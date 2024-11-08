@@ -56,7 +56,7 @@ impl TlsTerminateProxy {
         let host = self
             .app_state
             .lock()
-            .get_host(&app_id)
+            .select_a_host(&app_id)
             .context(format!("tapp {app_id} not found"))?;
         let stream = MergedStream {
             buffer,

@@ -61,6 +61,7 @@ async fn index(state: &State<AppState>) -> Result<RawHtml<String>, String> {
         .map_err(|e| format!("Failed to construct RPC handler: {}", e))?;
     let WorkerInfo {
         app_id,
+        instance_id,
         tcb_info,
         app_cert,
     } = handler
@@ -71,6 +72,7 @@ async fn index(state: &State<AppState>) -> Result<RawHtml<String>, String> {
     let containers = list_containers().await.unwrap_or_default().containers;
     let model = crate::models::Dashboard {
         app_id,
+        instance_id,
         app_cert,
         tcb_info,
         containers,

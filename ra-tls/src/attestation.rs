@@ -100,6 +100,12 @@ impl Attestation {
             .map(|event| truncate(&event.digest, 40).to_string())
     }
 
+    /// Decode the instance-id from the event log
+    pub fn decode_instance_id(&self) -> Result<String> {
+        self.find_event(3, "instance-id")
+            .map(|event| truncate(&event.digest, 40).to_string())
+    }
+
     /// Decode the upgraded app-id from the event log
     pub fn decode_upgraded_app_id(&self) -> Result<String> {
         self.find_event(3, "upgraded-app-id")

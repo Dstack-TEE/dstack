@@ -77,8 +77,10 @@ message Container {
 message WorkerInfo {
   // Worker ID
   string app_id = 1;
+  // App Instance ID
+  string instance_id = 2;
   // App certificate
-  string app_cert = 2;
+  string app_cert = 3;
   // TCB info
-  string tcb_info = 3;
+  string tcb_info = 4;
 }

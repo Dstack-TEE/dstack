@@ -26,19 +26,15 @@
     <h2>CVM List</h2>
     <table>
         <tr>
+            <th>Instance ID</th>
             <th>App ID</th>
             <th>IP</th>
-            <th>Ports</th>
         </tr>
         {% for host in hosts %}
         <tr>
+            <td>{{ host.id }}</td>
             <td>{{ host.app_id }}</td>
             <td>{{ host.ip }}</td>
-            <td>
-                {% for port in host.ports %}
-                <a href="https://{{ host.endpoint }}:{{ port }}" target="_blank">{{ port }}</a>{% if !loop.last %}, {% endif %}
-                {% endfor %}
-            </td>
         </tr>
         {% endfor %}
     </table>

@@ -147,10 +147,13 @@ After the container deployed, it should need some time to start the CVM and the 
 
 Once the app is deployed and listening on an HTTP port, you can access the HTTP service via tproxy's public domain. The ingress mapping rules are:
 
-- `<app_id>.<base_domain>` maps to port `80` in the CVM.
-- `<app_id>-<port>.<base_domain>` maps to port `<port>` in the CVM.
+- `<id>[s].<base_domain>` maps to port `80` or `443` if with `s` in the CVM.
+- `<id>-<port>[s].<base_domain>` maps to port `<port>` in the CVM.
 
 For example, `3327603e03f5bd1f830812ca4a789277fc31f577-8080.app.kvin.wang` maps to port `8080` in the CVM.
+
+Where the `<id>` can be either the app id or the instance id. If the app id is used, one of the instances will be selected by the load balancer.
+If the `id-port` part ends with `s`, it means the TLS connection will be passthrough to the app rather than terminating at tproxy.
 
 You can also ssh into the CVM to inspect more information, if your deployment uses the image `dstack-x.x.x-dev`:
 

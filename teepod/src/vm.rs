@@ -86,6 +86,8 @@ pub(crate) mod run {
     pub use super::image::Image;
     pub use super::qemu::{TdxConfig, VmConfig};
     use anyhow::{bail, Context, Result};
+    use fs_err as fs;
+    use serde::Deserialize;
     use shared_child::SharedChild;
     use std::collections::BTreeMap;
     use std::io::Read;
@@ -93,6 +95,12 @@ pub(crate) mod run {
     use std::sync::Arc;
     use std::time::{Duration, Instant};
     use tracing::{error, info};
+
+    #[derive(Debug, Deserialize)]
+    pub struct InstanceInfo {
+        pub app_id: String,
+        pub instance_id: String,
+    }
 
     pub struct VmInstance {
         config: VmConfig,
@@ -113,6 +121,12 @@ pub(crate) mod run {
                 exited_at: None,
                 started_at: None,
             }
+        }
+
+        pub fn instance_info(&self) -> Result<InstanceInfo> {
+            let info_file = self.workdir.join("shared").join(".instance_info");
+            let info: InstanceInfo = serde_json::from_slice(&fs::read(&info_file)?)?;
+            Ok(info)
         }
 
         pub fn start(&mut self, qemu_bin: &Path) -> Result<()> {
@@ -201,10 +215,12 @@ pub(crate) mod run {
                 (false, true) => "stopping",
                 (false, false) => "stopped",
             };
+            let instance_id = self.instance_info().ok().map(|info| info.instance_id);
             VmInfo {
                 id: self.config.id.clone(),
                 name: self.config.name.clone(),
                 app_id: self.config.app_id.clone(),
+                instance_id,
                 status,
                 uptime_ms,
                 uptime,
@@ -223,6 +239,7 @@ pub(crate) mod run {
         pub created_at_ms: u64,
         pub exited_at: Option<String>,
         pub app_id: String,
+        pub instance_id: Option<String>,
     }
 
     pub struct VmMonitor {

@@ -112,6 +112,9 @@ impl WorkerRpc for ExternalRpcHandler {
         let app_id = attestation
             .decode_app_id()
             .context("Failed to decode app id")?;
+        let instance_id = attestation
+            .decode_instance_id()
+            .context("Failed to decode instance_id")?;
         let quote = attestation
             .decode_quote()
             .context("Failed to decode quote")?;
@@ -139,6 +142,7 @@ impl WorkerRpc for ExternalRpcHandler {
         .unwrap_or_default();
         Ok(WorkerInfo {
             app_id,
+            instance_id,
             app_cert: ca.pem_cert.clone(),
             tcb_info,
         })

@@ -48,14 +48,16 @@ message ListResponse {
 
 // HostInfo is the information of a host.
 message HostInfo {
+  // The Instance id
+  string id = 1;
   // The IP address of the host.
-  string ip = 1;
+  string ip = 2;
   // The app id of the host.
-  string app_id = 2;
-  // The HTTPS endpoint of the host.
-  string endpoint = 3;
-  // The external ports of the host.
-  repeated uint32 ports = 4;
+  string app_id = 3;
+  // The base domain of the HTTPS endpoint of the host.
+  string base_domain = 4;
+  // The external port of the host.
+  uint32 port = 5;
 }
 
 

@@ -60,7 +60,7 @@ pub(crate) async fn proxy_to_app(
     app_id: &str,
     port: u16,
 ) -> Result<()> {
-    let target_ip = state.lock().get_host(app_id).context("tapp not found")?.ip;
+    let target_ip = state.lock().select_a_host(app_id).context("tapp not found")?.ip;
     let mut outbound = TcpStream::connect((target_ip, port))
         .await
         .context("failed to connect to tapp")?;

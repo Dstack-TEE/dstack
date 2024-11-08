@@ -14,9 +14,11 @@ message VmInfo {
   // Uptime in human-readable format
   string uptime = 4;
   // URL to the Tappd console
-  string app_url = 5;
+  optional string app_url = 5;
   // App ID
   string app_id = 6;
+  // Instance ID
+  optional string instance_id = 7;
 }
 
 message Id {

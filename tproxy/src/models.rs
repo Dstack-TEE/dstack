@@ -54,8 +54,9 @@ impl<'a, K, V> Iterator for MapValuesIter<'a, K, V> {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct HostInfo {
+pub struct InstanceInfo {
     pub id: String,
+    pub app_id: String,
     pub ip: Ipv4Addr,
     pub public_key: String,
 }
@@ -65,7 +66,7 @@ pub struct HostInfo {
 pub struct WgConf<'a> {
     pub private_key: &'a str,
     pub listen_port: u16,
-    pub peers: MapValues<'a, String, HostInfo>,
+    pub peers: MapValues<'a, String, InstanceInfo>,
 }
 
 #[derive(Template)]

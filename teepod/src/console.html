@@ -467,7 +467,7 @@
                                 <button class="action-btn" @click="showLog(vm.id)" title="View Logs">
                                     <i class="fas fa-file-alt"></i> Logs
                                 </button>
-                                <button class="action-btn" @click="showAppInfo(vm.app_url)" title="View App Info">
+                                <button v-if="vm.app_url" class="action-btn" @click="showAppInfo(vm.app_url)" title="View App Info">
                                     <i class="fas fa-info-circle"></i> Dashboard
                                 </button>
                                 <button class="action-btn" @click="showUpgradeDialog(vm)" title="Upgrade VM">
