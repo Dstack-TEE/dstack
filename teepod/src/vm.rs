@@ -117,7 +117,7 @@ pub(crate) mod run {
 
         pub fn start(&mut self, qemu_bin: &Path) -> Result<()> {
             if self.is_running() {
-                bail!("VM already running");
+                bail!("The instance is already running");
             }
             let process = super::qemu::run_vm(qemu_bin, &self.config, &self.workdir)?;
             let cloned_child = process.clone();
@@ -133,19 +133,19 @@ pub(crate) mod run {
                     }
                 };
                 if status.success() {
-                    info!("VM exited successfully");
+                    info!("The instance exited successfully");
                 } else {
                     let todo = "Dont show error if VM is stopped by user";
-                    error!("VM exited with status: {:#?}", status);
+                    error!("The instance exited with status: {:#?}", status);
                     if let Some(mut output) = cloned_child.take_stderr() {
                         let mut stderr = String::new();
                         match output.read_to_string(&mut stderr) {
                             Ok(_) => {
                                 if !stderr.is_empty() {
-                                    error!("VM stderr: {:#?}", stderr);
+                                    error!("The instance stderr: {:#?}", stderr);
                                 }
                             }
-                            Err(e) => error!("Failed to read VM stderr: {e:?}"),
+                            Err(e) => error!("Failed to read the instance stderr: {e:?}"),
                         }
                     }
                     if let Some(mut output) = cloned_child.take_stdout() {
@@ -153,10 +153,10 @@ pub(crate) mod run {
                         match output.read_to_string(&mut stdout) {
                             Ok(_) => {
                                 if !stdout.is_empty() {
-                                    info!("VM stdout: {:#?}", stdout);
+                                    info!("The instance stdout: {:#?}", stdout);
                                 }
                             }
-                            Err(e) => error!("Failed to read VM stdout: {e:?}"),
+                            Err(e) => error!("Failed to read the instance stdout: {e:?}"),
                         }
                     }
                 }
@@ -254,7 +254,7 @@ pub(crate) mod run {
 
         pub fn start_vm(&mut self, id: &str) -> Result<()> {
             let Some(vm) = self.vms.get_mut(id) else {
-                bail!("VM not found: {}", id);
+                bail!("The instance {} is not found", id);
             };
             vm.start(&self.qemu_bin)?;
             Ok(())
@@ -262,7 +262,7 @@ pub(crate) mod run {
 
         pub fn stop_vm(&mut self, id: &str) -> Result<()> {
             let Some(vm) = self.vms.get_mut(id) else {
-                bail!("VM not found: {}", id);
+                bail!("The instance {} is not found", id);
             };
             vm.stop()?;
             Ok(())
@@ -272,7 +272,7 @@ pub(crate) mod run {
             {
                 let vm = self.vms.get(id).context("VM not found")?;
                 if vm.is_running() || vm.started {
-                    bail!("VM is running");
+                    bail!("The instance is running, please stop it first");
                 }
             }
             self.vms.remove(id);
@@ -281,7 +281,7 @@ pub(crate) mod run {
 
         pub fn get_log_file(&self, id: &str) -> Result<PathBuf> {
             let Some(info) = self.vms.get(id) else {
-                bail!("VM not found: {}", id);
+                bail!("The instance {} is not found", id);
             };
             super::qemu::get_log_file(&info.workdir).context("Failed to get log")
         }

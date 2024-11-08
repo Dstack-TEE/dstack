@@ -6,7 +6,7 @@ TMP_CA_CERT=${CFG_DIR}/certs/tmp-ca.cert
 TMP_CA_KEY=${CFG_DIR}/certs/tmp-ca.key
 CA_CERT=${CFG_DIR}/certs/ca.cert
 CFG_FILE=${CFG_DIR}/config.json
-APP_COMPOSE_FILE=${CFG_DIR}/docker-compose.yaml
+APP_COMPOSE_FILE=${CFG_DIR}/app-compose.json
 
 kmfs_premount() {
     local key_phrase rootfs_hash app_id kms_url ca_cert_hash
@@ -27,7 +27,7 @@ kmfs_premount() {
     fi
 
     if [ ! -f "${APP_COMPOSE_FILE}" ]; then
-        panic "FSINIT: Docker compose file ${APP_COMPOSE_FILE} does not exist"
+        panic "FSINIT: App compose file ${APP_COMPOSE_FILE} does not exist"
     fi
 
     rootfs_hash=$(jq -r .rootfs_hash ${CFG_FILE})

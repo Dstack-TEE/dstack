@@ -13,7 +13,7 @@
 //! └── vm
 //!     └── e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
 //!         └── shared
-//!             └── docker-compose.yaml
+//!             └── app-compose.json
 //! ```
 use crate::config::Config;
 use crate::vm::run::{Image, TdxConfig, VmConfig, VmMonitor};

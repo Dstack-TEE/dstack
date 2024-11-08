@@ -13,27 +13,27 @@
             margin: 0;
             padding: 20px;
         }
-        
+
         h1 {
             color: #333;
         }
-        
+
         form {
             margin-bottom: 20px;
         }
-        
+
         input,
         button,
         textarea {
             margin: 5px 0;
             padding: 5px;
         }
-        
+
         #vmList {
             border: 1px solid #ddd;
             padding: 10px;
         }
-        
+
         .vm-item {
             border: 1px solid #e0e0e0;
             border-radius: 8px;
@@ -42,25 +42,25 @@
             background: #fff;
             box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
         }
-        
+
         .vm-info {
             display: flex;
             gap: 20px;
             margin-bottom: 10px;
         }
-        
+
         .vm-detail {
             display: flex;
             align-items: center;
             gap: 5px;
         }
-        
+
         .vm-actions {
             display: flex;
             gap: 10px;
             flex-wrap: wrap;
         }
-        
+
         .action-btn {
             padding: 6px 12px;
             border: none;
@@ -70,53 +70,45 @@
             align-items: center;
             gap: 5px;
             transition: all 0.2s;
+            background: #1b6b73;
+            color: white;
         }
-        
+
         .action-btn:hover {
             transform: translateY(-1px);
         }
-        
-        .start {
+
+        .primary {
             background: #4CAF50;
             color: white;
         }
-        
-        .stop {
+
+        .danger {
             background: #f44336;
             color: white;
         }
-        
-        .remove {
-            background: #9e9e9e;
+
+        .warning {
+            background: #FF9800;
             color: white;
         }
-        
-        .logs {
-            background: #2196F3;
-            color: white;
-        }
-        
-        .info {
-            background: #673AB7;
-            color: white;
-        }
-        
+
         .status-created {
             color: #FFC107;
         }
-        
+
         .status-running {
             color: #4CAF50;
         }
-        
+
         .status-stopping {
             color: #FF9800;
         }
-        
+
         .status-stopped {
             color: #f44336;
         }
-        
+
         .status-exited {
             color: #9E9E9E;
         }
@@ -126,18 +118,18 @@
             max-width: 600px;
             margin: 20px 0;
         }
-        
+
         .form-group {
             margin-bottom: 15px;
         }
-        
+
         .form-group label {
             display: block;
             margin-bottom: 5px;
             font-weight: bold;
             color: #333;
         }
-        
+
         .form-group input,
         .form-group textarea {
             width: 100%;
@@ -146,21 +138,21 @@
             border-radius: 4px;
             font-size: 14px;
         }
-        
+
         .form-group textarea {
             min-height: 120px;
             resize: vertical;
         }
-        
+
         .form-group input[type="file"] {
             border: none;
             padding: 0;
         }
-        
+
         .form-group input[type="number"] {
             width: 150px;
         }
-        
+
         .submit-btn {
             background-color: #2196F3;
             color: white;
@@ -171,11 +163,11 @@
             font-size: 16px;
             transition: background-color 0.2s;
         }
-        
+
         .submit-btn:hover {
             background-color: #1976D2;
         }
-        
+
         .submit-btn:active {
             transform: translateY(1px);
         }
@@ -187,7 +179,7 @@
             gap: 15px;
             margin-bottom: 15px;
         }
-        
+
         .form-grid .form-group {
             margin-bottom: 0;
             padding: 10px;
@@ -195,11 +187,11 @@
             border-radius: 4px;
             background-color: #f9f9f9;
         }
-        
+
         .form-group.full-width {
             grid-column: 1 / -1;
         }
-        
+
         .form-grid .form-group input {
             /* Adjust for padding */
             width: calc(100% - 16px);
@@ -210,7 +202,7 @@
             /* Include padding in width calculation */
             box-sizing: border-box;
         }
-        
+
         .form-group input:focus {
             outline: none;
             border-color: #2196F3;
@@ -223,16 +215,16 @@
             box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
             border-radius: 8px;
         }
-        
+
         #vmList tr:hover {
             background-color: #f5f5f5;
         }
-        
+
         #vmList th {
             font-weight: bold;
             color: #333;
         }
-        
+
         .vm-actions {
             display: flex;
             gap: 8px;
@@ -252,7 +244,7 @@
             align-items: center;
             z-index: 1000;
         }
-        
+
         .dialog {
             background: white;
             padding: 20px;
@@ -260,22 +252,54 @@
             width: 500px;
             max-width: 90%;
         }
-        
+
         .upgrade {
             background: #FF9800;
             color: white;
         }
-        
-        .success-message {
+    </style>
+    <style>
+        .message-container {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            z-index: 1001;
+            min-width: 300px;
+            max-width: 600px;
+        }
+
+        .message {
             margin: 10px 0;
-            padding: 10px;
+            padding: 15px;
+            border-radius: 4px;
+            position: relative;
+            animation: slideIn 0.3s ease-out;
+        }
+
+        .success-message {
             background: #E8F5E9;
             border: 1px solid #4CAF50;
-            border-radius: 4px;
             color: #2E7D32;
-            position: relative;
         }
-        
+
+        .error-message {
+            background: #FFEBEE;
+            border: 1px solid #F44336;
+            color: #C62828;
+        }
+
+        @keyframes slideIn {
+            from {
+                transform: translateX(100%);
+                opacity: 0;
+            }
+
+            to {
+                transform: translateX(0);
+                opacity: 1;
+            }
+        }
+
         .close-btn {
             position: absolute;
             top: 5px;
@@ -284,64 +308,134 @@
             border: none;
             font-size: 20px;
             cursor: pointer;
-            color: #2E7D32;
             padding: 0 5px;
         }
-        
+
         .close-btn:hover {
             color: #1B5E20;
+        }
+
+        .success-message .close-btn {
+            color: #2E7D32;
+        }
+
+        .error-message .close-btn {
+            color: #C62828;
+        }
+    </style>
+    <style>
+        .upgrade-message {
+            font-size: 16px;
+            margin-bottom: 10px;
+        }
+
+        .next-steps-header {
+            font-weight: bold;
+            margin-bottom: 8px;
+        }
+
+        .command-container {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .command-code {
+            background: #f0f0f0;
+            padding: 2px 4px;
+            border-radius: 3px;
+        }
+
+        .copy-button {
+            padding: 2px 6px;
+            border: 1px solid #ddd;
+            border-radius: 3px;
+            cursor: pointer;
+            background: white;
+        }
+
+        .steps-list {
+            margin: 0;
+            padding-left: 20px;
+        }
+
+        .step-item {
+            margin-bottom: 5px;
+        }
+    </style>
+    <style>
+        .app-id-preview {
+            font-size: 14px;
+            color: #666;
         }
     </style>
 </head>
 
 <body>
     <div id="app">
-        <h2>Create VM</h2>
-        <form @submit.prevent="createVM" class="create-vm-form">
-            <div class="form-grid">
-                <div class="form-group">
-                    <label for="vmName">Name</label>
-                    <input id="vmName" v-model="vmForm.name" type="text" placeholder="Enter VM name" required>
-                </div>
+        <button class="action-btn" @click="showCreateDialog = true">Deploy a new instance</button>
 
-                <div class="form-group">
-                    <label for="vmImage">Image</label>
-                    <select id="vmImage" v-model="vmForm.image" required>
-                        <option value="" disabled>Select an image</option>
-                        <option v-for="image in images" :key="image" :value="image.name">
-                            {{ image.name }}
-                        </option>
-                    </select>
+        <div v-if="showCreateDialog" class="dialog-overlay">
+            <div class="dialog">
+                <h2>Deploy a new instance</h2>
+                <div>
+                    <label>App ID:</label>
+                    <div class="app-id-preview">{{ appIdPreview() }}</div>
                 </div>
+                <form @submit.prevent="createVM" class="create-vm-form">
+                    <div class="form-grid">
+                        <div class="form-group">
+                            <label for="vmName">Name</label>
+                            <input id="vmName" v-model="vmForm.name" type="text" placeholder="Enter VM name" required>
+                        </div>
 
-                <div class="form-group">
-                    <label for="vcpu">Number of vCPUs</label>
-                    <input id="vcpu" v-model.number="vmForm.vcpu" type="number" placeholder="vCPUs" required>
-                </div>
+                        <div class="form-group">
+                            <label for="vmImage">Image</label>
+                            <select id="vmImage" v-model="vmForm.image" required>
+                                <option value="" disabled>Select an image</option>
+                                <option v-for="image in images" :key="image" :value="image.name">
+                                    {{ image.name }}
+                                </option>
+                            </select>
+                        </div>
 
-                <div class="form-group">
-                    <label for="memory">Memory (MB)</label>
-                    <input id="memory" v-model.number="vmForm.memory" type="number" placeholder="Memory in MB" required>
-                </div>
+                        <div class="form-group">
+                            <label for="vcpu">Number of vCPUs</label>
+                            <input id="vcpu" v-model.number="vmForm.vcpu" type="number" placeholder="vCPUs" required>
+                        </div>
 
-                <div class="form-group">
-                    <label for="diskSize">Disk Size (GB)</label>
-                    <input id="diskSize" v-model.number="vmForm.disk_size" type="number" placeholder="Disk size in GB" required>
-                </div>
+                        <div class="form-group">
+                            <label for="memory">Memory (MB)</label>
+                            <input id="memory" v-model.number="vmForm.memory" type="number" placeholder="Memory in MB"
+                                required>
+                        </div>
 
-                <div class="form-group">
-                    <label for="fileInput">Upload Compose File</label>
-                    <input id="fileInput" type="file" @change="loadComposeFile" accept=".yml,.yaml,.txt">
-                </div>
+                        <div class="form-group">
+                            <label for="diskSize">Disk Size (GB)</label>
+                            <input id="diskSize" v-model.number="vmForm.disk_size" type="number"
+                                placeholder="Disk size in GB" required>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="fileInput">Upload Compose File</label>
+                            <input id="fileInput" type="file" @change="loadComposeFile" accept=".yml,.yaml,.txt">
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="composeFile">Docker Compose File</label>
+                        <textarea id="composeFile" v-model="vmForm.compose_file"
+                            placeholder="Paste your docker-compose.yml here" required></textarea>
+                    </div>
+
+                    <div class="vm-actions">
+                        <button type="submit" class="action-btn primary">Deploy</button>
+                        <button type="button" class="action-btn remove"
+                            @click="showCreateDialog = false">Cancel</button>
+                    </div>
+                </form>
             </div>
-
-            <div class="form-group">
-                <label for="composeFile">Docker Compose File</label>
-                <textarea id="composeFile" v-model="vmForm.compose_file" placeholder="Paste your docker-compose.yml here" required></textarea>
-            </div>
-
-            <button type="submit" class="submit-btn">Create VM</button>
-        </form>
+        </div>
 
         <h2>VM List</h2>
         <div id="vmList">
@@ -365,22 +459,22 @@
                         <td style="padding: 12px;">{{ vm.uptime }}</td>
                         <td style="padding: 12px;">
                             <div class="vm-actions">
-                                <button class="action-btn start" @click="startVM(vm.id)" title="Start VM">
+                                <button class="action-btn primary" @click="startVM(vm.id)" title="Start VM">
                                     <i class="fas fa-play"></i> Start
                                 </button>
-                                <button class="action-btn stop" @click="stopVM(vm.id)" title="Stop VM">
+                                <button class="action-btn danger" @click="stopVM(vm.id)" title="Stop VM">
                                     <i class="fas fa-stop"></i> Stop
                                 </button>
-                                <button class="action-btn remove" @click="removeVM(vm.id)" title="Remove VM">
+                                <button class="action-btn warning" @click="removeVM(vm.id)" title="Remove VM">
                                     <i class="fas fa-trash"></i> Remove
                                 </button>
-                                <button class="action-btn logs" @click="showLog(vm.id)" title="View Logs">
+                                <button class="action-btn" @click="showLog(vm.id)" title="View Logs">
                                     <i class="fas fa-file-alt"></i> Logs
                                 </button>
-                                <button class="action-btn info" @click="showAppInfo(vm.app_url)" title="View App Info">
+                                <button class="action-btn" @click="showAppInfo(vm.app_url)" title="View App Info">
                                     <i class="fas fa-info-circle"></i> Dashboard
                                 </button>
-                                <button class="action-btn upgrade" @click="showUpgradeDialog(vm)" title="Upgrade VM">
+                                <button class="action-btn" @click="showUpgradeDialog(vm)" title="Upgrade VM">
                                     <i class="fas fa-arrow-up"></i> Upgrade
                                 </button>
                             </div>
@@ -399,7 +493,8 @@
                 </div>
                 <div class="form-group">
                     <label for="upgradeCompose">Docker Compose File</label>
-                    <textarea id="upgradeCompose" v-model="upgradeDialog.compose_file" placeholder="Paste your new docker-compose.yml here" required></textarea>
+                    <textarea id="upgradeCompose" v-model="upgradeDialog.compose_file"
+                        placeholder="Paste your new docker-compose.yml here" required></textarea>
                 </div>
                 <div class="vm-actions">
                     <button class="action-btn upgrade" @click="upgradeVM">Upgrade</button>
@@ -408,9 +503,15 @@
             </div>
         </div>
 
-        <div v-if="upgradeMessage" class="success-message">
-            {{ upgradeMessage }}
-            <button class="close-btn" @click="upgradeMessage = ''">×</button>
+        <div class="message-container">
+            <div v-if="upgradeMessage" class="message success-message">
+                <button class="close-btn" @click="upgradeMessage = ''">×</button>
+                <div v-html="upgradeMessage"></div>
+            </div>
+            <div v-if="errorMessage" class="message error-message">
+                {{ errorMessage }}
+                <button class="close-btn" @click="errorMessage = ''">×</button>
+            </div>
         </div>
     </div>
 
@@ -421,21 +522,6 @@
             ref,
             onMounted
         } = Vue;
-
-        async function rpcCall(method, params) {
-            const response = await fetch(`/prpc/Teepod.${method}?json`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify(params || {}),
-            });
-            if (!response.ok) {
-                const error = await response.text();
-                alert(`RPC call failed: ${error}`);
-            }
-            return response;
-        }
 
         createApp({
             setup() {
@@ -456,8 +542,26 @@
                     compose_file: ''
                 });
                 const upgradeMessage = ref('');
+                const errorMessage = ref('');
 
-                const loadVMList = async() => {
+                const showCreateDialog = ref(false);
+
+                const rpcCall = async (method, params) => {
+                    const response = await fetch(`/prpc/Teepod.${method}?json`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify(params || {}),
+                    });
+                    if (!response.ok) {
+                        const error = await response.text();
+                        errorMessage.value = error;
+                    }
+                    return response;
+                };
+
+                const loadVMList = async () => {
                     try {
                         const response = await rpcCall('ListVms');
                         const data = await response.json();
@@ -467,17 +571,51 @@
                     }
                 };
 
-                const createVM = async() => {
+                const makeAppComposeFile = () => {
+                    const app_compose = {
+                        "manifest_version": 1,
+                        "name": vmForm.value.name,
+                        "version": "1.0.0",
+                        "features": ["migration", "tproxy-net"],
+                        "runner": "docker-compose",
+                        "docker_compose_file": vmForm.value.compose_file
+                    };
+                    return JSON.stringify(app_compose);
+                };
+
+                const appIdPreview = () => {
+                    const compose_file = makeAppComposeFile();
+                    const encoder = new TextEncoder();
+                    const data = encoder.encode(compose_file);
+                    
+                    return crypto.subtle.digest('SHA-256', data)
+                        .then(hashBuffer => {
+                            const hashArray = Array.from(new Uint8Array(hashBuffer));
+                            const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+                            return hashHex.substring(0, 40);
+                        })
+                        .catch(error => {
+                            console.error('Error generating hash:', error);
+                            return '';
+                        });
+                };
+
+                const createVM = async () => {
                     try {
-                        const _response = await rpcCall('CreateVM', vmForm.value);
+                        const form = {
+                            ...vmForm.value,
+                            compose_file: makeAppComposeFile()
+                        };
+                        const _response = await rpcCall('CreateVM', form);
                         loadVMList();
+                        showCreateDialog.value = false;
                     } catch (error) {
                         console.error('Error creating VM:', error);
                         alert('Failed to create VM');
                     }
                 };
 
-                const stopVM = async(id) => {
+                const stopVM = async (id) => {
                     try {
                         const _response = await rpcCall('StopVM', {
                             id
@@ -489,7 +627,7 @@
                     }
                 };
 
-                const startVM = async(id) => {
+                const startVM = async (id) => {
                     try {
                         const _response = await rpcCall('StartVM', {
                             id
@@ -501,7 +639,7 @@
                     }
                 };
 
-                const removeVM = async(id) => {
+                const removeVM = async (id) => {
                     try {
                         const _response = await rpcCall('RemoveVM', {
                             id
@@ -513,11 +651,11 @@
                     }
                 };
 
-                const showLog = async(id) => {
+                const showLog = async (id) => {
                     window.open(`/logs?id=${id}&follow=false&ansi=false`, '_blank');
                 };
 
-                const showAppInfo = async(app_url) => {
+                const showAppInfo = async (app_url) => {
                     if (app_url) {
                         window.open(app_url, '_blank');
                     } else {
@@ -537,7 +675,7 @@
                     }
                 };
 
-                const loadImages = async() => {
+                const loadImages = async () => {
                     try {
                         const response = await rpcCall('ListImages');
                         const data = await response.json();
@@ -566,7 +704,7 @@
                     }
                 };
 
-                const upgradeVM = async() => {
+                const upgradeVM = async () => {
                     try {
                         const response = await rpcCall('UpgradeApp', {
                             id: upgradeDialog.value.vm.id,
@@ -574,7 +712,24 @@
                         });
                         const data = await response.json();
                         upgradeDialog.value.show = false;
-                        upgradeMessage.value = `Upgrade initiated successfully! Next step:\n./kms-allow-upgrade.sh ${upgradeDialog.value.vm.app_id} ${data.id}`;
+                        upgradeMessage.value = `
+<div class="upgrade-message">✅ Upgrade initiated successfully!</div>
+<div class="next-steps-header">Next steps:</div>
+<ol class="steps-list">
+    <li class="step-item">
+        Run: 
+        <div class="command-container">
+            <code class="command-code">./kms-allow-upgrade.sh ${upgradeDialog.value.vm.app_id} ${data.id}</code>
+            <button 
+                @click="navigator.clipboard.writeText('./kms-allow-upgrade.sh ' + upgradeDialog.value.vm.app_id + ' ' + data.id)"
+                class="copy-button"
+                title="Copy command">
+                📋
+            </button>
+        </div>
+    </li>
+    <li>Restart the instance</li>
+</ol>`;
                         loadVMList();
                     } catch (error) {
                         console.error('error upgrading VM:', error);
@@ -600,9 +755,12 @@
                     loadComposeFile,
                     upgradeDialog,
                     upgradeMessage,
+                    errorMessage,
                     showUpgradeDialog,
                     loadUpgradeFile,
-                    upgradeVM
+                    upgradeVM,
+                    showCreateDialog,
+                    appIdPreview
                 };
             }
         }).mount('#app');

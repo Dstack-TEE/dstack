@@ -30,7 +30,7 @@ message CreateVMRequest {
   string name = 1;
   // Image to be used for the VM
   string image = 2;
-  // Docker compose file to be used for the VM
+  // Compose file to be used for the VM
   string compose_file = 3;
   // Number of vCPUs
   uint32 vcpu = 4;

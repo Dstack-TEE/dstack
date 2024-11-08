@@ -11,14 +11,13 @@ CERBOT_WORKDIR=$RUN_DIR/certbot
 KMS_UPGRADE_REGISTRY_DIR=$RUN_DIR/kms/upgrade_registry
 KMS_CERT_LOG_DIR=$RUN_DIR/kms/cert_log/
 
-CONFIG_FILE=$SCRIPT_DIR/build-config.sh
-if [ -f build-config.sh ]; then
-    source build-config.sh
+if [ -f ./build-config.sh ]; then
+    CONFIG_FILE=./build-config.sh
 else
-    if [ -f $CONFIG_FILE ]; then
-        source $CONFIG_FILE
-    else
-        cat <<EOF > $CONFIG_FILE
+    CONFIG_FILE=$SCRIPT_DIR/build-config.sh
+fi
+
+cat <<EOF > build-config.sh.tpl
 # base domain of kms rpc and tproxy rpc
 # 1022.kvin.wang resolves to 10.0.2.2 which is host ip at the
 # cvm point of view
@@ -49,10 +48,43 @@ CF_API_TOKEN=
 CF_ZONE_ID=
 ACME_URL=https://acme-staging-v02.api.letsencrypt.org/directory
 EOF
-        echo "Config file $CONFIG_FILE created, please edit it to configure the build"
+
+check_config() {
+    local template_file=$1
+    local config_file=$2
+
+    # extract all variables in template file
+    local variables=$(grep -oE '^\s*[A-Z_]+=' $template_file | sort)
+
+    # check if each variable is set in config file
+    local var missing=0
+    for var in $variables; do
+        if ! grep -qE "^\s*$var" $config_file; then
+            echo "Variable $var is not set in $config_file"
+            missing=1
+        fi
+    done
+    if [ $missing -ne 0 ]; then
+        return 1
+    fi
+    return 0
+}
+
+if [ -f $CONFIG_FILE ]; then
+    source $CONFIG_FILE
+    # check if any variable in build-config.sh.tpl is not set in build-config.sh.
+    # This might occur if the build-config.sh is generated from and old repo.
+    check_config build-config.sh.tpl $CONFIG_FILE
+    if [ $? -ne 0 ]; then
         exit 1
     fi
+    rm -f build-config.sh.tpl
+else
+    mv build-config.sh.tpl build-config.sh
+    echo "Config file $CONFIG_FILE created, please edit it to configure the build"
+    exit 1
 fi
+
 
 if [ -z "$TPROXY_SERVE_PORT" ]; then
     TPROXY_SERVE_PORT=${TPROXY_LISTEN_PORT1}
