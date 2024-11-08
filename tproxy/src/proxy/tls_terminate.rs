@@ -4,7 +4,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use anyhow::{bail, Context as _, Result};
+use anyhow::{Context as _, Result};
 use fs_err as fs;
 use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
@@ -16,14 +16,12 @@ use crate::main_service::AppState;
 
 pub struct TlsTerminateProxy {
     app_state: AppState,
-    dotted_base_domain: String,
     acceptor: TlsAcceptor,
 }
 
 impl TlsTerminateProxy {
     pub fn new(
         app_state: &AppState,
-        dotted_base_domain: &str,
         cert: impl AsRef<Path>,
         key: impl AsRef<Path>,
     ) -> Result<Self> {
@@ -43,14 +41,17 @@ impl TlsTerminateProxy {
 
         Ok(Self {
             app_state: app_state.clone(),
-            dotted_base_domain: dotted_base_domain.to_owned(),
             acceptor,
         })
     }
 
-    pub(crate) async fn proxy(&self, inbound: TcpStream, sni: &str, buffer: Vec<u8>) -> Result<()> {
-        let (app_id, port) = extract_app_id_and_port(sni, &self.dotted_base_domain)
-            .context("failed to extract app id and port")?;
+    pub(crate) async fn proxy(
+        &self,
+        inbound: TcpStream,
+        buffer: Vec<u8>,
+        app_id: &str,
+        port: Option<u16>,
+    ) -> Result<()> {
         let port = port.unwrap_or(80);
         let host = self
             .app_state
@@ -141,25 +142,4 @@ impl AsyncWrite for MergedStream {
     fn is_write_vectored(&self) -> bool {
         self.inbound.is_write_vectored()
     }
-}
-
-fn extract_app_id_and_port(sni: &str, dotted_base_domain: &str) -> Result<(String, Option<u16>)> {
-    // format: <app_id>[-<port>].<base_domain>
-    if !sni.ends_with(dotted_base_domain) {
-        bail!("sni is not a subdomain of {dotted_base_domain}");
-    }
-    let subdomain = sni[..sni.len() - dotted_base_domain.len()].to_string();
-    if subdomain.contains('.') {
-        bail!("only one level of subdomain is supported");
-    }
-    let mut parts = subdomain.split('-');
-    let app_id = parts.next().context("no app id found")?.to_owned();
-    let port = parts
-        .next()
-        .map(|p| p.parse().context("invalid port"))
-        .transpose()?;
-    if parts.next().is_some() {
-        bail!("invalid sni format");
-    }
-    Ok((app_id, port))
 }

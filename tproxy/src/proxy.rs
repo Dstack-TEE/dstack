@@ -44,6 +44,40 @@ fn is_subdomain(sni: &str, base_domain: &str) -> bool {
     sni.ends_with(base_domain)
 }
 
+struct DstInfo {
+    app_id: String,
+    port: Option<u16>,
+    is_tls: bool,
+}
+
+fn parse_destination(sni: &str, dotted_base_domain: &str) -> Result<DstInfo> {
+    // format: <app_id>[-<port>][s].<base_domain>
+    let mut subdomain = sni
+        .strip_suffix(dotted_base_domain)
+        .context("invalid sni format")?;
+    if subdomain.contains('.') {
+        bail!("only one level of subdomain is supported");
+    }
+    let is_tls = subdomain.ends_with("s");
+    if is_tls {
+        subdomain.pop();
+    }
+    let mut parts = subdomain.split('-');
+    let app_id = parts.next().context("no app id found")?.to_owned();
+    let port = parts
+        .next()
+        .map(|p| p.parse().context("invalid port"))
+        .transpose()?;
+    if parts.next().is_some() {
+        bail!("invalid sni format");
+    }
+    Ok(DstInfo {
+        app_id,
+        port,
+        is_tls,
+    })
+}
+
 async fn handle_connection(
     mut inbound: TcpStream,
     state: AppState,
@@ -55,12 +89,25 @@ async fn handle_connection(
         bail!("no sni found");
     };
     if is_subdomain(&sni, dotted_base_domain) {
-        tls_terminate_proxy
-            .proxy(inbound, &sni, buffer)
+        let dst = parse_destination(&sni, dotted_base_domain)?;
+        if dst.is_tls {
+            tls_passthough::proxy_to_app(
+                state,
+                inbound,
+                buffer,
+                &dst.app_id,
+                dst.port.unwrap_or(443),
+            )
             .await
             .with_context(|| format!("error on connection {sni}"))
+        } else {
+            tls_terminate_proxy
+                .proxy(inbound, buffer, &dst.app_id, dst.port)
+                .await
+                .with_context(|| format!("error on connection {sni}"))
+        }
     } else {
-        tls_passthough::proxy(state, inbound, &sni, buffer)
+        tls_passthough::proxy_with_sni(state, inbound, buffer, &sni)
             .await
             .with_context(|| format!("error on connection {sni}"))
     }
@@ -73,13 +120,9 @@ pub async fn run(config: &ProxyConfig, app_state: AppState) -> Result<()> {
         Arc::new(format!(".{base_domain}"))
     };
 
-    let tls_terminate_proxy = TlsTerminateProxy::new(
-        &app_state,
-        &dotted_base_domain,
-        &config.cert_chain,
-        &config.cert_key,
-    )
-    .context("failed to create tls terminate proxy")?;
+    let tls_terminate_proxy =
+        TlsTerminateProxy::new(&app_state, &config.cert_chain, &config.cert_key)
+            .context("failed to create tls terminate proxy")?;
     let tls_terminate_proxy = Arc::new(tls_terminate_proxy);
 
     let listener = TcpListener::bind((config.listen_addr.clone(), config.listen_port))

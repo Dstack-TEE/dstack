@@ -39,6 +39,8 @@ TPROXY_WG_IP=10.0.3.1
 TPROXY_WG_CLIENT_IP_RANGE=10.0.3.0/24
 TPROXY_SERVE_PORT=9443
 
+BIND_PUBLIC_IP=0.0.0.0
+
 TPROXY_PUBLIC_DOMAIN=app.kvin.wang
 TPROXY_CERT=/etc/rproxy/certs/cert.pem
 TPROXY_KEY=/etc/rproxy/certs/key.pem
@@ -138,7 +140,7 @@ make -C .. certs DOMAIN=$BASE_DOMAIN TO=$CERTS_DIR
 # kms
 cat <<EOF > kms.toml
 log_level = "info"
-address = "0.0.0.0"
+address = "127.0.0.1"
 port = $KMS_RPC_LISTEN_PORT
 
 [tls]
@@ -167,7 +169,7 @@ EOF
 # tproxy
 cat <<EOF > tproxy.toml
 log_level = "info"
-address = "0.0.0.0"
+address = "127.0.0.1"
 port = $TPROXY_RPC_LISTEN_PORT
 
 [tls]
@@ -195,7 +197,7 @@ endpoint = "10.0.2.2:$TPROXY_WG_LISTEN_PORT"
 cert_chain = "$TPROXY_CERT"
 cert_key = "$TPROXY_KEY"
 base_domain = "$TPROXY_PUBLIC_DOMAIN"
-listen_addr = "0.0.0.0"
+listen_addr = "$BIND_PUBLIC_IP"
 listen_port = $TPROXY_SERVE_PORT
 tappd_port = $TAPPD_PORT
 EOF
@@ -203,6 +205,7 @@ EOF
 # teepod
 cat <<EOF > teepod.toml
 log_level = "info"
+address = "127.0.0.1"
 port = $TEEPOD_RPC_LISTEN_PORT
 image_path = "$IMAGES_DIR"
 run_path = "$RUN_DIR/vm"

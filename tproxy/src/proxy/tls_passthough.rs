@@ -40,22 +40,28 @@ async fn resolve_tapp_address(sni: &str) -> Result<TappAddress> {
     TappAddress::parse(data).context("failed to parse tapp address")
 }
 
-pub(crate) async fn proxy(
+pub(crate) async fn proxy_with_sni(
     state: AppState,
-    mut inbound: TcpStream,
-    sni: &str,
+    inbound: TcpStream,
     buffer: Vec<u8>,
+    sni: &str,
 ) -> Result<()> {
     let tapp_addr = resolve_tapp_address(sni)
         .await
         .context("failed to resolve tapp address")?;
     debug!("target address is {}:{}", tapp_addr.app_id, tapp_addr.port);
-    let target_ip = state
-        .lock()
-        .get_host(&tapp_addr.app_id)
-        .context("tapp not found")?
-        .ip;
-    let mut outbound = TcpStream::connect((target_ip, tapp_addr.port))
+    proxy_to_app(state, inbound, buffer, &tapp_addr.app_id, tapp_addr.port).await
+}
+
+pub(crate) async fn proxy_to_app(
+    state: AppState,
+    mut inbound: TcpStream,
+    buffer: Vec<u8>,
+    app_id: &str,
+    port: u16,
+) -> Result<()> {
+    let target_ip = state.lock().get_host(app_id).context("tapp not found")?.ip;
+    let mut outbound = TcpStream::connect((target_ip, port))
         .await
         .context("failed to connect to tapp")?;
     outbound
