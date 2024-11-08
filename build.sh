@@ -8,6 +8,8 @@ RUN_DIR=`pwd`/run
 IMAGE_NAME=dstack-0.1.0
 IMAGE_TMP_DIR=`pwd`/tmp/images/$IMAGE_NAME
 CERBOT_WORKDIR=$RUN_DIR/certbot
+KMS_UPGRADE_REGISTRY_DIR=$RUN_DIR/kms/upgrade_registry
+KMS_CERT_LOG_DIR=$RUN_DIR/kms/cert_log/
 
 CONFIG_FILE=$SCRIPT_DIR/build-config.sh
 if [ -f build-config.sh ]; then
@@ -119,6 +121,8 @@ mandatory = false
 root_ca_cert = "$CERTS_DIR/root-ca.cert"
 root_ca_key = "$CERTS_DIR/root-ca.key"
 subject_postfix = ".phala"
+upgrade_registry_dir = "$KMS_UPGRADE_REGISTRY_DIR"
+cert_log_dir = "$KMS_CERT_LOG_DIR"
 
 [core.allowed_mr]
 allow_all = true
@@ -207,7 +211,17 @@ renew_days_before = 10
 renew_timeout = 120
 EOF
 
-# Step 5: prepare run dir
+cat <<EOF > kms-allow-upgrade.sh
+#!/bin/bash
+if [ \$# -ne 2 ]; then
+    echo "Usage: \$0 <app_id> <upgraded_app_id>"
+    exit 1
+fi
+mkdir -p "$KMS_UPGRADE_REGISTRY_DIR/\$1"
+touch "$KMS_UPGRADE_REGISTRY_DIR/\$1/\$2"
+EOF
+chmod +x kms-allow-upgrade.sh
+
 mkdir -p $RUN_DIR
 mkdir -p $CERBOT_WORKDIR/backup/preinstalled
 

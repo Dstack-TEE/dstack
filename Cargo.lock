@@ -2062,7 +2062,9 @@ name = "kms"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "clap",
+ "fs-err 3.0.0",
  "hex",
  "hex_fmt",
  "kms-rpc",

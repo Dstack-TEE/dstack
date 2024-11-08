@@ -245,6 +245,17 @@ The TXT record value `3327603e03f5bd1f830812ca4a789277fc31f577:8043` means that 
 
 Given the config `TPROXY_LISTEN_PORT_PASSTHROUGH=9008`, now we can go to [`https://tapp-nginx.kvin.wang:9008`](https://tapp-nginx.kvin.wang:9008) and the request will be handled by the service listening on `8043` in Tapp `3327603e03f5bd1f830812ca4a789277fc31f577`.
 
+## Upgrade an App
+
+Got to the teepod webpage, click the [Upgrade] button, select or paste the compose file you want to upgrade to, and click the [Upgrade] button again.
+Upon successful initiation of the upgrade, you'll see a message prompting you to run the following command in your terminal to authorize the upgrade through KMS:
+
+```shell
+./kms-allow-upgrade.sh <app_id> <upgraded_app_id>
+```
+
+The app id does not change after the upgrade. Stop and start the app to apply the upgrade.
+
 ## HTTPS Certificate Transparency
 
 In the tutorial above, we used a TLS certificate with a private key external to the TEE (Tproxy-CVM here). To establish trust, we need to generate and maintain the certificate's private key within the TEE and provide evidence that all TLS certificates for the domain were originate solely from Tproxy-CVM.

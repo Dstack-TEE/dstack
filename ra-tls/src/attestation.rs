@@ -79,6 +79,12 @@ impl Attestation {
             .map(|event| truncate(&event.digest, 40).to_string())
     }
 
+    /// Decode the upgraded app-id from the event log
+    pub fn decode_upgraded_app_id(&self) -> Result<String> {
+        self.find_event(3, "upgraded-app-id")
+            .map(|event| truncate(&event.digest, 40).to_string())
+    }
+
     /// Decode the rootfs hash from the event log
     pub fn decode_rootfs_hash(&self) -> Result<String> {
         self.find_event(3, "rootfs-hash")

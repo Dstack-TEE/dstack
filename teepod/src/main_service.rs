@@ -6,7 +6,8 @@ use fs_err as fs;
 use ra_rpc::{Attestation, RpcCall};
 use teepod_rpc::teepod_server::{TeepodRpc, TeepodServer};
 use teepod_rpc::{
-    CreateVmRequest, Id, ImageInfo as RpcImageInfo, ImageListResponse, VmListResponse,
+    CreateVmRequest, Id, ImageInfo as RpcImageInfo, ImageListResponse, UpgradeAppRequest,
+    VmListResponse,
 };
 use tracing::warn;
 
@@ -25,13 +26,21 @@ pub struct RpcHandler {
 }
 
 impl RpcHandler {
+    fn compose_file_path(&self, id: &str) -> PathBuf {
+        self.app
+            .config
+            .run_path
+            .join(id)
+            .join("shared")
+            .join("docker-compose.yaml")
+    }
+
     fn prepare_work_dir(&self, id: &str, compose_file: &str, image_name: &str) -> Result<PathBuf> {
         let cfg = self.app.config.clone();
         let work_dir = cfg.run_path.join(&id);
         if work_dir.exists() {
             anyhow::bail!("VM already exists at {}", work_dir.display());
         }
-
         let shared_dir = work_dir.join("shared");
         fs::create_dir_all(&shared_dir).context("Failed to create shared directory")?;
         fs::write(shared_dir.join("docker-compose.yaml"), compose_file)
@@ -156,6 +165,17 @@ impl TeepodRpc for RpcHandler {
                 })
                 .collect(),
         })
+    }
+
+    async fn upgrade_app(self, request: UpgradeAppRequest) -> Result<Id> {
+        let compose_file_path = self.compose_file_path(&request.id);
+        if !compose_file_path.exists() {
+            anyhow::bail!("VM {} not found", request.id);
+        }
+        fs::write(compose_file_path, &request.compose_file)
+            .context("Failed to write compose file")?;
+        let new_app_id = app_id_of(&request.compose_file);
+        Ok(Id { id: new_app_id })
     }
 }
 

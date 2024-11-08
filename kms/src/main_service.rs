@@ -12,9 +12,13 @@ use ra_tls::{
     kdf::derive_ecdsa_key_pair,
     qvl::quote::{Report, TDReport10},
 };
-use tracing::info;
+use tracing::{info, warn};
 
-use crate::config::{AllowedMr, KmsConfig};
+use crate::{
+    config::{AllowedMr, KmsConfig},
+    ct_log::ct_log_write_cert,
+};
+use fs_err as fs;
 
 #[derive(Clone)]
 pub struct KmsState {
@@ -84,12 +88,33 @@ impl RpcHandler {
         }
         Ok(attestation)
     }
+
+    fn ensure_upgrade_allowed(&self, app_id: &str, upgraded_app_id: &str) -> Result<()> {
+        if app_id == upgraded_app_id {
+            return Ok(());
+        }
+        if self.state.inner.config.allow_any_upgrade {
+            return Ok(());
+        }
+        let registry_dir = &self.state.inner.config.upgrade_registry_dir;
+        let flag_file_path = format!("{registry_dir}/{app_id}/{upgraded_app_id}");
+        if fs::metadata(&flag_file_path).is_ok() {
+            return Ok(());
+        }
+        warn!("Denied upgrade from {app_id} to {upgraded_app_id}");
+        bail!("Upgrade denied");
+    }
 }
 
 impl KmsRpc for RpcHandler {
     async fn get_app_key(self) -> Result<AppKeyResponse> {
         let attest = self.ensure_attested()?;
         let app_id = attest.decode_app_id().context("Failed to decode app ID")?;
+        let upgraded_app_id = attest
+            .decode_upgraded_app_id()
+            .context("Failed to decode upgraded app ID")?;
+        self.ensure_upgrade_allowed(&app_id, &upgraded_app_id)
+            .context("Upgrade not allowed")?;
         let rootfs_hash = attest
             .decode_rootfs_hash()
             .context("Failed to decode rootfs hash")?;
@@ -125,12 +150,16 @@ impl KmsRpc for RpcHandler {
         let cert = state
             .root_ca
             .sign(req)
-            .context("Failed to sign certificate")?;
+            .context("Failed to sign certificate")?
+            .pem();
+
+        ct_log_write_cert(&app_id, &cert, &state.config.cert_log_dir)
+            .context("failed to log certificate")?;
 
         Ok(AppKeyResponse {
             app_key: app_key.serialize_pem(),
             disk_crypt_key: app_disk_key.serialize_der(),
-            certificate_chain: vec![cert.pem(), state.root_ca.cert.pem()],
+            certificate_chain: vec![cert, state.root_ca.cert.pem()],
         })
     }
 }

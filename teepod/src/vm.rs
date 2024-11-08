@@ -116,7 +116,7 @@ pub(crate) mod run {
         }
 
         pub fn start(&mut self, qemu_bin: &Path) -> Result<()> {
-            if self.started {
+            if self.is_running() {
                 bail!("VM already running");
             }
             let process = super::qemu::run_vm(qemu_bin, &self.config, &self.workdir)?;
@@ -135,6 +135,7 @@ pub(crate) mod run {
                 if status.success() {
                     info!("VM exited successfully");
                 } else {
+                    let todo = "Dont show error if VM is stopped by user";
                     error!("VM exited with status: {:#?}", status);
                     if let Some(mut output) = cloned_child.take_stderr() {
                         let mut stderr = String::new();

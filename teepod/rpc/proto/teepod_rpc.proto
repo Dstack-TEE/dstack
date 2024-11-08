@@ -40,6 +40,14 @@ message CreateVMRequest {
   uint32 disk_size = 6;
 }
 
+// Message for upgrading an app request
+message UpgradeAppRequest {
+  // ID of the VM
+  string id = 1;
+  // Compose file to be used for the VM
+  string compose_file = 2;
+}
+
 // Message for VM list response
 message VMListResponse {
   // List of VMs
@@ -56,6 +64,8 @@ service Teepod {
   rpc StopVM(Id) returns (google.protobuf.Empty);
   // RPC to remove a VM
   rpc RemoveVM(Id) returns (google.protobuf.Empty);
+  // RPC to upgrade an app
+  rpc UpgradeApp(UpgradeAppRequest) returns (Id);
 
   // RPC to list all VMs
   rpc ListVms(google.protobuf.Empty) returns (VMListResponse);

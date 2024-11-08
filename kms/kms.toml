@@ -19,6 +19,9 @@ mandatory = false
 root_ca_cert = "/etc/kms/certs/ca.cert"
 root_ca_key = "/etc/kms/certs/ca.key"
 subject_postfix = ".local"
+cert_log_dir = "/var/log/kms"
+allow_any_upgrade = false
+upgrade_registry_dir = "/var/run/kms/upgrade_registry"
 
 [core.allowed_mr]
 allow_all = false

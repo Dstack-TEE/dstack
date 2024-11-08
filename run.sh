@@ -13,10 +13,10 @@ PROCESS_NAME=qemu
 INITRD=${IMAGE_PATH}/$(jq -r '.initrd' ${IMG_METADATA})
 KERNEL=${IMAGE_PATH}/$(jq -r '.kernel' ${IMG_METADATA})
 CDROM=${IMAGE_PATH}/$(jq -r '.rootfs' ${IMG_METADATA})
+TDVF_FIRMWARE=${IMAGE_PATH}/$(jq -r '.bios' ${IMG_METADATA})
 CMDLINE=$(jq -r '.cmdline' ${IMG_METADATA})
 CONFIG_DIR=${VMDIR}/shared
 TD=${TD:-1}
-TDVF_FIRMWARE=/usr/share/ovmf/OVMF.fd
 RO=${RO:-on}
 CID=$(( ( RANDOM % 10000 )  + 3 ))
 
@@ -33,8 +33,8 @@ if [ "${TD}" == "1" ]; then
 	MACHINE_ARGS=",confidential-guest-support=tdx,hpet=off"
 	PROCESS_NAME=td
 	TDX_ARGS="-device vhost-vsock-pci,guest-cid=${CID} -object tdx-guest,id=tdx"
-	BIOS="-bios ${TDVF_FIRMWARE}"
 fi
+BIOS="-bios ${TDVF_FIRMWARE}"
 
 sleep 2
 
@@ -52,6 +52,6 @@ qemu-system-x86_64 \
 		   -device virtio-net-pci,netdev=nic0_td -netdev user,id=nic0_td \
 		   -drive file=${VDA},if=none,id=virtio-disk0 -device virtio-blk-pci,drive=virtio-disk0 \
 		   -cdrom ${CDROM} \
-		   -virtfs local,path=${CONFIG_DIR},mount_tag=config,readonly=${RO},security_model=mapped,id=virtfs0 \
+		   -virtfs local,path=${CONFIG_DIR},mount_tag=host-shared,readonly=${RO},security_model=mapped,id=virtfs0 \
 		   ${ARGS} \
 		   -append "${CMDLINE}"

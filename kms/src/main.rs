@@ -5,6 +5,7 @@ use tracing::info;
 mod config;
 mod main_service;
 mod web_routes;
+mod ct_log;
 
 #[derive(Parser)]
 #[command(author, version, about)]
