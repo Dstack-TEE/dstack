@@ -2,8 +2,40 @@
 
 use anyhow::{anyhow, Context, Result};
 use dcap_qvl::quote::Quote;
+use qvl::quote::Report;
 
 use crate::{event_log::EventLog, oids, traits::CertExt};
+
+/// The content type of a quote. A CVM should only generate quotes for these types.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuoteContentType {
+    /// The public key of KMS root CA
+    KmsRootCa,
+    /// The public key of the RA-TLS certificate
+    RaTlsCert,
+}
+
+impl QuoteContentType {
+    /// The tag of the content type used in the report data.
+    pub fn tag(&self) -> &'static str {
+        match self {
+            Self::KmsRootCa => "kms-root-ca",
+            Self::RaTlsCert => "ratls-cert",
+        }
+    }
+
+    /// Convert the content to the report data.
+    pub fn to_report_data(&self, content: &[u8]) -> [u8; 64] {
+        use sha2::Digest;
+        // The format is:
+        // sha2_512(<tag>:<content>)
+        let mut hasher = sha2::Sha512::new();
+        hasher.update(self.tag().as_bytes());
+        hasher.update(b":");
+        hasher.update(content);
+        hasher.finalize().into()
+    }
+}
 
 /// Attestation data
 #[derive(Debug, Clone)]
@@ -12,18 +44,12 @@ pub struct Attestation {
     pub quote: Vec<u8>,
     /// Event log
     pub event_log: Vec<u8>,
-    /// Application info
-    pub app_info: Vec<u8>,
 }
 
 impl Attestation {
     /// Create a new attestation
-    pub fn new(quote: Vec<u8>, event_log: Vec<u8>, app_info: Vec<u8>) -> Self {
-        Self {
-            quote,
-            event_log,
-            app_info,
-        }
+    pub fn new(quote: Vec<u8>, event_log: Vec<u8>) -> Self {
+        Self { quote, event_log }
     }
 
     /// Extract attestation data from a certificate
@@ -48,13 +74,8 @@ impl Attestation {
             None => return Ok(None),
         };
         let event_log = read_ext_bytes!(oids::PHALA_RATLS_EVENT_LOG).unwrap_or_default();
-        let app_info = read_ext_bytes!(oids::PHALA_RATLS_APP_INFO).unwrap_or_default();
 
-        Ok(Some(Self {
-            quote,
-            event_log,
-            app_info,
-        }))
+        Ok(Some(Self { quote, event_log }))
     }
 
     /// Decode the quote
@@ -89,6 +110,25 @@ impl Attestation {
     pub fn decode_rootfs_hash(&self) -> Result<String> {
         self.find_event(3, "rootfs-hash")
             .map(|event| truncate(&event.digest, 64).to_string())
+    }
+
+    /// Decode the report data in the quote
+    pub fn decode_report_data(&self) -> Result<[u8; 64]> {
+        match self.decode_quote()?.report {
+            Report::SgxEnclave(report) => Ok(report.report_data),
+            Report::TD10(report) => Ok(report.report_data),
+            Report::TD15(report) => Ok(report.base.report_data),
+        }
+    }
+
+    /// Ensure the quote is for the RA-TLS public key
+    pub fn ensure_quote_for_ra_tls_pubkey(&self, pubkey: &[u8]) -> Result<()> {
+        let report_data = self.decode_report_data()?;
+        let expected_report_data = QuoteContentType::RaTlsCert.to_report_data(pubkey);
+        if report_data != expected_report_data {
+            return Err(anyhow!("invalid quote"));
+        }
+        Ok(())
     }
 }
 

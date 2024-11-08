@@ -54,7 +54,7 @@ pub async fn handle_prpc<State, Call: RpcCall<State>>(
 }
 
 pub fn extract_attestation(cert: Certificate<'_>) -> Result<Option<Attestation>> {
-    Attestation::from_ext_getter(|oid| {
+    let attestation = Attestation::from_ext_getter(|oid| {
         let oid = Oid::from(oid).ok().context("Invalid OID")?;
         let Some(ext) = cert
             .get_extension_unique(&oid)
@@ -63,5 +63,14 @@ pub fn extract_attestation(cert: Certificate<'_>) -> Result<Option<Attestation>>
             return Ok(None);
         };
         Ok(Some(ext.value.to_vec()))
-    })
+    })?;
+    let todo = "verify the attestation";
+    let Some(attestation) = attestation else {
+        return Ok(None);
+    };
+    let pubkey = cert.public_key().raw;
+    attestation
+        .ensure_quote_for_ra_tls_pubkey(pubkey)
+        .context("invalid quote")?;
+    Ok(Some(attestation))
 }

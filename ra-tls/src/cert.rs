@@ -10,7 +10,7 @@ use x509_parser::der_parser::Oid;
 
 use crate::{
     attestation::Attestation,
-    oids::{PHALA_RATLS_APP_INFO, PHALA_RATLS_EVENT_LOG, PHALA_RATLS_QUOTE},
+    oids::{PHALA_RATLS_EVENT_LOG, PHALA_RATLS_QUOTE},
     traits::CertExt,
 };
 
@@ -87,7 +87,6 @@ pub struct CertRequest<'a> {
     ca_level: Option<u8>,
     quote: Option<&'a [u8]>,
     event_log: Option<&'a [u8]>,
-    app_info: Option<&'a [u8]>,
 }
 
 impl<'a> CertRequest<'a> {
@@ -116,13 +115,6 @@ impl<'a> CertRequest<'a> {
                 writer.write_bytes(event_log);
             });
             let ext = CustomExtension::from_oid_content(PHALA_RATLS_EVENT_LOG, content);
-            params.custom_extensions.push(ext);
-        }
-        if let Some(app_info) = self.app_info {
-            let content = yasna::construct_der(|writer| {
-                writer.write_bytes(app_info);
-            });
-            let ext = CustomExtension::from_oid_content(PHALA_RATLS_APP_INFO, content);
             params.custom_extensions.push(ext);
         }
         if let Some(ca_level) = self.ca_level {

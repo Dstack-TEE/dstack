@@ -3102,7 +3102,7 @@ dependencies = [
  "bon",
  "dcap-qvl",
  "elliptic-curve",
- "fs-err 2.11.0",
+ "fs-err 3.0.0",
  "hkdf",
  "p256",
  "rcgen",
@@ -3110,6 +3110,7 @@ dependencies = [
  "rustls-pki-types",
  "serde",
  "serde_json",
+ "sha2",
  "x509-parser",
  "yasna",
 ]

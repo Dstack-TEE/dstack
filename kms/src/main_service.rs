@@ -143,7 +143,6 @@ impl KmsRpc for RpcHandler {
             .ca_level(1)
             .quote(&attest.quote)
             .event_log(&attest.event_log)
-            .app_info(&attest.app_info)
             .key(&app_key)
             .build();
 

@@ -378,10 +378,6 @@
         <div v-if="showCreateDialog" class="dialog-overlay">
             <div class="dialog">
                 <h2>Deploy a new instance</h2>
-                <div>
-                    <label>App ID:</label>
-                    <div class="app-id-preview">{{ appIdPreview() }}</div>
-                </div>
                 <form @submit.prevent="createVM" class="create-vm-form">
                     <div class="form-grid">
                         <div class="form-group">
@@ -583,23 +579,6 @@
                     return JSON.stringify(app_compose);
                 };
 
-                const appIdPreview = () => {
-                    const compose_file = makeAppComposeFile();
-                    const encoder = new TextEncoder();
-                    const data = encoder.encode(compose_file);
-                    
-                    return crypto.subtle.digest('SHA-256', data)
-                        .then(hashBuffer => {
-                            const hashArray = Array.from(new Uint8Array(hashBuffer));
-                            const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-                            return hashHex.substring(0, 40);
-                        })
-                        .catch(error => {
-                            console.error('Error generating hash:', error);
-                            return '';
-                        });
-                };
-
                 const createVM = async () => {
                     try {
                         const form = {
@@ -760,7 +739,6 @@
                     loadUpgradeFile,
                     upgradeVM,
                     showCreateDialog,
-                    appIdPreview
                 };
             }
         }).mount('#app');
