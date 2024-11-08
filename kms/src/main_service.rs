@@ -69,6 +69,9 @@ impl RpcHandler {
         let Some(attestation) = &self.attestation else {
             bail!("No attestation provided");
         };
+        // if !attestation.is_verified() {
+        //     bail!("The quote is not verified");
+        // }
         let quote = attestation.decode_quote()?;
 
         let report = match quote.report {

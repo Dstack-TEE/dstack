@@ -8,7 +8,6 @@ use rocket::{
     data::{Data, Limits},
     get,
     http::ContentType,
-    mtls::Certificate,
     post,
     response::{content::RawHtml, status::Custom},
     routes, Route, State,
@@ -18,7 +17,6 @@ use tappd_rpc::{worker_server::WorkerRpc, WorkerInfo};
 #[post("/prpc/<method>?<json>", data = "<data>")]
 async fn prpc_post(
     state: &State<AppState>,
-    cert: Option<Certificate<'_>>,
     method: &str,
     data: Data<'_>,
     limits: &Limits,
@@ -27,7 +25,8 @@ async fn prpc_post(
 ) -> Result<Custom<Vec<u8>>, String> {
     handle_prpc::<_, InternalRpcHandler>(
         &*state,
-        cert,
+        None,
+        None,
         method,
         Some(data),
         limits,
@@ -41,14 +40,22 @@ async fn prpc_post(
 #[get("/prpc/<method>")]
 async fn prpc_get(
     state: &State<AppState>,
-    cert: Option<Certificate<'_>>,
     method: &str,
     limits: &Limits,
     content_type: Option<&ContentType>,
 ) -> Result<Custom<Vec<u8>>, String> {
-    handle_prpc::<_, InternalRpcHandler>(&*state, cert, method, None, limits, content_type, true)
-        .await
-        .map_err(|e| format!("Failed to handle PRPC request: {e}"))
+    handle_prpc::<_, InternalRpcHandler>(
+        &*state,
+        None,
+        None,
+        method,
+        None,
+        limits,
+        content_type,
+        true,
+    )
+    .await
+    .map_err(|e| format!("Failed to handle PRPC request: {e}"))
 }
 
 pub fn internal_routes() -> Vec<Route> {
@@ -86,7 +93,6 @@ async fn index(state: &State<AppState>) -> Result<RawHtml<String>, String> {
 #[post("/prpc/<method>?<json>", data = "<data>")]
 async fn external_prpc_post(
     state: &State<AppState>,
-    cert: Option<Certificate<'_>>,
     method: &str,
     data: Data<'_>,
     limits: &Limits,
@@ -95,7 +101,8 @@ async fn external_prpc_post(
 ) -> Result<Custom<Vec<u8>>, String> {
     handle_prpc::<_, ExternalRpcHandler>(
         &*state,
-        cert,
+        None,
+        None,
         method,
         Some(data),
         limits,
@@ -109,14 +116,22 @@ async fn external_prpc_post(
 #[get("/prpc/<method>")]
 async fn external_prpc_get(
     state: &State<AppState>,
-    cert: Option<Certificate<'_>>,
     method: &str,
     limits: &Limits,
     content_type: Option<&ContentType>,
 ) -> Result<Custom<Vec<u8>>, String> {
-    handle_prpc::<_, ExternalRpcHandler>(&*state, cert, method, None, limits, content_type, true)
-        .await
-        .map_err(|e| format!("Failed to handle PRPC request: {e}"))
+    handle_prpc::<_, ExternalRpcHandler>(
+        &*state,
+        None,
+        None,
+        method,
+        None,
+        limits,
+        content_type,
+        true,
+    )
+    .await
+    .map_err(|e| format!("Failed to handle PRPC request: {e}"))
 }
 
 #[get("/logs/<container_name>?<since>&<until>&<follow>&<text>&<timestamps>&<bare>")]

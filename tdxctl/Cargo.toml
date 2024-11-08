@@ -7,6 +7,7 @@ edition = "2021"
 anyhow = "1.0.86"
 clap = { version = "4.5.17", features = ["derive"] }
 fs-err = "2.11.0"
+getrandom = "0.2.15"
 hex = "0.4.3"
 hex_fmt = "0.3.0"
 ra-tls = { version = "0.1.0", path = "../ra-tls" }

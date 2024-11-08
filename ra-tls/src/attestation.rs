@@ -2,7 +2,7 @@
 
 use anyhow::{anyhow, Context, Result};
 use dcap_qvl::quote::Quote;
-use qvl::quote::Report;
+use qvl::{quote::Report, verify::VerifiedReport};
 
 use crate::{event_log::EventLog, oids, traits::CertExt};
 
@@ -44,12 +44,18 @@ pub struct Attestation {
     pub quote: Vec<u8>,
     /// Event log
     pub event_log: Vec<u8>,
+    /// Verified report
+    pub verified_report: Option<VerifiedReport>,
 }
 
 impl Attestation {
     /// Create a new attestation
     pub fn new(quote: Vec<u8>, event_log: Vec<u8>) -> Self {
-        Self { quote, event_log }
+        Self {
+            quote,
+            event_log,
+            verified_report: None,
+        }
     }
 
     /// Extract attestation data from a certificate
@@ -75,7 +81,11 @@ impl Attestation {
         };
         let event_log = read_ext_bytes!(oids::PHALA_RATLS_EVENT_LOG).unwrap_or_default();
 
-        Ok(Some(Self { quote, event_log }))
+        Ok(Some(Self {
+            quote,
+            event_log,
+            verified_report: None,
+        }))
     }
 
     /// Decode the quote
@@ -92,6 +102,11 @@ impl Attestation {
             }
         }
         Err(anyhow!("event {ad} not found"))
+    }
+
+    /// Return true if the quote is verified
+    pub fn is_verified(&self) -> bool {
+        self.verified_report.is_some()
     }
 
     /// Decode the app-id from the event log

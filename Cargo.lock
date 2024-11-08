@@ -4385,6 +4385,7 @@ dependencies = [
  "anyhow",
  "clap",
  "fs-err 2.11.0",
+ "getrandom 0.2.15",
  "hex",
  "hex_fmt",
  "parity-scale-codec",

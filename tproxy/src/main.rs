@@ -1,6 +1,7 @@
 use anyhow::{anyhow, Result};
 use clap::Parser;
 use config::Config;
+use ra_rpc::rocket_helper::QuoteVerifier;
 
 mod config;
 mod main_service;
@@ -27,13 +28,18 @@ async fn main() -> Result<()> {
 
     let config = figment.focus("core").extract::<Config>()?;
     let proxy_config = config.proxy.clone();
+    let pccs_url = config.pccs_url.clone();
     let state = main_service::AppState::new(config)?;
     state.lock().reconfigure()?;
     proxy::start(proxy_config, state.clone());
 
-    let rocket = rocket::custom(figment)
+    let mut rocket = rocket::custom(figment)
         .mount("/", web_routes::routes())
         .manage(state);
+    if !pccs_url.is_empty() {
+        let verifier = QuoteVerifier::new(pccs_url);
+        rocket = rocket.manage(verifier);
+    }
     rocket
         .launch()
         .await

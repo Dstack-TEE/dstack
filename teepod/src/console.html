@@ -717,7 +717,16 @@
                 };
 
                 onMounted(() => {
-                    loadVMList();
+                    (async () => {
+                        while (true) {
+                            try {
+                                await loadVMList();
+                            } catch (error) {
+                                console.error('error loading VM list:', error);
+                            }
+                            await new Promise(resolve => setTimeout(resolve, 3000));
+                        }
+                    })();
                     loadImages();
                 });
 

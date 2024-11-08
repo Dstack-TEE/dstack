@@ -1,11 +1,13 @@
 use anyhow::{anyhow, Context, Result};
 use clap::Parser;
+use config::KmsConfig;
+use ra_rpc::rocket_helper::QuoteVerifier;
 use tracing::info;
 
 mod config;
+mod ct_log;
 mod main_service;
 mod web_routes;
-mod ct_log;
 
 #[derive(Parser)]
 #[command(author, version, about)]
@@ -27,11 +29,17 @@ async fn main() -> Result<()> {
     }
 
     let figment = config::load_config_figment(args.config.as_deref());
-    let config = figment.focus("core").extract()?;
+    let config: KmsConfig = figment.focus("core").extract()?;
+    let pccs_url = config.pccs_url.clone();
     let state = main_service::KmsState::new(config).context("Failed to initialize KMS state")?;
-    let rocket = rocket::custom(figment)
+    let mut rocket = rocket::custom(figment)
         .mount("/", web_routes::routes())
         .manage(state);
+
+    if !pccs_url.is_empty() {
+        let verifier = QuoteVerifier::new(pccs_url);
+        rocket = rocket.manage(verifier);
+    }
 
     rocket
         .launch()

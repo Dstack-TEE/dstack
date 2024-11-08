@@ -1,6 +1,7 @@
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use fs_err as fs;
+use getrandom::getrandom;
 use ra_tls::{attestation::QuoteContentType, cert::CaCert, event_log::EventLog};
 use scale::Decode;
 use std::io::{self, Read, Write};
@@ -24,6 +25,7 @@ enum Commands {
     Show,
     Hex(HexCommand),
     GenRaCert(GenRaCertArgs),
+    Rand(RandArgs),
 }
 
 #[derive(Parser)]
@@ -80,6 +82,22 @@ struct GenRaCertArgs {
     #[arg(short, long)]
     /// file path to store the private key
     key_path: String,
+}
+
+#[derive(Parser)]
+/// Generate random data
+struct RandArgs {
+    /// number of bytes to generate
+    #[arg(short = 'n', long, default_value_t = 20)]
+    bytes: usize,
+
+    /// output to file
+    #[arg(short = 'o', long)]
+    output: Option<String>,
+
+    /// hex encode output
+    #[arg(short = 'x', long)]
+    hex: bool,
 }
 
 fn cmd_quote() -> Result<()> {
@@ -153,6 +171,18 @@ fn cmd_report() -> Result<()> {
     io::stdout()
         .write_all(&report.0)
         .context("Failed to write report")?;
+    Ok(())
+}
+
+fn cmd_rand(rand_args: RandArgs) -> Result<()> {
+    let mut data = vec![0u8; rand_args.bytes];
+    getrandom(&mut data).context("Failed to generate random data")?;
+    if rand_args.hex {
+        data = hex::encode(data).into_bytes();
+    }
+    io::stdout()
+        .write_all(&data)
+        .context("Failed to write random data")?;
     Ok(())
 }
 
@@ -262,6 +292,9 @@ fn main() -> Result<()> {
         }
         Commands::GenRaCert(args) => {
             cmd_gen_ra_cert(args)?;
+        }
+        Commands::Rand(rand_args) => {
+            cmd_rand(rand_args)?;
         }
     }
 

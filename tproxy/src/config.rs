@@ -38,6 +38,7 @@ pub struct Config {
     pub wg: WgConfig,
     pub proxy: ProxyConfig,
     pub certbot: CertbotConfig,
+    pub pccs_url: String,
 }
 
 pub const CONFIG_FILENAME: &str = "tproxy.toml";
