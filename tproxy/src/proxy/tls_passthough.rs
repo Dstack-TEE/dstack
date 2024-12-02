@@ -1,9 +1,10 @@
 use anyhow::{Context, Result};
 use std::fmt::Debug;
-use tokio::{io::AsyncWriteExt, net::TcpStream};
+use tokio::{io::AsyncWriteExt, net::TcpStream, time::timeout};
 use tracing::debug;
 
 use crate::main_service::AppState;
+use crate::models::Timeouts;
 
 #[derive(Debug)]
 struct TappAddress {
@@ -45,12 +46,13 @@ pub(crate) async fn proxy_with_sni(
     inbound: TcpStream,
     buffer: Vec<u8>,
     sni: &str,
+    timeouts: Option<Timeouts>,
 ) -> Result<()> {
     let tapp_addr = resolve_tapp_address(sni)
         .await
         .context("failed to resolve tapp address")?;
     debug!("target address is {}:{}", tapp_addr.app_id, tapp_addr.port);
-    proxy_to_app(state, inbound, buffer, &tapp_addr.app_id, tapp_addr.port).await
+    proxy_to_app(state, inbound, buffer, &tapp_addr.app_id, tapp_addr.port, timeouts).await
 }
 
 pub(crate) async fn proxy_to_app(
@@ -59,19 +61,28 @@ pub(crate) async fn proxy_to_app(
     buffer: Vec<u8>,
     app_id: &str,
     port: u16,
+    timeouts: Option<Timeouts>,
 ) -> Result<()> {
+    let timeouts = timeouts.unwrap_or_default();
     let target_ip = state.lock().select_a_host(app_id).context("tapp not found")?.ip;
-    let mut outbound = TcpStream::connect((target_ip, port))
-        .await
-        .context("failed to connect to tapp")?;
+    let mut outbound = timeout(
+        timeouts.connect,
+        TcpStream::connect((target_ip, port))
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("connection timeout"))?
+    .context("failed to connect to tapp")?;
     outbound
         .write_all(&buffer)
         .await
         .context("failed to write to tapp")?;
-
-    tokio::io::copy_bidirectional(&mut inbound, &mut outbound)
-        .await
-        .context("failed to copy between inbound and outbound")?;
+    let _first_byte_timeout = timeout(
+        timeouts.first_byte,
+        tokio::io::copy_bidirectional(&mut inbound, &mut outbound)
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("first byte timeout"))?
+    .context("failed to copy between inbound and outbound")?;
     Ok(())
 }
 

@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use anyhow::{bail, Context, Result};
 use sni::extract_sni;
@@ -10,6 +10,7 @@ use tokio::{
 use tracing::{debug, error, info};
 
 use crate::{config::ProxyConfig, main_service::AppState};
+use crate::models::Timeouts;
 
 mod sni;
 mod tls_passthough;
@@ -90,6 +91,7 @@ async fn handle_connection(
     state: AppState,
     dotted_base_domain: &str,
     tls_terminate_proxy: Arc<TlsTerminateProxy>,
+    timeouts: Option<Timeouts>,
 ) -> Result<()> {
     let (sni, buffer) = take_sni(&mut inbound).await.context("failed to take sni")?;
     let Some(sni) = sni else {
@@ -104,17 +106,18 @@ async fn handle_connection(
                 buffer,
                 &dst.app_id,
                 dst.port.unwrap_or(443),
+                timeouts,
             )
             .await
             .with_context(|| format!("error on connection {sni}"))
         } else {
             tls_terminate_proxy
-                .proxy(inbound, buffer, &dst.app_id, dst.port)
+                .proxy(inbound, buffer, &dst.app_id, dst.port, timeouts)
                 .await
                 .with_context(|| format!("error on connection {sni}"))
         }
     } else {
-        tls_passthough::proxy_with_sni(state, inbound, buffer, &sni)
+        tls_passthough::proxy_with_sni(state, inbound, buffer, &sni, timeouts)
             .await
             .with_context(|| format!("error on connection {sni}"))
     }
@@ -125,6 +128,10 @@ pub async fn run(config: &ProxyConfig, app_state: AppState) -> Result<()> {
         let base_domain = config.base_domain.as_str();
         let base_domain = base_domain.strip_prefix(".").unwrap_or(base_domain);
         Arc::new(format!(".{base_domain}"))
+    };
+    let timeouts = Timeouts {
+        connect: Duration::from_secs(config.connect_timeout.into()),
+        first_byte: Duration::from_secs(config.first_byte_timeout.into()),
     };
 
     let tls_terminate_proxy =
@@ -158,6 +165,7 @@ pub async fn run(config: &ProxyConfig, app_state: AppState) -> Result<()> {
                         app_state,
                         &dotted_base_domain,
                         tls_terminate_proxy,
+                        Some(timeouts),
                     )
                     .await
                     {

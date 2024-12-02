@@ -27,6 +27,8 @@ pub struct ProxyConfig {
     pub listen_addr: Ipv4Addr,
     pub listen_port: u16,
     pub tappd_port: u16,
+    pub connect_timeout: u16,
+    pub first_byte_timeout: u16,
 }
 
 #[derive(Debug, Clone, Deserialize)]

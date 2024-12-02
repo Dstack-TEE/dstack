@@ -11,8 +11,10 @@ use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::TcpStream;
 use tokio_rustls::{rustls, TlsAcceptor};
+use tokio::time::timeout;
 
 use crate::main_service::AppState;
+use crate::models::Timeouts;
 
 pub struct TlsTerminateProxy {
     app_state: AppState,
@@ -51,8 +53,10 @@ impl TlsTerminateProxy {
         buffer: Vec<u8>,
         app_id: &str,
         port: Option<u16>,
+        timeouts: Option<Timeouts>,
     ) -> Result<()> {
         let port = port.unwrap_or(80);
+        let timeouts = timeouts.unwrap_or_default();
         let host = self
             .app_state
             .lock()
@@ -68,12 +72,20 @@ impl TlsTerminateProxy {
             .accept(stream)
             .await
             .context("failed to accept tls connection")?;
-        let mut outbound = TcpStream::connect((host.ip, port))
-            .await
-            .context("failed to connect to app")?;
-        tokio::io::copy_bidirectional(&mut tls_stream, &mut outbound)
-            .await
-            .context("failed to bridge inbound and outbound")?;
+        let mut outbound = timeout(
+            timeouts.connect,
+            TcpStream::connect((host.ip, port))
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("connection timeout"))?
+        .context("failed to connect to app")?;
+        let _first_byte_timeout = timeout(
+            timeouts.first_byte,
+            tokio::io::copy_bidirectional(&mut tls_stream, &mut outbound)
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("first byte timeout"))?
+        .context("failed to bridge inbound and outbound")?;
         Ok(())
     }
 }
