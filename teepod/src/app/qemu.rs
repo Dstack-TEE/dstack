@@ -151,7 +151,7 @@ impl VmConfig {
         }
     }
 
-    pub fn config_qemu(&self, qemu: &Path, workdir: impl AsRef<Path>) -> Result<ProcessConfig> {
+    pub fn config_qemu(&self, qemu: &Path, workdir: impl AsRef<Path>, cid: u32) -> Result<ProcessConfig> {
         let workdir = VmWorkDir::new(workdir);
         let serial_file = workdir.serial_file();
         let shared_dir = workdir.shared_dir();
@@ -209,15 +209,13 @@ impl VmConfig {
         };
         command.arg("-netdev").arg(netdev);
         command.arg("-device").arg("virtio-net-pci,netdev=net0");
-        if let Some(tdx) = &self.tdx_config {
-            command
-                .arg("-machine")
-                .arg("q35,kernel-irqchip=split,confidential-guest-support=tdx,hpet=off");
-            command.arg("-object").arg("tdx-guest,id=tdx");
-            command
-                .arg("-device")
-                .arg(format!("vhost-vsock-pci,guest-cid={}", tdx.cid));
-        }
+        command
+            .arg("-machine")
+            .arg("q35,kernel-irqchip=split,confidential-guest-support=tdx,hpet=off");
+        command.arg("-object").arg("tdx-guest,id=tdx");
+        command
+            .arg("-device")
+            .arg(format!("vhost-vsock-pci,guest-cid={}", cid));
         command.arg("-virtfs").arg(format!(
             "local,path={},mount_tag=host-shared,readonly=off,security_model=mapped,id=virtfs0",
             shared_dir.display()

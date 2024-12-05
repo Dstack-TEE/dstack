@@ -86,6 +86,7 @@ impl App {
             supervisor: supervisor.clone(),
             state: Arc::new(Mutex::new(AppState {
                 cid_pool,
+                occupied_cids: HashMap::new(),
                 vms: HashMap::new(),
             })),
             config: Arc::new(config),
@@ -95,29 +96,16 @@ impl App {
     pub async fn load_vm(
         &self,
         work_dir: impl AsRef<Path>,
-        cids_assigned: &HashMap<String, u32>,
     ) -> Result<()> {
         let vm_work_dir = VmWorkDir::new(work_dir.as_ref());
         let manifest = vm_work_dir.manifest().context("Failed to read manifest")?;
         let todo = "sanitize the image name";
         let image_path = self.config.image_path.join(&manifest.image);
         let image = Image::load(&image_path).context("Failed to load image")?;
-        let running_vms = self.supervisor.list().await.context("Failed to list VMs")?;
-
-        let cid = cids_assigned.get(&manifest.id).cloned();
-        let cid = match cid {
-            Some(cid) => cid,
-            None => self
-                .lock()
-                .cid_pool
-                .allocate()
-                .context("CID pool exhausted")?,
-        };
-
         let vm_config = VmConfig {
             manifest,
             image,
-            tdx_config: Some(TdxConfig { cid }),
+            tdx_config: None,
             networking: self.config.networking.clone(),
         };
         if vm_config.manifest.disk_size > self.config.cvm.max_disk_size {
@@ -138,14 +126,15 @@ impl App {
     pub async fn start_vm(&self, id: &str) -> Result<()> {
         let vm_config = self.lock().get(id).context("VM not found")?;
         let work_dir = self.work_dir(id);
-        work_dir
-            .set_started(true)
-            .with_context(|| format!("Failed to set started for VM {id}"))?;
-        let process_config = vm_config.config_qemu(&self.config.qemu_path, &work_dir)?;
+        let cid = self.lock().allocate_cid(id)?;
+        let process_config = vm_config.config_qemu(&self.config.qemu_path, &work_dir, cid)?;
         self.supervisor
             .deploy(process_config)
             .await
             .with_context(|| format!("Failed to start VM {id}"))?;
+        work_dir
+            .set_started(true)
+            .with_context(|| format!("Failed to set started for VM {id}"))?;
         Ok(())
     }
 
@@ -155,6 +144,7 @@ impl App {
             .set_started(false)
             .context("Failed to set started")?;
         self.supervisor.stop(id).await?;
+        self.lock().free_cid(id)?;
         Ok(())
     }
 
@@ -165,16 +155,7 @@ impl App {
             bail!("VM is running, stop it first");
         }
         self.supervisor.remove(id).await?;
-
-        {
-            let mut state = self.lock();
-            if let Some(config) = state.remove(id) {
-                if let Some(cfg) = &config.tdx_config {
-                    state.cid_pool.free(cfg.cid);
-                }
-            }
-        }
-
+        self.lock().remove(id);
         let vm_path = self.work_dir(id);
         fs::remove_dir_all(&vm_path).context("Failed to remove VM directory")?;
         Ok(())
@@ -182,26 +163,12 @@ impl App {
 
     pub async fn reload_vms(&self) -> Result<()> {
         let vm_path = self.vm_dir();
-        let running_vms = self.supervisor.list().await.context("Failed to list VMs")?;
-        let occupied_cids = running_vms
-            .iter()
-            .flat_map(|p| match p.config.cid {
-                Some(cid) => Some((p.config.id.clone(), cid)),
-                None => None,
-            })
-            .collect::<HashMap<_, _>>();
-        {
-            let mut state = self.lock();
-            for (_id, cid) in &occupied_cids {
-                state.cid_pool.occupy(*cid)?;
-            }
-        }
         if vm_path.exists() {
             for entry in fs::read_dir(vm_path).context("Failed to read VM directory")? {
                 let entry = entry.context("Failed to read directory entry")?;
                 let vm_path = entry.path();
                 if vm_path.is_dir() {
-                    if let Err(err) = self.load_vm(vm_path, &occupied_cids).await {
+                    if let Err(err) = self.load_vm(vm_path).await {
                         error!("Failed to load VM: {err:?}");
                     }
                 }
@@ -264,6 +231,7 @@ impl App {
 
 pub(crate) struct AppState {
     cid_pool: IdPool<u32>,
+    occupied_cids: HashMap<String, u32>,
     vms: HashMap<String, Arc<VmConfig>>,
 }
 
@@ -282,5 +250,21 @@ impl AppState {
 
     pub fn iter_vms(&self) -> impl Iterator<Item = &Arc<VmConfig>> {
         self.vms.values()
+    }
+
+    pub fn allocate_cid(&mut self, id: &str) -> Result<u32> {
+        let _ = self.vms.get(id).context("VM not found")?;
+        let cid = self.cid_pool
+            .allocate()
+            .context("CID pool exhausted")?;
+        self.occupied_cids.insert(id.into(), cid);
+        Ok(cid)
+    }
+
+    pub fn free_cid(&mut self, id: &str) -> Result<()> {
+        let cid = self.occupied_cids.get(id).context("Not cid assigned for the VM.")?;
+        self.cid_pool.free(*cid);
+        self.occupied_cids.remove(id);
+        Ok(())
     }
 }
