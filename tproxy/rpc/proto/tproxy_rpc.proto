@@ -81,6 +81,11 @@ message GetInfoResponse {
   optional HostInfo info = 2;
 }
 
+message GetMetaResponse {
+  uint32 registered = 1;
+  uint32 online = 2;
+}
+
 service Tproxy {
   // Register a new proxied CVM.
   rpc RegisterCvm(RegisterCvmRequest) returns (RegisterCvmResponse) {}
@@ -90,4 +95,6 @@ service Tproxy {
   rpc AcmeInfo(google.protobuf.Empty) returns (AcmeInfoResponse) {}
   // Find Proxied HostInfo by instance ID
   rpc GetInfo(GetInfoRequest) returns (GetInfoResponse) {}
+  // Summary API for inspect.
+  rpc GetMeta(google.protobuf.Empty) returns (GetMetaResponse);
 }
