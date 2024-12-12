@@ -2538,6 +2538,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "nix"
+version = "0.29.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "71e2746dc3a24dd78b3cfcb7be93368c6de9963d30f43a6a73998a9cf4b17b46"
+dependencies = [
+ "bitflags 2.6.0",
+ "cfg-if",
+ "cfg_aliases",
+ "libc",
+ "memoffset",
+]
+
+[[package]]
 name = "nom"
 version = "7.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3756,6 +3769,20 @@ version = "0.1.0"
 source = "git+https://github.com/kvinwang/rocket-apitoken?branch=dev#7b5c1e864217b928e08913886c1a3ddd849e254c"
 dependencies = [
  "rocket",
+]
+
+[[package]]
+name = "rocket-vsock-listener"
+version = "0.3.2"
+dependencies = [
+ "anyhow",
+ "derive_more 1.0.0",
+ "pin-project",
+ "rocket",
+ "serde",
+ "thiserror 2.0.4",
+ "tokio",
+ "tokio-vsock",
 ]
 
 [[package]]
@@ -5014,6 +5041,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "tokio-vsock"
+version = "0.6.0"
+source = "git+https://github.com/kvinwang/tokio-vsock?branch=shared-self-accept#dd9778742ceb98ee39d68ad527b8d80f3178c172"
+dependencies = [
+ "bytes",
+ "futures",
+ "libc",
+ "tokio",
+ "vsock",
+]
+
+[[package]]
 name = "toml"
 version = "0.8.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5298,6 +5337,16 @@ name = "version_check"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
+
+[[package]]
+name = "vsock"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4e8b4d00e672f147fc86a09738fadb1445bd1c0a40542378dfb82909deeee688"
+dependencies = [
+ "libc",
+ "nix",
+]
 
 [[package]]
 name = "vte"
