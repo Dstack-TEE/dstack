@@ -27,6 +27,7 @@ members = [
     "cc-eventlog",
     "supervisor",
     "supervisor/client",
+    "rocket-vsock-listener",
 ]
 resolver = "2"
 
@@ -44,6 +45,7 @@ supervisor-client = { path = "supervisor/client" }
 tdx-attest = { path = "tdx-attest" }
 tdx-attest-sys = { path = "tdx-attest-sys" }
 certbot = { path = "certbot" }
+rocket-vsock-listener = { path = "rocket-vsock-listener" }
 
 # Core dependencies
 anyhow = "1.0.94"
@@ -59,7 +61,6 @@ log = "0.4.22"
 notify = "7.0.0"
 rand = "0.8.5"
 serde = { version = "1.0.210", features = ["derive"] }
-tokio = { version = "1.42.0" }
 tracing = "0.1.40"
 tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
 safe-write = "0.1.1"
@@ -87,6 +88,8 @@ ipnet = { version = "2.10.1", features = ["serde"] }
 reqwest = { version = "0.12.9", default-features = false, features = ["json", "rustls-tls", "charset", "hickory-dns"] }
 rocket = { git = "https://github.com/rwf2/Rocket", branch = "master", features = ["mtls"] }
 rocket-apitoken = { git = "https://github.com/kvinwang/rocket-apitoken", branch = "dev" }
+tokio = { version = "1.42.0" }
+tokio-vsock = "0.6.0"
 
 # Cryptography/Security
 aes-gcm = "0.10.3"
@@ -124,6 +127,7 @@ enum_dispatch = "0.3.13"
 insta = "1.41.1"
 num_enum = "0.7.3"
 thiserror = "2.0.4"
+derive_more = "1.0.0"
 
 # Utilities
 dirs = "5.0.1"
@@ -139,3 +143,6 @@ tailf = "0.1.2"
 time = "0.3.37"
 uuid = { version = "1.11.0", features = ["v4"] }
 which = "7.0.0"
+
+[patch.crates-io]
+tokio-vsock = { git = "https://github.com/kvinwang/tokio-vsock", branch = "shared-self-accept" }
