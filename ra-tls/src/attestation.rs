@@ -161,9 +161,12 @@ impl Attestation {
     }
 
     /// Decode the upgraded app-id from the event log
-    pub fn decode_upgraded_app_id(&self) -> Result<String> {
-        self.find_event(3, "upgraded-app-id")
-            .map(|event| hex::encode(&event.event_payload))
+    pub fn decode_compose_hash(&self) -> Result<String> {
+        let event = self.find_event(3, "compose-hash").or_else(|_| {
+            // Old images use this event name
+            self.find_event(3, "upgraded-app-id")
+        })?;
+        Ok(hex::encode(&event.event_payload))
     }
 
     /// Decode the rootfs hash from the event log
