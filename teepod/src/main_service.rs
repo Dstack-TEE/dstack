@@ -9,7 +9,8 @@ use ra_rpc::{Attestation, RpcCall};
 use teepod_rpc::teepod_server::{TeepodRpc, TeepodServer};
 use teepod_rpc::{
     AppId, GetInfoResponse, Id, ImageInfo as RpcImageInfo, ImageListResponse, PublicKeyResponse,
-    ResizeVmRequest, StatusResponse, UpgradeAppRequest, VmConfiguration,
+    ResizeVmRequest, StatusResponse, UpgradeAppRequest, VmConfiguration, GetMetaResponse, KmsSettings,
+    TProxySettings, ResourcesSettings,
 };
 use tracing::warn;
 
@@ -342,6 +343,26 @@ impl TeepodRpc for RpcHandler {
             .await
             .context("Failed to load VM")?;
         Ok(())
+    }
+
+    async fn get_meta(self) -> Result<GetMetaResponse> {
+        Ok(GetMetaResponse {
+            kms: Some(KmsSettings {
+                url: self.app.config.cvm.kms_url.clone(),
+            }),
+            tproxy: Some(TProxySettings {
+                url: self.app.config.cvm.tproxy_url.clone(),
+                base_domain: self.app.config.gateway.base_domain.clone(),
+                port: self.app.config.gateway.port.into(),
+                tappd_port: self.app.config.gateway.tappd_port.into(),
+            }),
+            resources: Some(ResourcesSettings {
+                max_cvm_number: self.app.config.cvm.cid_pool_size,
+                max_allocable_vcpu: self.app.config.cvm.max_allocable_vcpu,
+                max_allocable_memory_in_mb: self.app.config.cvm.max_allocable_memory_in_mb,
+                max_disk_size_in_gb: self.app.config.cvm.max_disk_size,
+            }),
+        })
     }
 }
 

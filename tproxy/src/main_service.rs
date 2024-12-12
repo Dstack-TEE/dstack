@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use tproxy_rpc::{
     tproxy_server::{TproxyRpc, TproxyServer},
     AcmeInfoResponse, GetInfoRequest, GetInfoResponse, HostInfo as PbHostInfo, ListResponse,
-    RegisterCvmRequest, RegisterCvmResponse, TappdConfig, WireGuardConfig,
+    RegisterCvmRequest, RegisterCvmResponse, TappdConfig, WireGuardConfig, GetMetaResponse,
 };
 use tracing::{debug, error, info};
 
@@ -352,7 +352,7 @@ impl TproxyRpc for RpcHandler {
             .instances
             .values()
             .map(|instance| PbHostInfo {
-                id: instance.id.clone(),
+                instance_id: instance.id.clone(),
                 ip: instance.ip.to_string(),
                 app_id: instance.app_id.clone(),
                 base_domain: base_domain.clone(),
@@ -376,7 +376,7 @@ impl TproxyRpc for RpcHandler {
 
         if let Some(instance) = state.state.instances.get(&request.id) {
             let host_info = PbHostInfo {
-                id: instance.id.clone(),
+                instance_id: instance.id.clone(),
                 ip: instance.ip.to_string(),
                 app_id: instance.app_id.clone(),
                 base_domain: base_domain.clone(),
@@ -409,6 +409,34 @@ impl TproxyRpc for RpcHandler {
         Ok(AcmeInfoResponse {
             account_uri,
             hist_keys: keys.into_iter().collect(),
+        })
+    }
+
+    async fn get_meta(self) -> Result<GetMetaResponse> {
+        let state = self.state.lock();
+        let handshakes = state.latest_handshakes(None)?;
+        
+        // Total registered instances
+        let registered = state.state.instances.len();
+        
+        // Get current timestamp
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .context("system time before Unix epoch")?
+            .as_secs();
+        
+        // Count online instances (those with handshakes in last 5 minutes)
+        let online = handshakes
+            .values()
+            .filter(|(ts, _)| {
+                // Skip instances that never connected (ts == 0)
+                *ts != 0 && (now - *ts) < 300
+            })
+            .count();
+
+        Ok(GetMetaResponse {
+            registered: registered as u32,
+            online: online as u32,
         })
     }
 }

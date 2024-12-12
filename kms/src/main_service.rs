@@ -3,7 +3,7 @@ use std::sync::Arc;
 use anyhow::{bail, Context, Result};
 use kms_rpc::{
     kms_server::{KmsRpc, KmsServer},
-    AppId, AppKeyResponse, PublicKeyResponse,
+    AppId, AppKeyResponse, PublicKeyResponse, GetMetaResponse,
 };
 use ra_rpc::RpcCall;
 use ra_tls::{
@@ -182,6 +182,13 @@ impl KmsRpc for RpcHandler {
         let pubkey = x25519_dalek::PublicKey::from(&secret);
         Ok(PublicKeyResponse {
             public_key: pubkey.to_bytes().to_vec(),
+        })
+    }
+
+    async fn get_meta(self) -> Result<GetMetaResponse> {
+        Ok(GetMetaResponse {
+            ca_cert: self.state.inner.root_ca.cert.pem(),
+            allow_any_upgrade: self.state.inner.config.allow_any_upgrade,
         })
     }
 }

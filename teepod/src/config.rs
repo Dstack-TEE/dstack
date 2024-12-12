@@ -99,6 +99,9 @@ pub struct CvmConfig {
     pub cid_pool_size: u32,
     /// Port mapping configuration
     pub port_mapping: PortMappingConfig,
+    /// Max allocable resources. Not yet implement fully, only for inspect API `GetMeta`
+    pub max_allocable_vcpu: u32,
+    pub max_allocable_memory_in_mb: u32,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]

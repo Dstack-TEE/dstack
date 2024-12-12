@@ -116,6 +116,30 @@ message ResizeVmRequest {
   optional uint32 disk_size = 4;
 }
 
+message KmsSettings {
+  string url = 1;
+}
+
+message TProxySettings {
+  string url = 1;
+  string base_domain = 2;
+  uint32 port = 3;
+  uint32 tappd_port = 4;
+}
+
+message ResourcesSettings {
+  uint32 max_cvm_number = 1; // equals to the cid pool size.
+  uint32 max_allocable_vcpu = 2;
+  uint32 max_allocable_memory_in_mb = 3; // in MB.
+  uint32 max_disk_size_in_gb = 4; // in GB.
+}
+
+message GetMetaResponse {
+  KmsSettings kms = 1;
+  TProxySettings tproxy = 2;
+  ResourcesSettings resources = 3;
+}
+
 // Service definition for Teepod
 service Teepod {
   // RPC to create a VM
@@ -142,4 +166,6 @@ service Teepod {
 
   // RPC to resize a VM
   rpc ResizeVm(ResizeVmRequest) returns (google.protobuf.Empty);
+
+  rpc GetMeta(google.protobuf.Empty) returns (GetMetaResponse);
 }
