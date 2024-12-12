@@ -85,20 +85,28 @@ impl RpcHandler {
         Ok(attestation)
     }
 
-    fn ensure_upgrade_allowed(&self, app_id: &str, upgraded_app_id: &str) -> Result<()> {
-        if app_id == upgraded_app_id {
+    fn ensure_app_allowed(&self, app_id: &str, compose_hash: &str) -> Result<()> {
+        fn truncate(s: &str, len: usize) -> &str {
+            if s.len() > len {
+                &s[..len]
+            } else {
+                s
+            }
+        }
+        let truncated_compose_hash = truncate(compose_hash, 40);
+        if app_id == truncated_compose_hash {
             return Ok(());
         }
         if self.state.inner.config.allow_any_upgrade {
             return Ok(());
         }
         let registry_dir = &self.state.inner.config.upgrade_registry_dir;
-        let flag_file_path = format!("{registry_dir}/{app_id}/{upgraded_app_id}");
+        let flag_file_path = format!("{registry_dir}/{app_id}/{truncated_compose_hash}");
         if fs::metadata(&flag_file_path).is_ok() {
             return Ok(());
         }
-        warn!("Denied upgrade from {app_id} to {upgraded_app_id}");
-        bail!("Upgrade denied");
+        warn!("Denied to load {app_id} of hash {compose_hash}");
+        bail!("Compose hash denied");
     }
 }
 
@@ -109,11 +117,11 @@ impl KmsRpc for RpcHandler {
         let instance_id = attest
             .decode_instance_id()
             .context("Failed to decode instance ID")?;
-        let upgraded_app_id = attest
-            .decode_upgraded_app_id()
-            .context("Failed to decode upgraded app ID")?;
-        self.ensure_upgrade_allowed(&app_id, &upgraded_app_id)
-            .context("Upgrade not allowed")?;
+        let compose_hash = attest
+            .decode_compose_hash()
+            .context("Failed to decode compose hash")?;
+        self.ensure_app_allowed(&app_id, &compose_hash)
+            .context("App not allowed")?;
         let rootfs_hash = attest
             .decode_rootfs_hash()
             .context("Failed to decode rootfs hash")?;

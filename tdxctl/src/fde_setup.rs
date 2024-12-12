@@ -432,7 +432,7 @@ impl SetupFdeArgs {
         let host_shared = self.copy_host_shared()?;
         let rootfs_hash = &host_shared.vm_config.rootfs_hash;
         let compose_hash = sha256_file(host_shared.dir.app_compose_file())?;
-        let upgraded_app_id = truncate(&compose_hash, 20);
+        let truncated_compose_hash = truncate(&compose_hash, 20);
         let kms_enabled = host_shared.app_compose.feature_enabled("kms");
         let ca_cert_hash = if kms_enabled {
             sha256_file(host_shared.dir.kms_ca_cert_file())?
@@ -443,7 +443,7 @@ impl SetupFdeArgs {
         let mut instance_info = host_shared.instance_info.clone();
 
         if instance_info.app_id.is_empty() {
-            instance_info.app_id = upgraded_app_id.to_vec();
+            instance_info.app_id = truncated_compose_hash.to_vec();
         }
 
         let disk_reusable = kms_enabled || !self.rootfs_encryption;
@@ -455,12 +455,12 @@ impl SetupFdeArgs {
                 sha256(&rand_id)[..20].to_vec()
             };
         }
-        if !kms_enabled && instance_info.app_id != upgraded_app_id {
+        if !kms_enabled && instance_info.app_id != truncated_compose_hash {
             bail!("App upgrade is not supported without KMS");
         }
         extend_rtmr3("rootfs-hash", rootfs_hash)?;
         extend_rtmr3("app-id", &instance_info.app_id)?;
-        extend_rtmr3("upgraded-app-id", upgraded_app_id)?;
+        extend_rtmr3("compose-hash", &compose_hash)?;
         extend_rtmr3("ca-cert-hash", &ca_cert_hash)?;
         extend_rtmr3("instance-id", &instance_info.instance_id)?;
 

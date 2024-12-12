@@ -568,7 +568,11 @@
                                 Remove
                             </button>
                         </div>
-                        <button type="button" class="action-btn" @click="addEncryptedEnv">Add</button>
+                        <div style="display: flex; gap: 10px;">
+                            <button type="button" class="action-btn" @click="addEncryptedEnv">Add</button>
+                            <input type="file" ref="envFile" @change="loadEnvFile" style="display: none" accept=".env,.txt">
+                            <button type="button" class="action-btn" @click="$refs.envFile.click()">Load from file</button>
+                        </div>
                     </div>
 
                     <div class="form-group full-width">
@@ -1207,6 +1211,39 @@
                     vmForm.value.encrypted_envs.splice(index, 1);
                 };
 
+                const loadEnvFile = (event) => {
+                    const file = event.target.files[0];
+                    if (file) {
+                        const reader = new FileReader();
+                        reader.onload = (e) => {
+                            const content = e.target.result;
+                            const lines = content.split('\n');
+
+                            vmForm.value.encrypted_envs = [];
+                            
+                            lines.forEach(line => {
+                                // Skip empty lines and comments
+                                if (!line.trim() || line.startsWith('#')) return;
+                                
+                                // Split on first = only
+                                const [key, ...valueParts] = line.split('=');
+                                const value = valueParts.join('=');
+                                
+                                if (key && value) {
+                                    vmForm.value.encrypted_envs.push({
+                                        key: key.trim(),
+                                        value: value.trim()
+                                    });
+                                }
+                            });
+                            
+                            // Reset the file input
+                            event.target.value = '';
+                        };
+                        reader.readAsText(file);
+                    }
+                };
+
                 watch(teepodApiToken, (newValue) => {
                     localStorage.setItem('teepodApiToken', newValue);
                 });
@@ -1274,6 +1311,7 @@
                     showForkVm,
                     forkDialog,
                     forkVm,
+                    loadEnvFile,
                 };
             }
         }).mount('#app');
