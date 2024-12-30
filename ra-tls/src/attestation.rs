@@ -158,6 +158,10 @@ impl Attestation {
         self.verified_report.is_some()
     }
 
+    fn find_event_payload(&self, event: &str) -> Result<Vec<u8>> {
+        self.find_event(3, event).map(|event| event.event_payload)
+    }
+
     /// Decode the app-id from the event log
     pub fn decode_app_id(&self) -> Result<String> {
         self.find_event(3, "app-id")
@@ -177,6 +181,17 @@ impl Attestation {
             self.find_event(3, "upgraded-app-id")
         })?;
         Ok(hex::encode(&event.event_payload))
+    }
+
+    /// Decode the app info from the event log
+    pub fn decode_app_info(&self) -> Result<AppInfo> {
+        Ok(AppInfo {
+            app_id: self.find_event_payload("app-id")?,
+            compose_hash: self.find_event_payload("compose-hash")?,
+            instance_id: self.find_event_payload("instance-id")?,
+            device_id: self.find_event_payload("device-id")?,
+            rootfs_hash: self.find_event_payload("rootfs-hash")?,
+        })
     }
 
     /// Decode the rootfs hash from the event log
@@ -203,6 +218,20 @@ impl Attestation {
         }
         Ok(())
     }
+}
+
+/// Information about the app extracted from event log
+pub struct AppInfo {
+    /// App ID
+    pub app_id: Vec<u8>,
+    /// SHA256 of the app compose file
+    pub compose_hash: Vec<u8>,
+    /// ID of the CVM instance
+    pub instance_id: Vec<u8>,
+    /// ID of the device
+    pub device_id: Vec<u8>,
+    /// Rootfs hash
+    pub rootfs_hash: Vec<u8>,
 }
 
 /// Replay event logs

@@ -10,15 +10,12 @@ use ra_tls::{
     attestation::Attestation,
     cert::{CaCert, CertRequest},
     kdf::{derive_dh_secret, derive_ecdsa_key_pair},
-    qvl::quote::{Report, TDReport10},
 };
-use tracing::warn;
+use upgrade_authority::BootInfo;
 
-use crate::{
-    config::{AllowedMr, KmsConfig},
-    ct_log::ct_log_write_cert,
-};
-use fs_err as fs;
+use crate::{config::KmsConfig, ct_log::ct_log_write_cert};
+
+mod upgrade_authority;
 
 #[derive(Clone)]
 pub struct KmsState {
@@ -52,109 +49,73 @@ pub struct RpcHandler {
     attestation: Option<Attestation>,
 }
 
-impl AllowedMr {
-    pub fn is_allowed(&self, report: &TDReport10) -> bool {
-        if self.allow_all {
-            return true;
-        }
-        self.mrtd.contains(&report.mr_td)
-            && self.rtmr0.contains(&report.rt_mr0)
-            && self.rtmr1.contains(&report.rt_mr1)
-            && self.rtmr2.contains(&report.rt_mr2)
-    }
-}
-
 impl RpcHandler {
     fn ensure_attested(&self) -> Result<&Attestation> {
         let Some(attestation) = &self.attestation else {
             bail!("No attestation provided");
         };
-        // if !attestation.is_verified() {
-        //     bail!("The quote is not verified");
-        // }
-        let quote = attestation.decode_quote()?;
-
-        let report = match quote.report {
-            Report::SgxEnclave(_) => bail!("SGX enclave is not supported"),
-            Report::TD10(r) => r,
-            Report::TD15(r) => r.base,
-        };
-        if !self.state.inner.config.allowed_mr.is_allowed(&report) {
-            bail!("Forbidden MR");
-        }
         Ok(attestation)
     }
 
-    fn ensure_app_allowed(&self, app_id: &str, compose_hash: &str) -> Result<()> {
-        fn truncate(s: &str, len: usize) -> &str {
-            if s.len() > len {
-                &s[..len]
-            } else {
-                s
-            }
+    async fn ensure_app_allowed(&self) -> Result<BootInfo> {
+        let att = self.ensure_attested()?;
+        let report = att.verified_report.as_ref().context("No verified report")?;
+        let report = report
+            .report
+            .as_td10()
+            .context("Failed to decode TD report")?;
+        let mrtd = report.mr_td.to_vec();
+        let image_hash = concat_sha256(&[&report.rt_mr0, &report.rt_mr1, &report.rt_mr2]).to_vec();
+        let app_info = att.decode_app_info()?;
+        let boot_info = BootInfo {
+            mrtd,
+            image_hash,
+            rootfs_hash: app_info.rootfs_hash,
+            app_id: app_info.app_id,
+            compose_hash: app_info.compose_hash,
+            instance_id: app_info.instance_id,
+            device_id: app_info.device_id,
+        };
+        let response = self
+            .state
+            .lock()
+            .config
+            .boot_authority
+            .is_allowed(&boot_info)
+            .await?;
+        if !response.is_allowed {
+            bail!("Boot denied: {}", response.reason);
         }
-        let truncated_compose_hash = truncate(compose_hash, 40);
-        if app_id == truncated_compose_hash {
-            return Ok(());
-        }
-        if self.state.inner.config.allow_any_upgrade {
-            return Ok(());
-        }
-        let registry_dir = &self.state.inner.config.upgrade_registry_dir;
-        let flag_file_path = format!("{registry_dir}/{app_id}/{truncated_compose_hash}");
-        if fs::metadata(&flag_file_path).is_ok() {
-            return Ok(());
-        }
-        warn!("Denied to load {app_id} of hash {compose_hash}");
-        bail!("Compose hash denied");
+        Ok(boot_info)
     }
 }
 
 impl KmsRpc for RpcHandler {
-    async fn get_app_key(self, request: GetAppKeyRequest) -> Result<AppKeyResponse> {
+    async fn get_app_key(self, _request: GetAppKeyRequest) -> Result<AppKeyResponse> {
         let attest = self.ensure_attested()?;
-        let app_id = attest.decode_app_id().context("Failed to decode app ID")?;
-        let instance_id = attest
-            .decode_instance_id()
-            .context("Failed to decode instance ID")?;
-        let compose_hash = attest
-            .decode_compose_hash()
-            .context("Failed to decode compose hash")?;
-        self.ensure_app_allowed(&app_id, &compose_hash)
-            .context("App not allowed")?;
-        let rootfs_hash = attest
-            .decode_rootfs_hash()
-            .context("Failed to decode rootfs hash")?;
+        let boot_info = self.ensure_app_allowed().await.context("App not allowed")?;
+        let app_id = boot_info.app_id;
+        let instance_id = boot_info.instance_id;
 
         let state = self.state.lock();
 
-        let app_key = derive_ecdsa_key_pair(
-            &state.root_ca.key,
-            &[app_id.as_bytes(), "app-key".as_bytes()],
-        )
-        .context("Failed to derive app key")?;
-        let mut context_data = if request.upgradable {
-            vec![]
-        } else {
-            vec![rootfs_hash.as_bytes()]
-        };
-        context_data.extend(vec![
-            app_id.as_bytes(),
-            instance_id.as_bytes(),
-            "app-disk-crypt-key".as_bytes(),
-        ]);
-        let app_disk_key = derive_ecdsa_key_pair(&state.root_ca.key, &context_data)
+        let app_key =
+            derive_ecdsa_key_pair(&state.root_ca.key, &[&app_id[..], "app-key".as_bytes()])
+                .context("Failed to derive app key")?;
+        let context_data = vec![&app_id[..], &instance_id[..], b"app-disk-crypt-key"];
+        let app_disk_key = derive_dh_secret(&state.root_ca.key, &context_data)
+            .context("Failed to derive app disk key")?;
+        derive_ecdsa_key_pair(&state.root_ca.key, &context_data)
             .context("Failed to derive app disk key")?;
 
+        let todo = "TODO: Add ecdsa key";
         let env_crypt_key = {
-            let secret = derive_dh_secret(
-                &state.root_ca.key,
-                &[app_id.as_bytes(), "env-encrypt-key".as_bytes()],
-            )
-            .context("Failed to derive env encrypt key")?;
+            let secret = derive_dh_secret(&state.root_ca.key, &[&app_id[..], b"env-encrypt-key"])
+                .context("Failed to derive env encrypt key")?;
             let secret = x25519_dalek::StaticSecret::from(secret);
             secret.to_bytes()
         };
+        let app_id = hex::encode(&app_id);
         let subject = format!("{app_id}{}", state.config.subject_postfix);
         let req = CertRequest::builder()
             .subject(&subject)
@@ -174,9 +135,9 @@ impl KmsRpc for RpcHandler {
             .context("failed to log certificate")?;
 
         Ok(AppKeyResponse {
-            app_key: app_key.serialize_pem(),
-            disk_crypt_key: app_disk_key.serialize_der(),
+            disk_crypt_key: app_disk_key.to_vec(),
             env_crypt_key: env_crypt_key.to_vec(),
+            app_key: app_key.serialize_pem(),
             certificate_chain: vec![cert, state.root_ca.cert.pem()],
         })
     }
@@ -197,7 +158,7 @@ impl KmsRpc for RpcHandler {
     async fn get_meta(self) -> Result<GetMetaResponse> {
         Ok(GetMetaResponse {
             ca_cert: self.state.inner.root_ca.cert.pem(),
-            allow_any_upgrade: self.state.inner.config.allow_any_upgrade,
+            allow_any_upgrade: self.state.inner.config.boot_authority.is_dev(),
         })
     }
 }
@@ -215,4 +176,13 @@ impl RpcCall<KmsState> for RpcHandler {
 
 pub fn rpc_methods() -> &'static [&'static str] {
     <KmsServer<RpcHandler>>::supported_methods()
+}
+
+fn concat_sha256(hashes: &[&[u8]]) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    for hash in hashes {
+        hasher.update(hash);
+    }
+    hasher.finalize().into()
 }

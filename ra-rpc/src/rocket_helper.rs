@@ -36,7 +36,6 @@ pub mod deps {
 
 fn query_field_get_raw<'r>(req: &'r Request<'_>, field_name: &str) -> Option<&'r str> {
     for field in req.query_fields() {
-        let raw = (field.name.source().as_str(), field.value);
         let key = field.name.key_lossy().as_str();
         if key == field_name {
             return Some(field.value);
@@ -279,7 +278,6 @@ pub async fn handle_prpc_impl<S, Call: RpcCall<S>>(
         .map(extract_attestation)
         .transpose()?
         .flatten();
-    let todo = "verified attestation needs to be a distinct type";
     if let (Some(quote_verifier), Some(attestation)) = (request.quote_verifier, &mut attestation) {
         let verified_report = quote_verifier
             .verify_quote(attestation)
@@ -325,7 +323,6 @@ pub fn extract_attestation(cert: Certificate<'_>) -> Result<Option<Attestation>>
         };
         Ok(Some(ext.value.to_vec()))
     })?;
-    let todo = "verify the attestation";
     let Some(attestation) = attestation else {
         return Ok(None);
     };

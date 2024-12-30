@@ -24,6 +24,9 @@ kms-rpc.workspace = true
 ra-rpc = { workspace = true, features = ["rocket"] }
 ra-tls.workspace = true
 load_config.workspace = true
+serde-human-bytes.workspace = true
+reqwest = { workspace = true, features = ["json"] }
+sha2.workspace = true
 
 [features]
 default = []
