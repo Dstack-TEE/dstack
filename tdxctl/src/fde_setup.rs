@@ -58,6 +58,15 @@ pub struct SetupFdeArgs {
     /// Enabled rootfs encryption
     #[arg(long, default_value_t = true)]
     rootfs_encryption: std::primitive::bool,
+
+    /// Rootfs hash
+    #[arg(long, value_parser = parse_hex_bytes)]
+    rootfs_hash: Vec<u8>,
+}
+
+fn parse_hex_bytes(s: &str) -> Result<Vec<u8>> {
+    let bytes = hex::decode(s).context("Failed to decode hex string")?;
+    Ok(bytes)
 }
 
 #[derive(Deserialize, Serialize, Clone, Default)]
@@ -204,7 +213,11 @@ impl SetupFdeArgs {
         )?;
         let kms_client = kms_rpc::kms_client::KmsClient::new(ra_client);
         let response = kms_client
-            .get_app_key(GetAppKeyRequest { upgradable: true })
+            .get_app_key(GetAppKeyRequest {
+                upgradable: true,
+                app_compose: fs::read_to_string(host_shared.dir.app_compose_file())
+                    .context("Failed to read app compose file")?,
+            })
             .await
             .context("Failed to get app key")?;
         let keys_json = serde_json::to_string(&response).context("Failed to serialize app keys")?;
@@ -281,12 +294,7 @@ impl SetupFdeArgs {
         Ok(())
     }
 
-    async fn mount_rootfs(
-        &self,
-        host_shared: &HostShared,
-        disk_crypt_key: &str,
-        host: &HostApi,
-    ) -> Result<()> {
+    async fn mount_rootfs(&self, disk_crypt_key: &str, host: &HostApi) -> Result<()> {
         let rootfs_mountpoint = &self.rootfs_dir;
         let rootfs_dev = if self.rootfs_encryption {
             info!("Mounting encrypted rootfs");
@@ -303,14 +311,13 @@ impl SetupFdeArgs {
 
         let hash_file = self.rootfs_dir.join(".rootfs_hash");
         let existing_rootfs_hash = fs::read(&hash_file).unwrap_or_default();
-        if existing_rootfs_hash != host_shared.vm_config.rootfs_hash {
+        if existing_rootfs_hash != self.rootfs_hash {
             info!("Rootfs hash changed, upgrading the rootfs");
             if hash_file.exists() {
                 fs::remove_file(&hash_file).context("Failed to remove old rootfs hash file")?;
             }
             host.notify_q("boot.progress", "upgrading rootfs").await;
-            self.extract_rootfs(&host_shared.vm_config.rootfs_hash)
-                .await?;
+            self.extract_rootfs(&self.rootfs_hash).await?;
         }
         Ok(())
     }
@@ -336,7 +343,6 @@ impl SetupFdeArgs {
 
     async fn bootstrap_rootfs(
         &self,
-        host_shared: &HostShared,
         disk_crypt_key: &str,
         instance_info: &InstanceInfo,
         host: &HostApi,
@@ -354,8 +360,7 @@ impl SetupFdeArgs {
         cmd!(mkfs.ext4 -L dstack-rootfs $rootfs_dev)?;
         cmd!(mount $rootfs_dev $rootfs_dir)?;
 
-        self.extract_rootfs(&host_shared.vm_config.rootfs_hash)
-            .await?;
+        self.extract_rootfs(&self.rootfs_hash).await?;
         host.notify_q("instance.info", &serde_json::to_string(instance_info)?)
             .await;
         Ok(())
@@ -432,7 +437,6 @@ impl SetupFdeArgs {
 
     async fn setup_rootfs(&self, host_shared: &HostShared, host: &HostApi) -> Result<()> {
         host.notify_q("boot.progress", "loading host-shared").await;
-        let rootfs_hash = &host_shared.vm_config.rootfs_hash;
         let compose_hash = sha256_file(host_shared.dir.app_compose_file())?;
         let truncated_compose_hash = truncate(&compose_hash, 20);
         let kms_enabled = host_shared.app_compose.kms_enabled();
@@ -468,7 +472,7 @@ impl SetupFdeArgs {
 
         extend_rtmr3("system-preparing", &[])?;
         extend_rtmr3("device-id", &device_id)?;
-        extend_rtmr3("rootfs-hash", rootfs_hash)?;
+        extend_rtmr3("rootfs-hash", &self.rootfs_hash)?;
         extend_rtmr3("app-id", &instance_info.app_id)?;
         extend_rtmr3("compose-hash", &compose_hash)?;
         extend_rtmr3("instance-id", &instance_info.instance_id)?;
@@ -493,11 +497,10 @@ impl SetupFdeArgs {
             self.decrypt_env_vars(&app_keys.env_crypt_key, &host_shared.encrypted_env)?;
         if is_bootstrapped {
             host.notify_q("boot.progress", "mounting rootfs").await;
-            self.mount_rootfs(host_shared, &app_keys.disk_crypt_key, host)
-                .await?;
+            self.mount_rootfs(&app_keys.disk_crypt_key, host).await?;
         } else {
             host.notify_q("boot.progress", "initializing rootfs").await;
-            self.bootstrap_rootfs(host_shared, &app_keys.disk_crypt_key, &instance_info, host)
+            self.bootstrap_rootfs(&app_keys.disk_crypt_key, &instance_info, host)
                 .await?;
         }
         self.write_decrypted_env(&decrypted_env)?;

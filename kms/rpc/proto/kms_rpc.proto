@@ -8,6 +8,8 @@ message GetAppKeyRequest {
   // When upgradable is true, the disk encryption key is derived without the rootfs hash
   // so that the app can upgrade the base image
   bool upgradable = 1;
+  // The app compose file
+  string app_compose = 2;
 }
 
 // The kms public RPC service.

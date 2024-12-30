@@ -153,8 +153,6 @@ impl AppCompose {
 
 #[derive(Deserialize)]
 pub struct LocalConfig {
-    #[serde(with = "hex_bytes")]
-    pub rootfs_hash: Vec<u8>,
     pub kms_url: Option<String>,
     pub tproxy_url: Option<String>,
     pub pccs_url: Option<String>,
