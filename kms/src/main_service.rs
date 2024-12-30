@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
+use fs_err as fs;
+use k256::ecdsa::SigningKey;
 use kms_rpc::{
     kms_server::{KmsRpc, KmsServer},
     AppId, AppKeyResponse, GetAppKeyRequest, GetMetaResponse, PublicKeyResponse,
@@ -9,11 +11,11 @@ use ra_rpc::{CallContext, RpcCall};
 use ra_tls::{
     attestation::Attestation,
     cert::{CaCert, CertRequest},
-    kdf::{derive_dh_secret, derive_ecdsa_key_pair},
+    kdf,
 };
 use upgrade_authority::BootInfo;
 
-use crate::{config::KmsConfig, ct_log::ct_log_write_cert};
+use crate::{config::KmsConfig, crypto::derive_k256_key};
 
 mod upgrade_authority;
 
@@ -22,23 +24,33 @@ pub struct KmsState {
     inner: Arc<KmsStateInner>,
 }
 
-struct KmsStateInner {
+impl std::ops::Deref for KmsState {
+    type Target = KmsStateInner;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+pub struct KmsStateInner {
     config: KmsConfig,
     root_ca: CaCert,
+    ecdsa_root_key: SigningKey,
 }
 
 impl KmsState {
-    fn lock(&self) -> &KmsStateInner {
-        &self.inner
-    }
-
     pub fn new(config: KmsConfig) -> Result<Self> {
-        let ca_cert = CaCert::load(&config.root_ca_cert, &config.root_ca_key)
+        let root_ca = CaCert::load(&config.root_ca_cert, &config.root_ca_key)
             .context("Failed to load root CA certificate")?;
+        let key_bytes =
+            fs::read(&config.ecdsa_root_key).context("Failed to read ECDSA root key")?;
+        let ecdsa_root_key =
+            SigningKey::from_slice(&key_bytes).context("Failed to load ECDSA root key")?;
         Ok(Self {
             inner: Arc::new(KmsStateInner {
                 config,
-                root_ca: ca_cert,
+                root_ca,
+                ecdsa_root_key,
             }),
         })
     }
@@ -78,7 +90,6 @@ impl RpcHandler {
         };
         let response = self
             .state
-            .lock()
             .config
             .boot_authority
             .is_allowed(&boot_info)
@@ -97,26 +108,25 @@ impl KmsRpc for RpcHandler {
         let app_id = boot_info.app_id;
         let instance_id = boot_info.instance_id;
 
-        let state = self.state.lock();
+        let app_key = kdf::derive_ecdsa_key_pair(
+            &self.state.root_ca.key,
+            &[&app_id[..], "app-key".as_bytes()],
+        )
+        .context("Failed to derive app key")?;
 
-        let app_key =
-            derive_ecdsa_key_pair(&state.root_ca.key, &[&app_id[..], "app-key".as_bytes()])
-                .context("Failed to derive app key")?;
         let context_data = vec![&app_id[..], &instance_id[..], b"app-disk-crypt-key"];
-        let app_disk_key = derive_dh_secret(&state.root_ca.key, &context_data)
+        let app_disk_key = kdf::derive_dh_secret(&self.state.root_ca.key, &context_data)
             .context("Failed to derive app disk key")?;
-        derive_ecdsa_key_pair(&state.root_ca.key, &context_data)
-            .context("Failed to derive app disk key")?;
-
         let todo = "TODO: Add ecdsa key";
         let env_crypt_key = {
-            let secret = derive_dh_secret(&state.root_ca.key, &[&app_id[..], b"env-encrypt-key"])
-                .context("Failed to derive env encrypt key")?;
+            let secret =
+                kdf::derive_dh_secret(&self.state.root_ca.key, &[&app_id[..], b"env-encrypt-key"])
+                    .context("Failed to derive env encrypt key")?;
             let secret = x25519_dalek::StaticSecret::from(secret);
             secret.to_bytes()
         };
-        let app_id = hex::encode(&app_id);
-        let subject = format!("{app_id}{}", state.config.subject_postfix);
+        let app_id_str = hex::encode(&app_id);
+        let subject = format!("{app_id_str}{}", self.state.config.subject_postfix);
         let req = CertRequest::builder()
             .subject(&subject)
             .ca_level(1)
@@ -125,26 +135,38 @@ impl KmsRpc for RpcHandler {
             .key(&app_key)
             .build();
 
-        let cert = state
+        let cert = self
+            .state
             .root_ca
             .sign(req)
             .context("Failed to sign certificate")?
             .pem();
 
-        ct_log_write_cert(&app_id, &cert, &state.config.cert_log_dir)
-            .context("failed to log certificate")?;
+        let (app_ecdsa_key, app_ecdsa_signature) = {
+            let (app_ecdsa_key, signature, recid) = derive_k256_key(
+                &self.state.ecdsa_root_key,
+                &[&app_id[..], "app-key".as_bytes()],
+            )
+            .context("Failed to derive app ecdsa key")?;
+
+            let mut signature = signature.to_vec();
+            signature.push(recid.to_byte());
+            (app_ecdsa_key.to_bytes().to_vec(), signature)
+        };
 
         Ok(AppKeyResponse {
             disk_crypt_key: app_disk_key.to_vec(),
             env_crypt_key: env_crypt_key.to_vec(),
             app_key: app_key.serialize_pem(),
-            certificate_chain: vec![cert, state.root_ca.cert.pem()],
+            certificate_chain: vec![cert, self.state.root_ca.cert.pem()],
+            app_ecdsa_key,
+            app_ecdsa_signature,
         })
     }
 
     async fn get_app_env_encrypt_pub_key(self, request: AppId) -> Result<PublicKeyResponse> {
-        let secret = derive_dh_secret(
-            &self.state.lock().root_ca.key,
+        let secret = kdf::derive_dh_secret(
+            &self.state.root_ca.key,
             &[request.app_id.as_bytes(), "env-encrypt-key".as_bytes()],
         )
         .context("Failed to derive env encrypt key")?;

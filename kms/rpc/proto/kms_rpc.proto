@@ -37,6 +37,8 @@ message AppKeyResponse {
   bytes disk_crypt_key = 2;
   bytes env_crypt_key = 3;
   repeated string certificate_chain = 4;
+  bytes app_ecdsa_key = 5;
+  bytes app_ecdsa_signature = 6;
 }
 
 message GetMetaResponse {

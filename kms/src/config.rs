@@ -12,8 +12,8 @@ pub fn load_config_figment(config_file: Option<&str>) -> Figment {
 pub(crate) struct KmsConfig {
     pub root_ca_cert: String,
     pub root_ca_key: String,
+    pub ecdsa_root_key: String,
     pub subject_postfix: String,
-    pub cert_log_dir: String,
     pub pccs_url: String,
     pub boot_authority: BootAuthority,
 }

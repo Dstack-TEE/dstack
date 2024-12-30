@@ -214,7 +214,6 @@ impl SetupFdeArgs {
         let kms_client = kms_rpc::kms_client::KmsClient::new(ra_client);
         let response = kms_client
             .get_app_key(GetAppKeyRequest {
-                upgradable: true,
                 app_compose: fs::read_to_string(host_shared.dir.app_compose_file())
                     .context("Failed to read app compose file")?,
             })

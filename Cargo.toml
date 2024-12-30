@@ -126,6 +126,7 @@ blake2 = "0.10.6"
 tokio-rustls = { version = "0.26.0", features = ["ring"] }
 x25519-dalek = { version = "2.0.1", features = ["static_secrets"] }
 sodiumoxide = "0.2.7"
+k256 = "0.13.4"
 
 # Certificate/DNS
 hickory-resolver = "0.24.1"

@@ -7,8 +7,9 @@ use rocket::fairing::AdHoc;
 use tracing::info;
 
 mod config;
-mod ct_log;
+// mod ct_log;
 mod main_service;
+mod crypto;
 
 fn app_version() -> String {
     const CARGO_PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
