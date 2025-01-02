@@ -129,7 +129,9 @@ impl CertRequest<'_> {
                 params.is_ca = IsCa::Ca(BasicConstraints::Constrained(ca_level));
             }
         }
-        params.not_before = self.not_before.unwrap_or_else(SystemTime::now).into();
+        if let Some(not_before) = self.not_before {
+            params.not_before = not_before.into();
+        }
         params.not_after = self
             .not_after
             .unwrap_or_else(|| {
