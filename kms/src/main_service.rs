@@ -76,17 +76,20 @@ impl RpcHandler {
             .report
             .as_td10()
             .context("Failed to decode TD report")?;
-        let mrtd = report.mr_td.to_vec();
-        let image_hash = concat_sha256(&[&report.rt_mr0, &report.rt_mr1, &report.rt_mr2]).to_vec();
         let app_info = att.decode_app_info()?;
         let boot_info = BootInfo {
-            mrtd,
-            image_hash,
+            mrtd: report.mr_td.to_vec(),
+            rtmr0: report.rt_mr0.to_vec(),
+            rtmr1: report.rt_mr1.to_vec(),
+            rtmr2: report.rt_mr2.to_vec(),
+            rtmr3: report.rt_mr3.to_vec(),
             rootfs_hash: app_info.rootfs_hash,
             app_id: app_info.app_id,
             compose_hash: app_info.compose_hash,
             instance_id: app_info.instance_id,
             device_id: app_info.device_id,
+            event_log: String::from_utf8(att.raw_event_log.clone())
+                .context("Failed to serialize event log")?,
         };
         let response = self
             .state
@@ -198,13 +201,4 @@ impl RpcCall<KmsState> for RpcHandler {
 
 pub fn rpc_methods() -> &'static [&'static str] {
     <KmsServer<RpcHandler>>::supported_methods()
-}
-
-fn concat_sha256(hashes: &[&[u8]]) -> [u8; 32] {
-    use sha2::{Digest, Sha256};
-    let mut hasher = Sha256::new();
-    for hash in hashes {
-        hasher.update(hash);
-    }
-    hasher.finalize().into()
 }

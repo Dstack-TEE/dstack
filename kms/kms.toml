@@ -30,3 +30,6 @@ mrtd = []
 rtmr0 = []
 rtmr1 = []
 rtmr2 = []
+
+[core.boot_authority]
+type = "dev"

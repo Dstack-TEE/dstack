@@ -8,7 +8,13 @@ pub(crate) struct BootInfo {
     #[serde(with = "hex_bytes")]
     pub mrtd: Vec<u8>,
     #[serde(with = "hex_bytes")]
-    pub image_hash: Vec<u8>,
+    pub rtmr0: Vec<u8>,
+    #[serde(with = "hex_bytes")]
+    pub rtmr1: Vec<u8>,
+    #[serde(with = "hex_bytes")]
+    pub rtmr2: Vec<u8>,
+    #[serde(with = "hex_bytes")]
+    pub rtmr3: Vec<u8>,
     #[serde(with = "hex_bytes")]
     pub rootfs_hash: Vec<u8>,
     #[serde(with = "hex_bytes")]
@@ -19,6 +25,7 @@ pub(crate) struct BootInfo {
     pub instance_id: Vec<u8>,
     #[serde(with = "hex_bytes")]
     pub device_id: Vec<u8>,
+    pub event_log: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
