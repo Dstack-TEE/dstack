@@ -1,32 +1,40 @@
+[default]
 workers = 8
 max_blocking = 64
-ident = "Phala KMS"
+ident = "DStack KMS"
 temp_dir = "/tmp"
 keep_alive = 10
 log_level = "info"
+
+[rpc]
 address = "0.0.0.0"
-port = 8043
+port = 8000
 
-[tls]
-key = "/etc/kms/certs/key.pem"
-certs = "/etc/kms/certs/cert.pem"
+[rpc.tls]
+key = "/etc/kms/certs/rpc.key"
+certs = "/etc/kms/certs/rpc.crt"
 
-[tls.mutual]
-ca_certs = "/etc/kms/certs/ca.cert"
+[rpc.tls.mutual]
+ca_certs = "/etc/kms/certs/tmp-ca.crt"
 mandatory = false
 
 [core]
-root_ca_cert = "/etc/kms/certs/ca.cert"
-root_ca_key = "/etc/kms/certs/ca.key"
-subject_postfix = ".local"
-cert_log_dir = "/var/log/kms"
-allow_any_upgrade = false
-upgrade_registry_dir = "/var/run/kms/upgrade_registry"
+cert_dir = "/etc/kms/certs"
+subject_postfix = ".dstack"
 pccs_url = "https://api.trustedservices.intel.com/tdx/certification/v4"
 
-[core.allowed_mr]
-allow_all = false
-mrtd = []
-rtmr0 = []
-rtmr1 = []
-rtmr2 = []
+[core.auth_api]
+type = "webhook"
+
+[core.auth_api.webhook]
+url = "http://auth-api:8000"
+
+[core.auth_api.dev]
+tproxy_app_id = "any"
+
+[core.onboard]
+enabled = true
+auto_bootstrap_domain = ""
+quote_enabled = true
+address = "0.0.0.0"
+port = 8000

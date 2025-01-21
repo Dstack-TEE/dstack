@@ -23,7 +23,7 @@ struct OneDirection<'a, R, W> {
     next_step: NextStep,
 }
 
-impl<'a, R, W> OneDirection<'a, R, W>
+impl<R, W> OneDirection<'_, R, W>
 where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,

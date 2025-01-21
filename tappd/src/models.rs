@@ -24,14 +24,20 @@ mod filters {
             units.get(unit_index).unwrap_or(&"?")
         ))
     }
+
+    pub fn hex(s: &[u8]) -> Result<String, rinja::Error> {
+        Ok(hex::encode(s))
+    }
 }
 
 #[derive(Template)]
 #[template(path = "dashboard.html")]
 pub struct Dashboard {
     pub app_name: String,
-    pub app_id: String,
-    pub instance_id: String,
+    pub app_id: Vec<u8>,
+    pub instance_id: Vec<u8>,
+    pub device_id: Vec<u8>,
+    pub key_provider_info: String,
     pub app_cert: String,
     pub tcb_info: String,
     pub containers: Vec<Container>,

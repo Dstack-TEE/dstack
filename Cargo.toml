@@ -32,6 +32,9 @@ members = [
     "host-api",
     "guest-api",
     "load_config",
+    "key-provider-client",
+    "dstack-types",
+    "cert-client",
 ]
 resolver = "2"
 
@@ -54,19 +57,22 @@ host-api = { path = "host-api", default-features = false }
 guest-api = { path = "guest-api", default-features = false }
 http-client = { path = "http-client", default-features = false }
 load_config = { path = "load_config" }
+key-provider-client = { path = "key-provider-client" }
+dstack-types = { path = "dstack-types" }
+cert-client = { path = "cert-client" }
 
 # Core dependencies
-anyhow = "1.0.94"
-chrono = "0.4.38"
-clap = { version = "4.5.22", features = ["derive", "string"] }
+anyhow = "1.0.95"
+chrono = "0.4.39"
+clap = { version = "4.5.26", features = ["derive", "string"] }
 dashmap = "6.1.0"
 fs-err = "3.0.0"
 path-absolutize = "3.1.1"
 futures = "0.3.31"
 git-version = "0.3.9"
 libc = "0.2.167"
-log = "0.4.22"
-notify = "7.0.0"
+log = "0.4.25"
+notify = "8.0.0"
 rand = "0.8.5"
 tracing = "0.1.40"
 tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
@@ -75,15 +81,15 @@ nix = "0.29.0"
 sd-notify = "0.4.3"
 
 # Serialization/Parsing
-bon = "3.2.0"
+bon = "3.3.2"
 base64 = "0.22.1"
 hex = "0.4.3"
 hex_fmt = "0.3.0"
-prost = "0.13.3"
+prost = "0.13.4"
 scale = { version = "3.6.12", package = "parity-scale-codec", features = ["derive"] }
-serde = { version = "1.0.210", features = ["derive"] }
+serde = { version = "1.0.217", features = ["derive"] }
 serde-human-bytes = "0.1.0"
-serde_json = "1.0"
+serde_json = "1.0.135"
 toml = "0.8.19"
 toml_edit = { version = "0.22.22", features = ["serde"] }
 yasna = "0.5.2"
@@ -94,73 +100,72 @@ figment = "0.10.19"
 bollard = "0.18.1"
 http = "1.2.0"
 http-body-util = "0.1.2"
-hyper = { version = "1.5.1", features = ["client", "http1"] }
+hyper = { version = "1.5.2", features = ["client", "http1"] }
 hyper-util = { version = "0.1.10", features = ["client", "client-legacy", "http1"] }
 hyperlocal = "0.9.1"
 ipnet = { version = "2.10.1", features = ["serde"] }
-reqwest = { version = "0.12.9", default-features = false, features = ["json", "rustls-tls", "charset", "hickory-dns"] }
+reqwest = { version = "0.12.12", default-features = false, features = ["json", "rustls-tls", "charset", "hickory-dns"] }
 rocket = { git = "https://github.com/rwf2/Rocket", branch = "master", features = ["mtls"] }
 rocket-apitoken = { git = "https://github.com/kvinwang/rocket-apitoken", branch = "dev" }
-tokio = { version = "1.42.0" }
-tokio-vsock = "0.6.0"
-sysinfo = "0.33.0"
+tokio = { version = "1.43.0" }
+tokio-vsock = "0.7.0"
+sysinfo = "0.33.1"
 default-net = "0.22.0"
 
 # Cryptography/Security
 aes-gcm = "0.10.3"
 curve25519-dalek = "4.1.3"
-dcap-qvl = "0.1.6"
+dcap-qvl = "0.2.1"
 elliptic-curve = { version = "0.13.8", features = ["pkcs8"] }
 getrandom = "0.2.15"
 hkdf = "0.12.4"
 p256 = "0.13.2"
 ring = "0.17.8"
-rustls = "0.23.19"
-rustls-pki-types = "1.8.0"
+rustls = "0.23.21"
+rustls-pki-types = "1.10.1"
 schnorrkel = "0.11.4"
 sha2 = "0.10.8"
 sha3 = "0.10.8"
 blake2 = "0.10.6"
-tokio-rustls = { version = "0.26.0", features = ["ring"] }
+tokio-rustls = { version = "0.26.1", features = ["ring"] }
 x25519-dalek = { version = "2.0.1", features = ["static_secrets"] }
+sodiumoxide = "0.2.7"
+k256 = "0.13.4"
 
 # Certificate/DNS
-hickory-resolver = "0.24.1"
+hickory-resolver = "0.24.2"
 instant-acme = "0.7.2"
-rcgen = { version = "0.13.1", features = ["pem"] }
+rcgen = { version = "0.13.2", features = ["pem"] }
 x509-parser = "0.16.0"
 
 # RPC/Protocol
-prpc = "0.5.0"
-prpc-build = "0.5.1"
+prpc = "0.6.0"
+prpc-build = "0.6.0"
 
 # Development/Testing
-bindgen = "0.70.1"
-cc = "1.2.2"
+bindgen = "0.71.1"
+cc = "1.2.9"
 documented = "0.9.1"
 enum_dispatch = "0.3.13"
-insta = "1.41.1"
+insta = "1.42.0"
 num_enum = "0.7.3"
-thiserror = "2.0.4"
+thiserror = "2.0.11"
 derive_more = "1.0.0"
-tempfile = "3.14.0"
+tempfile = "3.15.0"
 
 # Utilities
-dirs = "5.0.1"
+dirs = "6.0.0"
 humantime = "2.1.0"
 parcelona = "0.4.3"
-pin-project = "1.1.7"
+pin-project = "1.1.8"
 regex = "1.11.1"
 rinja = "0.3.5"
 shared_child = "1.0.1"
-strip-ansi-escapes = "0.2.0"
+strip-ansi-escapes = "0.2.1"
 tailf = "0.1.2"
 time = "0.3.37"
-uuid = { version = "1.11.0", features = ["v4"] }
-which = "7.0.0"
+uuid = { version = "1.12.0", features = ["v4"] }
+which = "7.0.1"
 smallvec = "1.13.2"
 cmd_lib = "1.9.5"
 serde_yaml2 = "0.1.2"
-
-[patch.crates-io]
-tokio-vsock = { git = "https://github.com/kvinwang/tokio-vsock", branch = "shared-self-accept" }

@@ -3,10 +3,13 @@
 use anyhow::{anyhow, Context, Result};
 use dcap_qvl::quote::Quote;
 use qvl::{quote::Report, verify::VerifiedReport};
+use serde::Serialize;
 use sha2::{Digest as _, Sha384};
+use x509_parser::parse_x509_certificate;
 
 use crate::{oids, traits::CertExt};
 use cc_eventlog::TdxEventLog as EventLog;
+use serde_human_bytes as hex_bytes;
 
 /// The content type of a quote. A CVM should only generate quotes for these types.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -80,9 +83,12 @@ impl QuoteContentType<'_> {
     }
 }
 
+/// Represents a verified attestation
+pub type VerifiedAttestation = Attestation<VerifiedReport>;
+
 /// Attestation data
 #[derive(Debug, Clone)]
-pub struct Attestation {
+pub struct Attestation<R = ()> {
     /// Quote
     pub quote: Vec<u8>,
     /// Raw event log
@@ -90,50 +96,10 @@ pub struct Attestation {
     /// Event log
     pub event_log: Vec<EventLog>,
     /// Verified report
-    pub verified_report: Option<VerifiedReport>,
+    pub report: R,
 }
 
-impl Attestation {
-    /// Create a new attestation
-    pub fn new(quote: Vec<u8>, raw_event_log: Vec<u8>) -> Result<Self> {
-        let event_log: Vec<EventLog> = if !raw_event_log.is_empty() {
-            serde_json::from_slice(&raw_event_log).context("invalid event log")?
-        } else {
-            vec![]
-        };
-        Ok(Self {
-            quote,
-            raw_event_log,
-            event_log,
-            verified_report: None,
-        })
-    }
-
-    /// Extract attestation data from a certificate
-    pub fn from_cert(cert: &impl CertExt) -> Result<Option<Self>> {
-        Self::from_ext_getter(|oid| cert.get_extension(oid))
-    }
-
-    /// From an extension getter
-    pub fn from_ext_getter(
-        get_ext: impl Fn(&[u64]) -> Result<Option<Vec<u8>>>,
-    ) -> Result<Option<Self>> {
-        macro_rules! read_ext_bytes {
-            ($oid:expr) => {
-                get_ext($oid)?
-                    .map(|v| yasna::parse_der(&v, |reader| reader.read_bytes()))
-                    .transpose()?
-            };
-        }
-
-        let quote = match read_ext_bytes!(oids::PHALA_RATLS_QUOTE) {
-            Some(v) => v,
-            None => return Ok(None),
-        };
-        let raw_event_log = read_ext_bytes!(oids::PHALA_RATLS_EVENT_LOG).unwrap_or_default();
-        Self::new(quote, raw_event_log).map(Some)
-    }
-
+impl<T> Attestation<T> {
     /// Decode the quote
     pub fn decode_quote(&self) -> Result<Quote> {
         Quote::parse(&self.quote)
@@ -149,13 +115,12 @@ impl Attestation {
     }
 
     /// Replay event logs
-    pub fn replay_event_logs(&self) -> Result<[[u8; 48]; 4]> {
-        replay_event_logs(&self.event_log)
+    pub fn replay_event_logs(&self, to_event: Option<&str>) -> Result<[[u8; 48]; 4]> {
+        replay_event_logs(&self.event_log, to_event)
     }
 
-    /// Return true if the quote is verified
-    pub fn is_verified(&self) -> bool {
-        self.verified_report.is_some()
+    fn find_event_payload(&self, event: &str) -> Result<Vec<u8>> {
+        self.find_event(3, event).map(|event| event.event_payload)
     }
 
     /// Decode the app-id from the event log
@@ -179,6 +144,50 @@ impl Attestation {
         Ok(hex::encode(&event.event_payload))
     }
 
+    /// Decode the app info from the event log
+    pub fn decode_app_info(&self, boottime_mr: bool) -> Result<AppInfo> {
+        let rtmrs = self
+            .replay_event_logs(boottime_mr.then_some("boot-mr-done"))
+            .context("Failed to replay event logs")?;
+        let quote = self.decode_quote()?;
+        let device_id = sha256(&[&quote.header.user_data]).to_vec();
+        let td_report = quote.report.as_td10().context("TDX report not found")?;
+        let key_provider_info = if boottime_mr {
+            vec![]
+        } else {
+            self.find_event_payload("key-provider").unwrap_or_default()
+        };
+        let mr_key_provider = if key_provider_info.is_empty() {
+            [0u8; 32]
+        } else {
+            sha256(&[&key_provider_info])
+        };
+        let mr_aggregated = sha256(&[
+            &td_report.mr_td,
+            &rtmrs[0],
+            &rtmrs[1],
+            &rtmrs[2],
+            &mr_key_provider,
+        ]);
+        let mr_image = sha256(&[&td_report.mr_td, &rtmrs[1], &rtmrs[2]]);
+        Ok(AppInfo {
+            app_id: self.find_event_payload("app-id")?,
+            compose_hash: self.find_event_payload("compose-hash")?,
+            instance_id: self.find_event_payload("instance-id")?,
+            device_id,
+            rootfs_hash: self.find_event_payload("rootfs-hash")?,
+            mrtd: td_report.mr_td,
+            rtmr0: rtmrs[0],
+            rtmr1: rtmrs[1],
+            rtmr2: rtmrs[2],
+            rtmr3: rtmrs[3],
+            mr_aggregated,
+            mr_image,
+            mr_key_provider,
+            key_provider_info,
+        })
+    }
+
     /// Decode the rootfs hash from the event log
     pub fn decode_rootfs_hash(&self) -> Result<String> {
         self.find_event(3, "rootfs-hash")
@@ -193,37 +202,196 @@ impl Attestation {
             Report::TD15(report) => Ok(report.base.report_data),
         }
     }
+}
 
-    /// Ensure the quote is for the RA-TLS public key
-    pub fn ensure_quote_for_ra_tls_pubkey(&self, pubkey: &[u8]) -> Result<()> {
-        let report_data = self.decode_report_data()?;
-        let expected_report_data = QuoteContentType::RaTlsCert.to_report_data(pubkey);
-        if report_data != expected_report_data {
-            return Err(anyhow!("report data mismatch"));
+impl Attestation {
+    /// Create an attestation for local machine
+    pub fn local() -> Result<Self> {
+        let (_, quote) = tdx_attest::get_quote(&[0u8; 64], None)?;
+        let event_log = tdx_attest::eventlog::read_event_logs()?;
+        let raw_event_log = serde_json::to_vec(&event_log)?;
+        Ok(Self {
+            quote,
+            raw_event_log,
+            event_log,
+            report: (),
+        })
+    }
+
+    /// Create a new attestation
+    pub fn new(quote: Vec<u8>, raw_event_log: Vec<u8>) -> Result<Self> {
+        let event_log: Vec<EventLog> = if !raw_event_log.is_empty() {
+            serde_json::from_slice(&raw_event_log).context("invalid event log")?
+        } else {
+            vec![]
+        };
+        Ok(Self {
+            quote,
+            raw_event_log,
+            event_log,
+            report: (),
+        })
+    }
+
+    /// Extract attestation data from a certificate
+    pub fn from_cert(cert: &impl CertExt) -> Result<Option<Self>> {
+        Self::from_ext_getter(|oid| cert.get_extension_bytes(oid))
+    }
+
+    /// From an extension getter
+    pub fn from_ext_getter(
+        get_ext: impl Fn(&[u64]) -> Result<Option<Vec<u8>>>,
+    ) -> Result<Option<Self>> {
+        let quote = match get_ext(oids::PHALA_RATLS_QUOTE)? {
+            Some(v) => v,
+            None => return Ok(None),
+        };
+        let raw_event_log = get_ext(oids::PHALA_RATLS_EVENT_LOG)?.unwrap_or_default();
+        Self::new(quote, raw_event_log).map(Some)
+    }
+
+    /// Extract attestation from x509 certificate
+    pub fn from_der(cert: &[u8]) -> Result<Option<Self>> {
+        let (_, cert) = parse_x509_certificate(cert).context("Failed to parse certificate")?;
+        Self::from_cert(&cert)
+    }
+
+    /// Extract attestation from x509 certificate in PEM format
+    pub fn from_pem(cert: &[u8]) -> Result<Option<Self>> {
+        let (_, pem) =
+            x509_parser::pem::parse_x509_pem(cert).context("Failed to parse certificate")?;
+        let cert = pem.parse_x509().context("Failed to parse certificate")?;
+        Self::from_cert(&cert)
+    }
+
+    /// Verify the quote
+    pub async fn verify_with_ra_pubkey(
+        self,
+        ra_pubkey_der: &[u8],
+        pccs_url: Option<&str>,
+    ) -> Result<VerifiedAttestation> {
+        self.verify(
+            &QuoteContentType::RaTlsCert.to_report_data(ra_pubkey_der),
+            pccs_url,
+        )
+        .await
+    }
+
+    /// Verify the quote
+    pub async fn verify(
+        self,
+        report_data: &[u8; 64],
+        pccs_url: Option<&str>,
+    ) -> Result<VerifiedAttestation> {
+        let quote = &self.quote;
+        if &self.decode_report_data()? != report_data {
+            anyhow::bail!("report data mismatch");
         }
-        Ok(())
+        let report = qvl::collateral::get_collateral_and_verify(quote, pccs_url)
+            .await
+            .context("Failed to get collateral")?;
+        if let Some(report) = report.report.as_td10() {
+            // Replay the event logs
+            let rtmrs = self
+                .replay_event_logs(None)
+                .context("Failed to replay event logs")?;
+            if rtmrs != [report.rt_mr0, report.rt_mr1, report.rt_mr2, report.rt_mr3] {
+                anyhow::bail!("RTMR mismatch");
+            }
+        }
+        Ok(VerifiedAttestation {
+            quote: self.quote,
+            raw_event_log: self.raw_event_log,
+            event_log: self.event_log,
+            report,
+        })
     }
 }
 
+impl Attestation<VerifiedReport> {}
+
+/// Information about the app extracted from event log
+#[derive(Debug, Clone, Serialize)]
+pub struct AppInfo {
+    /// App ID
+    #[serde(with = "hex_bytes")]
+    pub app_id: Vec<u8>,
+    /// SHA256 of the app compose file
+    #[serde(with = "hex_bytes")]
+    pub compose_hash: Vec<u8>,
+    /// ID of the CVM instance
+    #[serde(with = "hex_bytes")]
+    pub instance_id: Vec<u8>,
+    /// ID of the device
+    #[serde(with = "hex_bytes")]
+    pub device_id: Vec<u8>,
+    /// Rootfs hash
+    #[serde(with = "hex_bytes")]
+    pub rootfs_hash: Vec<u8>,
+    /// TCB info
+    #[serde(with = "hex_bytes")]
+    pub mrtd: [u8; 48],
+    /// Runtime MR0
+    #[serde(with = "hex_bytes")]
+    pub rtmr0: [u8; 48],
+    /// Runtime MR1
+    #[serde(with = "hex_bytes")]
+    pub rtmr1: [u8; 48],
+    /// Runtime MR2
+    #[serde(with = "hex_bytes")]
+    pub rtmr2: [u8; 48],
+    /// Runtime MR3
+    #[serde(with = "hex_bytes")]
+    pub rtmr3: [u8; 48],
+    /// Measurement of the entire vm execution environment
+    #[serde(with = "hex_bytes")]
+    pub mr_aggregated: [u8; 32],
+    /// Measurement of the app image
+    #[serde(with = "hex_bytes")]
+    pub mr_image: [u8; 32],
+    /// Measurement of the key provider
+    #[serde(with = "hex_bytes")]
+    pub mr_key_provider: [u8; 32],
+    /// Key provider info
+    #[serde(with = "hex_bytes")]
+    pub key_provider_info: Vec<u8>,
+}
+
 /// Replay event logs
-pub fn replay_event_logs(eventlog: &[EventLog]) -> Result<[[u8; 48]; 4]> {
+pub fn replay_event_logs(eventlog: &[EventLog], to_event: Option<&str>) -> Result<[[u8; 48]; 4]> {
     let mut rtmrs = [[0u8; 48]; 4];
     for idx in 0..4 {
         let mut mr = [0u8; 48];
 
         for event in eventlog.iter() {
+            event
+                .validate()
+                .context("Failed to validate event digest")?;
             if event.imr == idx {
                 let mut hasher = Sha384::new();
                 hasher.update(mr);
                 hasher.update(event.digest);
                 mr = hasher.finalize().into();
             }
+            if let Some(to_event) = to_event {
+                if event.event == to_event {
+                    break;
+                }
+            }
         }
-
         rtmrs[idx as usize] = mr;
     }
 
     Ok(rtmrs)
+}
+
+fn sha256(data: &[&[u8]]) -> [u8; 32] {
+    use sha2::{Digest as _, Sha256};
+    let mut hasher = Sha256::new();
+    for d in data {
+        hasher.update(d);
+    }
+    hasher.finalize().into()
 }
 
 #[cfg(test)]

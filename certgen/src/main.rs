@@ -31,19 +31,19 @@ enum Commands {
         domain: String,
 
         /// CA key file
-        #[arg(short, long)]
+        #[arg(long)]
         ca_key: String,
 
         /// CA cert file
-        #[arg(short, long)]
+        #[arg(long)]
         ca_cert: String,
 
         /// Output cert file
-        #[arg(short, long)]
+        #[arg(long)]
         cert: String,
 
         /// Output key file
-        #[arg(short, long)]
+        #[arg(long)]
         key: String,
     },
 }
@@ -153,17 +153,19 @@ fn sign_certificate(
 ) -> anyhow::Result<()> {
     let ca_key = fs::read_to_string(ca_key_path)?;
     let ca_cert = fs::read_to_string(ca_cert_path)?;
-    let ca = CaCert::new(ca_cert, ca_key)?;
+    let ca = CaCert::new(ca_cert.clone(), ca_key)?;
     let key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)?;
 
-    let cert = CertRequest::builder()
+    let alt_names = [domain.to_string()];
+    let req = CertRequest::builder()
         .subject(domain)
-        .alt_names(&[domain.to_string()])
+        .alt_names(&alt_names)
         .key(&key)
-        .build()
-        .signed_by(&ca.cert, &ca.key)?;
+        .build();
+    let cert = ca.sign(req)?;
 
-    fs::write(cert_path, cert.pem())?;
+    let cert_chain = format!("{}\n{}", cert.pem(), ca_cert);
+    fs::write(cert_path, cert_chain)?;
     fs::write(key_path, key.serialize_pem())?;
     Ok(())
 }

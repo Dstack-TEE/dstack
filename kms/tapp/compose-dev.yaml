@@ -1,0 +1,57 @@
+services:
+  auth-api:
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM node:18-alpine@sha256:06f7bbbcec00dd10c21a3a0962609600159601b5004d84aff142977b449168e9
+        WORKDIR /app
+
+        RUN apk add --no-cache git
+        RUN git clone https://github.com/Dstack-TEE/dstack.git && \
+            cd dstack && \
+            git checkout c70a6ed18858ed6ba42ed92f5dce1e120c4cf7c7
+        WORKDIR /app/dstack/kms/auth-eth
+        RUN npm install && \
+            npx hardhat typechain && \
+            npx tsc --project tsconfig.json
+        CMD node dist/src/main.js
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8000
+      - ETH_RPC_URL=https://rpc.phala.network
+      - KMS_CONTRACT_ADDR=0xEf33Ad0701a0c57C871F583681AE869ecfaedce4
+    restart: unless-stopped
+
+  kms:
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM rust:1.84@sha256:e6e40c05cfe7dd55ad13794333d31b6d0818f0c6086876e7dc65871e6c8c0b21
+        WORKDIR /app
+        RUN apt-get update && apt-get install -y \
+            git \
+            build-essential \
+            libssl-dev \
+            protobuf-compiler \
+            libprotobuf-dev \
+            clang \
+            libclang-dev \
+            --no-install-recommends \
+            && rm -rf /var/lib/apt/lists/*
+        RUN git clone https://github.com/Dstack-TEE/dstack.git && \
+            cd dstack && \
+            git checkout c70a6ed18858ed6ba42ed92f5dce1e120c4cf7c7
+        WORKDIR /app/dstack
+        RUN cargo build --release -p kms
+        CMD ["./target/release/kms"]
+    volumes:
+      - kms-volume:/etc/kms
+      - /var/run/tappd.sock:/var/run/tappd.sock
+    ports:
+      - 8000:8000
+    depends_on:
+      - auth-api
+    restart: unless-stopped
+
+volumes:
+  kms-volume:

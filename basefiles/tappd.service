@@ -4,13 +4,16 @@ After=network.target tboot.service
 
 [Service]
 OOMScoreAdjust=-1000
-ExecStartPre=-/bin/rm -f /var/run/tappd.sock
-ExecStart=/bin/tappd --watchdog
+ExecStartPre=-/bin/rm -rf /var/run/tappd.sock
+ExecStart=/bin/tappd --watchdog -c /tapp/tappd.json
 Restart=always
 User=root
 Group=root
 Type=notify
 WatchdogSec=30s
+StandardOutput=journal+console
+StandardError=journal+console
+Environment=RUST_LOG=warn
 
 [Install]
 WantedBy=multi-user.target

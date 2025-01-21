@@ -103,7 +103,7 @@ message ImageInfo {
 }
 
 message AppId {
-  string app_id = 1;
+  bytes app_id = 1;
 }
 
 message PublicKeyResponse {

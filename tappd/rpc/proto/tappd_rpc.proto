@@ -9,6 +9,9 @@ service Tappd {
   // Returns the derived key along with its certificate chain.
   rpc DeriveKey(DeriveKeyArgs) returns (DeriveKeyResponse) {}
 
+  // Derives a new ECDSA key with k256 EC curve.
+  rpc DeriveK256Key(DeriveK256KeyArgs) returns (DeriveK256KeyResponse) {}
+
   // Generates a TDX quote
   rpc TdxQuote(TdxQuoteArgs) returns (TdxQuoteResponse) {}
 
@@ -25,12 +28,21 @@ service Tappd {
 
 // The request to derive a key
 message DeriveKeyArgs {
-  // Path to the key to derive
+  // Path used to derive the private key
   string path = 1;
+  // Bellow fields are used to generate the certificate
   // Subject of the certificate to request
   string subject = 2;
   // DNS alternative names for the certificate
   repeated string alt_names = 3;
+  // Includes quote in the certificate
+  bool usage_ra_tls = 4;
+  // Key usage server auth
+  bool usage_server_auth = 5;
+  // Key usage client auth
+  bool usage_client_auth = 6;
+  // Derive from random seed
+  bool random_seed = 7;
 }
 
 // The response to a DeriveKey request
@@ -39,6 +51,22 @@ message DeriveKeyResponse {
   string key = 1;
   // Certificate chain
   repeated string certificate_chain = 2;
+}
+
+// The request to derive a new ECDSA key with k256 EC curve
+message DeriveK256KeyArgs {
+  // Path to the key to derive
+  string path = 1;
+  // Purpose of the key
+  string purpose = 2;
+}
+
+// The response to a DeriveK256Key request
+message DeriveK256KeyResponse {
+  // Derived k256 key
+  bytes k256_key = 1;
+  // Derived k256 signature chain
+  repeated bytes k256_signature_chain = 2;
 }
 
 // The request to get a TDX quote
@@ -88,9 +116,9 @@ message TdxQuoteResponse {
 // The request to derive a key
 message WorkerInfo {
   // App ID
-  string app_id = 1;
+  bytes app_id = 1;
   // App Instance ID
-  string instance_id = 2;
+  bytes instance_id = 2;
   // App certificate
   string app_cert = 3;
   // TCB info
@@ -101,6 +129,18 @@ message WorkerInfo {
   bool public_logs = 6;
   // Whether the app sysinfo is public
   bool public_sysinfo = 7;
+  // Device ID
+  bytes device_id = 8;
+  // MR Aggregated
+  bytes mr_aggregated = 9;
+  // MR Image
+  bytes mr_image = 10;
+  // MR Key Provider
+  bytes mr_key_provider = 11;
+  // Key provider info
+  string key_provider_info = 12;
+  // Compose hash
+  bytes compose_hash = 13;
 }
 
 // The response to a WorkerInfo request
