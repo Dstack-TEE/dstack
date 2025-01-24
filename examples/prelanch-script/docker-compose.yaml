@@ -1,0 +1,7 @@
+services:
+  busybox:
+    image: busybox:latest
+    command: sh -c "cat /etc/motd"
+    volumes:
+      - /tapp/motd:/etc/motd
+    restart: no
