@@ -8,27 +8,18 @@ log_level = "debug"
 
 [default.core]
 app_name = ""
-cert_file = "/etc/tappd/app-ca.cert"
-key_file = "/etc/tappd/app-ca.key"
+keys_file = "/tapp/appkeys.json"
 public_logs = true
 public_sysinfo = true
 compose_file = "/tapp/app-compose.json"
 
 [internal]
 address = "unix:/var/run/tappd.sock"
-reuse = false
+reuse = true
 
 [external]
 address = "0.0.0.0"
 port = 8090
-
-[external-https]
-address = "0.0.0.0"
-port = 8043
-
-[external-https.tls]
-key = "/etc/tappd/tls.key"
-certs = "/etc/tappd/tls.cert"
 
 [guest-api]
 address = "vsock:0xffffffff"

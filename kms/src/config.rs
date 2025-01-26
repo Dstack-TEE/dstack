@@ -1,75 +1,102 @@
-use anyhow::Result;
 use load_config::load_config;
 use rocket::figment::Figment;
 use serde::Deserialize;
-
+use std::path::PathBuf;
 pub const DEFAULT_CONFIG: &str = include_str!("../kms.toml");
 
 pub fn load_config_figment(config_file: Option<&str>) -> Figment {
     load_config("kms", DEFAULT_CONFIG, config_file, false)
 }
 
+const TEMP_CA_CERT: &str = "tmp-ca.crt";
+const TEMP_CA_KEY: &str = "tmp-ca.key";
+const ROOT_CA_CERT: &str = "root-ca.crt";
+const ROOT_CA_KEY: &str = "root-ca.key";
+const RPC_CERT: &str = "rpc.crt";
+const RPC_KEY: &str = "rpc.key";
+const K256_KEY: &str = "root-k256.key";
+const BOOTSTRAP_INFO: &str = "bootstrap-info.json";
+
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct KmsConfig {
-    pub allowed_mr: AllowedMr,
-    pub root_ca_cert: String,
-    pub root_ca_key: String,
-    pub subject_postfix: String,
-    pub cert_log_dir: String,
-    pub allow_any_upgrade: bool,
-    pub upgrade_registry_dir: String,
-    pub pccs_url: String,
+    pub cert_dir: PathBuf,
+    pub pccs_url: Option<String>,
+    pub auth_api: AuthApi,
+    pub onboard: OnboardConfig,
 }
 
-#[derive(Debug, Clone)]
-pub(crate) struct AllowedMr {
-    pub allow_all: bool,
-    pub mrtd: Vec<[u8; 48]>,
-    pub rtmr0: Vec<[u8; 48]>,
-    pub rtmr1: Vec<[u8; 48]>,
-    pub rtmr2: Vec<[u8; 48]>,
-}
-
-impl<'de> Deserialize<'de> for AllowedMr {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        struct RawAllowedMr {
-            #[serde(default)]
-            allow_all: bool,
-            #[serde(default)]
-            mrtd: Vec<String>,
-            #[serde(default)]
-            rtmr0: Vec<String>,
-            #[serde(default)]
-            rtmr1: Vec<String>,
-            #[serde(default)]
-            rtmr2: Vec<String>,
-        }
-
-        let raw = RawAllowedMr::deserialize(deserializer)?;
-
-        fn parse_mrlist<'d, D: serde::Deserializer<'d>>(
-            list: Vec<String>,
-        ) -> Result<Vec<[u8; 48]>, D::Error> {
-            list.into_iter()
-                .map(|s| {
-                    let bytes = hex::decode(&s).map_err(serde::de::Error::custom)?;
-                    bytes
-                        .try_into()
-                        .map_err(|_| serde::de::Error::custom("invalid MR config"))
-                })
-                .collect()
-        }
-
-        Ok(AllowedMr {
-            allow_all: raw.allow_all,
-            mrtd: parse_mrlist::<D>(raw.mrtd)?,
-            rtmr0: parse_mrlist::<D>(raw.rtmr0)?,
-            rtmr1: parse_mrlist::<D>(raw.rtmr1)?,
-            rtmr2: parse_mrlist::<D>(raw.rtmr2)?,
-        })
+impl KmsConfig {
+    pub fn keys_exists(&self) -> bool {
+        self.tmp_ca_cert().exists()
+            && self.tmp_ca_key().exists()
+            && self.root_ca_cert().exists()
+            && self.root_ca_key().exists()
+            && self.rpc_cert().exists()
+            && self.rpc_key().exists()
+            && self.k256_key().exists()
     }
+
+    pub fn tmp_ca_cert(&self) -> PathBuf {
+        self.cert_dir.join(TEMP_CA_CERT)
+    }
+
+    pub fn tmp_ca_key(&self) -> PathBuf {
+        self.cert_dir.join(TEMP_CA_KEY)
+    }
+
+    pub fn root_ca_cert(&self) -> PathBuf {
+        self.cert_dir.join(ROOT_CA_CERT)
+    }
+
+    pub fn root_ca_key(&self) -> PathBuf {
+        self.cert_dir.join(ROOT_CA_KEY)
+    }
+
+    pub fn rpc_cert(&self) -> PathBuf {
+        self.cert_dir.join(RPC_CERT)
+    }
+
+    pub fn rpc_key(&self) -> PathBuf {
+        self.cert_dir.join(RPC_KEY)
+    }
+
+    pub fn k256_key(&self) -> PathBuf {
+        self.cert_dir.join(K256_KEY)
+    }
+
+    pub fn bootstrap_info(&self) -> PathBuf {
+        self.cert_dir.join(BOOTSTRAP_INFO)
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "type")]
+pub(crate) enum AuthApi {
+    #[serde(rename = "dev")]
+    Dev { dev: Dev },
+    #[serde(rename = "webhook")]
+    Webhook { webhook: Webhook },
+}
+
+impl AuthApi {
+    pub fn is_dev(&self) -> bool {
+        matches!(self, AuthApi::Dev { .. })
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct Webhook {
+    pub url: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct Dev {
+    pub tproxy_app_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct OnboardConfig {
+    pub enabled: bool,
+    pub quote_enabled: bool,
+    pub auto_bootstrap_domain: String,
 }

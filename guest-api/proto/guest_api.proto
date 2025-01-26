@@ -13,13 +13,15 @@ message GuestInfo {
   // Guest software version
   string version = 1;
   // App ID
-  string app_id = 2;
+  bytes app_id = 2;
   // App Instance ID
-  string instance_id = 3;
+  bytes instance_id = 3;
   // App certificate
   string app_cert = 4;
   // TCB info
   string tcb_info = 5;
+  // Device ID
+  bytes device_id = 6;
 }
 
 message IpAddress {

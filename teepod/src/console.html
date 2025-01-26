@@ -520,6 +520,12 @@
                     </div>
 
                     <div class="form-group">
+                        <label for="appId">App ID (optional)</label>
+                        <input id="appId" v-model="vmForm.app_id" type="text"
+                            placeholder="Will be auto-generated from configuration">
+                    </div>
+
+                    <div class="form-group">
                         <label for="composeFile">Docker Compose File</label>
                         <textarea id="composeFile" v-model="vmForm.dockerComposeFile"
                             placeholder="Paste your docker-compose.yml here" required></textarea>
@@ -554,6 +560,10 @@
                             <label style="display: flex; align-items: center; gap: 5px;">
                                 <input type="checkbox" v-model="vmForm.kms_enabled">
                                 KMS
+                            </label>
+                            <label style="display: flex; align-items: center; gap: 5px;">
+                                <input type="checkbox" v-model="vmForm.local_key_provider_enabled">
+                                Local Key Provider
                             </label>
                             <label style="display: flex; align-items: center; gap: 5px;">
                                 <input type="checkbox" v-model="vmForm.tproxy_enabled">
@@ -672,7 +682,8 @@
                                         title="View App Info">
                                         <i class="fas fa-info-circle"></i> Board
                                     </button>
-                                    <button class="action-btn" @click="showUpgradeDialog(vm)" title="Upgrade VM">
+                                    <button v-if="kmsEnabled(vm)" class="action-btn" @click="showUpgradeDialog(vm)"
+                                        title="Upgrade VM">
                                         <i class="fas fa-arrow-up"></i> Update
                                     </button>
                                     <button class="action-btn" @click="showForkVm(vm)" title="Derive VM">
@@ -963,7 +974,9 @@
                         username: '',
                         token_key: ''
                     },
+                    app_id: '',
                     kms_enabled: true,
+                    local_key_provider_enabled: false,
                     tproxy_enabled: true,
                     public_logs: true,
                     public_sysinfo: true
@@ -1066,7 +1079,8 @@
                         "kms_enabled": vmForm.value.kms_enabled,
                         "tproxy_enabled": vmForm.value.tproxy_enabled,
                         "public_logs": vmForm.value.public_logs,
-                        "public_sysinfo": vmForm.value.public_sysinfo
+                        "public_sysinfo": vmForm.value.public_sysinfo,
+                        "local_key_provider_enabled": vmForm.value.local_key_provider_enabled
                     };
 
                     if (vmForm.value.preLaunchScript?.trim()) {
@@ -1140,6 +1154,7 @@
 
                 const clearEncryptedEnv = () => {
                     vmForm.value.encrypted_envs = [];
+                    vmForm.value.app_id = null;
                 };
 
                 const createVm = async () => {
@@ -1218,7 +1233,7 @@
                 };
 
                 const showLog = async (id) => {
-                    window.open(`/logs?id=${id}&follow=true&ansi=false&lines=20`, '_blank');
+                    window.open(`/logs?id=${id}&follow=true&ansi=false&lines=50`, '_blank');
                 };
 
                 const showDashboard = async (vm) => {
@@ -1347,18 +1362,7 @@
                         clearEncryptedEnv();
                         upgradeDialog.value.show = false;
                         if (body.compose_file) {
-                            upgradeMessage.value = `
-<div class="upgrade-message">✅ Upgrade initiated successfully!</div>
-<div class="next-steps-header">Next steps:</div>
-<ol class="steps-list">
-    <li class="step-item">
-        Run: 
-        <div class="command-container">
-            <code class="command-code">./kms-allow-upgrade.sh ${upgradeDialog.value.vm.app_id} ${data.id}</code>
-        </div>
-    </li>
-    <li>Restart the instance</li>
-</ol>`;
+                            upgradeMessage.value = `✅ Compose file updated!`;
                         }
                         loadVMList();
                     } catch (error) {
@@ -1495,6 +1499,12 @@
                     return image?.version;
                 };
 
+                const verGE = (versionStr, otherVersionStr) => {
+                    const version = versionStr.split('.').map(Number);
+                    const otherVersion = otherVersionStr.split('.').map(Number);
+                    return version[0] > otherVersion[0] || (version[0] == otherVersion[0] && version[1] > otherVersion[1]) || (version[0] == otherVersion[0] && version[1] == otherVersion[1] && version[2] >= otherVersion[2]);
+                };
+
                 const imageVersionFeatures = (versionStr) => {
                     const features = {
                         progress: false,
@@ -1506,7 +1516,7 @@
                         return features;
                     }
                     const version = versionStr.split('.').map(Number);
-                    if (version[0] >= 0 && version[1] >= 3 && version[2] >= 3) {
+                    if (verGE(versionStr, '0.3.3')) {
                         features.progress = true;
                         features.graceful_shutdown = true;
                         features.network_info = true;

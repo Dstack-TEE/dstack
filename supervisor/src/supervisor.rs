@@ -57,7 +57,7 @@ impl Supervisor {
         }
         if self
             .info(&id)
-            .map_or(false, |info| info.state.status.is_running())
+            .is_some_and(|info| info.state.status.is_running())
         {
             bail!("Process is already running");
         }

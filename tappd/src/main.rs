@@ -155,19 +155,18 @@ async fn main() -> Result<()> {
     }
     let args = Args::parse();
     let figment = config::load_config_figment(args.config.as_deref());
-    let state =
-        AppState::new(figment.focus("core").extract()?).context("Failed to create app state")?;
+    let state = AppState::new(figment.focus("core").extract()?)
+        .await
+        .context("Failed to create app state")?;
     let internal_figment = figment.clone().select("internal");
     let external_figment = figment.clone().select("external");
     let bind_addr: BindAddr = external_figment
         .extract()
         .context("Failed to extract bind address")?;
-    let external_https_figment = figment.clone().select("external-https");
     let guest_api_figment = figment.select("guest-api");
     tokio::select!(
         res = run_internal(state.clone(), internal_figment) => res?,
         res = run_external(state.clone(), external_figment) => res?,
-        res = run_external(state.clone(), external_https_figment) => res?,
         res = run_guest_api(state.clone(), guest_api_figment) => res?,
         _ = async {
             if args.watchdog {

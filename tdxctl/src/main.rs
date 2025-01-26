@@ -3,11 +3,18 @@ use bollard::container::{ListContainersOptions, RemoveContainerOptions};
 use bollard::Docker;
 use clap::{Parser, Subcommand};
 use cmd_lib::run_cmd as cmd;
+use dstack_types::KeyProvider;
 use fde_setup::{cmd_setup_fde, SetupFdeArgs};
 use fs_err as fs;
 use getrandom::getrandom;
-use notify_client::NotifyClient;
-use ra_tls::{attestation::QuoteContentType, cert::CaCert};
+use host_api::HostApi;
+use k256::schnorr::SigningKey;
+use ra_tls::{
+    attestation::QuoteContentType,
+    cert::generate_ra_cert,
+    kdf::{derive_ecdsa_key, derive_ecdsa_key_pair_from_bytes},
+    rcgen::KeyPair,
+};
 use scale::Decode;
 use serde::Deserialize;
 use std::{collections::HashMap, path::Path};
@@ -18,11 +25,11 @@ use std::{
 use tboot::TbootArgs;
 use tdx_attest as att;
 use tracing::error;
-use utils::extend_rtmr;
+use utils::{extend_rtmr, AppKeys};
 
 mod crypto;
 mod fde_setup;
-mod notify_client;
+mod host_api;
 mod tboot;
 mod utils;
 
@@ -278,12 +285,11 @@ impl core::fmt::Debug for ParsedReport {
 }
 
 fn cmd_show() -> Result<()> {
-    let report_data = [0; 64];
-    let report = att::get_report(&report_data).context("Failed to get report")?;
-    let parsed_report =
-        ParsedReport::decode(&mut report.0.get(512..).context("Failed to get report")?)
-            .context("Failed to decode report")?;
-    println!("{:#?}", parsed_report);
+    let attestation = ra_tls::attestation::Attestation::local()?;
+    let app_info = attestation.decode_app_info(false)?;
+    println!("========== App Info ==========");
+    serde_json::to_writer_pretty(io::stdout(), &app_info)?;
+    println!();
     Ok(())
 }
 
@@ -310,27 +316,11 @@ fn cmd_hex(hex_args: HexCommand) -> Result<()> {
 }
 
 fn cmd_gen_ra_cert(args: GenRaCertArgs) -> Result<()> {
-    use ra_tls::cert::CertRequest;
-    use ra_tls::rcgen::{KeyPair, PKCS_ECDSA_P256_SHA256};
-
-    let ca = CaCert::load(&args.ca_cert, &args.ca_key).context("Failed to read CA certificate")?;
-
-    let key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)?;
-    let pubkey = key.public_key_der();
-    let report_data = QuoteContentType::RaTlsCert.to_report_data(&pubkey);
-    let (_, quote) = att::get_quote(&report_data, None).context("Failed to get quote")?;
-    let event_logs = att::eventlog::read_event_logs().context("Failed to read event logs")?;
-    let event_log = serde_json::to_vec(&event_logs).context("Failed to serialize event logs")?;
-    let req = CertRequest::builder()
-        .subject("RA-TLS TEMP Cert")
-        .quote(&quote)
-        .event_log(&event_log)
-        .key(&key)
-        .build();
-    let cert = ca.sign(req).context("Failed to sign certificate")?;
-
-    fs::write(&args.cert_path, cert.pem()).context("Failed to write certificate")?;
-    fs::write(&args.key_path, key.serialize_pem()).context("Failed to write private key")?;
+    let ca_cert = fs::read_to_string(args.ca_cert)?;
+    let ca_key = fs::read_to_string(args.ca_key)?;
+    let cert_pair = generate_ra_cert(ca_cert, ca_key)?;
+    fs::write(&args.cert_path, cert_pair.cert_pem).context("Failed to write certificate")?;
+    fs::write(&args.key_path, cert_pair.key_pem).context("Failed to write private key")?;
     Ok(())
 }
 
@@ -362,12 +352,33 @@ fn cmd_gen_ca_cert(args: GenCaCertArgs) -> Result<()> {
 }
 
 fn cmd_gen_app_keys(args: GenAppKeysArgs) -> Result<()> {
-    use ra_tls::cert::CertRequest;
     use ra_tls::rcgen::{KeyPair, PKCS_ECDSA_P256_SHA256};
 
     let key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)?;
     let disk_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)?;
-    let pubkey = key.public_key_der();
+    let k256_key = SigningKey::random(&mut rand::thread_rng());
+    let app_keys = make_app_keys(key, disk_key, k256_key, args.ca_level)?;
+    let app_keys = serde_json::to_string(&app_keys).context("Failed to serialize app keys")?;
+    fs::write(&args.output, app_keys).context("Failed to write app keys")?;
+    Ok(())
+}
+
+fn gen_app_keys_from_seed(seed: &[u8]) -> Result<AppKeys> {
+    let key = derive_ecdsa_key_pair_from_bytes(seed, &["app-key".as_bytes()])?;
+    let disk_key = derive_ecdsa_key_pair_from_bytes(seed, &["app-disk-key".as_bytes()])?;
+    let k256_key = derive_ecdsa_key(seed, &["app-k256-key".as_bytes()], 32)?;
+    let k256_key = SigningKey::from_bytes(&k256_key).context("Failed to parse k256 key")?;
+    make_app_keys(key, disk_key, k256_key, 1)
+}
+
+fn make_app_keys(
+    app_key: KeyPair,
+    disk_key: KeyPair,
+    k256_key: SigningKey,
+    ca_level: u8,
+) -> Result<AppKeys> {
+    use ra_tls::cert::CertRequest;
+    let pubkey = app_key.public_key_der();
     let report_data = QuoteContentType::RaTlsCert.to_report_data(&pubkey);
     let (_, quote) = att::get_quote(&report_data, None).context("Failed to get quote")?;
     let event_logs = att::eventlog::read_event_logs().context("Failed to read event logs")?;
@@ -376,34 +387,37 @@ fn cmd_gen_app_keys(args: GenAppKeysArgs) -> Result<()> {
         .subject("App Root Cert")
         .quote(&quote)
         .event_log(&event_log)
-        .key(&key)
-        .ca_level(args.ca_level)
+        .key(&app_key)
+        .ca_level(ca_level)
         .build();
     let cert = req
         .self_signed()
         .context("Failed to self-sign certificate")?;
 
-    let app_keys = serde_json::json!({
-        "app_key": key.serialize_pem(),
-        "disk_crypt_key": sha256(&disk_key.serialize_der()),
-        "certificate_chain": vec![cert.pem()],
-    });
-    let app_keys = serde_json::to_string(&app_keys).context("Failed to serialize app keys")?;
-    fs::write(&args.output, app_keys).context("Failed to write app keys")?;
-    Ok(())
+    Ok(AppKeys {
+        disk_crypt_key: sha256(&disk_key.serialize_der()).to_vec(),
+        env_crypt_key: vec![],
+        k256_key: k256_key.to_bytes().to_vec(),
+        k256_signature: vec![],
+        tproxy_app_id: "".to_string(),
+        ca_cert: cert.pem(),
+        key_provider: KeyProvider::Local {
+            key: app_key.serialize_pem(),
+        },
+    })
 }
 
 async fn cmd_notify_host(args: HostNotifyArgs) -> Result<()> {
-    let client = NotifyClient::load_or_default(args.url)?;
+    let client = HostApi::load_or_default(args.url)?;
     client.notify(&args.event, &args.payload).await?;
     Ok(())
 }
 
-fn sha256(data: &[u8]) -> String {
+fn sha256(data: &[u8]) -> [u8; 32] {
     use sha2::Digest;
     let mut sha256 = sha2::Sha256::new();
     sha256.update(data);
-    hex::encode(sha256.finalize())
+    sha256.finalize().into()
 }
 
 fn get_project_name(compose_file: impl AsRef<Path>) -> Result<String> {

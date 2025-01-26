@@ -16,9 +16,10 @@ pub struct BindAddr {
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
     pub app_name: String,
-    pub cert_file: String,
-    pub key_file: String,
+    pub keys_file: String,
     pub public_logs: bool,
     pub public_sysinfo: bool,
     pub compose_file: String,
+    #[serde(default)]
+    pub pccs_url: Option<String>,
 }
