@@ -1,18 +1,21 @@
 use anyhow::{anyhow, bail, Context, Result};
+use cert_client::CertRequestClient;
 use clap::Parser;
 use cmd_lib::run_fun as cmd;
 use fs_err as fs;
-use ra_rpc::client::RaClient;
+use ra_rpc::client::{CertInfo, RaClientConfig};
+use ra_tls::{
+    cert::CertConfig,
+    rcgen::{KeyPair, PKCS_ECDSA_P256_SHA256},
+};
 use serde_json::Value;
-use std::{collections::BTreeMap, io::Write};
+use std::collections::BTreeMap;
 use tproxy_rpc::{tproxy_client::TproxyClient, RegisterCvmRequest};
 use tracing::info;
 
 use crate::{
-    cmd_gen_ra_cert,
-    notify_client::NotifyClient,
+    host_api::HostApi,
     utils::{deserialize_json_file, AppCompose, AppKeys, LocalConfig},
-    GenRaCertArgs,
 };
 
 #[derive(Parser)]
@@ -29,6 +32,31 @@ pub(crate) struct TbootArgs {
 impl TbootArgs {
     pub(crate) fn resolve(&self, path: &str) -> String {
         format!("{}/{}", self.prefix, path)
+    }
+}
+
+struct RaValidator {
+    remote_app_id: String,
+}
+
+impl RaValidator {
+    fn validate(&self, cert: Option<CertInfo>) -> Result<()> {
+        if self.remote_app_id == "any" {
+            return Ok(());
+        }
+        let Some(cert) = cert else {
+            bail!("Missing cert");
+        };
+        let Some(attestation) = cert.attestation else {
+            bail!("Missing attestation");
+        };
+        let app_id = attestation
+            .decode_app_id()
+            .context("Failed to decode app id")?;
+        if app_id != self.remote_app_id {
+            bail!("Invalid app id: {}", app_id);
+        }
+        Ok(())
     }
 }
 
@@ -59,8 +87,7 @@ impl<'a> Setup<'a> {
         self.args.resolve(path)
     }
 
-    async fn setup(&self, nc: &NotifyClient) -> Result<()> {
-        self.prepare_certs()?;
+    async fn setup(&self, nc: &HostApi) -> Result<()> {
         nc.notify_q("boot.progress", "setting up tproxy net").await;
         self.setup_tappd_config()?;
         self.setup_tproxy_net().await?;
@@ -75,6 +102,10 @@ impl<'a> Setup<'a> {
             info!("tproxy is not enabled");
             return Ok(());
         }
+        if self.app_keys.tproxy_app_id.is_empty() {
+            bail!("Missing allowed tproxy app id");
+        }
+
         info!("Setting up tproxy network");
         // Generate WireGuard keys
         let sk = cmd!(wg genkey)?;
@@ -88,12 +119,41 @@ impl<'a> Setup<'a> {
             .context("Missing tproxy_url")?;
 
         let url = format!("{}/prpc", tproxy_url);
-        let client = RaClient::new_mtls(
-            url,
-            fs::read_to_string(self.resolve("/etc/tappd/ca.cert"))?,
-            fs::read_to_string(self.resolve("/etc/tappd/tls.cert"))?,
-            fs::read_to_string(self.resolve("/etc/tappd/tls.key"))?,
-        )?;
+        let ra_validator = RaValidator {
+            remote_app_id: self.app_keys.tproxy_app_id.clone(),
+        };
+        let cert_client =
+            CertRequestClient::create(&self.app_keys, self.local_config.pccs_url.as_deref())
+                .await
+                .context("Failed to create cert client")?;
+        let client_key =
+            KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).context("Failed to generate key")?;
+        let config = CertConfig {
+            org_name: None,
+            subject: "tappd".to_string(),
+            subject_alt_names: vec![],
+            usage_server_auth: false,
+            usage_client_auth: true,
+            ext_quote: true,
+        };
+        let client_certs = cert_client
+            .request_cert(&client_key, config)
+            .await
+            .context("Failed to request cert")?;
+        let client_cert = client_certs.join("\n");
+        let ca_cert = self.app_keys.ca_cert.clone();
+        let client = RaClientConfig::builder()
+            .remote_uri(url)
+            .maybe_pccs_url(self.local_config.pccs_url.clone())
+            .tls_client_cert(client_cert)
+            .tls_client_key(client_key.serialize_pem())
+            .tls_ca_cert(ca_cert)
+            .tls_built_in_root_certs(false)
+            .tls_no_check(self.app_keys.tproxy_app_id == "any")
+            .cert_validator(Box::new(move |cert| ra_validator.validate(cert)))
+            .build()
+            .into_client()
+            .context("Failed to create RA client")?;
         let tproxy_client = TproxyClient::new(client);
         let response = tproxy_client
             .register_cvm(RegisterCvmRequest {
@@ -136,50 +196,6 @@ impl<'a> Setup<'a> {
         Ok(())
     }
 
-    fn prepare_certs(&self) -> Result<()> {
-        info!("Preparing certs");
-        if fs::metadata(self.resolve("/etc/tappd")).is_ok() {
-            fs::remove_dir_all(self.resolve("/etc/tappd"))?;
-        }
-        fs::create_dir_all(self.resolve("/etc/tappd"))?;
-
-        if self.app_keys.app_key.is_empty() {
-            bail!("Invalid app_key");
-        }
-        fs::write(
-            self.resolve("/etc/tappd/app-ca.key"),
-            &self.app_keys.app_key,
-        )?;
-
-        let kms_ca_cert = self.resolve("/tapp/certs/ca.cert");
-        if fs::metadata(&kms_ca_cert).is_ok() {
-            fs::copy(kms_ca_cert, self.resolve("/etc/tappd/ca.cert"))?;
-        } else {
-            // symbolic link the app-ca.cert to ca.cert
-            fs::os::unix::fs::symlink(
-                self.resolve("/etc/tappd/app-ca.cert"),
-                self.resolve("/etc/tappd/ca.cert"),
-            )?;
-        }
-
-        let cert_chain_str = self.app_keys.certificate_chain.join("\n");
-        fs::write(self.resolve("/etc/tappd/app-ca.cert"), cert_chain_str)?;
-
-        cmd_gen_ra_cert(GenRaCertArgs {
-            ca_key: self.resolve("/etc/tappd/app-ca.key").into(),
-            ca_cert: self.resolve("/etc/tappd/app-ca.cert").into(),
-            cert_path: self.resolve("/etc/tappd/tls.cert").into(),
-            key_path: self.resolve("/etc/tappd/tls.key").into(),
-        })
-        .context("Failed to generate RA cert")?;
-
-        let mut tls_cert = fs::OpenOptions::new()
-            .append(true)
-            .open(self.resolve("/etc/tappd/tls.cert"))?;
-        tls_cert.write_all(&fs::read(self.resolve("/etc/tappd/app-ca.cert"))?)?;
-        Ok(())
-    }
-
     fn setup_tappd_config(&self) -> Result<()> {
         info!("Setting up tappd config");
         let config = serde_json::json!({
@@ -188,10 +204,11 @@ impl<'a> Setup<'a> {
                     "app_name": self.app_compose.name,
                     "public_logs": self.app_compose.public_logs,
                     "public_sysinfo": self.app_compose.public_sysinfo,
+                    "pccs_url": self.local_config.pccs_url,
                 }
             }
         });
-        let tappd_config = self.resolve("/etc/tappd/tappd.json");
+        let tappd_config = self.resolve("/tapp/tappd.json");
         fs::write(tappd_config, serde_json::to_string_pretty(&config)?)?;
         Ok(())
     }
@@ -265,7 +282,7 @@ impl<'a> Setup<'a> {
 }
 
 pub async fn tboot(args: &TbootArgs) -> Result<()> {
-    let nc = NotifyClient::load_or_default(None).unwrap_or_default();
+    let nc = HostApi::load_or_default(None).unwrap_or_default();
     if let Err(err) = tboot_inner(args, &nc).await {
         nc.notify_q("boot.error", &format!("{err:?}")).await;
         return Err(err);
@@ -273,7 +290,7 @@ pub async fn tboot(args: &TbootArgs) -> Result<()> {
     Ok(())
 }
 
-pub async fn tboot_inner(args: &TbootArgs, nc: &NotifyClient) -> Result<()> {
+pub async fn tboot_inner(args: &TbootArgs, nc: &HostApi) -> Result<()> {
     nc.notify_q("boot.progress", "enter system").await;
     Setup::load(args)?.setup(nc).await?;
     Ok(())

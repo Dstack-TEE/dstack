@@ -146,11 +146,19 @@
             </div>
             <div class="info-row">
                 <div class="info-label">App ID</div>
-                <div class="info-value">{{app_id}}</div>
+                <div class="info-value">{{app_id|hex}}</div>
             </div>
             <div class="info-row">
                 <div class="info-label">Instance ID</div>
-                <div class="info-value">{{instance_id}}</div>
+                <div class="info-value">{{instance_id|hex}}</div>
+            </div>
+            <div class="info-row">
+                <div class="info-label">Device ID</div>
+                <div class="info-value">{{device_id|hex}}</div>
+            </div>
+            <div class="info-row">
+                <div class="info-label">Key Provider Info</div>
+                <div class="info-value">{{key_provider_info}}</div>
             </div>
             {% if public_sysinfo %}
             <div class="info-row">

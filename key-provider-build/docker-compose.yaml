@@ -1,0 +1,34 @@
+x-common: &common-config
+  restart: always
+  logging:
+    driver: "json-file"
+    options:
+      max-size: "100m"
+      max-file: "5"
+
+services:
+  gramine-sealing-key-provider:
+    <<: *common-config
+    container_name: gramine-sealing-key-provider
+    build:
+      context: .
+      dockerfile: Dockerfile
+    privileged: true
+    devices:
+      - "/dev/sgx_enclave:/dev/sgx_enclave"
+      - "/dev/sgx_provision:/dev/sgx_provision"
+    volumes:
+      - "./sgx_default_qcnl.conf:/etc/sgx_default_qcnl.conf"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "127.0.0.1:3443:3443"
+
+  # proxy to access the local pccs for the aesm service
+  # The local PCCS is supposed to be running on the host machine and listening on 127.0.0.1:8081
+  pccs-proxy:
+    <<: *common-config
+    image: alpine/socat
+    container_name: pccs-proxy
+    network_mode: host
+    command: TCP-LISTEN:8082,bind=172.17.0.1,fork,reuseaddr TCP:127.0.0.1:8081

@@ -1,0 +1,83 @@
+services:
+  # Helios is a Ethereum light client
+  helios:
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM rust:1.80-alpine@sha256:1f5aff501e02c1384ec61bb47f89e3eebf60e287e6ed5d1c598077afc82e83d5
+        WORKDIR /app
+        RUN apk add --no-cache git build-base openssl-dev protobuf protobuf-dev perl
+        RUN git clone https://github.com/a16z/helios && \
+            cd helios && \
+            git checkout 5c61864a167c16141a9a12b976c0e9398b332f07
+        WORKDIR /app/helios
+        RUN cargo build --release
+    command: [
+      "./target/release/helios",
+      "ethereum",
+      "--network", "mainnet",
+      "--checkpoint", "0xbee4f32f91e62060d2aa41c652f6c69431829cfb09b02ea3cad92f65bd15dcce",
+      "--rpc-bind-ip", "0.0.0.0",
+      "--rpc-port", "8545",
+      "--consensus-rpc", "https://ethereum.operationsolarstorm.org",
+      "--execution-rpc", "https://ethereum-rpc.publicnode.com"
+    ]
+
+  # Auth API is a webhook server that authenticates KMS instances and Apps launches
+  auth-api:
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM node:18-alpine@sha256:06f7bbbcec00dd10c21a3a0962609600159601b5004d84aff142977b449168e9
+        WORKDIR /app
+
+        RUN apk add --no-cache git
+        RUN git clone https://github.com/Dstack-TEE/dstack.git && \
+            cd dstack && \
+            git checkout 78057c975fe4b9e21f557fb888d72eeecfb21178
+        WORKDIR /app/dstack/kms/auth-eth
+        RUN npm install && \
+            npx hardhat typechain && \
+            npx tsc --project tsconfig.json
+        CMD node dist/src/main.js
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8000
+      - ETH_RPC_URL=http://helios:8545
+      - KMS_CONTRACT_ADDR=0x515cd0dd984Adc75EE8625131FcC3d2D91f7F140
+    depends_on:
+      - helios
+
+  # KMS handles the TEE Remote Attestation
+  kms:
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM rust:1.80@sha256:d22d8938f0403ee31c118b5bf2162b883313dd7f387f859d9f2accd7c884c385
+        WORKDIR /app
+        RUN apt-get update && apt-get install -y \
+            git \
+            build-essential \
+            libssl-dev \
+            protobuf-compiler \
+            libprotobuf-dev \
+            clang \
+            libclang-dev \
+            --no-install-recommends \
+            && rm -rf /var/lib/apt/lists/*
+        RUN git clone https://github.com/Dstack-TEE/dstack.git && \
+            cd dstack && \
+            git checkout 78057c975fe4b9e21f557fb888d72eeecfb21178
+        WORKDIR /app/dstack
+        RUN cargo build --release -p kms
+        CMD ["./target/release/kms"]
+    volumes:
+      - kms-volume:/etc/kms
+      - /var/run/tappd.sock:/var/run/tappd.sock
+    ports:
+      - 8000:8000
+    depends_on:
+      - auth-api
+
+volumes:
+  kms-volume:

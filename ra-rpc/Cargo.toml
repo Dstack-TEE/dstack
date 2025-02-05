@@ -17,6 +17,7 @@ ra-tls.workspace = true
 bon.workspace = true
 rocket-vsock-listener = { workspace = true, optional = true }
 serde.workspace = true
+x509-parser.workspace = true
 
 [features]
 default = ["rocket", "client"]

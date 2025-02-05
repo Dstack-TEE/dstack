@@ -9,7 +9,7 @@ use anyhow::{bail, Context, Result};
 use certbot::WorkDir;
 use cmd_lib::run_cmd as cmd;
 use fs_err as fs;
-use ra_rpc::{Attestation, CallContext, RpcCall};
+use ra_rpc::{CallContext, RpcCall, VerifiedAttestation};
 use rand::seq::IteratorRandom;
 use rinja::Template as _;
 use safe_write::safe_write;
@@ -338,7 +338,7 @@ impl ProxyState {
 }
 
 pub struct RpcHandler {
-    attestation: Option<Attestation>,
+    attestation: Option<VerifiedAttestation>,
     state: Proxy,
 }
 
@@ -347,12 +347,12 @@ impl TproxyRpc for RpcHandler {
         let Some(ra) = &self.attestation else {
             bail!("no attestation provided");
         };
-        let app_id = ra
-            .decode_app_id()
-            .context("failed to decode app-id from attestation")?;
-        let instance_id = ra
-            .decode_instance_id()
-            .context("failed to decode instance-id from attestation")?;
+        let app_info = ra
+            .decode_app_info(false)
+            .context("failed to decode app-info from attestation")?;
+        let app_id = hex::encode(&app_info.app_id);
+        let instance_id = hex::encode(&app_info.instance_id);
+
         let mut state = self.state.lock();
         if request.client_public_key.is_empty() {
             bail!("[{instance_id}] client public key is empty");

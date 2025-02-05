@@ -5,10 +5,11 @@ use std::{
 
 use anyhow::{Context, Result};
 use fs_err as fs;
-use serde::{de::DeserializeOwned, Deserialize};
-use serde_human_bytes as hex_bytes;
+use serde::de::DeserializeOwned;
 use sha2::{digest::Output, Digest};
 use tdx_attest as att;
+
+pub use dstack_types::{AppCompose, AppKeys, KeyProviderKind, LocalConfig};
 
 /// This code is not defined in the TCG specification.
 /// See https://trustedcomputinggroup.org/wp-content/uploads/PC-ClientSpecific_Platform_Profile_for_TPM_2p0_Systems_v51.pdf
@@ -70,69 +71,4 @@ pub fn extend_rtmr(index: u32, event_type: u32, event: &str, payload: &[u8]) -> 
     println!("Extended RTMR{index}: event={event}, payload={hexed_payload}, digest={hexed_digest}");
     att::log_rtmr_event(&log).context("Failed to log RTMR extending event")?;
     Ok(())
-}
-
-#[derive(Deserialize)]
-#[allow(unused)]
-pub struct AppCompose {
-    pub manifest_version: u32,
-    pub name: String,
-    // Deprecated
-    #[serde(default)]
-    pub features: Vec<String>,
-    pub runner: String,
-    pub docker_compose_file: Option<String>,
-    #[serde(default)]
-    pub docker_config: DockerConfig,
-    #[serde(default)]
-    pub public_logs: bool,
-    #[serde(default)]
-    pub public_sysinfo: bool,
-    #[serde(default)]
-    pub kms_enabled: bool,
-    #[serde(default)]
-    pub tproxy_enabled: bool,
-}
-
-#[derive(Deserialize, Debug, Default)]
-pub struct DockerConfig {
-    /// The URL of the Docker registry.
-    pub registry: Option<String>,
-    /// The username of the registry account.
-    pub username: Option<String>,
-    /// The key of the encrypted environment variables for registry account token.
-    pub token_key: Option<String>,
-}
-
-impl AppCompose {
-    fn feature_enabled(&self, feature: &str) -> bool {
-        self.features.contains(&feature.to_string())
-    }
-
-    pub fn tproxy_enabled(&self) -> bool {
-        self.tproxy_enabled || self.feature_enabled("tproxy-net")
-    }
-
-    pub fn kms_enabled(&self) -> bool {
-        self.kms_enabled || self.feature_enabled("kms")
-    }
-}
-
-#[derive(Deserialize)]
-pub struct LocalConfig {
-    #[serde(with = "hex_bytes")]
-    pub rootfs_hash: Vec<u8>,
-    pub kms_url: Option<String>,
-    pub tproxy_url: Option<String>,
-    pub docker_registry: Option<String>,
-    pub host_api_url: String,
-}
-
-#[derive(Deserialize)]
-pub struct AppKeys {
-    pub app_key: String,
-    pub disk_crypt_key: String,
-    #[serde(with = "hex_bytes", default)]
-    pub env_crypt_key: Vec<u8>,
-    pub certificate_chain: Vec<String>,
 }

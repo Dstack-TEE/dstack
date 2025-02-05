@@ -131,7 +131,6 @@ impl VmState {
             Some(info) => info.state.status.is_running(),
             None => false,
         };
-        let todo = "more light way to get started";
         let started = workdir.started().unwrap_or(false);
         let status = match (started, is_running) {
             (true, true) => "running",

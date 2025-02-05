@@ -7,10 +7,11 @@ log_level = "debug"
 port = 8010
 
 [core]
-pccs_url = "https://api.trustedservices.intel.com/tdx/certification/v4"
+kms_url = ""
 state_path = "./tproxy-state.json"
 # auto set soft ulimit to hard ulimit
 set_ulimit = true
+tls_domain = ""
 
 [core.certbot]
 workdir = "/etc/certbot"

@@ -34,6 +34,14 @@ tdx-attest.workspace = true
 host-api = { workspace = true, features = ["client"] }
 cmd_lib.workspace = true
 toml.workspace = true
+key-provider-client.workspace = true
+dcap-qvl.workspace = true
+k256 = { workspace = true, features = ["ecdsa"] }
+dstack-types.workspace = true
+rand.workspace = true
+sha3.workspace = true
+cert-client.workspace = true
+x509-parser.workspace = true
 serde_yaml2.workspace = true
 bollard.workspace = true
 
