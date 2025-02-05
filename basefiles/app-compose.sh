@@ -22,6 +22,10 @@ case "$RUNNER" in
         tdxctl notify-host -e "boot.error" -d "failed to start containers"
         exit 1
     fi
+    echo "Pruning unused images"
+    docker image prune -af
+    echo "Pruning unused volumes"
+    docker volume prune -f
     ;;
 "bash")
     chmod +x /usr/bin/containerd-shim-runc-v2
