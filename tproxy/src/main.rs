@@ -75,11 +75,14 @@ async fn main() -> Result<()> {
     state.lock().reconfigure()?;
     proxy::start(proxy_config, state.clone());
 
-    let admin_figment = Figment::from(Serialized::defaults(
-        figment
-            .find_value("admin")
-            .context("admin section not found")?,
-    ));
+    let admin_figment =
+        Figment::new()
+            .merge(rocket::Config::default())
+            .merge(Serialized::defaults(
+                figment
+                    .find_value("admin")
+                    .context("admin section not found")?,
+            ));
 
     let admin_config = admin_figment
         .extract::<AdminConfig>()
