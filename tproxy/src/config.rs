@@ -130,6 +130,25 @@ pub struct Config {
     pub recycle: RecycleConfig,
     pub state_path: String,
     pub set_ulimit: bool,
+    pub tls_domain: String,
+    pub kms_url: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct AdminConfig {
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct TlsConfig {
+    pub key: String,
+    pub certs: String,
+    pub mutual: MutualConfig,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct MutualConfig {
+    pub ca_certs: String,
 }
 
 pub const DEFAULT_CONFIG: &str = include_str!("../tproxy.toml");

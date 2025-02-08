@@ -98,3 +98,8 @@ service Tproxy {
   // Summary API for inspect.
   rpc GetMeta(google.protobuf.Empty) returns (GetMetaResponse);
 }
+
+service TproxyAdmin {
+  // Exit the TProxy.
+  rpc Exit(google.protobuf.Empty) returns (google.protobuf.Empty) {}
+}

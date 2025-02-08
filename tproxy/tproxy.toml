@@ -3,8 +3,12 @@ max_blocking = 64
 ident = "Tproxy Server"
 temp_dir = "/tmp"
 keep_alive = 10
-log_level = "debug"
+log_level = "info"
 port = 8010
+
+[admin]
+enabled = false
+port = 8011
 
 [core]
 pccs_url = "https://api.trustedservices.intel.com/tdx/certification/v4"

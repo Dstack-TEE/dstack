@@ -335,6 +335,10 @@ impl ProxyState {
         }
         Ok(())
     }
+
+    pub(crate) fn exit(&mut self) -> ! {
+        std::process::exit(0);
+    }
 }
 
 pub struct RpcHandler {
