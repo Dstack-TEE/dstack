@@ -65,6 +65,9 @@ struct Config {
     renew_days_before: u64,
     /// Renew timeout in seconds
     renew_timeout: u64,
+    /// Command to run after renewal
+    #[serde(default)]
+    renewed_hook: Option<String>,
 }
 
 impl Default for Config {
@@ -79,6 +82,7 @@ impl Default for Config {
             renew_interval: 3600,
             renew_days_before: 10,
             renew_timeout: 120,
+            renewed_hook: None,
         }
     }
 }
@@ -126,6 +130,7 @@ fn load_config(config: &PathBuf) -> Result<CertBotConfig> {
         .renew_expires_in(renew_expires_in)
         .credentials_file(workdir.account_credentials_path())
         .auto_set_caa(config.auto_set_caa)
+        .maybe_renewed_hook(config.renewed_hook)
         .build();
     Ok(bot_config)
 }

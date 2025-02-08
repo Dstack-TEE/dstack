@@ -32,6 +32,7 @@ pub struct CertBotConfig {
     renew_interval: Duration,
     renew_timeout: Duration,
     renew_expires_in: Duration,
+    renewed_hook: Option<String>,
 }
 
 impl CertBotConfig {
@@ -145,6 +146,16 @@ impl CertBot {
                     "renewed certificate for {}",
                     self.config.cert_file.display()
                 );
+                if let Some(hook) = &self.config.renewed_hook {
+                    info!("running renewed hook");
+                    let status = std::process::Command::new("/bin/sh")
+                        .arg("-c")
+                        .arg(hook)
+                        .status()?;
+                    if !status.success() {
+                        error!("renewed hook failed with status: {}", status);
+                    }
+                }
             }
             Ok(false) => {
                 info!(
