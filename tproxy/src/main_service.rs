@@ -62,7 +62,7 @@ impl Proxy {
                 .build_bot()
                 .await
                 .context("Failed to build certbot")?;
-            info!("Running certbot...");
+            info!("First renewal...");
             certbot.renew(false).await.context("Failed to renew cert")?;
             let certbot = Arc::new(certbot);
             start_certbot_task(certbot.clone());
@@ -116,6 +116,7 @@ fn start_recycle_thread(state: Weak<Mutex<ProxyState>>, config: Arc<Config>) {
 fn start_certbot_task(certbot: Arc<CertBot>) {
     tokio::spawn(async move {
         loop {
+            tokio::time::sleep(certbot.renew_interval()).await;
             match certbot.renew(false).await {
                 Err(e) => {
                     error!("failed to run certbot: {e:?}");
@@ -128,7 +129,6 @@ fn start_certbot_task(certbot: Arc<CertBot>) {
                     }
                 }
             }
-            tokio::time::sleep(certbot.renew_interval()).await;
         }
     });
 }

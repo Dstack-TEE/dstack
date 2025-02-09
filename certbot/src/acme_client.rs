@@ -490,7 +490,7 @@ fn need_renew(cert_pem: &str, expires_in: Duration) -> Result<bool> {
     let cert = pem.parse_x509().context("Invalid x509 certificate")?;
     let not_after = cert.validity().not_after.to_datetime();
     let now = time::OffsetDateTime::now_utc();
-    debug!("will expire in {:?}", not_after - now);
+    debug!("will expire in {}", not_after - now);
 
     Ok(not_after < now + expires_in)
 }
