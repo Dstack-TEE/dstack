@@ -6,9 +6,6 @@ keep_alive = 10
 log_level = "info"
 port = 8010
 
-[admin]
-enabled = false
-port = 8011
 
 [core]
 pccs_url = "https://api.trustedservices.intel.com/tdx/certification/v4"
@@ -16,8 +13,21 @@ state_path = "./tproxy-state.json"
 # auto set soft ulimit to hard ulimit
 set_ulimit = true
 
+[core.admin]
+enabled = false
+port = 8011
+
 [core.certbot]
+enabled = false
 workdir = "/etc/certbot"
+acme_url = "https://acme-staging-v02.api.letsencrypt.org/directory"
+cf_api_token = ""
+cf_zone_id = ""
+auto_set_caa = true
+domain = "*.example.com"
+renew_interval = "1h"
+renew_before_expiration = "10d"
+renew_timeout = "120s"
 
 [core.wg]
 public_key = ""

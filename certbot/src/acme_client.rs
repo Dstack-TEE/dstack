@@ -138,6 +138,7 @@ impl AcmeClient {
     ///
     /// Returns the new certificates encoded in PEM format.
     pub async fn request_new_certificate(&self, key: &str, domains: &[String]) -> Result<String> {
+        info!("requesting new certificates for {}", domains.join(", "));
         let mut challenges = Vec::new();
         let result = self
             .request_new_certificate_inner(key, domains, &mut challenges)
@@ -188,14 +189,20 @@ impl AcmeClient {
         live_key_pem_path: impl AsRef<Path>,
         backup_dir: impl AsRef<Path>,
         expires_in: Duration,
+        force: bool,
     ) -> Result<bool> {
         let live_cert_pem = fs::read_to_string(live_cert_pem_path.as_ref())?;
         let live_key_pem = fs::read_to_string(live_key_pem_path.as_ref())?;
-        let Some(new_cert) = self
-            .renew_cert_if_needed(&live_cert_pem, &live_key_pem, expires_in)
-            .await?
-        else {
-            return Ok(false);
+        let new_cert = if force {
+            self.renew_cert(&live_cert_pem, &live_key_pem).await?
+        } else {
+            let Some(new_cert) = self
+                .renew_cert_if_needed(&live_cert_pem, &live_key_pem, expires_in)
+                .await?
+            else {
+                return Ok(false);
+            };
+            new_cert
         };
         self.store_cert(
             live_cert_pem_path.as_ref(),
@@ -243,9 +250,9 @@ impl AcmeClient {
         live_cert_pem_path: impl AsRef<Path>,
         live_key_pem_path: impl AsRef<Path>,
         backup_dir: impl AsRef<Path>,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         if live_cert_pem_path.as_ref().exists() && live_key_pem_path.as_ref().exists() {
-            return Ok(());
+            return Ok(false);
         }
         let key_pem = if live_key_pem_path.as_ref().exists() {
             debug!("using existing cert key pair");
@@ -263,7 +270,7 @@ impl AcmeClient {
             &key_pem,
             backup_dir.as_ref(),
         )?;
-        Ok(())
+        Ok(true)
     }
 }
 

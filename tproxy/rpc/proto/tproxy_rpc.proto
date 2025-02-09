@@ -99,7 +99,14 @@ service Tproxy {
   rpc GetMeta(google.protobuf.Empty) returns (GetMetaResponse);
 }
 
+message RenewCertResponse {
+  // True if the certificate was renewed.
+  bool renewed = 1;
+}
+
 service TproxyAdmin {
   // Exit the TProxy.
   rpc Exit(google.protobuf.Empty) returns (google.protobuf.Empty) {}
+  // Renew the proxy TLS certificate if certbot is enabled
+  rpc RenewCert(google.protobuf.Empty) returns (RenewCertResponse) {}
 }

@@ -1,6 +1,6 @@
 use anyhow::{anyhow, Result};
 use clap::Parser;
-use config::{AdminConfig, Config, TlsConfig};
+use config::{Config, TlsConfig};
 use http_client::prpc::PrpcClient;
 use ra_rpc::{client::RaClient, rocket_helper::QuoteVerifier};
 use rocket::{
@@ -71,7 +71,8 @@ async fn main() -> Result<()> {
 
     let proxy_config = config.proxy.clone();
     let pccs_url = config.pccs_url.clone();
-    let state = main_service::Proxy::new(config)?;
+    let admin_enabled = config.admin.enabled;
+    let state = main_service::Proxy::new(config).await?;
     state.lock().reconfigure()?;
     proxy::start(proxy_config, state.clone());
 
@@ -80,13 +81,9 @@ async fn main() -> Result<()> {
             .merge(rocket::Config::default())
             .merge(Serialized::defaults(
                 figment
-                    .find_value("admin")
+                    .find_value("core.admin")
                     .context("admin section not found")?,
             ));
-
-    let admin_config = admin_figment
-        .extract::<AdminConfig>()
-        .context("Failed to parse admin config")?;
 
     let mut rocket = rocket::custom(figment)
         .mount("/", web_routes::routes())
@@ -101,7 +98,7 @@ async fn main() -> Result<()> {
     rocket = rocket.manage(verifier);
     let main_srv = rocket.launch();
     let admin_srv = async move {
-        if admin_config.enabled {
+        if admin_enabled {
             rocket::custom(admin_figment)
                 .mount("/", ra_rpc::prpc_routes!(Proxy, AdminRpcHandler))
                 .manage(state)

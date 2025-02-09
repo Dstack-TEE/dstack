@@ -18,6 +18,9 @@ enum Command {
         /// Run only once and exit
         #[arg(long)]
         once: bool,
+        /// Force renewal
+        #[arg(long)]
+        force: bool,
     },
     /// Initialize the configuration file
     Init {
@@ -135,14 +138,14 @@ fn load_config(config: &PathBuf) -> Result<CertBotConfig> {
     Ok(bot_config)
 }
 
-async fn renew(config: &PathBuf, once: bool) -> Result<()> {
+async fn renew(config: &PathBuf, once: bool, force: bool) -> Result<()> {
     let bot_config = load_config(config).context("Failed to load configuration")?;
     let bot = bot_config
         .build_bot()
         .await
         .context("Failed to build bot")?;
     if once {
-        bot.run_once().await?;
+        bot.renew(force).await?;
     } else {
         bot.run().await;
     }
@@ -162,8 +165,12 @@ async fn main() -> Result<()> {
 
     let args = Args::parse();
     match args.command {
-        Command::Renew { config, once } => {
-            renew(&config, once).await?;
+        Command::Renew {
+            config,
+            once,
+            force,
+        } => {
+            renew(&config, once, force).await?;
         }
         Command::Init { config } => {
             let config = load_config(&config).context("Failed to load configuration")?;

@@ -6,7 +6,7 @@ use std::{
 };
 
 use anyhow::{bail, Context, Result};
-use certbot::WorkDir;
+use certbot::{CertBot, WorkDir};
 use cmd_lib::run_cmd as cmd;
 use fs_err as fs;
 use ra_rpc::{Attestation, CallContext, RpcCall};
@@ -31,6 +31,7 @@ use crate::{
 #[derive(Clone)]
 pub struct Proxy {
     pub(crate) config: Arc<Config>,
+    pub(crate) certbot: Option<Arc<CertBot>>,
     inner: Arc<Mutex<ProxyState>>,
 }
 
@@ -53,7 +54,23 @@ impl Proxy {
         self.inner.lock().expect("Failed to lock AppState")
     }
 
-    pub fn new(config: Config) -> Result<Self> {
+    pub async fn new(config: Config) -> Result<Self> {
+        let certbot = if config.certbot.enabled {
+            info!("Starting certbot...");
+            let certbot = config
+                .certbot
+                .build_bot()
+                .await
+                .context("Failed to build certbot")?;
+            info!("Running certbot...");
+            certbot.renew(false).await.context("Failed to renew cert")?;
+            let certbot = Arc::new(certbot);
+            start_certbot_task(certbot.clone());
+            Some(certbot)
+        } else {
+            info!("certbot is disabled");
+            None
+        };
         let config = Arc::new(config);
         let state_path = &config.state_path;
         let state = if fs::metadata(state_path).is_ok() {
@@ -72,7 +89,11 @@ impl Proxy {
             state,
         }));
         start_recycle_thread(Arc::downgrade(&inner), config.clone());
-        Ok(Self { config, inner })
+        Ok(Self {
+            config,
+            inner,
+            certbot,
+        })
     }
 }
 
@@ -89,6 +110,26 @@ fn start_recycle_thread(state: Weak<Mutex<ProxyState>>, config: Arc<Config>) {
         if let Err(err) = state.lock().unwrap().recycle() {
             error!("failed to run recycle: {err}");
         };
+    });
+}
+
+fn start_certbot_task(certbot: Arc<CertBot>) {
+    tokio::spawn(async move {
+        loop {
+            match certbot.renew(false).await {
+                Err(e) => {
+                    error!("failed to run certbot: {e:?}");
+                }
+                Ok(renewed) => {
+                    if renewed {
+                        // Restart self
+                        info!("certificate renewed, restarting...");
+                        std::process::exit(0);
+                    }
+                }
+            }
+            tokio::time::sleep(certbot.renew_interval()).await;
+        }
     });
 }
 
