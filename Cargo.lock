@@ -5342,6 +5342,7 @@ dependencies = [
  "git-version",
  "hex",
  "hickory-resolver",
+ "http-client",
  "insta",
  "ipnet",
  "kms-rpc",

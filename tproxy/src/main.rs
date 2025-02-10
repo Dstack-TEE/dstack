@@ -1,12 +1,19 @@
 use anyhow::{anyhow, Context, Result};
 use clap::Parser;
 use config::{Config, TlsConfig};
-use main_service::{Proxy, RpcHandler};
+use http_client::prpc::PrpcClient;
 use ra_rpc::{client::RaClient, rocket_helper::QuoteVerifier};
-use rocket::fairing::AdHoc;
+use rocket::{
+    fairing::AdHoc,
+    figment::{providers::Serialized, Figment},
+};
 use std::path::Path;
 use tracing::info;
 
+use admin_service::AdminRpcHandler;
+use main_service::{Proxy, RpcHandler};
+
+mod admin_service;
 mod config;
 mod main_service;
 mod models;
@@ -50,10 +57,9 @@ async fn maybe_gen_certs(config: &Config, tls_config: &TlsConfig) -> Result<()> 
     let tappd_socket = Path::new("/var/run/tappd.sock");
     if tappd_socket.exists() {
         info!("Using tappd for certificate generation");
-        let client = tappd_rpc::tappd_client::TappdClient::new(
-            RaClient::new(tappd_socket.to_str().unwrap().to_string(), true)
-                .context("Failed to create tappd client")?,
-        );
+        let http_client =
+            PrpcClient::new_unix(tappd_socket.display().to_string(), "/prpc".to_string());
+        let client = tappd_rpc::tappd_client::TappdClient::new(http_client);
         let response = client
             .derive_key(tappd_rpc::DeriveKeyArgs {
                 path: "".to_string(),
@@ -138,9 +144,19 @@ async fn main() -> Result<()> {
 
     let proxy_config = config.proxy.clone();
     let pccs_url = config.pccs_url.clone();
-    let state = main_service::Proxy::new(config)?;
+    let admin_enabled = config.admin.enabled;
+    let state = main_service::Proxy::new(config).await?;
     state.lock().reconfigure()?;
     proxy::start(proxy_config, state.clone());
+
+    let admin_figment =
+        Figment::new()
+            .merge(rocket::Config::default())
+            .merge(Serialized::defaults(
+                figment
+                    .find_value("core.admin")
+                    .context("admin section not found")?,
+            ));
 
     let mut rocket = rocket::custom(figment)
         .mount("/", web_routes::routes())
@@ -150,12 +166,28 @@ async fn main() -> Result<()> {
                 res.set_raw_header("X-App-Version", app_version());
             })
         }))
-        .manage(state);
+        .manage(state.clone());
     let verifier = QuoteVerifier::new(pccs_url);
     rocket = rocket.manage(verifier);
-    rocket
-        .launch()
-        .await
-        .map_err(|err| anyhow!(err.to_string()))?;
+    let main_srv = rocket.launch();
+    let admin_srv = async move {
+        if admin_enabled {
+            rocket::custom(admin_figment)
+                .mount("/", ra_rpc::prpc_routes!(Proxy, AdminRpcHandler))
+                .manage(state)
+                .launch()
+                .await
+        } else {
+            std::future::pending().await
+        }
+    };
+    tokio::select! {
+        result = main_srv => {
+            result.map_err(|err| anyhow!("Failed to start main server: {err:?}"))?;
+        }
+        result = admin_srv => {
+            result.map_err(|err| anyhow!("Failed to start admin server: {err:?}"))?;
+        }
+    }
     Ok(())
 }

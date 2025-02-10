@@ -1,0 +1,38 @@
+services:
+  tproxy:
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM rust:1.84@sha256:738ae99a3d75623f41e6882566b4ef37e38a9840244a47efd4a0ca22e9628b88
+        WORKDIR /app
+        RUN apt-get update && apt-get install -y \
+            git build-essential libssl-dev protobuf-compiler \
+            libprotobuf-dev wireguard-tools iproute2 libclang-dev jq
+        RUN git clone https://github.com/Dstack-TEE/dstack.git && \
+            cd dstack && \
+            git checkout TPROXY_REV
+        WORKDIR /app/dstack/tproxy/tapp
+        RUN cargo build --release -p tproxy
+    entrypoint:
+      - /app/dstack/tproxy/tapp/tproxy-entrypoint.sh
+    command: ["/app/dstack/target/release/tproxy", "-c", "/etc/tproxy/tproxy.toml"]
+    volumes:
+      - /var/run/tappd.sock:/var/run/tappd.sock
+      - /tapp:/tapp
+      - tproxy-volume:/data
+      - tproxy-conf:/etc/tproxy
+      - rproxy-conf:/etc/rproxy
+    network_mode: host
+    privileged: true
+    environment:
+      - WG_ENDPOINT=${WG_ENDPOINT}
+      - SRV_DOMAIN=${SRV_DOMAIN}
+      - CF_API_TOKEN=${CF_API_TOKEN}
+      - CF_ZONE_ID=${CF_ZONE_ID}
+      - RUST_LOG=info,certbot=debug
+    restart: always
+
+volumes:
+  tproxy-volume:
+  tproxy-conf:
+  rproxy-conf:

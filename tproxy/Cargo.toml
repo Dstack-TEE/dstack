@@ -38,6 +38,7 @@ load_config.workspace = true
 kms-rpc.workspace = true
 ra-tls.workspace = true
 tappd-rpc.workspace = true
+http-client = { workspace = true, features = ["prpc"] }
 
 [target.'cfg(unix)'.dependencies]
 nix = { workspace = true, features = ["resource"] }

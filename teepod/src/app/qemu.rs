@@ -103,6 +103,7 @@ impl VmInfo {
                     .iter()
                     .map(|pm| pb::PortMapping {
                         protocol: pm.protocol.as_str().into(),
+                        host_address: pm.address.to_string(),
                         host_port: pm.from as u32,
                         vm_port: pm.to as u32,
                     })

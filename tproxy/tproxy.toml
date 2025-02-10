@@ -3,8 +3,9 @@ max_blocking = 64
 ident = "Tproxy Server"
 temp_dir = "/tmp"
 keep_alive = 10
-log_level = "debug"
+log_level = "info"
 port = 8010
+
 
 [core]
 kms_url = ""
@@ -13,8 +14,21 @@ state_path = "./tproxy-state.json"
 set_ulimit = true
 tls_domain = ""
 
+[core.admin]
+enabled = false
+port = 8011
+
 [core.certbot]
+enabled = false
 workdir = "/etc/certbot"
+acme_url = "https://acme-staging-v02.api.letsencrypt.org/directory"
+cf_api_token = ""
+cf_zone_id = ""
+auto_set_caa = true
+domain = "*.example.com"
+renew_interval = "1h"
+renew_before_expiration = "10d"
+renew_timeout = "120s"
 
 [core.wg]
 public_key = ""
@@ -36,6 +50,7 @@ tappd_port = 8090
 buffer_size = 8192
 # number of hosts to try to connect to
 connect_top_n = 3
+localhost_enabled = false
 
 [core.proxy.timeouts]
 # Timeout for establishing a connection to the target app.

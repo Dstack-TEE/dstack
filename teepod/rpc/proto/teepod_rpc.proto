@@ -71,6 +71,8 @@ message PortMapping {
   uint32 host_port = 2;
   // VM port
   uint32 vm_port = 3;
+  // Host address
+  string host_address = 4;
 }
 
 // Message for upgrading an app request

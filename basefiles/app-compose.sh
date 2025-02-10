@@ -18,7 +18,7 @@ case "$RUNNER" in
     chmod +x /usr/bin/containerd-shim-runc-v2
     systemctl restart docker
 
-    if ! docker compose up --remove-orphans -d; then
+    if ! docker compose up --remove-orphans -d --build; then
         tdxctl notify-host -e "boot.error" -d "failed to start containers"
         exit 1
     fi
