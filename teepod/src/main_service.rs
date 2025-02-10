@@ -2,6 +2,7 @@ use std::ops::Deref;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail, Context, Result};
+use dstack_types::AppCompose;
 use fs_err as fs;
 use ra_rpc::{CallContext, RpcCall};
 use teepod_rpc::teepod_server::{TeepodRpc, TeepodServer};
@@ -83,7 +84,7 @@ impl TeepodRpc for RpcHandler {
             .collect::<Result<Vec<_>>>()?;
 
         let app_id = match &request.app_id {
-            Some(id) => id.clone(),
+            Some(id) => id.strip_prefix("0x").unwrap_or(id).to_lowercase(),
             None => app_id_of(&request.compose_file),
         };
         let id = uuid::Uuid::new_v4().to_string();
@@ -106,7 +107,7 @@ impl TeepodRpc for RpcHandler {
         vm_work_dir
             .put_manifest(&manifest)
             .context("Failed to write manifest")?;
-        let work_dir = self.prepare_work_dir(&id, &request)?;
+        let work_dir = self.prepare_work_dir(&id, &request, &app_id)?;
         if let Err(err) = vm_work_dir.set_started(true) {
             warn!("Failed to set started: {}", err);
         }
@@ -175,20 +176,9 @@ impl TeepodRpc for RpcHandler {
 
     async fn upgrade_app(self, request: UpgradeAppRequest) -> Result<Id> {
         let new_id = if !request.compose_file.is_empty() {
-            {
-                // check the compose file is valid
-                let todo = "import from external crate";
-                #[allow(dead_code)]
-                #[derive(serde::Deserialize)]
-                struct AppCompose {
-                    manifest_version: u32,
-                    name: String,
-                    runner: String,
-                    docker_compose_file: Option<String>,
-                }
-                let _app_compose: AppCompose =
-                    serde_json::from_str(&request.compose_file).context("Invalid compose file")?;
-            }
+            // check the compose file is valid
+            let _app_compose: AppCompose =
+                serde_json::from_str(&request.compose_file).context("Invalid compose file")?;
             let compose_file_path = self.compose_file_path(&request.id);
             if !compose_file_path.exists() {
                 bail!("The instance {} not found", request.id);

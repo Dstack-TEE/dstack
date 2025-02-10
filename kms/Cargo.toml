@@ -21,9 +21,22 @@ x25519-dalek.workspace = true
 yasna.workspace = true
 
 kms-rpc.workspace = true
-ra-rpc = { workspace = true, features = ["rocket"] }
+ra-rpc = { workspace = true, features = ["client", "rocket"] }
 ra-tls.workspace = true
 load_config.workspace = true
+serde-human-bytes.workspace = true
+reqwest = { workspace = true, features = ["json"] }
+sha2.workspace = true
+sha3.workspace = true
+k256.workspace = true
+rand.workspace = true
+tappd-rpc.workspace = true
+http-client = { workspace = true, features = ["prpc"] }
+scale.workspace = true
+x509-parser = { workspace = true, features = ["verify"] }
+ring.workspace = true
+safe-write.workspace = true
+serde_json.workspace = true
 
 [features]
 default = []

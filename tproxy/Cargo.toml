@@ -26,8 +26,7 @@ pin-project.workspace = true
 serde_json.workspace = true
 rand.workspace = true
 git-version.workspace = true
-
-ra-rpc = { workspace = true, features = ["rocket"] }
+ra-rpc = { workspace = true, features = ["client", "rocket"] }
 tproxy-rpc.workspace = true
 certbot.workspace = true
 bytes.workspace = true
@@ -36,6 +35,9 @@ smallvec.workspace = true
 futures.workspace = true
 cmd_lib.workspace = true
 load_config.workspace = true
+kms-rpc.workspace = true
+ra-tls.workspace = true
+tappd-rpc.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 nix = { workspace = true, features = ["resource"] }

@@ -1,9 +1,11 @@
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use clap::Parser;
-use config::Config;
+use config::{Config, TlsConfig};
 use main_service::{Proxy, RpcHandler};
-use ra_rpc::rocket_helper::QuoteVerifier;
+use ra_rpc::{client::RaClient, rocket_helper::QuoteVerifier};
 use rocket::fairing::AdHoc;
+use std::path::Path;
+use tracing::info;
 
 mod config;
 mod main_service;
@@ -39,6 +41,75 @@ fn set_max_ulimit() -> Result<()> {
     Ok(())
 }
 
+async fn maybe_gen_certs(config: &Config, tls_config: &TlsConfig) -> Result<()> {
+    if config.tls_domain.is_empty() {
+        info!("TLS domain is empty, skipping cert generation");
+        return Ok(());
+    }
+
+    let tappd_socket = Path::new("/var/run/tappd.sock");
+    if tappd_socket.exists() {
+        info!("Using tappd for certificate generation");
+        let client = tappd_rpc::tappd_client::TappdClient::new(
+            RaClient::new(tappd_socket.to_str().unwrap().to_string(), true)
+                .context("Failed to create tappd client")?,
+        );
+        let response = client
+            .derive_key(tappd_rpc::DeriveKeyArgs {
+                path: "".to_string(),
+                subject: "tproxy".to_string(),
+                alt_names: vec![config.tls_domain.clone()],
+                usage_ra_tls: true,
+                usage_server_auth: true,
+                usage_client_auth: false,
+                random_seed: true,
+            })
+            .await?;
+
+        let ca_cert = response
+            .certificate_chain
+            .last()
+            .context("Empty certificate chain")?
+            .to_string();
+        let certs = response.certificate_chain.join("\n");
+        write_cert(&tls_config.mutual.ca_certs, &ca_cert)?;
+        write_cert(&tls_config.certs, &certs)?;
+        write_cert(&tls_config.key, &response.key)?;
+        return Ok(());
+    }
+
+    let kms_url = config.kms_url.clone();
+    if kms_url.is_empty() {
+        info!("KMS URL is empty, skipping cert generation");
+        return Ok(());
+    }
+    let kms_url = format!("{kms_url}/prpc");
+    info!("Getting CA cert from {kms_url}");
+    let client = RaClient::new(kms_url, true).context("Failed to create kms client")?;
+    let client = kms_rpc::kms_client::KmsClient::new(client);
+    let ca_cert = client.get_meta().await?.ca_cert;
+    let key = ra_tls::rcgen::KeyPair::generate().context("Failed to generate key")?;
+    let cert = ra_tls::cert::CertRequest::builder()
+        .key(&key)
+        .subject("tproxy")
+        .alt_names(&[config.tls_domain.clone()])
+        .usage_server_auth(true)
+        .build()
+        .self_signed()
+        .context("Failed to self-sign rpc cert")?;
+
+    write_cert(&tls_config.mutual.ca_certs, &ca_cert)?;
+    write_cert(&tls_config.certs, &cert.pem())?;
+    write_cert(&tls_config.key, &key.serialize_pem())?;
+    Ok(())
+}
+
+fn write_cert(path: &str, cert: &str) -> Result<()> {
+    info!("Writing cert to file: {path}");
+    safe_write::safe_write(path, cert)?;
+    Ok(())
+}
+
 #[rocket::main]
 async fn main() -> Result<()> {
     {
@@ -54,6 +125,11 @@ async fn main() -> Result<()> {
 
     let config = figment.focus("core").extract::<Config>()?;
     config::setup_wireguard(&config.wg)?;
+
+    let tls_config = figment.focus("tls").extract::<TlsConfig>()?;
+    maybe_gen_certs(&config, &tls_config)
+        .await
+        .context("Failed to generate certs")?;
 
     #[cfg(unix)]
     if config.set_ulimit {
@@ -75,10 +151,8 @@ async fn main() -> Result<()> {
             })
         }))
         .manage(state);
-    if !pccs_url.is_empty() {
-        let verifier = QuoteVerifier::new(pccs_url);
-        rocket = rocket.manage(verifier);
-    }
+    let verifier = QuoteVerifier::new(pccs_url);
+    rocket = rocket.manage(verifier);
     rocket
         .launch()
         .await

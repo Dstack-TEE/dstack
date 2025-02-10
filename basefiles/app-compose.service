@@ -1,7 +1,7 @@
 [Unit]
 Description=App Compose Service
 Wants=docker.service
-After=docker.service tboot.service
+After=docker.service tboot.service tappd.service
 
 [Service]
 Type=oneshot

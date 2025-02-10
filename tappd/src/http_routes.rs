@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use crate::config::Config;
 use crate::guest_api_service::{list_containers, GuestApiHandler};
 use crate::rpc_service::{AppState, ExternalRpcHandler};
@@ -28,6 +30,12 @@ async fn index(state: &State<AppState>) -> Result<RawHtml<String>, String> {
         app_name,
         app_id,
         instance_id,
+        device_id,
+        mr_aggregated: _,
+        mr_image: _,
+        mr_key_provider: _,
+        key_provider_info,
+        compose_hash: _,
         tcb_info,
         app_cert,
         public_logs,
@@ -46,6 +54,8 @@ async fn index(state: &State<AppState>) -> Result<RawHtml<String>, String> {
         app_name,
         app_id,
         instance_id,
+        device_id,
+        key_provider_info,
         app_cert,
         tcb_info,
         containers,
@@ -59,7 +69,7 @@ async fn index(state: &State<AppState>) -> Result<RawHtml<String>, String> {
     }
 }
 
-#[get("/logs/<container_name>?<since>&<until>&<follow>&<text>&<timestamps>&<bare>&<tail>")]
+#[get("/logs/<container_name>?<since>&<until>&<follow>&<text>&<timestamps>&<bare>&<tail>&<ansi>")]
 #[allow(clippy::too_many_arguments)]
 fn get_logs(
     container_name: String,
@@ -70,6 +80,7 @@ fn get_logs(
     bare: bool,
     timestamps: bool,
     tail: Option<String>,
+    ansi: bool,
 ) -> TextStream![String] {
     // default to 1 hour ago
     let since = since.map_or(Ok(0), parse_duration);
@@ -92,6 +103,7 @@ fn get_logs(
             bare,
             timestamps,
             tail,
+            ansi,
         };
         let mut stream = match docker_logs::get_logs(&container_name, config) {
             Ok(stream) => stream,
@@ -100,9 +112,18 @@ fn get_logs(
                 return;
             }
         };
-        while let Some(log) = stream.next().await {
+        loop {
+            let log = match tokio::time::timeout(Duration::from_secs(600), stream.next()).await {
+                Ok(Some(log)) => log,
+                Ok(None) => break,
+                Err(_) => {
+                    break;
+                }
+            };
             match log {
-                Ok(log) => yield log,
+                Ok(log) => {
+                    yield log;
+                }
                 Err(e) => yield serde_json::json!({ "error": e.to_string() }).to_string(),
             }
         }
@@ -126,6 +147,7 @@ mod docker_logs {
         pub bare: bool,
         pub timestamps: bool,
         pub tail: String,
+        pub ansi: bool,
     }
 
     pub fn parse_duration(duration: &str) -> Result<i64> {
@@ -175,6 +197,7 @@ mod docker_logs {
             bare,
             timestamps,
             tail,
+            ansi,
         } = config;
         let docker = Docker::connect_with_local_defaults()?;
         let options = LogsOptions {
@@ -189,10 +212,10 @@ mod docker_logs {
 
         Ok(docker
             .logs(container_name, Some(options))
-            .map(move |result| result.map(|m| log_to_json(m, text, bare))))
+            .map(move |result| result.map(|m| log_to_json(m, text, bare, ansi))))
     }
 
-    fn log_to_json(log: LogOutput, text: bool, bare: bool) -> String {
+    fn log_to_json(log: LogOutput, text: bool, bare: bool, ansi: bool) -> String {
         let channel = match &log {
             LogOutput::StdErr { .. } => "stderr",
             LogOutput::StdOut { .. } => "stdout",
@@ -207,7 +230,11 @@ mod docker_logs {
             base64::engine::general_purpose::STANDARD.encode(message)
         };
         if bare {
-            return message;
+            if ansi || !text {
+                return message;
+            } else {
+                return strip_ansi_escapes::strip_str(&message);
+            }
         }
         let log_line = serde_json::json!({
             "channel": channel,

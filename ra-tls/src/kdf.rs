@@ -35,8 +35,16 @@ pub fn derive_ecdsa_key_pair(from: &KeyPair, context_data: &[&[u8]]) -> Result<K
     let der_bytes = from.serialized_der();
     let sk = p256::SecretKey::from_pkcs8_der(der_bytes).context("failed to decode secret key")?;
     let sk_bytes = sk.as_scalar_primitive().to_bytes();
+    derive_ecdsa_key_pair_from_bytes(&sk_bytes, context_data)
+}
+
+/// Derives a key pair from a given private key bytes.
+pub fn derive_ecdsa_key_pair_from_bytes(
+    sk_bytes: &[u8],
+    context_data: &[&[u8]],
+) -> Result<KeyPair> {
     let derived_sk_bytes =
-        derive_ecdsa_key(&sk_bytes, context_data, 32).or(Err(anyhow!("failed to derive key")))?;
+        derive_ecdsa_key(sk_bytes, context_data, 32).or(Err(anyhow!("failed to derive key")))?;
     let derived_sk = p256::SecretKey::from_slice(&derived_sk_bytes)
         .context("failed to decode derived secret key")?;
     let derived_sk_der = derived_sk

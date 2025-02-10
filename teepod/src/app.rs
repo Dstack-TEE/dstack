@@ -85,7 +85,15 @@ impl App {
     ) -> Result<()> {
         let vm_work_dir = VmWorkDir::new(work_dir.as_ref());
         let manifest = vm_work_dir.manifest().context("Failed to read manifest")?;
-        let todo = "sanitize the image name";
+        if manifest.image.len() > 64
+            || manifest.image.contains("..")
+            || !manifest
+                .image
+                .chars()
+                .all(|c| c.is_alphanumeric() || c == '_' || c == '-' || c == '.')
+        {
+            bail!("Invalid image name");
+        }
         let image_path = self.config.image_path.join(&manifest.image);
         let image = Image::load(&image_path).context("Failed to load image")?;
         let vm_id = manifest.id.clone();
@@ -320,7 +328,12 @@ impl App {
         self.config.run_path.join(id).join("shared")
     }
 
-    pub(crate) fn prepare_work_dir(&self, id: &str, req: &VmConfiguration) -> Result<VmWorkDir> {
+    pub(crate) fn prepare_work_dir(
+        &self,
+        id: &str,
+        req: &VmConfiguration,
+        app_id: &str,
+    ) -> Result<VmWorkDir> {
         let work_dir = self.work_dir(id);
         let shared_dir = work_dir.join("shared");
         fs::create_dir_all(&shared_dir).context("Failed to create shared directory")?;
@@ -330,7 +343,6 @@ impl App {
             fs::write(shared_dir.join("encrypted-env"), &req.encrypted_env)
                 .context("Failed to write encrypted env")?;
         }
-        let app_id = req.app_id.clone().unwrap_or_default();
         if !app_id.is_empty() {
             let instance_info = serde_json::json!({
                 "app_id": app_id,
@@ -348,8 +360,6 @@ impl App {
         let work_dir = self.work_dir(id);
         let shared_dir = self.shared_dir(id);
         let manifest = work_dir.manifest().context("Failed to read manifest")?;
-        let certs_dir = shared_dir.join("certs");
-        fs::create_dir_all(&certs_dir).context("Failed to create certs directory")?;
         let cfg = &self.config;
         let image_path = cfg.image_path.join(&manifest.image);
         let image_info = ImageInfo::load(image_path.join("metadata.json"))
@@ -361,6 +371,7 @@ impl App {
             "rootfs_hash": rootfs_hash,
             "kms_url": cfg.cvm.kms_url,
             "tproxy_url": cfg.cvm.tproxy_url,
+            "pccs_url": cfg.cvm.pccs_url,
             "docker_registry": cfg.cvm.docker_registry,
             "host_api_url": format!("vsock://2:{}/api", cfg.host_api.port),
         });
@@ -368,11 +379,6 @@ impl App {
             serde_json::to_string(&vm_config).context("Failed to serialize vm config")?;
         fs::write(shared_dir.join("config.json"), vm_config_str)
             .context("Failed to write vm config")?;
-        fs::copy(&cfg.cvm.ca_cert, certs_dir.join("ca.cert")).context("Failed to copy ca cert")?;
-        fs::copy(&cfg.cvm.tmp_ca_cert, certs_dir.join("tmp-ca.cert"))
-            .context("Failed to copy tmp ca cert")?;
-        fs::copy(&cfg.cvm.tmp_ca_key, certs_dir.join("tmp-ca.key"))
-            .context("Failed to copy tmp ca key")?;
         Ok(())
     }
 
@@ -381,7 +387,7 @@ impl App {
             bail!("KMS is not configured");
         }
         let url = format!("{}/prpc", self.config.kms_url);
-        let prpc_client = RaClient::new(url, true);
+        let prpc_client = RaClient::new(url, true)?;
         Ok(KmsClient::new(prpc_client))
     }
 

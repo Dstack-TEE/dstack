@@ -1,12 +1,13 @@
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use host_api::{
     host_api_server::{HostApiRpc, HostApiServer},
-    HostInfo, Notification,
+    GetSealingKeyRequest, GetSealingKeyResponse, HostInfo, Notification,
 };
 use ra_rpc::{CallContext, RemoteEndpoint, RpcCall};
 use rocket_vsock_listener::VsockEndpoint;
 
 use crate::app::App;
+use key_provider_client::host::get_key;
 
 pub struct HostApiHandler {
     endpoint: VsockEndpoint,
@@ -39,5 +40,20 @@ impl HostApiRpc for HostApiHandler {
     async fn notify(self, request: Notification) -> Result<()> {
         self.app
             .vm_event_report(self.endpoint.cid, &request.event, request.payload)
+    }
+
+    async fn get_sealing_key(self, request: GetSealingKeyRequest) -> Result<GetSealingKeyResponse> {
+        let key_provider = &self.app.config.key_provider;
+        if !key_provider.enabled {
+            bail!("Key provider is not enabled");
+        }
+        let response = get_key(request.quote, key_provider.address, key_provider.port)
+            .await
+            .context("Failed to get sealing key from key provider")?;
+
+        Ok(GetSealingKeyResponse {
+            encrypted_key: response.encrypted_key,
+            provider_quote: response.provider_quote,
+        })
     }
 }

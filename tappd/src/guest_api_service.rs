@@ -44,6 +44,7 @@ impl GuestApiRpc for GuestApiHandler {
             version: env!("CARGO_PKG_VERSION").to_string(),
             app_id: info.app_id,
             instance_id: info.instance_id,
+            device_id: info.device_id,
             app_cert: info.app_cert,
             tcb_info: info.tcb_info,
         })
@@ -60,10 +61,6 @@ impl GuestApiRpc for GuestApiHandler {
     }
 
     async fn network_info(self) -> Result<NetworkInformation> {
-        let networks = sysinfo::Networks::new_with_refreshed_list();
-        for (interface_name, network) in &networks {
-            println!("[{interface_name}]: {network:?}");
-        }
         Ok(NetworkInformation {
             dns_servers: get_dns_servers(),
             gateways: get_gateways(),
