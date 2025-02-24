@@ -86,7 +86,6 @@ async fn main() -> Result<()> {
             ));
 
     let mut rocket = rocket::custom(figment)
-        .mount("/", web_routes::routes())
         .mount("/prpc", ra_rpc::prpc_routes!(Proxy, RpcHandler))
         .attach(AdHoc::on_response("Add app version header", |_req, res| {
             Box::pin(async move {
@@ -100,6 +99,7 @@ async fn main() -> Result<()> {
     let admin_srv = async move {
         if admin_enabled {
             rocket::custom(admin_figment)
+                .mount("/", web_routes::routes())
                 .mount("/", ra_rpc::prpc_routes!(Proxy, AdminRpcHandler))
                 .manage(state)
                 .launch()
