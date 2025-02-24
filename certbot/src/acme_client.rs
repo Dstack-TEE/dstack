@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeSet,
     path::{Path, PathBuf},
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tokio::time::sleep;
 use tracing::{debug, error, info};
@@ -324,6 +324,9 @@ impl AcmeClient {
 
         let mut unsettled_challenges = challenges.to_vec();
 
+        let start = Instant::now();
+        info!("Unsettled challenges: {unsettled_challenges:#?}");
+
         'outer: loop {
             use hickory_resolver::AsyncResolver;
 
@@ -333,10 +336,13 @@ impl AcmeClient {
                 AsyncResolver::tokio_from_system_conf().context("failed to create dns resolver")?;
 
             while let Some(challenge) = unsettled_challenges.pop() {
+                let expected_txt = &challenge.dns_value;
                 let settled = match dns_resolver.txt_lookup(&challenge.acme_domain).await {
-                    Ok(record) => record
-                        .iter()
-                        .any(|txt| txt.to_string() == challenge.dns_value),
+                    Ok(record) => record.iter().any(|txt| {
+                        let actual_txt = txt.to_string();
+                        info!("Expected challenge: {expected_txt}, actual: {actual_txt}",);
+                        actual_txt == *expected_txt
+                    }),
                     Err(err) => {
                         let ResolveErrorKind::NoRecordsFound { .. } = err.kind() else {
                             bail!(
@@ -348,17 +354,13 @@ impl AcmeClient {
                     }
                 };
                 if !settled {
-                    delay *= 2;
+                    delay = Duration::from_secs(32).min(delay * 2);
                     tries += 1;
-                    if tries < 10 {
-                        debug!(
-                            tries,
-                            domain = &challenge.acme_domain,
-                            "challenge not found, waiting {delay:?}"
-                        );
-                    } else {
-                        bail!("dns record not found");
-                    }
+                    debug!(
+                        tries,
+                        domain = &challenge.acme_domain,
+                        "challenge not found, waiting for {delay:?}"
+                    );
                     unsettled_challenges.push(challenge);
                     continue 'outer;
                 }
