@@ -21,6 +21,12 @@ impl TproxyAdminRpc for AdminRpcHandler {
         let renewed = bot.renew(true).await?;
         Ok(RenewCertResponse { renewed })
     }
+
+    async fn set_caa(self) -> Result<()> {
+        let bot = self.state.certbot.context("Certbot is not enabled")?;
+        bot.set_caa().await?;
+        Ok(())
+    }
 }
 
 impl RpcCall<Proxy> for AdminRpcHandler {

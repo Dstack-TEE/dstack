@@ -15,51 +15,41 @@ pub struct CloudflareClient {
     api_token: String,
 }
 
+#[derive(Deserialize)]
+struct Response {
+    result: ApiResult,
+}
+
+#[derive(Deserialize)]
+struct ApiResult {
+    id: String,
+}
+
 impl CloudflareClient {
     pub fn new(zone_id: String, api_token: String) -> Self {
         Self { zone_id, api_token }
     }
-}
 
-impl Dns01Api for CloudflareClient {
-    async fn add_txt_record(&self, domain: &str, content: &str) -> Result<String> {
+    async fn add_record(&self, record: &impl Serialize) -> Result<Response> {
         let client = Client::new();
         let url = format!("{}/zones/{}/dns_records", CLOUDFLARE_API_URL, self.zone_id);
         let response = client
             .post(&url)
             .header("Authorization", format!("Bearer {}", self.api_token))
             .header("Content-Type", "application/json")
-            .json(&json!({
-                "type": "TXT",
-                "name": domain,
-                "content": content,
-                "ttl": 120
-            }))
+            .json(&record)
             .send()
-            .await?;
-
+            .await
+            .context("failed to send add_record request")?;
         if !response.status().is_success() {
-            anyhow::bail!(
-                "failed to create acme challenge: {}",
-                response.text().await?
-            );
+            anyhow::bail!("failed to add record: {}", response.text().await?);
         }
-
-        #[derive(Deserialize)]
-        struct Response {
-            result: ApiResult,
-        }
-
-        #[derive(Deserialize)]
-        struct ApiResult {
-            id: String,
-        }
-
-        let response: Response = response.json().await.context("failed to parse response")?;
-
-        Ok(response.result.id)
+        let response = response.json().await.context("failed to parse response")?;
+        Ok(response)
     }
+}
 
+impl Dns01Api for CloudflareClient {
     async fn remove_record(&self, record_id: &str) -> Result<()> {
         let client = Client::new();
         let url = format!(
@@ -83,6 +73,18 @@ impl Dns01Api for CloudflareClient {
         Ok(())
     }
 
+    async fn add_txt_record(&self, domain: &str, content: &str) -> Result<String> {
+        let response = self
+            .add_record(&json!({
+                "type": "TXT",
+                "name": domain,
+                "content": content,
+                "ttl": 120
+            }))
+            .await?;
+        Ok(response.result.id)
+    }
+
     async fn add_caa_record(
         &self,
         domain: &str,
@@ -90,13 +92,8 @@ impl Dns01Api for CloudflareClient {
         tag: &str,
         value: &str,
     ) -> Result<String> {
-        let client = Client::new();
-        let url = format!("{}/zones/{}/dns_records", CLOUDFLARE_API_URL, self.zone_id);
-        let response = client
-            .post(&url)
-            .header("Authorization", format!("Bearer {}", self.api_token))
-            .header("Content-Type", "application/json")
-            .json(&json!({
+        let response = self
+            .add_record(&json!({
                 "type": "CAA",
                 "name": domain,
                 "ttl": 120,
@@ -106,27 +103,7 @@ impl Dns01Api for CloudflareClient {
                     "value": value
                 }
             }))
-            .send()
             .await?;
-        if !response.status().is_success() {
-            anyhow::bail!(
-                "failed to create acme challenge: {}",
-                response.text().await?
-            );
-        }
-
-        #[derive(Deserialize)]
-        struct Response {
-            result: ApiResult,
-        }
-
-        #[derive(Deserialize)]
-        struct ApiResult {
-            id: String,
-        }
-
-        let response: Response = response.json().await.context("failed to parse response")?;
-
         Ok(response.result.id)
     }
 
