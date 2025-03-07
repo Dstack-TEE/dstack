@@ -1,6 +1,6 @@
 {
   "name": "@phala/dstack-sdk",
-  "version": "0.1.7",
+  "version": "0.1.10",
   "description": "DStack SDK",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -10,6 +10,16 @@
       "import": "./dist/viem.js",
       "require": "./dist/viem.js",
       "types": "./dist/viem.d.ts"
+    },
+    "./encrypt-env-vars": {
+      "import": "./dist/encrypt-env-vars.js",
+      "require": "./dist/encrypt-env-vars.js",
+      "types": "./dist/encrypt-env-vars.d.ts"
+    },
+    "./solana": {
+      "import": "./dist/solana.js",
+      "require": "./dist/solana.js",
+      "types": "./dist/solana.d.ts"
     }
   },
   "engines": {
@@ -21,7 +31,7 @@
     "test:ci": "vitest --run",
     "release": "npm run build && npm publish --access public"
   },
-  "keywords": ["tappd", "sdk"],
+  "keywords": ["tappd", "sdk", "DStack", "Phala"],
   "author": "Leechael Yim",
   "license": "Apache-2.0",
   "devDependencies": {
@@ -30,13 +40,23 @@
     "vitest": "^2.1.3"
   },
   "optionalDependencies": {
-    "viem": "^2.21.0 <3.0.0"
+    "viem": "^2.21.0 <3.0.0",
+    "@noble/curves": "^1.8.1",
+    "@solana/web3.js": "^1.98.0"
   },
   "peerDependencies": {
-    "viem": "^2.21.0 <3.0.0"
+    "viem": "^2.21.0 <3.0.0",
+    "@noble/curves": "^1.8.1",
+    "@solana/web3.js": "^1.98.0"
   },
   "peerDependenciesMeta": {
     "viem": {
+      "optional": true
+    },
+    "@noble/curves": {
+      "optional": true
+    },
+    "@solana/web3.js": {
       "optional": true
     }
   }

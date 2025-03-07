@@ -24,6 +24,16 @@ export interface TdxQuoteResponse {
   replayRtmrs: () => string[]
 }
 
+export interface TappdInfoResponse {
+  app_id: string
+  instance_id: string
+  app_cert: string
+  tcb_info: string
+  app_name: string
+  public_logs: boolean
+  public_sysinfo: boolean
+}
+
 export function to_hex(data: string | Buffer | Uint8Array): string {
   if (typeof data === 'string') {
     return Buffer.from(data).toString('hex');
@@ -247,5 +257,10 @@ export class TappdClient {
       configurable: false,
     })
     return Object.freeze(result)
+  }
+
+  async info(): Promise<TappdInfoResponse> {
+    const result = await send_rpc_request<TappdInfoResponse>(this.endpoint, '/prpc/Tappd.Info', '{}')
+    return result
   }
 }
