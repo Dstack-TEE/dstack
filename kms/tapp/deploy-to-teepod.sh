@@ -91,6 +91,7 @@ $CLI compose \
   --local-key-provider \
   --public-logs \
   --public-sysinfo \
+  --no-instance-id \
   --output .app-compose.json
 
 # Remove the temporary file as it is no longer needed

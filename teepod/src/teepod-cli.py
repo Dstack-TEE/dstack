@@ -396,10 +396,17 @@ class TeepodCLI:
         compose_hash = hashlib.sha256(compose_file.encode()).hexdigest()
         return compose_hash[:40]
 
-    def create_app_compose(self, name: str, prelaunch_script: str, docker_compose: str,
-                           kms_enabled: bool, tproxy_enabled: bool, local_key_provider_enabled: bool,
-                           public_logs: bool, public_sysinfo: bool,
+    def create_app_compose(self,
+                           name: str,
+                           prelaunch_script: str,
+                           docker_compose: str,
+                           kms_enabled: bool,
+                           tproxy_enabled: bool,
+                           local_key_provider_enabled: bool,
+                           public_logs: bool,
+                           public_sysinfo: bool,
                            envs: Optional[Dict],
+                           no_instance_id: bool,
                            output: str,
                            ) -> None:
         """Create a new app compose file"""
@@ -414,6 +421,7 @@ class TeepodCLI:
             "public_logs": public_logs,
             "public_sysinfo": public_sysinfo,
             "allowed_envs": [k for k in envs.keys()],
+            "no_instance_id": no_instance_id,
         }
         if prelaunch_script:
             app_compose["prelaunch_script"] = prelaunch_script
@@ -771,6 +779,8 @@ def main():
     compose_parser.add_argument(
         '--env-file', help='File with environment variables to encrypt', default=None)
     compose_parser.add_argument(
+        '--no-instance-id', action='store_true', help='Disable instance ID')
+    compose_parser.add_argument(
         '--output', required=True, help='Path to output app-compose.json file')
 
     # Deploy command
@@ -856,6 +866,7 @@ def main():
             public_logs=args.public_logs,
             public_sysinfo=args.public_sysinfo,
             envs=parse_env_file(args.env_file),
+            no_instance_id=args.no_instance_id,
             output=args.output
         )
     elif args.command == 'deploy':

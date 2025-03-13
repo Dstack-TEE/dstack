@@ -284,10 +284,10 @@ impl core::fmt::Debug for ParsedReport {
     }
 }
 
-fn cmd_show() -> Result<()> {
+fn cmd_show_mrs() -> Result<()> {
     let attestation = ra_tls::attestation::Attestation::local()?;
     let app_info = attestation.decode_app_info(false)?;
-    println!("========== App Info ==========");
+    println!("========== Measurement Report ==========");
     serde_json::to_writer_pretty(io::stdout(), &app_info)?;
     println!();
     Ok(())
@@ -516,7 +516,7 @@ async fn main() -> Result<()> {
     match cli.command {
         Commands::Report => cmd_report()?,
         Commands::Quote => cmd_quote()?,
-        Commands::Show => cmd_show()?,
+        Commands::Show => cmd_show_mrs()?,
         Commands::Extend(extend_args) => {
             cmd_extend(extend_args)?;
         }

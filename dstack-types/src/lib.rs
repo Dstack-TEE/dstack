@@ -27,6 +27,8 @@ pub struct AppCompose {
     pub key_provider: Option<KeyProviderKind>,
     #[serde(default)]
     pub allowed_envs: Vec<String>,
+    #[serde(default)]
+    pub no_instance_id: bool,
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone, Copy)]

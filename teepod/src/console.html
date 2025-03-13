@@ -1163,6 +1163,7 @@
                         "public_sysinfo": vmForm.value.public_sysinfo,
                         "local_key_provider_enabled": vmForm.value.local_key_provider_enabled,
                         "allowed_envs": vmForm.value.encrypted_envs.map(env => env.key),
+                        "no_instance_id": !vmForm.value.tproxy_enabled,
                     };
 
                     if (vmForm.value.preLaunchScript?.trim()) {
