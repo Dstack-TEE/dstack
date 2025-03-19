@@ -35,6 +35,8 @@ private_key = ""
 ip = "10.0.0.1"
 listen_port = 51820
 client_ip_range = "10.0.0.0/24"
+# Don't allocate the IP address in the range of reserved net
+reserved_net = ["10.0.0.0/32"]
 config_path = "/etc/wireguard/wg0.conf"
 interface = "wg0"
 endpoint = "10.0.2.2:51820"

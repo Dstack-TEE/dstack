@@ -15,6 +15,7 @@ pub struct WgConfig {
     pub listen_port: u16,
     pub ip: Ipv4Addr,
     pub client_ip_range: Ipv4Net,
+    pub reserved_net: Vec<Ipv4Net>,
     pub interface: String,
     pub config_path: String,
     pub endpoint: String,
