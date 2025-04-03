@@ -1,35 +1,36 @@
 [default]
 workers = 8
 max_blocking = 64
-ident = "Dstack guest agent"
+ident = "Dstack Simulator"
 temp_dir = "/tmp"
 keep_alive = 10
 log_level = "debug"
 
 [default.core]
 app_name = ""
-keys_file = "/tapp/.host-shared/.appkeys.json"
-compose_file = "/tapp/.host-shared/app-compose.json"
+keys_file = "appkeys.json"
+compose_file = "app-compose.json"
 public_logs = true
 public_sysinfo = true
 
 [default.core.simulator]
-enabled = false
+enabled = true
 quote_file = "quote.hex"
 event_log_file = "eventlog.json"
 
 [internal-v0]
-address = "unix:/var/run/tappd.sock"
+address = "unix:./tappd.sock"
 reuse = true
 
 [internal]
-address = "unix:/var/run/dstack.sock"
+address = "unix:./dstack.sock"
 reuse = true
 
 [external]
-address = "0.0.0.0"
-port = 8090
+address = "unix:./external.sock"
+reuse = true
 
 [guest-api]
-address = "vsock:0xffffffff"
-port = 8000
+address = "unix:./guest.sock"
+reuse = true
+

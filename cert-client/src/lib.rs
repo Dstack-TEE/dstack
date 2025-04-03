@@ -79,12 +79,23 @@ impl CertRequestClient {
         }
     }
 
-    pub async fn request_cert(&self, key: &KeyPair, config: CertConfig) -> Result<Vec<String>> {
+    pub async fn request_cert(
+        &self,
+        key: &KeyPair,
+        config: CertConfig,
+        no_ra: bool,
+    ) -> Result<Vec<String>> {
         let pubkey = key.public_key_der();
         let report_data = QuoteContentType::RaTlsCert.to_report_data(&pubkey);
-        let (_, quote) = get_quote(&report_data, None).context("Failed to get quote")?;
-        let event_log = read_event_logs().context("Failed to decode event log")?;
-        let event_log = serde_json::to_vec(&event_log).context("Failed to serialize event log")?;
+        let (quote, event_log) = if !no_ra {
+            let (_, quote) = get_quote(&report_data, None).context("Failed to get quote")?;
+            let event_log = read_event_logs().context("Failed to decode event log")?;
+            let event_log =
+                serde_json::to_vec(&event_log).context("Failed to serialize event log")?;
+            (quote, event_log)
+        } else {
+            (vec![], vec![])
+        };
 
         let csr = CertSigningRequest {
             confirm: "please sign cert:".to_string(),

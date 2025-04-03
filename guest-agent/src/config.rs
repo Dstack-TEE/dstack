@@ -22,4 +22,12 @@ pub struct Config {
     pub compose_file: String,
     #[serde(default)]
     pub pccs_url: Option<String>,
+    pub simulator: Simulator,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct Simulator {
+    pub enabled: bool,
+    pub quote_file: String,
+    pub event_log_file: String,
 }
