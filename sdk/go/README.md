@@ -18,16 +18,16 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/Dstack-TEE/dstack/sdk/go/tappd"
+	"github.com/Dstack-TEE/dstack/sdk/go/dstack"
 )
 
 func main() {
-	client := tappd.NewTappdClient(
-		// tappd.WithEndpoint("http://localhost"),
-		// tappd.WithLogger(slog.Default()),
+	client := dstack.NewDstackClient(
+		// dstack.WithEndpoint("http://localhost"),
+		// dstack.WithLogger(slog.Default()),
 	)
 
-	// Get information about the Tappd instance
+	// Get information about the dstack client instance
 	info, err := client.Info(context.Background())
 	if err != nil {
 		fmt.Println(err)
@@ -37,17 +37,19 @@ func main() {
 	fmt.Println(info.TcbInfo.Mrtd)  // Access TCB info directly
 	fmt.Println(info.TcbInfo.EventLog[0].Event)  // Access event log entries
 
-	// Derive a key with optional path and subject
-	deriveKeyResp, err := client.DeriveKey(context.Background(), "/")
+	path := "/test"
+	purpose := "test" // or leave empty
+
+	// Derive a key with optional path and purpose
+	deriveKeyResp, err := client.GetKey(context.Background(), path, purpose)
 	if err != nil {
 		fmt.Println(err)
 		return
 	}
-	fmt.Println(deriveKeyResp.Key)  // -----BEGIN PRIVATE KEY--- ...
-	keyBytes, _ := deriveKeyResp.ToBytes(-1)  // Get key as bytes
+	fmt.Println(deriveKeyResp.Key)
 
 	// Generate TDX quote
-	tdxQuoteResp, err := client.TdxQuote(context.Background(), []byte("test"))
+	tdxQuoteResp, err := client.GetQuote(context.Background(), []byte("test"))
 	if err != nil {
 		fmt.Println(err)
 		return
@@ -65,16 +67,16 @@ func main() {
 
 ## API Reference
 
-### TappdClient
+### DstackClient
 
 #### Constructor
 
 ```go
-func NewTappdClient(opts ...TappdClientOption) *TappdClient
+func NewDstackClient(opts ...DstackClientOption) *DstackClient
 ```
 
 Options:
-- `WithEndpoint(endpoint string)`: Sets the endpoint (Unix socket path or HTTP(S) URL). Defaults to '/var/run/tappd.sock'.
+- `WithEndpoint(endpoint string)`: Sets the endpoint (Unix socket path or HTTP(S) URL). Defaults to '/var/run/dstack.sock'.
 - `WithLogger(logger *slog.Logger)`: Sets the logger. Defaults to `slog.Default()`.
 
 The client uses `DSTACK_SIMULATOR_ENDPOINT` environment variable if set.
@@ -83,141 +85,36 @@ NOTE: Leave endpoint empty in production. You only need to add `volumes` in your
 
 ```yaml
     volumes:
-      - /var/run/tappd.sock:/var/run/tappd.sock
+      - /var/run/dstack.sock:/var/run/dstack.sock
 ```
-
-For local development without TDX devices, you can use the simulator available for download here:
-
-https://github.com/Leechael/tappd-simulator/releases
 
 #### Methods
 
-##### `DeriveKey(ctx context.Context, path string) (*DeriveKeyResponse, error)`
-
-Derives a key for the given path. This is a convenience method that uses the path as the subject.
-
-##### `DeriveKeyWithSubject(ctx context.Context, path string, subject string) (*DeriveKeyResponse, error)`
-
-Derives a key for the given path and subject.
-
-##### `DeriveKeyWithSubjectAndAltNames(ctx context.Context, path string, subject string, altNames []string) (*DeriveKeyResponse, error)`
-
-Derives a key for the given path, subject, and alternative names.
-
-**NOTE: Only the `path` affects the derived result. `subject` & `altNames` are for the generated certificate and do not affect the derived result.**
-
-##### `TdxQuote(ctx context.Context, reportData []byte) (*TdxQuoteResponse, error)`
-
-Generates a TDX quote using SHA512 as the hash algorithm.
-
-##### `TdxQuoteWithHashAlgorithm(ctx context.Context, reportData []byte, hashAlgorithm QuoteHashAlgorithm) (*TdxQuoteResponse, error)`
-
-Generates a TDX quote with a specific hash algorithm. The quote is returned in hex format, and you can paste your quote into https://proof.t16z.com/ to get the attestation report.
-
-##### `Info(ctx context.Context) (*TappdInfoResponse, error)`
-
-Retrieves information about the Tappd instance, including TCB info and event logs.
-
-### Types
-
-```go
-type QuoteHashAlgorithm string
-
-const (
-    SHA256    QuoteHashAlgorithm = "sha256"
-    SHA384    QuoteHashAlgorithm = "sha384"
-    SHA512    QuoteHashAlgorithm = "sha512"
-    SHA3_256  QuoteHashAlgorithm = "sha3-256"
-    SHA3_384  QuoteHashAlgorithm = "sha3-384"
-    SHA3_512  QuoteHashAlgorithm = "sha3-512"
-    KECCAK256 QuoteHashAlgorithm = "keccak256"
-    KECCAK384 QuoteHashAlgorithm = "keccak384"
-    KECCAK512 QuoteHashAlgorithm = "keccak512"
-    RAW       QuoteHashAlgorithm = "raw"
-)
-
-type DeriveKeyResponse struct {
-    Key              string
-    CertificateChain []string
-}
-
-func (d *DeriveKeyResponse) ToBytes(maxLength int) ([]byte, error)
-
-type TdxQuoteResponse struct {
-    Quote    string
-    EventLog string
-}
-
-func (r *TdxQuoteResponse) ReplayRTMRs() (map[int]string, error)
-
-type EventLog struct {
-    IMR          int
-    EventType    int
-    Digest       string
-    Event        string
-    EventPayload string
-}
-
-type TcbInfo struct {
-    Mrtd       string
-    RootfsHash string
-    Rtmr0      string
-    Rtmr1      string
-    Rtmr2      string
-    Rtmr3      string
-    EventLog   []EventLog
-}
-
-type TappdInfoResponse struct {
-    AppID        string
-    InstanceID   string
-    AppCert      string
-    TcbInfo      TcbInfo
-    AppName      string
-    PublicLogs   bool
-    PublicSysinfo bool
-}
-```
+- `Info(ctx context.Context) (*InfoResponse, error)`: Retrieves information about the CVM instance.
+- `GetKey(ctx context.Context, path string, purpose string) (*GetKeyResponse, error)`: Derives a key for the given path and purpose.
+- `GetQuote(ctx context.Context, reportData []byte) (*GetQuoteResponse, error)`: Generates a TDX quote using SHA512 as the hash algorithm.
+- `GetTlsKey(ctx context.Context, path string, subject string, altNames []string, usageRaTls bool, usageServerAuth bool, usageClientAuth bool, randomSeed bool) (*GetTlsKeyResponse, error)`: Derives a key for the given path and purpose.
 
 ## Development
 
 Set up [Go](https://go.dev/doc/install).
 
+### Running the Simulator
+
+For local development without TDX devices, you can use the simulator under `sdk/simulator`.
+
+Run the simulator with:
+
+```bash
+cd sdk/simulator
+./build.sh
+./dstack-simulator
+```
+
 ### Running Tests
-
-There are several ways to run the tests:
-
-1. Run all tests with local simulator:
 ```bash
-DSTACK_SIMULATOR_ENDPOINT=/tmp/tappd.sock go test ./...
+DSTACK_SIMULATOR_ENDPOINT=$(realpath ../simulator/dstack.sock) go test -v ./...
 ```
-
-2. Run specific test package:
-```bash
-DSTACK_SIMULATOR_ENDPOINT=/tmp/tappd.sock go test ./tappd
-```
-
-3. Run tests with verbose output:
-```bash
-DSTACK_SIMULATOR_ENDPOINT=/tmp/tappd.sock go test -v ./...
-```
-
-4. Run specific test function:
-```bash
-DSTACK_SIMULATOR_ENDPOINT=/tmp/tappd.sock go test -v ./tappd -run TestDeriveKey
-```
-
-5. Run tests with coverage report:
-```bash
-DSTACK_SIMULATOR_ENDPOINT=/tmp/tappd.sock go test -coverprofile=coverage.out ./...
-# View coverage in browser
-go tool cover -html=coverage.out
-```
-
-Note: The tests require a running Tappd simulator. You can download it from:
-https://github.com/Leechael/tappd-simulator/releases
-
-Make sure the simulator is running and accessible at the path specified in `DSTACK_SIMULATOR_ENDPOINT` before running the tests.
 
 ## License
 
