@@ -113,7 +113,10 @@ cd sdk/simulator
 
 ### Running Tests
 ```bash
-DSTACK_SIMULATOR_ENDPOINT=$(realpath ../simulator/dstack.sock) go test -v ./...
+DSTACK_SIMULATOR_ENDPOINT=$(realpath ../simulator/dstack.sock) go test -v ./dstack
+
+# or for the old Tappd client
+DSTACK_SIMULATOR_ENDPOINT=$(realpath ../simulator/tappd.sock) go test -v ./tappd
 ```
 
 ## License
