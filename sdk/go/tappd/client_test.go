@@ -56,10 +56,6 @@ func TestTdxQuote(t *testing.T) {
 		t.Error("expected quote to not be empty")
 	}
 
-	if !strings.HasPrefix(resp.Quote, "0x") {
-		t.Error("expected quote to start with 0x")
-	}
-
 	if resp.EventLog == "" {
 		t.Error("expected event log to not be empty")
 	}
@@ -70,7 +66,7 @@ func TestTdxQuote(t *testing.T) {
 		t.Errorf("expected event log to be a valid JSON object: %v", err)
 	}
 
-	quoteBytes, err := hex.DecodeString(resp.Quote[2:])
+	quoteBytes, err := hex.DecodeString(resp.Quote)
 	if err != nil {
 		t.Errorf("expected quote to be a valid hex string: %v", err)
 	}
