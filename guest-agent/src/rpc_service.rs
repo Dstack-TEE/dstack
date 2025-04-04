@@ -57,6 +57,7 @@ impl AppState {
                     usage_client_auth: true,
                     ext_quote: true,
                 },
+                config.simulator.enabled,
             )
             .await
             .context("Failed to get app cert")?
@@ -105,7 +106,7 @@ impl DstackGuestRpc for InternalRpcHandler {
             .state
             .inner
             .cert_client
-            .request_cert(&derived_key, config)
+            .request_cert(&derived_key, config, self.state.config().simulator.enabled)
             .await
             .context("Failed to sign the CSR")?;
         Ok(GetTlsKeyResponse {
@@ -138,6 +139,9 @@ impl DstackGuestRpc for InternalRpcHandler {
     }
 
     async fn get_quote(self, request: RawQuoteArgs) -> Result<GetQuoteResponse> {
+        if self.state.config().simulator.enabled {
+            return simulate_quote(self.state.config(), &request.report_data);
+        }
         fn pad64(data: &[u8]) -> Option<[u8; 64]> {
             if data.len() > 64 {
                 return None;
@@ -162,6 +166,19 @@ impl DstackGuestRpc for InternalRpcHandler {
     async fn info(self) -> Result<WorkerInfo> {
         ExternalRpcHandler { state: self.state }.info().await
     }
+}
+
+fn simulate_quote(config: &Config, report_data: &[u8]) -> Result<GetQuoteResponse> {
+    let quote_file =
+        fs::read_to_string(&config.simulator.quote_file).context("Failed to read quote file")?;
+    let quote = hex::decode(quote_file.trim()).context("Failed to decode quote")?;
+    let event_log = fs::read_to_string(&config.simulator.event_log_file)
+        .context("Failed to read event log file")?;
+    Ok(GetQuoteResponse {
+        quote,
+        event_log,
+        report_data: report_data.to_vec(),
+    })
 }
 
 impl RpcCall<AppState> for InternalRpcHandler {
@@ -196,6 +213,25 @@ impl TappdRpc for InternalRpcHandlerV0 {
     }
 
     async fn tdx_quote(self, request: TdxQuoteArgs) -> Result<TdxQuoteResponse> {
+        let hash_algorithm = if request.hash_algorithm.is_empty() {
+            DEFAULT_HASH_ALGORITHM
+        } else {
+            &request.hash_algorithm
+        };
+        let prefix = if hash_algorithm == "raw" {
+            "".into()
+        } else {
+            QuoteContentType::AppData.tag().to_string()
+        };
+        if self.state.config().simulator.enabled {
+            let response = simulate_quote(self.state.config(), &request.report_data)?;
+            return Ok(TdxQuoteResponse {
+                quote: response.quote,
+                event_log: response.event_log,
+                hash_algorithm: hash_algorithm.to_string(),
+                prefix,
+            });
+        }
         let content_type = if request.prefix.is_empty() {
             QuoteContentType::AppData
         } else {
@@ -208,16 +244,6 @@ impl TappdRpc for InternalRpcHandlerV0 {
             serde_json::to_string(&event_log).context("Failed to serialize event log")?;
         let (_, quote) =
             tdx_attest::get_quote(&report_data, None).context("Failed to get quote")?;
-        let hash_algorithm = if request.hash_algorithm.is_empty() {
-            DEFAULT_HASH_ALGORITHM
-        } else {
-            &request.hash_algorithm
-        };
-        let prefix = if hash_algorithm == "raw" {
-            "".into()
-        } else {
-            QuoteContentType::AppData.tag().to_string()
-        };
         Ok(TdxQuoteResponse {
             quote,
             event_log,

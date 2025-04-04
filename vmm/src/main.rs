@@ -11,6 +11,7 @@ use path_absolutize::Absolutize;
 use rocket::{
     fairing::AdHoc,
     figment::{providers::Serialized, Figment},
+    listener::{Bind, DefaultListener},
 };
 use rocket_apitoken::ApiToken;
 use rocket_vsock_listener::VsockListener;
@@ -82,12 +83,22 @@ async fn run_host_api(app: App, figment: Figment) -> Result<()> {
         .ignite()
         .await
         .map_err(|err| anyhow!("Failed to ignite rocket: {err}"))?;
-    let listener = VsockListener::bind_rocket(&ignite)
-        .map_err(|err| anyhow!("Failed to bind host API : {err}"))?;
-    ignite
-        .launch_on(listener)
-        .await
-        .map_err(|err| anyhow!(err.to_string()))?;
+    if DefaultListener::bind_endpoint(&ignite).is_ok() {
+        let listener = DefaultListener::bind(&ignite)
+            .await
+            .map_err(|err| anyhow!("Failed to bind host API : {err}"))?;
+        ignite
+            .launch_on(listener)
+            .await
+            .map_err(|err| anyhow!(err.to_string()))?;
+    } else {
+        let listener = VsockListener::bind_rocket(&ignite)
+            .map_err(|err| anyhow!("Failed to bind host API : {err}"))?;
+        ignite
+            .launch_on(listener)
+            .await
+            .map_err(|err| anyhow!(err.to_string()))?;
+    }
     Ok(())
 }
 

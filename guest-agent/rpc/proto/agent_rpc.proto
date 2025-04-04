@@ -180,7 +180,7 @@ message WorkerInfo {
 
 // The response to a WorkerInfo request
 message WorkerVersion {
-  // Tappd version
+  // Dstack version
   string version = 1;
   // Git revision
   string rev = 2;
