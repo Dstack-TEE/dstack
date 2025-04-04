@@ -18,5 +18,5 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 x509-parser.workspace = true
 
-tproxy-rpc.workspace = true
+dstack-gateway-rpc.workspace = true
 ra-rpc = { workspace = true, default-features = false, features = ["client"] }

@@ -399,7 +399,7 @@ fn make_app_keys(
         env_crypt_key: vec![],
         k256_key: k256_key.to_bytes().to_vec(),
         k256_signature: vec![],
-        tproxy_app_id: "".to_string(),
+        gateway_app_id: "".to_string(),
         ca_cert: cert.pem(),
         key_provider: KeyProvider::Local {
             key: app_key.serialize_pem(),

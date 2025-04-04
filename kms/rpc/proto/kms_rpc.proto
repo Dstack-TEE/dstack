@@ -30,7 +30,7 @@ message AppKeyResponse {
   // Signature of the k256 key signed by the root k256 key.
   bytes k256_signature = 5;
   // Reverse proxy app ID from KmsAuth contract.
-  string tproxy_app_id = 6;
+  string gateway_app_id = 6;
 }
 
 message GetMetaResponse {

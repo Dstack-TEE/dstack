@@ -14,13 +14,12 @@ members = [
     "tdx-attest",
     "tdxctl",
     "iohash",
-    "tappd",
-    "tappd/rpc",
-    "teepod",
-    "teepod/rpc",
-    "tproxy",
-    "tproxy/rpc",
-    "certgen",
+    "guest-agent",
+    "guest-agent/rpc",
+    "vmm",
+    "vmm/rpc",
+    "gateway",
+    "gateway/rpc",
     "certbot",
     "certbot/cli",
     "ct_monitor",
@@ -43,10 +42,10 @@ resolver = "2"
 # Internal dependencies
 ra-rpc = { path = "ra-rpc", default-features = false }
 ra-tls = { path = "ra-tls" }
-tproxy-rpc = { path = "tproxy/rpc" }
-kms-rpc = { path = "kms/rpc" }
-tappd-rpc = { path = "tappd/rpc" }
-teepod-rpc = { path = "teepod/rpc" }
+dstack-gateway-rpc = { path = "gateway/rpc" }
+dstack-kms-rpc = { path = "kms/rpc" }
+dstack-guest-agent-rpc = { path = "guest-agent/rpc" }
+dstack-vmm-rpc = { path = "vmm/rpc" }
 cc-eventlog = { path = "cc-eventlog" }
 supervisor = { path = "supervisor" }
 supervisor-client = { path = "supervisor/client" }
@@ -142,7 +141,7 @@ x509-parser = "0.16.0"
 
 # RPC/Protocol
 prpc = "0.6.0"
-prpc-build = "0.6.0"
+prpc-build = "0.6.1"
 
 # Development/Testing
 bindgen = "0.71.1"

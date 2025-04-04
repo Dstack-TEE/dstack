@@ -91,7 +91,7 @@ pub(crate) struct Webhook {
 
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct Dev {
-    pub tproxy_app_id: String,
+    pub gateway_app_id: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]

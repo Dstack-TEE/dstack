@@ -73,7 +73,7 @@ const keypair = toKeypair(keyResult);
 
 ## Environment Variables Encryption
 
-The SDK includes utilities for encrypting environment variables using X25519 key exchange and AES-GCM. This feature is handy for interacting with the bare DStack Teepod API or the Phala Cloud API.
+The SDK includes utilities for encrypting environment variables using X25519 key exchange and AES-GCM. This feature is handy for interacting with the bare dstack-vmm API or the Phala Cloud API.
 
 ```typescript
 import { encryptEnvVars, type EnvVar } from '@phala/dstack-sdk/encrypt-env-vars';
@@ -83,7 +83,7 @@ const envVars: EnvVar[] = [
   { key: 'DATABASE_URL', value: 'postgresql://...' }
 ];
 
-const publicKeyHex = '0x...'; // You need get that from Teepod API or Phala Cloud API.
+const publicKeyHex = '0x...'; // You need get that from dstack-vmm API or Phala Cloud API.
 const encrypted = await encryptEnvVars(envVars, publicKeyHex);
 // encrypted is a hex string containing: ephemeral public key + iv + encrypted data
 ```

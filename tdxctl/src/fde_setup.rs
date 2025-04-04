@@ -6,6 +6,7 @@ use std::{
 };
 
 use anyhow::{anyhow, bail, Context, Result};
+use dstack_kms_rpc::GetAppKeyRequest;
 use dstack_types::{
     shared_filenames::{
         APP_COMPOSE, APP_KEYS, DECRYPTED_ENV, DECRYPTED_ENV_JSON, ENCRYPTED_ENV, INSTANCE_INFO,
@@ -14,7 +15,6 @@ use dstack_types::{
     KeyProvider, KeyProviderInfo,
 };
 use fs_err as fs;
-use kms_rpc::GetAppKeyRequest;
 use ra_rpc::client::{RaClient, RaClientConfig};
 use ra_tls::cert::generate_ra_cert;
 use serde::{Deserialize, Serialize};
@@ -229,7 +229,7 @@ impl SetupFdeArgs {
         let tmp_ca = {
             info!("Getting temp ca cert");
             let client = RaClient::new(kms_url.clone(), true)?;
-            let kms_client = kms_rpc::kms_client::KmsClient::new(client);
+            let kms_client = dstack_kms_rpc::kms_client::KmsClient::new(client);
             kms_client
                 .get_temp_ca_cert()
                 .await
@@ -265,7 +265,7 @@ impl SetupFdeArgs {
             .build()
             .into_client()
             .context("Failed to create client")?;
-        let kms_client = kms_rpc::kms_client::KmsClient::new(ra_client);
+        let kms_client = dstack_kms_rpc::kms_client::KmsClient::new(ra_client);
         let response = kms_client
             .get_app_key(GetAppKeyRequest { app_compose })
             .await
@@ -276,7 +276,7 @@ impl SetupFdeArgs {
             env_crypt_key: response.env_crypt_key,
             k256_key: response.k256_key,
             k256_signature: response.k256_signature,
-            tproxy_app_id: response.tproxy_app_id,
+            gateway_app_id: response.gateway_app_id,
             key_provider: KeyProvider::Kms { url: kms_url },
         };
         Ok(keys)

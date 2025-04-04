@@ -32,11 +32,11 @@ export async function build(): Promise<FastifyInstance> {
   server.addSchema({
     $id: 'bootResponse',
     type: 'object',
-    required: ['isAllowed', 'reason', 'tproxyAppId'],
+    required: ['isAllowed', 'reason', 'gatewayAppId'],
     properties: {
       isAllowed: { type: 'boolean' },
       reason: { type: 'string' },
-      tproxyAppId: { type: 'string' },
+      gatewayAppId: { type: 'string' },
     }
   });
 
@@ -63,7 +63,7 @@ export async function build(): Promise<FastifyInstance> {
     } catch (error) {
       reply.code(200).send({
         isAllowed: false,
-        tproxyAppId: '',
+        gatewayAppId: '',
         reason: `${error instanceof Error ? error.message : String(error)}`
       });
     }
@@ -85,7 +85,7 @@ export async function build(): Promise<FastifyInstance> {
     } catch (error) {
       reply.code(200).send({
         isAllowed: false,
-        tproxyAppId: '',
+        gatewayAppId: '',
         reason: `${error instanceof Error ? error.message : String(error)}`
       });
     }

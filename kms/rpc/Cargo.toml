@@ -1,5 +1,5 @@
 [package]
-name = "kms-rpc"
+name = "dstack-kms-rpc"
 version.workspace = true
 authors.workspace = true
 edition.workspace = true

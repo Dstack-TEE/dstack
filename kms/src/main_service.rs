@@ -1,13 +1,13 @@
 use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
-use fs_err as fs;
-use k256::ecdsa::SigningKey;
-use kms_rpc::{
+use dstack_kms_rpc::{
     kms_server::{KmsRpc, KmsServer},
     AppId, AppKeyResponse, GetAppKeyRequest, GetMetaResponse, GetTempCaCertResponse,
     KmsKeyResponse, KmsKeys, PublicKeyResponse, SignCertRequest, SignCertResponse,
 };
+use fs_err as fs;
+use k256::ecdsa::SigningKey;
 use ra_rpc::{Attestation, CallContext, RpcCall};
 use ra_tls::{
     attestation::VerifiedAttestation,
@@ -75,7 +75,7 @@ pub struct RpcHandler {
 
 struct BootConfig {
     boot_info: BootInfo,
-    tproxy_app_id: String,
+    gateway_app_id: String,
 }
 
 impl RpcHandler {
@@ -141,7 +141,7 @@ impl RpcHandler {
         }
         Ok(BootConfig {
             boot_info,
-            tproxy_app_id: response.tproxy_app_id,
+            gateway_app_id: response.gateway_app_id,
         })
     }
 
@@ -170,7 +170,7 @@ impl KmsRpc for RpcHandler {
     async fn get_app_key(self, _request: GetAppKeyRequest) -> Result<AppKeyResponse> {
         let BootConfig {
             boot_info,
-            tproxy_app_id,
+            gateway_app_id,
         } = self
             .ensure_app_boot_allowed()
             .await
@@ -201,7 +201,7 @@ impl KmsRpc for RpcHandler {
             env_crypt_key: env_crypt_key.to_vec(),
             k256_key,
             k256_signature,
-            tproxy_app_id,
+            gateway_app_id,
         })
     }
 

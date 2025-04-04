@@ -8,7 +8,7 @@ use rocket::{
     listener::Endpoint,
     mtls::Certificate,
     request::{FromRequest, Outcome},
-    response::status::Custom,
+    response::{status::Custom, Responder},
     Request,
 };
 use rocket_vsock_listener::VsockEndpoint;
@@ -16,14 +16,34 @@ use tracing::warn;
 
 use crate::{encode_error, CallContext, RemoteEndpoint, RpcCall};
 
+pub struct RpcResponse {
+    is_json: bool,
+    status: Status,
+    body: Vec<u8>,
+}
+
+impl<'r> Responder<'r, 'static> for RpcResponse {
+    fn respond_to(self, request: &'r Request<'_>) -> rocket::response::Result<'static> {
+        use rocket::http::ContentType;
+        let content_type = if self.is_json {
+            ContentType::JSON
+        } else {
+            ContentType::Binary
+        };
+        let response = Custom(self.status, self.body).respond_to(request)?;
+        rocket::Response::build_from(response)
+            .header(content_type)
+            .ok()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct QuoteVerifier {
     pccs_url: Option<String>,
 }
 
 pub mod deps {
-    pub use super::{PrpcHandler, RpcRequest};
-    pub use rocket::response::status::Custom;
+    pub use super::{PrpcHandler, RpcRequest, RpcResponse};
     pub use rocket::{Data, State};
 }
 
@@ -47,29 +67,33 @@ fn query_field_get_bool(req: &Request<'_>, field_name: &str) -> bool {
 #[macro_export]
 macro_rules! prpc_routes {
     ($state:ty, $handler:ty) => {{
-        ra_rpc::declare_prpc_routes!(prpc_post, prpc_get, $state, $handler);
+        $crate::prpc_routes!($state, $handler, trim: "")
+    }};
+    ($state:ty, $handler:ty, trim: $trim_prefix:literal) => {{
+        $crate::declare_prpc_routes!(prpc_post, prpc_get, $state, $handler, trim: $trim_prefix);
         rocket::routes![prpc_post, prpc_get]
     }};
 }
 
 #[macro_export]
 macro_rules! declare_prpc_routes {
-    ($post:ident, $get:ident, $state:ty, $handler:ty) => {
-        $crate::declare_prpc_routes!(path: "/<method>", $post, $get, $state, $handler);
+    ($post:ident, $get:ident, $state:ty, $handler:ty, trim: $trim_prefix:literal) => {
+        $crate::declare_prpc_routes!(path: "/<method>", $post, $get, $state, $handler, trim: $trim_prefix);
     };
-    (path: $path: literal, $post:ident, $get:ident, $state:ty, $handler:ty) => {
+    (path: $path: literal, $post:ident, $get:ident, $state:ty, $handler:ty, trim: $trim_prefix:literal) => {
         #[rocket::post($path, data = "<data>")]
         async fn $post<'a: 'd, 'd>(
             state: &'a $crate::rocket_helper::deps::State<$state>,
             method: &'a str,
             rpc_request: $crate::rocket_helper::deps::RpcRequest<'a>,
             data: $crate::rocket_helper::deps::Data<'d>,
-        ) -> $crate::rocket_helper::deps::Custom<Vec<u8>> {
+        ) -> $crate::rocket_helper::deps::RpcResponse {
             $crate::rocket_helper::deps::PrpcHandler::builder()
                 .state(&**state)
                 .request(rpc_request)
                 .method(method)
                 .data(data)
+                .method_trim_prefix($trim_prefix)
                 .build()
                 .handle::<$handler>()
                 .await
@@ -80,11 +104,12 @@ macro_rules! declare_prpc_routes {
             state: &$crate::rocket_helper::deps::State<$state>,
             method: &str,
             rpc_request: $crate::rocket_helper::deps::RpcRequest<'_>,
-        ) -> $crate::rocket_helper::deps::Custom<Vec<u8>> {
+        ) -> $crate::rocket_helper::deps::RpcResponse {
             $crate::rocket_helper::deps::PrpcHandler::builder()
                 .state(&**state)
                 .request(rpc_request)
                 .method(method)
+                .method_trim_prefix($trim_prefix)
                 .build()
                 .handle::<$handler>()
                 .await
@@ -99,7 +124,7 @@ macro_rules! prpc_alias {
         async fn $name(
             state: &$crate::rocket_helper::deps::State<$state>,
             rpc_request: $crate::rocket_helper::deps::RpcRequest<'_>,
-        ) -> $crate::rocket_helper::deps::Custom<Vec<u8>> {
+        ) -> $crate::rocket_helper::deps::RpcResponse {
             $prpc(state, $method, rpc_request).await
         }
     };
@@ -109,7 +134,7 @@ macro_rules! prpc_alias {
             state: &'a $crate::rocket_helper::deps::State<$state>,
             rpc_request: $crate::rocket_helper::deps::RpcRequest<'a>,
             data: $crate::rocket_helper::deps::Data<'d>,
-        ) -> $crate::rocket_helper::deps::Custom<Vec<u8>> {
+        ) -> $crate::rocket_helper::deps::RpcResponse {
             $prpc(state, $method, rpc_request, data).await
         }
     };
@@ -164,6 +189,7 @@ pub struct PrpcHandler<'s, 'r, S> {
     state: &'s S,
     request: RpcRequest<'r>,
     method: &'r str,
+    method_trim_prefix: Option<&'r str>,
     data: Option<Data<'r>>,
 }
 
@@ -175,6 +201,7 @@ pub struct RpcRequest<'r> {
     limits: &'r Limits,
     content_type: Option<&'r ContentType>,
     json: bool,
+    is_get: bool,
 }
 
 #[rocket::async_trait]
@@ -190,12 +217,13 @@ impl<'r> FromRequest<'r> for RpcRequest<'r> {
             limits: from_request!(request),
             content_type: from_request!(request),
             json: request.method() == Method::Get || query_field_get_bool(request, "json"),
+            is_get: request.method() == Method::Get,
         })
     }
 }
 
 impl<S> PrpcHandler<'_, '_, S> {
-    pub async fn handle<Call: RpcCall<S>>(self) -> Custom<Vec<u8>> {
+    pub async fn handle<Call: RpcCall<S>>(self) -> RpcResponse {
         let json = self.request.json;
         let result = handle_prpc_impl::<S, Call>(self).await;
         match result {
@@ -204,7 +232,11 @@ impl<S> PrpcHandler<'_, '_, S> {
                 let estr = format!("{e:?}");
                 warn!("error handling prpc: {estr}");
                 let body = encode_error(json, estr);
-                Custom(Status::BadRequest, body)
+                RpcResponse {
+                    is_json: json,
+                    status: Status::BadRequest,
+                    body,
+                }
             }
         }
     }
@@ -232,13 +264,15 @@ impl From<Endpoint> for RemoteEndpoint {
 
 pub async fn handle_prpc_impl<S, Call: RpcCall<S>>(
     args: PrpcHandler<'_, '_, S>,
-) -> Result<Custom<Vec<u8>>> {
+) -> Result<RpcResponse> {
     let PrpcHandler {
         state,
         request,
         method,
+        method_trim_prefix,
         data,
     } = args;
+    let method = method.trim_start_matches(method_trim_prefix.unwrap_or_default());
     let remote_app_id = request
         .certificate
         .as_ref()
@@ -267,7 +301,6 @@ pub async fn handle_prpc_impl<S, Call: RpcCall<S>>(
         }
         _ => None,
     };
-    let is_get = data.is_none();
     let payload = match data {
         Some(data) => {
             let limit = limit_for_method(method, request.limits);
@@ -280,7 +313,7 @@ pub async fn handle_prpc_impl<S, Call: RpcCall<S>>(
             .query()
             .map_or(vec![], |q| q.as_bytes().to_vec()),
     };
-    let json = request.json || request.content_type.map(|t| t.is_json()).unwrap_or(false);
+    let is_json = request.json || request.content_type.map(|t| t.is_json()).unwrap_or(false);
     let context = CallContext {
         state,
         attestation,
@@ -288,8 +321,14 @@ pub async fn handle_prpc_impl<S, Call: RpcCall<S>>(
         remote_app_id,
     };
     let call = Call::construct(context).context("failed to construct call")?;
-    let (status_code, output) = call.call(method.to_string(), payload, json, is_get).await;
-    Ok(Custom(Status::new(status_code), output))
+    let (status_code, output) = call
+        .call(method.to_string(), payload, is_json, request.is_get)
+        .await;
+    Ok(RpcResponse {
+        is_json,
+        status: Status::new(status_code),
+        body: output,
+    })
 }
 
 struct RocketCertificate<'a>(&'a rocket::mtls::Certificate<'a>);

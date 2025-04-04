@@ -2,6 +2,9 @@ use anyhow::{anyhow, bail, Context, Result};
 use cert_client::CertRequestClient;
 use clap::Parser;
 use cmd_lib::run_fun as cmd;
+use dstack_gateway_rpc::{
+    gateway_client::GatewayClient, RegisterCvmRequest, RegisterCvmResponse, WireGuardPeer,
+};
 use fs_err as fs;
 use ra_rpc::client::{CertInfo, RaClientConfig};
 use ra_tls::{
@@ -10,9 +13,6 @@ use ra_tls::{
 };
 use serde_json::Value;
 use std::collections::BTreeMap;
-use tproxy_rpc::{
-    tproxy_client::TproxyClient, RegisterCvmRequest, RegisterCvmResponse, WireGuardPeer,
-};
 use tracing::{info, warn};
 
 use crate::{
@@ -61,7 +61,7 @@ impl AppIdValidator {
         };
         let app_id = hex::encode(app_id);
         if !self.allowed_app_id.contains(&app_id) {
-            bail!("Invalid tproxy app id: {app_id}");
+            bail!("Invalid dstack-gateway app id: {app_id}");
         }
         Ok(())
     }
@@ -92,9 +92,10 @@ impl<'a> Setup<'a> {
 
     async fn setup(&self, nc: &HostApi) -> Result<()> {
         self.prepare_fs()?;
-        self.setup_tappd_config()?;
-        nc.notify_q("boot.progress", "setting up tproxy net").await;
-        self.setup_tproxy_net().await?;
+        self.setup_guest_agent_config()?;
+        nc.notify_q("boot.progress", "setting up dstack-gateway")
+            .await;
+        self.setup_dstack_gateway().await?;
         nc.notify_q("boot.progress", "setting up docker").await;
         self.setup_docker_registry()?;
         self.setup_docker_account()?;
@@ -103,15 +104,15 @@ impl<'a> Setup<'a> {
 
     async fn register_cvm(
         &self,
-        tproxy_url: &str,
+        gateway_url: &str,
         client_key: String,
         client_cert: String,
         wg_pk: String,
     ) -> Result<RegisterCvmResponse> {
-        let url = format!("{}/prpc", tproxy_url);
+        let url = format!("{}/prpc", gateway_url);
         let ca_cert = self.app_keys.ca_cert.clone();
         let cert_validator = AppIdValidator {
-            allowed_app_id: self.app_keys.tproxy_app_id.clone(),
+            allowed_app_id: self.app_keys.gateway_app_id.clone(),
         };
         let client = RaClientConfig::builder()
             .remote_uri(url)
@@ -120,14 +121,14 @@ impl<'a> Setup<'a> {
             .tls_client_key(client_key)
             .tls_ca_cert(ca_cert)
             .tls_built_in_root_certs(false)
-            .tls_no_check(self.app_keys.tproxy_app_id == "any")
+            .tls_no_check(self.app_keys.gateway_app_id == "any")
             .verify_server_attestation(false)
             .cert_validator(Box::new(move |cert| cert_validator.validate(cert)))
             .build()
             .into_client()
             .context("Failed to create RA client")?;
-        let tproxy_client = TproxyClient::new(client);
-        tproxy_client
+        let client = GatewayClient::new(client);
+        client
             .register_cvm(RegisterCvmRequest {
                 client_public_key: wg_pk,
             })
@@ -135,23 +136,23 @@ impl<'a> Setup<'a> {
             .context("Failed to register CVM")
     }
 
-    async fn setup_tproxy_net(&self) -> Result<()> {
-        if !self.app_compose.tproxy_enabled() {
-            info!("tproxy is not enabled");
+    async fn setup_dstack_gateway(&self) -> Result<()> {
+        if !self.app_compose.gateway_enabled() {
+            info!("dstack-gateway is not enabled");
             return Ok(());
         }
-        if self.app_keys.tproxy_app_id.is_empty() {
-            bail!("Missing allowed tproxy app id");
+        if self.app_keys.gateway_app_id.is_empty() {
+            bail!("Missing allowed dstack-gateway app id");
         }
 
-        info!("Setting up tproxy network");
+        info!("Setting up dstack-gateway");
         // Generate WireGuard keys
         let sk = cmd!(wg genkey)?;
         let pk = cmd!(echo $sk | wg pubkey).or(Err(anyhow!("Failed to generate public key")))?;
 
         let config = CertConfig {
             org_name: None,
-            subject: "tappd".to_string(),
+            subject: "dstack-guest-agent".to_string(),
             subject_alt_names: vec![],
             usage_server_auth: false,
             usage_client_auth: true,
@@ -170,33 +171,27 @@ impl<'a> Setup<'a> {
         let client_cert = client_certs.join("\n");
         let client_key = client_key.serialize_pem();
 
-        if self.sys_config.tproxy_urls.is_empty() {
-            bail!("Missing tproxy urls");
+        if self.sys_config.gateway_urls.is_empty() {
+            bail!("Missing gateway urls");
         }
         // Read config and make API call
         let response = 'out: {
-            for tproxy_url in self.sys_config.tproxy_urls.iter() {
+            for url in self.sys_config.gateway_urls.iter() {
                 let response = self
-                    .register_cvm(
-                        tproxy_url,
-                        client_key.clone(),
-                        client_cert.clone(),
-                        pk.clone(),
-                    )
+                    .register_cvm(url, client_key.clone(), client_cert.clone(), pk.clone())
                     .await;
                 match response {
                     Ok(response) => {
                         break 'out response;
                     }
                     Err(err) => {
-                        warn!("Failed to register CVM: {err:?}, retrying with next tproxy");
+                        warn!("Failed to register CVM: {err:?}, retrying with next dstack-gateway");
                     }
                 }
             }
-            bail!("Failed to register CVM, all tproxy urls are down");
+            bail!("Failed to register CVM, all dstack-gateway urls are down");
         };
         let wg_info = response.wg.context("Missing wg info")?;
-        let _tappd_info = response.tappd.context("Missing tappd info")?;
 
         let client_ip = &wg_info.client_ip;
 
@@ -224,13 +219,13 @@ impl<'a> Setup<'a> {
         // Setup WireGuard iptables rules
         cmd! {
             // Create the chain if it doesn't exist
-            ignore iptables -N TPROXY_WG 2>/dev/null;
+            ignore iptables -N DSTACK_WG 2>/dev/null;
             // Flush the chain
-            iptables -F TPROXY_WG;
+            iptables -F DSTACK_WG;
             // Remove any existing jump rule
-            ignore iptables -D INPUT -p udp --dport $wg_listen_port -j TPROXY_WG 2>/dev/null;
+            ignore iptables -D INPUT -p udp --dport $wg_listen_port -j DSTACK_WG 2>/dev/null;
             // Insert the new jump rule at the beginning of the INPUT chain
-            iptables -I INPUT -p udp --dport $wg_listen_port -j TPROXY_WG
+            iptables -I INPUT -p udp --dport $wg_listen_port -j DSTACK_WG
         }?;
 
         for peer in &wg_info.servers {
@@ -240,11 +235,11 @@ impl<'a> Setup<'a> {
                 .split(':')
                 .next()
                 .context("Invalid wireguard endpoint")?;
-            cmd!(iptables -A TPROXY_WG -s $endpoint_ip -j ACCEPT)?;
+            cmd!(iptables -A DSTACK_WG -s $endpoint_ip -j ACCEPT)?;
         }
 
         // Drop any UDP packets that don't come from an allowed IP.
-        cmd!(iptables -A TPROXY_WG -j DROP)?;
+        cmd!(iptables -A DSTACK_WG -j DROP)?;
 
         info!("Starting WireGuard");
         cmd!(wg-quick up wg0)?;
@@ -263,8 +258,8 @@ impl<'a> Setup<'a> {
         Ok(())
     }
 
-    fn setup_tappd_config(&self) -> Result<()> {
-        info!("Setting up tappd config");
+    fn setup_guest_agent_config(&self) -> Result<()> {
+        info!("Setting up guest agent config");
         let config = serde_json::json!({
             "default": {
                 "core": {
@@ -275,8 +270,8 @@ impl<'a> Setup<'a> {
                 }
             }
         });
-        let tappd_config = self.resolve("/tapp/tappd.json");
-        fs::write(tappd_config, serde_json::to_string_pretty(&config)?)?;
+        let agent_config = self.resolve("/tapp/agent.json");
+        fs::write(agent_config, serde_json::to_string_pretty(&config)?)?;
         Ok(())
     }
 

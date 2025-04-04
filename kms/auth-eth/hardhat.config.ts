@@ -110,13 +110,13 @@ task("kms:set-info", "Set KMS information from file")
     console.log("KMS info set successfully");
   });
 
-task("kms:set-tproxy", "Set the allowed TProxy App ID")
-  .addPositionalParam("appId", "TProxy App ID")
+task("kms:set-gateway", "Set the allowed Gateway App ID")
+  .addPositionalParam("appId", "Gateway App ID")
   .setAction(async ({ appId }, { ethers }) => {
     const contract = await getKmsAuth(ethers);
-    const tx = await contract.setTproxyAppId(appId);
+    const tx = await contract.setGatewayAppId(appId);
     await waitTx(tx);
-    console.log("TProxy App ID set successfully");
+    console.log("Gateway App ID set successfully");
   });
 
 task("kms:add", "Add a Aggregated MR of an KMS instance")
@@ -203,11 +203,11 @@ task("info:kms", "Get current KMS information")
     });
   });
 
-task("info:tproxy", "Get current TProxy App ID")
+task("info:gateway", "Get current Gateway App ID")
   .setAction(async (_, { ethers }) => {
     const kmsAuth = await getKmsAuth(ethers);
-    const appId = await kmsAuth.tproxyAppId();
-    console.log("TProxy App ID:", appId);
+    const appId = await kmsAuth.gatewayAppId();
+    console.log("Gateway App ID:", appId);
   });
 
 task("app:show-controller", "Show the controller of an AppAuth contract")

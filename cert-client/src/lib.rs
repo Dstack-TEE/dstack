@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
+use dstack_kms_rpc::{kms_client::KmsClient, SignCertRequest};
 use dstack_types::{AppKeys, KeyProvider};
-use kms_rpc::{kms_client::KmsClient, SignCertRequest};
 use ra_rpc::client::{RaClient, RaClientConfig};
 use ra_tls::{
     attestation::QuoteContentType,

@@ -19,8 +19,8 @@ pub struct AppCompose {
     pub public_sysinfo: bool,
     #[serde(default)]
     pub kms_enabled: bool,
-    #[serde(default)]
-    pub tproxy_enabled: bool,
+    #[serde(default, alias = "tproxy_enabled")]
+    pub gateway_enabled: bool,
     #[serde(default)]
     pub local_key_provider_enabled: bool,
     #[serde(default)]
@@ -64,8 +64,8 @@ impl AppCompose {
         self.features.contains(&feature.to_string())
     }
 
-    pub fn tproxy_enabled(&self) -> bool {
-        self.tproxy_enabled || self.feature_enabled("tproxy-net")
+    pub fn gateway_enabled(&self) -> bool {
+        self.gateway_enabled || self.feature_enabled("tproxy-net")
     }
 
     pub fn kms_enabled(&self) -> bool {
@@ -92,8 +92,8 @@ impl AppCompose {
 pub struct SysConfig {
     #[serde(default)]
     pub kms_urls: Vec<String>,
-    #[serde(default)]
-    pub tproxy_urls: Vec<String>,
+    #[serde(default, alias = "tproxy_urls")]
+    pub gateway_urls: Vec<String>,
     pub pccs_url: Option<String>,
     pub docker_registry: Option<String>,
     pub host_api_url: String,
@@ -109,7 +109,7 @@ pub struct AppKeys {
     pub k256_key: Vec<u8>,
     #[serde(with = "hex_bytes")]
     pub k256_signature: Vec<u8>,
-    pub tproxy_app_id: String,
+    pub gateway_app_id: String,
     pub ca_cert: String,
     pub key_provider: KeyProvider,
 }

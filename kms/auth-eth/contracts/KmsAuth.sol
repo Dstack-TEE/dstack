@@ -23,8 +23,8 @@ contract KmsAuth is
     // KMS information
     KmsInfo public kmsInfo;
 
-    // TProxy App ID
-    string public tproxyAppId;
+    // The dstack-gateway App ID
+    string public gatewayAppId;
 
     // Struct to store App configuration
     struct AppConfig {
@@ -61,7 +61,7 @@ contract KmsAuth is
     event AppImageMrRemoved(bytes32 mrImage);
     event AppSystemMrAdded(bytes32 mrSystem);
     event AppSystemMrRemoved(bytes32 mrSystem);
-    event TproxyAppIdSet(string tproxyAppId);
+    event GatewayAppIdSet(string gatewayAppId);
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -95,10 +95,10 @@ contract KmsAuth is
         kmsInfo.eventlog = eventlog;
     }
 
-    // Function to set trusted TProxy App ID
-    function setTproxyAppId(string memory appId) external onlyOwner {
-        tproxyAppId = appId;
-        emit TproxyAppIdSet(appId);
+    // Function to set trusted Gateway App ID
+    function setGatewayAppId(string memory appId) external onlyOwner {
+        gatewayAppId = appId;
+        emit GatewayAppIdSet(appId);
     }
 
     // View next app id

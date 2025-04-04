@@ -1,7 +1,7 @@
 [Unit]
 Description=Guest Boot Service
 After=network.target
-Before=app-compose.service tappd.service
+Before=app-compose.service dstack-guest-agent.service
 
 [Service]
 Type=oneshot

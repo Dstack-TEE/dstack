@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 40px;
+            background-color: #f0f0f0;
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        h1 {
+            color: #333;
+        }
+
+        h2 {
+            color: #333;
+            margin-top: 30px;
+            border-bottom: 2px solid #4CAF50;
+            padding-bottom: 8px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            background-color: white;
+            border-radius: 8px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            margin: 20px 0;
+        }
+
+        th,
+        td {
+            padding: 12px 15px;
+            text-align: left;
+            border-bottom: 1px solid #ddd;
+        }
+
+        th {
+            background-color: #4CAF50;
+            color: white;
+        }
+
+        /* 添加斑马条纹样式 */
+        tr:nth-child(even) {
+            background-color: #f2f2f2;
+        }
+
+        tr:hover {
+            background-color: #e9e9e9;
+        }
+
+        a {
+            color: #1a73e8;
+            text-decoration: none;
+        }
+
+        a:hover {
+            text-decoration: underline;
+        }
+
+        input {
+            background-color: #f5f5f5;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            width: 100%;
+            padding: 8px;
+            box-sizing: border-box;
+        }
+
+        .timestamp {
+            position: relative;
+        }
+
+        .timestamp:hover::after {
+            content: attr(data-original);
+            position: absolute;
+            bottom: 100%;
+            left: 0;
+            background: #333;
+            color: white;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            white-space: nowrap;
+            z-index: 1;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        }
+
+        .info-section {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+
+        .info-group {
+            margin-bottom: 25px;
+        }
+
+        .info-group h3 {
+            color: #333;
+            margin: 0 0 15px 0;
+            font-size: 1.2em;
+        }
+
+        .info-group h4 {
+            color: #555;
+            margin: 20px 0 10px 0;
+            font-size: 1.1em;
+        }
+
+        .info-row {
+            display: flex;
+            margin-bottom: 10px;
+            align-items: center;
+        }
+
+        .info-label {
+            font-weight: bold;
+            width: 120px;
+            color: #555;
+        }
+
+        .info-value {
+            flex: 1;
+        }
+
+        .key-list {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .key-list input {
+            font-family: monospace;
+            background-color: #f8f8f8;
+        }
+
+        .truncated-id {
+            max-width: 100px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+    </style>
+    <title>Dashboard</title>
+    <script>
+        function timeAgo(timestamp) {
+            if (timestamp === 0) return 'never';
+
+            const seconds = Math.floor((Date.now() / 1000) - timestamp);
+            const intervals = {
+                year: 31536000,
+                month: 2592000,
+                week: 604800,
+                day: 86400,
+                hour: 3600,
+                minute: 60,
+                second: 1
+            };
+
+            for (const [unit, secondsInUnit] of Object.entries(intervals)) {
+                const interval = Math.floor(seconds / secondsInUnit);
+                if (interval >= 1) {
+                    return interval + ' ' + unit + (interval === 1 ? '' : 's') + ' ago';
+                }
+            }
+            return 'just now';
+        }
+
+        document.addEventListener('DOMContentLoaded', function () {
+            const timestamps = document.querySelectorAll('.timestamp');
+            timestamps.forEach(cell => {
+                const timestamp = parseInt(cell.textContent);
+                if (!isNaN(timestamp)) {
+                    const date = new Date(timestamp * 1000);
+                    cell.setAttribute('data-original', date.toLocaleString());
+                    cell.textContent = timeAgo(timestamp);
+                }
+            });
+        });
+    </script>
+</head>
+
+<body>
+    <h2>This Node</h2>
+    <table>
+        <tr>
+            <th colspan="2">Node Information</th>
+        </tr>
+        <tr>
+            <td>URL</td>
+            <td>{{ status.url }}</td>
+        </tr>
+        <tr>
+            <td>ID</td>
+            <td>{{ status.id|hex }}</td>
+        </tr>
+        <tr>
+            <td>Bootnode URL</td>
+            <td>{{ status.bootnode_url }}</td>
+        </tr>
+        <tr>
+            <td>Connections</td>
+            <td>{{ status.num_connections }}</td>
+        </tr>
+    </table>
+
+    <table>
+        <tr>
+            <th colspan="2">ACME Information</th>
+        </tr>
+        <tr>
+            <td>Account URI</td>
+            <td>{{ acme_info.account_uri }}</td>
+        </tr>
+        <tr>
+            <td>Historical Certificate Public Keys</td>
+            <td>
+                <div class="key-list">
+                    {% for key in acme_info.hist_keys %}
+                    <input type="text" value="{{ key|hex }}" readonly>
+                    {% endfor %}
+                </div>
+            </td>
+        </tr>
+    </table>
+    <h2>Cluster</h2>
+    <table>
+        <tr>
+            <th>ID</th>
+            <th>Last Seen</th>
+            <th>Wg IP</th>
+            <th>Wg Endpoint</th>
+            <th>URL</th>
+        </tr>
+        {% for node in status.nodes %}
+        <tr class="{% if node.id == status.id %}me{% endif %}">
+            <td class="truncated-id" title="{{ node.id|hex }}">{{ node.id|hex }}</td>
+            <td class="timestamp">{{ node.last_seen }}</td>
+            {% if let Some(wg_peer) = node.wg_peer %}
+            <td>{{ wg_peer.ip }}</td>
+            <td>{{ wg_peer.endpoint }}</td>
+            {% else %}
+            <td>N/A</td>
+            <td>N/A</td>
+            {% endif %}
+            <td>{{ node.url }}</td>
+        </tr>
+        {% endfor %}
+    </table>
+    <h2>CVM List</h2>
+    <table>
+        <tr>
+            <th>Instance ID</th>
+            <th>App ID</th>
+            <th>IP</th>
+            <th>Last Seen</th>
+            <th>Connections</th>
+        </tr>
+        {% for host in status.hosts %}
+        <tr>
+            <td class="truncated-id" title="{{ host.instance_id }}">{{ host.instance_id }}</td>
+            <td class="truncated-id" title="{{ host.app_id }}">{{ host.app_id }}</td>
+            <td>{{ host.ip }}</td>
+            <td class="timestamp">{{ host.latest_handshake }}</td>
+            <td>{{ host.num_connections }}</td>
+        </tr>
+        {% endfor %}
+    </table>
+</body>
+
+</html>

@@ -73,7 +73,7 @@ services:
         CMD ["./target/release/kms"]
     volumes:
       - kms-volume:/etc/kms
-      - /var/run/tappd.sock:/var/run/tappd.sock
+      - /var/run/dstack.sock:/var/run/dstack.sock
     ports:
       - 8000:8000
     depends_on:

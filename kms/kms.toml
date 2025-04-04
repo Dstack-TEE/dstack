@@ -30,7 +30,7 @@ type = "webhook"
 url = "http://auth-api:8000"
 
 [core.auth_api.dev]
-tproxy_app_id = "any"
+gateway_app_id = "any"
 
 [core.onboard]
 enabled = true

@@ -26,10 +26,10 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 x25519-dalek.workspace = true
 
-kms-rpc.workspace = true
+dstack-kms-rpc.workspace = true
 ra-rpc = { workspace = true, features = ["client"] }
 ra-tls.workspace = true
-tproxy-rpc.workspace = true
+dstack-gateway-rpc.workspace = true
 tdx-attest.workspace = true
 host-api = { workspace = true, features = ["client"] }
 cmd_lib.workspace = true

@@ -47,11 +47,11 @@ export class EthereumBackend {
       response = await this.kmsAuth.isAppAllowed(bootInfoStruct);
     }
     const [isAllowed, reason] = response;
-    const tproxyAppId = await this.kmsAuth.tproxyAppId();
+    const gatewayAppId = await this.kmsAuth.gatewayAppId();
     return {
       isAllowed,
       reason,
-      tproxyAppId
+      gatewayAppId,
     }
   }
 }

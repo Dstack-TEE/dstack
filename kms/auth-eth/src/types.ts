@@ -12,7 +12,7 @@ export interface BootInfo {
 
 export interface BootResponse {
   isAllowed: boolean;
-  tproxyAppId: string;
+  gatewayAppId: string;
   reason: string;
 }
 

@@ -43,7 +43,7 @@ pub(crate) struct BootInfo {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct BootResponse {
     pub is_allowed: bool,
-    pub tproxy_app_id: String,
+    pub gateway_app_id: String,
     pub reason: String,
 }
 
@@ -53,7 +53,7 @@ impl AuthApi {
             AuthApi::Dev { dev } => Ok(BootResponse {
                 is_allowed: true,
                 reason: "".to_string(),
-                tproxy_app_id: dev.tproxy_app_id.clone(),
+                gateway_app_id: dev.gateway_app_id.clone(),
             }),
             AuthApi::Webhook { webhook } => {
                 let client = reqwest::Client::new();

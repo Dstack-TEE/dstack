@@ -1,18 +1,18 @@
 use anyhow::{bail, Context, Result};
 use clap::Parser;
+use dstack_gateway_rpc::gateway_client::GatewayClient;
 use ra_rpc::client::RaClient;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::time::Duration;
-use tproxy_rpc::tproxy_client::TproxyClient;
 use tracing::{debug, error, info};
 use x509_parser::prelude::*;
 
 const BASE_URL: &str = "https://crt.sh";
 
 struct Monitor {
-    tproxy_uri: String,
+    gateway_uri: String,
     domain: String,
     known_keys: BTreeSet<Vec<u8>>,
     last_checked: Option<u64>,
@@ -33,10 +33,10 @@ struct CTLog {
 }
 
 impl Monitor {
-    fn new(tproxy_uri: String, domain: String) -> Result<Self> {
+    fn new(gateway_uri: String, domain: String) -> Result<Self> {
         validate_domain(&domain)?;
         Ok(Self {
-            tproxy_uri,
+            gateway_uri,
             domain,
             known_keys: BTreeSet::new(),
             last_checked: None,
@@ -44,10 +44,10 @@ impl Monitor {
     }
 
     async fn refresh_known_keys(&mut self) -> Result<()> {
-        info!("fetching known public keys from {}", self.tproxy_uri);
+        info!("fetching known public keys from {}", self.gateway_uri);
         let todo = "Use RA-TLS";
         let tls_no_check = true;
-        let rpc = TproxyClient::new(RaClient::new(self.tproxy_uri.clone(), tls_no_check)?);
+        let rpc = GatewayClient::new(RaClient::new(self.gateway_uri.clone(), tls_no_check)?);
         let info = rpc.acme_info().await?;
         self.known_keys = info.hist_keys.into_iter().collect();
         info!("got {} known public keys", self.known_keys.len());
@@ -146,9 +146,9 @@ fn validate_domain(domain: &str) -> Result<()> {
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
-    /// TProxy URI
+    /// The gateway URI
     #[arg(short, long)]
-    tproxy_uri: String,
+    gateway_uri: String,
     /// Domain name to monitor
     #[arg(short, long)]
     domain: String,
@@ -162,7 +162,7 @@ async fn main() -> anyhow::Result<()> {
         fmt().with_env_filter(filter).init();
     }
     let args = Args::parse();
-    let mut monitor = Monitor::new(args.tproxy_uri, args.domain)?;
+    let mut monitor = Monitor::new(args.gateway_uri, args.domain)?;
     monitor.run().await;
     Ok(())
 }

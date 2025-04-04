@@ -1,11 +1,14 @@
 use anyhow::{Context, Result};
-use http_client::prpc::PrpcClient;
-use k256::ecdsa::SigningKey;
-use kms_rpc::{
+use dstack_guest_agent_rpc::{
+    dstack_guest_client::DstackGuestClient, GetQuoteResponse, RawQuoteArgs,
+};
+use dstack_kms_rpc::{
     kms_client::KmsClient,
     onboard_server::{OnboardRpc, OnboardServer},
     BootstrapRequest, BootstrapResponse, OnboardRequest, OnboardResponse,
 };
+use http_client::prpc::PrpcClient;
+use k256::ecdsa::SigningKey;
 use ra_rpc::{client::RaClient, CallContext, RpcCall};
 use ra_tls::{
     attestation::QuoteContentType,
@@ -13,7 +16,6 @@ use ra_tls::{
     rcgen::{Certificate, KeyPair, PKCS_ECDSA_P256_SHA256},
 };
 use safe_write::safe_write;
-use tappd_rpc::{tappd_client::TappdClient, RawQuoteArgs, TdxQuoteResponse};
 
 use crate::config::KmsConfig;
 
@@ -238,15 +240,14 @@ pub(crate) async fn bootstrap_keys(cfg: &KmsConfig) -> Result<()> {
     Ok(())
 }
 
-fn tappd_client() -> Result<TappdClient<PrpcClient>> {
-    let http_client = PrpcClient::new_unix("/var/run/tappd.sock".into(), "/prpc".into());
-    let tappd_client = TappdClient::new(http_client);
-    Ok(tappd_client)
+fn dstack_client() -> DstackGuestClient<PrpcClient> {
+    let http_client = PrpcClient::new_unix("/var/run/dstack.sock".into(), "/prpc".into());
+    DstackGuestClient::new(http_client)
 }
 
-async fn tapp_quote(report_data: Vec<u8>) -> Result<TdxQuoteResponse> {
-    let quote = tappd_client()?
-        .raw_quote(RawQuoteArgs { report_data })
+async fn tapp_quote(report_data: Vec<u8>) -> Result<GetQuoteResponse> {
+    let quote = dstack_client()
+        .get_quote(RawQuoteArgs { report_data })
         .await?;
     Ok(quote)
 }

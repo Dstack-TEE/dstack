@@ -39,7 +39,7 @@ describe('Server', () => {
       const mockCheckBoot = jest.fn().mockResolvedValue({
         isAllowed: true,
         reason: '',
-        tproxyAppId: ''
+        gatewayAppId: ''
       });
       app.ethereum.checkBoot = mockCheckBoot;
 
@@ -76,7 +76,7 @@ describe('Server', () => {
       const mockCheckBoot = jest.fn().mockResolvedValue({
         isAllowed: true,
         reason: '',
-        tproxyAppId: '0x1234',
+        gatewayAppId: '0x1234',
       });
       app.ethereum.checkBoot = mockCheckBoot;
 

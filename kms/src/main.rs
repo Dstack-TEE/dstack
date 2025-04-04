@@ -62,7 +62,10 @@ async fn run_onboard_service(kms_config: KmsConfig, figment: Figment) -> Result<
 
     let _ = rocket::custom(figment)
         .mount("/", rocket::routes![index, finish])
-        .mount("/prpc", ra_rpc::prpc_routes!(OnboardState, OnboardHandler))
+        .mount(
+            "/prpc",
+            ra_rpc::prpc_routes!(OnboardState, OnboardHandler, trim: "Onboard."),
+        )
         .manage(state)
         .launch()
         .await
@@ -107,7 +110,10 @@ async fn main() -> Result<()> {
                 res.set_raw_header("X-App-Version", app_version());
             })
         }))
-        .mount("/prpc", ra_rpc::prpc_routes!(KmsState, RpcHandler))
+        .mount(
+            "/prpc",
+            ra_rpc::prpc_routes!(KmsState, RpcHandler, trim: "KMS."),
+        )
         .manage(state);
 
     let verifier = QuoteVerifier::new(pccs_url);
