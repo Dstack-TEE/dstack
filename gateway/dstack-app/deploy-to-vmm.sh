@@ -112,6 +112,7 @@ WG_ENDPOINT=$PUBLIC_IP:$WG_PORT
 MY_URL=$MY_URL
 BOOTNODE_URL=$BOOTNODE_URL
 SUBNET_INDEX=$SUBNET_INDEX
+RPC_DOMAIN=$RPC_DOMAIN
 EOF
 
 $CLI compose \
@@ -140,7 +141,7 @@ echo "GATEWAY_RPC_ADDR: $GATEWAY_RPC_ADDR"
 echo "GATEWAY_ADMIN_RPC_ADDR: $GATEWAY_ADMIN_RPC_ADDR"
 echo "GATEWAY_SERVING_ADDR: $GATEWAY_SERVING_ADDR"
 echo "GUEST_AGENT_ADDR: $GUEST_AGENT_ADDR"
-
+echo "RPC_DOMAIN: $RPC_DOMAIN"
 if [ -t 0 ]; then
   # Only ask for confirmation if running in an interactive terminal
   read -p "Continue? [y/N] " -n 1 -r
