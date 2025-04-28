@@ -73,7 +73,7 @@ fn parse_destination(sni: &str, dotted_base_domain: &str) -> Result<DstInfo> {
         .strip_suffix(dotted_base_domain)
         .context("invalid sni format")?;
     if subdomain.contains('.') {
-        bail!("only one level of subdomain is supported");
+        bail!("only one level of subdomain is supported: {}, {}", sni, subdomain);
     }
     let mut parts = subdomain.split('-');
     let app_id = parts.next().context("no app id found")?.to_owned();
