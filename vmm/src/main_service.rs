@@ -433,6 +433,15 @@ impl VmmRpc for RpcHandler {
         let gpus = self.app.list_gpus().await?;
         Ok(ListGpusResponse { gpus })
     }
+
+    async fn get_compose_hash(self, request: VmConfiguration) -> Result<AppId> {
+        validate_label(&request.name)?;
+        // check the compose file is valid
+        let _app_compose: AppCompose =
+            serde_json::from_str(&request.compose_file).context("Invalid compose file")?;
+        let app_id = app_id_of(&request.compose_file);
+        Ok(AppId { app_id: app_id.into() })
+    }
 }
 
 impl RpcCall<App> for RpcHandler {

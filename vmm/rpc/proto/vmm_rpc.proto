@@ -231,6 +231,8 @@ service Vmm {
   rpc ShutdownVm(Id) returns (google.protobuf.Empty);
   // RPC to resize a VM
   rpc ResizeVm(ResizeVmRequest) returns (google.protobuf.Empty);
+  // RPC to compute the compose hash, it's helpful for debugging & developing SDK.
+  rpc GetComposeHash(VmConfiguration) returns (AppId);
 
   // RPC to list all VMs
   rpc Status(StatusRequest) returns (StatusResponse);
