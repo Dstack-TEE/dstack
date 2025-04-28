@@ -440,7 +440,9 @@ impl VmmRpc for RpcHandler {
         let _app_compose: AppCompose =
             serde_json::from_str(&request.compose_file).context("Invalid compose file")?;
         let app_id = app_id_of(&request.compose_file);
-        Ok(AppId { app_id: app_id.into() })
+        Ok(AppId {
+            app_id: app_id.into(),
+        })
     }
 }
 
