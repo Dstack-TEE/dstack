@@ -121,6 +121,9 @@ pub struct CvmConfig {
 
     /// Auto restart configuration
     pub auto_restart: AutoRestartConfig,
+
+    /// Networking configuration
+    pub networking: Networking,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -199,9 +202,6 @@ pub struct Config {
     /// Gateway configuration
     pub gateway: GatewayConfig,
 
-    /// Networking configuration
-    pub networking: Networking,
-
     /// Authentication configuration
     pub auth: AuthConfig,
 
@@ -216,9 +216,22 @@ pub struct Config {
 }
 
 #[derive(Debug, Default, Clone, Deserialize, Serialize)]
-pub struct ProcessNote {
+pub struct ProcessAnnotation {
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub live_for: Option<String>,
     #[serde(default)]
     pub devices: Vec<String>,
+}
+
+impl ProcessAnnotation {
+    pub fn is_cvm(&self) -> bool {
+        if self.live_for.is_some() {
+            return false;
+        }
+        self.kind.is_empty() || self.kind == "cvm"
+    }
 }
 
 impl Config {
@@ -235,7 +248,14 @@ impl Config {
 #[serde(tag = "mode", rename_all = "lowercase")]
 pub enum Networking {
     User(UserNetworking),
+    Passt(PasstNetworking),
     Custom(CustomNetworking),
+}
+
+impl Networking {
+    pub fn is_passt(&self) -> bool {
+        matches!(self, Networking::Passt(_))
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -243,6 +263,20 @@ pub struct UserNetworking {
     pub net: String,
     pub dhcp_start: String,
     pub restrict: bool,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct PasstNetworking {
+    pub passt_exec: String,
+    pub interface: String,
+    pub address: String,
+    pub netmask: String,
+    pub gateway: String,
+    pub dns: Vec<String>,
+    pub map_host_loopback: String,
+    pub map_guest_addr: String,
+    pub no_map_gw: bool,
+    pub ipv4_only: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
