@@ -8,13 +8,6 @@ address = "unix:./vmm.sock"
 reuse = true
 kms_url = "http://127.0.0.1:8081"
 
-
-[networking]
-mode = "user"
-net = "10.0.2.0/24"
-dhcp_start = "10.0.2.10"
-restrict = false
-
 [cvm]
 qemu_path = ""
 kms_urls = ["http://127.0.0.1:8081"]
@@ -37,6 +30,26 @@ qemu_single_pass_add_pages = false
 qemu_pic = true
 qemu_pci_hole64_size = 0
 qemu_hotplug_off = false
+
+[cvm.networking]
+mode = "user"
+
+# for mode = "user"
+net = "10.0.2.0/24"
+dhcp_start = "10.0.2.10"
+restrict = false
+
+# for mode = "passt"
+passt_exec = ""
+interface = ""
+address = "10.0.2.10"
+netmask = "255.255.255.0"
+gateway = "10.0.2.2"
+dns = ["1.1.1.1", "1.0.0.1"]
+map_host_loopback = "none"
+map_guest_addr = "none"
+no_map_gw = true
+ipv4_only = true
 
 [cvm.port_mapping]
 enabled = false
