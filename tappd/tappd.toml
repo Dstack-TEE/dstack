@@ -16,7 +16,7 @@ compose_file = "/tapp/app-compose.json"
 
 [internal]
 address = "unix:/var/run/tappd.sock"
-reuse = false
+reuse = true
 
 [external]
 address = "0.0.0.0"

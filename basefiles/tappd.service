@@ -1,10 +1,10 @@
 [Unit]
 Description=Tappd Service
 After=network.target tboot.service
+Before=docker.service
 
 [Service]
 OOMScoreAdjust=-1000
-ExecStartPre=-/bin/rm -f /var/run/tappd.sock
 ExecStart=/bin/tappd --watchdog
 Restart=always
 User=root
