@@ -32,6 +32,7 @@ services:
       - SUBNET_INDEX=${SUBNET_INDEX}
       - RUST_LOG=info,certbot=debug
       - PCCS_URL=${PCCS_URL}
+      - RPC_DOMAIN=${RPC_DOMAIN}
     restart: always
 
 volumes:
