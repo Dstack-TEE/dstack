@@ -1,0 +1,21 @@
+[package]
+name = "dstack-rust"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "This crate provides a rust client for communicating with dstack"
+authors = ["Encifher <encifher@rizelabs.io>"]
+
+[dependencies]
+alloy = { version = "0.15", features = ["signers", "signer-local"] }
+hex = "0.4"
+http = "0.2"
+http-client-unix-domain-socket = "0.1.1"
+reqwest = { version = "0.11", features = ["json"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10.9"
+
+[dev-dependencies]
+dcap-qvl = "0.1.0"
+tokio = { version = "1", features = ["full"] }

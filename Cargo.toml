@@ -35,6 +35,7 @@ members = [
     "dstack-types",
     "cert-client",
     "lspci",
+    "sdk/rust",
 ]
 resolver = "2"
 
