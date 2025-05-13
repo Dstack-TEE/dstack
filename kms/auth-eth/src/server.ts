@@ -51,6 +51,7 @@ export async function build(): Promise<FastifyInstance> {
       status: 'ok',
       kmsContractAddr: kmsContractAddr,
       gatewayAppId: await server.ethereum.getGatewayAppId(),
+      chainId: await server.ethereum.getChainId(),
     };
   });
 
