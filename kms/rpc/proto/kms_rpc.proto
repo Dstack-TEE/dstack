@@ -43,8 +43,9 @@ message GetMetaResponse {
   bytes k256_pubkey = 3;
   BootstrapResponse bootstrap_info = 4;
   bool is_dev = 5;
-  optional string kms_contract_address = 6;
-  optional uint64 chain_id = 7;
+  optional string gateway_app_id = 6;
+  optional string kms_contract_address = 7;
+  optional uint64 chain_id = 8;
 }
 
 message GetKmsKeyRequest {
