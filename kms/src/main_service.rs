@@ -234,6 +234,7 @@ impl KmsRpc for RpcHandler {
         let bootstrap_info = fs::read_to_string(self.state.config.bootstrap_info())
             .ok()
             .and_then(|s| serde_json::from_str(&s).ok());
+        let info = self.state.config.auth_api.get_info().await?;
         Ok(GetMetaResponse {
             ca_cert: self.state.inner.root_ca.pem_cert.clone(),
             allow_any_upgrade: self.state.inner.config.auth_api.is_dev(),
@@ -245,6 +246,10 @@ impl KmsRpc for RpcHandler {
                 .to_sec1_bytes()
                 .to_vec(),
             bootstrap_info,
+            is_dev: self.state.config.auth_api.is_dev(),
+            kms_contract_address: info.kms_contract_address,
+            chain_id: info.chain_id,
+            gateway_app_id: info.gateway_app_id,
         })
     }
 

@@ -428,7 +428,7 @@ class VmmCLI:
         if prelaunch_script:
             app_compose["prelaunch_script"] = prelaunch_script
 
-        compose_file = json.dumps(app_compose, indent=4).encode('utf-8')
+        compose_file = json.dumps(app_compose, indent=4, ensure_ascii=False).encode('utf-8')
         compose_hash = hashlib.sha256(compose_file).hexdigest()
         with open(output, 'wb') as f:
             f.write(compose_file)
