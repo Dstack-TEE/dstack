@@ -261,6 +261,7 @@ impl RpcHandler {
             .context("Failed to create temporary directory")?;
         let tmp_dir = auto_delete_temp_dir.path();
         // Download the image tarball
+        info!("Downloading image from {}", url);
         let client = reqwest::Client::new();
         let response = client
             .get(&url)
