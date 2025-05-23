@@ -121,6 +121,15 @@ pub struct Config {
     pub admin: AdminConfig,
     pub run_in_dstack: bool,
     pub sync: SyncConfig,
+    pub auth: AuthConfig,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct AuthConfig {
+    pub enabled: bool,
+    pub url: String,
+    #[serde(with = "serde_duration")]
+    pub timeout: Duration,
 }
 
 impl Config {

@@ -1991,6 +1991,7 @@ dependencies = [
  "ra-rpc",
  "ra-tls",
  "rand 0.8.5",
+ "reqwest",
  "rinja",
  "rocket",
  "rustls",

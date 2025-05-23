@@ -6,6 +6,7 @@ use std::{
 };
 
 use anyhow::{bail, Context, Result};
+use auth_client::AuthClient;
 use certbot::{CertBot, WorkDir};
 use cmd_lib::run_cmd as cmd;
 use dstack_gateway_rpc::{
@@ -33,6 +34,8 @@ use crate::{
 
 mod sync_client;
 
+mod auth_client;
+
 #[derive(Clone)]
 pub struct Proxy {
     pub(crate) config: Arc<Config>,
@@ -40,6 +43,7 @@ pub struct Proxy {
     my_app_id: Option<Vec<u8>>,
     sync_tx: Sender<SyncEvent>,
     inner: Arc<Mutex<ProxyState>>,
+    auth_client: Arc<AuthClient>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -102,12 +106,14 @@ impl Proxy {
         let (sync_tx, sync_rx) = mpsc::channel(1);
         start_sync_task(Arc::downgrade(&inner), config.clone(), sync_rx);
         let certbot = start_certbot_task(&config).await?;
+        let auth_client = Arc::new(AuthClient::new(config.auth.clone()));
         Ok(Self {
             config,
             inner,
             certbot,
             my_app_id,
             sync_tx,
+            auth_client,
         })
     }
 }
@@ -607,6 +613,11 @@ impl GatewayRpc for RpcHandler {
         let app_info = ra
             .decode_app_info(false)
             .context("failed to decode app-info from attestation")?;
+        self.state
+            .auth_client
+            .ensure_app_authorized(&app_info)
+            .await
+            .context("App authorization failed")?;
         let app_id = hex::encode(&app_info.app_id);
         let instance_id = hex::encode(&app_info.instance_id);
 

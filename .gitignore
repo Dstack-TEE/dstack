@@ -5,3 +5,4 @@
 generated/
 node_modules/
 /.cargo
+.venv

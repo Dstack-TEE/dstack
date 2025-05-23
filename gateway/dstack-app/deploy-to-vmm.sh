@@ -1,5 +1,28 @@
 #!/bin/bash
 
+APP_COMPOSE_FILE=""
+
+usage() {
+  echo "Usage: $0 [-c <app compose file>]"
+  echo "  -c  App compose file"
+}
+
+while getopts "c:h" opt; do
+  case $opt in
+    c)
+      APP_COMPOSE_FILE=$OPTARG
+      ;;
+    h)
+      usage
+      exit 0
+      ;;
+    \?)
+      usage
+      exit 1
+      ;;
+  esac
+done
+
 # Check if .env exists
 if [ -f ".env" ]; then
   # Load variables from .env
@@ -57,6 +80,9 @@ GATEWAY_SERVING_ADDR=0.0.0.0:9204
 GUEST_AGENT_ADDR=127.0.0.1:9206
 WG_ADDR=0.0.0.0:9202
 
+# The token used to launch the App
+APP_LAUNCH_TOKEN=$(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 32 | head -n 1)
+
 EOF
   echo "Please edit the .env file and set the required variables, then run this script again."
   exit 1
@@ -72,6 +98,7 @@ required_env_vars=(
   "WG_ADDR"
   "GATEWAY_APP_ID"
   "MY_URL"
+  "APP_LAUNCH_TOKEN"
   # "BOOTNODE_URL"
 )
 
@@ -112,17 +139,36 @@ WG_ENDPOINT=$PUBLIC_IP:$WG_PORT
 MY_URL=$MY_URL
 BOOTNODE_URL=$BOOTNODE_URL
 SUBNET_INDEX=$SUBNET_INDEX
+APP_LAUNCH_TOKEN=$APP_LAUNCH_TOKEN
 EOF
 
-$CLI compose \
-  --docker-compose "$COMPOSE_TMP" \
-  --name dstack-gateway \
-  --kms \
-  --env-file .app_env \
-  --public-logs \
-  --public-sysinfo \
-  --no-instance-id \
-  --output .app-compose.json
+if [ -n "$APP_COMPOSE_FILE" ]; then
+  cp "$APP_COMPOSE_FILE" .app-compose.json
+else
+
+  EXPECTED_TOKEN_HASH=$(echo -n "$APP_LAUNCH_TOKEN" | sha256sum | cut -d' ' -f1)
+  cat >.prelaunch.sh <<EOF
+ACTUAL_TOKEN_HASH=\$(echo -n "\$APP_LAUNCH_TOKEN" | sha256sum | cut -d' ' -f1)
+if [ "$EXPECTED_TOKEN_HASH" != "\$ACTUAL_TOKEN_HASH" ]; then
+    echo "Error: Incorrect APP_LAUNCH_TOKEN, please make sure set the correct APP_LAUNCH_TOKEN in env"
+    reboot
+    exit 1
+else
+    echo "APP_LAUNCH_TOKEN checked OK"
+fi
+EOF
+
+  $CLI compose \
+    --docker-compose "$COMPOSE_TMP" \
+    --name dstack-gateway \
+    --kms \
+    --env-file .app_env \
+    --public-logs \
+    --public-sysinfo \
+    --no-instance-id \
+    --prelaunch-script .prelaunch.sh \
+    --output .app-compose.json
+fi
 
 # Remove the temporary file as it is no longer needed
 rm "$COMPOSE_TMP"

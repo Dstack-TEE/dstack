@@ -42,6 +42,7 @@ http-client = { workspace = true, features = ["prpc"] }
 sha2.workspace = true
 dstack-types.workspace = true
 serde-duration.workspace = true
+reqwest = { workspace = true, features = ["json"] }
 
 [target.'cfg(unix)'.dependencies]
 nix = { workspace = true, features = ["resource"] }

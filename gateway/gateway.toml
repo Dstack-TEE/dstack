@@ -14,6 +14,11 @@ set_ulimit = true
 rpc_domain = ""
 run_in_dstack = true
 
+[core.auth]
+enabled = false
+url = "http://localhost/app-auth"
+timeout = "5s"
+
 [core.admin]
 enabled = false
 port = 8011
