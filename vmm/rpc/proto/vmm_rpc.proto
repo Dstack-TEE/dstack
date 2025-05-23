@@ -69,6 +69,10 @@ message VmConfiguration {
   bool pin_numa = 12;
   // Gpu config
   GpuConfig gpus = 13;
+  // KMS URLs
+  repeated string kms_urls = 14;
+  // Gateway URLs
+  repeated string gateway_urls = 15;
 }
 
 message GpuConfig {

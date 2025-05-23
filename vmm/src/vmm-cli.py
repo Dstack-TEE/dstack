@@ -12,6 +12,7 @@ import re
 import socket
 import http.client
 import urllib.parse
+import ssl
 
 from eth_keys import keys
 from eth_utils import keccak
@@ -162,7 +163,11 @@ class VmmClient:
             conn = UnixSocketHTTPConnection(self.uds_path)
         else:
             if self.is_https:
-                conn = http.client.HTTPSConnection(self.host)
+                # TODO: we should verify TLS cert.
+                context = ssl.create_default_context()
+                context.check_hostname = False
+                context.verify_mode = ssl.CERT_NONE
+                conn = http.client.HTTPSConnection(self.host, context=context)
             else:
                 conn = http.client.HTTPConnection(self.host)
 
@@ -313,9 +318,18 @@ class VmmCLI:
         response = self.rpc_call('ListImages')
         return response['images']
 
-    def get_app_env_encrypt_pub_key(self, app_id: str) -> Dict:
+    def get_app_env_encrypt_pub_key(self, app_id: str, kms_url: Optional[str] = None) -> Dict:
         """Get the encryption public key for the specified application ID"""
-        response = self.rpc_call('GetAppEnvEncryptPubKey', {'app_id': app_id})
+        if kms_url:
+            client = VmmClient(kms_url)
+            path = f"/prpc/GetAppEnvEncryptPubKey?json"
+            status, response = client.request(
+                'POST', path, headers={
+                'Content-Type': 'application/json'
+            }, body={'app_id': app_id})
+            print(f"Getting encryption public key for {app_id} from {kms_url}")
+        else:
+            response = self.rpc_call('GetAppEnvEncryptPubKey', {'app_id': app_id})
 
         # Verify the signature if available
         if 'signature' not in response:
@@ -443,6 +457,8 @@ class VmmCLI:
                   gpus: Optional[List[str]] = None,
                   pin_numa: bool = False,
                   hugepages: bool = False,
+                  kms_urls: Optional[List[str]] = None,
+                  gateway_urls: Optional[List[str]] = None,
                   ) -> None:
         """Create a new VM"""
         # Read and validate compose file
@@ -471,11 +487,15 @@ class VmmCLI:
                 "attach_mode": "listed",
                 "gpus": [{"slot": gpu} for gpu in gpus or []]
             }
+        if kms_urls:
+            params["kms_urls"] = kms_urls
+        if gateway_urls:
+            params["gateway_urls"] = gateway_urls
 
         app_id = app_id or self.calc_app_id(compose_content)
         print(f"App ID: {app_id}")
         if envs:
-            encrypt_pubkey = self.get_app_env_encrypt_pub_key(app_id)
+            encrypt_pubkey = self.get_app_env_encrypt_pub_key(app_id, kms_urls[0] if kms_urls else None)
             print(
                 f"Encrypting environment variables with key: {encrypt_pubkey}")
             envs_list = [{"key": k, "value": v} for k, v in envs.items()]
@@ -484,7 +504,7 @@ class VmmCLI:
         print(f"Created VM with ID: {response.get('id')}")
         return response.get('id')
 
-    def update_vm_env(self, vm_id: str, envs: Dict[str, str]) -> None:
+    def update_vm_env(self, vm_id: str, envs: Dict[str, str], kms_urls: Optional[List[str]] = None) -> None:
         """Update environment variables for a VM"""
         # First get the VM info to retrieve the app_id
         vm_info_response = self.rpc_call('GetInfo', {'id': vm_id})
@@ -496,11 +516,7 @@ class VmmCLI:
         print(f"Retrieved app ID: {app_id}")
 
         # Now get the encryption key for the app
-        response = self.rpc_call('GetAppEnvEncryptPubKey', {'app_id': app_id})
-        if 'public_key' not in response:
-            raise Exception("Failed to get encryption public key for the VM")
-
-        encrypt_pubkey = response['public_key']
+        encrypt_pubkey = self.get_app_env_encrypt_pub_key(app_id, kms_urls[0] if kms_urls else None)
         print(f"Encrypting environment variables with key: {encrypt_pubkey}")
         envs_list = [{"key": k, "value": v} for k, v in envs.items()]
         encrypted_env = encrypt_env(envs_list, encrypt_pubkey)
@@ -815,6 +831,10 @@ def main():
                                help='Pin VM to specific NUMA node')
     deploy_parser.add_argument('--hugepages', action='store_true',
                                help='Enable hugepages for the VM')
+    deploy_parser.add_argument('--kms-url', action='append', type=str,
+                               help='KMS URL')
+    deploy_parser.add_argument('--gateway-url', action='append', type=str,
+                               help='Gateway URL')
 
     # Images command
     _images_parser = subparsers.add_parser(
@@ -829,6 +849,9 @@ def main():
     update_env_parser.add_argument('vm_id', help='VM ID to update')
     update_env_parser.add_argument(
         '--env-file', required=True, help='File with environment variables to encrypt')
+    update_env_parser.add_argument(
+        '--kms-url', action='append', type=str,
+        help='KMS URL')
 
     # Whitelist command
     kms_parser = subparsers.add_parser(
@@ -891,7 +914,9 @@ def main():
             app_id=args.app_id,
             gpus=args.gpu,
             hugepages=args.hugepages,
-            pin_numa=args.pin_numa
+            pin_numa=args.pin_numa,
+            kms_urls=args.kms_url,
+            gateway_urls=args.gateway_url
         )
     elif args.command == 'lsimage':
         images = cli.list_images()
@@ -901,7 +926,7 @@ def main():
     elif args.command == 'lsgpu':
         cli.list_gpus()
     elif args.command == 'update-env':
-        cli.update_vm_env(args.vm_id, parse_env_file(args.env_file))
+        cli.update_vm_env(args.vm_id, parse_env_file(args.env_file), kms_urls=args.kms_url)
     elif args.command == 'kms':
         if not args.kms_action:
             kms_parser.print_help()

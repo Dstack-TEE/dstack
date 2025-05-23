@@ -52,6 +52,10 @@ pub struct Manifest {
     pub pin_numa: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gpus: Option<GpuConfig>,
+    #[serde(default)]
+    pub kms_urls: Vec<String>,
+    #[serde(default)]
+    pub gateway_urls: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -460,6 +464,16 @@ impl App {
         let image_path = cfg.image_path.join(&manifest.image);
         let image = Image::load(image_path).context("Failed to load image info")?;
         let img_ver = image.info.version_tuple().unwrap_or((0, 0, 0));
+        let kms_urls = if manifest.kms_urls.is_empty() {
+            cfg.cvm.kms_urls.clone()
+        } else {
+            manifest.kms_urls.clone()
+        };
+        let gateway_urls = if manifest.gateway_urls.is_empty() {
+            cfg.cvm.gateway_urls.clone()
+        } else {
+            manifest.gateway_urls.clone()
+        };
         let sys_config = if img_ver >= (0, 5, 0) {
             let vm_config = serde_json::to_string(&json!({
                 "os_image_hash": image.digest.unwrap_or_default(),
@@ -467,8 +481,8 @@ impl App {
                 "memory_size": manifest.memory as u64 * 1024 * 1024,
             }))?;
             json!({
-                "kms_urls": cfg.cvm.kms_urls,
-                "gateway_urls": cfg.cvm.gateway_urls,
+                "kms_urls": kms_urls,
+                "gateway_urls": gateway_urls,
                 "pccs_url": cfg.cvm.pccs_url,
                 "docker_registry": cfg.cvm.docker_registry,
                 "host_api_url": format!("vsock://2:{}/api", cfg.host_api.port),
@@ -476,8 +490,8 @@ impl App {
             })
         } else if img_ver >= (0, 4, 2) {
             json!({
-                "kms_urls": cfg.cvm.kms_urls,
-                "gateway_urls": cfg.cvm.gateway_urls,
+                "kms_urls": kms_urls,
+                "gateway_urls": gateway_urls,
                 "pccs_url": cfg.cvm.pccs_url,
                 "docker_registry": cfg.cvm.docker_registry,
                 "host_api_url": format!("vsock://2:{}/api", cfg.host_api.port),
@@ -490,8 +504,8 @@ impl App {
                 .context("Rootfs hash not found in image info")?;
             json!({
                 "rootfs_hash": rootfs_hash,
-                "kms_urls": cfg.cvm.kms_urls,
-                "tproxy_urls": cfg.cvm.gateway_urls,
+                "kms_urls": kms_urls,
+                "tproxy_urls": gateway_urls,
                 "pccs_url": cfg.cvm.pccs_url,
                 "docker_registry": cfg.cvm.docker_registry,
                 "host_api_url": format!("vsock://2:{}/api", cfg.host_api.port),
@@ -504,8 +518,8 @@ impl App {
                 .context("Rootfs hash not found in image info")?;
             json!({
                 "rootfs_hash": rootfs_hash,
-                "kms_url": cfg.cvm.kms_urls.first(),
-                "tproxy_url": cfg.cvm.gateway_urls.first(),
+                "kms_url": kms_urls.first(),
+                "tproxy_url": gateway_urls.first(),
                 "pccs_url": cfg.cvm.pccs_url,
                 "docker_registry": cfg.cvm.docker_registry,
                 "host_api_url": format!("vsock://2:{}/api", cfg.host_api.port),
