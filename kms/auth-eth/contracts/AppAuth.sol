@@ -47,11 +47,63 @@ contract AppAuth is
         bool _disableUpgrades,
         bool _allowAnyDevice
     ) public initializer {
-        require(initialOwner != address(0), "Invalid owner address");
-        require(_appId != address(0), "Invalid app ID");
+        _initializeWithData(
+            initialOwner,
+            _appId,
+            _disableUpgrades,
+            _allowAnyDevice,
+            bytes32(0),  // no initial device
+            bytes32(0)   // no initial hash
+        );
+    }
+
+    // Initialize the contract with initial device and compose hash
+    function initializeWithData(
+        address initialOwner,
+        address _appId,
+        bool _disableUpgrades,
+        bool _allowAnyDevice,
+        bytes32 initialDeviceId,
+        bytes32 initialComposeHash
+    ) public initializer {
+        _initializeWithData(
+            initialOwner,
+            _appId,
+            _disableUpgrades,
+            _allowAnyDevice,
+            initialDeviceId,
+            initialComposeHash
+        );
+    }
+
+    // Internal initialization function
+    function _initializeWithData(
+        address initialOwner,
+        address _appId,
+        bool _disableUpgrades,
+        bool _allowAnyDevice,
+        bytes32 initialDeviceId,
+        bytes32 initialComposeHash
+    ) internal {
+        require(initialOwner != address(0), "invalid owner address");
+        require(_appId != address(0), "invalid app ID");
+        
         appId = _appId;
         _upgradesDisabled = _disableUpgrades;
         allowAnyDevice = _allowAnyDevice;
+        
+        // Add initial device if provided
+        if (initialDeviceId != bytes32(0)) {
+            allowedDeviceIds[initialDeviceId] = true;
+            emit DeviceAdded(initialDeviceId);
+        }
+        
+        // Add initial compose hash if provided
+        if (initialComposeHash != bytes32(0)) {
+            allowedComposeHashes[initialComposeHash] = true;
+            emit ComposeHashAdded(initialComposeHash);
+        }
+        
         __Ownable_init(initialOwner);
         __UUPSUpgradeable_init();
     }

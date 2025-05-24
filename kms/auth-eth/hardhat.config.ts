@@ -238,6 +238,66 @@ task("app:deploy", "Deploy AppAuth with a UUPS proxy")
     }
   });
 
+task("app:deploy-with-data", "Deploy AppAuth with initial device and compose hash")
+  .addFlag("allowAnyDevice", "Allow any device to boot this app")
+  .addOptionalParam("device", "Initial device ID", "", types.string)
+  .addOptionalParam("hash", "Initial compose hash", "", types.string)
+  .setAction(async (taskArgs, hre) => {
+    const { ethers } = hre;
+    const [deployer] = await ethers.getSigners();
+    const deployerAddress = await deployer.getAddress();
+    console.log("Deploying with account:", deployerAddress);
+    console.log("Account balance:", await accountBalance(ethers, deployerAddress));
+
+    const kmsContract = await getKmsAuth(ethers);
+    const appId = await kmsContract.nextAppId();
+    console.log("App ID:", appId);
+
+    // Parse device and hash (convert to bytes32, use 0x0 if empty)
+    const deviceId = taskArgs.device ? taskArgs.device.trim() : "0x0000000000000000000000000000000000000000000000000000000000000000";
+    const composeHash = taskArgs.hash ? taskArgs.hash.trim() : "0x0000000000000000000000000000000000000000000000000000000000000000";
+    
+    console.log("Initial device:", deviceId === "0x0000000000000000000000000000000000000000000000000000000000000000" ? "none" : deviceId);
+    console.log("Initial compose hash:", composeHash === "0x0000000000000000000000000000000000000000000000000000000000000000" ? "none" : composeHash);
+
+    // Use a custom deployment function for the new initializer
+    const contractFactory = await ethers.getContractFactory("AppAuth");
+    const appAuth = await hre.upgrades.deployProxy(
+      contractFactory,
+      [deployerAddress, appId, false, taskArgs.allowAnyDevice, deviceId, composeHash],
+      { 
+        kind: 'uups',
+        initializer: 'initializeWithData'
+      }
+    );
+    
+    await appAuth.waitForDeployment();
+    const proxyAddress = await appAuth.getAddress();
+    console.log("AppAuth deployed to:", proxyAddress);
+
+    const tx = await kmsContract.registerApp(proxyAddress);
+    const receipt = await waitTx(tx);
+    
+    // Parse the AppRegistered event from the logs
+    const appRegisteredEvent = receipt.logs
+      .filter((log: any) => log.fragment?.name === 'AppRegistered')
+      .map((log: any) => {
+        const { appId } = log.args;
+        return { appId };
+      })[0];
+
+    if (appRegisteredEvent) {
+      console.log("App registered in KMS successfully");
+      console.log("Registered AppId:", appRegisteredEvent.appId);
+      
+      const hasDevice = deviceId !== "0x0000000000000000000000000000000000000000000000000000000000000000";
+      const hasHash = composeHash !== "0x0000000000000000000000000000000000000000000000000000000000000000";
+      console.log(`Deployed with ${hasDevice ? "1" : "0"} initial device and ${hasHash ? "1" : "0"} initial compose hash`);
+    } else {
+      console.log("App registered in KMS successfully (event not found)");
+    }
+  });
+
 task("app:upgrade", "Upgrade the AppAuth contract")
   .addParam("address", "The address of the contract to upgrade", undefined, types.string, false)
   .addFlag("dryRun", "Simulate the upgrade without executing it")
