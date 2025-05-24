@@ -138,4 +138,132 @@ describe("AppAuth", function () {
       ).to.be.revertedWithCustomError(appAuth, "OwnableUnauthorizedAccount");
     });
   });
+
+  describe("Initialize with device and hash", function () {
+    let appAuthWithData: AppAuth;
+    const testDevice = ethers.randomBytes(32);
+    const testHash = ethers.randomBytes(32);
+    let appIdWithData: string;
+
+    beforeEach(async function () {
+      appIdWithData = ethers.Wallet.createRandom().address;
+      
+      // Deploy using the new initializer
+      const contractFactory = await ethers.getContractFactory("AppAuth");
+      appAuthWithData = await hre.upgrades.deployProxy(
+        contractFactory,
+        [owner.address, appIdWithData, false, false, testDevice, testHash],
+        { 
+          kind: 'uups',
+          initializer: 'initializeWithData'
+        }
+      ) as AppAuth;
+      
+      await appAuthWithData.waitForDeployment();
+    });
+
+    it("Should set basic properties correctly", async function () {
+      expect(await appAuthWithData.owner()).to.equal(owner.address);
+      expect(await appAuthWithData.appId()).to.equal(appIdWithData);
+      expect(await appAuthWithData.allowAnyDevice()).to.be.false;
+    });
+
+    it("Should initialize device correctly", async function () {
+      expect(await appAuthWithData.allowedDeviceIds(testDevice)).to.be.true;
+    });
+
+    it("Should initialize compose hash correctly", async function () {
+      expect(await appAuthWithData.allowedComposeHashes(testHash)).to.be.true;
+    });
+
+    it("Should emit events for initial device and hash", async function () {
+      // Check that events were emitted during initialization
+      const deploymentTx = await appAuthWithData.deploymentTransaction();
+      const receipt = await deploymentTx?.wait();
+      
+      // Count DeviceAdded and ComposeHashAdded events
+      const deviceEvents = receipt?.logs.filter(log => {
+        try {
+          const parsed = appAuthWithData.interface.parseLog({
+            topics: log.topics as string[],
+            data: log.data
+          });
+          return parsed?.name === 'DeviceAdded';
+        } catch {
+          return false;
+        }
+      }) || [];
+      
+      const hashEvents = receipt?.logs.filter(log => {
+        try {
+          const parsed = appAuthWithData.interface.parseLog({
+            topics: log.topics as string[],
+            data: log.data
+          });
+          return parsed?.name === 'ComposeHashAdded';
+        } catch {
+          return false;
+        }
+      }) || [];
+      
+      expect(deviceEvents.length).to.equal(1);
+      expect(hashEvents.length).to.equal(1);
+    });
+
+    it("Should work correctly with isAppAllowed", async function () {
+      const bootInfo = {
+        appId: appIdWithData,
+        composeHash: testHash,
+        instanceId: ethers.Wallet.createRandom().address,
+        deviceId: testDevice,
+        mrAggregated: ethers.randomBytes(32),
+        mrSystem: ethers.randomBytes(32),
+        osImageHash: ethers.randomBytes(32),
+        tcbStatus: "UpToDate",
+        advisoryIds: []
+      };
+
+      const [isAllowed, reason] = await appAuthWithData.isAppAllowed(bootInfo);
+      expect(isAllowed).to.be.true;
+      expect(reason).to.equal("");
+    });
+
+    it("Should reject unauthorized device when allowAnyDevice is false", async function () {
+      const unauthorizedDevice = ethers.randomBytes(32);
+      
+      const bootInfo = {
+        appId: appIdWithData,
+        composeHash: testHash,
+        instanceId: ethers.Wallet.createRandom().address,
+        deviceId: unauthorizedDevice,
+        mrAggregated: ethers.randomBytes(32),
+        mrSystem: ethers.randomBytes(32),
+        osImageHash: ethers.randomBytes(32),
+        tcbStatus: "UpToDate",
+        advisoryIds: []
+      };
+
+      const [isAllowed, reason] = await appAuthWithData.isAppAllowed(bootInfo);
+      expect(isAllowed).to.be.false;
+      expect(reason).to.equal("Device not allowed");
+    });
+
+    it("Should handle empty initialization (no device, no hash)", async function () {
+      const contractFactory = await ethers.getContractFactory("AppAuth");
+      const appAuthEmpty = await hre.upgrades.deployProxy(
+        contractFactory,
+        [owner.address, appIdWithData, false, false, ethers.ZeroHash, ethers.ZeroHash],
+        { 
+          kind: 'uups',
+          initializer: 'initializeWithData'
+        }
+      ) as AppAuth;
+      
+      await appAuthEmpty.waitForDeployment();
+      
+      // Should not have any devices or hashes set
+      expect(await appAuthEmpty.allowedDeviceIds(testDevice)).to.be.false;
+      expect(await appAuthEmpty.allowedComposeHashes(testHash)).to.be.false;
+    });
+  });
 });

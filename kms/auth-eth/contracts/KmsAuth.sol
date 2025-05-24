@@ -5,6 +5,7 @@ import "./IAppAuth.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
+import "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 
 contract KmsAuth is
     Initializable,
@@ -48,6 +49,9 @@ contract KmsAuth is
     // Sequence number for app IDs - per user
     mapping(address => uint256) public nextAppSequence;
 
+    // AppAuth implementation contract address for factory deployment
+    address public appAuthImplementation;
+
     // Events
     event AppRegistered(address appId);
     event KmsInfoSet(bytes k256Pubkey);
@@ -58,6 +62,8 @@ contract KmsAuth is
     event OsImageHashAdded(bytes32 osImageHash);
     event OsImageHashRemoved(bytes32 osImageHash);
     event GatewayAppIdSet(string gatewayAppId);
+    event AppAuthImplementationSet(address implementation);
+    event AppDeployedViaFactory(address indexed appId, address indexed proxyAddress, address indexed deployer);
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -118,6 +124,51 @@ contract KmsAuth is
         apps[appId].controller = controller;
         nextAppSequence[msg.sender]++;
         emit AppRegistered(appId);
+    }
+
+    // Function to set AppAuth implementation contract address
+    function setAppAuthImplementation(address _implementation) external onlyOwner {
+        require(_implementation != address(0), "Invalid implementation address");
+        appAuthImplementation = _implementation;
+        emit AppAuthImplementationSet(_implementation);
+    }
+
+    // Factory method: Deploy and register AppAuth in single transaction
+    function deployAndRegisterApp(
+        address initialOwner,
+        bool disableUpgrades,
+        bool allowAnyDevice,
+        bytes32 initialDeviceId,
+        bytes32 initialComposeHash
+    ) external returns (address appId, address proxyAddress) {
+        require(appAuthImplementation != address(0), "AppAuth implementation not set");
+        require(initialOwner != address(0), "Invalid owner address");
+        
+        // Calculate app ID
+        appId = nextAppId();
+        
+        // Prepare initialization data
+        bytes memory initData = abi.encodeWithSelector(
+            bytes4(keccak256("initializeWithData(address,address,bool,bool,bytes32,bytes32)")),
+            initialOwner,
+            appId,
+            disableUpgrades,
+            allowAnyDevice,
+            initialDeviceId,
+            initialComposeHash
+        );
+        
+        // Deploy proxy contract
+        proxyAddress = address(new ERC1967Proxy(appAuthImplementation, initData));
+        
+        // Register to KMS
+        require(!apps[appId].isRegistered, "App already registered");
+        apps[appId].isRegistered = true;
+        apps[appId].controller = proxyAddress;
+        nextAppSequence[msg.sender]++;
+        
+        emit AppRegistered(appId);
+        emit AppDeployedViaFactory(appId, proxyAddress, msg.sender);
     }
 
     // Function to register an aggregated MR measurement
