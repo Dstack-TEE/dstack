@@ -1,0 +1,30 @@
+{
+  "name": "dstack",
+  "version": "1.0.0",
+  "description": "[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/Dstack-TEE/dstack)",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/DylanCkawalec/dstack.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/DylanCkawalec/dstack/issues"
+  },
+  "homepage": "https://github.com/DylanCkawalec/dstack#readme",
+  "devDependencies": {
+    "mintlify": "^4.0.559"
+  },
+  "dependencies": {
+    "@mintlify/cli": "^4.0.557"
+  }
+}
