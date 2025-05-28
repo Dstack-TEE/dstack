@@ -164,6 +164,8 @@ impl VmmRpc for RpcHandler {
             .hugepages(request.hugepages)
             .pin_numa(request.pin_numa)
             .gpus(gpus)
+            .kms_urls(request.kms_urls.clone())
+            .gateway_urls(request.gateway_urls.clone())
             .build();
         let vm_work_dir = self.app.work_dir(&id);
         vm_work_dir
