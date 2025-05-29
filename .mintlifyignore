@@ -1,4 +1,55 @@
-README.md
+# Ignore all markdown files except those in docs
 *.md
 !docs/**/*.md
-!docs/**/*.mdx 
+!docs/**/*.mdx
+
+# Ignore all non-docs directories
+basefiles/
+cc-eventlog/
+cert-client/
+certbot/
+ct_monitor/
+dstack-types/
+dstack-util/
+gateway/
+guest-agent/
+guest-api/
+host-api/
+http-client/
+iohash/
+key-provider-build/
+key-provider-client/
+kms/
+load_config/
+lspci/
+mod-tdx-guest/
+python/
+ra-rpc/
+ra-tls/
+rocket-vsock-listener/
+sdk/
+serde-duration/
+sodiumbox/
+supervisor/
+tdx-attest/
+tdx-attest-sys/
+test-scripts/
+vmm/
+
+# Ignore build and config files
+*.toml
+*.yaml
+*.yml
+*.lock
+*.sh
+Makefile
+Cargo.toml
+Cargo.lock
+
+# Ignore hidden files
+.git/
+.github/
+.*
+
+# Node modules
+node_modules/ 

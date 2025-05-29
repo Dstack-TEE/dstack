@@ -7,7 +7,7 @@
     "light": "#4D9CFF",
     "dark": "#0050B4"
   },
-  "favicon": "/favicon.png",
+  "favicon": "/docs/public/favicon.png",
   "navigation": {
     "tabs": [
       {
@@ -16,47 +16,50 @@
           {
             "group": "Overview",
             "pages": [
-              "index",
-              "overview/what-is-dstack",
-              "overview/key-features",
-              "overview/benefits"
+              "docs/index",
+              "docs/introduction",
+              "docs/overview/what-is-dstack",
+              "docs/overview/key-features",
+              "docs/overview/benefits"
             ]
           },
           {
             "group": "Getting Started",
             "pages": [
-              "quickstart",
-              "getting-started/installation",
-              "getting-started/first-deployment"
+              "docs/quickstart",
+              "docs/getting-started/installation",
+              "docs/getting-started/first-deployment"
             ]
           },
           {
             "group": "Core Concepts",
             "pages": [
-              "concepts/overview",
-              "concepts/architecture",
-              "concepts/core-components",
-              "concepts/security-model",
-              "concepts/networking"
+              "docs/concepts/overview",
+              "docs/concepts/architecture",
+              "docs/concepts/core-components",
+              "docs/concepts/security-model",
+              "docs/concepts/networking"
+            ]
+          },
+          {
+            "group": "dstack Reference",
+            "pages": [
+              "docs/dstack-reference/dstack-wiki",
+              "docs/dstack-reference/structure",
+              "docs/dstack-reference/content",
+              "docs/dstack-reference/context"
             ]
           },
           {
             "group": "Deployment Guides",
             "pages": [
-              "deployment-guides/deploying-applications",
-              "deployment-guides/configuring-components",
-              "deployment-guides/managing-keys-and-secrets",
-              "deployment-guides/monitoring-and-logging"
+              "docs/deployment-guides/deploying-applications"
             ]
           },
           {
             "group": "Tutorials",
             "pages": [
-              "tutorials/python-example",
-              "tutorials/javascript-example",
-              "tutorials/rust-example",
-              "tutorials/use-case-phala-cloud",
-              "tutorials/use-case-secure-web-app"
+              "docs/tutorials/python-example"
             ]
           }
         ]
@@ -67,50 +70,8 @@
           {
             "group": "API Reference",
             "pages": [
-              "api-reference/overview",
-              "api-reference/authentication",
-              "api-reference/vmm-api",
-              "api-reference/guest-api",
-              "api-reference/kms-api"
-            ]
-          },
-          {
-            "group": "SDKs",
-            "pages": [
-              "api-reference/sdk/python",
-              "api-reference/sdk/javascript",
-              "api-reference/sdk/go"
-            ]
-          }
-        ]
-      },
-      {
-        "tab": "Resources",
-        "groups": [
-          {
-            "group": "Reference",
-            "pages": [
-              "reference/cli-commands",
-              "reference/configuration",
-              "reference/environment-variables",
-              "reference/glossary"
-            ]
-          },
-          {
-            "group": "Troubleshooting",
-            "pages": [
-              "troubleshooting/common-issues",
-              "troubleshooting/debugging-guide",
-              "troubleshooting/error-codes"
-            ]
-          },
-          {
-            "group": "Community",
-            "pages": [
-              "community/contributing",
-              "community/support",
-              "community/roadmap",
-              "community/faq"
+              "docs/api-reference/overview",
+              "docs/api-reference/authentication"
             ]
           }
         ]
@@ -118,8 +79,8 @@
     ]
   },
   "logo": {
-    "light": "/logo/light.png",
-    "dark": "/logo/dark.png"
+    "light": "/docs/public/logo/light.png",
+    "dark": "/docs/public/logo/dark.png"
   },
   "api": {
     "mdx": {
@@ -130,7 +91,7 @@
     }
   },
   "background": {
-    "image": "/background.png"
+    "image": "/docs/public/background.png"
   },
   "navbar": {
     "links": [

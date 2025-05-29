@@ -1,0 +1,175 @@
+---
+title: "Troubleshooting"
+description: "Common issues and solutions for dstack deployments"
+---
+
+# Troubleshooting
+
+This guide helps you resolve common issues when working with dstack.
+
+## Common Issues
+
+### Services Won't Start
+
+If dstack services fail to start, check the following:
+
+```bash
+# Check if ports are already in use
+sudo netstat -tulpn | grep -E '9080|443|8000'
+
+# Check service logs
+sudo journalctl -u dstack-vmm -n 50
+sudo journalctl -u dstack-gateway -n 50
+sudo journalctl -u dstack-kms -n 50
+```
+
+**Common causes:**
+- Port conflicts (especially 9080, 443, 8000)
+- Missing configuration files
+- Insufficient permissions
+
+### CID Conflicts
+
+**Error:** "CID already in use" or similar CID-related errors
+
+**Solution:**
+1. Check `vmm.toml` for CID range configuration
+2. Adjust `cid_start` and `cid_pool_size`:
+   ```toml
+   [resources]
+   cid_start = 33000
+   cid_pool_size = 1000
+   ```
+
+### Guest Build Errors
+
+**Error:** AppArmor restrictions on unprivileged user namespaces
+
+**Solution:**
+```bash
+sudo sysctl kernel.apparmor_restrict_unprivileged_userns=0
+```
+
+### Deployment Failures
+
+When deployments fail:
+
+1. **Check Docker image availability:**
+   ```bash
+   docker-compose config
+   docker pull <your-image>
+   ```
+
+2. **Verify resources:**
+   ```bash
+   # Check available memory and disk
+   free -h
+   df -h
+   ```
+
+3. **Review deployment logs:**
+   - Access web UI at `http://localhost:9080`
+   - Use API to fetch logs
+
+### Application Not Accessible
+
+If your deployed application isn't accessible:
+
+1. **Check application status:**
+   ```bash
+   # Via API
+   curl http://localhost:9080/api/apps
+   ```
+
+2. **Verify port mappings:**
+   - Check `docker-compose.yml` port configuration
+   - Ensure gateway routing is configured correctly
+
+3. **Test connectivity:**
+   ```bash
+   # Test gateway
+   curl -v https://<app-id>.app.example.com
+   
+   # Test direct CVM access (if applicable)
+   curl http://localhost:<mapped-port>
+   ```
+
+### Certificate Issues
+
+**Problem:** HTTPS certificates not working
+
+**Solutions:**
+1. Check DNS configuration for custom domains
+2. Verify CAA records if using Let's Encrypt
+3. Monitor certificate transparency logs
+4. Check certbot logs:
+   ```bash
+   sudo journalctl -u certbot -n 50
+   ```
+
+### Remote Attestation Failures
+
+If remote attestation fails:
+
+1. Ensure TEE hardware is properly configured
+2. Check that debug mode is disabled
+3. Verify KMS is running and accessible
+4. Review attestation logs in the web UI
+
+## Debugging Tips
+
+### Enable Debug Logging
+
+In your configuration files, set:
+```toml
+[general]
+log_level = "debug"
+```
+
+### Check Component Health
+
+```bash
+# Check all dstack processes
+ps aux | grep dstack
+
+# Check network connectivity
+ping <gateway-ip>
+nc -zv localhost 9080
+```
+
+### Collect Diagnostic Information
+
+When reporting issues, include:
+1. Output of `dstack version`
+2. Configuration files (sanitized)
+3. Relevant log excerpts
+4. Hardware specifications
+5. TEE attestation status
+
+## Performance Tuning
+
+### Resource Allocation
+
+Optimize performance by adjusting:
+- CPU and memory limits in `vmm.toml`
+- Network buffer sizes
+- Disk I/O settings
+
+### Monitoring
+
+Set up monitoring for:
+- CPU and memory usage
+- Network throughput
+- Disk I/O patterns
+- Application response times
+
+## Getting Help
+
+If you can't resolve an issue:
+
+1. Check the [FAQ](/docs/community#faq)
+2. Search [GitHub Issues](https://github.com/Dstack-TEE/dstack/issues)
+3. Join our [Discord community](https://discord.gg/phala)
+4. Open a [new issue](https://github.com/Dstack-TEE/dstack/issues/new)
+
+**See Also:** [Installation](/docs/getting-started/installation), [Deployment Guide](/docs/deployment-guides/deploying-applications), [Community Support](/docs/community) 
