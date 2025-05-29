@@ -396,9 +396,11 @@ Now that you've deployed your first application, explore more advanced features:
   <Card title="Deploy Complex Apps" icon="layer-group" href="/deployment-guides/deploying-applications">
     Multi-service applications and databases
   </Card>
+  {/* Managing keys page coming soon:
   <Card title="Manage Secrets" icon="key" href="/deployment-guides/managing-keys-and-secrets">
     Secure key and secret management
   </Card>
+  */}
   <Card title="Python Tutorial" icon="python" href="/tutorials/python-example">
     Build a secure Python application
   </Card>
@@ -427,17 +429,17 @@ dstack remove my-first-app
 
 ### API Endpoints
 
-Your deployed application exposes several endpoints:
+- **VMM API**: `http://localhost:9080/api`
+- **Guest API**: `http://<app-cid>:8090`
+- **Health Check**: `http://<app-url>/health`
 
-| Endpoint | Description |
-|----------|-------------|
-| `/` | Main application endpoint |
-| `/health` | Health check endpoint |
-| `/__dstack__/attestation` | Attestation information |
-| `/__dstack__/metrics` | Application metrics |
+- [API Overview](/api-reference/overview) - API documentation overview
+
+For more information about key management and API reference, see the [deployment guide](/deployment-guides/deploying-applications#key-management) and [API documentation](/api-reference/overview).
 
 ## Learn More
 
 - [System Architecture](/concepts/architecture) - Understand how dstack works
 - [Security Model](/concepts/security-model) - Deep dive into TEE security
-- [API Reference](/reference/api) - Complete API documentation 
+
+For more information about key management and API reference, see the [deployment guide](/deployment-guides/deploying-applications#key-management) and [API documentation](/api-reference/overview). 
