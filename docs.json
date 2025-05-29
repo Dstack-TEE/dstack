@@ -20,7 +20,8 @@
               "docs/introduction",
               "docs/overview/what-is-dstack",
               "docs/overview/key-features",
-              "docs/overview/benefits"
+              "docs/overview/benefits",
+              "docs/case-studies"
             ]
           },
           {
@@ -34,11 +35,11 @@
           {
             "group": "Core Concepts",
             "pages": [
+              "docs/concepts/overview",
               "docs/concepts/architecture",
               "docs/concepts/core-components",
               "docs/concepts/networking",
-              "docs/concepts/security-model",
-              "docs/concepts/overview"
+              "docs/concepts/security-model"
             ]
           },
           {
@@ -51,8 +52,10 @@
             "group": "Tutorials",
             "pages": [
               "docs/tutorials/index",
-              "docs/tutorials/introduction",
-              "docs/tutorials/community"
+              "docs/tutorials/python-example",
+              "docs/tutorials/javascript-example",
+              "docs/tutorials/rust-example",
+              "docs/tutorials/secure-web-app"
             ]
           },
           {
@@ -65,8 +68,9 @@
             ]
           },
           {
-            "group": "Troubleshooting & Support",
+            "group": "Community & Support",
             "pages": [
+              "docs/community",
               "docs/troubleshooting"
             ]
           }
