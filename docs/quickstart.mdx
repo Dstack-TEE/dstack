@@ -5,60 +5,285 @@ description: "Get up and running with dstack in minutes"
 
 # Quick Start Guide
 
-This guide will help you get started with dstack quickly. Follow these steps to set up your environment and create your first project.
+This guide provides the fastest path to getting dstack up and running. For detailed instructions, see our comprehensive guides.
 
-## Prerequisites
+<div className="bg-blue-50 border-l-4 border-blue-400 p-4 mb-6">
+  <div className="flex">
+    <div className="ml-3">
+      <p className="text-sm text-blue-700">
+        <strong>No TEE Hardware?</strong> Use <a href="https://cloud.phala.network/register?invite=beta" className="underline">Phala Cloud</a> to test dstack instantly without local setup.
+      </p>
+    </div>
+  </div>
+</div>
 
-Before you begin, make sure you have the following installed:
+## 🚀 5-Minute Quick Start
 
-- Node.js (v14 or later)
-- npm or yarn
-- Git
+### Prerequisites
 
-## Installation
+- Ubuntu 24.04 with Intel TDX support
+- 16GB RAM, 100GB storage
+- Basic familiarity with Docker
 
-Install dstack using npm:
-
-```bash
-npm install -g dstack-cli
-```
-
-Or using yarn:
-
-```bash
-yarn global add dstack-cli
-```
-
-## Create Your First Project
-
-1. Initialize a new dstack project:
+### Step 1: Install Dependencies
 
 ```bash
-dstack init my-first-project
-cd my-first-project
+# Install system packages
+sudo apt update && sudo apt install -y \
+    build-essential chrpath diffstat lz4 \
+    wireguard-tools xorriso git curl
+
+# Install Rust
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source $HOME/.cargo/env
 ```
 
-2. Configure your project:
+### Step 2: Clone and Build
 
 ```bash
-dstack configure
+# Clone repository
+git clone https://github.com/Dstack-TEE/meta-dstack.git --recursive
+cd meta-dstack
+
+# Configure and build
+./build.sh hostcfg
+./build.sh build
+
+# Download guest image
+./build.sh dl 0.5.1
 ```
 
-3. Deploy your project:
+### Step 3: Start Services
 
 ```bash
-dstack deploy
+# Start in separate terminals
+./dstack-kms -c kms.toml
+sudo ./dstack-gateway -c gateway.toml
+./dstack-vmm -c vmm.toml
 ```
 
-## Next Steps
+### Step 4: Deploy Your First App
 
-Now that you've created your first project, you can:
+Create a simple `docker-compose.yml`:
 
-- [Learn about the core concepts](/concepts/overview)
-- [Explore the API reference](/api-reference/overview)
-- [Configure advanced settings](/)
+```yaml
+version: '3.8'
+services:
+  app:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+```
 
-## Troubleshooting
+Deploy it:
+```bash
+# Via Web UI
+# Navigate to http://localhost:9080
 
-If you encounter any issues during installation or setup, please refer to our [troubleshooting guide](/) or [contact support](/).
+# Or via CLI
+dstack deploy -f docker-compose.yml
+```
+
+## 📖 Detailed Guides
+
+<CardGroup cols={2}>
+  <Card title="Complete Installation" icon="download" href="/getting-started/installation">
+    Step-by-step installation with troubleshooting
+  </Card>
+  <Card title="First Deployment" icon="rocket" href="/getting-started/first-deployment">
+    Deploy and verify your first secure application
+  </Card>
+</CardGroup>
+
+## 🎯 Common Use Cases
+
+### Deploy a Python Web App
+
+```python
+# app.py
+from flask import Flask
+app = Flask(__name__)
+
+@app.route('/')
+def hello():
+    return 'Hello from dstack!'
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=8080)
+```
+
+```dockerfile
+# Dockerfile
+FROM python:3.11-slim
+WORKDIR /app
+RUN pip install flask
+COPY app.py .
+CMD ["python", "app.py"]
+```
+
+[Full Python Tutorial →](/tutorials/python-example)
+
+### Deploy a Node.js API
+
+```javascript
+// server.js
+const express = require('express');
+const app = express();
+
+app.get('/', (req, res) => {
+  res.json({ message: 'Secure API in TEE' });
+});
+
+app.listen(3000);
+```
+
+[Full Node.js Tutorial →](/tutorials/javascript-example)
+
+## 🛠️ Essential Commands
+
+```bash
+# Check installation
+dstack version
+
+# List deployments
+dstack list
+
+# View logs
+dstack logs <app-name>
+
+# Get attestation
+dstack attest <app-name>
+```
+
+## 🔧 Quick Configuration
+
+### Minimal Configuration Files
+
+<details>
+<summary>kms.toml</summary>
+
+```toml
+[general]
+log_level = "info"
+
+[rpc]
+listen = "127.0.0.1:8000"
+```
+
+</details>
+
+<details>
+<summary>gateway.toml</summary>
+
+```toml
+[network]
+public_ip = "YOUR_IP"
+srv_domain = "app.example.com"
+
+[gateway]
+listen = "0.0.0.0:443"
+```
+
+</details>
+
+<details>
+<summary>vmm.toml</summary>
+
+```toml
+[resources]
+cid_start = 33000
+max_vms = 10
+
+[api]
+listen = "127.0.0.1:9080"
+```
+
+</details>
+
+## 🆘 Quick Troubleshooting
+
+### Services Won't Start
+```bash
+# Check ports
+sudo netstat -tulpn | grep -E '9080|443'
+
+# View logs
+sudo journalctl -u dstack-vmm -n 50
+```
+
+### Deployment Fails
+```bash
+# Check Docker image
+docker-compose config
+
+# Verify resources
+dstack resources
+```
+
+### Can't Access App
+```bash
+# Check status
+dstack status <app-name>
+
+# Test connectivity
+curl http://localhost:9080/api/health
+```
+
+## 📚 Learn More
+
+<div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-6">
+  <div className="text-center p-4 border rounded-lg">
+    <div className="text-3xl mb-2">🏗️</div>
+    <h3 className="font-semibold">Architecture</h3>
+    <p className="text-sm text-gray-600 mb-2">
+      Understand how dstack works
+    </p>
+    <a href="/concepts/architecture" className="text-blue-600 hover:underline">
+      Learn →
+    </a>
+  </div>
+  <div className="text-center p-4 border rounded-lg">
+    <div className="text-3xl mb-2">🔒</div>
+    <h3 className="font-semibold">Security</h3>
+    <p className="text-sm text-gray-600 mb-2">
+      TEEs and attestation explained
+    </p>
+    <a href="/concepts/security-model" className="text-blue-600 hover:underline">
+      Explore →
+    </a>
+  </div>
+  <div className="text-center p-4 border rounded-lg">
+    <div className="text-3xl mb-2">🚀</div>
+    <h3 className="font-semibold">Examples</h3>
+    <p className="text-sm text-gray-600 mb-2">
+      Real-world applications
+    </p>
+    <a href="/tutorials" className="text-blue-600 hover:underline">
+      Browse →
+    </a>
+  </div>
+</div>
+
+## 🤝 Get Help
+
+- 📖 [Full Documentation](/)
+- 💬 [GitHub Discussions](https://github.com/Dstack-TEE/dstack/discussions)
+- 🐛 [Report Issues](https://github.com/Dstack-TEE/dstack/issues)
+- 📧 [Contact Support](mailto:support@dstack.dev)
+
+---
+
+<div className="mt-8 text-center">
+  <p className="text-gray-600 mb-4">
+    Ready for the complete experience?
+  </p>
+  <div className="flex gap-4 justify-center">
+    <a href="/getting-started/installation" className="bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700">
+      Full Installation Guide →
+    </a>
+    <a href="/overview/what-is-dstack" className="bg-gray-200 text-gray-800 px-6 py-3 rounded-lg hover:bg-gray-300">
+      Learn About dstack
+    </a>
+  </div>
+</div>
 

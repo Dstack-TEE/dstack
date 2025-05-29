@@ -1,0 +1,326 @@
+---
+title: "Benefits"
+description: "Discover how dstack delivers value to developers, enterprises, and end users"
+---
+
+# Benefits of Using dstack
+
+dstack offers compelling advantages for different stakeholders in the software ecosystem. Whether you're a developer looking to add security to your applications, an enterprise protecting sensitive data, or an end user concerned about privacy, dstack provides tangible benefits that address real-world challenges.
+
+## For Developers
+
+### 🚀 **Rapid Time to Market**
+
+Ship secure applications faster without becoming a security expert.
+
+<div className="grid grid-cols-1 md:grid-cols-2 gap-6 my-6">
+  <div className="bg-green-50 p-6 rounded-lg">
+    <h4 className="font-semibold text-green-800 mb-2">Traditional Approach</h4>
+    <ul className="space-y-2 text-sm">
+      <li>❌ Weeks learning TEE specifics</li>
+      <li>❌ Significant code refactoring</li>
+      <li>❌ Complex deployment process</li>
+      <li>❌ Vendor-specific implementations</li>
+    </ul>
+  </div>
+  <div className="bg-blue-50 p-6 rounded-lg">
+    <h4 className="font-semibold text-blue-800 mb-2">With dstack</h4>
+    <ul className="space-y-2 text-sm">
+      <li>✅ Deploy in minutes</li>
+      <li>✅ Zero code changes required</li>
+      <li>✅ Familiar Docker workflows</li>
+      <li>✅ Hardware-agnostic deployment</li>
+    </ul>
+  </div>
+</div>
+
+### 💻 **Focus on Your Code**
+
+Write business logic, not security infrastructure.
+
+```python
+# Your existing application code works as-is
+from flask import Flask
+app = Flask(__name__)
+
+@app.route('/api/sensitive-data')
+def handle_sensitive_data():
+    # dstack handles the security layer
+    return process_data()
+```
+
+**What dstack handles for you:**
+- Hardware attestation complexity
+- Key management infrastructure
+- Secure communication channels
+- Certificate management
+- Encryption at rest and in transit
+
+### 🔧 **Developer-Friendly Tooling**
+
+Work with tools you already know and love.
+
+<CardGroup cols={3}>
+  <Card title="Native SDKs" icon="code">
+    First-class support for Python, JavaScript, Go, and more
+  </Card>
+  <Card title="CI/CD Ready" icon="rocket">
+    Integrate with GitHub Actions, GitLab CI, Jenkins
+  </Card>
+  <Card title="Local Testing" icon="laptop">
+    Test locally before deploying to production TEEs
+  </Card>
+</CardGroup>
+
+### 📚 **Reduced Learning Curve**
+
+<div className="bg-gray-50 p-6 rounded-lg my-6">
+  <h4 className="font-semibold mb-4">Time to First Secure Deployment</h4>
+  <div className="space-y-3">
+    <div className="flex items-center gap-4">
+      <span className="text-sm font-medium w-32">Raw TEE APIs</span>
+      <div className="flex-1 bg-red-200 h-6 rounded" style={{width: '100%'}}></div>
+      <span className="text-sm">4-6 weeks</span>
+    </div>
+    <div className="flex items-center gap-4">
+      <span className="text-sm font-medium w-32">Traditional TEE SDKs</span>
+      <div className="flex-1 bg-yellow-200 h-6 rounded" style={{width: '60%'}}></div>
+      <span className="text-sm">2-3 weeks</span>
+    </div>
+    <div className="flex items-center gap-4">
+      <span className="text-sm font-medium w-32">dstack</span>
+      <div className="flex-1 bg-green-200 h-6 rounded" style={{width: '10%'}}></div>
+      <span className="text-sm">< 1 day</span>
+    </div>
+  </div>
+</div>
+
+## For Enterprises
+
+### 🛡️ **Enhanced Security Posture**
+
+Protect sensitive data with hardware-level isolation.
+
+**Key Security Benefits:**
+- **Data Protection**: Encrypted memory prevents unauthorized access
+- **Code Integrity**: Remote attestation ensures unmodified execution
+- **Compliance Ready**: Meet stringent regulatory requirements
+- **Zero Trust**: Every component verified before interaction
+
+### 💰 **Reduced Operational Costs**
+
+Lower TCO compared to traditional security solutions.
+
+<table className="w-full my-6">
+  <thead>
+    <tr className="bg-gray-100">
+      <th className="p-3 text-left">Cost Factor</th>
+      <th className="p-3 text-left">Traditional Security</th>
+      <th className="p-3 text-left">dstack</th>
+      <th className="p-3 text-left">Savings</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td className="p-3">Development Time</td>
+      <td className="p-3">6-12 months</td>
+      <td className="p-3">1-2 months</td>
+      <td className="p-3 text-green-600">80%+ reduction</td>
+    </tr>
+    <tr className="bg-gray-50">
+      <td className="p-3">Security Audits</td>
+      <td className="p-3">Quarterly</td>
+      <td className="p-3">Automated verification</td>
+      <td className="p-3 text-green-600">75% reduction</td>
+    </tr>
+    <tr>
+      <td className="p-3">Infrastructure</td>
+      <td className="p-3">Complex HSM setup</td>
+      <td className="p-3">Standard servers</td>
+      <td className="p-3 text-green-600">50% reduction</td>
+    </tr>
+    <tr className="bg-gray-50">
+      <td className="p-3">Maintenance</td>
+      <td className="p-3">Dedicated team</td>
+      <td className="p-3">Automated updates</td>
+      <td className="p-3 text-green-600">60% reduction</td>
+    </tr>
+  </tbody>
+</table>
+
+### 🌍 **Vendor Independence**
+
+Avoid lock-in with hardware-agnostic architecture.
+
+**Portability Benefits:**
+- Deploy on Intel TDX today
+- Move to AMD SEV tomorrow
+- Support ARM CCA in the future
+- No code changes required
+
+### 📊 **Improved Compliance**
+
+Meet regulatory requirements with built-in security features.
+
+<div className="grid grid-cols-2 md:grid-cols-4 gap-4 my-6">
+  <div className="text-center p-4 border rounded-lg">
+    <div className="text-2xl mb-2">🏥</div>
+    <div className="font-semibold">HIPAA</div>
+    <div className="text-sm text-gray-600">Healthcare</div>
+  </div>
+  <div className="text-center p-4 border rounded-lg">
+    <div className="text-2xl mb-2">💳</div>
+    <div className="font-semibold">PCI-DSS</div>
+    <div className="text-sm text-gray-600">Payment</div>
+  </div>
+  <div className="text-center p-4 border rounded-lg">
+    <div className="text-2xl mb-2">🇪🇺</div>
+    <div className="font-semibold">GDPR</div>
+    <div className="text-sm text-gray-600">Privacy</div>
+  </div>
+  <div className="text-center p-4 border rounded-lg">
+    <div className="text-2xl mb-2">🏦</div>
+    <div className="font-semibold">SOC 2</div>
+    <div className="text-sm text-gray-600">Security</div>
+  </div>
+</div>
+
+## For End Users
+
+### 🔐 **True Data Privacy**
+
+Your data remains confidential, even from the service provider.
+
+**Privacy Guarantees:**
+- Encrypted processing ensures data isn't visible to anyone
+- Hardware attestation proves security claims
+- No backdoors or unauthorized access possible
+- You control who can access your data
+
+### ✅ **Verifiable Security**
+
+Don't just trust - verify.
+
+<div className="bg-blue-50 p-6 rounded-lg my-6">
+  <h4 className="font-semibold mb-3">User Verification Options</h4>
+  <ul className="space-y-2">
+    <li>🔍 Check remote attestation reports</li>
+    <li>📋 Verify code hashes match published versions</li>
+    <li>🔗 Audit blockchain records for transparency</li>
+    <li>🛡️ Confirm hardware security features are active</li>
+  </ul>
+</div>
+
+### 🚀 **Better Performance**
+
+Security without sacrificing user experience.
+
+**Performance Benefits:**
+- Native execution speed (no virtualization overhead)
+- Optimized for TEE hardware
+- Efficient resource utilization
+- Low latency operations
+
+## Industry-Specific Benefits
+
+### 🏥 **Healthcare**
+
+- **Patient Privacy**: Process medical records without exposure
+- **Research Collaboration**: Share insights, not raw data
+- **Regulatory Compliance**: HIPAA-compliant by design
+- **Secure Telemedicine**: End-to-end encrypted consultations
+
+### 💰 **Financial Services**
+
+- **Transaction Security**: Process payments in isolated environments
+- **Fraud Prevention**: Secure ML models for detection
+- **Data Sovereignty**: Keep sensitive data in specific regions
+- **Multi-party Computation**: Enable secure data sharing between institutions
+
+### 🤖 **AI/ML**
+
+- **Model Protection**: Keep proprietary models confidential
+- **Data Privacy**: Train on sensitive data without exposure
+- **Federated Learning**: Secure multi-party training
+- **Inference Security**: Protect both models and input data
+
+### 🏛️ **Government**
+
+- **Citizen Privacy**: Process personal data securely
+- **Inter-agency Sharing**: Collaborate without data exposure
+- **Audit Trails**: Blockchain-backed transparency
+- **National Security**: Hardware-level protection for sensitive operations
+
+## Competitive Advantages
+
+### vs. Traditional Security Solutions
+
+<table className="w-full my-6">
+  <thead>
+    <tr className="bg-gray-100">
+      <th className="p-3 text-left">Feature</th>
+      <th className="p-3 text-left">Traditional</th>
+      <th className="p-3 text-left">dstack</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td className="p-3">Setup Time</td>
+      <td className="p-3">Weeks to months</td>
+      <td className="p-3 font-semibold text-green-600">Hours</td>
+    </tr>
+    <tr className="bg-gray-50">
+      <td className="p-3">Code Changes</td>
+      <td className="p-3">Extensive refactoring</td>
+      <td className="p-3 font-semibold text-green-600">None required</td>
+    </tr>
+    <tr>
+      <td className="p-3">Hardware Lock-in</td>
+      <td className="p-3">Vendor specific</td>
+      <td className="p-3 font-semibold text-green-600">Hardware agnostic</td>
+    </tr>
+    <tr className="bg-gray-50">
+      <td className="p-3">Key Management</td>
+      <td className="p-3">Complex HSM setup</td>
+      <td className="p-3 font-semibold text-green-600">Automated & decentralized</td>
+    </tr>
+    <tr>
+      <td className="p-3">Verification</td>
+      <td className="p-3">Trust-based</td>
+      <td className="p-3 font-semibold text-green-600">Cryptographic proof</td>
+    </tr>
+  </tbody>
+</table>
+
+## ROI Calculator
+
+<div className="bg-gray-50 p-6 rounded-lg my-6">
+  <h3 className="font-semibold mb-4">Estimated Savings with dstack</h3>
+  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+    <div className="bg-white p-4 rounded">
+      <div className="text-3xl font-bold text-green-600">80%</div>
+      <div className="text-sm text-gray-600">Faster deployment</div>
+    </div>
+    <div className="bg-white p-4 rounded">
+      <div className="text-3xl font-bold text-green-600">60%</div>
+      <div className="text-sm text-gray-600">Lower operational costs</div>
+    </div>
+    <div className="bg-white p-4 rounded">
+      <div className="text-3xl font-bold text-green-600">90%</div>
+      <div className="text-sm text-gray-600">Reduced security incidents</div>
+    </div>
+  </div>
+</div>
+
+## Start Realizing These Benefits
+
+Ready to transform how you build and deploy secure applications?
+
+<div className="mt-8 flex gap-4">
+  <a href="/getting-started/installation" className="bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700">
+    Start Free →
+  </a>
+  <a href="/tutorials/python-example" className="bg-gray-200 text-gray-800 px-6 py-3 rounded-lg hover:bg-gray-300">
+    See Examples
+  </a>
+</div> 

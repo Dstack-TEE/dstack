@@ -1,44 +1,116 @@
 ---
 title: "dstack Documentation"
-description: "Welcome to the official documentation for dstack"
+description: "Deploy secure applications to Trusted Execution Environments with ease"
 ---
 
 # Welcome to dstack
 
-dstack is a powerful platform designed to help you build, deploy, and manage your applications efficiently.
+<p className="text-lg text-gray-600">
+  dstack is an open-source platform that simplifies deploying containerized applications to Trusted Execution Environments (TEEs), ensuring high security with minimal configuration.
+</p>
 
-## Getting Started
+<div className="mt-8">
+  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+    <Card title="Quick Start in 5 Minutes" icon="rocket" iconColor="#0069ED">
+      Deploy your first secure application to a TEE environment
+    </Card>
+    <Card title="Enterprise-Grade Security" icon="shield-check" iconColor="#10B981">
+      Hardware-based isolation with remote attestation and encrypted communication
+    </Card>
+    <Card title="Developer Friendly" icon="code" iconColor="#8B5CF6">
+      Use familiar Docker workflows with minimal code changes
+    </Card>
+    <Card title="Decentralized & Portable" icon="cube" iconColor="#F59E0B">
+      Blockchain-controlled key management and hardware-agnostic deployment
+    </Card>
+  </div>
+</div>
 
-Get up and running with dstack:
+## Get Started
 
-<CardGroup cols={2}>
-  <Card title="Introduction" icon="book" href="/introduction">
-    Learn about what dstack is and how it can help you
+<CardGroup cols={3}>
+  <Card title="What is dstack?" icon="info-circle" href="/overview/what-is-dstack">
+    Learn about dstack's purpose and capabilities
   </Card>
-  <Card title="Quick Start" icon="rocket" href="/quickstart">
-    Start using dstack in minutes
+  <Card title="Installation" icon="download" href="/getting-started/installation">
+    Set up dstack on your server
+  </Card>
+  <Card title="First Deployment" icon="play" href="/getting-started/first-deployment">
+    Deploy your first secure application
   </Card>
 </CardGroup>
 
 ## Core Concepts
 
 <CardGroup cols={2}>
-  <Card title="Overview" icon="map" href="/concepts/overview">
-    Understand the core concepts behind dstack
+  <Card title="System Architecture" icon="sitemap" href="/concepts/architecture">
+    Understand dstack's layered architecture and component interactions
   </Card>
-  <Card title="Architecture" icon="cube" href="/concepts/architecture">
-    Learn about dstack's architecture
+  <Card title="Security Model" icon="lock" href="/concepts/security-model">
+    Learn about TEEs, remote attestation, and key management
+  </Card>
+  <Card title="Core Components" icon="puzzle-piece" href="/concepts/core-components">
+    Explore dstack-vmm, dstack-gateway, dstack-kms, and more
+  </Card>
+  <Card title="Networking" icon="network-wired" href="/concepts/networking">
+    Discover how dstack handles HTTPS routing and certificates
   </Card>
 </CardGroup>
 
-## API Reference
+## Deployment & Tutorials
+
+<CardGroup cols={3}>
+  <Card title="Deploy Applications" icon="upload" href="/deployment-guides/deploying-applications">
+    Step-by-step guide to deploying containerized apps
+  </Card>
+  <Card title="Python Tutorial" icon="python" href="/tutorials/python-example">
+    Deploy a Flask application
+  </Card>
+  <Card title="Node.js Tutorial" icon="node-js" href="/tutorials/javascript-example">
+    Deploy an Express application
+  </Card>
+</CardGroup>
+
+## Reference & Support
 
 <CardGroup cols={2}>
-  <Card title="API Overview" icon="code" href="/api-reference/overview">
-    Introduction to the dstack API
+  <Card title="API Reference" icon="code" href="/reference/api">
+    Complete API documentation for all dstack services
   </Card>
-  <Card title="Authentication" icon="lock" href="/api-reference/authentication">
-    Learn how to authenticate with the dstack API
+  <Card title="CLI Reference" icon="terminal" href="/reference/cli">
+    Command-line interface documentation
+  </Card>
+  <Card title="Troubleshooting" icon="wrench" href="/troubleshooting">
+    Common issues and debugging tips
+  </Card>
+  <Card title="Community" icon="users" href="/community">
+    Get help and contribute to dstack
   </Card>
 </CardGroup>
+
+## Use Cases
+
+<CardGroup cols={2}>
+  <Card title="Phala Cloud" icon="cloud" href="/tutorials/use-case-phala-cloud">
+    Deploy to managed TEE infrastructure without hardware setup
+  </Card>
+  <Card title="Secure Web Apps" icon="globe" href="/tutorials/use-case-secure-web-app">
+    Host applications with sensitive data using Zero Trust TLS
+  </Card>
+</CardGroup>
+
+<div className="mt-12 p-6 bg-blue-50 rounded-lg">
+  <h3 className="text-lg font-semibold mb-2">Ready to deploy secure applications?</h3>
+  <p className="text-gray-700 mb-4">
+    Join developers and enterprises using dstack to protect their sensitive workloads with TEE technology.
+  </p>
+  <div className="flex gap-4">
+    <a href="/getting-started/installation" className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">
+      Get Started →
+    </a>
+    <a href="https://github.com/Dstack-TEE/dstack" className="bg-gray-200 text-gray-800 px-4 py-2 rounded hover:bg-gray-300">
+      View on GitHub
+    </a>
+  </div>
+</div>
 

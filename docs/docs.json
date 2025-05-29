@@ -14,18 +14,49 @@
         "tab": "Documentation",
         "groups": [
           {
-            "group": "Getting Started",
+            "group": "Overview",
             "pages": [
               "index",
-              "introduction",
-              "quickstart"
+              "overview/what-is-dstack",
+              "overview/key-features",
+              "overview/benefits"
+            ]
+          },
+          {
+            "group": "Getting Started",
+            "pages": [
+              "quickstart",
+              "getting-started/installation",
+              "getting-started/first-deployment"
             ]
           },
           {
             "group": "Core Concepts",
             "pages": [
               "concepts/overview",
-              "concepts/architecture"
+              "concepts/architecture",
+              "concepts/core-components",
+              "concepts/security-model",
+              "concepts/networking"
+            ]
+          },
+          {
+            "group": "Deployment Guides",
+            "pages": [
+              "deployment-guides/deploying-applications",
+              "deployment-guides/configuring-components",
+              "deployment-guides/managing-keys-and-secrets",
+              "deployment-guides/monitoring-and-logging"
+            ]
+          },
+          {
+            "group": "Tutorials",
+            "pages": [
+              "tutorials/python-example",
+              "tutorials/javascript-example",
+              "tutorials/rust-example",
+              "tutorials/use-case-phala-cloud",
+              "tutorials/use-case-secure-web-app"
             ]
           }
         ]
@@ -37,7 +68,49 @@
             "group": "API Reference",
             "pages": [
               "api-reference/overview",
-              "api-reference/authentication"
+              "api-reference/authentication",
+              "api-reference/vmm-api",
+              "api-reference/guest-api",
+              "api-reference/kms-api"
+            ]
+          },
+          {
+            "group": "SDKs",
+            "pages": [
+              "api-reference/sdk/python",
+              "api-reference/sdk/javascript",
+              "api-reference/sdk/go"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Resources",
+        "groups": [
+          {
+            "group": "Reference",
+            "pages": [
+              "reference/cli-commands",
+              "reference/configuration",
+              "reference/environment-variables",
+              "reference/glossary"
+            ]
+          },
+          {
+            "group": "Troubleshooting",
+            "pages": [
+              "troubleshooting/common-issues",
+              "troubleshooting/debugging-guide",
+              "troubleshooting/error-codes"
+            ]
+          },
+          {
+            "group": "Community",
+            "pages": [
+              "community/contributing",
+              "community/support",
+              "community/roadmap",
+              "community/faq"
             ]
           }
         ]
@@ -50,7 +123,7 @@
   },
   "api": {
     "mdx": {
-      "server": "https://api.example.com",
+      "server": "https://api.dstack.dev",
       "auth": {
         "method": "bearer"
       }
@@ -62,25 +135,66 @@
   "navbar": {
     "links": [
       {
-        "label": "Documentation",
-        "href": "https://example.com/docs"
+        "label": "GitHub",
+        "href": "https://github.com/Dstack-TEE/dstack"
+      },
+      {
+        "label": "Blog",
+        "href": "https://blog.dstack.dev"
       }
     ],
     "primary": {
       "type": "button",
-      "label": "Get Started",
-      "href": "https://example.com/register"
+      "label": "Try Phala Cloud",
+      "href": "https://cloud.phala.network/register?invite=beta"
     }
   },
   "footer": {
     "socials": {
-      "github": "https://github.com/yourusername/dstack",
-      "twitter": "https://twitter.com/yourusername"
-    }
+      "github": "https://github.com/Dstack-TEE/dstack",
+      "twitter": "https://twitter.com/PhalaNetwork",
+      "discord": "https://discord.gg/phala"
+    },
+    "links": [
+      {
+        "items": [
+          {
+            "label": "Status",
+            "href": "https://status.dstack.dev"
+          }
+        ]
+      },
+      {
+        "items": [
+          {
+            "label": "Terms",
+            "href": "https://dstack.dev/terms"
+          },
+          {
+            "label": "Privacy",
+            "href": "https://dstack.dev/privacy"
+          }
+        ]
+      },
+      {
+        "items": [
+          {
+            "label": "GitHub",
+            "href": "https://github.com/Dstack-TEE/dstack"
+          }
+        ]
+      }
+    ]
   },
   "integrations": {
     "ga4": {
       "measurementId": "G-XXXXXXXXXX"
+    },
+    "intercom": {
+      "appId": "YOUR_INTERCOM_APP_ID"
     }
+  },
+  "search": {
+    "prompt": "Search documentation..."
   }
 }

@@ -1,0 +1,158 @@
+---
+title: "What is dstack?"
+description: "An introduction to dstack - the open-source platform for secure application deployment to TEEs"
+---
+
+# What is dstack?
+
+dstack is an open-source platform that simplifies the deployment of containerized applications to Trusted Execution Environments (TEEs), specifically using Confidential VMs (CVMs). It bridges the gap between traditional application development and secure computing, making TEE technology accessible to developers without requiring deep expertise in hardware security.
+
+## The Problem dstack Solves
+
+In today's digital landscape, protecting sensitive data and ensuring computational integrity is paramount. However, deploying applications to secure hardware environments like TEEs has traditionally been complex, requiring:
+
+- Deep understanding of hardware security features
+- Complex configuration and setup procedures
+- Significant code modifications
+- Vendor-specific implementations that create lock-in
+
+dstack eliminates these barriers by providing a developer-friendly abstraction layer that works with familiar tools and workflows.
+
+## How dstack Works
+
+dstack takes your existing Docker containers and runs them securely within Confidential Virtual Machines (CVMs) powered by Intel TDX technology. Here's the simplified flow:
+
+<div className="my-8">
+  <div className="bg-gray-50 p-6 rounded-lg">
+    <div className="space-y-4">
+      <div className="flex items-center gap-4">
+        <div className="bg-blue-100 p-3 rounded-full">
+          <span className="text-2xl">1</span>
+        </div>
+        <div>
+          <h4 className="font-semibold">Package Your Application</h4>
+          <p className="text-gray-600">Use standard Docker containers and docker-compose.yml files</p>
+        </div>
+      </div>
+      <div className="flex items-center gap-4">
+        <div className="bg-blue-100 p-3 rounded-full">
+          <span className="text-2xl">2</span>
+        </div>
+        <div>
+          <h4 className="font-semibold">Deploy with dstack</h4>
+          <p className="text-gray-600">dstack converts your container to a secure CVM image</p>
+        </div>
+      </div>
+      <div className="flex items-center gap-4">
+        <div className="bg-blue-100 p-3 rounded-full">
+          <span className="text-2xl">3</span>
+        </div>
+        <div>
+          <h4 className="font-semibold">Run Securely</h4>
+          <p className="text-gray-600">Your application runs in a hardware-isolated environment with encrypted memory</p>
+        </div>
+      </div>
+      <div className="flex items-center gap-4">
+        <div className="bg-blue-100 p-3 rounded-full">
+          <span className="text-2xl">4</span>
+        </div>
+        <div>
+          <h4 className="font-semibold">Verify & Attest</h4>
+          <p className="text-gray-600">Remote attestation proves your code is running unmodified in a genuine TEE</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+## Key Components
+
+dstack consists of several core components that work together:
+
+| Component | Purpose |
+|-----------|---------|
+| **dstack-vmm** | Manages the lifecycle of Confidential VMs |
+| **dstack-gateway** | Handles secure HTTPS routing and TLS termination |
+| **dstack-kms** | Manages encryption keys with blockchain integration |
+| **dstack CLI** | Command-line tool for deployment and management |
+
+## What Makes dstack Unique?
+
+### 1. **Developer-First Approach**
+- Use familiar Docker workflows
+- Minimal code changes required
+- Standard docker-compose.yml support
+
+### 2. **Hardware Agnostic**
+- Not tied to specific TEE implementations
+- Portable across different hardware vendors
+- Future-proof architecture
+
+### 3. **Decentralized Security**
+- Blockchain-controlled key management
+- No single point of trust
+- Transparent governance via smart contracts
+
+### 4. **Zero Trust Architecture**
+- End-to-end encryption
+- Remote attestation for every component
+- Verifiable security at every layer
+
+## Use Cases
+
+dstack is ideal for:
+
+<CardGroup cols={2}>
+  <Card title="Financial Services" icon="dollar-sign">
+    Process sensitive financial data with hardware-guaranteed isolation
+  </Card>
+  <Card title="Healthcare" icon="heart">
+    Handle patient data in compliance with privacy regulations
+  </Card>
+  <Card title="AI/ML Workloads" icon="brain">
+    Train models on sensitive data without exposing it
+  </Card>
+  <Card title="Multi-party Computation" icon="users">
+    Enable secure collaboration without sharing raw data
+  </Card>
+</CardGroup>
+
+## Technical Architecture
+
+```mermaid
+graph TD
+    A[Developer] -->|Docker Compose| B[dstack CLI]
+    B -->|Deploy| C[dstack-vmm]
+    C -->|Create| D[Confidential VM]
+    D -->|Contains| E[dstack-os]
+    E -->|Runs| F[Docker Containers]
+    
+    G[External Users] -->|HTTPS| H[dstack-gateway]
+    H -->|Route| D
+    
+    I[dstack-kms] -->|Keys| D
+    J[Blockchain] -->|Authorization| I
+    
+    style D fill:#e1f5fe
+    style F fill:#c8e6c9
+```
+
+## Who Should Use dstack?
+
+- **Developers** who want to add security to their applications without complexity
+- **Enterprises** needing to protect sensitive workloads
+- **Startups** building privacy-first applications
+- **Researchers** working with confidential data
+
+## Getting Started
+
+Ready to deploy your first secure application? Follow our [Quick Start Guide](/getting-started/first-deployment) to get up and running in minutes.
+
+<div className="mt-8 flex gap-4">
+  <a href="/getting-started/installation" className="bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700">
+    Install dstack →
+  </a>
+  <a href="/concepts/architecture" className="bg-gray-200 text-gray-800 px-6 py-3 rounded-lg hover:bg-gray-300">
+    Learn More About Architecture
+  </a>
+</div> 

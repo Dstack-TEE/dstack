@@ -1,0 +1,297 @@
+---
+title: "Key Features"
+description: "Explore the powerful features that make dstack the platform of choice for secure application deployment"
+---
+
+# Key Features
+
+dstack provides a comprehensive set of features designed to make secure computing accessible, manageable, and scalable. Each feature is built with both developers and enterprises in mind, ensuring ease of use without compromising security.
+
+## Core Security Features
+
+### 🔒 **Seamless TEE Deployment**
+
+Transform any Docker container into a secure Confidential VM with zero code changes.
+
+<div className="bg-blue-50 p-4 rounded-lg my-4">
+  <h4 className="font-semibold mb-2">How it works:</h4>
+  <ul className="space-y-2">
+    <li>• Automatically converts Docker images to CVM-compatible formats</li>
+    <li>• Preserves existing application logic and dependencies</li>
+    <li>• Handles TEE-specific configurations transparently</li>
+  </ul>
+</div>
+
+**Example:**
+```yaml
+# Your existing docker-compose.yml works as-is
+version: '3.8'
+services:
+  app:
+    image: myapp:latest
+    ports:
+      - "8080:8080"
+```
+
+### 🛡️ **Remote Attestation**
+
+Cryptographically verify that your application is running unmodified in a genuine TEE.
+
+**Features:**
+- Hardware-signed attestation quotes
+- Verifiable measurements of code and configuration
+- Integration with Intel DCAP for quote verification
+- Custom event log for application-specific attestation
+
+**API Example:**
+```javascript
+const { DstackClient } = require('@phala/dstack-sdk');
+const client = new DstackClient();
+
+// Get attestation quote
+const quote = await client.getQuote();
+console.log('TEE Quote:', quote);
+```
+
+### 🔐 **End-to-End Encryption**
+
+All communication is encrypted by default, from deployment to runtime.
+
+<table className="w-full my-4">
+  <thead>
+    <tr className="bg-gray-100">
+      <th className="p-2 text-left">Layer</th>
+      <th className="p-2 text-left">Encryption Method</th>
+      <th className="p-2 text-left">Purpose</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td className="p-2">Network</td>
+      <td className="p-2">TLS 1.3 with RA-TLS</td>
+      <td className="p-2">Secure communication between components</td>
+    </tr>
+    <tr className="bg-gray-50">
+      <td className="p-2">Storage</td>
+      <td className="p-2">LUKS with TEE-derived keys</td>
+      <td className="p-2">Encrypted persistent storage</td>
+    </tr>
+    <tr>
+      <td className="p-2">Memory</td>
+      <td className="p-2">Hardware encryption (Intel TDX)</td>
+      <td className="p-2">Protected runtime memory</td>
+    </tr>
+  </tbody>
+</table>
+
+### 🔑 **Decentralized Key Management**
+
+Blockchain-controlled KMS ensures no single point of failure for key management.
+
+**Benefits:**
+- Deterministic key derivation
+- Portable across hardware vendors
+- Smart contract-based authorization
+- No vendor lock-in
+
+## Developer Experience Features
+
+### 🚀 **Familiar Workflows**
+
+Use the tools and workflows you already know.
+
+<CardGroup cols={3}>
+  <Card title="Docker Support" icon="docker">
+    Standard Dockerfile and docker-compose.yml compatibility
+  </Card>
+  <Card title="Multiple Languages" icon="code">
+    SDKs for Python, JavaScript, Go, and more
+  </Card>
+  <Card title="CLI & Web UI" icon="terminal">
+    Choose between command-line or graphical interfaces
+  </Card>
+</CardGroup>
+
+### 📊 **Comprehensive Monitoring**
+
+Real-time insights into your secure applications.
+
+```bash
+# Stream application logs
+curl 'http://<app-id>.app.kvin.wang:9090/logs/?follow=true'
+
+# Check application status
+dstack status <app-id>
+```
+
+**Dashboard Features:**
+- Real-time resource usage
+- Application logs and events
+- Performance metrics
+- Health checks
+
+### 🔄 **Zero-Downtime Updates**
+
+Update applications without service interruption.
+
+**Process:**
+1. Deploy new version alongside existing
+2. Verify new deployment with attestation
+3. Seamlessly switch traffic
+4. Remove old version
+
+## Infrastructure Features
+
+### 🌐 **Automatic HTTPS & Certificates**
+
+Built-in Let's Encrypt integration for automatic TLS certificates.
+
+**Features:**
+- Automatic certificate issuance and renewal
+- Custom domain support
+- Certificate transparency monitoring
+- Zero-configuration HTTPS
+
+**Configuration:**
+```toml
+# gateway.toml
+[domain]
+base = "app.example.com"
+custom_domains = ["myapp.com", "api.myapp.com"]
+```
+
+### ⚡ **Hardware Flexibility**
+
+Deploy across different TEE hardware without code changes.
+
+<div className="grid grid-cols-2 gap-4 my-4">
+  <div className="border rounded-lg p-4">
+    <h4 className="font-semibold mb-2">Supported Now</h4>
+    <ul className="space-y-1">
+      <li>✓ Intel TDX</li>
+      <li>✓ Intel SGX (via compatibility)</li>
+    </ul>
+  </div>
+  <div className="border rounded-lg p-4">
+    <h4 className="font-semibold mb-2">Coming Soon</h4>
+    <ul className="space-y-1">
+      <li>○ AMD SEV-SNP</li>
+      <li>○ ARM CCA</li>
+    </ul>
+  </div>
+</div>
+
+### 🔗 **Blockchain Integration**
+
+Smart contract-based governance and authorization.
+
+**Use Cases:**
+- Decentralized access control
+- Transparent code updates
+- Multi-party authorization
+- Audit trails
+
+## Advanced Features
+
+### 🖥️ **GPU Support**
+
+Run AI/ML workloads with GPU acceleration in secure environments.
+
+```yaml
+# docker-compose.yml with GPU
+services:
+  ml-model:
+    image: tensorflow/tensorflow:latest-gpu
+    deploy:
+      resources:
+        devices:
+          - capabilities: [gpu]
+```
+
+### 🔍 **Content Addressing**
+
+Cryptographic verification of all deployed code.
+
+**Benefits:**
+- Immutable application deployments
+- Verifiable code integrity
+- Reproducible builds
+- Supply chain security
+
+### 🌍 **Multi-Region Deployment**
+
+Deploy applications across multiple geographic regions while maintaining security.
+
+**Features:**
+- Cross-region key synchronization
+- Geo-distributed attestation
+- Regional compliance support
+- Automatic failover
+
+## Integration Features
+
+### 📦 **CI/CD Integration**
+
+Seamlessly integrate with existing DevOps pipelines.
+
+```yaml
+# GitHub Actions example
+- name: Deploy to dstack
+  run: |
+    dstack deploy -f docker-compose.yml
+    dstack verify --attestation
+```
+
+### 🔌 **API-First Design**
+
+Everything accessible via well-documented APIs.
+
+**Available APIs:**
+- Management API for deployment and monitoring
+- Guest API for runtime operations
+- Attestation API for verification
+- KMS API for key management
+
+### 📚 **Comprehensive SDKs**
+
+Native libraries for popular programming languages.
+
+<table className="w-full my-4">
+  <thead>
+    <tr className="bg-gray-100">
+      <th className="p-2 text-left">Language</th>
+      <th className="p-2 text-left">Package</th>
+      <th className="p-2 text-left">Features</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td className="p-2">Python</td>
+      <td className="p-2">dstack-sdk</td>
+      <td className="p-2">Sync/Async, Type hints</td>
+    </tr>
+    <tr className="bg-gray-50">
+      <td className="p-2">JavaScript</td>
+      <td className="p-2">@phala/dstack-sdk</td>
+      <td className="p-2">Node.js & Browser</td>
+    </tr>
+    <tr>
+      <td className="p-2">Go</td>
+      <td className="p-2">github.com/Dstack-TEE/dstack/sdk/go</td>
+      <td className="p-2">Native performance</td>
+    </tr>
+  </tbody>
+</table>
+
+## What's Next?
+
+Ready to experience these features firsthand?
+
+<div className="mt-8 flex gap-4">
+  <a href="/getting-started/installation" className="bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700">
+    Get Started →
+  </a>
+  <a href="/concepts/architecture" className="bg-gray-200 text-gray-800 px-6 py-3 rounded-lg hover:bg-gray-300">
+    Deep Dive into Architecture
+  </a>
+</div> 

@@ -1,0 +1,771 @@
+---
+title: "Python Tutorial"
+description: "Build and deploy a secure Python application to dstack"
+---
+
+# Python Application Tutorial
+
+This tutorial walks you through building and deploying a secure Python web application to dstack. We'll create a Flask API that demonstrates key dstack features including attestation, secure key management, and encrypted data storage.
+
+## What We'll Build
+
+A secure document storage API with the following features:
+- User authentication with JWT tokens
+- Encrypted document storage
+- Remote attestation verification
+- Secure key derivation
+- Health monitoring
+
+## Prerequisites
+
+- Python 3.9 or higher installed locally
+- Docker installed for containerization
+- dstack up and running
+- Basic knowledge of Flask and REST APIs
+
+## Step 1: Create the Application
+
+### Project Structure
+
+Create a new directory for your project:
+
+```bash
+mkdir secure-docs-api
+cd secure-docs-api
+```
+
+Create the following structure:
+```
+secure-docs-api/
+├── app.py
+├── requirements.txt
+├── Dockerfile
+├── docker-compose.yml
+├── config.py
+├── models/
+│   ├── __init__.py
+│   └── document.py
+├── routes/
+│   ├── __init__.py
+│   ├── auth.py
+│   └── documents.py
+└── utils/
+    ├── __init__.py
+    ├── crypto.py
+    └── attestation.py
+```
+
+### Install Dependencies
+
+Create `requirements.txt`:
+
+```txt
+flask==3.0.0
+flask-jwt-extended==4.5.3
+flask-sqlalchemy==3.1.1
+cryptography==41.0.7
+dstack-sdk==0.1.0
+gunicorn==21.2.0
+psycopg2-binary==2.9.9
+redis==5.0.1
+requests==2.31.0
+```
+
+### Main Application (app.py)
+
+```python
+from flask import Flask, jsonify
+from flask_jwt_extended import JWTManager
+from flask_sqlalchemy import SQLAlchemy
+from dstack_sdk import DstackClient
+import os
+import logging
+
+# Initialize Flask app
+app = Flask(__name__)
+
+# Configuration
+app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get(
+    'DATABASE_URL', 
+    'postgresql://postgres:password@db:5432/securedocs'
+)
+app.config['JWT_SECRET_KEY'] = os.environ.get('JWT_SECRET_KEY', 'dev-secret')
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+
+# Initialize extensions
+db = SQLAlchemy(app)
+jwt = JWTManager(app)
+
+# Initialize dstack client
+dstack_client = DstackClient()
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Import routes
+from routes import auth_bp, documents_bp
+app.register_blueprint(auth_bp, url_prefix='/api/auth')
+app.register_blueprint(documents_bp, url_prefix='/api/documents')
+
+@app.route('/health')
+def health():
+    """Health check endpoint"""
+    try:
+        # Check database
+        db.session.execute('SELECT 1')
+        db_status = 'healthy'
+    except Exception as e:
+        db_status = f'unhealthy: {str(e)}'
+    
+    # Get attestation info
+    try:
+        attestation_info = dstack_client.info()
+        tee_status = 'verified'
+    except Exception as e:
+        attestation_info = None
+        tee_status = f'unverified: {str(e)}'
+    
+    return jsonify({
+        'status': 'healthy' if db_status == 'healthy' else 'degraded',
+        'database': db_status,
+        'tee': tee_status,
+        'attestation': attestation_info
+    })
+
+@app.route('/attestation')
+def attestation():
+    """Get remote attestation quote"""
+    try:
+        quote = dstack_client.get_quote()
+        return jsonify({
+            'quote': quote,
+            'verified': True
+        })
+    except Exception as e:
+        return jsonify({
+            'error': str(e),
+            'verified': False
+        }), 500
+
+if __name__ == '__main__':
+    with app.app_context():
+        db.create_all()
+    app.run(host='0.0.0.0', port=8080)
+```
+
+### Secure Encryption Utilities (utils/crypto.py)
+
+```python
+from cryptography.fernet import Fernet
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+from dstack_sdk import DstackClient
+import base64
+import os
+
+class SecureEncryption:
+    def __init__(self):
+        self.dstack_client = DstackClient()
+        self._cipher = None
+    
+    @property
+    def cipher(self):
+        """Get or create encryption cipher using dstack-derived key"""
+        if not self._cipher:
+            # Derive key from dstack KMS
+            app_key = self.dstack_client.get_key('/app/encryption')
+            
+            # Use PBKDF2 to derive encryption key
+            kdf = PBKDF2HMAC(
+                algorithm=hashes.SHA256(),
+                length=32,
+                salt=b'secure-docs-salt',  # In production, use random salt
+                iterations=100000,
+            )
+            key = base64.urlsafe_b64encode(
+                kdf.derive(app_key.encode())
+            )
+            self._cipher = Fernet(key)
+        
+        return self._cipher
+    
+    def encrypt(self, data: bytes) -> bytes:
+        """Encrypt data using TEE-derived key"""
+        return self.cipher.encrypt(data)
+    
+    def decrypt(self, encrypted_data: bytes) -> bytes:
+        """Decrypt data"""
+        return self.cipher.decrypt(encrypted_data)
+    
+    def encrypt_string(self, text: str) -> str:
+        """Encrypt string and return base64"""
+        encrypted = self.encrypt(text.encode())
+        return base64.b64encode(encrypted).decode()
+    
+    def decrypt_string(self, encrypted_text: str) -> str:
+        """Decrypt base64 string"""
+        encrypted = base64.b64decode(encrypted_text.encode())
+        return self.decrypt(encrypted).decode()
+
+# Global encryption instance
+encryption = SecureEncryption()
+```
+
+### Document Model (models/document.py)
+
+```python
+from app import db
+from utils.crypto import encryption
+from datetime import datetime
+import json
+
+class Document(db.Model):
+    __tablename__ = 'documents'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, nullable=False)
+    title = db.Column(db.String(255), nullable=False)
+    encrypted_content = db.Column(db.Text, nullable=False)
+    content_hash = db.Column(db.String(64), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, 
+                          onupdate=datetime.utcnow)
+    
+    def set_content(self, content: str):
+        """Encrypt and store content"""
+        self.encrypted_content = encryption.encrypt_string(content)
+        # Store hash for integrity verification
+        import hashlib
+        self.content_hash = hashlib.sha256(content.encode()).hexdigest()
+    
+    def get_content(self) -> str:
+        """Decrypt and return content"""
+        content = encryption.decrypt_string(self.encrypted_content)
+        
+        # Verify integrity
+        import hashlib
+        if hashlib.sha256(content.encode()).hexdigest() != self.content_hash:
+            raise ValueError("Content integrity check failed")
+        
+        return content
+    
+    def to_dict(self):
+        """Convert to dictionary (without decrypted content)"""
+        return {
+            'id': self.id,
+            'user_id': self.user_id,
+            'title': self.title,
+            'created_at': self.created_at.isoformat(),
+            'updated_at': self.updated_at.isoformat()
+        }
+```
+
+### Authentication Routes (routes/auth.py)
+
+```python
+from flask import Blueprint, request, jsonify
+from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity
+from werkzeug.security import generate_password_hash, check_password_hash
+from app import db
+import re
+
+auth_bp = Blueprint('auth', __name__)
+
+# Simple in-memory user store (use proper database in production)
+users = {}
+
+@auth_bp.route('/register', methods=['POST'])
+def register():
+    data = request.get_json()
+    
+    # Validate input
+    email = data.get('email')
+    password = data.get('password')
+    
+    if not email or not password:
+        return jsonify({'error': 'Email and password required'}), 400
+    
+    if not re.match(r'^[\w\.-]+@[\w\.-]+\.\w+$', email):
+        return jsonify({'error': 'Invalid email format'}), 400
+    
+    if len(password) < 8:
+        return jsonify({'error': 'Password must be at least 8 characters'}), 400
+    
+    # Check if user exists
+    if email in users:
+        return jsonify({'error': 'User already exists'}), 409
+    
+    # Create user
+    users[email] = {
+        'id': len(users) + 1,
+        'email': email,
+        'password_hash': generate_password_hash(password)
+    }
+    
+    # Create access token
+    access_token = create_access_token(identity=email)
+    
+    return jsonify({
+        'access_token': access_token,
+        'user_id': users[email]['id']
+    }), 201
+
+@auth_bp.route('/login', methods=['POST'])
+def login():
+    data = request.get_json()
+    email = data.get('email')
+    password = data.get('password')
+    
+    if not email or not password:
+        return jsonify({'error': 'Email and password required'}), 400
+    
+    user = users.get(email)
+    if not user or not check_password_hash(user['password_hash'], password):
+        return jsonify({'error': 'Invalid credentials'}), 401
+    
+    access_token = create_access_token(identity=email)
+    
+    return jsonify({
+        'access_token': access_token,
+        'user_id': user['id']
+    })
+
+@auth_bp.route('/me', methods=['GET'])
+@jwt_required()
+def me():
+    current_user = get_jwt_identity()
+    user = users.get(current_user)
+    
+    return jsonify({
+        'email': user['email'],
+        'user_id': user['id']
+    })
+```
+
+### Document Routes (routes/documents.py)
+
+```python
+from flask import Blueprint, request, jsonify
+from flask_jwt_extended import jwt_required, get_jwt_identity
+from models.document import Document
+from app import db, logger
+
+documents_bp = Blueprint('documents', __name__)
+
+@documents_bp.route('', methods=['POST'])
+@jwt_required()
+def create_document():
+    """Create encrypted document"""
+    data = request.get_json()
+    title = data.get('title')
+    content = data.get('content')
+    
+    if not title or not content:
+        return jsonify({'error': 'Title and content required'}), 400
+    
+    # Get current user
+    current_user = get_jwt_identity()
+    user = users.get(current_user)
+    
+    # Create document
+    doc = Document(
+        user_id=user['id'],
+        title=title
+    )
+    doc.set_content(content)
+    
+    db.session.add(doc)
+    db.session.commit()
+    
+    logger.info(f"Document created: {doc.id} by user {user['id']}")
+    
+    return jsonify(doc.to_dict()), 201
+
+@documents_bp.route('', methods=['GET'])
+@jwt_required()
+def list_documents():
+    """List user's documents"""
+    current_user = get_jwt_identity()
+    user = users.get(current_user)
+    
+    documents = Document.query.filter_by(user_id=user['id']).all()
+    
+    return jsonify([doc.to_dict() for doc in documents])
+
+@documents_bp.route('/<int:doc_id>', methods=['GET'])
+@jwt_required()
+def get_document(doc_id):
+    """Get decrypted document"""
+    current_user = get_jwt_identity()
+    user = users.get(current_user)
+    
+    doc = Document.query.filter_by(id=doc_id, user_id=user['id']).first()
+    
+    if not doc:
+        return jsonify({'error': 'Document not found'}), 404
+    
+    try:
+        content = doc.get_content()
+        result = doc.to_dict()
+        result['content'] = content
+        
+        return jsonify(result)
+    except Exception as e:
+        logger.error(f"Failed to decrypt document {doc_id}: {str(e)}")
+        return jsonify({'error': 'Failed to decrypt document'}), 500
+
+@documents_bp.route('/<int:doc_id>', methods=['DELETE'])
+@jwt_required()
+def delete_document(doc_id):
+    """Delete document"""
+    current_user = get_jwt_identity()
+    user = users.get(current_user)
+    
+    doc = Document.query.filter_by(id=doc_id, user_id=user['id']).first()
+    
+    if not doc:
+        return jsonify({'error': 'Document not found'}), 404
+    
+    db.session.delete(doc)
+    db.session.commit()
+    
+    logger.info(f"Document deleted: {doc_id} by user {user['id']}")
+    
+    return '', 204
+```
+
+## Step 2: Containerize the Application
+
+### Create Dockerfile
+
+```dockerfile
+FROM python:3.11-slim
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    gcc \
+    postgresql-client \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy requirements first for better caching
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy application code
+COPY . .
+
+# Create non-root user
+RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
+USER appuser
+
+# Expose port
+EXPOSE 8080
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD python -c "import requests; requests.get('http://localhost:8080/health')"
+
+# Run with gunicorn
+CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "2", "--timeout", "120", "app:app"]
+```
+
+### Create docker-compose.yml
+
+```yaml
+version: '3.8'
+
+services:
+  api:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      - DATABASE_URL=postgresql://postgres:password@db:5432/securedocs
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-change-me-in-production}
+      - FLASK_ENV=production
+      - LOG_LEVEL=INFO
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  db:
+    image: postgres:15-alpine
+    environment:
+      - POSTGRES_DB=securedocs
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=password
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  db_data:
+```
+
+## Step 3: Test Locally
+
+Before deploying to dstack, test the application locally:
+
+```bash
+# Build and run
+docker-compose up --build
+
+# In another terminal, test the API
+# Register a user
+curl -X POST http://localhost:8080/api/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"email": "test@example.com", "password": "securepass123"}'
+
+# Save the access token from the response
+export TOKEN="your-access-token"
+
+# Create a document
+curl -X POST http://localhost:8080/api/documents \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{"title": "Secret Document", "content": "This is encrypted content"}'
+
+# List documents
+curl http://localhost:8080/api/documents \
+  -H "Authorization: Bearer $TOKEN"
+
+# Check health
+curl http://localhost:8080/health
+```
+
+## Step 4: Deploy to dstack
+
+### Deploy the Application
+
+```bash
+# Deploy to dstack
+dstack deploy \
+  --name secure-docs-api \
+  --compose docker-compose.yml \
+  --env JWT_SECRET_KEY=$(openssl rand -hex 32)
+
+# Wait for deployment
+dstack wait secure-docs-api --timeout 300
+```
+
+### Verify Deployment
+
+```bash
+# Check status
+dstack status secure-docs-api
+
+# Get application URL
+export APP_URL=$(dstack url secure-docs-api)
+
+# Verify attestation
+curl $APP_URL/attestation | jq .
+```
+
+## Step 5: Integrate TEE Features
+
+### Using Hardware-Derived Keys
+
+Update `utils/crypto.py` to use TEE-specific features:
+
+```python
+class SecureEncryption:
+    def __init__(self):
+        self.dstack_client = DstackClient()
+        self._cipher = None
+        self._signing_key = None
+    
+    def get_signing_key(self):
+        """Get ECDSA signing key from TEE"""
+        if not self._signing_key:
+            # Derive signing key from hardware
+            key_info = self.dstack_client.get_key('/app/signing')
+            self._signing_key = key_info['private_key']
+        return self._signing_key
+    
+    def sign_document(self, doc_id: int, content_hash: str) -> str:
+        """Create digital signature for document"""
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives.asymmetric import ec
+        
+        # Create signature
+        private_key = self.get_signing_key()
+        signature = private_key.sign(
+            f"{doc_id}:{content_hash}".encode(),
+            ec.ECDSA(hashes.SHA256())
+        )
+        
+        return base64.b64encode(signature).decode()
+```
+
+### Add Attestation Verification
+
+```python
+@app.route('/api/verify', methods=['POST'])
+def verify_attestation():
+    """Verify remote attestation quote"""
+    data = request.get_json()
+    quote = data.get('quote')
+    
+    if not quote:
+        return jsonify({'error': 'Quote required'}), 400
+    
+    try:
+        # Verify quote using dstack SDK
+        result = dstack_client.verify_quote(quote)
+        
+        return jsonify({
+            'valid': result['valid'],
+            'measurements': result['measurements'],
+            'tcb_status': result['tcb_status']
+        })
+    except Exception as e:
+        return jsonify({
+            'error': str(e),
+            'valid': False
+        }), 500
+```
+
+## Step 6: Production Considerations
+
+### Security Hardening
+
+1. **Environment Variables**
+   ```bash
+   # Create production secrets
+   dstack secret create secure-docs-secrets \
+     --from-literal=jwt_secret=$(openssl rand -hex 32) \
+     --from-literal=db_password=$(openssl rand -hex 16)
+   ```
+
+2. **Update docker-compose.yml**
+   ```yaml
+   services:
+     api:
+       secrets:
+         - secure-docs-secrets
+       environment:
+         - JWT_SECRET_KEY_FILE=/run/secrets/jwt_secret
+         - DB_PASSWORD_FILE=/run/secrets/db_password
+   ```
+
+### Performance Optimization
+
+```python
+# Add caching
+from flask_caching import Cache
+
+cache = Cache(app, config={
+    'CACHE_TYPE': 'redis',
+    'CACHE_REDIS_URL': 'redis://redis:6379/0'
+})
+
+@documents_bp.route('/<int:doc_id>', methods=['GET'])
+@jwt_required()
+@cache.cached(timeout=300)
+def get_document(doc_id):
+    # ... existing code ...
+```
+
+### Monitoring
+
+```python
+# Add metrics collection
+from prometheus_flask_exporter import PrometheusMetrics
+
+metrics = PrometheusMetrics(app)
+metrics.info('secure_docs_api', 'Secure Documents API', version='1.0.0')
+
+# Custom metrics
+document_operations = metrics.counter(
+    'document_operations_total',
+    'Total document operations',
+    labels={'operation': lambda: request.endpoint}
+)
+```
+
+## Step 7: Testing in Production
+
+### Functional Tests
+
+```bash
+# Test registration
+curl -X POST $APP_URL/api/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"email": "prod@example.com", "password": "ProductionPass123!"}'
+
+# Verify attestation
+curl $APP_URL/attestation | jq '.verified'
+
+# Check TEE status
+curl $APP_URL/health | jq '.tee'
+```
+
+### Security Tests
+
+```python
+# test_security.py
+import requests
+import json
+
+def test_encryption():
+    """Verify documents are encrypted"""
+    # Create document
+    doc = create_document("Test", "Sensitive content")
+    
+    # Direct database query should show encrypted content
+    # This would fail if encryption isn't working
+    assert "Sensitive content" not in get_raw_db_content(doc['id'])
+
+def test_attestation():
+    """Verify TEE attestation"""
+    response = requests.get(f"{APP_URL}/attestation")
+    data = response.json()
+    
+    assert data['verified'] == True
+    assert 'quote' in data
+```
+
+## Conclusion
+
+You've successfully built and deployed a secure Python application to dstack that:
+
+- ✅ Runs in a hardware-isolated TEE environment
+- ✅ Uses hardware-derived encryption keys
+- ✅ Provides remote attestation for verification
+- ✅ Encrypts sensitive data at rest
+- ✅ Implements secure authentication
+
+### Next Steps
+
+<CardGroup cols={3}>
+  <Card title="Add Features" icon="plus">
+    Implement file uploads, sharing, and versioning
+  </Card>
+  <Card title="Scale Up" icon="chart-line">
+    Configure auto-scaling and load balancing
+  </Card>
+  <Card title="Integrate Services" icon="plug">
+    Add email notifications, search, and analytics
+  </Card>
+</CardGroup>
+
+### Resources
+
+- [dstack Python SDK Documentation](/api-reference/sdk/python)
+- [Security Best Practices](/concepts/security-model)
+- [Production Deployment Guide](/deployment-guides/deploying-applications)
+- [Example Repository](https://github.com/Dstack-TEE/dstack-examples/python-secure-api) 
