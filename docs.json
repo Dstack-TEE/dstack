@@ -59,7 +59,20 @@
           {
             "group": "Tutorials",
             "pages": [
+              "docs/tutorials/index",
               "docs/tutorials/python-example"
+            ]
+          },
+          {
+            "group": "Troubleshooting",
+            "pages": [
+              "docs/troubleshooting"
+            ]
+          },
+          {
+            "group": "Community",
+            "pages": [
+              "docs/community"
             ]
           }
         ]

@@ -1,13 +1,13 @@
 ### Optimizing dstack Documentation for Developer Success
 
 **Key Points:**
-- dstack’s documentation, hosted on DeepWiki, covers core concepts like architecture, deployment, and security but may lack detailed troubleshooting and API references.
+- dstack's documentation, hosted on DeepWiki, covers core concepts like architecture, deployment, and security but may lack detailed troubleshooting and API references.
 - Research suggests reorganizing the content into a user-friendly hierarchy can improve onboarding and navigation for developers.
 - Adding language-specific guides, a glossary, and a robust tagging system seems likely to enhance discoverability and usability.
 - Gaps in advanced configuration and community support sections could be addressed to better serve diverse user needs.
 
 **Overview of Improvements**
-The dstack documentation, primarily hosted on [DeepWiki](https://deepwiki.com/Dstack-TEE/dstack), provides a solid foundation for understanding the platform’s purpose and functionality. However, to better serve developers ranging from beginners to experts, it can be enhanced with a clearer structure, additional content, and improved navigation. The proposed changes aim to make the documentation more intuitive, comprehensive, and aligned with developer workflows.
+The dstack documentation, primarily hosted on [DeepWiki](https://deepwiki.com/Dstack-TEE/dstack), provides a solid foundation for understanding the platform's purpose and functionality. However, to better serve developers ranging from beginners to experts, it can be enhanced with a clearer structure, additional content, and improved navigation. The proposed changes aim to make the documentation more intuitive, comprehensive, and aligned with developer workflows.
 
 **Proposed Structure**
 A revised hierarchy organizes content into logical sections: Overview, Getting Started, Concepts, Deployment Guides, Tutorials, Reference, Troubleshooting, and Community. This structure prioritizes quick onboarding for new users while providing in-depth resources for advanced users.
@@ -50,8 +50,8 @@ The documentation includes:
 | Topic                    | Purpose                                                                 | Target Audience       | Links                        | Gaps Identified                  |
 |--------------------------|-------------------------------------------------------------------------|-----------------------|------------------------------|----------------------------------|
 | What is dstack?          | Introduce dstack and its purpose                                        | All users             | /overview/what-is-dstack     | None                             |
-| Installation             | Guide on installing dstack components                                   | DevOps, Developers    | /getting-started/installation| Add hardware requirements, screenshots |
-| First Deployment         | Step-by-step guide to deploy first application                          | Developers            | /getting-started/first-deployment | Include video tutorials    |
+| Installation             | Guide on installing dstack components                                   | DevOps, Developers    | /docs/getting-started/installation| Add hardware requirements, screenshots |
+| First Deployment         | Step-by-step guide to deploy first application                          | Developers            | /docs/getting-started/first-deployment | Include video tutorials    |
 | System Architecture      | Explain dstack architecture and components                              | Developers, Architects| /concepts/architecture       | Add detailed diagrams            |
 | Core Components          | Detail dstack-vmm, dstack-gateway, dstack-kms, etc.                     | Developers, Architects| /concepts/core-components    | Include configuration examples   |
 | Security Model           | Explain TEEs, remote attestation, key management                        | Security Engineers    | /concepts/security-model     | Add advanced security scenarios  |
@@ -118,7 +118,7 @@ To improve discoverability and comprehension:
 - **Table of Contents:** Include on every page for quick navigation.
 - **Breadcrumbs:** Show user location (e.g., Home > Concepts > Security Model).
 - **Search Functionality:** Implement faceted search using MkDocs-Material ([MkDocs](https://www.mkdocs.org/)).
-- **Related Links:** Add “See Also” sections linking to related topics.
+- **Related Links:** Add "See Also" sections linking to related topics.
 - **Code Snippets:** Use syntax highlighting for readability.
 - **Diagrams:** Visualize architecture and workflows for clarity.
 - **Quick-Start Boxes:** Provide concise deployment commands on the Overview page.
@@ -143,7 +143,7 @@ cd meta-dstack
 dstack deploy -f docker-compose.yml
 ```
 
-**See Also:** [Installation Guide](/getting-started/installation), [First Deployment](/getting-started/first-deployment)
+**See Also:** [Installation Guide](/docs/getting-started/installation), [First Deployment](/docs/getting-started/first-deployment)
 
 
 #### Metadata & Tag System
@@ -207,7 +207,7 @@ To enhance maintainability:
    git clone https://github.com/Dstack-TEE/meta-dstack.git --recursive
    ```
 
-**See Also:** [First Deployment](/getting-started/first-deployment)
+**See Also:** [First Deployment](/docs/getting-started/first-deployment)
 
 
 #### Key Citations

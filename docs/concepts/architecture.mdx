@@ -442,11 +442,21 @@ Span across multiple providers:
 Now that you understand the architecture:
 
 <div className="mt-8 flex gap-4">
-  <a href="/concepts/core-components" className="bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700">
+  <a href="/docs/concepts/core-components" className="bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700">
     Explore Components →
   </a>
-  <a href="/concepts/security-model" className="bg-gray-200 text-gray-800 px-6 py-3 rounded-lg hover:bg-gray-300">
+  <a href="/docs/concepts/security-model" className="bg-gray-200 text-gray-800 px-6 py-3 rounded-lg hover:bg-gray-300">
     Learn Security Model
   </a>
 </div>
+
+For a detailed breakdown of each component's functionality and configuration, see the [Core Components](/docs/concepts/core-components) page.
+
+dstack's security model is built on several key principles:
+- **Hardware-based isolation**: Using TEE features for memory encryption and process isolation
+- **Remote attestation**: Cryptographic proof of the execution environment
+- **Zero-trust networking**: All communication is encrypted and authenticated
+- **Decentralized trust**: No single point of failure in the trust chain
+
+Learn more about our [Security Model](/docs/concepts/security-model).
 

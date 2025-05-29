@@ -19,11 +19,12 @@ This guide walks you through deploying your first application to a Trusted Execu
 
 ## Prerequisites
 
-Before starting, ensure you have:
+Before starting:
 
-- ✅ dstack installed and running ([Installation Guide](/getting-started/installation))
-- ✅ Access to the dstack web UI (http://localhost:9080)
+- ✅ dstack installed and running ([Installation Guide](/docs/getting-started/installation))
+- ✅ TEE-capable hardware (Intel TDX)
 - ✅ Basic familiarity with Docker
+- ✅ Terminal access to your server
 
 ## Step 1: Prepare Your Application
 
@@ -392,18 +393,23 @@ Congratulations! You've successfully:
 
 Now that you've deployed your first application, explore more advanced features:
 
-<CardGroup cols={3}>
-  <Card title="Deploy Complex Apps" icon="layer-group" href="/deployment-guides/deploying-applications">
-    Multi-service applications and databases
+<CardGroup cols={2}>
+  <Card title="Deploy Complex Apps" icon="layer-group" href="/docs/deployment-guides/deploying-applications">
+    Multi-container applications
   </Card>
-  {/* Managing keys page coming soon:
-  <Card title="Manage Secrets" icon="key" href="/deployment-guides/managing-keys-and-secrets">
-    Secure key and secret management
+  {/* 
+  <Card title="Configure Components" icon="cog" href="/deployment-guides/configuring-components">
+    Advanced configuration options
   </Card>
   */}
-  <Card title="Python Tutorial" icon="python" href="/tutorials/python-example">
-    Build a secure Python application
+  <Card title="Python Tutorial" icon="python" href="/docs/tutorials/python-example">
+    Deploy a Flask application
   </Card>
+  {/* 
+  <Card title="Security Deep Dive" icon="shield" href="/concepts/security-model">
+    Understand TEE security
+  </Card>
+  */}
 </CardGroup>
 
 ## Quick Reference
@@ -433,13 +439,19 @@ dstack remove my-first-app
 - **Guest API**: `http://<app-cid>:8090`
 - **Health Check**: `http://<app-url>/health`
 
-- [API Overview](/api-reference/overview) - API documentation overview
+- [API Overview](/docs/api-reference/overview) - API documentation overview
 
-For more information about key management and API reference, see the [deployment guide](/deployment-guides/deploying-applications#key-management) and [API documentation](/api-reference/overview).
+For more information about key management and API reference, see the [deployment guide](/docs/deployment-guides/deploying-applications#key-management) and [API documentation](/docs/api-reference/overview).
 
 ## Learn More
 
-- [System Architecture](/concepts/architecture) - Understand how dstack works
-- [Security Model](/concepts/security-model) - Deep dive into TEE security
+### Technical References
+- [API Overview](/docs/api-reference/overview) - API documentation overview
+- Deployment configurations and options
+For more information about key management and API reference, see the [deployment guide](/docs/deployment-guides/deploying-applications#key-management) and [API documentation](/docs/api-reference/overview).
 
-For more information about key management and API reference, see the [deployment guide](/deployment-guides/deploying-applications#key-management) and [API documentation](/api-reference/overview). 
+### Architecture & Security
+- [System Architecture](/docs/concepts/architecture) - Understand how dstack works
+- [Security Model](/docs/concepts/security-model) - Deep dive into TEE security
+- Remote attestation and trust model
+For more information about key management and API reference, see the [deployment guide](/docs/deployment-guides/deploying-applications#key-management) and [API documentation](/docs/api-reference/overview). 

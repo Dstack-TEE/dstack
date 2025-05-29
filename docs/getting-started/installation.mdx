@@ -497,24 +497,24 @@ curl http://localhost:9080/api/health
 
 Congratulations! You've successfully installed dstack. Now you can:
 
-<div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-6">
-  <Card title="Deploy Your First App" icon="rocket" href="/getting-started/first-deployment">
-    Deploy a containerized application to a TEE
+<CardGroup cols={2}>
+  <Card title="Deploy Your First App" icon="rocket" href="/docs/getting-started/first-deployment">
+    Quick deployment guide
   </Card>
-  {/* Component configuration coming soon:
-  <Card title="Configure Components" icon="cog" href="/deployment-guides/configuring-components">
-    Fine-tune dstack for your needs
+  {/* Monitoring guide coming soon:
+  <Card title="Configure Monitoring" icon="chart-line" href="/deployment-guides/monitoring-and-logging">
+    Set up monitoring and logging
   </Card>
   */}
-  <Card title="Explore Examples" icon="code" href="/tutorials/python-example">
-    Check out sample applications
+  <Card title="Explore Examples" icon="code" href="/docs/tutorials/python-example">
+    Browse code examples
   </Card>
-</div>
+</CardGroup>
 
 ## Additional Resources
 
-- [System Architecture](/concepts/architecture) - Understand how dstack components work together
-- [Security Model](/concepts/security-model) - Learn about TEE security features
-- [Troubleshooting Guide](/troubleshooting) - Detailed solutions for common issues
+- [System Architecture](/docs/concepts/architecture) - Understand how dstack components work together
+- [Security Model](/docs/concepts/security-model) - Learn about TEE security features
+- [Troubleshooting Guide](/docs/troubleshooting) - Detailed solutions for common issues
 - [Community Support](https://github.com/Dstack-TEE/dstack/discussions) - Get help from the community
-- [First Deployment Guide](/getting-started/first-deployment) - Deploy your first application 
+- [First Deployment Guide](/docs/getting-started/first-deployment) - Deploy your first application 

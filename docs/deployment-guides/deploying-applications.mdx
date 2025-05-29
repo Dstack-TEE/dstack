@@ -9,12 +9,12 @@ This guide covers everything you need to know about deploying applications to ds
 
 ## Prerequisites
 
-Before deploying applications, ensure you have:
+Before deploying applications:
 
-- ✅ dstack installed and running ([Installation Guide](/getting-started/installation))
-- ✅ Docker installed locally for building images
-- ✅ Access to dstack web UI or CLI
-- ✅ Basic understanding of Docker and docker-compose
+- ✅ dstack installed and running ([Installation Guide](/docs/getting-started/installation))
+- ✅ TEE-capable hardware (Intel TDX)
+- ✅ Docker and docker-compose installed
+- ✅ Access to dstack web UI (http://localhost:9080)
 
 ## Deployment Methods
 
@@ -553,21 +553,6 @@ dstack attest myapp
 
 ## Next Steps
 
-{/* These pages will be available once created:
-<CardGroup cols={3}>
-  <Card title="Configure Components" icon="cog" href="/deployment-guides/configuring-components">
-    Gateway, KMS, and VMM configuration
-  </Card>
-  <Card title="Manage Secrets" icon="key" href="/deployment-guides/managing-keys-and-secrets">
-    Secure key and secret management
-  </Card>
-  <Card title="Monitor Apps" icon="chart-line" href="/deployment-guides/monitoring-and-logging">
-    Monitoring, logging, and observability
-  </Card>
-</CardGroup>
-*/}
-
-For more deployment guides and configuration, check out:
-- [Getting Started Guide](/getting-started/installation)
-- [Python Tutorial](/tutorials/python-example)
-- [System Architecture](/concepts/architecture) 
+- [Getting Started Guide](/docs/getting-started/installation)
+- [Python Tutorial](/docs/tutorials/python-example)
+- [System Architecture](/docs/concepts/architecture) 
