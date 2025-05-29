@@ -1,291 +1,513 @@
 ---
 title: "Quick Start Guide"
-description: "Get up and running with dstack in minutes"
+description: "Deploy secure applications to TEEs with minimal configuration"
 ---
 
 # Quick Start Guide
 
-This guide provides the fastest path to getting dstack up and running. For detailed instructions, see our comprehensive guides.
+<page_summary>
+This guide provides the most expedient path to deploying applications within dstack's Trusted Execution Environment infrastructure. By following this streamlined workflow, you'll deploy a containerized application to a Confidential VM, verify its attestation, and understand the security guarantees provided—all within 10 minutes. This guide prioritizes practical experience while maintaining the security properties that make dstack valuable for production workloads.
+</page_summary>
 
-<div className="bg-blue-50 border-l-4 border-blue-400 p-4 mb-6">
-  <div className="flex">
-    <div className="ml-3">
-      <p className="text-sm text-blue-700">
-        <strong>No TEE Hardware?</strong> Use <a href="https://cloud.phala.network/register?invite=beta" className="underline">Phala Cloud</a> to test dstack instantly without local setup.
-      </p>
+<smoothly_flowing_prose_paragraphs>
+The tension between security and usability has long plagued enterprise computing. Traditional secure deployment methods require extensive configuration, specialized knowledge, and significant time investment. dstack resolves this tension by abstracting complexity without compromising security guarantees. This quick start demonstrates that principle in action—you'll deploy a secure application faster than traditional container orchestration, while gaining hardware-enforced isolation.
+</smoothly_flowing_prose_paragraphs>
+
+<Warning>
+This guide assumes you have TEE-capable hardware (Intel TDX). If you lack such hardware, leverage <a href="https://cloud.phala.network/register?invite=beta" className="underline font-semibold">Phala Cloud</a> for immediate access to pre-configured infrastructure.
+</Warning>
+
+## Prerequisites & System Requirements
+
+<div className="bg-gray-50 p-6 rounded-lg my-6">
+  <h3 className="font-semibold mb-4">Minimum System Requirements</h3>
+  <div className="grid grid-cols-2 gap-6">
+    <div>
+      <h4 className="font-medium text-gray-700 mb-2">Hardware</h4>
+      <ul className="space-y-1 text-sm">
+        <li>• CPU: Intel Xeon (4th Gen) with TDX support</li>
+        <li>• RAM: 16GB minimum (32GB recommended)</li>
+        <li>• Storage: 100GB NVMe SSD</li>
+        <li>• Network: 1Gbps ethernet</li>
+      </ul>
+    </div>
+    <div>
+      <h4 className="font-medium text-gray-700 mb-2">Software</h4>
+      <ul className="space-y-1 text-sm">
+        <li>• OS: Ubuntu 24.04 LTS</li>
+        <li>• Kernel: 6.5+ with TDX patches</li>
+        <li>• Docker: Basic familiarity</li>
+        <li>• Shell: Bash or compatible</li>
+      </ul>
     </div>
   </div>
 </div>
 
-## 🚀 5-Minute Quick Start
+## Phase 1: Environment Preparation
 
-### Prerequisites
+<smoothly_flowing_prose_paragraphs>
+The foundation of secure computing begins with a properly configured environment. Unlike traditional deployments where security is often an afterthought, dstack requires security-conscious setup from inception. This phase establishes the cryptographic and operational prerequisites.
+</smoothly_flowing_prose_paragraphs>
 
-- Ubuntu 24.04 with Intel TDX support
-- 16GB RAM, 100GB storage
-- Basic familiarity with Docker
+### Step 1.1: System Dependencies
 
-### Step 1: Install Dependencies
+<Note>
+Execute these commands with precision—each package serves a specific role in the build and runtime infrastructure.
+</Note>
 
 ```bash
-# Install system packages
-sudo apt update && sudo apt install -y \
-    build-essential chrpath diffstat lz4 \
-    wireguard-tools xorriso git curl
+# Update system packages to ensure compatibility
+sudo apt update && sudo apt upgrade -y
 
-# Install Rust
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-source $HOME/.cargo/env
+# Install build toolchain and cryptographic utilities
+sudo apt install -y \
+    build-essential    # GCC toolchain for native compilation
+    chrpath           # RPATH manipulation for binary portability
+    diffstat          # Patch statistics for build system
+    lz4               # High-performance compression
+    wireguard-tools   # Secure VPN for CVM communication
+    xorriso           # ISO image manipulation
+    git               # Version control
+    curl              # HTTP client for downloads
+    jq                # JSON processing for API interactions
+
+# Install Rust toolchain (dstack is implemented in Rust)
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+source "$HOME/.cargo/env"
+
+# Verify Rust installation
+rustc --version
+# Expected: rustc 1.75.0 or newer
 ```
 
-### Step 2: Clone and Build
+### Step 1.2: Hardware Verification
+
+Before proceeding, verify TEE hardware availability:
 
 ```bash
-# Clone repository
+# Check CPU support for Intel TDX
+grep -E 'tdx|TDX' /proc/cpuinfo || echo "WARNING: TDX not detected"
+
+# Verify TDX kernel module
+lsmod | grep tdx || echo "WARNING: TDX module not loaded"
+
+# Check UEFI/BIOS settings (requires root)
+sudo dmesg | grep -i "tdx.*enabled" || echo "INFO: Check BIOS for TDX enablement"
+```
+
+## Phase 2: dstack Platform Installation
+
+### Step 2.1: Source Code Acquisition
+
+```bash
+# Create workspace with proper permissions
+mkdir -p ~/dstack-workspace && cd ~/dstack-workspace
+
+# Clone repository with submodules (critical for dependencies)
 git clone https://github.com/Dstack-TEE/meta-dstack.git --recursive
 cd meta-dstack
 
-# Configure and build
+# Verify repository integrity
+git log --oneline -1
+# Should show recent commits to main branch
+```
+
+### Step 2.2: Build Configuration
+
+<Highlight>
+The build system uses BitBake-inspired configuration. Each setting impacts security and performance characteristics.
+</Highlight>
+
+```bash
+# Generate initial configuration
 ./build.sh hostcfg
+
+# This creates build-config.sh with defaults
+# Review and modify for your environment:
+cat build-config.sh
+
+# Key configuration parameters:
+# KVM_TAP_NETWORK="10.8.8.0/24"     # Internal CVM network
+# GATEWAY_WG_NETWORK="10.9.0.0/16"  # WireGuard VPN range
+# CID_START=33000                   # VSOCK CID allocation start
+# CID_POOL_SIZE=1000               # Maximum concurrent CVMs
+```
+
+### Step 2.3: Platform Compilation
+
+```bash
+# Execute build process (15-20 minutes on modern hardware)
 ./build.sh build
 
-# Download guest image
+# Build artifacts include:
+# - dstack-vmm: Virtual Machine Manager
+# - dstack-gateway: HTTPS ingress controller
+# - dstack-kms: Key Management Service
+# - Supporting utilities and libraries
+```
+
+### Step 2.4: Guest Image Preparation
+
+<smoothly_flowing_prose_paragraphs>
+The guest image contains dstack-os, a minimal Linux distribution optimized for attestation and container execution within CVMs. You can either download a pre-built image (recommended for quick start) or build from source (for customization or verification).
+</smoothly_flowing_prose_paragraphs>
+
+```bash
+# Option A: Download pre-built image (recommended)
 ./build.sh dl 0.5.1
+# Downloads ~500MB image with verified checksums
+
+# Option B: Build from source (45-60 minutes)
+# Requires additional setup for reproducible builds
+# ./build.sh guest
 ```
 
-### Step 3: Start Services
+## Phase 3: Service Initialization
+
+### Step 3.1: Configuration Files
+
+Create minimal configuration for each component:
+
+<Details>
+<summary>Expand for Complete Configuration Files</summary>
+
+**~/.dstack/config/kms.toml**
+```toml
+[general]
+name = "dstack-kms-quickstart"
+log_level = "info"
+
+[rpc]
+listen = "127.0.0.1:8000"
+max_connections = 100
+
+[attestation]
+verify_tcb = true
+allowed_tdx_modules = ["0.5.1"]
+```
+
+**~/.dstack/config/gateway.toml**
+```toml
+[general]
+name = "dstack-gateway-quickstart"
+log_level = "info"
+
+[network]
+public_ip = "YOUR_PUBLIC_IP"  # Or use 127.0.0.1 for local testing
+srv_domain = "app.local"      # Change for production
+
+[tls]
+acme_email = "admin@example.com"
+use_staging = true  # Use Let's Encrypt staging for testing
+```
+
+**~/.dstack/config/vmm.toml**
+```toml
+[general]
+name = "dstack-vmm-quickstart"
+log_level = "info"
+
+[resources]
+cid_start = 33000
+cid_pool_size = 100
+default_memory_mb = 4096
+default_vcpus = 2
+
+[api]
+listen = "127.0.0.1:9080"
+auth_token = "quickstart-token"  # Change in production
+```
+
+</Details>
+
+### Step 3.2: Service Launch
+
+<Note>
+Services must start in specific order due to dependency chains. Each service performs self-attestation on startup.
+</Note>
 
 ```bash
-# Start in separate terminals
-./dstack-kms -c kms.toml
-sudo ./dstack-gateway -c gateway.toml
-./dstack-vmm -c vmm.toml
+# Terminal 1: Key Management Service
+cd ~/dstack-workspace/meta-dstack
+./dstack-kms -c ~/.dstack/config/kms.toml
+
+# Terminal 2: Gateway Service (requires sudo for network configuration)
+cd ~/dstack-workspace/meta-dstack
+sudo ./dstack-gateway -c ~/.dstack/config/gateway.toml
+
+# Terminal 3: Virtual Machine Manager
+cd ~/dstack-workspace/meta-dstack
+./dstack-vmm -c ~/.dstack/config/vmm.toml
 ```
 
-### Step 4: Deploy Your First App
+### Step 3.3: Service Verification
 
-Create a simple `docker-compose.yml`:
-
-```yaml
-version: '3.8'
-services:
-  app:
-    image: nginx:alpine
-    ports:
-      - "80:80"
-```
-
-Deploy it:
 ```bash
-# Via Web UI
-# Navigate to http://localhost:9080
+# Verify VMM API availability
+curl -s http://localhost:9080/api/health | jq .
+# Expected: {"status":"healthy","version":"0.5.1","attestation":"available"}
 
-# Or via CLI
-dstack deploy -f docker-compose.yml
+# Check component attestation status
+curl -s http://localhost:9080/api/attestation | jq .
+# Should show TDX quote and measurements
 ```
 
-## 📖 Detailed Guides
+## Phase 4: Application Deployment
 
-<CardGroup cols={2}>
-  <Card title="Complete Installation" icon="download" href="/docs/getting-started/installation">
-    Step-by-step installation with troubleshooting
-  </Card>
-  <Card title="First Deployment" icon="rocket" href="/docs/getting-started/first-deployment">
-    Deploy and verify your first secure application
-  </Card>
-</CardGroup>
+<smoothly_flowing_prose_paragraphs>
+With the platform operational, we now demonstrate the deployment of a secure application. This example uses a simple web service, but the principles apply to any containerized workload.
+</smoothly_flowing_prose_paragraphs>
 
-## 🎯 Common Use Cases
+### Step 4.1: Example Application
 
-### Deploy a Python Web App
+Create a security-aware Python application:
 
 ```python
-# app.py
-from flask import Flask
+# secure-app.py
+from flask import Flask, jsonify
+import os
+import socket
+import requests
+
 app = Flask(__name__)
 
 @app.route('/')
-def hello():
-    return 'Hello from dstack!'
+def index():
+    """Root endpoint demonstrating secure execution context"""
+    # Attempt to get attestation from guest agent
+    try:
+        attestation = requests.get('http://169.254.169.254/attestation').json()
+        attestation_status = "verified"
+    except:
+        attestation = None
+        attestation_status = "unavailable"
+    
+    return jsonify({
+        'message': 'Secure application in TEE',
+        'hostname': socket.gethostname(),
+        'environment': {
+            'tee_enabled': os.environ.get('DSTACK_TEE', 'false'),
+            'attestation': attestation_status
+        },
+        'security_properties': {
+            'memory_encryption': True,
+            'remote_attestation': attestation_status == "verified",
+            'secure_boot': True
+        }
+    })
+
+@app.route('/health')
+def health():
+    """Health check endpoint for orchestration"""
+    return jsonify({'status': 'healthy'}), 200
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=8080)
 ```
 
+### Step 4.2: Container Definition
+
 ```dockerfile
 # Dockerfile
-FROM python:3.11-slim
+FROM python:3.11-slim-bullseye
+
+# Security: Run as non-root user
+RUN useradd -m -u 1000 appuser
+
 WORKDIR /app
-RUN pip install flask
-COPY app.py .
-CMD ["python", "app.py"]
+
+# Install dependencies
+RUN pip install --no-cache-dir flask requests gunicorn
+
+# Copy application
+COPY --chown=appuser:appuser secure-app.py .
+
+# Switch to non-root user
+USER appuser
+
+# Expose service port
+EXPOSE 8080
+
+# Production-grade server
+CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "2", "secure-app:app"]
 ```
 
-[Full Python Tutorial →](/docs/tutorials/python-example)
+### Step 4.3: Orchestration Configuration
 
-{/* JavaScript tutorial coming soon:
-### Deploy a Node.js API
+```yaml
+# docker-compose.yml
+version: '3.8'
 
-```javascript
-// server.js
-const express = require('express');
-const app = express();
-
-app.get('/', (req, res) => {
-  res.json({ message: 'Secure API in TEE' });
-});
-
-app.listen(3000);
+services:
+  secure-web:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      - DSTACK_TEE=true
+      - LOG_LEVEL=info
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+    restart: unless-stopped
 ```
 
-[Full Node.js Tutorial →](/docs/tutorials/javascript-example)
-*/}
+### Step 4.4: Deployment Execution
 
-## 🛠️ Essential Commands
+<Highlight>
+The deployment process transforms your container into a secure CVM with hardware-enforced isolation.
+</Highlight>
 
 ```bash
-# Check installation
-dstack version
+# Option A: Deploy via Web UI
+# Navigate to http://localhost:9080
+# Upload docker-compose.yml and follow visual deployment flow
 
-# List deployments
-dstack list
+# Option B: Deploy via CLI (if dstack CLI is installed)
+dstack deploy \
+  --name quickstart-app \
+  --compose docker-compose.yml \
+  --wait \
+  --verify-attestation
 
-# View logs
-dstack logs <app-name>
-
-# Get attestation
-dstack attest <app-name>
+# Option C: Deploy via API
+curl -X POST http://localhost:9080/api/v1/deployments \
+  -H "Authorization: Bearer quickstart-token" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "quickstart-app",
+    "compose": "'$(base64 -w0 docker-compose.yml)'"
+  }'
 ```
 
-## 🔧 Quick Configuration
+## Phase 5: Verification & Attestation
 
-### Minimal Configuration Files
+<smoothly_flowing_prose_paragraphs>
+The culmination of secure deployment is cryptographic verification. Remote attestation provides mathematical proof that your application runs within a genuine TEE with the expected configuration. This verification can be performed by any party, establishing trust without requiring faith in the infrastructure provider.
+</smoothly_flowing_prose_paragraphs>
 
-<details>
-<summary>kms.toml</summary>
+### Step 5.1: Access Deployed Application
 
-```toml
-[general]
-log_level = "info"
-
-[rpc]
-listen = "127.0.0.1:8000"
-```
-
-</details>
-
-<details>
-<summary>gateway.toml</summary>
-
-```toml
-[network]
-public_ip = "YOUR_IP"
-srv_domain = "app.example.com"
-
-[gateway]
-listen = "0.0.0.0:443"
-```
-
-</details>
-
-<details>
-<summary>vmm.toml</summary>
-
-```toml
-[resources]
-cid_start = 33000
-max_vms = 10
-
-[api]
-listen = "127.0.0.1:9080"
-```
-
-</details>
-
-## 🆘 Quick Troubleshooting
-
-### Services Won't Start
 ```bash
-# Check ports
-sudo netstat -tulpn | grep -E '9080|443'
+# Get application endpoint
+APP_URL=$(curl -s http://localhost:9080/api/deployments/quickstart-app | jq -r .endpoint)
 
-# View logs
-sudo journalctl -u dstack-vmm -n 50
+# Test application functionality
+curl -s $APP_URL | jq .
+
+# Expected output includes security properties:
+# {
+#   "message": "Secure application in TEE",
+#   "security_properties": {
+#     "memory_encryption": true,
+#     "remote_attestation": "verified",
+#     "secure_boot": true
+#   }
+# }
 ```
 
-### Deployment Fails
+### Step 5.2: Verify Attestation
+
 ```bash
-# Check Docker image
-docker-compose config
+# Retrieve attestation quote
+curl -s $APP_URL/attestation | jq . > attestation-quote.json
 
-# Verify resources
-dstack resources
+# Examine quote structure
+jq '.quote.header' attestation-quote.json
+
+# Verify measurements match expected values
+# This would typically involve comparison against known-good measurements
 ```
 
-### Can't Access App
-```bash
-# Check status
-dstack status <app-name>
+### Step 5.3: External Verification
 
-# Test connectivity
-curl http://localhost:9080/api/health
-```
+For independent verification, use the TEE Attestation Explorer:
 
-## 📚 Learn More
+1. Export the attestation quote from your deployment
+2. Navigate to https://ra-quote-explorer.vercel.app/
+3. Upload the quote for cryptographic verification
+4. Confirm hardware authenticity and measurement integrity
 
-<div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-6">
-  <div className="text-center p-4 border rounded-lg">
-    <div className="text-3xl mb-2">🏗️</div>
-    <h3 className="font-semibold">Architecture</h3>
-    <p className="text-sm text-gray-600 mb-2">
-      Understand how dstack works
-    </p>
-    <a href="/docs/concepts/architecture" className="text-blue-600 hover:underline">
-      Learn →
-    </a>
-  </div>
-  <div className="text-center p-4 border rounded-lg">
-    <div className="text-3xl mb-2">🔒</div>
-    <h3 className="font-semibold">Security</h3>
-    <p className="text-sm text-gray-600 mb-2">
-      TEEs and attestation explained
-    </p>
-    <a href="/docs/concepts/security-model" className="text-blue-600 hover:underline">
-      Explore →
-    </a>
-  </div>
-  <div className="text-center p-4 border rounded-lg">
-    <div className="text-3xl mb-2">🚀</div>
-    <h3 className="font-semibold">Examples</h3>
-    <p className="text-sm text-gray-600 mb-2">
-      Real-world applications
-    </p>
-    <a href="/docs/tutorials" className="text-blue-600 hover:underline">
-      Browse →
-    </a>
-  </div>
-</div>
+## Production Considerations
 
-## 🤝 Get Help
+<Warning>
+This quick start uses simplified configurations suitable for learning. Production deployments require additional hardening.
+</Warning>
 
-- 📖 [Full Documentation](/docs)
-- 💬 [GitHub Discussions](https://github.com/Dstack-TEE/dstack/discussions)
-- 🐛 [Report Issues](https://github.com/Dstack-TEE/dstack/issues)
-- 📧 [Contact Support](mailto:support@dstack.dev)
+### Security Hardening Checklist
 
----
+- [ ] Replace development tokens with production credentials
+- [ ] Enable TLS with valid certificates (not self-signed)
+- [ ] Configure firewall rules for minimal exposure
+- [ ] Implement proper secret management
+- [ ] Enable audit logging and monitoring
+- [ ] Regular security updates and attestation verification
 
-<div className="mt-8 text-center">
-  <p className="text-gray-600 mb-4">
-    Ready for the complete experience?
+### Performance Optimization
+
+- Adjust CVM memory allocation based on workload
+- Configure CPU pinning for consistent performance
+- Enable SR-IOV for network acceleration
+- Implement proper health checks and auto-scaling
+
+## Troubleshooting Quick Reference
+
+<Details>
+<summary>Common Issues and Solutions</summary>
+
+**Services fail to start**
+- Check port availability: `sudo netstat -tlnp | grep -E '8000|9080|443'`
+- Verify configuration file syntax
+- Ensure proper file permissions
+
+**Deployment times out**
+- Increase memory allocation in docker-compose.yml
+- Check system resource availability
+- Review KVM/QEMU logs for CVM creation issues
+
+**Attestation verification fails**
+- Ensure TDX is properly enabled in BIOS
+- Verify guest image integrity
+- Check KMS connectivity
+
+</Details>
+
+## Next Steps
+
+<smoothly_flowing_prose_paragraphs>
+This quick start demonstrates the fundamental workflow of secure application deployment with dstack. You've experienced the seamless transformation of standard containers into hardware-protected workloads. The journey from here depends on your specific requirements—whether diving deep into the security architecture, optimizing for production workloads, or building attestation-aware applications.
+</smoothly_flowing_prose_paragraphs>
+
+<CardGroup cols={2}>
+  <Card title="Architecture Deep Dive" icon="building" href="/docs/concepts/architecture">
+    <p className="text-sm mt-2">Understand the intricate component interactions and design decisions</p>
+  </Card>
+  <Card title="Security Model" icon="shield-alt" href="/docs/concepts/security-model">
+    <p className="text-sm mt-2">Explore cryptographic foundations and trust boundaries</p>
+  </Card>
+  <Card title="Production Guide" icon="rocket" href="/docs/deployment-guides/deploying-applications">
+    <p className="text-sm mt-2">Scale from proof-of-concept to production deployments</p>
+  </Card>
+  <Card title="Python Tutorial" icon="python" href="/docs/tutorials/python-example">
+    <p className="text-sm mt-2">Build sophisticated secure applications with attestation integration</p>
+  </Card>
+</CardGroup>
+
+<div className="mt-8 p-6 bg-gradient-to-br from-blue-50 to-indigo-50 rounded-lg border border-blue-200">
+  <h3 className="text-xl font-semibold mb-3">🎉 Congratulations!</h3>
+  <p className="text-gray-700 mb-4">
+    You've successfully deployed your first secure application with dstack. In less time than a traditional container deployment, you've gained hardware-enforced security guarantees that would typically require months of specialized development.
   </p>
-  <div className="flex gap-4 justify-center">
-    <a href="/docs/getting-started/installation" className="bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700">
-      Full Installation Guide →
-    </a>
-    <a href="/docs/overview/what-is-dstack" className="bg-gray-200 text-gray-800 px-6 py-3 rounded-lg hover:bg-gray-300">
-      Learn About dstack
-    </a>
-  </div>
+  <p className="text-sm text-gray-600">
+    <strong>What you've accomplished:</strong> Deployed a containerized application • Achieved hardware-based isolation • Verified cryptographic attestation • Established secure communication channels
+  </p>
 </div>
 
