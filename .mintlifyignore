@@ -1,0 +1,4 @@
+README.md
+*.md
+!docs/**/*.md
+!docs/**/*.mdx 
