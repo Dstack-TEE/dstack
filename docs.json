@@ -34,24 +34,15 @@
           {
             "group": "Core Concepts",
             "pages": [
-              "docs/concepts/overview",
               "docs/concepts/architecture",
               "docs/concepts/core-components",
+              "docs/concepts/networking",
               "docs/concepts/security-model",
-              "docs/concepts/networking"
+              "docs/concepts/overview"
             ]
           },
           {
-            "group": "dstack Reference",
-            "pages": [
-              "docs/dstack-reference/dstack-wiki",
-              "docs/dstack-reference/structure",
-              "docs/dstack-reference/content",
-              "docs/dstack-reference/context"
-            ]
-          },
-          {
-            "group": "Deployment Guides",
+            "group": "Deployment",
             "pages": [
               "docs/deployment-guides/deploying-applications"
             ]
@@ -60,19 +51,23 @@
             "group": "Tutorials",
             "pages": [
               "docs/tutorials/index",
-              "docs/tutorials/python-example"
+              "docs/tutorials/introduction",
+              "docs/tutorials/community"
             ]
           },
           {
-            "group": "Troubleshooting",
+            "group": "dstack Internals",
+            "pages": [
+              "docs/dstack-reference/dstack-wiki",
+              "docs/dstack-reference/structure",
+              "docs/dstack-reference/content",
+              "docs/dstack-reference/context"
+            ]
+          },
+          {
+            "group": "Troubleshooting & Support",
             "pages": [
               "docs/troubleshooting"
-            ]
-          },
-          {
-            "group": "Community",
-            "pages": [
-              "docs/community"
             ]
           }
         ]
