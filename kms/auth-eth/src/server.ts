@@ -47,10 +47,17 @@ export async function build(): Promise<FastifyInstance> {
   server.decorate('ethereum', new EthereumBackend(provider, kmsContractAddr));
 
   server.get('/', async (request, reply) => {
+    const batch = await Promise.all([
+      server.ethereum.getGatewayAppId(),
+      server.ethereum.getChainId(),
+      server.ethereum.getAppAuthImplementation(),
+    ]);
     return {
       status: 'ok',
       kmsContractAddr: kmsContractAddr,
-      gatewayAppId: await server.ethereum.getGatewayAppId(),
+      gatewayAppId: batch[0],
+      chainId: batch[1],
+      appAuthImplementation: batch[2],
     };
   });
 

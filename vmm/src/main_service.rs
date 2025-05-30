@@ -6,10 +6,10 @@ use dstack_types::AppCompose;
 use dstack_vmm_rpc as rpc;
 use dstack_vmm_rpc::vmm_server::{VmmRpc, VmmServer};
 use dstack_vmm_rpc::{
-    AppId, GatewaySettings, GetInfoResponse, GetMetaResponse, Id, ImageInfo as RpcImageInfo,
-    ImageListResponse, KmsSettings, ListGpusResponse, PublicKeyResponse, ResizeVmRequest,
-    ResourcesSettings, StatusRequest, StatusResponse, UpgradeAppRequest, VersionResponse,
-    VmConfiguration,
+    AppId, ComposeHash as RpcComposeHash, GatewaySettings, GetInfoResponse, GetMetaResponse, Id,
+    ImageInfo as RpcImageInfo, ImageListResponse, KmsSettings, ListGpusResponse,
+    PublicKeyResponse, ResizeVmRequest, ResourcesSettings, StatusRequest, StatusResponse,
+    UpgradeAppRequest, VersionResponse, VmConfiguration,
 };
 use fs_err as fs;
 use ra_rpc::{CallContext, RpcCall};
@@ -432,6 +432,15 @@ impl VmmRpc for RpcHandler {
     async fn list_gpus(self) -> Result<ListGpusResponse> {
         let gpus = self.app.list_gpus().await?;
         Ok(ListGpusResponse { gpus })
+    }
+
+    async fn get_compose_hash(self, request: VmConfiguration) -> Result<RpcComposeHash> {
+        validate_label(&request.name)?;
+        // check the compose file is valid
+        let _app_compose: AppCompose =
+            serde_json::from_str(&request.compose_file).context("Invalid compose file")?;
+        let hash = hex_sha256(&request.compose_file);
+        Ok(RpcComposeHash { hash })
     }
 }
 

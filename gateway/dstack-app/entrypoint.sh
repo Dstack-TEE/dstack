@@ -61,10 +61,15 @@ RESERVED_NET="10.4.0.0/27"
 # The client IP range this dstack-gateway node can allocate
 CLIENT_RANGE="10.4.$((SUBNET_INDEX * 16)).0/20"
 
+if [ -z "$RPC_DOMAIN" ]; then
+    RPC_DOMAIN="gateway.$SRV_DOMAIN"
+fi
+
 echo "IP: $IP"
 echo "RESERVED_NET: $RESERVED_NET"
 echo "CLIENT_RANGE: $CLIENT_RANGE"
 echo "SYNC_ENABLED: $SYNC_ENABLED"
+echo "RPC_DOMAIN: $RPC_DOMAIN"
 
 # Create gateway.toml configuration
 cat >$CONFIG_PATH <<EOF
@@ -84,7 +89,7 @@ mandatory = false
 [core]
 state_path = "$DATA_DIR/gateway-state.json"
 set_ulimit = true
-rpc_domain = "gateway.$SRV_DOMAIN"
+rpc_domain = "$RPC_DOMAIN"
 run_in_dstack = true
 
 [core.sync]

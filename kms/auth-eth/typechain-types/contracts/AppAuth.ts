@@ -126,7 +126,7 @@ export interface AppAuthInterface extends Interface {
   ): string;
   encodeFunctionData(
     functionFragment: "initialize",
-    values: [AddressLike, AddressLike, boolean, boolean]
+    values: [AddressLike, AddressLike, boolean, boolean, BytesLike, BytesLike]
   ): string;
   encodeFunctionData(
     functionFragment: "isAppAllowed",
@@ -403,7 +403,9 @@ export interface AppAuth extends BaseContract {
       initialOwner: AddressLike,
       _appId: AddressLike,
       _disableUpgrades: boolean,
-      _allowAnyDevice: boolean
+      _allowAnyDevice: boolean,
+      initialDeviceId: BytesLike,
+      initialComposeHash: BytesLike
     ],
     [void],
     "nonpayable"
@@ -486,7 +488,9 @@ export interface AppAuth extends BaseContract {
       initialOwner: AddressLike,
       _appId: AddressLike,
       _disableUpgrades: boolean,
-      _allowAnyDevice: boolean
+      _allowAnyDevice: boolean,
+      initialDeviceId: BytesLike,
+      initialComposeHash: BytesLike
     ],
     [void],
     "nonpayable"

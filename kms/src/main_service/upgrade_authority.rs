@@ -45,6 +45,26 @@ pub(crate) struct BootResponse {
     pub reason: String,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AuthApiInfoResponse {
+    pub status: String,
+    pub kms_contract_addr: String,
+    pub gateway_app_id: String,
+    pub chain_id: u64,
+    pub app_auth_implementation: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct GetInfoResponse {
+    pub is_dev: bool,
+    pub gateway_app_id: Option<String>,
+    pub kms_contract_address: Option<String>,
+    pub chain_id: Option<u64>,
+    pub app_auth_implementation: Option<String>,
+}
+
 impl AuthApi {
     pub async fn is_app_allowed(&self, boot_info: &BootInfo, is_kms: bool) -> Result<BootResponse> {
         match self {
@@ -66,6 +86,31 @@ impl AuthApi {
                     bail!("Failed to check boot auth: {}", response.text().await?);
                 }
                 Ok(response.json().await?)
+            }
+        }
+    }
+
+    pub async fn get_info(&self) -> Result<GetInfoResponse> {
+        match self {
+            AuthApi::Dev { dev } => Ok(GetInfoResponse {
+                is_dev: true,
+                kms_contract_address: None,
+                gateway_app_id: Some(dev.gateway_app_id.clone()),
+                chain_id: None,
+                app_auth_implementation: None,
+            }),
+            AuthApi::Webhook { webhook } => {
+                let client = reqwest::Client::new();
+                let response = client.get(&webhook.url).send().await?;
+                println!("url: {}", webhook.url);
+                let info: AuthApiInfoResponse = response.json().await?;
+                Ok(GetInfoResponse {
+                    is_dev: false,
+                    kms_contract_address: Some(info.kms_contract_addr.clone()),
+                    chain_id: Some(info.chain_id),
+                    gateway_app_id: Some(info.gateway_app_id.clone()),
+                    app_auth_implementation: Some(info.app_auth_implementation.clone()),
+                })
             }
         }
     }
