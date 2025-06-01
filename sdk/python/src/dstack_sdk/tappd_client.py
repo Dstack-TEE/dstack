@@ -9,6 +9,8 @@ import base64
 from pydantic import BaseModel
 import httpx
 
+__version__ = "0.2.0"
+
 logger = logging.getLogger('dstack_sdk')
 
 QuoteHashAlgorithms = Literal[
@@ -138,7 +140,10 @@ class TappdClient(BaseClient):
             response = client.post(
                 path,
                 json=payload,
-                headers={"Content-Type": "application/json"}
+                headers={
+                    "Content-Type": "application/json",
+                    "User-Agent": f"dstack-sdk-python/{__version__}"
+                }
             )
             response.raise_for_status()
             return response.json()
@@ -195,7 +200,10 @@ class AsyncTappdClient(BaseClient):
             response = await client.post(
                 path,
                 json=payload,
-                headers={"Content-Type": "application/json"}
+                headers={
+                    "Content-Type": "application/json",
+                    "User-Agent": f"dstack-sdk-python/{__version__}"
+                }
             )
             response.raise_for_status()
             return response.json()

@@ -4,6 +4,8 @@ import http from 'http'
 import https from 'https'
 import { URL } from 'url'
 
+export const __version__ = "0.2.0"
+
 export interface DeriveKeyResponse {
   key: string
   certificate_chain: string[]
@@ -127,6 +129,7 @@ export function send_rpc_request<T = any>(endpoint: string, path: string, payloa
         headers: {
           'Content-Type': 'application/json',
           'Content-Length': Buffer.byteLength(payload),
+          'User-Agent': `dstack-sdk-js/${__version__}`,
         },
       }
 
