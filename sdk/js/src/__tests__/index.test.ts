@@ -1,6 +1,13 @@
 import { expect, describe, it } from 'vitest'
 import { TappdClient } from '../index'
 
+// Test PEM key for cross-platform validation
+const TEST_PEM_KEY = `-----BEGIN PRIVATE KEY-----
+MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgsxWvvkVZix6DYyFP
+aS1yz5RZLOSiiHLx8mp7axE6Whuha0QDQgAED/3OrGv33eegcOrd8WYJWLMbDJQc
+TJaeKpGauQSXugPjuwnq4a2mCUE221wXaGWAXBtH4eiHiumFe2eFzeDACA==
+-----END PRIVATE KEY-----`
+
 describe('TappdClient', () => {
   it('should able to derive key', async () => {
     const client = new TappdClient()
@@ -37,6 +44,55 @@ describe('TappdClient', () => {
     expect(key).toBeInstanceOf(Uint8Array)
     expect(key.length).toBe(32)
     expect(key.length).not.eq(full.length)
+  })
+
+  it('should validate asUint8Array output with known PEM key', () => {
+    // Create a mock DeriveKeyResponse with known PEM key
+    const mockResult = {
+      key: TEST_PEM_KEY,
+      certificate_chain: [],
+      asUint8Array: (length?: number) => {
+        // Import the x509key_to_uint8array function logic
+        const content = TEST_PEM_KEY.replace(/-----BEGIN PRIVATE KEY-----/, '')
+          .replace(/-----END PRIVATE KEY-----/, '')
+          .replace(/\n/g, '');
+        const binaryDer = atob(content)
+        const max_length = length || binaryDer.length
+        const result = new Uint8Array(max_length)
+        for (let i = 0; i < max_length; i++) {
+          result[i] = binaryDer.charCodeAt(i)
+        }
+        return result
+      }
+    }
+
+    // Test full length conversion
+    const resultFull = mockResult.asUint8Array()
+    expect(resultFull).toBeInstanceOf(Uint8Array)
+    expect(resultFull.length).toBe(139)  // Expected length for this key
+
+    // Test with specific length
+    const result32 = mockResult.asUint8Array(32)
+    expect(result32).toBeInstanceOf(Uint8Array)
+    expect(result32.length).toBe(32)
+
+    // Verify expected hex output (should match Python)
+    const expectedPrefix = "308187020100301306072a8648ce3d020106082a8648ce3d030107046d306b02"
+    const result32Hex = Array.from(result32).map(b => b.toString(16).padStart(2, '0')).join('')
+    expect(result32Hex).toBe(expectedPrefix)
+
+    // Test that longer result starts with the same prefix
+    const resultFullPrefix = Array.from(resultFull.slice(0, 32)).map(b => b.toString(16).padStart(2, '0')).join('')
+    expect(resultFullPrefix).toBe(expectedPrefix)
+
+    // Expected full hex for this specific key (should match Python)
+    const expectedFullHex = ("308187020100301306072a8648ce3d020106082a8648ce3d030107046d306b02" +
+                           "01010420b315afbe45598b1e8363214f692d72cf94592ce4a28872f1f26a7b6b11" +
+                           "3a5a1ba16b44034200040ffdceac6bf7dde7a070eaddf1660958b31b0c941c4c96" +
+                           "9e2a919ab90497ba03e3bb09eae1ada6094136db5c176865805c1b47e1e8878ae9" +
+                           "857b6785cde0c008")
+    const resultFullHex = Array.from(resultFull).map(b => b.toString(16).padStart(2, '0')).join('')
+    expect(resultFullHex).toBe(expectedFullHex)
   })
 
   it('should able set quote hash_algorithm', async () => {
