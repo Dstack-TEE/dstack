@@ -1,0 +1,18 @@
+[package]
+name = "rocket-vsock-listener"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+derive_more = { workspace = true, features = ["display"] }
+pin-project.workspace = true
+rocket.workspace = true
+serde = { workspace = true, features = ["derive"] }
+thiserror.workspace = true
+tokio-vsock.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full"] }

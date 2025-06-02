@@ -1,0 +1,6 @@
+{
+  "/_mintlify/revalidate/route": "app/_mintlify/revalidate/route.js",
+  "/_mintlify/navigation/route": "app/_mintlify/navigation/route.js",
+  "/_mintlify/auth-metadata/[subdomain]/[[...slug]]/route": "app/_mintlify/auth-metadata/[subdomain]/[[...slug]]/route.js",
+  "/_mintlify/_markdown/_sites/[subdomain]/[[...slug]]/route": "app/_mintlify/_markdown/_sites/[subdomain]/[[...slug]]/route.js"
+}

@@ -1,0 +1,31 @@
+[package]
+name = "ra-tls"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+bon.workspace = true
+dcap-qvl.workspace = true
+elliptic-curve.workspace = true
+fs-err.workspace = true
+hex.workspace = true
+hkdf.workspace = true
+p256.workspace = true
+rcgen = { workspace = true, features = ["x509-parser", "pem"] }
+ring.workspace = true
+rustls-pki-types.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+x509-parser.workspace = true
+yasna.workspace = true
+tracing.workspace = true
+sha3.workspace = true
+tdx-attest.workspace = true
+scale.workspace = true
+
+cc-eventlog.workspace = true
+serde-human-bytes.workspace = true

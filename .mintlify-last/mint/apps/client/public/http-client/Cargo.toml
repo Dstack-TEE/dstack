@@ -1,0 +1,28 @@
+[package]
+name = "http-client"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+http-body-util.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+hyperlocal.workspace = true
+log.workspace = true
+pin-project-lite = "0.2.15"
+prpc = { workspace = true, optional = true }
+reqwest.workspace = true
+serde.workspace = true
+tokio.workspace = true
+tokio-vsock.workspace = true
+tower-service = "0.3.3"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full"] }
+
+[features]
+default = ["prpc"]
+prpc = ["dep:prpc"]

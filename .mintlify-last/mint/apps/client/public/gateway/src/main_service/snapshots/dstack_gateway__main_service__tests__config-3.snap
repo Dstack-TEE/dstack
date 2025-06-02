@@ -1,0 +1,20 @@
+---
+source: gateway/src/main_service/tests.rs
+assertion_line: 34
+expression: wg_config
+snapshot_kind: text
+---
+[Interface]
+PrivateKey = 
+ListenPort = 51820
+
+
+[Peer]
+PublicKey = test-pubkey-0
+AllowedIPs = 10.0.0.2/32
+PersistentKeepalive = 25
+
+[Peer]
+PublicKey = test-pubkey-1
+AllowedIPs = 10.0.0.3/32
+PersistentKeepalive = 25

@@ -1,0 +1,183 @@
+[workspace.package]
+version = "0.5.1"
+authors = ["Kevin Wang <wy721@qq.com>", "Leechael <Leechael@github.com>"]
+edition = "2021"
+license = "MIT"
+homepage = "https://github.com/Dstack-TEE/dstack"
+repository = "https://github.com/Dstack-TEE/dstack"
+
+[workspace]
+members = [
+    "kms",
+    "kms/rpc",
+    "ra-rpc",
+    "ra-tls",
+    "tdx-attest-sys",
+    "tdx-attest",
+    "dstack-util",
+    "iohash",
+    "guest-agent",
+    "guest-agent/rpc",
+    "vmm",
+    "vmm/rpc",
+    "gateway",
+    "gateway/rpc",
+    "certbot",
+    "certbot/cli",
+    "ct_monitor",
+    "cc-eventlog",
+    "supervisor",
+    "supervisor/client",
+    "rocket-vsock-listener",
+    "http-client",
+    "host-api",
+    "guest-api",
+    "load_config",
+    "key-provider-client",
+    "dstack-types",
+    "cert-client",
+    "lspci",
+    "sdk/rust",
+    "sodiumbox",
+    "serde-duration",
+]
+resolver = "2"
+
+[workspace.dependencies]
+# Internal dependencies
+ra-rpc = { path = "ra-rpc", default-features = false }
+ra-tls = { path = "ra-tls" }
+dstack-gateway-rpc = { path = "gateway/rpc" }
+dstack-kms-rpc = { path = "kms/rpc" }
+dstack-guest-agent-rpc = { path = "guest-agent/rpc" }
+dstack-vmm-rpc = { path = "vmm/rpc" }
+cc-eventlog = { path = "cc-eventlog" }
+supervisor = { path = "supervisor" }
+supervisor-client = { path = "supervisor/client" }
+tdx-attest = { path = "tdx-attest" }
+tdx-attest-sys = { path = "tdx-attest-sys" }
+certbot = { path = "certbot" }
+rocket-vsock-listener = { path = "rocket-vsock-listener" }
+host-api = { path = "host-api", default-features = false }
+guest-api = { path = "guest-api", default-features = false }
+http-client = { path = "http-client", default-features = false }
+load_config = { path = "load_config" }
+key-provider-client = { path = "key-provider-client" }
+dstack-types = { path = "dstack-types" }
+cert-client = { path = "cert-client" }
+lspci = { path = "lspci" }
+sodiumbox = { path = "sodiumbox" }
+serde-duration = { path = "serde-duration" }
+
+# Core dependencies
+anyhow = "1.0.97"
+chrono = "0.4.40"
+clap = { version = "4.5.32", features = ["derive", "string"] }
+dashmap = "6.1.0"
+fs-err = "3.1.0"
+path-absolutize = "3.1.1"
+futures = "0.3.31"
+git-version = "0.3.9"
+libc = "0.2.171"
+log = "0.4.26"
+notify = "8.0.0"
+rand = "0.8.5"
+tracing = "0.1.40"
+tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
+safe-write = "0.1.2"
+nix = "0.29.0"
+sd-notify = "0.4.5"
+
+# Serialization/Parsing
+bon = "3.4.0"
+base64 = "0.22.1"
+hex = "0.4.3"
+hex_fmt = "0.3.0"
+prost = "0.13.5"
+scale = { version = "3.7.4", package = "parity-scale-codec", features = ["derive"] }
+serde = { version = "1.0.219", features = ["derive"] }
+serde-human-bytes = "0.1.0"
+serde_json = "1.0.140"
+toml = "0.8.20"
+toml_edit = { version = "0.22.24", features = ["serde"] }
+yasna = "0.5.2"
+bytes = "1.10.1"
+figment = "0.10.19"
+
+# Networking/HTTP
+bollard = "0.18.1"
+http = "1.3.1"
+http-body-util = "0.1.3"
+hyper = { version = "1.6.0", features = ["client", "http1"] }
+hyper-util = { version = "0.1.10", features = ["client", "client-legacy", "http1"] }
+hyperlocal = "0.9.1"
+ipnet = { version = "2.11.0", features = ["serde"] }
+reqwest = { version = "0.12.14", default-features = false, features = ["json", "rustls-tls", "charset", "hickory-dns"] }
+rocket = { git = "https://github.com/rwf2/Rocket", branch = "master", features = ["mtls"] }
+rocket-apitoken = { git = "https://github.com/kvinwang/rocket-apitoken", branch = "dev" }
+tokio = { version = "1.44.1" }
+tokio-vsock = "0.7.0"
+sysinfo = "0.33.1"
+default-net = "0.22.0"
+
+# Cryptography/Security
+aes-gcm = "0.10.3"
+curve25519-dalek = "4.1.3"
+dcap-qvl = "0.2.4"
+elliptic-curve = { version = "0.13.8", features = ["pkcs8"] }
+getrandom = "0.3.1"
+hkdf = "0.12.4"
+p256 = "0.13.2"
+ring = "0.17.14"
+rustls = "0.23.23"
+rustls-pki-types = "1.11.0"
+schnorrkel = "0.11.4"
+sha2 = "0.10.8"
+sha3 = "0.10.8"
+blake2 = "0.10.6"
+tokio-rustls = { version = "0.26.2", features = ["ring"] }
+x25519-dalek = { version = "2.0.1", features = ["static_secrets"] }
+k256 = "0.13.4"
+# Additional RustCrypto dependencies for sealed box
+xsalsa20poly1305 = "0.9.0"
+salsa20 = "0.10"
+rand_core = "0.6.4"
+alloy = { version = "0.15", default-features = false }
+
+# Certificate/DNS
+hickory-resolver = "0.24.4"
+instant-acme = "0.7.2"
+rcgen = { version = "0.13.2", features = ["pem"] }
+x509-parser = "0.16.0"
+
+# RPC/Protocol
+prpc = "0.6.0"
+prpc-build = "0.6.1"
+
+# Development/Testing
+bindgen = "0.71.1"
+cc = "1.2.16"
+documented = "0.9.1"
+enum_dispatch = "0.3.13"
+insta = "1.42.2"
+num_enum = "0.7.3"
+thiserror = "2.0.12"
+derive_more = "2.0.1"
+tempfile = "3.18.0"
+
+# Utilities
+dirs = "6.0.0"
+humantime = "2.2.0"
+parcelona = "0.4.3"
+pin-project = "1.1.10"
+regex = "1.11.1"
+rinja = "0.3.5"
+shared_child = "1.0.1"
+strip-ansi-escapes = "0.2.1"
+tailf = "0.1.2"
+time = "0.3.39"
+uuid = { version = "1.15.1", features = ["v4"] }
+which = "7.0.2"
+smallvec = "1.14.0"
+cmd_lib = "1.9.5"
+serde_yaml2 = "0.1.2"

@@ -1,0 +1,15 @@
+[package]
+name = "iohash"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+blake2.workspace = true
+clap = { workspace = true, features = ["derive"] }
+fs-err.workspace = true
+hex_fmt.workspace = true
+sha2.workspace = true
+sha3.workspace = true

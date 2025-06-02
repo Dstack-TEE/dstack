@@ -1,0 +1,581 @@
+---
+title: "Community & Ecosystem"
+description: "Engage with the dstack community, contribute to development, and access collaborative resources"
+---
+
+# Community & Ecosystem
+
+<page_summary>
+  The dstack community represents a convergence of security researchers, cloud architects, cryptographers, and systems engineers united by a shared vision of democratizing confidential computing. This page serves as the authoritative guide to engaging with our ecosystem—whether seeking technical assistance, contributing code, participating in governance, or advancing the state of secure computing. Our community operates on principles of transparency, technical excellence, and collaborative innovation.
+</page_summary>
+
+<smoothly_flowing_prose_paragraphs>
+  Open-source projects succeed not merely through code quality but through the strength of their communities. The dstack ecosystem exemplifies this principle, bringing together diverse perspectives from academia, industry, and independent researchers. Our community's unique value proposition lies in bridging the gap between theoretical cryptographic research and practical deployment challenges, creating a feedback loop that benefits both domains.
+
+  The transition from traditional computing to confidential computing requires more than technical innovation—it demands cultural change, educational resources, and collaborative problem-solving. The dstack community serves as the catalyst for this transformation, providing forums for knowledge exchange, collaborative development, and collective governance of the platform's evolution.
+</smoothly_flowing_prose_paragraphs>
+
+## Community Architecture
+
+<Note>
+  Our community structure mirrors the technical architecture of dstack itself—modular, interconnected, and designed for resilience.
+</Note>
+
+### Core Community Components
+
+<div className="grid grid-cols-1 md:grid-cols-2 gap-6 my-6">
+  <div className="bg-indigo-50 border-l-4 border-indigo-400 p-6">
+    <h4 className="font-semibold text-indigo-900 mb-3">Technical Working Groups</h4>
+    <p className="text-sm mb-3">Specialized teams focused on specific technical domains:</p>
+
+    <ul className="text-sm space-y-1">
+      <li>• <strong>Security Architecture</strong>: Cryptographic protocols and threat modeling</li>
+      <li>• <strong>Platform Development</strong>: Core dstack components and APIs</li>
+      <li>• <strong>Hardware Integration</strong>: TEE vendor compatibility and optimization</li>
+      <li>• <strong>Documentation</strong>: Technical writing and educational resources</li>
+    </ul>
+  </div>
+
+  <div className="bg-green-50 border-l-4 border-green-400 p-6">
+    <h4 className="font-semibold text-green-900 mb-3">Governance Bodies</h4>
+    <p className="text-sm mb-3">Decentralized decision-making structures:</p>
+
+    <ul className="text-sm space-y-1">
+      <li>• <strong>Technical Steering Committee</strong>: Architecture and roadmap decisions</li>
+      <li>• <strong>Security Advisory Board</strong>: Vulnerability response and audits</li>
+      <li>• <strong>Community Council</strong>: Code of conduct and inclusivity</li>
+      <li>• <strong>Token Holders</strong>: On-chain governance participation</li>
+    </ul>
+  </div>
+</div>
+
+## Communication Channels
+
+<smoothly_flowing_prose_paragraphs>
+  Effective collaboration requires appropriate communication channels tailored to different interaction modes. Our multi-modal approach ensures that whether you prefer synchronous discussion, asynchronous deliberation, or formal documentation, there's a suitable venue for engagement.
+</smoothly_flowing_prose_paragraphs>
+
+### Primary Channels
+
+<div className="space-y-4 my-6">
+  <div className="border rounded-lg p-4 hover:shadow-lg transition-shadow">
+    <h4 className="font-semibold flex items-center mb-2">
+      <span className="text-2xl mr-3">💬</span>
+      Discord Server
+    </h4>
+
+    <p className="text-sm text-gray-600 mb-2">Real-time discussion and community support</p>
+    <a href="https://discord.gg/phala" className="text-blue-600 hover:underline text-sm">Join Discord →</a>
+
+    <div className="mt-2 text-xs text-gray-500">
+      <strong>Channels:</strong> #general, #development, #security, #support, #research
+    </div>
+  </div>
+
+  <div className="border rounded-lg p-4 hover:shadow-lg transition-shadow">
+    <h4 className="font-semibold flex items-center mb-2">
+      <span className="text-2xl mr-3">🐙</span>
+      GitHub Discussions
+    </h4>
+
+    <p className="text-sm text-gray-600 mb-2">Long-form technical discussions and proposals</p>
+    <a href="https://github.com/Dstack-TEE/dstack/discussions" className="text-blue-600 hover:underline text-sm">View Discussions →</a>
+
+    <div className="mt-2 text-xs text-gray-500">
+      <strong>Categories:</strong> RFCs, Architecture, Security, Community, Show & Tell
+    </div>
+  </div>
+
+  <div className="border rounded-lg p-4 hover:shadow-lg transition-shadow">
+    <h4 className="font-semibold flex items-center mb-2">
+      <span className="text-2xl mr-3">📧</span>
+      Developer Mailing List
+    </h4>
+
+    <p className="text-sm text-gray-600 mb-2">Security announcements and technical updates</p>
+    <a href="mailto:dev-subscribe@dstack.dev" className="text-blue-600 hover:underline text-sm">Subscribe →</a>
+
+    <div className="mt-2 text-xs text-gray-500">
+      <strong>Volume:</strong> 2-3 messages per week • <strong>Archives:</strong> Public
+    </div>
+  </div>
+
+  <div className="border rounded-lg p-4 hover:shadow-lg transition-shadow">
+    <h4 className="font-semibold flex items-center mb-2">
+      <span className="text-2xl mr-3">🐦</span>
+      Social Media
+    </h4>
+
+    <p className="text-sm text-gray-600 mb-2">Announcements and ecosystem updates</p>
+
+    <div className="flex gap-4 text-sm">
+      <a href="https://twitter.com/dstack_tee" className="text-blue-600 hover:underline">Twitter/X →</a>
+      <a href="https://www.linkedin.com/company/dstack-tee" className="text-blue-600 hover:underline">LinkedIn →</a>
+    </div>
+  </div>
+</div>
+
+## Contributing to dstack
+
+<smoothly_flowing_prose_paragraphs>
+  Contributing to dstack extends beyond code submissions—it encompasses documentation improvements, security research, educational content creation, and community building. Our contribution framework acknowledges that expertise comes in many forms, and every contribution strengthens the ecosystem.
+</smoothly_flowing_prose_paragraphs>
+
+### Contribution Pathways
+
+<Tabs>
+  <Tab title="Code Contributions">
+    <div className="mt-4">
+      <h4 className="font-semibold mb-3">Development Workflow</h4>
+
+      <ol className="space-y-3 ml-4">
+        <li>
+          <strong>1. Environment Setup</strong>
+
+          <pre className="bg-gray-100 p-2 rounded mt-1 text-sm">
+            git clone [https://github.com/Dstack-TEE/dstack.git](https://github.com/Dstack-TEE/dstack.git)
+            cd dstack
+            ./scripts/dev-setup.sh
+          </pre>
+        </li>
+
+        <li>
+          <strong>2. Find an Issue</strong>
+          <p className="text-sm mt-1">Browse <a href="https://github.com/Dstack-TEE/dstack/issues?q=is:open+label:good-first-issue" className="text-blue-600 hover:underline">good first issues</a> or <a href="https://github.com/Dstack-TEE/dstack/issues?q=is:open+label:help-wanted" className="text-blue-600 hover:underline">help wanted</a> tags</p>
+        </li>
+
+        <li>
+          <strong>3. Development Process</strong>
+
+          <ul className="text-sm mt-1 ml-4 list-disc">
+            <li>Create feature branch: <code className="bg-gray-100 px-1">git checkout -b feature/your-feature</code></li>
+            <li>Write tests first (TDD encouraged)</li>
+            <li>Implement changes following style guide</li>
+            <li>Run test suite: <code className="bg-gray-100 px-1">cargo test</code></li>
+            <li>Update documentation</li>
+          </ul>
+        </li>
+
+        <li>
+          <strong>4. Submit Pull Request</strong>
+          <p className="text-sm mt-1">Follow the <a href="https://github.com/Dstack-TEE/dstack/blob/main/CONTRIBUTING.md" className="text-blue-600 hover:underline">contribution guidelines</a> and PR template</p>
+        </li>
+      </ol>
+
+      <div className="mt-6 p-4 bg-yellow-50 rounded-lg">
+        <h5 className="font-semibold text-yellow-800 mb-2">Code Quality Standards</h5>
+
+        <ul className="text-sm space-y-1">
+          <li>• Rust code must pass <code className="bg-yellow-100 px-1">cargo clippy</code> with no warnings</li>
+          <li>• 90%+ test coverage for new features</li>
+          <li>• Security-critical code requires formal review</li>
+          <li>• Performance regressions must be justified</li>
+        </ul>
+      </div>
+    </div>
+  </Tab>
+
+  <Tab title="Documentation">
+    <div className="mt-4">
+      <h4 className="font-semibold mb-3">Documentation Standards</h4>
+
+      <p className="text-sm mb-4">
+        High-quality documentation is crucial for adoption. We maintain several documentation types:
+      </p>
+
+      <div className="space-y-4">
+        <div className="border-l-4 border-blue-400 pl-4">
+          <h5 className="font-medium">API Documentation</h5>
+          <p className="text-sm text-gray-600">Generated from code comments using rustdoc</p>
+
+          <pre className="bg-gray-100 p-2 rounded mt-2 text-xs">
+            /// Performs remote attestation verification
+            ///
+            /// # Arguments
+            /// \* `quote` - The attestation quote to verify
+            /// \* `nonce` - Challenge nonce for freshness
+            ///
+            /// # Returns
+            /// Result containing verification status
+            pub fn verify\_attestation(quote: &\[u8], nonce: &\[u8]) -> Result\<AttestationResult>
+          </pre>
+        </div>
+
+        <div className="border-l-4 border-green-400 pl-4">
+          <h5 className="font-medium">User Guides</h5>
+          <p className="text-sm text-gray-600">Task-oriented documentation in MDX format</p>
+
+          <ul className="text-sm mt-2 space-y-1">
+            <li>• Clear learning objectives</li>
+            <li>• Step-by-step instructions</li>
+            <li>• Troubleshooting sections</li>
+            <li>• Real-world examples</li>
+          </ul>
+        </div>
+
+        <div className="border-l-4 border-purple-400 pl-4">
+          <h5 className="font-medium">Architecture Documents</h5>
+          <p className="text-sm text-gray-600">Design decisions and technical specifications</p>
+
+          <ul className="text-sm mt-2 space-y-1">
+            <li>• ADRs (Architecture Decision Records)</li>
+            <li>• System design documents</li>
+            <li>• Security analysis reports</li>
+            <li>• Performance benchmarks</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </Tab>
+
+  <Tab title="Security Research">
+    <div className="mt-4">
+      <h4 className="font-semibold mb-3">Security Contribution Guidelines</h4>
+
+      <Warning>
+        Security vulnerabilities must be reported privately. Do not open public issues for security concerns.
+      </Warning>
+
+      <div className="mt-4 space-y-4">
+        <div>
+          <h5 className="font-medium mb-2">Responsible Disclosure Process</h5>
+
+          <ol className="text-sm space-y-2 ml-4">
+            <li>1. Email [security@dstack.dev](mailto:security@dstack.dev) with encrypted details (PGP key available)</li>
+            <li>2. Include: vulnerability description, impact assessment, reproduction steps</li>
+            <li>3. Allow 90 days for patch development and deployment</li>
+            <li>4. Coordinate disclosure timing with security team</li>
+            <li>5. Receive acknowledgment in security advisories</li>
+          </ol>
+        </div>
+
+        <div>
+          <h5 className="font-medium mb-2">Security Research Areas</h5>
+
+          <div className="grid grid-cols-2 gap-2 text-sm">
+            <div className="bg-gray-50 p-2 rounded">Side-channel analysis</div>
+            <div className="bg-gray-50 p-2 rounded">Attestation protocols</div>
+            <div className="bg-gray-50 p-2 rounded">Key management</div>
+            <div className="bg-gray-50 p-2 rounded">Network security</div>
+            <div className="bg-gray-50 p-2 rounded">Supply chain integrity</div>
+            <div className="bg-gray-50 p-2 rounded">Formal verification</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </Tab>
+
+  <Tab title="Community Building">
+    <div className="mt-4">
+      <h4 className="font-semibold mb-3">Community Initiatives</h4>
+
+      <p className="text-sm mb-4">
+        Building a thriving community requires diverse contributions beyond code:
+      </p>
+
+      <div className="space-y-3">
+        <div className="flex items-start">
+          <span className="text-2xl mr-3">🎓</span>
+
+          <div>
+            <h5 className="font-medium">Educational Content</h5>
+            <p className="text-sm text-gray-600">Create tutorials, workshops, or university curriculum</p>
+          </div>
+        </div>
+
+        <div className="flex items-start">
+          <span className="text-2xl mr-3">🌍</span>
+
+          <div>
+            <h5 className="font-medium">Localization</h5>
+            <p className="text-sm text-gray-600">Translate documentation and resources</p>
+          </div>
+        </div>
+
+        <div className="flex items-start">
+          <span className="text-2xl mr-3">📢</span>
+
+          <div>
+            <h5 className="font-medium">Advocacy</h5>
+            <p className="text-sm text-gray-600">Present at conferences, write blog posts, organize meetups</p>
+          </div>
+        </div>
+
+        <div className="flex items-start">
+          <span className="text-2xl mr-3">🤝</span>
+
+          <div>
+            <h5 className="font-medium">Support</h5>
+            <p className="text-sm text-gray-600">Help newcomers, answer questions, triage issues</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </Tab>
+</Tabs>
+
+## Governance Model
+
+<smoothly_flowing_prose_paragraphs>
+  The governance of dstack reflects our commitment to decentralization not just in technology but in decision-making. Our hybrid governance model combines the efficiency of technical meritocracy with the inclusivity of token-based voting, creating a system that balances expertise with community representation.
+</smoothly_flowing_prose_paragraphs>
+
+### Decision-Making Framework
+
+<div className="my-6">
+  <table className="w-full border-collapse">
+    <thead>
+      <tr className="bg-gray-100">
+        <th className="border p-2 text-left">Decision Type</th>
+        <th className="border p-2 text-left">Authority</th>
+        <th className="border p-2 text-left">Process</th>
+        <th className="border p-2 text-left">Timeline</th>
+      </tr>
+    </thead>
+
+    <tbody className="text-sm">
+      <tr>
+        <td className="border p-2">Technical Architecture</td>
+        <td className="border p-2">Technical Steering Committee</td>
+        <td className="border p-2">RFC + Review</td>
+        <td className="border p-2">2-4 weeks</td>
+      </tr>
+
+      <tr className="bg-gray-50">
+        <td className="border p-2">Security Policies</td>
+        <td className="border p-2">Security Advisory Board</td>
+        <td className="border p-2">Private review + disclosure</td>
+        <td className="border p-2">As needed</td>
+      </tr>
+
+      <tr>
+        <td className="border p-2">Protocol Changes</td>
+        <td className="border p-2">Token Holders</td>
+        <td className="border p-2">On-chain voting</td>
+        <td className="border p-2">7-14 days</td>
+      </tr>
+
+      <tr className="bg-gray-50">
+        <td className="border p-2">Community Standards</td>
+        <td className="border p-2">Community Council</td>
+        <td className="border p-2">Public comment + vote</td>
+        <td className="border p-2">30 days</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+### Participation Levels
+
+<Highlight>
+  Community members progress through contribution levels, gaining increased governance rights and responsibilities.
+</Highlight>
+
+1. **Observer**: Read access, community participation
+2. **Contributor**: Code/documentation submissions, issue creation
+3. **Committer**: Direct repository access, review rights
+4. **Maintainer**: Subsystem ownership, architectural decisions
+5. **Steering Committee**: Platform-wide governance
+
+## Resources & Learning
+
+### Educational Resources
+
+<CardGroup cols={2}>
+  <Card title="dstack Academy" icon="graduation-cap" href="https://academy.dstack.dev">
+    <p className="text-sm mt-2">Structured courses on confidential computing and dstack</p>
+  </Card>
+
+  <Card title="Research Papers" icon="microscope" href="https://github.com/Dstack-TEE/research">
+    <p className="text-sm mt-2">Academic publications and technical deep-dives</p>
+  </Card>
+
+  <Card title="Video Tutorials" icon="video" href="https://youtube.com/@dstack-tee">
+    <p className="text-sm mt-2">Visual guides and conference presentations</p>
+  </Card>
+
+  <Card title="Case Studies" icon="briefcase" href="/docs/case-studies">
+    <p className="text-sm mt-2">Real-world implementations and lessons learned</p>
+  </Card>
+</CardGroup>
+
+### Developer Resources
+
+<div className="grid grid-cols-1 md:grid-cols-3 gap-4 my-6">
+  <div className="border rounded-lg p-4">
+    <h4 className="font-semibold mb-2">🛠️ SDK & Tools</h4>
+
+    <ul className="text-sm space-y-1">
+      <li><a href="https://crates.io/crates/dstack-sdk" className="text-blue-600 hover:underline">Rust SDK</a></li>
+      <li><a href="https://pypi.org/project/dstack/" className="text-blue-600 hover:underline">Python SDK</a></li>
+      <li><a href="https://www.npmjs.com/package/@dstack/sdk" className="text-blue-600 hover:underline">JavaScript SDK</a></li>
+      <li><a href="https://github.com/Dstack-TEE/cli" className="text-blue-600 hover:underline">CLI Tools</a></li>
+    </ul>
+  </div>
+
+  <div className="border rounded-lg p-4">
+    <h4 className="font-semibold mb-2">📚 References</h4>
+
+    <ul className="text-sm space-y-1">
+      <li><a href="https://docs.dstack.dev/api" className="text-blue-600 hover:underline">API Reference</a></li>
+      <li><a href="https://github.com/Dstack-TEE/rfcs" className="text-blue-600 hover:underline">RFCs</a></li>
+      <li><a href="https://github.com/Dstack-TEE/benchmarks" className="text-blue-600 hover:underline">Benchmarks</a></li>
+      <li><a href="/docs/dstack-reference/dstack-wiki" className="text-blue-600 hover:underline">DeepWiki</a></li>
+    </ul>
+  </div>
+
+  <div className="border rounded-lg p-4">
+    <h4 className="font-semibold mb-2">🔧 Infrastructure</h4>
+
+    <ul className="text-sm space-y-1">
+      <li><a href="https://github.com/Dstack-TEE/helm-charts" className="text-blue-600 hover:underline">Helm Charts</a></li>
+      <li><a href="https://github.com/Dstack-TEE/terraform" className="text-blue-600 hover:underline">Terraform Modules</a></li>
+      <li><a href="https://github.com/Dstack-TEE/ansible" className="text-blue-600 hover:underline">Ansible Playbooks</a></li>
+      <li><a href="https://hub.docker.com/u/dstack" className="text-blue-600 hover:underline">Docker Images</a></li>
+    </ul>
+  </div>
+</div>
+
+## Events & Meetups
+
+<smoothly_flowing_prose_paragraphs>
+  The dstack community organizes and participates in various events throughout the year, fostering in-person connections and knowledge exchange. These gatherings range from informal local meetups to formal academic conferences, each serving different community needs.
+</smoothly_flowing_prose_paragraphs>
+
+### Upcoming Events
+
+<div className="space-y-3 my-6">
+  <div className="bg-blue-50 border-l-4 border-blue-400 p-4">
+    <div className="flex justify-between items-start">
+      <div>
+        <h4 className="font-semibold">dstack Summit 2025</h4>
+        <p className="text-sm text-gray-600">Annual conference on confidential computing</p>
+        <p className="text-xs mt-1">📍 Berlin, Germany • 📅 March 15-17, 2025</p>
+      </div>
+
+      <a href="#" className="text-blue-600 hover:underline text-sm">Register →</a>
+    </div>
+  </div>
+
+  <div className="bg-green-50 border-l-4 border-green-400 p-4">
+    <div className="flex justify-between items-start">
+      <div>
+        <h4 className="font-semibold">Security Workshop Series</h4>
+        <p className="text-sm text-gray-600">Monthly deep-dives into TEE security</p>
+        <p className="text-xs mt-1">📍 Virtual • 📅 First Thursday each month</p>
+      </div>
+
+      <a href="#" className="text-blue-600 hover:underline text-sm">Join →</a>
+    </div>
+  </div>
+
+  <div className="bg-purple-50 border-l-4 border-purple-400 p-4">
+    <div className="flex justify-between items-start">
+      <div>
+        <h4 className="font-semibold">Hackathon: Build on dstack</h4>
+        <p className="text-sm text-gray-600">48-hour virtual hackathon with prizes</p>
+        <p className="text-xs mt-1">📍 Global/Virtual • 📅 April 20-22, 2025</p>
+      </div>
+
+      <a href="#" className="text-blue-600 hover:underline text-sm">Learn More →</a>
+    </div>
+  </div>
+</div>
+
+### Local Meetups
+
+Find or organize dstack meetups in your area:
+
+* **North America**: San Francisco, New York, Toronto, Austin
+* **Europe**: London, Berlin, Paris, Amsterdam
+* **Asia**: Singapore, Tokyo, Seoul, Bangalore
+
+[Start a Local Meetup →](https://github.com/Dstack-TEE/community/blob/main/meetup-guide.md)
+
+## Recognition & Contributors
+
+<smoothly_flowing_prose_paragraphs>
+  The strength of dstack lies in its contributors. We believe in recognizing contributions of all forms—from code commits to community support, from security research to educational content creation. Our recognition system ensures that every contribution is valued and acknowledged.
+</smoothly_flowing_prose_paragraphs>
+
+### Hall of Fame
+
+<div className="bg-gradient-to-r from-yellow-50 to-orange-50 p-6 rounded-lg my-6">
+  <h4 className="font-semibold mb-4">🏆 Top Contributors</h4>
+
+  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+    <div className="text-center">
+      <div className="text-3xl mb-2">🥇</div>
+      <p className="font-medium">Core Maintainers</p>
+      <p className="text-sm text-gray-600">Architecture & Leadership</p>
+    </div>
+
+    <div className="text-center">
+      <div className="text-3xl mb-2">🥈</div>
+      <p className="font-medium">Security Researchers</p>
+      <p className="text-sm text-gray-600">Vulnerability Discovery</p>
+    </div>
+
+    <div className="text-center">
+      <div className="text-3xl mb-2">🥉</div>
+      <p className="font-medium">Documentation Team</p>
+      <p className="text-sm text-gray-600">Knowledge Sharing</p>
+    </div>
+  </div>
+</div>
+
+[View All Contributors →](https://github.com/Dstack-TEE/dstack/graphs/contributors)
+
+## Code of Conduct
+
+<Warning>
+  All community interactions must adhere to our Code of Conduct. We are committed to providing a welcoming and inclusive environment for all participants.
+</Warning>
+
+### Core Principles
+
+1. **Respect**: Value diverse perspectives and experiences
+2. **Professionalism**: Maintain technical discussions at a high level
+3. **Collaboration**: Work together towards common goals
+4. **Inclusivity**: Welcome contributors regardless of background
+5. **Transparency**: Communicate openly and honestly
+
+[Read Full Code of Conduct →](https://github.com/Dstack-TEE/dstack/blob/main/CODE_OF_CONDUCT.md)
+
+## Getting Involved
+
+<smoothly_flowing_prose_paragraphs>
+  Your journey with the dstack community can begin today. Whether you're a seasoned cryptographer, a curious developer, or someone passionate about privacy-preserving technology, there's a place for you in our ecosystem. The future of confidential computing is being written by this community—join us in shaping it.
+</smoothly_flowing_prose_paragraphs>
+
+<div className="mt-8 p-6 bg-gradient-to-br from-blue-50 to-purple-50 rounded-lg border border-blue-200">
+  <h3 className="text-xl font-semibold mb-4">🚀 Start Your Journey</h3>
+
+  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+    <div>
+      <h4 className="font-medium mb-2">Quick Actions</h4>
+
+      <ul className="text-sm space-y-1">
+        <li>✓ Star the <a href="https://github.com/Dstack-TEE/dstack" className="text-blue-600 hover:underline">GitHub repository</a></li>
+        <li>✓ Join our <a href="https://discord.gg/phala" className="text-blue-600 hover:underline">Discord server</a></li>
+        <li>✓ Subscribe to the <a href="mailto:dev-subscribe@dstack.dev" className="text-blue-600 hover:underline">mailing list</a></li>
+        <li>✓ Read the <a href="/docs/quickstart" className="text-blue-600 hover:underline">quick start guide</a></li>
+      </ul>
+    </div>
+
+    <div>
+      <h4 className="font-medium mb-2">First Contributions</h4>
+
+      <ul className="text-sm space-y-1">
+        <li>→ Fix a typo in documentation</li>
+        <li>→ Add a code example</li>
+        <li>→ Report a bug you encounter</li>
+        <li>→ Answer a community question</li>
+      </ul>
+    </div>
+  </div>
+
+  <p className="text-sm text-gray-600 mt-4">
+    <strong>Remember:</strong> Every expert was once a beginner. Your questions and fresh perspectives are valuable contributions to our community.
+  </p>
+</div>

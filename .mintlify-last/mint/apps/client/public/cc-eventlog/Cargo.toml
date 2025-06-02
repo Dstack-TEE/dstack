@@ -1,0 +1,19 @@
+[package]
+name = "cc-eventlog"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+fs-err.workspace = true
+hex.workspace = true
+scale.workspace = true
+serde.workspace = true
+serde-human-bytes.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+
+[dev-dependencies]
+insta.workspace = true

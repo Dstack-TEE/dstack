@@ -1,0 +1,81 @@
+workers = 8
+max_blocking = 64
+ident = "Dstack VMM"
+temp_dir = "/tmp"
+keep_alive = 10
+log_level = "debug"
+address = "unix:./vmm.sock"
+reuse = true
+kms_url = "http://127.0.0.1:8081"
+
+
+[networking]
+mode = "user"
+net = "10.0.2.0/24"
+dhcp_start = "10.0.2.10"
+restrict = false
+
+[cvm]
+qemu_path = ""
+kms_urls = ["http://127.0.0.1:8081"]
+gateway_urls = ["http://127.0.0.1:8082"]
+# PCCS URL used by guest to verify the quote from local key provider
+pccs_url = ""
+docker_registry = ""
+max_disk_size = 500
+cid_start = 1000
+cid_pool_size = 1000
+max_allocable_vcpu = 20
+max_allocable_memory_in_mb = 100_000 # MB
+# Enable QMP socket
+qmp_socket = false
+# The user to run the VM as. If empty, the VM will be run as the current user.
+user = ""
+
+[cvm.port_mapping]
+enabled = false
+address = "127.0.0.1"
+range = [
+    { protocol = "tcp", from = 1, to = 20000 },
+]
+
+[cvm.auto_restart]
+enabled = true
+interval = 20
+
+[cvm.gpu]
+enabled = false
+# The product IDs of the GPUs to discover
+# H200: 10de:2335
+listing = ["10de:2335"]
+# The PCI addresses of the cards to exclude
+exclude = []
+# The PCI addresses of the cards to include
+include = []
+
+[gateway]
+base_domain = "localhost"
+port = 8082
+agent_port = 8090
+
+[auth]
+enabled = false
+tokens = []
+
+[supervisor]
+exe = "./supervisor"
+sock = "./run/supervisor.sock"
+pid_file = "./run/supervisor.pid"
+log_file = "./run/supervisor.log"
+detached = false
+auto_start = true
+
+[host_api]
+ident = "Dstack VMM"
+address = "vsock:2"
+port = 10000
+
+[key_provider]
+enabled = true
+address = "127.0.0.1"
+port = 3443

@@ -1,0 +1,34 @@
+[default]
+workers = 8
+max_blocking = 64
+ident = "Dstack guest agent"
+temp_dir = "/tmp"
+keep_alive = 10
+log_level = "debug"
+
+[default.core]
+keys_file = "/dstack/.host-shared/.appkeys.json"
+compose_file = "/dstack/.host-shared/app-compose.json"
+sys_config_file = "/dstack/.host-shared/.sys-config.json"
+data_disks = ["/"]
+
+[default.core.simulator]
+enabled = false
+quote_file = "quote.hex"
+event_log_file = "eventlog.json"
+
+[internal-v0]
+address = "unix:/var/run/tappd.sock"
+reuse = true
+
+[internal]
+address = "unix:/var/run/dstack.sock"
+reuse = true
+
+[external]
+address = "0.0.0.0"
+port = 8090
+
+[guest-api]
+address = "vsock:0xffffffff"
+port = 8000

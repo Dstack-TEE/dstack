@@ -1,0 +1,17 @@
+[Unit]
+Description=App Compose Service
+Wants=docker.service
+After=docker.service tboot.service dstack-guest-agent.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=true
+EnvironmentFile=-/dstack/.host-shared/.decrypted-env
+WorkingDirectory=/dstack
+ExecStart=/bin/app-compose.sh
+ExecStop=/bin/docker compose stop
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target

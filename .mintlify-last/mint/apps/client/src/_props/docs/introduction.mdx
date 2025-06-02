@@ -1,0 +1,225 @@
+---
+title: "Platform Introduction"
+description: "A comprehensive introduction to dstack's architecture, philosophy, and ecosystem"
+---
+
+# Platform Introduction
+
+<page_summary>
+  This introduction provides a comprehensive overview of dstack's architectural philosophy, design principles, and position within the broader landscape of confidential computing. It serves as the conceptual bridge between high-level platform benefits and the detailed technical implementation, offering readers the theoretical foundation necessary to understand dstack's approach to secure application deployment.
+</page_summary>
+
+<smoothly_flowing_prose_paragraphs>
+  The emergence of confidential computing represents a paradigm shift in how we approach data security in distributed systems. Traditional security models operate on the assumption that infrastructure providers must be trusted with unencrypted data during processing. This trust requirement creates an inherent vulnerability that becomes increasingly problematic as regulatory requirements tighten and data breaches grow more sophisticated.
+
+  dstack addresses this fundamental trust problem by leveraging hardware-based Trusted Execution Environments (TEEs) to create cryptographically verifiable boundaries around sensitive computations. However, the platform's true innovation lies not in the hardware itself, but in how it abstracts these complex security primitives into a developer-friendly orchestration layer that preserves existing operational workflows.
+</smoothly_flowing_prose_paragraphs>
+
+## Architectural Philosophy
+
+<Note>
+  dstack follows a principle of "progressive security enhancement"—applications gain TEE protection without requiring fundamental architectural changes.
+</Note>
+
+### Core Design Principles
+
+<div className="grid grid-cols-1 md:grid-cols-2 gap-6 my-6">
+  <div className="bg-blue-50 p-6 rounded-lg">
+    <h4 className="font-semibold text-blue-900 mb-3">1. Operational Familiarity</h4>
+
+    <p className="text-sm">
+      Developers interact with dstack using familiar tools—Docker, REST APIs, and web interfaces. The complexity of TEE management remains abstracted, allowing teams to focus on application logic rather than security implementation.
+    </p>
+  </div>
+
+  <div className="bg-green-50 p-6 rounded-lg">
+    <h4 className="font-semibold text-green-900 mb-3">2. Hardware Abstraction</h4>
+
+    <p className="text-sm">
+      The platform provides a consistent interface across different TEE implementations, preventing vendor lock-in and enabling workload portability between Intel TDX, AMD SEV, and future hardware platforms.
+    </p>
+  </div>
+
+  <div className="bg-purple-50 p-6 rounded-lg">
+    <h4 className="font-semibold text-purple-900 mb-3">3. Verifiable Security</h4>
+
+    <p className="text-sm">
+      Every component in the dstack ecosystem produces cryptographic attestations, creating an auditable chain of trust from hardware to application that can be independently verified.
+    </p>
+  </div>
+
+  <div className="bg-orange-50 p-6 rounded-lg">
+    <h4 className="font-semibold text-orange-900 mb-3">4. Decentralized Governance</h4>
+
+    <p className="text-sm">
+      Critical security decisions—key management, code authorization, update policies—are governed by blockchain smart contracts, eliminating single points of control.
+    </p>
+  </div>
+</div>
+
+## Theoretical Foundations
+
+<smoothly_flowing_prose_paragraphs>
+  To understand dstack's approach, we must first examine the security primitives it builds upon. Modern processors implement TEEs through various mechanisms—Intel's Trust Domain Extensions (TDX), AMD's Secure Encrypted Virtualization (SEV), and ARM's Confidential Compute Architecture (CCA)—each providing similar guarantees through different implementations.
+
+  These hardware features enable three critical security properties:
+</smoothly_flowing_prose_paragraphs>
+
+### 1. Isolation
+
+<Highlight>
+  TEEs create cryptographically isolated execution environments where code and data remain encrypted in memory, inaccessible even to privileged system software.
+</Highlight>
+
+The isolation boundary extends beyond traditional process or virtual machine boundaries. Even with physical access to the server, an attacker cannot read the contents of TEE-protected memory without the encryption keys, which are managed entirely within the processor's secure perimeter.
+
+### 2. Attestation
+
+Remote attestation provides cryptographic proof of the execution environment's state. This mechanism allows external parties to verify:
+
+* The hardware is genuine and implements the claimed security features
+* The software stack matches expected measurements
+* The configuration adheres to specified security policies
+* No unauthorized modifications have occurred
+
+### 3. Sealing
+
+Data can be cryptographically bound to specific hardware and software configurations, ensuring that secrets remain accessible only to authorized code running in verified environments.
+
+## The dstack Innovation
+
+<smoothly_flowing_prose_paragraphs>
+  While TEE hardware provides powerful security primitives, utilizing them effectively requires deep expertise in cryptography, systems programming, and security engineering. dstack's innovation lies in transforming these low-level capabilities into a platform that preserves the operational patterns of modern cloud-native development.
+
+  Consider the traditional approach to deploying a secure application in a TEE:
+</smoothly_flowing_prose_paragraphs>
+
+```bash
+# Traditional TEE deployment (simplified)
+1. Modify application for enclave constraints
+2. Implement custom attestation protocols
+3. Design key management infrastructure
+4. Handle secure communication channels
+5. Manage hardware-specific configurations
+```
+
+Contrast this with the dstack approach:
+
+```bash
+# dstack deployment
+1. Package application in Docker container
+2. Deploy using familiar orchestration commands
+3. Platform handles all security complexities
+```
+
+## Ecosystem Architecture
+
+<div className="my-8">
+  <img src="/docs/images/ecosystem-architecture.png" alt="dstack Ecosystem Architecture" className="w-full rounded-lg shadow-lg" />
+</div>
+
+The dstack ecosystem comprises several interconnected components:
+
+### Infrastructure Layer
+
+* **TEE Hardware**: Physical processors with confidential computing capabilities
+* **Host Operating System**: Standard Linux distributions with TEE support
+* **Virtualization Stack**: KVM/QEMU with confidential VM extensions
+
+### Platform Layer
+
+* **dstack-vmm**: Orchestrates confidential VM lifecycle
+* **dstack-gateway**: Manages secure ingress and certificate automation
+* **dstack-kms**: Provides decentralized key management services
+* **dstack-os**: Minimal, attestation-optimized guest operating system
+
+### Application Layer
+
+* **Container Runtime**: Standard OCI containers with no modifications
+* **Guest Agent**: Manages containers within confidential VMs
+* **SDK Libraries**: Optional integration for attestation-aware applications
+
+### Governance Layer
+
+* **Smart Contracts**: On-chain logic for authorization and key management
+* **Attestation Services**: Verification infrastructure for remote attestation
+* **Update Mechanisms**: Secure, verifiable platform updates
+
+## Security Model Overview
+
+<Warning>
+  Understanding dstack's security model is crucial for making informed decisions about workload deployment and risk assessment.
+</Warning>
+
+<smoothly_flowing_prose_paragraphs>
+  dstack implements a zero-trust security model where no component is implicitly trusted. Instead, trust is established through cryptographic verification at every layer. This approach fundamentally differs from traditional security models that rely on perimeter defenses and assume internal components are trustworthy.
+
+  The security model operates on several key principles:
+</smoothly_flowing_prose_paragraphs>
+
+1. **Hardware Root of Trust**: All security properties ultimately derive from hardware-enforced boundaries
+2. **Attestation-Based Authorization**: Components must prove their integrity before gaining access to resources
+3. **Principle of Least Privilege**: Each component receives only the minimum permissions required
+4. **Defense in Depth**: Multiple security layers ensure compromise of one component doesn't breach the entire system
+5. **Cryptographic Verifiability**: All security claims can be independently verified through cryptographic proofs
+
+## Use Cases and Applications
+
+The convergence of ease-of-use and strong security guarantees enables new categories of applications:
+
+### Privacy-Preserving Analytics
+
+Organizations can analyze sensitive datasets without exposing raw data, enabling collaboration while maintaining compliance with privacy regulations.
+
+### Secure Multi-Party Computation
+
+Multiple parties can jointly compute functions over their combined data without revealing individual inputs, revolutionizing fields like healthcare research and financial risk modeling.
+
+### Confidential AI/ML
+
+Machine learning models and training data remain encrypted throughout the computation lifecycle, protecting both intellectual property and sensitive training datasets.
+
+### Regulatory Compliance
+
+Applications can demonstrate cryptographic proof of data handling practices, simplifying compliance with regulations like GDPR, HIPAA, and financial data protection laws.
+
+## Getting Started
+
+<smoothly_flowing_prose_paragraphs>
+  The journey to deploying secure applications with dstack begins with understanding your security requirements and mapping them to the platform's capabilities. We recommend starting with our conceptual overview to build theoretical understanding, followed by hands-on experimentation using our quick-start guide.
+</smoothly_flowing_prose_paragraphs>
+
+<CardGroup cols={2}>
+  <Card title="Conceptual Deep Dive" icon="book" href="/docs/overview/what-is-dstack">
+    <p className="text-sm mt-2">Explore the detailed technical architecture and security properties</p>
+  </Card>
+
+  <Card title="Hands-On Quick Start" icon="rocket" href="/docs/quickstart">
+    <p className="text-sm mt-2">Deploy your first secure application in under 10 minutes</p>
+  </Card>
+
+  <Card title="Security Model" icon="shield" href="/docs/concepts/security-model">
+    <p className="text-sm mt-2">Understand the cryptographic foundations and trust boundaries</p>
+  </Card>
+
+  <Card title="Community Resources" icon="users" href="/docs/community">
+    <p className="text-sm mt-2">Connect with the dstack ecosystem and contribute to the platform</p>
+  </Card>
+</CardGroup>
+
+## Next Steps
+
+After completing this introduction, we recommend exploring:
+
+1. **[What is dstack?](/docs/overview/what-is-dstack)** - Detailed technical overview
+2. **[Key Features](/docs/overview/key-features)** - Comprehensive feature analysis
+3. **[Installation Guide](/docs/getting-started/installation)** - Begin your practical journey
+4. **[Security Model](/docs/concepts/security-model)** - Deep dive into security architecture
+
+<div className="mt-8 p-6 bg-gradient-to-r from-green-50 to-blue-50 rounded-lg border border-green-200">
+  <h3 className="text-lg font-semibold mb-2">Ready to Transform Your Security Posture?</h3>
+
+  <p className="text-gray-700">
+    dstack represents more than a deployment platform—it's a fundamental shift in how we approach application security. By making hardware-based security accessible to every developer, we're enabling a future where data privacy is guaranteed by physics, not policy.
+  </p>
+</div>

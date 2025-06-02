@@ -1,0 +1,254 @@
+{
+  "dropdowns": [
+    {
+      "dropdown": "Overview",
+      "icon": "book-open",
+      "pages": [
+        {
+          "title": "dstack - Deploy to TEE Without Code Changes",
+          "description": "The easiest way to deploy existing Docker applications to Trusted Execution Environments with hardware-enforced security",
+          "href": "/docs/index"
+        },
+        {
+          "title": "Platform Introduction",
+          "description": "A comprehensive introduction to dstack's architecture, philosophy, and ecosystem",
+          "href": "/docs/introduction"
+        },
+        {
+          "title": "What is dstack?",
+          "description": "A comprehensive technical overview of the dstack platform and its role in democratizing confidential computing",
+          "href": "/docs/overview/what-is-dstack"
+        },
+        {
+          "title": "Key Features",
+          "description": "Comprehensive analysis of dstack's technical capabilities and their implications for secure computing",
+          "href": "/docs/overview/key-features"
+        },
+        {
+          "title": "Benefits & Business Value",
+          "description": "Comprehensive analysis of dstack's strategic advantages and transformative impact on secure computing",
+          "href": "/docs/overview/benefits"
+        },
+        {
+          "title": "Case Studies",
+          "description": "Real-world implementations and success stories of organizations using dstack",
+          "href": "/docs/case-studies"
+        },
+        {
+          "title": "DStack Glossary",
+          "description": "An authoritative reference for every core concept, component, and cryptographic primitive that powers the dstack confidential-computing platform.",
+          "href": "/docs/overview/glossary"
+        }
+      ]
+    },
+    {
+      "dropdown": "Getting Started",
+      "icon": "rocket",
+      "pages": [
+        {
+          "title": "Quick Start Guide",
+          "description": "Deploy secure applications to TEEs with minimal configuration",
+          "href": "/docs/quickstart"
+        },
+        {
+          "title": "Installation",
+          "description": "Set up dstack on your server with our comprehensive installation guide",
+          "href": "/docs/getting-started/installation"
+        },
+        {
+          "title": "First Deployment",
+          "description": "Deploy your first secure application to a TEE with dstack in minutes",
+          "href": "/docs/getting-started/first-deployment"
+        }
+      ]
+    },
+    {
+      "dropdown": "Core Concepts",
+      "icon": "lightbulb",
+      "pages": [
+        {
+          "title": "Core Concepts Overview",
+          "description": "Essential concepts for understanding how dstack enables secure application deployment",
+          "href": "/docs/concepts/overview"
+        },
+        {
+          "title": "System Architecture",
+          "description": "Deep dive into dstack's layered architecture and component interactions",
+          "href": "/docs/concepts/architecture"
+        },
+        {
+          "title": "Core Components",
+          "description": "Deep dive into dstack's essential components and their roles",
+          "href": "/docs/concepts/core-components"
+        },
+        {
+          "title": "Networking",
+          "description": "Understanding dstack's secure networking architecture and traffic routing",
+          "href": "/docs/concepts/networking"
+        },
+        {
+          "title": "Security Model",
+          "description": "Understanding dstack's comprehensive security architecture and trust model",
+          "href": "/docs/concepts/security-model"
+        }
+      ]
+    },
+    {
+      "dropdown": "Deployment",
+      "icon": "cloud-arrow-up",
+      "pages": [
+        {
+          "title": "Deploying Applications",
+          "description": "Complete guide to deploying containerized applications to dstack",
+          "href": "/docs/deployment-guides/deploying-applications"
+        }
+      ]
+    },
+    {
+      "dropdown": "Tutorials",
+      "icon": "graduation-cap",
+      "pages": [
+        {
+          "title": "Tutorials",
+          "description": "Learn dstack with hands-on examples and step-by-step guides",
+          "href": "/docs/tutorials/index"
+        },
+        {
+          "title": "Python Tutorial",
+          "description": "Build and deploy a secure Python application to dstack",
+          "href": "/docs/tutorials/python-example"
+        },
+        {
+          "title": "JavaScript/Node.js Tutorial",
+          "description": "Deploy a Node.js application to dstack (Coming Soon)",
+          "href": "/docs/tutorials/javascript-example"
+        },
+        {
+          "title": "Rust Tutorial",
+          "description": "Deploy a Rust application to dstack (Coming Soon)",
+          "href": "/docs/tutorials/rust-example"
+        },
+        {
+          "title": "Secure Web Application Tutorial",
+          "description": "Build a privacy-preserving web application with dstack (Coming Soon)",
+          "href": "/docs/tutorials/secure-web-app"
+        }
+      ]
+    },
+    {
+      "dropdown": "Security & Research",
+      "icon": "shield-halved",
+      "pages": [
+        {
+          "title": "Security & Research",
+          "description": "Deep technical analysis of dstack's security architecture for researchers and security engineers",
+          "href": "/docs/security-research/overview"
+        },
+        {
+          "title": "TDX Attestation Security",
+          "description": "Deep dive into dstack's Intel TDX attestation implementation and security guarantees",
+          "href": "/docs/security-research/tdx-attestation"
+        },
+        {
+          "title": "TDX Attestation System Overview",
+          "description": "Complete attestation infrastructure and trust chain in dstack TEE platform",
+          "href": "/docs/security-research/tdx-attestation-system"
+        },
+        {
+          "title": "VMM Security Architecture",
+          "description": "Analysis of dstack VMM's security boundaries and isolation mechanisms",
+          "href": "/docs/security-research/vmm-security"
+        },
+        {
+          "title": "KMS Security Architecture",
+          "description": "Decentralized key management with hardware-backed security in dstack",
+          "href": "/docs/security-research/kms-security"
+        },
+        {
+          "title": "Gateway Security Architecture",
+          "description": "Secure ingress/egress with automated certificate management in dstack",
+          "href": "/docs/security-research/gateway-security"
+        },
+        {
+          "title": "Certbot TEE Security",
+          "description": "Analysis of automated certificate management and ACME protocol implementation in dstack TEE",
+          "href": "/docs/security-research/certbot-security"
+        },
+        {
+          "title": "Cert Client Security",
+          "description": "Certificate verification and client-side attestation integration in dstack",
+          "href": "/docs/security-research/cert-client-security"
+        },
+        {
+          "title": "CT Monitor Security",
+          "description": "Certificate Transparency monitoring and anomaly detection for dstack TEE infrastructure",
+          "href": "/docs/security-research/ct-monitor-security"
+        },
+        {
+          "title": "Host API Security",
+          "description": "Secure host management and orchestration API for dstack TEE infrastructure",
+          "href": "/docs/security-research/host-api-security"
+        },
+        {
+          "title": "IOHash Security Architecture",
+          "description": "Content-addressed storage and cryptographic integrity verification for dstack",
+          "href": "/docs/security-research/iohash-security"
+        }
+      ]
+    },
+    {
+      "dropdown": "dstack Internals",
+      "icon": "gear",
+      "pages": [
+        {
+          "title": "Dstack wiki",
+          "href": "/docs/dstack-reference/dstack-wiki"
+        },
+        {
+          "title": "Structure",
+          "href": "/docs/dstack-reference/structure"
+        },
+        {
+          "title": "Content",
+          "href": "/docs/dstack-reference/content"
+        },
+        {
+          "title": "Context",
+          "href": "/docs/dstack-reference/context"
+        }
+      ]
+    },
+    {
+      "dropdown": "Community & Support",
+      "icon": "users",
+      "pages": [
+        {
+          "title": "Community & Ecosystem",
+          "description": "Engage with the dstack community, contribute to development, and access collaborative resources",
+          "href": "/docs/community"
+        },
+        {
+          "title": "Troubleshooting & Diagnostics",
+          "description": "Systematic approaches to diagnosing and resolving issues in dstack deployments",
+          "href": "/docs/troubleshooting"
+        }
+      ]
+    },
+    {
+      "dropdown": "API Reference",
+      "icon": "square-terminal",
+      "pages": [
+        {
+          "title": "API Reference: Overview",
+          "description": "Introduction to the dstack API",
+          "href": "/docs/api-reference/overview"
+        },
+        {
+          "title": "API Authentication",
+          "description": "Learn how to authenticate with the dstack API",
+          "href": "/docs/api-reference/authentication"
+        }
+      ]
+    }
+  ]
+}

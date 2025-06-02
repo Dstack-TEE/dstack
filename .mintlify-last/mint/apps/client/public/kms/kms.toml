@@ -1,0 +1,45 @@
+[default]
+workers = 8
+max_blocking = 64
+ident = "DStack KMS"
+temp_dir = "/tmp"
+keep_alive = 10
+log_level = "info"
+
+[rpc]
+address = "0.0.0.0"
+port = 8000
+
+[rpc.tls]
+key = "/etc/kms/certs/rpc.key"
+certs = "/etc/kms/certs/rpc.crt"
+
+[rpc.tls.mutual]
+ca_certs = "/etc/kms/certs/tmp-ca.crt"
+mandatory = false
+
+[core]
+cert_dir = "/etc/kms/certs"
+subject_postfix = ".dstack"
+
+[core.image]
+verify = true
+cache_dir = "/usr/share/dstack/images"
+download_url = "http://localhost:8000/{OS_IMAGE_HASH}.tar.gz"
+download_timeout = "2m"
+
+[core.auth_api]
+type = "webhook"
+
+[core.auth_api.webhook]
+url = "http://auth-api:8000"
+
+[core.auth_api.dev]
+gateway_app_id = "any"
+
+[core.onboard]
+enabled = true
+auto_bootstrap_domain = ""
+quote_enabled = true
+address = "0.0.0.0"
+port = 8000

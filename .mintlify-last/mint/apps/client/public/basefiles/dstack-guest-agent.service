@@ -1,0 +1,19 @@
+[Unit]
+Description=Dstack Guest Agent Service
+After=network.target tboot.service
+Before=docker.service
+
+[Service]
+OOMScoreAdjust=-1000
+ExecStart=/bin/dstack-guest-agent --watchdog -c /dstack/agent.json
+Restart=always
+User=root
+Group=root
+Type=notify
+WatchdogSec=30s
+StandardOutput=journal+console
+StandardError=journal+console
+Environment=RUST_LOG=warn
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,158 @@
+syntax = "proto3";
+
+import "google/protobuf/empty.proto";
+
+package gateway;
+
+// RegisterCvmRequest is the request for RegisterCvm.
+message RegisterCvmRequest {
+  // The public key of the WireGuard interface of the CVM.
+  string client_public_key = 1;
+}
+
+// RegisterCvmResponse is the response for RegisterCvm.
+message RegisterCvmResponse {
+  // WireGuard configuration
+  WireGuardConfig wg = 1;
+  // Agent configuration
+  GuestAgentConfig agent = 2;
+}
+
+message WireGuardPeer {
+  // The wireguard peer public key.
+  string pk = 1;
+  // The wireguard peer IP address.
+  string ip = 2;
+  // The wireguard peer endpoint.
+  string endpoint = 3;
+} 
+
+// WireGuardConfig is the configuration of the WireGuard.
+message WireGuardConfig {
+  // The IP address of the CVM.
+  string client_ip = 1;
+  // List of proxy nodes.
+  repeated WireGuardPeer servers = 2;
+}
+
+// GuestAgentConfig is the configuration of the guest agent.
+message GuestAgentConfig {
+  // The external port of the guest agent.
+  uint32 external_port = 1;
+  // The in CVM port of the guest agent.
+  uint32 internal_port = 2;
+  // The domain of the guest agent.
+  string domain = 3;
+}
+
+// StatusResponse is the response for Status.
+message StatusResponse {
+  // Peer id
+  bytes id = 1;
+  // My URL.
+  string url = 2;
+  // The bootnode URL.
+  string bootnode_url = 3;
+  // Number of established proxy connections.
+  uint64 num_connections = 4;
+  // The list of proxied CVMs.
+  repeated HostInfo hosts = 5;
+  // The list of proxy nodes.
+  repeated GatewayNodeInfo nodes = 6;
+}
+
+// HostInfo is the information of a host.
+message HostInfo {
+  // The Instance id
+  string instance_id = 1;
+  // The IP address of the host.
+  string ip = 2;
+  // The app id of the host.
+  string app_id = 3;
+  // The base domain of the HTTPS endpoint of the host.
+  string base_domain = 4;
+  // The external port of the host.
+  uint32 port = 5;
+  // The latest handshake time of the host.
+  uint64 latest_handshake = 6;
+  // The number of connections of the host.
+  uint64 num_connections = 7;
+}
+
+// AcmeInfoResponse is the response for AcmeInfo.
+message AcmeInfoResponse {
+  // The ACME account URI.
+  string account_uri = 1;
+  // The public key history of the certificate.
+  repeated bytes hist_keys = 2;
+}
+
+// Get HostInfo for associated instance id.
+message GetInfoRequest {
+  string id = 1;
+}
+
+message GetInfoResponse {
+  bool found = 1;
+  optional HostInfo info = 2;
+}
+
+message GetMetaResponse {
+  uint32 registered = 1;
+  uint32 online = 2;
+}
+
+message GatewayNodeInfo {
+  // The ID of the node.
+  bytes id = 1;
+  // The RPC URL of the node.
+  string url = 2;
+  // The last seen time of the node.
+  uint64 last_seen = 3;
+  // The wireguard peer info.
+  WireGuardPeer wg_peer = 4;
+}
+
+message AppInstanceInfo {
+  string app_id = 1;
+  string instance_id = 2;
+  string ip = 3;
+  string public_key = 4;
+  uint64 reg_time = 5;
+  uint64 last_seen = 6;
+  uint64 num_connections = 7;
+}
+
+message GatewayState {
+  repeated GatewayNodeInfo nodes = 1;
+  repeated AppInstanceInfo apps = 2;
+}
+
+service Gateway {
+  // Register a new proxied CVM.
+  rpc RegisterCvm(RegisterCvmRequest) returns (RegisterCvmResponse) {}
+  // Get the status of the gateway.
+  rpc Status(google.protobuf.Empty) returns (StatusResponse) {}
+  // List all ACME account URIs and the public key history of the certificates for the Content Addressable HTTPS.
+  rpc AcmeInfo(google.protobuf.Empty) returns (AcmeInfoResponse) {}
+  // Find Proxied HostInfo by instance ID
+  rpc GetInfo(GetInfoRequest) returns (GetInfoResponse) {}
+  // Summary API for inspect.
+  rpc GetMeta(google.protobuf.Empty) returns (GetMetaResponse);
+  // Merge state from other Gateway instances.
+  rpc UpdateState(GatewayState) returns (google.protobuf.Empty) {}
+}
+
+message RenewCertResponse {
+  // True if the certificate was renewed.
+  bool renewed = 1;
+}
+
+service Admin {
+  // Exit the Gateway process.
+  rpc Exit(google.protobuf.Empty) returns (google.protobuf.Empty) {}
+  // Renew the proxy TLS certificate if certbot is enabled
+  rpc RenewCert(google.protobuf.Empty) returns (RenewCertResponse) {}
+  // Set CAA records
+  rpc SetCaa(google.protobuf.Empty) returns (google.protobuf.Empty) {}
+}

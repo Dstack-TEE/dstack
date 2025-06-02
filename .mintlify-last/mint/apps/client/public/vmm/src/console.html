@@ -1,0 +1,2390 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dstack VM Management Console</title>
+    <script src="https://unpkg.com/vue@3.0.0/dist/vue.global.js"></script>
+    <script src="/res/x25519.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css"
+        integrity="sha512-1ycn6IcaQQ40/MKBW2W4Rhis/DbILU74C1vSrLJxCq57o941Ym01SwNsOMqvEBFlcgUa6xLiPY/NS5R+E6ztJQ=="
+        crossorigin="anonymous" referrerpolicy="no-referrer" />
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            margin: 0;
+            padding: 20px;
+        }
+
+        h1 {
+            color: #333;
+        }
+
+        form {
+            margin-bottom: 20px;
+        }
+
+        #vmList {
+            border: 1px solid #ddd;
+            padding: 10px;
+        }
+
+        .vm-item {
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 15px;
+            background: #fff;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+        }
+
+        .vm-info {
+            display: flex;
+            gap: 20px;
+            margin-bottom: 10px;
+        }
+
+        .vm-detail {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .vm-actions {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .action-btn {
+            padding: 6px 12px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            transition: all 0.2s;
+            background: #1b6b73;
+            color: white;
+        }
+
+        .action-btn:hover {
+            transform: translateY(-1px);
+        }
+
+        .primary {
+            background: #4CAF50;
+            color: white;
+        }
+
+        .danger {
+            background: #f44336;
+            color: white;
+        }
+
+        .warning {
+            background: #FF9800;
+            color: white;
+        }
+
+        .status-created {
+            color: #FFC107;
+        }
+
+        .status-running {
+            color: #4CAF50;
+        }
+
+        .status-stopping {
+            color: #FF9800;
+        }
+
+        .status-stopped {
+            color: #f44336;
+        }
+
+        .status-exited {
+            color: #9E9E9E;
+        }
+    </style>
+    <style>
+        .form-group {
+            margin-bottom: 15px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+            color: #333;
+        }
+
+        .form-group input,
+        .form-group textarea {
+            width: 100%;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+
+        .form-group textarea {
+            min-height: 120px;
+            resize: vertical;
+        }
+
+        .form-group input[type="file"] {
+            border: none;
+            padding: 0;
+        }
+
+        .form-group input[type="number"] {
+            width: 150px;
+        }
+
+        .submit-btn {
+            background-color: #2196F3;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            transition: background-color 0.2s;
+        }
+
+        .submit-btn:hover {
+            background-color: #1976D2;
+        }
+
+        .submit-btn:active {
+            transform: translateY(1px);
+        }
+    </style>
+    <style>
+        .form-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+            gap: 15px;
+            margin-bottom: 15px;
+        }
+
+        .form-grid .form-group {
+            margin-bottom: 0;
+            padding: 10px;
+            border: 1px solid #e0e0e0;
+            border-radius: 4px;
+            background-color: #f9f9f9;
+        }
+
+        .form-group.full-width {
+            grid-column: 1 / -1;
+        }
+
+        .form-grid .form-group input {
+            /* Adjust for padding */
+            width: calc(100% - 16px);
+            padding: 6px 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            background-color: white;
+            /* Include padding in width calculation */
+            box-sizing: border-box;
+        }
+
+        .form-group input:focus {
+            outline: none;
+            border-color: #2196F3;
+            box-shadow: 0 0 0 2px rgba(33, 150, 243, 0.1);
+        }
+    </style>
+    <style>
+        #vmList table {
+            background: white;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+            border-radius: 8px;
+        }
+
+        #vmList tr:hover {
+            background-color: #f5f5f5;
+        }
+
+        #vmList th {
+            font-weight: bold;
+            color: #333;
+        }
+
+        .vm-actions {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+    </style>
+    <style>
+        .dialog-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.5);
+            display: flex;
+            justify-content: center;
+            align-items: flex-start;
+            z-index: 1000;
+            overflow-y: auto;
+            padding: 20px;
+        }
+
+        .dialog {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            width: 800px;
+            max-width: 90%;
+            margin: 20px auto;
+        }
+
+        .upgrade {
+            background: #FF9800;
+            color: white;
+        }
+    </style>
+    <style>
+        .message-container {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            z-index: 1001;
+            min-width: 300px;
+            max-width: 600px;
+        }
+
+        .message {
+            margin: 10px 0;
+            padding: 15px;
+            border-radius: 4px;
+            position: relative;
+            animation: slideIn 0.3s ease-out;
+        }
+
+        .success-message {
+            background: #E8F5E9;
+            border: 1px solid #4CAF50;
+            color: #2E7D32;
+        }
+
+        .error-message {
+            background: #FFEBEE;
+            border: 1px solid #F44336;
+            color: #C62828;
+        }
+
+        @keyframes slideIn {
+            from {
+                transform: translateX(100%);
+                opacity: 0;
+            }
+
+            to {
+                transform: translateX(0);
+                opacity: 1;
+            }
+        }
+
+        .close-btn {
+            position: absolute;
+            top: 5px;
+            right: 5px;
+            background: none;
+            border: none;
+            font-size: 20px;
+            cursor: pointer;
+            padding: 0 5px;
+        }
+
+        .close-btn:hover {
+            color: #1B5E20;
+        }
+
+        .success-message .close-btn {
+            color: #2E7D32;
+        }
+
+        .error-message .close-btn {
+            color: #C62828;
+        }
+    </style>
+    <style>
+        .upgrade-message {
+            font-size: 16px;
+            margin-bottom: 10px;
+        }
+
+        .next-steps-header {
+            font-weight: bold;
+            margin-bottom: 8px;
+        }
+
+        .command-container {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .command-code {
+            background: #f0f0f0;
+            padding: 2px 4px;
+            border-radius: 3px;
+        }
+
+        .copy-button {
+            padding: 2px 6px;
+            border: 1px solid #ddd;
+            border-radius: 3px;
+            cursor: pointer;
+            background: white;
+        }
+
+        .steps-list {
+            margin: 0;
+            padding-left: 20px;
+        }
+
+        .step-item {
+            margin-bottom: 5px;
+        }
+    </style>
+    <style>
+        .app-id-preview {
+            font-size: 14px;
+            color: #666;
+        }
+    </style>
+    <style>
+        /* Checkbox styling */
+        .form-check {
+            margin-bottom: 12px;
+        }
+
+        .checkbox-container {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .checkbox-label {
+            font-size: 14px;
+            color: #333;
+        }
+
+        input[type="checkbox"] {
+            width: 16px;
+            height: 16px;
+            cursor: pointer;
+            accent-color: #4285F4;
+        }
+    </style>
+    <style>
+        .vm-details {
+            font-size: 14px;
+        }
+
+        .details-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 16px;
+        }
+
+        .detail-item {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .detail-label {
+            color: #666;
+            font-weight: 500;
+        }
+
+        .detail-value {
+            color: #333;
+        }
+
+        .port-mappings {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+        }
+
+        .port-item {
+            background: #e9ecef;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-family: monospace;
+        }
+
+        .truncated-id {
+            max-width: 100px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+    </style>
+    <style>
+        .docker-registry-section {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            margin-top: 12px;
+        }
+
+        .docker-registry-field {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .docker-registry-label {
+            font-size: 12px;
+            margin-bottom: 4px;
+        }
+
+        .docker-registry-input {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+    </style>
+    <style>
+        .api-config-section {
+            margin: 16px 0;
+            padding: 12px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+
+        .api-token-field {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .api-token-label {
+            font-size: 14px;
+            font-weight: 500;
+        }
+
+        .api-token-input {
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-family: monospace;
+        }
+    </style>
+    <style>
+        .ml-text-ro {
+            white-space: pre-wrap;
+            background: #f1f1f1;
+            padding: 12px;
+            border-radius: 4px;
+            overflow-x: auto;
+        }
+
+        .loading-spinner {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid rgba(0, 0, 0, 0.1);
+            border-radius: 50%;
+            border-top-color: #1b6b73;
+            animation: spin 1s ease-in-out infinite;
+            margin-left: 8px;
+            vertical-align: middle;
+        }
+
+        @keyframes spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
+
+        .dropdown {
+            position: relative;
+            display: inline-block;
+        }
+
+        .dropdown-content {
+            display: none;
+            position: absolute;
+            right: 0;
+            background-color: #f9f9f9;
+            min-width: 160px;
+            box-shadow: 0px 8px 16px 0px rgba(0, 0, 0, 0.2);
+            z-index: 1000;
+            border-radius: 4px;
+            padding: 8px;
+            margin-top: 4px;
+        }
+
+        .dropdown-content button {
+            color: white;
+            padding: 10px 14px;
+            text-decoration: none;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            text-align: left;
+            width: 100%;
+            border: none;
+            background: #1b6b73;
+            cursor: pointer;
+            margin-bottom: 6px;
+            border-radius: 4px;
+            transition: all 0.2s;
+        }
+
+        .dropdown-content button:last-child {
+            margin-bottom: 0;
+        }
+
+        .dropdown-content button.primary {
+            background: #4CAF50;
+        }
+
+        .dropdown-content button.warning {
+            background: #FF9800;
+        }
+
+        .dropdown-content button.danger {
+            background: #F44336;
+        }
+
+        .dropdown-content button:hover {
+            background-color: #0f4c52;
+            transform: translateY(-1px);
+        }
+
+        .dropdown-content.show {
+            display: block;
+        }
+
+        .dropdown-toggle {
+            background-color: #1b6b73;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            padding: 8px 12px;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .dropdown-toggle:hover {
+            transform: translateY(-1px);
+            background-color: #0f4c52;
+        }
+
+        .text-link {
+            background: none;
+            border: none;
+            color: #1b6b73;
+            padding: 4px 8px;
+            cursor: pointer;
+            font-size: 0.9em;
+            text-decoration: underline;
+        }
+
+        .text-link:hover {
+            color: #0f4c52;
+        }
+
+        .vm-actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            align-items: center;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="app">
+        <button class="action-btn" @click="showDeployDialog()">Deploy a new instance</button>
+
+        <div v-if="showCreateDialog" class="dialog-overlay">
+            <div class="dialog">
+                <h2>Deploy a new instance</h2>
+                <form @submit.prevent="createVm" class="create-vm-form">
+                    <div class="form-grid">
+                        <div class="form-group">
+                            <label for="vmName">Name</label>
+                            <input id="vmName" v-model="vmForm.name" type="text" placeholder="Enter VM name" required>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="vmImage">Image</label>
+                            <select id="vmImage" v-model="vmForm.image" required>
+                                <option value="" disabled>Select an image</option>
+                                <option v-for="image in availableImages" :key="image.name" :value="image.name">
+                                    {{ image.name }}
+                                </option>
+                            </select>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="vcpu">Number of vCPUs</label>
+                            <input id="vcpu" v-model.number="vmForm.vcpu" type="number" placeholder="vCPUs" required>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="memory">Memory</label>
+                            <div style="display: flex; align-items: center; gap: 8px;">
+                                <input id="memory" v-model.number="vmForm.memoryValue" type="number"
+                                    placeholder="Memory" style="flex: 1;" required>
+                                <select v-model="vmForm.memoryUnit" style="width: 80px;">
+                                    <option value="MB">MB</option>
+                                    <option value="GB">GB</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="diskSize">Disk Size (GB)</label>
+                            <input id="diskSize" v-model.number="vmForm.disk_size" type="number"
+                                placeholder="Disk size in GB" required>
+                        </div>
+
+                        <div class="form-group full-width">
+                            <label for="dockerComposeFile">Docker Compose File</label>
+                            <div style="display: flex; flex-direction: column; gap: 10px;">
+                                <div style="display: flex; align-items: center; gap: 10px;">
+                                    <button type="button" class="action-btn"
+                                        style="padding: 6px 12px; background-color: #f0f0f0; color: #333; border: 1px solid #ddd;"
+                                        onclick="document.getElementById('fileInput').click()">Upload File</button>
+                                    <span style="color: #666; font-size: 0.9em;">or paste below</span>
+                                    <input id="fileInput" type="file" @change="loadComposeFile" accept=".yml,.yaml,.txt"
+                                        style="display: none;">
+                                </div>
+                                <textarea id="dockerComposeFile" v-model="vmForm.dockerComposeFile"
+                                    placeholder="Paste your docker-compose.yml here" rows="8"></textarea>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="form-group" v-if="availableGpus.length > 0">
+                        <label for="gpuSelection">GPU</label>
+                        <gpu-config-editor :available-gpus="availableGpus" v-model:gpus="vmForm.selectedGpus"
+                            v-model:attach-all="vmForm.attachAllGpus">
+                        </gpu-config-editor>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="appId">App ID (optional)</label>
+                        <input id="appId" v-model="vmForm.app_id" type="text"
+                            placeholder="Will be auto-generated from configuration">
+                    </div>
+
+                    <div class="form-group">
+                        <label for="preLaunchScript">Pre-launch Script</label>
+                        <textarea id="preLaunchScript" v-model="vmForm.preLaunchScript"
+                            placeholder="Optional: Bash script to run before starting containers"></textarea>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="userConfig">User Config</label>
+                        <textarea id="userConfig" v-model="vmForm.user_config"
+                            placeholder="Optional: User config to be put at /dstack/.user-config in the CVM"></textarea>
+                    </div>
+
+                    <div class="form-group full-width" v-if="config.portMappingEnabled">
+                        <port-mapping-editor :ports="vmForm.ports"></port-mapping-editor>
+                    </div>
+
+                    <div class="form-group full-width">
+                        <label>Features</label>
+                        <div
+                            style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 15px;">
+                            <label style="display: grid; grid-template-columns: 20px 1fr; align-items: center;">
+                                <input type="checkbox" v-model="vmForm.kms_enabled">
+                                <span style="margin-left: 5px;">KMS</span>
+                            </label>
+                            <label style="display: grid; grid-template-columns: 20px 1fr; align-items: center;">
+                                <input type="checkbox" v-model="vmForm.local_key_provider_enabled">
+                                <span style="margin-left: 5px;">Local Key Provider</span>
+                            </label>
+                            <label style="display: grid; grid-template-columns: 20px 1fr; align-items: center;">
+                                <input type="checkbox" v-model="vmForm.gateway_enabled">
+                                <span style="margin-left: 5px;">Dstack Gateway</span>
+                            </label>
+                            <label style="display: grid; grid-template-columns: 20px 1fr; align-items: center;">
+                                <input type="checkbox" v-model="vmForm.public_logs">
+                                <span style="margin-left: 5px;">Public Logs</span>
+                            </label>
+                            <label style="display: grid; grid-template-columns: 20px 1fr; align-items: center;">
+                                <input type="checkbox" v-model="vmForm.public_sysinfo">
+                                <span style="margin-left: 5px;">Public Sysinfo</span>
+                            </label>
+                            <label style="display: grid; grid-template-columns: 20px 1fr; align-items: center;">
+                                <input type="checkbox" v-model="vmForm.public_tcbinfo">
+                                <span style="margin-left: 5px;">Public TCB Info</span>
+                            </label>
+                            <label style="display: grid; grid-template-columns: 20px 1fr; align-items: center;">
+                                <input type="checkbox" v-model="vmForm.pin_numa">
+                                <span style="margin-left: 5px;">Pin NUMA</span>
+                            </label>
+                            <label style="display: grid; grid-template-columns: 20px 1fr; align-items: center;">
+                                <input type="checkbox" v-model="vmForm.hugepages">
+                                <span style="margin-left: 5px;">Hugepages</span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <div class="form-group full-width" v-if="vmForm.kms_enabled">
+                        <encrypted-env-editor :env-vars="vmForm.encryptedEnvs"></encrypted-env-editor>
+                    </div>
+
+                    <div class="form-group full-width">
+                        <label style="display: flex; align-items: center; gap: 8px;">
+                            Docker Registry Login
+                            <input type="checkbox" v-model="vmForm.docker_config.enabled"
+                                style="width: 16px; height: 16px;">
+                        </label>
+                        <div v-if="vmForm.docker_config.enabled" class="docker-registry-section">
+                            <div class="docker-registry-field" v-if="vmForm.kms_enabled">
+                                <label class="docker-registry-label">Username</label>
+                                <input type="text" v-model="vmForm.docker_config.username"
+                                    class="docker-registry-input">
+                            </div>
+                            <div class="docker-registry-field" v-if="vmForm.kms_enabled">
+                                <label class="docker-registry-label">Token Key</label>
+                                <input type="text" v-model="vmForm.docker_config.token_key"
+                                    placeholder="The key name in the encrypted environment variables"
+                                    class="docker-registry-input">
+                            </div>
+                        </div>
+                    </div>
+                    <div class="app-id-preview">
+                        Compose Hash: 0x{{ composeHashPreview }}
+                    </div>
+
+                    <div class="vm-actions">
+                        <button type="submit" class="action-btn primary">Deploy</button>
+                        <button type="button" class="action-btn remove"
+                            @click="showCreateDialog = false">Cancel</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <h2>VM List</h2>
+        <div id="vmList">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <input type="text" v-model="searchQuery" placeholder="Search VMs..."
+                        style="padding: 8px; border: 1px solid #ddd; border-radius: 4px; width: 250px;">
+                    <button class="action-btn" @click="loadVMList()" style="padding: 8px 12px;">Search</button>
+                </div>
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <span>Total: {{ totalVMs }}</span>
+                </div>
+            </div>
+            <table style="width: 100%; border-collapse: collapse;">
+                <thead>
+                    <tr>
+                        <th style="text-align: left; padding: 12px; border-bottom: 2px solid #ddd;">Name</th>
+                        <th style="text-align: left; padding: 12px; border-bottom: 2px solid #ddd;">Status</th>
+                        <th style="text-align: left; padding: 12px; border-bottom: 2px solid #ddd;">Uptime</th>
+                        <th style="text-align: left; padding: 12px; border-bottom: 2px solid #ddd;">View</th>
+                        <th style="text-align: left; padding: 12px; border-bottom: 2px solid #ddd;">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <template v-for="vm in vms" :key="vm.id">
+                        <tr style="border-bottom: 1px solid #eee;">
+                            <td style="padding: 12px;">
+                                <div style="display: flex; align-items: center; gap: 8px;">
+                                    <button @click="toggleDetails(vm)" class="action-btn"
+                                        style="padding: 2px 6px; min-width: 24px;">
+                                        {{ expandedVMs.has(vm.id) ? '−' : '+' }}
+                                    </button>
+                                    {{ vm.name }}
+                                </div>
+                            </td>
+                            <td style="padding: 12px;">
+                                <span :class="'status-' + vm.status.toLowerCase()">{{ vmStatus(vm) }}</span>
+                            </td>
+                            <td style="padding: 12px;">{{ vm.status == 'running' ? vm.uptime : '' }}</td>
+                            <td style="padding: 12px;">
+                                <!-- Text links for secondary actions -->
+                                <button class="text-link" @click="showLog(vm.id)" title="View Logs">
+                                    <i class="fas fa-list-alt"></i> Logs
+                                </button>
+                                <button class="text-link" @click="showLog(vm.id, 'stderr')" title="View stderr">
+                                    <i class="fas fa-exclamation-circle"></i> Stderr
+                                </button>
+                                <button v-if="dashboardAvailable(vm)" class="text-link" @click="showDashboard(vm)"
+                                    title="View App Info">
+                                    <i class="fas fa-tachometer-alt"></i> Dashboard
+                                </button>
+                            </td>
+                            <td style="padding: 12px;">
+                                <div class="vm-actions">
+                                    <!-- Dropdown menu for primary actions -->
+                                    <div class="dropdown">
+                                        <button class="dropdown-toggle" @click="toggleDropdown($event, vm)"
+                                            title="Actions">
+                                            <i class="fas fa-cog"></i>
+                                        </button>
+                                        <div :id="'dropdown-' + vm.id" class="dropdown-content">
+                                            <button class="primary" @click="startVm(vm.id)" title="Start VM">
+                                                <i class="fas fa-play"></i> Start
+                                            </button>
+                                            <button class="warning" v-if="imageFeatures(vm).graceful_shutdown"
+                                                @click="shutdownVm(vm.id)" title="Shutdown VM">
+                                                <i class="fas fa-power-off"></i> Shutdown
+                                            </button>
+                                            <button class="danger" @click="stopVm(vm)" title="Stop VM">
+                                                <i class="fas fa-bolt"></i> Kill
+                                            </button>
+                                            <button class="warning" @click="removeVm(vm)" title="Remove VM">
+                                                <i class="fas fa-trash-alt"></i> Remove
+                                            </button>
+                                            <button v-if="kmsEnabled(vm)" @click="showUpgradeDialog(vm)"
+                                                title="Upgrade VM" :disabled="loadingVMDetails">
+                                                <i class="fas fa-sync-alt"></i> Update
+                                                <span v-if="loadingVMDetails && !vm.configuration"
+                                                    class="loading-spinner"></span>
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                </div>
+                            </td>
+                        </tr>
+                        <tr v-if="expandedVMs.has(vm.id)" style="background-color: #f8f9fa;">
+                            <td colspan="5" style="padding: 16px;">
+                                <div class="vm-details">
+                                    <h4 style="margin: 0 0 12px 0;">Boot Status</h4>
+                                    <div style="margin-bottom: 16px;">
+                                        <table style="width: 100%;">
+                                            <tr>
+                                                <td style="width: 30%;">Boot Progress:</td>
+                                                <td>{{ vm.boot_progress || 'N/A' }}</td>
+                                            </tr>
+                                            <tr v-if="vm.boot_error">
+                                                <td style="width: 30%;">Boot Error</td>
+                                                <td style="color: #f44336;">{{ vm.boot_error }}</td>
+                                            </tr>
+                                        </table>
+                                    </div>
+                                    <div v-if="networkInfo[vm.id]">
+                                        <h4 style="margin: 0 0 12px 0;">Network Information</h4>
+                                        <div class="details-grid">
+                                            <div class="detail-item">
+                                                <span class="detail-label">DNS Servers:</span>
+                                                <span class="detail-value">{{ networkInfo[vm.id].dns_servers.join(', ')
+                                                    }}</span>
+                                            </div>
+                                            <div class="detail-item">
+                                                <span class="detail-label">Gateways:</span>
+                                                <span class="detail-value">{{ networkInfo[vm.id].gateways.map(gw =>
+                                                    gw.address).join(', ') }}</span>
+                                            </div>
+                                            <div v-for="iface in networkInfo[vm.id].interfaces" :key="iface.name"
+                                                class="detail-item">
+                                                <span class="detail-label">Interface {{ iface.name }}:</span>
+                                                <div class="interface-details">
+                                                    <div>IP: {{ iface.addresses.map(addr =>
+                                                        `${addr.address}/${addr.prefix}`).join(', ') }}</div>
+                                                    <div>RX: {{ iface.rx_bytes }} bytes ({{ iface.rx_errors }} errors)
+                                                    </div>
+                                                    <div>TX: {{ iface.tx_bytes }} bytes ({{ iface.tx_errors }} errors)
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div>
+                                            <div class="detail-item">
+                                                <span class="detail-label">WireGuard Info:</span>
+                                                <pre class="ml-text-ro">{{ networkInfo[vm.id].wg_info }}</pre>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <h4 style="margin: 0 0 12px 0;">VM Configuration</h4>
+                                    <div class="details-grid">
+                                        <div class="detail-item">
+                                            <span class="detail-label">Image:</span>
+                                            <span class="detail-value">{{ vm.configuration?.image }}</span>
+                                        </div>
+                                        <div class="detail-item">
+                                            <span class="detail-label">vCPUs:</span>
+                                            <span class="detail-value">{{ vm.configuration?.vcpu }}</span>
+                                        </div>
+                                        <div class="detail-item">
+                                            <span class="detail-label">Memory:</span>
+                                            <span class="detail-value">{{ formatMemory(vm.configuration?.memory)
+                                                }}</span>
+                                        </div>
+                                        <div class="detail-item">
+                                            <span class="detail-label">Disk Size:</span>
+                                            <span class="detail-value">{{ vm.configuration?.disk_size }} GB</span>
+                                        </div>
+                                        <div class="detail-item"
+                                            v-if="vm.configuration?.gpus && vm.configuration.gpus.length > 0">
+                                            <span class="detail-label">GPUs:</span>
+                                            <div>
+                                                <div v-for="gpu in vm.configuration.gpus" class="detail-value">
+                                                    {{ gpu.slot || gpu.product_id }}
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div class="detail-item">
+                                            <span class="detail-label">VM ID:</span>
+                                            <span class="detail-value">{{ vm.id }}</span>
+                                        </div>
+                                    </div>
+
+                                    <div v-if="vm.configuration?.ports?.length" style="margin-top: 16px;">
+                                        <h4 style="margin: 0 0 12px 0;">Port Mappings</h4>
+                                        <div class="port-mappings">
+                                            <div v-for="(port, index) in vm.configuration.ports" :key="index"
+                                                class="port-item">
+                                                <span
+                                                    :style="{ color: port.host_address === '127.0.0.1' ? '#4CAF50' : '#FF9800' }"
+                                                    style="font-weight: bold; margin-right: 5px;">
+                                                    {{ !port.host_address || port.host_address === '127.0.0.1' ? 'Local'
+                                                    : 'Public' }}
+                                                </span>
+                                                {{ port.protocol.toUpperCase() }}: {{ port.host_port }} → {{
+                                                port.vm_port }}
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <div style="margin-top: 16px;">
+                                        <h4 style="margin: 0 0 12px 0;">App Information</h4>
+                                        <div class="details-grid" style="margin-bottom: 16px;">
+                                            <div class="detail-item">
+                                                <span class="detail-label">App Name:</span>
+                                                <span class="detail-value">{{ vm.appCompose?.name }}</span>
+                                            </div>
+                                            <div class="detail-item">
+                                                <span class="detail-label">App ID:</span>
+                                                <span class="detail-value truncated-id">{{ vm.app_id }}</span>
+                                            </div>
+                                            <div class="detail-item">
+                                                <span class="detail-label">Instance ID:</span>
+                                                <span class="detail-value truncated-id">{{ vm.instance_id }}</span>
+                                            </div>
+                                            <div class="detail-item">
+                                                <span class="detail-label">Runner:</span>
+                                                <span class="detail-value">{{ vm.appCompose?.runner }}</span>
+                                            </div>
+                                            <div class="detail-item">
+                                                <span class="detail-label">Features:</span>
+                                                <span class="detail-value">{{ getFlags(vm) || 'None' }}</span>
+                                            </div>
+                                        </div>
+
+                                        <h4 style="margin: 0 0 12px 0;">Docker Compose File</h4>
+                                        <pre
+                                            style="background: #f1f1f1; padding: 12px; border-radius: 4px; overflow-x: auto;">{{ vm.appCompose?.docker_compose_file }}</pre>
+                                        <h4 style="margin: 0 0 12px 0;">Pre-launch Script</h4>
+                                        <pre
+                                            style="background: #f1f1f1; padding: 12px; border-radius: 4px; overflow-x: auto;">{{ vm.appCompose?.pre_launch_script }}</pre>
+                                    </div>
+                                </div>
+                            </td>
+                        </tr>
+                    </template>
+                </tbody>
+            </table>
+            <div style="display: flex; justify-content: center; margin-top: 20px; gap: 10px; align-items: center;">
+                <button class="action-btn" @click="prevPage()" :disabled="currentPage === 1"
+                    style="padding: 6px 12px;">Previous</button>
+
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <span>Page</span>
+                    <input type="number" v-model.number="pageInput" min="1" :max="maxPage"
+                        style="width: 60px; padding: 4px 8px; border: 1px solid #ddd; border-radius: 4px;"
+                        @keyup.enter="goToPage()">
+                    <span>of {{ maxPage || 1 }}</span>
+                </div>
+
+                <button class="action-btn" @click="goToPage()" style="padding: 6px 12px;">Go</button>
+                <button class="action-btn" @click="nextPage()" :disabled="!hasMorePages"
+                    style="padding: 6px 12px;">Next</button>
+
+                <select v-model="pageSize" style="padding: 6px; border: 1px solid #ddd; border-radius: 4px;"
+                    @change="onPageSizeChange()">
+                    <option :value="10">10 per page</option>
+                    <option :value="25">25 per page</option>
+                    <option :value="50">50 per page</option>
+                    <option :value="100">100 per page</option>
+                </select>
+            </div>
+        </div>
+
+        <div v-if="upgradeDialog.show" class="dialog-overlay">
+            <div class="dialog">
+                <h3>Update VM Config</h3>
+
+                <div class="form-group">
+                    <label for="vcpu">Number of vCPUs</label>
+                    <input id="vcpu" v-model.number="upgradeDialog.vcpu" type="number" placeholder="vCPUs" required>
+                </div>
+                <div class="form-group">
+                    <label for="memory">Memory</label>
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <input id="memory" v-model.number="upgradeDialog.memoryValue" type="number" placeholder="Memory"
+                            style="flex: 1;" required>
+                        <select v-model="upgradeDialog.memoryUnit" style="width: 80px;">
+                            <option value="MB">MB</option>
+                            <option value="GB">GB</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label for="diskSize">Disk Size (GB)</label>
+                    <input id="diskSize" v-model.number="upgradeDialog.disk_size" type="number"
+                        placeholder="Disk size in GB" required>
+                </div>
+
+                <div class="form-group">
+                    <label for="image">Image</label>
+                    <select id="vmImage" v-model="upgradeDialog.image" required>
+                        <option value="" disabled>Select an image</option>
+                        <option v-for="image in availableImages" :key="image.name" :value="image.name">
+                            {{ image.name }}
+                        </option>
+                    </select>
+                </div>
+
+                <!-- GPU Configuration -->
+                <div class="form-group" v-if="availableGpus.length > 0">
+                    <div class="form-check">
+                        <label class="checkbox-container">
+                            <input type="checkbox" v-model="upgradeDialog.updateGpuConfig">
+                            <span class="checkbox-label">Update GPU configuration</span>
+                        </label>
+                    </div>
+
+                    <div v-if="upgradeDialog.updateGpuConfig">
+                        <gpu-config-editor :available-gpus="availableGpus" v-model:gpus="upgradeDialog.selectedGpus"
+                            v-model:attach-all="upgradeDialog.attachAllGpus">
+                        </gpu-config-editor>
+                    </div>
+                </div>
+
+                <div class="form-check" style="margin-top: 16px;">
+                    <label class="checkbox-container">
+                        <input type="checkbox" v-model="upgradeDialog.updateCompose">
+                        <span class="checkbox-label">Update App Compose</span>
+                    </label>
+                </div>
+                <div v-if="upgradeDialog.updateCompose">
+                    <div class="form-group">
+                        <label for="upgradeCompose">Docker Compose File</label>
+                        <div style="display: flex; flex-direction: column; gap: 10px;">
+                            <div style="display: flex; align-items: center; gap: 10px;">
+                                <button type="button" class="action-btn"
+                                    style="padding: 6px 12px; background-color: #f0f0f0; color: #333; border: 1px solid #ddd;"
+                                    onclick="document.getElementById('upgradeFile').click()">Upload File</button>
+                                <span style="color: #666; font-size: 0.9em;">or paste below</span>
+                                <input id="upgradeFile" type="file" @change="loadUpgradeFile" accept=".yml,.yaml,.txt"
+                                    style="display: none;">
+                            </div>
+                            <textarea id="upgradeCompose" v-model="upgradeDialog.dockerComposeFile"
+                                placeholder="Paste your new docker-compose.yml here" rows="8" required></textarea>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label for="upgradePrelauncher">Pre-launch Script</label>
+                        <textarea id="upgradePrelauncher" v-model="upgradeDialog.preLaunchScript"
+                            placeholder="Optional: Bash script to run before starting containers"></textarea>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="userConfig">User Config</label>
+                        <textarea id="userConfig" v-model="upgradeDialog.user_config"
+                            placeholder="Optional: User config to be put at /dstack/.user-config in the CVM"></textarea>
+                    </div>
+                    <div class="app-id-preview">
+                        Compose Hash: 0x{{ upgradeComposeHashPreview }}
+                    </div>
+                </div>
+                <div class="form-check" style="margin-top: 16px;">
+                    <label class="checkbox-container">
+                        <input type="checkbox" v-model="upgradeDialog.resetSecrets">
+                        <span class="checkbox-label">Reset secrets</span>
+                    </label>
+                </div>
+                <div v-if="kmsEnabled(upgradeDialog.vm) && upgradeDialog.resetSecrets" style="margin-top: 16px;">
+                    <encrypted-env-editor :env-vars="upgradeDialog.encryptedEnvs"></encrypted-env-editor>
+                </div>
+
+                <div class="form-group full-width" v-if="config.portMappingEnabled">
+                    <port-mapping-editor :ports="upgradeDialog.ports"></port-mapping-editor>
+                </div>
+
+                <div class="vm-actions">
+                    <button class="action-btn upgrade" @click="upgradeVM">Upgrade</button>
+                    <button class="action-btn remove" @click="upgradeDialog.show = false">Cancel</button>
+                </div>
+            </div>
+        </div>
+
+        <div v-if="forkDialog.show" class="dialog-overlay">
+            <div class="dialog">
+                <h3>Derive VM</h3>
+                <p style="color: #f44336; margin: 0 0 12px 0;">
+                    This will create a new VM instance with the same app id, but the disk state will NOT migrate to the
+                    new instance.
+                </p>
+
+                <div class="form-group">
+                    <label for="vmImage">Image</label>
+                    <select id="vmImage" v-model="forkDialog.image" required>
+                        <option value="" disabled>Select an image</option>
+                        <option v-for="image in availableImages" :key="image.name" :value="image.name">
+                            {{ image.name }}
+                        </option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="vcpu">Number of vCPUs</label>
+                    <input id="vcpu" v-model.number="forkDialog.vcpu" type="number" placeholder="vCPUs" required>
+                </div>
+                <div class="form-group">
+                    <label for="memory">Memory (MB)</label>
+                    <input id="memory" v-model.number="forkDialog.memory" type="number" placeholder="Memory in MB"
+                        required>
+                </div>
+                <div class="form-group">
+                    <label for="diskSize">Disk Size (GB)</label>
+                    <input id="diskSize" v-model.number="forkDialog.disk_size" type="number"
+                        placeholder="Disk size in GB" required>
+                </div>
+                <div class="vm-actions">
+                    <button class="action-btn upgrade" @click="forkVm">Derive</button>
+                    <button class="action-btn remove" @click="forkDialog.show = false">Cancel</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="message-container">
+            <div v-if="upgradeMessage" class="message success-message">
+                <button class="close-btn" @click="upgradeMessage = ''">×</button>
+                <div v-html="upgradeMessage"></div>
+            </div>
+            <div v-if="errorMessage" class="message error-message">
+                {{ errorMessage }}
+                <button class="close-btn" @click="errorMessage = ''">×</button>
+            </div>
+        </div>
+        <div class="version-info" style="color: #666; font-size: 12px; margin-top: 16px; text-align: center;">
+            Version: v{{ version.version }} ({{ version.rev }})
+        </div>
+    </div>
+
+    <!-- Reusable template for encrypted environment variables editor -->
+    <template id="encrypted-env-editor">
+        <div class="encrypted-env-editor">
+            <label>Encrypted Environment Variables</label>
+            <div v-for="(env, index) in envVars" :key="index" style="display: flex; gap: 10px; margin-bottom: 10px;">
+                <input type="text" v-model="env.key" placeholder="Variable name" style="width: 200px;" required>
+                <input type="password" v-model="env.value" placeholder="Value" style="flex-grow: 1;" required>
+                <button type="button" class="action-btn danger" @click="removeEnv(index)">
+                    Remove
+                </button>
+            </div>
+            <div style="display: flex; gap: 10px;">
+                <button type="button" class="action-btn" @click="addEnv">Add</button>
+                <input type="file" ref="envFileInput" @change="loadEnvFromFile" style="display: none"
+                    accept=".env,.txt">
+                <button type="button" class="action-btn" @click="$refs.envFileInput.click()">Load from
+                    file</button>
+            </div>
+        </div>
+    </template>
+
+    <!-- Reusable template for port mapping editor -->
+    <template id="port-mapping-editor">
+        <div class="port-mapping-editor">
+            <label>Port Mappings</label>
+            <div v-for="(port, index) in ports" :key="index"
+                style="display: flex; gap: 10px; margin-bottom: 10px; align-items: center;">
+                <select v-model="port.protocol" style="width: 80px;">
+                    <option value="tcp">TCP</option>
+                    <option value="udp">UDP</option>
+                </select>
+                <select v-model="port.host_address" style="width: 100px;">
+                    <option value="127.0.0.1">Local</option>
+                    <option value="0.0.0.0">Public</option>
+                </select>
+                <input type="number" v-model.number="port.host_port" placeholder="Host Port" style="width: 120px;"
+                    required>
+                <input type="number" v-model.number="port.vm_port" placeholder="VM Port" style="width: 120px;" required>
+                <button type="button" class="action-btn danger" @click="removePort(index)">Remove</button>
+            </div>
+            <button type="button" class="action-btn" @click="addPort">Add Port Mapping</button>
+        </div>
+    </template>
+
+    <template id="gpu-config-editor">
+        <div>
+            <div style="display: flex; flex-wrap: wrap; gap: 20px;">
+                <label style="display: flex; align-items: center; gap: 5px; white-space: nowrap;">
+                    <input type="checkbox" v-model="attachAll" style="margin-right: 5px;">
+                    Attach All GPUs and NVSwitches
+                </label>
+            </div>
+            <div v-if="!attachAll" style="margin-top: 10px;">
+                <div style="margin-bottom: 5px; font-size: 0.9em; color: #666;">
+                    Select GPUs to attach:
+                </div>
+                <div
+                    style="max-height: 200px; overflow-y: auto; border: 1px solid #ddd; padding: 10px; border-radius: 4px;">
+                    <div v-for="gpu in availableGpus" :key="gpu.slot" style="margin-bottom: 8px;">
+                        <label style="display: grid; grid-template-columns: 20px 1fr; align-items: center;">
+                            <input type="checkbox" :value="gpu.slot" v-model="gpus">
+                            <span style="margin-left: 5px;">{{ gpu.slot }}: {{ gpu.description }} {{ gpu.is_free ? '' :
+                                '(in use)' }}</span>
+                        </label>
+                    </div>
+                </div>
+            </div>
+            <div v-else class="gpu-info-text" style="margin-top: 10px; color: #666;">
+                All NVIDIA GPUs and NVSwitches will be attached to the VM
+            </div>
+        </div>
+    </template>
+
+    <script>
+        const {
+            createApp,
+            ref,
+            onMounted,
+            watch,
+            computed
+        } = Vue;
+
+        // Define the encrypted environment variables editor component
+        const EncryptedEnvEditor = {
+            template: '#encrypted-env-editor',
+            props: {
+                envVars: {
+                    type: Array,
+                    required: true
+                }
+            },
+            methods: {
+                addEnv() {
+                    this.envVars.push({
+                        key: '',
+                        value: ''
+                    });
+                },
+                removeEnv(index) {
+                    this.envVars.splice(index, 1);
+                },
+                loadEnvFromFile(event) {
+                    const file = event.target.files[0];
+                    if (file) {
+                        const reader = new FileReader();
+                        reader.onload = (e) => {
+                            const content = e.target.result;
+                            const lines = content.split('\n');
+
+                            // Clear existing env vars
+                            this.envVars.splice(0, this.envVars.length);
+
+                            lines.forEach(line => {
+                                // Skip empty lines and comments
+                                if (!line.trim() || line.startsWith('#')) return;
+
+                                // Split on first = only
+                                const [key, ...valueParts] = line.split('=');
+                                const value = valueParts.join('=');
+
+                                if (key && value) {
+                                    this.envVars.push({
+                                        key: key.trim(),
+                                        value: value.trim()
+                                    });
+                                }
+                            });
+                        };
+                        reader.readAsText(file);
+                    }
+                }
+            }
+        };
+
+        // Define the port mapping editor component
+        const PortMappingEditor = {
+            template: '#port-mapping-editor',
+            props: {
+                ports: {
+                    type: Array,
+                    required: true
+                }
+            },
+            methods: {
+                addPort() {
+                    this.ports.push({
+                        protocol: 'tcp',
+                        host_address: '127.0.0.1', // Default to local address
+                        host_port: null,
+                        vm_port: null
+                    });
+                },
+                removePort(index) {
+                    this.ports.splice(index, 1);
+                }
+            }
+        };
+
+        // Define the GPU configuration editor component
+        const GpuConfigEditor = {
+            template: '#gpu-config-editor',
+            props: {
+                availableGpus: {
+                    type: Array,
+                    required: true
+                },
+                gpus: {
+                    type: Array,
+                    required: true
+                },
+                attachAll: {
+                    type: Boolean,
+                    required: true
+                }
+            },
+            emits: ['update:gpus', 'update:attachAll'],
+            setup(props, { emit }) {
+                const gpus = computed({
+                    get: () => props.gpus,
+                    set: (value) => emit('update:gpus', value)
+                });
+
+                const attachAll = computed({
+                    get: () => props.attachAll,
+                    set: (value) => emit('update:attachAll', value)
+                });
+
+                return {
+                    gpus,
+                    attachAll
+                };
+            }
+        };
+
+        createApp({
+            components: {
+                'encrypted-env-editor': EncryptedEnvEditor,
+                'port-mapping-editor': PortMappingEditor,
+                'gpu-config-editor': GpuConfigEditor,
+            },
+            setup() {
+                const version = ref({
+                    version: '-',
+                    commit: ''
+                });
+                const vms = ref([]);
+                const expandedVMs = ref(new Set());
+                const networkInfo = ref({});
+                const searchQuery = ref('');
+                const currentPage = ref(1);
+                const pageInput = ref(1);
+                const pageSize = ref(parseInt(localStorage.getItem('pageSize')) || 50);
+                const totalVMs = ref(0);
+                const hasMorePages = ref(false);
+                const loadingVMDetails = ref(false);
+                const maxPage = computed(() => {
+                    return Math.ceil(totalVMs.value / pageSize.value) || 1;
+                });
+                const vmForm = ref({
+                    name: '',
+                    image: '',
+                    dockerComposeFile: '',
+                    preLaunchScript: '',
+                    vcpu: 1,
+                    memory: 2048, // This will be computed from memoryValue and memoryUnit
+                    memoryValue: 2,
+                    memoryUnit: 'GB',
+                    disk_size: 20,
+                    selectedGpus: [],
+                    attachAllGpus: false,
+                    ports: [],
+                    encryptedEnvs: [],
+                    docker_config: {
+                        enabled: false,
+                        username: '',
+                        token_key: ''
+                    },
+                    app_id: '',
+                    kms_enabled: true,
+                    local_key_provider_enabled: false,
+                    gateway_enabled: true,
+                    public_logs: true,
+                    public_sysinfo: true,
+                    public_tcbinfo: true,
+                    pin_numa: false,
+                    hugepages: false,
+                    user_config: ''
+                });
+                const availableImages = ref([]);
+                const availableGpus = ref([]);
+                const availableGpuProducts = ref([]);
+                const upgradeDialog = ref({
+                    show: false,
+                    vm: null,
+                    updateCompose: false,
+                    dockerComposeFile: '',
+                    preLaunchScript: '',
+                    encryptedEnvs: [],
+                    resetSecrets: false,
+                    vcpu: 0,
+                    memory: 0, // This will be computed from memoryValue and memoryUnit
+                    memoryValue: 0,
+                    memoryUnit: 'MB',
+                    disk_size: 0,
+                    image: '',
+                    ports: [],
+                    // GPU configuration
+                    attachAllGpus: false,
+                    selectedGpus: [],
+                    updateGpuConfig: false
+                });
+                const upgradeMessage = ref('');
+                const errorMessage = ref('');
+
+                const forkDialog = ref({
+                    show: false,
+                    image: '',
+                    vcpu: 0,
+                    memory: 0,
+                    disk_size: 0
+                });
+
+                const showCreateDialog = ref(false);
+                const config = ref({
+                    portMappingEnabled: false
+                });
+
+                const rpcCall = async (method, params) => {
+                    return await baseRpcCall(`/prpc/${method}`, params)
+                }
+
+                const guestRpcCall = async (method, params) => {
+                    return await baseRpcCall(`/guest/${method}`, params)
+                }
+
+                const baseRpcCall = async (path, params) => {
+                    const headers = {
+                        'Content-Type': 'application/json',
+                    };
+
+                    const response = await fetch(`${path}?json`, {
+                        method: 'POST',
+                        headers,
+                        body: JSON.stringify(params || {}),
+                    });
+                    if (!response.ok) {
+                        const error = await response.text();
+                        errorMessage.value = error;
+                        throw new Error(error);
+                    }
+                    return response;
+                };
+
+                const loadVMList = async () => {
+                    try {
+                        const response = await rpcCall('Status', {
+                            brief: true, // Always load with brief=true for efficiency
+                            keyword: searchQuery.value,
+                            page: currentPage.value,
+                            page_size: pageSize.value
+                        });
+                        const data = await response.json();
+
+                        totalVMs.value = data.total || data.vms.length;
+                        hasMorePages.value = data.vms.length === pageSize.value && totalVMs.value > (currentPage.value * pageSize.value);
+
+                        const previousVms = vms.value;
+                        const previousVmMap = new Map(previousVms.map(vm => [vm.id, vm]));
+                        vms.value = data.vms.map(vm => {
+                            const previousVm = previousVmMap.get(vm.id);
+                            if (previousVm) {
+                                return {
+                                    ...vm,
+                                    configuration: previousVm.configuration,
+                                    appCompose: previousVm.appCompose
+                                };
+                            }
+                            return vm;
+                        });
+
+                        config.value = {
+                            portMappingEnabled: data.port_mapping_enabled
+                        };
+
+                        // If there are expanded VMs, refresh their details
+                        if (expandedVMs.value.size > 0) {
+                            refreshExpandedVMs();
+                        }
+                    } catch (error) {
+                        console.error('Error loading VM list:', error);
+                    }
+                };
+
+                const refreshExpandedVMs = async () => {
+                    if (expandedVMs.value.size === 0) return;
+
+                    try {
+                        const response = await rpcCall('Status', {
+                            brief: false, // Get full details
+                            ids: Array.from(expandedVMs.value)
+                        });
+                        const data = await response.json();
+
+                        // Update the expanded VMs with full details
+                        if (data.vms && data.vms.length > 0) {
+                            const vmMap = new Map(vms.value.map(vm => [vm.id, vm]));
+
+                            data.vms.forEach(detailedVM => {
+                                const appCompose = (() => {
+                                    try {
+                                        return JSON.parse(detailedVM.configuration?.compose_file || '{}');
+                                    } catch (e) {
+                                        console.error('Error parsing app config:', e);
+                                        return {};
+                                    }
+                                })();
+
+                                // If VM exists in the list, update it with detailed info
+                                if (vmMap.has(detailedVM.id)) {
+                                    const index = vms.value.findIndex(vm => vm.id === detailedVM.id);
+                                    if (index !== -1) {
+                                        vms.value[index] = { ...detailedVM, appCompose };
+                                    }
+                                }
+                            });
+                        }
+                    } catch (error) {
+                        console.error('Error refreshing expanded VMs:', error);
+                    }
+                };
+
+                const makeAppComposeFile = () => {
+                    const app_compose = {
+                        "manifest_version": 2,
+                        "name": vmForm.value.name,
+                        "runner": "docker-compose",
+                        "docker_compose_file": vmForm.value.dockerComposeFile,
+                        "docker_config": vmForm.value.docker_config.enabled ? {
+                            "username": vmForm.value.docker_config.username,
+                            "token_key": vmForm.value.docker_config.token_key,
+                        } : {},
+                        "kms_enabled": vmForm.value.kms_enabled,
+                        "gateway_enabled": vmForm.value.gateway_enabled,
+                        "public_logs": vmForm.value.public_logs,
+                        "public_sysinfo": vmForm.value.public_sysinfo,
+                        "public_tcbinfo": vmForm.value.public_tcbinfo,
+                        "local_key_provider_enabled": vmForm.value.local_key_provider_enabled,
+                        "allowed_envs": vmForm.value.encryptedEnvs.map(env => env.key),
+                        "no_instance_id": !vmForm.value.gateway_enabled,
+                        "secure_time": false,
+                    };
+
+                    if (vmForm.value.preLaunchScript?.trim()) {
+                        app_compose.pre_launch_script = vmForm.value.preLaunchScript;
+                    }
+
+                    const imgFeatures = imageVersionFeatures(imageVersion(vmForm.value.image));
+                    if (imgFeatures.compose_version < 2) {
+                        // Compatibility with old images
+                        const features = [];
+                        if (vmForm.value.kms_enabled) features.push("kms");
+                        if (vmForm.value.gateway_enabled) features.push("tproxy-net");
+                        app_compose.features = features;
+                        app_compose.manifest_version = 1;
+                        app_compose.version = "1.0.0";
+                    }
+                    if (imgFeatures.compose_version < 3) {
+                        app_compose.tproxy_enabled = app_compose.gateway_enabled;
+                        delete app_compose["gateway_enabled"];
+                    }
+                    return JSON.stringify(app_compose);
+                };
+
+                const calcComposeHash = async (app_compose) => {
+                    const sha256Hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(app_compose));
+                    return Array.from(new Uint8Array(sha256Hash)).map(b => b.toString(16).padStart(2, '0')).join('');
+                }
+
+                const calcAppId = async () => {
+                    const composeHash = await calcComposeHash(makeAppComposeFile());
+                    return composeHash.slice(0, 40);
+                };
+
+                const encryptEnv = async (envs, hexPublicKey) => {
+                    const envsJson = JSON.stringify({ env: envs });
+                    if (hexPublicKey.startsWith('0x')) {
+                        hexPublicKey = hexPublicKey.slice(2);
+                    }
+                    const remotePubkey = new Uint8Array(hexPublicKey.match(/.{1,2}/g).map(byte => parseInt(byte, 16)));
+
+                    const seed = crypto.getRandomValues(new Uint8Array(32));
+                    const ephemeralKeyPair = x25519.generateKeyPair(seed);
+                    const shared = x25519.sharedKey(ephemeralKeyPair.private, remotePubkey);
+
+                    const importedShared = await crypto.subtle.importKey(
+                        "raw",
+                        shared,
+                        { name: "AES-GCM", length: 256 },
+                        true,
+                        ["encrypt"]
+                    );
+
+                    const iv = crypto.getRandomValues(new Uint8Array(12));
+                    const encrypted = await crypto.subtle.encrypt(
+                        { name: "AES-GCM", iv },
+                        importedShared,
+                        new TextEncoder().encode(envsJson)
+                    );
+
+                    const result = new Uint8Array(ephemeralKeyPair.public.byteLength + iv.length + encrypted.byteLength);
+                    result.set(new Uint8Array(ephemeralKeyPair.public));
+                    result.set(iv, ephemeralKeyPair.public.byteLength);
+                    result.set(new Uint8Array(encrypted), ephemeralKeyPair.public.byteLength + iv.length);
+
+                    return Array.from(result).map(b => b.toString(16).padStart(2, '0')).join('');
+                };
+
+                const makeEncryptedEnv = async (envs, kmsEnabled, appId) => {
+                    if (!kmsEnabled || envs.length === 0) return '';
+                    if (!appId) {
+                        appId = await calcAppId();
+                    }
+                    const response = await rpcCall('GetAppEnvEncryptPubKey', {
+                        app_id: appId
+                    });
+                    const encryptPubkey = await response.json();
+                    return await encryptEnv(envs, encryptPubkey.public_key);
+                };
+
+                const configGpu = (form) => {
+                    if (form.attachAllGpus) {
+                        return {
+                            attach_mode: 'all'
+                        };
+                    } else {
+                        // Otherwise, use the selected GPU slots if any are specified
+                        let gpus = [];
+                        if (form.selectedGpus && form.selectedGpus.length > 0) {
+                            gpus = form.selectedGpus.map(slot => ({
+                                slot: slot
+                            }));
+                        }
+                        if (gpus.length === 0) {
+                            return null;
+                        }
+                        return {
+                            attach_mode: 'listed',
+                            gpus: gpus
+                        };
+                    }
+                };
+
+                const showDeployDialog = () => {
+                    showCreateDialog.value = true;
+                    vmForm.value.encryptedEnvs = [];
+                    vmForm.value.app_id = null;
+                    loadGpus();
+                };
+
+                // Memory conversion functions
+                const convertMemoryToMB = (value, unit) => {
+                    if (unit === 'GB') {
+                        return value * 1024;
+                    }
+                    return value;
+                };
+
+                const formatMemory = (memoryMB) => {
+                    if (!memoryMB) return '0 MB';
+
+                    if (memoryMB >= 1024) {
+                        const gbValue = (memoryMB / 1024).toFixed(1);
+                        // Remove trailing zeros after decimal point
+                        return `${parseFloat(gbValue)} GB`;
+                    }
+                    return `${memoryMB} MB`;
+                };
+
+                // Watch for memory unit changes and update the memory value
+                watch([() => vmForm.value.memoryValue, () => vmForm.value.memoryUnit], () => {
+                    vmForm.value.memory = convertMemoryToMB(vmForm.value.memoryValue, vmForm.value.memoryUnit);
+                });
+
+                watch([() => upgradeDialog.value.memoryValue, () => upgradeDialog.value.memoryUnit], () => {
+                    upgradeDialog.value.memory = convertMemoryToMB(upgradeDialog.value.memoryValue, upgradeDialog.value.memoryUnit);
+                });
+
+                const createVm = async () => {
+                    try {
+                        // Convert memory based on selected unit
+                        vmForm.value.memory = convertMemoryToMB(vmForm.value.memoryValue, vmForm.value.memoryUnit);
+
+                        const form = {
+                            ...vmForm.value,
+                            compose_file: makeAppComposeFile(),
+                            allowed_envs: vmForm.value.encryptedEnvs.map(env => env.key),
+                            encrypted_env: await makeEncryptedEnv(
+                                vmForm.value.encryptedEnvs,
+                                vmForm.value.kms_enabled,
+                                vmForm.value.app_id
+                            ),
+                            user_config: vmForm.value.user_config,
+                            gpus: configGpu(vmForm.value),
+                        };
+                        const _response = await rpcCall('CreateVm', form);
+                        loadVMList();
+                        showCreateDialog.value = false;
+                    } catch (error) {
+                        console.error('Error creating VM:', error);
+                        alert('Failed to create VM');
+                    }
+                };
+
+                const stopVm = async (vm) => {
+                    if (!confirm(`You are killing "${vm.name}". This might cause data corruption.`)) {
+                        return;
+                    }
+                    try {
+                        const _response = await rpcCall('StopVm', {
+                            id: vm.id
+                        });
+                        loadVMList();
+                    } catch (error) {
+                        console.error('Error stopping VM:', error);
+                        alert('Failed to stop VM');
+                    }
+                };
+
+                const shutdownVm = async (id) => {
+                    try {
+                        const _response = await rpcCall('ShutdownVm', {
+                            id
+                        });
+                        loadVMList();
+                    } catch (error) {
+                        console.error('Error shutting down VM:', error);
+                        alert('Failed to shut down VM');
+                    }
+                };
+
+                const startVm = async (id) => {
+                    try {
+                        const _response = await rpcCall('StartVm', {
+                            id
+                        });
+                        loadVMList();
+                    } catch (error) {
+                        console.error('Error starting VM:', error);
+                        alert('Failed to start VM');
+                    }
+                };
+
+                const removeVm = async (vm) => {
+                    if (!confirm(`You are removing "${vm.name}". This action cannot be undone.`)) {
+                        return;
+                    }
+                    try {
+                        const _response = await rpcCall('RemoveVm', {
+                            id: vm.id
+                        });
+                        loadVMList();
+                    } catch (error) {
+                        console.error('Error removing VM:', error);
+                        alert('Failed to remove VM');
+                    }
+                };
+
+                const showLog = async (id, stream) => {
+                    if (stream == 'stderr') {
+                        window.open(`/logs?id=${id}&follow=true&ansi=false&lines=50&ch=stderr`, '_blank');
+                    } else {
+                        window.open(`/logs?id=${id}&follow=true&ansi=false&lines=50`, '_blank');
+                    }
+                };
+
+                const showDashboard = async (vm) => {
+                    if (vm.app_url) {
+                        window.open(vm.app_url, '_blank');
+                    } else {
+                        alert('No guest agent dashboard URL');
+                    }
+                };
+
+                const kmsEnabled = (vm) => {
+                    return vm.appCompose?.kms_enabled || vm.appCompose?.features?.includes('kms');
+                };
+
+                const gatewayEnabled = (vm) => {
+                    return vm.appCompose?.gateway_enabled || vm.appCompose?.tproxy_enabled || vm.appCompose?.features?.includes('tproxy-net');
+                };
+
+                const defaultTrue = (v) => {
+                    if (v === undefined) return true;
+                    return v;
+                };
+
+                const getFlags = (vm) => {
+                    const features = [];
+                    if (kmsEnabled(vm)) features.push("kms");
+                    if (gatewayEnabled(vm)) features.push("gateway");
+                    if (defaultTrue(vm.appCompose?.public_logs)) features.push("logs");
+                    if (defaultTrue(vm.appCompose?.public_sysinfo)) features.push("sysinfo");
+                    if (defaultTrue(vm.appCompose?.public_tcbinfo)) features.push("tcbinfo");
+                    return features.join(', ');
+                };
+
+                const dashboardAvailable = (vm) => {
+                    return vm.app_url
+                };
+
+                const loadComposeFile = (event) => {
+                    const file = event.target.files[0];
+                    if (file) {
+                        const reader = new FileReader();
+                        reader.onload = (e) => {
+                            vmForm.value.dockerComposeFile = e.target.result;
+                        };
+                        reader.readAsText(file);
+                    }
+                };
+
+                const loadImages = async () => {
+                    try {
+                        const response = await rpcCall('ListImages');
+                        const data = await response.json();
+                        availableImages.value = data.images;
+                    } catch (error) {
+                        console.error('error loading images:', error);
+                    }
+                };
+
+                const loadGpus = async () => {
+                    try {
+                        const response = await rpcCall('ListGpus');
+                        const data = await response.json();
+                        const gpus = data.gpus || [];
+                        availableGpus.value = gpus;
+                        availableGpuProducts.value = [];
+                        for (const gpu of gpus) {
+                            if (!availableGpuProducts.value.find(product => product.product_id == gpu.product_id)) {
+                                console.log('appending gpu', gpu);
+                                availableGpuProducts.value.push(gpu);
+                            }
+                        }
+                    } catch (error) {
+                        console.error('error loading GPUs:', error);
+                    }
+                };
+
+                function autoMemoryDisplay(mb) {
+                    if (mb >= 1024) {
+                        return {
+                            memoryValue: (mb / 1024).toFixed(1),
+                            memoryUnit: 'GB'
+                        };
+                    }
+                    return {
+                        memoryValue: mb,
+                        memoryUnit: 'MB'
+                    };
+                }
+
+                const showUpgradeDialog = async (vm) => {
+                    if (!vm.configuration) {
+                        // Load full VM details before showing the dialog
+                        await loadVMDetails(vm.id);
+                    }
+
+                    // Get the updated VM with full details
+                    const updatedVM = vms.value.find(v => v.id === vm.id);
+                    if (!updatedVM) {
+                        console.error('Could not find updated VM details');
+                        return;
+                    }
+
+                    // Get current GPU configuration from VM
+                    const currentGpuConfig = updatedVM.configuration?.gpus || {};
+                    const isAttachAll = currentGpuConfig.gpus_attach_mode === 'all';
+                    const selectedGpuSlots = currentGpuConfig.gpus?.map(gpu => gpu.slot) || [];
+                    const appCompose = JSON.parse(updatedVM.configuration?.compose_file || "{}");
+
+                    upgradeDialog.value = {
+                        show: true,
+                        vm: updatedVM,
+                        updateCompose: false,
+                        dockerComposeFile: appCompose.docker_compose_file || '',
+                        preLaunchScript: appCompose.pre_launch_script || '',
+                        encryptedEnvs: [],
+                        resetSecrets: false,
+                        user_config: updatedVM.configuration?.user_config || '',
+                        vcpu: updatedVM.configuration?.vcpu || 1,
+                        memory: updatedVM.configuration?.memory || 1024,
+                        ...autoMemoryDisplay(updatedVM.configuration?.memory),
+                        disk_size: updatedVM.configuration?.disk_size || 10,
+                        image: updatedVM.configuration?.image || '',
+                        ports: updatedVM.configuration?.ports?.map(port => ({ ...port })) || [],
+                        // GPU configuration
+                        attachAllGpus: isAttachAll,
+                        selectedGpus: selectedGpuSlots,
+                        updateGpuConfig: false
+                    };
+                };
+
+                const loadUpgradeFile = (event) => {
+                    const file = event.target.files[0];
+                    if (file) {
+                        const reader = new FileReader();
+                        reader.onload = (e) => {
+                            upgradeDialog.value.dockerComposeFile = e.target.result;
+                        };
+                        reader.readAsText(file);
+                    }
+                };
+
+                const updatedCompose = () => {
+                    const currentAppCompose = upgradeDialog.value.vm.appCompose;
+                    const app_compose = {
+                        ...currentAppCompose,
+                        docker_compose_file: upgradeDialog.value.dockerComposeFile || currentAppCompose.docker_compose_file
+                    };
+                    app_compose.pre_launch_script = upgradeDialog.value.preLaunchScript?.trim();
+                    return JSON.stringify(app_compose);
+                }
+
+                const upgradeVM = async () => {
+                    try {
+                        const vm = upgradeDialog.value.vm;
+                        const original = vm.configuration;
+                        const updated = upgradeDialog.value;
+
+                        const fieldsToCompare = ['vcpu', 'memory', 'disk_size', 'image'];
+                        if (fieldsToCompare.some(field => updated[field] != original[field])) {
+                            const response = await rpcCall('ResizeVm', {
+                                id: vm.id,
+                                vcpu: updated.vcpu,
+                                memory: updated.memory,
+                                disk_size: updated.disk_size,
+                                image: updated.image
+                            });
+                            await response.json();
+                        }
+                        const body = {
+                            id: upgradeDialog.value.vm.id,
+                        };
+                        if (upgradeDialog.value.updateCompose) {
+                            body.compose_file = updatedCompose();
+                        }
+
+                        if (upgradeDialog.value.resetSecrets) {
+                            body.encrypted_env = await makeEncryptedEnv(
+                                upgradeDialog.value.encryptedEnvs,
+                                kmsEnabled(upgradeDialog.value.vm),
+                                upgradeDialog.value.vm.app_id
+                            );
+                        }
+
+                        // Add GPU configuration if update is requested
+                        if (upgradeDialog.value.updateGpuConfig) {
+                            body.gpus = configGpu(upgradeDialog.value);
+                        }
+
+                        body.update_ports = true;
+                        body.ports = upgradeDialog.value.ports.map(port => ({
+                            host_address: port.host_address,
+                            protocol: port.protocol,
+                            host_port: port.host_port,
+                            vm_port: port.vm_port
+                        }));
+
+                        const response = await rpcCall('UpgradeApp', body);
+                        const data = await response.json();
+                        upgradeDialog.value.encryptedEnvs = [];
+                        upgradeDialog.value.show = false;
+                        if (body.compose_file) {
+                            upgradeMessage.value = `✅ Compose file updated!`;
+                        }
+                        loadVMList();
+                    } catch (error) {
+                        console.error('error upgrading VM:', error);
+                        alert('failed to upgrade VM');
+                    }
+                };
+
+                const addPort = () => {
+                    vmForm.value.ports.push({
+                        protocol: 'tcp',
+                        host_address: '127.0.0.1', // Default to local address
+                        host_port: null,
+                        vm_port: null
+                    });
+                };
+
+                const removePort = (index) => {
+                    vmForm.value.ports.splice(index, 1);
+                };
+
+                const toggleDetails = async (vm) => {
+                    if (expandedVMs.value.has(vm.id)) {
+                        expandedVMs.value.delete(vm.id);
+                    } else {
+                        expandedVMs.value.add(vm.id);
+                        // Load full details for this VM
+                        loadVMDetails(vm.id);
+                        refreshNetworkInfo(vm);
+                    }
+                };
+
+                const loadVMDetails = async (vmId) => {
+                    loadingVMDetails.value = true;
+                    try {
+                        const response = await rpcCall('Status', {
+                            brief: false,
+                            ids: [vmId]
+                        });
+                        const data = await response.json();
+
+                        if (data.vms && data.vms.length > 0) {
+                            const detailedVM = data.vms[0];
+                            const appCompose = (() => {
+                                try {
+                                    return JSON.parse(detailedVM.configuration?.compose_file || '{}');
+                                } catch (e) {
+                                    console.error('Error parsing app config:', e);
+                                    return {};
+                                }
+                            })();
+
+                            // Update the VM in the list with full details
+                            const index = vms.value.findIndex(vm => vm.id === vmId);
+                            if (index !== -1) {
+                                vms.value[index] = { ...detailedVM, appCompose };
+                            }
+                        }
+                    } catch (error) {
+                        console.error(`Error loading details for VM ${vmId}:`, error);
+                    } finally {
+                        loadingVMDetails.value = false;
+                    }
+                };
+
+                const refreshNetworkInfo = async (vm) => {
+                    if (vm.status != 'running' || !imageFeatures(vm).network_info) {
+                        return;
+                    }
+                    const response = await guestRpcCall('NetworkInfo', {
+                        id: vm.id
+                    });
+                    const data = await response.json();
+                    networkInfo.value[vm.id] = data;
+                };
+
+                onMounted(() => {
+                    (async () => {
+                        while (true) {
+                            try {
+                                await loadVMList();
+                            } catch (error) {
+                                console.error('error loading VM list:', error);
+                            }
+                            await new Promise(resolve => setTimeout(resolve, 3000));
+                        }
+                    })();
+                    loadImages();
+                    loadGpus();
+                    loadVersion();
+                });
+
+                const loadVersion = async () => {
+                    const response = await rpcCall('Version');
+                    const data = await response.json();
+                    version.value = data;
+                };
+
+                const nextPage = () => {
+                    if (hasMorePages.value) {
+                        currentPage.value++;
+                        pageInput.value = currentPage.value;
+                        loadVMList();
+                    }
+                };
+
+                const prevPage = () => {
+                    if (currentPage.value > 1) {
+                        currentPage.value--;
+                        pageInput.value = currentPage.value;
+                        loadVMList();
+                    }
+                };
+
+                const goToPage = () => {
+                    // Validate input
+                    let page = parseInt(pageInput.value);
+                    if (isNaN(page) || page < 1) {
+                        page = 1;
+                    } else if (page > maxPage.value) {
+                        page = maxPage.value;
+                    }
+
+                    // Update both inputs to ensure they're in sync
+                    pageInput.value = page;
+                    currentPage.value = page;
+                    loadVMList();
+                };
+
+                const toggleDropdown = (event, vm) => {
+                    if (!vm.configuration) {
+                        loadVMDetails(vm.id);
+                    }
+                    // Close all other dropdowns first
+                    document.querySelectorAll('.dropdown-content').forEach(dropdown => {
+                        if (dropdown.id !== 'dropdown-' + vm.id) {
+                            dropdown.classList.remove('show');
+                        }
+                    });
+
+                    // Toggle the clicked dropdown
+                    const dropdownContent = document.getElementById('dropdown-' + vm.id);
+                    dropdownContent.classList.toggle('show');
+
+                    // Stop event propagation to prevent immediate closing
+                    event.stopPropagation();
+
+                    // Add a click event listener to the document to close the dropdown when clicking outside
+                    const closeDropdowns = (e) => {
+                        document.querySelectorAll('.dropdown-content').forEach(dropdown => {
+                            dropdown.classList.remove('show');
+                        });
+                        document.removeEventListener('click', closeDropdowns);
+                    };
+
+                    document.addEventListener('click', closeDropdowns);
+                };
+
+                const onPageSizeChange = () => {
+                    currentPage.value = 1; // Reset to first page when changing page size
+                    pageInput.value = 1; // Also reset page input
+                    loadVMList();
+                };
+
+                const showForkVm = (vm) => {
+                    forkDialog.value = {
+                        ...vm.configuration,
+                        show: true
+                    };
+                };
+
+                const forkVm = async () => {
+                    try {
+                        const _response = await rpcCall('CreateVm', forkDialog.value);
+                        loadVMList();
+                        forkDialog.value.show = false;
+                    } catch (error) {
+                        console.error('Error creating VM:', error);
+                        alert('Failed to create VM');
+                    }
+                };
+
+                const imageFeatures = (vm) => {
+                    return imageVersionFeatures(vm.image_version);
+                };
+
+                const imageVersion = (imageName) => {
+                    const image = availableImages.value.find(image => image.name == imageName);
+                    return image?.version;
+                };
+
+                const verGE = (versionStr, otherVersionStr) => {
+                    const version = versionStr.split('.').map(Number);
+                    const otherVersion = otherVersionStr.split('.').map(Number);
+                    return version[0] > otherVersion[0] || (version[0] == otherVersion[0] && version[1] > otherVersion[1]) || (version[0] == otherVersion[0] && version[1] == otherVersion[1] && version[2] >= otherVersion[2]);
+                };
+
+                const imageVersionFeatures = (versionStr) => {
+                    const features = {
+                        progress: false,
+                        graceful_shutdown: false,
+                        network_info: false,
+                        compose_version: 1,
+                    }
+                    if (!versionStr) {
+                        return features;
+                    }
+                    const version = versionStr.split('.').map(Number);
+                    if (verGE(versionStr, '0.3.3')) {
+                        features.progress = true;
+                        features.graceful_shutdown = true;
+                        features.network_info = true;
+                        features.compose_version = 2;
+                    }
+                    if (verGE(versionStr, '0.4.2')) {
+                        features.compose_version = 3;
+                    }
+                    return features;
+                };
+
+                const vmStatus = (vm) => {
+                    const features = imageFeatures(vm);
+                    if (!features.progress) {
+                        return vm.status;
+                    }
+                    if (vm.status != 'running') {
+                        return vm.status;
+                    }
+                    if (vm.shutdown_progress) {
+                        return "shutting down";
+                    }
+                    // If boot_progress is 'running', it means the vm is already running before
+                    // dstack-vmm was started, so it's state is unknown to dstack-vmm.
+                    // TODO: read the status from the guest
+                    if (vm.boot_progress == 'running') {
+                        return "running";
+                    }
+                    if (vm.boot_progress != 'done') {
+                        return "booting";
+                    }
+                    return "running";
+                };
+
+                const composeHashPreview = ref('');
+                const upgradeComposeHashPreview = ref('');
+
+                // Watch for changes to relevant form fields and update the hash preview
+                watch([
+                    () => vmForm.value.name,
+                    () => vmForm.value.dockerComposeFile,
+                    () => vmForm.value.preLaunchScript,
+                    () => vmForm.value.kms_enabled,
+                    () => vmForm.value.gateway_enabled,
+                    () => vmForm.value.public_logs,
+                    () => vmForm.value.public_sysinfo,
+                    () => vmForm.value.public_tcbinfo,
+                    () => vmForm.value.local_key_provider_enabled,
+                    () => vmForm.value.docker_config.enabled,
+                    () => vmForm.value.docker_config.username,
+                    () => vmForm.value.docker_config.token_key
+                ], async () => {
+                    try {
+                        composeHashPreview.value = await calcComposeHash(makeAppComposeFile());
+                    } catch (error) {
+                        composeHashPreview.value = 'Error calculating hash';
+                    }
+                }, { deep: true });
+
+                // Watch for changes to upgrade dialog compose fields
+                watch([
+                    () => upgradeDialog.value.dockerComposeFile,
+                    () => upgradeDialog.value.preLaunchScript
+                ], async () => {
+                    if (!upgradeDialog.value.show || !upgradeDialog.value.updateCompose) return;
+
+                    try {
+                        // Calculate hash with upgrade values
+                        upgradeComposeHashPreview.value = await calcComposeHash(updatedCompose());
+                    } catch (error) {
+                        upgradeComposeHashPreview.value = 'Error calculating hash';
+                    }
+                }, { deep: true });
+
+                // Watch for changes to searchQuery and reset page to 1
+                watch(searchQuery, () => {
+                    currentPage.value = 1;
+                    pageInput.value = 1;
+                });
+
+                watch(pageSize, (newValue) => {
+                    localStorage.setItem('pageSize', newValue);
+                });
+
+                return {
+                    vms,
+                    vmForm,
+                    availableImages,
+                    availableGpus,
+                    availableGpuProducts,
+                    createVm,
+                    stopVm,
+                    startVm,
+                    removeVm,
+                    showLog,
+                    showDashboard,
+                    loadComposeFile,
+                    upgradeDialog,
+                    upgradeMessage,
+                    errorMessage,
+                    showUpgradeDialog,
+                    loadUpgradeFile,
+                    upgradeVM,
+                    showCreateDialog,
+                    addPort,
+                    removePort,
+                    config,
+                    toggleDetails,
+                    expandedVMs,
+                    networkInfo,
+                    dashboardAvailable,
+                    showForkVm,
+                    forkDialog,
+                    forkVm,
+                    vmStatus,
+                    imageFeatures,
+                    shutdownVm,
+                    kmsEnabled,
+                    gatewayEnabled,
+                    getFlags,
+                    version,
+                    showDeployDialog,
+                    composeHashPreview,
+                    upgradeComposeHashPreview,
+                    formatMemory,
+                    // Pagination and search variables
+                    searchQuery,
+                    currentPage,
+                    pageSize,
+                    totalVMs,
+                    hasMorePages,
+                    maxPage,
+                    pageInput,
+                    goToPage,
+                    nextPage,
+                    prevPage,
+                    onPageSizeChange,
+                    loadingVMDetails,
+                    toggleDropdown,
+                    loadVMList,
+                };
+            }
+        }).mount('#app');
+    </script>
+</body>
+
+</html>

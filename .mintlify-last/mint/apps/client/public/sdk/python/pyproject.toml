@@ -1,0 +1,45 @@
+[project]
+name = "dstack-sdk"
+version = "0.2.0"
+description = "DStack SDK for Python"
+authors = [
+    {name = "Leechael Yim", email = "yanleech@gmail.com"},
+]
+dependencies = [
+    "httpx>=0.27.2",
+    "asyncio>=3.4.3",
+    "pydantic>=2.9.2",
+]
+requires-python = ">=3.10"
+readme = "README.md"
+license = {text = "Apache-2.0"}
+
+[project.optional-dependencies]
+solana = ["solders"]
+ethereum = ["web3"]
+sol = ["solders"]
+eth = ["web3"]
+all = ["solders", "web3"]
+
+[build-system]
+requires = ["pdm-backend"]
+build-backend = "pdm.backend"
+
+[tool.pdm]
+distribution = true
+
+[tool.pdm.publish]
+repository = "pypi"
+
+[tool.pdm.dev-dependencies]
+test = [
+    "pytest>=8.3.3",
+    "pytest-asyncio>=0.24.0",
+    "evidence-api>=0.5.0",
+]
+solana = [
+    "solders",
+]
+ethereum = [
+    "web3",
+]

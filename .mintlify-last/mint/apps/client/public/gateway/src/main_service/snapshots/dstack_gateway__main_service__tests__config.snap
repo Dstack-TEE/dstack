@@ -1,0 +1,20 @@
+---
+source: gateway/src/main_service/tests.rs
+assertion_line: 29
+expression: info
+---
+InstanceInfo {
+    id: "test-id-0",
+    app_id: "app-id-0",
+    ip: 10.0.0.2,
+    public_key: "test-pubkey-0",
+    reg_time: SystemTime {
+        tv_sec: 0,
+        tv_nsec: 0,
+    },
+    last_seen: SystemTime {
+        tv_sec: 0,
+        tv_nsec: 0,
+    },
+    connections: 0,
+}

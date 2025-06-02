@@ -1,0 +1,25 @@
+[package]
+name = "ra-rpc"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+prpc.workspace = true
+rocket = { workspace = true, features = ["mtls"], optional = true }
+serde_json.workspace = true
+tracing.workspace = true
+reqwest = { workspace = true, default-features = false, features = ["rustls-tls", "charset"], optional = true }
+
+ra-tls.workspace = true
+bon.workspace = true
+rocket-vsock-listener = { workspace = true, optional = true }
+serde.workspace = true
+x509-parser.workspace = true
+
+[features]
+default = ["rocket", "client"]
+rocket = ["dep:rocket", "dep:rocket-vsock-listener"]
+client = ["reqwest"]

@@ -1,0 +1,215 @@
+syntax = "proto3";
+
+import "google/protobuf/empty.proto";
+
+package dstack_guest;
+
+// For backwards compatibility with tappd
+service Tappd {
+  // Derives a cryptographic key from the specified key path.
+  // Returns the derived key along with its certificate chain.
+  rpc DeriveKey(DeriveKeyArgs) returns (GetTlsKeyResponse) {}
+
+  // Derives a new ECDSA key with k256 EC curve.
+  rpc DeriveK256Key(GetKeyArgs) returns (DeriveK256KeyResponse) {}
+
+  // Generates a TDX quote
+  rpc TdxQuote(TdxQuoteArgs) returns (TdxQuoteResponse) {}
+
+  // Generates a TDX quote with raw report data.
+  // This is a low-level API that should be used with caution.
+  // When using quotes in multiple locations within your application,
+  // ensure proper quote differentiation by including a content type
+  // identifier in the report_data to avoid Quote Repurposing Attacks.
+  rpc RawQuote(RawQuoteArgs) returns (TdxQuoteResponse) {}
+
+  // Get app info
+  rpc Info(google.protobuf.Empty) returns (AppInfo) {}
+}
+
+// The service for the dstack guest agent
+service DstackGuest {
+  // Derives a cryptographic key from the specified key path.
+  // Returns the derived key along with its TLS certificate chain.
+  rpc GetTlsKey(GetTlsKeyArgs) returns (GetTlsKeyResponse) {}
+
+  // Derives a new ECDSA key with k256 EC curve.
+  rpc GetKey(GetKeyArgs) returns (GetKeyResponse) {}
+
+  // Generates a TDX quote with given report data.
+  rpc GetQuote(RawQuoteArgs) returns (GetQuoteResponse) {}
+
+  // Emit an event. This extends the event to RTMR3 on TDX platform.
+  rpc EmitEvent(EmitEventArgs) returns (google.protobuf.Empty) {}
+
+  // Get app info
+  rpc Info(google.protobuf.Empty) returns (AppInfo) {}
+}
+
+// The request to derive a key
+message GetTlsKeyArgs {
+  // Subject of the certificate to request
+  string subject = 1;
+  // DNS alternative names for the certificate
+  repeated string alt_names = 2;
+  // Includes quote in the certificate
+  bool usage_ra_tls = 3;
+  // Key usage server auth
+  bool usage_server_auth = 4;
+  // Key usage client auth
+  bool usage_client_auth = 5;
+}
+
+// The request to derive a key
+message DeriveKeyArgs {
+  // Path used to derive the private key
+  string path = 1;
+  // Bellow fields are used to generate the certificate
+  // Subject of the certificate to request
+  string subject = 2;
+  // DNS alternative names for the certificate
+  repeated string alt_names = 3;
+  // Includes quote in the certificate
+  bool usage_ra_tls = 4;
+  // Key usage server auth
+  bool usage_server_auth = 5;
+  // Key usage client auth
+  bool usage_client_auth = 6;
+  // Derive from random seed
+  bool random_seed = 7;
+}
+
+// The response to a DeriveKey request
+message GetTlsKeyResponse {
+  // Derived key
+  string key = 1;
+  // Certificate chain
+  repeated string certificate_chain = 2;
+}
+
+// The request to derive a new ECDSA key with k256 EC curve
+message GetKeyArgs {
+  // Path to the key to derive
+  string path = 1;
+  // Purpose of the key
+  string purpose = 2;
+}
+
+// The response to a DeriveK256Key request
+message DeriveK256KeyResponse {
+  // Derived k256 key
+  bytes k256_key = 1;
+  // Derived k256 signature chain
+  repeated bytes k256_signature_chain = 2;
+}
+
+// The response to a GetEthKey request
+message GetKeyResponse {
+  // Derived k256 key
+  bytes key = 1;
+  // Derived k256 signature chain
+  repeated bytes signature_chain = 2;
+}
+
+// The request to get a TDX quote
+// The report data is prefixed with `app-data:` before hashing unless the algorithm is `raw`.
+// Final report data is hash(`app-data:` + report_data) if the algorithm is not `raw`.
+message TdxQuoteArgs {
+  // Report data
+  bytes report_data = 1;
+  // The hash algorithm to use to process the report data. Default is `sha512`.
+  // Supported algorithms are:
+  // - `sha256`
+  // - `sha384`
+  // - `sha512`
+  // - `sha3-256`
+  // - `sha3-384`
+  // - `sha3-512`
+  // - `keccak256`
+  // - `keccak384`
+  // - `keccak512`
+  // - `raw`: Passes the report_data directly to the driver without any processing
+  string hash_algorithm = 2;
+
+  // Custom prefix to prepend to report data before hashing.
+  // Defaults to 'app-data:' when hash_algorithm is not 'raw'.
+  string prefix = 3;
+}
+
+// The request to get a raw TDX quote
+message RawQuoteArgs {
+  // 64 bytes of report data
+  bytes report_data = 1;
+}
+
+message TdxQuoteResponse {
+  // TDX quote
+  bytes quote = 1;
+  // Event log
+  string event_log = 2;
+
+  // The following fields might be used for app debugging purposes
+  // Hash algorithm used to hash the caller passed in report data
+  string hash_algorithm = 3;
+  // Prefix added to the report data before hashing
+  string prefix = 4;
+}
+
+message GetQuoteResponse {
+  // TDX quote
+  bytes quote = 1;
+  // Event log
+  string event_log = 2;
+  // Report data
+  bytes report_data = 3;
+}
+
+message EmitEventArgs {
+  // The event name
+  string event = 1;
+  // The event data
+  bytes payload = 2;
+}
+
+// The request to derive a key
+message AppInfo {
+  // App ID
+  bytes app_id = 1;
+  // App Instance ID
+  bytes instance_id = 2;
+  // App certificate
+  string app_cert = 3;
+  // TCB info
+  string tcb_info = 4;
+  // App name
+  string app_name = 5;
+  // Device ID
+  bytes device_id = 8;
+  // MR Aggregated
+  bytes mr_aggregated = 9;
+  // OS Image hash
+  bytes os_image_hash = 10;
+  // MR Key Provider
+  bytes mr_key_provider = 11;
+  // Key provider info
+  string key_provider_info = 12;
+  // Compose hash
+  bytes compose_hash = 13;
+  // VM config
+  string vm_config = 14;
+}
+
+// The response to a Version request
+message WorkerVersion {
+  // Dstack version
+  string version = 1;
+  // Git revision
+  string rev = 2;
+}
+
+service Worker {
+  // Get app info
+  rpc Info(google.protobuf.Empty) returns (AppInfo) {}
+  // Get the guest agent version
+  rpc Version(google.protobuf.Empty) returns (WorkerVersion) {}
+}

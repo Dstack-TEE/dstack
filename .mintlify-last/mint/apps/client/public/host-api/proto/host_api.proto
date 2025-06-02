@@ -1,0 +1,31 @@
+
+syntax = "proto3";
+
+import "google/protobuf/empty.proto";
+
+package host_api;
+
+message HostInfo {
+  string name = 1;
+  string version = 2;
+}
+
+message Notification {
+  string event = 1;
+  string payload = 2;
+}
+
+message GetSealingKeyRequest {
+  bytes quote = 1;
+}
+
+message GetSealingKeyResponse {
+  bytes encrypted_key = 1;
+  bytes provider_quote = 2;
+}
+
+service HostApi {
+  rpc Info(google.protobuf.Empty) returns (HostInfo);
+  rpc Notify(Notification) returns (google.protobuf.Empty);
+  rpc GetSealingKey(GetSealingKeyRequest) returns (GetSealingKeyResponse);
+}

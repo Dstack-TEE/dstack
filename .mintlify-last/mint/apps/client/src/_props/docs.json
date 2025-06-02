@@ -1,0 +1,189 @@
+{
+  "theme": "maple",
+  "$schema": "https://mintlify.com/docs.json",
+  "name": "dstack",
+  "colors": {
+    "primary": "#0069ED",
+    "light": "#4D9CFF",
+    "dark": "#0050B4"
+  },
+  "logo": {
+    "light": "/docs/public/logo/light.png",
+    "dark": "/docs/public/logo/dark.png"
+  },
+  "favicon": "/docs/public/favicon.png",
+  "api": {
+    "mdx": {
+      "auth": {
+        "method": "bearer"
+      },
+      "server": "https://api.dstack.dev"
+    }
+  },
+  "background": {
+    "image": "/docs/public/background.png"
+  },
+  "navbar": {
+    "links": [
+      {
+        "label": "GitHub",
+        "href": "https://github.com/Dstack-TEE/dstack"
+      },
+      {
+        "label": "Blog",
+        "href": "https://blog.dstack.dev"
+      }
+    ],
+    "primary": {
+      "type": "button",
+      "label": "Deploy DStack on Phala Cloud",
+      "href": "https://cloud.phala.network/register?invite=beta"
+    }
+  },
+  "navigation": {
+    "dropdowns": [
+      {
+        "dropdown": "Overview",
+        "icon": "book-open",
+        "pages": [
+          "docs/index",
+          "docs/introduction",
+          "docs/overview/what-is-dstack",
+          "docs/overview/key-features",
+          "docs/overview/benefits",
+          "docs/case-studies",
+          "docs/overview/glossary"
+        ]
+      },
+      {
+        "dropdown": "Getting Started",
+        "icon": "rocket",
+        "pages": [
+          "docs/quickstart",
+          "docs/getting-started/installation",
+          "docs/getting-started/first-deployment"
+        ]
+      },
+      {
+        "dropdown": "Core Concepts",
+        "icon": "lightbulb",
+        "pages": [
+          "docs/concepts/overview",
+          "docs/concepts/architecture",
+          "docs/concepts/core-components",
+          "docs/concepts/networking",
+          "docs/concepts/security-model"
+        ]
+      },
+      {
+        "dropdown": "Deployment",
+        "icon": "cloud-arrow-up",
+        "pages": [
+          "docs/deployment-guides/deploying-applications"
+        ]
+      },
+      {
+        "dropdown": "Tutorials",
+        "icon": "graduation-cap",
+        "pages": [
+          "docs/tutorials/index",
+          "docs/tutorials/python-example",
+          "docs/tutorials/javascript-example",
+          "docs/tutorials/rust-example",
+          "docs/tutorials/secure-web-app"
+        ]
+      },
+      {
+        "dropdown": "Security & Research",
+        "icon": "shield-halved",
+        "pages": [
+          "docs/security-research/overview",
+          "docs/security-research/tdx-attestation",
+          "docs/security-research/tdx-attestation-system",
+          "docs/security-research/vmm-security",
+          "docs/security-research/kms-security",
+          "docs/security-research/gateway-security",
+          "docs/security-research/certbot-security",
+          "docs/security-research/cert-client-security",
+          "docs/security-research/ct-monitor-security",
+          "docs/security-research/host-api-security",
+          "docs/security-research/iohash-security"
+        ]
+      },
+      {
+        "dropdown": "dstack Internals",
+        "icon": "gear",
+        "pages": [
+          "docs/dstack-reference/dstack-wiki",
+          "docs/dstack-reference/structure",
+          "docs/dstack-reference/content",
+          "docs/dstack-reference/context"
+        ]
+      },
+      {
+        "dropdown": "Community & Support",
+        "icon": "users",
+        "pages": [
+          "docs/community",
+          "docs/troubleshooting"
+        ]
+      },
+      {
+        "dropdown": "API Reference",
+        "icon": "square-terminal",
+        "pages": [
+          "docs/api-reference/overview",
+          "docs/api-reference/authentication"
+        ]
+      }
+    ]
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/Dstack-TEE/dstack",
+      "twitter": "https://twitter.com/PhalaNetwork",
+      "discord": "https://discord.gg/phala"
+    },
+    "links": [
+      {
+        "items": [
+          {
+            "label": "Status",
+            "href": "https://status.dstack.dev"
+          }
+        ]
+      },
+      {
+        "items": [
+          {
+            "label": "Terms",
+            "href": "https://dstack.dev/terms"
+          },
+          {
+            "label": "Privacy",
+            "href": "https://dstack.dev/privacy"
+          }
+        ]
+      },
+      {
+        "items": [
+          {
+            "label": "GitHub",
+            "href": "https://github.com/Dstack-TEE/dstack"
+          }
+        ]
+      }
+    ]
+  },
+  "search": {
+    "prompt": "Search documentation..."
+  },
+  "integrations": {
+    "ga4": {
+      "measurementId": "G-XXXXXXXXXX"
+    },
+    "intercom": {
+      "appId": "YOUR_INTERCOM_APP_ID"
+    }
+  }
+}

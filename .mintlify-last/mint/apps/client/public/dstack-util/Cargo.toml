@@ -1,0 +1,49 @@
+[package]
+name = "dstack-util"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+aes-gcm.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+curve25519-dalek.workspace = true
+fs-err.workspace = true
+getrandom = { workspace = true, features = ["std"] }
+hex.workspace = true
+hex_fmt.workspace = true
+regex.workspace = true
+scale = { workspace = true, features = ["derive"] }
+schnorrkel.workspace = true
+serde.workspace = true
+serde-human-bytes.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tokio = { workspace = true, features = ["full"] }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+x25519-dalek.workspace = true
+
+dstack-kms-rpc.workspace = true
+ra-rpc = { workspace = true, features = ["client"] }
+ra-tls.workspace = true
+dstack-gateway-rpc.workspace = true
+tdx-attest.workspace = true
+host-api = { workspace = true, features = ["client"] }
+cmd_lib.workspace = true
+toml.workspace = true
+dcap-qvl.workspace = true
+k256 = { workspace = true, features = ["ecdsa"] }
+dstack-types.workspace = true
+rand.workspace = true
+sha3.workspace = true
+cert-client.workspace = true
+x509-parser.workspace = true
+serde_yaml2.workspace = true
+bollard.workspace = true
+sodiumbox.workspace = true
+
+[dev-dependencies]
+rand.workspace = true
