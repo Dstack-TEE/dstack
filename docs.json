@@ -1,6 +1,6 @@
 {
   "$schema": "https://mintlify.com/docs.json",
-  "theme": "almond",
+  "theme": "maple",
   "name": "dstack",
   "colors": {
     "primary": "#0069ED",
@@ -9,83 +9,81 @@
   },
   "favicon": "/docs/public/favicon.png",
   "navigation": {
-    "tabs": [
+    "dropdowns": [
       {
-        "tab": "Documentation",
-        "groups": [
-          {
-            "group": "Overview",
-            "pages": [
-              "docs/index",
-              "docs/introduction",
-              "docs/overview/what-is-dstack",
-              "docs/overview/key-features",
-              "docs/overview/benefits",
-              "docs/case-studies"
-            ]
-          },
-          {
-            "group": "Getting Started",
-            "pages": [
-              "docs/quickstart",
-              "docs/getting-started/installation",
-              "docs/getting-started/first-deployment"
-            ]
-          },
-          {
-            "group": "Core Concepts",
-            "pages": [
-              "docs/concepts/overview",
-              "docs/concepts/architecture",
-              "docs/concepts/core-components",
-              "docs/concepts/networking",
-              "docs/concepts/security-model"
-            ]
-          },
-          {
-            "group": "Deployment",
-            "pages": [
-              "docs/deployment-guides/deploying-applications"
-            ]
-          },
-          {
-            "group": "Tutorials",
-            "pages": [
-              "docs/tutorials/index",
-              "docs/tutorials/python-example",
-              "docs/tutorials/javascript-example",
-              "docs/tutorials/rust-example",
-              "docs/tutorials/secure-web-app"
-            ]
-          },
-          {
-            "group": "dstack Internals",
-            "pages": [
-              "docs/dstack-reference/dstack-wiki",
-              "docs/dstack-reference/structure",
-              "docs/dstack-reference/content",
-              "docs/dstack-reference/context"
-            ]
-          },
-          {
-            "group": "Community & Support",
-            "pages": [
-              "docs/community",
-              "docs/troubleshooting"
-            ]
-          }
+        "dropdown": "Overview",
+        "icon": "book-open",
+        "pages": [
+          "docs/index",
+          "docs/introduction",
+          "docs/overview/what-is-dstack",
+          "docs/overview/key-features",
+          "docs/overview/benefits",
+          "docs/case-studies"
         ]
       },
       {
-        "tab": "API Reference",
-        "groups": [
-          {
-            "group": "API Reference",
-            "pages": [
-              "docs/api-reference/overview",
-              "docs/api-reference/authentication"
-            ]
-          }
+        "dropdown": "Getting Started",
+        "icon": "rocket",
+        "pages": [
+          "docs/quickstart",
+          "docs/getting-started/installation",
+          "docs/getting-started/first-deployment"
+        ]
+      },
+      {
+        "dropdown": "Core Concepts",
+        "icon": "lightbulb",
+        "pages": [
+          "docs/concepts/overview",
+          "docs/concepts/architecture",
+          "docs/concepts/core-components",
+          "docs/concepts/networking",
+          "docs/concepts/security-model"
+        ]
+      },
+      {
+        "dropdown": "Deployment",
+        "icon": "cloud-arrow-up",
+        "pages": [
+          "docs/deployment-guides/deploying-applications"
+        ]
+      },
+      {
+        "dropdown": "Tutorials",
+        "icon": "graduation-cap",
+        "pages": [
+          "docs/tutorials/index",
+          "docs/tutorials/python-example",
+          "docs/tutorials/javascript-example",
+          "docs/tutorials/rust-example",
+          "docs/tutorials/secure-web-app"
+        ]
+      },
+      {
+        "dropdown": "dstack Internals",
+        "icon": "gear",
+        "pages": [
+          "docs/dstack-reference/dstack-wiki",
+          "docs/dstack-reference/structure",
+          "docs/dstack-reference/content",
+          "docs/dstack-reference/context"
+        ]
+      },
+      {
+        "dropdown": "Community & Support",
+        "icon": "users",
+        "pages": [
+          "docs/community",
+          "docs/troubleshooting"
+        ]
+      },
+      {
+        "dropdown": "API Reference",
+        "icon": "square-terminal",
+        "pages": [
+          "docs/api-reference/overview",
+          "docs/api-reference/authentication"
         ]
       }
     ]
