@@ -61,6 +61,23 @@
         ]
       },
       {
+        "dropdown": "Security & Research",
+        "icon": "shield-halved",
+        "pages": [
+          "docs/security-research/overview",
+          "docs/security-research/tdx-attestation",
+          "docs/security-research/tdx-attestation-system",
+          "docs/security-research/vmm-security",
+          "docs/security-research/kms-security",
+          "docs/security-research/gateway-security",
+          "docs/security-research/certbot-security",
+          "docs/security-research/cert-client-security",
+          "docs/security-research/ct-monitor-security",
+          "docs/security-research/host-api-security",
+          "docs/security-research/iohash-security"
+        ]
+      },
+      {
         "dropdown": "dstack Internals",
         "icon": "gear",
         "pages": [

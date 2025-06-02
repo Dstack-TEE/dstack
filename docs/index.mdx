@@ -1,130 +1,121 @@
 ---
-title: "dstack Documentation"
-description: "Deploy secure applications to Trusted Execution Environments with ease"
+title: "dstack - Deploy to TEE Without Code Changes"
+description: "The easiest way to deploy existing Docker applications to Trusted Execution Environments with hardware-enforced security"
 ---
 
-# Welcome to dstack
+# Deploy Any Docker App to TEE in Minutes
 
-<page_summary>
-dstack is an open-source platform that abstracts the complexity of deploying containerized applications to Trusted Execution Environments (TEEs). By providing a developer-friendly interface atop hardware security primitives, dstack enables organizations to leverage confidential computing without requiring deep expertise in TEE-specific implementations. This documentation serves as the authoritative guide for understanding, installing, and operating dstack in production environments.
-</page_summary>
+<Callout type="success" icon="rocket">
+**See dstack in action:** Deploy a Docker app to TEE in under 5 minutes (assuming dstack is configured). No code changes required.
+</Callout>
 
-<smoothly_flowing_prose_paragraphs>
-In the contemporary landscape of cloud computing, the tension between computational utility and data confidentiality presents a fundamental challenge. Traditional deployment models require implicit trust in infrastructure providers, creating vulnerabilities that are increasingly untenable for sensitive workloads. dstack emerges as a solution to this dilemma, bridging the gap between the ease of container orchestration and the security guarantees of hardware-based isolation.
+## Why dstack?
 
-At its core, dstack transforms the deployment of secure applications from a specialized cryptographic exercise into a routine operational task. By abstracting the complexities of Trusted Execution Environments behind familiar interfaces—Docker, REST APIs, and web dashboards—the platform democratizes access to confidential computing technologies that were previously the domain of security specialists.
-</smoothly_flowing_prose_paragraphs>
-
-## Platform Overview
-
-<div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-8">
-  <Card title="Quick Start in 5 Minutes" icon="rocket" iconColor="#0069ED">
-    <p className="text-sm mt-2">Deploy your first secure application to a TEE environment with minimal configuration and immediate verification capabilities.</p>
+<div className="grid grid-cols-1 md:grid-cols-3 gap-6 mt-8">
+  <Card title="No Code Changes" icon="code" iconColor="#0069ED">
+    <p className="text-sm mt-2">Unlike other TEE frameworks, dstack works with your existing Docker containers. Zero rewrites needed.</p>
   </Card>
-  <Card title="Enterprise-Grade Security" icon="shield-check" iconColor="#10B981">
-    <p className="text-sm mt-2">Hardware-enforced isolation with cryptographic attestation, ensuring data confidentiality even from privileged system operators.</p>
+  <Card title="Best Security by Default" icon="shield-check" iconColor="#10B981">
+    <p className="text-sm mt-2">Hardware-enforced isolation with automated security practices. Zero-trust compute without the complexity.</p>
   </Card>
-  <Card title="Developer Ergonomics" icon="code" iconColor="#8B5CF6">
-    <p className="text-sm mt-2">Preserve existing Docker workflows while gaining TEE security benefits—no architectural rewrites required.</p>
-  </Card>
-  <Card title="Decentralized Architecture" icon="cube" iconColor="#F59E0B">
-    <p className="text-sm mt-2">Blockchain-anchored key management eliminates vendor lock-in and enables portable, verifiable deployments.</p>
+  <Card title="No Vendor Lock-in" icon="unlock" iconColor="#F59E0B">
+    <p className="text-sm mt-2">Deploy on bare metal today, cloud providers tomorrow. We abstract the hardware layer completely.</p>
   </Card>
 </div>
 
-## Documentation Structure
+## Quick Tour: How Easy Is It?
+
+```bash
+# Your existing Docker app
+docker run -p 8080:80 nginx
+
+# The same app in a TEE with dstack
+dstack deploy nginx -p 8080:80
+```
+
+That's it. Your app now runs in a hardware-isolated environment with:
+- Memory encryption
+- Remote attestation 
+- Cryptographic proof of execution
+- Certificate management
+- Secure key storage
 
 <Note>
-This documentation follows a progressive disclosure pattern, beginning with practical deployment guides and advancing to theoretical foundations and implementation details.
+**For serious developers:** Want to verify our security claims? Check our [Security & Research](/docs/security-research/overview) section for deep dives into our TEE implementation.
 </Note>
 
-### Getting Started
+## Two Paths Forward
+
+<div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-8">
+  <Card 
+    title="Start Using dstack" 
+    icon="play-circle" 
+    href="/docs/quickstart"
+    className="hover:shadow-lg transition-shadow"
+  >
+    <p className="text-sm mt-2 mb-4">Deploy your first secure application in minutes. See why developers love our zero-friction approach.</p>
+    <p className="text-xs text-gray-600">Best for: Getting started quickly</p>
+  </Card>
+  
+  <Card 
+    title="Deploy dstack Infrastructure" 
+    icon="server" 
+    href="/docs/getting-started/installation"
+    className="hover:shadow-lg transition-shadow"
+  >
+    <p className="text-sm mt-2 mb-4">Set up your own dstack deployment. Full control over your TEE infrastructure.</p>
+    <p className="text-xs text-gray-600">Best for: Power users & researchers</p>
+  </Card>
+</div>
+
+## What Makes dstack Different?
+
+<Tabs>
+  <Tab title="For Developers">
+    - **Use existing containers**: No rewrites, no special SDKs
+    - **Familiar tools**: Docker, REST APIs, web dashboards
+    - **Instant verification**: Built-in attestation endpoints
+    - **Automated security**: Certificates, keys, and policies handled for you
+  </Tab>
+  <Tab title="For Security Teams">
+    - **Hardware root of trust**: Intel TDX with memory encryption
+    - **Zero-trust by design**: Even admins can't access your data
+    - **Transparent verification**: Open-source and auditable
+    - **Decentralized keys**: No single point of failure
+  </Tab>
+  <Tab title="For Enterprises">
+    - **No vendor lock-in**: Deploy anywhere with TEE support
+    - **Compliance ready**: Hardware-based security guarantees
+    - **Operational simplicity**: Fits existing DevOps workflows
+    - **Progressive adoption**: Start small, scale securely
+  </Tab>
+</Tabs>
+
+## Dive Deeper
 
 <CardGroup cols={3}>
-  <Card title="Platform Introduction" icon="info-circle" href="/docs/overview/what-is-dstack">
-    Understand dstack's architectural philosophy and security model
+  <Card title="Core Concepts" icon="lightbulb" href="/docs/concepts/overview">
+    Understand TEE, attestation, and our architecture
   </Card>
-  <Card title="Installation Guide" icon="download" href="/docs/getting-started/installation">
-    Configure your infrastructure for dstack deployment
+  <Card title="Tutorials" icon="graduation-cap" href="/docs/tutorials/index">
+    Step-by-step guides for common use cases
   </Card>
-  <Card title="First Deployment" icon="play" href="/docs/getting-started/first-deployment">
-    Deploy and verify a secure application end-to-end
-  </Card>
-</CardGroup>
-
-### Conceptual Foundations
-
-<CardGroup cols={2}>
-  <Card title="System Architecture" icon="sitemap" href="/docs/concepts/architecture">
-    <p className="text-sm mt-2">Explore the layered architecture enabling secure, scalable deployments</p>
-  </Card>
-  <Card title="Security Model" icon="lock" href="/docs/concepts/security-model">
-    <p className="text-sm mt-2">Understand TEE primitives, attestation protocols, and trust boundaries</p>
-  </Card>
-  <Card title="Core Components" icon="puzzle-piece" href="/docs/concepts/core-components">
-    <p className="text-sm mt-2">Deep dive into VMM, Gateway, KMS, and supporting subsystems</p>
-  </Card>
-  <Card title="Network Architecture" icon="network-wired" href="/docs/concepts/networking">
-    <p className="text-sm mt-2">Learn how dstack implements secure routing and certificate management</p>
-  </Card>
-</CardGroup>
-
-### Practical Guides
-
-<CardGroup cols={3}>
-  <Card title="Application Deployment" icon="upload" href="/docs/deployment-guides/deploying-applications">
-    Comprehensive guide to containerized application deployment
-  </Card>
-  <Card title="Python Tutorial" icon="python" href="/docs/tutorials/python-example">
-    Build a secure Flask application with attestation integration
-  </Card>
-  <Card title="Tutorial Index" icon="graduation-cap" href="/docs/tutorials/index">
-    Explore language-specific guides and use cases
-  </Card>
-</CardGroup>
-
-### Reference & Support
-
-<CardGroup cols={2}>
   <Card title="API Reference" icon="code" href="/docs/api-reference/overview">
-    <p className="text-sm mt-2">Complete API documentation for programmatic control</p>
-  </Card>
-  <Card title="Troubleshooting" icon="wrench" href="/docs/troubleshooting">
-    <p className="text-sm mt-2">Diagnostic procedures and common issue resolution</p>
-  </Card>
-  <Card title="Community" icon="users" href="/docs/community">
-    <p className="text-sm mt-2">Contribute to dstack and engage with the ecosystem</p>
+    Complete API documentation
   </Card>
 </CardGroup>
 
-## Theoretical Foundations
-
-<smoothly_flowing_prose_paragraphs>
-The security guarantees provided by dstack rest upon hardware primitives implemented in modern processors. Intel's Trust Domain Extensions (TDX), the primary supported platform, creates cryptographically isolated execution environments through a combination of memory encryption, integrity protection, and remote attestation capabilities. These hardware features, while powerful, traditionally require extensive expertise to utilize effectively.
-
-dstack's innovation lies not in the creation of new security primitives, but in their thoughtful composition and abstraction. By treating the Confidential Virtual Machine (CVM) as the fundamental unit of deployment—analogous to containers in traditional orchestration—the platform enables a familiar operational model while preserving the security properties of the underlying hardware.
-</smoothly_flowing_prose_paragraphs>
-
-## Production Deployment Patterns
-
-<Highlight>
-Organizations typically progress through three stages of dstack adoption: experimental validation, pilot deployment, and production integration. Each stage builds upon the previous, allowing incremental trust establishment and operational familiarity.
-</Highlight>
-
-Visit our [Python Tutorial](/docs/tutorials/python-example) for a practical introduction to building secure applications with dstack.
-
-<div className="mt-12 p-6 bg-gradient-to-r from-blue-50 to-purple-50 rounded-lg border border-blue-200">
-  <h3 className="text-xl font-semibold mb-3">Ready to Deploy with Confidence?</h3>
-  <p className="text-gray-700 mb-4">
-    Join pioneering organizations using dstack to protect sensitive workloads with hardware-enforced security guarantees. Our platform transforms TEE complexity into operational simplicity.
-  </p>
-  <div className="flex gap-4">
-    <a href="/docs/getting-started/installation" className="bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 transition-colors">
-      Begin Installation →
-    </a>
-    <a href="https://github.com/Dstack-TEE/dstack" className="bg-gray-800 text-white px-6 py-3 rounded-lg hover:bg-gray-900 transition-colors">
-      Explore Source Code
-    </a>
+<div className="mt-12 p-6 bg-gradient-to-br from-blue-50 to-indigo-50 rounded-lg border border-blue-200">
+  <div className="flex items-center justify-between">
+    <div>
+      <h3 className="text-xl font-semibold mb-2">Ready to Secure Your Applications?</h3>
+      <p className="text-gray-700">Join developers deploying to TEE without changing a single line of code.</p>
+    </div>
+    <div className="flex gap-4">
+      <a href="/docs/quickstart" className="bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 transition-colors whitespace-nowrap">
+        Quick Start →
+      </a>
+    </div>
   </div>
 </div>
 
