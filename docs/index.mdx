@@ -6,90 +6,111 @@ description: "The easiest way to deploy existing Docker applications to Trusted 
 # Deploy Any Docker App to TEE in Minutes
 
 <Callout type="success" icon="rocket">
-**See dstack in action:** Deploy a Docker app to TEE in under 5 minutes (assuming dstack is configured). No code changes required.
+<strong>See dstack in action:</strong> Deploy a Docker app to TEE in under 5 minutes—no code changes needed, just your containers.
 </Callout>
 
 ## Why dstack?
 
 <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mt-8">
   <Card title="No Code Changes" icon="code" iconColor="#0069ED">
-    <p className="text-sm mt-2">Unlike other TEE frameworks, dstack works with your existing Docker containers. Zero rewrites needed.</p>
+    <p className="text-sm mt-2">Drop in your existing Docker containers—dstack works as-is. No rewrites, no SDKs, just instant TEE.</p>
   </Card>
   <Card title="Best Security by Default" icon="shield-check" iconColor="#10B981">
-    <p className="text-sm mt-2">Hardware-enforced isolation with automated security practices. Zero-trust compute without the complexity.</p>
+    <p className="text-sm mt-2">Get hardware-enforced, zero-trust compute. Security is built in, not bolted on.</p>
   </Card>
   <Card title="No Vendor Lock-in" icon="unlock" iconColor="#F59E0B">
-    <p className="text-sm mt-2">Deploy on bare metal today, cloud providers tomorrow. We abstract the hardware layer completely.</p>
+    <p className="text-sm mt-2">Bare metal, cloud, or hybrid—your call. We abstract the hardware, you own the deployment.</p>
   </Card>
 </div>
 
-## Quick Tour: How Easy Is It?
+### Core Design Principles
 
-```bash
-# Your existing Docker app
-docker run -p 8080:80 nginx
+<div className="grid grid-cols-1 md:grid-cols-2 gap-6 my-6">
+  <div className="bg-blue-50 p-6 rounded-lg">
+    <h4 className="font-semibold text-blue-900 mb-3">1. Operational Familiarity</h4>
+    <p className="text-sm">
+      Developers interact with dstack using familiar tools—Docker, REST APIs, and web interfaces. The complexity of TEE management remains abstracted, allowing teams to focus on application logic rather than security implementation.
+    </p>
+  </div>
+  <div className="bg-green-50 p-6 rounded-lg">
+    <h4 className="font-semibold text-green-900 mb-3">2. Hardware Abstraction</h4>
+    <p className="text-sm">
+      The platform provides a consistent interface across different TEE implementations, preventing vendor lock-in and enabling workload portability between Intel TDX, AMD SEV, and future hardware platforms.
+    </p>
+  </div>
+  <div className="bg-purple-50 p-6 rounded-lg">
+    <h4 className="font-semibold text-purple-900 mb-3">3. Verifiable Security</h4>
+    <p className="text-sm">
+      Every component in the dstack ecosystem produces cryptographic attestations, creating an auditable chain of trust from hardware to application that can be independently verified.
+    </p>
+  </div>
+  <div className="bg-orange-50 p-6 rounded-lg">
+    <h4 className="font-semibold text-orange-900 mb-3">4. Decentralized Governance</h4>
+    <p className="text-sm">
+      Critical security decisions—key management, code authorization, update policies—are governed by blockchain smart contracts, eliminating single points of control.
+    </p>
+  </div>
+</div>
+---
 
-# The same app in a TEE with dstack
-dstack deploy nginx -p 8080:80
-```
-
-That's it. Your app now runs in a hardware-isolated environment with:
-- Memory encryption
-- Remote attestation 
-- Cryptographic proof of execution
-- Certificate management
-- Secure key storage
-
-<Note>
-**For serious developers:** Want to verify our security claims? Check our [Security & Research](/docs/security-research/overview) section for deep dives into our TEE implementation.
-</Note>
 
 ## Two Paths Forward
 
 <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-8">
   <Card 
-    title="Start Using dstack" 
+    title="Quick Start (Recommended)" 
     icon="play-circle" 
     href="/docs/quickstart"
     className="hover:shadow-lg transition-shadow"
   >
-    <p className="text-sm mt-2 mb-4">Deploy your first secure application in minutes. See why developers love our zero-friction approach.</p>
-    <p className="text-xs text-gray-600">Best for: Getting started quickly</p>
+    <p className="text-sm mt-2 mb-4">Cut to the chase: deploy your secure app to Phala in minutes. No infra setup. No complexity.</p>
+    <p className="text-xs text-gray-600">Best for: Getting started, prototyping, production deploys—fast.</p>
   </Card>
   
   <Card 
-    title="Deploy dstack Infrastructure" 
+    title="Deploy Your Own Framework" 
     icon="server" 
     href="/docs/getting-started/installation"
     className="hover:shadow-lg transition-shadow"
   >
-    <p className="text-sm mt-2 mb-4">Set up your own dstack deployment. Full control over your TEE infrastructure.</p>
-    <p className="text-xs text-gray-600">Best for: Power users & researchers</p>
+    <p className="text-sm mt-2 mb-4">
+      Want full control? Our docs walk you through deploying your own decentralized cloud framework—customize your infra, scale as needed, own your stack.
+    </p>
+    <p className="text-xs text-gray-600">Best for: Power users, researchers, custom networks.</p>
   </Card>
 </div>
+
+---
+
+If you're just here to **launch your application fast**, follow our quick-start and get live on TEE in minutes—no need to handle infra yourself.  
+If you want to **build and operate your own decentralized cloud**, these docs cover the entire process, from setup to scaling and advanced security.
+
+---
 
 ## What Makes dstack Different?
 
 <Tabs>
   <Tab title="For Developers">
-    - **Use existing containers**: No rewrites, no special SDKs
-    - **Familiar tools**: Docker, REST APIs, web dashboards
-    - **Instant verification**: Built-in attestation endpoints
-    - **Automated security**: Certificates, keys, and policies handled for you
+    - **Zero rewrites:** Use your existing containers.
+    - **Familiar tools:** Docker, REST APIs, web dashboards.
+    - **Instant verification:** Built-in attestation endpoints.
+    - **Automated security:** Certificates, keys, and policies managed for you.
   </Tab>
   <Tab title="For Security Teams">
-    - **Hardware root of trust**: Intel TDX with memory encryption
-    - **Zero-trust by design**: Even admins can't access your data
-    - **Transparent verification**: Open-source and auditable
-    - **Decentralized keys**: No single point of failure
+    - **Hardware root of trust:** Intel TDX and memory encryption.
+    - **Zero-trust by design:** Even admins can’t access your data.
+    - **Transparent:** Open-source and fully auditable.
+    - **Decentralized keys:** No single point of failure.
   </Tab>
   <Tab title="For Enterprises">
-    - **No vendor lock-in**: Deploy anywhere with TEE support
-    - **Compliance ready**: Hardware-based security guarantees
-    - **Operational simplicity**: Fits existing DevOps workflows
-    - **Progressive adoption**: Start small, scale securely
+    - **No lock-in:** Deploy anywhere with TEE support.
+    - **Compliance-ready:** Hardware-based security guarantees.
+    - **Simple ops:** Fits right into existing DevOps.
+    - **Progressive:** Start small, scale securely.
   </Tab>
 </Tabs>
+
+---
 
 ## Dive Deeper
 
@@ -101,21 +122,142 @@ That's it. Your app now runs in a hardware-isolated environment with:
     Step-by-step guides for common use cases
   </Card>
   <Card title="API Reference" icon="code" href="/docs/api-reference/overview">
-    Complete API documentation
+    Full API documentation for developers
+  </Card>
+  <Card title="Security & Research" icon="shield-halved" href="/docs/security-research/overview.mdx">
+    Full API documentation for developers
   </Card>
 </CardGroup>
 
-<div className="mt-12 p-6 bg-gradient-to-br from-blue-50 to-indigo-50 rounded-lg border border-blue-200">
-  <div className="flex items-center justify-between">
-    <div>
-      <h3 className="text-xl font-semibold mb-2">Ready to Secure Your Applications?</h3>
-      <p className="text-gray-700">Join developers deploying to TEE without changing a single line of code.</p>
-    </div>
-    <div className="flex gap-4">
-      <a href="/docs/quickstart" className="bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 transition-colors whitespace-nowrap">
-        Quick Start →
-      </a>
-    </div>
+---
+
+## Quick Start: From Zero to Confidential Compute
+
+<div className="bg-gradient-to-r from-green-200 to-lime-300 text-white rounded-2xl p-8 my-8 shadow-lg hover:shadow-xl transition-shadow duration-300">
+  <div className="flex flex-col items-center text-center">
+    <h2 className="text-3xl font-bold mb-4">🚀 Try Phala Cloud</h2>
+    <p className="text-lg mb-6 max-w-2xl text-black">
+      Get confidential computing live in minutes. Sign up for free credits and deploy your first TEE app today.
+    </p>
+    <a href="https://cloud.phala.network/" className="inline-block">
+      <Card 
+        title="Get Started Now" 
+        icon="rocket" 
+        iconColor="#10B981" 
+        className="w-full md:w-96 mx-auto hover:scale-105 transition-transform duration-300"
+      >
+        <p className="text-sm">
+          Create your account in seconds and launch your first Confidential VM with a few clicks.
+        </p>
+      </Card>
+    </a>
   </div>
 </div>
 
+---
+
+## ⚡ Quick-Start Scripts
+
+<Accordion title="Shell Quick Start">
+  <CodeBlock language="bash">
+{`# Install necessary tools and dependencies
+yarn init -y
+nvm use 18.18.0
+yarn install
+
+# Download and set up the TEE simulator
+curl -L -O https://github.com/Leecheal/tappd-simulator/releases/download/v0.1.4/tappd-simulator-0.1.4-aarch64-apple-darwin.tgz
+tar -xvf tappd-simulator-0.1.4-aarch64-apple-darwin.tgz
+chmod +x run_simulator.sh
+./run_simulator.sh &
+
+# Authenticate with Phala Cloud (replace <TOKEN> with your Phala token)
+phala auth login <TOKEN>
+
+# Create Dockerfile and docker-compose.yml files (or use your own)
+
+# Build and push Docker image
+docker build -t <IMAGE_NAME> .
+docker push <IMAGE_NAME>:latest
+
+# Multi-platform image build (optional)
+docker buildx build --platform linux/amd64,linux/arm64 -t <IMAGE_NAME>:latest --push --provenance=false .
+
+# Update docker-compose if needed
+chmod +x update_compose.sh
+./update_compose.sh
+
+# Deploy to Phala Cloud
+phala cvms create --name <your-cvm-name> --compose docker-compose.yml --skip-env
+`}
+  </CodeBlock>
+</Accordion>
+
+<Accordion title="Command Script: update_compose.sh">
+  <CodeBlock language="bash">
+{`#!/bin/bash
+
+# update_compose.sh - Create or update docker-compose.yml with port mapping
+
+set -e
+
+echo "========================================================"
+echo "Updating Docker Compose Configuration"
+echo "========================================================"
+
+# Backup existing docker-compose.yml if it exists
+if [ -f "docker-compose.yml" ]; then
+  echo "Backing up existing docker-compose.yml to docker-compose.yml.bak"
+  cp docker-compose.yml docker-compose.yml.bak
+fi
+
+# Generate a new docker-compose.yml using Phala CLI
+phala docker generate -o docker-compose.yml
+
+# Verify successful generation
+if [ $? -ne 0 ]; then
+  echo "Error: Failed to generate docker-compose.yml"
+  exit 1
+fi
+
+# Add generic port mapping and remove PORT env
+TMP_FILE=$(mktemp)
+cat docker-compose.yml | awk '
+  {
+    if ($0 ~ /container_name: app/) {
+      print $0;
+      print "    ports:";
+      print "      - \"8080:8080\"";
+      next;
+    } else if ($0 ~ /- PORT=\${PORT}/) {
+      next;  # Remove PORT env variable
+    } else {
+      print $0;
+    }
+  }
+' > "$TMP_FILE"
+mv "$TMP_FILE" docker-compose.yml
+
+echo "Docker Compose file updated successfully."
+echo "You can now deploy your CVM with 'phala cvms create'."
+echo "========================================================"
+
+cat docker-compose.yml
+`}
+  </CodeBlock>
+</Accordion>
+
+---
+
+<div className="text-xl space-y-4">
+  <p>Your app is now live in a hardware-isolated environment with:</p>
+  <div>
+    <img src="/docs/images/dstack_outcomes.png" alt="dstack outcomes" className="w-full" />
+  </div>
+</div>
+
+<Note>
+<strong>For advanced users:</strong> Want to verify our security claims? See our <a href="/docs/security-research/overview">Security & Research</a> section for deep dives into TEE internals.
+</Note>
+
+---
