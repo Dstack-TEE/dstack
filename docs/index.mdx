@@ -1,15 +1,12 @@
 ---
-title: "dstack - Deploy to TEE Without Code Changes"
-description: "The easiest way to deploy existing Docker applications to Trusted Execution Environments with hardware-enforced security"
+title: "DStack - Deploy to TEE Without Code Changes"
+description: "It's the easiest way to deploy existing Docker applications to Trusted Execution Environments with hardware-enforced security"
 ---
 
-# Deploy Any Docker App to TEE in Minutes
+<img src="/docs/images/dstack_Banner_pro.png" alt="dstack banner" />
 
-<Callout type="success" icon="rocket">
-<strong>See dstack in action:</strong> Deploy a Docker app to TEE in under 5 minutes—no code changes needed, just your containers.
-</Callout>
 
-## Why dstack?
+## Why Choose DStack for Confidential Computing?
 
 <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mt-8">
   <Card title="No Code Changes" icon="code" iconColor="#0069ED">
@@ -19,33 +16,33 @@ description: "The easiest way to deploy existing Docker applications to Trusted 
     <p className="text-sm mt-2">Get hardware-enforced, zero-trust compute. Security is built in, not bolted on.</p>
   </Card>
   <Card title="No Vendor Lock-in" icon="unlock" iconColor="#F59E0B">
-    <p className="text-sm mt-2">Bare metal, cloud, or hybrid—your call. We abstract the hardware, you own the deployment.</p>
+    <p className="text-sm mt-2">Bare metal, cloud, or hybrid—deploy anywhere. Hardware abstraction enables full deployment flexibility.</p>
   </Card>
 </div>
 
-### Core Design Principles
+## Core Design Principles
 
 <div className="grid grid-cols-1 md:grid-cols-2 gap-6 my-6">
-  <div className="bg-blue-50 p-6 rounded-lg">
-    <h4 className="font-semibold text-blue-900 mb-3">1. Operational Familiarity</h4>
+  <div className="bg-green-50 p-6 rounded-lg">
+    <h4 className="font-semibold text-green-900 mb-3">1. Operational Familiarity</h4>
     <p className="text-sm">
       Developers interact with dstack using familiar tools—Docker, REST APIs, and web interfaces. The complexity of TEE management remains abstracted, allowing teams to focus on application logic rather than security implementation.
     </p>
   </div>
-  <div className="bg-green-50 p-6 rounded-lg">
+  <div className="bg-green-100 p-6 rounded-lg">
     <h4 className="font-semibold text-green-900 mb-3">2. Hardware Abstraction</h4>
     <p className="text-sm">
       The platform provides a consistent interface across different TEE implementations, preventing vendor lock-in and enabling workload portability between Intel TDX, AMD SEV, and future hardware platforms.
     </p>
   </div>
-  <div className="bg-purple-50 p-6 rounded-lg">
-    <h4 className="font-semibold text-purple-900 mb-3">3. Verifiable Security</h4>
+  <div className="bg-green-50/70 p-6 rounded-lg">
+    <h4 className="font-semibold text-green-900 mb-3">3. Verifiable Security</h4>
     <p className="text-sm">
       Every component in the dstack ecosystem produces cryptographic attestations, creating an auditable chain of trust from hardware to application that can be independently verified.
     </p>
   </div>
-  <div className="bg-orange-50 p-6 rounded-lg">
-    <h4 className="font-semibold text-orange-900 mb-3">4. Decentralized Governance</h4>
+  <div className="bg-green-50/90 p-6 rounded-lg">
+    <h4 className="font-semibold text-green-900 mb-3">4. Decentralized Governance</h4>
     <p className="text-sm">
       Critical security decisions—key management, code authorization, update policies—are governed by blockchain smart contracts, eliminating single points of control.
     </p>
@@ -53,7 +50,30 @@ description: "The easiest way to deploy existing Docker applications to Trusted 
 </div>
 ---
 
+## What Makes dstack Different?
 
+<Tabs>
+  <Tab title="For Developers">
+    - **Zero rewrites:** Use your existing containers.
+    - **Familiar tools:** Docker, REST APIs, web dashboards.
+    - **Instant verification:** Built-in attestation endpoints.
+    - **Automated security:** Certificates, keys, and policies managed for you.
+  </Tab>
+  <Tab title="For Security Teams">
+    - **Hardware root of trust:** Intel TDX and memory encryption.
+    - **Zero-trust by design:** Even admins can’t access your data.
+    - **Transparent:** Open-source and fully auditable.
+    - **Decentralized keys:** No single point of failure.
+  </Tab>
+  <Tab title="For Enterprises">
+    - **No lock-in:** Deploy anywhere with TEE support.
+    - **Compliance-ready:** Hardware-based security guarantees.
+    - **Simple ops:** Fits right into existing DevOps.
+    - **Progressive:** Start small, scale securely.
+  </Tab>
+</Tabs>
+
+---
 ## Two Paths Forward
 
 <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-8">
@@ -82,79 +102,115 @@ description: "The easiest way to deploy existing Docker applications to Trusted 
 
 ---
 
-If you're just here to **launch your application fast**, follow our quick-start and get live on TEE in minutes—no need to handle infra yourself.  
-If you want to **build and operate your own decentralized cloud**, these docs cover the entire process, from setup to scaling and advanced security.
-
----
-
-## What Makes dstack Different?
-
-<Tabs>
-  <Tab title="For Developers">
-    - **Zero rewrites:** Use your existing containers.
-    - **Familiar tools:** Docker, REST APIs, web dashboards.
-    - **Instant verification:** Built-in attestation endpoints.
-    - **Automated security:** Certificates, keys, and policies managed for you.
-  </Tab>
-  <Tab title="For Security Teams">
-    - **Hardware root of trust:** Intel TDX and memory encryption.
-    - **Zero-trust by design:** Even admins can’t access your data.
-    - **Transparent:** Open-source and fully auditable.
-    - **Decentralized keys:** No single point of failure.
-  </Tab>
-  <Tab title="For Enterprises">
-    - **No lock-in:** Deploy anywhere with TEE support.
-    - **Compliance-ready:** Hardware-based security guarantees.
-    - **Simple ops:** Fits right into existing DevOps.
-    - **Progressive:** Start small, scale securely.
-  </Tab>
-</Tabs>
-
----
-
 ## Dive Deeper
 
-<CardGroup cols={3}>
-  <Card title="Core Concepts" icon="lightbulb" href="/docs/concepts/overview">
-    Understand TEE, attestation, and our architecture
+<div className="grid grid-cols-2 gap-4">
+  <Card 
+    title="Core Concepts" 
+    icon="lightbulb" 
+    href="/docs/concepts/overview"
+    className="hover:shadow-lg transition-shadow border-2 border-gray-200 rounded-lg p-4"
+  >
+    <p className="mb-4">Understand TEE, attestation, and our architecture</p>
+    <button className="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded">
+      Learn More →
+    </button>
   </Card>
-  <Card title="Tutorials" icon="graduation-cap" href="/docs/tutorials/index">
-    Step-by-step guides for common use cases
+  
+  <Card 
+    title="Tutorials" 
+    icon="graduation-cap" 
+    href="/docs/tutorials/index"
+    className="hover:shadow-lg transition-shadow border-2 border-gray-200 rounded-lg p-4"
+  >
+    <p className="mb-4">Step-by-step guides for common use cases</p>
+    <button className="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded">
+      View Tutorials →
+    </button>
   </Card>
-  <Card title="API Reference" icon="code" href="/docs/api-reference/overview">
-    Full API documentation for developers
+  
+  <Card 
+    title="API Reference" 
+    icon="code" 
+    href="/docs/api-reference/overview"
+    className="hover:shadow-lg transition-shadow border-2 border-gray-200 rounded-lg p-4"
+  >
+    <p className="mb-4">Full API documentation for developers</p>
+    <button className="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded">
+      View Docs →
+    </button>
   </Card>
-  <Card title="Security & Research" icon="shield-halved" href="/docs/security-research/overview.mdx">
-    Full API documentation for developers
+  
+  <Card 
+    title="Security & Research" 
+    icon="shield-halved" 
+    href="/docs/security-research/overview.mdx"
+    className="hover:shadow-lg transition-shadow border-2 border-gray-200 rounded-lg p-4"
+  >
+    <p className="mb-4">Full API documentation for developers</p>
+    <button className="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded">
+      Learn More →
+    </button>
   </Card>
-</CardGroup>
-
----
-
-## Quick Start: From Zero to Confidential Compute
-
-<div className="bg-gradient-to-r from-green-200 to-lime-300 text-white rounded-2xl p-8 my-8 shadow-lg hover:shadow-xl transition-shadow duration-300">
-  <div className="flex flex-col items-center text-center">
-    <h2 className="text-3xl font-bold mb-4">🚀 Try Phala Cloud</h2>
-    <p className="text-lg mb-6 max-w-2xl text-black">
-      Get confidential computing live in minutes. Sign up for free credits and deploy your first TEE app today.
-    </p>
-    <a href="https://cloud.phala.network/" className="inline-block">
-      <Card 
-        title="Get Started Now" 
-        icon="rocket" 
-        iconColor="#10B981" 
-        className="w-full md:w-96 mx-auto hover:scale-105 transition-transform duration-300"
-      >
-        <p className="text-sm">
-          Create your account in seconds and launch your first Confidential VM with a few clicks.
-        </p>
-      </Card>
-    </a>
-  </div>
 </div>
 
 ---
+
+# ⚡ Super Quick Start ⚡
+## From Zero to Confidential Compute in Minutes
+
+<section className="mx-auto my-12 w-full max-w-xl rounded-2xl p-px
+                    bg-gradient-to-br from-emerald-500/60 via-teal-500/60 to-green-500/60
+                    shadow-lg hover:shadow-xl transition">
+
+  {/* Inner glass card */}
+  <div className="relative rounded-2xl bg-white/5 backdrop-blur-md px-8 py-10">
+
+    {/* Logo pinned top-right */}
+    <div className="absolute top-6 right-6 h-11 w-11 rounded-full bg-white/15
+                    flex items-center justify-center shadow-md">
+      <img
+        src="/docs/images/phala-logo.png"
+        alt="Phala Cloud logo"
+        className="h-8 w-8 object-contain"
+      />
+    </div>
+
+    {/* Heading */}
+    <h1 className="text-4xl md:text-5xl font-extrabold tracking-tight text-white">
+      Try Phala Cloud
+    </h1>
+
+    {/* Sub-headline */}
+    <p className="mt-4 text-sm font-medium uppercase tracking-wide text-teal-100/80">
+      Zero to Confidential Compute in Minutes
+    </p>
+
+    {/* Body copy */}
+    <p className="mt-4 text-base leading-relaxed text-white/90">
+      Spin up a Confidential VM in a few clicks. Claim free credits and deploy your first TEE
+      workload &mdash; no setup required.
+    </p>
+
+    {/* CTA */}
+    <a
+      href="https://cloud.phala.network/"
+      className="mt-8 inline-flex items-center gap-2 rounded-lg bg-white/10 px-6 py-3
+                 font-semibold text-white backdrop-blur-sm transition
+                 hover:bg-white/15 focus-visible:ring focus-visible:ring-white/40"
+    >
+      <svg className="h-5 w-5" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M12 2l3.09 6.26 6.91 1.01-5 4.86L18.18 22 12 18.27
+                 5.82 22 7 14.13 2 9.27l6.91-1.01L12 2z" />
+      </svg>
+      Get Started Now
+    </a>
+
+  </div>
+</section>
+
+
+
 
 ## ⚡ Quick-Start Scripts
 
@@ -250,14 +306,12 @@ cat docker-compose.yml
 ---
 
 <div className="text-xl space-y-4">
-  <p>Your app is now live in a hardware-isolated environment with:</p>
+  <p>Your app is now live in a hardware-isolated environment with full confidentiality and integrity protection! If you need help managing your deployment or want to explore additional features, check out the <a href="https://docs.phala.network/phala-cloud/getting-started/sign-up-for-cloud-account">Phala Cloud documentation</a>.</p>
   <div>
     <img src="/docs/images/dstack_outcomes.png" alt="dstack outcomes" className="w-full" />
   </div>
 </div>
 
-<Note>
-<strong>For advanced users:</strong> Want to verify our security claims? See our <a href="/docs/security-research/overview">Security & Research</a> section for deep dives into TEE internals.
-</Note>
+
 
 ---

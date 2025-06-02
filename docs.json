@@ -27,8 +27,8 @@
         "dropdown": "Getting Started",
         "icon": "rocket",
         "pages": [
-          "docs/quickstart",
           "docs/getting-started/installation",
+          "docs/getting-started/start",
           "docs/getting-started/first-deployment"
         ]
       },
