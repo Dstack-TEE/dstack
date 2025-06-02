@@ -1,8 +1,0 @@
-/target
-/certs
-/build-config.sh
-/build
-generated/
-node_modules/
-/.cargo
-.venv

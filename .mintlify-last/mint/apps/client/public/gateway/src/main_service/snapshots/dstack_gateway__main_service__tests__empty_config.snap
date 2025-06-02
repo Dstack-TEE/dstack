@@ -1,9 +1,0 @@
----
-source: gateway/src/main_service/tests.rs
-assertion_line: 14
-expression: wg_config
-snapshot_kind: text
----
-[Interface]
-PrivateKey = 
-ListenPort = 51820
