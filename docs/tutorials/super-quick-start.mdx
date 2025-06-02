@@ -1,0 +1,429 @@
+---
+title: Super Quick Start Tutorial
+description: "Deploy Your TEE application in TS, Py, Rust using your favorite dependenies on the Phala Cloud"
+---
+
+# ⚡ Super Quick Start Commands % Deployment  Scripts ⚡
+## From Zero to Confidential Compute in Minutes
+
+<div className="bg-gradient-to-r from-green-50 to-teal-50 border border-green-200 rounded-lg p-6 mb-8">
+  <h3 className="text-lg font-semibold text-green-800 mb-3">🚀 Phala Cloud Path: Instant TEE Deployment</h3>
+  <p className="text-sm text-green-700 mb-4">
+    Skip infrastructure setup entirely. Deploy your Docker containers to hardware-secured Trusted Execution Environments using Phala's managed cloud infrastructure. Perfect for immediate results, prototyping, or production deployments where you want to focus on your application rather than platform management.
+  </p>
+  <div className="grid grid-cols-2 gap-4 text-sm">
+    <div>
+      <h4 className="font-medium text-green-800">✅ What you get:</h4>
+      <ul className="text-green-700 space-y-1 mt-1">
+        <li>• Hardware-enforced TEE security</li>
+        <li>• Instant deployment (5-10 minutes)</li>
+        <li>• No infrastructure management</li>
+        <li>• Production-ready endpoints</li>
+      </ul>
+    </div>
+    <div>
+      <h4 className="font-medium text-green-800">📋 What you need:</h4>
+      <ul className="text-green-700 space-y-1 mt-1">
+        <li>• Docker containers (existing apps work)</li>
+        <li>• Basic command line familiarity</li>
+        <li>• 10 minutes of your time</li>
+        <li>• No special hardware required</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<section className="mx-auto my-12 w-full max-w-xl rounded-2xl p-px
+                    bg-gradient-to-br from-emerald-500/60 via-teal-500/60 to-green-500/60
+                    shadow-lg hover:shadow-xl transition">
+
+  {/* Inner glass card */}
+  <div className="relative rounded-2xl bg-white/5 backdrop-blur-md px-8 py-10">
+
+    {/* Logo pinned top-right */}
+    <div className="absolute top-6 right-6 h-11 w-11 rounded-full bg-white/15
+                    flex items-center justify-center shadow-md">
+      <img
+        src="/docs/images/phala-logo.png"
+        alt="Phala Cloud logo"
+        className="h-8 w-8 object-contain"
+      />
+    </div>
+
+    {/* Heading */}
+    <h1 className="text-4xl md:text-5xl font-extrabold tracking-tight text-white">
+      Try Phala Cloud
+    </h1>
+
+    {/* Sub-headline */}
+    <p className="mt-4 text-sm font-medium uppercase tracking-wide text-teal-100/80">
+      Zero to Confidential Compute in Minutes
+    </p>
+
+    {/* Body copy */}
+    <p className="mt-4 text-base leading-relaxed text-white/90">
+      Spin up a Confidential VM in a few clicks. Claim free credits and deploy your first TEE
+      workload &mdash; no setup required.
+    </p>
+
+    {/* CTA */}
+    <a
+      href="https://cloud.phala.network/"
+      className="mt-8 inline-flex items-center gap-2 rounded-lg bg-white/10 px-6 py-3
+                 font-semibold text-white backdrop-blur-sm transition
+                 hover:bg-white/15 focus-visible:ring focus-visible:ring-white/40"
+    >
+      <svg className="h-5 w-5" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M12 2l3.09 6.26 6.91 1.01-5 4.86L18.18 22 12 18.27
+                 5.82 22 7 14.13 2 9.27l6.91-1.01L12 2z" />
+      </svg>
+      Get Started Now
+    </a>
+
+  </div>
+</section>
+
+## Step-by-Step Quick Deployment
+
+### Prerequisites
+- Docker installed locally (for building images)
+- Basic command line knowledge
+- Your application containerized (we'll help if it isn't)
+
+### Step 1: Get Phala Cloud Access
+
+First, obtain access to Phala Cloud and set up your development environment:
+
+<details>
+<summary>Environment Setup Commands</summary>
+
+```bash
+# Install Node.js and required tools
+# (Skip if you already have these)
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.0/install.sh | bash
+nvm install 18.18.0
+nvm use 18.18.0
+
+# Initialize your project directory
+mkdir my-secure-app && cd my-secure-app
+yarn init -y
+yarn install
+```
+
+</details>
+
+1. **Register for Phala Cloud**: Visit [cloud.phala.network](https://cloud.phala.network/) and create your account
+2. **Claim free credits**: Get started with complimentary TEE compute credits  
+3. **Download CLI tools**: Install the Phala CLI for streamlined deployments
+
+### Step 2: Prepare Your Application  
+
+If you already have a Docker container, skip to Step 3. Otherwise, let's containerize a sample application:
+
+<details>
+<summary>Sample Application (Python Flask)</summary>
+
+Create a simple secure web application:
+
+```python
+# app.py
+from flask import Flask, jsonify
+import os
+
+app = Flask(__name__)
+
+@app.route('/')
+def secure_hello():
+    return jsonify({
+        'message': 'Hello from Phala TEE!',
+        'secure': True,
+        'tee_environment': os.environ.get('PHALA_TEE', 'enabled'),
+        'deployment': 'phala-cloud'
+    })
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=8080)
+```
+
+```dockerfile
+# Dockerfile
+FROM python:3.11-slim
+WORKDIR /app
+RUN pip install flask
+COPY app.py .
+EXPOSE 8080
+CMD ["python", "app.py"]
+```
+
+```yaml
+# docker-compose.yml
+version: '3.8'
+services:
+  app:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      - PHALA_TEE=enabled
+```
+
+</details>
+
+### Step 3: Deploy to Phala Cloud
+
+Once your application is containerized, deploy it to secure TEE infrastructure:
+
+<details>
+<summary>Deployment Commands</summary>
+
+```bash
+# Authenticate with Phala Cloud
+phala auth login <YOUR_TOKEN>
+
+# Build and push your container  
+docker build -t my-secure-app .
+docker tag my-secure-app <your-registry>/my-secure-app:latest
+docker push <your-registry>/my-secure-app:latest
+
+# Deploy to Phala TEE infrastructure
+phala cvms create \
+  --name my-first-secure-app \
+  --compose docker-compose.yml \
+  --skip-env
+```
+
+</details>
+
+That's it! Your application is now running in a hardware-secured Trusted Execution Environment.
+
+### Step 4: Verify Security
+
+Access your deployed application and verify its security properties:
+
+1. **Test functionality**: Your app will be accessible via a secure HTTPS endpoint
+2. **Verify TEE attestation**: Use built-in attestation endpoints to cryptographically prove security
+3. **Monitor deployment**: View logs, metrics, and security status through the Phala Cloud dashboard
+
+## Why This Path Works
+
+This super quick start demonstrates dstack's core value: **existing applications gain enterprise-grade security without code changes**. Your Docker containers run in hardware-isolated environments with:
+
+- **Memory encryption**: All data encrypted in CPU cache and RAM
+- **Remote attestation**: Cryptographic proof your code runs unmodified  
+- **Zero-trust compute**: Even cloud admins cannot access your data
+- **Instant deployment**: Production security in development timeframes
+
+<div className="bg-blue-50 border border-blue-200 rounded-lg p-6 mt-8">
+  <h3 className="font-semibold text-blue-900 mb-3">🔄 Ready for More Control?</h3>
+  <p className="text-sm text-blue-800 mb-4">
+    Once you've experienced dstack through Phala Cloud, you might want to deploy your own infrastructure for custom networks, enhanced control, or research purposes.
+  </p>
+  <p className="text-sm text-blue-700">
+    <strong>Next step:</strong> Explore our <a href="/docs/getting-started/installation" className="underline font-medium">self-hosted deployment path</a> to build your own dstack infrastructure. Note that this path requires Linux expertise and 2-8 hours of setup time.
+  </p>
+</div>
+
+---
+
+## ⚡ Quick-Start Scripts
+
+<div className="bg-amber-50 border border-amber-200 rounded-lg p-4 mb-6">
+  <h4 className="font-medium text-amber-800 mb-2">📋 Alternative Quick Deployment Methods</h4>
+  <p className="text-sm text-amber-700">
+    These scripts provide alternative methods for rapid deployment. Use these if you prefer command-line automation or need to integrate dstack deployment into CI/CD pipelines.
+  </p>
+</div>
+
+<Accordion title="Automated Shell Deployment Script">
+  <div className="space-y-4">
+    <p className="text-sm text-gray-700">This comprehensive script automates the entire deployment process from environment setup through application deployment:</p>
+    
+    <CodeBlock language="bash">
+{`#!/bin/bash
+# Automated dstack deployment to Phala Cloud
+
+# Step 1: Environment Setup
+echo "Setting up development environment..."
+yarn init -y
+nvm use 18.18.0
+yarn install
+
+# Step 2: Download TEE Simulator (for local testing)
+echo "Downloading TEE simulator for local development..."
+curl -L -O https://github.com/Leecheal/tappd-simulator/releases/download/v0.1.4/tappd-simulator-0.1.4-aarch64-apple-darwin.tgz
+tar -xvf tappd-simulator-0.1.4-aarch64-apple-darwin.tgz
+chmod +x run_simulator.sh
+./run_simulator.sh &
+
+# Step 3: Authenticate with Phala Cloud
+echo "Authenticating with Phala Cloud..."
+echo "Replace <TOKEN> with your actual Phala Cloud authentication token"
+read -p "Enter your Phala Cloud token: " PHALA_TOKEN
+phala auth login $PHALA_TOKEN
+
+# Step 4: Build and Deploy Application
+echo "Building Docker image..."
+echo "Ensure your Dockerfile and docker-compose.yml exist in current directory"
+read -p "Enter your image name (e.g., username/myapp): " IMAGE_NAME
+
+docker build -t $IMAGE_NAME .
+docker push $IMAGE_NAME:latest
+
+# Step 5: Multi-platform Build (optional for broader compatibility)
+echo "Building multi-platform image for better compatibility..."
+docker buildx build --platform linux/amd64,linux/arm64 -t $IMAGE_NAME:latest --push --provenance=false .
+
+# Step 6: Update Docker Compose Configuration
+echo "Updating docker-compose.yml with proper port mapping..."
+chmod +x update_compose.sh
+./update_compose.sh
+
+# Step 7: Deploy to Phala Cloud
+read -p "Enter CVM name for deployment: " CVM_NAME
+phala cvms create --name $CVM_NAME --compose docker-compose.yml --skip-env
+
+echo "Deployment complete! Check Phala Cloud dashboard for status."
+`}
+    </CodeBlock>
+    
+    <div className="bg-blue-50 p-3 rounded">
+      <p className="text-xs text-blue-800"><strong>Usage:</strong> Save as deploy.sh, make executable with chmod +x deploy.sh, then run ./deploy.sh</p>
+    </div>
+  </div>
+</Accordion>
+
+<Accordion title="Docker Compose Configuration Helper Script">
+  <div className="space-y-4">
+    <p className="text-sm text-gray-700">This helper script generates and configures your docker-compose.yml file for optimal Phala Cloud deployment:</p>
+    
+    <CodeBlock language="bash">
+{`#!/bin/bash
+# update_compose.sh - Docker Compose Configuration for Phala Cloud
+
+set -e
+
+echo "========================================================"
+echo "Configuring Docker Compose for Phala Cloud Deployment"
+echo "========================================================"
+
+# Create backup of existing configuration
+if [ -f "docker-compose.yml" ]; then
+  echo "Creating backup of existing docker-compose.yml..."
+  cp docker-compose.yml docker-compose.yml.bak
+  echo "Backup saved as docker-compose.yml.bak"
+fi
+
+# Generate base docker-compose.yml using Phala CLI
+echo "Generating new docker-compose.yml configuration..."
+phala docker generate -o docker-compose.yml
+
+# Verify generation was successful
+if [ $? -ne 0 ]; then
+  echo "❌ Error: Failed to generate docker-compose.yml"
+  echo "Please check your Phala CLI installation and authentication"
+  exit 1
+fi
+
+# Configure port mapping and environment variables
+echo "Adding port mapping and optimizing configuration..."
+TMP_FILE=$(mktemp)
+
+# Process the generated file to add proper port mapping
+cat docker-compose.yml | awk '
+  {
+    if ($0 ~ /container_name: app/) {
+      print $0;
+      print "    ports:";
+      print "      - \"8080:8080\"";
+      next;
+    } else if ($0 ~ /- PORT=\${PORT}/) {
+      # Remove automatic PORT environment variable (handled by port mapping)
+      next;
+    } else {
+      print $0;
+    }
+  }
+' > "$TMP_FILE"
+
+mv "$TMP_FILE" docker-compose.yml
+
+echo "✅ Docker Compose configuration completed successfully"
+echo "You can now deploy your CVM with: phala cvms create --name <cvm-name> --compose docker-compose.yml"
+echo "========================================================"
+
+# Display final configuration for review
+echo "Final docker-compose.yml configuration:"
+cat docker-compose.yml
+`}
+    </CodeBlock>
+    
+    <div className="bg-green-50 p-3 rounded">
+      <p className="text-xs text-green-800"><strong>Features:</strong> Automatic backup, error handling, port optimization, and configuration review</p>
+    </div>
+  </div>
+</Accordion>
+
+<Accordion title="Manual Step-by-Step Commands">
+  <div className="space-y-4">
+    <p className="text-sm text-gray-700">For users who prefer to execute each step manually with full control:</p>
+    
+    <details>
+    <summary className="font-medium cursor-pointer">Environment Preparation</summary>
+    <CodeBlock language="bash">
+{`# Install and configure Node.js environment
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.0/install.sh | bash
+source ~/.bashrc
+nvm install 18.18.0
+nvm use 18.18.0
+
+# Initialize project
+mkdir my-secure-app && cd my-secure-app
+yarn init -y
+`}
+    </CodeBlock>
+    </details>
+    
+    <details>
+    <summary className="font-medium cursor-pointer">Phala Cloud Authentication</summary>
+    <CodeBlock language="bash">
+{`# Get your token from https://cloud.phala.network/
+# Replace YOUR_ACTUAL_TOKEN with your real token
+phala auth login YOUR_ACTUAL_TOKEN
+
+# Verify authentication
+phala auth status
+`}
+    </CodeBlock>
+    </details>
+    
+    <details>
+    <summary className="font-medium cursor-pointer">Application Deployment</summary>
+    <CodeBlock language="bash">
+{`# Build your application container
+docker build -t my-app-name .
+
+# Tag for registry (replace with your registry)
+docker tag my-app-name your-registry/my-app-name:latest
+
+# Push to container registry
+docker push your-registry/my-app-name:latest
+
+# Deploy to Phala Cloud
+phala cvms create \
+  --name my-production-app \
+  --compose docker-compose.yml \
+  --skip-env
+`}
+    </CodeBlock>
+    </details>
+  </div>
+</Accordion>
+
+---
+
+<div className="text-xl space-y-4">
+  <p>Your app is now live in a hardware-isolated environment with full confidentiality and integrity protection! If you need help managing your deployment or want to explore additional features, check out the <a href="https://docs.phala.network/phala-cloud/getting-started/sign-up-for-cloud-account">Phala Cloud documentation</a>.</p>
+  <div>
+    <img src="/docs/images/dstack_outcomes.png" alt="dstack outcomes" className="w-full" />
+  </div>
+</div>

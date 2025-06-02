@@ -55,6 +55,7 @@
         "icon": "graduation-cap",
         "pages": [
           "docs/tutorials/index",
+          "docs/tutorials/super-quick-start",
           "docs/tutorials/python-example",
           "docs/tutorials/javascript-example",
           "docs/tutorials/rust-example",

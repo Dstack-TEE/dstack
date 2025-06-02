@@ -48,56 +48,52 @@ description: "It's the easiest way to deploy existing Docker applications to Tru
     </p>
   </div>
 </div>
----
 
-## What Makes dstack Different?
-
-<Tabs>
-  <Tab title="For Developers">
-    - **Zero rewrites:** Use your existing containers.
-    - **Familiar tools:** Docker, REST APIs, web dashboards.
-    - **Instant verification:** Built-in attestation endpoints.
-    - **Automated security:** Certificates, keys, and policies managed for you.
-  </Tab>
-  <Tab title="For Security Teams">
-    - **Hardware root of trust:** Intel TDX and memory encryption.
-    - **Zero-trust by design:** Even admins can’t access your data.
-    - **Transparent:** Open-source and fully auditable.
-    - **Decentralized keys:** No single point of failure.
-  </Tab>
-  <Tab title="For Enterprises">
-    - **No lock-in:** Deploy anywhere with TEE support.
-    - **Compliance-ready:** Hardware-based security guarantees.
-    - **Simple ops:** Fits right into existing DevOps.
-    - **Progressive:** Start small, scale securely.
-  </Tab>
-</Tabs>
 
 ---
 ## Two Paths Forward
 
+Choose your journey based on your needs and timeline:
+
 <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-8">
   <Card 
-    title="Quick Start (Recommended)" 
+    title="Super Quick Start (Recommended)" 
     icon="play-circle" 
-    href="/docs/quickstart"
-    className="hover:shadow-lg transition-shadow"
+    href="/docs/tutorials/super-quick-start"
+    className="hover:shadow-lg transition-shadow border-2 border-green-200"
   >
-    <p className="text-sm mt-2 mb-4">Cut to the chase: deploy your secure app to Phala in minutes. No infra setup. No complexity.</p>
-    <p className="text-xs text-gray-600">Best for: Getting started, prototyping, production deploys—fast.</p>
+    <div className="space-y-3">
+      <p className="text-sm mt-2 mb-2">Deploy your secure app to Phala Cloud in minutes. No infrastructure setup, no complexity—just instant TEE deployment.</p>
+      <div className="bg-green-50 p-3 rounded">
+        <p className="text-xs font-medium text-green-800">⚡ Time: 5-10 minutes</p>
+        <p className="text-xs text-green-700">Perfect for: Getting started, prototyping, quick production deploys</p>
+      </div>
+      <p className="text-xs text-gray-600">Uses Phala's managed infrastructure—deploy immediately without hardware requirements.</p>
+    </div>
   </Card>
   
   <Card 
-    title="Deploy Your Own Framework" 
+    title="Deploy Your Own dstack Framework" 
     icon="server" 
     href="/docs/getting-started/installation"
-    className="hover:shadow-lg transition-shadow"
+    className="hover:shadow-lg transition-shadow border-2 border-blue-200"
   >
-    <p className="text-sm mt-2 mb-4">
-      Want full control? Our docs walk you through deploying your own decentralized cloud framework—customize your infra, scale as needed, own your stack.
-    </p>
-    <p className="text-xs text-gray-600">Best for: Power users, researchers, custom networks.</p>
+    <div className="space-y-3">
+      <p className="text-sm mt-2 mb-2">Build and deploy your own decentralized confidential computing infrastructure from the ground up.</p>
+      <div className="bg-blue-50 p-3 rounded">
+        <p className="text-xs font-medium text-blue-800">🔧 Time: 2-8 hours (skill dependent)</p>
+        <p className="text-xs text-blue-700">Perfect for: Custom infrastructure, research, full control</p>
+      </div>
+      <p className="text-xs text-gray-600"><strong>Linux required.</strong> Follow our comprehensive guides: Installation → Environment Setup → First Deployment.</p>
+    </div>
   </Card>
+</div>
+
+<div className="mt-6 p-4 bg-gray-50 rounded-lg">
+  <h4 className="font-medium text-gray-800 mb-2">Not sure which path to choose?</h4>
+  <p className="text-sm text-gray-600">
+    Start with the <strong>Super Quick Start</strong> to see dstack in action immediately. You can always deploy your own framework later once you understand the platform better.
+  </p>
 </div>
 
 ---
@@ -154,163 +150,6 @@ description: "It's the easiest way to deploy existing Docker applications to Tru
   </Card>
 </div>
 
----
-
-# ⚡ Super Quick Start ⚡
-## From Zero to Confidential Compute in Minutes
-
-<section className="mx-auto my-12 w-full max-w-xl rounded-2xl p-px
-                    bg-gradient-to-br from-emerald-500/60 via-teal-500/60 to-green-500/60
-                    shadow-lg hover:shadow-xl transition">
-
-  {/* Inner glass card */}
-  <div className="relative rounded-2xl bg-white/5 backdrop-blur-md px-8 py-10">
-
-    {/* Logo pinned top-right */}
-    <div className="absolute top-6 right-6 h-11 w-11 rounded-full bg-white/15
-                    flex items-center justify-center shadow-md">
-      <img
-        src="/docs/images/phala-logo.png"
-        alt="Phala Cloud logo"
-        className="h-8 w-8 object-contain"
-      />
-    </div>
-
-    {/* Heading */}
-    <h1 className="text-4xl md:text-5xl font-extrabold tracking-tight text-white">
-      Try Phala Cloud
-    </h1>
-
-    {/* Sub-headline */}
-    <p className="mt-4 text-sm font-medium uppercase tracking-wide text-teal-100/80">
-      Zero to Confidential Compute in Minutes
-    </p>
-
-    {/* Body copy */}
-    <p className="mt-4 text-base leading-relaxed text-white/90">
-      Spin up a Confidential VM in a few clicks. Claim free credits and deploy your first TEE
-      workload &mdash; no setup required.
-    </p>
-
-    {/* CTA */}
-    <a
-      href="https://cloud.phala.network/"
-      className="mt-8 inline-flex items-center gap-2 rounded-lg bg-white/10 px-6 py-3
-                 font-semibold text-white backdrop-blur-sm transition
-                 hover:bg-white/15 focus-visible:ring focus-visible:ring-white/40"
-    >
-      <svg className="h-5 w-5" viewBox="0 0 24 24" fill="currentColor">
-        <path d="M12 2l3.09 6.26 6.91 1.01-5 4.86L18.18 22 12 18.27
-                 5.82 22 7 14.13 2 9.27l6.91-1.01L12 2z" />
-      </svg>
-      Get Started Now
-    </a>
-
-  </div>
-</section>
-
-
-
-
-## ⚡ Quick-Start Scripts
-
-<Accordion title="Shell Quick Start">
-  <CodeBlock language="bash">
-{`# Install necessary tools and dependencies
-yarn init -y
-nvm use 18.18.0
-yarn install
-
-# Download and set up the TEE simulator
-curl -L -O https://github.com/Leecheal/tappd-simulator/releases/download/v0.1.4/tappd-simulator-0.1.4-aarch64-apple-darwin.tgz
-tar -xvf tappd-simulator-0.1.4-aarch64-apple-darwin.tgz
-chmod +x run_simulator.sh
-./run_simulator.sh &
-
-# Authenticate with Phala Cloud (replace <TOKEN> with your Phala token)
-phala auth login <TOKEN>
-
-# Create Dockerfile and docker-compose.yml files (or use your own)
-
-# Build and push Docker image
-docker build -t <IMAGE_NAME> .
-docker push <IMAGE_NAME>:latest
-
-# Multi-platform image build (optional)
-docker buildx build --platform linux/amd64,linux/arm64 -t <IMAGE_NAME>:latest --push --provenance=false .
-
-# Update docker-compose if needed
-chmod +x update_compose.sh
-./update_compose.sh
-
-# Deploy to Phala Cloud
-phala cvms create --name <your-cvm-name> --compose docker-compose.yml --skip-env
-`}
-  </CodeBlock>
-</Accordion>
-
-<Accordion title="Command Script: update_compose.sh">
-  <CodeBlock language="bash">
-{`#!/bin/bash
-
-# update_compose.sh - Create or update docker-compose.yml with port mapping
-
-set -e
-
-echo "========================================================"
-echo "Updating Docker Compose Configuration"
-echo "========================================================"
-
-# Backup existing docker-compose.yml if it exists
-if [ -f "docker-compose.yml" ]; then
-  echo "Backing up existing docker-compose.yml to docker-compose.yml.bak"
-  cp docker-compose.yml docker-compose.yml.bak
-fi
-
-# Generate a new docker-compose.yml using Phala CLI
-phala docker generate -o docker-compose.yml
-
-# Verify successful generation
-if [ $? -ne 0 ]; then
-  echo "Error: Failed to generate docker-compose.yml"
-  exit 1
-fi
-
-# Add generic port mapping and remove PORT env
-TMP_FILE=$(mktemp)
-cat docker-compose.yml | awk '
-  {
-    if ($0 ~ /container_name: app/) {
-      print $0;
-      print "    ports:";
-      print "      - \"8080:8080\"";
-      next;
-    } else if ($0 ~ /- PORT=\${PORT}/) {
-      next;  # Remove PORT env variable
-    } else {
-      print $0;
-    }
-  }
-' > "$TMP_FILE"
-mv "$TMP_FILE" docker-compose.yml
-
-echo "Docker Compose file updated successfully."
-echo "You can now deploy your CVM with 'phala cvms create'."
-echo "========================================================"
-
-cat docker-compose.yml
-`}
-  </CodeBlock>
-</Accordion>
-
----
-
-<div className="text-xl space-y-4">
-  <p>Your app is now live in a hardware-isolated environment with full confidentiality and integrity protection! If you need help managing your deployment or want to explore additional features, check out the <a href="https://docs.phala.network/phala-cloud/getting-started/sign-up-for-cloud-account">Phala Cloud documentation</a>.</p>
-  <div>
-    <img src="/docs/images/dstack_outcomes.png" alt="dstack outcomes" className="w-full" />
-  </div>
-</div>
 
 
 

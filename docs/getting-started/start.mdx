@@ -1,21 +1,69 @@
 ---
 title: "Starting with dStack"
-description: "Deploy secure applications to TEEs with minimal configuration"
+description: "Configure your dstack environment and prepare for secure application deployment"
 ---
 
-# Getting Started with dStack
+# Environment Setup & Configuration
+
+<div className="bg-blue-50 border-l-4 border-blue-400 p-4 mb-6">
+  <div className="flex">
+    <div className="ml-3">
+      <p className="text-sm text-blue-700">
+        <strong>Prerequisites:</strong> Complete the <a href="/docs/getting-started/installation" className="underline font-medium">Installation Guide</a> before proceeding. This guide assumes dstack components are installed on your Linux system.
+      </p>
+    </div>
+  </div>
+</div>
 
 <page_summary>
-This guide provides the most expedient path to deploying applications within dstack's Trusted Execution Environment infrastructure. By following this streamlined workflow, you'll deploy a containerized application to a Confidential VM, verify its attestation, and understand the security guarantees provided—all within 10 minutes. This guide prioritizes practical experience while maintaining the security properties that make dstack valuable for production workloads.
+This guide configures your installed dstack infrastructure for secure application deployment. You'll establish the cryptographic foundations, configure networking, initialize services, and prepare your Trusted Execution Environment for containerized workloads. This streamlined workflow gets your self-hosted dstack operational and ready for your first deployment within 30-60 minutes.
 </page_summary>
 
 <smoothly_flowing_prose_paragraphs>
-The tension between security and usability has long plagued enterprise computing. Traditional secure deployment methods require extensive configuration, specialized knowledge, and significant time investment. dstack resolves this tension by abstracting complexity without compromising security guarantees. This quick start demonstrates that principle in action—you'll deploy a secure application faster than traditional container orchestration, while gaining hardware-enforced isolation.
+After installing the dstack platform components, the next critical phase involves configuring the security and networking foundation. Unlike cloud-managed TEE services where this complexity is abstracted away, self-hosted dstack requires careful setup of cryptographic keys, network isolation, and service orchestration. This guide streamlines that process while maintaining the security properties that make dstack valuable for production workloads.
 </smoothly_flowing_prose_paragraphs>
 
+<div className="bg-green-50 border-l-4 border-green-400 p-4 mb-6">
+  <div className="flex">
+    <div className="ml-3">
+      <p className="text-sm text-green-700">
+        <strong>🎯 Goal:</strong> Transform your installed dstack components into a running, secure platform ready for application deployment.
+      </p>
+      <p className="text-sm text-green-700 mt-2">
+        <strong>Next Step:</strong> After completing this setup, proceed to <a href="/docs/getting-started/first-deployment" className="underline font-medium">First Deployment</a> to deploy your first secure application.
+      </p>
+    </div>
+  </div>
+</div>
+
 <Warning>
-This guide assumes you have TEE-capable hardware (Intel TDX). If you lack such hardware, leverage <a href="https://cloud.phala.network/register?invite=beta" className="underline font-semibold">Phala Cloud</a> for immediate access to pre-configured infrastructure.
+This guide assumes you have completed the installation and have TEE-capable hardware (Intel TDX) properly configured on Linux. If you're looking for a faster path to see dstack in action, consider the <a href="/#-super-quick-start-" className="underline font-semibold">Super Quick Start</a> using Phala Cloud.
 </Warning>
+
+## Verified Prerequisites
+
+Before beginning configuration, verify your installation is complete:
+
+<details>
+<summary>Verification Commands</summary>
+
+Run these commands to confirm your installation is ready:
+
+```bash
+# Verify dstack binaries exist
+ls -la ~/dstack-workspace/meta-dstack/dstack-*
+
+# Check TEE hardware availability
+grep -E 'tdx|TDX' /proc/cpuinfo
+
+# Verify required ports are available
+sudo netstat -tulpn | grep -E '9080|9090|443|80|51820' || echo "Ports available"
+
+# Confirm Rust installation (needed for any builds)
+rustc --version
+```
+
+</details>
 
 ## Prerequisites & System Requirements
 
