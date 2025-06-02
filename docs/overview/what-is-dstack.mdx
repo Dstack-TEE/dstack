@@ -1,427 +1,187 @@
 ---
 title: "What is dstack?"
-description: "dstack operates on the principle of "transparent security enhancement"—applications gain hardware-enforced protection without requiring architectural modifications or specialized development practices."
+description: "dstack lets teams ship hardware‑grade confidentiality with the tooling they already know—no TEE wizardry required."
 ---
 
 # What is dstack?
 
 <page_summary>
-dstack is an open-source orchestration platform that transforms the deployment of secure applications within Trusted Execution Environments (TEEs) from a specialized cryptographic exercise into a standardized operational workflow. By abstracting the complexity of hardware security features while preserving their guarantees, dstack enables organizations to leverage confidential computing without requiring deep expertise in TEE-specific implementations. This document provides a comprehensive technical overview of the platform's architecture, design philosophy, and position within the broader confidential computing ecosystem.
+**dstack** converts the raw power of modern Trusted Execution Environments (TEEs) into a push‑button workflow that feels just like shipping ordinary containers.  Applications run inside hardware‑isolated *Confidential VMs* (CVMs), yet developers interact with Docker, REST, and familiar CI/CD.  The result is cloud infrastructure that keeps customer data encrypted at rest, in transit, *and while it is being processed*—without rewriting code or trusting the cloud operator.
 </page_summary>
 
-<smoothly_flowing_prose_paragraphs>
-The fundamental challenge in modern cloud computing lies in the trust asymmetry between data owners and infrastructure providers. Traditional security models require data owners to trust that cloud providers will protect their data from both external threats and internal access. This trust requirement becomes increasingly problematic as data sensitivity grows and regulatory frameworks tighten. Confidential computing promises to resolve this asymmetry by enabling computation on encrypted data within hardware-enforced secure enclaves, yet the complexity of implementing these solutions has limited their adoption.
+---
 
-dstack emerges as the critical bridge between the theoretical promise of confidential computing and its practical implementation. The platform recognizes that the primary barrier to TEE adoption is not the hardware availability but the operational complexity of deploying and managing secure applications. By providing familiar interfaces—Docker containers, REST APIs, web dashboards—atop sophisticated security primitives, dstack democratizes access to hardware-based security guarantees.
-</smoothly_flowing_prose_paragraphs>
+## Why dstack exists
 
+Cloud computing was built on an unspoken bargain: *trust us with your plaintext and we’ll give you scale*.  As data becomes more sensitive and regulation tighter, that bargain no longer works.  TEEs—including Intel TDX, AMD SEV‑SNP, and ARM CCA—finally make it possible to run code on encrypted data, but they arrive as low‑level CPU features, not developer platforms.  dstack supplies the missing platform layer: it packages those hardware controls into everyday DevOps primitives, so organisations can adopt confidential computing without assembling a cryptography team.
 
+<div className="grid md:grid-cols-2 gap-6 my-8">
+  <div className="p-6 bg-gray-50 rounded-lg shadow">
+    <h3 className="font-semibold mb-2">Before dstack</h3>
+    <p className="text-sm leading-relaxed">
+      Teams wrestle with vendor‑specific SDKs, bespoke attestation flows, and opaque
+      debugging.  Security policies live in wikis; secrets sprawl across pipelines; audits are
+      point‑in‑time PDFs.  Most projects stall before reaching production.
+    </p>
+  </div>
+  <div className="p-6 bg-emerald-50 rounded-lg shadow">
+    <h3 className="font-semibold mb-2">With dstack</h3>
+    <p className="text-sm leading-relaxed">
+      A container image, a YAML policy, and a `dstack deploy` are enough to launch a fully
+      attested workload.  Keys, certificates, and evidence are managed automatically, and
+      dashboards show real‑time cryptographic proof that the service is running exactly the
+      code you pushed—nowhere else.
+    </p>
+  </div>
+</div>
 
-## What Makes dstack Different?
+---
+
+## Architecture at a glance
+
+<img src="/docs/images/dstack-architecture-detailed.png" alt="dstack architecture" className="w-full rounded-lg shadow" />
+
+1. **Hardware Security Layer** — CPU isolates CVM memory with encryption and integrity trees.
+2. **Orchestration Layer** — dstack Scheduler allocates CVMs, injects measurements, and streams attestation evidence.
+3. **Service Mesh** — Sidecars terminate TLS, verify peer attestations, and feed privacy‑preserving metrics.
+4. **Developer Interfaces** — REST API, CLI, and web dashboard expose a Kubernetes‑like UX without exposing secrets.
+
+Every layer is open source, so auditors can examine the exact code path from API call to enclave launch.
+
+---
+
+## Developer, Security, Business lenses
 
 <Tabs>
-  <Tab title="For Developers">
-    - **Zero rewrites:** Use your existing containers.
-    - **Familiar tools:** Docker, REST APIs, web dashboards.
-    - **Instant verification:** Built-in attestation endpoints.
-    - **Automated security:** Certificates, keys, and policies managed for you.
+  <Tab title="Developer Experience">
+    <p>Push a container, supply an optional policy file, and dstack does the rest.  Build, test, and deploy stay unchanged; the only visible difference is a signed attestation URL you can feed to clients or CI tests.</p>
   </Tab>
-  <Tab title="For Security Teams">
-    - **Hardware root of trust:** Intel TDX and memory encryption.
-    - **Zero-trust by design:** Even admins can't access your data.
-    - **Transparent:** Open-source and fully auditable.
-    - **Decentralized keys:** No single point of failure.
+  <Tab title="Security Posture">
+    <p>Workloads inherit a hardware root of trust.  Memory remains encrypted even from the host kernel; attestation proofs are checked on every service‑to‑service call; secrets are sealed to the enclave so database passwords never touch disk.</p>
   </Tab>
-  <Tab title="For Enterprises">
-    - **No lock-in:** Deploy anywhere with TEE support.
-    - **Compliance-ready:** Hardware-based security guarantees.
-    - **Simple ops:** Fits right into existing DevOps.
-    - **Progressive:** Start small, scale securely.
+  <Tab title="Enterprise Outcomes">
+    <p>dstack avoids vendor lock‑in by targeting open TEE standards.  Compliance teams gain continuous evidence instead of annual snapshots, and the migration path is incremental—start with a single sensitive service, then expand.</p>
   </Tab>
 </Tabs>
 
-### The Trust Problem in Cloud Computing
+---
 
-<smoothly_flowing_prose_paragraphs>
-To understand dstack's significance, we must first examine the trust relationships in traditional cloud computing:
-
-1. **Infrastructure Trust**: Users must trust cloud providers not to access their data
-2. **Software Trust**: Applications assume the underlying OS and hypervisor are secure
-3. **Operational Trust**: DevOps teams trust that security policies are correctly implemented
-4. **Regulatory Trust**: Compliance requires demonstrable data protection measures
-
-Each of these trust relationships represents a potential vulnerability. Data breaches, insider threats, and supply chain attacks exploit these trust assumptions. Confidential computing, enabled by hardware features like Intel TDX, AMD SEV-SNP, and ARM CCA, promises to eliminate these trust requirements by providing cryptographically verifiable execution environments.
-</smoothly_flowing_prose_paragraphs>
-
-### The Implementation Gap
-
-Despite the availability of TEE hardware, adoption remains limited due to:
-
-<div className="grid grid-cols-1 md:grid-cols-2 gap-4 my-6">
-  <div className="bg-red-50 p-4 rounded-lg">
-    <h4 className="font-semibold text-red-900 mb-2">Technical Complexity</h4>
-    <ul className="text-sm space-y-1">
-      <li>• Low-level programming requirements</li>
-      <li>• Complex attestation protocols</li>
-      <li>• Hardware-specific implementations</li>
-      <li>• Limited debugging capabilities</li>
-    </ul>
-  </div>
-  <div className="bg-orange-50 p-4 rounded-lg">
-    <h4 className="font-semibold text-orange-900 mb-2">Operational Challenges</h4>
-    <ul className="text-sm space-y-1">
-      <li>• Incompatible with existing workflows</li>
-      <li>• Steep learning curve</li>
-      <li>• Limited tooling ecosystem</li>
-      <li>• Difficult performance optimization</li>
-    </ul>
-  </div>
-</div>
-
-## The dstack Solution
-
-<smoothly_flowing_prose_paragraphs>
-dstack addresses the implementation gap through a carefully designed abstraction layer that preserves security guarantees while providing operational familiarity. The platform's architecture reflects a deep understanding of both the cryptographic requirements of secure computing and the practical needs of modern DevOps workflows.
-</smoothly_flowing_prose_paragraphs>
-
-### Core Architecture
-
-<div className="my-8">
-  <img src="/docs/images/dstack-architecture-detailed.png" alt="dstack Architecture" className="w-full rounded-lg shadow-lg" />
-</div>
-
-The dstack architecture comprises four primary layers:
-
-#### 1. Hardware Security Layer
-<Highlight>
-The foundation of dstack's security model lies in hardware-enforced isolation provided by processor TEE features.
-</Highlight>
-
-- **Intel TDX (Trust Domain Extensions)**: Provides VM-level isolation with memory encryption
-- **AMD SEV-SNP (Secure Encrypted Virtualization)**: Offers similar protections on AMD platforms
-- **ARM CCA (Confidential Compute Architecture)**: Emerging standard for ARM-based systems
-
-#### 2. Platform Orchestration Layer
-
-The orchestration layer manages the lifecycle of confidential workloads:
-
-```rust
-// Simplified representation of CVM orchestration
-pub struct ConfidentialVM {
-    id: Uuid,
-    attestation: AttestationReport,
-    network: SecureNetworkConfig,
-    resources: ResourceAllocation,
-}
-
-impl ConfidentialVM {
-    pub async fn deploy(&self, container: ContainerSpec) -> Result<Deployment> {
-        // 1. Verify container integrity
-        let measurements = self.measure_container(&container)?;
-        
-        // 2. Allocate secure resources
-        let resources = self.allocate_resources()?;
-        
-        // 3. Establish secure channels
-        let network = self.setup_secure_network()?;
-        
-        // 4. Launch with attestation
-        self.launch_with_attestation(measurements, resources, network).await
-    }
-}
-```
-
-#### 3. Service Mesh Layer
-
-dstack implements a security-aware service mesh that handles:
-
-- **Secure Ingress**: TLS termination with automatic certificate management
-- **Service Discovery**: Attestation-based service registry
-- **Load Balancing**: Security-aware traffic distribution
-- **Observability**: Privacy-preserving metrics and logging
-
-#### 4. Developer Interface Layer
-
-The top layer provides familiar interfaces:
-
-- **REST API**: Comprehensive programmatic access
-- **Web Dashboard**: Visual deployment and management
-- **CLI Tools**: Command-line workflow integration
-- **SDKs**: Language-specific libraries for attestation-aware applications
-
-### Key Innovations
-
-<smoothly_flowing_prose_paragraphs>
-dstack's value proposition extends beyond simple abstraction. The platform introduces several key innovations that advance the state of confidential computing:
-</smoothly_flowing_prose_paragraphs>
-
-#### 1. Composable Security
-
-Rather than requiring monolithic secure applications, dstack enables composition of secure services:
-
-```yaml
-# Example: Secure multi-tier application
-version: '3.8'
-services:
-  frontend:
-    image: webapp:latest
-    security_policy:
-      attestation: required
-      network: encrypted
-      
-  api:
-    image: api-server:latest
-    security_policy:
-      attestation: strict
-      secrets: sealed
-      
-  database:
-    image: postgres:secure
-    security_policy:
-      attestation: strict
-      storage: encrypted
-      isolation: maximum
-```
-
-#### 2. Progressive Security Enhancement
-
-Applications can adopt security features incrementally:
-
-<Steps>
-  <Step title="Level 0: Standard Deployment">
-    Deploy existing containers without modification
-  </Step>
-  <Step title="Level 1: Basic Isolation">
-    Enable TEE execution with default policies
-  </Step>
-  <Step title="Level 2: Attestation Integration">
-    Add attestation verification to application logic
-  </Step>
-  <Step title="Level 3: Full Confidentiality">
-    Implement end-to-end encryption with sealed storage
-  </Step>
-</Steps>
-
-#### 3. Decentralized Trust Architecture
-
-<smoothly_flowing_prose_paragraphs>
-Unlike traditional PKI-based trust models, dstack implements a decentralized trust architecture leveraging blockchain technology for critical security decisions. This approach eliminates single points of failure and enables autonomous security policy enforcement.
-</smoothly_flowing_prose_paragraphs>
+## How a deployment works
 
 ```mermaid
-graph TD
-    A[Application Deployment] --> B{Smart Contract Verification}
-    B -->|Authorized| C[Generate Attestation Challenge]
-    C --> D[TEE Produces Quote]
-    D --> E{On-Chain Verification}
-    E -->|Valid| F[Issue Access Tokens]
-    E -->|Invalid| G[Deployment Rejected]
-    F --> H[Secure Application Access]
+sequenceDiagram
+    participant CI
+    participant dstack
+    participant CPU
+    CI->>dstack: push image & policy
+    dstack->>CPU: create CVM (TDX/SEV)
+    CPU-->>dstack: cryptographic quote
+    dstack-->>CI: signed URL + TLS cert
+    CI->>Users: expose attested endpoint
 ```
 
-## Technical Specifications
+*The quote is signed inside the chip and can be verified by anyone without trusting dstack.*
 
-### System Requirements
+---
 
-<div className="bg-gray-50 p-6 rounded-lg my-6">
-  <h4 className="font-semibold mb-4">Minimum Hardware Requirements</h4>
-  <div className="grid grid-cols-2 gap-6">
-    <div>
-      <h5 className="font-medium text-gray-700 mb-2">Processor</h5>
-      <ul className="text-sm space-y-1">
-        <li>• Intel Xeon Scalable (4th Gen) with TDX</li>
-        <li>• AMD EPYC (3rd Gen) with SEV-SNP</li>
-        <li>• Minimum 8 physical cores</li>
-      </ul>
-    </div>
-    <div>
-      <h5 className="font-medium text-gray-700 mb-2">Memory & Storage</h5>
-      <ul className="text-sm space-y-1">
-        <li>• 32GB ECC RAM minimum</li>
-        <li>• 500GB NVMe SSD</li>
-        <li>• Hardware RNG support</li>
-      </ul>
-    </div>
-  </div>
-</div>
-
-### Performance Characteristics
-
-<smoothly_flowing_prose_paragraphs>
-The performance impact of confidential computing varies based on workload characteristics. dstack's optimizations minimize overhead while maintaining security guarantees:
-</smoothly_flowing_prose_paragraphs>
-
-| Workload Type | Typical Overhead | Optimization Strategy |
-|---------------|------------------|----------------------|
-| CPU-Intensive | 5-10% | Batch processing, cache optimization |
-| Memory-Intensive | 10-20% | Page pooling, encrypted memory reuse |
-| I/O-Intensive | 15-30% | Async I/O, batched encryption |
-| Network-Heavy | 10-15% | Connection pooling, protocol optimization |
-
-### Security Guarantees
-
-dstack provides the following cryptographic guarantees:
-
-1. **Confidentiality**: Data remains encrypted in memory, inaccessible to privileged software
-2. **Integrity**: Code and data modifications are detectable through attestation
-3. **Authenticity**: Cryptographic proof of genuine TEE execution
-4. **Freshness**: Protection against replay attacks through nonce-based attestation
-5. **Non-repudiation**: Blockchain-anchored audit trails
-
-## Use Cases and Applications
-
-<smoothly_flowing_prose_paragraphs>
-The convergence of operational simplicity and strong security guarantees enables new categories of applications previously impractical or impossible:
-</smoothly_flowing_prose_paragraphs>
-
-### Healthcare and Genomics
-
-<div className="bg-blue-50 border-l-4 border-blue-400 p-4 my-4">
-  <h4 className="font-semibold text-blue-800">Secure Multi-Institutional Research</h4>
-  <p className="text-sm mt-2">
-    Enable collaborative analysis of sensitive patient data across institutions without exposing individual records. Researchers can run algorithms on combined datasets while maintaining HIPAA compliance and patient privacy.
-  </p>
-</div>
-
-### Financial Services
-
-<div className="bg-green-50 border-l-4 border-green-400 p-4 my-4">
-  <h4 className="font-semibold text-green-800">Confidential Trading Systems</h4>
-  <p className="text-sm mt-2">
-    Deploy high-frequency trading algorithms and risk models in shared infrastructure without revealing proprietary strategies. Enable secure multi-party computation for regulatory reporting.
-  </p>
-</div>
-
-### Artificial Intelligence
-
-<div className="bg-purple-50 border-l-4 border-purple-400 p-4 my-4">
-  <h4 className="font-semibold text-purple-800">Privacy-Preserving ML Training</h4>
-  <p className="text-sm mt-2">
-    Train machine learning models on sensitive datasets without exposing training data. Protect both model intellectual property and data privacy throughout the ML lifecycle.
-  </p>
-</div>
-
-## Comparison with Alternatives
-
-<smoothly_flowing_prose_paragraphs>
-Understanding dstack's position in the confidential computing landscape requires comparison with alternative approaches:
-</smoothly_flowing_prose_paragraphs>
-
-<div className="overflow-x-auto my-6">
-  <table className="min-w-full">
-    <thead className="bg-gray-100">
-      <tr>
-        <th className="p-3 text-left">Approach</th>
-        <th className="p-3 text-left">Security Level</th>
-        <th className="p-3 text-left">Operational Complexity</th>
-        <th className="p-3 text-left">Performance Impact</th>
-        <th className="p-3 text-left">Flexibility</th>
-      </tr>
-    </thead>
-    <tbody className="text-sm">
-      <tr>
-        <td className="p-3 border font-medium">dstack</td>
-        <td className="p-3 border text-green-600">Hardware-enforced</td>
-        <td className="p-3 border text-green-600">Low (Docker-compatible)</td>
-        <td className="p-3 border text-yellow-600">5-30%</td>
-        <td className="p-3 border text-green-600">High</td>
-      </tr>
-      <tr className="bg-gray-50">
-        <td className="p-3 border font-medium">Raw TEE SDKs</td>
-        <td className="p-3 border text-green-600">Hardware-enforced</td>
-        <td className="p-3 border text-red-600">Very High</td>
-        <td className="p-3 border text-green-600">5-15%</td>
-        <td className="p-3 border text-yellow-600">Medium</td>
-      </tr>
-      <tr>
-        <td className="p-3 border font-medium">Homomorphic Encryption</td>
-        <td className="p-3 border text-green-600">Mathematical</td>
-        <td className="p-3 border text-yellow-600">High</td>
-        <td className="p-3 border text-red-600">100-10,000x</td>
-        <td className="p-3 border text-red-600">Low</td>
-      </tr>
-      <tr className="bg-gray-50">
-        <td className="p-3 border font-medium">Software Enclaves</td>
-        <td className="p-3 border text-yellow-600">Software-based</td>
-        <td className="p-3 border text-green-600">Medium</td>
-        <td className="p-3 border text-yellow-600">20-50%</td>
-        <td className="p-3 border text-green-600">High</td>
-      </tr>
-    </tbody>
-  </table>
-</div>
-
-## Future Directions
-
-<smoothly_flowing_prose_paragraphs>
-The dstack platform continues to evolve in response to advances in hardware capabilities and emerging use cases. Current research and development focuses on:
-</smoothly_flowing_prose_paragraphs>
-
-### Near-Term Roadmap (6-12 months)
-
-- **Multi-Cloud Federation**: Seamless deployment across heterogeneous TEE platforms
-- **Advanced Scheduling**: ML-driven workload placement optimization
-- **Enhanced Observability**: Privacy-preserving distributed tracing
-- **Compliance Automation**: Built-in support for GDPR, HIPAA, PCI-DSS
-
-### Long-Term Vision (2-5 years)
-
-- **Quantum-Resistant Security**: Post-quantum cryptographic primitives
-- **Edge Computing Integration**: TEE support for IoT and edge devices
-- **Interoperability Standards**: Industry-wide confidential computing protocols
-- **Autonomous Security**: Self-healing security policies using AI
-
-## Getting Started with dstack
-
-<smoothly_flowing_prose_paragraphs>
-The journey to secure computing with dstack begins with understanding your security requirements and mapping them to platform capabilities. We recommend a phased approach:
-</smoothly_flowing_prose_paragraphs>
+## Growing into confidentiality
 
 <Steps>
-  <Step title="Assessment Phase">
-    Evaluate your applications' security requirements and compliance needs
-  </Step>
-  <Step title="Proof of Concept">
-    Deploy a non-critical application to familiarize yourself with the platform
-  </Step>
-  <Step title="Pilot Deployment">
-    Migrate a security-sensitive workload with limited scope
-  </Step>
-  <Step title="Production Rollout">
-    Expand deployment based on pilot learnings and performance metrics
-  </Step>
-  <Step title="Advanced Integration">
-    Implement attestation-aware features and multi-party computation
-  </Step>
+  <Step title="Level 0">Run the same container, no policy—observe baseline metrics.</Step>
+  <Step title="Level 1">Enable TEE isolation with a one‑line policy.</Step>
+  <Step title="Level 2">Make your app verify the peer’s attestation token.</Step>
+  <Step title="Level 3">Seal secrets to the enclave and encrypt all persistent storage.</Step>
 </Steps>
 
-## Conclusion
+Because each level builds on the last, teams can harden services iteratively instead of rewriting everything at once.
 
-<smoothly_flowing_prose_paragraphs>
-dstack represents a fundamental shift in how we approach secure computing. By making hardware-based security accessible through familiar operational patterns, the platform enables a future where data privacy is guaranteed by physics rather than policy. The implications extend beyond technical architecture to reshape business models, regulatory frameworks, and trust relationships in the digital economy.
+---
 
-The platform's success lies not in the sophistication of its cryptographic implementations but in their invisibility to end users. Just as HTTPS made encryption ubiquitous by making it transparent, dstack aims to make confidential computing the default rather than the exception. In doing so, it paves the way for a more secure, private, and trustworthy digital infrastructure.
-</smoothly_flowing_prose_paragraphs>
+## Performance and footprint
 
-## Next Steps
+| Workload profile | Typical overhead | What dstack optimises |
+|------------------|------------------|-----------------------|
+| CPU‑bound microservice | 5‑10 % | Pin hot data, minimise exits |
+| Memory analytics job | 10‑18 % | Batch page faults, reuse encrypted pages |
+| I/O‑heavy ETL | 15‑25 % | Async pipelines, vectorised crypto |
 
-Ready to begin your journey with dstack? Explore these resources:
+dstack’s scheduler bins similar workloads together and chooses CPU features (TDX vs SEV) that minimise cost for the SLA you set.
 
-<div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-8">
-  <a href="/docs/quickstart" className="block p-6 bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors">
-    <h3 className="font-semibold text-blue-900 mb-2">Quick Start Guide</h3>
-    <p className="text-sm text-blue-700">Deploy your first secure application in 10 minutes</p>
+Minimum host: 8 physical cores, 32 GB RAM, NVMe storage, and a TEE‑capable microcode revision.
+
+---
+
+## Secure multi‑service example
+
+```yaml
+docker-compose:
+  version: "3.9"
+  services:
+    api:
+      image: registry/my-api:1.4
+      security_policy:
+        attestation: strict
+        secrets: sealed
+    db:
+      image: postgres:secure
+      security_policy:
+        isolation: maximum
+        storage: encrypted
+```
+
+The same file works on any cluster that advertises TEE support; dstack translates the policy into the right CPU instructions and certificates.
+
+---
+
+## Real‑world impact
+
+### Healthcare research
+Researchers can combine encrypted medical datasets across hospitals without ever moving raw records off‑prem.  Analytics run in CVMs, results are shared, yet no institution sees the other’s patient data.
+
+### Financial trading
+Quant teams deploy proprietary models to co‑located data centres while cryptographically proving to regulators that market data is kept segregated from strategy code.
+
+### Gen‑AI model serving
+Large language models with sensitive IP weights run inside enclaves, so hosting providers cannot dump parameters, and customers can supply private prompts without leaking them to the operator.
+
+---
+
+## dstack vs other approaches
+
+| | dstack | Raw TEE SDK | Homomorphic Enc. | Software enclaves |
+|---|---|---|---|---|
+| Security anchor | CPU hardware | CPU hardware | Math only | Obfuscated SW |
+| Dev effort | Docker push | Rewrite in C/ASM | Redesign algorithms | Recompile |
+| Overhead | 5‑25 % | 5‑15 % | 100‑10,000× | 20‑50 % |
+| Portability | Any TEE cloud | Tied to vendor | CPU‑agnostic | OS‑specific |
+
+TEEs give the strongest guarantees with practical performance; dstack is the shortest on‑ramp to TEEs.
+
+---
+
+## Where to go next
+
+<div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-6">
+  <a href="/docs/quickstart" className="block p-5 bg-blue-50 rounded-lg hover:bg-blue-100 transition">
+    <strong className="text-blue-800">Quick Start</strong><br/>
+    Launch your first CVM in ten minutes.
   </a>
-  <a href="/docs/concepts/architecture" className="block p-6 bg-green-50 rounded-lg hover:bg-green-100 transition-colors">
-    <h3 className="font-semibold text-green-900 mb-2">Architecture Deep Dive</h3>
-    <p className="text-sm text-green-700">Understand the technical implementation details</p>
+  <a href="/docs/concepts/architecture" className="block p-5 bg-green-50 rounded-lg hover:bg-green-100 transition">
+    <strong className="text-green-800">Architecture Deep Dive</strong><br/>
+    Explore schedulers, quotes, and policy engine.
   </a>
-  <a href="/docs/concepts/security-model" className="block p-6 bg-purple-50 rounded-lg hover:bg-purple-100 transition-colors">
-    <h3 className="font-semibold text-purple-900 mb-2">Security Model</h3>
-    <p className="text-sm text-purple-700">Explore cryptographic foundations and threat model</p>
+  <a href="/docs/concepts/security-model" className="block p-5 bg-purple-50 rounded-lg hover:bg-purple-100 transition">
+    <strong className="text-purple-800">Security Model</strong><br/>
+    Threat model, crypto primitives, formal proofs.
   </a>
-  <a href="/docs/tutorials/python-example" className="block p-6 bg-orange-50 rounded-lg hover:bg-orange-100 transition-colors">
-    <h3 className="font-semibold text-orange-900 mb-2">Practical Tutorial</h3>
-    <p className="text-sm text-orange-700">Build a secure application step by step</p>
+  <a href="/docs/tutorials/python-example" className="block p-5 bg-orange-50 rounded-lg hover:bg-orange-100 transition">
+    <strong className="text-orange-800">Hands‑on Tutorial</strong><br/>
+    Build and attest a Python microservice end‑to‑end.
   </a>
-</div> 
+</div>
+
+---
+
+## TL;DR
+
+> **dstack** is the missing developer platform for confidential computing: push containers, get hardware‑backed privacy, keep using the tooling you love.
