@@ -1,17 +1,30 @@
 ---
 title: "First Deployment"
-description: "Deploy your first secure application to a TEE with dstack in minutes"
+description: "Deploy your first secure application to your self-hosted dstack infrastructure"
 ---
 
 # Your First dstack Deployment
 
-This guide walks you through deploying your first application to a Trusted Execution Environment using dstack. We'll deploy a simple web application and verify it's running securely.
+<div className="bg-blue-50 border-l-4 border-blue-400 p-4 mb-6">
+  <div className="flex">
+    <div className="ml-3">
+      <p className="text-sm text-blue-700">
+        <strong>Prerequisites:</strong> Complete both <a href="/docs/getting-started/installation" className="underline font-medium">Installation</a> and <a href="/docs/getting-started/start" className="underline font-medium">Environment Setup</a> before proceeding. This guide assumes your dstack infrastructure is running and configured.
+      </p>
+    </div>
+  </div>
+</div>
+
+This final guide in the self-hosted dstack deployment series walks you through deploying your first application to your newly configured Trusted Execution Environment. You'll deploy a containerized application, verify it's running securely within your infrastructure, and confirm the end-to-end security guarantees.
 
 <div className="bg-green-50 border-l-4 border-green-400 p-4 mb-6">
   <div className="flex">
     <div className="ml-3">
       <p className="text-sm text-green-700">
-        <strong>Time Required:</strong> About 5-10 minutes after dstack is installed
+        <strong>🎉 Final Step:</strong> Deploy and verify your first secure application on your self-hosted dstack infrastructure.
+      </p>
+      <p className="text-sm text-green-700 mt-2">
+        <strong>Time Required:</strong> About 15-30 minutes after your dstack services are running.
       </p>
     </div>
   </div>
@@ -19,12 +32,32 @@ This guide walks you through deploying your first application to a Trusted Execu
 
 ## Prerequisites
 
-Before starting:
+Before starting this deployment:
 
-- ✅ dstack installed and running ([Installation Guide](/docs/getting-started/installation))
-- ✅ TEE-capable hardware (Intel TDX)
-- ✅ Basic familiarity with Docker
-- ✅ Terminal access to your server
+- ✅ dstack installed via the [Installation Guide](/docs/getting-started/installation)
+- ✅ Environment configured via the [Environment Setup Guide](/docs/getting-started/start)  
+- ✅ All dstack services running (KMS, Gateway, VMM)
+- ✅ TEE-capable hardware (Intel TDX) verified and operational
+- ✅ Network access to your dstack management interface (http://localhost:9080)
+
+<details>
+<summary>Quick Service Verification</summary>
+
+Verify your dstack services are operational:
+
+```bash
+# Check VMM health
+curl -s http://localhost:9080/api/health | jq .
+# Expected: {"status":"healthy","version":"0.5.1","attestation":"available"}
+
+# Verify service processes
+ps aux | grep -E 'dstack-(kms|gateway|vmm)'
+
+# Check service logs if needed
+sudo journalctl -u dstack-vmm --no-pager -n 10
+```
+
+</details>
 
 ## Step 1: Prepare Your Application
 
