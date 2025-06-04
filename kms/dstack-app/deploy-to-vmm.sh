@@ -32,8 +32,14 @@ else
 # The URL of the dstack app image download URL
 # IMAGE_DOWNLOAD_URL=https://files.kvin.wang/images/mr_{OS_IMAGE_HASH}.tar.gz
 
+# Image hash verification feature flag
+# VERIFY_IMAGE=true
+
 # The URL of the Ethereum RPC service
 ETH_RPC_URL=https://rpc.phala.network
+
+# The Git repository to deploy
+# GIT_REPOSITORY=https://github.com/Dstack-TEE/dstack.git
 
 # The Git revision to deploy
 GIT_REV=HEAD
@@ -56,6 +62,8 @@ required_env_vars=(
   "KMS_CONTRACT_ADDR"
   "ETH_RPC_URL"
   "IMAGE_DOWNLOAD_URL"
+  "VERIFY_IMAGE"
+  "GIT_REPOSITORY"
 )
 
 for var in "${required_env_vars[@]}"; do
@@ -85,6 +93,8 @@ subvar KMS_CONTRACT_ADDR
 subvar GIT_REV
 subvar IMAGE_DOWNLOAD_URL
 subvar ADMIN_TOKEN_HASH
+subvar VERIFY_IMAGE
+subvar GIT_REPOSITORY
 
 echo "Docker compose file:"
 cat "$COMPOSE_TMP"

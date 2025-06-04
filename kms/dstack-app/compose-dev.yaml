@@ -7,7 +7,7 @@ services:
         WORKDIR /app
 
         RUN apk add --no-cache git
-        RUN git clone https://github.com/Dstack-TEE/dstack.git && \
+        RUN git clone ${GIT_REPOSITORY} && \
             cd dstack && \
             git checkout ${GIT_REV}
         WORKDIR /app/dstack/kms/auth-eth
