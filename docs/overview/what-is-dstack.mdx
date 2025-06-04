@@ -1,187 +1,94 @@
 ---
-title: "What is dstack?"
-description: "dstack lets teams ship hardware‑grade confidentiality with the tooling they already know—no TEE wizardry required."
+title: "DStack Architecture"
+description: "A comprehensive exploration of dstack's architecture, detailing its components, innovations, and zero-trust principles for confidential containers in Web3."
 ---
 
-# What is dstack?
+# DStack Architecture Deep Dive
 
-<page_summary>
-**dstack** converts the raw power of modern Trusted Execution Environments (TEEs) into a push‑button workflow that feels just like shipping ordinary containers.  Applications run inside hardware‑isolated *Confidential VMs* (CVMs), yet developers interact with Docker, REST, and familiar CI/CD.  The result is cloud infrastructure that keeps customer data encrypted at rest, in transit, *and while it is being processed*—without rewriting code or trusting the cloud operator.
-</page_summary>
+This document offers a thorough exploration of dstack’s architecture, a zero-trust platform engineered to deliver secure, decentralized, and verifiable computing for Web3 applications. By harnessing Trusted Execution Environments (TEEs), dstack introduces a novel approach to confidential containers, ensuring that data and code remain protected, portable, and transparent across diverse hardware environments. Here, we dissect the platform’s core components, their interplay, and the innovations that distinguish dstack as a leader in confidential computing.
 
----
+## Introduction
 
-## Why dstack exists
+dstack addresses the critical need for secure, decentralized application deployment in Web3, where traditional trust models fall short. It leverages TEEs—hardware-based isolation mechanisms like Intel TDX, AMD SEV-SNP, and ARM CCA—to create confidential containers. These containers safeguard data confidentiality, code integrity, and operational verifiability without dependence on centralized authorities. Unlike conventional TEE implementations, which suffer from vendor lock-in, censorship vulnerabilities, and incomplete trust chains, dstack introduces a robust architecture built on three foundational innovations: Portable Confidential Containers, Decentralized Code Management, and Verifiable Domain Management. This deep dive unpacks these concepts and the technical machinery that brings them to life.
 
-Cloud computing was built on an unspoken bargain: *trust us with your plaintext and we’ll give you scale*.  As data becomes more sensitive and regulation tighter, that bargain no longer works.  TEEs—including Intel TDX, AMD SEV‑SNP, and ARM CCA—finally make it possible to run code on encrypted data, but they arrive as low‑level CPU features, not developer platforms.  dstack supplies the missing platform layer: it packages those hardware controls into everyday DevOps primitives, so organisations can adopt confidential computing without assembling a cryptography team.
 
-<div className="grid md:grid-cols-2 gap-6 my-8">
-  <div className="p-6 bg-gray-50 rounded-lg shadow">
-    <h3 className="font-semibold mb-2">Before dstack</h3>
-    <p className="text-sm leading-relaxed">
-      Teams wrestle with vendor‑specific SDKs, bespoke attestation flows, and opaque
-      debugging.  Security policies live in wikis; secrets sprawl across pipelines; audits are
-      point‑in‑time PDFs.  Most projects stall before reaching production.
-    </p>
-  </div>
-  <div className="p-6 bg-emerald-50 rounded-lg shadow">
-    <h3 className="font-semibold mb-2">With dstack</h3>
-    <p className="text-sm leading-relaxed">
-      A container image, a YAML policy, and a `dstack deploy` are enough to launch a fully
-      attested workload.  Keys, certificates, and evidence are managed automatically, and
-      dashboards show real‑time cryptographic proof that the service is running exactly the
-      code you pushed—nowhere else.
-    </p>
-  </div>
-</div>
+## System Design
 
----
+At its core, dstack’s architecture revolves around the seamless integration of four primary components: dstack-os, dstack-kms, dstack-ingress, and dstack-gateway. Together, they form a cohesive system that abstracts hardware differences, manages cryptographic keys, and secures communication channels—all while adhering to Web3’s decentralized ethos.
 
-## Architecture at a glance
+dstack-os serves as the hardware abstraction layer, providing a consistent runtime environment across disparate TEE platforms. dstack-kms handles key management with blockchain oversight, ensuring keys are portable and secure. Meanwhile, dstack-ingress and dstack-gateway facilitate secure, verifiable communication between applications and users. This design ensures that confidential containers can be deployed, executed, and accessed with end-to-end security and transparency.
 
-<img src="/docs/images/dstack-architecture-detailed.png" alt="dstack architecture" className="w-full rounded-lg shadow" />
+## Deep Dive into Components
 
-1. **Hardware Security Layer** — CPU isolates CVM memory with encryption and integrity trees.
-2. **Orchestration Layer** — dstack Scheduler allocates CVMs, injects measurements, and streams attestation evidence.
-3. **Service Mesh** — Sidecars terminate TLS, verify peer attestations, and feed privacy‑preserving metrics.
-4. **Developer Interfaces** — REST API, CLI, and web dashboard expose a Kubernetes‑like UX without exposing secrets.
+### dstack-os: Hardware Abstraction Layer
 
-Every layer is open source, so auditors can examine the exact code path from API call to enclave launch.
+dstack-os is a lightweight operating system optimized for TEEs, engineered to bridge the gap between diverse hardware implementations. Its primary role is to provide a uniform runtime environment, enabling applications to operate seamlessly across Intel, AMD, or ARM TEEs without modification.
 
----
+The secure boot process of dstack-os establishes a verifiable chain of trust. Starting with the hypervisor, each layer measures the subsequent one—recording cryptographic digests in hardware registers such as MRTD and RTMR0-3 (specific to Intel TDX, with analogous registers in other TEEs). For instance, the hypervisor loads the Open Virtual Machine Firmware (OVMF), which configures the virtual machine and loads the Linux kernel. The kernel then initializes the root filesystem, which manages application execution. Each step’s measurement is captured in the TEE’s attestation report, allowing external parties to verify the system’s integrity.
 
-## Developer, Security, Business lenses
+To minimize vulnerabilities, dstack-os adopts a lean design, incorporating only essential utilities like busybox, filesystem support, and a container runtime. This reduced footprint shrinks the attack surface and simplifies auditing. Furthermore, its open-source codebase and reproducible builds enable independent verification, ensuring the deployed image matches the reviewed source. Data security is reinforced through dm-verity for block-level integrity and LUKS for disk encryption, with keys sourced from dstack-kms to maintain portability across TEE instances.
 
-<Tabs>
-  <Tab title="Developer Experience">
-    <p>Push a container, supply an optional policy file, and dstack does the rest.  Build, test, and deploy stay unchanged; the only visible difference is a signed attestation URL you can feed to clients or CI tests.</p>
-  </Tab>
-  <Tab title="Security Posture">
-    <p>Workloads inherit a hardware root of trust.  Memory remains encrypted even from the host kernel; attestation proofs are checked on every service‑to‑service call; secrets are sealed to the enclave so database passwords never touch disk.</p>
-  </Tab>
-  <Tab title="Enterprise Outcomes">
-    <p>dstack avoids vendor lock‑in by targeting open TEE standards.  Compliance teams gain continuous evidence instead of annual snapshots, and the migration path is incremental—start with a single sensitive service, then expand.</p>
-  </Tab>
-</Tabs>
 
----
+### dstack-kms: Blockchain-Controlled Key Management
 
-## How a deployment works
+dstack-kms is the cryptographic backbone of dstack, delivering a decentralized key management service that liberates keys from hardware-specific constraints. This independence is pivotal for enabling data and application portability across TEEs while upholding stringent security standards.
 
-```mermaid
-sequenceDiagram
-    participant CI
-    participant dstack
-    participant CPU
-    CI->>dstack: push image & policy
-    dstack->>CPU: create CVM (TDX/SEV)
-    CPU-->>dstack: cryptographic quote
-    dstack-->>CI: signed URL + TLS cert
-    CI->>Users: expose attested endpoint
-```
 
-*The quote is signed inside the chip and can be verified by anyone without trusting dstack.*
+For each application, dstack-kms generates a unique root key derived from the application’s code and configuration. This root key serves as the foundation for a hierarchy of derived keys—such as those for disk encryption, environment variables, and cryptographic signing. Unlike traditional TEEs, where keys are tethered to specific hardware, dstack-kms ensures that keys remain tied to the application itself, facilitating seamless migration between TEE instances.
 
----
+Key rotation is a critical feature of dstack-kms. In multi-party computation (MPC) scenarios, individual key shares can be rotated without altering the root key, maintaining continuity. In cases of suspected compromise, a full root key rotation is executed, with a handover period to re-encrypt data securely. Governance is enforced through smart contracts, such as KmsAuth, which dictate key distribution rules. Only TEE instances running verified code, as confirmed by attestation, can access these keys. A peer-to-peer network of service nodes, synchronized with on-chain policies, ensures resilience and availability.
 
-## Growing into confidentiality
 
-<Steps>
-  <Step title="Level 0">Run the same container, no policy—observe baseline metrics.</Step>
-  <Step title="Level 1">Enable TEE isolation with a one‑line policy.</Step>
-  <Step title="Level 2">Make your app verify the peer’s attestation token.</Step>
-  <Step title="Level 3">Seal secrets to the enclave and encrypt all persistent storage.</Step>
-</Steps>
+The key derivation process is methodical. For example, an application’s certificate authority (CA) key is derived from the root CA key using the application’s unique identifier, while a disk encryption key incorporates both application and instance identifiers. This structure preserves security and portability across deployments.
 
-Because each level builds on the last, teams can harden services iteratively instead of rewriting everything at once.
+### dstack-ingress and dstack-gateway: Domain Management
+
+Secure and verifiable communication is handled by dstack-ingress and dstack-gateway, which together enable HTTPS access to TEE applications with zero-trust principles. dstack-gateway operates as a TEE-based reverse proxy, providing pre-registered wildcard domains (e.g., app-id.dstack.com) with automated TLS certificate management. It verifies an application’s attestation before assigning a subdomain, requiring no changes to the application’s code. Conversely, dstack-ingress supports custom domains with minimal integration, offering TLS passthrough for direct, secure client connections.
+
+Both components rely on Zero Trust TLS (ZT-TLS), a mechanism that cryptographically binds TLS certificates to TEE applications. Certificates are generated within the TEE, linked to secrets from dstack-kms, and verified through a chain extending to the blockchain. This ensures that domains are exclusively controlled by authenticated environments, visible to users via standard browser trust indicators. Security is further bolstered by CAA records, restricting certificate issuance to authorized CAs, and Certificate Transparency monitoring to detect unauthorized certificates.
+
+## How It All Works Together
+
+The synergy of dstack’s components is best illustrated through a typical deployment workflow. Developers begin by submitting a container image and policy to dstack. dstack-os provisions a TEE instance, loading the container and measuring its components into hardware registers. The TEE generates an attestation report, which dstack-kms verifies to confirm the instance’s integrity and authorize key release. With keys in hand, the instance encrypts its data and configures its runtime. dstack-gateway or dstack-ingress then establishes a secure HTTPS endpoint, binding it to the TEE via ZT-TLS. Users access the application through this endpoint, confident in its authenticity thanks to browser-verifiable certificates.
+
+This end-to-end process guarantees that only authorized code executes in a trusted environment, with all interactions secured and auditable.
+
+
+## Security and Trust Model
+
+dstack’s zero-trust security model is rooted in cryptographic verification at every level, eliminating reliance on any single point of trust. The hardware root of trust, provided by TEEs, enforces isolation and measurement. Attestation ensures that only verified components access resources or keys. Smart contracts govern deployment, updates, and key management transparently, while the full chain-of-trust—from hardware to user interaction—remains verifiable. This design aligns with Web3’s trustless paradigm, ensuring that even platform operators cannot undermine the system’s integrity.
+
+## Use Cases and Benefits
+
+dstack’s architecture unlocks powerful use cases for Web3. In AI model training, it enables secure, decentralized computation on confidential datasets across TEE nodes. Autonomous agents benefit from transparent governance and verifiable execution, ensuring predictable behavior. Privacy-preserving analytics become feasible as encrypted data is processed without exposure, fostering collaboration in sensitive domains.
+
+The platform’s benefits are manifold. Portability allows applications to span TEE vendors effortlessly. Enhanced security stems from hardware isolation, key rotation, and decentralized control. Transparency and auditability, driven by blockchain governance, empower users and developers alike.
+
+## Comparison with Other Approaches
+
+dstack stands apart from alternative confidential computing methods. Compared to raw TEE SDKs, it offers a developer-friendly container-based workflow and multi-vendor portability, rather than vendor-specific code customization. Against homomorphic encryption, dstack avoids the need for algorithm redesign, leveraging TEEs and blockchain for practical security and governance. This balance of usability, security, and decentralization makes it uniquely suited for Web3.
+
+## Where to Go Next
+
+If you're researching dstack for your next project and want deeper clarity on its inner workings, start by exploring the [Core Components](/docs/concepts/core-components) reference. This section provides a detailed look at every major component of dstack, complete with architecture diagrams to help you understand how each part fits together.
+
+For hands-on deployment, check out the [Deployment installation and starter guide](/docs/getting-started/installation).
+
+For a technical deep dive, see the [System Design](/docs/concepts/architecture) overview, or read the [Phala Network blog post introducing dstack](https://phala.network/posts/Dstack-A-Zero-Trust-Framework-for-Confidential-Containers).
+
+If you're interested in the security model and want to review the design and threat analysis of specific components, see the following research documents:
+
+🔑 [KMS Security](/docs/security-research/kms-security.mdx) – security architecture and threat model for dstack's decentralized key management service  
+🖥️ [VMM Security](/docs/security-research/vmm-security.mdx) – analysis of the virtual machine monitor and its isolation guarantees  
+🛡️ [TDX Attestation](/docs/security-research/tdx-attestation.mdx) – technical details on Intel TDX attestation flow  
+🗂️ [TDX Attestation System](/docs/security-research/tdx-attestation-system.mdx) – system-level overview of attestation orchestration  
+🔗 [IOHash Security](/docs/security-research/iohash-security.mdx) – integrity and confidentiality of I/O hashing mechanisms  
+🔒 [Host API Security](/docs/security-research/host-api-security.mdx) – security boundaries and controls for host APIs exposed to enclaves  
+🌐 [Gateway Security](/docs/security-research/gateway-security.mdx) – security model for the TEE-based gateway and ingress  
+👁️ [CT Monitor Security](/docs/security-research/ct-monitor-security.mdx) – certificate transparency monitoring and detection of unauthorized certificates  
+🤖 [Certbot Security](/docs/security-research/certbot-security.mdx) – certificate issuance automation and its security posture  
+📜 [Cert Client Security](/docs/security-research/cert-client-security.mdx) – client-side certificate management and validation
 
 ---
 
-## Performance and footprint
-
-| Workload profile | Typical overhead | What dstack optimises |
-|------------------|------------------|-----------------------|
-| CPU‑bound microservice | 5‑10 % | Pin hot data, minimise exits |
-| Memory analytics job | 10‑18 % | Batch page faults, reuse encrypted pages |
-| I/O‑heavy ETL | 15‑25 % | Async pipelines, vectorised crypto |
-
-dstack’s scheduler bins similar workloads together and chooses CPU features (TDX vs SEV) that minimise cost for the SLA you set.
-
-Minimum host: 8 physical cores, 32 GB RAM, NVMe storage, and a TEE‑capable microcode revision.
-
----
-
-## Secure multi‑service example
-
-```yaml
-docker-compose:
-  version: "3.9"
-  services:
-    api:
-      image: registry/my-api:1.4
-      security_policy:
-        attestation: strict
-        secrets: sealed
-    db:
-      image: postgres:secure
-      security_policy:
-        isolation: maximum
-        storage: encrypted
-```
-
-The same file works on any cluster that advertises TEE support; dstack translates the policy into the right CPU instructions and certificates.
-
----
-
-## Real‑world impact
-
-### Healthcare research
-Researchers can combine encrypted medical datasets across hospitals without ever moving raw records off‑prem.  Analytics run in CVMs, results are shared, yet no institution sees the other’s patient data.
-
-### Financial trading
-Quant teams deploy proprietary models to co‑located data centres while cryptographically proving to regulators that market data is kept segregated from strategy code.
-
-### Gen‑AI model serving
-Large language models with sensitive IP weights run inside enclaves, so hosting providers cannot dump parameters, and customers can supply private prompts without leaking them to the operator.
-
----
-
-## dstack vs other approaches
-
-| | dstack | Raw TEE SDK | Homomorphic Enc. | Software enclaves |
-|---|---|---|---|---|
-| Security anchor | CPU hardware | CPU hardware | Math only | Obfuscated SW |
-| Dev effort | Docker push | Rewrite in C/ASM | Redesign algorithms | Recompile |
-| Overhead | 5‑25 % | 5‑15 % | 100‑10,000× | 20‑50 % |
-| Portability | Any TEE cloud | Tied to vendor | CPU‑agnostic | OS‑specific |
-
-TEEs give the strongest guarantees with practical performance; dstack is the shortest on‑ramp to TEEs.
-
----
-
-## Where to go next
-
-<div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-6">
-  <a href="/docs/quickstart" className="block p-5 bg-blue-50 rounded-lg hover:bg-blue-100 transition">
-    <strong className="text-blue-800">Quick Start</strong><br/>
-    Launch your first CVM in ten minutes.
-  </a>
-  <a href="/docs/concepts/architecture" className="block p-5 bg-green-50 rounded-lg hover:bg-green-100 transition">
-    <strong className="text-green-800">Architecture Deep Dive</strong><br/>
-    Explore schedulers, quotes, and policy engine.
-  </a>
-  <a href="/docs/concepts/security-model" className="block p-5 bg-purple-50 rounded-lg hover:bg-purple-100 transition">
-    <strong className="text-purple-800">Security Model</strong><br/>
-    Threat model, crypto primitives, formal proofs.
-  </a>
-  <a href="/docs/tutorials/python-example" className="block p-5 bg-orange-50 rounded-lg hover:bg-orange-100 transition">
-    <strong className="text-orange-800">Hands‑on Tutorial</strong><br/>
-    Build and attest a Python microservice end‑to‑end.
-  </a>
-</div>
-
----
-
-## TL;DR
-
-> **dstack** is the missing developer platform for confidential computing: push containers, get hardware‑backed privacy, keep using the tooling you love.
+**TL;DR**: dstack is a zero-trust platform for Web3, delivering portable, secure, and verifiable confidential containers through a decentralized architecture.

@@ -29,7 +29,8 @@
         "pages": [
           "docs/getting-started/installation",
           "docs/getting-started/start",
-          "docs/getting-started/first-deployment"
+          "docs/getting-started/first-deployment", 
+          "docs/getting-started/deploying-applications"
         ]
       },
       {
@@ -44,13 +45,6 @@
         ]
       },
       {
-        "dropdown": "Deployment",
-        "icon": "cloud-arrow-up",
-        "pages": [
-          "docs/deployment-guides/deploying-applications"
-        ]
-      },
-      {
         "dropdown": "Tutorials",
         "icon": "graduation-cap",
         "pages": [
@@ -58,8 +52,7 @@
           "docs/tutorials/super-quick-start",
           "docs/tutorials/python-example",
           "docs/tutorials/javascript-example",
-          "docs/tutorials/rust-example",
-          "docs/tutorials/secure-web-app"
+          "docs/tutorials/rust-example"
         ]
       },
       {
