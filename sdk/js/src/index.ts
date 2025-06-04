@@ -4,7 +4,7 @@ import http from 'http'
 import https from 'https'
 import { URL } from 'url'
 
-export const __version__ = "0.2.0"
+export const __version__ = "0.2.1"
 
 export interface DeriveKeyResponse {
   key: string
