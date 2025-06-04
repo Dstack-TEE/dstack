@@ -19,7 +19,6 @@
           "docs/overview/what-is-dstack",
           "docs/overview/key-features",
           "docs/overview/benefits",
-          "docs/case-studies", 
           "docs/overview/glossary"
         ]
       },
@@ -27,8 +26,8 @@
         "dropdown": "Getting Started",
         "icon": "rocket",
         "pages": [
-          "docs/getting-started/installation",
           "docs/getting-started/start",
+          "docs/getting-started/installation",
           "docs/getting-started/first-deployment", 
           "docs/getting-started/deploying-applications"
         ]
@@ -60,16 +59,16 @@
         "icon": "shield-halved",
         "pages": [
           "docs/security-research/overview",
+          "docs/security-research/kms-security",
+          "docs/security-research/vmm-security",
+          "docs/security-research/gateway-security",
           "docs/security-research/tdx-attestation",
           "docs/security-research/tdx-attestation-system",
-          "docs/security-research/vmm-security",
-          "docs/security-research/kms-security",
-          "docs/security-research/gateway-security",
-          "docs/security-research/certbot-security",
-          "docs/security-research/cert-client-security",
+          "docs/security-research/iohash-security",
+          "docs/security-research/host-api-security", 
           "docs/security-research/ct-monitor-security",
-          "docs/security-research/host-api-security",
-          "docs/security-research/iohash-security"
+          "docs/security-research/certbot-security",
+          "docs/security-research/cert-client-security"
         ]
       },
       {
