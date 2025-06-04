@@ -1,6 +1,6 @@
 [project]
 name = "dstack-sdk"
-version = "0.2.0"
+version = "0.2.1"
 description = "DStack SDK for Python"
 authors = [
     {name = "Leechael Yim", email = "yanleech@gmail.com"},

@@ -5,11 +5,15 @@ import hashlib
 import os
 import logging
 import base64
+import platform
+import urllib.request
+import urllib.parse
+import socket
 
 from pydantic import BaseModel
 import httpx
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 
 logger = logging.getLogger('dstack_sdk')
 
@@ -114,11 +118,11 @@ class TappdInfoResponse(BaseModel):
     public_sysinfo: bool
 
     @classmethod
-    def model_validate(cls, obj: Any) -> 'TappdInfoResponse':
+    def model_validate(cls, obj: Any, *, strict: bool | None = None, from_attributes: bool | None = None, context: Any = None) -> 'TappdInfoResponse':
         if isinstance(obj, dict) and 'tcb_info' in obj and isinstance(obj['tcb_info'], str):
             obj = dict(obj)
             obj['tcb_info'] = TcbInfo(**json.loads(obj['tcb_info']))
-        return super().model_validate(obj)
+        return super().model_validate(obj, strict=strict, from_attributes=from_attributes, context=context)
 
 
 class BaseClient:

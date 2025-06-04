@@ -51,25 +51,49 @@ For `tdxQuote`, it supports a range of hash algorithms, including:
 
 The SDK provides integration with [viem](https://viem.sh/) for Ethereum account management:
 
+### ⚠️ Deprecated API (shows warning)
 ```typescript
 import { toViemAccount } from '@phala/dstack-sdk/viem';
 
 const keyResult = await client.deriveKey('<unique-id>');
-const account = toViemAccount(keyResult);
+const account = toViemAccount(keyResult); // ⚠️ Security concern, shows warning
 // Use the account with viem operations
 ```
+
+### ✅ Recommended Secure API
+```typescript
+import { toViemAccountSecure } from '@phala/dstack-sdk/viem';
+
+const keyResult = await client.deriveKey('<unique-id>');
+const account = toViemAccountSecure(keyResult); // ✅ Secure, no warning
+// Use the account with viem operations
+```
+
+> **Note**: `toViemAccount` uses first 32 bytes of key material directly (deprecated due to security concerns). `toViemAccountSecure` uses SHA256 hash of complete key material for enhanced security.
 
 ## Solana Integration
 
 The SDK provides integration with [Solana Web3.js](https://solana-labs.github.io/solana-web3.js/) for Solana account management:
 
+### ⚠️ Deprecated API (shows warning)
 ```typescript
 import { toKeypair } from '@phala/dstack-sdk/solana';
 
 const keyResult = await client.deriveKey('<unique-id>');
-const keypair = toKeypair(keyResult);
+const keypair = toKeypair(keyResult); // ⚠️ Security concern, shows warning
 // Use the keypair with Solana Web3.js operations
 ```
+
+### ✅ Recommended Secure API
+```typescript
+import { toKeypairSecure } from '@phala/dstack-sdk/solana';
+
+const keyResult = await client.deriveKey('<unique-id>');
+const keypair = toKeypairSecure(keyResult); // ✅ Secure, no warning
+// Use the keypair with Solana Web3.js operations
+```
+
+> **Note**: `toKeypair` uses first 32 bytes of key material directly (deprecated due to security concerns). `toKeypairSecure` uses SHA256 hash of complete key material for enhanced security.
 
 ## Environment Variables Encryption
 
@@ -87,6 +111,21 @@ const publicKeyHex = '0x...'; // You need get that from Teepod API or Phala Clou
 const encrypted = await encryptEnvVars(envVars, publicKeyHex);
 // encrypted is a hex string containing: ephemeral public key + iv + encrypted data
 ```
+
+## Migration from Deprecated APIs
+
+We've introduced secure versions of key derivation functions due to security concerns with the original implementations:
+
+| Deprecated (⚠️ Security Warning) | Secure Replacement (✅ Recommended) |
+|-----------------------------------|-------------------------------------|
+| `toKeypair()` | `toKeypairSecure()` |
+| `toViemAccount()` | `toViemAccountSecure()` |
+
+**Key Differences:**
+- **Deprecated APIs**: Use first 32 bytes of key material directly
+- **Secure APIs**: Apply SHA256 hash to complete key material
+
+> **Warning**: Deprecated APIs will show console warnings but continue to work for backward compatibility. The secure APIs generate different keys from the same input.
 
 ## API Reference
 
@@ -134,6 +173,26 @@ Generates a TDX quote. The quote is returned in hex format, and you can paste yo
 ##### `info(): Promise<TappdInfoResponse>`
 Retrieves server information.
 - Returns: Information about the Tappd instance
+
+### Viem Integration Functions
+
+#### `toViemAccount(deriveKeyResponse: DeriveKeyResponse)` ⚠️ **DEPRECATED**
+> **Warning**: This function has security concerns. Use `toViemAccountSecure` instead.
+
+Creates a Viem account using first 32 bytes of key material directly.
+
+#### `toViemAccountSecure(deriveKeyResponse: DeriveKeyResponse)` ✅ **RECOMMENDED**
+Creates a Viem account using SHA256 hash of complete key material for enhanced security.
+
+### Solana Integration Functions
+
+#### `toKeypair(deriveKeyResponse: DeriveKeyResponse)` ⚠️ **DEPRECATED**
+> **Warning**: This function has security concerns. Use `toKeypairSecure` instead.
+
+Creates a Solana Keypair using first 32 bytes of key material directly.
+
+#### `toKeypairSecure(deriveKeyResponse: DeriveKeyResponse)` ✅ **RECOMMENDED**
+Creates a Solana Keypair using SHA256 hash of complete key material for enhanced security.
 
 ### Types
 
