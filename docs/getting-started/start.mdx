@@ -3,8 +3,6 @@ title: "Starting with dStack"
 description: "Configure your dstack environment and prepare for secure application deployment"
 ---
 
-# Starting with dStack
-
 <div className="my-6">
   <a
     href="https://github.com/Dstack-TEE/dstack"
@@ -23,21 +21,6 @@ description: "Configure your dstack environment and prepare for secure applicati
 
 Welcome to dStack, a platform designed to provide a secure environment for deploying containerized applications with hardware-backed security guarantees. Before diving into deployment, it’s essential to understand the core components and the structure of the dstack repository. This guide will walk you through the key elements and directories that make up the dstack ecosystem, all hosted at the main repository [https://github.com/Dstack-TEE/dstack/tree/master/](https://github.com/Dstack-TEE/dstack/tree/master/). Each section below links directly to the relevant directory in the repository, helping you explore the packages and systems that power this Trusted Execution Environment (TEE) platform.
 
-## Core Components of dStack
-
-The dstack platform is built on several critical components that work together to ensure secure, hardware-backed application deployment. Here’s an overview of these foundational pieces:
-
-- **dstack-vmm** ([vmm/](https://github.com/Dstack-TEE/dstack/tree/master/vmm)): This component runs on the bare-metal TDX host and is responsible for managing Confidential Virtual Machines (CVMs). It handles their lifecycle—from creation to termination—and serves as the foundational layer for secure workload execution within the dstack environment.
-
-- **dstack-gateway** ([gateway/](https://github.com/Dstack-TEE/dstack/tree/master/gateway)): Acting as a secure reverse proxy, this service forwards incoming TLS connections from external clients to the appropriate CVMs. It ensures encrypted communication and controlled access, making it a vital part of the platform’s security architecture.
-
-- **dstack-kms** ([kms/](https://github.com/Dstack-TEE/dstack/tree/master/kms)): The Key Management Service (KMS) for dstack generates, stores, and manages cryptographic keys for CVMs. It plays an integral role in the attestation and key provisioning processes, ensuring that security credentials are handled securely.
-
-- **dstack-guest-agent** ([guest-agent/](https://github.com/Dstack-TEE/dstack/tree/master/guest-agent)): Running inside each CVM, this agent handles key derivation requests from containers, facilitates attestation, and bridges the guest environment with the broader dstack security infrastructure.
-
-- **meta-dstack**: This is a Yocto meta layer used to build custom CVM guest images. It provides recipes and configurations to create minimal, secure operating system images tailored for confidential workloads. While it doesn’t correspond to a specific directory in the main repository, it’s a key part of the ecosystem for preparing secure environments.
-
-These components collaborate seamlessly to deliver end-to-end security, leveraging the hardware root of trust provided by Intel TDX technology, through to application-level attestation and key management.
 
 ## Exploring the dStack Repository
 

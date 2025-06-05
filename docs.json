@@ -37,8 +37,9 @@
         "icon": "lightbulb",
         "pages": [
           "docs/concepts/overview",
-          "docs/concepts/architecture",
+          "docs/concepts/basic-components",
           "docs/concepts/core-components",
+          "docs/concepts/architecture",
           "docs/concepts/networking",
           "docs/concepts/security-model"
         ]
