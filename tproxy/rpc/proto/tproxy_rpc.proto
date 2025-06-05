@@ -89,12 +89,8 @@ message GetMetaResponse {
 service Tproxy {
   // Register a new proxied CVM.
   rpc RegisterCvm(RegisterCvmRequest) returns (RegisterCvmResponse) {}
-  // List all proxied CVMs.
-  rpc List(google.protobuf.Empty) returns (ListResponse) {}
   // List all ACME account URIs and the public key history of the certificates for the Content Addressable HTTPS.
   rpc AcmeInfo(google.protobuf.Empty) returns (AcmeInfoResponse) {}
-  // Find Proxied HostInfo by instance ID
-  rpc GetInfo(GetInfoRequest) returns (GetInfoResponse) {}
   // Summary API for inspect.
   rpc GetMeta(google.protobuf.Empty) returns (GetMetaResponse);
 }
@@ -105,6 +101,10 @@ message RenewCertResponse {
 }
 
 service TproxyAdmin {
+  // Get the status of the gateway.
+  rpc Status(google.protobuf.Empty) returns (StatusResponse) {}
+  // Find Proxied HostInfo by instance ID
+  rpc GetInfo(GetInfoRequest) returns (GetInfoResponse) {}
   // Exit the TProxy.
   rpc Exit(google.protobuf.Empty) returns (google.protobuf.Empty) {}
   // Renew the proxy TLS certificate if certbot is enabled

@@ -1,4 +1,5 @@
 use crate::{
+    admin_service::AdminRpcHandler,
     main_service::{Proxy, RpcHandler},
     models::CvmList,
 };
@@ -11,7 +12,7 @@ use tproxy_rpc::tproxy_server::TproxyRpc;
 pub async fn index(state: &State<Proxy>) -> anyhow::Result<Html<String>> {
     let context = CallContext::builder().state(&**state).build();
     let rpc_handler =
-        RpcHandler::construct(context.clone()).context("Failed to construct RpcHandler")?;
+        AdminRpcHandler::construct(context.clone()).context("Failed to construct RpcHandler")?;
     let response = rpc_handler.list().await.context("Failed to list hosts")?;
     let rpc_handler = RpcHandler::construct(context).context("Failed to construct RpcHandler")?;
     let acme_info = rpc_handler
