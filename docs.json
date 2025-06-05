@@ -44,7 +44,9 @@
               "docs/concepts/core-components",
               "docs/concepts/core-vmm",
               "docs/concepts/core-gateway",
-              "docs/concepts/core-kms"
+              "docs/concepts/core-kms",
+              "docs/concepts/core-guest-agent",
+              "docs/concepts/core-os"
             ]
           },
           "docs/concepts/networking",

@@ -1,0 +1,47 @@
+---
+title: "OS core"
+description: "Deep dive into dstack's essential components and their roles"
+---
+
+
+### dstack-os Implementation
+
+The operating system provides a secure, minimal foundation:
+
+#### Boot Process
+
+```mermaid
+graph TD
+    UEFI[UEFI Secure Boot] --> GRUB[GRUB Bootloader]
+    GRUB --> KERNEL[Linux Kernel]
+    KERNEL --> INITRD[Initial RAM Disk]
+    INITRD --> TDXCTL[tdxctl SetupFde]
+    TDXCTL --> MOUNT[Mount Encrypted Root]
+    MOUNT --> SYSTEMD[systemd Init]
+    SYSTEMD --> AGENT[dstack-guest-agent]
+    AGENT --> CONTAINERS[User Containers]
+```
+
+#### System Configuration
+
+Key system configurations for security:
+
+```bash
+# /etc/systemd/system/dstack-guest-agent.service
+[Unit]
+Description=dstack Guest Agent
+After=network.target
+Requires=network.target
+
+[Service]
+Type=simple
+User=dstack
+Group=dstack
+ExecStart=/usr/bin/dstack-guest-agent
+Restart=always
+RestartSec=5
+Environment=RUST_LOG=info
+
+[Install]
+WantedBy=multi-user.target
+```

@@ -90,69 +90,7 @@ service Onboard {
 }
 ```
 
-### dstack-guest-agent Implementation
 
-The guest agent provides multiple service interfaces for different use cases:
-
-#### Service Interfaces
-
-```go
-// Main service for applications
-service DstackGuest {
-    rpc GetTlsKey(GetTlsKeyArgs) returns (GetTlsKeyResponse);
-    rpc GetKey(GetKeyArgs) returns (GetKeyResponse);
-    rpc GetQuote(RawQuoteArgs) returns (GetQuoteResponse);
-    rpc EmitEvent(EmitEventArgs) returns (google.protobuf.Empty);
-    rpc Info(google.protobuf.Empty) returns (AppInfo);
-}
-
-// Legacy compatibility service
-service Tappd {
-    rpc DeriveKey(DeriveKeyArgs) returns (GetTlsKeyResponse);
-    rpc DeriveK256Key(GetKeyArgs) returns (DeriveK256KeyResponse);
-    rpc TdxQuote(TdxQuoteArgs) returns (TdxQuoteResponse);
-    rpc RawQuote(RawQuoteArgs) returns (TdxQuoteResponse);
-    rpc Info(google.protobuf.Empty) returns (AppInfo);
-}
-
-// External communication service
-service Worker {
-    rpc Info(google.protobuf.Empty) returns (AppInfo);
-    rpc Version(google.protobuf.Empty) returns (WorkerVersion);
-}
-```
-
-#### Configuration Example
-
-```toml
-# dstack.toml
-[default]
-workers = 8
-max_blocking = 64
-ident = "Dstack guest agent"
-log_level = "info"
-
-[default.core]
-keys_file = "/dstack/.host-shared/.appkeys.json"
-compose_file = "/dstack/.host-shared/app-compose.json"
-sys_config_file = "/dstack/.host-shared/.sys-config.json"
-data_disks = ["/"]
-
-[internal-v0]
-address = "unix:/var/run/tappd.sock"
-reuse = true
-
-[internal]
-address = "unix:/var/run/dstack.sock"
-reuse = true
-
-[external]
-address = "0.0.0.0"
-port = 8090
-
-[guest-api]
-address = "vsock:0xffffffff"
-```
 
 ### dstack-os Implementation
 

@@ -1,0 +1,53 @@
+
+
+# tdxctl Implementation
+
+The TDX control utility provides secure boot and encryption services:
+
+## Commands Reference
+
+<table className="w-full my-4">
+  <thead>
+    <tr className="bg-gray-100">
+      <th className="p-3 text-left">Command</th>
+      <th className="p-3 text-left">Purpose</th>
+      <th className="p-3 text-left">Parameters</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td className="p-3 font-mono">SetupFde</td>
+      <td className="p-3">Initialize full disk encryption</td>
+      <td className="p-3">--root-device, --key-source, --app-id</td>
+    </tr>
+    <tr className="bg-gray-50">
+      <td className="p-3 font-mono">Tboot</td>
+      <td className="p-3">Secure boot with measurements</td>
+      <td className="p-3">--kernel, --initrd, --cmdline</td>
+    </tr>
+    <tr>
+      <td className="p-3 font-mono">ExtendRTMR</td>
+      <td className="p-3">Extend Runtime Measurement Register</td>
+      <td className="p-3">--rtmr-index, --data</td>
+    </tr>
+    <tr className="bg-gray-50">
+      <td className="p-3 font-mono">SealSecret</td>
+      <td className="p-3">Seal data to current PCR state</td>
+      <td className="p-3">--input, --output, --pcrs</td>
+    </tr>
+  </tbody>
+</table>
+
+### Full Disk Encryption Setup
+
+```bash
+# Complete FDE setup command
+tdxctl SetupFde \
+    --root-device /dev/vda2 \
+    --key-source kms \
+    --app-id $APP_ID \
+    --kms-endpoint https://kms.internal:8000 \
+    --integrity-check \
+    --luks-cipher aes-xts-plain64 \
+    --luks-key-size 512
+```
