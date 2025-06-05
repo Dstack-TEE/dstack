@@ -38,7 +38,15 @@
         "pages": [
           "docs/concepts/overview",
           "docs/concepts/basic-components",
-          "docs/concepts/core-components",
+          {
+            "group": "Core Components",
+            "pages": [
+              "docs/concepts/core-components",
+              "docs/concepts/core-vmm",
+              "docs/concepts/core-gateway",
+              "docs/concepts/core-kms"
+            ]
+          },
           "docs/concepts/networking",
           "docs/concepts/security-model",
           "docs/concepts/architecture"
