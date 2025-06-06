@@ -1,0 +1,36 @@
+---
+title: "Step 5: Configure Environment Variables for dstack"
+description: "Set your domain, email, and ports in the dstack .env file for proper operation."
+---
+
+# Step 5: Configure Environment Variables
+
+Create an `.env` file with your domain and email for Let's Encrypt, along with API and UI port settings.
+
+## Create the .env File
+
+Create the file at `/etc/dstack/.env`:
+
+```bash
+# /etc/dstack/.env
+DSTACK_DOMAIN=example.com
+DSTACK_EMAIL=admin@example.com    # For SSL via Let's Encrypt
+DSTACK_API_PORT=9090
+DSTACK_UI_PORT=9080
+```
+
+**Explanation:**
+- Your domain enables HTTPS and exposes the dstack UI.
+- Email is used for automatic SSL certificate provisioning.
+- API and UI ports can be customized, but defaults are recommended.
+
+---
+
+## Recommendations
+- Use a real, reachable domain for production deployments.
+- Double-check your email address for Let's Encrypt notifications.
+- Store the .env file securely and restrict access to root/admin users.
+
+---
+
+**Next:** [Step 6 – Register dstack as a Systemd Service](./step-6-register-systemd-service) 

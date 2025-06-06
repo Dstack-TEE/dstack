@@ -30,6 +30,19 @@
           "docs/getting-started/start",
           "docs/getting-started/installation",
           "docs/getting-started/deploying-applications",
+          { 
+            "group": "dstack Installation Steps",
+            "pages": [
+              "docs/getting-started/install/step-1-prerequisites",
+              "docs/getting-started/install/step-2-update-server",
+              "docs/getting-started/install/step-3-install-required-packages",
+              "docs/getting-started/install/step-4-install-dstack-runtime",
+              "docs/getting-started/install/step-5-configure-environment",
+              "docs/getting-started/install/step-6-register-systemd-service",
+              "docs/getting-started/install/step-7-firewall-and-verification"
+            ]
+          },
+          
           {
             "group": "First DStack Deployment",
             "pages": [
@@ -109,16 +122,6 @@
         ]
       },
       {
-        "dropdown": "dstack Internals",
-        "icon": "gear",
-        "pages": [
-          "docs/dstack-reference/dstack-wiki",
-          "docs/dstack-reference/structure",
-          "docs/dstack-reference/content",
-          "docs/dstack-reference/context"
-        ]
-      },
-      {
         "dropdown": "Community & Support",
         "icon": "users",
         "pages": [
@@ -130,7 +133,6 @@
         "dropdown": "API Reference",
         "icon": "square-terminal",
         "pages": [
-          "docs/api-reference/overview",
           "docs/api-reference/authentication"
         ]
       }

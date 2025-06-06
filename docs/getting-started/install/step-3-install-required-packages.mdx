@@ -1,0 +1,27 @@
+---
+title: "Step 3: Install Required Packages for dstack"
+description: "Install Linux headers, development tools, and WireGuard to prepare your system for dstack."
+---
+
+# Step 3: Install Required Packages
+
+To build and run dstack, your system needs Linux headers, development tools, and WireGuard for secure networking.
+
+## Install Command
+
+```bash
+sudo apt install -y linux-headers-$(uname -r) build-essential wireguard
+```
+
+*On Ubuntu, this also resolves missing modules for the latest kernel.*
+
+---
+
+## Recommendations
+- Double-check that the installation completes without errors.
+- If you are using a custom kernel, ensure the headers match your running kernel version.
+- WireGuard is required for secure enclave networking.
+
+---
+
+**Next:** [Step 4 – Install dstack Runtime](./step-4-install-dstack-runtime) 

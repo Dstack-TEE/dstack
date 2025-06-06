@@ -1,0 +1,53 @@
+---
+title: "Step 1: Prerequisites & System Requirements"
+description: "Check hardware, OS, and software requirements before installing dstack."
+---
+
+# Step 1: Prerequisites & System Requirements
+
+Make sure your system matches these requirements before installing dstack:
+
+## Hardware Requirements
+
+- **Bare-metal server with Intel TDX**: Your hardware must support Intel TDX. Prepare your firmware using the [canonical/tdx guide](https://github.com/canonical/tdx). _Note: VMs are not supported for secure enclaves._
+- **Public IPv4 address**: Required for HTTPS, API, and external access.
+- **Specs**: At least **16GB RAM** & **100GB SSD**. For best results, aim for 32GB+ RAM and NVMe storage.
+- **Domain name & DNS access**: You'll need a domain you can manage for Let's Encrypt and gateway access.
+
+## Software Requirements
+
+- **Linux kernel** 5.15+ (with TDX patches)
+- **Supported OS**: Ubuntu 24.04 LTS (**strongly recommended**) or Ubuntu 22.04 LTS
+- **Rust & Cargo**: Some dstack components are built from source. Install using the [official Rust installer](https://www.rust-lang.org/tools/install).
+- **Node.js & npm**: For contract deployment tools, install from [nodejs.org](https://nodejs.org/).
+
+## Network & Ports
+
+| Port  | Service   | Direction | Purpose                     |
+| ----- | --------- | --------- | --------------------------- |
+| 9080  | Web UI    | Inbound   | dstack management interface |
+| 9090  | API       | Inbound   | Application API access      |
+| 443   | HTTPS     | Inbound   | Secure web/app access       |
+| 80    | HTTP      | Inbound   | Redirect HTTP → HTTPS       |
+| 51820 | WireGuard | In/Out    | Secure VPN for enclaves     |
+
+## How to Check Intel TDX Support
+
+Run these commands. If you see TDX output, your hardware is ready:
+
+```bash
+grep -E 'tdx|TDX' /proc/cpuinfo
+sudo dmesg | grep -i tdx
+```
+
+---
+
+## Recommendations
+- Use bare-metal hardware for production workloads.
+- Prepare your domain and DNS settings in advance.
+- Ensure you have root or sudo access to the server.
+- If you're not ready for bare-metal, try our [Super Quick Start](/docs/tutorials/super-quick-start) on Phala Cloud.
+
+---
+
+**Next:** [Step 2 – Update Your Server](./step-2-update-server) 
