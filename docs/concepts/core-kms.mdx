@@ -91,76 +91,6 @@ service Onboard {
 ```
 
 
-
-### dstack-os Implementation
-
-The operating system provides secure boot with TDX attestation:
-
-#### Boot Process
-
-```mermaid
-graph TD
-    UEFI[UEFI Secure Boot] --> KERNEL[Linux Kernel]
-    KERNEL --> INITRD[Initial RAM Disk]
-    INITRD --> SETUP[dstack-util Setup]
-    SETUP --> MOUNT[Mount Encrypted Root]
-    MOUNT --> SYSTEMD[systemd Init]
-    SYSTEMD --> AGENT[dstack-guest-agent]
-    AGENT --> CONTAINERS[User Containers]
-    
-    SETUP --> MEASURE[Extend RTMR3]
-    MEASURE --> KEYS[Request App Keys]
-    KEYS --> FDE[Full Disk Encryption]
-```
-
-### dstack-util Implementation
-
-The system utility provides secure boot and encryption services:
-
-#### Commands Reference
-
-<table className="w-full my-4">
-  <thead>
-    <tr className="bg-gray-100">
-      <th className="p-3 text-left">Command</th>
-      <th className="p-3 text-left">Purpose</th>
-      <th className="p-3 text-left">Parameters</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td className="p-3 font-mono">Setup</td>
-      <td className="p-3">Initialize full disk encryption and system</td>
-      <td className="p-3">--work-dir, --device, --mount-point</td>
-    </tr>
-    <tr className="bg-gray-50">
-      <td className="p-3 font-mono">Quote</td>
-      <td className="p-3">Generate TDX quote from report data</td>
-      <td className="p-3">stdin: report_data</td>
-    </tr>
-    <tr>
-      <td className="p-3 font-mono">Extend</td>
-      <td className="p-3">Extend Runtime Measurement Register</td>
-      <td className="p-3">--event, --payload</td>
-    </tr>
-    <tr className="bg-gray-50">
-      <td className="p-3 font-mono">GenAppKeys</td>
-      <td className="p-3">Generate application keys</td>
-      <td className="p-3">--output, --ca-level</td>
-    </tr>
-  </tbody>
-</table>
-
-#### Full Disk Encryption Setup
-
-```bash
-# Complete system setup command
-dstack-util Setup \
-    --work-dir /dstack \
-    --device /dev/vda2 \
-    --mount-point /data
-```
-
 ## Key Provider Modes
 
 The system supports three distinct key provider modes with different trust models:
@@ -204,3 +134,20 @@ curl --unix-socket /var/run/dstack.sock -X POST \
 ```
 
 For detailed API documentation, see the [DStack Guest Agent RPC API Documentation](sdk/curl/api.md).
+
+## Next Steps
+
+Now that you understand KMS key management and attestation, continue learning about dstack's core components:
+
+<div className="mt-8 flex gap-4">
+  <a href="/docs/concepts/core-guest-agent" className="bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700">
+    Next: Guest Agent Core →
+  </a>
+  <a href="/docs/concepts/core-gateway" className="bg-gray-200 text-gray-800 px-6 py-3 rounded-lg hover:bg-gray-300">
+    ← Previous: Gateway Core
+  </a>
+</div>
+
+### Related Topics
+- [Security Model](/docs/concepts/security-model) - Learn about attestation and trust models
+- [Architecture](/docs/concepts/architecture) - Understand how KMS fits in the overall system

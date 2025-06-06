@@ -46,6 +46,7 @@
               "docs/concepts/core-gateway",
               "docs/concepts/core-kms",
               "docs/concepts/core-guest-agent",
+              "docs/concepts/core-tdxctl",
               "docs/concepts/core-os"
             ]
           },

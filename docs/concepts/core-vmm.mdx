@@ -115,4 +115,23 @@ address = "127.0.0.1"                        # Address of the key provider servi
 
 ## Gateway Integration with the VMM
 
-The integration of the gateway within the VMM’s configuration reflects the tightly coupled nature of secure, orchestrated deployments in dstack. By defining gateway parameters—such as the base domain, network ports, and agent interface—directly alongside VM and cluster settings, dstack ensures that network exposure, TLS policy, and VPN tunneling are always synchronized with the lifecycle of each Confidential VM. The VMM is responsible not only for creating and maintaining the compute environment, but also for provisioning and updating the gateway, allowing seamless coordination between workload orchestration and secure service exposure. This architecture eliminates configuration drift and centralizes operational control, so that every application endpoint published by the gateway is cryptographically tied to the trusted state managed by the VMM.
+The integration of the gateway within the VMM's configuration reflects the tightly coupled nature of secure, orchestrated deployments in dstack. By defining gateway parameters—such as the base domain, network ports, and agent interface—directly alongside VM and cluster settings, dstack ensures that network exposure, TLS policy, and VPN tunneling are always synchronized with the lifecycle of each Confidential VM. The VMM is responsible not only for creating and maintaining the compute environment, but also for provisioning and updating the gateway, allowing seamless coordination between workload orchestration and secure service exposure. This architecture eliminates configuration drift and centralizes operational control, so that every application endpoint published by the gateway is cryptographically tied to the trusted state managed by the VMM.
+
+## Next Steps
+
+Now that you understand VMM orchestration, continue learning about dstack's core components:
+
+<div className="mt-8 flex gap-4">
+  <a href="/docs/concepts/core-gateway" className="bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700">
+    Next: Gateway Core →
+  </a>
+  <a href="/docs/concepts/core-components" className="bg-gray-200 text-gray-800 px-6 py-3 rounded-lg hover:bg-gray-300">
+    ← Back to Overview
+  </a>
+</div>
+
+### Related Topics
+- [Networking](/docs/concepts/networking) - Learn about dstack's network architecture
+- [Architecture](/docs/concepts/architecture) - Understand the overall system design
+
+
