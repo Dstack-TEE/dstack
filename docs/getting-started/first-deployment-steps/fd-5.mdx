@@ -1,0 +1,31 @@
+---
+title: "Verify attestation & remote‑prove trust"
+description: "Access Your Application"
+---
+
+## Step 5: Access Your Application
+
+Once deployed, your application is accessible through the dstack gateway.
+
+### Find Your Application URL
+
+1. In the dashboard, click on your deployment
+2. Look for the **"Endpoints"** section
+3. You'll see URLs like:
+   - Internal: `http://cvm-abc123.local:8080`
+   - External: `https://my-first-app.app.example.com`
+
+### Test Your Application
+
+```bash
+# Test the application
+curl https://my-first-app.app.example.com
+
+# Expected response:
+{
+  "message": "Hello from dstack! 🔒",
+  "secure": "Running in a Trusted Execution Environment",
+  "hostname": "cvm-abc123",
+  "environment": "production"
+}
+```

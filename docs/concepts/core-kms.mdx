@@ -1,153 +1,147 @@
 ---
-title: "kms core"
-description: "Deep dive into dstack's essential components and their roles"
+title: "KMS core"
+description: "Comprehensive technical deep dive into dstack's Key Management Service - the critical security and governance layer"
 ---
 
-## dstack-kms Implementation
-
-The KMS provides enterprise-grade cryptographic services with blockchain integration and supports three boot modes:
-
-#### Boot Modes
-
-```mermaid
-graph TD
-    START[CVM Boot] --> MODE{Boot Mode}
-    MODE -->|Non-KMS| EPHEMERAL[Ephemeral Keys<br/>No Persistence]
-    MODE -->|Local-Key-Provider| LOCAL[SGX Sealing<br/>Persistent Disk]
-    MODE -->|KMS| KMS_MODE[KMS Service<br/>Upgradeable]
-    
-    EPHEMERAL --> VALIDATE1[app-id = compose-hash]
-    LOCAL --> VALIDATE2[SGX Quote Validation]
-    KMS_MODE --> VALIDATE3[Blockchain Validation]
-```
-
-#### Configuration Example
+## Configuration
 
 ```toml
-# kms.toml
+# kms.toml - Complete KMS Configuration
 [default]
-workers = 8
-max_blocking = 64
-ident = "DStack KMS"
-temp_dir = "/tmp"
-keep_alive = 10
-log_level = "info"
+workers = 8                    # Number of worker threads for async operations
+max_blocking = 64             # Maximum blocking threads for I/O operations
+ident = "DStack KMS"          # Service identifier for logging and metrics
+temp_dir = "/tmp"             # Temporary directory for operations
+keep_alive = 10               # HTTP keep-alive timeout in seconds
+log_level = "info"            # Logging level (debug, info, warn, error)
 
 [rpc]
-address = "0.0.0.0"
-port = 8000
+address = "0.0.0.0"           # RPC server bind address
+port = 8000                   # RPC server port
 
 [rpc.tls]
-key = "/etc/kms/certs/rpc.key"
-certs = "/etc/kms/certs/rpc.crt"
+key = "/etc/kms/certs/rpc.key"      # TLS private key for RPC server
+certs = "/etc/kms/certs/rpc.crt"    # TLS certificate for RPC server
 
 [rpc.tls.mutual]
-ca_certs = "/etc/kms/certs/tmp-ca.crt"
-mandatory = false
+ca_certs = "/etc/kms/certs/tmp-ca.crt"  # CA certificates for mutual TLS
+mandatory = false                        # Whether mutual TLS is required
 
 [core]
-cert_dir = "/etc/kms/certs"
-subject_postfix = ".dstack"
+cert_dir = "/etc/kms/certs"         # Directory containing all certificates and keys
+subject_postfix = ".dstack"         # Subject postfix for generated certificates
+admin_token_hash = ""               # SHA256 hash of admin token for privileged operations
+
+[core.image]
+verify = true                       # Enable OS image verification against trusted measurements
+cache_dir = "/usr/share/dstack/images"  # Directory for caching downloaded OS images
+download_url = "http://localhost:8000/{OS_IMAGE_HASH}.tar.gz"  # Template URL for image downloads
+download_timeout = "2m"             # Timeout for image download operations
 
 [core.auth_api]
-type = "webhook"
+type = "webhook"                    # Authorization API type (webhook or dev)
 
 [core.auth_api.webhook]
-url = "http://auth-api:8000"
+url = "http://auth-api:8000"        # Webhook URL for authorization decisions
+
+[core.auth_api.dev]
+gateway_app_id = "any"              # Development mode: allow any gateway app ID
 
 [core.onboard]
-enabled = true
-quote_enabled = true
-address = "0.0.0.0"
+enabled = true                      # Enable onboarding service for new KMS instances
+auto_bootstrap_domain = ""          # Domain for automatic bootstrapping (empty = manual)
+quote_enabled = true                # Enable TDX quote verification during onboarding
+address = "0.0.0.0"                # Onboarding service bind address
 ```
 
-#### RPC Service Interface
+## dstack KMS: The Critical Security Foundation
 
-The KMS exposes a focused RPC API  
-([see source](https://github.com/Dstack-TEE/dstack/blob/45ebd05a/kms/rpc/proto/kms_rpc.proto)):
+**dstack KMS serves as the cornerstone of the entire trusted computing infrastructure**, providing enterprise-grade cryptographic services with blockchain integration and comprehensive attestation capabilities. The KMS operates as the primary trust anchor, responsible for key derivation, certificate authority functions, and application authorization within the Trusted Execution Environment ecosystem.
 
-```go
-service KMS {
-    // Request the app key given the app id and tdx quote
-    rpc GetAppKey(GetAppKeyRequest) returns (AppKeyResponse);
-    // KMS key handover for replication
-    rpc GetKmsKey(GetKmsKeyRequest) returns (KmsKeyResponse);
-    // Request the app environment encryption public key
-    rpc GetAppEnvEncryptPubKey(AppId) returns (PublicKeyResponse);
-    // Request the KMS instance metadata
-    rpc GetMeta(google.protobuf.Empty) returns (GetMetaResponse);
-    // Request the temporary CA certificate and key
-    rpc GetTempCaCert(google.protobuf.Empty) returns (GetTempCaCertResponse);
-    // Sign a certificate
-    rpc SignCert(SignCertRequest) returns (SignCertResponse);
-}
+### KMS Architecture and Core Components
 
-service Onboard {
-    // Bootstrap a new KMS
-    rpc Bootstrap(BootstrapRequest) returns (BootstrapResponse);
-    // Onboard from existing KMS
-    rpc Onboard(OnboardRequest) returns (OnboardResponse);
-}
-```
+**The KMS implementation consists of three primary architectural components** that work in concert to provide comprehensive key management and security services [1](#0-0) . 
 
+**The main dstack-kms service** functions as the central RPC service handling all application key requests, quote verification, and boot information validation. This service maintains the core cryptographic operations and interfaces directly with requesting applications through a secure RPC protocol [2](#0-1) .
 
-## Key Provider Modes
+**The dstack-kms-auth-eth component** provides blockchain integration for permission validation through a sophisticated two-step verification process. This component first validates against the KMS control contract, then performs application-specific authorization checks through dedicated app control contracts [3](#0-2) .
 
-The system supports three distinct key provider modes with different trust models:
+**Authorization contracts deployed on Ethereum-compatible chains** maintain the complete registry of authorized applications, allowed KMS instance measurements, permitted OS images, and registered KMS root keys. These contracts provide immutable governance and audit trails for all authorization decisions [4](#0-3) .
 
-### Non-KMS Mode
-- Generates ephemeral app keys on startup
-- No persistent disk state
-- `app-id` must equal `compose-hash`
-- Key provider in RTMR: `{"type": "none", "id": ""}`
+### KMS Boot Modes and Trust Models
 
-### Local-Key-Provider Mode  
-- Uses SGX sealing key provider for app keys
-- Maintains persistent disk state
-- Validates key provider via SGX quote
-- Key provider in RTMR: `{"type": "local-sgx", "id": "<sgx mrenclave>"}`
+**The KMS supports three distinct operational modes**, each providing different levels of security, persistence, and upgrade capabilities to accommodate various deployment scenarios and trust requirements.
 
-### KMS Mode
-- Enables flexible app-id validation
-- Supports application upgrades
-- Requires blockchain contract configuration
-- Key provider in RTMR: `{"type": "kms", "id": "<kms-root-pubkey>"}`
+**Non-KMS Mode** operates as a stateless configuration generating ephemeral application keys during startup with no persistent disk state. This mode enforces strict application identity validation where the app-id must exactly equal the compose-hash, ensuring complete deterministic behavior. The key provider is recorded in RTMR as `{"type": "none", "id": ""}` indicating no external key provider dependency [5](#0-4) .
 
-## REST API Access
+**Local-Key-Provider Mode** utilizes SGX sealing mechanisms through the gramine-sealing-key-provider for persistent key storage while maintaining strict measurement validation. This mode supports stateful operations with persistent disk storage but prohibits application upgrades, ensuring consistent cryptographic identity. The key provider information is recorded as `{"type": "local-sgx", "id": "<sgx mrenclave>"}` in RTMR for verification purposes [6](#0-5) .
 
-Applications can access guest agent services via Unix socket:
+**KMS Mode** enables the most flexible deployment scenario supporting application upgrades and sophisticated application identity management through blockchain-based authorization. This mode derives app-id from the deployer's Ethereum address combined with a salt value, providing upgradeable application identity while maintaining security. The key provider is recorded as `{"type": "kms", "id": "<kms-root-pubkey>"}` establishing the KMS root public key as the trust anchor [7](#0-6) .
 
-```bash
-# Get TLS certificate
-curl --unix-socket /var/run/dstack.sock -X POST \
-  http://dstack/GetTlsKey \
-  -H 'Content-Type: application/json' \
-  -d '{"subject": "example.com", "usage_ra_tls": true}'
+### KMS Service Initialization and Bootstrap Process
 
-# Get application info
-curl --unix-socket /var/run/dstack.sock http://dstack/Info
+**The KMS initialization process follows a sophisticated multi-stage bootstrap procedure** ensuring secure establishment of cryptographic trust anchors and proper service configuration [8](#0-7) .
 
-# Generate TDX quote
-curl --unix-socket /var/run/dstack.sock -X POST \
-  http://dstack/GetQuote \
-  -d '{"report_data": "1234deadbeaf"}'
-```
+**During the onboarding phase**, the KMS determines whether to bootstrap a new instance or join an existing KMS cluster through key replication. The onboarding service provides a web interface for manual configuration or can perform automatic bootstrapping when configured with a domain parameter [9](#0-8) .
 
-For detailed API documentation, see the [DStack Guest Agent RPC API Documentation](sdk/curl/api.md).
+**Bootstrap operations generate two critical root keys**: a CA root key used for issuing X.509 certificates enabling HTTPS traffic for applications, and a K256 root key used for deriving Ethereum-compatible signing keys for blockchain interactions. These root keys establish the cryptographic foundation for all subsequent key derivation operations [10](#0-9) .
 
-## Next Steps
+**The KMS service startup sequence** includes certificate updates, RPC method registration, and state initialization with comprehensive error handling and logging throughout the process [11](#0-10) .
 
-Now that you understand KMS key management and attestation, continue learning about dstack's core components:
+### Key Derivation and Cryptographic Operations
 
-<div className="mt-8 flex gap-4">
-  <a href="/docs/concepts/core-guest-agent" className="bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700">
-    Next: Guest Agent Core →
-  </a>
-  <a href="/docs/concepts/core-gateway" className="bg-gray-200 text-gray-800 px-6 py-3 rounded-lg hover:bg-gray-300">
-    ← Previous: Gateway Core
-  </a>
-</div>
+**The KMS implements sophisticated key derivation functions** providing multiple cryptographic keys for different application purposes while maintaining cryptographic isolation between applications and use cases [12](#0-11) .
 
-### Related Topics
-- [Security Model](/docs/concepts/security-model) - Learn about attestation and trust models
-- [Architecture](/docs/concepts/architecture) - Understand how KMS fits in the overall system
+**Application disk encryption keys** are derived using key derivation functions combining the root CA key with application ID, instance ID, and a specific context identifier for disk encryption purposes. This ensures each application instance receives unique encryption keys that cannot be accessed by other applications [13](#0-12) .
+
+**Environment variable encryption keys** utilize X25519 key agreement protocols derived from the root CA key and application ID, providing secure encryption for sensitive configuration data that can only be decrypted within the target application's TEE [14](#0-13) .
+
+**Ethereum-compatible signing keys** are generated using K256 elliptic curve cryptography with proper signature validation to ensure cryptographic integrity and blockchain compatibility for applications requiring smart contract interactions [15](#0-14) .
+
+### Attestation and Quote Verification
+
+**The KMS performs comprehensive TDX quote validation** for all requesting applications, extracting and validating measurement registers, application information, and device identity before authorizing key provisioning [16](#0-15) .
+
+**OS image verification** ensures applications are running trusted operating system images by downloading, extracting, and validating image checksums against known-good measurements. The KMS maintains a local cache of verified images and their corresponding measurement registers to optimize subsequent validation operations [17](#0-16) .
+
+**The attestation process** includes validation of MRTD (Measurement of Root of Trust for Detection), RTMR registers containing boot measurements, application configuration, and runtime state to ensure complete system integrity before key provisioning [18](#0-17) .
+
+### KMS Replication and High Availability
+
+**KMS replication enables horizontal scaling** and high availability through secure key transfer between authenticated KMS instances. The replication process utilizes RA-TLS (Remote Attestation with Transport Layer Security) to establish secure channels between KMS nodes [19](#0-18) .
+
+**The replication workflow** requires pre-registration of target KMS measurements in the KmsAuth contract, followed by secure key transfer from the source instance after comprehensive quote validation and blockchain authorization verification.
+
+**Post-replication operation** results in multiple KMS instances sharing identical root keys, enabling load distribution and fault tolerance while maintaining cryptographic consistency across the distributed system.
+
+### RPC Service Interface and API Operations
+
+**The KMS exposes a comprehensive RPC API** supporting key provisioning, certificate signing, metadata retrieval, and administrative operations through a secure protocol buffer interface [20](#0-19) .
+
+**GetAppKey operations** handle the core key provisioning workflow, validating TDX quotes, checking blockchain authorization, and returning the complete set of application keys including disk encryption, environment encryption, and signing keys [21](#0-20) [22](#0-21) .
+
+**Certificate signing services** enable applications to obtain signed TLS certificates through Certificate Signing Request validation, quote verification, and hierarchical certificate authority operations [23](#0-22) [24](#0-23) .
+
+**Metadata and health check endpoints** provide KMS instance information, bootstrap status, and configuration details necessary for monitoring and integration with external services [25](#0-24) .
+
+### Security Architecture and Trust Anchors
+
+**The KMS establishes a complete chain of trust** from hardware-based attestation through blockchain governance to application-level cryptographic operations. This multi-layered security architecture ensures comprehensive protection against various attack vectors and unauthorized access attempts.
+
+**Root key protection** utilizes TEE-based isolation combined with encrypted local storage and distributed replication to prevent single points of failure while maintaining cryptographic security across the distributed system.
+
+**Authorization decisions** integrate blockchain-based smart contracts with real-time attestation validation, ensuring both immutable governance policies and dynamic security assessment for every key provisioning request.
+
+**The KMS serves as the fundamental security primitive** for the entire dstack ecosystem, providing the cryptographic foundation upon which all other security mechanisms depend.
+
+## Reference Links
+
+- [dstack KMS Source Code](https://github.com/Dstack-TEE/dstack/tree/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/kms)
+- [KMS RPC Protocol Definition](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/kms/rpc/proto/kms_rpc.proto)
+- [KMS Main Service Implementation](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/kms/src/main_service.rs)
+- [KMS Configuration System](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/kms/src/config.rs)
+
+## Notes
+
+The dstack KMS represents a sophisticated approach to enterprise key management within Trusted Execution Environments, combining hardware-based attestation, blockchain governance, and comprehensive cryptographic services. Its role as the primary trust anchor makes proper configuration and deployment critical for overall system security. The three-tier boot mode architecture provides flexibility for different deployment scenarios while maintaining strong security guarantees appropriate for each use case.
+

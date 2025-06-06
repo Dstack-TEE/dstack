@@ -1,90 +1,160 @@
 ---
-title: "guest agent core"
+title: "Guest Agent Core"
 description: "Deep dive into dstack's essential components and their roles"
 ---
 
+# Dstack Guest Agent Implementation
 
-# dstack-guest-agent Implementation
+The dstack guest agent is the foundational security and runtime service component that operates within Intel TDX Confidential Virtual Machines (CVMs). It serves as the critical bridge between the trusted execution environment and application workloads, providing essential attestation, container management, and cryptographic services that form the backbone of dstack's security architecture.
 
-The guest agent provides runtime services and security integration:
-
-## Guest Agent Service Interface
-
-```go
-type GuestAgent interface {
-    // Container management
-    DeployCompose(compose []byte) error
-    StartContainers() error
-    StopContainers() error
-    GetContainerLogs(name string) ([]byte, error)
-    
-    // Security services
-    GetAttestation() (*Quote, error)
-    DeriveKey(path string) (*Key, error)
-    GetTLSCert(domain string) (*Certificate, error)
-    
-    // Monitoring and health
-    GetMetrics() (*Metrics, error)
-    GetHealth() (*Health, error)
-    StreamLogs(follow bool) (<-chan LogEntry, error)
-}
-```
-
-### Guest Agent Configuration Example
+## **Guest Agent Configuration** [1](#0-0) 
 
 ```toml
-# guest-agent.toml
-[general]
-log_level = "info"
-data_dir = "/var/lib/dstack"
+# Primary guest agent configuration
+[default]
+# Worker thread pool configuration for handling concurrent requests
+workers = 8
+# Maximum blocking operations allowed concurrently
+max_blocking = 64
+# Service identification string for system logs and monitoring
+ident = "Dstack guest agent"
+# Temporary directory for runtime operations and file processing
+temp_dir = "/tmp"
+# TCP keep-alive timeout for persistent connections
+keep_alive = 10
+# Logging verbosity level (trace, debug, info, warn, error)
+log_level = "debug"
 
-[container_runtime]
-socket_path = "/var/run/containerd/containerd.sock"
-namespace = "dstack"
-registry_config_path = "/etc/containerd/certs.d"
+# Core application and security configuration
+[default.core]
+# Application cryptographic keys file shared between host and guest
+keys_file = "/dstack/.host-shared/.appkeys.json"
+# Docker Compose configuration for application containers
+compose_file = "/dstack/.host-shared/app-compose.json"
+# System configuration including VM specifications and host API endpoints
+sys_config_file = "/dstack/.host-shared/.sys-config.json"
+# Data disk mount points to monitor for metrics and health reporting
+data_disks = ["/"]
 
-[security]
-kms_endpoint = "https://kms.dstack.internal:8000"
-attestation_cache_ttl = "5m"
-key_cache_ttl = "1h"
+# TDX simulation mode for development and testing environments
+[default.core.simulator]
+# Enable simulation mode (bypasses hardware TDX requirements)
+enabled = false
+# Pre-generated quote file for simulation scenarios
+quote_file = "quote.hex"
+# Event log file for RTMR replay verification
+event_log_file = "eventlog.json"
 
-[monitoring]
-metrics_port = 9090
-health_port = 8080
-log_buffer_size = 1000
+# Internal RPC interface (legacy tappd compatibility)
+[internal-v0]
+# Unix domain socket for backward compatibility with tappd clients
+address = "unix:/var/run/tappd.sock"
+# Socket reuse configuration for service restarts
+reuse = true
+
+# Primary internal RPC interface for dstack components
+[internal]
+# Unix domain socket for secure local communication
+address = "unix:/var/run/dstack.sock"
+reuse = true
+
+# External HTTP/RPC interface for remote access
+[external]
+# Network interface binding for external access
+address = "0.0.0.0"
+# HTTP service port for dashboard and API access
+port = 8090
+
+# Guest API interface for host communication
+[guest-api]
+# VSOCK address for secure host-guest communication channel
+address = "vsock:0xffffffff"
 ```
 
-#### Container Lifecycle Management
+## **Guest Agent Architecture Overview**
 
-The agent manages containers through a sophisticated state machine:
+The dstack guest agent implements a multi-service architecture designed for high availability and security within trusted execution environments. [2](#0-1)  The service operates four concurrent server components that handle different aspects of system functionality while maintaining strict security boundaries and ensuring robust operation under various operational conditions.
 
-```mermaid
-stateDiagram-v2
-    [*] --> Initializing
-    Initializing --> PullingImages: Compose received
-    PullingImages --> CreatingContainers: Images ready
-    CreatingContainers --> StartingContainers: Containers created
-    StartingContainers --> Running: All healthy
-    Running --> Updating: New deployment
-    Running --> Stopping: Stop requested
-    Updating --> Running: Update complete
-    Stopping --> Stopped: Graceful shutdown
-    Stopped --> [*]
-```
+**Service Initialization and Management**
 
-## Next Steps
+The guest agent employs a sophisticated initialization sequence that ensures all critical services are available before accepting requests. [3](#0-2)  Each service component runs independently with dedicated error handling and graceful degradation capabilities, ensuring that failure in one component does not compromise the entire system's security posture or operational capability.
 
-Now that you understand Guest Agent container management and runtime services, continue learning about dstack's core components:
+**Application State Management**
 
-<div className="mt-8 flex gap-4">
-  <a href="/docs/concepts/core-tdxctl" className="bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700">
-    Next: TDX Utilities Core →
-  </a>
-  <a href="/docs/concepts/core-kms" className="bg-gray-200 text-gray-800 px-6 py-3 rounded-lg hover:bg-gray-300">
-    ← Previous: KMS Core
-  </a>
-</div>
+Central to the guest agent's operation is the AppState management system that maintains critical security context and configuration data. [4](#0-3)  This state includes cryptographic keys, application composition configuration, certificate management clients, and VM-specific configuration that enables secure and verifiable operation within the TDX environment.
 
-### Related Topics
-- [Security Model](/docs/concepts/security-model) - Learn about container security and attestation
-- [Networking](/docs/concepts/networking) - Understand how containers connect to the network
+## **Security Architecture and Attestation Services**
+
+**TDX Quote Generation and Verification**
+
+The guest agent implements comprehensive TDX attestation capabilities that enable remote parties to verify the integrity and authenticity of the execution environment. [5](#0-4)  The attestation system supports both raw quote generation for low-level operations and structured quote generation with hash-based report data processing, providing flexibility for different security requirements and use cases.
+
+**Runtime Measurement Register (RTMR) Management**
+
+RTMR extension capabilities allow applications to record security-relevant events that become part of the attestation evidence. [6](#0-5)  This functionality is essential for maintaining a verifiable chain of custody for application operations and ensuring that all security-relevant state changes are recorded in the hardware-protected measurement registers.
+
+**Cryptographic Key Derivation Services**
+
+The guest agent provides sophisticated key derivation services based on the application's cryptographic identity and attestation state. [7](#0-6)  These services enable applications to derive unique cryptographic keys for specific purposes while maintaining verifiable links to the application's identity and the integrity of the execution environment.
+
+**TLS Certificate Management**
+
+Automated TLS certificate generation and management ensures secure communication channels for application services. [8](#0-7)  The certificate authority integration allows for both standard TLS certificates and Remote Attestation TLS (RA-TLS) certificates that embed attestation evidence directly in the certificate chain, enabling clients to verify both the communication channel and the execution environment simultaneously.
+
+## **Container Lifecycle and Runtime Management**
+
+**Docker Integration and Container Operations**
+
+The guest agent maintains comprehensive integration with the container runtime environment, providing detailed visibility into container operations and lifecycle management. [9](#0-8)  This integration enables real-time monitoring of application containers, including state tracking, resource utilization monitoring, and operational health assessment that supports both automated management and manual troubleshooting scenarios.
+
+**Application Composition Processing**
+
+Container deployment is managed through structured application composition files that define the complete application stack configuration. [10](#0-9)  The guest agent processes these compositions to ensure proper container configuration, networking setup, and security policy enforcement while maintaining auditability of the deployment configuration through cryptographic hashing and attestation integration.
+
+**Log Management and Monitoring**
+
+Comprehensive logging capabilities provide detailed visibility into container operations while respecting privacy and security requirements. [11](#0-10)  The logging system supports real-time streaming, historical log retrieval, and flexible filtering options that enable effective debugging and operational monitoring without compromising sensitive data or security boundaries.
+
+## **System Monitoring and Health Services**
+
+**Resource Monitoring and Metrics Collection**
+
+The guest agent implements detailed system monitoring capabilities that track CPU utilization, memory usage, disk space, and network activity across the guest environment. [12](#0-11)  These metrics support both operational monitoring and capacity planning while providing essential data for automated scaling and resource management decisions.
+
+**Network Interface and Connectivity Management**
+
+Network monitoring capabilities provide comprehensive visibility into network configuration, traffic patterns, and connectivity status. [13](#0-12)  The system tracks both standard network interfaces and specialized secure communication channels, ensuring that network connectivity issues can be quickly identified and resolved while maintaining security isolation requirements.
+
+**Watchdog and Health Check Services**
+
+Integrated watchdog functionality ensures system reliability and enables integration with systemd service management. [14](#0-13)  The health check system continuously monitors service availability and can automatically trigger recovery procedures when anomalies are detected, ensuring high availability and reliable operation in production environments.
+
+## **Communication Interfaces and API Services**
+
+**RPC Service Architecture**
+
+The guest agent implements multiple RPC interfaces designed for different security contexts and operational requirements. [15](#0-14)  These interfaces provide structured access to attestation services, cryptographic operations, and system management functions while maintaining appropriate security boundaries and access controls for different categories of clients and operations.
+
+**External HTTP Interface and Dashboard**
+
+A comprehensive web-based dashboard provides operational visibility and management capabilities for authorized users. [16](#0-15)  The dashboard interface supports both human operators and automated tools, providing access to system status, container information, and operational metrics while respecting privacy and security configuration settings.
+
+**VSOCK Communication Channel**
+
+Secure host-guest communication is facilitated through VSOCK interfaces that provide isolation and security guarantees. [17](#0-16)  This communication channel enables secure coordination between the host system and guest environment while maintaining the security boundaries essential for trusted execution environments.
+
+## **Operational Security and Governance**
+
+**Application Information and Identity Management**
+
+The guest agent maintains comprehensive application identity information that enables verification of application authenticity and operational context. [18](#0-17)  This information includes application identifiers, instance information, device identification, and cryptographic evidence that supports both operational management and security verification requirements.
+
+**Configuration Security and Integrity**
+
+All configuration data is processed with integrity verification and security validation to ensure that only authorized and verified configurations can be deployed. [19](#0-18)  The configuration system supports both development and production scenarios while maintaining strict security controls and auditability requirements that are essential for production deployment scenarios.
+
+The dstack guest agent represents a sophisticated and comprehensive solution for secure container orchestration within trusted execution environments. Its multi-layered architecture, comprehensive security services, and robust operational capabilities make it an essential component for organizations requiring verifiable and secure cloud computing solutions. For detailed implementation references and integration guidance, consult the [dstack guest agent source code](https://github.com/Dstack-TEE/dstack/tree/main/guest-agent) and associated documentation resources.
+
+**Notes**
+
+The guest agent serves as the cornerstone of dstack's security architecture, implementing Intel TDX attestation services, container lifecycle management, cryptographic key derivation, and comprehensive system monitoring within a unified service framework. Its role in maintaining security boundaries, enabling verifiable computation, and providing operational visibility makes it critical for the governance and security of the overall dstack system. Proper configuration and deployment of the guest agent is essential for achieving the security guarantees and operational reliability that dstack provides for confidential computing workloads.

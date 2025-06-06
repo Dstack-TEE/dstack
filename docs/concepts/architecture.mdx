@@ -1,445 +1,700 @@
 ---
-title: "System Architecture"
+title: "System Architecture"  
 description: "Deep dive into dstack's layered architecture and component interactions"
 ---
 
-# System Architecture
+# DStack System Architecture
 
-dstack follows a modern, distributed architecture designed for security, scalability, and portability. This page provides a comprehensive overview of how the different components work together to provide secure application deployment in TEEs.
+This page provides a technical overview of dstack’s system architecture—detailing how each component contributes to secure, scalable, and verifiable container deployments. dstack is designed to transform standard containers into confidential workloads using hardware-backed isolation, decentralized trust, and zero-trust networking.
 
-## Architecture Overview
+Here, you’ll find a breakdown of how dstack’s components interact: from user interfaces and orchestration layers to security services and confidential VMs. The architecture emphasizes cryptographic verification at every stage, secure VM orchestration, and robust management of secrets and network boundaries.
 
-dstack's architecture is organized into distinct layers, each responsible for specific functionality while maintaining security boundaries.
+
+### We started off by Establishing Trusted vs Untrusted Boundaries
+
+In this architecture, trust boundaries are established to clearly delineate which components are considered secure and which are not. Trusted systems are those whose integrity and confidentiality are maintained through hardware-based security features, such as Intel TDX, cryptographic verification, and measured boot processes. These mechanisms ensure that only authorized and verified code is executed, and that sensitive operations and data remain protected. In contrast, untrusted systems include elements like the host operating system, the hypervisor outside the trusted execution environment, network infrastructure, storage systems (regardless of encryption at rest), and external services such as DNS or certificate authorities. These components are considered untrusted because they operate outside the hardware-enforced security perimeter and may be susceptible to compromise or manipulation. The architecture is intentionally designed so that, even in the event of a breach or compromise of untrusted systems, the security and confidentiality of trusted components and their data are preserved.
+
+<div className="my-8">
+  <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+    {/* Trusted */}
+    <div className="bg-gradient-to-br from-green-50 to-green-100 border border-green-200 shadow-md p-6 rounded-2xl flex flex-col hover:shadow-lg transition-shadow duration-200">
+      <h4 className="font-bold text-green-800 text-lg mb-4">Trusted Components</h4>
+      <ul className="space-y-3 text-green-900 text-[15px] list-none">
+        <ul className="flex items-center">
+          <span className="inline-flex items-center justify-center w-7 h-7 rounded-full bg-green-200 mr-3">
+            <svg className="w-4 h-4 text-green-700" fill="none" stroke="currentColor" strokeWidth="3" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+            </svg>
+          </span>
+          Intel TDX Hardware Attestation
+        </ul>
+        <ul className="flex items-center">
+          <span className="inline-flex items-center justify-center w-7 h-7 rounded-full bg-green-200 mr-3">
+            <svg className="w-4 h-4 text-green-700" fill="none" stroke="currentColor" strokeWidth="3" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+            </svg>
+          </span>
+          Cryptographic Quote Verification
+        </ul>
+        <ul className="flex items-center">
+          <span className="inline-flex items-center justify-center w-7 h-7 rounded-full bg-green-200 mr-3">
+            <svg className="w-4 h-4 text-green-700" fill="none" stroke="currentColor" strokeWidth="3" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+            </svg>
+          </span>
+          Blockchain Smart Contract Consensus
+        </ul>
+        <ul className="flex items-center">
+          <span className="inline-flex items-center justify-center w-7 h-7 rounded-full bg-green-200 mr-3">
+            <svg className="w-4 h-4 text-green-700" fill="none" stroke="currentColor" strokeWidth="3" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+            </svg>
+          </span>
+          Hardware-derived Key Material
+        </ul>
+        <ul className="flex items-center">
+          <span className="inline-flex items-center justify-center w-7 h-7 rounded-full bg-green-200 mr-3">
+            <svg className="w-4 h-4 text-green-700" fill="none" stroke="currentColor" strokeWidth="3" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+            </svg>
+          </span>
+          Measured Boot and Code Integrity
+        </ul>
+      </ul>
+    </div>
+    {/* Untrusted */}
+    <div className="bg-gradient-to-br from-red-50 to-red-100 border border-red-200 shadow-md p-6 rounded-2xl flex flex-col hover:shadow-lg transition-shadow duration-200">
+      <h4 className="font-bold text-red-800 text-lg mb-4">Untrusted Components</h4>
+      <ul className="space-y-3 text-red-900 text-[15px] list-none">
+        <ul className="flex items-center">
+          <span className="inline-flex items-center justify-center w-7 h-7 rounded-full bg-red-200 mr-3">
+            <svg className="w-4 h-4 text-red-700" fill="none" stroke="currentColor" strokeWidth="3" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </span>
+          Host Operating System
+        </ul>
+        <ul className="flex items-center">
+          <span className="inline-flex items-center justify-center w-7 h-7 rounded-full bg-red-200 mr-3">
+            <svg className="w-4 h-4 text-red-700" fill="none" stroke="currentColor" strokeWidth="3" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </span>
+          Hypervisor (outside TEE boundary)
+        </ul>
+        <ul className="flex items-center">
+          <span className="inline-flex items-center justify-center w-7 h-7 rounded-full bg-red-200 mr-3">
+            <svg className="w-4 h-4 text-red-700" fill="none" stroke="currentColor" strokeWidth="3" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </span>
+          Network Infrastructure
+        </ul>
+        <ul className="flex items-center">
+          <span className="inline-flex items-center justify-center w-7 h-7 rounded-full bg-red-200 mr-3">
+            <svg className="w-4 h-4 text-red-700" fill="none" stroke="currentColor" strokeWidth="3" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </span>
+          Storage Systems (encrypted at rest)
+        </ul>
+        <ul className="flex items-center">
+          <span className="inline-flex items-center justify-center w-7 h-7 rounded-full bg-red-200 mr-3">
+            <svg className="w-4 h-4 text-red-700" fill="none" stroke="currentColor" strokeWidth="3" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </span>
+          External DNS and Certificate Authorities
+        </ul>
+      </ul>
+    </div>
+  </div>
+</div>
+
+
+## Now let's Deep Dive into the dstack Architecture
+
+dstack’s architecture is organized into distinct layers, each with a specific role and strict security boundaries. User tools, orchestration engines, security services, and confidential VMs work together to deliver secure, auditable deployments at scale. The following sections and diagrams explain the responsibilities and interactions of each layer in detail.
+
+
+*This diagram illustrates the layered architecture of the dstack system, showing how user-facing interfaces, orchestration and security services, confidential VM components, and core infrastructure all interact. Each arrow represents a direct communication or integration path between components, from the user's CLI, dashboard, and SDKs at the top, down to trusted hardware, secure networking, and blockchain integration at the base. The design emphasizes separation of concerns and trusted execution across every layer of the stack.*
 
 ```mermaid
 graph TB
     subgraph "User Layer"
         CLI[dstack CLI]
-        WebUI[Web Dashboard]
+        WebUI[Web Dashboard] 
         SDK[SDKs]
     end
     
     subgraph "Orchestration Layer"
         VMM[dstack-vmm]
+        SUP[Supervisor]
         Gateway[dstack-gateway]
     end
     
     subgraph "Security Layer"
         KMS[dstack-kms]
         RA[Remote Attestation]
+        PCCS[PCCS Service]
     end
     
     subgraph "CVM Layer"
-        OS[dstack-os]
-        Agent[dstack-guest-agent]
-        Containers[Docker Containers]
+        GA[dstack-guest-agent]
+        Docker[Docker Runtime]
+        Apps[Application Containers]
     end
     
     subgraph "Infrastructure"
-        TEE[TEE Hardware]
-        Blockchain[Blockchain]
+        TDX[Intel TDX TEE]
+        WG[WireGuard VPN]
+        Blockchain[Ethereum Chain]
     end
     
     CLI --> VMM
     WebUI --> VMM
-    SDK --> Agent
-    VMM --> OS
-    Gateway --> Agent
+    SDK --> GA
+    VMM --> SUP
+    VMM --> Gateway
+    Gateway --> GA
     KMS --> Blockchain
-    Agent --> Containers
-    OS --> TEE
-    RA --> TEE
+    GA --> Docker
+    Docker --> Apps
+    VMM --> TDX
+    Gateway --> WG
+    GA --> TDX
+    RA --> PCCS
 ```
 
-## Layered Architecture
+## [VMM (Virtual Machine Manager) Architecture](https://github.com/Dstack-TEE/dstack/blob/45ebd05a/vmm/src/main.rs)
 
-### 1. User Interface Layer
+The VMM is the core orchestrator implemented in Rust that manages the complete lifecycle of Confidential VMs.
 
-The topmost layer provides multiple ways for users to interact with dstack:
+*This expandable diagram details the internal architecture of the VMM system, highlighting the main layers and service groupings. Each component is colored by function: core VMM subsystems use varying shades of green to emphasize their role within the trusted execution environment, while external interfaces and integrations are rendered in gray or blue for visual distinction. The diagram captures key data flows and relationships—from user-facing entry points, through orchestration and resource management, to integration with external key management and API endpoints—making the hierarchy and scope of each subsystem clear at a glance.*
+<a href="/docs/images/vmm%20internal%20arch.png" target="_blank">
+  <img src="/docs/images/vmm%20internal%20arch.png" alt="VMM Internal Architecture" style={{maxWidth: "600px", width: "100%", marginTop: "1em", border: "1px solid #ccc", borderRadius: "6px", cursor: "zoom-in"}} />
+</a>
 
-<table className="w-full my-4">
-  <thead>
-    <tr className="bg-gray-100">
-      <th className="p-3 text-left">Component</th>
-      <th className="p-3 text-left">Purpose</th>
-      <th className="p-3 text-left">Key Features</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td className="p-3 font-semibold">dstack CLI</td>
-      <td className="p-3">Command-line interface for deployment and management</td>
-      <td className="p-3">
-        • Deploy applications<br/>
-        • Manage CVMs<br/>
-        • View logs and metrics<br/>
-        • Verify attestation
-      </td>
-    </tr>
-    <tr className="bg-gray-50">
-      <td className="p-3 font-semibold">Web Dashboard</td>
-      <td className="p-3">Browser-based management interface</td>
-      <td className="p-3">
-        • Visual deployment<br/>
-        • Real-time monitoring<br/>
-        • Resource management<br/>
-        • Security verification
-      </td>
-    </tr>
-    <tr>
-      <td className="p-3 font-semibold">SDKs</td>
-      <td className="p-3">Language-specific libraries for integration</td>
-      <td className="p-3">
-        • Python, JavaScript, Go<br/>
-        • Key derivation<br/>
-        • Attestation verification<br/>
-        • Secure communication
-      </td>
-    </tr>
-  </tbody>
-</table>
 
-### 2. Orchestration Layer
 
-This layer manages the lifecycle and coordination of secure applications:
+**Key VMM Services** ([VMM RPC API](https://github.com/Dstack-TEE/dstack/blob/45ebd05a/vmm/rpc/proto/vmm_rpc.proto)):  
+The VMM exposes a comprehensive suite of services through its RPC API, enabling robust management of Confidential Virtual Machines (CVMs) throughout their entire lifecycle. This includes the ability to create, start, stop, remove, and upgrade VMs with fine-grained control, ensuring operational flexibility and reliability. The VMM continuously monitors and allocates system resources, dynamically adjusting CPU, memory, disk, and GPU assignments to meet workload demands while maintaining optimal performance and isolation. Advanced networking capabilities are provided through seamless port mapping and configurable network topologies, supporting both user-mode and bridge networking scenarios. GPU management is fully integrated, allowing for efficient discovery, allocation, and sharing of GPU resources across VMs. Additionally, the VMM handles image and configuration management, streamlining the deployment and maintenance of VM environments with consistent and reproducible settings.
 
-#### dstack-vmm (Virtual Machine Manager)
+**VMM Configuration** ([vmm.toml reference](https://github.com/Dstack-TEE/dstack/blob/45ebd05a/vmm/vmm.toml)):  
+VMM configuration is defined in a flexible TOML file that governs all operational parameters, allowing administrators to tailor the environment to specific requirements. The configuration supports both user-mode and bridge networking, enabling versatile connectivity options for guest VMs. It manages CID pools to facilitate secure and efficient guest communication, and provides configurable resource limits for CPU, memory, and disk to ensure fair allocation and prevent resource contention. GPU discovery and allocation are natively supported, allowing the VMM to automatically detect available GPUs and assign them to VMs as needed. To enhance reliability, the configuration also includes auto-restart capabilities, ensuring that failed VMs are automatically recovered and service continuity is maintained without manual intervention.
 
-The VMM is the core orchestrator that manages Confidential VMs:
+## [Gateway Architecture](https://github.com/Dstack-TEE/dstack/blob/45ebd05a/gateway/src/main.rs)
 
-<div className="bg-blue-50 p-6 rounded-lg my-4">
-  <h4 className="font-semibold mb-3">Key Responsibilities:</h4>
-  <ul className="space-y-2">
-    <li>• <strong>CVM Lifecycle:</strong> Create, start, stop, and destroy CVMs</li>
-    <li>• <strong>Resource Allocation:</strong> Manage CPU, memory, storage, and network resources</li>
-    <li>• <strong>API Server:</strong> Expose management APIs for CLI and web UI</li>
-    <li>• <strong>State Management:</strong> Track deployment status and configurations</li>
-  </ul>
-</div>
+The Gateway provides secure network access and traffic routing with automatic TLS certificate management.
 
-**API Endpoints:**
-```
-/prpc          - RPC API for internal communication
-/api           - Host management API
-/guest         - Guest agent communication
-/              - Web dashboard
+### Gateway Internal Architecture  
+
+*This diagram presents the internal architecture of the Gateway service, organizing its core functions, networking components, and security mechanisms into distinct layers. Each service block is visually grouped according to its domain—core services, network layer, and security—to highlight separation of responsibilities. The directional arrows depict key data flows and operational dependencies, from service proxies and RPC handlers through network management (including TLS, VPN, and load balancing), to certificate automation and authentication controls. The visual layout clarifies how the Gateway orchestrates secure, reliable, and scalable connectivity across the system.*
+```mermaid
+graph TB
+    subgraph "Gateway Core Services"
+        Main[Main Service]
+        Admin[Admin Service]
+        Proxy[Proxy Engine]
+        RPC[Gateway RPC Handler]
+    end
+    
+    subgraph "Network Layer"
+        TLS[TLS Termination]
+        WG[WireGuard VPN]
+        LB[Load Balancer]
+        Cert[Certificate Manager]
+    end
+    
+    subgraph "Security"
+        ACME[Let's Encrypt ACME]
+        RA_TLS[RA-TLS Integration]
+        Auth[Authentication]
+    end
+    
+    Main --> Proxy
+    Admin --> Cert
+    Proxy --> TLS
+    Proxy --> WG
+    TLS --> ACME
+    RA_TLS --> Auth
+    WG --> LB
 ```
 
-#### dstack-gateway
+**[Gateway RPC Services](https://github.com/Dstack-TEE/dstack/blob/45ebd05a/gateway/rpc/proto/gateway_rpc.proto):**  
+The Gateway exposes a set of RPC services that enable core networking and management functionality. These services facilitate the registration of Confidential Virtual Machines (CVMs) and the automated setup of WireGuard tunnels, ensuring secure and authenticated connectivity between components. The RPC interface also orchestrates traffic routing and load balancing, dynamically distributing network flows to optimize resource utilization and maintain high availability. Integrated ACME certificate management automates the lifecycle of TLS certificates, leveraging Let's Encrypt to provision, renew, and revoke certificates as needed for secure communications. Additionally, the Gateway provides real-time status and health monitoring endpoints, allowing for continuous observability and proactive management of gateway operations.
 
-The gateway provides secure network access to applications:
-
-<div className="bg-green-50 p-6 rounded-lg my-4">
-  <h4 className="font-semibold mb-3">Core Functions:</h4>
-  <ul className="space-y-2">
-    <li>• <strong>HTTPS Termination:</strong> Automatic TLS with Let's Encrypt</li>
-    <li>• <strong>Traffic Routing:</strong> Route requests to appropriate CVMs</li>
-    <li>• <strong>WireGuard VPN:</strong> Secure tunnels between components</li>
-    <li>• <strong>Certificate Management:</strong> Automated certificate lifecycle</li>
-  </ul>
-</div>
-
-**Routing Patterns:**
-```
-app.example.com         → Default app routing
-custom.domain.com       → Custom domain via DNS TXT
-app-id.srv.domain.com   → Direct CVM access
-```
-
-### 3. Security Layer
-
-Security is enforced through multiple components:
-
-#### dstack-kms (Key Management Service)
-
-The KMS manages all cryptographic operations:
+### Gateway Service and Traffic Flow Diagram
 
 ```mermaid
-graph LR
-    App[Application] -->|Request Key| KMS[dstack-kms]
-    KMS -->|Verify Attestation| RA[RA Service]
-    KMS -->|Check Authorization| BC[Blockchain]
-    KMS -->|Return Key| App
+graph TB
+    subgraph "External Network"
+        Client["External Client"]
+    end
+    
+    subgraph "dstack-gateway Core Services"
+        ProxyService["Proxy Service"]
+        WGService["WireGuard Service"]
+        CertBot["Certificate Management"]
+        SyncService["Sync Service"]
+        AuthService["Auth Service"]
+        RecycleService["Recycle Service"]
+    end
+    
+    subgraph "Confidential VMs"
+        CVM1["CVM Instance 1"]
+        CVM2["CVM Instance 2"]
+    end
+    
+    Client -->|"HTTPS Request"| ProxyService
+    ProxyService -->|"Route Traffic"| WGService
+    WGService -->|"Secure Tunnel"| CVM1
+    WGService -->|"Secure Tunnel"| CVM2
+    
+    CertBot -->|"Manage Certificates"| ProxyService
+    SyncService -->|"Cluster State"| SyncService
+    AuthService -->|"Verify Apps"| ProxyService
+    RecycleService -->|"Cleanup Stale"| WGService
 ```
 
-**Key Types Managed:**
-- Root CA certificates
-- Application-specific ECDSA keys
-- Disk encryption keys
-- TLS certificates
+**Gateway Configuration** ([gateway.toml reference](https://github.com/Dstack-TEE/dstack/blob/45ebd05a/gateway/gateway.toml)):  
+Gateway configuration is defined in a TOML file that specifies all operational parameters. This includes detailed WireGuard VPN tunnel settings, enabling secure encrypted channels for inter-node communication. The configuration supports automatic certificate provisioning through Let's Encrypt, streamlining the deployment and renewal of TLS certificates without manual intervention. Administrators can fine-tune proxy behavior by adjusting timeouts and buffer sizes to match workload requirements and network conditions. Furthermore, the configuration supports multi-gateway synchronization, allowing multiple gateway instances to coordinate state and provide seamless, resilient service across distributed environments.
 
-#### Remote Attestation (RA)
+## [KMS (Key Management Service) Architecture](https://github.com/Dstack-TEE/dstack/blob/45ebd05a/kms/src/main.rs)
 
-Ensures code integrity and TEE authenticity:
+The KMS handles all cryptographic operations and integrates with blockchain for decentralized authorization.
 
-<div className="bg-purple-50 p-6 rounded-lg my-4">
-  <h4 className="font-semibold mb-3">Attestation Flow:</h4>
-  <ol className="space-y-2">
-    <li>1. TEE generates hardware-signed quote</li>
-    <li>2. Quote includes measurements of code and configuration</li>
-    <li>3. RA service verifies quote using Intel DCAP</li>
-    <li>4. Application receives attestation certificate</li>
-  </ol>
-</div>
+### KMS Internal Architecture
 
-### 4. CVM Layer
+*This diagram outlines the internal architecture of the KMS (Key Management Service), clearly organizing its core logic, key management components, and external integrations. Each section is grouped to reflect functional boundaries: the KMS core oversees primary operations and state, the key management layer handles a variety of cryptographic keys and certificates, and the integration layer connects with external systems like blockchains and remote attestation services. The directional arrows illustrate the flow of key material and control signals between modules, clarifying how onboarding, crypto operations, and state management all interact to securely provision, store, and expose keys across the trusted environment.*
 
-Inside each Confidential VM:
-
-#### dstack-os
-
-A minimal, hardened Linux distribution:
-- Based on Yocto/OpenEmbedded
-- Includes only essential components
-- Measured boot for attestation
-- Read-only root filesystem
-
-#### dstack-guest-agent
-
-Manages containers within the CVM:
-
-```go
-// Guest agent responsibilities
-type GuestAgent struct {
-    ContainerManager  // Docker container lifecycle
-    KeyManager       // Local key derivation
-    AttestationSvc   // Generate quotes
-    MetricsCollector // Resource monitoring
-}
+```mermaid
+graph TB
+    subgraph "KMS Core"
+        Main[Main KMS Service]
+        Onboard[Onboarding Service]
+        Crypto[Crypto Operations]
+        State[KMS State Manager]
+    end
+    
+    subgraph "Key Management"
+        AppKeys[App-Specific Keys]
+        CACerts[CA Certificates]  
+        DiskCrypt[Disk Encryption Keys]
+        K256[ECDSA K256 Keys]
+    end
+    
+    subgraph "External Integration"
+        BC[Blockchain Contract]
+        RA[Remote Attestation]
+        TempCA[Temporary CA]
+    end
+    
+    Main --> State
+    Main --> Crypto
+    Onboard --> TempCA
+    Crypto --> AppKeys
+    Crypto --> CACerts
+    Crypto --> DiskCrypt
+    Crypto --> K256
+    State --> BC
+    State --> RA
 ```
 
-### 5. Infrastructure Layer
+**KMS RPC Services:** ([see service definition in kms_rpc.proto](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/kms/rpc/proto/kms_rpc.proto#L84))
 
-The foundation that dstack builds upon:
+The KMS exposes a comprehensive suite of RPC services designed to facilitate secure cryptographic operations and system integration. One of the core services is application key derivation, which is tightly coupled with remote attestation to ensure that keys are only provisioned to verified and trusted environments. This process leverages attestation evidence to validate the integrity and authenticity of the requesting entity before any key material is derived or released. The KMS also provides robust certificate signing and chain management capabilities, enabling automated issuance, renewal, and revocation of certificates, as well as the maintenance of certificate chains to establish trust hierarchies within the system. For secure handling of sensitive configuration data, the KMS manages environment variable encryption keys, allowing applications to encrypt and decrypt environment variables at runtime without exposing raw secrets. Integration with blockchain technology is another critical service, where the KMS interacts with smart contracts to enforce decentralized authorization policies, ensuring that only entities with valid on-chain permissions can access protected resources or perform sensitive operations. Additionally, the KMS oversees image cache management, which involves the secure storage, retrieval, and validation of container or VM images, ensuring that only attested and authorized images are deployed within the infrastructure.
 
-<table className="w-full my-4">
-  <thead>
-    <tr className="bg-gray-100">
-      <th className="p-3 text-left">Component</th>
-      <th className="p-3 text-left">Current Support</th>
-      <th className="p-3 text-left">Future Support</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td className="p-3 font-semibold">TEE Hardware</td>
-      <td className="p-3">Intel TDX</td>
-      <td className="p-3">AMD SEV-SNP, ARM CCA</td>
-    </tr>
-    <tr className="bg-gray-50">
-      <td className="p-3 font-semibold">Blockchain</td>
-      <td className="p-3">Ethereum-compatible</td>
-      <td className="p-3">Multi-chain support</td>
-    </tr>
-    <tr>
-      <td className="p-3 font-semibold">Storage</td>
-      <td className="p-3">Local encrypted volumes</td>
-      <td className="p-3">Distributed storage</td>
-    </tr>
-  </tbody>
-</table>
+**Key Types Managed:**  
+(see [kms_rpc.proto message struct definition](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/kms/rpc/proto/kms_rpc.proto#L21))
+
+The KMS is responsible for managing a diverse set of cryptographic key types, each tailored to specific security requirements within the platform. It maintains the TLS CA certificate chain, which forms the foundation of trust for all TLS communications by enabling the issuance and validation of server and client certificates. For data-at-rest protection, the KMS generates and stores disk encryption keys that are used to implement full disk encryption, safeguarding sensitive data even if physical storage is compromised. To support secure environment variable handling, the KMS provisions X25519 keys, which are used for encrypting and decrypting environment variables, ensuring that secrets remain protected throughout their lifecycle. The system also manages ECDSA K256 keys, which are essential for performing Ethereum-compatible cryptographic operations, such as signing blockchain transactions or verifying signatures in decentralized applications. Finally, the KMS orchestrates the creation and management of signed key chains, which are used for trust verification across distributed components, enabling secure delegation and validation of cryptographic authority within the ecosystem.
+
+## Guest Agent Architecture
+
+[See main.rs implementation reference](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/guest-agent/src/main.rs#L200)
+
+The Guest Agent runs inside each CVM and provides the runtime environment for applications.
+
+### Guest Agent Internal Architecture
+
+*This diagram depicts the internal architecture of the Guest Agent, which operates inside each confidential VM (CVM) to orchestrate application runtime, container lifecycle, and security services. Core service groupings show how external and internal APIs interact with the state manager, which coordinates both application execution and cryptographic operations. Container management subsystems oversee Docker runtime, monitoring, and system health, while the security layer handles key derivation, attestation, and event logging. The flow of data and control across these modules demonstrates how the Guest Agent maintains both robust runtime orchestration and a strong security posture within the confidential computing environment.*
+
+```mermaid
+graph TB
+    subgraph "Guest Agent Services"
+        External[External RPC]
+        Internal[Internal RPC] 
+        InternalV0[Internal RPC v0]
+        GuestAPI[Guest API]
+        State[App State Manager]
+    end
+    
+    subgraph "Container Management"
+        Docker[Docker Runtime]
+        Monitor[Container Monitor]
+        Health[Health Checks]
+        Watchdog[Systemd Watchdog]
+    end
+    
+    subgraph "Security Services"
+        KeyDeriv[Key Derivation]
+        QuoteGen[TDX Quote Generation]
+        EventLog[Event Logging]
+        Attest[Attestation Service]
+    end
+    
+    External --> State
+    Internal --> State  
+    InternalV0 --> State
+    GuestAPI --> State
+    State --> Docker
+    State --> KeyDeriv
+    State --> QuoteGen
+    Docker --> Monitor
+    Monitor --> Health
+    Health --> Watchdog
+    KeyDeriv --> Attest
+    QuoteGen --> EventLog
+```
+
+**Guest Agent RPC Services:**  
+[See the service definition in agent_rpc.proto](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/guest-agent/rpc/proto/agent_rpc.proto#L31)
+
+The Guest Agent exposes a set of RPC services that enable secure and flexible management of cryptographic and attestation operations within the CVM environment. These services include the derivation of TLS keys along with the automated generation of certificates, ECDSA key generation for cryptographic signing, and the production of TDX quotes with support for custom report data. Additionally, the Guest Agent is capable of emitting events to extend RTMR3 measurements, thereby supporting advanced attestation workflows, and provides comprehensive application information and status reporting to facilitate monitoring and integration with external systems.
+
+**Supported Key Operations**  
+[See full list in agent_rpc.proto &rarr;](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/guest-agent/rpc/proto/agent_rpc.proto#L50)
+
+The Guest Agent supports a range of key management operations, including path-based key derivation for hierarchical key management, certificate generation with configurable subject and alternative names, and integration with RA-TLS for remote attestation. It can issue both server and client authentication certificates as required by the application, and supports random seed-based key generation to ensure cryptographic strength and flexibility in key provisioning workflows.
+
+## Supervisor Architecture
+
+[See the main Supervisor implementation in main.rs](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/supervisor/src/main.rs#L112)
+
+The Supervisor is responsible for orchestrating the lifecycle of VM processes and provides a web-based management interface for operational control. It features robust process lifecycle management with PID tracking, facilitates communication through Unix domain sockets, and exposes a web API for VM control operations. The Supervisor also supports configurable logging and daemonization to suit various deployment environments, and enforces resource limits to ensure reliable and secure operation of managed virtual machines.
 
 ## Component Interaction Flows
 
-### Deployment Flow
-
-When deploying an application, components interact in a specific sequence:
+### VM Deployment Flow
 
 ```mermaid
 sequenceDiagram
-    participant User
-    participant CLI
-    participant VMM
-    participant KMS
-    participant CVM
-    participant Gateway
-    
-    User->>CLI: dstack deploy app.yml
-    CLI->>VMM: CreateVM request
-    VMM->>KMS: Request encryption keys
-    KMS->>VMM: Return keys
-    VMM->>CVM: Create and start
-    CVM->>VMM: Report ready
-    VMM->>Gateway: Register routes
-    Gateway->>CVM: Establish WireGuard
-    VMM->>User: Deployment complete
+    participant CLI as dstack CLI
+    participant VMM as dstack-vmm
+    participant SUP as Supervisor
+    participant KMS as dstack-kms  
+    participant GA as Guest Agent
+    participant GW as Gateway
+
+    CLI->>VMM: CreateVm(VmConfiguration)
+    VMM->>KMS: GetAppKey(vm_config + quote)
+    KMS->>VMM: AppKeyResponse(keys + certs)
+    VMM->>SUP: StartVM(config)
+    SUP->>VMM: VM Started
+    VMM->>GA: Configure Keys
+    GA->>GW: RegisterCvm(wg_pubkey)
+    GW->>GA: WireGuardConfig + routes
+    VMM->>CLI: VM ID + Status
 ```
 
-### Request Handling Flow
-
-How external requests reach your application:
+### Request Routing Flow
 
 ```mermaid
 sequenceDiagram
     participant Client
-    participant Gateway
-    participant CVM
-    participant App
-    
-    Client->>Gateway: HTTPS request
-    Gateway->>Gateway: TLS termination
-    Gateway->>CVM: Forward via WireGuard
-    CVM->>App: Route to container
-    App->>CVM: Response
-    CVM->>Gateway: Return response
-    Gateway->>Client: HTTPS response
+    participant GW as Gateway
+    participant WG as WireGuard
+    participant GA as Guest Agent
+    participant App as Application
+
+    Client->>GW: HTTPS Request
+    GW->>GW: TLS Termination
+    GW->>WG: Route via VPN
+    WG->>GA: Forward Request  
+    GA->>App: Proxy to Container
+    App->>GA: Application Response
+    GA->>WG: Return Response
+    WG->>GW: VPN Response
+    GW->>Client: HTTPS Response
 ```
 
-### Attestation Flow
+### Remote Attestation Flow
 
-Verifying application integrity:
-
-```mermaid
+```mermaid  
 sequenceDiagram
     participant Client
-    participant App
-    participant Agent
-    participant TEE
-    participant Verifier
-    
-    Client->>App: Request with attestation
-    App->>Agent: Get quote
-    Agent->>TEE: Generate quote
-    TEE->>Agent: Hardware-signed quote
-    Agent->>App: Return quote
-    App->>Client: Response + quote
-    Client->>Verifier: Verify quote
-    Verifier->>Client: Verification result
+    participant GA as Guest Agent
+    participant TDX as Intel TDX
+    participant KMS as dstack-kms
+    participant BC as Blockchain
+
+    Client->>GA: Request with Attestation
+    GA->>TDX: Generate Quote
+    TDX->>GA: Hardware-signed Quote
+    GA->>KMS: GetAppKey(quote)
+    KMS->>BC: Verify Authorization
+    BC->>KMS: Auth Result
+    KMS->>GA: Keys + Certificate
+    GA->>Client: Response + Proof
 ```
 
 ## Network Architecture
 
-dstack uses multiple network layers for security and isolation:
+### Multi-Layer Network Security
 
-<div className="bg-gray-50 p-6 rounded-lg my-4">
-  <h4 className="font-semibold mb-3">Network Layers:</h4>
-  <table className="w-full">
-    <tr>
-      <td className="p-2 font-semibold">Public Network</td>
-      <td className="p-2">Internet-facing HTTPS (ports 80/443)</td>
-    </tr>
-    <tr className="bg-white">
-      <td className="p-2 font-semibold">Management Network</td>
-      <td className="p-2">VMM ↔ Gateway communication (internal)</td>
-    </tr>
-    <tr>
-      <td className="p-2 font-semibold">WireGuard VPN</td>
-      <td className="p-2">Encrypted tunnels Gateway ↔ CVMs</td>
-    </tr>
-    <tr className="bg-white">
-      <td className="p-2 font-semibold">CVM Internal</td>
-      <td className="p-2">Container-to-container communication</td>
-    </tr>
-  </table>
-</div>
+([gateway config](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/gateway/gateway.toml#L38)) ([vmm config](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/vmm/vmm.toml#L12))
+
+*This diagram provides a detailed view of the dstack multi-layer network architecture, emphasizing the layered security controls that protect communication from the public internet down to confidential workloads. Each layer is visually differentiated by shades of green, representing increasing trust and isolation as traffic flows inward. The structure ensures strict separation between external access, secure tunnels, and internal virtualized resources, while maintaining strong cryptographic guarantees at every boundary. The architecture demonstrates how network segmentation, encrypted tunneling, automated certificate management, and container-level isolation work together to create a robust and defense-in-depth security posture.*
+
+```mermaid
+graph TB
+    %% Public Internet
+    subgraph PUB["Public Internet"]
+        HTTPS[HTTPS Traffic :443]
+        DNS[DNS Resolution]
+    end
+
+    %% Gateway Layer
+    subgraph GATE["Gateway Layer"]
+        LB[Load Balancer]
+        TLS[TLS Termination]
+        ACME[ACME Certificates]
+    end
+
+    %% VPN Layer
+    subgraph VPN["VPN Layer"]
+        WG[WireGuard Network]
+        Tunnel[Encrypted Tunnels]
+    end
+
+    %% CVM Network
+    subgraph CVM["CVM Internal Network"]
+        Internal[Internal Bridge]
+        DHCP[DHCP Range<br/>10.0.2.0/24]
+        Containers[Container Networks]
+    end
+
+    HTTPS --> LB
+    DNS --> LB
+    LB --> TLS
+    TLS --> ACME
+    TLS --> WG
+    WG --> Tunnel
+    Tunnel --> Internal
+    Internal --> DHCP
+    DHCP --> Containers
+
+    %% -- Coloring (shades of green inward) --
+    style PUB fill:#e2e8f0,stroke:#a3a3a3,stroke-width:2px
+    style HTTPS fill:#e2e8f0,stroke:#a3a3a3
+    style DNS fill:#e2e8f0,stroke:#a3a3a3
+
+    style GATE fill:#d1fae5,stroke:#059669,stroke-width:2.5px
+    style LB fill:#bbf7d0,stroke:#059669
+    style TLS fill:#86efac,stroke:#059669
+    style ACME fill:#dcfce7,stroke:#059669
+
+    style VPN fill:#6ee7b7,stroke:#047857,stroke-width:2.5px
+    style WG fill:#4ade80,stroke:#047857
+    style Tunnel fill:#34d399,stroke:#047857
+
+    style CVM fill:#f0fdf4,stroke:#16a34a,stroke-width:2.5px
+    style Internal fill:#bbf7d0,stroke:#16a34a
+    style DHCP fill:#86efac,stroke:#16a34a
+    style Containers fill:#dcfce7,stroke:#16a34a
+```
+
+---
+
+### Network Configuration Layers
+
+* **Public Layer:**
+  Handles all ingress from the public internet. HTTPS and DNS traffic are first received and terminated at the load balancer. This layer enforces TLS encryption at the network edge and acts as the first point of defense against external threats.
+
+* **Gateway Layer:**
+  Consists of the load balancer, TLS termination, and automated certificate management using ACME. Here, connections are securely routed and encrypted certificates are managed dynamically. The gateway strictly enforces security boundaries and forwards only authenticated, encrypted traffic deeper into the stack.
+
+* **VPN Layer:**
+  All internal traffic passes through a dedicated WireGuard VPN overlay. Encrypted tunnels are automatically provisioned for both host-to-host and host-to-VM traffic, providing confidential communication even across untrusted networks. This adds a strong cryptographic layer, ensuring that no data traverses the underlying infrastructure unprotected.
+
+* **CVM Internal Network:**
+  At the heart of the system, the internal network segments VM and container workloads via isolated virtual bridges and DHCP-managed subnets. Each confidential VM (CVM) and its containers receive unique, securely allocated addresses, minimizing lateral movement and further compartmentalizing resources. Communication between workloads is strictly controlled and isolated from public and management networks.
+
+* **Security:**
+  All network segments are encrypted and authenticated, with certificates managed automatically and VPN keys rotated regularly. Only explicitly authorized endpoints can communicate, and all management, orchestration, and application data flows are cryptographically verified at each boundary.
+
+---
+
+**The layered network architecture implements mandatory isolation between public, management, and confidential computing environments. Each segment is cryptographically protected, with no direct access permitted across boundaries. Only authenticated and authorized traffic is allowed to traverse between layers, minimizing attack surface and enforcing defense-in-depth.**
+
+
+
+---
 
 ## Security Architecture
 
-Security is enforced at every layer:
+### Defense in Depth Model
 
-### Defense in Depth
+1. Foundational Trust Chain
 
 ```mermaid
-graph TD
-    A[Hardware TEE Protection] -->|Layer 1| B[Encrypted Memory]
-    B -->|Layer 2| C[Measured Boot]
-    C -->|Layer 3| D[Remote Attestation]
-    D -->|Layer 4| E[Encrypted Storage]
-    E -->|Layer 5| F[TLS Communication]
-    F -->|Layer 6| G[Application Security]
+flowchart LR
+    A[TEE Hardware<br/>Protection]
+    B[Encrypted<br/>Memory]
+    C[Measured Boot<br/>& Attestation]
+    D[Remote Quote<br/>Verification]
+
+    A --> B --> C --> D
+
+    style A fill:#e6f0fa,stroke:#2b6cb0,stroke-width:2px
+    style B fill:#e6f0fa,stroke:#2b6cb0,stroke-width:2px
+    style C fill:#e6f0fa,stroke:#2b6cb0,stroke-width:2px
+    style D fill:#e6f0fa,stroke:#2b6cb0,stroke-width:2px
 ```
 
-### Trust Model
 
-<div className="grid grid-cols-1 md:grid-cols-2 gap-6 my-6">
-  <div className="bg-green-50 p-4 rounded-lg">
-    <h4 className="font-semibold text-green-800 mb-2">Trusted Components</h4>
-    <ul className="space-y-1 text-sm">
-      <li>✓ TEE hardware (Intel TDX)</li>
-      <li>✓ Cryptographic proofs</li>
-      <li>✓ Blockchain consensus</li>
-      <li>✓ Open-source code</li>
-    </ul>
-  </div>
-  <div className="bg-red-50 p-4 rounded-lg">
-    <h4 className="font-semibold text-red-800 mb-2">Untrusted Components</h4>
-    <ul className="space-y-1 text-sm">
-      <li>✗ Host operating system</li>
-      <li>✗ Hypervisor (outside TEE)</li>
-      <li>✗ Network infrastructure</li>
-      <li>✗ Storage systems</li>
-    </ul>
-  </div>
-</div>
 
-## Scalability Considerations
+2. Derived Controls & Runtime Protections
 
-dstack is designed to scale horizontally:
+```mermaid
+flowchart LR
+    E[Key Derivation<br/>& Storage]
+    F[Disk Encryption]
+    G[TLS /<br/>WireGuard]
+    H[Container<br/>Isolation]
 
-### Component Scaling
+    E --> F --> G --> H
 
-| Component | Scaling Method | Considerations |
-|-----------|----------------|----------------|
-| **dstack-vmm** | Multiple instances | Shared state via etcd/consul |
-| **dstack-gateway** | Load balancer | Synchronized certificates |
-| **dstack-kms** | Active-passive HA | Blockchain consistency |
-| **CVMs** | Horizontal scaling | Resource limits per host |
+    style E fill:#eafbe7,stroke:#258a38,stroke-width:2px
+    style F fill:#eafbe7,stroke:#258a38,stroke-width:2px
+    style G fill:#eafbe7,stroke:#258a38,stroke-width:2px
+    style H fill:#eafbe7,stroke:#258a38,stroke-width:2px
+```
 
-### Performance Characteristics
 
-<div className="bg-blue-50 p-4 rounded-lg my-4">
-  <h4 className="font-semibold mb-2">Typical Performance Metrics:</h4>
-  <ul className="space-y-1">
-    <li>• CVM boot time: 2-3 minutes (first boot with attestation)</li>
-    <li>• Container start: 5-10 seconds</li>
-    <li>• Attestation verification: 100-200ms</li>
-    <li>• Key derivation: 50-100ms</li>
-    <li>• Network latency overhead: 5-10ms (WireGuard)</li>
-  </ul>
-</div>
+
 
 ## Deployment Topologies
 
-dstack supports various deployment patterns:
+### Single Host Development
 
-### Single Host
+```mermaid
+flowchart TB
+    subgraph DevHost["Development Host"]
+        VMM["VMM<br/>:8080"]
+        Gateway["Gateway<br/>:8082"]
+        KMS["KMS<br/>:8081"]
+        Supervisor["Supervisor<br/>UDS"]
 
-Ideal for development and testing:
-```
-┌─────────────────────────────┐
-│         Host Server         │
-├─────────────────────────────┤
-│  VMM │ Gateway │ KMS │ CVMs │
-└─────────────────────────────┘
-```
+        subgraph CVMs["CVM Instances (TDX)"]
+            Agent1["Agent<br/>:8090"]
+            Agent2["Agent<br/>:8090"]
+        end
+    end
 
-### Multi-Host Cluster
+    VMM --> CVMs
+    Gateway --> CVMs
+    KMS --> CVMs
+    Supervisor --> CVMs
 
-Production deployment with high availability:
-```
-┌──────────────┐  ┌──────────────┐  ┌──────────────┐
-│   Host 1     │  │   Host 2     │  │   Host 3     │
-│ VMM │ CVMs   │  │ Gateway│CVMs │  │ KMS │ CVMs   │
-└──────────────┘  └──────────────┘  └──────────────┘
-        └─────────────┬─────────────┘
-                Load Balancer
-```
+    %% Coloring
+    style DevHost fill:#e9f9ee,stroke:#4ade80,stroke-width:2px
+    style VMM fill:#bbf7d0,stroke:#059669,stroke-width:2px
+    style Gateway fill:#bbf7d0,stroke:#059669,stroke-width:2px
+    style KMS fill:#bbf7d0,stroke:#059669,stroke-width:2px
+    style Supervisor fill:#bbf7d0,stroke:#059669,stroke-width:2px
+    style CVMs fill:#dcfce7,stroke:#34d399,stroke-width:2px
+    style Agent1 fill:#a7f3d0,stroke:#059669,stroke-width:2px
+    style Agent2 fill:#a7f3d0,stroke:#059669,stroke-width:2px
 
-### Hybrid Cloud
-
-Span across multiple providers:
-```
-┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│  On-Premise │     │  AWS TDX    │     │ Azure CVM   │
-│   Cluster   │ ←→  │  Instances  │ ←→  │ Instances   │
-└─────────────┘     └─────────────┘     └─────────────┘
-                          ↓
-                    Blockchain KMS
 ```
 
+### Production Multi-Host Cluster
+
+```mermaid
+flowchart LR
+    subgraph Host1["Host 1"]
+        VMM1["VMM<br/>+ CVMs"]
+        WireGuard1["WireGuard<br/>Endpoints"]
+    end
+    subgraph Host2["Host 2"]
+        Gateway2["Gateway<br/>+ CVMs"]
+        LB["Load Balancer<br/>TLS Termination"]
+    end
+    subgraph Host3["Host 3"]
+        KMS3["KMS<br/>+ CVMs"]
+        Blockchain["Blockchain<br/>Integration"]
+    end
+
+    WireGuard1 -- traffic --> LB
+    LB -- traffic --> Blockchain
+
+    %% Visual separation of hosts and components
+    style Host1 fill:#e5e7eb,stroke:#a3a3a3,stroke-width:2px
+    style VMM1 fill:#bbf7d0,stroke:#059669,stroke-width:2px
+    style WireGuard1 fill:#d1fae5,stroke:#10b981,stroke-width:2px
+
+    style Host2 fill:#e5e7eb,stroke:#a3a3a3,stroke-width:2px
+    style Gateway2 fill:#bbf7d0,stroke:#059669,stroke-width:2px
+    style LB fill:#f9fafb,stroke:#7dd3fc,stroke-width:2px
+
+    style Host3 fill:#e5e7eb,stroke:#a3a3a3,stroke-width:2px
+    style KMS3 fill:#bbf7d0,stroke:#059669,stroke-width:2px
+    style Blockchain fill:#bae6fd,stroke:#0369a1,stroke-width:2px
+
+```
+
+## Performance Characteristics & Resource Management
+
+*Understanding the performance and resource constraints of the dstack platform is essential for capacity planning, debugging, and cost modeling. This section summarizes the most important real-world timings and system limits, so operators and users know what to expect and where scaling thresholds or bottlenecks might arise. All configuration and reference links are included for full transparency and reproducibility.*
+
+---
+
+<div className="grid grid-cols-1 md:grid-cols-2 gap-6 my-6">
+  <div className="bg-blue-50 p-5 rounded-xl shadow-sm">
+    <h4 className="font-semibold mb-3 text-blue-900">Typical Performance Metrics</h4>
+    <ul className="space-y-2 text-sm text-blue-900 list-disc ml-6">
+      <li>CVM boot time: <span className="font-medium">30–60s</span> (with TDX attestation)</li>
+      <li>Container start: <span className="font-medium">2–5s</span> (Docker runtime)</li>
+      <li>Quote generation: <span className="font-medium">50–100ms</span> (TDX hardware)</li>
+      <li>Key derivation: <span className="font-medium">10–50ms</span> (KMS operations)</li>
+      <li>Network latency: <span className="font-medium">1–5ms</span> (WireGuard overhead)</li>
+      <li>TLS handshake: <span className="font-medium">100–200ms</span> (with RA-TLS verification)</li>
+    </ul>
+  </div>
+  <div className="bg-gray-50 p-5 rounded-xl shadow-sm">
+    <h4 className="font-semibold mb-3 text-gray-800">Key Resource Limits & Scaling</h4>
+    <ul className="space-y-2 text-sm text-gray-900 list-none">
+      <li><b>vCPU limit</b>: <a href="https://github.com/Dstack-TEE/dstack/blob/main/vmm/vmm.toml#L28" target="_blank" rel="noopener">20 per host</a></li>
+      <li><b>Memory limit</b>: <a href="https://github.com/Dstack-TEE/dstack/blob/main/vmm/vmm.toml#L29" target="_blank" rel="noopener">100GB per host</a></li>
+      <li><b>Disk size</b>: <a href="https://github.com/Dstack-TEE/dstack/blob/main/vmm/vmm.toml#L25" target="_blank" rel="noopener">500GB per VM</a></li>
+      <li><b>CID pool</b>: <a href="https://github.com/Dstack-TEE/dstack/blob/main/vmm/vmm.toml#L27" target="_blank" rel="noopener">1000 concurrent CVMs</a></li>
+      <li><b>Auto-restart</b>: <a href="https://github.com/Dstack-TEE/dstack/blob/main/vmm/vmm.toml#L45" target="_blank" rel="noopener">20 seconds</a></li>
+      <li className="mt-4"><b>Gateway scaling</b>: <a href="https://github.com/Dstack-TEE/dstack/blob/main/gateway/gateway.toml#L85-L92" target="_blank" rel="noopener">gateway.toml</a></li>
+      <li className="ml-4">Connection recycling: <a href="https://github.com/Dstack-TEE/dstack/blob/main/gateway/gateway.toml#L85" target="_blank" rel="noopener">5 min</a></li>
+      <li className="ml-4">Node timeout: <a href="https://github.com/Dstack-TEE/dstack/blob/main/gateway/gateway.toml#L87" target="_blank" rel="noopener">10 min</a></li>
+      <li className="ml-4">State sync: <a href="https://github.com/Dstack-TEE/dstack/blob/main/gateway/gateway.toml#L91" target="_blank" rel="noopener">30 sec</a></li>
+      <li className="ml-4">Multi-gateway broadcast: <a href="https://github.com/Dstack-TEE/dstack/blob/main/gateway/gateway.toml#L92" target="_blank" rel="noopener">10 min</a></li>
+    </ul>
+  </div>
+</div>
+
+---
+
+### Why This Matters
+
+* **Operational predictability:** These figures help set user expectations for startup, scaling, and workload responsiveness.
+* **Capacity planning:** Knowing resource ceilings and timing enables efficient host sizing and better cost modeling for clusters.
+* **Debugging and troubleshooting:** Outliers and anomalies are easier to spot when typical timings and quotas are known upfront.
+* **Transparent configuration:** Direct links to source config files ensure reproducibility and clarity for security and compliance review.
+
+> *Reviewing these characteristics is essential for operators, architects, and developers to make informed choices about deploying, scaling, and troubleshooting confidential workloads on dstack.*
+
+  
 ## Next Steps
 
-Now that you understand the architecture:
+Now that you understand the comprehensive architecture:
 
 <div className="mt-8 flex gap-4">
   <a href="/docs/concepts/core-components" className="bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700">
@@ -450,13 +705,12 @@ Now that you understand the architecture:
   </a>
 </div>
 
-For a detailed breakdown of each component's functionality and configuration, see the [Core Components](/docs/concepts/core-components) page.
+The dstack architecture provides enterprise-grade security through:
+- **Hardware-based Isolation**: Intel TDX for memory encryption and attestation
+- **Cryptographic Verification**: End-to-end quote verification and key derivation  
+- **Zero-trust Networking**: WireGuard VPN with TLS termination
+- **Decentralized Trust**: Blockchain-based authorization without central authority
+- **Container Security**: Isolated execution environments within TEEs
 
-dstack's security model is built on several key principles:
-- **Hardware-based isolation**: Using TEE features for memory encryption and process isolation
-- **Remote attestation**: Cryptographic proof of the execution environment
-- **Zero-trust networking**: All communication is encrypted and authenticated
-- **Decentralized trust**: No single point of failure in the trust chain
-
-Learn more about our [Security Model](/docs/concepts/security-model).
+Learn more about our [Security Model](/docs/concepts/security-model) and [Core Components](/docs/concepts/core-components).
 

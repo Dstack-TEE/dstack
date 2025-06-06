@@ -1,0 +1,62 @@
+---
+title: "Write the dstack deployment manifest"
+description: "Create a docker-compose.yml file"
+---
+
+## Step 2: Create docker-compose.yml
+
+Create a `docker-compose.yml` file to define your application:
+
+```yaml
+# docker-compose.yml
+version: '3.8'
+
+services:
+  web:
+    build: .
+    # Or use a pre-built image:
+    # image: your-dockerhub-username/your-app:latest
+    ports:
+      - "8080:8080"
+    environment:
+      - DSTACK_ENV=production
+      - LOG_LEVEL=info
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
+```
+
+
+#### Advanced: Multi-container application
+
+For applications with multiple services:
+
+```yaml
+version: '3.8'
+
+services:
+  web:
+    build: ./web
+    ports:
+      - "8080:8080"
+    environment:
+      - DATABASE_URL=postgresql://user:pass@db:5432/mydb
+    depends_on:
+      - db
+      
+  db:
+    image: postgres:15-alpine
+    environment:
+      - POSTGRES_USER=user
+      - POSTGRES_PASSWORD=pass
+      - POSTGRES_DB=mydb
+    volumes:
+      - db_data:/var/lib/postgresql/data
+
+volumes:
+  db_data:
+```

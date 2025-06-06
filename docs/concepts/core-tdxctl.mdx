@@ -3,7 +3,6 @@ title: "dstack-util core"
 description: "Complete guide to dstack's TDX control utility, system setup, and cryptographic services for secure computing environments"
 ---
 
-
 # dstack-util Core Implementation: TDX Control Utility and System Setup Services
 
 The dstack-util is a comprehensive command-line utility written in Rust that provides TDX attestation, system initialization, cryptographic services, and container management for Confidential Virtual Machines (CVMs) in the dstack system. [1](#0-0) 
@@ -14,7 +13,7 @@ The dstack-util serves as the primary interface for TDX operations and system ma
 
 - **Main CLI Interface**: Handles command parsing and routing [2](#0-1) 
 - **System Setup Module**: Comprehensive system initialization with full disk encryption [3](#0-2) 
-- **Cryptographic Services**: Diffie-Hellman key agreement and AES-GCM encryption/decryption [4](#0-3) 
+- **Cryptographic Services**: X25519 Diffie-Hellman key agreement and AES-GCM encryption/decryption [4](#0-3) 
 - **TDX Attestation**: Integration with tdx-attest library for low-level TDX functionality [5](#0-4) 
 
 ## Commands Reference
@@ -89,7 +88,9 @@ The dstack-util serves as the primary interface for TDX operations and system ma
 <td className="p-3">--compose</td>
 </tr>
 </tbody>
-</table>
+</table> 
+
+**[6](#0-5)** 
 
 ## Core Components
 
@@ -97,33 +98,33 @@ The dstack-util serves as the primary interface for TDX operations and system ma
 
 The core TDX functionality handles essential secure computing operations:
 
-- **TDX Report Generation**: Creates attestation reports from 64-byte report data [6](#0-5) 
-- **TDX Quote Generation**: Produces signed quotes for remote attestation [7](#0-6) 
-- **RTMR Extension Operations**: Extends Runtime Measurement Registers with application events [8](#0-7) 
-- **Measurement Display**: Shows current RTMR state and decoded measurement information [9](#0-8) 
+- **TDX Report Generation**: Creates attestation reports from 64-byte report data [7](#0-6) 
+- **TDX Quote Generation**: Produces signed quotes for remote attestation [8](#0-7) 
+- **RTMR Extension Operations**: Extends Runtime Measurement Registers with application events [9](#0-8) 
+- **Measurement Display**: Shows current RTMR state and decoded measurement information [10](#0-9) 
 
 ### 2. System Setup and Full Disk Encryption
 
 The Setup command provides comprehensive system initialization including:
 
 #### LUKS2 Disk Encryption Setup
-- **Encryption Configuration**: Uses AES-XTS-Plain64 cipher with PBKDF2 key derivation [10](#0-9) 
-- **ZFS Integration**: Creates encrypted ZFS pools with Blake3 checksums and autoexpand capabilities [11](#0-10) 
-- **Mount Management**: Handles both new initialization and existing disk mounting [12](#0-11) 
+- **Encryption Configuration**: Uses AES-XTS-Plain64 cipher with PBKDF2 key derivation [11](#0-10) 
+- **ZFS Integration**: Creates encrypted ZFS pools with Blake3 checksums and autoexpand capabilities [12](#0-11) 
+- **Mount Management**: Handles both new initialization and existing disk mounting [13](#0-12) 
 
 #### Key Management Integration
-- **KMS-based Key Retrieval**: Supports remote key management services with attestation [13](#0-12) 
-- **Local Key Provider**: SGX-based key derivation for isolated environments [14](#0-13) 
-- **Key Provider Verification**: Validates and measures key providers for security [15](#0-14) 
+- **KMS-based Key Retrieval**: Supports remote key management services with attestation [14](#0-13) 
+- **Local Key Provider**: SGX-based key derivation for isolated environments [15](#0-14) 
+- **Key Provider Verification**: Validates and measures key providers for security [16](#0-15) 
 
 ### 3. Cryptographic Services
 
 Advanced cryptographic operations including:
 
-- **Certificate Generation**: Creates Remote Attestation TLS certificates with TDX quotes [16](#0-15) 
-- **CA Certificate Creation**: Generates Certificate Authority certificates with attestation [17](#0-16) 
-- **Application Key Management**: Produces complete application key sets with quotes [18](#0-17) 
-- **Diffie-Hellman Operations**: X25519 key agreement and AES-GCM decryption [19](#0-18) 
+- **Certificate Generation**: Creates Remote Attestation TLS certificates with TDX quotes [17](#0-16) 
+- **CA Certificate Creation**: Generates Certificate Authority certificates with attestation [18](#0-17) 
+- **Application Key Management**: Produces complete application key sets with quotes [19](#0-18) 
+- **X25519 Operations**: X25519 key agreement and AES-GCM decryption [4](#0-3) 
 
 ### 4. Container Management
 
@@ -187,7 +188,7 @@ The system implements comprehensive measurement logging:
 
 - **Application Composition Measurement**: Hashes and extends compose file contents to RTMR [23](#0-22) 
 - **Key Provider Verification**: Measures and validates key provider information [24](#0-23) 
-- **Boot Process Measurement**: Tracks system initialization stages through RTMR extensions [23](#0-22) 
+- **Boot Process Measurement**: Tracks system initialization stages through RTMR extensions [25](#0-24) 
 
 ### Encryption Implementation
 
@@ -202,7 +203,7 @@ The system implements comprehensive measurement logging:
 
 The system integrates with the dstack guest agent through:
 
-- **Configuration Generation**: Creates agent.json with disk paths and PCCS URL [25](#0-24) 
+- **Configuration Generation**: Creates agent.json with disk paths and PCCS URL [26](#0-25) 
 - **Measurement Reporting**: Extends RTMRs with system state information
 - **Secure Communication**: Establishes encrypted channels for host communication
 
@@ -210,15 +211,15 @@ The system integrates with the dstack guest agent through:
 
 For network connectivity and secure communication:
 
-- **WireGuard VPN Setup**: Configures secure tunnels with TDX-attested certificates [26](#0-25) 
-- **Certificate-based Authentication**: Uses Remote Attestation TLS for gateway registration [27](#0-26) 
-- **Firewall Configuration**: Sets up iptables rules for secure WireGuard operation [28](#0-27) 
+- **WireGuard VPN Setup**: Configures secure tunnels with TDX-attested certificates [27](#0-26) 
+- **Certificate-based Authentication**: Uses Remote Attestation TLS for gateway registration [28](#0-27) 
+- **Firewall Configuration**: Sets up iptables rules for secure WireGuard operation [29](#0-28) 
 
 ### Host Communication
 
 Provides secure bidirectional communication with the host system:
 
-- **Event Notification**: Sends structured events and payloads to host API [29](#0-28) 
+- **Event Notification**: Sends structured events and payloads to host API [30](#0-29) 
 - **Progress Reporting**: Updates host on system initialization stages
 - **Configuration Synchronization**: Loads system and application configuration from host
 
@@ -226,45 +227,52 @@ Provides secure bidirectional communication with the host system:
 
 ### Initialization Flow
 
-```mermaid
-graph TD
-    A["System Boot"] --> B["Load Host Shared Files"]
-    B --> C["Measure App Composition"]
-    C --> D["Request App Keys"]
-    D --> E["Setup Disk Encryption"]
-    E --> F["Mount Data Disk"]
-    F --> G["Configure Network"]
-    G --> H["Setup Docker"]
-    H --> I["System Ready"]
-```
+The system initialization process proceeds through the following steps:
+
+1. **System Boot**: The system starts up and begins the initialization sequence.
+2. **Load Host Shared Files**: Shared files from the host are loaded into the environment. [31](#0-30) 
+3. **Measure App Composition**: The application composition (such as configuration and compose files) is measured and logged for attestation. [23](#0-22) 
+4. **Request App Keys**: The system requests application keys from the configured key provider. [32](#0-31) 
+5. **Setup Disk Encryption**: Full disk encryption is set up using the provided or derived keys. [13](#0-12) 
+6. **Mount Data Disk**: The encrypted data disk is mounted and made available to the system.
+7. **Configure Network**: Network interfaces and secure tunnels (such as WireGuard) are configured. [27](#0-26) 
+8. **Setup Docker**: The Docker runtime is initialized and prepared for container workloads. [33](#0-32) 
+9. **System Ready**: The system signals readiness for operation and workloads can be started.
 
 ### Key Provider Flow
 
-```mermaid
-graph TD
-    A["Determine Key Provider"] --> B{"Provider Type"}
-    B -->|KMS| C["Connect to KMS"]
-    B -->|Local| D["Get Sealing Key"]
-    B -->|None| E["Generate Temp Keys"]
-    C --> F["Validate Certificate"]
-    D --> G["Derive from SGX"]
-    E --> H["Random Generation"]
-    F --> I["Decrypt App Keys"]
-    G --> I
-    H --> I
-    I --> J["Verify Provider ID"]
-    J --> K["Measure Provider"]
-```
+The key provider flow proceeds as follows:
+
+A. **Determine Key Provider**: The system first determines which key provider is configured (KMS, Local, or None). [32](#0-31) 
+
+B. **Provider Type**:
+   - If **KMS**: [34](#0-33) 
+     C. Connect to the Key Management Service (KMS).
+     D. Validate the KMS certificate.
+     E. Decrypt application keys received from KMS.
+   - If **Local**: [15](#0-14) 
+     F. Retrieve the local sealing key.
+     G. Derive the key from SGX hardware.
+     H. Decrypt application keys using the derived key.
+   - If **None**: [35](#0-34) 
+     I. Generate temporary keys using a random generator.
+     J. Decrypt application keys with the generated key.
+
+K. **Verify Provider ID**: After obtaining the keys, the system verifies the provider's identity. [16](#0-15) 
+
+L. **Measure Provider**: Finally, the provider's information is measured and logged for attestation. [24](#0-23) 
+
+This stepwise process ensures that the correct key material is securely obtained and validated, regardless of the provider type.
 
 ## Dependencies and Integration
 
 The utility integrates with multiple dstack components:
 
-- **tdx-attest**: Low-level TDX operations and RTMR management [30](#0-29) 
-- **ra-tls**: Remote Attestation TLS certificate generation [31](#0-30) 
-- **dstack-kms-rpc**: Key Management Service communication [32](#0-31) 
-- **dstack-gateway-rpc**: Gateway registration and WireGuard setup [33](#0-32) 
-- **host-api**: Host system communication and event reporting [34](#0-33) 
+- **tdx-attest**: Low-level TDX operations and RTMR management [5](#0-4) 
+- **ra-tls**: Remote Attestation TLS certificate generation [36](#0-35) 
+- **dstack-kms-rpc**: Key Management Service communication [37](#0-36) 
+- **dstack-gateway-rpc**: Gateway registration and WireGuard setup [38](#0-37) 
+- **host-api**: Host system communication and event reporting [39](#0-38) 
 
 ## Error Handling and Reliability
 
@@ -293,6 +301,6 @@ Next: OS Core →
 
 ## Notes
 
-dstack-util is a critical component of the dstack system that bridges the gap between TEE hardware capabilities and the application layer. It handles the complex setup procedures required for secure computing in trusted execution environments, including disk encryption with LUKS, network setup with WireGuard, and integration with key management services. The tool is designed to be called both during system initialization and application runtime to maintain security and manage the secure environment.
+dstack-util is a critical component of the dstack system that bridges the gap between TEE hardware capabilities and the application layer. It handles the complex setup procedures required for secure computing in trusted execution environments, including disk encryption with LUKS, network setup with WireGuard, and integration with key management services. The tool is designed to be called both during system initialization [40](#0-39)  and application runtime [41](#0-40)  to maintain security and manage the secure environment.
 
 The utility's modular design allows for different key provider configurations, making it suitable for various deployment scenarios from development (no key provider) to production (KMS-based) environments. Its comprehensive measurement and attestation capabilities ensure that the system state is continuously verified and recorded in the TDX measurement registers.

@@ -3,42 +3,24 @@ title: "gateway core"
 description: "Deep dive into dstack's essential components and their roles"
 ---
 
+
+# dstack-gateway Operational Features  
+  
+The dstack-gateway component includes comprehensive operational capabilities designed to maintain robust security, automatic cleanup, and enhanced observability within dstack deployments. For automated cleanup and maintenance, the gateway continuously monitors WireGuard handshake activity to efficiently **remove stale CVM instances**, ensuring optimal resource usage.
+
+It proactively manages **gateway node cleanup** to maintain seamless synchronization across distributed clusters. WireGuard configurations are automatically updated, providing stable networking without manual intervention, and connections are systematically recycled every five minutes, enforcing a maximum timeout limit of 10 hours to preserve both security and system efficiency. 
+  
+Security and authorization within the gateway are rigorously enforced. It mandates **remote attestation verification for CVM registration**, verifying the integrity and identity of each confidential VM instance at launch.
+
+Additionally, integration with the **KmsAuth contract** strengthens application authorization cryptographically, guaranteeing that only legitimate deployments receive necessary keys and credentials. Active **TLS certificate transparency monitoring** prevents unauthorized certificate issuance, while the management of **CAA records** restricts certificate authorities, significantly mitigating risks associated with unauthorized or compromised certificates.
+  
+For effective monitoring and observability, the gateway provides real-time tracking of connection statistics, offering immediate insights into network health and usage patterns. CVM instance health is assessed through regular WireGuard handshake checks, enabling rapid identification and resolution of potential connectivity issues. Additionally, the system monitors certificate expiration closely, issuing proactive alerts to avoid service disruptions due to expired certificates. Continuous monitoring of cluster synchronization status further ensures that distributed deployments remain reliable, coordinated, and resilient across diverse operational scenarios.
+
+
 # dstack-gateway Implementation
 
 The dstack-gateway is a reverse proxy and networking component that handles TLS termination, WireGuard VPN connections, and traffic routing between external clients and Confidential Virtual Machines (CVMs). [5](#0-4) 
 
-## dstack-gateway Service and Traffic Flow Diagram
-
-```mermaid
-graph TB
-    subgraph "External Network"
-        Client["External Client"]
-    end
-    
-    subgraph "dstack-gateway Core Services"
-        ProxyService["Proxy Service"]
-        WGService["WireGuard Service"]
-        CertBot["Certificate Management"]
-        SyncService["Sync Service"]
-        AuthService["Auth Service"]
-        RecycleService["Recycle Service"]
-    end
-    
-    subgraph "Confidential VMs"
-        CVM1["CVM Instance 1"]
-        CVM2["CVM Instance 2"]
-    end
-    
-    Client -->|"HTTPS Request"| ProxyService
-    ProxyService -->|"Route Traffic"| WGService
-    WGService -->|"Secure Tunnel"| CVM1
-    WGService -->|"Secure Tunnel"| CVM2
-    
-    CertBot -->|"Manage Certificates"| ProxyService
-    SyncService -->|"Cluster State"| SyncService
-    AuthService -->|"Verify Apps"| ProxyService
-    RecycleService -->|"Cleanup Stale"| WGService
-```
 
 ### Advanced Routing Configuration
 
@@ -87,28 +69,7 @@ The gateway uses sophisticated domain-based routing with the following patterns:
   </tbody>
 </table>
 
-### CVM Registration Process
-
-```mermaid
-sequenceDiagram
-    participant CVM
-    participant Gateway
-    participant KMS
-    participant Auth as "KmsAuth Contract"
-    
-    CVM->>KMS: Request attestation
-    KMS->>CVM: Provide attestation
-    CVM->>Gateway: RegisterCvm with public key + attestation
-    Gateway->>Gateway: Verify attestation
-    Gateway->>Auth: Check app authorization
-    Auth->>Gateway: Authorization confirmed
-    Gateway->>Gateway: Allocate WireGuard IP
-    Gateway->>Gateway: Configure WireGuard peers
-    Gateway->>CVM: Return WireGuard config + agent config
-    CVM->>Gateway: Establish WireGuard tunnel
-```
-
-#### Production Configuration Example
+#### Gateway Confirguation -- Detailed Example
 ```toml
 # gateway.toml - Production Configuration for dstack-gateway
 # The dstack-gateway is a reverse proxy and networking component that handles
@@ -205,134 +166,8 @@ node_timeout = "10m"  # Timeout for individual node cleanup operations
 ```
 
 
-## Advanced Certificate Management
-
-The gateway implements comprehensive certificate management with automatic renewal and monitoring:
-
-```mermaid
-sequenceDiagram
-    participant App
-    participant Gateway
-    participant Certbot
-    participant CF as "Cloudflare DNS"
-    participant LE as "Let's Encrypt"
-    participant CT as "CT Monitor"
-    
-    App->>Gateway: Request certificate
-    Gateway->>Certbot: Initialize certificate request
-    Certbot->>CF: Set CAA records
-    CF->>Certbot: CAA records configured
-    Certbot->>LE: Request certificate with DNS-01 challenge
-    LE->>Certbot: Provide challenge token
-    Certbot->>CF: Create TXT record with challenge
-    CF->>LE: DNS challenge verification
-    LE->>Certbot: Issue certificate
-    Certbot->>Gateway: Certificate ready
-    Gateway->>CT: Monitor certificate transparency logs
-    Gateway->>App: Certificate deployed
-    
-    Note over Certbot: Automatic renewal every hour
-    Certbot->>LE: Check certificate expiration
-    LE->>Certbot: Certificate status
-    alt Certificate expires in < 10 days
-        Certbot->>LE: Renew certificate
-        LE->>Certbot: New certificate issued
-        Certbot->>Gateway: Restart with new certificate
-    end
-```
-
-## Gateway Cluster Topology and State Synchronization
-
-The gateway supports clustering for redundancy and load balancing: 
-
-```mermaid
-graph TD
-    subgraph "Gateway Cluster"
-        GW1["Gateway Node 1<br/>10.4.0.1"]
-        GW2["Gateway Node 2<br/>10.4.0.2"] 
-        GW3["Gateway Node 3<br/>10.4.0.3"]
-    end
-    
-    subgraph "CVM Network"
-        CVM1["CVM 1<br/>10.4.1.10"]
-        CVM2["CVM 2<br/>10.4.1.11"]
-        CVM3["CVM 3<br/>10.4.1.12"]
-    end
-    
-    subgraph "State Synchronization"
-        Sync["Broadcast Sync<br/>Every 10m"]
-    end
-    
-    GW1 <-->|"State Sync"| GW2
-    GW2 <-->|"State Sync"| GW3
-    GW3 <-->|"State Sync"| GW1
-    
-    GW1 -->|"WireGuard"| CVM1
-    GW1 -->|"WireGuard"| CVM2
-    GW2 -->|"WireGuard"| CVM2
-    GW2 -->|"WireGuard"| CVM3
-    GW3 -->|"WireGuard"| CVM1
-    GW3 -->|"WireGuard"| CVM3
-    
-    Sync --> GW1
-    Sync --> GW2
-    Sync --> GW3
-```
-
-## Gateway Connection Strategies and Load Balancing Algorithms
-
-The gateway implements intelligent connection management with health monitoring:
-
-<table className="w-full my-4">
-  <thead>
-    <tr className="bg-gray-100">
-      <th className="p-3 text-left">Strategy</th>
-      <th className="p-3 text-left">Algorithm</th>
-      <th className="p-3 text-left">Health Check</th>
-      <th className="p-3 text-left">Fallback</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td className="p-3 font-mono">top_n_selection</td>
-      <td className="p-3">Latest handshake priority</td>
-      <td className="p-3">WireGuard handshake time</td>
-      <td className="p-3">Random selection</td>
-    </tr>
-    <tr className="bg-gray-50">
-      <td className="p-3 font-mono">direct_instance</td>
-      <td className="p-3">Instance ID lookup</td>
-      <td className="p-3">Connection counter</td>
-      <td className="p-3">App-level routing</td>
-    </tr>
-    <tr>
-      <td className="p-3 font-mono">localhost_mode</td>
-      <td className="p-3">Local development</td>
-      <td className="p-3">TCP connection</td>
-      <td className="p-3">127.0.0.1:port</td>
-    </tr>
-    <tr className="bg-gray-50">
-      <td className="p-3 font-mono">dns_resolution</td>
-      <td className="p-3">TXT record lookup</td>
-      <td className="p-3">DNS availability</td>
-      <td className="p-3">Connection timeout</td>
-    </tr>
-  </tbody>
-</table>
 
 
-
-# dstack-gateway Operational Features  
-  
-The dstack-gateway component includes comprehensive operational capabilities designed to maintain robust security, automatic cleanup, and enhanced observability within dstack deployments. For automated cleanup and maintenance, the gateway continuously monitors WireGuard handshake activity to efficiently **remove stale CVM instances**, ensuring optimal resource usage.
-
-It proactively manages **gateway node cleanup** to maintain seamless synchronization across distributed clusters. WireGuard configurations are automatically updated, providing stable networking without manual intervention, and connections are systematically recycled every five minutes, enforcing a maximum timeout limit of 10 hours to preserve both security and system efficiency. 
-  
-Security and authorization within the gateway are rigorously enforced. It mandates **remote attestation verification for CVM registration**, verifying the integrity and identity of each confidential VM instance at launch.
-
-Additionally, integration with the **KmsAuth contract** strengthens application authorization cryptographically, guaranteeing that only legitimate deployments receive necessary keys and credentials. Active **TLS certificate transparency monitoring** prevents unauthorized certificate issuance, while the management of **CAA records** restricts certificate authorities, significantly mitigating risks associated with unauthorized or compromised certificates.
-  
-For effective monitoring and observability, the gateway provides real-time tracking of connection statistics, offering immediate insights into network health and usage patterns. CVM instance health is assessed through regular WireGuard handshake checks, enabling rapid identification and resolution of potential connectivity issues. Additionally, the system monitors certificate expiration closely, issuing proactive alerts to avoid service disruptions due to expired certificates. Continuous monitoring of cluster synchronization status further ensures that distributed deployments remain reliable, coordinated, and resilient across diverse operational scenarios.
 
 ## Next Steps
 
@@ -350,11 +185,3 @@ Now that you understand Gateway networking and TLS management, continue learning
 ### Related Topics
 - [Networking](/docs/concepts/networking) - Deep dive into dstack's network architecture
 - [Security Model](/docs/concepts/security-model) - Understand TLS and WireGuard security
-
-
-
-
-
-
-
-

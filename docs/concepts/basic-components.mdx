@@ -1,6 +1,6 @@
 ---
-title: "Core dstack Components: Roles and Interactions"
-description: "A detailed introduction to the foundational dstack components, explaining how each part contributes to secure, confidential, and zero-trust application deployment"
+title: "dstack Components Overview"
+description: "Learn about dstack's core components and how they work together to provide secure application deployment"
 ---
 
 # The Basic Components of dstack
@@ -72,6 +72,26 @@ graph TB
 *The above Mermaid diagram illustrates how the basic components interconnect during an application deployment.* Starting from the **developer's application code** (packaged as one or more containers), dstack's tooling builds a specialized CVM image and hands it off to the **dstack-vmm**, which launches the Confidential VM on a TDX-enabled host. Inside the CVM, the **dstack-guest-agent** takes control: it performs a remote attestation of the new VM and orchestrates the startup of the user's **application containers**. The guest agent communicates with the **dstack-kms** to obtain the necessary secrets (such as encryption keys), proving the CVM's trustworthiness before any sensitive material is released. Meanwhile, the **dstack-gateway** on the host is configured to forward external client requests into the CVM. When a client initiates an HTTPS connection to the service (for example, via the unique `*.dstack.host` domain for that deployment), the gateway verifies the CVM's attestation and then routes the traffic over a TLS channel that terminates inside the enclave. In this way, the application's users interact with it as they would any web service, but under the hood every request and response is confined within a secure enclave context. The diagram shows the end-to-end flow: from building the confidential image, to launching the CVM, attesting and provisioning keys, and finally serving client traffic—ensuring at each step that the code running is exactly what it should be and that data remains confidential and tamper-proof.
 
 ## Enhanced Deployment Flow
+
+```mermaid
+sequenceDiagram
+    participant VMM
+    participant KMS
+    participant Gateway
+    participant CVM as "Confidential VM"
+    participant Agent as "Guest Agent"
+    
+    VMM->>KMS: Initialize KMS service
+    VMM->>Gateway: Configure gateway routing
+    VMM->>CVM: Boot CVM with dstack-os
+    CVM->>CVM: tdxctl SetupFde (Full Disk Encryption)
+    CVM->>Agent: Start guest agent
+    Agent->>KMS: Request app keys with attestation
+    KMS->>Agent: Provide keys after verification
+    Agent->>Gateway: Register CVM with public key
+    Gateway->>Agent: Provide WireGuard config
+    Agent->>Agent: Deploy user containers
+```
 
 With the core components in place, deploying an application with dstack involves a sequence of steps that **enhance the traditional cloud deployment flow with additional security checkpoints**. In a typical scenario, a developer begins with a containerized application (for example, a set of Docker containers defined via Docker Compose) and ends up with that application running in a confidential environment accessible to end-users. The process below describes this flow in a narrative form, demonstrating how dstack automates secure deployment:
 

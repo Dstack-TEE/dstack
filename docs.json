@@ -28,7 +28,19 @@
         "pages": [
           "docs/getting-started/start",
           "docs/getting-started/installation",
-          "docs/getting-started/first-deployment", 
+          {
+            "group": "First DStack Deployment",
+            "pages": [
+              "docs/getting-started/first-deployment",
+              "docs/getting-started/first-deployment-steps/fd-1",
+              "docs/getting-started/first-deployment-steps/fd-2",
+              "docs/getting-started/first-deployment-steps/fd-3",
+              "docs/getting-started/first-deployment-steps/fd-4",
+              "docs/getting-started/first-deployment-steps/fd-5",
+              "docs/getting-started/first-deployment-steps/fd-6",
+              "docs/getting-started/first-deployment-steps/fd-7"
+            ]
+          },
           "docs/getting-started/deploying-applications"
         ]
       },
@@ -41,17 +53,16 @@
           {
             "group": "Core Components",
             "pages": [
-              "docs/concepts/core-components",
               "docs/concepts/core-vmm",
               "docs/concepts/core-gateway",
               "docs/concepts/core-kms",
               "docs/concepts/core-guest-agent",
               "docs/concepts/core-tdxctl",
-              "docs/concepts/core-os"
+              "docs/concepts/core-os", 
+              "docs/concepts/core-glossary"
             ]
           },
           "docs/concepts/networking",
-          "docs/concepts/security-model",
           "docs/concepts/architecture"
         ]
       },
@@ -71,16 +82,28 @@
         "icon": "shield-halved",
         "pages": [
           "docs/security-research/overview",
-          "docs/security-research/kms-security",
-          "docs/security-research/vmm-security",
-          "docs/security-research/gateway-security",
-          "docs/security-research/tdx-attestation",
-          "docs/security-research/tdx-attestation-system",
-          "docs/security-research/iohash-security",
-          "docs/security-research/host-api-security", 
-          "docs/security-research/ct-monitor-security",
-          "docs/security-research/certbot-security",
-          "docs/security-research/cert-client-security"
+          "docs/security-research/security-model",
+
+          {
+            "group": "core component security reference material",
+            "pages": [
+              "docs/security-research/kms-security",
+              "docs/security-research/vmm-security",
+              "docs/security-research/gateway-security",
+              "docs/security-research/tdx-attestation"
+            ]
+          },
+          {
+            "group": "Additional Sec Ops",
+            "pages": [
+              "docs/security-research/extra-sec-ops/host-api-security",
+              "docs/security-research/extra-sec-ops/ct-monitor-security",
+              "docs/security-research/extra-sec-ops/certbot-security",
+              "docs/security-research/extra-sec-ops/cert-client-security", 
+              "docs/security-research/extra-sec-ops/iohash-security", 
+              "docs/security-research/extra-sec-ops/tdx-attestation-system"
+            ]
+          }
         ]
       },
       {

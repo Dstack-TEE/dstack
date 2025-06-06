@@ -1,0 +1,82 @@
+---
+title: "Update, roll back, and tear down safely"
+description: "Monitor Your Application"
+---
+
+## Step 7: Monitor Your Application
+
+### View Logs
+
+From the dashboard:
+1. Click on your deployment
+2. Go to the **"Logs"** tab
+3. You'll see real-time application logs
+
+From the CLI:
+```bash
+# Stream logs
+dstack logs -f my-first-app
+
+# Get last 100 lines
+dstack logs --tail 100 my-first-app
+```
+
+### Check Metrics
+
+The dashboard provides metrics including:
+- CPU usage
+- Memory consumption
+- Network I/O
+- Request count
+
+## Common Issues and Solutions
+
+<details>
+<summary>Application fails to start</summary>
+
+1. Check logs for errors:
+   ```bash
+   dstack logs my-first-app
+   ```
+
+2. Verify your Docker image works locally:
+   ```bash
+   docker-compose up
+   ```
+
+3. Ensure health checks are configured correctly
+
+
+#### Cannot access application URL
+
+1. Check if the application is running:
+   ```bash
+   dstack status my-first-app
+   ```
+
+2. Verify network connectivity:
+   ```bash
+   curl -I https://my-first-app.app.example.com
+   ```
+
+3. Check gateway logs:
+   ```bash
+   sudo journalctl -u dstack-gateway -f
+   ```
+
+Attestation verification fails
+
+1. Ensure you're using the correct endpoint
+2. Check if the CVM is fully initialized
+3. Verify TDX is enabled on your hardware
+
+</details>
+
+## What You've Accomplished
+
+Congratulations! You've successfully:
+
+- ✅ Deployed an application to a Trusted Execution Environment
+- ✅ Verified it's running securely with attestation
+- ✅ Accessed it through secure HTTPS endpoints
+- ✅ Monitored logs and metrics

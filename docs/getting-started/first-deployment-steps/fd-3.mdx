@@ -1,0 +1,63 @@
+---
+title: "sign & push the image to your private registry"
+description: "Deploy via Web UI"
+---
+
+## Step 3: Deploy via Web UI
+
+### Access the dstack Dashboard
+
+1. Open your browser and navigate to http://localhost:9080
+2. You should see the dstack management interface
+
+![dstack Dashboard](https://via.placeholder.com/800x400.png?text=dstack+Dashboard)
+
+### Create New Deployment
+
+1. Click the **"Deploy New Application"** button
+2. Fill in the deployment form:
+
+| Field | Value |
+|-------|-------|
+| **Application Name** | my-first-app |
+| **Description** | My first secure application |
+| **Docker Compose File** | Upload your `docker-compose.yml` |
+
+3. Configure resources (optional):
+
+| Resource | Default | Recommended for Testing |
+|----------|---------|------------------------|
+| **CPU** | 2 cores | 1 core |
+| **Memory** | 4 GB | 2 GB |
+| **Storage** | 10 GB | 5 GB |
+
+4. Click **"Deploy"**
+
+### Monitor Deployment Progress
+
+The deployment process involves several steps:
+
+<div className="bg-gray-50 p-4 rounded-lg my-4">
+  <div className="space-y-3">
+    <div className="flex items-center gap-3">
+      <div className="w-6 h-6 bg-blue-500 rounded-full flex items-center justify-center text-white text-sm">1</div>
+      <span>Creating Confidential VM</span>
+    </div>
+    <div className="flex items-center gap-3">
+      <div className="w-6 h-6 bg-blue-500 rounded-full flex items-center justify-center text-white text-sm">2</div>
+      <span>Setting up secure environment</span>
+    </div>
+    <div className="flex items-center gap-3">
+      <div className="w-6 h-6 bg-blue-500 rounded-full flex items-center justify-center text-white text-sm">3</div>
+      <span>Pulling Docker images</span>
+    </div>
+    <div className="flex items-center gap-3">
+      <div className="w-6 h-6 bg-blue-500 rounded-full flex items-center justify-center text-white text-sm">4</div>
+      <span>Starting containers</span>
+    </div>
+    <div className="flex items-center gap-3">
+      <div className="w-6 h-6 bg-green-500 rounded-full flex items-center justify-center text-white text-sm">✓</div>
+      <span>Application running</span>
+    </div>
+  </div>
+</div>

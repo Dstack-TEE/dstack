@@ -1,0 +1,41 @@
+---
+title: "Expose an API endpoint via the Gateway"
+description: "Verify Security"
+---
+
+## Step 6: Verify Security
+
+One of dstack's key features is verifiable security. Let's verify your application is running in a genuine TEE.
+
+### Get Attestation Quote
+
+Using the dstack SDK:
+
+```javascript
+// verify-deployment.js
+const { DstackClient } = require('@phala/dstack-sdk');
+
+async function verifyDeployment() {
+  const client = new DstackClient({
+    endpoint: 'https://my-first-app.app.example.com'
+  });
+  
+  // Get attestation quote
+  const quote = await client.getQuote();
+  console.log('Attestation Quote:', quote);
+  
+  // Get application info
+  const info = await client.info();
+  console.log('Application Info:', info);
+}
+
+verifyDeployment();
+```
+
+
+### Verify via Web Interface
+
+1. In the dashboard, click on your deployment
+2. Navigate to the **"Security"** tab
+3. Click **"View Attestation Report"**
+4. You can also verify using the [TEE Attestation Explorer](https://ra-quote-explorer.vercel.app/)
