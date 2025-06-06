@@ -1,4 +1,5 @@
 use crate::{
+    admin_service::AdminRpcHandler,
     main_service::{Proxy, RpcHandler},
     models::Dashboard,
 };
@@ -11,7 +12,7 @@ use rocket::{response::content::RawHtml as Html, State};
 pub async fn index(state: &State<Proxy>) -> anyhow::Result<Html<String>> {
     let context = CallContext::builder().state(&**state).build();
     let rpc_handler =
-        RpcHandler::construct(context.clone()).context("Failed to construct RpcHandler")?;
+        AdminRpcHandler::construct(context.clone()).context("Failed to construct RpcHandler")?;
     let status = rpc_handler.status().await.context("Failed to get status")?;
     let rpc_handler = RpcHandler::construct(context).context("Failed to construct RpcHandler")?;
     let acme_info = rpc_handler

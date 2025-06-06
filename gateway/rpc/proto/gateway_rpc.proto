@@ -131,12 +131,8 @@ message GatewayState {
 service Gateway {
   // Register a new proxied CVM.
   rpc RegisterCvm(RegisterCvmRequest) returns (RegisterCvmResponse) {}
-  // Get the status of the gateway.
-  rpc Status(google.protobuf.Empty) returns (StatusResponse) {}
   // List all ACME account URIs and the public key history of the certificates for the Content Addressable HTTPS.
   rpc AcmeInfo(google.protobuf.Empty) returns (AcmeInfoResponse) {}
-  // Find Proxied HostInfo by instance ID
-  rpc GetInfo(GetInfoRequest) returns (GetInfoResponse) {}
   // Summary API for inspect.
   rpc GetMeta(google.protobuf.Empty) returns (GetMetaResponse);
   // Merge state from other Gateway instances.
@@ -149,6 +145,10 @@ message RenewCertResponse {
 }
 
 service Admin {
+  // Get the status of the gateway.
+  rpc Status(google.protobuf.Empty) returns (StatusResponse) {}
+  // Find Proxied HostInfo by instance ID
+  rpc GetInfo(GetInfoRequest) returns (GetInfoResponse) {}
   // Exit the Gateway process.
   rpc Exit(google.protobuf.Empty) returns (google.protobuf.Empty) {}
   // Renew the proxy TLS certificate if certbot is enabled

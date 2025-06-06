@@ -1,7 +1,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     net::Ipv4Addr,
-    sync::{atomic::Ordering, Arc, Mutex, MutexGuard, Weak},
+    sync::{Arc, Mutex, MutexGuard, Weak},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -11,9 +11,8 @@ use certbot::{CertBot, WorkDir};
 use cmd_lib::run_cmd as cmd;
 use dstack_gateway_rpc::{
     gateway_server::{GatewayRpc, GatewayServer},
-    AcmeInfoResponse, GatewayState, GetInfoRequest, GetInfoResponse, GetMetaResponse,
-    GuestAgentConfig, HostInfo as PbHostInfo, RegisterCvmRequest, RegisterCvmResponse,
-    StatusResponse, WireGuardConfig, WireGuardPeer,
+    AcmeInfoResponse, GatewayState, GetMetaResponse, GuestAgentConfig, RegisterCvmRequest,
+    RegisterCvmResponse, WireGuardConfig, WireGuardPeer,
 };
 use fs_err as fs;
 use ra_rpc::{CallContext, RpcCall, VerifiedAttestation};
@@ -29,7 +28,7 @@ use tracing::{debug, error, info, warn};
 use crate::{
     config::Config,
     models::{InstanceInfo, WgConf},
-    proxy::{AddressGroup, AddressInfo, NUM_CONNECTIONS},
+    proxy::{AddressGroup, AddressInfo},
 };
 
 mod sync_client;
@@ -55,18 +54,18 @@ pub(crate) struct GatewayNodeInfo {
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
-struct ProxyStateMut {
-    nodes: BTreeMap<String, GatewayNodeInfo>,
-    apps: BTreeMap<String, BTreeSet<String>>,
-    instances: BTreeMap<String, InstanceInfo>,
-    allocated_addresses: BTreeSet<Ipv4Addr>,
+pub(crate) struct ProxyStateMut {
+    pub(crate) nodes: BTreeMap<String, GatewayNodeInfo>,
+    pub(crate) apps: BTreeMap<String, BTreeSet<String>>,
+    pub(crate) instances: BTreeMap<String, InstanceInfo>,
+    pub(crate) allocated_addresses: BTreeSet<Ipv4Addr>,
     #[serde(skip)]
-    top_n: BTreeMap<String, (AddressGroup, Instant)>,
+    pub(crate) top_n: BTreeMap<String, (AddressGroup, Instant)>,
 }
 
 pub(crate) struct ProxyState {
-    config: Arc<Config>,
-    state: ProxyStateMut,
+    pub(crate) config: Arc<Config>,
+    pub(crate) state: ProxyStateMut,
 }
 
 impl Proxy {
@@ -373,7 +372,7 @@ impl ProxyState {
     /// Get latest handshakes
     ///
     /// Return a map of public key to (timestamp, elapsed)
-    fn latest_handshakes(
+    pub(crate) fn latest_handshakes(
         &self,
         stale_timeout: Option<Duration>,
     ) -> Result<BTreeMap<String, (u64, Duration)>> {
@@ -559,7 +558,7 @@ impl ProxyState {
         )
     }
 
-    fn refresh_state(&mut self) -> Result<()> {
+    pub(crate) fn refresh_state(&mut self) -> Result<()> {
         let handshakes = self.latest_handshakes(None)?;
         for instance in self.state.instances.values_mut() {
             let Some((ts, _)) = handshakes.get(&instance.public_key).copied() else {
@@ -580,7 +579,7 @@ fn decode_ts(ts: u64) -> SystemTime {
         .unwrap_or(UNIX_EPOCH)
 }
 
-fn encode_ts(ts: SystemTime) -> u64 {
+pub(crate) fn encode_ts(ts: SystemTime) -> u64 {
     ts.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()
 }
 
@@ -652,74 +651,6 @@ impl GatewayRpc for RpcHandler {
             warn!("Failed to talk to sync task: {err}");
         }
         Ok(response)
-    }
-
-    async fn status(self) -> Result<StatusResponse> {
-        let mut state = self.state.lock();
-        state.refresh_state()?;
-        let base_domain = &state.config.proxy.base_domain;
-        let hosts = state
-            .state
-            .instances
-            .values()
-            .map(|instance| PbHostInfo {
-                instance_id: instance.id.clone(),
-                ip: instance.ip.to_string(),
-                app_id: instance.app_id.clone(),
-                base_domain: base_domain.clone(),
-                port: state.config.proxy.listen_port as u32,
-                latest_handshake: encode_ts(instance.last_seen),
-                num_connections: instance.num_connections(),
-            })
-            .collect::<Vec<_>>();
-        let nodes = state
-            .state
-            .nodes
-            .values()
-            .cloned()
-            .map(Into::into)
-            .collect::<Vec<_>>();
-        Ok(StatusResponse {
-            url: state.config.sync.my_url.clone(),
-            id: state.config.id(),
-            bootnode_url: state.config.sync.bootnode.clone(),
-            nodes,
-            hosts,
-            num_connections: NUM_CONNECTIONS.load(Ordering::Relaxed),
-        })
-    }
-
-    async fn get_info(self, request: GetInfoRequest) -> Result<GetInfoResponse> {
-        let state = self.state.lock();
-        let base_domain = &state.config.proxy.base_domain;
-        let handshakes = state.latest_handshakes(None)?;
-
-        if let Some(instance) = state.state.instances.get(&request.id) {
-            let host_info = PbHostInfo {
-                instance_id: instance.id.clone(),
-                ip: instance.ip.to_string(),
-                app_id: instance.app_id.clone(),
-                base_domain: base_domain.clone(),
-                port: state.config.proxy.listen_port as u32,
-                latest_handshake: {
-                    let (ts, _) = handshakes
-                        .get(&instance.public_key)
-                        .copied()
-                        .unwrap_or_default();
-                    ts
-                },
-                num_connections: instance.num_connections(),
-            };
-            Ok(GetInfoResponse {
-                found: true,
-                info: Some(host_info),
-            })
-        } else {
-            Ok(GetInfoResponse {
-                found: false,
-                info: None,
-            })
-        }
     }
 
     async fn acme_info(self) -> Result<AcmeInfoResponse> {
