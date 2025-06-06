@@ -1,90 +1,332 @@
 ---
-title: "API Authentication"
-description: "Learn how to authenticate with the dstack API"
+title: "API Reference"
+description: "Comprehensive guide to Dstack's TEE SDK APIs, Guest Agent RPC service, and available SDKs for confidential computing."
 ---
 
-# API Authentication
+Dstack is a **developer friendly** and **security first** SDK that simplifies deploying any containerized app into a TEE (Trusted Execution Environment). [1](#0-0) 
 
-This guide explains how to authenticate your requests to the dstack API.
+This reference provides detailed documentation for Dstack's APIs, including the Guest Agent RPC service, management interfaces, and available SDKs.
 
-## Authentication Methods
+---
 
-dstack supports several authentication methods:
+## 📘 Overview
 
-1. **API Keys** (recommended)
-2. **OAuth 2.0**
-3. **JWT Tokens**
+Dstack consists of several key components: [2](#0-1) 
 
-## API Keys
+- **dstack-vmm**: A service running in bare TDX host to manage CVMs
+- **dstack-gateway**: A reverse proxy to forward TLS connections to CVMs  
+- **dstack-kms**: A KMS server to generate keys for CVMs
+- **dstack-guest-agent**: A service running in CVM to serve containers' key derivation and attestation requests
+- **supervisor**: Process management service within CVMs
 
-API keys are the simplest way to authenticate with the dstack API.
+The overall architecture enables secure deployment of containerized applications within Intel TDX (Trust Domain Extensions) environments.
 
-### Generating an API Key
+---
 
-1. Log in to the dstack dashboard
-2. Navigate to Settings > API Keys
-3. Click "Create New API Key"
-4. Give your key a name and select the appropriate permissions
-5. Copy the API key (it will only be shown once)
+## 🔐 Authentication
 
-### Using API Keys in Requests
+Dstack uses simple API token authentication for the VMM component when enabled: [3](#0-2) 
 
-Include your API key in the `Authorization` header:
+```toml
+[auth]
+enabled = false
+tokens = []
+```
+
+Most API interactions within CVMs occur over Unix domain sockets and do not require external authentication.
+
+---
+
+## 🛠️ Guest Agent RPC API
+
+The primary API for applications running inside Dstack CVMs. The Guest Agent provides cryptographic services, attestation, and key derivation capabilities.
+
+### Base Connection
+
+The Guest Agent listens on a Unix domain socket: [4](#0-3) 
+
+```
+/var/run/dstack.sock
+```
+
+All API requests should be made to this socket using the `--unix-socket` flag with curl.
+
+### Docker Compose Integration
+
+To access the Guest Agent API from your containers, mount the Unix socket: [5](#0-4) 
+
+```yaml
+services:
+  jupyter:
+    image: quay.io/jupyter/base-notebook
+    volumes:
+      - /var/run/dstack.sock:/var/run/dstack.sock
+```
+
+### API Endpoints
+
+#### 1. GetTlsKey
+
+Derives a cryptographic key and returns it along with its TLS certificate chain for RA-TLS: [6](#0-5) 
+
+**Endpoint:** `/GetTlsKey` [7](#0-6) 
+
+**Request Parameters:** [8](#0-7) 
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `subject` | string | The subject name for the certificate |
+| `alt_names` | array of strings | List of Subject Alternative Names (SANs) |
+| `usage_ra_tls` | boolean | Whether to include quote in certificate for RA-TLS |
+| `usage_server_auth` | boolean | Enable certificate for server authentication |
+| `usage_client_auth` | boolean | Enable certificate for client authentication |
+
+**Example Request:** [9](#0-8) 
+
+**Response Format:** [10](#0-9) 
+
+```json
+{
+  "key": "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----",
+  "certificate_chain": [
+    "-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----"
+  ]
+}
+```
+
+#### 2. GetKey
+
+Generates an ECDSA key using the k256 elliptic curve for Ethereum key generation: [11](#0-10) 
+
+**Endpoint:** `/GetKey` [12](#0-11) 
+
+**Request Parameters:** [13](#0-12) 
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `path` | string | Path for the key |
+| `purpose` | string | Purpose for the key (used in signature chain) |
+
+**Example Request:** [14](#0-13) 
+
+**Response Format:** [15](#0-14) 
+
+```json
+{
+  "key": "<hex-encoded-key>",
+  "signature_chain": [
+    "<hex-encoded-signature-1>",
+    "<hex-encoded-signature-2>"
+  ]
+}
+```
+
+#### 3. GetQuote
+
+Generates a TDX quote with given plain report data: [16](#0-15) 
+
+**Endpoint:** `/GetQuote` [17](#0-16) 
+
+**Request Parameters:** [18](#0-17) 
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `report_data` | string | Report data of max 64 bytes (padded with 0s if less) |
+
+**Response Format:** [19](#0-18) 
+
+```json
+{
+  "quote": "<hex-encoded-quote>",
+  "event_log": "quote generation log",
+  "report_data": "<hex-encoded-report-data>"
+}
+```
+
+#### 4. Info
+
+Retrieves worker information about the CVM instance: [20](#0-19) 
+
+**Endpoint:** `/Info` [21](#0-20) 
+
+**Response Format:** [22](#0-21) 
+
+```json
+{
+  "app_id": "<hex-encoded-app-id>",
+  "instance_id": "<hex-encoded-instance-id>",
+  "app_cert": "<certificate-string>",
+  "tcb_info": "<tcb-info-string>",
+  "app_name": "my-app",
+  "public_logs": true,
+  "public_sysinfo": true,
+  "device_id": "<hex-encoded-device-id>",
+  "mr_aggregated": "<hex-encoded-mr-aggregated>",
+  "os_image_hash": "<hex-encoded-os-image-hash>",
+  "key_provider_info": "<key-provider-info-string>",
+  "compose_hash": "<hex-encoded-compose-hash>"
+}
+```
+
+#### 5. EmitEvent
+
+Emit an event to be extended to RTMR3 on TDX platform (requires Dstack OS 0.5.0+): [23](#0-22) 
+
+**Endpoint:** `/EmitEvent` [24](#0-23) 
+
+**Request Parameters:** [25](#0-24) 
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `event` | string | The event name |
+| `payload` | string | Hex-encoded payload data |
+
+---
+
+## 📊 Management APIs
+
+### Guest Agent HTTP Endpoints
+
+The Guest Agent also provides HTTP endpoints for monitoring and log access: [26](#0-25) 
+
+#### Dashboard
+- **Endpoint:** `/` 
+- **Description:** Web dashboard showing CVM information, containers, and system stats
+- **Access:** Available when `public_sysinfo` or `public_logs` is enabled
+
+#### Metrics
+- **Endpoint:** `/metrics` [27](#0-26) 
+- **Description:** Prometheus-format metrics about the guest system
+- **Access:** Available when `public_sysinfo` is enabled
+
+#### Container Logs
+- **Endpoint:** `/logs/<container_name>` [28](#0-27) 
+- **Description:** Stream container logs with various formatting options
+- **Parameters:** `since`, `until`, `follow`, `text`, `timestamps`, `bare`, `tail`, `ansi`
+- **Access:** Available when `public_logs` is enabled
+
+### Supervisor API
+
+Process management API for controlling services within CVMs: [29](#0-28) 
+
+**Available Endpoints:**
+- `POST /deploy` - Deploy a new process [30](#0-29) 
+- `POST /start/<id>` - Start a process [31](#0-30)   
+- `POST /stop/<id>` - Stop a process [32](#0-31) 
+- `DELETE /remove/<id>` - Remove a process [33](#0-32) 
+- `GET /list` - List all processes [34](#0-33) 
+- `GET /info/<id>` - Get process information [35](#0-34) 
+- `GET /ping` - Health check [36](#0-35) 
+
+### VMM Management Console
+
+Web-based management interface for VM operations: [37](#0-36) 
+
+- **Access:** `http://localhost:9080` (configurable port)
+- **Features:** Deploy applications via docker-compose.yaml, view logs, manage CVMs
+
+---
+
+## 📦 Official SDKs
+
+Dstack provides official SDKs for multiple programming languages: [38](#0-37) 
+
+### JavaScript/TypeScript SDK
+
+**Installation:** [39](#0-38) 
+```bash
+npm install @phala/dstack-sdk
+```
+
+**Basic Usage:** [40](#0-39) 
+
+**Features:**
+- Viem integration for Ethereum [41](#0-40) 
+- Solana Web3.js integration [42](#0-41) 
+- Environment variable encryption utilities [43](#0-42) 
+
+### Python SDK
+
+**Installation:** [44](#0-43) 
+```bash
+pip install dstack-sdk
+```
+
+**Basic Usage:** [45](#0-44) 
+
+**Blockchain Integration:**
+- Ethereum support: `pip install "dstack-sdk[eth]"` [46](#0-45) 
+- Solana support: `pip install "dstack-sdk[sol]"` [47](#0-46) 
+
+### Go SDK
+
+**Installation:** [48](#0-47) 
+```bash
+go get github.com/Dstack-TEE/dstack/sdk/go
+```
+
+**Basic Usage:** [49](#0-48) 
+
+### Rust SDK
+
+Built-in support as part of the core Dstack components.
+
+---
+
+## 🔧 Development Tools
+
+### Simulator
+
+For local development without TDX hardware: [50](#0-49) 
 
 ```bash
-curl -X GET "https://api.dstack.com/v1/projects" \
-  -H "Authorization: Bearer YOUR_API_KEY"
+git clone https://github.com/Dstack-TEE/dstack.git
+cd dstack/sdk/simulator
+./build.sh
+./dstack-simulator
 ```
 
-## OAuth 2.0
+---
 
-dstack supports OAuth 2.0 for more secure authentication flows.
+## 📝 Error Handling
 
-### Authorization Code Flow
+All Guest Agent API endpoints return consistent error responses: [51](#0-50) 
 
-1. Redirect users to:
-```
-https://auth.dstack.com/oauth/authorize?client_id=YOUR_CLIENT_ID&redirect_uri=YOUR_REDIRECT_URI&response_type=code&scope=read,write
-```
+**HTTP Status Codes:**
+- `200 OK`: Request successful
+- `400 Bad Request`: Invalid request parameters  
+- `500 Internal Server Error`: Server-side error
 
-2. Exchange the code for an access token:
-```bash
-curl -X POST "https://auth.dstack.com/oauth/token" \
-  -H "Content-Type: application/x-www-form-urlencoded" \
-  -d "grant_type=authorization_code&code=AUTHORIZATION_CODE&client_id=YOUR_CLIENT_ID&client_secret=YOUR_CLIENT_SECRET&redirect_uri=YOUR_REDIRECT_URI"
-```
-
-## JWT Tokens
-
-For service-to-service communication, dstack supports JWT tokens.
-
-### Generating a JWT Token
-
-```javascript
-const jwt = require('jsonwebtoken');
-
-const token = jwt.sign(
-  { 
-    sub: 'service-account-name',
-    iss: 'your-issuer',
-    aud: 'dstack-api'
-  },
-  'your-secret-key',
-  { expiresIn: '1h' }
-);
+**Error Response Format:**
+```json
+{
+  "error": "Error description"
+}
 ```
 
-### Using JWT Tokens in Requests
+---
 
-```bash
-curl -X GET "https://api.dstack.com/v1/projects" \
-  -H "Authorization: Bearer YOUR_JWT_TOKEN"
-```
+## 🏗️ Architecture Notes
 
-## Best Practices
+### Container Deployment
+Applications are deployed using docker-compose.yaml files through the VMM web interface. [52](#0-51) 
 
-- Never expose your API keys or client secrets in client-side code
-- Use appropriate scopes to limit access
-- Rotate your API keys periodically
-- Use environment variables to store sensitive credentials in your applications
+### Secret Management
+Environment variables can be encrypted client-side and decrypted within the CVM before being passed to containers. [53](#0-52) 
+
+### Network Access
+Apps are accessible via dstack-gateway using domain mapping: [54](#0-53) 
+- `<id>[s].<base_domain>` maps to port 80/443
+- `<id>-<port>[s].<base_domain>` maps to specified port
+
+### TDX Attestation
+Applications can generate TDX quotes for remote attestation by mounting the Guest Agent socket and making API calls. [55](#0-54) 
+
+---
+
+## Notes
+
+This API reference covers the core Dstack TEE SDK APIs for confidential computing applications. Dstack is specifically designed for deploying containerized applications in Intel TDX environments with strong security guarantees through remote attestation and encrypted execution.
+
+For deployment and operational guides, refer to the main Dstack documentation and repository examples.
 

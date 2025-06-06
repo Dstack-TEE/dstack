@@ -1,6 +1,6 @@
 ---
-title: "First Deployment"
-description: "Deploy your first secure application to your self-hosted dstack infrastructure"
+title: "DStack Deployment Preparation"
+description: "Deploy your first secure application to your self‑hosted dstack infrastructure"
 ---
 
 # Your First dstack Deployment
@@ -9,482 +9,103 @@ description: "Deploy your first secure application to your self-hosted dstack in
   <div className="flex">
     <div className="ml-3">
       <p className="text-sm text-blue-700">
-        <strong>Prerequisites:</strong> Complete both <a href="/docs/getting-started/installation" className="underline font-medium">Installation</a> and <a href="/docs/getting-started/start" className="underline font-medium">Environment Setup</a> before proceeding. This guide assumes your dstack infrastructure is running and configured.
+        <strong>Prerequisites:</strong> Complete both <a href="/docs/getting-started/installation" className="underline font-medium">Installation</a> and <a href="/docs/getting-started/start" className="underline font-medium">Environment&nbsp;Setup</a> before continuing. Your dstack services (KMS, Gateway, VMM) must be up and running on TEE‑capable hardware.
       </p>
     </div>
   </div>
 </div>
 
-This final guide in the self-hosted dstack deployment series walks you through deploying your first application to your newly configured Trusted Execution Environment. You'll deploy a containerized application, verify it's running securely within your infrastructure, and confirm the end-to-end security guarantees.
+This guide is the launch‑point for bringing your first workload online. It lays out **exactly** where to go next, so you never wonder “What now?”. Follow the seven numbered sub‑guides (Step 1 → Step 7) in order—each one is a bite‑sized task that builds on the last.
+
+---
+
+> **🧭 Quick Path to Success with our Mini Guides**
+>
+> | Step     | What You’ll Do                                 | Link                                    |
+> | -------- | ---------------------------------------------- | --------------------------------------- |
+> | **1** | Pull & inspect the example container image     | [`Pull & inspect the example container image`](./first-deployment-steps/fd-1) |
+> | **2** | Write the dstack deployment manifest           | [`Write the dstack deployment manifest`](./first-deployment-steps/fd-2) |
+> | **3** | Sign & push the image to your private registry | [`sign & push the image to your private registry`](./first-deployment-steps/fd-3) |
+> | **4** | Launch the workload inside a TDX enclave       | [`Launch the workload inside a TDX enclave`](./first-deployment-steps/fd-4) |
+> | **5** | Verify attestation & remote‑prove trust        | [`Verify attestation & remote‑prove trust`](./first-deployment-steps/fd-5) |
+> | **6** | Expose an API endpoint via the Gateway         | [`Expose an API endpoint via the Gateway`](./first-deployment-steps/fd-6) |
+> | **7** | Update, roll back, and tear down safely        | [`Update, roll back, and tear down safely`](./first-deployment-steps/fd-7) |
+>
+> Skim the table, pick up at **Step 1**, and continue straight through **Step 7**.
+
+---
 
 <div className="bg-green-50 border-l-4 border-green-400 p-4 mb-6">
   <div className="flex">
     <div className="ml-3">
       <p className="text-sm text-green-700">
-        <strong>🎉 Final Step:</strong> Deploy and verify your first secure application on your self-hosted dstack infrastructure.
+        <strong>🎉 Milestone:</strong> by the end of Step 7 you will have a fully attested, externally reachable application running under hardware‑enforced confidentiality.
       </p>
       <p className="text-sm text-green-700 mt-2">
-        <strong>Time Required:</strong> About 15-30 minutes after your dstack services are running.
+        <strong>note:</strong> estimated time depends on your setup and experience; no specific time allotted.
       </p>
     </div>
   </div>
 </div>
+---
+## Before You Begin
 
-## Prerequisites
+| ✅ Checklist            | Description                                                                  |
+| ---------------------- | ---------------------------------------------------------------------------- |
+| dstack installed       | Finished <a href="/docs/getting-started/installation">Installation</a> guide |
+| Environment configured | Finished <a href="/docs/getting-started/start">Environment Setup</a> guide   |
+| Services healthy       | KMS, Gateway & VMM report <code>status: healthy</code>                       |
+| TDX enabled            | Host CPU supports Intel TDX and BIOS/Kernel options are enabled              |
+| Management UI up       | <code>[http://localhost:9080](http://localhost:9080)</code> reachable        |
 
-Before starting this deployment:
-
-- ✅ dstack installed via the [Installation Guide](/docs/getting-started/installation)
-- ✅ Environment configured via the [Environment Setup Guide](/docs/getting-started/start)  
-- ✅ All dstack services running (KMS, Gateway, VMM)
-- ✅ TEE-capable hardware (Intel TDX) verified and operational
-- ✅ Network access to your dstack management interface (http://localhost:9080)
-
-<details>
-<summary>Quick Service Verification</summary>
-
-Verify your dstack services are operational:
+### Quick Service Verification
 
 ```bash
 # Check VMM health
 curl -s http://localhost:9080/api/health | jq .
-# Expected: {"status":"healthy","version":"0.5.1","attestation":"available"}
+# → {"status":"healthy","version":"0.5.1","attestation":"available"}
 
-# Verify service processes
+# Verify processes
 ps aux | grep -E 'dstack-(kms|gateway|vmm)'
 
-# Check service logs if needed
+# Tail recent VMM logs
 sudo journalctl -u dstack-vmm --no-pager -n 10
 ```
 
-</details>
+If anything above fails, revisit the **Installation** and **Environment Setup** guides before proceeding.
 
-## Step 1: Prepare Your Application
+---
 
-For this guide, we'll deploy a simple "Hello World" web application. You can use your own Docker container or follow along with our example.
-
-### Option A: Use Our Example Application
-
-Create a new directory for your project:
-
-```bash
-mkdir ~/my-first-dstack-app
-cd ~/my-first-dstack-app
-```
-
-Create a simple Python Flask application:
-
-```python
-# app.py
-from flask import Flask, jsonify
-import os
-import socket
-
-app = Flask(__name__)
-
-@app.route('/')
-def hello():
-    return jsonify({
-        'message': 'Hello from dstack! 🔒',
-        'secure': 'Running in a Trusted Execution Environment',
-        'hostname': socket.gethostname(),
-        'environment': os.environ.get('DSTACK_ENV', 'production')
-    })
-
-@app.route('/health')
-def health():
-    return jsonify({'status': 'healthy'}), 200
-
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=8080)
-```
-
-Create a requirements file:
-
-```txt
-# requirements.txt
-flask==3.0.0
-gunicorn==21.2.0
-```
-
-Create a Dockerfile:
-
-```dockerfile
-# Dockerfile
-FROM python:3.11-slim
-
-WORKDIR /app
-
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-COPY app.py .
-
-EXPOSE 8080
-
-CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "2", "app:app"]
-```
-
-### Option B: Use Your Own Application
-
-Ensure your application:
-- Runs in a Docker container
-- Exposes at least one port
-- Can handle HTTP requests (for this example)
-
-## Step 2: Create docker-compose.yml
-
-Create a `docker-compose.yml` file to define your application:
-
-```yaml
-# docker-compose.yml
-version: '3.8'
-
-services:
-  web:
-    build: .
-    # Or use a pre-built image:
-    # image: your-dockerhub-username/your-app:latest
-    ports:
-      - "8080:8080"
-    environment:
-      - DSTACK_ENV=production
-      - LOG_LEVEL=info
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-    restart: unless-stopped
-```
-
-<details>
-<summary>Advanced: Multi-container application</summary>
-
-For applications with multiple services:
-
-```yaml
-version: '3.8'
-
-services:
-  web:
-    build: ./web
-    ports:
-      - "8080:8080"
-    environment:
-      - DATABASE_URL=postgresql://user:pass@db:5432/mydb
-    depends_on:
-      - db
-      
-  db:
-    image: postgres:15-alpine
-    environment:
-      - POSTGRES_USER=user
-      - POSTGRES_PASSWORD=pass
-      - POSTGRES_DB=mydb
-    volumes:
-      - db_data:/var/lib/postgresql/data
-
-volumes:
-  db_data:
-```
-
-</details>
-
-## Step 3: Deploy via Web UI
-
-### Access the dstack Dashboard
-
-1. Open your browser and navigate to http://localhost:9080
-2. You should see the dstack management interface
-
-![dstack Dashboard](https://via.placeholder.com/800x400.png?text=dstack+Dashboard)
-
-### Create New Deployment
-
-1. Click the **"Deploy New Application"** button
-2. Fill in the deployment form:
-
-| Field | Value |
-|-------|-------|
-| **Application Name** | my-first-app |
-| **Description** | My first secure application |
-| **Docker Compose File** | Upload your `docker-compose.yml` |
-
-3. Configure resources (optional):
-
-| Resource | Default | Recommended for Testing |
-|----------|---------|------------------------|
-| **CPU** | 2 cores | 1 core |
-| **Memory** | 4 GB | 2 GB |
-| **Storage** | 10 GB | 5 GB |
-
-4. Click **"Deploy"**
-
-### Monitor Deployment Progress
-
-The deployment process involves several steps:
-
-<div className="bg-gray-50 p-4 rounded-lg my-4">
-  <div className="space-y-3">
-    <div className="flex items-center gap-3">
-      <div className="w-6 h-6 bg-blue-500 rounded-full flex items-center justify-center text-white text-sm">1</div>
-      <span>Creating Confidential VM</span>
-    </div>
-    <div className="flex items-center gap-3">
-      <div className="w-6 h-6 bg-blue-500 rounded-full flex items-center justify-center text-white text-sm">2</div>
-      <span>Setting up secure environment</span>
-    </div>
-    <div className="flex items-center gap-3">
-      <div className="w-6 h-6 bg-blue-500 rounded-full flex items-center justify-center text-white text-sm">3</div>
-      <span>Pulling Docker images</span>
-    </div>
-    <div className="flex items-center gap-3">
-      <div className="w-6 h-6 bg-blue-500 rounded-full flex items-center justify-center text-white text-sm">4</div>
-      <span>Starting containers</span>
-    </div>
-    <div className="flex items-center gap-3">
-      <div className="w-6 h-6 bg-green-500 rounded-full flex items-center justify-center text-white text-sm">✓</div>
-      <span>Application running</span>
-    </div>
-  </div>
-</div>
-
-## Step 4: Deploy via CLI (Alternative)
-
-If you prefer the command line:
-
-```bash
-# Deploy using dstack CLI
-dstack deploy \
-  --name my-first-app \
-  --compose docker-compose.yml \
-  --wait
-
-# Check deployment status
-dstack status my-first-app
-```
-
-Expected output:
-```
-Deployment: my-first-app
-Status: Running
-CVM ID: cvm-abc123
-Created: 2024-01-15 10:30:00
-Endpoints:
-  - http://my-first-app.app.example.com
-```
-
-## Step 5: Access Your Application
-
-Once deployed, your application is accessible through the dstack gateway.
-
-### Find Your Application URL
-
-1. In the dashboard, click on your deployment
-2. Look for the **"Endpoints"** section
-3. You'll see URLs like:
-   - Internal: `http://cvm-abc123.local:8080`
-   - External: `https://my-first-app.app.example.com`
-
-### Test Your Application
-
-```bash
-# Test the application
-curl https://my-first-app.app.example.com
-
-# Expected response:
-{
-  "message": "Hello from dstack! 🔒",
-  "secure": "Running in a Trusted Execution Environment",
-  "hostname": "cvm-abc123",
-  "environment": "production"
-}
-```
-
-## Step 6: Verify Security
-
-One of dstack's key features is verifiable security. Let's verify your application is running in a genuine TEE.
-
-### Get Attestation Quote
-
-Using the dstack SDK:
-
-```javascript
-// verify-deployment.js
-const { DstackClient } = require('@phala/dstack-sdk');
-
-async function verifyDeployment() {
-  const client = new DstackClient({
-    endpoint: 'https://my-first-app.app.example.com'
-  });
-  
-  // Get attestation quote
-  const quote = await client.getQuote();
-  console.log('Attestation Quote:', quote);
-  
-  // Get application info
-  const info = await client.info();
-  console.log('Application Info:', info);
-}
-
-verifyDeployment();
-```
-
-### Verify via Web Interface
-
-1. In the dashboard, click on your deployment
-2. Navigate to the **"Security"** tab
-3. Click **"View Attestation Report"**
-4. You can also verify using the [TEE Attestation Explorer](https://ra-quote-explorer.vercel.app/)
-
-## Step 7: Monitor Your Application
-
-### View Logs
-
-From the dashboard:
-1. Click on your deployment
-2. Go to the **"Logs"** tab
-3. You'll see real-time application logs
-
-From the CLI:
-```bash
-# Stream logs
-dstack logs -f my-first-app
-
-# Get last 100 lines
-dstack logs --tail 100 my-first-app
-```
-
-### Check Metrics
-
-The dashboard provides metrics including:
-- CPU usage
-- Memory consumption
-- Network I/O
-- Request count
-
-## Common Issues and Solutions
-
-<details>
-<summary>Application fails to start</summary>
-
-1. Check logs for errors:
-   ```bash
-   dstack logs my-first-app
-   ```
-
-2. Verify your Docker image works locally:
-   ```bash
-   docker-compose up
-   ```
-
-3. Ensure health checks are configured correctly
-
-</details>
-
-<details>
-<summary>Cannot access application URL</summary>
-
-1. Check if the application is running:
-   ```bash
-   dstack status my-first-app
-   ```
-
-2. Verify network connectivity:
-   ```bash
-   curl -I https://my-first-app.app.example.com
-   ```
-
-3. Check gateway logs:
-   ```bash
-   sudo journalctl -u dstack-gateway -f
-   ```
-
-</details>
-
-<details>
-<summary>Attestation verification fails</summary>
-
-1. Ensure you're using the correct endpoint
-2. Check if the CVM is fully initialized
-3. Verify TDX is enabled on your hardware
-
-</details>
-
-## What You've Accomplished
-
-Congratulations! You've successfully:
-
-- ✅ Deployed an application to a Trusted Execution Environment
-- ✅ Verified it's running securely with attestation
-- ✅ Accessed it through secure HTTPS endpoints
-- ✅ Monitored logs and metrics
-
-## Next Steps
-
-Now that you've deployed your first application, explore more advanced features:
-
-<CardGroup cols={2}>
-  <Card title="Deploy Complex Apps" icon="layer-group" href="/docs/deployment-guides/deploying-applications">
-    Multi-container applications
-  </Card>
-  {/* 
-  <Card title="Configure Components" icon="cog" href="/deployment-guides/configuring-components">
-    Advanced configuration options
-  </Card>
-  */}
-  <Card title="Python Tutorial" icon="python" href="/docs/tutorials/python-example">
-    Deploy a Flask application
-  </Card>
-  {/* 
-  <Card title="Security Deep Dive" icon="shield" href="/concepts/security-model">
-    Understand TEE security
-  </Card>
-  */}
-</CardGroup>
-
-## Quick Reference
-
-### Useful Commands
+## Reference Commands (useful in every step)
 
 ```bash
 # List all deployments
 dstack list
 
-# Get deployment details
+# Describe a deployment
 dstack describe my-first-app
 
-# Update deployment
+# Update from a manifest
 dstack update my-first-app -f docker-compose.yml
 
-# Stop deployment
+# Stop or remove
+# (used in step 7 rollback/cleanup)
 dstack stop my-first-app
-
-# Remove deployment
 dstack remove my-first-app
 ```
 
-### API Endpoints
+---
 
-- **VMM API**: `http://localhost:9080/api`
-- **Guest API**: `http://<app-cid>:8090`
-- **Health Check**: `http://<app-url>/health`
+## Next Steps & Further Reading
 
-- [API Overview](/docs/api-reference/overview) - API documentation overview
+**Start here:** <a href="./first-deployment-steps/fd-1" className="underline font-medium">Step 1 — Pull the Example Application</a>
 
-For more information about key management and API reference, see the [deployment guide](/docs/deployment-guides/deploying-applications#key-management) and [API documentation](/docs/api-reference/overview).
+After each mini-guide, follow the **Next Step** banner to proceed in order. Skipping steps may leave your deployment unverified or insecure.
 
-## Learn More
+**Further reading:**
+- [System Architecture](/docs/concepts/architecture) – How all components fit together
+- [Security Model](/docs/concepts/security-model) – Threat model & enclave guarantees
+- [API Overview](/docs/api-reference/overview) – Programmatic control once you’re comfortable with the CLI
+- [Deployment Guides](/docs/deployment-guides/deploying-applications) – Deep-dive options beyond your first full deployment
 
-### Technical References
-- [API Overview](/docs/api-reference/overview) - API documentation overview
-- Deployment configurations and options
-For more information about key management and API reference, see the [deployment guide](/docs/deployment-guides/deploying-applications#key-management) and [API documentation](/docs/api-reference/overview).
-
-### Architecture & Security
-- [System Architecture](/docs/concepts/architecture) - Understand how dstack works
-- [Security Model](/docs/concepts/security-model) - Deep dive into TEE security
-- Remote attestation and trust model
-For more information about key management and API reference, see the [deployment guide](/docs/deployment-guides/deploying-applications#key-management) and [API documentation](/docs/api-reference/overview). 
+**Ready?** <a href="./first-deployment-steps/fd-1.mdx" className="underline font-medium">Jump to Step 1 and ship something real.</a>

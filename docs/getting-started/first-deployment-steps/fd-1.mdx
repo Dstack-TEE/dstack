@@ -1,0 +1,79 @@
+---
+title: "Pull & inspect the example container image"
+description: "Prepare your application for deployment"
+---
+
+## Step 1: Prepare Your Application
+
+For this guide, we'll deploy a simple "Hello World" web application. You can use your own Docker container or follow along with our example.
+
+### Option A: Use Our Example Application
+
+Create a new directory for your project:
+
+```bash
+mkdir ~/my-first-dstack-app
+cd ~/my-first-dstack-app
+```
+
+Create a simple Python Flask application:
+
+```python
+# app.py
+from flask import Flask, jsonify
+import os
+import socket
+
+app = Flask(__name__)
+
+@app.route('/')
+def hello():
+    return jsonify({
+        'message': 'Hello from dstack! 🔒',
+        'secure': 'Running in a Trusted Execution Environment',
+        'hostname': socket.gethostname(),
+        'environment': os.environ.get('DSTACK_ENV', 'production')
+    })
+
+@app.route('/health')
+def health():
+    return jsonify({'status': 'healthy'}), 200
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=8080)
+```
+
+Create a requirements file:
+
+```txt
+# requirements.txt
+flask==3.0.0
+gunicorn==21.2.0
+```
+
+Create a Dockerfile:
+
+```dockerfile
+# Dockerfile
+FROM python:3.11-slim
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY app.py .
+
+EXPOSE 8080
+
+CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "2", "app:app"]
+```
+
+### Option B: Use Your Own Application
+
+Ensure your application:
+- Runs in a Docker container
+- Exposes at least one port
+- Can handle HTTP requests (for this example)
+
+- If you have any issues or get stuck, visit the [Troubleshooting page](../../troubleshooting) for solutions and diagnostics. You can also ask for help in the [community](../../community.mdx).

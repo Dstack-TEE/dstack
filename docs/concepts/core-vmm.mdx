@@ -1,0 +1,137 @@
+---
+title: "vmm core"
+description: "Deep dive into dstack's essential components and their roles"
+---
+
+# dstack-vmm
+
+The VMM provides orchestration capabilities through several service interfaces:
+
+| **Service** | **Endpoint** | **Purpose** |
+|-------------|-------------|-------------|
+| RPC API     | `/prpc`     | VM lifecycle management and operations |
+| Host API    | `/api`      | CVM notifications and host information |
+| Guest API   | `/guest`    | Proxied access to CVM guest agents     |
+| Web UI      | `/`         | HTML console for browser-based management |
+
+  ## vmm Configuration
+  [See full VMM configuration reference](https://deepwiki.com/Dstack-TEE/dstack/2.1-dstack-vmm)
+
+
+
+```toml
+# vmm.toml - Configuration for Dstack VMM
+
+# --------- General VMM Parameters ---------
+workers = 8                    # Number of worker threads for task execution
+max_blocking = 64              # Maximum number of blocking tasks allowed
+ident = "Dstack VMM"           # Identifier/name for the VMM instance
+temp_dir = "/tmp"              # Directory for temporary files (e.g., sockets, images)
+keep_alive = 10                # Time (in seconds) to keep idle resources alive
+log_level = "info"             # Logging verbosity: trace, debug, info, warn, error
+address = "unix:./vmm.sock"    # Unix socket address for VMM communication
+reuse = true                   # Reuse the socket if already exists (avoids conflicts)
+kms_url = "http://127.0.0.1:8081"    # URL for Key Management Service (KMS)
+image_path = "/var/lib/dstack/images"    # Directory to store VM/container images
+run_path = "/var/lib/dstack/vms"        # Directory to store running VM state and files
+
+# --------- Networking Configuration ---------
+[networking]
+mode = "user"                  # Networking mode: user, bridge, host, etc.
+net = "10.0.2.0/24"            # Subnet for VMs/containers
+dhcp_start = "10.0.2.10"       # Starting IP for DHCP-assigned addresses
+restrict = false               # Restrict networking for isolation (false = open)
+
+# --------- CVM (Compute Virtual Machine) Parameters ---------
+[cvm]
+qemu_path = "/usr/bin/qemu-system-x86_64"    # Path to QEMU executable
+kms_urls = ["http://127.0.0.1:8081"]         # List of Key Management Service URLs
+gateway_urls = ["http://127.0.0.1:8082"]     # URLs for gateway agents/services
+pccs_url = ""                                # Optional: SGX PCS URL (empty if unused)
+docker_registry = ""                         # Optional: Docker registry for images
+max_disk_size = 500                          # Maximum disk size per VM (GB)
+cid_start = 1000                             # Starting CID (Container ID) for VMs
+cid_pool_size = 1000                         # Number of CIDs available for allocation
+max_allocable_vcpu = 20                      # Maximum virtual CPUs allocable per VM
+max_allocable_memory_in_mb = 100000           # Maximum RAM per VM (MB)
+qmp_socket = false                           # Enable QEMU Machine Protocol socket (for advanced control)
+user = ""                                    # Run VMs as this user (empty = default)
+use_mrconfigid = true                        # Use measured config ID for attestation
+
+# ----- Port Mapping for CVM -----
+[cvm.port_mapping]
+enabled = false                              # Enable port mapping between host and guest
+address = "127.0.0.1"                        # Host address for mapped ports
+range = [
+    { protocol = "tcp", from = 1, to = 20000 },  # Range of TCP ports available for mapping
+]
+
+# ----- Auto-Restart for CVM -----
+[cvm.auto_restart]
+enabled = true                               # Automatically restart VMs on failure
+interval = 20                                # Interval (seconds) before attempting restart
+
+# ----- GPU Passthrough for CVM -----
+[cvm.gpu]
+enabled = false                              # Enable GPU passthrough to VMs
+listing = ["10de:2335"]                      # List of allowed GPU devices (PCI IDs)
+exclude = []                                 # List of GPUs to exclude from passthrough
+include = []                                 # List of GPUs to include (overrides 'listing')
+
+# --------- Gateway Service Configuration ---------
+[gateway]
+base_domain = "localhost"                    # Base domain for gateway routing
+port = 8082                                  # Port for gateway HTTP interface
+agent_port = 8090                            # Port for gateway agent communication
+
+# --------- Authentication and Tokens ---------
+[auth]
+enabled = false                              # Enable authentication for API/services
+tokens = []                                  # List of valid API tokens (empty = no auth)
+
+# --------- Supervisor Process Configuration ---------
+[supervisor]
+exe = "./supervisor"                         # Path to supervisor executable
+sock = "./run/supervisor.sock"               # Path to supervisor socket file
+pid_file = "./run/supervisor.pid"            # Path to supervisor PID file
+log_file = "./run/supervisor.log"            # Path to supervisor log file
+detached = false                             # Run supervisor in background (daemon)
+auto_start = true                            # Start supervisor automatically with VMM
+
+# --------- Host API Endpoint ---------
+[host_api]
+ident = "Dstack VMM"                         # Identifier for the Host API instance
+address = "vsock:2"                          # Address (VSOCK) for host API communication
+port = 10000                                 # Port for host API
+
+# --------- Key Provider Configuration ---------
+[key_provider]
+enabled = true                               # Enable external key provider
+address = "127.0.0.1"                        # Address of the key provider service
+```
+
+
+---
+
+## Gateway Integration with the VMM
+
+The integration of the gateway within the VMM's configuration reflects the tightly coupled nature of secure, orchestrated deployments in dstack. By defining gateway parameters—such as the base domain, network ports, and agent interface—directly alongside VM and cluster settings, dstack ensures that network exposure, TLS policy, and VPN tunneling are always synchronized with the lifecycle of each Confidential VM. The VMM is responsible not only for creating and maintaining the compute environment, but also for provisioning and updating the gateway, allowing seamless coordination between workload orchestration and secure service exposure. This architecture eliminates configuration drift and centralizes operational control, so that every application endpoint published by the gateway is cryptographically tied to the trusted state managed by the VMM.
+
+## Next Steps
+
+Now that you understand VMM orchestration, continue learning about dstack's core components:
+
+<div className="mt-8 flex gap-4">
+  <a href="/docs/concepts/core-gateway" className="bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700">
+    Next: Gateway Core →
+  </a>
+  <a href="/docs/concepts/core-components" className="bg-gray-200 text-gray-800 px-6 py-3 rounded-lg hover:bg-gray-300">
+    ← Back to Overview
+  </a>
+</div>
+
+### Related Topics
+- [Networking](/docs/concepts/networking) - Learn about dstack's network architecture
+- [Architecture](/docs/concepts/architecture) - Understand the overall system design
+
+

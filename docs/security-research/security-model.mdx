@@ -1,0 +1,170 @@
+---
+title: "Cryptographic Security Model"
+description: "Complete reference for cryptographic primitives, libraries, and security mechanisms in dStack"
+---
+
+# Cryptographic Security Model
+
+This document provides a comprehensive reference for all cryptographic primitives, libraries, and universal security concepts implemented across dStack repositories. It serves as a technical reference for developers, security reviewers, and users who need to understand the cryptographic underpinnings of dStack's security architecture.
+
+## Universal Cryptographic Libraries and Algorithms
+
+### Core Cryptographic Libraries
+
+#### ring (v0.17.14)
+**Components:** KMS, RA-TLS, Gateway, Guest Agent  
+**Security Properties:** Digital signatures, key derivation, secure random generation, certificate verification  
+**Rationale:** Chosen for its security audit history, performance, and integration with rustls  
+**Configuration:**
+- ECDSA P-256 with SHA-256 for digital signatures [1](#0-0) 
+- HKDF-SHA256 for key derivation with "RATLS" salt [2](#0-1) 
+- SystemRandom for cryptographically secure random number generation [3](#0-2) 
+
+#### rustls (v0.23.23)
+**Components:** Gateway, KMS, RA-RPC clients  
+**Security Properties:** TLS 1.2/1.3 transport encryption and authentication  
+**Rationale:** Pure Rust implementation avoiding OpenSSL vulnerabilities, with ring crypto backend  
+**Configuration:**
+- Uses ring as the default crypto provider [4](#0-3) 
+- Default cipher suites (TLS 1.3 preferred)
+- ECDSA certificate support for RA-TLS
+
+#### sodiumbox (Custom Implementation)
+**Components:** Host API, Key Provider  
+**Security Properties:** Public-key authenticated encryption (sealed boxes)  
+**Rationale:** Pure Rust libsodium-compatible implementation eliminating C dependencies  
+**Configuration:**
+- X25519 key exchange for ephemeral shared secrets [5](#0-4) 
+- XSalsa20-Poly1305 for authenticated encryption [6](#0-5) 
+- Blake2b for deterministic nonce derivation from public keys [7](#0-6) 
+- HSalsa20 for symmetric key derivation from shared secrets [8](#0-7) 
+
+### Blockchain and Ethereum Cryptography
+
+#### k256 (v0.13.4)
+**Components:** KMS  
+**Security Properties:** Ethereum-compatible secp256k1 signatures and key generation  
+**Rationale:** Required for blockchain integration and Ethereum ecosystem compatibility  
+**Configuration:**
+- Secp256k1 curve for signing keys [9](#0-8) 
+- Keccak256 hashing for Ethereum-style message signing [10](#0-9) 
+- Recoverable signatures with recovery ID [11](#0-10) 
+
+### Symmetric Encryption
+
+#### aes-gcm (v0.10.3)
+**Components:** Environment variable encryption, data protection  
+**Security Properties:** Authenticated encryption with associated data (AEAD)  
+**Rationale:** Industry standard for authenticated symmetric encryption  
+**Configuration:**
+- AES-256-GCM for high-security applications [12](#0-11) 
+- 96-bit nonces, 128-bit authentication tags
+
+### Hash Functions
+
+#### SHA Family (v0.10.8)
+**Components:** Universal across all components  
+**Security Properties:** Cryptographic hashing, integrity verification, key derivation  
+**Configuration:**
+- SHA-256, SHA-384, SHA-512 for different security levels [13](#0-12) 
+- SHA-512 as default for TDX quote report data hashing [14](#0-13) 
+
+#### SHA-3/Keccak (v0.10.8)
+**Components:** KMS, blockchain operations  
+**Security Properties:** Alternative hash functions for specific use cases  
+**Configuration:**
+- Keccak256 for Ethereum message signing [15](#0-14) 
+- SHA3 variants available for quote content hashing [16](#0-15) 
+
+#### Blake2b (v0.10.6)
+**Components:** sodiumbox sealed box implementation  
+**Security Properties:** Fast cryptographic hashing for nonce derivation  
+**Rationale:** Required for libsodium compatibility in sealed box nonce generation  
+**Configuration:**
+- 24-byte output for XSalsa20 nonce generation [17](#0-16) 
+
+### Key Exchange and Elliptic Curves
+
+#### x25519-dalek (v2.0.1)
+**Components:** sodiumbox, key exchange operations  
+**Security Properties:** Elliptic curve Diffie-Hellman key exchange  
+**Rationale:** High performance, side-channel resistant implementation  
+**Configuration:**
+- Static secrets for long-term keys, ephemeral for perfect forward secrecy [18](#0-17) 
+
+#### p256 (v0.13.2)
+**Components:** RA-TLS, certificate operations  
+**Security Properties:** NIST P-256 elliptic curve operations  
+**Rationale:** Standard curve for TLS certificates and government compliance  
+**Configuration:**
+- ECDSA key pairs for certificate signing [19](#0-18) 
+- PKCS#8 DER encoding for key serialization [20](#0-19) 
+
+### Key Derivation
+
+#### hkdf (v0.12.4)
+**Components:** RA-TLS, KMS, key management  
+**Security Properties:** HMAC-based key derivation function (RFC 5869)  
+**Rationale:** Standard for deriving multiple keys from single master key  
+**Configuration:**
+- HKDF-SHA256 with context separation [21](#0-20) 
+- "RATLS" salt for domain separation [22](#0-21) 
+
+### Intel TDX Attestation
+
+#### dcap-qvl (v0.2.4)
+**Components:** RA-TLS attestation verification  
+**Security Properties:** Intel TDX quote verification and measurement validation  
+**Rationale:** Official Intel library for hardware attestation verification  
+**Configuration:**
+- Verifies TDX quotes from Intel Trust Domain Extensions [23](#0-22) 
+- Validates measurement registers (MRTD, RTMR) [24](#0-23) 
+
+#### tdx-attest-sys
+**Components:** Guest Agent, quote generation  
+**Security Properties:** Low-level TDX attestation syscalls  
+**Rationale:** Direct interface to TDX hardware for quote generation  
+
+## Implementation Notes
+
+### Remote Attestation TLS (RA-TLS)
+RA-TLS extends standard TLS certificates with Intel TDX attestation quotes embedded as X.509 extensions. The implementation uses ring for ECDSA signature verification and custom OIDs for quote data [25](#0-24) . Quote content is hashed using configurable algorithms before inclusion in TDX report data [26](#0-25) .
+
+### Key Management System (KMS)
+The KMS uses HKDF for deterministic key derivation from hardware-sealed root keys. Application-specific keys are derived using context data including application ID and purpose [27](#0-26) . Ethereum-compatible keys use secp256k1 with recoverable signatures for blockchain integration [28](#0-27) .
+
+### Sealed Box Encryption
+The sodiumbox implementation provides libsodium-compatible sealed boxes using pure Rust libraries. Each sealed box uses an ephemeral X25519 keypair, derives a shared secret, and encrypts with XSalsa20-Poly1305 [29](#0-28) . Nonces are deterministically derived from public keys using Blake2b to prevent reuse [30](#0-29) .
+
+### Certificate Management
+X.509 certificates include custom extensions for TDX quotes, event logs, application IDs, and certificate usage [31](#0-30) . Certificate signing requests are authenticated using ECDSA signatures with ring verification [32](#0-31) .
+
+## Security Guarantees
+
+### Cryptographic Assurances
+- **Key Derivation**: All application keys derived using HKDF-SHA256 from hardware-sealed root keys
+- **Transport Security**: All inter-service communication protected by TLS 1.2/1.3 with ring crypto backend
+- **Digital Signatures**: ECDSA P-256 signatures for certificate authentication and integrity
+- **Authenticated Encryption**: AES-GCM and XSalsa20-Poly1305 for data confidentiality and integrity
+- **Random Number Generation**: Cryptographically secure randomness from ring's SystemRandom
+- **Hardware Attestation**: Intel TDX quotes verified using official DCAP libraries
+- **Key Exchange**: Perfect forward secrecy through ephemeral X25519 key exchange
+- **Hash Security**: SHA-2, SHA-3, and Blake2b providing collision resistance and integrity
+
+### Algorithm Security Levels
+- **Symmetric**: AES-256 (256-bit security), XSalsa20 (256-bit security)
+- **Asymmetric**: P-256 (128-bit security), secp256k1 (128-bit security), X25519 (128-bit security)
+- **Hash**: SHA-256 (128-bit security), SHA-384 (192-bit security), SHA-512 (256-bit security)
+
+## Exclusions
+
+This document does not cover:
+- **Infrastructure Security**: Cloud provider security, network architecture, hardware specifications
+- **Operational Security**: Deployment procedures, monitoring systems, incident response
+- **Compliance Frameworks**: HIPAA, SOC 2, or other regulatory mapping
+- **Protocol Diagrams**: Network flow diagrams, trust boundaries, system architecture
+- **TEE Hardware Details**: Intel TDX hardware implementation specifics beyond cryptographic interfaces
+- **Performance Benchmarks**: Cryptographic performance metrics or optimization details
+- **Key Ceremonies**: Operational procedures for root key generation or rotation
+
+For operational security guidance, see the deployment documentation. For system architecture details, refer to the infrastructure documentation.

@@ -24,9 +24,9 @@ description: "It's the easiest way to deploy existing Docker applications to Tru
 
 <div className="grid grid-cols-1 md:grid-cols-2 gap-6 my-6">
   <div className="bg-green-50 p-6 rounded-lg">
-    <h4 className="font-semibold text-green-900 mb-3">1. Operational Familiarity</h4>
+    <h4 className="font-semibold text-blue-900 mb-3">1. Use your existing tools</h4>
     <p className="text-sm">
-      Developers interact with dstack using familiar tools—Docker, REST APIs, and web interfaces. The complexity of TEE management remains abstracted, allowing teams to focus on application logic rather than security implementation.
+      You work with dstack just like you do with Docker, REST APIs, and web dashboards. No need to learn new tools or change how you build and run your apps.
     </p>
   </div>
   <div className="bg-green-100 p-6 rounded-lg">
@@ -51,24 +51,30 @@ description: "It's the easiest way to deploy existing Docker applications to Tru
 
 
 ---
-## Two Paths Forward
+## Two Guides to Get Started
 
-Choose your journey based on your needs and timeline:
+dstack supports multiple ways to deploy your apps—use a partner-managed cloud (like Phala) for instant TEE access, or follow the self-hosted guide to deploy dstack on your own hardware when you're ready for full control.
 
 <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-8">
   <Card 
     title="Super Quick Start (Recommended)" 
-    icon="play-circle" 
+    icon="rocket" 
     href="/docs/tutorials/super-quick-start"
     className="hover:shadow-lg transition-shadow border-2 border-green-200"
   >
     <div className="space-y-3">
-      <p className="text-sm mt-2 mb-2">Deploy your secure app to Phala Cloud in minutes. No infrastructure setup, no complexity—just instant TEE deployment.</p>
+      <p className="text-sm mt-2 mb-2">
+        Deploy a secure app to Phala Cloud in minutes—no setup needed. Fastest way to try dstack.
+      </p>
       <div className="bg-green-50 p-3 rounded">
-        <p className="text-xs font-medium text-green-800">⚡ Time: 5-10 minutes</p>
-        <p className="text-xs text-green-700">Perfect for: Getting started, prototyping, quick production deploys</p>
+        <p className="text-xs font-medium text-green-800">⚡ 5-10 minutes</p>
+        <p className="text-xs text-green-700">
+          Great for: Getting started and quick prototyping
+        </p>
       </div>
-      <p className="text-xs text-gray-600">Uses Phala's managed infrastructure—deploy immediately without hardware requirements.</p>
+      <p className="text-xs text-gray-600">
+        Uses free credits and managed infrastructure. Move to <a href="/docs/getting-started/installation" className="underline">your own deployment</a> anytime.
+      </p>
     </div>
   </Card>
   
@@ -76,13 +82,13 @@ Choose your journey based on your needs and timeline:
     title="Deploy Your Own dstack Framework" 
     icon="server" 
     href="/docs/getting-started/installation"
-    className="hover:shadow-lg transition-shadow border-2 border-blue-200"
+    className="hover:shadow-lg transition-shadow border-2 border-purple-200"
   >
     <div className="space-y-3">
       <p className="text-sm mt-2 mb-2">Build and deploy your own decentralized confidential computing infrastructure from the ground up.</p>
-      <div className="bg-blue-50 p-3 rounded">
-        <p className="text-xs font-medium text-blue-800">🔧 Time: 2-8 hours (skill dependent)</p>
-        <p className="text-xs text-blue-700">Perfect for: Custom infrastructure, research, full control</p>
+      <div className="bg-purple-50 p-3 rounded">
+        <p className="text-xs font-medium text-purple-800">🔧 Time: 2-8 hours (skill dependent)</p>
+        <p className="text-xs text-purple-700">Perfect for: Custom infrastructure, research, full control</p>
       </div>
       <p className="text-xs text-gray-600"><strong>Linux required.</strong> Follow our comprehensive guides: Installation → Environment Setup → First Deployment.</p>
     </div>
@@ -91,8 +97,8 @@ Choose your journey based on your needs and timeline:
 
 <div className="mt-6 p-4 bg-gray-50 rounded-lg">
   <h4 className="font-medium text-gray-800 mb-2">Not sure which path to choose?</h4>
-  <p className="text-sm text-gray-600">
-    Start with the <strong>Super Quick Start</strong> to see dstack in action immediately. You can always deploy your own framework later once you understand the platform better.
+  <p className="text-sm text-gray-700">
+    start with the <strong>Super Quick Start</strong> to see dstack in action immediately. you can always deploy your own framework later once you understand the platform better.
   </p>
 </div>
 
@@ -128,7 +134,7 @@ Choose your journey based on your needs and timeline:
   <Card 
     title="API Reference" 
     icon="code" 
-    href="/docs/api-reference/overview"
+    href="/docs/api-reference/authentication"
     className="hover:shadow-lg transition-shadow border-2 border-gray-200 rounded-lg p-4"
   >
     <p className="mb-4">Full API documentation for developers</p>
@@ -140,17 +146,12 @@ Choose your journey based on your needs and timeline:
   <Card 
     title="Security & Research" 
     icon="shield-halved" 
-    href="/docs/security-research/overview.mdx"
+    href="/docs/security-research/overview"
     className="hover:shadow-lg transition-shadow border-2 border-gray-200 rounded-lg p-4"
   >
-    <p className="mb-4">Full API documentation for developers</p>
+    <p className="mb-4">Explore security model, research, and advanced topics</p>
     <button className="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded">
       Learn More →
     </button>
   </Card>
 </div>
-
-
-
-
----

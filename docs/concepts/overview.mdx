@@ -1,353 +1,212 @@
 ---
-title: "Core Concepts Overview"
-description: "Essential concepts for understanding how dstack enables secure application deployment"
+title: "Core Concepts Starting Guide"
+description: "dstack is an open-source platform that transforms any Docker container into a secure Trusted Execution Environment (TEE) deployment with zero code changes. This overview introduces the fundamental concepts and guides you to the detailed documentation you need."
 ---
 
-# Core Concepts Overview
+<img src="/docs/images/what-tee-provide-pro.png" />
 
-Before diving into dstack's implementation details, it's important to understand the fundamental concepts that make secure application deployment possible. This page introduces the key ideas and terminology you'll encounter throughout the documentation.
+## Understanding TEEs and Confidential Computing
 
-## Trusted Execution Environments (TEEs)
+At its core, dstack leverages **Trusted Execution Environments** - hardware-secured computing environments that protect your code and data even from privileged system access. Think of a TEE as a hardware-enforced safe room for your applications.
 
-At the heart of dstack is the concept of a Trusted Execution Environment - a secure area within a processor that ensures code and data loaded inside are protected.
+**Current TEE Support:** dstack currently supports [Intel TDX (Trust Domain Extensions)](https://www.intel.com/content/www/us/en/developer/tools/trust-domain-extensions/overview.html) with planned support for AMD SEV-SNP and ARM Confidential Compute Architecture.
 
-<div className="bg-blue-50 p-6 rounded-lg my-4">
-  <h3 className="font-semibold mb-3">What is a TEE?</h3>
-  <p className="mb-3">
-    A TEE is a hardware-based security feature that creates an isolated execution environment. Think of it as a secure vault within your computer where sensitive operations can happen without interference from the outside world.
-  </p>
-  <ul className="space-y-2">
-    <li>• <strong>Hardware Isolation:</strong> Physical separation from the main system</li>
-    <li>• <strong>Encrypted Memory:</strong> Data in memory is encrypted and inaccessible</li>
-    <li>• <strong>Secure Boot:</strong> Only authorized code can run</li>
-    <li>• <strong>Remote Attestation:</strong> Cryptographic proof of integrity</li>
-  </ul>
-</div>
+---
 
-### TEE Technologies
+## DStack main components
 
-<table className="w-full my-4">
-  <thead>
-    <tr className="bg-gray-100">
-      <th className="p-3 text-left">Technology</th>
-      <th className="p-3 text-left">Vendor</th>
-      <th className="p-3 text-left">Key Features</th>
-      <th className="p-3 text-left">dstack Support</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td className="p-3 font-semibold">Intel TDX</td>
-      <td className="p-3">Intel</td>
-      <td className="p-3">VM-level isolation, scalable</td>
-      <td className="p-3 text-green-600">✓ Supported</td>
-    </tr>
-    <tr className="bg-gray-50">
-      <td className="p-3 font-semibold">AMD SEV-SNP</td>
-      <td className="p-3">AMD</td>
-      <td className="p-3">VM encryption, memory integrity</td>
-      <td className="p-3 text-yellow-600">Coming Soon</td>
-    </tr>
-    <tr>
-      <td className="p-3 font-semibold">Intel SGX</td>
-      <td className="p-3">Intel</td>
-      <td className="p-3">Application enclaves, fine-grained</td>
-      <td className="p-3 text-green-600">✓ Via compatibility</td>
-    </tr>
-    <tr className="bg-gray-50">
-      <td className="p-3 font-semibold">ARM CCA</td>
-      <td className="p-3">ARM</td>
-      <td className="p-3">Realm-based isolation</td>
-      <td className="p-3 text-yellow-600">Planned</td>
-    </tr>
-  </tbody>
-</table>
-
-## Confidential Virtual Machines (CVMs)
-
-dstack uses Confidential VMs as the deployment unit for applications.
-
-### What is a CVM?
-
-A CVM is a virtual machine that runs within a TEE, providing:
-
-<div className="grid grid-cols-1 md:grid-cols-3 gap-4 my-6">
-  <div className="border rounded-lg p-4">
-    <div className="text-2xl mb-2">🔒</div>
-    <h4 className="font-semibold">Isolation</h4>
-    <p className="text-sm text-gray-600">
-      Complete isolation from host OS and other VMs
-    </p>
-  </div>
-  <div className="border rounded-lg p-4">
-    <div className="text-2xl mb-2">🔐</div>
-    <h4 className="font-semibold">Encryption</h4>
-    <p className="text-sm text-gray-600">
-      Memory and state encrypted by hardware
-    </p>
-  </div>
-  <div className="border rounded-lg p-4">
-    <div className="text-2xl mb-2">✓</div>
-    <h4 className="font-semibold">Attestation</h4>
-    <p className="text-sm text-gray-600">
-      Verifiable proof of code and configuration
-    </p>
-  </div>
-</div>
-
-### CVM vs Traditional VMs
-
-| Aspect | Traditional VM | Confidential VM |
-|--------|----------------|-----------------|
-| **Memory Protection** | Accessible to hypervisor | Encrypted, inaccessible |
-| **Trust Model** | Trust the infrastructure | Zero trust |
-| **Performance** | Native speed | ~5-10% overhead |
-| **Use Cases** | General computing | Sensitive workloads |
-
-## Remote Attestation
-
-Remote attestation is the process of cryptographically proving that code is running unmodified in a genuine TEE.
-
-### How Attestation Works
-
-```mermaid
-graph LR
-    A[Application] -->|1. Request Quote| B[TEE Hardware]
-    B -->|2. Generate Quote| B
-    B -->|3. Sign with HW Key| C[Attestation Quote]
-    C -->|4. Send Quote| D[Verifier]
-    D -->|5. Verify Signature| E[Intel/AMD Service]
-    E -->|6. Confirm Valid| D
-    D -->|7. Trust Established| A
-```
-
-### Components of Attestation
-
-<div className="bg-green-50 p-6 rounded-lg my-4">
-  <h4 className="font-semibold mb-3">Attestation Quote Contains:</h4>
-  <ul className="space-y-2">
-    <li>• <strong>Measurements:</strong> Cryptographic hashes of code and configuration</li>
-    <li>• <strong>Hardware Identity:</strong> Unique TEE hardware identifier</li>
-    <li>• <strong>Security Version:</strong> Firmware and microcode versions</li>
-    <li>• <strong>Runtime Data:</strong> Application-specific information</li>
-    <li>• <strong>Signature:</strong> Hardware-based cryptographic signature</li>
-  </ul>
-</div>
-
-## Decentralized Key Management
-
-dstack uses a unique approach to key management that avoids vendor lock-in and single points of failure.
-
-### Traditional vs dstack KMS
-
-<div className="grid grid-cols-1 md:grid-cols-2 gap-6 my-6">
-  <div className="bg-red-50 p-4 rounded-lg">
-    <h4 className="font-semibold text-red-800 mb-2">Traditional KMS</h4>
-    <ul className="space-y-1 text-sm">
-      <li>• Centralized key storage</li>
-      <li>• Vendor-specific APIs</li>
-      <li>• Single point of failure</li>
-      <li>• Lock-in to provider</li>
-    </ul>
-  </div>
-  <div className="bg-green-50 p-4 rounded-lg">
-    <h4 className="font-semibold text-green-800 mb-2">dstack KMS</h4>
-    <ul className="space-y-1 text-sm">
-      <li>• Decentralized via blockchain</li>
-      <li>• Standard interfaces</li>
-      <li>• No single point of failure</li>
-      <li>• Portable across providers</li>
-    </ul>
-  </div>
-</div>
-
-### Key Hierarchy
-
-```mermaid
-graph TD
-    A[Master Key on Blockchain] -->|Derives| B[KMS Root Key]
-    B -->|Derives| C[Application Keys]
-    C -->|Derives| D[Encryption Keys]
-    C -->|Derives| E[Signing Keys]
-    C -->|Derives| F[TLS Keys]
-```
-
-## Zero Trust Security Model
-
-dstack implements a zero trust architecture where nothing is trusted by default.
-
-### Trust Boundaries
+dstack's architecture centers around five primary components that work together to provide secure deployment:
 
 <div className="bg-gray-50 p-6 rounded-lg my-4">
-  <h4 className="font-semibold mb-3">What We Don't Trust:</h4>
-  <div className="grid grid-cols-2 gap-4">
-    <ul className="space-y-1">
-      <li>❌ Host operating system</li>
-      <li>❌ Hypervisor (outside TEE)</li>
-      <li>❌ Network infrastructure</li>
-      <li>❌ Storage systems</li>
-    </ul>
-    <ul className="space-y-1">
-      <li>❌ System administrators</li>
-      <li>❌ Cloud providers</li>
-      <li>❌ Physical access</li>
-      <li>❌ Other applications</li>
-    </ul>
+  <table className="w-full">
+    <thead>
+      <tr className="border-b">
+        <th className="text-left p-2">Component</th>
+        <th className="text-left p-2">Primary Role</th>
+        <th className="text-left p-2">When You'll Use It</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr className="border-b">
+        <td className="p-2 font-semibold">dstack-vmm</td>
+        <td className="p-2">Manages TEE virtual machines</td>
+        <td className="p-2">Every deployment</td>
+      </tr>
+      <tr className="border-b">
+        <td className="p-2 font-semibold">dstack-gateway</td>
+        <td className="p-2">Secure HTTPS gateway</td>
+        <td className="p-2">Web-accessible applications</td>
+      </tr>
+      <tr className="border-b">
+        <td className="p-2 font-semibold">dstack-kms</td>
+        <td className="p-2">Cryptographic key management</td>
+        <td className="p-2">Secure data handling</td>
+      </tr>
+      <tr className="border-b">
+        <td className="p-2 font-semibold">dstack-guest-agent</td>
+        <td className="p-2">Container management in TEE</td>
+        <td className="p-2">Runtime operations</td>
+      </tr>
+      <tr>
+        <td className="p-2 font-semibold">dstack-os</td>
+        <td className="p-2">Minimal secure operating system</td>
+        <td className="p-2">TEE environment foundation</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+**Next:** Learn about each component's basic role in [Basic Components](/docs/concepts/basic-components)
+
+---
+
+# The DStack Approach
+
+<p className="mb-2">
+  dstack abstracts the complexity of TEE deployment through a familiar Docker-centric workflow:
+</p>
+<div className="flex flex-col md:flex-row items-center gap-6 my-6">
+  <div className="flex-shrink-0">
+    <img
+      src="/docs/images/docker-logo.png"
+      alt="Docker Logo"
+      className="w-24 h-24 md:w-32 md:h-32 rounded-lg shadow-md bg-white p-2"
+      style={{ border: '2px solid #e5e7eb' }}
+    />
+  </div>
+  <div>
+    <ol className="list-decimal list-inside space-y-1">
+      <li><strong>Start with existing containers</strong> – Use your current Docker containers and compose files</li>
+      <li><strong>Deploy to secure infrastructure</strong> – dstack handles TEE provisioning and configuration</li>
+      <li><strong>Get automatic security</strong> – Memory encryption, attestation, and secure networking included</li>
+      <li><strong>Verify independently</strong> – Cryptographic proof of security available to anyone</li>
+    </ol>
   </div>
 </div>
 
-### What We Do Trust
+---
 
-- ✅ **TEE Hardware:** Verified through attestation
-- ✅ **Cryptographic Proofs:** Mathematical guarantees
-- ✅ **Open Source Code:** Auditable and verifiable
-- ✅ **Blockchain Consensus:** Decentralized agreement
+# Security Model
 
-## Content Addressing
+dstack implements a **zero-trust architecture** where security doesn't depend on trusting infrastructure providers, system administrators, or even the host operating system.
 
-dstack uses content addressing to ensure code integrity and enable verification.
-
-### How It Works
-
-```python
-# Example: Content addressing in dstack
-docker_image = "myapp:latest"
-image_hash = sha256(docker_image_content)
-# Hash: sha256:abc123...
-
-deployment = {
-    "app_id": derive_from_hash(image_hash),
-    "compose_hash": sha256(docker_compose_content),
-    "verified": attestation_includes(image_hash)
-}
-```
-
-### Benefits
-
-- **Immutability:** Content cannot be changed without changing the address
-- **Verification:** Anyone can verify content matches its address
-- **Caching:** Content can be cached and verified anywhere
-- **Deduplication:** Identical content has the same address
-
-## Application Lifecycle
-
-Understanding how applications move through their lifecycle in dstack:
-
-```mermaid
-stateDiagram-v2
-    [*] --> Development: Create App
-    Development --> Building: docker build
-    Building --> Deploying: dstack deploy
-    Deploying --> Attesting: Generate Quote
-    Attesting --> Running: Verified
-    Running --> Updating: New Version
-    Updating --> Attesting
-    Running --> Terminating: dstack remove
-    Terminating --> [*]
-```
-
-### Lifecycle Stages
-
-1. **Development:** Write code using familiar tools
-2. **Building:** Create Docker containers
-3. **Deploying:** Submit to dstack for CVM creation
-4. **Attesting:** Hardware generates proof of integrity
-5. **Running:** Application serves requests securely
-6. **Updating:** Deploy new versions with zero downtime
-7. **Terminating:** Clean shutdown and resource cleanup
-
-## Networking Concepts
-
-dstack implements secure networking at multiple levels:
-
-### Network Isolation
-
-<div className="bg-blue-50 p-4 rounded-lg my-4">
-  <h4 className="font-semibold mb-2">Network Layers:</h4>
-  <ol className="space-y-2">
-    <li><strong>1. Public Internet:</strong> HTTPS traffic from users</li>
-    <li><strong>2. Gateway Layer:</strong> TLS termination and routing</li>
-    <li><strong>3. WireGuard VPN:</strong> Encrypted tunnels to CVMs</li>
-    <li><strong>4. CVM Internal:</strong> Container-to-container communication</li>
-  </ol>
-</div>
-
-### Domain Management
-
-dstack supports flexible domain routing:
-
-- **Automatic:** `app-name.your-domain.com`
-- **Custom:** Any domain via DNS TXT records
-- **Direct:** `cvm-id.internal` for debugging
-
-## Blockchain Integration
-
-dstack uses blockchain for decentralized governance and trust:
-
-### Smart Contracts
-
-| Contract | Purpose | Key Functions |
-|----------|---------|---------------|
-| **KmsAuth** | KMS authorization | Register, verify, revoke |
-| **AppAuth** | Application auth | Whitelist, measurements |
-| **Governance** | Platform updates | Propose, vote, execute |
-
-### Why Blockchain?
-
-- **Decentralization:** No single controlling entity
-- **Transparency:** All actions are auditable
-- **Immutability:** Records cannot be altered
-- **Consensus:** Agreement without central authority
-
-## Key Takeaways
-
-<div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-8">
-  <div className="bg-blue-50 p-6 rounded-lg">
-    <h3 className="font-semibold mb-3">🎯 Core Principles</h3>
-    <ul className="space-y-2 text-sm">
-      <li>• Hardware-based security (TEEs)</li>
-      <li>• Zero trust architecture</li>
-      <li>• Decentralized key management</li>
-      <li>• Verifiable execution (attestation)</li>
-      <li>• Developer-friendly abstractions</li>
-    </ul>
+<div className="flex flex-col md:flex-row gap-6 my-6">
+  <div className="flex-1 bg-lime-100 border-l-4 border-lime-400 rounded-lg p-5 shadow-sm">
+    <h4 className="font-semibold text-lime-700 mb-4 flex items-center gap-2">
+      <span className="text-2xl">✅</span> what we trust
+    </h4>
+    <div className="text-lime-800 text-sm space-y-1">
+      <div className="print:block">- TEE hardware (cryptographically verified)</div>
+      <div className="print:block">- Open-source code (auditable by anyone)</div>
+      <div className="print:block">- Blockchain consensus (decentralized verification)</div>
+      <div className="print:block">- Mathematical proofs (attestation signatures)</div>
+    </div>
   </div>
-  <div className="bg-green-50 p-6 rounded-lg">
-    <h3 className="font-semibold mb-3">✅ What This Enables</h3>
-    <ul className="space-y-2 text-sm">
-      <li>• Process sensitive data safely</li>
-      <li>• Prove code integrity to users</li>
-      <li>• Avoid vendor lock-in</li>
-      <li>• Meet compliance requirements</li>
-      <li>• Build trust through transparency</li>
-    </ul>
+  <div className="flex-1 bg-yellow-50 border-l-4 border-yellow-400 rounded-lg p-5 shadow-sm">
+    <h4 className="font-semibold text-yellow-700 mb-4 flex items-center gap-2">
+      <span className="text-2xl">⚠️</span> what we don't trust
+    </h4>
+    <div className="text-yellow-800 text-sm space-y-1">
+      <div className="print:block">- Host operating systems</div>
+      <div className="print:block">- Cloud providers</div>
+      <div className="print:block">- Network infrastructure</div>
+      <div className="print:block">- System administrators</div>
+      <div className="print:block">- Other applications on the same hardware</div>
+    </div>
   </div>
 </div>
+<div className="mt-2">
+  see <a href="/docs/concepts/architecture" className="underline text-blue-700">system architecture</a> for more security details
+</div>
 
-## Next Steps
+## Key Active Technologies
 
-Now that you understand the core concepts:
+dstack uses several advanced security mechanisms to guarantee the integrity, confidentiality, and portability of workloads across different environments:
 
-<CardGroup cols={3}>
-  <Card title="Architecture Deep Dive" icon="sitemap" href="/docs/concepts/architecture">
-    Explore system design
-  </Card>
-  <Card title="Security Model" icon="shield" href="/docs/concepts/security-model">
-    Understand security features
-  </Card>
-  <Card title="Start Building" icon="hammer" href="/docs/getting-started/first-deployment">
-    Deploy your first app
-  </Card>
-</CardGroup>
+**Remote Attestation**  
+remote attestation is central to dstack's security model. It provides cryptographic proof that the Trusted Execution Environment (TEE) is genuine and that the application code hasn't been tampered with. This lets any party verify the integrity and authenticity of the TEE and the running code, ensuring the execution context matches expected measurements. This verifiable evidence is essential for building trust in distributed systems and is a core part of confidential computing.
 
-## Deep Dive Topics
+**Decentralized Key Management**  
+dstack uses decentralized methods to manage cryptographic keys, reducing reliance on any single provider or authority and improving resilience and security.
 
-### Architecture
-Explore the [System Architecture](/docs/concepts/architecture) to understand how dstack components work together to provide secure application deployment.
+**Immutable Deployments**  
+deployments in dstack are immutable, meaning application images and configurations can't be changed after deployment. This ensures consistency, prevents drift, and makes it easier to verify the integrity of running workloads.
 
-### Security
-Learn about the [Security Model](/docs/concepts/security-model) including TEEs, remote attestation, and our decentralized trust architecture.
+<span className="text-green-700 font-semibold">
+  for a comprehensive understanding of dstack's security framework, see the <a href="/docs/concepts/security-model" className="underline text-lime-600 font-semibold ml-1">Security Model</a> page. More technical details are available on the <a href="/docs/concepts/core-components" className="underline text-lime-600 font-semibold ml-1">Core Components</a> page.
+</span>
 
-### Deployment
-Ready to deploy? Check out our [First Deployment Guide](/docs/getting-started/first-deployment) for step-by-step instructions.
+# DStack Network Architecture
+
+dstack secures data in transit through a multi-tiered network stack, integrating four distinct security and isolation domains:
+
+**Public HTTPS**  
+Every public endpoint is fronted by automatically issued and renewed TLS certificates from [Let's Encrypt](https://letsencrypt.org/), delivering browser-to-edge encryption and hands-free domain routing.
+
+**WireGuard VPN**  
+A lightweight mesh of [WireGuard](https://www.wireguard.com/) tunnels secures node-to-node traffic, creating a zero-trust backbone that spans clouds, regions, and on-prem clusters with minimal latency overhead.
+
+**TDX Isolation**  
+Workloads run inside Intel [Trust Domain Extensions (TDX)](https://en.wikipedia.org/wiki/Trust_Domain_Extensions) confidential VMs. Each trust domain is hardware-isolated from the host hypervisor and other tenants; network interfaces are scoped and attested before any packet is accepted, blocking spoofing and side-channel attacks.
+
+**Application**  
+Inside each TDX enclave, containers use standard Docker/Kubernetes networking—services, virtual IPs, and sidecars—so existing micro-services communicate normally while inheriting all lower-layer protections.
+
+<span className="text-green-700 font-semibold">
+  understanding dstack's secure networking architecture and traffic routing—<a href="/docs/concepts/networking" className="underline text-lime-600 font-semibold ml-1">see the networking guide</a>
+</span>
+
+## Documentation Navigation
+
+**Core concepts reading path** – follow this sequence to build comprehensive understanding:
+
+<div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-6">
+  <a href="/docs/concepts/basic-components" className="bg-lime-200 border border-lime-300 rounded-lg p-5 hover:shadow-md transition-shadow group relative">
+    <div className="absolute top-3 right-4 text-lime-500 text-lg font-bold select-none">①</div>
+    <div className="text-3xl mb-3">🧩</div>
+    <h3 className="font-semibold text-lime-800 mb-2 group-hover:text-lime-900">Basic Components</h3>
+    <p className="text-sm text-lime-700 mb-2">Start here. Learn the role of each component and how they work together.</p>
+    <div className="text-xs text-lime-600">💡 Focus on relationships, not implementation details</div>
+  </a>
+
+  <a href="/docs/concepts/core-components" className="bg-lime-100 border border-lime-200 rounded-lg p-5 hover:shadow-md transition-shadow group relative">
+    <div className="absolute top-3 right-4 text-lime-400 text-lg font-bold select-none">②</div>
+    <div className="text-3xl mb-3">⚙️</div>
+    <h3 className="font-semibold text-lime-700 mb-2 group-hover:text-lime-800">Core Components</h3>
+    <p className="text-sm text-lime-600 mb-2">Deep dive into configuration, APIs, and technical implementation patterns.</p>
+    <div className="text-xs text-lime-500">💡 Reference material for deployment and troubleshooting</div>
+  </a>
+
+  <a href="/docs/concepts/networking" className="bg-lime-50 border border-lime-100 rounded-lg p-5 hover:shadow-md transition-shadow group relative">
+    <div className="absolute top-3 right-4 text-lime-300 text-lg font-bold select-none">③</div>
+    <div className="text-3xl mb-3">🌐</div>
+    <h3 className="font-semibold text-lime-600 mb-2 group-hover:text-lime-700">Networking</h3>
+    <p className="text-sm text-lime-500 mb-2">Understand secure traffic routing, VPN tunnels, and network isolation.</p>
+    <div className="text-xs text-lime-400">💡 Critical for production deployments and security</div>
+  </a>
+</div>
+
+<div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-6 justify-center items-center place-items-center">
+  <a href="/docs/concepts/security-model" className="bg-lime-50 border border-lime-100 rounded-lg p-5 hover:shadow-md transition-shadow group relative w-full max-w-md">
+    <div className="absolute top-3 right-4 text-lime-300 text-lg font-bold select-none">④</div>
+    <div className="text-3xl mb-3">🔒</div>
+    <h3 className="font-semibold text-lime-600 mb-2 group-hover:text-lime-700">Security Model</h3>
+    <p className="text-sm text-lime-500 mb-2">TEE fundamentals, attestation, and the cryptographic foundations of trust.</p>
+    <div className="text-xs text-lime-400">💡 Essential for understanding "why" behind design choices</div>
+  </a>
+
+  <a href="/docs/concepts/architecture" className="bg-lime-100 border border-lime-200 rounded-lg p-5 hover:shadow-md transition-shadow group relative w-full max-w-md">
+    <div className="absolute top-3 right-4 text-lime-400 text-lg font-bold select-none">⑤</div>
+    <div className="text-3xl mb-3">🏗️</div>
+    <h3 className="font-semibold text-lime-700 mb-2 group-hover:text-lime-800">System Architecture</h3>
+    <p className="text-sm text-lime-600 mb-2">Complete picture: how everything connects, scales, and operates together.</p>
+    <div className="text-xs text-lime-500">💡 Big picture view after understanding individual pieces</div>
+  </a>
+</div>
+
+## What if i read everything and want to go even deeper? 
+
+Before you jump into the advanced research and security topics, make sure you've gone through the next page on the basics of dstack's core components. understanding how the `/kms`, `/vmm`, and `/gateway` work together will give you much better intuition for the deeper material. 
+
+Once you're comfortable with those, then we recommend moving on to [security and research](/docs/security-research/overview) for a look at the underlying security research and design decisions.
 

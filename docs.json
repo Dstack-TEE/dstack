@@ -19,17 +19,43 @@
           "docs/overview/what-is-dstack",
           "docs/overview/key-features",
           "docs/overview/benefits",
-          "docs/case-studies", 
-          "docs/overview/glossary"
+          "docs/overview/glossary",
+          "docs/overview/faq"
         ]
       },
       {
         "dropdown": "Getting Started",
         "icon": "rocket",
         "pages": [
-          "docs/getting-started/installation",
           "docs/getting-started/start",
-          "docs/getting-started/first-deployment"
+          "docs/getting-started/installation",
+          "docs/getting-started/deploying-applications",
+          { 
+            "group": "A) dstack Installation Steps",
+            "pages": [
+              "docs/getting-started/install/step-1-prerequisites",
+              "docs/getting-started/install/step-2-update-server",
+              "docs/getting-started/install/step-3-install-required-packages",
+              "docs/getting-started/install/step-4-install-dstack-runtime",
+              "docs/getting-started/install/step-5-configure-environment",
+              "docs/getting-started/install/step-6-register-systemd-service",
+              "docs/getting-started/install/step-7-firewall-and-verification"
+            ]
+          },
+          
+          {
+            "group": "B) First DStack Deployment",
+            "pages": [
+              "docs/getting-started/first-deployment",
+              "docs/getting-started/first-deployment-steps/fd-1",
+              "docs/getting-started/first-deployment-steps/fd-2",
+              "docs/getting-started/first-deployment-steps/fd-3",
+              "docs/getting-started/first-deployment-steps/fd-4",
+              "docs/getting-started/first-deployment-steps/fd-5",
+              "docs/getting-started/first-deployment-steps/fd-6",
+              "docs/getting-started/first-deployment-steps/fd-7"
+            ]
+          }
         ]
       },
       {
@@ -37,29 +63,39 @@
         "icon": "lightbulb",
         "pages": [
           "docs/concepts/overview",
-          "docs/concepts/architecture",
-          "docs/concepts/core-components",
+          "docs/concepts/basic-components",
+          {
+            "group": "Core Components",
+            "pages": [
+              "docs/concepts/core-vmm",
+              "docs/concepts/core-gateway",
+              "docs/concepts/core-kms",
+              "docs/concepts/core-guest-agent",
+              "docs/concepts/core-tdxctl",
+              "docs/concepts/core-os", 
+              "docs/concepts/core-glossary"
+            ]
+          },
           "docs/concepts/networking",
-          "docs/concepts/security-model"
-        ]
-      },
-      {
-        "dropdown": "Deployment",
-        "icon": "cloud-arrow-up",
-        "pages": [
-          "docs/deployment-guides/deploying-applications"
+          "docs/concepts/architecture"
         ]
       },
       {
         "dropdown": "Tutorials",
         "icon": "graduation-cap",
         "pages": [
-          "docs/tutorials/index",
-          "docs/tutorials/super-quick-start",
-          "docs/tutorials/python-example",
-          "docs/tutorials/javascript-example",
-          "docs/tutorials/rust-example",
-          "docs/tutorials/secure-web-app"
+          "docs/tutorials/index-quick-start",
+          "/docs/getting-started/start",
+          {
+            "group": "Super Quick Start Tutorials",
+            "pages": [
+              "docs/tutorials/super-quick-start",
+              "docs/tutorials/python-example",
+              "docs/tutorials/javascript-example",
+              "docs/tutorials/rust-example"
+              
+            ]
+          }
         ]
       },
       {
@@ -67,26 +103,29 @@
         "icon": "shield-halved",
         "pages": [
           "docs/security-research/overview",
-          "docs/security-research/tdx-attestation",
-          "docs/security-research/tdx-attestation-system",
-          "docs/security-research/vmm-security",
-          "docs/security-research/kms-security",
-          "docs/security-research/gateway-security",
-          "docs/security-research/certbot-security",
-          "docs/security-research/cert-client-security",
-          "docs/security-research/ct-monitor-security",
-          "docs/security-research/host-api-security",
-          "docs/security-research/iohash-security"
-        ]
-      },
-      {
-        "dropdown": "dstack Internals",
-        "icon": "gear",
-        "pages": [
-          "docs/dstack-reference/dstack-wiki",
-          "docs/dstack-reference/structure",
-          "docs/dstack-reference/content",
-          "docs/dstack-reference/context"
+          "docs/security-research/security-model",
+
+          {
+            "group": "core component security",
+            "pages": [
+              "docs/security-research/tdx-attestation",
+              "docs/security-research/vmm-security",
+              "docs/security-research/kms-security",
+              "docs/security-research/gateway-security"
+              
+            ]
+          },
+          {
+            "group": "Additional Sec Ops",
+            "pages": [
+              "docs/security-research/extra-sec-ops/host-api-security",
+              "docs/security-research/extra-sec-ops/ct-monitor-security",
+              "docs/security-research/extra-sec-ops/certbot-security",
+              "docs/security-research/extra-sec-ops/cert-client-security", 
+              "docs/security-research/extra-sec-ops/iohash-security", 
+              "docs/security-research/extra-sec-ops/tdx-attestation-system"
+            ]
+          }
         ]
       },
       {
@@ -94,6 +133,7 @@
         "icon": "users",
         "pages": [
           "docs/community",
+          "docs/contribution",
           "docs/troubleshooting"
         ]
       },
@@ -101,8 +141,18 @@
         "dropdown": "API Reference",
         "icon": "square-terminal",
         "pages": [
-          "docs/api-reference/overview",
-          "docs/api-reference/authentication"
+          "docs/api-reference/authentication",
+          {
+            "group": "API Reference & SDKs",
+            "pages": [
+              "docs/api-reference/api-sub-docs/overview",
+              "docs/api-reference/api-sub-docs/guest-agent",
+              "docs/api-reference/api-sub-docs/management",
+              "docs/api-reference/api-sub-docs/supervisor",
+              "docs/api-reference/api-sub-docs/sdks",
+              "docs/api-reference/api-sub-docs/glossary"
+            ]
+          }
         ]
       }
     ]
