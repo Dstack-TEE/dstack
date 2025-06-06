@@ -13,7 +13,7 @@ For a high-level conceptual overview, start with [Basic Components](/docs/concep
 
 ## Component Architecture Overview
 
-dstack consists of six core components working together to provide confidential computing:
+dstack consists of five core components working together to provide confidential computing:
 
 ```mermaid
 graph TB
@@ -24,20 +24,20 @@ graph TB
     end
     
     subgraph "Confidential VM"
-        OS["💽 dstack-os<br/>(Operating System)"]
-        TDXctl["⚙️ tdxctl<br/>(TDX Control)"]
+        GuestOS["💽 Guest OS<br/>(meta-dstack Image)"]
+        DstackUtil["⚙️ dstack-util<br/>(TDX Utilities)"]
         Agent["🤖 Guest Agent<br/>(Runtime Services)"]
     end
     
-    VMM -->|"Orchestrates"| OS
+    VMM -->|"Boots & Manages"| GuestOS
     Gateway -->|"Routes Traffic"| Agent
     KMS -->|"Provides Keys"| Agent
-    OS -->|"Boots with"| TDXctl
-    TDXctl -->|"Initializes"| Agent
+    GuestOS -->|"Contains"| DstackUtil
+    GuestOS -->|"Runs"| Agent
     
-    Agent -->|"Registers with"| Gateway
-    Agent -->|"Requests Keys"| KMS
-    VMM -->|"Manages"| Gateway
+    Agent -->|"Registers via gRPC"| Gateway
+    Agent -->|"Requests Keys via RA-TLS"| KMS
+    VMM -->|"Configures"| Gateway
 ```
 
 ## Component Communication Matrix
@@ -58,33 +58,34 @@ Understanding how components communicate is essential for troubleshooting and co
     <tr>
       <td className="p-2 font-semibold">VMM</td>
       <td className="p-2 bg-gray-100">-</td>
-      <td className="p-2">HTTP/gRPC</td>
-      <td className="p-2">RA-TLS</td>
-      <td className="p-2">HTTP API</td>
+      <td className="p-2">Configuration</td>
+      <td className="p-2">Configuration</td>
+      <td className="p-2">VM Lifecycle</td>
     </tr>
     <tr className="bg-gray-50">
       <td className="p-2 font-semibold">Gateway</td>
-      <td className="p-2">WebHook Events</td>
+      <td className="p-2">Status Updates</td>
       <td className="p-2 bg-gray-100">-</td>
-      <td className="p-2">RA-TLS</td>
-      <td className="p-2">WireGuard + HTTP</td>
+      <td className="p-2">Certificate Requests</td>
+      <td className="p-2">WireGuard + gRPC</td>
     </tr>
     <tr>
       <td className="p-2 font-semibold">KMS</td>
-      <td className="p-2">Registration</td>
-      <td className="p-2">Certificate Requests</td>
+      <td className="p-2">-</td>
+      <td className="p-2">Certificate Provision</td>
       <td className="p-2 bg-gray-100">-</td>
-      <td className="p-2">RA-TLS</td>
+      <td className="p-2">RA-TLS Key Provision</td>
     </tr>
     <tr className="bg-gray-50">
       <td className="p-2 font-semibold">Guest Agent</td>
       <td className="p-2">Health/Status</td>
-      <td className="p-2">Registration</td>
-      <td className="p-2">Key Requests</td>
+      <td className="p-2">gRPC Registration</td>
+      <td className="p-2">RA-TLS Key Requests</td>
       <td className="p-2 bg-gray-100">-</td>
     </tr>
   </tbody>
 </table>
+
 
 ## Component Responsibilities
 
