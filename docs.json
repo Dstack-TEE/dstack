@@ -31,7 +31,7 @@
           "docs/getting-started/installation",
           "docs/getting-started/deploying-applications",
           { 
-            "group": "dstack Installation Steps",
+            "group": "A) dstack Installation Steps",
             "pages": [
               "docs/getting-started/install/step-1-prerequisites",
               "docs/getting-started/install/step-2-update-server",
@@ -44,7 +44,7 @@
           },
           
           {
-            "group": "First DStack Deployment",
+            "group": "B) First DStack Deployment",
             "pages": [
               "docs/getting-started/first-deployment",
               "docs/getting-started/first-deployment-steps/fd-1",
@@ -84,11 +84,18 @@
         "dropdown": "Tutorials",
         "icon": "graduation-cap",
         "pages": [
-          "docs/tutorials/index",
-          "docs/tutorials/super-quick-start",
-          "docs/tutorials/python-example",
-          "docs/tutorials/javascript-example",
-          "docs/tutorials/rust-example"
+          "docs/tutorials/index-quick-start",
+          "/docs/getting-started/start",
+          {
+            "group": "Super Quick Start Tutorials",
+            "pages": [
+              "docs/tutorials/super-quick-start",
+              "docs/tutorials/python-example",
+              "docs/tutorials/javascript-example",
+              "docs/tutorials/rust-example"
+              
+            ]
+          }
         ]
       },
       {
