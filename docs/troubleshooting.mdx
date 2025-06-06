@@ -3,207 +3,163 @@ title: "Troubleshooting & Diagnostics"
 description: "Common issues and solutions for troubleshooting dstack deployments"
 ---
 
-## Common Issues & Solutions
+# Troubleshooting Dstack Components and Systems
+
+Dstack provides a comprehensive troubleshooting framework across its components, including structured logging, diagnostic commands, web dashboards, and specific error resolution guides.
 
 ---
 
-### 1. Services Fail to Start
+## 🧭 Overview of Troubleshooting Framework
 
-**Problem:**  
-Services (`dstack-vmm`, `dstack-gateway`, or `dstack-kms`) fail to initialize or immediately crash.
+- Structured CLI tools for direct diagnostics  
+- HTTP API endpoints for log and status access  
+- Web dashboards for real-time and historical monitoring  
+- Consistent error handling and logging patterns across all components
 
-**Solution:**  
-Check logs and system status:
+---
+
+## 🛠️ Troubleshooting Commands and Tools
+
+### VMM CLI Tool
+
+The primary diagnostic utility is `vmm-cli.py`, which offers:
+
+#### VM Management & Monitoring
+- `lsvm` – List all VMs and their status  
+- `logs` – Show VM logs (supports `--follow` and line count options)  
+- `start` / `stop` / `remove` – VM lifecycle commands  
+
+#### Resource Monitoring
+- `lsimage` – List available images  
+- `lsgpu` – List GPUs and availability status  
+
+---
+
+### 📋 Container Log Access
+
+You can access container logs via HTTP endpoints with flexible parameters:
+
+- **Parameters:**  
+  - `since` / `until`: Time-based filtering (e.g., `"30s"`, `"5m"`, `"2h"`, `"1d"`)  
+  - `follow`: Continuous streaming  
+  - `text` / `bare`: Output formatting  
+  - `timestamps`: Include timestamps  
+  - `ansi`: ANSI color control  
+
+---
+
+## 📑 Logging and Error Handling
+
+### Structured Logging
+
+All components use the `tracing` framework for structured logs and environment-based filtering.
+
+### Error Handling Patterns
+
+- Uses `anyhow::Result` for error handling and context propagation  
+- Process management reports detailed exit codes and failure states  
+
+---
+
+## 🚨 Common Errors and Resolutions
+
+### 1. Unix Socket CID Conflicts
+
+**Error:**  
+`vhost-vsock: unable to set guest cid: Address already in use`
+
+**Diagnosis:**  
 ```bash
-journalctl -u dstack-vmm -n 50
-journalctl -u dstack-gateway -n 50
-journalctl -u dstack-kms -n 50
+ps aux | grep 'guest-cid='
 ````
 
-Ensure required ports (`8000`, `9080`, `443`) are free:
-
-```bash
-sudo netstat -tlnp | grep -E '8000|9080|443'
-```
-
-Verify hardware support (TDX enabled):
-
-```bash
-dmesg | grep -i "tdx.*error"
-```
-
-Correct configuration errors in `vmm.toml`, `gateway.toml`, or `kms.toml`.
-
-> **Developer Suggestion:**  
-> ensure proper hardware setup and validate configurations before restarting services.
+**Resolution:**
+Configure a new CID range in `vmm.toml` or `build-config.sh`.
 
 ---
 
-### 2. Confidential VM (CVM) Deployment Issues
+### 2. CVM Status Issues
 
-**Problem:**
-CVMs fail to deploy or crash immediately after launch.
+**Error:**
+CVM status turns to `exited` immediately
 
-**Solution:**
-Check CID allocation and resource availability:
+**Diagnosis:**
+Check stderr output by appending `ch=stderr` to your log URL.
 
-```bash
-grep "CID.*exhausted" /var/log/dstack/vmm.log
-df -h /var/lib/dstack
-free -h
-```
+**Common Cause:**
+Permission denied for KVM kernel module
 
-Verify guest image integrity:
-
-```bash
-sha256sum /var/lib/dstack/images/dstack-guest-*.img
-```
-
-Re-download corrupted images:
-
-```bash
-./build.sh dl 0.5.1 --verify --force
-```
-
-> **Developer Suggestion:**  
-> regularly check CID usage and available storage to prevent resource exhaustion, and periodically verify the integrity of your guest images to avoid deployment failures.
+**Resolution:**
+Ensure the user belongs to `libvirt` and `kvm` groups.
 
 ---
 
-### 3. Attestation Verification Failures
+### 3. Guest Image Build Errors
 
-**Problem:**
-Remote attestation consistently fails.
+**Error:**
+`Operation not permitted` during image building
 
-**Solution:**
-Verify hardware and TDX support:
+**Cause:**
+Ubuntu 23.10+ restricts unprivileged user namespaces
 
-```bash
-cat /sys/firmware/tdx/tdx_module/status
-```
-
-Check for measurement mismatches:
+**Resolution:**
 
 ```bash
-dstack-attest compare --baseline baseline.json --current current.json
+sudo sysctl kernel.apparmor_restrict_unprivileged_userns=0
 ```
-
-Update TCB and microcode:
-
-```bash
-sudo apt update && sudo apt upgrade intel-sgx tdx-module
-```
-
-> **Developer Suggestion:**  
->  
-> **keep your TCB and Intel microcode up-to-date** to ensure your platform passes attestation checks and remains protected against known vulnerabilities.  
->  
-> **always use consistent, reproducible image builds**—even small differences in build environments or dependencies can cause measurement mismatches and attestation failures.
 
 ---
 
-### 4. Network Connectivity Issues
+## 🖥️ Web Dashboard Diagnostics
 
-**Problem:**
-CVMs cannot communicate externally or internally.
+### VMM Console
 
-**Solution:**
-Verify WireGuard configuration:
+* Monitor VM status/configuration
+* Real-time log viewing (supports follow)
+* Manage container status
+* Monitor resource utilization
 
-```bash
-sudo wg show
-```
+### Gateway Dashboard
 
-Inspect routing tables and firewall rules:
-
-```bash
-ip route show table all | grep wg0
-sudo iptables -L -n -v | grep dstack
-```
-
-Test connectivity via vsock:
-
-```bash
-vsock-ping --cid <CVM_CID> --port 8080
-```
-
-> **Developer Suggestion:**  
->  
-> **regularly review and test your network configurations** to ensure CVMs can communicate as intended.  
->  
-> **keep firewall and routing rules clean and up-to-date**—misconfigured or outdated rules are a common cause of connectivity issues and can introduce security risks.
+* Wireguard IP address monitoring
+* Node connection status
+* TLS certificate management
 
 ---
 
-### 5. Performance Degradation
+## 📡 Advanced Monitoring
 
-**Problem:**
-Significant performance degradation in CVMs.
+### Certificate Transparency Monitoring
 
-**Solution:**
-Monitor resources:
+The `ct_monitor` tool provides:
 
-```bash
-iostat -x 1 5
-free -h
-```
+* Tracking CT logs for unauthorized certificates
+* Validating certs against known gateway public keys
+* Alerts on certificate mismatches
 
-Benchmark TEE workloads:
+### VM Event Reporting
 
-```bash
-dstack-vmm benchmark --workload crypto --iterations 500
-```
+Tracks:
 
-Adjust resources or tune configurations as required.
-
-> **Developer Suggestion:**  
->  
-> **regularly benchmark and document your system's baseline performance**—this helps you quickly identify when and where degradation occurs. If you notice a drop in performance, review your resource allocation (CPU, memory, storage) and adjust configurations as needed to restore optimal operation. Consistent monitoring and tuning are key to maintaining healthy CVMs.
+* Boot/shutdown progress
+* Errors
+* Instance info updates
 
 ---
 
-### 6. Security Incident Response
+## 📂 Log File Locations & Output Redirection
 
-**Problem:**
-Suspected or confirmed security breach.
-
-**Solution:**
-Isolate CVMs immediately:
-
-```bash
-dstack-cli isolate --cvm-id <id> --reason "security incident"
-```
-
-Collect evidence securely:
-
-```bash
-dstack-attest snapshot --all --output incident.tar.gz
-```
-
-Enable verbose logging:
-
-```bash
-dstack-vmm loglevel --set trace
-```
-
-> **Developer Suggestion:**  
->  
-> **always maintain a clearly documented incident response plan**—this ensures your team can act quickly and effectively in the event of a security breach.  
->  
-> **proactively and regularly review all relevant logs for suspicious activity** to detect incidents early and minimize potential impact.
+* Supervisor handles output redirection and error logs
+* Automatic creation of parent log directories
+* Errors are logged with full context
 
 ---
 
-## Best Practices for Issue Reporting and Resolution
+## 📝 Notes
 
-- clearly document issue symptoms and steps to reproduce  
-- label GitHub issues correctly (`bug`, `enhancement`, or `documentation`)  
-- attach logs, screenshots, or diagnostic outputs for quicker resolution  
-- allow 1-3 days for responses from core contributors  
+The dstack troubleshooting system layers multiple diagnostic approaches—from CLI tools and APIs to web dashboards. Structured logging via `tracing` and consistent error handling ensure that most issues have actionable diagnostic steps and clear, documented resolutions. Both real-time and historical monitoring are supported for thorough, efficient troubleshooting.
 
 ---
 
-**Remember:**
-Efficient troubleshooting strengthens the dstack platform—your detailed reports and solutions significantly contribute to our community's success.
-
+> **Tip:** For additional context or uncommon errors, refer to the [full deployment guides](/docs/deployment-guides/) and component-specific documentation.
 

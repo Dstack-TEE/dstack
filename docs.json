@@ -19,7 +19,8 @@
           "docs/overview/what-is-dstack",
           "docs/overview/key-features",
           "docs/overview/benefits",
-          "docs/overview/glossary"
+          "docs/overview/glossary",
+          "docs/overview/faq"
         ]
       },
       {
@@ -28,6 +29,7 @@
         "pages": [
           "docs/getting-started/start",
           "docs/getting-started/installation",
+          "docs/getting-started/deploying-applications",
           {
             "group": "First DStack Deployment",
             "pages": [
@@ -40,8 +42,7 @@
               "docs/getting-started/first-deployment-steps/fd-6",
               "docs/getting-started/first-deployment-steps/fd-7"
             ]
-          },
-          "docs/getting-started/deploying-applications"
+          }
         ]
       },
       {
@@ -85,12 +86,13 @@
           "docs/security-research/security-model",
 
           {
-            "group": "core component security reference material",
+            "group": "core component security",
             "pages": [
-              "docs/security-research/kms-security",
+              "docs/security-research/tdx-attestation",
               "docs/security-research/vmm-security",
-              "docs/security-research/gateway-security",
-              "docs/security-research/tdx-attestation"
+              "docs/security-research/kms-security",
+              "docs/security-research/gateway-security"
+              
             ]
           },
           {

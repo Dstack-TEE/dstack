@@ -3,556 +3,246 @@ title: "Deploying Applications"
 description: "Complete guide to deploying containerized applications to dstack"
 ---
 
-# Deploying Applications
+# Deploying Applications to dstack
 
-This guide covers everything you need to know about deploying applications to dstack, from simple single-container apps to complex multi-service architectures.
+This comprehensive guide covers deploying containerized applications to dstack's Confidential Virtual Machine (CVM) environment using the real dstack architecture.
 
 ## Prerequisites
 
-Before deploying applications:
+Before deploying applications, ensure you have:
 
-- ✅ dstack installed and running ([Installation Guide](/docs/getting-started/installation))
-- ✅ TEE-capable hardware (Intel TDX)
-- ✅ Docker and docker-compose installed
-- ✅ Access to dstack web UI (http://localhost:9080)
+- ✅ **TDX-capable hardware** with Intel TDX support [1](#0-0) 
+- ✅ **dstack-vmm running** (Virtual Machine Manager) [2](#0-1) 
+- ✅ **Guest OS images downloaded** (dstack OS images) [3](#0-2) 
+- ✅ **KMS and Gateway deployed** (for production workloads) [4](#0-3) 
 
-## Deployment Methods
+## Understanding dstack Application Architecture
 
-dstack supports multiple deployment methods:
+### App-Compose Format
 
-<CardGroup cols={3}>
-  <Card title="Web UI" icon="browser">
-    Visual deployment through dashboard
-  </Card>
-  <Card title="CLI" icon="terminal">
-    Command-line deployment
-  </Card>
-  <Card title="API" icon="code">
-    Programmatic deployment
-  </Card>
-</CardGroup>
+dstack uses a specialized **app-compose.json** format instead of direct docker-compose deployment. This format embeds your docker-compose.yaml content alongside dstack-specific configuration [5](#0-4) .
 
-## Preparing Your Application
+The app-compose.json structure includes:
+- `manifest_version: 2` (current version)
+- `docker_compose_file` (your docker-compose.yaml as embedded string)
+- Security settings (KMS, gateway, encryption options)
+- Environment variable allowlists
+- Key provider configuration
 
-### Step 1: Containerize Your Application
+### Virtual Machine Manager (VMM)
 
-If your application isn't already containerized, create a Dockerfile:
+Applications deploy through **dstack-vmm**, which manages Confidential Virtual Machines [6](#0-5) . The VMM:
+- Creates isolated CVMs for each application
+- Handles encrypted environment variables
+- Manages port mappings and resource allocation
+- Provides attestation and security guarantees
 
-```dockerfile
-# Example Dockerfile for a Node.js app
-FROM node:18-alpine
+## Step-by-Step Deployment Process
 
-WORKDIR /app
+### Step 1: Prepare Your Docker Compose Application
 
-# Copy package files
-COPY package*.json ./
-RUN npm ci --only=production
-
-# Copy application code
-COPY . .
-
-# Expose port
-EXPOSE 3000
-
-# Run application
-CMD ["node", "server.js"]
-```
-
-### Step 2: Create docker-compose.yml
-
-dstack uses docker-compose format for deployments:
+Create your standard `docker-compose.yaml` file. This gets embedded into the app-compose.json format:
 
 ```yaml
+# Example: docker-compose.yaml
 version: '3.8'
-
 services:
   web:
-    build: .
-    # Or use pre-built image
-    # image: myregistry/myapp:latest
+    image: nginx:alpine
     ports:
-      - "8080:8080"
+      - "8080:80"
     environment:
       - NODE_ENV=production
-      - LOG_LEVEL=info
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-    restart: unless-stopped
-    
-  # Add more services as needed
-  redis:
-    image: redis:7-alpine
-    command: redis-server --appendonly yes
-    volumes:
-      - redis_data:/data
-    restart: unless-stopped
-
-volumes:
-  redis_data:
 ```
 
-### Step 3: Test Locally
+### Step 2: Generate App-Compose Configuration
 
-Before deploying to dstack, test your application locally:
+Use the **vmm-cli.py** tool to create your app-compose.json [7](#0-6) :
 
 ```bash
-# Build and run locally
-docker-compose up --build
+# Basic app-compose generation
+python3 vmm-cli.py compose \
+  --name myapp \
+  --docker-compose docker-compose.yaml \
+  --output .app-compose.json
 
-# Test the application
-curl http://localhost:8080
-
-# Stop when done
-docker-compose down
+# With advanced features
+python3 vmm-cli.py compose \
+  --name myapp \
+  --docker-compose docker-compose.yaml \
+  --kms \
+  --gateway \
+  --public-logs \
+  --env-file .env \
+  --output .app-compose.json
 ```
 
-## Deployment Process
+### Step 3: Deploy to dstack-vmm
 
-### Option 1: Deploy via Web UI
-
-1. **Access Dashboard**
-   - Navigate to http://localhost:9080
-   - Log in with your credentials
-
-2. **Create New Deployment**
-   - Click "Deploy New Application"
-   - Enter application details:
-     - **Name**: unique identifier for your app
-     - **Description**: optional description
-     - **Compose File**: upload your docker-compose.yml
-
-3. **Configure Resources**
-   
-   | Resource | Default | Production Recommended |
-   |----------|---------|----------------------|
-   | CPU | 2 cores | 4+ cores |
-   | Memory | 4 GB | 8+ GB |
-   | Storage | 10 GB | 50+ GB |
-   | Network | NAT | Bridge mode |
-
-4. **Advanced Settings** (optional)
-   - **GPU**: Enable for ML workloads
-   - **Persistent Storage**: For stateful applications
-   - **Custom Domain**: Use your own domain
-
-5. **Deploy**
-   - Review configuration
-   - Click "Deploy"
-   - Monitor progress in real-time
-
-### Option 2: Deploy via CLI
+Deploy your application using the generated app-compose.json [8](#0-7) :
 
 ```bash
 # Basic deployment
-dstack deploy --name myapp --compose docker-compose.yml
-
-# With custom resources
-dstack deploy \
+python3 vmm-cli.py deploy \
   --name myapp \
-  --compose docker-compose.yml \
-  --cpu 4 \
+  --compose .app-compose.json \
+  --image dstack-0.5.1 \
+  --port tcp:127.0.0.1:8080:8080 \
+  --vcpu 2 \
+  --memory 4G
+
+# Production deployment with encryption
+python3 vmm-cli.py deploy \
+  --name myapp \
+  --app-id your-registered-app-id \
+  --compose .app-compose.json \
+  --image dstack-0.5.1 \
+  --env-file .env \
+  --port tcp:0.0.0.0:8080:8080 \
+  --vcpu 4 \
   --memory 8G \
-  --storage 50G
-
-# Deploy with environment file
-dstack deploy \
-  --name myapp \
-  --compose docker-compose.yml \
-  --env-file .env.production
-
-# Deploy and wait for ready
-dstack deploy \
-  --name myapp \
-  --compose docker-compose.yml \
-  --wait \
-  --timeout 300
+  --kms-url https://your-kms-url:9201
 ```
 
-### Option 3: Deploy via API
+## Production Deployment Requirements
 
-```python
-import requests
-import yaml
+### On-Chain Application Registration
 
-# Load compose file
-with open('docker-compose.yml', 'r') as f:
-    compose_content = yaml.safe_load(f)
-
-# Deployment configuration
-deployment = {
-    "name": "myapp",
-    "compose": compose_content,
-    "resources": {
-        "cpu": 4,
-        "memory": "8G",
-        "storage": "50G"
-    },
-    "environment": {
-        "API_KEY": "secret-key",
-        "DATABASE_URL": "postgresql://..."
-    }
-}
-
-# Deploy via API
-response = requests.post(
-    'http://localhost:9080/api/v1/deployments',
-    json=deployment,
-    headers={'Authorization': 'Bearer YOUR_TOKEN'}
-)
-
-if response.status_code == 201:
-    print(f"Deployment created: {response.json()['id']}")
-```
-
-## Multi-Service Applications
-
-### Example: Web App with Database
-
-```yaml
-version: '3.8'
-
-services:
-  web:
-    image: myapp:latest
-    ports:
-      - "8080:8080"
-    environment:
-      - DATABASE_URL=postgresql://postgres:password@db:5432/myapp
-      - REDIS_URL=redis://cache:6379
-    depends_on:
-      - db
-      - cache
-    restart: unless-stopped
-
-  db:
-    image: postgres:15-alpine
-    environment:
-      - POSTGRES_DB=myapp
-      - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=password
-    volumes:
-      - db_data:/var/lib/postgresql/data
-    restart: unless-stopped
-
-  cache:
-    image: redis:7-alpine
-    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
-    restart: unless-stopped
-
-  # Background worker
-  worker:
-    image: myapp:latest
-    command: python worker.py
-    environment:
-      - DATABASE_URL=postgresql://postgres:password@db:5432/myapp
-      - REDIS_URL=redis://cache:6379
-    depends_on:
-      - db
-      - cache
-    restart: unless-stopped
-
-volumes:
-  db_data:
-    driver: local
-```
-
-### Service Discovery
-
-Services can communicate using their service names:
-
-```python
-# In your application code
-import redis
-import psycopg2
-
-# Connect to Redis using service name
-redis_client = redis.from_url('redis://cache:6379')
-
-# Connect to PostgreSQL using service name
-conn = psycopg2.connect('postgresql://postgres:password@db:5432/myapp')
-```
-
-## Environment Variables & Secrets
-
-### Using Environment Variables
-
-```yaml
-services:
-  app:
-    image: myapp:latest
-    environment:
-      # Hardcoded values (not recommended for secrets)
-      - NODE_ENV=production
-      
-      # From host environment
-      - API_KEY=${API_KEY}
-      
-      # From .env file
-      - DATABASE_URL=${DATABASE_URL}
-```
-
-### Managing Secrets Securely
-
-1. **Create Secret in dstack**
-   ```bash
-   dstack secret create myapp-secrets \
-     --from-literal=api_key=abc123 \
-     --from-literal=db_password=secret
-   ```
-
-2. **Reference in Compose**
-   ```yaml
-   services:
-     app:
-       image: myapp:latest
-       secrets:
-         - myapp-secrets
-       environment:
-         - API_KEY=/run/secrets/api_key
-   ```
-
-## Persistent Storage
-
-### Volume Configuration
-
-```yaml
-services:
-  database:
-    image: postgres:15
-    volumes:
-      # Named volume (recommended)
-      - db_data:/var/lib/postgresql/data
-      
-      # Bind mount (for development)
-      - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
-
-volumes:
-  db_data:
-    driver: local
-    driver_opts:
-      type: none
-      o: bind
-      device: /mnt/persistent/db
-```
-
-### Backup Strategy
+For production deployments, applications must be registered on-chain through the KmsAuth contract system [9](#0-8) :
 
 ```bash
-# Backup volume data
-dstack volume backup db_data --output backup.tar.gz
-
-# Restore volume data
-dstack volume restore db_data --input backup.tar.gz
+# Deploy AppAuth contract and register
+cd kms/auth-eth
+npm install
+npx hardhat compile
+export PRIVATE_KEY=your-private-key
+npx hardhat app:deploy --allow-any-device --network phala
 ```
 
-## Health Checks & Monitoring
+### Adding Compose Hash to Whitelist
 
-### Configuring Health Checks
-
-```yaml
-services:
-  web:
-    image: myapp:latest
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-```
-
-### Custom Health Check Endpoint
-
-```python
-# Flask example
-@app.route('/health')
-def health_check():
-    # Check dependencies
-    checks = {
-        'database': check_database(),
-        'redis': check_redis(),
-        'disk_space': check_disk_space()
-    }
-    
-    # Return appropriate status
-    if all(checks.values()):
-        return jsonify({'status': 'healthy', 'checks': checks}), 200
-    else:
-        return jsonify({'status': 'unhealthy', 'checks': checks}), 503
-```
-
-## Scaling Applications
-
-### Horizontal Scaling
-
-```yaml
-services:
-  web:
-    image: myapp:latest
-    deploy:
-      replicas: 3
-      resources:
-        limits:
-          cpus: '2'
-          memory: 2G
-      restart_policy:
-        condition: on-failure
-        delay: 5s
-        max_attempts: 3
-```
-
-### Auto-scaling Configuration
+The app-compose.json hash must be whitelisted in the AppAuth contract [10](#0-9) :
 
 ```bash
-# Enable auto-scaling
-dstack autoscale create myapp-web \
-  --deployment myapp \
-  --service web \
-  --min 2 \
-  --max 10 \
-  --cpu-threshold 70 \
-  --memory-threshold 80
+# Add your app's compose hash to whitelist
+npx hardhat app:add-hash --network phala \
+  --app-id your-app-id \
+  your-compose-hash
 ```
 
-## Zero-Downtime Deployments
+## Environment Variable Encryption
 
-### Blue-Green Deployment
+dstack automatically encrypts environment variables for security [11](#0-10) . The process:
+
+1. Retrieves encryption public key from KMS
+2. Encrypts environment variables using X25519 + AES-GCM
+3. Passes encrypted data to the CVM
+4. CVM decrypts variables at runtime
+
+## Real-World Deployment Examples
+
+### KMS Deployment Example
+
+The KMS component deployment demonstrates the complete process [12](#0-11) :
+
+- Generates app-compose.json with local key provider
+- Deploys with specific port mappings
+- Uses environment file for configuration
+- Includes resource specifications (8 vCPU, 8GB RAM)
+
+### Gateway Deployment Example
+
+The Gateway deployment shows advanced features [13](#0-12) :
+
+- Uses pre-launch script for token validation
+- Enables KMS integration
+- Includes public logs and sysinfo
+- Supports existing app-compose.json files via `-c` flag
+
+## Management and Monitoring
+
+### VM Lifecycle Management
+
+Monitor and manage your deployed applications [14](#0-13) :
 
 ```bash
-# Deploy new version to green environment
-dstack deploy --name myapp-green --compose docker-compose.yml
-
-# Verify green deployment
-dstack verify myapp-green
-
-# Switch traffic to green
-dstack switch myapp --to myapp-green
-
-# Remove old blue deployment
-dstack remove myapp-blue
-```
-
-### Rolling Updates
-
-```yaml
-services:
-  web:
-    image: myapp:v2
-    deploy:
-      update_config:
-        parallelism: 1
-        delay: 10s
-        failure_action: rollback
-        monitor: 30s
-        max_failure_ratio: 0.3
-```
-
-## Post-Deployment
-
-### Verify Deployment
-
-```bash
-# Check deployment status
-dstack status myapp
+# List all VMs
+python3 vmm-cli.py lsvm -v
 
 # View application logs
-dstack logs -f myapp
+python3 vmm-cli.py logs vm-id -f
 
-# Get application URL
-dstack url myapp
+# Start/stop VMs
+python3 vmm-cli.py start vm-id
+python3 vmm-cli.py stop vm-id
 
-# Verify attestation
-dstack attest myapp
+# Remove VM
+python3 vmm-cli.py remove vm-id
 ```
 
-### Access Your Application
+### Environment Variable Updates
 
-1. **Internal Access**
-   ```bash
-   # Get internal URL
-   http://myapp.cvm.internal:8080
-   ```
+Update encrypted environment variables for running applications [15](#0-14) :
 
-2. **External Access**
-   ```bash
-   # Default domain
-   https://myapp.app.example.com
-   
-   # Custom domain (after configuration)
-   https://api.mycompany.com
-   ```
+```bash
+python3 vmm-cli.py update-env vm-id \
+  --env-file updated.env \
+  --kms-url https://your-kms-url:9201
+```
 
-## Troubleshooting Deployments
+## Application Execution Process
 
-### Common Issues
+Inside the CVM, applications execute through the **app-compose.sh** script [16](#0-15) :
 
-<details>
-<summary>Deployment fails to start</summary>
+1. Extracts docker-compose.yaml from app-compose.json
+2. Runs pre-launch script (if specified)
+3. Starts Docker daemon and containers
+4. Performs cleanup (image/volume pruning)
 
-1. Check logs:
-   ```bash
-   dstack logs myapp --tail 100
-   ```
+## Security and Attestation
 
-2. Verify image availability:
-   ```bash
-   docker pull myimage:tag
-   ```
+### Trust and Verification
 
-3. Check resource limits:
-   ```bash
-   dstack describe myapp
-   ```
+dstack includes signature verification for KMS public keys [17](#0-16) . The system:
 
-</details>
+- Verifies cryptographic signatures on encryption keys
+- Maintains whitelist of trusted signers
+- Provides attestation capabilities for deployed applications
 
-<details>
-<summary>Application crashes repeatedly</summary>
+### Resource Isolation
 
-1. Check health check configuration
-2. Verify environment variables
-3. Ensure dependencies are running
-4. Check for port conflicts
-
-</details>
-
-<details>
-<summary>Cannot access application</summary>
-
-1. Verify deployment status:
-   ```bash
-   dstack status myapp
-   ```
-
-2. Check network configuration
-3. Verify port mappings
-4. Check gateway logs
-
-</details>
+Each application runs in its own Confidential Virtual Machine with:
+- Dedicated CPU and memory allocation
+- Encrypted storage and communication
+- Network isolation through port mappings
+- Hardware-level security guarantees via Intel TDX
 
 ## Best Practices
 
-<div className="bg-blue-50 p-6 rounded-lg my-4">
-  <h4 className="font-semibold mb-3">Deployment Checklist:</h4>
-  <ul className="space-y-2">
-    <li>☐ Use specific image tags (not `latest`)</li>
-    <li>☐ Configure health checks</li>
-    <li>☐ Set resource limits</li>
-    <li>☐ Use secrets for sensitive data</li>
-    <li>☐ Enable logging and monitoring</li>
-    <li>☐ Test locally before deploying</li>
-    <li>☐ Document environment variables</li>
-    <li>☐ Plan for persistent storage</li>
-    <li>☐ Configure restart policies</li>
-    <li>☐ Set up backup procedures</li>
-  </ul>
-</div>
+### Security Configuration
 
-## Next Steps
+- Always use encrypted environment variables for sensitive data
+- Register applications on-chain for production deployments
+- Verify KMS signatures and maintain trusted signer whitelists
+- Use specific image tags, not `latest`
 
-- [Getting Started Guide](/docs/getting-started/installation)
-- [Python Tutorial](/docs/tutorials/python-example)
-- [System Architecture](/docs/concepts/architecture) 
+### Resource Management
+
+- Specify appropriate CPU and memory limits
+- Use health checks in your docker-compose.yaml
+- Implement proper logging for debugging
+- Plan for persistent storage needs
+
+### Development Workflow
+
+1. Develop and test with standard docker-compose locally
+2. Generate app-compose.json for dstack deployment
+3. Test deployment in development environment
+4. Register application on-chain for production
+5. Deploy to production dstack cluster
+
+## Notes
+
+This guide reflects the actual dstack architecture based on the codebase. The deployment process differs significantly from generic container orchestration platforms due to dstack's focus on confidential computing and hardware-based security guarantees. The system requires on-chain registration and uses specialized tooling (vmm-cli.py) rather than standard Docker or Kubernetes commands.
+
+For development and testing, you can use simpler configurations without KMS or on-chain registration. Production deployments require the full security stack including KMS, Gateway, and blockchain-based application authorization.
