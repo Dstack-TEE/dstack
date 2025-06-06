@@ -1,0 +1,23 @@
+---
+title: "API Glossary"
+description: "Glossary of dstack API components and terminology."
+---
+
+[← Back to API Reference Overview](./overview)
+
+# API Glossary
+
+- **dstack-vmm**: Virtual Machine Manager, runs on the TDX host to manage Confidential Virtual Machines (CVMs).
+- **dstack-gateway**: Reverse proxy for forwarding TLS connections to CVMs.
+- **dstack-kms**: Key Management Service for generating and distributing keys to CVMs.
+- **dstack-guest-agent**: Runs inside each CVM, provides cryptographic, attestation, and key management APIs.
+- **supervisor**: Process management service within CVMs.
+- **CVM (Confidential Virtual Machine)**: Isolated VM with hardware-backed security (Intel TDX).
+- **TDX (Trust Domain Extensions)**: Intel technology for confidential computing and secure enclaves.
+- **RA-TLS**: Remote Attestation TLS, cryptographic protocol for attesting enclave state.
+- **App Compose**: dstack's deployment manifest format, embedding docker-compose.yaml and security config.
+- **VMM Console**: Web UI for managing deployments, logs, and CVMs.
+
+---
+
+See the [API Reference Overview](./overview) for more sections. 

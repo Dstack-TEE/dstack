@@ -5,7 +5,7 @@ description: "Comprehensive answers to common questions about dstack, covering e
 
 # dstack FAQ
 
-This comprehensive FAQ addresses the most common questions about dstack, from basic concepts to advanced deployment scenarios. If you can't find what you're looking for, check our [troubleshooting guide](/docs/troubleshooting) or visit our [community](/docs/community).
+this comprehensive FAQ addresses the most common questions about dstack, from basic concepts to advanced deployment scenarios. if you can't find what you're looking for, check our [troubleshooting guide](/docs/troubleshooting), visit our [community](/docs/community), or explore the [dstack wiki](https://deepwiki.com/Dstack-TEE/dstack/1-introduction-to-dstack) for in-depth AI explanations and further exploration of any topic.
 
 ---
 
@@ -547,35 +547,28 @@ curl http://localhost:9080/api/vms/stats
 
 ### What does it cost to run dstack?
 
-**Phala Cloud (Managed Service):**
-- **Pay-per-use pricing:** Only pay when CVMs are running
-- **Typical costs:** $0.10-0.50 per hour per CVM (varies by resources)
-- **No upfront costs:** No hardware investment required
-- **Included services:** Automatic updates, monitoring, support
+dstack can be run as a managed service or on your own infrastructure. Costs depend on your deployment model, resource usage, and operational needs.
+
+**Managed Service:**
+- **Pay-per-use:** You are billed only for the resources (such as CVMs) you actively use.
+- **No upfront hardware costs:** All infrastructure is provided.
+- **Included services:** Automatic updates, monitoring, and support are typically bundled.
 
 **Self-hosted Infrastructure:**
-```
-Hardware costs (one-time):
-- TDX-capable server: $5,000-15,000
-- Network equipment: $1,000-3,000
-- Storage: $500-2,000
+- **Hardware investment:** Requires servers with TEE support, networking equipment, and storage.
+- **Operational costs:** Ongoing expenses include electricity, internet, and maintenance.
+- **Full control:** You manage updates, monitoring, and support.
 
-Operational costs (monthly):
-- Electricity: $200-500
-- Internet: $100-300
-- Maintenance: $500-1,500
-```
-
-**Cost comparison (100 hours/month):**
-- **Phala Cloud:** $10-50/month per application
-- **Self-hosted:** $2,000-5,000 initial + $800-2,300/month
-- **Traditional cloud:** $20-100/month (but no TEE security)
+**Cost comparison:**
+- Managed service is generally billed based on actual usage, with no upfront hardware investment.
+- Self-hosted deployments require an initial hardware purchase and ongoing operational costs.
+- Traditional cloud deployments may be less expensive, but do not provide confidential computing or TEE security.
 
 **Cost optimization tips:**
-- Use resource-appropriate CVM sizes
-- Implement efficient auto-scaling
-- Optimize container images for faster boot times
-- Use Phala Cloud for development, self-host for production
+- Choose CVM sizes appropriate to your workload.
+- Use auto-scaling to match demand.
+- Optimize container images for faster boot and lower resource usage.
+- Consider using managed services for development and self-hosting for production, or vice versa, depending on your needs.
 
 ### Is dstack more expensive than traditional deployment?
 
@@ -599,86 +592,10 @@ Operational costs (monthly):
 
 ---
 
-## Limitations & Roadmap
-
-### What are the current limitations of dstack?
-
-**Container ecosystem:**
-- ❌ Some Docker features not supported (privileged containers, device access)
-- ❌ Limited container orchestration compared to Kubernetes
-- ❌ No Windows containers (Linux only)
-- ⚠️ Larger container images take longer to boot in CVMs
-
-**Development workflow:**
-- ❌ Cannot use `docker exec` for debugging
-- ❌ Limited IDE integration for remote debugging
-- ❌ Hot reloading requires container restart
-- ⚠️ Local development requires Phala Cloud or TEE hardware
-
-**Performance:**
-- ⚠️ 10-30% performance overhead for most workloads
-- ⚠️ Higher memory usage due to CVM overhead
-- ⚠️ Slower boot times (30-60 seconds vs instant containers)
-- ⚠️ Limited to single-node applications currently
-
-**Ecosystem:**
-- ⚠️ Smaller community compared to Docker/Kubernetes
-- ⚠️ Fewer third-party integrations
-- ⚠️ Limited hardware ecosystem (Intel TDX only currently)
-
-### What's on the dstack roadmap?
-
-**Near-term (3-6 months):**
-- ✅ AMD SEV-SNP support
-- ✅ Improved debugging tools
-- ✅ Better performance optimization
-- ✅ Enhanced monitoring and logging
-
-**Medium-term (6-12 months):**
-- 🔄 ARM TrustZone/CCA support
-- 🔄 Multi-node application support
-- 🔄 Kubernetes integration
-- 🔄 Enhanced auto-scaling
-
-**Long-term (12+ months):**
-- 🔮 GPU confidential computing
-- 🔮 Zero-knowledge proof integration
-- 🔮 Advanced container orchestration
-- 🔮 Cross-cloud federation
-
-### Can I migrate away from dstack if needed?
-
-**Yes, dstack is designed for portability:**
-
-**Your applications remain portable:**
-- Standard Docker containers work anywhere
-- No vendor-specific APIs required (dstack SDK is optional)
-- Standard networking and storage interfaces
-
-**Data extraction:**
-```bash
-# Export your data
-docker run --rm -v myapp_data:/data busybox tar czf - /data > backup.tar.gz
-
-# Your docker-compose.yml works in any Docker environment
-docker-compose up
-```
-
-**Configuration migration:**
-```bash
-# Convert dstack configs to standard Docker
-# Remove dstack-specific annotations
-# Update networking for standard environments
-```
-
-**Gradual migration:**
-- Run some services in dstack, others in traditional infrastructure
-- Migrate gradually as needed
-- No lock-in to specific cloud providers
-
----
 
 ## Troubleshooting
+
+for a comprehensive guide to diagnosing and fixing common issues, see the [troubleshooting section](/docs/troubleshooting.mdx). it covers error messages, deployment failures, networking problems, and advanced debugging tips specific to dstack. start there if you run into problems, or use the quick tips below for fast checks.
 
 ### My application won't start in dstack. What should I check?
 
@@ -785,57 +702,3 @@ dstack-util show
 - Keep dstack components updated
 - Follow security advisories
 
----
-
-## Getting Started
-
-### What's the fastest way to try dstack?
-
-**Option 1: Phala Cloud (Recommended for beginners)**
-1. Sign up at [Phala Cloud](https://cloud.phala.network/register?invite=beta)
-2. Upload your `docker-compose.yml` via web interface
-3. Deploy and access your secure application in 2-3 minutes
-
-**Option 2: Local development**
-```bash
-# Install dependencies (Ubuntu 24.04)
-sudo apt-get install build-essential chrpath diffstat lz4 wireguard-tools xorriso
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-
-# Clone and build
-git clone https://github.com/Dstack-TEE/meta-dstack.git --recursive
-cd meta-dstack
-../build.sh hostcfg
-../build.sh dl 0.5.1
-
-# Start services
-./dstack-kms -c kms.toml &
-sudo ./dstack-gateway -c gateway.toml &
-./dstack-vmm -c vmm.toml &
-
-# Deploy application
-dstack deploy -f examples/hello-world/docker-compose.yml
-```
-
-### Where can I find more examples and tutorials?
-
-**Official examples:**
-- [dstack-examples repository](https://github.com/Dstack-TEE/dstack-examples)
-- [Python Flask tutorial](/docs/tutorials/python-example)
-- [Node.js Express tutorial](/docs/tutorials/javascript-example)
-- [Rust Actix tutorial](/docs/tutorials/rust-example)
-
-**Community examples:**
-- Custom domain setup with Let's Encrypt
-- Database applications with encrypted storage
-- API services with secure key management
-- Multi-container applications
-
-**Learning path:**
-1. **Start simple:** Deploy a "Hello World" application
-2. **Add secrets:** Use dstack SDK for key derivation
-3. **Configure networking:** Set up custom domains
-4. **Monitor and scale:** Learn operational best practices
-5. **Advanced features:** Implement custom attestation policies
-
-Ready to get started? Check out our [installation guide](/docs/getting-started/installation) or try [Phala Cloud](https://cloud.phala.network/register?invite=beta) for immediate access to TEE infrastructure. 

@@ -126,6 +126,7 @@
         "icon": "users",
         "pages": [
           "docs/community",
+          "docs/contribution",
           "docs/troubleshooting"
         ]
       },
@@ -133,7 +134,18 @@
         "dropdown": "API Reference",
         "icon": "square-terminal",
         "pages": [
-          "docs/api-reference/authentication"
+          "docs/api-reference/authentication",
+          {
+            "group": "API Reference & SDKs",
+            "pages": [
+              "docs/api-reference/api-sub-docs/overview",
+              "docs/api-reference/api-sub-docs/guest-agent",
+              "docs/api-reference/api-sub-docs/management",
+              "docs/api-reference/api-sub-docs/supervisor",
+              "docs/api-reference/api-sub-docs/sdks",
+              "docs/api-reference/api-sub-docs/glossary"
+            ]
+          }
         ]
       }
     ]

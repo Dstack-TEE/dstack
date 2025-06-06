@@ -1,0 +1,70 @@
+---
+title: "Guest Agent RPC API"
+description: "Endpoints and usage for the dstack Guest Agent RPC API inside CVMs."
+---
+
+[← Back to API Reference Overview](./overview)
+
+# Guest Agent RPC API
+
+The Guest Agent runs inside each dstack CVM, providing cryptographic, attestation, and key management services via a Unix domain socket.
+
+- **Socket:** `/var/run/dstack.sock`
+- **Access:** Use the `--unix-socket` flag with curl or mount the socket in your container.
+
+## Docker Compose Integration
+
+```yaml
+services:
+  myservice:
+    image: your-image
+    volumes:
+      - /var/run/dstack.sock:/var/run/dstack.sock
+```
+
+## Endpoints
+
+### 1. `/GetTlsKey`
+- Derives a cryptographic key and returns a TLS certificate chain for RA-TLS.
+- **Request:**
+  - `subject` (string)
+  - `alt_names` (array of strings)
+  - `usage_ra_tls` (boolean)
+  - `usage_server_auth` (boolean)
+  - `usage_client_auth` (boolean)
+- **Response:**
+  - `key` (PEM string)
+  - `certificate_chain` (array of PEM strings)
+
+### 2. `/GetKey`
+- Generates an ECDSA key (k256) for Ethereum or other uses.
+- **Request:**
+  - `path` (string)
+  - `purpose` (string)
+- **Response:**
+  - `key` (hex string)
+  - `signature_chain` (array of hex strings)
+
+### 3. `/GetQuote`
+- Generates a TDX quote with provided report data.
+- **Request:**
+  - `report_data` (string, max 64 bytes)
+- **Response:**
+  - `quote` (hex string)
+  - `event_log` (string)
+  - `report_data` (hex string)
+
+### 4. `/Info`
+- Retrieves information about the CVM instance.
+- **Response:**
+  - `app_id`, `instance_id`, `app_cert`, `tcb_info`, `app_name`, `public_logs`, `public_sysinfo`, `device_id`, `mr_aggregated`, `os_image_hash`, `key_provider_info`, `compose_hash`
+
+### 5. `/EmitEvent`
+- Emits an event to be extended to RTMR3 (requires Dstack OS 0.5.0+).
+- **Request:**
+  - `event` (string)
+  - `payload` (hex string)
+
+---
+
+See the [API Reference Overview](./overview) for more sections. 
