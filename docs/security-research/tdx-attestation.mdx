@@ -7,110 +7,129 @@ description: "Deep dive into dstack's Intel TDX attestation implementation and s
 
 ## Overview
 
-The dstack TDX attestation system provides hardware-rooted cryptographic proof of execution integrity through Intel Trust Domain Extensions (TDX). The implementation centers around the `tdx-attest` crate which interfaces directly with Intel TDX hardware to generate unforgeable attestation quotes [1](#0-0) .
+dStack’s TDX attestation system delivers hardware-backed cryptographic proof of execution integrity using Intel Trust Domain Extensions (TDX). At its core, the implementation is powered by the [`tdx-attest` crate](https://github.com/Dstack-TEE/dstack/blob/45ebd05a/tdx-attest/src/lib.rs), which directly interfaces with Intel TDX hardware to generate strong, unforgeable attestation quotes.
+
+## Architectural Synthesis
+
+dStack’s TDX attestation security architecture is designed as an end-to-end chain of verifiable trust, beginning at the Intel TDX hardware root and extending through every software and policy layer involved in confidential workload execution. Each step of the process—from the first code loaded by the TDX module, to the runtime configuration of guest VMs, and up to the application—contributes cryptographically measured evidence to an immutable trust chain. 
+
+What makes this model robust is its compositional layering: every system stage (firmware, kernel, initrd, application) records its state in hardware-backed measurement registers, and these are captured and sealed in an attestation quote—cryptographically signed by Intel’s hardware-rooted key infrastructure. Validation does not stop at signature checking: event log replay, measurement validation, and report data binding all ensure that not only was the environment authentic at a moment in time, but that its entire boot and runtime sequence is tamper-evident and externally auditable.
+
+By combining TDX’s hardware assurances with policy enforcement through smart contracts and cryptographically controlled key management, dStack provides a closed loop of attestation, authorization, and key provisioning. This architecture makes it possible to deliver both continuous runtime integrity and decentralized, verifiable trust for confidential applications and distributed systems.
+
+## TDX Attestation Security – Enhanced Architecture Diagram & Flow
+
+the following section describes the comprehensive, multi-layered trust and attestation flow in dstack’s TDX security architecture. each component and connection is designed to ensure that every stage of the workload lifecycle—from hardware boot to application execution and key provisioning—is cryptographically measured, auditable, and verifiable.
+
+- **Hardware Root of Trust:** The process begins with Intel TDX hardware, establishing a silicon-anchored root of trust. The TDX Module (SEAM Mode) manages the secure launch and measurement of the firmware and subsequent layers.
+- **Boot Chain Integrity:** The OVMF firmware, Linux kernel, initrd, and dStack application are each measured and extended into dedicated RTMRs (Runtime Measurement Registers), ensuring that any modification or tampering is detectable.
+- **Measurement Registers:** MRTD and RTMR0–3 capture the state of hardware configuration, kernel, initrd, and application. These measurements are chained and sealed into the attestation quote.
+- **Quote Generation & Event Logging:** The TDX Quote Generator collects all RTMR values and report data, producing a signed attestation quote. Simultaneously, a cryptographically secure event log records every measurement extension, supporting full replay and auditability.
+- **Quote Verification & KMS Integration:** The quote, along with the event log, is verified against Intel’s CA root keys. The KMS node then authenticates the attestation, interacts with smart contracts for policy enforcement, and manages root/app keys for secure provisioning.
+- **Trust Verification & Policy Enforcement:** Additional verification steps—such as image verification, measurement recalculation, and signature chain validation—ensure that only trusted workloads receive cryptographic keys and access.
 
 ## Security Architecture
 
 ### Hardware Root of Trust
 
-The attestation system leverages Intel TDX CPU instructions to generate TD reports that cannot be forged by software, including malicious hypervisors. The core implementation uses direct CPU calls through the `tdx_att_get_report` and `tdx_att_get_quote` functions [2](#0-1) [3](#0-2) .
+This attestation system takes advantage of Intel TDX CPU instructions to produce TD reports that are fundamentally resistant to forgery, even by malicious hypervisors or privileged host software. All low-level interactions use direct CPU calls, such as [`tdx_att_get_report`](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/tdx-attest/src/linux.rs#L88) and [`tdx_att_get_quote`](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/tdx-attest/src/linux.rs#L52), to ensure trust is anchored in silicon.
 
 ### Cryptographic Foundations
 
-The system employs ECDSA signatures with Intel-provisioned attestation keys, ensuring that only legitimate TDX hardware can generate valid quotes. The attestation data structure includes a 1024-byte TDX report containing measurements and a 64-byte report data field for binding application-specific data [4](#0-3) .
+Every attestation quote leverages ECDSA signatures generated by Intel-provisioned attestation keys, as implemented in the [`tdx-attest` crate](https://github.com/Dstack-TEE/dstack/blob/45ebd05a/tdx-attest/src/lib.rs). This ensures that only legitimate TDX hardware is capable of issuing valid quotes. Each quote contains a 1024-byte TDX report—including measurement registers and a 64-byte report data field, which can be used to cryptographically bind application-specific data to the attestation.
 
-### Runtime Measurement Registers (RTMR)
+### Runtime Measurement Registers (RTMRs)
 
-The security model relies on four Runtime Measurement Registers that track different aspects of the system:
-- RTMR0: Virtual hardware configuration including CPU count and memory size
-- RTMR1: Linux kernel measurement  
-- RTMR2: Kernel command line and initramfs measurements
-- RTMR3: Application-specific runtime measurements including compose hash and instance ID
+The TDX security model is built around four Runtime Measurement Registers, each capturing a distinct trust boundary:
 
-The RTMR extension mechanism uses SHA-384 hashing to maintain a tamper-evident log [5](#0-4) [6](#0-5) .
+- **RTMR0:** Virtual hardware configuration (e.g., CPU count, memory size)
+- **RTMR1:** Linux kernel measurement
+- **RTMR2:** Kernel command line and initramfs measurements
+- **RTMR3:** Application runtime measurements (compose hash, instance ID, etc.)
+
+RTMRs use SHA-384 hashing for extension and state tracking, providing a tamper-evident log, as shown in [linux.rs#L129](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/tdx-attest/src/linux.rs#L129) and explained in the [`tdx-attest` crate](https://github.com/Dstack-TEE/dstack/blob/45ebd05a/tdx-attest/src/lib.rs).
 
 ### Event Log Security
 
-The attestation system maintains a cryptographically verifiable event log that records all RTMR extensions. Each event includes the measurement register index, event type, description, and payload data [7](#0-6) . The event log replay mechanism ensures that claimed RTMR values match the actual sequence of measurements [8](#0-7) .
+dStack’s attestation system maintains a cryptographically secure event log, recording every RTMR extension ([linux.rs#L105](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/tdx-attest/src/linux.rs#L105)). Each event contains the measurement register index, event type, descriptive metadata, and payload. The replay logic ([attestation.rs#L421](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/ra-tls/src/attestation.rs#L421)) enables auditors to verify that RTMR values are consistent with all prior measurements, providing full transparency for the system’s integrity chain.
 
 ## Quote Generation and Verification
 
 ### Quote Structure and Content
 
-The TDX quote contains the TD report, attestation key identifier, and ECDSA signature. The guest agent implements secure quote generation by padding user data to exactly 64 bytes and interfacing with the hardware attestation service [9](#0-8) .
+Each TDX quote includes the raw TD report, an attestation key ID, and an ECDSA signature. The guest agent generates quotes securely, padding user data to exactly 64 bytes and invoking TDX hardware attestation APIs—see the logic in [rpc_service.rs#L150](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/guest-agent/src/rpc_service.rs#L150).
 
 ### Report Data Binding
 
-Applications can bind arbitrary data to quotes through the report data field using multiple cryptographic hash algorithms including SHA-256, SHA-384, SHA-512, and Keccak variants. The system supports both hashed content and raw data binding with proper length validation [10](#0-9) .
+Applications can bind arbitrary data to their attestation by filling the 64-byte report data field. The system supports a wide range of cryptographic hash algorithms—including SHA-256, SHA-384, SHA-512, and Keccak—as described in [attestation.rs#L32](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/ra-tls/src/attestation.rs#L32). The implementation enforces length and content validation to ensure strict adherence to TDX’s data-binding requirements.
 
 ### Certificate Integration
 
-The RA-TLS implementation embeds TDX quotes directly into X.509 certificates, enabling transparent attestation during TLS handshakes. This approach allows verifiers to validate both the certificate chain and the underlying TEE attestation simultaneously [11](#0-10) .
+RA-TLS integrates TDX quotes directly into X.509 certificates as custom extensions, allowing remote attestation as part of the TLS handshake. Verifiers extract and validate embedded quotes with the [`from_cert`](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/ra-tls/src/attestation.rs#L260) method. This provides seamless validation of both the certificate chain and the underlying TEE attestation, ensuring a cryptographically linked trust chain from the hardware root all the way to the TLS endpoint.
 
 ## Verification Security Model
 
 ### Quote Verification Process
 
-The verification process validates the ECDSA signature against Intel's certificate chain, checks the TCB (Trusted Computing Base) status for known vulnerabilities, and replays the event log to verify RTMR consistency [12](#0-11) .
+Quotes are verified with the [`verify_with_ra_pubkey`](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/ra-tls/src/attestation.rs#L291) function, which checks the ECDSA signature in the TDX quote against Intel’s public key infrastructure and the RA-TLS public key. It also performs TCB (Trusted Computing Base) checks, and replays the event log to confirm RTMR values reflect the real sequence of system measurements. This robust process ensures attestation is both cryptographically bound to the TLS certificate and accurately describes the enclave’s state.
 
 ### TCB Validation
 
-The system enforces strict TCB policies by rejecting debug-enabled TDs and validating that security-critical measurement registers contain expected values. This prevents attestation of compromised or development environments in production [13](#0-12) .
+Strict TCB validation is enforced, with the system rejecting debug-enabled TDs and confirming that key measurement registers (`mr_signer_seam`, `mr_service_td`, etc.) match expected values. This is handled in the [`validate_tcb`](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/ra-tls/src/attestation.rs#L346) function, which inspects the TD report for debug attributes and validates critical fields. For SGX enclaves, it also ensures debug attributes are not set. This protects production deployments by refusing to attest development or potentially compromised environments.
 
 ### Measurement Chain Validation
 
-The verification process reconstructs the complete measurement chain from the initial MRTD (Measurement Root of Trust for Data) through all RTMR values, ensuring that every component in the trusted execution path can be verified [14](#0-13) .
+dStack reconstructs and verifies the entire measurement chain, from the Measurement Root of Trust for Data (MRTD) through all RTMRs and application identifiers. The [`decode_app_info`](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/ra-tls/src/attestation.rs#L156) function replays the event log and extracts key fields from the TDX report, computing digests like `mr_system` (hashing `mr_td`, RTMR0-2, and the key provider measurement) and `mr_aggregated` (covering all RTMRs and additional fields). This process ensures every element of the trust chain—from firmware and kernel to application identity—is independently validated.
 
 ## Integration Security
 
 ### Guest Agent Security
 
-The guest agent provides attestation services through authenticated RPC interfaces, implementing secure key derivation and certificate signing capabilities. The agent validates all quote requests and maintains isolation between different application contexts [15](#0-14) .
+The guest agent provides attestation and key management services over authenticated RPC endpoints ([rpc_service.rs#L150](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/guest-agent/src/rpc_service.rs#L150)). These services cover secure ECDSA key derivation, certificate signing, and TDX quote generation. The `get_tls_key` method generates a random seed, derives a unique ECDSA key pair, and requests a signed certificate chain, while `get_quote` pads user data and requests a hardware-backed quote and event log. All requests are carefully validated, and the agent ensures strict separation between application contexts—preventing any cross-tenant key or attestation leakage.
 
 ### KMS Integration
 
-The Key Management Service relies on TDX attestation for secure key provisioning, implementing a chain-of-trust model where application keys are derived from hardware-attested root keys. The KMS validates TDX quotes before releasing any cryptographic material [16](#0-15) .
+The Key Management Service (KMS) uses TDX attestation to securely provision keys, following a chain-of-trust model where application keys are derived only from hardware-attested root keys. Before releasing any cryptographic material, the KMS rigorously verifies TDX quotes.
 
 ## Threat Model and Security Guarantees
 
-### Protected Against
+### What the System Protects Against
 
-The attestation system provides protection against malicious hypervisors, runtime attacks detected through RTMR changes, and rollback attacks prevented by TCB version checks. The nonce-based binding mechanism mitigates man-in-the-middle attacks during attestation exchanges [17](#0-16) .
+dStack’s attestation system, as described in the [dstack attestation design doc](https://github.com/Dstack-TEE/dstack/blob/45ebd05a/attestation.md), is built to defend against powerful adversaries, including malicious hypervisors and privileged hosts. Hardware-enforced measurements, RTMR monitoring, and strict TCB validation ensure that runtime or rollback attacks are detected. Nonce-based binding in attestation exchanges counters man-in-the-middle attacks by guaranteeing freshness and cryptographic linkage between verifier challenges and enclave attestations.
 
 ### Verification Requirements
 
-Complete security verification requires validating the source code, building images from source, calculating expected measurement values, and verifying that quote measurements match pre-calculated values. The event log must be replayed to confirm RTMR3 consistency [18](#0-17) .
+End-to-end security requires verifying the dStack source code, building enclave images from source, and calculating expected measurement values as explained in [attestation.md §2.2: determining expected MRs](https://github.com/Dstack-TEE/dstack/blob/45ebd05a/attestation.md#22-determining-expected-mrs). Once calculated, these measurements must match the values in the quote, and the event log must be replayed to confirm the accuracy of RTMR3 and the entire trust chain.
 
 ### Trust Boundaries
 
-The system establishes clear trust boundaries where Intel TDX hardware serves as the ultimate root of trust, with measurements extending through the virtual firmware (OVMF), Linux kernel, initramfs, and application components. Each boundary is cryptographically verified through the measurement chain [19](#0-18) .
+dStack clearly defines all trust boundaries, starting with Intel TDX hardware as the immutable root of trust. Measurements flow through each stage—virtual firmware, Linux kernel, initramfs, and user applications—and each layer is independently validated. For more detail on how TDX quote measurements correspond to these boundaries, see [attestation.md §2.1: understanding tdx quote measurements](https://github.com/Dstack-TEE/dstack/blob/45ebd05a/attestation.md#21-understanding-tdx-quote-measurements).
 
 ## Cryptographic Implementation Details
 
 ### Hash Algorithm Support
 
-The attestation system supports multiple cryptographic hash algorithms with proper algorithm identification and content type prefixing. This flexibility allows applications to choose appropriate hash functions while maintaining security through standardized content formatting [20](#0-19) .
+The attestation layer supports a full range of cryptographic hash algorithms for report data binding, as implemented in [`attestation.rs#L33`](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/ra-tls/src/attestation.rs#L33). By default, `sha512` is used, but options include `sha256`, `sha384`, all SHA-3 variants, Keccak, and a `raw` mode for direct data binding. Every report data input is prefixed with a content tag (e.g., `kms-root-ca`, `ratls-cert`, `app-data`), ensuring context-specific and unambiguous measurements. This allows applications to select the most suitable hash algorithm, while maintaining interoperability and high security.
 
 ### Key Derivation Security
 
-Application keys are derived using hardware-sealed root keys with application-specific identifiers, ensuring cryptographic isolation between different applications and use cases. The derivation process includes digital signatures that can be verified independently [21](#0-20) .
+All application keys are deterministically derived from hardware-sealed root keys, using application-specific identifiers for cryptographic isolation between tenants. The guest agent’s [`get_key`](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/guest-agent/src/rpc_service.rs#L150C1-L239C2) RPC method implements this: a root ECDSA key derives per-application keys by path, then signs the derived public key and usage context. This signature chain allows independent verification that every derived key is both valid and bound to the right application, so that only trusted code can use it.
 
 ## Error Handling and Security
 
-The implementation includes comprehensive error handling for all attestation operations, with specific error codes for different failure modes including hardware failures, invalid parameters, and attestation service unavailability [22](#0-21) .
+The TDX attestation implementation features robust, granular error handling with a dedicated `TdxAttestError` enum ([source](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/tdx-attest/src/linux.rs#L20C1-L50C2)). Every failure mode—unexpected errors, invalid parameters, resource exhaustion, hardware failures, and more—has a unique error code and message. This enables both secure operation and straightforward debugging, as each error can be quickly identified and acted upon.
 
 ## Simulator Mode Security
 
-For development purposes, the system includes a simulator mode that maintains the same API surface while using pre-generated quotes and event logs. This mode is clearly identified and disabled in production environments to prevent security bypass [23](#0-22) .
+For development and testing, dStack provides a simulator mode that emulates the production attestation API using pre-generated quotes and event logs. The simulation logic is in [`simulate_quote`](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/guest-agent/src/rpc_service.rs#L241), which loads simulated artifacts and substitutes the report data field with caller input. Simulator mode is strictly disabled in production builds, ensuring only genuine, hardware-backed attestation is accepted in secure environments.
 
 ## Security Monitoring and Auditability
 
-The event logging system provides complete auditability of all runtime measurements, with cryptographic binding between events and their corresponding RTMR extensions. This enables post-hoc verification of the complete execution history [7](#0-6) .
+Every runtime measurement is persistently logged, with each event cryptographically bound to its RTMR extension ([`log_rtmr_event`](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/tdx-attest/src/linux.rs#L105)). Events are serialized as JSON and stored in a secure log directory, allowing full post-hoc verification. Auditors can replay and validate the entire execution history, verifying every measurement and trust boundary that dStack enforces.
 
 ## Notes
 
-The dstack TDX attestation implementation provides enterprise-grade security through hardware-rooted trust, comprehensive measurement chains, and rigorous verification procedures. The system's security relies on Intel TDX hardware guarantees combined with careful cryptographic implementation and thorough validation of all trust boundaries. The modular design allows for flexible deployment while maintaining strong security properties across different use cases and environments.
-
+dStack’s TDX attestation provides enterprise-grade security through hardware-rooted trust, complete measurement chains, and rigorous verification at every level. The platform’s guarantees rest on Intel TDX hardware, robust cryptographic construction, and careful, modular validation of all trust boundaries. This design enables flexible deployment for a range of use cases—while ensuring uncompromising security properties wherever it’s used.
 
 ## References
 

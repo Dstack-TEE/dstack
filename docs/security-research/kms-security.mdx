@@ -9,15 +9,23 @@ description: "Decentralized key management with hardware-backed security in dsta
 
 ## Overview
 
-The Key Management Service (KMS) implements decentralized, attestation-based key management for dstack. Unlike traditional centralized KMS solutions, dstack-kms operates through hardware-backed key derivation using Intel TDX attestation. The system derives keys deterministically from hardware measurements, eliminating single points of failure while providing cryptographic guarantees. [1](#0-0) 
+dstack’s Key Management Service (KMS) implements decentralized, hardware-rooted key management. For a high-level architectural view, see the [dstack-kms README](https://github.com/Dstack-TEE/dstack/blob/45ebd05a/kms/README.md).
+
+
+## Architectural Synthesis
+
+The dstack KMS represents a shift in key management design—moving from traditional, perimeter-based trust models to a composable, zero-trust architecture tailored for confidential computing. By fusing hardware attestation (Intel TDX), deterministic key derivation, and on-chain authorization, the KMS enforces not just secrecy, but *provable correctness* of both key issuance and key usage. Each cryptographic operation is tightly bound to attested hardware state and explicit authorization logic on decentralized smart contracts, eliminating the risks inherent in centralized storage and static access control lists.
+
+Instead of relying on static secrets or vault-like key storage, all application and workload keys are derived on-demand from real-time attestation evidence. The system ensures every step—CVM provisioning, measurement validation, root-of-trust creation, and policy enforcement—is independently verifiable and cryptographically auditable. This enables robust horizontal scaling, flexible workload upgrades, and fine-grained policy governance, all without sacrificing cryptographic assurance. The result is a KMS architecture that embodies both strong confidentiality and transparent, externally verifiable integrity for distributed cloud-native and confidential workloads.
+
 
 ## Why Decentralized Key Management?
 
-### The Problem with Centralized KMS
+### Centralization Risks
 
-Traditional key management systems create critical vulnerabilities through centralized storage and trust requirements. The dstack approach eliminates these issues by deriving keys on-demand from hardware attestation data rather than storing them centrally.
+Traditional KMS solutions introduce single points of failure, both in storage and trust. A compromise of the central KMS or its database can expose all managed keys. By contrast, dstack derives all application keys on demand, directly from hardware attestation data, eliminating the risk of key theft via database or infrastructure compromise.
 
-### dstack's Solution
+### dstack’s Approach
 
 ```mermaid
 graph LR
@@ -33,178 +41,162 @@ graph LR
         A2[Attestation 2] --> D2[Derived Key 2]
         A3[Attestation 3] --> D3[Derived Key 3]
     end
-```
+````
 
-The system supports three security modes with increasing trust guarantees: Non-KMS Mode (ephemeral keys), Local-Key-Provider Mode (SGX-sealed keys), and KMS Mode (blockchain-authorized keys with upgrade capability). [2](#0-1) 
+dstack KMS supports three security modes—**non-kms (ephemeral keys), local-key-provider (SGX-sealed keys), and full kms mode (blockchain-authorized, upgradeable keys)**. Each mode is described in the [KMS README overview](https://github.com/Dstack-TEE/dstack/blob/45ebd05a/kms/README.md#overview).
 
 ## Security Architecture
 
-### Hardware-Backed Key Derivation Model
+### Hardware-Backed Key Derivation
 
-The core security foundation relies on HKDF-SHA256 key derivation using hardware measurements as input key material. The system uses a salt value "RATLS" and context data including application identifiers to ensure key isolation. [3](#0-2) 
+At the core of dstack KMS is a hardware-rooted key derivation model. Each key is produced via **HKDF-SHA256**, seeded by unique hardware attestation data—specifically, TDX measurements and a domain-separating salt ("RATLS") plus context data (such as application identifiers). See the key derivation implementation in [ra-tls/src/kdf.rs#L19](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/ra-tls/src/kdf.rs#L19).
 
-Key derivation occurs through hierarchical key expansion where parent keys generate child keys using specific context data. This ensures deterministic key generation while maintaining cryptographic separation between applications. [4](#0-3) 
+Key derivation is hierarchical: parent keys can deterministically derive child keys for distinct application, instance, or usage contexts ([ra-tls/src/kdf.rs#L34](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/ra-tls/src/kdf.rs#L34)). This ensures every derived key is cryptographically unique and isolated—even if the same KMS instance manages thousands of workloads, each application’s secrets remain independently protected.
 
 ### Trust Model
 
-The security model establishes trust through four fundamental principles:
+dstack KMS’s security model is grounded in four main principles:
 
-1. **Hardware Root**: Keys derived from CPU measurements (MRTD) and runtime measurements (RTMR0-3) [5](#0-4) 
-2. **No Persistence**: Keys regenerated on demand from attestation data
-3. **Attestation Gated**: Only verified CVMs with valid TDX quotes can access keys [6](#0-5) 
-4. **Deterministic**: Same measurements produce identical keys across instances
+1. **Hardware Root of Trust**: All keys are derived from CPU and runtime measurements ([MRTD, RTMR0–RTMR3](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/ra-tls/src/attestation.rs#L393)).
+2. **No Key Persistence**: Keys are regenerated as needed from attestation data and are never stored outside TEE memory.
+3. **Attestation Gated Access**: Only workloads that have passed strict TDX quote and event log validation ([ra-tls/src/attestation.rs#L291](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/ra-tls/src/attestation.rs#L291)) can access keys.
+4. **Determinism**: The same measurements and context will always yield the same derived key—supporting reproducibility and scalable, stateless key management.
 
 ## Implementation Details
 
 ### Cryptographic Key Hierarchy
 
-The system implements a hierarchical key structure where the KMS maintains root keys that derive application-specific keys. The root CA key generates X.509 certificates while the K256 root key creates Ethereum-compatible signing keys. [7](#0-6) 
+The KMS manages a hierarchical key structure ([main\_service.rs#L50](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/kms/src/main_service.rs#L50)), anchored by a root CA certificate and a k256 ECDSA key. The root CA signs X.509 certificates, while the k256 key enables Ethereum-compatible signing and encryption. Application-specific keys are derived on demand, incorporating the app ID, instance ID, and purpose string ([main\_service.rs#L498](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/kms/src/main_service.rs#L498)), ensuring strong isolation between workloads and cryptographic roles.
 
-Application keys are derived using context data that includes app ID and instance ID, ensuring cryptographic isolation between different applications and instances. [8](#0-7) 
+### Secure Key Generation and Attestation
 
-### Secure Key Generation Process
+The process begins with attestation verification ([ra-tls/src/attestation.rs#L321](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/ra-tls/src/attestation.rs#L321)). Each key is only issued if the requester’s TDX quote is valid—meaning the signature, TCB status, and event logs all match expected measurements. If any aspect of attestation fails, key derivation is aborted.
 
-The key generation process begins with TDX attestation verification where the system validates the quote signature, checks TCB status, and replays event logs to verify runtime measurements. [9](#0-8) 
-
-After successful attestation, the system derives multiple key types for different purposes including disk encryption keys, environment encryption keys, and signing keys. Each key serves a specific cryptographic purpose with appropriate usage restrictions. [10](#0-9) 
+After verification, dstack KMS deterministically derives keys for different functions—such as disk encryption, environment encryption, and signing ([main\_service.rs#L515](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/kms/src/main_service.rs#L515)). Each key is bound to a unique cryptographic context and never reused outside its intended purpose.
 
 ## Security Properties
 
 ### Cryptographic Guarantees
 
-The implementation provides comprehensive cryptographic protection through multiple algorithms and standards:
-
-**Confidentiality**: Environment encryption uses X25519 key exchange with ChaCha20-Poly1305 for authenticated encryption [11](#0-10) 
-
-**Integrity**: Message authentication uses Keccak256 hashing with ECDSA signatures for tamper detection [12](#0-11) 
-
-**Authenticity**: ECDSA P-256 signatures provide non-repudiation using K256 elliptic curve cryptography [13](#0-12) 
-
-**Forward Secrecy**: Keys are derived fresh from attestation data rather than persisted long-term
+* **Confidentiality:** Application secrets are encrypted using X25519 key exchange and ChaCha20-Poly1305 AEAD, with keys derived for each context ([main\_service.rs#L501](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/kms/src/main_service.rs#L501)).
+* **Integrity:** Keccak256 hashes and ECDSA signatures (k256) protect all authenticated messages and keys ([crypto.rs#L29](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/kms/src/crypto.rs#L29)).
+* **Authenticity:** ECDSA P-256 signatures provide cryptographic proof of origin ([crypto.rs#L7](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/kms/src/crypto.rs#L7)).
+* **Forward Secrecy:** All keys are derived fresh from attestation at each boot—there are no long-lived static secrets.
+* **Reproducibility:** Identical environments will derive identical keys, supporting stateless scale-out and recovery.
 
 ### Attack Resistance
 
-The architecture resists multiple attack vectors through defense-in-depth strategies:
+dstack KMS is designed for robust resistance to real-world attacks:
 
-**Key Extraction**: Keys exist only within TEE memory and are never persisted to disk in plaintext
+* **Key Extraction Prevention:** All keys exist only in TEE memory and are never written to disk in plaintext.
+* **Replay Attack Mitigation:** Nonces and timestamps are included in attestation data ([attestation.rs#L47](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/ra-tls/src/attestation.rs#L47)), ensuring each attestation is unique and cannot be reused.
+* **Rollback Protection:** Version checks in measurements ([attestation.rs#L345](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/ra-tls/src/attestation.rs#L345)) block attempts to use outdated or debug configurations.
+* **Side Channel Hardening:** Cryptographic operations leverage constant-time code to reduce risk from timing attacks.
 
-**Replay Attacks**: Fresh nonces and timestamps prevent replay of attestation data [14](#0-13) 
+## Blockchain Integration
 
-**Rollback**: Version binding in measurements prevents downgrade attacks [15](#0-14) 
+### Decentralized Authorization
 
-**Side Channels**: Constant-time operations in cryptographic libraries mitigate timing attacks
+dstack KMS integrates with Ethereum-compatible blockchains for decentralized authorization. The [AppAuth contract](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/kms/auth-eth/contracts/AppAuth.sol#L9) enforces application-specific access controls—validating allowed compose hashes, device restrictions, and upgrade policies. The KmsAuth contract maintains registries for allowed KMS instances, OS images, and configurations, supporting transparent, auditable policy enforcement.
 
-## Integration with Blockchain Authorization
-
-### Smart Contract Security Controls
-
-The system integrates with Ethereum-compatible blockchains through KmsAuth and AppAuth smart contracts that provide decentralized authorization policies. The KmsAuth contract maintains registries of allowed KMS instances, OS images, and application configurations. [16](#0-15) 
-
-Application-specific authorization occurs through AppAuth contracts that control allowed compose hashes, device restrictions, and upgrade policies. The contract implements owner-based access control with the ability to permanently disable upgrades for enhanced security. [17](#0-16) 
+Authorization logic is enforced directly in the smart contract ([AppAuth.sol#L110](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/kms/auth-eth/contracts/AppAuth.sol#L110)): application identity, compose hash, and device restrictions are all checked on-chain before key access is permitted. Owners can permanently disable upgrades for greater assurance.
 
 ### Attestation Verification Pipeline
 
-The authorization pipeline validates applications through multiple checkpoints: TDX quote verification, measurement validation against allowed lists, and smart contract permission checks before key provisioning. [18](#0-17) 
+Key provisioning is controlled by a strict attestation pipeline ([main\_service.rs#L407](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/kms/src/main_service.rs#L407)), which verifies:
+
+* TDX quote signature and measurement extraction
+* Validation of all runtime measurements (MRTD, RTMR0–RTMR3), application metadata, and device IDs
+* Integrity and authenticity of the VM configuration and OS image hash
+* Aggregation of all attestation and config data into a `boot_info` structure
+* Blockchain authorization via Auth smart contract
+* Immediate denial and abort if any requirement fails
 
 ## Certificate Management and RA-TLS
 
-### Remote Attestation TLS Implementation
+### RA-TLS Implementation
 
-The system implements Remote Attestation TLS (RA-TLS) where X.509 certificates embed TDX quotes and event logs as custom extensions. This enables cryptographic verification of both certificate authenticity and underlying TEE measurements. [19](#0-18) 
+dstack KMS implements **Remote Attestation TLS (RA-TLS)** by embedding TDX quotes, event logs, application IDs, and usage policy as custom X.509 extensions ([cert.rs#L227](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/ra-tls/src/cert.rs#L227)). Custom OIDs and DER encoding enable cryptographic validation of both certificate authenticity and the underlying TEE state.
 
-Certificate signing requests include attestation data that is cryptographically verified before certificate issuance. The verification process ensures that only legitimate TEE applications can obtain valid certificates. [20](#0-19) 
+Certificate signing requests include full attestation data, and only validated requests can obtain certificates ([ra-tls/src/cert.rs](https://github.com/Dstack-TEE/dstack/blob/45ebd05a/ra-tls/src/cert.rs)). This guarantees that only fully attested workloads are eligible for trusted certificates.
 
 ### Custom OID Extensions
 
-The implementation uses custom Object Identifiers (OIDs) to embed security-critical data within certificates: quote data (1.3.6.1.4.1.62397.1.1), event logs (1.3.6.1.4.1.62397.1.2), application identifiers (1.3.6.1.4.1.62397.1.3), and certificate usage restrictions (1.3.6.1.4.1.62397.1.4). [21](#0-20) 
+Special Object Identifiers (OIDs) embed security-critical data in X.509 certificates ([ra-tls/src/oids.rs](https://github.com/Dstack-TEE/dstack/blob/45ebd05a/ra-tls/src/oids.rs)):
 
-## Verification Procedures
+* Quote data: `1.3.6.1.4.1.62397.1.1`
+* Event logs: `1.3.6.1.4.1.62397.1.2`
+* Application IDs: `1.3.6.1.4.1.62397.1.3`
+* Certificate usage: `1.3.6.1.4.1.62397.1.4`
 
-### Security Audit Methodology
+These custom extensions allow any relying party to verify not only certificate validity, but also the full hardware-backed attestation state of the workload.
 
-For comprehensive security verification, auditors should examine the attestation verification logic that validates TDX quotes, checks measurement whitelists, and ensures proper event log replay. The system provides deterministic key derivation that can be verified through repeated operations with identical inputs. [22](#0-21) 
+## Verification and Audit Procedures
 
-### Measurement Validation Process
+### Security Auditing
 
-The verification process requires validating four categories of measurements: MRTD (virtual firmware), RTMR0 (hardware configuration), RTMR1 (kernel), RTMR2 (boot parameters), and RTMR3 (application data). Each measurement type serves a specific security purpose in establishing the trust chain. [23](#0-22) 
+Security auditors are encouraged to review the entire attestation and key derivation logic, including TDX quote validation, measurement whitelists, and event log replay ([attestation.rs#L422](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/ra-tls/src/attestation.rs#L422)). This ensures RTMR values genuinely reflect the execution path. Deterministic key derivation enables repeated audits and comparison of outputs with known inputs.
 
-Independent verification is possible by building the OS image from source code and calculating expected measurements using the dstack-mr tool, then comparing against live attestation data. [24](#0-23) 
+### Measurement Validation
+
+Verification requires validation of five categories: MRTD (firmware), RTMR0 (hardware config), RTMR1 (kernel), RTMR2 (boot params), RTMR3 (application). The [attestation documentation](https://github.com/Dstack-TEE/dstack/blob/45ebd05a/attestation.md#22-determining-expected-mrs) details expected values and verification steps. Building the OS image from source and using dstack-mr to calculate measurements allows independent validation.
 
 ## Performance and Scalability
 
 ### Cryptographic Performance
 
-The key derivation process using HKDF-SHA256 provides efficient key generation with minimal computational overhead. The system supports concurrent key derivation operations while maintaining cryptographic security guarantees.
+HKDF-SHA256 key derivation is highly efficient and incurs minimal computational overhead. dstack KMS is designed for concurrent, parallel key operations with no compromise to cryptographic guarantees.
 
-### Distributed KMS Architecture
+### Distributed KMS Scaling
 
-The KMS supports self-replication where new instances can obtain root keys from existing instances through authenticated channels. This enables horizontal scaling while maintaining security through attestation-based authentication. [25](#0-24) 
+KMS supports secure self-replication, allowing new nodes to obtain root keys from attested peers using authenticated channels ([kms self-replication documentation](https://github.com/Dstack-TEE/dstack/blob/45ebd05a/kms/README.md#kms-self-replication)). This supports horizontal scaling while maintaining attestation-based trust.
 
 ## Security Best Practices
 
-### Key Usage Guidelines
+### Key Usage
 
-Applications should follow the principle of least privilege by requesting only necessary keys and implementing proper key rotation policies. The system provides purpose-specific keys that should be used only for their intended cryptographic operations.
+Applications should always request only the minimum required keys, enforce least privilege, and rotate keys as appropriate. Each derived key is purpose-scoped and must only be used for its intended cryptographic function.
 
 ### Attestation Policy Management
 
-Organizations should maintain strict attestation policies that specify allowed measurements, TCB versions, and application configurations. Regular policy reviews ensure continued security as the threat landscape evolves.
+Organizations should maintain strict policies specifying allowed measurements, TCB versions, and configurations. Regular review and updates ensure the system remains robust as threats evolve.
 
 ### Monitoring and Auditing
 
-The system supports comprehensive audit logging of key derivation events, attestation validations, and authorization decisions. Organizations should implement monitoring for anomalous access patterns and policy violations.
+dstack KMS logs all key derivation, attestation, and authorization events. Continuous monitoring for anomalous access or policy violations is strongly recommended.
 
-## Integration Security Considerations
+## Integration and Application Security
 
 ### Application Integration
 
-Applications must properly verify certificate chains and validate attestation data when establishing trust relationships. The signature verification process requires checking the complete chain from the message signature back to the registered KMS root key. [26](#0-25) 
+Applications must validate certificate chains and attestation evidence for every trust relationship ([KMS documentation: attestation](https://github.com/Dstack-TEE/dstack/blob/45ebd05a/kms/README.md#attestation)). Signature chains must be checked from the message to the registered KMS root key.
 
 ### Network Security
 
-All KMS communications occur over RA-TLS connections that provide mutual authentication and transport security. The system validates both client and server attestation before establishing secure channels.
+All communications with the KMS occur over RA-TLS channels with mutual attestation, ensuring that only trusted endpoints exchange key material.
 
 ## Threat Model and Limitations
 
-### Assumed Threats
+### Adversary Assumptions
 
-The security model assumes attackers may compromise host systems, network infrastructure, and external services while maintaining trust in TEE hardware, attestation infrastructure, and properly configured smart contracts.
+The model assumes attackers may compromise hosts, networks, or infrastructure, but not the TEE hardware, attestation infrastructure, or correctly configured smart contracts.
 
 ### Security Boundaries
 
-The system protects against unauthorized key access, attestation forgery, and policy bypass while requiring proper TEE hardware, secure boot processes, and trusted attestation verification.
+The system is engineered to prevent unauthorized key access, attestation forgery, and policy bypass, provided hardware and attestation are trusted and correctly configured.
 
-## References and Further Investigation
+## References and Further Reading
 
-For detailed security analysis, examine the core cryptographic implementations in the ra-tls module, key derivation functions in the KMS service, and attestation verification logic. The smart contract implementations provide authorization policy enforcement mechanisms.
-
-**Primary Security Components:**
-- Key Derivation: [27](#0-26) 
-- Attestation Verification: [28](#0-27) 
-- Certificate Management: [29](#0-28) 
-- Authorization Logic: [30](#0-29) 
-
-**Security Standards and References:**
-- NIST SP 800-56C Rev. 2 for Key Derivation Functions
-- RFC 5869 for HMAC-based Key Derivation Function (HKDF)
-- Intel TDX Attestation Specification
-- Ethereum Smart Contract Security Best Practices
+* [ra-tls key derivation](https://github.com/Dstack-TEE/dstack/blob/45ebd05a/ra-tls/src/kdf.rs)
+* [ra-tls attestation verification](https://github.com/Dstack-TEE/dstack/blob/45ebd05a/ra-tls/src/attestation.rs)
+* [ra-tls certificate management](https://github.com/Dstack-TEE/dstack/blob/45ebd05a/ra-tls/src/cert.rs)
+* [KMS authorization policy](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/kms/src/main_service.rs#L407)
+* [NIST SP 800-56C Rev. 2](https://csrc.nist.gov/publications/detail/sp/800-56c/rev-2/final)
+* [dstack KMS Design](https://github.com/Dstack-TEE/dstack/blob/master/kms/DESIGN.md)
+* [NIST Key Derivation Functions](https://nvlpubs.nist.gov/nistpubs/Legacy/SP/nistspecialpublication800-108.pdf)
 
 <div className="mt-8 p-4 bg-purple-50 rounded-lg border border-purple-200">
   <p className="text-sm text-purple-800">
     <strong>Next Component:</strong> See how derived keys protect traffic in the <a href="/docs/security-research/gateway-security" className="underline">Gateway security architecture</a>.
   </p>
 </div>
-
-
-## References
-
-- [NIST SP 800-56C Rev. 2](https://csrc.nist.gov/publications/detail/sp/800-56c/rev-2/final)
-- [dstack KMS Design](https://github.com/Dstack-TEE/dstack/blob/master/kms/DESIGN.md)
-- [Key Derivation Functions](https://nvlpubs.nist.gov/nistpubs/Legacy/SP/nistspecialpublication800-108.pdf)
-
-<div className="mt-8 p-4 bg-purple-50 rounded-lg border border-purple-200">
-  <p className="text-sm text-purple-800">
-    <strong>Next Component:</strong> See how derived keys protect traffic in the <a href="/docs/security-research/gateway-security" className="underline">Gateway security architecture</a>.
-  </p>
-</div> 
