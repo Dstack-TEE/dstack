@@ -1,17 +1,15 @@
 ---
 title: "VMM Security Architecture"
-description: "Analysis of dstack VMM's security boundaries and isolation mechanisms"
+description: "In-depth analysis of dstack VMM's security boundaries and isolation mechanisms"
 ---
 
 # VMM Security Architecture
 
-<Callout type="info" icon="server">
-**Component**: `dstack-vmm` | [View Source](https://github.com/Dstack-TEE/dstack/tree/master/vmm)
-</Callout>
+`dstack-vmm` ([source](https://github.com/Dstack-TEE/dstack/tree/master/vmm))
 
 ## Overview
 
-The Virtual Machine Manager (VMM) is the critical security boundary between untrusted host infrastructure and confidential workloads. Built on QEMU/KVM with Intel TDX extensions, it provides hardware-enforced memory isolation, secure VM lifecycle management, attestation measurement generation, and resource access mediation through a Rust-based architecture [1](#0-0) .
+The `dstack-vmm` serves as the primary security boundary between untrusted host infrastructure and confidential workloads. Its implementation is located in [`vmm/src/main.rs`](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/vmm/src/main.rs). Built upon QEMU/KVM with Intel TDX extensions, the VMM enforces hardware-backed memory isolation, manages the secure lifecycle of confidential VMs, generates attestation measurements, and mediates resource access—all within a Rust-based architecture designed for robust security guarantees.
 
 ## Security Model
 
@@ -38,111 +36,130 @@ graph TB
 
 ### Intel TDX Hardware Security Properties
 
-The VMM leverages Intel TDX (Trust Domain Extensions) for hardware-enforced confidential computing. TDX provides AES-256 memory encryption automatically applied to all guest memory pages, with cryptographic integrity protection preventing unauthorized modification [2](#0-1) . The system implements the q35 machine type with kernel IRQ chip splitting and confidential guest support, ensuring hardware-level isolation between the host and guest domains.
+The VMM leverages Intel TDX (Trust Domain Extensions) to provide hardware-enforced confidential computing. TDX automatically applies AES-256 memory encryption to all guest memory pages and ensures cryptographic integrity, preventing unauthorized modification. The VMM configures QEMU to use the `q35` machine type with `kernel-irqchip=split` and `confidential-guest-support=tdx`, as demonstrated in the [source code](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/vmm/src/app/qemu.rs#L320).
 
 ### Measurement and Attestation Framework
 
-The security architecture relies on a comprehensive measurement system using TDX Runtime Measurement Registers (RTMRs). MRTD contains virtual firmware measurements taken by the TDX module in SEAM mode, serving as the trust anchor for all subsequent code execution [3](#0-2) . 
+The security architecture relies on a comprehensive measurement system using TDX Runtime Measurement Registers (RTMRs), as detailed in [the attestation documentation](https://github.com/Dstack-TEE/dstack/blob/45ebd05a/attestation.md#22-determining-expected-mrs). MRTD contains virtual firmware measurements taken by the TDX module in SEAM mode, serving as the trust anchor for all subsequent code execution.
 
-RTMR0 records the CVM's virtual hardware configuration including CPU count and memory specifications. RTMR1 captures Linux kernel measurements, while RTMR2 records kernel command line parameters and initrd measurements. RTMR3 contains runtime application details including compose hash, instance ID, and key provider information, enabling fine-grained application validation [4](#0-3) .
+Refer to [attestation.md#22-determining-expected-mrs](https://github.com/Dstack-TEE/dstack/blob/45ebd05a/attestation.md#22-determining-expected-mrs) for specifics on RTMR0–RTMR3 measurement contents.
 
 ### Cryptographic Key Management Integration
 
-The VMM integrates with the dstack Key Management Service (KMS) for secure key derivation and certificate management. The KMS operates in Local-Key-Provider mode using SGX sealing keys or full KMS mode with blockchain-based authorization [5](#0-4) . Applications receive cryptographically derived keys based on their verified measurements, ensuring that only authenticated workloads can access sensitive cryptographic material.
+The VMM integrates with the dstack Key Management Service (KMS) for secure key derivation and certificate management. For a comprehensive overview of supported boot and key management modes, consult the [KMS README overview](https://github.com/Dstack-TEE/dstack/blob/45ebd05a/kms/README.md#overview). dstack supports three boot modes for confidential VMs:
+
+* **Non-KMS Mode**: Stateless, ephemeral keys, no persistent state.
+* **Local-Key-Provider Mode**: Stateful, uses SGX sealing keys for persistent app keys, validates key provider via SGX quote.
+* **KMS Mode**: Stateful, upgradeable, enables flexible app-id validation and blockchain-based authorization.
+
+In all modes, applications receive cryptographically derived keys based on their verified measurements, ensuring that only authenticated workloads can access sensitive cryptographic material.
 
 ## Implementation Security Details
 
 ### Device Isolation Architecture
 
-The VMM implements a restrictive device model using only paravirtualized drivers to minimize attack surface. All network connectivity uses virtio-net-pci devices with user-mode networking providing automatic NAT isolation [6](#0-5) . Storage access is limited to virtio-blk-pci devices with no direct hardware passthrough except for GPU resources which require VFIO with IOMMU protection [7](#0-6) .
+The VMM enforces a restrictive device model by utilizing only paravirtualized drivers, significantly reducing the attack surface. For network connectivity, it exclusively employs `virtio-net-pci` devices configured with user-mode networking, which provides automatic NAT isolation and port forwarding, as implemented in [qemu.rs#L295](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/vmm/src/app/qemu.rs#L295).
+
+Storage is confined to `virtio-blk-pci` devices, and direct hardware passthrough is not permitted for storage or other peripherals. The sole exception is for GPU resources, which are attached using VFIO and protected by IOMMU, as detailed in [qemu.rs#L427](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/vmm/src/app/qemu.rs#L427).
 
 ### Memory Security Implementation
 
-Memory isolation is enforced through TDX's hardware encryption capabilities combined with secure Extended Page Tables (EPT). The VMM configures memory backends with hugepage support when GPU resources are allocated, implementing NUMA-aware memory binding for optimal security and performance [8](#0-7) . All guest memory becomes inaccessible to the host after TD finalization, providing cryptographic protection against memory snooping attacks.
+Memory isolation is enforced by TDX hardware encryption and secure Extended Page Tables (EPT). When GPU resources are attached, the VMM configures memory backends with hugepage support and applies NUMA-aware memory binding to optimize both security and performance. This is implemented in [`qemu.rs#L379`](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/vmm/src/app/qemu.rs#L379), where the VMM dynamically assigns memory and CPU resources across NUMA nodes based on GPU placement, ensuring that each NUMA node receives dedicated hugepage-backed memory and CPU allocations, and memory is bound to the appropriate host NUMA node for isolation.
+
+After TD finalization, all guest memory is cryptographically protected and becomes inaccessible to the host, preventing memory snooping attacks.
 
 ### Communication Security Channels
 
-Inter-VM communication is restricted to vhost-vsock-pci devices providing a secure communication channel between host and guest domains [9](#0-8) . The VMM exposes host API services through vsock addressing, enabling secure communication without exposing network interfaces to potential attack vectors [10](#0-9) .
+Inter-VM communication is restricted to `vhost-vsock-pci` devices, which provide a secure communication channel between host and guest domains, as implemented in [qemu.rs#L358](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/vmm/src/app/qemu.rs#L358).
+
+The VMM exposes host API services to confidential VMs using vsock addressing (see [app.rs#L487](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/vmm/src/app.rs#L487)), allowing secure communication channels (e.g., `vsock://2:{port}/api`) without exposing network interfaces to the guest or external attack surfaces.
 
 ## Attestation and Verification Mechanisms
 
 ### TDX Quote Generation and Validation
 
-The attestation system implements comprehensive quote verification using Intel's DCAP Quote Verification Library (QVL). Quote validation includes signature verification, collateral fetching from PCCS servers, and measurement replay to ensure RTMR consistency [11](#0-10) . The system validates TCB attributes to prevent debug mode execution and verifies measurement registers against expected values [12](#0-11) .
+The dstack attestation system performs quote verification using Intel's DCAP Quote Verification Library (QVL), as implemented in [ra-tls/src/attestation.rs#L304](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/ra-tls/src/attestation.rs#L304). The verification process includes checking the quote signature, fetching collateral from PCCS servers, and replaying event logs to ensure RTMR values match the reported measurements. If the replayed RTMRs do not match the values in the quote, or if the report data does not match expectations, the verification fails. TCB attributes are also validated to prevent debug mode execution and ensure the integrity of the attestation chain.
+
+The system validates TCB attributes to prevent debug mode execution, following the logic in [ra-tls/src/attestation.rs#L346](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/ra-tls/src/attestation.rs#L346), and verifies measurement registers against expected values.
 
 ### Event Log Integrity Validation
 
-Runtime measurements are validated through event log replay mechanisms that reconstruct RTMR values from recorded events. The system uses SHA-384 hashing for event extension operations, ensuring cryptographic integrity of the measurement chain [13](#0-12) . Event logs are stored in JSON format with cryptographic digests, enabling third-party verification of application execution integrity.
+Runtime measurements are validated by replaying event logs to reconstruct the RTMR values, following the logic in [ra-tls/src/attestation.rs#L422](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/ra-tls/src/attestation.rs#L422). For each RTMR (0–3), the system iterates through the event log, validates each event digest, and extends the measurement using SHA-384 hashing of the previous value and the event digest. This process ensures the cryptographic integrity of the measurement chain. Event logs are stored in JSON format with cryptographic digests, allowing third parties to independently verify application execution integrity.
 
 ### Blockchain-Based Authorization
 
-The security model integrates with Ethereum-compatible smart contracts for authorization decisions. The KmsAuth contract maintains registries of allowed application measurements, OS images, and KMS instance measurements [14](#0-13) . This provides decentralized trust anchors independent of any single authority, enabling transparent and auditable security policies.
+The security model integrates with Ethereum-compatible smart contracts for authorization decisions, as described in the [KMS implementation documentation](https://github.com/Dstack-TEE/dstack/blob/45ebd05a/kms/README.md#kms-implementation). The `KmsAuth` contract maintains registries of allowed application measurements, OS images, and KMS instance measurements. This approach provides decentralized trust anchors independent of any single authority, enabling transparent and auditable security policies.
 
 ## Resource Protection and DoS Prevention
 
 ### Resource Isolation Controls
 
-The VMM implements comprehensive resource limits to prevent resource exhaustion attacks. Maximum allocatable resources are configurable per host, with defaults of 20 vCPUs and 100GB memory per VM [15](#0-14) . Disk space is limited with configurable maximums, and network bandwidth can be controlled through host-level restrictions.
+The VMM implements strict resource isolation to defend against resource exhaustion attacks. Administrators can configure maximum limits for vCPUs and memory allocated to each VM on a per-host basis, with default values specified in [`vmm.toml#L28`](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/vmm/vmm.toml#L28). Disk space allocation is also subject to configurable upper bounds, ensuring that no single VM can consume excessive storage. Additionally, network bandwidth usage can be restricted at the host level, providing further protection against denial-of-service scenarios and ensuring fair resource distribution across all VMs.
 
 ### Input Validation and Sanitization
 
-All VM configuration parameters undergo strict validation before processing. Image names are restricted to alphanumeric characters with specific allowed symbols, and path validation prevents directory traversal attacks [16](#0-15) . GPU device specifications are validated against PCI addressing formats to prevent injection attacks [17](#0-16) .
+All VM configuration parameters are strictly validated before processing. For instance, image names are limited to a maximum of 64 characters, must only contain alphanumeric characters, underscores, hyphens, or periods, and cannot include directory traversal patterns like `..`. This validation logic is implemented as shown in [app.rs#L141](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/vmm/src/app.rs#L141). These checks prevent invalid or malicious image names and block directory traversal attacks.
 
+GPU device specifications are validated against PCI addressing formats to prevent injection attacks, following the logic in \[qemu.rs#L558]\([https://github.com/Dstack-TEE/dstack/blob/45ebd05a25](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25)
 ### API Security and Rate Limiting
 
-The VMM exposes REST APIs through Rocket framework with configurable authentication tokens and rate limiting capabilities [18](#0-17) . API access can be restricted to specific token sets, and the system supports both Unix socket and network-based communication channels for different security requirements.
+The VMM exposes REST APIs through the Rocket framework, with support for authentication tokens and rate limiting as specified in [`vmm.toml#L62C1-L64C12`](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/vmm/vmm.toml#L62C1-L64C12). Authentication can be enabled or disabled, and tokens are defined in the `[auth]` section of the configuration file.
+
+API access is restricted to specific token sets, and the system offers both Unix socket and network-based communication channels to support various deployment security requirements.
 
 ## Security Verification Procedures
 
 ### Measurement Validation Process
 
-Security verification begins with building the base OS image from source code to establish known-good measurements. The dstack-mr tool calculates expected MRTD, RTMR0, RTMR1, and RTMR2 values based on CPU and memory specifications [19](#0-18) . RTMR3 validation requires event log replay to verify application-specific measurements match deployment expectations.
+Security verification begins by building the base OS image from source, establishing known-good measurement values. The [dstack-mr tool](https://github.com/Dstack-TEE/dstack/blob/45ebd05a/attestation.md#22-determining-expected-mrs) is used to calculate expected values for MRTD, RTMR0, RTMR1, and RTMR2, based on the chosen CPU and memory configuration. RTMR3 validation is performed by replaying the event log, ensuring that application-specific measurements are consistent with deployment expectations.
 
 ### Cryptographic Chain of Trust
 
-The system implements a hierarchical trust model where the TDX module serves as the hardware root of trust, validating virtual firmware measurements in MRTD. The virtual firmware then measures and validates the Linux kernel, which in turn measures the initramfs and application components [20](#0-19) . This creates an unbroken chain of cryptographic measurements from hardware to application level.
+The system implements a hierarchical trust model. The TDX module serves as the hardware root of trust, validating virtual firmware measurements stored in MRTD. The virtual firmware then measures and verifies the Linux kernel, which subsequently measures the initramfs and application components. This creates an unbroken, cryptographically verifiable chain of trust, from hardware all the way up to the application layer. For more detail on the measurement and attestation process, see the [attestation documentation](https://github.com/Dstack-TEE/dstack/blob/45ebd05a/attestation.md).
 
 ### Third-Party Verification Capabilities
 
-Applications can implement simplified verification by validating KMS-signed certificates rather than performing full quote verification. The KMS maintains root keys registered in blockchain contracts, enabling signature chain validation where applications prove their authenticity through KMS-signed credentials [21](#0-20) . This reduces verification complexity while maintaining cryptographic assurance.
+Applications can use simplified verification by validating KMS-signed certificates, instead of performing full quote verification. The KMS maintains root keys registered in blockchain contracts, supporting signature chain validation—so applications can prove authenticity using KMS-signed credentials. For more on this process, see [validating apps via the KMS auth chain](https://github.com/Dstack-TEE/dstack/blob/45ebd05a/kms/README.md#validating-apps-via-the-kms-auth-chain). This approach reduces verification complexity while still maintaining cryptographic assurance.
 
 ## Integration Security Architecture
 
 ### KMS Integration Security
 
-The VMM integrates with KMS instances through RA-TLS connections providing mutual authentication based on TDX quotes. Key derivation uses application-specific identifiers derived from measurements, ensuring cryptographic isolation between different applications even when running on the same host [22](#0-21) . The system supports both ephemeral keys for stateless applications and persistent keys for applications requiring data continuity.
+The VMM integrates with KMS instances using RA-TLS connections, enabling mutual authentication using TDX quotes. Key derivation uses application-specific identifiers derived from TDX measurements, ensuring cryptographic isolation even for applications running on the same host. For a full explanation of the key derivation process and API usage, see the [getAppKey documentation](https://github.com/Dstack-TEE/dstack/blob/45ebd05a/kms/README.md#getappkey). The platform supports both ephemeral keys for stateless workloads and persistent keys for applications that require continuity.
 
 ### Gateway Communication Security
 
-External communication flows through the dstack-gateway component which implements TLS termination with certificate validation. The gateway performs quote verification for incoming connections and routes traffic only to verified confidential VMs [23](#0-22) . This provides network-level isolation while enabling external access to authorized applications.
+All external communication is routed through the dstack-gateway component, which manages TLS termination and certificate validation. Gateway endpoints are selected dynamically based on the VM and host configuration, following the logic in [app.rs#L467](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/vmm/src/app.rs#L467). The gateway verifies TDX quotes for all incoming connections and only forwards traffic to confidential VMs that have successfully attested. This provides strong network-level isolation while enabling external access to authorized workloads.
 
 ### Certificate Management
 
-TLS certificates are generated through KMS-signed certificate signing requests, creating a PKI hierarchy rooted in hardware-protected keys. The VMM validates certificate chains during connection establishment, ensuring all communications use cryptographically verified endpoints [24](#0-23) . Certificate lifecycle management includes automatic renewal and revocation capabilities.
+TLS certificates are generated via KMS-signed certificate signing requests, creating a PKI hierarchy rooted in hardware-protected keys. The VMM validates certificate chains during connection setup to ensure that all endpoints are cryptographically authenticated. Certificate lifecycle management—including automatic renewal and revocation—is managed through the KMS RPC interface (see [the rpc interface documentation](https://github.com/Dstack-TEE/dstack/blob/45ebd05a/kms/README.md#the-rpc-interface)).
 
 ## Threat Model and Risk Assessment
 
 ### Mitigated Attack Vectors
 
-The architecture provides comprehensive protection against memory-based attacks through AES-256 encryption with hardware key management. Hypervisor compromise scenarios are mitigated through TDX measurement validation and attestation requirements. DMA attacks are prevented through IOMMU protection for GPU resources and elimination of direct hardware access for other devices. Side-channel attacks are reduced through limited device exposure and paravirtualized drivers.
+This architecture offers comprehensive protection against memory-based attacks by enforcing AES-256 encryption and hardware key management. Hypervisor compromise is mitigated through TDX measurement validation and strict attestation requirements. DMA attacks are prevented using IOMMU for GPU resources and by eliminating direct hardware access for other devices. Exposure to side-channel attacks is minimized by the exclusive use of paravirtualized drivers and limited device exposure.
 
 ### Residual Security Considerations
 
-Timing-based side channel attacks represent ongoing research areas where complete mitigation depends on application-level countermeasures. Power analysis attacks require physical access and hardware-level protections beyond software control. Microarchitectural vulnerabilities may require ongoing microcode updates and hardware mitigations. The security model assumes trusted execution of the TDX module and underlying hardware components.
+Some residual risks remain. Timing-based side-channel attacks are an ongoing area of research and may require application-level countermeasures. Power analysis attacks require physical access and are largely outside the scope of software-based protections. Microarchitectural vulnerabilities must be addressed with continual microcode and hardware updates. The security model assumes trusted execution of the TDX module and underlying platform hardware.
 
 ### Security Monitoring and Incident Response
 
-The system provides comprehensive logging of security-relevant events including VM lifecycle operations, attestation failures, and resource limit violations. Event aggregation enables detection of abnormal patterns that might indicate compromise attempts. The measurement-based architecture enables forensic analysis of security incidents through cryptographic audit trails [25](#0-24) .
+The VMM implements detailed logging of security-relevant events—including VM lifecycle changes, attestation failures, and resource limit violations—via the [`vm_event_report`](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/vmm/src/app.rs#L376) function. This system records events, enforces limits on event body size, and tracks types such as `boot.progress`, `boot.error`, and `shutdown.progress` for each VM. Unknown or malformed events are logged for further investigation. Aggregated logs enable detection of abnormal patterns that could indicate compromise attempts. The measurement-based architecture ensures cryptographic audit trails for effective forensic analysis.
 
 ## Performance and Security Trade-offs
 
-Memory encryption introduces approximately 5% performance overhead while providing comprehensive protection against host-level attacks. Nested page table operations add minimal overhead while enabling complete memory isolation. Device emulation reduces attack surface compared to hardware passthrough but may impact I/O intensive workloads. Measurement validation requires minimal runtime overhead while providing continuous integrity assurance.
+Memory encryption with TDX introduces an estimated 5% performance overhead, but provides strong protection against host-level attacks. Nested page tables offer robust memory isolation with minimal additional overhead. Device emulation reduces attack surface compared to hardware passthrough, though it can affect performance for I/O-intensive workloads. Measurement validation incurs only minimal runtime overhead, ensuring continuous integrity without major impact.
 
 ## References and Further Investigation
 
 - [Intel TDX Architecture Specification](https://www.intel.com/content/www/us/en/developer/tools/trust-domain-extensions/documentation.html)
 - [QEMU TDX Support Documentation](https://qemu.readthedocs.io/en/latest/system/i386/tdx.html)
+- [KVM TDX Patches](https://lore.kernel.org/kvm/)
 - [dstack GitHub Repository](https://github.com/Dstack-TEE/dstack)
+- [dstack VMM Design](https://github.com/Dstack-TEE/dstack/blob/master/vmm/DESIGN.md)
 - [TDX Quote Verification Library](https://github.com/intel/SGXDataCenterAttestationPrimitives)
 
 <div className="mt-8 p-4 bg-green-50 rounded-lg border border-green-200">
@@ -150,20 +167,3 @@ Memory encryption introduces approximately 5% performance overhead while providi
     <strong>Next Component:</strong> Explore how the VMM integrates with <a href="/docs/security-research/kms-security" className="underline">KMS for secure key management</a> and <a href="/docs/security-research/attestation-architecture" className="underline">attestation verification</a>.
   </p>
 </div>
-
-## Notes
-
-This security analysis is based on direct examination of the dstack VMM codebase and represents the current implementation as of the analyzed commit. The security model relies heavily on Intel TDX hardware capabilities and assumes proper configuration of the underlying platform. Regular security audits and updates are essential to maintain the security posture as new vulnerabilities are discovered and mitigated. The measurement-based trust model provides strong cryptographic assurance but requires careful validation of expected measurement values during deployment.
-
-
-## References
-
-- [QEMU TDX Support](https://qemu.readthedocs.io/en/latest/system/i386/tdx.html)
-- [KVM TDX Patches](https://lore.kernel.org/kvm/)
-- [dstack VMM Design](https://github.com/Dstack-TEE/dstack/blob/master/vmm/DESIGN.md)
-
-<div className="mt-8 p-4 bg-green-50 rounded-lg border border-green-200">
-  <p className="text-sm text-green-800">
-    <strong>Next Component:</strong> Explore how the VMM integrates with <a href="/docs/security-research/kms-security" className="underline">KMS for secure key management</a>.
-  </p>
-</div> 
