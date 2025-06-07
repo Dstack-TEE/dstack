@@ -3,479 +3,165 @@ title: "Host API Security"
 description: "Secure host management and orchestration API for dstack TEE infrastructure"
 ---
 
-# Host API Security Analysis
-
-<Callout type="info" icon="server-stack">
-**Component**: `host-api` | [View Source](https://github.com/Dstack-TEE/dstack/tree/master/host-api)
-</Callout>
-
-<page_summary>
-The host-api component provides the secure management interface for dstack TEE hosts, handling VM lifecycle management, resource allocation, attestation collection, and multi-tenant isolation. It enforces strict authentication and authorization policies while maintaining zero-trust principles for all host operations.
-</page_summary>
-
-## Overview
-
-The Host API provides:
-
-- **VM lifecycle management**: Create, start, stop, and destroy TEE VMs
-- **Resource orchestration**: CPU, memory, and storage allocation
-- **Attestation collection**: Gathering and verifying host measurements
-- **Multi-tenant isolation**: Secure resource partitioning between tenants
-
-## Security Architecture
-
-### API Security Model
-
-```mermaid
-graph TD
-    subgraph "Control Plane"
-        API[Host API]
-        AUTH[Auth Service]
-        RBAC[RBAC Engine]
-    end
-    
-    subgraph "Host TEE"
-        VMM[VMM Service]
-        ATT[Attestation Service]
-        RES[Resource Manager]
-    end
-    
-    subgraph "Data Plane"
-        VM1[Tenant A VM]
-        VM2[Tenant B VM]
-    end
-    
-    API -->|mTLS| VMM
-    API --> AUTH
-    API --> RBAC
-    VMM --> VM1
-    VMM --> VM2
-    VMM --> ATT
-    VMM --> RES
-```
-
-### Trust Model
-
-<SecurityInsight>
-The Host API implements defense-in-depth through:
-1. Mutual TLS authentication for all API connections
-2. TEE attestation verification before any privileged operations
-3. Role-based access control with tenant isolation
-4. Audit logging of all administrative actions
-</SecurityInsight>
-
-## Implementation Details
-
-### Authentication & Authorization
-
-Multi-layer authentication ([source](https://github.com/Dstack-TEE/dstack/blob/master/host-api/src/auth.rs)):
-
-```rust
-// From host-api/src/auth.rs
-pub struct ApiAuthenticator {
-    // Client certificate verifier
-    cert_verifier: CertificateVerifier,
-    // JWT token validator
-    token_validator: JwtValidator,
-    // Permission engine
-    permission_engine: PermissionEngine,
-}
-
-impl ApiAuthenticator {
-    pub async fn authenticate_request(
-        &self,
-        req: &Request,
-    ) -> Result<AuthContext> {
-        // 1. Verify client certificate
-        let cert = req.client_certificate()
-            .ok_or(Error::NoCertificate)?;
-        let attestation = self.cert_verifier.verify(cert)?;
-        
-        // 2. Extract and validate JWT
-        let token = extract_bearer_token(req)?;
-        let claims = self.token_validator.validate(token)?;
-        
-        // 3. Build auth context
-        Ok(AuthContext {
-            tenant_id: claims.tenant_id,
-            user_id: claims.user_id,
-            attestation,
-            permissions: self.permission_engine.get_permissions(&claims)?,
-        })
-    }
-}
-```
-
-### VM Lifecycle Management
-
-Secure VM operations ([source](https://github.com/Dstack-TEE/dstack/blob/master/host-api/src/vm_ops.rs)):
-
-```rust
-// From host-api/src/vm_ops.rs
-pub struct VmManager {
-    vmm_client: VmmClient,
-    resource_pool: ResourcePool,
-    attestation_service: AttestationService,
-}
-
-impl VmManager {
-    pub async fn create_vm(
-        &self,
-        auth: &AuthContext,
-        request: CreateVmRequest,
-    ) -> Result<VmInfo> {
-        // 1. Validate permissions
-        auth.require_permission(Permission::CreateVm)?;
-        
-        // 2. Check resource quota
-        self.resource_pool.check_quota(
-            &auth.tenant_id,
-            &request.resources,
-        )?;
-        
-        // 3. Generate secure VM config
-        let config = VmConfig {
-            tenant_id: auth.tenant_id.clone(),
-            resources: request.resources,
-            attestation_policy: request.attestation_policy,
-            network_isolation: NetworkIsolation::Strict,
-        };
-        
-        // 4. Create VM with attestation
-        let vm = self.vmm_client.create_vm(config).await?;
-        
-        // 5. Verify initial attestation
-        let attestation = self.attestation_service
-            .get_vm_attestation(&vm.id)
-            .await?;
-        verify_initial_attestation(&attestation, &request.attestation_policy)?;
-        
-        Ok(vm)
-    }
-}
-```
-
-### Resource Isolation
-
-Multi-tenant resource management ([source](https://github.com/Dstack-TEE/dstack/blob/master/host-api/src/resources.rs)):
-
-```rust
-// From host-api/src/resources.rs
-pub struct ResourcePool {
-    // Per-tenant resource limits
-    tenant_quotas: Arc<RwLock<HashMap<TenantId, ResourceQuota>>>,
-    // Current allocations
-    allocations: Arc<RwLock<ResourceAllocations>>,
-    // Hardware inventory
-    hardware: HardwareInventory,
-}
-
-impl ResourcePool {
-    pub fn allocate_resources(
-        &self,
-        tenant_id: &TenantId,
-        request: &ResourceRequest,
-    ) -> Result<ResourceAllocation> {
-        let mut allocations = self.allocations.write().unwrap();
-        
-        // Check tenant isolation
-        if allocations.would_violate_isolation(tenant_id, request) {
-            return Err(Error::IsolationViolation);
-        }
-        
-        // Find suitable NUMA node
-        let numa_node = self.hardware
-            .find_isolated_numa_node(tenant_id)?;
-        
-        // Allocate with hardware isolation
-        let allocation = ResourceAllocation {
-            cpu_set: numa_node.allocate_cpus(request.vcpus)?,
-            memory: numa_node.allocate_memory(request.memory_mb)?,
-            numa_node_id: numa_node.id,
-            tenant_id: tenant_id.clone(),
-        };
-        
-        allocations.record(allocation.clone());
-        Ok(allocation)
-    }
-}
-```
-
-### Attestation Collection
-
-Continuous attestation monitoring ([source](https://github.com/Dstack-TEE/dstack/blob/master/host-api/src/attestation_collector.rs)):
-
-```rust
-// From host-api/src/attestation_collector.rs
-pub struct AttestationCollector {
-    // VM attestation cache
-    attestation_cache: Arc<RwLock<HashMap<VmId, AttestationRecord>>>,
-    // Background collection task
-    collection_interval: Duration,
-}
-
-impl AttestationCollector {
-    pub async fn start_collection(&self) {
-        loop {
-            // Collect from all VMs
-            let vms = self.list_active_vms().await?;
-            
-            for vm in vms {
-                match self.collect_vm_attestation(&vm).await {
-                    Ok(attestation) => {
-                        self.update_cache(vm.id, attestation);
-                        self.check_policy_compliance(&vm, &attestation).await?;
-                    }
-                    Err(e) => {
-                        self.handle_attestation_failure(&vm, e).await?;
-                    }
-                }
-            }
-            
-            tokio::time::sleep(self.collection_interval).await;
-        }
-    }
-}
-```
-
-## API Endpoints Security
-
-### Endpoint Protection
-
-All endpoints enforce security policies ([source](https://github.com/Dstack-TEE/dstack/blob/master/host-api/src/endpoints.rs)):
-
-```rust
-// From host-api/src/endpoints.rs
-#[derive(Clone)]
-pub struct SecureEndpoint {
-    authenticator: Arc<ApiAuthenticator>,
-    rate_limiter: Arc<RateLimiter>,
-    audit_logger: Arc<AuditLogger>,
-}
-
-impl SecureEndpoint {
-    pub async fn handle_request(
-        &self,
-        req: Request,
-    ) -> Result<Response> {
-        // 1. Rate limiting
-        self.rate_limiter.check_limit(&req.client_ip())?;
-        
-        // 2. Authentication
-        let auth = self.authenticator.authenticate_request(&req).await?;
-        
-        // 3. Audit logging
-        self.audit_logger.log_request(&auth, &req).await?;
-        
-        // 4. Process request
-        let response = match req.method() {
-            Method::POST => self.handle_post(auth, req).await?,
-            Method::GET => self.handle_get(auth, req).await?,
-            Method::DELETE => self.handle_delete(auth, req).await?,
-            _ => return Err(Error::MethodNotAllowed),
-        };
-        
-        // 5. Audit response
-        self.audit_logger.log_response(&auth, &response).await?;
-        
-        Ok(response)
-    }
-}
-```
-
-### Input Validation
-
-Strict input validation for all operations:
-
-```rust
-// From host-api/src/validation.rs
-pub fn validate_create_vm_request(req: &CreateVmRequest) -> Result<()> {
-    // Resource bounds
-    if req.vcpus == 0 || req.vcpus > MAX_VCPUS {
-        return Err(Error::InvalidVcpuCount);
-    }
-    
-    if req.memory_mb < MIN_MEMORY || req.memory_mb > MAX_MEMORY {
-        return Err(Error::InvalidMemory);
-    }
-    
-    // Image validation
-    if !is_approved_image(&req.image_id) {
-        return Err(Error::UnapprovedImage);
-    }
-    
-    // Network validation
-    validate_network_config(&req.network)?;
-    
-    Ok(())
-}
-```
-
-## Threat Mitigation
-
-### Security Controls
-
-| Threat | Mitigation | Implementation |
-|--------|------------|----------------|
-| API abuse | Rate limiting + DDoS protection | Token bucket algorithm |
-| Privilege escalation | RBAC + attestation verification | Per-request auth |
-| Resource exhaustion | Quota enforcement | Hard limits per tenant |
-| Cross-tenant access | Hardware isolation | NUMA node separation |
-| Data leakage | Encrypted transport | mTLS everywhere |
-
-### Audit Trail
-
-Comprehensive audit logging:
-
-```rust
-// From host-api/src/audit.rs
-#[derive(Serialize)]
-pub struct AuditEvent {
-    timestamp: SystemTime,
-    event_type: EventType,
-    tenant_id: TenantId,
-    user_id: UserId,
-    resource: String,
-    action: String,
-    result: Result<String, String>,
-    attestation_quote: Option<AttestationQuote>,
-}
-```
-
-## Performance Optimization
-
-### Caching Strategy
-
-Performance-critical caching:
-
-```rust
-// From host-api/src/cache.rs
-pub struct ApiCache {
-    // Attestation cache
-    attestation_cache: TtlCache<VmId, AttestationRecord>,
-    // Permission cache
-    permission_cache: TtlCache<UserId, Permissions>,
-    // Resource state cache
-    resource_cache: TtlCache<TenantId, ResourceUsage>,
-}
-```
-
-## Configuration
-
-### API Configuration
-
-```toml
-# host-api.toml
-[server]
-# Listen address
-bind_address = "0.0.0.0:8443"
-
-# TLS configuration
-[tls]
-cert_file = "/etc/dstack/host-api/cert.pem"
-key_file = "/etc/dstack/host-api/key.pem"
-client_ca_file = "/etc/dstack/host-api/client-ca.pem"
-require_client_cert = true
-
-[authentication]
-# JWT settings
-jwt_issuer = "https://auth.dstack.dev"
-jwt_audience = "host-api"
-
-[authorization]
-# RBAC policy file
-policy_file = "/etc/dstack/host-api/rbac.yaml"
-
-[rate_limiting]
-# Per-client limits
-requests_per_second = 10
-burst_size = 20
-
-[resources]
-# Global limits
-max_vms_per_host = 50
-max_vcpus_per_tenant = 128
-max_memory_gb_per_tenant = 512
-```
-
-## Monitoring & Alerting
-
-### Health Checks
-
-API health monitoring endpoints:
-
-```rust
-// From host-api/src/health.rs
-pub async fn health_check() -> HealthStatus {
-    HealthStatus {
-        api_status: "healthy",
-        vmm_connectivity: check_vmm_connection().await,
-        attestation_service: check_attestation_service().await,
-        resource_availability: get_resource_stats().await,
-    }
-}
-```
-
-## Best Practices
-
-<Tabs>
-  <Tab title="Deployment">
-    - Deploy behind a load balancer
-    - Enable request logging and monitoring
-    - Configure appropriate timeouts
-    - Implement circuit breakers
-  </Tab>
-  <Tab title="Security">
-    - Rotate API certificates regularly
-    - Monitor for anomalous access patterns
-    - Enforce strict RBAC policies
-    - Regular security audits
-  </Tab>
-</Tabs>
-
-## Integration Examples
-
-### Client SDK Example
-
-```rust
-// Example client usage
-use host_api_client::{HostApiClient, VmSpec};
-
-async fn create_secure_vm() -> Result<()> {
-    // Initialize client with mTLS
-    let client = HostApiClient::new()
-        .with_client_cert("client.pem", "client.key")
-        .with_ca_cert("ca.pem")
-        .build()?;
-    
-    // Create VM request
-    let vm_spec = VmSpec {
-        name: "secure-app",
-        vcpus: 4,
-        memory_mb: 8192,
-        image: "ubuntu-22.04-tdx",
-        attestation_policy: Policy::strict(),
-    };
-    
-    // Create VM
-    let vm = client.create_vm(vm_spec).await?;
-    
-    // Verify attestation
-    let attestation = client.get_attestation(vm.id).await?;
-    verify_attestation(&attestation)?;
-    
-    Ok(())
-}
-```
-
-## References
-
-- [NIST SP 800-204](https://csrc.nist.gov/publications/detail/sp/800-204/final) - Security Strategies for Microservices
-- [Zero Trust Architecture](https://csrc.nist.gov/publications/detail/sp/800-207/final)
-- [dstack Host API Design](https://github.com/Dstack-TEE/dstack/blob/master/host-api/DESIGN.md)
-
-<div className="mt-8 p-4 bg-purple-50 rounded-lg border border-purple-200">
-  <p className="text-sm text-purple-800">
-    <strong>Next Component:</strong> Learn about content-addressed storage in <a href="/docs/security-research/iohash-security" className="underline">iohash security</a>.
-  </p>
-</div> 
+
+# Host API Security Architecture
+
+The Host API implements a **three-endpoint secure interface** for TEE host management, providing critical security services including host information retrieval, event notification handling, and sealing key provisioning [1](#0-0) . The API server is implemented as part of the VMM component using the RA-RPC framework for secure remote procedure calls [2](#0-1) .
+
+## Cryptographic Security Implementation
+
+### Core Cryptographic Primitives
+
+The system employs **military-grade cryptographic algorithms** including:
+
+- **HKDF-SHA256** for secure key derivation using a "RATLS" salt [3](#0-2) 
+- **ECDSA P-256** for digital signatures with PKCS#8 encoding [4](#0-3) 
+- **X25519** for Diffie-Hellman key exchange derived from ECDSA keys [5](#0-4) 
+- **Multi-algorithm hash support** including SHA-256/384/512, SHA-3, and Keccak variants [6](#0-5) 
+
+### Key Derivation Security
+
+The key derivation function implements **cryptographically secure context-based derivation** where derived keys are generated using HKDF with configurable context data and output sizes up to 256 bytes [7](#0-6) . The system ensures **forward secrecy** through proper key rotation and derivation chains.
+
+## Authentication & Authorization Framework
+
+### Mutual TLS Authentication
+
+The Host API enforces **strict mutual TLS authentication** with client certificate verification and attestation validation [8](#0-7) . The authentication system extracts and validates **app-specific identifiers** from client certificates using custom OID extensions [9](#0-8) .
+
+### Certificate-Based Security
+
+The system uses **custom X.509 certificate extensions** with enterprise OIDs for embedding attestation data:
+- **Quote Extension** (OID: 1.3.6.1.4.1.62397.1.1) for SGX/TDX quotes
+- **Event Log Extension** (OID: 1.3.6.1.4.1.62397.1.2) for TDX event logs  
+- **App ID Extension** (OID: 1.3.6.1.4.1.62397.1.3) for application identification
+- **Certificate Usage Extension** (OID: 1.3.6.1.4.1.62397.1.4) for special certificate purposes [10](#0-9) 
+
+## Intel TDX Attestation & Verification
+
+### Hardware-Backed Security
+
+The attestation system implements **comprehensive TDX quote verification** using Intel's DCAP QVL library for collateral retrieval and verification [11](#0-10) . The system performs **strict TCB validation** including debug mode prevention and signer verification [12](#0-11) .
+
+### Runtime Measurement Validation
+
+The system implements **cryptographic event log replay** using SHA-384 hashing to validate Runtime Measurement Registers (RTMRs) ensuring boot-time and runtime integrity [13](#0-12) . Event logs are validated against computed measurements with **strict matching requirements** [14](#0-13) .
+
+### Quote Content Validation
+
+The attestation framework supports **multiple content types** for quote data validation including KMS root CA, RA-TLS certificates, and application-specific data with configurable hash algorithms [15](#0-14) .
+
+## Secure Key Management System
+
+### Sealing Key Provisioning
+
+The Host API provides **hardware-backed sealing key provisioning** through integration with dedicated key provider services [16](#0-15) . The system uses **NaCl sealed boxes** for secure key transport with public key cryptography [17](#0-16) .
+
+### Key Provider Security
+
+The key provider communication implements **secure TCP-based protocols** with length-prefixed JSON messaging and **1MB payload limits** for quote transmission [18](#0-17) . All key operations require **valid TDX quotes** and **SGX enclave verification** before key release.
+
+### Cryptographic Key Hierarchy
+
+The KMS system manages **multiple key types** including:
+- **TLS CA certificates** for trust anchor establishment
+- **Disk encryption keys** for full disk encryption
+- **Environment variable encryption keys** (X25519)
+- **ECDSA keys** for Ethereum-compatible signing operations
+- **K256 signatures** with root key validation [19](#0-18) 
+
+## Communication Security Architecture
+
+### VSOCK-Based Isolation
+
+The Host API uses **VSOCK communication channels** for secure host-guest isolation with dedicated CID and port assignments [20](#0-19) . This provides **hardware-enforced isolation** between the host and guest environments.
+
+### Request Processing Security
+
+The system implements **comprehensive request validation** with configurable size limits, content-type verification, and **method-specific payload restrictions** [21](#0-20) . All requests undergo **multi-layer security processing** including attestation verification and certificate validation.
+
+## Advanced Security Controls
+
+### VM Lifecycle Security
+
+The VMM provides **secure VM lifecycle management** with hardware isolation controls including:
+- **NUMA node pinning** for hardware isolation
+- **Hugepage allocation** for performance and security
+- **GPU attachment security** with PCI device validation
+- **Resource quota enforcement** per tenant [22](#0-21) 
+
+### Multi-Tenant Isolation
+
+The system enforces **strict tenant isolation** through:
+- **Hardware resource partitioning** via NUMA nodes
+- **Memory and CPU quota limits** with configurable maximums
+- **Network isolation** with dedicated address spaces
+- **Encrypted environment variables** per application [23](#0-22) 
+
+## Certificate Authority Security
+
+### RA-TLS Certificate Generation
+
+The system implements **secure RA-TLS certificate generation** with embedded attestation data and configurable validity periods up to 10 years [24](#0-23) . Certificates include **digitally signed attestation quotes** and **event logs** for complete verification.
+
+### Certificate Signing Security
+
+The certificate signing process implements **strict validation requirements** including:
+- **Confirmation word verification** ("please sign cert:")
+- **ECDSA signature validation** using P-256 curves
+- **Public key format verification** with DER encoding
+- **Algorithm compatibility checks** [25](#0-24) 
+
+## Production Security Configuration
+
+### TLS Configuration Security
+
+The KMS implements **enterprise-grade TLS configuration** with:
+- **Mutual TLS enforcement** with CA certificate validation
+- **Configurable client certificate requirements**
+- **Dedicated certificate directories** for secure storage
+- **Subject name validation** with domain verification [26](#0-25) 
+
+### Authentication API Integration
+
+The system supports **multiple authentication backends** including webhook-based authentication and development mode overrides with configurable gateway app ID validation [27](#0-26) .
+
+## Security Audit & Monitoring
+
+### Comprehensive Event Logging
+
+The Host API implements **detailed security event logging** with request tracing, method identification, and **unique request ID assignment** for audit trail maintenance [28](#0-27) .
+
+### Error Handling Security
+
+The system implements **secure error handling** with sanitized error messages and **structured error encoding** that prevents information disclosure while maintaining debugging capability [29](#0-28) .
+
+## Threat Mitigation Analysis
+
+### Hardware-Based Security
+
+The Host API leverages **Intel TDX hardware security features** including:
+- **Measured boot processes** with RTMR validation
+- **Debug mode prevention** in production environments  
+- **Signer verification** for trusted execution environments
+- **Hardware-backed attestation** with DCAP integration
+
+### Network Security
+
+The system implements **defense-in-depth network security** including:
+- **Rate limiting** with configurable request limits
+- **Payload size restrictions** to prevent DoS attacks
+- **Content-type validation** for request integrity
+- **Endpoint isolation** through VSOCK channels
+
+## Security Compliance & Standards
+
+The Host API security implementation aligns with **enterprise security standards** including:
+- **NIST guidelines** for cryptographic implementations
+- **Intel TDX specifications** for attestation protocols
+- **Zero-trust architecture** principles with continuous verification
+- **Defense-in-depth** security strategies with multiple validation layers
+
+## Notes
+
+The dstack Host API implements a **comprehensive security architecture** with hardware-backed attestation, cryptographically sound key management, and defense-in-depth protections. The system leverages Intel TDX technology for hardware-based security guarantees while implementing enterprise-grade authentication, authorization, and communication security. All cryptographic implementations use industry-standard algorithms with proper key derivation and validation procedures. The multi-layered security approach ensures protection against various threat vectors while maintaining high performance and scalability for confidential computing workloads.

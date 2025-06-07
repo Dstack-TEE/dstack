@@ -10,391 +10,118 @@ description: "Certificate verification and client-side attestation integration i
 </Callout>
 
 <page_summary>
-The cert-client component implements client-side certificate verification and attestation binding for dstack. It validates certificate chains, extracts TEE attestation from certificate extensions, and ensures all TLS connections are authenticated against hardware measurements.
+The cert-client component implements client-side certificate request and signing operations with hardware-backed attestation for dstack. It validates TDX quotes, enforces TCB security policies, and ensures all certificates are cryptographically bound to Trusted Execution Environment measurements.
 </page_summary>
 
 ## Overview
 
-The cert-client provides:
-
-- **Certificate chain validation**: Full X.509 path verification
-- **Attestation extraction**: Parses TEE quotes from certificate extensions
-- **Policy enforcement**: Configurable trust requirements
-- **Revocation checking**: OCSP and CRL support
+The cert-client provides secure certificate operations through hardware attestation integration. The core functionality centers around the `CertRequestClient` enum which supports both local CA operations and remote KMS-based signing with full attestation verification [1](#0-0) .
 
 ## Security Architecture
 
-### Trust Flow
+### Trust Model
 
-```mermaid
-graph LR
-    subgraph "Client"
-        CC[Cert Client]
-        VP[Verification Policy]
-    end
-    
-    subgraph "Remote TEE"
-        GW[Gateway]
-        AT[Attestation]
-    end
-    
-    subgraph "External"
-        CA[CA Infrastructure]
-        CT[CT Logs]
-    end
-    
-    GW -->|TLS Cert| CC
-    CC -->|Extract| AT
-    CC -->|Verify| CA
-    CC -->|Check| CT
-    VP -->|Enforce| CC
-```
+The security architecture implements a dual-mode certificate authority system with hardware-backed attestation. Local mode uses direct CA certificate signing [2](#0-1) , while KMS mode establishes remote attestation through RA-RPC clients with mutual TLS authentication [3](#0-2) .
 
-### Key Security Properties
+### Cryptographic Foundation
 
-<SecurityInsight>
-The cert-client enforces:
-1. Complete certificate chain validation to trusted roots
-2. TEE attestation verification from certificate extensions
-3. Certificate transparency log inclusion checks
-4. Configurable policy constraints on measurements
-</SecurityInsight>
+The system employs ECDSA P-256 SHA-256 for all certificate signing operations, ensuring industry-standard elliptic curve cryptography. The certificate signing request process incorporates PKCS#8 DER encoding and ASN.1 signature verification [4](#0-3) . All signatures are validated against the embedded public key using ring cryptography's ECDSA implementation [5](#0-4) .
 
-## Implementation Details
+### Hardware Attestation Integration
 
-### Certificate Verification
+The core security mechanism integrates TDX (Trust Domain Extensions) attestation directly into X.509 certificates. The system generates TDX quotes containing hardware measurements and embeds them as custom certificate extensions using enterprise OIDs [6](#0-5) . The attestation process binds certificate public keys to hardware report data through SHA-512 hashing [7](#0-6) .
 
-Core verification logic ([source](https://github.com/Dstack-TEE/dstack/blob/master/cert-client/src/verify.rs)):
+### Quote Content Types and Report Data
 
-```rust
-// From cert-client/src/verify.rs
-pub struct CertificateVerifier {
-    // Trusted root certificates
-    trust_store: TrustStore,
-    // Attestation policy
-    attestation_policy: AttestationPolicy,
-    // CT log verifiers
-    ct_verifiers: Vec<CtLogVerifier>,
-}
+The attestation system defines specific content types for quote generation, including KMS root CA verification, RA-TLS certificates, and application-specific data [8](#0-7) . Report data generation uses configurable hash algorithms including SHA-256, SHA-384, SHA-512, and SHA-3 variants, with SHA-512 as the default [9](#0-8) .
 
-impl CertificateVerifier {
-    pub async fn verify_certificate_chain(
-        &self,
-        chain: &[Certificate],
-        hostname: &str,
-    ) -> Result<VerificationResult> {
-        // 1. Basic X.509 path validation
-        self.verify_chain_signatures(chain)?;
-        
-        // 2. Hostname verification
-        self.verify_hostname(chain[0], hostname)?;
-        
-        // 3. Extract and verify attestation
-        let attestation = self.extract_attestation(&chain[0])?;
-        self.verify_attestation(&attestation)?;
-        
-        // 4. Certificate transparency checks
-        self.verify_ct_inclusion(&chain[0]).await?;
-        
-        Ok(VerificationResult {
-            attestation,
-            ct_timestamps: self.get_scts(&chain[0]),
-        })
-    }
-}
-```
+### TCB Validation and Security Policies
 
-### Attestation Extraction
+The system implements comprehensive Trusted Computing Base validation to prevent execution in insecure environments. For TDX environments, debug mode execution is explicitly prohibited [10](#0-9) . The validation extends to SGX enclaves, enforcing production-only execution by checking debug attributes [11](#0-10) .
 
-TEE attestation from X.509 extensions ([source](https://github.com/Dstack-TEE/dstack/blob/master/cert-client/src/attestation.rs)):
+### Runtime Measurement Verification
 
-```rust
-// From cert-client/src/attestation.rs
-const ATTESTATION_OID: &str = "1.3.6.1.4.1.54392.5.1984.1";
+Event log replay functionality ensures runtime integrity through RTMR (Runtime Measurement Register) verification. The system validates event log chains using SHA-384 hashing and ensures measurements match hardware-reported values [12](#0-11) . This prevents runtime tampering and ensures execution environment integrity.
 
-pub fn extract_attestation_quote(cert: &Certificate) -> Result<AttestationQuote> {
-    // Find attestation extension
-    let ext = cert.extensions()
-        .find(|e| e.oid == ATTESTATION_OID)
-        .ok_or(Error::NoAttestationExtension)?;
-    
-    // Decode quote from extension value
-    let quote_bytes = ext.value()?;
-    let quote = AttestationQuote::from_bytes(&quote_bytes)?;
-    
-    // Verify quote signature
-    quote.verify_signature()?;
-    
-    Ok(quote)
-}
-```
+### Certificate Extension Security
 
-### Policy Enforcement
+Custom X.509 extensions embed attestation data using DER encoding. The quote extension stores raw TDX quotes [13](#0-12) , while event logs are JSON-serialized and embedded for measurement verification [14](#0-13) . Application identity is cryptographically bound through app-id extensions [15](#0-14) .
 
-Configurable trust policies ([source](https://github.com/Dstack-TEE/dstack/blob/master/cert-client/src/policy.rs)):
+### Remote Attestation Client Security
 
-```rust
-// From cert-client/src/policy.rs
-#[derive(Deserialize, Clone)]
-pub struct AttestationPolicy {
-    // Required measurements
-    pub allowed_measurements: Vec<Measurement>,
-    // Minimum TCB versions
-    pub min_tcb_version: TcbVersion,
-    // Required features
-    pub required_features: Vec<TdxFeature>,
-    // Max quote age
-    pub max_quote_age_seconds: u64,
-}
+The RA-RPC client implements comprehensive TLS security with attestation verification. Client certificates are validated through hardware quote verification, ensuring remote endpoints execute in trusted environments [16](#0-15) . The system extracts attestation data from peer certificates and validates against PCCS infrastructure [17](#0-16) .
 
-impl AttestationPolicy {
-    pub fn evaluate(&self, quote: &AttestationQuote) -> PolicyResult {
-        // Check measurements
-        if !self.allowed_measurements.contains(&quote.measurements) {
-            return PolicyResult::Deny("Measurement not allowed");
-        }
-        
-        // Check TCB version
-        if quote.tcb_version < self.min_tcb_version {
-            return PolicyResult::Deny("TCB version too old");
-        }
-        
-        // Check quote freshness
-        let age = SystemTime::now()
-            .duration_since(quote.timestamp)?
-            .as_secs();
-        if age > self.max_quote_age_seconds {
-            return PolicyResult::Deny("Quote too old");
-        }
-        
-        PolicyResult::Allow
-    }
-}
-```
+### Key Provider Integration
 
-## Certificate Transparency Integration
+The certificate request process supports multiple key provider modes with distinct security models. Local key providers use direct CA operations, while KMS providers establish temporary certificate authority relationships through RA-TLS certificate generation [18](#0-17) . This enables secure key escrow while maintaining hardware attestation requirements.
 
-### SCT Verification
+### Certificate Signing Request Security
 
-Signed Certificate Timestamp validation ([source](https://github.com/Dstack-TEE/dstack/blob/master/cert-client/src/ct.rs)):
+The CSR process implements mandatory confirmation strings to prevent unauthorized signing operations [19](#0-18) . All requests include hardware quotes and event logs when attestation is enabled, ensuring every certificate is cryptographically bound to execution environment measurements [20](#0-19) .
 
-```rust
-// From cert-client/src/ct.rs
-pub struct CtVerifier {
-    log_list: LogList,
-}
+### Attestation Verification Pipeline
 
-impl CtVerifier {
-    pub fn verify_scts(
-        &self,
-        cert: &Certificate,
-        scts: &[SignedCertificateTimestamp],
-    ) -> Result<()> {
-        // Require minimum number of SCTs
-        if scts.len() < 2 {
-            return Err(Error::InsufficientScts);
-        }
-        
-        // Verify each SCT
-        for sct in scts {
-            let log = self.log_list.find_log(&sct.log_id)?;
-            log.verify_sct(cert, sct)?;
-        }
-        
-        Ok(())
-    }
-}
-```
+The verification pipeline implements multi-stage validation including quote parsing, collateral verification through PCCS, and RTMR consistency checking [21](#0-20) . Report data validation ensures certificate public keys match attested measurements, preventing key substitution attacks.
 
-## Revocation Checking
+### Application Information Extraction
 
-### OCSP Support
+The system extracts comprehensive application metadata from event logs, including application identifiers, compose file hashes, and instance identifiers [22](#0-21) . This enables fine-grained policy enforcement based on application identity and deployment configuration.
 
-Online Certificate Status Protocol ([source](https://github.com/Dstack-TEE/dstack/blob/master/cert-client/src/ocsp.rs)):
+## Security Properties
 
-```rust
-// From cert-client/src/ocsp.rs
-pub async fn check_ocsp_status(
-    cert: &Certificate,
-    issuer: &Certificate,
-) -> Result<OcspStatus> {
-    // Extract OCSP responder URL
-    let ocsp_url = cert.ocsp_responders()
-        .first()
-        .ok_or(Error::NoOcspResponder)?;
-    
-    // Build OCSP request
-    let request = OcspRequestBuilder::new()
-        .certificate(cert)
-        .issuer(issuer)
-        .build()?;
-    
-    // Send request and verify response
-    let response = send_ocsp_request(ocsp_url, request).await?;
-    verify_ocsp_response(&response, cert, issuer)?;
-    
-    Ok(response.cert_status)
-}
-```
+### Cryptographic Guarantees
 
-## Performance Optimization
+- **Certificate Integrity**: ECDSA P-256 SHA-256 ensures non-repudiation and tampering detection
+- **Hardware Binding**: TDX quotes cryptographically bind certificates to execution environments
+- **Measurement Validation**: Event log replay ensures runtime integrity verification
+- **Key Authentication**: Public key embedding in report data prevents key substitution
 
-### Connection Caching
+### Threat Model Coverage
 
-Reuse verified connections ([source](https://github.com/Dstack-TEE/dstack/blob/master/cert-client/src/cache.rs)):
+| Attack Vector | Protection Mechanism | Implementation Reference |
+|---------------|---------------------|-------------------------|
+| Certificate Forgery | Hardware-backed quote generation | [23](#0-22)  |
+| Debug Mode Execution | TCB validation with debug prohibition | [24](#0-23)  |
+| Runtime Tampering | RTMR verification and event log replay | [25](#0-24)  |
+| Key Substitution | Report data binding to public keys | [26](#0-25)  |
+| Unauthorized Signing | Confirmation string validation | [27](#0-26)  |
 
-```rust
-// From cert-client/src/cache.rs
-pub struct ConnectionCache {
-    // Verified connections by endpoint
-    connections: Arc<RwLock<HashMap<String, VerifiedConnection>>>,
-    // Maximum cache duration
-    max_age: Duration,
-}
+### Compliance and Standards
 
-impl ConnectionCache {
-    pub fn get_verified_connection(
-        &self,
-        endpoint: &str,
-    ) -> Option<VerifiedConnection> {
-        let connections = self.connections.read().unwrap();
-        
-        connections.get(endpoint)
-            .filter(|conn| !conn.is_expired())
-            .cloned()
-    }
-}
-```
+The implementation adheres to X.509 certificate standards while extending functionality through custom OIDs registered under enterprise namespace 1.3.6.1.4.1.62397 [28](#0-27) . The system maintains backward compatibility through conditional feature inclusion and graceful degradation for non-TEE environments.
 
-## Error Handling
+## Configuration Security
 
-### Security-Critical Failures
+### Policy Enforcement Points
 
-```rust
-// From cert-client/src/errors.rs
-#[derive(Debug, Error)]
-pub enum VerificationError {
-    #[error("Invalid certificate chain")]
-    InvalidChain,
-    
-    #[error("Attestation verification failed: {0}")]
-    AttestationFailed(String),
-    
-    #[error("Policy violation: {0}")]
-    PolicyViolation(String),
-    
-    #[error("Certificate revoked")]
-    CertificateRevoked,
-    
-    #[error("CT verification failed")]
-    CtVerificationFailed,
-}
-```
+Certificate configuration supports comprehensive usage restrictions including server authentication, client authentication, and extended key usage purposes [29](#0-28) . Subject alternative names and organizational constraints provide additional policy enforcement mechanisms.
 
-## Configuration
+### Trust Store Management
 
-### Client Configuration Options
+The system supports flexible trust store configuration with built-in root certificate support and custom CA certificate injection [30](#0-29) . This enables air-gapped deployments while maintaining attestation security requirements.
 
-```toml
-# cert-client.toml
-[verification]
-# Require attestation in all certificates
-require_attestation = true
+## Security Recommendations
 
-# Maximum certificate chain length
-max_chain_length = 3
+### Deployment Considerations
 
-# OCSP timeout
-ocsp_timeout_seconds = 5
+- **Environment Validation**: Always verify TCB status before certificate issuance
+- **Quote Freshness**: Implement time-based validation for quote staleness
+- **Policy Enforcement**: Configure restrictive measurement policies for production environments
+- **Key Rotation**: Regularly rotate CA certificates and validate attestation chains
 
-[policy]
-# Allowed enclave measurements
-allowed_measurements = [
-    "0x1234567890abcdef...",
-    "0xfedcba0987654321..."
-]
+### Monitoring and Auditing
 
-# Minimum TCB version
-min_tcb_version = "1.5.0"
+- **Event Log Analysis**: Monitor for anomalous measurement sequences
+- **Certificate Transparency**: Implement SCT monitoring for issued certificates
+- **Attestation Failures**: Alert on quote verification failures or policy violations
+- **Performance Metrics**: Track attestation verification latency and success rates
 
-# Maximum quote age
-max_quote_age_seconds = 300
+## Future Security Enhancements
 
-[ct]
-# Minimum SCTs required
-min_scts = 2
+### Enhanced Verification
 
-# Trusted CT logs
-trusted_logs = [
-    "Google 'Argon2023'",
-    "Cloudflare 'Nimbus2023'"
-]
-```
+The current implementation provides comprehensive security through hardware attestation, but future enhancements could include Certificate Transparency log integration, OCSP responder support for revocation checking, and enhanced policy engines for complex measurement validation scenarios.
 
-## Security Best Practices
+## Notes
 
-<Tabs>
-  <Tab title="Implementation">
-    - Always verify full certificate chains
-    - Check revocation status for critical connections
-    - Implement certificate pinning for known endpoints
-    - Cache verification results appropriately
-  </Tab>
-  <Tab title="Configuration">
-    - Use strict attestation policies
-    - Require multiple CT SCTs
-    - Set appropriate quote age limits
-    - Monitor policy violations
-  </Tab>
-</Tabs>
-
-## Integration Examples
-
-### Basic Usage
-
-```rust
-// Example usage
-use cert_client::{CertificateVerifier, AttestationPolicy};
-
-async fn verify_tls_connection(
-    stream: TlsStream,
-    expected_hostname: &str,
-) -> Result<AttestationQuote> {
-    // Create verifier with policy
-    let policy = AttestationPolicy::from_file("policy.toml")?;
-    let verifier = CertificateVerifier::new(policy);
-    
-    // Get peer certificates
-    let certs = stream.peer_certificates()?;
-    
-    // Verify chain and extract attestation
-    let result = verifier.verify_certificate_chain(
-        &certs,
-        expected_hostname,
-    ).await?;
-    
-    Ok(result.attestation)
-}
-```
-
-## Threat Model
-
-| Attack Vector | Protection | Notes |
-|---------------|------------|-------|
-| Certificate substitution | Chain validation | Requires CA compromise |
-| Attestation forgery | Quote signature verification | Hardware-backed |
-| Downgrade attacks | Policy enforcement | No fallback allowed |
-| Privacy leaks | No external queries by default | OCSP optional |
-
-## References
-
-- [X.509 Certificate Extensions](https://datatracker.ietf.org/doc/html/rfc5280)
-- [Certificate Transparency](https://datatracker.ietf.org/doc/html/rfc6962)
-- [OCSP Protocol](https://datatracker.ietf.org/doc/html/rfc6960)
-- [dstack Cert Client Design](https://github.com/Dstack-TEE/dstack/blob/master/cert-client/DESIGN.md)
-
-<div className="mt-8 p-4 bg-indigo-50 rounded-lg border border-indigo-200">
-  <p className="text-sm text-indigo-800">
-    <strong>Next Component:</strong> Learn about certificate transparency monitoring in <a href="/docs/security-research/ct-monitor-security" className="underline">CT monitor security</a>.
-  </p>
-</div> 
+The cert-client security model depends entirely on the underlying TDX hardware security guarantees and PCCS infrastructure reliability. The system assumes trusted PCCS endpoints and secure communication channels for collateral retrieval. All cryptographic operations rely on hardware random number generation and secure key storage within the TEE environment. The attestation verification pipeline requires network connectivity for quote validation, which may impact air-gapped deployment scenarios.

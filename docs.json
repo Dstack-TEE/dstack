@@ -14,13 +14,23 @@
         "dropdown": "Overview",
         "icon": "book-open",
         "pages": [
-          "docs/index",
-          "docs/introduction",
-          "docs/overview/what-is-dstack",
-          "docs/overview/key-features",
-          "docs/overview/benefits",
-          "docs/overview/glossary",
-          "docs/overview/faq"
+          {
+            "group": "Welcome to DStack",
+            "pages": [
+              "docs/index",
+              "docs/overview/introduction",
+              "docs/overview/what-is-dstack"
+            ]
+          },
+          {
+            "group": "Additional Reading",
+            "pages": [
+              "docs/overview/key-features",
+              "docs/overview/benefits",
+               "docs/overview/faq",
+              "docs/overview/glossary"
+            ]
+          }
         ]
       },
       {
@@ -28,11 +38,11 @@
         "icon": "rocket",
         "pages": [
           "docs/getting-started/start",
-          "docs/getting-started/installation",
           "docs/getting-started/deploying-applications",
-          { 
-            "group": "A) dstack Installation Steps",
+          {
+            "group": "📦 DStack Installation Steps",
             "pages": [
+              "docs/getting-started/install/installation",
               "docs/getting-started/install/step-1-prerequisites",
               "docs/getting-started/install/step-2-update-server",
               "docs/getting-started/install/step-3-install-required-packages",
@@ -44,9 +54,9 @@
           },
           
           {
-            "group": "B) First DStack Deployment",
+            "group": "🚢 First DStack Deployment",
             "pages": [
-              "docs/getting-started/first-deployment",
+              "docs/getting-started/first-deployment-steps/first-deployment",
               "docs/getting-started/first-deployment-steps/fd-1",
               "docs/getting-started/first-deployment-steps/fd-2",
               "docs/getting-started/first-deployment-steps/fd-3",
@@ -62,22 +72,32 @@
         "dropdown": "Core Concepts",
         "icon": "lightbulb",
         "pages": [
-          "docs/concepts/overview",
-          "docs/concepts/basic-components",
           {
-            "group": "Core Components",
+            "group": "Component Overview",
+            "pages": [
+              "docs/concepts/overview",
+              "docs/concepts/basic-components"
+            ]
+          },
+          {
+            "group": "Core Component Implementation",
             "pages": [
               "docs/concepts/core-vmm",
               "docs/concepts/core-gateway",
               "docs/concepts/core-kms",
               "docs/concepts/core-guest-agent",
               "docs/concepts/core-tdxctl",
-              "docs/concepts/core-os", 
-              "docs/concepts/core-glossary"
+              "docs/concepts/core-os"
             ]
           },
-          "docs/concepts/networking",
-          "docs/concepts/architecture"
+          {
+            "group": "DStack Component Architecture",
+            "pages": [
+              "docs/concepts/architecture", 
+              "docs/concepts/networking"
+            ]
+          },
+          "docs/concepts/core-glossary"
         ]
       },
       {
@@ -103,8 +123,12 @@
         "icon": "shield-halved",
         "pages": [
           "docs/security-research/overview",
-          "docs/security-research/security-model",
-
+          {
+            "group": "DStack cryptography",
+            "pages": [
+              "docs/security-research/security-model"
+            ]
+          },
           {
             "group": "core component security",
             "pages": [
@@ -112,18 +136,16 @@
               "docs/security-research/vmm-security",
               "docs/security-research/kms-security",
               "docs/security-research/gateway-security"
-              
             ]
           },
           {
             "group": "Additional Sec Ops",
             "pages": [
               "docs/security-research/extra-sec-ops/host-api-security",
-              "docs/security-research/extra-sec-ops/ct-monitor-security",
+              "docs/security-research/extra-sec-ops/cert-client-security",
               "docs/security-research/extra-sec-ops/certbot-security",
-              "docs/security-research/extra-sec-ops/cert-client-security", 
-              "docs/security-research/extra-sec-ops/iohash-security", 
-              "docs/security-research/extra-sec-ops/tdx-attestation-system"
+              "docs/security-research/extra-sec-ops/ct-monitor-security",
+              "docs/security-research/extra-sec-ops/iohash-security"
             ]
           }
         ]
@@ -132,9 +154,9 @@
         "dropdown": "Community & Support",
         "icon": "users",
         "pages": [
-          "docs/community",
-          "docs/contribution",
-          "docs/troubleshooting"
+          "docs/community-section/community",
+          "docs/community-section/contribution",
+          "docs/community-section/troubleshooting"
         ]
       },
       {

@@ -6,21 +6,21 @@ description: "Certificate Transparency monitoring and anomaly detection for dsta
 # Certificate Transparency Monitor Security Analysis
 
 <Callout type="info" icon="magnifying-glass">
-**Component**: `ct-monitor` | [View Source](https://github.com/Dstack-TEE/dstack/tree/master/ct-monitor)
+**Component**: `ct_monitor` | [View Source](https://github.com/Dstack-TEE/dstack/tree/master/ct_monitor)
 </Callout>
 
 <page_summary>
-The ct-monitor component provides continuous monitoring of Certificate Transparency logs to detect unauthorized certificate issuance for dstack domains. It implements real-time alerting, anomaly detection, and automated response capabilities to protect against certificate misissuance attacks.
+The ct_monitor component provides Certificate Transparency monitoring for dstack domains by querying crt.sh and validating certificates against known public keys from the dstack-gateway. It implements real-time monitoring, public key validation, and automated alerting to protect against certificate misissuance attacks within the TEE security model.
 </page_summary>
 
 ## Overview
 
 The CT monitor provides:
 
-- **Real-time log monitoring**: Watches multiple CT logs for new certificates
-- **Domain pattern matching**: Detects certificates for protected domains
-- **Anomaly detection**: Identifies suspicious issuance patterns
-- **Automated alerting**: Immediate notification of unauthorized certificates
+- **CT log monitoring**: Queries crt.sh database for domain certificates [1](#0-0) 
+- **Public key validation**: Verifies certificates against gateway-managed keys [2](#0-1) 
+- **Domain pattern matching**: Monitors specific domains for unauthorized issuance [3](#0-2) 
+- **Real-time alerting**: Immediate detection of unauthorized certificates [4](#0-3) 
 
 ## Security Architecture
 
@@ -28,468 +28,156 @@ The CT monitor provides:
 
 ```mermaid
 graph TD
-    subgraph "CT Infrastructure"
-        L1[Google CT Log]
-        L2[Cloudflare Log]
-        L3[DigiCert Log]
+    subgraph "External Services"
+        CS[crt.sh Database]
+        CF[Cloudflare DNS]
+        LE[Let's Encrypt CA]
+    end
+    
+    subgraph "dstack Gateway TEE"
+        CB[Certbot]
+        GW[Gateway RPC]
+        PK[Public Key Store]
     end
     
     subgraph "CT Monitor"
         M[Monitor Core]
-        AD[Anomaly Detection]
-        AL[Alert System]
-        DB[State Database]
+        V[Key Validator]
+        A[Alert System]
     end
     
-    subgraph "Response"
-        NS[Notification Service]
-        AR[Auto Revoke]
-    end
-    
-    L1 -->|Stream| M
-    L2 -->|Stream| M
-    L3 -->|Stream| M
-    M --> AD
-    AD --> AL
-    AL --> NS
-    AL --> AR
-    M --> DB
+    CS -->|Query Logs| M
+    M --> V
+    V -->|Fetch Keys| GW
+    GW --> PK
+    V --> A
+    CB -->|Manage Certs| LE
+    CB -->|Set CAA| CF
 ```
 
 ### Security Model
 
 <SecurityInsight>
-The CT monitor provides defense-in-depth by:
-1. Detecting certificate misissuance within minutes
-2. Correlating issuance patterns across multiple logs
-3. Automatically triggering revocation for unauthorized certificates
-4. Maintaining immutable audit trails of all certificates
+The CT monitor provides defense through:
+1. Continuous monitoring of Certificate Transparency logs via crt.sh
+2. Validation against TEE-managed public keys from dstack-gateway
+3. CAA DNS records restricting certificate issuance to authorized accounts
+4. RA-TLS attestation embedding for certificate authenticity verification
 </SecurityInsight>
 
 ## Implementation Details
 
-### Log Monitoring Core
+### Core Monitoring Logic
 
-Real-time CT log monitoring ([source](https://github.com/Dstack-TEE/dstack/blob/master/ct-monitor/src/monitor.rs)):
+The CT monitor operates by querying the crt.sh database and validating certificates against known public keys [5](#0-4) . The monitor fetches known public keys from the dstack-gateway RPC endpoint [6](#0-5)  and validates each certificate's public key against this trusted set [7](#0-6) .
 
-```rust
-// From ct-monitor/src/monitor.rs
-pub struct CtMonitor {
-    // Active log connections
-    log_clients: Vec<CtLogClient>,
-    // Domain patterns to monitor
-    watched_domains: DomainPatternSet,
-    // Alert dispatcher
-    alert_dispatcher: AlertDispatcher,
-    // State persistence
-    state_store: StateStore,
-}
+### Domain Validation
 
-impl CtMonitor {
-    pub async fn start_monitoring(&mut self) -> Result<()> {
-        // Start monitoring each log
-        let mut streams = vec![];
-        
-        for client in &self.log_clients {
-            let stream = client.stream_entries(
-                self.state_store.get_last_index(&client.log_id)?
-            );
-            streams.push(stream);
-        }
-        
-        // Process entries from all logs
-        loop {
-            tokio::select! {
-                Some(entry) = streams.select_next_some() => {
-                    self.process_log_entry(entry).await?;
-                }
-            }
-        }
-    }
-    
-    async fn process_log_entry(&mut self, entry: LogEntry) -> Result<()> {
-        // Extract certificate
-        let cert = entry.extract_certificate()?;
-        
-        // Check if monitored domain
-        if self.is_monitored_certificate(&cert) {
-            // Verify legitimacy
-            match self.verify_certificate_legitimacy(&cert).await {
-                Ok(()) => self.record_authorized_cert(&cert),
-                Err(e) => self.handle_unauthorized_cert(&cert, e).await?,
-            }
-        }
-        
-        // Update state
-        self.state_store.update_index(&entry.log_id, entry.index)?;
-        
-        Ok(())
-    }
-}
-```
+Domain validation ensures only legitimate domains are monitored using regex pattern matching [3](#0-2) . The monitor processes CT log entries sequentially, tracking the last checked entry to avoid reprocessing [8](#0-7) .
 
-### Domain Pattern Matching
+### Public Key Verification
 
-Efficient domain monitoring ([source](https://github.com/Dstack-TEE/dstack/blob/master/ct-monitor/src/patterns.rs)):
+The system maintains a trusted set of public keys retrieved from the gateway's ACME information endpoint [9](#0-8) . The gateway exposes historical certificate public keys through the certbot working directory [10](#0-9) .
 
-```rust
-// From ct-monitor/src/patterns.rs
-pub struct DomainPatternSet {
-    // Exact domains
-    exact_domains: HashSet<String>,
-    // Wildcard patterns
-    wildcard_patterns: Vec<WildcardPattern>,
-    // Subdomain monitoring
-    monitored_roots: Vec<String>,
-}
+## Certificate Management Integration
 
-impl DomainPatternSet {
-    pub fn matches_certificate(&self, cert: &Certificate) -> bool {
-        // Check all SANs
-        for san in cert.subject_alternative_names() {
-            if self.matches_domain(&san) {
-                return true;
-            }
-        }
-        
-        false
-    }
-    
-    fn matches_domain(&self, domain: &str) -> bool {
-        // Exact match
-        if self.exact_domains.contains(domain) {
-            return true;
-        }
-        
-        // Wildcard pattern match
-        for pattern in &self.wildcard_patterns {
-            if pattern.matches(domain) {
-                return true;
-            }
-        }
-        
-        // Subdomain check
-        for root in &self.monitored_roots {
-            if domain.ends_with(&format!(".{}", root)) {
-                return true;
-            }
-        }
-        
-        false
-    }
-}
-```
+### ACME Certificate Lifecycle
 
-### Anomaly Detection
+The certbot component manages the complete ACME certificate lifecycle within the TEE [11](#0-10) . It automatically creates ACME accounts, sets CAA records, and manages certificate renewal [12](#0-11) .
 
-Pattern-based anomaly detection ([source](https://github.com/Dstack-TEE/dstack/blob/master/ct-monitor/src/anomaly.rs)):
+### CAA Record Management
 
-```rust
-// From ct-monitor/src/anomaly.rs
-pub struct AnomalyDetector {
-    // Historical issuance data
-    history: IssuanceHistory,
-    // Detection rules
-    rules: Vec<Box<dyn AnomalyRule>>,
-}
+CAA records are automatically configured to restrict certificate issuance to the dstack-gateway ACME account [13](#0-12) . This provides the first line of defense against unauthorized certificate issuance by restricting which Certificate Authorities can issue certificates for monitored domains.
 
-pub trait AnomalyRule: Send + Sync {
-    fn evaluate(&self, cert: &Certificate, history: &IssuanceHistory) -> AnomalyScore;
-}
+### RA-TLS Integration
 
-// Example: Unusual CA detection
-pub struct UnusualCaRule;
-
-impl AnomalyRule for UnusualCaRule {
-    fn evaluate(&self, cert: &Certificate, history: &IssuanceHistory) -> AnomalyScore {
-        let issuer = cert.issuer();
-        let ca_frequency = history.ca_frequency(&issuer);
-        
-        if ca_frequency == 0 {
-            // Never seen this CA before
-            AnomalyScore::High(0.9)
-        } else if ca_frequency < 0.01 {
-            // Rarely used CA
-            AnomalyScore::Medium(0.6)
-        } else {
-            AnomalyScore::Low(0.1)
-        }
-    }
-}
-```
-
-### Alert Generation
-
-Multi-channel alerting ([source](https://github.com/Dstack-TEE/dstack/blob/master/ct-monitor/src/alerts.rs)):
-
-```rust
-// From ct-monitor/src/alerts.rs
-pub struct AlertDispatcher {
-    channels: Vec<Box<dyn AlertChannel>>,
-    rate_limiter: RateLimiter,
-}
-
-impl AlertDispatcher {
-    pub async fn send_alert(&mut self, alert: Alert) -> Result<()> {
-        // Check rate limits
-        if !self.rate_limiter.allow(&alert.domain) {
-            return Ok(());
-        }
-        
-        // Send to all channels
-        for channel in &mut self.channels {
-            if let Err(e) = channel.send(&alert).await {
-                error!("Alert channel failed: {}", e);
-            }
-        }
-        
-        // Log for audit
-        self.log_alert(&alert)?;
-        
-        Ok(())
-    }
-}
-
-#[derive(Clone, Serialize)]
-pub struct Alert {
-    pub severity: Severity,
-    pub domain: String,
-    pub certificate: CertificateInfo,
-    pub anomaly_score: f64,
-    pub details: String,
-    pub timestamp: SystemTime,
-}
-```
-
-## Certificate Validation
-
-### Legitimacy Verification
-
-Verify certificates are authorized ([source](https://github.com/Dstack-TEE/dstack/blob/master/ct-monitor/src/validation.rs)):
-
-```rust
-// From ct-monitor/src/validation.rs
-pub struct CertificateValidator {
-    // Known good certificate database
-    authorized_certs: AuthorizedCertStore,
-    // TEE attestation verifier
-    attestation_verifier: AttestationVerifier,
-}
-
-impl CertificateValidator {
-    pub async fn verify_legitimacy(
-        &self,
-        cert: &Certificate,
-    ) -> Result<LegitimacyStatus> {
-        // Check if pre-authorized
-        if self.authorized_certs.contains(cert.fingerprint()) {
-            return Ok(LegitimacyStatus::Authorized);
-        }
-        
-        // Check attestation extension
-        if let Some(attestation) = extract_attestation(cert) {
-            if self.attestation_verifier.verify(&attestation).is_ok() {
-                return Ok(LegitimacyStatus::ValidAttestation);
-            }
-        }
-        
-        // Check CAA records
-        if !self.verify_caa_compliance(cert).await? {
-            return Ok(LegitimacyStatus::Unauthorized("CAA violation"));
-        }
-        
-        // Unknown certificate
-        Ok(LegitimacyStatus::Unknown)
-    }
-}
-```
-
-## Response Automation
-
-### Automated Revocation
-
-Trigger certificate revocation ([source](https://github.com/Dstack-TEE/dstack/blob/master/ct-monitor/src/revocation.rs)):
-
-```rust
-// From ct-monitor/src/revocation.rs
-pub struct RevocationManager {
-    // ACME client for revocation
-    acme_client: AcmeClient,
-    // Policy engine
-    revocation_policy: RevocationPolicy,
-}
-
-impl RevocationManager {
-    pub async fn handle_unauthorized_cert(
-        &self,
-        cert: &Certificate,
-        reason: &str,
-    ) -> Result<()> {
-        // Check policy
-        if !self.revocation_policy.should_revoke(cert, reason) {
-            return Ok(());
-        }
-        
-        // Attempt revocation
-        match self.acme_client.revoke_certificate(cert).await {
-            Ok(()) => {
-                info!("Revoked unauthorized certificate: {}", cert.serial());
-            }
-            Err(e) => {
-                error!("Revocation failed: {}", e);
-                // Escalate to manual intervention
-                self.escalate_to_security_team(cert, &e)?;
-            }
-        }
-        
-        Ok(())
-    }
-}
-```
-
-## Performance & Scalability
-
-### Stream Processing
-
-Efficient log entry processing:
-
-| Metric | Value | Notes |
-|--------|-------|-------|
-| Entry processing rate | 10K/sec | Per monitor instance |
-| Detection latency | &lt;5 seconds | From log entry to alert |
-| Memory usage | ~500MB | For 1M monitored domains |
-| State checkpoint | Every 1000 entries | Resumable monitoring |
-
-### Horizontal Scaling
-
-```rust
-// From ct-monitor/src/scaling.rs
-pub struct MonitorCluster {
-    // Monitors assigned to specific logs
-    monitors: HashMap<LogId, CtMonitor>,
-    // Coordinator for deduplication
-    coordinator: ClusterCoordinator,
-}
-```
-
-## Configuration
-
-### Monitor Configuration
-
-```toml
-# ct-monitor.toml
-[monitoring]
-# Domains to monitor
-watched_domains = [
-    "*.dstack.dev",
-    "example.com",
-    "*.example.com"
-]
-
-# CT logs to monitor
-ct_logs = [
-    { name = "Google 'Argon2023'", url = "https://ct.googleapis.com/logs/argon2023/" },
-    { name = "Cloudflare 'Nimbus2023'", url = "https://ct.cloudflare.com/logs/nimbus2023/" }
-]
-
-[anomaly_detection]
-# Enable ML-based detection
-enable_ml = true
-
-# Anomaly threshold
-alert_threshold = 0.7
-
-[alerts]
-# Alert channels
-channels = [
-    { type = "email", to = "security@example.com" },
-    { type = "slack", webhook = "https://hooks.slack.com/..." },
-    { type = "pagerduty", key = "..." }
-]
-
-# Rate limiting
-max_alerts_per_hour = 10
-
-[response]
-# Auto-revocation
-enable_auto_revoke = false
-revocation_delay_minutes = 30
-```
+Certificates can embed TEE attestation quotes using custom X.509 extensions [14](#0-13) . The system supports embedding quotes, event logs, and application IDs in certificates for enhanced verification [15](#0-14) .
 
 ## Security Considerations
 
-<Tabs>
-  <Tab title="Threat Model">
-    - **Log poisoning**: Verify SCT signatures
-    - **DoS attacks**: Rate limit log connections
-    - **False positives**: Multi-factor verification
-    - **Alert fatigue**: Smart deduplication
-  </Tab>
-  <Tab title="Best Practices">
-    - Monitor multiple diverse CT logs
-    - Implement gradual response escalation
-    - Maintain certificate allowlists
-    - Regular anomaly rule tuning
-  </Tab>
-</Tabs>
+### Threat Model Analysis
+
+**Certificate Misissuance**: The primary threat is unauthorized certificate issuance for dstack domains. The system mitigates this through:
+- CAA records restricting authorized CAs
+- CT log monitoring for detection
+- Public key validation against TEE-managed keys
+
+**DNS Manipulation**: CAA records can be modified if DNS is compromised. The CT monitor provides detection capabilities even if CAA protections are bypassed.
+
+**CT Log Reliability**: The monitor depends on crt.sh data availability. The system currently lacks multi-source redundancy for CT log data.
+
+### Cryptographic Security
+
+The system uses ECDSA P-256 keys for certificate signing [16](#0-15)  and validates signatures using ring cryptography library [17](#0-16) . Certificate signing requests require proper authentication and verification [18](#0-17) .
+
+## Performance & Operational Security
+
+### Monitoring Frequency
+
+The CT monitor operates with a 60-second polling interval [19](#0-18) , fetching up to 10,000 log entries per query [20](#0-19) . This provides reasonable detection latency while avoiding rate limiting.
+
+### Error Handling
+
+The system implements robust error handling for network failures, invalid certificates, and missing public keys [21](#0-20) . Critical errors are logged for investigation while maintaining service continuity.
+
+## Configuration Security
+
+### Gateway Integration
+
+The monitor requires secure communication with the dstack-gateway RPC endpoint. Configuration includes gateway URI and domain specifications [22](#0-21) . The gateway provides ACME account information and historical public keys through authenticated RPC calls [9](#0-8) .
+
+### Certbot Configuration
+
+Certbot integrates with Cloudflare for DNS challenges and CAA management [13](#0-12) . The configuration includes ACME server URLs, Cloudflare credentials, and certificate management parameters.
+
+## TEE Security Guarantees
+
+### Attestation Integration
+
+The system embeds Intel TDX attestation quotes in certificates to prove TEE execution [23](#0-22) . This provides cryptographic proof that certificates were generated within a verified TEE environment.
+
+### Key Protection
+
+Certificate private keys remain sealed within the TEE environment. The gateway manages key material and exposes only public key information for CT monitoring validation [24](#0-23) .
+
+## Limitations and Recommendations
+
+### Current Limitations
+
+1. **Single Source Dependency**: Relies solely on crt.sh for CT data
+2. **Basic Alerting**: Simple error logging without sophisticated notification channels
+3. **No Automated Response**: Manual intervention required for unauthorized certificates
+4. **Limited Scalability**: Sequential processing of CT entries
+
+### Security Recommendations
+
+1. **Multi-Source Monitoring**: Integrate multiple CT log sources for redundancy
+2. **Enhanced Alerting**: Implement webhook/email notifications for critical events
+3. **Automated Response**: Add capability for automatic certificate revocation
+4. **Rate Limiting**: Implement backoff strategies for crt.sh API limits
 
 ## Integration Examples
 
-### Basic Monitoring Setup
-
-```rust
-// Example setup
-use ct_monitor::{CtMonitor, DomainPatternSet, AlertChannel};
-
-async fn setup_monitoring() -> Result<()> {
-    // Configure domains
-    let domains = DomainPatternSet::new()
-        .add_exact("example.com")
-        .add_wildcard("*.example.com")
-        .add_subdomain_monitoring("example.org");
-    
-    // Setup alerts
-    let email_alerts = EmailAlertChannel::new("security@example.com");
-    
-    // Create monitor
-    let mut monitor = CtMonitor::builder()
-        .watch_domains(domains)
-        .add_alert_channel(Box::new(email_alerts))
-        .add_ct_log("https://ct.googleapis.com/logs/argon2023/")
-        .build()?;
-    
-    // Start monitoring
-    monitor.start_monitoring().await
-}
-```
+The CT monitor integrates with the broader dstack security architecture through the gateway RPC interface. It validates certificates against the trusted public key set maintained by the certbot component within the TEE environment.
 
 ## Metrics & Observability
 
-### Key Metrics
+### Key Security Metrics
 
-```rust
-// From ct-monitor/src/metrics.rs
-pub struct MonitorMetrics {
-    // Certificates processed
-    certs_processed: Counter,
-    // Alerts generated
-    alerts_sent: Counter,
-    // Processing latency
-    processing_latency: Histogram,
-    // Log lag time
-    log_lag_seconds: Gauge,
-}
-```
+- Certificate validation success/failure rates
+- Unauthorized certificate detection events  
+- CT log query latency and success rates
+- Gateway RPC communication health
 
 ## References
 
 - [Certificate Transparency RFC 6962](https://datatracker.ietf.org/doc/html/rfc6962)
-- [CT Log Operations](https://certificate-transparency.org/)
-- [Google CT Policy](https://github.com/google/certificate-transparency-community-site/blob/master/docs/google-ct-policy.md)
-- [dstack CT Monitor Design](https://github.com/Dstack-TEE/dstack/blob/master/ct-monitor/DESIGN.md)
+- [crt.sh Certificate Search](https://crt.sh/)
+- [Intel TDX Attestation](https://www.intel.com/content/www/us/en/developer/tools/trust-domain-extensions/overview.html)
+- [ACME Protocol RFC 8555](https://datatracker.ietf.org/doc/html/rfc8555)
 
 <div className="mt-8 p-4 bg-orange-50 rounded-lg border border-orange-200">
   <p className="text-sm text-orange-800">
-    <strong>Next Component:</strong> Explore TEE host management in <a href="/docs/security-research/host-api-security" className="underline">Host API security</a>.
+    <strong>Next Component:</strong> Explore TEE attestation verification in <a href="/docs/security-research/ra-tls-security" className="underline">RA-TLS security analysis</a>.
   </p>
-</div> 
+</div>
