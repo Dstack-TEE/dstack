@@ -185,15 +185,16 @@ The model assumes attackers may compromise hosts, networks, or infrastructure, b
 
 The system is engineered to prevent unauthorized key access, attestation forgery, and policy bypass, provided hardware and attestation are trusted and correctly configured.
 
-## References and Further Reading
+## DStack KMS References
+**dstack code reference:**
+- [ra-tls key derivation](https://github.com/Dstack-TEE/dstack/blob/45ebd05a/ra-tls/src/kdf.rs)
+- [ra-tls attestation verification](https://github.com/Dstack-TEE/dstack/blob/45ebd05a/ra-tls/src/attestation.rs)
+- [ra-tls certificate management](https://github.com/Dstack-TEE/dstack/blob/45ebd05a/ra-tls/src/cert.rs)
 
-* [ra-tls key derivation](https://github.com/Dstack-TEE/dstack/blob/45ebd05a/ra-tls/src/kdf.rs)
-* [ra-tls attestation verification](https://github.com/Dstack-TEE/dstack/blob/45ebd05a/ra-tls/src/attestation.rs)
-* [ra-tls certificate management](https://github.com/Dstack-TEE/dstack/blob/45ebd05a/ra-tls/src/cert.rs)
-* [KMS authorization policy](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/kms/src/main_service.rs#L407)
+## Public References
+* [KMS authorization details](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/kms/src/main_service.rs#L407)
 * [NIST SP 800-56C Rev. 2](https://csrc.nist.gov/publications/detail/sp/800-56c/rev-2/final)
-* [dstack KMS Design](https://github.com/Dstack-TEE/dstack/blob/master/kms/DESIGN.md)
-* [NIST Key Derivation Functions](https://nvlpubs.nist.gov/nistpubs/Legacy/SP/nistspecialpublication800-108.pdf)
+* ["Recommendation for Key Derivation Using Pseudorandom Functions"](https://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-108r1.pdf)
 
 <div className="mt-8 p-4 bg-purple-50 rounded-lg border border-purple-200">
   <p className="text-sm text-purple-800">

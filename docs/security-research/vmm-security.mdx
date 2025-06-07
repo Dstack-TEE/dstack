@@ -153,13 +153,10 @@ The VMM implements detailed logging of security-relevant events—including VM l
 
 Memory encryption with TDX introduces an estimated 5% performance overhead, but provides strong protection against host-level attacks. Nested page tables offer robust memory isolation with minimal additional overhead. Device emulation reduces attack surface compared to hardware passthrough, though it can affect performance for I/O-intensive workloads. Measurement validation incurs only minimal runtime overhead, ensuring continuous integrity without major impact.
 
-## References and Further Investigation
+## Supporting Documentation
 
 - [Intel TDX Architecture Specification](https://www.intel.com/content/www/us/en/developer/tools/trust-domain-extensions/documentation.html)
-- [QEMU TDX Support Documentation](https://qemu.readthedocs.io/en/latest/system/i386/tdx.html)
-- [KVM TDX Patches](https://lore.kernel.org/kvm/)
 - [dstack GitHub Repository](https://github.com/Dstack-TEE/dstack)
-- [dstack VMM Design](https://github.com/Dstack-TEE/dstack/blob/master/vmm/DESIGN.md)
 - [TDX Quote Verification Library](https://github.com/intel/SGXDataCenterAttestationPrimitives)
 
 <div className="mt-8 p-4 bg-green-50 rounded-lg border border-green-200">

@@ -13,19 +13,23 @@ The dstack gateway implements comprehensive certificate management through an in
 
 ### Certificate Lifecycle Management
 
-The gateway's certificate management system uses a dedicated CertBot component that automatically handles the entire certificate lifecycle [1](#0-0) . The system supports automatic account creation, certificate issuance, and renewal with configurable intervals [2](#0-1) .
+The gateway's certificate management system uses a dedicated CertBot struct that automatically handles the entire certificate lifecycle. The system runs in a continuous loop with configurable renewal intervals , executing post-renewal hooks when certificates are successfully updated.([certbot.rs#L44](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/certbot/src/bot.rs#L44)).
+
+The system supports automatic account creation, certificate issuance, and renewal with configurable intervals. The renewal process is implemented as a background loop ([certbot.rs#L118](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/certbot/src/bot.rs#L118)), which periodically checks certificate status and triggers renewal as needed. After a successful renewal, an optional post-renewal hook can be executed for custom actions, with errors and statuses logged for observability.
 
 ### DNS-01 Challenge with Cloudflare Integration
 
-The certificate validation process uses DNS-01 challenges through Cloudflare DNS API integration [3](#0-2) . The system can automatically set CAA (Certificate Authority Authorization) records to enhance security [4](#0-3) .
+The certificate validation process uses DNS-01 challenges, leveraging Cloudflare's DNS API for automated record management. The integration is implemented via the `Dns01Client::new_cloudflare` method, which initializes the DNS-01 client with the configured Cloudflare zone ID and API token ([see source](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/certbot/src/bot.rs#L76)). This enables the gateway to programmatically create and clean up TXT records required for ACME validation, ensuring seamless and secure certificate issuance.
+
+the system can automatically set CAA (Certificate Authority Authorization) records to enhance security, as implemented in [certbot/src/bot.rs#L61](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/certbot/src/bot.rs#L61).
 
 ### Automatic Renewal Process
 
-Certificates are automatically renewed based on configurable expiration thresholds [5](#0-4) . The renewal process includes timeout protection and hook execution for post-renewal tasks [6](#0-5) .
+Certificates are automatically renewed based on configurable expiration thresholds . The renewal process includes timeout protection and hook execution for post-renewal tasks . The default configuration sets renewal intervals to 1 hour and renewal before expiration to 10 days .
 
-### RA-TLS Certificate Generation
+The gateway's certificate renewal logic is implemented as an automated process that periodically checks certificate validity and triggers renewal when the expiration threshold is reached. This is handled in the CertBot component, which logs each renewal check and invokes the ACME client to perform the renewal if needed ([see source](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/certbot/src/bot.rs#L176)). The renewal interval and expiration threshold are fully configurable, ensuring certificates are always refreshed before expiry without manual intervention.
 
-When running in dstack environment, the gateway uses the guest agent for secure certificate generation with remote attestation capabilities [7](#0-6) . This ensures certificates are generated within the trusted execution environment.
+the renewal process includes timeout protection and, if a post-renewal hook is configured, executes it using a shell command. the system logs when the hook is run, and if the hook fails (either by returning a non-zero status or by failing to execute), an error message is logged with details about the failure.
 
 ```mermaid
 sequenceDiagram
@@ -65,15 +69,23 @@ The dstack gateway supports distributed deployment through a cluster architectur
 
 ### Cluster State Management
 
-The gateway maintains cluster state including information about other gateway nodes, registered applications, and CVM instances [8](#0-7) . Each gateway node tracks other nodes in the cluster with their WireGuard peer information and last-seen timestamps [9](#0-8) .
+The gateway maintains its cluster state using a central `ProxyStateMut` structure ([see source](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/gateway/src/main_service.rs#L57)). This state includes information about other gateway nodes (`nodes`), registered applications (`apps`), CVM instances (`instances`), allocated network addresses, and additional internal tracking fields. By synchronizing this structured state across the cluster, the gateway ensures consistent knowledge of node membership, application registrations, and CVM instance assignments.
+
+each gateway node tracks other nodes in the cluster using a `GatewayNodeInfo` structure ([see source](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/gateway/src/main_service.rs#L49)), which includes the node's id, url, WireGuard peer information, and last-seen timestamp.
 
 ### State Synchronization Protocol
 
-State synchronization between gateway nodes uses secure RPC communication with mutual TLS authentication [10](#0-9) . The synchronization process includes timeout protection and error handling [11](#0-10) .
+Gateway node state synchronization is achieved via secure RPC channels with mutual TLS authentication, ensuring both confidentiality and strong peer verification. The synchronization client (`SyncClient`) initiates connections to peer nodes using a purpose-built RPC client that strictly enforces certificate-based authentication and validates application identity ([sync client handshake and validation logic](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/gateway/src/main_service/sync_client.rs#L31C1-L63C6)).  
+During the handshake, the client checks that the remote node presents a valid TLS certificate and that the application ID matches the expected cluster identity. If the app ID does not match, the connection is immediately rejected and a log entry records the error.  
+This rigorous validation mechanism ensures that only properly authenticated and authorized gateway nodes can participate in the state sync protocol, effectively blocking unauthorized or misconfigured nodes from joining the cluster.
+
+The state sync protocol is engineered for resilience, with built-in timeout protection and comprehensive error handling as detailed in the [sync client async logic](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/gateway/src/main_service/sync_client.rs#L65C5-L85C6). When a node initiates a sync with a peer, it logs the attempt, enforces a timeout on the operation, and monitors for both timeout and RPC-level errors. If synchronization fails—due to timeout, network issues, or any other error—the system logs the failure with diagnostic details and continues operating, ensuring that cluster stability is not compromised by transient faults or misbehaving nodes. This design guarantees robust, fault-tolerant state propagation across the gateway cluster.
 
 ### Node Recycling and Health Monitoring
 
-The gateway implements automatic node recycling to remove stale nodes from the cluster [12](#0-11) . Node health is monitored through last-seen timestamps with configurable timeout thresholds [13](#0-12) .
+the gateway automatically removes ("recycles") stale nodes from the cluster based on their last-seen timestamp. as implemented in [main_service.rs#L439C4-L452C10](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/gateway/src/main_service.rs#L439C4-L452C10), the recycling logic iterates over all known nodes and checks if the time since their last_seen exceeds the configured node_timeout. if a node is considered stale and is not the current node itself, it is removed from the cluster state. this ensures that only healthy, recently active nodes remain in the cluster, improving reliability and preventing issues from unresponsive or disconnected peers.
+
+ node health monitoring is configured in the gateway's toml file under the `[core.recycle]` section ([see gateway.toml](https://github.com/Dstack-TEE/dstack/blob/45ebd05a/gateway/gateway.toml)), which sets parameters such as `interval`, `timeout`, and especially `node_timeout` (e.g., `node_timeout = "10m"`). the gateway tracks each node's last-seen timestamp and automatically recycles (removes) nodes that have not been seen within the `node_timeout` period. this mechanism is implemented in the gateway service using the `GatewayNodeInfo` structure and is part of the cluster state management logic, relying on the gateway's internal state synchronization and recycling packages.
 
 ```mermaid
 graph TD
@@ -115,15 +127,32 @@ The CVM (Confidential Virtual Machine) registration process involves remote atte
 
 ### Remote Attestation Verification
 
-The gateway implements a RegisterCvm RPC endpoint that verifies CVM attestations before allowing registration [14](#0-13) . The verification process includes checking the attestation against known KMS authorization contracts using the integrated auth client [15](#0-14) .
+remote attestation verification is a critical security step in the gateway's CVM registration process. its primary purpose is to ensure that only trusted, hardware-backed confidential virtual machines (CVMs) are allowed to join the cluster. this mechanism prevents unauthorized or potentially compromised VMs from gaining access to sensitive network resources, enforcing a strong trust boundary at the point of entry.
+
+conceptually, remote attestation is a cryptographic protocol where a CVM proves to the gateway that it is running genuine, unmodified code inside a trusted execution environment (TEE), such as Intel TDX. the CVM generates an attestation report (or "quote") that includes measurements of its software stack and environment, which are then cryptographically signed by the TEE hardware. this report serves as verifiable evidence of the CVM's integrity and identity.
+
+the gateway's [RegisterCvm RPC endpoint](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/gateway/src/main_service.rs#L12C1-L17C3) (see the `RegisterCvmRequest` and related types) is responsible for handling CVM registration requests. as part of this process, the endpoint requires the CVM to submit its attestation evidence. the gateway then performs a series of verification steps:
+
+- it validates the cryptographic signature of the attestation report to ensure it was produced by genuine TEE hardware.
+- it checks the measurements and configuration values in the report against expected values, confirming that the CVM is running approved code and has not been tampered with.
+- it verifies that the attestation is fresh and not a replay of an old or compromised report.
+
+in addition to these technical checks, the gateway also integrates with the KMS authorization system. using the built-in auth client, the gateway cross-references the attestation evidence with known KMS authorization contracts. this step ensures that the CVM is not only technically valid, but also explicitly authorized to join the cluster according to organizational policy.
+
+only after all these verification steps succeed does the gateway allow the CVM to complete registration and participate in the secure network. this layered approach to attestation and authorization is fundamental to maintaining the security and integrity of the gateway cluster.
 
 ### WireGuard Network Configuration
 
-Upon successful registration, the gateway allocates IP addresses from configured ranges and sets up WireGuard peer configurations [16](#0-15) . The WireGuard configuration includes public keys, endpoints, and allowed IP ranges for secure communication [17](#0-16) .
+WireGuard is a modern, high-performance VPN protocol that provides secure, encrypted tunnels between network peers using state-of-the-art cryptography. In the dstack gateway architecture, WireGuard is used to establish private, authenticated connections between the gateway and registered confidential virtual machines (CVMs), ensuring that all traffic within the cluster is protected from eavesdropping and tampering.
 
-### IP Address Allocation
+After a CVM successfully completes remote attestation and registration, the gateway allocates an IP address for the CVM from a configured address pool and generates a WireGuard peer configuration. This configuration includes the CVM's public key, the gateway's endpoint information, and the allowed IP ranges for secure communication. These parameters ensure that only authorized CVMs can participate in the cluster and that network isolation is strictly enforced.
 
-The gateway maintains a pool of allocated IP addresses and ensures no conflicts occur during CVM registration [18](#0-17) . Reserved network ranges are respected to avoid conflicts with gateway infrastructure.
+The WireGuard network settings—such as the interface, listen port, key material, and IP ranges—are defined in the gateway's configuration file. For a detailed example of these settings, see the [gateway.toml configuration](https://github.com/Dstack-TEE/dstack/blob/45ebd05a/gateway/gateway.toml), specifically the `[core.wg]` section. This configuration governs how the gateway manages WireGuard peers, allocates client IPs, and maintains secure connectivity for all registered CVMs.
+
+
+<span style={{ color: '#6B7280' }}>
+  the following diagram illustrates the CVM registration and secure network setup process: the confidential virtual machine (CVM) first requests attestation from the KMS, which provides the attestation evidence. the CVM then registers with the gateway, submitting its public key and attestation. the gateway verifies the attestation, checks application authorization with the KmsAuth contract, and upon confirmation, allocates a WireGuard IP and configures WireGuard peers. finally, the gateway returns the WireGuard and agent configuration to the CVM, which then establishes a secure WireGuard tunnel with the gateway.
+</span>
 
 ```mermaid
 sequenceDiagram
@@ -146,7 +175,19 @@ sequenceDiagram
 
 ## Gateway Connection Strategies and Load Balancing
 
-The dstack gateway implements intelligent connection management with multiple strategies for distributing traffic across available CVM instances.
+if you aren't familiar with the concept of a gateway in confidential computing, it's the component that acts as a secure entry point for network traffic destined for confidential virtual machines (CVMs) within a cluster. the gateway is responsible for authenticating, authorizing, and securely routing connections to the appropriate CVM instances, enforcing both network isolation and policy controls.
+
+connection strategies in this context refer to the algorithms and mechanisms the gateway uses to decide *which* CVM instance should handle a given incoming connection. this is especially important in environments where multiple CVMs are available for the same application or service, and the system must balance load, optimize performance, and maintain security guarantees.
+
+the dstack gateway implements a set of advanced connection management strategies to efficiently distribute traffic and maintain high availability:
+
+- **top-n selection**: the gateway tracks the most recent WireGuard handshake times for all registered CVMs. when a new connection request arrives, it sorts the available instances by handshake recency and selects the top N most recently active CVMs. this approach prioritizes instances that are known to be healthy and responsive, reducing connection latency and avoiding stale or disconnected peers.
+- **direct instance selection**: for scenarios requiring deterministic routing (such as session stickiness or debugging), the gateway allows direct lookup and connection to a specific CVM instance by its unique identifier, bypassing the load balancer.
+- **randomized fallback**: if the top-n selection yields no healthy candidates (e.g., all are stale or unreachable), or if the configuration disables top-n, the gateway falls back to random selection among all available CVMs, with additional health checks based on WireGuard handshake status to avoid routing to dead peers.
+- **connection health monitoring**: the gateway continuously monitors the health of each CVM connection using WireGuard handshake timestamps and connection counters. instances that fail to respond or become stale are automatically removed or recycled according to configurable timeout policies.
+- **certificate transparency monitoring**: to defend against certificate-based attacks, the gateway integrates with a certificate transparency (CT) monitoring system, ensuring that only certificates with known, authorized public keys are accepted for CVM connections.
+
+these strategies work together to provide robust, secure, and efficient connection management for confidential workloads, ensuring that only healthy, authorized CVMs receive traffic and that the system can adapt to failures or dynamic scaling events in real time.
 
 ### Top-N Selection Strategy
 
