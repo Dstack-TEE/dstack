@@ -21,25 +21,125 @@ description: "Configure your dstack environment and prepare for secure applicati
 
 Welcome to dStack, a platform designed to provide a secure environment for deploying containerized applications with hardware-backed security guarantees. Before diving into deployment, it’s essential to understand the core components and the structure of the dstack repository. This guide will walk you through the key elements and directories that make up the dstack ecosystem, all hosted at the main repository [https://github.com/Dstack-TEE/dstack/tree/master/](https://github.com/Dstack-TEE/dstack/tree/master/). Each section below links directly to the relevant directory in the repository, helping you explore the packages and systems that power this Trusted Execution Environment (TEE) platform.
 
+<div style={{ display: 'flex', gap: '1.5rem', margin: '2rem 0' }}>
+  <a href="../install/installation" style={{
+    flex: 1,
+    textDecoration: 'none',
+    border: '1px solid #e0e0e0',
+    borderRadius: '10px',
+    padding: '1.5rem',
+    background: '#fafbfc',
+    boxShadow: '0 2px 8px rgba(0,0,0,0.03)',
+    color: '#222'
+  }}>
+    <div style={{ fontSize: '1.2rem', fontWeight: 600, marginBottom: '0.5rem' }}>
+      📦 DStack Installation Guide
+    </div>
+    <div style={{ fontSize: '1rem', color: '#555' }}>
+      Step-by-step instructions to install dstack and required components.
+    </div>
+  </a>
+  <a href="../first-deployment-steps/first-deployment" style={{
+    flex: 1,
+    textDecoration: 'none',
+    border: '1px solid #e0e0e0',
+    borderRadius: '10px',
+    padding: '1.5rem',
+    background: '#fafbfc',
+    boxShadow: '0 2px 8px rgba(0,0,0,0.03)',
+    color: '#222'
+  }}>
+    <div style={{ fontSize: '1.2rem', fontWeight: 600, marginBottom: '0.5rem' }}>
+      🚢 First DStack Deployment Guide
+    </div>
+    <div style={{ fontSize: '1rem', color: '#555' }}>
+      Deploy your first application to a Confidential Virtual Machine.
+    </div>
+  </a>
+</div>
+
+
 
 ## Exploring the dStack Repository
 
-The dstack repository is a comprehensive collection of tools, libraries, and services that support the platform’s mission of secure application deployment. Below, we’ll explore the various directories and their purposes, each linked to its location in the repository for easy reference. This structure represents the full scope of the dstack TEE platform.
+The dstack repository is a comprehensive collection of tools, libraries, and services that support the platform’s mission of secure application deployment.
 
-The [vmm/](https://github.com/Dstack-TEE/dstack/tree/master/vmm) directory houses the service that manages Confidential VMs on a bare TDX host, as described earlier. Complementing this, the [gateway/](https://github.com/Dstack-TEE/dstack/tree/master/gateway) directory contains the reverse proxy that secures TLS connections to CVMs. The [kms/](https://github.com/Dstack-TEE/dstack/tree/master/kms) directory provides the KMS server for key generation and management, while [guest-agent/](https://github.com/Dstack-TEE/dstack/tree/master/guest-agent) includes the service running inside CVMs to support container operations.
+Below, we’ll explore the various directories and their purposes, each linked to its location in the repository for easy reference.
 
-For system setup and security tasks, [dstack-util/](https://github.com/Dstack-TEE/dstack/tree/master/dstack-util) offers a CLI tool used within the guest environment for tasks like TDX quote generation, Runtime Measurement Register (RTMR) extension, and RA-TLS certificate generation. Remote attestation is a big part of dstack’s security model, supported by libraries like [ra-rpc/](https://github.com/Dstack-TEE/dstack/tree/master/ra-rpc) for Protocol Buffers RPC (pRPC) and [ra-tls/](https://github.com/Dstack-TEE/dstack/tree/master/ra-tls) for secure communication.
+This structure represents the full scope of the dstack TEE platform.
 
-Attestation-specific functionality is further enhanced by [tdx-attest/](https://github.com/Dstack-TEE/dstack/tree/master/tdx-attest), a guest library for obtaining TDX quotes and extending RTMR, and [tdx-attest-sys/](https://github.com/Dstack-TEE/dstack/tree/master/tdx-attest-sys), which provides low-level Rust bindings for Intel TDX attestation. Certificate management is handled through [cert-client/](https://github.com/Dstack-TEE/dstack/tree/master/cert-client) for requesting and verifying certificates in a TEE environment, and [certbot/](https://github.com/Dstack-TEE/dstack/tree/master/certbot) for automatic TLS certificate acquisition and renewal, specifically for the dstack-gateway. The [ct_monitor/](https://github.com/Dstack-TEE/dstack/tree/master/ct_monitor) directory ensures certificate issuance security by monitoring Certificate Transparency logs.
+The [vmm/](https://github.com/Dstack-TEE/dstack/tree/master/vmm) directory houses the service that manages Confidential VMs on a bare TDX host, as described earlier.
 
-Configuration and API support come from [load_config/](https://github.com/Dstack-TEE/dstack/tree/master/load_config), a utility for loading configurations across dstack components, [guest-api/](https://github.com/Dstack-TEE/dstack/tree/master/guest-api) for guest-to-host interactions, and [host-api/](https://github.com/Dstack-TEE/dstack/tree/master/host-api) for managing guest environments from the host. Secure data handling is supported by [iohash/](https://github.com/Dstack-TEE/dstack/tree/master/iohash), an I/O hashing library, while key provisioning is managed through [key-provider-client/](https://github.com/Dstack-TEE/dstack/tree/master/key-provider-client) and its build utilities in [key-provider-build/](https://github.com/Dstack-TEE/dstack/tree/master/key-provider-build).
+Complementing this, the [gateway/](https://github.com/Dstack-TEE/dstack/tree/master/gateway) directory contains the reverse proxy that secures TLS connections to CVMs.
 
-Shared resources across the ecosystem are defined in [dstack-types/](https://github.com/Dstack-TEE/dstack/tree/master/dstack-types), which contains type definitions and data structures. Communication needs are met by [http-client/](https://github.com/Dstack-TEE/dstack/tree/master/http-client), a secure HTTP client library, and [sodiumbox/](https://github.com/Dstack-TEE/dstack/tree/master/sodiumbox), a Rust implementation of libsodium’s sealed box encryption. Auditing and verification are supported by [cc-eventlog/](https://github.com/Dstack-TEE/dstack/tree/master/cc-eventlog) for handling Confidential Computing event logs.
+The [kms/](https://github.com/Dstack-TEE/dstack/tree/master/kms) directory provides the KMS server for key generation and management.
 
-Service management within dstack is overseen by [supervisor/](https://github.com/Dstack-TEE/dstack/tree/master/supervisor), which monitors and controls running services. Utilities like [serde-duration/](https://github.com/Dstack-TEE/dstack/tree/master/serde-duration) provide serialization and deserialization for time durations in configurations, and [mod-tdx-guest/](https://github.com/Dstack-TEE/dstack/tree/master/mod-tdx-guest) offers a TDX guest module for secure VM operations. For web framework integration, [rocket-vsock-listener/](https://github.com/Dstack-TEE/dstack/tree/master/rocket-vsock-listener) implements a VSOCK listener for Rocket.
+[guest-agent/](https://github.com/Dstack-TEE/dstack/tree/master/guest-agent) includes the service running inside CVMs to support container operations.
 
-Developers can integrate with dstack using [python/](https://github.com/Dstack-TEE/dstack/tree/master/python) for Python bindings and utilities, or the [sdk/](https://github.com/Dstack-TEE/dstack/tree/master/sdk) directory, which includes Software Development Kits for multiple languages. Within the SDK, you’ll find [go/](https://github.com/Dstack-TEE/dstack/tree/master/sdk/go) for Go integration, [js/](https://github.com/Dstack-TEE/dstack/tree/master/sdk/js) for JavaScript and web applications, [python/](https://github.com/Dstack-TEE/dstack/tree/master/sdk/python) for data science and machine learning, and [rust/](https://github.com/Dstack-TEE/dstack/tree/master/sdk/rust) for systems programming.
+For system setup and security tasks, [dstack-util/](https://github.com/Dstack-TEE/dstack/tree/master/dstack-util) offers a CLI tool used within the guest environment for tasks like TDX quote generation, Runtime Measurement Register (RTMR) extension, and RA-TLS certificate generation.
 
-Additional resources include [docs/](https://github.com/Dstack-TEE/dstack/tree/master/docs) for platform documentation, [basefiles/](https://github.com/Dstack-TEE/dstack/tree/master/basefiles) for base file templates used in system initialization, and [.github/](https://github.com/Dstack-TEE/dstack/tree/master/.github) for GitHub configuration files managing CI/CD pipelines. Hardware-related utilities are found in [lspci/](https://github.com/Dstack-TEE/dstack/tree/master/lspci) for PCI device inspection, and testing is supported by [test-scripts/](https://github.com/Dstack-TEE/dstack/tree/master/test-scripts) for validating dstack functionality.
+Remote attestation is a big part of dstack’s security model, supported by libraries like [ra-rpc/](https://github.com/Dstack-TEE/dstack/tree/master/ra-rpc) for Protocol Buffers RPC (pRPC).
+
+[ra-tls/](https://github.com/Dstack-TEE/dstack/tree/master/ra-tls) is for secure communication.
+
+Attestation-specific functionality is further enhanced by [tdx-attest/](https://github.com/Dstack-TEE/dstack/tree/master/tdx-attest), a guest library for obtaining TDX quotes and extending RTMR.
+
+[tdx-attest-sys/](https://github.com/Dstack-TEE/dstack/tree/master/tdx-attest-sys) provides low-level Rust bindings for Intel TDX attestation.
+
+Certificate management is handled through [cert-client/](https://github.com/Dstack-TEE/dstack/tree/master/cert-client) for requesting and verifying certificates in a TEE environment.
+
+[certbot/](https://github.com/Dstack-TEE/dstack/tree/master/certbot) is for automatic TLS certificate acquisition and renewal, specifically for the dstack-gateway.
+
+The [ct_monitor/](https://github.com/Dstack-TEE/dstack/tree/master/ct_monitor) directory ensures certificate issuance security by monitoring Certificate Transparency logs.
+
+Configuration and API support come from [load_config/](https://github.com/Dstack-TEE/dstack/tree/master/load_config), a utility for loading configurations across dstack components.
+
+[guest-api/](https://github.com/Dstack-TEE/dstack/tree/master/guest-api) is for guest-to-host interactions.
+
+[host-api/](https://github.com/Dstack-TEE/dstack/tree/master/host-api) is for managing guest environments from the host.
+
+Secure data handling is supported by [iohash/](https://github.com/Dstack-TEE/dstack/tree/master/iohash), an I/O hashing library.
+
+Key provisioning is managed through [key-provider-client/](https://github.com/Dstack-TEE/dstack/tree/master/key-provider-client).
+
+Its build utilities are in [key-provider-build/](https://github.com/Dstack-TEE/dstack/tree/master/key-provider-build).
+
+Shared resources across the ecosystem are defined in [dstack-types/](https://github.com/Dstack-TEE/dstack/tree/master/dstack-types), which contains type definitions and data structures.
+
+Communication needs are met by [http-client/](https://github.com/Dstack-TEE/dstack/tree/master/http-client), a secure HTTP client library.
+
+[sodiumbox/](https://github.com/Dstack-TEE/dstack/tree/master/sodiumbox) is a Rust implementation of libsodium’s sealed box encryption.
+
+Auditing and verification are supported by [cc-eventlog/](https://github.com/Dstack-TEE/dstack/tree/master/cc-eventlog) for handling Confidential Computing event logs.
+
+Service management within dstack is overseen by [supervisor/](https://github.com/Dstack-TEE/dstack/tree/master/supervisor), which monitors and controls running services.
+
+Utilities like [serde-duration/](https://github.com/Dstack-TEE/dstack/tree/master/serde-duration) provide serialization and deserialization for time durations in configurations.
+
+[mod-tdx-guest/](https://github.com/Dstack-TEE/dstack/tree/master/mod-tdx-guest) offers a TDX guest module for secure VM operations.
+
+For web framework integration, [rocket-vsock-listener/](https://github.com/Dstack-TEE/dstack/tree/master/rocket-vsock-listener) implements a VSOCK listener for Rocket.
+
+Developers can integrate with dstack using [python/](https://github.com/Dstack-TEE/dstack/tree/master/python) for Python bindings and utilities.
+
+The [sdk/](https://github.com/Dstack-TEE/dstack/tree/master/sdk) directory includes Software Development Kits for multiple languages.
+
+Within the SDK, you’ll find [go/](https://github.com/Dstack-TEE/dstack/tree/master/sdk/go) for Go integration.
+
+[js/](https://github.com/Dstack-TEE/dstack/tree/master/sdk/js) is for JavaScript and web applications.
+
+[python/](https://github.com/Dstack-TEE/dstack/tree/master/sdk/python) is for data science and machine learning.
+
+[rust/](https://github.com/Dstack-TEE/dstack/tree/master/sdk/rust) is for systems programming.
+
+Additional resources include [docs/](https://github.com/Dstack-TEE/dstack/tree/master/docs) for platform documentation.
+
+[basefiles/](https://github.com/Dstack-TEE/dstack/tree/master/basefiles) is for base file templates used in system initialization.
+
+[.github/](https://github.com/Dstack-TEE/dstack/tree/master/.github) is for GitHub configuration files managing CI/CD pipelines.
+
+Hardware-related utilities are found in [lspci/](https://github.com/Dstack-TEE/dstack/tree/master/lspci) for PCI device inspection.
+
+Testing is supported by [test-scripts/](https://github.com/Dstack-TEE/dstack/tree/master/test-scripts) for validating dstack functionality.
 
 This comprehensive structure represents the full dstack TEE platform, providing everything needed to deploy containerized applications securely, from core services to developer tools, all backed by hardware-level security guarantees.
