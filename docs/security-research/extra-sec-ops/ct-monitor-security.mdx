@@ -3,15 +3,9 @@ title: "CT Monitor Security"
 description: "Certificate Transparency monitoring and anomaly detection for dstack TEE infrastructure"
 ---
 
-# Certificate Transparency Monitor Security Analysis
+# Certificate Transparency Monitor Security
 
-<Callout type="info" icon="magnifying-glass">
-**Component**: `ct_monitor` | [View Source](https://github.com/Dstack-TEE/dstack/tree/master/ct_monitor)
-</Callout>
-
-<page_summary>
-The ct_monitor component provides Certificate Transparency monitoring for dstack domains by querying crt.sh and validating certificates against known public keys from the dstack-gateway. It implements real-time monitoring, public key validation, and automated alerting to protect against certificate misissuance attacks within the TEE security model.
-</page_summary>
+`ct_monitor` watches for new certificates issued for dstack domains by querying crt.sh and checks them against the expected public keys from the dstack-gateway. It sends alerts if it finds any unauthorized or suspicious certificates.
 
 ## Overview
 

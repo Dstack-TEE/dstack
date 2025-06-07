@@ -3,15 +3,12 @@ title: "Cert Client Security"
 description: "Certificate verification and client-side attestation integration in dstack"
 ---
 
-# Certificate Client Security Analysis
+# cert-client security
 
-<Callout type="info" icon="certificate-check">
-**Component**: `cert-client` | [View Source](https://github.com/Dstack-TEE/dstack/tree/master/cert-client)
-</Callout>
+**Component:** `cert-client`  
+[View Source](https://github.com/Dstack-TEE/dstack/tree/master/cert-client)
 
-<page_summary>
-The cert-client component implements client-side certificate request and signing operations with hardware-backed attestation for dstack. It validates TDX quotes, enforces TCB security policies, and ensures all certificates are cryptographically bound to Trusted Execution Environment measurements.
-</page_summary>
+cert-client handles client-side certificate requests and signing with hardware attestation. it checks TDX quotes, enforces TCB security, and makes sure certificates are tied to TEE measurements.
 
 ## Overview
 
