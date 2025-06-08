@@ -1,0 +1,20 @@
+---
+title: "KMS Cryptographic Implementation Details"
+description: "Technical deep dive into the cryptographic key hierarchy and secure key generation in dStack KMS."
+---
+
+## Implementation Details
+
+The security of dStack KMS is grounded in its cryptographic implementation. At the heart of the system is a hierarchical key structure, anchored by a hardware-rooted root CA and k256 ECDSA key. This architecture ensures that every key, certificate, and cryptographic operation is both isolated and auditable.
+
+### Cryptographic Key Hierarchy
+
+The KMS manages a hierarchical key structure ([main\_service.rs#L50](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/kms/src/main_service.rs#L50)), anchored by a root CA certificate and a k256 ECDSA key. The root CA signs X.509 certificates, while the k256 key enables Ethereum-compatible signing and encryption. Application-specific keys are derived on demand, incorporating the app ID, instance ID, and purpose string ([main\_service.rs#L498](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/kms/src/main_service.rs#L498)), ensuring strong isolation between workloads and cryptographic roles.
+
+### Secure Key Generation and Attestation
+
+The process begins with attestation verification ([ra-tls/src/attestation.rs#L321](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/ra-tls/src/attestation.rs#L321)). Each key is only issued if the requester's TDX quote is valid—meaning the signature, TCB status, and event logs all match expected measurements. If any aspect of attestation fails, key derivation is aborted.
+
+After verification, dstack KMS deterministically derives keys for different functions—such as disk encryption, environment encryption, and signing ([main\_service.rs#L515](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/kms/src/main_service.rs#L515)). Each key is bound to a unique cryptographic context and never reused outside its intended purpose.
+
+> The cryptographic implementation is the technical foundation for all higher-level guarantees. The next section explores how dStack KMS supports verification and audit procedures for maximum transparency.

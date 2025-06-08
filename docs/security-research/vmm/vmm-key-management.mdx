@@ -1,0 +1,35 @@
+---
+title: "VMM Key Management Integration"
+description: "How dStack VMM provisions, manages, and secures cryptographic keys and certificates for confidential workloads."
+---
+
+## dStack-VMM Key Management Integration
+
+Key management is the linchpin of secure workload execution in confidential computing. In dStack, the VMM is responsible for provisioning, managing, and protecting cryptographic keys and certificates for each Confidential Virtual Machine (CVM). This process ensures that secrets are only released to trusted, attested environments, and that every key is cryptographically bound to the measured state of the VM.
+
+### Why Key Management Matters
+
+Without robust key management, even the strongest hardware isolation can be undermined. dStack VMM integrates with dstack-kms to provide flexible, policy-driven key provisioning, supporting a range of deployment scenarios from ephemeral test VMs to production multi-tenant clouds. Every key is derived, issued, and managed according to strict security policies, ensuring cryptographic isolation between tenants and workloads.
+
+### Key Provisioning Modes
+- **Non-KMS Mode (Ephemeral Keys):** For development or test VMs, keys are generated fresh on each launch and discarded at shutdown. No external key authority is involved.
+- **Local-Key-Provider Mode (SGX-style Sealing):** For closed-loop environments, keys are sealed to the VM's TDX identity and stored encrypted on disk. Only the same VM can unseal them.
+- **KMS Mode (Remote Key Authority):** For production, the VMM authenticates to dstack-kms after attestation. The KMS verifies the quote and policy, then issues keys and certificates over an encrypted channel.
+
+### Hierarchical Key Derivation
+
+dStack KMS uses a strict hierarchy:
+1. **Root Key** (in HSM)
+2. **Zone Key** (per tenant/environment)
+3. **VM Key** (bound to RTMR values and VM ID)
+4. **Application Certificates** (leaf keys signed by the VM Key)
+
+This structure ensures that a compromise at one layer does not leak keys for other tenants or VMs.
+
+### Attestation Validation Workflow
+1. **Quote Receipt:** VMM sends the TDX quote and measurement log to KMS.
+2. **Integrity Checks:** KMS replays RTMR events, matches hashes, and verifies the CPU signature.
+3. **Policy Enforcement:** Smart contracts or policy engines decide if the VM's measurements satisfy requirements.
+4. **Key Issuance:** On success, KMS returns wrapped keys and certificates, which the VMM injects into the VM over a secure vsock channel.
+
+> Key management is the bridge between attestation and operational security. The next section explores how the VMM enforces device and memory isolation to protect these secrets at runtime.

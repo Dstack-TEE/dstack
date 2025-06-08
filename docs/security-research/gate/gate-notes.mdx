@@ -1,0 +1,18 @@
+
+## Cryptographic Security Implementation
+
+### TLS Configuration and Crypto Providers
+
+The gateway uses rustls with the ring cryptographic provider for all TLS operations [28](#0-27) . Certificate generation leverages RA-TLS capabilities when running in TEE environments, with fallback to KMS-based certificate authority for self-signed certificates [29](#0-28) .
+
+### Proxy Security Architecture
+
+The gateway implements both TLS termination and TLS passthrough modes based on SNI analysis [30](#0-29) . Connection handling includes comprehensive timeout management and secure connection lifecycle management [31](#0-30) .
+
+## Notes
+
+This document covers the security architecture of the dstack gateway, which serves as the entry point for external traffic to applications running in Confidential Virtual Machines. The gateway provides comprehensive security through automated certificate management, secure cluster communication, remote attestation verification, and intelligent load balancing. The implementation uses industry-standard protocols like ACME, WireGuard, and mutual TLS authentication to ensure secure communication throughout the system.
+
+The configuration parameters mentioned in this document can be customized through the gateway configuration file [32](#0-31) , allowing operators to tune the security and performance characteristics according to their specific deployment requirements.
+
+The security model is built on the principle of zero trust, where every component must be authenticated and authorized before being granted access to the network. Remote attestation ensures that only genuine TEE instances can register with the gateway, while Certificate Transparency monitoring provides ongoing security assurance against certificate-based attacks.

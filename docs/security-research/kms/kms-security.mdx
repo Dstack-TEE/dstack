@@ -1,13 +1,17 @@
+---
+title: "KMS Security: Performance, Best Practices, and Threat Model"
+description: "Comprehensive overview of dStack KMS security posture, operational best practices, and threat model."
+---
 
 ## KMS Security: Performance, Best Practices, and Threat Model
 
-dstack KMS is designed to deliver strong security guarantees while maintaining high performance and scalability. This section provides a comprehensive overview of the system’s security posture, operational best practices, and the threat model it addresses.
+dStack KMS is designed to deliver strong security guarantees while maintaining high performance and scalability. This section provides a comprehensive overview of the system's security posture, operational best practices, and the threat model it addresses.
 
 ---
 
 ### Cryptographic Performance and Scalability
 
-dstack KMS leverages HKDF-SHA256 for key derivation, which is highly efficient and introduces minimal computational overhead. The architecture is optimized for concurrent and parallel key operations, ensuring that cryptographic guarantees are never compromised even under high load.
+dStack KMS leverages HKDF-SHA256 for key derivation, which is highly efficient and introduces minimal computational overhead. The architecture is optimized for concurrent and parallel key operations, ensuring that cryptographic guarantees are never compromised even under high load.
 
 To support large-scale deployments, KMS enables secure self-replication. New nodes can join the cluster by securely obtaining root keys from attested peers over authenticated channels ([see kms self-replication documentation](https://github.com/Dstack-TEE/dstack/blob/45ebd05a/kms/README.md#kms-self-replication)). This approach allows for horizontal scaling while preserving the integrity of attestation-based trust across all nodes.
 
@@ -22,7 +26,7 @@ Applications should always request only the minimum set of keys required for the
 Organizations are encouraged to define and enforce strict policies specifying allowed measurements, TCB (Trusted Computing Base) versions, and configuration parameters. These policies should be reviewed and updated regularly to adapt to evolving threats and maintain system robustness.
 
 **Monitoring and Auditing:**  
-dstack KMS logs all key derivation, attestation, and authorization events. Continuous monitoring of these logs is essential for detecting anomalous access patterns or policy violations, enabling rapid response to potential security incidents.
+dStack KMS logs all key derivation, attestation, and authorization events. Continuous monitoring of these logs is essential for detecting anomalous access patterns or policy violations, enabling rapid response to potential security incidents.
 
 ---
 
@@ -38,7 +42,7 @@ All communications with the KMS are protected by RA-TLS channels with mutual att
 
 ### Threat Model and Security Boundaries
 
-dstack KMS is engineered to withstand a wide range of adversarial scenarios. The threat model assumes that attackers may gain control over hosts, networks, or other infrastructure components. However, the security of the system relies on the integrity of the TEE hardware, the attestation infrastructure, and the correct configuration of smart contracts.
+dStack KMS is engineered to withstand a wide range of adversarial scenarios. The threat model assumes that attackers may gain control over hosts, networks, or other infrastructure components. However, the security of the system relies on the integrity of the TEE hardware, the attestation infrastructure, and the correct configuration of smart contracts.
 
 The system is specifically designed to:
 

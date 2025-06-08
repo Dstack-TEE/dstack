@@ -1,0 +1,28 @@
+---
+title: "VMM Attestation and Verification Mechanisms"
+description: "How dStack VMM validates TDX quotes, replays event logs, and enforces policy for runtime trust."
+---
+
+## Attestation and Verification Mechanisms
+
+Attestation and verification are the final gatekeepers in the dStack VMM security model. After building a chain of trust and provisioning keys, the VMM must continuously validate that the environment remains secure and policy-compliant. This section details how the VMM uses TDX quote verification, event log replay, and policy enforcement to maintain runtime integrity and prevent unauthorized access.
+
+### Why Attestation and Verification Matter
+
+Even after a secure launch, threats can emerge at runtime. The VMM's attestation and verification mechanisms ensure that only VMs with valid, untampered measurements can access secrets or perform sensitive operations. By integrating with Intel's DCAP Quote Verification Library and decentralized policy engines, dStack VMM provides both cryptographic and policy-based assurance for confidential workloads.
+
+### TDX Quote Generation and Validation
+
+The dstack attestation system performs quote verification using Intel's DCAP Quote Verification Library (QVL), as implemented in [ra-tls/src/attestation.rs#L304](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/ra-tls/src/attestation.rs#L304). The verification process includes checking the quote signature, fetching collateral from PCCS servers, and replaying event logs to ensure RTMR values match the reported measurements. If the replayed RTMRs do not match the values in the quote, or if the report data does not match expectations, the verification fails. TCB attributes are also validated to prevent debug mode execution and ensure the integrity of the attestation chain.
+
+The system validates TCB attributes to prevent debug mode execution, following the logic in [ra-tls/src/attestation.rs#L346](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/ra-tls/src/attestation.rs#L346), and verifies measurement registers against expected values.
+
+### Event Log Integrity Validation
+
+Runtime measurements are validated by replaying event logs to reconstruct the RTMR values, following the logic in [ra-tls/src/attestation.rs#L422](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/ra-tls/src/attestation.rs#L422). For each RTMR (0–3), the system iterates through the event log, validates each event digest, and extends the measurement using SHA-384 hashing of the previous value and the event digest. This process ensures the cryptographic integrity of the measurement chain. Event logs are stored in JSON format with cryptographic digests, allowing third parties to independently verify application execution integrity.
+
+### Blockchain-Based Authorization
+
+The security model integrates with Ethereum-compatible smart contracts for authorization decisions, as described in the [KMS implementation documentation](https://github.com/Dstack-TEE/dstack/blob/45ebd05a/kms/README.md#kms-implementation). The `KmsAuth` contract maintains registries of allowed application measurements, OS images, and KMS instance measurements. This approach provides decentralized trust anchors independent of any single authority, enabling transparent and auditable security policies.
+
+> Attestation and verification are the last line of defense. The next section explores how the VMM enforces resource isolation and protects against denial-of-service attacks.

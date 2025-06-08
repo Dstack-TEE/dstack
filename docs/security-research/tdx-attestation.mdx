@@ -1,11 +1,11 @@
 ---
-title: "🖇️ TDX Attestation Security"
+title: "TDX Attestation Security"
 description: "Deep dive into dstack's Intel TDX attestation implementation and security guarantees"
 ---
 
 # TDX Attestation Security Analysis
 
-## TDX Overview
+## TDXOverview
 
 dStack’s TDX attestation system delivers hardware-backed cryptographic proof of execution integrity using Intel Trust Domain Extensions (TDX). At its core, the implementation is powered by the [`tdx-attest` crate](https://github.com/Dstack-TEE/dstack/blob/45ebd05a/tdx-attest/src/lib.rs), which directly interfaces with Intel TDX hardware to generate strong, unforgeable attestation quotes.
 

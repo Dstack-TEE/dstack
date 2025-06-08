@@ -1,0 +1,24 @@
+---
+title: "TDX Threat Model and Security Guarantees"
+description: "A detailed look at the threat model, what dStack's TDX attestation protects against, and the guarantees it provides."
+---
+
+## Threat Model and Security Guarantees
+
+### What the System Protects Against
+
+dStack's attestation system, as described in the [dstack attestation design doc](https://github.com/Dstack-TEE/dstack/blob/45ebd05a/attestation.md), is built to defend against powerful adversaries, including malicious hypervisors and privileged hosts. Hardware-enforced measurements, RTMR monitoring, and strict TCB validation ensure that runtime or rollback attacks are detected. Nonce-based binding in attestation exchanges counters man-in-the-middle attacks by guaranteeing freshness and cryptographic linkage between verifier challenges and enclave attestations.
+
+The threat model for dStack's TDX attestation is comprehensive, considering not only external attackers but also those with privileged access to the host or hypervisor. By leveraging hardware-backed measurements and cryptographic validation, dStack ensures that even sophisticated adversaries cannot subvert the integrity of confidential workloads.
+
+### Verification Requirements
+
+End-to-end security requires verifying the dStack source code, building enclave images from source, and calculating expected measurement values as explained in [attestation.md §2.2: determining expected MRs](https://github.com/Dstack-TEE/dstack/blob/45ebd05a/attestation.md#22-determining-expected-mrs). Once calculated, these measurements must match the values in the quote, and the event log must be replayed to confirm the accuracy of RTMR3 and the entire trust chain.
+
+This rigorous approach ensures that only trusted, reproducible environments are attested and that any deviation from the expected state is immediately detectable. The replay of the event log is a critical step, providing auditors with a transparent and tamper-evident record of every measurement and extension.
+
+### Trust Boundaries
+
+dStack clearly defines all trust boundaries, starting with Intel TDX hardware as the immutable root of trust. Measurements flow through each stage—virtual firmware, Linux kernel, initramfs, and user applications—and each layer is independently validated. For more detail on how TDX quote measurements correspond to these boundaries, see [attestation.md §2.1: understanding tdx quote measurements](https://github.com/Dstack-TEE/dstack/blob/45ebd05a/attestation.md#21-understanding-tdx-quote-measurements).
+
+> The threat model and security guarantees provide the foundation for dStack's cryptographic implementation. The next section explores the technical details of how these guarantees are realized in code and protocol.

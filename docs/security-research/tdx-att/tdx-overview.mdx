@@ -1,0 +1,38 @@
+---
+title: "TDX Attestation Overview"
+description: "Comprehensive introduction to dStack's Intel TDX attestation implementation and its security guarantees."
+---
+
+# TDX Attestation Security Analysis
+
+## TDX Overview
+
+dStack's TDX attestation system delivers hardware-backed cryptographic proof of execution integrity using Intel Trust Domain Extensions (TDX). At its core, the implementation is powered by the [`tdx-attest` crate](https://github.com/Dstack-TEE/dstack/blob/45ebd05a/tdx-attest/src/lib.rs), which directly interfaces with Intel TDX hardware to generate strong, unforgeable attestation quotes.
+
+TDX attestation is not just a technical feature—it's a paradigm shift in how trust is established in cloud and confidential computing. By anchoring the root of trust in hardware, dStack ensures that every layer of the software stack, from firmware to application, is measured, validated, and auditable. This approach provides a foundation for building secure, decentralized, and verifiable systems where users and organizations can confidently run sensitive workloads without fear of tampering or unauthorized access.
+
+## TDX Attestation Architectural Synthesis
+
+dStack's TDX attestation security architecture is designed as an end-to-end chain of verifiable trust, beginning at the Intel TDX hardware root and extending through every software and policy layer involved in confidential workload execution. Each step of the process—from the first code loaded by the TDX module, to the runtime configuration of guest VMs, and up to the application—contributes cryptographically measured evidence to an immutable trust chain. 
+
+What makes this model robust is its compositional layering: every system stage (firmware, kernel, initrd, application) records its state in hardware-backed measurement registers, and these are captured and sealed in an attestation quote—cryptographically signed by Intel's hardware-rooted key infrastructure. Validation does not stop at signature checking: event log replay, measurement validation, and report data binding all ensure that not only was the environment authentic at a moment in time, but that its entire boot and runtime sequence is tamper-evident and externally auditable.
+
+By combining TDX's hardware assurances with policy enforcement through smart contracts and cryptographically controlled key management, dStack provides a closed loop of attestation, authorization, and key provisioning. This architecture makes it possible to deliver both continuous runtime integrity and decentralized, verifiable trust for confidential applications and distributed systems.
+
+## TDX Attestation Security
+
+tdx attestation is a process by which a confidential virtual machine (cvm) proves to a remote verifier that it is running on genuine intel tdx hardware and that its entire software stack—from firmware and kernel to application—has not been tampered with. this is achieved by measuring each stage of the boot and runtime process, sealing these measurements into a signed attestation quote, and providing cryptographic evidence that can be externally validated.
+
+while both tdx and intel sgx provide hardware-backed attestation, there are key differences between them. sgx attestation is focused on user-space enclaves, measuring and attesting only the code and data within a specific enclave. tdx attestation, on the other hand, operates at the virtual machine level, capturing the integrity of the entire guest os, kernel, and all applications. tdx introduces a set of runtime measurement registers (rtmrs) and a cryptographically secure event log, enabling full transparency and replay of the system's trust chain. tdx also supports more flexible report data binding and is designed for cloud-scale confidential computing, integrating with key management and policy systems to support complex, multi-tenant workloads.
+
+the following section describes the comprehensive, multi-layered trust and attestation flow in dstack's tdx security architecture. each component and connection is designed to ensure that every stage of the workload lifecycle—from hardware boot to application execution and key provisioning—is cryptographically measured, auditable, and verifiable.
+
+- **Hardware Root of Trust:** The process begins with Intel TDX hardware, establishing a silicon-anchored root of trust. The TDX Module (SEAM Mode) manages the secure launch and measurement of the firmware and subsequent layers.
+- **Boot Chain Integrity:** The OVMF firmware, Linux kernel, initrd, and dStack application are each measured and extended into dedicated RTMRs (Runtime Measurement Registers), ensuring that any modification or tampering is detectable.
+- **Measurement Registers:** MRTD and RTMR0–3 capture the state of hardware configuration, kernel, initrd, and application. These measurements are chained and sealed into the attestation quote.
+- **Quote Generation & Event Logging:** The TDX Quote Generator collects all RTMR values and report data, producing a signed attestation quote. Simultaneously, a cryptographically secure event log records every measurement extension, supporting full replay and auditability.
+- **Quote Verification & KMS Integration:** The quote, along with the event log, is verified against Intel's CA root keys. The KMS node then authenticates the attestation, interacts with smart contracts for policy enforcement, and manages root/app keys for secure provisioning.
+- **Trust Verification & Policy Enforcement:** Additional verification steps—such as image verification, measurement recalculation, and signature chain validation—ensure that only trusted workloads receive cryptographic keys and access.
+
+> This overview sets the stage for a deep dive into each architectural and security component of dStack's TDX attestation. Continue reading the following sections for a comprehensive understanding of how each layer contributes to the overall security model.
+

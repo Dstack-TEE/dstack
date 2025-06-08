@@ -1,0 +1,30 @@
+---
+title: "VMM Resource Protection and DoS Prevention"
+description: "How dStack VMM enforces resource isolation, input validation, and API security to prevent denial-of-service and resource exhaustion attacks."
+---
+
+## Resource Protection and DoS Prevention
+
+Resource isolation and denial-of-service (DoS) prevention are critical for maintaining the reliability and security of confidential computing environments. In dStack, the VMM implements strict controls to ensure that no single VM or tenant can exhaust system resources or disrupt service for others. This section details how the VMM enforces resource limits, validates input, and secures API endpoints to defend against both accidental and malicious abuse.
+
+### Why Resource Protection Matters
+
+In multi-tenant and cloud environments, resource exhaustion is a common attack vector. Without proper controls, a single misbehaving or compromised VM could consume excessive CPU, memory, disk, or network bandwidth, impacting the availability and security of the entire platform. dStack VMM's resource isolation mechanisms are designed to provide fair allocation, prevent abuse, and ensure that confidential workloads remain protected and performant.
+
+### Resource Isolation Controls
+
+The VMM implements strict resource isolation to defend against resource exhaustion attacks. Administrators can configure maximum limits for vCPUs and memory allocated to each VM on a per-host basis, with default values specified in [`vmm.toml#L28`](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/vmm/vmm.toml#L28). Disk space allocation is also subject to configurable upper bounds, ensuring that no single VM can consume excessive storage. Additionally, network bandwidth usage can be restricted at the host level, providing further protection against denial-of-service scenarios and ensuring fair resource distribution across all VMs.
+
+### Input Validation and Sanitization
+
+All VM configuration parameters are strictly validated before processing. For instance, image names are limited to a maximum of 64 characters, must only contain alphanumeric characters, underscores, hyphens, or periods, and cannot include directory traversal patterns like `..`. This validation logic is implemented as shown in [app.rs#L141](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/vmm/src/app.rs#L141). These checks prevent invalid or malicious image names and block directory traversal attacks.
+
+GPU device specifications are validated against PCI addressing formats to prevent injection attacks, following the logic in [qemu.rs#L558](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25).
+
+### API Security and Rate Limiting
+
+The VMM exposes REST APIs through the Rocket framework, with support for authentication tokens and rate limiting as specified in [`vmm.toml#L62C1-L64C12`](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/vmm/vmm.toml#L62C1-L64C12). Authentication can be enabled or disabled, and tokens are defined in the `[auth]` section of the configuration file.
+
+API access is restricted to specific token sets, and the system offers both Unix socket and network-based communication channels to support various deployment security requirements.
+
+> Resource protection and DoS prevention are essential for platform stability. The next section explores how the VMM validates its own security posture and supports third-party verification.
