@@ -7,13 +7,14 @@ use anyhow::{Context as _, Result};
 use fs_err as fs;
 use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
+use rustls::version::{TLS12, TLS13};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::TcpStream;
 use tokio::time::timeout;
 use tokio_rustls::{rustls, TlsAcceptor};
 use tracing::debug;
 
-use crate::config::ProxyConfig;
+use crate::config::{CryptoProvider, ProxyConfig, TlsVersion};
 use crate::main_service::Proxy;
 
 use super::io_bridge::bridge;
@@ -100,7 +101,21 @@ fn create_acceptor(config: &ProxyConfig) -> Result<TlsAcceptor> {
     let key =
         PrivateKeyDer::from_pem_slice(key_pem.as_slice()).context("failed to parse private key")?;
 
-    let config = rustls::ServerConfig::builder()
+    let provider = match config.tls_crypto_provider {
+        CryptoProvider::AwsLcRs => rustls::crypto::aws_lc_rs::default_provider(),
+        CryptoProvider::Ring => rustls::crypto::ring::default_provider(),
+    };
+    let supported_versions = config
+        .tls_versions
+        .iter()
+        .map(|v| match v {
+            TlsVersion::Tls12 => &TLS12,
+            TlsVersion::Tls13 => &TLS13,
+        })
+        .collect::<Vec<_>>();
+    let config = rustls::ServerConfig::builder_with_provider(Arc::new(provider))
+        .with_protocol_versions(&supported_versions)
+        .context("Failed to build TLS config")?
         .with_no_client_auth()
         .with_single_cert(certs, key)?;
 

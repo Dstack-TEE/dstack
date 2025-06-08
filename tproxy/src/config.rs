@@ -22,9 +22,27 @@ pub struct WgConfig {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+pub enum CryptoProvider {
+    #[serde(rename = "aws-lc-rs")]
+    AwsLcRs,
+    #[serde(rename = "ring")]
+    Ring,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub enum TlsVersion {
+    #[serde(rename = "1.2")]
+    Tls12,
+    #[serde(rename = "1.3")]
+    Tls13,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct ProxyConfig {
     pub cert_chain: String,
     pub cert_key: String,
+    pub tls_crypto_provider: CryptoProvider,
+    pub tls_versions: Vec<TlsVersion>,
     pub base_domain: String,
     pub listen_addr: Ipv4Addr,
     pub listen_port: u16,
