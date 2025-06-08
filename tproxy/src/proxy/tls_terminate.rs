@@ -1,5 +1,4 @@
 use std::io;
-use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -14,6 +13,7 @@ use tokio::time::timeout;
 use tokio_rustls::{rustls, TlsAcceptor};
 use tracing::debug;
 
+use crate::config::ProxyConfig;
 use crate::main_service::Proxy;
 
 use super::io_bridge::bridge;
@@ -91,25 +91,29 @@ pub struct TlsTerminateProxy {
     acceptor: TlsAcceptor,
 }
 
+fn create_acceptor(config: &ProxyConfig) -> Result<TlsAcceptor> {
+    let cert_pem = fs::read(&config.cert_chain).context("failed to read certificate")?;
+    let key_pem = fs::read(&config.cert_key).context("failed to read private key")?;
+    let certs = CertificateDer::pem_slice_iter(cert_pem.as_slice())
+        .collect::<Result<Vec<_>, _>>()
+        .context("failed to parse certificate")?;
+    let key =
+        PrivateKeyDer::from_pem_slice(key_pem.as_slice()).context("failed to parse private key")?;
+
+    let config = rustls::ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(certs, key)?;
+
+    let acceptor = TlsAcceptor::from(Arc::new(config));
+
+    Ok(acceptor)
+}
+
 impl TlsTerminateProxy {
-    pub fn new(app_state: &Proxy, cert: impl AsRef<Path>, key: impl AsRef<Path>) -> Result<Self> {
-        let cert_pem = fs::read(cert.as_ref()).context("failed to read certificate")?;
-        let key_pem = fs::read(key.as_ref()).context("failed to read private key")?;
-        let certs = CertificateDer::pem_slice_iter(cert_pem.as_slice())
-            .collect::<Result<Vec<_>, _>>()
-            .context("failed to parse certificate")?;
-        let key = PrivateKeyDer::from_pem_slice(key_pem.as_slice())
-            .context("failed to parse private key")?;
-
-        let config = rustls::ServerConfig::builder()
-            .with_no_client_auth()
-            .with_single_cert(certs, key)?;
-
-        let acceptor = TlsAcceptor::from(Arc::new(config));
-
+    pub fn new(app_state: &Proxy) -> Result<Self> {
         Ok(Self {
             app_state: app_state.clone(),
-            acceptor,
+            acceptor: create_acceptor(&app_state.config.proxy)?,
         })
     }
 
