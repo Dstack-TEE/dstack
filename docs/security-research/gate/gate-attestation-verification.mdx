@@ -1,0 +1,48 @@
+---
+title: "Gateway Attestation and Verification Mechanisms"
+description: "Technical implementation details of attestation verification, quote validation, and continuous security monitoring in the dstack gateway"
+---
+
+# Gateway Attestation and Verification Mechanisms
+
+Attestation verification in the dstack gateway represents the technical implementation of trust establishment protocols that ensure only genuine, uncompromised confidential virtual machines can participate in the cluster. This process goes beyond simple certificate validation to include hardware-backed cryptographic proof of integrity, real-time verification of execution environment state, and ongoing monitoring of security guarantees.
+
+The gateway's attestation verification system is designed to handle the complex requirements of modern confidential computing environments, where traditional notions of perimeter security are insufficient. Instead of relying on network-based access controls, the system implements a comprehensive verification framework that can detect tampering, unauthorized modifications, and compromise attempts at the hardware, firmware, and software levels.
+
+What makes dstack's approach particularly robust is its integration of multiple verification mechanisms into a unified security framework. The system combines Intel TDX attestation with custom authorization contracts, certificate transparency monitoring, and real-time health assessment to create a multi-layered verification system that can adapt to emerging threats while maintaining the performance characteristics required for production workloads.
+
+## Attestation Verification Architecture
+
+The gateway implements a comprehensive attestation verification pipeline that validates multiple aspects of CVM integrity and authorization. This verification process is critical for maintaining the security guarantees that make confidential computing possible, ensuring that only legitimate, uncompromised workloads can access sensitive data and resources.
+
+### Quote Structure and Validation
+
+When a CVM requests registration, it must provide an attestation quote that includes cryptographic measurements of its software stack and execution environment. The gateway validates this quote through a series of checks that verify both the cryptographic integrity of the attestation and the policy compliance of the requesting CVM.
+
+The quote validation process includes verification of the cryptographic signature chain, validation of measurement values against expected baselines, and assessment of the freshness and uniqueness of the attestation evidence. This multi-step validation ensures that attestation quotes cannot be replayed, modified, or forged by attackers.
+
+### Real-time Security Monitoring
+
+Beyond initial registration, the gateway maintains ongoing verification of CVM security status through continuous monitoring of attestation evidence, network behavior, and system health metrics. This approach recognizes that security in confidential computing environments is not a one-time verification, but an ongoing process that must adapt to changing conditions and emerging threats.
+
+The monitoring system tracks multiple security indicators, including attestation refresh rates, cryptographic key rotation schedules, and behavioral anomalies that might indicate compromise or unauthorized access attempts. When security violations are detected, the gateway can automatically isolate affected CVMs and trigger security response procedures.
+
+## Authorization Contract Integration
+
+The gateway integrates with blockchain-based authorization contracts to ensure that technical validity is combined with policy compliance. This integration allows organizations to implement sophisticated access control policies that can be transparently audited and cryptographically verified by all participants in the confidential computing cluster.
+
+### Blockchain Verification Pipeline
+
+Authorization decisions are validated through integration with Ethereum-compatible smart contracts that maintain authoritative records of which CVMs are permitted to access specific resources. This approach provides transparency, auditability, and resistance to tampering that traditional centralized authorization systems cannot match.
+
+The verification pipeline includes real-time queries to authorization contracts, validation of transaction authenticity, and caching mechanisms that ensure performance while maintaining security guarantees. This design allows the gateway to make rapid authorization decisions while ensuring that all access grants can be independently verified and audited.
+
+### Continuous Compliance Monitoring
+
+The gateway continuously monitors compliance with authorization policies, detecting and responding to changes in authorization status, policy updates, and security incidents. This ongoing compliance monitoring ensures that access decisions remain current and accurate even as organizational policies and security requirements evolve.
+
+## Performance and Scalability Considerations
+
+Attestation verification is computationally intensive, requiring careful optimization to ensure that security operations do not become a bottleneck for cluster performance. The gateway implements several optimization strategies, including parallel verification pipelines, intelligent caching of verification results, and adaptive verification schedules that balance security requirements with performance needs.
+
+The system is designed to scale horizontally, allowing multiple gateway instances to share verification workloads while maintaining consistent security decisions across the entire cluster. This distributed approach ensures that attestation verification can keep pace with growing cluster sizes and increasing security requirements. 

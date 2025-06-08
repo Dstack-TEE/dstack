@@ -1,15 +1,23 @@
 ---
-title: "Gateway Security Architecture"
-description: "Secure ingress/egress with automated certificate management in dstack"
+title: "Gateway Security Overview"
+description: "Comprehensive overview of dstack's secure gateway architecture with automated certificate management"
 ---
 
-# dstack Gateway Security Architecture
+# Gateway Security Overview
 
-This document provides a comprehensive overview of the dstack gateway's security architecture, covering certificate management, cluster topology, CVM registration, and connection strategies.
+In confidential computing architectures, the gateway serves as the critical security perimeter - the trusted bridge between the external world and the confidential virtual machines (CVMs) operating within trusted execution environments. Unlike traditional network gateways that primarily route traffic, a confidential computing gateway must establish, verify, and maintain cryptographic trust relationships while ensuring that only authenticated and authorized entities can access the secure cluster.
+
+The dstack gateway represents a paradigm shift in secure network architecture, combining automated certificate lifecycle management with hardware-backed attestation verification. This creates a zero-trust security model where every connection, whether from external clients or internal CVMs, must be cryptographically verified before being granted access to confidential workloads.
+
+Understanding the gateway's role is fundamental to comprehending dstack's security model: it's not just a network entry point, but a comprehensive security orchestrator that manages identity, encryption, and access control for confidential computing environments. Every certificate issued, every attestation verified, and every connection established flows through carefully designed security protocols that maintain the integrity of the entire system.
 
 ## Advanced Certificate Management
 
 The dstack gateway implements comprehensive certificate management through an integrated certbot system that handles automatic certificate provisioning and renewal using Let's Encrypt's ACME protocol.
+
+Certificate management in confidential computing goes far beyond traditional TLS certificates. In dstack's architecture, certificates serve multiple critical functions: they establish secure communication channels, verify the identity of CVMs through RA-TLS (Remote Attestation Transport Layer Security), and provide cryptographic evidence that can be audited and verified by third parties. The gateway's certificate management system is designed to handle these complex requirements while maintaining operational simplicity and security.
+
+The automated nature of dstack's certificate management eliminates human error and ensures consistent security posture across the entire cluster. By integrating directly with Let's Encrypt and DNS providers, the system can respond to security incidents, rotate certificates proactively, and maintain compliance with industry standards without manual intervention.
 
 ### Certificate Lifecycle Management
 
