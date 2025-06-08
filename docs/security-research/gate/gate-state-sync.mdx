@@ -1,4 +1,15 @@
+---
+title: "Gateway Cluster State Synchronization"
+description: "Distributed state management and secure synchronization protocols for gateway clusters in dstack"
+---
 
+# Gateway Cluster State Synchronization
+
+State synchronization in confidential computing represents one of the most challenging aspects of distributed system design. Unlike traditional distributed systems where trust can be assumed among cluster members, confidential computing environments operate under a zero-trust model where every node must continuously prove its identity and integrity. The dstack gateway's state synchronization system addresses this challenge by implementing cryptographically secure protocols that enable multiple gateway nodes to maintain consistent cluster state while ensuring that only authenticated and authorized nodes can participate.
+
+The concept of "state" in this context encompasses far more than simple configuration data. It includes the complete knowledge of registered CVMs, their attestation status, cryptographic keys, network topology, health metrics, and authorization policies. This state must be synchronized across multiple gateway nodes to ensure high availability and load distribution, but this synchronization must never compromise the security guarantees that make confidential computing possible.
+
+What makes dstack's approach unique is its integration of hardware-backed attestation with traditional distributed consensus mechanisms. Each gateway node doesn't just sync data - it continuously validates the cryptographic identity of its peers, ensuring that compromised or malicious nodes cannot inject false state information or gain unauthorized access to sensitive cluster operations.
 
 ## Gateway Cluster Topology and State Synchronization
 

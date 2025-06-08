@@ -1,4 +1,67 @@
+---
+title: "Gateway Security Architecture"
+description: "Secure ingress/egress with automated certificate management in dstack"
+---
 
+# dstack Gateway Security Architecture
+
+This document provides a comprehensive overview of the dstack gateway's security architecture, covering certificate management, cluster topology, CVM registration, and connection strategies.
+
+## Advanced Certificate Management
+
+The dstack gateway implements comprehensive certificate management through an integrated certbot system that handles automatic certificate provisioning and renewal using Let's Encrypt's ACME protocol.
+
+### Certificate Lifecycle Management
+
+The gateway's certificate management system uses a dedicated CertBot struct that automatically handles the entire certificate lifecycle. The system runs in a continuous loop with configurable renewal intervals , executing post-renewal hooks when certificates are successfully updated.([certbot.rs#L44](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/certbot/src/bot.rs#L44)).
+
+The system supports automatic account creation, certificate issuance, and renewal with configurable intervals. The renewal process is implemented as a background loop ([certbot.rs#L118](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/certbot/src/bot.rs#L118)), which periodically checks certificate status and triggers renewal as needed. After a successful renewal, an optional post-renewal hook can be executed for custom actions, with errors and statuses logged for observability.
+
+### DNS-01 Challenge with Cloudflare Integration
+
+The certificate validation process uses DNS-01 challenges, leveraging Cloudflare's DNS API for automated record management. The integration is implemented via the `Dns01Client::new_cloudflare` method, which initializes the DNS-01 client with the configured Cloudflare zone ID and API token ([see source](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/certbot/src/bot.rs#L76)). This enables the gateway to programmatically create and clean up TXT records required for ACME validation, ensuring seamless and secure certificate issuance.
+
+the system can automatically set CAA (Certificate Authority Authorization) records to enhance security, as implemented in [certbot/src/bot.rs#L61](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/certbot/src/bot.rs#L61).
+
+### Automatic Renewal Process
+
+Certificates are automatically renewed based on configurable expiration thresholds . The renewal process includes timeout protection and hook execution for post-renewal tasks . The default configuration sets renewal intervals to 1 hour and renewal before expiration to 10 days .
+
+The gateway's certificate renewal logic is implemented as an automated process that periodically checks certificate validity and triggers renewal when the expiration threshold is reached. This is handled in the CertBot component, which logs each renewal check and invokes the ACME client to perform the renewal if needed ([see source](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/certbot/src/bot.rs#L176)). The renewal interval and expiration threshold are fully configurable, ensuring certificates are always refreshed before expiry without manual intervention.
+
+the renewal process includes timeout protection and, if a post-renewal hook is configured, executes it using a shell command. the system logs when the hook is run, and if the hook fails (either by returning a non-zero status or by failing to execute), an error message is logged with details about the failure.
+
+```mermaid
+sequenceDiagram
+    participant App
+    participant Gateway
+    participant Certbot
+    participant CF as "Cloudflare DNS"
+    participant LE as "Let's Encrypt"
+    participant CT as "CT Monitor"
+    
+    App->>Gateway: Request certificate
+    Gateway->>Certbot: Initialize certificate request
+    Certbot->>CF: Set CAA records
+    CF->>Certbot: CAA records configured
+    Certbot->>LE: Request certificate with DNS-01 challenge
+    LE->>Certbot: Provide challenge token
+    Certbot->>CF: Create TXT record with challenge
+    CF->>LE: DNS challenge verification
+    LE->>Certbot: Issue certificate
+    Certbot->>Gateway: Certificate ready
+    Gateway->>CT: Monitor certificate transparency logs
+    Gateway->>App: Certificate deployed
+    
+    Note over Certbot: Automatic renewal every hour
+    Certbot->>LE: Check certificate expiration
+    LE->>Certbot: Certificate status
+    alt Certificate expires in < 10 days
+        Certbot->>LE: Renew certificate
+        LE->>Certbot: New certificate issued
+        Certbot->>Gateway: Restart with new certificate
+    end
+```
 
 ## Gateway Cluster Topology and State Synchronization
 

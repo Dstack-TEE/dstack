@@ -1,3 +1,16 @@
+---
+title: "Gateway Connection Strategies and Load Balancing"
+description: "Advanced load balancing algorithms and connection management strategies for confidential virtual machine clusters"
+---
+
+# Gateway Connection Strategies and Load Balancing
+
+Load balancing in confidential computing environments presents unique challenges that go far beyond traditional traffic distribution. While conventional load balancers primarily focus on optimizing performance metrics like response time and throughput, confidential computing load balancers must also maintain cryptographic trust relationships, verify ongoing attestation status, and ensure that security guarantees are preserved across all connection routing decisions.
+
+The dstack gateway's connection management system represents a fundamental rethinking of how traffic should be distributed in security-critical environments. Traditional round-robin or least-connections algorithms are insufficient when each backend server (CVM) must be continuously verified for integrity and authorization. Instead, dstack implements intelligent selection algorithms that prioritize not just performance, but also the cryptographic health and attestation status of each CVM instance.
+
+What makes this approach particularly sophisticated is its integration of multiple data sources for routing decisions. The gateway doesn't just consider server load or response times - it evaluates WireGuard handshake freshness, attestation validity, authorization status, and real-time health metrics to make routing decisions that optimize both performance and security. This creates a dynamic, adaptive system that can respond to security events, hardware failures, and changing network conditions while maintaining the strict security guarantees required for confidential computing.
+
 ## Gateway Connection Strategies and Load Balancing
 
 if you aren't familiar with the concept of a gateway in confidential computing, it's the component that acts as a secure entry point for network traffic destined for confidential virtual machines (CVMs) within a cluster. the gateway is responsible for authenticating, authorizing, and securely routing connections to the appropriate CVM instances, enforcing both network isolation and policy controls.
@@ -59,7 +72,7 @@ Below are several recommended connection management strategies available in the 
 4. **connection health monitoring**  
    the gateway continuously monitors the health of each CVM instance by tracking WireGuard handshake timestamps and connection activity. if an instance is found to be stale—meaning its last handshake exceeds a configurable timeout—the gateway automatically recycles and removes it from the active pool. this recycling and removal process is logged (see [main_service.rs:454-485](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/gateway/src/main_service.rs#L454C7-L485C6)), ensuring visibility and auditability. after recycling, the WireGuard peer set is reconfigured to reflect the updated state, so only healthy, responsive CVMs are available for new connections. 
 
-   these health check and recycling behaviors are fully configurable in the gateway’s toml configuration file, especially under the `[core.recycle]` section. for example:
+   these health check and recycling behaviors are fully configurable in the gateway's toml configuration file, especially under the `[core.recycle]` section. for example:
    ```toml
    [core.recycle]
    enabled = true

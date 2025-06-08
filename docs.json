@@ -124,13 +124,13 @@
         "pages": [
           "docs/security-research/overview",
           {
-            "group": "DStack cryptography",
+            "group": "DStack crypto",
             "pages": [
               "docs/security-research/security-model"
             ]
           },
           {
-            "group": "core component security",
+            "group": "Hardware layers Core Component Security",
             "pages": [
               {
                 "group": "tdx",
@@ -161,13 +161,12 @@
                 "group": "gateway",
                 "pages": [
                   "docs/security-research/gate/gate-overview",
-                  "docs/security-research/gate/gate-tdx-attestation-and-measurement",
-                  "docs/security-research/gate/gate-key-management",
+                  "docs/security-research/gate/gate-cvm-registration",
+                  "docs/security-research/gate/gate-state-sync",
                   "docs/security-research/gate/gate-implementation",
-                  "docs/security-research/gate/gate-attestation-and-verification",
-                  "docs/security-research/gate/gate-dos-protection",
-                  "docs/security-research/gate/gate-procedures",
-                  "docs/security-research/gate/gate-integration-arch"
+                  "docs/security-research/gate/gate-attestation-verification",
+                  "docs/security-research/gate/gate-load-balancing",
+                  "docs/security-research/gate/gate-notes"
                 ]
               },
               {
@@ -182,9 +181,7 @@
                   "docs/security-research/kms/kms-security-props",
                   "docs/security-research/kms/kms-security"
                 ]
-              },
-              "docs/security-research/kms-security",
-              "docs/security-research/gateway-security"
+              }
             ]
           },
           {

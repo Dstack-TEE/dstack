@@ -1,3 +1,16 @@
+---
+title: "Gateway CVM Registration and Attestation"
+description: "Secure registration process for confidential virtual machines with remote attestation and WireGuard network configuration"
+---
+
+# Gateway CVM Registration and Attestation
+
+CVM registration represents the cornerstone of trust establishment in confidential computing environments. Unlike traditional virtual machine deployment where trust is assumed based on administrative controls, confidential virtual machines must cryptographically prove their integrity before being granted access to any cluster resources. This process, known as remote attestation, creates a hardware-backed chain of trust that extends from the silicon level up through the hypervisor, operating system, and application layers.
+
+The dstack gateway's CVM registration process is designed around the principle that trust must be earned and continuously validated, not assumed. Every CVM that wishes to join the cluster must not only prove that it's running genuine, unmodified code inside a trusted execution environment, but also demonstrate that it has been explicitly authorized by the cluster's governance mechanisms. This dual requirement of technical validity and policy compliance ensures that only legitimate, secure workloads can participate in the confidential computing cluster.
+
+What sets dstack's approach apart is its integration of multiple security technologies into a seamless registration workflow. Remote attestation provides cryptographic proof of CVM integrity, WireGuard establishes encrypted communication channels, and blockchain-based authorization contracts ensure that access decisions are transparent and auditable. This layered security model creates multiple opportunities to detect and prevent unauthorized access attempts while maintaining operational simplicity for legitimate users.
+
 ## Gateway CVM Registration Process
 
 a CVM, or confidential virtual machine, is a virtual machine that runs inside a trusted execution environment (TEE) such as Intel TDX, providing hardware-enforced isolation and cryptographic protection for its code and data—even from the host or hypervisor. in dstack, CVMs are the core compute units that participate in the secure cluster, and their integrity is critical for trustless operation between nodes.
