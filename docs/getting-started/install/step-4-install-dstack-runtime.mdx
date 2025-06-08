@@ -1,33 +1,8 @@
 ---
 title: "Step 4: Install dstack Runtime"
-description: "Choose between a prebuilt package for quick setup or build from source for customization."
+description: "Follow the official README for installation instructions."
 ---
 
 # Step 4: Install dstack Runtime
 
-Install dstack using the prebuilt DEB package for a fast setup, or build from source if you need customization or want to audit the code.
-
-## Option A – Fastest: Prebuilt DEB Package
-
-```bash
-curl -LO https://downloads.dstack.io/latest/dstack_amd64.deb
-sudo dpkg -i dstack_amd64.deb
-```
-
-*Use this option for a quick, stable setup on a supported OS.*
-
-## Option B – Advanced: Build from Source
-
-```bash
-cargo install --git https://github.com/dstackio/dstack-runtime.git dstack
-```
-
-*Use this option if you need custom builds, want to audit code, or run on less common hardware.*
-
----
-
-## Recommendations
-- Use the prebuilt package for most users on Ubuntu 22.04/24.04.
-- Build from source if you require custom features or want to audit the codebase.
-- After installation, verify that the `dstack` binary is available in your PATH.
-
+To install and set up dstack, follow the instructions provided in the official [dstack README](https://github.com/Dstack-TEE/dstack/blob/master/README.md). The README contains the most up-to-date and recommended steps for installing dstack on your system.
