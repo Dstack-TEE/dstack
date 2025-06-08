@@ -1,6 +1,6 @@
 use std::io;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::task::{Context, Poll};
 
 use anyhow::{anyhow, bail, Context as _, Result};
@@ -17,7 +17,7 @@ use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::TcpStream;
 use tokio::time::timeout;
 use tokio_rustls::{rustls, server::TlsStream, TlsAcceptor};
-use tracing::debug;
+use tracing::{debug, info};
 
 use crate::config::{CryptoProvider, ProxyConfig, TlsVersion};
 use crate::main_service::Proxy;
@@ -94,7 +94,7 @@ where
 
 pub struct TlsTerminateProxy {
     app_state: Proxy,
-    acceptor: TlsAcceptor,
+    acceptor: RwLock<TlsAcceptor>,
 }
 
 fn create_acceptor(config: &ProxyConfig) -> Result<TlsAcceptor> {
@@ -133,8 +133,24 @@ impl TlsTerminateProxy {
     pub fn new(app_state: &Proxy) -> Result<Self> {
         Ok(Self {
             app_state: app_state.clone(),
-            acceptor: create_acceptor(&app_state.config.proxy)?,
+            acceptor: RwLock::new(create_acceptor(&app_state.config.proxy)?),
         })
+    }
+
+    /// Reload the TLS acceptor with fresh certificates
+    pub fn reload_certificates(&self) -> Result<()> {
+        info!("Reloading TLS certificates");
+        let new_acceptor = create_acceptor(&self.app_state.config.proxy)?;
+
+        // Replace the acceptor with the new one
+        if let Ok(mut acceptor) = self.acceptor.write() {
+            *acceptor = new_acceptor;
+            info!("TLS certificates successfully reloaded");
+        } else {
+            bail!("Failed to acquire write lock for TLS acceptor");
+        }
+
+        Ok(())
     }
 
     pub(crate) async fn handle_health_check(
@@ -185,7 +201,11 @@ impl TlsTerminateProxy {
             buffer_cursor: 0,
             inbound,
         };
-        let acceptor = self.acceptor.clone();
+        let acceptor = self
+            .acceptor
+            .read()
+            .expect("Failed to acquire read lock for TLS acceptor")
+            .clone();
         let tls_stream = timeout(
             self.app_state.config.proxy.timeouts.handshake,
             acceptor.accept(stream),
