@@ -141,11 +141,12 @@
           {
             "group": "Additional Sec Ops",
             "pages": [
-              "docs/security-research/extra-sec-ops/host-api-security",
-              "docs/security-research/extra-sec-ops/cert-client-security",
+              "docs/security-research/extra-sec-ops/before-reading",
               "docs/security-research/extra-sec-ops/certbot-security",
+              "docs/security-research/extra-sec-ops/cert-client-security",
               "docs/security-research/extra-sec-ops/ct-monitor-security",
-              "docs/security-research/extra-sec-ops/iohash-security"
+              "docs/security-research/extra-sec-ops/iohash-security",
+              "docs/security-research/extra-sec-ops/host-api-security"
             ]
           }
         ]
