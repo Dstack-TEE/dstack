@@ -132,8 +132,57 @@
           {
             "group": "core component security",
             "pages": [
-              "docs/security-research/tdx-attestation",
-              "docs/security-research/vmm-security",
+              {
+                "group": "tdx",
+                "pages": [
+                  "docs/security-research/tdx-att/tdx-overview",
+                  "docs/security-research/tdx-att/tdx-security-arch",
+                  "docs/security-research/tdx-att/tdx-quote-gen",
+                  "docs/security-research/tdx-att/tdx-verification-model",
+                  "docs/security-research/tdx-att/tdx-integration-review",
+                  "docs/security-research/tdx-att/tdx-threat-model-garentees",
+                  "docs/security-research/tdx-att/tdx-implementation"
+                ]
+              },
+              {
+                "group": "vmm",
+                "pages": [
+                  "docs/security-research/vmm/vmm-overview",
+                  "docs/security-research/vmm/vmm-tdx-attestation-and-measurement",
+                  "docs/security-research/vmm/vmm-key-management",
+                  "docs/security-research/vmm/vmm-implementation",
+                  "docs/security-research/vmm/vmm-attestation-and-verification",
+                  "docs/security-research/vmm/vmm-dos-protection",
+                  "docs/security-research/vmm/vmm-procedures",
+                  "docs/security-research/vmm/vmm-integration-arch"
+                ]
+              },
+              {
+                "group": "gateway",
+                "pages": [
+                  "docs/security-research/gate/gate-overview",
+                  "docs/security-research/gate/gate-tdx-attestation-and-measurement",
+                  "docs/security-research/gate/gate-key-management",
+                  "docs/security-research/gate/gate-implementation",
+                  "docs/security-research/gate/gate-attestation-and-verification",
+                  "docs/security-research/gate/gate-dos-protection",
+                  "docs/security-research/gate/gate-procedures",
+                  "docs/security-research/gate/gate-integration-arch"
+                ]
+              },
+              {
+                "group": "kms",
+                "pages": [
+                  "docs/security-research/kms/kms-overview",
+                  "docs/security-research/kms/kms-cert-manager",
+                  "docs/security-research/kms/kms-implementation",
+                  "docs/security-research/kms/kms-audit-procedures",
+                  "docs/security-research/kms/kms-blockchain-integration",
+                  "docs/security-research/kms/kms-security-arch",
+                  "docs/security-research/kms/kms-security-props",
+                  "docs/security-research/kms/kms-security"
+                ]
+              },
               "docs/security-research/kms-security",
               "docs/security-research/gateway-security"
             ]
@@ -141,11 +190,12 @@
           {
             "group": "Additional Sec Ops",
             "pages": [
-              "docs/security-research/extra-sec-ops/host-api-security",
-              "docs/security-research/extra-sec-ops/cert-client-security",
+              "docs/security-research/extra-sec-ops/before-reading",
               "docs/security-research/extra-sec-ops/certbot-security",
+              "docs/security-research/extra-sec-ops/cert-client-security",
               "docs/security-research/extra-sec-ops/ct-monitor-security",
-              "docs/security-research/extra-sec-ops/iohash-security"
+              "docs/security-research/extra-sec-ops/iohash-security",
+              "docs/security-research/extra-sec-ops/host-api-security"
             ]
           }
         ]

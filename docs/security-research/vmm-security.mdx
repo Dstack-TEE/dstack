@@ -7,13 +7,21 @@ description: "In-depth analysis of dstack VMM's security boundaries and isolatio
 
 `dstack-vmm` ([source](https://github.com/Dstack-TEE/dstack/tree/master/vmm))
 
+The Virtual Machine Monitor (VMM) within the Dstack ecosystem, known specifically as dstack-vmm, serves as the central orchestrator managing the lifecycle and operations of Confidential Virtual Machines (CVMs) running in secure execution environments enabled by Intel Trust Domain Extensions (TDX). Acting as an advanced hypervisor management layer, dstack-vmm abstracts and simplifies the deployment of containerized applications within hardware-enforced trusted boundaries, providing unified mechanisms for VM provisioning, resource allocation, and operational control. It seamlessly integrates key security services, including cryptographic measurement and attestation workflows, through interaction with the Key Management Service (dstack-kms), and ensures secure connectivity via the gateway component (dstack-gateway). With clearly defined interfaces spanning RPC, web-based consoles, and CLI, the VMM enables robust, automated, and flexible management suited for confidential computing environments. Built upon foundational trust in Intel TDX hardware, dstack-vmm’s architecture leverages sophisticated measurement and attestation models, establishing secure execution contexts even amidst potentially compromised host systems, thus combining comprehensive security assurances with practical usability.
+
 ## Overview
 
 The `dstack-vmm` serves as the primary security boundary between untrusted host infrastructure and confidential workloads. Its implementation is located in [`vmm/src/main.rs`](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/vmm/src/main.rs). Built upon QEMU/KVM with Intel TDX extensions, the VMM enforces hardware-backed memory isolation, manages the secure lifecycle of confidential VMs, generates attestation measurements, and mediates resource access—all within a Rust-based architecture designed for robust security guarantees.
 
+<img src="/docs/images/dstack-vmm-pro.png" alt="dstack-vmm architecture diagram" style={{maxWidth: "100%", marginTop: "1.5em", marginBottom: "1.5em"}} />
+
+---
+
 ## Security Model
 
 ### Trust Boundaries
+
+*The security model for dstack-vmm is built around strict trust boundaries that separate the untrusted host environment from the confidential workloads running inside secure virtual machines. This model ensures that only the components within the trusted domain—protected by hardware-based isolation—can access sensitive data and operations, while the host and hardware outside this boundary are treated as untrusted. The following diagram illustrates these boundaries and the protections in place:*
 
 ```mermaid
 graph TB
@@ -34,25 +42,99 @@ graph TB
     H -.->|"No Access"| CVM
 ```
 
+
 ### Intel TDX Hardware Security Properties
 
-The VMM leverages Intel TDX (Trust Domain Extensions) to provide hardware-enforced confidential computing. TDX automatically applies AES-256 memory encryption to all guest memory pages and ensures cryptographic integrity, preventing unauthorized modification. The VMM configures QEMU to use the `q35` machine type with `kernel-irqchip=split` and `confidential-guest-support=tdx`, as demonstrated in the [source code](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/vmm/src/app/qemu.rs#L320).
+The VMM leverages Intel TDX (Trust Domain Extensions) to provide hardware-enforced confidential computing. TDX automatically applies AES-256 memory encryption to all guest memory pages and ensures cryptographic integrity, preventing unauthorized modification ([Intel TDX Whitepaper §3.2](https://www.intel.com/content/dam/develop/external/us/en/documents/tdx-whitepaper-final9-17.pdf?utm_source=chatgpt.com)).
 
-### Measurement and Attestation Framework
+Beyond memory encryption, TDX enforces CPU-state isolation by capturing the full register context inside Secure Arbitration Mode (SEAM) and preventing any host-initiated register inspection or tampering during VM exits and entries ([Linux Kernel TDX Documentation](https://www.kernel.org/doc/html/next/x86/tdx.html?utm_source=chatgpt.com)). Address-Translation Integrity protects the guest’s page tables against injection or replay attacks by verifying each update through the Runtime TDX Measurement Registers (RTMRs), which accumulate progressive hashes of firmware, bootloader, kernel, and critical components into a measured-boot chain of trust ([Intel Trust Authority – TD Integrity](https://docs.trustauthority.intel.com/main/articles/concept-td-integrity.html?utm_source=chatgpt.com)).
 
-The security architecture relies on a comprehensive measurement system using TDX Runtime Measurement Registers (RTMRs), as detailed in [the attestation documentation](https://github.com/Dstack-TEE/dstack/blob/45ebd05a/attestation.md#22-determining-expected-mrs). MRTD contains virtual firmware measurements taken by the TDX module in SEAM mode, serving as the trust anchor for all subsequent code execution.
+To instantiate a TDX-protected CVM in QEMU, the VMM configures the VM to use the `q35` machine type—a modern Intel ICH9-style chipset emulation that supports PCI-Express, LPC, and all device models required for confidential computing. Legacy platforms like `i440fx` or `microvm` lack the necessary PCIe infrastructure and cannot host TDX guests ([Intel TDX Whitepaper §2.3](https://cdrdv2-public.intel.com/690419/TDX-Whitepaper-February2022.pdf?utm_source=chatgpt.com); [Wikipedia: Trust Domain Extensions](https://en.wikipedia.org/wiki/Trust_Domain_Extensions?utm_source=chatgpt.com)).
 
-Refer to [attestation.md#22-determining-expected-mrs](https://github.com/Dstack-TEE/dstack/blob/45ebd05a/attestation.md#22-determining-expected-mrs) for specifics on RTMR0–RTMR3 measurement contents.
+In Dstack’s QEMU wrapper (see [`vmm/src/app/qemu.rs` at commit 45ebd05…#L320](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/vmm/src/app/qemu.rs#L320)), the invocation appears as:
 
-### Cryptographic Key Management Integration
+```rust
+command
+    .arg("-machine")
+    .arg("q35,kernel-irqchip=split,confidential-guest-support=tdx,hpet=off");
 
-The VMM integrates with the dstack Key Management Service (KMS) for secure key derivation and certificate management. For a comprehensive overview of supported boot and key management modes, consult the [KMS README overview](https://github.com/Dstack-TEE/dstack/blob/45ebd05a/kms/README.md#overview). dstack supports three boot modes for confidential VMs:
+let tdx_object = if cfg.use_mrconfigid {
+    // Compute mrconfigid for attestation binding...
+    format!("tdx-guest,id=tdx,mrconfigid={mrconfigid}")
+} else {
+    "tdx-guest,id=tdx".to_string()
+};
+command.arg("-object").arg(tdx_object);
+```
 
-* **Non-KMS Mode**: Stateless, ephemeral keys, no persistent state.
-* **Local-Key-Provider Mode**: Stateful, uses SGX sealing keys for persistent app keys, validates key provider via SGX quote.
-* **KMS Mode**: Stateful, upgradeable, enables flexible app-id validation and blockchain-based authorization.
+* **`confidential-guest-support=tdx`** engages the TDX firmware interface.
+* **`kernel-irqchip=split`** offloads interrupt emulation to the kernel’s KVM module for precise delivery under SEAM protection.
+* **`hpet=off`** disables legacy timers that can conflict with TDX’s secure interrupt handling.
+* **`-object tdx-guest,id=tdx[,mrconfigid=…]`** initializes the Intel TDX guest context and, if supplied, binds the computed MRCONFIGID for attestation.
 
-In all modes, applications receive cryptographically derived keys based on their verified measurements, ensuring that only authenticated workloads can access sensitive cryptographic material.
+Finally, the VMM integrates with **dstack-kms** to automate remote attestation: it retrieves Intel TDX quotes—cryptographically signed bundles that bind the RTMR measurement chain to a public key—allowing external verifiers to validate the CVM’s boot sequence and runtime integrity before provisioning secrets. By combining AES-XTS memory encryption, SHA-3 MAC integrity, CPU-state isolation, address-translation integrity, and end-to-end attestation, Intel TDX provides a robust hardware-rooted security foundation that the Dstack VMM orchestrates for confidential computing environments.
+
+
+## TDX Measurement and Attestation Framework
+
+To ensure that confidential workloads are only executed in a secure and trusted environment, Dstack VMM relies on a robust measurement and attestation process built on Intel TDX. This framework combines a tamper-evident measurement chain with flexible, policy-driven key management. The result: your confidential workloads are launched only on verified hardware and receive cryptographic materials strictly according to policy—never anywhere else.
+
+Before any confidential VM is allowed to run, Dstack VMM must demonstrate that both its hardware and software stack match expected, untampered states. This is achieved through Intel TDX’s Runtime Measurement Registers (RTMRs), which establish a “chain of trust” by cryptographically hashing each stage of the VM’s boot and runtime process:
+
+### 1. Building the Measurement Chain
+- **MRTD (Measurement Register for Trust Domain)**  
+  The first anchor in our chain: it records a digest of the TDX firmware (TDVF) itself, ensuring we started from the correct trusted foundation [1](#1-0).  
+- **RTMR0 (Firmware & Launch Environment)**  
+  Captures post-boot firmware bytes and microcode patches, guaranteeing that no rogue microcode or modified SEAM loader was injected [2](#1-1).  
+- **RTMR1 (Bootloader & Kernel)**  
+  Records the bootloader image and Linux kernel measurement, preventing kernel-level rootkits or patched initrd from slipping through [3](#1-2).  
+- **RTMR2 (Initial Userspace & Drivers)**  
+  Hashes early userspace components (e.g., initramfs, critical drivers) so that only audited, integrity-checked drivers can execute [4](#1-3).  
+- **RTMR3 (Application Manifests & Runtime Libraries)**  
+  Extends the chain into higher-level artifacts—application manifests, container images, and dynamic libraries—locking down the exact code you intended to run [5](#1-4).
+
+### 2. Verifying the Chain via Remote Attestation
+1. **Quote Generation**  
+   The VMM requests a TDX quote, which bundles the current RTMR values with a cryptographic signature from the CPU’s on-die attestation key.  
+2. **Quote Validation**  
+   An external verifier compares RTMR0–RTMR2 against known-good measurements (e.g., firmware and kernel hashes) and then **replays** the recorded events for RTMR3 to confirm that the exact application content was loaded [6](#1-5).  
+3. **Trust Decision**  
+   Only if every measurement matches expected values does the verifier signal Dstack VMM to release decryption keys—ensuring that your code runs on a pristine, hardware-backed root of trust.
+
+## dstack-vmm Key Management Integration
+
+Once the Dstack VMM has established a trustworthy execution environment, it must provision encryption keys and certificates to the VM. This is handled by the integrated **dstack-kms**, which supports three flexible boot-time modes:
+
+### 1. Non-KMS Mode (Ephemeral Keys)
+- **Use Case:** Development or one-off test VMs where long-term key persistence isn’t needed.  
+- **Behavior:** The VMM generates a fresh key pair inside the VM on each launch; keys are discarded at shutdown.  
+- **Trust Model:** Relies solely on TDX isolation—no external key authority.
+
+### 2. Local-Key-Provider Mode (SGX-style Sealing)
+- **Use Case:** Closed-loop environments where you want keys on-disk but encrypted under hardware.  
+- **Behavior:** The VM uses a local sealing key (derived from its TDX identity) to wrap application secrets. On reboot, the same VM can unseal without contacting a remote service.  
+- **Trust Model:** Assumes the host disk is untrusted, but the TDX chip enforces secret confidentiality.
+
+### 3. KMS Mode (Remote Key Authority)
+- **Use Case:** Production and multi-tenant clouds requiring centralized key governance and audit trails.  
+- **Behavior:** After attestation, Dstack VMM authenticates to the dstack-kms service and requests VM-specific certificates and symmetric keys. The KMS verifies the quote, checks policies (e.g., which application IDs are allowed), and only then issues key material over an encrypted channel.  
+- **Trust Model:** Combines hardware-rooted attestation with organizational policy—allowing fine-grained access control and monitoring.
+
+### Hierarchical Key Derivation
+Regardless of mode, Dstack KMS uses a strict hierarchy:
+1. **Root Key** (held in HSM)  
+2. **Zone Key** (per tenant or environment)  
+3. **VM Key** (derivation bound to RTMR values and VM ID)  
+4. **Application Certificates** (leaf keys signed by the VM Key)  
+This structure ensures that a compromise at one layer does not leak keys for other tenants or VMs [11](#1-10).
+
+### Attestation Validation Workflow
+1. **Quote Receipt:** Dstack VMM hands the TDX quote and measurement log to KMS.  
+2. **Integrity Checks:** The KMS replays RTMR events, matches hashes against policy-approved lists, and verifies the CPU signature.  
+3. **Policy Enforcement:** Smart contracts or policy engines decide if this VM’s measurements satisfy application requirements.  
+4. **Key Issuance:** On success, KMS returns wrapped keys and certificates, which the VMM injects into the VM over a secure vsock channel [12](#1-11).
+
+---
 
 ## Implementation Security Details
 
@@ -153,13 +235,10 @@ The VMM implements detailed logging of security-relevant events—including VM l
 
 Memory encryption with TDX introduces an estimated 5% performance overhead, but provides strong protection against host-level attacks. Nested page tables offer robust memory isolation with minimal additional overhead. Device emulation reduces attack surface compared to hardware passthrough, though it can affect performance for I/O-intensive workloads. Measurement validation incurs only minimal runtime overhead, ensuring continuous integrity without major impact.
 
-## References and Further Investigation
+## Supporting Documentation
 
 - [Intel TDX Architecture Specification](https://www.intel.com/content/www/us/en/developer/tools/trust-domain-extensions/documentation.html)
-- [QEMU TDX Support Documentation](https://qemu.readthedocs.io/en/latest/system/i386/tdx.html)
-- [KVM TDX Patches](https://lore.kernel.org/kvm/)
 - [dstack GitHub Repository](https://github.com/Dstack-TEE/dstack)
-- [dstack VMM Design](https://github.com/Dstack-TEE/dstack/blob/master/vmm/DESIGN.md)
 - [TDX Quote Verification Library](https://github.com/intel/SGXDataCenterAttestationPrimitives)
 
 <div className="mt-8 p-4 bg-green-50 rounded-lg border border-green-200">

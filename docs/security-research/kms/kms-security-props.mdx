@@ -1,0 +1,25 @@
+---
+title: "KMS Security Properties and Guarantees"
+description: "The cryptographic guarantees and attack resistance features of dStack KMS."
+---
+
+## Security Properties
+
+The security properties of dStack KMS are the result of careful cryptographic design and rigorous implementation. This section details the guarantees provided by the system, including confidentiality, integrity, authenticity, forward secrecy, and reproducibility, as well as the mechanisms that ensure robust resistance to real-world attacks.
+
+### Cryptographic Guarantees
+
+* **Confidentiality:** Application secrets are encrypted using X25519 key exchange and ChaCha20-Poly1305 AEAD, with keys derived for each context ([main\_service.rs#L501](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/kms/src/main_service.rs#L501)).
+* **Integrity:** Keccak256 hashes and ECDSA signatures (k256) protect all authenticated messages and keys ([crypto.rs#L29](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/kms/src/crypto.rs#L29)).
+* **Authenticity:** ECDSA P-256 signatures provide cryptographic proof of origin ([crypto.rs#L7](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/kms/src/crypto.rs#L7)).
+* **Forward Secrecy:** All keys are derived fresh from attestation at each boot—there are no long-lived static secrets.
+* **Reproducibility:** Identical environments will derive identical keys, supporting stateless scale-out and recovery.
+
+### Attack Resistance
+
+dstack KMS is designed for robust resistance to real-world attacks:
+
+* **Key Extraction Prevention:** All keys exist only in TEE memory and are never written to disk in plaintext.
+* **Replay Attack Mitigation:** Nonces and timestamps are included in attestation data ([attestation.rs#L47](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/ra-tls/src/attestation.rs#L47)), ensuring each attestation is unique and cannot be reused.
+* **Rollback Protection:** Version checks in measurements ([attestation.rs#L345](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/ra-tls/src/attestation.rs#L345)) block attempts to use outdated or debug configurations.
+* **Side Channel Hardening:** Cryptographic operations leverage constant-time code to reduce risk from timing attacks.
