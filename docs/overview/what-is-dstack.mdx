@@ -1,6 +1,6 @@
 ---
-title: "DStack High Level Technical Architecture "
-description: "High Level exploration of dstack’s system architecture, components, and robust security framework leveraging Intel TDX for confidential container deployment."
+title: "Dstack Explained"
+description: "A comprehensive exploration of dstack's architecture, detailing its components and security principles for confidential containers using Intel TDX."
 ---
 
 # DStack Architecture 
@@ -9,7 +9,9 @@ This page gives you a high-level overview of dstack's architecture—a developer
 
 ## Introduction
 
-dstack is a developer-friendly and security-first SDK that simplifies the deployment of arbitrary containerized applications into TEE environments [1](#0-0) . It uses Intel TDX technology to create Confidential Virtual Machines (CVMs) that provide hardware-based isolation for sensitive workloads. Unlike traditional deployment solutions, dstack allows developers to use familiar tools like docker-compose.yaml files while automatically handling the complexities of TEE deployment, key management, and secure networking [2](#0-1) .
+For a detailed overview, see the [dstack README](https://github.com/Dstack-TEE/dstack/blob/45ebd05a/README.md).
+
+dstack is a developer-friendly, security-first SDK that streamlines the deployment of containerized applications into Trusted Execution Environments (TEEs). By leveraging Intel TDX, dstack creates Confidential Virtual Machines (CVMs) that provide hardware-based isolation for sensitive workloads. Developers can use familiar tools like `docker-compose.yaml` files, while dstack automatically manages the complexities of TEE deployment, key management, and secure networking.
 
 The platform is community-driven, open-sourced, and built by Kevin Wang and many others from Phala Network, inspired by Andrew Miller from Flashbots and Teleport, with contributions from Nethermind and the broader community [3](#0-2) .
 
@@ -90,8 +92,20 @@ For hands-on deployment, follow the build and setup instructions in the main rep
 
 To get started with development, explore the component documentation and examples in the dstack repository, which includes detailed setup instructions, configuration examples, and troubleshooting guides.
 
-If you want a deep dive into the technical architecture of dstack, check out the [architecture overview](/docs/concepts/architecture).
-
 ---
 
 **TL;DR**: dstack is a developer-friendly SDK for deploying containerized applications in Intel TDX-based Trusted Execution Environments, providing hardware-based security with familiar Docker tooling.
+
+## Notes
+
+This corrected version removes several inaccuracies from the original document:
+
+1. **TEE Support**: The original document claimed support for AMD SEV-SNP and ARM CCA, but dstack currently only supports Intel TDX [18](#0-17) .
+
+2. **Component Names**: The original mentioned "dstack-os" and "dstack-ingress" which don't exist in the actual codebase. The real components are dstack-vmm, dstack-gateway, dstack-kms, dstack-guest-agent, and supervisor.
+
+3. **Architecture Claims**: Removed speculative claims about "Portable Confidential Containers, Decentralized Code Management, and Verifiable Domain Management" as core innovations, as these terms don't appear in the actual codebase.
+
+4. **Technical Details**: Corrected technical implementation details to match the actual codebase rather than speculative descriptions.
+
+5. **Focus**: Adjusted the emphasis from "Web3-first" to accurately reflect dstack's broader confidential computing focus while maintaining its blockchain integration aspects.

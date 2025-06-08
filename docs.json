@@ -12,18 +12,34 @@
     "dropdowns": [
       {
         "dropdown": "Overview",
-        "icon": "book-open",
         "pages": [
           {
             "group": "Welcome to DStack",
+            "icon": {
+                  "name": "circle-stop",
+                  "style": "regular"
+                },
             "pages": [
-              "docs/index",
+              "docs/index"
+            ]
+          },
+          {
+            "group": "Introduction to DStack",
+            "icon": {
+                  "name": "circle-stop",
+                  "style": "regular"
+                },
+            "pages": [
               "docs/overview/introduction",
               "docs/overview/what-is-dstack"
             ]
           },
           {
             "group": "Additional Reading",
+            "icon": {
+                  "name": "circle-stop",
+                  "style": "regular"
+                },
             "pages": [
               "docs/overview/key-features",
               "docs/overview/benefits",
@@ -35,12 +51,29 @@
       },
       {
         "dropdown": "Getting Started",
-        "icon": "rocket",
-        "pages": [
-          "docs/getting-started/start",
-          "docs/getting-started/deploying-applications",
+        "icon": {
+                  "name": "book-open",
+                  "style": "duotone"
+                },
+         "pages": [
           {
-            "group": "📦 DStack Installation Steps",
+            "group": "downloading, setting up and runing the dstack APIs",
+            "icon": {
+                  "name": "circle-stop",
+                  "style": "regular"
+                },
+            "pages": [
+              "docs/getting-started/start",
+              "docs/getting-started/deploying-applications", 
+              "/docs/tutorials/super-quick-start"
+            ]
+          },
+          {
+            "group": " 📦 DStack Installation Steps",
+            "icon": {
+                  "name": "circle-stop",
+                  "style": "solid"
+                },
             "pages": [
               "docs/getting-started/install/installation",
               "docs/getting-started/install/step-1-prerequisites",
@@ -54,7 +87,11 @@
           },
           
           {
-            "group": "🚢 First DStack Deployment",
+            "group": " 🚢 First DStack Deployment",
+            "icon": {
+                  "name": "circle-stop",
+                  "style": "solid"
+                },
             "pages": [
               "docs/getting-started/first-deployment-steps/first-deployment",
               "docs/getting-started/first-deployment-steps/fd-1",
@@ -70,10 +107,18 @@
       },
       {
         "dropdown": "Core Concepts",
-        "icon": "lightbulb",
+        "icon": {
+                  "name": "lightbulb-on",
+                  "style": "regular"
+                },
         "pages": [
+          
           {
             "group": "Component Overview",
+            "icon": {
+                  "name": "circle-stop",
+                  "style": "regular"
+                },
             "pages": [
               "docs/concepts/overview",
               "docs/concepts/basic-components"
@@ -81,6 +126,10 @@
           },
           {
             "group": "Core Component Implementation",
+            "icon": {
+                  "name": "circle-stop",
+                  "style": "solid"
+                },
             "pages": [
               "docs/concepts/core-vmm",
               "docs/concepts/core-gateway",
@@ -92,22 +141,42 @@
           },
           {
             "group": "DStack Component Architecture",
+            "icon": {
+                  "name": "circle-stop",
+                  "style": "solid"
+                },
             "pages": [
               "docs/concepts/architecture", 
               "docs/concepts/networking"
             ]
           },
-          "docs/concepts/core-glossary"
+          {
+            "group": "Core Glossary",
+            "icon": {
+              "name": "circle-stop",
+              "style": "regular"
+            },
+            "pages": [
+              "docs/concepts/core-glossary"
+            ]
+          }
         ]
       },
       {
         "dropdown": "Tutorials",
-        "icon": "graduation-cap",
+        "icon": {
+                  "name": "person-to-portal",
+                  "style": "regular"
+                },
         "pages": [
           "docs/tutorials/index-quick-start",
           "/docs/getting-started/start",
           {
             "group": "Super Quick Start Tutorials",
+            "icon": {
+              "name": "play",
+              "style": "solid"
+            },
             "pages": [
               "docs/tutorials/super-quick-start",
               "docs/tutorials/python-example",
@@ -119,8 +188,11 @@
         ]
       },
       {
-        "dropdown": "Security & Research",
-        "icon": "shield-halved",
+        "dropdown": "Security + Research",
+        "icon": {
+                  "name": "shield-plus",
+                  "style": "solid"
+                },
         "pages": [
           "docs/security-research/overview",
           {
@@ -185,14 +257,23 @@
             ]
           },
           {
-            "group": "Additional Sec Ops",
+            "group": "before-reading",
+            "icon": {
+                  "name": "person-to-portal",
+                  "style": "regular"
+                },
             "pages": [
               "docs/security-research/extra-sec-ops/before-reading",
-              "docs/security-research/extra-sec-ops/certbot-security",
-              "docs/security-research/extra-sec-ops/cert-client-security",
-              "docs/security-research/extra-sec-ops/ct-monitor-security",
-              "docs/security-research/extra-sec-ops/iohash-security",
-              "docs/security-research/extra-sec-ops/host-api-security"
+              {
+                "group": "extra-sec-ops",
+                "pages": [
+                  "docs/security-research/extra-sec-ops/certbot-security",
+                  "docs/security-research/extra-sec-ops/cert-client-security",
+                  "docs/security-research/extra-sec-ops/ct-monitor-security",
+                  "docs/security-research/extra-sec-ops/iohash-security",
+                  "docs/security-research/extra-sec-ops/host-api-security"
+                ]
+              }
             ]
           }
         ]
@@ -208,7 +289,10 @@
       },
       {
         "dropdown": "API Reference",
-        "icon": "square-terminal",
+        "icon": {
+                  "name": "webhook",
+                  "style": "duotone"
+                },
         "pages": [
           "docs/api-reference/authentication",
           {
@@ -248,14 +332,14 @@
         "href": "https://github.com/Dstack-TEE/dstack"
       },
       {
-        "label": "Blog",
-        "href": "https://blog.dstack.dev"
+        "label": "Additional FAQ",
+        "href": "https://docs.phala.network/dstack/faqs"
       }
     ],
     "primary": {
       "type": "button",
-      "label": "Deploy DStack on Phala Cloud",
-      "href": "https://cloud.phala.network/register?invite=beta"
+      "label": "Publications",
+      "href": "https://collective.flashbots.net/t/dstack-speedrunning-a-p2p-confidential-vm/3876"
     }
   },
   "footer": {
@@ -268,28 +352,28 @@
       {
         "items": [
           {
-            "label": "Status",
-            "href": "https://status.dstack.dev"
+            "label": "📕 Authors Note -- TEE Guide",
+            "href": "https://www.intothebytecode.com/46-andrew-miller/"
           }
         ]
       },
       {
         "items": [
           {
-            "label": "Terms",
-            "href": "https://dstack.dev/terms"
+            "label": "Eliza AI Deploys on the dStack 🤯",
+            "href": "https://www.youtube.com/watch?v=QkGLilgQ2Yc"
           },
           {
-            "label": "Privacy",
-            "href": "https://dstack.dev/privacy"
+            "label": "DStack Worker Agents using TEE 🤯",
+            "href": "https://www.youtube.com/watch?v=MCUWLUZuqJc"
           }
         ]
       },
       {
         "items": [
           {
-            "label": "GitHub",
-            "href": "https://github.com/Dstack-TEE/dstack"
+            "label": "📺 Phala dStack MCP agent video guide",
+            "href": "https://www.youtube.com/watch?v=qG-9f66z-G8"
           }
         ]
       }
@@ -298,12 +382,6 @@
   "integrations": {
     "ga4": {
       "measurementId": "G-XXXXXXXXXX"
-    },
-    "intercom": {
-      "appId": "YOUR_INTERCOM_APP_ID"
     }
-  },
-  "search": {
-    "prompt": "Search documentation..."
   }
 }

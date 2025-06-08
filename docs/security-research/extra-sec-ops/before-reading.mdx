@@ -3,6 +3,43 @@ title: "Before Reading: dstack Extra Security Modules Overview"
 description: "Summary and navigation for supplementary security modules in dstack"
 ---
 
+# Before You Continue: Prerequisite Reading & Navigation Guide
+
+<div style={{ border: "1px solid #f59e42", background: "#fff7ed", borderRadius: "8px", padding: "1.5rem", marginBottom: "2rem", display: "flex", flexDirection: "column", gap: "1.2rem" }}>
+  <div style={{ fontWeight: 600, color: "#b45309", fontSize: "1.1rem", marginBottom: "0.5rem" }}>
+    ⚠️ before reading this section, make sure you have covered the following foundational topics:
+  </div>
+  <div style={{ display: "flex", flexWrap: "wrap", gap: "1.2rem" }}>
+    <a href="/docs/security-research/security-model" style={{ flex: "1 1 260px", border: "1px solid #eab308", borderRadius: "7px", padding: "1rem", background: "#fefce8", textDecoration: "none", color: "#92400e" }}>
+      <b>Security Model Overview</b>
+      <div style={{ marginTop: "0.4rem", color: "#a16207" }}>
+        start here to understand dstack's overall security model and threat landscape
+      </div>
+    </a>
+    <a href="/docs/concepts/overview" style={{ flex: "1 1 260px", border: "1px solid #eab308", borderRadius: "7px", padding: "1rem", background: "#fefce8", textDecoration: "none", color: "#92400e" }}>
+      <b>Core Components</b>
+      <div style={{ marginTop: "0.4rem", color: "#a16207" }}>
+        review the main architectural components before diving into supplementary modules
+      </div>
+    </a>
+    <a href="/docs/overview/key-features" style={{ flex: "1 1 260px", border: "1px solid #eab308", borderRadius: "7px", padding: "1rem", background: "#fefce8", textDecoration: "none", color: "#92400e" }}>
+      <b>Key Features</b>
+      <div style={{ marginTop: "0.4rem", color: "#a16207" }}>
+        revisit the key features to understand how the platform behaves overall
+      </div>
+    </a>
+    <a href="/docs/security-research/overview" style={{ flex: "1 1 260px", border: "1px solid #eab308", borderRadius: "7px", padding: "1rem", background: "#fefce8", textDecoration: "none", color: "#92400e" }}>
+      <b>Main Security Systems</b>
+      <div style={{ marginTop: "0.4rem", color: "#a16207" }}>
+        read about the main systems (tdx attestation, vmm, gateway, kms) before exploring utilities
+      </div>
+    </a>
+  </div>
+  <div style={{ marginTop: "1rem", color: "#92400e", fontSize: "1rem" }}>
+    <b>note:</b> the sections below focus on supplementary and utility modules (such as certbot, ct monitor, iohash, and host api security). these are not required reading for understanding the core dstack platform, but are valuable for deep research or if you need to understand the full security landscape. if you are new to dstack or have not yet reviewed the main systems, we recommend starting with the links above.
+  </div>
+</div>
+
 # Overview: Supplementary Security Modules in dstack
 
 This section provides a high-level summary of the supplementary security modules that are part of the broader dstack repository. These modules—**Certbot Client**, **Certificate Transparency Monitor**, **Host API Security**, and **IOHash Security**—are maintained as distinct code repositories, but are designed to work together to enhance the overall security posture of dstack's TEE (Trusted Execution Environment) infrastructure.
