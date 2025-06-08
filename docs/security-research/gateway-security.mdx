@@ -1,5 +1,5 @@
 ---
-title: "Gateway Security Architecture"
+title: "⛩️ Gateway Security Architecture"
 description: "Secure ingress/egress with automated certificate management in dstack"
 ---
 
@@ -121,9 +121,15 @@ graph TD
     Sync --> GW3
 ```
 
+
+--- 
 ## Gateway CVM Registration Process
 
-The CVM (Confidential Virtual Machine) registration process involves remote attestation verification and secure network configuration through WireGuard tunnels.
+a CVM, or confidential virtual machine, is a virtual machine that runs inside a trusted execution environment (TEE) such as Intel TDX, providing hardware-enforced isolation and cryptographic protection for its code and data—even from the host or hypervisor. in dstack, CVMs are the core compute units that participate in the secure cluster, and their integrity is critical for trustless operation between nodes.
+
+to ensure that only trusted CVMs can join and communicate within the gateway cluster, every CVM must go through a registration process. this process requires the CVM to prove its trustworthiness via remote attestation (demonstrating it is running genuine, unmodified code inside a TEE) and to establish a secure, encrypted network channel using wireguard tunnels. wireguard provides authenticated, high-performance VPN connections between the gateway and each registered CVM, ensuring that all traffic is protected from eavesdropping or tampering.
+
+this registration process is essential for enabling trustless synchronization and secure communication between nodes in the dstack gateway architecture—only CVMs that have passed attestation and are properly registered are allowed to participate in the cluster and exchange state or data.
 
 ### Remote Attestation Verification
 
@@ -172,6 +178,8 @@ sequenceDiagram
     Gateway->>CVM: Return WireGuard config + agent config
     CVM->>Gateway: Establish WireGuard tunnel
 ```
+---
+
 
 ## Gateway Connection Strategies and Load Balancing
 
@@ -189,77 +197,62 @@ the dstack gateway implements a set of advanced connection management strategies
 
 these strategies work together to provide robust, secure, and efficient connection management for confidential workloads, ensuring that only healthy, authorized CVMs receive traffic and that the system can adapt to failures or dynamic scaling events in real time.
 
-### Top-N Selection Strategy
+Below are several recommended connection management strategies available in the dstack gateway. Each approach is designed to address different operational and security needs, and can be selected or combined based on your deployment requirements:
 
-The primary connection strategy uses a top-N selection algorithm that prioritizes instances based on recent WireGuard handshake times [19](#0-18) . The algorithm sorts instances by handshake elapsed time and selects the top N most recently active instances [20](#0-19) .
+1. **Top-N Selection Strategy**  
+   the primary connection strategy in the dstack gateway uses a top-n selection algorithm that prioritizes confidential virtual machine (CVM) instances based on recent WireGuard handshake times ([main_service.rs:286-335](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/gateway/src/main_service.rs#L286)). when a new connection request arrives, the gateway checks the latest handshake times for all CVMs associated with the requested application, sorts these instances by handshake elapsed time, and selects the top N most recently active instances (as configured by `connect_top_n`). this ensures that traffic is routed to peers that are known to be alive and responsive, minimizing latency and avoiding stale or unreachable instances.
 
-### Direct Instance Selection
+   the algorithm for sorting and selecting the top N instances is implemented as follows ([main_service.rs:329-334](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/gateway/src/main_service.rs#L329C5-L335C6)):
 
-For direct instance access, the gateway provides a direct lookup mechanism that bypasses load balancing [21](#0-20) . This allows applications to connect directly to specific CVM instances when needed.
+   [See implementation in gateway/src/main_service.rs (permalink)](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/gateway/src/main_service.rs#L329C5-L335C6):
 
-### Fallback Strategies
+   ```rust
+   instances.sort_by(|a, b| a.1.cmp(&b.1));
+   instances.truncate(n);
+   Ok(instances
+       .into_iter()
+       .map(|(ip, _, counter)| AddressInfo { ip, counter })
+       .collect())
+   ```
 
-When the top-N selection fails or when connect_top_n is set to 0, the gateway falls back to random selection [22](#0-21) . The random selection includes health checks based on WireGuard handshake status [23](#0-22) .
+   if the top-n cache is still valid (i.e., not expired), the gateway reuses the cached selection for efficiency. if handshake data cannot be retrieved (for example, due to an error), the gateway logs a warning and falls back to random selection among available instances. if `connect_top_n` is set to 0, the system also defaults to random selection. for localhost development, a special case routes traffic directly to `127.0.0.1`.
 
-### Connection Health Monitoring
+   for implementation details, see [`select_top_n_hosts`](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/gateway/src/main_service.rs#L286).
 
-The gateway monitors connection health through WireGuard handshake tracking and connection counting [24](#0-23) . Stale instances are automatically recycled based on configurable timeout thresholds [25](#0-24) .
+2. **Direct Instance Selection**  
+   sometimes you need to connect to a specific CVM instance instead of letting the gateway's load balancer decide. this is useful for debugging, session stickiness, or when deterministic routing is required. the dstack gateway enables this by allowing you to provide the unique identifier of a CVM instance; when you do, the gateway bypasses its normal load balancing and routes the connection directly to that instance. this gives you precise control over which CVM handles your request.
 
-### Certificate Transparency Monitoring
+   the direct instance selection logic is implemented by checking for a specific instance ID and, if present, returning the corresponding connection details. see the implementation in [`main_service.rs` (permalink)](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/gateway/src/main_service.rs#L329C5-L335C6). this mechanism ensures that applications or operators can always target a particular CVM when needed, without interference from the load balancer.
 
-The gateway integrates with a Certificate Transparency monitoring system that continuously monitors CT logs to detect unauthorized certificate issuance [26](#0-25) . The system validates that only certificates with known public keys are issued, providing protection against certificate-based attacks [27](#0-26) .
+3. **Fallback Strategies**  
+   if the top-n selection does not return any healthy CVMs (for example, if all candidates are stale, unreachable, or if `connect_top_n` is set to 0), the gateway switches to a fallback strategy. 
+   
+   [See fallback implementation in gateway/src/main_service.rs (permalink)](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/gateway/src/main_service.rs#L301):
 
-<table className="w-full my-4">
-  <thead>
-    <tr className="bg-gray-100">
-      <th className="p-3 text-left">Strategy</th>
-      <th className="p-3 text-left">Algorithm</th>
-      <th className="p-3 text-left">Health Check</th>
-      <th className="p-3 text-left">Fallback</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td className="p-3 font-mono">top_n_selection</td>
-      <td className="p-3">Latest handshake priority</td>
-      <td className="p-3">WireGuard handshake time</td>
-      <td className="p-3">Random selection</td>
-    </tr>
-    <tr className="bg-gray-50">
-      <td className="p-3 font-mono">direct_instance</td>
-      <td className="p-3">Instance ID lookup</td>
-      <td className="p-3">Connection counter</td>
-      <td className="p-3">App-level routing</td>
-    </tr>
-    <tr>
-      <td className="p-3 font-mono">localhost_mode</td>
-      <td className="p-3">Local development</td>
-      <td className="p-3">TCP connection</td>
-      <td className="p-3">127.0.0.1:port</td>
-    </tr>
-    <tr className="bg-gray-50">
-      <td className="p-3 font-mono">dns_resolution</td>
-      <td className="p-3">TXT record lookup</td>
-      <td className="p-3">DNS availability</td>
-      <td className="p-3">Connection timeout</td>
-    </tr>
-  </tbody>
-</table>
+   ```rust
+   if n == 0 {
+            // fallback to random selection
+            return Ok(self.random_select_a_host(id).unwrap_or_default());
+        }
+   ```
+   
+   in this mode, the gateway randomly selects from all available CVMs, but before making a selection, it checks the WireGuard handshake status for each instance to verify health ([see implementation](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/gateway/src/main_service.rs#L337C5-L350C1)). only CVMs with recent, valid handshakes are considered eligible, so traffic is never routed to dead or unresponsive instances even when falling back to random selection.
 
-## Cryptographic Security Implementation
 
-### TLS Configuration and Crypto Providers
+4. **connection health monitoring**  
+   the gateway continuously monitors the health of each CVM instance by tracking WireGuard handshake timestamps and connection activity. if an instance is found to be stale—meaning its last handshake exceeds a configurable timeout—the gateway automatically recycles and removes it from the active pool. this recycling and removal process is logged (see [main_service.rs:454-485](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/gateway/src/main_service.rs#L454C7-L485C6)), ensuring visibility and auditability. after recycling, the WireGuard peer set is reconfigured to reflect the updated state, so only healthy, responsive CVMs are available for new connections. 
 
-The gateway uses rustls with the ring cryptographic provider for all TLS operations [28](#0-27) . Certificate generation leverages RA-TLS capabilities when running in TEE environments, with fallback to KMS-based certificate authority for self-signed certificates [29](#0-28) .
+   these health check and recycling behaviors are fully configurable in the gateway’s toml configuration file, especially under the `[core.recycle]` section. for example:
+   ```toml
+   [core.recycle]
+   enabled = true
+   interval = "5m"
+   timeout = "10h"
+   node_timeout = "10m"
+   ```
+   for a complete reference configuration, see the [gateway.toml example](https://github.com/Dstack-TEE/dstack/blob/45ebd05a/gateway/gateway.toml).
+   you can adjust the recycling interval, timeouts, and enable/disable the feature as needed for your deployment. this automated health monitoring and recycling mechanism helps maintain a robust, reliable set of CVM endpoints without manual intervention.
 
-### Proxy Security Architecture
+5. **Certificate Transparency Monitoring**  
+   To defend against certificate-based attacks, the gateway integrates with a Certificate Transparency (CT) monitoring system. This system continuously checks CT logs for unauthorized certificate issuance and ensures that only certificates with known, authorized public keys are accepted for CVM connections. This provides an additional layer of protection against malicious or misissued certificates.
 
-The gateway implements both TLS termination and TLS passthrough modes based on SNI analysis [30](#0-29) . Connection handling includes comprehensive timeout management and secure connection lifecycle management [31](#0-30) .
-
-## Notes
-
-This document covers the security architecture of the dstack gateway, which serves as the entry point for external traffic to applications running in Confidential Virtual Machines. The gateway provides comprehensive security through automated certificate management, secure cluster communication, remote attestation verification, and intelligent load balancing. The implementation uses industry-standard protocols like ACME, WireGuard, and mutual TLS authentication to ensure secure communication throughout the system.
-
-The configuration parameters mentioned in this document can be customized through the gateway configuration file [32](#0-31) , allowing operators to tune the security and performance characteristics according to their specific deployment requirements.
-
-The security model is built on the principle of zero trust, where every component must be authenticated and authorized before being granted access to the network. Remote attestation ensures that only genuine TEE instances can register with the gateway, while Certificate Transparency monitoring provides ongoing security assurance against certificate-based attacks.
