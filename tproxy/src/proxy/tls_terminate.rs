@@ -3,15 +3,20 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use anyhow::{Context as _, Result};
+use anyhow::{anyhow, bail, Context as _, Result};
 use fs_err as fs;
+use hyper::body::Incoming;
+use hyper::server::conn::http1;
+use hyper::service::service_fn;
+use hyper::{Request, Response, StatusCode};
+use hyper_util::rt::tokio::TokioIo;
 use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::version::{TLS12, TLS13};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::TcpStream;
 use tokio::time::timeout;
-use tokio_rustls::{rustls, TlsAcceptor};
+use tokio_rustls::{rustls, server::TlsStream, TlsAcceptor};
 use tracing::debug;
 
 use crate::config::{CryptoProvider, ProxyConfig, TlsVersion};
@@ -132,6 +137,65 @@ impl TlsTerminateProxy {
         })
     }
 
+    pub(crate) async fn handle_health_check(
+        &self,
+        inbound: TcpStream,
+        buffer: Vec<u8>,
+        port: u16,
+    ) -> Result<()> {
+        if port != 80 {
+            bail!("Only port 80 is supported for health checks");
+        }
+        let stream = self.tls_accept(inbound, buffer).await?;
+
+        // Wrap the TLS stream with TokioIo to make it compatible with hyper 1.x
+        let io = TokioIo::new(stream);
+
+        let service = service_fn(|req: Request<Incoming>| async move {
+            // Only respond to GET / requests
+            if req.method() != hyper::Method::GET || req.uri().path() != "/" {
+                return Ok::<_, anyhow::Error>(
+                    Response::builder()
+                        .status(StatusCode::METHOD_NOT_ALLOWED)
+                        .body(String::new())
+                        .unwrap(),
+                );
+            }
+            Ok(Response::builder()
+                .status(StatusCode::OK)
+                .body(String::new())
+                .unwrap())
+        });
+
+        http1::Builder::new()
+            .serve_connection(io, service)
+            .await
+            .context("Failed to serve HTTP connection")?;
+
+        Ok(())
+    }
+
+    async fn tls_accept(
+        &self,
+        inbound: TcpStream,
+        buffer: Vec<u8>,
+    ) -> Result<TlsStream<MergedStream>> {
+        let stream = MergedStream {
+            buffer,
+            buffer_cursor: 0,
+            inbound,
+        };
+        let acceptor = self.acceptor.clone();
+        let tls_stream = timeout(
+            self.app_state.config.proxy.timeouts.handshake,
+            acceptor.accept(stream),
+        )
+        .await
+        .context("handshake timeout")?
+        .context("failed to accept tls connection")?;
+        Ok(tls_stream)
+    }
+
     pub(crate) async fn proxy(
         &self,
         inbound: TcpStream,
@@ -139,30 +203,22 @@ impl TlsTerminateProxy {
         app_id: &str,
         port: u16,
     ) -> Result<()> {
+        if app_id == "health" {
+            return self.handle_health_check(inbound, buffer, port).await;
+        }
         let addresses = self
             .app_state
             .lock()
             .select_top_n_hosts(app_id)
             .with_context(|| format!("tapp {app_id} not found"))?;
         debug!("selected top n hosts: {addresses:?}");
-        let stream = MergedStream {
-            buffer,
-            buffer_cursor: 0,
-            inbound,
-        };
-        let tls_stream = timeout(
-            self.app_state.config.proxy.timeouts.handshake,
-            self.acceptor.accept(stream),
-        )
-        .await
-        .context("handshake timeout")?
-        .context("failed to accept tls connection")?;
+        let tls_stream = self.tls_accept(inbound, buffer).await?;
         let outbound = timeout(
             self.app_state.config.proxy.timeouts.connect,
             connect_multiple_hosts(addresses, port),
         )
         .await
-        .map_err(|_| anyhow::anyhow!("connecting timeout"))?
+        .map_err(|_| anyhow!("connecting timeout"))?
         .context("failed to connect to app")?;
         bridge(
             IgnoreUnexpectedEofStream::new(tls_stream),
