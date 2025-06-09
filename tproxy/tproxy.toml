@@ -27,7 +27,7 @@ auto_set_caa = true
 domain = "*.example.com"
 renew_interval = "1h"
 renew_before_expiration = "10d"
-renew_timeout = "120s"
+renew_timeout = "5m"
 
 [core.wg]
 public_key = ""
