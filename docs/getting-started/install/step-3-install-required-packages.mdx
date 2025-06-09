@@ -1,34 +1,148 @@
 ---
-title: "Step 3: Install Required Packages for dstack"
-description: "Install Linux headers, development tools, and WireGuard to prepare your system for dstack."
+title: "Step 3 – Install Required Packages for dstack"
+description: "Install kernel headers, development tools, Rust, and WireGuard so your host can build and run dstack securely."
 ---
 
-# Step 3: Install Required Packages
+## Why this step matters 🔍
 
-To build and run dstack, your system needs Linux headers, development tools, and WireGuard for secure networking.
+dstack compiles kernel-level helpers (via WireGuard) and runs
+micro-VMs.  
+Before it can start, your host **must** have:
 
-## Install Command
+1. **Kernel headers** that exactly match your running kernel (for out-of-tree modules).  
+2. **Build-essential** tool-chain (gcc, make, etc.).  
+3. **Rust tool-chain** (dstack, guest helpers, and some plugins are written in Rust).  
+4. **WireGuard** userspace & kernel module for encrypted overlay networking.
 
-```bash
-sudo apt install -y linux-headers-$(uname -r) build-essential wireguard
-```
+> **Good to know:**  
+> These commands assume **Ubuntu 20.04+** (including 24.04).  
+> For other distros, install the equivalent packages (e.g. `dnf groupinstall "Development Tools"` on Fedora).
 
-*On Ubuntu, this also resolves missing modules for the latest kernel.*
-
+---
 
 ## Prerequisites
 
-- A bare metal TDX server setup following [canonical/tdx](https://github.com/canonical/tdx)
-- Public IPv4 address assigned to the machine
-- At least 16GB RAM, 100GB free disk space.
-- A domain with DNS access if you want to set up `dstack-gateway` for Zero Trust HTTPS
+- A bare-metal **TDX** server set up via [canonical/tdx](https://github.com/canonical/tdx)  
+  (ensures hardware isolation + SGX/TDX firmware support).
+- Public **IPv4** address on the machine.
+- **16 GB RAM** and **100 GB** free disk (minimum).
+- A domain with DNS control if you’ll expose `dstack-gateway` over HTTPS.
 
-## Install dependencies
+---
+
+## 1 – Update the package cache
+
+Always refresh apt metadata first:
 
 ```bash
-# for Ubuntu 24.04
-sudo apt install -y build-essential chrpath diffstat lz4 wireguard-tools xorriso
-# install rust
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+sudo apt update
+````
+
+---
+
+## 2 – Install kernel headers, dev tools, and WireGuard
+
+```bash
+sudo apt install -y \
+  linux-headers-$(uname -r) \
+  build-essential \
+  wireguard \
+  wireguard-tools \
+  chrpath diffstat lz4 xorriso
 ```
+
+* `linux-headers-$(uname -r)` – **must** match `uname -r`; otherwise DKMS fails.
+* `build-essential` – gcc, g++, make, libc headers.
+* `wireguard` + `wireguard-tools` – encrypted overlay between VM and gateway.
+* `chrpath`, `diffstat`, `lz4`, `xorriso` – helpers pulled in by dstack build scripts.
+
+> 💡 *If you just upgraded your kernel and the exact header package is not yet published, reboot into an older kernel (via GRUB) whose headers exist, or wait until the mirror catches up.*
+
+---
+
+## 3 – Install the Rust tool-chain
+
+dstack targets **stable** Rust. Use `rustup` so future updates are one command away:
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+# then activate without re-logging:
+source $HOME/.cargo/env
+rustc --version   # sanity check
+```
+
+---
+
+## 4 – Create the dstack environment file
+
+dstack reads runtime settings from `/etc/dstack/.env`.
+
+```bash
+sudo install -d -m 755 /etc/dstack
+sudo tee /etc/dstack/.env >/dev/null <<'EOF'
+# /etc/dstack/.env
+DSTACK_DOMAIN=example.com          # Your public domain (A/AAAA record → server IP)
+DSTACK_EMAIL=admin@example.com     # Let's Encrypt contact & expiry warnings
+DSTACK_API_PORT=9090               # REST / gRPC API
+DSTACK_UI_PORT=9080                # Web UI
+EOF
+sudo chmod 600 /etc/dstack/.env    # protect secrets
+```
+
+**Why these values?**
+
+| Variable                             | Reason                                                                                         |
+| ------------------------------------ | ---------------------------------------------------------------------------------------------- |
+| `DSTACK_DOMAIN`                      | Enables automatic HTTPS via ACME (Zero-Trust gateway).                                         |
+| `DSTACK_EMAIL`                       | Required by Let’s Encrypt for expiry notices & abuse reports.                                  |
+| `DSTACK_API_PORT` / `DSTACK_UI_PORT` | Separate the JSON API from the user-facing UI so you can lock one down via firewall if needed. |
+
+---
+
+## 5 – Register dstack as a `systemd` service
+
+Running dstack under `systemd` guarantees auto-start on boot and automatic restart on crash.
+
+```bash
+sudo tee /etc/systemd/system/dstack.service >/dev/null <<'EOF'
+[Unit]
+Description=dstack Runtime
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/dstack/.env
+ExecStart=/usr/local/bin/dstack run \
+  --domain ${DSTACK_DOMAIN} \
+  --email  ${DSTACK_EMAIL} \
+  --api-port ${DSTACK_API_PORT} \
+  --ui-port  ${DSTACK_UI_PORT}
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable --now dstack
+```
+
+### Verify
+
+```bash
+systemctl status dstack --no-pager
+journalctl -fu dstack
+```
+
+You should see `Listening on https://<DSTACK_DOMAIN>` and no errors about WireGuard or TLS.
+
+---
+
+## Next Steps
+
+1. **Open ports** `80` and `443` (or your custom ports) on any cloud firewall.
+2. Proceed to **Step 4 – Deploy dstack UI** to push your first container or notebook.
+3. Optionally harden the host (fail2ban, UFW rules, unattended-upgrades).
 

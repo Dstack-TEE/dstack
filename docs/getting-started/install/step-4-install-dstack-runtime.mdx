@@ -1,85 +1,88 @@
 ---
-title: "Step 4: Install dstack Runtime"
-description: "Quick install and setup instructions for dstack."
+title: "Step 4 – Build and Run dstack components"
+description: "Build the dstack components, start the core services, and verify everything in the UI."
 ---
 
-# Step 4: Install dstack Runtime
+> **Heads-up:** This step assumes you finished **Step 3** (kernel headers, Rust, WireGuard, `.env`, and the `systemd` unit).
 
-To install dstack, follow the latest instructions in the [official dstack README](https://github.com/Dstack-TEE/dstack/blob/master/README.md).
+---
 
-## Quick Start
+## 1 – Clone the Sources
 
-### Prerequisites
+```bash
+git clone https://github.com/Dstack-TEE/meta-dstack.git
+cd meta-dstack
+````
 
-- Bare metal Intel TDX server ([setup guide](https://github.com/canonical/tdx))
-- Public IPv4 address
-- 16GB+ RAM, 100GB+ disk
-- Domain with DNS access (for HTTPS via dstack-gateway)
+---
 
-> **Note:** For hardware requirements and cloud deployment, see [Dstack Hardware Requirements](https://docs.phala.network/dstack/hardware-requirements) and [Phala Cloud Getting Started](https://docs.phala.network/phala-cloud/getting-started/sign-up-for-cloud-account).
+## 2 – Visual Walk-through
 
-# Build and play locally
+### 2.1 Connect to Your Server
 
-## Installation Guide Screenshots
+| Action                      |                                                                                           |
+| --------------------------- | ----------------------------------------------------------------------------------------- |
+| SSH into the host           | ![](./step-install-guide/step1.png)<br/>[step1.png](./step-install-guide/step1.png)       |
+| Accept the fingerprint      | ![](./step-install-guide/step2.png)<br/>[step2.png](./step-install-guide/step2.png)       |
+| Confirm WireGuard installed | ![](./step-install-guide/step4.0.png)<br/>[step4.0.png](./step-install-guide/step4.0.png) |
 
-Below are all the step-by-step screenshots for the installation process. Follow them in order for a visual reference.
+---
 
-## Step 1: SSH into Your Server
+### 2.2 Prepare the Build Environment
 
-| Step | Image |
-|------|-------|
-| ssh into your console  | ![](./step-install-guide/step1.png) |
-| Sign for fingerprint   | ![](./step-install-guide/step2.png) |
-| Install Wireguard   | ![](./step-install-guide/step4.0.png) |
+| Action                      |                                                                                           |
+| --------------------------- | ----------------------------------------------------------------------------------------- |
+| Install Rust (rustup)       | ![](./step-install-guide/step4.1.png)<br/>[step4.1.png](./step-install-guide/step4.1.png) |
+| Finish rustup setup         | ![](./step-install-guide/step4.2.png)<br/>[step4.2.png](./step-install-guide/step4.2.png) |
+| Clone **meta-dstack**       | ![](./step-install-guide/step4.3.png)<br/>[step4.3.png](./step-install-guide/step4.3.png) |
+| Generate local build config | ![](./step-install-guide/step4.4.png)<br/>[step4.4.png](./step-install-guide/step4.4.png) |
 
-## Step 2: Terminal Commands for Deployment
+---
 
-| Step   | Image |
-|--------|-------|
-| Install Rustup Crates   | ![](./step-install-guide/step4.1.png) |
-|    | ![](./step-install-guide/step4.2.png) |
-| Git install the `meta-dstack`   | ![](./step-install-guide/step4.3.png) |
-| Make a Build config   | ![](./step-install-guide/step4.4.png) |
+### 2.3 Build dstack Binaries
 
-## Step 3: Continue Deployment Steps
+Inside the repo:
 
-| Step | Image |
-|------|-------|
-| Build the host config using `$ ./build.sh hostcfg` script  | ![](./step-install-guide/step5.png) |
-| Build the `dl` at the domain address   | ![](./step-install-guide/step6.png) |
-| Build the guest agent for gateway access   | ![](./step-install-guide/step7.png) |
+```bash
+./build.sh hostcfg          # host configuration
+./build.sh dl <domain>      # gateway helper
+./build.sh guest            # guest agent
+```
 
-## Step 4: Additional Setup Steps
+| Command              |                                                                                     |
+| -------------------- | ----------------------------------------------------------------------------------- |
+| `./build.sh hostcfg` | ![](./step-install-guide/step5.png)<br/>[step5.png](./step-install-guide/step5.png) |
+| `./build.sh dl …`    | ![](./step-install-guide/step6.png)<br/>[step6.png](./step-install-guide/step6.png) |
+| `./build.sh guest`   | ![](./step-install-guide/step7.png)<br/>[step7.png](./step-install-guide/step7.png) |
 
-| Step | Image |
-|------|-------|
-| Start the dstack `kms`  | ![](./step-install-guide/step9.png) |
-| Run the gateway instance | ![](./step-install-guide/step10.png) |
-| 11   | ![](./step-install-guide/step11.png) |
-| 12.0 | ![](./step-install-guide/step12.0.png) |
-| 12.1 | ![](./step-install-guide/step12.1.png) |
-| 12.2 | ![](./step-install-guide/step12.2.png) |
+---
 
-## Step 5: Finalize Deployment
+## 3 – Start Core Services
 
-| Step | Image |
-|------|-------|
-| 13   | ![](./step-install-guide/step13.png) |
-| 14   | ![](./step-install-guide/step14.png) |
-| 15   | ![](./step-install-guide/step15.png) |
-| 16   | ![](./step-install-guide/step16.png) |
-| 17   | ![](./step-install-guide/step17.png) |
-| 18   | ![](./step-install-guide/step18.png) |
-| 19   | ![](./step-install-guide/step19.png) |
-| 20   | ![](./step-install-guide/step20.png) |
-| 21   | ![](./step-install-guide/step21.png) |
-| 22   | ![](./step-install-guide/step22.png) |
-| 23   | ![](./step-install-guide/step23.png) |
-| 24   | ![](./step-install-guide/step24.png) |
-| 25   | ![](./step-install-guide/step25.png) |
-| 26   | ![](./step-install-guide/step26.png) |
-| 27   | ![](./step-install-guide/step27.png) |
-| 28   | ![](./step-install-guide/step28.png) |
+```bash
+# 1. Key-management service
+./target/release/dstack-kms --config kms.toml
+# 2. Gateway
+./target/release/dstack-gateway --config gateway.toml
+# 3. Virtual-machine manager
+./target/release/dstack-vmm --config vmm.toml
+```
 
+| Action            |                                                                                              |
+| ----------------- | -------------------------------------------------------------------------------------------- |
+| Start `kms`       | ![](./step-install-guide/step9.png)<br/>[step9.png](./step-install-guide/step9.png)          |
+| Start `gateway`   | ![](./step-install-guide/step10.png)<br/>[step10.png](./step-install-guide/step10.png)       |
+| Start `vmm`       | ![](./step-install-guide/step11.png)<br/>[step11.png](./step-install-guide/step11.png)       |
+| Open VMM UI       | ![](./step-install-guide/step12.0.png)<br/>[step12.0.png](./step-install-guide/step12.0.png) |
+| Verify components | ![](./step-install-guide/step12.1.png)<br/>[step12.1.png](./step-install-guide/step12.1.png) |
+| Ready to deploy   | ![](./step-install-guide/step12.2.png)<br/>[step12.2.png](./step-install-guide/step12.2.png) |
 
+---
 
+## ✅ Next Step: Deploy Your First Application
+
+By now you've successfully built and started all the core dstack components. Your dstack cluster is now ready to deploy confidential applications.
+
+To continue with deploying your first application, visit:
+
+[**dstack Deployment Walkthrough**](/docs/getting-started/deploying-applications)

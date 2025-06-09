@@ -68,6 +68,16 @@
             ]
           },
           {
+            "group": "🚀 Application Deployment",
+            "icon": {
+                  "name": "circle-stop",
+                  "style": "solid"
+                },
+            "pages": [
+              "docs/getting-started/deploying-applications"
+            ]
+          },
+          {
             "group": " 📦 DStack Installation",
             "icon": {
                   "name": "circle-stop",
@@ -85,17 +95,14 @@
                   "docs/getting-started/install/step-1-prerequisites",
                   "docs/getting-started/install/step-2-update-server",
                   "docs/getting-started/install/step-3-install-required-packages",
-                  "docs/getting-started/install/step-4-install-dstack-runtime",
-                  "docs/getting-started/install/step-5-configure-environment",
-                  "docs/getting-started/install/step-6-register-systemd-service",
-                  "docs/getting-started/install/step-7-firewall-and-verification"
+                  "docs/getting-started/install/step-4-install-dstack-runtime"
                 ]
               }
             ]
           },
           
           {
-            "group": " 🚢 First DStack Deployment",
+            "group": "In-Depth Deployment Guide",
             "icon": {
               "name": "circle-stop",
               "style": "solid"
