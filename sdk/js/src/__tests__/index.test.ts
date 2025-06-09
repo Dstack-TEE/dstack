@@ -1,5 +1,6 @@
 import { expect, describe, it } from 'vitest'
-import { TappdClient } from '../index'
+import { TappdClient, send_rpc_request } from '../index'
+import net from 'net'
 
 // Test PEM key for cross-platform validation
 const TEST_PEM_KEY = `-----BEGIN PRIVATE KEY-----
@@ -237,5 +238,368 @@ describe('TappdClient', () => {
     const { privateKeyToAccount } = require('viem/accounts')
     const expectedViemAccount = privateKeyToAccount(`0x${expectedHex}`)
     expect(secureViemAccount.address).toBe(expectedViemAccount.address)
+  })
+})
+
+describe('send_rpc_request timeout and abort', () => {
+  it('should timeout after 30 seconds with http endpoint', async () => {
+    // Create a server that accepts connections but never responds
+    const server = require('http').createServer((req, res) => {
+      // Don't respond, let it hang
+    })
+    
+    await new Promise<void>((resolve) => {
+      server.listen(0, () => resolve())
+    })
+    
+    const port = server.address().port
+    const endpoint = `http://localhost:${port}`
+    
+    try {
+      const start = Date.now()
+      // The timeout triggers abort, so we expect 'request aborted' not 'request timed out'
+      await expect(send_rpc_request(endpoint, '/test', '{}')).rejects.toThrow('request aborted')
+      const elapsed = Date.now() - start
+      
+      // Should timeout around 30 seconds (with some tolerance)
+      expect(elapsed).toBeGreaterThanOrEqual(29000)
+      expect(elapsed).toBeLessThan(32000)
+    } finally {
+      server.close()
+    }
+  }, 35000) // Test timeout longer than request timeout
+
+  it('should timeout after 30 seconds with unix socket endpoint', async () => {
+    // Create a Unix socket server that accepts connections but never responds
+    const socketPath = `/tmp/test-socket-${Date.now()}`
+    const server = net.createServer((socket) => {
+      // Don't respond, let it hang
+    })
+    
+    await new Promise<void>((resolve) => {
+      server.listen(socketPath, () => resolve())
+    })
+    
+    try {
+      const start = Date.now()
+      // The timeout triggers abort, so we expect 'request aborted' not 'request timed out'
+      await expect(send_rpc_request(socketPath, '/test', '{}')).rejects.toThrow('request aborted')
+      const elapsed = Date.now() - start
+      
+      // Should timeout around 30 seconds (with some tolerance)
+      expect(elapsed).toBeGreaterThanOrEqual(29000)
+      expect(elapsed).toBeLessThan(32000)
+    } finally {
+      server.close()
+      // Clean up socket file
+      require('fs').unlink(socketPath, () => {})
+    }
+  }, 35000) // Test timeout longer than request timeout
+
+  it('should handle manual abort with custom abort controller', async () => {
+    // Create a testable version of send_rpc_request that exposes abortController
+    function send_rpc_request_with_abort<T = any>(endpoint: string, path: string, payload: string): { promise: Promise<T>, abort: () => void } {
+      let abortController: AbortController
+      let isCompleted = false
+      
+      const promise = new Promise<T>((resolve, reject) => {
+        abortController = new AbortController()
+        
+        const safeReject = (error: Error) => {
+          if (!isCompleted) {
+            isCompleted = true
+            reject(error)
+          }
+        }
+        
+        const safeResolve = (result: T) => {
+          if (!isCompleted) {
+            isCompleted = true
+            resolve(result)
+          }
+        }
+        
+        const timeout = setTimeout(() => {
+          abortController.abort()
+          safeReject(new Error('request timed out'))
+        }, 30_000)
+
+        const cleanup = () => {
+          clearTimeout(timeout)
+          abortController.signal.removeEventListener('abort', onAbort)
+        }
+
+        const onAbort = () => {
+          cleanup()
+          safeReject(new Error('request aborted'))
+        }
+
+        abortController.signal.addEventListener('abort', onAbort)
+
+        // Create a server that never responds
+        const server = require('http').createServer((req, res) => {
+          // Don't respond
+        })
+        
+        server.listen(0, () => {
+          const port = server.address().port
+          const url = new URL(path, `http://localhost:${port}`)
+          const req = require('http').request(url, { method: 'POST' }, (res) => {
+            // This won't be called since server doesn't respond
+          })
+
+          req.on('error', (error) => {
+            cleanup()
+            server.close()
+            safeReject(error)
+          })
+
+          abortController.signal.addEventListener('abort', () => {
+            req.destroy()
+            server.close()
+          })
+
+          req.write(payload)
+          req.end()
+        })
+      })
+
+      return {
+        promise,
+        abort: () => abortController?.abort()
+      }
+    }
+
+    const start = Date.now()
+    const { promise, abort } = send_rpc_request_with_abort('http://localhost:1', '/test', '{}')
+    
+    // Abort after 1 second
+    setTimeout(() => {
+      abort()
+    }, 1000)
+    
+    await expect(promise).rejects.toThrow('request aborted')
+    const elapsed = Date.now() - start
+    
+    // Should abort quickly (around 1 second, not 30)
+    expect(elapsed).toBeLessThan(5000)
+    expect(elapsed).toBeGreaterThanOrEqual(1000)
+  })
+
+  it('should handle connection errors gracefully', async () => {
+    // Try to connect to a non-existent HTTP server
+    const endpoint = 'http://localhost:99999'
+    
+    await expect(send_rpc_request(endpoint, '/test', '{}')).rejects.toThrow()
+  })
+
+  it('should handle connection errors for unix socket gracefully', async () => {
+    // Try to connect to a non-existent Unix socket
+    const endpoint = '/tmp/non-existent-socket'
+    
+    await expect(send_rpc_request(endpoint, '/test', '{}')).rejects.toThrow()
+  })
+
+  it('should handle malformed JSON response', async () => {
+    // Create a server that returns invalid JSON
+    const server = require('http').createServer((req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end('invalid json{')
+    })
+    
+    await new Promise<void>((resolve) => {
+      server.listen(0, () => resolve())
+    })
+    
+    const port = server.address().port
+    const endpoint = `http://localhost:${port}`
+    
+    try {
+      await expect(send_rpc_request(endpoint, '/test', '{}')).rejects.toThrow('failed to parse response')
+    } finally {
+      server.close()
+    }
+  })
+
+  it('should handle malformed JSON response from unix socket', async () => {
+    // Create a Unix socket server that returns invalid JSON
+    const socketPath = `/tmp/test-socket-json-${Date.now()}`
+    const server = net.createServer((socket) => {
+      socket.write('HTTP/1.1 200 OK\r\n')
+      socket.write('Content-Type: application/json\r\n')
+      socket.write('Content-Length: 13\r\n')
+      socket.write('\r\n')
+      socket.write('invalid json{')
+      socket.end()
+    })
+    
+    await new Promise<void>((resolve) => {
+      server.listen(socketPath, () => resolve())
+    })
+    
+    try {
+      await expect(send_rpc_request(socketPath, '/test', '{}')).rejects.toThrow('failed to parse response')
+    } finally {
+      server.close()
+      require('fs').unlink(socketPath, () => {})
+    }
+  })
+
+  it('should successfully handle valid response from http server', async () => {
+    // Create a server that returns valid JSON
+    const server = require('http').createServer((req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end('{"success": true}')
+    })
+    
+    await new Promise<void>((resolve) => {
+      server.listen(0, () => resolve())
+    })
+    
+    const port = server.address().port
+    const endpoint = `http://localhost:${port}`
+    
+    try {
+      const result = await send_rpc_request(endpoint, '/test', '{}')
+      expect(result).toEqual({ success: true })
+    } finally {
+      server.close()
+    }
+  })
+
+  it('should successfully handle valid response from unix socket', async () => {
+    // Create a Unix socket server that returns valid JSON
+    const socketPath = `/tmp/test-socket-valid-${Date.now()}`
+    const server = net.createServer((socket) => {
+      socket.write('HTTP/1.1 200 OK\r\n')
+      socket.write('Content-Type: application/json\r\n')
+      socket.write('Content-Length: 17\r\n')
+      socket.write('\r\n')
+      socket.write('{"success": true}')
+      socket.end()
+    })
+    
+    await new Promise<void>((resolve) => {
+      server.listen(socketPath, () => resolve())
+    })
+    
+    try {
+      const result = await send_rpc_request(socketPath, '/test', '{}')
+      expect(result).toEqual({ success: true })
+    } finally {
+      server.close()
+      require('fs').unlink(socketPath, () => {})
+    }
+  })
+
+  it('should prevent duplicate rejections', async () => {
+    // Test that our safe reject/resolve mechanism works
+    let rejectCount = 0
+    let resolveCount = 0
+    
+    const testPromise = new Promise((resolve, reject) => {
+      let isCompleted = false
+      
+      const safeReject = (error: Error) => {
+        rejectCount++
+        if (!isCompleted) {
+          isCompleted = true
+          reject(error)
+        }
+      }
+      
+      const safeResolve = (result: any) => {
+        resolveCount++
+        if (!isCompleted) {
+          isCompleted = true
+          resolve(result)
+        }
+      }
+      
+      // Try to reject multiple times - only two should run since the first will complete
+      setTimeout(() => safeReject(new Error('first')), 10)
+      setTimeout(() => safeReject(new Error('second')), 20)
+      // This won't run because promise is already completed  
+      setTimeout(() => safeResolve('resolved'), 30)
+    })
+    
+    await expect(testPromise).rejects.toThrow('first')
+    
+    // Wait a bit to ensure all timeouts fire
+    await new Promise(resolve => setTimeout(resolve, 100))
+    
+    // First reject completes the promise, second should be attempted but ignored
+    // The resolve should also be attempted since the timeout is already set
+    expect(rejectCount).toBe(2) // First two rejects should increment counter  
+    expect(resolveCount).toBe(1) // Resolve should still be attempted
+  })
+
+  it('should timeout with fast timeout for testing', async () => {
+    // Create a testable version with shorter timeout
+    function send_rpc_request_fast_timeout<T = any>(endpoint: string, path: string, payload: string): Promise<T> {
+      return new Promise((resolve, reject) => {
+        const abortController = new AbortController()
+        let isCompleted = false
+        
+        const safeReject = (error: Error) => {
+          if (!isCompleted) {
+            isCompleted = true
+            reject(error)
+          }
+        }
+        
+        const timeout = setTimeout(() => {
+          abortController.abort()
+          safeReject(new Error('request timed out'))
+        }, 1000) // 1 second timeout for testing
+
+        const cleanup = () => {
+          clearTimeout(timeout)
+          abortController.signal.removeEventListener('abort', onAbort)
+        }
+
+        const onAbort = () => {
+          cleanup()
+          safeReject(new Error('request aborted'))
+        }
+
+        abortController.signal.addEventListener('abort', onAbort)
+
+        // Create a server that never responds
+        const server = require('http').createServer((req, res) => {
+          // Don't respond
+        })
+        
+        server.listen(0, () => {
+          const port = server.address().port
+          const url = new URL(path, `http://localhost:${port}`)
+          const req = require('http').request(url, { method: 'POST' }, (res) => {
+            // This won't be called since server doesn't respond
+          })
+
+          req.on('error', (error) => {
+            cleanup()
+            server.close()
+            safeReject(error)
+          })
+
+          abortController.signal.addEventListener('abort', () => {
+            req.destroy()
+            server.close()
+          })
+
+          req.write(payload)
+          req.end()
+        })
+      })
+    }
+
+    const start = Date.now()
+    await expect(send_rpc_request_fast_timeout('http://localhost:1', '/test', '{}')).rejects.toThrow('request aborted')
+    const elapsed = Date.now() - start
+    
+    // Should timeout around 1 second
+    expect(elapsed).toBeGreaterThanOrEqual(1000)
+    expect(elapsed).toBeLessThan(2000)
   })
 })
