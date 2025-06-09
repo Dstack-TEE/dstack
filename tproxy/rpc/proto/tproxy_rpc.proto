@@ -109,6 +109,8 @@ service TproxyAdmin {
   rpc Exit(google.protobuf.Empty) returns (google.protobuf.Empty) {}
   // Renew the proxy TLS certificate if certbot is enabled
   rpc RenewCert(google.protobuf.Empty) returns (RenewCertResponse) {}
+  // Reload the proxy TLS certificate from files
+  rpc ReloadCert(google.protobuf.Empty) returns (google.protobuf.Empty) {}
   // Set CAA records
   rpc SetCaa(google.protobuf.Empty) returns (google.protobuf.Empty) {}
 }

@@ -95,16 +95,23 @@ impl AdminRpc for AdminRpcHandler {
         self.state.lock().exit();
     }
 
-    async fn renew_cert(self) -> anyhow::Result<RenewCertResponse> {
-        let bot = self.state.certbot.context("Certbot is not enabled")?;
-        let renewed = bot.renew(true).await?;
+    async fn renew_cert(self) -> Result<RenewCertResponse> {
+        let renewed = self.state.renew_cert(true).await?;
         Ok(RenewCertResponse { renewed })
     }
 
     async fn set_caa(self) -> Result<()> {
-        let bot = self.state.certbot.context("Certbot is not enabled")?;
-        bot.set_caa().await?;
+        self.state
+            .certbot
+            .as_ref()
+            .context("Certbot is not enabled")?
+            .set_caa()
+            .await?;
         Ok(())
+    }
+
+    async fn reload_cert(self) -> Result<()> {
+        self.state.reload_certificates()
     }
 
     async fn status(self) -> Result<StatusResponse> {

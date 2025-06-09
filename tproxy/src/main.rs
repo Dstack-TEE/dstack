@@ -73,6 +73,8 @@ async fn main() -> Result<()> {
     let pccs_url = config.pccs_url.clone();
     let admin_enabled = config.admin.enabled;
     let state = main_service::Proxy::new(config).await?;
+    info!("Starting background tasks");
+    state.start_bg_tasks().await?;
     state.lock().reconfigure()?;
     proxy::start(proxy_config, state.clone());
 

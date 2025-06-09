@@ -1,7 +1,8 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     net::Ipv4Addr,
-    sync::{Arc, Mutex, MutexGuard, Weak},
+    ops::Deref,
+    sync::{Arc, Mutex, MutexGuard, RwLock},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -20,24 +21,44 @@ use rinja::Template as _;
 use safe_write::safe_write;
 use serde::{Deserialize, Serialize};
 use smallvec::{smallvec, SmallVec};
-use tproxy_rpc::{
-    tproxy_server::{TproxyRpc, TproxyServer},
-    AcmeInfoResponse, GetInfoRequest, GetInfoResponse, GetMetaResponse, HostInfo as PbHostInfo,
-    ListResponse, RegisterCvmRequest, RegisterCvmResponse, TappdConfig, WireGuardConfig,
-};
+use tokio::sync::Notify;
+use tokio_rustls::TlsAcceptor;
 use tracing::{debug, error, info, warn};
 
 use crate::{
     config::Config,
     models::{InstanceInfo, WgConf},
-    proxy::{AddressGroup, AddressInfo},
+    proxy::{create_acceptor, AddressGroup, AddressInfo},
 };
 
 #[derive(Clone)]
 pub struct Proxy {
+    _inner: Arc<ProxyInner>,
+}
+
+impl Deref for Proxy {
+    type Target = ProxyInner;
+    fn deref(&self) -> &Self::Target {
+        &self._inner
+    }
+}
+
+pub struct ProxyInner {
     pub(crate) config: Arc<Config>,
     pub(crate) certbot: Option<Arc<CertBot>>,
-    inner: Arc<Mutex<ProxyState>>,
+    my_app_id: Option<Vec<u8>>,
+    state: Mutex<ProxyState>,
+    notify_state_updated: Notify,
+    auth_client: AuthClient,
+    pub(crate) acceptor: RwLock<TlsAcceptor>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct GatewayNodeInfo {
+    pub id: Vec<u8>,
+    pub url: String,
+    pub wg_peer: WireGuardPeer,
+    pub last_seen: SystemTime,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -56,84 +77,139 @@ pub(crate) struct ProxyState {
 }
 
 impl Proxy {
+    pub async fn new(config: Config, my_app_id: Option<Vec<u8>>) -> Result<Self> {
+        Ok(Self {
+            _inner: Arc::new(ProxyInner::new(config, my_app_id).await?),
+        })
+    }
+}
+
+impl ProxyInner {
     pub(crate) fn lock(&self) -> MutexGuard<ProxyState> {
-        self.inner.lock().expect("Failed to lock AppState")
+        self.state.lock().expect("Failed to lock AppState")
     }
 
     pub async fn new(config: Config) -> Result<Self> {
         let config = Arc::new(config);
-        let state_path = &config.state_path;
-        let state = if fs::metadata(state_path).is_ok() {
-            let state_str = fs::read_to_string(state_path).context("Failed to read state")?;
-            serde_json::from_str(&state_str).context("Failed to load state")?
-        } else {
-            ProxyStateMut {
-                apps: BTreeMap::new(),
-                top_n: BTreeMap::new(),
-                instances: BTreeMap::new(),
-                allocated_addresses: BTreeSet::new(),
-            }
-        };
-        let inner = Arc::new(Mutex::new(ProxyState {
+        let mut state = fs::metadata(&config.state_path)
+            .is_ok()
+            .then(|| load_state(&config.state_path))
+            .transpose()
+            .unwrap_or_else(|err| {
+                error!("Failed to load state: {err}");
+                None
+            })
+            .unwrap_or_default();
+        state.nodes.insert(
+            config.wg.public_key.clone(),
+            GatewayNodeInfo {
+                id: config.id(),
+                url: config.sync.my_url.clone(),
+                wg_peer: WireGuardPeer {
+                    pk: config.wg.public_key.clone(),
+                    ip: config.wg.ip.to_string(),
+                    endpoint: config.wg.endpoint.clone(),
+                },
+                last_seen: SystemTime::now(),
+            },
+        );
+        let state = Mutex::new(ProxyState {
             config: config.clone(),
             state,
-        }));
-        start_recycle_thread(Arc::downgrade(&inner), config.clone());
-        let certbot = start_certbot_task(&config).await?;
+        });
+        let auth_client = AuthClient::new(config.auth.clone());
+        let certbot = match config.certbot.enabled {
+            true => {
+                let certbot = config
+                    .certbot
+                    .build_bot()
+                    .await
+                    .context("Failed to build certbot")?;
+                info!("Certbot built, renewing...");
+                // Try first renewal for the acceptor creation
+                certbot.renew(false).await.context("Failed to renew cert")?;
+                Some(Arc::new(certbot))
+            }
+            false => None,
+        };
+        let acceptor =
+            RwLock::new(create_acceptor(&config.proxy).context("Failed to create acceptor")?);
         Ok(Self {
             config,
-            inner,
+            state,
+            notify_state_updated: Notify::new(),
+            my_app_id,
+            auth_client,
+            acceptor,
             certbot,
         })
     }
 }
 
-fn start_recycle_thread(state: Weak<Mutex<ProxyState>>, config: Arc<Config>) {
-    if !config.recycle.enabled {
+impl Proxy {
+    pub(crate) async fn start_bg_tasks(&self) -> Result<()> {
+        start_recycle_thread(self.clone());
+        start_sync_task(self.clone());
+        start_certbot_task(self.clone()).await?;
+        Ok(())
+    }
+
+    pub(crate) async fn renew_cert(&self, force: bool) -> Result<bool> {
+        let Some(certbot) = &self.certbot else {
+            return Ok(false);
+        };
+        let renewed = certbot.renew(force).await.context("Failed to renew cert")?;
+        if renewed {
+            self.reload_certificates()
+                .context("Failed to reload certificates")?;
+        }
+        Ok(renewed)
+    }
+}
+
+fn load_state(state_path: &str) -> Result<ProxyStateMut> {
+    let state_str = fs::read_to_string(state_path).context("Failed to read state")?;
+    serde_json::from_str(&state_str).context("Failed to load state")
+}
+
+fn start_recycle_thread(proxy: Proxy) {
+    if !proxy.config.recycle.enabled {
         info!("recycle is disabled");
         return;
     }
     std::thread::spawn(move || loop {
-        std::thread::sleep(config.recycle.interval);
-        let Some(state) = state.upgrade() else {
-            break;
-        };
-        if let Err(err) = state.lock().unwrap().recycle() {
+        std::thread::sleep(proxy.config.recycle.interval);
+        if let Err(err) = proxy.lock().recycle() {
             error!("failed to run recycle: {err}");
         };
     });
 }
 
-async fn start_certbot_task(config: &Arc<Config>) -> Result<Option<Arc<CertBot>>> {
-    if !config.certbot.enabled {
-        info!("Certbot is disabled");
-        return Ok(None);
-    }
-    info!("Starting certbot...");
-    let certbot = config
-        .certbot
-        .build_bot()
-        .await
-        .context("Failed to build certbot")?;
-    info!("First renewal...");
-    certbot.renew(false).await.context("Failed to renew cert")?;
-    let certbot = Arc::new(certbot);
-    let certbot_clone = certbot.clone();
+async fn start_certbot_task(proxy: Proxy) -> Result<()> {
+    let Some(certbot) = proxy.certbot.clone() else {
+        info!("Certbot is not enabled");
+        return Ok(());
+    };
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(certbot.renew_interval()).await;
-            match certbot.renew(false).await {
-                Err(e) => {
-                    error!("Failed to run certbot: {e:?}");
-                }
-                Ok(renewed) => {
-                    if renewed {
-                        // Restart self
-                        info!("Certificate renewed, restarting...");
-                        std::process::exit(0);
-                    }
-                }
+            if let Err(err) = proxy.renew_cert(false).await {
+                error!("Failed to renew cert: {err}");
             }
+        }
+    });
+    Ok(())
+}
+
+fn start_sync_task(proxy: Proxy) {
+    if !proxy.config.sync.enabled {
+        info!("sync is disabled");
+        return;
+    }
+    tokio::spawn(async move {
+        match sync_client::sync_task(proxy).await {
+            Ok(_) => info!("Sync task exited"),
+            Err(err) => error!("Failed to run sync task: {err}"),
         }
     });
 }
@@ -525,75 +601,9 @@ impl TproxyRpc for RpcHandler {
                 internal_port: state.config.proxy.tappd_port as u32,
                 domain: state.config.proxy.base_domain.clone(),
             }),
-        })
-    }
-
-    async fn status(self) -> Result<StatusResponse> {
-        let mut state = self.state.lock();
-        state.refresh_state()?;
-        let base_domain = &state.config.proxy.base_domain;
-        let hosts = state
-            .state
-            .instances
-            .values()
-            .map(|instance| PbHostInfo {
-                instance_id: instance.id.clone(),
-                ip: instance.ip.to_string(),
-                app_id: instance.app_id.clone(),
-                base_domain: base_domain.clone(),
-                port: state.config.proxy.listen_port as u32,
-                latest_handshake: encode_ts(instance.last_seen),
-                num_connections: instance.num_connections(),
-            })
-            .collect::<Vec<_>>();
-        let nodes = state
-            .state
-            .nodes
-            .values()
-            .cloned()
-            .map(Into::into)
-            .collect::<Vec<_>>();
-        Ok(StatusResponse {
-            url: state.config.sync.my_url.clone(),
-            id: state.config.id(),
-            bootnode_url: state.config.sync.bootnode.clone(),
-            nodes,
-            hosts,
-            num_connections: NUM_CONNECTIONS.load(Ordering::Relaxed),
-        })
-    }
-
-    async fn get_info(self, request: GetInfoRequest) -> Result<GetInfoResponse> {
-        let state = self.state.lock();
-        let base_domain = &state.config.proxy.base_domain;
-        let handshakes = state.latest_handshakes(None)?;
-
-        if let Some(instance) = state.state.instances.get(&request.id) {
-            let host_info = PbHostInfo {
-                instance_id: instance.id.clone(),
-                ip: instance.ip.to_string(),
-                app_id: instance.app_id.clone(),
-                base_domain: base_domain.clone(),
-                port: state.config.proxy.listen_port as u32,
-                latest_handshake: {
-                    let (ts, _) = handshakes
-                        .get(&instance.public_key)
-                        .copied()
-                        .unwrap_or_default();
-                    ts
-                },
-                num_connections: instance.num_connections(),
-            };
-            Ok(GetInfoResponse {
-                found: true,
-                info: Some(host_info),
-            })
-        } else {
-            Ok(GetInfoResponse {
-                found: false,
-                info: None,
-            })
-        }
+        };
+        self.state.notify_state_updated.notify_one();
+        Ok(response)
     }
 
     async fn acme_info(self) -> Result<AcmeInfoResponse> {

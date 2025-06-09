@@ -1,6 +1,6 @@
 use std::io;
 use std::pin::Pin;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use anyhow::{anyhow, bail, Context as _, Result};
@@ -92,12 +92,7 @@ where
     }
 }
 
-pub struct TlsTerminateProxy {
-    app_state: Proxy,
-    acceptor: RwLock<TlsAcceptor>,
-}
-
-fn create_acceptor(config: &ProxyConfig) -> Result<TlsAcceptor> {
+pub(crate) fn create_acceptor(config: &ProxyConfig) -> Result<TlsAcceptor> {
     let cert_pem = fs::read(&config.cert_chain).context("failed to read certificate")?;
     let key_pem = fs::read(&config.cert_key).context("failed to read private key")?;
     let certs = CertificateDer::pem_slice_iter(cert_pem.as_slice())
@@ -129,18 +124,11 @@ fn create_acceptor(config: &ProxyConfig) -> Result<TlsAcceptor> {
     Ok(acceptor)
 }
 
-impl TlsTerminateProxy {
-    pub fn new(app_state: &Proxy) -> Result<Self> {
-        Ok(Self {
-            app_state: app_state.clone(),
-            acceptor: RwLock::new(create_acceptor(&app_state.config.proxy)?),
-        })
-    }
-
+impl Proxy {
     /// Reload the TLS acceptor with fresh certificates
     pub fn reload_certificates(&self) -> Result<()> {
         info!("Reloading TLS certificates");
-        let new_acceptor = create_acceptor(&self.app_state.config.proxy)?;
+        let new_acceptor = create_acceptor(&self.config.proxy)?;
 
         // Replace the acceptor with the new one
         if let Ok(mut acceptor) = self.acceptor.write() {
@@ -207,7 +195,7 @@ impl TlsTerminateProxy {
             .expect("Failed to acquire read lock for TLS acceptor")
             .clone();
         let tls_stream = timeout(
-            self.app_state.config.proxy.timeouts.handshake,
+            self.config.proxy.timeouts.handshake,
             acceptor.accept(stream),
         )
         .await
@@ -227,14 +215,13 @@ impl TlsTerminateProxy {
             return self.handle_health_check(inbound, buffer, port).await;
         }
         let addresses = self
-            .app_state
             .lock()
             .select_top_n_hosts(app_id)
             .with_context(|| format!("tapp {app_id} not found"))?;
         debug!("selected top n hosts: {addresses:?}");
         let tls_stream = self.tls_accept(inbound, buffer).await?;
         let outbound = timeout(
-            self.app_state.config.proxy.timeouts.connect,
+            self.config.proxy.timeouts.connect,
             connect_multiple_hosts(addresses, port),
         )
         .await
@@ -243,7 +230,7 @@ impl TlsTerminateProxy {
         bridge(
             IgnoreUnexpectedEofStream::new(tls_stream),
             outbound,
-            &self.app_state.config.proxy,
+            &self.config.proxy,
         )
         .await
         .context("bridge error")?;

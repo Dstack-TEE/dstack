@@ -8,7 +8,7 @@ use std::{
 
 use anyhow::{bail, Context, Result};
 use sni::extract_sni;
-use tls_terminate::TlsTerminateProxy;
+pub(crate) use tls_terminate::create_acceptor;
 use tokio::{
     io::AsyncReadExt,
     net::{TcpListener, TcpStream},
@@ -115,7 +115,6 @@ async fn handle_connection(
     mut inbound: TcpStream,
     state: Proxy,
     dotted_base_domain: &str,
-    tls_terminate_proxy: Arc<TlsTerminateProxy>,
 ) -> Result<()> {
     let timeouts = &state.config.proxy.timeouts;
     let (sni, buffer) = timeout(timeouts.handshake, take_sni(&mut inbound))
@@ -131,26 +130,19 @@ async fn handle_connection(
         if dst.is_tls {
             tls_passthough::proxy_to_app(state, inbound, buffer, &dst.app_id, dst.port).await
         } else {
-            tls_terminate_proxy
-                .proxy(inbound, buffer, &dst.app_id, dst.port)
-                .await
+            state.proxy(inbound, buffer, &dst.app_id, dst.port).await
         }
     } else {
         tls_passthough::proxy_with_sni(state, inbound, buffer, &sni).await
     }
 }
 
-pub async fn run(config: &ProxyConfig, app_state: Proxy) -> Result<()> {
+pub async fn run(config: &ProxyConfig, proxy: Proxy) -> Result<()> {
     let dotted_base_domain = {
         let base_domain = config.base_domain.as_str();
         let base_domain = base_domain.strip_prefix(".").unwrap_or(base_domain);
         Arc::new(format!(".{base_domain}"))
     };
-    let tls_terminate_proxy =
-        TlsTerminateProxy::new(&app_state)
-            .context("failed to create tls terminate proxy")?;
-    let tls_terminate_proxy = Arc::new(tls_terminate_proxy);
-
     let listener = TcpListener::bind((config.listen_addr, config.listen_port))
         .await
         .with_context(|| {
@@ -171,20 +163,14 @@ pub async fn run(config: &ProxyConfig, app_state: Proxy) -> Result<()> {
                 let _enter = span.enter();
 
                 info!(%from, "new connection");
-                let app_state = app_state.clone();
+                let proxy = proxy.clone();
                 let dotted_base_domain = dotted_base_domain.clone();
-                let tls_terminate_proxy = tls_terminate_proxy.clone();
                 tokio::spawn(
                     async move {
-                        let timeouts = &app_state.config.proxy.timeouts;
+                        let timeouts = &proxy.config.proxy.timeouts;
                         let result = timeout(
                             timeouts.total,
-                            handle_connection(
-                                inbound,
-                                app_state,
-                                &dotted_base_domain,
-                                tls_terminate_proxy,
-                            ),
+                            handle_connection(inbound, proxy, &dotted_base_domain),
                         )
                         .await;
                         match result {
