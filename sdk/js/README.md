@@ -18,6 +18,13 @@ const client = new TappdClient();
 // Causion: You don't need to do this most of the time.
 const httpClient = new TappdClient('http://localhost:8000');
 
+// Check if service is reachable (500ms timeout, never throws)
+const isReachable = await client.isReachable();
+if (!isReachable) {
+  console.log('Tappd service is not available');
+  return;
+}
+
 // Get the information of the Base Image.
 await client.info();
 
@@ -173,6 +180,27 @@ Generates a TDX quote. The quote is returned in hex format, and you can paste yo
 ##### `info(): Promise<TappdInfoResponse>`
 Retrieves server information.
 - Returns: Information about the Tappd instance
+
+##### `isReachable(): Promise<boolean>`
+Checks if the Tappd service is reachable and responsive. This method uses a 500ms timeout and never throws errors, making it safe for health checks.
+
+- Returns: `true` if the service is reachable, `false` otherwise
+- Timeout: 500ms maximum
+- No exceptions: Always returns a boolean result, never throws
+
+```typescript
+const client = new TappdClient();
+
+// Safe health check - never throws
+const isServiceHealthy = await client.isReachable();
+if (isServiceHealthy) {
+  console.log('Tappd service is available');
+  // Proceed with other operations
+} else {
+  console.log('Tappd service is not reachable');
+  // Handle gracefully
+}
+```
 
 ### Viem Integration Functions
 

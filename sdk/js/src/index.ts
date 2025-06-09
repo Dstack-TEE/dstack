@@ -112,7 +112,7 @@ function reply_rtmrs(event_log: EventLog[]): Record<number, string> {
 }
 
 
-export function send_rpc_request<T = any>(endpoint: string, path: string, payload: string): Promise<T> {
+export function send_rpc_request<T = any>(endpoint: string, path: string, payload: string, timeoutMs?: number): Promise<T> {
   return new Promise((resolve, reject) => {
     const abortController = new AbortController()
     let isCompleted = false
@@ -134,7 +134,7 @@ export function send_rpc_request<T = any>(endpoint: string, path: string, payloa
     const timeout = setTimeout(() => {
       abortController.abort()
       safeReject(new Error('request timed out'))
-    }, 30_000) // 30 seconds timeout
+    }, timeoutMs || 30_000) // Default 30 seconds timeout
 
     const cleanup = () => {
       clearTimeout(timeout)
@@ -307,5 +307,15 @@ export class TappdClient {
       ...result,
       tcb_info: JSON.parse(result.tcb_info) as TcbInfo,
     })
+  }
+
+  async isReachable(): Promise<boolean> {
+    try {
+      // Use info endpoint to test connectivity with 500ms timeout
+      await send_rpc_request(this.endpoint, '/prpc/Tappd.Info', '{}', 500)
+      return true
+    } catch (error) {
+      return false
+    }
   }
 }

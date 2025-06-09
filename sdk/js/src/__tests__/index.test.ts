@@ -239,6 +239,95 @@ describe('TappdClient', () => {
     const expectedViemAccount = privateKeyToAccount(`0x${expectedHex}`)
     expect(secureViemAccount.address).toBe(expectedViemAccount.address)
   })
+
+  it('should return false when tappd service is not reachable', async () => {
+    // Test with non-existent socket
+    const client = new TappdClient('/tmp/non-existent-socket')
+    const reachable = await client.isReachable()
+    expect(reachable).toBe(false)
+  })
+
+  it('should return false for unreachable http endpoint within 500ms', async () => {
+    // Test with unreachable HTTP endpoint
+    const client = new TappdClient('http://localhost:99999')
+    const start = Date.now()
+    const reachable = await client.isReachable()
+    const elapsed = Date.now() - start
+    
+    expect(reachable).toBe(false)
+    // Should fail quickly due to connection error, but timeout would be 500ms
+    expect(elapsed).toBeLessThan(1000)
+  })
+
+  it('should return true when tappd service is reachable', async () => {
+    // Create a mock server that responds to info requests
+    const server = require('http').createServer((req, res) => {
+      if (req.url === '/prpc/Tappd.Info') {
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end('{"tcb_info": "{\\"mrtd\\": \\"test\\"}"}')
+      } else {
+        res.writeHead(404)
+        res.end()
+      }
+    })
+    
+    await new Promise<void>((resolve) => {
+      server.listen(0, () => resolve())
+    })
+    
+    const port = server.address().port
+    const endpoint = `http://localhost:${port}`
+    
+    try {
+      const client = new TappdClient(endpoint)
+      const reachable = await client.isReachable()
+      expect(reachable).toBe(true)
+    } finally {
+      server.close()
+    }
+  })
+
+  it('should timeout after 500ms for hanging server', async () => {
+    // Create a server that accepts connections but never responds
+    const server = require('http').createServer((req, res) => {
+      // Don't respond, let it hang
+    })
+    
+    await new Promise<void>((resolve) => {
+      server.listen(0, () => resolve())
+    })
+    
+    const port = server.address().port
+    const endpoint = `http://localhost:${port}`
+    
+    try {
+      const client = new TappdClient(endpoint)
+      const start = Date.now()
+      const reachable = await client.isReachable()
+      const elapsed = Date.now() - start
+      
+      expect(reachable).toBe(false)
+      // Should timeout around 500ms
+      expect(elapsed).toBeGreaterThanOrEqual(500)
+      expect(elapsed).toBeLessThan(1000)
+    } finally {
+      server.close()
+    }
+  })
+
+  it('should demonstrate isReachable usage pattern', async () => {
+    // Example usage pattern for isReachable
+    const client = new TappdClient('/tmp/non-existent-socket')
+    
+    const isReachable = await client.isReachable()
+    expect(isReachable).toBe(false)
+    
+    // Show that it doesn't throw - safe to use for health checks
+    expect(async () => {
+      const result = await client.isReachable()
+      return result
+    }).not.toThrow()
+  })
 })
 
 describe('send_rpc_request timeout and abort', () => {
@@ -601,5 +690,32 @@ describe('send_rpc_request timeout and abort', () => {
     // Should timeout around 1 second
     expect(elapsed).toBeGreaterThanOrEqual(1000)
     expect(elapsed).toBeLessThan(2000)
+  })
+
+  it('should respect custom timeout parameter', async () => {
+    // Create a server that never responds
+    const server = require('http').createServer((req, res) => {
+      // Don't respond, let it hang
+    })
+    
+    await new Promise<void>((resolve) => {
+      server.listen(0, () => resolve())
+    })
+    
+    const port = server.address().port
+    const endpoint = `http://localhost:${port}`
+    
+    try {
+      const start = Date.now()
+      // Use custom 1 second timeout instead of default 30 seconds
+      await expect(send_rpc_request(endpoint, '/test', '{}', 1000)).rejects.toThrow('request aborted')
+      const elapsed = Date.now() - start
+      
+      // Should timeout around 1 second
+      expect(elapsed).toBeGreaterThanOrEqual(1000)
+      expect(elapsed).toBeLessThan(2000)
+    } finally {
+      server.close()
+    }
   })
 })
