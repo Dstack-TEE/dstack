@@ -100,7 +100,7 @@ message RenewCertResponse {
   bool renewed = 1;
 }
 
-service TproxyAdmin {
+service Admin {
   // List all proxied CVMs.
   rpc List(google.protobuf.Empty) returns (ListResponse) {}
   // Find Proxied HostInfo by instance ID

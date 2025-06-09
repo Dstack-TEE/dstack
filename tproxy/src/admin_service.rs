@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use ra_rpc::{CallContext, RpcCall};
 use tproxy_rpc::{
-    tproxy_admin_server::{TproxyAdminRpc, TproxyAdminServer},
+    admin_server::{AdminRpc, AdminServer},
     GetInfoRequest, GetInfoResponse, HostInfo, ListResponse, RenewCertResponse,
 };
 
@@ -33,7 +33,7 @@ impl AdminRpcHandler {
     }
 }
 
-impl TproxyAdminRpc for AdminRpcHandler {
+impl AdminRpc for AdminRpcHandler {
     async fn exit(self) -> Result<()> {
         self.state.lock().exit();
     }
@@ -95,7 +95,7 @@ impl TproxyAdminRpc for AdminRpcHandler {
 }
 
 impl RpcCall<Proxy> for AdminRpcHandler {
-    type PrpcService = TproxyAdminServer<Self>;
+    type PrpcService = AdminServer<Self>;
 
     fn construct(context: CallContext<'_, Proxy>) -> Result<Self> {
         Ok(AdminRpcHandler {
