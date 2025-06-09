@@ -9,11 +9,6 @@ use std::{
 use anyhow::{bail, Context, Result};
 use certbot::{CertBot, WorkDir};
 use cmd_lib::run_cmd as cmd;
-use dstack_gateway_rpc::{
-    gateway_server::{GatewayRpc, GatewayServer},
-    AcmeInfoResponse, GatewayState, GetMetaResponse, GuestAgentConfig, RegisterCvmRequest,
-    RegisterCvmResponse, WireGuardConfig, WireGuardPeer,
-};
 use fs_err as fs;
 use ra_rpc::{Attestation, CallContext, RpcCall};
 use rand::seq::IteratorRandom;
@@ -23,12 +18,17 @@ use serde::{Deserialize, Serialize};
 use smallvec::{smallvec, SmallVec};
 use tokio::sync::Notify;
 use tokio_rustls::TlsAcceptor;
+use tproxy_rpc::TappdConfig;
+use tproxy_rpc::{
+    tproxy_server::{TproxyRpc, TproxyServer},
+    AcmeInfoResponse, GetMetaResponse, RegisterCvmRequest, RegisterCvmResponse, WireGuardConfig,
+};
 use tracing::{debug, error, info, warn};
 
 use crate::{
     config::Config,
     models::{InstanceInfo, WgConf},
-    proxy::{create_acceptor, AddressGroup, AddressInfo},
+    proxy::{create_acceptor, AddressGroup},
 };
 
 #[derive(Clone)]
@@ -46,24 +46,13 @@ impl Deref for Proxy {
 pub struct ProxyInner {
     pub(crate) config: Arc<Config>,
     pub(crate) certbot: Option<Arc<CertBot>>,
-    my_app_id: Option<Vec<u8>>,
     state: Mutex<ProxyState>,
     notify_state_updated: Notify,
-    auth_client: AuthClient,
     pub(crate) acceptor: RwLock<TlsAcceptor>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct GatewayNodeInfo {
-    pub id: Vec<u8>,
-    pub url: String,
-    pub wg_peer: WireGuardPeer,
-    pub last_seen: SystemTime,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub(crate) struct ProxyStateMut {
-    pub(crate) nodes: BTreeMap<String, GatewayNodeInfo>,
     pub(crate) apps: BTreeMap<String, BTreeSet<String>>,
     pub(crate) instances: BTreeMap<String, InstanceInfo>,
     pub(crate) allocated_addresses: BTreeSet<Ipv4Addr>,
@@ -77,9 +66,9 @@ pub(crate) struct ProxyState {
 }
 
 impl Proxy {
-    pub async fn new(config: Config, my_app_id: Option<Vec<u8>>) -> Result<Self> {
+    pub async fn new(config: Config) -> Result<Self> {
         Ok(Self {
-            _inner: Arc::new(ProxyInner::new(config, my_app_id).await?),
+            _inner: Arc::new(ProxyInner::new(config).await?),
         })
     }
 }
@@ -91,7 +80,7 @@ impl ProxyInner {
 
     pub async fn new(config: Config) -> Result<Self> {
         let config = Arc::new(config);
-        let mut state = fs::metadata(&config.state_path)
+        let state = fs::metadata(&config.state_path)
             .is_ok()
             .then(|| load_state(&config.state_path))
             .transpose()
@@ -100,24 +89,6 @@ impl ProxyInner {
                 None
             })
             .unwrap_or_default();
-        state.nodes.insert(
-            config.wg.public_key.clone(),
-            GatewayNodeInfo {
-                id: config.id(),
-                url: config.sync.my_url.clone(),
-                wg_peer: WireGuardPeer {
-                    pk: config.wg.public_key.clone(),
-                    ip: config.wg.ip.to_string(),
-                    endpoint: config.wg.endpoint.clone(),
-                },
-                last_seen: SystemTime::now(),
-            },
-        );
-        let state = Mutex::new(ProxyState {
-            config: config.clone(),
-            state,
-        });
-        let auth_client = AuthClient::new(config.auth.clone());
         let certbot = match config.certbot.enabled {
             true => {
                 let certbot = config
@@ -135,11 +106,9 @@ impl ProxyInner {
         let acceptor =
             RwLock::new(create_acceptor(&config.proxy).context("Failed to create acceptor")?);
         Ok(Self {
-            config,
-            state,
+            config: config.clone(),
+            state: Mutex::new(ProxyState { config, state }),
             notify_state_updated: Notify::new(),
-            my_app_id,
-            auth_client,
             acceptor,
             certbot,
         })
@@ -149,7 +118,6 @@ impl ProxyInner {
 impl Proxy {
     pub(crate) async fn start_bg_tasks(&self) -> Result<()> {
         start_recycle_thread(self.clone());
-        start_sync_task(self.clone());
         start_certbot_task(self.clone()).await?;
         Ok(())
     }
@@ -201,19 +169,6 @@ async fn start_certbot_task(proxy: Proxy) -> Result<()> {
     Ok(())
 }
 
-fn start_sync_task(proxy: Proxy) {
-    if !proxy.config.sync.enabled {
-        info!("sync is disabled");
-        return;
-    }
-    tokio::spawn(async move {
-        match sync_client::sync_task(proxy).await {
-            Ok(_) => info!("Sync task exited"),
-            Err(err) => error!("Failed to run sync task: {err}"),
-        }
-    });
-}
-
 impl ProxyState {
     fn alloc_ip(&mut self) -> Option<Ipv4Addr> {
         for ip in self.config.wg.client_ip_range.hosts() {
@@ -257,6 +212,7 @@ impl ProxyState {
             ip,
             public_key: public_key.to_string(),
             reg_time: SystemTime::now(),
+            last_seen: SystemTime::now(),
         };
         self.state
             .instances
@@ -467,87 +423,13 @@ impl ProxyState {
         std::process::exit(0);
     }
 
-    fn dedup_nodes(&mut self) {
-        // Dedup nodes by URL, keeping the latest one
-        let mut node_map = BTreeMap::<String, GatewayNodeInfo>::new();
-
-        for node in std::mem::take(&mut self.state.nodes).into_values() {
-            match node_map.get(&node.wg_peer.endpoint) {
-                Some(existing) if existing.last_seen >= node.last_seen => {}
-                _ => {
-                    node_map.insert(node.wg_peer.endpoint.clone(), node);
-                }
-            }
-        }
-        for node in node_map.into_values() {
-            self.state.nodes.insert(node.wg_peer.pk.clone(), node);
-        }
-    }
-
-    fn update_state(
-        &mut self,
-        proxy_nodes: Vec<GatewayNodeInfo>,
-        apps: Vec<InstanceInfo>,
-    ) -> Result<()> {
-        for node in proxy_nodes {
-            if node.wg_peer.pk == self.config.wg.public_key {
-                continue;
-            }
-            if node.url == self.config.sync.my_url {
-                continue;
-            }
-            if let Some(existing) = self.state.nodes.get(&node.wg_peer.pk) {
-                if node.last_seen <= existing.last_seen {
-                    continue;
-                }
-            }
-            self.state.nodes.insert(node.wg_peer.pk.clone(), node);
-        }
-        self.dedup_nodes();
-
-        let mut wg_changed = false;
-        for app in apps {
-            if let Some(existing) = self.state.instances.get(&app.id) {
-                let existing_ts = (existing.reg_time, existing.last_seen);
-                let update_ts = (app.reg_time, app.last_seen);
-                if update_ts <= existing_ts {
-                    continue;
-                }
-                if !wg_changed {
-                    wg_changed = existing.public_key != app.public_key || existing.ip != app.ip;
-                }
-            } else {
-                wg_changed = true;
-            }
-            self.add_instance(app);
-        }
-        info!("updated, wg_changed: {wg_changed}");
-        if wg_changed {
-            self.reconfigure()?;
-        } else {
-            self.save_state()?;
-        }
-        Ok(())
-    }
-
-    fn dump_state(&mut self) -> (Vec<GatewayNodeInfo>, Vec<InstanceInfo>) {
-        self.refresh_state().ok();
-        (
-            self.state.nodes.values().cloned().collect(),
-            self.state.instances.values().cloned().collect(),
-        )
-    }
-
-    fn refresh_state(&mut self) -> Result<()> {
+    pub(crate) fn refresh_state(&mut self) -> Result<()> {
         let handshakes = self.latest_handshakes(None)?;
         for instance in self.state.instances.values_mut() {
             let Some((ts, _)) = handshakes.get(&instance.public_key).copied() else {
                 continue;
             };
             instance.last_seen = decode_ts(ts);
-        }
-        if let Some(node) = self.state.nodes.get_mut(&self.config.wg.public_key) {
-            node.last_seen = SystemTime::now();
         }
         Ok(())
     }
@@ -559,7 +441,7 @@ fn decode_ts(ts: u64) -> SystemTime {
         .unwrap_or(UNIX_EPOCH)
 }
 
-fn encode_ts(ts: SystemTime) -> u64 {
+pub(crate) fn encode_ts(ts: SystemTime) -> u64 {
     ts.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()
 }
 
@@ -589,6 +471,7 @@ impl TproxyRpc for RpcHandler {
         if let Err(err) = state.reconfigure() {
             error!("failed to reconfigure: {}", err);
         }
+        self.state.notify_state_updated.notify_one();
         Ok(RegisterCvmResponse {
             wg: Some(WireGuardConfig {
                 server_public_key: state.config.wg.public_key.clone(),
@@ -601,9 +484,7 @@ impl TproxyRpc for RpcHandler {
                 internal_port: state.config.proxy.tappd_port as u32,
                 domain: state.config.proxy.base_domain.clone(),
             }),
-        };
-        self.state.notify_state_updated.notify_one();
-        Ok(response)
+        })
     }
 
     async fn acme_info(self) -> Result<AcmeInfoResponse> {

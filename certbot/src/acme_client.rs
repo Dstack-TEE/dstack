@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeSet,
     path::{Path, PathBuf},
-    time::{Duration, Instant},
+    time::Duration,
 };
 use tokio::time::sleep;
 use tracing::{debug, error, info};
@@ -324,7 +324,6 @@ impl AcmeClient {
 
         let mut unsettled_challenges = challenges.to_vec();
 
-        let start = Instant::now();
         info!("Unsettled challenges: {unsettled_challenges:#?}");
 
         'outer: loop {

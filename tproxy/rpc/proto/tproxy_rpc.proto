@@ -101,8 +101,8 @@ message RenewCertResponse {
 }
 
 service TproxyAdmin {
-  // Get the status of the gateway.
-  rpc Status(google.protobuf.Empty) returns (StatusResponse) {}
+  // List all proxied CVMs.
+  rpc List(google.protobuf.Empty) returns (ListResponse) {}
   // Find Proxied HostInfo by instance ID
   rpc GetInfo(GetInfoRequest) returns (GetInfoResponse) {}
   // Exit the TProxy.

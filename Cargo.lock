@@ -5404,6 +5404,8 @@ dependencies = [
  "git-version",
  "hex",
  "hickory-resolver",
+ "hyper 1.5.1",
+ "hyper-util",
  "insta",
  "ipnet",
  "load_config",

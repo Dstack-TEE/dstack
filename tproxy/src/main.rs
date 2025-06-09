@@ -1,13 +1,11 @@
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use clap::Parser;
-use config::{Config, TlsConfig};
-use http_client::prpc::PrpcClient;
-use ra_rpc::{client::RaClient, rocket_helper::QuoteVerifier};
+use config::Config;
+use ra_rpc::rocket_helper::QuoteVerifier;
 use rocket::{
     fairing::AdHoc,
     figment::{providers::Serialized, Figment},
 };
-use std::path::Path;
 use tracing::info;
 
 use admin_service::AdminRpcHandler;

@@ -52,6 +52,7 @@ pub struct InstanceInfo {
     pub ip: Ipv4Addr,
     pub public_key: String,
     pub reg_time: SystemTime,
+    pub last_seen: SystemTime,
 }
 
 #[derive(Template)]
