@@ -36,7 +36,16 @@ struct Challenge {
 #[derive(Serialize, Deserialize)]
 pub(crate) struct Credentials {
     pub(crate) account_id: String,
+    #[serde(default)]
+    acme_url: String,
     credentials: AccountCredentials,
+}
+
+pub(crate) fn acme_matches(encoded_credentials: &str, acme_url: &str) -> bool {
+    let Ok(credentials) = serde_json::from_str::<Credentials>(encoded_credentials) else {
+        return false;
+    };
+    credentials.acme_url == acme_url
 }
 
 impl AcmeClient {
@@ -65,6 +74,7 @@ impl AcmeClient {
         .await
         .with_context(|| format!("failed to create ACME account for {acme_url}"))?;
         let credentials = Credentials {
+            acme_url: acme_url.to_string(),
             account_id: account.id().to_string(),
             credentials,
         };
@@ -298,10 +308,12 @@ impl AcmeClient {
             let dns_value = order.key_authorization(challenge).dns_value();
             debug!("creating dns record for {}", identifier);
             let acme_domain = format!("_acme-challenge.{identifier}");
+            debug!("removing existing dns record for {}", acme_domain);
             self.dns01_client
                 .remove_txt_records(&acme_domain)
                 .await
                 .context("failed to remove existing dns record")?;
+            debug!("creating dns record for {}", acme_domain);
             let id = self
                 .dns01_client
                 .add_txt_record(&acme_domain, &dns_value)
@@ -324,7 +336,7 @@ impl AcmeClient {
 
         let mut unsettled_challenges = challenges.to_vec();
 
-        info!("Unsettled challenges: {unsettled_challenges:#?}");
+        debug!("Unsettled challenges: {unsettled_challenges:#?}");
 
         'outer: loop {
             use hickory_resolver::AsyncResolver;
@@ -339,7 +351,7 @@ impl AcmeClient {
                 let settled = match dns_resolver.txt_lookup(&challenge.acme_domain).await {
                     Ok(record) => record.iter().any(|txt| {
                         let actual_txt = txt.to_string();
-                        info!("Expected challenge: {expected_txt}, actual: {actual_txt}",);
+                        debug!("Expected challenge: {expected_txt}, actual: {actual_txt}");
                         actual_txt == *expected_txt
                     }),
                     Err(err) => {
