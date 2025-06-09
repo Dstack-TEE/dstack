@@ -183,12 +183,21 @@
       {
         "dropdown": "Tutorials",
         "icon": {
-                  "name": "person-to-portal",
-                  "style": "regular"
-                },
+          "name": "person-to-portal",
+          "style": "regular"
+        },
         "pages": [
           "docs/tutorials/index-quick-start",
-          "/docs/getting-started/start",
+          {
+            "group": "Getting Started",
+            "icon": {
+              "name": "play",
+              "style": "regular"
+            },
+            "pages": [
+              "/docs/getting-started/start"
+            ]
+          },
           {
             "group": "Super Quick Start Tutorials",
             "icon": {
@@ -200,7 +209,6 @@
               "docs/tutorials/python-example",
               "docs/tutorials/javascript-example",
               "docs/tutorials/rust-example"
-              
             ]
           }
         ]
