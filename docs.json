@@ -56,17 +56,7 @@
                   "style": "duotone"
                 },
          "pages": [
-          {
-            "group": "downloading, setting up and runing the dstack APIs",
-            "icon": {
-                  "name": "circle-stop",
-                  "style": "regular"
-                },
-            "pages": [
-              "docs/getting-started/start",
-              "/docs/tutorials/super-quick-start"
-            ]
-          },
+          "docs/getting-started/start",
           {
             "group": "🚀 Application Deployment",
             "icon": {
@@ -74,11 +64,12 @@
                   "style": "solid"
                 },
             "pages": [
+              "docs/getting-started/install/app-jupiter-guide",
               "docs/getting-started/deploying-applications"
             ]
           },
           {
-            "group": " 📦 DStack Installation",
+            "group": " 📦 DStack Installation Guide",
             "icon": {
                   "name": "circle-stop",
                   "style": "solid"
@@ -102,7 +93,7 @@
           },
           
           {
-            "group": "In-Depth Deployment Guide",
+            "group": "Full Deployment Guide",
             "icon": {
               "name": "circle-stop",
               "style": "solid"
@@ -125,6 +116,16 @@
                   "docs/getting-started/first-deployment-steps/fd-7"
                 ]
               }
+            ]
+          }, 
+          {
+            "group": "Examples",
+            "icon": {
+                  "name": "circle-stop",
+                  "style": "regular"
+                },
+            "pages": [
+              "/docs/tutorials/super-quick-start"
             ]
           }
         ]
@@ -203,19 +204,6 @@
             },
             "pages": [
               "/docs/getting-started/start"
-            ]
-          },
-          {
-            "group": "Super Quick Start Tutorials",
-            "icon": {
-              "name": "play",
-              "style": "solid"
-            },
-            "pages": [
-              "docs/tutorials/super-quick-start",
-              "docs/tutorials/python-example",
-              "docs/tutorials/javascript-example",
-              "docs/tutorials/rust-example"
             ]
           }
         ]
