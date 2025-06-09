@@ -52,7 +52,12 @@ pub struct InstanceInfo {
     pub ip: Ipv4Addr,
     pub public_key: String,
     pub reg_time: SystemTime,
+    #[serde(skip, default = "default_last_seen")]
     pub last_seen: SystemTime,
+}
+
+fn default_last_seen() -> SystemTime {
+    SystemTime::UNIX_EPOCH
 }
 
 #[derive(Template)]
