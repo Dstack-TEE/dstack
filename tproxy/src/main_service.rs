@@ -16,7 +16,6 @@ use rinja::Template as _;
 use safe_write::safe_write;
 use serde::{Deserialize, Serialize};
 use smallvec::{smallvec, SmallVec};
-use tokio::sync::Notify;
 use tokio_rustls::TlsAcceptor;
 use tproxy_rpc::TappdConfig;
 use tproxy_rpc::{
@@ -47,7 +46,6 @@ pub struct ProxyInner {
     pub(crate) config: Arc<Config>,
     pub(crate) certbot: Option<Arc<CertBot>>,
     state: Mutex<ProxyState>,
-    notify_state_updated: Notify,
     pub(crate) acceptor: RwLock<TlsAcceptor>,
 }
 
@@ -108,7 +106,6 @@ impl ProxyInner {
         Ok(Self {
             config: config.clone(),
             state: Mutex::new(ProxyState { config, state }),
-            notify_state_updated: Notify::new(),
             acceptor,
             certbot,
         })
@@ -471,7 +468,6 @@ impl TproxyRpc for RpcHandler {
         if let Err(err) = state.reconfigure() {
             error!("failed to reconfigure: {}", err);
         }
-        self.state.notify_state_updated.notify_one();
         Ok(RegisterCvmResponse {
             wg: Some(WireGuardConfig {
                 server_public_key: state.config.wg.public_key.clone(),
