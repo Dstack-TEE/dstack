@@ -26,7 +26,7 @@ impl AdminRpcHandler {
                 app_id: instance.app_id.clone(),
                 base_domain: base_domain.clone(),
                 port: state.config.proxy.listen_port as u32,
-                latest_handshake: encode_ts(instance.reg_time),
+                latest_handshake: encode_ts(instance.last_seen),
             })
             .collect::<Vec<_>>();
         Ok(ListResponse { hosts })
