@@ -64,46 +64,64 @@
                 },
             "pages": [
               "docs/getting-started/start",
-              "docs/getting-started/deploying-applications", 
               "/docs/tutorials/super-quick-start"
             ]
           },
           {
-            "group": " 📦 DStack Installation Steps",
+            "group": " 📦 DStack Installation",
             "icon": {
                   "name": "circle-stop",
                   "style": "solid"
                 },
             "pages": [
               "docs/getting-started/install/installation",
-              "docs/getting-started/install/step-1-prerequisites",
-              "docs/getting-started/install/step-2-update-server",
-              "docs/getting-started/install/step-3-install-required-packages",
-              "docs/getting-started/install/step-4-install-dstack-runtime",
-              "docs/getting-started/install/step-5-configure-environment",
-              "docs/getting-started/install/step-6-register-systemd-service",
-              "docs/getting-started/install/step-7-firewall-and-verification"
+              {
+                "group": "Steps",
+                "icon": {
+                  "name": "circle-stop",
+                  "style": "regular"
+                },
+                "pages": [
+                  "docs/getting-started/install/step-1-prerequisites",
+                  "docs/getting-started/install/step-2-update-server",
+                  "docs/getting-started/install/step-3-install-required-packages",
+                  "docs/getting-started/install/step-4-install-dstack-runtime",
+                  "docs/getting-started/install/step-5-configure-environment",
+                  "docs/getting-started/install/step-6-register-systemd-service",
+                  "docs/getting-started/install/step-7-firewall-and-verification"
+                ]
+              }
             ]
           },
           
           {
             "group": " 🚢 First DStack Deployment",
             "icon": {
-                  "name": "circle-stop",
-                  "style": "solid"
-                },
+              "name": "circle-stop",
+              "style": "solid"
+            },
             "pages": [
               "docs/getting-started/first-deployment-steps/first-deployment",
-              "docs/getting-started/first-deployment-steps/fd-1",
-              "docs/getting-started/first-deployment-steps/fd-2",
-              "docs/getting-started/first-deployment-steps/fd-3",
-              "docs/getting-started/first-deployment-steps/fd-4",
-              "docs/getting-started/first-deployment-steps/fd-5",
-              "docs/getting-started/first-deployment-steps/fd-6",
-              "docs/getting-started/first-deployment-steps/fd-7"
+              {
+                "group": "Steps",
+                "icon": {
+                  "name": "circle-stop",
+                  "style": "regular"
+                },
+                "pages": [
+                  "docs/getting-started/first-deployment-steps/fd-1",
+                  "docs/getting-started/first-deployment-steps/fd-2",
+                  "docs/getting-started/first-deployment-steps/fd-3",
+                  "docs/getting-started/first-deployment-steps/fd-4",
+                  "docs/getting-started/first-deployment-steps/fd-5",
+                  "docs/getting-started/first-deployment-steps/fd-6",
+                  "docs/getting-started/first-deployment-steps/fd-7"
+                ]
+              }
             ]
           }
         ]
+        
       },
       {
         "dropdown": "Core Concepts",
