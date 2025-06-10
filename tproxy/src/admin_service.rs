@@ -1,0 +1,105 @@
+use anyhow::{Context, Result};
+use ra_rpc::{CallContext, RpcCall};
+use tproxy_rpc::{
+    admin_server::{AdminRpc, AdminServer},
+    GetInfoRequest, GetInfoResponse, HostInfo, ListResponse, RenewCertResponse,
+};
+
+use crate::main_service::{encode_ts, Proxy};
+
+pub struct AdminRpcHandler {
+    state: Proxy,
+}
+
+impl AdminRpcHandler {
+    pub(crate) async fn list(self) -> Result<ListResponse> {
+        let mut state = self.state.lock();
+        state.refresh_state()?;
+        let base_domain = &state.config.proxy.base_domain;
+        let hosts = state
+            .state
+            .instances
+            .values()
+            .map(|instance| HostInfo {
+                instance_id: instance.id.clone(),
+                ip: instance.ip.to_string(),
+                app_id: instance.app_id.clone(),
+                base_domain: base_domain.clone(),
+                port: state.config.proxy.listen_port as u32,
+                latest_handshake: encode_ts(instance.last_seen),
+            })
+            .collect::<Vec<_>>();
+        Ok(ListResponse { hosts })
+    }
+}
+
+impl AdminRpc for AdminRpcHandler {
+    async fn exit(self) -> Result<()> {
+        self.state.lock().exit();
+    }
+
+    async fn renew_cert(self) -> Result<RenewCertResponse> {
+        let renewed = self.state.renew_cert(true).await?;
+        Ok(RenewCertResponse { renewed })
+    }
+
+    async fn set_caa(self) -> Result<()> {
+        self.state
+            .certbot
+            .as_ref()
+            .context("Certbot is not enabled")?
+            .set_caa()
+            .await?;
+        Ok(())
+    }
+
+    async fn reload_cert(self) -> Result<()> {
+        self.state.reload_certificates()
+    }
+
+    async fn list(self) -> Result<ListResponse> {
+        self.list().await
+    }
+
+    async fn get_info(self, request: GetInfoRequest) -> Result<GetInfoResponse> {
+        let state = self.state.lock();
+        let base_domain = &state.config.proxy.base_domain;
+        let handshakes = state.latest_handshakes(None)?;
+
+        if let Some(instance) = state.state.instances.get(&request.id) {
+            let host_info = HostInfo {
+                instance_id: instance.id.clone(),
+                ip: instance.ip.to_string(),
+                app_id: instance.app_id.clone(),
+                base_domain: base_domain.clone(),
+                port: state.config.proxy.listen_port as u32,
+                latest_handshake: {
+                    let (ts, _) = handshakes
+                        .get(&instance.public_key)
+                        .copied()
+                        .unwrap_or_default();
+                    ts
+                },
+            };
+            Ok(GetInfoResponse {
+                found: true,
+                info: Some(host_info),
+            })
+        } else {
+            Ok(GetInfoResponse {
+                found: false,
+                info: None,
+            })
+        }
+    }
+}
+
+impl RpcCall<Proxy> for AdminRpcHandler {
+    type PrpcService = AdminServer<Self>;
+
+    fn construct(context: CallContext<'_, Proxy>) -> Result<Self> {
+        Ok(AdminRpcHandler {
+            state: context.state.clone(),
+        })
+    }
+}

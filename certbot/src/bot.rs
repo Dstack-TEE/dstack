@@ -10,7 +10,7 @@ use fs_err as fs;
 use tokio::time::sleep;
 use tracing::{error, info};
 
-use crate::acme_client::read_pem;
+use crate::acme_client::{acme_matches, read_pem};
 
 use super::{AcmeClient, Dns01Client};
 
@@ -32,6 +32,7 @@ pub struct CertBotConfig {
     renew_interval: Duration,
     renew_timeout: Duration,
     renew_expires_in: Duration,
+    renewed_hook: Option<String>,
 }
 
 impl CertBotConfig {
@@ -45,38 +46,48 @@ pub struct CertBot {
     config: CertBotConfig,
 }
 
+async fn create_new_account(
+    config: &CertBotConfig,
+    dns01_client: Dns01Client,
+) -> Result<AcmeClient> {
+    info!("creating new ACME account");
+    let client = AcmeClient::new_account(&config.acme_url, dns01_client)
+        .await
+        .context("failed to create new account")?;
+    let credentials = client
+        .dump_credentials()
+        .context("failed to dump credentials")?;
+    info!("created new ACME account: {}", client.account_id());
+    if config.auto_set_caa {
+        client
+            .set_caa_records(&config.cert_subject_alt_names)
+            .await?;
+    }
+    if let Some(credential_dir) = config.credentials_file.parent() {
+        fs::create_dir_all(credential_dir).context("failed to create credential directory")?;
+    }
+    fs::write(&config.credentials_file, credentials).context("failed to write credentials")?;
+    Ok(client)
+}
+
 impl CertBot {
     /// Build a new `CertBot` from a `CertBotConfig`.
     pub async fn build(config: CertBotConfig) -> Result<Self> {
         let dns01_client =
             Dns01Client::new_cloudflare(config.cf_zone_id.clone(), config.cf_api_token.clone());
         let acme_client = match fs::read_to_string(&config.credentials_file) {
-            Ok(credentials) => AcmeClient::load(dns01_client, &credentials).await?,
+            Ok(credentials) => {
+                if acme_matches(&credentials, &config.acme_url) {
+                    AcmeClient::load(dns01_client, &credentials).await?
+                } else {
+                    create_new_account(&config, dns01_client).await?
+                }
+            }
             Err(e) if e.kind() == ErrorKind::NotFound => {
                 if !config.auto_create_account {
                     return Err(e).context("credentials file not found");
                 }
-                info!("creating new ACME account");
-                let client = AcmeClient::new_account(&config.acme_url, dns01_client)
-                    .await
-                    .context("failed to create new account")?;
-                let credentials = client
-                    .dump_credentials()
-                    .context("failed to dump credentials")?;
-                if let Some(credential_dir) = config.credentials_file.parent() {
-                    fs::create_dir_all(credential_dir)
-                        .context("failed to create credential directory")?;
-                }
-                fs::write(&config.credentials_file, credentials)
-                    .context("failed to write credentials")?;
-                info!("created new ACME account: {}", client.account_id());
-                if config.auto_set_caa {
-                    info!("setting CAA records");
-                    client
-                        .set_caa_records(&config.cert_subject_alt_names)
-                        .await?;
-                }
-                client
+                create_new_account(&config, dns01_client).await?
             }
             Err(e) => {
                 return Err(e).context("failed to read credentials file");
@@ -106,13 +117,31 @@ impl CertBot {
     /// Run the certbot.
     pub async fn run(&self) {
         loop {
-            match tokio::time::timeout(self.config.renew_timeout, self.run_once()).await {
-                Ok(Ok(_)) => {}
-                Ok(Err(e)) => {
-                    error!("failed to run certbot: {e:?}");
+            match self.renew(false).await {
+                Ok(renewed) => {
+                    if !renewed {
+                        continue;
+                    }
+                    if let Some(hook) = &self.config.renewed_hook {
+                        info!("running renewed hook");
+                        let result = std::process::Command::new("/bin/sh")
+                            .arg("-c")
+                            .arg(hook)
+                            .status();
+                        match result {
+                            Ok(status) => {
+                                if !status.success() {
+                                    error!("renewed hook failed with status: {status}");
+                                }
+                            }
+                            Err(err) => {
+                                error!("failed to run renewed hook: {err:?}");
+                            }
+                        }
+                    }
                 }
-                Err(_) => {
-                    error!("certbot timed out");
+                Err(e) => {
+                    error!("failed to run certbot: {e:?}");
                 }
             }
             sleep(self.config.renew_interval).await;
@@ -120,8 +149,19 @@ impl CertBot {
     }
 
     /// Run the certbot once.
-    pub async fn run_once(&self) -> Result<()> {
-        self.acme_client
+    pub async fn renew(&self, force: bool) -> Result<bool> {
+        tokio::time::timeout(self.config.renew_timeout, self.renew_inner(force))
+            .await
+            .context("requesting cert timeout")?
+    }
+
+    pub fn renew_interval(&self) -> Duration {
+        self.config.renew_interval
+    }
+
+    async fn renew_inner(&self, force: bool) -> Result<bool> {
+        let created = self
+            .acme_client
             .create_cert_if_needed(
                 &self.config.cert_subject_alt_names,
                 &self.config.cert_file,
@@ -129,6 +169,10 @@ impl CertBot {
                 &self.config.cert_dir,
             )
             .await?;
+        if created {
+            info!("created new certificate");
+            return Ok(true);
+        }
         info!("checking if certificate needs to be renewed");
         let renewed = self
             .acme_client
@@ -137,26 +181,25 @@ impl CertBot {
                 &self.config.key_file,
                 &self.config.cert_dir,
                 self.config.renew_expires_in,
+                force,
             )
-            .await;
+            .await?;
+
         match renewed {
-            Ok(true) => {
+            true => {
                 info!(
                     "renewed certificate for {}",
                     self.config.cert_file.display()
                 );
             }
-            Ok(false) => {
+            false => {
                 info!(
                     "certificate {} is up to date",
                     self.config.cert_file.display()
                 );
             }
-            Err(e) => {
-                return Err(e);
-            }
         }
-        Ok(())
+        Ok(renewed)
     }
 
     /// Set CAA record for the domain.

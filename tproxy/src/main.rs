@@ -1,10 +1,17 @@
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use clap::Parser;
 use config::Config;
-use main_service::{Proxy, RpcHandler};
 use ra_rpc::rocket_helper::QuoteVerifier;
-use rocket::fairing::AdHoc;
+use rocket::{
+    fairing::AdHoc,
+    figment::{providers::Serialized, Figment},
+};
+use tracing::info;
 
+use admin_service::AdminRpcHandler;
+use main_service::{Proxy, RpcHandler};
+
+mod admin_service;
 mod config;
 mod main_service;
 mod models;
@@ -62,26 +69,52 @@ async fn main() -> Result<()> {
 
     let proxy_config = config.proxy.clone();
     let pccs_url = config.pccs_url.clone();
-    let state = main_service::Proxy::new(config)?;
+    let admin_enabled = config.admin.enabled;
+    let state = main_service::Proxy::new(config).await?;
+    info!("Starting background tasks");
+    state.start_bg_tasks().await?;
     state.lock().reconfigure()?;
     proxy::start(proxy_config, state.clone());
 
+    let admin_figment =
+        Figment::new()
+            .merge(rocket::Config::default())
+            .merge(Serialized::defaults(
+                figment
+                    .find_value("core.admin")
+                    .context("admin section not found")?,
+            ));
+
     let mut rocket = rocket::custom(figment)
-        .mount("/", web_routes::routes())
         .mount("/prpc", ra_rpc::prpc_routes!(Proxy, RpcHandler))
         .attach(AdHoc::on_response("Add app version header", |_req, res| {
             Box::pin(async move {
                 res.set_raw_header("X-App-Version", app_version());
             })
         }))
-        .manage(state);
-    if !pccs_url.is_empty() {
-        let verifier = QuoteVerifier::new(pccs_url);
-        rocket = rocket.manage(verifier);
+        .manage(state.clone());
+    let verifier = QuoteVerifier::new(pccs_url);
+    rocket = rocket.manage(verifier);
+    let main_srv = rocket.launch();
+    let admin_srv = async move {
+        if admin_enabled {
+            rocket::custom(admin_figment)
+                .mount("/", web_routes::routes())
+                .mount("/", ra_rpc::prpc_routes!(Proxy, AdminRpcHandler))
+                .manage(state)
+                .launch()
+                .await
+        } else {
+            std::future::pending().await
+        }
+    };
+    tokio::select! {
+        result = main_srv => {
+            result.map_err(|err| anyhow!("Failed to start main server: {err:?}"))?;
+        }
+        result = admin_srv => {
+            result.map_err(|err| anyhow!("Failed to start admin server: {err:?}"))?;
+        }
     }
-    rocket
-        .launch()
-        .await
-        .map_err(|err| anyhow!(err.to_string()))?;
     Ok(())
 }

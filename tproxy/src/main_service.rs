@@ -1,12 +1,13 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     net::Ipv4Addr,
-    sync::{Arc, Mutex, MutexGuard, Weak},
+    ops::Deref,
+    sync::{Arc, Mutex, MutexGuard, RwLock},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{bail, Context, Result};
-use certbot::WorkDir;
+use certbot::{CertBot, WorkDir};
 use cmd_lib::run_cmd as cmd;
 use fs_err as fs;
 use ra_rpc::{Attestation, CallContext, RpcCall};
@@ -15,81 +16,154 @@ use rinja::Template as _;
 use safe_write::safe_write;
 use serde::{Deserialize, Serialize};
 use smallvec::{smallvec, SmallVec};
+use tokio_rustls::TlsAcceptor;
+use tproxy_rpc::TappdConfig;
 use tproxy_rpc::{
     tproxy_server::{TproxyRpc, TproxyServer},
-    AcmeInfoResponse, GetInfoRequest, GetInfoResponse, GetMetaResponse, HostInfo as PbHostInfo,
-    ListResponse, RegisterCvmRequest, RegisterCvmResponse, TappdConfig, WireGuardConfig,
+    AcmeInfoResponse, GetMetaResponse, RegisterCvmRequest, RegisterCvmResponse, WireGuardConfig,
 };
 use tracing::{debug, error, info, warn};
 
 use crate::{
     config::Config,
     models::{InstanceInfo, WgConf},
-    proxy::AddressGroup,
+    proxy::{create_acceptor, AddressGroup},
 };
 
 #[derive(Clone)]
 pub struct Proxy {
-    pub(crate) config: Arc<Config>,
-    inner: Arc<Mutex<ProxyState>>,
+    _inner: Arc<ProxyInner>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-struct ProxyStateMut {
-    apps: BTreeMap<String, BTreeSet<String>>,
-    instances: BTreeMap<String, InstanceInfo>,
-    allocated_addresses: BTreeSet<Ipv4Addr>,
+impl Deref for Proxy {
+    type Target = ProxyInner;
+    fn deref(&self) -> &Self::Target {
+        &self._inner
+    }
+}
+
+pub struct ProxyInner {
+    pub(crate) config: Arc<Config>,
+    pub(crate) certbot: Option<Arc<CertBot>>,
+    state: Mutex<ProxyState>,
+    pub(crate) acceptor: RwLock<TlsAcceptor>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Default)]
+pub(crate) struct ProxyStateMut {
+    pub(crate) apps: BTreeMap<String, BTreeSet<String>>,
+    pub(crate) instances: BTreeMap<String, InstanceInfo>,
+    pub(crate) allocated_addresses: BTreeSet<Ipv4Addr>,
     #[serde(skip)]
-    top_n: BTreeMap<String, (AddressGroup, Instant)>,
+    pub(crate) top_n: BTreeMap<String, (AddressGroup, Instant)>,
 }
 
 pub(crate) struct ProxyState {
-    config: Arc<Config>,
-    state: ProxyStateMut,
+    pub(crate) config: Arc<Config>,
+    pub(crate) state: ProxyStateMut,
 }
 
 impl Proxy {
-    pub(crate) fn lock(&self) -> MutexGuard<ProxyState> {
-        self.inner.lock().expect("Failed to lock AppState")
-    }
-
-    pub fn new(config: Config) -> Result<Self> {
-        let config = Arc::new(config);
-        let state_path = &config.state_path;
-        let state = if fs::metadata(state_path).is_ok() {
-            let state_str = fs::read_to_string(state_path).context("Failed to read state")?;
-            serde_json::from_str(&state_str).context("Failed to load state")?
-        } else {
-            ProxyStateMut {
-                apps: BTreeMap::new(),
-                top_n: BTreeMap::new(),
-                instances: BTreeMap::new(),
-                allocated_addresses: BTreeSet::new(),
-            }
-        };
-        let inner = Arc::new(Mutex::new(ProxyState {
-            config: config.clone(),
-            state,
-        }));
-        start_recycle_thread(Arc::downgrade(&inner), config.clone());
-        Ok(Self { config, inner })
+    pub async fn new(config: Config) -> Result<Self> {
+        Ok(Self {
+            _inner: Arc::new(ProxyInner::new(config).await?),
+        })
     }
 }
 
-fn start_recycle_thread(state: Weak<Mutex<ProxyState>>, config: Arc<Config>) {
-    if !config.recycle.enabled {
+impl ProxyInner {
+    pub(crate) fn lock(&self) -> MutexGuard<ProxyState> {
+        self.state.lock().expect("Failed to lock AppState")
+    }
+
+    pub async fn new(config: Config) -> Result<Self> {
+        let config = Arc::new(config);
+        let state = fs::metadata(&config.state_path)
+            .is_ok()
+            .then(|| load_state(&config.state_path))
+            .transpose()
+            .unwrap_or_else(|err| {
+                error!("Failed to load state: {err}");
+                None
+            })
+            .unwrap_or_default();
+        let certbot = match config.certbot.enabled {
+            true => {
+                let certbot = config
+                    .certbot
+                    .build_bot()
+                    .await
+                    .context("Failed to build certbot")?;
+                info!("Certbot built, renewing...");
+                // Try first renewal for the acceptor creation
+                certbot.renew(false).await.context("Failed to renew cert")?;
+                Some(Arc::new(certbot))
+            }
+            false => None,
+        };
+        let acceptor =
+            RwLock::new(create_acceptor(&config.proxy).context("Failed to create acceptor")?);
+        Ok(Self {
+            config: config.clone(),
+            state: Mutex::new(ProxyState { config, state }),
+            acceptor,
+            certbot,
+        })
+    }
+}
+
+impl Proxy {
+    pub(crate) async fn start_bg_tasks(&self) -> Result<()> {
+        start_recycle_thread(self.clone());
+        start_certbot_task(self.clone()).await?;
+        Ok(())
+    }
+
+    pub(crate) async fn renew_cert(&self, force: bool) -> Result<bool> {
+        let Some(certbot) = &self.certbot else {
+            return Ok(false);
+        };
+        let renewed = certbot.renew(force).await.context("Failed to renew cert")?;
+        if renewed {
+            self.reload_certificates()
+                .context("Failed to reload certificates")?;
+        }
+        Ok(renewed)
+    }
+}
+
+fn load_state(state_path: &str) -> Result<ProxyStateMut> {
+    let state_str = fs::read_to_string(state_path).context("Failed to read state")?;
+    serde_json::from_str(&state_str).context("Failed to load state")
+}
+
+fn start_recycle_thread(proxy: Proxy) {
+    if !proxy.config.recycle.enabled {
         info!("recycle is disabled");
         return;
     }
     std::thread::spawn(move || loop {
-        std::thread::sleep(config.recycle.interval);
-        let Some(state) = state.upgrade() else {
-            break;
-        };
-        if let Err(err) = state.lock().unwrap().recycle() {
+        std::thread::sleep(proxy.config.recycle.interval);
+        if let Err(err) = proxy.lock().recycle() {
             error!("failed to run recycle: {err}");
         };
     });
+}
+
+async fn start_certbot_task(proxy: Proxy) -> Result<()> {
+    let Some(certbot) = proxy.certbot.clone() else {
+        info!("Certbot is not enabled");
+        return Ok(());
+    };
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(certbot.renew_interval()).await;
+            if let Err(err) = proxy.renew_cert(false).await {
+                error!("Failed to renew cert: {err}");
+            }
+        }
+    });
+    Ok(())
 }
 
 impl ProxyState {
@@ -97,6 +171,11 @@ impl ProxyState {
         for ip in self.config.wg.client_ip_range.hosts() {
             if ip == self.config.wg.ip {
                 continue;
+            }
+            for net in &self.config.wg.reserved_net {
+                if net.contains(&ip) {
+                    continue;
+                }
             }
             if self.state.allocated_addresses.contains(&ip) {
                 continue;
@@ -130,6 +209,7 @@ impl ProxyState {
             ip,
             public_key: public_key.to_string(),
             reg_time: SystemTime::now(),
+            last_seen: SystemTime::now(),
         };
         self.state
             .instances
@@ -240,7 +320,7 @@ impl ProxyState {
     /// Get latest handshakes
     ///
     /// Return a map of public key to (timestamp, elapsed)
-    fn latest_handshakes(
+    pub(crate) fn latest_handshakes(
         &self,
         stale_timeout: Option<Duration>,
     ) -> Result<BTreeMap<String, (u64, Duration)>> {
@@ -335,6 +415,31 @@ impl ProxyState {
         }
         Ok(())
     }
+
+    pub(crate) fn exit(&mut self) -> ! {
+        std::process::exit(0);
+    }
+
+    pub(crate) fn refresh_state(&mut self) -> Result<()> {
+        let handshakes = self.latest_handshakes(None)?;
+        for instance in self.state.instances.values_mut() {
+            let Some((ts, _)) = handshakes.get(&instance.public_key).copied() else {
+                continue;
+            };
+            instance.last_seen = decode_ts(ts);
+        }
+        Ok(())
+    }
+}
+
+fn decode_ts(ts: u64) -> SystemTime {
+    UNIX_EPOCH
+        .checked_add(Duration::from_secs(ts))
+        .unwrap_or(UNIX_EPOCH)
+}
+
+pub(crate) fn encode_ts(ts: SystemTime) -> u64 {
+    ts.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()
 }
 
 pub struct RpcHandler {
@@ -376,64 +481,6 @@ impl TproxyRpc for RpcHandler {
                 domain: state.config.proxy.base_domain.clone(),
             }),
         })
-    }
-
-    async fn list(self) -> Result<ListResponse> {
-        let state = self.state.lock();
-        let base_domain = &state.config.proxy.base_domain;
-        let handshakes = state.latest_handshakes(None)?;
-        let hosts = state
-            .state
-            .instances
-            .values()
-            .map(|instance| PbHostInfo {
-                instance_id: instance.id.clone(),
-                ip: instance.ip.to_string(),
-                app_id: instance.app_id.clone(),
-                base_domain: base_domain.clone(),
-                port: state.config.proxy.listen_port as u32,
-                latest_handshake: {
-                    let (ts, _) = handshakes
-                        .get(&instance.public_key)
-                        .copied()
-                        .unwrap_or_default();
-                    ts
-                },
-            })
-            .collect::<Vec<_>>();
-        Ok(ListResponse { hosts })
-    }
-
-    async fn get_info(self, request: GetInfoRequest) -> Result<GetInfoResponse> {
-        let state = self.state.lock();
-        let base_domain = &state.config.proxy.base_domain;
-        let handshakes = state.latest_handshakes(None)?;
-
-        if let Some(instance) = state.state.instances.get(&request.id) {
-            let host_info = PbHostInfo {
-                instance_id: instance.id.clone(),
-                ip: instance.ip.to_string(),
-                app_id: instance.app_id.clone(),
-                base_domain: base_domain.clone(),
-                port: state.config.proxy.listen_port as u32,
-                latest_handshake: {
-                    let (ts, _) = handshakes
-                        .get(&instance.public_key)
-                        .copied()
-                        .unwrap_or_default();
-                    ts
-                },
-            };
-            Ok(GetInfoResponse {
-                found: true,
-                info: Some(host_info),
-            })
-        } else {
-            Ok(GetInfoResponse {
-                found: false,
-                info: None,
-            })
-        }
     }
 
     async fn acme_info(self) -> Result<AcmeInfoResponse> {

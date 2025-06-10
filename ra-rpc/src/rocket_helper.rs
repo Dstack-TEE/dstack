@@ -36,7 +36,6 @@ pub mod deps {
 
 fn query_field_get_raw<'r>(req: &'r Request<'_>, field_name: &str) -> Option<&'r str> {
     for field in req.query_fields() {
-        let raw = (field.name.source().as_str(), field.value);
         let key = field.name.key_lossy().as_str();
         if key == field_name {
             return Some(field.value);

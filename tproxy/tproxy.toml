@@ -3,8 +3,9 @@ max_blocking = 64
 ident = "Tproxy Server"
 temp_dir = "/tmp"
 keep_alive = 10
-log_level = "debug"
+log_level = "info"
 port = 8010
+
 
 [core]
 pccs_url = "https://api.trustedservices.intel.com/tdx/certification/v4"
@@ -12,8 +13,21 @@ state_path = "./tproxy-state.json"
 # auto set soft ulimit to hard ulimit
 set_ulimit = true
 
+[core.admin]
+enabled = false
+port = 8011
+
 [core.certbot]
+enabled = false
 workdir = "/etc/certbot"
+acme_url = "https://acme-staging-v02.api.letsencrypt.org/directory"
+cf_api_token = ""
+cf_zone_id = ""
+auto_set_caa = true
+domain = "*.example.com"
+renew_interval = "1h"
+renew_before_expiration = "10d"
+renew_timeout = "5m"
 
 [core.wg]
 public_key = ""
@@ -21,6 +35,8 @@ private_key = ""
 ip = "10.0.0.1"
 listen_port = 51820
 client_ip_range = "10.0.0.0/24"
+# Don't allocate the IP address in the range of reserved net
+reserved_net = ["10.0.0.0/32"]
 config_path = "/etc/wireguard/wg0.conf"
 interface = "wg0"
 endpoint = "10.0.2.2:51820"
@@ -28,6 +44,8 @@ endpoint = "10.0.2.2:51820"
 [core.proxy]
 cert_chain = "/etc/rproxy/certs/cert.pem"
 cert_key = "/etc/rproxy/certs/key.pem"
+tls_crypto_provider = "aws-lc-rs"
+tls_versions = ["1.2"]
 base_domain = "app.localhost"
 listen_addr = "0.0.0.0"
 listen_port = 8443

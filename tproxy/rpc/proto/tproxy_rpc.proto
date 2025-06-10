@@ -89,12 +89,28 @@ message GetMetaResponse {
 service Tproxy {
   // Register a new proxied CVM.
   rpc RegisterCvm(RegisterCvmRequest) returns (RegisterCvmResponse) {}
-  // List all proxied CVMs.
-  rpc List(google.protobuf.Empty) returns (ListResponse) {}
   // List all ACME account URIs and the public key history of the certificates for the Content Addressable HTTPS.
   rpc AcmeInfo(google.protobuf.Empty) returns (AcmeInfoResponse) {}
-  // Find Proxied HostInfo by instance ID
-  rpc GetInfo(GetInfoRequest) returns (GetInfoResponse) {}
   // Summary API for inspect.
   rpc GetMeta(google.protobuf.Empty) returns (GetMetaResponse);
+}
+
+message RenewCertResponse {
+  // True if the certificate was renewed.
+  bool renewed = 1;
+}
+
+service Admin {
+  // List all proxied CVMs.
+  rpc List(google.protobuf.Empty) returns (ListResponse) {}
+  // Find Proxied HostInfo by instance ID
+  rpc GetInfo(GetInfoRequest) returns (GetInfoResponse) {}
+  // Exit the TProxy.
+  rpc Exit(google.protobuf.Empty) returns (google.protobuf.Empty) {}
+  // Renew the proxy TLS certificate if certbot is enabled
+  rpc RenewCert(google.protobuf.Empty) returns (RenewCertResponse) {}
+  // Reload the proxy TLS certificate from files
+  rpc ReloadCert(google.protobuf.Empty) returns (google.protobuf.Empty) {}
+  // Set CAA records
+  rpc SetCaa(google.protobuf.Empty) returns (google.protobuf.Empty) {}
 }

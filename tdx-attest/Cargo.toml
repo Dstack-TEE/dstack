@@ -12,12 +12,14 @@ num_enum.workspace = true
 scale.workspace = true
 serde.workspace = true
 serde-human-bytes.workspace = true
-tdx-attest-sys.workspace = true
 cc-eventlog.workspace = true
 thiserror.workspace = true
 fs-err.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+
+[target.'cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))'.dependencies]
+tdx-attest-sys.workspace = true
 
 [dev-dependencies]
 insta.workspace = true

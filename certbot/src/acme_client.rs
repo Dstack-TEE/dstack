@@ -36,7 +36,16 @@ struct Challenge {
 #[derive(Serialize, Deserialize)]
 pub(crate) struct Credentials {
     pub(crate) account_id: String,
+    #[serde(default)]
+    acme_url: String,
     credentials: AccountCredentials,
+}
+
+pub(crate) fn acme_matches(encoded_credentials: &str, acme_url: &str) -> bool {
+    let Ok(credentials) = serde_json::from_str::<Credentials>(encoded_credentials) else {
+        return false;
+    };
+    credentials.acme_url == acme_url
 }
 
 impl AcmeClient {
@@ -63,8 +72,9 @@ impl AcmeClient {
             None,
         )
         .await
-        .context("failed to create new account")?;
+        .with_context(|| format!("failed to create ACME account for {acme_url}"))?;
         let credentials = Credentials {
+            acme_url: acme_url.to_string(),
             account_id: account.id().to_string(),
             credentials,
         };
@@ -138,6 +148,7 @@ impl AcmeClient {
     ///
     /// Returns the new certificates encoded in PEM format.
     pub async fn request_new_certificate(&self, key: &str, domains: &[String]) -> Result<String> {
+        info!("requesting new certificates for {}", domains.join(", "));
         let mut challenges = Vec::new();
         let result = self
             .request_new_certificate_inner(key, domains, &mut challenges)
@@ -188,14 +199,20 @@ impl AcmeClient {
         live_key_pem_path: impl AsRef<Path>,
         backup_dir: impl AsRef<Path>,
         expires_in: Duration,
+        force: bool,
     ) -> Result<bool> {
         let live_cert_pem = fs::read_to_string(live_cert_pem_path.as_ref())?;
         let live_key_pem = fs::read_to_string(live_key_pem_path.as_ref())?;
-        let Some(new_cert) = self
-            .renew_cert_if_needed(&live_cert_pem, &live_key_pem, expires_in)
-            .await?
-        else {
-            return Ok(false);
+        let new_cert = if force {
+            self.renew_cert(&live_cert_pem, &live_key_pem).await?
+        } else {
+            let Some(new_cert) = self
+                .renew_cert_if_needed(&live_cert_pem, &live_key_pem, expires_in)
+                .await?
+            else {
+                return Ok(false);
+            };
+            new_cert
         };
         self.store_cert(
             live_cert_pem_path.as_ref(),
@@ -243,9 +260,9 @@ impl AcmeClient {
         live_cert_pem_path: impl AsRef<Path>,
         live_key_pem_path: impl AsRef<Path>,
         backup_dir: impl AsRef<Path>,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         if live_cert_pem_path.as_ref().exists() && live_key_pem_path.as_ref().exists() {
-            return Ok(());
+            return Ok(false);
         }
         let key_pem = if live_key_pem_path.as_ref().exists() {
             debug!("using existing cert key pair");
@@ -263,7 +280,7 @@ impl AcmeClient {
             &key_pem,
             backup_dir.as_ref(),
         )?;
-        Ok(())
+        Ok(true)
     }
 }
 
@@ -291,10 +308,12 @@ impl AcmeClient {
             let dns_value = order.key_authorization(challenge).dns_value();
             debug!("creating dns record for {}", identifier);
             let acme_domain = format!("_acme-challenge.{identifier}");
+            debug!("removing existing dns record for {}", acme_domain);
             self.dns01_client
                 .remove_txt_records(&acme_domain)
                 .await
                 .context("failed to remove existing dns record")?;
+            debug!("creating dns record for {}", acme_domain);
             let id = self
                 .dns01_client
                 .add_txt_record(&acme_domain, &dns_value)
@@ -317,6 +336,8 @@ impl AcmeClient {
 
         let mut unsettled_challenges = challenges.to_vec();
 
+        debug!("Unsettled challenges: {unsettled_challenges:#?}");
+
         'outer: loop {
             use hickory_resolver::AsyncResolver;
 
@@ -326,10 +347,13 @@ impl AcmeClient {
                 AsyncResolver::tokio_from_system_conf().context("failed to create dns resolver")?;
 
             while let Some(challenge) = unsettled_challenges.pop() {
+                let expected_txt = &challenge.dns_value;
                 let settled = match dns_resolver.txt_lookup(&challenge.acme_domain).await {
-                    Ok(record) => record
-                        .iter()
-                        .any(|txt| txt.to_string() == challenge.dns_value),
+                    Ok(record) => record.iter().any(|txt| {
+                        let actual_txt = txt.to_string();
+                        debug!("Expected challenge: {expected_txt}, actual: {actual_txt}");
+                        actual_txt == *expected_txt
+                    }),
                     Err(err) => {
                         let ResolveErrorKind::NoRecordsFound { .. } = err.kind() else {
                             bail!(
@@ -341,17 +365,13 @@ impl AcmeClient {
                     }
                 };
                 if !settled {
-                    delay *= 2;
+                    delay = Duration::from_secs(32).min(delay * 2);
                     tries += 1;
-                    if tries < 10 {
-                        debug!(
-                            tries,
-                            domain = &challenge.acme_domain,
-                            "challenge not found, waiting {delay:?}"
-                        );
-                    } else {
-                        bail!("dns record not found");
-                    }
+                    debug!(
+                        tries,
+                        domain = &challenge.acme_domain,
+                        "challenge not found, waiting for {delay:?}"
+                    );
                     unsettled_challenges.push(challenge);
                     continue 'outer;
                 }
@@ -483,7 +503,7 @@ fn need_renew(cert_pem: &str, expires_in: Duration) -> Result<bool> {
     let cert = pem.parse_x509().context("Invalid x509 certificate")?;
     let not_after = cert.validity().not_after.to_datetime();
     let now = time::OffsetDateTime::now_utc();
-    debug!("will expire in {:?}", not_after - now);
+    debug!("will expire in {}", not_after - now);
 
     Ok(not_after < now + expires_in)
 }
