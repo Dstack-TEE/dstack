@@ -28,18 +28,26 @@ impl TappAddress {
 /// resolve tapp address by sni
 async fn resolve_tapp_address(sni: &str) -> Result<TappAddress> {
     let txt_domain = format!("_tapp-address.{sni}");
+    let txt_domain_v2 = format!("_dstack-app-address.{sni}");
     let resolver = hickory_resolver::AsyncResolver::tokio_from_system_conf()
         .context("failed to create dns resolver")?;
-    let lookup = resolver
-        .txt_lookup(txt_domain)
-        .await
-        .context("failed to lookup tapp address")?;
-    let txt_record = lookup.iter().next().context("no txt record found")?;
-    let data = txt_record
-        .txt_data()
-        .first()
-        .context("no data in txt record")?;
-    TappAddress::parse(data).context("failed to parse tapp address")
+    let (lookup, lookup_v2) = tokio::join!(
+        resolver.txt_lookup(txt_domain),
+        resolver.txt_lookup(txt_domain_v2),
+    );
+    for lookup in [lookup_v2, lookup] {
+        let Ok(lookup) = lookup else {
+            continue;
+        };
+        let Some(txt_record) = lookup.iter().next() else {
+            continue;
+        };
+        let Some(data) = txt_record.txt_data().first() else {
+            continue;
+        };
+        return TappAddress::parse(data).context("failed to parse tapp address");
+    }
+    anyhow::bail!("failed to resolve tapp address");
 }
 
 pub(crate) async fn proxy_with_sni(
