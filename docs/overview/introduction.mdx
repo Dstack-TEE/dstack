@@ -1,19 +1,14 @@
 ---
-title: "A Framework for Verifying Data Integrity in Confidential Computing"
-description: "Simple and clear overview of dstack, its importance in Web3, zero-trust security principles, and how it enhances confidential computing."
+title: "What is DStack?"
+description: "DStack lets you run your apps in a secure, private environment that no one else can access or tamper with - not even cloud providers or system administrators. Think of it as a protective bubble for your applications.
+"
 ---
 
-# dstack Platform Introduction
+## What is Solves for
 
-This introduction will help you understand what dstack is, how it works, and why it matters for building secure applications in Web3. If you are new to confidential computing, this page will walk you through the main concepts in simple language.
+When you run apps on regular cloud servers, you have to trust the cloud provider won't peek at your data, system administrators won't modify your app, and hackers won't break into the server.
 
-## What is dstack?
-
-dstack is a platform that helps you run your applications securely by using special hardware protections called Trusted Execution Environments (TEEs). These protections make sure your app and its data are kept private, even from cloud providers or system administrators. With dstack, you don’t have to trust anyone except the hardware itself, and you can always prove that your app is running safely.
-
-## Why is dstack needed?
-
-In today’s world, running apps on the cloud or public blockchains comes with risks—your code and data can be exposed if someone gains access to the servers or infrastructure. Web3 introduces new challenges because apps are decentralized, and you can’t just rely on one company or admin to keep things secure. dstack addresses this by using TEEs to create a protected “bubble” for your app to run in, where everything is encrypted and verifiable.
+**With DStack, you don't have to trust anyone.** Your app runs in special secure hardware that keeps everything private and proves it's running exactly as intended.
 
 <img
   src="/docs/images/before-after-dstack.png"
@@ -22,79 +17,40 @@ In today’s world, running apps on the cloud or public blockchains comes with r
   style={{ maxWidth: '600px' }}
 />
 
-## The Basics of Zero Trust in Web3
+## How does it work?
 
-Zero trust means no part of the system is automatically trusted. Everything has to prove it is safe. For Web3, this means: 
-- Application code can’t be changed once it’s deployed, unless everyone agrees and the change is recorded publicly.
-- Nobody should be able to control or block access to your data or app.
-- Every part of the system, from the code to the hardware, should be verifiable by anyone.
-- The system assumes that attacks will happen, so it is designed to keep problems contained if something goes wrong.
+DStack uses <span title="Trusted Execution Environment" style={{display: 'inline-flex', alignItems: 'center'}}><svg xmlns="http://www.w3.org/2000/svg" className="inline w-5 h-5 mr-1 text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor"><circle cx="12" cy="12" r="10" strokeWidth="2" /><path d="M12 8v4l3 3" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>**Trusted Execution Environments (TEEs)**</span>—special security built into modern chips. This creates a private, encrypted space for your app.
 
-dstack was created to follow these ideas, so you get privacy, integrity, and verifiability without needing to trust any central authority.
+**What happens:**  
+<span title="Shield" style={{display: 'inline-flex', alignItems: 'center'}}><svg xmlns="http://www.w3.org/2000/svg" className="inline w-4 h-4 mr-1 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path d="M12 3l7 4v5c0 5-3.5 9.74-7 11-3.5-1.26-7-6-7-11V7l7-4z" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" /></svg></span>Your app runs in a secure "bubble"—everything is encrypted.  
+<span title="Eye Off" style={{display: 'inline-flex', alignItems: 'center'}}><svg xmlns="http://www.w3.org/2000/svg" className="inline w-4 h-4 mr-1 text-gray-500" fill="none" viewBox="0 0 16 16" stroke="currentColor"><circle cx="8" cy="8" r="6" strokeWidth="1.5"/><line x1="3" y1="13" x2="13" y2="3" strokeWidth="1.5" strokeLinecap="round"/></svg></span>No one can see inside—not the cloud, not hackers, not anyone.  
+<span title="Check Badge" style={{display: 'inline-flex', alignItems: 'center'}}><svg xmlns="http://www.w3.org/2000/svg" className="inline w-4 h-4 mr-1 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path d="M9 12l2 2l4-4" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/><circle cx="12" cy="12" r="10" strokeWidth="2"/></svg></span>You can prove it's secure—anyone can check your app is running in real secure hardware.  
+<span title="Code" style={{display: 'inline-flex', alignItems: 'center'}}><svg xmlns="http://www.w3.org/2000/svg" className="inline w-4 h-4 mr-1 text-purple-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path d="M16 18l6-6-6-6M8 6l-6 6 6 6" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg></span>Your app works as usual—no code changes needed.
 
-## What are TEEs, and what are their limitations?
+---
 
-Trusted Execution Environments (TEEs) are a kind of hardware security built into modern processors, like Intel TDX or AMD SEV. They let your code and data run inside a protected, encrypted space that other parts of the system can’t access. This is great for privacy, but TEEs also have some challenges:
-- Some security bugs can be found in the hardware, which means extra protection is needed.
-- Sometimes encryption keys are tied to one machine, making it risky if that machine fails or is attacked.
-- Most TEE systems depend on big vendors, which can be a single point of failure.
-- Current TEEs can prove the hardware and code are genuine, but it’s harder to prove exactly how your app behaves.
+## Why does this matter?
 
-dstack solves these problems by making your secure app portable, easier to manage, and more transparent.
+<span title="Lock" style={{display: 'inline-flex', alignItems: 'center'}}><svg xmlns="http://www.w3.org/2000/svg" className="inline w-4 h-4 mr-1 text-gray-700" fill="none" viewBox="0 0 24 24" stroke="currentColor"><rect x="3" y="11" width="18" height="10" rx="2" strokeWidth="2"/><path d="M7 11V7a5 5 0 0110 0v4" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg></span>**Privacy:** Your data stays private, even on someone else's server.  
+<span title="Shield Check" style={{display: 'inline-flex', alignItems: 'center'}}><svg xmlns="http://www.w3.org/2000/svg" className="inline w-4 h-4 mr-1 text-green-700" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path d="M12 3l7 4v5c0 5-3.5 9.74-7 11-3.5-1.26-7-6-7-11V7l7-4z" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/><path d="M9 12l2 2l4-4" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg></span>**Trust:** Anyone can verify your app is running the code you claim.  
+<span title="Alert" style={{display: 'inline-flex', alignItems: 'center'}}><svg xmlns="http://www.w3.org/2000/svg" className="inline w-4 h-4 mr-1 text-red-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path d="M12 9v2m0 4h.01M21 12c0 4.97-4.03 9-9 9s-9-4.03-9-9 4.03-9 9-9 9 4.03 9 9z" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg></span>**Security:** Even if the server is hacked, your app and data are safe.  
+<span title="Document Check" style={{display: 'inline-flex', alignItems: 'center'}}><svg xmlns="http://www.w3.org/2000/svg" className="inline w-4 h-4 mr-1 text-blue-700" fill="none" viewBox="0 0 24 24" stroke="currentColor"><rect x="4" y="4" width="16" height="16" rx="2" strokeWidth="2"/><path d="M9 12l2 2l4-4" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg></span>**Compliance:** Great for sensitive data that needs strict privacy.
 
-## dstack’s Main Innovations
+---
 
-dstack is designed to improve on basic TEEs in three big ways.
+## What makes DStack special?
 
-First, it makes confidential containers portable. That means your secure app can move between different hardware or cloud providers without losing security. This is done using dstack’s key management service (dstack-kms), which keeps your encryption keys controlled by the blockchain rather than any one machine, and a small operating system (dstack-os) that works across many platforms.
+<span title="Upload" style={{display: 'inline-flex', alignItems: 'center'}}><svg xmlns="http://www.w3.org/2000/svg" className="inline w-4 h-4 mr-1 text-lime-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path d="M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2" strokeWidth="2"/><path d="M7 9l5-5 5 5M12 4v12" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg></span>**Easy deployment:** Upload your Docker containers—no code changes.  
+<span title="Globe" style={{display: 'inline-flex', alignItems: 'center'}}><svg xmlns="http://www.w3.org/2000/svg" className="inline w-4 h-4 mr-1 text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor"><circle cx="12" cy="12" r="10" strokeWidth="2"/><path d="M2 12h20M12 2a15.3 15.3 0 010 20M12 2a15.3 15.3 0 000 20" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg></span>**Portable security:** Move your secure app between clouds.  
+<span title="Check Circle" style={{display: 'inline-flex', alignItems: 'center'}}><svg xmlns="http://www.w3.org/2000/svg" className="inline w-4 h-4 mr-1 text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor"><circle cx="12" cy="12" r="10" strokeWidth="2"/><path d="M9 12l2 2l4-4" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg></span>**Verifiable trust:** Anyone can check your app is running in real secure hardware.  
+<span title="Lock Open" style={{display: 'inline-flex', alignItems: 'center'}}><svg xmlns="http://www.w3.org/2000/svg" className="inline w-4 h-4 mr-1 text-purple-500" fill="none" viewBox="0 0 24 24" stroke="currentColor"><rect x="3" y="11" width="18" height="10" rx="2" strokeWidth="2"/><path d="M7 11V7a5 5 0 0110 0v4" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg></span>**Web access:** Users connect securely over HTTPS.
 
-Second, dstack uses smart contracts for managing your app’s code. All updates, upgrades, and deployments are handled transparently and recorded on-chain, so everyone can see what’s running and when changes happen. This keeps everything auditable and follows the principle that “code is law.”
+---
 
-Third, dstack creates verifiable security for your web app’s domains, using a protocol called Zero Trust TLS. This lets users connect securely to your app, knowing for sure that it’s running in a genuine TEE and hasn’t been tampered with.
+## Common use cases
 
-## How does dstack’s architecture work?
-
-To keep things simple, here’s how dstack is put together:
-
-- At the bottom, there is the physical hardware with TEE support, running standard Linux and virtualization tools.
-- On top of this, dstack runs its own system for managing confidential virtual machines, secure network gateways, key management, and a minimal operating system for running your apps.
-- Your app runs as a standard container—no need to change your code.
-- Everything about how your app is launched, upgraded, and kept secure is managed by smart contracts and can be verified by anyone.
-
-## Key Components in Simple Terms
-
-- **dstack-os:** The minimal operating system that provides a secure, reproducible environment for your app. It checks everything from boot to runtime, making sure nothing has been tampered with.
-- **dstack-kms:** Handles all your encryption keys in a way that isn’t tied to just one machine. The rules for using and rotating keys are managed by smart contracts.
-- **dstack-gateway and dstack-ingress:** These provide secure web access to your app and handle domain verification. They make sure your app is only accessible via secure, encrypted connections and that users can check the app is genuine.
-- **Smart Contracts:** Control who can deploy, upgrade, or access your app. All decisions and updates are recorded publicly.
-
-## How does dstack keep everything safe?
-
-dstack uses a layered security approach:
-- The hardware creates a private “bubble” for your app and encrypts all memory.
-- The operating system checks itself every time it starts up, making sure nothing has changed.
-- Remote attestation lets you (and anyone else) verify that your app is running in a genuine, secure environment.
-- All permissions are limited as much as possible, so no part of the system can do more than it’s supposed to.
-- All rules, code versions, and upgrades are managed with cryptographic proof, not just trust.
-
-## What can you do with dstack?
-
-dstack is useful for any situation where you need to keep data private or prove that your app is trustworthy. This includes analyzing sensitive data, running private AI models, doing multi-party computation without exposing information, and showing regulators or partners that you follow strict privacy rules.
-
-## Summary Table
-
-| Component          | What it does                             | Main features                                         |
-|--------------------|------------------------------------------|-------------------------------------------------------|
-| dstack-os          | Secure operating system for TEEs         | Minimal, open-source, checks itself for integrity     |
-| dstack-kms         | Key management                           | Hardware-independent, blockchain-controlled           |
-| dstack-gateway     | Secure web access                        | Automatic HTTPS, connects domains to TEEs             |
-| dstack-ingress     | Handles custom domains                   | Secure connections, easy setup                        |
-| dstack-vmm         | Manages confidential VMs                 | Launches, scales, and stops secure app environments   |
-| KmsAuth/AppAuth    | Smart contracts for control              | Approves code, manages upgrades, fully transparent    |
-
-## What’s Next: Dive Deeper into dstack Architecture
-
-Curious how all these pieces fit together under the hood?  
-The next step is to explore the [dstack architecture](/docs/overview/what-is-dstack), where you’ll find a detailed breakdown of the platform’s components, how they interact, and what makes dstack unique for confidential computing.  
-Keep reading to see how dstack’s design enables verifiable security, portability, and transparency at every layer.
-
+<span title="Brain" style={{display: 'inline-flex', alignItems: 'center'}}><svg xmlns="http://www.w3.org/2000/svg" className="inline w-4 h-4 mr-1 text-pink-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path d="M9 9a3 3 0 016 0v6a3 3 0 01-6 0V9z" strokeWidth="2"/><path d="M12 3v2M12 19v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" strokeWidth="2"/></svg></span>**Private AI models:** Run AI without exposing data or model weights.  
+<span title="Database" style={{display: 'inline-flex', alignItems: 'center'}}><svg xmlns="http://www.w3.org/2000/svg" className="inline w-4 h-4 mr-1 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><ellipse cx="12" cy="5" rx="9" ry="3" strokeWidth="2"/><path d="M3 5v14a9 3 0 0018 0V5" strokeWidth="2"/></svg></span>**Sensitive data processing:** Analyze confidential info safely.  
+<span title="Credit Card" style={{display: 'inline-flex', alignItems: 'center'}}><svg xmlns="http://www.w3.org/2000/svg" className="inline w-4 h-4 mr-1 text-yellow-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><rect x="2" y="7" width="20" height="10" rx="2" strokeWidth="2"/><path d="M2 11h20" strokeWidth="2"/></svg></span>**Financial apps:** Handle transactions and sensitive data.  
+<span title="Heart" style={{display: 'inline-flex', alignItems: 'center'}}><svg xmlns="http://www.w3.org/2000/svg" className="inline w-4 h-4 mr-1 text-red-500" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path d="M12 21C12 21 4 13.5 4 8.5C4 5.42 6.42 3 9.5 3C11.24 3 12.91 3.81 14 5.08C15.09 3.81 16.76 3 18.5 3C21.58 3 24 5.42 24 8.5C24 13.5 16 21 16 21H12Z" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg></span>**Healthcare systems:** Process medical records with privacy.  
+<span title="Users" style={{display: 'inline-flex', alignItems: 'center'}}><svg xmlns="http://www.w3.org/2000/svg" className="inline w-4 h-4 mr-1 text-indigo-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><circle cx="9" cy="7" r="4" strokeWidth="2"/><circle cx="17" cy="17" r="4" strokeWidth="2"/><path d="M17 13a4 4 0 00-8 0" strokeWidth="2"/></svg></span>**Multi-party computation:** Compute together without sharing raw data.

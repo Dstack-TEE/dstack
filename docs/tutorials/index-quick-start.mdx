@@ -1,64 +1,67 @@
 ---
-title: "Introduction to learning dstack"
-description: "Learn dstack with hands-on examples and step-by-step guides"
+title: "Quick dstack Guide"
+description: "Fastest way to learn and deploy with dstack"
 ---
 
-# The Recommended DStack Learning Path
+# dstack: Fast Learning & Deployment Guide
 
-### Beginner Path
+Get started with dstack in minutes. This is your streamlined path—just follow the steps and deploy.
 
-1. Read [What is dstack?](/docs/overview/what-is-dstack)
-2. Try the [Super Quick Start Guide](/docs/tutorials/super-quick-start) for instant TEE deployment (no setup required)
-3. Explore [Core Concepts](/docs/concepts/overview)
+## Quick Start
 
-### Advanced Path
+1. [What is dstack?](/docs/overview/what-is-dstack)
+2. [Super Quick Start Guide](/docs/tutorials/super-quick-start) — deploy to TEE instantly, no setup
+3. [Core Concepts](/docs/concepts/overview)
 
-1. Complete [Installation](/docs/getting-started/installation)
-2. Study [System Architecture](/docs/concepts/architecture)
-3. Review [Security & Research Overview](/docs/security-research/overview)
-4. Deploy your own dstack:  
-   - [Install dstack](/docs/getting-started/installation)  
-   - [First Deployment](/docs/getting-started/first-deployment)
-5. Once your dstack system is running, try the [Rust Tutorial](/docs/tutorials/rust-example) and [Python Tutorial](/docs/tutorials/python-example) on your own infrastructure
-
-If you want to go further or need more real-world deployment examples, check out the [dstack-examples repository](https://github.com/Dstack-TEE/dstack-examples/) for additional application deployment guides and advanced use cases.
-
-**Ready to start?** Begin with our [Super Quick Start Guide](/docs/tutorials/super-quick-start) →
-
-
-## Available Tutorials
+## Quick Start Guide
 
 <div className="mb-6">
   <Card
-    title="Super Quick Start"
+    title="Deploy an App"
     icon="play-circle"
-    href="/docs/tutorials/super-quick-start"
+    href="docs/getting-started/install/app-jupiter-guide.mdx"
     className="border border-green-200 bg-green-50/60 rounded-lg shadow-none px-5 py-3 text-sm"
     thin
   >
     <div>
       <span className="font-medium text-green-800">Deploy any containerized app to TEE in minutes</span>
       <div className="text-green-700 mt-1">
-        <span>Zero infrastructure setup • Free credits • Fastest way to try dstack</span>
+        <span>Zero setup • Free credits • Fastest way to try dstack</span>
       </div>
-      <div className="mt-2 text-xs text-green-600">Uses Phala Cloud’s managed confidential compute platform</div>
+      <div className="mt-2 text-xs text-green-600">Runs on Phala Cloud’s managed confidential compute</div>
     </div>
   </Card>
 </div>
 
+## For Advanced Users
+
+- [Install dstack](/docs/getting-started/installation)
+- [System Architecture](/docs/concepts/architecture)
+- [Security & Research](/docs/security-research/overview)
+- Deploy on your own hardware:  
+  - [Install](/docs/getting-started/installation)  
+  - [First Deployment](/docs/getting-started/first-deployment)
+- Once running, try:  
+  - [Rust Tutorial](/docs/tutorials/rust-example)  
+  - [Python Tutorial](/docs/tutorials/python-example)
+
+Need more? See [dstack-examples](https://github.com/Dstack-TEE/dstack-examples/) for real-world deployments.
+
+**Start now:** [Super Quick Start Guide](docs/getting-started/install/app-jupiter-guide.mdx) →
+
+
+
 <CardGroup cols={2}>
   <Card title="Python Flask Application" icon="python" href="/docs/tutorials/python-example">
-    Deploy a Python Flask web application to a secure TEE environment
+    Deploy a Python Flask app to a secure TEE
   </Card>
   <Card title="JavaScript/Node.js Application" icon="node-js" href="/docs/tutorials/javascript-example">
-    Build and deploy a Node.js API with Express (Coming Soon)
+    Node.js API with Express (Coming Soon)
   </Card>
   <Card title="Rust Application" icon="rust" href="/docs/tutorials/rust-example">
-    Deploy a high-performance Rust application using Actix (Coming Soon)
+    Rust app with Actix (Coming Soon)
   </Card>
   <Card title="Secure Web Application" icon="shield" href="/docs/getting-started/start">
-    Build a privacy-preserving web application with end-to-end encryption (Coming Soon)
+    End-to-end encrypted web app (Coming Soon)
   </Card>
 </CardGroup>
-
-

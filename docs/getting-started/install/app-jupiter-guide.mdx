@@ -1,5 +1,5 @@
 ---
-title: "Gettings Started Now"
+title: "Getting Started Now"
 description: "this is how you and a remote host can quickly deploy apps to dstack"
 ---
 # Quick Start: Jupyter Notebook on dstack
@@ -19,101 +19,36 @@ and then we will be able to access our own TDX VM with Jupyter Notebook running 
 
 ---
 
-## 🚦 Launch dstack Infrastructure
 
-> **warning:** run each step below in a separate terminal window, in order.
-
-<div className="flex flex-col gap-3">
-
-  {/* Step 1: Connect to Remote Machine */}
-  <div className="rounded border border-gray-300 p-4 flex flex-col space-y-2 w-full max-w-2xl mx-auto">
-    <div className="flex items-center gap-2 mb-1">
-      <span className="inline-flex items-center justify-center w-7 h-7 rounded-full border border-gray-400 text-gray-800 font-bold text-base bg-white">1</span>
-      <h3 className="font-semibold text-gray-900 text-base tracking-tight">Connect to your dstack host</h3>
-    </div>
-    <CodeBlock language="bash">
-      ssh &lt;user&gt;@&lt;host&gt;
-    </CodeBlock>
-    <p className="text-sm text-gray-700">Open a terminal and SSH into your remote dstack host.</p>
+{/* Step 1: Open Tunnel and Access Dashboard */}
+<div className="rounded border border-gray-300 p-4 flex flex-col space-y-3 w-full max-w-2xl mx-auto">
+  <div className="flex items-center gap-2 mb-1">
+    <span className="inline-flex items-center justify-center w-7 h-7 rounded-full border border-gray-400 text-gray-800 font-bold text-base bg-white">1</span>
+    <h3 className="font-semibold text-gray-900 text-base tracking-tight">Open tunnel &amp; access dashboard</h3>
   </div>
-
-  {/* Step 2: Start Key Management Service */}
-  <div className="rounded border border-gray-300 p-4 flex flex-col space-y-2 w-full max-w-2xl mx-auto">
-    <div className="flex items-center gap-2 mb-1">
-      <span className="inline-flex items-center justify-center w-7 h-7 rounded-full border border-gray-400 text-gray-800 font-bold text-base bg-white">2</span>
-      <h3 className="font-semibold text-gray-900 text-base tracking-tight">Start key management service (KMS)</h3>
-    </div>
-    <CodeBlock language="bash">
-      cd meta-dstack/
-      cd build/
-      ./dstack-kms -c kms.toml
-    </CodeBlock>
-    <p className="text-sm text-gray-700">In a new terminal, start the KMS service for secure key management.</p>
+  <CodeBlock language="bash">
+    {`ssh -L13680:localhost:13680 <user>@<host>`}
+  </CodeBlock>
+  <div className="text-xs text-gray-600">
+    this command lets you access the dstack dashboard running on your remote host.
   </div>
-
-  {/* Step 3: Start Gateway Service */}
-  <div className="rounded border border-gray-300 p-4 flex flex-col space-y-2 w-full max-w-2xl mx-auto">
-    <div className="flex items-center gap-2 mb-1">
-      <span className="inline-flex items-center justify-center w-7 h-7 rounded-full border border-gray-400 text-gray-800 font-bold text-base bg-white">3</span>
-      <h3 className="font-semibold text-gray-900 text-base tracking-tight">Start gateway service</h3>
-    </div>
-    <CodeBlock language="bash">
-      cd meta-dstack/
-      cd build/
-      sudo ./dstack-gateway -c gateway.toml
-    </CodeBlock>
-    <p className="text-sm text-gray-700">In another terminal, start the gateway service to handle network routing.</p>
+  <div className="flex flex-col space-y-0.5">
+    <span className="text-xs text-gray-600">open in your browser:</span>
+    <a href="http://127.0.0.1:13680/" className="text-gray-800 underline font-medium">http://127.0.0.1:13680</a>
   </div>
-
-  {/* Step 4: Start Virtual Machine Manager */}
-  <div className="rounded border border-gray-300 p-4 flex flex-col space-y-2 w-full max-w-2xl mx-auto">
-    <div className="flex items-center gap-2 mb-1">
-      <span className="inline-flex items-center justify-center w-7 h-7 rounded-full border border-gray-400 text-gray-800 font-bold text-base bg-white">4</span>
-      <h3 className="font-semibold text-gray-900 text-base tracking-tight">Start virtual machine manager (VMM)</h3>
-    </div>
-    <CodeBlock language="bash">
-      cd meta-dstack/
-      cd build/
-      ./dstack-vmm -c vmm.toml
-    </CodeBlock>
-    <p className="text-sm text-gray-700">In a separate terminal, launch the VMM service to manage your CVMs.</p>
+  <div className="flex flex-col space-y-1 mt-2">
+    <span className="text-xs text-gray-600">click <strong>"Deploy a new instance"</strong> to start your first container:</span>
+    <img src="/docs/images/deploy-instance.png" alt="deploy a new instance" className="rounded border border-gray-200 max-w-xs shadow" />
   </div>
-
-  {/* Step 5: Open Local Tunnel and Access Dashboard */}
-  <div className="rounded border border-gray-300 p-4 flex flex-col space-y-2 w-full max-w-2xl mx-auto">
-    <div className="flex items-center gap-2 mb-1">
-      <span className="inline-flex items-center justify-center w-7 h-7 rounded-full border border-gray-400 text-gray-800 font-bold text-base bg-white">5</span>
-      <h3 className="font-semibold text-gray-900 text-base tracking-tight">Open local tunnel &amp; access dstack dashboard</h3>
-    </div>
-    <div>
-      <CodeBlock language="bash">
-        ssh -L&lt;local_port&gt;:localhost:&lt;local_port&gt; &lt;user&gt;@&lt;host&gt;
-      </CodeBlock>
-      <div className="text-xs text-gray-600 mt-1">
-        <strong>Example:</strong>
-        <span className="text-gray-500">ssh -L13680:localhost:13680 &lt;user&gt;@&lt;host&gt;</span>
-      </div>
-    </div>
-    <p className="text-sm text-gray-700">
-      This command forwards a local port to the remote host, allowing you to access the dstack dashboard in your browser.
-    </p>
-    <div className="flex flex-col space-y-0.5">
-      <span className="text-xs text-gray-600">Open local host tunnel to dashboard</span>
-      <a href="http://127.0.0.1/" className="text-gray-800 underline font-medium">http://127.0.0.1</a>
-    </div>
-    <div className="flex flex-col space-y-1 mt-2">
-      <span className="text-xs text-gray-600">Once loaded, click <strong>"Deploy a new instance"</strong> to start your first container:</span>
-      <img src="/docs/images/deploy-instance.png" alt="deploy a new instance" className="rounded border border-gray-200 max-w-xs shadow" />
-    </div>
-  </div>
-
 </div>
+
 
 ---
 
 ## 📓 Check Your Jupyter Notebook Deployment
 
-First, let's confirm your VMM is running and ready. Open the dstack dashboard (http://localhost:13680/) in your browser. If everything is set up, you should see the Jupyter Notebook web page like this:
+First, let's confirm your VMM is running and ready. Open the dstack dashboard In Local Host in your browser. If everything is set up, you should see the Jupyter Notebook web page like this:
+<a href="http://localhost/" className="text-gray-800 underline font-medium">http://localhost/</a>
 
 <img src="/docs/images/deploy-instance-4.png" alt="jupyter notebook web page" className="rounded border border-gray-200 max-w-xs shadow" />
 
@@ -202,7 +137,4 @@ After deployment, find your app's URL in the dashboard to access Jupyter Noteboo
 <CodeBlock language="text">
 https://&lt;APP_ID&gt;-&lt;APP_PORT&gt;.app.&lt;host&gt;:&lt;host_port&gt;
 </CodeBlock>
-
-Example:  
-https://5f080e9c178c067d71d8dcf486fa7e9f108837bc-8080.app.kvin.wang:13684/lab
 
