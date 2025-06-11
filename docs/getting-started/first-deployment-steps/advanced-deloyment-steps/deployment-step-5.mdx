@@ -1,0 +1,155 @@
+---
+title: "Step 5: Deploy dstack-gateway in CVM"
+description: "Deploy dstack-gateway in CVM"
+---
+
+## Step 5: Deploy dstack-gateway in CVM
+
+<div className="bg-white border border-gray-200 rounded-lg p-6 my-6">
+  <p className="text-gray-600 mb-4">dstack-gateway can be deployed as a dstack app in the same host as the KMS or in a different host.</p>
+
+  <h3 className="text-lg font-semibold mb-4">Add OS Image Hash to KMS Whitelist</h3>
+  
+  <div className="bg-yellow-50 border-l-4 border-yellow-400 p-4 mb-4">
+    <p className="text-sm text-yellow-700">
+      In order to run user workloads that use the KMS, the OS image hash must be added to the KMS whitelist.
+    </p>
+  </div>
+
+  <p className="text-sm text-gray-600 mb-2">The <code className="bg-gray-200 px-1 rounded">os_image_hash</code> is generated during the image build process and stored in <code className="bg-gray-200 px-1 rounded">digest.txt</code>:</p>
+
+```bash
+cd dstack/kms/auth-eth
+npx hardhat kms:add-image --network phala --mr <os-image-hash>
+```
+
+  <h3 className="text-lg font-semibold mb-4 mt-6">Register dstack-gateway in KMS</h3>
+
+```bash
+cd dstack/kms/auth-eth
+npx hardhat app:deploy --network phala
+```
+
+  <div className="mt-4">
+    <h4 className="font-medium mb-2">Expected Output:</h4>
+    <div className="bg-gray-100 p-3 rounded text-sm">
+      <pre>
+Deploying proxy...
+Waiting for deployment...
+AppAuth Proxy deployed to: 0x539D0d59D1742780De41b85b2c3674b24369e292
+Implementation deployed to: 0x5aC1671E1Df54994D023F0B05806821d6D84e086
+Deployment completed successfully
+Transaction hash: 0xceac2ac6d56a40fef903b947d3a05df42ccce66da7f356c5d54afda68277f9a9
+Waiting for transaction 0xe144e9007208079e5e82c04f727d2383c58184e74d4f860e62557b5f330ab832 to be confirmed...
+App registered in KMS successfully
+Registered AppId: 0x31884c4b7775affe4c99735f6c2aff7d7bc6cfcd
+      </pre>
+    </div>
+  </div>
+</div>
+
+### Configure and Deploy Gateway
+
+<div className="bg-white border border-gray-200 rounded-lg p-6 my-6">
+  <h4 className="font-medium mb-4">Initialize Gateway Deployment</h4>
+
+```bash
+cd ../../gateway/dstack-app/
+./deploy-to-vmm.sh 
+```
+
+  <div className="mt-4">
+    <h4 className="font-medium mb-2">Configure Environment Variables</h4>
+    <p className="text-sm text-gray-600 mb-2">Edit the <code className="bg-gray-200 px-1 rounded">.env</code> file with required variables:</p>
+  </div>
+
+<div className="bg-gray-50 p-4 rounded-lg overflow-x-auto">
+```bash
+# .env
+VMM_RPC=unix:../../vmm-data/vmm.sock
+
+# Cloudflare API token for DNS challenge used to get the SSL certificate.
+CF_API_TOKEN=your_cloudflare_api_token
+CF_ZONE_ID=your_zone_id
+
+# Service domain
+SRV_DOMAIN=test2.dstack.phala.network
+
+# Public IP address
+PUBLIC_IP=$(curl -s ifconfig.me)
+
+# Gateway application ID. Register the app in KmsAuth first to get the app ID.
+GATEWAY_APP_ID=0x31884c4b7775affe4c99735f6c2aff7d7bc6cfcd
+
+# Whether to use ACME staging (yes/no)
+ACME_STAGING=yes
+
+# Subnet index. 0~15
+SUBNET_INDEX=0
+
+# My URL. The URL will be synced to other nodes in the cluster so that each node can discover other nodes.
+MY_URL=https://gateway.test2.dstack.phala.network:9202
+
+# Bootnode URL. If you want to deploy a multi-node dstack-gateway cluster, set the bootnode URL to the URL of another node already deployed or planed to be deployed later.
+BOOTNODE_URL=https://gateway.test2.dstack.phala.network:9202
+
+# DStack OS image name
+OS_IMAGE=dstack-0.5.2
+
+# Set defaults for variables that might not be in .env
+GIT_REV=HEAD
+
+# Port configurations
+GATEWAY_RPC_ADDR=0.0.0.0:9202
+GATEWAY_ADMIN_RPC_ADDR=127.0.0.1:9203
+GATEWAY_SERVING_ADDR=0.0.0.0:9204
+GUEST_AGENT_ADDR=127.0.0.1:9206
+WG_ADDR=0.0.0.0:9202
+```
+</div>
+
+<div className="mt-4">
+  <h4 className="font-medium mb-2">Deployment Confirmation</h4>
+  <p className="text-sm text-gray-600 mb-2">After running the script again, you'll see a confirmation prompt:</p>
+  <div className="bg-gray-100 p-3 rounded text-sm">
+    <pre>
+App compose file created at: .app-compose.json
+Compose hash: 700a50336df7c07c82457b116e144f526c29f6d8f4a0946b3e88065c9beba0f4
+Configuration:
+VMM_RPC: unix:../../build/vmm.sock
+SRV_DOMAIN: test5.dstack.phala.network
+PUBLIC_IP: 66.220.6.113
+GATEWAY_APP_ID: 31884c4b7775affe4c99735f6c2aff7d7bc6cfcd
+MY_URL: https://gateway.test5.dstack.phala.network:9202
+BOOTNODE_URL: https://gateway.test2.dstack.phala.network:9202
+SUBNET_INDEX: 0
+WG_ADDR: 0.0.0.0:9202
+GATEWAY_RPC_ADDR: 0.0.0.0:9202
+GATEWAY_ADMIN_RPC_ADDR: 127.0.0.1:9203
+GATEWAY_SERVING_ADDR: 0.0.0.0:9204
+GUEST_AGENT_ADDR: 127.0.0.1:9206
+Continue? [y/N]
+    </pre>
+  </div>
+</div>
+
+<div className="bg-red-50 border-l-4 border-red-400 p-4 mt-4">
+  <p className="text-sm text-red-700">
+    <strong>Important:</strong> Don't press 'y' yet! First add the compose hash to the AppAuth contract.
+  </p>
+</div>
+
+<div className="mt-4">
+  <h4 className="font-medium mb-2">Add Compose Hash to Contract</h4>
+</div>
+
+```bash
+npx hardhat app:add-hash --network phala --app-id 0x31884c4b7775affe4c99735f6c2aff7d7bc6cfcd 0x700a50336df7c07c82457b116e144f526c29f6d8f4a0946b3e88065c9beba0f4
+```
+
+<div className="bg-green-50 border-l-4 border-green-400 p-4 mt-4">
+  <p className="text-sm text-green-700">
+    After the transaction is confirmed, you can press 'y' to continue the deployment.
+  </p>
+</div>
+</div>

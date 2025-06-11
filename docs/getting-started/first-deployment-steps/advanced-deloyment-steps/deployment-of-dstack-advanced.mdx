@@ -1,0 +1,40 @@
+---
+title: "Full Dstack Deployment Guide"
+description: "Originally Authored, by Kevin Wang edited by Dylan Kawalec from Phala Network"
+---
+
+<div className="flex justify-center my-8">
+  <img
+    src="/docs/images/full-deployment-imgs/deployment-guide-tdx-pro.png"
+    alt="dstack advanced deployment architecture"
+    className="rounded-lg shadow-lg max-w-full h-auto"
+    style={{ maxWidth: '100%', height: 'auto' }}
+    width={900}
+    height={500}
+    loading="eager"
+  />
+</div>
+
+<div className="bg-blue-50 border-l-4 border-blue-400 p-4 my-6">
+  <div className="flex">
+    <div className="ml-3">
+      <p className="text-sm text-blue-700">
+        This document describes the deployment of DStack components on bare metal TDX hosts.
+        It contains steps to deploy dstack-kms and dstack-gateway into CVMs.
+      </p>
+    </div>
+  </div>
+</div>
+
+## Prerequisites
+
+<div className="grid grid-cols-1 md:grid-cols-2 gap-4 my-6">
+  <div className="bg-gray-50 p-4 rounded-lg">
+    <h3 className="font-semibold mb-2">Hardware Requirements</h3>
+    <p>Follow the <a href="https://github.com/canonical/tdx" className="text-blue-600 hover:underline">TDX setup guide</a> to setup the TDX host.</p>
+  </div>
+  <div className="bg-gray-50 p-4 rounded-lg">
+    <h3 className="font-semibold mb-2">Software Requirements</h3>
+    <p>Install <code className="bg-gray-200 px-1 rounded">cargo</code> and <code className="bg-gray-200 px-1 rounded">rustc</code></p>
+  </div>
+</div>
