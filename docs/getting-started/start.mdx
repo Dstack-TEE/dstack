@@ -3,157 +3,224 @@ title: "Start deploying apps with dstack"
 description: "Configure your dstack environment and prepare for secure application deployment"
 ---
 
-
 <div
   style={{
-    width: '100%',
-    maxWidth: 480,
-    margin: '2rem auto 1.5rem auto',
-    position: 'relative',
+    maxWidth: '540px',
+    margin: '2rem auto',
+    padding: '1.2rem 1rem',
+    borderRadius: '1.1rem',
+    boxShadow: '0 2px 16px 0 #d9f99d22, 0 1px 6px 0 rgba(0,0,0,0.06)',
+    background: 'linear-gradient(135deg, #f7fee7 85%, #e0f2fe 100%)',
     display: 'flex',
-    justifyContent: 'center',
+    flexDirection: 'column',
     alignItems: 'center',
-    border: '1.5px solid #d9f99d',
-    borderRadius: '0.9rem',
-    boxShadow: '0 1px 8px 0 #d9f99d33, 0 1px 8px 0 rgba(0,0,0,0.06)',
-    padding: '1.1rem 1rem',
-    overflow: 'hidden',
-    minHeight: '220px',
-    background: 'transparent',
-    transition: 'box-shadow 0.18s, border 0.18s'
+    gap: '1.1rem',
   }}
 >
-  {/* Blurry, semi-transparent background image */}
+  {/* Header */}
+  <div style={{ width: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.5rem', marginBottom: '0.2rem' }}>
+    {/* No mascot image here anymore */}
+  </div>
+
+  {/* Deploy an app button with blurred mascot background */}
   <div
     style={{
-      position: 'absolute',
-      top: 0,
-      left: 0,
       width: '100%',
-      height: '100%',
-      backgroundImage: 'url(/docs/images/arm-dillo.png)',
-      backgroundSize: 'cover',
-      backgroundPosition: 'center',
-      filter: 'blur(16px) brightness(1.15) saturate(1.1) opacity(0.55)',
-      zIndex: 0,
-      pointerEvents: 'none',
-      transition: 'filter 0.2s'
-    }}
-  />
-  {/* Centered button */}
-  <a
-    href="/docs/getting-started/install/app-jupiter-guide"
-    style={{
-      display: 'block',
-      width: '100%',
-      maxWidth: 340,
-      margin: '0 auto',
-      padding: '1rem 0',
-      background: '#f7fee7cc',
-      color: '#365314',
-      borderRadius: '0.6rem',
-      fontWeight: 700,
-      fontSize: 'clamp(1.2rem, 3vw, 1.7rem)',
-      textAlign: 'center',
-      textDecoration: 'none',
-      border: '1.5px solid #d9f99d',
-      boxShadow: '0 1px 6px 0 #d9f99d33, 0 1px 6px 0 rgba(0,0,0,0.04)',
-      cursor: 'pointer',
-      lineHeight: 1.15,
-      letterSpacing: '-0.01em',
+      margin: '0.1rem 0 0.2rem 0',
+      display: 'flex',
+      justifyContent: 'center',
       position: 'relative',
-      zIndex: 1,
-      transition: 'background 0.13s, color 0.13s, border 0.13s, box-shadow 0.13s, font-size 0.15s'
+      minHeight: '90px',
+    }}
+  >
+    {/* Blurred mascot background */}
+    <img
+      src="/docs/images/arm-dillo.png"
+      alt="arm-dillo mascot"
+      style={{
+        position: 'absolute',
+        left: '50%',
+        top: '50%',
+        transform: 'translate(-50%, -50%)',
+        width: '110px',
+        height: 'auto',
+        filter: 'blur(16px) brightness(1.2) drop-shadow(0 1px 8px #bbf7d0)',
+        opacity: 0.45,
+        zIndex: 0,
+        pointerEvents: 'none',
+        userSelect: 'none',
+      }}
+    />
+    <a
+      href="/docs/getting-started/install/app-jupiter-guide"
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: '0.5rem',
+        width: '100%',
+        maxWidth: 320,
+        padding: '0.7rem 0',
+        background: 'linear-gradient(90deg, #bbf7d0 0%, #a7f3d0 100%)',
+        color: '#166534',
+        borderRadius: '0.6rem',
+        fontWeight: 700,
+        fontSize: 'clamp(1.05rem, 2.5vw, 1.2rem)',
+        textAlign: 'center',
+        textDecoration: 'none',
+        border: '1.5px solid #bbf7d0',
+        boxShadow: '0 1px 6px 0 #bbf7d033, 0 1px 6px 0 rgba(0,0,0,0.04)',
+        cursor: 'pointer',
+        letterSpacing: '-0.01em',
+        transition: 'transform 0.13s, box-shadow 0.13s',
+        margin: 0,
+        position: 'relative',
+        overflow: 'hidden',
+        zIndex: 1,
+        backdropFilter: 'none',
+      }}
+      onMouseOver={e => {
+        e.currentTarget.style.transform = 'scale(1.025)';
+        e.currentTarget.style.boxShadow = '0 2px 12px 0 #bbf7d033, 0 2px 8px 0 rgba(0,0,0,0.08)';
+      }}
+      onMouseOut={e => {
+        e.currentTarget.style.transform = 'scale(1)';
+        e.currentTarget.style.boxShadow = '0 1px 6px 0 #bbf7d033, 0 1px 6px 0 rgba(0,0,0,0.04)';
+      }}
+    >
+      <svg width="22" height="22" fill="none" viewBox="0 0 24 24"><path fill="#166534" d="M12 2a1 1 0 0 1 1 1v8h8a1 1 0 1 1 0 2h-8v8a1 1 0 1 1-2 0v-8H3a1 1 0 1 1 0-2h8V3a1 1 0 0 1 1-1z"/></svg>
+      Deploy DStack App
+    </a>
+  </div>
+
+  <div style={{ width: '100%', textAlign: 'center', margin: '0.1rem 0 0.1rem 0', fontSize: '0.97rem', color: '#333' }}>
+    dstack lets you deploy secure containerized apps with hardware-backed protection. if you're new, we recommend starting with the <a href="/docs/getting-started/install/app-jupiter-guide" className="underline text-lime-700 font-medium">Jupyter Notebook Quick Start</a>. for more details on the repo structure and core components, see <a href="https://github.com/Dstack-TEE/dstack/tree/master/" target="_blank" rel="noopener noreferrer" className="underline text-lime-700">github.com/Dstack-TEE/dstack</a>.
+  </div>
+
+  {/* Cards for install and deployment */}
+  <div
+    style={{
+      display: 'grid',
+      gridTemplateColumns: '1fr 1fr',
+      gap: '0.7rem',
+      width: '100%',
+      margin: '0.2rem 0',
+    }}
+  >
+    {/* Install card */}
+    <a href="/docs/getting-started/install/installation" style={{
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'flex-start',
+      gap: '0.3rem',
+      textDecoration: 'none',
+      border: '1px solid #e0e0e0',
+      borderRadius: '0.7rem',
+      padding: '0.9rem 0.7rem',
+      background: '#f7fee7',
+      boxShadow: '0 1px 4px rgba(0,0,0,0.02)',
+      color: '#222',
+      transition: 'box-shadow 0.13s, border 0.13s, background 0.13s',
+      minHeight: '80px',
+      position: 'relative',
+      fontSize: '0.97rem',
     }}
     onMouseOver={e => {
-      e.currentTarget.style.background = '#fafff4ee';
-      e.currentTarget.style.border = '1.5px solid #bbf7d0';
-      e.currentTarget.style.boxShadow = '0 2px 12px 0 #bbf7d033, 0 2px 8px 0 rgba(0,0,0,0.08)';
-      e.currentTarget.style.fontSize = 'clamp(1.3rem, 3.5vw, 1.9rem)';
-      e.currentTarget.style.color = '#166534';
+      e.currentTarget.style.background = '#e0f2fe';
+      e.currentTarget.style.border = '1px solid #a7f3d0';
+      e.currentTarget.style.boxShadow = '0 2px 8px 0 #a7f3d033, 0 1px 4px 0 rgba(0,0,0,0.08)';
     }}
     onMouseOut={e => {
-      e.currentTarget.style.background = '#f7fee7cc';
-      e.currentTarget.style.border = '1.5px solid #d9f99d';
-      e.currentTarget.style.boxShadow = '0 1px 6px 0 #d9f99d33, 0 1px 6px 0 rgba(0,0,0,0.04)';
-      e.currentTarget.style.fontSize = 'clamp(1.2rem, 3vw, 1.7rem)';
-      e.currentTarget.style.color = '#365314';
+      e.currentTarget.style.background = '#f7fee7';
+      e.currentTarget.style.border = '1px solid #e0e0e0';
+      e.currentTarget.style.boxShadow = '0 1px 4px rgba(0,0,0,0.02)';
     }}
-  >
-    Deploy an app
-  </a>
-</div>
+    >
+      <span style={{ fontSize: '1.1rem', marginBottom: '0.1rem', color: '#166534' }}>⬇️</span>
+      <div style={{ fontWeight: 700, marginBottom: '0.1rem' }}>
+        #1 Install dstack
+      </div>
+      <div style={{ color: '#555' }}>
+        Step-by-step install instructions.
+      </div>
+    </a>
+    {/* First deployment card */}
+    <a href="/docs/getting-started/first-deployment-steps/first-deployment" style={{
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'flex-start',
+      gap: '0.3rem',
+      textDecoration: 'none',
+      border: '1px solid #e0e0e0',
+      borderRadius: '0.7rem',
+      padding: '0.9rem 0.7rem',
+      background: '#f7fee7',
+      boxShadow: '0 1px 4px rgba(0,0,0,0.02)',
+      color: '#222',
+      transition: 'box-shadow 0.13s, border 0.13s, background 0.13s',
+      minHeight: '80px',
+      position: 'relative',
+      fontSize: '0.97rem',
+    }}
+    onMouseOver={e => {
+      e.currentTarget.style.background = '#e0f2fe';
+      e.currentTarget.style.border = '1px solid #a7f3d0';
+      e.currentTarget.style.boxShadow = '0 2px 8px 0 #a7f3d033, 0 1px 4px 0 rgba(0,0,0,0.08)';
+    }}
+    onMouseOut={e => {
+      e.currentTarget.style.background = '#f7fee7';
+      e.currentTarget.style.border = '1px solid #e0e0e0';
+      e.currentTarget.style.boxShadow = '0 1px 4px rgba(0,0,0,0.02)';
+    }}
+    >
+      <span style={{ fontSize: '1.1rem', marginBottom: '0.1rem', color: '#166534' }}>🚀</span>
+      <div style={{ fontWeight: 700, marginBottom: '0.1rem' }}>
+        #2 First Deployment Guide
+      </div>
+      <div style={{ color: '#555' }}>
+        Deploy your first app to a Confidential VM.
+      </div>
+    </a>
+  </div>
 
-<div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', margin: '2rem 0' }}>
-  <span style={{ marginBottom: '0.75rem' }}>
-    dstack lets you deploy secure containerized apps with hardware-backed protection.
-  </span>
-  <span style={{ marginBottom: '0.75rem' }}>
-    if you're new, we recommend starting with the <a href="/docs/getting-started/install/app-jupiter-guide" className="underline text-lime-700 font-medium">Jupyter Notebook Quick Start</a>.
-  </span>
-  <span>
-    for more details on the repo structure and core components, see <a href="https://github.com/Dstack-TEE/dstack/tree/master/" target="_blank" rel="noopener noreferrer" className="underline text-lime-700">github.com/Dstack-TEE/dstack</a>.
-  </span>
-</div>
-
-<div style={{
-  display: 'flex',
-  flexWrap: 'wrap',
-  gap: '1.5rem',
-  margin: '2rem 0'
-}}>
-  <a href="/docs/getting-started/install/installation" style={{
-    flex: '1 1 260px',
-    minWidth: '220px',
-    textDecoration: 'none',
-    border: '1px solid #e0e0e0',
-    borderRadius: '10px',
-    padding: '1.5rem',
-    background: '#fafbfc',
-    boxShadow: '0 2px 8px rgba(0,0,0,0.03)',
-    color: '#222',
-    marginBottom: '0.5rem'
-  }}>
-    <div style={{ fontSize: '1.2rem', fontWeight: 600, marginBottom: '0.5rem' }}>
-      #1 Install dstack
-    </div>
-    <div style={{ fontSize: '1rem', color: '#555' }}>
-      Step-by-step install instructions.
-    </div>
-  </a>
-  <a href="/docs/getting-started/first-deployment-steps/first-deployment" style={{
-    flex: '1 1 260px',
-    minWidth: '220px',
-    textDecoration: 'none',
-    border: '1px solid #e0e0e0',
-    borderRadius: '10px',
-    padding: '1.5rem',
-    background: '#fafbfc',
-    boxShadow: '0 2px 8px rgba(0,0,0,0.03)',
-    color: '#222',
-    marginBottom: '0.5rem'
-  }}>
-    <div style={{ fontSize: '1.2rem', fontWeight: 600, marginBottom: '0.5rem' }}>
-      #2  First Deployment Guide
-    </div>
-    <div style={{ fontSize: '1rem', color: '#555' }}>
-      Deploy your first app to a Confidential VM.
-    </div>
-  </a>
-</div>
-
-<div className="my-6">
-  <a
-    href="https://github.com/Dstack-TEE/dstack"
-    target="_blank"
-    rel="noopener noreferrer"
-    className="block bg-gray-100 border border-gray-300 rounded-lg p-4 text-center hover:bg-blue-50 transition"
-    style={{ textDecoration: 'none' }}
-  >
-    <span className="text-lg font-semibold text-blue-700 flex items-center justify-center gap-2">
-      <svg xmlns="http://www.w3.org/2000/svg" className="inline-block h-5 w-5 text-blue-500" fill="currentColor" viewBox="0 0 24 24"><path d="M12 .5C5.73.5.5 5.73.5 12c0 5.08 3.29 9.39 7.86 10.91.58.11.79-.25.79-.56 0-.28-.01-1.02-.02-2-3.2.7-3.88-1.54-3.88-1.54-.53-1.34-1.3-1.7-1.3-1.7-1.06-.72.08-.71.08-.71 1.17.08 1.79 1.2 1.79 1.2 1.04 1.78 2.73 1.27 3.4.97.11-.75.41-1.27.74-1.56-2.56-.29-5.26-1.28-5.26-5.7 0-1.26.45-2.29 1.19-3.1-.12-.29-.52-1.46.11-3.05 0 0 .98-.31 3.2 1.18a11.1 11.1 0 0 1 2.92-.39c.99.01 1.99.13 2.92.39 2.22-1.49 3.2-1.18 3.2-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.84 1.19 3.1 0 4.43-2.7 5.41-5.27 5.7.42.36.79 1.09.79 2.2 0 1.59-.01 2.87-.01 3.26 0 .31.21.68.8.56C20.71 21.39 24 17.08 24 12c0-6.27-5.23-11.5-12-11.5z"/></svg>
-      dstack GitHub Repository
-    </span>
-    <span className="text-sm text-gray-600 block mt-1">github.com/Dstack-TEE/dstack</span>
-  </a>
+  {/* GitHub repo card */}
+  <div style={{ width: '100%', margin: '0.1rem 0 0 0', display: 'flex', justifyContent: 'center' }}>
+    <a
+      href="https://github.com/Dstack-TEE/dstack"
+      target="_blank"
+      rel="noopener noreferrer"
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: '0.6rem',
+        background: '#f1f5f9',
+        border: '1px solid #cbd5e1',
+        borderRadius: '0.7rem',
+        padding: '0.7rem 1rem',
+        width: '100%',
+        boxShadow: '0 1px 4px rgba(0,0,0,0.02)',
+        textDecoration: 'none',
+        fontSize: '0.97rem',
+        transition: 'background 0.13s, border 0.13s, box-shadow 0.13s',
+      }}
+      onMouseOver={e => {
+        e.currentTarget.style.background = '#e0f2fe';
+        e.currentTarget.style.border = '1px solid #38bdf8';
+        e.currentTarget.style.boxShadow = '0 2px 8px 0 #38bdf833, 0 1px 4px 0 rgba(0,0,0,0.08)';
+      }}
+      onMouseOut={e => {
+        e.currentTarget.style.background = '#f1f5f9';
+        e.currentTarget.style.border = '1px solid #cbd5e1';
+        e.currentTarget.style.boxShadow = '0 1px 4px rgba(0,0,0,0.02)';
+      }}
+    >
+      <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="#2563eb" viewBox="0 0 24 24"><path d="M12 .5C5.73.5.5 5.73.5 12c0 5.08 3.29 9.39 7.86 10.91.58.11.79-.25.79-.56 0-.28-.01-1.02-.02-2-3.2.7-3.88-1.54-3.88-1.54-.53-1.34-1.3-1.7-1.3-1.7-1.06-.72.08-.71.08-.71 1.17.08 1.79 1.2 1.79 1.2 1.04 1.78 2.73 1.27 3.4.97.11-.75.41-1.27.74-1.56-2.56-.29-5.26-1.28-5.26-5.7 0-1.26.45-2.29 1.19-3.1-.12-.29-.52-1.46.11-3.05 0 0 .98-.31 3.2 1.18a11.1 11.1 0 0 1 2.92-.39c.99.01 1.99.13 2.92.39 2.22-1.49 3.2-1.18 3.2-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.84 1.19 3.1 0 4.43-2.7 5.41-5.27 5.7.42.36.79 1.09.79 2.2 0 1.59-.01 2.87-.01 3.26 0 .31.21.68.8.56C20.71 21.39 24 17.08 24 12c0-6.27-5.23-11.5-12-11.5z"/></svg>
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
+        <span style={{ fontWeight: 700, color: '#2563eb' }}>
+          dstack GitHub Repository
+        </span>
+        <span style={{ color: '#555' }}>github.com/Dstack-TEE/dstack</span>
+      </div>
+    </a>
+  </div>
 </div>
