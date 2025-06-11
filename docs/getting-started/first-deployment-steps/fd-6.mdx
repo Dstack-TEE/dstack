@@ -1,44 +1,136 @@
 ---
-title: "F) Expose an API endpoint via the Gateway"
-description: "Verify Security"
+title: "Expose an API endpoint via the Gateway"
+description: "Verify Security & Attestation"
 ---
 
-## Step 6: Verify Security
+## Step 6: Verify Security & Expose API Endpoints
 
-One of dstack's key features is verifiable security. Let's verify your application is running in a genuine TEE.
+One of dstack's key features is verifiable security. Let's verify your application is running in a genuine TEE and expose secure API endpoints.
 
-### Get Attestation Quote
+### Get Attestation Quote Using dstack SDK
 
-Using the dstack SDK:
+The dstack JavaScript SDK provides direct access to attestation functionality:
 
 ```javascript
 // verify-deployment.js
-const { DstackClient } = require('@phala/dstack-sdk');
+const { DstackClient } = require('dstack-sdk');
 
 async function verifyDeployment() {
-  const client = new DstackClient({
-    endpoint: 'https://my-first-app.app.example.com'
-  });
+  // Connect to dstack guest agent (default Unix socket)
+  const client = new DstackClient();
   
-  // Get attestation quote
-  const quote = await client.getQuote();
-  console.log('Attestation Quote:', quote);
+  // Get attestation quote with report data
+  const quote = await client.getQuote('your-report-data');
+  console.log('Attestation Quote:', quote.quote);
+  console.log('Event Log:', quote.event_log);
+  
+  // Replay RTMRs for verification
+  const rtmrs = quote.replayRtmrs();
+  console.log('RTMRs:', rtmrs);
   
   // Get application info
   const info = await client.info();
-  console.log('Application Info:', info);
+  console.log('App ID:', info.app_id);
+  console.log('Instance ID:', info.instance_id);
+  console.log('TCB Info:', info.tcb_info);
 }
 
 verifyDeployment();
 ```
 
+### Container Setup
+
+To use dstack SDK in your Docker container, mount the dstack socket:
+
+```yaml
+version: '3'
+services:
+  your-app:
+    image: your-image
+    volumes:
+      - /var/run/dstack.sock:/var/run/dstack.sock
+    ports:
+      - "8080:8080"
+```
+
+### Alternative: Direct HTTP API
+
+You can also access attestation via HTTP API:
+
+```bash
+# Get attestation quote
+curl --unix-socket /var/run/dstack.sock \
+  http://dstack/GetQuote \
+  -H "Content-Type: application/json" \
+  -d '{"report_data": "1234deadbeaf"}'
+
+# Get application info
+curl --unix-socket /var/run/dstack.sock \
+  http://dstack/Info
+```
+
+### Expose Secure API Endpoints
+
+Create an API endpoint that provides attestation data:
+
+```javascript
+// app.js - Express.js example
+const express = require('express');
+const { DstackClient } = require('dstack-sdk');
+
+const app = express();
+const client = new DstackClient();
+
+// Endpoint to get attestation quote
+app.get('/api/attestation', async (req, res) => {
+  try {
+    const reportData = req.query.report_data || 'default-report-data';
+    const quote = await client.getQuote(reportData);
+    res.json({
+      success: true,
+      quote: quote.quote,
+      event_log: quote.event_log,
+      rtmrs: quote.replayRtmrs()
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Endpoint to get app info
+app.get('/api/info', async (req, res) => {
+  try {
+    const info = await client.info();
+    res.json({ success: true, info });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.listen(8080, () => {
+  console.log('API server running on port 8080');
+});
+```
+
+### Verification Process
+
+For complete security verification:
+
+1. **Verify TDX Quote**: Use Intel's DCAP-QVL to verify the quote signature
+2. **Check Measurements**: Validate MRTD and RTMRs against expected values  
+3. **Replay Event Log**: Use the `replayRtmrs()` method to verify RTMR3 contains correct app information
+4. **Validate App Identity**: Ensure the app ID matches your deployment
 
 ### Verify via Web Interface
 
-1. In the dashboard, click on your deployment
+1. In the VMM dashboard, click on your deployment
 2. Navigate to the **"Security"** tab
 3. Click **"View Attestation Report"**
-4. You can also verify using the [TEE Attestation Explorer](https://ra-quote-explorer.vercel.app/)
+4. Use external TEE verification tools to validate the attestation
 
+### Gateway URL Access
 
-- If you have any issues or get stuck, visit the [Troubleshooting page](../../troubleshooting) for solutions and diagnostics. You can also ask for help in the [community](../../community.mdx).
+Your secure API endpoints will be accessible through dstack gateway URLs:
+
+- `https://<app-id>.example.com/api/attestation`
+- `https://<app-id>.example.com/api/info`

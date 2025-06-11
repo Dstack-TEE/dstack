@@ -96,10 +96,27 @@
               "style": "solid"
             },
             "pages": [
-              "docs/getting-started/first-deployment-steps/deploying-applications",
               "docs/getting-started/first-deployment-steps/first-deployment",
+              "docs/getting-started/first-deployment-steps/advanced-deloyment-steps/deployment-of-dstack-advanced",
               {
-                "group": "Steps",
+                "group": "Advanced Deployment Steps",
+                "icon": {
+                  "name": "shoe-prints",
+                  "style": "duotone"
+                },
+                "pages": [
+                  "docs/getting-started/first-deployment-steps/advanced-deloyment-steps/deployment-step-1",
+                  "docs/getting-started/first-deployment-steps/advanced-deloyment-steps/deployment-step-2",
+                  "docs/getting-started/first-deployment-steps/advanced-deloyment-steps/deployment-step-3",
+                  "docs/getting-started/first-deployment-steps/advanced-deloyment-steps/deployment-step-4",
+                  "docs/getting-started/first-deployment-steps/advanced-deloyment-steps/deployment-step-5",
+                  "docs/getting-started/first-deployment-steps/advanced-deloyment-steps/deployment-step-6",
+                  "docs/getting-started/first-deployment-steps/advanced-deloyment-steps/deployment-step-7"
+                ]
+              },
+
+              {
+                "group": "dstack deployment for dummies",
                 "icon": {
                   "name": "shoe-prints",
                   "style": "duotone"
@@ -108,7 +125,6 @@
                   "docs/getting-started/first-deployment-steps/fd-1",
                   "docs/getting-started/first-deployment-steps/fd-2",
                   "docs/getting-started/first-deployment-steps/fd-3",
-                  "docs/getting-started/first-deployment-steps/fd-4",
                   "docs/getting-started/first-deployment-steps/fd-5",
                   "docs/getting-started/first-deployment-steps/fd-6",
                   "docs/getting-started/first-deployment-steps/fd-7"

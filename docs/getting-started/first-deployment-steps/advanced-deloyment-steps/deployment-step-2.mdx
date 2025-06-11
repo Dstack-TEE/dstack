@@ -1,0 +1,64 @@
+---
+title: "Step 2: Compile and Run dstack-vmm"
+description: "Compile and run dstack-vmm"
+---
+
+<div className="bg-white border border-gray-200 rounded-lg p-6 my-6">
+  <h3 className="text-lg font-semibold mb-4">Build and Configuration</h3>
+
+```bash
+cd dstack
+cargo build --release -p dstack-vmm -p supervisor
+mkdir -p vmm-data
+cp target/release/dstack-vmm vmm-data/
+cp target/release/supervisor vmm-data/
+cd vmm-data/
+```
+
+<div className="mt-4">
+  <h4 className="font-medium mb-2">Create vmm.toml configuration:</h4>
+</div>
+
+```bash
+# create vmm.toml. Edit the config as needed.
+cat <<EOF > vmm.toml
+address = "unix:./vmm.sock"
+reuse = true
+image_path = "./images"
+run_path = "./run/vm"
+
+[cvm]
+kms_urls = ["https://kms.test2.dstack.phala.network:9201"]
+gateway_urls = []
+cid_start = 30000
+cid_pool_size = 1000
+
+[cvm.port_mapping]
+enabled = true
+address = "127.0.0.1"
+range = [
+    { protocol = "tcp", from = 1, to = 20000 },
+    { protocol = "udp", from = 1, to = 20000 },
+]
+
+[host_api]
+port = 9300
+EOF
+```
+
+<div className="mt-4">
+  <h4 className="font-medium mb-2">Download Guest OS images:</h4>
+</div>
+
+```bash
+# Download Guest OS images
+DSTACK_VERSION=0.5.2
+wget "https://github.com/Dstack-TEE/meta-dstack/releases/download/v${DSTACK_VERSION}/dstack-${DSTACK_VERSION}.tar.gz"
+mkdir -p images/
+tar -xvf dstack-${DSTACK_VERSION}.tar.gz -C images/
+rm -f dstack-${DSTACK_VERSION}.tar.gz
+
+# run dstack-vmm
+./dstack-vmm -c vmm.toml
+```
+</div>

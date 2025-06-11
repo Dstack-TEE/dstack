@@ -3,28 +3,53 @@ title: "Start deploying apps with dstack"
 description: "Configure your dstack environment and prepare for secure application deployment"
 ---
 
+
 <div
   style={{
     width: '100%',
-    maxWidth: 420,
+    maxWidth: 480,
     margin: '2rem auto 1.5rem auto',
+    position: 'relative',
     display: 'flex',
     justifyContent: 'center',
-    background: 'transparent',
+    alignItems: 'center',
     border: '1.5px solid #d9f99d',
     borderRadius: '0.9rem',
     boxShadow: '0 1px 8px 0 #d9f99d33, 0 1px 8px 0 rgba(0,0,0,0.06)',
     padding: '1.1rem 1rem',
+    overflow: 'hidden',
+    minHeight: '220px',
+    background: 'transparent',
     transition: 'box-shadow 0.18s, border 0.18s'
   }}
 >
+  {/* Blurry, semi-transparent background image */}
+  <div
+    style={{
+      position: 'absolute',
+      top: 0,
+      left: 0,
+      width: '100%',
+      height: '100%',
+      backgroundImage: 'url(/docs/images/arm-dillo.png)',
+      backgroundSize: 'cover',
+      backgroundPosition: 'center',
+      filter: 'blur(16px) brightness(1.15) saturate(1.1) opacity(0.55)',
+      zIndex: 0,
+      pointerEvents: 'none',
+      transition: 'filter 0.2s'
+    }}
+  />
+  {/* Centered button */}
   <a
     href="/docs/getting-started/install/app-jupiter-guide"
     style={{
       display: 'block',
       width: '100%',
+      maxWidth: 340,
+      margin: '0 auto',
       padding: '1rem 0',
-      background: '#f7fee7',
+      background: '#f7fee7cc',
       color: '#365314',
       borderRadius: '0.6rem',
       fontWeight: 700,
@@ -36,17 +61,19 @@ description: "Configure your dstack environment and prepare for secure applicati
       cursor: 'pointer',
       lineHeight: 1.15,
       letterSpacing: '-0.01em',
+      position: 'relative',
+      zIndex: 1,
       transition: 'background 0.13s, color 0.13s, border 0.13s, box-shadow 0.13s, font-size 0.15s'
     }}
     onMouseOver={e => {
-      e.currentTarget.style.background = '#fafff4';
+      e.currentTarget.style.background = '#fafff4ee';
       e.currentTarget.style.border = '1.5px solid #bbf7d0';
       e.currentTarget.style.boxShadow = '0 2px 12px 0 #bbf7d033, 0 2px 8px 0 rgba(0,0,0,0.08)';
       e.currentTarget.style.fontSize = 'clamp(1.3rem, 3.5vw, 1.9rem)';
       e.currentTarget.style.color = '#166534';
     }}
     onMouseOut={e => {
-      e.currentTarget.style.background = '#f7fee7';
+      e.currentTarget.style.background = '#f7fee7cc';
       e.currentTarget.style.border = '1.5px solid #d9f99d';
       e.currentTarget.style.boxShadow = '0 1px 6px 0 #d9f99d33, 0 1px 6px 0 rgba(0,0,0,0.04)';
       e.currentTarget.style.fontSize = 'clamp(1.2rem, 3vw, 1.7rem)';

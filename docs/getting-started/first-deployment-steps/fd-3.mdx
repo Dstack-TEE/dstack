@@ -1,21 +1,29 @@
 ---
-title: "C) sign & push the image to your private registry"
-description: "Deploy via Web UI"
+title: "How to Sign & push the image to your private registry"
+description: "Deploy via Web UI & Monitor with CLI Tools"
 ---
 
-## Step 3: Deploy via Web UI
+## Step 3: Access Dashboard & Monitor Deployments
 
 ### Access the dstack Dashboard
 
 1. Open your browser and navigate to http://localhost:9080
 2. You should see the dstack management interface
 
-![dstack Dashboard](https://via.placeholder.com/800x400.png?text=dstack+Dashboard)
+<div className="flex justify-center my-6">
+  <img
+    src="/docs/images/delpoy-instance-main.png"
+    alt="dstack Dashboard"
+    width={900}
+    height={500}
+    style={{ borderRadius: '0.5rem', boxShadow: '0 2px 16px rgba(0,0,0,0.08)' }}
+    loading="eager"
+  />
+</div>
 
 ### Create New Deployment
 
-1. Click the **"Deploy New Application"** button
-2. Fill in the deployment form:
+Click **"Deploy New Application"** and fill in the deployment form:
 
 | Field | Value |
 |-------|-------|
@@ -23,17 +31,75 @@ description: "Deploy via Web UI"
 | **Description** | My first secure application |
 | **Docker Compose File** | Upload your `docker-compose.yml` |
 
-3. Configure resources (optional):
+<div className="flex justify-center my-6">
+  <img
+    src="/docs/images/deploy-instance-2.png"
+    alt="deployment progress"
+    width={900}
+    height={500}
+    style={{ borderRadius: '0.5rem', boxShadow: '0 2px 16px rgba(0,0,0,0.08)' }}
+    loading="eager"
+  />
+</div>
 
-| Resource | Default | Recommended for Testing |
-|----------|---------|------------------------|
-| **CPU** | 2 cores | 1 core |
-| **Memory** | 4 GB | 2 GB |
-| **Storage** | 10 GB | 5 GB |
+---
 
-4. Click **"Deploy"**
+## CLI Tools for Monitoring Deployments
 
-### Monitor Deployment Progress
+### dstack-vmm CLI
+
+Monitor VMs and container deployments:
+
+```bash
+# List all VMs and their status
+python3 vmm-cli.py --url http://localhost:8080 lsvm
+
+# List VMs with detailed information
+python3 vmm-cli.py --url http://localhost:8080 lsvm -v
+
+# Show VM logs (useful for monitoring deployment progress)
+python3 vmm-cli.py --url http://localhost:8080 logs <vm_id>
+
+# Follow logs in real-time
+python3 vmm-cli.py --url http://localhost:8080 logs <vm_id> --follow
+
+# List available OS images
+python3 vmm-cli.py --url http://localhost:8080 lsimage
+```
+
+### Supervisor CLI
+
+Monitor processes within containers:
+
+```bash
+# List all running processes
+supervisor-client --base-url unix:/var/run/supervisor.sock list
+
+# Get detailed information about a specific process
+supervisor-client --base-url unix:/var/run/supervisor.sock info <process_id>
+
+# Health check
+supervisor-client --base-url unix:/var/run/supervisor.sock ping
+```
+
+### dstack-util CLI
+
+For advanced monitoring and attestation:
+
+```bash
+# Get TDX report (for attestation verification)
+echo -n "report_data" | dstack-util report
+
+# Generate TDX quote (for remote attestation)
+echo -n "report_data" | dstack-util quote
+
+# Show current RTMR measurements
+dstack-util show
+```
+
+---
+
+## Monitor Deployment Progress
 
 The deployment process involves several steps:
 
@@ -62,5 +128,4 @@ The deployment process involves several steps:
   </div>
 </div>
 
-
-- If you have any issues or get stuck, visit the [Troubleshooting page](../../troubleshooting) for solutions and diagnostics. You can also ask for help in the [community](../../community.mdx).
+Use the CLI tools above to monitor each step and troubleshoot any issues during deployment.
