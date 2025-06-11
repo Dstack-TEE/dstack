@@ -3,19 +3,18 @@ title: "In-Depth Application Deployment Guide"
 description: "Comprehensive guide for deploying secure applications to your dstack infrastructure"
 ---
 
+## Before You Begin
+
+| ✅ Checklist            | Description                                                                  |
+| ---------------------- | ---------------------------------------------------------------------------- |
+| dstack installed       | Finished <a href="/docs/getting-started/installation">Installation</a> guide |
+| Environment configured | Finished <a href="/docs/getting-started/first-deployment-steps/deploying-applications">Environment Setup</a> guide   |
+| Services healthy       | KMS, Gateway & VMM report <code>status: healthy</code>                       |
+| TDX enabled            | Host CPU supports Intel TDX and BIOS/Kernel options are enabled              |
+| Management UI up       | <code>[http://localhost:9080](http://localhost:9080)</code> reachable        |
+
+
 # Deploying Applications on dstack
-
-<div className="bg-blue-50 border-l-4 border-blue-400 p-4 mb-6">
-  <div className="flex">
-    <div className="ml-3">
-      <p className="text-sm text-blue-700">
-        <strong>Prerequisites:</strong> Complete both <a href="/docs/getting-started/installation" className="underline font-medium">Installation</a> and <a href="/docs/getting-started/start" className="underline font-medium">Environment&nbsp;Setup</a> before continuing. Your dstack services (KMS, Gateway, VMM) must be up and running on TEE‑capable hardware.
-      </p>
-    </div>
-  </div>
-</div>
-
-This comprehensive guide walks through the complete process of deploying secure applications on dstack. Whether you're deploying your first production workload or managing multiple applications, this guide provides detailed instructions for each step. Follow the seven sections in order—each covers a critical aspect of the deployment process, from container preparation to production operations.
 
 ---
 
@@ -23,13 +22,13 @@ This comprehensive guide walks through the complete process of deploying secure 
 >
 > | Step     | What You’ll Do                                 | Link                                    |
 > | -------- | ---------------------------------------------- | --------------------------------------- |
-> | **1** | Pull & inspect the example container image     | [`Pull & inspect the example container image`](./first-deployment-steps/fd-1) |
-> | **2** | Write the dstack deployment manifest           | [`Write the dstack deployment manifest`](./first-deployment-steps/fd-2) |
-> | **3** | Sign & push the image to your private registry | [`sign & push the image to your private registry`](./first-deployment-steps/fd-3) |
-> | **4** | Launch the workload inside a TDX enclave       | [`Launch the workload inside a TDX enclave`](./first-deployment-steps/fd-4) |
-> | **5** | Verify attestation & remote‑prove trust        | [`Verify attestation & remote‑prove trust`](./first-deployment-steps/fd-5) |
-> | **6** | Expose an API endpoint via the Gateway         | [`Expose an API endpoint via the Gateway`](./first-deployment-steps/fd-6) |
-> | **7** | Update, roll back, and tear down safely        | [`Update, roll back, and tear down safely`](./first-deployment-steps/fd-7) |
+> | **1** | Pull & inspect the example container image     | [`Pull & inspect the example container image`](/docs/getting-started/first-deployment-steps/fd-1) |
+> | **2** | Write the dstack deployment manifest           | [`Write the dstack deployment manifest`](/docs/getting-started/first-deployment-steps/fd-2) |
+> | **3** | Sign & push the image to your private registry | [`Sign & push the image to your private registry`](/docs/getting-started/first-deployment-steps/fd-3) |
+> | **4** | Launch the workload inside a TDX enclave       | [`Launch the workload inside a TDX enclave`](/docs/getting-started/first-deployment-steps/fd-4) |
+> | **5** | Verify attestation & remote‑prove trust        | [`Verify attestation & remote‑prove trust`](/docs/getting-started/first-deployment-steps/fd-5) |
+> | **6** | Expose an API endpoint via the Gateway         | [`Expose an API endpoint via the Gateway`](/docs/getting-started/first-deployment-steps/fd-6) |
+> | **7** | Update, roll back, and tear down safely        | [`Update, roll back, and tear down safely`](/docs/getting-started/first-deployment-steps/fd-7) |
 >
 > Skim the table, pick up at **Step 1**, and continue straight through **Step 7**.
 
@@ -47,65 +46,18 @@ This comprehensive guide walks through the complete process of deploying secure 
     </div>
   </div>
 </div>
----
-## Before You Begin
-
-| ✅ Checklist            | Description                                                                  |
-| ---------------------- | ---------------------------------------------------------------------------- |
-| dstack installed       | Finished <a href="/docs/getting-started/installation">Installation</a> guide |
-| Environment configured | Finished <a href="/docs/getting-started/start">Environment Setup</a> guide   |
-| Services healthy       | KMS, Gateway & VMM report <code>status: healthy</code>                       |
-| TDX enabled            | Host CPU supports Intel TDX and BIOS/Kernel options are enabled              |
-| Management UI up       | <code>[http://localhost:9080](http://localhost:9080)</code> reachable        |
-
-### Quick Service Verification
-
-```bash
-# Check VMM health
-curl -s http://localhost:9080/api/health | jq .
-# → {"status":"healthy","version":"0.5.1","attestation":"available"}
-
-# Verify processes
-ps aux | grep -E 'dstack-(kms|gateway|vmm)'
-
-# Tail recent VMM logs
-sudo journalctl -u dstack-vmm --no-pager -n 10
-```
-
-If anything above fails, revisit the **Installation** and **Environment Setup** guides before proceeding.
-
----
-
-## Reference Commands (useful in every step)
-
-```bash
-# List all deployments
-dstack list
-
-# Describe a deployment
-dstack describe my-first-app
-
-# Update from a manifest
-dstack update my-first-app -f docker-compose.yml
-
-# Stop or remove
-# (used in step 7 rollback/cleanup)
-dstack stop my-first-app
-dstack remove my-first-app
-```
 
 ---
 
 ## Next Steps & Further Reading
 
-**Start here:** <a href="./first-deployment-steps/fd-1" className="underline font-medium">Step 1 — Pull the Example Application</a>
+**Start here:** <a href="/docs/getting-started/first-deployment-steps/fd-1" className="underline font-medium">Step 1 — Pull the Example Application</a>
 
 After each mini-guide, follow the **Next Step** banner to proceed in order. Skipping steps may leave your deployment unverified or insecure.
 
 **Further reading:**
 - [System Architecture](/docs/concepts/architecture) – How all components fit together
-- [Security Model](/docs/concepts/security-model) – Threat model & enclave guarantees
-- [API Overview](/docs/api-reference/overview) – Programmatic control once you’re comfortable with the CLI
-- [Deployment Guides](/docs/deployment-guides/deploying-applications) – Deep-dive options beyond your first full deployment
+- [Security Model](/docs/security-research/security-model) – Threat model & enclave guarantees
+- [Read to Go Deployment Guides](/docs/tutorials/index-quick-start) – 
 
 **Ready?** <a href="./first-deployment-steps/fd-1.mdx" className="underline font-medium">Jump to Step 1 and ship something real.</a>
