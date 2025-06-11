@@ -97,7 +97,7 @@
             },
             "pages": [
               "docs/getting-started/first-deployment-steps/first-deployment",
-              
+              "docs/getting-started/first-deployment-steps/advanced-deloyment-steps/deployment-of-dstack-advanced",
               {
                 "group": "Advanced Deployment Steps",
                 "icon": {
@@ -116,7 +116,7 @@
               },
 
               {
-                "group": "Deployment Helper guides",
+                "group": "dstack deployment for dummies",
                 "icon": {
                   "name": "shoe-prints",
                   "style": "duotone"
@@ -129,8 +129,7 @@
                   "docs/getting-started/first-deployment-steps/fd-6",
                   "docs/getting-started/first-deployment-steps/fd-7"
                 ]
-              },
-              "docs/getting-started/first-deployment-steps/advanced-deloyment-steps/deployment-of-dstack-advanced"
+              }
             ]
           },
           {
