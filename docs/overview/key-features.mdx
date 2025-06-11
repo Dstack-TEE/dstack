@@ -1,77 +1,118 @@
 ---
-title: "Key Technical Features of DStack"
-description: "A concise overview of dstack’s essential capabilities for secure, confidential computing"
+title: "TDX Technology"
+description: "DStack brings confidential computing to everyday development workflows without forcing teams to rewrite code or rethink their toolchains. Here are the features that make secure deployment simple and powerful.
+"
+---
+# Out-of-the-box benefits of using and deploying with dstack
+
+<div className="grid grid-cols-1 md:grid-cols-2 gap-8 my-8">
+
+  <div className="flex flex-col items-center justify-center bg-white p-8 shadow-sm hover:shadow-md transition-shadow rounded-lg">
+    <span className="flex items-center justify-center w-16 h-16 rounded-full bg-blue-100 text-blue-600 mb-4" title="Hardware-Enforced Isolation">
+      <svg xmlns="http://www.w3.org/2000/svg" className="w-9 h-9" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path d="M12 3l7 4v5c0 5-3.5 9.74-7 11-3.5-1.26-7-6-7-11V7l7-4z" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    </span>
+    <h3 className="font-semibold text-lg text-center">Hardware-Enforced Isolation</h3>
+    <p className="text-center mt-2">
+      Every workload runs inside a processor-level Trusted Execution Environment (TEE). The CPU encrypts memory on the fly, sealing it off from the operating system, hypervisor, and anyone with physical access.
+    </p>
+  </div>
+
+  <div className="flex flex-col items-center justify-center bg-white p-8 shadow-sm hover:shadow-md transition-shadow rounded-lg">
+    <span className="flex items-center justify-center w-16 h-16 rounded-full bg-green-100 text-green-600 mb-4" title="Remote Attestation">
+      {/* Simple shield icon for remote attestation */}
+      <svg xmlns="http://www.w3.org/2000/svg" className="w-9 h-9" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path d="M12 3l7 4v5c0 5-3.5 9.74-7 11-3.5-1.26-7-6-7-11V7l7-4z" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    </span>
+    <h3 className="font-semibold text-lg text-center">Remote Attestation</h3>
+    <p className="text-center mt-2">
+      DStack exposes a built-in attestation API that packages cryptographic evidence of the exact code, configuration, and TEE firmware your service is running on. Third parties can verify this proof before exchanging secrets or traffic.
+    </p>
+  </div>
+
+  <div className="flex flex-col items-center justify-center bg-white p-8 shadow-sm hover:shadow-md transition-shadow rounded-lg">
+    <span className="flex items-center justify-center w-16 h-16 rounded-full bg-yellow-100 text-yellow-600 mb-4" title="Zero-Code-Modification Deployment">
+      <svg xmlns="http://www.w3.org/2000/svg" className="w-9 h-9" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <rect x="3" y="7" width="18" height="10" rx="2" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+        <path d="M16 3v4M8 3v4M3 17v2a2 2 0 002 2h14a2 2 0 002-2v-2" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+      </svg>
+    </span>
+    <h3 className="font-semibold text-lg text-center">Zero-Code-Modification Deployment</h3>
+    <p className="text-center mt-2">
+      Container images that work in staging can be deployed directly to DStack with no SDK, no recompilation, no enclave-specific branches. The platform transparently adds the security layer at runtime.
+    </p>
+  </div>
+
+  <div className="flex flex-col items-center justify-center bg-white p-8 shadow-sm hover:shadow-md transition-shadow rounded-lg">
+    <span className="flex items-center justify-center w-16 h-16 rounded-full bg-purple-100 text-purple-600 mb-4" title="Decentralized Key Management">
+      <svg xmlns="http://www.w3.org/2000/svg" className="w-9 h-9" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path d="M12 15v2m0-2a3 3 0 100-6 3 3 0 000 6zm0 0v2m6-2a6 6 0 11-12 0 6 6 0 0112 0z" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+        <path d="M17 16l2 2m0 0l2-2m-2 2v-6" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+      </svg>
+    </span>
+    <h3 className="font-semibold text-lg text-center">Decentralized Key Management</h3>
+    <p className="text-center mt-2">
+      Encryption keys are issued, rotated, and retired through a blockchain-backed coordination service. Key custodianship is distributed with no single vault to breach or subpoena.
+    </p>
+  </div>
+
+  <div className="flex flex-col items-center justify-center bg-white p-8 shadow-sm hover:shadow-md transition-shadow rounded-lg">
+    <span className="flex items-center justify-center w-16 h-16 rounded-full bg-pink-100 text-pink-600 mb-4" title="Automated Certificate Lifecycle">
+      <svg xmlns="http://www.w3.org/2000/svg" className="w-9 h-9" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <rect x="5" y="3" width="14" height="18" rx="2" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+        <path d="M9 7h6M9 11h6M9 15h2" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+      </svg>
+    </span>
+    <h3 className="font-semibold text-lg text-center">Automated Certificate Lifecycle</h3>
+    <p className="text-center mt-2">
+      TLS certificates are automatically generated, bound to specific enclaves, and renewed just-in-time before expiry. End-to-end encrypted channels with zero downtime and no surprise certificate failures.
+    </p>
+  </div>
+
+  <div className="flex flex-col items-center justify-center bg-white p-8 shadow-sm hover:shadow-md transition-shadow rounded-lg">
+    <span className="flex items-center justify-center w-16 h-16 rounded-full bg-indigo-100 text-indigo-600 mb-4" title="Intuitive Web Dashboard">
+      <svg xmlns="http://www.w3.org/2000/svg" className="w-9 h-9" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <rect x="3" y="3" width="7" height="7" rx="1.5" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+        <rect x="14" y="3" width="7" height="7" rx="1.5" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+        <rect x="14" y="14" width="7" height="7" rx="1.5" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+        <rect x="3" y="14" width="7" height="7" rx="1.5" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+      </svg>
+    </span>
+    <h3 className="font-semibold text-lg text-center">Intuitive Web Dashboard</h3>
+    <p className="text-center mt-2">
+      Replace command-line complexity with a real-time dashboard that shows enclave health, performance counters, and audit trails. Scale, pause, or revoke workloads with a click using role-based access control.
+    </p>
+  </div>
+
+</div>
+
+dstack lets you push the same containers you run today into CPU-encrypted enclaves, so code and data stay private while hardware-level crypto keeps performance high. 
+Every deployment is attested for integrity, keys live in a shared on-chain vault, TLS certs renew themselves, and all traffic stays encrypted end to end. 
+
+A point-and-click dashboard replaces CLI wrangling, language-agnostic SDKs plug into any stack, and the platform auto-scales, heals, and logs without leaking sensitive info. 
+You get an immutable audit trail, one-click compliance reports, 
+
+and a supply-chain filter that blocks unverified images—secure infrastructure without the rewrite.
+## Supporting Features
+
+**Use SDKs in any major language** to connect your app to secure enclaves—no need to rewrite code. Great for teams deploying multi-language microservices in the cloud. *Understand the term*: SDKs (Software Development Kits) are tools that help your app interact with secure enclaves easily.
+
+**All internal traffic is encrypted and authenticated by default**, so your cloud workloads stay protected from lateral threats. *Understand the term*: Encryption ensures data privacy, while authentication verifies the identity of communicating parties.
+
+**Enclaves auto-scale and self-heal**, keeping your cloud services online and responsive even during failures or demand spikes. *Understand the term*: Auto-scaling adjusts resources as needed, and self-healing means automatic recovery from failures.
+
+**Get real-time metrics and logs for debugging**, but never leak sensitive data—ideal for regulated cloud environments. *Understand the term*: Real-time metrics and logs provide immediate insight into system health and issues, without exposing confidential information.
+
+**Encryption and security checks run at hardware speed**, so even big data or AI workloads in the cloud don’t slow down. *Understand the term*: Hardware-level security means cryptographic operations are fast and efficient.
+
+**Every admin action and key event is logged and tamper-proof**, making compliance and incident response easy for cloud deployments. *Understand the term*: Tamper-proof logs ensure that records of actions and events cannot be altered, supporting audits and investigations.
+
+**Compliance checks and reports are automated**, so you can meet standards like GDPR or SOC 2 without manual effort. *Understand the term*: Automated compliance means the system continuously checks and documents adherence to regulatory standards.
+
+**Only verified containers are promoted to production enclaves**, blocking supply-chain attacks before they reach your cloud. *Understand the term*: Verified containers are checked for authenticity and security before being deployed, reducing risk from compromised software.
+
 ---
 
-dstack brings the assurances of confidential computing to everyday development workflows without forcing teams to rewrite code or rethink their toolchains. Below is a tour of the platform’s principal features—each presented as a self-contained benefit, woven into a coherent narrative rather than a checklist.
-
-## Hardware-Enforced Isolation
-
-Every workload on dstack runs inside a processor-level Trusted Execution Environment (TEE). The CPU encrypts memory on the fly, sealing it off from the operating system, hypervisor, and anyone with physical access. From a developer’s perspective, it feels like deploying into an immutable “clean room” where sensitive logic and data are immune to prying eyes and tampering, even if the host itself is compromised.
-
-## Remote Attestation
-
-Isolation is only useful if you can prove it. dstack exposes a built-in attestation API that packages cryptographic evidence of the exact code, configuration, and TEE firmware your service is running on. Third-party validators—or your own CI pipeline—can inspect this proof before exchanging secrets or traffic, establishing trust without any manual ceremony.
-
-## Zero-Code-Modification Deployment
-
-Container images that already pass in staging can be lifted straight into dstack: no SDK, no recompilation, no enclave-specific branches. At runtime the platform transparently injects the enclave layer, rewires networking, and applies mandatory encryption, turning existing workloads into confidential workloads with a single flag in your deployment manifest.
-
-## Decentralized Key Management
-
-Encryption keys are issued, rotated, and retired through a blockchain-backed coordination service. Because key custodianship is distributed, there is no single vault to breach or subpoena. Keys are sharded, versioned, and auditable on-chain, offering verifiable provenance while preserving operational privacy.
-
-## Automated Certificate Lifecycle
-
-TLS certificates ride on top of the same attestation workflow. dstack pin-binds each cert to the enclave that generated its private key, then renews it just-in-time before expiry. The result is end-to-end encrypted channels with zero downtime and no surprise “certificate expired” incidents at 2 a.m.
-
-## Intuitive Web Dashboard
-
-Confidential computing traditionally demands command-line gymnastics. dstack replaces that friction with a real-time dashboard that surfaces enclave health, performance counters, and audit trails. Operators can scale, pause, or revoke workloads with a click, while role-based access control ensures least-privilege management.
-
-## Language-Agnostic SDKs
-
-When you do need to reach deeper—sign a challenge, stream attested data, or forward a sealed secret—language-native SDKs (Rust, Go, Python, TypeScript, and more) provide typed helpers that abstract marshalling, nonce handling, and error propagation. Security primitives stay consistent across stacks, so teams remain productive in their language of choice.
-
-## Secure Networking
-
-East-west traffic inside the cluster is always encrypted and authenticated at Layer 4, with envelope enforcement handled by the enclave itself, not a sidecar. Performance stays predictable because cryptographic acceleration leverages AES-NI, SHA-extensions, and other silicon assist features already present on modern CPUs.
-
-## High Availability & Elastic Scaling
-
-Every enclave instance participates in a quorum that self-heals on node failure. Autoscaling hooks spin up fresh attested nodes, replicate sealed state, and join them to the service mesh—without exposing plaintext anywhere in transit or at rest. Your SLA survives hardware hiccups, traffic spikes, and rolling updates alike.
-
-## Observability Without Compromise
-
-Detailed metrics, traces, and structured logs are exported through a privacy-preserving envelope that strips sensitive payloads but retains actionable signals. You get the visibility needed to debug latency or memory pressure while regulators get assurance that confidential data never leaks into your monitoring backend.
-
-## Hardware Acceleration
-
-Cryptographic operations fall back to Intel SGX or AMD SEV/SME instruction sets for near-native speed. Data-intensive services—analytics, ML inference, high-frequency trading—enjoy the same protection as control-plane microservices without sacrificing throughput.
-
-## Immutable Audit Logging
-
-Every administrative action, attestation handshake, and key event is hashed, chained, and checkpointed to an append-only ledger. Because logs are anchored by cryptographic proofs, they remain admissible evidence for compliance audits and post-incident forensics.
-
-## Continuous Compliance Automation
-
-dstack cross-maps platform controls to frameworks such as GDPR, HIPAA, SOC 2, and ISO 27001. It gathers attestations, configuration snapshots, and access records into machine-readable bundles, trimming weeks off certification cycles and letting teams ship features instead of paperwork.
-
-## CI/CD Pipeline Integration
-
-Pipeline plugins verify container digests against attestation policies before promotion. Only artifacts that match the signed bill of materials reach production enclaves. Supply-chain attacks are stopped at the door, and release velocity remains unchanged.
-
-
-### From Prototype to Production—Securely
-
-dstack compresses the confidential‑computing learning curve into a set of pragmatic building blocks. You bring the containers; the platform wraps them in hardware trust, enforces policy, and keeps the lights on. Security experts get deep guarantees, developers keep familiar workflows, and the business gets to move fast—safely.
-
----
-
-## What's Next?
-
-Curious about the real-world value and benefits of dstack? [Explore the next section →](/docs/overview/benefits.mdx) for a deeper look at how these features translate into business impact.
-
-Want to understand the platform's internals? [See the core components →](/docs/concepts/overview.mdx) for detailed breakdowns of each building block mentioned above.
-
-Ready to try it yourself? [Get started installing and running dstack →](/docs/getting-started/installation) to experience these features firsthand.
+**The Bottom Line:** dstack gives you secure, scalable, and compliant cloud deployments with simple tools and strong guarantees. Move fast, stay safe, and keep your workflows familiar.

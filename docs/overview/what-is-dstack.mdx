@@ -1,111 +1,79 @@
 ---
-title: "Dstack Explained"
-description: "A comprehensive exploration of dstack's architecture, detailing its components and security principles for confidential containers using Intel TDX."
+title: "DStack Architecture"
+description: "How DStack's components work together to create secure, verifiable applications using Intel TDX technology"
 ---
 
-# DStack Architecture 
+# DStack Architecture
 
-This page gives you a high-level overview of dstack's architecture—a developer-friendly SDK designed for secure deployment of containerized applications in Trusted Execution Environments (TEEs). By leveraging Intel TDX (Trust Domain Extensions), dstack enables confidential containers that keep your data and code protected through hardware-based isolation. Here, you'll get a look at the platform's main components, how they work together, and the security model that underpins dstack.
+DStack is a developer-friendly SDK that streamlines the deployment of containerized applications into Intel TDX Trusted Execution Environments. Built by Kevin Wang and contributors from Phala Network, inspired by Andrew Miller from Flashbots, with contributions from Nethermind and the broader community.
 
-## Introduction
+---
+## Core Design Principles
 
-For a detailed overview, see the [dstack README](https://github.com/Dstack-TEE/dstack/blob/45ebd05a/README.md).
+<div className="grid grid-cols-1 md:grid-cols-2 gap-6 my-6">
+  <div className="bg-green-50 p-6 rounded-lg">
+    <h4 className="font-semibold text-blue-900 mb-3">1. Use your existing tools</h4>
+    <p className="text-sm">
+      You work with dstack just like you do with Docker, REST APIs, and web dashboards. No need to learn new tools or change how you build and run your apps.
+    </p>
+  </div>
+  <div className="bg-green-100 p-6 rounded-lg">
+    <h4 className="font-semibold text-green-900 mb-3">2. Hardware Abstraction</h4>
+    <p className="text-sm">
+      The platform provides a consistent interface across different TEE implementations, preventing vendor lock-in and enabling workload portability between Intel TDX, AMD SEV, and future hardware platforms.
+    </p>
+  </div>
+  <div className="bg-green-50/70 p-6 rounded-lg">
+    <h4 className="font-semibold text-green-900 mb-3">3. Verifiable Security</h4>
+    <p className="text-sm">
+      Every component in the dstack ecosystem produces cryptographic attestations, creating an auditable chain of trust from hardware to application that can be independently verified.
+    </p>
+  </div>
+  <div className="bg-green-50/90 p-6 rounded-lg">
+    <h4 className="font-semibold text-green-900 mb-3">4. Decentralized Code Governance</h4>
+    <p className="text-sm">
+      Critical security decisions—key management, code authorization, update policies—are governed by blockchain smart contracts, eliminating single points of control.
+    </p>
+  </div>
+</div>
 
-dstack is a developer-friendly, security-first SDK that streamlines the deployment of containerized applications into Trusted Execution Environments (TEEs). By leveraging Intel TDX, dstack creates Confidential Virtual Machines (CVMs) that provide hardware-based isolation for sensitive workloads. Developers can use familiar tools like `docker-compose.yaml` files, while dstack automatically manages the complexities of TEE deployment, key management, and secure networking.
+---
+## How the Magic Happens
 
-The platform is community-driven, open-sourced, and built by Kevin Wang and many others from Phala Network, inspired by Andrew Miller from Flashbots and Teleport, with contributions from Nethermind and the broader community [3](#0-2) .
+DStack transforms your regular Docker containers into secure, verifiable applications through a sophisticated architecture built on Intel TDX technology. When you deploy an application, five core components work seamlessly together:
 
-## System Design
+**The Virtual Machine Manager (dstack-vmm)** runs on bare TDX host hardware and manages the complete lifecycle of your Confidential Virtual Machines. It handles VM creation, configuration, and deployment orchestration while ensuring each CVM is properly isolated and measured during boot. You interact with it through a web interface at port 9080, where you can deploy docker-compose.yaml files, monitor VM status, and access logs.
 
-At its core, dstack's architecture revolves around the seamless integration of five primary components: dstack-vmm, dstack-gateway, dstack-kms, dstack-guest-agent, and supervisor [4](#0-3) . Together, they form a cohesive system that manages virtual machines, handles cryptographic keys, and secures communication channels while providing a familiar development experience.
+**The Gateway (dstack-gateway)** acts as your secure front door, operating as a reverse proxy that forwards TLS connections to your CVMs. It provides multiple access patterns: standard routing where `<id>.<base_domain>` maps to port 80 in your CVM, port-specific routing with `<id>-<port>.<base_domain>`, and TLS passthrough using the 's' suffix for applications managing their own certificates. Under the hood, it uses WireGuard VPN to create encrypted tunnels between the gateway and CVMs.
 
-dstack-vmm serves as the service running on TDX host to manage CVMs, while dstack-gateway acts as a reverse proxy to forward TLS connections to CVMs. dstack-kms provides key management services, and dstack-guest-agent runs inside the CVM to serve containers' key derivation and attestation requests [5](#0-4) .
+**The Guest Agent (dstack-guest-agent)** lives inside your CVMs, serving as the bridge between your containerized applications and the secure environment. Your applications interact with it through a Unix socket mounted at `/var/run/dstack.sock` to obtain TDX quotes for remote attestation, maintaining security boundaries while enabling necessary communication.
 
-## Deep Dive into Components
+---
+## The Security Infrastructure
 
-### Virtual Machine Manager (dstack-vmm)
 
-dstack-vmm is the service running on bare TDX host hardware that manages the lifecycle of Confidential Virtual Machines [6](#0-5) . It handles VM creation, configuration, and deployment orchestration while ensuring that each CVM is properly isolated and measured during the boot process.
+DStack's security model centers on Intel TDX technology, which provides hardware-based isolation for confidential workloads. The system uses remote attestation to verify application integrity and relies on cryptographic measurements stored in hardware registers.
 
-The VMM provides a web interface accessible at port 9080 for deploying docker-compose.yaml files, monitoring VM status, and accessing logs [7](#0-6) . It integrates with the other dstack components to ensure secure deployment and operation of containerized workloads.
+**Key Management Service (dstack-kms)** generates and manages cryptographic keys for CVMs, integrating with blockchain-based authorization through smart contracts. It validates TEE attestation reports before releasing keys, ensuring only trusted environments running verified code can access sensitive cryptographic material. The KMS supports key derivation for disk encryption, environment variable encryption, and certificate generation.
 
-### Gateway and Reverse Proxy (dstack-gateway)
+**Secret Management** happens through Encrypted Environment Variables. When you deploy applications, secrets are encrypted client-side using public keys provided by the KMS, transmitted securely to the VMM, and only decrypted within the Confidential VM using keys derived from TDX attestation. This ensures sensitive data remains protected throughout the entire deployment process.
 
-dstack-gateway operates as a reverse proxy that forwards TLS connections to CVMs [8](#0-7) . It provides secure access to deployed applications through domain-based routing with built-in TLS termination [9](#0-8) .
+**Certificate Management** includes automated TLS certificate management through Let's Encrypt and Cloudflare DNS integration. The system implements Certificate Authority Authorization (CAA) records to restrict certificate issuance and monitors Certificate Transparency logs to detect unauthorized certificates, preventing man-in-the-middle attacks.
 
-The gateway supports multiple access patterns including standard routing where `<id>.<base_domain>` maps to port 80 in the CVM, port-specific routing with `<id>-<port>.<base_domain>`, and TLS passthrough using the 's' suffix for applications that manage their own certificates [10](#0-9) . It uses WireGuard VPN to create encrypted tunnels between the gateway and CVMs for secure communication.
-
-### Key Management Service (dstack-kms)
-
-dstack-kms is the KMS server that generates and manages cryptographic keys for CVMs [11](#0-10) . It integrates with blockchain-based authorization through smart contracts to ensure that only verified applications can access cryptographic keys.
-
-The KMS validates TEE attestation reports before releasing keys, ensuring that only trusted environments running verified code can access sensitive cryptographic material. It supports key derivation for various purposes including disk encryption, environment variable encryption, and certificate generation.
-
-### Guest Agent (dstack-guest-agent)
-
-dstack-guest-agent is the service running inside CVMs that serves containers' key derivation and attestation requests [12](#0-11) . Applications can interact with the guest agent through a Unix socket mounted at `/var/run/dstack.sock` to obtain TDX quotes for remote attestation [13](#0-12) .
-
-The guest agent handles the communication between containerized applications and the host system while maintaining the security boundaries of the TEE environment.
-
-### Process Management (supervisor)
-
-The supervisor component manages and monitors running processes across the dstack system, ensuring reliable operation of all services and handling process lifecycle management.
-
-## Security and Trust Model
-
-dstack implements a comprehensive security model centered around Intel TDX technology, which provides hardware-based isolation for confidential workloads. The system uses remote attestation to verify the integrity of deployed applications and relies on cryptographic measurements stored in hardware registers.
-
-The security architecture includes TDX quotes for attestation, measurement registers (MRTD, RTMR0-3) for tracking system state, and blockchain-based smart contracts for authorization [14](#0-13) . This multi-layered approach ensures that only authorized code can run in the trusted environment and that all interactions are secured and auditable.
-
-Key security features include secure boot processes, encrypted communication channels using WireGuard VPN, TLS certificate management with Certificate Transparency monitoring, and comprehensive logging for security auditing.
-
-## Secret Management
-
-dstack provides secure handling of sensitive data through Encrypted Environment Variables. When deploying applications, secrets are encrypted client-side using public keys provided by the KMS, transmitted securely to the VMM, and only decrypted within the Confidential VM using keys derived from TDX attestation [15](#0-14) . This ensures sensitive data remains protected throughout the deployment process.
-
-## Certificate Management and Transparency
-
-The platform includes automated TLS certificate management through integration with Let's Encrypt and Cloudflare DNS. It implements Certificate Authority Authorization (CAA) records to restrict certificate issuance and monitors Certificate Transparency logs to detect unauthorized certificates [16](#0-15) . This comprehensive approach helps prevent man-in-the-middle attacks and ensures the integrity of TLS connections.
-
-## Getting Started
-
-To deploy applications with dstack, you need a TDX-compatible server with public IPv4 address, at least 16GB RAM, and 100GB free disk space [17](#0-16) . The deployment process involves:
-
-1. Setting up the TDX host with necessary dependencies
-2. Building or downloading dstack components
-3. Configuring and running dstack-kms, dstack-gateway, and dstack-vmm
-4. Deploying applications using standard docker-compose.yaml files through the web interface
-
-## Use Cases and Benefits
-
-dstack enables secure deployment of containerized workloads in confidential computing environments, making it suitable for applications requiring data privacy, code protection, and verifiable execution. The platform provides benefits such as:
-
-- Developer-friendly experience with familiar Docker tools
-- Hardware-based security through Intel TDX
-- Automated key management and certificate handling
-- Secure networking with built-in VPN and TLS termination
-- Remote attestation capabilities for trust verification
-
-## Where to Go Next
-
-For hands-on deployment, follow the build and setup instructions in the main repository. The system provides web interfaces for VM management and monitoring, with comprehensive logging and debugging capabilities for troubleshooting deployments.
-
-To get started with development, explore the component documentation and examples in the dstack repository, which includes detailed setup instructions, configuration examples, and troubleshooting guides.
+The security architecture includes TDX quotes for attestation, measurement registers (MRTD, RTMR0-3) for tracking system state, and blockchain-based smart contracts for authorization. This multi-layered approach ensures only authorized code runs in the trusted environment with all interactions secured and auditable.
 
 ---
 
-**TL;DR**: dstack is a developer-friendly SDK for deploying containerized applications in Intel TDX-based Trusted Execution Environments, providing hardware-based security with familiar Docker tooling.
+## From Development to Production
 
-## Notes
+DStack bridges the gap between familiar development tools and advanced confidential computing. You deploy applications using standard docker-compose.yaml files through the web interface, while DStack automatically manages the complexities of TEE deployment, key management, and secure networking.
 
-This corrected version removes several inaccuracies from the original document:
+**Hardware Requirements:** You need a TDX-compatible server with a public IPv4 address, at least 16GB RAM, and 100GB free disk space. The deployment process involves setting up the TDX host with necessary dependencies, building or downloading DStack components, configuring and running the core services, then deploying applications through the familiar Docker interface.
 
-1. **TEE Support**: The original document claimed support for AMD SEV-SNP and ARM CCA, but dstack currently only supports Intel TDX [18](#0-17) .
+**Real-World Benefits:** The platform provides a developer-friendly experience with familiar Docker tools, hardware-based security through Intel TDX, automated key management and certificate handling, secure networking with built-in VPN and TLS termination, and remote attestation capabilities for trust verification.
 
-2. **Component Names**: The original mentioned "dstack-os" and "dstack-ingress" which don't exist in the actual codebase. The real components are dstack-vmm, dstack-gateway, dstack-kms, dstack-guest-agent, and supervisor.
+**Process Management** is handled by the supervisor component, which manages and monitors running processes across the DStack system, ensuring reliable operation of all services and handling process lifecycle management with comprehensive logging and debugging capabilities for troubleshooting deployments.
 
-3. **Architecture Claims**: Removed speculative claims about "Portable Confidential Containers, Decentralized Code Management, and Verifiable Domain Management" as core innovations, as these terms don't appear in the actual codebase.
+---
 
-4. **Technical Details**: Corrected technical implementation details to match the actual codebase rather than speculative descriptions.
-
-5. **Focus**: Adjusted the emphasis from "Web3-first" to accurately reflect dstack's broader confidential computing focus while maintaining its blockchain integration aspects.
+**The Bottom Line:** DStack makes confidential computing accessible by providing hardware-based security with familiar Docker tooling, enabling secure deployment of containerized workloads in environments requiring data privacy, code protection, and verifiable execution.

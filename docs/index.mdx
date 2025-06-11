@@ -1,109 +1,86 @@
 ---
-title: "DStack"
-description: "It's the easiest way to deploy existing Docker applications to Trusted Execution Environments with hardware-enforced security"
+title: "Getting Started"
+description: "Easily build and deploy containerized apps to your own confidential virtual machine using the dstack framework"
 ---
+## Begin by deploying your first dstack app
 
-<img src="/docs/images/dstack_Banner_pro.png" alt="dstack banner" />
+<div className="flex justify-center mt-10">
+  <a
+    href="/docs/getting-started/start"
+    className="group block w-full max-w-xl text-center rounded-2xl shadow-xl border-4 border-lime-500 bg-gradient-to-r from-lime-200 via-lime-300 to-lime-100 hover:from-lime-300 hover:to-lime-200 transition-all duration-200 p-8"
+    style={{
+      background: 'linear-gradient(90deg, #d9f99d 0%, #bbf7d0 100%)',
+      border: '3.5px solid #84cc16',
+      color: '#166534',
+      fontWeight: 700,
+      fontSize: '1.35rem',
+      letterSpacing: '-0.01em',
+      minWidth: '260px',
+      boxShadow: '0 4px 24px 0 rgba(132,204,22,0.18)',
+      textDecoration: 'none',
+      cursor: 'pointer'
+    }}
+  >
+    <div className="flex flex-col items-center space-y-3">
+      <span className="inline-flex items-center justify-center w-14 h-14 rounded-full bg-lime-100 border-2 border-lime-400 mb-2 shadow">
+        <svg width="36" height="36" fill="none" viewBox="0 0 24 24">
+          <rect x="4" y="4" width="16" height="16" rx="3" fill="#bbf7d0" stroke="#84cc16" strokeWidth="2"/>
+          <path d="M8 12h8M8 16h8M8 8h8" stroke="#166534" strokeWidth="2" strokeLinecap="round"/>
+        </svg>
+      </span>
+      <span className="block text-2xl font-extrabold tracking-tight">Quick Start Guide</span>
+      <span className="block text-base font-medium mt-1 mb-1">
+        Get started with a step-by-step guide for deploying apps on the vmm with dstack
+      </span>
+      <span className="block text-sm text-lime-800">
+        <strong>Linux required.</strong> Follow our comprehensive guide to get started.
+      </span>
+      <span className="inline-block mt-4">
+        <span className="inline-flex items-center px-6 py-3 rounded-xl bg-lime-500 text-white font-bold text-lg shadow-lg group-hover:bg-lime-600 transition">
+          Start Here
+          <svg className="ml-2" width="22" height="22" fill="none" viewBox="0 0 24 24">
+            <path d="M13 5l7 7-7 7M5 12h14" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+          </svg>
+        </span>
+      </span>
+    </div>
+  </a>
+</div>
 
 
-## Why Choose DStack for Confidential Computing?
+## Zero Code Changes, Maximum Security, and Full Control
 
 <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mt-8">
-  <Card title="No Code Changes" icon="code" iconColor="#0069ED">
+  <div className="rounded-lg p-5">
+    <h3 className="font-semibold text-blue-900 mb-2 flex items-center gap-2">
+      <span className="inline-block">
+        <svg width="20" height="20" fill="none" viewBox="0 0 24 24"><path d="M16 18v1a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h1" stroke="#0069ED" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/><rect x="8" y="2" width="14" height="14" rx="2" stroke="#0069ED" strokeWidth="2"/></svg>
+      </span>
+      Use Your Existing Code
+    </h3>
     <p className="text-sm mt-2">Drop in your existing Docker containers—dstack works as-is. No rewrites, no SDKs, just instant TEE.</p>
-  </Card>
-  <Card title="Best Security by Default" icon="shield-check" iconColor="#10B981">
+  </div>
+  <div className="rounded-lg p-5">
+    <h3 className="font-semibold text-green-900 mb-2 flex items-center gap-2">
+      <span className="inline-block">
+        <svg width="20" height="20" fill="none" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" stroke="#10B981" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/><path d="M9 9h6v4H9z" stroke="#10B981" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+      </span>
+      Protected Programming
+    </h3>
     <p className="text-sm mt-2">Get hardware-enforced, zero-trust compute. Security is built in, not bolted on.</p>
-  </Card>
-  <Card title="No Vendor Lock-in" icon="unlock" iconColor="#F59E0B">
+  </div>
+  <div className="rounded-lg p-5">
+    <h3 className="font-semibold text-yellow-900 mb-2 flex items-center gap-2">
+      <span className="inline-block">
+        <svg width="20" height="20" fill="none" viewBox="0 0 24 24"><path d="M17 8V7a5 5 0 0 0-10 0v1M5 8h14a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2z" stroke="#F59E0B" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/><path d="M12 12v4" stroke="#F59E0B" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+      </span>
+      No Vendor Lock-in
+    </h3>
     <p className="text-sm mt-2">Bare metal, cloud, or hybrid—deploy anywhere. Hardware abstraction enables full deployment flexibility.</p>
-  </Card>
-</div>
-
-## Core Design Principles
-
-<div className="grid grid-cols-1 md:grid-cols-2 gap-6 my-6">
-  <div className="bg-green-50 p-6 rounded-lg">
-    <h4 className="font-semibold text-blue-900 mb-3">1. Use your existing tools</h4>
-    <p className="text-sm">
-      You work with dstack just like you do with Docker, REST APIs, and web dashboards. No need to learn new tools or change how you build and run your apps.
-    </p>
   </div>
-  <div className="bg-green-100 p-6 rounded-lg">
-    <h4 className="font-semibold text-green-900 mb-3">2. Hardware Abstraction</h4>
-    <p className="text-sm">
-      The platform provides a consistent interface across different TEE implementations, preventing vendor lock-in and enabling workload portability between Intel TDX, AMD SEV, and future hardware platforms.
-    </p>
-  </div>
-  <div className="bg-green-50/70 p-6 rounded-lg">
-    <h4 className="font-semibold text-green-900 mb-3">3. Verifiable Security</h4>
-    <p className="text-sm">
-      Every component in the dstack ecosystem produces cryptographic attestations, creating an auditable chain of trust from hardware to application that can be independently verified.
-    </p>
-  </div>
-  <div className="bg-green-50/90 p-6 rounded-lg">
-    <h4 className="font-semibold text-green-900 mb-3">4. Decentralized Code Governance</h4>
-    <p className="text-sm">
-      Critical security decisions—key management, code authorization, update policies—are governed by blockchain smart contracts, eliminating single points of control.
-    </p>
-  </div>
-</div>
-
-
----
-## Two Guides to Get Started
-
-dstack supports multiple ways to deploy your apps—use a partner-managed cloud (like Phala) for instant TEE access, or follow the self-hosted guide to deploy dstack on your own hardware when you're ready for full control.
-
-<div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-8">
-  <Card 
-    title="Deploy A DStack Application with a New guest agent" 
-    icon="rocket" 
-    href="/docs/getting-started/deploying-applications"
-    className="hover:shadow-lg transition-shadow border-2 border-green-200"
-  >
-    <div className="space-y-3">
-      <p className="text-sm mt-2 mb-2">
-        Deploy a secure app to Dstack Framework prebuilt TDX image in minutes—no setup needed. Fastest way to deploy is to deploy to a known host with dstack installed.
-      </p>
-      <div className="bg-green-50 p-3 rounded">
-        <p className="text-xs font-medium text-green-800">⚡ 5-10 minutes</p>
-        <p className="text-xs text-green-700">
-          Great for: Getting started and quick prototyping
-        </p>
-      </div>
-      <p className="text-xs text-gray-600">
-        Uses free credits and managed infrastructure. Move to <a href="/docs/getting-started/installation" className="underline">your own deployment</a> anytime.
-      </p>
-    </div>
-  </Card>
-  
-  <Card 
-    title="Deploy Your Own dstack Framework" 
-    icon="server" 
-    href="/docs/getting-started/start"
-    className="hover:shadow-lg transition-shadow border-2 border-purple-200"
-  >
-    <div className="space-y-3">
-      <p className="text-sm mt-2 mb-2">Build and deploy your own decentralized confidential computing infrastructure from the ground up.</p>
-      <div className="bg-purple-50 p-3 rounded">
-        <p className="text-xs font-medium text-purple-800">🔧 Time: 2-8 hours (skill dependent)</p>
-        <p className="text-xs text-purple-700">Perfect for: Custom infrastructure, research, full control</p>
-      </div>
-      <p className="text-xs text-gray-600"><strong>Linux required.</strong> Follow our comprehensive guides: Installation → Environment Setup → First Deployment.</p>
-    </div>
-  </Card>
-</div>
-
-<div className="mt-6 p-4 bg-gray-50 rounded-lg">
-  <h4 className="font-medium text-gray-800 mb-2">Not sure which path to choose?</h4>
-  <p className="text-sm text-gray-700">
-    start with the <strong>Super Quick Start</strong> to see dstack in action immediately. you can always deploy your own framework later once you understand the platform better.
-  </p>
 </div>
 
 ---
-
 ## Dive Deeper
 
 <div className="grid grid-cols-2 gap-4">
@@ -155,3 +132,4 @@ dstack supports multiple ways to deploy your apps—use a partner-managed cloud 
     </button>
   </Card>
 </div>
+

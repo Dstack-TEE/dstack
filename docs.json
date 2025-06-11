@@ -16,9 +16,9 @@
           {
             "group": "Welcome to DStack",
             "icon": {
-                  "name": "circle-stop",
-                  "style": "regular"
-                },
+              "name": "party-horn",
+              "style": "solid"
+            },
             "pages": [
               "docs/index"
             ]
@@ -26,9 +26,9 @@
           {
             "group": "Introduction to DStack",
             "icon": {
-                  "name": "circle-stop",
-                  "style": "regular"
-                },
+              "name": "hand-wave",
+              "style": "regular"
+            },
             "pages": [
               "docs/overview/introduction",
               "docs/overview/what-is-dstack"
@@ -37,13 +37,12 @@
           {
             "group": "Additional Reading",
             "icon": {
-                  "name": "circle-stop",
-                  "style": "regular"
-                },
+              "name": "head-side-gear",
+              "style": "regular"
+            },
             "pages": [
               "docs/overview/key-features",
               "docs/overview/benefits",
-               "docs/overview/faq",
               "docs/overview/glossary"
             ]
           }
@@ -52,35 +51,34 @@
       {
         "dropdown": "Getting Started",
         "icon": {
-                  "name": "book-open",
-                  "style": "duotone"
-                },
-         "pages": [
+          "name": "book-open",
+          "style": "duotone"
+        },
+        "pages": [
           "docs/getting-started/start",
           {
-            "group": "🚀 Application Deployment",
+            "group": "Application Deployment Guide ",
             "icon": {
-                  "name": "circle-stop",
-                  "style": "solid"
-                },
+              "name": "rocket-launch",
+              "style": "solid"
+            },
             "pages": [
-              "docs/getting-started/install/app-jupiter-guide",
-              "docs/getting-started/deploying-applications"
+              "docs/getting-started/install/app-jupiter-guide"
             ]
           },
           {
-            "group": " 📦 DStack Installation Guide",
+            "group": "DStack Framework Installation",
             "icon": {
-                  "name": "circle-stop",
-                  "style": "solid"
-                },
+              "name": "download",
+              "style": "solid"
+            },
             "pages": [
               "docs/getting-started/install/installation",
               {
                 "group": "Steps",
                 "icon": {
-                  "name": "circle-stop",
-                  "style": "regular"
+                  "name": "shoe-prints",
+                  "style": "duotone"
                 },
                 "pages": [
                   "docs/getting-started/install/step-1-prerequisites",
@@ -91,20 +89,20 @@
               }
             ]
           },
-          
           {
-            "group": "Full Deployment Guide",
+            "group": "Cloud Deployment Preparation Manual",
             "icon": {
-              "name": "circle-stop",
+              "name": "cloud-bolt",
               "style": "solid"
             },
             "pages": [
+              "docs/getting-started/first-deployment-steps/deploying-applications",
               "docs/getting-started/first-deployment-steps/first-deployment",
               {
                 "group": "Steps",
                 "icon": {
-                  "name": "circle-stop",
-                  "style": "regular"
+                  "name": "shoe-prints",
+                  "style": "duotone"
                 },
                 "pages": [
                   "docs/getting-started/first-deployment-steps/fd-1",
@@ -117,34 +115,32 @@
                 ]
               }
             ]
-          }, 
+          },
           {
             "group": "Examples",
             "icon": {
-                  "name": "circle-stop",
-                  "style": "regular"
-                },
+              "name": "circle-stop",
+              "style": "regular"
+            },
             "pages": [
               "/docs/tutorials/super-quick-start"
             ]
           }
         ]
-        
       },
       {
         "dropdown": "Core Concepts",
         "icon": {
-                  "name": "lightbulb-on",
-                  "style": "regular"
-                },
+          "name": "comet",
+          "style": "solid"
+        },
         "pages": [
-          
           {
             "group": "Component Overview",
             "icon": {
-                  "name": "circle-stop",
-                  "style": "regular"
-                },
+              "name": "circle-stop",
+              "style": "regular"
+            },
             "pages": [
               "docs/concepts/overview",
               "docs/concepts/basic-components"
@@ -153,9 +149,9 @@
           {
             "group": "Core Component Implementation",
             "icon": {
-                  "name": "circle-stop",
-                  "style": "solid"
-                },
+              "name": "circle-stop",
+              "style": "solid"
+            },
             "pages": [
               "docs/concepts/core-vmm",
               "docs/concepts/core-gateway",
@@ -168,11 +164,11 @@
           {
             "group": "DStack Component Architecture",
             "icon": {
-                  "name": "circle-stop",
-                  "style": "solid"
-                },
+              "name": "circle-stop",
+              "style": "solid"
+            },
             "pages": [
-              "docs/concepts/architecture", 
+              "docs/concepts/architecture",
               "docs/concepts/networking"
             ]
           },
@@ -191,8 +187,8 @@
       {
         "dropdown": "Tutorials",
         "icon": {
-          "name": "person-to-portal",
-          "style": "regular"
+          "name": "apple-whole",
+          "style": "solid"
         },
         "pages": [
           "docs/tutorials/index-quick-start",
@@ -203,7 +199,19 @@
               "style": "regular"
             },
             "pages": [
-              "/docs/getting-started/start"
+              "docs/getting-started/start"
+            ]
+          },
+          {
+            "group": "Additional Starter Guides",
+            "icon": {
+              "name": "book",
+              "style": "regular"
+            },
+            "pages": [
+              "docs/tutorials/javascript-example",
+              "docs/tutorials/python-example",
+              "docs/tutorials/rust-example"
             ]
           }
         ]
@@ -211,19 +219,27 @@
       {
         "dropdown": "Security + Research",
         "icon": {
-                  "name": "shield-plus",
-                  "style": "solid"
-                },
+          "name": "shield-plus",
+          "style": "solid"
+        },
         "pages": [
           "docs/security-research/overview",
           {
             "group": "DStack crypto",
+            "icon": {
+              "name": "key",
+              "style": "solid"
+            },
             "pages": [
               "docs/security-research/security-model"
             ]
           },
           {
-            "group": "Hardware layers Core Component Security",
+            "group": "Key Component Infrastructure",
+            "icon": {
+              "name": "dice-four",
+              "style": "solid"
+            },
             "pages": [
               {
                 "group": "tdx",
@@ -278,11 +294,11 @@
             ]
           },
           {
-            "group": "before-reading",
+            "group": "Additional Reading",
             "icon": {
-                  "name": "person-to-portal",
-                  "style": "regular"
-                },
+              "name": "book-open",
+              "style": "solid"
+            },
             "pages": [
               "docs/security-research/extra-sec-ops/before-reading",
               {
@@ -304,29 +320,7 @@
         "icon": "users",
         "pages": [
           "docs/community-section/community",
-          "docs/community-section/contribution",
-          "docs/community-section/troubleshooting"
-        ]
-      },
-      {
-        "dropdown": "API Reference",
-        "icon": {
-                  "name": "webhook",
-                  "style": "duotone"
-                },
-        "pages": [
-          "docs/api-reference/authentication",
-          {
-            "group": "API Reference & SDKs",
-            "pages": [
-              "docs/api-reference/api-sub-docs/overview",
-              "docs/api-reference/api-sub-docs/guest-agent",
-              "docs/api-reference/api-sub-docs/management",
-              "docs/api-reference/api-sub-docs/supervisor",
-              "docs/api-reference/api-sub-docs/sdks",
-              "docs/api-reference/api-sub-docs/glossary"
-            ]
-          }
+          "docs/community-section/contribution"
         ]
       }
     ]
@@ -349,12 +343,8 @@
   "navbar": {
     "links": [
       {
-        "label": "GitHub",
+        "label": "Hosted by Phala - GitHub",
         "href": "https://github.com/Dstack-TEE/dstack"
-      },
-      {
-        "label": "Additional FAQ",
-        "href": "https://docs.phala.network/dstack/faqs"
       }
     ],
     "primary": {
