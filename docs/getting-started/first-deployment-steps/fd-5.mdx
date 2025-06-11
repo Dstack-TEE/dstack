@@ -1,9 +1,9 @@
 ---
-title: "Verify attestation & remote‑prove trust"
+title: "How to Verify a TDX Attestation & perform a remote proof of trust"
 description: "Access Your Application"
 ---
 
-## Step 5: Access Your Application
+## Step 4: Access Your Application
 
 Once deployed, your application is accessible through the dstack gateway.
 
@@ -30,6 +30,70 @@ curl https://my-first-app.app.example.com
 }
 ```
 
+---
 
+## Additional Access Methods
 
-- If you have any issues or get stuck, visit the [Troubleshooting page](../../troubleshooting) for solutions and diagnostics. You can also ask for help in the [community](../../community.mdx).
+### Gateway URL Patterns
+
+Beyond basic URLs, the gateway supports multiple patterns:
+
+- `<app-id>.<base_domain>` → port 80
+- `<app-id>s.<base_domain>` → port 443 (TLS passthrough)  
+- `<app-id>-<port>.<base_domain>` → custom port
+- `<app-id>-<port>s.<base_domain>` → custom port with TLS passthrough
+
+### Programmatic Access via SDKs
+
+Interact with dstack services programmatically:
+
+**JavaScript/TypeScript:**
+```javascript
+import { DstackClient } from '@dstack/sdk'
+const client = new DstackClient()
+const key = await client.getKey('/path', 'purpose')
+```
+
+**Python:**
+```python
+from dstack_sdk import DstackClient
+client = DstackClient()
+key = client.get_key('/path', 'purpose')
+```
+
+**Go:**
+```go
+client := dstack.NewClient()
+key, err := client.GetKey("/path", "purpose")
+```
+
+### Direct CVM Access
+
+**SSH into CVM** (development images only):
+```bash
+ssh root@<wireguard-ip>  # Get IP from gateway dashboard
+```
+
+**Unix Socket Communication:**
+```bash
+# Mount socket in docker-compose.yaml
+volumes:
+  - /var/run/dstack.sock:/var/run/dstack.sock
+```
+
+### Management Dashboards
+
+- **VMM Dashboard**: `http://localhost:9080` - deployment management
+- **Gateway Dashboard**: Monitor CVM connections and WireGuard status
+- **Container Logs**: HTTP endpoints with filtering options
+
+### Log Access
+
+```bash
+# Via VMM CLI
+python3 vmm-cli.py logs <vm_id> --follow
+
+# Via HTTP API
+curl http://localhost:8080/logs?id=<vm_id>&follow=true
+```
+

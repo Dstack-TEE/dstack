@@ -1,91 +1,99 @@
 ---
-title: "Update, roll back, and tear down safely"
+title: "How to Update, roll back, and tear down safely"
 description: "Monitor Your Application"
 ---
 
-## Step 7
+## Step 7:
+
+
+Monitor and troubleshoot 
 
 ### View Logs
 
-From the dashboard:
-1. Click on your deployment
-2. Go to the **"Logs"** tab
-3. You'll see real-time application logs
+**From the Web Interface:**
+1. Open VMM dashboard at `http://localhost:9080`
+2. Click on your deployment
+3. Go to the **"Logs"** tab for real-time logs
 
-From the CLI:
+**From the CLI:**
 ```bash
-# Stream logs
-dstack logs -f my-first-app
+# Stream logs in real-time
+python3 vmm-cli.py --url http://localhost:8080 logs <vm-id> --follow
 
 # Get last 100 lines
-dstack logs --tail 100 my-first-app
+python3 vmm-cli.py --url http://localhost:8080 logs <vm-id> --lines 100
 ```
 
-### Check Metrics
+**Direct HTTP API:**
+```bash
+curl 'http://<app-id>.app.example.com:9090/logs/<container_name>?follow=true&text=true&timestamps=true'
+```
 
-The dashboard provides metrics including:
-- CPU usage
-- Memory consumption
-- Network I/O
-- Request count
+### Check Application Status
 
-## Common Issues and Solutions
+```bash
+# List all VMs and their status
+python3 vmm-cli.py --url http://localhost:8080 lsvm --verbose
 
-<details>
-<summary>Application fails to start</summary>
+# List available images
+python3 vmm-cli.py --url http://localhost:8080 lsimage
+```
 
-1. Check logs for errors:
-   ```bash
-   dstack logs my-first-app
-   ```
+### VM Management
 
-2. Verify your Docker image works locally:
-   ```bash
-   docker-compose up
-   ```
+```bash
+# Start a VM
+python3 vmm-cli.py --url http://localhost:8080 start <vm-id>
 
-3. Ensure health checks are configured correctly
+# Stop a VM
+python3 vmm-cli.py --url http://localhost:8080 stop <vm-id>
 
-
-#### Cannot access application URL
-
-1. Check if the application is running:
-   ```bash
-   dstack status my-first-app
-   ```
-
-2. Verify network connectivity:
-   ```bash
-   curl -I https://my-first-app.app.example.com
-   ```
-
-3. Check gateway logs:
-   ```bash
-   sudo journalctl -u dstack-gateway -f
-   ```
-
-Attestation verification fails
-
-1. Ensure you're using the correct endpoint
-2. Check if the CVM is fully initialized
-3. Verify TDX is enabled on your hardware
-
-</details>
-
-## What You've Accomplished
-
-Congratulations! You've successfully:
-
-- ✅ Deployed an application to a Trusted Execution Environment
-- ✅ Verified it's running securely with attestation
-- ✅ Accessed it through secure HTTPS endpoints
-- ✅ Monitored logs and metrics
+# Remove a VM
+python3 vmm-cli.py --url http://localhost:8080 remove <vm-id>
+```
 
 ---
 
-**Next steps:**  
-- To start deploying more applications, continue with the [Deploying Applications guide](../deploying-applications).
-- If you ran into issues or get stuck, check the [Troubleshooting page](../../troubleshooting) for solutions and diagnostics.
-- You can also ask for help in the [community](../../community.mdx).
-- 
+## Common Issues & Solutions
+
+### Application fails to start
+```bash
+# Check VM logs for errors
+python3 vmm-cli.py --url http://localhost:8080 logs <vm-id>
+
+# Verify VM status
+python3 vmm-cli.py --url http://localhost:8080 lsvm -v
+```
+
+### Cannot access application URL
+```bash
+# Check if VM is running
+python3 vmm-cli.py --url http://localhost:8080 lsvm
+
+# Test connectivity
+curl -I https://<app-id>.example.com
+
+# Check gateway VM logs (find gateway VM ID first)
+python3 vmm-cli.py --url http://localhost:8080 logs <gateway-vm-id> --follow
+```
+
+### Attestation verification fails
+1. Ensure the CVM is fully initialized
+2. Verify TDX is enabled on your hardware
+3. Check app endpoint is accessible via Unix socket
+
+---
+
+## What You've Accomplished
+
+✅ **Deployed** an application to a Trusted Execution Environment  
+✅ **Verified** it's running securely with attestation  
+✅ **Accessed** it through secure HTTPS endpoints  
+✅ **Monitored** logs and system status  
+
+**Next Steps:**
+- Deploy more applications: [Deploying Applications guide](/docs/getting-started/first-deployment-steps/deploying-applications.mdx)
+- Get help: [Community](/docs/community-section/community.mdx)
+
+---
 

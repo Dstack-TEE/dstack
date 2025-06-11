@@ -105,10 +105,10 @@
                   "style": "duotone"
                 },
                 "pages": [
+                  "docs/getting-started/first-deployment-steps/deployment-of-dstack-advanced",
                   "docs/getting-started/first-deployment-steps/fd-1",
                   "docs/getting-started/first-deployment-steps/fd-2",
                   "docs/getting-started/first-deployment-steps/fd-3",
-                  "docs/getting-started/first-deployment-steps/fd-4",
                   "docs/getting-started/first-deployment-steps/fd-5",
                   "docs/getting-started/first-deployment-steps/fd-6",
                   "docs/getting-started/first-deployment-steps/fd-7"
