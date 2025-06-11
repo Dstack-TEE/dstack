@@ -51,8 +51,8 @@
       {
         "dropdown": "Getting Started",
         "icon": {
-          "name": "book-open",
-          "style": "duotone"
+          "name": "stars",
+          "style": "solid"
         },
         "pages": [
           "docs/getting-started/start",
@@ -136,82 +136,53 @@
         },
         "pages": [
           {
-            "group": "Component Overview",
+            "group": "Diving Deep",
             "icon": {
-              "name": "circle-stop",
-              "style": "regular"
-            },
-            "pages": [
-              "docs/concepts/overview",
-              "docs/concepts/basic-components"
-            ]
-          },
-          {
-            "group": "Core Component Implementation",
-            "icon": {
-              "name": "circle-stop",
+              "name": "star-sharp",
               "style": "solid"
             },
             "pages": [
-              "docs/concepts/core-vmm",
-              "docs/concepts/core-gateway",
-              "docs/concepts/core-kms",
-              "docs/concepts/core-guest-agent",
-              "docs/concepts/core-tdxctl",
-              "docs/concepts/core-os"
+              "docs/concepts/overview", 
+              "/docs/concepts/core-glossary"
             ]
           },
+          {
+            "group": "KSM, VMM & Gateway",
+            "icon": {
+              "name": "code",
+              "style": "solid"
+            },
+            "pages": [
+              "docs/concepts/basic-components",
+              {
+                "group": "Core Implementations",
+                "icon": {
+                  "name": "list-ol",
+                  "style": "solid"
+                },
+                "pages": [
+                 
+                  "docs/concepts/core-vmm",
+                  "docs/concepts/core-gateway",
+                  "docs/concepts/core-kms",
+                  "docs/concepts/core-guest-agent",
+                  "docs/concepts/core-tdxctl",
+                  "docs/concepts/core-os"
+                ]
+              }
+              
+            ]
+          },
+          
           {
             "group": "DStack Component Architecture",
             "icon": {
-              "name": "circle-stop",
-              "style": "solid"
+              "name": "sitemap",
+              "style": "thin"
             },
             "pages": [
               "docs/concepts/architecture",
               "docs/concepts/networking"
-            ]
-          },
-          {
-            "group": "Core Glossary",
-            "icon": {
-              "name": "circle-stop",
-              "style": "regular"
-            },
-            "pages": [
-              "docs/concepts/core-glossary"
-            ]
-          }
-        ]
-      },
-      {
-        "dropdown": "Tutorials",
-        "icon": {
-          "name": "apple-whole",
-          "style": "solid"
-        },
-        "pages": [
-          "docs/tutorials/index-quick-start",
-          {
-            "group": "Getting Started",
-            "icon": {
-              "name": "play",
-              "style": "regular"
-            },
-            "pages": [
-              "docs/getting-started/start"
-            ]
-          },
-          {
-            "group": "Additional Starter Guides",
-            "icon": {
-              "name": "book",
-              "style": "regular"
-            },
-            "pages": [
-              "docs/tutorials/javascript-example",
-              "docs/tutorials/python-example",
-              "docs/tutorials/rust-example"
             ]
           }
         ]
@@ -311,6 +282,28 @@
                   "docs/security-research/extra-sec-ops/host-api-security"
                 ]
               }
+            ]
+          }
+        ]
+      },
+      {
+        "dropdown": "Tutorials",
+        "icon": {
+          "name": "apple-whole",
+          "style": "solid"
+        },
+        "pages": [
+          "docs/tutorials/index-quick-start",
+          {
+            "group": "Additional Starter Guides",
+            "icon": {
+              "name": "book",
+              "style": "regular"
+            },
+            "pages": [
+              "/docs/tutorials/javascript-example",
+              "/docs/tutorials/python-example",
+              "/docs/tutorials/rust-example"
             ]
           }
         ]
