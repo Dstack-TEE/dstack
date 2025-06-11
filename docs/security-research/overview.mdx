@@ -2,6 +2,7 @@
 title: "Security & Research Section"
 description: "Deep technical analysis of dstack's security architecture for researchers and security engineers"
 ---
+
 This section offers an in-depth security analysis of dstack's TEE implementation. For general information, refer to the [Core Concepts](/docs/concepts/overview) section.
 
 ## For Security Researchers
@@ -16,16 +17,16 @@ dstack is built on a foundation of hardware-enforced security primitives. This s
 ## Core Security Components
 
 <CardGroup cols={2}>
-  <Card title="TDX Attestation" icon="fingerprint" href="/docs/security-research/tdx-attestation">
+  <Card title="TDX Attestation" icon="fingerprint" href="/docs/security-research/tdx-att/tdx-overview">
     Remote attestation implementation using Intel TDX hardware primitives
   </Card>
-  <Card title="VMM Security" icon="server" href="/docs/security-research/vmm-security">
+  <Card title="VMM Security" icon="server" href="/docs/security-research/vmm/vmm-overview">
     Virtual Machine Manager security boundaries and isolation guarantees
   </Card>
-  <Card title="KMS Architecture" icon="key" href="/docs/security-research/kms-security">
-    Decentralized key management with hardware-backed secure storage
-  </Card>
-  <Card title="Gateway Protection" icon="shield" href="/docs/security-research/gateway-security">
+  <Card title="Gateway Protection" icon="shield" href="/docs/security-research/gate/gate-overview">
     Secure ingress/egress with automated certificate management
+  </Card>
+  <Card title="KMS Architecture" icon="key" href="http://localhost:3000/docs/security-research/kms/kms-overview">
+    Decentralized key management with hardware-backed secure storage
   </Card>
 </CardGroup>

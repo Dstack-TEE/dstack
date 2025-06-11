@@ -42,48 +42,39 @@ description: "Summary and navigation for supplementary security modules in dstac
 
 # Overview: Supplementary Security Modules in dstack
 
-This section provides a high-level summary of the supplementary security modules that are part of the broader dstack repository. These modules—**Certbot Client**, **Certificate Transparency Monitor**, **Host API Security**, and **IOHash Security**—are maintained as distinct code repositories, but are designed to work together to enhance the overall security posture of dstack's TEE (Trusted Execution Environment) infrastructure.
+This section provides analysis of the supplementary security modules that enhance dstack's TEE (Trusted Execution Environment) infrastructure. These modules—**Certbot TEE Security**, **Certificate Transparency Monitor**, **Host API Security**, and **IOHash Security**—work together to provide comprehensive security coverage across certificate management, monitoring, host operations, and cryptographic verification.
 
-Each module addresses a specific aspect of security:
-
-- **Certbot Client**: Automates certificate management and ACME protocol operations.
-- **Certificate Transparency Monitor**: Monitors certificate issuance and detects anomalies.
-- **Host API Security**: Secures host management and orchestration APIs.
-- **IOHash Security**: Provides content-addressed storage and cryptographic integrity verification.
-
-These systems are deeply integrated into dstack's architecture, and understanding their roles will help you appreciate the layered security model employed throughout the platform.
-
-Below, you can explore each module in detail. Click on a box to navigate to the corresponding section for a focused deep dive.
+Each module addresses a specific security domain while integrating with dstack's core TEE architecture to provide layered protection and verification capabilities throughout the platform.
 
 <div style={{ display: "flex", flexWrap: "wrap", gap: "1.5rem", marginTop: "2rem" }}>
   <a href="/docs/security-research/extra-sec-ops/certbot-security" style={{ flex: "1 1 300px", border: "1px solid #eaeaea", borderRadius: "8px", padding: "1.5rem", textDecoration: "none", color: "inherit", background: "#fafbfc" }}>
     <b>Certbot TEE Security</b>
     <div style={{ marginTop: "0.5rem", color: "#555" }}>
-      analysis of automated certificate management and ACME protocol implementation in dstack TEE
+      hardware-backed certificate management with TEE-integrated ACME protocol and attestation-bound certificate generation
     </div>
   </a>
   <a href="/docs/security-research/extra-sec-ops/cert-client-security" style={{ flex: "1 1 300px", border: "1px solid #eaeaea", borderRadius: "8px", padding: "1.5rem", textDecoration: "none", color: "inherit", background: "#fafbfc" }}>
-    <b>Cert Client Security</b>
+    <b>Certificate Client Security</b>
     <div style={{ marginTop: "0.5rem", color: "#555" }}>
-      details on the client-side certificate request and management logic for secure communications
+      client-side certificate operations with comprehensive hardware attestation integration and TDX quote verification
     </div>
   </a>
   <a href="/docs/security-research/extra-sec-ops/ct-monitor-security" style={{ flex: "1 1 300px", border: "1px solid #eaeaea", borderRadius: "8px", padding: "1.5rem", textDecoration: "none", color: "inherit", background: "#fafbfc" }}>
     <b>CT Monitor Security</b>
     <div style={{ marginTop: "0.5rem", color: "#555" }}>
-      certificate transparency monitoring and anomaly detection for dstack TEE infrastructure
+      continuous certificate transparency monitoring with real-time detection of unauthorized certificate issuance
     </div>
   </a>
   <a href="/docs/security-research/extra-sec-ops/iohash-security" style={{ flex: "1 1 300px", border: "1px solid #eaeaea", borderRadius: "8px", padding: "1.5rem", textDecoration: "none", color: "inherit", background: "#fafbfc" }}>
     <b>IOHash Security Architecture</b>
     <div style={{ marginTop: "0.5rem", color: "#555" }}>
-      content-addressed storage and cryptographic integrity verification for dstack
+      cryptographic hashing utility for content-addressed storage and integrity verification within TEE environments
     </div>
   </a>
   <a href="/docs/security-research/extra-sec-ops/host-api-security" style={{ flex: "1 1 300px", border: "1px solid #eaeaea", borderRadius: "8px", padding: "1.5rem", textDecoration: "none", color: "inherit", background: "#fafbfc" }}>
     <b>Host API Security</b>
     <div style={{ marginTop: "0.5rem", color: "#555" }}>
-      secure host management and orchestration API for dstack TEE infrastructure
+      foundational security interface for TEE host management with hardware-backed attestation and key provisioning
     </div>
   </a>
 </div>

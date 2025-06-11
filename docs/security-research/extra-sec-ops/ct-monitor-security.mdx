@@ -5,173 +5,50 @@ description: "Certificate Transparency monitoring and anomaly detection for dsta
 
 # Certificate Transparency Monitor Security
 
-`ct_monitor` watches for new certificates issued for dstack domains by querying crt.sh and checks them against the expected public keys from the dstack-gateway. It sends alerts if it finds any unauthorized or suspicious certificates.
+The Certificate Transparency monitor serves as a critical security component that continuously watches for unauthorized certificate issuance across dstack domains. This system queries the crt.sh database to detect newly issued certificates and validates them against expected public keys managed by the dstack gateway, immediately alerting administrators to any suspicious or unauthorized certificate activity.
 
-## Overview
+## Purpose and Security Model
 
-The CT monitor provides:
+The CT monitor implements a defense-in-depth approach to certificate security through continuous monitoring of Certificate Transparency logs combined with validation against TEE-managed public keys from the dstack gateway. This dual-layer protection includes CAA DNS records that restrict certificate issuance to authorized accounts and RA-TLS attestation embedding for certificate authenticity verification.
 
-- **CT log monitoring**: Queries crt.sh database for domain certificates [1](#0-0) 
-- **Public key validation**: Verifies certificates against gateway-managed keys [2](#0-1) 
-- **Domain pattern matching**: Monitors specific domains for unauthorized issuance [3](#0-2) 
-- **Real-time alerting**: Immediate detection of unauthorized certificates [4](#0-3) 
+The monitoring system operates by establishing a trusted baseline of legitimate certificates and continuously comparing new certificate issuance against this known-good state. When certificates appear in transparency logs that don't match the expected public keys, the system immediately triggers alert mechanisms to notify security teams of potential compromise or unauthorized issuance.
 
-## Security Architecture
+## Monitoring Architecture and Implementation
 
-### Monitoring Architecture
+The core monitoring logic queries the crt.sh database at regular intervals and validates each discovered certificate against a trusted set of public keys retrieved from the dstack gateway RPC endpoint. The system maintains this trusted key set by fetching known public keys from the gateway's ACME information endpoint, which exposes historical certificate public keys through the certbot working directory.
 
-```mermaid
-graph TD
-    subgraph "External Services"
-        CS[crt.sh Database]
-        CF[Cloudflare DNS]
-        LE[Let's Encrypt CA]
-    end
-    
-    subgraph "dstack Gateway TEE"
-        CB[Certbot]
-        GW[Gateway RPC]
-        PK[Public Key Store]
-    end
-    
-    subgraph "CT Monitor"
-        M[Monitor Core]
-        V[Key Validator]
-        A[Alert System]
-    end
-    
-    CS -->|Query Logs| M
-    M --> V
-    V -->|Fetch Keys| GW
-    GW --> PK
-    V --> A
-    CB -->|Manage Certs| LE
-    CB -->|Set CAA| CF
-```
-
-### Security Model
-
-<SecurityInsight>
-The CT monitor provides defense through:
-1. Continuous monitoring of Certificate Transparency logs via crt.sh
-2. Validation against TEE-managed public keys from dstack-gateway
-3. CAA DNS records restricting certificate issuance to authorized accounts
-4. RA-TLS attestation embedding for certificate authenticity verification
-</SecurityInsight>
-
-## Implementation Details
-
-### Core Monitoring Logic
-
-The CT monitor operates by querying the crt.sh database and validating certificates against known public keys [5](#0-4) . The monitor fetches known public keys from the dstack-gateway RPC endpoint [6](#0-5)  and validates each certificate's public key against this trusted set [7](#0-6) .
-
-### Domain Validation
-
-Domain validation ensures only legitimate domains are monitored using regex pattern matching [3](#0-2) . The monitor processes CT log entries sequentially, tracking the last checked entry to avoid reprocessing [8](#0-7) .
-
-### Public Key Verification
-
-The system maintains a trusted set of public keys retrieved from the gateway's ACME information endpoint [9](#0-8) . The gateway exposes historical certificate public keys through the certbot working directory [10](#0-9) .
+Domain validation ensures that only legitimate domains are monitored through regex pattern matching, while the monitor processes Certificate Transparency log entries sequentially and tracks the last checked entry to avoid reprocessing. The system operates with a 60-second polling interval, fetching up to 10,000 log entries per query to provide reasonable detection latency while avoiding rate limiting from the crt.sh service.
 
 ## Certificate Management Integration
 
-### ACME Certificate Lifecycle
+The system integrates deeply with dstack's certificate management infrastructure through the certbot component, which manages the complete ACME certificate lifecycle within the TEE environment. This integration includes automatic ACME account creation, CAA record configuration, and certificate renewal processes that maintain security boundaries while enabling operational efficiency.
 
-The certbot component manages the complete ACME certificate lifecycle within the TEE [11](#0-10) . It automatically creates ACME accounts, sets CAA records, and manages certificate renewal [12](#0-11) .
+CAA records provide the first line of defense by automatically restricting certificate issuance to the dstack gateway ACME account. These DNS-based controls prevent unauthorized Certificate Authorities from issuing certificates for monitored domains, though the CT monitor provides essential detection capabilities even if CAA protections are bypassed through DNS manipulation or other attack vectors.
 
-### CAA Record Management
+## TEE Security Integration and Attestation
 
-CAA records are automatically configured to restrict certificate issuance to the dstack-gateway ACME account [13](#0-12) . This provides the first line of defense against unauthorized certificate issuance by restricting which Certificate Authorities can issue certificates for monitored domains.
+Certificates within the dstack ecosystem can embed TEE attestation quotes using custom X.509 extensions, providing cryptographic proof that certificates were generated within verified TEE environments. The system supports embedding quotes, event logs, and application IDs in certificates for enhanced verification, creating a comprehensive trust model that extends beyond traditional certificate authority validation.
 
-### RA-TLS Integration
+The gateway manages certificate private keys within sealed TEE environments and exposes only public key information for CT monitoring validation. This architecture ensures that even if monitoring systems are compromised, the underlying certificate private keys remain protected by hardware security guarantees.
 
-Certificates can embed TEE attestation quotes using custom X.509 extensions [14](#0-13) . The system supports embedding quotes, event logs, and application IDs in certificates for enhanced verification [15](#0-14) .
+## Threat Model and Security Considerations
 
-## Security Considerations
+The primary threat addressed by the CT monitor is unauthorized certificate issuance for dstack domains, which could enable man-in-the-middle attacks or other security compromises. The system mitigates this through multiple complementary mechanisms including CAA records restricting authorized CAs, continuous CT log monitoring for detection, and public key validation against TEE-managed keys.
 
-### Threat Model Analysis
+DNS manipulation represents a secondary threat vector where CAA records could be modified if DNS infrastructure is compromised. The CT monitor provides detection capabilities that function even when CAA protections are bypassed, ensuring that unauthorized certificates are detected regardless of the attack method used.
 
-**Certificate Misissuance**: The primary threat is unauthorized certificate issuance for dstack domains. The system mitigates this through:
-- CAA records restricting authorized CAs
-- CT log monitoring for detection
-- Public key validation against TEE-managed keys
+The system currently relies solely on crt.sh for Certificate Transparency data, creating a potential single point of failure. While this dependency introduces some risk, the robust error handling for network failures, invalid certificates, and missing public keys ensures that critical errors are logged for investigation while maintaining service continuity.
 
-**DNS Manipulation**: CAA records can be modified if DNS is compromised. The CT monitor provides detection capabilities even if CAA protections are bypassed.
+## Cryptographic Security and Performance
 
-**CT Log Reliability**: The monitor depends on crt.sh data availability. The system currently lacks multi-source redundancy for CT log data.
+The monitoring system uses ECDSA P-256 keys for certificate signing operations and validates signatures using the ring cryptography library. Certificate signing requests require proper authentication and verification throughout the process, ensuring that only legitimate certificates can be issued and validated.
 
-### Cryptographic Security
+Error handling mechanisms ensure robust operation under various failure conditions including network connectivity issues, invalid certificate formats, and missing public key references. The system implements comprehensive logging for critical errors while maintaining operational continuity and avoiding false positive alerts that could overwhelm security teams.
 
-The system uses ECDSA P-256 keys for certificate signing [16](#0-15)  and validates signatures using ring cryptography library [17](#0-16) . Certificate signing requests require proper authentication and verification [18](#0-17) .
+## Configuration and Integration Points
 
-## Performance & Operational Security
+The monitor requires secure communication with the dstack gateway RPC endpoint through configuration that includes gateway URI specifications and domain monitoring patterns. The gateway provides ACME account information and historical public keys through authenticated RPC calls, ensuring that monitoring data remains accurate and up-to-date.
 
-### Monitoring Frequency
+Integration with Cloudflare enables DNS challenges and CAA management, with configuration parameters including ACME server URLs, Cloudflare credentials, and certificate management settings. This integration ensures that certificate lifecycle management processes remain automated while maintaining security controls.
 
-The CT monitor operates with a 60-second polling interval [19](#0-18) , fetching up to 10,000 log entries per query [20](#0-19) . This provides reasonable detection latency while avoiding rate limiting.
-
-### Error Handling
-
-The system implements robust error handling for network failures, invalid certificates, and missing public keys [21](#0-20) . Critical errors are logged for investigation while maintaining service continuity.
-
-## Configuration Security
-
-### Gateway Integration
-
-The monitor requires secure communication with the dstack-gateway RPC endpoint. Configuration includes gateway URI and domain specifications [22](#0-21) . The gateway provides ACME account information and historical public keys through authenticated RPC calls [9](#0-8) .
-
-### Certbot Configuration
-
-Certbot integrates with Cloudflare for DNS challenges and CAA management [13](#0-12) . The configuration includes ACME server URLs, Cloudflare credentials, and certificate management parameters.
-
-## TEE Security Guarantees
-
-### Attestation Integration
-
-The system embeds Intel TDX attestation quotes in certificates to prove TEE execution [23](#0-22) . This provides cryptographic proof that certificates were generated within a verified TEE environment.
-
-### Key Protection
-
-Certificate private keys remain sealed within the TEE environment. The gateway manages key material and exposes only public key information for CT monitoring validation [24](#0-23) .
-
-## Limitations and Recommendations
-
-### Current Limitations
-
-1. **Single Source Dependency**: Relies solely on crt.sh for CT data
-2. **Basic Alerting**: Simple error logging without sophisticated notification channels
-3. **No Automated Response**: Manual intervention required for unauthorized certificates
-4. **Limited Scalability**: Sequential processing of CT entries
-
-### Security Recommendations
-
-1. **Multi-Source Monitoring**: Integrate multiple CT log sources for redundancy
-2. **Enhanced Alerting**: Implement webhook/email notifications for critical events
-3. **Automated Response**: Add capability for automatic certificate revocation
-4. **Rate Limiting**: Implement backoff strategies for crt.sh API limits
-
-## Integration Examples
-
-The CT monitor integrates with the broader dstack security architecture through the gateway RPC interface. It validates certificates against the trusted public key set maintained by the certbot component within the TEE environment.
-
-## Metrics & Observability
-
-### Key Security Metrics
-
-- Certificate validation success/failure rates
-- Unauthorized certificate detection events  
-- CT log query latency and success rates
-- Gateway RPC communication health
-
-## References
-
-- [Certificate Transparency RFC 6962](https://datatracker.ietf.org/doc/html/rfc6962)
-- [crt.sh Certificate Search](https://crt.sh/)
-- [Intel TDX Attestation](https://www.intel.com/content/www/us/en/developer/tools/trust-domain-extensions/overview.html)
-- [ACME Protocol RFC 8555](https://datatracker.ietf.org/doc/html/rfc8555)
-
-<div className="mt-8 p-4 bg-orange-50 rounded-lg border border-orange-200">
-  <p className="text-sm text-orange-800">
-    <strong>Next Component:</strong> Explore TEE attestation verification in <a href="/docs/security-research/ra-tls-security" className="underline">RA-TLS security analysis</a>.
-  </p>
-</div>
+The CT monitor represents a critical component of dstack's layered security approach, providing continuous monitoring capabilities that complement hardware-based security guarantees and enable rapid detection of potential security incidents related to certificate management and domain security.
