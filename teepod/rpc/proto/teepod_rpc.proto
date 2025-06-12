@@ -83,12 +83,27 @@ message UpgradeAppRequest {
   bytes encrypted_env = 3;
 }
 
+message StatusRequest {
+  // List of VM IDs
+  repeated string ids = 1;
+  // Brief (Don't include VM configuration)
+  bool brief = 2;
+  // Filter by keyword
+  string keyword = 3;
+  // Page number
+  uint32 page = 4;
+  // Page size
+  uint32 page_size = 5;
+}
+
 // Message for VM list response
 message StatusResponse {
   // List of VMs
   repeated VmInfo vms = 1;
   // Port mapping enabled
   bool port_mapping_enabled = 2;
+  // Total number of VMs
+  uint32 total = 3;
 }
 
 message ImageListResponse {
@@ -175,7 +190,7 @@ service Teepod {
   rpc ResizeVm(ResizeVmRequest) returns (google.protobuf.Empty);
 
   // RPC to list all VMs
-  rpc Status(google.protobuf.Empty) returns (StatusResponse);
+  rpc Status(StatusRequest) returns (StatusResponse);
   // RPC to list all available images
   rpc ListImages(google.protobuf.Empty) returns (ImageListResponse);
 

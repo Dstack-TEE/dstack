@@ -76,7 +76,7 @@ fn create_hd(
 }
 
 impl VmInfo {
-    pub fn to_pb(&self, gw: &GatewayConfig) -> pb::VmInfo {
+    pub fn to_pb(&self, gw: &GatewayConfig, brief: bool) -> pb::VmInfo {
         let workdir = VmWorkDir::new(&self.workdir);
         pb::VmInfo {
             id: self.manifest.id.clone(),
@@ -87,28 +87,33 @@ impl VmInfo {
             boot_error: self.boot_error.clone(),
             shutdown_progress: self.shutdown_progress.clone(),
             image_version: self.image_version.clone(),
-            configuration: Some(pb::VmConfiguration {
-                name: self.manifest.name.clone(),
-                image: self.manifest.image.clone(),
-                compose_file: {
-                    fs::read_to_string(workdir.app_compose_path()).unwrap_or_default()
-                },
-                encrypted_env: { fs::read(workdir.encrypted_env_path()).unwrap_or_default() },
-                vcpu: self.manifest.vcpu,
-                memory: self.manifest.memory,
-                disk_size: self.manifest.disk_size,
-                ports: self
-                    .manifest
-                    .port_map
-                    .iter()
-                    .map(|pm| pb::PortMapping {
-                        protocol: pm.protocol.as_str().into(),
-                        host_port: pm.from as u32,
-                        vm_port: pm.to as u32,
-                    })
-                    .collect(),
-                app_id: Some(self.manifest.app_id.clone()),
-            }),
+            configuration: if brief {
+                None
+            } else {
+                let vm_config = workdir.manifest();
+                Some(pb::VmConfiguration {
+                    name: self.manifest.name.clone(),
+                    image: self.manifest.image.clone(),
+                    compose_file: {
+                        fs::read_to_string(workdir.app_compose_path()).unwrap_or_default()
+                    },
+                    encrypted_env: { fs::read(workdir.encrypted_env_path()).unwrap_or_default() },
+                    vcpu: self.manifest.vcpu,
+                    memory: self.manifest.memory,
+                    disk_size: self.manifest.disk_size,
+                    ports: self
+                        .manifest
+                        .port_map
+                        .iter()
+                        .map(|pm| pb::PortMapping {
+                            protocol: pm.protocol.as_str().into(),
+                            host_port: pm.from as u32,
+                            vm_port: pm.to as u32,
+                        })
+                        .collect(),
+                    app_id: Some(self.manifest.app_id.clone()),
+                })
+            },
             app_url: self.instance_id.as_ref().map(|id| {
                 format!(
                     "https://{id}-{}.{}:{}",
