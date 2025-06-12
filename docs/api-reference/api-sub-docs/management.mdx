@@ -1,0 +1,31 @@
+---
+title: "Management APIs"
+description: "HTTP endpoints for monitoring, logs, and the VMM Management Console."
+---
+
+[← Back to API Reference Overview](./overview)
+
+# Management APIs
+
+## Guest Agent HTTP Endpoints
+
+- **Dashboard:** `/`  
+  Web dashboard with CVM info, containers, and system stats.  
+  _Access: Requires `public_sysinfo` or `public_logs` enabled._
+
+- **Metrics:** `/metrics`  
+  Prometheus-format metrics about the guest system.  
+  _Access: Requires `public_sysinfo` enabled._
+
+- **Container Logs:** `/logs/<container_name>`  
+  Stream logs with options: `since`, `until`, `follow`, `text`, `timestamps`, `bare`, `tail`, `ansi`.  
+  _Access: Requires `public_logs` enabled._
+
+## VMM Management Console
+
+- **URL:** `http://localhost:9080` (configurable)
+- **Features:** Deploy apps via docker-compose.yaml, view logs, manage CVMs.
+
+---
+
+See the [API Reference Overview](./overview) for more sections. 

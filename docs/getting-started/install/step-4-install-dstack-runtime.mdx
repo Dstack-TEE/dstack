@@ -1,0 +1,88 @@
+---
+title: "Step 4 – Build and Run dstack components"
+description: "Build the dstack components, start the core services, and verify everything in the UI."
+---
+
+> **Heads-up:** This step assumes you finished **Step 3** (kernel headers, Rust, WireGuard, `.env`, and the `systemd` unit).
+
+---
+
+## 1 – Clone the Sources
+
+```bash
+git clone https://github.com/Dstack-TEE/meta-dstack.git
+cd meta-dstack
+````
+
+---
+
+## 2 – Visual Walk-through
+
+### 2.1 Connect to Your Server
+
+| Action                      |                                                                                           |
+| --------------------------- | ----------------------------------------------------------------------------------------- |
+| SSH into the host           | ![](/docs/getting-started/first-deployment-steps/step-install-guide/step1.png)<br/>[step1.png](/docs/getting-started/first-deployment-steps/step-install-guide/step1.png)       |
+| Accept the fingerprint      | ![](/docs/getting-started/first-deployment-steps/step-install-guide/step2.png)<br/>[step2.png](/docs/getting-started/first-deployment-steps/step-install-guide/step2.png)       |
+| Confirm WireGuard installed | ![](/docs/getting-started/first-deployment-steps/step-install-guide/step4.0.png)<br/>[step4.0.png](/docs/getting-started/first-deployment-steps/step-install-guide/step4.0.png) |
+
+---
+
+### 2.2 Prepare the Build Environment
+
+| Action                      |                                                                                           |
+| --------------------------- | ----------------------------------------------------------------------------------------- |
+| Install Rust (rustup)       | ![](/docs/getting-started/first-deployment-steps/step-install-guide/step4.1.png)<br/>[step4.1.png](/docs/getting-started/first-deployment-steps/step-install-guide/step4.1.png) |
+| Finish rustup setup         | ![](/docs/getting-started/first-deployment-steps/step-install-guide/step4.2.png)<br/>[step4.2.png](/docs/getting-started/first-deployment-steps/step-install-guide/step4.2.png) |
+| Clone **meta-dstack**       | ![](/docs/getting-started/first-deployment-steps/step-install-guide/step4.3.png)<br/>[step4.3.png](/docs/getting-started/first-deployment-steps/step-install-guide/step4.3.png) |
+| Generate local build config | ![](/docs/getting-started/first-deployment-steps/step-install-guide/step4.4.png)<br/>[step4.4.png](/docs/getting-started/first-deployment-steps/step-install-guide/step4.4.png) |
+
+---
+
+### 2.3 Build dstack Binaries
+
+Inside the repo:
+
+```bash
+./build.sh hostcfg          # host configuration
+./build.sh dl <domain>      # gateway helper
+./build.sh guest            # guest agent
+```
+
+| Command              |                                                                                     |
+| -------------------- | ----------------------------------------------------------------------------------- |
+| `./build.sh hostcfg` | ![](/docs/getting-started/first-deployment-steps/step-install-guide/step5.png)<br/>[step5.png](/docs/getting-started/first-deployment-steps/step-install-guide/step5.png) |
+| `./build.sh dl …`    | ![](/docs/getting-started/first-deployment-steps/step-install-guide/step6.png)<br/>[step6.png](/docs/getting-started/first-deployment-steps/step-install-guide/step6.png) |
+| `./build.sh guest`   | ![](/docs/getting-started/first-deployment-steps/step-install-guide/step7.png)<br/>[step7.png](/docs/getting-started/first-deployment-steps/step-install-guide/step7.png) |
+
+---
+
+## 3 – Start Core Services
+
+```bash
+# 1. Key-management service
+./target/release/dstack-kms --config kms.toml
+# 2. Gateway
+./target/release/dstack-gateway --config gateway.toml
+# 3. Virtual-machine manager
+./target/release/dstack-vmm --config vmm.toml
+```
+
+| Action            |                                                                                              |
+| ----------------- | -------------------------------------------------------------------------------------------- |
+| Start `kms`       | ![](/docs/getting-started/first-deployment-steps/step-install-guide/step9.png)<br/>[step9.png](/docs/getting-started/first-deployment-steps/step-install-guide/step9.png)          |
+| Start `gateway`   | ![](/docs/getting-started/first-deployment-steps/step-install-guide/step10.png)<br/>[step10.png](/docs/getting-started/first-deployment-steps/step-install-guide/step10.png)       |
+| Start `vmm`       | ![](/docs/getting-started/first-deployment-steps/step-install-guide/step11.png)<br/>[step11.png](/docs/getting-started/first-deployment-steps/step-install-guide/step11.png)       |
+| Open VMM UI       | ![](/docs/getting-started/first-deployment-steps/step-install-guide/step12.0.png)<br/>[step12.0.png](/docs/getting-started/first-deployment-steps/step-install-guide/step12.0.png) |
+| Verify components | ![](/docs/getting-started/first-deployment-steps/step-install-guide/step12.1.png)<br/>[step12.1.png](/docs/getting-started/first-deployment-steps/step-install-guide/step12.1.png) |
+| Ready to deploy   | ![](/docs/getting-started/first-deployment-steps/step-install-guide/step12.2.png)<br/>[step12.2.png](/docs/getting-started/first-deployment-steps/step-install-guide/step12.2.png) |
+
+---
+
+## ✅ Next Step: Deploy Your First Application
+
+By now you've successfully built and started all the core dstack components. Your dstack cluster is now ready to deploy confidential applications.
+
+To continue with deploying your first application, visit:
+
+[**dstack Deployment Walkthrough**](/docs/getting-started/deploying-applications)

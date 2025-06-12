@@ -1,0 +1,190 @@
+---
+title: "DStack-OS Core"
+description: "Deep dive into dstack's operating system core components, guest agent architecture, and secure boot implementation"
+---
+
+# dstack OS Core Implementation
+
+The dstack operating system provides a secure, minimal foundation built on TDX (Trust Domain Extensions) with comprehensive attestation and full disk encryption capabilities. At its core lies the **dstack-guest-agent**, a critical runtime service that manages all TEE operations, cryptographic functions, and container orchestration within Confidential Virtual Machines.
+
+## Guest Agent Configuration
+
+```toml
+# dstack Guest Agent Configuration
+# Core service configuration for TEE operations and container management
+
+[default]
+workers = 8                           # Tokio runtime worker threads
+max_blocking = 64                    # Maximum blocking task threads  
+ident = "Dstack guest agent"         # Service identification
+temp_dir = "/tmp"                    # Temporary file storage
+keep_alive = 10                      # Connection keep-alive timeout
+log_level = "debug"                  # Logging verbosity level
+
+[default.core]
+keys_file = "/dstack/.host-shared/.appkeys.json"        # Application cryptographic keys
+compose_file = "/dstack/.host-shared/app-compose.json"   # Container deployment configuration
+sys_config_file = "/dstack/.host-shared/.sys-config.json" # System configuration parameters
+data_disks = ["/"]                   # Persistent storage mount points
+
+[default.core.simulator]
+enabled = false                      # TDX simulation mode for development
+quote_file = "quote.hex"            # Simulated TDX quote file
+event_log_file = "eventlog.json"    # Simulated event log file
+
+# Internal RPC Interface (Legacy v0 - Tappd compatibility)
+[internal-v0]
+address = "unix:/var/run/tappd.sock" # Unix domain socket for legacy applications
+reuse = true                         # Socket reuse configuration
+
+# Internal RPC Interface (Current)
+[internal]
+address = "unix:/var/run/dstack.sock" # Unix domain socket for container applications
+reuse = true                         # Socket reuse configuration
+
+# External HTTP Interface
+[external]
+address = "0.0.0.0"                  # HTTP server bind address
+port = 8090                          # HTTP server port for dashboard and management
+
+# Guest API Interface
+[guest-api]
+address = "vsock:0xffffffff"         # VSOCK communication with host VMM
+```
+
+## dstack Guest Agent Architecture
+
+**Runtime Service Foundation**
+
+The dstack guest agent represents the cornerstone of the dstack OS architecture, functioning as a multi-service runtime daemon that orchestrates all confidential computing operations within TDX-enabled virtual machines. [1](#0-0) 
+
+**Concurrent Service Architecture**
+
+The guest agent implements a sophisticated concurrent service model using Tokio's asynchronous runtime, operating four distinct service interfaces simultaneously. Each service is designed for specific communication patterns and security contexts within the confidential computing environment. [2](#0-1) 
+
+**Internal RPC Services**
+
+The system maintains two internal RPC interfaces for container communication. The legacy v0 interface provides backward compatibility with existing Tappd applications, while the current internal interface offers enhanced functionality for modern container workloads. Both interfaces utilize Unix domain sockets with proper permission management to allow any user within the CVM to access cryptographic services. [3](#0-2) 
+
+**External HTTP Interface**
+
+The external HTTP interface serves as the primary management and monitoring endpoint, providing both RESTful APIs and web dashboard functionality. This interface includes comprehensive health monitoring integration with systemd watchdog services, ensuring robust service availability and automatic recovery mechanisms. [4](#0-3) 
+
+**VSOCK Guest API**
+
+The VSOCK-based Guest API establishes secure communication channels between the guest agent and the host Virtual Machine Manager (VMM). This interface enables privileged operations such as system configuration, attestation coordination, and secure key provisioning without requiring network-based communication. [5](#0-4) 
+
+## Cryptographic Operations and Key Management
+
+**Application State Management**
+
+The guest agent maintains comprehensive application state through the AppState structure, which encapsulates all cryptographic materials, system configurations, and certificate management components. This centralized state management ensures consistent access to security primitives across all service interfaces. [6](#0-5) 
+
+**TLS Certificate Generation**
+
+The system implements dynamic TLS certificate generation using Remote Attestation TLS (RA-TLS) protocols. Each certificate request includes comprehensive TDX attestation data, enabling verifiable proof of the certificate's origin from within a genuine TDX environment. The certificate generation process supports both server and client authentication modes with flexible subject alternative name configuration. [7](#0-6) 
+
+**Cryptographic Key Derivation**
+
+Application-specific key derivation follows a hierarchical deterministic approach using ECDSA P-256 curves. The system derives unique keys for specific purposes while maintaining cryptographic proof chains that validate key authenticity through signature verification against root application keys. [8](#0-7) 
+
+**TDX Quote Generation and Attestation**
+
+The guest agent provides comprehensive TDX quote generation capabilities, supporting both raw quote requests and structured attestation protocols. The system includes event log integration for maintaining cryptographic measurement chains and supports simulation modes for development environments. [9](#0-8) 
+
+## System Initialization and Boot Process
+
+**Boot Preparation Phase**
+
+The dstack OS initialization begins with the dstack-prepare.sh script, which establishes the foundational runtime environment. This script creates overlay filesystems for critical system directories, ensuring that modifications to sensitive areas like /etc/wireguard, /etc/docker, and /usr/bin are contained within volatile storage. [10](#0-9) 
+
+**TDX Module Loading and Time Synchronization**
+
+The preparation phase includes loading the TDX guest kernel module and establishing synchronized system time through chrony. Time synchronization is critical for certificate validity and attestation timestamp accuracy in the confidential computing environment. [11](#0-10) 
+
+**System Setup Orchestration**
+
+Following preparation, the dstack-util setup command orchestrates the complete system configuration process. This includes cryptographic key provisioning, full disk encryption establishment, environment variable decryption, and network security configuration. [12](#0-11) 
+
+**RTMR Measurement Chain**
+
+The system maintains a comprehensive measurement chain using TDX RTMR3 (Runtime Measurement Register), recording critical system events including system preparation markers, application identifiers, compose file hashes, and instance identifiers. This measurement chain provides cryptographic proof of system integrity and configuration. [13](#0-12) 
+
+## Full Disk Encryption and Storage Management
+
+**LUKS2 Encryption Implementation**
+
+The dstack OS implements full disk encryption using LUKS2 with AES-XTS-Plain64 cipher configuration and PBKDF2 key derivation. The encryption setup process includes automatic key provisioning from either KMS services or local sealing mechanisms, ensuring data protection without manual intervention. [14](#0-13) 
+
+**ZFS Filesystem Integration**
+
+The encrypted storage utilizes ZFS with Blake3 checksums for enhanced data integrity and automatic pool expansion capabilities. The ZFS configuration includes persistent mounting and optimized settings for confidential computing workloads, including disabled access time tracking and optimized compression. [15](#0-14) 
+
+**Key Management Integration**
+
+The system supports multiple key provisioning modes including KMS integration for cloud deployments, local SGX sealing for edge computing, and development mode for testing environments. Each mode provides appropriate security guarantees while maintaining operational flexibility. [16](#0-15) 
+
+## Container Deployment and Orchestration
+
+**Application Composition Framework**
+
+Container deployment follows a structured application composition framework defined in JSON configuration files. The system supports multiple runner types including Docker Compose for complex multi-container applications and bash scripts for custom deployment scenarios. [17](#0-16) 
+
+**Container Lifecycle Management**
+
+The deployment process includes comprehensive lifecycle management with orphan container removal, Docker daemon restart coordination, and systematic cleanup of unused images and volumes. This ensures clean deployment states and optimal resource utilization within the constrained CVM environment. [18](#0-17) 
+
+**Pre-launch Script Execution**
+
+The system supports pre-launch script execution for custom environment preparation, enabling applications to perform initialization tasks before container startup. This capability supports complex deployment scenarios while maintaining security isolation. [19](#0-18) 
+
+## Network Security and Gateway Integration
+
+**WireGuard VPN Configuration**
+
+Network security relies on WireGuard VPN configuration with dynamic peer management and iptables-based access control. The system automatically generates cryptographic key pairs and establishes secure tunnels to dstack-gateway instances for external connectivity. [20](#0-19) 
+
+**Certificate-based Gateway Authentication**
+
+Gateway registration employs certificate-based authentication using RA-TLS certificates that include TDX attestation data. This ensures that only genuine TDX environments can establish gateway connections while providing cryptographic proof of the guest's security posture. [21](#0-20) 
+
+## Environment Variable Management
+
+**Encrypted Environment Processing**
+
+The system implements secure environment variable management through encrypted storage and runtime decryption. Environment variables are encrypted using AES keys derived from the application's cryptographic material and decrypted only during system initialization within the secure TDX environment. [22](#0-21) 
+
+**Access Control and Validation**
+
+Environment variable access is controlled through allowlist mechanisms defined in the application composition configuration. This prevents unauthorized access to sensitive configuration data while enabling necessary application functionality. [23](#0-22) 
+
+## Health Monitoring and System Integration
+
+**Systemd Watchdog Integration**
+
+The guest agent integrates comprehensively with systemd watchdog services, providing continuous health monitoring and automatic service recovery. The watchdog implementation includes HTTP-based health checks and proper notification protocols to ensure system reliability. [4](#0-3) 
+
+**Application Information Reporting**
+
+The system provides detailed application information reporting including TDX measurements, cryptographic signatures, and system configuration data. This information enables external verification of the system's security posture and operational status. [24](#0-23) 
+
+## Notes
+
+The dstack OS represents a comprehensive confidential computing platform that prioritizes **security-first architecture** through TDX attestation integration, **minimal attack surface** via targeted component selection, and **enterprise-grade reliability** through robust monitoring and recovery mechanisms. The guest agent serves as the central orchestration point for all confidential computing operations, providing a secure foundation for deploying sensitive applications while maintaining familiar Docker-based workflows for developers.
+
+The architecture emphasizes **cryptographic verifiability** at every layer, from boot-time measurements through runtime certificate generation, ensuring that all system operations can be cryptographically verified by external parties. This approach enables **zero-trust deployment models** where applications can verify their execution environment before processing sensitive data.
+
+### Reference Links
+
+- [dstack Guest Agent Implementation](https://github.com/Dstack-TEE/dstack/tree/main/guest-agent) - Complete guest agent source code and documentation
+- [System Setup Utilities](https://github.com/Dstack-TEE/dstack/tree/main/dstack-util) - System initialization and configuration management
+- [Boot Process Scripts](https://github.com/Dstack-TEE/dstack/tree/main/basefiles) - System preparation and container deployment scripts
+- [TDX Attestation Integration](https://github.com/Dstack-TEE/dstack/tree/main/tdx-attest) - TDX-specific attestation and measurement utilities
+
+### Continue Learning
+
+- [Core Components Overview](/docs/concepts/core-components) - Review the complete architecture
+- [Security Model](/docs/concepts/security-model) - Deep dive into security architecture  
+- [Architecture](/docs/concepts/architecture) - Understand the complete system design
+- [Getting Started](/docs/getting-started/start) - Begin deploying applications
+

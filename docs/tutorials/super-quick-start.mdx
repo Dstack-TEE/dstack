@@ -1,0 +1,83 @@
+---
+title: "Tool Deployment Tutorials"
+description: "dstack enables you to take any Docker container and deploy it as a hardware-secured TEE application with no code changes, special SDKs, or infrastructure setup required. To get started, simply choose a tutorial that matches your technology stack, copy the provided code into your preferred code editor, and follow the tutorial steps carefully to deploy your application using the Phala CLI—a separate tool for deploying apps to Phala that uses dstack to help you become familiar with the process, as both are operationally identical. After completing a tutorial, you will be well-prepared to move on to the full deployment demo found here: (/docs/getting-started/installation).
+"
+---
+
+## How These Tutorials Work
+
+Each tutorial below is designed to get you hands-on with dstack and the Phala CLI as quickly as possible. For each stack, you'll simply copy and paste the provided code into your editor, then run the listed commands in order—no prior setup or special SDKs required. These guides are intentionally basic, so you can get comfortable with the Phala CLI workflow and see how dstack operates in practice.
+
+Once you've completed a tutorial and are familiar with the basics, we recommend checking out the additional reading in the [recommended learning path](/docs/tutorials/index) to dive deeper into dstack's architecture and learn how to perform full production deployments.
+
+## Choose Your Application Stack
+
+Pick the tutorial that matches your technology stack to see dstack in action:
+
+<div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-8">
+  <Card 
+    title="🐍 Python Tutorial" 
+    icon="code" 
+    href="/docs/tutorials/python-example"
+    className="hover:shadow-lg transition-shadow border-2 border-green-200"
+  >
+    <div className="space-y-3">
+      <p className="text-sm mt-2 mb-2">Deploy a Flask/FastAPI application with dstack TEE security. Perfect for APIs, web services, and data processing applications.</p>
+      <div className="bg-green-50 p-3 rounded">
+        <p className="text-xs font-medium text-green-800">⚡ Time: 10-15 minutes</p>
+        <p className="text-xs text-green-700">Perfect for: APIs, data processing, machine learning</p>
+      </div>
+      <p className="text-xs text-gray-600">Includes containerization, deployment commands, and monitoring setup.</p>
+    </div>
+  </Card>
+  
+  <Card 
+    title="🔧 Node.js/TypeScript Tutorial" 
+    icon="code" 
+    href="/docs/tutorials/javascript-example"
+    className="hover:shadow-lg transition-shadow border-2 border-blue-200"
+  >
+    <div className="space-y-3">
+      <p className="text-sm mt-2 mb-2">Deploy Express.js applications to dstack TEE infrastructure. Great for APIs, real-time applications, and microservices.</p>
+      <div className="bg-blue-50 p-3 rounded">
+        <p className="text-xs font-medium text-blue-800">⚡ Time: 10-15 minutes</p>
+        <p className="text-xs text-blue-700">Perfect for: Real-time apps, APIs, microservices</p>
+      </div>
+      <p className="text-xs text-gray-600">Complete setup from TypeScript build to secure deployment.</p>
+    </div>
+  </Card>
+
+  <Card 
+    title="⚡ Rust Tutorial" 
+    icon="code" 
+    href="/docs/tutorials/rust-example"
+    className="hover:shadow-lg transition-shadow border-2 border-orange-200"
+  >
+    <div className="space-y-3">
+      <p className="text-sm mt-2 mb-2">Deploy high-performance Rust applications with dstack. Optimal for security-critical applications and high-performance computing.</p>
+      <div className="bg-orange-50 p-3 rounded">
+        <p className="text-xs font-medium text-orange-800">⚡ Time: 10-15 minutes</p>
+        <p className="text-xs text-orange-700">Perfect for: High-performance, security-critical apps</p>
+      </div>
+      <p className="text-xs text-gray-600">From Cargo build to TEE deployment with zero overhead.</p>
+    </div>
+  </Card>
+
+  <Card 
+    title="🌐 Full-Stack Web App" 
+    icon="globe" 
+    href="/docs/getting-started/start"
+    className="hover:shadow-lg transition-shadow border-2 border-purple-200"
+  >
+    <div className="space-y-3">
+      <p className="text-sm mt-2 mb-2">Enterprise deployment patterns, CI/CD automation, and production-ready configurations for dstack.</p>
+      <div className="bg-purple-50 p-3 rounded">
+        <p className="text-xs font-medium text-purple-800">⚡ Time: 30-60 minutes</p>
+        <p className="text-xs text-purple-700">Perfect for: Production deployments, enterprise setup</p>
+      </div>
+      <p className="text-xs text-gray-600">Advanced patterns for scaling dstack applications.</p>
+    </div>
+  </Card>
+</div>
+
+---

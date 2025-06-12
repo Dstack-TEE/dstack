@@ -1,0 +1,35 @@
+---
+title: "Step 6: Deploy Additional VMM Instances"
+description: "Deploy Additional VMM Instances"
+---
+
+<div className="bg-white border border-gray-200 rounded-lg p-6 my-6">
+  <h3 className="text-lg font-semibold mb-4">Deploy dstack-vmm on other TDX hosts to serve user workloads</h3>
+  
+  <p className="text-gray-600 mb-4">After the KMS and dstack-gateway are deployed, you can deploy dstack-vmm on other TDX hosts to serve user workloads.</p>
+
+  <div className="flex flex-col md:flex-row gap-4">
+    <div className="flex-1">
+      <h4 className="font-medium mb-2">terminal # 3</h4>
+      <p className="text-sm text-gray-600">Open new terminal for the vmm</p>
+    </div>
+    
+    <div className="flex-1">
+      <h4 className="font-medium mb-2">Update Configuration</h4>
+      <p className="text-sm text-gray-600">Edit the vmm.toml file to set the KMS and dstack-gateway URLs:</p>
+      
+      <div className="bg-gray-50 p-3 rounded text-sm mt-2">
+```toml
+# vmm.toml
+[cvm]
+kms_urls = ["https://kms.test2.dstack.phala.network:9201"]
+gateway_urls = ["https://gateway.test2.dstack.phala.network:9202"]
+```
+      </div>
+    </div>
+  </div>
+
+  <div className="mt-4 p-3 bg-blue-50 rounded">
+    <p className="text-sm text-blue-700">Then restart the dstack-vmm to apply the new configuration.</p>
+  </div>
+</div>

@@ -1,0 +1,63 @@
+---
+title: "Application Deployment Overview"
+description: "A practical walkthrough for deploying secure applications on your dstack infrastructure"
+---
+
+## Before You Begin
+
+| ✅ Checklist            | Description                                                                  |
+| ---------------------- | ---------------------------------------------------------------------------- |
+| dstack installed       | Finished <a href="/docs/getting-started/installation">Installation</a> guide |
+| Environment configured | Finished <a href="/docs/getting-started/first-deployment-steps/deploying-applications">Environment Setup</a> guide   |
+| Services healthy       | KMS, Gateway & VMM report <code>status: healthy</code>                       |
+| TDX enabled            | Host CPU supports Intel TDX and BIOS/Kernel options are enabled              |
+| Management UI up       | <code>[http://localhost:9080](http://localhost:9080)</code> reachable        |
+
+
+# Deploying Applications on dstack
+
+---
+
+> **🧭 Quick Path to Success with our Mini Guides**
+>
+> | Step     | What You’ll Do                                 | Link                                    |
+> | -------- | ---------------------------------------------- | --------------------------------------- |
+> | **1** | Pull & inspect the example container image     | [`Pull & inspect the example container image`](/docs/getting-started/first-deployment-steps/fd-1) |
+> | **2** | Write the dstack deployment manifest           | [`Write the dstack deployment manifest`](/docs/getting-started/first-deployment-steps/fd-2) |
+> | **3** | Sign & push the image to your private registry | [`Sign & push the image to your private registry`](/docs/getting-started/first-deployment-steps/fd-3) |
+> | **4** | Access the dstack dashboard & monitor deployments | [`Access the dstack dashboard & monitor deployments`](/docs/getting-started/first-deployment-steps/fd-3) |
+> | **5** | Verify attestation & remote‑prove trust        | [`Verify attestation & remote‑prove trust`](/docs/getting-started/first-deployment-steps/fd-5) |
+> | **6** | Expose an API endpoint via the Gateway         | [`Expose an API endpoint via the Gateway`](/docs/getting-started/first-deployment-steps/fd-6) |
+> | **7** | Update, roll back, and tear down safely        | [`Update, roll back, and tear down safely`](/docs/getting-started/first-deployment-steps/fd-7) |
+>
+> Skim the table, pick up at **Step 1**, and continue straight through **Step 7**.
+
+---
+
+<div className="bg-green-50 border-l-4 border-green-400 p-4 mb-6">
+  <div className="flex">
+    <div className="ml-3">
+      <p className="text-sm text-green-700">
+        <strong>🎉 Milestone:</strong> by the end of Step 7 you will have a fully attested, externally reachable application running under hardware‑enforced confidentiality.
+      </p>
+      <p className="text-sm text-green-700 mt-2">
+        <strong>note:</strong> estimated time depends on your setup and experience; no specific time allotted.
+      </p>
+    </div>
+  </div>
+</div>
+
+---
+
+## Next Steps & Further Reading
+
+**Start here:** <a href="/docs/getting-started/first-deployment-steps/fd-1" className="underline font-medium">Step 1 — Pull the Example Application</a>
+
+After each mini-guide, follow the **Next Step** banner to proceed in order. Skipping steps may leave your deployment unverified or insecure.
+
+**Further reading:**
+- [System Architecture](/docs/concepts/architecture) – How all components fit together
+- [Security Model](/docs/security-research/security-model) – Threat model & enclave guarantees
+- [Read to Go Deployment Guides](/docs/tutorials/index-quick-start) – 
+
+**Ready?** <a href="./first-deployment-steps/fd-1.mdx" className="underline font-medium">Jump to Step 1 and ship something real.</a>

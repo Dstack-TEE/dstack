@@ -1,0 +1,88 @@
+---
+title: "Gateway Connection Strategies and Load Balancing"
+description: "Advanced load balancing algorithms and connection management strategies for confidential virtual machine clusters"
+---
+
+# Gateway Connection Strategies and Load Balancing
+
+Load balancing in confidential computing environments presents unique challenges that go far beyond traditional traffic distribution. While conventional load balancers primarily focus on optimizing performance metrics like response time and throughput, confidential computing load balancers must also maintain cryptographic trust relationships, verify ongoing attestation status, and ensure that security guarantees are preserved across all connection routing decisions.
+
+The dstack gateway's connection management system represents a fundamental rethinking of how traffic should be distributed in security-critical environments. Traditional round-robin or least-connections algorithms are insufficient when each backend server (CVM) must be continuously verified for integrity and authorization. Instead, dstack implements intelligent selection algorithms that prioritize not just performance, but also the cryptographic health and attestation status of each CVM instance.
+
+What makes this approach particularly sophisticated is its integration of multiple data sources for routing decisions. The gateway doesn't just consider server load or response times - it evaluates WireGuard handshake freshness, attestation validity, authorization status, and real-time health metrics to make routing decisions that optimize both performance and security. This creates a dynamic, adaptive system that can respond to security events, hardware failures, and changing network conditions while maintaining the strict security guarantees required for confidential computing.
+
+## Gateway Connection Strategies and Load Balancing
+
+if you aren't familiar with the concept of a gateway in confidential computing, it's the component that acts as a secure entry point for network traffic destined for confidential virtual machines (CVMs) within a cluster. the gateway is responsible for authenticating, authorizing, and securely routing connections to the appropriate CVM instances, enforcing both network isolation and policy controls.
+
+connection strategies in this context refer to the algorithms and mechanisms the gateway uses to decide *which* CVM instance should handle a given incoming connection. this is especially important in environments where multiple CVMs are available for the same application or service, and the system must balance load, optimize performance, and maintain security guarantees.
+
+the dstack gateway implements a set of advanced connection management strategies to efficiently distribute traffic and maintain high availability:
+
+- **top-n selection**: the gateway tracks the most recent WireGuard handshake times for all registered CVMs. when a new connection request arrives, it sorts the available instances by handshake recency and selects the top N most recently active CVMs. this approach prioritizes instances that are known to be healthy and responsive, reducing connection latency and avoiding stale or disconnected peers.
+- **direct instance selection**: for scenarios requiring deterministic routing (such as session stickiness or debugging), the gateway allows direct lookup and connection to a specific CVM instance by its unique identifier, bypassing the load balancer.
+- **randomized fallback**: if the top-n selection yields no healthy candidates (e.g., all are stale or unreachable), or if the configuration disables top-n, the gateway falls back to random selection among all available CVMs, with additional health checks based on WireGuard handshake status to avoid routing to dead peers.
+- **connection health monitoring**: the gateway continuously monitors the health of each CVM connection using WireGuard handshake timestamps and connection counters. instances that fail to respond or become stale are automatically removed or recycled according to configurable timeout policies.
+- **certificate transparency monitoring**: to defend against certificate-based attacks, the gateway integrates with a certificate transparency (CT) monitoring system, ensuring that only certificates with known, authorized public keys are accepted for CVM connections.
+
+these strategies work together to provide robust, secure, and efficient connection management for confidential workloads, ensuring that only healthy, authorized CVMs receive traffic and that the system can adapt to failures or dynamic scaling events in real time.
+
+Below are several recommended connection management strategies available in the dstack gateway. Each approach is designed to address different operational and security needs, and can be selected or combined based on your deployment requirements:
+
+1. **Top-N Selection Strategy**  
+   the primary connection strategy in the dstack gateway uses a top-n selection algorithm that prioritizes confidential virtual machine (CVM) instances based on recent WireGuard handshake times ([main_service.rs:286-335](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/gateway/src/main_service.rs#L286)). when a new connection request arrives, the gateway checks the latest handshake times for all CVMs associated with the requested application, sorts these instances by handshake elapsed time, and selects the top N most recently active instances (as configured by `connect_top_n`). this ensures that traffic is routed to peers that are known to be alive and responsive, minimizing latency and avoiding stale or unreachable instances.
+
+   the algorithm for sorting and selecting the top N instances is implemented as follows ([main_service.rs:329-334](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/gateway/src/main_service.rs#L329C5-L335C6)):
+
+   [See implementation in gateway/src/main_service.rs (permalink)](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/gateway/src/main_service.rs#L329C5-L335C6):
+
+   ```rust
+   instances.sort_by(|a, b| a.1.cmp(&b.1));
+   instances.truncate(n);
+   Ok(instances
+       .into_iter()
+       .map(|(ip, _, counter)| AddressInfo { ip, counter })
+       .collect())
+   ```
+
+   if the top-n cache is still valid (i.e., not expired), the gateway reuses the cached selection for efficiency. if handshake data cannot be retrieved (for example, due to an error), the gateway logs a warning and falls back to random selection among available instances. if `connect_top_n` is set to 0, the system also defaults to random selection. for localhost development, a special case routes traffic directly to `127.0.0.1`.
+
+   for implementation details, see [`select_top_n_hosts`](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/gateway/src/main_service.rs#L286).
+
+2. **Direct Instance Selection**  
+   sometimes you need to connect to a specific CVM instance instead of letting the gateway's load balancer decide. this is useful for debugging, session stickiness, or when deterministic routing is required. the dstack gateway enables this by allowing you to provide the unique identifier of a CVM instance; when you do, the gateway bypasses its normal load balancing and routes the connection directly to that instance. this gives you precise control over which CVM handles your request.
+
+   the direct instance selection logic is implemented by checking for a specific instance ID and, if present, returning the corresponding connection details. see the implementation in [`main_service.rs` (permalink)](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/gateway/src/main_service.rs#L329C5-L335C6). this mechanism ensures that applications or operators can always target a particular CVM when needed, without interference from the load balancer.
+
+3. **Fallback Strategies**  
+   if the top-n selection does not return any healthy CVMs (for example, if all candidates are stale, unreachable, or if `connect_top_n` is set to 0), the gateway switches to a fallback strategy. 
+   
+   [See fallback implementation in gateway/src/main_service.rs (permalink)](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/gateway/src/main_service.rs#L301):
+
+   ```rust
+   if n == 0 {
+            // fallback to random selection
+            return Ok(self.random_select_a_host(id).unwrap_or_default());
+        }
+   ```
+   
+   in this mode, the gateway randomly selects from all available CVMs, but before making a selection, it checks the WireGuard handshake status for each instance to verify health ([see implementation](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/gateway/src/main_service.rs#L337C5-L350C1)). only CVMs with recent, valid handshakes are considered eligible, so traffic is never routed to dead or unresponsive instances even when falling back to random selection.
+
+
+4. **connection health monitoring**  
+   the gateway continuously monitors the health of each CVM instance by tracking WireGuard handshake timestamps and connection activity. if an instance is found to be stale—meaning its last handshake exceeds a configurable timeout—the gateway automatically recycles and removes it from the active pool. this recycling and removal process is logged (see [main_service.rs:454-485](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/gateway/src/main_service.rs#L454C7-L485C6)), ensuring visibility and auditability. after recycling, the WireGuard peer set is reconfigured to reflect the updated state, so only healthy, responsive CVMs are available for new connections. 
+
+   these health check and recycling behaviors are fully configurable in the gateway's toml configuration file, especially under the `[core.recycle]` section. for example:
+   ```toml
+   [core.recycle]
+   enabled = true
+   interval = "5m"
+   timeout = "10h"
+   node_timeout = "10m"
+   ```
+   for a complete reference configuration, see the [gateway.toml example](https://github.com/Dstack-TEE/dstack/blob/45ebd05a/gateway/gateway.toml).
+   you can adjust the recycling interval, timeouts, and enable/disable the feature as needed for your deployment. this automated health monitoring and recycling mechanism helps maintain a robust, reliable set of CVM endpoints without manual intervention.
+
+5. **Certificate Transparency Monitoring**  
+   To defend against certificate-based attacks, the gateway integrates with a Certificate Transparency (CT) monitoring system. This system continuously checks CT logs for unauthorized certificate issuance and ensures that only certificates with known, authorized public keys are accepted for CVM connections. This provides an additional layer of protection against malicious or misissued certificates.
+

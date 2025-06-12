@@ -1,0 +1,52 @@
+---
+title: "Cert Client Security"
+description: "Certificate verification and client-side attestation integration in dstack"
+---
+
+# Certificate Client Security
+
+The certificate client component serves as the critical interface between applications and dstack's hardware-backed certificate authority system. This component handles client-side certificate requests and signing operations while integrating comprehensive hardware attestation verification, ensuring that every certificate issued is cryptographically bound to verified trusted execution environments.
+
+## Security Architecture and Trust Model
+
+The cert-client implements a dual-mode certificate authority system that supports both local CA operations and remote KMS-based signing with full attestation verification. In local mode, the system performs direct CA certificate signing, while KMS mode establishes remote attestation through RA-RPC clients with mutual TLS authentication. This flexibility allows the system to operate in various deployment scenarios while maintaining consistent security guarantees.
+
+The cryptographic foundation relies entirely on ECDSA P-256 SHA-256 for all certificate signing operations, ensuring industry-standard elliptic curve cryptography throughout the system. Certificate signing requests incorporate PKCS#8 DER encoding and ASN.1 signature verification, with all signatures validated against embedded public keys using the ring cryptography library's ECDSA implementation.
+
+## Hardware Attestation Integration
+
+The core security mechanism integrates Intel TDX (Trust Domain Extensions) attestation directly into X.509 certificates through a sophisticated quote generation and embedding process. The system generates TDX quotes containing hardware measurements and embeds them as custom certificate extensions using enterprise-registered OIDs. This attestation process creates an unbreakable cryptographic binding between certificate public keys and hardware report data through SHA-512 hashing.
+
+The attestation system defines specific content types for quote generation, covering KMS root CA verification, RA-TLS certificates, and application-specific data. Report data generation supports configurable hash algorithms including SHA-256, SHA-384, SHA-512, and SHA-3 variants, with SHA-512 serving as the default for maximum security.
+
+## Trusted Computing Base Validation
+
+Comprehensive TCB validation prevents execution in insecure environments by implementing strict security policies. For TDX environments, debug mode execution is explicitly prohibited, ensuring that certificates can only be generated in production-ready hardware. This validation extends to SGX enclaves, enforcing production-only execution by checking debug attributes and preventing any certificate generation in development or debugging scenarios.
+
+The system implements cryptographic event log replay functionality to ensure runtime integrity through RTMR (Runtime Measurement Register) verification. Event log chains are validated using SHA-384 hashing, with measurements verified against hardware-reported values to prevent runtime tampering and ensure execution environment integrity.
+
+## Certificate Extension Security and Verification
+
+Custom X.509 extensions embed attestation data using carefully structured DER encoding. Quote extensions store raw TDX quotes, while event logs are JSON-serialized and embedded for comprehensive measurement verification. Application identity becomes cryptographically bound through specialized app-id extensions, enabling fine-grained policy enforcement based on application identity and deployment configuration.
+
+The RA-RPC client implements comprehensive TLS security with integrated attestation verification. Client certificates undergo validation through hardware quote verification, ensuring that remote endpoints execute within trusted environments. The system extracts attestation data from peer certificates and validates against Intel's Provisioning Certificate Caching Service (PCCS) infrastructure for complete trust chain verification.
+
+## Key Provider Integration and Certificate Signing
+
+The certificate request process supports multiple key provider modes with distinct security models designed for different operational requirements. Local key providers utilize direct CA operations for simplified deployments, while KMS providers establish temporary certificate authority relationships through RA-TLS certificate generation. This approach enables secure key escrow while maintaining strict hardware attestation requirements.
+
+Certificate signing requests implement mandatory confirmation strings to prevent unauthorized signing operations, with all requests including hardware quotes and event logs when attestation is enabled. This ensures that every certificate issued is cryptographically bound to execution environment measurements, creating an audit trail that can be independently verified.
+
+## Verification Pipeline and Application Identity
+
+The attestation verification pipeline implements multi-stage validation including quote parsing, collateral verification through PCCS, and RTMR consistency checking. Report data validation ensures that certificate public keys match attested measurements, effectively preventing key substitution attacks and maintaining the integrity of the entire certificate issuance process.
+
+The system extracts comprehensive application metadata from event logs, including application identifiers, compose file hashes, and instance identifiers. This capability enables sophisticated policy enforcement based on application identity and deployment configuration, allowing organizations to implement fine-grained access controls and compliance requirements.
+
+## Security Properties and Compliance
+
+The implementation adheres to X.509 certificate standards while extending functionality through custom OIDs registered under the enterprise namespace. The system maintains backward compatibility through conditional feature inclusion and graceful degradation for non-TEE environments, ensuring broad applicability while preserving security benefits where hardware support is available.
+
+Certificate configuration supports comprehensive usage restrictions including server authentication, client authentication, and extended key usage purposes. Subject alternative names and organizational constraints provide additional policy enforcement mechanisms, while flexible trust store configuration supports both built-in root certificate support and custom CA certificate injection for air-gapped deployments.
+
+The cert-client security model fundamentally depends on underlying TDX hardware security guarantees and PCCS infrastructure reliability. All cryptographic operations rely on hardware random number generation and secure key storage within the TEE environment, with the attestation verification pipeline requiring network connectivity for quote validation, which may impact certain deployment scenarios but ensures comprehensive security validation.

@@ -1,0 +1,80 @@
+---
+title: "Security Modules"
+description: "Summary and navigation for supplementary security modules in dstack"
+---
+
+# Before You Continue: Prerequisite Reading & Navigation Guide
+
+<div style={{ border: "1px solid #f59e42", background: "#fff7ed", borderRadius: "8px", padding: "1.5rem", marginBottom: "2rem", display: "flex", flexDirection: "column", gap: "1.2rem" }}>
+  <div style={{ fontWeight: 600, color: "#b45309", fontSize: "1.1rem", marginBottom: "0.5rem" }}>
+    ⚠️ before reading this section, make sure you have covered the following foundational topics:
+  </div>
+  <div style={{ display: "flex", flexWrap: "wrap", gap: "1.2rem" }}>
+    <a href="/docs/security-research/security-model" style={{ flex: "1 1 260px", border: "1px solid #eab308", borderRadius: "7px", padding: "1rem", background: "#fefce8", textDecoration: "none", color: "#92400e" }}>
+      <b>Security Model Overview</b>
+      <div style={{ marginTop: "0.4rem", color: "#a16207" }}>
+        start here to understand dstack's overall security model and threat landscape
+      </div>
+    </a>
+    <a href="/docs/concepts/overview" style={{ flex: "1 1 260px", border: "1px solid #eab308", borderRadius: "7px", padding: "1rem", background: "#fefce8", textDecoration: "none", color: "#92400e" }}>
+      <b>Core Components</b>
+      <div style={{ marginTop: "0.4rem", color: "#a16207" }}>
+        review the main architectural components before diving into supplementary modules
+      </div>
+    </a>
+    <a href="/docs/overview/key-features" style={{ flex: "1 1 260px", border: "1px solid #eab308", borderRadius: "7px", padding: "1rem", background: "#fefce8", textDecoration: "none", color: "#92400e" }}>
+      <b>Key Features</b>
+      <div style={{ marginTop: "0.4rem", color: "#a16207" }}>
+        revisit the key features to understand how the platform behaves overall
+      </div>
+    </a>
+    <a href="/docs/security-research/overview" style={{ flex: "1 1 260px", border: "1px solid #eab308", borderRadius: "7px", padding: "1rem", background: "#fefce8", textDecoration: "none", color: "#92400e" }}>
+      <b>Main Security Systems</b>
+      <div style={{ marginTop: "0.4rem", color: "#a16207" }}>
+        read about the main systems (tdx attestation, vmm, gateway, kms) before exploring utilities
+      </div>
+    </a>
+  </div>
+  <div style={{ marginTop: "1rem", color: "#92400e", fontSize: "1rem" }}>
+    <b>note:</b> the sections below focus on supplementary and utility modules (such as certbot, ct monitor, iohash, and host api security). these are not required reading for understanding the core dstack platform, but are valuable for deep research or if you need to understand the full security landscape. if you are new to dstack or have not yet reviewed the main systems, we recommend starting with the links above.
+  </div>
+</div>
+
+# Overview: Supplementary Security Modules in dstack
+
+This section provides analysis of the supplementary security modules that enhance dstack's TEE (Trusted Execution Environment) infrastructure. These modules—**Certbot TEE Security**, **Certificate Transparency Monitor**, **Host API Security**, and **IOHash Security**—work together to provide comprehensive security coverage across certificate management, monitoring, host operations, and cryptographic verification.
+
+Each module addresses a specific security domain while integrating with dstack's core TEE architecture to provide layered protection and verification capabilities throughout the platform.
+
+<div style={{ display: "flex", flexWrap: "wrap", gap: "1.5rem", marginTop: "2rem" }}>
+  <a href="/docs/security-research/extra-sec-ops/certbot-security" style={{ flex: "1 1 300px", border: "1px solid #eaeaea", borderRadius: "8px", padding: "1.5rem", textDecoration: "none", color: "inherit", background: "#fafbfc" }}>
+    <b>Certbot TEE Security</b>
+    <div style={{ marginTop: "0.5rem", color: "#555" }}>
+      hardware-backed certificate management with TEE-integrated ACME protocol and attestation-bound certificate generation
+    </div>
+  </a>
+  <a href="/docs/security-research/extra-sec-ops/cert-client-security" style={{ flex: "1 1 300px", border: "1px solid #eaeaea", borderRadius: "8px", padding: "1.5rem", textDecoration: "none", color: "inherit", background: "#fafbfc" }}>
+    <b>Certificate Client Security</b>
+    <div style={{ marginTop: "0.5rem", color: "#555" }}>
+      client-side certificate operations with comprehensive hardware attestation integration and TDX quote verification
+    </div>
+  </a>
+  <a href="/docs/security-research/extra-sec-ops/ct-monitor-security" style={{ flex: "1 1 300px", border: "1px solid #eaeaea", borderRadius: "8px", padding: "1.5rem", textDecoration: "none", color: "inherit", background: "#fafbfc" }}>
+    <b>CT Monitor Security</b>
+    <div style={{ marginTop: "0.5rem", color: "#555" }}>
+      continuous certificate transparency monitoring with real-time detection of unauthorized certificate issuance
+    </div>
+  </a>
+  <a href="/docs/security-research/extra-sec-ops/iohash-security" style={{ flex: "1 1 300px", border: "1px solid #eaeaea", borderRadius: "8px", padding: "1.5rem", textDecoration: "none", color: "inherit", background: "#fafbfc" }}>
+    <b>IOHash Security Architecture</b>
+    <div style={{ marginTop: "0.5rem", color: "#555" }}>
+      cryptographic hashing utility for content-addressed storage and integrity verification within TEE environments
+    </div>
+  </a>
+  <a href="/docs/security-research/extra-sec-ops/host-api-security" style={{ flex: "1 1 300px", border: "1px solid #eaeaea", borderRadius: "8px", padding: "1.5rem", textDecoration: "none", color: "inherit", background: "#fafbfc" }}>
+    <b>Host API Security</b>
+    <div style={{ marginTop: "0.5rem", color: "#555" }}>
+      foundational security interface for TEE host management with hardware-backed attestation and key provisioning
+    </div>
+  </a>
+</div>

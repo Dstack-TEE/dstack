@@ -1,0 +1,33 @@
+---
+title: "Step 3: Deploy the KmsAuth Contract"
+description: "Deploy the KmsAuth Contract"
+---
+
+<div className="bg-white border border-gray-200 rounded-lg p-6 my-6">
+  <div className="bg-yellow-50 border-l-4 border-yellow-400 p-4 mb-4">
+    <p className="text-sm text-yellow-700">
+      A KMS node requires a KMSAuth contract to be deployed on the Ethereum-compatible network.
+    </p>
+  </div>
+
+```bash
+cd dstack/kms/auth-eth
+npm install
+npx hardhat compile
+PRIVATE_KEY=<your-private-key> npx hardhat kms:deploy --network phala
+```
+
+<div className="mt-4">
+  <h4 className="font-medium mb-2">Expected Output:</h4>
+  <div className="bg-gray-100 p-3 rounded text-sm">
+    <pre>
+Deploying proxy...
+Waiting for deployment...
+KmsAuth Proxy deployed to: 0xFE6C45aE66344CAEF5E5D7e2cbD476286D651875
+Implementation deployed to: 0x5FbDB2315678afecb367f032d93F642f64180aa3
+Deployment completed successfully
+Transaction hash: 0xd413d01a0640b6193048b0e98afb7c173abe58c74d9cf01f368166bc53f4fefe
+    </pre>
+  </div>
+</div>
+</div>

@@ -1,0 +1,26 @@
+---
+title: "TDX Measurement and Attestation in VMM"
+description: "How dStack VMM builds and verifies a chain of trust using Intel TDX measurement and attestation."
+---
+
+## TDX Measurement and Attestation Framework
+
+Establishing trust in confidential computing begins with measurement and attestation. In dStack, the VMM leverages Intel TDX to create a tamper-evident chain of trust, ensuring that every stage of the VM's lifecycle is cryptographically measured and verifiable. This process is the bedrock of secure workload execution: only when the entire stack—from firmware to application—matches expected, untampered states, are cryptographic keys and secrets provisioned.
+
+### Why Measurement and Attestation Matter
+
+Without robust measurement and attestation, there is no way to guarantee that a confidential VM is running on genuine hardware or that its software stack has not been compromised. Intel TDX provides the hardware primitives to measure each boot and runtime stage, while dStack VMM orchestrates the attestation workflow, binding these measurements to cryptographic evidence that can be validated by external verifiers and policy engines.
+
+### 1. Building the Measurement Chain
+- **MRTD (Measurement Register for Trust Domain):** The anchor of trust, recording a digest of the TDX firmware (TDVF) to ensure a secure foundation.
+- **RTMR0 (Firmware & Launch Environment):** Captures post-boot firmware and microcode, preventing unauthorized modifications.
+- **RTMR1 (Bootloader & Kernel):** Measures the bootloader and Linux kernel, blocking rootkits and unauthorized kernel changes.
+- **RTMR2 (Initial Userspace & Drivers):** Hashes early userspace and drivers, ensuring only audited components are loaded.
+- **RTMR3 (Application Manifests & Runtime Libraries):** Extends trust to application code, container images, and dynamic libraries.
+
+### 2. Verifying the Chain via Remote Attestation
+1. **Quote Generation:** The VMM requests a TDX quote, bundling current RTMR values with a CPU-signed attestation.
+2. **Quote Validation:** An external verifier checks RTMR0–RTMR2 against known-good values and replays RTMR3 events to confirm application integrity.
+3. **Trust Decision:** Only if all measurements match does the verifier authorize key release, ensuring workloads run on a pristine, hardware-backed root of trust.
+
+> Measurement and attestation are the foundation of dStack's security model. The next section explores how the VMM provisions keys and certificates based on these trusted measurements.

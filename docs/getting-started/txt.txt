@@ -1,0 +1,59 @@
+## 🚦 Launch dstack Infrastructure
+
+> **warning:** run each step below in a separate terminal window, in order.
+
+<div className="flex flex-col gap-3">
+
+  {/* Step 1: Connect to Remote Machine */}
+  <div className="rounded border border-gray-300 p-4 flex flex-col space-y-2 w-full max-w-2xl mx-auto">
+    <div className="flex items-center gap-2 mb-1">
+      <span className="inline-flex items-center justify-center w-7 h-7 rounded-full border border-gray-400 text-gray-800 font-bold text-base bg-white">1</span>
+      <h3 className="font-semibold text-gray-900 text-base tracking-tight">Connect to your dstack host</h3>
+    </div>
+    <CodeBlock language="bash">
+      ssh &lt;user&gt;@&lt;host&gt;
+    </CodeBlock>
+    <p className="text-sm text-gray-700">Open a terminal and SSH into your remote dstack host.</p>
+  </div>
+
+  {/* Step 2: Start Key Management Service */}
+  <div className="rounded border border-gray-300 p-4 flex flex-col space-y-2 w-full max-w-2xl mx-auto">
+    <div className="flex items-center gap-2 mb-1">
+      <span className="inline-flex items-center justify-center w-7 h-7 rounded-full border border-gray-400 text-gray-800 font-bold text-base bg-white">2</span>
+      <h3 className="font-semibold text-gray-900 text-base tracking-tight">Start key management service (KMS)</h3>
+    </div>
+    <CodeBlock language="bash">
+      cd meta-dstack/
+      cd build/
+      ./dstack-kms -c kms.toml
+    </CodeBlock>
+    <p className="text-sm text-gray-700">In a new terminal, start the KMS service for secure key management.</p>
+  </div>
+
+  {/* Step 3: Start Gateway Service */}
+  <div className="rounded border border-gray-300 p-4 flex flex-col space-y-2 w-full max-w-2xl mx-auto">
+    <div className="flex items-center gap-2 mb-1">
+      <span className="inline-flex items-center justify-center w-7 h-7 rounded-full border border-gray-400 text-gray-800 font-bold text-base bg-white">3</span>
+      <h3 className="font-semibold text-gray-900 text-base tracking-tight">Start gateway service</h3>
+    </div>
+    <CodeBlock language="bash">
+      cd meta-dstack/
+      cd build/
+      sudo ./dstack-gateway -c gateway.toml
+    </CodeBlock>
+    <p className="text-sm text-gray-700">In another terminal, start the gateway service to handle network routing.</p>
+  </div>
+
+  {/* Step 4: Start Virtual Machine Manager */}
+  <div className="rounded border border-gray-300 p-4 flex flex-col space-y-2 w-full max-w-2xl mx-auto">
+    <div className="flex items-center gap-2 mb-1">
+      <span className="inline-flex items-center justify-center w-7 h-7 rounded-full border border-gray-400 text-gray-800 font-bold text-base bg-white">4</span>
+      <h3 className="font-semibold text-gray-900 text-base tracking-tight">Start virtual machine manager (VMM)</h3>
+    </div>
+    <CodeBlock language="bash">
+      cd meta-dstack/
+      cd build/
+      ./dstack-vmm -c vmm.toml
+    </CodeBlock>
+    <p className="text-sm text-gray-700">In a separate terminal, launch the VMM service to manage your CVMs.</p>
+  </div>

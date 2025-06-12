@@ -1,0 +1,44 @@
+---
+title: "Certbot TEE Security"
+description: "Analysis of automated certificate management and ACME protocol implementation in dstack TEE"
+---
+
+# Certbot TEE Security
+
+The Certbot integration within dstack represents a fundamental shift from traditional certificate management to hardware-backed, attestation-bound certificate generation. This system replaces standard cryptographic operations with TEE-derived security mechanisms, creating certificates that provide cryptographic proof of their generation within trusted execution environments.
+
+## Hardware-Sealed Certificate Management
+
+Rather than using conventional key generation methods, the TEE-integrated Certbot leverages dstack's key derivation framework to create ECDSA key pairs from TEE-sealed master keys. This approach ensures that private keys are intrinsically bound to the specific TEE environment and application state through measurement-based context data that incorporates TDX Runtime Measurement Register (RTMR) values and application-specific identifiers.
+
+The security model fundamentally changes how we think about certificate trust. Instead of relying solely on certificate authority validation, these certificates carry embedded proof of their creation within verified hardware environments, enabling new levels of assurance for SSL/TLS communications.
+
+## Attestation-Bound Certificate Generation
+
+Each certificate generated through this system embeds TDX attestation quotes as custom X.509 extensions, following established attestation patterns within dstack's security architecture. The quote generation process creates attestation data containing the certificate's public key hash, establishing a cryptographic binding between the certificate and the current TEE state.
+
+This integration utilizes the guest agent's RPC interface to generate attestation quotes with certificate public keys as report data. The resulting certificates don't just authenticate identity—they prove the integrity and trustworthiness of the environment that created them.
+
+## Enclave-Resident Operations
+
+All certificate operations occur entirely within the TEE boundary using the guest agent's key derivation services. Private keys never exist in plaintext outside the secure enclave, with all signing operations happening within the protected environment. This architectural decision ensures that even if the host system is compromised, the certificate private keys remain protected by hardware security guarantees.
+
+The system builds upon existing TLS key generation services to create attestation-enabled certificates directly within the TEE environment, maintaining the security properties that make confidential computing valuable.
+
+## Enhanced ACME Protocol Integration
+
+The ACME client implementation includes attestation proofs in certificate requests, potentially through new challenge types or additional metadata embedded in the standard ACME flow. The existing DNS-01 challenge process can be enhanced to include TEE attestation validation by certificate authorities that support this verification model.
+
+Key renewal operations maintain TEE binding by deriving new keys from the same master key material while updating embedded attestation quotes to reflect current TEE state. This ensures that certificate lifecycle management preserves the security properties established during initial generation.
+
+## Security Guarantees and Trust Model
+
+This architecture provides several critical security guarantees that extend beyond traditional certificate management. Hardware-backed key security ensures that private keys are derived from and sealed to TEE measurements, making them accessible only within verified environments. Attestation-bound certificates provide cryptographic proof of their origin within verified TEE instances, while measurement-based validation enables end-to-end verification from hardware through application layers.
+
+The system creates tamper-evident operations through event log records of all certificate lifecycle events, stored in RTMR3 to provide cryptographic proof within the attestation chain. This comprehensive approach enables zero-trust verification where certificates include all necessary attestation data for independent verification by relying parties.
+
+## Integration with dstack's Security Infrastructure
+
+The TEE-integrated Certbot leverages dstack's existing security infrastructure, requiring minimal changes to core attestation and key derivation systems. This design maintains compatibility with standard ACME protocols while adding TEE-specific security enhancements, ensuring that certificates issued through this system enable new use cases for high-assurance SSL/TLS certificates in confidential computing environments.
+
+The integration demonstrates how traditional internet security protocols can be enhanced with hardware-backed security guarantees, creating a new class of certificates that provide both identity authentication and execution environment verification.

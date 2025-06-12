@@ -1,0 +1,36 @@
+---
+title: "Understanding the DStack Deployment UI Guide"
+description: "Complete guide to deploying containerized applications to dstack with step-by-step instructions"
+---
+> We've come a long way from the first steps of installing dstack. Now, let's deploy your first application.
+
+> If you already have access to a dstack host (for example, someone else has installed and set up the hardware and dstack runtime for you), you can deploy your application directly to their dstack instance.  
+>  
+> If you need to review or complete the installation and setup steps for your own dstack host, go back to the previous section: [Step 4 – Install dstack Runtime](/docs/getting-started/install/step-4-install-dstack-runtime). That section covers the full dstack installation and build process before you reach this deployment guide.
+
+## 4 – Deploying Your First Application: Step-by-Step
+
+Follow these clear steps to deploy your first application using the dstack UI. Each phase is illustrated with a screenshot and a brief explanation.
+
+| Step                   | What to Do & What You’ll See |
+|------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| **1. Configure Container**      | ![](/docs/getting-started/first-deployment-steps/step-install-guide/step13.png)<br/>Select the container image you want to deploy and specify which ports should be exposed. |
+| **2. Set Basic Settings**       | ![](/docs/getting-started/first-deployment-steps/step-install-guide/step14.png)<br/>Enter a name for your application and choose the deployment type (e.g., web service, job, etc.). |
+| **3. Secure Environment**       | ![](/docs/getting-started/first-deployment-steps/step-install-guide/step15.png)<br/>Add any environment variables your app needs. Mark sensitive variables to encrypt them for extra security. |
+| **4. Review Variables**         | ![](/docs/getting-started/first-deployment-steps/step-install-guide/step16.png)<br/>Double-check all environment variables and settings. Make sure everything is correct before proceeding. |
+| **5. Launch Application**       | ![](/docs/getting-started/first-deployment-steps/step-install-guide/step17.png)<br/>Click to deploy your application. dstack will start the deployment process on the infrastructure. |
+| **6. Check Deployment Status**  | ![](/docs/getting-started/first-deployment-steps/step-install-guide/step18.png)<br/>Once deployed, your application will appear in the deployment list. You can monitor its status here. |
+
+---
+
+## 5 – Verify & Explore
+
+After deploying your application, follow these steps to make sure everything is working as expected:
+
+| What to Check      | What to Do & What You’ll See |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **VMM Status**     | ![](/docs/getting-started/first-deployment-steps/step-install-guide/step23.png)<br/>Open the VMM dashboard to confirm your application appears in the list and is marked as running. [See example screenshot](/docs/getting-started/first-deployment-steps/step-install-guide/step23.png). |
+| **System Logs**    | ![](/docs/getting-started/first-deployment-steps/step-install-guide/step24.png)<br/>Check the system and application logs for any errors or warnings. This helps you verify that the node and your app started up correctly. [See example screenshot](/docs/getting-started/first-deployment-steps/step-install-guide/step24.png). |
+| **Live Monitoring**| ![](/docs/getting-started/first-deployment-steps/step-install-guide/step25.logs.png)<br/>Use the live log viewer to watch your application’s output in real time. This is useful for troubleshooting and confirming your app is running as expected. [See example screenshot](/docs/getting-started/first-deployment-steps/step-install-guide/step25.logs.png). |
+| **Access Check**   | ![](/docs/getting-started/first-deployment-steps/step-install-guide/step26.png)<br/>Test your application’s endpoint (such as a web URL or API) to make sure it is accessible from your browser or API client. [See example screenshot](/docs/getting-started/first-deployment-steps/step-install-guide/step26.png). |
+| **Final Validation** | ![](/docs/getting-started/first-deployment-steps/step-install-guide/step28.png)<br/>Your application is now fully deployed and running on dstack. For reference, here’s a live example: [see deployed app](https://13bed0f2e9d7529a6eba06f0ebff51c8e23953c2-3000.dstack-prod6.phala.network/). Visit your own app’s endpoint or UI to confirm it loads and works as expected. If you can see and interact with your app, your deployment is complete and your app is running securely on a confidential VM. |

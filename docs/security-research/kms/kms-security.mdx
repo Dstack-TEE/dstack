@@ -1,0 +1,72 @@
+---
+title: "KMS Security: Performance, Best Practices, and Threat Model"
+description: "Comprehensive overview of dStack KMS security posture, operational best practices, and threat model."
+---
+
+## KMS Security: Performance, Best Practices, and Threat Model
+
+dStack KMS is designed to deliver strong security guarantees while maintaining high performance and scalability. This section provides a comprehensive overview of the system's security posture, operational best practices, and the threat model it addresses.
+
+---
+
+### Cryptographic Performance and Scalability
+
+dStack KMS leverages HKDF-SHA256 for key derivation, which is highly efficient and introduces minimal computational overhead. The architecture is optimized for concurrent and parallel key operations, ensuring that cryptographic guarantees are never compromised even under high load.
+
+To support large-scale deployments, KMS enables secure self-replication. New nodes can join the cluster by securely obtaining root keys from attested peers over authenticated channels ([see kms self-replication documentation](https://github.com/Dstack-TEE/dstack/blob/45ebd05a/kms/README.md#kms-self-replication)). This approach allows for horizontal scaling while preserving the integrity of attestation-based trust across all nodes.
+
+---
+
+### Security Best Practices
+
+**Key Usage:**  
+Applications should always request only the minimum set of keys required for their operation, following the principle of least privilege. Each derived key is purpose-scoped and must be used strictly for its intended cryptographic function. Regular key rotation is recommended to minimize risk.
+
+**Attestation Policy Management:**  
+Organizations are encouraged to define and enforce strict policies specifying allowed measurements, TCB (Trusted Computing Base) versions, and configuration parameters. These policies should be reviewed and updated regularly to adapt to evolving threats and maintain system robustness.
+
+**Monitoring and Auditing:**  
+dStack KMS logs all key derivation, attestation, and authorization events. Continuous monitoring of these logs is essential for detecting anomalous access patterns or policy violations, enabling rapid response to potential security incidents.
+
+---
+
+### Integration and Application Security
+
+**Application Integration:**  
+For every trust relationship, applications must validate both the certificate chain and the attestation evidence provided by the KMS ([see KMS documentation: attestation](https://github.com/Dstack-TEE/dstack/blob/45ebd05a/kms/README.md#attestation)). Signature chains should be verified end-to-end, from the message itself to the registered KMS root key, to ensure authenticity and integrity.
+
+**Network Security:**  
+All communications with the KMS are protected by RA-TLS channels with mutual attestation. This ensures that only trusted endpoints are able to exchange key material, preventing unauthorized access and man-in-the-middle attacks.
+
+---
+
+### Threat Model and Security Boundaries
+
+dStack KMS is engineered to withstand a wide range of adversarial scenarios. The threat model assumes that attackers may gain control over hosts, networks, or other infrastructure components. However, the security of the system relies on the integrity of the TEE hardware, the attestation infrastructure, and the correct configuration of smart contracts.
+
+The system is specifically designed to:
+
+- Prevent unauthorized key access, even in the presence of compromised infrastructure
+- Block attestation forgery and policy bypass attempts
+- Ensure that only workloads with valid, hardware-backed attestation can access cryptographic material
+
+These guarantees hold as long as the underlying hardware and attestation mechanisms remain trustworthy and are properly configured.
+
+---
+
+## DStack KMS References
+**dstack code reference:**
+- [ra-tls key derivation](https://github.com/Dstack-TEE/dstack/blob/45ebd05a/ra-tls/src/kdf.rs)
+- [ra-tls attestation verification](https://github.com/Dstack-TEE/dstack/blob/45ebd05a/ra-tls/src/attestation.rs)
+- [ra-tls certificate management](https://github.com/Dstack-TEE/dstack/blob/45ebd05a/ra-tls/src/cert.rs)
+
+## Public References
+* [KMS authorization details](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/kms/src/main_service.rs#L407)
+* [NIST SP 800-56C Rev. 2](https://csrc.nist.gov/publications/detail/sp/800-56c/rev-2/final)
+* ["Recommendation for Key Derivation Using Pseudorandom Functions"](https://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-108r1.pdf)
+
+<div className="mt-8 p-4 bg-purple-50 rounded-lg border border-purple-200">
+  <p className="text-sm text-purple-800">
+    <strong>Next Component:</strong> See how derived keys protect traffic in the <a href="/docs/security-research/gateway-security" className="underline">Gateway security architecture</a>.
+  </p>
+</div>

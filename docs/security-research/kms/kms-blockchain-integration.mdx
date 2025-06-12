@@ -1,0 +1,27 @@
+---
+title: "KMS Blockchain Integration"
+description: "How dStack KMS leverages blockchain for decentralized authorization and policy enforcement."
+---
+
+## Blockchain Integration
+
+Blockchain integration is a defining feature of dStack KMS, enabling decentralized, transparent, and tamper-evident authorization for key management. By leveraging Ethereum-compatible smart contracts, dStack KMS enforces application-specific access controls, device restrictions, and upgrade policies directly on-chain. This approach provides a level of auditability and policy assurance that is unmatched by traditional KMS solutions.
+
+### Decentralized Authorization
+
+dStack KMS integrates with Ethereum-compatible blockchains for decentralized authorization. The [AppAuth contract](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/kms/auth-eth/contracts/AppAuth.sol#L9) enforces application-specific access controls—validating allowed compose hashes, device restrictions, and upgrade policies. The KmsAuth contract maintains registries for allowed KMS instances, OS images, and configurations, supporting transparent, auditable policy enforcement.
+
+Authorization logic is enforced directly in the smart contract ([AppAuth.sol#L110](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/kms/auth-eth/contracts/AppAuth.sol#L110)): application identity, compose hash, and device restrictions are all checked on-chain before key access is permitted. Owners can permanently disable upgrades for greater assurance.
+
+### Attestation Verification Pipeline
+
+Key provisioning is controlled by a strict attestation pipeline ([main_service.rs#L407](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/kms/src/main_service.rs#L407)), which verifies:
+
+* TDX quote signature and measurement extraction
+* Validation of all runtime measurements (MRTD, RTMR0–RTMR3), application metadata, and device IDs
+* Integrity and authenticity of the VM configuration and OS image hash
+* Aggregation of all attestation and config data into a `boot_info` structure
+* Blockchain authorization via Auth smart contract
+* Immediate denial and abort if any requirement fails
+
+> Blockchain integration in dStack KMS is not just a feature—it's a foundation for decentralized, transparent, and policy-driven security. The next section explores the security architecture that underpins these guarantees.

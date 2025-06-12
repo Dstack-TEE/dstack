@@ -1,0 +1,26 @@
+---
+title: "Supervisor API"
+description: "Process management endpoints for controlling services within dstack CVMs."
+---
+
+[← Back to API Reference Overview](./overview)
+
+# Supervisor API
+
+The Supervisor API manages processes inside dstack CVMs.
+
+## Endpoints
+
+- `POST /deploy` — Deploy a new process
+- `POST /start/<id>` — Start a process
+- `POST /stop/<id>` — Stop a process
+- `DELETE /remove/<id>` — Remove a process
+- `GET /list` — List all processes
+- `GET /info/<id>` — Get process information
+- `GET /ping` — Health check
+
+Each endpoint returns status and error information in a consistent format.
+
+---
+
+See the [API Reference Overview](./overview) for more sections. 

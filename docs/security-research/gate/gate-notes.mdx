@@ -1,0 +1,36 @@
+---
+title: "Gateway Cryptographic Implementation and Security Notes"
+description: "Comprehensive notes on cryptographic security implementation, TLS configuration, and security architecture principles in dstack gateway"
+---
+
+# Gateway Cryptographic Implementation and Security Notes
+
+The cryptographic foundation of dstack's gateway represents the culmination of modern secure communication protocols, specifically adapted for the unique requirements of confidential computing environments. Unlike traditional network security implementations that focus primarily on protecting data in transit, confidential computing gateways must also verify the integrity and authenticity of the computing environments themselves, creating a multi-layered security architecture that extends trust verification from the network layer down to the hardware level.
+
+dstack's cryptographic implementation is built around the principle of defense in depth, where multiple independent security mechanisms work together to provide comprehensive protection. This approach recognizes that confidential computing environments face threats not just from network attackers, but also from potentially compromised hosts, malicious hypervisors, and sophisticated supply chain attacks. By implementing multiple overlapping security controls, the system can maintain security even if individual components are compromised.
+
+The choice of cryptographic primitives and protocols in dstack reflects careful consideration of both current security requirements and future threat models. The implementation prioritizes algorithms and approaches that have been thoroughly analyzed by the cryptographic community, while also ensuring compatibility with hardware security features like Intel TDX and other trusted execution environments.
+
+## Cryptographic Security Implementation
+
+### TLS Configuration and Crypto Providers
+
+The gateway uses rustls with the ring cryptographic provider for all TLS operations. This choice represents a deliberate move away from OpenSSL toward more modern, memory-safe cryptographic implementations that are less susceptible to the buffer overflow and memory corruption vulnerabilities that have historically plagued TLS implementations. The ring cryptographic provider offers high-performance, constant-time implementations of cryptographic primitives, reducing the risk of timing-based side-channel attacks.
+
+Certificate generation leverages RA-TLS capabilities when running in TEE environments, with fallback to KMS-based certificate authority for self-signed certificates. RA-TLS (Remote Attestation Transport Layer Security) represents a significant advancement in certificate-based authentication, allowing certificates to embed cryptographic attestation evidence directly in their structure. This creates a unified authentication mechanism where traditional X.509 certificate verification is enhanced with hardware-backed attestation validation.
+
+### Proxy Security Architecture
+
+The gateway implements both TLS termination and TLS passthrough modes based on SNI analysis. This flexibility allows the system to adapt to different security requirements - TLS termination enables deep packet inspection and application-layer security controls, while TLS passthrough preserves end-to-end encryption when required by compliance or security policies.
+
+Connection handling includes comprehensive timeout management and secure connection lifecycle management. These mechanisms protect against resource exhaustion attacks, connection hijacking attempts, and other network-based attacks that could compromise the availability or security of the gateway service.
+
+## Notes
+
+This document covers the security architecture of the dstack gateway, which serves as the entry point for external traffic to applications running in Confidential Virtual Machines. The gateway provides comprehensive security through automated certificate management, secure cluster communication, remote attestation verification, and intelligent load balancing. The implementation uses industry-standard protocols like ACME, WireGuard, and mutual TLS authentication to ensure secure communication throughout the system.
+
+The configuration parameters mentioned in this document can be customized through the gateway configuration file, allowing operators to tune the security and performance characteristics according to their specific deployment requirements. This configurability is essential for adapting the gateway to different threat models, compliance requirements, and operational constraints while maintaining the core security guarantees that make confidential computing possible.
+
+The security model is built on the principle of zero trust, where every component must be authenticated and authorized before being granted access to the network. Remote attestation ensures that only genuine TEE instances can register with the gateway, while Certificate Transparency monitoring provides ongoing security assurance against certificate-based attacks. This comprehensive approach to security creates multiple opportunities to detect and prevent attacks while maintaining the usability and performance characteristics required for production deployments.
+
+The dstack gateway's security architecture represents a significant advancement in confidential computing infrastructure, providing the robust security guarantees needed for sensitive workloads while maintaining the operational simplicity required for widespread adoption. As confidential computing continues to evolve, the gateway's modular architecture and comprehensive security controls provide a solid foundation for addressing emerging threats and requirements.

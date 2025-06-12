@@ -1,0 +1,27 @@
+---
+title: "KMS Certificate Management and RA-TLS"
+description: "How dStack KMS uses RA-TLS and custom X.509 extensions to embed attestation and enforce certificate trust."
+---
+
+## Certificate Management and RA-TLS
+
+Certificate management is a cornerstone of secure communication in dStack. The KMS implements Remote Attestation TLS (RA-TLS), embedding TDX quotes, event logs, application IDs, and usage policy as custom X.509 extensions. This approach ensures that every certificate is not only cryptographically valid, but also cryptographically bound to the attested state of the workload.
+
+### RA-TLS Implementation
+
+dStack KMS implements **Remote Attestation TLS (RA-TLS)** by embedding TDX quotes, event logs, application IDs, and usage policy as custom X.509 extensions ([cert.rs#L227](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/ra-tls/src/cert.rs#L227)). Custom OIDs and DER encoding enable cryptographic validation of both certificate authenticity and the underlying TEE state.
+
+Certificate signing requests include full attestation data, and only validated requests can obtain certificates ([ra-tls/src/cert.rs](https://github.com/Dstack-TEE/dstack/blob/45ebd05a/ra-tls/src/cert.rs)). This guarantees that only fully attested workloads are eligible for trusted certificates.
+
+### Custom OID Extensions
+
+Special Object Identifiers (OIDs) embed security-critical data in X.509 certificates ([ra-tls/src/oids.rs](https://github.com/Dstack-TEE/dstack/blob/45ebd05a/ra-tls/src/oids.rs)):
+
+* Quote data: `1.3.6.1.4.1.62397.1.1`
+* Event logs: `1.3.6.1.4.1.62397.1.2`
+* Application IDs: `1.3.6.1.4.1.62397.1.3`
+* Certificate usage: `1.3.6.1.4.1.62397.1.4`
+
+These custom extensions allow any relying party to verify not only certificate validity, but also the full hardware-backed attestation state of the workload.
+
+> Certificate management in dStack KMS is inseparable from attestation. The next section explores the cryptographic implementation details that underpin this trust model.
