@@ -6,3 +6,6 @@ generated/
 node_modules/
 /.cargo
 .venv
+# macOS system files
+.DS_Store
+**/.DS_Store
