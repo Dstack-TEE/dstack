@@ -536,7 +536,8 @@ fn extract_subject_alt_names(cert_pem: &str) -> Result<Vec<String>> {
 }
 
 fn ln_force(src: impl AsRef<Path>, dst: impl AsRef<Path>) -> Result<()> {
-    if dst.as_ref().exists() {
+    // Check if the symlink exists without following it
+    if dst.as_ref().symlink_metadata().is_ok() {
         fs::remove_file(dst.as_ref())?;
     } else if let Some(dst_parent) = dst.as_ref().parent() {
         fs::create_dir_all(dst_parent)?;
