@@ -1,0 +1,18 @@
+---
+title: "KMS Verification and Audit Procedures"
+description: "How dStack KMS enables independent auditing, measurement validation, and cryptographic assurance."
+---
+
+## Verification and Audit Procedures
+
+Verification and audit are essential for maintaining trust in any key management system. dStack KMS is designed to be fully auditable, allowing security professionals and external parties to independently verify every step of the attestation and key derivation process. This section details how auditors can review attestation logic, validate measurements, and ensure that cryptographic operations are both correct and compliant.
+
+### Security Auditing
+
+Security auditors are encouraged to review the entire attestation and key derivation logic, including TDX quote validation, measurement whitelists, and event log replay ([attestation.rs#L422](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/ra-tls/src/attestation.rs#L422)). This ensures RTMR values genuinely reflect the execution path. Deterministic key derivation enables repeated audits and comparison of outputs with known inputs.
+
+### Measurement Validation
+
+Verification requires validation of five categories: MRTD (firmware), RTMR0 (hardware config), RTMR1 (kernel), RTMR2 (boot params), RTMR3 (application). The [attestation documentation](https://github.com/Dstack-TEE/dstack/blob/45ebd05a/attestation.md#22-determining-expected-mrs) details expected values and verification steps. Building the OS image from source and using dstack-mr to calculate measurements allows independent validation.
+
+> Auditability is a core value of dStack KMS. The next section explores how blockchain integration provides decentralized, transparent authorization and policy enforcement.

@@ -1,0 +1,140 @@
+---
+title: "Getting Started Now"
+description: "this is how you and a remote host can quickly deploy apps to dstack"
+---
+# Quick Start: Jupyter Notebook on dstack
+
+This is an exact guide on deploying a Jupyter Notebook on dstack where step by step we install, build and run the dstack straight from our local host, 
+and then we will be able to access our own TDX VM with Jupyter Notebook running on it.
+
+
+<div style={{ width: '100%', display: 'flex', justifyContent: 'center', margin: '2rem 0' }}>
+  <img 
+    src="/docs/images/note-book-pro.png" 
+    alt="Jupyter Notebook Quick Start Banner" 
+    style={{ maxWidth: '100%', height: 'auto', borderRadius: '12px', boxShadow: '0 2px 12px rgba(0,0,0,0.07)' }} 
+  />
+</div>
+
+
+---
+
+
+{/* Step 1: Open Tunnel and Access Dashboard */}
+<div className="rounded border border-gray-300 p-4 flex flex-col space-y-3 w-full max-w-2xl mx-auto">
+  <div className="flex items-center gap-2 mb-1">
+    <span className="inline-flex items-center justify-center w-7 h-7 rounded-full border border-gray-400 text-gray-800 font-bold text-base bg-white">1</span>
+    <h3 className="font-semibold text-gray-900 text-base tracking-tight">Open tunnel &amp; access dashboard</h3>
+  </div>
+  <CodeBlock language="bash">
+    {`ssh -L13680:localhost:13680 <user>@<host>`}
+  </CodeBlock>
+  <div className="text-xs text-gray-600">
+    this command lets you access the dstack dashboard running on your remote host.
+  </div>
+  <div className="flex flex-col space-y-0.5">
+    <span className="text-xs text-gray-600">open in your browser:</span>
+    <a href="http://127.0.0.1:13680/" className="text-gray-800 underline font-medium">http://127.0.0.1:13680</a>
+  </div>
+  <div className="flex flex-col space-y-1 mt-2">
+    <span className="text-xs text-gray-600">click <strong>"Deploy a new instance"</strong> to start your first container:</span>
+    <img src="/docs/images/deploy-instance.png" alt="deploy a new instance" className="rounded border border-gray-200 max-w-xs shadow" />
+  </div>
+</div>
+
+
+---
+
+## 📓 Check Your Jupyter Notebook Deployment
+
+First, let's confirm your VMM is running and ready. Open the dstack dashboard In Local Host in your browser. If everything is set up, you should see the Jupyter Notebook web page like this:
+<a href="http://localhost/" className="text-gray-800 underline font-medium">http://localhost/</a>
+
+<img src="/docs/images/deploy-instance-4.png" alt="jupyter notebook web page" className="rounded border border-gray-200 max-w-xs shadow" />
+
+
+
+
+### Step 2: Add the Docker Compose YAML
+
+Copy the following YAML and paste it into the "Docker Compose File" field in the dashboard:
+
+<CodeBlock language="yaml">
+{`services:
+  jupyter:
+    image: quay.io/jupyter/base-notebook
+    ports:
+      - 8080:8888
+    volumes:
+      - /var/run/tappd.sock:/var/run/tappd.sock
+    environment:
+      - GRANT_SUDO=yes
+    user: root
+    command: "start-notebook.sh --NotebookApp.token=\${TOKEN}"`}
+</CodeBlock>
+
+<div className="mt-8 max-w-2xl mx-auto">
+  <div className="flex items-center space-x-2 mb-2">
+    <span className="inline-flex items-center justify-center w-5 h-5 bg-blue-100 text-blue-600 rounded-full text-xs font-bold">1</span>
+    <span className="text-sm text-gray-700 font-medium">Paste your Docker Compose YAML</span>
+  </div>
+  <img
+    src="/docs/images/deploy-instance-2.png"
+    alt="Paste Docker Compose and deploy"
+    className="rounded border border-gray-200 max-w-xs"
+  />
+  <div className="mt-2 text-xs text-gray-600 text-center">
+    Confirm the editor matches this example, then click <strong className="text-blue-700">"Deploy"</strong> to continue.
+  </div>
+</div>
+
+
+### Step 3: Launch and Monitor
+
+<div className="max-w-2xl mx-auto mt-8 space-y-6">
+
+  <div className="rounded border border-gray-200 bg-white p-4 flex flex-col items-center">
+    <img
+      src="/docs/images/deploy-instance-5.png"
+      alt="deployment launched in dashboard"
+      className="rounded border border-gray-200 max-w-xs shadow"
+    />
+    <div className="mt-3 text-base text-gray-800 font-medium text-center">
+      1. Click <span className="text-blue-700 font-semibold">Launch</span> or <span className="text-blue-700 font-semibold">Deploy</span> in the dashboard.
+    </div>
+    <div className="mt-1 text-sm text-gray-600 text-center">
+      dstack will start your Jupyter Notebook. This usually takes 1–2 minutes.
+    </div>
+  </div>
+
+  <div className="rounded border border-gray-200 bg-white p-4 flex flex-col items-center">
+    <img
+      src="/docs/images/deploy-instance-3.png"
+      alt="deployment in progress"
+      className="rounded border border-gray-200 max-w-xs shadow"
+    />
+    <div className="mt-3 text-base text-gray-800 font-medium text-center">
+      2. Watch the progress
+    </div>
+    <ul className="mt-2 text-sm text-gray-600 list-disc list-inside text-left space-y-1">
+      <li>Check <span className="font-semibold">Serial Logs</span> for VM boot details</li>
+      <li>See container status in the <span className="font-semibold">Containers</span> tab</li>
+      <li>Scroll to the bottom of logs with <kbd>Ctrl/Cmd+Down</kbd></li>
+    </ul>
+    <div className="mt-2 text-xs text-gray-500 text-center">
+      Your deployment will appear in the dashboard as it starts up.
+    </div>
+  </div>
+
+</div>
+
+
+
+### Step 4: Open Your Jupyter Notebook
+
+After deployment, find your app's URL in the dashboard to access Jupyter Notebook.
+
+<CodeBlock language="text">
+https://&lt;APP_ID&gt;-&lt;APP_PORT&gt;.app.&lt;host&gt;:&lt;host_port&gt;
+</CodeBlock>
+

@@ -1,0 +1,407 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "theme": "maple",
+  "name": "dstack",
+  "colors": {
+    "primary": "#0069ED",
+    "light": "#4D9CFF",
+    "dark": "#0050B4"
+  },
+  "favicon": "/docs/public/favicon.png",
+  "navigation": {
+    "dropdowns": [
+      {
+        "dropdown": "Overview",
+        "pages": [
+          {
+            "group": "Welcome to DStack",
+            "icon": {
+              "name": "party-horn",
+              "style": "solid"
+            },
+            "pages": [
+              "docs/index"
+            ]
+          },
+          {
+            "group": "Introduction to DStack",
+            "icon": {
+              "name": "hand-wave",
+              "style": "regular"
+            },
+            "pages": [
+              "docs/overview/introduction",
+              "docs/overview/what-is-dstack"
+            ]
+          },
+          {
+            "group": "Additional Reading",
+            "icon": {
+              "name": "head-side-gear",
+              "style": "regular"
+            },
+            "pages": [
+              "docs/overview/key-features",
+              "docs/overview/benefits",
+              "docs/overview/glossary"
+            ]
+          }
+        ]
+      },
+      {
+        "dropdown": "Getting Started",
+        "icon": {
+          "name": "stars",
+          "style": "solid"
+        },
+        "pages": [
+          "docs/getting-started/start",
+          {
+            "group": "Application Deployment Guide ",
+            "icon": {
+              "name": "rocket-launch",
+              "style": "solid"
+            },
+            "pages": [
+              "docs/getting-started/install/app-jupiter-guide"
+            ]
+          },
+          {
+            "group": "DStack Framework Installation",
+            "icon": {
+              "name": "download",
+              "style": "solid"
+            },
+            "pages": [
+              "docs/getting-started/install/installation",
+              {
+                "group": "Steps",
+                "icon": {
+                  "name": "shoe-prints",
+                  "style": "duotone"
+                },
+                "pages": [
+                  "docs/getting-started/install/step-1-prerequisites",
+                  "docs/getting-started/install/step-2-update-server",
+                  "docs/getting-started/install/step-3-install-required-packages",
+                  "docs/getting-started/install/step-4-install-dstack-runtime"
+                ]
+              }
+            ]
+          },
+          {
+            "group": "Cloud Deployment Preparation Manual",
+            "icon": {
+              "name": "cloud-bolt",
+              "style": "solid"
+            },
+            "pages": [
+              "docs/getting-started/first-deployment-steps/first-deployment",
+              "docs/getting-started/first-deployment-steps/advanced-deloyment-steps/deployment-of-dstack-advanced",
+              {
+                "group": "Advanced Deployment Steps",
+                "icon": {
+                  "name": "shoe-prints",
+                  "style": "duotone"
+                },
+                "pages": [
+                  "docs/getting-started/first-deployment-steps/advanced-deloyment-steps/deployment-step-1",
+                  "docs/getting-started/first-deployment-steps/advanced-deloyment-steps/deployment-step-2",
+                  "docs/getting-started/first-deployment-steps/advanced-deloyment-steps/deployment-step-3",
+                  "docs/getting-started/first-deployment-steps/advanced-deloyment-steps/deployment-step-4",
+                  "docs/getting-started/first-deployment-steps/advanced-deloyment-steps/deployment-step-5",
+                  "docs/getting-started/first-deployment-steps/advanced-deloyment-steps/deployment-step-6",
+                  "docs/getting-started/first-deployment-steps/advanced-deloyment-steps/deployment-step-7"
+                ]
+              },
+
+              {
+                "group": "dstack deployment for dummies",
+                "icon": {
+                  "name": "shoe-prints",
+                  "style": "duotone"
+                },
+                "pages": [
+                  "docs/getting-started/first-deployment-steps/fd-1",
+                  "docs/getting-started/first-deployment-steps/fd-2",
+                  "docs/getting-started/first-deployment-steps/fd-3",
+                  "docs/getting-started/first-deployment-steps/fd-5",
+                  "docs/getting-started/first-deployment-steps/fd-6",
+                  "docs/getting-started/first-deployment-steps/fd-7"
+                ]
+              }
+            ]
+          },
+          {
+            "group": "Examples",
+            "icon": {
+              "name": "circle-stop",
+              "style": "regular"
+            },
+            "pages": [
+              "/docs/tutorials/super-quick-start"
+            ]
+          }
+        ]
+      },
+      {
+        "dropdown": "Core Concepts",
+        "icon": {
+          "name": "comet",
+          "style": "solid"
+        },
+        "pages": [
+          {
+            "group": "Diving Deep",
+            "icon": {
+              "name": "star-sharp",
+              "style": "solid"
+            },
+            "pages": [
+              "docs/concepts/overview", 
+              "/docs/concepts/core-glossary"
+            ]
+          },
+          {
+            "group": "KSM, VMM & Gateway",
+            "icon": {
+              "name": "code",
+              "style": "solid"
+            },
+            "pages": [
+              "docs/concepts/basic-components",
+              {
+                "group": "Core Implementations",
+                "icon": {
+                  "name": "list-ol",
+                  "style": "solid"
+                },
+                "pages": [
+                 
+                  "docs/concepts/core-vmm",
+                  "docs/concepts/core-gateway",
+                  "docs/concepts/core-kms",
+                  "docs/concepts/core-guest-agent",
+                  "docs/concepts/core-tdxctl",
+                  "docs/concepts/core-os"
+                ]
+              }
+              
+            ]
+          },
+          
+          {
+            "group": "DStack Component Architecture",
+            "icon": {
+              "name": "sitemap",
+              "style": "thin"
+            },
+            "pages": [
+              "docs/concepts/architecture",
+              "docs/concepts/networking"
+            ]
+          }
+        ]
+      },
+      {
+        "dropdown": "Security + Research",
+        "icon": {
+          "name": "shield-plus",
+          "style": "solid"
+        },
+        "pages": [
+          "docs/security-research/overview",
+          {
+            "group": "DStack crypto",
+            "icon": {
+              "name": "key",
+              "style": "solid"
+            },
+            "pages": [
+              "docs/security-research/security-model"
+            ]
+          },
+          {
+            "group": "Key Component Infrastructure",
+            "icon": {
+              "name": "dice-four",
+              "style": "solid"
+            },
+            "pages": [
+              {
+                "group": "tdx",
+                "pages": [
+                  "docs/security-research/tdx-att/tdx-overview",
+                  "docs/security-research/tdx-att/tdx-security-arch",
+                  "docs/security-research/tdx-att/tdx-quote-gen",
+                  "docs/security-research/tdx-att/tdx-verification-model",
+                  "docs/security-research/tdx-att/tdx-integration-review",
+                  "docs/security-research/tdx-att/tdx-threat-model-garentees",
+                  "docs/security-research/tdx-att/tdx-implementation"
+                ]
+              },
+              {
+                "group": "vmm",
+                "pages": [
+                  "docs/security-research/vmm/vmm-overview",
+                  "docs/security-research/vmm/vmm-tdx-attestation-and-measurement",
+                  "docs/security-research/vmm/vmm-key-management",
+                  "docs/security-research/vmm/vmm-implementation",
+                  "docs/security-research/vmm/vmm-attestation-and-verification",
+                  "docs/security-research/vmm/vmm-dos-protection",
+                  "docs/security-research/vmm/vmm-procedures",
+                  "docs/security-research/vmm/vmm-integration-arch"
+                ]
+              },
+              {
+                "group": "gateway",
+                "pages": [
+                  "docs/security-research/gate/gate-overview",
+                  "docs/security-research/gate/gate-cvm-registration",
+                  "docs/security-research/gate/gate-state-sync",
+                  "docs/security-research/gate/gate-implementation",
+                  "docs/security-research/gate/gate-attestation-verification",
+                  "docs/security-research/gate/gate-load-balancing",
+                  "docs/security-research/gate/gate-notes"
+                ]
+              },
+              {
+                "group": "kms",
+                "pages": [
+                  "docs/security-research/kms/kms-overview",
+                  "docs/security-research/kms/kms-cert-manager",
+                  "docs/security-research/kms/kms-implementation",
+                  "docs/security-research/kms/kms-audit-procedures",
+                  "docs/security-research/kms/kms-blockchain-integration",
+                  "docs/security-research/kms/kms-security-arch",
+                  "docs/security-research/kms/kms-security-props",
+                  "docs/security-research/kms/kms-security"
+                ]
+              }
+            ]
+          },
+          {
+            "group": "Additional Reading",
+            "icon": {
+              "name": "book-open",
+              "style": "solid"
+            },
+            "pages": [
+              "docs/security-research/extra-sec-ops/before-reading",
+              {
+                "group": "extra-sec-ops",
+                "pages": [
+                  "docs/security-research/extra-sec-ops/certbot-security",
+                  "docs/security-research/extra-sec-ops/cert-client-security",
+                  "docs/security-research/extra-sec-ops/ct-monitor-security",
+                  "docs/security-research/extra-sec-ops/iohash-security",
+                  "docs/security-research/extra-sec-ops/host-api-security"
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "dropdown": "Tutorials",
+        "icon": {
+          "name": "apple-whole",
+          "style": "solid"
+        },
+        "pages": [
+          "docs/tutorials/index-quick-start",
+          {
+            "group": "Additional Starter Guides",
+            "icon": {
+              "name": "book",
+              "style": "regular"
+            },
+            "pages": [
+              "/docs/tutorials/javascript-example",
+              "/docs/tutorials/python-example",
+              "/docs/tutorials/rust-example"
+            ]
+          }
+        ]
+      },
+      {
+        "dropdown": "Community & Support",
+        "icon": "users",
+        "pages": [
+          "docs/community-section/community",
+          "docs/community-section/contribution"
+        ]
+      }
+    ]
+  },
+  "logo": {
+    "light": "/docs/public/logo/light.png",
+    "dark": "/docs/public/logo/dark.png"
+  },
+  "api": {
+    "mdx": {
+      "server": "https://api.dstack.dev",
+      "auth": {
+        "method": "bearer"
+      }
+    }
+  },
+  "background": {
+    "image": "/docs/public/background.png"
+  },
+  "navbar": {
+    "links": [
+      {
+        "label": "Hosted by Phala - GitHub",
+        "href": "https://github.com/Dstack-TEE/dstack"
+      }
+    ],
+    "primary": {
+      "type": "button",
+      "label": "Publications",
+      "href": "https://collective.flashbots.net/t/dstack-speedrunning-a-p2p-confidential-vm/3876"
+    }
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/Dstack-TEE/dstack",
+      "twitter": "https://twitter.com/PhalaNetwork",
+      "discord": "https://discord.gg/phala"
+    },
+    "links": [
+      {
+        "items": [
+          {
+            "label": "📕 Authors Note -- TEE Guide",
+            "href": "https://www.intothebytecode.com/46-andrew-miller/"
+          }
+        ]
+      },
+      {
+        "items": [
+          {
+            "label": "Eliza AI Deploys on the dStack 🤯",
+            "href": "https://www.youtube.com/watch?v=QkGLilgQ2Yc"
+          },
+          {
+            "label": "DStack Worker Agents using TEE 🤯",
+            "href": "https://www.youtube.com/watch?v=MCUWLUZuqJc"
+          }
+        ]
+      },
+      {
+        "items": [
+          {
+            "label": "📺 Phala dStack MCP agent video guide",
+            "href": "https://www.youtube.com/watch?v=qG-9f66z-G8"
+          }
+        ]
+      }
+    ]
+  },
+  "integrations": {
+    "ga4": {
+      "measurementId": "G-XXXXXXXXXX"
+    }
+  }
+}

@@ -1,0 +1,36 @@
+---
+title: "VMM Integration Security Architecture"
+description: "How dStack VMM integrates with KMS, gateway, and certificate management for end-to-end security."
+---
+
+## Integration Security Architecture
+
+End-to-end security in confidential computing requires seamless integration between the VMM, key management, and network gateway components. dStack VMM is designed to work hand-in-hand with dstack-kms and dstack-gateway, ensuring that every connection, key, and certificate is rooted in hardware-backed trust and policy enforcement. This section details how these integrations work to provide a unified, secure platform for confidential workloads.
+
+### Why Integration Security Matters
+
+No single component can provide complete security in isolation. By integrating KMS for key management, gateway for secure connectivity, and robust certificate management, dStack VMM creates a holistic security architecture that spans the entire workload lifecycle—from launch to decommission.
+
+### KMS Integration Security
+
+The VMM integrates with KMS instances using RA-TLS connections, enabling mutual authentication using TDX quotes. Key derivation uses application-specific identifiers derived from TDX measurements, ensuring cryptographic isolation even for applications running on the same host. For a full explanation of the key derivation process and API usage, see the [getAppKey documentation](https://github.com/Dstack-TEE/dstack/blob/45ebd05a/kms/README.md#getappkey). The platform supports both ephemeral keys for stateless workloads and persistent keys for applications that require continuity.
+
+### Gateway Communication Security
+
+All external communication is routed through the dstack-gateway component, which manages TLS termination and certificate validation. Gateway endpoints are selected dynamically based on the VM and host configuration, following the logic in [app.rs#L467](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/vmm/src/app.rs#L467). The gateway verifies TDX quotes for all incoming connections and only forwards traffic to confidential VMs that have successfully attested. This provides strong network-level isolation while enabling external access to authorized workloads.
+
+### Certificate Management
+
+TLS certificates are generated via KMS-signed certificate signing requests, creating a PKI hierarchy rooted in hardware-protected keys. The VMM validates certificate chains during connection setup to ensure that all endpoints are cryptographically authenticated. Certificate lifecycle management—including automatic renewal and revocation—is managed through the KMS RPC interface (see [the rpc interface documentation](https://github.com/Dstack-TEE/dstack/blob/45ebd05a/kms/README.md#the-rpc-interface)).
+
+## Supporting Documentation
+
+- [Intel TDX Architecture Specification](https://www.intel.com/content/www/us/en/developer/tools/trust-domain-extensions/documentation.html)
+- [dstack GitHub Repository](https://github.com/Dstack-TEE/dstack)
+- [TDX Quote Verification Library](https://github.com/intel/SGXDataCenterAttestationPrimitives)
+
+<div className="mt-8 p-4 bg-green-50 rounded-lg border border-green-200">
+  <p className="text-sm text-green-800">
+    <strong>Next Component:</strong> Explore how the VMM integrates with <a href="/docs/security-research/kms-security" className="underline">KMS for secure key management</a> and <a href="/docs/security-research/attestation-architecture" className="underline">attestation verification</a>.
+  </p>
+</div>
