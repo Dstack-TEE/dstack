@@ -20,7 +20,7 @@ use tokio_rustls::TlsAcceptor;
 use tproxy_rpc::TappdConfig;
 use tproxy_rpc::{
     tproxy_server::{TproxyRpc, TproxyServer},
-    AcmeInfoResponse, GetMetaResponse, RegisterCvmRequest, RegisterCvmResponse, WireGuardConfig,
+    AcmeInfoResponse, RegisterCvmRequest, RegisterCvmResponse, WireGuardConfig,
 };
 use tracing::{debug, error, info, warn};
 
@@ -491,34 +491,6 @@ impl TproxyRpc for RpcHandler {
         Ok(AcmeInfoResponse {
             account_uri,
             hist_keys: keys.into_iter().collect(),
-        })
-    }
-
-    async fn get_meta(self) -> Result<GetMetaResponse> {
-        let state = self.state.lock();
-        let handshakes = state.latest_handshakes(None)?;
-
-        // Total registered instances
-        let registered = state.state.instances.len();
-
-        // Get current timestamp
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .context("system time before Unix epoch")?
-            .as_secs();
-
-        // Count online instances (those with handshakes in last 5 minutes)
-        let online = handshakes
-            .values()
-            .filter(|(ts, _)| {
-                // Skip instances that never connected (ts == 0)
-                *ts != 0 && (now - *ts) < 300
-            })
-            .count();
-
-        Ok(GetMetaResponse {
-            registered: registered as u32,
-            online: online as u32,
         })
     }
 }
