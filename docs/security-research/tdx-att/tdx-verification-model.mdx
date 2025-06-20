@@ -1,0 +1,24 @@
+---
+title: "TDX Verification Security Model"
+description: "Comprehensive explanation of the verification process and security model for TDX attestation in dStack."
+---
+
+## Verification Security Model
+
+Verification is a critical component of confidential computing, as it provides independent assurance that a workload is running on genuine TDX hardware and that its measured state matches expected, trusted values. In practice, this means verifying not only the cryptographic integrity of the attestation evidence, but also the Trusted Computing Base (TCB)—the combination of hardware, firmware, and software components that must remain secure for the system to be trustworthy. TCB validation ensures that only production, non-debug environments are attested, and that all critical measurements (such as firmware, kernel, and application hashes) are as expected.
+
+### Quote Verification Process
+
+Quotes are verified with the [`verify_with_ra_pubkey`](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/ra-tls/src/attestation.rs#L291) function, which checks the ECDSA signature in the TDX quote against Intel's public key infrastructure and the RA-TLS public key. It also performs TCB (Trusted Computing Base) checks, and replays the event log to confirm RTMR values reflect the real sequence of system measurements. This robust process ensures attestation is both cryptographically bound to the TLS certificate and accurately describes the enclave's state.
+
+Traditionally, TDX quote verification is performed by a remote verifier or attestation service, which must be trusted to validate the quote and enforce policy. However, dStack introduces a novel enhancement: TDX attestation verification can now also be performed on-chain, directly on the blockchain. This means that the integrity and authenticity of TDX quotes can be validated in a decentralized, transparent, and tamper-evident manner, without relying solely on off-chain verifiers. By anchoring attestation results on the blockchain, dStack enables new models of trust and auditability, allowing any participant to independently verify the security posture of workloads in real time.
+
+### TCB Validation
+
+Strict TCB validation is enforced, with the system rejecting debug-enabled TDs and confirming that key measurement registers (`mr_signer_seam`, `mr_service_td`, etc.) match expected values. This is handled in the [`validate_tcb`](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/ra-tls/src/attestation.rs#L346) function, which inspects the TD report for debug attributes and validates critical fields. For SGX enclaves, it also ensures debug attributes are not set. This protects production deployments by refusing to attest development or potentially compromised environments.
+
+### Measurement Chain Validation
+
+dStack reconstructs and verifies the entire measurement chain, from the Measurement Root of Trust for Data (MRTD) through all RTMRs and application identifiers. The [`decode_app_info`](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/ra-tls/src/attestation.rs#L156) function replays the event log and extracts key fields from the TDX report, computing digests like `mr_system` (hashing `mr_td`, RTMR0-2, and the key provider measurement) and `mr_aggregated` (covering all RTMRs and additional fields). This process ensures every element of the trust chain—from firmware and kernel to application identity—is independently validated.
+
+> The verification security model is essential for maintaining trust in confidential computing. The next section explores how dStack integrates these guarantees into real-world deployments and operational workflows.

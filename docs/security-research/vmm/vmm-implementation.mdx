@@ -1,0 +1,32 @@
+---
+title: "VMM Implementation Security Details"
+description: "How dStack VMM enforces device, memory, and communication isolation to protect confidential workloads."
+---
+
+## Implementation Security Details
+
+The security of confidential workloads depends not only on cryptographic primitives, but also on the practical enforcement of isolation at every layer of the stack. dStack VMM is engineered to minimize the attack surface by strictly controlling device models, memory access, and communication channels. This section details how the VMM implements these controls to ensure that secrets and sensitive data remain protected at runtime.
+
+### Why Implementation Security Matters
+
+Even with strong attestation and key management, a misconfigured device or memory subsystem can expose confidential data to attackers. The VMM's implementation choices—such as exclusive use of paravirtualized drivers, memory encryption, and secure vsock channels—are designed to eliminate common attack vectors and enforce robust boundaries between the host, guest, and external networks.
+
+### Device Isolation Architecture
+
+The VMM enforces a restrictive device model by utilizing only paravirtualized drivers, significantly reducing the attack surface. For network connectivity, it exclusively employs `virtio-net-pci` devices configured with user-mode networking, which provides automatic NAT isolation and port forwarding, as implemented in [qemu.rs#L295](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/vmm/src/app/qemu.rs#L295).
+
+Storage is confined to `virtio-blk-pci` devices, and direct hardware passthrough is not permitted for storage or other peripherals. The sole exception is for GPU resources, which are attached using VFIO and protected by IOMMU, as detailed in [qemu.rs#L427](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/vmm/src/app/qemu.rs#L427).
+
+### Memory Security Implementation
+
+Memory isolation is enforced by TDX hardware encryption and secure Extended Page Tables (EPT). When GPU resources are attached, the VMM configures memory backends with hugepage support and applies NUMA-aware memory binding to optimize both security and performance. This is implemented in [`qemu.rs#L379`](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/vmm/src/app/qemu.rs#L379), where the VMM dynamically assigns memory and CPU resources across NUMA nodes based on GPU placement, ensuring that each NUMA node receives dedicated hugepage-backed memory and CPU allocations, and memory is bound to the appropriate host NUMA node for isolation.
+
+After TD finalization, all guest memory is cryptographically protected and becomes inaccessible to the host, preventing memory snooping attacks.
+
+### Communication Security Channels
+
+Inter-VM communication is restricted to `vhost-vsock-pci` devices, which provide a secure communication channel between host and guest domains, as implemented in [qemu.rs#L358](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/vmm/src/app/qemu.rs#L358).
+
+The VMM exposes host API services to confidential VMs using vsock addressing (see [app.rs#L487](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/vmm/src/app.rs#L487)), allowing secure communication channels (e.g., `vsock://2:{port}/api`) without exposing network interfaces to the guest or external attack surfaces.
+
+> Implementation security is the practical foundation for all higher-level guarantees. The next section explores how the VMM validates attestation and enforces policy at runtime.

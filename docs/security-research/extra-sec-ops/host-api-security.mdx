@@ -1,0 +1,68 @@
+---
+title: "Host API Security"
+description: "Secure host management and orchestration API for dstack TEE infrastructure"
+---
+
+# Host API Security Architecture
+
+The Host API represents the foundational security interface for TEE host management within dstack, implementing a three-endpoint secure interface that provides critical security services including host information retrieval, event notification handling, and sealing key provisioning. This API server operates as an integral component of the VMM using the RA-RPC framework for secure remote procedure calls, establishing the trust foundation for all confidential computing operations.
+
+## Cryptographic Security Foundation
+
+The system employs military-grade cryptographic algorithms designed for enterprise-level security requirements. The cryptographic foundation relies on HKDF-SHA256 for secure key derivation using a dedicated "RATLS" salt, ECDSA P-256 for digital signatures with PKCS#8 encoding, and X25519 for Diffie-Hellman key exchange derived from ECDSA keys. This comprehensive cryptographic suite supports multi-algorithm hash operations including SHA-256, SHA-384, SHA-512, SHA-3, and Keccak variants.
+
+Key derivation functions implement cryptographically secure context-based derivation where derived keys are generated using HKDF with configurable context data and output sizes up to 256 bytes. The system ensures forward secrecy through proper key rotation and derivation chains, preventing compromise of future keys even if current key material is exposed.
+
+## Authentication and Authorization Framework
+
+The Host API enforces strict mutual TLS authentication with comprehensive client certificate verification and attestation validation. The authentication system extracts and validates app-specific identifiers from client certificates using custom OID extensions, creating a robust identity verification mechanism that extends beyond traditional certificate validation.
+
+The system utilizes custom X.509 certificate extensions with enterprise-registered OIDs for embedding attestation data. Quote extensions store SGX and TDX quotes, event log extensions preserve TDX event logs, app ID extensions provide application identification, and certificate usage extensions handle special certificate purposes. This extension system creates a comprehensive identity and attestation framework.
+
+## Intel TDX Attestation and Hardware Security
+
+The attestation system implements comprehensive TDX quote verification using Intel's DCAP QVL library for collateral retrieval and verification. The system performs strict Trusted Computing Base validation including debug mode prevention and signer verification, ensuring that only production-ready hardware environments can participate in secure operations.
+
+Runtime measurement validation utilizes cryptographic event log replay using SHA-384 hashing to validate Runtime Measurement Registers, ensuring boot-time and runtime integrity. Event logs are validated against computed measurements with strict matching requirements, preventing runtime tampering and ensuring execution environment integrity throughout the operational lifecycle.
+
+The quote content validation framework supports multiple content types for quote data validation including KMS root CA verification, RA-TLS certificates, and application-specific data with configurable hash algorithms. This flexibility enables diverse security policies while maintaining consistent verification standards.
+
+## Secure Key Management and Provisioning
+
+The Host API provides hardware-backed sealing key provisioning through integration with dedicated key provider services. The system uses NaCl sealed boxes for secure key transport with public key cryptography, ensuring that sensitive key material remains protected during transmission and storage operations.
+
+Key provider communication implements secure TCP-based protocols with length-prefixed JSON messaging and payload limits for quote transmission. All key operations require valid TDX quotes and SGX enclave verification before key release, creating a comprehensive verification pipeline that prevents unauthorized key access.
+
+The KMS system manages multiple key types including TLS CA certificates for trust anchor establishment, disk encryption keys for full disk encryption, environment variable encryption keys using X25519, ECDSA keys for Ethereum-compatible signing operations, and K256 signatures with root key validation. This diverse key management capability supports various cryptographic requirements within the confidential computing environment.
+
+## Communication Security and Isolation
+
+The Host API utilizes VSOCK communication channels for secure host-guest isolation with dedicated CID and port assignments. This approach provides hardware-enforced isolation between host and guest environments, preventing unauthorized access and ensuring that sensitive operations remain contained within appropriate security boundaries.
+
+Request processing security implements comprehensive request validation with configurable size limits, content-type verification, and method-specific payload restrictions. All requests undergo multi-layer security processing including attestation verification and certificate validation, ensuring that only authorized and verified requests can access sensitive API endpoints.
+
+## Advanced Security Controls and Multi-Tenant Isolation
+
+The VMM provides secure VM lifecycle management with hardware isolation controls including NUMA node pinning for hardware isolation, hugepage allocation for performance and security, GPU attachment security with PCI device validation, and resource quota enforcement per tenant. These controls ensure that multiple tenants can operate securely within the same hardware environment without compromising isolation guarantees.
+
+The system enforces strict tenant isolation through hardware resource partitioning via NUMA nodes, memory and CPU quota limits with configurable maximums, network isolation with dedicated address spaces, and encrypted environment variables per application. This comprehensive isolation model prevents cross-tenant information leakage and ensures that confidential workloads remain protected.
+
+## Certificate Authority and Attestation Operations
+
+The system implements secure RA-TLS certificate generation with embedded attestation data and configurable validity periods up to 10 years. Certificates include digitally signed attestation quotes and event logs for complete verification, enabling comprehensive trust establishment for secure communications.
+
+Certificate signing processes implement strict validation requirements including confirmation word verification, ECDSA signature validation using P-256 curves, public key format verification with DER encoding, and algorithm compatibility checks. These requirements ensure that only authorized certificate requests can be processed and that all certificates maintain cryptographic integrity.
+
+## Production Security Configuration
+
+The KMS implements enterprise-grade TLS configuration with mutual TLS enforcement and CA certificate validation. The system supports configurable client certificate requirements, dedicated certificate directories for secure storage, and subject name validation with domain verification. This comprehensive TLS configuration ensures that all communications remain secure and properly authenticated.
+
+Authentication API integration supports multiple authentication backends including webhook-based authentication and development mode overrides with configurable gateway app ID validation. This flexibility enables diverse deployment scenarios while maintaining consistent security standards across different operational environments.
+
+## Security Monitoring and Compliance
+
+The Host API implements detailed security event logging with request tracing, method identification, and unique request ID assignment for audit trail maintenance. This comprehensive logging capability enables security teams to track all API interactions and investigate potential security incidents effectively.
+
+Error handling security utilizes sanitized error messages and structured error encoding that prevents information disclosure while maintaining debugging capability. This approach ensures that security-sensitive information remains protected even when errors occur during normal operations.
+
+The Host API security implementation aligns with enterprise security standards including NIST guidelines for cryptographic implementations, Intel TDX specifications for attestation protocols, zero-trust architecture principles with continuous verification, and defense-in-depth security strategies with multiple validation layers. This comprehensive approach ensures that the system meets stringent security requirements for confidential computing workloads while maintaining operational efficiency and scalability.
