@@ -1,6 +1,6 @@
 {
   "name": "@phala/dstack-sdk",
-  "version": "0.2.0",
+  "version": "0.5.0-beta.2",
   "description": "Dstack SDK",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -47,6 +47,7 @@
   "peerDependencies": {
     "viem": "^2.21.0 <3.0.0",
     "@noble/curves": "^1.8.1",
+    "@noble/hashes": "^1.6.1",
     "@solana/web3.js": "^1.98.0"
   },
   "peerDependenciesMeta": {
