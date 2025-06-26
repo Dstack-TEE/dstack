@@ -40,6 +40,7 @@ members = [
     "sdk/rust",
     "sodiumbox",
     "serde-duration",
+    "dstack-mr"
 ]
 resolver = "2"
 
@@ -68,6 +69,7 @@ cert-client = { path = "cert-client" }
 lspci = { path = "lspci" }
 sodiumbox = { path = "sodiumbox" }
 serde-duration = { path = "serde-duration" }
+dstack-mr = { path = "dstack-mr" }
 
 # Core dependencies
 anyhow = "1.0.97"
@@ -94,6 +96,7 @@ bon = "3.4.0"
 base64 = "0.22.1"
 hex = "0.4.3"
 hex_fmt = "0.3.0"
+hex-literal = "1.0.0"
 prost = "0.13.5"
 scale = { version = "3.7.4", package = "parity-scale-codec", features = ["derive"] }
 serde = { version = "1.0.219", features = ["derive"] }
@@ -104,6 +107,7 @@ toml_edit = { version = "0.22.24", features = ["serde"] }
 yasna = "0.5.2"
 bytes = "1.10.1"
 figment = "0.10.19"
+object = "0.36.4"
 
 # Networking/HTTP
 bollard = "0.18.1"
@@ -118,7 +122,7 @@ rocket = { git = "https://github.com/rwf2/Rocket", branch = "master", features =
 rocket-apitoken = { git = "https://github.com/kvinwang/rocket-apitoken", branch = "dev" }
 tokio = { version = "1.44.1" }
 tokio-vsock = "0.7.0"
-sysinfo = "0.33.1"
+sysinfo = "0.35.2"
 default-net = "0.22.0"
 
 # Cryptography/Security
