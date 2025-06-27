@@ -12,6 +12,7 @@ const ATTRIBUTE_MR_EXTEND: u32 = 0x00000001;
 const ATTRIBUTE_PAGE_AUG: u32 = 0x00000002;
 
 const TDVF_SECTION_TD_HOB: u32 = 0x02;
+const TDVF_SECTION_TEMP_MEM: u32 = 0x03;
 
 pub enum PageAddOrder {
     TwoPass,
@@ -255,13 +256,16 @@ impl<'a> Tdvf<'a> {
     }
 
     fn measure_td_hob(&self, memory_size: u64) -> Result<Vec<u8>> {
+        let mut memory_acceptor = MemoryAcceptor::new(0, memory_size);
         let mut td_hob = Vec::new();
 
         let mut td_hob_base_addr = 0x809000u64;
         for s in &self.sections {
+            if let TDVF_SECTION_TD_HOB | TDVF_SECTION_TEMP_MEM = s.sec_type {
+                memory_acceptor.accept(s.memory_address, s.memory_address + s.memory_data_size);
+            }
             if s.sec_type == TDVF_SECTION_TD_HOB {
                 td_hob_base_addr = s.memory_address;
-                break;
             }
         }
 
@@ -276,12 +280,7 @@ impl<'a> Tdvf<'a> {
         td_hob.extend_from_slice(&[0u8; 8]); // EfiFreeMemoryBottom
         td_hob.extend_from_slice(&[0u8; 8]); // EfiEndOfHobList (placeholder)
 
-        let mut remaining_memory = memory_size;
-
-        let mut add_memory_resource_hob = |resource_type: u8, start: u64, mut length: u64| {
-            if length == 0 {
-                length = remaining_memory;
-            }
+        let mut add_memory_resource_hob = |resource_type: u8, start: u64, length: u64| {
             td_hob.extend_from_slice(&[0x03, 0x00]); // HobType
             td_hob.extend_from_slice(&48u16.to_le_bytes()); // HobLength
             td_hob.extend_from_slice(&[0u8; 4]); // Reserved
@@ -291,27 +290,64 @@ impl<'a> Tdvf<'a> {
             td_hob.extend_from_slice(&7u32.to_le_bytes()); // ResourceAttribute
             td_hob.extend_from_slice(&start.to_le_bytes());
             td_hob.extend_from_slice(&length.to_le_bytes());
-            remaining_memory = remaining_memory.saturating_sub(length);
         };
 
-        add_memory_resource_hob(0x07, 0x0000000000000000, 0x0000000000800000);
-        add_memory_resource_hob(0x00, 0x0000000000800000, 0x0000000000006000);
-        add_memory_resource_hob(0x07, 0x0000000000806000, 0x0000000000003000);
-        add_memory_resource_hob(0x00, 0x0000000000809000, 0x0000000000002000);
-        add_memory_resource_hob(0x00, 0x000000000080B000, 0x0000000000002000);
-        add_memory_resource_hob(0x07, 0x000000000080D000, 0x0000000000004000);
-        add_memory_resource_hob(0x00, 0x0000000000811000, 0x000000000000f000);
+        let (_, mut last_start, last_end) = memory_acceptor.ranges.pop().expect("No ranges");
+
+        for (accepted, start, end) in memory_acceptor.ranges {
+            if accepted {
+                add_memory_resource_hob(0x00, start, end - start);
+            } else {
+                add_memory_resource_hob(0x07, start, end - start);
+            }
+        }
 
         if memory_size >= 0xB0000000 {
-            add_memory_resource_hob(0x07, 0x0000000000820000, 0x000000007F7E0000);
-            add_memory_resource_hob(0x07, 0x0000000100000000, 0);
-        } else {
-            add_memory_resource_hob(0x07, 0x0000000000820000, 0);
+            let mid = 0x80000000u64;
+            add_memory_resource_hob(0x07, last_start, mid - last_start);
+            last_start = mid;
         }
+        add_memory_resource_hob(0x07, last_start, last_end - last_start);
 
         let end_of_hob_list = td_hob_base_addr + td_hob.len() as u64 + 8;
         td_hob[48..56].copy_from_slice(&end_of_hob_list.to_le_bytes());
 
         Ok(measure_sha384(&td_hob))
+    }
+}
+
+struct MemoryAcceptor {
+    ranges: Vec<(bool, u64, u64)>,
+}
+
+impl MemoryAcceptor {
+    fn new(start: u64, size: u64) -> Self {
+        Self {
+            ranges: vec![(false, start, start + size)],
+        }
+    }
+
+    fn accept(&mut self, start: u64, end: u64) {
+        if start >= end {
+            return;
+        }
+
+        let mut new_ranges = Vec::new();
+
+        for &(is_accepted, range_start, range_end) in &self.ranges {
+            if is_accepted || range_end <= start || range_start >= end {
+                new_ranges.push((is_accepted, range_start, range_end));
+            } else {
+                if range_start < start {
+                    new_ranges.push((false, range_start, start));
+                }
+                if range_end > end {
+                    new_ranges.push((false, end, range_end));
+                }
+            }
+        }
+        new_ranges.push((true, start, end));
+        new_ranges.sort_by_key(|&(_, start, _)| start);
+        self.ranges = new_ranges;
     }
 }
