@@ -2092,6 +2092,7 @@ dependencies = [
  "clap",
  "dstack-guest-agent-rpc",
  "dstack-kms-rpc",
+ "dstack-mr",
  "dstack-types",
  "fs-err",
  "git-version",

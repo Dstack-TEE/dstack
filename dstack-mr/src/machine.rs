@@ -6,10 +6,8 @@ use fs_err as fs;
 
 #[derive(Debug, bon::Builder)]
 pub struct Machine<'a> {
-    #[builder(default = 1)]
-    pub spec_version: u32,
-    pub memory_size: u64,
     pub cpu_count: u8,
+    pub memory_size: u64,
     pub firmware: &'a str,
     pub kernel: &'a str,
     pub initrd: &'a str,

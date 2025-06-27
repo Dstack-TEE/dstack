@@ -265,6 +265,21 @@ impl VmConfig {
         }
         command.arg("-kernel").arg(&self.image.kernel);
         command.arg("-initrd").arg(&self.image.initrd);
+        if cfg.qemu_hotplug_off {
+            command.args([
+                "-global",
+                "ICH9-LPC.acpi-pci-hotplug-with-bridge-support=off",
+            ]);
+        }
+        if cfg.qemu_pci_hole64_size > 0 {
+            command.args([
+                "-global",
+                &format!(
+                    "q35-pcihost.pci-hole64-size=0x{:x}",
+                    cfg.qemu_pci_hole64_size
+                ),
+            ]);
+        }
         if let Some(rootfs) = &self.image.rootfs {
             let ext = rootfs
                 .extension()

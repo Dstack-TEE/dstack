@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_human_bytes as hex_bytes;
 
 pub use machine::Machine;
@@ -13,7 +13,7 @@ mod tdvf;
 mod util;
 
 /// Contains all the measurement values for TDX.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TdxMeasurements {
     #[serde(with = "hex_bytes")]
     pub mrtd: Vec<u8>,
