@@ -4,17 +4,20 @@ set -e
 WORK_DIR="/var/volatile/dstack"
 DATA_MNT="$WORK_DIR/persistent"
 
+OVERLAY_TMP="/var/volatile/overlay"
+OVERLAY_PERSIST="$DATA_MNT/overlay"
+
 # Prepare volatile dirs
 mount_overlay() {
     local src=$1
-    local dst=/var/volatile/$1
+    local dst=$2/$1
     mkdir -p $dst/upper $dst/work
     mount -t overlay overlay -o lowerdir=$src,upperdir=$dst/upper,workdir=$dst/work $src
 }
-mount_overlay /etc/wireguard
-mount_overlay /etc/docker
-mount_overlay /usr/bin
-mount_overlay /home/root
+mount_overlay /etc/wireguard $OVERLAY_TMP
+mount_overlay /etc/docker $OVERLAY_TMP
+mount_overlay /usr/bin $OVERLAY_TMP
+mount_overlay /home/root $OVERLAY_TMP
 
 # Disable the containerd-shim-runc-v2 temporarily to prevent the containers from starting
 # before docker compose removal orphans. It will be enabled in app-compose.sh
@@ -36,3 +39,4 @@ echo "Mounting docker dirs to persistent storage"
 mkdir -p $DATA_MNT/var/lib/docker
 mount --rbind $DATA_MNT/var/lib/docker /var/lib/docker
 mount --rbind $WORK_DIR /dstack
+mount_overlay /etc/users $OVERLAY_PERSIST
