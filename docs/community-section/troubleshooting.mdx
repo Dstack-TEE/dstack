@@ -1,0 +1,165 @@
+---
+title: "Troubleshooting & Diagnostics"
+description: "Common issues and solutions for troubleshooting dstack deployments"
+---
+
+# Troubleshooting Dstack Components and Systems
+
+Dstack provides a comprehensive troubleshooting framework across its components, including structured logging, diagnostic commands, web dashboards, and specific error resolution guides.
+
+---
+
+## 🧭 Overview of Troubleshooting Framework
+
+- Structured CLI tools for direct diagnostics  
+- HTTP API endpoints for log and status access  
+- Web dashboards for real-time and historical monitoring  
+- Consistent error handling and logging patterns across all components
+
+---
+
+## 🛠️ Troubleshooting Commands and Tools
+
+### VMM CLI Tool
+
+The primary diagnostic utility is `vmm-cli.py`, which offers:
+
+#### VM Management & Monitoring
+- `lsvm` – List all VMs and their status  
+- `logs` – Show VM logs (supports `--follow` and line count options)  
+- `start` / `stop` / `remove` – VM lifecycle commands  
+
+#### Resource Monitoring
+- `lsimage` – List available images  
+- `lsgpu` – List GPUs and availability status  
+
+---
+
+### 📋 Container Log Access
+
+You can access container logs via HTTP endpoints with flexible parameters:
+
+- **Parameters:**  
+  - `since` / `until`: Time-based filtering (e.g., `"30s"`, `"5m"`, `"2h"`, `"1d"`)  
+  - `follow`: Continuous streaming  
+  - `text` / `bare`: Output formatting  
+  - `timestamps`: Include timestamps  
+  - `ansi`: ANSI color control  
+
+---
+
+## 📑 Logging and Error Handling
+
+### Structured Logging
+
+All components use the `tracing` framework for structured logs and environment-based filtering.
+
+### Error Handling Patterns
+
+- Uses `anyhow::Result` for error handling and context propagation  
+- Process management reports detailed exit codes and failure states  
+
+---
+
+## 🚨 Common Errors and Resolutions
+
+### 1. Unix Socket CID Conflicts
+
+**Error:**  
+`vhost-vsock: unable to set guest cid: Address already in use`
+
+**Diagnosis:**  
+```bash
+ps aux | grep 'guest-cid='
+````
+
+**Resolution:**
+Configure a new CID range in `vmm.toml` or `build-config.sh`.
+
+---
+
+### 2. CVM Status Issues
+
+**Error:**
+CVM status turns to `exited` immediately
+
+**Diagnosis:**
+Check stderr output by appending `ch=stderr` to your log URL.
+
+**Common Cause:**
+Permission denied for KVM kernel module
+
+**Resolution:**
+Ensure the user belongs to `libvirt` and `kvm` groups.
+
+---
+
+### 3. Guest Image Build Errors
+
+**Error:**
+`Operation not permitted` during image building
+
+**Cause:**
+Ubuntu 23.10+ restricts unprivileged user namespaces
+
+**Resolution:**
+
+```bash
+sudo sysctl kernel.apparmor_restrict_unprivileged_userns=0
+```
+
+---
+
+## 🖥️ Web Dashboard Diagnostics
+
+### VMM Console
+
+* Monitor VM status/configuration
+* Real-time log viewing (supports follow)
+* Manage container status
+* Monitor resource utilization
+
+### Gateway Dashboard
+
+* Wireguard IP address monitoring
+* Node connection status
+* TLS certificate management
+
+---
+
+## 📡 Advanced Monitoring
+
+### Certificate Transparency Monitoring
+
+The `ct_monitor` tool provides:
+
+* Tracking CT logs for unauthorized certificates
+* Validating certs against known gateway public keys
+* Alerts on certificate mismatches
+
+### VM Event Reporting
+
+Tracks:
+
+* Boot/shutdown progress
+* Errors
+* Instance info updates
+
+---
+
+## 📂 Log File Locations & Output Redirection
+
+* Supervisor handles output redirection and error logs
+* Automatic creation of parent log directories
+* Errors are logged with full context
+
+---
+
+## 📝 Notes
+
+The dstack troubleshooting system layers multiple diagnostic approaches—from CLI tools and APIs to web dashboards. Structured logging via `tracing` and consistent error handling ensure that most issues have actionable diagnostic steps and clear, documented resolutions. Both real-time and historical monitoring are supported for thorough, efficient troubleshooting.
+
+---
+
+> **Tip:** For additional context or uncommon errors, refer to the [full deployment guides](/docs/deployment-guides/) and component-specific documentation.
+

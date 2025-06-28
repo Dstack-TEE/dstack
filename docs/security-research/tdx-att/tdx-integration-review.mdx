@@ -1,0 +1,30 @@
+---
+title: "TDX Integration Security and Guest Agent"
+description: "How dStack integrates TDX attestation into real-world deployments, focusing on the guest agent and KMS workflows."
+---
+
+## Integration Security
+
+<img src="/docs/images/how-guest-operates.png" alt="How the Guest Agent Operates" className="my-6 rounded-lg border border-gray-200 shadow-sm" />
+
+
+### Guest Agent Security
+
+When we refer to a "guest agent" in the context of dstack and TDX attestation, we mean a dedicated system process running inside the confidential virtual machine (CVM)—not an "agent" in the sense of AI or autonomous software agents. This guest agent is a privileged, security-critical component whose sole purpose is to interface between the workload and the underlying TDX hardware, providing attestation and key management services. Unlike AI agents, which act autonomously or make decisions based on data, the guest agent in dstack is tightly scoped: it exposes authenticated RPC endpoints ([rpc_service.rs#L150](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/guest-agent/src/rpc_service.rs#L150)) for cryptographic operations such as ECDSA key derivation, certificate signing, and TDX quote generation.
+
+The security model for the guest agent is fundamentally different from that of AI agents. The guest agent is designed to enforce strict isolation between application contexts, ensuring that no keys or attestation data can leak between tenants or workloads. For example, the `get_tls_key` method generates a random seed, derives a unique ECDSA key pair, and requests a signed certificate chain, while `get_quote` pads user data and requests a hardware-backed quote and event log. All requests are carefully validated, and the agent is engineered to prevent any cross-tenant key or attestation leakage. Its role is purely to mediate secure, hardware-rooted cryptographic operations on behalf of the guest environment, with a minimal and auditable attack surface.
+
+### KMS Integration
+
+The Key Management Service (KMS) uses TDX attestation to securely provision keys, following a chain-of-trust model where application keys are derived only from hardware-attested root keys. Before releasing any cryptographic material, the KMS rigorously verifies TDX quotes.
+
+#### How the Guest Agent Operates in the KMS Context
+
+Conceptually, the guest agent acts as the trusted bridge between the application running inside the CVM and the KMS, enabling secure, hardware-rooted key management. When an application within the CVM needs a cryptographic key, it communicates with the guest agent, which in turn generates a TDX quote that attests to the current state of the virtual machine. This quote, along with any required application-specific data, is sent to the KMS as part of a key request.
+
+The KMS, running outside the CVM (typically on the host or in a management domain), receives the attestation evidence from the guest agent. It verifies the TDX quote to ensure that the request is coming from a genuine, measured, and trusted environment. Only after successful verification does the KMS derive or release the requested key material, binding it to the attested state of the guest. This process ensures that keys are never provisioned to untrusted or tampered workloads.
+
+In summary, the guest agent is the only component inside the CVM with the privilege to interact directly with the TDX hardware and produce attestation evidence. Its role in the KMS workflow is to securely generate, package, and transmit this evidence, enabling the KMS to enforce strict hardware-based access control for all cryptographic operations. This design ensures that key provisioning is always rooted in verifiable hardware state, and that the attack surface for key compromise is minimized.
+
+> Integration security is where theory meets practice. The next section explores the threat model and security guarantees that underpin dStack's TDX attestation.
+

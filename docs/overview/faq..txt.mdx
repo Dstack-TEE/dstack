@@ -1,0 +1,704 @@
+---
+title: "Frequently Asked Questions"
+description: "Comprehensive answers to common questions about dstack, covering everything from basic concepts to advanced deployment scenarios."
+---
+
+# dstack FAQ
+
+this comprehensive FAQ addresses the most common questions about dstack, from basic concepts to advanced deployment scenarios. if you can't find what you're looking for, check our [troubleshooting guide](/docs/troubleshooting), visit our [community](/docs/community), or explore the [dstack wiki](https://deepwiki.com/Dstack-TEE/dstack/1-introduction-to-dstack) for in-depth AI explanations and further exploration of any topic.
+
+---
+
+## Basic Understanding
+
+### What exactly is dstack and how is it different from regular Docker?
+
+dstack is a platform that takes your existing Docker containers and runs them inside **Confidential Virtual Machines (CVMs)** powered by hardware Trusted Execution Environments (TEEs) like Intel TDX. While regular Docker containers share the host OS kernel and can be inspected by system administrators, dstack containers run in hardware-encrypted memory that even the cloud provider cannot access.
+
+**Key differences:**
+- **Regular Docker:** Containers share host OS, visible to system admins, no hardware protection
+- **dstack:** Each container runs in its own encrypted VM, protected by hardware TEE, cryptographically verifiable security
+
+You still use the same `docker-compose.yml` files and Docker images—dstack just adds a secure layer underneath.
+
+### Do I need to rewrite my application to use dstack?
+
+**No.** dstack is designed to work with existing containerized applications with minimal to no code changes. You can:
+
+- Use your existing `Dockerfile` and `docker-compose.yml` files
+- Keep your current development workflow
+- Deploy the same container images you use today
+
+The main differences are:
+- **Secrets management:** Instead of environment variables, you can use dstack's secure key derivation APIs
+- **Networking:** Applications are automatically accessible via HTTPS with certificates managed by dstack
+- **Storage:** Persistent data is automatically encrypted using full disk encryption
+
+### What are Trusted Execution Environments (TEEs) and why do I need them?
+
+TEEs are specialized hardware features in modern CPUs that create **hardware-encrypted secure enclaves**. Think of them as "black boxes" that:
+
+- **Encrypt all memory and CPU state** so external observers (including cloud providers) cannot read your data
+- **Provide cryptographic proof** that your code is running unmodified via "remote attestation"
+- **Isolate your application** from the host operating system and hypervisor
+
+**Why you need them:**
+- **Compliance:** Meet regulatory requirements for data protection (GDPR, HIPAA, etc.)
+- **Zero-trust cloud:** Run sensitive workloads on untrusted infrastructure
+- **Verifiable security:** Cryptographically prove your application hasn't been tampered with
+
+### How does dstack compare to other confidential computing solutions?
+
+| Feature | dstack | Azure Confidential Computing | AWS Nitro Enclaves | Google Confidential GKE |
+|---------|---------|------------------------------|-------------------|--------------------------|
+| **Container Support** | ✅ Docker Compose | ✅ Limited | ❌ Custom format | ✅ Kubernetes only |
+| **Hardware Agnostic** | ✅ Intel TDX + roadmap | ❌ Azure only | ❌ AWS only | ❌ Google only |
+| **Open Source** | ✅ Fully open | ❌ Proprietary | ❌ Proprietary | ❌ Proprietary |
+| **Decentralized Keys** | ✅ Blockchain KMS | ❌ Cloud provider | ❌ Cloud provider | ❌ Cloud provider |
+| **Developer Experience** | ✅ Standard Docker | ⚠️ Modified workflow | ❌ Complex setup | ⚠️ Kubernetes required |
+
+---
+
+## Hardware & Infrastructure
+
+### What hardware do I need to run dstack?
+
+**For Development/Testing:**
+- Use [Phala Cloud](https://cloud.phala.network/register?invite=beta) - no hardware required
+- Get started in 2-3 minutes with click-to-deploy
+
+**For Self-Hosting:**
+- **CPU:** Intel processor with TDX support (4th Gen Xeon Scalable or newer)
+- **Memory:** Minimum 16GB RAM, recommended 32GB+ for production
+- **Storage:** 100GB+ SSD for the host, additional storage for applications
+- **OS:** Ubuntu 24.04 (other distributions on roadmap)
+
+**Future Hardware Support:**
+- AMD SEV-SNP (in development)
+- ARM TrustZone/CCA (planned)
+- NVIDIA H100 with confidential computing (planned)
+
+### How can I test dstack without TEE hardware?
+
+**Option 1: Phala Cloud (Recommended)**
+- Sign up at [Phala Cloud](https://cloud.phala.network/register?invite=beta)
+- Deploy applications in minutes using real TEE hardware
+- Pay-per-use pricing, no upfront costs
+- Full dstack feature set available
+
+**Option 2: Simulation Mode**
+- Limited functionality for development
+- Cannot provide real attestation or hardware security
+- Good for testing application containerization
+
+**Option 3: Cloud Providers**
+- Rent TDX-capable servers from providers like:
+  - Azure DCsv3/ECsv5 series
+  - Bare metal providers with latest Xeon processors
+
+### Is dstack production-ready?
+
+**Yes, for many use cases.** dstack is actively used in production environments, particularly through Phala Cloud. However, consider these factors:
+
+**Production-Ready:**
+- ✅ Core security features (attestation, encryption, key management)
+- ✅ Container orchestration and lifecycle management
+- ✅ Automatic HTTPS and certificate management
+- ✅ High availability and clustering support
+- ✅ Enterprise deployments in financial services and healthcare
+
+**Consider Carefully:**
+- ⚠️ Hardware ecosystem still maturing (Intel TDX is relatively new)
+- ⚠️ Limited debugging tools compared to traditional containers
+- ⚠️ Performance overhead (10-30% typical for memory-intensive workloads)
+- ⚠️ Some advanced Docker features not yet supported
+
+---
+
+## Architecture & Components
+
+### How do all the dstack components work together?
+
+dstack uses a **layered architecture** with components that handle different aspects of secure deployment:
+
+```
+[User] → [dstack CLI] → [dstack-vmm] → [Confidential VM]
+                              ↓              ↓
+[External Traffic] → [dstack-gateway] → [dstack-guest-agent] → [Your App]
+                              ↓              ↓
+                        [Certificate Mgmt] → [dstack-kms] → [Blockchain]
+```
+
+**Flow explanation:**
+1. **You deploy** using standard `docker-compose.yml` via CLI or web UI
+2. **dstack-vmm** creates a new Confidential VM with encrypted memory
+3. **dstack-os** boots inside the CVM with minimal attack surface
+4. **dstack-guest-agent** starts your containers and manages secrets
+5. **dstack-gateway** handles external traffic with automatic HTTPS
+6. **dstack-kms** provides encryption keys after verifying CVM integrity
+7. **Blockchain contracts** authorize deployments based on code measurements
+
+### What's the difference between VMM, Gateway, and KMS?
+
+**dstack-vmm (Virtual Machine Manager):**
+- **Role:** Orchestrates CVM lifecycle (create, start, stop, remove)
+- **Think of it as:** The "conductor" that manages your secure VMs
+- **Key features:** Resource allocation, CVM monitoring, web interface
+- **Runs on:** Host machine (outside the secure environment)
+
+**dstack-gateway (Network Gateway):**
+- **Role:** Secure reverse proxy handling external traffic
+- **Think of it as:** The "bouncer" that controls access to your applications
+- **Key features:** TLS termination, domain routing, certificate management, WireGuard VPN
+- **Runs on:** Host machine or dedicated gateway servers
+
+**dstack-kms (Key Management Service):**
+- **Role:** Cryptographic key generation and secret management
+- **Think of it as:** The "vault" that controls access to encryption keys
+- **Key features:** Remote attestation, key derivation, blockchain integration
+- **Runs in:** Its own Confidential VM for maximum security
+
+### Why does dstack need blockchain integration?
+
+The blockchain integration solves critical problems with traditional key management:
+
+**Problems with Centralized KMS:**
+- **Vendor lock-in:** Keys tied to specific cloud provider
+- **Single point of failure:** If KMS provider goes down, you lose access
+- **Trust issues:** Must trust the KMS provider not to access your keys
+- **Limited portability:** Hard to move applications between providers
+
+**dstack's Blockchain Solution:**
+- **Decentralized control:** No single entity controls your keys
+- **Transparent governance:** All key policies recorded on-chain
+- **Hardware portability:** Move applications between TEE providers
+- **Cryptographic authorization:** Smart contracts verify code integrity before releasing keys
+
+**Simple example:** When you deploy an app, its code hash is recorded on-chain. Only CVMs running that exact code can retrieve the encryption keys—preventing unauthorized access even if someone compromises the infrastructure.
+
+---
+
+## Security Model
+
+### How does remote attestation actually work?
+
+Remote attestation is like a **cryptographic passport** for your application that proves it's running unmodified in a genuine TEE:
+
+**Step-by-step process:**
+1. **Boot measurement:** TEE hardware measures each component as it loads (bootloader, OS, application)
+2. **Quote generation:** Hardware creates a signed "quote" containing these measurements
+3. **Quote verification:** External parties can verify the quote using the TEE manufacturer's certificates
+4. **Policy check:** Smart contracts compare measurements against approved code hashes
+5. **Key release:** If everything matches, encryption keys are provided to the application
+
+**What gets measured:**
+- Bootloader and kernel hashes
+- Operating system image
+- Application container images
+- Configuration files and compose specifications
+
+**Verification tools:**
+- Use the [TEE Attestation Explorer](https://ra-quote-explorer.vercel.app/) to inspect quotes
+- Blockchain explorer to verify on-chain policies
+- dstack APIs to retrieve current attestation status
+
+### What threats does dstack protect against?
+
+**✅ Protected Against:**
+- **Malicious cloud providers:** Can't access your encrypted memory or storage
+- **Insider threats:** System administrators can't inspect running applications
+- **Infrastructure compromises:** Hypervisor or host OS compromises don't affect CVMs
+- **Data exfiltration:** All data encrypted at rest and in transit
+- **Code tampering:** Remote attestation detects any modifications
+- **Man-in-the-middle attacks:** RA-TLS prevents certificate substitution
+- **Supply chain attacks:** Only verified code can access encryption keys
+
+**❌ Not Protected Against:**
+- **Application vulnerabilities:** Bugs in your code still exist
+- **Side-channel attacks:** Advanced cryptographic attacks (though TEEs have mitigations)
+- **Physical hardware attacks:** Direct hardware tampering with advanced tools
+- **Social engineering:** Compromising developer accounts or code repositories
+- **DDoS attacks:** Application availability depends on network protection
+
+### How do I verify my application is actually secure?
+
+dstack provides multiple verification mechanisms:
+
+**Real-time verification:**
+```bash
+# Get current attestation quote
+curl --unix-socket /var/run/dstack.sock -X POST http://dstack/GetQuote
+
+# Verify quote using external tools
+# Upload to https://ra-quote-explorer.vercel.app/
+```
+
+**Blockchain verification:**
+- Check your app's registration in KmsAuth contract
+- Verify code hashes match your deployment
+- Confirm key access policies are correct
+
+**Continuous monitoring:**
+- Monitor certificate transparency logs for unauthorized certificates
+- Set up alerts for deployment changes
+- Use dstack APIs to track CVM health and status
+
+**Third-party audits:**
+- dstack undergoes regular security audits
+- TEE hardware (Intel TDX) is independently certified
+- Open source codebase allows community security review
+
+---
+
+## Development & Deployment
+
+### How do I migrate my existing application to dstack?
+
+**Phase 1: Assessment (1-2 days)**
+```bash
+# Check if your app is already containerized
+docker-compose -f your-app/docker-compose.yml config
+
+# Identify external dependencies
+# - Databases, APIs, file storage
+# - Network requirements
+# - Compliance requirements
+```
+
+**Phase 2: Containerization (if needed)**
+```dockerfile
+# Ensure your Dockerfile follows best practices
+FROM node:18-alpine
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci --only=production
+COPY . .
+EXPOSE 8080
+CMD ["npm", "start"]
+```
+
+**Phase 3: dstack Deployment**
+```bash
+# Deploy to Phala Cloud for testing
+# Upload your docker-compose.yml via web interface
+
+# Or deploy to your own infrastructure
+dstack deploy -f docker-compose.yml
+```
+
+**Phase 4: Security Integration**
+```javascript
+// Optional: Use dstack APIs for enhanced security
+const { DstackClient } = require('@phala/dstack-sdk');
+const client = new DstackClient();
+
+// Derive encryption keys instead of environment variables
+const appKey = await client.getKey('encryption-key');
+```
+
+### Can I use my existing CI/CD pipeline?
+
+**Yes!** dstack integrates with standard CI/CD workflows:
+
+**GitHub Actions Example:**
+```yaml
+name: Deploy to dstack
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Deploy to dstack
+        run: |
+          # Option 1: Deploy to Phala Cloud via API
+          curl -X POST https://api.phala.cloud/deploy \
+            -H "Authorization: Bearer ${{ secrets.PHALA_TOKEN }}" \
+            -F "compose=@docker-compose.yml"
+          
+          # Option 2: Deploy to self-hosted
+          dstack deploy -f docker-compose.yml \
+            --endpoint ${{ secrets.DSTACK_ENDPOINT }}
+```
+
+**GitLab CI Example:**
+```yaml
+deploy:
+  stage: deploy
+  script:
+    - dstack deploy -f docker-compose.yml
+  only:
+    - main
+```
+
+**Jenkins Pipeline:**
+```groovy
+pipeline {
+    agent any
+    stages {
+        stage('Deploy') {
+            steps {
+                sh 'dstack deploy -f docker-compose.yml'
+            }
+        }
+    }
+}
+```
+
+### How do I handle secrets and environment variables?
+
+**Traditional approach (still works):**
+```yaml
+# docker-compose.yml
+services:
+  app:
+    image: myapp
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - API_KEY=${API_KEY}
+```
+
+**Enhanced dstack approach:**
+```javascript
+// Use dstack SDK for derived keys
+const client = new DstackClient();
+
+// Derive deterministic keys from app measurement
+const databaseKey = await client.getKey('database-encryption');
+const apiKey = await client.getKey('external-api-auth');
+
+// Keys are unique per application and can't be accessed by other apps
+```
+
+**Hybrid approach:**
+```yaml
+# docker-compose.yml - public config
+services:
+  app:
+    image: myapp
+    environment:
+      - PUBLIC_API_URL=https://api.example.com
+      - LOG_LEVEL=info
+    # Secrets retrieved via dstack SDK at runtime
+```
+
+### What's the performance impact of running in dstack?
+
+**Typical performance characteristics:**
+
+| Workload Type | Performance Impact | Notes |
+|---------------|-------------------|-------|
+| **CPU-intensive** | 5-15% overhead | Cryptographic operations, context switches |
+| **Memory-intensive** | 10-30% overhead | Memory encryption/decryption |
+| **Network I/O** | 5-10% overhead | TLS termination, VPN overhead |
+| **Disk I/O** | 15-25% overhead | Full disk encryption (LUKS) |
+| **Database** | 10-20% overhead | Combination of memory and disk overhead |
+
+**Optimization strategies:**
+```bash
+# Use more CPU cores to offset encryption overhead
+# In vmm.toml
+max_allocable_vcpu = 8
+
+# Allocate more memory for caching
+max_allocable_memory_in_mb = 16384
+
+# Use SSD storage for better encrypted I/O performance
+```
+
+**Benchmarking your app:**
+```bash
+# Test locally first
+docker run --name benchmark myapp
+ab -n 10000 -c 100 http://localhost:8080/
+
+# Then test in dstack
+dstack deploy -f docker-compose.yml
+ab -n 10000 -c 100 https://myapp.your-domain.com/
+```
+
+---
+
+## Operations & Management
+
+### How do I monitor and debug applications in dstack?
+
+**Built-in monitoring:**
+```bash
+# Web interface
+open http://localhost:9080
+
+# API access to logs
+curl 'http://myapp.app.yourdomain.com:9090/logs/?follow=true&timestamps=true'
+
+# Health checks
+curl http://localhost:9080/health
+```
+
+**Application monitoring:**
+```yaml
+# docker-compose.yml
+services:
+  app:
+    image: myapp
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+```
+
+**External monitoring integration:**
+```bash
+# Prometheus metrics
+curl http://localhost:9091/metrics
+
+# Custom application metrics
+# Expose metrics endpoint in your app
+# dstack automatically includes it in monitoring
+```
+
+**Debugging limitations:**
+- ❌ Cannot use `docker exec` to shell into CVMs
+- ❌ Cannot attach debuggers directly to processes
+- ❌ Limited visibility into system internals
+- ✅ Can view application logs and metrics
+- ✅ Can use remote debugging protocols (if exposed)
+- ✅ Can deploy debug versions with additional logging
+
+### How do I handle application updates and rollbacks?
+
+**Blue-green deployments:**
+```bash
+# Deploy new version
+dstack deploy -f docker-compose-v2.yml --app-id myapp-v2
+
+# Test new version
+curl https://myapp-v2.yourdomain.com/health
+
+# Switch traffic (update DNS or load balancer)
+# Remove old version
+dstack remove myapp-v1
+```
+
+**Rolling updates:**
+```yaml
+# Use multiple instances for zero-downtime updates
+# docker-compose.yml
+services:
+  app:
+    image: myapp:v2
+    deploy:
+      replicas: 3
+      update_config:
+        parallelism: 1
+        delay: 30s
+```
+
+**Rollback strategy:**
+```bash
+# Keep previous version images
+docker tag myapp:latest myapp:backup
+
+# Quick rollback
+dstack deploy -f docker-compose-backup.yml
+```
+
+### How do I scale dstack applications?
+
+**Vertical scaling (single CVM):**
+```toml
+# vmm.toml
+[cvm]
+max_allocable_vcpu = 16
+max_allocable_memory_in_mb = 32768
+max_disk_size = 1000
+```
+
+**Horizontal scaling (multiple CVMs):**
+```bash
+# Deploy multiple instances
+dstack deploy -f docker-compose.yml --replicas 3
+
+# Use load balancer or gateway routing
+# Traffic automatically distributed across instances
+```
+
+**Auto-scaling considerations:**
+- CVMs take 30-60 seconds to boot (vs milliseconds for containers)
+- Each CVM requires attestation before receiving keys
+- Consider keeping warm instances for faster scaling
+
+**Resource monitoring:**
+```bash
+# Monitor resource usage
+curl http://localhost:9080/api/vms/stats
+
+# Set up alerts for high resource usage
+# Scale proactively based on metrics
+```
+
+---
+
+## Costs & Economics
+
+### What does it cost to run dstack?
+
+dstack can be run as a managed service or on your own infrastructure. Costs depend on your deployment model, resource usage, and operational needs.
+
+**Managed Service:**
+- **Pay-per-use:** You are billed only for the resources (such as CVMs) you actively use.
+- **No upfront hardware costs:** All infrastructure is provided.
+- **Included services:** Automatic updates, monitoring, and support are typically bundled.
+
+**Self-hosted Infrastructure:**
+- **Hardware investment:** Requires servers with TEE support, networking equipment, and storage.
+- **Operational costs:** Ongoing expenses include electricity, internet, and maintenance.
+- **Full control:** You manage updates, monitoring, and support.
+
+**Cost comparison:**
+- Managed service is generally billed based on actual usage, with no upfront hardware investment.
+- Self-hosted deployments require an initial hardware purchase and ongoing operational costs.
+- Traditional cloud deployments may be less expensive, but do not provide confidential computing or TEE security.
+
+**Cost optimization tips:**
+- Choose CVM sizes appropriate to your workload.
+- Use auto-scaling to match demand.
+- Optimize container images for faster boot and lower resource usage.
+- Consider using managed services for development and self-hosting for production, or vice versa, depending on your needs.
+
+### Is dstack more expensive than traditional deployment?
+
+**Short answer:** Slightly more expensive, but the security benefits often justify the cost.
+
+**Detailed comparison:**
+
+| Deployment Model | Monthly Cost (small app) | Security Level | Compliance |
+|------------------|-------------------------|----------------|------------|
+| **Shared hosting** | $5-20 | ⭐ Low | ❌ Limited |
+| **VPS/Cloud VM** | $20-100 | ⭐⭐ Medium | ⚠️ Depends |
+| **Traditional containers** | $50-200 | ⭐⭐ Medium | ⚠️ Depends |
+| **dstack (Phala Cloud)** | $30-150 | ⭐⭐⭐⭐⭐ Very High | ✅ Built-in |
+| **Self-hosted dstack** | $100-500 | ⭐⭐⭐⭐⭐ Very High | ✅ Built-in |
+
+**When dstack saves money:**
+- **Compliance costs:** Avoid expensive audits and certifications
+- **Security incidents:** Prevent costly data breaches
+- **Vendor lock-in:** Avoid migration costs between cloud providers
+- **Development time:** Reduce time spent on security infrastructure
+
+---
+
+
+## Troubleshooting
+
+for a comprehensive guide to diagnosing and fixing common issues, see the [troubleshooting section](/docs/troubleshooting.mdx). it covers error messages, deployment failures, networking problems, and advanced debugging tips specific to dstack. start there if you run into problems, or use the quick tips below for fast checks.
+
+### My application won't start in dstack. What should I check?
+
+**Common issues and solutions:**
+
+**1. Container startup failures:**
+```bash
+# Check logs
+curl 'http://myapp.yourdomain.com:9090/logs/'
+
+# Common fixes:
+# - Ensure your app binds to 0.0.0.0, not localhost
+# - Check port mappings in docker-compose.yml
+# - Verify image works locally first
+```
+
+**2. Network connectivity issues:**
+```yaml
+# docker-compose.yml
+services:
+  app:
+    ports:
+      - "8080:8080"  # Make sure this matches your app's port
+    environment:
+      - HOST=0.0.0.0  # Bind to all interfaces, not just localhost
+```
+
+**3. Memory or resource issues:**
+```bash
+# Check resource allocation
+curl http://localhost:9080/api/vms/stats
+
+# Increase resources in vmm.toml
+max_allocable_memory_in_mb = 8192
+max_allocable_vcpu = 4
+```
+
+**4. Attestation failures:**
+```bash
+# Check KMS connectivity
+curl --cert client.crt --key client.key https://kms:8000/health
+
+# Verify app is registered in blockchain
+# Check measurements match expected values
+```
+
+### How do I get help when things go wrong?
+
+**Self-service resources:**
+1. **Documentation:** Check [dstack docs](https://docs.dstack.dev) for detailed guides
+2. **Troubleshooting guide:** See [troubleshooting](/docs/troubleshooting) for common issues
+3. **Community forum:** Search existing discussions and ask questions
+4. **GitHub issues:** Check [known issues](https://github.com/Dstack-TEE/dstack/issues) and report bugs
+
+**Getting support:**
+```bash
+# Collect diagnostic information
+dstack-util show  # System measurements
+curl http://localhost:9080/health  # Component health
+curl 'http://myapp:9090/logs/?timestamps=true'  # Application logs
+
+# Include this information when asking for help
+```
+
+**Phala Cloud users:**
+- Built-in support ticket system
+- Community Discord for real-time help
+- Priority support for production deployments
+
+**Enterprise users:**
+- Dedicated support channels
+- SLA-backed response times
+- Custom deployment assistance
+
+### What should I do if I suspect a security issue?
+
+**For security vulnerabilities:**
+1. **Do not post publicly** - security issues should be reported privately
+2. **Email security team:** security@phala.network
+3. **Include:** Detailed description, reproduction steps, potential impact
+4. **Response:** Expect acknowledgment within 24-48 hours
+
+**For attestation failures:**
+```bash
+# Verify your measurements
+dstack-util show
+
+# Check blockchain records
+# Verify KMS connectivity
+# Ensure no unauthorized changes to your application
+```
+
+**For suspicious activity:**
+```bash
+# Check certificate transparency logs
+# Monitor for unauthorized certificate issuance
+# Verify all deployments are authorized
+# Review access logs and metrics
+```
+
+**Best practices:**
+- Monitor attestation status regularly
+- Set up alerts for deployment changes
+- Keep dstack components updated
+- Follow security advisories
+
