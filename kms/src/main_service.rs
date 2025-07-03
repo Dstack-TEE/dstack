@@ -245,33 +245,45 @@ impl RpcHandler {
             .with_context(|| format!("Failed to download image {hex_os_image_hash}"))?;
         }
 
-        // Calculate expected MRs with dstack-mr command
-        let vcpus = vm_config.cpu_count.to_string();
-        let memory = vm_config.memory_size.to_string();
+        let image_info =
+            fs::read_to_string(metadata_path).context("Failed to read image metadata")?;
+        let image_info: dstack_types::ImageInfo =
+            serde_json::from_str(&image_info).context("Failed to parse image metadata")?;
 
-        let output = Command::new("dstack-mr")
-            .arg("-cpu")
-            .arg(vcpus)
-            .arg("-memory")
-            .arg(memory)
-            .arg("-json")
-            .arg("-metadata")
-            .arg(&metadata_path)
-            .output()
-            .await
-            .context("Failed to execute dstack-mr command")?;
+        let fw_path = image_dir.join(&image_info.bios);
+        let kernel_path = image_dir.join(&image_info.kernel);
+        let initrd_path = image_dir.join(&image_info.initrd);
+        let kernel_cmdline = image_info.cmdline + " initrd=initrd";
 
-        if !output.status.success() {
-            bail!(
-                "dstack-mr failed with exit code {}: {}",
-                output.status.code().unwrap_or(-1),
-                String::from_utf8_lossy(&output.stderr)
-            );
-        }
+        let mrs = dstack_mr::Machine::builder()
+            .cpu_count(vm_config.cpu_count)
+            .memory_size(vm_config.memory_size)
+            .firmware(&fw_path.display().to_string())
+            .kernel(&kernel_path.display().to_string())
+            .initrd(&initrd_path.display().to_string())
+            .kernel_cmdline(&kernel_cmdline)
+            .root_verity(true)
+            .hotplug_off(vm_config.hotplug_off)
+            .two_pass_add_pages(vm_config.qemu_single_pass_add_pages)
+            .pic(vm_config.pic)
+            .maybe_pci_hole64_size(if vm_config.pci_hole64_size > 0 {
+                Some(vm_config.pci_hole64_size)
+            } else {
+                None
+            })
+            .hugepages(vm_config.hugepages)
+            .num_gpus(vm_config.num_gpus)
+            .num_nvswitches(vm_config.num_nvswitches)
+            .build()
+            .measure()
+            .context("Failed to compute expected MRs")?;
 
-        // Parse the expected MRs
-        let expected_mrs: Mrs =
-            serde_json::from_slice(&output.stdout).context("Failed to parse dstack-mr output")?;
+        let expected_mrs: Mrs = Mrs {
+            mrtd: hex::encode(&mrs.mrtd),
+            rtmr0: hex::encode(&mrs.rtmr0),
+            rtmr1: hex::encode(&mrs.rtmr1),
+            rtmr2: hex::encode(&mrs.rtmr2),
+        };
         self.cache_mrs(&cache_key, &expected_mrs)
             .context("Failed to cache MRs")?;
         expected_mrs

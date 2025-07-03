@@ -484,11 +484,22 @@ impl App {
             manifest.gateway_urls.clone()
         };
         let sys_config = if img_ver >= (0, 5, 0) {
-            let vm_config = serde_json::to_string(&json!({
-                "os_image_hash": image.digest.unwrap_or_default(),
-                "cpu_count": manifest.vcpu,
-                "memory_size": manifest.memory as u64 * 1024 * 1024,
-            }))?;
+            let os_image_hash = hex::decode(image.digest.unwrap_or_default())
+                .context("Failed to decode image digest")?;
+            let gpus = manifest.gpus.unwrap_or_default();
+            let vm_config = serde_json::to_string(&dstack_types::VmConfig {
+                spec_version: 1,
+                os_image_hash,
+                cpu_count: manifest.vcpu.try_into().context("Too many vCPUs")?,
+                memory_size: manifest.memory as u64 * 1024 * 1024,
+                qemu_single_pass_add_pages: cfg.cvm.qemu_single_pass_add_pages,
+                pic: cfg.cvm.qemu_pic,
+                pci_hole64_size: cfg.cvm.qemu_pci_hole64_size,
+                hugepages: manifest.hugepages,
+                num_gpus: gpus.gpus.len() as u32,
+                num_nvswitches: gpus.bridges.len() as u32,
+                hotplug_off: cfg.cvm.qemu_hotplug_off,
+            })?;
             json!({
                 "kms_urls": kms_urls,
                 "gateway_urls": gateway_urls,

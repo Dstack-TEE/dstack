@@ -123,6 +123,15 @@ pub struct CvmConfig {
 
     /// Use mrconfigid instead of compose hash
     pub use_mrconfigid: bool,
+
+    /// QEMU single pass add page
+    pub qemu_single_pass_add_pages: bool,
+    /// QEMU pic
+    pub qemu_pic: bool,
+    /// QEMU pci_hole64_size
+    pub qemu_pci_hole64_size: u64,
+    /// QEMU hotplug_off
+    pub qemu_hotplug_off: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]

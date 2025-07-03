@@ -128,10 +128,19 @@ pub struct SysConfig {
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct VmConfig {
+    pub spec_version: u32,
     #[serde(with = "hex_bytes")]
     pub os_image_hash: Vec<u8>,
-    pub cpu_count: u32,
+    pub cpu_count: u8,
     pub memory_size: u64,
+    // https://github.com/intel-staging/qemu-tdx/issues/1
+    pub qemu_single_pass_add_pages: bool,
+    pub pic: bool,
+    pub pci_hole64_size: u64,
+    pub hugepages: bool,
+    pub num_gpus: u32,
+    pub num_nvswitches: u32,
+    pub hotplug_off: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -194,6 +203,14 @@ impl KeyProviderInfo {
     pub fn new(name: String, id: String) -> Self {
         Self { name, id }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImageInfo {
+    pub cmdline: String,
+    pub kernel: String,
+    pub initrd: String,
+    pub bios: String,
 }
 
 pub mod mr_config;
