@@ -26,19 +26,16 @@ beforeAll(async () => {
     ethers.ZeroAddress  // _appAuthImplementation (can be set to zero for tests)
   ], true) as KmsAuth;
 
-  // Initialize the contract with an app and KMS info
-  const appId = await kmsAuth.nextAppId();
-
   const appAuth = await deployContract(hre, "AppAuth", [
     owner.address, 
-    appId, 
     false,  // _disableUpgrades
     true,   // _allowAnyDevice
     ethers.ZeroHash,  // initialDeviceId (empty)
     ethers.ZeroHash   // initialComposeHash (empty)
   ], true) as AppAuth;
 
-  await kmsAuth.registerApp(await appAuth.getAddress());
+  const appId = await appAuth.getAddress();
+  await kmsAuth.registerApp(appId);
 
   // Set up KMS info with the generated app ID
   await kmsAuth.setKmsInfo({

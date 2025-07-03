@@ -99,7 +99,9 @@ export async function build(): Promise<FastifyInstance> {
     try {
       return await server.ethereum.checkBoot(request.body, true);
     } catch (error) {
-      console.error(error);
+      if (!(error instanceof Error && "Test backend error" == error.message)) {
+        console.error(error);
+      }
       reply.code(200).send({
         isAllowed: false,
         gatewayAppId: '',

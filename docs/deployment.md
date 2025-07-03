@@ -295,7 +295,7 @@ After the dstack-vmm is ready, you can deploy an app on it following the steps b
 The on-chain registration process includes two steps:
 
 1. Deploy an App's control contract AppAuth. Developers can develop their own or choose the reference contract from the Dstack repository. Custom contracts need to implement the IAppAuth interface.
-2. Call KmsAuth.registerApp(appAuthAddress) to register and obtain the App Id
+2. Call KmsAuth.registerApp(appAuthAddress) to register the contract.
 
 The Dstack repository provides scripts to complete these two steps:
 
@@ -352,7 +352,6 @@ Call the hardhat command to add it to the whitelist (using AppAuth as an example
 
 ```bash
 export PRIVATE_KEY=<your eth private key here>
-export KMS_CONTRACT_ADDRESS=0xFE6C45aE66344CAEF5E5D7e2cbD476286D651875
 npx hardhat app:add-hash --network phala --app-id 0xA35b434eE853fdf9c2Bf48Fa1583Ac1332d50255 0x44d9cb98aaa6ab11f5729fc7d6fd58117585e0e3fbec621612dcee6b2dfbcde5
 ```
 

@@ -95,7 +95,7 @@ describe('Server', () => {
 
     it('should handle backend errors gracefully', async () => {
       // Mock error response
-      const mockCheckBoot = jest.fn().mockRejectedValue(new Error('Backend error'));
+      const mockCheckBoot = jest.fn().mockRejectedValue(new Error('Test backend error'));
       app.ethereum.checkBoot = mockCheckBoot;
 
       const response = await app.inject({
@@ -107,7 +107,7 @@ describe('Server', () => {
       expect(response.statusCode).toBe(200);
       const result = JSON.parse(response.payload);
       expect(result.isAllowed).toBe(false);
-      expect(result.reason).toMatch(/Backend error/);
+      expect(result.reason).toMatch(/Test backend error/);
     });
   });
 });

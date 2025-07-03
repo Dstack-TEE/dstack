@@ -259,10 +259,6 @@ cast call $KMS_CONTRACT_ADDRESS "isAppAllowed((address,bytes32,address,bytes32,b
 ### Query Operations
 
 ```bash
-# Get app ID
-cast call $APP_AUTH_ADDRESS "appId()" --rpc-url $RPC_URL
-# To decode: cast abi-decode "appId()(address)" RETURN_DATA
-
 # Get owner
 cast call $APP_AUTH_ADDRESS "owner()" --rpc-url $RPC_URL
 # To decode: cast abi-decode "owner()(address)" RETURN_DATA

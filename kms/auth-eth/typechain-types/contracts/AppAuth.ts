@@ -68,7 +68,6 @@ export interface AppAuthInterface extends Interface {
       | "allowAnyDevice"
       | "allowedComposeHashes"
       | "allowedDeviceIds"
-      | "appId"
       | "disableUpgrades"
       | "initialize"
       | "isAppAllowed"
@@ -120,14 +119,13 @@ export interface AppAuthInterface extends Interface {
     functionFragment: "allowedDeviceIds",
     values: [BytesLike]
   ): string;
-  encodeFunctionData(functionFragment: "appId", values?: undefined): string;
   encodeFunctionData(
     functionFragment: "disableUpgrades",
     values?: undefined
   ): string;
   encodeFunctionData(
     functionFragment: "initialize",
-    values: [AddressLike, AddressLike, boolean, boolean, BytesLike, BytesLike]
+    values: [AddressLike, boolean, boolean, BytesLike, BytesLike]
   ): string;
   encodeFunctionData(
     functionFragment: "isAppAllowed",
@@ -188,7 +186,6 @@ export interface AppAuthInterface extends Interface {
     functionFragment: "allowedDeviceIds",
     data: BytesLike
   ): Result;
-  decodeFunctionResult(functionFragment: "appId", data: BytesLike): Result;
   decodeFunctionResult(
     functionFragment: "disableUpgrades",
     data: BytesLike
@@ -403,14 +400,11 @@ export interface AppAuth extends BaseContract {
 
   allowedDeviceIds: TypedContractMethod<[arg0: BytesLike], [boolean], "view">;
 
-  appId: TypedContractMethod<[], [string], "view">;
-
   disableUpgrades: TypedContractMethod<[], [void], "nonpayable">;
 
   initialize: TypedContractMethod<
     [
       initialOwner: AddressLike,
-      _appId: AddressLike,
       _disableUpgrades: boolean,
       _allowAnyDevice: boolean,
       initialDeviceId: BytesLike,
@@ -491,9 +485,6 @@ export interface AppAuth extends BaseContract {
     nameOrSignature: "allowedDeviceIds"
   ): TypedContractMethod<[arg0: BytesLike], [boolean], "view">;
   getFunction(
-    nameOrSignature: "appId"
-  ): TypedContractMethod<[], [string], "view">;
-  getFunction(
     nameOrSignature: "disableUpgrades"
   ): TypedContractMethod<[], [void], "nonpayable">;
   getFunction(
@@ -501,7 +492,6 @@ export interface AppAuth extends BaseContract {
   ): TypedContractMethod<
     [
       initialOwner: AddressLike,
-      _appId: AddressLike,
       _disableUpgrades: boolean,
       _allowAnyDevice: boolean,
       initialDeviceId: BytesLike,

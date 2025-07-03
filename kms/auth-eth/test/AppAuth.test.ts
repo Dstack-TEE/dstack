@@ -13,24 +13,19 @@ describe("AppAuth", function () {
 
   beforeEach(async function () {
     [owner, user] = await ethers.getSigners();
-    appId = ethers.Wallet.createRandom().address;
     appAuth = await deployContract(hre, "AppAuth", [
       owner.address, 
-      appId, 
       false,  // _disableUpgrades
       true,   // _allowAnyDevice
       ethers.ZeroHash,  // initialDeviceId (empty)
       ethers.ZeroHash   // initialComposeHash (empty)
     ], true) as AppAuth;
+    appId = await appAuth.getAddress();
   });
 
   describe("Basic functionality", function () {
     it("Should set the correct owner", async function () {
       expect(await appAuth.owner()).to.equal(owner.address);
-    });
-
-    it("Should set the correct app ID", async function () {
-      expect(await appAuth.appId()).to.equal(appId);
     });
   });
 
@@ -92,24 +87,6 @@ describe("AppAuth", function () {
       expect(isAllowed).to.be.true;
     });
 
-    it("Should reject invalid app ID", async function () {
-      const bootInfo = {
-        tcbStatus: "UpToDate",
-        advisoryIds: [],
-        appId: ethers.Wallet.createRandom().address,
-        composeHash,
-        instanceId,
-        deviceId,
-        mrAggregated,
-        osImageHash,
-        mrSystem
-      };
-
-      const [isAllowed, reason] = await appAuth.isAppAllowed(bootInfo);
-      expect(isAllowed).to.be.false;
-      expect(reason).to.equal("Wrong app controller");
-    });
-
     it("Should reject unallowed compose hash", async function () {
       const bootInfo = {
         tcbStatus: "UpToDate",
@@ -153,24 +130,22 @@ describe("AppAuth", function () {
     let appIdWithData: string;
 
     beforeEach(async function () {
-      appIdWithData = ethers.Wallet.createRandom().address;
-      
       // Deploy using the new initializer
       const contractFactory = await ethers.getContractFactory("AppAuth");
       appAuthWithData = await hre.upgrades.deployProxy(
         contractFactory,
-        [owner.address, appIdWithData, false, false, testDevice, testHash],
+        [owner.address, false, false, testDevice, testHash],
         { 
           kind: 'uups'
         }
       ) as AppAuth;
       
       await appAuthWithData.waitForDeployment();
+      appIdWithData = await appAuthWithData.getAddress();
     });
 
     it("Should set basic properties correctly", async function () {
       expect(await appAuthWithData.owner()).to.equal(owner.address);
-      expect(await appAuthWithData.appId()).to.equal(appIdWithData);
       expect(await appAuthWithData.allowAnyDevice()).to.be.false;
     });
 
@@ -258,14 +233,14 @@ describe("AppAuth", function () {
       const contractFactory = await ethers.getContractFactory("AppAuth");
       const appAuthEmpty = await hre.upgrades.deployProxy(
         contractFactory,
-        [owner.address, appIdWithData, false, false, ethers.ZeroHash, ethers.ZeroHash],
-        { 
+        [owner.address, false, false, ethers.ZeroHash, ethers.ZeroHash],
+        {
           kind: 'uups'
         }
       ) as AppAuth;
-      
+
       await appAuthEmpty.waitForDeployment();
-      
+
       // Should not have any devices or hashes set
       expect(await appAuthEmpty.allowedDeviceIds(testDevice)).to.be.false;
       expect(await appAuthEmpty.allowedComposeHashes(testHash)).to.be.false;

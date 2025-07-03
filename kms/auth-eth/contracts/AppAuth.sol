@@ -16,9 +16,6 @@ contract AppAuth is
     IAppAuth,
     IAppAuthBasicManagement
 {
-    // App ID this contract is managing
-    address public appId;
-
     // Mapping of allowed compose hashes for this app
     mapping(bytes32 => bool) public allowedComposeHashes;
 
@@ -43,31 +40,28 @@ contract AppAuth is
     // Initialize the contract
     function initialize(
         address initialOwner,
-        address _appId,
         bool _disableUpgrades,
         bool _allowAnyDevice,
         bytes32 initialDeviceId,
         bytes32 initialComposeHash
     ) public initializer {
         require(initialOwner != address(0), "invalid owner address");
-        require(_appId != address(0), "invalid app ID");
-        
-        appId = _appId;
+
         _upgradesDisabled = _disableUpgrades;
         allowAnyDevice = _allowAnyDevice;
-        
+
         // Add initial device if provided
         if (initialDeviceId != bytes32(0)) {
             allowedDeviceIds[initialDeviceId] = true;
             emit DeviceAdded(initialDeviceId);
         }
-        
+
         // Add initial compose hash if provided
         if (initialComposeHash != bytes32(0)) {
             allowedComposeHashes[initialComposeHash] = true;
             emit ComposeHashAdded(initialComposeHash);
         }
-        
+
         __Ownable_init(initialOwner);
         __UUPSUpgradeable_init();
         __ERC165_init();
@@ -131,11 +125,6 @@ contract AppAuth is
     function isAppAllowed(
         IAppAuth.AppBootInfo calldata bootInfo
     ) external view override returns (bool isAllowed, string memory reason) {
-        // Check if this controller is responsible for the app
-        if (bootInfo.appId != appId) {
-            return (false, "Wrong app controller");
-        }
-
         // Check if compose hash is allowed
         if (!allowedComposeHashes[bootInfo.composeHash]) {
             return (false, "Compose hash not allowed");
