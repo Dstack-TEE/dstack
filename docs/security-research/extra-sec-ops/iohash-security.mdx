@@ -1,0 +1,38 @@
+---
+title: "IOHash Security Architecture"
+description: "Content-addressed storage and cryptographic integrity verification for dstack"
+---
+
+# IOHash Security Architecture
+
+IOHash is a specialized cryptographic hashing utility that serves as a critical component in dstack's trusted execution environment. This command-line tool operates as a streaming hash computation service, designed to compute cryptographic digests of data streams while preserving the original data flow—reading from stdin, outputting original data to stdout, and writing hash digests to stderr.
+
+## Core Purpose and Design
+
+The utility exists to provide consistent cryptographic operations across dstack's TEE infrastructure. IOHash processes data in efficient 32KB chunks, supporting both file-based operations and Unix pipeline integration without disrupting existing data flows. This design enables seamless integration into existing workflows while providing cryptographic verification capabilities.
+
+The tool supports an extensive range of industry-standard cryptographic algorithms, including the complete SHA-2 family (SHA-224, SHA-256, SHA-384, SHA-512, and their variants), the SHA-3 family, Keccak variants, and Blake2 algorithms. This comprehensive support ensures compatibility with various security requirements throughout the TEE environment.
+
+## Integration with dstack's Security Architecture
+
+IOHash functions as more than a standalone utility—it's deeply integrated into dstack's attestation and verification systems. The algorithms supported by IOHash directly correspond to those used in the broader TEE attestation framework, particularly for processing report data in TDX quotes. This alignment ensures that hash computations performed by IOHash can be seamlessly verified and validated within the complete attestation pipeline.
+
+The utility uses SHA-512 as its default algorithm, maintaining consistency with the rest of dstack's infrastructure. This standardization simplifies verification processes and reduces the complexity of cross-component validation.
+
+## Security Integration Points
+
+The tool integrates with several key components of dstack's security model. It works alongside the guest agent RPC protocol for TDX quote generation, enabling applications to specify hash algorithms for attestation processes. The KMS component utilizes similar cryptographic functions, particularly Keccak256, for key derivation and message signing operations.
+
+IOHash also supports the event log processing system, which implements measurement replay functionality using SHA-384 hashing. This integration ensures that hash computations can be verified against Runtime Measurement Registers (RTMRs) within the TDX environment, maintaining the integrity of the boot process and runtime measurements.
+
+## Cryptographic Integrity and Validation
+
+The security architecture includes comprehensive validation mechanisms that ensure debug modes are disabled and measurements match expected values. IOHash supports the creation of unique application fingerprints based on compose files and instance identifiers, enabling fine-grained security policies and verification processes.
+
+The utility's design emphasizes both performance and security, utilizing Rust's Digest trait for consistent algorithm handling while maintaining the streaming architecture necessary for high-throughput operations. This approach ensures that cryptographic operations remain efficient even when processing large data volumes.
+
+## Role in TEE Attestation
+
+Within the broader dstack ecosystem, IOHash demonstrates a cohesive approach to cryptographic operations where the same algorithms and processing methods are used consistently across different components. From command-line utilities to core attestation services, this consistency reduces complexity and improves the overall security posture of the system.
+
+The utility serves both immediate operational needs and long-term security requirements, providing a foundation for content-addressed storage, data integrity verification, and seamless integration with dstack's comprehensive TEE security architecture.

@@ -1,0 +1,33 @@
+---
+title: "TDX Cryptographic Implementation Details"
+description: "Technical deep dive into the cryptographic primitives and implementation details of dStack's TDX attestation."
+---
+
+## Cryptographic Implementation Details
+
+### Hash Algorithm Support
+
+The attestation layer supports a full range of cryptographic hash algorithms for report data binding, as implemented in [`attestation.rs#L33`](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/ra-tls/src/attestation.rs#L33). By default, `sha512` is used, but options include `sha256`, `sha384`, all SHA-3 variants, Keccak, and a `raw` mode for direct data binding. Every report data input is prefixed with a content tag (e.g., `kms-root-ca`, `ratls-cert`, `app-data`), ensuring context-specific and unambiguous measurements. This allows applications to select the most suitable hash algorithm, while maintaining interoperability and high security.
+
+The flexibility in hash algorithm selection is crucial for supporting a wide range of cryptographic policies and interoperability requirements. By allowing applications to choose the most appropriate algorithm, dStack ensures both forward compatibility and robust security.
+
+### Key Derivation Security
+
+All application keys are deterministically derived from hardware-sealed root keys, using application-specific identifiers for cryptographic isolation between tenants. The guest agent’s [`get_key`](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/guest-agent/src/rpc_service.rs#L150C1-L239C2) RPC method implements this: a root ECDSA key derives per-application keys by path, then signs the derived public key and usage context. This signature chain allows independent verification that every derived key is both valid and bound to the right application, so that only trusted code can use it.
+
+This approach to key derivation ensures that cryptographic material is never shared across tenants or applications, providing strong isolation and minimizing the risk of key compromise.
+
+## Notes
+
+dStack’s TDX attestation provides enterprise-grade security through hardware-rooted trust, complete measurement chains, and rigorous verification at every level. The platform’s guarantees rest on Intel TDX hardware, robust cryptographic construction, and careful, modular validation of all trust boundaries. This design enables flexible deployment for a range of use cases—while ensuring uncompromising security properties wherever it’s used.
+
+## References
+
+- [Intel TDX Module 1.5 Specification](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-trust-domain-extensions.html)
+- [dstack Attestation Design Doc](https://github.com/Dstack-TEE/dstack/blob/master/attestation.md)
+
+<div className="mt-8 p-4 bg-blue-50 rounded-lg border border-blue-200">
+  <p className="text-sm text-blue-800">
+    <strong>Next Component:</strong> Learn how attestation integrates with the <a href="/docs/security-research/vmm-security" className="underline">VMM security architecture</a>.
+  </p>
+</div> 
