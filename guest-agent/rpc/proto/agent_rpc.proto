@@ -162,6 +162,8 @@ message GetQuoteResponse {
   string event_log = 2;
   // Report data
   bytes report_data = 3;
+  // Hw config
+  string vm_config = 4;
 }
 
 message EmitEventArgs {

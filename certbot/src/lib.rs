@@ -13,7 +13,7 @@
 //! to the documentation of individual structs and functions.
 
 pub use acme_client::AcmeClient;
-pub use bot::{CertBot, CertBotConfig};
+pub use bot::{read_pubkey, CertBot, CertBotConfig};
 pub use dns01_client::Dns01Client;
 pub use workdir::WorkDir;
 

@@ -13,6 +13,7 @@ use hyper_util::rt::tokio::TokioIo;
 use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::version::{TLS12, TLS13};
+use serde::Serialize;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::TcpStream;
 use tokio::time::timeout;
@@ -124,6 +125,22 @@ pub(crate) fn create_acceptor(config: &ProxyConfig) -> Result<TlsAcceptor> {
     Ok(acceptor)
 }
 
+fn json_response(body: &impl Serialize) -> Result<Response<String>> {
+    let body = serde_json::to_string(body).context("Failed to serialize response")?;
+    Response::builder()
+        .status(StatusCode::OK)
+        .header("Content-Type", "application/json")
+        .body(body)
+        .context("Failed to build response")
+}
+
+fn empty_response(status: StatusCode) -> Result<Response<String>> {
+    Response::builder()
+        .status(status)
+        .body(String::new())
+        .context("Failed to build response")
+}
+
 impl Proxy {
     /// Reload the TLS acceptor with fresh certificates
     pub fn reload_certificates(&self) -> Result<()> {
@@ -141,6 +158,61 @@ impl Proxy {
         Ok(())
     }
 
+    pub(crate) async fn handle_this_node(
+        &self,
+        inbound: TcpStream,
+        buffer: Vec<u8>,
+        port: u16,
+    ) -> Result<()> {
+        if port != 80 {
+            bail!("Only port 80 is supported for this node");
+        }
+        let stream = self.tls_accept(inbound, buffer).await?;
+        let io = TokioIo::new(stream);
+
+        let service = service_fn(|req: Request<Incoming>| async move {
+            // Only respond to GET / requests
+            if req.method() != hyper::Method::GET {
+                return empty_response(StatusCode::METHOD_NOT_ALLOWED);
+            }
+            if req.uri().path() == "/health" {
+                return empty_response(StatusCode::OK);
+            }
+            let path = req.uri().path().trim_start_matches("/.dstack");
+            match path {
+                "/index" => {
+                    let body = serde_json::json!({
+                        "type": "dstack gateway",
+                        "paths": [
+                            "/index",
+                            "/app-info",
+                            "/acme-info",
+                        ],
+                    });
+                    json_response(&body)
+                }
+                "/app-info" => {
+                    let agent = crate::dstack_agent().context("Failed to get dstack agent")?;
+                    let app_info = agent.info().await.context("Failed to get app info")?;
+                    json_response(&app_info)
+                }
+                "/acme-info" => {
+                    let acme_info = self.acme_info().await.context("Failed to get acme info")?;
+                    json_response(&acme_info)
+                }
+                _ => empty_response(StatusCode::NOT_FOUND),
+            }
+        });
+
+        http1::Builder::new()
+            .serve_connection(io, service)
+            .await
+            .context("Failed to serve HTTP connection")?;
+
+        Ok(())
+    }
+
+    /// Deprecated legacy endpoint
     pub(crate) async fn handle_health_check(
         &self,
         inbound: TcpStream,
@@ -158,17 +230,15 @@ impl Proxy {
         let service = service_fn(|req: Request<Incoming>| async move {
             // Only respond to GET / requests
             if req.method() != hyper::Method::GET || req.uri().path() != "/" {
-                return Ok::<_, anyhow::Error>(
-                    Response::builder()
-                        .status(StatusCode::METHOD_NOT_ALLOWED)
-                        .body(String::new())
-                        .unwrap(),
-                );
+                return Response::builder()
+                    .status(StatusCode::NOT_FOUND)
+                    .body(String::new())
+                    .context("Failed to build response");
             }
-            Ok(Response::builder()
+            Response::builder()
                 .status(StatusCode::OK)
                 .body(String::new())
-                .unwrap())
+                .context("Failed to build response")
         });
 
         http1::Builder::new()
@@ -213,6 +283,9 @@ impl Proxy {
     ) -> Result<()> {
         if app_id == "health" {
             return self.handle_health_check(inbound, buffer, port).await;
+        }
+        if app_id == "gateway" {
+            return self.handle_this_node(inbound, buffer, port).await;
         }
         let addresses = self
             .lock()

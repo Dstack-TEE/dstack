@@ -25,7 +25,7 @@ message WireGuardPeer {
   string ip = 2;
   // The wireguard peer endpoint.
   string endpoint = 3;
-} 
+}
 
 // WireGuardConfig is the configuration of the WireGuard.
 message WireGuardConfig {
@@ -79,12 +79,25 @@ message HostInfo {
   uint64 num_connections = 7;
 }
 
+message QuotedPublicKey {
+  bytes public_key = 1;
+  string quote = 2;
+}
+
 // AcmeInfoResponse is the response for AcmeInfo.
 message AcmeInfoResponse {
   // The ACME account URI.
   string account_uri = 1;
   // The public key history of the certificate.
   repeated bytes hist_keys = 2;
+  // The quoted public key of the certificate.
+  repeated QuotedPublicKey quoted_hist_keys = 3;
+  // The quote of the ACME account URI.
+  string account_quote = 4;
+  // Active certificate
+  string active_cert = 5;
+  // The domain that serves ZT-HTTPS
+  string base_domain = 6;
 }
 
 // Get HostInfo for associated instance id.

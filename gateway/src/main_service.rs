@@ -2,6 +2,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     net::Ipv4Addr,
     ops::Deref,
+    path::Path,
     sync::{Arc, Mutex, MutexGuard, RwLock},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -12,11 +13,14 @@ use certbot::{CertBot, WorkDir};
 use cmd_lib::run_cmd as cmd;
 use dstack_gateway_rpc::{
     gateway_server::{GatewayRpc, GatewayServer},
-    AcmeInfoResponse, GatewayState, GuestAgentConfig, RegisterCvmRequest, RegisterCvmResponse,
-    WireGuardConfig, WireGuardPeer,
+    AcmeInfoResponse, GatewayState, GuestAgentConfig, QuotedPublicKey, RegisterCvmRequest,
+    RegisterCvmResponse, WireGuardConfig, WireGuardPeer,
 };
+use dstack_guest_agent_rpc::{dstack_guest_client::DstackGuestClient, RawQuoteArgs};
 use fs_err as fs;
+use http_client::prpc::PrpcClient;
 use ra_rpc::{CallContext, RpcCall, VerifiedAttestation};
+use ra_tls::attestation::QuoteContentType;
 use rand::seq::IteratorRandom;
 use rinja::Template as _;
 use safe_write::safe_write;
@@ -169,6 +173,51 @@ impl Proxy {
                 .context("Failed to reload certificates")?;
         }
         Ok(renewed)
+    }
+
+    pub(crate) async fn acme_info(&self) -> Result<AcmeInfoResponse> {
+        let config = self.lock().config.clone();
+        let workdir = WorkDir::new(&config.certbot.workdir);
+        let account_uri = workdir.acme_account_uri().unwrap_or_default();
+        let keys = workdir.list_cert_public_keys().unwrap_or_default();
+        let agent = crate::dstack_agent().context("Failed to get dstack agent")?;
+        let account_quote = get_or_generate_quote(
+            &agent,
+            QuoteContentType::Custom("acme-account"),
+            account_uri.as_bytes(),
+            workdir.acme_account_quote_path(),
+        )
+        .await
+        .unwrap_or_default();
+
+        let mut quoted_hist_keys = vec![];
+        for cert_path in workdir.list_certs().unwrap_or_default() {
+            let cert_pem = fs::read_to_string(&cert_path).context("Failed to read key")?;
+            let pubkey = certbot::read_pubkey(&cert_pem).context("Failed to read pubkey")?;
+            let quote = get_or_generate_quote(
+                &agent,
+                QuoteContentType::Custom("zt-cert"),
+                &pubkey,
+                cert_path.display().to_string() + ".quote",
+            )
+            .await
+            .unwrap_or_default();
+            quoted_hist_keys.push(QuotedPublicKey {
+                public_key: pubkey,
+                quote,
+            });
+        }
+        let active_cert =
+            fs::read_to_string(workdir.cert_path()).context("Failed to read active cert")?;
+
+        Ok(AcmeInfoResponse {
+            account_uri,
+            hist_keys: keys.into_iter().collect(),
+            account_quote,
+            quoted_hist_keys,
+            active_cert,
+            base_domain: config.proxy.base_domain.clone(),
+        })
     }
 }
 
@@ -681,14 +730,7 @@ impl GatewayRpc for RpcHandler {
     }
 
     async fn acme_info(self) -> Result<AcmeInfoResponse> {
-        let state = self.state.lock();
-        let workdir = WorkDir::new(&state.config.certbot.workdir);
-        let account_uri = workdir.acme_account_uri().unwrap_or_default();
-        let keys = workdir.list_cert_public_keys().unwrap_or_default();
-        Ok(AcmeInfoResponse {
-            account_uri,
-            hist_keys: keys.into_iter().collect(),
-        })
+        self.state.acme_info().await
     }
 
     async fn update_state(self, request: GatewayState) -> Result<()> {
@@ -723,6 +765,26 @@ impl GatewayRpc for RpcHandler {
             .context("failed to update state")?;
         Ok(())
     }
+}
+
+async fn get_or_generate_quote(
+    agent: &DstackGuestClient<PrpcClient>,
+    content_type: QuoteContentType<'_>,
+    payload: &[u8],
+    quote_path: impl AsRef<Path>,
+) -> Result<String> {
+    let quote_path = quote_path.as_ref();
+    if fs::metadata(quote_path).is_ok() {
+        return fs::read_to_string(quote_path).context("Failed to read quote");
+    }
+    let report_data = content_type.to_report_data(payload).to_vec();
+    let response = agent
+        .get_quote(RawQuoteArgs { report_data })
+        .await
+        .context("Failed to get quote")?;
+    let quote = serde_json::to_string(&response).context("Failed to serialize quote")?;
+    safe_write(quote_path, &quote).context("Failed to write quote")?;
+    Ok(quote)
 }
 
 impl RpcCall<Proxy> for RpcHandler {

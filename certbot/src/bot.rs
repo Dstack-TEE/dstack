@@ -210,7 +210,7 @@ impl CertBot {
     }
 }
 
-fn read_pubkey(cert_pem: &str) -> Result<Vec<u8>> {
+pub fn read_pubkey(cert_pem: &str) -> Result<Vec<u8>> {
     let cert = read_pem(cert_pem)?;
     let public_key = cert.parse_x509().context("failed to parse x509 cert")?;
     Ok(public_key.tbs_certificate.public_key().raw.to_vec())

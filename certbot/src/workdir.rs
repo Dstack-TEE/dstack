@@ -53,6 +53,10 @@ impl WorkDir {
         Ok(credentials.account_id)
     }
 
+    pub fn acme_account_quote_path(&self) -> PathBuf {
+        self.workdir.join("acme-account.quote")
+    }
+
     pub fn list_cert_public_keys(&self) -> Result<BTreeSet<Vec<u8>>> {
         crate::bot::list_cert_public_keys(self.backup_dir())
     }

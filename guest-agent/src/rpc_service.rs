@@ -212,17 +212,23 @@ impl DstackGuestRpc for InternalRpcHandler {
         }
         let report_data = pad64(&request.report_data).context("Report data is too long")?;
         if self.state.config().simulator.enabled {
-            return simulate_quote(self.state.config(), report_data);
+            return simulate_quote(
+                self.state.config(),
+                report_data,
+                &self.state.inner.vm_config,
+            );
         }
         let (_, quote) =
             tdx_attest::get_quote(&report_data, None).context("Failed to get quote")?;
         let event_log = read_event_logs().context("Failed to decode event log")?;
         let event_log =
             serde_json::to_string(&event_log).context("Failed to serialize event log")?;
+
         Ok(GetQuoteResponse {
             quote,
             event_log,
             report_data: report_data.to_vec(),
+            vm_config: self.state.inner.vm_config.clone(),
         })
     }
 
@@ -238,7 +244,11 @@ impl DstackGuestRpc for InternalRpcHandler {
     }
 }
 
-fn simulate_quote(config: &Config, report_data: [u8; 64]) -> Result<GetQuoteResponse> {
+fn simulate_quote(
+    config: &Config,
+    report_data: [u8; 64],
+    vm_config: &str,
+) -> Result<GetQuoteResponse> {
     let quote_file =
         fs::read_to_string(&config.simulator.quote_file).context("Failed to read quote file")?;
     let mut quote = hex::decode(quote_file.trim()).context("Failed to decode quote")?;
@@ -252,6 +262,7 @@ fn simulate_quote(config: &Config, report_data: [u8; 64]) -> Result<GetQuoteResp
         quote,
         event_log,
         report_data: report_data.to_vec(),
+        vm_config: vm_config.to_string(),
     })
 }
 
@@ -332,7 +343,11 @@ impl TappdRpc for InternalRpcHandlerV0 {
         let report_data =
             content_type.to_report_data_with_hash(&request.report_data, &request.hash_algorithm)?;
         if self.state.config().simulator.enabled {
-            let response = simulate_quote(self.state.config(), report_data)?;
+            let response = simulate_quote(
+                self.state.config(),
+                report_data,
+                &self.state.inner.vm_config,
+            )?;
             return Ok(TdxQuoteResponse {
                 quote: response.quote,
                 event_log: response.event_log,
