@@ -1,4 +1,4 @@
-import { expect, describe, it } from 'vitest'
+import { expect, describe, it, vi } from 'vitest'
 import { DstackClient } from '../index'
 
 describe('DstackClient', () => {
@@ -99,5 +99,76 @@ describe('DstackClient', () => {
     expect(result).toHaveProperty('certificate_chain')
     expect(result.key).not.toBe('')
     expect(result.certificate_chain.length).toBeGreaterThan(0)
+  })
+
+  it('should throw error when unix socket file does not exist', () => {
+    // Temporarily remove environment variable to test file check
+    const savedEnv = process.env.DSTACK_SIMULATOR_ENDPOINT
+    delete process.env.DSTACK_SIMULATOR_ENDPOINT
+    
+    expect(() => new DstackClient('/non/existent/socket')).toThrow('Unix socket file /non/existent/socket does not exist')
+    
+    // Restore environment variable
+    if (savedEnv) {
+      process.env.DSTACK_SIMULATOR_ENDPOINT = savedEnv
+    }
+  })
+
+  it('should not throw error for non-unix socket endpoints', () => {
+    // Temporarily remove environment variable to test non-unix socket paths
+    const savedEnv = process.env.DSTACK_SIMULATOR_ENDPOINT
+    delete process.env.DSTACK_SIMULATOR_ENDPOINT
+    
+    expect(() => new DstackClient('http://localhost:8080')).not.toThrow()
+    expect(() => new DstackClient('https://example.com')).not.toThrow()
+    
+    // Restore environment variable
+    if (savedEnv) {
+      process.env.DSTACK_SIMULATOR_ENDPOINT = savedEnv
+    }
+  })
+
+  it('should be able to check if service is reachable', async () => {
+    const client = new DstackClient()
+    const isReachable = await client.isReachable()
+    expect(typeof isReachable).toBe('boolean')
+  })
+
+  describe('deprecated methods', () => {
+    it('should support deprecated deriveKey method with warning', async () => {
+      const client = new DstackClient()
+      const consoleSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      
+      const result = await client.deriveKey('/', 'test')
+      expect(result).toHaveProperty('key')
+      expect(result).toHaveProperty('signature_chain')
+      expect(consoleSpy).toHaveBeenCalledWith('deriveKey is deprecated, please use getKey instead')
+      
+      consoleSpy.mockRestore()
+    })
+
+    it('should support deprecated tdxQuote method with warning', async () => {
+      const client = new DstackClient()
+      const consoleSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      
+      const result = await client.tdxQuote('test data')
+      expect(result).toHaveProperty('quote')
+      expect(result).toHaveProperty('event_log')
+      expect(consoleSpy).toHaveBeenCalledWith('tdxQuote is deprecated, please use getQuote instead')
+      
+      consoleSpy.mockRestore()
+    })
+
+    it('should support tdxQuote with hash algorithm parameter', async () => {
+      const client = new DstackClient()
+      const consoleSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      
+      const result = await client.tdxQuote('test data', 'sha256')
+      expect(result).toHaveProperty('quote')
+      expect(result).toHaveProperty('event_log')
+      expect(consoleSpy).toHaveBeenCalledWith('tdxQuote is deprecated, please use getQuote instead')
+      
+      consoleSpy.mockRestore()
+    })
   })
 })
