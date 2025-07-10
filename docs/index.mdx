@@ -1,0 +1,135 @@
+---
+title: "Getting Started"
+description: "Easily build and deploy containerized apps to your own confidential virtual machine using the dstack framework"
+---
+
+## Begin by deploying your first dstack app
+
+<div className="flex justify-center mt-10 px-2">
+  <a
+    href="/docs/getting-started/start"
+    className="group block w-full max-w-xl text-center rounded-2xl shadow-xl border-4 border-lime-500 bg-gradient-to-r from-lime-200 via-lime-300 to-lime-100 hover:from-lime-300 hover:to-lime-200 transition-all duration-200 p-6 sm:p-8"
+    style={{
+      background: 'linear-gradient(90deg, #d9f99d 0%, #bbf7d0 100%)',
+      border: '3.5px solid #84cc16',
+      color: '#166534',
+      fontWeight: 700,
+      fontSize: '1.15rem',
+      letterSpacing: '-0.01em',
+      minWidth: '200px',
+      boxShadow: '0 4px 24px 0 rgba(132,204,22,0.18)',
+      textDecoration: 'none',
+      cursor: 'pointer'
+    }}
+  >
+    <div className="flex flex-col items-center space-y-3">
+      <span className="inline-flex items-center justify-center w-12 h-12 sm:w-14 sm:h-14 rounded-full bg-lime-100 border-2 border-lime-400 mb-2 shadow">
+        <svg width="32" height="32" fill="none" viewBox="0 0 24 24" className="sm:w-9 sm:h-9 w-8 h-8">
+          <rect x="4" y="4" width="16" height="16" rx="3" fill="#bbf7d0" stroke="#84cc16" strokeWidth="2"/>
+          <path d="M8 12h8M8 16h8M8 8h8" stroke="#166534" strokeWidth="2" strokeLinecap="round"/>
+        </svg>
+      </span>
+      <span className="block text-xl sm:text-2xl font-extrabold tracking-tight">Quick Start Guide</span>
+      <span className="block text-base font-medium mt-1 mb-1">
+        Get started with a step-by-step guide for deploying apps on the vmm with dstack
+      </span>
+      <span className="block text-sm text-lime-800">
+        <strong>Linux required.</strong> Follow our comprehensive guide to get started.
+      </span>
+      <span className="inline-block mt-4">
+        <span className="inline-flex items-center px-4 py-2 sm:px-6 sm:py-3 rounded-xl bg-lime-500 text-white font-bold text-base sm:text-lg shadow-lg group-hover:bg-lime-600 transition">
+          Start Here
+          <svg className="ml-2" width="20" height="20" fill="none" viewBox="0 0 24 24">
+            <path d="M13 5l7 7-7 7M5 12h14" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+          </svg>
+        </span>
+      </span>
+    </div>
+  </a>
+</div>
+
+## Zero Code Changes, Maximum Security, and Full Control
+
+<div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6 mt-8">
+  <div className="rounded-lg p-4 sm:p-5 flex flex-col h-full">
+    <h3 className="font-semibold text-blue-900 mb-2 flex items-center gap-2">
+      <span className="inline-block">
+        <svg width="20" height="20" fill="none" viewBox="0 0 24 24"><path d="M16 18v1a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h1" stroke="#0069ED" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/><rect x="8" y="2" width="14" height="14" rx="2" stroke="#0069ED" strokeWidth="2"/></svg>
+      </span>
+      Use Your Existing Code
+    </h3>
+    <p className="text-sm mt-2">Drop in your existing Docker containers—dstack works as-is. No rewrites, no SDKs, just instant TEE.</p>
+  </div>
+  <div className="rounded-lg p-4 sm:p-5 flex flex-col h-full">
+    <h3 className="font-semibold text-green-900 mb-2 flex items-center gap-2">
+      <span className="inline-block">
+        <svg width="20" height="20" fill="none" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" stroke="#10B981" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/><path d="M9 9h6v4H9z" stroke="#10B981" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+      </span>
+      Protected Programming
+    </h3>
+    <p className="text-sm mt-2">Get hardware-enforced, zero-trust compute. Security is built in, not bolted on.</p>
+  </div>
+  <div className="rounded-lg p-4 sm:p-5 flex flex-col h-full">
+    <h3 className="font-semibold text-yellow-900 mb-2 flex items-center gap-2">
+      <span className="inline-block">
+        <svg width="20" height="20" fill="none" viewBox="0 0 24 24"><path d="M17 8V7a5 5 0 0 0-10 0v1M5 8h14a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2z" stroke="#F59E0B" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/><path d="M12 12v4" stroke="#F59E0B" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+      </span>
+      No Vendor Lock-in
+    </h3>
+    <p className="text-sm mt-2">Bare metal, cloud, or hybrid—deploy anywhere. Hardware abstraction enables full deployment flexibility.</p>
+  </div>
+</div>
+
+---
+
+## Dive Deeper
+
+<div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+  <Card 
+    title="Core Concepts" 
+    icon="star" 
+    href="/docs/concepts/overview"
+    className="hover:shadow-lg transition-shadow border-2 border-gray-200 rounded-lg p-3 sm:p-4 flex flex-col h-full"
+  >
+    <p className="mb-4">Understand TEE, attestation, and our architecture</p>
+    <button className="bg-blue-500 hover:bg-blue-600 text-white px-3 py-2 sm:px-4 sm:py-2 rounded text-sm sm:text-base">
+      Learn More →
+    </button>
+  </Card>
+  
+  <Card 
+    title="Tutorials" 
+    icon="apple-whole" 
+    href="/docs/tutorials/index-quick-start"
+    className="hover:shadow-lg transition-shadow border-2 border-gray-200 rounded-lg p-3 sm:p-4 flex flex-col h-full"
+  >
+    <p className="mb-4">Step-by-step guides for common use cases</p>
+    <button className="bg-blue-500 hover:bg-blue-600 text-white px-3 py-2 sm:px-4 sm:py-2 rounded text-sm sm:text-base">
+      View Tutorials →
+    </button>
+  </Card>
+  
+  <Card 
+    title="DStack Community" 
+    icon="users" 
+    href="/docs/community-section/community"
+    className="hover:shadow-lg transition-shadow border-2 border-gray-200 rounded-lg p-3 sm:p-4 flex flex-col h-full"
+  >
+    <p className="mb-4">Connect, share, and collaborate with other dstack users</p>
+    <button className="bg-blue-500 hover:bg-blue-600 text-white px-3 py-2 sm:px-4 sm:py-2 rounded text-sm sm:text-base">
+      Join Community →
+    </button>
+  </Card>
+  
+  <Card 
+    title="Security & Research" 
+    icon="shield-plus" 
+    href="/docs/security-research/overview"
+    className="hover:shadow-lg transition-shadow border-2 border-gray-200 rounded-lg p-3 sm:p-4 flex flex-col h-full"
+  >
+    <p className="mb-4">Explore security model, research, and advanced topics</p>
+    <button className="bg-blue-500 hover:bg-blue-600 text-white px-3 py-2 sm:px-4 sm:py-2 rounded text-sm sm:text-base">
+      Learn More →
+    </button>
+  </Card>
+</div>

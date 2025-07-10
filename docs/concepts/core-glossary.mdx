@@ -1,0 +1,82 @@
+---
+title: "Component Glossary"
+description: "Deep dive into dstack's essential components and their roles"
+---
+
+# DStack Core Components Overview
+
+This page provides an overview of dstack's core components and guides you through understanding their technical implementation. Each component plays a crucial role in creating secure, confidential computing environments.
+
+For a high-level conceptual overview, start with [Basic Components](/docs/concepts/basic-components). This page focuses on the technical implementation details and how components interact.
+
+---
+
+
+## Component Responsibilities
+
+### Host Components (Run on Physical Host)
+
+**VMM (Virtual Machine Manager)**
+- Orchestrates CVM lifecycle and resource allocation
+- Provides RPC API, Host API, Guest API, and Web UI interfaces
+- Manages VM networking, storage, and GPU passthrough
+- Integrates with KMS for secure boot processes
+
+**Gateway (Network Proxy)**  
+- Handles TLS termination and WireGuard VPN connections
+- Routes external traffic to CVMs using domain-based routing
+- Manages certificate provisioning and renewal via Let's Encrypt
+- Provides cluster synchronization for high availability
+
+**KMS (Key Management Service)**
+- Provides enterprise-grade cryptographic services with blockchain integration
+- Supports three boot modes: Non-KMS, Local-Key-Provider, and KMS
+- Handles remote attestation and key distribution
+- Manages certificate authority and signing operations
+
+### CVM Components (Run Inside Confidential VMs)
+
+**dstack-os (Operating System)**
+- Minimal, secure Linux foundation with TDX attestation
+- Provides secure boot process with UEFI and measured boot
+- Handles full disk encryption initialization
+- Manages system services and container runtime
+
+**tdxctl (TDX Control Utility)**
+- Provides secure boot and encryption utilities
+- Handles full disk encryption setup with LUKS
+- Manages Runtime Measurement Register (RTMR) extensions
+- Supports data sealing and attestation operations
+
+**Guest Agent (Runtime Services)**
+- Manages container lifecycle using containerd
+- Provides security services including attestation and key derivation
+- Exposes REST API via Unix socket for application integration
+- Handles registration with Gateway and KMS services
+
+---
+
+
+## DStack Implementation Path
+
+To understand dstack's implementation in detail, follow this recommended reading order:
+
+1. **[VMM Core](/docs/concepts/core-vmm)** - Start here to understand VM orchestration and lifecycle management
+2. **[Gateway Core](/docs/concepts/core-gateway)** - Learn about network routing, TLS, and WireGuard VPN
+3. **[KMS Core](/docs/concepts/core-kms)** - Dive into key management, attestation, and cryptographic services  
+4. **[Guest Agent Core](/docs/concepts/core-guest-agent)** - Understand container management and runtime services
+5. **[TDXctl Core](/docs/concepts/core-tdxctl)** - Explore TDX utilities and secure boot processes
+6. **[OS Core](/docs/concepts/core-os)** - Learn about the minimal secure operating system foundation
+
+Each component page provides detailed configuration examples, API references, and operational guidance.
+
+## Next Steps
+
+<div className="mt-8 flex gap-4">
+  <a href="/docs/concepts/core-vmm" className="bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700">
+    Start with VMM Core →
+  </a>
+  <a href="/docs/concepts/networking" className="bg-gray-200 text-gray-800 px-6 py-3 rounded-lg hover:bg-gray-300">
+    Explore Networking
+  </a>
+</div>

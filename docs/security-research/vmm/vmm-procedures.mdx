@@ -1,0 +1,26 @@
+---
+title: "VMM Security Verification Procedures"
+description: "How dStack VMM validates measurements, maintains a cryptographic chain of trust, and supports third-party verification."
+---
+
+## Security Verification Procedures
+
+Security is not a one-time event—it's a continuous process. dStack VMM implements rigorous verification procedures to ensure that every component, from the base OS image to application code, is measured, validated, and auditable. This section details how the VMM calculates expected measurements, maintains a cryptographic chain of trust, and enables third-party verification for maximum transparency and assurance.
+
+### Why Verification Procedures Matter
+
+Even the best-designed security architecture can be undermined by configuration drift, supply chain attacks, or operational mistakes. By continuously validating measurements and supporting independent verification, dStack VMM ensures that only trusted code runs and that every security claim can be independently audited.
+
+### Measurement Validation Process
+
+Security verification begins by building the base OS image from source, establishing known-good measurement values. The [dstack-mr tool](https://github.com/Dstack-TEE/dstack/blob/45ebd05a/attestation.md#22-determining-expected-mrs) is used to calculate expected values for MRTD, RTMR0, RTMR1, and RTMR2, based on the chosen CPU and memory configuration. RTMR3 validation is performed by replaying the event log, ensuring that application-specific measurements are consistent with deployment expectations.
+
+### Cryptographic Chain of Trust
+
+The system implements a hierarchical trust model. The TDX module serves as the hardware root of trust, validating virtual firmware measurements stored in MRTD. The virtual firmware then measures and verifies the Linux kernel, which subsequently measures the initramfs and application components. This creates an unbroken, cryptographically verifiable chain of trust, from hardware all the way up to the application layer. For more detail on the measurement and attestation process, see the [attestation documentation](https://github.com/Dstack-TEE/dstack/blob/45ebd05a/attestation.md).
+
+### Third-Party Verification Capabilities
+
+Applications can use simplified verification by validating KMS-signed certificates, instead of performing full quote verification. The KMS maintains root keys registered in blockchain contracts, supporting signature chain validation—so applications can prove authenticity using KMS-signed credentials. For more on this process, see [validating apps via the KMS auth chain](https://github.com/Dstack-TEE/dstack/blob/45ebd05a/kms/README.md#validating-apps-via-the-kms-auth-chain). This approach reduces verification complexity while still maintaining cryptographic assurance.
+
+> Security verification is the final step in the trust chain. The next section explores how the VMM integrates with KMS and gateway components for end-to-end security.
