@@ -51,4 +51,12 @@ impl ProxiedGuestApiRpc for GuestApiHandler {
     async fn shutdown(self, request: Id) -> Result<()> {
         self.guest_agent_client(&request.id)?.shutdown().await
     }
+
+    async fn pre_backup(self, request: Id) -> Result<()> {
+        self.guest_agent_client(&request.id)?.pre_backup().await
+    }
+
+    async fn post_backup(self, request: Id) -> Result<()> {
+        self.guest_agent_client(&request.id)?.post_backup().await
+    }
 }
