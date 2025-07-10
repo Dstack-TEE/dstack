@@ -18,6 +18,8 @@ use tracing::error;
 
 use crate::{rpc_service::ExternalRpcHandler, AppState};
 
+const BACKUP_LOCK_FILE: &str = "/run/dstack-backup.lock";
+
 pub struct GuestApiHandler {
     state: AppState,
 }
@@ -43,6 +45,7 @@ impl GuestApiRpc for GuestApiHandler {
             device_id: info.device_id,
             app_cert: info.app_cert,
             tcb_info: info.tcb_info,
+            backup_in_progress: fs::metadata(BACKUP_LOCK_FILE).is_ok(),
         })
     }
 
@@ -111,6 +114,20 @@ impl GuestApiRpc for GuestApiHandler {
 
     async fn list_containers(self) -> Result<ListContainersResponse> {
         list_containers().await
+    }
+
+    async fn pre_backup(self) -> Result<()> {
+        fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(BACKUP_LOCK_FILE)
+            .context("Failed to create backup lock file, there is another backup in progress")?;
+        Ok(())
+    }
+
+    async fn post_backup(self) -> Result<()> {
+        fs::remove_file(BACKUP_LOCK_FILE).context("Failed to remove backup lock file")?;
+        Ok(())
     }
 }
 
