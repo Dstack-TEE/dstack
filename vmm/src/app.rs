@@ -6,7 +6,9 @@ use dstack_kms_rpc::kms_client::KmsClient;
 use dstack_types::shared_filenames::{
     compat_v3, APP_COMPOSE, ENCRYPTED_ENV, INSTANCE_INFO, SYS_CONFIG, USER_CONFIG,
 };
-use dstack_vmm_rpc::{self as pb, GpuInfo, StatusRequest, StatusResponse, VmConfiguration};
+use dstack_vmm_rpc::{
+    self as pb, BackupInfo, GpuInfo, StatusRequest, StatusResponse, VmConfiguration,
+};
 use fs_err as fs;
 use guest_api::client::DefaultClient as GuestClient;
 use id_pool::IdPool;
@@ -18,7 +20,7 @@ use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 use supervisor_client::SupervisorClient;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 pub use image::{Image, ImageInfo};
 pub use qemu::{VmConfig, VmWorkDir};
@@ -646,6 +648,111 @@ impl App {
             self.start_vm(&id).await?;
         }
         Ok(())
+    }
+
+    pub(crate) async fn backup_disk(&self, id: &str, level: &str) -> Result<()> {
+        let work_dir = self.work_dir(id);
+
+        // Determine backup level based on the backup_type
+        let backup_level = match level {
+            "full" => "full",
+            "incremental" => "inc",
+            _ => bail!("Invalid backup level: {level}"),
+        };
+
+        // Get the VM directory path as a string
+        let backup_dir = work_dir.path().join("backups");
+        let qmp_socket = work_dir.qmp_socket().to_string_lossy().to_string();
+
+        // Create backup directory if it doesn't exist
+        tokio::fs::create_dir_all(&backup_dir)
+            .await
+            .context("Failed to create backup directory")?;
+
+        // Run the qmpbackup command in a blocking thread pool since it takes seconds to complete
+        tokio::task::spawn_blocking(move || {
+            let output = std::process::Command::new("qmpbackup")
+                .arg("--socket")
+                .arg(qmp_socket)
+                .arg("backup")
+                .arg("-i")
+                .arg("hd1")
+                .arg("--no-subdir")
+                .arg("-t")
+                .arg(&backup_dir)
+                .arg("-T")
+                .arg("-l")
+                .arg(backup_level)
+                .output();
+
+            match output {
+                Ok(output) => {
+                    if !output.status.success() {
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+                        Err(anyhow::anyhow!("qmpbackup command failed: {}", stderr))
+                    } else {
+                        Ok(())
+                    }
+                }
+                Err(e) => Err(anyhow::anyhow!(
+                    "Failed to execute qmpbackup command: {}",
+                    e
+                )),
+            }
+        })
+        .await
+        .context("Failed to execute backup task")?
+    }
+
+    pub(crate) async fn list_backups(&self, id: &str) -> Result<Vec<BackupInfo>> {
+        let work_dir = self.work_dir(id);
+        let backup_dir = work_dir.path().join("backups");
+
+        // Create backup directory if it doesn't exist
+        if !backup_dir.exists() {
+            return Ok(Vec::new());
+        }
+
+        // List backup files in the directory
+        let mut backups = Vec::new();
+
+        // Read directory entries in a blocking task
+        let backup_dir_clone = backup_dir.clone();
+        let entries =
+            std::fs::read_dir(backup_dir_clone).context("Failed to read backup directory")?;
+        // Process each entry
+        for entry in entries {
+            let path = match entry {
+                Ok(entry) => entry.path(),
+                Err(e) => {
+                    warn!("Failed to read directory entry: {e:?}");
+                    continue;
+                }
+            };
+            // Skip if not a file
+            if !path.is_file() {
+                continue;
+            }
+
+            // Get file name
+            let file_name = match path.file_name().and_then(|n| n.to_str()) {
+                Some(name) => name.to_string(),
+                None => continue,
+            };
+
+            if !file_name.ends_with(".img") {
+                continue;
+            }
+
+            backups.push(BackupInfo {
+                filename: file_name,
+                size: path
+                    .metadata()
+                    .context("Failed to get file metadata")?
+                    .len(),
+            });
+        }
+        Ok(backups)
     }
 }
 

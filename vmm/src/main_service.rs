@@ -3,8 +3,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail, Context, Result};
 use dstack_types::AppCompose;
-use dstack_vmm_rpc as rpc;
 use dstack_vmm_rpc::vmm_server::{VmmRpc, VmmServer};
+use dstack_vmm_rpc::{self as rpc, BackupDiskRequest};
 use dstack_vmm_rpc::{
     AppId, ComposeHash as RpcComposeHash, GatewaySettings, GetInfoResponse, GetMetaResponse, Id,
     ImageInfo as RpcImageInfo, ImageListResponse, KmsSettings, ListGpusResponse, PublicKeyResponse,
@@ -455,6 +455,15 @@ impl VmmRpc for RpcHandler {
             serde_json::from_str(&request.compose_file).context("Invalid compose file")?;
         let hash = hex_sha256(&request.compose_file);
         Ok(RpcComposeHash { hash })
+    }
+
+    async fn backup_disk(self, request: BackupDiskRequest) -> Result<()> {
+        self.app.backup_disk(&request.id, &request.level).await
+    }
+
+    async fn list_backups(self, request: Id) -> Result<rpc::ListBackupsResponse> {
+        let backups = self.app.list_backups(&request.id).await?;
+        Ok(rpc::ListBackupsResponse { backups })
     }
 }
 

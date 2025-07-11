@@ -223,6 +223,25 @@ message GpuInfo {
   bool is_free = 4;
 }
 
+message BackupDiskRequest {
+  // vm id
+  string id = 1;
+  // full or incremental
+  string level = 2;
+}
+
+message BackupInfo {
+  // filename (e.g., FULL-1694222400-hd1.img)
+  string filename = 1;
+  // size of the backup in bytes
+  uint64 size = 2;
+}
+
+message ListBackupsResponse {
+  // list of backups
+  repeated BackupInfo backups = 1;
+}
+
 // Service definition for dstack-vmm
 service Vmm {
   // RPC to create a VM
@@ -261,4 +280,10 @@ service Vmm {
 
   // List GPUs
   rpc ListGpus(google.protobuf.Empty) returns (ListGpusResponse);
+
+  // Backup a VM data disk
+  rpc BackupDisk(BackupDiskRequest) returns (google.protobuf.Empty);
+
+  // List backups for a VM
+  rpc ListBackups(Id) returns (ListBackupsResponse);
 }
