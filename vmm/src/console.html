@@ -251,6 +251,124 @@
             background: #FF9800;
             color: white;
         }
+
+        /* Backup dialog styles */
+        .tabs {
+            display: flex;
+            border-bottom: 1px solid #ddd;
+            margin-bottom: 20px;
+        }
+
+        .tab-btn {
+            padding: 10px 20px;
+            background: none;
+            border: none;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            color: #666;
+        }
+
+        .tab-btn.active {
+            color: #1976D2;
+            border-bottom: 2px solid #1976D2;
+        }
+
+        .tab-content {
+            padding: 10px 0;
+        }
+
+        .backup-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 16px;
+        }
+
+        .backup-table th,
+        .backup-table td {
+            padding: 8px;
+            text-align: left;
+            border-bottom: 1px solid #ddd;
+        }
+
+        .backup-list {
+            max-height: 300px;
+            overflow-y: auto;
+            margin-bottom: 16px;
+        }
+
+        .backup-container {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .backup-section {
+            background-color: #f9f9f9;
+            padding: 16px;
+            border-radius: 8px;
+            border: 1px solid #eee;
+        }
+
+        .backup-section h4 {
+            margin-top: 0;
+            margin-bottom: 16px;
+            color: #333;
+        }
+
+        .backup-group {
+            margin-bottom: 24px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            overflow: hidden;
+        }
+
+        .backup-group-header {
+            background-color: #f0f0f0;
+            padding: 10px 16px;
+            border-bottom: 1px solid #ddd;
+        }
+
+        .backup-group-header h5 {
+            margin: 0;
+            font-size: 14px;
+            color: #444;
+        }
+
+        .backup-group-actions {
+            padding: 10px;
+            background-color: #f5f5f5;
+            text-align: right;
+        }
+
+        .action-buttons {
+            display: flex;
+            gap: 8px;
+        }
+
+        .no-backups {
+            padding: 20px;
+            text-align: center;
+            color: #666;
+            background-color: #f9f9f9;
+            border-radius: 6px;
+        }
+
+        .loading-spinner {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            border-radius: 50%;
+            border-top-color: white;
+            animation: spin 1s ease-in-out infinite;
+        }
+
+        @keyframes spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
     </style>
     <style>
         .message-container {
@@ -680,8 +798,8 @@
 
                     <div class="form-group" v-if="availableGpus.length > 0">
                         <label for="gpuSelection">GPU</label>
-                        <gpu-config-editor :available-gpus="availableGpus" :allow-attach-all="allowAttachAllGpus" v-model:gpus="vmForm.selectedGpus"
-                            v-model:attach-all="vmForm.attachAllGpus">
+                        <gpu-config-editor :available-gpus="availableGpus" :allow-attach-all="allowAttachAllGpus"
+                            v-model:gpus="vmForm.selectedGpus" v-model:attach-all="vmForm.attachAllGpus">
                         </gpu-config-editor>
                     </div>
 
@@ -860,6 +978,9 @@
                                             </button>
                                             <button class="warning" @click="removeVm(vm)" title="Remove VM">
                                                 <i class="fas fa-trash-alt"></i> Remove
+                                            </button>
+                                            <button @click="showBackupDialog(vm)" title="Backup VM Disk">
+                                                <i class="fas fa-save"></i> Backup
                                             </button>
                                             <button v-if="kmsEnabled(vm)" @click="showUpgradeDialog(vm)"
                                                 title="Upgrade VM" :disabled="loadingVMDetails">
@@ -1084,8 +1205,8 @@
                     </div>
 
                     <div v-if="upgradeDialog.updateGpuConfig">
-                        <gpu-config-editor :available-gpus="availableGpus" :allow-attach-all="allowAttachAllGpus" v-model:gpus="upgradeDialog.selectedGpus"
-                            v-model:attach-all="upgradeDialog.attachAllGpus">
+                        <gpu-config-editor :available-gpus="availableGpus" :allow-attach-all="allowAttachAllGpus"
+                            v-model:gpus="upgradeDialog.selectedGpus" v-model:attach-all="upgradeDialog.attachAllGpus">
                         </gpu-config-editor>
                     </div>
                 </div>
@@ -1183,6 +1304,86 @@
                 <div class="vm-actions">
                     <button class="action-btn upgrade" @click="forkVm">Derive</button>
                     <button class="action-btn remove" @click="forkDialog.show = false">Cancel</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Backup VM Dialog -->
+        <div v-if="backupDialog.show" class="dialog-overlay">
+            <div class="dialog">
+                <h3>Disk Backup: {{ backupDialog.id }}</h3>
+                <div class="backup-container">
+                    <!-- Create new backup section -->
+                    <div class="backup-section">
+                        <h4>Create New Backup</h4>
+                        <form @submit.prevent="performBackup">
+                            <div class="form-group">
+                                <label for="backupLevel">Backup Level</label>
+                                <select v-model="backupDialog.level" id="backupLevel">
+                                    <option value="full">Full</option>
+                                    <option value="incremental">Incremental</option>
+                                </select>
+                            </div>
+                            <div class="vm-actions">
+                                <button type="submit" class="action-btn primary" :disabled="backupDialog.isLoading">
+                                    <span v-if="backupDialog.isLoading" class="loading-spinner"></span>
+                                    <span v-else>Create Backup</span>
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+
+                    <!-- Existing backups section -->
+                    <div class="backup-section">
+                        <h4>Existing Backups</h4>
+                        <div v-if="groupedBackups.length > 0">
+                            <div v-for="group in groupedBackups" :key="group.backup_id" class="backup-group">
+                                <div class="backup-group-header">
+                                    <h5>Backup ID: {{ group.backup_id }}</h5>
+                                </div>
+                                <table class="backup-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Snapshot ID</th>
+                                            <th>Type</th>
+                                            <th>Created</th>
+                                            <th>Size</th>
+                                            <th>Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr v-for="snapshot in group.snapshots" :key="snapshot.snapshot_id">
+                                            <td>{{ snapshot.snapshot_id }}</td>
+                                            <td>{{ snapshot.level }}</td>
+                                            <td>{{ formatDate(snapshot.timestamp) }}</td>
+                                            <td>{{ formatFileSize(snapshot.size) }}</td>
+                                            <td>
+                                                <div class="action-buttons">
+                                                    <button class="action-btn primary"
+                                                        @click="restoreBackup(group.backup_id, snapshot.snapshot_id)">
+                                                        Restore
+                                                    </button>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                                <div class="backup-group-actions">
+                                    <button class="action-btn danger" @click="removeBackup(group.backup_id)">
+                                        Delete Backup
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                        <div v-else class="no-backups">
+                            <p>No backups found for this VM.</p>
+                        </div>
+                    </div>
+
+                    <div class="vm-actions">
+                        <button type="button" class="action-btn remove"
+                            @click="backupDialog.show = false">Close</button>
+                    </div>
                 </div>
             </div>
         </div>
@@ -1503,6 +1704,15 @@ fi
                     vcpu: 0,
                     memory: 0,
                     disk_size: 0
+                });
+
+                const backupDialog = ref({
+                    show: false,
+                    id: '',
+                    level: 'full',
+                    activeTab: 'backup',
+                    backups: [],
+                    isLoading: false
                 });
 
                 const showCreateDialog = ref(false);
@@ -2369,6 +2579,156 @@ fi
                     localStorage.setItem('pageSize', newValue);
                 });
 
+                // Backup-related functions
+                const showBackupDialog = async (vm) => {
+                    backupDialog.value = {
+                        show: true,
+                        id: vm.id,
+                        level: 'full',
+                        backups: [],
+                        isLoading: false
+                    };
+
+                    // Load existing backups when dialog is opened
+                    await listBackups(vm.id);
+                };
+
+                // Group backups by backup_id
+                const groupedBackups = computed(() => {
+                    const groups = {};
+
+                    // First, group backups by backup_id
+                    backupDialog.value.backups.forEach(backup => {
+                        if (!groups[backup.backup_id]) {
+                            groups[backup.backup_id] = {
+                                backup_id: backup.backup_id,
+                                snapshots: []
+                            };
+                        }
+                        groups[backup.backup_id].snapshots.push(backup);
+                    });
+
+                    // Convert to array and sort each group's snapshots by timestamp
+                    const result = Object.values(groups);
+                    result.forEach(group => {
+                        group.snapshots.sort((a, b) => {
+                            return b.timestamp.localeCompare(a.timestamp);
+                        });
+                    });
+
+                    // Sort groups by most recent snapshot
+                    result.sort((a, b) => {
+                        const aLatest = a.snapshots[0]?.timestamp || '';
+                        const bLatest = b.snapshots[0]?.timestamp || '';
+                        return bLatest.localeCompare(aLatest);
+                    });
+
+                    return result;
+                });
+
+                const listBackups = async (vmId) => {
+                    try {
+                        const response = await rpcCall('ListBackups', {
+                            vm_id: vmId
+                        });
+                        const data = await response.json();
+                        backupDialog.value.backups = data.backups || [];
+                    } catch (error) {
+                        console.error('Error listing backups:', error);
+                        errorMessage.value = `Failed to list backups: ${error.message}`;
+                    }
+                };
+
+                const performBackup = async () => {
+                    try {
+                        backupDialog.value.isLoading = true;
+
+                        await rpcCall('BackupDisk', {
+                            vm_id: backupDialog.value.id,
+                            level: backupDialog.value.level
+                        });
+
+                        // Refresh the backup list after successful backup
+                        await listBackups(backupDialog.value.id);
+
+                        upgradeMessage.value = 'Disk backup completed successfully';
+                    } catch (error) {
+                        console.error('Error performing backup:', error);
+                        errorMessage.value = `Backup failed: ${error.message}`;
+                    } finally {
+                        backupDialog.value.isLoading = false;
+                    }
+                };
+
+                const restoreBackup = async (backup_id, snapshot_id) => {
+                    if (!confirm(`Are you sure you want to restore this backup? This will overwrite the current VM disk.`)) {
+                        return;
+                    }
+
+                    try {
+                        backupDialog.value.isLoading = true;
+
+                        await rpcCall('RestoreBackup', {
+                            vm_id: backupDialog.value.id,
+                            backup_id: backup_id,
+                            snapshot_id: snapshot_id
+                        });
+
+                        upgradeMessage.value = 'Backup restored successfully';
+                        backupDialog.value.show = false;
+                    } catch (error) {
+                        console.error('Error restoring backup:', error);
+                        errorMessage.value = `Restore failed: ${error.message}`;
+                    } finally {
+                        backupDialog.value.isLoading = false;
+                    }
+                };
+
+                const removeBackup = async (backup_id) => {
+                    if (!confirm(`Are you sure you want to delete this backup? This cannot be undone.`)) {
+                        return;
+                    }
+
+                    try {
+                        backupDialog.value.isLoading = true;
+
+                        await rpcCall('DeleteBackup', {
+                            vm_id: backupDialog.value.id,
+                            backup_id: backup_id
+                        });
+
+                        // Refresh the backup list after deletion
+                        await listBackups(backupDialog.value.id);
+
+                        upgradeMessage.value = 'Backup group deleted successfully';
+                    } catch (error) {
+                        console.error('Error deleting backup group:', error);
+                        errorMessage.value = `Delete failed: ${error.message}`;
+                    } finally {
+                        backupDialog.value.isLoading = false;
+                    }
+                };
+
+                const formatDate = (timestamp) => {
+                    if (!timestamp) return '';
+
+                    const str = timestamp.toString();
+                    const match = str.match(/^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})$/);
+
+                    if (!match) return '';
+
+                    const [, year, month, day, hour, minute, second] = match;
+                    return `${year}-${month}-${day} ${hour}:${minute}:${second}`;
+                };
+
+                const formatFileSize = (bytes) => {
+                    if (bytes === 0) return '0 Bytes';
+                    const k = 1024;
+                    const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
+                    const i = Math.floor(Math.log(bytes) / Math.log(k));
+                    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+                };
+
                 return {
                     vms,
                     vmForm,
@@ -2386,6 +2746,14 @@ fi
                     upgradeDialog,
                     upgradeMessage,
                     errorMessage,
+                    backupDialog,
+                    showBackupDialog,
+                    performBackup,
+                    listBackups,
+                    restoreBackup,
+                    removeBackup,
+                    formatDate,
+                    formatFileSize,
                     showUpgradeDialog,
                     loadUpgradeFile,
                     upgradeVM,
@@ -2426,6 +2794,7 @@ fi
                     loadingVMDetails,
                     toggleDropdown,
                     loadVMList,
+                    groupedBackups,
                 };
             }
         }).mount('#app');

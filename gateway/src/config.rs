@@ -210,7 +210,7 @@ impl CertbotConfig {
         let workdir = certbot::WorkDir::new(&self.workdir);
         certbot::CertBotConfig::builder()
             .auto_create_account(true)
-            .cert_dir(workdir.backup_dir())
+            .cert_dir(workdir.cert_backup_dir())
             .cert_file(workdir.cert_path())
             .key_file(workdir.key_path())
             .credentials_file(workdir.account_credentials_path())

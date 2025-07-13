@@ -18,6 +18,7 @@ use serde_json::json;
 use std::collections::{BTreeSet, HashMap};
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::{Arc, Mutex, MutexGuard};
 use supervisor_client::SupervisorClient;
 use tracing::{error, info, warn};
@@ -114,6 +115,13 @@ pub struct App {
     state: Arc<Mutex<AppState>>,
 }
 
+fn validate_filename(s: &str) -> Result<()> {
+    if s.contains("/") || s.contains("\\") {
+        bail!("Invalid filename");
+    }
+    Ok(())
+}
+
 impl App {
     fn lock(&self) -> MutexGuard<AppState> {
         self.state.lock().unwrap()
@@ -125,6 +133,21 @@ impl App {
 
     pub(crate) fn work_dir(&self, id: &str) -> VmWorkDir {
         VmWorkDir::new(self.config.run_path.join(id))
+    }
+
+    fn backups_dir(&self, id: &str) -> PathBuf {
+        self.config.cvm.backup.path.join(id).join("backups")
+    }
+
+    fn backup_dir(&self, id: &str, backup_id: &str) -> Result<PathBuf> {
+        validate_filename(backup_id)?;
+        let backup_dir = self.backups_dir(id).join(backup_id);
+        Ok(backup_dir)
+    }
+
+    fn backup_file(&self, id: &str, backup_id: &str, snapshot_id: &str) -> Result<PathBuf> {
+        validate_filename(snapshot_id)?;
+        Ok(self.backup_dir(id, backup_id)?.join(snapshot_id))
     }
 
     pub fn new(config: Config, supervisor: SupervisorClient) -> Self {
@@ -651,7 +674,11 @@ impl App {
     }
 
     pub(crate) async fn backup_disk(&self, id: &str, level: &str) -> Result<()> {
+        if !self.config.cvm.backup.enabled {
+            bail!("Backup is not enabled");
+        }
         let work_dir = self.work_dir(id);
+        let backup_dir = self.backups_dir(id);
 
         // Determine backup level based on the backup_type
         let backup_level = match level {
@@ -660,99 +687,216 @@ impl App {
             _ => bail!("Invalid backup level: {level}"),
         };
 
-        // Get the VM directory path as a string
-        let backup_dir = work_dir.path().join("backups");
-        let qmp_socket = work_dir.qmp_socket().to_string_lossy().to_string();
+        let qmp_socket = work_dir.qmp_socket();
 
-        // Create backup directory if it doesn't exist
-        tokio::fs::create_dir_all(&backup_dir)
-            .await
-            .context("Failed to create backup directory")?;
-
-        // Run the qmpbackup command in a blocking thread pool since it takes seconds to complete
+        let id = id.to_string();
         tokio::task::spawn_blocking(move || {
-            let output = std::process::Command::new("qmpbackup")
+            let latest_dir = backup_dir.join("latest");
+            if backup_level == "full" {
+                // clear the bitmaps
+                let output = Command::new("qmpbackup")
+                    .arg("--socket")
+                    .arg(&qmp_socket)
+                    .arg("cleanup")
+                    .arg("--remove-bitmap")
+                    .output()
+                    .context("Failed to clear bitmaps")?;
+                if !output.status.success() {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    warn!("Failed to clear bitmaps for {id}: {stderr}");
+                }
+                // Switch to new dir and symbol link the latest to it
+                let timestamp = chrono::Utc::now().format("%Y%m%dZ%H%M%S").to_string();
+                let new_dir = backup_dir.join(&timestamp);
+                fs::create_dir_all(&new_dir).context("Failed to create backup directory")?;
+                if fs::symlink_metadata(&latest_dir).is_ok() {
+                    fs::remove_file(&latest_dir)
+                        .context("Failed to remove latest directory link")?;
+                }
+                fs::os::unix::fs::symlink(&timestamp, &latest_dir)
+                    .context("Failed to create latest directory link")?;
+            }
+            let output = Command::new("qmpbackup")
                 .arg("--socket")
-                .arg(qmp_socket)
+                .arg(&qmp_socket)
                 .arg("backup")
                 .arg("-i")
                 .arg("hd1")
                 .arg("--no-subdir")
                 .arg("-t")
-                .arg(&backup_dir)
-                .arg("-T")
+                .arg(&latest_dir)
                 .arg("-l")
                 .arg(backup_level)
-                .output();
+                .output()
+                .context("Failed to execute qmpbackup command")?;
 
-            match output {
-                Ok(output) => {
-                    if !output.status.success() {
-                        let stderr = String::from_utf8_lossy(&output.stderr);
-                        Err(anyhow::anyhow!("qmpbackup command failed: {}", stderr))
-                    } else {
-                        Ok(())
-                    }
-                }
-                Err(e) => Err(anyhow::anyhow!(
-                    "Failed to execute qmpbackup command: {}",
-                    e
-                )),
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                warn!("Failed to backup disk for {id}: {stderr}");
             }
+            Ok(())
         })
         .await
         .context("Failed to execute backup task")?
     }
 
     pub(crate) async fn list_backups(&self, id: &str) -> Result<Vec<BackupInfo>> {
-        let work_dir = self.work_dir(id);
-        let backup_dir = work_dir.path().join("backups");
+        let backup_dir = self.backups_dir(id);
 
         // Create backup directory if it doesn't exist
         if !backup_dir.exists() {
             return Ok(Vec::new());
         }
 
-        // List backup files in the directory
+        // List backup groups in the directory
         let mut backups = Vec::new();
 
         // Read directory entries in a blocking task
         let backup_dir_clone = backup_dir.clone();
-        let entries =
+        let backup_entries =
             std::fs::read_dir(backup_dir_clone).context("Failed to read backup directory")?;
+
+        fn filename(path: &Path) -> Option<String> {
+            path.file_name()
+                .and_then(|n| n.to_str().map(|s| s.to_string()))
+        }
+
         // Process each entry
-        for entry in entries {
-            let path = match entry {
+        for backup_entry in backup_entries {
+            let backup_path = match backup_entry {
                 Ok(entry) => entry.path(),
                 Err(e) => {
                     warn!("Failed to read directory entry: {e:?}");
                     continue;
                 }
             };
-            // Skip if not a file
-            if !path.is_file() {
+            if !backup_path.is_dir() {
                 continue;
             }
-
-            // Get file name
-            let file_name = match path.file_name().and_then(|n| n.to_str()) {
-                Some(name) => name.to_string(),
-                None => continue,
+            if backup_path.ends_with("latest") {
+                continue;
+            }
+            let backup_id = filename(&backup_path).context("Failed to get group name")?;
+            let snaps = match std::fs::read_dir(backup_path) {
+                Ok(entries) => entries,
+                Err(e) => {
+                    warn!("Failed to read directory entry: {e:?}");
+                    continue;
+                }
             };
+            for snap in snaps {
+                let snap_path = match snap {
+                    Ok(entry) => entry.path(),
+                    Err(e) => {
+                        warn!("Failed to read directory entry: {e:?}");
+                        continue;
+                    }
+                };
+                if !snap_path.is_file() {
+                    continue;
+                }
+                // Get file name
+                let snap_filename = filename(&snap_path).context("Failed to get file name")?;
 
-            if !file_name.ends_with(".img") {
-                continue;
-            }
-
-            backups.push(BackupInfo {
-                filename: file_name,
-                size: path
+                if !snap_filename.ends_with(".img") {
+                    continue;
+                }
+                let parts = snap_filename
+                    .split('.')
+                    .next()
+                    .context("Failed to split filename")?
+                    .split('-')
+                    .collect::<Vec<_>>();
+                let [level, timestamp, _] = parts[..] else {
+                    warn!("Invalid backup filename: {snap_filename}");
+                    continue;
+                };
+                let size = snap_path
                     .metadata()
                     .context("Failed to get file metadata")?
-                    .len(),
-            });
+                    .len();
+                backups.push(BackupInfo {
+                    backup_id: backup_id.clone(),
+                    snapshot_id: snap_filename.clone(),
+                    timestamp: timestamp.to_string(),
+                    level: level.to_string(),
+                    size,
+                });
+            }
         }
         Ok(backups)
+    }
+
+    pub(crate) async fn delete_backup(&self, vm_id: &str, backup_id: &str) -> Result<()> {
+        if !self.config.cvm.backup.enabled {
+            bail!("Backup is not enabled");
+        }
+        let backup_dir = self.backup_dir(vm_id, backup_id)?;
+        if !backup_dir.exists() {
+            bail!("Backup does not exist");
+        }
+        if !backup_dir.is_dir() {
+            bail!("Backup is not a directory");
+        }
+        fs::remove_dir_all(&backup_dir).context("Failed to remove backup directory")?;
+        Ok(())
+    }
+
+    pub(crate) async fn restore_backup(
+        &self,
+        vm_id: &str,
+        backup_id: &str,
+        snapshot_id: &str,
+    ) -> Result<()> {
+        if !self.config.cvm.backup.enabled {
+            bail!("Backup is not enabled");
+        }
+        // First, ensure the vm is stopped
+        let info = self.vm_info(vm_id).await?.context("VM not found")?;
+        if info.status != "stopped" {
+            bail!("VM is not stopped: status={}", info.status);
+        }
+
+        let backup_file = self.backup_file(vm_id, backup_id, snapshot_id)?;
+        if !backup_file.exists() {
+            bail!("Backup file not found");
+        }
+        let vm_work_dir = self.work_dir(vm_id);
+        let hda_img = vm_work_dir.hda_path();
+        if snapshot_id.starts_with("FULL") {
+            // Just copy the file
+            tokio::fs::copy(&backup_file, &hda_img).await?;
+        } else {
+            let backup_dir = self.backup_dir(vm_id, backup_id)?;
+            let snapshot_id = snapshot_id.to_string();
+            // Rename the current hda file to *.bak
+            let bak_file = hda_img.display().to_string() + ".bak";
+            fs::rename(&hda_img, &bak_file).context("Failed to rename hda file")?;
+
+            tokio::task::spawn_blocking(move || {
+                /*
+                    qmprestore merge --dir <backup_dir> --until <snapshot_id> --targetfile <hda_img>
+                */
+                let mut command = Command::new("qmprestore");
+                command.arg("merge");
+                command.arg("--dir").arg(&backup_dir);
+                command.arg("--until").arg(snapshot_id);
+                command.arg("--targetfile").arg(&hda_img);
+                let output = command
+                    .output()
+                    .context("Failed to execute qmprestore command")?;
+                if !output.status.success() {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    bail!("Failed to restore backup: {stderr}:{stdout}");
+                }
+                Ok(())
+            })
+            .await
+            .context("Failed to spawn restore command")?
+            .context("Failed to restore backup")?;
+        }
+        Ok(())
     }
 }
 

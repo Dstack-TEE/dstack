@@ -4,7 +4,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::{anyhow, bail, Context, Result};
 use dstack_types::AppCompose;
 use dstack_vmm_rpc::vmm_server::{VmmRpc, VmmServer};
-use dstack_vmm_rpc::{self as rpc, BackupDiskRequest};
+use dstack_vmm_rpc::{self as rpc, BackupDiskRequest, DeleteBackupRequest, RestoreBackupRequest};
 use dstack_vmm_rpc::{
     AppId, ComposeHash as RpcComposeHash, GatewaySettings, GetInfoResponse, GetMetaResponse, Id,
     ImageInfo as RpcImageInfo, ImageListResponse, KmsSettings, ListGpusResponse, PublicKeyResponse,
@@ -458,12 +458,24 @@ impl VmmRpc for RpcHandler {
     }
 
     async fn backup_disk(self, request: BackupDiskRequest) -> Result<()> {
-        self.app.backup_disk(&request.id, &request.level).await
+        self.app.backup_disk(&request.vm_id, &request.level).await
     }
 
     async fn list_backups(self, request: Id) -> Result<rpc::ListBackupsResponse> {
         let backups = self.app.list_backups(&request.id).await?;
         Ok(rpc::ListBackupsResponse { backups })
+    }
+
+    async fn delete_backup(self, request: DeleteBackupRequest) -> Result<()> {
+        self.app
+            .delete_backup(&request.vm_id, &request.backup_id)
+            .await
+    }
+
+    async fn restore_backup(self, request: RestoreBackupRequest) -> Result<()> {
+        self.app
+            .restore_backup(&request.vm_id, &request.backup_id, &request.snapshot_id)
+            .await
     }
 }
 

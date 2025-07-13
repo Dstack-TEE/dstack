@@ -44,6 +44,8 @@ hex_fmt.workspace = true
 lspci.workspace = true
 base64.workspace = true
 serde-human-bytes.workspace = true
+serde-duration.workspace = true
+chrono.workspace = true
 
 [dev-dependencies]
 insta.workspace = true
