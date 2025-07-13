@@ -172,10 +172,14 @@ impl ProxyState {
             if ip == self.config.wg.ip {
                 continue;
             }
-            for net in &self.config.wg.reserved_net {
-                if net.contains(&ip) {
-                    continue;
-                }
+            if self
+                .config
+                .wg
+                .reserved_net
+                .iter()
+                .any(|net| net.contains(&ip))
+            {
+                continue;
             }
             if self.state.allocated_addresses.contains(&ip) {
                 continue;
