@@ -167,18 +167,25 @@ async fn start_certbot_task(proxy: Proxy) -> Result<()> {
 }
 
 impl ProxyState {
+    fn valid_ip(&self, ip: Ipv4Addr) -> bool {
+        if ip == self.config.wg.ip {
+            return false;
+        }
+        if self
+            .config
+            .wg
+            .reserved_net
+            .iter()
+            .any(|net| net.contains(&ip))
+        {
+            return false;
+        }
+        true
+    }
+
     fn alloc_ip(&mut self) -> Option<Ipv4Addr> {
         for ip in self.config.wg.client_ip_range.hosts() {
-            if ip == self.config.wg.ip {
-                continue;
-            }
-            if self
-                .config
-                .wg
-                .reserved_net
-                .iter()
-                .any(|net| net.contains(&ip))
-            {
+            if !self.valid_ip(ip) {
                 continue;
             }
             if self.state.allocated_addresses.contains(&ip) {
@@ -204,7 +211,12 @@ impl ProxyState {
                 info!("public key changed for instance {id}, new key: {public_key}");
                 existing.public_key = public_key.to_string();
             }
-            return Some(existing.clone());
+            let existing = existing.clone();
+            if self.valid_ip(existing.ip) {
+                return Some(existing);
+            }
+            info!("ip {} is invalid, removing", existing.ip);
+            self.state.allocated_addresses.remove(&existing.ip);
         }
         let ip = self.alloc_ip()?;
         let host_info = InstanceInfo {
