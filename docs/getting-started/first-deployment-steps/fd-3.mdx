@@ -1,0 +1,131 @@
+---
+title: "How to Sign & push the image to your private registry"
+description: "Deploy via Web UI & Monitor with CLI Tools"
+---
+
+## Step 3: Access Dashboard & Monitor Deployments
+
+### Access the dstack Dashboard
+
+1. Open your browser and navigate to http://localhost:9080
+2. You should see the dstack management interface
+
+<div className="flex justify-center my-6">
+  <img
+    src="/docs/images/delpoy-instance-main.png"
+    alt="dstack Dashboard"
+    width={900}
+    height={500}
+    style={{ borderRadius: '0.5rem', boxShadow: '0 2px 16px rgba(0,0,0,0.08)' }}
+    loading="eager"
+  />
+</div>
+
+### Create New Deployment
+
+Click **"Deploy New Application"** and fill in the deployment form:
+
+| Field | Value |
+|-------|-------|
+| **Application Name** | my-first-app |
+| **Description** | My first secure application |
+| **Docker Compose File** | Upload your `docker-compose.yml` |
+
+<div className="flex justify-center my-6">
+  <img
+    src="/docs/images/deploy-instance-2.png"
+    alt="deployment progress"
+    width={900}
+    height={500}
+    style={{ borderRadius: '0.5rem', boxShadow: '0 2px 16px rgba(0,0,0,0.08)' }}
+    loading="eager"
+  />
+</div>
+
+---
+
+## CLI Tools for Monitoring Deployments
+
+### dstack-vmm CLI
+
+Monitor VMs and container deployments:
+
+```bash
+# List all VMs and their status
+python3 vmm-cli.py --url http://localhost:8080 lsvm
+
+# List VMs with detailed information
+python3 vmm-cli.py --url http://localhost:8080 lsvm -v
+
+# Show VM logs (useful for monitoring deployment progress)
+python3 vmm-cli.py --url http://localhost:8080 logs <vm_id>
+
+# Follow logs in real-time
+python3 vmm-cli.py --url http://localhost:8080 logs <vm_id> --follow
+
+# List available OS images
+python3 vmm-cli.py --url http://localhost:8080 lsimage
+```
+
+### Supervisor CLI
+
+Monitor processes within containers:
+
+```bash
+# List all running processes
+supervisor-client --base-url unix:/var/run/supervisor.sock list
+
+# Get detailed information about a specific process
+supervisor-client --base-url unix:/var/run/supervisor.sock info <process_id>
+
+# Health check
+supervisor-client --base-url unix:/var/run/supervisor.sock ping
+```
+
+### dstack-util CLI
+
+For advanced monitoring and attestation:
+
+```bash
+# Get TDX report (for attestation verification)
+echo -n "report_data" | dstack-util report
+
+# Generate TDX quote (for remote attestation)
+echo -n "report_data" | dstack-util quote
+
+# Show current RTMR measurements
+dstack-util show
+```
+
+---
+
+## Monitor Deployment Progress
+
+The deployment process involves several steps:
+
+<div className="bg-gray-50 p-4 rounded-lg my-4">
+  <div className="space-y-3">
+    <div className="flex items-center gap-3">
+      <div className="w-6 h-6 bg-blue-500 rounded-full flex items-center justify-center text-white text-sm">1</div>
+      <span>Creating Confidential VM</span>
+    </div>
+    <div className="flex items-center gap-3">
+      <div className="w-6 h-6 bg-blue-500 rounded-full flex items-center justify-center text-white text-sm">2</div>
+      <span>Setting up secure environment</span>
+    </div>
+    <div className="flex items-center gap-3">
+      <div className="w-6 h-6 bg-blue-500 rounded-full flex items-center justify-center text-white text-sm">3</div>
+      <span>Pulling Docker images</span>
+    </div>
+    <div className="flex items-center gap-3">
+      <div className="w-6 h-6 bg-blue-500 rounded-full flex items-center justify-center text-white text-sm">4</div>
+      <span>Starting containers</span>
+    </div>
+    <div className="flex items-center gap-3">
+      <div className="w-6 h-6 bg-green-500 rounded-full flex items-center justify-center text-white text-sm">✓</div>
+      <span>Application running</span>
+    </div>
+  </div>
+</div>
+
+Use the CLI tools above to monitor each step and troubleshoot any issues during deployment.

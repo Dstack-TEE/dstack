@@ -1,0 +1,25 @@
+---
+title: "KMS Security Architecture Details"
+description: "How dStack KMS uses hardware-backed key derivation and a robust trust model to secure key management."
+---
+
+## Security Architecture
+
+The security architecture of dStack KMS is built on a foundation of hardware-backed key derivation and a rigorous trust model. Every key is produced using HKDF-SHA256, seeded by unique hardware attestation data and domain-separating context. This ensures that each key is cryptographically unique, isolated, and never persisted outside the TEE.
+
+### Hardware-Backed Key Derivation
+
+At the core of dStack KMS is a hardware-rooted key derivation model. Each key is produced via **HKDF-SHA256**, seeded by unique hardware attestation data—specifically, TDX measurements and a domain-separating salt ("RATLS") plus context data (such as application identifiers). See the key derivation implementation in [ra-tls/src/kdf.rs#L19](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/ra-tls/src/kdf.rs#L19).
+
+Key derivation is hierarchical: parent keys can deterministically derive child keys for distinct application, instance, or usage contexts ([ra-tls/src/kdf.rs#L34](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/ra-tls/src/kdf.rs#L34)). This ensures every derived key is cryptographically unique and isolated—even if the same KMS instance manages thousands of workloads, each application's secrets remain independently protected.
+
+### Trust Model
+
+dStack KMS's security model is grounded in four main principles:
+
+1. **Hardware Root of Trust**: All keys are derived from CPU and runtime measurements ([MRTD, RTMR0–RTMR3](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/ra-tls/src/attestation.rs#L393)).
+2. **No Key Persistence**: Keys are regenerated as needed from attestation data and are never stored outside TEE memory.
+3. **Attestation Gated Access**: Only workloads that have passed strict TDX quote and event log validation ([ra-tls/src/attestation.rs#L291](https://github.com/Dstack-TEE/dstack/blob/45ebd05a25ad4ffacce3b8f003e4f5a8b609b2e2/ra-tls/src/attestation.rs#L291)) can access keys.
+4. **Determinism**: The same measurements and context will always yield the same derived key—supporting reproducibility and scalable, stateless key management.
+
+> The security architecture is the backbone of dStack KMS. The next section explores the security properties and guarantees that result from this design.
