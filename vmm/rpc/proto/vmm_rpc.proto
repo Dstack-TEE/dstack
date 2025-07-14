@@ -301,7 +301,7 @@ service Vmm {
   rpc BackupDisk(BackupDiskRequest) returns (google.protobuf.Empty);
 
   // List backups for a VM
-  rpc ListBackups(Id) returns (ListBackupsResponse);
+  rpc ListBackups(BackupDiskRequest) returns (ListBackupsResponse);
 
   // Delete a backup
   rpc DeleteBackup(DeleteBackupRequest) returns (google.protobuf.Empty);

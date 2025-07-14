@@ -115,13 +115,6 @@ pub struct App {
     state: Arc<Mutex<AppState>>,
 }
 
-fn validate_filename(s: &str) -> Result<()> {
-    if s.contains("/") || s.contains("\\") {
-        bail!("Invalid filename");
-    }
-    Ok(())
-}
-
 impl App {
     fn lock(&self) -> MutexGuard<AppState> {
         self.state.lock().unwrap()
@@ -139,15 +132,12 @@ impl App {
         self.config.cvm.backup.path.join(id).join("backups")
     }
 
-    fn backup_dir(&self, id: &str, backup_id: &str) -> Result<PathBuf> {
-        validate_filename(backup_id)?;
-        let backup_dir = self.backups_dir(id).join(backup_id);
-        Ok(backup_dir)
+    fn backup_dir(&self, id: &str, backup_id: &str) -> PathBuf {
+        self.backups_dir(id).join(backup_id)
     }
 
-    fn backup_file(&self, id: &str, backup_id: &str, snapshot_id: &str) -> Result<PathBuf> {
-        validate_filename(snapshot_id)?;
-        Ok(self.backup_dir(id, backup_id)?.join(snapshot_id))
+    fn backup_file(&self, id: &str, backup_id: &str, snapshot_id: &str) -> PathBuf {
+        self.backup_dir(id, backup_id).join(snapshot_id)
     }
 
     pub fn new(config: Config, supervisor: SupervisorClient) -> Self {
@@ -831,7 +821,7 @@ impl App {
         if !self.config.cvm.backup.enabled {
             bail!("Backup is not enabled");
         }
-        let backup_dir = self.backup_dir(vm_id, backup_id)?;
+        let backup_dir = self.backup_dir(vm_id, backup_id);
         if !backup_dir.exists() {
             bail!("Backup does not exist");
         }
@@ -857,7 +847,7 @@ impl App {
             bail!("VM is not stopped: status={}", info.status);
         }
 
-        let backup_file = self.backup_file(vm_id, backup_id, snapshot_id)?;
+        let backup_file = self.backup_file(vm_id, backup_id, snapshot_id);
         if !backup_file.exists() {
             bail!("Backup file not found");
         }
@@ -867,7 +857,7 @@ impl App {
             // Just copy the file
             tokio::fs::copy(&backup_file, &hda_img).await?;
         } else {
-            let backup_dir = self.backup_dir(vm_id, backup_id)?;
+            let backup_dir = self.backup_dir(vm_id, backup_id);
             let snapshot_id = snapshot_id.to_string();
             // Rename the current hda file to *.bak
             let bak_file = hda_img.display().to_string() + ".bak";
