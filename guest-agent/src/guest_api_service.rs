@@ -1,6 +1,6 @@
 use std::fmt::Debug;
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use bollard::{container::ListContainersOptions, Docker};
 use cmd_lib::{run_cmd as cmd, run_fun};
 use dstack_guest_agent_rpc::worker_server::WorkerRpc as _;
@@ -122,13 +122,46 @@ impl GuestApiRpc for GuestApiHandler {
             .write(true)
             .open(BACKUP_LOCK_FILE)
             .context("Failed to create backup lock file, there is another backup in progress")?;
+        // Run /dstack/hooks/pre-backup if it exists
+        let pre_backup_hook = "/dstack/hooks/pre-backup";
+        if is_exe(pre_backup_hook) {
+            let status = tokio::process::Command::new(pre_backup_hook)
+                .spawn()
+                .context("Failed to run pre-backup hook")?
+                .wait()
+                .await
+                .context("Failed to run pre-backup hook")?;
+            if !status.success() {
+                bail!("Failed to run pre-backup hook");
+            }
+        }
         Ok(())
     }
 
     async fn post_backup(self) -> Result<()> {
         fs::remove_file(BACKUP_LOCK_FILE).context("Failed to remove backup lock file")?;
+        let post_backup_hook = "/dstack/hooks/post-backup";
+        if is_exe(post_backup_hook) {
+            let status = tokio::process::Command::new(post_backup_hook)
+                .spawn()
+                .context("Failed to run post-backup hook")?
+                .wait()
+                .await
+                .context("Failed to run post-backup hook")?;
+            if !status.success() {
+                bail!("Failed to run post-backup hook");
+            }
+        }
         Ok(())
     }
+}
+
+fn is_exe(path: &str) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    let Ok(metadata) = fs::metadata(path) else {
+        return false;
+    };
+    metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
 }
 
 pub(crate) async fn list_containers() -> Result<ListContainersResponse> {
