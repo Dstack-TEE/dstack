@@ -31,6 +31,8 @@ message VmInfo {
   string shutdown_progress = 12;
   // Image version
   string image_version = 13;
+  // Backup in progress
+  bool backup_in_progress = 14;
 }
 
 message Id {

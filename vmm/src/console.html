@@ -2503,6 +2503,14 @@ fi
                 };
 
                 const vmStatus = (vm) => {
+                    const status = vmStatus0(vm);
+                    if (vm.backup_in_progress) {
+                        return status + ' (backing up)';
+                    }
+                    return status;
+                }
+
+                const vmStatus0 = (vm) => {
                     const features = imageFeatures(vm);
                     if (!features.progress) {
                         return vm.status;
