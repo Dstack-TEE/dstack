@@ -1,0 +1,236 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "DStack KMS Ethereum Backend API",
+    "description": "API for DStack KMS Ethereum backend authentication and system information",
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "url": "http://localhost:3000",
+      "description": "Development server"
+    }
+  ],
+  "paths": {
+    "/": {
+      "get": {
+        "summary": "Health check and system information",
+        "description": "Returns system status and configuration information",
+        "operationId": "getSystemInfo",
+        "responses": {
+          "200": {
+            "description": "System information",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SystemInfo"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/bootAuth/app": {
+      "post": {
+        "summary": "Application boot authentication",
+        "description": "Validates application boot information against smart contract",
+        "operationId": "authenticateAppBoot",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BootInfo"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Authentication result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BootResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/bootAuth/kms": {
+      "post": {
+        "summary": "KMS boot authentication",
+        "description": "Validates KMS boot information against smart contract",
+        "operationId": "authenticateKmsBoot",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BootInfo"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Authentication result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BootResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "BootInfo": {
+        "type": "object",
+        "required": [
+          "mrAggregated",
+          "osImageHash", 
+          "appId",
+          "composeHash",
+          "instanceId",
+          "deviceId"
+        ],
+        "properties": {
+          "mrAggregated": {
+            "type": "string",
+            "description": "Aggregated MR measurement"
+          },
+          "osImageHash": {
+            "type": "string", 
+            "description": "OS Image hash"
+          },
+          "appId": {
+            "type": "string",
+            "description": "Application ID"
+          },
+          "composeHash": {
+            "type": "string",
+            "description": "Compose hash"
+          },
+          "instanceId": {
+            "type": "string",
+            "description": "Instance ID"
+          },
+          "deviceId": {
+            "type": "string",
+            "description": "Device ID"
+          },
+          "tcbStatus": {
+            "type": "string",
+            "description": "TCB status (optional for compatibility)"
+          },
+          "advisoryIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Advisory IDs (optional for compatibility)"
+          },
+          "mrSystem": {
+            "type": "string",
+            "description": "MR System measurement (optional for compatibility)"
+          }
+        }
+      },
+      "BootResponse": {
+        "type": "object",
+        "required": [
+          "isAllowed",
+          "reason", 
+          "gatewayAppId"
+        ],
+        "properties": {
+          "isAllowed": {
+            "type": "boolean",
+            "description": "Whether the boot is allowed"
+          },
+          "reason": {
+            "type": "string",
+            "description": "Reason for the decision"
+          },
+          "gatewayAppId": {
+            "type": "string",
+            "description": "Gateway application ID"
+          }
+        }
+      },
+      "SystemInfo": {
+        "type": "object",
+        "required": [
+          "status",
+          "kmsContractAddr",
+          "gatewayAppId",
+          "chainId",
+          "appAuthImplementation",
+          "appImplementation"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": ["ok"],
+            "description": "System status"
+          },
+          "kmsContractAddr": {
+            "type": "string",
+            "description": "KMS contract address"
+          },
+          "gatewayAppId": {
+            "type": "string", 
+            "description": "Gateway application ID"
+          },
+          "chainId": {
+            "type": "number",
+            "description": "Blockchain chain ID"
+          },
+          "appAuthImplementation": {
+            "type": "string",
+            "description": "App auth implementation address (deprecated, use appImplementation)"
+          },
+          "appImplementation": {
+            "type": "string",
+            "description": "App implementation address"
+          }
+        }
+      },
+      "Error": {
+        "type": "object",
+        "required": [
+          "status",
+          "message"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": ["error"]
+          },
+          "message": {
+            "type": "string",
+            "description": "Error message"
+          }
+        }
+      }
+    }
+  }
+} 
