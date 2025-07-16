@@ -190,6 +190,7 @@ class BackupScheduler:
         vm_dir = self.vms_dir.resolve() / vm_id
         backup_dir = self.backup_dir.resolve() / vm_id / "backups"
         qmp_socket = vm_dir / "qmp.sock"
+        backup_lock = vm_dir / "backup.lock"
 
         # Create backup directory if it doesn't exist
         backup_dir.mkdir(parents=True, exist_ok=True)
@@ -204,6 +205,7 @@ class BackupScheduler:
             # Create timestamped directory for this backup
             timestamp = datetime.now().strftime("%Y%m%dT%H%M%S")
             backup_timestamp_dir = backup_dir / f"{timestamp}"
+            logger.info(f"Creating backup directory: {backup_timestamp_dir}")
             backup_timestamp_dir.mkdir(parents=True, exist_ok=True)
             try:
                 latest_dir.unlink()
@@ -211,72 +213,98 @@ class BackupScheduler:
                 pass
             latest_dir.symlink_to(timestamp)
 
-        # For full backups, clear bitmaps first
-        if backup_level == "full":
-            logger.info(f"Clearing bitmaps for full backup of VM {vm_name}")
+        def do_backup():
+            # For full backups, clear bitmaps first
+            if backup_level == "full":
+                logger.info(f"Clearing bitmaps for full backup of VM {vm_name}")
+                if qmp_socket.exists():
+                    try:
+                        # Use absolute path for qmp_socket
+                        abs_qmp_socket = qmp_socket.resolve()
+                        result = subprocess.Popen(
+                            ["qmpbackup", "--debug", "--socket",
+                                str(abs_qmp_socket), "cleanup", "--remove-bitmap"],
+                            stdout=sys.stdout,
+                            stderr=sys.stderr
+                        )
+                        returncode = result.wait()
+                        if returncode != 0:
+                            logger.warning(
+                                f"Failed to clear bitmaps for VM {vm_name} ({vm_id})")
+                            # Continue anyway as this might be the first backup
+                    except Exception as e:
+                        logger.error(f"Error clearing bitmaps: {e}")
+                        return False
+                else:
+                    logger.error(f"QMP socket not found at {qmp_socket}")
+                    return False
+
+            # Perform the backup
+            logger.info(f"Running qmpbackup")
+
+            # Convert to absolute paths for qmpbackup
+            abs_qmp_socket = qmp_socket.resolve()
+            abs_latest_dir = latest_dir.resolve()
+
+            logger.debug(
+                f"Running: qmpbackup --socket {abs_qmp_socket} backup -i {hd} --no-subdir -t {abs_latest_dir} -l {backup_level}")
             if qmp_socket.exists():
                 try:
-                    # Use absolute path for qmp_socket
-                    abs_qmp_socket = qmp_socket.resolve()
-                    result = subprocess.run(
-                        ["qmpbackup", "--socket",
-                            str(abs_qmp_socket), "cleanup", "--remove-bitmap"],
-                        capture_output=True,
-                        text=True
+                    backup_lock.touch(exist_ok=False)
+                    # Use Popen for real-time output
+                    process = subprocess.Popen(
+                        [
+                            "qmpbackup",
+                            "--debug",
+                            "--socket", str(abs_qmp_socket),
+                            "backup",
+                            "-i", hd,
+                            "--no-subdir",
+                            "-t", str(abs_latest_dir),
+                            "-l", backup_level
+                        ],
+                        stdout=sys.stdout,
+                        stderr=sys.stderr,
+                        text=True,
+                        bufsize=1  # Line buffered
                     )
-                    if result.returncode != 0:
-                        logger.warning(
-                            f"Failed to clear bitmaps for VM {vm_name} ({vm_id}): {result.stderr}")
-                        # Continue anyway as this might be the first backup
+
+                    # Get return code
+                    returncode = process.wait()
+                    if returncode == 0:
+                        logger.info(f"Backup successful")
+                        self.update_backup_time(vm_id, backup_type)
+
+                        # Rotate backups if needed
+                        if backup_type == "full":
+                            self._rotate_backups(vm_id)
+                        return True
+                    else:
+                        logger.error("Backup failed")
+                        return False
                 except Exception as e:
-                    logger.error(f"Error clearing bitmaps: {e}")
+                    logger.error(f"Error performing backup: {e}")
+                    return False
+                finally:
+                    backup_lock.unlink()
             else:
                 logger.error(f"QMP socket not found at {qmp_socket}")
                 return False
-
-        # Perform the backup
-        logger.debug(f"Running qmpbackup")
-
-        # Convert to absolute paths for qmpbackup
-        abs_qmp_socket = qmp_socket.resolve()
-        abs_latest_dir = latest_dir.resolve()
-
-        logger.debug(
-            f"Running: qmpbackup --socket {abs_qmp_socket} backup -i {hd} --no-subdir -t {abs_latest_dir} -l {backup_level}")
-        if qmp_socket.exists():
+        try:
+            suc = do_backup()
+        except Exception as e:
+            logger.error(f"Error performing backup: {e}")
+            suc = False
+        if not suc and backup_type == "full":
+            # Remove the latest backup dir            suc = self.perform_backup(vm_id, vm_name, "incremental", hd)
+            logger.info(
+                f"Removing {os.path.basename(backup_timestamp_dir)}")
             try:
-                result = subprocess.run(
-                    [
-                        "qmpbackup",
-                        "--socket", str(abs_qmp_socket),
-                        "backup",
-                        "-i", hd,
-                        "--no-subdir",
-                        "-t", str(abs_latest_dir),
-                        "-l", backup_level
-                    ],
-                    capture_output=True,
-                    text=True
-                )
-
-                if result.returncode == 0:
-                    logger.debug(f"Backup successful")
-                    self.update_backup_time(vm_id, backup_type)
-
-                    # Rotate backups if needed
-                    if backup_type == "full":
-                        self._rotate_backups(vm_id)
-                    return True
-                else:
-                    logger.error(
-                        f"Backup failed: {result.stderr} : {result.stdout}")
-                    return False
+                shutil.rmtree(backup_timestamp_dir)
             except Exception as e:
-                logger.error(f"Error performing backup: {e}")
-                return False
-        else:
-            logger.error(f"QMP socket not found at {qmp_socket}")
-            return False
+                logger.error(f"Error removing old backup: {e}")
+
+        return suc
 
     def needs_backup(self, vm_id: str) -> Optional[str]:
         """Determine if a VM needs a backup and what type"""
