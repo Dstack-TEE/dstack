@@ -678,6 +678,8 @@ impl App {
         };
 
         let qmp_socket = work_dir.qmp_socket();
+        let _lock = BackupLock::try_lock(work_dir.backup_lock_file())
+            .context("Failed to lock for backup")?;
 
         let id = id.to_string();
         tokio::task::spawn_blocking(move || {
@@ -887,6 +889,30 @@ impl App {
             .context("Failed to restore backup")?;
         }
         Ok(())
+    }
+}
+
+struct BackupLock {
+    path: PathBuf,
+}
+
+impl BackupLock {
+    fn try_lock(path: impl AsRef<Path>) -> Result<Self> {
+        let path = path.as_ref();
+        let _file = fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(path)
+            .context("Failed to create backup lock file")?;
+        Ok(BackupLock {
+            path: path.to_path_buf(),
+        })
+    }
+}
+
+impl Drop for BackupLock {
+    fn drop(&mut self) {
+        fs::remove_file(&self.path).ok();
     }
 }
 
