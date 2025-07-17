@@ -44,6 +44,7 @@ pub struct ProxyConfig {
     pub tls_crypto_provider: CryptoProvider,
     pub tls_versions: Vec<TlsVersion>,
     pub base_domain: String,
+    pub external_port: u16,
     pub listen_addr: Ipv4Addr,
     pub listen_port: u16,
     pub tappd_port: u16,

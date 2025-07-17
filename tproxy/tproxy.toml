@@ -53,6 +53,7 @@ tappd_port = 8090
 buffer_size = 8192
 # number of hosts to try to connect to
 connect_top_n = 3
+external_port = 443
 
 [core.proxy.timeouts]
 # Timeout for establishing a connection to the target app.
