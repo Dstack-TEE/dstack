@@ -20,7 +20,7 @@ use tokio_rustls::TlsAcceptor;
 use tproxy_rpc::TappdConfig;
 use tproxy_rpc::{
     tproxy_server::{TproxyRpc, TproxyServer},
-    AcmeInfoResponse, RegisterCvmRequest, RegisterCvmResponse, WireGuardConfig,
+    AcmeInfoResponse, InfoResponse, RegisterCvmRequest, RegisterCvmResponse, WireGuardConfig,
 };
 use tracing::{debug, error, info, warn};
 
@@ -507,6 +507,14 @@ impl TproxyRpc for RpcHandler {
         Ok(AcmeInfoResponse {
             account_uri,
             hist_keys: keys.into_iter().collect(),
+        })
+    }
+
+    async fn info(self) -> Result<InfoResponse> {
+        let state = self.state.lock();
+        Ok(InfoResponse {
+            base_domain: state.config.proxy.base_domain.clone(),
+            external_port: state.config.proxy.external_port as u32,
         })
     }
 }
