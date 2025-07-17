@@ -201,18 +201,6 @@ class BackupScheduler:
         # Create or update latest symlink
         latest_dir = backup_dir / "latest"
 
-        if backup_level == "full":
-            # Create timestamped directory for this backup
-            timestamp = datetime.now().strftime("%Y%m%dT%H%M%S")
-            backup_timestamp_dir = backup_dir / f"{timestamp}"
-            logger.info(f"Creating backup directory: {backup_timestamp_dir}")
-            backup_timestamp_dir.mkdir(parents=True, exist_ok=True)
-            try:
-                latest_dir.unlink()
-            except FileNotFoundError:
-                pass
-            latest_dir.symlink_to(timestamp)
-
         def do_backup():
             # For full backups, clear bitmaps first
             if backup_level == "full":
@@ -250,7 +238,6 @@ class BackupScheduler:
                 f"Running: qmpbackup --socket {abs_qmp_socket} backup -i {hd} --no-subdir -t {abs_latest_dir} -l {backup_level}")
             if qmp_socket.exists():
                 try:
-                    backup_lock.touch(exist_ok=False)
                     # Use Popen for real-time output
                     process = subprocess.Popen(
                         [
@@ -285,24 +272,48 @@ class BackupScheduler:
                 except Exception as e:
                     logger.error(f"Error performing backup: {e}")
                     return False
-                finally:
-                    backup_lock.unlink()
             else:
                 logger.error(f"QMP socket not found at {qmp_socket}")
                 return False
-        try:
-            suc = do_backup()
-        except Exception as e:
-            logger.error(f"Error performing backup: {e}")
-            suc = False
-        if not suc and backup_type == "full":
-            # Remove the latest backup dir            suc = self.perform_backup(vm_id, vm_name, "incremental", hd)
-            logger.info(
-                f"Removing {os.path.basename(backup_timestamp_dir)}")
+
+        if backup_level == "full":
+            # Create timestamped directory for this backup
+            timestamp = datetime.now().strftime("%Y%m%dT%H%M%S")
+            backup_timestamp_dir = backup_dir / f"{timestamp}"
+            logger.info(f"Creating backup directory: {backup_timestamp_dir}")
+            backup_timestamp_dir.mkdir(parents=True, exist_ok=True)
             try:
-                shutil.rmtree(backup_timestamp_dir)
+                latest_dir.unlink()
+            except FileNotFoundError:
+                pass
+            latest_dir.symlink_to(timestamp)
+
+        try:
+            backup_lock.touch(exist_ok=False)
+            locked = True
+        except Exception as e:
+            logger.error(f"Error creating backup lock: {e}")
+            locked = False
+        if locked:
+            try:
+                suc = do_backup()
             except Exception as e:
-                logger.error(f"Error removing old backup: {e}")
+                logger.error(f"Error performing backup: {e}")
+                suc = False
+            finally:
+                backup_lock.unlink()
+        else:
+            suc = False
+        if backup_type == "full":
+            if not suc:
+                logger.info(
+                    f"Removing {os.path.basename(backup_timestamp_dir)}")
+                try:
+                    shutil.rmtree(backup_timestamp_dir)
+                except Exception as e:
+                    logger.error(f"Error removing old backup: {e}")
+            else:
+                pass
 
         return suc
 
