@@ -13,8 +13,8 @@ use certbot::{CertBot, WorkDir};
 use cmd_lib::run_cmd as cmd;
 use dstack_gateway_rpc::{
     gateway_server::{GatewayRpc, GatewayServer},
-    AcmeInfoResponse, GatewayState, GuestAgentConfig, QuotedPublicKey, RegisterCvmRequest,
-    RegisterCvmResponse, WireGuardConfig, WireGuardPeer,
+    AcmeInfoResponse, GatewayState, GuestAgentConfig, InfoResponse, QuotedPublicKey,
+    RegisterCvmRequest, RegisterCvmResponse, WireGuardConfig, WireGuardPeer,
 };
 use dstack_guest_agent_rpc::{dstack_guest_client::DstackGuestClient, RawQuoteArgs};
 use fs_err as fs;
@@ -779,6 +779,14 @@ impl GatewayRpc for RpcHandler {
             .update_state(nodes, apps)
             .context("failed to update state")?;
         Ok(())
+    }
+
+    async fn info(self) -> Result<InfoResponse> {
+        let state = self.state.lock();
+        Ok(InfoResponse {
+            base_domain: state.config.proxy.base_domain.clone(),
+            external_port: state.config.proxy.external_port as u32,
+        })
     }
 }
 
