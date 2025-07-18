@@ -1,8 +1,8 @@
-import net from 'net'
+import fs from 'fs'
 import crypto from 'crypto'
-import http from 'http'
-import https from 'https'
-import { URL } from 'url'
+import { send_rpc_request } from './send-rpc-request'
+export { getComposeHash } from './get-compose-hash'
+export { verifyEnvEncryptPublicKey } from './verify-env-encrypt-public-key'
 
 export interface GetTlsKeyResponse {
   key: string
@@ -17,6 +17,10 @@ export interface GetKeyResponse {
 }
 
 export type Hex = `${string}`
+
+export type TdxQuoteHashAlgorithms =
+  'sha256' | 'sha384' | 'sha512' | 'sha3-256' | 'sha3-384' | 'sha3-512' |
+  'keccak256' | 'keccak384' | 'keccak512' | 'raw'
 
 export interface EventLog {
   imr: number
@@ -111,118 +115,6 @@ function reply_rtmrs(event_log: EventLog[]): Record<number, string> {
   return rtmrs
 }
 
-export function send_rpc_request<T = any>(endpoint: string, path: string, payload: string): Promise<T> {
-  return new Promise((resolve, reject) => {
-    const abortController = new AbortController()
-    const timeout = setTimeout(() => {
-      abortController.abort()
-      reject(new Error('Request timed out'))
-    }, 30_000) // 30 seconds timeout
-
-    const isHttp = endpoint.startsWith('http://') || endpoint.startsWith('https://')
-
-    if (isHttp) {
-      const url = new URL(path, endpoint)
-      const options = {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Content-Length': Buffer.byteLength(payload),
-        },
-      }
-
-      const req = (url.protocol === 'https:' ? https : http).request(url, options, (res) => {
-        let data = ''
-        res.on('data', (chunk) => {
-          data += chunk
-        })
-        res.on('end', () => {
-          clearTimeout(timeout)
-          try {
-            const result = JSON.parse(data)
-            resolve(result as T)
-          } catch (error) {
-            reject(new Error('Failed to parse response'))
-          }
-        })
-      })
-
-      req.on('error', (error) => {
-        clearTimeout(timeout)
-        reject(error)
-      })
-
-      abortController.signal.addEventListener('abort', () => {
-        req.destroy()
-        reject(new Error('Request aborted'))
-      })
-
-      req.write(payload)
-      req.end()
-    } else {
-      const client = net.createConnection({ path: endpoint }, () => {
-        client.write(`POST ${path} HTTP/1.1\r\n`)
-        client.write(`Host: localhost\r\n`)
-        client.write(`Content-Type: application/json\r\n`)
-        client.write(`Content-Length: ${payload.length}\r\n`)
-        client.write('\r\n')
-        client.write(payload)
-      })
-
-      let data = ''
-      let headers: Record<string, string> = {}
-      let headersParsed = false
-      let contentLength = 0
-      let bodyData = ''
-
-      client.on('data', (chunk) => {
-        data += chunk
-        if (!headersParsed) {
-          const headerEndIndex = data.indexOf('\r\n\r\n')
-          if (headerEndIndex !== -1) {
-            const headerLines = data.slice(0, headerEndIndex).split('\r\n')
-            headerLines.forEach(line => {
-              const [key, value] = line.split(': ')
-              if (key && value) {
-                headers[key.toLowerCase()] = value
-              }
-            })
-            headersParsed = true
-            contentLength = parseInt(headers['content-length'] || '0', 10)
-            bodyData = data.slice(headerEndIndex + 4)
-          }
-        } else {
-          bodyData += chunk
-        }
-
-        if (headersParsed && bodyData.length >= contentLength) {
-          client.end()
-        }
-      })
-
-      client.on('end', () => {
-        clearTimeout(timeout)
-        try {
-          const result = JSON.parse(bodyData.slice(0, contentLength))
-          resolve(result as T)
-        } catch (error) {
-          reject(new Error('Failed to parse response'))
-        }
-      })
-
-      client.on('error', (error) => {
-        clearTimeout(timeout)
-        reject(error)
-      })
-
-      abortController.signal.addEventListener('abort', () => {
-        client.destroy()
-        reject(new Error('Request aborted'))
-      })
-    }
-  })
-}
-
 export interface TlsKeyOptions {
   path?: string;
   subject?: string;
@@ -239,6 +131,9 @@ export class DstackClient {
     if (process.env.DSTACK_SIMULATOR_ENDPOINT) {
       console.warn(`Using simulator endpoint: ${process.env.DSTACK_SIMULATOR_ENDPOINT}`)
       endpoint = process.env.DSTACK_SIMULATOR_ENDPOINT
+    }
+    if (endpoint.startsWith('/') && !fs.existsSync(endpoint)) {
+      throw new Error(`Unix socket file ${endpoint} does not exist`);
     }
     this.endpoint = endpoint
   }
@@ -310,6 +205,16 @@ export class DstackClient {
     })
   }
 
+  async isReachable(): Promise<boolean> {
+    try {
+      // Use info endpoint to test connectivity with 500ms timeout
+      await send_rpc_request(this.endpoint, '/prpc/Tappd.Info', '{}', 500)
+      return true
+    } catch (error) {
+      return false
+    }
+  }
+
   /**
    * Emit an event. This extends the event to RTMR3 on TDX platform.
    *
@@ -332,5 +237,42 @@ export class DstackClient {
         payload: hexPayload
       })
     )
+  }
+
+  //
+  // Legacy methods for backward compatibility with a warning to notify users about migrating to new methods.
+  // These methods don't mean fully compatible as past, but we keep them here until next major version.
+  //
+
+  /**
+   * @deprecated Use getKey instead.
+   * @param path The path to the key.
+   * @param subject The subject of the key.
+   * @param altNames The alternative names of the key.
+   * @returns The key.
+   */
+  async deriveKey(path?: string, subject?: string, altNames?: string[]): Promise<GetKeyResponse> {
+    throw new Error('deriveKey is deprecated, please use getKey instead.')
+  }
+
+  /**
+   * @deprecated Use getQuote instead.
+   * @param report_data The report data.
+   * @param hash_algorithm The hash algorithm.
+   * @returns The quote.
+   */
+  async tdxQuote(report_data: string | Buffer | Uint8Array, hash_algorithm?: TdxQuoteHashAlgorithms): Promise<GetQuoteResponse> {
+    console.warn('tdxQuote is deprecated, please use getQuote instead')
+    if (hash_algorithm !== "raw") {
+      throw new Error('tdxQuote only supports raw hash algorithm.')
+    }
+    return this.getQuote(report_data)
+  }
+}
+
+export class TappdClient extends DstackClient {
+  constructor(endpoint: string = '/var/run/tappd.sock') {
+    console.warn('TappdClient is deprecated, please use DstackClient instead')
+    super(endpoint)
   }
 }
