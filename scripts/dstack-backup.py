@@ -377,14 +377,15 @@ class BackupScheduler:
             logger.info("No running VMs found")
             return
 
+        total_vms = len(vms)
         # Process each VM
-        for vm in vms:
+        for i, vm in enumerate(vms):
             vm_id = vm['id']
             vm_name = vm['name']
             hd = vm['hd']
 
             logger.info("-" * 50)
-            logger.info(f"Processing VM: {vm_name} ({vm_id})")
+            logger.info(f"[{i+1}/{total_vms}] Processing VM: {vm_name} ({vm_id})")
 
             # Check if backup is needed
             backup_type = self.needs_backup(vm_id)
