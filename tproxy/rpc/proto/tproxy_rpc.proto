@@ -86,11 +86,20 @@ message GetMetaResponse {
   uint32 online = 2;
 }
 
+message InfoResponse {
+  // The base domain of the ZT-HTTPS
+  string base_domain = 1;
+  // The external port of the ZT-HTTPS
+  uint32 external_port = 2;
+}
+
 service Tproxy {
   // Register a new proxied CVM.
   rpc RegisterCvm(RegisterCvmRequest) returns (RegisterCvmResponse) {}
   // List all ACME account URIs and the public key history of the certificates for the Content Addressable HTTPS.
   rpc AcmeInfo(google.protobuf.Empty) returns (AcmeInfoResponse) {}
+  // Get the gateway info
+  rpc Info(google.protobuf.Empty) returns (InfoResponse) {}
 }
 
 message RenewCertResponse {
