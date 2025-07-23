@@ -158,7 +158,6 @@ message ResourcesSettings {
   uint32 max_cvm_number = 1; // equals to the cid pool size.
   uint32 max_allocable_vcpu = 2;
   uint32 max_allocable_memory_in_mb = 3; // in MB.
-  uint32 max_disk_size_in_gb = 4; // in GB.
 }
 
 message GetMetaResponse {
