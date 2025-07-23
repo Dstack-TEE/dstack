@@ -3,8 +3,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail, Context, Result};
 use dstack_types::AppCompose;
-use dstack_vmm_rpc as rpc;
 use dstack_vmm_rpc::vmm_server::{VmmRpc, VmmServer};
+use dstack_vmm_rpc::{self as rpc, BackupDiskRequest, DeleteBackupRequest, RestoreBackupRequest};
 use dstack_vmm_rpc::{
     AppId, ComposeHash as RpcComposeHash, GatewaySettings, GetInfoResponse, GetMetaResponse, Id,
     ImageInfo as RpcImageInfo, ImageListResponse, KmsSettings, ListGpusResponse, PublicKeyResponse,
@@ -104,6 +104,30 @@ fn resolve_gpus(gpu_cfg: &rpc::GpuConfig) -> Result<GpuConfig> {
         }
         _ => bail!("Invalid GPU attach mode: {}", gpu_cfg.attach_mode),
     }
+}
+
+fn check_path_traversal(input: &str) -> Result<()> {
+    if input.is_empty() {
+        bail!("path is empty");
+    }
+
+    if input.len() > 255 {
+        bail!("path is too long");
+    }
+
+    if input.contains('/') {
+        bail!("path contains '/'");
+    }
+
+    if input.contains('\0') {
+        bail!("path contains '\0'");
+    }
+
+    if input == "." || input == ".." {
+        bail!("path is '.' or '..'");
+    }
+
+    Ok(())
 }
 
 impl RpcHandler {
@@ -209,6 +233,7 @@ impl VmmRpc for RpcHandler {
     }
 
     async fn start_vm(self, request: Id) -> Result<()> {
+        check_path_traversal(&request.id)?;
         self.app
             .start_vm(&request.id)
             .await
@@ -217,6 +242,7 @@ impl VmmRpc for RpcHandler {
     }
 
     async fn stop_vm(self, request: Id) -> Result<()> {
+        check_path_traversal(&request.id)?;
         self.app
             .stop_vm(&request.id)
             .await
@@ -225,6 +251,7 @@ impl VmmRpc for RpcHandler {
     }
 
     async fn remove_vm(self, request: Id) -> Result<()> {
+        check_path_traversal(&request.id)?;
         self.app
             .remove_vm(&request.id)
             .await
@@ -253,6 +280,7 @@ impl VmmRpc for RpcHandler {
     }
 
     async fn upgrade_app(self, request: UpgradeAppRequest) -> Result<Id> {
+        check_path_traversal(&request.id)?;
         let new_id = if !request.compose_file.is_empty() {
             // check the compose file is valid
             let _app_compose: AppCompose =
@@ -322,6 +350,7 @@ impl VmmRpc for RpcHandler {
     }
 
     async fn get_info(self, request: Id) -> Result<GetInfoResponse> {
+        check_path_traversal(&request.id)?;
         if let Some(vm) = self.app.vm_info(&request.id).await? {
             Ok(GetInfoResponse {
                 found: true,
@@ -337,6 +366,7 @@ impl VmmRpc for RpcHandler {
 
     #[tracing::instrument(skip(self, request), fields(id = request.id))]
     async fn resize_vm(self, request: ResizeVmRequest) -> Result<()> {
+        check_path_traversal(&request.id)?;
         info!("Resizing VM: {:?}", request);
         let vm = self
             .app
@@ -393,6 +423,7 @@ impl VmmRpc for RpcHandler {
     }
 
     async fn shutdown_vm(self, request: Id) -> Result<()> {
+        check_path_traversal(&request.id)?;
         self.guest_agent_client(&request.id)?.shutdown().await?;
         Ok(())
     }
@@ -455,6 +486,34 @@ impl VmmRpc for RpcHandler {
             serde_json::from_str(&request.compose_file).context("Invalid compose file")?;
         let hash = hex_sha256(&request.compose_file);
         Ok(RpcComposeHash { hash })
+    }
+
+    async fn backup_disk(self, request: BackupDiskRequest) -> Result<()> {
+        check_path_traversal(&request.vm_id)?;
+        self.app.backup_disk(&request.vm_id, &request.level).await
+    }
+
+    async fn list_backups(self, request: BackupDiskRequest) -> Result<rpc::ListBackupsResponse> {
+        check_path_traversal(&request.vm_id)?;
+        let backups = self.app.list_backups(&request.vm_id).await?;
+        Ok(rpc::ListBackupsResponse { backups })
+    }
+
+    async fn delete_backup(self, request: DeleteBackupRequest) -> Result<()> {
+        check_path_traversal(&request.vm_id)?;
+        check_path_traversal(&request.backup_id)?;
+        self.app
+            .delete_backup(&request.vm_id, &request.backup_id)
+            .await
+    }
+
+    async fn restore_backup(self, request: RestoreBackupRequest) -> Result<()> {
+        check_path_traversal(&request.vm_id)?;
+        check_path_traversal(&request.backup_id)?;
+        check_path_traversal(&request.snapshot_id)?;
+        self.app
+            .restore_backup(&request.vm_id, &request.backup_id, &request.snapshot_id)
+            .await
     }
 }
 

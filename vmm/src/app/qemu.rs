@@ -168,6 +168,7 @@ impl VmInfo {
             app_id: self.manifest.app_id.clone(),
             instance_id: self.instance_id.as_deref().map(Into::into),
             exited_at: self.exited_at.clone(),
+            backup_in_progress: workdir.backup_lock_file().exists(),
         }
     }
 }
@@ -730,6 +731,10 @@ impl VmWorkDir {
 
     pub fn path(&self) -> &Path {
         &self.workdir
+    }
+
+    pub fn backup_lock_file(&self) -> PathBuf {
+        self.workdir.join("backup.lock")
     }
 }
 

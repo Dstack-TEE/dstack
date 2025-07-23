@@ -130,6 +130,8 @@ pub struct CvmConfig {
     pub qemu_pci_hole64_size: u64,
     /// QEMU hotplug_off
     pub qemu_hotplug_off: bool,
+    /// Backup configuration
+    pub backup: BackupConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -197,10 +199,14 @@ pub struct GatewayConfig {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+pub struct BackupConfig {
+    pub enabled: bool,
+    pub path: PathBuf,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct Config {
-    #[serde(default)]
     pub image_path: PathBuf,
-    #[serde(default)]
     pub run_path: PathBuf,
     /// The URL of the KMS server
     pub kms_url: String,
@@ -227,12 +233,15 @@ pub struct Config {
 }
 
 impl Config {
-    pub fn abs_path(self) -> Result<Self> {
-        Ok(Self {
-            image_path: self.image_path.absolutize()?.to_path_buf(),
-            run_path: self.run_path.absolutize()?.to_path_buf(),
-            ..self
-        })
+    pub fn abs_path(mut self) -> Result<Self> {
+        fn absolutize(path: &mut PathBuf) -> Result<()> {
+            *path = path.absolutize()?.to_path_buf();
+            Ok(())
+        }
+        absolutize(&mut self.image_path)?;
+        absolutize(&mut self.run_path)?;
+        absolutize(&mut self.cvm.backup.path)?;
+        Ok(self)
     }
 }
 
