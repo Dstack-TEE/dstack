@@ -54,35 +54,28 @@ forge test --ffi --match-path "test/DstackApp.t.sol" && forge test --ffi --match
 
 ### Upgrade Tests
 
-Test upgrade functionality and contract migration scenarios:
+Test upgrade functionality and contract migration scenarios using OpenZeppelin Foundry Upgrades plugin:
 
 ```bash
-# Test basic upgrade functionality (5 tests)
-forge test --ffi --match-path "test/UpgradesBasic.t.sol"
-
-# Test advanced upgrade scenarios (may have OpenZeppelin validation issues)
-forge test --ffi --match-path "test/Upgrades.t.sol"
+# Test comprehensive upgrade scenarios with plugin (may have OpenZeppelin validation issues)
 forge test --ffi --match-path "test/UpgradesWithPlugin.t.sol"
 ```
 
 ### Run All Working Tests
 
 ```bash
-# Run all stable tests (32 tests total)
+# Run all stable tests (27 tests total)
 forge test --ffi --match-path "test/DstackApp.t.sol" && \
-forge test --ffi --match-path "test/DstackKms.t.sol" && \
-forge test --ffi --match-path "test/UpgradesBasic.t.sol"
+forge test --ffi --match-path "test/DstackKms.t.sol"
 ```
 
 ### Test Coverage Summary
 
 - ✅ **DstackApp.t.sol**: 11/11 tests PASS - Core app functionality
 - ✅ **DstackKms.t.sol**: 16/16 tests PASS - Core KMS functionality  
-- ✅ **UpgradesBasic.t.sol**: 5/5 tests PASS - Basic upgrade functionality
-- ⚠️ **Upgrades.t.sol**: OpenZeppelin validation issues (advanced upgrade testing)
-- ⚠️ **UpgradesWithPlugin.t.sol**: OpenZeppelin validation issues (advanced upgrade testing)
+- ⚠️ **UpgradesWithPlugin.t.sol**: OpenZeppelin validation issues (comprehensive plugin-based upgrade testing)
 
-**Total: 32/32 core and basic upgrade tests PASSING**
+**Total: 27/27 core functionality tests PASSING**
 
 ## Important Notes
 
