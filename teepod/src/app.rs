@@ -119,12 +119,6 @@ impl App {
                 networking: self.config.networking.clone(),
                 workdir: vm_work_dir.path().to_path_buf(),
             };
-            if vm_config.manifest.disk_size > self.config.cvm.max_disk_size {
-                bail!(
-                    "disk size too large, max size is {}",
-                    self.config.cvm.max_disk_size
-                );
-            }
             teapot.add(VmState::new(vm_config));
         };
         let started = vm_work_dir.started().context("Failed to read VM state")?;
