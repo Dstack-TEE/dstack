@@ -1,21 +1,13 @@
-/*
- * SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
- *
- * SPDX-License-Identifier: Apache-2.0
- */
-
+// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.22;
 
-/// @custom:oz-upgrades-from DstackKmsV1
-
-import "./IAppAuth.sol";
+import "../IAppAuth.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/utils/introspection/ERC165Upgradeable.sol";
-import "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 
-contract DstackKms is
+contract DstackKmsV1 is
     Initializable,
     OwnableUpgradeable,
     UUPSUpgradeable,
@@ -34,7 +26,6 @@ contract DstackKms is
     KmsInfo public kmsInfo;
 
     // The dstack-gateway App ID
-    /// @custom:oz-renamed-from tproxyAppId
     string public gatewayAppId;
 
     // Mapping of registered apps
@@ -49,9 +40,6 @@ contract DstackKms is
     // Mapping of allowed image measurements
     mapping(bytes32 => bool) public allowedOsImages;
 
-    // DstackApp implementation contract address for factory deployment
-    address public appImplementation;
-
     // Events
     event AppRegistered(address appId);
     event KmsInfoSet(bytes k256Pubkey);
@@ -62,32 +50,29 @@ contract DstackKms is
     event OsImageHashAdded(bytes32 osImageHash);
     event OsImageHashRemoved(bytes32 osImageHash);
     event GatewayAppIdSet(string gatewayAppId);
-    event AppImplementationSet(address implementation);
-    event AppDeployedViaFactory(address indexed appId, address indexed deployer);
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
         _disableInitializers();
     }
 
-    // Initialize the contract with the owner wallet address and optionally set DstackApp implementation
-    function initialize(address initialOwner, address _appImplementation) public initializer {
+    // Initialize the contract with the owner wallet address
+    function initialize(address initialOwner) public initializer {
         __Ownable_init(initialOwner);
         __UUPSUpgradeable_init();
         __ERC165_init();
+    }
 
-        // Set DstackApp implementation if provided
-        if (_appImplementation != address(0)) {
-            appImplementation = _appImplementation;
-            emit AppImplementationSet(_appImplementation);
+    function isContract(address addr) internal view returns (bool){
+        uint32 size;
+        assembly {
+            size := extcodesize(addr)
         }
+        return (size > 0);
     }
 
     /**
      * @dev See {IERC165-supportsInterface}.
-     * @notice Returns true if this contract implements the interface defined by interfaceId
-     * @param interfaceId The interface identifier, as specified in ERC-165
-     * @return True if the contract implements `interfaceId`
      */
     function supportsInterface(bytes4 interfaceId)
         public
@@ -112,16 +97,6 @@ contract DstackKms is
         emit KmsInfoSet(info.k256Pubkey);
     }
 
-    // Function to set KMS quote
-    function setKmsQuote(bytes memory quote) external onlyOwner {
-        kmsInfo.quote = quote;
-    }
-
-    // Function to set KMS eventlog
-    function setKmsEventlog(bytes memory eventlog) external onlyOwner {
-        kmsInfo.eventlog = eventlog;
-    }
-
     // Function to set trusted Gateway App ID
     function setGatewayAppId(string memory appId) external onlyOwner {
         gatewayAppId = appId;
@@ -133,41 +108,6 @@ contract DstackKms is
         require(appId != address(0), "Invalid app ID");
         registeredApps[appId] = true;
         emit AppRegistered(appId);
-    }
-
-    // Function to set DstackApp implementation contract address
-    function setAppImplementation(address _implementation) external onlyOwner {
-        require(_implementation != address(0), "Invalid implementation address");
-        appImplementation = _implementation;
-        emit AppImplementationSet(_implementation);
-    }
-
-    // Factory method: Deploy and register DstackApp in single transaction
-    function deployAndRegisterApp(
-        address initialOwner,
-        bool disableUpgrades,
-        bool allowAnyDevice,
-        bytes32 initialDeviceId,
-        bytes32 initialComposeHash
-    ) external returns (address appId) {
-        require(appImplementation != address(0), "DstackApp implementation not set");
-        require(initialOwner != address(0), "Invalid owner address");
-
-        // Prepare initialization data
-        bytes memory initData = abi.encodeWithSelector(
-            bytes4(keccak256("initialize(address,bool,bool,bytes32,bytes32)")),
-            initialOwner,
-            disableUpgrades,
-            allowAnyDevice,
-            initialDeviceId,
-            initialComposeHash
-        );
-
-        // Deploy proxy contract
-        appId = address(new ERC1967Proxy(appImplementation, initData));
-        // Register to KMS
-        registerApp(appId);
-        emit AppDeployedViaFactory(appId, msg.sender);
     }
 
     // Function to register an aggregated MR measurement
@@ -206,36 +146,6 @@ contract DstackKms is
         emit OsImageHashRemoved(osImageHash);
     }
 
-    // Function to check if KMS is allowed to boot
-    function isKmsAllowed(
-        AppBootInfo calldata bootInfo
-    ) external view returns (bool isAllowed, string memory reason) {
-        // Check if the TCB status is up to date
-        if (
-            keccak256(abi.encodePacked(bootInfo.tcbStatus)) !=
-            keccak256(abi.encodePacked("UpToDate"))
-        ) {
-            return (false, "TCB status is not up to date");
-        }
-
-        // Check if the OS image is allowed
-        if (!allowedOsImages[bootInfo.osImageHash]) {
-            return (false, "OS image is not allowed");
-        }
-
-        // Check if the aggregated MR is allowed
-        if (!kmsAllowedAggregatedMrs[bootInfo.mrAggregated]) {
-            return (false, "Aggregated MR not allowed");
-        }
-
-        // Check if the KMS device ID is allowed
-        if (!kmsAllowedDeviceIds[bootInfo.deviceId]) {
-            return (false, "KMS is not allowed to boot on this device");
-        }
-
-        return (true, "");
-    }
-
     // Function to check if an app is allowed to boot
     function isAppAllowed(
         AppBootInfo calldata bootInfo
@@ -260,12 +170,4 @@ contract DstackKms is
 
     // Add storage gap for upgradeable contracts
     uint256[50] private __gap;
-}
-
-function isContract(address addr) view returns (bool){
-    uint32 size;
-    assembly {
-        size := extcodesize(addr)
-    }
-    return (size > 0);
 }
