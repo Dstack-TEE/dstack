@@ -1,21 +1,14 @@
-/*
- * SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
- *
- * SPDX-License-Identifier: Apache-2.0
- */
-
+// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.22;
 
-/// @custom:oz-upgrades-from DstackAppV1
-
-import "./IAppAuth.sol";
-import "./IAppAuthBasicManagement.sol";
+import "../IAppAuth.sol";
+import "../IAppAuthBasicManagement.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/utils/introspection/ERC165Upgradeable.sol";
 
-contract DstackApp is
+contract DstackAppV1 is
     Initializable,
     OwnableUpgradeable,
     UUPSUpgradeable,
@@ -76,9 +69,6 @@ contract DstackApp is
 
     /**
      * @dev See {IERC165-supportsInterface}.
-     * @notice Returns true if this contract implements the interface defined by interfaceId
-     * @param interfaceId The interface identifier, as specified in ERC-165
-     * @return True if the contract implements `interfaceId`
      */
     function supportsInterface(bytes4 interfaceId)
         public
