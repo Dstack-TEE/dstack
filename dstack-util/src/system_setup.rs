@@ -471,7 +471,7 @@ impl<'a> Stage0<'a> {
 
             info "Opening the device";
             echo -n $disk_crypt_key |
-                cryptsetup luksOpen --type luks2 -d- $root_hd $name;
+                cryptsetup --perf-no_read_workqueue --perf-no_write_workqueue --persistent open --type luks2 -d- $root_hd $name;
         }.or(Err(anyhow!("Failed to setup luks volume")))?;
         Ok(())
     }
