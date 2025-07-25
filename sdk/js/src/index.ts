@@ -5,6 +5,8 @@ export { getComposeHash } from './get-compose-hash'
 export { verifyEnvEncryptPublicKey } from './verify-env-encrypt-public-key'
 
 export interface GetTlsKeyResponse {
+  __name__: Readonly<'GetTlsKeyResponse'>
+
   key: string
   certificate_chain: string[]
 
@@ -12,6 +14,8 @@ export interface GetTlsKeyResponse {
 }
 
 export interface GetKeyResponse {
+  __name__: Readonly<'GetKeyResponse'>
+
   key: Uint8Array
   signature_chain: Uint8Array[]
 }
@@ -125,12 +129,16 @@ export interface TlsKeyOptions {
 }
 
 export class DstackClient {
-  private endpoint: string
+  protected endpoint: string
 
-  constructor(endpoint: string = '/var/run/dstack.sock') {
-    if (process.env.DSTACK_SIMULATOR_ENDPOINT) {
-      console.warn(`Using simulator endpoint: ${process.env.DSTACK_SIMULATOR_ENDPOINT}`)
-      endpoint = process.env.DSTACK_SIMULATOR_ENDPOINT
+  constructor(endpoint: string | undefined = undefined) {
+    if (endpoint === undefined) {
+      if (process.env.DSTACK_SIMULATOR_ENDPOINT) {
+        console.warn(`Using simulator endpoint: ${process.env.DSTACK_SIMULATOR_ENDPOINT}`)
+        endpoint = process.env.DSTACK_SIMULATOR_ENDPOINT
+      } else {
+        endpoint = '/var/run/dstack.sock'
+      }
     }
     if (endpoint.startsWith('/') && !fs.existsSync(endpoint)) {
       throw new Error(`Unix socket file ${endpoint} does not exist`);
@@ -146,7 +154,8 @@ export class DstackClient {
     const result = await send_rpc_request<{ key: string, signature_chain: string[] }>(this.endpoint, '/GetKey', payload)
     return Object.freeze({
       key: new Uint8Array(Buffer.from(result.key, 'hex')),
-      signature_chain: result.signature_chain.map(sig => new Uint8Array(Buffer.from(sig, 'hex')))
+      signature_chain: result.signature_chain.map(sig => new Uint8Array(Buffer.from(sig, 'hex'))),
+      __name__: 'GetKeyResponse',
     })
   }
 
@@ -170,12 +179,12 @@ export class DstackClient {
     }
     const payload = JSON.stringify(raw)
     const result = await send_rpc_request<GetTlsKeyResponse>(this.endpoint, '/GetTlsKey', payload)
-    Object.defineProperty(result, 'asUint8Array', {
-      get: () => (length?: number) => x509key_to_uint8array(result.key, length),
-      enumerable: true,
-      configurable: false,
+    const asUint8Array = (length?: number) => x509key_to_uint8array(result.key, length)
+    return Object.freeze({
+      ...result,
+      asUint8Array,
+      __name__: 'GetTlsKeyResponse',
     })
-    return Object.freeze(result)
   }
 
   async getQuote(report_data: string | Buffer | Uint8Array): Promise<GetQuoteResponse> {
@@ -251,7 +260,7 @@ export class DstackClient {
    * @param altNames The alternative names of the key.
    * @returns The key.
    */
-  async deriveKey(path?: string, subject?: string, altNames?: string[]): Promise<GetKeyResponse> {
+  async deriveKey(path?: string, subject?: string, altNames?: string[]): Promise<GetTlsKeyResponse> {
     throw new Error('deriveKey is deprecated, please use getKey instead.')
   }
 
@@ -271,8 +280,70 @@ export class DstackClient {
 }
 
 export class TappdClient extends DstackClient {
-  constructor(endpoint: string = '/var/run/tappd.sock') {
+  constructor(endpoint: string | undefined = undefined) {
+    if (endpoint === undefined) {
+      if (process.env.TAPPD_SIMULATOR_ENDPOINT) {
+        console.warn(`Using tappd endpoint: ${process.env.TAPPD_SIMULATOR_ENDPOINT}`)
+        endpoint = process.env.TAPPD_SIMULATOR_ENDPOINT
+      } else {
+        endpoint = '/var/run/tappd.sock'
+      }
+    }
     console.warn('TappdClient is deprecated, please use DstackClient instead')
     super(endpoint)
+  }
+
+  /**
+   * @deprecated Use getKey instead.
+   * @param path The path to the key.
+   * @param subject The subject of the key.
+   * @param altNames The alternative names of the key.
+   * @returns The key.
+   */
+  async deriveKey(path?: string, subject?: string, alt_names?: string[]): Promise<GetTlsKeyResponse> {
+    console.warn('deriveKey is deprecated, please use getKey instead');
+    let raw: Record<string, any> = { path: path || '', subject: subject || path || '' }
+    if (alt_names && alt_names.length) {
+      raw['alt_names'] = alt_names
+    }
+    const payload = JSON.stringify(raw)
+    const result = await send_rpc_request<GetTlsKeyResponse>(this.endpoint, '/prpc/Tappd.DeriveKey', payload)
+    const asUint8Array = (length?: number) => x509key_to_uint8array(result.key, length)
+    return Object.freeze({
+      ...result,
+      asUint8Array,
+      __name__: 'GetTlsKeyResponse',
+    })
+  }
+
+  /**
+   * @deprecated Use getQuote instead.
+   * @param report_data The report data.
+   * @param hash_algorithm The hash algorithm.
+   * @returns The quote.
+   */
+  async tdxQuote(report_data: string | Buffer | Uint8Array, hash_algorithm?: TdxQuoteHashAlgorithms): Promise<GetQuoteResponse> {
+    console.warn('tdxQuote is deprecated, please use getQuote instead');
+    let hex = to_hex(report_data)
+    if (hash_algorithm === 'raw') {
+      if (hex.length > 128) {
+        throw new Error(`Report data is too large, it should less then 64 bytes when hash_algorithm is raw.`)
+      }
+      if (hex.length < 128) {
+        hex = hex.padStart(128, '0')
+      }
+    }
+    const payload = JSON.stringify({ report_data: hex, hash_algorithm })
+    const result = await send_rpc_request<GetQuoteResponse>(this.endpoint, '/prpc/Tappd.TdxQuote', payload)
+    if ('error' in result) {
+      const err = result['error'] as string
+      throw new Error(err)
+    }
+    Object.defineProperty(result, 'replayRtmrs', {
+      get: () => () => reply_rtmrs(JSON.parse(result.event_log) as EventLog[]),
+      enumerable: true,
+      configurable: false,
+    })
+    return Object.freeze(result)
   }
 }
