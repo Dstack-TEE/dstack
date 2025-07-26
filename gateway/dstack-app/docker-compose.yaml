@@ -1,20 +1,6 @@
 services:
   gateway:
-    build:
-      context: .
-      dockerfile_inline: |
-        FROM rust:1.86.0@sha256:300ec56abce8cc9448ddea2172747d048ed902a3090e6b57babb2bf19f754081
-        WORKDIR /src
-        RUN apt-get update && apt-get install -y \
-            git build-essential libssl-dev protobuf-compiler \
-            libprotobuf-dev wireguard-tools iproute2 libclang-dev jq
-        RUN git clone https://github.com/Dstack-TEE/dstack.git && \
-            cd dstack && \
-            git checkout ${GIT_REV}
-        WORKDIR /src/dstack/gateway/dstack-app
-        RUN cargo build --release -p dstack-gateway
-        ENTRYPOINT ["/src/dstack/gateway/dstack-app/entrypoint.sh"]
-        CMD ["/src/dstack/target/release/dstack-gateway", "-c", "/data/gateway/gateway.toml"]
+    image: kvin/gateway@sha256:27fc6872836712c640d22397e4cf86c3e771ebed0116e075dca0eb170d9a9081
     volumes:
       - /var/run/dstack.sock:/var/run/dstack.sock
       - /dstack:/dstack
