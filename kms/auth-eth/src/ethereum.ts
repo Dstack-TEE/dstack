@@ -7,8 +7,8 @@ import { BootInfo, BootResponse } from './types';
 
 // Minimal ABI for DstackKms contract
 const DSTACK_KMS_ABI = [
-  "function isAppAllowed((address,bytes32,address,bytes32,bytes32,bytes32,bytes32,string,string[]) bootInfo) view returns (bool, string)",
-  "function isKmsAllowed((address,bytes32,address,bytes32,bytes32,bytes32,bytes32,string,string[]) bootInfo) view returns (bool, string)", 
+  "function isAppAllowed((address appId,bytes32 composeHash,address instanceId,bytes32 deviceId,bytes32 mrAggregated,bytes32 mrSystem,bytes32 osImageHash,string tcbStatus,string[] advisoryIds) bootInfo) view returns (bool, string)",
+  "function isKmsAllowed((address appId,bytes32 composeHash,address instanceId,bytes32 deviceId,bytes32 mrAggregated,bytes32 mrSystem,bytes32 osImageHash,string tcbStatus,string[] advisoryIds) bootInfo) view returns (bool, string)", 
   "function gatewayAppId() view returns (string)",
   "function appImplementation() view returns (address)"
 ];
