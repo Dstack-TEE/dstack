@@ -73,9 +73,9 @@ forge test --ffi --match-path "test/DstackKms.t.sol"
 
 - ✅ **DstackApp.t.sol**: 11/11 tests PASS - Core app functionality
 - ✅ **DstackKms.t.sol**: 16/16 tests PASS - Core KMS functionality  
-- ⚠️ **UpgradesWithPlugin.t.sol**: OpenZeppelin validation issues (comprehensive plugin-based upgrade testing)
+- ✅ **UpgradesWithPlugin.t.sol**: 7/9 tests PASS (2 failing due to OpenZeppelin validation on expected-revert tests)
 
-**Total: 27/27 core functionality tests PASSING**
+**Total: 34/36 tests PASSING (27 core + 7 upgrade tests)**
 
 ## Important Notes
 
