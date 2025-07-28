@@ -6,6 +6,8 @@ import "openzeppelin-foundry-upgrades/Upgrades.sol";
 import "../contracts/DstackKms.sol";
 import "../contracts/DstackApp.sol";
 import "../contracts/IAppAuth.sol";
+import "../contracts/test-utils/DstackKmsV2.sol";
+import "../contracts/test-utils/DstackAppV2.sol";
 
 contract UpgradesWithPluginTest is Test {
     address public owner;
@@ -73,7 +75,7 @@ contract UpgradesWithPluginTest is Test {
         kms.addKmsAggregatedMr(mrAggregated);
         
         // Upgrade to new implementation using plugin
-        Upgrades.upgradeProxy(kmsProxy, "DstackKms.sol", "");
+        Upgrades.upgradeProxy(kmsProxy, "DstackKmsV2.sol", "");
         
         // Verify state is preserved after upgrade
         assertEq(kms.owner(), owner);
@@ -102,7 +104,7 @@ contract UpgradesWithPluginTest is Test {
         app.setAllowAnyDevice(true);
         
         // Upgrade to new implementation using plugin
-        Upgrades.upgradeProxy(appProxy, "DstackApp.sol", "");
+        Upgrades.upgradeProxy(appProxy, "DstackAppV2.sol", "");
         
         // Verify state is preserved after upgrade
         assertEq(app.owner(), owner);
@@ -131,7 +133,7 @@ contract UpgradesWithPluginTest is Test {
             ("upgraded-gateway-id")
         );
         
-        Upgrades.upgradeProxy(kmsProxy, "DstackKms.sol", initData);
+        Upgrades.upgradeProxy(kmsProxy, "DstackKmsV2.sol", initData);
         
         // Verify the initialization happened during upgrade
         assertEq(kms.gatewayAppId(), "upgraded-gateway-id");
@@ -156,7 +158,7 @@ contract UpgradesWithPluginTest is Test {
         // - Proxy upgrade safety
         
         // This should work fine since DstackKms is upgrade-safe
-        Upgrades.upgradeProxy(kmsProxy, "DstackKms.sol", "");
+        Upgrades.upgradeProxy(kmsProxy, "DstackKmsV2.sol", "");
         
         vm.stopPrank();
     }
@@ -177,7 +179,7 @@ contract UpgradesWithPluginTest is Test {
         
         // Try to upgrade - should fail due to our custom _authorizeUpgrade logic
         vm.expectRevert("Upgrades are permanently disabled");
-        Upgrades.upgradeProxy(appProxy, "DstackApp.sol", "");
+        Upgrades.upgradeProxy(appProxy, "DstackAppV2.sol", "");
         
         vm.stopPrank();
     }
@@ -197,7 +199,7 @@ contract UpgradesWithPluginTest is Test {
         // Try to upgrade as non-owner
         vm.startPrank(user);
         vm.expectRevert();
-        Upgrades.upgradeProxy(kmsProxy, "DstackKms.sol", "");
+        Upgrades.upgradeProxy(kmsProxy, "DstackKmsV2.sol", "");
         vm.stopPrank();
     }
     
@@ -235,8 +237,8 @@ contract UpgradesWithPluginTest is Test {
         kms.setGatewayAppId("complex-test-gateway");
         
         // Upgrade both contracts
-        Upgrades.upgradeProxy(kmsProxy, "DstackKms.sol", "");
-        Upgrades.upgradeProxy(appId, "DstackApp.sol", "");
+        Upgrades.upgradeProxy(kmsProxy, "DstackKmsV2.sol", "");
+        Upgrades.upgradeProxy(appId, "DstackAppV2.sol", "");
         
         // Verify everything still works after upgrades
         assertTrue(kms.allowedOsImages(osImageHash));
