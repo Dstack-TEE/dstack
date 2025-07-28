@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Add git-cliff based changelog"
 - Added TappdClient and show warning. by @Leechael
 - Add getComposeHash & verifyEnvEncryptPublicKey by @Leechael
 - Support customize timeout. by @Leechael
@@ -19,9 +20,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add /app-info to gw info endpoint by @kvinwang
 
 ### Changed
-- Clean up test suite - remove duplicate upgrade tests
-- Complete Hardhat removal - migrate to pure Foundry setup
-- Migrate Hardhat to Foundry with comprehensive test suite
+- Merge pull request #256 from Dstack-TEE/sdk-compat by @kvinwang in [#256](https://github.com/Dstack-TEE/dstack/pull/256)
+- Bump 0.5.2 by @Leechael
+- Compatible for solana & viem by @Leechael
+- Bump 0.5.1 for testing. by @Leechael
+- Keep legacy support only in TappdClient. by @Leechael
+- Add compatible deriveKey by @kvinwang
+- Merge pull request #258 from Dstack-TEE/vmm-cli-ppcie by @kvinwang in [#258](https://github.com/Dstack-TEE/dstack/pull/258)
+- Add basic auth by @kvinwang
+- Add doc/tests and --ppcie by @kvinwang
+- Merge pull request #253 from Dstack-TEE/dependabot/npm_and_yarn/kms/auth-eth/axios-1.11.0 by @Leechael in [#253](https://github.com/Dstack-TEE/dstack/pull/253)
+- Bump axios from 1.10.0 to 1.11.0 in /kms/auth-eth by @dependabot[bot]
+- Merge pull request #257 from Dstack-TEE/tcbinfo-fields by @kvinwang in [#257](https://github.com/Dstack-TEE/dstack/pull/257)
+- Add some missing fields in TcbInfo by @kvinwang
+- Merge pull request #250 from Dstack-TEE/imp-remove-max-disk-size-check by @Leechael in [#250](https://github.com/Dstack-TEE/dstack/pull/250)
 - Merge pull request #249 from Dstack-TEE/dependabot/npm_and_yarn/kms/auth-eth/multi-0ca592796f by @Leechael in [#249](https://github.com/Dstack-TEE/dstack/pull/249)
 - Bump form-data in /kms/auth-eth by @dependabot[bot]
 - Merge pull request #223 from Dstack-TEE/feat-js-sdk-backward-compatible by @Leechael in [#223](https://github.com/Dstack-TEE/dstack/pull/223)
@@ -101,9 +113,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Unmatched app_compose when no key provider id. by @Leechael
 
 ### Removed
-- Remove Foundry build artifacts and update .gitignore
+- Remove max disk size limit by @Leechael
 
 ## New Contributors
+* @dependabot[bot] made their first contribution
 * @shelvenzhou made their first contribution in [#230](https://github.com/Dstack-TEE/dstack/pull/230)
 ## [0.5.3] - 2025-06-24
 
