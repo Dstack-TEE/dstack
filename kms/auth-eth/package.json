@@ -11,7 +11,9 @@
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
     "test:foundry": "forge test --ffi",
-    "test:foundry:core": "forge test --ffi --match-path \"test/DstackApp.t.sol\" && forge test --ffi --match-path \"test/DstackKms.t.sol\" && forge test --ffi --match-path \"test/UpgradesBasic.t.sol\""
+    "test:foundry:all": "forge clean && forge build && forge test --ffi",
+    "test:full": "./scripts/test-with-anvil.sh",
+    "test:full:keep": "./scripts/test-with-anvil.sh --keep-running"
   },
   "dependencies": {
     "@fastify/swagger": "^8.12.0",
