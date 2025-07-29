@@ -201,7 +201,7 @@ message AppInfo {
 
 // The response to a Version request
 message WorkerVersion {
-  // Dstack version
+  // dstack version
   string version = 1;
   // Git revision
   string rev = 2;

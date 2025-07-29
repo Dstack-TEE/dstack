@@ -1,16 +1,16 @@
-This document describes the Dstack defined information exchange channels between CVM and the outside world.
+This document describes the dstack defined information exchange channels between CVM and the outside world.
 
 ## Network layer
 
 ### Virtual Native Network
-Dstack currently uses QEMU's user-mode network stack to create a virtual network for the CVM. In this setup, QEMU (running on the host) simulates the gateway, DNS, and DHCP services. The CVM should treat these network components as untrusted.
+dstack currently uses QEMU's user-mode network stack to create a virtual network for the CVM. In this setup, QEMU (running on the host) simulates the gateway, DNS, and DHCP services. The CVM should treat these network components as untrusted.
 
 ### Wireguard Network
 When dstack-gateway is enabled, it establishes a secure Wireguard network connection between the workload CVM and dstack-gateway CVM.
 External clients connect to the workload CVM through dstack-gateway using the CVM's ZT-HTTPS domain. For clients, ZT-HTTPS ensures no man-in-the-middle attacks can occur between them and the workload CVM. However, workload developers should note that incoming traffic might come from either dstack-gateway or the QEMU native network.
 
 ## Host Shared Folder
-Dstack OS requires a host shared folder to be attached to the CVM. It copies the following files from the host shared folder to the CVM:
+dstack OS requires a host shared folder to be attached to the CVM. It copies the following files from the host shared folder to the CVM:
 
 | File | Purpose |
 |------|--------|
@@ -82,7 +82,7 @@ The hash of this file is not extended to any RTMR because each field has its own
 It does not make sense to measure the entire sys-config.json, because it is not deterministic and measuring it would make the verification process troublesome.
 
 ### .encrypted-env
-Dstack uses encrypted environment variables to allow app developers to securely load sensitive configuration values into the CVM. Since these variables are temporarily stored on the host server before being loaded into the CVM, encryption ensures host servers cannot access the confidential data.
+dstack uses encrypted environment variables to allow app developers to securely load sensitive configuration values into the CVM. Since these variables are temporarily stored on the host server before being loaded into the CVM, encryption ensures host servers cannot access the confidential data.
 
 #### Encryption Workflow:
 
@@ -116,13 +116,13 @@ Dstack uses encrypted environment variables to allow app developers to securely 
 This file is not measured to RTMRs. But it is highly recommended to add application-specific integrity checks on encrypted environment variables at the application layer. See [security-guide.md](security-guide.md) for more details.
 
 ### .user-config
-This is an optional application-specific configuration file that applications inside the CVM can access. Dstack OS simply stores it at /dstack/user-config without any measurement or additional processing.
+This is an optional application-specific configuration file that applications inside the CVM can access. dstack OS simply stores it at /dstack/user-config without any measurement or additional processing.
 
 Application developers should perform integrity checks on user_config at the application layer if necessary.
 
 ## APIs
 
-Dstack provides several API services for communication between components. These APIs define the boundaries and information exchange channels between the CVM and external systems.
+dstack provides several API services for communication between components. These APIs define the boundaries and information exchange channels between the CVM and external systems.
 
 ### VSOCK-based Guest API Service
 

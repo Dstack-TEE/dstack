@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-# Dstack runs Confidential VMs (CVMs) with QEMU user networking. To prevent VMs from accessing 127.0.0.1,
+# dstack runs Confidential VMs (CVMs) with QEMU user networking. To prevent VMs from accessing 127.0.0.1,
 # we run the VM as a different user and set up iptables rules to DROP traffic to 127.0.0.1.
 #
 # # How to Use
@@ -9,7 +9,7 @@ set -e
 # Example systemd service configuration:
 # ```
 # [Unit]
-# Description=Dstack Firewall Configuration
+# Description=dstack Firewall Configuration
 # Before=dstack-vmm.service
 #
 # [Service]

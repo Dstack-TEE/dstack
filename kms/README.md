@@ -1,4 +1,4 @@
-# Dstack - KMS Protocol
+# dstack - KMS Protocol
 
 ## Overview
 

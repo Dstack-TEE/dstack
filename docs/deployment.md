@@ -1,6 +1,6 @@
-# Deployment of DStack
+# Deployment of dstack
 
-This document describes the deployment of DStack components on bare metal TDX hosts.
+This document describes the deployment of dstack components on bare metal TDX hosts.
 It contains steps to deploy dstack-kms and dstack-gateway into CVMs.
 
 ## Prerequisites
@@ -8,7 +8,7 @@ It contains steps to deploy dstack-kms and dstack-gateway into CVMs.
 - Follow the [TDX setup guide](https://github.com/canonical/tdx) to setup the TDX host.
 - Install `cargo` and `rustc`
 
-## Clone the DStack repository
+## Clone the dstack repository
 ```bash
 git clone https://github.com/Dstack-TEE/dstack
 ```
@@ -229,7 +229,7 @@ MY_URL=https://gateway.test2.dstack.phala.network:9202
 # Bootnode URL. If you want to deploy a multi-node dstack-gateway cluster, set the bootnode URL to the URL of another node already deployed or planed to be deployed later.
 BOOTNODE_URL=https://gateway.test2.dstack.phala.network:9202
 
-# DStack OS image name
+# dstack OS image name
 OS_IMAGE=dstack-0.5.2
 
 # Set defaults for variables that might not be in .env
@@ -296,10 +296,10 @@ After the dstack-vmm is ready, you can deploy an app on it following the steps b
 
 The on-chain registration process includes two steps:
 
-1. Deploy an App's control contract DstackApp. Developers can develop their own or choose the reference contract from the Dstack repository. Custom contracts need to implement the IAppAuth interface.
+1. Deploy an App's control contract DstackApp. Developers can develop their own or choose the reference contract from the dstack repository. Custom contracts need to implement the IAppAuth interface.
 2. Call DstackKms.registerApp(appContractAddress) to register the contract.
 
-The Dstack repository provides scripts to complete these two steps:
+The dstack repository provides scripts to complete these two steps:
 
 **Option 1: Traditional deployment (2 transactions)**
 ```bash

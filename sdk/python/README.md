@@ -1,6 +1,6 @@
-# DStack SDK
+# dstack SDK
 
-This SDK provides a Python client for communicating with the Dstack Guest Agent, which is available inside Dstack CVM.
+This SDK provides a Python client for communicating with the dstack Guest Agent, which is available inside dstack CVM.
 
 ## Installation
 
@@ -154,7 +154,7 @@ Retrieves information about the CVM instance.
 
 ##### `get_tls_key(subject: str | None = None, alt_names: List[str] | None = None, usage_ra_tls: bool = False, usage_server_auth: bool = False, usage_client_auth: bool = False) -> GetTlsKeyResponse`
 
-Gets a TLS key from the Dstack service with optional parameters.
+Gets a TLS key from the dstack service with optional parameters.
 
 - `subject`: The subject for the TLS key (optional)
 - `alt_names`: Alternative names for the TLS key (optional)

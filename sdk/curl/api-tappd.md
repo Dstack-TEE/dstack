@@ -1,10 +1,10 @@
-# DStack Tappd RPC API Documentation (Legacy)
+# dstack Tappd RPC API Documentation (Legacy)
 
-This document describes the legacy REST API endpoints for the DStack Tappd service. These APIs are deprecated as of version 0.4.2. For newer versions, please refer to [api.md](api.md) which contains the current API documentation.
+This document describes the legacy REST API endpoints for the dstack Tappd service. These APIs are deprecated as of version 0.4.2. For newer versions, please refer to [api.md](api.md) which contains the current API documentation.
 
 ## Base URL
 
-The DStack Tappd service listens on a Unix domain socket at `/var/run/tappd.sock`. All API requests should be made to this socket using the `--unix-socket` flag with curl.
+The dstack Tappd service listens on a Unix domain socket at `/var/run/tappd.sock`. All API requests should be made to this socket using the `--unix-socket` flag with curl.
 
 Make sure to map the Unix socket in your Docker Compose file:
 

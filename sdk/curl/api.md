@@ -1,10 +1,10 @@
-# DStack Guest Agent RPC API Documentation
+# dstack Guest Agent RPC API Documentation
 
-This document describes the REST API endpoints for the DStack Guest Agent RPC service.
+This document describes the REST API endpoints for the dstack Guest Agent RPC service.
 
 ## Base URL
 
-The DStack Guest Agent listens on a Unix domain socket at `/var/run/dstack.sock`. All API requests should be made to this socket using the `--unix-socket` flag with curl.
+The dstack Guest Agent listens on a Unix domain socket at `/var/run/dstack.sock`. All API requests should be made to this socket using the `--unix-socket` flag with curl.
 
 Make sure to map the Unix socket in your Docker Compose file:
 
@@ -163,7 +163,7 @@ curl --unix-socket /var/run/dstack.sock http://dstack/Info
 
 ### 5. Emit Event
 
-Emit an event to be extended to RTMR3 on TDX platform. This API requires Dstack OS 0.5.0 or later.
+Emit an event to be extended to RTMR3 on TDX platform. This API requires dstack OS 0.5.0 or later.
 
 **Endpoint:** `/EmitEvent`
 

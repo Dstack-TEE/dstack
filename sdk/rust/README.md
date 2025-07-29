@@ -1,4 +1,4 @@
-# Dstack Crate
+# dstack Crate
 
 This crate provides rust clients for communicating with both the current dstack server and the legacy tappd service, which are available inside dstack.
 

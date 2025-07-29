@@ -1,4 +1,4 @@
-// Provides a Dstack SDK Tappd client and related utilities
+// Provides a dstack SDK Tappd client and related utilities
 //
 // Author: Franco Barpp Gomes <franco@nethermind.io>
 package tappd

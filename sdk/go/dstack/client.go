@@ -1,4 +1,4 @@
-// Provides a Dstack SDK client and related utilities
+// Provides a dstack SDK client and related utilities
 //
 // Author: Franco Barpp Gomes <franco@nethermind.io>
 package dstack
@@ -157,7 +157,7 @@ const (
 	RAW QuoteHashAlgorithm = "raw"
 )
 
-// Handles communication with the Dstack service.
+// Handles communication with the dstack service.
 type DstackClient struct {
 	endpoint   string
 	baseURL    string
@@ -231,7 +231,7 @@ func (c *DstackClient) getEndpoint() string {
 	return "/var/run/dstack.sock"
 }
 
-// Sends an RPC request to the Dstack service.
+// Sends an RPC request to the dstack service.
 func (c *DstackClient) sendRPCRequest(ctx context.Context, path string, payload interface{}) ([]byte, error) {
 	jsonData, err := json.Marshal(payload)
 	if err != nil {
@@ -309,7 +309,7 @@ func WithUsageClientAuth(usage bool) TlsKeyOption {
 	}
 }
 
-// Gets a TLS key from the Dstack service with optional parameters.
+// Gets a TLS key from the dstack service with optional parameters.
 func (c *DstackClient) GetTlsKey(
 	ctx context.Context,
 	options ...TlsKeyOption,
@@ -344,7 +344,7 @@ func (c *DstackClient) GetTlsKey(
 	return &response, nil
 }
 
-// Gets a key from the Dstack service.
+// Gets a key from the dstack service.
 func (c *DstackClient) GetKey(ctx context.Context, path string, purpose string) (*GetKeyResponse, error) {
 	payload := map[string]interface{}{
 		"path":    path,
@@ -363,7 +363,7 @@ func (c *DstackClient) GetKey(ctx context.Context, path string, purpose string) 
 	return &response, nil
 }
 
-// Gets a quote from the Dstack service.
+// Gets a quote from the dstack service.
 func (c *DstackClient) GetQuote(ctx context.Context, reportData []byte) (*GetQuoteResponse, error) {
 	if len(reportData) > 64 {
 		return nil, fmt.Errorf("report data is too large, it should be at most 64 bytes")
@@ -422,7 +422,7 @@ func (c *DstackClient) Info(ctx context.Context) (*InfoResponse, error) {
 // EmitEvent sends an event to be extended to RTMR3 on TDX platform.
 // The event will be extended to RTMR3 with the provided name and payload.
 //
-// Requires Dstack OS 0.5.0 or later.
+// Requires dstack OS 0.5.0 or later.
 func (c *DstackClient) EmitEvent(ctx context.Context, event string, payload []byte) error {
 	_, err := c.sendRPCRequest(ctx, "/EmitEvent", map[string]interface{}{
 		"event":   event,

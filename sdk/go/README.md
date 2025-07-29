@@ -1,6 +1,6 @@
-# DStack SDK
+# dstack SDK
 
-The DStack SDK for Go.
+The dstack SDK for Go.
 
 ## Installation
 
