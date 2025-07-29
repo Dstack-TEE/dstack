@@ -1,6 +1,6 @@
 workers = 8
 max_blocking = 64
-ident = "Dstack VMM"
+ident = "dstack VMM"
 temp_dir = "/tmp"
 keep_alive = 10
 log_level = "debug"
@@ -79,7 +79,7 @@ detached = false
 auto_start = true
 
 [host_api]
-ident = "Dstack VMM"
+ident = "dstack VMM"
 address = "vsock:2"
 port = 10000
 

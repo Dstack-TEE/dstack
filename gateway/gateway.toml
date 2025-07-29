@@ -1,6 +1,6 @@
 workers = 8
 max_blocking = 64
-ident = "Dstack Gateway"
+ident = "dstack Gateway"
 temp_dir = "/tmp"
 keep_alive = 10
 log_level = "info"
