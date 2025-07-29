@@ -33,13 +33,13 @@ else
 # IMAGE_DOWNLOAD_URL=https://files.kvin.wang/images/mr_{OS_IMAGE_HASH}.tar.gz
 
 # Image hash verification feature flag
-# VERIFY_IMAGE=true
+VERIFY_IMAGE=true
 
 # The URL of the Ethereum RPC service
 ETH_RPC_URL=https://rpc.phala.network
 
 # The Git repository to deploy
-# GIT_REPOSITORY=https://github.com/Dstack-TEE/dstack.git
+GIT_REPOSITORY=https://github.com/Dstack-TEE/dstack.git
 
 # The Git revision to deploy
 GIT_REV=HEAD
