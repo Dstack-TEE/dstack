@@ -1,4 +1,5 @@
 use std::ops::Deref;
+use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -127,6 +128,47 @@ fn check_path_traversal(input: &str) -> Result<()> {
         bail!("path is '.' or '..'");
     }
 
+    Ok(())
+}
+
+fn run_cmd(exec: &str, args: &[&str]) -> Result<Vec<u8>> {
+    let mut cmd = Command::new(exec);
+    cmd.args(args);
+    let output = cmd
+        .output()
+        .with_context(|| format!("Failed to run command: {cmd:?}"))?;
+    if !output.status.success() {
+        let err = String::from_utf8_lossy(&output.stderr);
+        bail!("Failed to run command {cmd:?}: {err}");
+    }
+    Ok(output.stdout)
+}
+
+fn remove_all_qemu_bitmaps(disk_path: &str) -> Result<()> {
+    // Get JSON info
+    let output = run_cmd("qemu-img", &["info", "--output=json", disk_path])?;
+    let info: serde_json::Value = serde_json::from_slice(&output)?;
+    // Extract and remove bitmaps
+    let Some(bitmaps) = info.pointer("/format-specific/data/bitmaps") else {
+        return Ok(());
+    };
+    let bitmaps = bitmaps
+        .as_array()
+        .context("The bitmaps field is not an array")?;
+    for bitmap in bitmaps {
+        let Some(name) = bitmap["name"].as_str() else {
+            info!("Invalid bitmap: {bitmap:?}");
+            continue;
+        };
+        run_cmd("qemu-img", &["bitmap", "--remove", disk_path, name])?;
+        info!("Removed bitmap {name} for {disk_path}");
+    }
+    Ok(())
+}
+
+fn resize_qcow2(disk_path: &str, size_gb: u32) -> Result<()> {
+    let new_size_str = format!("{}G", size_gb);
+    run_cmd("qemu-img", &["resize", disk_path, &new_size_str])?;
     Ok(())
 }
 
@@ -391,26 +433,19 @@ impl VmmRpc for RpcHandler {
         if let Some(image) = request.image {
             manifest.image = image;
         }
-        if let Some(disk_size) = request.disk_size {
+        let resize_disk_to = request
+            .disk_size
+            .filter(|&disk_size| disk_size != manifest.disk_size);
+        if let Some(disk_size) = resize_disk_to {
             if disk_size < manifest.disk_size {
                 bail!("Cannot shrink disk size");
             }
-            manifest.disk_size = disk_size;
-
-            // Run qemu-img resize to resize the disk
             info!("Resizing disk to {}GB", disk_size);
             let hda_path = vm_work_dir.hda_path();
-            let new_size_str = format!("{}G", disk_size);
-            let output = std::process::Command::new("qemu-img")
-                .args(["resize", &hda_path.display().to_string(), &new_size_str])
-                .output()
-                .context("Failed to resize disk")?;
-            if !output.status.success() {
-                bail!(
-                    "Failed to resize disk: {}",
-                    String::from_utf8_lossy(&output.stderr)
-                );
-            }
+            let hda_str = hda_path.display().to_string();
+            remove_all_qemu_bitmaps(&hda_str).context("Failed to remove qemu bitmaps")?;
+            resize_qcow2(&hda_str, disk_size).context("Failed to resize disk")?;
+            manifest.disk_size = disk_size;
         }
         vm_work_dir
             .put_manifest(&manifest)
