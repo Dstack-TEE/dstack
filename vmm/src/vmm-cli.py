@@ -504,6 +504,7 @@ class VmmCLI:
             "ports": [parse_port_mapping(port) for port in args.port or []],
             "hugepages": args.hugepages,
             "pin_numa": args.pin_numa,
+            "stopped": args.stopped,
         }
 
         if args.ppcie:
@@ -899,6 +900,8 @@ def main():
                                help='KMS URL')
     deploy_parser.add_argument('--gateway-url', action='append', type=str,
                                help='Gateway URL')
+    deploy_parser.add_argument('--stopped', action='store_true',
+                               help='Create VM in stopped state (requires dstack-vmm >= 0.5.4)')
 
     # Images command
     _images_parser = subparsers.add_parser(

@@ -185,7 +185,7 @@ impl VmmRpc for RpcHandler {
             .put_manifest(&manifest)
             .context("Failed to write manifest")?;
         let work_dir = self.prepare_work_dir(&id, &request, &app_id)?;
-        if let Err(err) = vm_work_dir.set_started(true) {
+        if let Err(err) = vm_work_dir.set_started(!request.stopped) {
             warn!("Failed to set started: {}", err);
         }
 
@@ -195,7 +195,13 @@ impl VmmRpc for RpcHandler {
             .await
             .context("Failed to load VM");
         let result = match result {
-            Ok(()) => self.app.start_vm(&id).await,
+            Ok(()) => {
+                if !request.stopped {
+                    self.app.start_vm(&id).await
+                } else {
+                    Ok(())
+                }
+            }
             Err(err) => Err(err),
         };
         if let Err(err) = result {

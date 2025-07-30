@@ -77,6 +77,8 @@ message VmConfiguration {
   repeated string kms_urls = 14;
   // Gateway URLs
   repeated string gateway_urls = 15;
+  // The VM is stopped
+  bool stopped = 16;
 }
 
 message GpuConfig {
