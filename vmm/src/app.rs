@@ -484,7 +484,7 @@ impl App {
             let vm_config = serde_json::to_string(&dstack_types::VmConfig {
                 spec_version: 1,
                 os_image_hash,
-                cpu_count: manifest.vcpu.try_into().context("Too many vCPUs")?,
+                cpu_count: manifest.vcpu,
                 memory_size: manifest.memory as u64 * 1024 * 1024,
                 qemu_single_pass_add_pages: cfg.cvm.qemu_single_pass_add_pages,
                 pic: cfg.cvm.qemu_pic,

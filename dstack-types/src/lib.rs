@@ -131,7 +131,7 @@ pub struct VmConfig {
     pub spec_version: u32,
     #[serde(with = "hex_bytes")]
     pub os_image_hash: Vec<u8>,
-    pub cpu_count: u8,
+    pub cpu_count: u32,
     pub memory_size: u64,
     // https://github.com/intel-staging/qemu-tdx/issues/1
     #[serde(default)]

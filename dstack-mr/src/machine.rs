@@ -8,7 +8,7 @@ use log::debug;
 
 #[derive(Debug, bon::Builder)]
 pub struct Machine<'a> {
-    pub cpu_count: u8,
+    pub cpu_count: u32,
     pub memory_size: u64,
     pub firmware: &'a str,
     pub kernel: &'a str,
