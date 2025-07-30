@@ -113,6 +113,7 @@ impl VmInfo {
                     .as_ref()
                     .map(|c| c.gateway_urls.clone())
                     .unwrap_or_default();
+                let stopped = !workdir.started().unwrap_or(false);
 
                 Some(pb::VmConfiguration {
                     name: self.manifest.name.clone(),
@@ -153,6 +154,7 @@ impl VmInfo {
                     }),
                     kms_urls,
                     gateway_urls,
+                    stopped,
                 })
             },
             app_url: self

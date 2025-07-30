@@ -250,8 +250,10 @@ Deploy your application with the compose file:
 - `--gpu`: GPU assignments
 - `--ppcie`: Enable PPCIE mode (attach ALL available GPUs and NVSwitches)
 - `--env-file`: Environment variables file
+- `--user-config`: Path to user config file (will be placed at `/dstack/.user-config` in the CVM)
 - `--kms-url`: KMS server URL
 - `--gateway-url`: Gateway server URL
+- `--stopped`: Create VM in stopped state (requires dstack-vmm >= 0.5.4)
 
 #### Port Mapping
 
@@ -389,6 +391,40 @@ export DSTACK_VMM_URL=http://ml-cluster:8080
   --pin-numa \
   --env-file ./ml-secrets.env
 ```
+
+##### VM with User Configuration and Stopped State
+
+```bash
+# Create a user configuration file
+cat > user-config.json << EOF
+{
+  "timezone": "UTC",
+  "locale": "en_US.UTF-8",
+  "custom_settings": {
+    "debug_mode": false,
+    "log_level": "INFO"
+  }
+}
+EOF
+
+# Deploy VM in stopped state with user config
+./vmm-cli.py deploy \
+  --name "configured-vm" \
+  --image "dstack-0.5.4" \
+  --compose ./app-compose.json \
+  --vcpu 4 \
+  --memory 8G \
+  --disk 100G \
+  --user-config ./user-config.json \
+  --stopped
+
+# The VM is created but not started - start it manually when ready
+./vmm-cli.py start configured-vm
+```
+
+**Note:** The `--stopped` flag is useful for:
+- Pre-staging VMs for later use
+- Preparing VMs with specific configurations before startup
 
 ### Environment Variable Encryption
 
