@@ -3,7 +3,7 @@
 # Test script for vmm-cli.py deployment functionality
 # Tests the complete compose + deploy workflow with local VMM instance
 
-set -e  # Exit on any error
+set -e # Exit on any error
 
 # Colors for output
 RED='\033[0;31m'
