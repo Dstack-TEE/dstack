@@ -492,6 +492,14 @@ class VmmCLI:
 
         envs = parse_env_file(args.env_file)
 
+        # Read user config file if provided
+        user_config = ""
+        if args.user_config:
+            if not os.path.exists(args.user_config):
+                raise Exception(f"User config file not found: {args.user_config}")
+            with open(args.user_config, 'r') as f:
+                user_config = f.read()
+
         # Create VM request
         params = {
             "name": args.name,
@@ -501,6 +509,7 @@ class VmmCLI:
             "memory": args.memory,
             "disk_size": args.disk,
             "app_id": args.app_id,
+            "user_config": user_config,
             "ports": [parse_port_mapping(port) for port in args.port or []],
             "hugepages": args.hugepages,
             "pin_numa": args.pin_numa,
@@ -885,6 +894,8 @@ def main():
         '--disk', type=parse_disk_size, default=20, help='Disk size (e.g. 1G, 100M)')
     deploy_parser.add_argument(
         '--env-file', help='File with environment variables to encrypt', default=None)
+    deploy_parser.add_argument(
+        '--user-config', help='Path to user config file', default=None)
     deploy_parser.add_argument('--app-id', help='Application ID', default=None)
     deploy_parser.add_argument('--port', action='append', type=str,
                                help='Port mapping in format: protocol[:address]:from:to')
