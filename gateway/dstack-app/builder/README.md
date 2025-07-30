@@ -1,4 +1,4 @@
-# Dstack KMS Builder
+# dstack KMS Builder
 
 This directory contains the necessary files to build and run the dstack-kms Docker image for development.
 

@@ -30,7 +30,7 @@ struct MachineConfig {
     #[arg(short, long, default_value = "2G", value_parser = parse_memory_size)]
     memory: u64,
 
-    /// Path to DStack image metadata.json
+    /// Path to dstack image metadata.json
     metadata: PathBuf,
 
     /// Enable two-pass add pages

@@ -67,7 +67,7 @@ SUBNET_INDEX=0
 # Bootnode URL
 # BOOTNODE_URL=https://gateway.test2.dstack.phala.network:9202
 
-# DStack OS image name
+# dstack OS image name
 OS_IMAGE=dstack-0.5.0
 
 # Set defaults for variables that might not be in .env

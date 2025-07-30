@@ -30,7 +30,7 @@ mod parse_env_file;
 mod system_setup;
 mod utils;
 
-/// DStack guest utility
+/// dstack guest utility
 #[derive(Parser)]
 #[command(author, version, about)]
 struct Cli {

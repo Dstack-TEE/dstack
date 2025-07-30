@@ -1,5 +1,5 @@
 [Unit]
-Description=DStack Guest Preparation Service
+Description=dstack Guest Preparation Service
 After=network.target chronyd.service
 Before=app-compose.service dstack-guest-agent.service docker.service
 OnFailure=reboot.target

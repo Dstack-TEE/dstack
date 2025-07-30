@@ -210,7 +210,7 @@ class DstackClient(BaseClient):
         """
         Emit an event. This extends the event to RTMR3 on TDX platform.
 
-        Requires Dstack OS 0.5.0 or later.
+        Requires dstack OS 0.5.0 or later.
 
         Args:
             event: The event name
@@ -238,7 +238,7 @@ class DstackClient(BaseClient):
         usage_client_auth: bool = False,
     ) -> GetTlsKeyResponse:
         """
-        Gets a TLS key from the Dstack service with optional parameters.
+        Gets a TLS key from the dstack service with optional parameters.
 
         Args:
             subject: The subject for the TLS key
@@ -319,7 +319,7 @@ class AsyncDstackClient(BaseClient):
         """
         Emit an event. This extends the event to RTMR3 on TDX platform.
 
-        Requires Dstack OS 0.5.0 or later.
+        Requires dstack OS 0.5.0 or later.
 
         Args:
             event: The event name
@@ -347,7 +347,7 @@ class AsyncDstackClient(BaseClient):
         usage_client_auth: bool = False,
     ) -> GetTlsKeyResponse:
         """
-        Gets a TLS key from the Dstack service with optional parameters.
+        Gets a TLS key from the dstack service with optional parameters.
 
         Args:
             subject: The subject for the TLS key

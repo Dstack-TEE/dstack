@@ -1,4 +1,4 @@
-# Dstack Production Security Best Practices
+# dstack Production Security Best Practices
 
 This document describes security considerations for deploying dstack apps in production.
 
@@ -30,11 +30,11 @@ services:
 
 ## Reproducibility
 
-If your App is intended for end users who need to verify what code your App is running, then the verifiability of Docker images is crucial. Dstack anchors the code running inside the CVM through the hash of app-compose.json. However, at the same time, the App needs to provide users with a reproducible build method. There are multiple ways to achieve reproducible image builds, and dstack provides a reference example: [dstack-ingress](https://github.com/Dstack-TEE/dstack-examples/tree/main/custom-domain/dstack-ingress)
+If your App is intended for end users who need to verify what code your App is running, then the verifiability of Docker images is crucial. dstack anchors the code running inside the CVM through the hash of app-compose.json. However, at the same time, the App needs to provide users with a reproducible build method. There are multiple ways to achieve reproducible image builds, and dstack provides a reference example: [dstack-ingress](https://github.com/Dstack-TEE/dstack-examples/tree/main/custom-domain/dstack-ingress)
 
 ## Authenticated envs and user_config
 
-Dstack provides encrypted environment variable functionality. Although the CVM physical machine controller cannot view encrypted environment variables, they may forge encrypted environment variables because the CVM encryption public key is known to everyone. Therefore, Apps need to perform auth checks on encrypted environment variables at the application layer. LAUNCH_TOKEN pattern is one method to prevent unauthorized envs replacement. For details, refer to the deployment script of [dstack-gateway](https://github.com/Dstack-TEE/dstack/blob/1b8a4516826b02f9d7f747eddac244dcd68fc325/gateway/dstack-app/deploy-to-vmm.sh#L150-L165).
+dstack provides encrypted environment variable functionality. Although the CVM physical machine controller cannot view encrypted environment variables, they may forge encrypted environment variables because the CVM encryption public key is known to everyone. Therefore, Apps need to perform auth checks on encrypted environment variables at the application layer. LAUNCH_TOKEN pattern is one method to prevent unauthorized envs replacement. For details, refer to the deployment script of [dstack-gateway](https://github.com/Dstack-TEE/dstack/blob/1b8a4516826b02f9d7f747eddac244dcd68fc325/gateway/dstack-app/deploy-to-vmm.sh#L150-L165).
 
 If you use dstack-vmm's built-in UI, the prelaunch script has already been automatically filled in for you:
 
@@ -79,7 +79,7 @@ Example app-compose.json:
 
 ## Don't expose unexpected ports
 
-In Dstack CVM, dstack-guest-agent listens on port 8090, allowing public access to basic CVM information.
+In dstack CVM, dstack-guest-agent listens on port 8090, allowing public access to basic CVM information.
 
 In docker-compose.yaml, all declared ports will be exposed to the public internet. Do not expose unnecessary ports.
 

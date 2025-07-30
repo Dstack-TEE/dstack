@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Dstack currently runs the CVMs with qemu user networking. To prevent the VM to access 127.0.0.1, we need to
+# dstack currently runs the CVMs with qemu user networking. To prevent the VM to access 127.0.0.1, we need to
 # run the VM as a different user and setup the iptables rules to DROP the traffic to 127.0.0.1.
 
 # This script creates a sandbox user for running VMs with restricted network access.

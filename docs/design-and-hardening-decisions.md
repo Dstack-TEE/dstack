@@ -10,7 +10,7 @@ The meta-dstack layer is designed to create a minimally secure image for booting
 
 **Decision**: We use `linux-yocto-dev` (development recipes) instead of `linux-yocto` (stable recipes).
 
-**Rationale**: We use Scarthgap version of Yocto, which is the latest version when we started the Dstack project. The stable `linux-yocto` recipe in Scarthgap is based on kernel 6.6 which does not support RTMR[1-2]. So we switch to `linux-yocto-dev` to get the kernel 6.9 support. The latest released Yocto (Walnascar) updated kernel to 6.12 which meets our requirements. We plan to upgrade the Yocto version later, but this is not trivial as all downstream Yocto recipes need to be updated to adapt to the major Yocto version change.
+**Rationale**: We use Scarthgap version of Yocto, which is the latest version when we started the dstack project. The stable `linux-yocto` recipe in Scarthgap is based on kernel 6.6 which does not support RTMR[1-2]. So we switch to `linux-yocto-dev` to get the kernel 6.9 support. The latest released Yocto (Walnascar) updated kernel to 6.12 which meets our requirements. We plan to upgrade the Yocto version later, but this is not trivial as all downstream Yocto recipes need to be updated to adapt to the major Yocto version change.
 
 ### 2. TDVF vs td-shim Boot Firmware
 
@@ -49,7 +49,7 @@ See [here](https://intel.github.io/ccc-linux-guest-hardening-docs/security-spec.
 
 ### 5. Secure System Time
 
-**Implementation**: Dstack OS enforces the guest kernel uses TSC as the only timer source by appending `tsc=reliable no-kvmclock` to the kernel cmdline. It also enforces the use of NTS with built-in [trusted servers](https://github.com/Dstack-TEE/meta-dstack/blob/bef2dfa850f4116ae4ece96d8c0948965c5874b3/meta-dstack/recipes-core/chrony/files/chrony.conf#L13-L20) to synchronize system time.
+**Implementation**: dstack OS enforces the guest kernel uses TSC as the only timer source by appending `tsc=reliable no-kvmclock` to the kernel cmdline. It also enforces the use of NTS with built-in [trusted servers](https://github.com/Dstack-TEE/meta-dstack/blob/bef2dfa850f4116ae4ece96d8c0948965c5874b3/meta-dstack/recipes-core/chrony/files/chrony.conf#L13-L20) to synchronize system time.
 
 **Behavior**: When `secure_time` is enabled in the app-compose.json configuration, the system ensures time synchronization is completed before requesting application keys. If `secure_time` is disabled, time synchronization is not enforced before application launch.
 

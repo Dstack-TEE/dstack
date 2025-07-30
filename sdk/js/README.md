@@ -1,4 +1,4 @@
-# Dstack SDK
+# dstack SDK
 
 This SDK provides a JavaScript/TypeScript client for communicating with the dstack server, which available inside dstack.
 

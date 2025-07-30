@@ -227,7 +227,7 @@ export class DstackClient {
   /**
    * Emit an event. This extends the event to RTMR3 on TDX platform.
    *
-   * Requires Dstack OS 0.5.0 or later.
+   * Requires dstack OS 0.5.0 or later.
    *
    * @param event The event name
    * @param payload The event data as string or Buffer or Uint8Array

@@ -44,7 +44,7 @@ GIT_REPOSITORY=https://github.com/Dstack-TEE/dstack.git
 # The Git revision to deploy
 GIT_REV=HEAD
 
-# The DStack OS image name to use for the KMS app
+# The dstack OS image name to use for the KMS app
 OS_IMAGE=dstack-0.5.0
 
 # The admin token for the KMS app

@@ -1,7 +1,7 @@
 {
   "name": "auth-eth",
   "version": "1.0.0",
-  "description": "DStack KMS Ethereum Backend",
+  "description": "dstack KMS Ethereum Backend",
   "main": "dist/main.js",
   "scripts": {
     "build": "tsc",

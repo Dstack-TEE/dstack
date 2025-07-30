@@ -47,7 +47,7 @@ mod config_id_verifier;
 #[derive(clap::Parser)]
 /// Prepare full disk encryption
 pub struct SetupArgs {
-    /// Dstack work directory
+    /// dstack work directory
     #[arg(long)]
     work_dir: PathBuf,
     /// Hard disk device

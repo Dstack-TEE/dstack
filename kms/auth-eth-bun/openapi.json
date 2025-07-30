@@ -1,8 +1,8 @@
 {
   "openapi": "3.0.0",
   "info": {
-    "title": "DStack KMS Ethereum Backend API",
-    "description": "API for DStack KMS Ethereum backend authentication and system information",
+    "title": "dstack KMS Ethereum Backend API",
+    "description": "API for dstack KMS Ethereum backend authentication and system information",
     "version": "1.0.0"
   },
   "servers": [

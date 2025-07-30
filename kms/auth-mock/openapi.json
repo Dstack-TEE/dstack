@@ -1,8 +1,8 @@
 {
   "openapi": "3.0.0",
   "info": {
-    "title": "DStack KMS Mock Backend API",
-    "description": "Mock API for DStack KMS backend - all authentications will succeed (no blockchain interaction)",
+    "title": "dstack KMS Mock Backend API",
+    "description": "Mock API for dstack KMS backend - all authentications will succeed (no blockchain interaction)",
     "version": "1.0.0"
   },
   "servers": [

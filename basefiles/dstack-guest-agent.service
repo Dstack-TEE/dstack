@@ -1,5 +1,5 @@
 [Unit]
-Description=Dstack Guest Agent Service
+Description=dstack Guest Agent Service
 After=network.target tboot.service
 Before=docker.service
 
