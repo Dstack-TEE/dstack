@@ -116,6 +116,7 @@ $CLI compose \
   --local-key-provider \
   --public-logs \
   --public-sysinfo \
+  --secure-time \
   --no-instance-id \
   --output .app-compose.json
 

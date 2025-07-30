@@ -115,6 +115,10 @@ def parse_port_mapping(port_str: str) -> Dict:
         raise argparse.ArgumentTypeError(
             f"Invalid port mapping format: {port_str}")
 
+def read_utf8(filepath: str) -> str:
+    with open(filepath, 'rb') as f:
+        return f.read().decode('utf-8')
+
 
 class UnixSocketHTTPConnection(http.client.HTTPConnection):
     """HTTPConnection that connects to a Unix domain socket."""
@@ -246,10 +250,15 @@ class VmmCLI:
 
         return response
 
-    def list_vms(self, verbose: bool = False) -> None:
+    def list_vms(self, verbose: bool = False, json_output: bool = False) -> None:
         """List all VMs and their status"""
         response = self.rpc_call('Status')
         vms = response['vms']
+
+        if json_output:
+            # Return raw JSON data for automation/testing
+            print(json.dumps(vms, indent=2))
+            return
 
         if not vms:
             print("No VMs found")
@@ -352,10 +361,23 @@ class VmmCLI:
             # For non-streamed responses, response is already the data
             print(response)
 
-    def list_images(self) -> List[Dict]:
+    def list_images(self, json_output: bool = False) -> None:
         """Get list of available images"""
         response = self.rpc_call('ListImages')
-        return response['images']
+        images = response['images']
+
+        if json_output:
+            # Return raw JSON data for automation/testing
+            print(json.dumps(images, indent=2))
+            return
+
+        if not images:
+            print("No images found")
+            return
+
+        headers = ['Name', 'Version']
+        rows = [[img['name'], img.get('version', '-')] for img in images]
+        print(format_table(rows, headers))
 
     def get_app_env_encrypt_pub_key(self, app_id: str, kms_url: Optional[str] = None) -> Dict:
         """Get the encryption public key for the specified application ID"""
@@ -467,7 +489,7 @@ class VmmCLI:
             "public_sysinfo": args.public_sysinfo,
             "allowed_envs": [k for k in envs.keys()],
             "no_instance_id": args.no_instance_id,
-            "secure_time": True,
+            "secure_time": args.secure_time,
         }
         if args.prelaunch_script:
             app_compose["pre_launch_script"] = open(
@@ -487,18 +509,14 @@ class VmmCLI:
         if not os.path.exists(args.compose):
             raise Exception(f"Compose file not found: {args.compose}")
 
-        with open(args.compose, 'r') as f:
-            compose_content = f.read()
+        compose_content = read_utf8(args.compose)
 
         envs = parse_env_file(args.env_file)
 
         # Read user config file if provided
         user_config = ""
         if args.user_config:
-            if not os.path.exists(args.user_config):
-                raise Exception(f"User config file not found: {args.user_config}")
-            with open(args.user_config, 'r') as f:
-                user_config = f.read()
+            user_config = read_utf8(args.user_config)
 
         # Create VM request
         params = {
@@ -578,10 +596,15 @@ class VmmCLI:
                       'compose_file': app_compose})
         print(f"App compose updated for VM {vm_id}")
 
-    def list_gpus(self) -> None:
+    def list_gpus(self, json_output: bool = False) -> None:
         """List all available GPUs"""
         response = self.rpc_call('ListGpus')
         gpus = response.get('gpus', [])
+
+        if json_output:
+            # Return raw JSON data for automation/testing
+            print(json.dumps(gpus, indent=2))
+            return
 
         if not gpus:
             print("No GPUs found")
@@ -830,6 +853,8 @@ def main():
     lsvm_parser = subparsers.add_parser('lsvm', help='List VMs')
     lsvm_parser.add_argument(
         '-v', '--verbose', action='store_true', help='Show detailed information')
+    lsvm_parser.add_argument(
+        '--json', action='store_true', help='Output in JSON format for automation')
 
     # Start command
     start_parser = subparsers.add_parser('start', help='Start a VM')
@@ -878,6 +903,8 @@ def main():
     compose_parser.add_argument(
         '--no-instance-id', action='store_true', help='Disable instance ID')
     compose_parser.add_argument(
+        '--secure-time', action='store_true', help='Enable secure time')
+    compose_parser.add_argument(
         '--output', required=True, help='Path to output app-compose.json file')
 
     # Deploy command
@@ -915,11 +942,15 @@ def main():
                                help='Create VM in stopped state (requires dstack-vmm >= 0.5.4)')
 
     # Images command
-    _images_parser = subparsers.add_parser(
+    lsimage_parser = subparsers.add_parser(
         'lsimage', help='List available images')
+    lsimage_parser.add_argument(
+        '--json', action='store_true', help='Output in JSON format for automation')
 
     # GPU command
-    _lsgpu_parser = subparsers.add_parser('lsgpu', help='List available GPUs')
+    lsgpu_parser = subparsers.add_parser('lsgpu', help='List available GPUs')
+    lsgpu_parser.add_argument(
+        '--json', action='store_true', help='Output in JSON format for automation')
 
     # Update environment variables command
     update_env_parser = subparsers.add_parser(
@@ -970,7 +1001,7 @@ def main():
     cli = VmmCLI(args.url, args.auth_user, args.auth_password)
 
     if args.command == 'lsvm':
-        cli.list_vms(args.verbose)
+        cli.list_vms(args.verbose, args.json)
     elif args.command == 'start':
         cli.start_vm(args.vm_id)
     elif args.command == 'stop':
@@ -984,12 +1015,9 @@ def main():
     elif args.command == 'deploy':
         cli.create_vm(args)
     elif args.command == 'lsimage':
-        images = cli.list_images()
-        headers = ['Name', 'Version']
-        rows = [[img['name'], img.get('version', '-')] for img in images]
-        print(format_table(rows, headers))
+        cli.list_images(args.json)
     elif args.command == 'lsgpu':
-        cli.list_gpus()
+        cli.list_gpus(args.json)
     elif args.command == 'update-env':
         cli.update_vm_env(args.vm_id, parse_env_file(
             args.env_file), kms_urls=args.kms_url)
