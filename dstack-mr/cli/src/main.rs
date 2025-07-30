@@ -24,7 +24,7 @@ type Bool = bool;
 struct MachineConfig {
     /// Number of CPUs
     #[arg(short, long, default_value = "1")]
-    cpu: u8,
+    cpu: u32,
 
     /// Memory size in bytes
     #[arg(short, long, default_value = "2G", value_parser = parse_memory_size)]
