@@ -31,6 +31,7 @@ import logging
 import argparse
 import subprocess
 import shutil
+import tarfile
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -182,6 +183,31 @@ class BackupScheduler:
         logger.debug(
             f"Updated {backup_type} backup timestamp for VM {vm_id} to {datetime.fromtimestamp(current_time)}")
 
+    def _backup_vm_configs(self, vm_dir: Path, backup_dir: Path) -> bool:
+        """Backup VM configuration files as tar.gz"""
+        vm_configs = ["vm-manifest.json", "shared/"]
+        config_archive = backup_dir / "vm-configs.tar.gz"
+
+        logger.info(f"Creating VM config backup: {config_archive}")
+
+        try:
+            with tarfile.open(config_archive, 'w:gz') as tar:
+                for config_item in vm_configs:
+                    config_path = vm_dir / config_item
+                    if config_path.exists():
+                        # Add to archive with relative path
+                        tar.add(config_path, arcname=config_item)
+                        logger.debug(f"Added {config_item} to config archive")
+                    else:
+                        logger.warning(
+                            f"Config item {config_item} not found, skipping")
+
+            logger.info(f"VM config backup completed: {config_archive}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to create VM config backup: {e}")
+            return False
+
     def perform_backup(self, vm_id: str, vm_name: str, backup_type: str, hd: str) -> bool:
         """Perform a backup for the specified VM"""
         logger.info(f"Performing {backup_type} backup...")
@@ -198,13 +224,16 @@ class BackupScheduler:
         # Set backup level based on type
         backup_level = "full" if backup_type == "full" else "inc"
 
+        vm_configs = ["vm-manifest.json", "shared/"]
+
         # Create or update latest symlink
         latest_dir = backup_dir / "latest"
 
         def do_backup():
             # For full backups, clear bitmaps first
             if backup_level == "full":
-                logger.info(f"Clearing bitmaps for full backup of VM {vm_name}")
+                logger.info(
+                    f"Clearing bitmaps for full backup of VM {vm_name}")
                 if qmp_socket.exists():
                     try:
                         # Use absolute path for qmp_socket
@@ -259,7 +288,13 @@ class BackupScheduler:
                     # Get return code
                     returncode = process.wait()
                     if returncode == 0:
-                        logger.info(f"Backup successful")
+                        logger.info(f"Disk backup successful")
+
+                        # Backup VM configuration files
+                        if not self._backup_vm_configs(vm_dir, abs_latest_dir):
+                            logger.error("VM config backup failed")
+                            return False
+
                         self.update_backup_time(vm_id, backup_type)
 
                         # Rotate backups if needed
@@ -385,7 +420,8 @@ class BackupScheduler:
             hd = vm['hd']
 
             logger.info("-" * 50)
-            logger.info(f"[{i+1}/{total_vms}] Processing VM: {vm_name} ({vm_id})")
+            logger.info(
+                f"[{i+1}/{total_vms}] Processing VM: {vm_name} ({vm_id})")
 
             # Check if backup is needed
             backup_type = self.needs_backup(vm_id)
