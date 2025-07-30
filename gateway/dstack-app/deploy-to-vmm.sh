@@ -172,6 +172,7 @@ EOF
     --public-logs \
     --public-sysinfo \
     --no-instance-id \
+    --secure-time \
     --prelaunch-script .prelaunch.sh \
     --output .app-compose.json
 fi
