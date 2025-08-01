@@ -12,8 +12,12 @@
     "test:coverage": "jest --coverage",
     "test:foundry": "forge test --ffi",
     "test:foundry:all": "forge clean && forge build && forge test --ffi",
-    "test:full": "./scripts/test-with-anvil.sh",
-    "test:full:keep": "./scripts/test-with-anvil.sh --keep-running"
+    "test:setup": "./scripts/setup-local-chain.sh",
+    "test:run": "./scripts/run-tests.sh",
+    "test:run:foundry": "./scripts/run-tests.sh --with-foundry",
+    "test:all": "./scripts/test-all.sh",
+    "test:all:foundry": "./scripts/test-all.sh --with-foundry",
+    "test:cleanup": "./scripts/cleanup.sh"
   },
   "dependencies": {
     "@fastify/swagger": "^8.12.0",
