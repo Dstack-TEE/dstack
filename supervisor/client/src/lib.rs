@@ -110,7 +110,7 @@ impl SupervisorClient {
 
 // Async API
 impl SupervisorClient {
-    pub async fn deploy(&self, config: ProcessConfig) -> Result<()> {
+    pub async fn deploy(&self, config: &ProcessConfig) -> Result<()> {
         self.http_request("POST", "/deploy", config).await
     }
 
