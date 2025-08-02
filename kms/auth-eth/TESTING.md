@@ -1,25 +1,22 @@
-# Testing Guide for DStack KMS Auth
+# Testing Guide
 
-Complete testing with **Foundry only** - no Hardhat dependencies.
-
-## 🏗️ Smart Contract Testing
+## Smart Contract Testing
 
 ```bash
-npm run test:foundry:all    # All smart contract tests (36 tests)
+# Run all tests (36 tests total)
+forge test --ffi
 ```
 
-Covers: Core logic, upgrades, authorization, gas optimization
+## API Server Testing
 
-## 🌐 API Server Testing
-
-### Unit Tests (Fast)
+### Unit Tests
 ```bash
 npm test                    # Jest with mocked blockchain (4 tests)
 ```
 
-### Integration Tests (Real Blockchain)
+### Integration Tests
 ```bash
-npm run test:full           # Complete: Anvil + Deploy + API tests + Cleanup
+npm run test:all           # Complete: Anvil + Deploy + API tests + Cleanup
 ```
 
 This automatically:
@@ -29,11 +26,12 @@ This automatically:
 4. Tests all endpoints
 5. Cleans up
 
-## 🔧 Manual Testing
+## Manual Testing
 
 ### Start Services
 ```bash
-npm run test:full:keep      # Keep Anvil + API server running
+npm run test:setup         # Start Anvil and deploy contracts
+npm run dev                # Start API server in development mode
 ```
 
 ### Test Endpoints
@@ -41,13 +39,10 @@ npm run test:full:keep      # Keep Anvil + API server running
 curl http://127.0.0.1:8000/                    # Health check
 curl -X POST http://127.0.0.1:8000/bootAuth/app \
   -H "Content-Type: application/json" \
-  -d '{"tcbStatus":"UpToDate","advisoryIds":[],"mrAggregated":"0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef","osImageHash":"0xabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd","mrSystem":"0x9012901290129012901290129012901290129012901290129012901290129012","appId":"0x9012345678901234567890123456789012345678","composeHash":"0xabcdabcdabcdabcdabcdabcdabcdabcdabcdabcdabcdabcdabcdabcdabcdabcd","instanceId":"0x3456789012345678901234567890123456789012","deviceId":"0xef12ef12ef12ef12ef12ef12ef12ef12ef12ef12ef12ef12ef12ef12ef12ef12"}'
+  -d '{"tcbStatus":"UpToDate","advisoryIds":[],"mrAggregated":"0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef","osImageHash":"0xabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd"}'
 ```
 
-## 🚀 CI/CD Pipeline
-
+### Cleanup
 ```bash
-npm test                    # Fast unit tests
-npm run test:foundry:all    # Complete contract tests  
-npm run build               # Build check
+npm run test:cleanup       # Stop all test processes
 ```
