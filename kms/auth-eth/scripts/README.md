@@ -1,11 +1,11 @@
 # Test Scripts
 
-This directory contains automated test scripts for the DStack KMS Ethereum backend.
+This directory contains automated test scripts for the dstack KMS Ethereum backend.
 
 ## Scripts Overview
 
 ### 🚀 setup-local-chain.sh
-Sets up a local Anvil blockchain and deploys the DStack contracts.
+Sets up a local Anvil blockchain and deploys the dstack contracts.
 - Starts Anvil on port 8545
 - Deploys DstackKms and DstackApp contracts
 - Saves configuration to `.env.test`
