@@ -1,6 +1,6 @@
-# Dstack KMS Auth-ETH
+# dstack KMS Auth-ETH
 
-A Foundry-based smart contract project for Dstack's Key Management System (KMS) authentication on Ethereum.
+A Foundry-based smart contract project for dstack's Key Management System (KMS) authentication on Ethereum.
 
 ## Overview
 

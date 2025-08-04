@@ -1,6 +1,6 @@
 # Foundry Scripts
 
-This directory contains Foundry scripts for deploying and managing DStack contracts.
+This directory contains Foundry scripts for deploying and managing dstack contracts.
 
 ## Deployment Scripts (`Deploy.s.sol`)
 
