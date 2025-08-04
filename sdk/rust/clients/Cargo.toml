@@ -1,5 +1,5 @@
 [package]
-name = "dstack-sdk"
+name = "dstack-sdk-clients"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
@@ -9,6 +9,7 @@ authors = ["Encifher <encifher@rizelabs.io>"]
 [dependencies]
 alloy = { workspace = true, features = ["signers", "signer-local"] }
 anyhow.workspace = true
+dstack-sdk-types.workspace = true
 bon.workspace = true
 hex.workspace = true
 http.workspace = true

@@ -1,5 +1,5 @@
-use crate::dstack_client::GetKeyResponse;
 use alloy::signers::local::PrivateKeySigner;
+use dstack_sdk_types::dstack::GetKeyResponse;
 
 pub fn to_account(
     get_key_response: &GetKeyResponse,

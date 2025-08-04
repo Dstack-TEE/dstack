@@ -1,4 +1,4 @@
-use dstack_sdk::tappd_client::TappdClient;
+use dstack_sdk_clients::tappd_client::TappdClient;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {

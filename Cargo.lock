@@ -2171,17 +2171,33 @@ dependencies = [
 ]
 
 [[package]]
-name = "dstack-sdk"
+name = "dstack-sdk-clients"
 version = "0.1.0"
 dependencies = [
  "alloy",
  "anyhow",
  "bon",
  "dcap-qvl",
+ "dstack-sdk-types",
  "hex",
  "http",
  "http-client-unix-domain-socket",
  "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "x509-parser",
+]
+
+[[package]]
+name = "dstack-sdk-types"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bon",
+ "dcap-qvl",
+ "hex",
  "serde",
  "serde_json",
  "sha2",

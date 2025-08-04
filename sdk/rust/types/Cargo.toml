@@ -1,0 +1,20 @@
+[package]
+name = "dstack-sdk-types"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "This crate provides rust types for communication with dstack"
+authors = ["Encifher <encifher@rizelabs.io>"]
+
+[dependencies]
+anyhow.workspace = true
+bon.workspace = true
+hex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+x509-parser.workspace = true
+
+[dev-dependencies]
+dcap-qvl.workspace = true
+tokio = { workspace = true, features = ["full"] }
