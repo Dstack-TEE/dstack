@@ -6,8 +6,6 @@
 
 pragma solidity ^0.8.22;
 
-/// @custom:oz-upgrades-from DstackKmsV1
-
 import "./IAppAuth.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
