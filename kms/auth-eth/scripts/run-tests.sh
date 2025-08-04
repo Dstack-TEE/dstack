@@ -229,17 +229,11 @@ INTEGRATION_RESULT=$?
 # Clean up integration test file
 rm -f "$PROJECT_ROOT/integration-test.js"
 
-# Optionally run Foundry tests
-if [ "$1" == "--with-foundry" ]; then
-    echo ""
-    echo -e "${BLUE}🔨 Running Foundry tests...${NC}"
-    forge test --rpc-url $ETH_RPC_URL
-    FOUNDRY_RESULT=$?
-else
-    echo ""
-    echo -e "${YELLOW}ℹ️  Skipping Foundry tests (use --with-foundry to include)${NC}"
-    FOUNDRY_RESULT=0
-fi
+# Run Foundry tests
+echo ""
+echo -e "${BLUE}🔨 Running Foundry tests...${NC}"
+forge test --rpc-url $ETH_RPC_URL
+FOUNDRY_RESULT=$?
 
 # Summary
 echo ""
@@ -250,12 +244,10 @@ if [ $INTEGRATION_RESULT -eq 0 ]; then
 else
     echo "   Integration Tests: ${RED}❌ Failed${NC}"
 fi
-if [ "$1" == "--with-foundry" ]; then
-    if [ $FOUNDRY_RESULT -eq 0 ]; then
-        echo "   Foundry Tests: ${GREEN}✅ Passed${NC}"
-    else
-        echo "   Foundry Tests: ${RED}❌ Failed${NC}"
-    fi
+if [ $FOUNDRY_RESULT -eq 0 ]; then
+    echo "   Foundry Tests: ${GREEN}✅ Passed${NC}"
+else
+    echo "   Foundry Tests: ${RED}❌ Failed${NC}"
 fi
 
 # Exit with appropriate code
