@@ -14,9 +14,7 @@
     "test:foundry:all": "forge clean && forge build && forge test --ffi",
     "test:setup": "./scripts/setup-local-chain.sh",
     "test:run": "./scripts/run-tests.sh",
-    "test:run:foundry": "./scripts/run-tests.sh --with-foundry",
     "test:all": "./scripts/test-all.sh",
-    "test:all:foundry": "./scripts/test-all.sh --with-foundry",
     "test:cleanup": "./scripts/cleanup.sh"
   },
   "dependencies": {
