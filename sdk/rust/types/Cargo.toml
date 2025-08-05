@@ -10,10 +10,10 @@ authors = ["Encifher <encifher@rizelabs.io>"]
 anyhow.workspace = true
 bon.workspace = true
 hex.workspace = true
+pkcs8 = { version = "0.10", features = ["pem"] }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
-x509-parser.workspace = true
 
 [dev-dependencies]
 dcap-qvl.workspace = true

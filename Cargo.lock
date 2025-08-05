@@ -2229,11 +2229,11 @@ dependencies = [
  "bon",
  "dcap-qvl",
  "hex",
+ "pkcs8",
  "serde",
  "serde_json",
  "sha2",
  "tokio",
- "x509-parser",
 ]
 
 [[package]]

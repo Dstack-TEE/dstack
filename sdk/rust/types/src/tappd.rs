@@ -3,7 +3,7 @@ use alloc::{
     string::{String, ToString},
     vec::Vec,
 };
-use anyhow::{bail, Context as _, Result};
+use anyhow::{bail, Result};
 use hex::{encode as hex_encode, FromHexError};
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
@@ -72,41 +72,52 @@ pub struct DeriveKeyResponse {
 impl DeriveKeyResponse {
     /// Decodes the key from PEM format and extracts the raw ECDSA P-256 private key bytes
     pub fn decode_key(&self) -> Result<Vec<u8>, anyhow::Error> {
-        use x509_parser::der_parser::der::parse_der;
-        use x509_parser::pem::parse_x509_pem;
+        use pkcs8::der::asn1::{Int, OctetString};
+        use pkcs8::der::{Decode, Document, Reader, SliceReader};
+        use pkcs8::PrivateKeyInfo;
 
         let key_content = self.key.trim();
 
-        let (_, pem) = parse_x509_pem(key_content.as_bytes()).context("Failed to parse PEM")?;
-        // Parse PKCS#8 PrivateKeyInfo structure
-        // PKCS#8 format: SEQUENCE { version, algorithm, privateKey }
-        let (_, der_seq) = parse_der(&pem.contents).context("Failed to parse DER")?;
-        let sequence = der_seq.as_sequence().context("Expected SEQUENCE")?;
-        if sequence.len() < 3 {
-            bail!("Invalid PKCS#8 structure: expected at least 3 elements");
+        // Parse PEM to DER using der's Document
+        let (label, doc) = Document::from_pem(key_content)
+            .map_err(|e| anyhow::anyhow!("Failed to parse PEM: {:?}", e))?;
+
+        // Verify it's a private key
+        if label != "PRIVATE KEY" {
+            bail!("Expected PRIVATE KEY PEM label, got: {}", label);
         }
 
-        // The privateKey is the 3rd element (index 2) and should be an OCTET STRING
-        let private_key_data = sequence[2]
-            .content
-            .as_slice()
-            .context("Could not extract privateKey data")?;
+        // Parse as PKCS#8 PrivateKeyInfo
+        let private_key_info = PrivateKeyInfo::from_der(doc.as_bytes())
+            .map_err(|e| anyhow::anyhow!("Failed to parse PKCS#8 private key: {:?}", e))?;
 
-        // For ECDSA keys, the private key is wrapped in another DER structure
-        // Parse the inner ECDSA private key structure
-        let (_, inner_der) = parse_der(private_key_data).context("Failed to parse inner DER")?;
+        // Extract the private key bytes from the PKCS#8 structure
+        // For ECDSA P-256 keys, the private key data contains a DER-encoded ECPrivateKey
+        let private_key_data = private_key_info.private_key;
 
-        let inner_sequence = inner_der.as_sequence().context("Expected inner SEQUENCE")?;
-
-        if inner_sequence.len() < 2 {
-            return Err(anyhow::anyhow!("Invalid ECDSA private key structure"));
-        }
-
-        // The actual private key value is the 2nd element (index 1) as OCTET STRING
-        let key_bytes = inner_sequence[1]
-            .content
-            .as_slice()
-            .context("Could not extract key bytes")?;
+        // Parse the ECPrivateKey structure to extract the raw key bytes
+        // ECPrivateKey ::= SEQUENCE {
+        //   version INTEGER,
+        //   privateKey OCTET STRING,
+        //   parameters [0] EXPLICIT ECParameters OPTIONAL,
+        //   publicKey [1] EXPLICIT BIT STRING OPTIONAL
+        // }
+        let mut reader = SliceReader::new(private_key_data)
+            .map_err(|e| anyhow::anyhow!("Failed to create reader: {:?}", e))?;
+        let key_bytes = reader
+            .sequence(|reader| {
+                // Skip version (INTEGER)
+                let _version: Int = reader.decode()?;
+                // Get the private key (OCTET STRING)
+                let private_key: OctetString = reader.decode()?;
+                // Skip optional fields (parameters and publicKey)
+                // We don't need to parse them, just consume remaining data
+                while !reader.is_finished() {
+                    let _: pkcs8::der::Any = reader.decode()?;
+                }
+                Ok(private_key.as_bytes().to_vec())
+            })
+            .map_err(|e| anyhow::anyhow!("Failed to parse ECPrivateKey structure: {:?}", e))?;
 
         if key_bytes.len() != 32 {
             bail!(
@@ -115,7 +126,7 @@ impl DeriveKeyResponse {
             );
         }
 
-        Ok(key_bytes.to_vec())
+        Ok(key_bytes)
     }
 }
 
