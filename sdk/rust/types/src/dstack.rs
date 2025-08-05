@@ -3,7 +3,7 @@ use alloc::{
     string::{String, ToString},
     vec::Vec,
 };
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use hex::{encode as hex_encode, FromHexError};
 use serde::{Deserialize, Serialize};
 use serde_json::{from_str, Value};
@@ -109,7 +109,12 @@ impl GetQuoteResponse {
                     history.push(event.digest.clone());
                 }
             }
-            rtmrs.insert(idx as u8, replay_rtmr(history)?);
+            rtmrs.insert(
+                idx as u8,
+                replay_rtmr(history)
+                    .ok()
+                    .context("Invalid digest in event log")?,
+            );
         }
         Ok(rtmrs)
     }

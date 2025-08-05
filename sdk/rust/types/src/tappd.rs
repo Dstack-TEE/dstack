@@ -3,7 +3,7 @@ use alloc::{
     string::{String, ToString},
     vec::Vec,
 };
-use anyhow::{bail, Result};
+use anyhow::{bail, Context as _, Result};
 use hex::{encode as hex_encode, FromHexError};
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
@@ -165,7 +165,12 @@ impl TdxQuoteResponse {
                     history.push(event.digest.clone());
                 }
             }
-            rtmrs.insert(idx as u8, replay_rtmr(history)?);
+            rtmrs.insert(
+                idx as u8,
+                replay_rtmr(history)
+                    .ok()
+                    .context("Invalid digest in event log")?,
+            );
         }
         Ok(rtmrs)
     }

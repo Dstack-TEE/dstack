@@ -30,3 +30,6 @@ jobs:
       - name: Verify WASM compilation
         # Ensures SDK types can be used in smart contracts
         run: cargo check --target=wasm32-unknown-unknown -p dstack-sdk-types
+
+      - name: Verify no_std compatibility
+        run: cargo test -p dstack-sdk-types --test no_std_test --no-default-features

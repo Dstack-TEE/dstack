@@ -9,10 +9,10 @@ authors = ["Encifher <encifher@rizelabs.io>"]
 [dependencies]
 anyhow.workspace = true
 bon.workspace = true
-hex.workspace = true
+hex = { workspace = true, features = ["alloc"] }
 pkcs8 = { workspace = true, features = ["pem"] }
 serde.workspace = true
-serde_json.workspace = true
+serde_json = { workspace = true, features = ["alloc"] }
 sha2.workspace = true
 
 [dev-dependencies]
