@@ -6,7 +6,7 @@ This crate provides rust clients for communicating with both the current dstack 
 
 ```toml
 [dependencies]
-dstack-rust = { git = "https://github.com/Dstack-TEE/dstack.git", package = "dstack-rust" }
+dstack-sdk = { git = "https://github.com/Dstack-TEE/dstack.git" }
 ```
 
 ## Basic Usage

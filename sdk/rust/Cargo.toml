@@ -9,6 +9,7 @@ authors = ["Encifher <encifher@rizelabs.io>"]
 [dependencies]
 alloy = { workspace = true, features = ["signers", "signer-local"] }
 anyhow.workspace = true
+dstack-sdk-types.workspace = true
 bon.workspace = true
 hex.workspace = true
 http.workspace = true

@@ -1,5 +1,6 @@
-use dstack_sdk::dstack_client::{DstackClient, GetKeyResponse};
+use dstack_sdk::dstack_client::DstackClient;
 use dstack_sdk::ethereum::to_account;
+use dstack_sdk_types::dstack::GetKeyResponse;
 
 #[tokio::test]
 async fn test_async_to_keypair() {

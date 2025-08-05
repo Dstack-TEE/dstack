@@ -1,4 +1,5 @@
 use dstack_sdk::tappd_client::TappdClient;
+use dstack_sdk_types::tappd::DeriveKeyResponse;
 use std::env;
 
 #[tokio::test]
@@ -182,8 +183,6 @@ fn get_test_client() -> TappdClient {
 
 #[test]
 fn test_derive_key_response_decode() {
-    use dstack_sdk::tappd_client::DeriveKeyResponse;
-
     // Test with a valid ECDSA P-256 private key in PKCS#8 format
     let pem_key = "-----BEGIN PRIVATE KEY-----\nMIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQg3/aZQhz0nBx0tqG1\nwPNlB/ILBqnY1xvHT7bkZl9oJP2hRANCAATEwT3ixOl0zFOjEEUhpwP6xBz1F2jY\n3B1LokSVHFcFJHUWEHVZJQcFhBAhFGdhEn1B/9HYBQz5w5H8Vl0z3T9U\n-----END PRIVATE KEY-----";
     let response = DeriveKeyResponse {
