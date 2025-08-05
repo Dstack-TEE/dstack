@@ -37,7 +37,7 @@ members = [
     "dstack-types",
     "cert-client",
     "lspci",
-    "sdk/rust/clients",
+    "sdk/rust",
     "sdk/rust/types",
     "sodiumbox",
     "serde-duration",
