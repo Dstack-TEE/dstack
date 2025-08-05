@@ -1,7 +1,5 @@
+use crate::dstack_client::BaseClient;
 use anyhow::{bail, Result};
-use dstack_sdk_types::tappd::{
-    DeriveKeyResponse, TappdInfoResponse, TappdTcbInfo, TdxQuoteResponse,
-};
 use hex::encode as hex_encode;
 use http_client_unix_domain_socket::{ClientUnix, Method};
 use reqwest::Client;
@@ -9,7 +7,7 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::env;
 
-use crate::dstack_client::BaseClient;
+pub use dstack_sdk_types::tappd::*;
 
 fn get_tappd_endpoint(endpoint: Option<&str>) -> String {
     if let Some(e) = endpoint {

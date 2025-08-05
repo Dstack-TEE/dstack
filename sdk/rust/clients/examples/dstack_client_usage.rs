@@ -1,4 +1,4 @@
-use dstack_sdk_clients::dstack_client::DstackClient;
+use dstack_sdk::dstack_client::DstackClient;
 use dstack_sdk_types::dstack::TlsKeyConfig;
 
 #[tokio::main]

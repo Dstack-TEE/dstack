@@ -1,5 +1,5 @@
 [package]
-name = "dstack-sdk-clients"
+name = "dstack-sdk"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"

@@ -1,5 +1,5 @@
 use dcap_qvl::quote::Quote;
-use dstack_sdk_clients::dstack_client::DstackClient as AsyncDstackClient;
+use dstack_sdk::dstack_client::DstackClient as AsyncDstackClient;
 
 #[tokio::test]
 async fn test_async_client_get_key() {
