@@ -14,7 +14,7 @@ fs-err.workspace = true
 git-version.workspace = true
 libc.workspace = true
 load_config.workspace = true
-nix.workspace = true
+nix = { workspace = true, features = ["resource"] }
 notify.workspace = true
 rocket = { workspace = true, features = ["json"] }
 serde = { workspace = true, features = ["derive"] }

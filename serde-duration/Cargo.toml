@@ -8,4 +8,4 @@ homepage.workspace = true
 repository.workspace = true
 
 [dependencies]
-serde = { workspace = true, features = ["derive"] }
+serde = { workspace = true, features = ["derive", "alloc"] }

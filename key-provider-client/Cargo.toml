@@ -8,5 +8,5 @@ license.workspace = true
 [dependencies]
 anyhow.workspace = true
 serde = { workspace = true, features = ["derive"] }
-serde_json.workspace = true
+serde_json = { workspace = true, features = ["alloc"] }
 tokio = { workspace = true, features = ["net", "io-util"] }

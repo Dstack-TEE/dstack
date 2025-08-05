@@ -10,7 +10,7 @@ authors = ["Encifher <encifher@rizelabs.io>"]
 anyhow.workspace = true
 bon.workspace = true
 hex.workspace = true
-pkcs8 = { version = "0.10", features = ["pem"] }
+pkcs8 = { workspace = true, features = ["pem"] }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
@@ -18,3 +18,15 @@ sha2.workspace = true
 [dev-dependencies]
 dcap-qvl.workspace = true
 tokio = { workspace = true, features = ["full"] }
+
+[features]
+default = ["std"]
+std = [
+    "anyhow/std",
+    "bon/std",
+    "hex/std",
+    "pkcs8/pem",
+    "serde/std",
+    "serde_json/std",
+    "sha2/std",
+]
