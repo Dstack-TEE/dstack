@@ -121,7 +121,7 @@ fn load_config(config: &PathBuf) -> Result<CertBotConfig> {
     let renew_timeout = Duration::from_secs(config.renew_timeout);
     let bot_config = CertBotConfig::builder()
         .acme_url(config.acme_url)
-        .cert_dir(workdir.backup_dir())
+        .cert_dir(workdir.cert_backup_dir())
         .cert_file(workdir.cert_path())
         .key_file(workdir.key_path())
         .auto_create_account(true)
