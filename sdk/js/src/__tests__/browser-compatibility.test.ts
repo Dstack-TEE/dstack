@@ -7,6 +7,12 @@
 
 import { describe, it, expect } from 'vitest'
 
+// Polyfill crypto for Node.js test environment
+if (typeof globalThis.crypto === 'undefined') {
+  const { webcrypto } = require('crypto')
+  globalThis.crypto = webcrypto
+}
+
 // Import Node.js versions
 import * as nodeEncryptEnvVars from '../encrypt-env-vars'
 import * as nodeGetComposeHash from '../get-compose-hash'

@@ -1,5 +1,4 @@
 import { x25519 } from "@noble/curves/ed25519"
-import crypto from 'crypto'
 
 // Convert hex string to Uint8Array
 function hexToUint8Array(hex: string) {
@@ -36,7 +35,7 @@ export async function encryptEnvVars(envs: EnvVar[], publicKeyHex: string) {
   // Import shared key for AES-GCM
   const importedShared = await crypto.subtle.importKey(
     "raw",
-    shared,
+    new Uint8Array(shared),
     { name: "AES-GCM", length: 256 },
     true,
     ["encrypt"],
