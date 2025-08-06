@@ -41,8 +41,10 @@ message GuestAgentConfig {
   uint32 external_port = 1;
   // The in CVM port of the guest agent.
   uint32 internal_port = 2;
-  // The domain of the guest agent.
+  // The base domain of the zt-https
   string domain = 3;
+  // The app address namespace prefix
+  string app_address_ns_prefix = 4;
 }
 
 // StatusResponse is the response for Status.
@@ -145,6 +147,8 @@ message InfoResponse {
   string base_domain = 1;
   // The external port of the ZT-HTTPS
   uint32 external_port = 2;
+  // The app address namespace prefix
+  string app_address_ns_prefix = 3;
 }
 
 service Gateway {

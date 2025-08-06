@@ -29,20 +29,42 @@ impl AppAddress {
 }
 
 /// resolve app address by sni
-async fn resolve_app_address(prefix: &str, sni: &str) -> Result<AppAddress> {
+async fn resolve_app_address(prefix: &str, sni: &str, compat: bool) -> Result<AppAddress> {
     let txt_domain = format!("{prefix}.{sni}");
     let resolver = hickory_resolver::AsyncResolver::tokio_from_system_conf()
         .context("failed to create dns resolver")?;
-    let lookup = resolver
-        .txt_lookup(txt_domain)
-        .await
-        .context("failed to lookup app address")?;
-    let txt_record = lookup.iter().next().context("no txt record found")?;
-    let data = txt_record
-        .txt_data()
-        .first()
-        .context("no data in txt record")?;
-    AppAddress::parse(data).context("failed to parse app address")
+
+    if compat && prefix != "_tapp-address" {
+        let txt_domain_legacy = format!("_tapp-address.{sni}");
+        let (lookup, lookup_legacy) = tokio::join!(
+            resolver.txt_lookup(txt_domain),
+            resolver.txt_lookup(txt_domain_legacy),
+        );
+        for lookup in [lookup, lookup_legacy] {
+            let Ok(lookup) = lookup else {
+                continue;
+            };
+            let Some(txt_record) = lookup.iter().next() else {
+                continue;
+            };
+            let Some(data) = txt_record.txt_data().first() else {
+                continue;
+            };
+            return AppAddress::parse(data).context("failed to parse app address");
+        }
+        anyhow::bail!("failed to resolve app address");
+    } else {
+        let lookup = resolver
+            .txt_lookup(txt_domain)
+            .await
+            .context("failed to lookup app address")?;
+        let txt_record = lookup.iter().next().context("no txt record found")?;
+        let data = txt_record
+            .txt_data()
+            .first()
+            .context("no data in txt record")?;
+        AppAddress::parse(data).context("failed to parse app address")
+    }
 }
 
 pub(crate) async fn proxy_with_sni(
@@ -51,7 +73,9 @@ pub(crate) async fn proxy_with_sni(
     buffer: Vec<u8>,
     sni: &str,
 ) -> Result<()> {
-    let addr = resolve_app_address(&state.config.proxy.app_address_ns_prefix, sni)
+    let ns_prefix = &state.config.proxy.app_address_ns_prefix;
+    let compat = state.config.proxy.app_address_ns_compat;
+    let addr = resolve_app_address(ns_prefix, sni, compat)
         .await
         .context("failed to resolve app address")?;
     debug!("target address is {}:{}", addr.app_id, addr.port);
@@ -123,6 +147,7 @@ mod tests {
         let app_addr = resolve_app_address(
             "_dstack-app-address",
             "3327603e03f5bd1f830812ca4a789277fc31f577.app.kvin.wang",
+            false,
         )
         .await
         .unwrap();
