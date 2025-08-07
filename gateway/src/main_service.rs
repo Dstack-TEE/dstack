@@ -60,6 +60,7 @@ pub struct ProxyInner {
     notify_state_updated: Notify,
     auth_client: AuthClient,
     pub(crate) acceptor: RwLock<TlsAcceptor>,
+    pub(crate) h2_acceptor: RwLock<TlsAcceptor>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -141,8 +142,11 @@ impl ProxyInner {
             }
             false => None,
         };
-        let acceptor =
-            RwLock::new(create_acceptor(&config.proxy).context("Failed to create acceptor")?);
+        let acceptor = RwLock::new(
+            create_acceptor(&config.proxy, false).context("Failed to create acceptor")?,
+        );
+        let h2_acceptor =
+            RwLock::new(create_acceptor(&config.proxy, true).context("Failed to create acceptor")?);
         Ok(Self {
             config,
             state,
@@ -150,6 +154,7 @@ impl ProxyInner {
             my_app_id,
             auth_client,
             acceptor,
+            h2_acceptor,
             certbot,
         })
     }
