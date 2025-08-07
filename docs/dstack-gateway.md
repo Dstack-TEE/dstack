@@ -41,6 +41,27 @@ Focus on these five fields in the `core.proxy` section:
 
 For example, if your base domain is `gateway.example.com`, app ID is `<app_id>`, listening on `80`, and dstack-gateway is on port 7777, the URL would be `https://<app_id>-80.gateway.example.com:7777`
 
+### URL Format
+
+The gateway supports the following URL format:
+- `<app_id>[-<port>][<suffix>].<base_domain>`
+
+Where:
+- `<app_id>`: The application identifier
+- `<port>`: Optional port number (defaults to 80 for HTTP, 443 for HTTPS)
+- `<suffix>`: Optional suffix flags:
+  - `s`: Enable TLS passthrough (proxy passes encrypted traffic directly to backend)
+  - `g`: Enable HTTP/2 (gRPC) support (proxy advertises h2 via ALPN)
+
+Examples:
+- `<app_id>.gateway.example.com` - Default HTTP on port 80
+- `<app_id>-8080.gateway.example.com` - HTTP on port 8080
+- `<app_id>-s.gateway.example.com` - TLS passthrough on port 443
+- `<app_id>-443s.gateway.example.com` - TLS passthrough on port 443
+- `<app_id>-50051g.gateway.example.com` - HTTP/2/gRPC on port 50051
+
+Note: The `s` and `g` suffixes cannot be used together
+
 ## Step 5: Adjust Configuration in `vmm.toml`
 
 Open `vmm.toml` and adjust dstack-gateway configuration in the `gateway` section:
