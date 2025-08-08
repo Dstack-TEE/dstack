@@ -972,7 +972,6 @@ const result = await dstackClient.getQuote(hash); // hash is 32 bytes
 - [ ] **Infrastructure Updates:**
   - [ ] Update Docker volume binding to `/var/run/dstack.sock`
   - [ ] Change environment variables from `TAPPD_*` to `DSTACK_*`
-  - [ ] Verify `dstack-guest-agent` is running (not `tappd`)
 
 - [ ] **Client Code Updates:**
   - [ ] Replace `TappdClient` with `DstackClient`
