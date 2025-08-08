@@ -2,48 +2,97 @@
   "name": "@phala/dstack-sdk",
   "version": "0.5.3",
   "description": "dstack SDK",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
+  "main": "dist/node/index.js",
+  "types": "dist/node/index.d.ts",
+  "browser": {
+    "crypto": "crypto-browserify"
+  },
   "exports": {
-    ".": "./dist/index.js",
+    ".": {
+      "import": "./dist/node/index.js",
+      "require": "./dist/node/index.js",
+      "types": "./dist/node/index.d.ts"
+    },
     "./viem": {
-      "import": "./dist/viem.js",
-      "require": "./dist/viem.js",
-      "types": "./dist/viem.d.ts"
+      "import": "./dist/node/viem.js",
+      "require": "./dist/node/viem.js",
+      "types": "./dist/node/viem.d.ts"
     },
     "./encrypt-env-vars": {
-      "import": "./dist/encrypt-env-vars.js",
-      "require": "./dist/encrypt-env-vars.js",
-      "types": "./dist/encrypt-env-vars.d.ts"
+      "node": {
+        "import": "./dist/node/encrypt-env-vars.js",
+        "require": "./dist/node/encrypt-env-vars.js",
+        "types": "./dist/node/encrypt-env-vars.d.ts"
+      },
+      "browser": {
+        "import": "./dist/browser/encrypt-env-vars.browser.js",
+        "require": "./dist/browser/encrypt-env-vars.browser.js",
+        "types": "./dist/browser/encrypt-env-vars.browser.d.ts"
+      },
+      "default": {
+        "import": "./dist/browser/encrypt-env-vars.browser.js",
+        "require": "./dist/browser/encrypt-env-vars.browser.js",
+        "types": "./dist/browser/encrypt-env-vars.browser.d.ts"
+      }
     },
     "./solana": {
-      "import": "./dist/solana.js",
-      "require": "./dist/solana.js",
-      "types": "./dist/solana.d.ts"
+      "import": "./dist/node/solana.js",
+      "require": "./dist/node/solana.js",
+      "types": "./dist/node/solana.d.ts"
     },
     "./get-compose-hash": {
-      "import": "./dist/get-compose-hash.js",
-      "require": "./dist/get-compose-hash.js",
-      "types": "./dist/get-compose-hash.d.ts"
+      "node": {
+        "import": "./dist/node/get-compose-hash.js",
+        "require": "./dist/node/get-compose-hash.js",
+        "types": "./dist/node/get-compose-hash.d.ts"
+      },
+      "browser": {
+        "import": "./dist/browser/get-compose-hash.browser.js",
+        "require": "./dist/browser/get-compose-hash.browser.js",
+        "types": "./dist/browser/get-compose-hash.browser.d.ts"
+      },
+      "default": {
+        "import": "./dist/browser/get-compose-hash.browser.js",
+        "require": "./dist/browser/get-compose-hash.browser.js",
+        "types": "./dist/browser/get-compose-hash.browser.d.ts"
+      }
     },
     "./verify-env-encrypt-public-key": {
-      "import": "./dist/verify-env-encrypt-public-key.js",
-      "require": "./dist/verify-env-encrypt-public-key.js",
-      "types": "./dist/verify-env-encrypt-public-key.d.ts"
+      "node": {
+        "import": "./dist/node/verify-env-encrypt-public-key.js",
+        "require": "./dist/node/verify-env-encrypt-public-key.js",
+        "types": "./dist/node/verify-env-encrypt-public-key.d.ts"
+      },
+      "browser": {
+        "import": "./dist/browser/verify-env-encrypt-public-key.browser.js",
+        "require": "./dist/browser/verify-env-encrypt-public-key.browser.js",
+        "types": "./dist/browser/verify-env-encrypt-public-key.browser.d.ts"
+      },
+      "default": {
+        "import": "./dist/browser/verify-env-encrypt-public-key.browser.js",
+        "require": "./dist/browser/verify-env-encrypt-public-key.browser.js",
+        "types": "./dist/browser/verify-env-encrypt-public-key.browser.d.ts"
+      }
     }
   },
   "engines": {
     "node": ">=18.0.0"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "npm run build:node && npm run build:browser",
+    "build:node": "tsc -p tsconfig.node.json",
+    "build:browser": "tsc -p tsconfig.browser.json",
+    "clean": "rm -rf dist",
     "test": "vitest",
     "test:ci": "vitest --run",
-    "release": "npm run build && npm publish --access public"
+    "release": "npm run clean && npm run build && npm publish --access public"
   },
   "keywords": ["sdk", "dstack", "Phala"],
   "author": "Leechael Yim",
   "license": "Apache-2.0",
+  "dependencies": {
+    "crypto-browserify": "^3.12.0"
+  },
   "devDependencies": {
     "@types/node": "latest",
     "typescript": "latest",

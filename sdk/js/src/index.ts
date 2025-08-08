@@ -101,9 +101,9 @@ function replay_rtmr(history: string[]): string {
       const padding = Buffer.alloc(48 - contentBuffer.length, 0)
       contentBuffer = Buffer.concat([contentBuffer, padding])
     }
-    mr = crypto.createHash('sha384')
+    mr = Buffer.from(crypto.createHash('sha384')
       .update(Buffer.concat([mr, contentBuffer]))
-      .digest()
+      .digest())
   }
   return mr.toString('hex')
 }
