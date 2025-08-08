@@ -774,7 +774,6 @@ The legacy `deriveKey()` method mixed two different use cases that have now been
 
 | Component | TappdClient (Old) | DstackClient (New) | Status |
 |-----------|-------------------|-------------------|---------|
-| **Daemon Process** | `tappd` | `dstack-guest-agent` | ✅ Updated |
 | **Socket Path** | `/var/run/tappd.sock` | `/var/run/dstack.sock` | ✅ Updated |
 | **HTTP URL Format** | `http://localhost/prpc/Tappd.<Method>` | `http://localhost/<Method>` | ✅ Simplified |
 | **K256 Key Method** | `DeriveK256Key(...)` | `GetKey(...)` | ✅ Renamed |
