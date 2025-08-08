@@ -1,6 +1,6 @@
 {
   "name": "@phala/dstack-sdk",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "description": "dstack SDK",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -20,6 +20,16 @@
       "import": "./dist/solana.js",
       "require": "./dist/solana.js",
       "types": "./dist/solana.d.ts"
+    },
+    "./get-compose-hash": {
+      "import": "./dist/get-compose-hash.js",
+      "require": "./dist/get-compose-hash.js",
+      "types": "./dist/get-compose-hash.d.ts"
+    },
+    "./verify-env-encrypt-public-key": {
+      "import": "./dist/verify-env-encrypt-public-key.js",
+      "require": "./dist/verify-env-encrypt-public-key.js",
+      "types": "./dist/verify-env-encrypt-public-key.d.ts"
     }
   },
   "engines": {
