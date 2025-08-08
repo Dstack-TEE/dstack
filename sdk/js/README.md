@@ -136,6 +136,9 @@ const tlsKey2 = await client.getTlsKey();
 
 ### Event Logging
 
+> [!NOTE]
+> This method is not available in the simulator. Make sure your application really needs this. Emitting many events in the application is a disaster for the verifier. In most scenarios, you only need to use report_data.
+
 Extend RTMR3 with custom events for audit trails:
 
 ```typescript
