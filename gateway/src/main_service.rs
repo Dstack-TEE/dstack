@@ -735,9 +735,10 @@ impl GatewayRpc for RpcHandler {
                 servers,
             }),
             agent: Some(GuestAgentConfig {
-                external_port: state.config.proxy.listen_port as u32,
+                external_port: state.config.proxy.external_port as u32,
                 internal_port: state.config.proxy.agent_port as u32,
                 domain: state.config.proxy.base_domain.clone(),
+                app_address_ns_prefix: state.config.proxy.app_address_ns_prefix.clone(),
             }),
         };
         self.state.notify_state_updated.notify_one();
@@ -786,6 +787,7 @@ impl GatewayRpc for RpcHandler {
         Ok(InfoResponse {
             base_domain: state.config.proxy.base_domain.clone(),
             external_port: state.config.proxy.external_port as u32,
+            app_address_ns_prefix: state.config.proxy.app_address_ns_prefix.clone(),
         })
     }
 }
