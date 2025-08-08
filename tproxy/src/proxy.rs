@@ -59,6 +59,7 @@ struct DstInfo {
     app_id: String,
     port: u16,
     is_tls: bool,
+    is_h2: bool,
 }
 
 fn parse_destination(sni: &str, dotted_base_domain: &str) -> Result<DstInfo> {
@@ -77,22 +78,28 @@ fn parse_destination(sni: &str, dotted_base_domain: &str) -> Result<DstInfo> {
     let last_part = parts.next();
     let is_tls;
     let port;
+    let is_h2;
     match last_part {
         None => {
             is_tls = false;
+            is_h2 = false;
             port = None;
         }
         Some(last_part) => {
-            let port_str = match last_part.strip_suffix('s') {
-                None => {
-                    is_tls = false;
-                    last_part
-                }
-                Some(last_part) => {
-                    is_tls = true;
-                    last_part
-                }
+            let (port_str, has_g) = match last_part.strip_suffix('g') {
+                Some(without_g) => (without_g, true),
+                None => (last_part, false),
             };
+
+            let (port_str, has_s) = match port_str.strip_suffix('s') {
+                Some(without_s) => (without_s, true),
+                None => (port_str, false),
+            };
+            if has_g && has_s {
+                bail!("invalid sni format: `gs` is not allowed");
+            }
+            is_h2 = has_g;
+            is_tls = has_s;
             port = if port_str.is_empty() {
                 None
             } else {
@@ -108,6 +115,7 @@ fn parse_destination(sni: &str, dotted_base_domain: &str) -> Result<DstInfo> {
         app_id,
         port,
         is_tls,
+        is_h2,
     })
 }
 
@@ -130,7 +138,9 @@ async fn handle_connection(
         if dst.is_tls {
             tls_passthough::proxy_to_app(state, inbound, buffer, &dst.app_id, dst.port).await
         } else {
-            state.proxy(inbound, buffer, &dst.app_id, dst.port).await
+            state
+                .proxy(inbound, buffer, &dst.app_id, dst.port, dst.is_h2)
+                .await
         }
     } else {
         tls_passthough::proxy_with_sni(state, inbound, buffer, &sni).await
