@@ -137,7 +137,7 @@ const tlsKey2 = await client.getTlsKey();
 ### Event Logging
 
 > [!NOTE]
-> This method is not available in the simulator. Make sure your application really needs this. Emitting many events in the application is a disaster for the verifier. In most scenarios, you only need to use report_data.
+> This feature isn't available in the simulator. We recommend sticking with `report_data` for most cases since it's simpler and safer to use. If you're not super familiar with SGX/TDX attestation quotes, it's best to avoid adding data directly into quotes as it could cause verification issues.
 
 Extend RTMR3 with custom events for audit trails:
 
