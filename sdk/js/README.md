@@ -743,7 +743,7 @@ The legacy `deriveKey()` method mixed two different use cases that have now been
 | **Key Generation** | Deterministic (same input = same key) | Random (different every call) |
 | **Key Format** | Raw 32-byte secp256k1 private key | PEM-formatted X.509 private key |
 | **Use Cases** | Wallets, signing, DeFi, NFT | HTTPS servers, mTLS, secure APIs |
-| **Curve/Algorithm** | secp256k1 (K256) | Various (RSA, ECDSA, etc.) |
+| **Algorithm/Curve** | ECDSA/secp256k1 (k256) | ECDSA/NIST P-256 |
 | **Returns** | `{ key: Uint8Array, signature_chain }` | `{ key: string (PEM), certificate_chain }` |
 | **Reproducible** | ✅ Yes (same path = same key) | ❌ No (random each time) |
 | **Blockchain Ready** | ✅ Yes (Ethereum, Bitcoin, Solana) | ❌ No (TLS-specific format) |
