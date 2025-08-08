@@ -1,4 +1,4 @@
-use crate::config::{Config, Protocol};
+use crate::config::{Config, ProcessAnnotation, Protocol};
 
 use anyhow::{bail, Context, Result};
 use bon::Builder;
@@ -174,7 +174,6 @@ impl App {
                 manifest,
                 image,
                 cid,
-                networking: self.config.networking.clone(),
                 workdir: vm_work_dir.path().to_path_buf(),
                 gateway_enabled: app_compose.gateway_enabled(),
             };
@@ -213,6 +212,11 @@ impl App {
             vm_state.config.clone()
         };
         if !is_running {
+            // Try to stop passt if already running
+            if self.config.cvm.networking.is_passt() {
+                self.supervisor.stop(&format!("passt-{}", id)).await.ok();
+            }
+
             let work_dir = self.work_dir(id);
             for path in [work_dir.serial_pty(), work_dir.qmp_socket()] {
                 if path.symlink_metadata().is_ok() {
@@ -221,11 +225,13 @@ impl App {
             }
 
             let devices = self.try_allocate_gpus(&vm_config.manifest)?;
-            let process_config = vm_config.config_qemu(&work_dir, &self.config.cvm, &devices)?;
-            self.supervisor
-                .deploy(process_config)
-                .await
-                .with_context(|| format!("Failed to start VM {id}"))?;
+            let processes = vm_config.config_qemu(&work_dir, &self.config.cvm, &devices)?;
+            for process in processes {
+                self.supervisor
+                    .deploy(&process)
+                    .await
+                    .with_context(|| format!("Failed to start process {}", process.id))?;
+            }
 
             let mut state = self.lock();
             let vm_state = state.get_mut(id).context("VM not found")?;
@@ -259,6 +265,16 @@ impl App {
                 self.supervisor.stop(id).await?;
             }
             self.supervisor.remove(id).await?;
+            if self.config.cvm.networking.is_passt() {
+                let passt_id = format!("passt-{}", id);
+                let info = self.supervisor.info(&passt_id).await.ok().flatten();
+                if let Some(info) = info {
+                    if info.state.status.is_running() {
+                        self.supervisor.stop(&passt_id).await?;
+                    }
+                    self.supervisor.remove(&passt_id).await?;
+                }
+            }
         }
 
         {
@@ -276,9 +292,14 @@ impl App {
     pub async fn reload_vms(&self) -> Result<()> {
         let vm_path = self.vm_dir();
         let running_vms = self.supervisor.list().await.context("Failed to list VMs")?;
+        let running_vms: Vec<(ProcessAnnotation, _)> = running_vms
+            .into_iter()
+            .map(|p| (serde_json::from_str(&p.config.note).unwrap_or_default(), p))
+            .collect();
         let occupied_cids = running_vms
             .iter()
-            .flat_map(|p| p.config.cid.map(|cid| (p.config.id.clone(), cid)))
+            .filter(|(note, _)| note.is_cvm())
+            .flat_map(|(_, p)| p.config.cid.map(|cid| (p.config.id.clone(), cid)))
             .collect::<HashMap<_, _>>();
         {
             let mut state = self.lock();
