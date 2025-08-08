@@ -93,7 +93,7 @@ where
     }
 }
 
-pub(crate) fn create_acceptor(config: &ProxyConfig) -> Result<TlsAcceptor> {
+pub(crate) fn create_acceptor(config: &ProxyConfig, h2: bool) -> Result<TlsAcceptor> {
     let cert_pem = fs::read(&config.cert_chain).context("failed to read certificate")?;
     let key_pem = fs::read(&config.cert_key).context("failed to read private key")?;
     let certs = CertificateDer::pem_slice_iter(cert_pem.as_slice())
@@ -114,11 +114,15 @@ pub(crate) fn create_acceptor(config: &ProxyConfig) -> Result<TlsAcceptor> {
             TlsVersion::Tls13 => &TLS13,
         })
         .collect::<Vec<_>>();
-    let config = rustls::ServerConfig::builder_with_provider(Arc::new(provider))
+    let mut config = rustls::ServerConfig::builder_with_provider(Arc::new(provider))
         .with_protocol_versions(&supported_versions)
         .context("Failed to build TLS config")?
         .with_no_client_auth()
         .with_single_cert(certs, key)?;
+
+    if h2 {
+        config.alpn_protocols = vec![b"h2".to_vec()];
+    }
 
     let acceptor = TlsAcceptor::from(Arc::new(config));
 
@@ -145,11 +149,16 @@ impl Proxy {
     /// Reload the TLS acceptor with fresh certificates
     pub fn reload_certificates(&self) -> Result<()> {
         info!("Reloading TLS certificates");
-        let new_acceptor = create_acceptor(&self.config.proxy)?;
-
         // Replace the acceptor with the new one
         if let Ok(mut acceptor) = self.acceptor.write() {
-            *acceptor = new_acceptor;
+            *acceptor = create_acceptor(&self.config.proxy, false)?;
+            info!("TLS certificates successfully reloaded");
+        } else {
+            bail!("Failed to acquire write lock for TLS acceptor");
+        }
+
+        if let Ok(mut acceptor) = self.h2_acceptor.write() {
+            *acceptor = create_acceptor(&self.config.proxy, true)?;
             info!("TLS certificates successfully reloaded");
         } else {
             bail!("Failed to acquire write lock for TLS acceptor");
@@ -163,11 +172,12 @@ impl Proxy {
         inbound: TcpStream,
         buffer: Vec<u8>,
         port: u16,
+        h2: bool,
     ) -> Result<()> {
         if port != 80 {
             bail!("Only port 80 is supported for this node");
         }
-        let stream = self.tls_accept(inbound, buffer).await?;
+        let stream = self.tls_accept(inbound, buffer, h2).await?;
         let io = TokioIo::new(stream);
 
         let service = service_fn(|req: Request<Incoming>| async move {
@@ -218,11 +228,12 @@ impl Proxy {
         inbound: TcpStream,
         buffer: Vec<u8>,
         port: u16,
+        h2: bool,
     ) -> Result<()> {
         if port != 80 {
             bail!("Only port 80 is supported for health checks");
         }
-        let stream = self.tls_accept(inbound, buffer).await?;
+        let stream = self.tls_accept(inbound, buffer, h2).await?;
 
         // Wrap the TLS stream with TokioIo to make it compatible with hyper 1.x
         let io = TokioIo::new(stream);
@@ -253,17 +264,24 @@ impl Proxy {
         &self,
         inbound: TcpStream,
         buffer: Vec<u8>,
+        h2: bool,
     ) -> Result<TlsStream<MergedStream>> {
         let stream = MergedStream {
             buffer,
             buffer_cursor: 0,
             inbound,
         };
-        let acceptor = self
-            .acceptor
-            .read()
-            .expect("Failed to acquire read lock for TLS acceptor")
-            .clone();
+        let acceptor = if h2 {
+            self.h2_acceptor
+                .read()
+                .expect("Failed to acquire read lock for TLS acceptor")
+                .clone()
+        } else {
+            self.acceptor
+                .read()
+                .expect("Failed to acquire read lock for TLS acceptor")
+                .clone()
+        };
         let tls_stream = timeout(
             self.config.proxy.timeouts.handshake,
             acceptor.accept(stream),
@@ -280,19 +298,20 @@ impl Proxy {
         buffer: Vec<u8>,
         app_id: &str,
         port: u16,
+        h2: bool,
     ) -> Result<()> {
         if app_id == "health" {
-            return self.handle_health_check(inbound, buffer, port).await;
+            return self.handle_health_check(inbound, buffer, port, h2).await;
         }
         if app_id == "gateway" {
-            return self.handle_this_node(inbound, buffer, port).await;
+            return self.handle_this_node(inbound, buffer, port, h2).await;
         }
         let addresses = self
             .lock()
             .select_top_n_hosts(app_id)
             .with_context(|| format!("app {app_id} not found"))?;
         debug!("selected top n hosts: {addresses:?}");
-        let tls_stream = self.tls_accept(inbound, buffer).await?;
+        let tls_stream = self.tls_accept(inbound, buffer, h2).await?;
         let (outbound, _counter) = timeout(
             self.config.proxy.timeouts.connect,
             connect_multiple_hosts(addresses, port),
