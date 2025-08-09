@@ -53,6 +53,7 @@ dstack is community driven. Open sourced and built by [Kevin Wang](https://githu
   - [Zero Trust HTTPS](#zero-trust-https)
   - [Certificate Transparency Log Monitor](#certificate-transparency-log-monitor)
 - [Troubleshooting](#-troubleshooting)
+- [Media Kit](#-media-kit)
 - [License](#-license)
 
 ---
@@ -453,6 +454,18 @@ sudo sysctl kernel.apparmor_restrict_unprivileged_userns=0
 ```
 
 Then try building again. For more information about this restriction, see the [Ubuntu discourse post](https://discourse.ubuntu.com/t/spec-unprivileged-user-namespace-restrictions-via-apparmor-in-ubuntu-23-10/37626).
+
+---
+
+## 🎨 Media Kit
+
+The dstack logo and branding assets are available in the [media kit](./docs/assets/Dstack%20Logo%20Kit/):
+
+- **Horizontal logos**: Primary and dark versions in PNG/SVG formats
+- **Vertical logos**: Primary and dark versions in PNG/SVG formats  
+- **Icons**: Primary and dark versions in PNG/SVG formats
+
+All assets are provided in high-resolution formats suitable for both digital and print use.
 
 ---
 
