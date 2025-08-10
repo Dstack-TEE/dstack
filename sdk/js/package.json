@@ -1,6 +1,6 @@
 {
   "name": "@phala/dstack-sdk",
-  "version": "0.5.3",
+  "version": "0.5.4",
   "description": "dstack SDK",
   "main": "dist/node/index.js",
   "types": "dist/node/index.d.ts",
