@@ -28,7 +28,7 @@ fn replay_rtmr(history: Vec<String>) -> Result<String, FromHexError> {
 }
 
 /// Represents an event log entry in the system
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct EventLog {
     /// The index of the IMR (Integrity Measurement Register)
     pub imr: u32,
@@ -43,7 +43,7 @@ pub struct EventLog {
 }
 
 /// Configuration for TLS key generation
-#[derive(bon::Builder, Serialize)]
+#[derive(Debug, bon::Builder, Serialize)]
 pub struct TlsKeyConfig {
     /// The subject name for the certificate
     #[builder(into, default = String::new())]
@@ -63,7 +63,7 @@ pub struct TlsKeyConfig {
 }
 
 /// Response containing a key and its signature chain
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct GetKeyResponse {
     /// The key in hexadecimal format
     pub key: String,
@@ -82,7 +82,7 @@ impl GetKeyResponse {
 }
 
 /// Response containing a quote and associated event log
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct GetQuoteResponse {
     /// The attestation quote in hexadecimal format
     pub quote: String,
@@ -121,7 +121,7 @@ impl GetQuoteResponse {
 }
 
 /// Response containing instance information and attestation data
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct InfoResponse {
     /// The application identifier
     pub app_id: String,
@@ -156,7 +156,7 @@ impl InfoResponse {
 }
 
 /// Trusted Computing Base information structure
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct TcbInfo {
     /// The measurement root of trust
     pub mrtd: String,
@@ -182,7 +182,7 @@ pub struct TcbInfo {
 }
 
 /// Response containing TLS key and certificate chain
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct GetTlsKeyResponse {
     /// The TLS key in hexadecimal format
     pub key: String,
