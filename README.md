@@ -52,6 +52,7 @@ dstack is community driven. Open sourced and built by [Kevin Wang](https://githu
 - [Advanced Features](#-advanced-features)
   - [Zero Trust HTTPS](#zero-trust-https)
   - [Certificate Transparency Log Monitor](#certificate-transparency-log-monitor)
+- [Security](#-security)
 - [Troubleshooting](#-troubleshooting)
 - [Media Kit](#-media-kit)
 - [License](#-license)
@@ -404,6 +405,27 @@ $ ./ct_monitor -t https://localhost:9010/prpc -d app.kvin.wang
 2024-10-25T08:12:14.494944Z ERROR ct_monitor: ❌ error in CTLog { id: 14666084839, issuer_ca_id: 295815, issuer_name: "C=US, O=Let's Encrypt, CN=R11", common_name: "kvin.wang", name_value: "*.app.kvin.wang", not_before: "2024-09-24T02:23:15", not_after: "2024-12-23T02:23:14", serial_number: "03ae796f56a933c8ff7e32c7c0d662a253d4", result_count: 1, entry_timestamp: "2024-09-24T03:21:45.825" }
 2024-10-25T08:12:14.494998Z ERROR ct_monitor: error: certificate has issued to unknown pubkey: 30820122300d06092a864886f70d01010105000382010f003082010a02820101009de65c767caf117880626d1acc1ee78f3c6a992e3fe458f34066f92812ac550190a67e49ebf4f537003c393c000a8ec3e114da088c0cb02ffd0881fd39a2b32cc60d2e9989f0efab3345bee418262e0179d307d8d361fd0837f85d17eab92ec6f4126247e614aa01f4efcc05bc6303a8be68230f04326c9e85406fc4d234e9ce92089253b11d002cdf325582df45d5da42981cd546cbd2e9e49f0fa6636e747a345aaf8cefa02556aa258e1f7f90906be8fe51567ac9626f35bc46837e4f3203387fee59c71cea400000007c24e7537debc1941b36ff1612990233e4c219632e35858b1771f17a71944adf6c657dd7303583e3aeed199bd36a3152f49980f4f30203010001
 ```
+
+---
+
+## 🔒 Security
+
+dstack undergoes regular security audits to ensure the highest standards of security for TEE-based deployments.
+
+### Security Audit Report
+
+A comprehensive security audit was conducted to evaluate the security architecture and implementation of dstack. The audit report is available at:
+
+📄 **[Security Audit Report](./docs/security/dstack-audit.pdf)**
+
+The audit covers key security aspects including:
+- TEE integration and attestation mechanisms
+- Cryptographic implementations and key management
+- Network security and TLS configurations
+- Container isolation and runtime security
+- Smart contract security (for blockchain integrations)
+
+For additional security guidance and best practices, see the [Security Guide](./docs/security-guide/security-guide.md).
 
 ---
 
