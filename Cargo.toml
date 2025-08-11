@@ -95,6 +95,7 @@ sd-notify = "0.4.5"
 jemallocator = "0.5.4"
 
 # Serialization/Parsing
+borsh = { version = "1.5.7", features = ["derive"] }
 bon = { version = "3.4.0", default-features = false }
 base64 = "0.22.1"
 hex = { version = "0.4.3", default-features = false }
