@@ -28,6 +28,8 @@ mod guest_api_service;
 mod host_api_service;
 mod main_routes;
 mod main_service;
+mod one_shot;
+mod validation;
 
 const CARGO_PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
 const GIT_REV: &str = git_version::git_version!(
@@ -46,6 +48,18 @@ struct Args {
     /// Path to the configuration file
     #[arg(short, long)]
     config: Option<String>,
+    /// One-shot mode: setup VM and execute QEMU command from VM configuration file
+    #[arg(long)]
+    one_shot: Option<String>,
+    /// Validate JSON configuration file without executing (useful for debugging)
+    #[arg(long)]
+    validate_only: Option<String>,
+    /// Working directory for one-shot mode (default: create in current directory)
+    #[arg(long)]
+    workdir: Option<String>,
+    /// Dry run: only output QEMU command without executing (use with --one-shot)
+    #[arg(long)]
+    dry_run: bool,
 }
 
 async fn run_external_api(app: App, figment: Figment, api_auth: ApiToken) -> Result<()> {
@@ -134,6 +148,17 @@ async fn main() -> Result<()> {
     let args = Args::parse();
     let figment = config::load_config_figment(args.config.as_deref());
     let config = Config::extract_or_default(&figment)?.abs_path()?;
+
+    // Handle one-shot mode
+    if let Some(vm_config_path) = args.one_shot {
+        return one_shot::run_one_shot(&vm_config_path, config, args.workdir, args.dry_run).await;
+    }
+
+    // Handle validate-only mode
+    if let Some(vm_config_path) = args.validate_only {
+        return validation::validate_config_file(&vm_config_path).await;
+    }
+
     let api_auth = ApiToken::new(config.auth.tokens.clone(), config.auth.enabled);
     let supervisor = {
         let cfg = &config.supervisor;

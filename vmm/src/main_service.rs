@@ -62,7 +62,21 @@ fn validate_label(label: &str) -> Result<()> {
     Ok(())
 }
 
-fn resolve_gpus(gpu_cfg: &rpc::GpuConfig) -> Result<GpuConfig> {
+pub fn resolve_gpus_with_config(
+    gpu_cfg: &rpc::GpuConfig,
+    cvm_config: &crate::config::CvmConfig,
+) -> Result<GpuConfig> {
+    if !cvm_config.gpu.enabled {
+        bail!("GPU is not enabled");
+    }
+    let gpus = resolve_gpus(gpu_cfg)?;
+    if !cvm_config.gpu.allow_attach_all && gpus.attach_mode.is_all() {
+        bail!("Attaching all GPUs is not allowed");
+    }
+    Ok(gpus)
+}
+
+pub fn resolve_gpus(gpu_cfg: &rpc::GpuConfig) -> Result<GpuConfig> {
     // Check the attach mode to determine how to handle GPUs
     match gpu_cfg.attach_mode.as_str() {
         "listed" => {
@@ -110,80 +124,84 @@ fn resolve_gpus(gpu_cfg: &rpc::GpuConfig) -> Result<GpuConfig> {
     }
 }
 
+// Shared function to create manifest from VM configuration
+pub fn create_manifest_from_vm_config(
+    request: VmConfiguration,
+    cvm_config: &crate::config::CvmConfig,
+) -> Result<Manifest> {
+    validate_label(&request.name)?;
+
+    let pm_cfg = &cvm_config.port_mapping;
+    if !(request.ports.is_empty() || pm_cfg.enabled) {
+        bail!("Port mapping is disabled");
+    }
+    let port_map = request
+        .ports
+        .iter()
+        .map(|p| {
+            let from = p.host_port.try_into().context("Invalid host port")?;
+            let to = p.vm_port.try_into().context("Invalid vm port")?;
+            if !pm_cfg.is_allowed(&p.protocol, from) {
+                bail!("Port mapping is not allowed for {}:{}", p.protocol, from);
+            }
+            let protocol = p.protocol.parse().context("Invalid protocol")?;
+            let address = if !p.host_address.is_empty() {
+                p.host_address.parse().context("Invalid host address")?
+            } else {
+                pm_cfg.address
+            };
+            Ok(PortMapping {
+                address,
+                protocol,
+                from,
+                to,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let app_id = match &request.app_id {
+        Some(id) => id.strip_prefix("0x").unwrap_or(id).to_lowercase(),
+        None => app_id_of(&request.compose_file),
+    };
+    let id = uuid::Uuid::new_v4().to_string();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    let gpus = match &request.gpus {
+        Some(gpus) => resolve_gpus_with_config(gpus, cvm_config)?,
+        None => GpuConfig::default(),
+    };
+
+    Ok(Manifest::builder()
+        .id(id)
+        .name(request.name.clone())
+        .app_id(app_id)
+        .image(request.image.clone())
+        .vcpu(request.vcpu)
+        .memory(request.memory)
+        .disk_size(request.disk_size)
+        .port_map(port_map)
+        .created_at_ms(now)
+        .hugepages(request.hugepages)
+        .pin_numa(request.pin_numa)
+        .gpus(gpus)
+        .kms_urls(request.kms_urls.clone())
+        .gateway_urls(request.gateway_urls.clone())
+        .build())
+}
+
 impl RpcHandler {
     fn resolve_gpus(&self, gpu_cfg: &rpc::GpuConfig) -> Result<GpuConfig> {
-        let gpus = resolve_gpus(gpu_cfg)?;
-        if !self.app.config.cvm.gpu.enabled {
-            bail!("GPU is not enabled");
-        }
-        if !self.app.config.cvm.gpu.allow_attach_all && gpus.attach_mode.is_all() {
-            bail!("Attaching all GPUs is not allowed");
-        }
-        Ok(gpus)
+        resolve_gpus_with_config(gpu_cfg, &self.app.config.cvm)
     }
 }
 
 impl VmmRpc for RpcHandler {
     async fn create_vm(self, request: VmConfiguration) -> Result<Id> {
-        validate_label(&request.name)?;
-
-        let pm_cfg = &self.app.config.cvm.port_mapping;
-        if !(request.ports.is_empty() || pm_cfg.enabled) {
-            bail!("Port mapping is disabled");
-        }
-        let port_map = request
-            .ports
-            .iter()
-            .map(|p| {
-                let from = p.host_port.try_into().context("Invalid host port")?;
-                let to = p.vm_port.try_into().context("Invalid vm port")?;
-                if !pm_cfg.is_allowed(&p.protocol, from) {
-                    bail!("Port mapping is not allowed for {}:{}", p.protocol, from);
-                }
-                let protocol = p.protocol.parse().context("Invalid protocol")?;
-                let address = if !p.host_address.is_empty() {
-                    p.host_address.parse().context("Invalid host address")?
-                } else {
-                    pm_cfg.address
-                };
-                Ok(PortMapping {
-                    address,
-                    protocol,
-                    from,
-                    to,
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
-
-        let app_id = match &request.app_id {
-            Some(id) => id.strip_prefix("0x").unwrap_or(id).to_lowercase(),
-            None => app_id_of(&request.compose_file),
-        };
-        let id = uuid::Uuid::new_v4().to_string();
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as u64;
-        let gpus = match &request.gpus {
-            Some(gpus) => self.resolve_gpus(gpus)?,
-            None => GpuConfig::default(),
-        };
-        let manifest = Manifest::builder()
-            .id(id.clone())
-            .name(request.name.clone())
-            .app_id(app_id.clone())
-            .image(request.image.clone())
-            .vcpu(request.vcpu)
-            .memory(request.memory)
-            .disk_size(request.disk_size)
-            .port_map(port_map)
-            .created_at_ms(now)
-            .hugepages(request.hugepages)
-            .pin_numa(request.pin_numa)
-            .gpus(gpus)
-            .kms_urls(request.kms_urls.clone())
-            .gateway_urls(request.gateway_urls.clone())
-            .build();
+        let manifest = create_manifest_from_vm_config(request.clone(), &self.app.config.cvm)?;
+        let id = manifest.id.clone();
+        let app_id = manifest.app_id.clone();
         let vm_work_dir = self.app.work_dir(&id);
         vm_work_dir
             .put_manifest(&manifest)
