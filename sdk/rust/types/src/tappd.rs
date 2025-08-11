@@ -61,7 +61,7 @@ fn replay_rtmr(history: Vec<String>) -> Result<String, FromHexError> {
 }
 
 /// Response from a key derivation request
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct DeriveKeyResponse {
     /// The derived key (PEM format for certificates, hex for raw keys)
     pub key: String,
@@ -131,7 +131,7 @@ impl DeriveKeyResponse {
 }
 
 /// Response from a TDX quote request
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct TdxQuoteResponse {
     /// The TDX quote in hexadecimal format
     pub quote: String,
@@ -177,7 +177,7 @@ impl TdxQuoteResponse {
 }
 
 /// TCB (Trusted Computing Base) information
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct TappdTcbInfo {
     /// The measurement root of trust
     pub mrtd: String,
@@ -196,7 +196,7 @@ pub struct TappdTcbInfo {
 }
 
 /// Response from a Tappd info request
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct TappdInfoResponse {
     /// The application identifier
     pub app_id: String,
