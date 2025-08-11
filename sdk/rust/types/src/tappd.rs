@@ -4,10 +4,12 @@ use alloc::{
     vec::Vec,
 };
 use anyhow::{bail, Context as _, Result};
-use borsh::{BorshDeserialize, BorshSerialize};
 use hex::{encode as hex_encode, FromHexError};
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
+
+#[cfg(feature = "borsh")]
+use borsh::{BorshDeserialize, BorshSerialize};
 
 use crate::dstack::EventLog;
 
