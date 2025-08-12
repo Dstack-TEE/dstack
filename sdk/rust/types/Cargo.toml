@@ -9,6 +9,7 @@ authors = ["Encifher <encifher@rizelabs.io>"]
 [dependencies]
 anyhow.workspace = true
 bon.workspace = true
+borsh = { workspace = true, optional = true }
 hex = { workspace = true, features = ["alloc"] }
 pkcs8 = { workspace = true, features = ["pem"] }
 serde.workspace = true
@@ -21,6 +22,7 @@ tokio = { workspace = true, features = ["full"] }
 
 [features]
 default = ["std"]
+borsh = ["dep:borsh"]
 std = [
     "anyhow/std",
     "bon/std",
