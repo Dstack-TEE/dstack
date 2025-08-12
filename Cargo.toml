@@ -43,6 +43,7 @@ members = [
     "serde-duration",
     "dstack-mr",
     "dstack-mr/cli",
+    "no_std_check",
 ]
 resolver = "2"
 
