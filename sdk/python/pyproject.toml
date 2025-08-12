@@ -9,6 +9,7 @@ dependencies = [
     "httpx>=0.27.2",
     "asyncio>=3.4.3",
     "pydantic>=2.9.2",
+    "cryptography>=43.0.0",
 ]
 requires-python = ">=3.10"
 readme = "README.md"
@@ -25,18 +26,119 @@ all = ["solders", "web3"]
 requires = ["pdm-backend"]
 build-backend = "pdm.backend"
 
+[dependency-groups]
+test = [
+    "pytest>=8.3.3",
+    "pytest-asyncio>=0.24.0",
+    "evidence-api>=0.5.0",
+]
+lint = [
+    "mypy>=1.8.0",
+    "black>=24.0.0",
+    "isort>=5.12.0",
+    "flake8>=7.0.0",
+    "flake8-docstrings>=1.7.0",
+    "flake8-pyproject>=1.2.3",
+]
+solana = [
+    "solders",
+]
+ethereum = [
+    "web3",
+]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+disallow_untyped_decorators = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_no_return = true
+warn_unreachable = true
+strict_equality = true
+show_error_codes = true
+
+# Black configuration
+[tool.black]
+line-length = 88
+target-version = ['py310']
+include = '\.pyi?$'
+exclude = '''
+/(
+    \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | _build
+  | buck-out
+  | build
+  | dist
+)/
+'''
+
+# isort configuration
+[tool.isort]
+profile = "black"
+line_length = 88
+# Enforce one import per line without parentheses
+force_single_line = true
+use_parentheses = false
+include_trailing_comma = false
+multi_line_output = 3
+force_grid_wrap = 0
+ensure_newline_before_comments = true
+
+# flake8 configuration
+[tool.flake8]
+max-line-length = 88
+extend-ignore = [
+    "E203",  # whitespace before ':'
+    "E501",  # line too long (handled by black)
+    "W503",  # line break before binary operator
+]
+exclude = [
+    ".git",
+    "__pycache__",
+    "build",
+    "dist",
+    ".venv",
+    ".mypy_cache",
+    ".pytest_cache",
+]
+per-file-ignores = [
+    "__init__.py:F401",  # imported but unused
+    "tests/*.py:D100,D101,D102,D103,D104",  # relax docstring rules for tests
+]
 [tool.pdm]
 distribution = true
 
 [tool.pdm.publish]
 repository = "pypi"
 
+[tool.pdm.scripts]
+# Formatting scripts
+fmt = {composite = ["isort src/ tests/", "black src/ tests/"]}
+format = {call = "pdm:fmt"}
+
+# Linting scripts  
+lint = {composite = ["flake8 src/ tests/", "mypy src/"]}
+check = {composite = ["black --check src/ tests/", "isort --check-only src/ tests/", "flake8 src/ tests/", "mypy src/"]}
+
+# Testing scripts
+test = "pytest"
+test-cov = "pytest --cov=src/"
+
+# Combined scripts
+check-all = {composite = ["pdm:fmt", "pdm:lint", "pdm:test"]}
+verify = {composite = ["pdm:check", "pdm:test"]}
+
 [tool.pdm.dev-dependencies]
-test = [
-    "pytest>=8.3.3",
-    "pytest-asyncio>=0.24.0",
-    "evidence-api>=0.5.0",
-]
 solana = [
     "solders",
 ]
