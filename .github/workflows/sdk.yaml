@@ -22,7 +22,7 @@ jobs:
         with:
           components: clippy, rustfmt
           # This additional target is needed for wasm32 compatibility check.
-          targets: wasm32-unknown-unknown
+          targets: wasm32-unknown-unknown, thumbv6m-none-eabi
 
       - name: SDK tests
         run: cd sdk && ./run-tests.sh
@@ -32,4 +32,7 @@ jobs:
         run: cargo check --target=wasm32-unknown-unknown -p dstack-sdk-types
 
       - name: Verify no_std compatibility
-        run: cargo test -p dstack-sdk-types --test no_std_test --no-default-features
+        run: |
+          cargo test -p dstack-sdk-types --test no_std_test --no-default-features
+          cargo check -p no_std_check --target thumbv6m-none-eabi
+

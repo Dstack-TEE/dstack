@@ -43,6 +43,7 @@ members = [
     "serde-duration",
     "dstack-mr",
     "dstack-mr/cli",
+    "no_std_check",
 ]
 resolver = "2"
 
@@ -50,7 +51,7 @@ resolver = "2"
 # Internal dependencies
 ra-rpc = { path = "ra-rpc", default-features = false }
 ra-tls = { path = "ra-tls" }
-dstack-sdk-types = { path = "sdk/rust/types" }
+dstack-sdk-types = { path = "sdk/rust/types", default-features = false }
 dstack-gateway-rpc = { path = "gateway/rpc" }
 dstack-kms-rpc = { path = "kms/rpc" }
 dstack-guest-agent-rpc = { path = "guest-agent/rpc" }
@@ -95,7 +96,7 @@ sd-notify = "0.4.5"
 jemallocator = "0.5.4"
 
 # Serialization/Parsing
-borsh = { version = "1.5.7", features = ["derive"] }
+borsh = { version = "1.5.7", default-features = false, features = ["derive"] }
 bon = { version = "3.4.0", default-features = false }
 base64 = "0.22.1"
 hex = { version = "0.4.3", default-features = false }
