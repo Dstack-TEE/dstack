@@ -17,4 +17,4 @@ echo "DSTACK_SIMULATOR_ENDPOINT: $DSTACK_SIMULATOR_ENDPOINT"
 echo "TAPPD_SIMULATOR_ENDPOINT: $TAPPD_SIMULATOR_ENDPOINT"
 
 # Run the tests
-cargo test
+cargo test --all-features -- --show-output
