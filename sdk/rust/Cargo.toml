@@ -11,7 +11,7 @@ alloy = { workspace = true, features = ["signers", "signer-local"] }
 anyhow.workspace = true
 dstack-sdk-types.workspace = true
 bon.workspace = true
-hex.workspace = true
+hex = { workspace = true, features = ["std"] }
 http.workspace = true
 http-client-unix-domain-socket = "0.1.1"
 reqwest = { workspace = true, features = ["json"] }

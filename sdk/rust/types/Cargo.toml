@@ -31,4 +31,5 @@ std = [
     "serde/std",
     "serde_json/std",
     "sha2/std",
+    "borsh?/std"
 ]
