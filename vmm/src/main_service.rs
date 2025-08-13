@@ -1,10 +1,11 @@
 use std::ops::Deref;
+use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail, Context, Result};
 use dstack_types::AppCompose;
-use dstack_vmm_rpc as rpc;
 use dstack_vmm_rpc::vmm_server::{VmmRpc, VmmServer};
+use dstack_vmm_rpc::{self as rpc, BackupDiskRequest, DeleteBackupRequest, RestoreBackupRequest};
 use dstack_vmm_rpc::{
     AppId, ComposeHash as RpcComposeHash, GatewaySettings, GetInfoResponse, GetMetaResponse, Id,
     ImageInfo as RpcImageInfo, ImageListResponse, KmsSettings, ListGpusResponse, PublicKeyResponse,
@@ -104,6 +105,71 @@ fn resolve_gpus(gpu_cfg: &rpc::GpuConfig) -> Result<GpuConfig> {
         }
         _ => bail!("Invalid GPU attach mode: {}", gpu_cfg.attach_mode),
     }
+}
+
+fn check_path_traversal(input: &str) -> Result<()> {
+    if input.is_empty() {
+        bail!("path is empty");
+    }
+
+    if input.len() > 255 {
+        bail!("path is too long");
+    }
+
+    if input.contains('/') {
+        bail!("path contains '/'");
+    }
+
+    if input.contains('\0') {
+        bail!("path contains '\0'");
+    }
+
+    if input == "." || input == ".." {
+        bail!("path is '.' or '..'");
+    }
+
+    Ok(())
+}
+
+fn run_cmd(exec: &str, args: &[&str]) -> Result<Vec<u8>> {
+    let mut cmd = Command::new(exec);
+    cmd.args(args);
+    let output = cmd
+        .output()
+        .with_context(|| format!("Failed to run command: {cmd:?}"))?;
+    if !output.status.success() {
+        let err = String::from_utf8_lossy(&output.stderr);
+        bail!("Failed to run command {cmd:?}: {err}");
+    }
+    Ok(output.stdout)
+}
+
+fn remove_all_qemu_bitmaps(disk_path: &str) -> Result<()> {
+    // Get JSON info
+    let output = run_cmd("qemu-img", &["info", "--output=json", disk_path])?;
+    let info: serde_json::Value = serde_json::from_slice(&output)?;
+    // Extract and remove bitmaps
+    let Some(bitmaps) = info.pointer("/format-specific/data/bitmaps") else {
+        return Ok(());
+    };
+    let bitmaps = bitmaps
+        .as_array()
+        .context("The bitmaps field is not an array")?;
+    for bitmap in bitmaps {
+        let Some(name) = bitmap["name"].as_str() else {
+            info!("Invalid bitmap: {bitmap:?}");
+            continue;
+        };
+        run_cmd("qemu-img", &["bitmap", "--remove", disk_path, name])?;
+        info!("Removed bitmap {name} for {disk_path}");
+    }
+    Ok(())
+}
+
+fn resize_qcow2(disk_path: &str, size_gb: u32) -> Result<()> {
+    let new_size_str = format!("{}G", size_gb);
+    run_cmd("qemu-img", &["resize", disk_path, &new_size_str])?;
+    Ok(())
 }
 
 impl RpcHandler {
@@ -215,6 +281,7 @@ impl VmmRpc for RpcHandler {
     }
 
     async fn start_vm(self, request: Id) -> Result<()> {
+        check_path_traversal(&request.id)?;
         self.app
             .start_vm(&request.id)
             .await
@@ -223,6 +290,7 @@ impl VmmRpc for RpcHandler {
     }
 
     async fn stop_vm(self, request: Id) -> Result<()> {
+        check_path_traversal(&request.id)?;
         self.app
             .stop_vm(&request.id)
             .await
@@ -231,6 +299,7 @@ impl VmmRpc for RpcHandler {
     }
 
     async fn remove_vm(self, request: Id) -> Result<()> {
+        check_path_traversal(&request.id)?;
         self.app
             .remove_vm(&request.id)
             .await
@@ -259,6 +328,7 @@ impl VmmRpc for RpcHandler {
     }
 
     async fn upgrade_app(self, request: UpgradeAppRequest) -> Result<Id> {
+        check_path_traversal(&request.id)?;
         let new_id = if !request.compose_file.is_empty() {
             // check the compose file is valid
             let _app_compose: AppCompose =
@@ -328,6 +398,7 @@ impl VmmRpc for RpcHandler {
     }
 
     async fn get_info(self, request: Id) -> Result<GetInfoResponse> {
+        check_path_traversal(&request.id)?;
         if let Some(vm) = self.app.vm_info(&request.id).await? {
             Ok(GetInfoResponse {
                 found: true,
@@ -343,6 +414,7 @@ impl VmmRpc for RpcHandler {
 
     #[tracing::instrument(skip(self, request), fields(id = request.id))]
     async fn resize_vm(self, request: ResizeVmRequest) -> Result<()> {
+        check_path_traversal(&request.id)?;
         info!("Resizing VM: {:?}", request);
         let vm = self
             .app
@@ -367,26 +439,19 @@ impl VmmRpc for RpcHandler {
         if let Some(image) = request.image {
             manifest.image = image;
         }
-        if let Some(disk_size) = request.disk_size {
+        let resize_disk_to = request
+            .disk_size
+            .filter(|&disk_size| disk_size != manifest.disk_size);
+        if let Some(disk_size) = resize_disk_to {
             if disk_size < manifest.disk_size {
                 bail!("Cannot shrink disk size");
             }
-            manifest.disk_size = disk_size;
-
-            // Run qemu-img resize to resize the disk
             info!("Resizing disk to {}GB", disk_size);
             let hda_path = vm_work_dir.hda_path();
-            let new_size_str = format!("{}G", disk_size);
-            let output = std::process::Command::new("qemu-img")
-                .args(["resize", &hda_path.display().to_string(), &new_size_str])
-                .output()
-                .context("Failed to resize disk")?;
-            if !output.status.success() {
-                bail!(
-                    "Failed to resize disk: {}",
-                    String::from_utf8_lossy(&output.stderr)
-                );
-            }
+            let hda_str = hda_path.display().to_string();
+            remove_all_qemu_bitmaps(&hda_str).context("Failed to remove qemu bitmaps")?;
+            resize_qcow2(&hda_str, disk_size).context("Failed to resize disk")?;
+            manifest.disk_size = disk_size;
         }
         vm_work_dir
             .put_manifest(&manifest)
@@ -399,6 +464,7 @@ impl VmmRpc for RpcHandler {
     }
 
     async fn shutdown_vm(self, request: Id) -> Result<()> {
+        check_path_traversal(&request.id)?;
         self.guest_agent_client(&request.id)?.shutdown().await?;
         Ok(())
     }
@@ -461,6 +527,34 @@ impl VmmRpc for RpcHandler {
             serde_json::from_str(&request.compose_file).context("Invalid compose file")?;
         let hash = hex_sha256(&request.compose_file);
         Ok(RpcComposeHash { hash })
+    }
+
+    async fn backup_disk(self, request: BackupDiskRequest) -> Result<()> {
+        check_path_traversal(&request.vm_id)?;
+        self.app.backup_disk(&request.vm_id, &request.level).await
+    }
+
+    async fn list_backups(self, request: BackupDiskRequest) -> Result<rpc::ListBackupsResponse> {
+        check_path_traversal(&request.vm_id)?;
+        let backups = self.app.list_backups(&request.vm_id).await?;
+        Ok(rpc::ListBackupsResponse { backups })
+    }
+
+    async fn delete_backup(self, request: DeleteBackupRequest) -> Result<()> {
+        check_path_traversal(&request.vm_id)?;
+        check_path_traversal(&request.backup_id)?;
+        self.app
+            .delete_backup(&request.vm_id, &request.backup_id)
+            .await
+    }
+
+    async fn restore_backup(self, request: RestoreBackupRequest) -> Result<()> {
+        check_path_traversal(&request.vm_id)?;
+        check_path_traversal(&request.backup_id)?;
+        check_path_traversal(&request.snapshot_id)?;
+        self.app
+            .restore_backup(&request.vm_id, &request.backup_id, &request.snapshot_id)
+            .await
     }
 }
 

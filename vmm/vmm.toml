@@ -7,7 +7,8 @@ log_level = "debug"
 address = "unix:./vmm.sock"
 reuse = true
 kms_url = "http://127.0.0.1:8081"
-
+image_path = "./images"
+run_path = "./run/vm"
 
 [networking]
 mode = "user"
@@ -27,7 +28,7 @@ cid_pool_size = 1000
 max_allocable_vcpu = 20
 max_allocable_memory_in_mb = 100_000 # MB
 # Enable QMP socket
-qmp_socket = false
+qmp_socket = true
 # The user to run the VM as. If empty, the VM will be run as the current user.
 user = ""
 use_mrconfigid = true
@@ -60,6 +61,10 @@ exclude = []
 include = []
 # Allow attach all GPUs
 allow_attach_all = true
+
+[cvm.backup]
+enabled = true
+path = "./run/backup"
 
 [gateway]
 base_domain = "localhost"

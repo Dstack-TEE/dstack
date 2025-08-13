@@ -22,6 +22,8 @@ message GuestInfo {
   string tcb_info = 5;
   // Device ID
   bytes device_id = 6;
+  // true if backup is in progress
+  bool backup_in_progress = 7;
 }
 
 message IpAddress {
@@ -123,6 +125,8 @@ service GuestApi {
   rpc NetworkInfo(google.protobuf.Empty) returns (NetworkInformation);
   rpc ListContainers(google.protobuf.Empty) returns (ListContainersResponse);
   rpc Shutdown(google.protobuf.Empty) returns (google.protobuf.Empty);
+  rpc PreBackup(google.protobuf.Empty) returns (google.protobuf.Empty);
+  rpc PostBackup(google.protobuf.Empty) returns (google.protobuf.Empty);
 }
 
 service ProxiedGuestApi {
@@ -131,4 +135,6 @@ service ProxiedGuestApi {
   rpc NetworkInfo(Id) returns (NetworkInformation);
   rpc ListContainers(Id) returns (ListContainersResponse);
   rpc Shutdown(Id) returns (google.protobuf.Empty);
+  rpc PreBackup(Id) returns (google.protobuf.Empty);
+  rpc PostBackup(Id) returns (google.protobuf.Empty);
 }

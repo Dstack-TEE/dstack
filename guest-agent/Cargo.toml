@@ -15,7 +15,7 @@ fs-err.workspace = true
 rcgen.workspace = true
 sha2.workspace = true
 clap.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["full"] }
 hex.workspace = true
 serde_json.workspace = true
 bollard.workspace = true

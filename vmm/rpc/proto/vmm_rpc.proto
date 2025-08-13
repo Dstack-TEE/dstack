@@ -31,6 +31,8 @@ message VmInfo {
   string shutdown_progress = 12;
   // Image version
   string image_version = 13;
+  // Backup in progress
+  bool backup_in_progress = 14;
 }
 
 message Id {
@@ -225,6 +227,41 @@ message GpuInfo {
   bool is_free = 4;
 }
 
+message BackupDiskRequest {
+  // vm id
+  string vm_id = 1;
+  // full or incremental
+  string level = 2;
+}
+
+message BackupInfo {
+  // Group id
+  string backup_id = 1;
+  // id of the snapshot
+  string snapshot_id = 2;
+  // timestamp
+  string timestamp = 3;
+  // level: full or incremental
+  string level = 4;
+  // size of the backup in bytes
+  uint64 size = 5;
+}
+
+message ListBackupsResponse {
+  repeated BackupInfo backups = 1;
+}
+
+message DeleteBackupRequest {
+  string vm_id = 1;
+  string backup_id = 2;
+}
+
+message RestoreBackupRequest {
+  string vm_id = 1;
+  string backup_id = 2;
+  string snapshot_id = 3;
+}
+
 // Service definition for dstack-vmm
 service Vmm {
   // RPC to create a VM
@@ -263,4 +300,16 @@ service Vmm {
 
   // List GPUs
   rpc ListGpus(google.protobuf.Empty) returns (ListGpusResponse);
+
+  // Backup a VM data disk
+  rpc BackupDisk(BackupDiskRequest) returns (google.protobuf.Empty);
+
+  // List backups for a VM
+  rpc ListBackups(BackupDiskRequest) returns (ListBackupsResponse);
+
+  // Delete a backup
+  rpc DeleteBackup(DeleteBackupRequest) returns (google.protobuf.Empty);
+
+  // Restore a backup
+  rpc RestoreBackup(RestoreBackupRequest) returns (google.protobuf.Empty);
 }

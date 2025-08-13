@@ -27,24 +27,24 @@ impl WorkDir {
         self.workdir.join("credentials.json")
     }
 
-    pub fn backup_dir(&self) -> PathBuf {
+    pub fn cert_backup_dir(&self) -> PathBuf {
         self.workdir.join("backup")
     }
 
-    pub fn live_dir(&self) -> PathBuf {
+    pub fn cert_live_dir(&self) -> PathBuf {
         self.workdir.join("live")
     }
 
     pub fn cert_path(&self) -> PathBuf {
-        self.live_dir().join("cert.pem")
+        self.cert_live_dir().join("cert.pem")
     }
 
     pub fn key_path(&self) -> PathBuf {
-        self.live_dir().join("key.pem")
+        self.cert_live_dir().join("key.pem")
     }
 
     pub fn list_certs(&self) -> Result<Vec<PathBuf>> {
-        crate::bot::list_certs(self.backup_dir())
+        crate::bot::list_certs(self.cert_backup_dir())
     }
 
     pub fn acme_account_uri(&self) -> Result<String> {
@@ -58,6 +58,6 @@ impl WorkDir {
     }
 
     pub fn list_cert_public_keys(&self) -> Result<BTreeSet<Vec<u8>>> {
-        crate::bot::list_cert_public_keys(self.backup_dir())
+        crate::bot::list_cert_public_keys(self.cert_backup_dir())
     }
 }
