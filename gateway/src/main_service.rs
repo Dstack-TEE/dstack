@@ -110,6 +110,9 @@ impl ProxyInner {
                 None
             })
             .unwrap_or_default();
+        state
+            .nodes
+            .retain(|_, info| info.wg_peer.ip != config.wg.ip.to_string());
         state.nodes.insert(
             config.wg.public_key.clone(),
             GatewayNodeInfo {
