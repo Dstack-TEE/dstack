@@ -20,6 +20,9 @@ from pydantic import BaseModel
 
 logger = logging.getLogger("dstack_sdk")
 
+# SDK version for User-Agent header
+__version__ = "0.2.0"
+
 
 INIT_MR = "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
 
@@ -218,7 +221,12 @@ class DstackClient(BaseClient):
         """Send an RPC request and return the parsed JSON response."""
         with httpx.Client(transport=self.transport, base_url=self.base_url) as client:
             response = client.post(
-                path, json=payload, headers={"Content-Type": "application/json"}
+                path,
+                json=payload,
+                headers={
+                    "Content-Type": "application/json",
+                    "User-Agent": f"dstack-sdk-python/{__version__}",
+                },
             )
             response.raise_for_status()
             from typing import cast
@@ -300,7 +308,10 @@ class DstackClient(BaseClient):
                 response = client.post(
                     "/prpc/Tappd.Info",
                     json={},
-                    headers={"Content-Type": "application/json"},
+                    headers={
+                        "Content-Type": "application/json",
+                        "User-Agent": f"dstack-sdk-python/{__version__}",
+                    },
                 )
                 response.raise_for_status()
                 return True
@@ -332,7 +343,12 @@ class AsyncDstackClient(BaseClient):
             transport=self.transport, base_url=self.base_url
         ) as client:
             response = await client.post(
-                path, json=payload, headers={"Content-Type": "application/json"}
+                path,
+                json=payload,
+                headers={
+                    "Content-Type": "application/json",
+                    "User-Agent": f"dstack-sdk-python/{__version__}",
+                },
             )
             response.raise_for_status()
             from typing import cast
@@ -416,7 +432,10 @@ class AsyncDstackClient(BaseClient):
                 response = await client.post(
                     "/prpc/Tappd.Info",
                     json={},
-                    headers={"Content-Type": "application/json"},
+                    headers={
+                        "Content-Type": "application/json",
+                        "User-Agent": f"dstack-sdk-python/{__version__}",
+                    },
                 )
                 response.raise_for_status()
                 return True

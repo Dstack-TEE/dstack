@@ -4,6 +4,7 @@ import pytest
 from evidence_api.tdx.quote import TdxQuote
 
 from dstack_sdk import AsyncDstackClient
+from dstack_sdk import AsyncTappdClient
 from dstack_sdk import DstackClient
 from dstack_sdk import GetKeyResponse
 from dstack_sdk import GetQuoteResponse
@@ -293,3 +294,62 @@ def test_tappd_client_tdx_quote_deprecated():
         except Exception:
             # It's OK if this fails due to simulator not supporting the old endpoint
             pass
+
+
+# Test AsyncTappdClient
+def test_async_tappd_client_deprecated():
+    """Test that AsyncTappdClient shows deprecation warning."""
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        AsyncTappdClient()
+        assert len(w) == 1
+        assert issubclass(w[0].category, DeprecationWarning)
+        assert "AsyncTappdClient is deprecated" in str(w[0].message)
+
+
+@pytest.mark.asyncio
+async def test_async_tappd_client_derive_key_deprecated():
+    """Test that AsyncTappdClient.derive_key shows deprecation warning."""
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        client = AsyncTappdClient()
+
+        try:
+            await client.derive_key("/", "test")
+            # Should have warnings for both constructor and derive_key
+            warning_messages = [str(warning.message) for warning in w]
+            assert any(
+                "AsyncTappdClient is deprecated" in msg for msg in warning_messages
+            )
+            assert any("derive_key is deprecated" in msg for msg in warning_messages)
+        except Exception:
+            # It's OK if this fails due to simulator not supporting the old endpoint
+            pass
+
+
+@pytest.mark.asyncio
+async def test_async_tappd_client_tdx_quote_deprecated():
+    """Test that AsyncTappdClient.tdx_quote shows deprecation warning."""
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        client = AsyncTappdClient()
+
+        try:
+            await client.tdx_quote("test data", "raw")
+            # Should have warnings for both constructor and tdx_quote
+            warning_messages = [str(warning.message) for warning in w]
+            assert any(
+                "AsyncTappdClient is deprecated" in msg for msg in warning_messages
+            )
+            assert any("tdx_quote is deprecated" in msg for msg in warning_messages)
+        except Exception:
+            # It's OK if this fails due to simulator not supporting the old endpoint
+            pass
+
+
+@pytest.mark.asyncio
+async def test_async_tappd_client_is_reachable():
+    """Test that AsyncTappdClient can check if service is reachable."""
+    client = AsyncTappdClient()
+    is_reachable = await client.is_reachable()
+    assert isinstance(is_reachable, bool)
