@@ -12,6 +12,24 @@ pip install dstack-sdk
 
 The dstack SDK enables secure communication with dstack Trusted Execution Environment (TEE) instances. dstack applications are defined using `app-compose.json` (based on the `AppCompose` structure) and deployed as containerized applications using Docker Compose.
 
+### Client Types
+
+The Python SDK provides both synchronous and asynchronous clients to accommodate different programming patterns:
+
+#### Synchronous Clients
+- **`DstackClient`**: Main synchronous client for dstack services
+- **`TappdClient`**: Deprecated synchronous client (use `DstackClient` instead)
+
+#### Asynchronous Clients  
+- **`AsyncDstackClient`**: Async/await compatible client for dstack services
+- **`AsyncTappdClient`**: Deprecated async client (use `AsyncDstackClient` instead)
+
+**Key Differences:**
+- **Synchronous clients** use regular method calls and block until completion
+- **Asynchronous clients** use `async`/`await` syntax and allow concurrent operations
+- **API compatibility**: Both client types provide identical methods and functionality
+- **Performance**: Async clients excel in I/O-bound applications with multiple concurrent requests
+
 ### Application Architecture
 
 dstack applications consist of:
@@ -63,19 +81,18 @@ First, ensure your dstack application is properly configured:
 
 **Note**: The `docker_compose_file` field contains the actual Docker Compose YAML content as a string, not a file path.
 
-### SDK Integration
+### Synchronous Client Usage
 
 ```python
-from dstack_sdk import DstackClient, AsyncDstackClient
+import json
+import time
+from dstack_sdk import DstackClient
 
-# Create client - automatically connects to /var/run/dstack.sock
+# Create synchronous client - automatically connects to /var/run/dstack.sock
 client = DstackClient()
 
 # For local development with simulator
 dev_client = DstackClient('http://localhost:8090')
-
-# Async client
-async_client = AsyncDstackClient()
 
 # Get TEE instance information
 info = client.info()
@@ -103,6 +120,75 @@ print('Event Log:', quote.event_log)
 # Verify measurement registers
 rtmrs = quote.replay_rtmrs()
 print('RTMR0-3:', rtmrs)
+```
+
+### Asynchronous Client Usage
+
+```python
+import json
+import time
+import asyncio
+from dstack_sdk import AsyncDstackClient
+
+async def main():
+    # Create asynchronous client
+    async_client = AsyncDstackClient()
+    
+    # All methods must be awaited
+    info = await async_client.info()
+    print('App ID:', info.app_id)
+    
+    # Derive keys asynchronously
+    wallet_key = await async_client.get_key('wallet/ethereum', 'mainnet')
+    print('Derived key:', wallet_key.decode_key().hex())
+    
+    # Generate quote asynchronously
+    quote = await async_client.get_quote(b'async-test-data')
+    print('Quote length:', len(quote.quote))
+    
+    # Multiple concurrent operations
+    tasks = [
+        async_client.get_key('wallet/btc', 'mainnet'),
+        async_client.get_key('wallet/eth', 'mainnet'),
+        async_client.get_key('signing/key', 'production')
+    ]
+    
+    # Execute concurrently
+    keys = await asyncio.gather(*tasks)
+    for i, key in enumerate(keys):
+        print(f'Key {i}: {key.decode_key().hex()[:16]}...')
+
+# Run async code
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+### Choosing Between Sync and Async
+
+**Use Synchronous Client (`DstackClient`) when:**
+- Building simple scripts or CLI tools
+- Making sequential API calls
+- Working in synchronous codebases
+- Learning or prototyping
+
+**Use Asynchronous Client (`AsyncDstackClient`) when:**
+- Building web applications (FastAPI, Starlette, etc.)
+- Needing concurrent TEE operations
+- Integrating with async frameworks
+- Optimizing I/O-bound applications
+
+```python
+# Example: Concurrent key derivation (async advantage)
+async def derive_multiple_keys():
+    client = AsyncDstackClient()
+    
+    # This is much faster than sequential sync calls
+    keys = await asyncio.gather(
+        client.get_key('user/alice', 'eth'),
+        client.get_key('user/bob', 'eth'),
+        client.get_key('user/charlie', 'eth')
+    )
+    return keys
 ```
 
 ### Version Compatibility
@@ -380,13 +466,23 @@ if not is_available:
 
 ## API Reference
 
-### DstackClient / AsyncDstackClient
+### Client Classes Overview
+
+The Python SDK provides four client classes with identical functionality but different execution models:
+
+| Client Class | Type | Status | Use Case |
+|-------------|------|--------|----------|
+| `DstackClient` | Synchronous | ✅ Active | General use, scripts, synchronous code |
+| `AsyncDstackClient` | Asynchronous | ✅ Active | Web apps, concurrent operations |
+| `TappdClient` | Synchronous | ⚠️ Deprecated | Legacy compatibility only |
+| `AsyncTappdClient` | Asynchronous | ⚠️ Deprecated | Legacy compatibility only |
+
+### DstackClient (Synchronous)
 
 #### Constructor
 
 ```python
 DstackClient(endpoint: str | None = None)
-AsyncDstackClient(endpoint: str | None = None)
 ```
 
 **Parameters:**
@@ -394,6 +490,22 @@ AsyncDstackClient(endpoint: str | None = None)
   - Unix socket path (production): `/var/run/dstack.sock`
   - HTTP/HTTPS URL (development): `http://localhost:8090`
   - Environment variable: `DSTACK_SIMULATOR_ENDPOINT`
+
+### AsyncDstackClient (Asynchronous)
+
+#### Constructor
+
+```python
+AsyncDstackClient(endpoint: str | None = None)
+```
+
+**Parameters:** Same as `DstackClient`
+
+**Key Differences from Sync Client:**
+- All methods are `async` and must be awaited
+- Supports concurrent operations with `asyncio.gather()`
+- Better performance for multiple I/O operations
+- Integrates with async frameworks (FastAPI, aiohttp, etc.)
 
 **Production App Configuration:**
 
@@ -411,9 +523,22 @@ The Docker Compose configuration is embedded in `app-compose.json`:
 
 **Important**: The `docker_compose_file` contains YAML content as a string, ensuring the volume binding for `/var/run/dstack.sock` is included.
 
+### Shared Methods
+
+All methods below are available in both synchronous and asynchronous clients with identical signatures and functionality:
+
+| Sync Method | Async Method | Description |
+|------------|--------------|-------------|
+| `client.info()` | `await async_client.info()` | Get TEE instance information |
+| `client.get_key(...)` | `await async_client.get_key(...)` | Derive deterministic keys |
+| `client.get_quote(...)` | `await async_client.get_quote(...)` | Generate attestation quote |
+| `client.get_tls_key(...)` | `await async_client.get_tls_key(...)` | Generate TLS certificate |
+| `client.emit_event(...)` | `await async_client.emit_event(...)` | Log custom events |
+| `client.is_reachable()` | `await async_client.is_reachable()` | Test connectivity |
+
 #### Methods
 
-##### `info() -> InfoResponse`
+##### `info() -> InfoResponse` / `async info() -> InfoResponse`
 
 Retrieves comprehensive information about the TEE instance.
 
