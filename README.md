@@ -4,7 +4,7 @@
 
 **Deploy containerized apps to TEE with end-to-end security in minutes.**
 
-[![GitHub Stars](https://img.shields.io/github/stars/dstack-tee/dstack?style=flat-square&logo=github)](https://github.com/dstack-tee/dstack)
+[![GitHub Stars](https://img.shields.io/github/stars/dstack-tee/dstack?style=flat-square&logo=github)](https://github.com/Dstack-TEE/dstack/stargazers)
 [![License](https://img.shields.io/github/license/dstack-tee/dstack?style=flat-square)](https://github.com/Dstack-TEE/dstack/blob/master/LICENSE)
 [![Telegram](https://img.shields.io/badge/Community-blue?style=flat-square&logo=telegram&logoColor=fff)](https://t.me/+UO4bS4jflr45YmUx)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/Dstack-TEE/dstack)
