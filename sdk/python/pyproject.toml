@@ -128,7 +128,7 @@ repository = "pypi"
 [tool.pdm.scripts]
 # Formatting scripts
 fmt = {composite = ["isort src/ tests/", "black src/ tests/"]}
-format = {call = "pdm:fmt"}
+format = {composite = ["isort src/ tests/", "black src/ tests/"]}
 
 # Linting scripts  
 lint = {composite = ["flake8 src/ tests/", "mypy src/"]}
@@ -139,8 +139,8 @@ test = "pytest"
 test-cov = "pytest --cov=src/"
 
 # Combined scripts
-check-all = {composite = ["pdm:fmt", "pdm:lint", "pdm:test"]}
-verify = {composite = ["pdm:check", "pdm:test"]}
+check-all = {composite = ["fmt", "lint", "test"]}
+verify = {composite = ["check", "test"]}
 
 [tool.pdm.dev-dependencies]
 solana = [
