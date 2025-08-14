@@ -67,7 +67,7 @@ async fn main() -> Result<()> {
                 cid: None,
                 note: String::new(),
             };
-            print_json(&client.deploy(config).await?);
+            print_json(&client.deploy(&config).await?);
         }
         Commands::Start { id } => {
             print_json(&client.start(&id).await?);
