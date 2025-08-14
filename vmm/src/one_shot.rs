@@ -268,25 +268,6 @@ Compose file content (first 200 chars):
     fs_err::write(&sys_config_path, serde_json::to_string(&sys_config)?)
         .context("Failed to write sys config")?;
 
-    // Pre-create all files that QEMU and the system expect to exist
-    // Note: Some files QEMU will create/overwrite, but the directory must exist
-    // and QEMU needs to be able to create them
-
-    // Create empty serial log file (QEMU will append to it)
-    let serial_log = vm_work_dir.serial_file();
-    fs_err::write(&serial_log, "").context("Failed to create serial log file")?;
-
-    // Create empty pty path placeholder (QEMU will replace this with actual pty path)
-    let serial_pty = vm_work_dir.serial_pty();
-    fs_err::write(&serial_pty, "").context("Failed to create serial pty file")?;
-
-    // Create empty stdout and stderr log files
-    let stdout_log = vm_work_dir.stdout_file();
-    fs_err::write(&stdout_log, "").context("Failed to create stdout log file")?;
-
-    let stderr_log = vm_work_dir.stderr_file();
-    fs_err::write(&stderr_log, "").context("Failed to create stderr log file")?;
-
     // Create vm-state.json with initial state
     vm_work_dir
         .set_started(false)
