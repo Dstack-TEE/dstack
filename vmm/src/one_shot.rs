@@ -1,6 +1,6 @@
 use crate::app::{Image, VmConfig, VmWorkDir};
 use crate::main_service;
-use crate::{config::Config, validation};
+use crate::config::Config;
 use anyhow::{Context, Result};
 
 pub async fn run_one_shot(
@@ -59,9 +59,9 @@ pub async fn run_one_shot(
     let vm_config_json = fs_err::read_to_string(vm_config_path)
         .with_context(|| format!("Failed to read VM configuration file: {}", vm_config_path))?;
 
-    // Parse with better error messages
-    let vm_config: VmConfiguration =
-        validation::parse_vm_config_with_validation(&vm_config_json, vm_config_path)?;
+    // Parse VM configuration
+    let vm_config: VmConfiguration = serde_json::from_str(&vm_config_json)
+        .with_context(|| format!("Failed to parse VM configuration from: {}", vm_config_path))?;
 
     // Calculate compose_hash using the same logic as main_service
     let compose_hash = {
