@@ -422,7 +422,7 @@ class AsyncDstackClient(BaseClient, BusinessMethodsMixin):
     def _get_client(self) -> httpx.AsyncClient:
         if self._client is None:
             self._client = httpx.AsyncClient(
-                transport=self.transport, base_url=self.base_url
+                transport=self.transport, base_url=self.base_url, timeout=0.5
             )
         return self._client
 
@@ -469,7 +469,7 @@ class DstackClient(BaseClient, BusinessMethodsMixin, metaclass=SyncMethodsMeta):
     def _get_client(self) -> httpx.Client:
         if self._client is None:
             self._client = httpx.Client(
-                transport=self.transport, base_url=self.base_url
+                transport=self.transport, base_url=self.base_url, timeout=0.5
             )
         return self._client
 
