@@ -4,19 +4,25 @@
 
 import { ethers } from 'ethers';
 import { BootInfo, BootResponse } from './types';
-import { DstackKms__factory } from '../typechain-types/factories/contracts/DstackKms__factory';
-import { DstackKms } from '../typechain-types/contracts/DstackKms';
-import { HardhatEthersProvider } from '@nomicfoundation/hardhat-ethers/internal/hardhat-ethers-provider';
+
+// Minimal ABI for DstackKms contract
+const DSTACK_KMS_ABI = [
+  "function isAppAllowed((address appId,bytes32 composeHash,address instanceId,bytes32 deviceId,bytes32 mrAggregated,bytes32 mrSystem,bytes32 osImageHash,string tcbStatus,string[] advisoryIds) bootInfo) view returns (bool, string)",
+  "function isKmsAllowed((address appId,bytes32 composeHash,address instanceId,bytes32 deviceId,bytes32 mrAggregated,bytes32 mrSystem,bytes32 osImageHash,string tcbStatus,string[] advisoryIds) bootInfo) view returns (bool, string)", 
+  "function gatewayAppId() view returns (string)",
+  "function appImplementation() view returns (address)"
+];
 
 export class EthereumBackend {
-  private provider: ethers.JsonRpcProvider | HardhatEthersProvider;
-  private kmsContract: DstackKms;
+  private provider: ethers.JsonRpcProvider;
+  private kmsContract: ethers.Contract;
 
-  constructor(provider: ethers.JsonRpcProvider | HardhatEthersProvider, kmsContractAddr: string) {
+  constructor(provider: ethers.JsonRpcProvider, kmsContractAddr: string) {
     this.provider = provider;
-    this.kmsContract = DstackKms__factory.connect(
+    this.kmsContract = new ethers.Contract(
       ethers.getAddress(kmsContractAddr),
-      this.provider
+      DSTACK_KMS_ABI,
+      provider
     );
   }
 

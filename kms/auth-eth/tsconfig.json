@@ -10,9 +10,9 @@
     "outDir": "./dist",
     "rootDir": ".",
     "resolveJsonModule": true,
-    "types": ["node", "jest", "hardhat"],
+    "types": ["node", "jest"],
     "baseUrl": "."
   },
-  "include": ["src/**/*", "test/**/*", "hardhat.config.ts", "typechain-types/**/*"],
+  "include": ["src/**/*"],
   "exclude": ["node_modules"]
 }
