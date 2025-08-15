@@ -282,14 +282,19 @@ Compose file content (first 200 chars):
         manifest: manifest.clone(),
         image,
         cid: one_shot_cid, // Avoid conflict with existing VMs
-        networking: config.networking,
         workdir: workdir_path.clone(),
         gateway_enabled: app_compose.gateway_enabled(),
     };
 
-    let process_config = vm_builder_config
+    let process_configs = vm_builder_config
         .config_qemu(&workdir_path, &config.cvm, &gpus)
         .context("Failed to build QEMU configuration")?;
+
+    // Get the main QEMU process config (first in the list)
+    let process_config = process_configs
+        .into_iter()
+        .next()
+        .context("No QEMU process configuration generated")?;
 
     // Build the QEMU command
     let mut full_command = vec![process_config.command.clone()];
