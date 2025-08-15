@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 [submodule "kms/auth-eth/lib/forge-std"]
 	path = kms/auth-eth/lib/forge-std
 	url = https://github.com/foundry-rs/forge-std
