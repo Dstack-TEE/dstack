@@ -1,4 +1,5 @@
 import warnings
+import asyncio
 
 import pytest
 from evidence_api.tdx.quote import TdxQuote
@@ -140,6 +141,7 @@ def test_sync_client_is_reachable():
     client = DstackClient()
     is_reachable = client.is_reachable()
     assert isinstance(is_reachable, bool)
+    assert is_reachable
 
 
 @pytest.mark.asyncio
@@ -148,6 +150,7 @@ async def test_async_client_is_reachable():
     client = AsyncDstackClient()
     is_reachable = await client.is_reachable()
     assert isinstance(is_reachable, bool)
+    assert is_reachable
 
 
 def test_tls_key_as_uint8array():
@@ -272,8 +275,10 @@ def test_tappd_client_derive_key_deprecated():
             client.derive_key("/", "test")
             # Should have warnings for both constructor and derive_key
             warning_messages = [str(warning.message) for warning in w]
-            assert any("TappdClient is deprecated" in msg for msg in warning_messages)
-            assert any("derive_key is deprecated" in msg for msg in warning_messages)
+            assert any(
+                "TappdClient is deprecated" in msg for msg in warning_messages)
+            assert any(
+                "derive_key is deprecated" in msg for msg in warning_messages)
         except Exception:
             # It's OK if this fails due to simulator not supporting the old endpoint
             pass
@@ -289,8 +294,10 @@ def test_tappd_client_tdx_quote_deprecated():
             client.tdx_quote("test data", "raw")
             # Should have warnings for both constructor and tdx_quote
             warning_messages = [str(warning.message) for warning in w]
-            assert any("TappdClient is deprecated" in msg for msg in warning_messages)
-            assert any("tdx_quote is deprecated" in msg for msg in warning_messages)
+            assert any(
+                "TappdClient is deprecated" in msg for msg in warning_messages)
+            assert any(
+                "tdx_quote is deprecated" in msg for msg in warning_messages)
         except Exception:
             # It's OK if this fails due to simulator not supporting the old endpoint
             pass
@@ -321,7 +328,8 @@ async def test_async_tappd_client_derive_key_deprecated():
             assert any(
                 "AsyncTappdClient is deprecated" in msg for msg in warning_messages
             )
-            assert any("derive_key is deprecated" in msg for msg in warning_messages)
+            assert any(
+                "derive_key is deprecated" in msg for msg in warning_messages)
         except Exception:
             # It's OK if this fails due to simulator not supporting the old endpoint
             pass
@@ -341,7 +349,8 @@ async def test_async_tappd_client_tdx_quote_deprecated():
             assert any(
                 "AsyncTappdClient is deprecated" in msg for msg in warning_messages
             )
-            assert any("tdx_quote is deprecated" in msg for msg in warning_messages)
+            assert any(
+                "tdx_quote is deprecated" in msg for msg in warning_messages)
         except Exception:
             # It's OK if this fails due to simulator not supporting the old endpoint
             pass
@@ -353,3 +362,42 @@ async def test_async_tappd_client_is_reachable():
     client = AsyncTappdClient()
     is_reachable = await client.is_reachable()
     assert isinstance(is_reachable, bool)
+    assert is_reachable
+
+
+# Test sync client called from async context
+@pytest.mark.asyncio
+async def test_sync_client_in_async_context_get_key():
+    """Test that sync client works when called from async context."""
+    client = DstackClient()
+    result = client.get_key()
+    assert isinstance(result, GetKeyResponse)
+    assert isinstance(result.decode_key(), bytes)
+    assert len(result.decode_key()) == 32
+
+
+@pytest.mark.asyncio
+async def test_sync_client_in_async_context_get_info():
+    """Test that sync client info works when called from async context."""
+    client = DstackClient()
+    result = client.info()
+    check_info_response(result)
+
+
+@pytest.mark.asyncio
+async def test_mixed_sync_async_calls():
+    """Test mixing sync and async client calls in the same async context."""
+    sync_client = DstackClient()
+    async_client = AsyncDstackClient()
+
+    # Call sync client from async context
+    sync_result = sync_client.get_key()
+    assert isinstance(sync_result, GetKeyResponse)
+
+    # Call async client normally
+    async_result = await async_client.get_key()
+    assert isinstance(async_result, GetKeyResponse)
+
+    # Both should work and return valid results
+    assert len(sync_result.decode_key()) == 32
+    assert len(async_result.decode_key()) == 32
