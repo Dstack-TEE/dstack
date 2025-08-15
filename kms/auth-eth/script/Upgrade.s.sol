@@ -1,4 +1,9 @@
-// SPDX-License-Identifier: MIT
+/*
+ * SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 pragma solidity ^0.8.22;
 
 import "forge-std/Script.sol";
