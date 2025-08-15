@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 from dstack_sdk.verify_env_encrypt_public_key import verify_env_encrypt_public_key
 from dstack_sdk.verify_env_encrypt_public_key import verify_signature_simple
 

@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Script to test mypy type checking on dstack client methods."""
 
 import os

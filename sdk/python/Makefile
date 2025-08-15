@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 .PHONY: install lint format type-check type-check-tests test check-all verify
 
 # Install dependencies including linting tools

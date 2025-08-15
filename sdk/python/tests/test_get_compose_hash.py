@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 from dstack_sdk.get_compose_hash import AppCompose
 from dstack_sdk.get_compose_hash import DockerConfig
 from dstack_sdk.get_compose_hash import get_compose_hash

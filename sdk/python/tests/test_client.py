@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2024-2025 Phala Network <dstack@phala.network>
+# SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
 #
 # SPDX-License-Identifier: Apache-2.0
 

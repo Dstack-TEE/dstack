@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Verify ECDSA signatures of environment-encrypt public keys.
 
 This module prepares the message per dstack convention and offers a simplified
