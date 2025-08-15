@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2024-2025 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
 FROM gramineproject/gramine:v1.5@sha256:615849089db84477f03cd13209c08eaf6b6a3a68b4df733e097db56781935589
 
 RUN apt-get update && apt-get install -y \

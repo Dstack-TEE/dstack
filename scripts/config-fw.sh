@@ -1,4 +1,8 @@
 #!/bin/bash
+
+# SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+# SPDX-License-Identifier: Apache-2.0
+
 set -e
 
 # dstack runs Confidential VMs (CVMs) with QEMU user networking. To prevent VMs from accessing 127.0.0.1,

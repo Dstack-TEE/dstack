@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 FROM rust:1.86.0@sha256:300ec56abce8cc9448ddea2172747d048ed902a3090e6b57babb2bf19f754081 AS gateway-builder
 ARG DSTACK_REV
 WORKDIR /src

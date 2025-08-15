@@ -1,3 +1,8 @@
+// SPDX-FileCopyrightText: © 2025 Created-for-a-purpose <rachitchahar@gmail.com>
+// SPDX-FileCopyrightText: © 2025 Daniel Sharifi <danielsharifi@outlook.com>
+//
+// SPDX-License-Identifier: Apache-2.0
+
 use alloy::signers::local::PrivateKeySigner;
 use dstack_sdk_types::dstack::GetKeyResponse;
 

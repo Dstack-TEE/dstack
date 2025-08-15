@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+//
+// SPDX-License-Identifier: Apache-2.0
+
 import { keccak_256 } from "@noble/hashes/sha3";
 import { secp256k1 } from "@noble/curves/secp256k1";
 

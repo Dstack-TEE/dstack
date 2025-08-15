@@ -1,5 +1,9 @@
 #!/bin/sh
 
+# SPDX-FileCopyrightText: © 2024 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 get_conf_endpoint() {
     grep "Endpoint" /etc/wireguard/wg0.conf | awk "{print \$3}"
 }

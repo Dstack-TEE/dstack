@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2024-2025 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 workers = 8
 max_blocking = 64
 ident = "dstack Gateway"

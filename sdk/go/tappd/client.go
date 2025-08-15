@@ -1,3 +1,8 @@
+// SPDX-FileCopyrightText: © 2024 Nethermind <dstack@nethermind.io>
+// SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+//
+// SPDX-License-Identifier: Apache-2.0
+
 // Provides a dstack SDK Tappd client and related utilities
 //
 // Author: Franco Barpp Gomes <franco@nethermind.io>

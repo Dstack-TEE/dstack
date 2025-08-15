@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+//
+// SPDX-License-Identifier: Apache-2.0
+
 use crate::tdvf::Tdvf;
 use crate::util::debug_print_log;
 use crate::{kernel, TdxMeasurements};

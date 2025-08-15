@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2024-2025 Phala Network <dstack@phala.network>
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! A CertBot client for requesting certificates from Let's Encrypt.
 //!
 //! This library provides a simple interface for requesting and managing SSL/TLS certificates

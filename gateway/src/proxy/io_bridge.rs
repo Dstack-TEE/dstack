@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2024-2025 Phala Network <dstack@phala.network>
+//
+// SPDX-License-Identifier: Apache-2.0
+
 use crate::config::ProxyConfig;
 use anyhow::{Context, Result};
 use bytes::BytesMut;

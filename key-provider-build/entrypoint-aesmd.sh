@@ -1,4 +1,9 @@
 #!/bin/sh
+
+# SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 echo "Starting AESM service..."
 # Make sure the AESM directory exists with proper permissions
 mkdir -p /var/run/aesmd

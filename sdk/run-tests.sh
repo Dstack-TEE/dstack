@@ -1,5 +1,10 @@
 #!/bin/bash
 
+# SPDX-FileCopyrightText: © 2025 Daniel Sharifi <danielsharifi@outlook.com>
+# SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 set -e
 
 export DSTACK_SIMULATOR_ENDPOINT=$(realpath simulator/dstack.sock)

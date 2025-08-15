@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+//
+// SPDX-License-Identifier: Apache-2.0
+
 import { expect } from "chai";
 import { ethers } from "hardhat";
 import { DstackApp } from "../typechain-types";

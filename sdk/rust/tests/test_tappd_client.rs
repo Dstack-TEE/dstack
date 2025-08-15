@@ -1,3 +1,8 @@
+// SPDX-FileCopyrightText: © 2025 Daniel Sharifi <danielsharifi@outlook.com>
+// SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+//
+// SPDX-License-Identifier: Apache-2.0
+
 use dstack_sdk::tappd_client::TappdClient;
 use dstack_sdk_types::tappd::DeriveKeyResponse;
 use std::env;

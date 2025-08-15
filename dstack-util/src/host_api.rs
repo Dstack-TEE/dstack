@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2024-2025 Phala Network <dstack@phala.network>
+//
+// SPDX-License-Identifier: Apache-2.0
+
 use crate::utils::{deserialize_json_file, sha256, SysConfig};
 use anyhow::{anyhow, bail, Context, Result};
 use dstack_types::shared_filenames::{HOST_SHARED_DIR, SYS_CONFIG};

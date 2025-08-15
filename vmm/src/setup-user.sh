@@ -1,5 +1,9 @@
 #!/bin/bash
 
+# SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 # dstack currently runs the CVMs with qemu user networking. To prevent the VM to access 127.0.0.1, we need to
 # run the VM as a different user and setup the iptables rules to DROP the traffic to 127.0.0.1.
 

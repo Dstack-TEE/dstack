@@ -1,3 +1,8 @@
+// SPDX-FileCopyrightText: © 2024 Nethermind <contact@nethermind.io>
+// SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+//
+// SPDX-License-Identifier: Apache-2.0
+
 module github.com/Dstack-TEE/dstack/sdk/go
 
 go 1.23.0

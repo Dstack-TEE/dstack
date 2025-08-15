@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2024-2025 Phala Network <dstack@phala.network>
+//
+// SPDX-License-Identifier: Apache-2.0
+
 import { expect, describe, it, vi } from 'vitest'
 import { DstackClient, TappdClient } from '../index'
 

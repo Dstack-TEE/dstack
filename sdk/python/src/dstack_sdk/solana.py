@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 from solders.keypair import Keypair
 
 from .dstack_client import GetKeyResponse

@@ -1,5 +1,9 @@
 #![allow(dead_code)]
 
+// SPDX-FileCopyrightText: © 2024 Phala Network <dstack@phala.network>
+//
+// SPDX-License-Identifier: Apache-2.0
+
 use crate::codecs::VecOf;
 
 pub const TPM_ALG_ERROR: u16 = 0x0;

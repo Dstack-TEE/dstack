@@ -1,6 +1,9 @@
-// Provides a dstack SDK client and related utilities
+// SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+// SPDX-FileCopyrightText: © 2024 Nethermind <contact@nethermind.io>
 //
-// Author: Franco Barpp Gomes <franco@nethermind.io>
+// SPDX-License-Identifier: Apache-2.0
+
+// Provides a dstack SDK client and related utilities
 package dstack
 
 import (

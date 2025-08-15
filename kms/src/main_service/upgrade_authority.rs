@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2024-2025 Phala Network <dstack@phala.network>
+//
+// SPDX-License-Identifier: Apache-2.0
+
 use crate::config::AuthApi;
 use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};

@@ -1,3 +1,8 @@
+// SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+// © 2025 Phala Network <dstack@phala.network>
+//
+// SPDX-License-Identifier: Apache-2.0
+
 import { run } from "hardhat";
 
 async function main() {

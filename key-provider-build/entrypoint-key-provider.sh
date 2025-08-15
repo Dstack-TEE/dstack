@@ -1,4 +1,9 @@
 #!/bin/sh
+
+# SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 echo "Waiting for AESM socket to be available..."
 AESM_SOCKET="/var/run/aesmd/aesm.socket"
 for i in $(seq 1 30); do

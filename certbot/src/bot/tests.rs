@@ -1,5 +1,9 @@
 #![cfg(not(test))]
 
+// SPDX-FileCopyrightText: © 2024 Phala Network <dstack@phala.network>
+//
+// SPDX-License-Identifier: Apache-2.0
+
 use instant_acme::LetsEncrypt;
 
 use super::*;

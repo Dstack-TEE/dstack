@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+//
+// SPDX-License-Identifier: Apache-2.0
+
 import { expect, describe, it, vi, beforeEach, afterEach } from 'vitest'
 import { send_rpc_request, __version__ } from '../send-rpc-request'
 import http from 'http'
