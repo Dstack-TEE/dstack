@@ -94,7 +94,7 @@ precedence = "override"
 [[annotations]]
 path = "kms/auth-eth/lib/openzeppelin-foundry-upgrades/**"
 SPDX-FileCopyrightText = "NONE"
-SPDX-License-Identifier = "AGPL-3.0-or-later"
+SPDX-License-Identifier = "MIT"
 
 [[annotations]]
 path = "kms/auth-eth/lib/forge-std/**"
