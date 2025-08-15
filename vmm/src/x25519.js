@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2016 Dmitry Chestnykh, © 2019 Harvey Connor
+// SPDX-License-Identifier: MIT
+
 (() => {
     let _0 = new Uint8Array(16);
     let _9 = new Uint8Array(32);

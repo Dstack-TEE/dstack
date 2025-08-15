@@ -1,3 +1,10 @@
+// SPDX-FileCopyrightText: © 2025 Created-for-a-purpose <rachitchahar@gmail.com>
+// SPDX-FileCopyrightText: © 2025 Daniel Sharifi <danielsharifi@outlook.com>
+// SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+// SPDX-FileCopyrightText: © 2025 tuddman <tuddman@users.noreply.github.com>
+//
+// SPDX-License-Identifier: Apache-2.0
+
 use dcap_qvl::quote::Quote;
 use dstack_sdk::dstack_client::DstackClient as AsyncDstackClient;
 

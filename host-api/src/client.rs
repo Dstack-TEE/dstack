@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2024 Phala Network <dstack@phala.network>
+//
+// SPDX-License-Identifier: Apache-2.0
+
 use crate::host_api_client::HostApiClient;
 use http_client::prpc::PrpcClient;
 

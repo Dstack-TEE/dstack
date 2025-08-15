@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2024 Phala Network <dstack@phala.network>
+//
+// SPDX-License-Identifier: Apache-2.0
+
 fn main() {
     prpc_build::configure()
         .out_dir("./src/generated")

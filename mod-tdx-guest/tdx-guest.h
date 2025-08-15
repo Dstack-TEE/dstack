@@ -1,4 +1,6 @@
-/* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
+// SPDX-FileCopyrightText: © 2022 Intel Corporation
+// SPDX-FileCopyrightText: © 2024 Phala Network <dstack@phala.network>
+// SPDX-License-Identifier: GPL-2.0-only WITH Linux-syscall-note
 /*
  * Userspace interface for TDX guest driver
  *

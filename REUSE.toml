@@ -1,0 +1,159 @@
+version = 1
+SPDX-PackageName = "dstack"
+SPDX-PackageSupplier = "Phala Network <dstack@phala.network>"
+SPDX-PackageDownloadLocation = "https://github.com/Dstack-TEE/dstack"
+
+# Non source files
+
+[[annotations]]
+path = "**/*.md"
+SPDX-FileCopyrightText = "Copyright (c) 2024-2025 The Project Contributors"
+SPDX-License-Identifier = "Apache-2.0"
+
+[[annotations]]
+path = "**/requirements.txt"
+SPDX-FileCopyrightText = "Copyright (c) 2024-2025 The Project Contributors"
+SPDX-License-Identifier = "Apache-2.0"
+
+[[annotations]]
+path = [
+    "**/package.json",
+    "**/openapi.json",
+    "**/tsconfig.json",
+    "**/tsconfig.node.json",
+    "**/tsconfig.browser.json",
+    "kms/auth-eth-bun/.oxlintrc.json",
+    "package-lock.json",
+    "**/package-lock.json",
+    "kms/auth-eth/.openzeppelin/unknown-2035.json",
+    "kms/auth-mock/.oxlintrc.json",
+    "sdk/simulator/*.json",
+    "sdk/go/go.sum",
+    "kms/dstack-app/builder/shared/kms-pinned-packages.txt",
+    "kms/dstack-app/builder/shared/qemu-pinned-packages.txt",
+    "gateway/dstack-app/builder/shared/builder-pinned-packages.txt",
+    "gateway/dstack-app/builder/shared/pinned-packages.txt",
+]
+SPDX-FileCopyrightText = "Copyright (c) 2024-2025 The Project Contributors"
+SPDX-License-Identifier = "Apache-2.0"
+
+[[annotations]]
+path = [
+    "gateway/templates/wg.conf",
+    "guest-agent/templates/metrics.tpl",
+    "key-provider-build/sgx_default_qcnl.conf",
+]
+SPDX-FileCopyrightText = "Copyright (c) 2024-2025 The Project Contributors"
+SPDX-License-Identifier = "Apache-2.0"
+
+[[annotations]]
+path = [
+    ".cursorrules",
+    ".mailmap",
+    "**/.gitignore",
+    "**/.npmignore",
+]
+SPDX-FileCopyrightText = "Copyright (c) 2024-2025 The Project Contributors"
+SPDX-License-Identifier = "Apache-2.0"
+
+[[annotations]]
+path = "basefiles/*"
+SPDX-FileCopyrightText = "Copyright (c) 2024-2025 The Project Contributors"
+SPDX-License-Identifier = "Apache-2.0"
+
+[[annotations]]
+path = [
+    "docs/security/dstack-audit.pdf",
+    "sdk/simulator/quote.hex",
+    "ra-tls/assets/tdx_quote",
+    "cc-eventlog/samples/ccel.bin",
+]
+SPDX-FileCopyrightText = "NONE"
+SPDX-License-Identifier = "CC0-1.0"
+
+# Artworks
+
+
+[[annotations]]
+path = [
+    "docs/assets/**",
+    "docs/security-guide/assets/**",
+    "dstack-logo.svg",
+]
+SPDX-FileCopyrightText = "Copyright (c) 2024-2025 The Project Contributors"
+SPDX-License-Identifier = "Apache-2.0"
+
+# Vendor code
+
+[[annotations]]
+path = "kms/auth-eth/lib/openzeppelin-contracts-upgradeable/**"
+SPDX-FileCopyrightText = "Copyright (c) 2016-2025 Zeppelin Group Ltd"
+SPDX-License-Identifier = "MIT"
+precedence = "override"
+
+[[annotations]]
+path = "kms/auth-eth/lib/openzeppelin-foundry-upgrades/**"
+SPDX-FileCopyrightText = "NONE"
+SPDX-License-Identifier = "MIT"
+
+[[annotations]]
+path = "kms/auth-eth/lib/forge-std/**"
+SPDX-FileCopyrightText = "NONE"
+SPDX-License-Identifier = "Apache-2.0"
+
+[[annotations]]
+path = "tdx-attest-sys/csrc/*"
+SPDX-FileCopyrightText = "Copyright (C) 2011-2021 Intel Corporation. All rights reserved."
+SPDX-License-Identifier = "BSD-3-Clause"
+
+[[annotations]]
+path = "mod-tdx-guest/Kconfig"
+SPDX-FileCopyrightText = "© 2022 Intel Corporation"
+SPDX-License-Identifier = "GPL-2.0-only"
+
+# Generated files
+
+[[annotations]]
+path = "kms/auth-eth/typechain-types/**"
+SPDX-FileCopyrightText = "NONE"
+SPDX-License-Identifier = "CC0-1.0"
+
+[[annotations]]
+path = "**/*.lock"
+SPDX-FileCopyrightText = "NONE"
+SPDX-License-Identifier = "CC0-1.0"
+
+[[annotations]]
+path = "**/*.lockb"
+SPDX-FileCopyrightText = "NONE"
+SPDX-License-Identifier = "CC0-1.0"
+
+[[annotations]]
+path = "**/*.lockb"
+SPDX-FileCopyrightText = "NONE"
+SPDX-License-Identifier = "CC0-1.0"
+
+[[annotations]]
+path = "**/*.snap"
+SPDX-FileCopyrightText = "NONE"
+SPDX-License-Identifier = "CC0-1.0"
+
+[[annotations]]
+path = "**/src/generated.rs"
+SPDX-FileCopyrightText = "NONE"
+SPDX-License-Identifier = "CC0-1.0"
+
+[[annotations]]
+path = "**/src/generated/*"
+SPDX-FileCopyrightText = "NONE"
+SPDX-License-Identifier = "CC0-1.0"
+
+[[annotations]]
+path = "gateway/assets/*"
+SPDX-FileCopyrightText = "NONE"
+SPDX-License-Identifier = "CC0-1.0"
+
+[[annotations]]
+path = "guest-api/src/generated/*"
+SPDX-FileCopyrightText = "NONE"
+SPDX-License-Identifier = "CC0-1.0"

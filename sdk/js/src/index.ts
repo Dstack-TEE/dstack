@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2024-2025 Phala Network <dstack@phala.network>
+//
+// SPDX-License-Identifier: Apache-2.0
+
 import fs from 'fs'
 import crypto from 'crypto'
 import { send_rpc_request } from './send-rpc-request'

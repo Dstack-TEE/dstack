@@ -1,5 +1,9 @@
 #!/bin/bash
 
+# SPDX-FileCopyrightText: © 2024 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 VMDIR=$1
 IMAGE_PATH=./images/$(jq -r '.image' ${VMDIR}/vm-manifest.json)
 IMG_METADATA=${IMAGE_PATH}/metadata.json

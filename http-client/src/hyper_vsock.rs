@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2024 Phala Network <dstack@phala.network>
+//
+// SPDX-License-Identifier: Apache-2.0
+
 use hyper::{body::Body, rt::ReadBufCursor, Uri};
 use hyper_util::{
     client::legacy::{

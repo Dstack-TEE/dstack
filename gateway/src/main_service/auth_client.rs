@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+//
+// SPDX-License-Identifier: Apache-2.0
+
 use crate::config::AuthConfig;
 use anyhow::{Context, Result};
 use ra_tls::attestation::AppInfo;

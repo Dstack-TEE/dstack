@@ -35,3 +35,19 @@ git-cliff --output CHANGELOG.md
 ```
 
 The changelog follows the [Keep a Changelog](https://keepachangelog.com/) format and includes GitHub integration for PR links and contributor recognition.
+
+## License
+
+This project uses SPDX headers for license compliance. You should add appropriate SPDX headers to all your source files.
+
+We have a script to automatically add SPDX headers based on git blame data:
+
+```bash
+python3 scripts/add-spdx-attribution.py --file path/to/file.rs
+```
+
+Before submitting your changes, verify SPDX compliance using the [REUSE tool](https://github.com/fsfe/reuse-tool):
+
+```bash
+reuse lint
+```

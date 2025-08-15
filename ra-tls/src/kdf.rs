@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2024 Phala Network <dstack@phala.network>
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! Key derivation functions.
 use anyhow::{anyhow, Context, Result};
 use p256::pkcs8::{DecodePrivateKey, EncodePrivateKey};

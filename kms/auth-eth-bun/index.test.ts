@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+//
+// SPDX-License-Identifier: Apache-2.0
+
 import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
 import openApiSpec from './openapi.json';
 

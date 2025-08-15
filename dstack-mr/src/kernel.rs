@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+//
+// SPDX-License-Identifier: Apache-2.0
+
 use crate::{measure_log, measure_sha384, num::read_le, utf16_encode, util::debug_print_log};
 use anyhow::{bail, Context, Result};
 use object::pe;

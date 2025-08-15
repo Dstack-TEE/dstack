@@ -1,4 +1,6 @@
-# SPDX-License-Identifier: GPL-2.0
+# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-FileCopyrightText: © 2022 Intel Corporation
+# SPDX-FileCopyrightText: © 2024 Phala Network <dstack@phala.network>
 
 SRC := $(shell pwd)
 KERNEL_SRC ?= /lib/modules/$(shell uname -r)/build

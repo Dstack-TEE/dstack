@@ -1,4 +1,7 @@
-/* SPDX-License-Identifier: GPL-2.0 */
+/*
+ * Copyright (c) 2023, Intel Inc
+ * SPDX-License-Identifier: GPL-2.0-only WITH Linux-syscall-note
+ */
 #include <asm/asm-offsets.h>
 #include <asm/asm.h>
 

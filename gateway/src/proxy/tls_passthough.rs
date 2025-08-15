@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2024-2025 Phala Network <dstack@phala.network>
+//
+// SPDX-License-Identifier: Apache-2.0
+
 use anyhow::{Context, Result};
 use std::fmt::Debug;
 use tokio::{io::AsyncWriteExt, net::TcpStream, task::JoinSet, time::timeout};

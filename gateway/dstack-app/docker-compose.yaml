@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 services:
   gateway:
     image: kvin/gateway@sha256:27fc6872836712c640d22397e4cf86c3e771ebed0116e075dca0eb170d9a9081

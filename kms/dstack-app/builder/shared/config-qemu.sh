@@ -1,5 +1,9 @@
 #!/bin/bash
 
+# SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 BUILD_DIR="$1"
 PREFIX="$2"
 if [ -z "$BUILD_DIR" ]; then

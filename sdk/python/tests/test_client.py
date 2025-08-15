@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2024-2025 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 from dstack_sdk.dstack_client import TcbInfo
 from dstack_sdk.dstack_client import InfoResponse
 import hashlib

@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+//
+// SPDX-License-Identifier: Apache-2.0
+
 import crypto from "crypto";
 
 type SortableValue = string | number | boolean | null | undefined | SortableObject | SortableArray;

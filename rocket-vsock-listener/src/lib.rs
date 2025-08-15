@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2024 Phala Network <dstack@phala.network>
+//
+// SPDX-License-Identifier: Apache-2.0
+
 use derive_more::Display;
 use rocket::listener::{Connection, Endpoint, Listener};
 use rocket::tokio::io::{AsyncRead, AsyncWrite, ReadBuf};

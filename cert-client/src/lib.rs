@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+//
+// SPDX-License-Identifier: Apache-2.0
+
 use anyhow::{Context, Result};
 use dstack_kms_rpc::{kms_client::KmsClient, SignCertRequest};
 use dstack_types::{AppKeys, KeyProvider};
