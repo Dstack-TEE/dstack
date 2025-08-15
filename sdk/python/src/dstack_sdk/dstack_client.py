@@ -198,6 +198,8 @@ class BaseClient:
 class DstackClient(BaseClient):
     """Synchronous client for dstack services."""
 
+    PATH_PREFIX = "/"
+
     def __init__(self, endpoint: str | None = None):
         """Initialize client with HTTP or Unix-socket transport.
 
@@ -215,8 +217,9 @@ class DstackClient(BaseClient):
             self.transport = httpx.HTTPTransport(uds=endpoint)
             self.base_url = "http://localhost"
 
-    def _send_rpc_request(self, path: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    def _send_rpc_request(self, method: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         """Send an RPC request and return the parsed JSON response."""
+        path = self.PATH_PREFIX + method
         with httpx.Client(transport=self.transport, base_url=self.base_url) as client:
             response = client.post(
                 path,
@@ -238,7 +241,7 @@ class DstackClient(BaseClient):
     ) -> GetKeyResponse:
         """Derive a key from the given path and purpose."""
         data: Dict[str, Any] = {"path": path or "", "purpose": purpose or ""}
-        result = self._send_rpc_request("/GetKey", data)
+        result = self._send_rpc_request("GetKey", data)
         return GetKeyResponse(**result)
 
     def get_quote(
@@ -254,12 +257,12 @@ class DstackClient(BaseClient):
         if len(report_bytes) > 64:
             raise ValueError("report_data must be less than 64 bytes")
         hex = binascii.hexlify(report_bytes).decode()
-        result = self._send_rpc_request("/GetQuote", {"report_data": hex})
+        result = self._send_rpc_request("GetQuote", {"report_data": hex})
         return GetQuoteResponse(**result)
 
     def info(self) -> InfoResponse:
         """Fetch service information including parsed TCB info."""
-        result = self._send_rpc_request("/Info", {})
+        result = self._send_rpc_request("Info", {})
         return InfoResponse.parse_response(result)
 
     def emit_event(
@@ -273,7 +276,7 @@ class DstackClient(BaseClient):
 
         payload_bytes: bytes = payload.encode() if isinstance(payload, str) else payload
         hex_payload = binascii.hexlify(payload_bytes).decode()
-        self._send_rpc_request("/EmitEvent", {"event": event, "payload": hex_payload})
+        self._send_rpc_request("EmitEvent", {"event": event, "payload": hex_payload})
         return None
 
     def get_tls_key(
@@ -294,7 +297,7 @@ class DstackClient(BaseClient):
         if alt_names:
             data["alt_names"] = list(alt_names)
 
-        result = self._send_rpc_request("/GetTlsKey", data)
+        result = self._send_rpc_request("GetTlsKey", data)
         return GetTlsKeyResponse(**result)
 
     def is_reachable(self) -> bool:
@@ -320,6 +323,8 @@ class DstackClient(BaseClient):
 class AsyncDstackClient(BaseClient):
     """Asynchronous client for dstack services."""
 
+    PATH_PREFIX = "/"
+
     def __init__(self, endpoint: str | None = None):
         """Initialize async client with HTTP or Unix-socket transport."""
         endpoint = get_endpoint(endpoint)
@@ -334,9 +339,10 @@ class AsyncDstackClient(BaseClient):
             self.base_url = "http://localhost"
 
     async def _send_rpc_request(
-        self, path: str, payload: Dict[str, Any]
+        self, method: str, payload: Dict[str, Any]
     ) -> Dict[str, Any]:
         """Send an RPC request asynchronously and return parsed JSON."""
+        path = self.PATH_PREFIX + method
         async with httpx.AsyncClient(
             transport=self.transport, base_url=self.base_url
         ) as client:
@@ -360,7 +366,7 @@ class AsyncDstackClient(BaseClient):
     ) -> GetKeyResponse:
         """Derive a key from the given path and purpose."""
         data: Dict[str, Any] = {"path": path or "", "purpose": purpose or ""}
-        result = await self._send_rpc_request("/GetKey", data)
+        result = await self._send_rpc_request("GetKey", data)
         return GetKeyResponse(**result)
 
     async def get_quote(
@@ -376,12 +382,12 @@ class AsyncDstackClient(BaseClient):
         if len(report_bytes) > 64:
             raise ValueError("report_data must be less than 64 bytes")
         hex = binascii.hexlify(report_bytes).decode()
-        result = await self._send_rpc_request("/GetQuote", {"report_data": hex})
+        result = await self._send_rpc_request("GetQuote", {"report_data": hex})
         return GetQuoteResponse(**result)
 
     async def info(self) -> InfoResponse:
         """Fetch service information including parsed TCB info."""
-        result = await self._send_rpc_request("/Info", {})
+        result = await self._send_rpc_request("Info", {})
         return InfoResponse.parse_response(result)
 
     async def emit_event(
@@ -396,7 +402,7 @@ class AsyncDstackClient(BaseClient):
         payload_bytes: bytes = payload.encode() if isinstance(payload, str) else payload
         hex_payload = binascii.hexlify(payload_bytes).decode()
         await self._send_rpc_request(
-            "/EmitEvent", {"event": event, "payload": hex_payload}
+            "EmitEvent", {"event": event, "payload": hex_payload}
         )
         return None
 
@@ -418,7 +424,7 @@ class AsyncDstackClient(BaseClient):
         if alt_names:
             data["alt_names"] = list(alt_names)
 
-        result = await self._send_rpc_request("/GetTlsKey", data)
+        result = await self._send_rpc_request("GetTlsKey", data)
         return GetTlsKeyResponse(**result)
 
     async def is_reachable(self) -> bool:
@@ -446,6 +452,7 @@ class TappdClient(DstackClient):
 
     DEPRECATED: Use ``DstackClient`` instead.
     """
+    PATH_PREFIX = "/prpc/Tappd."
 
     def __init__(self, endpoint: str | None = None):
         """Initialize deprecated tappd client wrapper."""
@@ -482,7 +489,7 @@ class TappdClient(DstackClient):
         if alt_names:
             data["alt_names"] = alt_names
 
-        result = self._send_rpc_request("/prpc/Tappd.DeriveKey", data)
+        result = self._send_rpc_request("DeriveKey", data)
         return GetTlsKeyResponse(**result)
 
     def tdx_quote(
@@ -517,7 +524,7 @@ class TappdClient(DstackClient):
 
         payload = {"report_data": hex_data, "hash_algorithm": hash_algorithm or "raw"}
 
-        result = self._send_rpc_request("/prpc/Tappd.TdxQuote", payload)
+        result = self._send_rpc_request("TdxQuote", payload)
 
         if "error" in result:
             raise RuntimeError(result["error"])
@@ -530,6 +537,7 @@ class AsyncTappdClient(AsyncDstackClient):
 
     DEPRECATED: Use ``AsyncDstackClient`` instead.
     """
+    PATH_PREFIX = "/prpc/Tappd."
 
     def __init__(self, endpoint: str | None = None):
         """Initialize deprecated async tappd client wrapper."""
@@ -566,7 +574,7 @@ class AsyncTappdClient(AsyncDstackClient):
         if alt_names:
             data["alt_names"] = alt_names
 
-        result = await self._send_rpc_request("/prpc/Tappd.DeriveKey", data)
+        result = await self._send_rpc_request("DeriveKey", data)
         return GetTlsKeyResponse(**result)
 
     async def tdx_quote(
@@ -601,7 +609,7 @@ class AsyncTappdClient(AsyncDstackClient):
 
         payload = {"report_data": hex_data, "hash_algorithm": hash_algorithm or "raw"}
 
-        result = await self._send_rpc_request("/prpc/Tappd.TdxQuote", payload)
+        result = await self._send_rpc_request("TdxQuote", payload)
 
         if "error" in result:
             raise RuntimeError(result["error"])
