@@ -1,4 +1,4 @@
-.PHONY: install lint format type-check test check-all verify
+.PHONY: install lint format type-check type-check-tests test check-all verify
 
 # Install dependencies including linting tools
 install:
@@ -18,6 +18,10 @@ lint:
 # Run type checking only
 type-check:
 	pdm run mypy src/
+
+# Run type checking on tests specifically  
+type-check-tests:
+	pdm run mypy tests/test_mypy_check.py tests/test_typing.py
 
 # Run tests
 test:

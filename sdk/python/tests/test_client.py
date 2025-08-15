@@ -107,7 +107,7 @@ async def test_replay_rtmr():
     client = AsyncDstackClient()
     result = await client.get_quote("test")
     # TODO evidence_api is a bit out-of-date, we need an up-to-date implementation.
-    tdxQuote = TdxQuote(bytes.fromhex(result.quote))
+    tdxQuote = TdxQuote(bytearray(bytes.fromhex(result.quote)))
     rtmrs = result.replay_rtmrs()
     assert rtmrs[0] == tdxQuote.body.rtmr0.hex()
     assert rtmrs[1] == tdxQuote.body.rtmr1.hex()
@@ -132,7 +132,7 @@ async def test_report_data():
     reportdata = "test"
     client = AsyncDstackClient()
     result = await client.get_quote(reportdata)
-    tdxQuote = TdxQuote(result.decode_quote())
+    tdxQuote = TdxQuote(bytearray(result.decode_quote()))
     reportdata = reportdata.encode("utf-8") + b"\x00" * (64 - len(reportdata))
     assert reportdata == tdxQuote.body.reportdata
 
@@ -276,10 +276,8 @@ def test_tappd_client_derive_key_deprecated():
             client.derive_key("/", "test")
             # Should have warnings for both constructor and derive_key
             warning_messages = [str(warning.message) for warning in w]
-            assert any(
-                "TappdClient is deprecated" in msg for msg in warning_messages)
-            assert any(
-                "derive_key is deprecated" in msg for msg in warning_messages)
+            assert any("TappdClient is deprecated" in msg for msg in warning_messages)
+            assert any("derive_key is deprecated" in msg for msg in warning_messages)
         except Exception:
             # It's OK if this fails due to simulator not supporting the old endpoint
             pass
@@ -295,10 +293,8 @@ def test_tappd_client_tdx_quote_deprecated():
             client.tdx_quote("test data", "raw")
             # Should have warnings for both constructor and tdx_quote
             warning_messages = [str(warning.message) for warning in w]
-            assert any(
-                "TappdClient is deprecated" in msg for msg in warning_messages)
-            assert any(
-                "tdx_quote is deprecated" in msg for msg in warning_messages)
+            assert any("TappdClient is deprecated" in msg for msg in warning_messages)
+            assert any("tdx_quote is deprecated" in msg for msg in warning_messages)
         except Exception:
             # It's OK if this fails due to simulator not supporting the old endpoint
             pass
@@ -329,8 +325,7 @@ async def test_async_tappd_client_derive_key_deprecated():
             assert any(
                 "AsyncTappdClient is deprecated" in msg for msg in warning_messages
             )
-            assert any(
-                "derive_key is deprecated" in msg for msg in warning_messages)
+            assert any("derive_key is deprecated" in msg for msg in warning_messages)
         except Exception:
             # It's OK if this fails due to simulator not supporting the old endpoint
             pass
@@ -350,8 +345,7 @@ async def test_async_tappd_client_tdx_quote_deprecated():
             assert any(
                 "AsyncTappdClient is deprecated" in msg for msg in warning_messages
             )
-            assert any(
-                "tdx_quote is deprecated" in msg for msg in warning_messages)
+            assert any("tdx_quote is deprecated" in msg for msg in warning_messages)
         except Exception:
             # It's OK if this fails due to simulator not supporting the old endpoint
             pass
