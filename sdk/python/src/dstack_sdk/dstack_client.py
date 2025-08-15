@@ -303,19 +303,8 @@ class DstackClient(BaseClient):
     def is_reachable(self) -> bool:
         """Return True if the service responds to a quick health call."""
         try:
-            with httpx.Client(
-                transport=self.transport, base_url=self.base_url, timeout=0.5
-            ) as client:
-                response = client.post(
-                    "/prpc/Tappd.Info",
-                    json={},
-                    headers={
-                        "Content-Type": "application/json",
-                        "User-Agent": f"dstack-sdk-python/{__version__}",
-                    },
-                )
-                response.raise_for_status()
-                return True
+            self._send_rpc_request("Version", {})
+            return True
         except Exception:
             return False
 
@@ -430,19 +419,8 @@ class AsyncDstackClient(BaseClient):
     async def is_reachable(self) -> bool:
         """Return True if the service responds to a quick health call."""
         try:
-            async with httpx.AsyncClient(
-                transport=self.transport, base_url=self.base_url, timeout=0.5
-            ) as client:
-                response = await client.post(
-                    "/prpc/Tappd.Info",
-                    json={},
-                    headers={
-                        "Content-Type": "application/json",
-                        "User-Agent": f"dstack-sdk-python/{__version__}",
-                    },
-                )
-                response.raise_for_status()
-                return True
+            await self._send_rpc_request("Version", {})
+            return True
         except Exception:
             return False
 
