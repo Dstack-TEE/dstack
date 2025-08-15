@@ -31,7 +31,7 @@ fn replay_rtmr(history: Vec<String>) -> Result<String, FromHexError> {
 }
 
 /// Represents an event log entry in the system
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "borsh", derive(BorshSerialize, BorshDeserialize))]
 pub struct EventLog {
     /// The index of the IMR (Integrity Measurement Register)
@@ -164,7 +164,7 @@ impl InfoResponse {
 }
 
 /// Trusted Computing Base information structure
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "borsh", derive(BorshSerialize, BorshDeserialize))]
 pub struct TcbInfo {
     /// The measurement root of trust
