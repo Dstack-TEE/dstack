@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::app::{Image, VmConfig, VmWorkDir};
-use crate::main_service;
 use crate::config::Config;
+use crate::main_service;
 use anyhow::{Context, Result};
 
 pub async fn run_one_shot(

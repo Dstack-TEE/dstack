@@ -6,7 +6,7 @@ use std::{path::Path, time::Duration};
 
 use anyhow::{anyhow, Context, Result};
 use app::App;
-use clap::Parser;
+use clap::{Args as ClapArgs, Parser, Subcommand};
 use config::Config;
 use guest_api_service::GuestApiHandler;
 use host_api_service::HostApiHandler;
@@ -47,13 +47,28 @@ struct Args {
     /// Path to the configuration file
     #[arg(short, long)]
     config: Option<String>,
-    /// One-shot mode: setup VM and execute QEMU command from VM configuration file
-    #[arg(long)]
-    one_shot: Option<String>,
+    /// Subcommand to run
+    #[command(subcommand)]
+    command: Option<Command>,
+}
+
+#[derive(Default, Subcommand)]
+enum Command {
+    /// Start the VMM server (default mode)
+    #[default]
+    Serve,
+    /// One-shot VM execution mode for debugging
+    Run(RunArgs),
+}
+
+#[derive(ClapArgs)]
+struct RunArgs {
+    /// VM configuration file path
+    vm_config: String,
     /// Working directory for one-shot mode (default: create in current directory)
     #[arg(long)]
     workdir: Option<String>,
-    /// Dry run: only output QEMU command without executing (use with --one-shot)
+    /// Dry run: only output QEMU command without executing
     #[arg(long)]
     dry_run: bool,
 }
@@ -145,11 +160,22 @@ async fn main() -> Result<()> {
     let figment = config::load_config_figment(args.config.as_deref());
     let config = Config::extract_or_default(&figment)?.abs_path()?;
 
-    // Handle one-shot mode
-    if let Some(vm_config_path) = args.one_shot {
-        return one_shot::run_one_shot(&vm_config_path, config, args.workdir, args.dry_run).await;
+    // Handle commands
+    match args.command {
+        Some(Command::Run(run_args)) => {
+            // One-shot VM execution mode
+            return one_shot::run_one_shot(
+                &run_args.vm_config,
+                config,
+                run_args.workdir,
+                run_args.dry_run,
+            )
+            .await;
+        }
+        Some(Command::Serve) | None => {
+            // Default server mode - continue to main server logic
+        }
     }
-
 
     let api_auth = ApiToken::new(config.auth.tokens.clone(), config.auth.enabled);
     let supervisor = {
