@@ -71,6 +71,7 @@ fn create_hd(
     image_file: impl AsRef<Path>,
     backing_file: Option<impl AsRef<Path>>,
     size: &str,
+    work_dir: Option<impl AsRef<Path>>,
 ) -> Result<()> {
     let mut command = Command::new("qemu-img");
     command.arg("create").arg("-f").arg("qcow2");
@@ -82,6 +83,11 @@ fn create_hd(
     }
     command.arg(image_file.as_ref());
     command.arg(size);
+
+    // Set working directory if provided
+    if let Some(work_dir) = work_dir {
+        command.current_dir(work_dir.as_ref());
+    }
     let output = command.output()?;
     if !output.status.success() {
         bail!(
@@ -341,7 +347,12 @@ impl VmConfig {
         let disk_size = format!("{}G", self.manifest.disk_size);
         let hda_path = workdir.hda_path();
         if !hda_path.exists() {
-            create_hd(&hda_path, self.image.hda.as_ref(), &disk_size)?;
+            create_hd(
+                &hda_path,
+                self.image.hda.as_ref(),
+                &disk_size,
+                Some(&workdir),
+            )?;
         }
         if !cfg.user.is_empty() {
             fs_err::set_permissions(&hda_path, Permissions::from_mode(0o660))?;
