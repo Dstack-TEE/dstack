@@ -65,7 +65,8 @@ def get_tappd_endpoint(endpoint: str | None = None) -> str:
     if endpoint:
         return endpoint
     if "TAPPD_SIMULATOR_ENDPOINT" in os.environ:
-        logger.info(f"Using tappd endpoint: {os.environ['TAPPD_SIMULATOR_ENDPOINT']}")
+        logger.info(
+            f"Using tappd endpoint: {os.environ['TAPPD_SIMULATOR_ENDPOINT']}")
         return os.environ["TAPPD_SIMULATOR_ENDPOINT"]
     return "/var/run/tappd.sock"
 
@@ -195,158 +196,74 @@ class BaseClient:
     """Marker base class for dstack clients."""
 
 
-class DstackClient(BaseClient):
-    """Synchronous client for dstack services."""
+class AsyncDstackClient(BaseClient):
+    """Asynchronous client for dstack services.
+
+    This client can work in both async and sync contexts by using
+    sync HTTP internally while maintaining async method signatures.
+    """
 
     PATH_PREFIX = "/"
 
-    def __init__(self, endpoint: str | None = None):
-        """Initialize client with HTTP or Unix-socket transport.
+    def __init__(self, endpoint: str | None = None, use_sync_http: bool = False):
+        """Initialize async client with HTTP or Unix-socket transport.
 
-        If a non-HTTP(S) endpoint is provided, it is treated as a Unix socket
-        path and validated for existence.
+        Args:
+            endpoint: HTTP/HTTPS URL or Unix socket path
+            use_sync_http: If True, use sync HTTP client internally
         """
         endpoint = get_endpoint(endpoint)
+        self.use_sync_http = use_sync_http
+
         if endpoint.startswith("http://") or endpoint.startswith("https://"):
-            self.transport = httpx.HTTPTransport()
+            if use_sync_http:
+                self.transport = httpx.HTTPTransport()
+            else:
+                self.transport = httpx.AsyncHTTPTransport()
             self.base_url = endpoint
         else:
             # Check if Unix socket file exists
             if endpoint.startswith("/") and not os.path.exists(endpoint):
-                raise FileNotFoundError(f"Unix socket file {endpoint} does not exist")
-            self.transport = httpx.HTTPTransport(uds=endpoint)
-            self.base_url = "http://localhost"
-
-    def _send_rpc_request(self, method: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-        """Send an RPC request and return the parsed JSON response."""
-        path = self.PATH_PREFIX + method
-        with httpx.Client(transport=self.transport, base_url=self.base_url) as client:
-            response = client.post(
-                path,
-                json=payload,
-                headers={
-                    "Content-Type": "application/json",
-                    "User-Agent": f"dstack-sdk-python/{__version__}",
-                },
-            )
-            response.raise_for_status()
-            from typing import cast
-
-            return cast(Dict[str, Any], response.json())
-
-    def get_key(
-        self,
-        path: str | None = None,
-        purpose: str | None = None,
-    ) -> GetKeyResponse:
-        """Derive a key from the given path and purpose."""
-        data: Dict[str, Any] = {"path": path or "", "purpose": purpose or ""}
-        result = self._send_rpc_request("GetKey", data)
-        return GetKeyResponse(**result)
-
-    def get_quote(
-        self,
-        report_data: str | bytes,
-    ) -> GetQuoteResponse:
-        """Request an attestation quote for the provided report data."""
-        if not report_data or not isinstance(report_data, (bytes, str)):
-            raise ValueError("report_data can not be empty")
-        report_bytes: bytes = (
-            report_data.encode() if isinstance(report_data, str) else report_data
-        )
-        if len(report_bytes) > 64:
-            raise ValueError("report_data must be less than 64 bytes")
-        hex = binascii.hexlify(report_bytes).decode()
-        result = self._send_rpc_request("GetQuote", {"report_data": hex})
-        return GetQuoteResponse(**result)
-
-    def info(self) -> InfoResponse:
-        """Fetch service information including parsed TCB info."""
-        result = self._send_rpc_request("Info", {})
-        return InfoResponse.parse_response(result)
-
-    def emit_event(
-        self,
-        event: str,
-        payload: str | bytes,
-    ) -> None:
-        """Emit an event that extends RTMR3 on TDX platforms."""
-        if not event:
-            raise ValueError("event name cannot be empty")
-
-        payload_bytes: bytes = payload.encode() if isinstance(payload, str) else payload
-        hex_payload = binascii.hexlify(payload_bytes).decode()
-        self._send_rpc_request("EmitEvent", {"event": event, "payload": hex_payload})
-        return None
-
-    def get_tls_key(
-        self,
-        subject: str | None = None,
-        alt_names: List[str] | None = None,
-        usage_ra_tls: bool = False,
-        usage_server_auth: bool = True,
-        usage_client_auth: bool = False,
-    ) -> GetTlsKeyResponse:
-        """Request a TLS key from the service with optional parameters."""
-        data: Dict[str, Any] = {
-            "subject": subject or "",
-            "usage_ra_tls": usage_ra_tls,
-            "usage_server_auth": usage_server_auth,
-            "usage_client_auth": usage_client_auth,
-        }
-        if alt_names:
-            data["alt_names"] = list(alt_names)
-
-        result = self._send_rpc_request("GetTlsKey", data)
-        return GetTlsKeyResponse(**result)
-
-    def is_reachable(self) -> bool:
-        """Return True if the service responds to a quick health call."""
-        try:
-            self._send_rpc_request("Version", {})
-            return True
-        except Exception:
-            return False
-
-
-class AsyncDstackClient(BaseClient):
-    """Asynchronous client for dstack services."""
-
-    PATH_PREFIX = "/"
-
-    def __init__(self, endpoint: str | None = None):
-        """Initialize async client with HTTP or Unix-socket transport."""
-        endpoint = get_endpoint(endpoint)
-        if endpoint.startswith("http://") or endpoint.startswith("https://"):
-            self.transport = httpx.AsyncHTTPTransport()
-            self.base_url = endpoint
-        else:
-            # Check if Unix socket file exists
-            if endpoint.startswith("/") and not os.path.exists(endpoint):
-                raise FileNotFoundError(f"Unix socket file {endpoint} does not exist")
-            self.transport = httpx.AsyncHTTPTransport(uds=endpoint)
+                raise FileNotFoundError(
+                    f"Unix socket file {endpoint} does not exist")
+            if use_sync_http:
+                self.transport = httpx.HTTPTransport(uds=endpoint)
+            else:
+                self.transport = httpx.AsyncHTTPTransport(uds=endpoint)
             self.base_url = "http://localhost"
 
     async def _send_rpc_request(
         self, method: str, payload: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Send an RPC request asynchronously and return parsed JSON."""
-        path = self.PATH_PREFIX + method
-        async with httpx.AsyncClient(
-            transport=self.transport, base_url=self.base_url
-        ) as client:
-            response = await client.post(
-                path,
-                json=payload,
-                headers={
-                    "Content-Type": "application/json",
-                    "User-Agent": f"dstack-sdk-python/{__version__}",
-                },
-            )
-            response.raise_for_status()
-            from typing import cast
+        """Send an RPC request and return parsed JSON.
 
-            return cast(Dict[str, Any], response.json())
+        Uses sync or async HTTP client based on use_sync_http flag.
+        Maintains async signature for compatibility.
+        """
+        path = self.PATH_PREFIX + method
+        headers = {
+            "Content-Type": "application/json",
+            "User-Agent": f"dstack-sdk-python/{__version__}",
+        }
+
+        if self.use_sync_http:
+            # Use sync HTTP client - works from any context
+            with httpx.Client(
+                transport=self.transport, base_url=self.base_url
+            ) as client:
+                response = client.post(path, json=payload, headers=headers)
+                response.raise_for_status()
+                from typing import cast
+                return cast(Dict[str, Any], response.json())
+        else:
+            # Use async HTTP client - traditional async behavior
+            async with httpx.AsyncClient(
+                transport=self.transport, base_url=self.base_url
+            ) as client:
+                response = await client.post(path, json=payload, headers=headers)
+                response.raise_for_status()
+                from typing import cast
+                return cast(Dict[str, Any], response.json())
 
     async def get_key(
         self,
@@ -419,95 +336,10 @@ class AsyncDstackClient(BaseClient):
     async def is_reachable(self) -> bool:
         """Return True if the service responds to a quick health call."""
         try:
-            await self._send_rpc_request("Version", {})
+            await self._send_rpc_request("Info", {})
             return True
         except Exception:
             return False
-
-
-class TappdClient(DstackClient):
-    """Deprecated client kept for backward compatibility.
-
-    DEPRECATED: Use ``DstackClient`` instead.
-    """
-    PATH_PREFIX = "/prpc/Tappd."
-
-    def __init__(self, endpoint: str | None = None):
-        """Initialize deprecated tappd client wrapper."""
-        import warnings
-
-        warnings.warn(
-            "TappdClient is deprecated, please use DstackClient instead",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-
-        endpoint = get_tappd_endpoint(endpoint)
-        super().__init__(endpoint)
-
-    def derive_key(
-        self,
-        path: str | None = None,
-        subject: str | None = None,
-        alt_names: List[str] | None = None,
-    ) -> GetTlsKeyResponse:
-        """Use ``get_key`` instead (deprecated)."""
-        import warnings
-
-        warnings.warn(
-            "derive_key is deprecated, please use get_key instead",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-
-        data: Dict[str, Any] = {
-            "path": path or "",
-            "subject": subject or path or "",
-        }
-        if alt_names:
-            data["alt_names"] = alt_names
-
-        result = self._send_rpc_request("DeriveKey", data)
-        return GetTlsKeyResponse(**result)
-
-    def tdx_quote(
-        self,
-        report_data: str | bytes,
-        hash_algorithm: str | None = None,
-    ) -> GetQuoteResponse:
-        """Use ``get_quote`` instead (deprecated)."""
-        import warnings
-
-        warnings.warn(
-            "tdx_quote is deprecated, please use get_quote instead",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-
-        if not report_data or not isinstance(report_data, (bytes, str)):
-            raise ValueError("report_data can not be empty")
-
-        report_bytes: bytes = (
-            report_data.encode() if isinstance(report_data, str) else report_data
-        )
-        hex_data = binascii.hexlify(report_bytes).decode()
-
-        if hash_algorithm == "raw":
-            if len(hex_data) > 128:
-                raise ValueError(
-                    "Report data is too large, it should less then 64 bytes when hash_algorithm is raw."
-                )
-            if len(hex_data) < 128:
-                hex_data = hex_data.zfill(128)
-
-        payload = {"report_data": hex_data, "hash_algorithm": hash_algorithm or "raw"}
-
-        result = self._send_rpc_request("TdxQuote", payload)
-
-        if "error" in result:
-            raise RuntimeError(result["error"])
-
-        return GetQuoteResponse(**result)
 
 
 class AsyncTappdClient(AsyncDstackClient):
@@ -517,7 +349,7 @@ class AsyncTappdClient(AsyncDstackClient):
     """
     PATH_PREFIX = "/prpc/Tappd."
 
-    def __init__(self, endpoint: str | None = None):
+    def __init__(self, endpoint: str | None = None, use_sync_http: bool = False):
         """Initialize deprecated async tappd client wrapper."""
         import warnings
 
@@ -528,7 +360,7 @@ class AsyncTappdClient(AsyncDstackClient):
         )
 
         endpoint = get_tappd_endpoint(endpoint)
-        super().__init__(endpoint)
+        super().__init__(endpoint, use_sync_http=use_sync_http)
 
     async def derive_key(
         self,
@@ -585,7 +417,8 @@ class AsyncTappdClient(AsyncDstackClient):
             if len(hex_data) < 128:
                 hex_data = hex_data.zfill(128)
 
-        payload = {"report_data": hex_data, "hash_algorithm": hash_algorithm or "raw"}
+        payload = {"report_data": hex_data,
+                   "hash_algorithm": hash_algorithm or "raw"}
 
         result = await self._send_rpc_request("TdxQuote", payload)
 
@@ -593,3 +426,119 @@ class AsyncTappdClient(AsyncDstackClient):
             raise RuntimeError(result["error"])
 
         return GetQuoteResponse(**result)
+
+
+def call_async(func):
+    """Decorator to call async methods synchronously.
+
+    This decorator wraps a method to call its async counterpart from
+    self.async_client and run it synchronously using asyncio.
+
+    Supports being called from within async contexts by using
+    a sync HTTP client internally and a custom coroutine runner.
+    """
+    import functools
+
+    def _step_coro(coro):
+        """Step through a coroutine that only does sync operations."""
+        try:
+            result = coro.send(None)
+            raise RuntimeError(f"Coroutine yielded unexpected value: {result}")
+        except StopIteration as e:
+            return e.value
+
+    @functools.wraps(func)
+    def wrapper(self, *args, **kwargs):
+        async_method = getattr(self.async_client, func.__name__)
+        return _step_coro(async_method(*args, **kwargs))
+    return wrapper
+
+
+class DstackClient(BaseClient):
+    """Synchronous client for dstack services."""
+
+    def __init__(self, endpoint: str | None = None):
+        """Initialize client with HTTP or Unix-socket transport.
+
+        If a non-HTTP(S) endpoint is provided, it is treated as a Unix socket
+        path and validated for existence.
+        """
+        self.async_client = AsyncDstackClient(endpoint, use_sync_http=True)
+
+    @call_async
+    def get_key(
+        self,
+        path: str | None = None,
+        purpose: str | None = None,
+    ) -> GetKeyResponse:
+        """Derive a key from the given path and purpose."""
+        raise NotImplementedError
+
+    @call_async
+    def get_quote(
+        self,
+        report_data: str | bytes,
+    ) -> GetQuoteResponse:
+        """Request an attestation quote for the provided report data."""
+        raise NotImplementedError
+
+    @call_async
+    def info(self) -> InfoResponse:
+        """Fetch service information including parsed TCB info."""
+        raise NotImplementedError
+
+    @call_async
+    def emit_event(
+        self,
+        event: str,
+        payload: str | bytes,
+    ) -> None:
+        """Emit an event that extends RTMR3 on TDX platforms."""
+        raise NotImplementedError
+
+    @call_async
+    def get_tls_key(
+        self,
+        subject: str | None = None,
+        alt_names: List[str] | None = None,
+        usage_ra_tls: bool = False,
+        usage_server_auth: bool = True,
+        usage_client_auth: bool = False,
+    ) -> GetTlsKeyResponse:
+        """Request a TLS key from the service with optional parameters."""
+        raise NotImplementedError
+
+    @call_async
+    def is_reachable(self) -> bool:
+        """Return True if the service responds to a quick health call."""
+        raise NotImplementedError
+
+
+class TappdClient(DstackClient):
+    """Deprecated client kept for backward compatibility.
+
+    DEPRECATED: Use ``DstackClient`` instead.
+    """
+
+    def __init__(self, endpoint: str | None = None):
+        """Initialize deprecated tappd client wrapper."""
+        self.async_client = AsyncTappdClient(endpoint, use_sync_http=True)
+
+    @call_async
+    def derive_key(
+        self,
+        path: str | None = None,
+        subject: str | None = None,
+        alt_names: List[str] | None = None,
+    ) -> GetTlsKeyResponse:
+        """Use ``get_key`` instead (deprecated)."""
+        raise NotImplementedError
+
+    @call_async
+    def tdx_quote(
+        self,
+        report_data: str | bytes,
+        hash_algorithm: str | None = None,
+    ) -> GetQuoteResponse:
+        """Use ``get_quote`` instead (deprecated)."""
+        raise NotImplementedError
