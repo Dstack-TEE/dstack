@@ -7,6 +7,7 @@
 Use with ``dstack_sdk.DstackClient`` responses to create ``solders.Keypair``
 objects for signing transactions on Solana.
 """
+import hashlib
 import warnings
 
 from solders.keypair import Keypair

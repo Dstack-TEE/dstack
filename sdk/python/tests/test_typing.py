@@ -1,7 +1,6 @@
 """Test typing and mypy compatibility for sync/async methods."""
 
 import inspect
-import os
 from typing import get_type_hints
 
 from dstack_sdk import AsyncDstackClient

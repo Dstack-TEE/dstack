@@ -6,32 +6,34 @@ from typing import Dict
 from typing import List
 from typing import Optional
 
-class GetTlsKeyResponse:
+from pydantic import BaseModel
+
+class GetTlsKeyResponse(BaseModel):
     key: str
     certificate_chain: List[str]
     def as_uint8array(self, max_length: Optional[int] = ...) -> bytes: ...
 
-class GetKeyResponse:
+class GetKeyResponse(BaseModel):
     key: str
     signature_chain: List[str]
     def decode_key(self) -> bytes: ...
     def decode_signature_chain(self) -> List[bytes]: ...
 
-class GetQuoteResponse:
+class GetQuoteResponse(BaseModel):
     quote: str
     event_log: str
     def decode_quote(self) -> bytes: ...
     def decode_event_log(self) -> List[EventLog]: ...
     def replay_rtmrs(self) -> Dict[int, str]: ...
 
-class EventLog:
+class EventLog(BaseModel):
     imr: int
     event_type: int
     digest: str
     event: str
     event_payload: str
 
-class TcbInfo:
+class TcbInfo(BaseModel):
     mrtd: str
     rtmr0: str
     rtmr1: str
@@ -43,7 +45,7 @@ class TcbInfo:
     app_compose: str
     event_log: List[EventLog]
 
-class InfoResponse:
+class InfoResponse(BaseModel):
     app_id: str
     instance_id: str
     app_cert: str
@@ -62,7 +64,45 @@ class BusinessMethodsMixin:
         self, method: str, payload: Dict[str, Any]
     ) -> Dict[str, Any]: ...
 
-    # Async methods
+    # Methods can be either async or sync depending on implementation
+    def get_key(self, path: str | None = ..., purpose: str | None = ...) -> Any: ...
+    def get_quote(self, report_data: str | bytes) -> Any: ...
+    def info(self) -> Any: ...
+    def emit_event(self, event: str, payload: str | bytes) -> Any: ...
+    def get_tls_key(
+        self,
+        subject: str | None = ...,
+        alt_names: List[str] | None = ...,
+        usage_ra_tls: bool = ...,
+        usage_server_auth: bool = ...,
+        usage_client_auth: bool = ...,
+    ) -> Any: ...
+    def is_reachable(self) -> Any: ...
+
+class TappdMethodsMixin:
+    @abstractmethod
+    async def _send_rpc_request(
+        self, method: str, payload: Dict[str, Any]
+    ) -> Dict[str, Any]: ...
+    def derive_key(
+        self,
+        path: str | None = ...,
+        subject: str | None = ...,
+        alt_names: List[str] | None = ...,
+    ) -> Any: ...
+    def tdx_quote(
+        self, report_data: str | bytes, hash_algorithm: str | None = ...
+    ) -> Any: ...
+
+class BaseClient: ...
+
+class AsyncDstackClient(BaseClient, BusinessMethodsMixin):
+    def __init__(self, endpoint: str | None = ...) -> None: ...
+    async def _send_rpc_request(
+        self, method: str, payload: Dict[str, Any]
+    ) -> Dict[str, Any]: ...
+
+    # Override with specific async return types
     async def get_key(
         self, path: str | None = ..., purpose: str | None = ...
     ) -> GetKeyResponse: ...
@@ -78,29 +118,6 @@ class BusinessMethodsMixin:
         usage_client_auth: bool = ...,
     ) -> GetTlsKeyResponse: ...
     async def is_reachable(self) -> bool: ...
-
-class TappdMethodsMixin:
-    @abstractmethod
-    async def _send_rpc_request(
-        self, method: str, payload: Dict[str, Any]
-    ) -> Dict[str, Any]: ...
-    async def derive_key(
-        self,
-        path: str | None = ...,
-        subject: str | None = ...,
-        alt_names: List[str] | None = ...,
-    ) -> GetTlsKeyResponse: ...
-    async def tdx_quote(
-        self, report_data: str | bytes, hash_algorithm: str | None = ...
-    ) -> GetQuoteResponse: ...
-
-class BaseClient: ...
-
-class AsyncDstackClient(BaseClient, BusinessMethodsMixin):
-    def __init__(self, endpoint: str | None = ...) -> None: ...
-    async def _send_rpc_request(
-        self, method: str, payload: Dict[str, Any]
-    ) -> Dict[str, Any]: ...
 
 class DstackClient(BaseClient, BusinessMethodsMixin):
     def __init__(self, endpoint: str | None = ...) -> None: ...
@@ -127,6 +144,17 @@ class DstackClient(BaseClient, BusinessMethodsMixin):
 
 class AsyncTappdClient(AsyncDstackClient, TappdMethodsMixin):
     def __init__(self, endpoint: str | None = ...) -> None: ...
+
+    # Override with specific async return types
+    async def derive_key(
+        self,
+        path: str | None = ...,
+        subject: str | None = ...,
+        alt_names: List[str] | None = ...,
+    ) -> GetTlsKeyResponse: ...
+    async def tdx_quote(
+        self, report_data: str | bytes, hash_algorithm: str | None = ...
+    ) -> GetQuoteResponse: ...
 
 class TappdClient(DstackClient, TappdMethodsMixin):
     def __init__(self, endpoint: str | None = ...) -> None: ...

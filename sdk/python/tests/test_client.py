@@ -2,6 +2,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import warnings
+
 import pytest
 from evidence_api.tdx.quote import TdxQuote
 

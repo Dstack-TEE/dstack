@@ -2,11 +2,11 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import warnings
+
 import pytest
 from eth_account.signers.local import LocalAccount
 
-from dstack_sdk import AsyncDstackClient
-from dstack_sdk import DstackClient
 from dstack_sdk import GetKeyResponse
 from dstack_sdk.ethereum import to_account
 from dstack_sdk.ethereum import to_account_secure

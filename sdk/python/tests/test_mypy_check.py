@@ -13,8 +13,6 @@ import pytest
 
 from dstack_sdk import AsyncDstackClient
 from dstack_sdk import DstackClient
-from dstack_sdk import GetKeyResponse
-from dstack_sdk import GetTlsKeyResponse
 
 
 def test_sync_client_types():

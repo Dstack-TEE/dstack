@@ -7,6 +7,7 @@
 Use with ``dstack_sdk.DstackClient`` responses to create ``eth_account``
 objects for signing and transacting.
 """
+import hashlib
 import warnings
 
 from eth_account import Account
@@ -29,7 +30,7 @@ def to_account(get_key_response: GetKeyResponse | GetTlsKeyResponse) -> LocalAcc
     Returns:
         Account: Ethereum account object
     """
-    if hasattr(get_key_response, "as_uint8array"):  # GetTlsKeyResponse
+    if isinstance(get_key_response, GetTlsKeyResponse):
         warnings.warn(
             "to_account: Please don't use getTlsKey method to get key, use getKey instead.",
             DeprecationWarning,
@@ -45,7 +46,7 @@ def to_account_secure(
     get_key_response: GetKeyResponse | GetTlsKeyResponse,
 ) -> LocalAccount:
     """Create an Ethereum account using SHA256 of full key material for security."""
-    if hasattr(get_key_response, "as_uint8array"):  # GetTlsKeyResponse
+    if isinstance(get_key_response, GetTlsKeyResponse):
         warnings.warn(
             "to_account_secure: Please don't use getTlsKey method to get key, use getKey instead.",
             DeprecationWarning,

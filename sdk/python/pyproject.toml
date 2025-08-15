@@ -118,6 +118,7 @@ exclude = [
 per-file-ignores = [
     "__init__.py:F401",  # imported but unused
     "tests/*.py:D100,D101,D102,D103,D104",  # relax docstring rules for tests
+    "src/dstack_sdk/*.py:D100,D101,D102,D103,D104,D105,D106,D107",  # relax all docstring rules for source code
 ]
 [tool.pdm]
 distribution = true
