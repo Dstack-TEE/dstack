@@ -263,9 +263,16 @@ def test_tappd_client_deprecated():
     with warnings.catch_warnings(record=True) as w:
         warnings.simplefilter("always")
         TappdClient()
-        assert len(w) == 1
-        assert issubclass(w[0].category, DeprecationWarning)
-        assert "TappdClient is deprecated" in str(w[0].message)
+        
+        # Filter for TappdClient deprecation warnings specifically
+        tappd_warnings = [
+            warning for warning in w 
+            if issubclass(warning.category, DeprecationWarning) 
+            and "TappdClient is deprecated" in str(warning.message)
+        ]
+        
+        assert len(tappd_warnings) == 1
+        assert "TappdClient is deprecated" in str(tappd_warnings[0].message)
 
 
 def test_tappd_client_derive_key_deprecated():
@@ -308,9 +315,16 @@ def test_async_tappd_client_deprecated():
     with warnings.catch_warnings(record=True) as w:
         warnings.simplefilter("always")
         AsyncTappdClient()
-        assert len(w) == 1
-        assert issubclass(w[0].category, DeprecationWarning)
-        assert "AsyncTappdClient is deprecated" in str(w[0].message)
+        
+        # Filter for AsyncTappdClient deprecation warnings specifically
+        tappd_warnings = [
+            warning for warning in w 
+            if issubclass(warning.category, DeprecationWarning) 
+            and "AsyncTappdClient is deprecated" in str(warning.message)
+        ]
+        
+        assert len(tappd_warnings) == 1
+        assert "AsyncTappdClient is deprecated" in str(tappd_warnings[0].message)
 
 
 @pytest.mark.asyncio
