@@ -6,19 +6,15 @@ import base64
 import binascii
 import functools
 import hashlib
-import inspect
 import json
 import logging
 import os
 import warnings
-from abc import abstractmethod
 from typing import Any
 from typing import Dict
 from typing import List
 from typing import Optional
 from typing import cast
-from typing import get_args
-from typing import get_origin
 
 import httpx
 from pydantic import BaseModel
@@ -67,6 +63,58 @@ def get_tappd_endpoint(endpoint: str | None = None) -> str:
 
 def emit_deprecation_warning(message: str, stacklevel: int = 2) -> None:
     warnings.warn(message, DeprecationWarning, stacklevel=stacklevel)
+
+
+def call_async(func):
+    """Call async methods synchronously.
+
+    This decorator wraps a method to call its async counterpart from
+    self.async_client and run it synchronously using asyncio.
+
+    Supports being called from within async contexts by using
+    a sync HTTP client internally and a custom coroutine runner.
+    """
+
+    def _step_coro(coro):
+        """Step through a coroutine that only does sync operations."""
+        try:
+            result = coro.send(None)
+            raise RuntimeError(f"Coroutine yielded unexpected value: {result}")
+        except StopIteration as e:
+            return e.value
+
+    @functools.wraps(func)
+    def wrapper(self, *args, **kwargs):
+        async_method = getattr(self.async_client, func.__name__)
+        return _step_coro(async_method(*args, **kwargs))
+
+    return wrapper
+
+
+def call_async_with_deprecation(method_name, deprecation_message):
+    """Create decorator for deprecated methods that call async implementations."""
+
+    def decorator(func):
+        def _step_coro(coro):
+            try:
+                result = coro.send(None)
+                raise RuntimeError(f"Coroutine yielded unexpected value: {result}")
+            except StopIteration as e:
+                return e.value
+
+        @functools.wraps(func)
+        def wrapper(self, *args, **kwargs):
+            emit_deprecation_warning(deprecation_message)
+            if hasattr(self.async_client, method_name):
+                async_method = getattr(self.async_client, method_name)
+                return _step_coro(async_method(*args, **kwargs))
+            else:
+                # Fallback for methods not in async_client
+                return _step_coro(func(self, *args, **kwargs))
+
+        return wrapper
+
+    return decorator
 
 
 class GetTlsKeyResponse(BaseModel):
@@ -165,12 +213,98 @@ class InfoResponse(BaseModel):
         return cls(**obj)
 
 
-class BusinessMethodsMixin:
-    @abstractmethod
+class BaseClient:
+    pass
+
+
+class AsyncDstackClient(BaseClient):
+
+    PATH_PREFIX = "/"
+
+    def __init__(self, endpoint: str | None = None, use_sync_http: bool = False):
+        """Initialize async client with HTTP or Unix-socket transport.
+
+        Args:
+            endpoint: HTTP/HTTPS URL or Unix socket path
+            use_sync_http: If True, use sync HTTP client internally
+        """
+        endpoint = get_endpoint(endpoint)
+        self.use_sync_http = use_sync_http
+        self._client: Optional[httpx.AsyncClient] = None
+        self._sync_client: Optional[httpx.Client] = None
+        self._client_ref_count = 0
+
+        if endpoint.startswith("http://") or endpoint.startswith("https://"):
+            self.async_transport = httpx.AsyncHTTPTransport()
+            self.sync_transport = httpx.HTTPTransport()
+            self.base_url = endpoint
+        else:
+            # Check if Unix socket file exists
+            if endpoint.startswith("/") and not os.path.exists(endpoint):
+                raise FileNotFoundError(f"Unix socket file {endpoint} does not exist")
+            self.async_transport = httpx.AsyncHTTPTransport(uds=endpoint)
+            self.sync_transport = httpx.HTTPTransport(uds=endpoint)
+            self.base_url = "http://localhost"
+
+    def _get_client(self) -> httpx.AsyncClient:
+        if self._client is None:
+            self._client = httpx.AsyncClient(
+                transport=self.async_transport, base_url=self.base_url, timeout=0.5
+            )
+        return self._client
+
+    def _get_sync_client(self) -> httpx.Client:
+        if self._sync_client is None:
+            self._sync_client = httpx.Client(
+                transport=self.sync_transport, base_url=self.base_url, timeout=0.5
+            )
+        return self._sync_client
+
     async def _send_rpc_request(
         self, method: str, payload: Dict[str, Any]
     ) -> Dict[str, Any]:
-        pass
+        """Send an RPC request and return parsed JSON.
+
+        Uses sync or async HTTP client based on use_sync_http flag.
+        Maintains async signature for compatibility.
+        """
+        path = self.PATH_PREFIX + method
+        headers = {
+            "Content-Type": "application/json",
+            "User-Agent": f"dstack-sdk-python/{__version__}",
+        }
+
+        if self.use_sync_http:
+            # Use sync HTTP client - works from any context
+            sync_client: httpx.Client = self._get_sync_client()
+            response = sync_client.post(path, json=payload, headers=headers)
+            response.raise_for_status()
+            return cast(Dict[str, Any], response.json())
+        else:
+            # Use async HTTP client - traditional async behavior
+            async_client: httpx.AsyncClient = self._get_client()
+            response = await async_client.post(path, json=payload, headers=headers)
+            response.raise_for_status()
+            return cast(Dict[str, Any], response.json())
+
+    async def __aenter__(self):
+        self._client_ref_count += 1
+        # Eagerly create client when entering context
+        if self.use_sync_http:
+            self._get_sync_client()
+        else:
+            self._get_client()
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        self._client_ref_count -= 1
+        if self._client_ref_count == 0:
+            if self._client:
+                await self._client.aclose()
+                self._client = None
+            if self._sync_client:
+                self._sync_client.close()
+                self._sync_client = None
 
     async def get_key(
         self,
@@ -249,54 +383,103 @@ class BusinessMethodsMixin:
             return False
 
 
-def sync_version(async_method):
+class DstackClient(BaseClient):
 
-    def _step_coro(coro):
-        try:
-            result = coro.send(None)
-            raise RuntimeError(f"Coroutine yielded unexpected value: {result}")
-        except StopIteration as e:
-            return e.value
+    PATH_PREFIX = "/"
 
-    @functools.wraps(async_method)
-    def sync_wrapper(self, *args, **kwargs):
-        coro = async_method(self, *args, **kwargs)
-        return _step_coro(coro)
+    def __init__(self, endpoint: str | None = None):
+        """Initialize client with HTTP or Unix-socket transport.
 
-    # Copy annotations but fix the return type for coroutines
-    sync_wrapper.__annotations__ = async_method.__annotations__.copy()
+        If a non-HTTP(S) endpoint is provided, it is treated as a Unix socket
+        path and validated for existence.
+        """
+        self.async_client = AsyncDstackClient(endpoint, use_sync_http=True)
 
-    # Extract the actual return type from Coroutine[Any, Any, T] -> T
-    if "return" in sync_wrapper.__annotations__:
-        return_annotation = sync_wrapper.__annotations__["return"]
+    @call_async
+    def get_key(
+        self,
+        path: str | None = None,
+        purpose: str | None = None,
+    ) -> GetKeyResponse:
+        """Derive a key from the given path and purpose."""
+        raise NotImplementedError
 
-        # Handle different forms of coroutine annotations
-        origin = get_origin(return_annotation)
-        args = get_args(return_annotation)
+    @call_async
+    def get_quote(
+        self,
+        report_data: str | bytes,
+    ) -> GetQuoteResponse:
+        """Request an attestation quote for the provided report data."""
+        raise NotImplementedError
 
-        # Check for Coroutine[Any, Any, T] pattern
-        if origin is not None and len(args) >= 3:
-            # If it's a coroutine type, extract the actual return type (third argument)
-            actual_return_type = args[2]
-            sync_wrapper.__annotations__["return"] = actual_return_type
+    @call_async
+    def info(self) -> InfoResponse:
+        """Fetch service information including parsed TCB info."""
+        raise NotImplementedError
 
-        # Also handle cases where the annotation might be a string
-        elif isinstance(return_annotation, str) and "Coroutine" in return_annotation:
-            # For string annotations, we need a different approach
-            # For now, we'll rely on the runtime type checking
-            pass
+    @call_async
+    def emit_event(
+        self,
+        event: str,
+        payload: str | bytes,
+    ) -> None:
+        """Emit an event that extends RTMR3 on TDX platforms."""
+        raise NotImplementedError
 
-    return sync_wrapper
+    @call_async
+    def get_tls_key(
+        self,
+        subject: str | None = None,
+        alt_names: List[str] | None = None,
+        usage_ra_tls: bool = False,
+        usage_server_auth: bool = True,
+        usage_client_auth: bool = False,
+    ) -> GetTlsKeyResponse:
+        """Request a TLS key from the service with optional parameters."""
+        raise NotImplementedError
+
+    @call_async
+    def is_reachable(self) -> bool:
+        """Return True if the service responds to a quick health call."""
+        raise NotImplementedError
+
+    def __enter__(self):
+        # Delegate to async client's context management for proper ref counting
+        self.async_client._client_ref_count += 1
+        # Create sync client eagerly for sync context manager
+        if self.async_client.use_sync_http:
+            self.async_client._get_sync_client()
+        else:
+            self.async_client._get_client()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        # Delegate to async client's context management for proper cleanup
+        self.async_client._client_ref_count -= 1
+        if self.async_client._client_ref_count == 0:
+            # For sync context, we only clean up sync clients
+            # Async clients should not be created in sync context anyway
+            if self.async_client._sync_client:
+                self.async_client._sync_client.close()
+                self.async_client._sync_client = None
 
 
-class TappdMethodsMixin:
-    """Deprecated Tappd methods mixin for backward compatibility."""
+class AsyncTappdClient(AsyncDstackClient):
+    """Deprecated async client kept for backward compatibility.
 
-    @abstractmethod
-    async def _send_rpc_request(
-        self, method: str, payload: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        pass
+    DEPRECATED: Use ``AsyncDstackClient`` instead.
+    """
+
+    def __init__(self, endpoint: str | None = None, use_sync_http: bool = False):
+        """Initialize deprecated async tappd client wrapper."""
+        emit_deprecation_warning(
+            "AsyncTappdClient is deprecated, please use AsyncDstackClient instead"
+        )
+
+        endpoint = get_tappd_endpoint(endpoint)
+        super().__init__(endpoint, use_sync_http=use_sync_http)
+        # Set the correct path prefix for tappd
+        self.PATH_PREFIX = "/prpc/Tappd."
 
     async def derive_key(
         self,
@@ -353,178 +536,46 @@ class TappdMethodsMixin:
         return GetQuoteResponse(**result)
 
 
-class SyncMethodsMixin:
-
-    pass
-
-
-class SyncMethodsMeta(type):
-
-    def __new__(mcs, name, bases, namespace, **kwargs):
-        cls = super().__new__(mcs, name, bases, namespace, **kwargs)
-
-        for base in bases:
-            if not hasattr(base, "_send_rpc_request"):
-                continue
-
-            for method_name in dir(base):
-                if method_name.startswith("_"):
-                    continue
-
-                base_method = getattr(base, method_name, None)
-                if not callable(base_method):
-                    continue
-
-                cls_method = getattr(cls, method_name, None)
-                if cls_method and inspect.iscoroutinefunction(cls_method):
-                    sync_method = sync_version(cls_method)
-
-                    # Fix the return type annotation for mypy
-                    if (
-                        hasattr(sync_method, "__annotations__")
-                        and "return" in sync_method.__annotations__
-                    ):
-                        return_annotation = sync_method.__annotations__["return"]
-                        origin = get_origin(return_annotation)
-                        args = get_args(return_annotation)
-
-                        # Extract return type from Coroutine[Any, Any, T] -> T
-                        if origin is not None and len(args) >= 3:
-                            sync_method.__annotations__["return"] = args[2]
-
-                    setattr(cls, method_name, sync_method)
-
-        return cls
-
-
-class BaseClient:
-    pass
-
-
-class AsyncDstackClient(BaseClient, BusinessMethodsMixin):
-
-    PATH_PREFIX = "/"
-
-    def __init__(self, endpoint: str | None = None):
-        endpoint = get_endpoint(endpoint)
-        self._client: Optional[httpx.AsyncClient] = None
-
-        if endpoint.startswith("http://") or endpoint.startswith("https://"):
-            self.transport = httpx.AsyncHTTPTransport()
-            self.base_url = endpoint
-        else:
-            # Check if Unix socket file exists
-            if endpoint.startswith("/") and not os.path.exists(endpoint):
-                raise FileNotFoundError(f"Unix socket file {endpoint} does not exist")
-            self.transport = httpx.AsyncHTTPTransport(uds=endpoint)
-            self.base_url = "http://localhost"
-
-    def _get_client(self) -> httpx.AsyncClient:
-        if self._client is None:
-            self._client = httpx.AsyncClient(
-                transport=self.transport, base_url=self.base_url, timeout=0.5
-            )
-        return self._client
-
-    async def _send_rpc_request(
-        self, method: str, payload: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        path = self.PATH_PREFIX + method
-        headers = {
-            "Content-Type": "application/json",
-            "User-Agent": f"dstack-sdk-python/{__version__}",
-        }
-
-        client = self._get_client()
-        response = await client.post(path, json=payload, headers=headers)
-        response.raise_for_status()
-        return cast(Dict[str, Any], response.json())
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        if self._client:
-            await self._client.aclose()
-            self._client = None
-
-
-class DstackClient(BaseClient, BusinessMethodsMixin, metaclass=SyncMethodsMeta):
-
-    PATH_PREFIX = "/"
-
-    def __init__(self, endpoint: str | None = None):
-        endpoint = get_endpoint(endpoint)
-        self._client: Optional[httpx.Client] = None
-
-        if endpoint.startswith("http://") or endpoint.startswith("https://"):
-            self.transport = httpx.HTTPTransport()
-            self.base_url = endpoint
-        else:
-            if endpoint.startswith("/") and not os.path.exists(endpoint):
-                raise FileNotFoundError(f"Unix socket file {endpoint} does not exist")
-            self.transport = httpx.HTTPTransport(uds=endpoint)
-            self.base_url = "http://localhost"
-
-    def _get_client(self) -> httpx.Client:
-        if self._client is None:
-            self._client = httpx.Client(
-                transport=self.transport, base_url=self.base_url, timeout=0.5
-            )
-        return self._client
-
-    async def _send_rpc_request(
-        self, method: str, payload: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        path = self.PATH_PREFIX + method
-        headers = {
-            "Content-Type": "application/json",
-            "User-Agent": f"dstack-sdk-python/{__version__}",
-        }
-
-        client = self._get_client()
-        response = client.post(path, json=payload, headers=headers)
-        response.raise_for_status()
-        return cast(Dict[str, Any], response.json())
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        if self._client:
-            self._client.close()
-            self._client = None
-
-
-class AsyncTappdClient(AsyncDstackClient, TappdMethodsMixin):
-    """Deprecated async client kept for backward compatibility.
-
-    DEPRECATED: Use ``AsyncDstackClient`` instead.
-    """
-
-    def __init__(self, endpoint: str | None = None):
-        emit_deprecation_warning(
-            "AsyncTappdClient is deprecated, please use AsyncDstackClient instead"
-        )
-
-        endpoint = get_tappd_endpoint(endpoint)
-        super().__init__(endpoint)
-        # Set the correct path prefix for tappd
-        self.PATH_PREFIX = "/prpc/Tappd."
-
-
-class TappdClient(DstackClient, TappdMethodsMixin, metaclass=SyncMethodsMeta):
+class TappdClient(DstackClient):
     """Deprecated client kept for backward compatibility.
 
     DEPRECATED: Use ``DstackClient`` instead.
     """
 
     def __init__(self, endpoint: str | None = None):
+        """Initialize deprecated tappd client wrapper."""
         emit_deprecation_warning(
             "TappdClient is deprecated, please use DstackClient instead"
         )
-
         endpoint = get_tappd_endpoint(endpoint)
-        super().__init__(endpoint)
-        # Set the correct path prefix for tappd
-        self.PATH_PREFIX = "/prpc/Tappd."
+        self.async_client = AsyncDstackClient(endpoint, use_sync_http=True)
+        self.async_client.PATH_PREFIX = "/prpc/Tappd."
+
+    @call_async_with_deprecation(
+        "derive_key", "derive_key is deprecated, please use get_key instead"
+    )
+    def derive_key(
+        self,
+        path: str | None = None,
+        subject: str | None = None,
+        alt_names: List[str] | None = None,
+    ) -> GetTlsKeyResponse:
+        """Use ``get_key`` instead (deprecated)."""
+        raise NotImplementedError
+
+    @call_async_with_deprecation(
+        "tdx_quote", "tdx_quote is deprecated, please use get_quote instead"
+    )
+    def tdx_quote(
+        self,
+        report_data: str | bytes,
+        hash_algorithm: str | None = None,
+    ) -> GetQuoteResponse:
+        """Use ``get_quote`` instead (deprecated)."""
+        raise NotImplementedError
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        pass
