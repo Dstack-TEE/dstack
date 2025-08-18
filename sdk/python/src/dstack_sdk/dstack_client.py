@@ -85,7 +85,12 @@ def call_async(func):
 
     @functools.wraps(func)
     def wrapper(self, *args, **kwargs):
-        async_method = getattr(self.async_client, func.__name__)
+        magic_map = {
+            "__enter__": "__aenter__",
+            "__exit__": "__aexit__",
+        }
+        async_method_name = magic_map.get(func.__name__) or func.__name__
+        async_method = getattr(self.async_client, async_method_name)
         return _step_coro(async_method(*args, **kwargs))
 
     return wrapper
@@ -417,25 +422,13 @@ class DstackClient(BaseClient):
         """Return True if the service responds to a quick health call."""
         raise NotImplementedError
 
+    @call_async
     def __enter__(self):
-        # Delegate to async client's context management for proper ref counting
-        self.async_client._client_ref_count += 1
-        # Create sync client eagerly for sync context manager
-        if self.async_client.use_sync_http:
-            self.async_client._get_sync_client()
-        else:
-            self.async_client._get_client()
-        return self
+        raise NotImplementedError
 
+    @call_async
     def __exit__(self, exc_type, exc_val, exc_tb):
-        # Delegate to async client's context management for proper cleanup
-        self.async_client._client_ref_count -= 1
-        if self.async_client._client_ref_count == 0:
-            # For sync context, we only clean up sync clients
-            # Async clients should not be created in sync context anyway
-            if self.async_client._sync_client:
-                self.async_client._sync_client.close()
-                self.async_client._sync_client = None
+        raise NotImplementedError
 
 
 class AsyncTappdClient(AsyncDstackClient):
@@ -545,8 +538,10 @@ class TappdClient(DstackClient):
         """Use ``get_quote`` instead (deprecated)."""
         raise NotImplementedError
 
+    @call_async
     def __enter__(self):
-        return self
+        raise NotImplementedError
 
+    @call_async
     def __exit__(self, exc_type, exc_val, exc_tb):
-        pass
+        raise NotImplementedError
