@@ -5,82 +5,103 @@
 import asyncio
 import sys
 
-from dstack_sdk import DstackClient, AsyncDstackClient, TappdClient, AsyncTappdClient, get_compose_hash, verify_env_encrypt_public_key
+from dstack_sdk import (
+    DstackClient,
+    AsyncDstackClient,
+    TappdClient,
+    AsyncTappdClient,
+    get_compose_hash,
+    verify_env_encrypt_public_key,
+)
 
 
 async def main():
     print("=== Python SDK Output Test ===")
-    
+
     try:
         # Test client get_key
         client = DstackClient()
         print("\n1. Testing DstackClient.get_key()")
-        
+
         test_paths = [
             {"path": "test/wallet", "purpose": "ethereum"},
             {"path": "test/signing", "purpose": "solana"},
-            {"path": "user/alice", "purpose": "mainnet"}
+            {"path": "user/alice", "purpose": "mainnet"},
         ]
-        
+
         for test_case in test_paths:
             path, purpose = test_case["path"], test_case["purpose"]
             key_result = client.get_key(path, purpose)
             print(f"get_key('{path}', '{purpose}'):")
             print(f"  key: {key_result.decode_key().hex()}")
             print(f"  signature_chain length: {len(key_result.signature_chain)}")
-            print(f"  signature_chain[0]: {key_result.decode_signature_chain()[0].hex()}")
+            print(
+                f"  signature_chain[0]: {key_result.decode_signature_chain()[0].hex()}"
+            )
 
         # Test viem integration (if available)
         print("\n2. Testing Viem Integration")
         eth_key = client.get_key("eth/test", "wallet")
-        
+
         print("\n2.1 to_account (legacy):")
         try:
             from dstack_sdk.ethereum import to_account
+
             account = to_account(eth_key)
             print(f"  address: {account.address}")
             print(f"  type: ethereum account")
         except ImportError:
-            print("  error: Ethereum integration not available (install with pip install 'dstack-sdk[eth]')")
+            print(
+                "  error: Ethereum integration not available (install with pip install 'dstack-sdk[eth]')"
+            )
         except Exception as error:
             print(f"  error: {error}")
-        
+
         print("\n2.2 to_account_secure:")
         try:
             from dstack_sdk.ethereum import to_account_secure
+
             account_secure = to_account_secure(eth_key)
             print(f"  address: {account_secure.address}")
             print(f"  type: ethereum account")
         except ImportError:
-            print("  error: Ethereum integration not available (install with pip install 'dstack-sdk[eth]')")
+            print(
+                "  error: Ethereum integration not available (install with pip install 'dstack-sdk[eth]')"
+            )
         except Exception as error:
             print(f"  error: {error}")
 
         # Test solana integration (if available)
         print("\n3. Testing Solana Integration")
         sol_key = client.get_key("sol/test", "wallet")
-        
+
         print("\n3.1 to_keypair (legacy):")
         try:
             from dstack_sdk.solana import to_keypair
+
             keypair = to_keypair(sol_key)
             print(f"  publicKey: {keypair.pubkey()}")
             print(f"  secretKey length: {len(bytes(keypair))}")
             print(f"  secretKey (first 32 bytes): {bytes(keypair)[:32].hex()}")
         except ImportError:
-            print("  error: Solana integration not available (install with pip install 'dstack-sdk[sol]')")
+            print(
+                "  error: Solana integration not available (install with pip install 'dstack-sdk[sol]')"
+            )
         except Exception as error:
             print(f"  error: {error}")
-        
+
         print("\n3.2 to_keypair_secure:")
         try:
             from dstack_sdk.solana import to_keypair_secure
+
             keypair_secure = to_keypair_secure(sol_key)
             print(f"  publicKey: {keypair_secure.pubkey()}")
             print(f"  secretKey length: {len(bytes(keypair_secure))}")
             print(f"  secretKey (first 32 bytes): {bytes(keypair_secure)[:32].hex()}")
         except ImportError:
-            print("  error: Solana integration not available (install with pip install 'dstack-sdk[sol]')")
+            print(
+                "  error: Solana integration not available (install with pip install 'dstack-sdk[sol]')"
+            )
         except Exception as error:
             print(f"  error: {error}")
 
@@ -106,7 +127,9 @@ async def main():
         try:
             async_tappd_client = AsyncTappdClient()
             print("\n4.3.1 AsyncTappdClient.get_key():")
-            async_tappd_key = await async_tappd_client.get_key("test/wallet", "ethereum")
+            async_tappd_key = await async_tappd_client.get_key(
+                "test/wallet", "ethereum"
+            )
             print(f"  key: {async_tappd_key.decode_key().hex()}")
             print(f"  signature_chain length: {len(async_tappd_key.signature_chain)}")
 
@@ -140,16 +163,16 @@ async def main():
                 "manifest_version": 1,
                 "name": "test-app",
                 "runner": "docker-compose",
-                "docker_compose_file": "services:\\n  app:\\n    image: test\\n    ports:\\n      - 8080:8080"
+                "docker_compose_file": "services:\\n  app:\\n    image: test\\n    ports:\\n      - 8080:8080",
             },
             {
                 "manifest_version": 1,
-                "name": "another-app", 
+                "name": "another-app",
                 "runner": "docker-compose",
-                "docker_compose_file": "services:\\n  web:\\n    build: .\\n    environment:\\n      - NODE_ENV=production"
-            }
+                "docker_compose_file": "services:\\n  web:\\n    build: .\\n    environment:\\n      - NODE_ENV=production",
+            },
         ]
-        
+
         for index, compose in enumerate(test_composes):
             hash_value = get_compose_hash(compose)
             print(f"compose {index + 1}: {hash_value}")
@@ -160,23 +183,29 @@ async def main():
         print("\n7. Testing verify_env_encrypt_public_key")
         test_cases = [
             {
-                "public_key": bytes.fromhex('e33a1832c6562067ff8f844a61e51ad051f1180b66ec2551fb0251735f3ee90a'),
-                "signature": bytes.fromhex('8542c49081fbf4e03f62034f13fbf70630bdf256a53032e38465a27c36fd6bed7a5e7111652004aef37f7fd92fbfc1285212c4ae6a6154203a48f5e16cad2cef00'),
-                "app_id": '0000000000000000000000000000000000000000'
+                "public_key": bytes.fromhex(
+                    "e33a1832c6562067ff8f844a61e51ad051f1180b66ec2551fb0251735f3ee90a"
+                ),
+                "signature": bytes.fromhex(
+                    "8542c49081fbf4e03f62034f13fbf70630bdf256a53032e38465a27c36fd6bed7a5e7111652004aef37f7fd92fbfc1285212c4ae6a6154203a48f5e16cad2cef00"
+                ),
+                "app_id": "0000000000000000000000000000000000000000",
             },
             {
-                "public_key": bytes.fromhex('deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef'),
-                "signature": bytes.fromhex('0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'),
-                "app_id": 'invalid-app-id'
-            }
+                "public_key": bytes.fromhex(
+                    "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+                ),
+                "signature": bytes.fromhex(
+                    "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+                ),
+                "app_id": "invalid-app-id",
+            },
         ]
 
         for index, test_case in enumerate(test_cases):
             try:
                 result = verify_env_encrypt_public_key(
-                    test_case["public_key"],
-                    test_case["signature"],
-                    test_case["app_id"]
+                    test_case["public_key"], test_case["signature"], test_case["app_id"]
                 )
                 print(f"test case {index + 1}: {result.hex() if result else 'null'}")
             except Exception as error:
@@ -185,6 +214,7 @@ async def main():
     except Exception as error:
         print(f"Error: {error}")
         sys.exit(1)
+
 
 if __name__ == "__main__":
     asyncio.run(main())

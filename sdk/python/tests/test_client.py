@@ -263,14 +263,15 @@ def test_tappd_client_deprecated():
     with warnings.catch_warnings(record=True) as w:
         warnings.simplefilter("always")
         TappdClient()
-        
+
         # Filter for TappdClient deprecation warnings specifically
         tappd_warnings = [
-            warning for warning in w 
-            if issubclass(warning.category, DeprecationWarning) 
+            warning
+            for warning in w
+            if issubclass(warning.category, DeprecationWarning)
             and "TappdClient is deprecated" in str(warning.message)
         ]
-        
+
         assert len(tappd_warnings) == 1
         assert "TappdClient is deprecated" in str(tappd_warnings[0].message)
 
@@ -307,14 +308,15 @@ def test_async_tappd_client_deprecated():
     with warnings.catch_warnings(record=True) as w:
         warnings.simplefilter("always")
         AsyncTappdClient()
-        
+
         # Filter for AsyncTappdClient deprecation warnings specifically
         tappd_warnings = [
-            warning for warning in w 
-            if issubclass(warning.category, DeprecationWarning) 
+            warning
+            for warning in w
+            if issubclass(warning.category, DeprecationWarning)
             and "AsyncTappdClient is deprecated" in str(warning.message)
         ]
-        
+
         assert len(tappd_warnings) == 1
         assert "AsyncTappdClient is deprecated" in str(tappd_warnings[0].message)
 
@@ -329,9 +331,7 @@ async def test_async_tappd_client_derive_key_deprecated():
         await client.derive_key("/", "test")
         # Should have warnings for both constructor and derive_key
         warning_messages = [str(warning.message) for warning in w]
-        assert any(
-            "AsyncTappdClient is deprecated" in msg for msg in warning_messages
-        )
+        assert any("AsyncTappdClient is deprecated" in msg for msg in warning_messages)
         assert any("derive_key is deprecated" in msg for msg in warning_messages)
 
 
@@ -345,9 +345,7 @@ async def test_async_tappd_client_tdx_quote_deprecated():
         await client.tdx_quote("test data", "raw")
         # Should have warnings for both constructor and tdx_quote
         warning_messages = [str(warning.message) for warning in w]
-        assert any(
-            "AsyncTappdClient is deprecated" in msg for msg in warning_messages
-        )
+        assert any("AsyncTappdClient is deprecated" in msg for msg in warning_messages)
         assert any("tdx_quote is deprecated" in msg for msg in warning_messages)
 
 

@@ -7,6 +7,7 @@
 Use with ``dstack_sdk.DstackClient`` responses to create ``eth_account``
 objects for signing and transacting.
 """
+
 import hashlib
 import warnings
 

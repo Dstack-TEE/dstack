@@ -35,8 +35,9 @@ if [ ! -d .venv ]; then
 fi
 source .venv/bin/activate
 pip install -e .
-pip install pytest pytest-asyncio evidence-api web3 solders
+pip install pytest pytest-asyncio evidence-api web3 solders ruff
 pytest
+ruff format --check --diff .
 popd
 
 pushd js/

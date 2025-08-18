@@ -197,7 +197,6 @@ class BaseClient:
 
 
 class AsyncDstackClient(BaseClient):
-
     PATH_PREFIX = "/"
 
     def __init__(self, endpoint: str | None = None, use_sync_http: bool = False):
@@ -363,7 +362,6 @@ class AsyncDstackClient(BaseClient):
 
 
 class DstackClient(BaseClient):
-
     PATH_PREFIX = "/"
 
     def __init__(self, endpoint: str | None = None):

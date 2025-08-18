@@ -41,9 +41,9 @@ def test_sync_method_type_annotations():
     except Exception as e:
         print(f"Error getting type hints for get_tls_key: {e}")
         # If we can't get type hints, at least check it's not a coroutine function
-        assert not inspect.iscoroutinefunction(
-            get_tls_key_method
-        ), "Sync method should not be a coroutine function"
+        assert not inspect.iscoroutinefunction(get_tls_key_method), (
+            "Sync method should not be a coroutine function"
+        )
 
 
 def test_all_sync_method_types():
@@ -64,9 +64,9 @@ def test_all_sync_method_types():
         assert callable(method), f"{method_name} should be callable"
 
         # Should not be coroutine function for sync client
-        assert not inspect.iscoroutinefunction(
-            method
-        ), f"Sync {method_name} should not be coroutine function"
+        assert not inspect.iscoroutinefunction(method), (
+            f"Sync {method_name} should not be coroutine function"
+        )
 
         try:
             type_hints = get_type_hints(method)
@@ -80,7 +80,9 @@ def test_all_sync_method_types():
                 assert (
                     return_type == expected_return_type
                     or return_type is expected_return_type
-                ), f"{method_name} should return {expected_return_type}, got {return_type}"
+                ), (
+                    f"{method_name} should return {expected_return_type}, got {return_type}"
+                )
 
         except Exception as e:
             print(f"Warning: Could not get type hints for {method_name}: {e}")
@@ -104,9 +106,9 @@ def test_async_method_types():
         assert callable(method), f"{method_name} should be callable"
 
         # Should be coroutine function for async client
-        assert inspect.iscoroutinefunction(
-            method
-        ), f"Async {method_name} should be coroutine function"
+        assert inspect.iscoroutinefunction(method), (
+            f"Async {method_name} should be coroutine function"
+        )
 
         try:
             type_hints = get_type_hints(method)
@@ -153,9 +155,9 @@ def test_method_signature_comparison():
         if "self" in async_params:
             async_params.remove("self")
 
-        assert (
-            sync_params == async_params
-        ), f"Parameter mismatch for {method_name}: sync={sync_params}, async={async_params}"
+        assert sync_params == async_params, (
+            f"Parameter mismatch for {method_name}: sync={sync_params}, async={async_params}"
+        )
 
 
 if __name__ == "__main__":
