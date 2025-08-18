@@ -2,37 +2,42 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Literal, Optional, List, Dict, Any
-import binascii
-import json
-import hashlib
-import os
-import logging
 import base64
+import binascii
+import functools
+import hashlib
+import json
+import logging
+import os
+from typing import Any
+from typing import Dict
+from typing import List
+from typing import Optional
+from typing import cast
+import warnings
 
-from pydantic import BaseModel
 import httpx
+from pydantic import BaseModel
 
-logger = logging.getLogger('dstack_sdk')
+logger = logging.getLogger("dstack_sdk")
+
+__version__ = "0.2.0"
 
 
 INIT_MR = "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
 
 
-def replay_rtmr(history: list[str]):
-    """
-    Replay the RTMR history to calculate the final RTMR value.
-    """
+def replay_rtmr(history: list[str]) -> str:
     if len(history) == 0:
         return INIT_MR
     mr = bytes.fromhex(INIT_MR)
     for content in history:
         # mr = sha384(concat(mr, content))
         # if content is shorter than 48 bytes, pad it with zeros
-        content = bytes.fromhex(content)
-        if len(content) < 48:
-            content = content.ljust(48, b'\0')
-        mr = hashlib.sha384(mr + content).digest()
+        content_bytes = bytes.fromhex(content)
+        if len(content_bytes) < 48:
+            content_bytes = content_bytes.ljust(48, b"\0")
+        mr = hashlib.sha384(mr + content_bytes).digest()
     return mr.hex()
 
 
@@ -41,14 +46,74 @@ def get_endpoint(endpoint: str | None = None) -> str:
         return endpoint
     if "DSTACK_SIMULATOR_ENDPOINT" in os.environ:
         logger.info(
-            f"Using simulator endpoint: {os.environ['DSTACK_SIMULATOR_ENDPOINT']}")
+            f"Using simulator endpoint: {os.environ['DSTACK_SIMULATOR_ENDPOINT']}"
+        )
         return os.environ["DSTACK_SIMULATOR_ENDPOINT"]
     return "/var/run/dstack.sock"
+
+
+def get_tappd_endpoint(endpoint: str | None = None) -> str:
+    if endpoint:
+        return endpoint
+    if "TAPPD_SIMULATOR_ENDPOINT" in os.environ:
+        logger.info(f"Using tappd endpoint: {os.environ['TAPPD_SIMULATOR_ENDPOINT']}")
+        return os.environ["TAPPD_SIMULATOR_ENDPOINT"]
+    return "/var/run/tappd.sock"
+
+
+def emit_deprecation_warning(message: str, stacklevel: int = 2) -> None:
+    warnings.warn(message, DeprecationWarning, stacklevel=stacklevel)
+
+
+def call_async(func):
+    """Call async methods synchronously.
+
+    This decorator wraps a method to call its async counterpart from
+    self.async_client and run it synchronously using `coro.send(None)`.
+
+    Supports being called from within async contexts by using
+    a sync HTTP client internally and a custom coroutine runner.
+    """
+
+    def _step_coro(coro):
+        """Step through a coroutine that only does sync operations."""
+        try:
+            result = coro.send(None)
+            raise RuntimeError(f"Coroutine yielded unexpected value: {result}")
+        except StopIteration as e:
+            return e.value
+
+    @functools.wraps(func)
+    def wrapper(self, *args, **kwargs):
+        magic_map = {
+            "__enter__": "__aenter__",
+            "__exit__": "__aexit__",
+        }
+        async_method_name = magic_map.get(func.__name__) or func.__name__
+        async_method = getattr(self.async_client, async_method_name)
+        return _step_coro(async_method(*args, **kwargs))
+
+    return wrapper
 
 
 class GetTlsKeyResponse(BaseModel):
     key: str
     certificate_chain: List[str]
+
+    def as_uint8array(self, max_length: Optional[int] = None) -> bytes:
+        content = self.key.replace("-----BEGIN PRIVATE KEY-----", "")
+        content = content.replace("-----END PRIVATE KEY-----", "")
+        content = content.replace("\n", "").replace(" ", "")
+
+        binary_der = base64.b64decode(content)
+
+        if max_length is None:
+            return binary_der
+        else:
+            result = bytearray(max_length)
+            copy_len = min(len(binary_der), max_length)
+            result[:copy_len] = binary_der[:copy_len]
+            return bytes(result)
 
 
 class GetKeyResponse(BaseModel):
@@ -69,18 +134,16 @@ class GetQuoteResponse(BaseModel):
     def decode_quote(self) -> bytes:
         return bytes.fromhex(self.quote)
 
-    def decode_event_log(self) -> 'List[EventLog]':
+    def decode_event_log(self) -> "List[EventLog]":
         return [EventLog(**event) for event in json.loads(self.event_log)]
 
     def replay_rtmrs(self) -> Dict[int, str]:
-        # NOTE: before dstack-0.3.0, event log might not a JSON file.
         parsed_event_log = json.loads(self.event_log)
-        rtmrs = {}
+        rtmrs: Dict[int, str] = {}
         for idx in range(4):
-            history = []
-            for event in parsed_event_log:
-                if event.get('imr') == idx:
-                    history.append(event['digest'])
+            history = [
+                event["digest"] for event in parsed_event_log if event.get("imr") == idx
+            ]
             rtmrs[idx] = replay_rtmr(history)
         return rtmrs
 
@@ -99,7 +162,7 @@ class TcbInfo(BaseModel):
     rtmr1: str
     rtmr2: str
     rtmr3: str
-    os_image_hash: str = ""  # Optional: empty if OS image is not measured by KMS
+    os_image_hash: str = ""
     compose_hash: str
     device_id: str
     app_compose: str
@@ -113,233 +176,160 @@ class InfoResponse(BaseModel):
     tcb_info: TcbInfo
     app_name: str
     device_id: str
-    os_image_hash: str = ""  # Optional: empty if OS image is not measured by KMS
+    os_image_hash: str = ""
     key_provider_info: str
     compose_hash: str
 
     @classmethod
-    def model_validate(cls, obj: Any) -> 'InfoResponse':
-        if isinstance(obj, dict) and 'tcb_info' in obj and isinstance(obj['tcb_info'], str):
+    def parse_response(cls, obj: Any) -> "InfoResponse":
+        if (
+            isinstance(obj, dict)
+            and "tcb_info" in obj
+            and isinstance(obj["tcb_info"], str)
+        ):
             obj = dict(obj)
-            obj['tcb_info'] = TcbInfo(**json.loads(obj['tcb_info']))
-        return super().model_validate(obj)
+            obj["tcb_info"] = TcbInfo(**json.loads(obj["tcb_info"]))
+        return cls(**obj)
 
 
 class BaseClient:
     pass
 
 
-class DstackClient(BaseClient):
-    def __init__(self, endpoint: str | None = None):
-        endpoint = get_endpoint(endpoint)
-        if endpoint.startswith("http://") or endpoint.startswith('https://'):
-            self.transport = httpx.HTTPTransport()
-            self.base_url = endpoint
-        else:
-            self.transport = httpx.HTTPTransport(uds=endpoint)
-            self.base_url = "http://localhost"
-
-    def _send_rpc_request(self, path, payload):
-        with httpx.Client(transport=self.transport, base_url=self.base_url) as client:
-            response = client.post(
-                path,
-                json=payload,
-                headers={"Content-Type": "application/json"}
-            )
-            response.raise_for_status()
-            return response.json()
-
-    def get_key(
-        self,
-        path: str | None = None,
-        purpose: str | None = None,
-    ) -> GetKeyResponse:
-        """
-        Derives a key from the given path + app root key.
-
-        Args:
-            path: Path for key derivation (optional)
-            purpose: Purpose for key derivation (optional)
-
-        Returns:
-            GetKeyResponse object containing key and signature chain
-
-        The key derivation process works as follows:
-
-        1. The app's root key is used as the base for derivation
-        2. The provided path is used as context data for HKDF-SHA256 derivation
-        3. A derived ECDSA key is created
-        4. A message is formed by combining the purpose and the hex-encoded public key of the derived key
-        5. The app's key signs this message using Keccak256 (Ethereum-style signing)
-        6. The signature includes the recovery ID for verification
-        7. A signature chain is returned containing:
-           - First element: The app key's signature over the derived key's public key
-           - Second element: The KMS root key's signature over the app's public key
-
-        To verify the key:
-        1. Verify the app's signature in the chain using the app's public key
-        2. Verify the KMS root key's signature over the app's public key
-        3. Verify that the message signed by the app key matches the derived key's public key
-        4. Optionally, recover the app's public key from its signature and verify it matches
-           the expected app public key
-        """
-        data: Dict[str, Any] = {"path": path or '', "purpose": purpose or ''}
-        result = self._send_rpc_request("/GetKey", data)
-        return GetKeyResponse(**result)
-
-    def get_quote(
-        self,
-        report_data: str | bytes,
-    ) -> GetQuoteResponse:
-        if not report_data or not isinstance(report_data, (bytes, str)):
-            raise ValueError("report_data can not be empty")
-        is_str = isinstance(report_data, str)
-        if is_str:
-            report_data = report_data.encode()
-        if len(report_data) > 64:
-            raise ValueError("report_data must be less than 64 bytes")
-        hex = binascii.hexlify(report_data).decode()
-        result = self._send_rpc_request("/GetQuote", {"report_data": hex})
-        return GetQuoteResponse(**result)
-
-    def info(self) -> InfoResponse:
-        result = self._send_rpc_request("/Info", {})
-        return InfoResponse.model_validate(result)
-
-    def emit_event(
-        self,
-        event: str,
-        payload: str | bytes,
-    ) -> None:
-        """
-        Emit an event. This extends the event to RTMR3 on TDX platform.
-
-        Requires dstack OS 0.5.0 or later.
-
-        Args:
-            event: The event name
-            payload: The event data as string or bytes
-
-        Returns:
-            None
-        """
-        if not event:
-            raise ValueError("event name cannot be empty")
-
-        if isinstance(payload, str):
-            payload = payload.encode()
-
-        hex_payload = binascii.hexlify(payload).decode()
-        self._send_rpc_request("/EmitEvent", {"event": event, "payload": hex_payload})
-        return None
-
-    def get_tls_key(
-        self,
-        subject: str | None = None,
-        alt_names: List[str] | None = None,
-        usage_ra_tls: bool = False,
-        usage_server_auth: bool = False,
-        usage_client_auth: bool = False,
-    ) -> GetTlsKeyResponse:
-        """
-        Gets a TLS key from the dstack service with optional parameters.
-
-        Args:
-            subject: The subject for the TLS key
-            alt_names: Alternative names for the TLS key
-            usage_ra_tls: Whether to enable RA TLS usage
-            usage_server_auth: Whether to enable server auth usage
-            usage_client_auth: Whether to enable client auth usage
-
-        Returns:
-            GetTlsKeyResponse object containing the key and certificate chain
-        """
-        data: Dict[str, Any] = {
-            "subject": subject or "",
-            "usage_ra_tls": usage_ra_tls,
-            "usage_server_auth": usage_server_auth,
-            "usage_client_auth": usage_client_auth,
-        }
-        if alt_names:
-            data["alt_names"] = alt_names
-
-        result = self._send_rpc_request("/GetTlsKey", data)
-        return GetTlsKeyResponse(**result)
-
-
 class AsyncDstackClient(BaseClient):
-    def __init__(self, endpoint=None):
+    PATH_PREFIX = "/"
+
+    def __init__(self, endpoint: str | None = None, use_sync_http: bool = False):
+        """Initialize async client with HTTP or Unix-socket transport.
+
+        Args:
+            endpoint: HTTP/HTTPS URL or Unix socket path
+            use_sync_http: If True, use sync HTTP client internally
+
+        """
         endpoint = get_endpoint(endpoint)
-        if endpoint.startswith("http://") or endpoint.startswith('https://'):
-            self.transport = httpx.AsyncHTTPTransport()
+        self.use_sync_http = use_sync_http
+        self._client: Optional[httpx.AsyncClient] = None
+        self._sync_client: Optional[httpx.Client] = None
+        self._client_ref_count = 0
+
+        if endpoint.startswith("http://") or endpoint.startswith("https://"):
+            self.async_transport = httpx.AsyncHTTPTransport()
+            self.sync_transport = httpx.HTTPTransport()
             self.base_url = endpoint
         else:
-            self.transport = httpx.AsyncHTTPTransport(uds=endpoint)
+            # Check if Unix socket file exists
+            if endpoint.startswith("/") and not os.path.exists(endpoint):
+                raise FileNotFoundError(f"Unix socket file {endpoint} does not exist")
+            self.async_transport = httpx.AsyncHTTPTransport(uds=endpoint)
+            self.sync_transport = httpx.HTTPTransport(uds=endpoint)
             self.base_url = "http://localhost"
 
-    async def _send_rpc_request(self, path, payload):
-        async with httpx.AsyncClient(transport=self.transport, base_url=self.base_url) as client:
-            response = await client.post(
-                path,
-                json=payload,
-                headers={"Content-Type": "application/json"}
+    def _get_client(self) -> httpx.AsyncClient:
+        if self._client is None:
+            self._client = httpx.AsyncClient(
+                transport=self.async_transport, base_url=self.base_url, timeout=0.5
             )
+        return self._client
+
+    def _get_sync_client(self) -> httpx.Client:
+        if self._sync_client is None:
+            self._sync_client = httpx.Client(
+                transport=self.sync_transport, base_url=self.base_url, timeout=0.5
+            )
+        return self._sync_client
+
+    async def _send_rpc_request(
+        self, method: str, payload: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Send an RPC request and return parsed JSON.
+
+        Uses sync or async HTTP client based on use_sync_http flag.
+        Maintains async signature for compatibility.
+        """
+        path = self.PATH_PREFIX + method
+        headers = {
+            "Content-Type": "application/json",
+            "User-Agent": f"dstack-sdk-python/{__version__}",
+        }
+
+        if self.use_sync_http:
+            # Use sync HTTP client - works from any context
+            sync_client: httpx.Client = self._get_sync_client()
+            response = sync_client.post(path, json=payload, headers=headers)
             response.raise_for_status()
-            return response.json()
+            return cast(Dict[str, Any], response.json())
+        else:
+            # Use async HTTP client - traditional async behavior
+            async_client: httpx.AsyncClient = self._get_client()
+            response = await async_client.post(path, json=payload, headers=headers)
+            response.raise_for_status()
+            return cast(Dict[str, Any], response.json())
+
+    async def __aenter__(self):
+        self._client_ref_count += 1
+        # Eagerly create client when entering context
+        if self.use_sync_http:
+            self._get_sync_client()
+        else:
+            self._get_client()
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        self._client_ref_count -= 1
+        if self._client_ref_count == 0:
+            if self._client:
+                await self._client.aclose()
+                self._client = None
+            if self._sync_client:
+                self._sync_client.close()
+                self._sync_client = None
 
     async def get_key(
         self,
         path: str | None = None,
         purpose: str | None = None,
     ) -> GetKeyResponse:
-        data: Dict[str, Any] = {"path": path or '', "purpose": purpose or ''}
-        result = await self._send_rpc_request("/GetKey", data)
+        """Derive a key from the given path and purpose."""
+        data: Dict[str, Any] = {"path": path or "", "purpose": purpose or ""}
+        result = await self._send_rpc_request("GetKey", data)
         return GetKeyResponse(**result)
 
     async def get_quote(
         self,
         report_data: str | bytes,
     ) -> GetQuoteResponse:
+        """Request an attestation quote for the provided report data."""
         if not report_data or not isinstance(report_data, (bytes, str)):
             raise ValueError("report_data can not be empty")
-        is_str = isinstance(report_data, str)
-        if is_str:
-            report_data = report_data.encode()
-        if len(report_data) > 64:
+        report_bytes: bytes = (
+            report_data.encode() if isinstance(report_data, str) else report_data
+        )
+        if len(report_bytes) > 64:
             raise ValueError("report_data must be less than 64 bytes")
-        hex = binascii.hexlify(report_data).decode()
-        result = await self._send_rpc_request("/GetQuote", {"report_data": hex})
+        hex = binascii.hexlify(report_bytes).decode()
+        result = await self._send_rpc_request("GetQuote", {"report_data": hex})
         return GetQuoteResponse(**result)
 
     async def info(self) -> InfoResponse:
-        result = await self._send_rpc_request("/Info", {})
-        return InfoResponse.model_validate(result)
+        """Fetch service information including parsed TCB info."""
+        result = await self._send_rpc_request("Info", {})
+        return InfoResponse.parse_response(result)
 
     async def emit_event(
         self,
         event: str,
         payload: str | bytes,
     ) -> None:
-        """
-        Emit an event. This extends the event to RTMR3 on TDX platform.
-
-        Requires dstack OS 0.5.0 or later.
-
-        Args:
-            event: The event name
-            payload: The event data as string or bytes
-
-        Returns:
-            None
-        """
+        """Emit an event that extends RTMR3 on TDX platforms."""
         if not event:
             raise ValueError("event name cannot be empty")
 
-        if isinstance(payload, str):
-            payload = payload.encode()
-
-        hex_payload = binascii.hexlify(payload).decode()
-        await self._send_rpc_request("/EmitEvent", {"event": event, "payload": hex_payload})
+        payload_bytes: bytes = payload.encode() if isinstance(payload, str) else payload
+        hex_payload = binascii.hexlify(payload_bytes).decode()
+        await self._send_rpc_request(
+            "EmitEvent", {"event": event, "payload": hex_payload}
+        )
         return None
 
     async def get_tls_key(
@@ -347,22 +337,10 @@ class AsyncDstackClient(BaseClient):
         subject: str | None = None,
         alt_names: List[str] | None = None,
         usage_ra_tls: bool = False,
-        usage_server_auth: bool = False,
+        usage_server_auth: bool = True,
         usage_client_auth: bool = False,
     ) -> GetTlsKeyResponse:
-        """
-        Gets a TLS key from the dstack service with optional parameters.
-
-        Args:
-            subject: The subject for the TLS key
-            alt_names: Alternative names for the TLS key
-            usage_ra_tls: Whether to enable RA TLS usage
-            usage_server_auth: Whether to enable server auth usage
-            usage_client_auth: Whether to enable client auth usage
-
-        Returns:
-            GetTlsKeyResponse object containing the key and certificate chain
-        """
+        """Request a TLS key from the service with optional parameters."""
         data: Dict[str, Any] = {
             "subject": subject or "",
             "usage_ra_tls": usage_ra_tls,
@@ -370,7 +348,199 @@ class AsyncDstackClient(BaseClient):
             "usage_client_auth": usage_client_auth,
         }
         if alt_names:
+            data["alt_names"] = list(alt_names)
+
+        result = await self._send_rpc_request("GetTlsKey", data)
+        return GetTlsKeyResponse(**result)
+
+    async def is_reachable(self) -> bool:
+        """Return True if the service responds to a quick health call."""
+        try:
+            await self._send_rpc_request("Info", {})
+            return True
+        except Exception:
+            return False
+
+
+class DstackClient(BaseClient):
+    PATH_PREFIX = "/"
+
+    def __init__(self, endpoint: str | None = None):
+        """Initialize client with HTTP or Unix-socket transport.
+
+        If a non-HTTP(S) endpoint is provided, it is treated as a Unix socket
+        path and validated for existence.
+        """
+        self.async_client = AsyncDstackClient(endpoint, use_sync_http=True)
+
+    @call_async
+    def get_key(
+        self,
+        path: str | None = None,
+        purpose: str | None = None,
+    ) -> GetKeyResponse:
+        """Derive a key from the given path and purpose."""
+        raise NotImplementedError
+
+    @call_async
+    def get_quote(
+        self,
+        report_data: str | bytes,
+    ) -> GetQuoteResponse:
+        """Request an attestation quote for the provided report data."""
+        raise NotImplementedError
+
+    @call_async
+    def info(self) -> InfoResponse:
+        """Fetch service information including parsed TCB info."""
+        raise NotImplementedError
+
+    @call_async
+    def emit_event(
+        self,
+        event: str,
+        payload: str | bytes,
+    ) -> None:
+        """Emit an event that extends RTMR3 on TDX platforms."""
+        raise NotImplementedError
+
+    @call_async
+    def get_tls_key(
+        self,
+        subject: str | None = None,
+        alt_names: List[str] | None = None,
+        usage_ra_tls: bool = False,
+        usage_server_auth: bool = True,
+        usage_client_auth: bool = False,
+    ) -> GetTlsKeyResponse:
+        """Request a TLS key from the service with optional parameters."""
+        raise NotImplementedError
+
+    @call_async
+    def is_reachable(self) -> bool:
+        """Return True if the service responds to a quick health call."""
+        raise NotImplementedError
+
+    @call_async
+    def __enter__(self):
+        raise NotImplementedError
+
+    @call_async
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        raise NotImplementedError
+
+
+class AsyncTappdClient(AsyncDstackClient):
+    """Deprecated async client kept for backward compatibility.
+
+    DEPRECATED: Use ``AsyncDstackClient`` instead.
+    """
+
+    def __init__(self, endpoint: str | None = None, use_sync_http: bool = False):
+        """Initialize deprecated async tappd client wrapper."""
+        if not use_sync_http:
+            # Already warned in TappdClient.__init__
+            emit_deprecation_warning(
+                "AsyncTappdClient is deprecated, please use AsyncDstackClient instead"
+            )
+
+        endpoint = get_tappd_endpoint(endpoint)
+        super().__init__(endpoint, use_sync_http=use_sync_http)
+        # Set the correct path prefix for tappd
+        self.PATH_PREFIX = "/prpc/Tappd."
+
+    async def derive_key(
+        self,
+        path: str | None = None,
+        subject: str | None = None,
+        alt_names: List[str] | None = None,
+    ) -> GetTlsKeyResponse:
+        """Use ``get_key`` instead (deprecated)."""
+        emit_deprecation_warning("derive_key is deprecated, please use get_key instead")
+
+        data: Dict[str, Any] = {
+            "path": path or "",
+            "subject": subject or path or "",
+        }
+        if alt_names:
             data["alt_names"] = alt_names
 
-        result = await self._send_rpc_request("/GetTlsKey", data)
+        result = await self._send_rpc_request("DeriveKey", data)
         return GetTlsKeyResponse(**result)
+
+    async def tdx_quote(
+        self,
+        report_data: str | bytes,
+        hash_algorithm: str | None = None,
+    ) -> GetQuoteResponse:
+        """Use ``get_quote`` instead (deprecated)."""
+        emit_deprecation_warning(
+            "tdx_quote is deprecated, please use get_quote instead"
+        )
+
+        if not report_data or not isinstance(report_data, (bytes, str)):
+            raise ValueError("report_data can not be empty")
+
+        report_bytes: bytes = (
+            report_data.encode() if isinstance(report_data, str) else report_data
+        )
+        hex_data = binascii.hexlify(report_bytes).decode()
+
+        if hash_algorithm == "raw":
+            if len(hex_data) > 128:
+                raise ValueError(
+                    "Report data is too large, it should less then 64 bytes when hash_algorithm is raw."
+                )
+            if len(hex_data) < 128:
+                hex_data = hex_data.zfill(128)
+
+        payload = {"report_data": hex_data, "hash_algorithm": hash_algorithm or "raw"}
+
+        result = await self._send_rpc_request("TdxQuote", payload)
+
+        if "error" in result:
+            raise RuntimeError(result["error"])
+
+        return GetQuoteResponse(**result)
+
+
+class TappdClient(DstackClient):
+    """Deprecated client kept for backward compatibility.
+
+    DEPRECATED: Use ``DstackClient`` instead.
+    """
+
+    def __init__(self, endpoint: str | None = None):
+        """Initialize deprecated tappd client wrapper."""
+        emit_deprecation_warning(
+            "TappdClient is deprecated, please use DstackClient instead"
+        )
+        endpoint = get_tappd_endpoint(endpoint)
+        self.async_client = AsyncTappdClient(endpoint, use_sync_http=True)
+
+    @call_async
+    def derive_key(
+        self,
+        path: str | None = None,
+        subject: str | None = None,
+        alt_names: List[str] | None = None,
+    ) -> GetTlsKeyResponse:
+        """Use ``get_key`` instead (deprecated)."""
+        raise NotImplementedError
+
+    @call_async
+    def tdx_quote(
+        self,
+        report_data: str | bytes,
+        hash_algorithm: str | None = None,
+    ) -> GetQuoteResponse:
+        """Use ``get_quote`` instead (deprecated)."""
+        raise NotImplementedError
+
+    @call_async
+    def __enter__(self):
+        raise NotImplementedError
+
+    @call_async
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        raise NotImplementedError

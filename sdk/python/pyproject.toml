@@ -4,15 +4,17 @@
 
 [project]
 name = "dstack-sdk"
-version = "0.2.0"
+version = "0.5.0"
 description = "dstack SDK for Python"
 authors = [
     {name = "Leechael Yim", email = "yanleech@gmail.com"},
+    {name = "Kevin Wang", email = "wy721@qq.com"},
 ]
 dependencies = [
     "httpx>=0.27.2",
     "asyncio>=3.4.3",
     "pydantic>=2.9.2",
+    "cryptography>=43.0.0",
 ]
 requires-python = ">=3.10"
 readme = "README.md"
@@ -29,14 +31,100 @@ all = ["solders", "web3"]
 requires = ["pdm-backend"]
 build-backend = "pdm.backend"
 
+[dependency-groups]
+lint = [
+    "mypy>=1.8.0",
+]
+solana = [
+    "solders",
+]
+ethereum = [
+    "web3",
+]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+disallow_untyped_decorators = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_no_return = true
+warn_unreachable = true
+strict_equality = true
+show_error_codes = true
+
+# Ruff configuration
+[tool.ruff]
+line-length = 88
+target-version = "py310"
+
+[tool.ruff.lint]
+extend-select = [
+    "E",  # pycodestyle errors
+    "F",  # pyflakes
+    "I",  # isort
+    "D",  # pydocstyle
+]
+extend-ignore = [
+    "E203",  # whitespace before ':'
+    "E501",  # line too long (handled by formatter)
+    "D203",  # one-blank-line-before-class (conflicts with D211)
+    "D213",  # multi-line-summary-second-line (conflicts with D212)
+]
+
+[tool.ruff.lint.isort]
+force-single-line = true
+force-sort-within-sections = true
+combine-as-imports = false
+known-first-party = ["dstack_sdk"]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]  # imported but unused
+"tests/*.py" = ["D100", "D101", "D102", "D103", "D104"]  # relax docstring rules for tests
+"src/dstack_sdk/*.py" = ["D100", "D101", "D102", "D103", "D104", "D105", "D106", "D107"]  # relax all docstring rules for source code
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
 [tool.pdm]
 distribution = true
 
 [tool.pdm.publish]
 repository = "pypi"
 
+[tool.pdm.scripts]
+# Formatting scripts
+fmt = {composite = ["ruff format src/ tests/", "ruff check --fix src/ tests/"]}
+format = {composite = ["ruff format src/ tests/", "ruff check --fix src/ tests/"]}
+
+# Linting scripts  
+lint = {composite = ["ruff check src/ tests/", "mypy src/"]}
+check = {composite = ["ruff check src/ tests/", "ruff format --check src/ tests/", "mypy src/"]}
+
+# Testing scripts
+test = "pytest"
+test-cov = "pytest --cov=src/"
+
+# Combined scripts
+check-all = {composite = ["fmt", "lint", "test"]}
+verify = {composite = ["check", "test"]}
+
+[tool.pytest.ini_options]
+asyncio_default_fixture_loop_scope = "function"
+markers = [
+    "asyncio: marks tests as asyncio (deselect with '-m \"not asyncio\"')"
+]
+
 [tool.pdm.dev-dependencies]
-test = [
+dev = [
+    "ruff>=0.12.9",
+    "mypy>=1.8.0",
     "pytest>=8.3.3",
     "pytest-asyncio>=0.24.0",
     "evidence-api>=0.5.0",
