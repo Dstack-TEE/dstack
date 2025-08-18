@@ -13,6 +13,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{from_str, Value};
 use sha2::Digest;
 
+#[cfg(feature = "borsh_schema")]
+use borsh::BorshSchema;
 #[cfg(feature = "borsh")]
 use borsh::{BorshDeserialize, BorshSerialize};
 
@@ -37,6 +39,7 @@ fn replay_rtmr(history: Vec<String>) -> Result<String, FromHexError> {
 /// Represents an event log entry in the system
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "borsh", derive(BorshSerialize, BorshDeserialize))]
+#[cfg_attr(feature = "borsh_schema", derive(BorshSchema))]
 pub struct EventLog {
     /// The index of the IMR (Integrity Measurement Register)
     pub imr: u32,
@@ -53,6 +56,8 @@ pub struct EventLog {
 /// Configuration for TLS key generation
 #[derive(Debug, bon::Builder, Serialize, Deserialize)]
 #[cfg_attr(feature = "borsh", derive(BorshSerialize, BorshDeserialize))]
+#[cfg_attr(feature = "borsh_schema", derive(BorshSchema))]
+
 pub struct TlsKeyConfig {
     /// The subject name for the certificate
     #[builder(into, default = String::new())]
@@ -74,6 +79,8 @@ pub struct TlsKeyConfig {
 /// Response containing a key and its signature chain
 #[derive(Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "borsh", derive(BorshSerialize, BorshDeserialize))]
+#[cfg_attr(feature = "borsh_schema", derive(BorshSchema))]
+
 pub struct GetKeyResponse {
     /// The key in hexadecimal format
     pub key: String,
@@ -94,6 +101,8 @@ impl GetKeyResponse {
 /// Response containing a quote and associated event log
 #[derive(Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "borsh", derive(BorshSerialize, BorshDeserialize))]
+#[cfg_attr(feature = "borsh_schema", derive(BorshSchema))]
+
 pub struct GetQuoteResponse {
     /// The attestation quote in hexadecimal format
     pub quote: String,
@@ -134,6 +143,8 @@ impl GetQuoteResponse {
 /// Response containing instance information and attestation data
 #[derive(Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "borsh", derive(BorshSerialize, BorshDeserialize))]
+#[cfg_attr(feature = "borsh_schema", derive(BorshSchema))]
+
 pub struct InfoResponse {
     /// The application identifier
     pub app_id: String,
@@ -170,6 +181,8 @@ impl InfoResponse {
 /// Trusted Computing Base information structure
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "borsh", derive(BorshSerialize, BorshDeserialize))]
+#[cfg_attr(feature = "borsh_schema", derive(BorshSchema))]
+
 pub struct TcbInfo {
     /// The measurement root of trust
     pub mrtd: String,
@@ -197,6 +210,8 @@ pub struct TcbInfo {
 /// Response containing TLS key and certificate chain
 #[derive(Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "borsh", derive(BorshSerialize, BorshDeserialize))]
+#[cfg_attr(feature = "borsh_schema", derive(BorshSchema))]
+
 pub struct GetTlsKeyResponse {
     /// The TLS key in hexadecimal format
     pub key: String,

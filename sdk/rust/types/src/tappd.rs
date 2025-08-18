@@ -12,6 +12,8 @@ use hex::{encode as hex_encode, FromHexError};
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
 
+#[cfg(feature = "borsh_schema")]
+use borsh::BorshSchema;
 #[cfg(feature = "borsh")]
 use borsh::{BorshDeserialize, BorshSerialize};
 
@@ -22,6 +24,8 @@ const INIT_MR: &str = "000000000000000000000000000000000000000000000000000000000
 /// Hash algorithms supported by the TDX quote generation
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "borsh", derive(BorshSerialize, BorshDeserialize))]
+#[cfg_attr(feature = "borsh_schema", derive(BorshSchema))]
+
 pub enum QuoteHashAlgorithm {
     Sha256,
     Sha384,
@@ -71,6 +75,8 @@ fn replay_rtmr(history: Vec<String>) -> Result<String, FromHexError> {
 /// Response from a key derivation request
 #[derive(Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "borsh", derive(BorshSerialize, BorshDeserialize))]
+#[cfg_attr(feature = "borsh_schema", derive(BorshSchema))]
+
 pub struct DeriveKeyResponse {
     /// The derived key (PEM format for certificates, hex for raw keys)
     pub key: String,
@@ -142,6 +148,8 @@ impl DeriveKeyResponse {
 /// Response from a TDX quote request
 #[derive(Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "borsh", derive(BorshSerialize, BorshDeserialize))]
+#[cfg_attr(feature = "borsh_schema", derive(BorshSchema))]
+
 pub struct TdxQuoteResponse {
     /// The TDX quote in hexadecimal format
     pub quote: String,
@@ -189,6 +197,8 @@ impl TdxQuoteResponse {
 /// TCB (Trusted Computing Base) information
 #[derive(Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "borsh", derive(BorshSerialize, BorshDeserialize))]
+#[cfg_attr(feature = "borsh_schema", derive(BorshSchema))]
+
 pub struct TappdTcbInfo {
     /// The measurement root of trust
     pub mrtd: String,
@@ -209,6 +219,8 @@ pub struct TappdTcbInfo {
 /// Response from a Tappd info request
 #[derive(Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "borsh", derive(BorshSerialize, BorshDeserialize))]
+#[cfg_attr(feature = "borsh_schema", derive(BorshSchema))]
+
 pub struct TappdInfoResponse {
     /// The application identifier
     pub app_id: String,
