@@ -31,18 +31,8 @@ requires = ["pdm-backend"]
 build-backend = "pdm.backend"
 
 [dependency-groups]
-test = [
-    "pytest>=8.3.3",
-    "pytest-asyncio>=0.24.0",
-    "evidence-api>=0.5.0",
-]
 lint = [
     "mypy>=1.8.0",
-    "black>=24.0.0",
-    "isort>=5.12.0",
-    "flake8>=7.0.0",
-    "flake8-docstrings>=1.7.0",
-    "flake8-pyproject>=1.2.3",
 ]
 solana = [
     "solders",
@@ -67,59 +57,40 @@ warn_unreachable = true
 strict_equality = true
 show_error_codes = true
 
-# Black configuration
-[tool.black]
+# Ruff configuration
+[tool.ruff]
 line-length = 88
-target-version = ['py310']
-include = '\.pyi?$'
-exclude = '''
-/(
-    \.git
-  | \.hg
-  | \.mypy_cache
-  | \.tox
-  | \.venv
-  | _build
-  | buck-out
-  | build
-  | dist
-)/
-'''
+target-version = "py310"
 
-# isort configuration
-[tool.isort]
-profile = "black"
-line_length = 88
-# Enforce one import per line without parentheses
-force_single_line = true
-use_parentheses = false
-include_trailing_comma = false
-multi_line_output = 3
-force_grid_wrap = 0
-ensure_newline_before_comments = true
-
-# flake8 configuration
-[tool.flake8]
-max-line-length = 88
+[tool.ruff.lint]
+extend-select = [
+    "E",  # pycodestyle errors
+    "F",  # pyflakes
+    "I",  # isort
+    "D",  # pydocstyle
+]
 extend-ignore = [
     "E203",  # whitespace before ':'
-    "E501",  # line too long (handled by black)
-    "W503",  # line break before binary operator
+    "E501",  # line too long (handled by formatter)
+    "D203",  # one-blank-line-before-class (conflicts with D211)
+    "D213",  # multi-line-summary-second-line (conflicts with D212)
 ]
-exclude = [
-    ".git",
-    "__pycache__",
-    "build",
-    "dist",
-    ".venv",
-    ".mypy_cache",
-    ".pytest_cache",
-]
-per-file-ignores = [
-    "__init__.py:F401",  # imported but unused
-    "tests/*.py:D100,D101,D102,D103,D104",  # relax docstring rules for tests
-    "src/dstack_sdk/*.py:D100,D101,D102,D103,D104,D105,D106,D107",  # relax all docstring rules for source code
-]
+
+[tool.ruff.lint.isort]
+force-single-line = true
+force-sort-within-sections = true
+combine-as-imports = false
+known-first-party = ["dstack_sdk"]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]  # imported but unused
+"tests/*.py" = ["D100", "D101", "D102", "D103", "D104"]  # relax docstring rules for tests
+"src/dstack_sdk/*.py" = ["D100", "D101", "D102", "D103", "D104", "D105", "D106", "D107"]  # relax all docstring rules for source code
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
 [tool.pdm]
 distribution = true
 
@@ -128,12 +99,12 @@ repository = "pypi"
 
 [tool.pdm.scripts]
 # Formatting scripts
-fmt = {composite = ["isort src/ tests/", "black src/ tests/"]}
-format = {composite = ["isort src/ tests/", "black src/ tests/"]}
+fmt = {composite = ["ruff format src/ tests/", "ruff check --fix src/ tests/"]}
+format = {composite = ["ruff format src/ tests/", "ruff check --fix src/ tests/"]}
 
 # Linting scripts  
-lint = {composite = ["flake8 src/ tests/", "mypy src/"]}
-check = {composite = ["black --check src/ tests/", "isort --check-only src/ tests/", "flake8 src/ tests/", "mypy src/"]}
+lint = {composite = ["ruff check src/ tests/", "mypy src/"]}
+check = {composite = ["ruff check src/ tests/", "ruff format --check src/ tests/", "mypy src/"]}
 
 # Testing scripts
 test = "pytest"
@@ -150,6 +121,13 @@ markers = [
 ]
 
 [tool.pdm.dev-dependencies]
+dev = [
+    "ruff>=0.12.9",
+    "mypy>=1.8.0",
+    "pytest>=8.3.3",
+    "pytest-asyncio>=0.24.0",
+    "evidence-api>=0.5.0",
+]
 solana = [
     "solders",
 ]

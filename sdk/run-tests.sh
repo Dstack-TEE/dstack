@@ -30,14 +30,17 @@ DSTACK_SIMULATOR_ENDPOINT=$TAPPD_SIMULATOR_ENDPOINT go test -v ./tappd
 popd
 
 pushd python/
-if [ ! -d .venv ]; then
-    python -m venv .venv
+# Ensure PDM is installed
+if ! command -v pdm &> /dev/null; then
+    echo "Installing PDM..."
+    pip install pdm
 fi
-source .venv/bin/activate
-pip install -e .
-pip install pytest pytest-asyncio evidence-api web3 solders ruff
-pytest
-ruff format --check --diff .
+# Install dependencies and setup environment using PDM
+pdm install --dev
+# Run tests
+pdm run test
+# Run formatting check
+pdm run check
 popd
 
 pushd js/
