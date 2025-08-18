@@ -69,7 +69,7 @@ def call_async(func):
     """Call async methods synchronously.
 
     This decorator wraps a method to call its async counterpart from
-    self.async_client and run it synchronously using asyncio.
+    self.async_client and run it synchronously using `coro.send(None)`.
 
     Supports being called from within async contexts by using
     a sync HTTP client internally and a custom coroutine runner.
@@ -89,32 +89,6 @@ def call_async(func):
         return _step_coro(async_method(*args, **kwargs))
 
     return wrapper
-
-
-def call_async_with_deprecation(method_name, deprecation_message):
-    """Create decorator for deprecated methods that call async implementations."""
-
-    def decorator(func):
-        def _step_coro(coro):
-            try:
-                result = coro.send(None)
-                raise RuntimeError(f"Coroutine yielded unexpected value: {result}")
-            except StopIteration as e:
-                return e.value
-
-        @functools.wraps(func)
-        def wrapper(self, *args, **kwargs):
-            emit_deprecation_warning(deprecation_message)
-            if hasattr(self.async_client, method_name):
-                async_method = getattr(self.async_client, method_name)
-                return _step_coro(async_method(*args, **kwargs))
-            else:
-                # Fallback for methods not in async_client
-                return _step_coro(func(self, *args, **kwargs))
-
-        return wrapper
-
-    return decorator
 
 
 class GetTlsKeyResponse(BaseModel):
@@ -472,9 +446,11 @@ class AsyncTappdClient(AsyncDstackClient):
 
     def __init__(self, endpoint: str | None = None, use_sync_http: bool = False):
         """Initialize deprecated async tappd client wrapper."""
-        emit_deprecation_warning(
-            "AsyncTappdClient is deprecated, please use AsyncDstackClient instead"
-        )
+        if not use_sync_http:
+            # Already warned in TappdClient.__init__
+            emit_deprecation_warning(
+                "AsyncTappdClient is deprecated, please use AsyncDstackClient instead"
+            )
 
         endpoint = get_tappd_endpoint(endpoint)
         super().__init__(endpoint, use_sync_http=use_sync_http)
@@ -548,12 +524,9 @@ class TappdClient(DstackClient):
             "TappdClient is deprecated, please use DstackClient instead"
         )
         endpoint = get_tappd_endpoint(endpoint)
-        self.async_client = AsyncDstackClient(endpoint, use_sync_http=True)
-        self.async_client.PATH_PREFIX = "/prpc/Tappd."
+        self.async_client = AsyncTappdClient(endpoint, use_sync_http=True)
 
-    @call_async_with_deprecation(
-        "derive_key", "derive_key is deprecated, please use get_key instead"
-    )
+    @call_async
     def derive_key(
         self,
         path: str | None = None,
@@ -563,9 +536,7 @@ class TappdClient(DstackClient):
         """Use ``get_key`` instead (deprecated)."""
         raise NotImplementedError
 
-    @call_async_with_deprecation(
-        "tdx_quote", "tdx_quote is deprecated, please use get_quote instead"
-    )
+    @call_async
     def tdx_quote(
         self,
         report_data: str | bytes,

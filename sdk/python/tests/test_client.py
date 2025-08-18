@@ -281,15 +281,11 @@ def test_tappd_client_derive_key_deprecated():
         warnings.simplefilter("always")
         client = TappdClient()
 
-        try:
-            client.derive_key("/", "test")
-            # Should have warnings for both constructor and derive_key
-            warning_messages = [str(warning.message) for warning in w]
-            assert any("TappdClient is deprecated" in msg for msg in warning_messages)
-            assert any("derive_key is deprecated" in msg for msg in warning_messages)
-        except Exception:
-            # It's OK if this fails due to simulator not supporting the old endpoint
-            pass
+        client.derive_key("/", "test")
+        # Should have warnings for both constructor and derive_key
+        warning_messages = [str(warning.message) for warning in w]
+        assert any("TappdClient is deprecated" in msg for msg in warning_messages)
+        assert any("derive_key is deprecated" in msg for msg in warning_messages)
 
 
 def test_tappd_client_tdx_quote_deprecated():
@@ -298,15 +294,11 @@ def test_tappd_client_tdx_quote_deprecated():
         warnings.simplefilter("always")
         client = TappdClient()
 
-        try:
-            client.tdx_quote("test data", "raw")
-            # Should have warnings for both constructor and tdx_quote
-            warning_messages = [str(warning.message) for warning in w]
-            assert any("TappdClient is deprecated" in msg for msg in warning_messages)
-            assert any("tdx_quote is deprecated" in msg for msg in warning_messages)
-        except Exception:
-            # It's OK if this fails due to simulator not supporting the old endpoint
-            pass
+        client.tdx_quote("test data", "raw")
+        # Should have warnings for both constructor and tdx_quote
+        warning_messages = [str(warning.message) for warning in w]
+        assert any("TappdClient is deprecated" in msg for msg in warning_messages)
+        assert any("tdx_quote is deprecated" in msg for msg in warning_messages)
 
 
 # Test AsyncTappdClient
@@ -334,17 +326,13 @@ async def test_async_tappd_client_derive_key_deprecated():
         warnings.simplefilter("always")
         client = AsyncTappdClient()
 
-        try:
-            await client.derive_key("/", "test")
-            # Should have warnings for both constructor and derive_key
-            warning_messages = [str(warning.message) for warning in w]
-            assert any(
-                "AsyncTappdClient is deprecated" in msg for msg in warning_messages
-            )
-            assert any("derive_key is deprecated" in msg for msg in warning_messages)
-        except Exception:
-            # It's OK if this fails due to simulator not supporting the old endpoint
-            pass
+        await client.derive_key("/", "test")
+        # Should have warnings for both constructor and derive_key
+        warning_messages = [str(warning.message) for warning in w]
+        assert any(
+            "AsyncTappdClient is deprecated" in msg for msg in warning_messages
+        )
+        assert any("derive_key is deprecated" in msg for msg in warning_messages)
 
 
 @pytest.mark.asyncio
@@ -354,17 +342,13 @@ async def test_async_tappd_client_tdx_quote_deprecated():
         warnings.simplefilter("always")
         client = AsyncTappdClient()
 
-        try:
-            await client.tdx_quote("test data", "raw")
-            # Should have warnings for both constructor and tdx_quote
-            warning_messages = [str(warning.message) for warning in w]
-            assert any(
-                "AsyncTappdClient is deprecated" in msg for msg in warning_messages
-            )
-            assert any("tdx_quote is deprecated" in msg for msg in warning_messages)
-        except Exception:
-            # It's OK if this fails due to simulator not supporting the old endpoint
-            pass
+        await client.tdx_quote("test data", "raw")
+        # Should have warnings for both constructor and tdx_quote
+        warning_messages = [str(warning.message) for warning in w]
+        assert any(
+            "AsyncTappdClient is deprecated" in msg for msg in warning_messages
+        )
+        assert any("tdx_quote is deprecated" in msg for msg in warning_messages)
 
 
 @pytest.mark.asyncio
