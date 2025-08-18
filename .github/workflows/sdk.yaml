@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Daniel Sharifi <danielsharifi@outlook.com>
+# SPDX-FileCopyrightText: © 2025 Daniel Sharifi <daniel.sharifi@nearone.org>
 # SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
 #
 # SPDX-License-Identifier: Apache-2.0
@@ -40,4 +40,3 @@ jobs:
         run: |
           cargo test -p dstack-sdk-types --test no_std_test --no-default-features
           cargo check -p no_std_check --target thumbv6m-none-eabi
-

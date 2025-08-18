@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Daniel Sharifi <danielsharifi@outlook.com>
+# SPDX-FileCopyrightText: © 2025 Daniel Sharifi <daniel.sharifi@nearone.org>
 # SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
 #
 # SPDX-License-Identifier: Apache-2.0
@@ -28,6 +28,7 @@ tokio = { workspace = true, features = ["full"] }
 [features]
 default = ["std"]
 borsh = ["dep:borsh"]
+borsh_schema = ["borsh", "borsh/unstable__schema"]
 std = [
     "anyhow/std",
     "bon/std",
@@ -36,5 +37,5 @@ std = [
     "serde/std",
     "serde_json/std",
     "sha2/std",
-    "borsh?/std"
+    "borsh?/std",
 ]
