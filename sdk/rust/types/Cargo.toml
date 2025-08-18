@@ -28,7 +28,6 @@ tokio = { workspace = true, features = ["full"] }
 [features]
 default = ["std"]
 borsh = ["dep:borsh"]
-borsh_schema = ["borsh", "borsh/unstable__schema"]
 std = [
     "anyhow/std",
     "bon/std",
