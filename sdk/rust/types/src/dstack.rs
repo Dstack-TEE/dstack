@@ -57,7 +57,6 @@ pub struct EventLog {
 #[derive(Debug, bon::Builder, Serialize, Deserialize)]
 #[cfg_attr(feature = "borsh", derive(BorshSerialize, BorshDeserialize))]
 #[cfg_attr(feature = "borsh_schema", derive(BorshSchema))]
-
 pub struct TlsKeyConfig {
     /// The subject name for the certificate
     #[builder(into, default = String::new())]
@@ -80,7 +79,6 @@ pub struct TlsKeyConfig {
 #[derive(Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "borsh", derive(BorshSerialize, BorshDeserialize))]
 #[cfg_attr(feature = "borsh_schema", derive(BorshSchema))]
-
 pub struct GetKeyResponse {
     /// The key in hexadecimal format
     pub key: String,
@@ -102,7 +100,6 @@ impl GetKeyResponse {
 #[derive(Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "borsh", derive(BorshSerialize, BorshDeserialize))]
 #[cfg_attr(feature = "borsh_schema", derive(BorshSchema))]
-
 pub struct GetQuoteResponse {
     /// The attestation quote in hexadecimal format
     pub quote: String,
@@ -144,7 +141,6 @@ impl GetQuoteResponse {
 #[derive(Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "borsh", derive(BorshSerialize, BorshDeserialize))]
 #[cfg_attr(feature = "borsh_schema", derive(BorshSchema))]
-
 pub struct InfoResponse {
     /// The application identifier
     pub app_id: String,
@@ -182,7 +178,6 @@ impl InfoResponse {
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "borsh", derive(BorshSerialize, BorshDeserialize))]
 #[cfg_attr(feature = "borsh_schema", derive(BorshSchema))]
-
 pub struct TcbInfo {
     /// The measurement root of trust
     pub mrtd: String,
@@ -211,7 +206,6 @@ pub struct TcbInfo {
 #[derive(Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "borsh", derive(BorshSerialize, BorshDeserialize))]
 #[cfg_attr(feature = "borsh_schema", derive(BorshSchema))]
-
 pub struct GetTlsKeyResponse {
     /// The TLS key in hexadecimal format
     pub key: String,

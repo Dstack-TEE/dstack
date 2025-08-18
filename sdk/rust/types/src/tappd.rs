@@ -25,7 +25,6 @@ const INIT_MR: &str = "000000000000000000000000000000000000000000000000000000000
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "borsh", derive(BorshSerialize, BorshDeserialize))]
 #[cfg_attr(feature = "borsh_schema", derive(BorshSchema))]
-
 pub enum QuoteHashAlgorithm {
     Sha256,
     Sha384,
@@ -76,7 +75,6 @@ fn replay_rtmr(history: Vec<String>) -> Result<String, FromHexError> {
 #[derive(Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "borsh", derive(BorshSerialize, BorshDeserialize))]
 #[cfg_attr(feature = "borsh_schema", derive(BorshSchema))]
-
 pub struct DeriveKeyResponse {
     /// The derived key (PEM format for certificates, hex for raw keys)
     pub key: String,
@@ -149,7 +147,6 @@ impl DeriveKeyResponse {
 #[derive(Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "borsh", derive(BorshSerialize, BorshDeserialize))]
 #[cfg_attr(feature = "borsh_schema", derive(BorshSchema))]
-
 pub struct TdxQuoteResponse {
     /// The TDX quote in hexadecimal format
     pub quote: String,
@@ -198,7 +195,6 @@ impl TdxQuoteResponse {
 #[derive(Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "borsh", derive(BorshSerialize, BorshDeserialize))]
 #[cfg_attr(feature = "borsh_schema", derive(BorshSchema))]
-
 pub struct TappdTcbInfo {
     /// The measurement root of trust
     pub mrtd: String,
@@ -220,7 +216,6 @@ pub struct TappdTcbInfo {
 #[derive(Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "borsh", derive(BorshSerialize, BorshDeserialize))]
 #[cfg_attr(feature = "borsh_schema", derive(BorshSchema))]
-
 pub struct TappdInfoResponse {
     /// The application identifier
     pub app_id: String,
