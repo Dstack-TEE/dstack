@@ -4,8 +4,8 @@
 
 import warnings
 
-import pytest
 from eth_account.signers.local import LocalAccount
+import pytest
 
 from dstack_sdk import GetKeyResponse
 from dstack_sdk.ethereum import to_account

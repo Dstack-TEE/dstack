@@ -2,8 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-Environment variable encryption module for dstack SDK.
+"""Environment variable encryption module for dstack SDK.
 
 Provides functionality to encrypt environment variables using X25519 key exchange
 and AES-GCM encryption, similar to the TypeScript implementation.

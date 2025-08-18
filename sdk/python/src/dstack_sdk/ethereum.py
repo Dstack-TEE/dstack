@@ -19,8 +19,7 @@ from .dstack_client import GetTlsKeyResponse
 
 
 def to_account(get_key_response: GetKeyResponse | GetTlsKeyResponse) -> LocalAccount:
-    """
-    Create an Ethereum account from DstackClient key response.
+    """Create an Ethereum account from DstackClient key response.
 
     DEPRECATED: Use to_account_secure instead. This method has security concerns.
     Current implementation uses raw key material without proper hashing.
@@ -30,6 +29,7 @@ def to_account(get_key_response: GetKeyResponse | GetTlsKeyResponse) -> LocalAcc
 
     Returns:
         Account: Ethereum account object
+
     """
     if isinstance(get_key_response, GetTlsKeyResponse):
         warnings.warn(

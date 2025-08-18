@@ -4,8 +4,8 @@
 
 import warnings
 
-import pytest
 from evidence_api.tdx.quote import TdxQuote
+import pytest
 
 from dstack_sdk import AsyncDstackClient
 from dstack_sdk import AsyncTappdClient

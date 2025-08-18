@@ -2,8 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-Compose hash calculation module for dstack SDK.
+"""Compose hash calculation module for dstack SDK.
 
 Provides deterministic JSON serialization and SHA256 hashing of AppCompose configurations,
 compatible with the TypeScript implementation.
@@ -153,8 +152,7 @@ class AppCompose:
 
 
 def sort_object(obj: Any) -> Any:
-    """
-    Recursively sort object keys lexicographically.
+    """Recursively sort object keys lexicographically.
 
     This is crucial for deterministic JSON.stringify.
     """
@@ -185,8 +183,7 @@ def preprocess_app_compose(app_compose: AppCompose) -> AppCompose:
 
 
 def to_deterministic_json(app_compose: AppCompose) -> str:
-    """
-    Serialize to deterministic JSON following cross-language standards.
+    """Serialize to deterministic JSON following cross-language standards.
 
     - Recursively sorts object keys lexicographically
     - Compact output (no spaces)
@@ -224,8 +221,7 @@ def to_deterministic_json(app_compose: AppCompose) -> str:
 def get_compose_hash(
     app_compose: Union[AppCompose, Dict[str, Any]], normalize: bool = False
 ) -> str:
-    """
-    Calculate SHA256 hash of app compose configuration.
+    """Calculate SHA256 hash of app compose configuration.
 
     Args:
         app_compose: AppCompose object or dictionary
@@ -233,6 +229,7 @@ def get_compose_hash(
 
     Returns:
         str: SHA256 hash as hex string
+
     """
     if isinstance(app_compose, dict):
         app_compose = AppCompose.from_dict(app_compose)

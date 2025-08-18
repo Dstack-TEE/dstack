@@ -9,12 +9,12 @@ import hashlib
 import json
 import logging
 import os
-import warnings
 from typing import Any
 from typing import Dict
 from typing import List
 from typing import Optional
 from typing import cast
+import warnings
 
 import httpx
 from pydantic import BaseModel
@@ -205,6 +205,7 @@ class AsyncDstackClient(BaseClient):
         Args:
             endpoint: HTTP/HTTPS URL or Unix socket path
             use_sync_http: If True, use sync HTTP client internally
+
         """
         endpoint = get_endpoint(endpoint)
         self.use_sync_http = use_sync_http

@@ -80,8 +80,7 @@ def verify_env_encrypt_public_key(
 def _recover_public_key(
     message_hash: bytes, r: int, s: int, recovery_id: int
 ) -> Optional[bytes]:
-    """
-    Recover public key from ECDSA signature components.
+    """Recover public key from ECDSA signature components.
 
     This is a simplified implementation. In production, you should use
     a proper ECDSA recovery library like the one used in Ethereum.

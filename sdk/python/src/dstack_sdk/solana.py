@@ -18,8 +18,7 @@ from .dstack_client import GetTlsKeyResponse
 
 
 def to_keypair(get_key_response: GetKeyResponse | GetTlsKeyResponse) -> Keypair:
-    """
-    Create a Solana Keypair from DstackClient key response.
+    """Create a Solana Keypair from DstackClient key response.
 
     DEPRECATED: Use to_keypair_secure instead. This method has security concerns.
     Current implementation uses raw key material without proper hashing.
@@ -29,6 +28,7 @@ def to_keypair(get_key_response: GetKeyResponse | GetTlsKeyResponse) -> Keypair:
 
     Returns:
         Keypair: Solana keypair object
+
     """
     if isinstance(get_key_response, GetTlsKeyResponse):
         warnings.warn(
