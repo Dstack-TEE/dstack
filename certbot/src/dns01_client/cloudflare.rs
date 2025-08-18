@@ -79,7 +79,6 @@ impl Dns01Api for CloudflareClient {
                 "type": "TXT",
                 "name": domain,
                 "content": content,
-                "ttl": 120
             }))
             .await?;
         Ok(response.result.id)
@@ -96,7 +95,6 @@ impl Dns01Api for CloudflareClient {
             .add_record(&json!({
                 "type": "CAA",
                 "name": domain,
-                "ttl": 120,
                 "data": {
                     "flags": flags,
                     "tag": tag,
