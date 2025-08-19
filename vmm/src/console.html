@@ -686,8 +686,8 @@ SPDX-License-Identifier: Apache-2.0
 
                     <div class="form-group" v-if="availableGpus.length > 0">
                         <label for="gpuSelection">GPU</label>
-                        <gpu-config-editor :available-gpus="availableGpus" :allow-attach-all="allowAttachAllGpus" v-model:gpus="vmForm.selectedGpus"
-                            v-model:attach-all="vmForm.attachAllGpus">
+                        <gpu-config-editor :available-gpus="availableGpus" :allow-attach-all="allowAttachAllGpus"
+                            v-model:gpus="vmForm.selectedGpus" v-model:attach-all="vmForm.attachAllGpus">
                         </gpu-config-editor>
                     </div>
 
@@ -867,11 +867,8 @@ SPDX-License-Identifier: Apache-2.0
                                             <button class="warning" @click="removeVm(vm)" title="Remove VM">
                                                 <i class="fas fa-trash-alt"></i> Remove
                                             </button>
-                                            <button v-if="kmsEnabled(vm)" @click="showUpgradeDialog(vm)"
-                                                title="Upgrade VM" :disabled="loadingVMDetails">
+                                            <button @click="showUpgradeDialog(vm)" title="Upgrade VM">
                                                 <i class="fas fa-sync-alt"></i> Update
-                                                <span v-if="loadingVMDetails && !vm.configuration"
-                                                    class="loading-spinner"></span>
                                             </button>
                                         </div>
                                     </div>
@@ -1048,19 +1045,21 @@ SPDX-License-Identifier: Apache-2.0
             <div class="dialog">
                 <h3>Update VM Config</h3>
 
-                <div class="form-group">
-                    <label for="vcpu">Number of vCPUs</label>
-                    <input id="vcpu" v-model.number="upgradeDialog.vcpu" type="number" placeholder="vCPUs" required>
-                </div>
-                <div class="form-group">
-                    <label for="memory">Memory</label>
-                    <div style="display: flex; align-items: center; gap: 8px;">
-                        <input id="memory" v-model.number="upgradeDialog.memoryValue" type="number" placeholder="Memory"
-                            style="flex: 1;" required>
-                        <select v-model="upgradeDialog.memoryUnit" style="width: 80px;">
-                            <option value="MB">MB</option>
-                            <option value="GB">GB</option>
-                        </select>
+                <div v-if="kmsEnabled(upgradeDialog.vm)">
+                    <div class="form-group">
+                        <label for="vcpu">Number of vCPUs</label>
+                        <input id="vcpu" v-model.number="upgradeDialog.vcpu" type="number" placeholder="vCPUs" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="memory">Memory</label>
+                        <div style="display: flex; align-items: center; gap: 8px;">
+                            <input id="memory" v-model.number="upgradeDialog.memoryValue" type="number" placeholder="Memory"
+                                style="flex: 1;" required>
+                            <select v-model="upgradeDialog.memoryUnit" style="width: 80px;">
+                                <option value="MB">MB</option>
+                                <option value="GB">GB</option>
+                            </select>
+                        </div>
                     </div>
                 </div>
 
@@ -1070,81 +1069,82 @@ SPDX-License-Identifier: Apache-2.0
                         placeholder="Disk size in GB" required>
                 </div>
 
-                <div class="form-group">
-                    <label for="image">Image</label>
-                    <select id="vmImage" v-model="upgradeDialog.image" required>
-                        <option value="" disabled>Select an image</option>
-                        <option v-for="image in availableImages" :key="image.name" :value="image.name">
-                            {{ image.name }}
-                        </option>
-                    </select>
-                </div>
-
-                <!-- GPU Configuration -->
-                <div class="form-group" v-if="availableGpus.length > 0">
-                    <div class="form-check">
-                        <label class="checkbox-container">
-                            <input type="checkbox" v-model="upgradeDialog.updateGpuConfig">
-                            <span class="checkbox-label">Update GPU configuration</span>
-                        </label>
-                    </div>
-
-                    <div v-if="upgradeDialog.updateGpuConfig">
-                        <gpu-config-editor :available-gpus="availableGpus" :allow-attach-all="allowAttachAllGpus" v-model:gpus="upgradeDialog.selectedGpus"
-                            v-model:attach-all="upgradeDialog.attachAllGpus">
-                        </gpu-config-editor>
-                    </div>
-                </div>
-
-                <div class="form-check" style="margin-top: 16px;">
-                    <label class="checkbox-container">
-                        <input type="checkbox" v-model="upgradeDialog.updateCompose">
-                        <span class="checkbox-label">Update App Compose</span>
-                    </label>
-                </div>
-                <div v-if="upgradeDialog.updateCompose">
+                <div v-if="kmsEnabled(upgradeDialog.vm)">
                     <div class="form-group">
-                        <label for="upgradeCompose">Docker Compose File</label>
-                        <div style="display: flex; flex-direction: column; gap: 10px;">
-                            <div style="display: flex; align-items: center; gap: 10px;">
-                                <button type="button" class="action-btn"
-                                    style="padding: 6px 12px; background-color: #f0f0f0; color: #333; border: 1px solid #ddd;"
-                                    onclick="document.getElementById('upgradeFile').click()">Upload File</button>
-                                <span style="color: #666; font-size: 0.9em;">or paste below</span>
-                                <input id="upgradeFile" type="file" @change="loadUpgradeFile" accept=".yml,.yaml,.txt"
-                                    style="display: none;">
-                            </div>
-                            <textarea id="upgradeCompose" v-model="upgradeDialog.dockerComposeFile"
-                                placeholder="Paste your new docker-compose.yml here" rows="8" required></textarea>
+                        <label for="image">Image</label>
+                        <select id="vmImage" v-model="upgradeDialog.image" required>
+                            <option value="" disabled>Select an image</option>
+                            <option v-for="image in availableImages" :key="image.name" :value="image.name">
+                                {{ image.name }}
+                            </option>
+                        </select>
+                    </div>
+
+                    <!-- GPU Configuration -->
+                    <div class="form-group" v-if="availableGpus.length > 0">
+                        <div class="form-check">
+                            <label class="checkbox-container">
+                                <input type="checkbox" v-model="upgradeDialog.updateGpuConfig">
+                                <span class="checkbox-label">Update GPU configuration</span>
+                            </label>
+                        </div>
+
+                        <div v-if="upgradeDialog.updateGpuConfig">
+                            <gpu-config-editor :available-gpus="availableGpus" :allow-attach-all="allowAttachAllGpus"
+                                v-model:gpus="upgradeDialog.selectedGpus" v-model:attach-all="upgradeDialog.attachAllGpus">
+                            </gpu-config-editor>
                         </div>
                     </div>
-                    <div class="form-group">
-                        <label for="upgradePrelauncher">Pre-launch Script</label>
-                        <textarea id="upgradePrelauncher" v-model="upgradeDialog.preLaunchScript"
-                            placeholder="Optional: Bash script to run before starting containers"></textarea>
+                    <div class="form-check" style="margin-top: 16px;">
+                        <label class="checkbox-container">
+                            <input type="checkbox" v-model="upgradeDialog.updateCompose">
+                            <span class="checkbox-label">Update App Compose</span>
+                        </label>
                     </div>
-
-                    <div class="form-group">
-                        <label for="userConfig">User Config</label>
-                        <textarea id="userConfig" v-model="upgradeDialog.user_config"
-                            placeholder="Optional: User config to be put at /dstack/.user-config in the CVM"></textarea>
+                    <div v-if="upgradeDialog.updateCompose">
+                        <div class="form-group">
+                            <label for="upgradeCompose">Docker Compose File</label>
+                            <div style="display: flex; flex-direction: column; gap: 10px;">
+                                <div style="display: flex; align-items: center; gap: 10px;">
+                                    <button type="button" class="action-btn"
+                                        style="padding: 6px 12px; background-color: #f0f0f0; color: #333; border: 1px solid #ddd;"
+                                        onclick="document.getElementById('upgradeFile').click()">Upload File</button>
+                                    <span style="color: #666; font-size: 0.9em;">or paste below</span>
+                                    <input id="upgradeFile" type="file" @change="loadUpgradeFile" accept=".yml,.yaml,.txt"
+                                        style="display: none;">
+                                </div>
+                                <textarea id="upgradeCompose" v-model="upgradeDialog.dockerComposeFile"
+                                    placeholder="Paste your new docker-compose.yml here" rows="8" required></textarea>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label for="upgradePrelauncher">Pre-launch Script</label>
+                            <textarea id="upgradePrelauncher" v-model="upgradeDialog.preLaunchScript"
+                                placeholder="Optional: Bash script to run before starting containers"></textarea>
+                        </div>
+                        <div class="app-id-preview">
+                            Compose Hash: 0x{{ upgradeComposeHashPreview }}
+                        </div>
                     </div>
-                    <div class="app-id-preview">
-                        Compose Hash: 0x{{ upgradeComposeHashPreview }}
+                    <div class="form-check" style="margin-top: 16px;">
+                        <label class="checkbox-container">
+                            <input type="checkbox" v-model="upgradeDialog.resetSecrets">
+                            <span class="checkbox-label">Reset secrets</span>
+                        </label>
                     </div>
-                </div>
-                <div class="form-check" style="margin-top: 16px;">
-                    <label class="checkbox-container">
-                        <input type="checkbox" v-model="upgradeDialog.resetSecrets">
-                        <span class="checkbox-label">Reset secrets</span>
-                    </label>
-                </div>
-                <div v-if="kmsEnabled(upgradeDialog.vm) && upgradeDialog.resetSecrets" style="margin-top: 16px;">
-                    <encrypted-env-editor :env-vars="upgradeDialog.encryptedEnvs"></encrypted-env-editor>
+                    <div v-if="upgradeDialog.resetSecrets" style="margin-top: 16px;">
+                        <encrypted-env-editor :env-vars="upgradeDialog.encryptedEnvs"></encrypted-env-editor>
+                    </div>
                 </div>
 
                 <div class="form-group full-width" v-if="config.portMappingEnabled">
                     <port-mapping-editor :ports="upgradeDialog.ports"></port-mapping-editor>
+                </div>
+
+                <div class="form-group">
+                    <label for="userConfig">User Config</label>
+                    <textarea id="userConfig" v-model="upgradeDialog.user_config"
+                        placeholder="Optional: User config to be put at /dstack/.user-config in the CVM"></textarea>
                 </div>
 
                 <div class="vm-actions">
@@ -2208,9 +2208,6 @@ fi
                 };
 
                 const toggleDropdown = (event, vm) => {
-                    if (!vm.configuration) {
-                        loadVMDetails(vm.id);
-                    }
                     // Close all other dropdowns first
                     document.querySelectorAll('.dropdown-content').forEach(dropdown => {
                         if (dropdown.id !== 'dropdown-' + vm.id) {
