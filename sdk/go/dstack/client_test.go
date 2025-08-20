@@ -62,11 +62,16 @@ func TestGetQuote(t *testing.T) {
 	}
 
 	// Get quote RTMRs manually
+	quoteBytes, err := resp.DecodeQuote()
+	if err != nil {
+		t.Fatal(err)
+	}
+	
 	quoteRtmrs := [4][48]byte{
-		[48]byte(resp.Quote[376:424]),
-		[48]byte(resp.Quote[424:472]),
-		[48]byte(resp.Quote[472:520]),
-		[48]byte(resp.Quote[520:568]),
+		[48]byte(quoteBytes[376:424]),
+		[48]byte(quoteBytes[424:472]),
+		[48]byte(quoteBytes[472:520]),
+		[48]byte(quoteBytes[520:568]),
 	}
 
 	// Test ReplayRTMRs
