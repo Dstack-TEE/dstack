@@ -44,6 +44,9 @@ service DstackGuest {
 
   // Get app info
   rpc Info(google.protobuf.Empty) returns (AppInfo) {}
+
+  // Get app info
+  rpc Sign(SignRequest) returns (SignResponse) {}
 }
 
 // The request to derive a key
@@ -210,4 +213,19 @@ service Worker {
   rpc Info(google.protobuf.Empty) returns (AppInfo) {}
   // Get the guest agent version
   rpc Version(google.protobuf.Empty) returns (WorkerVersion) {}
+  // Get attestation
+  rpc GetAttestation(GetAttestationRequest) returns (GetQuoteResponse) {}
+}
+
+message SignRequest {
+  string algorithm = 1;
+  bytes data = 2;
+}
+
+message SignResponse {
+  bytes signature = 1;
+}
+
+message GetAttestationRequest {
+  string algorithm = 1;
 }

@@ -6,11 +6,14 @@ use dstack_guest_agent_rpc::{
     dstack_guest_server::{DstackGuestRpc, DstackGuestServer},
     tappd_server::{TappdRpc, TappdServer},
     worker_server::{WorkerRpc, WorkerServer},
+    GetAttestationRequest,
     AppInfo, DeriveK256KeyResponse, DeriveKeyArgs, EmitEventArgs, GetKeyArgs, GetKeyResponse,
     GetQuoteResponse, GetTlsKeyArgs, GetTlsKeyResponse, RawQuoteArgs, TdxQuoteArgs,
-    TdxQuoteResponse, WorkerVersion,
+    TdxQuoteResponse, WorkerVersion, SignRequest, SignResponse,
 };
 use dstack_types::{AppKeys, SysConfig};
+use ed25519_dalek::{Signer as Ed25519Signer, SigningKey as Ed25519SigningKey};
+use rand::rngs::OsRng;
 use fs_err as fs;
 use k256::ecdsa::SigningKey;
 use ra_rpc::{Attestation, CallContext, RpcCall};
@@ -38,6 +41,10 @@ struct AppStateInner {
     vm_config: String,
     cert_client: CertRequestClient,
     demo_cert: String,
+    ed25519_key: Ed25519SigningKey,
+    secp256k1_key: SigningKey,
+    ed25519_attestation: GetQuoteResponse,
+    secp256k1_attestation: GetQuoteResponse,
 }
 
 impl AppState {
@@ -69,6 +76,49 @@ impl AppState {
             .await
             .context("Failed to get app cert")?
             .join("\n");
+
+        let mut csprng = OsRng;
+        let ed25519_key = ed25519_dalek::SigningKey::generate(&mut csprng);
+        let secp256k1_key = SigningKey::random(&mut csprng);
+
+        let ed25519_pubkey = ed25519_key.verifying_key().to_bytes();
+        let secp256k1_pubkey = secp256k1_key.verifying_key().to_sec1_bytes();
+
+        let mut ed25519_report_data = [0u8; 64];
+        ed25519_report_data[..ed25519_pubkey.len()].copy_from_slice(&ed25519_pubkey);
+
+        let mut secp256k1_report_data = [0u8; 64];
+        secp256k1_report_data[..secp256k1_pubkey.len()].copy_from_slice(&secp256k1_pubkey);
+        let (ed25519_attestation, secp256k1_attestation) = if config.simulator.enabled {
+            (
+                simulate_quote(&config, ed25519_report_data)?,
+                simulate_quote(&config, secp256k1_report_data)?,
+            )
+        } else {
+            let (ed25519_quote, secp256k1_quote) = (
+                tdx_attest::get_quote(&ed25519_report_data, None)
+                    .context("Failed to get ed25519 quote")?
+                    .1,
+                tdx_attest::get_quote(&secp256k1_report_data, None)
+                    .context("Failed to get secp256k1 quote")?
+                    .1,
+            );
+            let event_log =
+                serde_json::to_string(&read_event_logs().context("Failed to read event log")?)?;
+            (
+                GetQuoteResponse {
+                    quote: ed25519_quote,
+                    event_log: event_log.clone(),
+                    report_data: ed25519_report_data.to_vec(),
+                },
+                GetQuoteResponse {
+                    quote: secp256k1_quote,
+                    event_log,
+                    report_data: secp256k1_report_data.to_vec(),
+                },
+            )
+        };
+
         Ok(Self {
             inner: Arc::new(AppStateInner {
                 config,
@@ -76,6 +126,10 @@ impl AppState {
                 cert_client,
                 demo_cert,
                 vm_config,
+                ed25519_key,
+                secp256k1_key,
+                ed25519_attestation,
+                secp256k1_attestation,
             }),
         })
     }
@@ -235,6 +289,21 @@ impl DstackGuestRpc for InternalRpcHandler {
 
     async fn info(self) -> Result<AppInfo> {
         get_info(&self.state, false).await
+    }
+
+    async fn sign(self, request: SignRequest) -> Result<SignResponse> {
+        let signature = match request.algorithm.as_str() {
+            "ed25519" => {
+                let signature = self.state.inner.ed25519_key.sign(&request.data);
+                signature.to_bytes().to_vec()
+            }
+            "secp256k1" => {
+                let signature: k256::ecdsa::Signature = self.state.inner.secp256k1_key.sign(&request.data);
+                signature.to_bytes().to_vec()
+            }
+            _ => return Err(anyhow::anyhow!("Unsupported algorithm")),
+        };
+        Ok(SignResponse { signature })
     }
 }
 
@@ -397,6 +466,14 @@ impl WorkerRpc for ExternalRpcHandler {
             version: env!("CARGO_PKG_VERSION").to_string(),
             rev: super::GIT_REV.to_string(),
         })
+    }
+
+    async fn get_attestation(self, request: GetAttestationRequest) -> Result<GetQuoteResponse> {
+        match request.algorithm.as_str() {
+            "ed25519" => Ok(self.state.inner.ed25519_attestation.clone()),
+            "secp256k1" => Ok(self.state.inner.secp256k1_attestation.clone()),
+            _ => Err(anyhow::anyhow!("Unsupported algorithm")),
+        }
     }
 }
 
