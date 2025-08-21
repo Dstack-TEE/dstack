@@ -161,8 +161,8 @@ async fn main() -> Result<()> {
     let config = Config::extract_or_default(&figment)?.abs_path()?;
 
     // Handle commands
-    match args.command {
-        Some(Command::Run(run_args)) => {
+    match args.command.unwrap_or_default() {
+        Command::Run(run_args) => {
             // One-shot VM execution mode
             return one_shot::run_one_shot(
                 &run_args.vm_config,
@@ -172,7 +172,7 @@ async fn main() -> Result<()> {
             )
             .await;
         }
-        Some(Command::Serve) | None => {
+        Command::Serve => {
             // Default server mode - continue to main server logic
         }
     }
