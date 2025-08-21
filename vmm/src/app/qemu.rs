@@ -70,7 +70,7 @@ pub struct State {
 fn create_hd(
     image_file: impl AsRef<Path>,
     backing_file: Option<impl AsRef<Path>>,
-    size: &str
+    size: &str,
 ) -> Result<()> {
     let mut command = Command::new("qemu-img");
     command.arg("create").arg("-f").arg("qcow2");
@@ -341,11 +341,7 @@ impl VmConfig {
         let disk_size = format!("{}G", self.manifest.disk_size);
         let hda_path = workdir.hda_path();
         if !hda_path.exists() {
-            create_hd(
-                &hda_path,
-                self.image.hda.as_ref(),
-                &disk_size
-            )?;
+            create_hd(&hda_path, self.image.hda.as_ref(), &disk_size)?;
         }
         if !cfg.user.is_empty() {
             fs_err::set_permissions(&hda_path, Permissions::from_mode(0o660))?;
