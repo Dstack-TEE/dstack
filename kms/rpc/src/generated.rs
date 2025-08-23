@@ -1,4 +1,1 @@
-pub use kms::*;
-
-#[allow(async_fn_in_trait)]
-mod kms;
+include!(concat!(env!("OUT_DIR"), "/kms.rs"));

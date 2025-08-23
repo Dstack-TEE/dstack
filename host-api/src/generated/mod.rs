@@ -1,4 +1,1 @@
-pub use host_api::*;
-
-#[allow(async_fn_in_trait)]
-mod host_api;
+include!(concat!(env!("OUT_DIR"), "/host_api.rs"));
