@@ -7,7 +7,7 @@ use fs_err as fs;
 use hickory_resolver::error::ResolveErrorKind;
 use instant_acme::{
     Account, AccountCredentials, AuthorizationStatus, ChallengeType, Identifier, NewAccount,
-    NewOrder, Order, OrderStatus,
+    NewOrder, Order, OrderStatus, Problem,
 };
 use rcgen::{CertificateParams, DistinguishedName, KeyPair};
 use serde::{Deserialize, Serialize};
@@ -457,7 +457,14 @@ impl AcmeClient {
                     return extract_certificate(order).await;
                 }
                 // Something went wrong
-                OrderStatus::Invalid => bail!("order is invalid"),
+                OrderStatus::Invalid => {
+                    let error = find_error(&mut order).await.unwrap_or(Problem {
+                        r#type: None,
+                        detail: None,
+                        status: None,
+                    });
+                    bail!("order is invalid: {error}");
+                }
             }
         }
     }
@@ -470,6 +477,20 @@ impl AcmeClient {
         fs::create_dir_all(&backup_path)?;
         Ok(backup_path)
     }
+}
+
+async fn find_error(order: &mut Order) -> Option<Problem> {
+    if let Some(error) = order.state().error.as_ref() {
+        return Some(error.clone());
+    }
+    for auth in order.authorizations().await.ok()? {
+        for challenge in auth.challenges {
+            if let Some(error) = challenge.error {
+                return Some(error);
+            }
+        }
+    }
+    None
 }
 
 fn make_csr(key: &str, names: &[String]) -> Result<Vec<u8>> {
