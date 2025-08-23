@@ -1,4 +1,3 @@
-pub use guest_api::*;
+#![allow(async_fn_in_trait)]
 
-#[allow(async_fn_in_trait)]
-mod guest_api;
+include!(concat!(env!("OUT_DIR"), "/guest_api.rs"));

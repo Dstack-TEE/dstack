@@ -1,4 +1,3 @@
-pub use gateway::*;
+#![allow(async_fn_in_trait)]
 
-#[allow(async_fn_in_trait)]
-mod gateway;
+include!(concat!(env!("OUT_DIR"), "/gateway.rs"));

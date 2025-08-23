@@ -1,4 +1,3 @@
-pub use vmm::*;
+#![allow(async_fn_in_trait)]
 
-#[allow(async_fn_in_trait)]
-mod vmm;
+include!(concat!(env!("OUT_DIR"), "/vmm.rs"));
