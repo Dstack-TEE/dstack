@@ -183,20 +183,12 @@ Open the dstack-vmm webpage [http://localhost:9080](http://localhost:9080) (chan
 
 After the container is deployed, it should take some time to start the CVM and the containers. Time would be vary depending on your workload.
 
-- **[Logs]**: Click the button to see the logs of the CVM, you can see if the container is finished starting there
-- **[Dashboard]**: Once the container is running, you can click the button to see some information about the container. The logs of the containers can be seen in the Dashboard page
+- **[Logs]**: Click this button to view the CVM logs and monitor container startup progress
+- **[Dashboard]**: Once the container is running, click this button to view container information and logs. (Note: This button is only visible when dstack-gateway is enabled. If disabled, you'll need to add a port mapping to port 8090 to access the CVM dashboard)
 
 <div align="center">
 
 <img src="./docs/assets/guest-agent.png" alt="Guest Agent Dashboard" height="300">
-
-</div>
-
-- **Gateway Dashboard**: You can open dstack-gateway's dashboard at [https://localhost:9070](https://localhost:9070) to see the CVM's wireguard ip address:
-
-<div align="center">
-
-<img src="./docs/assets/gateway.png" alt="Gateway Dashboard" height="150">
 
 </div>
 
@@ -214,19 +206,24 @@ The environment variables will be encrypted in the client-side and decrypted in 
 
 ### Access the App
 
-Once the app is deployed and listening on an HTTP port, you can access the HTTP service via dstack-gateway's public domain. The ingress mapping rules are:
+Once your app is deployed and listening on an HTTP port, you can access it through dstack-gateway's public domain using these ingress mapping rules:
 
-- `<id>[s].<base_domain>` maps to port `80` or `443` if with `s` in the CVM
-- `<id>-<port>[s].<base_domain>` maps to port `<port>` in the CVM
+- `<id>[-[<port>][s|g]].<base_domain>` → maps to port `<port>` in the CVM
 
-**Example**: `3327603e03f5bd1f830812ca4a789277fc31f577-8080.app.kvin.wang` maps to port `8080` in the CVM.
+**Examples**:
 
-Where the `<id>` can be either the app id or the instance id. If the app id is used, one of the instances will be selected by the load balancer. If the `id-port` part ends with `s`, it means the TLS connection will be passthrough to the app rather than terminating at dstack-gateway.
+- `3327603e03f5bd1f830812ca4a789277fc31f577-8080.app.kvin.wang` → port `8080` (TLS termination to any TCP)
+- `3327603e03f5bd1f830812ca4a789277fc31f577-8080g.app.kvin.wang` → port `8080` (TLS termination with HTTP/2 negotiation)
+- `3327603e03f5bd1f830812ca4a789277fc31f577-8080s.app.kvin.wang` → port `8080` (TLS passthrough to any TCP)
 
-You can also ssh into the CVM to inspect more information, if your deployment uses the image `dstack-x.x.x-dev`:
+The `<id>` can be either the app ID or instance ID. When using the app ID, the load balancer will select one of the available instances. Adding an `s` suffix enables TLS passthrough to the app instead of terminating at dstack-gateway. Adding a `g` suffix enables HTTPS/2 with TLS termination for gRPC applications.
+
+**Note**: If dstack-gateway is disabled, you'll need to use port mappings configured during deployment to access your application via the host's IP address and mapped ports.
+
+For development images (`dstack-x.x.x-dev`), you can SSH into the CVM for inspection:
 
 ```bash
-# The IP address of the CVM can be found in the dstack-gateway dashboard
+# Find the CVM wg IP address in the dstack-vmm dashboard
 ssh root@10.0.3.2
 ```
 
