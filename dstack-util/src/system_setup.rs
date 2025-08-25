@@ -470,29 +470,46 @@ impl<'a> Stage0<'a> {
 
     fn luks_setup(&self, disk_crypt_key: &str, name: &str) -> Result<()> {
         let root_hd = &self.args.device;
+        let sector_offset = PAYLOAD_OFFSET / 512;
         cmd! {
             info "Formatting encrypted disk";
             echo -n $disk_crypt_key |
-                cryptsetup luksFormat --type luks2 --cipher aes-xts-plain64 --pbkdf pbkdf2 -d- $root_hd $name;
-        }.or(Err(anyhow!("Failed to setup luks volume")))?;
+                cryptsetup luksFormat
+                    --type luks2
+                    --offset $sector_offset
+                    --cipher aes-xts-plain64
+                    --pbkdf pbkdf2
+                    -d-
+                    $root_hd
+                    $name;
+        }
+        .or(Err(anyhow!("Failed to setup luks volume")))?;
         self.open_encrypted_volume(disk_crypt_key, name)
     }
 
     fn open_encrypted_volume(&self, disk_crypt_key: &str, name: &str) -> Result<()> {
         let root_hd = &self.args.device;
         let disk_crypt_key = disk_crypt_key.trim();
-        let in_mem_hdr = "/tmp/luks_header";
+        // Create a private tmpfs mount to ensure the header stays in-memory.
+        let tmp_hdr_dir = "/tmp/dstack-luks-header";
+        let in_mem_hdr = format!("{tmp_hdr_dir}/luks-header");
+        defer! {
+            // Ensure cleanup of header file and tmpfs mount.
+            cmd! {
+                info "Cleaning up in-memory LUKS header";
+                rm -f $in_mem_hdr;
+                umount $tmp_hdr_dir;
+                rmdir $tmp_hdr_dir;
+            }.ok();
+        }
         cmd! {
+            info "Mounting tmpfs for in-memory LUKS header";
+            mkdir -p $tmp_hdr_dir;
+            mount -t tmpfs -o size=64M,mode=0700,nosuid,nodev,noexec tmpfs $tmp_hdr_dir;
             info "Loading the LUKS2 header";
             cryptsetup luksHeaderBackup --header-backup-file=$in_mem_hdr $root_hd;
         }
-        .or(Err(anyhow!("Failed to load LUKS2 header")))?;
-        defer! {
-            cmd! {
-                info "Removing the in-memory LUKS2 header";
-                rm $in_mem_hdr;
-            }.ok();
-        }
+        .context("Failed to load LUKS2 header")?;
 
         let hdr_file = fs::File::open(&in_mem_hdr).context("Failed to open LUKS2 header")?;
         validate_luks2_header(hdr_file).context("Failed to validate LUKS2 header")?;
@@ -956,6 +973,8 @@ macro_rules! const_pad {
     };
 }
 
+const PAYLOAD_OFFSET: u64 = 16777216;
+
 fn validate_luks2_header(mut reader: impl std::io::Read) -> Result<()> {
     let mut hdr_data = vec![0; 4096];
     reader
@@ -1102,7 +1121,7 @@ fn validate_luks2_header(mut reader: impl std::io::Read) -> Result<()> {
             integrity,
             flags,
         } = first_segment;
-        if *offset != 16777216 {
+        if *offset != PAYLOAD_OFFSET {
             bail!("Invalid LUKS segment offset");
         }
         if *size != LuksSegmentSize::dynamic {
