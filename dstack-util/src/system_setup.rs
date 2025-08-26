@@ -512,7 +512,7 @@ impl<'a> Stage0<'a> {
         .context("Failed to load LUKS2 header")?;
 
         let hdr_file = fs::File::open(&in_mem_hdr).context("Failed to open LUKS2 header")?;
-        validate_luks2_header(hdr_file).context("Failed to validate LUKS2 header")?;
+        validate_luks2_headers(hdr_file).context("Failed to validate LUKS2 header")?;
 
         cmd! {
             info "Opening the device";
@@ -975,7 +975,13 @@ macro_rules! const_pad {
 
 const PAYLOAD_OFFSET: u64 = 16777216;
 
-fn validate_luks2_header(mut reader: impl std::io::Read) -> Result<()> {
+fn validate_luks2_headers(mut reader: impl std::io::Read) -> Result<()> {
+    validate_single_luks2_header(&mut reader, 0)?;
+    validate_single_luks2_header(&mut reader, 1)?;
+    Ok(())
+}
+
+fn validate_single_luks2_header(mut reader: impl std::io::Read, hdr_ind: u64) -> Result<()> {
     let mut hdr_data = vec![0; 4096];
     reader
         .read_exact(&mut hdr_data)
@@ -997,8 +1003,14 @@ fn validate_luks2_header(mut reader: impl std::io::Read) -> Result<()> {
         ..
     } = header;
 
-    if magic != [76, 85, 75, 83, 186, 190] {
-        bail!("Invalid LUKS magic: {:?}", magic);
+    if hdr_ind == 0 {
+        if magic != [76, 85, 75, 83, 186, 190] {
+            bail!("Invalid LUKS magic: {:?}", magic);
+        }
+    } else {
+        if magic != [83, 75, 85, 76, 186, 190] {
+            bail!("Invalid LUKS magic: {:?}", magic);
+        }
     }
     if version != 2 {
         bail!("Invalid LUKS version: {version}");
@@ -1012,7 +1024,7 @@ fn validate_luks2_header(mut reader: impl std::io::Read) -> Result<()> {
     if subsystem != [0; 48] {
         bail!("Invalid LUKS subsystem");
     }
-    if hdr_offset != 0 {
+    if hdr_offset != hdr_ind * hdr_size {
         bail!("Invalid LUKS header offset: {hdr_offset}");
     }
     if hdr_size < 4096 || hdr_size > 1024 * 1024 * 16 {
@@ -1169,9 +1181,9 @@ fn validate_luks2_header(mut reader: impl std::io::Read) -> Result<()> {
 #[test]
 fn test_validate_luks2_header() {
     let header_data = include_bytes!("../tests/fixtures/luks_header_good").to_vec();
-    validate_luks2_header(&mut &header_data[..]).expect("Failed to validate LUKS2 header");
+    validate_luks2_headers(&mut &header_data[..]).expect("Failed to validate LUKS2 header");
     let header_data = include_bytes!("../tests/fixtures/luks_header_cipher_null").to_vec();
-    let error = validate_luks2_header(&mut &header_data[..]).unwrap_err();
+    let error = validate_luks2_headers(&mut &header_data[..]).unwrap_err();
     assert!(error
         .to_string()
         .contains("Invalid LUKS keyslot encryption"));
