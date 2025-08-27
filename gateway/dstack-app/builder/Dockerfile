@@ -24,7 +24,7 @@ RUN rustup target add x86_64-unknown-linux-musl
 RUN cd dstack && cargo build --release -p dstack-gateway --target x86_64-unknown-linux-musl
 RUN echo "${DSTACK_REV}" > /build/.GIT_REV
 
-FROM debian:bookworm@sha256:0d8498a0e9e6a60011df39aab78534cfe940785e7c59d19dfae1eb53ea59babe
+FROM debian:bookworm@sha256:731dd1380d6a8d170a695dbeb17fe0eade0e1c29f654cf0a3a07f372191c3f4b
 COPY ./shared /build
 WORKDIR /build
 RUN ./pin-packages.sh ./pinned-packages.txt && \

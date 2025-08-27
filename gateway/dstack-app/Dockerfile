@@ -27,7 +27,7 @@ WORKDIR /src/dstack
 RUN cargo build --release -p dstack-gateway
 
 # Runtime stage
-FROM debian:bookworm@sha256:ced9eb5eca0a3ba2e29d0045513863b3baaee71cd8c2eed403c9f7d3eaccfd2b
+FROM debian:bookworm@sha256:731dd1380d6a8d170a695dbeb17fe0eade0e1c29f654cf0a3a07f372191c3f4b
 WORKDIR /app
 
 # Install runtime dependencies
@@ -42,7 +42,7 @@ RUN apt-get update && \
 COPY --from=gateway-builder /src/dstack/target/release/dstack-gateway /usr/local/bin/dstack-gateway
 
 # Copy entrypoint script
-COPY entrypoint.sh /app/entrypoint.sh
+COPY builder/entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
 
 # Store git revision for reproducibility
