@@ -514,7 +514,7 @@ limitations under the License.
 
 <div align="center">
 
-**[⬆ Back to top](#dstack)**
+**[⬆ Back to top](#-Overview)**
 
 Made with ❤️ by the dstack community
 
