@@ -184,7 +184,7 @@ func WithLogger(logger *slog.Logger) TappdClientOption {
 
 // Creates a new TappdClient instance based on the provided endpoint.
 // If the endpoint is empty, it will use the simulator endpoint if it is
-// set in the environment through DSTACK_SIMULATOR_ENDPOINT. Otherwise, it
+// set in the environment through TAPPD_SIMULATOR_ENDPOINT. Otherwise, it
 // will use the default endpoint at /var/run/tappd.sock.
 func NewTappdClient(opts ...TappdClientOption) *TappdClient {
 	client := &TappdClient{
@@ -218,14 +218,14 @@ func NewTappdClient(opts ...TappdClientOption) *TappdClient {
 
 // Returns the appropriate endpoint based on environment and input. If the
 // endpoint is empty, it will use the simulator endpoint if it is set in the
-// environment through DSTACK_SIMULATOR_ENDPOINT. Otherwise, it will use the
+// environment through TAPPD_SIMULATOR_ENDPOINT. Otherwise, it will use the
 // default endpoint at /var/run/tappd.sock.
 func (c *TappdClient) getEndpoint() string {
 	if c.endpoint != "" {
 		return c.endpoint
 	}
-	if simEndpoint, exists := os.LookupEnv("DSTACK_SIMULATOR_ENDPOINT"); exists {
-		c.logger.Info("using simulator endpoint", "endpoint", simEndpoint)
+	if simEndpoint, exists := os.LookupEnv("TAPPD_SIMULATOR_ENDPOINT"); exists {
+		c.logger.Info("using tappd simulator endpoint", "endpoint", simEndpoint)
 		return simEndpoint
 	}
 	return "/var/run/tappd.sock"
