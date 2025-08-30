@@ -24,32 +24,32 @@ use crate::{Result, TdxUuid};
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, FromPrimitive, Error)]
 pub enum TdxAttestError {
-    #[error("unexpected")]
+    #[error("TDX_ATTEST_ERROR_UNEXPECTED")]
     Unexpected = _tdx_attest_error_t::TDX_ATTEST_ERROR_UNEXPECTED,
-    #[error("invalid parameter")]
+    #[error("TDX_ATTEST_ERROR_INVALID_PARAMETER")]
     InvalidParameter = _tdx_attest_error_t::TDX_ATTEST_ERROR_INVALID_PARAMETER,
-    #[error("out of memory")]
+    #[error("TDX_ATTEST_ERROR_OUT_OF_MEMORY")]
     OutOfMemory = _tdx_attest_error_t::TDX_ATTEST_ERROR_OUT_OF_MEMORY,
-    #[error("vsock failure")]
+    #[error("TDX_ATTEST_ERROR_VSOCK_FAILURE")]
     VsockFailure = _tdx_attest_error_t::TDX_ATTEST_ERROR_VSOCK_FAILURE,
-    #[error("report failure")]
+    #[error("TDX_ATTEST_ERROR_REPORT_FAILURE")]
     ReportFailure = _tdx_attest_error_t::TDX_ATTEST_ERROR_REPORT_FAILURE,
-    #[error("extend failure")]
+    #[error("TDX_ATTEST_ERROR_EXTEND_FAILURE")]
     ExtendFailure = _tdx_attest_error_t::TDX_ATTEST_ERROR_EXTEND_FAILURE,
-    #[error("not supported")]
+    #[error("TDX_ATTEST_ERROR_NOT_SUPPORTED")]
     NotSupported = _tdx_attest_error_t::TDX_ATTEST_ERROR_NOT_SUPPORTED,
-    #[error("quote failure")]
+    #[error("TDX_ATTEST_ERROR_QUOTE_FAILURE")]
     QuoteFailure = _tdx_attest_error_t::TDX_ATTEST_ERROR_QUOTE_FAILURE,
-    #[error("busy")]
+    #[error("TDX_ATTEST_ERROR_BUSY")]
     Busy = _tdx_attest_error_t::TDX_ATTEST_ERROR_BUSY,
-    #[error("device failure")]
+    #[error("TDX_ATTEST_ERROR_DEVICE_FAILURE")]
     DeviceFailure = _tdx_attest_error_t::TDX_ATTEST_ERROR_DEVICE_FAILURE,
-    #[error("invalid rtmr index")]
+    #[error("TDX_ATTEST_ERROR_INVALID_RTMR_INDEX")]
     InvalidRtmrIndex = _tdx_attest_error_t::TDX_ATTEST_ERROR_INVALID_RTMR_INDEX,
-    #[error("unsupported att key id")]
+    #[error("TDX_ATTEST_ERROR_UNSUPPORTED_ATT_KEY_ID")]
     UnsupportedAttKeyId = _tdx_attest_error_t::TDX_ATTEST_ERROR_UNSUPPORTED_ATT_KEY_ID,
     #[num_enum(catch_all)]
-    #[error("unknown error ({0})")]
+    #[error("unknown tdx attest error ({0})")]
     UnknownError(u32),
 }
 
