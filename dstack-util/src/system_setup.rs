@@ -958,17 +958,14 @@ impl Stage1<'_> {
 macro_rules! const_pad {
     ($s:expr, $len:expr) => {
         const {
+            assert!($s.len() <= $len, "The s is too long");
             let mut padded: [u8; $len] = [0; $len];
-            if $s.len() > $len {
-                padded
-            } else {
-                let mut i = 0;
-                while i < $s.len() {
-                    padded[i] = $s[i];
-                    i += 1;
-                }
-                padded
+            let mut i = 0;
+            while i < $s.len() {
+                padded[i] = $s[i];
+                i += 1;
             }
+            padded
         }
     };
 }
@@ -982,7 +979,7 @@ fn validate_luks2_headers(mut reader: impl std::io::Read) -> Result<()> {
 }
 
 fn validate_single_luks2_header(mut reader: impl std::io::Read, hdr_ind: u64) -> Result<()> {
-    let mut hdr_data = vec![0; 4096];
+    let mut hdr_data = vec![0u8; 4096];
     reader
         .read_exact(&mut hdr_data)
         .context("Failed to read LUKS header")?;
@@ -1033,7 +1030,7 @@ fn validate_single_luks2_header(mut reader: impl std::io::Read, hdr_ind: u64) ->
 
     // Check JSON
     let json_size = hdr_size - 4096;
-    let mut jsn_data = vec![0; json_size as usize];
+    let mut jsn_data = vec![0u8; json_size as usize];
     reader
         .read_exact(&mut jsn_data)
         .context("Failed to read LUKS JSON")?;
