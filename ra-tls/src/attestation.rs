@@ -234,9 +234,11 @@ impl<T> Attestation<T> {
 impl Attestation {
     /// Create an attestation for local machine
     pub fn local() -> Result<Self> {
-        let (_, quote) = tdx_attest::get_quote(&[0u8; 64], None)?;
-        let event_log = tdx_attest::eventlog::read_event_logs()?;
-        let raw_event_log = serde_json::to_vec(&event_log)?;
+        let (_, quote) = tdx_attest::get_quote(&[0u8; 64], None).context("Failed to get quote")?;
+        let event_log =
+            tdx_attest::eventlog::read_event_logs().context("Failed to read event logs")?;
+        let raw_event_log =
+            serde_json::to_vec(&event_log).context("Failed to serialize event log")?;
         Ok(Self {
             quote,
             raw_event_log,

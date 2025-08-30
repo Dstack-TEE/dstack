@@ -551,7 +551,9 @@ impl<'a> Stage0<'a> {
 
     async fn setup_fs(self) -> Result<Stage1<'a>> {
         let is_initialized = self.shared.instance_info.is_initialized();
-        let app_info = self.measure_app_info()?;
+        let app_info = self
+            .measure_app_info()
+            .context("Failed to measure app info")?;
         if self.shared.app_compose.key_provider().is_kms() {
             cmd_show_mrs()?;
         }
