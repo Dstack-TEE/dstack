@@ -1000,14 +1000,13 @@ fn validate_single_luks2_header(mut reader: impl std::io::Read, hdr_ind: u64) ->
         ..
     } = header;
 
-    if hdr_ind == 0 {
-        if magic != [76, 85, 75, 83, 186, 190] {
-            bail!("Invalid LUKS magic: {:?}", magic);
-        }
-    } else {
-        if magic != [83, 75, 85, 76, 186, 190] {
-            bail!("Invalid LUKS magic: {:?}", magic);
-        }
+    let expected_magic = match hdr_ind {
+        0 => [76, 85, 75, 83, 186, 190],
+        1 => [83, 75, 85, 76, 186, 190],
+        _ => bail!("Invalid LUKS header index: {hdr_ind}"),
+    };
+    if magic != expected_magic {
+        bail!("Invalid LUKS magic: {magic:?}");
     }
     if version != 2 {
         bail!("Invalid LUKS version: {version}");
@@ -1024,7 +1023,7 @@ fn validate_single_luks2_header(mut reader: impl std::io::Read, hdr_ind: u64) ->
     if hdr_offset != hdr_ind * hdr_size {
         bail!("Invalid LUKS header offset: {hdr_offset}");
     }
-    if hdr_size < 4096 || hdr_size > 1024 * 1024 * 16 {
+    if !(4096..=1024 * 1024 * 16).contains(&hdr_size) {
         bail!("Invalid LUKS header size: {hdr_size}");
     }
 
@@ -1058,7 +1057,7 @@ fn validate_single_luks2_header(mut reader: impl std::io::Read, hdr_ind: u64) ->
     if keyslots.len() != 1 {
         bail!("Invalid LUKS keyslots");
     }
-    if tokens.len() != 0 {
+    if !tokens.is_empty() {
         bail!("Invalid LUKS tokens");
     }
     if segments.len() != 1 {
