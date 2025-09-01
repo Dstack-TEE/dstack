@@ -157,3 +157,8 @@ SPDX-License-Identifier = "CC0-1.0"
 path = "guest-api/src/generated/*"
 SPDX-FileCopyrightText = "NONE"
 SPDX-License-Identifier = "CC0-1.0"
+
+[[annotations]]
+path = "dstack-util/tests/fixtures/*"
+SPDX-FileCopyrightText = "NONE"
+SPDX-License-Identifier = "CC0-1.0"
