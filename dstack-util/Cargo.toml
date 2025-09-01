@@ -49,6 +49,8 @@ serde_yaml2.workspace = true
 bollard.workspace = true
 sodiumbox.workspace = true
 libc.workspace = true
+luks2.workspace = true
+scopeguard.workspace = true
 
 [dev-dependencies]
 rand.workspace = true

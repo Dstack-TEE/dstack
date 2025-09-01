@@ -18,9 +18,14 @@ use dstack_types::{
     KeyProvider, KeyProviderInfo,
 };
 use fs_err as fs;
+use luks2::{
+    LuksAf, LuksConfig, LuksDigest, LuksHeader, LuksJson, LuksKdf, LuksKeyslot, LuksSegment,
+    LuksSegmentSize,
+};
 use ra_rpc::client::{CertInfo, RaClient, RaClientConfig};
 use ra_tls::cert::generate_ra_cert;
 use rand::Rng as _;
+use scopeguard::defer;
 use serde::{Deserialize, Serialize};
 use tdx_attest::extend_rtmr3;
 use tracing::{info, warn};
@@ -449,10 +454,7 @@ impl<'a> Stage0<'a> {
                 .notify_q("boot.progress", "mounting data disk")
                 .await;
             info!("Mounting encrypted data disk");
-            let root_hd = &self.args.device;
-            let disk_crypt_key = disk_crypt_key.trim();
-            cmd!(echo -n $disk_crypt_key | cryptsetup luksOpen --type luks2 -d- $root_hd $name)
-                .or(Err(anyhow!("Failed to open encrypted data disk")))?;
+            self.open_encrypted_volume(disk_crypt_key, name)?;
             cmd! {
                 zpool import dstack;
                 zpool status dstack;
@@ -468,15 +470,55 @@ impl<'a> Stage0<'a> {
 
     fn luks_setup(&self, disk_crypt_key: &str, name: &str) -> Result<()> {
         let root_hd = &self.args.device;
+        let sector_offset = PAYLOAD_OFFSET / 512;
         cmd! {
             info "Formatting encrypted disk";
             echo -n $disk_crypt_key |
-                cryptsetup luksFormat --type luks2 --cipher aes-xts-plain64 --pbkdf pbkdf2 -d- $root_hd $name;
+                cryptsetup luksFormat
+                    --type luks2
+                    --offset $sector_offset
+                    --cipher aes-xts-plain64
+                    --pbkdf pbkdf2
+                    -d-
+                    $root_hd
+                    $name;
+        }
+        .or(Err(anyhow!("Failed to setup luks volume")))?;
+        self.open_encrypted_volume(disk_crypt_key, name)
+    }
 
+    fn open_encrypted_volume(&self, disk_crypt_key: &str, name: &str) -> Result<()> {
+        let root_hd = &self.args.device;
+        let disk_crypt_key = disk_crypt_key.trim();
+        // Create a private tmpfs mount to ensure the header stays in-memory.
+        let tmp_hdr_dir = "/tmp/dstack-luks-header";
+        let in_mem_hdr = format!("{tmp_hdr_dir}/luks-header");
+        defer! {
+            // Ensure cleanup of header file and tmpfs mount.
+            cmd! {
+                info "Cleaning up in-memory LUKS header";
+                rm -f $in_mem_hdr;
+                umount $tmp_hdr_dir;
+                rmdir $tmp_hdr_dir;
+            }.ok();
+        }
+        cmd! {
+            info "Mounting tmpfs for in-memory LUKS header";
+            mkdir -p $tmp_hdr_dir;
+            mount -t tmpfs -o size=64M,mode=0700,nosuid,nodev,noexec tmpfs $tmp_hdr_dir;
+            info "Loading the LUKS2 header";
+            cryptsetup luksHeaderBackup --header-backup-file=$in_mem_hdr $root_hd;
+        }
+        .context("Failed to load LUKS2 header")?;
+
+        let hdr_file = fs::File::open(&in_mem_hdr).context("Failed to open LUKS2 header")?;
+        validate_luks2_headers(hdr_file).context("Failed to validate LUKS2 header")?;
+
+        cmd! {
             info "Opening the device";
-            echo -n $disk_crypt_key |
-                cryptsetup luksOpen --type luks2 -d- $root_hd $name;
-        }.or(Err(anyhow!("Failed to setup luks volume")))?;
+            echo -n $disk_crypt_key | cryptsetup luksOpen --type luks2 --header $in_mem_hdr -d- $root_hd $name;
+        }
+        .or(Err(anyhow!("Failed to open encrypted data disk")))?;
         Ok(())
     }
 
@@ -913,4 +955,234 @@ impl Stage1<'_> {
         cmd!(docker login -u $username -p $token)?;
         Ok(())
     }
+}
+
+macro_rules! const_pad {
+    ($s:expr, $len:expr) => {
+        const {
+            assert!($s.len() <= $len, "The s is too long");
+            let mut padded: [u8; $len] = [0; $len];
+            let mut i = 0;
+            while i < $s.len() {
+                padded[i] = $s[i];
+                i += 1;
+            }
+            padded
+        }
+    };
+}
+
+const PAYLOAD_OFFSET: u64 = 16777216;
+
+fn validate_luks2_headers(mut reader: impl std::io::Read) -> Result<()> {
+    validate_single_luks2_header(&mut reader, 0)?;
+    validate_single_luks2_header(&mut reader, 1)?;
+    Ok(())
+}
+
+fn validate_single_luks2_header(mut reader: impl std::io::Read, hdr_ind: u64) -> Result<()> {
+    let mut hdr_data = vec![0u8; 4096];
+    reader
+        .read_exact(&mut hdr_data)
+        .context("Failed to read LUKS header")?;
+    let header =
+        LuksHeader::read_from(&mut &hdr_data[..]).context("Failed to decode LUKS header")?;
+    let LuksHeader {
+        magic,
+        version,
+        hdr_size,
+        seqid: _,
+        label,
+        csum_alg,
+        salt: _,
+        uuid: _,
+        subsystem,
+        hdr_offset,
+        csum: _,
+        ..
+    } = header;
+
+    let expected_magic = match hdr_ind {
+        0 => [76, 85, 75, 83, 186, 190],
+        1 => [83, 75, 85, 76, 186, 190],
+        _ => bail!("Invalid LUKS header index: {hdr_ind}"),
+    };
+    if magic != expected_magic {
+        bail!("Invalid LUKS magic: {magic:?}");
+    }
+    if version != 2 {
+        bail!("Invalid LUKS version: {version}");
+    }
+    if label != [0; 48] {
+        bail!("Invalid LUKS label: {:?}", label);
+    }
+    if csum_alg != const_pad!(b"sha256", 32) {
+        bail!("Invalid LUKS checksum algorithm");
+    }
+    if subsystem != [0; 48] {
+        bail!("Invalid LUKS subsystem");
+    }
+    if hdr_offset != hdr_ind * hdr_size {
+        bail!("Invalid LUKS header offset: {hdr_offset}");
+    }
+    if !(4096..=1024 * 1024 * 16).contains(&hdr_size) {
+        bail!("Invalid LUKS header size: {hdr_size}");
+    }
+
+    // Check JSON
+    let json_size = hdr_size - 4096;
+    let mut jsn_data = vec![0u8; json_size as usize];
+    reader
+        .read_exact(&mut jsn_data)
+        .context("Failed to read LUKS JSON")?;
+    let json_end = jsn_data
+        .iter()
+        .position(|&b| b == 0)
+        .unwrap_or(jsn_data.len());
+    jsn_data.truncate(json_end);
+
+    let json = LuksJson::read_from(&mut &jsn_data[..]).context("Failed to decode LUKS JSON")?;
+    let LuksJson {
+        keyslots,
+        tokens,
+        segments,
+        digests,
+        config:
+            LuksConfig {
+                json_size: _,
+                keyslots_size: _,
+                flags,
+                requirements,
+            },
+    } = json;
+
+    if keyslots.len() != 1 {
+        bail!("Invalid LUKS keyslots");
+    }
+    if !tokens.is_empty() {
+        bail!("Invalid LUKS tokens");
+    }
+    if segments.len() != 1 {
+        bail!("Invalid LUKS segments");
+    }
+    if digests.len() != 1 {
+        bail!("Invalid LUKS digests");
+    }
+    if flags.is_some() {
+        bail!("Invalid LUKS flags");
+    }
+    if requirements.is_some() {
+        bail!("Invalid LUKS requirements");
+    }
+
+    {
+        let first_keyslot = keyslots.get(&0).context("no LUKS keyslot")?;
+        let LuksKeyslot::luks2 {
+            key_size,
+            area,
+            kdf,
+            af,
+            priority,
+        } = first_keyslot;
+        if area.encryption() != "aes-xts-plain64" {
+            bail!("Invalid LUKS keyslot encryption: {}", area.encryption());
+        }
+        if *key_size != 64 {
+            bail!("Invalid LUKS keyslot key size: {key_size}");
+        }
+        if area.key_size() != 64 {
+            bail!("Invalid LUKS keyslot key size: {}", area.key_size());
+        }
+        {
+            let LuksKdf::pbkdf2 {
+                hash,
+                iterations: _,
+                salt: _,
+            } = kdf
+            else {
+                bail!("Invalid LUKS keyslot KDF");
+            };
+            if hash != "sha256" {
+                bail!("Invalid LUKS keyslot hash: {hash}");
+            }
+        }
+        {
+            let LuksAf::luks1 { hash, stripes } = af;
+            if hash != "sha256" {
+                bail!("Invalid LUKS keyslot hash: {hash}");
+            }
+            if *stripes != 4000 {
+                bail!("Invalid LUKS keyslot stripes: {stripes}");
+            }
+        }
+        if priority.is_some() {
+            bail!("Invalid LUKS keyslot priority");
+        }
+    }
+
+    {
+        let first_segment = segments.get(&0).context("no LUKS segment")?;
+        let LuksSegment::crypt {
+            offset,
+            size,
+            iv_tweak,
+            encryption,
+            sector_size,
+            integrity,
+            flags,
+        } = first_segment;
+        if *offset != PAYLOAD_OFFSET {
+            bail!("Invalid LUKS segment offset");
+        }
+        if *size != LuksSegmentSize::dynamic {
+            bail!("Invalid LUKS segment size");
+        }
+        if *iv_tweak != 0 {
+            bail!("Invalid LUKS segment IV tweak");
+        }
+        if encryption != "aes-xts-plain64" {
+            bail!("Invalid LUKS segment encryption");
+        }
+        if *sector_size != 512 {
+            bail!("Invalid LUKS segment sector size");
+        }
+        if integrity.is_some() {
+            bail!("Invalid LUKS segment integrity");
+        }
+        if flags.is_some() {
+            bail!("Invalid LUKS segment flags");
+        }
+    }
+    {
+        let first_digest = digests.get(&0).context("no LUKS digest")?;
+        let LuksDigest::pbkdf2 {
+            keyslots,
+            segments,
+            hash,
+            digest: _,
+            iterations: _,
+            salt: _,
+        } = first_digest;
+        if hash != "sha256" {
+            bail!("Invalid LUKS digest hash: {hash}");
+        }
+        if keyslots != &[0] {
+            bail!("Invalid LUKS digest keyslots: {keyslots:?}");
+        }
+        if segments != &[0] {
+            bail!("Invalid LUKS digest segments: {segments:?}");
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn test_validate_luks2_header() {
+    let header_data = include_bytes!("../tests/fixtures/luks_header_good").to_vec();
+    validate_luks2_headers(&mut &header_data[..]).expect("Failed to validate LUKS2 header");
+    let header_data = include_bytes!("../tests/fixtures/luks_header_cipher_null").to_vec();
+    let error = validate_luks2_headers(&mut &header_data[..]).unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("Invalid LUKS keyslot encryption"));
 }
