@@ -5,119 +5,49 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.5.4] - 2025-09-01
+
+### Security
+- Fixed LUKS header validation security vulnerability (GHSA-jxq2-hpw3-m5wf)
 
 ### Added
-- Add git-cliff based changelog"
-- Added TappdClient and show warning. by @Leechael
-- Add getComposeHash & verifyEnvEncryptPublicKey by @Leechael
-- Support customize timeout. by @Leechael
-- Add base to hardhat's predefine networks by @Leechael
-- Add logo by @h4x3rotab
-- Add kms-builder by @kvinwang
-- Add logs to dstack-mr by @kvinwang
-- Add crate dstack-mr by @kvinwang
-- Add /app-info to gw info endpoint by @kvinwang
+- Support for generating borsh schema for public types (#302)
+- Python SDK v0.5.0 with async support
+- Auth backend examples (auth-mock, auth-eth-bun)
+- Support for passt as network egress
+- Support for more than 255 CPUs
+- SPDX license annotations
+- Security audit report and documentation
+- Media kit and branding updates
+- gRPC proxy support for gateway
+- Browser compatibility for JS SDK
+- git-cliff based changelog generation
+- CONTRIBUTING.md documentation
 
 ### Changed
-- Merge pull request #256 from Dstack-TEE/sdk-compat by @kvinwang in [#256](https://github.com/Dstack-TEE/dstack/pull/256)
-- Bump 0.5.2 by @Leechael
-- Compatible for solana & viem by @Leechael
-- Bump 0.5.1 for testing. by @Leechael
-- Keep legacy support only in TappdClient. by @Leechael
-- Add compatible deriveKey by @kvinwang
-- Merge pull request #258 from Dstack-TEE/vmm-cli-ppcie by @kvinwang in [#258](https://github.com/Dstack-TEE/dstack/pull/258)
-- Add basic auth by @kvinwang
-- Add doc/tests and --ppcie by @kvinwang
-- Merge pull request #253 from Dstack-TEE/dependabot/npm_and_yarn/kms/auth-eth/axios-1.11.0 by @Leechael in [#253](https://github.com/Dstack-TEE/dstack/pull/253)
-- Bump axios from 1.10.0 to 1.11.0 in /kms/auth-eth by @dependabot[bot]
-- Merge pull request #257 from Dstack-TEE/tcbinfo-fields by @kvinwang in [#257](https://github.com/Dstack-TEE/dstack/pull/257)
-- Add some missing fields in TcbInfo by @kvinwang
-- Merge pull request #250 from Dstack-TEE/imp-remove-max-disk-size-check by @Leechael in [#250](https://github.com/Dstack-TEE/dstack/pull/250)
-- Merge pull request #249 from Dstack-TEE/dependabot/npm_and_yarn/kms/auth-eth/multi-0ca592796f by @Leechael in [#249](https://github.com/Dstack-TEE/dstack/pull/249)
-- Bump form-data in /kms/auth-eth by @dependabot[bot]
-- Merge pull request #223 from Dstack-TEE/feat-js-sdk-backward-compatible by @Leechael in [#223](https://github.com/Dstack-TEE/dstack/pull/223)
-- V0.5.0 by @Leechael
-- Rename Deterministic Compose Hash to Normalized App Compose by @Leechael
-- Make preprocess app compose optional by @Leechael
-- Typing for AppCompose by @Leechael
-- Determinstic compose hash by @Leechael
-- Rename dumpAppCompose to toDeterminsticJson and refactor by @Leechael
-- Better migrate plan for legacy APIs by @Leechael
-- Pump beta release 0.5.0-beta.2 by @Leechael
-- Pump beta release 0.5.0-beta.1 by @Leechael
-- Rename. by @Leechael
-- Backward compatible. by @Leechael
-- Move out send_rpc_request to standalone file. by @Leechael
-- Merge pull request #245 from Dstack-TEE/gw-info by @Leechael in [#245](https://github.com/Dstack-TEE/dstack/pull/245)
-- Add RPC for Gateway Info by @kvinwang
-- Merge pull request #244 from Dstack-TEE/feat-auth-backend-examples by @Leechael in [#244](https://github.com/Dstack-TEE/dstack/pull/244)
-- More configurable for auth-mock by @Leechael
-- Auth-mock by @Leechael
-- Auth-eth-bun by @Leechael
-- Merge pull request #248 from Dstack-TEE/dependabot/cargo/tokio-1.46.1 by @h4x3rotab in [#248](https://github.com/Dstack-TEE/dstack/pull/248)
-- Bump tokio from 1.44.1 to 1.46.1 by @dependabot[bot]
-- Merge pull request #247 from Dstack-TEE/dependabot/npm_and_yarn/kms/auth-eth/openzeppelin/contracts-upgradeable-5.4.0 by @dependabot[bot] in [#247](https://github.com/Dstack-TEE/dstack/pull/247)
-- Bump @openzeppelin/contracts-upgradeable in /kms/auth-eth by @dependabot[bot]
-- Merge pull request #240 from Dstack-TEE/rename-contracts by @Leechael in [#240](https://github.com/Dstack-TEE/dstack/pull/240)
-- Update docs for deploy app by @Leechael
-- Rename contracts by @kvinwang
-- Merge pull request #242 from Dstack-TEE/readme by @h4x3rotab in [#242](https://github.com/Dstack-TEE/dstack/pull/242)
-- Limit height by @h4x3rotab
-- Vibe documenting by @h4x3rotab
-- Update readme by @h4x3rotab
-- Merge pull request #239 from Dstack-TEE/fix-rev-net by @kvinwang in [#239](https://github.com/Dstack-TEE/dstack/pull/239)
-- Fix reserved ip allocation by @kvinwang
-- Merge pull request #233 from Dstack-TEE/dependabot/npm_and_yarn/kms/auth-eth/multi-a1c2ce69a2 by @kvinwang in [#233](https://github.com/Dstack-TEE/dstack/pull/233)
-- Bump brace-expansion in /kms/auth-eth by @dependabot[bot]
-- Merge pull request #236 from Dstack-TEE/dependabot/npm_and_yarn/kms/auth-eth/axios-1.10.0 by @kvinwang in [#236](https://github.com/Dstack-TEE/dstack/pull/236)
-- Bump axios from 1.7.9 to 1.10.0 in /kms/auth-eth by @dependabot[bot]
-- Merge pull request #238 from Dstack-TEE/rm-fields by @kvinwang in [#238](https://github.com/Dstack-TEE/dstack/pull/238)
-- Remove more fields in AppInfo by @kvinwang
-- Merge pull request #232 from Dstack-TEE/rm-rootfs-hash by @kvinwang in [#232](https://github.com/Dstack-TEE/dstack/pull/232)
-- Remove rootfs_hash from TcbInfo by @kvinwang
-- Merge pull request #234 from Dstack-TEE/dependabot/npm_and_yarn/kms/auth-eth/fastify-4.29.1 by @h4x3rotab in [#234](https://github.com/Dstack-TEE/dstack/pull/234)
-- Bump fastify from 4.29.0 to 4.29.1 in /kms/auth-eth by @dependabot[bot]
-- Merge pull request #235 from Dstack-TEE/dependabot/npm_and_yarn/kms/auth-eth/base-x-3.0.11 by @h4x3rotab in [#235](https://github.com/Dstack-TEE/dstack/pull/235)
-- Bump base-x from 3.0.10 to 3.0.11 in /kms/auth-eth by @dependabot[bot]
-- Update image hash by @kvinwang
-- Build prod image by @kvinwang
-- Allow default values in VmConfig by @kvinwang
-- Merge pull request #229 from Dstack-TEE/kms-builder by @kvinwang in [#229](https://github.com/Dstack-TEE/dstack/pull/229)
-- Merge pull request #228 from Dstack-TEE/dstack-mr by @kvinwang in [#228](https://github.com/Dstack-TEE/dstack/pull/228)
-- Support hugepages for non-gpu vm by @kvinwang
-- Use new dstack-mr implmementation by @kvinwang
-- Merge pull request #231 from Dstack-TEE/addr-as-appid by @kvinwang in [#231](https://github.com/Dstack-TEE/dstack/pull/231)
-- Add back registered apps by @kvinwang
-- Use the contract address as appId by @kvinwang
-- Merge pull request #230 from Dstack-TEE/gw-quote by @shelvenzhou in [#230](https://github.com/Dstack-TEE/dstack/pull/230)
-- Alias app-info and acme-info under /.dstack/ by @kvinwang
-- Cache the quotes on fs by @kvinwang
-- Add vm_config in quote report by @kvinwang
-- Cargo fmt by @kvinwang
-- Add base_domain to AcmeInfoResponse by @kvinwang
-- Add endpoint this-node by @kvinwang
-- Add quote for zt-tls keys by @kvinwang
-- Merge pull request #226 from Dstack-TEE/passwd by @kvinwang in [#226](https://github.com/Dstack-TEE/dstack/pull/226)
-- Mount passwd files to data disk by @kvinwang
-- Merge pull request #224 from Dstack-TEE/code-of-conduct by @h4x3rotab in [#224](https://github.com/Dstack-TEE/dstack/pull/224)
-- Create CODE_OF_CONDUCT.md by @h4x3rotab
-- Merge pull request #227 from Dstack-TEE/dependabot/npm_and_yarn/kms/auth-eth/pbkdf2-3.1.3 by @kvinwang in [#227](https://github.com/Dstack-TEE/dstack/pull/227)
-- Bump pbkdf2 from 3.1.2 to 3.1.3 in /kms/auth-eth by @dependabot[bot]
-- Merge pull request #222 from Dstack-TEE/fix-vmm-cli-set-key-provider-id by @Leechael in [#222](https://github.com/Dstack-TEE/dstack/pull/222)
+- Better error reporting for TDX quote errors
+- Moved generated prpc files to OUT_DIR
+- Refactored dstack-sdk into two crates for no_std support
+- Updated various dependencies (sha.js, elliptic, tokio, etc.)
+- Improved vmm with one-shot support
+- Updated documentation for non-KMS app access
+- Consolidated dstack branding capitalization
 
 ### Fixed
-- Unknown field by @Leechael
-- Get appAuthImplementation failed. by @Leechael
-- Fix anchors by @h4x3rotab
-- Unmatched app_compose when no key provider id. by @Leechael
+- Warnings and clippy issues
+- Networking configuration issues
+- Typing errors in Python SDK
+- Compilation errors in supervisor
+- Reserved IP allocation issues
 
-### Removed
-- Remove max disk size limit by @Leechael
+### Contributors
+New contributors in this release:
+- @DSharifi
+- @pbeza
+- @bravesasha
+- @Olexandr88
+- @crStiv
 
-## New Contributors
-* @dependabot[bot] made their first contribution
-* @shelvenzhou made their first contribution in [#230](https://github.com/Dstack-TEE/dstack/pull/230)
 ## [0.5.3] - 2025-06-24
 
 ### Added
@@ -1308,6 +1238,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * @nanometerzhu made their first contribution
 * @h4x3rotab made their first contribution
 [unreleased]: https://github.com/Dstack-TEE/dstack/compare/v0.5.3..HEAD
+[0.5.4]: https://github.com/Dstack-TEE/dstack/compare/v0.5.3..v0.5.4
 [0.5.3]: https://github.com/Dstack-TEE/dstack/compare/v0.5.2..v0.5.3
 [0.5.2]: https://github.com/Dstack-TEE/dstack/compare/v0.5.1..v0.5.2
 [0.5.1]: https://github.com/Dstack-TEE/dstack/compare/v0.5.0..v0.5.1
