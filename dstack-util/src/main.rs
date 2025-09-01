@@ -271,9 +271,12 @@ impl core::fmt::Debug for ParsedReport {
 }
 
 fn cmd_show_mrs() -> Result<()> {
-    let attestation = ra_tls::attestation::Attestation::local()?;
-    let app_info = attestation.decode_app_info(false)?;
-    serde_json::to_writer_pretty(io::stdout(), &app_info)?;
+    let attestation =
+        ra_tls::attestation::Attestation::local().context("Failed to get attestation")?;
+    let app_info = attestation
+        .decode_app_info(false)
+        .context("Failed to decode app info")?;
+    serde_json::to_writer_pretty(io::stdout(), &app_info).context("Failed to write app info")?;
     println!();
     Ok(())
 }
