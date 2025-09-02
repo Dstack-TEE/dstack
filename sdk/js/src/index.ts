@@ -44,14 +44,26 @@ export interface TcbInfo {
   rtmr1: string
   rtmr2: string
   rtmr3: string
+  app_compose: string
   event_log: EventLog[]
 }
 
-export interface InfoResponse {
+export type TcbInfoV03x = TcbInfo & {
+  rootfs_hash: string
+}
+
+export type TcbInfoV05x = TcbInfo & {
+  mr_aggregated: string
+  os_image_hash: string
+  compose_hash: string
+  device_id: string
+}
+
+export interface InfoResponse<VersionTcbInfo extends TcbInfo> {
   app_id: string
   instance_id: string
   app_cert: string
-  tcb_info: TcbInfo
+  tcb_info: VersionTcbInfo
   app_name: string
   device_id: string
   os_image_hash?: string // Optional: empty if OS image is not measured by KMS
@@ -132,7 +144,7 @@ export interface TlsKeyOptions {
   usageClientAuth?: boolean;
 }
 
-export class DstackClient {
+export class DstackClient<T extends TcbInfo = TcbInfoV05x> {
   protected endpoint: string
 
   constructor(endpoint: string | undefined = undefined) {
@@ -210,11 +222,11 @@ export class DstackClient {
     return Object.freeze(result)
   }
 
-  async info(): Promise<InfoResponse> {
-    const result = await send_rpc_request<Omit<InfoResponse, 'tcb_info'> & { tcb_info: string }>(this.endpoint, '/Info', '{}')
+  async info(): Promise<InfoResponse<T>> {
+    const result = await send_rpc_request<Omit<InfoResponse<TcbInfo>, 'tcb_info'> & { tcb_info: string }>(this.endpoint, '/Info', '{}')
     return Object.freeze({
       ...result,
-      tcb_info: JSON.parse(result.tcb_info) as TcbInfo,
+      tcb_info: JSON.parse(result.tcb_info) as T,
     })
   }
 
@@ -283,7 +295,7 @@ export class DstackClient {
   }
 }
 
-export class TappdClient extends DstackClient {
+export class TappdClient extends DstackClient<TcbInfoV03x> {
   constructor(endpoint: string | undefined = undefined) {
     if (endpoint === undefined) {
       if (process.env.TAPPD_SIMULATOR_ENDPOINT) {
