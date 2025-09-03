@@ -258,6 +258,8 @@ impl<Key> CertRequest<'_, Key> {
         }
         if let Some(ca_level) = self.ca_level {
             params.is_ca = IsCa::Ca(BasicConstraints::Constrained(ca_level));
+            params.key_usages.push(KeyUsagePurpose::KeyCertSign);
+            params.key_usages.push(KeyUsagePurpose::CrlSign);
         }
         if let Some(not_before) = self.not_before {
             params.not_before = not_before.into();
