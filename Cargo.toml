@@ -57,7 +57,7 @@ resolver = "2"
 # Internal dependencies
 ra-rpc = { path = "ra-rpc", default-features = false }
 ra-tls = { path = "ra-tls" }
-dstack-sdk-types = { path = "sdk/rust/types", default-features = false }
+dstack-sdk-types = { path = "sdk/rust/types", version = "0.1.0", default-features = false }
 dstack-gateway-rpc = { path = "gateway/rpc" }
 dstack-kms-rpc = { path = "kms/rpc" }
 dstack-guest-agent-rpc = { path = "guest-agent/rpc" }
