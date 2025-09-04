@@ -11,8 +11,10 @@ import logging
 import os
 from typing import Any
 from typing import Dict
+from typing import Generic
 from typing import List
 from typing import Optional
+from typing import TypeVar
 from typing import cast
 import warnings
 
@@ -157,23 +159,41 @@ class EventLog(BaseModel):
 
 
 class TcbInfo(BaseModel):
+    """Base TCB (Trusted Computing Base) information structure."""
+
     mrtd: str
     rtmr0: str
     rtmr1: str
     rtmr2: str
     rtmr3: str
-    os_image_hash: str = ""
-    compose_hash: str
-    device_id: str
     app_compose: str
     event_log: List[EventLog]
 
 
-class InfoResponse(BaseModel):
+class TcbInfoV03x(TcbInfo):
+    """TCB information for dstack OS version 0.3.x."""
+
+    rootfs_hash: str
+
+
+class TcbInfoV05x(TcbInfo):
+    """TCB information for dstack OS version 0.5.x."""
+
+    mr_aggregated: str
+    os_image_hash: str
+    compose_hash: str
+    device_id: str
+
+
+# Type variable for TCB info versions
+T = TypeVar("T", bound=TcbInfo)
+
+
+class InfoResponse(BaseModel, Generic[T]):
     app_id: str
     instance_id: str
     app_cert: str
-    tcb_info: TcbInfo
+    tcb_info: T
     app_name: str
     device_id: str
     os_image_hash: str = ""
@@ -181,14 +201,21 @@ class InfoResponse(BaseModel):
     compose_hash: str
 
     @classmethod
-    def parse_response(cls, obj: Any) -> "InfoResponse":
+    def parse_response(cls, obj: Any, tcb_info_type: type[T]) -> "InfoResponse[T]":
+        """Parse response from service, automatically deserializing tcb_info.
+
+        Args:
+            obj: Raw response object from service
+            tcb_info_type: The specific TcbInfo subclass to use for parsing
+
+        """
         if (
             isinstance(obj, dict)
             and "tcb_info" in obj
             and isinstance(obj["tcb_info"], str)
         ):
             obj = dict(obj)
-            obj["tcb_info"] = TcbInfo(**json.loads(obj["tcb_info"]))
+            obj["tcb_info"] = tcb_info_type(**json.loads(obj["tcb_info"]))
         return cls(**obj)
 
 
@@ -311,10 +338,10 @@ class AsyncDstackClient(BaseClient):
         result = await self._send_rpc_request("GetQuote", {"report_data": hex})
         return GetQuoteResponse(**result)
 
-    async def info(self) -> InfoResponse:
+    async def info(self) -> InfoResponse[TcbInfo]:
         """Fetch service information including parsed TCB info."""
         result = await self._send_rpc_request("Info", {})
-        return InfoResponse.parse_response(result)
+        return InfoResponse.parse_response(result, TcbInfoV05x)
 
     async def emit_event(
         self,
@@ -391,7 +418,7 @@ class DstackClient(BaseClient):
         raise NotImplementedError
 
     @call_async
-    def info(self) -> InfoResponse:
+    def info(self) -> InfoResponse[TcbInfo]:
         """Fetch service information including parsed TCB info."""
         raise NotImplementedError
 
@@ -503,6 +530,11 @@ class AsyncTappdClient(AsyncDstackClient):
 
         return GetQuoteResponse(**result)
 
+    async def info(self) -> InfoResponse[TcbInfo]:
+        """Fetch service information including parsed TCB info."""
+        result = await self._send_rpc_request("Info", {})
+        return InfoResponse.parse_response(result, TcbInfoV03x)
+
 
 class TappdClient(DstackClient):
     """Deprecated client kept for backward compatibility.
@@ -535,6 +567,11 @@ class TappdClient(DstackClient):
         hash_algorithm: str | None = None,
     ) -> GetQuoteResponse:
         """Use ``get_quote`` instead (deprecated)."""
+        raise NotImplementedError
+
+    @call_async
+    def info(self) -> InfoResponse[TcbInfo]:
+        """Fetch service information including parsed TCB info."""
         raise NotImplementedError
 
     @call_async
