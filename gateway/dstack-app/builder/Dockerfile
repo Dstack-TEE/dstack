@@ -34,6 +34,7 @@ RUN ./pin-packages.sh ./pinned-packages.txt && \
     wireguard-tools \
     iproute2 \
     jq \
+    ca-certificates \
     && rm -rf /var/lib/apt/lists/* /var/log/* /var/cache/ldconfig/aux-cache
 COPY --from=gateway-builder /build/dstack/target/x86_64-unknown-linux-musl/release/dstack-gateway /usr/local/bin/dstack-gateway
 COPY --from=gateway-builder /build/.GIT_REV /etc/
@@ -41,4 +42,4 @@ WORKDIR /app
 COPY entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
 ENTRYPOINT ["/app/entrypoint.sh"]
-CMD ["dstack-gateway"]
+CMD ["dstack-gateway", "-c", "/data/gateway/gateway.toml"]
