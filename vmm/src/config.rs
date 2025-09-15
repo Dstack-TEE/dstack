@@ -310,6 +310,32 @@ pub struct KeyProviderConfig {
     pub port: u16,
 }
 
+const CLIENT_CONF_PATH: &str = "/etc/dstack/client.conf";
+fn read_qemu_path_from_client_conf() -> Option<PathBuf> {
+    #[derive(Debug, Deserialize)]
+    struct ClientQemuSection {
+        path: Option<String>,
+    }
+    #[derive(Debug, Deserialize)]
+    struct ClientIniConfig {
+        qemu: Option<ClientQemuSection>,
+    }
+
+    let raw = fs_err::read_to_string(CLIENT_CONF_PATH).ok()?;
+    let parsed: ClientIniConfig = serde_ini::from_str(&raw).ok()?;
+    let path = parsed.qemu?.path?;
+    let path = path.trim().trim_matches('"').trim_matches('\'');
+    if path.is_empty() {
+        return None;
+    }
+    let path = PathBuf::from(path);
+    if path.exists() {
+        Some(path)
+    } else {
+        None
+    }
+}
+
 impl Config {
     pub fn extract_or_default(figment: &Figment) -> Result<Self> {
         let mut me: Self = figment.extract()?;
@@ -323,11 +349,18 @@ impl Config {
                 me.run_path = app_home.join("vm");
             }
             if me.cvm.qemu_path == PathBuf::default() {
-                let cpu_arch = std::env::consts::ARCH;
-                let qemu_path = which::which(format!("qemu-system-{}", cpu_arch))
-                    .context("Failed to find qemu executable")?;
-                me.cvm.qemu_path = qemu_path;
+                // Prefer the path from dstack client config if present
+                if let Some(qemu_path) = read_qemu_path_from_client_conf() {
+                    info!("Found QEMU path from client config: {CLIENT_CONF_PATH:?}");
+                    me.cvm.qemu_path = qemu_path;
+                } else {
+                    let cpu_arch = std::env::consts::ARCH;
+                    let qemu_path = which::which(format!("qemu-system-{}", cpu_arch))
+                        .context("Failed to find qemu executable")?;
+                    me.cvm.qemu_path = qemu_path;
+                }
             }
+            info!("QEMU path: {}", me.cvm.qemu_path.display());
         }
         Ok(me)
     }

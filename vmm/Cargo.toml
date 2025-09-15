@@ -32,6 +32,7 @@ tailf.workspace = true
 tokio = { workspace = true, features = ["full"] }
 git-version.workspace = true
 rocket-apitoken.workspace = true
+serde_ini.workspace = true
 
 supervisor-client.workspace = true
 ra-rpc = { workspace = true, features = ["client", "rocket"] }
