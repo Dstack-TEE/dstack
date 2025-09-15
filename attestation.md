@@ -25,7 +25,7 @@ The MR register values indicate the following:
     - RTMR0: OVMF records CVM's virtual hardware setup, including CPU count, memory size, and device configuration. While dstack uses fixed devices, CPU and memory specifications can vary. RTMR0 can be computed from these specifications.
     - RTMR1: OVMF records the Linux kernel measurement.
     - RTMR2: Linux kernel records kernel cmdline (including rootfs hash) and initrd measurements.
-    - RTMR3: initrd records dstack App details, including compose hash, instance id, app id, rootfs hash, and key provider.
+    - RTMR3: initrd records dstack App details, including compose hash, instance id, app id, and key provider.
 
 MRTD, RTMR0, RTMR1, and RTMR2 can be pre-calculated from the built image (given CPU+RAM specifications). Compare these with the verified quote's MRs to confirm correct base image code execution.
 
