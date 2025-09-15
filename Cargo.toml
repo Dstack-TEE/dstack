@@ -115,6 +115,7 @@ scale = { version = "3.7.4", package = "parity-scale-codec", features = [
 serde = { version = "1.0.219", features = ["derive"], default-features = false }
 serde-human-bytes = "0.1.0"
 serde_json = { version = "1.0.140", default-features = false }
+serde_ini = "0.2.0"
 toml = "0.8.20"
 toml_edit = { version = "0.22.24", features = ["serde"] }
 yasna = "0.5.2"
