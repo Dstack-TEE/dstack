@@ -49,7 +49,7 @@ export interface TcbInfo {
 }
 
 export type TcbInfoV03x = TcbInfo & {
-  rootfs_hash: string
+  rootfs_hash?: string
 }
 
 export type TcbInfoV05x = TcbInfo & {
