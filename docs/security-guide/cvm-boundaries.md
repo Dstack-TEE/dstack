@@ -39,7 +39,9 @@ This is the main configuration file for the application in JSON format:
 | allowed_envs | array of string | List of allowed environment variable names |
 | no_instance_id | boolean | Disable instance ID generation |
 | secure_time | boolean | Whether secure time is enabled |
-| pre_launch_script | string | Prelaunch bash script that runs before starting containers |
+| pre_launch_script | string | Prelaunch bash script that runs before execute `docker compose up` |
+| init_script | string | Bash script that executed prior to dockerd startup |
+
 
 The hash of this file content is extended to RTMR3 as event name `compose-hash`. Remote verifier can extract the compose-hash during remote attestation.
 

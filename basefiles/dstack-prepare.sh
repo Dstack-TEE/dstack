@@ -45,3 +45,11 @@ mkdir -p $DATA_MNT/var/lib/docker
 mount --rbind $DATA_MNT/var/lib/docker /var/lib/docker
 mount --rbind $WORK_DIR /dstack
 mount_overlay /etc/users $OVERLAY_PERSIST
+
+cd /dstack
+
+if [ $(jq 'has("init_script")' app-compose.json) == true ]; then
+    echo "Running init script"
+    dstack-util notify-host -e "boot.progress" -d "init-script" || true
+    source <(jq -r '.init_script' app-compose.json)
+fi
