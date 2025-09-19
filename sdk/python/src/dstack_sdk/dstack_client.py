@@ -23,7 +23,7 @@ from pydantic import BaseModel
 
 logger = logging.getLogger("dstack_sdk")
 
-__version__ = "0.2.0"
+__version__ = "0.5.2"
 
 
 INIT_MR = "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
@@ -226,12 +226,19 @@ class BaseClient:
 class AsyncDstackClient(BaseClient):
     PATH_PREFIX = "/"
 
-    def __init__(self, endpoint: str | None = None, *, use_sync_http: bool = False, timeout: float = 3):
+    def __init__(
+        self,
+        endpoint: str | None = None,
+        *,
+        use_sync_http: bool = False,
+        timeout: float = 3,
+    ):
         """Initialize async client with HTTP or Unix-socket transport.
 
         Args:
             endpoint: HTTP/HTTPS URL or Unix socket path
             use_sync_http: If True, use sync HTTP client internally
+            timeout: Timeout in seconds
 
         """
         endpoint = get_endpoint(endpoint)
@@ -256,14 +263,18 @@ class AsyncDstackClient(BaseClient):
     def _get_client(self) -> httpx.AsyncClient:
         if self._client is None:
             self._client = httpx.AsyncClient(
-                transport=self.async_transport, base_url=self.base_url, timeout=self._timeout
+                transport=self.async_transport,
+                base_url=self.base_url,
+                timeout=self._timeout,
             )
         return self._client
 
     def _get_sync_client(self) -> httpx.Client:
         if self._sync_client is None:
             self._sync_client = httpx.Client(
-                transport=self.sync_transport, base_url=self.base_url, timeout=self._timeout
+                transport=self.sync_transport,
+                base_url=self.base_url,
+                timeout=self._timeout,
             )
         return self._sync_client
 
@@ -399,7 +410,9 @@ class DstackClient(BaseClient):
         If a non-HTTP(S) endpoint is provided, it is treated as a Unix socket
         path and validated for existence.
         """
-        self.async_client = AsyncDstackClient(endpoint, use_sync_http=True, timeout=timeout)
+        self.async_client = AsyncDstackClient(
+            endpoint, use_sync_http=True, timeout=timeout
+        )
 
     @call_async
     def get_key(
@@ -464,7 +477,13 @@ class AsyncTappdClient(AsyncDstackClient):
     DEPRECATED: Use ``AsyncDstackClient`` instead.
     """
 
-    def __init__(self, endpoint: str | None = None, *, use_sync_http: bool = False, timeout: float = 3):
+    def __init__(
+        self,
+        endpoint: str | None = None,
+        *,
+        use_sync_http: bool = False,
+        timeout: float = 3,
+    ):
         """Initialize deprecated async tappd client wrapper."""
         if not use_sync_http:
             # Already warned in TappdClient.__init__
@@ -549,7 +568,9 @@ class TappdClient(DstackClient):
             "TappdClient is deprecated, please use DstackClient instead"
         )
         endpoint = get_tappd_endpoint(endpoint)
-        self.async_client = AsyncTappdClient(endpoint, use_sync_http=True, timeout=timeout)
+        self.async_client = AsyncTappdClient(
+            endpoint, use_sync_http=True, timeout=timeout
+        )
 
     @call_async
     def derive_key(
