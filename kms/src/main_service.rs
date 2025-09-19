@@ -481,8 +481,8 @@ impl RpcHandler {
             .context("Failed to derive app disk key")?;
         let req = CertRequest::builder()
             .key(&app_key)
-            .org_name("dstack")
-            .subject("dstack App CA")
+            .org_name("Dstack")
+            .subject("Dstack App CA")
             .ca_level(0)
             .app_id(app_id)
             .special_usage("app:ca")
