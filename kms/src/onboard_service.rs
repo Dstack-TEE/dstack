@@ -128,8 +128,8 @@ impl Keys {
         quote_enabled: bool,
     ) -> Result<Self> {
         let tmp_ca_cert = CertRequest::builder()
-            .org_name("dstack")
-            .subject("dstack Client Temp CA")
+            .org_name("Dstack")
+            .subject("Dstack Client Temp CA")
             .ca_level(0)
             .key(&tmp_ca_key)
             .build()
@@ -137,8 +137,8 @@ impl Keys {
 
         // Create self-signed KMS cert
         let ca_cert = CertRequest::builder()
-            .org_name("dstack")
-            .subject("dstack KMS CA")
+            .org_name("Dstack")
+            .subject("Dstack KMS CA")
             .ca_level(1)
             .key(&ca_key)
             .build()
