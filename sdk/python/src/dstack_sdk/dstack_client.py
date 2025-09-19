@@ -173,7 +173,7 @@ class TcbInfo(BaseModel):
 class TcbInfoV03x(TcbInfo):
     """TCB information for dstack OS version 0.3.x."""
 
-    rootfs_hash: str
+    rootfs_hash: Optional[str] = None
 
 
 class TcbInfoV05x(TcbInfo):
