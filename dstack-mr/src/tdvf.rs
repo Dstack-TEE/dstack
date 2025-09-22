@@ -6,9 +6,9 @@ use anyhow::{anyhow, bail, Context, Result};
 use hex_literal::hex;
 use sha2::{Digest, Sha384};
 
+use crate::acpi::Tables;
 use crate::num::read_le;
-use crate::util::debug_print_log;
-use crate::{measure_log, measure_sha384, utf16_encode, Machine};
+use crate::{measure_log, measure_sha384, utf16_encode, Machine, RtmrLog};
 
 const PAGE_SIZE: u64 = 0x1000;
 const MR_EXTEND_GRANULARITY: usize = 0x100;
@@ -233,7 +233,13 @@ impl<'a> Tdvf<'a> {
         })
     }
 
+    #[allow(dead_code)]
     pub fn rtmr0(&self, machine: &Machine) -> Result<Vec<u8>> {
+        let (rtmr0_log, _) = self.rtmr0_log(machine)?;
+        Ok(measure_log(&rtmr0_log))
+    }
+
+    pub fn rtmr0_log(&self, machine: &Machine) -> Result<(RtmrLog, Tables)> {
         let td_hob_hash = self.measure_td_hob(machine.memory_size)?;
         let cfv_image_hash = hex!("344BC51C980BA621AAA00DA3ED7436F7D6E549197DFE699515DFA2C6583D95E6412AF21C097D473155875FFD561D6790");
         let boot000_hash = hex!("23ADA07F5261F12F34A0BD8E46760962D6B4D576A416F1FEA1C64BC656B1D28EACF7047AE6E967C58FD2A98BFA74C298");
@@ -245,23 +251,24 @@ impl<'a> Tdvf<'a> {
 
         // RTMR0 calculation
 
-        let rtmr0_log = vec![
-            td_hob_hash,
-            cfv_image_hash.to_vec(),
-            measure_tdx_efi_variable("8BE4DF61-93CA-11D2-AA0D-00E098032B8C", "SecureBoot")?,
-            measure_tdx_efi_variable("8BE4DF61-93CA-11D2-AA0D-00E098032B8C", "PK")?,
-            measure_tdx_efi_variable("8BE4DF61-93CA-11D2-AA0D-00E098032B8C", "KEK")?,
-            measure_tdx_efi_variable("D719B2CB-3D3A-4596-A3BC-DAD00E67656F", "db")?,
-            measure_tdx_efi_variable("D719B2CB-3D3A-4596-A3BC-DAD00E67656F", "dbx")?,
-            measure_sha384(&[0x00, 0x00, 0x00, 0x00]), // Separator
-            acpi_loader_hash,
-            acpi_rsdp_hash,
-            acpi_tables_hash,
-            measure_sha384(&[0x00, 0x00]), // BootOrder
-            boot000_hash.to_vec(),
-        ];
-        debug_print_log("RTMR0", &rtmr0_log);
-        Ok(measure_log(&rtmr0_log))
+        Ok((
+            vec![
+                td_hob_hash,
+                cfv_image_hash.to_vec(),
+                measure_tdx_efi_variable("8BE4DF61-93CA-11D2-AA0D-00E098032B8C", "SecureBoot")?,
+                measure_tdx_efi_variable("8BE4DF61-93CA-11D2-AA0D-00E098032B8C", "PK")?,
+                measure_tdx_efi_variable("8BE4DF61-93CA-11D2-AA0D-00E098032B8C", "KEK")?,
+                measure_tdx_efi_variable("D719B2CB-3D3A-4596-A3BC-DAD00E67656F", "db")?,
+                measure_tdx_efi_variable("D719B2CB-3D3A-4596-A3BC-DAD00E67656F", "dbx")?,
+                measure_sha384(&[0x00, 0x00, 0x00, 0x00]), // Separator
+                acpi_loader_hash,
+                acpi_rsdp_hash,
+                acpi_tables_hash,
+                measure_sha384(&[0x00, 0x00]), // BootOrder
+                boot000_hash.to_vec(),
+            ],
+            tables,
+        ))
     }
 
     fn measure_td_hob(&self, memory_size: u64) -> Result<Vec<u8>> {

@@ -5,9 +5,12 @@
 use serde::{Deserialize, Serialize};
 use serde_human_bytes as hex_bytes;
 
-pub use machine::Machine;
+pub use machine::{Machine, TdxMeasurementDetails};
 
 use util::{measure_log, measure_sha384, utf16_encode};
+
+pub type RtmrLog = Vec<Vec<u8>>;
+pub type RtmrLogs = [RtmrLog; 3];
 
 mod acpi;
 mod kernel;
