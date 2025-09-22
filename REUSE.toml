@@ -162,3 +162,13 @@ SPDX-License-Identifier = "CC0-1.0"
 path = "dstack-util/tests/fixtures/*"
 SPDX-FileCopyrightText = "NONE"
 SPDX-License-Identifier = "CC0-1.0"
+
+[[annotations]]
+path = "verifier/fixtures/*"
+SPDX-FileCopyrightText = "NONE"
+SPDX-License-Identifier = "CC0-1.0"
+
+[[annotations]]
+path = "verifier/builder/shared/*.txt"
+SPDX-FileCopyrightText = "NONE"
+SPDX-License-Identifier = "CC0-1.0"
