@@ -513,6 +513,7 @@ impl App {
                 memory_size: manifest.memory as u64 * 1024 * 1024,
                 qemu_single_pass_add_pages: cfg.cvm.qemu_single_pass_add_pages,
                 pic: cfg.cvm.qemu_pic,
+                qemu_version: cfg.cvm.qemu_version.clone(),
                 pci_hole64_size: cfg.cvm.qemu_pci_hole64_size,
                 hugepages: manifest.hugepages,
                 num_gpus: gpus.gpus.len() as u32,

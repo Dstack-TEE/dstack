@@ -85,7 +85,12 @@ impl Machine<'_> {
         } else {
             machine.push_str(",smm=off");
         }
-        if self.pic {
+
+        let vopt = self
+            .versioned_options()
+            .context("Failed to get versioned options")?;
+
+        if vopt.pic {
             machine.push_str(",pic=on");
         } else {
             machine.push_str(",pic=off");
@@ -148,8 +153,13 @@ impl Machine<'_> {
 
         debug!("qemu command: {cmd:?}");
 
+        let ver = vopt.version;
         // Execute the command and capture output
         let output = cmd
+            .env(
+                "QEMU_ACPI_COMPAT_VER",
+                format!("{}.{}.{}", ver.0, ver.1, ver.2),
+            )
             .output()
             .context("failed to execute dstack-acpi-tables")?;
 

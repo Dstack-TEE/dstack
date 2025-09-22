@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{net::IpAddr, path::PathBuf, str::FromStr};
+use std::{net::IpAddr, path::PathBuf, process::Command, str::FromStr};
 
 use anyhow::{bail, Context, Result};
 use load_config::load_config;
@@ -11,9 +11,69 @@ use rocket::figment::Figment;
 use serde::{Deserialize, Serialize};
 
 use lspci::{lspci_filtered, Device};
-use tracing::info;
+use tracing::{info, warn};
 
 pub const DEFAULT_CONFIG: &str = include_str!("../vmm.toml");
+
+fn detect_qemu_version(qemu_path: &PathBuf) -> Result<String> {
+    let output = Command::new(qemu_path)
+        .arg("--version")
+        .output()
+        .context("Failed to execute qemu --version")?;
+
+    if !output.status.success() {
+        bail!("QEMU version command failed with status: {}", output.status);
+    }
+
+    let version_output =
+        String::from_utf8(output.stdout).context("QEMU version output is not valid UTF-8")?;
+
+    parse_qemu_version_from_output(&version_output)
+        .context("Could not parse QEMU version from output")
+}
+
+fn parse_qemu_version_from_output(output: &str) -> Result<String> {
+    // Parse version from output like:
+    // "QEMU emulator version 8.2.2 (Debian 2:8.2.2+ds-0ubuntu1.4+tdx1.0)"
+    // "QEMU emulator version 9.1.0"
+    let version = output
+        .lines()
+        .next()
+        .and_then(|line| {
+            let words: Vec<&str> = line.split_whitespace().collect();
+
+            // First try: Look for "version" keyword and get the next word (only if it looks like a version)
+            if let Some(version_idx) = words.iter().position(|&word| word == "version") {
+                if let Some(next_word) = words.get(version_idx + 1) {
+                    // Only use the word after "version" if it looks like a version number
+                    if next_word.chars().next().is_some_and(|c| c.is_ascii_digit())
+                        && (next_word.contains('.')
+                            || next_word.chars().all(|c| c.is_ascii_digit() || c == '-'))
+                    {
+                        return Some(*next_word);
+                    }
+                }
+            }
+
+            // Fallback: find first word that looks like a version number
+            words
+                .iter()
+                .find(|word| {
+                    // Check if word starts with digit and contains dots (version-like)
+                    word.chars().next().is_some_and(|c| c.is_ascii_digit())
+                        && (word.contains('.')
+                            || word.chars().all(|c| c.is_ascii_digit() || c == '-'))
+                })
+                .copied()
+        })
+        .context("Could not parse QEMU version from output")?;
+
+    // Extract just the version number (e.g., "8.2.2" from "8.2.2+ds-0ubuntu1.4+tdx1.0")
+    let clean_version = version.split('+').next().unwrap_or(version).to_string();
+
+    Ok(clean_version)
+}
+
 pub fn load_config_figment(config_file: Option<&str>) -> Figment {
     load_config("vmm", DEFAULT_CONFIG, config_file, false)
 }
@@ -127,9 +187,11 @@ pub struct CvmConfig {
     pub use_mrconfigid: bool,
 
     /// QEMU single pass add page
-    pub qemu_single_pass_add_pages: bool,
+    pub qemu_single_pass_add_pages: Option<bool>,
     /// QEMU pic
-    pub qemu_pic: bool,
+    pub qemu_pic: Option<bool>,
+    /// QEMU qemu_version
+    pub qemu_version: Option<String>,
     /// QEMU pci_hole64_size
     pub qemu_pci_hole64_size: u64,
     /// QEMU hotplug_off
@@ -361,7 +423,69 @@ impl Config {
                 }
             }
             info!("QEMU path: {}", me.cvm.qemu_path.display());
+
+            // Detect QEMU version if not already set
+            match &me.cvm.qemu_version {
+                None => match detect_qemu_version(&me.cvm.qemu_path) {
+                    Ok(version) => {
+                        info!("Detected QEMU version: {version}");
+                        me.cvm.qemu_version = Some(version);
+                    }
+                    Err(e) => {
+                        warn!("Failed to detect QEMU version: {e}");
+                        // Continue without version - the system will use defaults
+                    }
+                },
+                Some(version) => info!("Configured QEMU version: {version}"),
+            }
         }
         Ok(me)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_qemu_version_debian_format() {
+        let output = "QEMU emulator version 8.2.2 (Debian 2:8.2.2+ds-0ubuntu1.4+tdx1.0)\nCopyright (c) 2003-2023 Fabrice Bellard and the QEMU Project developers";
+        let version = parse_qemu_version_from_output(output).unwrap();
+        assert_eq!(version, "8.2.2");
+    }
+
+    #[test]
+    fn test_parse_qemu_version_simple_format() {
+        let output = "QEMU emulator version 9.1.0\nCopyright (c) 2003-2024 Fabrice Bellard and the QEMU Project developers";
+        let version = parse_qemu_version_from_output(output).unwrap();
+        assert_eq!(version, "9.1.0");
+    }
+
+    #[test]
+    fn test_parse_qemu_version_old_debian_format() {
+        let output = "QEMU emulator version 8.2.2 (Debian 1:8.2.2+ds-0ubuntu1.2)\nCopyright (c) 2003-2023 Fabrice Bellard and the QEMU Project developers";
+        let version = parse_qemu_version_from_output(output).unwrap();
+        assert_eq!(version, "8.2.2");
+    }
+
+    #[test]
+    fn test_parse_qemu_version_with_rc() {
+        let output = "QEMU emulator version 9.0.0-rc1\nCopyright (c) 2003-2024 Fabrice Bellard and the QEMU Project developers";
+        let version = parse_qemu_version_from_output(output).unwrap();
+        assert_eq!(version, "9.0.0-rc1");
+    }
+
+    #[test]
+    fn test_parse_qemu_version_fallback() {
+        let output = "Some unusual format 8.1.5 with version info";
+        let version = parse_qemu_version_from_output(output).unwrap();
+        assert_eq!(version, "8.1.5");
+    }
+
+    #[test]
+    fn test_parse_qemu_version_invalid() {
+        let output = "No version information here";
+        let result = parse_qemu_version_from_output(output);
+        assert!(result.is_err());
     }
 }

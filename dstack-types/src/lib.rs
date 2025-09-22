@@ -138,10 +138,9 @@ pub struct VmConfig {
     pub cpu_count: u32,
     pub memory_size: u64,
     // https://github.com/intel-staging/qemu-tdx/issues/1
-    #[serde(default)]
-    pub qemu_single_pass_add_pages: bool,
-    #[serde(default)]
-    pub pic: bool,
+    pub qemu_single_pass_add_pages: Option<bool>,
+    pub pic: Option<bool>,
+    pub qemu_version: Option<String>,
     #[serde(default)]
     pub pci_hole64_size: u64,
     #[serde(default)]

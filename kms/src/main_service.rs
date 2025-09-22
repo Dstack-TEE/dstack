@@ -268,8 +268,9 @@ impl RpcHandler {
             .kernel_cmdline(&kernel_cmdline)
             .root_verity(true)
             .hotplug_off(vm_config.hotplug_off)
-            .two_pass_add_pages(vm_config.qemu_single_pass_add_pages)
-            .pic(vm_config.pic)
+            .maybe_two_pass_add_pages(vm_config.qemu_single_pass_add_pages)
+            .maybe_pic(vm_config.pic)
+            .maybe_qemu_version(vm_config.qemu_version.clone())
             .maybe_pci_hole64_size(if vm_config.pci_hole64_size > 0 {
                 Some(vm_config.pci_hole64_size)
             } else {

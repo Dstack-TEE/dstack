@@ -261,6 +261,7 @@ Compose file content (first 200 chars):
             memory_size: manifest.memory as u64 * 1024 * 1024,
             qemu_single_pass_add_pages: config.cvm.qemu_single_pass_add_pages,
             pic: config.cvm.qemu_pic,
+            qemu_version: config.cvm.qemu_version.clone(),
             pci_hole64_size: config.cvm.qemu_pci_hole64_size,
             hugepages: manifest.hugepages,
             num_gpus: manifest.gpus.as_ref().map_or(0, |g| g.gpus.len() as u32),
