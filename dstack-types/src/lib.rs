@@ -151,6 +151,7 @@ pub struct VmConfig {
     pub num_nvswitches: u32,
     #[serde(default)]
     pub hotplug_off: bool,
+    pub image: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

@@ -267,6 +267,7 @@ Compose file content (first 200 chars):
             num_gpus: manifest.gpus.as_ref().map_or(0, |g| g.gpus.len() as u32),
             num_nvswitches: manifest.gpus.as_ref().map_or(0, |g| g.bridges.len() as u32),
             hotplug_off: config.cvm.qemu_hotplug_off,
+            image: Some(manifest.image.clone()),
         })?
     });
     let sys_config_path = vm_work_dir.shared_dir().join(".sys-config.json");

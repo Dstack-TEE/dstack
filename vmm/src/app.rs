@@ -519,6 +519,7 @@ impl App {
                 num_gpus: gpus.gpus.len() as u32,
                 num_nvswitches: gpus.bridges.len() as u32,
                 hotplug_off: cfg.cvm.qemu_hotplug_off,
+                image: Some(manifest.image.clone()),
             })?;
             json!({
                 "kms_urls": kms_urls,
