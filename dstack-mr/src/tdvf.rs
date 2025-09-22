@@ -223,7 +223,10 @@ impl<'a> Tdvf<'a> {
     }
 
     pub fn mrtd(&self, machine: &Machine) -> Result<Vec<u8>> {
-        self.compute_mrtd(if machine.two_pass_add_pages {
+        let opts = machine
+            .versioned_options()
+            .context("Failed to get versioned options")?;
+        self.compute_mrtd(if opts.two_pass_add_pages {
             PageAddOrder::TwoPass
         } else {
             PageAddOrder::SinglePass

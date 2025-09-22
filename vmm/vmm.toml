@@ -30,8 +30,9 @@ user = ""
 use_mrconfigid = true
 
 # QEMU flags
-qemu_single_pass_add_pages = false
-qemu_pic = true
+#qemu_single_pass_add_pages = false
+#qemu_pic = true
+#qemu_version = ""
 qemu_pci_hole64_size = 0
 qemu_hotplug_off = false
 
