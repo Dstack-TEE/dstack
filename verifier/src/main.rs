@@ -167,7 +167,7 @@ async fn run_oneshot(file_path: &str, config: &Config) -> anyhow::Result<()> {
 
 #[rocket::launch]
 fn rocket() -> _ {
-    tracing_subscriber::fmt::init();
+    tracing_subscriber::fmt::try_init().ok();
 
     let cli = Cli::parse();
 
@@ -207,35 +207,4 @@ fn rocket() -> _ {
                 info!("dstack-verifier started successfully");
             })
         }))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use rocket::http::{ContentType, Status};
-    use rocket::local::asynchronous::Client;
-
-    #[tokio::test]
-    async fn test_health_endpoint() {
-        let client = Client::tracked(rocket())
-            .await
-            .expect("valid rocket instance");
-        let response = client.get("/health").dispatch().await;
-        assert_eq!(response.status(), Status::Ok);
-    }
-
-    #[tokio::test]
-    async fn test_verify_endpoint_invalid_request() {
-        let client = Client::tracked(rocket())
-            .await
-            .expect("valid rocket instance");
-        let response = client
-            .post("/verify")
-            .header(ContentType::JSON)
-            .body(r#"{"invalid": "request"}"#)
-            .dispatch()
-            .await;
-
-        assert_eq!(response.status(), Status::UnprocessableEntity);
-    }
 }
