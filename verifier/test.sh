@@ -99,11 +99,12 @@ fi
 
 # Show app info if available
 APP_ID=$(echo "$RESPONSE" | jq -r '.details.app_info.app_id // "null"')
+OS_IMAGE_HASH=$(echo "$RESPONSE" | jq -r '.details.app_info.os_image_hash // "null"')
 if [ "$APP_ID" != "null" ]; then
     echo -e "\n${YELLOW}App Information:${NC}"
     echo "App ID: $APP_ID"
-    echo "Instance ID: $(echo "$RESPONSE" | jq -r '.details.app_info.instance_id')"
     echo "Compose Hash: $(echo "$RESPONSE" | jq -r '.details.app_info.compose_hash')"
+    echo "OS Image Hash: $OS_IMAGE_HASH"
 fi
 
 # Show report data

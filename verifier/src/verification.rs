@@ -11,7 +11,7 @@ use dstack_types::VmConfig;
 use ra_tls::attestation::{Attestation, VerifiedAttestation};
 use sha2::{Digest as _, Sha256, Sha384};
 use tokio::{io::AsyncWriteExt, process::Command};
-use tracing::{debug, info};
+use tracing::info;
 
 use crate::types::{
     AcpiTables, RtmrEventEntry, RtmrEventStatus, RtmrMismatch, VerificationDetails,
@@ -52,12 +52,15 @@ fn replay_event_logs(eventlog: &[EventLog]) -> Result<RtmrComputationResult> {
 
 fn collect_rtmr_mismatch(
     rtmr_label: &str,
-    expected_hex: &str,
-    actual_hex: &str,
+    expected: &[u8],
+    actual: &[u8],
     expected_sequence: &RtmrLog,
     actual_indices: &[usize],
     event_log: &[EventLog],
 ) -> RtmrMismatch {
+    let expected_hex = hex::encode(expected);
+    let actual_hex = hex::encode(actual);
+
     let mut events = Vec::new();
 
     for (&idx, expected_digest) in actual_indices.iter().zip(expected_sequence.iter()) {
@@ -200,20 +203,6 @@ impl CvmVerifier {
             }
         };
 
-        match verified_attestation.decode_app_info(false) {
-            Ok(info) => {
-                details.event_log_verified = true;
-                details.app_info = Some(info);
-            }
-            Err(e) => {
-                return Ok(VerificationResponse {
-                    is_valid: false,
-                    details,
-                    reason: Some(format!("Event log verification failed: {}", e)),
-                });
-            }
-        };
-
         // Step 3: Verify os-image-hash matches using dstack-mr
         if let Err(e) = self
             .verify_os_image_hash(&vm_config, &verified_attestation, &mut details)
@@ -226,6 +215,20 @@ impl CvmVerifier {
             });
         }
         details.os_image_hash_verified = true;
+        match verified_attestation.decode_app_info(false) {
+            Ok(mut info) => {
+                info.os_image_hash = vm_config.os_image_hash;
+                details.event_log_verified = true;
+                details.app_info = Some(info);
+            }
+            Err(e) => {
+                return Ok(VerificationResponse {
+                    is_valid: false,
+                    details,
+                    reason: Some(format!("Event log verification failed: {}", e)),
+                });
+            }
+        };
 
         Ok(VerificationResponse {
             is_valid: true,
@@ -263,30 +266,13 @@ impl CvmVerifier {
             .as_td10()
             .context("Failed to decode TD report")?;
 
-        let app_info = attestation.decode_app_info(false)?;
-
-        let boot_info = upgrade_authority::BootInfo {
+        // Extract the verified MRs from the report
+        let verified_mrs = Mrs {
             mrtd: report.mr_td.to_vec(),
             rtmr0: report.rt_mr0.to_vec(),
             rtmr1: report.rt_mr1.to_vec(),
             rtmr2: report.rt_mr2.to_vec(),
-            rtmr3: report.rt_mr3.to_vec(),
-            mr_aggregated: app_info.mr_aggregated.to_vec(),
-            os_image_hash: vm_config.os_image_hash.clone(),
-            mr_system: app_info.mr_system.to_vec(),
-            app_id: app_info.app_id,
-            compose_hash: app_info.compose_hash,
-            instance_id: app_info.instance_id,
-            device_id: app_info.device_id,
-            key_provider_info: app_info.key_provider_info,
-            event_log: String::from_utf8(attestation.raw_event_log.clone())
-                .context("Failed to serialize event log")?,
-            tcb_status: attestation.report.status.clone(),
-            advisory_ids: attestation.report.advisory_ids.clone(),
         };
-
-        // Extract the verified MRs from the boot info
-        let verified_mrs = Mrs::from(&boot_info);
 
         // Get image directory
         let image_dir = Path::new(&self.image_cache_dir)
@@ -349,27 +335,19 @@ impl CvmVerifier {
         });
 
         let expected_mrs = Mrs {
-            mrtd: hex::encode(&mrs.mrtd),
-            rtmr0: hex::encode(&mrs.rtmr0),
-            rtmr1: hex::encode(&mrs.rtmr1),
-            rtmr2: hex::encode(&mrs.rtmr2),
+            mrtd: mrs.mrtd.clone(),
+            rtmr0: mrs.rtmr0.clone(),
+            rtmr1: mrs.rtmr1.clone(),
+            rtmr2: mrs.rtmr2.clone(),
         };
 
-        debug!(
-            "Expected MRs from dstack-mr: MRTD={}, RTMR0={}, RTMR1={}, RTMR2={}",
-            expected_mrs.mrtd, expected_mrs.rtmr0, expected_mrs.rtmr1, expected_mrs.rtmr2
-        );
-        debug!(
-            "Verified MRs from attestation: MRTD={}, RTMR0={}, RTMR1={}, RTMR2={}",
-            verified_mrs.mrtd, verified_mrs.rtmr0, verified_mrs.rtmr1, verified_mrs.rtmr2
-        );
         let event_log: Vec<EventLog> = serde_json::from_slice(&attestation.raw_event_log)
             .context("Failed to parse event log for mismatch analysis")?;
 
         let computation_result = replay_event_logs(&event_log)
             .context("Failed to replay event logs for mismatch analysis")?;
 
-        if computation_result.rtmrs[3] != *boot_info.rtmr3 {
+        if computation_result.rtmrs[3] != report.rt_mr3 {
             bail!("RTMR3 mismatch");
         }
 
@@ -544,54 +522,43 @@ impl CvmVerifier {
 
 #[derive(Debug, Clone)]
 struct Mrs {
-    mrtd: String,
-    rtmr0: String,
-    rtmr1: String,
-    rtmr2: String,
+    mrtd: Vec<u8>,
+    rtmr0: Vec<u8>,
+    rtmr1: Vec<u8>,
+    rtmr2: Vec<u8>,
 }
 
 impl Mrs {
     fn assert_eq(&self, other: &Self) -> Result<()> {
         if self.mrtd != other.mrtd {
             bail!(
-                "MRTD does not match: expected={}, actual={}",
-                self.mrtd,
-                other.mrtd
+                "MRTD mismatch: expected={}, actual={}",
+                hex::encode(&self.mrtd),
+                hex::encode(&other.mrtd)
             );
         }
         if self.rtmr0 != other.rtmr0 {
             bail!(
-                "RTMR0 does not match: expected={}, actual={}",
-                self.rtmr0,
-                other.rtmr0
+                "RTMR0 mismatch: expected={}, actual={}",
+                hex::encode(&self.rtmr0),
+                hex::encode(&other.rtmr0)
             );
         }
         if self.rtmr1 != other.rtmr1 {
             bail!(
-                "RTMR1 does not match: expected={}, actual={}",
-                self.rtmr1,
-                other.rtmr1
+                "RTMR1 mismatch: expected={}, actual={}",
+                hex::encode(&self.rtmr1),
+                hex::encode(&other.rtmr1)
             );
         }
         if self.rtmr2 != other.rtmr2 {
             bail!(
-                "RTMR2 does not match: expected={}, actual={}",
-                self.rtmr2,
-                other.rtmr2
+                "RTMR2 mismatch: expected={}, actual={}",
+                hex::encode(&self.rtmr2),
+                hex::encode(&other.rtmr2)
             );
         }
         Ok(())
-    }
-}
-
-impl From<&upgrade_authority::BootInfo> for Mrs {
-    fn from(report: &upgrade_authority::BootInfo) -> Self {
-        Self {
-            mrtd: hex::encode(&report.mrtd),
-            rtmr0: hex::encode(&report.rtmr0),
-            rtmr1: hex::encode(&report.rtmr1),
-            rtmr2: hex::encode(&report.rtmr2),
-        }
     }
 }
 
