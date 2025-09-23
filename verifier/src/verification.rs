@@ -2,16 +2,21 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{ffi::OsStr, path::Path, time::Duration};
+use std::{
+    ffi::OsStr,
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use cc_eventlog::TdxEventLog as EventLog;
-use dstack_mr::RtmrLog;
+use dstack_mr::{RtmrLog, TdxMeasurementDetails, TdxMeasurements};
 use dstack_types::VmConfig;
 use ra_tls::attestation::{Attestation, VerifiedAttestation};
+use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256, Sha384};
 use tokio::{io::AsyncWriteExt, process::Command};
-use tracing::info;
+use tracing::{debug, info, warn};
 
 use crate::types::{
     AcpiTables, RtmrEventEntry, RtmrEventStatus, RtmrMismatch, VerificationDetails,
@@ -143,6 +148,14 @@ fn collect_rtmr_mismatch(
     }
 }
 
+const MEASUREMENT_CACHE_VERSION: u32 = 1;
+
+#[derive(Clone, Serialize, Deserialize)]
+struct CachedMeasurement {
+    version: u32,
+    measurements: TdxMeasurements,
+}
+
 pub struct CvmVerifier {
     pub image_cache_dir: String,
     pub download_url: String,
@@ -156,6 +169,178 @@ impl CvmVerifier {
             download_url,
             download_timeout,
         }
+    }
+
+    fn measurement_cache_dir(&self) -> PathBuf {
+        Path::new(&self.image_cache_dir).join("measurements")
+    }
+
+    fn measurement_cache_path(&self, cache_key: &str) -> PathBuf {
+        self.measurement_cache_dir()
+            .join(format!("{cache_key}.json"))
+    }
+
+    fn vm_config_cache_key(vm_config: &VmConfig) -> Result<String> {
+        let serialized = serde_json::to_vec(vm_config)
+            .context("Failed to serialize VM config for cache key computation")?;
+        Ok(hex::encode(Sha256::digest(&serialized)))
+    }
+
+    fn load_measurements_from_cache(&self, cache_key: &str) -> Result<Option<TdxMeasurements>> {
+        let path = self.measurement_cache_path(cache_key);
+        if !path.exists() {
+            return Ok(None);
+        }
+
+        let path_display = path.display().to_string();
+        let contents = match fs_err::read(&path) {
+            Ok(data) => data,
+            Err(e) => {
+                warn!("Failed to read measurement cache {}: {e:?}", path_display);
+                return Ok(None);
+            }
+        };
+
+        let cached: CachedMeasurement = match serde_json::from_slice(&contents) {
+            Ok(entry) => entry,
+            Err(e) => {
+                warn!("Failed to parse measurement cache {}: {e:?}", path_display);
+                return Ok(None);
+            }
+        };
+
+        if cached.version != MEASUREMENT_CACHE_VERSION {
+            debug!(
+                "Ignoring measurement cache {} due to version mismatch (found {}, expected {})",
+                path_display, cached.version, MEASUREMENT_CACHE_VERSION
+            );
+            return Ok(None);
+        }
+
+        debug!("Loaded measurement cache entry {}", cache_key);
+        Ok(Some(cached.measurements))
+    }
+
+    fn store_measurements_in_cache(
+        &self,
+        cache_key: &str,
+        measurements: &TdxMeasurements,
+    ) -> Result<()> {
+        let cache_dir = self.measurement_cache_dir();
+        fs_err::create_dir_all(&cache_dir)
+            .context("Failed to create measurement cache directory")?;
+
+        let path = self.measurement_cache_path(cache_key);
+        let mut tmp = tempfile::NamedTempFile::new_in(&cache_dir)
+            .context("Failed to create temporary cache file")?;
+
+        let entry = CachedMeasurement {
+            version: MEASUREMENT_CACHE_VERSION,
+            measurements: measurements.clone(),
+        };
+        serde_json::to_writer(tmp.as_file_mut(), &entry)
+            .context("Failed to serialize measurement cache entry")?;
+        tmp.as_file_mut()
+            .sync_all()
+            .context("Failed to flush measurement cache entry to disk")?;
+
+        tmp.persist(&path).map_err(|e| {
+            anyhow!(
+                "Failed to persist measurement cache to {}: {e}",
+                path.display()
+            )
+        })?;
+        debug!("Stored measurement cache entry {}", cache_key);
+        Ok(())
+    }
+
+    fn compute_measurement_details(
+        &self,
+        vm_config: &VmConfig,
+        fw_path: &Path,
+        kernel_path: &Path,
+        initrd_path: &Path,
+        kernel_cmdline: &str,
+    ) -> Result<TdxMeasurementDetails> {
+        let firmware = fw_path.display().to_string();
+        let kernel = kernel_path.display().to_string();
+        let initrd = initrd_path.display().to_string();
+
+        let details = dstack_mr::Machine::builder()
+            .cpu_count(vm_config.cpu_count)
+            .memory_size(vm_config.memory_size)
+            .firmware(&firmware)
+            .kernel(&kernel)
+            .initrd(&initrd)
+            .kernel_cmdline(kernel_cmdline)
+            .root_verity(true)
+            .hotplug_off(vm_config.hotplug_off)
+            .maybe_two_pass_add_pages(vm_config.qemu_single_pass_add_pages)
+            .maybe_pic(vm_config.pic)
+            .maybe_qemu_version(vm_config.qemu_version.clone())
+            .maybe_pci_hole64_size(if vm_config.pci_hole64_size > 0 {
+                Some(vm_config.pci_hole64_size)
+            } else {
+                None
+            })
+            .hugepages(vm_config.hugepages)
+            .num_gpus(vm_config.num_gpus)
+            .num_nvswitches(vm_config.num_nvswitches)
+            .build()
+            .measure_with_logs()
+            .context("Failed to compute expected MRs")?;
+
+        Ok(details)
+    }
+
+    fn compute_measurements(
+        &self,
+        vm_config: &VmConfig,
+        fw_path: &Path,
+        kernel_path: &Path,
+        initrd_path: &Path,
+        kernel_cmdline: &str,
+    ) -> Result<TdxMeasurements> {
+        self.compute_measurement_details(
+            vm_config,
+            fw_path,
+            kernel_path,
+            initrd_path,
+            kernel_cmdline,
+        )
+        .map(|details| details.measurements)
+    }
+
+    fn load_or_compute_measurements(
+        &self,
+        vm_config: &VmConfig,
+        fw_path: &Path,
+        kernel_path: &Path,
+        initrd_path: &Path,
+        kernel_cmdline: &str,
+    ) -> Result<TdxMeasurements> {
+        let cache_key = Self::vm_config_cache_key(vm_config)?;
+
+        if let Some(measurements) = self.load_measurements_from_cache(&cache_key)? {
+            return Ok(measurements);
+        }
+
+        let measurements = self.compute_measurements(
+            vm_config,
+            fw_path,
+            kernel_path,
+            initrd_path,
+            kernel_cmdline,
+        )?;
+
+        if let Err(e) = self.store_measurements_in_cache(&cache_key, &measurements) {
+            warn!(
+                "Failed to write measurement cache entry for {}: {e:?}",
+                cache_key
+            );
+        }
+
+        Ok(measurements)
     }
 
     pub async fn verify(&self, request: &VerificationRequest) -> Result<VerificationResponse> {
@@ -305,39 +490,41 @@ impl CvmVerifier {
         let kernel_cmdline = image_info.cmdline + " initrd=initrd";
 
         // Use dstack-mr to compute expected MRs
-        let measurement_details = dstack_mr::Machine::builder()
-            .cpu_count(vm_config.cpu_count)
-            .memory_size(vm_config.memory_size)
-            .firmware(&fw_path.display().to_string())
-            .kernel(&kernel_path.display().to_string())
-            .initrd(&initrd_path.display().to_string())
-            .kernel_cmdline(&kernel_cmdline)
-            .root_verity(true)
-            .hotplug_off(vm_config.hotplug_off)
-            .maybe_two_pass_add_pages(vm_config.qemu_single_pass_add_pages)
-            .maybe_pic(vm_config.pic)
-            .maybe_qemu_version(vm_config.qemu_version.clone())
-            .maybe_pci_hole64_size(if vm_config.pci_hole64_size > 0 {
-                Some(vm_config.pci_hole64_size)
-            } else {
-                None
-            })
-            .hugepages(vm_config.hugepages)
-            .num_gpus(vm_config.num_gpus)
-            .num_nvswitches(vm_config.num_nvswitches)
-            .build()
-            .measure_with_logs()
-            .context("Failed to compute expected MRs")?;
+        let (mrs, expected_logs) = if debug {
+            let TdxMeasurementDetails {
+                measurements,
+                rtmr_logs,
+                acpi_tables,
+            } = self
+                .compute_measurement_details(
+                    vm_config,
+                    &fw_path,
+                    &kernel_path,
+                    &initrd_path,
+                    &kernel_cmdline,
+                )
+                .context("Failed to compute expected measurements")?;
 
-        let mrs = measurement_details.measurements;
-        let expected_logs = measurement_details.rtmr_logs;
-        if debug {
             details.acpi_tables = Some(AcpiTables {
-                tables: hex::encode(&measurement_details.acpi_tables.tables),
-                rsdp: hex::encode(&measurement_details.acpi_tables.rsdp),
-                loader: hex::encode(&measurement_details.acpi_tables.loader),
+                tables: hex::encode(&acpi_tables.tables),
+                rsdp: hex::encode(&acpi_tables.rsdp),
+                loader: hex::encode(&acpi_tables.loader),
             });
-        }
+
+            (measurements, Some(rtmr_logs))
+        } else {
+            (
+                self.load_or_compute_measurements(
+                    vm_config,
+                    &fw_path,
+                    &kernel_path,
+                    &initrd_path,
+                    &kernel_cmdline,
+                )
+                .context("Failed to obtain expected measurements")?,
+                None,
+            )
+        };
 
         let expected_mrs = Mrs {
             mrtd: mrs.mrtd.clone(),
@@ -363,6 +550,9 @@ impl CvmVerifier {
                 if !debug {
                     return result;
                 }
+                let Some(expected_logs) = expected_logs.as_ref() else {
+                    return result;
+                };
                 let mut rtmr_debug = Vec::new();
 
                 if expected_mrs.rtmr0 != verified_mrs.rtmr0 {
