@@ -1,20 +1,12 @@
 # dstack-verifier
 
-A HTTP server that provides CVM (Confidential Virtual Machine) verification services using the same verification process as the dstack KMS.
-
-## Features
-
-- **TDX Quote Verification**: Uses dcap-qvl to verify TDX quotes
-- **Event Log Verification**: Validates event logs and extracts app information
-- **OS Image Hash Verification**: Uses dstack-mr to ensure OS image hash matches expected measurements
-- **Automatic Image Download**: Downloads and caches OS images automatically when not found locally
-- **RESTful API**: Simple HTTP endpoints for verification requests
+A HTTP server that provides dstack quote verification services using the same verification process as the dstack KMS.
 
 ## API Endpoints
 
 ### POST /verify
 
-Verifies a CVM attestation with the provided quote, event log, and VM configuration.
+Verifies a dstack quote with the provided quote and VM configuration. The body can be grabbed via [getQuote](https://github.com/Dstack-TEE/dstack/blob/master/sdk/curl/api.md#3-get-quote).
 
 **Request Body:**
 ```json
@@ -22,7 +14,6 @@ Verifies a CVM attestation with the provided quote, event log, and VM configurat
   "quote": "hex-encoded-quote",
   "event_log": "hex-encoded-event-log",
   "vm_config": "json-vm-config-string",
-  "pccs_url": "optional-pccs-url"
 }
 ```
 
@@ -71,11 +62,6 @@ Health check endpoint that returns service status.
 
 ## Configuration
 
-Configuration can be provided via:
-1. TOML file (default: `dstack-verifier.toml`)
-2. Environment variables with prefix `DSTACK_VERIFIER_`
-3. Command line arguments
-
 ### Configuration Options
 
 - `host`: Server bind address (default: "0.0.0.0")
@@ -90,13 +76,15 @@ Configuration can be provided via:
 ```toml
 host = "0.0.0.0"
 port = 8080
-image_cache_dir = "/var/cache/dstack-verifier"
+image_cache_dir = "/tmp/dstack-verifier/cache"
 image_download_url = "http://0.0.0.0:8000/mr_{OS_IMAGE_HASH}.tar.gz"
 image_download_timeout_secs = 300
-pccs_url = "https://pccs.example.com"
+pccs_url = "https://pccs.phala.network"
 ```
 
 ## Usage
+
+### Running with Cargo
 
 ```bash
 # Run with default config
@@ -106,29 +94,64 @@ cargo run --bin dstack-verifier
 cargo run --bin dstack-verifier -- --config /path/to/config.toml
 
 # Set via environment variables
-DSTACK_VERIFIER_PORT=9000 cargo run --bin dstack-verifier
+DSTACK_VERIFIER_PORT=8080 cargo run --bin dstack-verifier
 ```
 
-## Testing
+### Running with Docker Compose
 
-Two test scripts are provided for easy testing:
+```yaml
+services:
+  dstack-verifier:
+    image: kvin/dstack-verifier:latest
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+```
 
-### Full Test (with server management)
+Save the docker compose file as `docker-compose.yml` and run `docker compose up -d`.
+
+### Request verification
+
+Grab a quote from your app. It's depends on your app how to grab a quote.
+
 ```bash
-./test.sh
-```
-This script will:
-- Build the project
-- Start the server
-- Run the verification test
-- Display detailed results
-- Clean up automatically
+# Grab a quote from the demo app
+curl https://712eab2f507b963e11144ae67218177e93ac2a24-3000.app.kvin.wang:12004/GetQuote?report_data=0x1234 -o quote.json
 
-### Quick Test (assumes server is running)
-```bash
-./quick-test.sh
 ```
-This script assumes the server is already running and just sends a test request.
+
+Send the quote to the verifier.
+
+```bash
+$ curl -s -d @quote.json localhost:8080/verify | jq
+{
+  "is_valid": true,
+  "details": {
+    "quote_verified": true,
+    "event_log_verified": true,
+    "os_image_hash_verified": true,
+    "report_data": "12340000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+    "tcb_status": "UpToDate",
+    "advisory_ids": [],
+    "app_info": {
+      "app_id": "e631a04a5d068c0e5ffd8ca60d6574ac99a18bda",
+      "compose_hash": "e631a04a5d068c0e5ffd8ca60d6574ac99a18bdaf0417d129d0c4ac52244d40f",
+      "instance_id": "712eab2f507b963e11144ae67218177e93ac2a24",
+      "device_id": "ee218f44a5f0a9c3233f9cc09f0cd41518f376478127feb989d5cf1292c56a01",
+      "mrtd": "f06dfda6dce1cf904d4e2bab1dc370634cf95cefa2ceb2de2eee127c9382698090d7a4a13e14c536ec6c9c3c8fa87077",
+      "rtmr0": "68102e7b524af310f7b7d426ce75481e36c40f5d513a9009c046e9d37e31551f0134d954b496a3357fd61d03f07ffe96",
+      "rtmr1": "a7b523278d4f914ee8df0ec80cd1c3d498cbf1152b0c5eaf65bad9425072874a3fcf891e8b01713d3d9937e3e0d26c15",
+      "rtmr2": "dbf4924c07f5066f3dc6859844184344306aa3263817153dcaee85af97d23e0c0b96efe0731d8865a8747e51b9e351ac",
+      "rtmr3": "5e7d8d84317343d28d73031d0be3c75f25facb1b20c9835a44582b8b0115de1acfe2d19350437dbd63846bcc5d7bf328",
+      "mr_system": "145010fa227e6c2537ad957c64e4a8486fcbfd8265ddfb359168b59afcff1d05",
+      "mr_aggregated": "52f6d7ccbee1bfa870709e8ff489e016e2e5c25a157b7e22ef1ea68fce763694",
+      "os_image_hash": "b6420818b356b198bdd70f076079aa0299a20279b87ab33ada7b2770ef432a5a",
+      "key_provider_info": "7b226e616d65223a226b6d73222c226964223a223330353933303133303630373261383634386365336430323031303630383261383634386365336430333031303730333432303030343139623234353764643962386161363434366439383066313336666666373831326563643663373737343065656230653238623130643536633063303030323861356236653539646365613330376435383362643166373037363965396331313664663262636662313735386139356438363133653764653163383438326330227d"
+    }
+  },
+  "reason": null
+}
+```
 
 ## Verification Process
 
@@ -142,22 +165,3 @@ The verifier performs three main verification steps:
    - Compares against the verified measurements from the quote
 
 All three steps must pass for the verification to be considered valid.
-
-### Automatic Image Download
-
-When an OS image is not found in the local cache, the verifier will:
-
-1. **Download**: Fetch the image tarball from the configured URL
-2. **Extract**: Extract the tarball contents to a temporary directory
-3. **Verify**: Check SHA256 checksums to ensure file integrity
-4. **Validate**: Confirm the OS image hash matches the computed hash
-5. **Cache**: Move the validated files to the cache directory for future use
-
-The download URL template uses `{OS_IMAGE_HASH}` as a placeholder that gets replaced with the actual OS image hash from the verification request.
-
-## Dependencies
-
-- dcap-qvl: TDX quote verification
-- dstack-mr: OS image measurement computation
-- ra-tls: Attestation handling and verification
-- rocket: HTTP server framework

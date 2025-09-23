@@ -131,7 +131,8 @@ curl --unix-socket /var/run/dstack.sock http://dstack/GetQuote?report_data=00000
 {
   "quote": "<hex-encoded-quote>",
   "event_log": "quote generation log",
-  "report_data": "<hex-encoded-report-data>"
+  "report_data": "<hex-encoded-report-data>",
+  "vm_config": "<json-vm-config-string>"
 }
 ```
 

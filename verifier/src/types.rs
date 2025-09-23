@@ -11,6 +11,7 @@ pub struct VerificationRequest {
     pub event_log: String,
     pub vm_config: String,
     pub pccs_url: Option<String>,
+    pub debug: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize)]

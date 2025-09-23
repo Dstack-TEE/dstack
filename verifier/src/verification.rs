@@ -167,6 +167,8 @@ impl CvmVerifier {
         let attestation = Attestation::new(quote, event_log)
             .context("Failed to create attestation from quote and event log")?;
 
+        let debug = request.debug.unwrap_or(false);
+
         let mut details = VerificationDetails {
             quote_verified: false,
             event_log_verified: false,
@@ -205,7 +207,7 @@ impl CvmVerifier {
 
         // Step 3: Verify os-image-hash matches using dstack-mr
         if let Err(e) = self
-            .verify_os_image_hash(&vm_config, &verified_attestation, &mut details)
+            .verify_os_image_hash(&vm_config, &verified_attestation, debug, &mut details)
             .await
         {
             return Ok(VerificationResponse {
@@ -255,6 +257,7 @@ impl CvmVerifier {
         &self,
         vm_config: &VmConfig,
         attestation: &VerifiedAttestation,
+        debug: bool,
         details: &mut VerificationDetails,
     ) -> Result<()> {
         let hex_os_image_hash = hex::encode(&vm_config.os_image_hash);
@@ -328,11 +331,13 @@ impl CvmVerifier {
 
         let mrs = measurement_details.measurements;
         let expected_logs = measurement_details.rtmr_logs;
-        details.acpi_tables = Some(AcpiTables {
-            tables: hex::encode(&measurement_details.acpi_tables.tables),
-            rsdp: hex::encode(&measurement_details.acpi_tables.rsdp),
-            loader: hex::encode(&measurement_details.acpi_tables.loader),
-        });
+        if debug {
+            details.acpi_tables = Some(AcpiTables {
+                tables: hex::encode(&measurement_details.acpi_tables.tables),
+                rsdp: hex::encode(&measurement_details.acpi_tables.rsdp),
+                loader: hex::encode(&measurement_details.acpi_tables.loader),
+            });
+        }
 
         let expected_mrs = Mrs {
             mrtd: mrs.mrtd.clone(),
@@ -354,6 +359,10 @@ impl CvmVerifier {
         match expected_mrs.assert_eq(&verified_mrs) {
             Ok(()) => Ok(()),
             Err(e) => {
+                let result = Err(e).context("MRs do not match");
+                if !debug {
+                    return result;
+                }
                 let mut rtmr_debug = Vec::new();
 
                 if expected_mrs.rtmr0 != verified_mrs.rtmr0 {
@@ -393,7 +402,7 @@ impl CvmVerifier {
                     details.rtmr_debug = Some(rtmr_debug);
                 }
 
-                Err(e.context("MRs do not match"))
+                result
             }
         }
     }
