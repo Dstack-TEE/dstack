@@ -104,7 +104,7 @@ GUEST_AGENT_ADDR=127.0.0.1:9205
 ETH_RPC_URL=https://rpc.phala.network
 GIT_REV=HEAD
 OS_IMAGE=dstack-0.5.2
-IMAGE_DOWNLOAD_URL=https://files.kvin.wang/images/mr_{OS_IMAGE_HASH}.tar.gz
+IMAGE_DOWNLOAD_URL=https://download.dstack.org/os-images/mr_{OS_IMAGE_HASH}.tar.gz
 ```
 
 Then run the script again.

@@ -10,7 +10,7 @@ port = 8080
 image_cache_dir = "/tmp/dstack-verifier/cache"
 
 # Image download URL template (replace {OS_IMAGE_HASH} with actual hash)
-image_download_url = "https://dstack-images.phala.network/mr_{OS_IMAGE_HASH}.tar.gz"
+image_download_url = "https://download.dstack.org/os-images/mr_{OS_IMAGE_HASH}.tar.gz"
 
 # Image download timeout in seconds
 image_download_timeout_secs = 300

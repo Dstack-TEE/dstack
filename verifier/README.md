@@ -116,7 +116,7 @@ Grab a quote from your app. It's depends on your app how to grab a quote.
 
 ```bash
 # Grab a quote from the demo app
-curl https://712eab2f507b963e11144ae67218177e93ac2a24-3000.app.kvin.wang:12004/GetQuote?report_data=0x1234 -o quote.json
+curl https://712eab2f507b963e11144ae67218177e93ac2a24-3000.test0.dstack.org:12004/GetQuote?report_data=0x1234 -o quote.json
 
 ```
 

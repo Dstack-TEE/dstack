@@ -44,7 +44,7 @@ services:
     environment:
       - IMAGE_DOWNLOAD_URL=${IMAGE_DOWNLOAD_URL:-http://localhost:8001/mr_{OS_IMAGE_HASH}.tar.gz}
       - AUTH_TYPE=dev
-      - DEV_DOMAIN=kms.1022.kvin.wang
+      - DEV_DOMAIN=kms.1022.dstack.org
       - QUOTE_ENABLED=false
 ```
 
