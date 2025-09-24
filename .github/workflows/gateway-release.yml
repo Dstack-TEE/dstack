@@ -51,7 +51,7 @@ jobs:
         with:
           context: gateway/dstack-app/builder
           push: true
-          tags: ${{ vars.DOCKERHUB_USERNAME }}/gateway:${{ env.VERSION }}
+          tags: ${{ vars.DOCKERHUB_ORG }}/dstack-gateway:${{ env.VERSION }}
           platforms: linux/amd64
           provenance: false
           build-args: |
@@ -61,7 +61,7 @@ jobs:
       - name: Generate artifact attestation
         uses: actions/attest-build-provenance@v1
         with:
-          subject-name: "docker.io/${{ vars.DOCKERHUB_USERNAME }}/gateway"
+          subject-name: "docker.io/${{ vars.DOCKERHUB_ORG }}/dstack-gateway"
           subject-digest: ${{ steps.build-and-push.outputs.digest }}
           push-to-registry: true
 
@@ -72,7 +72,7 @@ jobs:
           body: |
             ## Docker Image Information
 
-            **Image**: `docker.io/${{ vars.DOCKERHUB_USERNAME }}/gateway:${{ env.VERSION }}`
+            **Image**: `docker.io/${{ vars.DOCKERHUB_ORG }}/dstack-gateway:${{ env.VERSION }}`
 
             **Digest (SHA256)**: `${{ steps.build-and-push.outputs.digest }}`
 

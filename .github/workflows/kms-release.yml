@@ -54,7 +54,7 @@ jobs:
         with:
           context: kms/dstack-app/builder
           push: true
-          tags: ${{ vars.DOCKERHUB_USERNAME }}/kms:${{ env.VERSION }}
+          tags: ${{ vars.DOCKERHUB_ORG }}/dstack-kms:${{ env.VERSION }}
           platforms: linux/amd64
           provenance: false
           build-args: |
@@ -65,7 +65,7 @@ jobs:
       - name: Generate artifact attestation
         uses: actions/attest-build-provenance@v1
         with:
-          subject-name: "docker.io/${{ vars.DOCKERHUB_USERNAME }}/kms"
+          subject-name: "docker.io/${{ vars.DOCKERHUB_ORG }}/dstack-kms"
           subject-digest: ${{ steps.build-and-push.outputs.digest }}
           push-to-registry: true
 
@@ -92,7 +92,7 @@ jobs:
           body: |
             ## Docker Image Information
 
-            **Image**: `docker.io/${{ vars.DOCKERHUB_USERNAME }}/kms:${{ env.VERSION }}`
+            **Image**: `docker.io/${{ vars.DOCKERHUB_ORG }}/dstack-kms:${{ env.VERSION }}`
 
             **Digest (SHA256)**: `${{ steps.build-and-push.outputs.digest }}`
 
