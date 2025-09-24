@@ -2,9 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+use crate::acpi::Tables;
 use crate::tdvf::Tdvf;
 use crate::util::debug_print_log;
-use crate::{kernel, TdxMeasurements};
+use crate::{kernel, RtmrLogs, TdxMeasurements};
 use crate::{measure_log, measure_sha384};
 use anyhow::{bail, Context, Result};
 use fs_err as fs;
@@ -78,21 +79,41 @@ pub struct VersionedOptions {
     pub two_pass_add_pages: bool,
 }
 
+#[derive(Debug, Clone)]
+pub struct TdxMeasurementDetails {
+    pub measurements: TdxMeasurements,
+    pub rtmr_logs: RtmrLogs,
+    pub acpi_tables: Tables,
+}
+
 impl Machine<'_> {
     pub fn measure(&self) -> Result<TdxMeasurements> {
+        self.measure_with_logs().map(|details| details.measurements)
+    }
+
+    pub fn measure_with_logs(&self) -> Result<TdxMeasurementDetails> {
         debug!("measuring machine: {self:#?}");
         let fw_data = fs::read(self.firmware)?;
         let kernel_data = fs::read(self.kernel)?;
         let initrd_data = fs::read(self.initrd)?;
         let tdvf = Tdvf::parse(&fw_data).context("Failed to parse TDVF metadata")?;
+
         let mrtd = tdvf.mrtd(self).context("Failed to compute MR TD")?;
-        let rtmr0 = tdvf.rtmr0(self).context("Failed to compute RTMR0")?;
-        let rtmr1 = kernel::measure_kernel(
+
+        let (rtmr0_log, acpi_tables) = tdvf
+            .rtmr0_log(self)
+            .context("Failed to compute RTMR0 log")?;
+        debug_print_log("RTMR0", &rtmr0_log);
+        let rtmr0 = measure_log(&rtmr0_log);
+
+        let rtmr1_log = kernel::rtmr1_log(
             &kernel_data,
             initrd_data.len() as u32,
             self.memory_size,
             0x28000,
         )?;
+        debug_print_log("RTMR1", &rtmr1_log);
+        let rtmr1 = measure_log(&rtmr1_log);
 
         let rtmr2_log = vec![
             kernel::measure_cmdline(self.kernel_cmdline),
@@ -101,11 +122,15 @@ impl Machine<'_> {
         debug_print_log("RTMR2", &rtmr2_log);
         let rtmr2 = measure_log(&rtmr2_log);
 
-        Ok(TdxMeasurements {
-            mrtd,
-            rtmr0,
-            rtmr1,
-            rtmr2,
+        Ok(TdxMeasurementDetails {
+            measurements: TdxMeasurements {
+                mrtd,
+                rtmr0,
+                rtmr1,
+                rtmr2,
+            },
+            rtmr_logs: [rtmr0_log, rtmr1_log, rtmr2_log],
+            acpi_tables,
         })
     }
 }

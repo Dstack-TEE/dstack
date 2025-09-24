@@ -1,0 +1,19 @@
+# SPDX-FileCopyrightText: © 2024-2025 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# Server configuration
+address = "0.0.0.0"
+port = 8080
+
+# Image cache directory for OS image verification
+image_cache_dir = "/tmp/dstack-verifier/cache"
+
+# Image download URL template (replace {OS_IMAGE_HASH} with actual hash)
+image_download_url = "https://dstack-images.phala.network/mr_{OS_IMAGE_HASH}.tar.gz"
+
+# Image download timeout in seconds
+image_download_timeout_secs = 300
+
+# Optional PCCS URL for quote verification
+# pccs_url = "https://pccs.phala.network"

@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::{measure_log, measure_sha384, num::read_le, utf16_encode, util::debug_print_log};
+use crate::{measure_sha384, num::read_le, utf16_encode};
 use anyhow::{bail, Context, Result};
 use object::pe;
 use sha2::{Digest, Sha384};
@@ -201,24 +201,22 @@ fn patch_kernel(
 }
 
 /// Measures a QEMU-patched TDX kernel image.
-pub(crate) fn measure_kernel(
+pub(crate) fn rtmr1_log(
     kernel_data: &[u8],
     initrd_size: u32,
     mem_size: u64,
     acpi_data_size: u32,
-) -> Result<Vec<u8>> {
+) -> Result<Vec<Vec<u8>>> {
     let kd = patch_kernel(kernel_data, initrd_size, mem_size, acpi_data_size)
         .context("Failed to patch kernel")?;
     let kernel_hash = authenticode_sha384_hash(&kd).context("Failed to compute kernel hash")?;
-    let rtmr1_log = vec![
+    Ok(vec![
         kernel_hash,
         measure_sha384(b"Calling EFI Application from Boot Option"),
         measure_sha384(&[0x00, 0x00, 0x00, 0x00]), // Separator
         measure_sha384(b"Exit Boot Services Invocation"),
         measure_sha384(b"Exit Boot Services Returned with Success"),
-    ];
-    debug_print_log("RTMR1", &rtmr1_log);
-    Ok(measure_log(&rtmr1_log))
+    ])
 }
 
 /// Measures the kernel command line by converting to UTF-16LE and hashing.

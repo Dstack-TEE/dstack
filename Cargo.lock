@@ -2462,6 +2462,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "dstack-verifier"
+version = "0.5.4"
+dependencies = [
+ "anyhow",
+ "cc-eventlog",
+ "clap",
+ "dcap-qvl",
+ "dstack-mr",
+ "dstack-types",
+ "figment",
+ "fs-err",
+ "hex",
+ "ra-tls",
+ "reqwest",
+ "rocket",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "dstack-vmm"
 version = "0.5.4"
 dependencies = [

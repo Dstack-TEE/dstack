@@ -13,6 +13,7 @@ use crate::Machine;
 const LDR_LENGTH: usize = 4096;
 const FIXED_STRING_LEN: usize = 56;
 
+#[derive(Debug, Clone)]
 pub struct Tables {
     pub tables: Vec<u8>,
     pub rsdp: Vec<u8>,
