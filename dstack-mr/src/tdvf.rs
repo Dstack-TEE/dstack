@@ -82,20 +82,30 @@ impl<'a> Tdvf<'a> {
         const TABLE_FOOTER_GUID: &str = "96b582de-1fb2-45f7-baea-a366c55a082d";
         const BYTES_AFTER_TABLE_FOOTER: usize = 32;
 
+        if fw.len() < BYTES_AFTER_TABLE_FOOTER {
+            bail!("TDVF firmware too small");
+        }
         let offset = fw.len() - BYTES_AFTER_TABLE_FOOTER;
         let encoded_footer_guid = encode_guid(TABLE_FOOTER_GUID)?;
+        if offset < 16 {
+            bail!("TDVF firmware offset too small for GUID");
+        }
         let guid = &fw[offset - 16..offset];
 
         if guid != encoded_footer_guid {
             bail!("Failed to parse TDVF metadata: Invalid footer GUID");
         }
 
+        if offset < 18 {
+            bail!("TDVF firmware offset too small for tables length");
+        }
         let tables_len =
             u16::from_le_bytes(fw[offset - 18..offset - 16].try_into().unwrap()) as usize;
-        if tables_len == 0 || tables_len > offset - 18 {
+        if tables_len == 0 || tables_len > offset.saturating_sub(18) {
             bail!("Failed to parse TDVF metadata: Invalid tables length");
         }
-        let tables = &fw[offset - 18 - tables_len..offset - 18];
+        let table_start = offset.saturating_sub(18).saturating_sub(tables_len);
+        let tables = &fw[table_start..offset - 18];
         let mut offset = tables.len();
 
         let mut data: Option<&[u8]> = None;
@@ -106,21 +116,28 @@ impl<'a> Tdvf<'a> {
             }
             let guid = &tables[offset - 16..offset];
             let entry_len = read_le::<u16>(tables, offset - 18, "entry length")? as usize;
-            if entry_len > offset - 18 {
+            if entry_len > offset.saturating_sub(18) {
                 bail!("Failed to parse TDVF metadata: Invalid entry length");
             }
             if guid == encoded_guid {
-                data = Some(&tables[offset - 18 - entry_len..offset - 18]);
+                let entry_start = offset.saturating_sub(18).saturating_sub(entry_len);
+                data = Some(&tables[entry_start..offset - 18]);
                 break;
             }
-            offset -= entry_len;
+            offset = offset.saturating_sub(entry_len);
         }
 
         let data = data.context("Failed to parse TDVF metadata: Missing TDVF metadata")?;
 
-        let tdvf_meta_offset =
+        if data.len() < 4 {
+            bail!("TDVF metadata data too small");
+        }
+        let tdvf_meta_offset_raw =
             u32::from_le_bytes(data[data.len() - 4..].try_into().unwrap()) as usize;
-        let tdvf_meta_offset = fw.len() - tdvf_meta_offset;
+        if tdvf_meta_offset_raw > fw.len() {
+            bail!("TDVF metadata offset exceeds firmware size");
+        }
+        let tdvf_meta_offset = fw.len() - tdvf_meta_offset_raw;
         let tdvf_meta_desc = &fw[tdvf_meta_offset..tdvf_meta_offset + 16];
 
         if &tdvf_meta_desc[..4] != b"TDVF" {
@@ -311,16 +328,27 @@ impl<'a> Tdvf<'a> {
         let (_, last_start, last_end) = memory_acceptor.ranges.pop().expect("No ranges");
 
         for (accepted, start, end) in memory_acceptor.ranges {
+            if end < start {
+                bail!("Invalid memory range: end < start");
+            }
+            let size = end - start;
             if accepted {
-                add_memory_resource_hob(0x00, start, end - start);
+                add_memory_resource_hob(0x00, start, size);
             } else {
-                add_memory_resource_hob(0x07, start, end - start);
+                add_memory_resource_hob(0x07, start, size);
             }
         }
 
+        if last_end < last_start {
+            bail!("Invalid last memory range: end < start");
+        }
         if memory_size >= 0xB0000000 {
-            add_memory_resource_hob(0x07, last_start, 0x80000000u64 - last_start);
-            add_memory_resource_hob(0x07, 0x100000000, last_end - 0x80000000u64);
+            if last_start < 0x80000000u64 {
+                add_memory_resource_hob(0x07, last_start, 0x80000000u64 - last_start);
+            }
+            if last_end > 0x80000000u64 {
+                add_memory_resource_hob(0x07, 0x100000000, last_end - 0x80000000u64);
+            }
         } else {
             add_memory_resource_hob(0x07, last_start, last_end - last_start);
         }

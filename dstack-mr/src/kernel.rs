@@ -99,7 +99,7 @@ fn authenticode_sha384_hash(data: &[u8]) -> Result<Vec<u8>> {
         let trailing_data_len = file_size - sum_of_bytes_hashed;
 
         if trailing_data_len > cert_table_size {
-            let hashed_trailing_len = trailing_data_len - cert_table_size;
+            let hashed_trailing_len = trailing_data_len.saturating_sub(cert_table_size);
             let trailing_start = sum_of_bytes_hashed;
 
             if trailing_start + hashed_trailing_len <= data.len() {
@@ -142,14 +142,14 @@ fn patch_kernel(
     }
     if protocol >= 0x201 {
         kd[0x211] |= 0x80; // loadflags |= CAN_USE_HEAP
-        let heap_end_ptr = cmdline_addr - real_addr - 0x200;
+        let heap_end_ptr = cmdline_addr.saturating_sub(real_addr).saturating_sub(0x200);
         kd[0x224..0x228].copy_from_slice(&heap_end_ptr.to_le_bytes());
     }
     if protocol >= 0x202 {
         kd[0x228..0x22C].copy_from_slice(&cmdline_addr.to_le_bytes());
     } else {
         kd[0x20..0x22].copy_from_slice(&0xa33f_u16.to_le_bytes());
-        let offset = (cmdline_addr - real_addr) as u16;
+        let offset = cmdline_addr.saturating_sub(real_addr) as u16;
         kd[0x22..0x24].copy_from_slice(&offset.to_le_bytes());
     }
 
@@ -186,14 +186,23 @@ fn patch_kernel(
             mem_size as u32
         };
 
-        if initrd_max >= below_4g_mem_size - acpi_data_size {
-            initrd_max = below_4g_mem_size - acpi_data_size - 1;
+        if let Some(available_mem) = below_4g_mem_size.checked_sub(acpi_data_size) {
+            if initrd_max >= available_mem {
+                initrd_max = available_mem.saturating_sub(1);
+            }
+        } else {
+            // If acpi_data_size >= below_4g_mem_size, we have no memory available
+            bail!(
+                "ACPI data size ({}) exceeds available memory ({})",
+                acpi_data_size,
+                below_4g_mem_size
+            );
         }
         if initrd_size >= initrd_max {
             bail!("initrd is too large");
         }
 
-        let initrd_addr = (initrd_max - initrd_size) & !4095;
+        let initrd_addr = initrd_max.saturating_sub(initrd_size) & !4095;
         kd[0x218..0x21C].copy_from_slice(&initrd_addr.to_le_bytes());
         kd[0x21C..0x220].copy_from_slice(&initrd_size.to_le_bytes());
     }
