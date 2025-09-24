@@ -33,26 +33,26 @@ RTMR3 differs as it contains runtime information like compose hash and instance 
 
 ### 2.2. Determining expected MRs
 MRTD, RTMR0, RTMR1, and RTMR2 correspond to the image. dstack OS builds all related software from source.
-Build version v0.4.0 using these commands:
+Build version v0.5.4 using these commands:
 ```bash
 git clone https://github.com/Dstack-TEE/meta-dstack.git
 cd meta-dstack/
-git checkout 15189bcb5397083b5c650a438243ce3f29e705f4
+git checkout f7c795b76faa693f218e1c255007e3a68c541d79
 git submodule update --init --recursive
 cd repro-build && ./repro-build.sh -n
 ```
 
-The resulting dstack-v0.4.0.tar.gz contains:
+The resulting dstack-0.5.4.tar.gz contains:
 
 - ovmf.fd: virtual firmware
 - bzImage: kernel image
 - initramfs.cpio.gz: initrd
-- rootfs.cpio: root filesystem
+- rootfs.img.verity: root filesystem
 - metadata.json: image metadata, including kernel boot cmdline
 
-Calculate image MRs using [dstack-mr](https://github.com/kvinwang/dstack-mr):
+Calculate image MRs using [dstack-mr](dstack-mr/):
 ```bash
-dstack-mr -cpu 4 -ram 4096 -metadata dstack-v0.4.0/metadata.json
+cargo run --manifest-path ../dstack/Cargo.toml --bin dstack-mr measure -c 4 -m 4G dstack-0.5.4/metadata.json
 ```
 
 Once these verification steps are completed successfully, the report_data contained in the verified quote can be considered authentic and trustworthy.
