@@ -102,7 +102,7 @@ DSTACK_VERIFIER_PORT=8080 cargo run --bin dstack-verifier
 ```yaml
 services:
   dstack-verifier:
-    image: kvin/dstack-verifier:latest
+    image: dstacktee/dstack-verifier:latest
     ports:
       - "8080:8080"
     restart: unless-stopped
