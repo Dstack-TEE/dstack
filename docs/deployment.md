@@ -165,7 +165,7 @@ After you get the `os_image_hash`, you can register it to the KMS whitelist by r
 
 ```bash
 cd dstack/kms/auth-eth
-npx hardhat kms:add-image --network phala --mr <os-image-hash>
+npx hardhat kms:add-image --network phala 0x<os-image-hash>
 ```
 
 ### Register dstack-gateway in KMS
