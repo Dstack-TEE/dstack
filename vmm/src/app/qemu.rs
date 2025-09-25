@@ -165,10 +165,14 @@ impl VmInfo {
                 .then_some(self.instance_id.as_ref())
                 .flatten()
                 .map(|id| {
-                    format!(
-                        "https://{id}-{}.{}:{}",
-                        gw.agent_port, gw.base_domain, gw.port
-                    )
+                    if gw.port == 443 {
+                        format!("https://{id}-{}.{}", gw.agent_port, gw.base_domain)
+                    } else {
+                        format!(
+                            "https://{id}-{}.{}:{}",
+                            gw.agent_port, gw.base_domain, gw.port
+                        )
+                    }
                 }),
             app_id: self.manifest.app_id.clone(),
             instance_id: self.instance_id.as_deref().map(Into::into),
