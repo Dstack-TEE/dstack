@@ -1,9 +1,9 @@
 {
     "kms_urls": [
-        "https://kms.1022.kvin.wang:12001"
+        "https://kms.1022.dstack.org:12001"
     ],
     "gateway_urls": [
-        "https://tproxy.1022.kvin.wang:12002"
+        "https://tproxy.1022.dstack.org:12002"
     ],
     "pccs_url": "",
     "docker_registry": "",

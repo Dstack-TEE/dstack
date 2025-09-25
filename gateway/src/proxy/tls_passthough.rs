@@ -150,7 +150,7 @@ mod tests {
     async fn test_resolve_app_address() {
         let app_addr = resolve_app_address(
             "_dstack-app-address",
-            "3327603e03f5bd1f830812ca4a789277fc31f577.app.kvin.wang",
+            "3327603e03f5bd1f830812ca4a789277fc31f577.app.dstack.org",
             false,
         )
         .await

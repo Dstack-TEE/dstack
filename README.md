@@ -212,9 +212,9 @@ Once your app is deployed and listening on an HTTP port, you can access it throu
 
 **Examples**:
 
-- `3327603e03f5bd1f830812ca4a789277fc31f577-8080.app.kvin.wang` → port `8080` (TLS termination to any TCP)
-- `3327603e03f5bd1f830812ca4a789277fc31f577-8080g.app.kvin.wang` → port `8080` (TLS termination with HTTP/2 negotiation)
-- `3327603e03f5bd1f830812ca4a789277fc31f577-8080s.app.kvin.wang` → port `8080` (TLS passthrough to any TCP)
+- `3327603e03f5bd1f830812ca4a789277fc31f577-8080.test0.dstack.org` → port `8080` (TLS termination to any TCP)
+- `3327603e03f5bd1f830812ca4a789277fc31f577-8080g.test0.dstack.org` → port `8080` (TLS termination with HTTP/2 negotiation)
+- `3327603e03f5bd1f830812ca4a789277fc31f577-8080s.test0.dstack.org` → port `8080` (TLS passthrough to any TCP)
 
 The `<id>` can be either the app ID or instance ID. When using the app ID, the load balancer will select one of the available instances. Adding an `s` suffix enables TLS passthrough to the app instead of terminating at dstack-gateway. Adding a `g` suffix enables HTTPS/2 with TLS termination for gRPC applications.
 
@@ -258,7 +258,7 @@ curl --unix-socket /var/run/dstack.sock http://localhost/GetQuote?report_data=0x
 Container logs can be obtained from the CVM's `dashboard` page or by curl:
 
 ```bash
-curl 'http://<appid>.app.kvin.wang:9090/logs/<container name>?since=0&until=0&follow=true&text=true&timestamps=true&bare=true'
+curl 'http://<appid>.<the domain you set for dstack-gateway>:9090/logs/<container name>?since=0&until=0&follow=true&text=true&timestamps=true&bare=true'
 ```
 
 Replace `<appid>` and `<container name>` with actual values. Available parameters:
@@ -334,24 +334,7 @@ Then run the certbot in the `build/` and you will see the following log:
 $ RUST_LOG=info,certbot=debug ./certbot renew -c certbot.toml
 2024-10-25T07:41:00.682990Z  INFO certbot::bot: creating new ACME account
 2024-10-25T07:41:00.869246Z  INFO certbot::bot: created new ACME account: https://acme-staging-v02.api.letsencrypt.org/acme/acct/168601853
-2024-10-25T07:41:00.869270Z  INFO certbot::bot: setting CAA records
-2024-10-25T07:41:00.869276Z DEBUG certbot::acme_client: setting guard CAA records for app.kvin.wang
-2024-10-25T07:41:01.740767Z DEBUG certbot::acme_client: removing existing CAA record app.kvin.wang 0 issuewild "letsencrypt.org;validationmethods=dns-01;accounturi=https://acme-staging-v02.api.letsencrypt.org/acme/acct/168578683"
-2024-10-25T07:41:01.991298Z DEBUG certbot::acme_client: removing existing CAA record app.kvin.wang 0 issue "letsencrypt.org;validationmethods=dns-01;accounturi=https://acme-staging-v02.api.letsencrypt.org/acme/acct/168578683"
-2024-10-25T07:41:02.216751Z DEBUG certbot::acme_client: setting CAA records for app.kvin.wang, 0 issue "letsencrypt.org;validationmethods=dns-01;accounturi=https://acme-staging-v02.api.letsencrypt.org/acme/acct/168601853"
-2024-10-25T07:41:02.424217Z DEBUG certbot::acme_client: setting CAA records for app.kvin.wang, 0 issuewild "letsencrypt.org;validationmethods=dns-01;accounturi=https://acme-staging-v02.api.letsencrypt.org/acme/acct/168601853"
-2024-10-25T07:41:02.663824Z DEBUG certbot::acme_client: removing guard CAA records for app.kvin.wang
-2024-10-25T07:41:03.095564Z DEBUG certbot::acme_client: generating new cert key pair
-2024-10-25T07:41:03.095678Z DEBUG certbot::acme_client: requesting new certificates for *.app.kvin.wang
-2024-10-25T07:41:03.095699Z DEBUG certbot::acme_client: creating new order
-2024-10-25T07:41:03.250382Z DEBUG certbot::acme_client: order is pending, waiting for authorization
-2024-10-25T07:41:03.283600Z DEBUG certbot::acme_client: creating dns record for app.kvin.wang
-2024-10-25T07:41:04.027882Z DEBUG certbot::acme_client: challenge not found, waiting 500ms tries=2 domain="_acme-challenge.app.kvin.wang"
-2024-10-25T07:41:04.600711Z DEBUG certbot::acme_client: challenge not found, waiting 1s tries=3 domain="_acme-challenge.app.kvin.wang"
-2024-10-25T07:41:05.642300Z DEBUG certbot::acme_client: challenge not found, waiting 2s tries=4 domain="_acme-challenge.app.kvin.wang"
-2024-10-25T07:41:07.715947Z DEBUG certbot::acme_client: challenge not found, waiting 4s tries=5 domain="_acme-challenge.app.kvin.wang"
-2024-10-25T07:41:11.724831Z DEBUG certbot::acme_client: challenge not found, waiting 8s tries=6 domain="_acme-challenge.app.kvin.wang"
-2024-10-25T07:41:19.815990Z DEBUG certbot::acme_client: challenge not found, waiting 16s tries=7 domain="_acme-challenge.app.kvin.wang"
+...
 2024-10-25T07:41:35.852790Z DEBUG certbot::acme_client: setting challenge ready for https://acme-staging-v02.api.letsencrypt.org/acme/chall-v3/14584884443/mQ-I2A
 2024-10-25T07:41:35.934425Z DEBUG certbot::acme_client: challenges are ready, waiting for order to be ready
 2024-10-25T07:41:37.972434Z DEBUG certbot::acme_client: order is ready, uploading csr
@@ -391,16 +374,16 @@ Execute dstack-gateway with `sudo ./dstack-gateway -c gateway.toml`, then access
 
 To enhance security, we've limited TLS certificate issuance to dstack-gateway via CAA records. However, since these records can be modified through Cloudflare's domain management, we need to implement global CA certificate monitoring to maintain security oversight.
 
-`ct_monitor` tracks Certificate Transparency logs via [https://crt.sh](https://crt.sh/?q=app.kvin.wang), comparing their public key with the ones got from dstack-gateway RPC. It immediately alerts when detecting unauthorized certificates not issued through dstack-gateway:
+`ct_monitor` tracks Certificate Transparency logs via https://crt.sh, comparing their public key with the ones got from dstack-gateway RPC. It immediately alerts when detecting unauthorized certificates not issued through dstack-gateway:
 
 ```text
-$ ./ct_monitor -t https://localhost:9010/prpc -d app.kvin.wang
-2024-10-25T08:12:11.366463Z  INFO ct_monitor: monitoring app.kvin.wang...
+$ ./ct_monitor -t https://localhost:9010/prpc -d <YOUR_DOMAIN>
+2024-10-25T08:12:11.366463Z  INFO ct_monitor: monitoring <YOUR_DOMAIN>...
 2024-10-25T08:12:11.366488Z  INFO ct_monitor: fetching known public keys from https://localhost:9010/prpc
 2024-10-25T08:12:11.566222Z  INFO ct_monitor: got 2 known public keys
 2024-10-25T08:12:13.142122Z  INFO ct_monitor: ✅ checked log id=14705660685
 2024-10-25T08:12:13.802573Z  INFO ct_monitor: ✅ checked log id=14705656674
-2024-10-25T08:12:14.494944Z ERROR ct_monitor: ❌ error in CTLog { id: 14666084839, issuer_ca_id: 295815, issuer_name: "C=US, O=Let's Encrypt, CN=R11", common_name: "kvin.wang", name_value: "*.app.kvin.wang", not_before: "2024-09-24T02:23:15", not_after: "2024-12-23T02:23:14", serial_number: "03ae796f56a933c8ff7e32c7c0d662a253d4", result_count: 1, entry_timestamp: "2024-09-24T03:21:45.825" }
+2024-10-25T08:12:14.494944Z ERROR ct_monitor: ❌ error in CTLog { id: 14666084839, issuer_ca_id: 295815, issuer_name: "C=US, O=Let's Encrypt, CN=R11", common_name: "<YOUR_DOMAIN>", name_value: "*.<YOUR_DOMAIN>", not_before: "2024-09-24T02:23:15", not_after: "2024-12-23T02:23:14", serial_number: "03ae796f56a933c8ff7e32c7c0d662a253d4", result_count: 1, entry_timestamp: "2024-09-24T03:21:45.825" }
 2024-10-25T08:12:14.494998Z ERROR ct_monitor: error: certificate has issued to unknown pubkey: 30820122300d06092a864886f70d01010105000382010f003082010a02820101009de65c767caf117880626d1acc1ee78f3c6a992e3fe458f34066f92812ac550190a67e49ebf4f537003c393c000a8ec3e114da088c0cb02ffd0881fd39a2b32cc60d2e9989f0efab3345bee418262e0179d307d8d361fd0837f85d17eab92ec6f4126247e614aa01f4efcc05bc6303a8be68230f04326c9e85406fc4d234e9ce92089253b11d002cdf325582df45d5da42981cd546cbd2e9e49f0fa6636e747a345aaf8cefa02556aa258e1f7f90906be8fe51567ac9626f35bc46837e4f3203387fee59c71cea400000007c24e7537debc1941b36ff1612990233e4c219632e35858b1771f17a71944adf6c657dd7303583e3aeed199bd36a3152f49980f4f30203010001
 ```
 

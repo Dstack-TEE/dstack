@@ -35,7 +35,7 @@ else
 # GUEST_AGENT_ADDR=127.0.0.1:9205
 
 # The URL of the dstack app image download URL
-# IMAGE_DOWNLOAD_URL=https://files.kvin.wang/images/mr_{OS_IMAGE_HASH}.tar.gz
+# IMAGE_DOWNLOAD_URL=https://download.dstack.org/os-images/mr_{OS_IMAGE_HASH}.tar.gz
 
 # Image hash verification feature flag
 VERIFY_IMAGE=true
