@@ -138,8 +138,11 @@ pub struct VmConfig {
     pub cpu_count: u32,
     pub memory_size: u64,
     // https://github.com/intel-staging/qemu-tdx/issues/1
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub qemu_single_pass_add_pages: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pic: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub qemu_version: Option<String>,
     #[serde(default)]
     pub pci_hole64_size: u64,
@@ -151,6 +154,7 @@ pub struct VmConfig {
     pub num_nvswitches: u32,
     #[serde(default)]
     pub hotplug_off: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image: Option<String>,
 }
 
