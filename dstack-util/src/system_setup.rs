@@ -6,6 +6,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     ops::Deref,
     path::{Path, PathBuf},
+    str::FromStr,
 };
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -75,6 +76,58 @@ struct InstanceInfo {
     instance_id: Vec<u8>,
     #[serde(with = "hex_bytes", default)]
     app_id: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+enum FsType {
+    #[default]
+    Zfs,
+    Ext4,
+}
+
+impl FromStr for FsType {
+    type Err = anyhow::Error;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "zfs" => Ok(FsType::Zfs),
+            "ext4" => Ok(FsType::Ext4),
+            _ => bail!("Invalid filesystem type: {s}, supported types: zfs, ext4"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+struct DstackOptions {
+    storage_encrypted: bool,
+    storage_fs: FsType,
+}
+
+fn parse_dstack_options(shared: &HostShared) -> Result<DstackOptions> {
+    let cmdline = fs::read_to_string("/proc/cmdline").context("Failed to read /proc/cmdline")?;
+
+    let mut options = DstackOptions {
+        storage_encrypted: true, // Default to encryption enabled
+        storage_fs: FsType::Zfs, // Default to ZFS
+    };
+
+    for param in cmdline.split_whitespace() {
+        if let Some(value) = param.strip_prefix("dstack.storage_encrypted=") {
+            match value {
+                "0" | "false" | "no" | "off" => options.storage_encrypted = false,
+                "1" | "true" | "yes" | "on" => options.storage_encrypted = true,
+                _ => {
+                    bail!("Invalid value for dstack.storage_encrypted: {value}");
+                }
+            }
+        } else if let Some(value) = param.strip_prefix("dstack.storage_fs=") {
+            options.storage_fs = value.parse().context("Failed to parse dstack.storage_fs")?;
+        }
+    }
+
+    if let Some(fs) = &shared.app_compose.storage_fs {
+        options.storage_fs = fs.parse().context("Failed to parse storage_fs")?;
+    }
+    Ok(options)
 }
 
 impl InstanceInfo {
@@ -433,36 +486,86 @@ impl<'a> Stage0<'a> {
         }
     }
 
-    async fn mount_data_disk(&self, initialized: bool, disk_crypt_key: &str) -> Result<()> {
+    async fn mount_data_disk(
+        &self,
+        initialized: bool,
+        disk_crypt_key: &str,
+        opts: &DstackOptions,
+    ) -> Result<()> {
         let name = "dstack_data_disk";
-        let fs_dev = "/dev/mapper/".to_string() + name;
         let mount_point = &self.args.mount_point;
+
+        // Determine the device to use based on encryption settings
+        let fs_dev = if opts.storage_encrypted {
+            format!("/dev/mapper/{name}")
+        } else {
+            self.args.device.to_string_lossy().to_string()
+        };
+
         if !initialized {
             self.vmm
                 .notify_q("boot.progress", "initializing data disk")
                 .await;
-            info!("Setting up disk encryption");
-            self.luks_setup(disk_crypt_key, name)?;
+
+            if opts.storage_encrypted {
+                info!("Setting up disk encryption");
+                self.luks_setup(disk_crypt_key, name)?;
+            } else {
+                info!("Skipping disk encryption as requested by kernel cmdline");
+            }
+
             cmd! {
                 mkdir -p $mount_point;
-                zpool create -o autoexpand=on dstack $fs_dev;
-                zfs create -o mountpoint=$mount_point -o atime=off -o checksum=blake3 dstack/data;
+            }?;
+
+            match opts.storage_fs {
+                FsType::Zfs => {
+                    info!("Creating ZFS filesystem");
+                    cmd! {
+                        zpool create -o autoexpand=on dstack $fs_dev;
+                        zfs create -o mountpoint=$mount_point -o atime=off -o checksum=blake3 dstack/data;
+                    }
+                    .context("Failed to create zpool")?;
+                }
+                FsType::Ext4 => {
+                    info!("Creating ext4 filesystem");
+                    cmd! {
+                        mkfs.ext4 -F $fs_dev;
+                        mount $fs_dev $mount_point;
+                    }
+                    .context("Failed to create ext4 filesystem")?;
+                }
             }
-            .context("Failed to create zpool")?;
         } else {
             self.vmm
                 .notify_q("boot.progress", "mounting data disk")
                 .await;
-            info!("Mounting encrypted data disk");
-            self.open_encrypted_volume(disk_crypt_key, name)?;
-            cmd! {
-                zpool import dstack;
-                zpool status dstack;
-                zpool online -e dstack $fs_dev; // triggers autoexpand
+
+            if opts.storage_encrypted {
+                info!("Mounting encrypted data disk");
+                self.open_encrypted_volume(disk_crypt_key, name)?;
+            } else {
+                info!("Mounting unencrypted data disk");
             }
-            .context("Failed to import zpool")?;
-            if cmd!(mountpoint -q $mount_point).is_err() {
-                cmd!(zfs mount dstack/data).context("Failed to mount zpool")?;
+
+            match opts.storage_fs {
+                FsType::Zfs => {
+                    cmd! {
+                        zpool import dstack;
+                        zpool status dstack;
+                        zpool online -e dstack $fs_dev; // triggers autoexpand
+                    }
+                    .context("Failed to import zpool")?;
+                    if cmd!(mountpoint -q $mount_point).is_err() {
+                        cmd!(zfs mount dstack/data).context("Failed to mount zpool")?;
+                    }
+                }
+                FsType::Ext4 => {
+                    if cmd!(mountpoint -q $mount_point).is_err() {
+                        cmd!(mount $fs_dev $mount_point)
+                            .context("Failed to mount ext4 filesystem")?;
+                    }
+                }
             }
         }
         Ok(())
@@ -614,9 +717,20 @@ impl<'a> Stage0<'a> {
         let keys_json = serde_json::to_string(&app_keys).context("Failed to serialize app keys")?;
         fs::write(self.app_keys_file(), keys_json).context("Failed to write app keys")?;
 
+        // Parse kernel command line options
+        let opts = parse_dstack_options(&self.shared).context("Failed to parse kernel cmdline")?;
+        info!(
+            "Filesystem options: encryption={}, filesystem={:?}",
+            opts.storage_encrypted, opts.storage_fs
+        );
+
         self.vmm.notify_q("boot.progress", "unsealing env").await;
-        self.mount_data_disk(is_initialized, &hex::encode(&app_keys.disk_crypt_key))
-            .await?;
+        self.mount_data_disk(
+            is_initialized,
+            &hex::encode(&app_keys.disk_crypt_key),
+            &opts,
+        )
+        .await?;
         self.vmm
             .notify_q(
                 "instance.info",
