@@ -39,6 +39,8 @@ pub struct AppCompose {
     pub no_instance_id: bool,
     #[serde(default = "default_true")]
     pub secure_time: bool,
+    #[serde(default)]
+    pub storage_fs: Option<String>,
 }
 
 fn default_true() -> bool {

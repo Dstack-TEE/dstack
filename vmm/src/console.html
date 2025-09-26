@@ -493,6 +493,56 @@ SPDX-License-Identifier: Apache-2.0
         }
     </style>
     <style>
+        /* Help icon tooltip styles */
+        .help-icon {
+            display: inline-block;
+            margin-left: 5px;
+            color: #666;
+            cursor: help;
+            position: relative;
+        }
+
+        .help-icon:hover {
+            color: #4285F4;
+        }
+
+        .help-icon .tooltip {
+            visibility: hidden;
+            width: 300px;
+            background-color: #333;
+            color: #fff;
+            text-align: left;
+            border-radius: 6px;
+            padding: 10px;
+            position: absolute;
+            z-index: 1000;
+            bottom: 125%;
+            left: 50%;
+            margin-left: -150px;
+            opacity: 0;
+            transition: opacity 0.3s;
+            font-size: 12px;
+            line-height: 1.4;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+        }
+
+        .help-icon .tooltip::after {
+            content: "";
+            position: absolute;
+            top: 100%;
+            left: 50%;
+            margin-left: -5px;
+            border-width: 5px;
+            border-style: solid;
+            border-color: #333 transparent transparent transparent;
+        }
+
+        .help-icon:hover .tooltip {
+            visibility: visible;
+            opacity: 1;
+        }
+    </style>
+    <style>
         .ml-text-ro {
             white-space: pre-wrap;
             background: #f1f1f1;
@@ -662,9 +712,27 @@ SPDX-License-Identifier: Apache-2.0
                         </div>
 
                         <div class="form-group">
-                            <label for="diskSize">Disk Size (GB)</label>
+                            <label for="diskSize">Storage (GB)</label>
                             <input id="diskSize" v-model.number="vmForm.disk_size" type="number"
-                                placeholder="Disk size in GB" required>
+                                placeholder="Storage size in GB" required>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="storageFs">Storage Filesystem
+                                <span class="help-icon">
+                                    <i class="fas fa-question-circle"></i>
+                                    <span class="tooltip">
+                                        <strong>ZFS:</strong> Ensures filesystem integrity with built-in data protection features.<br><br>
+                                        <strong>ext4:</strong> Provides better performance for database applications
+                                        with lower overhead and faster I/O operations.
+                                    </span>
+                                </span>
+                            </label>
+                            <select id="storageFs" v-model="vmForm.storage_fs">
+                                <option value="">Default (ZFS)</option>
+                                <option value="zfs">ZFS</option>
+                                <option value="ext4">ext4</option>
+                            </select>
                         </div>
 
                         <div class="form-group full-width">
@@ -999,6 +1067,11 @@ SPDX-License-Identifier: Apache-2.0
                                             <div class="detail-item">
                                                 <span class="detail-label">Features:</span>
                                                 <span class="detail-value">{{ getFlags(vm) || 'None' }}</span>
+                                            </div>
+                                            <div class="detail-item">
+                                                <span class="detail-label">Storage FS:</span>
+                                                <span class="detail-value">{{ vm.appCompose?.storage_fs ?
+                                                    vm.appCompose.storage_fs.toUpperCase() : 'ZFS (default)' }}</span>
                                             </div>
                                         </div>
 
@@ -1464,6 +1537,7 @@ fi
                         username: '',
                         token_key: ''
                     },
+                    storage_fs: '',
                     app_id: '',
                     kms_enabled: true,
                     local_key_provider_enabled: false,
@@ -1641,6 +1715,10 @@ fi
                         "no_instance_id": !vmForm.value.gateway_enabled,
                         "secure_time": false,
                     };
+
+                    if (vmForm.value.storage_fs) {
+                        app_compose.storage_fs = vmForm.value.storage_fs;
+                    }
 
                     if (vmForm.value.preLaunchScript?.trim()) {
                         app_compose.pre_launch_script = vmForm.value.preLaunchScript;
@@ -2336,7 +2414,8 @@ fi
                     () => vmForm.value.docker_config.enabled,
                     () => vmForm.value.docker_config.username,
                     () => vmForm.value.docker_config.token_key,
-                    () => vmForm.value.encryptedEnvs
+                    () => vmForm.value.encryptedEnvs,
+                    () => vmForm.value.storage_fs
                 ], async () => {
                     try {
                         const appCompose = await makeAppComposeFile();

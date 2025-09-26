@@ -41,6 +41,7 @@ This is the main configuration file for the application in JSON format:
 | secure_time | boolean | Whether secure time is enabled |
 | pre_launch_script | string | Prelaunch bash script that runs before execute `docker compose up` |
 | init_script | string | Bash script that executed prior to dockerd startup |
+| storage_fs | string | Filesystem type for the data disk of the CVM. Supported values: "zfs", "ext4". default to "zfs". **ZFS:** Ensures filesystem integrity with built-in data protection features. **ext4:** Provides better performance for database applications with lower overhead and faster I/O operations, but no strong integrity protection. |
 
 
 The hash of this file content is extended to RTMR3 as event name `compose-hash`. Remote verifier can extract the compose-hash during remote attestation.
