@@ -1,6 +1,6 @@
 [Unit]
 Description=WireGuard Endpoint Checker Service
-After=network-online.target tboot.service
+After=network-online.target dstack-prepare.service
 Wants=network-online.target
 
 [Service]
