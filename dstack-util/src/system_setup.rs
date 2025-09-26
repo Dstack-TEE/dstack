@@ -6,6 +6,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     ops::Deref,
     path::{Path, PathBuf},
+    process::Command,
     str::FromStr,
 };
 
@@ -502,6 +503,8 @@ impl<'a> Stage0<'a> {
             self.args.device.to_string_lossy().to_string()
         };
 
+        cmd!(mkdir -p $mount_point).context("Failed to create mount point")?;
+
         if !initialized {
             self.vmm
                 .notify_q("boot.progress", "initializing data disk")
@@ -513,10 +516,6 @@ impl<'a> Stage0<'a> {
             } else {
                 info!("Skipping disk encryption as requested by kernel cmdline");
             }
-
-            cmd! {
-                mkdir -p $mount_point;
-            }?;
 
             match opts.storage_fs {
                 FsType::Zfs => {
@@ -561,13 +560,49 @@ impl<'a> Stage0<'a> {
                     }
                 }
                 FsType::Ext4 => {
-                    if cmd!(mountpoint -q $mount_point).is_err() {
-                        cmd!(mount $fs_dev $mount_point)
-                            .context("Failed to mount ext4 filesystem")?;
-                    }
+                    Self::mount_e2fs(&fs_dev, mount_point)
+                        .context("Failed to mount ext4 filesystem")?;
                 }
             }
         }
+        Ok(())
+    }
+
+    fn mount_e2fs(dev: &impl AsRef<Path>, mount_point: &impl AsRef<Path>) -> Result<()> {
+        let dev = dev.as_ref();
+        let mount_point = mount_point.as_ref();
+        info!("Checking filesystem");
+
+        let e2fsck_status = Command::new("e2fsck")
+            .arg("-f")
+            .arg("-p")
+            .arg(dev)
+            .status()
+            .with_context(|| format!("Failed to run e2fsck on {}", dev.display()))?;
+
+        match e2fsck_status.code() {
+            Some(0 | 1) => {}
+            Some(code) => {
+                bail!(
+                    "e2fsck exited with status {code} while checking {}",
+                    dev.display()
+                );
+            }
+            None => {
+                bail!(
+                    "e2fsck terminated by signal while checking {}",
+                    dev.display()
+                );
+            }
+        }
+
+        cmd! {
+            info "Trying to resize filesystem if needed";
+            resize2fs $dev;
+            info "Mounting filesystem";
+            mount $dev $mount_point;
+        }
+        .context("Failed to prepare ext4 filesystem")?;
         Ok(())
     }
 
