@@ -24,7 +24,7 @@ use std::{
     io::{self, Read, Write},
     path::PathBuf,
 };
-use system_setup::{cmd_sys_setup, SetupArgs};
+use system_setup::{cmd_gateway_refresh, cmd_sys_setup, GatewayRefreshArgs, SetupArgs};
 use tdx_attest as att;
 use utils::AppKeys;
 
@@ -64,6 +64,8 @@ enum Commands {
     Rand(RandArgs),
     /// Prepare dstack system.
     Setup(SetupArgs),
+    /// Refresh the dstack gateway configuration
+    GatewayRefresh(GatewayRefreshArgs),
     /// Notify the host about the dstack app
     NotifyHost(HostNotifyArgs),
     /// Remove orphaned containers
@@ -532,6 +534,9 @@ async fn main() -> Result<()> {
         }
         Commands::Setup(args) => {
             cmd_sys_setup(args).await?;
+        }
+        Commands::GatewayRefresh(args) => {
+            cmd_gateway_refresh(args).await?;
         }
         Commands::NotifyHost(args) => {
             cmd_notify_host(args).await?;

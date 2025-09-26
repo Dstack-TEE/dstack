@@ -67,6 +67,14 @@ pub struct SetupArgs {
     mount_point: PathBuf,
 }
 
+#[derive(clap::Parser)]
+/// Refresh dstack gateway configuration
+pub struct GatewayRefreshArgs {
+    /// dstack work directory
+    #[arg(long)]
+    work_dir: PathBuf,
+}
+
 #[derive(Deserialize, Serialize, Clone, Default)]
 struct InstanceInfo {
     #[serde(with = "hex_bytes", default)]
@@ -203,6 +211,171 @@ impl HostShared {
     }
 }
 
+struct GatewayContext<'a> {
+    shared: &'a HostShared,
+    keys: &'a AppKeys,
+}
+
+impl<'a> GatewayContext<'a> {
+    fn new(shared: &'a HostShared, keys: &'a AppKeys) -> Self {
+        Self { shared, keys }
+    }
+
+    async fn register_cvm(
+        &self,
+        gateway_url: &str,
+        client_key: String,
+        client_cert: String,
+        wg_pk: String,
+    ) -> Result<RegisterCvmResponse> {
+        let url = format!("{}/prpc", gateway_url);
+        let ca_cert = self.keys.ca_cert.clone();
+        let cert_validator = AppIdValidator {
+            allowed_app_id: self.keys.gateway_app_id.clone(),
+        };
+        let client = RaClientConfig::builder()
+            .remote_uri(url)
+            .maybe_pccs_url(self.shared.sys_config.pccs_url.clone())
+            .tls_client_cert(client_cert)
+            .tls_client_key(client_key)
+            .tls_ca_cert(ca_cert)
+            .tls_built_in_root_certs(false)
+            .tls_no_check(self.keys.gateway_app_id == "any")
+            .verify_server_attestation(false)
+            .cert_validator(Box::new(move |cert| cert_validator.validate(cert)))
+            .build()
+            .into_client()
+            .context("Failed to create RA client")?;
+        let client = GatewayClient::new(client);
+        client
+            .register_cvm(RegisterCvmRequest {
+                client_public_key: wg_pk,
+            })
+            .await
+            .context("Failed to register CVM")
+    }
+
+    async fn setup(&self) -> Result<()> {
+        if !self.shared.app_compose.gateway_enabled() {
+            info!("dstack-gateway is not enabled");
+            return Ok(());
+        }
+        if self.keys.gateway_app_id.is_empty() {
+            bail!("Missing allowed dstack-gateway app id");
+        }
+
+        info!("Setting up dstack-gateway");
+        // Generate WireGuard keys
+        let sk = cmd!(wg genkey)?;
+        let pk = cmd!(echo $sk | wg pubkey).or(Err(anyhow!("Failed to generate public key")))?;
+
+        let config = CertConfig {
+            org_name: None,
+            subject: "dstack-guest-agent".to_string(),
+            subject_alt_names: vec![],
+            usage_server_auth: false,
+            usage_client_auth: true,
+            ext_quote: true,
+        };
+        let cert_client = CertRequestClient::create(
+            self.keys,
+            self.shared.sys_config.pccs_url.as_deref(),
+            self.shared.sys_config.vm_config.clone(),
+        )
+        .await
+        .context("Failed to create cert client")?;
+        let client_key =
+            KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).context("Failed to generate key")?;
+        let client_certs = cert_client
+            .request_cert(&client_key, config, false)
+            .await
+            .context("Failed to request cert")?;
+        let client_cert = client_certs.join("\n");
+        let client_key = client_key.serialize_pem();
+
+        if self.shared.sys_config.gateway_urls.is_empty() {
+            bail!("Missing gateway urls");
+        }
+        // Read config and make API call
+        let response = 'out: {
+            for url in self.shared.sys_config.gateway_urls.iter() {
+                let response = self
+                    .register_cvm(url, client_key.clone(), client_cert.clone(), pk.clone())
+                    .await;
+                match response {
+                    Ok(response) => {
+                        break 'out response;
+                    }
+                    Err(err) => {
+                        warn!("Failed to register CVM: {err:?}, retrying with next dstack-gateway");
+                    }
+                }
+            }
+            bail!("Failed to register CVM, all dstack-gateway urls are down");
+        };
+        let wg_info = response.wg.context("Missing wg info")?;
+
+        let client_ip = &wg_info.client_ip;
+
+        // Create WireGuard config
+        let wg_listen_port = "9182";
+        let mut config = format!(
+            "[Interface]\n\
+            PrivateKey = {sk}\n\
+            ListenPort = {wg_listen_port}\n\
+            Address = {client_ip}/32\n\n"
+        );
+        for WireGuardPeer { pk, ip, endpoint } in &wg_info.servers {
+            let ip = ip.split('/').next().unwrap_or_default();
+            config.push_str(&format!(
+                "[Peer]\n\
+                PublicKey = {pk}\n\
+                AllowedIPs = {ip}/32\n\
+                Endpoint = {endpoint}\n\
+                PersistentKeepalive = 25\n",
+            ));
+        }
+
+        let wg_dir = Path::new("/etc/wireguard");
+        fs::create_dir_all(wg_dir)?;
+        fs::write(wg_dir.join("dstack-wg0.conf"), config)?;
+
+        cmd! {
+            chmod 600 $wg_dir/dstack-wg0.conf;
+            ignore wg-quick down dstack-wg0;
+        }?;
+
+        // Setup WireGuard iptables rules
+        cmd! {
+            // Create the chain if it doesn't exist
+            ignore iptables -N DSTACK_WG 2>/dev/null;
+            // Flush the chain
+            iptables -F DSTACK_WG;
+            // Remove any existing jump rule
+            ignore iptables -D INPUT -p udp --dport $wg_listen_port -j DSTACK_WG 2>/dev/null;
+            // Insert the new jump rule at the beginning of the INPUT chain
+            iptables -I INPUT -p udp --dport $wg_listen_port -j DSTACK_WG
+        }?;
+
+        for peer in &wg_info.servers {
+            // Avoid issues with field-access in the macro by binding the IP to a local variable.
+            let endpoint_ip = peer
+                .endpoint
+                .split(':')
+                .next()
+                .context("Invalid wireguard endpoint")?;
+            cmd!(iptables -A DSTACK_WG -s $endpoint_ip -j ACCEPT)?;
+        }
+
+        // Drop any UDP packets that don't come from an allowed IP.
+        cmd!(iptables -A DSTACK_WG -j DROP)?;
+
+        info!("Starting WireGuard");
+        cmd!(wg-quick up dstack-wg0)?;
+        Ok(())
+    }
+}
+
 fn truncate(s: &[u8], len: usize) -> &[u8] {
     if s.len() > len {
         &s[..len]
@@ -231,6 +404,21 @@ pub async fn cmd_sys_setup(args: SetupArgs) -> Result<()> {
     }
     let stage1 = stage0.setup_fs().await?;
     stage1.setup().await
+}
+
+pub async fn cmd_gateway_refresh(args: GatewayRefreshArgs) -> Result<()> {
+    let host_shared_dir = args.work_dir.join(HOST_SHARED_DIR_NAME);
+    let shared = HostShared::load(host_shared_dir.as_path()).with_context(|| {
+        format!(
+            "Failed to load host-shared dir: {}",
+            host_shared_dir.display()
+        )
+    })?;
+    let keys_path = shared.dir.join(APP_KEYS);
+    let keys: AppKeys = deserialize_json_file(&keys_path)
+        .with_context(|| format!("Failed to load app keys from {}", keys_path.display()))?;
+
+    GatewayContext::new(&shared, &keys).setup().await
 }
 
 struct AppIdValidator {
@@ -639,10 +827,6 @@ impl<'a> Stage0<'a> {
 }
 
 impl Stage1<'_> {
-    fn resolve(&self, path: &str) -> String {
-        path.to_string()
-    }
-
     fn decrypt_env_vars(
         &self,
         key: &[u8],
@@ -703,159 +887,14 @@ impl Stage1<'_> {
         self.vmm
             .notify_q("boot.progress", "setting up dstack-gateway")
             .await;
-        self.setup_dstack_gateway().await?;
+        GatewayContext::new(&self.shared, &self.keys)
+            .setup()
+            .await?;
         self.vmm
             .notify_q("boot.progress", "setting up docker")
             .await;
         self.setup_docker_registry()?;
         self.setup_docker_account(&envs)?;
-        Ok(())
-    }
-
-    async fn register_cvm(
-        &self,
-        gateway_url: &str,
-        client_key: String,
-        client_cert: String,
-        wg_pk: String,
-    ) -> Result<RegisterCvmResponse> {
-        let url = format!("{}/prpc", gateway_url);
-        let ca_cert = self.keys.ca_cert.clone();
-        let cert_validator = AppIdValidator {
-            allowed_app_id: self.keys.gateway_app_id.clone(),
-        };
-        let client = RaClientConfig::builder()
-            .remote_uri(url)
-            .maybe_pccs_url(self.shared.sys_config.pccs_url.clone())
-            .tls_client_cert(client_cert)
-            .tls_client_key(client_key)
-            .tls_ca_cert(ca_cert)
-            .tls_built_in_root_certs(false)
-            .tls_no_check(self.keys.gateway_app_id == "any")
-            .verify_server_attestation(false)
-            .cert_validator(Box::new(move |cert| cert_validator.validate(cert)))
-            .build()
-            .into_client()
-            .context("Failed to create RA client")?;
-        let client = GatewayClient::new(client);
-        client
-            .register_cvm(RegisterCvmRequest {
-                client_public_key: wg_pk,
-            })
-            .await
-            .context("Failed to register CVM")
-    }
-
-    async fn setup_dstack_gateway(&self) -> Result<()> {
-        if !self.shared.app_compose.gateway_enabled() {
-            info!("dstack-gateway is not enabled");
-            return Ok(());
-        }
-        if self.keys.gateway_app_id.is_empty() {
-            bail!("Missing allowed dstack-gateway app id");
-        }
-
-        info!("Setting up dstack-gateway");
-        // Generate WireGuard keys
-        let sk = cmd!(wg genkey)?;
-        let pk = cmd!(echo $sk | wg pubkey).or(Err(anyhow!("Failed to generate public key")))?;
-
-        let config = CertConfig {
-            org_name: None,
-            subject: "dstack-guest-agent".to_string(),
-            subject_alt_names: vec![],
-            usage_server_auth: false,
-            usage_client_auth: true,
-            ext_quote: true,
-        };
-        let cert_client = CertRequestClient::create(
-            &self.keys,
-            self.shared.sys_config.pccs_url.as_deref(),
-            self.shared.sys_config.vm_config.clone(),
-        )
-        .await
-        .context("Failed to create cert client")?;
-        let client_key =
-            KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).context("Failed to generate key")?;
-        let client_certs = cert_client
-            .request_cert(&client_key, config, false)
-            .await
-            .context("Failed to request cert")?;
-        let client_cert = client_certs.join("\n");
-        let client_key = client_key.serialize_pem();
-
-        if self.shared.sys_config.gateway_urls.is_empty() {
-            bail!("Missing gateway urls");
-        }
-        // Read config and make API call
-        let response = 'out: {
-            for url in self.shared.sys_config.gateway_urls.iter() {
-                let response = self
-                    .register_cvm(url, client_key.clone(), client_cert.clone(), pk.clone())
-                    .await;
-                match response {
-                    Ok(response) => {
-                        break 'out response;
-                    }
-                    Err(err) => {
-                        warn!("Failed to register CVM: {err:?}, retrying with next dstack-gateway");
-                    }
-                }
-            }
-            bail!("Failed to register CVM, all dstack-gateway urls are down");
-        };
-        let wg_info = response.wg.context("Missing wg info")?;
-
-        let client_ip = &wg_info.client_ip;
-
-        // Create WireGuard config
-        let wg_listen_port = "9182";
-        let mut config = format!(
-            "[Interface]\n\
-            PrivateKey = {sk}\n\
-            ListenPort = {wg_listen_port}\n\
-            Address = {client_ip}/32\n\n"
-        );
-        for WireGuardPeer { pk, ip, endpoint } in &wg_info.servers {
-            let ip = ip.split('/').next().unwrap_or_default();
-            config.push_str(&format!(
-                "[Peer]\n\
-                PublicKey = {pk}\n\
-                AllowedIPs = {ip}/32\n\
-                Endpoint = {endpoint}\n\
-                PersistentKeepalive = 25\n",
-            ));
-        }
-        fs::create_dir_all(self.resolve("/etc/wireguard"))?;
-        fs::write(self.resolve("/etc/wireguard/wg0.conf"), config)?;
-
-        // Setup WireGuard iptables rules
-        cmd! {
-            // Create the chain if it doesn't exist
-            ignore iptables -N DSTACK_WG 2>/dev/null;
-            // Flush the chain
-            iptables -F DSTACK_WG;
-            // Remove any existing jump rule
-            ignore iptables -D INPUT -p udp --dport $wg_listen_port -j DSTACK_WG 2>/dev/null;
-            // Insert the new jump rule at the beginning of the INPUT chain
-            iptables -I INPUT -p udp --dport $wg_listen_port -j DSTACK_WG
-        }?;
-
-        for peer in &wg_info.servers {
-            // Avoid issues with field-access in the macro by binding the IP to a local variable.
-            let endpoint_ip = peer
-                .endpoint
-                .split(':')
-                .next()
-                .context("Invalid wireguard endpoint")?;
-            cmd!(iptables -A DSTACK_WG -s $endpoint_ip -j ACCEPT)?;
-        }
-
-        // Drop any UDP packets that don't come from an allowed IP.
-        cmd!(iptables -A DSTACK_WG -j DROP)?;
-
-        info!("Starting WireGuard");
-        cmd!(wg-quick up wg0)?;
         Ok(())
     }
 
