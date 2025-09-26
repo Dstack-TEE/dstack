@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::app::{Image, VmConfig, VmWorkDir};
+use crate::app::{make_sys_config, Image, VmConfig, VmWorkDir};
 use crate::config::Config;
 use crate::main_service;
 use anyhow::{Context, Result};
@@ -235,44 +235,9 @@ Compose file content (first 200 chars):
 
     // 2. Create .sys-config.json (critical for 0.5.x VMs)
     // Use manifest URLs if available, fallback to config URLs (matching VMM's sync_dynamic_config logic)
-    let kms_urls = if manifest.kms_urls.is_empty() {
-        config.cvm.kms_urls.clone()
-    } else {
-        manifest.kms_urls.clone()
-    };
-    let gateway_urls = if manifest.gateway_urls.is_empty() {
-        config.cvm.gateway_urls.clone()
-    } else {
-        manifest.gateway_urls.clone()
-    };
-
-    let sys_config = serde_json::json!({
-        "kms_urls": kms_urls,
-        "gateway_urls": gateway_urls,
-        "pccs_url": config.cvm.pccs_url,
-        "docker_registry": config.cvm.docker_registry,
-        "host_api_url": format!("vsock://2:{}/api", config.host_api.port),
-        "vm_config": serde_json::to_string(&dstack_types::VmConfig {
-            spec_version: 1,
-            os_image_hash: image.digest.as_ref()
-                .and_then(|d| hex::decode(d).ok())
-                .unwrap_or_default(),
-            cpu_count: manifest.vcpu,
-            memory_size: manifest.memory as u64 * 1024 * 1024,
-            qemu_single_pass_add_pages: config.cvm.qemu_single_pass_add_pages,
-            pic: config.cvm.qemu_pic,
-            qemu_version: config.cvm.qemu_version.clone(),
-            pci_hole64_size: config.cvm.qemu_pci_hole64_size,
-            hugepages: manifest.hugepages,
-            num_gpus: manifest.gpus.as_ref().map_or(0, |g| g.gpus.len() as u32),
-            num_nvswitches: manifest.gpus.as_ref().map_or(0, |g| g.bridges.len() as u32),
-            hotplug_off: config.cvm.qemu_hotplug_off,
-            image: Some(manifest.image.clone()),
-        })?
-    });
+    let sys_config_str = make_sys_config(&config, &manifest)?;
     let sys_config_path = vm_work_dir.shared_dir().join(".sys-config.json");
-    fs_err::write(&sys_config_path, serde_json::to_string(&sys_config)?)
-        .context("Failed to write sys config")?;
+    fs_err::write(&sys_config_path, sys_config_str).context("Failed to write sys config")?;
 
     // Create vm-state.json with initial state
     vm_work_dir

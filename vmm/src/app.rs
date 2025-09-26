@@ -8,7 +8,7 @@ use anyhow::{bail, Context, Result};
 use bon::Builder;
 use dstack_kms_rpc::kms_client::KmsClient;
 use dstack_types::shared_filenames::{
-    compat_v3, APP_COMPOSE, ENCRYPTED_ENV, INSTANCE_INFO, SYS_CONFIG, USER_CONFIG,
+    APP_COMPOSE, ENCRYPTED_ENV, INSTANCE_INFO, SYS_CONFIG, USER_CONFIG,
 };
 use dstack_vmm_rpc::{self as pb, GpuInfo, StatusRequest, StatusResponse, VmConfiguration};
 use fs_err as fs;
@@ -489,119 +489,9 @@ impl App {
         let shared_dir = self.shared_dir(id);
         let manifest = work_dir.manifest().context("Failed to read manifest")?;
         let cfg = &self.config;
-        let image_path = cfg.image_path.join(&manifest.image);
-        let image = Image::load(image_path).context("Failed to load image info")?;
-        let img_ver = image.info.version_tuple().unwrap_or((0, 0, 0));
-        let kms_urls = if manifest.kms_urls.is_empty() {
-            cfg.cvm.kms_urls.clone()
-        } else {
-            manifest.kms_urls.clone()
-        };
-        let gateway_urls = if manifest.gateway_urls.is_empty() {
-            cfg.cvm.gateway_urls.clone()
-        } else {
-            manifest.gateway_urls.clone()
-        };
-        let sys_config = if img_ver >= (0, 5, 0) {
-            let os_image_hash = hex::decode(image.digest.unwrap_or_default())
-                .context("Failed to decode image digest")?;
-            let gpus = manifest.gpus.unwrap_or_default();
-            let vm_config = serde_json::to_string(&dstack_types::VmConfig {
-                spec_version: 1,
-                os_image_hash,
-                cpu_count: manifest.vcpu,
-                memory_size: manifest.memory as u64 * 1024 * 1024,
-                qemu_single_pass_add_pages: cfg.cvm.qemu_single_pass_add_pages,
-                pic: cfg.cvm.qemu_pic,
-                qemu_version: cfg.cvm.qemu_version.clone(),
-                pci_hole64_size: cfg.cvm.qemu_pci_hole64_size,
-                hugepages: manifest.hugepages,
-                num_gpus: gpus.gpus.len() as u32,
-                num_nvswitches: gpus.bridges.len() as u32,
-                hotplug_off: cfg.cvm.qemu_hotplug_off,
-                image: Some(manifest.image.clone()),
-            })?;
-            json!({
-                "kms_urls": kms_urls,
-                "gateway_urls": gateway_urls,
-                "pccs_url": cfg.cvm.pccs_url,
-                "docker_registry": cfg.cvm.docker_registry,
-                "host_api_url": format!("vsock://2:{}/api", cfg.host_api.port),
-                "vm_config": vm_config,
-            })
-        } else if img_ver >= (0, 4, 2) {
-            json!({
-                "kms_urls": kms_urls,
-                "gateway_urls": gateway_urls,
-                "pccs_url": cfg.cvm.pccs_url,
-                "docker_registry": cfg.cvm.docker_registry,
-                "host_api_url": format!("vsock://2:{}/api", cfg.host_api.port),
-            })
-        } else if img_ver >= (0, 4, 0) {
-            let rootfs_hash = image
-                .info
-                .rootfs_hash
-                .as_ref()
-                .context("Rootfs hash not found in image info")?;
-            json!({
-                "rootfs_hash": rootfs_hash,
-                "kms_urls": kms_urls,
-                "tproxy_urls": gateway_urls,
-                "pccs_url": cfg.cvm.pccs_url,
-                "docker_registry": cfg.cvm.docker_registry,
-                "host_api_url": format!("vsock://2:{}/api", cfg.host_api.port),
-            })
-        } else {
-            let rootfs_hash = image
-                .info
-                .rootfs_hash
-                .as_ref()
-                .context("Rootfs hash not found in image info")?;
-            json!({
-                "rootfs_hash": rootfs_hash,
-                "kms_url": kms_urls.first(),
-                "tproxy_url": gateway_urls.first(),
-                "pccs_url": cfg.cvm.pccs_url,
-                "docker_registry": cfg.cvm.docker_registry,
-                "host_api_url": format!("vsock://2:{}/api", cfg.host_api.port),
-            })
-        };
-        let sys_config_str =
-            serde_json::to_string(&sys_config).context("Failed to serialize vm config")?;
-        let config_file = if img_ver >= (0, 4, 0) {
-            SYS_CONFIG
-        } else {
-            compat_v3::SYS_CONFIG
-        };
-        fs::write(shared_dir.join(config_file), sys_config_str)
+        let sys_config_str = make_sys_config(cfg, &manifest)?;
+        fs::write(shared_dir.join(SYS_CONFIG), sys_config_str)
             .context("Failed to write vm config")?;
-        if img_ver < (0, 4, 0) {
-            // Sync .encrypted-env to encrypted-env
-            let compat_encrypted_env_path = shared_dir.join(compat_v3::ENCRYPTED_ENV);
-            let encrypted_env_path = shared_dir.join(ENCRYPTED_ENV);
-            if compat_encrypted_env_path.exists() {
-                fs::remove_file(&compat_encrypted_env_path)?;
-            }
-            if encrypted_env_path.exists() {
-                fs::copy(&encrypted_env_path, &compat_encrypted_env_path)?;
-            }
-
-            // Sync certs
-            let certs_dir = shared_dir.join("certs");
-            fs::create_dir_all(&certs_dir).context("Failed to create certs directory")?;
-            if cfg.cvm.ca_cert.is_empty()
-                || cfg.cvm.tmp_ca_cert.is_empty()
-                || cfg.cvm.tmp_ca_key.is_empty()
-            {
-                bail!("Certificates are required for older images");
-            }
-            fs::copy(&cfg.cvm.ca_cert, certs_dir.join("ca.cert"))
-                .context("Failed to copy ca cert")?;
-            fs::copy(&cfg.cvm.tmp_ca_cert, certs_dir.join("tmp-ca.cert"))
-                .context("Failed to copy tmp ca cert")?;
-            fs::copy(&cfg.cvm.tmp_ca_key, certs_dir.join("tmp-ca.key"))
-                .context("Failed to copy tmp ca key")?;
-        }
         Ok(())
     }
 
@@ -673,6 +563,61 @@ impl App {
             self.start_vm(&id).await?;
         }
         Ok(())
+    }
+}
+
+pub(crate) fn make_sys_config(cfg: &Config, manifest: &Manifest) -> Result<String> {
+    let image_path = cfg.image_path.join(&manifest.image);
+    let image = Image::load(image_path).context("Failed to load image info")?;
+    let img_ver = image.info.version_tuple().unwrap_or((0, 0, 0));
+    let kms_urls = if manifest.kms_urls.is_empty() {
+        cfg.cvm.kms_urls.clone()
+    } else {
+        manifest.kms_urls.clone()
+    };
+    let gateway_urls = if manifest.gateway_urls.is_empty() {
+        cfg.cvm.gateway_urls.clone()
+    } else {
+        manifest.gateway_urls.clone()
+    };
+    if img_ver < (0, 5, 0) {
+        bail!("Unsupported image version: {img_ver:?}");
+    }
+
+    let sys_config = json!({
+        "kms_urls": kms_urls,
+        "gateway_urls": gateway_urls,
+        "pccs_url": cfg.cvm.pccs_url,
+        "docker_registry": cfg.cvm.docker_registry,
+        "host_api_url": format!("vsock://2:{}/api", cfg.host_api.port),
+        "vm_config": serde_json::to_string(&make_vm_config(cfg, manifest, &image))?,
+    });
+    let sys_config_str =
+        serde_json::to_string(&sys_config).context("Failed to serialize vm config")?;
+    Ok(sys_config_str)
+}
+
+fn make_vm_config(cfg: &Config, manifest: &Manifest, image: &Image) -> dstack_types::VmConfig {
+    let os_image_hash = image
+        .digest
+        .as_ref()
+        .and_then(|d| hex::decode(d).ok())
+        .unwrap_or_default();
+    let gpus = manifest.gpus.clone().unwrap_or_default();
+    dstack_types::VmConfig {
+        spec_version: 1,
+        os_image_hash,
+        cpu_count: manifest.vcpu,
+        memory_size: manifest.memory as u64 * 1024 * 1024,
+        qemu_single_pass_add_pages: cfg.cvm.qemu_single_pass_add_pages,
+        pic: cfg.cvm.qemu_pic,
+        qemu_version: cfg.cvm.qemu_version.clone(),
+        pci_hole64_size: cfg.cvm.qemu_pci_hole64_size,
+        hugepages: manifest.hugepages,
+        num_gpus: gpus.gpus.len() as u32,
+        num_nvswitches: gpus.bridges.len() as u32,
+        hotplug_off: cfg.cvm.qemu_hotplug_off,
+        image: Some(manifest.image.clone()),
     }
 }
 
