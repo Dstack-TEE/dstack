@@ -21,3 +21,4 @@ dstack-types.workspace = true
 fs-err.workspace = true
 serde_json = { workspace = true, features = ["alloc"] }
 tracing-subscriber.workspace = true
+size-parser.workspace = true

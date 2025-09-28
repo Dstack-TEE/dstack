@@ -1,0 +1,25 @@
+# SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "size-parser"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description = "A utility crate for parsing and handling memory sizes with serde support"
+
+[dependencies]
+anyhow.workspace = true
+serde = { workspace = true, features = ["derive"], optional = true }
+thiserror.workspace = true
+
+[features]
+default = []
+serde = ["dep:serde"]
+
+[dev-dependencies]
+serde_json = { workspace = true, features = ["std"] }
