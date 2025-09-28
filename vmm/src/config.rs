@@ -183,6 +183,7 @@ pub struct CvmConfig {
     /// QEMU qemu_version
     pub qemu_version: Option<String>,
     /// QEMU pci_hole64_size
+    #[serde(with = "size_parser::human_size")]
     pub qemu_pci_hole64_size: u64,
     /// QEMU hotplug_off
     pub qemu_hotplug_off: bool,

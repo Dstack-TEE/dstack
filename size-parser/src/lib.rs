@@ -234,7 +234,7 @@ impl<'de> Deserialize<'de> for MemorySize {
 
         struct MemorySizeVisitor;
 
-        impl<'de> Visitor<'de> for MemorySizeVisitor {
+        impl Visitor<'_> for MemorySizeVisitor {
             type Value = MemorySize;
 
             fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
@@ -344,7 +344,7 @@ pub mod human_size {
 
         struct MemorySizeVisitor<T>(std::marker::PhantomData<T>);
 
-        impl<'de, T> Visitor<'de> for MemorySizeVisitor<T>
+        impl<T> Visitor<'_> for MemorySizeVisitor<T>
         where
             T: TryFrom<u64>,
             T::Error: std::fmt::Display,
