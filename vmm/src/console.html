@@ -662,6 +662,19 @@ SPDX-License-Identifier: Apache-2.0
                         </div>
 
                         <div class="form-group">
+                            <label for="swapSize">Swap (optional)</label>
+                            <div style="display: flex; align-items: center; gap: 8px;">
+                                <input id="swapSize" v-model.number="vmForm.swapValue" type="number" min="0"
+                                    step="0.1" placeholder="Swap size" style="flex: 1;">
+                                <select v-model="vmForm.swapUnit" style="width: 80px;">
+                                    <option value="MB">MB</option>
+                                    <option value="GB">GB</option>
+                                </select>
+                            </div>
+                            <small style="color: #666;">Leave as 0 to disable swap.</small>
+                        </div>
+
+                        <div class="form-group">
                             <label for="diskSize">Disk Size (GB)</label>
                             <input id="diskSize" v-model.number="vmForm.disk_size" type="number"
                                 placeholder="Disk size in GB" required>
@@ -941,6 +954,10 @@ SPDX-License-Identifier: Apache-2.0
                                             <span class="detail-value">{{ formatMemory(vm.configuration?.memory)
                                                 }}</span>
                                         </div>
+                                        <div class="detail-item" v-if="vm.configuration?.swap_size">
+                                            <span class="detail-label">Swap:</span>
+                                            <span class="detail-value">{{ formatMemory(bytesToMB(vm.configuration.swap_size)) }}</span>
+                                        </div>
                                         <div class="detail-item">
                                             <span class="detail-label">Disk Size:</span>
                                             <span class="detail-value">{{ vm.configuration?.disk_size }} GB</span>
@@ -1061,6 +1078,21 @@ SPDX-License-Identifier: Apache-2.0
                             </select>
                         </div>
                     </div>
+                </div>
+
+                <div class="form-group">
+                    <label for="upgradeSwap">Swap (optional)</label>
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <input id="upgradeSwap" v-model.number="upgradeDialog.swapValue" type="number" min="0"
+                            step="0.1" placeholder="Swap size" style="flex: 1;"
+                            :disabled="!upgradeDialog.updateCompose">
+                        <select v-model="upgradeDialog.swapUnit" style="width: 80px;"
+                            :disabled="!upgradeDialog.updateCompose">
+                            <option value="MB">MB</option>
+                            <option value="GB">GB</option>
+                        </select>
+                    </div>
+                    <small style="color: #666;">Enable "Update compose" to change swap size.</small>
                 </div>
 
                 <div class="form-group">
@@ -1454,6 +1486,9 @@ fi
                     memory: 2048, // This will be computed from memoryValue and memoryUnit
                     memoryValue: 2,
                     memoryUnit: 'GB',
+                    swap_size: 0,
+                    swapValue: 0,
+                    swapUnit: 'GB',
                     disk_size: 20,
                     selectedGpus: [],
                     attachAllGpus: false,
@@ -1492,6 +1527,9 @@ fi
                     memory: 0, // This will be computed from memoryValue and memoryUnit
                     memoryValue: 0,
                     memoryUnit: 'MB',
+                    swap_size: 0,
+                    swapValue: 0,
+                    swapUnit: 'GB',
                     disk_size: 0,
                     image: '',
                     ports: [],
@@ -1646,6 +1684,11 @@ fi
                         app_compose.pre_launch_script = vmForm.value.preLaunchScript;
                     }
 
+                    const swapBytes = Math.max(0, Math.round(vmForm.value.swap_size || 0));
+                    if (swapBytes > 0) {
+                        app_compose.swap_size = swapBytes;
+                    }
+
                     // If APP_LAUNCH_TOKEN is set, add it's sha256 hash to the app compose file
                     const launchToken = vmForm.value.encryptedEnvs.find(env => env.key === 'APP_LAUNCH_TOKEN');
                     if (launchToken) {
@@ -1753,15 +1796,39 @@ fi
                     showCreateDialog.value = true;
                     vmForm.value.encryptedEnvs = [];
                     vmForm.value.app_id = null;
+                    vmForm.value.swapValue = 0;
+                    vmForm.value.swapUnit = 'GB';
+                    vmForm.value.swap_size = 0;
                     loadGpus();
                 };
 
                 // Memory conversion functions
                 const convertMemoryToMB = (value, unit) => {
-                    if (unit === 'GB') {
-                        return value * 1024;
+                    const numericValue = Number(value);
+                    if (!Number.isFinite(numericValue) || numericValue < 0) {
+                        return 0;
                     }
-                    return value;
+                    if (unit === 'GB') {
+                        return numericValue * 1024;
+                    }
+                    return numericValue;
+                };
+
+                const BYTES_PER_MB = 1024 * 1024;
+
+                const convertSwapToBytes = (value, unit) => {
+                    const mb = convertMemoryToMB(value, unit);
+                    if (!Number.isFinite(mb) || mb <= 0) {
+                        return 0;
+                    }
+                    return Math.max(0, Math.round(mb * BYTES_PER_MB));
+                };
+
+                const bytesToMB = (bytes) => {
+                    if (!bytes) {
+                        return 0;
+                    }
+                    return bytes / BYTES_PER_MB;
                 };
 
                 const formatMemory = (memoryMB) => {
@@ -1784,6 +1851,14 @@ fi
                     upgradeDialog.value.memory = convertMemoryToMB(upgradeDialog.value.memoryValue, upgradeDialog.value.memoryUnit);
                 });
 
+                watch([() => vmForm.value.swapValue, () => vmForm.value.swapUnit], () => {
+                    vmForm.value.swap_size = convertSwapToBytes(vmForm.value.swapValue, vmForm.value.swapUnit);
+                });
+
+                watch([() => upgradeDialog.value.swapValue, () => upgradeDialog.value.swapUnit], () => {
+                    upgradeDialog.value.swap_size = convertSwapToBytes(upgradeDialog.value.swapValue, upgradeDialog.value.swapUnit);
+                });
+
                 const createVm = async () => {
                     try {
                         // Convert memory based on selected unit
@@ -1801,6 +1876,12 @@ fi
                             user_config: vmForm.value.user_config,
                             gpus: configGpu(vmForm.value),
                         };
+                        const swapBytes = Math.max(0, Math.round(form.swap_size || 0));
+                        if (swapBytes > 0) {
+                            form.swap_size = swapBytes;
+                        } else {
+                            delete form.swap_size;
+                        }
                         const _response = await rpcCall('CreateVm', form);
                         loadVMList();
                         showCreateDialog.value = false;
@@ -1976,6 +2057,10 @@ fi
                     const selectedGpuSlots = currentGpuConfig.gpus?.map(gpu => gpu.slot) || [];
                     const appCompose = JSON.parse(updatedVM.configuration?.compose_file || "{}");
 
+                    const swapBytes = Number(appCompose.swap_size || 0);
+                    const swapMb = bytesToMB(swapBytes);
+                    const swapDisplay = autoMemoryDisplay(swapMb);
+
                     upgradeDialog.value = {
                         show: true,
                         vm: updatedVM,
@@ -1988,6 +2073,9 @@ fi
                         vcpu: updatedVM.configuration?.vcpu || 1,
                         memory: updatedVM.configuration?.memory || 1024,
                         ...autoMemoryDisplay(updatedVM.configuration?.memory),
+                        swap_size: swapBytes,
+                        swapValue: Number(swapDisplay.memoryValue),
+                        swapUnit: swapDisplay.memoryUnit,
                         disk_size: updatedVM.configuration?.disk_size || 10,
                         image: updatedVM.configuration?.image || '',
                         ports: updatedVM.configuration?.ports?.map(port => ({ ...port })) || [],
@@ -2022,6 +2110,13 @@ fi
                         }
                     }
                     app_compose.pre_launch_script = upgradeDialog.value.preLaunchScript?.trim();
+
+                    const swapBytes = Math.max(0, Math.round(upgradeDialog.value.swap_size || 0));
+                    if (swapBytes > 0) {
+                        app_compose.swap_size = swapBytes;
+                    } else {
+                        delete app_compose.swap_size;
+                    }
                     return JSON.stringify(app_compose);
                 }
 
@@ -2414,6 +2509,7 @@ fi
                     composeHashPreview,
                     upgradeComposeHashPreview,
                     formatMemory,
+                    bytesToMB,
                     // Pagination and search variables
                     searchQuery,
                     currentPage,

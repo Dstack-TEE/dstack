@@ -498,6 +498,12 @@ class VmmCLI:
         if args.prelaunch_script:
             app_compose["pre_launch_script"] = open(
                 args.prelaunch_script, 'rb').read().decode('utf-8')
+        if args.swap is not None:
+            swap_bytes = max(0, int(round(args.swap)) * 1024 * 1024)
+            if swap_bytes > 0:
+                app_compose["swap_size"] = swap_bytes
+            else:
+                app_compose.pop("swap_size", None)
 
         compose_file = json.dumps(
             app_compose, indent=4, ensure_ascii=False).encode('utf-8')
@@ -537,6 +543,10 @@ class VmmCLI:
             "pin_numa": args.pin_numa,
             "stopped": args.stopped,
         }
+        if args.swap is not None:
+            swap_bytes = max(0, int(round(args.swap)) * 1024 * 1024)
+            if swap_bytes > 0:
+                params["swap_size"] = swap_bytes
 
         if args.ppcie:
             params["gpus"] = {
@@ -909,6 +919,9 @@ def main():
     compose_parser.add_argument(
         '--secure-time', action='store_true', help='Enable secure time')
     compose_parser.add_argument(
+        '--swap', type=parse_memory_size, default=None,
+        help='Swap size (e.g. 4G). Set to 0 to disable')
+    compose_parser.add_argument(
         '--output', required=True, help='Path to output app-compose.json file')
 
     # Deploy command
@@ -923,6 +936,9 @@ def main():
         '--memory', type=parse_memory_size, default=1024, help='Memory size (e.g. 1G, 100M)')
     deploy_parser.add_argument(
         '--disk', type=parse_disk_size, default=20, help='Disk size (e.g. 1G, 100M)')
+    deploy_parser.add_argument(
+        '--swap', type=parse_memory_size, default=None,
+        help='Swap size (e.g. 4G). Set to 0 to disable')
     deploy_parser.add_argument(
         '--env-file', help='File with environment variables to encrypt', default=None)
     deploy_parser.add_argument(
