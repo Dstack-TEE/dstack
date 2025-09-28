@@ -51,6 +51,7 @@ members = [
     "dstack-mr/cli",
     "verifier",
     "no_std_check",
+    "size-parser",
 ]
 resolver = "2"
 
@@ -81,6 +82,7 @@ lspci = { path = "lspci" }
 sodiumbox = { path = "sodiumbox" }
 serde-duration = { path = "serde-duration" }
 dstack-mr = { path = "dstack-mr" }
+size-parser = { path = "size-parser" }
 
 # Core dependencies
 anyhow = { version = "1.0.97", default-features = false }

@@ -2,11 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use dstack_mr::Machine;
 use dstack_types::ImageInfo;
 use fs_err as fs;
+use size_parser::parse_memory_size;
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -129,33 +130,4 @@ fn main() -> Result<()> {
     }
 
     Ok(())
-}
-
-/// Parse a memory size value that can be decimal or hexadecimal (with 0x prefix)
-fn parse_memory_size(s: &str) -> Result<u64> {
-    let s = s.trim();
-
-    if s.is_empty() {
-        return Err(anyhow!("Empty memory size"));
-    }
-    if s.starts_with("0x") || s.starts_with("0X") {
-        let hex_str = &s[2..];
-        return u64::from_str_radix(hex_str, 16)
-            .map_err(|e| anyhow!("Invalid hexadecimal value: {}", e));
-    }
-
-    if s.chars().all(|c| c.is_ascii_digit()) {
-        return Ok(s.parse::<u64>()?);
-    }
-    let len = s.len();
-    let (num_part, suffix) = match s.chars().last().unwrap() {
-        'k' | 'K' => (&s[0..len - 1], 1024u64),
-        'm' | 'M' => (&s[0..len - 1], 1024u64 * 1024),
-        'g' | 'G' => (&s[0..len - 1], 1024u64 * 1024 * 1024),
-        't' | 'T' => (&s[0..len - 1], 1024u64 * 1024 * 1024 * 1024),
-        _ => return Err(anyhow!("Unknown memory size suffix")),
-    };
-
-    let num = num_part.parse::<u64>()?;
-    Ok(num * suffix)
 }

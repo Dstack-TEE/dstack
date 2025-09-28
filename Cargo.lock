@@ -2367,6 +2367,7 @@ dependencies = [
  "fs-err",
  "hex",
  "serde_json",
+ "size-parser",
  "tracing-subscriber",
 ]
 
@@ -6817,6 +6818,16 @@ name = "siphasher"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "56199f7ddabf13fe5074ce809e7d3f42b42ae711800501b5b16ea82ad029c39d"
+
+[[package]]
+name = "size-parser"
+version = "0.5.4"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.15",
+]
 
 [[package]]
 name = "slab"
