@@ -4,6 +4,7 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
+    fmt::Display,
     ops::Deref,
     path::{Path, PathBuf},
     process::Command,
@@ -84,6 +85,15 @@ enum FsType {
     #[default]
     Zfs,
     Ext4,
+}
+
+impl Display for FsType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            FsType::Zfs => write!(f, "zfs"),
+            FsType::Ext4 => write!(f, "ext4"),
+        }
+    }
 }
 
 impl FromStr for FsType {
@@ -754,6 +764,7 @@ impl<'a> Stage0<'a> {
 
         // Parse kernel command line options
         let opts = parse_dstack_options(&self.shared).context("Failed to parse kernel cmdline")?;
+        extend_rtmr3("storage-fs", opts.storage_fs.to_string().as_bytes())?;
         info!(
             "Filesystem options: encryption={}, filesystem={:?}",
             opts.storage_encrypted, opts.storage_fs
