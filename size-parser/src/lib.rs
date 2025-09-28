@@ -257,8 +257,10 @@ impl<'de> Deserialize<'de> for MemorySize {
         }
 
         if deserializer.is_human_readable() {
-            deserializer.deserialize_str(MemorySizeVisitor)
+            // For human-readable formats like JSON, support both strings and numbers
+            deserializer.deserialize_any(MemorySizeVisitor)
         } else {
+            // For binary formats, expect u64
             deserializer.deserialize_u64(MemorySizeVisitor)
         }
     }
@@ -405,8 +407,10 @@ pub mod human_size {
         }
 
         if deserializer.is_human_readable() {
-            deserializer.deserialize_str(MemorySizeVisitor(std::marker::PhantomData))
+            // For human-readable formats like JSON, support both strings and numbers
+            deserializer.deserialize_any(MemorySizeVisitor(std::marker::PhantomData))
         } else {
+            // For binary formats, expect u64
             deserializer.deserialize_u64(MemorySizeVisitor(std::marker::PhantomData))
         }
     }
@@ -515,11 +519,15 @@ mod tests {
         let json = serde_json::to_string(&size).unwrap();
         assert_eq!(json, "\"2G\"");
 
-        // Test deserialization
+        // Test deserialization from string
         let deserialized: MemorySize = serde_json::from_str("\"1G\"").unwrap();
         assert_eq!(deserialized.bytes(), 1024 * 1024 * 1024);
 
-        // Test deserialization from various formats
+        // Test deserialization from JSON number
+        let from_number: MemorySize = serde_json::from_str("2147483648").unwrap();
+        assert_eq!(from_number.bytes(), 2147483648);
+
+        // Test deserialization from various string formats
         let from_k: MemorySize = serde_json::from_str("\"512K\"").unwrap();
         assert_eq!(from_k.bytes(), 512 * 1024);
 
@@ -591,5 +599,32 @@ mod tests {
         let result: Result<Config, _> = serde_json::from_str(json_input);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("conversion error"));
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn test_human_size_json_number_support() {
+        use serde::{Deserialize, Serialize};
+
+        #[derive(Serialize, Deserialize, PartialEq, Debug)]
+        struct Config {
+            #[serde(with = "crate::human_size")]
+            memory_size: u64,
+        }
+
+        // Test deserialization from JSON string
+        let from_string: Config = serde_json::from_str(r#"{"memory_size":"2G"}"#).unwrap();
+        assert_eq!(from_string.memory_size, 2 * 1024 * 1024 * 1024);
+
+        // Test deserialization from JSON number
+        let from_number: Config = serde_json::from_str(r#"{"memory_size":2147483648}"#).unwrap();
+        assert_eq!(from_number.memory_size, 2147483648);
+
+        // Test that both produce the same result when the number matches the parsed string
+        let gb_2 = 2u64 * 1024 * 1024 * 1024;
+        let from_string_2g: Config = serde_json::from_str(r#"{"memory_size":"2G"}"#).unwrap();
+        let from_number_2g: Config =
+            serde_json::from_str(&format!(r#"{{"memory_size":{}}}"#, gb_2)).unwrap();
+        assert_eq!(from_string_2g.memory_size, from_number_2g.memory_size);
     }
 }
