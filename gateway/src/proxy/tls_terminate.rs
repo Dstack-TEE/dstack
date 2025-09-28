@@ -18,17 +18,18 @@ use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::version::{TLS12, TLS13};
 use serde::Serialize;
-use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, ReadBuf};
 use tokio::net::TcpStream;
 use tokio::time::timeout;
 use tokio_rustls::{rustls, server::TlsStream, TlsAcceptor};
-use tracing::{debug, info};
+use tracing::debug;
 
 use crate::config::{CryptoProvider, ProxyConfig, TlsVersion};
 use crate::main_service::Proxy;
 
 use super::io_bridge::bridge;
-use super::tls_passthough::connect_multiple_hosts;
+use super::tls_passthough::{connect_multiple_hosts, prepare_buffer_with_proxy_protocol};
+use super::ClientContext;
 
 #[pin_project::pin_project]
 struct IgnoreUnexpectedEofStream<S> {
@@ -151,25 +152,6 @@ fn empty_response(status: StatusCode) -> Result<Response<String>> {
 
 impl Proxy {
     /// Reload the TLS acceptor with fresh certificates
-    pub fn reload_certificates(&self) -> Result<()> {
-        info!("Reloading TLS certificates");
-        // Replace the acceptor with the new one
-        if let Ok(mut acceptor) = self.acceptor.write() {
-            *acceptor = create_acceptor(&self.config.proxy, false)?;
-            info!("TLS certificates successfully reloaded");
-        } else {
-            bail!("Failed to acquire write lock for TLS acceptor");
-        }
-
-        if let Ok(mut acceptor) = self.h2_acceptor.write() {
-            *acceptor = create_acceptor(&self.config.proxy, true)?;
-            info!("TLS certificates successfully reloaded");
-        } else {
-            bail!("Failed to acquire write lock for TLS acceptor");
-        }
-
-        Ok(())
-    }
 
     pub(crate) async fn handle_this_node(
         &self,
@@ -296,6 +278,9 @@ impl Proxy {
         Ok(tls_stream)
     }
 
+    /// Legacy proxy method without client context
+    /// Kept for backward compatibility, new code should use `proxy_with_context`
+    #[allow(dead_code)]
     pub(crate) async fn proxy(
         &self,
         inbound: TcpStream,
@@ -323,6 +308,57 @@ impl Proxy {
         .await
         .map_err(|_| anyhow!("connecting timeout"))?
         .context("failed to connect to app")?;
+        bridge(
+            IgnoreUnexpectedEofStream::new(tls_stream),
+            outbound,
+            &self.config.proxy,
+        )
+        .await
+        .context("bridge error")?;
+        Ok(())
+    }
+
+    pub(crate) async fn proxy_with_context(
+        &self,
+        inbound: TcpStream,
+        buffer: Vec<u8>,
+        app_id: &str,
+        port: u16,
+        h2: bool,
+        client_context: ClientContext,
+    ) -> Result<()> {
+        if app_id == "health" {
+            return self.handle_health_check(inbound, buffer, port, h2).await;
+        }
+        if app_id == "gateway" {
+            return self.handle_this_node(inbound, buffer, port, h2).await;
+        }
+
+        let addresses = self
+            .lock()
+            .select_top_n_hosts(app_id)
+            .with_context(|| format!("app {app_id} not found"))?;
+        debug!("selected top n hosts: {addresses:?}");
+
+        let tls_stream = self.tls_accept(inbound, buffer, h2).await?;
+        let (mut outbound, _counter) = timeout(
+            self.config.proxy.timeouts.connect,
+            connect_multiple_hosts(addresses, port),
+        )
+        .await
+        .map_err(|_| anyhow!("connecting timeout"))?
+        .context("failed to connect to app")?;
+
+        // For TLS termination, we need to send PROXY Protocol header to backend
+        // before starting the TLS handshake if configured to do so
+        let pp_buffer = prepare_buffer_with_proxy_protocol(&[], &client_context, app_id, self);
+        if !pp_buffer.is_empty() {
+            outbound
+                .write_all(&pp_buffer)
+                .await
+                .context("failed to write PROXY Protocol header to backend")?;
+        }
+
         bridge(
             IgnoreUnexpectedEofStream::new(tls_stream),
             outbound,

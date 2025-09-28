@@ -103,6 +103,26 @@ impl ProxyInner {
         self.state.lock().expect("Failed to lock AppState")
     }
 
+    pub fn reload_certificates(&self) -> Result<()> {
+        info!("Reloading TLS certificates");
+        // Replace the acceptor with the new one
+        if let Ok(mut acceptor) = self.acceptor.write() {
+            *acceptor = create_acceptor(&self.config.proxy, false)?;
+            info!("TLS certificates successfully reloaded");
+        } else {
+            bail!("Failed to acquire write lock for TLS acceptor");
+        }
+
+        if let Ok(mut acceptor) = self.h2_acceptor.write() {
+            *acceptor = create_acceptor(&self.config.proxy, true)?;
+            info!("TLS certificates successfully reloaded");
+        } else {
+            bail!("Failed to acquire write lock for TLS acceptor");
+        }
+
+        Ok(())
+    }
+
     pub async fn new(config: Config, my_app_id: Option<Vec<u8>>) -> Result<Self> {
         let config = Arc::new(config);
         let mut state = fs::metadata(&config.state_path)

@@ -68,6 +68,59 @@ pub enum TlsVersion {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+pub struct ProxyProtocolConfig {
+    pub enabled: bool,
+    pub trust_strategy: ProxyProtocolTrustStrategy,
+    pub backend_default: BackendProxyMode,
+    pub backend_overrides: Option<std::collections::HashMap<String, BackendProxyConfig>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ProxyProtocolTrustStrategy {
+    #[serde(rename = "type")]
+    pub strategy_type: TrustStrategyType,
+    pub addresses: Option<Vec<String>>,
+    pub ranges: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TrustStrategyType {
+    None,
+    All,
+    Ips,
+    Cidrs,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct BackendProxyMode {
+    pub mode: ForwardingMode,
+    pub version: Option<ProxyProtocolVersionConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct BackendProxyConfig {
+    pub mode: ForwardingMode,
+    pub version: Option<ProxyProtocolVersionConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ForwardingMode {
+    Never,
+    Passthrough,
+    Always,
+    Conditional,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ProxyProtocolVersionConfig {
+    V1,
+    V2,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct ProxyConfig {
     pub cert_chain: String,
     pub cert_key: String,
@@ -85,6 +138,7 @@ pub struct ProxyConfig {
     pub workers: usize,
     pub app_address_ns_prefix: String,
     pub app_address_ns_compat: bool,
+    pub proxy_protocol: Option<ProxyProtocolConfig>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

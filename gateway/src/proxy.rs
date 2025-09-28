@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::{
-    net::Ipv4Addr,
+    net::{Ipv4Addr, SocketAddr},
     sync::{
         atomic::{AtomicU64, AtomicUsize, Ordering},
         Arc,
@@ -11,6 +11,7 @@ use std::{
 };
 
 use anyhow::{bail, Context, Result};
+use proxy_protocol::{parse_proxy_protocol, ProxyProtocolHeader};
 use sni::extract_sni;
 pub(crate) use tls_terminate::create_acceptor;
 use tokio::{
@@ -19,6 +20,7 @@ use tokio::{
     time::timeout,
 };
 use tracing::{debug, error, info, info_span, Instrument};
+use trust::TrustStrategy;
 
 use crate::{config::ProxyConfig, main_service::Proxy, models::EnteredCounter};
 
@@ -30,16 +32,121 @@ pub(crate) struct AddressInfo {
 
 pub(crate) type AddressGroup = smallvec::SmallVec<[AddressInfo; 4]>;
 
+#[derive(Debug, Clone)]
+pub struct ClientContext {
+    pub direct_peer: SocketAddr,
+    pub real_client: SocketAddr,
+    pub proxy_header: Option<ProxyProtocolHeader>,
+}
+
 mod io_bridge;
+mod proxy_protocol;
 mod sni;
 mod tls_passthough;
 mod tls_terminate;
+mod trust;
 
-async fn take_sni(stream: &mut TcpStream) -> Result<(Option<String>, Vec<u8>)> {
-    let mut buffer = vec![0u8; 4096];
+async fn parse_proxy_and_sni(
+    stream: &mut TcpStream,
+    trust_strategy: Option<&TrustStrategy>,
+    direct_peer: SocketAddr,
+) -> Result<(ClientContext, Option<String>, Vec<u8>)> {
+    let mut buffer = vec![0u8; 8192]; // Increased size for potential PROXY + TLS headers
     let mut data_len = 0;
+    let mut proxy_header_len = 0;
+    let mut proxy_header: Option<ProxyProtocolHeader> = None;
+
+    // First, try to read and parse PROXY Protocol header if enabled
+    if trust_strategy.is_some() {
+        // Read initial data that might contain PROXY Protocol
+        let n = stream
+            .read(&mut buffer[data_len..])
+            .await
+            .context("failed to read from incoming tcp stream")?;
+        if n == 0 {
+            bail!("connection closed before data");
+        }
+        data_len += n;
+
+        // Try to parse PROXY Protocol
+        match parse_proxy_protocol(&buffer[..data_len]) {
+            Ok(Some(header)) => {
+                proxy_header_len = header.raw_header.len();
+                proxy_header = Some(header);
+                debug!("parsed PROXY Protocol header");
+            }
+            Ok(None) => {
+                debug!("no PROXY Protocol header found");
+            }
+            Err(e) => {
+                // If parsing fails, it might be incomplete, try to read more
+                if data_len < 108 {
+                    // Max v1 header size
+                    let n = stream
+                        .read(&mut buffer[data_len..])
+                        .await
+                        .context("failed to read more data")?;
+                    data_len += n;
+
+                    // Try parsing again
+                    match parse_proxy_protocol(&buffer[..data_len]) {
+                        Ok(Some(header)) => {
+                            proxy_header_len = header.raw_header.len();
+                            proxy_header = Some(header);
+                            debug!("parsed PROXY Protocol header on second attempt");
+                        }
+                        Ok(None) => {
+                            debug!("no PROXY Protocol header after second read");
+                        }
+                        Err(_) => {
+                            debug!("failed to parse PROXY Protocol: {}", e);
+                        }
+                    }
+                } else {
+                    debug!("failed to parse PROXY Protocol: {}", e);
+                }
+            }
+        }
+    }
+
+    // Determine real client based on PROXY Protocol and trust
+    let real_client = if let Some(header) = &proxy_header {
+        if let Some(strategy) = trust_strategy {
+            if strategy.is_trusted(&direct_peer.ip()) {
+                info!("trusted PROXY Protocol from {}", direct_peer);
+                header.source
+            } else {
+                info!("untrusted PROXY Protocol from {}, ignoring", direct_peer);
+                direct_peer
+            }
+        } else {
+            direct_peer
+        }
+    } else {
+        direct_peer
+    };
+
+    let client_context = ClientContext {
+        direct_peer,
+        real_client,
+        proxy_header: proxy_header.clone(),
+    };
+
+    // Now continue reading to extract SNI from the remaining data
+    let tls_start = proxy_header_len;
+
+    // Check if we have SNI in the already-read data
+    if let Some(sni) = extract_sni(&buffer[tls_start..data_len]) {
+        let sni = String::from_utf8(sni.to_vec()).context("sni: invalid utf-8")?;
+        debug!("got sni: {sni}");
+
+        // Keep all data including PROXY header for potential forwarding
+        buffer.truncate(data_len);
+        return Ok((client_context, Some(sni), buffer));
+    }
+
+    // Continue reading to get SNI
     loop {
-        // read data from stream
         let n = stream
             .read(&mut buffer[data_len..])
             .await
@@ -49,15 +156,16 @@ async fn take_sni(stream: &mut TcpStream) -> Result<(Option<String>, Vec<u8>)> {
         }
         data_len += n;
 
-        if let Some(sni) = extract_sni(&buffer[..data_len]) {
+        if let Some(sni) = extract_sni(&buffer[tls_start..data_len]) {
             let sni = String::from_utf8(sni.to_vec()).context("sni: invalid utf-8")?;
             debug!("got sni: {sni}");
             buffer.truncate(data_len);
-            return Ok((Some(sni), buffer));
+            return Ok((client_context, Some(sni), buffer));
         }
     }
+
     buffer.truncate(data_len);
-    Ok((None, buffer))
+    Ok((client_context, None, buffer))
 }
 
 fn is_subdomain(sni: &str, base_domain: &str) -> bool {
@@ -135,27 +243,65 @@ async fn handle_connection(
     mut inbound: TcpStream,
     state: Proxy,
     dotted_base_domain: &str,
+    direct_peer: SocketAddr,
 ) -> Result<()> {
     let timeouts = &state.config.proxy.timeouts;
-    let (sni, buffer) = timeout(timeouts.handshake, take_sni(&mut inbound))
-        .await
-        .context("take sni timeout")?
-        .context("failed to take sni")?;
+
+    // Prepare trust strategy if PROXY Protocol is enabled
+    let trust_strategy = if let Some(pp_config) = &state.config.proxy.proxy_protocol {
+        if pp_config.enabled {
+            Some(TrustStrategy::from_config(&pp_config.trust_strategy)?)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    let (client_context, sni, buffer) = timeout(
+        timeouts.handshake,
+        parse_proxy_and_sni(&mut inbound, trust_strategy.as_ref(), direct_peer),
+    )
+    .await
+    .context("parse proxy and sni timeout")?
+    .context("failed to parse proxy and sni")?;
+
+    info!(
+        "connection from {} (real: {})",
+        client_context.direct_peer, client_context.real_client
+    );
+
     let Some(sni) = sni else {
         bail!("no sni found");
     };
+
     if is_subdomain(&sni, dotted_base_domain) {
         let dst = parse_destination(&sni, dotted_base_domain)?;
         debug!("dst: {dst:?}");
         if dst.is_tls {
-            tls_passthough::proxy_to_app(state, inbound, buffer, &dst.app_id, dst.port).await
+            tls_passthough::proxy_to_app(
+                state,
+                inbound,
+                buffer,
+                &dst.app_id,
+                dst.port,
+                client_context,
+            )
+            .await
         } else {
             state
-                .proxy(inbound, buffer, &dst.app_id, dst.port, dst.is_h2)
+                .proxy_with_context(
+                    inbound,
+                    buffer,
+                    &dst.app_id,
+                    dst.port,
+                    dst.is_h2,
+                    client_context,
+                )
                 .await
         }
     } else {
-        tls_passthough::proxy_with_sni(state, inbound, buffer, &sni).await
+        tls_passthough::proxy_with_sni(state, inbound, buffer, &sni, client_context).await
     }
 }
 
@@ -202,7 +348,7 @@ pub async fn proxy_main(config: &ProxyConfig, proxy: Proxy) -> Result<()> {
                         let timeouts = &proxy.config.proxy.timeouts;
                         let result = timeout(
                             timeouts.total,
-                            handle_connection(inbound, proxy, &dotted_base_domain),
+                            handle_connection(inbound, proxy, &dotted_base_domain, from),
                         )
                         .await;
                         match result {

@@ -8,11 +8,16 @@ use tokio::{io::AsyncWriteExt, net::TcpStream, task::JoinSet, time::timeout};
 use tracing::{debug, info};
 
 use crate::{
+    config::{ForwardingMode, ProxyProtocolVersionConfig},
     main_service::Proxy,
     models::{Counting, EnteredCounter},
 };
 
-use super::{io_bridge::bridge, AddressGroup};
+use super::{
+    io_bridge::bridge,
+    proxy_protocol::{build_v1_header, build_v2_header, ProxyProtocolVersion},
+    AddressGroup, ClientContext,
+};
 
 #[derive(Debug)]
 struct AppAddress {
@@ -76,6 +81,7 @@ pub(crate) async fn proxy_with_sni(
     inbound: TcpStream,
     buffer: Vec<u8>,
     sni: &str,
+    client_context: ClientContext,
 ) -> Result<()> {
     let ns_prefix = &state.config.proxy.app_address_ns_prefix;
     let compat = state.config.proxy.app_address_ns_compat;
@@ -83,7 +89,7 @@ pub(crate) async fn proxy_with_sni(
         .await
         .context("failed to resolve app address")?;
     debug!("target address is {}:{}", addr.app_id, addr.port);
-    proxy_to_app(state, inbound, buffer, &addr.app_id, addr.port).await
+    proxy_to_app(state, inbound, buffer, &addr.app_id, addr.port, client_context).await
 }
 
 /// connect to multiple hosts simultaneously and return the first successful connection
@@ -117,12 +123,100 @@ pub(crate) async fn connect_multiple_hosts(
     Ok((connection, counter))
 }
 
+pub(crate) fn prepare_buffer_with_proxy_protocol(
+    buffer: &[u8],
+    client_context: &ClientContext,
+    app_id: &str,
+    state: &Proxy,
+) -> Vec<u8> {
+    // Determine backend forwarding mode
+    let pp_config = match &state.config.proxy.proxy_protocol {
+        Some(config) if config.enabled => config,
+        _ => return buffer.to_vec(), // PROXY Protocol not enabled
+    };
+
+    let backend_config = pp_config
+        .backend_overrides
+        .as_ref()
+        .and_then(|overrides| overrides.get(app_id))
+        .map(|c| (c.mode.clone(), c.version.clone()))
+        .unwrap_or_else(|| {
+            (
+                pp_config.backend_default.mode.clone(),
+                pp_config.backend_default.version.clone(),
+            )
+        });
+
+    let (mode, version) = backend_config;
+
+    match mode {
+        ForwardingMode::Never => {
+            // Strip PROXY Protocol header if present
+            if let Some(header) = &client_context.proxy_header {
+                let header_len = header.raw_header.len();
+                if buffer.len() > header_len && buffer.starts_with(&header.raw_header) {
+                    buffer[header_len..].to_vec()
+                } else {
+                    buffer.to_vec()
+                }
+            } else {
+                buffer.to_vec()
+            }
+        }
+        ForwardingMode::Passthrough => {
+            // Forward as-is
+            buffer.to_vec()
+        }
+        ForwardingMode::Always => {
+            // Always add PROXY Protocol header
+            let pp_version = match version {
+                Some(ProxyProtocolVersionConfig::V1) => ProxyProtocolVersion::V1,
+                Some(ProxyProtocolVersionConfig::V2) | None => ProxyProtocolVersion::V2,
+            };
+
+            let header = match pp_version {
+                ProxyProtocolVersion::V1 => {
+                    build_v1_header(&client_context.real_client, &client_context.direct_peer)
+                }
+                ProxyProtocolVersion::V2 => {
+                    build_v2_header(&client_context.real_client, &client_context.direct_peer)
+                }
+            };
+
+            // Combine header with data (strip old PP header if present)
+            let data_start = if let Some(old_header) = &client_context.proxy_header {
+                let header_len = old_header.raw_header.len();
+                if buffer.len() > header_len && buffer.starts_with(&old_header.raw_header) {
+                    header_len
+                } else {
+                    0
+                }
+            } else {
+                0
+            };
+
+            let mut result = header;
+            result.extend_from_slice(&buffer[data_start..]);
+            result
+        }
+        ForwardingMode::Conditional => {
+            // Forward if received, otherwise don't add
+            if client_context.proxy_header.is_some() {
+                buffer.to_vec() // Keep as-is (passthrough)
+            } else {
+                buffer.to_vec() // No PP header to forward
+            }
+        }
+    }
+}
+
 pub(crate) async fn proxy_to_app(
     state: Proxy,
     inbound: TcpStream,
     buffer: Vec<u8>,
     app_id: &str,
     port: u16,
+    client_context: ClientContext,
 ) -> Result<()> {
     let addresses = state.lock().select_top_n_hosts(app_id)?;
     let (mut outbound, _counter) = timeout(
@@ -132,8 +226,12 @@ pub(crate) async fn proxy_to_app(
     .await
     .with_context(|| format!("connecting timeout to app {app_id}: {addresses:?}:{port}"))?
     .with_context(|| format!("failed to connect to app {app_id}: {addresses:?}:{port}"))?;
+
+    // Prepare buffer with appropriate PROXY Protocol handling
+    let buffer_to_send = prepare_buffer_with_proxy_protocol(&buffer, &client_context, app_id, &state);
+
     outbound
-        .write_all(&buffer)
+        .write_all(&buffer_to_send)
         .await
         .context("failed to write to app")?;
     bridge(inbound, outbound, &state.config.proxy)
