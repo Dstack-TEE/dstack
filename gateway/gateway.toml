@@ -68,6 +68,24 @@ app_address_ns_compat = true
 workers = 32
 external_port = 443
 
+# PROXY Protocol configuration
+[core.proxy.proxy_protocol]
+enabled = true
+
+[core.proxy.proxy_protocol.trust_strategy]
+type = "all"  # Trust all sources by default (can be restricted to "ips", "cidrs", or "none")
+# addresses = ["10.0.0.1", "10.0.0.2"]  # Optional: specific IPs when type = "ips"
+# ranges = ["10.0.0.0/8", "172.16.0.0/12"]  # Optional: CIDR ranges when type = "cidrs"
+
+[core.proxy.proxy_protocol.backend_default]
+mode = "passthrough"  # Default: forward if received, don't add if not received
+# version = "v2"  # Optional: specify v1 or v2, defaults to v2 when mode = "always"
+
+# Optional: Override settings for specific backends
+# [core.proxy.proxy_protocol.backend_overrides]
+# "app1" = { mode = "never" }  # Never send PROXY Protocol to this app
+# "app2" = { mode = "always", version = "v1" }  # Always send v1 PROXY Protocol
+
 [core.proxy.timeouts]
 # Timeout for establishing a connection to the target app.
 connect = "5s"

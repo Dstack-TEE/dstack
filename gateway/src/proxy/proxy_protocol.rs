@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2024-2025 Phala Network <dstack@phala.network>
+//
+// SPDX-License-Identifier: Apache-2.0
+//
 // PROXY Protocol implementation
 // Specification references:
 // - v1: https://www.haproxy.org/download/1.8/doc/proxy-protocol.txt
@@ -36,11 +40,7 @@ impl ProxyProtocolHeader {
     /// Creates a new PROXY Protocol header with the given parameters
     /// This constructor is provided for testing and future extensibility
     #[allow(dead_code)]
-    pub fn new(
-        version: ProxyProtocolVersion,
-        source: SocketAddr,
-        destination: SocketAddr,
-    ) -> Self {
+    pub fn new(version: ProxyProtocolVersion, source: SocketAddr, destination: SocketAddr) -> Self {
         let raw_header = match version {
             ProxyProtocolVersion::V1 => build_v1_header(&source, &destination),
             ProxyProtocolVersion::V2 => build_v2_header(&source, &destination),
@@ -60,9 +60,7 @@ pub fn parse_proxy_protocol(buffer: &[u8]) -> io::Result<Option<ProxyProtocolHea
     }
 
     // Try V2 first (binary protocol with fixed signature)
-    if buffer.len() >= PROXY_V2_SIGNATURE.len()
-        && buffer.starts_with(PROXY_V2_SIGNATURE)
-    {
+    if buffer.len() >= PROXY_V2_SIGNATURE.len() && buffer.starts_with(PROXY_V2_SIGNATURE) {
         return parse_v2(buffer);
     }
 
@@ -114,14 +112,15 @@ fn parse_v1(buffer: &[u8]) -> io::Result<Option<ProxyProtocolHeader>> {
 
             let src_ip = IpAddr::from_str(parts[2])
                 .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Invalid source IP"))?;
-            let dst_ip = IpAddr::from_str(parts[3])
-                .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Invalid destination IP"))?;
+            let dst_ip = IpAddr::from_str(parts[3]).map_err(|_| {
+                io::Error::new(io::ErrorKind::InvalidData, "Invalid destination IP")
+            })?;
             let src_port = parts[4]
                 .parse::<u16>()
                 .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Invalid source port"))?;
-            let dst_port = parts[5]
-                .parse::<u16>()
-                .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Invalid destination port"))?;
+            let dst_port = parts[5].parse::<u16>().map_err(|_| {
+                io::Error::new(io::ErrorKind::InvalidData, "Invalid destination port")
+            })?;
 
             let raw_header = buffer[..header_end + 2].to_vec();
             Ok(Some(ProxyProtocolHeader {
@@ -293,9 +292,9 @@ pub fn build_v2_header(source: &SocketAddr, destination: &SocketAddr) -> Vec<u8>
 
     // Family and protocol
     let (family, addr_len) = match (source.is_ipv4(), destination.is_ipv4()) {
-        (true, true) => (0x11, 12), // AF_INET, STREAM
+        (true, true) => (0x11, 12),   // AF_INET, STREAM
         (false, false) => (0x21, 36), // AF_INET6, STREAM
-        _ => (0x00, 0), // AF_UNSPEC
+        _ => (0x00, 0),               // AF_UNSPEC
     };
     header.push(family);
 
@@ -332,7 +331,7 @@ pub fn build_v2_header(source: &SocketAddr, destination: &SocketAddr) -> Vec<u8>
 #[allow(dead_code)]
 pub fn header_max_len(version: ProxyProtocolVersion) -> usize {
     match version {
-        ProxyProtocolVersion::V1 => 108, // Max V1 header length per spec
+        ProxyProtocolVersion::V1 => 108,     // Max V1 header length per spec
         ProxyProtocolVersion::V2 => 16 + 36, // Fixed header + max IPv6 addresses
     }
 }

@@ -89,7 +89,15 @@ pub(crate) async fn proxy_with_sni(
         .await
         .context("failed to resolve app address")?;
     debug!("target address is {}:{}", addr.app_id, addr.port);
-    proxy_to_app(state, inbound, buffer, &addr.app_id, addr.port, client_context).await
+    proxy_to_app(
+        state,
+        inbound,
+        buffer,
+        &addr.app_id,
+        addr.port,
+        client_context,
+    )
+    .await
 }
 
 /// connect to multiple hosts simultaneously and return the first successful connection
@@ -228,7 +236,8 @@ pub(crate) async fn proxy_to_app(
     .with_context(|| format!("failed to connect to app {app_id}: {addresses:?}:{port}"))?;
 
     // Prepare buffer with appropriate PROXY Protocol handling
-    let buffer_to_send = prepare_buffer_with_proxy_protocol(&buffer, &client_context, app_id, &state);
+    let buffer_to_send =
+        prepare_buffer_with_proxy_protocol(&buffer, &client_context, app_id, &state);
 
     outbound
         .write_all(&buffer_to_send)

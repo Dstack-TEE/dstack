@@ -69,18 +69,39 @@ pub enum TlsVersion {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ProxyProtocolConfig {
+    #[serde(default = "default_enabled")]
     pub enabled: bool,
+    #[serde(default)]
     pub trust_strategy: ProxyProtocolTrustStrategy,
+    #[serde(default)]
     pub backend_default: BackendProxyMode,
     pub backend_overrides: Option<std::collections::HashMap<String, BackendProxyConfig>>,
 }
 
+fn default_enabled() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct ProxyProtocolTrustStrategy {
-    #[serde(rename = "type")]
+    #[serde(rename = "type", default = "default_trust_all")]
     pub strategy_type: TrustStrategyType,
     pub addresses: Option<Vec<String>>,
     pub ranges: Option<Vec<String>>,
+}
+
+fn default_trust_all() -> TrustStrategyType {
+    TrustStrategyType::All
+}
+
+impl Default for ProxyProtocolTrustStrategy {
+    fn default() -> Self {
+        Self {
+            strategy_type: TrustStrategyType::All,
+            addresses: None,
+            ranges: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -94,8 +115,31 @@ pub enum TrustStrategyType {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct BackendProxyMode {
+    #[serde(default = "default_passthrough_mode")]
     pub mode: ForwardingMode,
     pub version: Option<ProxyProtocolVersionConfig>,
+}
+
+fn default_passthrough_mode() -> ForwardingMode {
+    ForwardingMode::Passthrough
+}
+
+impl Default for BackendProxyMode {
+    fn default() -> Self {
+        Self {
+            mode: ForwardingMode::Passthrough,
+            version: None,
+        }
+    }
+}
+
+fn default_proxy_protocol() -> Option<ProxyProtocolConfig> {
+    Some(ProxyProtocolConfig {
+        enabled: true,
+        trust_strategy: ProxyProtocolTrustStrategy::default(),
+        backend_default: BackendProxyMode::default(),
+        backend_overrides: None,
+    })
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -138,6 +182,7 @@ pub struct ProxyConfig {
     pub workers: usize,
     pub app_address_ns_prefix: String,
     pub app_address_ns_compat: bool,
+    #[serde(default = "default_proxy_protocol")]
     pub proxy_protocol: Option<ProxyProtocolConfig>,
 }
 
@@ -324,6 +369,50 @@ pub fn setup_wireguard(config: &WgConfig) -> Result<()> {
 mod tests {
     use super::*;
     use std::str::FromStr;
+
+    #[test]
+    fn test_proxy_protocol_defaults() {
+        // Test that default values work correctly
+        let default_config = default_proxy_protocol().unwrap();
+        assert!(default_config.enabled);
+        assert!(matches!(
+            default_config.trust_strategy.strategy_type,
+            TrustStrategyType::All
+        ));
+        assert!(matches!(
+            default_config.backend_default.mode,
+            ForwardingMode::Passthrough
+        ));
+        assert!(default_config.backend_overrides.is_none());
+    }
+
+    #[test]
+    fn test_proxy_protocol_struct_defaults() {
+        // Test that Default trait implementations work correctly
+        let trust_strategy = ProxyProtocolTrustStrategy::default();
+        assert!(matches!(
+            trust_strategy.strategy_type,
+            TrustStrategyType::All
+        ));
+        assert!(trust_strategy.addresses.is_none());
+        assert!(trust_strategy.ranges.is_none());
+
+        let backend_mode = BackendProxyMode::default();
+        assert!(matches!(backend_mode.mode, ForwardingMode::Passthrough));
+        assert!(backend_mode.version.is_none());
+
+        // Test that default_proxy_protocol creates the expected config
+        let default_config = default_proxy_protocol().unwrap();
+        assert!(default_config.enabled);
+        assert!(matches!(
+            default_config.trust_strategy.strategy_type,
+            TrustStrategyType::All
+        ));
+        assert!(matches!(
+            default_config.backend_default.mode,
+            ForwardingMode::Passthrough
+        ));
+    }
 
     #[test]
     fn test_validate() {

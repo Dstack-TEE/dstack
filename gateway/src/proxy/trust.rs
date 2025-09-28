@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2024-2025 Phala Network <dstack@phala.network>
+//
+// SPDX-License-Identifier: Apache-2.0
+
 use ipnet::IpNet;
 use std::net::IpAddr;
 use std::str::FromStr;
@@ -30,7 +34,9 @@ impl TrustStrategy {
                 let ips = config
                     .addresses
                     .as_ref()
-                    .ok_or_else(|| anyhow::anyhow!("IP addresses required for 'ips' trust strategy"))?
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("IP addresses required for 'ips' trust strategy")
+                    })?
                     .iter()
                     .map(|s| IpAddr::from_str(s))
                     .collect::<Result<Vec<_>, _>>()?;
@@ -40,7 +46,9 @@ impl TrustStrategy {
                 let cidrs = config
                     .ranges
                     .as_ref()
-                    .ok_or_else(|| anyhow::anyhow!("CIDR ranges required for 'cidrs' trust strategy"))?
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("CIDR ranges required for 'cidrs' trust strategy")
+                    })?
                     .iter()
                     .map(|s| IpNet::from_str(s))
                     .collect::<Result<Vec<_>, _>>()?;
