@@ -192,6 +192,11 @@ Transaction hash: 0x46cf1959abf309fcde86bcab2518dcf28dd9eec70c74214f0562e7bf847c
 Deployed with 1 initial device and 0 initial compose hash
 ```
 
+Register the app ID to the kms as the gateway app ID:
+```bash
+npx hardhat kms:set-gateway --network phala 0x32467b43BFa67273FC7dDda0999Ee9A12F2AaA08
+```
+
 Now go to the `gateway/dstack-app/` directory and run the following command:
 ```bash
 cd ../../gateway/dstack-app/
