@@ -6,6 +6,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     ops::Deref,
     path::{Path, PathBuf},
+    time::Duration,
 };
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -621,6 +622,55 @@ impl<'a> Stage0<'a> {
         }
     }
 
+    async fn setup_swap(&self, swap_size: u64) -> Result<()> {
+        let swapvol_path = "dstack/data/swapvol";
+        let swapvol_device_path = format!("/dev/zvol/{swapvol_path}");
+
+        if Path::new(&swapvol_device_path).exists() {
+            cmd! {
+                zfs set volmode=none $swapvol_path;
+                zfs destroy $swapvol_path;
+            }
+            .context("Failed to destroy swap zvol")?;
+        }
+
+        if swap_size == 0 {
+            return Ok(());
+        }
+
+        info!("Creating swap zvol at {swapvol_device_path} (size {swap_size} bytes)");
+
+        let size_str = swap_size.to_string();
+        cmd! {
+            zfs create -V $size_str
+                -o compression=zle
+                -o logbias=throughput
+                -o sync=always
+                -o primarycache=metadata
+                -o com.sun:auto-snapshot=false
+                $swapvol_path
+        }
+        .with_context(|| format!("Failed to create swap zvol {swapvol_path}"))?;
+
+        let mut count = 0u32;
+        while !Path::new(&swapvol_device_path).exists() && count < 10 {
+            std::thread::sleep(Duration::from_secs(1));
+            count += 1;
+        }
+        if !Path::new(&swapvol_device_path).exists() {
+            bail!("Device {swapvol_device_path} did not appear after 10 seconds");
+        }
+
+        cmd! {
+            mkswap $swapvol_device_path;
+            swapon $swapvol_device_path;
+            swapon --show;
+        }
+        .context("Failed to enable swap on zvol")?;
+
+        Ok(())
+    }
+
     async fn mount_data_disk(&self, initialized: bool, disk_crypt_key: &str) -> Result<()> {
         let name = "dstack_data_disk";
         let fs_dev = "/dev/mapper/".to_string() + name;
@@ -805,6 +855,9 @@ impl<'a> Stage0<'a> {
         self.vmm.notify_q("boot.progress", "unsealing env").await;
         self.mount_data_disk(is_initialized, &hex::encode(&app_keys.disk_crypt_key))
             .await?;
+
+        self.setup_swap(self.shared.app_compose.swap_size).await?;
+
         self.vmm
             .notify_q(
                 "instance.info",

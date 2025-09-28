@@ -2414,6 +2414,7 @@ dependencies = [
  "serde",
  "serde-human-bytes",
  "sha3",
+ "size-parser",
 ]
 
 [[package]]
