@@ -60,7 +60,7 @@ PUBLIC_IP=$(curl -s4 ifconfig.me)
 # GATEWAY_APP_ID=31884c4b7775affe4c99735f6c2aff7d7bc6cfcd
 
 # Whether to use ACME staging (yes/no)
-ACME_STAGING=yes
+ACME_STAGING=no
 
 # Subnet index. 0~15
 SUBNET_INDEX=0
@@ -178,7 +178,7 @@ EOF
     --no-instance-id \
     --secure-time \
     --prelaunch-script .prelaunch.sh \
-    --output .app-compose.json
+    --output .app-compose.json > /dev/null
 fi
 
 # Set launch_token_hash in app-compose.json
@@ -187,6 +187,9 @@ jq \
   --arg token_hash "$EXPECTED_TOKEN_HASH" \
   '.launch_token_hash = $token_hash' \
   .app-compose.json.tmp > .app-compose.json
+
+COMPOSE_HASH=$(sha256sum .app-compose.json | cut -d' ' -f1)
+echo "Compose hash: 0x$COMPOSE_HASH"
 
 # Remove the temporary file as it is no longer needed
 rm "$COMPOSE_TMP"
