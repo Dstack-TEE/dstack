@@ -3,37 +3,23 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::{Context, Result};
-use std::fmt::Debug;
 use tokio::{io::AsyncWriteExt, net::TcpStream, task::JoinSet, time::timeout};
 use tracing::{debug, info};
 
 use crate::{
     main_service::Proxy,
     models::{Counting, EnteredCounter},
+    proxy::{parse_app_addr, DstInfo},
 };
 
 use super::{io_bridge::bridge, AddressGroup};
 
-#[derive(Debug)]
-struct AppAddress {
-    app_id: String,
-    port: u16,
-}
-
-impl AppAddress {
-    fn parse(data: &[u8]) -> Result<Self> {
-        // format: "3327603e03f5bd1f830812ca4a789277fc31f577:555"
-        let data = String::from_utf8(data.to_vec()).context("invalid app address")?;
-        let (app_id, port) = data.split_once(':').context("invalid app address")?;
-        Ok(Self {
-            app_id: app_id.to_string(),
-            port: port.parse().context("invalid port")?,
-        })
-    }
+fn parse_txt_addr(addr: &[u8]) -> Result<DstInfo> {
+    parse_app_addr(core::str::from_utf8(addr).context("invalid app address")?)
 }
 
 /// resolve app address by sni
-async fn resolve_app_address(prefix: &str, sni: &str, compat: bool) -> Result<AppAddress> {
+async fn resolve_app_address(prefix: &str, sni: &str, compat: bool) -> Result<DstInfo> {
     let txt_domain = format!("{prefix}.{sni}");
     let resolver = hickory_resolver::AsyncResolver::tokio_from_system_conf()
         .context("failed to create dns resolver")?;
@@ -54,7 +40,7 @@ async fn resolve_app_address(prefix: &str, sni: &str, compat: bool) -> Result<Ap
             let Some(data) = txt_record.txt_data().first() else {
                 continue;
             };
-            return AppAddress::parse(data).context("failed to parse app address");
+            return parse_txt_addr(data).context("failed to parse app address");
         }
         anyhow::bail!("failed to resolve app address");
     } else {
@@ -67,7 +53,7 @@ async fn resolve_app_address(prefix: &str, sni: &str, compat: bool) -> Result<Ap
             .txt_data()
             .first()
             .context("no data in txt record")?;
-        AppAddress::parse(data).context("failed to parse app address")
+        parse_txt_addr(data).context("failed to parse app address")
     }
 }
 
