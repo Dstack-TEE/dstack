@@ -10,11 +10,12 @@ use dstack_guest_agent_rpc::{
     dstack_guest_server::{DstackGuestRpc, DstackGuestServer},
     tappd_server::{TappdRpc, TappdServer},
     worker_server::{WorkerRpc, WorkerServer},
-    AppInfo, DeriveK256KeyResponse, DeriveKeyArgs, EmitEventArgs, GetKeyArgs, GetKeyResponse,
-    GetQuoteResponse, GetTlsKeyArgs, GetTlsKeyResponse, RawQuoteArgs, TdxQuoteArgs,
-    TdxQuoteResponse, WorkerVersion,
+    AppInfo, DeriveK256KeyResponse, DeriveKeyArgs, EmitEventArgs, GetAttestationRequest,
+    GetKeyArgs, GetKeyResponse, GetQuoteResponse, GetTlsKeyArgs, GetTlsKeyResponse, RawQuoteArgs,
+    SignRequest, SignResponse, TdxQuoteArgs, TdxQuoteResponse, WorkerVersion,
 };
 use dstack_types::{AppKeys, SysConfig};
+use ed25519_dalek::{Signer as Ed25519Signer, SigningKey as Ed25519SigningKey};
 use fs_err as fs;
 use k256::ecdsa::SigningKey;
 use ra_rpc::{Attestation, CallContext, RpcCall};
@@ -23,6 +24,7 @@ use ra_tls::{
     cert::CertConfig,
     kdf::{derive_ecdsa_key, derive_ecdsa_key_pair_from_bytes},
 };
+use rand::rngs::OsRng;
 use rcgen::KeyPair;
 use ring::rand::{SecureRandom, SystemRandom};
 use serde_json::json;
@@ -42,6 +44,10 @@ struct AppStateInner {
     vm_config: String,
     cert_client: CertRequestClient,
     demo_cert: String,
+    ed25519_key: Ed25519SigningKey,
+    secp256k1_key: SigningKey,
+    ed25519_attestation: GetQuoteResponse,
+    secp256k1_attestation: GetQuoteResponse,
 }
 
 impl AppState {
@@ -73,6 +79,49 @@ impl AppState {
             .await
             .context("Failed to get app cert")?
             .join("\n");
+
+        let mut csprng = OsRng;
+        let ed25519_key = ed25519_dalek::SigningKey::generate(&mut csprng);
+        let secp256k1_key = SigningKey::random(&mut csprng);
+
+        let ed25519_pubkey = ed25519_key.verifying_key().to_bytes();
+        let secp256k1_pubkey = secp256k1_key.verifying_key().to_sec1_bytes();
+
+        let mut ed25519_report_data = [0u8; 64];
+        ed25519_report_data[..ed25519_pubkey.len()].copy_from_slice(&ed25519_pubkey);
+
+        let mut secp256k1_report_data = [0u8; 64];
+        secp256k1_report_data[..secp256k1_pubkey.len()].copy_from_slice(&secp256k1_pubkey);
+        let (ed25519_attestation, secp256k1_attestation) = if config.simulator.enabled {
+            (
+                simulate_quote(&config, ed25519_report_data)?,
+                simulate_quote(&config, secp256k1_report_data)?,
+            )
+        } else {
+            let (ed25519_quote, secp256k1_quote) = (
+                tdx_attest::get_quote(&ed25519_report_data, None)
+                    .context("Failed to get ed25519 quote")?
+                    .1,
+                tdx_attest::get_quote(&secp256k1_report_data, None)
+                    .context("Failed to get secp256k1 quote")?
+                    .1,
+            );
+            let event_log =
+                serde_json::to_string(&read_event_logs().context("Failed to read event log")?)?;
+            (
+                GetQuoteResponse {
+                    quote: ed25519_quote,
+                    event_log: event_log.clone(),
+                    report_data: ed25519_report_data.to_vec(),
+                },
+                GetQuoteResponse {
+                    quote: secp256k1_quote,
+                    event_log,
+                    report_data: secp256k1_report_data.to_vec(),
+                },
+            )
+        };
+
         Ok(Self {
             inner: Arc::new(AppStateInner {
                 config,
@@ -80,6 +129,10 @@ impl AppState {
                 cert_client,
                 demo_cert,
                 vm_config,
+                ed25519_key,
+                secp256k1_key,
+                ed25519_attestation,
+                secp256k1_attestation,
             }),
         })
     }
@@ -245,6 +298,22 @@ impl DstackGuestRpc for InternalRpcHandler {
 
     async fn info(self) -> Result<AppInfo> {
         get_info(&self.state, false).await
+    }
+
+    async fn sign(self, request: SignRequest) -> Result<SignResponse> {
+        let signature = match request.algorithm.as_str() {
+            "ed25519" => {
+                let signature = self.state.inner.ed25519_key.sign(&request.data);
+                signature.to_bytes().to_vec()
+            }
+            "secp256k1" => {
+                let signature: k256::ecdsa::Signature =
+                    self.state.inner.secp256k1_key.sign(&request.data);
+                signature.to_bytes().to_vec()
+            }
+            _ => return Err(anyhow::anyhow!("Unsupported algorithm")),
+        };
+        Ok(SignResponse { signature })
     }
 }
 
@@ -417,6 +486,14 @@ impl WorkerRpc for ExternalRpcHandler {
             rev: super::GIT_REV.to_string(),
         })
     }
+
+    async fn get_attestation(self, request: GetAttestationRequest) -> Result<GetQuoteResponse> {
+        match request.algorithm.as_str() {
+            "ed25519" => Ok(self.state.inner.ed25519_attestation.clone()),
+            "secp256k1" => Ok(self.state.inner.secp256k1_attestation.clone()),
+            _ => Err(anyhow::anyhow!("Unsupported algorithm")),
+        }
+    }
 }
 
 impl RpcCall<AppState> for ExternalRpcHandler {
@@ -426,5 +503,203 @@ impl RpcCall<AppState> for ExternalRpcHandler {
         Ok(ExternalRpcHandler {
             state: context.state.clone(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{AppComposeWrapper, Config, Simulator};
+    use dstack_guest_agent_rpc::{GetAttestationRequest, SignRequest};
+    use dstack_types::{AppCompose, AppKeys, DockerConfig, KeyProvider};
+    use ed25519_dalek::{Signature as Ed25519Signature, Verifier};
+    use k256::ecdsa::{Signature as K256Signature, VerifyingKey};
+    use std::collections::HashSet;
+    use std::convert::TryFrom;
+
+    fn setup_test_state() -> AppState {
+        let mut csprng = OsRng;
+        let ed25519_key = ed25519_dalek::SigningKey::generate(&mut csprng);
+        let secp256k1_key = SigningKey::random(&mut csprng);
+
+        let ed25519_attestation = GetQuoteResponse {
+            quote: b"dummy_ed25519_quote".to_vec(),
+            event_log: "dummy_ed25519_event_log".to_string(),
+            report_data: vec![1; 64],
+        };
+        let secp256k1_attestation = GetQuoteResponse {
+            quote: b"dummy_secp256k1_quote".to_vec(),
+            event_log: "dummy_secp256k1_event_log".to_string(),
+            report_data: vec![2; 64],
+        };
+
+        let dummy_cert_client = unsafe { std::mem::zeroed() };
+
+        let dummy_simulator = Simulator {
+            enabled: false,
+            quote_file: String::new(),
+            event_log_file: String::new(),
+        };
+
+        let dummy_docker_config = DockerConfig {
+            registry: None,
+            username: None,
+            token_key: None,
+        };
+
+        let dummy_appcompose = AppCompose {
+            manifest_version: 0,
+            name: String::new(),
+            features: Vec::new(),
+            runner: String::new(),
+            docker_compose_file: None,
+            docker_config: dummy_docker_config,
+            public_logs: false,
+            public_sysinfo: false,
+            public_tcbinfo: false,
+            kms_enabled: false,
+            gateway_enabled: false,
+            local_key_provider_enabled: false,
+            key_provider: None,
+            key_provider_id: Vec::new(),
+            allowed_envs: Vec::new(),
+            no_instance_id: false,
+            secure_time: false,
+        };
+
+        let dummy_appcompose_wrapper = AppComposeWrapper {
+            app_compose: dummy_appcompose,
+            raw: String::new(),
+        };
+
+        let dummy_config = Config {
+            keys_file: String::new(),
+            app_compose: dummy_appcompose_wrapper,
+            sys_config_file: String::new().into(),
+            pccs_url: None,
+            simulator: dummy_simulator,
+            data_disks: HashSet::new(),
+        };
+
+        let dummy_keys = AppKeys {
+            disk_crypt_key: Vec::new(),
+            env_crypt_key: Vec::new(),
+            k256_key: Vec::new(),
+            k256_signature: Vec::new(),
+            gateway_app_id: String::new(),
+            ca_cert: String::new(),
+            key_provider: KeyProvider::None { key: String::new() },
+        };
+
+        let inner = AppStateInner {
+            config: dummy_config,
+            keys: dummy_keys,
+            vm_config: String::new(),
+            cert_client: dummy_cert_client,
+            demo_cert: String::new(),
+            ed25519_key,
+            secp256k1_key,
+            ed25519_attestation,
+            secp256k1_attestation,
+        };
+
+        AppState {
+            inner: Arc::new(inner),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sign_ed25519_success() {
+        let state = setup_test_state();
+        let handler = InternalRpcHandler {
+            state: state.clone(),
+        };
+        let data_to_sign = b"test message for ed25519";
+        let request = SignRequest {
+            algorithm: "ed25519".to_string(),
+            data: data_to_sign.to_vec(),
+        };
+
+        let response = handler.sign(request).await.unwrap();
+
+        let public_key = state.inner.ed25519_key.verifying_key();
+        let signature_bytes: [u8; 64] = response
+            .signature
+            .try_into()
+            .expect("Signature length is incorrect");
+        let signature = Ed25519Signature::from_bytes(&signature_bytes);
+        assert!(public_key.verify(data_to_sign, &signature).is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_sign_secp256k1_success() {
+        let state = setup_test_state();
+        let handler = InternalRpcHandler {
+            state: state.clone(),
+        };
+        let data_to_sign = b"test message for secp256k1";
+        let request = SignRequest {
+            algorithm: "secp256k1".to_string(),
+            data: data_to_sign.to_vec(),
+        };
+
+        let response = handler.sign(request).await.unwrap();
+
+        let public_key = VerifyingKey::from(&state.inner.secp256k1_key);
+        let signature = K256Signature::try_from(response.signature.as_slice()).unwrap();
+        assert!(public_key.verify(data_to_sign, &signature).is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_sign_unsupported_algorithm_fails() {
+        let state = setup_test_state();
+        let handler = InternalRpcHandler { state };
+        let request = SignRequest {
+            algorithm: "rsa".to_string(), // Unsupported algorithm
+            data: b"test message".to_vec(),
+        };
+
+        let result = handler.sign(request).await;
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().to_string(), "Unsupported algorithm");
+    }
+
+    #[tokio::test]
+    async fn test_get_attestation_ed25519_success() {
+        let state = setup_test_state();
+        let handler = ExternalRpcHandler::new(state.clone());
+        let request = GetAttestationRequest {
+            algorithm: "ed25519".to_string(),
+        };
+
+        let response = handler.get_attestation(request).await.unwrap();
+
+        assert_eq!(response, state.inner.ed25519_attestation);
+    }
+
+    #[tokio::test]
+    async fn test_get_attestation_secp256k1_success() {
+        let state = setup_test_state();
+        let handler = ExternalRpcHandler::new(state.clone());
+        let request = GetAttestationRequest {
+            algorithm: "secp256k1".to_string(),
+        };
+
+        let response = handler.get_attestation(request).await.unwrap();
+
+        assert_eq!(response, state.inner.secp256k1_attestation);
+    }
+
+    #[tokio::test]
+    async fn test_get_attestation_unsupported_algorithm_fails() {
+        let state = setup_test_state();
+        let handler = ExternalRpcHandler::new(state);
+        let request = GetAttestationRequest {
+            algorithm: "ecdsa".to_string(), // Unsupported algorithm
+        };
+
+        let result = handler.get_attestation(request).await;
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().to_string(), "Unsupported algorithm");
     }
 }

@@ -2241,6 +2241,7 @@ dependencies = [
  "default-net",
  "dstack-guest-agent-rpc",
  "dstack-types",
+ "ed25519-dalek",
  "figment",
  "fs-err",
  "git-version",
@@ -2251,6 +2252,7 @@ dependencies = [
  "load_config",
  "ra-rpc",
  "ra-tls",
+ "rand 0.8.5",
  "rcgen",
  "reqwest",
  "ring",
@@ -2571,6 +2573,31 @@ dependencies = [
  "serdect",
  "signature",
  "spki",
+]
+
+[[package]]
+name = "ed25519"
+version = "2.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "115531babc129696a58c64a4fef0a8bf9e9698629fb97e9e40767d235cfbcd53"
+dependencies = [
+ "pkcs8",
+ "signature",
+]
+
+[[package]]
+name = "ed25519-dalek"
+version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "70e796c081cee67dc755e1a36a0a172b897fab85fc3f6bc48307991f64e4eca9"
+dependencies = [
+ "curve25519-dalek",
+ "ed25519",
+ "rand_core 0.6.4",
+ "serde",
+ "sha2",
+ "subtle",
+ "zeroize",
 ]
 
 [[package]]
