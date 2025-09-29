@@ -686,8 +686,38 @@ impl<'a> Stage0<'a> {
         }
     }
 
-    async fn setup_swap(&self, swap_size: u64) -> Result<()> {
-        let swapvol_path = "dstack/data/swapvol";
+    async fn setup_swap(&self, swap_size: u64, opts: &DstackOptions) -> Result<()> {
+        match opts.storage_fs {
+            FsType::Zfs => self.setup_swap_zvol(swap_size).await,
+            FsType::Ext4 => self.setup_swapfile(swap_size).await,
+        }
+    }
+
+    async fn setup_swapfile(&self, swap_size: u64) -> Result<()> {
+        let swapfile = self.args.mount_point.join("swapfile");
+        if swapfile.exists() {
+            fs::remove_file(&swapfile).context("Failed to remove swapfile")?;
+            info!("Removed existing swapfile");
+        }
+        if swap_size == 0 {
+            return Ok(());
+        }
+        let swapfile = swapfile.display().to_string();
+        info!("Creating swapfile at {swapfile} (size {swap_size} bytes)");
+        let size_str = swap_size.to_string();
+        cmd! {
+            fallocate -l $size_str $swapfile;
+            chmod 600 $swapfile;
+            mkswap $swapfile;
+            swapon $swapfile;
+            swapon --show;
+        }
+        .context("Failed to enable swap on swapfile")?;
+        Ok(())
+    }
+
+    async fn setup_swap_zvol(&self, swap_size: u64) -> Result<()> {
+        let swapvol_path = "dstack/swap";
         let swapvol_device_path = format!("/dev/zvol/{swapvol_path}");
 
         if Path::new(&swapvol_device_path).exists() {
@@ -1014,7 +1044,8 @@ impl<'a> Stage0<'a> {
             &opts,
         )
         .await?;
-        self.setup_swap(self.shared.app_compose.swap_size).await?;
+        self.setup_swap(self.shared.app_compose.swap_size, &opts)
+            .await?;
         self.vmm
             .notify_q(
                 "instance.info",
