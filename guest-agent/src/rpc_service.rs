@@ -94,8 +94,8 @@ impl AppState {
         secp256k1_report_data[..secp256k1_pubkey.len()].copy_from_slice(&secp256k1_pubkey);
         let (ed25519_attestation, secp256k1_attestation) = if config.simulator.enabled {
             (
-                simulate_quote(&config, ed25519_report_data)?,
-                simulate_quote(&config, secp256k1_report_data)?,
+                simulate_quote(&config, ed25519_report_data, &vm_config)?,
+                simulate_quote(&config, secp256k1_report_data, &vm_config)?,
             )
         } else {
             let (ed25519_quote, secp256k1_quote) = (
@@ -113,11 +113,13 @@ impl AppState {
                     quote: ed25519_quote,
                     event_log: event_log.clone(),
                     report_data: ed25519_report_data.to_vec(),
+                    vm_config: vm_config.clone(),
                 },
                 GetQuoteResponse {
                     quote: secp256k1_quote,
                     event_log,
                     report_data: secp256k1_report_data.to_vec(),
+                    vm_config: vm_config.clone(),
                 },
             )
         };
@@ -526,11 +528,13 @@ mod tests {
             quote: b"dummy_ed25519_quote".to_vec(),
             event_log: "dummy_ed25519_event_log".to_string(),
             report_data: vec![1; 64],
+            vm_config: String::new(),
         };
         let secp256k1_attestation = GetQuoteResponse {
             quote: b"dummy_secp256k1_quote".to_vec(),
             event_log: "dummy_secp256k1_event_log".to_string(),
             report_data: vec![2; 64],
+            vm_config: String::new(),
         };
 
         let dummy_cert_client = unsafe { std::mem::zeroed() };
@@ -565,6 +569,7 @@ mod tests {
             allowed_envs: Vec::new(),
             no_instance_id: false,
             secure_time: false,
+            storage_fs: None,
         };
 
         let dummy_appcompose_wrapper = AppComposeWrapper {
