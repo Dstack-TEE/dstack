@@ -67,6 +67,7 @@ app_address_ns_prefix = "_dstack-app-address"
 app_address_ns_compat = true
 workers = 32
 external_port = 443
+inbound_pp_enabled = false
 
 [core.proxy.timeouts]
 # Timeout for establishing a connection to the target app.
@@ -88,6 +89,8 @@ write = "5s"
 shutdown = "5s"
 # Timeout for total connection duration.
 total = "5h"
+# Timeout for proxy protocol header
+pp_header = "5s"
 
 [core.recycle]
 enabled = true

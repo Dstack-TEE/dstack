@@ -14,11 +14,12 @@ use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Request, Response, StatusCode};
 use hyper_util::rt::tokio::TokioIo;
+use proxy_protocol::ProxyHeader;
 use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::version::{TLS12, TLS13};
 use serde::Serialize;
-use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt as _, ReadBuf};
 use tokio::net::TcpStream;
 use tokio::time::timeout;
 use tokio_rustls::{rustls, server::TlsStream, TlsAcceptor};
@@ -26,6 +27,7 @@ use tracing::{debug, info};
 
 use crate::config::{CryptoProvider, ProxyConfig, TlsVersion};
 use crate::main_service::Proxy;
+use crate::proxy::DstInfo;
 
 use super::io_bridge::bridge;
 use super::tls_passthough::connect_multiple_hosts;
@@ -296,14 +298,16 @@ impl Proxy {
         Ok(tls_stream)
     }
 
-    pub(crate) async fn proxy(
+    pub(super) async fn proxy(
         &self,
         inbound: TcpStream,
+        pp_header: ProxyHeader,
         buffer: Vec<u8>,
-        app_id: &str,
-        port: u16,
-        h2: bool,
+        dst: &DstInfo,
     ) -> Result<()> {
+        let app_id = &dst.app_id;
+        let port = dst.port;
+        let h2 = dst.is_h2;
         if app_id == "health" {
             return self.handle_health_check(inbound, buffer, port, h2).await;
         }
@@ -316,13 +320,19 @@ impl Proxy {
             .with_context(|| format!("app {app_id} not found"))?;
         debug!("selected top n hosts: {addresses:?}");
         let tls_stream = self.tls_accept(inbound, buffer, h2).await?;
-        let (outbound, _counter) = timeout(
+        let (mut outbound, _counter) = timeout(
             self.config.proxy.timeouts.connect,
             connect_multiple_hosts(addresses, port),
         )
         .await
         .map_err(|_| anyhow!("connecting timeout"))?
         .context("failed to connect to app")?;
+        if dst.is_pp {
+            debug!("sending pp header: {pp_header:?}");
+            let pp_header_bin =
+                proxy_protocol::encode(pp_header).context("failed to encode pp header")?;
+            outbound.write_all(&pp_header_bin).await?;
+        }
         bridge(
             IgnoreUnexpectedEofStream::new(tls_stream),
             outbound,

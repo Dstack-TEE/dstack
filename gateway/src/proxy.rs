@@ -20,7 +20,12 @@ use tokio::{
 };
 use tracing::{debug, error, info, info_span, Instrument};
 
-use crate::{config::ProxyConfig, main_service::Proxy, models::EnteredCounter};
+use crate::{
+    config::ProxyConfig,
+    main_service::Proxy,
+    models::EnteredCounter,
+    pp::{get_inbound_pp_header, DisplayAddr},
+};
 
 #[derive(Debug, Clone)]
 pub(crate) struct AddressInfo {
@@ -159,11 +164,19 @@ fn parse_destination(sni: &str, dotted_base_domain: &str) -> Result<DstInfo> {
 pub static NUM_CONNECTIONS: AtomicU64 = AtomicU64::new(0);
 
 async fn handle_connection(
-    mut inbound: TcpStream,
+    inbound: TcpStream,
     state: Proxy,
     dotted_base_domain: &str,
 ) -> Result<()> {
     let timeouts = &state.config.proxy.timeouts;
+
+    let pp_timeout = timeouts.pp_header;
+    let pp_fut = get_inbound_pp_header(inbound, &state.config.proxy);
+    let (mut inbound, pp_header) = timeout(pp_timeout, pp_fut)
+        .await
+        .context("take proxy protocol header timeout")?
+        .context("failed to take proxy protocol header")?;
+    info!("client address: {}", DisplayAddr(&pp_header));
     let (sni, buffer) = timeout(timeouts.handshake, take_sni(&mut inbound))
         .await
         .context("take sni timeout")?
@@ -175,14 +188,12 @@ async fn handle_connection(
         let dst = parse_destination(&sni, dotted_base_domain)?;
         debug!("dst: {dst:?}");
         if dst.is_tls {
-            tls_passthough::proxy_to_app(state, inbound, buffer, &dst.app_id, dst.port).await
+            tls_passthough::proxy_to_app(state, inbound, pp_header, buffer, &dst).await
         } else {
-            state
-                .proxy(inbound, buffer, &dst.app_id, dst.port, dst.is_h2)
-                .await
+            state.proxy(inbound, pp_header, buffer, &dst).await
         }
     } else {
-        tls_passthough::proxy_with_sni(state, inbound, buffer, &sni).await
+        tls_passthough::proxy_with_sni(state, inbound, pp_header, buffer, &sni).await
     }
 }
 

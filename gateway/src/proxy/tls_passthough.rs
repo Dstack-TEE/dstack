@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::{Context, Result};
+use proxy_protocol::ProxyHeader;
 use tokio::{io::AsyncWriteExt, net::TcpStream, task::JoinSet, time::timeout};
 use tracing::{debug, info};
 
@@ -60,6 +61,7 @@ async fn resolve_app_address(prefix: &str, sni: &str, compat: bool) -> Result<Ds
 pub(crate) async fn proxy_with_sni(
     state: Proxy,
     inbound: TcpStream,
+    pp_header: ProxyHeader,
     buffer: Vec<u8>,
     sni: &str,
 ) -> Result<()> {
@@ -69,7 +71,7 @@ pub(crate) async fn proxy_with_sni(
         .await
         .context("failed to resolve app address")?;
     debug!("target address is {}:{}", addr.app_id, addr.port);
-    proxy_to_app(state, inbound, buffer, &addr.app_id, addr.port).await
+    proxy_to_app(state, inbound, pp_header, buffer, &addr).await
 }
 
 /// connect to multiple hosts simultaneously and return the first successful connection
@@ -106,10 +108,12 @@ pub(crate) async fn connect_multiple_hosts(
 pub(crate) async fn proxy_to_app(
     state: Proxy,
     inbound: TcpStream,
+    pp_header: ProxyHeader,
     buffer: Vec<u8>,
-    app_id: &str,
-    port: u16,
+    dst: &DstInfo,
 ) -> Result<()> {
+    let app_id = &dst.app_id;
+    let port = dst.port;
     let addresses = state.lock().select_top_n_hosts(app_id)?;
     let (mut outbound, _counter) = timeout(
         state.config.proxy.timeouts.connect,
@@ -118,6 +122,12 @@ pub(crate) async fn proxy_to_app(
     .await
     .with_context(|| format!("connecting timeout to app {app_id}: {addresses:?}:{port}"))?
     .with_context(|| format!("failed to connect to app {app_id}: {addresses:?}:{port}"))?;
+
+    if dst.is_pp {
+        let pp_header_bin =
+            proxy_protocol::encode(pp_header).context("failed to encode pp header")?;
+        outbound.write_all(&pp_header_bin).await?;
+    }
     outbound
         .write_all(&buffer)
         .await
