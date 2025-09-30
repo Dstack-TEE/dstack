@@ -85,6 +85,7 @@ pub struct ProxyConfig {
     pub workers: usize,
     pub app_address_ns_prefix: String,
     pub app_address_ns_compat: bool,
+    pub inbound_pp_enabled: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -106,6 +107,8 @@ pub struct Timeouts {
     pub write: Duration,
     #[serde(with = "serde_duration")]
     pub shutdown: Duration,
+    #[serde(with = "serde_duration")]
+    pub pp_header: Duration,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

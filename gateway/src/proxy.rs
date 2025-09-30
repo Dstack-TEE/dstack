@@ -20,7 +20,12 @@ use tokio::{
 };
 use tracing::{debug, error, info, info_span, Instrument};
 
-use crate::{config::ProxyConfig, main_service::Proxy, models::EnteredCounter};
+use crate::{
+    config::ProxyConfig,
+    main_service::Proxy,
+    models::EnteredCounter,
+    pp::{get_inbound_pp_header, DisplayAddr},
+};
 
 #[derive(Debug, Clone)]
 pub(crate) struct AddressInfo {
@@ -70,6 +75,79 @@ struct DstInfo {
     port: u16,
     is_tls: bool,
     is_h2: bool,
+    is_pp: bool,
+}
+
+fn parse_app_addr(addr: &str) -> Result<DstInfo> {
+    let (app_id, port_part) = addr
+        .rsplit_once('-')
+        .or_else(|| addr.rsplit_once(':'))
+        .unwrap_or((addr, ""));
+    if app_id.is_empty() {
+        bail!("app id is empty");
+    }
+    let mut dst = DstInfo {
+        app_id: app_id.to_owned(),
+        port: 80,
+        is_tls: false,
+        is_h2: false,
+        is_pp: false,
+    };
+
+    if port_part.is_empty() {
+        return Ok(dst);
+    };
+
+    // Parse suffixes from right to left: g, s, p
+    let part_bytes = port_part.as_bytes();
+    let mut end_idx = part_bytes.len();
+
+    // Parse from right to left until we hit a digit
+    while end_idx > 0 {
+        let ch = part_bytes[end_idx - 1] as char;
+        match ch {
+            c if c.is_ascii_digit() => {
+                break;
+            }
+            'g' => {
+                if dst.is_h2 {
+                    bail!("invalid app address: duplicate suffix 'g'");
+                }
+                dst.is_h2 = true;
+                end_idx -= 1;
+            }
+            's' => {
+                if dst.is_tls {
+                    bail!("invalid app address: duplicate suffix 's'");
+                }
+                dst.is_tls = true;
+                end_idx -= 1;
+            }
+            'p' => {
+                if dst.is_pp {
+                    bail!("invalid app address: duplicate suffix 'p'");
+                }
+                dst.is_pp = true;
+                end_idx -= 1;
+            }
+            _ => {
+                bail!("invalid app address: unrecognized suffix character '{ch}'");
+            }
+        }
+    }
+
+    if dst.is_h2 && dst.is_tls {
+        bail!("invalid app address: both 's' and 'g' suffixes are present");
+    }
+
+    let port_str = &port_part[..end_idx];
+    let port = if port_str.is_empty() {
+        None
+    } else {
+        Some(port_str.parse::<u16>().context("invalid port")?)
+    };
+    dst.port = port.unwrap_or(if dst.is_tls { 443 } else { 80 });
+    Ok(dst)
 }
 
 fn parse_destination(sni: &str, dotted_base_domain: &str) -> Result<DstInfo> {
@@ -80,63 +158,25 @@ fn parse_destination(sni: &str, dotted_base_domain: &str) -> Result<DstInfo> {
     if subdomain.contains('.') {
         bail!("only one level of subdomain is supported, got sni={sni}, subdomain={subdomain}");
     }
-    let mut parts = subdomain.split('-');
-    let app_id = parts.next().context("no app id found")?.to_owned();
-    if app_id.is_empty() {
-        bail!("app id is empty");
-    }
-    let last_part = parts.next();
-    let is_tls;
-    let port;
-    let is_h2;
-    match last_part {
-        None => {
-            is_tls = false;
-            is_h2 = false;
-            port = None;
-        }
-        Some(last_part) => {
-            let (port_str, has_g) = match last_part.strip_suffix('g') {
-                Some(without_g) => (without_g, true),
-                None => (last_part, false),
-            };
-
-            let (port_str, has_s) = match port_str.strip_suffix('s') {
-                Some(without_s) => (without_s, true),
-                None => (port_str, false),
-            };
-            if has_g && has_s {
-                bail!("invalid sni format: `gs` is not allowed");
-            }
-            is_h2 = has_g;
-            is_tls = has_s;
-            port = if port_str.is_empty() {
-                None
-            } else {
-                Some(port_str.parse::<u16>().context("invalid port")?)
-            };
-        }
-    };
-    let port = port.unwrap_or(if is_tls { 443 } else { 80 });
-    if parts.next().is_some() {
-        bail!("invalid sni format");
-    }
-    Ok(DstInfo {
-        app_id,
-        port,
-        is_tls,
-        is_h2,
-    })
+    parse_app_addr(subdomain)
 }
 
 pub static NUM_CONNECTIONS: AtomicU64 = AtomicU64::new(0);
 
 async fn handle_connection(
-    mut inbound: TcpStream,
+    inbound: TcpStream,
     state: Proxy,
     dotted_base_domain: &str,
 ) -> Result<()> {
     let timeouts = &state.config.proxy.timeouts;
+
+    let pp_timeout = timeouts.pp_header;
+    let pp_fut = get_inbound_pp_header(inbound, &state.config.proxy);
+    let (mut inbound, pp_header) = timeout(pp_timeout, pp_fut)
+        .await
+        .context("take proxy protocol header timeout")?
+        .context("failed to take proxy protocol header")?;
+    info!("client address: {}", DisplayAddr(&pp_header));
     let (sni, buffer) = timeout(timeouts.handshake, take_sni(&mut inbound))
         .await
         .context("take sni timeout")?
@@ -148,14 +188,12 @@ async fn handle_connection(
         let dst = parse_destination(&sni, dotted_base_domain)?;
         debug!("dst: {dst:?}");
         if dst.is_tls {
-            tls_passthough::proxy_to_app(state, inbound, buffer, &dst.app_id, dst.port).await
+            tls_passthough::proxy_to_app(state, inbound, pp_header, buffer, &dst).await
         } else {
-            state
-                .proxy(inbound, buffer, &dst.app_id, dst.port, dst.is_h2)
-                .await
+            state.proxy(inbound, pp_header, buffer, &dst).await
         }
     } else {
-        tls_passthough::proxy_with_sni(state, inbound, buffer, &sni).await
+        tls_passthough::proxy_with_sni(state, inbound, pp_header, buffer, &sni).await
     }
 }
 

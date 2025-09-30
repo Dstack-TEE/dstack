@@ -21,6 +21,7 @@ mod admin_service;
 mod config;
 mod main_service;
 mod models;
+mod pp;
 mod proxy;
 mod web_routes;
 

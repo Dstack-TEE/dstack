@@ -218,3 +218,4 @@ serde_yaml2 = "0.1.2"
 
 luks2 = "0.5.0"
 scopeguard = "1.2.0"
+proxy-protocol = "0.5.0"
