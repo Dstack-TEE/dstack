@@ -4,6 +4,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_human_bytes as hex_bytes;
+use size_parser::human_size;
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct AppCompose {
@@ -41,6 +42,8 @@ pub struct AppCompose {
     pub secure_time: bool,
     #[serde(default)]
     pub storage_fs: Option<String>,
+    #[serde(default, with = "human_size")]
+    pub swap_size: u64,
 }
 
 fn default_true() -> bool {
