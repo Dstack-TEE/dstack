@@ -3,8 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
+use tokio::time::sleep;
 use cert_client::CertRequestClient;
 use dstack_guest_agent_rpc::{
     dstack_guest_server::{DstackGuestRpc, DstackGuestServer},
@@ -57,22 +59,44 @@ impl AppState {
                 .await
                 .context("Failed to create cert signer")?;
         let key = KeyPair::generate().context("Failed to generate demo key")?;
-        let demo_cert = cert_client
-            .request_cert(
-                &key,
-                CertConfig {
-                    org_name: None,
-                    subject: "demo-cert".to_string(),
-                    subject_alt_names: vec![],
-                    usage_server_auth: false,
-                    usage_client_auth: true,
-                    ext_quote: true,
-                },
-                config.simulator.enabled,
-            )
-            .await
-            .context("Failed to get app cert")?
-            .join("\n");
+        
+        // Retry certificate request with exponential backoff
+        let mut retries = 0;
+        const MAX_RETRIES: u32 = 5;
+        let demo_cert = loop {
+            match cert_client
+                .request_cert(
+                    &key,
+                    CertConfig {
+                        org_name: None,
+                        subject: "demo-cert".to_string(),
+                        subject_alt_names: vec![],
+                        usage_server_auth: false,
+                        usage_client_auth: true,
+                        ext_quote: true,
+                    },
+                    config.simulator.enabled,
+                )
+                .await
+            {
+                Ok(cert) => break cert.join("\n"),
+                Err(e) if retries < MAX_RETRIES => {
+                    retries += 1;
+                    let delay = Duration::from_millis(100 * 2_u64.pow(retries));
+                    tracing::warn!(
+                        "Certificate request failed (attempt {}/{}), retrying in {:?}: {}",
+                        retries,
+                        MAX_RETRIES,
+                        delay,
+                        e
+                    );
+                    sleep(delay).await;
+                }
+                Err(e) => {
+                    return Err(e).context("Failed to get app cert after multiple retries");
+                }
+            }
+        };
         Ok(Self {
             inner: Arc::new(AppStateInner {
                 config,
@@ -167,13 +191,35 @@ impl DstackGuestRpc for InternalRpcHandler {
             usage_client_auth: request.usage_client_auth,
             ext_quote: request.usage_ra_tls,
         };
-        let certificate_chain = self
-            .state
-            .inner
-            .cert_client
-            .request_cert(&derived_key, config, self.state.config().simulator.enabled)
-            .await
-            .context("Failed to sign the CSR")?;
+        // Retry certificate request with exponential backoff
+        let mut retries = 0;
+        const MAX_RETRIES: u32 = 5;
+        let certificate_chain = loop {
+            match self
+                .state
+                .inner
+                .cert_client
+                .request_cert(&derived_key, config.clone(), self.state.config().simulator.enabled)
+                .await
+            {
+                Ok(cert) => break cert,
+                Err(e) if retries < MAX_RETRIES => {
+                    retries += 1;
+                    let delay = Duration::from_millis(100 * 2_u64.pow(retries));
+                    tracing::warn!(
+                        "Certificate request failed (attempt {}/{}), retrying in {:?}: {}",
+                        retries,
+                        MAX_RETRIES,
+                        delay,
+                        e
+                    );
+                    sleep(delay).await;
+                }
+                Err(e) => {
+                    return Err(e).context("Failed to sign the CSR after multiple retries");
+                }
+            }
+        };
         Ok(GetTlsKeyResponse {
             key: derived_key.serialize_pem(),
             certificate_chain,
@@ -305,13 +351,35 @@ impl TappdRpc for InternalRpcHandlerV0 {
             usage_client_auth: request.usage_client_auth,
             ext_quote: request.usage_ra_tls,
         };
-        let certificate_chain = self
-            .state
-            .inner
-            .cert_client
-            .request_cert(&derived_key, config, self.state.config().simulator.enabled)
-            .await
-            .context("Failed to sign the CSR")?;
+        // Retry certificate request with exponential backoff
+        let mut retries = 0;
+        const MAX_RETRIES: u32 = 5;
+        let certificate_chain = loop {
+            match self
+                .state
+                .inner
+                .cert_client
+                .request_cert(&derived_key, config.clone(), self.state.config().simulator.enabled)
+                .await
+            {
+                Ok(cert) => break cert,
+                Err(e) if retries < MAX_RETRIES => {
+                    retries += 1;
+                    let delay = Duration::from_millis(100 * 2_u64.pow(retries));
+                    tracing::warn!(
+                        "Certificate request failed (attempt {}/{}), retrying in {:?}: {}",
+                        retries,
+                        MAX_RETRIES,
+                        delay,
+                        e
+                    );
+                    sleep(delay).await;
+                }
+                Err(e) => {
+                    return Err(e).context("Failed to sign the CSR after multiple retries");
+                }
+            }
+        };
         Ok(GetTlsKeyResponse {
             key: derived_key.serialize_pem(),
             certificate_chain,
