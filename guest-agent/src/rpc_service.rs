@@ -6,7 +6,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use tokio::time::sleep;
 use cert_client::CertRequestClient;
 use dstack_guest_agent_rpc::{
     dstack_guest_server::{DstackGuestRpc, DstackGuestServer},
@@ -30,6 +29,7 @@ use ring::rand::{SecureRandom, SystemRandom};
 use serde_json::json;
 use sha3::{Digest, Keccak256};
 use tdx_attest::eventlog::read_event_logs;
+use tokio::time::sleep;
 
 use crate::config::Config;
 
@@ -59,7 +59,7 @@ impl AppState {
                 .await
                 .context("Failed to create cert signer")?;
         let key = KeyPair::generate().context("Failed to generate demo key")?;
-        
+
         // Retry certificate request with exponential backoff
         let mut retries = 0;
         const MAX_RETRIES: u32 = 5;
@@ -199,7 +199,11 @@ impl DstackGuestRpc for InternalRpcHandler {
                 .state
                 .inner
                 .cert_client
-                .request_cert(&derived_key, config.clone(), self.state.config().simulator.enabled)
+                .request_cert(
+                    &derived_key,
+                    config.clone(),
+                    self.state.config().simulator.enabled,
+                )
                 .await
             {
                 Ok(cert) => break cert,
@@ -359,7 +363,11 @@ impl TappdRpc for InternalRpcHandlerV0 {
                 .state
                 .inner
                 .cert_client
-                .request_cert(&derived_key, config.clone(), self.state.config().simulator.enabled)
+                .request_cert(
+                    &derived_key,
+                    config.clone(),
+                    self.state.config().simulator.enabled,
+                )
                 .await
             {
                 Ok(cert) => break cert,
