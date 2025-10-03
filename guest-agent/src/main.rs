@@ -66,6 +66,16 @@ async fn run_internal_v0(
         .map_err(|err| anyhow!("Failed to ignite rocket: {err}"))?;
     let endpoint = DefaultListener::bind_endpoint(&ignite)
         .map_err(|err| anyhow!("Failed to get endpoint: {err}"))?;
+    // Clean up existing socket file or directory if it exists
+    if let Some(path) = endpoint.unix() {
+        if path.exists() {
+            if path.is_dir() {
+                std::fs::remove_dir_all(path).ok();
+            } else {
+                std::fs::remove_file(path).ok();
+            }
+        }
+    }
     let listener = DefaultListener::bind(&ignite)
         .await
         .map_err(|err| anyhow!("Failed to bind on {endpoint}: {err}"))?;
@@ -95,6 +105,16 @@ async fn run_internal(
         .map_err(|err| anyhow!("Failed to ignite rocket: {err}"))?;
     let endpoint = DefaultListener::bind_endpoint(&ignite)
         .map_err(|err| anyhow!("Failed to get endpoint: {err}"))?;
+    // Clean up existing socket file or directory if it exists
+    if let Some(path) = endpoint.unix() {
+        if path.exists() {
+            if path.is_dir() {
+                std::fs::remove_dir_all(path).ok();
+            } else {
+                std::fs::remove_file(path).ok();
+            }
+        }
+    }
     let listener = DefaultListener::bind(&ignite)
         .await
         .map_err(|err| anyhow!("Failed to bind on {endpoint}: {err}"))?;
