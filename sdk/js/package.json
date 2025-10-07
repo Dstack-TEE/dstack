@@ -96,7 +96,7 @@
   "devDependencies": {
     "@types/node": "latest",
     "typescript": "latest",
-    "vitest": "^2.1.3"
+    "vitest": "^3.2.4"
   },
   "optionalDependencies": {
     "viem": "^2.21.0 <3.0.0",
