@@ -105,6 +105,12 @@ pub struct GetQuoteResponse {
     pub quote: String,
     /// The event log associated with the quote
     pub event_log: String,
+    /// The report data
+    #[serde(default)]
+    pub report_data: String,
+    /// VM configuration
+    #[serde(default)]
+    pub vm_config: String,
 }
 
 impl GetQuoteResponse {
@@ -154,6 +160,9 @@ pub struct InfoResponse {
     pub app_name: String,
     /// The device identifier
     pub device_id: String,
+    /// The aggregated measurement register
+    #[serde(default)]
+    pub mr_aggregated: String,
     /// The hash of the OS image
     /// Optional: empty if OS image is not measured by KMS
     #[serde(default)]
@@ -162,6 +171,9 @@ pub struct InfoResponse {
     pub key_provider_info: String,
     /// The hash of the compose configuration
     pub compose_hash: String,
+    /// VM configuration
+    #[serde(default)]
+    pub vm_config: String,
 }
 
 impl InfoResponse {

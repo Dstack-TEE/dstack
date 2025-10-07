@@ -38,6 +38,7 @@ type GetQuoteResponse struct {
 	Quote      []byte `json:"quote"`
 	EventLog   string `json:"event_log"`
 	ReportData []byte `json:"report_data"`
+	VmConfig   string `json:"vm_config"`
 }
 
 // Represents an event log entry in the TCB info
@@ -72,10 +73,12 @@ type InfoResponse struct {
 	TcbInfo         string `json:"tcb_info"`
 	AppName         string `json:"app_name"`
 	DeviceID        string `json:"device_id"`
+	MrAggregated    string `json:"mr_aggregated,omitempty"`
 	KeyProviderInfo string `json:"key_provider_info"`
 	// Optional: empty if OS image is not measured by KMS
 	OsImageHash string `json:"os_image_hash,omitempty"`
 	ComposeHash string `json:"compose_hash"`
+	VmConfig    string `json:"vm_config,omitempty"`
 }
 
 // DecodeTcbInfo decodes the TcbInfo string into a TcbInfo struct
