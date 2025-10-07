@@ -132,6 +132,8 @@ class GetKeyResponse(BaseModel):
 class GetQuoteResponse(BaseModel):
     quote: str
     event_log: str
+    report_data: str = ""
+    vm_config: str = ""
 
     def decode_quote(self) -> bytes:
         return bytes.fromhex(self.quote)
@@ -196,9 +198,11 @@ class InfoResponse(BaseModel, Generic[T]):
     tcb_info: T
     app_name: str
     device_id: str
+    mr_aggregated: str = ""
     os_image_hash: str = ""
     key_provider_info: str
     compose_hash: str
+    vm_config: str = ""
 
     @classmethod
     def parse_response(cls, obj: Any, tcb_info_type: type[T]) -> "InfoResponse[T]":

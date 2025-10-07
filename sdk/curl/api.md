@@ -156,9 +156,11 @@ curl --unix-socket /var/run/dstack.sock http://dstack/Info
   "tcb_info": "<tcb-info-string>",
   "app_name": "my-app",
   "device_id": "<hex-encoded-device-id>",
+  "mr_aggregated": "<hex-encoded-mr-aggregated>",
   "os_image_hash": "<hex-encoded-os-image-hash>",
   "key_provider_info": "<key-provider-info-string>",
-  "compose_hash": "<hex-encoded-compose-hash>"
+  "compose_hash": "<hex-encoded-compose-hash>",
+  "vm_config": "<json-vm-config-string>"
 }
 ```
 
