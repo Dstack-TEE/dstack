@@ -7,7 +7,7 @@
 
 [package]
 name = "dstack-sdk"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 license = "MIT"
 description = "This crate provides a rust client for communicating with dstack"
