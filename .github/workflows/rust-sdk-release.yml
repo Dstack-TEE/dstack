@@ -1,0 +1,21 @@
+name: Publish SDK to crates.io
+on:
+  push:
+    tags: ['rust-sdk-v*']
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: sdk-release
+    permissions:
+      id-token: write
+    steps:
+    - uses: actions/checkout@v5
+    - uses: rust-lang/crates-io-auth-action@v1
+      id: auth
+    - run: cargo publish -p dstack-sdk-types
+      env:
+        CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+    - run: cargo publish -p dstack-sdk
+      env:
+        CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+
