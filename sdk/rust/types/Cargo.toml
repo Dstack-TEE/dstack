@@ -5,7 +5,7 @@
 
 [package]
 name = "dstack-sdk-types"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 license = "MIT"
 description = "This crate provides rust types for communication with dstack"
