@@ -220,7 +220,7 @@ service Worker {
   // Get the guest agent version
   rpc Version(google.protobuf.Empty) returns (WorkerVersion) {}
   // Get attestation
-  rpc GetAttestation(GetAttestationRequest) returns (GetQuoteResponse) {}
+  rpc GetAttestationForAppKey(GetAttestationForAppKeyRequest) returns (GetQuoteResponse) {}
 }
 
 message SignRequest {
@@ -232,6 +232,6 @@ message SignResponse {
   bytes signature = 1;
 }
 
-message GetAttestationRequest {
+message GetAttestationForAppKeyRequest {
   string algorithm = 1;
 }

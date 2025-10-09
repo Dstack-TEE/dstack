@@ -10,7 +10,7 @@ use dstack_guest_agent_rpc::{
     dstack_guest_server::{DstackGuestRpc, DstackGuestServer},
     tappd_server::{TappdRpc, TappdServer},
     worker_server::{WorkerRpc, WorkerServer},
-    AppInfo, DeriveK256KeyResponse, DeriveKeyArgs, EmitEventArgs, GetAttestationRequest,
+    AppInfo, DeriveK256KeyResponse, DeriveKeyArgs, EmitEventArgs, GetAttestationForAppKeyRequest,
     GetKeyArgs, GetKeyResponse, GetQuoteResponse, GetTlsKeyArgs, GetTlsKeyResponse, RawQuoteArgs,
     SignRequest, SignResponse, TdxQuoteArgs, TdxQuoteResponse, WorkerVersion,
 };
@@ -489,7 +489,10 @@ impl WorkerRpc for ExternalRpcHandler {
         })
     }
 
-    async fn get_attestation(self, request: GetAttestationRequest) -> Result<GetQuoteResponse> {
+    async fn get_attestation_for_app_key(
+        self,
+        request: GetAttestationForAppKeyRequest,
+    ) -> Result<GetQuoteResponse> {
         match request.algorithm.as_str() {
             "ed25519" => Ok(self.state.inner.ed25519_attestation.clone()),
             "secp256k1" => Ok(self.state.inner.secp256k1_attestation.clone()),
@@ -512,7 +515,7 @@ impl RpcCall<AppState> for ExternalRpcHandler {
 mod tests {
     use super::*;
     use crate::config::{AppComposeWrapper, Config, Simulator};
-    use dstack_guest_agent_rpc::{GetAttestationRequest, SignRequest};
+    use dstack_guest_agent_rpc::{GetAttestationForAppKeyRequest, SignRequest};
     use dstack_types::{AppCompose, AppKeys, DockerConfig, KeyProvider};
     use ed25519_dalek::{Signature as Ed25519Signature, Verifier};
     use k256::ecdsa::{Signature as K256Signature, VerifyingKey};
@@ -725,40 +728,40 @@ pNs85uhOZE8z2jr8Pg==
     }
 
     #[tokio::test]
-    async fn test_get_attestation_ed25519_success() {
+    async fn test_get_attestation_for_app_key_ed25519_success() {
         let state = setup_test_state().await;
         let handler = ExternalRpcHandler::new(state.clone());
-        let request = GetAttestationRequest {
+        let request = GetAttestationForAppKeyRequest {
             algorithm: "ed25519".to_string(),
         };
 
-        let response = handler.get_attestation(request).await.unwrap();
+        let response = handler.get_attestation_for_app_key(request).await.unwrap();
 
         assert_eq!(response, state.inner.ed25519_attestation);
     }
 
     #[tokio::test]
-    async fn test_get_attestation_secp256k1_success() {
+    async fn test_get_attestation_for_app_key_secp256k1_success() {
         let state = setup_test_state().await;
         let handler = ExternalRpcHandler::new(state.clone());
-        let request = GetAttestationRequest {
+        let request = GetAttestationForAppKeyRequest {
             algorithm: "secp256k1".to_string(),
         };
 
-        let response = handler.get_attestation(request).await.unwrap();
+        let response = handler.get_attestation_for_app_key(request).await.unwrap();
 
         assert_eq!(response, state.inner.secp256k1_attestation);
     }
 
     #[tokio::test]
-    async fn test_get_attestation_unsupported_algorithm_fails() {
+    async fn test_get_attestation_for_app_key_unsupported_algorithm_fails() {
         let state = setup_test_state().await;
         let handler = ExternalRpcHandler::new(state);
-        let request = GetAttestationRequest {
+        let request = GetAttestationForAppKeyRequest {
             algorithm: "ecdsa".to_string(), // Unsupported algorithm
         };
 
-        let result = handler.get_attestation(request).await;
+        let result = handler.get_attestation_for_app_key(request).await;
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().to_string(), "Unsupported algorithm");
     }
