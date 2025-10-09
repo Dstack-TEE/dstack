@@ -519,7 +519,7 @@ mod tests {
     use std::collections::HashSet;
     use std::convert::TryFrom;
 
-    fn setup_test_state() -> AppState {
+    async fn setup_test_state() -> AppState {
         let mut csprng = OsRng;
         let ed25519_key = ed25519_dalek::SigningKey::generate(&mut csprng);
         let secp256k1_key = SigningKey::random(&mut csprng);
@@ -536,8 +536,6 @@ mod tests {
             report_data: vec![2; 64],
             vm_config: String::new(),
         };
-
-        let dummy_cert_client = unsafe { std::mem::zeroed() };
 
         let dummy_simulator = Simulator {
             enabled: false,
@@ -586,15 +584,72 @@ mod tests {
             data_disks: HashSet::new(),
         };
 
+        const DUMMY_PEM_KEY: &str = r#"-----BEGIN PRIVATE KEY-----
+MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQCSeV81CKVqILf/
+bk+OarAkZeph4ggb1d9Qt4bzJjVNsowpc/iWbacO6dHvrjXrqNdK7WEHDuxYlQCS
+xppINUCKyCoelAt2OJuUonLHtT3s41pGM0k69fcUb420fhKqNAHIaCCc38vOFDZ7
+aqLUGNDooc7bXgZxHUJHmq9QneeB74Ia+6TzA2KKXMu4ixvZWvrgRt64XKyL3+4J
+sQ6QqSgopGeyTv0blxFxF6X8UTUO/nZPnqf7BN9GnkJtHglb0TLI1H7BYvFmnpjT
+8yfjmdbRxvnczvRJuKCzTq9ePEvhRrwAzqQk3Ide0/KWdIiu2nrrfO/Imvia1DNp
+GgJsV0L7AgMBAAECggEARUbTcV1kAwRzkgOF7CloouZzCxWhWSz4AJC06oadOmDi
+qu53WgqFs2eCjBZ82TdTkFQiiniT7zeV/FWjfdh17M3MIgdKPoF6kDufBvahUcuc
+FEzIa3MPB+LVBlOEl2yelT8ugZPVrGPh+tBOL/uGvyhckmNvr4szoHM4TOxKJSk/
+njFbJcoX3UmampyxSa6MMSGaxM2pdziTujoj5+sJ/a0x/wwIih/XEZSWgLzDjGZS
+qaKmldjD0SRJQrZ1LTjjguKtkbOwKa2dtNOoHBkAtHyI+vWOLXNzZisXMazpmHNT
+mE2X6oQFcAXI7HHuHzkLaLpEdqlHA16nwFPNF0LzAQKBgQDLaE1eZnutK+nxHpUq
+cb3vMGN8dPxCrQJz/fvEb6lP93RCWBZbGen2gLGvFKyFwPcD/OR0HfBnFRjHIy25
+V4ta+iubQM3GFO2FOp9SwequCPY2H6YXah4LyXrCIw4Pv3x/I2bpbLOlltmMT5PS
+qPV86dH546kxOsJS6VhMCcQXAQKBgQC4WJu9VTBPfKf8JL8f7b/K0+MBN3OBkhsN
+V6nCR8JizAa1hxmxpMaeq7PqlGpJhQKinBblR314Cpqqrt7AL005gCxD0ddBM9Ib
+/7HafmLrAuhEDxnYx/QAyprTOsqjLS8Vd+eaA0nGF68R1LLHLxfXfhiuAjMwScCs
+afCrbdG1+wKBgAyZ3ZEnkCneOpPxbRRAD6AtwzwGk0oeJbTB20MEF90YW19wzZG/
+PTtEJb3O7hErLyJUHGMFJ8t7BxnvF/oPblaogOMRVK4cxconI4+g68T0USxxMXzp
+2gqo5K36NfjLyA6oRsvXLBnqCngixembBfpDEfsFG4otNbSlOA8d28QBAoGBAKdG
+YCtxPaEi8BtwDK2gQsR9eCMGeh08wqdcwIG2M8EKeZwGt13mswQPsfZOLhQASd/b
+2zq5oDRpCueOPjoNsflXQNNZegWETEdzwaMNxByUSsZXHZED/3koX00EsBNZULwe
+TV4HVc4Wd5mqc38iUHQNy78559ENW3QXvXcQ85Y5AoGBAIQlSbNRupo/5ATwJW0e
+bggPyacIhS9GrsgP9qz9p8xxNSfcyAFRGiXnlGoiRbNchbUiZPRjoJ08lOHGxVQw
+O17ivI85heZnG+i5Yz0ZolMd8fbc4h78oA9FnJQJV5AeTDqTxf528A2jyWCAmu11
+Sv2zO+vcYHN7bT2UTCEWkeAw
+-----END PRIVATE KEY-----
+"#;
+
+        const DUMMY_PEM_CERT: &str = r#"-----BEGIN CERTIFICATE-----
+MIIDCTCCAfGgAwIBAgIUYRX7SNHsL6EGSy0ACQzjX4cfaw0wDQYJKoZIhvcNAQEL
+BQAwFDESMBAGA1UEAwwJbG9jYWxob3N0MB4XDTI1MTAwOTEyNDMyN1oXDTI2MTAw
+OTEyNDMyN1owFDESMBAGA1UEAwwJbG9jYWxob3N0MIIBIjANBgkqhkiG9w0BAQEF
+AAOCAQ8AMIIBCgKCAQEAknlfNQilaiC3/25PjmqwJGXqYeIIG9XfULeG8yY1TbKM
+KXP4lm2nDunR764166jXSu1hBw7sWJUAksaaSDVAisgqHpQLdjiblKJyx7U97ONa
+RjNJOvX3FG+NtH4SqjQByGggnN/LzhQ2e2qi1BjQ6KHO214GcR1CR5qvUJ3nge+C
+Gvuk8wNiilzLuIsb2Vr64EbeuFysi9/uCbEOkKkoKKRnsk79G5cRcRel/FE1Dv52
+T56n+wTfRp5CbR4JW9EyyNR+wWLxZp6Y0/Mn45nW0cb53M70Sbigs06vXjxL4Ua8
+AM6kJNyHXtPylnSIrtp663zvyJr4mtQzaRoCbFdC+wIDAQABo1MwUTAdBgNVHQ4E
+FgQUsnBjoCWFH3il0MvjO9p0o/vcACgwHwYDVR0jBBgwFoAUsnBjoCWFH3il0Mvj
+O9p0o/vcACgwDwYDVR0TAQH/BAUwAwEB/zANBgkqhkiG9w0BAQsFAAOCAQEAj9rI
+cHDTj9LhD2Nca/Mj2dNwUa1Fq81I5EF3GWi6mosTT4hfQupUC1i/6UE6ubLHRUGr
+J3JnHBG8hUCddx5VxLncDmYP/4LHVEue/XdCURgY+K2WxQnUPDzZV2mXJXUzp8si
+6xzFyiPyf4qsQaoRQnpOmyUXvBwtdf3M28EA/pTBBDZ4pZJ1QaSTlT7fpDgK2e6L
+arBh7HebdS9UBaWLtYBMsRWRK5qpOQnLiy8H6J93/W6i4X3DSxeZXeYiMSO/jsJ8
+5XxL9zqOVjsw9Bxr79zCe7JF6fp6r3miUndMHQch/WXOY07lxH00cEqYo+2/Vk5D
+pNs85uhOZE8z2jr8Pg==
+-----END CERTIFICATE-----
+"#;
+
         let dummy_keys = AppKeys {
             disk_crypt_key: Vec::new(),
             env_crypt_key: Vec::new(),
             k256_key: Vec::new(),
             k256_signature: Vec::new(),
             gateway_app_id: String::new(),
-            ca_cert: String::new(),
-            key_provider: KeyProvider::None { key: String::new() },
+            ca_cert: DUMMY_PEM_CERT.to_string(),
+            key_provider: KeyProvider::None {
+                key: DUMMY_PEM_KEY.to_string(),
+            },
         };
+
+        let dummy_cert_client = CertRequestClient::create(&dummy_keys, None, String::new())
+            .await
+            .expect("Failed to create CertRequestClient");
 
         let inner = AppStateInner {
             config: dummy_config,
@@ -615,7 +670,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_sign_ed25519_success() {
-        let state = setup_test_state();
+        let state = setup_test_state().await;
         let handler = InternalRpcHandler {
             state: state.clone(),
         };
@@ -638,7 +693,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_sign_secp256k1_success() {
-        let state = setup_test_state();
+        let state = setup_test_state().await;
         let handler = InternalRpcHandler {
             state: state.clone(),
         };
@@ -657,7 +712,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_sign_unsupported_algorithm_fails() {
-        let state = setup_test_state();
+        let state = setup_test_state().await;
         let handler = InternalRpcHandler { state };
         let request = SignRequest {
             algorithm: "rsa".to_string(), // Unsupported algorithm
@@ -671,7 +726,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_attestation_ed25519_success() {
-        let state = setup_test_state();
+        let state = setup_test_state().await;
         let handler = ExternalRpcHandler::new(state.clone());
         let request = GetAttestationRequest {
             algorithm: "ed25519".to_string(),
@@ -684,7 +739,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_attestation_secp256k1_success() {
-        let state = setup_test_state();
+        let state = setup_test_state().await;
         let handler = ExternalRpcHandler::new(state.clone());
         let request = GetAttestationRequest {
             algorithm: "secp256k1".to_string(),
@@ -697,7 +752,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_attestation_unsupported_algorithm_fails() {
-        let state = setup_test_state();
+        let state = setup_test_state().await;
         let handler = ExternalRpcHandler::new(state);
         let request = GetAttestationRequest {
             algorithm: "ecdsa".to_string(), // Unsupported algorithm
