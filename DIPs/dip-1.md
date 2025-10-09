@@ -97,7 +97,7 @@ For inline payloads, the combined length of `<type>` and `<base64url-payload>` M
 
 ## Test Vectors
 
-| Case                      | Identifier                                                      | Payload (when hashed)                                                                           |
+| Case                      | Report data                                                     | Outband payload                                                                             |
 | ------------------------- | ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
 | SHA-256 of payload        | `dip1:sha256:HmdI7tOxX-IxZngR8Aok9miZ4A5DzUj-HW-VUZ1Et0E`        | `ratls-pubkey:ee218f44a5f0a9c3233f9cc09f0cd41518f376478127feb989d5cf1292c56a01`                |
 | Inline ra-pk sample       | `dip1:inline:ra-pk:LPJNul-wow4m6DsqxbninhsWHlwfp0JecwQzYpOLmCQ` | _Embedded in identifier_                                                                        |
