@@ -47,5 +47,5 @@ sha3.workspace = true
 strip-ansi-escapes.workspace = true
 cert-client.workspace = true
 ring.workspace = true
-ed25519-dalek = { version = "2.2.0", features = ["rand_core"] }
+ed25519-dalek.workspace = true
 rand.workspace = true
