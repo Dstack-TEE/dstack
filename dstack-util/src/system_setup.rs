@@ -561,7 +561,7 @@ impl<'a> Stage0<'a> {
                 .await
                 .context("Failed to get temp ca cert")?
         };
-        let cert_pair = generate_ra_cert(tmp_ca.temp_ca_cert, tmp_ca.temp_ca_key)?;
+        let cert_pair = generate_ra_cert(tmp_ca.temp_ca_cert.clone(), tmp_ca.temp_ca_key.clone())?;
         let ra_client = RaClientConfig::builder()
             .tls_no_check(false)
             .tls_built_in_root_certs(false)
@@ -619,6 +619,8 @@ impl<'a> Stage0<'a> {
             key_provider: KeyProvider::Kms {
                 url: kms_url,
                 pubkey: root_pubkey,
+                tmp_ca_key: tmp_ca.temp_ca_key,
+                tmp_ca_cert: tmp_ca.temp_ca_cert,
             },
         };
         Ok(keys)

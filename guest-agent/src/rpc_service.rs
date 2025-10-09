@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use anyhow::{Context, Result};
 use cert_client::CertRequestClient;
@@ -28,6 +28,7 @@ use ring::rand::{SecureRandom, SystemRandom};
 use serde_json::json;
 use sha3::{Digest, Keccak256};
 use tdx_attest::eventlog::read_event_logs;
+use tracing::error;
 
 use crate::config::Config;
 
@@ -41,10 +42,51 @@ struct AppStateInner {
     keys: AppKeys,
     vm_config: String,
     cert_client: CertRequestClient,
-    demo_cert: String,
+    demo_cert: RwLock<String>,
+}
+
+impl AppStateInner {
+    async fn request_demo_cert(&self) -> Result<String> {
+        let key = KeyPair::generate().context("Failed to generate demo key")?;
+        let demo_cert = self
+            .cert_client
+            .request_cert(
+                &key,
+                CertConfig {
+                    org_name: None,
+                    subject: "demo-cert".to_string(),
+                    subject_alt_names: vec![],
+                    usage_server_auth: false,
+                    usage_client_auth: true,
+                    ext_quote: true,
+                },
+                self.config.simulator.enabled,
+            )
+            .await
+            .context("Failed to get app cert")?
+            .join("\n");
+        Ok(demo_cert)
+    }
 }
 
 impl AppState {
+    fn maybe_request_demo_cert(&self) {
+        let state = self.inner.clone();
+        if !state.demo_cert.read().unwrap().is_empty() {
+            return;
+        }
+        tokio::spawn(async move {
+            match state.request_demo_cert().await {
+                Ok(demo_cert) => {
+                    *state.demo_cert.write().unwrap() = demo_cert;
+                }
+                Err(e) => {
+                    error!("Failed to request demo cert: {e}");
+                }
+            }
+        });
+    }
+
     pub async fn new(config: Config) -> Result<Self> {
         let keys: AppKeys = serde_json::from_str(&fs::read_to_string(&config.keys_file)?)
             .context("Failed to parse app keys")?;
@@ -56,32 +98,17 @@ impl AppState {
             CertRequestClient::create(&keys, config.pccs_url.as_deref(), vm_config.clone())
                 .await
                 .context("Failed to create cert signer")?;
-        let key = KeyPair::generate().context("Failed to generate demo key")?;
-        let demo_cert = cert_client
-            .request_cert(
-                &key,
-                CertConfig {
-                    org_name: None,
-                    subject: "demo-cert".to_string(),
-                    subject_alt_names: vec![],
-                    usage_server_auth: false,
-                    usage_client_auth: true,
-                    ext_quote: true,
-                },
-                config.simulator.enabled,
-            )
-            .await
-            .context("Failed to get app cert")?
-            .join("\n");
-        Ok(Self {
+        let me = Self {
             inner: Arc::new(AppStateInner {
                 config,
                 keys,
                 cert_client,
-                demo_cert,
+                demo_cert: RwLock::new(String::new()),
                 vm_config,
             }),
-        })
+        };
+        me.maybe_request_demo_cert();
+        Ok(me)
     }
 
     pub fn config(&self) -> &Config {
@@ -136,6 +163,7 @@ pub async fn get_info(state: &AppState, external: bool) -> Result<AppInfo> {
     } else {
         state.inner.vm_config.clone()
     };
+    state.maybe_request_demo_cert();
     Ok(AppInfo {
         app_name: state.config().app_compose.name.clone(),
         app_id: app_info.app_id,
@@ -145,7 +173,7 @@ pub async fn get_info(state: &AppState, external: bool) -> Result<AppInfo> {
         os_image_hash: app_info.os_image_hash.clone(),
         key_provider_info: String::from_utf8(app_info.key_provider_info).unwrap_or_default(),
         compose_hash: app_info.compose_hash.clone(),
-        app_cert: state.inner.demo_cert.clone(),
+        app_cert: state.inner.demo_cert.read().unwrap().clone(),
         tcb_info,
         vm_config,
     })

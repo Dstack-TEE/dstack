@@ -192,6 +192,8 @@ pub enum KeyProvider {
         url: String,
         #[serde(with = "hex_bytes")]
         pubkey: Vec<u8>,
+        tmp_ca_key: String,
+        tmp_ca_cert: String,
     },
 }
 
