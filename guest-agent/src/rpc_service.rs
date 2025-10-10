@@ -5,6 +5,7 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use cert_client::CertRequestClient;
 use dstack_guest_agent_rpc::{
     dstack_guest_server::{DstackGuestRpc, DstackGuestServer},
@@ -89,10 +90,17 @@ impl AppState {
         let secp256k1_pubkey = secp256k1_key.verifying_key().to_sec1_bytes();
 
         let mut ed25519_report_data = [0u8; 64];
-        ed25519_report_data[..ed25519_pubkey.len()].copy_from_slice(&ed25519_pubkey);
+        let ed25519_b64 = URL_SAFE_NO_PAD.encode(ed25519_pubkey);
+        let ed25519_report_string = format!("dip1::ed25519-pk:{}", ed25519_b64);
+        let ed_bytes = ed25519_report_string.as_bytes();
+        ed25519_report_data[..ed_bytes.len()].copy_from_slice(ed_bytes);
 
         let mut secp256k1_report_data = [0u8; 64];
-        secp256k1_report_data[..secp256k1_pubkey.len()].copy_from_slice(&secp256k1_pubkey);
+        let secp256k1_b64 = URL_SAFE_NO_PAD.encode(secp256k1_pubkey);
+        let secp256k1_report_string = format!("dip1::secp256k1c-pk:{}", secp256k1_b64);
+        let secp_bytes = secp256k1_report_string.as_bytes();
+        secp256k1_report_data[..secp_bytes.len()].copy_from_slice(secp_bytes);
+
         let (ed25519_attestation, secp256k1_attestation) = if config.simulator.enabled {
             (
                 simulate_quote(&config, ed25519_report_data, &vm_config)?,
