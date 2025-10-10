@@ -15,6 +15,7 @@ use dstack_guest_agent_rpc::{
     SignRequest, SignResponse, TdxQuoteArgs, TdxQuoteResponse, WorkerVersion,
 };
 use dstack_types::{AppKeys, SysConfig};
+use ed25519_dalek::ed25519::signature::hazmat::PrehashSigner;
 use ed25519_dalek::{Signer as Ed25519Signer, SigningKey as Ed25519SigningKey};
 use fs_err as fs;
 use k256::ecdsa::SigningKey;
@@ -313,6 +314,17 @@ impl DstackGuestRpc for InternalRpcHandler {
                     self.state.inner.secp256k1_key.sign(&request.data);
                 signature.to_bytes().to_vec()
             }
+            "secp256k1_prehashed" => {
+                if request.data.len() != 32 {
+                    return Err(anyhow::anyhow!(
+                        "Pre-hashed signing requires a 32-byte digest, but received {} bytes",
+                        request.data.len()
+                    ));
+                }
+                let signature: k256::ecdsa::Signature =
+                    self.state.inner.secp256k1_key.sign_prehash(&request.data)?;
+                signature.to_bytes().to_vec()
+            }
             _ => return Err(anyhow::anyhow!("Unsupported algorithm")),
         };
         Ok(SignResponse { signature })
@@ -517,8 +529,10 @@ mod tests {
     use crate::config::{AppComposeWrapper, Config, Simulator};
     use dstack_guest_agent_rpc::{GetAttestationForAppKeyRequest, SignRequest};
     use dstack_types::{AppCompose, AppKeys, DockerConfig, KeyProvider};
+    use ed25519_dalek::ed25519::signature::hazmat::PrehashVerifier;
     use ed25519_dalek::{Signature as Ed25519Signature, Verifier};
     use k256::ecdsa::{Signature as K256Signature, VerifyingKey};
+    use sha2::Sha256;
     use std::collections::HashSet;
     use std::convert::TryFrom;
 
@@ -711,6 +725,53 @@ pNs85uhOZE8z2jr8Pg==
         let public_key = VerifyingKey::from(&state.inner.secp256k1_key);
         let signature = K256Signature::try_from(response.signature.as_slice()).unwrap();
         assert!(public_key.verify(data_to_sign, &signature).is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_sign_secp256k1_prehashed_success() {
+        let state = setup_test_state().await;
+        let handler = InternalRpcHandler {
+            state: state.clone(),
+        };
+        let data_to_sign = b"test message for secp256k1 prehashed";
+
+        let digest = Sha256::digest(data_to_sign);
+
+        let request = SignRequest {
+            algorithm: "secp256k1_prehashed".to_string(),
+            data: digest.to_vec(),
+        };
+
+        let response = handler.sign(request).await.unwrap();
+
+        let public_key = VerifyingKey::from(&state.inner.secp256k1_key);
+        let signature = K256Signature::try_from(response.signature.as_slice()).unwrap();
+        assert!(public_key
+            .verify_prehash(digest.as_slice(), &signature)
+            .is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_sign_secp256k1_prehashed_invalid_length_fails() {
+        let state = setup_test_state().await;
+        let handler = InternalRpcHandler {
+            state: state.clone(),
+        };
+
+        // digest with an invalid length
+        let invalid_digest = vec![0; 31];
+
+        let request = SignRequest {
+            algorithm: "secp256k1_prehashed".to_string(),
+            data: invalid_digest,
+        };
+
+        let response = handler.sign(request).await;
+        assert!(response.is_err());
+        assert!(response
+            .unwrap_err()
+            .to_string()
+            .contains("requires a 32-byte digest"));
     }
 
     #[tokio::test]
