@@ -94,6 +94,7 @@ enum FsType {
     #[default]
     Zfs,
     Ext4,
+    Xfs,
 }
 
 impl Display for FsType {
@@ -101,6 +102,7 @@ impl Display for FsType {
         match self {
             FsType::Zfs => write!(f, "zfs"),
             FsType::Ext4 => write!(f, "ext4"),
+            FsType::Xfs => write!(f, "xfs"),
         }
     }
 }
@@ -111,7 +113,8 @@ impl FromStr for FsType {
         match s.to_lowercase().as_str() {
             "zfs" => Ok(FsType::Zfs),
             "ext4" => Ok(FsType::Ext4),
-            _ => bail!("Invalid filesystem type: {s}, supported types: zfs, ext4"),
+            "xfs" => Ok(FsType::Xfs),
+            _ => bail!("Invalid filesystem type: {s}, supported types: zfs, ext4, xfs"),
         }
     }
 }
@@ -691,7 +694,7 @@ impl<'a> Stage0<'a> {
     async fn setup_swap(&self, swap_size: u64, opts: &DstackOptions) -> Result<()> {
         match opts.storage_fs {
             FsType::Zfs => self.setup_swap_zvol(swap_size).await,
-            FsType::Ext4 => self.setup_swapfile(swap_size).await,
+            FsType::Ext4 | FsType::Xfs => self.setup_swapfile(swap_size).await,
         }
     }
 
@@ -814,6 +817,15 @@ impl<'a> Stage0<'a> {
                     }
                     .context("Failed to create ext4 filesystem")?;
                 }
+                FsType::Xfs => {
+                    info!("Creating xfs filesystem");
+                    cmd! {
+                        mkfs.xfs -f $fs_dev;
+                    }
+                    .context("Failed to create xfs filesystem")?;
+                    Self::mount_xfs(&fs_dev, mount_point, false)
+                        .context("Failed to mount newly created xfs filesystem")?;
+                }
             }
         } else {
             self.vmm
@@ -842,6 +854,10 @@ impl<'a> Stage0<'a> {
                 FsType::Ext4 => {
                     Self::mount_e2fs(&fs_dev, mount_point)
                         .context("Failed to mount ext4 filesystem")?;
+                }
+                FsType::Xfs => {
+                    Self::mount_xfs(&fs_dev, mount_point, true)
+                        .context("Failed to mount xfs filesystem")?;
                 }
             }
         }
@@ -883,6 +899,60 @@ impl<'a> Stage0<'a> {
             mount $dev $mount_point;
         }
         .context("Failed to prepare ext4 filesystem")?;
+        Ok(())
+    }
+
+    fn mount_xfs(
+        dev: &impl AsRef<Path>,
+        mount_point: &impl AsRef<Path>,
+        run_check: bool,
+    ) -> Result<()> {
+        let dev = dev.as_ref();
+        let mount_point = mount_point.as_ref();
+        if run_check {
+            info!("Checking filesystem");
+
+            let repair_status = Command::new("xfs_repair")
+                .arg("-n")
+                .arg(dev)
+                .status()
+                .with_context(|| format!("Failed to run xfs_repair on {}", dev.display()))?;
+
+            match repair_status.code() {
+                Some(0) => {}
+                Some(1) => {
+                    warn!(
+                        "xfs_repair reported issues on {}, continuing without modification",
+                        dev.display()
+                    );
+                }
+                Some(code) => {
+                    bail!(
+                        "xfs_repair exited with status {code} while checking {}",
+                        dev.display()
+                    );
+                }
+                None => {
+                    bail!(
+                        "xfs_repair terminated by signal while checking {}",
+                        dev.display()
+                    );
+                }
+            }
+        }
+
+        cmd! {
+            info "Mounting filesystem";
+            mount $dev $mount_point;
+        }
+        .context("Failed to mount xfs filesystem")?;
+
+        cmd! {
+            info "Growing filesystem if needed";
+            xfs_growfs $mount_point;
+        }
+        .context("Failed to grow xfs filesystem")?;
+
         Ok(())
     }
 
