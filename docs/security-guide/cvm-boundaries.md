@@ -41,7 +41,7 @@ This is the main configuration file for the application in JSON format:
 | secure_time | 0.5.0 | boolean | Whether secure time is enabled |
 | pre_launch_script | 0.4.0 | string | Prelaunch bash script that runs before execute `docker compose up` |
 | init_script | 0.5.5 | string | Bash script that executed prior to dockerd startup |
-| storage_fs | 0.5.5 | string | Filesystem type for the data disk of the CVM. Supported values: "zfs", "ext4". default to "zfs". **ZFS:** Ensures filesystem integrity with built-in data protection features. **ext4:** Provides better performance for database applications with lower overhead and faster I/O operations, but no strong integrity protection. |
+| storage_fs | 0.5.5 | string | Filesystem type for the data disk of the CVM. Supported values: "zfs", "ext4", "xfs". default to "zfs". **ZFS:** Ensures filesystem integrity with built-in data protection features. **ext4:** Provides better performance for database applications with lower overhead and faster I/O operations, but no strong integrity protection. **xfs:** Scales well for large volumes and high-concurrency workloads |
 | swap_size | 0.5.5 | string/integer | The linux swap size. default to 0. Can be in byte or human-readable format (e.g., "1G", "256M"). |
 
 
