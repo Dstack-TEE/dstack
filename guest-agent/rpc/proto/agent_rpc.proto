@@ -49,8 +49,11 @@ service DstackGuest {
   // Get app info
   rpc Info(google.protobuf.Empty) returns (AppInfo) {}
 
-  // Get app info
+  // Sign a payload
   rpc Sign(SignRequest) returns (SignResponse) {}
+
+  // Verify a signature
+  rpc Verify(VerifyRequest) returns (VerifyResponse) {}
 }
 
 // The request to derive a key
@@ -232,6 +235,17 @@ message SignRequest {
 
 message SignResponse {
   bytes signature = 1;
+}
+
+message VerifyRequest {
+  string algorithm = 1;
+  bytes data = 2;
+  bytes signature = 3;
+  bytes public_key = 4;
+}
+
+message VerifyResponse {
+  bool valid = 1;
 }
 
 message GetAttestationForAppKeyRequest {
