@@ -26,7 +26,6 @@ use ra_tls::{
     cert::CertConfig,
     kdf::{derive_ecdsa_key, derive_ecdsa_key_pair_from_bytes},
 };
-use rand::rngs::OsRng;
 use rcgen::KeyPair;
 use ring::rand::{SecureRandom, SystemRandom};
 use serde_json::json;
@@ -46,10 +45,6 @@ struct AppStateInner {
     vm_config: String,
     cert_client: CertRequestClient,
     demo_cert: String,
-    ed25519_key: Ed25519SigningKey,
-    secp256k1_key: SigningKey,
-    ed25519_attestation: GetQuoteResponse,
-    secp256k1_attestation: GetQuoteResponse,
 }
 
 impl AppState {
@@ -82,57 +77,6 @@ impl AppState {
             .context("Failed to get app cert")?
             .join("\n");
 
-        let mut csprng = OsRng;
-        let ed25519_key = ed25519_dalek::SigningKey::generate(&mut csprng);
-        let secp256k1_key = SigningKey::random(&mut csprng);
-
-        let ed25519_pubkey = ed25519_key.verifying_key().to_bytes();
-        let secp256k1_pubkey = secp256k1_key.verifying_key().to_sec1_bytes();
-
-        let mut ed25519_report_data = [0u8; 64];
-        let ed25519_b64 = URL_SAFE_NO_PAD.encode(ed25519_pubkey);
-        let ed25519_report_string = format!("dip1::ed25519-pk:{}", ed25519_b64);
-        let ed_bytes = ed25519_report_string.as_bytes();
-        ed25519_report_data[..ed_bytes.len()].copy_from_slice(ed_bytes);
-
-        let mut secp256k1_report_data = [0u8; 64];
-        let secp256k1_b64 = URL_SAFE_NO_PAD.encode(secp256k1_pubkey);
-        let secp256k1_report_string = format!("dip1::secp256k1c-pk:{}", secp256k1_b64);
-        let secp_bytes = secp256k1_report_string.as_bytes();
-        secp256k1_report_data[..secp_bytes.len()].copy_from_slice(secp_bytes);
-
-        let (ed25519_attestation, secp256k1_attestation) = if config.simulator.enabled {
-            (
-                simulate_quote(&config, ed25519_report_data, &vm_config)?,
-                simulate_quote(&config, secp256k1_report_data, &vm_config)?,
-            )
-        } else {
-            let (ed25519_quote, secp256k1_quote) = (
-                tdx_attest::get_quote(&ed25519_report_data, None)
-                    .context("Failed to get ed25519 quote")?
-                    .1,
-                tdx_attest::get_quote(&secp256k1_report_data, None)
-                    .context("Failed to get secp256k1 quote")?
-                    .1,
-            );
-            let event_log =
-                serde_json::to_string(&read_event_logs().context("Failed to read event log")?)?;
-            (
-                GetQuoteResponse {
-                    quote: ed25519_quote,
-                    event_log: event_log.clone(),
-                    report_data: ed25519_report_data.to_vec(),
-                    vm_config: vm_config.clone(),
-                },
-                GetQuoteResponse {
-                    quote: secp256k1_quote,
-                    event_log,
-                    report_data: secp256k1_report_data.to_vec(),
-                    vm_config: vm_config.clone(),
-                },
-            )
-        };
-
         Ok(Self {
             inner: Arc::new(AppStateInner {
                 config,
@@ -140,10 +84,6 @@ impl AppState {
                 cert_client,
                 demo_cert,
                 vm_config,
-                ed25519_key,
-                secp256k1_key,
-                ed25519_attestation,
-                secp256k1_attestation,
             }),
         })
     }
@@ -246,16 +186,33 @@ impl DstackGuestRpc for InternalRpcHandler {
 
     async fn get_key(self, request: GetKeyArgs) -> Result<GetKeyResponse> {
         let k256_app_key = &self.state.inner.keys.k256_key;
-        let derived_k256_key = derive_ecdsa_key(k256_app_key, &[request.path.as_bytes()], 32)
-            .context("Failed to derive k256 key")?;
-        let derived_k256_key =
-            SigningKey::from_slice(&derived_k256_key).context("Failed to parse k256 key")?;
-        let derived_k256_pubkey = derived_k256_key.verifying_key();
-        let msg_to_sign = format!(
-            "{}:{}",
-            request.purpose,
-            hex::encode(derived_k256_pubkey.to_sec1_bytes())
-        );
+
+        let (key, pubkey_hex) = match request.algorithm.as_str() {
+            "ed25519" => {
+                let derived_key = derive_ecdsa_key(k256_app_key, &[request.path.as_bytes()], 32)
+                    .context("Failed to derive ed25519 key")?;
+                let signing_key = Ed25519SigningKey::from_bytes(
+                    &derived_key
+                        .as_slice()
+                        .try_into()
+                        .or(Err(anyhow::anyhow!("Invalid key length")))?,
+                );
+                let pubkey_hex = hex::encode(signing_key.verifying_key().as_bytes());
+                (derived_key, pubkey_hex)
+            }
+            "secp256k1" | "secp256k1_prehashed" | "" => {
+                let derived_key = derive_ecdsa_key(k256_app_key, &[request.path.as_bytes()], 32)
+                    .context("Failed to derive k256 key")?;
+
+                let signing_key =
+                    SigningKey::from_slice(&derived_key).context("Failed to parse k256 key")?;
+                let pubkey_hex = hex::encode(signing_key.verifying_key().to_sec1_bytes());
+                (derived_key, pubkey_hex)
+            }
+            _ => return Err(anyhow::anyhow!("Unsupported algorithm")),
+        };
+
+        let msg_to_sign = format!("{}:{}", request.purpose, pubkey_hex);
         let app_signing_key =
             SigningKey::from_slice(k256_app_key).context("Failed to parse app k256 key")?;
         let digest = Keccak256::new_with_prefix(msg_to_sign);
@@ -264,7 +221,7 @@ impl DstackGuestRpc for InternalRpcHandler {
         signature.push(recid.to_byte());
 
         Ok(GetKeyResponse {
-            key: derived_k256_key.to_bytes().to_vec(),
+            key,
             signature_chain: vec![signature, self.state.inner.keys.k256_signature.clone()],
         })
     }
@@ -312,14 +269,24 @@ impl DstackGuestRpc for InternalRpcHandler {
     }
 
     async fn sign(self, request: SignRequest) -> Result<SignResponse> {
+        let key_response = self
+            .get_key(GetKeyArgs {
+                path: "vms".to_string(),
+                purpose: "signing".to_string(),
+                algorithm: request.algorithm.clone(),
+            })
+            .await?;
         let signature = match request.algorithm.as_str() {
             "ed25519" => {
-                let signature = self.state.inner.ed25519_key.sign(&request.data);
+                let key_bytes: [u8; 32] = key_response.key.try_into().expect("Key is incorrect");
+                let signing_key = Ed25519SigningKey::from_bytes(&key_bytes);
+                let signature = signing_key.sign(&request.data);
                 signature.to_bytes().to_vec()
             }
             "secp256k1" => {
-                let signature: k256::ecdsa::Signature =
-                    self.state.inner.secp256k1_key.sign(&request.data);
+                let signing_key = SigningKey::from_slice(&key_response.key)
+                    .context("Failed to parse secp256k1 key")?;
+                let signature: k256::ecdsa::Signature = signing_key.sign(&request.data);
                 signature.to_bytes().to_vec()
             }
             "secp256k1_prehashed" => {
@@ -329,8 +296,9 @@ impl DstackGuestRpc for InternalRpcHandler {
                         request.data.len()
                     ));
                 }
-                let signature: k256::ecdsa::Signature =
-                    self.state.inner.secp256k1_key.sign_prehash(&request.data)?;
+                let signing_key = SigningKey::from_slice(&key_response.key)
+                    .context("Failed to parse secp256k1 key")?;
+                let signature: k256::ecdsa::Signature = signing_key.sign_prehash(&request.data)?;
                 signature.to_bytes().to_vec()
             }
             _ => return Err(anyhow::anyhow!("Unsupported algorithm")),
@@ -513,9 +481,82 @@ impl WorkerRpc for ExternalRpcHandler {
         self,
         request: GetAttestationForAppKeyRequest,
     ) -> Result<GetQuoteResponse> {
+        let key_response = InternalRpcHandler {
+            state: self.state.clone(),
+        }
+        .get_key(GetKeyArgs {
+            path: "vms".to_string(),
+            purpose: "signing".to_string(),
+            algorithm: request.algorithm.clone(),
+        })
+        .await?;
+
         match request.algorithm.as_str() {
-            "ed25519" => Ok(self.state.inner.ed25519_attestation.clone()),
-            "secp256k1" => Ok(self.state.inner.secp256k1_attestation.clone()),
+            "ed25519" => {
+                let key_bytes: [u8; 32] = key_response.key.try_into().expect("Key is incorrect");
+                let ed25519_key = Ed25519SigningKey::from_bytes(&key_bytes);
+                let ed25519_pubkey = ed25519_key.verifying_key().to_bytes();
+
+                let mut ed25519_report_data = [0u8; 64];
+                let ed25519_b64 = URL_SAFE_NO_PAD.encode(ed25519_pubkey);
+                let ed25519_report_string = format!("dip1::ed25519-pk:{}", ed25519_b64);
+                let ed_bytes = ed25519_report_string.as_bytes();
+                ed25519_report_data[..ed_bytes.len()].copy_from_slice(ed_bytes);
+
+                if self.state.config().simulator.enabled {
+                    Ok(simulate_quote(
+                        self.state.config(),
+                        ed25519_report_data,
+                        &self.state.inner.vm_config,
+                    )?)
+                } else {
+                    let ed25519_quote = tdx_attest::get_quote(&ed25519_report_data, None)
+                        .context("Failed to get ed25519 quote")?
+                        .1;
+                    let event_log = serde_json::to_string(
+                        &read_event_logs().context("Failed to read event log")?,
+                    )?;
+                    Ok(GetQuoteResponse {
+                        quote: ed25519_quote,
+                        event_log: event_log.clone(),
+                        report_data: ed25519_report_data.to_vec(),
+                        vm_config: self.state.inner.vm_config.clone(),
+                    })
+                }
+            }
+            "secp256k1" | "secp256k1_prehashed" => {
+                let secp256k1_key = SigningKey::from_slice(&key_response.key)
+                    .context("Failed to parse secp256k1 key")?;
+                let secp256k1_pubkey = secp256k1_key.verifying_key().to_sec1_bytes();
+
+                let mut secp256k1_report_data = [0u8; 64];
+                let secp256k1_b64 = URL_SAFE_NO_PAD.encode(secp256k1_pubkey);
+                let secp256k1_report_string = format!("dip1::secp256k1c-pk:{}", secp256k1_b64);
+                let secp_bytes = secp256k1_report_string.as_bytes();
+                secp256k1_report_data[..secp_bytes.len()].copy_from_slice(secp_bytes);
+
+                if self.state.config().simulator.enabled {
+                    Ok(simulate_quote(
+                        self.state.config(),
+                        secp256k1_report_data,
+                        &self.state.inner.vm_config,
+                    )?)
+                } else {
+                    let secp256k1_quote = tdx_attest::get_quote(&secp256k1_report_data, None)
+                        .context("Failed to get secp256k1 quote")?
+                        .1;
+                    let event_log = serde_json::to_string(
+                        &read_event_logs().context("Failed to read event log")?,
+                    )?;
+
+                    Ok(GetQuoteResponse {
+                        quote: secp256k1_quote,
+                        event_log,
+                        report_data: secp256k1_report_data.to_vec(),
+                        vm_config: self.state.inner.vm_config.clone(),
+                    })
+                }
+            }
             _ => Err(anyhow::anyhow!("Unsupported algorithm")),
         }
     }
@@ -538,34 +579,44 @@ mod tests {
     use dstack_guest_agent_rpc::{GetAttestationForAppKeyRequest, SignRequest};
     use dstack_types::{AppCompose, AppKeys, DockerConfig, KeyProvider};
     use ed25519_dalek::ed25519::signature::hazmat::PrehashVerifier;
-    use ed25519_dalek::{Signature as Ed25519Signature, Verifier};
+    use ed25519_dalek::{
+        Signature as Ed25519Signature, Verifier, VerifyingKey as Ed25519VerifyingKey,
+    };
     use k256::ecdsa::{Signature as K256Signature, VerifyingKey};
     use sha2::Sha256;
     use std::collections::HashSet;
     use std::convert::TryFrom;
+    use std::fs::File;
+    use std::io::Write;
+
+    fn extract_pubkey_from_report_data(report_data: &[u8], prefix: &str) -> Result<Vec<u8>> {
+        let end = report_data
+            .iter()
+            .position(|&b| b == 0)
+            .unwrap_or(report_data.len());
+        let report_str = std::str::from_utf8(&report_data[..end])?;
+
+        if let Some(base64_pk) = report_str.strip_prefix(prefix) {
+            URL_SAFE_NO_PAD
+                .decode(base64_pk)
+                .context("Failed to decode base64")
+        } else {
+            Err(anyhow::anyhow!("Prefix not found in report data"))
+        }
+    }
 
     async fn setup_test_state() -> AppState {
-        let mut csprng = OsRng;
-        let ed25519_key = ed25519_dalek::SigningKey::generate(&mut csprng);
-        let secp256k1_key = SigningKey::random(&mut csprng);
+        let mut dummy_quote_file = File::create("/tmp/sample_quote.txt").unwrap();
+        let _ = File::create("/tmp/sample_event_log.txt").unwrap();
 
-        let ed25519_attestation = GetQuoteResponse {
-            quote: b"dummy_ed25519_quote".to_vec(),
-            event_log: "dummy_ed25519_event_log".to_string(),
-            report_data: vec![1; 64],
-            vm_config: String::new(),
-        };
-        let secp256k1_attestation = GetQuoteResponse {
-            quote: b"dummy_secp256k1_quote".to_vec(),
-            event_log: "dummy_secp256k1_event_log".to_string(),
-            report_data: vec![2; 64],
-            vm_config: String::new(),
-        };
+        let dummy_quote = vec![b'0'; 10020];
+        dummy_quote_file.write_all(&dummy_quote).unwrap();
+        dummy_quote_file.flush().unwrap();
 
         let dummy_simulator = Simulator {
-            enabled: false,
-            quote_file: String::new(),
-            event_log_file: String::new(),
+            enabled: true,
+            quote_file: "/tmp/sample_quote.txt".to_string(),
+            event_log_file: "/tmp/sample_event_log.txt".to_string(),
         };
 
         let dummy_docker_config = DockerConfig {
@@ -660,10 +711,16 @@ pNs85uhOZE8z2jr8Pg==
 -----END CERTIFICATE-----
 "#;
 
+        const DUMMY_K256_KEY: [u8; 32] = [
+            0x1A, 0x2B, 0x3C, 0x4D, 0x5E, 0x6F, 0x7A, 0x8B, 0x9C, 0x0D, 0x1E, 0x2F, 0x3A, 0x4B,
+            0x5C, 0x6D, 0x7E, 0x8F, 0x9A, 0x0B, 0x1C, 0x2D, 0x3E, 0x4F, 0x5A, 0x6B, 0x7C, 0x8D,
+            0x9E, 0x0F, 0x1A, 0x2B,
+        ];
+
         let dummy_keys = AppKeys {
             disk_crypt_key: Vec::new(),
             env_crypt_key: Vec::new(),
-            k256_key: Vec::new(),
+            k256_key: DUMMY_K256_KEY.to_vec(),
             k256_signature: Vec::new(),
             gateway_app_id: String::new(),
             ca_cert: DUMMY_PEM_CERT.to_string(),
@@ -682,10 +739,6 @@ pNs85uhOZE8z2jr8Pg==
             vm_config: String::new(),
             cert_client: dummy_cert_client,
             demo_cert: String::new(),
-            ed25519_key,
-            secp256k1_key,
-            ed25519_attestation,
-            secp256k1_attestation,
         };
 
         AppState {
@@ -707,12 +760,19 @@ pNs85uhOZE8z2jr8Pg==
 
         let response = handler.sign(request).await.unwrap();
 
-        let public_key = state.inner.ed25519_key.verifying_key();
-        let signature_bytes: [u8; 64] = response
-            .signature
-            .try_into()
-            .expect("Signature length is incorrect");
-        let signature = Ed25519Signature::from_bytes(&signature_bytes);
+        let attestation_response = ExternalRpcHandler::new(state)
+            .get_attestation_for_app_key(GetAttestationForAppKeyRequest {
+                algorithm: "ed25519".to_string(),
+            })
+            .await
+            .unwrap();
+
+        let pk_bytes =
+            extract_pubkey_from_report_data(&attestation_response.report_data, "dip1::ed25519-pk:")
+                .unwrap();
+
+        let public_key = Ed25519VerifyingKey::try_from(pk_bytes.as_slice()).unwrap();
+        let signature = Ed25519Signature::try_from(response.signature.as_slice()).unwrap();
         assert!(public_key.verify(data_to_sign, &signature).is_ok());
     }
 
@@ -730,7 +790,20 @@ pNs85uhOZE8z2jr8Pg==
 
         let response = handler.sign(request).await.unwrap();
 
-        let public_key = VerifyingKey::from(&state.inner.secp256k1_key);
+        let attestation_response = ExternalRpcHandler::new(state)
+            .get_attestation_for_app_key(GetAttestationForAppKeyRequest {
+                algorithm: "secp256k1".to_string(),
+            })
+            .await
+            .unwrap();
+
+        let pk_bytes = extract_pubkey_from_report_data(
+            &attestation_response.report_data,
+            "dip1::secp256k1c-pk:",
+        )
+        .unwrap();
+
+        let public_key = VerifyingKey::from_sec1_bytes(&pk_bytes).unwrap();
         let signature = K256Signature::try_from(response.signature.as_slice()).unwrap();
         assert!(public_key.verify(data_to_sign, &signature).is_ok());
     }
@@ -752,7 +825,20 @@ pNs85uhOZE8z2jr8Pg==
 
         let response = handler.sign(request).await.unwrap();
 
-        let public_key = VerifyingKey::from(&state.inner.secp256k1_key);
+        let attestation_response = ExternalRpcHandler::new(state)
+            .get_attestation_for_app_key(GetAttestationForAppKeyRequest {
+                algorithm: "secp256k1".to_string(),
+            })
+            .await
+            .unwrap();
+
+        let pk_bytes = extract_pubkey_from_report_data(
+            &attestation_response.report_data,
+            "dip1::secp256k1c-pk:",
+        )
+        .unwrap();
+
+        let public_key = VerifyingKey::from_sec1_bytes(&pk_bytes).unwrap();
         let signature = K256Signature::try_from(response.signature.as_slice()).unwrap();
         assert!(public_key
             .verify_prehash(digest.as_slice(), &signature)
@@ -806,7 +892,9 @@ pNs85uhOZE8z2jr8Pg==
 
         let response = handler.get_attestation_for_app_key(request).await.unwrap();
 
-        assert_eq!(response, state.inner.ed25519_attestation);
+        const EXPECTED_REPORT_DATA: &str =
+            "dip1::ed25519-pk:5Pbre1Amf1hrp2V2bbfKlIfxpQb2pJAmrgmhxgVoG9s\0\0\0\0";
+        assert_eq!(EXPECTED_REPORT_DATA.as_bytes(), response.report_data);
     }
 
     #[tokio::test]
@@ -819,7 +907,9 @@ pNs85uhOZE8z2jr8Pg==
 
         let response = handler.get_attestation_for_app_key(request).await.unwrap();
 
-        assert_eq!(response, state.inner.secp256k1_attestation);
+        const EXPECTED_REPORT_DATA: &str =
+            "dip1::secp256k1c-pk:A6t_JdVkVdMAocH3f1f20WGT6JzdntxcXimUtEax8zc9";
+        assert_eq!(EXPECTED_REPORT_DATA.as_bytes(), response.report_data);
     }
 
     #[tokio::test]

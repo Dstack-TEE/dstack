@@ -37,7 +37,7 @@ service DstackGuest {
   // Returns the derived key along with its TLS certificate chain.
   rpc GetTlsKey(GetTlsKeyArgs) returns (GetTlsKeyResponse) {}
 
-  // Derives a new ECDSA key with k256 EC curve.
+  // Derives a new key.
   rpc GetKey(GetKeyArgs) returns (GetKeyResponse) {}
 
   // Generates a TDX quote with given report data.
@@ -94,12 +94,14 @@ message GetTlsKeyResponse {
   repeated string certificate_chain = 2;
 }
 
-// The request to derive a new ECDSA key with k256 EC curve
+// The request to derive a new key
 message GetKeyArgs {
   // Path to the key to derive
   string path = 1;
   // Purpose of the key
   string purpose = 2;
+  // Algorithm of the key. Either `secp256k1` or `ed25519`. Defaults to `secp256k1`
+  string algorithm = 3;
 }
 
 // The response to a DeriveK256Key request
@@ -112,9 +114,9 @@ message DeriveK256KeyResponse {
 
 // The response to a GetEthKey request
 message GetKeyResponse {
-  // Derived k256 key
+  // Derived key
   bytes key = 1;
-  // Derived k256 signature chain
+  // Derived signature chain
   repeated bytes signature_chain = 2;
 }
 
