@@ -29,7 +29,7 @@ This is the main configuration file for the application in JSON format:
 | name | 0.3.1 | string | Name of the instance |
 | runner | 0.3.1 | string | Name of the runner (currently defaults to "docker-compose") |
 | docker_compose_file | 0.3.1 | string | YAML string representing docker-compose config |
-| docker_config | 0.3.1 | object | Additional docker settings (currently empty) |
+| docker_config | 0.3.1 | object | (Removed since 0.5.5) Additional docker settings (currently empty) |
 | kms_enabled | 0.3.1 | boolean | Enable/disable KMS |
 | gateway_enabled | 0.3.1 | boolean | Enable/disable gateway |
 | local_key_provider_enabled | 0.3.1 | boolean | Use a local key provider |

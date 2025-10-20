@@ -17,8 +17,6 @@ pub struct AppCompose {
     #[serde(default)]
     pub docker_compose_file: Option<String>,
     #[serde(default)]
-    pub docker_config: DockerConfig,
-    #[serde(default)]
     pub public_logs: bool,
     #[serde(default)]
     pub public_sysinfo: bool,

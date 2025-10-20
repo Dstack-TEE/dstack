@@ -1137,7 +1137,6 @@ impl Stage1<'_> {
             .notify_q("boot.progress", "setting up docker")
             .await;
         self.setup_docker_registry()?;
-        self.setup_docker_account(&envs)?;
         Ok(())
     }
 
@@ -1172,20 +1171,10 @@ impl Stage1<'_> {
         info!("Setting up docker registry");
         let registry_url = self
             .shared
-            .app_compose
-            .docker_config
-            .registry
+            .sys_config
+            .docker_registry
             .as_deref()
             .unwrap_or_default();
-        let registry_url = if registry_url.is_empty() {
-            self.shared
-                .sys_config
-                .docker_registry
-                .as_deref()
-                .unwrap_or_default()
-        } else {
-            registry_url
-        };
         if registry_url.is_empty() {
             return Ok(());
         }
@@ -1203,38 +1192,6 @@ impl Stage1<'_> {
         daemon_env["registry-mirrors"] =
             Value::Array(vec![serde_json::Value::String(registry_url.to_string())]);
         fs::write(DAEMON_ENV_FILE, serde_json::to_string(&daemon_env)?)?;
-        Ok(())
-    }
-
-    fn setup_docker_account(&self, envs: &BTreeMap<String, String>) -> Result<()> {
-        info!("Setting up docker account");
-        let username = self
-            .shared
-            .app_compose
-            .docker_config
-            .username
-            .as_deref()
-            .unwrap_or_default();
-        if username.is_empty() {
-            return Ok(());
-        }
-        let token_key = self
-            .shared
-            .app_compose
-            .docker_config
-            .token_key
-            .as_deref()
-            .unwrap_or_default();
-        if token_key.is_empty() {
-            return Ok(());
-        }
-        let token = envs
-            .get(token_key)
-            .with_context(|| format!("Missing token for {username}"))?;
-        if token.is_empty() {
-            bail!("Missing token for {username}");
-        }
-        cmd!(docker login -u $username -p $token)?;
         Ok(())
     }
 }
