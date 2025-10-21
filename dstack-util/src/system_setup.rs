@@ -1124,7 +1124,7 @@ impl Stage1<'_> {
     }
 
     async fn setup(&self) -> Result<()> {
-        let envs = self.unseal_env_vars()?;
+        let _envs = self.unseal_env_vars()?;
         self.link_files()?;
         self.setup_guest_agent_config()?;
         self.vmm
