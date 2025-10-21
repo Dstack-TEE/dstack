@@ -72,10 +72,10 @@ SUBNET_INDEX=0
 # BOOTNODE_URL=https://gateway.test2.dstack.phala.network:9202
 
 # dstack OS image name
-OS_IMAGE=dstack-0.5.0
+OS_IMAGE=dstack-0.5.5
 
 # Set defaults for variables that might not be in .env
-GIT_REV=HEAD
+GATEWAY_IMAGE=dstacktee/gateway@sha256:a7b7e3144371b053ba21d6ac18141afd49e3cd767ca2715599aa0e2703b3a11a
 
 # Port configurations
 GATEWAY_RPC_ADDR=0.0.0.0:9202
@@ -120,15 +120,13 @@ CLI="../../vmm/src/vmm-cli.py --url $VMM_RPC"
 WG_PORT=$(echo $WG_ADDR | cut -d':' -f2)
 COMPOSE_TMP=$(mktemp)
 
-GIT_REV=$(git rev-parse $GIT_REV)
-
 cp docker-compose.yaml "$COMPOSE_TMP"
 
 subvar() {
   sed -i "s|\${$1}|${!1}|g" "$COMPOSE_TMP"
 }
 
-subvar GIT_REV
+subvar GATEWAY_IMAGE
 subvar ACME_STAGING
 
 echo "Docker compose file:"
