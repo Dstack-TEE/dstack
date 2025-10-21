@@ -71,6 +71,7 @@ Generates an ECDSA key using the k256 elliptic curve, derived from the applicati
 |-------|------|-------------|----------|
 | `path` | string | Path for the key | `"my/key/path"` |
 | `purpose` | string | Purpose for the key. Can be any string. This is used in the signature chain. | `"signing"` | `"encryption"` |
+| `algorithm` | string | Either `secp256k1` or `ed25519`. Defaults to `secp256k1` | `ed25519` |
 
 **Example:**
 ```bash
@@ -79,14 +80,15 @@ curl --unix-socket /var/run/dstack.sock -X POST \
   -H 'Content-Type: application/json' \
   -d '{
     "path": "my/key/path",
-    "purpose": "signing"
+    "purpose": "signing",
+    "algorithm": "ed25519",
   }'
 ```
 
 Or
 
 ```bash
-curl --unix-socket /var/run/dstack.sock http://dstack/GetKey?path=my/key/path&purpose=signing
+curl --unix-socket /var/run/dstack.sock http://dstack/GetKey?path=my/key/path&purpose=signing&algorithm=ed25519
 ```
 
 **Response:**
@@ -188,6 +190,80 @@ curl --unix-socket /var/run/dstack.sock -X POST \
 
 **Response:**
 Empty response with HTTP 200 status code on success.
+
+### 6. Sign
+
+Signs a payload.
+
+**Endpoint:** `/Sign`
+
+**Request Parameters:**
+
+| Field | Type | Description | Example |
+|-------|------|-------------|----------|
+| `algorithm` | string | `ed25519`, `secp256k1_prehashed` or `secp256k1`| `ed25519` |
+| `data` | string | Hex-encoded payload data | `deadbeef` |
+
+**Example:**
+```bash
+curl --unix-socket /var/run/dstack.sock -X POST \
+  http://dstack/Sign \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "algorithm": "ed25519",
+    "data": "deadbeef"
+  }'
+```
+
+**Response:**
+```json
+{
+  "signature": "<hex-encoded-signature>",
+  "signature_chain": [
+    "<hex-encoded-signature-1>",
+    "<hex-encoded-signature-2>",
+    "<hex-encoded-signature-3>"
+  ]
+  "public_key": "<hex-encoded-public-key>"
+}
+```
+
+### 7. Verify
+
+Verifies a signature.
+
+**Endpoint:** `/Verify`
+
+**Request Parameters:**
+
+| Field | Type | Description | Example |
+|-------|------|-------------|----------|
+| `algorithm` | string | `ed25519`, `secp256k1_prehashed` or `secp256k1`| `ed25519` |
+| `data` | string | Hex-encoded payload data | `deadbeef` |
+| `signature` | string | Hex-encoded signature | `deadbeef` |
+| `public_key` | string | Hex-encoded public key | `deadbeef` |
+
+**Example:**
+```bash
+curl --unix-socket /var/run/dstack.sock -X POST \
+  http://dstack/Verify \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "algorithm": "ed25519",
+    "data": "deadbeef",
+    "signature": "deadbeef",
+    "public_key": "deadbeef"
+  }'
+```
+
+**Response:**
+```json
+{
+  "valid": "<true|false>"
+}
+```
+
+```
 
 ## Error Responses
 

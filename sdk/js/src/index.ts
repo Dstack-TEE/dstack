@@ -24,6 +24,21 @@ export interface GetKeyResponse {
   signature_chain: Uint8Array[]
 }
 
+export interface SignResponse {
+  __name__: Readonly<'SignResponse'>
+
+  signature: Uint8Array
+  signature_chain: Uint8Array[]
+  public_key: Uint8Array
+}
+
+export interface VerifyResponse {
+  __name__: Readonly<'VerifyResponse'>
+
+  valid: boolean
+}
+
+
 export type Hex = `${string}`
 
 export type TdxQuoteHashAlgorithms =
@@ -162,10 +177,11 @@ export class DstackClient<T extends TcbInfo = TcbInfoV05x> {
     this.endpoint = endpoint
   }
 
-  async getKey(path: string, purpose: string = ''): Promise<GetKeyResponse> {
+  async getKey(path: string, purpose: string = '', algorithm: string = 'secp256k1'): Promise<GetKeyResponse> {
     const payload = JSON.stringify({
       path: path,
-      purpose: purpose
+      purpose: purpose,
+      algorithm: algorithm
     })
     const result = await send_rpc_request<{ key: string, signature_chain: string[] }>(this.endpoint, '/GetKey', payload)
     return Object.freeze({
@@ -262,6 +278,62 @@ export class DstackClient<T extends TcbInfo = TcbInfoV05x> {
         payload: hexPayload
       })
     )
+  }
+
+  /**
+   * Signs a payload using a derived key.
+   * @param algorithm The algorithm to use (e.g., "ed25519", "secp256k1", "secp256k1_prehashed")
+   * @param data The data to sign. If algorithm is "secp256k1_prehashed", this must be a 32-byte hash.
+   * @returns A SignResponse containing the signature, signature chain, and public key.
+   */
+  async sign(algorithm: string, data: string | Buffer | Uint8Array): Promise<SignResponse> {
+    const hexData = to_hex(data);
+    if (algorithm === 'secp256k1_prehashed' && hexData.length !== 64) {
+        throw new Error(`Pre-hashed signing requires a 32-byte digest, but received ${hexData.length / 2} bytes`);
+    }
+
+    const payload = JSON.stringify({
+        algorithm: algorithm,
+        data: hexData
+    });
+
+    const result = await send_rpc_request<{ signature: string, signature_chain: string[], public_key: string }>(this.endpoint, '/Sign', payload);
+
+    return Object.freeze({
+        signature: new Uint8Array(Buffer.from(result.signature, 'hex')),
+        signature_chain: result.signature_chain.map(sig => new Uint8Array(Buffer.from(sig, 'hex'))),
+        public_key: new Uint8Array(Buffer.from(result.public_key, 'hex')),
+        __name__: 'SignResponse',
+    });
+  }
+
+  /**
+   * Verifies a payload signature.
+   * @param algorithm The algorithm to use (e.g., "ed25519", "secp256k1", "secp256k1_prehashed")
+   * @param data The data that was signed.
+   * @param signature The signature to verify.
+   * @param publicKey The public key to use for verification.
+   * @returns A VerifyResponse indicating if the signature is valid.
+   */
+  async verify(
+    algorithm: string,
+    data: string | Buffer | Uint8Array,
+    signature: string | Buffer | Uint8Array,
+    publicKey: string | Buffer | Uint8Array
+  ): Promise<VerifyResponse> {
+    const payload = JSON.stringify({
+        algorithm: algorithm,
+        data: to_hex(data),
+        signature: to_hex(signature),
+        public_key: to_hex(publicKey)
+    });
+
+    const result = await send_rpc_request<{ valid: boolean }>(this.endpoint, '/Verify', payload);
+
+    return Object.freeze({
+        ...result,
+        __name__: 'VerifyResponse',
+    });
   }
 
   //

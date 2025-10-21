@@ -17,6 +17,7 @@ from typing import Optional
 from typing import TypeVar
 from typing import cast
 import warnings
+import hashlib # Added for prehashed check
 
 import httpx
 from pydantic import BaseModel
@@ -148,6 +149,23 @@ class GetQuoteResponse(BaseModel):
             ]
             rtmrs[idx] = replay_rtmr(history)
         return rtmrs
+
+class SignResponse(BaseModel):
+    signature: str
+    signature_chain: List[str]
+    public_key: str
+
+    def decode_signature(self) -> bytes:
+        return bytes.fromhex(self.signature)
+
+    def decode_signature_chain(self) -> List[bytes]:
+        return [bytes.fromhex(chain) for chain in self.signature_chain]
+
+    def decode_public_key(self) -> bytes:
+        return bytes.fromhex(self.public_key)
+
+class VerifyResponse(BaseModel):
+    valid: bool
 
 
 class EventLog(BaseModel):
@@ -328,9 +346,14 @@ class AsyncDstackClient(BaseClient):
         self,
         path: str | None = None,
         purpose: str | None = None,
+        algorithm: str = "secp256k1",
     ) -> GetKeyResponse:
-        """Derive a key from the given path and purpose."""
-        data: Dict[str, Any] = {"path": path or "", "purpose": purpose or ""}
+        """Derive a key from the given path, purpose, and algorithm."""
+        data: Dict[str, Any] = {
+            "path": path or "",
+            "purpose": purpose or "",
+            "algorithm": algorithm,
+        }
         result = await self._send_rpc_request("GetKey", data)
         return GetKeyResponse(**result)
 
@@ -392,6 +415,38 @@ class AsyncDstackClient(BaseClient):
         result = await self._send_rpc_request("GetTlsKey", data)
         return GetTlsKeyResponse(**result)
 
+    async def sign(self, algorithm: str, data: str | bytes) -> SignResponse:
+        """Signs data using a derived key."""
+        data_bytes = data.encode() if isinstance(data, str) else data
+        if algorithm == "secp256k1_prehashed" and len(data_bytes) != 32:
+             raise ValueError(f"Pre-hashed signing requires a 32-byte digest, but received {len(data_bytes)} bytes")
+
+        hex_data = binascii.hexlify(data_bytes).decode()
+        payload = {"algorithm": algorithm, "data": hex_data}
+        result = await self._send_rpc_request("Sign", payload)
+        return SignResponse(**result)
+
+    async def verify(
+        self,
+        algorithm: str,
+        data: str | bytes,
+        signature: str | bytes,
+        public_key: str | bytes,
+    ) -> VerifyResponse:
+        """Verifies a signature."""
+        data_bytes = data.encode() if isinstance(data, str) else data
+        sig_bytes = signature.encode() if isinstance(signature, str) else signature
+        pk_bytes = public_key.encode() if isinstance(public_key, str) else public_key
+
+        payload = {
+            "algorithm": algorithm,
+            "data": binascii.hexlify(data_bytes).decode(),
+            "signature": binascii.hexlify(sig_bytes).decode(),
+            "public_key": binascii.hexlify(pk_bytes).decode(),
+        }
+        result = await self._send_rpc_request("Verify", payload)
+        return VerifyResponse(**result)
+
     async def is_reachable(self) -> bool:
         """Return True if the service responds to a quick health call."""
         try:
@@ -419,8 +474,9 @@ class DstackClient(BaseClient):
         self,
         path: str | None = None,
         purpose: str | None = None,
+        algorithm: str = "secp256k1",
     ) -> GetKeyResponse:
-        """Derive a key from the given path and purpose."""
+        """Derive a key from the given path, purpose, and algorithm."""
         raise NotImplementedError
 
     @call_async
@@ -455,6 +511,22 @@ class DstackClient(BaseClient):
         usage_client_auth: bool = False,
     ) -> GetTlsKeyResponse:
         """Request a TLS key from the service with optional parameters."""
+        raise NotImplementedError
+
+    @call_async
+    def sign(self, algorithm: str, data: str | bytes) -> SignResponse:
+        """Signs data using a derived key."""
+        raise NotImplementedError
+
+    @call_async
+    def verify(
+        self,
+        algorithm: str,
+        data: str | bytes,
+        signature: str | bytes,
+        public_key: str | bytes,
+    ) -> VerifyResponse:
+        """Verifies a signature."""
         raise NotImplementedError
 
     @call_async

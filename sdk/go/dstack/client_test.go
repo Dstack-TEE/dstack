@@ -7,6 +7,7 @@ package dstack_test
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -25,7 +26,7 @@ import (
 
 func TestGetKey(t *testing.T) {
 	client := dstack.NewDstackClient()
-	resp, err := client.GetKey(context.Background(), "/", "test")
+	resp, err := client.GetKey(context.Background(), "/", "test", "ed25519")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -434,7 +435,7 @@ func TestGetKeySignatureVerification(t *testing.T) {
 	client := dstack.NewDstackClient()
 	path := "/test/path"
 	purpose := "test-purpose"
-	resp, err := client.GetKey(context.Background(), path, purpose)
+	resp, err := client.GetKey(context.Background(), path, purpose, "secp256k1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -607,4 +608,112 @@ func compressPublicKey(uncompressedKey []byte) ([]byte, error) {
 		Y:     y,
 	}
 	return crypto.CompressPubkey(pubKey), nil
+}
+
+func TestSignAndVerifyEd25519(t *testing.T) {
+	client := dstack.NewDstackClient()
+	dataToSign := []byte("test message for ed25519")
+	algorithm := "ed25519"
+
+	signResp, err := client.Sign(context.Background(), algorithm, dataToSign)
+	if err != nil {
+		t.Fatalf("Sign() error = %v", err)
+	}
+
+	if len(signResp.Signature) == 0 {
+		t.Error("expected signature to not be empty")
+	}
+	if len(signResp.PublicKey) == 0 {
+		t.Error("expected public key to not be empty")
+	}
+	if len(signResp.SignatureChain) != 3 {
+		t.Errorf("expected signature chain to have 3 elements, got %d", len(signResp.SignatureChain))
+	}
+	if !bytes.Equal(signResp.Signature, signResp.SignatureChain[0]) {
+		t.Error("expected Signature to be the same as SignatureChain[0]")
+	}
+
+	verifyResp, err := client.Verify(context.Background(), algorithm, dataToSign, signResp.Signature, signResp.PublicKey)
+	if err != nil {
+		t.Fatalf("Verify() error = %v", err)
+	}
+
+	if !verifyResp.Valid {
+		t.Error("expected verification to be valid")
+	}
+
+	badData := []byte("wrong message")
+	verifyResp, err = client.Verify(context.Background(), algorithm, badData, signResp.Signature, signResp.PublicKey)
+	if err != nil {
+		t.Fatalf("Verify() with bad data error = %v", err)
+	}
+
+	if verifyResp.Valid {
+		t.Error("expected verification with bad data to be invalid")
+	}
+}
+
+func TestSignAndVerifySecp256k1(t *testing.T) {
+	client := dstack.NewDstackClient()
+	dataToSign := []byte("test message for secp256k1")
+	algorithm := "secp256k1"
+
+	signResp, err := client.Sign(context.Background(), algorithm, dataToSign)
+	if err != nil {
+		t.Fatalf("Sign() error = %v", err)
+	}
+
+	if len(signResp.Signature) == 0 {
+		t.Error("expected signature to not be empty")
+	}
+	if len(signResp.PublicKey) == 0 {
+		t.Error("expected public key to not be empty")
+	}
+	if len(signResp.SignatureChain) != 3 {
+		t.Errorf("expected signature chain to have 3 elements, got %d", len(signResp.SignatureChain))
+	}
+
+	verifyResp, err := client.Verify(context.Background(), algorithm, dataToSign, signResp.Signature, signResp.PublicKey)
+	if err != nil {
+		t.Fatalf("Verify() error = %v", err)
+	}
+
+	if !verifyResp.Valid {
+		t.Error("expected verification to be valid")
+	}
+}
+
+func TestSignAndVerifySecp256k1Prehashed(t *testing.T) {
+	client := dstack.NewDstackClient()
+	dataToSign := []byte("test message for secp256k1 prehashed")
+	digest := sha256.Sum256(dataToSign)
+	algorithm := "secp256k1_prehashed"
+
+	signResp, err := client.Sign(context.Background(), algorithm, digest[:])
+	if err != nil {
+		t.Fatalf("Sign() error = %v", err)
+	}
+
+	if len(signResp.Signature) == 0 {
+		t.Error("expected signature to not be empty")
+	}
+
+	verifyResp, err := client.Verify(context.Background(), algorithm, digest[:], signResp.Signature, signResp.PublicKey)
+	if err != nil {
+		t.Fatalf("Verify() error = %v", err)
+	}
+
+	if !verifyResp.Valid {
+		t.Error("expected verification to be valid")
+	}
+
+	// Test invalid digest length for signing
+	invalidDigest := []byte{1, 2, 3}
+	_, err = client.Sign(context.Background(), algorithm, invalidDigest)
+	if err == nil {
+		t.Fatal("expected error for invalid digest length, got nil")
+	}
+	if !strings.Contains(err.Error(), "32-byte digest") {
+		t.Errorf("expected error to mention '32-byte digest', got: %v", err)
+	}
 }

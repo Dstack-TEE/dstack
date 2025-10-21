@@ -212,3 +212,42 @@ pub struct GetTlsKeyResponse {
     /// The chain of certificates
     pub certificate_chain: Vec<String>,
 }
+
+/// Response from a Sign request
+#[derive(Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "borsh", derive(BorshSerialize, BorshDeserialize))]
+#[cfg_attr(feature = "borsh_schema", derive(BorshSchema))]
+pub struct SignResponse {
+    /// The signature in hexadecimal format
+    pub signature: String,
+    /// The chain of signatures in hexadecimal format
+    pub signature_chain: Vec<String>,
+    /// The public key in hexadecimal format
+    pub public_key: String,
+}
+
+impl SignResponse {
+    /// Decodes the signature from hex to bytes
+    pub fn decode_signature(&self) -> Result<Vec<u8>, FromHexError> {
+        hex::decode(&self.signature)
+    }
+
+    /// Decodes the public key from hex to bytes
+    pub fn decode_public_key(&self) -> Result<Vec<u8>, FromHexError> {
+        hex::decode(&self.public_key)
+    }
+
+    /// Decodes the signature chain from hex to bytes
+    pub fn decode_signature_chain(&self) -> Result<Vec<Vec<u8>>, FromHexError> {
+        self.signature_chain.iter().map(hex::decode).collect()
+    }
+}
+
+/// Response from a Verify request
+#[derive(Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "borsh", derive(BorshSerialize, BorshDeserialize))]
+#[cfg_attr(feature = "borsh_schema", derive(BorshSchema))]
+pub struct VerifyResponse {
+    /// Whether the signature is valid
+    pub valid: bool,
+}

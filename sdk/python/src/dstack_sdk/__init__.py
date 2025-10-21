@@ -10,6 +10,8 @@ from .dstack_client import GetKeyResponse
 from .dstack_client import GetQuoteResponse
 from .dstack_client import GetTlsKeyResponse
 from .dstack_client import InfoResponse
+from .dstack_client import SignResponse
+from .dstack_client import VerifyResponse
 from .dstack_client import TappdClient
 from .dstack_client import TcbInfo
 from .encrypt_env_vars import EnvVar
