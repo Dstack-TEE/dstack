@@ -323,45 +323,15 @@ impl DstackGuestRpc for InternalRpcHandler {
     async fn verify(self, request: VerifyRequest) -> Result<VerifyResponse> {
         let valid = match request.algorithm.as_str() {
             "ed25519" => {
-                let public_key = if request.public_key.is_empty() {
-                    let key_response = self
-                        .get_key(GetKeyArgs {
-                            path: "vms".to_string(),
-                            purpose: "signing".to_string(),
-                            algorithm: "ed25519".to_string(),
-                        })
-                        .await?;
-                    let key_bytes: [u8; 32] =
-                        key_response.key.try_into().expect("Key is incorrect");
-                    Ed25519SigningKey::from_bytes(&key_bytes)
-                        .verifying_key()
-                        .to_bytes()
-                        .to_vec()
-                } else {
-                    request.public_key
-                };
                 let verifying_key = ed25519_dalek::VerifyingKey::from_bytes(
-                    &public_key.as_slice().try_into().unwrap(),
+                    &request.public_key.as_slice().try_into().unwrap(),
                 )?;
                 let signature = ed25519_dalek::Signature::from_slice(&request.signature)?;
                 verifying_key.verify(&request.data, &signature).is_ok()
             }
             "secp256k1" | "secp256k1_prehashed" => {
-                let public_key = if request.public_key.is_empty() {
-                    let key_response = self
-                        .get_key(GetKeyArgs {
-                            path: "vms".to_string(),
-                            purpose: "signing".to_string(),
-                            algorithm: request.algorithm,
-                        })
-                        .await?;
-                    let signing_key = SigningKey::from_slice(&key_response.key)
-                        .context("Failed to parse secp256k1 key")?;
-                    signing_key.verifying_key().to_sec1_bytes().to_vec()
-                } else {
-                    request.public_key
-                };
-                let verifying_key = k256::ecdsa::VerifyingKey::from_sec1_bytes(&public_key)?;
+                let verifying_key =
+                    k256::ecdsa::VerifyingKey::from_sec1_bytes(&request.public_key)?;
                 let signature = k256::ecdsa::Signature::from_slice(&request.signature)?;
                 verifying_key.verify(&request.data, &signature).is_ok()
             }
@@ -828,7 +798,7 @@ pNs85uhOZE8z2jr8Pg==
             algorithm: "ed25519".to_string(),
             data: data_to_sign.to_vec(),
             signature: sign_response.signature,
-            public_key: vec![],
+            public_key: sign_response.public_key,
         };
         let handler = InternalRpcHandler {
             state: state.clone(),
@@ -855,7 +825,7 @@ pNs85uhOZE8z2jr8Pg==
             algorithm: "secp256k1".to_string(),
             data: data_to_sign.to_vec(),
             signature: sign_response.signature,
-            public_key: vec![],
+            public_key: sign_response.public_key,
         };
         let handler = InternalRpcHandler {
             state: state.clone(),
