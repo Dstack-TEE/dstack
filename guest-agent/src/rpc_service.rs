@@ -17,7 +17,7 @@ use dstack_guest_agent_rpc::{
     WorkerVersion,
 };
 use dstack_types::{AppKeys, SysConfig};
-use ed25519_dalek::ed25519::signature::hazmat::PrehashSigner;
+use ed25519_dalek::ed25519::signature::hazmat::{PrehashSigner, PrehashVerifier};
 use ed25519_dalek::{
     Signer as Ed25519Signer, SigningKey as Ed25519SigningKey, Verifier as Ed25519Verifier,
 };
@@ -329,11 +329,17 @@ impl DstackGuestRpc for InternalRpcHandler {
                 let signature = ed25519_dalek::Signature::from_slice(&request.signature)?;
                 verifying_key.verify(&request.data, &signature).is_ok()
             }
-            "secp256k1" | "secp256k1_prehashed" => {
+            "secp256k1" => {
                 let verifying_key =
                     k256::ecdsa::VerifyingKey::from_sec1_bytes(&request.public_key)?;
                 let signature = k256::ecdsa::Signature::from_slice(&request.signature)?;
                 verifying_key.verify(&request.data, &signature).is_ok()
+            }
+            "secp256k1_prehashed" => {
+                let verifying_key =
+                    k256::ecdsa::VerifyingKey::from_sec1_bytes(&request.public_key)?;
+                let signature = k256::ecdsa::Signature::from_slice(&request.signature)?;
+                verifying_key.verify_prehash(&request.data, &signature).is_ok()
             }
             _ => return Err(anyhow::anyhow!("Unsupported algorithm")),
         };
