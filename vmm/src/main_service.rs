@@ -66,7 +66,7 @@ pub fn resolve_gpus_with_config(
     gpu_cfg: &rpc::GpuConfig,
     cvm_config: &crate::config::CvmConfig,
 ) -> Result<GpuConfig> {
-    if !cvm_config.gpu.enabled {
+    if !cvm_config.gpu.enabled && !gpu_cfg.is_empty() {
         bail!("GPU is not enabled");
     }
     let gpus = resolve_gpus(gpu_cfg)?;
