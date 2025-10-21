@@ -234,7 +234,15 @@ message SignRequest {
 }
 
 message SignResponse {
+  // the signature of the data
   bytes signature = 1;
+  // The signature chain consists of the following signatures:
+  // [0] - the signature of the data
+  // [1] - the k256 signature of the message signing pubkey signed by the app root key
+  // [2] - the k256 signature of the app root pubkey signed by the KMS root key
+  repeated bytes signature_chain = 2;
+  // The public key signing the data
+  bytes public_key = 3;
 }
 
 message VerifyRequest {

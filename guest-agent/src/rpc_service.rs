@@ -279,18 +279,20 @@ impl DstackGuestRpc for InternalRpcHandler {
                 algorithm: request.algorithm.clone(),
             })
             .await?;
-        let signature = match request.algorithm.as_str() {
+        let (signature, public_key) = match request.algorithm.as_str() {
             "ed25519" => {
                 let key_bytes: [u8; 32] = key_response.key.try_into().expect("Key is incorrect");
                 let signing_key = Ed25519SigningKey::from_bytes(&key_bytes);
                 let signature = signing_key.sign(&request.data);
-                signature.to_bytes().to_vec()
+                let public_key = signing_key.verifying_key().to_bytes().to_vec();
+                (signature.to_bytes().to_vec(), public_key)
             }
             "secp256k1" => {
                 let signing_key = SigningKey::from_slice(&key_response.key)
                     .context("Failed to parse secp256k1 key")?;
                 let signature: k256::ecdsa::Signature = signing_key.sign(&request.data);
-                signature.to_bytes().to_vec()
+                let public_key = signing_key.verifying_key().to_sec1_bytes().to_vec();
+                (signature.to_bytes().to_vec(), public_key)
             }
             "secp256k1_prehashed" => {
                 if request.data.len() != 32 {
@@ -302,11 +304,20 @@ impl DstackGuestRpc for InternalRpcHandler {
                 let signing_key = SigningKey::from_slice(&key_response.key)
                     .context("Failed to parse secp256k1 key")?;
                 let signature: k256::ecdsa::Signature = signing_key.sign_prehash(&request.data)?;
-                signature.to_bytes().to_vec()
+                let public_key = signing_key.verifying_key().to_sec1_bytes().to_vec();
+                (signature.to_bytes().to_vec(), public_key)
             }
             _ => return Err(anyhow::anyhow!("Unsupported algorithm")),
         };
-        Ok(SignResponse { signature })
+        Ok(SignResponse {
+            signature: signature.clone(),
+            signature_chain: vec![
+                signature,
+                key_response.signature_chain[0].clone(),
+                key_response.signature_chain[1].clone(),
+            ],
+            public_key,
+        })
     }
 
     async fn verify(self, request: VerifyRequest) -> Result<VerifyResponse> {
