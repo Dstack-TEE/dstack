@@ -75,7 +75,7 @@ SUBNET_INDEX=0
 OS_IMAGE=dstack-0.5.5
 
 # Set defaults for variables that might not be in .env
-GATEWAY_IMAGE=dstacktee/gateway@sha256:a7b7e3144371b053ba21d6ac18141afd49e3cd767ca2715599aa0e2703b3a11a
+GATEWAY_IMAGE=dstacktee/dstack-gateway@sha256:a7b7e3144371b053ba21d6ac18141afd49e3cd767ca2715599aa0e2703b3a11a
 
 # Port configurations
 GATEWAY_RPC_ADDR=0.0.0.0:9202
