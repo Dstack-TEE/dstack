@@ -29,7 +29,7 @@ services:
       - 8001:8000
 
   kms:
-    image: kvin/kms@sha256:ad6a8c5c43aed7278e665cd0960ae5be95060847f7d517633be685cabda95a3d
+    image: ${KMS_IMAGE}
     volumes:
       - kms-volume:/kms
       - /var/run/dstack.sock:/var/run/dstack.sock
