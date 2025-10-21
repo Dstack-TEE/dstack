@@ -119,7 +119,9 @@ message DeriveK256KeyResponse {
 message GetKeyResponse {
   // Derived key
   bytes key = 1;
-  // Derived signature chain
+  // The signature chain consists of the following signatures:
+  // [0] - the k256 signature of the derived pK signed by the app root key
+  // [1] - the k256 signature of the app root pK signed by the KMS root key
   repeated bytes signature_chain = 2;
 }
 
