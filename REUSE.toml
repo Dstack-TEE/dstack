@@ -64,6 +64,7 @@ SPDX-License-Identifier = "Apache-2.0"
 [[annotations]]
 path = [
     "docs/security/dstack-audit.pdf",
+    "dstack_Technical_Charter_Final_10-17-2025.pdf",
     "sdk/simulator/quote.hex",
     "ra-tls/assets/tdx_quote",
     "cc-eventlog/samples/ccel.bin",
