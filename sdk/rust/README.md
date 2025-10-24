@@ -120,6 +120,12 @@ Sends an event log with associated binary payload to the runtime.
 #### `get_tls_key(...) -> GetTlsKeyResponse`
 Requests a key and X.509 certificate chain for RA-TLS or server/client authentication.
 
+#### sign(algorithm: &str, data: Vec<u8>) -> SignResponse
+Signs a payload using a derived key.
+
+#### verify(algorithm: &str, data: Vec<u8>, signature: Vec<u8>, public_key: Vec<u8>) -> VerifyResponse
+Verifies a payload signature.
+
 ### TappdClient Methods (Legacy API)
 
 #### `info(): TappdInfoResponse`
@@ -146,6 +152,10 @@ Generates a TDX quote with exactly 64 bytes of raw report data.
 - `GetQuoteResponse`: Contains the TDX quote and event log, with RTMR replay support
 
 - `InfoResponse`: CVM instance metadata, including image and runtime measurements
+
+- `SignResponse`: Holds a signature, signature chain, and public key
+
+- `VerifyResponse`: Holds a boolean valid result
 
 ## API Reference
 

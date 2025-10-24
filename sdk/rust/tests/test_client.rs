@@ -7,6 +7,7 @@
 
 use dcap_qvl::quote::Quote;
 use dstack_sdk::dstack_client::DstackClient as AsyncDstackClient;
+use sha2::{Digest, Sha256};
 
 #[tokio::test]
 async fn test_async_client_get_key() {
@@ -94,4 +95,72 @@ async fn test_info() {
     assert!(!info.device_id.is_empty());
     assert!(!info.key_provider_info.is_empty());
     assert!(!info.compose_hash.is_empty());
+}
+
+#[tokio::test]
+async fn test_async_client_sign_and_verify_ed25519() {
+    let client = AsyncDstackClient::new(None);
+    let data_to_sign = b"test message for ed25519".to_vec();
+    let algorithm = "ed25519";
+
+    let sign_resp = client.sign(algorithm, data_to_sign.clone()).await.unwrap();
+    assert!(!sign_resp.signature.is_empty());
+    assert!(!sign_resp.public_key.is_empty());
+    assert_eq!(sign_resp.signature_chain.len(), 3);
+
+    let sig = sign_resp.decode_signature().unwrap();
+    let pub_key = sign_resp.decode_public_key().unwrap();
+
+    let verify_resp = client
+        .verify(
+            algorithm,
+            data_to_sign.clone(),
+            sig.clone(),
+            pub_key.clone(),
+        )
+        .await
+        .unwrap();
+    assert!(verify_resp.valid);
+
+    let bad_data = b"wrong message".to_vec();
+    let verify_resp_bad = client
+        .verify(algorithm, bad_data, sig, pub_key)
+        .await
+        .unwrap();
+    assert!(!verify_resp_bad.valid);
+}
+
+#[tokio::test]
+async fn test_async_client_sign_and_verify_secp256k1() {
+    let client = AsyncDstackClient::new(None);
+    let data_to_sign = b"test message for secp256k1".to_vec();
+    let algorithm = "secp256k1";
+
+    let sign_resp = client.sign(algorithm, data_to_sign.clone()).await.unwrap();
+    let sig = sign_resp.decode_signature().unwrap();
+    let pub_key = sign_resp.decode_public_key().unwrap();
+
+    let verify_resp = client
+        .verify(algorithm, data_to_sign, sig, pub_key)
+        .await
+        .unwrap();
+    assert!(verify_resp.valid);
+}
+
+#[tokio::test]
+async fn test_async_client_sign_and_verify_secp256k1_prehashed() {
+    let client = AsyncDstackClient::new(None);
+    let data_to_sign = b"test message for secp256k1 prehashed";
+    let digest = Sha256::digest(data_to_sign).to_vec();
+    let algorithm = "secp256k1_prehashed";
+
+    let sign_resp = client.sign(algorithm, digest.clone()).await.unwrap();
+    let sig = sign_resp.decode_signature().unwrap();
+    let pub_key = sign_resp.decode_public_key().unwrap();
+
+    let verify_resp = client
+        .verify(algorithm, digest.clone(), sig, pub_key)
+        .await
+        .unwrap();
+    assert!(verify_resp.valid);
 }

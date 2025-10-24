@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { expect, describe, it, vi } from 'vitest'
+import crypto from 'crypto' // Added for prehashed test
 import { DstackClient, TappdClient } from '../index'
 
 describe('DstackClient', () => {
@@ -24,6 +25,18 @@ describe('DstackClient', () => {
     expect(result).toHaveProperty('key')
     expect(result).toHaveProperty('signature_chain')
   })
+
+  it('should able to get key with different algorithms', async () => {
+    const client = new DstackClient()
+    const resultSecp = await client.getKey('/secp', 'test', 'secp256k1')
+    expect(resultSecp.key).toBeInstanceOf(Uint8Array)
+    expect(resultSecp.key.length).toBe(32) // secp256k1 private key size
+
+    const resultEd = await client.getKey('/ed', 'test', 'ed25519')
+    expect(resultEd.key).toBeInstanceOf(Uint8Array)
+    expect(resultEd.key.length).toBe(32) // ed25519 private key size (seed)
+  })
+
 
   it('should able to request tdx quote', async () => {
     const client = new DstackClient()
@@ -153,6 +166,84 @@ describe('DstackClient', () => {
     const client = new DstackClient()
     const isReachable = await client.isReachable()
     expect(typeof isReachable).toBe('boolean')
+  })
+
+  describe('Sign and Verify Methods', () => {
+    const client = new DstackClient()
+    const testData = 'Test message for signing'
+    const badData = 'This is not the original message'
+
+    it('should sign and verify with ed25519', async () => {
+      const algorithm = 'ed25519'
+      const signResp = await client.sign(algorithm, testData)
+
+      expect(signResp).toHaveProperty('signature')
+      expect(signResp).toHaveProperty('signature_chain')
+      expect(signResp).toHaveProperty('public_key')
+      expect(signResp.signature).toBeInstanceOf(Uint8Array)
+      expect(signResp.public_key).toBeInstanceOf(Uint8Array)
+      expect(signResp.signature_chain.length).toBeGreaterThan(0) // Should have at least the signature itself
+      expect(signResp.signature_chain[0]).toBeInstanceOf(Uint8Array)
+
+      // Verify success
+      const verifyResp = await client.verify(algorithm, testData, signResp.signature, signResp.public_key)
+      expect(verifyResp).toHaveProperty('valid', true)
+
+      // Verify failure (bad data)
+      const verifyRespBadData = await client.verify(algorithm, badData, signResp.signature, signResp.public_key)
+      expect(verifyRespBadData).toHaveProperty('valid', false)
+    })
+
+    it('should sign and verify with secp256k1', async () => {
+      const algorithm = 'secp256k1'
+      const signResp = await client.sign(algorithm, testData)
+
+      expect(signResp.signature).toBeInstanceOf(Uint8Array)
+      expect(signResp.public_key).toBeInstanceOf(Uint8Array)
+      expect(signResp.signature_chain.length).toBeGreaterThan(0)
+
+      // Verify success
+      const verifyResp = await client.verify(algorithm, testData, signResp.signature, signResp.public_key)
+      expect(verifyResp).toHaveProperty('valid', true)
+
+      // Verify failure (bad data)
+      const verifyRespBadData = await client.verify(algorithm, badData, signResp.signature, signResp.public_key)
+      expect(verifyRespBadData).toHaveProperty('valid', false)
+    })
+
+    it('should sign and verify with secp256k1_prehashed', async () => {
+      const algorithm = 'secp256k1_prehashed'
+      const digest = crypto.createHash('sha256').update(testData).digest()
+      expect(digest.length).toBe(32) // Ensure it's 32 bytes
+
+      const signResp = await client.sign(algorithm, digest)
+
+      expect(signResp.signature).toBeInstanceOf(Uint8Array)
+      expect(signResp.public_key).toBeInstanceOf(Uint8Array)
+
+      // Verify success
+      const verifyResp = await client.verify(algorithm, digest, signResp.signature, signResp.public_key)
+      expect(verifyResp).toHaveProperty('valid', true)
+
+      // Verify failure (bad digest)
+      const badDigest = crypto.createHash('sha256').update(badData).digest()
+      const verifyRespBadData = await client.verify(algorithm, badDigest, signResp.signature, signResp.public_key)
+      expect(verifyRespBadData).toHaveProperty('valid', false)
+    })
+
+    it('should throw error when signing secp256k1_prehashed with incorrect data length', async () => {
+      const algorithm = 'secp256k1_prehashed'
+      const invalidData = 'This is not 32 bytes'
+      await expect(() => client.sign(algorithm, invalidData)).rejects.toThrow('Pre-hashed signing requires a 32-byte digest')
+
+      const invalidBuffer = Buffer.alloc(31) // Not 32 bytes
+      await expect(() => client.sign(algorithm, invalidBuffer)).rejects.toThrow('Pre-hashed signing requires a 32-byte digest')
+    })
+
+    it('should throw error for unsupported sign algorithm', async () => {
+      const algorithm = 'rsa'
+      await expect(() => client.sign(algorithm, testData)).rejects.toThrow() // Specific error depends on server impl.
+    })
   })
 
   describe('deprecated methods with TappdClient', () => {

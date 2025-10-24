@@ -351,10 +351,11 @@ func (c *DstackClient) GetTlsKey(
 }
 
 // Gets a key from the dstack service.
-func (c *DstackClient) GetKey(ctx context.Context, path string, purpose string) (*GetKeyResponse, error) {
+func (c *DstackClient) GetKey(ctx context.Context, path string, purpose string, algorithm string) (*GetKeyResponse, error) {
 	payload := map[string]interface{}{
-		"path":    path,
-		"purpose": purpose,
+		"path":      path,
+		"purpose":   purpose,
+		"algorithm": algorithm,
 	}
 
 	data, err := c.sendRPCRequest(ctx, "/GetKey", payload)
@@ -420,6 +421,83 @@ func (c *DstackClient) Info(ctx context.Context) (*InfoResponse, error) {
 	var response InfoResponse
 	if err := json.Unmarshal(data, &response); err != nil {
 		return nil, err
+	}
+
+	return &response, nil
+}
+
+type SignResponse struct {
+	Signature      []byte
+	SignatureChain [][]byte
+	PublicKey      []byte
+}
+
+// Signs a payload.
+func (c *DstackClient) Sign(ctx context.Context, algorithm string, data []byte) (*SignResponse, error) {
+	payload := map[string]interface{}{
+		"algorithm": algorithm,
+		"data":      hex.EncodeToString(data),
+	}
+
+	respData, err := c.sendRPCRequest(ctx, "/Sign", payload)
+	if err != nil {
+		return nil, err
+	}
+
+	var response struct {
+		Signature      string   `json:"signature"`
+		SignatureChain []string `json:"signature_chain"`
+		PublicKey      string   `json:"public_key"`
+	}
+	if err := json.Unmarshal(respData, &response); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal sign response: %w", err)
+	}
+
+	sig, err := hex.DecodeString(response.Signature)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode signature: %w", err)
+	}
+	pubKey, err := hex.DecodeString(response.PublicKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode public key: %w", err)
+	}
+
+	sigChain := make([][]byte, len(response.SignatureChain))
+	for i, s := range response.SignatureChain {
+		sigChain[i], err = hex.DecodeString(s)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode signature chain element %d: %w", i, err)
+		}
+	}
+
+	return &SignResponse{
+		Signature:      sig,
+		SignatureChain: sigChain,
+		PublicKey:      pubKey,
+	}, nil
+}
+
+type VerifyResponse struct {
+	Valid bool `json:"valid"`
+}
+
+// Verifies a payload.
+func (c *DstackClient) Verify(ctx context.Context, algorithm string, data []byte, signature []byte, publicKey []byte) (*VerifyResponse, error) {
+	payload := map[string]interface{}{
+		"algorithm":  algorithm,
+		"data":       hex.EncodeToString(data),
+		"signature":  hex.EncodeToString(signature),
+		"public_key": hex.EncodeToString(publicKey),
+	}
+
+	respData, err := c.sendRPCRequest(ctx, "/Verify", payload)
+	if err != nil {
+		return nil, err
+	}
+
+	var response VerifyResponse
+	if err := json.Unmarshal(respData, &response); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal verify response: %w", err)
 	}
 
 	return &response, nil
