@@ -15,7 +15,7 @@
     "check": "bun run lint && bun run test:run"
   },
   "dependencies": {
-    "hono": "4.9.6",
+    "hono": "4.10.3",
     "@hono/zod-validator": "0.2.2",
     "zod": "3.25.76"
   },
