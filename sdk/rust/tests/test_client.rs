@@ -112,7 +112,12 @@ async fn test_async_client_sign_and_verify_ed25519() {
     let pub_key = sign_resp.decode_public_key().unwrap();
 
     let verify_resp = client
-        .verify(algorithm, data_to_sign.clone(), sig.clone(), pub_key.clone())
+        .verify(
+            algorithm,
+            data_to_sign.clone(),
+            sig.clone(),
+            pub_key.clone(),
+        )
         .await
         .unwrap();
     assert!(verify_resp.valid);

@@ -366,7 +366,9 @@ impl DstackGuestRpc for InternalRpcHandler {
                 let verifying_key =
                     k256::ecdsa::VerifyingKey::from_sec1_bytes(&request.public_key)?;
                 let signature = k256::ecdsa::Signature::from_slice(&request.signature)?;
-                verifying_key.verify_prehash(&request.data, &signature).is_ok()
+                verifying_key
+                    .verify_prehash(&request.data, &signature)
+                    .is_ok()
             }
             _ => return Err(anyhow::anyhow!("Unsupported algorithm")),
         };
@@ -686,19 +688,12 @@ mod tests {
             event_log_file: "/tmp/sample_event_log.txt".to_string(),
         };
 
-        let dummy_docker_config = DockerConfig {
-            registry: None,
-            username: None,
-            token_key: None,
-        };
-
         let dummy_appcompose = AppCompose {
             manifest_version: 0,
             name: String::new(),
             features: Vec::new(),
             runner: String::new(),
             docker_compose_file: None,
-            docker_config: dummy_docker_config,
             public_logs: false,
             public_sysinfo: false,
             public_tcbinfo: false,
@@ -711,6 +706,7 @@ mod tests {
             no_instance_id: false,
             secure_time: false,
             storage_fs: None,
+            swap_size: 0,
         };
 
         let dummy_appcompose_wrapper = AppComposeWrapper {
@@ -805,7 +801,7 @@ pNs85uhOZE8z2jr8Pg==
             keys: dummy_keys,
             vm_config: String::new(),
             cert_client: dummy_cert_client,
-            demo_cert: String::new(),
+            demo_cert: RwLock::new(String::new()),
         };
 
         AppState {
