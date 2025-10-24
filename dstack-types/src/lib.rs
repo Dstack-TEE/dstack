@@ -4,6 +4,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_human_bytes as hex_bytes;
+use size_parser::human_size;
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct AppCompose {
@@ -15,8 +16,6 @@ pub struct AppCompose {
     pub runner: String,
     #[serde(default)]
     pub docker_compose_file: Option<String>,
-    #[serde(default)]
-    pub docker_config: DockerConfig,
     #[serde(default)]
     pub public_logs: bool,
     #[serde(default)]
@@ -41,6 +40,8 @@ pub struct AppCompose {
     pub secure_time: bool,
     #[serde(default)]
     pub storage_fs: Option<String>,
+    #[serde(default, with = "human_size")]
+    pub swap_size: u64,
 }
 
 fn default_true() -> bool {
@@ -189,6 +190,8 @@ pub enum KeyProvider {
         url: String,
         #[serde(with = "hex_bytes")]
         pubkey: Vec<u8>,
+        tmp_ca_key: String,
+        tmp_ca_cert: String,
     },
 }
 

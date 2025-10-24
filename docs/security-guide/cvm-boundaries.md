@@ -23,25 +23,26 @@ dstack OS requires a host shared folder to be attached to the CVM. It copies the
 ### app-compose.json
 This is the main configuration file for the application in JSON format:
 
-| Field | Type | Description |
-|-------|------|-------------|
-| manifest_version | integer | Schema version (currently defaults to "2") |
-| name | string | Name of the instance |
-| runner | string | Name of the runner (currently defaults to "docker-compose") |
-| docker_compose_file | string | YAML string representing docker-compose config |
-| docker_config | object | Additional docker settings (currently empty) |
-| kms_enabled | boolean | Enable/disable KMS |
-| gateway_enabled | boolean | Enable/disable gateway |
-| public_logs | boolean | Whether logs are publicly visible |
-| public_sysinfo | boolean | Whether system info is public |
-| public_tcbinfo | boolean | Whether TCB info is public |
-| local_key_provider_enabled | boolean | Use a local key provider |
-| allowed_envs | array of string | List of allowed environment variable names |
-| no_instance_id | boolean | Disable instance ID generation |
-| secure_time | boolean | Whether secure time is enabled |
-| pre_launch_script | string | Prelaunch bash script that runs before execute `docker compose up` |
-| init_script | string | Bash script that executed prior to dockerd startup |
-| storage_fs | string | Filesystem type for the data disk of the CVM. Supported values: "zfs", "ext4". default to "zfs". **ZFS:** Ensures filesystem integrity with built-in data protection features. **ext4:** Provides better performance for database applications with lower overhead and faster I/O operations, but no strong integrity protection. |
+| Field | Since | Type | Description |
+|-------|-------|------|-------------|
+| manifest_version | 0.3.1 | integer | Schema version (currently defaults to "2") |
+| name | 0.3.1 | string | Name of the instance |
+| runner | 0.3.1 | string | Name of the runner (currently defaults to "docker-compose") |
+| docker_compose_file | 0.3.1 | string | YAML string representing docker-compose config |
+| docker_config | 0.3.1 | object | (Removed since 0.5.5) Additional docker settings (currently empty) |
+| kms_enabled | 0.3.1 | boolean | Enable/disable KMS |
+| gateway_enabled | 0.3.1 | boolean | Enable/disable gateway |
+| local_key_provider_enabled | 0.3.1 | boolean | Use a local key provider |
+| public_logs | 0.3.3 | boolean | Whether logs are publicly visible |
+| public_sysinfo | 0.3.3 | boolean | Whether system info is public |
+| public_tcbinfo | 0.5.1 | boolean | Whether TCB info is public |
+| allowed_envs | 0.4.2 | array of string | List of allowed environment variable names |
+| no_instance_id | 0.4.2 | boolean | Disable instance ID generation |
+| secure_time | 0.5.0 | boolean | Whether secure time is enabled |
+| pre_launch_script | 0.4.0 | string | Prelaunch bash script that runs before execute `docker compose up` |
+| init_script | 0.5.5 | string | Bash script that executed prior to dockerd startup |
+| storage_fs | 0.5.5 | string | Filesystem type for the data disk of the CVM. Supported values: "zfs", "ext4". default to "zfs". **ZFS:** Ensures filesystem integrity with built-in data protection features. **ext4:** Provides better performance for database applications with lower overhead and faster I/O operations, but no strong integrity protection. |
+| swap_size | 0.5.5 | string/integer | The linux swap size. default to 0. Can be in byte or human-readable format (e.g., "1G", "256M"). |
 
 
 The hash of this file content is extended to RTMR3 as event name `compose-hash`. Remote verifier can extract the compose-hash during remote attestation.

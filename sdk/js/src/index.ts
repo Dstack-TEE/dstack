@@ -81,14 +81,18 @@ export interface InfoResponse<VersionTcbInfo extends TcbInfo> {
   tcb_info: VersionTcbInfo
   app_name: string
   device_id: string
+  mr_aggregated?: string
   os_image_hash?: string // Optional: empty if OS image is not measured by KMS
   key_provider_info: string
   compose_hash: string
+  vm_config?: string
 }
 
 export interface GetQuoteResponse {
   quote: Hex
   event_log: string
+  report_data?: Hex
+  vm_config?: string
 
   replayRtmrs: () => string[]
 }

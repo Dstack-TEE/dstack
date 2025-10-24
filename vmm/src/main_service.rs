@@ -66,7 +66,7 @@ pub fn resolve_gpus_with_config(
     gpu_cfg: &rpc::GpuConfig,
     cvm_config: &crate::config::CvmConfig,
 ) -> Result<GpuConfig> {
-    if !cvm_config.gpu.enabled {
+    if !cvm_config.gpu.enabled && !gpu_cfg.is_empty() {
         bail!("GPU is not enabled");
     }
     let gpus = resolve_gpus(gpu_cfg)?;
@@ -173,22 +173,22 @@ pub fn create_manifest_from_vm_config(
         None => GpuConfig::default(),
     };
 
-    Ok(Manifest::builder()
-        .id(id)
-        .name(request.name.clone())
-        .app_id(app_id)
-        .image(request.image.clone())
-        .vcpu(request.vcpu)
-        .memory(request.memory)
-        .disk_size(request.disk_size)
-        .port_map(port_map)
-        .created_at_ms(now)
-        .hugepages(request.hugepages)
-        .pin_numa(request.pin_numa)
-        .gpus(gpus)
-        .kms_urls(request.kms_urls.clone())
-        .gateway_urls(request.gateway_urls.clone())
-        .build())
+    Ok(Manifest {
+        id,
+        name: request.name.clone(),
+        app_id,
+        vcpu: request.vcpu,
+        memory: request.memory,
+        disk_size: request.disk_size,
+        image: request.image.clone(),
+        port_map,
+        created_at_ms: now,
+        hugepages: request.hugepages,
+        pin_numa: request.pin_numa,
+        gpus: Some(gpus),
+        kms_urls: request.kms_urls.clone(),
+        gateway_urls: request.gateway_urls.clone(),
+    })
 }
 
 impl RpcHandler {

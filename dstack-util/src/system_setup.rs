@@ -9,6 +9,7 @@ use std::{
     path::{Path, PathBuf},
     process::Command,
     str::FromStr,
+    time::Duration,
 };
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -560,7 +561,7 @@ impl<'a> Stage0<'a> {
                 .await
                 .context("Failed to get temp ca cert")?
         };
-        let cert_pair = generate_ra_cert(tmp_ca.temp_ca_cert, tmp_ca.temp_ca_key)?;
+        let cert_pair = generate_ra_cert(tmp_ca.temp_ca_cert.clone(), tmp_ca.temp_ca_key.clone())?;
         let ra_client = RaClientConfig::builder()
             .tls_no_check(false)
             .tls_built_in_root_certs(false)
@@ -618,6 +619,8 @@ impl<'a> Stage0<'a> {
             key_provider: KeyProvider::Kms {
                 url: kms_url,
                 pubkey: root_pubkey,
+                tmp_ca_key: tmp_ca.temp_ca_key,
+                tmp_ca_cert: tmp_ca.temp_ca_cert,
             },
         };
         Ok(keys)
@@ -683,6 +686,85 @@ impl<'a> Stage0<'a> {
                 gen_app_keys_from_seed(&seed, None).context("Failed to generate app keys")
             }
         }
+    }
+
+    async fn setup_swap(&self, swap_size: u64, opts: &DstackOptions) -> Result<()> {
+        match opts.storage_fs {
+            FsType::Zfs => self.setup_swap_zvol(swap_size).await,
+            FsType::Ext4 => self.setup_swapfile(swap_size).await,
+        }
+    }
+
+    async fn setup_swapfile(&self, swap_size: u64) -> Result<()> {
+        let swapfile = self.args.mount_point.join("swapfile");
+        if swapfile.exists() {
+            fs::remove_file(&swapfile).context("Failed to remove swapfile")?;
+            info!("Removed existing swapfile");
+        }
+        if swap_size == 0 {
+            return Ok(());
+        }
+        let swapfile = swapfile.display().to_string();
+        info!("Creating swapfile at {swapfile} (size {swap_size} bytes)");
+        let size_str = swap_size.to_string();
+        cmd! {
+            fallocate -l $size_str $swapfile;
+            chmod 600 $swapfile;
+            mkswap $swapfile;
+            swapon $swapfile;
+            swapon --show;
+        }
+        .context("Failed to enable swap on swapfile")?;
+        Ok(())
+    }
+
+    async fn setup_swap_zvol(&self, swap_size: u64) -> Result<()> {
+        let swapvol_path = "dstack/swap";
+        let swapvol_device_path = format!("/dev/zvol/{swapvol_path}");
+
+        if Path::new(&swapvol_device_path).exists() {
+            cmd! {
+                zfs set volmode=none $swapvol_path;
+                zfs destroy $swapvol_path;
+            }
+            .context("Failed to destroy swap zvol")?;
+        }
+
+        if swap_size == 0 {
+            return Ok(());
+        }
+
+        info!("Creating swap zvol at {swapvol_device_path} (size {swap_size} bytes)");
+
+        let size_str = swap_size.to_string();
+        cmd! {
+            zfs create -V $size_str
+                -o compression=zle
+                -o logbias=throughput
+                -o sync=always
+                -o primarycache=metadata
+                -o com.sun:auto-snapshot=false
+                $swapvol_path
+        }
+        .with_context(|| format!("Failed to create swap zvol {swapvol_path}"))?;
+
+        let mut count = 0u32;
+        while !Path::new(&swapvol_device_path).exists() && count < 10 {
+            std::thread::sleep(Duration::from_secs(1));
+            count += 1;
+        }
+        if !Path::new(&swapvol_device_path).exists() {
+            bail!("Device {swapvol_device_path} did not appear after 10 seconds");
+        }
+
+        cmd! {
+            mkswap $swapvol_device_path;
+            swapon $swapvol_device_path;
+            swapon --show;
+        }
+        .context("Failed to enable swap on zvol")?;
+
+        Ok(())
     }
 
     async fn mount_data_disk(
@@ -958,13 +1040,14 @@ impl<'a> Stage0<'a> {
             opts.storage_encrypted, opts.storage_fs
         );
 
-        self.vmm.notify_q("boot.progress", "unsealing env").await;
         self.mount_data_disk(
             is_initialized,
             &hex::encode(&app_keys.disk_crypt_key),
             &opts,
         )
         .await?;
+        self.setup_swap(self.shared.app_compose.swap_size, &opts)
+            .await?;
         self.vmm
             .notify_q(
                 "instance.info",
@@ -1041,7 +1124,7 @@ impl Stage1<'_> {
     }
 
     async fn setup(&self) -> Result<()> {
-        let envs = self.unseal_env_vars()?;
+        let _envs = self.unseal_env_vars()?;
         self.link_files()?;
         self.setup_guest_agent_config()?;
         self.vmm
@@ -1054,7 +1137,6 @@ impl Stage1<'_> {
             .notify_q("boot.progress", "setting up docker")
             .await;
         self.setup_docker_registry()?;
-        self.setup_docker_account(&envs)?;
         Ok(())
     }
 
@@ -1089,20 +1171,10 @@ impl Stage1<'_> {
         info!("Setting up docker registry");
         let registry_url = self
             .shared
-            .app_compose
-            .docker_config
-            .registry
+            .sys_config
+            .docker_registry
             .as_deref()
             .unwrap_or_default();
-        let registry_url = if registry_url.is_empty() {
-            self.shared
-                .sys_config
-                .docker_registry
-                .as_deref()
-                .unwrap_or_default()
-        } else {
-            registry_url
-        };
         if registry_url.is_empty() {
             return Ok(());
         }
@@ -1120,38 +1192,6 @@ impl Stage1<'_> {
         daemon_env["registry-mirrors"] =
             Value::Array(vec![serde_json::Value::String(registry_url.to_string())]);
         fs::write(DAEMON_ENV_FILE, serde_json::to_string(&daemon_env)?)?;
-        Ok(())
-    }
-
-    fn setup_docker_account(&self, envs: &BTreeMap<String, String>) -> Result<()> {
-        info!("Setting up docker account");
-        let username = self
-            .shared
-            .app_compose
-            .docker_config
-            .username
-            .as_deref()
-            .unwrap_or_default();
-        if username.is_empty() {
-            return Ok(());
-        }
-        let token_key = self
-            .shared
-            .app_compose
-            .docker_config
-            .token_key
-            .as_deref()
-            .unwrap_or_default();
-        if token_key.is_empty() {
-            return Ok(());
-        }
-        let token = envs
-            .get(token_key)
-            .with_context(|| format!("Missing token for {username}"))?;
-        if token.is_empty() {
-            bail!("Missing token for {username}");
-        }
-        cmd!(docker login -u $username -p $token)?;
         Ok(())
     }
 }

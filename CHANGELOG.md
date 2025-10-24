@@ -5,6 +5,39 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.5] - 2025-10-20
+
+### Added
+- SDK sync agent for automated protobuf schema synchronization (#366)
+- dstack-verifier CLI tool with OS image hash verification (#341)
+- built-in swap configuration support for CVMs (#348, #357, #358)
+- support for ext4 filesystem type on storage (#348)
+- size-parser crate for handling size configurations (#355)
+- init_script support in app-compose.json (#337)
+- cache for verifier (#341)
+- Add QEMU version and image name in VmConfig (#340)
+- documentation for minimum version of each compose field (#363)
+
+### Changed
+- max app compose size increased to 256K (#349)
+- default timeout increased to 3 secs for python SDK (#339)
+- auto reconnect when WireGuard gets stuck (#350)
+- put filesystem type in RTMR3 event log (#348)
+- read QEMU path from /etc/dstack/client.conf (#332)
+- refactor sys-config generation code (#351)
+- when formatting app_url, skip port if it's 443 (#326)
+- update docker organization references (#342, #343)
+- RA-TLS: add KeyCertSign and CrlSign usages for CA cert (#320)
+
+### Fixed
+- guest-agent: request demo cert lazily
+- VmConfig decode error (#347)
+- potential panic due to int overflow in dstack-mr (#345)
+- SDK issues - marked rootfs_hash optional (#339)
+
+### Removed
+- docker_config field from app-compose.json (#374)
+
 ## [0.5.4] - 2025-09-01
 
 ### Security
@@ -1237,7 +1270,8 @@ New contributors in this release:
 * @Leechael made their first contribution
 * @nanometerzhu made their first contribution
 * @h4x3rotab made their first contribution
-[unreleased]: https://github.com/Dstack-TEE/dstack/compare/v0.5.3..HEAD
+[unreleased]: https://github.com/Dstack-TEE/dstack/compare/v0.5.5..HEAD
+[0.5.5]: https://github.com/Dstack-TEE/dstack/compare/v0.5.4..v0.5.5
 [0.5.4]: https://github.com/Dstack-TEE/dstack/compare/v0.5.3..v0.5.4
 [0.5.3]: https://github.com/Dstack-TEE/dstack/compare/v0.5.2..v0.5.3
 [0.5.2]: https://github.com/Dstack-TEE/dstack/compare/v0.5.1..v0.5.2

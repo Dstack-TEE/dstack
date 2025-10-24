@@ -50,7 +50,10 @@ GIT_REPOSITORY=https://github.com/Dstack-TEE/dstack.git
 GIT_REV=HEAD
 
 # The dstack OS image name to use for the KMS app
-OS_IMAGE=dstack-0.5.0
+OS_IMAGE=dstack-0.5.5
+
+# The dstack KMS image name to use for the KMS app
+KMS_IMAGE=dstacktee/dstack-kms@sha256:11ac59f524a22462ccd2152219b0bec48a28ceb734e32500152d4abefab7a62a
 
 # The admin token for the KMS app
 ADMIN_TOKEN=$(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 32 | head -n 1)
@@ -100,6 +103,7 @@ subvar IMAGE_DOWNLOAD_URL
 subvar ADMIN_TOKEN_HASH
 subvar VERIFY_IMAGE
 subvar GIT_REPOSITORY
+subvar KMS_IMAGE
 
 echo "Docker compose file:"
 cat "$COMPOSE_TMP"

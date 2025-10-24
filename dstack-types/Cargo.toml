@@ -13,3 +13,4 @@ license.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde-human-bytes.workspace = true
 sha3.workspace = true
+size-parser = { workspace = true, features = ["serde"] }

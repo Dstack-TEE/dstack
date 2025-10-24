@@ -68,15 +68,13 @@ impl CertRequestClient {
                     .context("Failed to create CA")?;
                 Ok(CertRequestClient::Local { ca })
             }
-            KeyProvider::Kms { url, .. } => {
-                let tmp_client =
-                    RaClient::new(url.into(), true).context("Failed to create RA client")?;
-                let tmp_client = KmsClient::new(tmp_client);
-                let tmp_ca = tmp_client
-                    .get_temp_ca_cert()
-                    .await
-                    .context("Failed to get temp CA cert")?;
-                let client_cert = generate_ra_cert(tmp_ca.temp_ca_cert, tmp_ca.temp_ca_key)
+            KeyProvider::Kms {
+                url,
+                tmp_ca_key,
+                tmp_ca_cert,
+                ..
+            } => {
+                let client_cert = generate_ra_cert(tmp_ca_cert.clone(), tmp_ca_key.clone())
                     .context("Failed to generate RA cert")?;
                 let ra_client = RaClientConfig::builder()
                     .remote_uri(url.clone())
