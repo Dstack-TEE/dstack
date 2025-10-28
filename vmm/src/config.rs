@@ -265,6 +265,10 @@ pub struct Config {
     /// The URL of the KMS server
     pub kms_url: String,
 
+    /// Node name (optional, used as prefix in UI title)
+    #[serde(default)]
+    pub node_name: String,
+
     /// CVM configuration
     pub cvm: CvmConfig,
     /// Gateway configuration

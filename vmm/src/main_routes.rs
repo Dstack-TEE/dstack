@@ -28,8 +28,15 @@ macro_rules! file_or_include_str {
 }
 
 #[get("/")]
-async fn index() -> (ContentType, String) {
-    (ContentType::HTML, file_or_include_str!("console.html"))
+async fn index(app: &State<App>) -> (ContentType, String) {
+    let html = file_or_include_str!("console.html");
+    let title = if app.config.node_name.is_empty() {
+        "dstack VM Management Console".to_string()
+    } else {
+        format!("{} - dstack VM Management Console", app.config.node_name)
+    };
+    let html = html.replace("{{TITLE}}", &title);
+    (ContentType::HTML, html)
 }
 
 #[get("/res/<path>")]
