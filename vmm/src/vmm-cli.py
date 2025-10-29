@@ -123,7 +123,6 @@ def read_utf8(filepath: str) -> str:
     with open(filepath, 'rb') as f:
         return f.read().decode('utf-8')
 
-
 class UnixSocketHTTPConnection(http.client.HTTPConnection):
     """HTTPConnection that connects to a Unix domain socket."""
 
@@ -331,6 +330,33 @@ class VmmCLI:
         """Remove a VM"""
         self.rpc_call('RemoveVm', {'id': vm_id})
         print(f"Removed VM {vm_id}")
+
+    def resize_vm(
+        self,
+        vm_id: str,
+        vcpu: Optional[int] = None,
+        memory: Optional[int] = None,
+        disk_size: Optional[int] = None,
+        image: Optional[str] = None,
+    ) -> None:
+        """Resize a VM"""
+        params = {"id": vm_id}
+        if vcpu is not None:
+            params["vcpu"] = vcpu
+        if memory is not None:
+            params["memory"] = memory
+        if disk_size is not None:
+            params["disk_size"] = disk_size
+        if image is not None:
+            params["image"] = image
+
+        if len(params) == 1:
+            raise Exception(
+                "at least one parameter must be specified for resize: --vcpu, --memory, --disk, or --image"
+            )
+
+        self.rpc_call("ResizeVm", params)
+        print(f"Resized VM {vm_id}")
 
     def show_logs(self, vm_id: str, lines: int = 20, follow: bool = False) -> None:
         """Show VM logs"""
@@ -609,6 +635,15 @@ class VmmCLI:
         self.rpc_call('UpgradeApp', {'id': vm_id,
                       'compose_file': app_compose})
         print(f"App compose updated for VM {vm_id}")
+    
+    def update_vm_ports(self, vm_id: str, ports: List[str]) -> None:
+        """Update port mapping for a VM"""
+        port_mappings = [parse_port_mapping(port) for port in ports]
+        self.rpc_call(
+            "UpgradeApp", {"id": vm_id,
+                           "update_ports": True, "ports": port_mappings}
+        )
+        print(f"Port mapping updated for VM {vm_id}")
 
     def list_gpus(self, json_output: bool = False) -> None:
         """List all available GPUs"""
@@ -884,6 +919,18 @@ def main():
     remove_parser = subparsers.add_parser('remove', help='Remove a VM')
     remove_parser.add_argument('vm_id', help='VM ID to remove')
 
+    # Resize command
+    resize_parser = subparsers.add_parser("resize", help="Resize a VM")
+    resize_parser.add_argument("vm_id", help="VM ID to resize")
+    resize_parser.add_argument("--vcpu", type=int, help="Number of vCPUs")
+    resize_parser.add_argument(
+        "--memory", type=parse_memory_size, help="Memory size (e.g. 1G, 100M)"
+    )
+    resize_parser.add_argument(
+        "--disk", type=parse_disk_size, help="Disk size (e.g. 20G, 1T)"
+    )
+    resize_parser.add_argument("--image", type=str, help="Image name")
+
     # Logs command
     logs_parser = subparsers.add_parser('logs', help='Show VM logs')
     logs_parser.add_argument('vm_id', help='VM ID to show logs for')
@@ -1016,6 +1063,19 @@ def main():
     update_user_config_parser.add_argument(
         'user_config', help='Path to user config file')
 
+    # Update port mapping
+    update_ports_parser = subparsers.add_parser(
+        "update-ports", help="Update port mapping for a VM"
+    )
+    update_ports_parser.add_argument("vm_id", help="VM ID to update")
+    update_ports_parser.add_argument(
+        "--port",
+        action="append",
+        type=str,
+        required=True,
+        help="Port mapping in format: protocol[:address]:from:to (can be used multiple times)",
+    )
+
     args = parser.parse_args()
 
     cli = VmmCLI(args.url, args.auth_user, args.auth_password)
@@ -1028,6 +1088,14 @@ def main():
         cli.stop_vm(args.vm_id, args.force)
     elif args.command == 'remove':
         cli.remove_vm(args.vm_id)
+    elif args.command == 'resize':
+        cli.resize_vm(
+            args.vm_id,
+            vcpu=args.vcpu,
+            memory=args.memory,
+            disk_size=args.disk,
+            image=args.image,
+        )
     elif args.command == 'logs':
         cli.show_logs(args.vm_id, args.lines, args.follow)
     elif args.command == 'compose':
@@ -1046,6 +1114,8 @@ def main():
             args.vm_id, open(args.user_config, 'r').read())
     elif args.command == 'update-app-compose':
         cli.update_vm_app_compose(args.vm_id, open(args.compose, 'r').read())
+    elif args.command == "update-ports":
+        cli.update_vm_ports(args.vm_id, args.port)
     elif args.command == 'kms':
         if not args.kms_action:
             kms_parser.print_help()
