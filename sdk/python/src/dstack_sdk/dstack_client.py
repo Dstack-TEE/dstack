@@ -17,7 +17,6 @@ from typing import Optional
 from typing import TypeVar
 from typing import cast
 import warnings
-import hashlib # Added for prehashed check
 
 import httpx
 from pydantic import BaseModel
@@ -437,7 +436,7 @@ class AsyncDstackClient(BaseClient):
         signature: str | bytes,
         public_key: str | bytes,
     ) -> VerifyResponse:
-        """Verifies a signature."""
+        """Verify a signature."""
         data_bytes = data.encode() if isinstance(data, str) else data
         sig_bytes = signature.encode() if isinstance(signature, str) else signature
         pk_bytes = public_key.encode() if isinstance(public_key, str) else public_key
@@ -530,7 +529,7 @@ class DstackClient(BaseClient):
         signature: str | bytes,
         public_key: str | bytes,
     ) -> VerifyResponse:
-        """Verifies a signature."""
+        """Verify a signature."""
         raise NotImplementedError
 
     @call_async

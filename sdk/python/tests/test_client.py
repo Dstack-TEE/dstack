@@ -2,8 +2,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-import warnings
 import hashlib
+import warnings
 
 from evidence_api.tdx.quote import TdxQuote
 import pytest
@@ -15,8 +15,8 @@ from dstack_sdk import GetKeyResponse
 from dstack_sdk import GetQuoteResponse
 from dstack_sdk import GetTlsKeyResponse
 from dstack_sdk import SignResponse
-from dstack_sdk import VerifyResponse
 from dstack_sdk import TappdClient
+from dstack_sdk import VerifyResponse
 from dstack_sdk.dstack_client import InfoResponse
 from dstack_sdk.dstack_client import TcbInfo
 
