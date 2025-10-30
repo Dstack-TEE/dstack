@@ -646,7 +646,7 @@ mod tests {
     use super::*;
     use crate::config::{AppComposeWrapper, Config, Simulator};
     use dstack_guest_agent_rpc::{GetAttestationForAppKeyRequest, SignRequest};
-    use dstack_types::{AppCompose, AppKeys, DockerConfig, KeyProvider};
+    use dstack_types::{AppCompose, AppKeys, KeyProvider};
     use ed25519_dalek::ed25519::signature::hazmat::PrehashVerifier;
     use ed25519_dalek::{
         Signature as Ed25519Signature, Verifier, VerifyingKey as Ed25519VerifyingKey,
@@ -655,8 +655,8 @@ mod tests {
     use sha2::Sha256;
     use std::collections::HashSet;
     use std::convert::TryFrom;
-    use std::fs::File;
     use std::io::Write;
+    use tempfile;
 
     fn extract_pubkey_from_report_data(report_data: &[u8], prefix: &str) -> Result<Vec<u8>> {
         let end = report_data
@@ -674,9 +674,9 @@ mod tests {
         }
     }
 
-    async fn setup_test_state() -> AppState {
-        let mut dummy_quote_file = File::create("/tmp/sample_quote.txt").unwrap();
-        let _ = File::create("/tmp/sample_event_log.txt").unwrap();
+    async fn setup_test_state() -> (AppState, tempfile::NamedTempFile, tempfile::NamedTempFile) {
+        let mut dummy_quote_file = tempfile::NamedTempFile::new().unwrap();
+        let dummy_event_log_file = tempfile::NamedTempFile::new().unwrap();
 
         let dummy_quote = vec![b'0'; 10020];
         dummy_quote_file.write_all(&dummy_quote).unwrap();
@@ -684,8 +684,8 @@ mod tests {
 
         let dummy_simulator = Simulator {
             enabled: true,
-            quote_file: "/tmp/sample_quote.txt".to_string(),
-            event_log_file: "/tmp/sample_event_log.txt".to_string(),
+            quote_file: dummy_quote_file.path().to_str().unwrap().to_string(),
+            event_log_file: dummy_event_log_file.path().to_str().unwrap().to_string(),
         };
 
         let dummy_appcompose = AppCompose {
@@ -804,14 +804,18 @@ pNs85uhOZE8z2jr8Pg==
             demo_cert: RwLock::new(String::new()),
         };
 
-        AppState {
-            inner: Arc::new(inner),
-        }
+        (
+            AppState {
+                inner: Arc::new(inner),
+            },
+            dummy_quote_file,
+            dummy_event_log_file,
+        )
     }
 
     #[tokio::test]
     async fn test_verify_ed25519_success() {
-        let state = setup_test_state().await;
+        let (state, _quote_file, _log_file) = setup_test_state().await;
         let handler = InternalRpcHandler {
             state: state.clone(),
         };
@@ -838,7 +842,7 @@ pNs85uhOZE8z2jr8Pg==
 
     #[tokio::test]
     async fn test_verify_secp256k1_success() {
-        let state = setup_test_state().await;
+        let (state, _quote_file, _log_file) = setup_test_state().await;
         let handler = InternalRpcHandler {
             state: state.clone(),
         };
@@ -865,7 +869,7 @@ pNs85uhOZE8z2jr8Pg==
 
     #[tokio::test]
     async fn test_sign_ed25519_success() {
-        let state = setup_test_state().await;
+        let (state, _quote_file, _log_file) = setup_test_state().await;
         let handler = InternalRpcHandler {
             state: state.clone(),
         };
@@ -895,7 +899,7 @@ pNs85uhOZE8z2jr8Pg==
 
     #[tokio::test]
     async fn test_sign_secp256k1_success() {
-        let state = setup_test_state().await;
+        let (state, _quote_file, _log_file) = setup_test_state().await;
         let handler = InternalRpcHandler {
             state: state.clone(),
         };
@@ -927,7 +931,7 @@ pNs85uhOZE8z2jr8Pg==
 
     #[tokio::test]
     async fn test_sign_secp256k1_prehashed_success() {
-        let state = setup_test_state().await;
+        let (state, _quote_file, _log_file) = setup_test_state().await;
         let handler = InternalRpcHandler {
             state: state.clone(),
         };
@@ -964,7 +968,7 @@ pNs85uhOZE8z2jr8Pg==
 
     #[tokio::test]
     async fn test_sign_secp256k1_prehashed_invalid_length_fails() {
-        let state = setup_test_state().await;
+        let (state, _quote_file, _log_file) = setup_test_state().await;
         let handler = InternalRpcHandler {
             state: state.clone(),
         };
@@ -987,7 +991,7 @@ pNs85uhOZE8z2jr8Pg==
 
     #[tokio::test]
     async fn test_sign_unsupported_algorithm_fails() {
-        let state = setup_test_state().await;
+        let (state, _quote_file, _log_file) = setup_test_state().await;
         let handler = InternalRpcHandler { state };
         let request = SignRequest {
             algorithm: "rsa".to_string(), // Unsupported algorithm
@@ -1001,7 +1005,7 @@ pNs85uhOZE8z2jr8Pg==
 
     #[tokio::test]
     async fn test_get_attestation_for_app_key_ed25519_success() {
-        let state = setup_test_state().await;
+        let (state, _quote_file, _log_file) = setup_test_state().await;
         let handler = ExternalRpcHandler::new(state.clone());
         let request = GetAttestationForAppKeyRequest {
             algorithm: "ed25519".to_string(),
@@ -1016,7 +1020,7 @@ pNs85uhOZE8z2jr8Pg==
 
     #[tokio::test]
     async fn test_get_attestation_for_app_key_secp256k1_success() {
-        let state = setup_test_state().await;
+        let (state, _quote_file, _log_file) = setup_test_state().await;
         let handler = ExternalRpcHandler::new(state.clone());
         let request = GetAttestationForAppKeyRequest {
             algorithm: "secp256k1".to_string(),
@@ -1031,7 +1035,7 @@ pNs85uhOZE8z2jr8Pg==
 
     #[tokio::test]
     async fn test_get_attestation_for_app_key_unsupported_algorithm_fails() {
-        let state = setup_test_state().await;
+        let (state, _quote_file, _log_file) = setup_test_state().await;
         let handler = ExternalRpcHandler::new(state);
         let request = GetAttestationForAppKeyRequest {
             algorithm: "ecdsa".to_string(), // Unsupported algorithm

@@ -2267,6 +2267,7 @@ dependencies = [
  "strip-ansi-escapes",
  "sysinfo",
  "tdx-attest",
+ "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",

@@ -48,4 +48,5 @@ strip-ansi-escapes.workspace = true
 cert-client.workspace = true
 ring.workspace = true
 ed25519-dalek.workspace = true
+tempfile.workspace = true
 rand.workspace = true
