@@ -23,7 +23,7 @@ from dstack_sdk.dstack_client import TcbInfo
 
 def test_sync_client_get_key():
     client = DstackClient()
-    result = client.get_key() # Test default algorithm (secp256k1)
+    result = client.get_key()  # Test default algorithm (secp256k1)
     assert isinstance(result, GetKeyResponse)
     assert isinstance(result.decode_key(), bytes)
     assert len(result.decode_key()) == 32
@@ -33,7 +33,7 @@ def test_sync_client_get_key():
     assert isinstance(result_ed, GetKeyResponse)
     assert len(result_ed.decode_key()) == 32
 
-    with pytest.raises(Exception): # Assuming unsupported algo raises error
+    with pytest.raises(Exception):  # Assuming unsupported algo raises error
         client.get_key(algorithm="rsa")
 
 
@@ -77,7 +77,7 @@ def check_info_response(result: InfoResponse):
 @pytest.mark.asyncio
 async def test_async_client_get_key():
     client = AsyncDstackClient()
-    result = await client.get_key() # Test default algorithm (secp256k1)
+    result = await client.get_key()  # Test default algorithm (secp256k1)
     assert isinstance(result, GetKeyResponse)
     assert isinstance(result.decode_key(), bytes)
     assert len(result.decode_key()) == 32
@@ -87,7 +87,7 @@ async def test_async_client_get_key():
     assert isinstance(result_ed, GetKeyResponse)
     assert len(result_ed.decode_key()) == 32
 
-    with pytest.raises(Exception): # Assuming unsupported algo raises error
+    with pytest.raises(Exception):  # Assuming unsupported algo raises error
         await client.get_key(algorithm="rsa")
 
 
@@ -277,8 +277,10 @@ def test_emit_event_validation():
         client.emit_event("", "payload")
     assert "event name cannot be empty" in str(exc_info.value)
 
+
 SIGN_TEST_DATA = b"Test message for signing"
 SIGN_BAD_DATA = b"This is not the original message"
+
 
 def test_sync_sign_verify_ed25519():
     client = DstackClient()
@@ -289,12 +291,20 @@ def test_sync_sign_verify_ed25519():
     assert len(sign_resp.decode_public_key()) > 0
     assert len(sign_resp.signature_chain) > 0
 
-    verify_resp = client.verify(algo, SIGN_TEST_DATA, sign_resp.decode_signature(), sign_resp.decode_public_key())
+    verify_resp = client.verify(
+        algo,
+        SIGN_TEST_DATA,
+        sign_resp.decode_signature(),
+        sign_resp.decode_public_key(),
+    )
     assert isinstance(verify_resp, VerifyResponse)
     assert verify_resp.valid is True
 
-    verify_bad = client.verify(algo, SIGN_BAD_DATA, sign_resp.decode_signature(), sign_resp.decode_public_key())
+    verify_bad = client.verify(
+        algo, SIGN_BAD_DATA, sign_resp.decode_signature(), sign_resp.decode_public_key()
+    )
     assert verify_bad.valid is False
+
 
 def test_sync_sign_verify_secp256k1():
     client = DstackClient()
@@ -302,11 +312,19 @@ def test_sync_sign_verify_secp256k1():
     sign_resp = client.sign(algo, SIGN_TEST_DATA)
     assert isinstance(sign_resp, SignResponse)
 
-    verify_resp = client.verify(algo, SIGN_TEST_DATA, sign_resp.decode_signature(), sign_resp.decode_public_key())
+    verify_resp = client.verify(
+        algo,
+        SIGN_TEST_DATA,
+        sign_resp.decode_signature(),
+        sign_resp.decode_public_key(),
+    )
     assert verify_resp.valid is True
 
-    verify_bad = client.verify(algo, SIGN_BAD_DATA, sign_resp.decode_signature(), sign_resp.decode_public_key())
+    verify_bad = client.verify(
+        algo, SIGN_BAD_DATA, sign_resp.decode_signature(), sign_resp.decode_public_key()
+    )
     assert verify_bad.valid is False
+
 
 def test_sync_sign_verify_secp256k1_prehashed():
     client = DstackClient()
@@ -317,12 +335,17 @@ def test_sync_sign_verify_secp256k1_prehashed():
     sign_resp = client.sign(algo, digest)
     assert isinstance(sign_resp, SignResponse)
 
-    verify_resp = client.verify(algo, digest, sign_resp.decode_signature(), sign_resp.decode_public_key())
+    verify_resp = client.verify(
+        algo, digest, sign_resp.decode_signature(), sign_resp.decode_public_key()
+    )
     assert verify_resp.valid is True
 
     bad_digest = hashlib.sha256(SIGN_BAD_DATA).digest()
-    verify_bad = client.verify(algo, bad_digest, sign_resp.decode_signature(), sign_resp.decode_public_key())
+    verify_bad = client.verify(
+        algo, bad_digest, sign_resp.decode_signature(), sign_resp.decode_public_key()
+    )
     assert verify_bad.valid is False
+
 
 def test_sync_sign_prehashed_length_error():
     client = DstackClient()
@@ -330,6 +353,7 @@ def test_sync_sign_prehashed_length_error():
     with pytest.raises(ValueError) as excinfo:
         client.sign(algo, b"too short")
     assert "32-byte digest" in str(excinfo.value)
+
 
 @pytest.mark.asyncio
 async def test_async_sign_verify_ed25519():
@@ -340,11 +364,19 @@ async def test_async_sign_verify_ed25519():
     assert len(sign_resp.decode_signature()) > 0
     assert len(sign_resp.decode_public_key()) > 0
 
-    verify_resp = await client.verify(algo, SIGN_TEST_DATA, sign_resp.decode_signature(), sign_resp.decode_public_key())
+    verify_resp = await client.verify(
+        algo,
+        SIGN_TEST_DATA,
+        sign_resp.decode_signature(),
+        sign_resp.decode_public_key(),
+    )
     assert verify_resp.valid is True
 
-    verify_bad = await client.verify(algo, SIGN_BAD_DATA, sign_resp.decode_signature(), sign_resp.decode_public_key())
+    verify_bad = await client.verify(
+        algo, SIGN_BAD_DATA, sign_resp.decode_signature(), sign_resp.decode_public_key()
+    )
     assert verify_bad.valid is False
+
 
 @pytest.mark.asyncio
 async def test_async_sign_verify_secp256k1():
@@ -353,11 +385,19 @@ async def test_async_sign_verify_secp256k1():
     sign_resp = await client.sign(algo, SIGN_TEST_DATA)
     assert isinstance(sign_resp, SignResponse)
 
-    verify_resp = await client.verify(algo, SIGN_TEST_DATA, sign_resp.decode_signature(), sign_resp.decode_public_key())
+    verify_resp = await client.verify(
+        algo,
+        SIGN_TEST_DATA,
+        sign_resp.decode_signature(),
+        sign_resp.decode_public_key(),
+    )
     assert verify_resp.valid is True
 
-    verify_bad = await client.verify(algo, SIGN_BAD_DATA, sign_resp.decode_signature(), sign_resp.decode_public_key())
+    verify_bad = await client.verify(
+        algo, SIGN_BAD_DATA, sign_resp.decode_signature(), sign_resp.decode_public_key()
+    )
     assert verify_bad.valid is False
+
 
 @pytest.mark.asyncio
 async def test_async_sign_verify_secp256k1_prehashed():
@@ -368,12 +408,17 @@ async def test_async_sign_verify_secp256k1_prehashed():
     sign_resp = await client.sign(algo, digest)
     assert isinstance(sign_resp, SignResponse)
 
-    verify_resp = await client.verify(algo, digest, sign_resp.decode_signature(), sign_resp.decode_public_key())
+    verify_resp = await client.verify(
+        algo, digest, sign_resp.decode_signature(), sign_resp.decode_public_key()
+    )
     assert verify_resp.valid is True
 
     bad_digest = hashlib.sha256(SIGN_BAD_DATA).digest()
-    verify_bad = await client.verify(algo, bad_digest, sign_resp.decode_signature(), sign_resp.decode_public_key())
+    verify_bad = await client.verify(
+        algo, bad_digest, sign_resp.decode_signature(), sign_resp.decode_public_key()
+    )
     assert verify_bad.valid is False
+
 
 @pytest.mark.asyncio
 async def test_async_sign_prehashed_length_error():
@@ -382,6 +427,7 @@ async def test_async_sign_prehashed_length_error():
     with pytest.raises(ValueError) as excinfo:
         await client.sign(algo, b"too short")
     assert "32-byte digest" in str(excinfo.value)
+
 
 # Test deprecated TappdClient
 def test_tappd_client_deprecated():

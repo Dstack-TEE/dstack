@@ -151,6 +151,7 @@ class GetQuoteResponse(BaseModel):
             rtmrs[idx] = replay_rtmr(history)
         return rtmrs
 
+
 class SignResponse(BaseModel):
     signature: str
     signature_chain: List[str]
@@ -164,6 +165,7 @@ class SignResponse(BaseModel):
 
     def decode_public_key(self) -> bytes:
         return bytes.fromhex(self.public_key)
+
 
 class VerifyResponse(BaseModel):
     valid: bool
@@ -422,7 +424,9 @@ class AsyncDstackClient(BaseClient):
         """Signs data using a derived key."""
         data_bytes = data.encode() if isinstance(data, str) else data
         if algorithm == "secp256k1_prehashed" and len(data_bytes) != 32:
-             raise ValueError(f"Pre-hashed signing requires a 32-byte digest, but received {len(data_bytes)} bytes")
+            raise ValueError(
+                f"Pre-hashed signing requires a 32-byte digest, but received {len(data_bytes)} bytes"
+            )
 
         hex_data = binascii.hexlify(data_bytes).decode()
         payload = {"algorithm": algorithm, "data": hex_data}
