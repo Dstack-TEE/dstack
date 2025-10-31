@@ -171,6 +171,7 @@ blake2 = "0.10.6"
 tokio-rustls = { version = "0.26.2", features = ["ring"] }
 x25519-dalek = { version = "2.0.1", features = ["static_secrets"] }
 k256 = "0.13.4"
+ed25519-dalek = { version = "2.2.0", features = ["rand_core"] }
 # Additional RustCrypto dependencies for sealed box
 xsalsa20poly1305 = "0.9.0"
 salsa20 = "0.10"

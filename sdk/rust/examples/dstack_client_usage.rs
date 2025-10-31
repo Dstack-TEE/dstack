@@ -115,5 +115,24 @@ async fn main() -> anyhow::Result<()> {
         );
     }
 
+    let data_to_sign = b"my secret message".to_vec();
+    let algorithm = "secp256k1";
+    println!("Signing data with algorithm '{}'...", algorithm);
+    let sign_resp = client.sign(algorithm, data_to_sign.clone()).await?;
+    println!("  Signature: {}", sign_resp.signature);
+    println!("  Public Key: {}", sign_resp.public_key);
+
+    let sig_bytes = sign_resp.decode_signature()?;
+    let pub_key_bytes = sign_resp.decode_public_key()?;
+
+    let verify_resp = client
+        .verify(
+            algorithm,
+            data_to_sign.clone(),
+            sig_bytes.clone(),
+            pub_key_bytes.clone(),
+        )
+        .await?;
+    println!("  Verification successful: {}", verify_resp.valid);
     Ok(())
 }

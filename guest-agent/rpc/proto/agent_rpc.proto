@@ -37,7 +37,7 @@ service DstackGuest {
   // Returns the derived key along with its TLS certificate chain.
   rpc GetTlsKey(GetTlsKeyArgs) returns (GetTlsKeyResponse) {}
 
-  // Derives a new ECDSA key with k256 EC curve.
+  // Derives a new key.
   rpc GetKey(GetKeyArgs) returns (GetKeyResponse) {}
 
   // Generates a TDX quote with given report data.
@@ -48,6 +48,12 @@ service DstackGuest {
 
   // Get app info
   rpc Info(google.protobuf.Empty) returns (AppInfo) {}
+
+  // Sign a payload
+  rpc Sign(SignRequest) returns (SignResponse) {}
+
+  // Verify a signature
+  rpc Verify(VerifyRequest) returns (VerifyResponse) {}
 }
 
 // The request to derive a key
@@ -91,12 +97,14 @@ message GetTlsKeyResponse {
   repeated string certificate_chain = 2;
 }
 
-// The request to derive a new ECDSA key with k256 EC curve
+// The request to derive a new key
 message GetKeyArgs {
   // Path to the key to derive
   string path = 1;
   // Purpose of the key
   string purpose = 2;
+  // Algorithm of the key. Either `secp256k1` or `ed25519`. Defaults to `secp256k1`
+  string algorithm = 3;
 }
 
 // The response to a DeriveK256Key request
@@ -109,9 +117,11 @@ message DeriveK256KeyResponse {
 
 // The response to a GetEthKey request
 message GetKeyResponse {
-  // Derived k256 key
+  // Derived key
   bytes key = 1;
-  // Derived k256 signature chain
+  // The signature chain consists of the following signatures:
+  // [0] - the k256 signature of the derived pK signed by the app root key
+  // [1] - the k256 signature of the app root pK signed by the KMS root key
   repeated bytes signature_chain = 2;
 }
 
@@ -216,4 +226,38 @@ service Worker {
   rpc Info(google.protobuf.Empty) returns (AppInfo) {}
   // Get the guest agent version
   rpc Version(google.protobuf.Empty) returns (WorkerVersion) {}
+  // Get attestation
+  rpc GetAttestationForAppKey(GetAttestationForAppKeyRequest) returns (GetQuoteResponse) {}
+}
+
+message SignRequest {
+  string algorithm = 1;
+  bytes data = 2;
+}
+
+message SignResponse {
+  // the signature of the data
+  bytes signature = 1;
+  // The signature chain consists of the following signatures:
+  // [0] - the signature of the data
+  // [1] - the k256 signature of the message signing pubkey signed by the app root key
+  // [2] - the k256 signature of the app root pubkey signed by the KMS root key
+  repeated bytes signature_chain = 2;
+  // The public key signing the data
+  bytes public_key = 3;
+}
+
+message VerifyRequest {
+  string algorithm = 1;
+  bytes data = 2;
+  bytes signature = 3;
+  bytes public_key = 4;
+}
+
+message VerifyResponse {
+  bool valid = 1;
+}
+
+message GetAttestationForAppKeyRequest {
+  string algorithm = 1;
 }

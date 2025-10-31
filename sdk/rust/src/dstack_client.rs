@@ -14,6 +14,21 @@ use std::env;
 
 pub use dstack_sdk_types::dstack::*;
 
+// Internal request structs for hex encoding
+#[derive(Debug, Serialize)]
+struct SignRequest<'a> {
+    algorithm: &'a str,
+    data: String,
+}
+
+#[derive(Debug, Serialize)]
+struct VerifyRequest<'a> {
+    algorithm: &'a str,
+    data: String,
+    signature: String,
+    public_key: String,
+}
+
 fn get_endpoint(endpoint: Option<&str>) -> String {
     if let Some(e) = endpoint {
         return e.to_string();
@@ -106,6 +121,7 @@ impl DstackClient {
         let data = json!({
             "path": path.unwrap_or_default(),
             "purpose": purpose.unwrap_or_default(),
+            "algorithm": "secp256k1", // Default or specify as needed
         });
         let response = self.send_rpc_request("/GetKey", &data).await?;
         let response = serde_json::from_value::<GetKeyResponse>(response)?;
@@ -144,6 +160,36 @@ impl DstackClient {
         let response = self.send_rpc_request("/GetTlsKey", &tls_key_config).await?;
         let response = serde_json::from_value::<GetTlsKeyResponse>(response)?;
 
+        Ok(response)
+    }
+
+    /// Signs a payload using a derived key.
+    pub async fn sign(&self, algorithm: &str, data: Vec<u8>) -> Result<SignResponse> {
+        let payload = SignRequest {
+            algorithm,
+            data: hex_encode(data),
+        };
+        let response = self.send_rpc_request("/Sign", &payload).await?;
+        let response = serde_json::from_value::<SignResponse>(response)?;
+        Ok(response)
+    }
+
+    /// Verifies a payload signature.
+    pub async fn verify(
+        &self,
+        algorithm: &str,
+        data: Vec<u8>,
+        signature: Vec<u8>,
+        public_key: Vec<u8>,
+    ) -> Result<VerifyResponse> {
+        let payload = VerifyRequest {
+            algorithm,
+            data: hex_encode(data),
+            signature: hex_encode(signature),
+            public_key: hex_encode(public_key),
+        };
+        let response = self.send_rpc_request("/Verify", &payload).await?;
+        let response = serde_json::from_value::<VerifyResponse>(response)?;
         Ok(response)
     }
 }

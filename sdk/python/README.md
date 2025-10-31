@@ -556,13 +556,14 @@ Retrieves comprehensive information about the TEE instance.
 - `app_cert`: Application certificate in PEM format
 - `key_provider_info`: Key management configuration
 
-##### `get_key(path: str | None = None, purpose: str | None = None) -> GetKeyResponse`
+##### `get_key(path: str | None = None, purpose: str | None = None, algorithm: str = "secp256k1") -> GetKeyResponse`
 
 Derives a deterministic secp256k1/K256 private key for blockchain and Web3 applications. This is the primary method for obtaining cryptographic keys for wallets, signing, and other deterministic key scenarios.
 
 **Parameters:**
 - `path`: Unique identifier for key derivation (e.g., `"wallet/ethereum"`, `"signing/solana"`)
 - `purpose` (optional): Additional context for key usage (default: `""`)
+- `algorithm` (optional): Key algorithm (e.g., "secp256k1", "ed25519"). Defaults to "secp256k1".
 
 **Returns:** `GetKeyResponse`
 - `key`: 32-byte secp256k1 private key as hex string (suitable for Ethereum, Bitcoin, Solana, etc.)
@@ -635,6 +636,32 @@ Generates a fresh, random TLS key pair with X.509 certificate for TLS/SSL connec
 - **TLS-Optimized**: Keys and certificates designed for TLS/SSL scenarios
 - **RA-TLS Support**: Optional remote attestation extension in certificates
 - **TEE-Signed**: Certificates signed by TEE-resident Certificate Authority
+
+##### `sign(algorithm: str, data: str | bytes) -> SignResponse`
+
+Signs data using a derived key.
+
+**Parameters**:
+- `algorithm`: The algorithm to use (e.g., "ed25519", "secp256k1", "secp256k1_prehashed").
+- `data`: The data to sign. If using "secp256k1_prehashed", this must be a 32-byte hash (bytes).
+
+**Returns**: `SignResponse`
+- `signature`: The resulting signature as hex string.
+- `signature_chain`: List of hex strings proving key authenticity.
+- `public_key`: The public key corresponding to the derived signing key as hex string.
+
+##### `verify(algorithm: str, data: str | bytes, signature: str | bytes, public_key: str | bytes) -> VerifyResponse`
+
+Verifies a payload signature.
+
+**Parameters**:
+- `algorithm`: The algorithm used for signing.
+- `data`: The original data that was signed.
+- `signature`: The signature to verify (hex string or bytes).
+- `public_key`: The public key to use for verification (hex string or bytes).
+
+**Returns**: `VerifyResponse`
+- `valid`: A bool indicating if the signature is valid.
 
 ##### `emit_event(event: str, payload: str | bytes) -> None`
 
