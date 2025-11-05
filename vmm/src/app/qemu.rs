@@ -51,6 +51,7 @@ pub struct VmInfo {
     pub shutdown_progress: String,
     pub image_version: String,
     pub gateway_enabled: bool,
+    pub events: Vec<pb::GuestEvent>,
 }
 
 #[derive(Debug, Builder)]
@@ -177,6 +178,7 @@ impl VmInfo {
             app_id: self.manifest.app_id.clone(),
             instance_id: self.instance_id.as_deref().map(Into::into),
             exited_at: self.exited_at.clone(),
+            events: self.events.clone(),
         }
     }
 }
@@ -222,6 +224,7 @@ impl VmState {
             shutdown_progress: self.state.shutdown_progress.clone(),
             image_version: self.config.image.info.version.clone(),
             gateway_enabled: self.config.gateway_enabled,
+            events: self.state.events.clone().into(),
         }
     }
 }
