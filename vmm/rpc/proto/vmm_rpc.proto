@@ -42,6 +42,8 @@ message VmInfo {
 message GuestEvent {
   string event = 1;
   string body = 2;
+  // Timestamp in milliseconds since Unix epoch
+  uint64 timestamp = 3;
 }
 
 message Id {

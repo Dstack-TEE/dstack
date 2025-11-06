@@ -21,6 +21,7 @@ use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::SystemTime;
 use supervisor_client::SupervisorClient;
 use tracing::{error, info};
 
@@ -414,6 +415,10 @@ impl App {
         vm.state.events.push_back(pb::GuestEvent {
             event: event.into(),
             body: body.clone(),
+            timestamp: SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64,
         });
         while vm.state.events.len() > self.config.event_buffer_size {
             vm.state.events.pop_front();
