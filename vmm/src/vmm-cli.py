@@ -603,6 +603,7 @@ class VmmCLI:
 
     def update_vm_env(self, vm_id: str, envs: Dict[str, str], kms_urls: Optional[List[str]] = None) -> None:
         """Update environment variables for a VM"""
+        envs = envs or {}
         # First get the VM info to retrieve the app_id
         vm_info_response = self.rpc_call('GetInfo', {'id': vm_id})
 
@@ -611,6 +612,8 @@ class VmmCLI:
 
         app_id = vm_info_response['info']['app_id']
         print(f"Retrieved app ID: {app_id}")
+        vm_configuration = vm_info_response['info'].get('configuration') or {}
+        compose_file = vm_configuration.get('compose_file')
 
         # Now get the encryption key for the app
         encrypt_pubkey = self.get_app_env_encrypt_pub_key(
@@ -620,8 +623,31 @@ class VmmCLI:
         encrypted_env = encrypt_env(envs_list, encrypt_pubkey)
 
         # Use UpdateApp with the VM ID
-        self.rpc_call('UpgradeApp', {'id': vm_id,
-                      'encrypted_env': encrypted_env})
+        payload = {'id': vm_id, 'encrypted_env': encrypted_env}
+
+        if compose_file:
+            try:
+                app_compose = json.loads(compose_file)
+            except json.JSONDecodeError:
+                app_compose = {}
+            compose_changed = False
+            allowed_envs = list(envs.keys())
+            if app_compose.get('allowed_envs') != allowed_envs:
+                app_compose['allowed_envs'] = allowed_envs
+                compose_changed = True
+            launch_token_value = envs.get('APP_LAUNCH_TOKEN')
+            if launch_token_value is not None:
+                launch_token_hash = hashlib.sha256(
+                    launch_token_value.encode('utf-8')
+                ).hexdigest()
+                if app_compose.get('launch_token_hash') != launch_token_hash:
+                    app_compose['launch_token_hash'] = launch_token_hash
+                    compose_changed = True
+            if compose_changed:
+                payload['compose_file'] = json.dumps(
+                    app_compose, indent=4, ensure_ascii=False)
+
+        self.rpc_call('UpgradeApp', payload)
         print(f"Environment variables updated for VM {vm_id}")
 
     def update_vm_user_config(self, vm_id: str, user_config: str) -> None:
