@@ -11,6 +11,7 @@ log_level = "debug"
 address = "unix:./vmm.sock"
 reuse = true
 kms_url = "http://127.0.0.1:8081"
+event_buffer_size = 20
 
 [cvm]
 qemu_path = ""

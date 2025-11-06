@@ -269,6 +269,9 @@ pub struct Config {
     #[serde(default)]
     pub node_name: String,
 
+    /// The buffer size in VMM process for guest events
+    pub event_buffer_size: usize,
+
     /// CVM configuration
     pub cvm: CvmConfig,
     /// Gateway configuration

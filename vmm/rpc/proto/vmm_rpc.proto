@@ -35,6 +35,15 @@ message VmInfo {
   string shutdown_progress = 12;
   // Image version
   string image_version = 13;
+  // Events
+  repeated GuestEvent events = 14;
+}
+
+message GuestEvent {
+  string event = 1;
+  string body = 2;
+  // Timestamp in milliseconds since Unix epoch
+  uint64 timestamp = 3;
 }
 
 message Id {

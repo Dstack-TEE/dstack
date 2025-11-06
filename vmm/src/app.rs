@@ -17,10 +17,11 @@ use id_pool::IdPool;
 use ra_rpc::client::RaClient;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::SystemTime;
 use supervisor_client::SupervisorClient;
 use tracing::{error, info};
 
@@ -411,6 +412,17 @@ impl App {
         let Some(vm) = state.vms.values_mut().find(|vm| vm.config.cid == cid) else {
             bail!("VM not found");
         };
+        vm.state.events.push_back(pb::GuestEvent {
+            event: event.into(),
+            body: body.clone(),
+            timestamp: SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64,
+        });
+        while vm.state.events.len() > self.config.event_buffer_size {
+            vm.state.events.pop_front();
+        }
         match event {
             "boot.progress" => {
                 vm.state.boot_progress = body;
@@ -648,6 +660,7 @@ struct VmStateMut {
     boot_error: String,
     shutdown_progress: String,
     devices: GpuConfig,
+    events: VecDeque<pb::GuestEvent>,
 }
 
 impl VmStateMut {
