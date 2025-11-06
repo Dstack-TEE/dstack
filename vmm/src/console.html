@@ -2188,6 +2188,9 @@ fi
                         }
                     }
                     app_compose.pre_launch_script = upgradeDialog.value.preLaunchScript?.trim();
+                    if (upgradeDialog.value.resetSecrets) {
+                        app_compose.allowed_envs = upgradeDialog.value.encryptedEnvs.map(env => env.key);
+                    }
 
                     const swapBytes = Math.max(0, Math.round(upgradeDialog.value.swap_size || 0));
                     if (swapBytes > 0) {
@@ -2218,6 +2221,8 @@ fi
                         const body = {
                             id: upgradeDialog.value.vm.id,
                         };
+                        const composeWasExplicitlyUpdated = upgradeDialog.value.updateCompose;
+                        let composeNeedsUpdate = composeWasExplicitlyUpdated;
 
                         if (upgradeDialog.value.resetSecrets) {
                             body.encrypted_env = await makeEncryptedEnv(
@@ -2225,8 +2230,9 @@ fi
                                 kmsEnabled(upgradeDialog.value.vm),
                                 upgradeDialog.value.vm.app_id
                             );
+                            composeNeedsUpdate = true;
                         }
-                        if (upgradeDialog.value.updateCompose) {
+                        if (composeNeedsUpdate) {
                             body.compose_file = await updatedCompose();
                         }
 
@@ -2249,7 +2255,7 @@ fi
                         const data = await response.json();
                         upgradeDialog.value.encryptedEnvs = [];
                         upgradeDialog.value.show = false;
-                        if (body.compose_file) {
+                        if (composeWasExplicitlyUpdated) {
                             upgradeMessage.value = `✅ Compose file updated!`;
                         }
                         loadVMList();
