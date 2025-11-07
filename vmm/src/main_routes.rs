@@ -39,6 +39,11 @@ async fn index(app: &State<App>) -> (ContentType, String) {
     (ContentType::HTML, html)
 }
 
+#[get("/beta")]
+async fn beta() -> (ContentType, String) {
+    (ContentType::HTML, file_or_include_str!("console_beta.html"))
+}
+
 #[get("/res/<path>")]
 async fn res(path: &str) -> Result<(ContentType, String), Custom<String>> {
     match path {
@@ -160,5 +165,5 @@ fn vm_logs(
 }
 
 pub fn routes() -> Vec<Route> {
-    routes![index, res, vm_logs]
+    routes![index, beta, res, vm_logs]
 }

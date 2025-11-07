@@ -1,0 +1,399 @@
+<!--
+SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+SPDX-License-Identifier: Apache-2.0
+-->
+
+<div class="console-root">
+  <header class="app-header">
+    <div class="header-content">
+      <div class="header-left">
+        <h1 class="app-title">dstack-vmm</h1>
+        <span class="version-badge">v{{ version.version }}</span>
+      </div>
+      <div class="header-right">
+        <button class="btn-primary" @click="showDeployDialog()">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+            <path d="M8 3V13M3 8H13" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+          Deploy Instance
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <create-vm-dialog
+    :visible="showCreateDialog"
+    :form="vmForm"
+    :available-images="availableImages"
+    :available-gpus="availableGpus"
+    :allow-attach-all-gpus="allowAttachAllGpus"
+    :kms-available="vmForm.kms_enabled"
+    :port-mapping-enabled="config.portMappingEnabled"
+    @close="showCreateDialog = false"
+    @submit="createVm"
+    @load-compose="loadComposeFile"
+  />
+
+  <update-vm-dialog
+    :visible="updateDialog.show"
+    :dialog="updateDialog"
+    :available-images="availableImages"
+    :available-gpus="availableGpus"
+    :allow-attach-all-gpus="allowAttachAllGpus"
+    :port-mapping-enabled="config.portMappingEnabled"
+    :kms-enabled="kmsEnabled(updateDialog.vm || {})"
+    :compose-hash-preview="updateComposeHashPreview"
+    @close="updateDialog.show = false"
+    @submit="updateVM"
+    @load-compose="loadUpdateFile"
+  />
+
+  <fork-vm-dialog
+    :visible="cloneConfigDialog.show"
+    :dialog="cloneConfigDialog"
+    :available-images="availableImages"
+    @close="cloneConfigDialog.show = false"
+    @submit="cloneConfig"
+  />
+
+  <div class="toolbar">
+    <div class="toolbar-section">
+      <div class="search-box">
+        <svg class="search-icon" width="16" height="16" viewBox="0 0 16 16" fill="none">
+          <circle cx="7" cy="7" r="5" stroke="currentColor" stroke-width="1.5"/>
+          <path d="M11 11L14 14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+        <input type="text" v-model="searchQuery" placeholder="Search instances..." @keyup.enter="loadVMList()">
+        <button class="btn-search" @click="loadVMList()">Search</button>
+      </div>
+      <div class="vm-count">
+        <span class="count-label">Total Instances:</span>
+        <span class="count-value">{{ totalVMs }}</span>
+      </div>
+    </div>
+    <div class="toolbar-section">
+      <div class="pagination-controls">
+        <button class="btn-pagination" @click="prevPage()" :disabled="currentPage === 1">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+            <path d="M9 3L5 7L9 11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+        <div class="page-display">
+          <input type="number" v-model.number="pageInput" min="1" :max="maxPage" @keyup.enter="goToPage()" class="page-input">
+          <span class="page-separator">/</span>
+          <span class="page-total">{{ maxPage || 1 }}</span>
+        </div>
+        <button class="btn-pagination" @click="nextPage()" :disabled="!hasMorePages">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+            <path d="M5 3L9 7L5 11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+        <select v-model="pageSize" @change="onPageSizeChange()" class="page-size-select">
+          <option :value="10">10 / page</option>
+          <option :value="25">25 / page</option>
+          <option :value="50">50 / page</option>
+          <option :value="100">100 / page</option>
+        </select>
+      </div>
+    </div>
+  </div>
+
+  <div class="vm-table">
+    <div class="vm-table-header">
+      <div class="vm-col-expand"></div>
+      <div class="vm-col-name">Name</div>
+      <div class="vm-col-status">Status</div>
+      <div class="vm-col-uptime">Uptime</div>
+      <div class="vm-col-view">View</div>
+      <div class="vm-col-actions">Actions</div>
+    </div>
+
+    <div v-for="vm in vms" :key="vm.id" class="vm-row">
+      <div class="vm-row-main" @click="toggleDetails(vm)">
+        <div class="vm-col-expand" @click.stop>
+          <button class="btn-expand" @click="toggleDetails(vm)" :class="{ expanded: expandedVMs.has(vm.id) }">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+              <path :d="expandedVMs.has(vm.id) ? 'M3 9L7 5L11 9' : 'M3 5L7 9L11 5'" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </button>
+        </div>
+        <div class="vm-col-name">
+          <span class="vm-name">{{ vm.name }}</span>
+        </div>
+        <div class="vm-col-status">
+          <span class="status-badge" :class="'status-' + vmStatus(vm).replace(/\s+/g, '-')">
+            <span class="status-dot"></span>
+            {{ vmStatus(vm) }}
+          </span>
+        </div>
+        <div class="vm-col-uptime">{{ vm.status !== 'stopped' ? (vm.uptime || '-') : '-' }}</div>
+        <div class="vm-col-view" @click.stop>
+          <a class="view-link" @click.prevent="showLogs(vm.id, 'serial')" href="#">Logs</a>
+          <a class="view-link" @click.prevent="showLogs(vm.id, 'stderr')" href="#">Stderr</a>
+          <a class="view-link" @click.prevent="showDashboard(vm)" href="#">Board</a>
+        </div>
+        <div class="vm-col-actions" @click.stop>
+          <div class="dropdown">
+            <button class="btn-actions" @click="toggleDropdown($event, vm)">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                <circle cx="8" cy="4" r="1.5" fill="currentColor"/>
+                <circle cx="8" cy="8" r="1.5" fill="currentColor"/>
+                <circle cx="8" cy="12" r="1.5" fill="currentColor"/>
+              </svg>
+            </button>
+            <div class="dropdown-content" :id="'dropdown-' + vm.id">
+              <button @click="startVm(vm.id); closeAllDropdowns()">
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                  <path d="M4 2L11 7L4 12V2Z" fill="currentColor"/>
+                </svg>
+                Start
+              </button>
+              <button @click="shutdownVm(vm.id); closeAllDropdowns()">
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                  <rect x="3" y="3" width="8" height="8" fill="currentColor"/>
+                </svg>
+                Shutdown
+              </button>
+              <button @click="stopVm(vm); closeAllDropdowns()">
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                  <path d="M2 2L12 12M12 2L2 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                </svg>
+                Kill
+              </button>
+              <button @click="removeVm(vm.id); closeAllDropdowns()">
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                  <path d="M5 1h4M1 3h12M11 3l-.5 8.5c-.1.8-.7 1.5-1.5 1.5H5c-.8 0-1.4-.7-1.5-1.5L3 3M5.5 5.5v5M8.5 5.5v5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+                </svg>
+                Remove
+              </button>
+              <button @click="showUpdateDialog(vm); closeAllDropdowns()">
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                  <path d="M7 11V3M7 3L4 6M7 3l3 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                  <path d="M2 13h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                </svg>
+                Update
+              </button>
+              <button @click="showCloneConfig(vm); closeAllDropdowns()">
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                  <rect x="4" y="4" width="8" height="8" rx="1" stroke="currentColor" stroke-width="1.5"/>
+                  <path d="M10 2H3c-.6 0-1 .4-1 1v7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                </svg>
+                Clone Config
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div v-if="expandedVMs.has(vm.id)" class="vm-details">
+        <div class="details-grid">
+          <div class="detail-item">
+            <span class="detail-label">VM ID</span>
+            <div class="detail-value-with-copy">
+              <span class="detail-value" :title="vm.id">{{ vm.id }}</span>
+              <button class="copy-btn" @click="copyToClipboard(vm.id)" title="Copy">
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                  <rect x="4" y="4" width="8" height="8" rx="1" stroke="currentColor" stroke-width="1.2"/>
+                  <path d="M10 2H3c-.6 0-1 .4-1 1v7" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+                </svg>
+              </button>
+            </div>
+          </div>
+          <div class="detail-item">
+            <span class="detail-label">Instance ID</span>
+            <div class="detail-value-with-copy" v-if="vm.instance_id">
+              <span class="detail-value" :title="vm.instance_id">{{ vm.instance_id }}</span>
+              <button class="copy-btn" @click="copyToClipboard(vm.instance_id)" title="Copy">
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                  <rect x="4" y="4" width="8" height="8" rx="1" stroke="currentColor" stroke-width="1.2"/>
+                  <path d="M10 2H3c-.6 0-1 .4-1 1v7" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+                </svg>
+              </button>
+            </div>
+            <span class="detail-value" v-else>-</span>
+          </div>
+          <div class="detail-item">
+            <span class="detail-label">App ID</span>
+            <div class="detail-value-with-copy" v-if="vm.app_id">
+              <span class="detail-value" :title="vm.app_id">{{ vm.app_id }}</span>
+              <button class="copy-btn" @click="copyToClipboard(vm.app_id)" title="Copy">
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                  <rect x="4" y="4" width="8" height="8" rx="1" stroke="currentColor" stroke-width="1.2"/>
+                  <path d="M10 2H3c-.6 0-1 .4-1 1v7" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+                </svg>
+              </button>
+            </div>
+            <span class="detail-value" v-else>-</span>
+          </div>
+          <div class="detail-item">
+            <span class="detail-label">Image</span>
+            <span class="detail-value">{{ vm.configuration?.image }}</span>
+          </div>
+          <div class="detail-item">
+            <span class="detail-label">vCPUs</span>
+            <span class="detail-value">{{ vm.configuration?.vcpu }}</span>
+          </div>
+          <div class="detail-item">
+            <span class="detail-label">Memory</span>
+            <span class="detail-value">{{ formatMemory(vm.configuration?.memory) }}</span>
+          </div>
+          <div class="detail-item" v-if="vm.configuration?.swap_size">
+            <span class="detail-label">Swap</span>
+            <span class="detail-value">{{ formatMemory(bytesToMB(vm.configuration.swap_size)) }}</span>
+          </div>
+          <div class="detail-item">
+            <span class="detail-label">Disk Size</span>
+            <span class="detail-value">{{ vm.configuration?.disk_size }} GB</span>
+          </div>
+          <div class="detail-item">
+            <span class="detail-label">Disk Type</span>
+            <span class="detail-value">{{ vm.configuration?.disk_type || 'virtio-pci' }}</span>
+          </div>
+          <div class="detail-item" v-if="vm.configuration?.gpus && vm.configuration.gpus.length > 0">
+            <span class="detail-label">GPUs</span>
+            <div>
+              <div v-for="gpu in vm.configuration.gpus" :key="gpu.slot" class="detail-value">
+                {{ gpu.slot || gpu.product_id }}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div v-if="vm.configuration?.ports?.length" class="port-mappings">
+          <h4>Port Mappings</h4>
+          <div v-for="(port, index) in vm.configuration.ports" :key="index" class="port-item">
+            <span>{{ port.host_address === '127.0.0.1' ? 'Local' : 'Public' }}</span>
+            <span>{{ port.protocol.toUpperCase() }}: {{ port.host_port }} → {{ port.vm_port }}</span>
+          </div>
+        </div>
+
+        <div class="features-section">
+          <h4>Features</h4>
+          <span class="features-text">{{ getVmFeatures(vm) }}</span>
+        </div>
+
+        <div v-if="networkInfo[vm.id]" class="network-section">
+          <h4 class="section-title">Network Interfaces</h4>
+          <div class="network-interfaces">
+            <div v-for="iface in networkInfo[vm.id].interfaces" :key="iface.name" class="network-interface-card">
+              <div class="interface-header">
+                <div class="interface-name">
+                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                    <rect x="2" y="3" width="12" height="10" rx="1" stroke="currentColor" stroke-width="1.5"/>
+                    <path d="M2 6h12M5 3v3M11 3v3" stroke="currentColor" stroke-width="1.5"/>
+                  </svg>
+                  <span>{{ iface.name }}</span>
+                </div>
+              </div>
+              <div class="interface-details">
+                <div class="interface-detail-row">
+                  <span class="detail-label">MAC Address</span>
+                  <span class="detail-value">{{ iface.mac || '-' }}</span>
+                </div>
+                <div class="interface-detail-row">
+                  <span class="detail-label">IP Address</span>
+                  <span class="detail-value">{{ iface.addresses.map(addr => addr.address + '/' + addr.prefix).join(', ') || '-' }}</span>
+                </div>
+                <div class="interface-stats">
+                  <div class="stat-item">
+                    <div class="stat-icon rx">
+                      <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+                        <path d="M6 2v8M3 7l3 3 3-3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                      </svg>
+                    </div>
+                    <div class="stat-content">
+                      <span class="stat-label">RX</span>
+                      <span class="stat-value">{{ iface.rx_bytes }} bytes</span>
+                      <span class="stat-errors" v-if="iface.rx_errors > 0">({{ iface.rx_errors }} errors)</span>
+                    </div>
+                  </div>
+                  <div class="stat-item">
+                    <div class="stat-icon tx">
+                      <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+                        <path d="M6 10V2M3 5l3-3 3 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                      </svg>
+                    </div>
+                    <div class="stat-content">
+                      <span class="stat-label">TX</span>
+                      <span class="stat-value">{{ iface.tx_bytes }} bytes</span>
+                      <span class="stat-errors" v-if="iface.tx_errors > 0">({{ iface.tx_errors }} errors)</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div v-if="networkInfo[vm.id].wg_info" class="wireguard-section">
+            <h4 class="section-title">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                <circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.5"/>
+                <path d="M8 5v3l2 2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+              </svg>
+              WireGuard Info
+            </h4>
+            <pre class="wireguard-info-text">{{ networkInfo[vm.id].wg_info }}</pre>
+          </div>
+        </div>
+
+        <div v-if="vm.configuration?.compose_file" class="compose-section">
+          <div class="section-header">
+            <h4>App Compose</h4>
+            <div class="section-actions">
+              <button class="copy-btn-small" @click="copyToClipboard(vm.appCompose?.docker_compose_file || '')" title="Copy Docker Compose">
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                  <rect x="4" y="4" width="8" height="8" rx="1" stroke="currentColor" stroke-width="1.2"/>
+                  <path d="M10 2H3c-.6 0-1 .4-1 1v7" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+                </svg>
+              </button>
+              <button class="action-btn" @click="downloadAppCompose(vm)">
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                  <path d="M7 2v8M7 10l3-3M7 10L4 7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                  <path d="M2 12h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                </svg>
+                Download
+              </button>
+            </div>
+          </div>
+          <div class="compose-content">
+            <pre>{{ vm.appCompose?.docker_compose_file || 'Docker Compose content not available' }}</pre>
+          </div>
+        </div>
+
+        <div v-if="vm.configuration?.user_config" class="user-config-section">
+          <div class="section-header">
+            <h4>User Config</h4>
+            <button class="action-btn" @click="downloadUserConfig(vm)">
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                <path d="M7 2v8M7 10l3-3M7 10L4 7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                <path d="M2 12h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+              </svg>
+              Download
+            </button>
+          </div>
+          <pre class="user-config-content">{{ vm.configuration.user_config }}</pre>
+        </div>
+
+        <div class="vm-log-tabs">
+          <button class="vm-log-button" @click="showLogs(vm.id, 'serial')">Serial Logs</button>
+          <button class="vm-log-button" @click="showLogs(vm.id, 'stdout')">Stdout</button>
+          <button class="vm-log-button" @click="showLogs(vm.id, 'stderr')">Stderr</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="message-container">
+    <div v-if="updateMessage" class="message success-message">
+      <button class="close-btn" @click="updateMessage = ''">×</button>
+      <div v-html="updateMessage"></div>
+    </div>
+    <div v-if="successMessage" class="message success-message">
+      <button class="close-btn" @click="successMessage = ''">×</button>
+      <div v-html="successMessage"></div>
+    </div>
+    <div v-if="errorMessage" class="message error-message">
+      {{ errorMessage }}
+      <button class="close-btn" @click="errorMessage = ''">×</button>
+    </div>
+  </div>
+</div>
