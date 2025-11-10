@@ -42,14 +42,6 @@ const ForkVmDialogComponent = {
           <input id="forkDiskSize" v-model.number="dialog.disk_size" type="number" placeholder="Disk size in GB" required>
         </div>
 
-        <div class="form-group">
-          <label for="forkDiskType">Disk Type</label>
-          <select id="forkDiskType" v-model="dialog.disk_type">
-            <option value="virtio-pci">Virtio PCI</option>
-            <option value="nvme">NVMe</option>
-          </select>
-        </div>
-
         <div class="dialog-footer">
           <button class="action-btn primary" @click="$emit('submit')">Derive</button>
           <button class="action-btn" @click="$emit('close')">Cancel</button>

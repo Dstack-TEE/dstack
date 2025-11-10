@@ -45,7 +45,6 @@ if (localStorage.getItem('dangerConfirm') === null) {
 }
 
 type MemoryUnit = 'MB' | 'GB';
-type DiskType = 'virtio-pci' | 'nvme';
 
 type JsonRpcCall = (method: string, params?: Record<string, unknown>) => Promise<Response>;
 type Ref<T> = { value: T };
@@ -89,7 +88,6 @@ type VmFormState = {
   swapValue: number;
   swapUnit: MemoryUnit;
   disk_size: number;
-  disk_type: DiskType;
   selectedGpus: string[];
   attachAllGpus: boolean;
   ports: PortFormEntry[];
@@ -127,7 +125,6 @@ type UpdateDialogState = {
   swapValue: number;
   swapUnit: MemoryUnit;
   disk_size: number;
-  disk_type: DiskType;
   image: string;
   ports: PortFormEntry[];
   attachAllGpus: boolean;
@@ -144,7 +141,6 @@ type CloneConfigDialogState = {
   vcpu: number;
   memory: number;
   disk_size: number;
-  disk_type: DiskType;
   ports: PortFormEntry[];
   user_config: string;
   gpus?: VmmTypes.IGpuConfig;
@@ -171,7 +167,6 @@ function createVmFormState(preLaunchScript: string): VmFormState {
     swapValue: 0,
     swapUnit: 'GB',
     disk_size: 20,
-    disk_type: 'virtio-pci',
     selectedGpus: [],
     attachAllGpus: false,
     ports: [],
@@ -211,7 +206,6 @@ function createUpdateDialogState(): UpdateDialogState {
     swapValue: 0,
     swapUnit: 'GB',
     disk_size: 0,
-    disk_type: 'virtio-pci',
     image: '',
     ports: [],
     attachAllGpus: false,
@@ -230,7 +224,6 @@ function createCloneConfigDialogState(): CloneConfigDialogState {
     vcpu: 0,
     memory: 0,
     disk_size: 0,
-    disk_type: 'virtio-pci',
     ports: [],
     user_config: '',
     gpus: undefined,
@@ -413,7 +406,6 @@ fi
     vcpu: number;
     memory: number;
     disk_size: number;
-    disk_type: DiskType;
     ports: PortFormEntry[];
     encrypted_env?: Uint8Array;
     app_id?: string | null;
@@ -435,7 +427,6 @@ fi
       vcpu: Math.max(1, Number(source.vcpu) || 1),
       memory: Math.max(0, Number(source.memory) || 0),
       disk_size: Math.max(0, Number(source.disk_size) || 0),
-      disk_type: source.disk_type || 'virtio-pci',
       ports: normalizedPorts,
       encrypted_env: source.encrypted_env,
       app_id: source.app_id || undefined,
@@ -836,7 +827,6 @@ fi
     vmForm.value.swapValue = 0;
     vmForm.value.swapUnit = 'GB';
     vmForm.value.swap_size = 0;
-    vmForm.value.disk_type = 'virtio-pci';
     loadGpus();
   }
 
@@ -866,7 +856,6 @@ fi
       swapValue: swapDisplay.memoryValue,
       swapUnit: swapDisplay.memoryUnit,
       disk_size: config.disk_size || 0,
-      disk_type: (config.disk_type as DiskType) || 'virtio-pci',
       image: config.image || '',
       ports: clonePortMappings(config.ports || []),
       attachAllGpus: gpuSelection.attachAll,
@@ -957,7 +946,6 @@ fi
         vcpu: vmForm.value.vcpu,
         memory: vmForm.value.memory,
         disk_size: vmForm.value.disk_size,
-        disk_type: vmForm.value.disk_type,
         ports: vmForm.value.ports,
         encrypted_env: encryptedEnv || undefined,
         app_id: vmForm.value.app_id || undefined,
@@ -1086,7 +1074,6 @@ fi
       swapValue: autoMemoryDisplay(bytesToMB(theVm.appCompose?.swap_size || 0)).memoryValue,
       swapUnit: autoMemoryDisplay(bytesToMB(theVm.appCompose?.swap_size || 0)).memoryUnit,
       disk_size: config.disk_size || 0,
-      disk_type: (config.disk_type as DiskType) || 'virtio-pci',
       selectedGpus: [],
       attachAllGpus: false,
       encryptedEnvs: [], // Clear environment variables
@@ -1126,7 +1113,6 @@ fi
         vcpu: source.vcpu,
         memory: source.memory,
         disk_size: source.disk_size,
-        disk_type: source.disk_type,
         ports: source.ports,
         encrypted_env: source.encrypted_env,
         app_id: source.app_id,

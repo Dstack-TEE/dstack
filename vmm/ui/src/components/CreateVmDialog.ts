@@ -77,14 +77,6 @@ const CreateVmDialogComponent = {
             </div>
 
             <div class="form-group">
-              <label for="diskType">Storage Interface</label>
-              <select id="diskType" v-model="form.disk_type">
-                <option value="virtio-pci">Virtio PCI</option>
-                <option value="nvme">NVMe</option>
-              </select>
-            </div>
-
-            <div class="form-group">
               <label for="storageFs">Storage Filesystem
                 <span class="help-icon" title="ZFS: strong integrity guarantees. ext4: lower overhead for databases.">?</span>
               </label>

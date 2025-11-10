@@ -238,7 +238,8 @@ async function build({ watch = false } = {}) {
           },
         ]);
         await fs.writeFile(distFile, rehtml);
-        await fs.writeFile(targetFile, rehtml);
+        const spdxHeader = '<!-- SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>\n     SPDX-License-Identifier: Apache-2.0 -->\n';
+        await fs.writeFile(targetFile, spdxHeader + rehtml);
         console.log('Rebuilt console');
       } catch (err) {
         console.error('Build failed:', err);
