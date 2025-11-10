@@ -1,0 +1,18 @@
+{
+  "compilerOptions": {
+    "target": "ES2018",
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "resolveJsonModule": true,
+    "lib": ["ES2018", "DOM"],
+    "strict": false,
+    "esModuleInterop": false,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "outDir": "build/ts",
+    "rootDir": "src",
+    "allowJs": true,
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts", "src/proto/**/*.js", "src/lib/**/*.js"]
+}
