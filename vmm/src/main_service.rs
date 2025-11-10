@@ -51,13 +51,17 @@ fn app_id_of(compose_file: &str) -> String {
     truncate40(&hex_sha256(compose_file)).to_string()
 }
 
-/// Validate the label of the VM. Valid chars are alphanumeric, dash and underscore.
+/// Validate the VM label, restricting it to a safe character set to prevent injection vectors.
 fn validate_label(label: &str) -> Result<()> {
-    if label
-        .chars()
-        .any(|c| !c.is_alphanumeric() && c != '-' && c != '_')
-    {
-        bail!("Invalid name: {}", label);
+    fn is_valid_label_char(c: char) -> bool {
+        c.is_ascii_alphanumeric()
+            || matches!(
+                c,
+                '-' | '_' | '.' | ' ' | '@' | '~' | '!' | '$' | '^' | '(' | ')'
+            )
+    }
+    if !label.chars().all(is_valid_label_char) {
+        bail!("Invalid name: {label}");
     }
     Ok(())
 }
