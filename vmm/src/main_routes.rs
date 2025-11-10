@@ -27,21 +27,27 @@ macro_rules! file_or_include_str {
     };
 }
 
+fn replace_title(app: &App, html: &str) -> String {
+    let title = if app.config.node_name.is_empty() {
+        "dstack-vmm".to_string()
+    } else {
+        format!("{} | dstack-vmm", app.config.node_name)
+    };
+    html.replace("{{TITLE}}", &title)
+}
+
 #[get("/")]
 async fn index(app: &State<App>) -> (ContentType, String) {
     let html = file_or_include_str!("console.html");
-    let title = if app.config.node_name.is_empty() {
-        "dstack VM Management Console".to_string()
-    } else {
-        format!("{} - dstack VM Management Console", app.config.node_name)
-    };
-    let html = html.replace("{{TITLE}}", &title);
+    let html = replace_title(app, &html);
     (ContentType::HTML, html)
 }
 
 #[get("/beta")]
-async fn beta() -> (ContentType, String) {
-    (ContentType::HTML, file_or_include_str!("console_beta.html"))
+async fn beta(app: &State<App>) -> (ContentType, String) {
+    let html = file_or_include_str!("console_beta.html");
+    let html = replace_title(app, &html);
+    (ContentType::HTML, html)
 }
 
 #[get("/res/<path>")]
