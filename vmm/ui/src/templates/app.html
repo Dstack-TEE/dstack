@@ -11,6 +11,21 @@ SPDX-License-Identifier: Apache-2.0
         <span class="version-badge">v{{ version.version }}</span>
       </div>
       <div class="header-right">
+        <div class="system-menu">
+          <button class="btn-icon system-menu-btn" @click="toggleSystemMenu($event)" title="System Menu">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+              <path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+            </svg>
+          </button>
+          <div class="dropdown-menu system-dropdown" :class="{ 'show': systemMenu.show }" @click.stop>
+            <button class="dropdown-item" @click="reloadVMs(); closeSystemMenu()">
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                <path d="M1 7a6 6 0 1 0 6-6M7 1v6l3 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+              Reload VMs
+            </button>
+          </div>
+        </div>
         <button class="btn-primary" @click="showDeployDialog()">
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
             <path d="M8 3V13M3 8H13" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>

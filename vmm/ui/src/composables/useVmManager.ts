@@ -44,6 +44,11 @@ if (localStorage.getItem('dangerConfirm') === null) {
   localStorage.setItem('dangerConfirm', 'true');
 }
 
+// System menu state
+const systemMenu = ref({
+  show: false,
+});
+
 type MemoryUnit = 'MB' | 'GB';
 
 type JsonRpcCall = (method: string, params?: Record<string, unknown>) => Promise<Response>;
@@ -1184,7 +1189,67 @@ fi
 
   function closeAllDropdowns() {
     document.querySelectorAll('.dropdown-content').forEach((dropdown) => dropdown.classList.remove('show'));
+    systemMenu.value.show = false;
     document.removeEventListener('click', closeAllDropdowns);
+  }
+
+  function toggleSystemMenu(event: Event) {
+    event.stopPropagation();
+    systemMenu.value.show = !systemMenu.value.show;
+
+    // Close all other dropdowns
+    document.querySelectorAll('.dropdown-content').forEach((dropdown) => {
+      dropdown.classList.remove('show');
+    });
+
+    if (systemMenu.value.show) {
+      document.addEventListener('click', closeAllDropdowns);
+    } else {
+      document.removeEventListener('click', closeAllDropdowns);
+    }
+  }
+
+  function closeSystemMenu() {
+    systemMenu.value.show = false;
+  }
+
+  async function reloadVMs() {
+    try {
+      errorMessage.value = '';
+      successMessage.value = '';
+
+      const response = await vmmRpc.reloadVms({});
+
+      // Show success message with statistics
+      if (response.loaded > 0 || response.updated > 0 || response.removed > 0) {
+        let message = 'VM reload completed: ';
+        const parts = [];
+        if (response.loaded > 0) parts.push(`${response.loaded} loaded`);
+        if (response.updated > 0) parts.push(`${response.updated} updated`);
+        if (response.removed > 0) parts.push(`${response.removed} removed`);
+
+        successMessage.value = message + parts.join(', ');
+      } else {
+        successMessage.value = 'VM reload completed: no changes detected';
+      }
+
+      // Reload the VM list to show updated data
+      await loadVMList();
+
+      // Hide message after 5 seconds
+      setTimeout(() => {
+        successMessage.value = '';
+      }, 5000);
+
+    } catch (error: any) {
+      console.error('Failed to reload VMs:', error);
+      errorMessage.value = `Failed to reload VMs: ${error.message || error.toString()}`;
+
+      // Hide error message after 10 seconds
+      setTimeout(() => {
+        errorMessage.value = '';
+      }, 10000);
+    }
   }
 
   function toggleDropdown(event: Event, vm: VmListItem) {
@@ -1385,6 +1450,10 @@ fi
     downloadAppCompose,
     downloadUserConfig,
     getVmFeatures,
+    systemMenu,
+    toggleSystemMenu,
+    closeSystemMenu,
+    reloadVMs,
   };
 }
 
