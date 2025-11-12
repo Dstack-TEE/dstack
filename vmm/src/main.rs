@@ -29,6 +29,7 @@ mod host_api_service;
 mod main_routes;
 mod main_service;
 mod one_shot;
+mod openapi;
 
 const CARGO_PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
 const GIT_REV: &str = git_version::git_version!(
@@ -74,6 +75,9 @@ struct RunArgs {
 }
 
 async fn run_external_api(app: App, figment: Figment, api_auth: ApiToken) -> Result<()> {
+    let version = app_version();
+    let openapi_doc = openapi::build_openapi_doc(&version)?;
+
     let external_api = rocket::custom(figment)
         .mount("/", main_routes::routes())
         .mount("/guest", ra_rpc::prpc_routes!(App, GuestApiHandler))
@@ -94,6 +98,8 @@ async fn run_external_api(app: App, figment: Figment, api_auth: ApiToken) -> Res
                 res.set_raw_header("X-Accel-Buffering", "no");
             })
         }));
+    let external_api =
+        ra_rpc::rocket_helper::mount_openapi_docs(external_api, openapi_doc, "/rpc-docs");
 
     let _ = external_api
         .launch()

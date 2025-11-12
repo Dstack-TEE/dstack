@@ -18,6 +18,9 @@ pub mod rocket_helper;
 #[cfg(feature = "client")]
 pub mod client;
 
+#[cfg(feature = "openapi")]
+pub mod openapi;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RemoteEndpoint {
     Tcp(SocketAddr),

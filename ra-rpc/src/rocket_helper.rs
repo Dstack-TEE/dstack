@@ -4,6 +4,13 @@
 
 use std::convert::Infallible;
 
+#[cfg(all(feature = "rocket", feature = "openapi"))]
+use crate::openapi::{OpenApiDoc, RenderedDoc};
+#[cfg(all(feature = "rocket", feature = "openapi"))]
+use rocket::response::content::{RawHtml, RawJson};
+#[cfg(all(feature = "rocket", feature = "openapi"))]
+use std::{borrow::Cow, sync::Arc};
+
 use anyhow::{Context, Result};
 use ra_tls::{attestation::Attestation, traits::CertExt};
 use rocket::{
@@ -354,5 +361,78 @@ impl CertExt for RocketCertificate<'_> {
             return Ok(None);
         };
         Ok(Some(ext.value.to_vec()))
+    }
+}
+
+#[cfg(all(feature = "rocket", feature = "openapi"))]
+#[derive(Clone)]
+struct OpenApiState {
+    spec_json: Arc<String>,
+    ui_html: Arc<String>,
+}
+
+#[cfg(all(feature = "rocket", feature = "openapi"))]
+impl From<RenderedDoc> for OpenApiState {
+    fn from(doc: RenderedDoc) -> Self {
+        Self {
+            spec_json: doc.spec.clone(),
+            ui_html: Arc::new(doc.ui_html),
+        }
+    }
+}
+
+#[cfg(all(feature = "rocket", feature = "openapi"))]
+#[rocket::get("/openapi.json")]
+fn openapi_spec(state: &rocket::State<OpenApiState>) -> RawJson<String> {
+    RawJson((*state.spec_json).clone())
+}
+
+#[cfg(all(feature = "rocket", feature = "openapi"))]
+#[rocket::get("/docs")]
+fn openapi_docs(state: &rocket::State<OpenApiState>) -> RawHtml<String> {
+    RawHtml((*state.ui_html).clone())
+}
+
+#[cfg(all(feature = "rocket", feature = "openapi"))]
+pub fn mount_openapi_docs(
+    rocket: rocket::Rocket<rocket::Build>,
+    doc: OpenApiDoc,
+    mount_path: impl Into<Cow<'static, str>>,
+) -> rocket::Rocket<rocket::Build> {
+    let base = normalize_openapi_mount(mount_path.into());
+    let spec_url = join_mount_path(base.as_ref(), "openapi.json");
+    let rendered = doc.render(&spec_url);
+    let state = OpenApiState::from(rendered);
+    let mount_point = base.clone().into_owned();
+    rocket
+        .manage(state)
+        .mount(mount_point, rocket::routes![openapi_spec, openapi_docs])
+}
+
+#[cfg(all(feature = "rocket", feature = "openapi"))]
+fn normalize_openapi_mount(path: Cow<'static, str>) -> Cow<'static, str> {
+    let mut owned = path.into_owned();
+    if owned.is_empty() {
+        owned.push('/');
+    }
+    if !owned.starts_with('/') {
+        owned.insert(0, '/');
+    }
+    if owned.len() > 1 && owned.ends_with('/') {
+        owned.pop();
+    }
+    Cow::Owned(if owned.is_empty() { "/".into() } else { owned })
+}
+
+#[cfg(all(feature = "rocket", feature = "openapi"))]
+fn join_mount_path(base: &str, segment: &str) -> String {
+    if base == "/" {
+        format!("/{}", segment.trim_start_matches('/'))
+    } else {
+        format!(
+            "{}/{}",
+            base.trim_end_matches('/'),
+            segment.trim_start_matches('/')
+        )
     }
 }

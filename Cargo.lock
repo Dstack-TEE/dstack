@@ -5450,6 +5450,7 @@ version = "0.5.5"
 dependencies = [
  "anyhow",
  "bon",
+ "prost-types 0.13.5",
  "prpc",
  "ra-tls",
  "reqwest",

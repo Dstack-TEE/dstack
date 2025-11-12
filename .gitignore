@@ -8,3 +8,4 @@ node_modules/
 .venv
 /tmp
 .claude/settings.local.json
+__pycache__
