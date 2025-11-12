@@ -112,6 +112,7 @@ hex = { version = "0.4.3", default-features = false }
 hex_fmt = "0.3.0"
 hex-literal = "1.0.0"
 prost = "0.13.5"
+prost-types = "0.13.5"
 scale = { version = "3.7.4", package = "parity-scale-codec", features = [
     "derive",
 ] }

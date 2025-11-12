@@ -35,7 +35,7 @@ rocket-apitoken.workspace = true
 serde_ini.workspace = true
 
 supervisor-client.workspace = true
-ra-rpc = { workspace = true, features = ["client", "rocket"] }
+ra-rpc = { workspace = true, features = ["client", "rocket", "openapi"] }
 dstack-vmm-rpc.workspace = true
 dstack-kms-rpc.workspace = true
 path-absolutize.workspace = true

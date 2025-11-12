@@ -22,8 +22,10 @@ bon.workspace = true
 rocket-vsock-listener = { workspace = true, optional = true }
 serde.workspace = true
 x509-parser.workspace = true
+prost-types = { workspace = true, optional = true }
 
 [features]
 default = ["rocket", "client"]
 rocket = ["dep:rocket", "dep:rocket-vsock-listener"]
 client = ["reqwest"]
+openapi = ["dep:prost-types"]
