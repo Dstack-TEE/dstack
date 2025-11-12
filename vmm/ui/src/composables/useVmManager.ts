@@ -1219,6 +1219,11 @@ type CreateVmPayloadSource = {
     systemMenu.value.show = false;
   }
 
+  function openApiDocs() {
+    closeSystemMenu();
+    window.open('/api-docs/docs', '_blank', 'noopener');
+  }
+
   async function reloadVMs() {
     try {
       errorMessage.value = '';
@@ -1459,6 +1464,7 @@ type CreateVmPayloadSource = {
     systemMenu,
     toggleSystemMenu,
     closeSystemMenu,
+    openApiDocs,
     reloadVMs,
   };
 }

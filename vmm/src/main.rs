@@ -99,7 +99,7 @@ async fn run_external_api(app: App, figment: Figment, api_auth: ApiToken) -> Res
             })
         }));
     let external_api =
-        ra_rpc::rocket_helper::mount_openapi_docs(external_api, openapi_doc, "/rpc-docs");
+        ra_rpc::rocket_helper::mount_openapi_docs(external_api, openapi_doc, "/api-docs");
 
     let _ = external_api
         .launch()

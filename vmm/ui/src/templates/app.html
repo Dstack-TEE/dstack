@@ -11,6 +11,12 @@ SPDX-License-Identifier: Apache-2.0
         <span class="version-badge">v{{ version.version }}</span>
       </div>
       <div class="header-right">
+        <button class="btn-primary" @click="showDeployDialog()">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+            <path d="M8 3V13M3 8H13" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+          Deploy Instance
+        </button>
         <div class="system-menu">
           <button class="btn-icon system-menu-btn" @click="toggleSystemMenu($event)" title="System Menu">
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
@@ -24,14 +30,15 @@ SPDX-License-Identifier: Apache-2.0
               </svg>
               Reload VMs
             </button>
+            <button class="dropdown-item" @click="openApiDocs()">
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                <path d="M3 3h8v8H3z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>
+                <path d="M5 5h4M5 7h4M5 9h2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+              </svg>
+              API Docs
+            </button>
           </div>
         </div>
-        <button class="btn-primary" @click="showDeployDialog()">
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-            <path d="M8 3V13M3 8H13" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-          </svg>
-          Deploy Instance
-        </button>
       </div>
     </div>
   </header>
