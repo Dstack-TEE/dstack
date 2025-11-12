@@ -61,10 +61,12 @@ const GpuConfigEditorComponent = {
           Select GPUs to attach:
         </div>
         <div class="gpu-config-items">
-          <label v-for="gpu in availableGpus" :key="gpu.slot">
-            <input type="checkbox" :value="gpu.slot" v-model="selectedGpus">
-            <span>{{ gpu.slot }}: {{ gpu.description }} {{ gpu.is_free ? '' : '(in use)' }}</span>
-          </label>
+          <div class="gpu-checkbox-grid">
+            <label v-for="gpu in availableGpus" :key="gpu.slot">
+              <input type="checkbox" :value="gpu.slot" v-model="selectedGpus">
+              <span>{{ gpu.slot }}: {{ gpu.description }} {{ gpu.is_free ? '' : '(in use)' }}</span>
+            </label>
+          </div>
         </div>
       </div>
       <div v-else class="gpu-config-hint">
