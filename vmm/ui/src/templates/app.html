@@ -278,6 +278,10 @@ SPDX-License-Identifier: Apache-2.0
             <span class="detail-label">Disk Type</span>
             <span class="detail-value">{{ vm.configuration?.disk_type || 'virtio-pci' }}</span>
           </div>
+          <div class="detail-item">
+            <span class="detail-label">TEE</span>
+            <span class="detail-value">{{ vm.configuration?.no_tee ? 'Disabled' : 'Enabled' }}</span>
+          </div>
           <div class="detail-item" v-if="vm.configuration?.gpus && vm.configuration.gpus.length > 0">
             <span class="detail-label">GPUs</span>
             <div>
