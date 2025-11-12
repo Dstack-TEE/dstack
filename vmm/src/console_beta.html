@@ -1993,6 +1993,7 @@ const CreateVmDialogComponent = {
                 <label><input type="checkbox" v-model="form.public_logs"> Public logs</label>
                 <label><input type="checkbox" v-model="form.public_sysinfo"> Public sysinfo</label>
                 <label><input type="checkbox" v-model="form.public_tcbinfo"> Public TCB info</label>
+                <label><input type="checkbox" v-model="form.no_tee"> Disable TDX</label>
                 <label><input type="checkbox" v-model="form.pin_numa"> Pin NUMA</label>
                 <label><input type="checkbox" v-model="form.hugepages"> Huge pages</label>
               </div>
@@ -2269,6 +2270,7 @@ function createVmFormState(preLaunchScript) {
         public_logs: true,
         public_sysinfo: true,
         public_tcbinfo: true,
+        no_tee: false,
         pin_numa: false,
         hugepages: false,
         user_config: '',
@@ -2318,6 +2320,7 @@ function createCloneConfigDialogState() {
         gateway_urls: undefined,
         hugepages: false,
         pin_numa: false,
+        no_tee: false,
         encrypted_env: undefined,
         app_id: undefined,
         stopped: false,
@@ -2462,7 +2465,7 @@ fi
         return undefined;
     }
     function buildCreateVmPayload(source) {
-        var _a, _b, _c, _d;
+        var _a, _b, _c, _d, _e;
         const normalizedPorts = normalizePorts(source.ports);
         return {
             name: source.name.trim(),
@@ -2477,9 +2480,10 @@ fi
             user_config: source.user_config || '',
             hugepages: !!source.hugepages,
             pin_numa: !!source.pin_numa,
+            no_tee: (_a = source.no_tee) !== null && _a !== void 0 ? _a : false,
             gpus: source.gpus,
-            kms_urls: (_b = (_a = source.kms_urls) === null || _a === void 0 ? void 0 : _a.filter((url) => url && url.trim().length)) !== null && _b !== void 0 ? _b : [],
-            gateway_urls: (_d = (_c = source.gateway_urls) === null || _c === void 0 ? void 0 : _c.filter((url) => url && url.trim().length)) !== null && _d !== void 0 ? _d : [],
+            kms_urls: (_c = (_b = source.kms_urls) === null || _b === void 0 ? void 0 : _b.filter((url) => url && url.trim().length)) !== null && _c !== void 0 ? _c : [],
+            gateway_urls: (_e = (_d = source.gateway_urls) === null || _d === void 0 ? void 0 : _d.filter((url) => url && url.trim().length)) !== null && _e !== void 0 ? _e : [],
             stopped: !!source.stopped,
         };
     }
@@ -2937,6 +2941,7 @@ fi
                 user_config: vmForm.value.user_config,
                 hugepages: vmForm.value.hugepages,
                 pin_numa: vmForm.value.pin_numa,
+                no_tee: vmForm.value.no_tee,
                 gpus: configGpu(vmForm.value) || undefined,
                 kms_urls: vmForm.value.kms_urls,
                 gateway_urls: vmForm.value.gateway_urls,
@@ -3067,6 +3072,7 @@ fi
             public_tcbinfo: !!((_p = theVm.appCompose) === null || _p === void 0 ? void 0 : _p.public_tcbinfo),
             pin_numa: !!config.pin_numa,
             hugepages: !!config.hugepages,
+            no_tee: !!config.no_tee,
             user_config: config.user_config || '',
             stopped: !!config.stopped,
         };
@@ -3093,6 +3099,7 @@ fi
                 user_config: source.user_config,
                 hugepages: source.hugepages,
                 pin_numa: source.pin_numa,
+                no_tee: source.no_tee,
                 gpus: source.gpus,
                 kms_urls: source.kms_urls,
                 gateway_urls: source.gateway_urls,
@@ -6386,6 +6393,7 @@ $root.vmm = (function () {
          * @property {Array.<string>|null} [kms_urls] VmConfiguration kms_urls
          * @property {Array.<string>|null} [gateway_urls] VmConfiguration gateway_urls
          * @property {boolean|null} [stopped] VmConfiguration stopped
+         * @property {boolean|null} [no_tee] VmConfiguration no_tee
          */
         /**
          * Constructs a new VmConfiguration.
@@ -6516,6 +6524,13 @@ $root.vmm = (function () {
          * @instance
          */
         VmConfiguration.prototype.stopped = false;
+        /**
+         * VmConfiguration no_tee.
+         * @member {boolean} no_tee
+         * @memberof vmm.VmConfiguration
+         * @instance
+         */
+        VmConfiguration.prototype.no_tee = false;
         // OneOf field names bound to virtual getters and setters
         var $oneOfFields;
         /**
@@ -6586,6 +6601,8 @@ $root.vmm = (function () {
                     writer.uint32(/* id 15, wireType 2 =*/ 122).string(message.gateway_urls[i]);
             if (message.stopped != null && Object.hasOwnProperty.call(message, "stopped"))
                 writer.uint32(/* id 16, wireType 0 =*/ 128).bool(message.stopped);
+            if (message.no_tee != null && Object.hasOwnProperty.call(message, "no_tee"))
+                writer.uint32(/* id 17, wireType 0 =*/ 136).bool(message.no_tee);
             return writer;
         };
         /**
@@ -6690,6 +6707,10 @@ $root.vmm = (function () {
                         message.stopped = reader.bool();
                         break;
                     }
+                    case 17: {
+                        message.no_tee = reader.bool();
+                        break;
+                    }
                     default:
                         reader.skipType(tag & 7);
                         break;
@@ -6790,6 +6811,9 @@ $root.vmm = (function () {
             if (message.stopped != null && message.hasOwnProperty("stopped"))
                 if (typeof message.stopped !== "boolean")
                     return "stopped: boolean expected";
+            if (message.no_tee != null && message.hasOwnProperty("no_tee"))
+                if (typeof message.no_tee !== "boolean")
+                    return "no_tee: boolean expected";
             return null;
         };
         /**
@@ -6860,6 +6884,8 @@ $root.vmm = (function () {
             }
             if (object.stopped != null)
                 message.stopped = Boolean(object.stopped);
+            if (object.no_tee != null)
+                message.no_tee = Boolean(object.no_tee);
             return message;
         };
         /**
@@ -6899,6 +6925,7 @@ $root.vmm = (function () {
                 object.pin_numa = false;
                 object.gpus = null;
                 object.stopped = false;
+                object.no_tee = false;
             }
             if (message.name != null && message.hasOwnProperty("name"))
                 object.name = message.name;
@@ -6944,6 +6971,8 @@ $root.vmm = (function () {
             }
             if (message.stopped != null && message.hasOwnProperty("stopped"))
                 object.stopped = message.stopped;
+            if (message.no_tee != null && message.hasOwnProperty("no_tee"))
+                object.no_tee = message.no_tee;
             return object;
         };
         /**
@@ -7669,6 +7698,7 @@ $root.vmm = (function () {
          * @property {number|null} [memory] UpdateVmRequest memory
          * @property {number|null} [disk_size] UpdateVmRequest disk_size
          * @property {string|null} [image] UpdateVmRequest image
+         * @property {boolean|null} [no_tee] UpdateVmRequest no_tee
          */
         /**
          * Constructs a new UpdateVmRequest.
@@ -7762,6 +7792,13 @@ $root.vmm = (function () {
          * @instance
          */
         UpdateVmRequest.prototype.image = null;
+        /**
+         * UpdateVmRequest no_tee.
+         * @member {boolean|null|undefined} no_tee
+         * @memberof vmm.UpdateVmRequest
+         * @instance
+         */
+        UpdateVmRequest.prototype.no_tee = null;
         // OneOf field names bound to virtual getters and setters
         var $oneOfFields;
         /**
@@ -7802,6 +7839,16 @@ $root.vmm = (function () {
          */
         Object.defineProperty(UpdateVmRequest.prototype, "_image", {
             get: $util.oneOfGetter($oneOfFields = ["image"]),
+            set: $util.oneOfSetter($oneOfFields)
+        });
+        /**
+         * UpdateVmRequest _no_tee.
+         * @member {"no_tee"|undefined} _no_tee
+         * @memberof vmm.UpdateVmRequest
+         * @instance
+         */
+        Object.defineProperty(UpdateVmRequest.prototype, "_no_tee", {
+            get: $util.oneOfGetter($oneOfFields = ["no_tee"]),
             set: $util.oneOfSetter($oneOfFields)
         });
         /**
@@ -7850,6 +7897,8 @@ $root.vmm = (function () {
                 writer.uint32(/* id 16, wireType 0 =*/ 128).uint32(message.disk_size);
             if (message.image != null && Object.hasOwnProperty.call(message, "image"))
                 writer.uint32(/* id 17, wireType 2 =*/ 138).string(message.image);
+            if (message.no_tee != null && Object.hasOwnProperty.call(message, "no_tee"))
+                writer.uint32(/* id 18, wireType 0 =*/ 144).bool(message.no_tee);
             return writer;
         };
         /**
@@ -7928,6 +7977,10 @@ $root.vmm = (function () {
                     }
                     case 17: {
                         message.image = reader.string();
+                        break;
+                    }
+                    case 18: {
+                        message.no_tee = reader.bool();
                         break;
                     }
                     default:
@@ -8013,6 +8066,11 @@ $root.vmm = (function () {
                 if (!$util.isString(message.image))
                     return "image: string expected";
             }
+            if (message.no_tee != null && message.hasOwnProperty("no_tee")) {
+                properties._no_tee = 1;
+                if (typeof message.no_tee !== "boolean")
+                    return "no_tee: boolean expected";
+            }
             return null;
         };
         /**
@@ -8063,6 +8121,8 @@ $root.vmm = (function () {
                 message.disk_size = object.disk_size >>> 0;
             if (object.image != null)
                 message.image = String(object.image);
+            if (object.no_tee != null)
+                message.no_tee = Boolean(object.no_tee);
             return message;
         };
         /**
@@ -8130,6 +8190,11 @@ $root.vmm = (function () {
                 object.image = message.image;
                 if (options.oneofs)
                     object._image = "image";
+            }
+            if (message.no_tee != null && message.hasOwnProperty("no_tee")) {
+                object.no_tee = message.no_tee;
+                if (options.oneofs)
+                    object._no_tee = "no_tee";
             }
             return object;
         };

@@ -117,6 +117,10 @@ impl VmInfo {
                     .as_ref()
                     .map(|c| c.gateway_urls.clone())
                     .unwrap_or_default();
+                let no_tee = vm_config
+                    .as_ref()
+                    .map(|c| c.no_tee)
+                    .unwrap_or(self.manifest.no_tee);
                 let stopped = !workdir.started().unwrap_or(false);
 
                 Some(pb::VmConfiguration {
@@ -159,6 +163,7 @@ impl VmInfo {
                     kms_urls,
                     gateway_urls,
                     stopped,
+                    no_tee,
                 })
             },
             app_url: self
@@ -459,46 +464,7 @@ impl VmConfig {
         command.arg("-netdev").arg(netdev);
         command.arg("-device").arg("virtio-net-pci,netdev=net0");
 
-        command
-            .arg("-machine")
-            .arg("q35,kernel-irqchip=split,confidential-guest-support=tdx,hpet=off");
-
-        let img_ver = self.image.info.version_tuple().unwrap_or_default();
-        let support_mr_config_id = img_ver >= (0, 5, 2);
-        let tdx_object = if cfg.use_mrconfigid && support_mr_config_id {
-            let app_compose = workdir.app_compose().context("Failed to get app compose")?;
-            let compose_hash = workdir
-                .app_compose_hash()
-                .context("Failed to get compose hash")?;
-            let mr_config = if app_compose.key_provider_id.is_empty() {
-                MrConfig::V1 {
-                    compose_hash: &compose_hash,
-                }
-            } else {
-                let instance_info = workdir
-                    .instance_info()
-                    .context("Failed to get instance info")?;
-                let app_id = if instance_info.app_id.is_empty() {
-                    &compose_hash[..20]
-                } else {
-                    &instance_info.app_id
-                };
-
-                let key_provider = app_compose.key_provider();
-                let key_provider_id = &app_compose.key_provider_id;
-                MrConfig::V2 {
-                    compose_hash: &compose_hash,
-                    app_id: &app_id.try_into().context("Invalid app ID")?,
-                    key_provider,
-                    key_provider_id,
-                }
-            };
-            let mrconfigid = BASE64_STANDARD.encode(mr_config.to_mr_config_id());
-            format!("tdx-guest,id=tdx,mrconfigid={mrconfigid}")
-        } else {
-            "tdx-guest,id=tdx".to_string()
-        };
-        command.arg("-object").arg(tdx_object);
+        self.configure_machine(&mut command, &workdir, cfg)?;
 
         command
             .arg("-device")
@@ -685,6 +651,62 @@ impl VmConfig {
         processes.push(process_config);
 
         Ok(processes)
+    }
+
+    fn configure_machine(
+        &self,
+        command: &mut Command,
+        workdir: &VmWorkDir,
+        cfg: &CvmConfig,
+    ) -> Result<()> {
+        if self.manifest.no_tee {
+            command
+                .arg("-machine")
+                .arg("q35,kernel-irqchip=split,hpet=off");
+            return Ok(());
+        }
+
+        command
+            .arg("-machine")
+            .arg("q35,kernel-irqchip=split,confidential-guest-support=tdx,hpet=off");
+
+        let img_ver = self.image.info.version_tuple().unwrap_or_default();
+        let support_mr_config_id = img_ver >= (0, 5, 2);
+        let tdx_object = if cfg.use_mrconfigid && support_mr_config_id {
+            let app_compose = workdir.app_compose().context("Failed to get app compose")?;
+            let compose_hash = workdir
+                .app_compose_hash()
+                .context("Failed to get compose hash")?;
+            let mr_config = if app_compose.key_provider_id.is_empty() {
+                MrConfig::V1 {
+                    compose_hash: &compose_hash,
+                }
+            } else {
+                let instance_info = workdir
+                    .instance_info()
+                    .context("Failed to get instance info")?;
+                let app_id = if instance_info.app_id.is_empty() {
+                    &compose_hash[..20]
+                } else {
+                    &instance_info.app_id
+                };
+
+                let key_provider = app_compose.key_provider();
+                let key_provider_id = &app_compose.key_provider_id;
+                MrConfig::V2 {
+                    compose_hash: &compose_hash,
+                    app_id: &app_id.try_into().context("Invalid app ID")?,
+                    key_provider,
+                    key_provider_id,
+                }
+            };
+            let mrconfigid = BASE64_STANDARD.encode(mr_config.to_mr_config_id());
+            format!("tdx-guest,id=tdx,mrconfigid={mrconfigid}")
+        } else {
+            "tdx-guest,id=tdx".to_string()
+        };
+        command.arg("-object").arg(tdx_object);
+        Ok(())
     }
 }
 

@@ -192,6 +192,7 @@ pub fn create_manifest_from_vm_config(
         gpus: Some(gpus),
         kms_urls: request.kms_urls.clone(),
         gateway_urls: request.gateway_urls.clone(),
+        no_tee: request.no_tee,
     })
 }
 
@@ -383,6 +384,9 @@ impl VmmRpc for RpcHandler {
         .await?;
         if let Some(gpus) = request.gpus {
             manifest.gpus = Some(self.resolve_gpus(&gpus)?);
+        }
+        if let Some(no_tee) = request.no_tee {
+            manifest.no_tee = no_tee;
         }
         if request.update_ports {
             manifest.port_map = request

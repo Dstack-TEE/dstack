@@ -97,6 +97,8 @@ message VmConfiguration {
   repeated string gateway_urls = 15;
   // The VM is stopped
   bool stopped = 16;
+  // Disable confidential computing (fallback to non-TEE VM).
+  bool no_tee = 17;
 }
 
 // Requested GPU layout for a CVM.
@@ -151,6 +153,8 @@ message UpdateVmRequest {
   optional uint32 memory = 15;
   optional uint32 disk_size = 16;
   optional string image = 17;
+  // Disable or re-enable TEE for an existing VM.
+  optional bool no_tee = 18;
 }
 
 // Parameters for listing CVMs with pagination and keyword filtering.
