@@ -1014,16 +1014,16 @@ fi
       const original = vm.configuration;
       const updated = updateDialog.value;
 
+      const body: VmmTypes.IUpdateVmRequest = {
+        id: vm.id,
+      };
+
       const fieldsToCompare = ['vcpu', 'memory', 'disk_size', 'image'];
       if (fieldsToCompare.some((field) => updated[field] !== original[field])) {
-        const resizePayload: VmmTypes.IResizeVmRequest = {
-          id: vm.id,
-          vcpu: updated.vcpu,
-          memory: updated.memory,
-          disk_size: updated.disk_size,
-          image: updated.image,
-        };
-        await vmmRpc.resizeVm(resizePayload);
+        body.vcpu = updated.vcpu;
+        body.memory = updated.memory;
+        body.disk_size = updated.disk_size;
+        body.image = updated.image;
       }
 
       const composeWasExplicitlyUpdated = updateDialog.value.updateCompose;
@@ -1034,17 +1034,14 @@ fi
         encryptedEnvPayload = await encryptEnvWithKey(updateDialog.value.encryptedEnvs, keyResponse.public_key);
         composeNeedsUpdate = true;
       }
-      const body: VmmTypes.IUpgradeAppRequest = {
-        id: vm.id,
-        compose_file: composeNeedsUpdate ? await makeUpdateComposeFile() : undefined,
-        encrypted_env: encryptedEnvPayload,
-        user_config: updated.user_config,
-        update_ports: true,
-        ports: normalizePorts(updated.ports),
-        gpus: updateDialog.value.updateGpuConfig ? configGpu(updated) : undefined,
-      };
+      body.compose_file = composeNeedsUpdate ? await makeUpdateComposeFile() : undefined;
+      body.encrypted_env = encryptedEnvPayload;
+      body.user_config = updated.user_config;
+      body.update_ports = true;
+      body.ports = normalizePorts(updated.ports);
+      body.gpus = updateDialog.value.updateGpuConfig ? configGpu(updated) : undefined;
 
-      await vmmRpc.upgradeApp(body);
+      await vmmRpc.updateVm(body);
       updateDialog.value.encryptedEnvs = [];
       updateDialog.value.show = false;
       if (composeWasExplicitlyUpdated) {

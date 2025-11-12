@@ -5,7 +5,7 @@
 use std::ops::Deref;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{bail, Context, Result};
 use dstack_types::AppCompose;
 use dstack_vmm_rpc as rpc;
 use dstack_vmm_rpc::vmm_server::{VmmRpc, VmmServer};
@@ -13,7 +13,7 @@ use dstack_vmm_rpc::{
     AppId, ComposeHash as RpcComposeHash, GatewaySettings, GetInfoResponse, GetMetaResponse, Id,
     ImageInfo as RpcImageInfo, ImageListResponse, KmsSettings, ListGpusResponse, PublicKeyResponse,
     ReloadVmsResponse, ResizeVmRequest, ResourcesSettings, StatusRequest, StatusResponse,
-    UpgradeAppRequest, VersionResponse, VmConfiguration,
+    UpdateVmRequest, VersionResponse, VmConfiguration,
 };
 use fs_err as fs;
 use ra_rpc::{CallContext, RpcCall};
@@ -199,6 +199,61 @@ impl RpcHandler {
     fn resolve_gpus(&self, gpu_cfg: &rpc::GpuConfig) -> Result<GpuConfig> {
         resolve_gpus_with_config(gpu_cfg, &self.app.config.cvm)
     }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn apply_resource_updates(
+        &self,
+        vm_id: &str,
+        manifest: &mut Manifest,
+        vm_work_dir: &VmWorkDir,
+        vcpu: Option<u32>,
+        memory: Option<u32>,
+        disk_size: Option<u32>,
+        image: Option<&str>,
+    ) -> Result<bool> {
+        let has_updates =
+            vcpu.is_some() || memory.is_some() || disk_size.is_some() || image.is_some();
+        if !has_updates {
+            return Ok(false);
+        }
+
+        let vm = self.app.vm_info(vm_id).await?.context("vm not found")?;
+        if !["stopped", "exited"].contains(&vm.status.as_str()) {
+            bail!("vm should be stopped before resize: {}", vm_id);
+        }
+
+        if let Some(vcpu) = vcpu {
+            manifest.vcpu = vcpu;
+        }
+        if let Some(memory) = memory {
+            manifest.memory = memory;
+        }
+        if let Some(image) = image {
+            manifest.image = image.to_string();
+        }
+        if let Some(disk_size) = disk_size {
+            if disk_size < manifest.disk_size {
+                bail!("Cannot shrink disk size");
+            }
+            manifest.disk_size = disk_size;
+
+            info!("Resizing disk to {}GB", disk_size);
+            let hda_path = vm_work_dir.hda_path();
+            let new_size_str = format!("{}G", disk_size);
+            let output = std::process::Command::new("qemu-img")
+                .args(["resize", &hda_path.display().to_string(), &new_size_str])
+                .output()
+                .context("Failed to resize disk")?;
+            if !output.status.success() {
+                bail!(
+                    "Failed to resize disk: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+        }
+
+        Ok(true)
+    }
 }
 
 impl VmmRpc for RpcHandler {
@@ -284,7 +339,11 @@ impl VmmRpc for RpcHandler {
         })
     }
 
-    async fn upgrade_app(self, request: UpgradeAppRequest) -> Result<Id> {
+    async fn upgrade_app(self, request: UpdateVmRequest) -> Result<Id> {
+        self.update_vm(request).await
+    }
+
+    async fn update_vm(self, request: UpdateVmRequest) -> Result<Id> {
         let new_id = if !request.compose_file.is_empty() {
             // check the compose file is valid
             let _app_compose: AppCompose =
@@ -312,6 +371,16 @@ impl VmmRpc for RpcHandler {
         }
         let vm_work_dir = self.app.work_dir(&request.id);
         let mut manifest = vm_work_dir.manifest().context("Failed to read manifest")?;
+        self.apply_resource_updates(
+            &request.id,
+            &mut manifest,
+            &vm_work_dir,
+            request.vcpu,
+            request.memory,
+            request.disk_size,
+            request.image.as_deref(),
+        )
+        .await?;
         if let Some(gpus) = request.gpus {
             manifest.gpus = Some(self.resolve_gpus(&gpus)?);
         }
@@ -370,55 +439,23 @@ impl VmmRpc for RpcHandler {
     #[tracing::instrument(skip(self, request), fields(id = request.id))]
     async fn resize_vm(self, request: ResizeVmRequest) -> Result<()> {
         info!("Resizing VM: {:?}", request);
-        let vm = self
-            .app
-            .vm_info(&request.id)
-            .await?
-            .context("vm not found")?;
-        if !["stopped", "exited"].contains(&vm.status.as_str()) {
-            return Err(anyhow!(
-                "vm should be stopped before resize: {}",
-                request.id
-            ));
-        }
-        let work_dir = self.app.config.run_path.join(&request.id);
-        let vm_work_dir = VmWorkDir::new(&work_dir);
+        let vm_work_dir = self.app.work_dir(&request.id);
         let mut manifest = vm_work_dir.manifest().context("failed to read manifest")?;
-        if let Some(vcpu) = request.vcpu {
-            manifest.vcpu = vcpu;
-        }
-        if let Some(memory) = request.memory {
-            manifest.memory = memory;
-        }
-        if let Some(image) = request.image {
-            manifest.image = image;
-        }
-        if let Some(disk_size) = request.disk_size {
-            if disk_size < manifest.disk_size {
-                bail!("Cannot shrink disk size");
-            }
-            manifest.disk_size = disk_size;
-
-            // Run qemu-img resize to resize the disk
-            info!("Resizing disk to {}GB", disk_size);
-            let hda_path = vm_work_dir.hda_path();
-            let new_size_str = format!("{}G", disk_size);
-            let output = std::process::Command::new("qemu-img")
-                .args(["resize", &hda_path.display().to_string(), &new_size_str])
-                .output()
-                .context("Failed to resize disk")?;
-            if !output.status.success() {
-                bail!(
-                    "Failed to resize disk: {}",
-                    String::from_utf8_lossy(&output.stderr)
-                );
-            }
-        }
+        self.apply_resource_updates(
+            &request.id,
+            &mut manifest,
+            &vm_work_dir,
+            request.vcpu,
+            request.memory,
+            request.disk_size,
+            request.image.as_deref(),
+        )
+        .await?;
         vm_work_dir
             .put_manifest(&manifest)
             .context("failed to update manifest")?;
         self.app
-            .load_vm(work_dir, &Default::default(), false)
+            .load_vm(vm_work_dir.path(), &Default::default(), false)
             .await
             .context("Failed to load VM")?;
         Ok(())

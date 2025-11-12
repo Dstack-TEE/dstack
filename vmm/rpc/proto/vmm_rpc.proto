@@ -118,7 +118,7 @@ message PortMapping {
 }
 
 // Message for upgrading an app request
-message UpgradeAppRequest {
+message UpdateVmRequest {
   // ID of the VM
   string id = 1;
   // Compose file to be used for the VM
@@ -133,6 +133,11 @@ message UpgradeAppRequest {
   repeated PortMapping ports = 7;
   // gpus
   GpuConfig gpus = 13;
+  // Optional compute resource updates. Leave unset to keep current configuration.
+  optional uint32 vcpu = 14;
+  optional uint32 memory = 15;
+  optional uint32 disk_size = 16;
+  optional string image = 17;
 }
 
 // Message for Status request
@@ -254,11 +259,13 @@ service Vmm {
   rpc StopVm(Id) returns (google.protobuf.Empty);
   // RPC to remove a VM
   rpc RemoveVm(Id) returns (google.protobuf.Empty);
-  // RPC to upgrade an app
-  rpc UpgradeApp(UpgradeAppRequest) returns (Id);
+  // RPC to upgrade an app. Deprecated, use UpdateVm instead.
+  rpc UpgradeApp(UpdateVmRequest) returns (Id);
+  // RPC to update a VM
+  rpc UpdateVm(UpdateVmRequest) returns (Id);
   // Shutdown a VM
   rpc ShutdownVm(Id) returns (google.protobuf.Empty);
-  // RPC to resize a VM
+  // RPC to resize a VM. Deprecated, use UpdateVm instead.
   rpc ResizeVm(ResizeVmRequest) returns (google.protobuf.Empty);
   // RPC to compute the compose hash, it's helpful for debugging & developing SDK.
   rpc GetComposeHash(VmConfiguration) returns (ComposeHash);
