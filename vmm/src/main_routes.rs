@@ -36,18 +36,29 @@ fn replace_title(app: &App, html: &str) -> String {
     html.replace("{{TITLE}}", &title)
 }
 
-#[get("/")]
-async fn index(app: &State<App>) -> (ContentType, String) {
-    let html = file_or_include_str!("console.html");
+fn render_console(html: String, app: &State<App>) -> (ContentType, String) {
     let html = replace_title(app, &html);
     (ContentType::HTML, html)
 }
 
+#[get("/")]
+async fn index(app: &State<App>) -> (ContentType, String) {
+    render_console(file_or_include_str!("console_v1.html"), app)
+}
+
+#[get("/v1")]
+async fn v1(app: &State<App>) -> (ContentType, String) {
+    index(app).await
+}
+
 #[get("/beta")]
 async fn beta(app: &State<App>) -> (ContentType, String) {
-    let html = file_or_include_str!("console_beta.html");
-    let html = replace_title(app, &html);
-    (ContentType::HTML, html)
+    index(app).await
+}
+
+#[get("/v0")]
+async fn v0(app: &State<App>) -> (ContentType, String) {
+    render_console(file_or_include_str!("console_v0.html"), app)
 }
 
 #[get("/res/<path>")]
@@ -171,5 +182,5 @@ fn vm_logs(
 }
 
 pub fn routes() -> Vec<Route> {
-    routes![index, beta, res, vm_logs]
+    routes![index, v1, beta, v0, res, vm_logs]
 }

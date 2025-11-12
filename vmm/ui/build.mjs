@@ -204,7 +204,7 @@ async function build({ watch = false } = {}) {
   const distFile = path.join(DIST_DIR, 'index.html');
   await fs.writeFile(distFile, html);
 
-  const targetFile = path.resolve(ROOT, '../src/console_beta.html');
+  const targetFile = path.resolve(ROOT, '../src/console_v1.html');
   await fs.writeFile(targetFile, html);
 
   if (watch) {
