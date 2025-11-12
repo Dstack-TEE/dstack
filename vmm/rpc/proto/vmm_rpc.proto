@@ -7,7 +7,7 @@ syntax = "proto3";
 import "google/protobuf/empty.proto";
 
 package vmm;
-// Information about a Virtual Machine (VM)
+// Aggregates runtime and provisioning state for a single CVM.
 message VmInfo {
   // Unique identifier for the VM
   string id = 1;
@@ -39,23 +39,28 @@ message VmInfo {
   repeated GuestEvent events = 14;
 }
 
+// Structured log or lifecycle event emitted by the guest or runtime.
 message GuestEvent {
+  // Event type, e.g. "boot_progress" or "shutdown".
   string event = 1;
+  // Human readable payload describing the event.
   string body = 2;
   // Timestamp in milliseconds since Unix epoch
   uint64 timestamp = 3;
 }
 
+// Wrapper around a VM identifier to keep RPC signatures consistent.
 message Id {
   // Unique identifier for the VM
   string id = 1;
 }
 
+// Stable hash of a compose spec used to detect drift between client and VMM.
 message ComposeHash {
   string hash = 1;
 }
 
-// Message for creating a VM request
+// Full desired state for provisioning or re-provisioning a CVM instance.
 message VmConfiguration {
   // Name of the VM
   string name = 1;
@@ -94,6 +99,7 @@ message VmConfiguration {
   bool stopped = 16;
 }
 
+// Requested GPU layout for a CVM.
 message GpuConfig {
   // GPUs
   repeated GpuSpec gpus = 1;
@@ -101,11 +107,12 @@ message GpuConfig {
   string attach_mode = 2;
 }
 
+// Identifies a physical GPU on the host.
 message GpuSpec {
   string slot = 1;
 }
 
-// Message for port mapping
+// Describes how host ports are forwarded into the CVM network namespace.
 message PortMapping {
   // Protocol
   string protocol = 1;
@@ -117,7 +124,7 @@ message PortMapping {
   string host_address = 4;
 }
 
-// Message for upgrading an app request
+// Partial configuration used when mutating an existing VM.
 message UpdateVmRequest {
   // ID of the VM
   string id = 1;
@@ -146,7 +153,7 @@ message UpdateVmRequest {
   optional string image = 17;
 }
 
-// Message for Status request
+// Parameters for listing CVMs with pagination and keyword filtering.
 message StatusRequest {
   // List of VM IDs
   repeated string ids = 1;
@@ -160,6 +167,7 @@ message StatusRequest {
   uint32 page_size = 5;
 }
 
+// Summary of the current fleet status.
 message StatusResponse {
   // List of VMs
   repeated VmInfo vms = 1;
@@ -169,10 +177,12 @@ message StatusResponse {
   uint32 total = 3;
 }
 
+// Available base images for the VMM to launch.
 message ImageListResponse {
   repeated ImageInfo images = 1;
 }
 
+// Metadata describing an OCI image published to the cluster.
 message ImageInfo {
   string name = 1;
   string description = 2;
@@ -180,20 +190,24 @@ message ImageInfo {
   bool is_dev = 4;
 }
 
+// App identifier used for encrypting env vars and routing telemetry.
 message AppId {
   bytes app_id = 1;
 }
 
+// Response with the KMS-backed public key used for env encryption plus audit signature.
 message PublicKeyResponse {
   bytes public_key = 1;
   bytes signature = 2;
 }
 
+// Optional VM info payload returned by GetInfo.
 message GetInfoResponse {
   bool found = 1;
   optional VmInfo info = 2;
 }
 
+// Input used when resizing compute or storage for a VM.
 message ResizeVmRequest {
   // Unique identifier for the VM
   string id = 1;
@@ -207,11 +221,13 @@ message ResizeVmRequest {
   optional string image = 5;
 }
 
+// Tunables for the KMS integration.
 message KmsSettings {
   string url = 1;
   repeated string urls = 2;
 }
 
+// Details about the HTTP gateway that fronts the CVMs.
 message GatewaySettings {
   string url = 1;
   string base_domain = 2;
@@ -220,34 +236,40 @@ message GatewaySettings {
   repeated string urls = 5;
 }
 
+// Capacity caps enforced by the scheduler.
 message ResourcesSettings {
   uint32 max_cvm_number = 1; // equals to the cid pool size.
   uint32 max_allocable_vcpu = 2;
   uint32 max_allocable_memory_in_mb = 3; // in MB.
 }
 
+// Aggregated metadata exposed through GetMeta.
 message GetMetaResponse {
   KmsSettings kms = 1;
   GatewaySettings gateway = 2;
   ResourcesSettings resources = 3;
 }
 
+// Build information for the running VMM binary.
 message VersionResponse {
   string version = 1;
   string rev = 2;
 }
 
+// Available GPUs and policy flags.
 message ListGpusResponse {
   repeated GpuInfo gpus = 1;
   bool allow_attach_all = 2;
 }
 
+// Counts applied when reloading persistent VM state from disk.
 message ReloadVmsResponse {
   uint32 loaded = 1;      // Number of VMs that were loaded
   uint32 updated = 2;     // Number of VMs that were updated
   uint32 removed = 3;     // Number of VMs that were removed
 }
 
+// Metadata for a single GPU discovered on the host.
 message GpuInfo {
   string slot = 1;
   string product_id = 2;
@@ -255,7 +277,7 @@ message GpuInfo {
   bool is_free = 4;
 }
 
-// Service definition for dstack-vmm
+// Exposes lifecycle and metadata management RPCs for dstack-vmm.
 service Vmm {
   // RPC to create a VM
   rpc CreateVm(VmConfiguration) returns (Id);

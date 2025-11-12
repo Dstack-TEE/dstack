@@ -8,10 +8,12 @@ import "google/protobuf/empty.proto";
 
 package guest_api;
 
+// Identifies a running guest worker instance.
 message Id {
   string id = 1;
 }
 
+// Static attestation and registration info reported by the guest agent.
 message GuestInfo {
   // Guest software version
   string version = 1;
@@ -27,11 +29,13 @@ message GuestInfo {
   bytes device_id = 6;
 }
 
+// IPv4/IPv6 address with prefix length.
 message IpAddress {
   string address = 1;
   uint32 prefix = 2;
 }
 
+// Observability metrics for a single NIC inside the guest.
 message Interface {
   string name = 1;
   repeated IpAddress addresses = 2;
@@ -41,10 +45,12 @@ message Interface {
   uint64 tx_errors = 6;
 }
 
+// Default gateway entry advertised to the guest.
 message Gateway {
   string address = 1;
 }
 
+// Complete networking snapshot including WireGuard info.
 message NetworkInformation {
   repeated string dns_servers = 1;
   repeated Gateway gateways = 2;
@@ -52,10 +58,12 @@ message NetworkInformation {
   string wg_info = 4;
 }
 
+// Lists all containers currently scheduled in the guest.
 message ListContainersResponse {
   repeated Container containers = 1;
 }
 
+// Docker-compatible view of an application container.
 message Container {
   // The ID of this container
   string id = 1;
@@ -73,7 +81,7 @@ message Container {
   string status = 8;
 }
 
-// The system info
+// OS, kernel, and resource metrics for the guest worker.
 message SystemInfo {
   // Operating system
   string os_name = 1;
@@ -109,6 +117,7 @@ message SystemInfo {
   repeated DiskInfo disks = 17;
 }
 
+// Disk usage metrics scoped per device or mount point.
 message DiskInfo {
   // Device name
   string name = 1;
@@ -120,14 +129,21 @@ message DiskInfo {
   uint64 free_size = 5;
 }
 
+// Direct gRPC surface exposed by the in-guest agent.
 service GuestApi {
+  // Returns attestation material and identifiers for the calling guest.
   rpc Info(google.protobuf.Empty) returns (GuestInfo);
+  // Reports the guest's OS/kernel and resource statistics.
   rpc SysInfo(google.protobuf.Empty) returns (SystemInfo);
+  // Dumps NIC/Gateway configuration so operators can debug connectivity.
   rpc NetworkInfo(google.protobuf.Empty) returns (NetworkInformation);
+  // Enumerates the containers running under the guest supervisor.
   rpc ListContainers(google.protobuf.Empty) returns (ListContainersResponse);
+  // Initiates a graceful shutdown inside the guest VM.
   rpc Shutdown(google.protobuf.Empty) returns (google.protobuf.Empty);
 }
 
+// Same API surface as GuestApi but multiplexed by VM ID through VMM.
 service ProxiedGuestApi {
   rpc Info(Id) returns (GuestInfo);
   rpc SysInfo(Id) returns (SystemInfo);

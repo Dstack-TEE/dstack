@@ -656,7 +656,6 @@ mod tests {
     use std::collections::HashSet;
     use std::convert::TryFrom;
     use std::io::Write;
-    use tempfile;
 
     fn extract_pubkey_from_report_data(report_data: &[u8], prefix: &str) -> Result<Vec<u8>> {
         let end = report_data
