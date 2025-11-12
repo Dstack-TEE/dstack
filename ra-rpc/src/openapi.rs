@@ -17,7 +17,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use prost_types::{
     field_descriptor_proto::{Label as FieldLabel, Type as FieldType},
     DescriptorProto, EnumDescriptorProto, FieldDescriptorProto, FileDescriptorSet,
-    ServiceDescriptorProto,
+    ServiceDescriptorProto, SourceCodeInfo,
 };
 use prpc::Message as _;
 use serde_json::{json, Map, Value};
@@ -136,6 +136,67 @@ impl OpenApiDoc {
             ui_html: html,
         }
     }
+}
+
+#[derive(Default)]
+struct SourceCodeComments {
+    entries: HashMap<Vec<i32>, String>,
+}
+
+impl SourceCodeComments {
+    fn from_source_info(info: Option<SourceCodeInfo>) -> Self {
+        let mut entries = HashMap::new();
+        if let Some(info) = info {
+            for location in info.location {
+                if let Some(comment) = comment_from_location(&location) {
+                    entries.insert(location.path, comment);
+                }
+            }
+        }
+        Self { entries }
+    }
+
+    fn comment_for(&self, path: &[i32]) -> Option<&str> {
+        self.entries.get(path).map(String::as_str)
+    }
+}
+
+fn comment_from_location(location: &prost_types::source_code_info::Location) -> Option<String> {
+    if let Some(text) = location.leading_comments.as_deref() {
+        return normalize_comment(text);
+    }
+
+    let mut detached = Vec::new();
+    for comment in &location.leading_detached_comments {
+        if let Some(normalized) = normalize_comment(comment) {
+            detached.push(normalized);
+        }
+    }
+    if !detached.is_empty() {
+        return Some(detached.join("\n\n"));
+    }
+
+    if let Some(text) = location.trailing_comments.as_deref() {
+        return normalize_comment(text);
+    }
+
+    None
+}
+
+fn normalize_comment(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.replace("\r\n", "\n"))
+    }
+}
+
+fn extend_path(base: &[i32], field_number: i32, index: i32) -> Vec<i32> {
+    let mut path = base.to_vec();
+    path.push(field_number);
+    path.push(index);
+    path
 }
 
 /// Final resources consumed by the Rocket helper.
@@ -278,15 +339,36 @@ fn build_operation(
             method.name
         )),
     );
-    operation.insert("summary".into(), Value::String(method.name.clone()));
-    let mut description = format!(
+    let summary = method
+        .description
+        .as_deref()
+        .and_then(|doc| doc.lines().find(|line| !line.trim().is_empty()))
+        .map(|line| line.trim().to_string())
+        .unwrap_or_else(|| method.name.clone());
+    operation.insert("summary".into(), Value::String(summary));
+
+    let mut description_parts = Vec::new();
+    if let Some(doc) = method.description.as_deref() {
+        let trimmed = doc.trim();
+        if !trimmed.is_empty() {
+            description_parts.push(trimmed.to_string());
+        }
+    }
+    let mut base = format!(
         "pRPC method `{}` on service `{}`.",
         method.name, service.full_name
     );
-    if let Some(extra) = &svc_cfg.description {
-        description.push_str("\n\n");
-        description.push_str(extra);
+    if let Some(extra) = svc_cfg
+        .description
+        .as_ref()
+        .map(|c| c.as_ref())
+        .or(service.description.as_deref())
+    {
+        base.push_str("\n\n");
+        base.push_str(extra);
     }
+    description_parts.push(base);
+    let description = description_parts.join("\n\n");
     operation.insert("description".into(), Value::String(description));
 
     if !is_empty_type(&method.input_type) {
@@ -404,19 +486,30 @@ impl DescriptorRegistry {
     fn ingest(&mut self, set: FileDescriptorSet, source_id: usize) {
         for file in set.file {
             let package = file.package.unwrap_or_default();
-            for message in file.message_type {
-                self.register_message(&package, &[], message);
+            let comments = SourceCodeComments::from_source_info(file.source_code_info.clone());
+            for (idx, message) in file.message_type.into_iter().enumerate() {
+                let path = vec![4, idx as i32];
+                self.register_message(&package, &[], message, &path, &comments);
             }
-            for enumeration in file.enum_type {
-                self.register_enum(&package, &[], enumeration);
+            for (idx, enumeration) in file.enum_type.into_iter().enumerate() {
+                let path = vec![5, idx as i32];
+                self.register_enum(&package, &[], enumeration, &path, &comments);
             }
-            for service in file.service {
-                self.register_service(&package, service, source_id);
+            for (idx, service) in file.service.into_iter().enumerate() {
+                let path = vec![6, idx as i32];
+                self.register_service(&package, service, source_id, &path, &comments);
             }
         }
     }
 
-    fn register_message(&mut self, package: &str, parents: &[String], descriptor: DescriptorProto) {
+    fn register_message(
+        &mut self,
+        package: &str,
+        parents: &[String],
+        descriptor: DescriptorProto,
+        descriptor_path: &[i32],
+        comments: &SourceCodeComments,
+    ) {
         let name = descriptor.name.clone().unwrap_or_default();
         let mut path = parents.to_owned();
         path.push(name.clone());
@@ -426,18 +519,32 @@ impl DescriptorRegistry {
             .as_ref()
             .and_then(|opt| opt.map_entry)
             .unwrap_or(false);
+        let description = comments.comment_for(descriptor_path).map(|s| s.to_string());
+        let mut field_comments = HashMap::new();
+        for (idx, field) in descriptor.field.iter().enumerate() {
+            if let Some(field_name) = field.name.as_ref() {
+                let field_path = extend_path(descriptor_path, 2, idx as i32);
+                if let Some(comment) = comments.comment_for(&field_path) {
+                    field_comments.insert(field_name.clone(), comment.to_string());
+                }
+            }
+        }
         let info = MessageInfo {
             full_name: full_name.clone(),
             descriptor: descriptor.clone(),
             is_map_entry: is_map,
+            description,
+            field_comments,
         };
         self.messages.insert(full_name.clone(), info);
 
-        for nested in descriptor.nested_type {
-            self.register_message(package, &path, nested);
+        for (idx, nested) in descriptor.nested_type.into_iter().enumerate() {
+            let nested_path = extend_path(descriptor_path, 3, idx as i32);
+            self.register_message(package, &path, nested, &nested_path, comments);
         }
-        for enumeration in descriptor.enum_type {
-            self.register_enum(package, &path, enumeration);
+        for (idx, enumeration) in descriptor.enum_type.into_iter().enumerate() {
+            let enum_path = extend_path(descriptor_path, 4, idx as i32);
+            self.register_enum(package, &path, enumeration, &enum_path, comments);
         }
     }
 
@@ -446,12 +553,18 @@ impl DescriptorRegistry {
         package: &str,
         parents: &[String],
         descriptor: EnumDescriptorProto,
+        descriptor_path: &[i32],
+        comments: &SourceCodeComments,
     ) {
         let name = descriptor.name.clone().unwrap_or_default();
         let mut path = parents.to_owned();
         path.push(name);
         let full_name = canonical_name(package, &path);
-        let info = EnumInfo { descriptor };
+        let description = comments.comment_for(descriptor_path).map(|s| s.to_string());
+        let info = EnumInfo {
+            descriptor,
+            description,
+        };
         self.enums.insert(full_name, info);
     }
 
@@ -460,23 +573,34 @@ impl DescriptorRegistry {
         package: &str,
         descriptor: ServiceDescriptorProto,
         source_id: usize,
+        descriptor_path: &[i32],
+        comments: &SourceCodeComments,
     ) {
         let simple_name = descriptor.name.clone().unwrap_or_default();
         let full_name = qualified_service_name(package, &simple_name);
         let methods = descriptor
             .method
             .into_iter()
-            .map(|method| MethodInfo {
-                name: method.name.unwrap_or_default(),
-                input_type: normalize_type_name(&method.input_type.unwrap_or_default()),
-                output_type: normalize_type_name(&method.output_type.unwrap_or_default()),
-                client_streaming: method.client_streaming.unwrap_or(false),
-                server_streaming: method.server_streaming.unwrap_or(false),
+            .enumerate()
+            .map(|(idx, method)| {
+                let description = comments
+                    .comment_for(&extend_path(descriptor_path, 2, idx as i32))
+                    .map(|s| s.to_string());
+                MethodInfo {
+                    name: method.name.unwrap_or_default(),
+                    input_type: normalize_type_name(&method.input_type.unwrap_or_default()),
+                    output_type: normalize_type_name(&method.output_type.unwrap_or_default()),
+                    client_streaming: method.client_streaming.unwrap_or(false),
+                    server_streaming: method.server_streaming.unwrap_or(false),
+                    description,
+                }
             })
             .collect();
+        let description = comments.comment_for(descriptor_path).map(|s| s.to_string());
         let service = ServiceInfo {
             full_name: full_name.clone(),
             source_id,
+            description,
             methods,
         };
         let idx = self.services.len();
@@ -532,17 +656,21 @@ struct MessageInfo {
     full_name: String,
     descriptor: DescriptorProto,
     is_map_entry: bool,
+    description: Option<String>,
+    field_comments: HashMap<String, String>,
 }
 
 #[derive(Clone)]
 struct EnumInfo {
     descriptor: EnumDescriptorProto,
+    description: Option<String>,
 }
 
 #[derive(Clone)]
 struct ServiceInfo {
     full_name: String,
     source_id: usize,
+    description: Option<String>,
     methods: Vec<MethodInfo>,
 }
 
@@ -553,6 +681,7 @@ struct MethodInfo {
     output_type: String,
     client_streaming: bool,
     server_streaming: bool,
+    description: Option<String>,
 }
 
 struct SchemaBuilder<'a> {
@@ -615,7 +744,10 @@ impl<'a> SchemaBuilder<'a> {
         let mut props = BTreeMap::new();
         for field in &descriptor.descriptor.field {
             let field_name = field.name.clone().unwrap_or_default();
-            let schema = self.field_schema(field)?;
+            let mut schema = self.field_schema(field)?;
+            if let Some(doc) = descriptor.field_comments.get(&field_name) {
+                apply_schema_description(&mut schema, doc);
+            }
             if is_required_field(field) {
                 required.push(field_name.clone());
             }
@@ -629,6 +761,9 @@ impl<'a> SchemaBuilder<'a> {
             properties.insert(k, v);
         }
         obj.insert("properties".into(), Value::Object(properties));
+        if let Some(doc) = &descriptor.description {
+            obj.insert("description".into(), Value::String(doc.clone()));
+        }
         if !required.is_empty() {
             obj.insert(
                 "required".into(),
@@ -655,11 +790,14 @@ impl<'a> SchemaBuilder<'a> {
                 variants.push(Value::String(name.clone()));
             }
         }
-        let schema = json!({
-            "type": "string",
-            "enum": variants
-        });
-        self.generated.insert(schema_key(name), schema);
+        let mut schema = Map::new();
+        schema.insert("type".into(), Value::String("string".into()));
+        schema.insert("enum".into(), Value::Array(variants));
+        if let Some(doc) = &descriptor.description {
+            schema.insert("description".into(), Value::String(doc.clone()));
+        }
+        self.generated
+            .insert(schema_key(name), Value::Object(schema));
         Ok(())
     }
 
@@ -751,6 +889,16 @@ impl<'a> SchemaBuilder<'a> {
             map.insert(k, v);
         }
         map
+    }
+}
+
+fn apply_schema_description(schema: &mut Value, doc: &str) {
+    let trimmed = doc.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+    if let Value::Object(obj) = schema {
+        obj.insert("description".into(), Value::String(trimmed.to_string()));
     }
 }
 
