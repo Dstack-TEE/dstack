@@ -2991,16 +2991,15 @@ fi
             const vm = updateDialog.value.vm;
             const original = vm.configuration;
             const updated = updateDialog.value;
+            const body = {
+                id: vm.id,
+            };
             const fieldsToCompare = ['vcpu', 'memory', 'disk_size', 'image'];
             if (fieldsToCompare.some((field) => updated[field] !== original[field])) {
-                const resizePayload = {
-                    id: vm.id,
-                    vcpu: updated.vcpu,
-                    memory: updated.memory,
-                    disk_size: updated.disk_size,
-                    image: updated.image,
-                };
-                await vmmRpc.resizeVm(resizePayload);
+                body.vcpu = updated.vcpu;
+                body.memory = updated.memory;
+                body.disk_size = updated.disk_size;
+                body.image = updated.image;
             }
             const composeWasExplicitlyUpdated = updateDialog.value.updateCompose;
             let composeNeedsUpdate = composeWasExplicitlyUpdated;
@@ -3010,15 +3009,12 @@ fi
                 encryptedEnvPayload = await encryptEnvWithKey(updateDialog.value.encryptedEnvs, keyResponse.public_key);
                 composeNeedsUpdate = true;
             }
-            const body = {
-                id: vm.id,
-                compose_file: composeNeedsUpdate ? await makeUpdateComposeFile() : undefined,
-                encrypted_env: encryptedEnvPayload,
-                user_config: updated.user_config,
-                update_ports: true,
-                ports: normalizePorts(updated.ports),
-                gpus: updateDialog.value.updateGpuConfig ? configGpu(updated) : undefined,
-            };
+            body.compose_file = composeNeedsUpdate ? await makeUpdateComposeFile() : undefined;
+            body.encrypted_env = encryptedEnvPayload;
+            body.user_config = updated.user_config;
+            body.update_ports = true;
+            body.ports = normalizePorts(updated.ports);
+            body.gpus = updateDialog.value.updateGpuConfig ? configGpu(updated) : undefined;
             await vmmRpc.upgradeApp(body);
             updateDialog.value.encryptedEnvs = [];
             updateDialog.value.show = false;
@@ -7669,6 +7665,10 @@ $root.vmm = (function () {
          * @property {boolean|null} [update_ports] UpgradeAppRequest update_ports
          * @property {Array.<vmm.IPortMapping>|null} [ports] UpgradeAppRequest ports
          * @property {vmm.IGpuConfig|null} [gpus] UpgradeAppRequest gpus
+         * @property {number|null} [vcpu] UpgradeAppRequest vcpu
+         * @property {number|null} [memory] UpgradeAppRequest memory
+         * @property {number|null} [disk_size] UpgradeAppRequest disk_size
+         * @property {string|null} [image] UpgradeAppRequest image
          */
         /**
          * Constructs a new UpgradeAppRequest.
@@ -7735,6 +7735,76 @@ $root.vmm = (function () {
          */
         UpgradeAppRequest.prototype.gpus = null;
         /**
+         * UpgradeAppRequest vcpu.
+         * @member {number|null|undefined} vcpu
+         * @memberof vmm.UpgradeAppRequest
+         * @instance
+         */
+        UpgradeAppRequest.prototype.vcpu = null;
+        /**
+         * UpgradeAppRequest memory.
+         * @member {number|null|undefined} memory
+         * @memberof vmm.UpgradeAppRequest
+         * @instance
+         */
+        UpgradeAppRequest.prototype.memory = null;
+        /**
+         * UpgradeAppRequest disk_size.
+         * @member {number|null|undefined} disk_size
+         * @memberof vmm.UpgradeAppRequest
+         * @instance
+         */
+        UpgradeAppRequest.prototype.disk_size = null;
+        /**
+         * UpgradeAppRequest image.
+         * @member {string|null|undefined} image
+         * @memberof vmm.UpgradeAppRequest
+         * @instance
+         */
+        UpgradeAppRequest.prototype.image = null;
+        // OneOf field names bound to virtual getters and setters
+        var $oneOfFields;
+        /**
+         * UpgradeAppRequest _vcpu.
+         * @member {"vcpu"|undefined} _vcpu
+         * @memberof vmm.UpgradeAppRequest
+         * @instance
+         */
+        Object.defineProperty(UpgradeAppRequest.prototype, "_vcpu", {
+            get: $util.oneOfGetter($oneOfFields = ["vcpu"]),
+            set: $util.oneOfSetter($oneOfFields)
+        });
+        /**
+         * UpgradeAppRequest _memory.
+         * @member {"memory"|undefined} _memory
+         * @memberof vmm.UpgradeAppRequest
+         * @instance
+         */
+        Object.defineProperty(UpgradeAppRequest.prototype, "_memory", {
+            get: $util.oneOfGetter($oneOfFields = ["memory"]),
+            set: $util.oneOfSetter($oneOfFields)
+        });
+        /**
+         * UpgradeAppRequest _disk_size.
+         * @member {"disk_size"|undefined} _disk_size
+         * @memberof vmm.UpgradeAppRequest
+         * @instance
+         */
+        Object.defineProperty(UpgradeAppRequest.prototype, "_disk_size", {
+            get: $util.oneOfGetter($oneOfFields = ["disk_size"]),
+            set: $util.oneOfSetter($oneOfFields)
+        });
+        /**
+         * UpgradeAppRequest _image.
+         * @member {"image"|undefined} _image
+         * @memberof vmm.UpgradeAppRequest
+         * @instance
+         */
+        Object.defineProperty(UpgradeAppRequest.prototype, "_image", {
+            get: $util.oneOfGetter($oneOfFields = ["image"]),
+            set: $util.oneOfSetter($oneOfFields)
+        });
+        /**
          * Creates a new UpgradeAppRequest instance using the specified properties.
          * @function create
          * @memberof vmm.UpgradeAppRequest
@@ -7772,6 +7842,14 @@ $root.vmm = (function () {
                     $root.vmm.PortMapping.encode(message.ports[i], writer.uint32(/* id 7, wireType 2 =*/ 58).fork()).ldelim();
             if (message.gpus != null && Object.hasOwnProperty.call(message, "gpus"))
                 $root.vmm.GpuConfig.encode(message.gpus, writer.uint32(/* id 13, wireType 2 =*/ 106).fork()).ldelim();
+            if (message.vcpu != null && Object.hasOwnProperty.call(message, "vcpu"))
+                writer.uint32(/* id 14, wireType 0 =*/ 112).uint32(message.vcpu);
+            if (message.memory != null && Object.hasOwnProperty.call(message, "memory"))
+                writer.uint32(/* id 15, wireType 0 =*/ 120).uint32(message.memory);
+            if (message.disk_size != null && Object.hasOwnProperty.call(message, "disk_size"))
+                writer.uint32(/* id 16, wireType 0 =*/ 128).uint32(message.disk_size);
+            if (message.image != null && Object.hasOwnProperty.call(message, "image"))
+                writer.uint32(/* id 17, wireType 2 =*/ 138).string(message.image);
             return writer;
         };
         /**
@@ -7836,6 +7914,22 @@ $root.vmm = (function () {
                         message.gpus = $root.vmm.GpuConfig.decode(reader, reader.uint32());
                         break;
                     }
+                    case 14: {
+                        message.vcpu = reader.uint32();
+                        break;
+                    }
+                    case 15: {
+                        message.memory = reader.uint32();
+                        break;
+                    }
+                    case 16: {
+                        message.disk_size = reader.uint32();
+                        break;
+                    }
+                    case 17: {
+                        message.image = reader.string();
+                        break;
+                    }
                     default:
                         reader.skipType(tag & 7);
                         break;
@@ -7869,6 +7963,7 @@ $root.vmm = (function () {
         UpgradeAppRequest.verify = function verify(message) {
             if (typeof message !== "object" || message === null)
                 return "object expected";
+            var properties = {};
             if (message.id != null && message.hasOwnProperty("id"))
                 if (!$util.isString(message.id))
                     return "id: string expected";
@@ -7897,6 +7992,26 @@ $root.vmm = (function () {
                 var error = $root.vmm.GpuConfig.verify(message.gpus);
                 if (error)
                     return "gpus." + error;
+            }
+            if (message.vcpu != null && message.hasOwnProperty("vcpu")) {
+                properties._vcpu = 1;
+                if (!$util.isInteger(message.vcpu))
+                    return "vcpu: integer expected";
+            }
+            if (message.memory != null && message.hasOwnProperty("memory")) {
+                properties._memory = 1;
+                if (!$util.isInteger(message.memory))
+                    return "memory: integer expected";
+            }
+            if (message.disk_size != null && message.hasOwnProperty("disk_size")) {
+                properties._disk_size = 1;
+                if (!$util.isInteger(message.disk_size))
+                    return "disk_size: integer expected";
+            }
+            if (message.image != null && message.hasOwnProperty("image")) {
+                properties._image = 1;
+                if (!$util.isString(message.image))
+                    return "image: string expected";
             }
             return null;
         };
@@ -7940,6 +8055,14 @@ $root.vmm = (function () {
                     throw TypeError(".vmm.UpgradeAppRequest.gpus: object expected");
                 message.gpus = $root.vmm.GpuConfig.fromObject(object.gpus);
             }
+            if (object.vcpu != null)
+                message.vcpu = object.vcpu >>> 0;
+            if (object.memory != null)
+                message.memory = object.memory >>> 0;
+            if (object.disk_size != null)
+                message.disk_size = object.disk_size >>> 0;
+            if (object.image != null)
+                message.image = String(object.image);
             return message;
         };
         /**
@@ -7988,6 +8111,26 @@ $root.vmm = (function () {
             }
             if (message.gpus != null && message.hasOwnProperty("gpus"))
                 object.gpus = $root.vmm.GpuConfig.toObject(message.gpus, options);
+            if (message.vcpu != null && message.hasOwnProperty("vcpu")) {
+                object.vcpu = message.vcpu;
+                if (options.oneofs)
+                    object._vcpu = "vcpu";
+            }
+            if (message.memory != null && message.hasOwnProperty("memory")) {
+                object.memory = message.memory;
+                if (options.oneofs)
+                    object._memory = "memory";
+            }
+            if (message.disk_size != null && message.hasOwnProperty("disk_size")) {
+                object.disk_size = message.disk_size;
+                if (options.oneofs)
+                    object._disk_size = "disk_size";
+            }
+            if (message.image != null && message.hasOwnProperty("image")) {
+                object.image = message.image;
+                if (options.oneofs)
+                    object._image = "image";
+            }
             return object;
         };
         /**

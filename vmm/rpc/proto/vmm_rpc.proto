@@ -133,6 +133,11 @@ message UpgradeAppRequest {
   repeated PortMapping ports = 7;
   // gpus
   GpuConfig gpus = 13;
+  // Optional compute resource updates. Leave unset to keep current configuration.
+  optional uint32 vcpu = 14;
+  optional uint32 memory = 15;
+  optional uint32 disk_size = 16;
+  optional string image = 17;
 }
 
 // Message for Status request
