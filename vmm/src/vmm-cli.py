@@ -671,6 +671,181 @@ class VmmCLI:
         )
         print(f"Port mapping updated for VM {vm_id}")
 
+    def update_vm(
+        self,
+        vm_id: str,
+        vcpu: Optional[int] = None,
+        memory: Optional[int] = None,
+        disk_size: Optional[int] = None,
+        image: Optional[str] = None,
+        docker_compose_content: Optional[str] = None,
+        prelaunch_script: Optional[str] = None,
+        swap_size: Optional[int] = None,
+        env_file: Optional[str] = None,
+        user_config: Optional[str] = None,
+        ports: Optional[List[str]] = None,
+        no_ports: bool = False,
+        gpu_slots: Optional[List[str]] = None,
+        attach_all: bool = False,
+        no_gpus: bool = False,
+        kms_urls: Optional[List[str]] = None,
+    ) -> None:
+        """Update multiple aspects of a VM in one command"""
+        updates = []
+
+        # handle resize operations (vcpu, memory, disk, image)
+        resize_params = {}
+        if vcpu is not None:
+            resize_params["vcpu"] = vcpu
+            updates.append(f"vCPU: {vcpu}")
+        if memory is not None:
+            resize_params["memory"] = memory
+            updates.append(f"memory: {memory}MB")
+        if disk_size is not None:
+            resize_params["disk_size"] = disk_size
+            updates.append(f"disk: {disk_size}GB")
+        if image is not None:
+            resize_params["image"] = image
+            updates.append(f"image: {image}")
+
+        if resize_params:
+            resize_params["id"] = vm_id
+            self.rpc_call("ResizeVm", resize_params)
+
+        # handle upgrade operations (compose, env, user_config, ports, gpu)
+        upgrade_params = {"id": vm_id}
+
+        # handle compose file updates (docker-compose, prelaunch script, swap)
+        needs_compose_update = docker_compose_content or prelaunch_script is not None or swap_size is not None
+        vm_info_response = None
+
+        if needs_compose_update or env_file:
+            vm_info_response = self.rpc_call('GetInfo', {'id': vm_id})
+            if not vm_info_response.get('found', False) or 'info' not in vm_info_response:
+                raise Exception(f"VM with ID {vm_id} not found")
+
+        if needs_compose_update:
+            vm_configuration = vm_info_response['info'].get('configuration') or {}
+            compose_file_content = vm_configuration.get('compose_file')
+
+            try:
+                app_compose = json.loads(compose_file_content) if compose_file_content else {}
+            except json.JSONDecodeError:
+                app_compose = {}
+
+            if docker_compose_content:
+                app_compose['docker_compose_file'] = docker_compose_content
+                updates.append("docker compose")
+
+            if prelaunch_script is not None:
+                script_stripped = prelaunch_script.strip()
+                if script_stripped:
+                    app_compose['pre_launch_script'] = script_stripped
+                    updates.append("prelaunch script")
+                elif 'pre_launch_script' in app_compose:
+                    del app_compose['pre_launch_script']
+                    updates.append("prelaunch script (removed)")
+
+            if swap_size is not None:
+                swap_bytes = max(0, int(round(swap_size)) * 1024 * 1024)
+                if swap_bytes > 0:
+                    app_compose['swap_size'] = swap_bytes
+                    updates.append(f"swap: {swap_size}MB")
+                elif 'swap_size' in app_compose:
+                    del app_compose['swap_size']
+                    updates.append("swap (disabled)")
+
+            upgrade_params['compose_file'] = json.dumps(app_compose, indent=4, ensure_ascii=False)
+
+        if env_file:
+            envs = parse_env_file(env_file)
+            if envs:
+                app_id = vm_info_response['info']['app_id']
+                vm_configuration = vm_info_response['info'].get('configuration') or {}
+                compose_file_content = vm_configuration.get('compose_file')
+
+                encrypt_pubkey = self.get_app_env_encrypt_pub_key(
+                    app_id, kms_urls[0] if kms_urls else None)
+                envs_list = [{"key": k, "value": v} for k, v in envs.items()]
+                upgrade_params["encrypted_env"] = encrypt_env(envs_list, encrypt_pubkey)
+                updates.append("environment variables")
+
+                # update allowed_envs in compose file if needed
+                if compose_file_content:
+                    try:
+                        app_compose = json.loads(compose_file_content)
+                    except json.JSONDecodeError:
+                        app_compose = {}
+                    compose_changed = False
+                    allowed_envs = list(envs.keys())
+                    if app_compose.get('allowed_envs') != allowed_envs:
+                        app_compose['allowed_envs'] = allowed_envs
+                        compose_changed = True
+                    launch_token_value = envs.get('APP_LAUNCH_TOKEN')
+                    if launch_token_value is not None:
+                        launch_token_hash = hashlib.sha256(
+                            launch_token_value.encode('utf-8')
+                        ).hexdigest()
+                        if app_compose.get('launch_token_hash') != launch_token_hash:
+                            app_compose['launch_token_hash'] = launch_token_hash
+                            compose_changed = True
+                    if compose_changed:
+                        upgrade_params['compose_file'] = json.dumps(
+                            app_compose, indent=4, ensure_ascii=False)
+
+        if user_config:
+            upgrade_params["user_config"] = user_config
+            updates.append("user config")
+
+        # handle port updates - only update if --port or --no-ports is specified
+        if no_ports or ports is not None:
+            if no_ports:
+                port_mappings = []
+                updates.append("port mappings (removed)")
+            elif ports:
+                port_mappings = [parse_port_mapping(port) for port in ports]
+                updates.append("port mappings")
+            else:
+                # ports is an empty list - shouldn't happen with mutually exclusive group
+                port_mappings = []
+                updates.append("port mappings (none)")
+            upgrade_params["update_ports"] = True
+            upgrade_params["ports"] = port_mappings
+
+        # handle GPU updates - only update if one of the GPU flags is set
+        if attach_all or no_gpus or gpu_slots is not None:
+            if attach_all:
+                gpu_config = {"attach_mode": "all"}
+                updates.append("GPUs (all)")
+            elif no_gpus:
+                gpu_config = {
+                    "attach_mode": "listed",
+                    "gpus": []
+                }
+                updates.append("GPUs (detached)")
+            elif gpu_slots:
+                gpu_config = {
+                    "attach_mode": "listed",
+                    "gpus": [{"slot": gpu} for gpu in gpu_slots]
+                }
+                updates.append(f"GPUs ({len(gpu_slots)} devices)")
+            else:
+                # gpu_slots is an empty list ([] not None) - shouldn't happen with mutually exclusive group
+                gpu_config = {
+                    "attach_mode": "listed",
+                    "gpus": []
+                }
+                updates.append("GPUs (none)")
+            upgrade_params["gpus"] = gpu_config
+
+        if len(upgrade_params) > 1:  # more than just the id
+            self.rpc_call("UpgradeApp", upgrade_params)
+
+        if updates:
+            print(f"Updated VM {vm_id}: {', '.join(updates)}")
+        else:
+            print(f"No updates specified for VM {vm_id}")
+
     def list_gpus(self, json_output: bool = False) -> None:
         """List all available GPUs"""
         response = self.rpc_call('ListGpus')
@@ -1102,6 +1277,80 @@ def main():
         help="Port mapping in format: protocol[:address]:from:to (can be used multiple times)",
     )
 
+    # Update (all-in-one) command
+    update_parser = subparsers.add_parser(
+        "update", help="Update multiple aspects of a VM in one command"
+    )
+    update_parser.add_argument("vm_id", help="VM ID to update")
+
+    # Resource options (requires VM to be stopped)
+    update_parser.add_argument(
+        "--vcpu", type=int, help="Number of vCPUs"
+    )
+    update_parser.add_argument(
+        "--memory", type=parse_memory_size, help="Memory size (e.g. 1G, 100M)"
+    )
+    update_parser.add_argument(
+        "--disk", type=parse_disk_size, help="Disk size (e.g. 20G, 1T)"
+    )
+    update_parser.add_argument(
+        "--image", type=str, help="Image name"
+    )
+
+    # Application options
+    update_parser.add_argument(
+        "--compose", help="Path to app-compose.json file"
+    )
+    update_parser.add_argument(
+        "--prelaunch-script", help="Path to pre-launch script file"
+    )
+    update_parser.add_argument(
+        "--env-file", help="File with environment variables to encrypt"
+    )
+    update_parser.add_argument(
+        "--user-config", help="Path to user config file"
+    )
+    # Port mapping options (mutually exclusive with --no-ports)
+    port_group = update_parser.add_mutually_exclusive_group()
+    port_group.add_argument(
+        "--port",
+        action="append",
+        type=str,
+        help="Port mapping in format: protocol[:address]:from:to (can be used multiple times)",
+    )
+    port_group.add_argument(
+        "--no-ports",
+        action="store_true",
+        help="Remove all port mappings from the VM",
+    )
+    update_parser.add_argument(
+        "--swap", type=parse_memory_size, help="Swap size (e.g. 4G). Set to 0 to disable"
+    )
+
+    # GPU options (mutually exclusive)
+    gpu_group = update_parser.add_mutually_exclusive_group()
+    gpu_group.add_argument(
+        "--gpu",
+        action="append",
+        type=str,
+        help="GPU slot to attach (can be used multiple times)",
+    )
+    gpu_group.add_argument(
+        "--ppcie",
+        action="store_true",
+        help="Enable PPCIE (Protected PCIe) mode - attach all available GPUs",
+    )
+    gpu_group.add_argument(
+        "--no-gpus",
+        action="store_true",
+        help="Detach all GPUs from the VM",
+    )
+
+    # KMS URL for environment encryption
+    update_parser.add_argument(
+        "--kms-url", action="append", type=str, help="KMS URL"
+    )
+
     args = parser.parse_args()
 
     cli = VmmCLI(args.url, args.auth_user, args.auth_password)
@@ -1142,6 +1391,34 @@ def main():
         cli.update_vm_app_compose(args.vm_id, open(args.compose, 'r').read())
     elif args.command == "update-ports":
         cli.update_vm_ports(args.vm_id, args.port)
+    elif args.command == "update":
+        compose_content = None
+        if args.compose:
+            compose_content = read_utf8(args.compose)
+        prelaunch_content = None
+        if hasattr(args, 'prelaunch_script') and args.prelaunch_script:
+            prelaunch_content = read_utf8(args.prelaunch_script)
+        user_config_content = None
+        if args.user_config:
+            user_config_content = read_utf8(args.user_config)
+        cli.update_vm(
+            args.vm_id,
+            vcpu=args.vcpu,
+            memory=args.memory,
+            disk_size=args.disk,
+            image=args.image,
+            docker_compose_content=compose_content,
+            prelaunch_script=prelaunch_content,
+            swap_size=args.swap if hasattr(args, 'swap') else None,
+            env_file=args.env_file,
+            user_config=user_config_content,
+            ports=args.port,
+            no_ports=args.no_ports if hasattr(args, 'no_ports') else False,
+            gpu_slots=args.gpu,
+            attach_all=args.ppcie,
+            no_gpus=args.no_gpus if hasattr(args, 'no_gpus') else False,
+            kms_urls=args.kms_url,
+        )
     elif args.command == 'kms':
         if not args.kms_action:
             kms_parser.print_help()
