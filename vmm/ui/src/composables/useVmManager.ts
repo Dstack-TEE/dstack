@@ -1317,7 +1317,7 @@ type CreateVmPayloadSource = {
   }
 
   function showLogs(id: string, channel: string) {
-    window.open(`/logs?id=${encodeURIComponent(id)}&follow=false&ansi=false&lines=200&ch=${channel}`, '_blank');
+    window.open(`/logs?id=${encodeURIComponent(id)}&follow=true&ansi=false&lines=200&ch=${channel}`, '_blank');
   }
 
   function showDashboard(vm: VmListItem) {
