@@ -132,6 +132,7 @@ const CreateVmDialogComponent = {
                 <label><input type="checkbox" v-model="form.public_logs"> Public logs</label>
                 <label><input type="checkbox" v-model="form.public_sysinfo"> Public sysinfo</label>
                 <label><input type="checkbox" v-model="form.public_tcbinfo"> Public TCB info</label>
+                <label><input type="checkbox" v-model="form.no_tee"> Disable TDX</label>
                 <label><input type="checkbox" v-model="form.pin_numa"> Pin NUMA</label>
                 <label><input type="checkbox" v-model="form.hugepages"> Huge pages</label>
               </div>

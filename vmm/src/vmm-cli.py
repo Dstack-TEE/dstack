@@ -568,6 +568,7 @@ class VmmCLI:
             "hugepages": args.hugepages,
             "pin_numa": args.pin_numa,
             "stopped": args.stopped,
+            "no_tee": args.no_tee,
         }
         if args.swap is not None:
             swap_bytes = max(0, int(round(args.swap)) * 1024 * 1024)
@@ -689,6 +690,7 @@ class VmmCLI:
         attach_all: bool = False,
         no_gpus: bool = False,
         kms_urls: Optional[List[str]] = None,
+        no_tee: Optional[bool] = None,
     ) -> None:
         """Update multiple aspects of a VM in one command"""
         updates = []
@@ -837,6 +839,10 @@ class VmmCLI:
                 }
                 updates.append("GPUs (none)")
             upgrade_params["gpus"] = gpu_config
+
+        if no_tee is not None:
+            upgrade_params["no_tee"] = no_tee
+            updates.append("TEE disabled" if no_tee else "TEE enabled")
 
         if len(upgrade_params) > 1:  # more than just the id
             self.rpc_call("UpgradeApp", upgrade_params)
@@ -1208,6 +1214,11 @@ def main():
                                help='Gateway URL')
     deploy_parser.add_argument('--stopped', action='store_true',
                                help='Create VM in stopped state (requires dstack-vmm >= 0.5.4)')
+    deploy_parser.add_argument('--no-tee', dest='no_tee', action='store_true',
+                               help='Disable Intel TDX / run without TEE')
+    deploy_parser.add_argument('--tee', dest='no_tee', action='store_false',
+                               help='Force-enable Intel TDX (default)')
+    deploy_parser.set_defaults(no_tee=False)
 
     # Images command
     lsimage_parser = subparsers.add_parser(
@@ -1346,6 +1357,22 @@ def main():
         help="Detach all GPUs from the VM",
     )
 
+    # TDX toggle
+    tee_group = update_parser.add_mutually_exclusive_group()
+    tee_group.add_argument(
+        "--no-tee",
+        dest="no_tee",
+        action="store_true",
+        help="Disable Intel TDX / run without TEE",
+    )
+    tee_group.add_argument(
+        "--tee",
+        dest="no_tee",
+        action="store_false",
+        help="Enable Intel TDX for the VM",
+    )
+    update_parser.set_defaults(no_tee=None)
+
     # KMS URL for environment encryption
     update_parser.add_argument(
         "--kms-url", action="append", type=str, help="KMS URL"
@@ -1418,6 +1445,7 @@ def main():
             attach_all=args.ppcie,
             no_gpus=args.no_gpus if hasattr(args, 'no_gpus') else False,
             kms_urls=args.kms_url,
+            no_tee=args.no_tee,
         )
     elif args.command == 'kms':
         if not args.kms_action:

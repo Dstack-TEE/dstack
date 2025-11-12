@@ -63,6 +63,8 @@ pub struct Manifest {
     pub kms_urls: Vec<String>,
     #[serde(default)]
     pub gateway_urls: Vec<String>,
+    #[serde(default)]
+    pub no_tee: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
