@@ -49,7 +49,7 @@ impl Monitor {
 
     async fn refresh_known_keys(&mut self) -> Result<()> {
         info!("fetching known public keys from {}", self.gateway_uri);
-        let todo = "Use RA-TLS";
+        // TODO: Use RA-TLS
         let tls_no_check = true;
         let rpc = GatewayClient::new(RaClient::new(self.gateway_uri.clone(), tls_no_check)?);
         let info = rpc.acme_info().await?;
