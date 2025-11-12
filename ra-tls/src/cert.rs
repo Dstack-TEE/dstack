@@ -48,7 +48,7 @@ impl CaCert {
         let key = KeyPair::from_pem(&pem_key).context("Failed to parse key")?;
         let cert =
             CertificateParams::from_ca_cert_pem(&pem_cert).context("Failed to parse cert")?;
-        let todo = "load the cert from the file directly: blocked by https://github.com/rustls/rcgen/issues/274";
+        // TODO: load the cert from the file directly, blocked by https://github.com/rustls/rcgen/issues/274
         let cert = cert.self_signed(&key).context("Failed to self-sign cert")?;
         Ok(Self {
             pem_cert,
