@@ -503,6 +503,79 @@ The whitelist is stored in `~/.dstack-vmm/kms-whitelist.json`.
 ./vmm-cli.py update-user-config <vm-id> ./new-config.json
 ```
 
+#### Update Port Mapping
+
+Update port mappings for an existing VM:
+
+```bash
+./vmm-cli.py update-ports <vm-id> --port tcp:8080:80 --port tcp:8443:443
+```
+
+#### Update Multiple Aspects at Once
+
+Use the all-in-one `update` command to update multiple VM aspects in a single operation:
+
+```bash
+# Update resources (requires VM to be stopped)
+./vmm-cli.py update <vm-id> \
+  --vcpu 4 \
+  --memory 8G \
+  --disk 100G \
+  --image "dstack-0.5.4"
+
+# Update application configuration
+./vmm-cli.py update <vm-id> \
+  --compose ./new-docker-compose.yml \
+  --prelaunch-script ./setup.sh \
+  --swap 4G \
+  --env-file ./new-secrets.env \
+  --user-config ./new-config.json
+
+# Update networking and GPU
+./vmm-cli.py update <vm-id> \
+  --port tcp:8080:80 \
+  --port tcp:8443:443 \
+  --gpu "18:00.0" --gpu "2a:00.0"
+
+# Detach all GPUs from a VM
+./vmm-cli.py update <vm-id> --no-gpus
+
+# Remove all port mappings from a VM
+./vmm-cli.py update <vm-id> --no-ports
+
+# Update everything at once
+./vmm-cli.py update <vm-id> \
+  --vcpu 8 \
+  --memory 16G \
+  --disk 200G \
+  --compose ./new-docker-compose.yml \
+  --prelaunch-script ./init.sh \
+  --swap 8G \
+  --env-file ./new-secrets.env \
+  --port tcp:8080:80 \
+  --ppcie
+```
+
+**Available Options:**
+- **Resource changes** (requires VM to be stopped): `--vcpu`, `--memory`, `--disk`, `--image`
+- **Application updates**: `--compose` (docker-compose file), `--prelaunch-script`, `--swap`, `--env-file`, `--user-config`
+- **Networking** (mutually exclusive):
+  - `--port <mapping>` (can be used multiple times)
+  - `--no-ports` (remove all port mappings)
+  - _No port flag: port configuration remains unchanged_
+- **GPU** (mutually exclusive):
+  - `--gpu <slot>` (can be used multiple times for specific GPUs)
+  - `--ppcie` (attach all available GPUs)
+  - `--no-gpus` (detach all GPUs)
+  - _No GPU flag: GPU configuration remains unchanged_
+- **KMS**: `--kms-url` (for environment encryption)
+
+**Notes:**
+- Resource changes (vCPU, memory, disk, image) require the VM to be stopped
+- Application updates can be applied to running VMs
+- Port and GPU options are mutually exclusive within their groups
+- If no flag is specified for ports or GPUs, those configurations remain unchanged
+
 ### Performance Optimization
 
 #### NUMA Pinning
