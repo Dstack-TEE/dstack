@@ -3015,7 +3015,7 @@ fi
             body.update_ports = true;
             body.ports = normalizePorts(updated.ports);
             body.gpus = updateDialog.value.updateGpuConfig ? configGpu(updated) : undefined;
-            await vmmRpc.upgradeApp(body);
+            await vmmRpc.updateVm(body);
             updateDialog.value.encryptedEnvs = [];
             updateDialog.value.show = false;
             if (composeWasExplicitlyUpdated) {
@@ -7653,32 +7653,32 @@ $root.vmm = (function () {
         };
         return PortMapping;
     })();
-    vmm.UpgradeAppRequest = (function () {
+    vmm.UpdateVmRequest = (function () {
         /**
-         * Properties of an UpgradeAppRequest.
+         * Properties of an UpdateVmRequest.
          * @memberof vmm
-         * @interface IUpgradeAppRequest
-         * @property {string|null} [id] UpgradeAppRequest id
-         * @property {string|null} [compose_file] UpgradeAppRequest compose_file
-         * @property {Uint8Array|null} [encrypted_env] UpgradeAppRequest encrypted_env
-         * @property {string|null} [user_config] UpgradeAppRequest user_config
-         * @property {boolean|null} [update_ports] UpgradeAppRequest update_ports
-         * @property {Array.<vmm.IPortMapping>|null} [ports] UpgradeAppRequest ports
-         * @property {vmm.IGpuConfig|null} [gpus] UpgradeAppRequest gpus
-         * @property {number|null} [vcpu] UpgradeAppRequest vcpu
-         * @property {number|null} [memory] UpgradeAppRequest memory
-         * @property {number|null} [disk_size] UpgradeAppRequest disk_size
-         * @property {string|null} [image] UpgradeAppRequest image
+         * @interface IUpdateVmRequest
+         * @property {string|null} [id] UpdateVmRequest id
+         * @property {string|null} [compose_file] UpdateVmRequest compose_file
+         * @property {Uint8Array|null} [encrypted_env] UpdateVmRequest encrypted_env
+         * @property {string|null} [user_config] UpdateVmRequest user_config
+         * @property {boolean|null} [update_ports] UpdateVmRequest update_ports
+         * @property {Array.<vmm.IPortMapping>|null} [ports] UpdateVmRequest ports
+         * @property {vmm.IGpuConfig|null} [gpus] UpdateVmRequest gpus
+         * @property {number|null} [vcpu] UpdateVmRequest vcpu
+         * @property {number|null} [memory] UpdateVmRequest memory
+         * @property {number|null} [disk_size] UpdateVmRequest disk_size
+         * @property {string|null} [image] UpdateVmRequest image
          */
         /**
-         * Constructs a new UpgradeAppRequest.
+         * Constructs a new UpdateVmRequest.
          * @memberof vmm
-         * @classdesc Represents an UpgradeAppRequest.
-         * @implements IUpgradeAppRequest
+         * @classdesc Represents an UpdateVmRequest.
+         * @implements IUpdateVmRequest
          * @constructor
-         * @param {vmm.IUpgradeAppRequest=} [properties] Properties to set
+         * @param {vmm.IUpdateVmRequest=} [properties] Properties to set
          */
-        function UpgradeAppRequest(properties) {
+        function UpdateVmRequest(properties) {
             this.ports = [];
             if (properties)
                 for (var keys = Object.keys(properties), i = 0; i < keys.length; ++i)
@@ -7686,145 +7686,145 @@ $root.vmm = (function () {
                         this[keys[i]] = properties[keys[i]];
         }
         /**
-         * UpgradeAppRequest id.
+         * UpdateVmRequest id.
          * @member {string} id
-         * @memberof vmm.UpgradeAppRequest
+         * @memberof vmm.UpdateVmRequest
          * @instance
          */
-        UpgradeAppRequest.prototype.id = "";
+        UpdateVmRequest.prototype.id = "";
         /**
-         * UpgradeAppRequest compose_file.
+         * UpdateVmRequest compose_file.
          * @member {string} compose_file
-         * @memberof vmm.UpgradeAppRequest
+         * @memberof vmm.UpdateVmRequest
          * @instance
          */
-        UpgradeAppRequest.prototype.compose_file = "";
+        UpdateVmRequest.prototype.compose_file = "";
         /**
-         * UpgradeAppRequest encrypted_env.
+         * UpdateVmRequest encrypted_env.
          * @member {Uint8Array} encrypted_env
-         * @memberof vmm.UpgradeAppRequest
+         * @memberof vmm.UpdateVmRequest
          * @instance
          */
-        UpgradeAppRequest.prototype.encrypted_env = $util.newBuffer([]);
+        UpdateVmRequest.prototype.encrypted_env = $util.newBuffer([]);
         /**
-         * UpgradeAppRequest user_config.
+         * UpdateVmRequest user_config.
          * @member {string} user_config
-         * @memberof vmm.UpgradeAppRequest
+         * @memberof vmm.UpdateVmRequest
          * @instance
          */
-        UpgradeAppRequest.prototype.user_config = "";
+        UpdateVmRequest.prototype.user_config = "";
         /**
-         * UpgradeAppRequest update_ports.
+         * UpdateVmRequest update_ports.
          * @member {boolean} update_ports
-         * @memberof vmm.UpgradeAppRequest
+         * @memberof vmm.UpdateVmRequest
          * @instance
          */
-        UpgradeAppRequest.prototype.update_ports = false;
+        UpdateVmRequest.prototype.update_ports = false;
         /**
-         * UpgradeAppRequest ports.
+         * UpdateVmRequest ports.
          * @member {Array.<vmm.IPortMapping>} ports
-         * @memberof vmm.UpgradeAppRequest
+         * @memberof vmm.UpdateVmRequest
          * @instance
          */
-        UpgradeAppRequest.prototype.ports = $util.emptyArray;
+        UpdateVmRequest.prototype.ports = $util.emptyArray;
         /**
-         * UpgradeAppRequest gpus.
+         * UpdateVmRequest gpus.
          * @member {vmm.IGpuConfig|null|undefined} gpus
-         * @memberof vmm.UpgradeAppRequest
+         * @memberof vmm.UpdateVmRequest
          * @instance
          */
-        UpgradeAppRequest.prototype.gpus = null;
+        UpdateVmRequest.prototype.gpus = null;
         /**
-         * UpgradeAppRequest vcpu.
+         * UpdateVmRequest vcpu.
          * @member {number|null|undefined} vcpu
-         * @memberof vmm.UpgradeAppRequest
+         * @memberof vmm.UpdateVmRequest
          * @instance
          */
-        UpgradeAppRequest.prototype.vcpu = null;
+        UpdateVmRequest.prototype.vcpu = null;
         /**
-         * UpgradeAppRequest memory.
+         * UpdateVmRequest memory.
          * @member {number|null|undefined} memory
-         * @memberof vmm.UpgradeAppRequest
+         * @memberof vmm.UpdateVmRequest
          * @instance
          */
-        UpgradeAppRequest.prototype.memory = null;
+        UpdateVmRequest.prototype.memory = null;
         /**
-         * UpgradeAppRequest disk_size.
+         * UpdateVmRequest disk_size.
          * @member {number|null|undefined} disk_size
-         * @memberof vmm.UpgradeAppRequest
+         * @memberof vmm.UpdateVmRequest
          * @instance
          */
-        UpgradeAppRequest.prototype.disk_size = null;
+        UpdateVmRequest.prototype.disk_size = null;
         /**
-         * UpgradeAppRequest image.
+         * UpdateVmRequest image.
          * @member {string|null|undefined} image
-         * @memberof vmm.UpgradeAppRequest
+         * @memberof vmm.UpdateVmRequest
          * @instance
          */
-        UpgradeAppRequest.prototype.image = null;
+        UpdateVmRequest.prototype.image = null;
         // OneOf field names bound to virtual getters and setters
         var $oneOfFields;
         /**
-         * UpgradeAppRequest _vcpu.
+         * UpdateVmRequest _vcpu.
          * @member {"vcpu"|undefined} _vcpu
-         * @memberof vmm.UpgradeAppRequest
+         * @memberof vmm.UpdateVmRequest
          * @instance
          */
-        Object.defineProperty(UpgradeAppRequest.prototype, "_vcpu", {
+        Object.defineProperty(UpdateVmRequest.prototype, "_vcpu", {
             get: $util.oneOfGetter($oneOfFields = ["vcpu"]),
             set: $util.oneOfSetter($oneOfFields)
         });
         /**
-         * UpgradeAppRequest _memory.
+         * UpdateVmRequest _memory.
          * @member {"memory"|undefined} _memory
-         * @memberof vmm.UpgradeAppRequest
+         * @memberof vmm.UpdateVmRequest
          * @instance
          */
-        Object.defineProperty(UpgradeAppRequest.prototype, "_memory", {
+        Object.defineProperty(UpdateVmRequest.prototype, "_memory", {
             get: $util.oneOfGetter($oneOfFields = ["memory"]),
             set: $util.oneOfSetter($oneOfFields)
         });
         /**
-         * UpgradeAppRequest _disk_size.
+         * UpdateVmRequest _disk_size.
          * @member {"disk_size"|undefined} _disk_size
-         * @memberof vmm.UpgradeAppRequest
+         * @memberof vmm.UpdateVmRequest
          * @instance
          */
-        Object.defineProperty(UpgradeAppRequest.prototype, "_disk_size", {
+        Object.defineProperty(UpdateVmRequest.prototype, "_disk_size", {
             get: $util.oneOfGetter($oneOfFields = ["disk_size"]),
             set: $util.oneOfSetter($oneOfFields)
         });
         /**
-         * UpgradeAppRequest _image.
+         * UpdateVmRequest _image.
          * @member {"image"|undefined} _image
-         * @memberof vmm.UpgradeAppRequest
+         * @memberof vmm.UpdateVmRequest
          * @instance
          */
-        Object.defineProperty(UpgradeAppRequest.prototype, "_image", {
+        Object.defineProperty(UpdateVmRequest.prototype, "_image", {
             get: $util.oneOfGetter($oneOfFields = ["image"]),
             set: $util.oneOfSetter($oneOfFields)
         });
         /**
-         * Creates a new UpgradeAppRequest instance using the specified properties.
+         * Creates a new UpdateVmRequest instance using the specified properties.
          * @function create
-         * @memberof vmm.UpgradeAppRequest
+         * @memberof vmm.UpdateVmRequest
          * @static
-         * @param {vmm.IUpgradeAppRequest=} [properties] Properties to set
-         * @returns {vmm.UpgradeAppRequest} UpgradeAppRequest instance
+         * @param {vmm.IUpdateVmRequest=} [properties] Properties to set
+         * @returns {vmm.UpdateVmRequest} UpdateVmRequest instance
          */
-        UpgradeAppRequest.create = function create(properties) {
-            return new UpgradeAppRequest(properties);
+        UpdateVmRequest.create = function create(properties) {
+            return new UpdateVmRequest(properties);
         };
         /**
-         * Encodes the specified UpgradeAppRequest message. Does not implicitly {@link vmm.UpgradeAppRequest.verify|verify} messages.
+         * Encodes the specified UpdateVmRequest message. Does not implicitly {@link vmm.UpdateVmRequest.verify|verify} messages.
          * @function encode
-         * @memberof vmm.UpgradeAppRequest
+         * @memberof vmm.UpdateVmRequest
          * @static
-         * @param {vmm.IUpgradeAppRequest} message UpgradeAppRequest message or plain object to encode
+         * @param {vmm.IUpdateVmRequest} message UpdateVmRequest message or plain object to encode
          * @param {$protobuf.Writer} [writer] Writer to encode to
          * @returns {$protobuf.Writer} Writer
          */
-        UpgradeAppRequest.encode = function encode(message, writer) {
+        UpdateVmRequest.encode = function encode(message, writer) {
             if (!writer)
                 writer = $Writer.create();
             if (message.id != null && Object.hasOwnProperty.call(message, "id"))
@@ -7853,32 +7853,32 @@ $root.vmm = (function () {
             return writer;
         };
         /**
-         * Encodes the specified UpgradeAppRequest message, length delimited. Does not implicitly {@link vmm.UpgradeAppRequest.verify|verify} messages.
+         * Encodes the specified UpdateVmRequest message, length delimited. Does not implicitly {@link vmm.UpdateVmRequest.verify|verify} messages.
          * @function encodeDelimited
-         * @memberof vmm.UpgradeAppRequest
+         * @memberof vmm.UpdateVmRequest
          * @static
-         * @param {vmm.IUpgradeAppRequest} message UpgradeAppRequest message or plain object to encode
+         * @param {vmm.IUpdateVmRequest} message UpdateVmRequest message or plain object to encode
          * @param {$protobuf.Writer} [writer] Writer to encode to
          * @returns {$protobuf.Writer} Writer
          */
-        UpgradeAppRequest.encodeDelimited = function encodeDelimited(message, writer) {
+        UpdateVmRequest.encodeDelimited = function encodeDelimited(message, writer) {
             return this.encode(message, writer).ldelim();
         };
         /**
-         * Decodes an UpgradeAppRequest message from the specified reader or buffer.
+         * Decodes an UpdateVmRequest message from the specified reader or buffer.
          * @function decode
-         * @memberof vmm.UpgradeAppRequest
+         * @memberof vmm.UpdateVmRequest
          * @static
          * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
          * @param {number} [length] Message length if known beforehand
-         * @returns {vmm.UpgradeAppRequest} UpgradeAppRequest
+         * @returns {vmm.UpdateVmRequest} UpdateVmRequest
          * @throws {Error} If the payload is not a reader or valid buffer
          * @throws {$protobuf.util.ProtocolError} If required fields are missing
          */
-        UpgradeAppRequest.decode = function decode(reader, length, error) {
+        UpdateVmRequest.decode = function decode(reader, length, error) {
             if (!(reader instanceof $Reader))
                 reader = $Reader.create(reader);
-            var end = length === undefined ? reader.len : reader.pos + length, message = new $root.vmm.UpgradeAppRequest();
+            var end = length === undefined ? reader.len : reader.pos + length, message = new $root.vmm.UpdateVmRequest();
             while (reader.pos < end) {
                 var tag = reader.uint32();
                 if (tag === error)
@@ -7938,29 +7938,29 @@ $root.vmm = (function () {
             return message;
         };
         /**
-         * Decodes an UpgradeAppRequest message from the specified reader or buffer, length delimited.
+         * Decodes an UpdateVmRequest message from the specified reader or buffer, length delimited.
          * @function decodeDelimited
-         * @memberof vmm.UpgradeAppRequest
+         * @memberof vmm.UpdateVmRequest
          * @static
          * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
-         * @returns {vmm.UpgradeAppRequest} UpgradeAppRequest
+         * @returns {vmm.UpdateVmRequest} UpdateVmRequest
          * @throws {Error} If the payload is not a reader or valid buffer
          * @throws {$protobuf.util.ProtocolError} If required fields are missing
          */
-        UpgradeAppRequest.decodeDelimited = function decodeDelimited(reader) {
+        UpdateVmRequest.decodeDelimited = function decodeDelimited(reader) {
             if (!(reader instanceof $Reader))
                 reader = new $Reader(reader);
             return this.decode(reader, reader.uint32());
         };
         /**
-         * Verifies an UpgradeAppRequest message.
+         * Verifies an UpdateVmRequest message.
          * @function verify
-         * @memberof vmm.UpgradeAppRequest
+         * @memberof vmm.UpdateVmRequest
          * @static
          * @param {Object.<string,*>} message Plain object to verify
          * @returns {string|null} `null` if valid, otherwise the reason why it is not
          */
-        UpgradeAppRequest.verify = function verify(message) {
+        UpdateVmRequest.verify = function verify(message) {
             if (typeof message !== "object" || message === null)
                 return "object expected";
             var properties = {};
@@ -8016,17 +8016,17 @@ $root.vmm = (function () {
             return null;
         };
         /**
-         * Creates an UpgradeAppRequest message from a plain object. Also converts values to their respective internal types.
+         * Creates an UpdateVmRequest message from a plain object. Also converts values to their respective internal types.
          * @function fromObject
-         * @memberof vmm.UpgradeAppRequest
+         * @memberof vmm.UpdateVmRequest
          * @static
          * @param {Object.<string,*>} object Plain object
-         * @returns {vmm.UpgradeAppRequest} UpgradeAppRequest
+         * @returns {vmm.UpdateVmRequest} UpdateVmRequest
          */
-        UpgradeAppRequest.fromObject = function fromObject(object) {
-            if (object instanceof $root.vmm.UpgradeAppRequest)
+        UpdateVmRequest.fromObject = function fromObject(object) {
+            if (object instanceof $root.vmm.UpdateVmRequest)
                 return object;
-            var message = new $root.vmm.UpgradeAppRequest();
+            var message = new $root.vmm.UpdateVmRequest();
             if (object.id != null)
                 message.id = String(object.id);
             if (object.compose_file != null)
@@ -8042,17 +8042,17 @@ $root.vmm = (function () {
                 message.update_ports = Boolean(object.update_ports);
             if (object.ports) {
                 if (!Array.isArray(object.ports))
-                    throw TypeError(".vmm.UpgradeAppRequest.ports: array expected");
+                    throw TypeError(".vmm.UpdateVmRequest.ports: array expected");
                 message.ports = [];
                 for (var i = 0; i < object.ports.length; ++i) {
                     if (typeof object.ports[i] !== "object")
-                        throw TypeError(".vmm.UpgradeAppRequest.ports: object expected");
+                        throw TypeError(".vmm.UpdateVmRequest.ports: object expected");
                     message.ports[i] = $root.vmm.PortMapping.fromObject(object.ports[i]);
                 }
             }
             if (object.gpus != null) {
                 if (typeof object.gpus !== "object")
-                    throw TypeError(".vmm.UpgradeAppRequest.gpus: object expected");
+                    throw TypeError(".vmm.UpdateVmRequest.gpus: object expected");
                 message.gpus = $root.vmm.GpuConfig.fromObject(object.gpus);
             }
             if (object.vcpu != null)
@@ -8066,15 +8066,15 @@ $root.vmm = (function () {
             return message;
         };
         /**
-         * Creates a plain object from an UpgradeAppRequest message. Also converts values to other types if specified.
+         * Creates a plain object from an UpdateVmRequest message. Also converts values to other types if specified.
          * @function toObject
-         * @memberof vmm.UpgradeAppRequest
+         * @memberof vmm.UpdateVmRequest
          * @static
-         * @param {vmm.UpgradeAppRequest} message UpgradeAppRequest
+         * @param {vmm.UpdateVmRequest} message UpdateVmRequest
          * @param {$protobuf.IConversionOptions} [options] Conversion options
          * @returns {Object.<string,*>} Plain object
          */
-        UpgradeAppRequest.toObject = function toObject(message, options) {
+        UpdateVmRequest.toObject = function toObject(message, options) {
             if (!options)
                 options = {};
             var object = {};
@@ -8134,30 +8134,30 @@ $root.vmm = (function () {
             return object;
         };
         /**
-         * Converts this UpgradeAppRequest to JSON.
+         * Converts this UpdateVmRequest to JSON.
          * @function toJSON
-         * @memberof vmm.UpgradeAppRequest
+         * @memberof vmm.UpdateVmRequest
          * @instance
          * @returns {Object.<string,*>} JSON object
          */
-        UpgradeAppRequest.prototype.toJSON = function toJSON() {
+        UpdateVmRequest.prototype.toJSON = function toJSON() {
             return this.constructor.toObject(this, $protobuf.util.toJSONOptions);
         };
         /**
-         * Gets the default type url for UpgradeAppRequest
+         * Gets the default type url for UpdateVmRequest
          * @function getTypeUrl
-         * @memberof vmm.UpgradeAppRequest
+         * @memberof vmm.UpdateVmRequest
          * @static
          * @param {string} [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
          * @returns {string} The default type url
          */
-        UpgradeAppRequest.getTypeUrl = function getTypeUrl(typeUrlPrefix) {
+        UpdateVmRequest.getTypeUrl = function getTypeUrl(typeUrlPrefix) {
             if (typeUrlPrefix === undefined) {
                 typeUrlPrefix = "type.googleapis.com";
             }
-            return typeUrlPrefix + "/vmm.UpgradeAppRequest";
+            return typeUrlPrefix + "/vmm.UpdateVmRequest";
         };
-        return UpgradeAppRequest;
+        return UpdateVmRequest;
     })();
     vmm.StatusRequest = (function () {
         /**
@@ -12292,20 +12292,50 @@ $root.vmm = (function () {
          * @function upgradeApp
          * @memberof vmm.Vmm
          * @instance
-         * @param {vmm.IUpgradeAppRequest} request UpgradeAppRequest message or plain object
+         * @param {vmm.IUpdateVmRequest} request UpdateVmRequest message or plain object
          * @param {vmm.Vmm.UpgradeAppCallback} callback Node-style callback called with the error, if any, and Id
          * @returns {undefined}
          * @variation 1
          */
         Object.defineProperty(Vmm.prototype.upgradeApp = function upgradeApp(request, callback) {
-            return this.rpcCall(upgradeApp, $root.vmm.UpgradeAppRequest, $root.vmm.Id, request, callback);
+            return this.rpcCall(upgradeApp, $root.vmm.UpdateVmRequest, $root.vmm.Id, request, callback);
         }, "name", { value: "UpgradeApp" });
         /**
          * Calls UpgradeApp.
          * @function upgradeApp
          * @memberof vmm.Vmm
          * @instance
-         * @param {vmm.IUpgradeAppRequest} request UpgradeAppRequest message or plain object
+         * @param {vmm.IUpdateVmRequest} request UpdateVmRequest message or plain object
+         * @returns {Promise<vmm.Id>} Promise
+         * @variation 2
+         */
+        /**
+         * Callback as used by {@link vmm.Vmm#updateVm}.
+         * @memberof vmm.Vmm
+         * @typedef UpdateVmCallback
+         * @type {function}
+         * @param {Error|null} error Error, if any
+         * @param {vmm.Id} [response] Id
+         */
+        /**
+         * Calls UpdateVm.
+         * @function updateVm
+         * @memberof vmm.Vmm
+         * @instance
+         * @param {vmm.IUpdateVmRequest} request UpdateVmRequest message or plain object
+         * @param {vmm.Vmm.UpdateVmCallback} callback Node-style callback called with the error, if any, and Id
+         * @returns {undefined}
+         * @variation 1
+         */
+        Object.defineProperty(Vmm.prototype.updateVm = function updateVm(request, callback) {
+            return this.rpcCall(updateVm, $root.vmm.UpdateVmRequest, $root.vmm.Id, request, callback);
+        }, "name", { value: "UpdateVm" });
+        /**
+         * Calls UpdateVm.
+         * @function updateVm
+         * @memberof vmm.Vmm
+         * @instance
+         * @param {vmm.IUpdateVmRequest} request UpdateVmRequest message or plain object
          * @returns {Promise<vmm.Id>} Promise
          * @variation 2
          */

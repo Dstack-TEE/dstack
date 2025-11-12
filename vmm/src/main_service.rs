@@ -13,7 +13,7 @@ use dstack_vmm_rpc::{
     AppId, ComposeHash as RpcComposeHash, GatewaySettings, GetInfoResponse, GetMetaResponse, Id,
     ImageInfo as RpcImageInfo, ImageListResponse, KmsSettings, ListGpusResponse, PublicKeyResponse,
     ReloadVmsResponse, ResizeVmRequest, ResourcesSettings, StatusRequest, StatusResponse,
-    UpgradeAppRequest, VersionResponse, VmConfiguration,
+    UpdateVmRequest, VersionResponse, VmConfiguration,
 };
 use fs_err as fs;
 use ra_rpc::{CallContext, RpcCall};
@@ -200,6 +200,7 @@ impl RpcHandler {
         resolve_gpus_with_config(gpu_cfg, &self.app.config.cvm)
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn apply_resource_updates(
         &self,
         vm_id: &str,
@@ -338,7 +339,11 @@ impl VmmRpc for RpcHandler {
         })
     }
 
-    async fn upgrade_app(self, request: UpgradeAppRequest) -> Result<Id> {
+    async fn upgrade_app(self, request: UpdateVmRequest) -> Result<Id> {
+        self.update_vm(request).await
+    }
+
+    async fn update_vm(self, request: UpdateVmRequest) -> Result<Id> {
         let new_id = if !request.compose_file.is_empty() {
             // check the compose file is valid
             let _app_compose: AppCompose =

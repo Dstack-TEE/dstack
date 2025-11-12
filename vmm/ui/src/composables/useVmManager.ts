@@ -1014,7 +1014,7 @@ fi
       const original = vm.configuration;
       const updated = updateDialog.value;
 
-      const body: VmmTypes.IUpgradeAppRequest = {
+      const body: VmmTypes.IUpdateVmRequest = {
         id: vm.id,
       };
 
@@ -1041,7 +1041,7 @@ fi
       body.ports = normalizePorts(updated.ports);
       body.gpus = updateDialog.value.updateGpuConfig ? configGpu(updated) : undefined;
 
-      await vmmRpc.upgradeApp(body);
+      await vmmRpc.updateVm(body);
       updateDialog.value.encryptedEnvs = [];
       updateDialog.value.show = false;
       if (composeWasExplicitlyUpdated) {
