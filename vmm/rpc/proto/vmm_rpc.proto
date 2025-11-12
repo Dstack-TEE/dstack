@@ -131,6 +131,12 @@ message UpdateVmRequest {
   bool update_ports = 5;
   // Port mapping
   repeated PortMapping ports = 7;
+  // Optional update KMS URLs.
+  bool update_kms_urls = 8;
+  repeated string kms_urls = 9;
+  // Optional update gateway URLs.
+  bool update_gateway_urls = 10;
+  repeated string gateway_urls = 11;
   // gpus
   GpuConfig gpus = 13;
   // Optional compute resource updates. Leave unset to keep current configuration.

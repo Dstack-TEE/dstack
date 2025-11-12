@@ -398,6 +398,12 @@ impl VmmRpc for RpcHandler {
                 })
                 .collect::<Result<Vec<_>>>()?;
         }
+        if request.update_kms_urls {
+            manifest.kms_urls = request.kms_urls.clone();
+        }
+        if request.update_gateway_urls {
+            manifest.gateway_urls = request.gateway_urls.clone();
+        }
         vm_work_dir
             .put_manifest(&manifest)
             .context("Failed to put manifest")?;
