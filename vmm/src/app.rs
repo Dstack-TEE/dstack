@@ -10,20 +10,22 @@ use dstack_kms_rpc::kms_client::KmsClient;
 use dstack_types::shared_filenames::{
     APP_COMPOSE, ENCRYPTED_ENV, INSTANCE_INFO, SYS_CONFIG, USER_CONFIG,
 };
-use dstack_vmm_rpc::{self as pb, GpuInfo, StatusRequest, StatusResponse, VmConfiguration};
+use dstack_vmm_rpc::{
+    self as pb, GpuInfo, ReloadVmsResponse, StatusRequest, StatusResponse, VmConfiguration,
+};
 use fs_err as fs;
 use guest_api::client::DefaultClient as GuestClient;
 use id_pool::IdPool;
 use ra_rpc::client::RaClient;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::collections::{BTreeSet, HashMap, VecDeque};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::SystemTime;
 use supervisor_client::SupervisorClient;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 pub use image::{Image, ImageInfo};
 pub use qemu::{VmConfig, VmWorkDir};
@@ -324,6 +326,199 @@ impl App {
             }
         }
         Ok(())
+    }
+
+    /// Reload VMs directory and sync with memory state while preserving statistics
+    pub async fn reload_vms_sync(&self) -> Result<ReloadVmsResponse> {
+        let vm_path = self.vm_dir();
+        let mut loaded = 0u32;
+        let mut updated = 0u32;
+        let mut removed = 0u32;
+
+        // Get running VMs to preserve CIDs and process info
+        let running_vms = self.supervisor.list().await.context("Failed to list VMs")?;
+        let running_vms_map: HashMap<String, _> = running_vms
+            .into_iter()
+            .map(|p| (p.config.id.clone(), p))
+            .collect();
+        let occupied_cids = running_vms_map
+            .iter()
+            .filter(|(_, p)| {
+                serde_json::from_str::<ProcessAnnotation>(&p.config.note)
+                    .unwrap_or_default()
+                    .is_cvm()
+            })
+            .map(|(id, p)| (id.clone(), p.config.cid.unwrap()))
+            .collect::<HashMap<_, _>>();
+
+        // Update CID pool with running VMs
+        {
+            let mut state = self.lock();
+            // First clear the pool and re-occupy running VM CIDs
+            state.cid_pool.clear();
+            for cid in occupied_cids.values() {
+                state.cid_pool.occupy(*cid)?;
+            }
+        }
+
+        // Get VM IDs from filesystem
+        let mut fs_vm_ids = HashSet::new();
+        if vm_path.exists() {
+            for entry in fs::read_dir(&vm_path).context("Failed to read VM directory")? {
+                let entry = entry.context("Failed to read directory entry")?;
+                let vm_dir_path = entry.path();
+                if vm_dir_path.is_dir() {
+                    // Try to get VM ID from directory name or manifest
+                    if let Some(vm_id) = vm_dir_path.file_name().and_then(|n| n.to_str()) {
+                        fs_vm_ids.insert(vm_id.to_string());
+                    }
+                }
+            }
+        }
+
+        // Get VM IDs currently in memory and their CIDs
+        let (memory_vm_ids, existing_cids): (HashSet<String>, HashSet<u32>) = {
+            let state = self.lock();
+            (
+                state.vms.keys().cloned().collect(),
+                state.vms.values().map(|vm| vm.config.cid).collect(),
+            )
+        };
+
+        // Remove VMs that no longer exist in filesystem
+        let to_remove: Vec<String> = memory_vm_ids.difference(&fs_vm_ids).cloned().collect();
+        if !to_remove.is_empty() {
+            for vm_id in &to_remove {
+                // Stop the VM process first if it's running
+                if running_vms_map.contains_key(vm_id) {
+                    if let Err(err) = self.supervisor.stop(vm_id).await {
+                        warn!("Failed to stop VM process {vm_id}: {err:?}");
+                    }
+                }
+
+                // Remove from memory and free CID
+                let mut state = self.lock();
+                if let Some(vm) = state.vms.remove(vm_id) {
+                    state.cid_pool.free(vm.config.cid);
+                    removed += 1;
+                    info!("Removed VM {vm_id} from memory (directory no longer exists)");
+                }
+            }
+        }
+
+        // Load or update VMs from filesystem
+        if vm_path.exists() {
+            for entry in fs::read_dir(vm_path).context("Failed to read VM directory")? {
+                let entry = entry.context("Failed to read directory entry")?;
+                let vm_path = entry.path();
+                if vm_path.is_dir() {
+                    match self.load_or_update_vm(&vm_path, &occupied_cids, true).await {
+                        Ok(is_new) => {
+                            if is_new {
+                                loaded += 1;
+                            } else {
+                                updated += 1;
+                            }
+                        }
+                        Err(err) => {
+                            error!("Failed to load or update VM: {err:?}");
+                        }
+                    }
+                }
+            }
+        }
+
+        // Clean up any orphaned CIDs that aren't being used
+        {
+            let mut state = self.lock();
+            let used_cids: HashSet<u32> = state.vms.values().map(|vm| vm.config.cid).collect();
+            let orphaned_cids: Vec<u32> = existing_cids.difference(&used_cids).cloned().collect();
+            for cid in orphaned_cids {
+                state.cid_pool.free(cid);
+                info!("Released orphaned CID {cid}");
+            }
+        }
+
+        Ok(ReloadVmsResponse {
+            loaded,
+            updated,
+            removed,
+        })
+    }
+
+    /// Load or update a VM, preserving existing statistics
+    async fn load_or_update_vm(
+        &self,
+        work_dir: impl AsRef<Path>,
+        cids_assigned: &HashMap<String, u32>,
+        auto_start: bool,
+    ) -> Result<bool> {
+        let vm_work_dir = VmWorkDir::new(work_dir.as_ref());
+        let manifest = vm_work_dir.manifest().context("Failed to read manifest")?;
+        if manifest.image.len() > 64
+            || manifest.image.contains("..")
+            || !manifest
+                .image
+                .chars()
+                .all(|c| c.is_alphanumeric() || c == '_' || c == '-' || c == '.')
+        {
+            bail!("Invalid image name");
+        }
+        let image_path = self.config.image_path.join(&manifest.image);
+        let image = Image::load(&image_path).context("Failed to load image")?;
+        let vm_id = manifest.id.clone();
+        let app_compose = vm_work_dir
+            .app_compose()
+            .context("Failed to read compose file")?;
+
+        let mut is_new = false;
+        {
+            let mut states = self.lock();
+
+            // For existing VMs, keep their current CID
+            // For new VMs, try to use assigned CID or allocate a new one
+            let cid = if let Some(existing_vm) = states.get(&vm_id) {
+                // Keep existing CID
+                existing_vm.config.cid
+            } else if let Some(assigned_cid) = cids_assigned.get(&vm_id) {
+                // Use assigned CID from running processes
+                *assigned_cid
+            } else {
+                // Allocate new CID only for truly new VMs
+                states.cid_pool.allocate().context("CID pool exhausted")?
+            };
+
+            let vm_config = VmConfig {
+                manifest,
+                image,
+                cid,
+                workdir: vm_work_dir.path().to_path_buf(),
+                gateway_enabled: app_compose.gateway_enabled(),
+            };
+
+            match states.get_mut(&vm_id) {
+                Some(vm) => {
+                    // Update existing VM but preserve statistics and CID
+                    let old_state = vm.state.clone();
+                    vm.config = vm_config.into();
+                    vm.state = old_state; // Preserve the existing state with statistics
+                }
+                None => {
+                    // This is a new VM, need to occupy its CID if it wasn't allocated
+                    if !cids_assigned.contains_key(&vm_id) {
+                        states.cid_pool.occupy(cid)?;
+                    }
+                    states.add(VmState::new(vm_config));
+                    is_new = true;
+                }
+            }
+        };
+
+        if auto_start && vm_work_dir.started().unwrap_or_default() {
+            self.start_vm(&vm_id).await?;
+        }
+
+        Ok(is_new)
     }
 
     pub async fn list_vms(&self, request: StatusRequest) -> Result<StatusResponse> {

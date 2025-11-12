@@ -231,6 +231,12 @@ message ListGpusResponse {
   bool allow_attach_all = 2;
 }
 
+message ReloadVmsResponse {
+  uint32 loaded = 1;      // Number of VMs that were loaded
+  uint32 updated = 2;     // Number of VMs that were updated
+  uint32 removed = 3;     // Number of VMs that were removed
+}
+
 message GpuInfo {
   string slot = 1;
   string product_id = 2;
@@ -276,4 +282,7 @@ service Vmm {
 
   // List GPUs
   rpc ListGpus(google.protobuf.Empty) returns (ListGpusResponse);
+
+  // Reload VMs directory and sync with memory state
+  rpc ReloadVms(google.protobuf.Empty) returns (ReloadVmsResponse);
 }

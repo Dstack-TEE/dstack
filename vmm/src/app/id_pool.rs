@@ -62,4 +62,8 @@ impl<T: Number> IdPool<T> {
     pub fn free(&mut self, id: T) {
         self.allocated.remove(&id);
     }
+
+    pub fn clear(&mut self) {
+        self.allocated.clear();
+    }
 }

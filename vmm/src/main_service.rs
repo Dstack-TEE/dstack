@@ -12,8 +12,8 @@ use dstack_vmm_rpc::vmm_server::{VmmRpc, VmmServer};
 use dstack_vmm_rpc::{
     AppId, ComposeHash as RpcComposeHash, GatewaySettings, GetInfoResponse, GetMetaResponse, Id,
     ImageInfo as RpcImageInfo, ImageListResponse, KmsSettings, ListGpusResponse, PublicKeyResponse,
-    ResizeVmRequest, ResourcesSettings, StatusRequest, StatusResponse, UpgradeAppRequest,
-    VersionResponse, VmConfiguration,
+    ReloadVmsResponse, ResizeVmRequest, ResourcesSettings, StatusRequest, StatusResponse,
+    UpgradeAppRequest, VersionResponse, VmConfiguration,
 };
 use fs_err as fs;
 use ra_rpc::{CallContext, RpcCall};
@@ -487,6 +487,11 @@ impl VmmRpc for RpcHandler {
             serde_json::from_str(&request.compose_file).context("Invalid compose file")?;
         let hash = hex_sha256(&request.compose_file);
         Ok(RpcComposeHash { hash })
+    }
+
+    async fn reload_vms(self) -> Result<ReloadVmsResponse> {
+        info!("Reloading VMs directory and syncing with memory state");
+        self.app.reload_vms_sync().await
     }
 }
 
