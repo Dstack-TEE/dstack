@@ -39,15 +39,11 @@ const { getVmmRpcClient } = require('../lib/vmmRpcClient');
 
 const vmmRpc = getVmmRpcClient();
 
-// Initialize dangerConfirm setting
-if (localStorage.getItem('dangerConfirm') === null) {
-  localStorage.setItem('dangerConfirm', 'true');
-}
-
 // System menu state
 const systemMenu = ref({
   show: false,
 });
+const devMode = ref(localStorage.getItem('devMode') === 'true');
 
 type MemoryUnit = 'MB' | 'GB';
 
@@ -1229,6 +1225,16 @@ type CreateVmPayloadSource = {
     window.open('/v0', '_blank', 'noopener');
   }
 
+  function toggleDevMode() {
+    devMode.value = !devMode.value;
+    localStorage.setItem('devMode', devMode.value ? 'true' : 'false');
+    closeSystemMenu();
+    successMessage.value = devMode.value ? '✅ Dev mode enabled' : 'Dev mode disabled';
+    setTimeout(() => {
+      successMessage.value = '';
+    }, 2000);
+  }
+
   async function reloadVMs() {
     try {
       errorMessage.value = '';
@@ -1289,31 +1295,59 @@ type CreateVmPayloadSource = {
   }
 
   async function startVm(id: string) {
-    await vmmRpc.startVm({ id });
-    loadVMList();
+    try {
+      await vmmRpc.startVm({ id });
+      loadVMList();
+    } catch (error) {
+      recordError('Failed to start VM', error);
+    }
   }
 
   async function shutdownVm(id: string) {
-    await vmmRpc.shutdownVm({ id });
-    loadVMList();
+    try {
+      await vmmRpc.shutdownVm({ id });
+      loadVMList();
+    } catch (error) {
+      recordError('Failed to shutdown VM', error);
+    }
   }
 
+  const dangerConfirmEnabled = () => !devMode.value;
+
   async function stopVm(vm: VmListItem) {
-    if (localStorage.getItem('dangerConfirm') === 'true' &&
+    if (dangerConfirmEnabled() &&
         !confirm(`You are killing "${vm.name}". This might cause data corruption.`)) {
       return;
     }
-    await vmmRpc.stopVm({ id: vm.id });
-    loadVMList();
+    try {
+      await vmmRpc.stopVm({ id: vm.id });
+      loadVMList();
+    } catch (error) {
+      recordError(`Failed to stop ${vm.name}`, error);
+    }
   }
 
-  async function removeVm(id: string) {
-    if (localStorage.getItem('dangerConfirm') === 'true' &&
+  async function removeVm(vm: VmListItem) {
+    if (dangerConfirmEnabled() &&
         !confirm('Remove VM? This action cannot be undone.')) {
       return;
     }
-    await vmmRpc.removeVm({ id });
-    loadVMList();
+
+    try {
+      if (devMode.value && vm.status === 'running') {
+        try {
+          await vmmRpc.stopVm({ id: vm.id });
+        } catch (error) {
+          recordError(`Failed to stop ${vm.name} before removal`, error);
+          return;
+        }
+      }
+
+      await vmmRpc.removeVm({ id: vm.id });
+      loadVMList();
+    } catch (error) {
+      recordError(`Failed to remove ${vm.name}`, error);
+    }
   }
 
   function showLogs(id: string, channel: string) {
@@ -1472,6 +1506,8 @@ type CreateVmPayloadSource = {
     openApiDocs,
     openLegacyUi,
     reloadVMs,
+    devMode,
+    toggleDevMode,
   };
 }
 
