@@ -167,7 +167,7 @@ SPDX-License-Identifier: Apache-2.0
             {{ vmStatus(vm) }}
           </span>
         </div>
-        <div class="vm-col-uptime">{{ vm.status !== 'stopped' ? (vm.uptime || '-') : '-' }}</div>
+        <div class="vm-col-uptime">{{ vm.status !== 'stopped' ? shortUptime(vm.uptime) : '-' }}</div>
         <div class="vm-col-view" @click.stop>
           <a class="view-link" @click.prevent="showLogs(vm.id, 'serial')" href="#">Logs</a>
           <a class="view-link" @click.prevent="showLogs(vm.id, 'stderr')" href="#">Stderr</a>

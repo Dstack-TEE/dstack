@@ -1225,6 +1225,16 @@ type CreateVmPayloadSource = {
     window.open('/v0', '_blank', 'noopener');
   }
 
+  function shortUptime(uptime?: string | null) {
+    if (!uptime) {
+      return '-';
+    }
+    const parts = uptime.split(/\s+/).filter(Boolean);
+    if (parts.length === 0) {
+      return uptime;
+    }
+    return parts.slice(0, Math.min(2, parts.length)).join(' ');
+  }
   function toggleDevMode() {
     devMode.value = !devMode.value;
     localStorage.setItem('devMode', devMode.value ? 'true' : 'false');
@@ -1508,6 +1518,7 @@ type CreateVmPayloadSource = {
     reloadVMs,
     devMode,
     toggleDevMode,
+    shortUptime,
   };
 }
 
