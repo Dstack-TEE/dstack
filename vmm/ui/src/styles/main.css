@@ -324,13 +324,14 @@ h1, h2, h3, h4, h5, h6 {
 
 .vm-table {
   max-width: 900px;
+  width: 900px;
   margin: 0 auto 24px;
   padding: 0 24px;
 }
 
 .vm-table-header {
   display: grid;
-  grid-template-columns: 24px 1fr 140px 120px 280px 60px;
+  grid-template-columns: 24px 2fr 100px 120px 180px 60px;
   gap: 16px;
   padding: 12px 16px;
   background: var(--color-bg-primary);
@@ -354,7 +355,7 @@ h1, h2, h3, h4, h5, h6 {
 
 .vm-row-main {
   display: grid;
-  grid-template-columns: 24px 1fr 140px 120px 280px 60px;
+  grid-template-columns: 24px 2fr 100px 120px 180px 60px;
   gap: 16px;
   padding: 16px;
   align-items: center;
@@ -552,6 +553,29 @@ h1, h2, h3, h4, h5, h6 {
   text-overflow: ellipsis;
   white-space: nowrap;
   cursor: help;
+}
+
+.gpu-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.gpu-chip {
+  font-size: 12px;
+  line-height: 1.4;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-primary);
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+
+.gpu-chip--all {
+  font-weight: 600;
+  color: var(--color-text-primary);
+  border-style: dashed;
 }
 
 .port-mappings {

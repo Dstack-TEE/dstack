@@ -294,12 +294,25 @@ SPDX-License-Identifier: Apache-2.0
             <span class="detail-label">TEE</span>
             <span class="detail-value">{{ vm.configuration?.no_tee ? 'Disabled' : 'Enabled' }}</span>
           </div>
-          <div class="detail-item" v-if="vm.configuration?.gpus && vm.configuration.gpus.length > 0">
+          <div class="detail-item detail-item--gpus" v-if="vm.configuration?.gpus">
             <span class="detail-label">GPUs</span>
-            <div>
-              <div v-for="gpu in vm.configuration.gpus" :key="gpu.slot" class="detail-value">
-                {{ gpu.slot || gpu.product_id }}
-              </div>
+            <div v-if="vm.configuration.gpus.attach_mode === 'all'" class="gpu-chip-list">
+              <span class="gpu-chip gpu-chip--all" title="All available GPUs and NVSwitches are attached">
+                All GPUs
+              </span>
+            </div>
+            <div v-else-if="vm.configuration.gpus?.gpus?.length" class="gpu-chip-list">
+              <span
+                class="gpu-chip"
+                v-for="(gpu, index) in vm.configuration.gpus.gpus"
+                :key="gpu.slot || gpu.product_id || index"
+                :title="gpu.description || gpu.slot || gpu.product_id || ('GPU #' + (index + 1))"
+              >
+                {{ gpu.slot || gpu.product_id || ('GPU #' + (index + 1)) }}
+              </span>
+            </div>
+            <div v-else class="detail-value">
+              None
             </div>
           </div>
         </div>
