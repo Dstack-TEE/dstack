@@ -469,6 +469,7 @@ impl App {
         let image_path = self.config.image_path.join(&manifest.image);
         let image = Image::load(&image_path).context("Failed to load image")?;
         let vm_id = manifest.id.clone();
+        let already_running = cids_assigned.contains_key(&vm_id);
         let app_compose = vm_work_dir
             .app_compose()
             .context("Failed to read compose file")?;
@@ -517,7 +518,11 @@ impl App {
         };
 
         if auto_start && vm_work_dir.started().unwrap_or_default() {
-            self.start_vm(&vm_id).await?;
+            if already_running {
+                info!("Skipping, {vm_id} is already running");
+            } else {
+                self.start_vm(&vm_id).await?;
+            }
         }
 
         Ok(is_new)
