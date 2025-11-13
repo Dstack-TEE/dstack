@@ -8,7 +8,12 @@ SPDX-License-Identifier: Apache-2.0
     <div class="header-content">
       <div class="header-left">
         <h1 class="app-title">dstack-vmm</h1>
-        <span class="version-badge">v{{ version.version }}</span>
+        <span class="version-badge">
+          v{{ version.version }}
+          <template v-if="version.rev">
+            ({{ version.rev.slice(0, 14) }})
+          </template>
+        </span>
       </div>
       <div class="header-right">
         <button class="btn-primary" @click="showDeployDialog()">
