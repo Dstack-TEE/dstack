@@ -73,20 +73,6 @@ const UpdateVmDialogComponent = {
             </select>
           </div>
 
-          <div class="form-group" v-if="availableGpus.length > 0">
-            <div class="checkbox-grid">
-              <label><input type="checkbox" v-model="dialog.updateGpuConfig"> Update GPU configuration</label>
-            </div>
-            <div v-if="dialog.updateGpuConfig">
-              <gpu-config-editor
-                :available-gpus="availableGpus"
-                :allow-attach-all="allowAttachAllGpus"
-                v-model:gpus="dialog.selectedGpus"
-                v-model:attach-all="dialog.attachAllGpus"
-              />
-            </div>
-          </div>
-
           <div class="checkbox-grid">
             <label><input type="checkbox" v-model="dialog.updateCompose"> Update App Compose</label>
           </div>
@@ -119,6 +105,20 @@ const UpdateVmDialogComponent = {
             <div class="form-group full-width">
               <encrypted-env-editor :env-vars="dialog.encryptedEnvs" />
             </div>
+          </div>
+        </div>
+
+        <div class="form-group" v-if="availableGpus.length > 0">
+          <div class="checkbox-grid">
+            <label><input type="checkbox" v-model="dialog.updateGpuConfig"> Update GPU configuration</label>
+          </div>
+          <div v-if="dialog.updateGpuConfig">
+            <gpu-config-editor
+              :available-gpus="availableGpus"
+              :allow-attach-all="allowAttachAllGpus"
+              v-model:gpus="dialog.selectedGpus"
+              v-model:attach-all="dialog.attachAllGpus"
+            />
           </div>
         </div>
 

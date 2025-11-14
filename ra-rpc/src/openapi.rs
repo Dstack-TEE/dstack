@@ -1035,6 +1035,7 @@ fn build_swagger_ui_html(spec_url: &str, cfg: &SwaggerUiConfig) -> String {
       window.ui = SwaggerUIBundle({{
         url: '{spec}',
         dom_id: '#swagger-ui',
+        deepLinking: true,
         presets: [
           SwaggerUIBundle.presets.apis,
           SwaggerUIStandalonePreset

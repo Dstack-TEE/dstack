@@ -109,6 +109,11 @@ const CreateVmDialogComponent = {
               <textarea id="preLaunchScript" v-model="form.preLaunchScript" placeholder="Optional script executed before launch" rows="6"></textarea>
             </div>
 
+            <div class="form-group full-width">
+              <label for="userConfig">User Config</label>
+              <textarea id="userConfig" v-model="form.user_config" placeholder="Optional user config placed at /dstack/.user-config in the CVM"></textarea>
+            </div>
+
             <div class="form-group full-width" v-if="availableGpus.length > 0">
               <gpu-config-editor
                 :available-gpus="availableGpus"
@@ -116,11 +121,6 @@ const CreateVmDialogComponent = {
                 v-model:attach-all="form.attachAllGpus"
                 :allow-attach-all="allowAttachAllGpus"
               />
-            </div>
-
-            <div class="form-group full-width">
-              <label for="userConfig">User Config</label>
-              <textarea id="userConfig" v-model="form.user_config" placeholder="Optional user config placed at /dstack/.user-config in the CVM"></textarea>
             </div>
 
             <div class="form-group full-width">

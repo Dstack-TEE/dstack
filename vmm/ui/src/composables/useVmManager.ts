@@ -391,10 +391,19 @@ fi
     }
   }
 
-  function configGpu(form: { attachAllGpus: boolean; selectedGpus: string[] }): VmmTypes.IGpuConfig | undefined {
+  function configGpu(form: { attachAllGpus: boolean; selectedGpus: string[] }, isUpdate: boolean = false): VmmTypes.IGpuConfig | undefined {
     if (form.attachAllGpus) {
       return { attach_mode: 'all' };
     }
+    // For updates, always return a config when GPUs are being explicitly updated
+    // Empty array means no GPUs should be attached
+    if (isUpdate) {
+      return {
+        attach_mode: 'listed',
+        gpus: (form.selectedGpus || []).map((slot: string) => ({ slot })),
+      };
+    }
+    // For creation, return undefined if no GPUs are selected
     if (form.selectedGpus && form.selectedGpus.length > 0) {
       return {
         attach_mode: 'listed',
@@ -1042,7 +1051,7 @@ type CreateVmPayloadSource = {
       body.user_config = updated.user_config;
       body.update_ports = true;
       body.ports = normalizePorts(updated.ports);
-      body.gpus = updateDialog.value.updateGpuConfig ? configGpu(updated) : undefined;
+      body.gpus = updateDialog.value.updateGpuConfig ? configGpu(updated, true) : undefined;
 
       await vmmRpc.updateVm(body);
       updateDialog.value.encryptedEnvs = [];
