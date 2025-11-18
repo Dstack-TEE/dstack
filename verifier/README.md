@@ -68,7 +68,7 @@ You usually don't need to edit the config file. Just using the default is fine, 
 - `host`: Server bind address (default: "0.0.0.0")
 - `port`: Server port (default: 8080)
 - `image_cache_dir`: Directory for cached OS images (default: "/tmp/dstack-verifier/cache")
-- `image_download_url`: URL template for downloading OS images (default: Dstack official releases URL)
+- `image_download_url`: URL template for downloading OS images (default: dstack official releases URL)
 - `image_download_timeout_secs`: Download timeout in seconds (default: 300)
 - `pccs_url`: Optional PCCS URL for quote verification
 
