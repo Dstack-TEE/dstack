@@ -14,12 +14,12 @@ import "../DstackKms.sol";
 contract DstackKmsV2 is DstackKms {
     // Minimal V2 contract that can be upgraded from DstackKms
     // Inherits all functionality from DstackKms
-    
+
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
         _disableInitializers();
     }
-    
+
     // Optional: Add a version identifier for testing
     function version() public pure returns (string memory) {
         return "2.0.0";
