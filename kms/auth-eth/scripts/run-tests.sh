@@ -237,7 +237,7 @@ rm -f "$PROJECT_ROOT/integration-test.js"
 # Run Foundry tests
 echo ""
 echo -e "${BLUE}🔨 Running Foundry tests...${NC}"
-forge test --rpc-url $ETH_RPC_URL
+ETHERSCAN_API_KEY=dummy forge test --ffi --rpc-url $ETH_RPC_URL
 FOUNDRY_RESULT=$?
 
 # Summary
