@@ -2,11 +2,17 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-name: CI
+name: KMS Auth-ETH Foundry Tests
 
 on:
   push:
+    paths:
+      - 'kms/auth-eth/**'
+      - '.github/workflows/foundry-test.yml'
   pull_request:
+    paths:
+      - 'kms/auth-eth/**'
+      - '.github/workflows/foundry-test.yml'
   workflow_dispatch:
 
 env:
@@ -16,6 +22,9 @@ jobs:
   check:
     name: Foundry project
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: kms/auth-eth
     steps:
       - uses: actions/checkout@v4
         with:
@@ -40,5 +49,5 @@ jobs:
 
       - name: Run Forge tests
         run: |
-          forge test -vvv
+          forge test --ffi -vvv
         id: test
