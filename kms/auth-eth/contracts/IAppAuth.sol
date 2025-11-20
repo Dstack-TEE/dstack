@@ -12,11 +12,11 @@ import "@openzeppelin/contracts/utils/introspection/IERC165.sol";
  * @title IAppAuth
  * @notice Core interface for App Authentication contracts
  * @dev This interface defines the core function for validating app boot information.
- *      Any contract implementing this interface should also implement ERC-165 to 
+ *      Any contract implementing this interface should also implement ERC-165 to
  *      allow interface detection.
- *      
+ *
  *      Interface ID: 0x1e079198
- *      
+ *
  *      This interface can be checked using:
  *      contract.supportsInterface(0x1e079198)
  */
@@ -52,7 +52,5 @@ interface IAppAuth is IERC165 {
      * @return isAllowed True if the app is authorized to boot, false otherwise
      * @return reason Human-readable reason for the decision (empty if allowed)
      */
-    function isAppAllowed(
-        AppBootInfo calldata bootInfo
-    ) external view returns (bool isAllowed, string memory reason);
+    function isAppAllowed(AppBootInfo calldata bootInfo) external view returns (bool isAllowed, string memory reason);
 }
