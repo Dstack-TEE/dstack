@@ -41,7 +41,7 @@ contract DstackKmsTest is Test {
         vm.stopPrank();
     }
     
-    function test_Initialize() public {
+    function test_Initialize() public view {
         assertEq(kms.owner(), owner);
         assertEq(kms.appImplementation(), address(appImpl));
     }
@@ -293,13 +293,13 @@ contract DstackKmsTest is Test {
         assertEq(kms.appImplementation(), address(newImpl));
     }
     
-    function test_SupportsInterface() public {
+    function test_SupportsInterface() public view {
         // Test IAppAuth interface
         assertTrue(kms.supportsInterface(0x1e079198));
-        
+
         // Test IERC165 interface
         assertTrue(kms.supportsInterface(0x01ffc9a7));
-        
+
         // Test invalid interface
         assertFalse(kms.supportsInterface(0x12345678));
     }

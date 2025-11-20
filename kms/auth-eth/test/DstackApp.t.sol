@@ -38,7 +38,7 @@ contract DstackAppTest is Test {
         vm.stopPrank();
     }
     
-    function test_Initialize() public {
+    function test_Initialize() public view {
         assertEq(app.owner(), owner);
         assertFalse(app.allowAnyDevice());
     }
@@ -225,10 +225,10 @@ contract DstackAppTest is Test {
     }
     
     
-    function test_SupportsInterface() public {
+    function test_SupportsInterface() public view {
         // Test IAppAuth interface
         assertTrue(app.supportsInterface(0x1e079198));
-        
+
         // Test IAppAuthBasicManagement interface
         assertTrue(app.supportsInterface(0x8fd37527));
         
