@@ -115,6 +115,7 @@ impl Dns01Api for CloudflareClient {
 
         let response = client
             .get(&url)
+            .query(&[("name", domain)])
             .header("Authorization", format!("Bearer {}", self.api_token))
             .send()
             .await?;
@@ -131,12 +132,7 @@ impl Dns01Api for CloudflareClient {
         let response: CloudflareResponse =
             response.json().await.context("failed to parse response")?;
 
-        let records = response
-            .result
-            .into_iter()
-            .filter(|record| record.name == domain)
-            .collect();
-        Ok(records)
+        Ok(response.result)
     }
 }
 
