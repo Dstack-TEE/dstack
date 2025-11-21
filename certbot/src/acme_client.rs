@@ -4,7 +4,10 @@
 
 use anyhow::{bail, Context, Result};
 use fs_err as fs;
-use hickory_resolver::error::ResolveErrorKind;
+use hickory_resolver::{
+    config::{ResolverConfig, ResolverOpts},
+    error::ResolveErrorKind,
+};
 use instant_acme::{
     Account, AccountCredentials, AuthorizationStatus, ChallengeType, Identifier, NewAccount,
     NewOrder, Order, OrderStatus, Problem,
@@ -347,8 +350,9 @@ impl AcmeClient {
 
             sleep(delay).await;
 
+            debug!("Creating Google DNS resolver for verification");
             let dns_resolver =
-                AsyncResolver::tokio_from_system_conf().context("failed to create dns resolver")?;
+                AsyncResolver::tokio(ResolverConfig::google(), ResolverOpts::default());
 
             while let Some(challenge) = unsettled_challenges.pop() {
                 let expected_txt = &challenge.dns_value;
