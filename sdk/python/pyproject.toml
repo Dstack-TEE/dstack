@@ -23,8 +23,10 @@ license = {text = "Apache-2.0"}
 [project.optional-dependencies]
 solana = ["solders"]
 ethereum = ["web3"]
+zetachain = ["web3"]
 sol = ["solders"]
 eth = ["web3"]
+zeta = ["web3"]
 all = ["solders", "web3"]
 
 [build-system]
@@ -39,6 +41,9 @@ solana = [
     "solders",
 ]
 ethereum = [
+    "web3",
+]
+zetachain = [
     "web3",
 ]
 
@@ -133,5 +138,8 @@ solana = [
     "solders",
 ]
 ethereum = [
+    "web3",
+]
+zetachain = [
     "web3",
 ]
