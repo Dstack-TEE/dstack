@@ -69,7 +69,7 @@ async fn maybe_gen_certs(config: &Config, tls_config: &TlsConfig) -> Result<()> 
         return Ok(());
     }
 
-    if config.run_in_dstack {
+    if !config.danger_disable_attestation {
         info!("Using dstack guest agent for certificate generation");
         let agent_client = dstack_agent().context("Failed to create dstack client")?;
         let response = agent_client
@@ -152,15 +152,15 @@ async fn main() -> Result<()> {
         set_max_ulimit()?;
     }
 
-    let my_app_id = if config.run_in_dstack {
+    let my_app_id = if config.danger_disable_attestation {
+        None
+    } else {
         let dstack_client = dstack_agent().context("Failed to create dstack client")?;
         let info = dstack_client
             .info()
             .await
             .context("Failed to get app info")?;
         Some(info.app_id)
-    } else {
-        None
     };
     let proxy_config = config.proxy.clone();
     let pccs_url = config.pccs_url.clone();

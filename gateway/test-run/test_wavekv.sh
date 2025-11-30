@@ -82,7 +82,7 @@ mandatory = false
 [core]
 kms_url = "https://kms.tdxlab.dstack.org:12001"
 rpc_domain = "gateway.tdxlab.dstack.org"
-run_in_dstack = false
+danger_disable_attestation = true
 state_path = "${RUN_DIR}/gateway-state-node${node_id}.json"
 
 [core.debug]

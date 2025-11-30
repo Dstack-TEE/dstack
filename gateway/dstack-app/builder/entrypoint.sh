@@ -95,7 +95,6 @@ mandatory = false
 state_path = "$DATA_DIR/gateway-state.json"
 set_ulimit = true
 rpc_domain = "$RPC_DOMAIN"
-run_in_dstack = true
 
 [core.sync]
 enabled = $SYNC_ENABLED

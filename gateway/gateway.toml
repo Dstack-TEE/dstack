@@ -16,7 +16,7 @@ state_path = "./gateway-state.json"
 # auto set soft ulimit to hard ulimit
 set_ulimit = true
 rpc_domain = ""
-run_in_dstack = true
+danger_disable_attestation = false
 
 [core.auth]
 enabled = false

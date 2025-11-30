@@ -163,7 +163,7 @@ pub struct Config {
     pub admin: AdminConfig,
     /// Debug server configuration (separate port for debug RPCs)
     pub debug: DebugConfig,
-    pub run_in_dstack: bool,
+    pub danger_disable_attestation: bool,
     pub sync: SyncConfig,
     pub auth: AuthConfig,
 }
