@@ -216,7 +216,7 @@ impl HttpsClient {
             .client
             .request(request)
             .await
-            .context("failed to send request")?;
+            .with_context(|| format!("failed to send request to {url}"))?;
 
         if !response.status().is_success() {
             anyhow::bail!("request failed: {}", response.status());

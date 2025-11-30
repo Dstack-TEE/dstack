@@ -94,7 +94,7 @@ impl ExchangeInterface for HttpSyncNetwork {
             .client
             .post_json(&sync_url, &msg)
             .await
-            .context("failed to sync to peer")?;
+            .with_context(|| format!("failed to sync to peer {peer} at {sync_url}"))?;
 
         // Update peer last_seen on successful sync
         self.update_peer_last_seen(peer);

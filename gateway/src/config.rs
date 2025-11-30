@@ -136,6 +136,10 @@ pub struct SyncConfig {
     /// Peer node IDs for WaveKV sync
     #[serde(default)]
     pub peer_node_ids: Vec<u32>,
+    /// Peer URLs for initial bootstrap (maps node_id -> url)
+    /// Format: ["node_id:url", ...], e.g. ["2:https://node2:13012", "3:https://node3:13012"]
+    #[serde(default)]
+    pub peer_urls: Vec<String>,
     /// Data directory for WaveKV persistence
     #[serde(default = "default_wavekv_data_dir")]
     pub wavekv_data_dir: String,

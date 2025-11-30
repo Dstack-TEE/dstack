@@ -51,14 +51,18 @@ generate_config() {
     local debug_port=$((13000 + node_id * 10 + 5))
     local wg_ip="10.0.3${node_id}.1/24"
     local other_nodes=""
+    local peer_urls=""
 
-    # Build peer_node_ids array
+    # Build peer_node_ids array and peer_urls
     for i in 1 2 3; do
         if [[ $i -ne $node_id ]]; then
+            local peer_rpc_port=$((13000 + i * 10 + 2))
             if [[ -n "$other_nodes" ]]; then
                 other_nodes="$other_nodes, $i"
+                peer_urls="$peer_urls, \"$i:https://localhost:$peer_rpc_port\""
             else
                 other_nodes="$i"
+                peer_urls="\"$i:https://localhost:$peer_rpc_port\""
             fi
         fi
     done
@@ -80,7 +84,8 @@ ca_certs = "${abs_run_dir}/certs/gateway-ca.cert"
 mandatory = false
 
 [core]
-kms_url = "https://kms.tdxlab.dstack.org:12001"
+# Empty kms_url to skip auto-cert generation (we use pre-generated certs)
+kms_url = ""
 rpc_domain = "gateway.tdxlab.dstack.org"
 danger_disable_attestation = true
 state_path = "${RUN_DIR}/gateway-state-node${node_id}.json"
@@ -99,6 +104,7 @@ my_url = "https://localhost:${rpc_port}"
 bootnode = ""
 node_id = ${node_id}
 peer_node_ids = [${other_nodes}]
+peer_urls = [${peer_urls}]
 wavekv_data_dir = "${RUN_DIR}/wavekv_node${node_id}"
 
 [core.certbot]
@@ -240,9 +246,9 @@ try:
         if pa.get('node_id') == $peer_node_id:
             sys.exit(0)
     sys.exit(1)
-except:
+except Exception as e:
     sys.exit(1)
-" 2>/dev/null
+"
 }
 
 # Check if node has synced node info from another node
@@ -261,9 +267,9 @@ try:
         if n.get('node_id') == $peer_node_id:
             sys.exit(0)
     sys.exit(1)
-except:
+except Exception as e:
     sys.exit(1)
-" 2>/dev/null
+"
 }
 
 # Get number of peer addresses from sync data
@@ -970,12 +976,57 @@ clean() {
 }
 
 # =============================================================================
-# Ensure proxy certificates exist (RPC certs are auto-fetched from KMS)
+# Ensure all certificates exist (CA + RPC + proxy)
 # =============================================================================
 ensure_certs() {
     # Create directories
     mkdir -p "$CERTS_DIR"
     mkdir -p "$RUN_DIR/certbot/live"
+
+    # Generate CA certificate if not exists
+    if [[ ! -f "$CERTS_DIR/gateway-ca.key" ]] || [[ ! -f "$CERTS_DIR/gateway-ca.cert" ]]; then
+        log_info "Creating CA certificate..."
+        openssl genrsa -out "$CERTS_DIR/gateway-ca.key" 2048 2>/dev/null
+        openssl req -x509 -new -nodes \
+            -key "$CERTS_DIR/gateway-ca.key" \
+            -sha256 -days 365 \
+            -out "$CERTS_DIR/gateway-ca.cert" \
+            -subj "/CN=Test CA/O=WaveKV Test" \
+            2>/dev/null
+    fi
+
+    # Generate RPC certificate signed by CA if not exists
+    if [[ ! -f "$CERTS_DIR/gateway-rpc.key" ]] || [[ ! -f "$CERTS_DIR/gateway-rpc.cert" ]]; then
+        log_info "Creating RPC certificate signed by CA..."
+        openssl genrsa -out "$CERTS_DIR/gateway-rpc.key" 2048 2>/dev/null
+        openssl req -new \
+            -key "$CERTS_DIR/gateway-rpc.key" \
+            -out "$CERTS_DIR/gateway-rpc.csr" \
+            -subj "/CN=localhost" \
+            2>/dev/null
+        # Create certificate with SAN for localhost
+        cat > "$CERTS_DIR/ext.cnf" << EXTEOF
+authorityKeyIdentifier=keyid,issuer
+basicConstraints=CA:FALSE
+keyUsage = digitalSignature, nonRepudiation, keyEncipherment, dataEncipherment
+subjectAltName = @alt_names
+
+[alt_names]
+DNS.1 = localhost
+IP.1 = 127.0.0.1
+EXTEOF
+        openssl x509 -req \
+            -in "$CERTS_DIR/gateway-rpc.csr" \
+            -CA "$CERTS_DIR/gateway-ca.cert" \
+            -CAkey "$CERTS_DIR/gateway-ca.key" \
+            -CAcreateserial \
+            -out "$CERTS_DIR/gateway-rpc.cert" \
+            -days 365 \
+            -sha256 \
+            -extfile "$CERTS_DIR/ext.cnf" \
+            2>/dev/null
+        rm -f "$CERTS_DIR/gateway-rpc.csr" "$CERTS_DIR/ext.cnf"
+    fi
 
     # Generate proxy certificates (for TLS termination)
     local proxy_cert_dir="$RUN_DIR/certbot/live"

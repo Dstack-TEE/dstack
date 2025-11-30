@@ -188,6 +188,23 @@ impl ProxyInner {
             error!("Failed to register peer URL: {err}");
         }
 
+        // Register configured peer URLs for initial bootstrap
+        for peer_url_spec in &config.sync.peer_urls {
+            if let Some((node_id_str, url)) = peer_url_spec.split_once(':') {
+                if let Ok(node_id) = node_id_str.parse::<u32>() {
+                    if let Err(err) = kv_store.register_peer_url(node_id, url) {
+                        error!("Failed to register peer URL for node {node_id}: {err}");
+                    } else {
+                        info!("Registered peer URL: node {node_id} -> {url}");
+                    }
+                } else {
+                    warn!("Invalid peer_urls entry (bad node_id): {peer_url_spec}");
+                }
+            } else {
+                warn!("Invalid peer_urls entry (expected 'node_id:url'): {peer_url_spec}");
+            }
+        }
+
         // Create WaveKV sync service (only if sync is enabled)
         let wavekv_sync = if config.sync.enabled {
             // Build HttpsClientConfig from Rocket's TlsConfig
@@ -654,6 +671,16 @@ impl ProxyState {
             }
             let existing = existing.clone();
             if self.valid_ip(existing.ip) {
+                // Sync existing instance to KvStore (might be from legacy state)
+                let data = InstanceData {
+                    app_id: existing.app_id.clone(),
+                    ip: existing.ip,
+                    public_key: existing.public_key.clone(),
+                    reg_time: encode_ts(existing.reg_time),
+                };
+                if let Err(err) = self.kv_store.sync_instance(&existing.id, &data) {
+                    error!("failed to sync existing instance to KvStore: {err}");
+                }
                 return Some(existing);
             }
             info!("ip {} is invalid, removing", existing.ip);
@@ -682,7 +709,7 @@ impl ProxyState {
             reg_time: encode_ts(info.reg_time),
         };
         if let Err(err) = self.kv_store.sync_instance(&info.id, &data) {
-            error!("Failed to sync instance to KvStore: {err}");
+            error!("failed to sync instance to KvStore: {err}");
         }
 
         self.state
