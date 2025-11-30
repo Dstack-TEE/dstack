@@ -35,12 +35,11 @@ use tokio_rustls::TlsAcceptor;
 use tracing::{debug, error, info, warn};
 
 use crate::{
-    config::Config,
+    config::{Config, TlsConfig},
+    kv::{AppIdValidator, HttpsClientConfig, InstanceData, KvStore, NodeData, WaveKvSyncService},
     models::{InstanceInfo, WgConf},
     proxy::{create_acceptor, AddressGroup, AddressInfo},
 };
-
-mod sync_client;
 
 mod auth_client;
 
@@ -61,10 +60,14 @@ pub struct ProxyInner {
     pub(crate) certbot: Option<Arc<CertBot>>,
     my_app_id: Option<Vec<u8>>,
     state: Mutex<ProxyState>,
-    notify_state_updated: Notify,
+    pub(crate) notify_state_updated: Notify,
     auth_client: AuthClient,
     pub(crate) acceptor: RwLock<TlsAcceptor>,
     pub(crate) h2_acceptor: RwLock<TlsAcceptor>,
+    /// WaveKV-based store for persistence (and cross-node sync when enabled)
+    kv_store: Arc<KvStore>,
+    /// WaveKV sync service for network synchronization
+    pub(crate) wavekv_sync: Option<Arc<WaveKvSyncService>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -88,12 +91,22 @@ pub(crate) struct ProxyStateMut {
 pub(crate) struct ProxyState {
     pub(crate) config: Arc<Config>,
     pub(crate) state: ProxyStateMut,
+    /// Reference to KvStore for syncing changes
+    kv_store: Arc<KvStore>,
+}
+
+/// Options for creating a Proxy instance
+pub struct ProxyOptions {
+    pub config: Config,
+    pub my_app_id: Option<Vec<u8>>,
+    /// TLS configuration (from Rocket's tls config)
+    pub tls_config: TlsConfig,
 }
 
 impl Proxy {
-    pub async fn new(config: Config, my_app_id: Option<Vec<u8>>) -> Result<Self> {
+    pub async fn new(options: ProxyOptions) -> Result<Self> {
         Ok(Self {
-            _inner: Arc::new(ProxyInner::new(config, my_app_id).await?),
+            _inner: Arc::new(ProxyInner::new(options).await?),
         })
     }
 }
@@ -103,36 +116,108 @@ impl ProxyInner {
         self.state.lock().expect("Failed to lock AppState")
     }
 
-    pub async fn new(config: Config, my_app_id: Option<Vec<u8>>) -> Result<Self> {
+    pub async fn new(options: ProxyOptions) -> Result<Self> {
+        let ProxyOptions {
+            config,
+            my_app_id,
+            tls_config,
+        } = options;
         let config = Arc::new(config);
-        let mut state = fs::metadata(&config.state_path)
-            .is_ok()
-            .then(|| load_state(&config.state_path))
-            .transpose()
-            .unwrap_or_else(|err| {
-                error!("Failed to load state: {err}");
-                None
-            })
-            .unwrap_or_default();
+
+        // Initialize WaveKV store (always used for persistence, sync is optional)
+        let kv_store = Arc::new(
+            KvStore::new(
+                config.sync.node_id,
+                config.sync.peer_node_ids.clone(),
+                &config.sync.wavekv_data_dir,
+            )
+            .context("failed to initialize WaveKV store")?,
+        );
+        info!(
+            "WaveKV store initialized: node_id={}, peers={:?}, sync_enabled={}",
+            config.sync.node_id, config.sync.peer_node_ids, config.sync.enabled
+        );
+
+        // Load state from WaveKV or legacy JSON
+        let instances = kv_store.load_all_instances();
+        let nodes = kv_store.load_all_nodes();
+        let mut state = if !instances.is_empty() || !nodes.is_empty() {
+            info!(
+                "Loaded state from WaveKV: {} instances, {} nodes",
+                instances.len(),
+                nodes.len()
+            );
+            build_state_from_kv_store(instances, nodes, &config)
+        } else {
+            // Fallback to legacy JSON state
+            load_legacy_state(&config)
+        };
+
         state
             .nodes
             .retain(|_, info| info.wg_peer.ip != config.wg.ip.to_string());
-        state.nodes.insert(
-            config.wg.public_key.clone(),
-            GatewayNodeInfo {
-                id: config.id(),
-                url: config.sync.my_url.clone(),
-                wg_peer: WireGuardPeer {
-                    pk: config.wg.public_key.clone(),
-                    ip: config.wg.ip.to_string(),
-                    endpoint: config.wg.endpoint.clone(),
-                },
-                last_seen: SystemTime::now(),
+
+        // Register this node
+        let my_node_info = GatewayNodeInfo {
+            id: config.id(),
+            url: config.sync.my_url.clone(),
+            wg_peer: WireGuardPeer {
+                pk: config.wg.public_key.clone(),
+                ip: config.wg.ip.to_string(),
+                endpoint: config.wg.endpoint.clone(),
             },
-        );
+            last_seen: SystemTime::now(),
+        };
+        state
+            .nodes
+            .insert(config.wg.public_key.clone(), my_node_info.clone());
+
+        // Sync this node to KvStore
+        let node_data = NodeData {
+            id: config.id(),
+            url: config.sync.my_url.clone(),
+            wg_public_key: config.wg.public_key.clone(),
+            wg_endpoint: config.wg.endpoint.clone(),
+            wg_ip: config.wg.ip.to_string(),
+        };
+        if let Err(err) = kv_store.sync_node(config.sync.node_id, &node_data) {
+            error!("Failed to sync this node to KvStore: {err}");
+        }
+        // Register this node's sync URL in DB (for peer discovery)
+        if let Err(err) = kv_store.register_peer_url(config.sync.node_id, &config.sync.my_url) {
+            error!("Failed to register peer URL: {err}");
+        }
+
+        // Create WaveKV sync service (only if sync is enabled)
+        let wavekv_sync = if config.sync.enabled {
+            // Build HttpsClientConfig from Rocket's TlsConfig
+            let https_config = {
+                let tls = tls_config;
+                let cert_validator = my_app_id
+                    .clone()
+                    .map(|app_id| Arc::new(AppIdValidator::new(app_id)) as _);
+                HttpsClientConfig {
+                    cert_path: tls.certs,
+                    key_path: tls.key,
+                    ca_cert_path: tls.mutual.ca_certs,
+                    cert_validator,
+                }
+            };
+            match WaveKvSyncService::new(&kv_store, &config.sync, https_config) {
+                Ok(sync_service) => Some(Arc::new(sync_service)),
+                Err(err) => {
+                    error!("Failed to create WaveKV sync service: {err}");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         let state = Mutex::new(ProxyState {
             config: config.clone(),
             state,
+            kv_store: kv_store.clone(),
         });
         let auth_client = AuthClient::new(config.auth.clone());
         let certbot = match config.certbot.enabled {
@@ -163,14 +248,28 @@ impl ProxyInner {
             acceptor,
             h2_acceptor,
             certbot,
+            kv_store,
+            wavekv_sync,
         })
+    }
+
+    pub(crate) fn kv_store(&self) -> &Arc<KvStore> {
+        &self.kv_store
+    }
+
+    pub(crate) fn my_app_id(&self) -> Option<&[u8]> {
+        self.my_app_id.as_deref()
     }
 }
 
 impl Proxy {
     pub(crate) async fn start_bg_tasks(&self) -> Result<()> {
         start_recycle_thread(self.clone());
-        start_sync_task(self.clone());
+        // Start WaveKV sync
+        if let Some(ref wavekv_sync) = self.wavekv_sync {
+            start_wavekv_sync_task(self.clone(), wavekv_sync.clone()).await;
+        }
+        start_wavekv_watch_task(self.clone());
         start_certbot_task(self.clone()).await?;
         Ok(())
     }
@@ -231,11 +330,115 @@ impl Proxy {
             base_domain: config.proxy.base_domain.clone(),
         })
     }
+
+    /// Register a CVM with the given app_id, instance_id and client_public_key
+    pub fn do_register_cvm(
+        &self,
+        app_id: &str,
+        instance_id: &str,
+        client_public_key: &str,
+    ) -> Result<RegisterCvmResponse> {
+        let mut state = self.lock();
+        if app_id.is_empty() {
+            bail!("[{instance_id}] app id is empty");
+        }
+        if instance_id.is_empty() {
+            bail!("[{instance_id}] instance id is empty");
+        }
+        if client_public_key.is_empty() {
+            bail!("[{instance_id}] client public key is empty");
+        }
+        let client_info = state
+            .new_client_by_id(instance_id, app_id, client_public_key)
+            .context("failed to allocate IP address for client")?;
+        if let Err(err) = state.reconfigure() {
+            error!("failed to reconfigure: {}", err);
+        }
+        let servers = state
+            .state
+            .nodes
+            .values()
+            .map(|n| n.wg_peer.clone())
+            .collect::<Vec<_>>();
+        let response = RegisterCvmResponse {
+            wg: Some(WireGuardConfig {
+                client_ip: client_info.ip.to_string(),
+                servers,
+            }),
+            agent: Some(GuestAgentConfig {
+                external_port: state.config.proxy.external_port as u32,
+                internal_port: state.config.proxy.agent_port as u32,
+                domain: state.config.proxy.base_domain.clone(),
+                app_address_ns_prefix: state.config.proxy.app_address_ns_prefix.clone(),
+            }),
+        };
+        self.notify_state_updated.notify_one();
+        Ok(response)
+    }
 }
 
 fn load_state(state_path: &str) -> Result<ProxyStateMut> {
     let state_str = fs::read_to_string(state_path).context("Failed to read state")?;
     serde_json::from_str(&state_str).context("Failed to load state")
+}
+
+fn load_legacy_state(config: &Config) -> ProxyStateMut {
+    fs::metadata(&config.state_path)
+        .is_ok()
+        .then(|| load_state(&config.state_path))
+        .transpose()
+        .unwrap_or_else(|err| {
+            error!("Failed to load legacy state: {err}");
+            None
+        })
+        .unwrap_or_default()
+}
+
+fn build_state_from_kv_store(
+    instances: BTreeMap<String, InstanceData>,
+    nodes: BTreeMap<wavekv::types::NodeId, NodeData>,
+    _config: &Config,
+) -> ProxyStateMut {
+    let mut state = ProxyStateMut::default();
+
+    // Build instances
+    for (instance_id, data) in instances {
+        let info = InstanceInfo {
+            id: instance_id.clone(),
+            app_id: data.app_id.clone(),
+            ip: data.ip,
+            public_key: data.public_key,
+            reg_time: UNIX_EPOCH
+                .checked_add(Duration::from_secs(data.reg_time))
+                .unwrap_or(UNIX_EPOCH),
+            last_seen: SystemTime::now(),
+            connections: Default::default(),
+        };
+        state.allocated_addresses.insert(data.ip);
+        state
+            .apps
+            .entry(data.app_id)
+            .or_default()
+            .insert(instance_id.clone());
+        state.instances.insert(instance_id, info);
+    }
+
+    // Build nodes
+    for (_node_id, data) in nodes {
+        let node_info = GatewayNodeInfo {
+            id: data.id,
+            url: data.url,
+            wg_peer: WireGuardPeer {
+                pk: data.wg_public_key.clone(),
+                ip: data.wg_ip,
+                endpoint: data.wg_endpoint,
+            },
+            last_seen: SystemTime::now(),
+        };
+        state.nodes.insert(data.wg_public_key, node_info);
+    }
+
+    state
 }
 
 fn start_recycle_thread(proxy: Proxy) {
@@ -267,17 +470,139 @@ async fn start_certbot_task(proxy: Proxy) -> Result<()> {
     Ok(())
 }
 
-fn start_sync_task(proxy: Proxy) {
+async fn start_wavekv_sync_task(proxy: Proxy, wavekv_sync: Arc<WaveKvSyncService>) {
     if !proxy.config.sync.enabled {
-        info!("sync is disabled");
+        info!("WaveKV sync is disabled");
         return;
     }
+
+    // Add peer endpoints from config
+    for &peer_id in &proxy.config.sync.peer_node_ids {
+        // We need to discover peer URLs from stored node data or config
+        // For now, peer URLs will be added dynamically when nodes are discovered
+        info!("WaveKV peer {peer_id} registered (URL will be discovered)");
+    }
+
+    // Bootstrap from peers
+    info!("WaveKV: bootstrapping from peers...");
+    if let Err(err) = wavekv_sync.bootstrap().await {
+        error!("WaveKV bootstrap failed: {err}");
+    }
+
+    // Start periodic sync tasks (runs forever in background)
     tokio::spawn(async move {
-        match sync_client::sync_task(proxy).await {
-            Ok(_) => info!("Sync task exited"),
-            Err(err) => error!("Failed to run sync task: {err}"),
+        wavekv_sync.start_sync_tasks().await;
+    });
+    info!("WaveKV sync tasks started");
+}
+
+fn start_wavekv_watch_task(proxy: Proxy) {
+    let kv_store = proxy.kv_store.clone();
+
+    // Watch for instance changes
+    let proxy_clone = proxy.clone();
+    let store_clone = kv_store.clone();
+    tokio::spawn(async move {
+        let mut rx = store_clone.watch_instances();
+        loop {
+            if rx.changed().await.is_err() {
+                break;
+            }
+            info!("WaveKV: detected remote instance changes, reloading...");
+            if let Err(err) = reload_instances_from_kv_store(&proxy_clone, &store_clone) {
+                error!("Failed to reload instances from KvStore: {err}");
+            }
         }
     });
+
+    // Watch for node changes
+    tokio::spawn(async move {
+        let mut rx = kv_store.watch_nodes();
+        loop {
+            if rx.changed().await.is_err() {
+                break;
+            }
+            info!("WaveKV: detected remote node changes, reloading...");
+            if let Err(err) = reload_nodes_from_kv_store(&proxy, &kv_store) {
+                error!("Failed to reload nodes from KvStore: {err}");
+            }
+        }
+    });
+}
+
+fn reload_instances_from_kv_store(proxy: &Proxy, store: &KvStore) -> Result<()> {
+    let instances = store.load_all_instances();
+    let mut state = proxy.lock();
+    let mut wg_changed = false;
+
+    for (instance_id, data) in instances {
+        let new_info = InstanceInfo {
+            id: instance_id.clone(),
+            app_id: data.app_id.clone(),
+            ip: data.ip,
+            public_key: data.public_key.clone(),
+            reg_time: UNIX_EPOCH
+                .checked_add(Duration::from_secs(data.reg_time))
+                .unwrap_or(UNIX_EPOCH),
+            last_seen: SystemTime::now(),
+            connections: Default::default(),
+        };
+
+        if let Some(existing) = state.state.instances.get(&instance_id) {
+            // Check if wg config needs update
+            if existing.public_key != data.public_key || existing.ip != data.ip {
+                wg_changed = true;
+            }
+            // Only update if remote is newer (based on reg_time)
+            if data.reg_time <= encode_ts(existing.reg_time) {
+                continue;
+            }
+        } else {
+            wg_changed = true;
+        }
+
+        state.state.allocated_addresses.insert(data.ip);
+        state
+            .state
+            .apps
+            .entry(data.app_id)
+            .or_default()
+            .insert(instance_id.clone());
+        state.state.instances.insert(instance_id, new_info);
+    }
+
+    if wg_changed {
+        state.reconfigure()?;
+    }
+    Ok(())
+}
+
+fn reload_nodes_from_kv_store(proxy: &Proxy, store: &KvStore) -> Result<()> {
+    let nodes = store.load_all_nodes();
+    let mut state = proxy.lock();
+
+    for (_node_id, data) in nodes {
+        // Skip self
+        if data.wg_public_key == state.config.wg.public_key {
+            continue;
+        }
+
+        let new_info = GatewayNodeInfo {
+            id: data.id,
+            url: data.url,
+            wg_peer: WireGuardPeer {
+                pk: data.wg_public_key.clone(),
+                ip: data.wg_ip,
+                endpoint: data.wg_endpoint,
+            },
+            last_seen: SystemTime::now(),
+        };
+
+        // Update or insert node
+        state.state.nodes.insert(data.wg_public_key, new_info);
+    }
+
+    Ok(())
 }
 
 impl ProxyState {
@@ -349,6 +674,17 @@ impl ProxyState {
     }
 
     fn add_instance(&mut self, info: InstanceInfo) {
+        // Sync to KvStore
+        let data = InstanceData {
+            app_id: info.app_id.clone(),
+            ip: info.ip,
+            public_key: info.public_key.clone(),
+            reg_time: encode_ts(info.reg_time),
+        };
+        if let Err(err) = self.kv_store.sync_instance(&info.id, &data) {
+            error!("Failed to sync instance to KvStore: {err}");
+        }
+
         self.state
             .apps
             .entry(info.app_id.clone())
@@ -530,6 +866,12 @@ impl ProxyState {
             .instances
             .remove(id)
             .context("instance not found")?;
+
+        // Sync deletion to KvStore
+        if let Err(err) = self.kv_store.sync_delete_instance(id) {
+            error!("Failed to sync instance deletion to KvStore: {err}");
+        }
+
         self.state.allocated_addresses.remove(&info.ip);
         if let Some(app_instances) = self.state.apps.get_mut(&info.app_id) {
             app_instances.remove(id);
@@ -541,6 +883,11 @@ impl ProxyState {
     }
 
     fn recycle(&mut self) -> Result<()> {
+        // Refresh state from WireGuard (updates instance last_seen and syncs to KvStore)
+        if let Err(err) = self.refresh_state() {
+            warn!("Failed to refresh state: {err}");
+        }
+
         // Recycle stale Gateway nodes
         let mut staled_nodes = vec![];
         for node in self.state.nodes.values() {
@@ -670,11 +1017,28 @@ impl ProxyState {
                 continue;
             };
             instance.last_seen = decode_ts(ts);
+
+            // Sync last_seen to KvStore
+            if let Err(err) = self.kv_store.sync_instance_last_seen(&instance.id, ts) {
+                debug!("Failed to sync instance last_seen: {err}");
+            }
         }
         if let Some(node) = self.state.nodes.get_mut(&self.config.wg.public_key) {
             node.last_seen = SystemTime::now();
         }
         Ok(())
+    }
+
+    /// Sync connection count for an instance to KvStore
+    pub(crate) fn sync_connections(&self, instance_id: &str, count: u64) {
+        if let Err(err) = self.kv_store.sync_connections(instance_id, count) {
+            debug!("Failed to sync connections: {err}");
+        }
+    }
+
+    /// Get total connections for an instance from KvStore (across all nodes)
+    pub(crate) fn get_total_connections(&self, instance_id: &str) -> u64 {
+        self.kv_store.get_total_connections(instance_id)
     }
 }
 
@@ -724,37 +1088,8 @@ impl GatewayRpc for RpcHandler {
             .context("App authorization failed")?;
         let app_id = hex::encode(&app_info.app_id);
         let instance_id = hex::encode(&app_info.instance_id);
-
-        let mut state = self.state.lock();
-        if request.client_public_key.is_empty() {
-            bail!("[{instance_id}] client public key is empty");
-        }
-        let client_info = state
-            .new_client_by_id(&instance_id, &app_id, &request.client_public_key)
-            .context("failed to allocate IP address for client")?;
-        if let Err(err) = state.reconfigure() {
-            error!("failed to reconfigure: {}", err);
-        }
-        let servers = state
-            .state
-            .nodes
-            .values()
-            .map(|n| n.wg_peer.clone())
-            .collect::<Vec<_>>();
-        let response = RegisterCvmResponse {
-            wg: Some(WireGuardConfig {
-                client_ip: client_info.ip.to_string(),
-                servers,
-            }),
-            agent: Some(GuestAgentConfig {
-                external_port: state.config.proxy.external_port as u32,
-                internal_port: state.config.proxy.agent_port as u32,
-                domain: state.config.proxy.base_domain.clone(),
-                app_address_ns_prefix: state.config.proxy.app_address_ns_prefix.clone(),
-            }),
-        };
-        self.state.notify_state_updated.notify_one();
-        Ok(response)
+        self.state
+            .do_register_cvm(&app_id, &instance_id, &request.client_public_key)
     }
 
     async fn acme_info(self) -> Result<AcmeInfoResponse> {

@@ -15,10 +15,12 @@ use rocket::{
 use tracing::info;
 
 use admin_service::AdminRpcHandler;
-use main_service::{Proxy, RpcHandler};
+use main_service::{Proxy, ProxyOptions, RpcHandler};
 
 mod admin_service;
 mod config;
+mod debug_service;
+mod kv;
 mod main_service;
 mod models;
 mod proxy;
@@ -163,7 +165,13 @@ async fn main() -> Result<()> {
     let proxy_config = config.proxy.clone();
     let pccs_url = config.pccs_url.clone();
     let admin_enabled = config.admin.enabled;
-    let state = main_service::Proxy::new(config, my_app_id).await?;
+    let debug_config = config.debug.clone();
+    let state = Proxy::new(ProxyOptions {
+        config,
+        my_app_id,
+        tls_config,
+    })
+    .await?;
     info!("Starting background tasks");
     state.start_bg_tasks().await?;
     state.lock().reconfigure()?;
@@ -178,11 +186,22 @@ async fn main() -> Result<()> {
                     .context("admin section not found")?,
             ));
 
+    let debug_figment =
+        Figment::new()
+            .merge(rocket::Config::default())
+            .merge(Serialized::defaults(
+                figment
+                    .find_value("core.debug")
+                    .context("debug section not found")?,
+            ));
+
     let mut rocket = rocket::custom(figment)
         .mount(
             "/prpc",
             ra_rpc::prpc_routes!(Proxy, RpcHandler, trim: "Tproxy."),
         )
+        // Mount WaveKV sync endpoints
+        .mount("/", web_routes::wavekv_routes())
         .attach(AdHoc::on_response("Add app version header", |_req, res| {
             Box::pin(async move {
                 res.set_raw_header("X-App-Version", app_version());
@@ -192,12 +211,29 @@ async fn main() -> Result<()> {
     let verifier = QuoteVerifier::new(pccs_url);
     rocket = rocket.manage(verifier);
     let main_srv = rocket.launch();
+    let admin_state = state.clone();
+    let debug_state = state;
     let admin_srv = async move {
         if admin_enabled {
             rocket::custom(admin_figment)
                 .mount("/", web_routes::routes())
+                .mount("/", web_routes::wavekv_routes())
                 .mount("/", ra_rpc::prpc_routes!(Proxy, AdminRpcHandler))
-                .manage(state)
+                .manage(admin_state)
+                .launch()
+                .await
+        } else {
+            std::future::pending().await
+        }
+    };
+    let debug_srv = async move {
+        if debug_config.enabled {
+            rocket::custom(debug_figment)
+                .mount(
+                    "/prpc",
+                    ra_rpc::prpc_routes!(Proxy, debug_service::DebugRpcHandler),
+                )
+                .manage(debug_state)
                 .launch()
                 .await
         } else {
@@ -210,6 +246,9 @@ async fn main() -> Result<()> {
         }
         result = admin_srv => {
             result.map_err(|err| anyhow!("Failed to start admin server: {err:?}"))?;
+        }
+        result = debug_srv => {
+            result.map_err(|err| anyhow!("Failed to start debug server: {err:?}"))?;
         }
     }
     Ok(())

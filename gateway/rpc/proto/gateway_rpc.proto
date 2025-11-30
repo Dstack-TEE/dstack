@@ -14,6 +14,16 @@ message RegisterCvmRequest {
   string client_public_key = 1;
 }
 
+// DebugRegisterCvmRequest is the request for DebugRegisterCvm (only works when debug_mode is enabled).
+message DebugRegisterCvmRequest {
+  // The public key of the WireGuard interface of the CVM.
+  string client_public_key = 1;
+  // The app id (hex encoded).
+  string app_id = 2;
+  // The instance id (hex encoded).
+  string instance_id = 3;
+}
+
 // RegisterCvmResponse is the response for RegisterCvm.
 message RegisterCvmResponse {
   // WireGuard configuration
@@ -165,6 +175,55 @@ service Gateway {
   rpc UpdateState(GatewayState) returns (google.protobuf.Empty) {}
   // Get the gateway info
   rpc Info(google.protobuf.Empty) returns (InfoResponse) {}
+}
+
+// Debug service - runs on a separate port when debug.enabled=true
+service Debug {
+  // Register a new proxied CVM without attestation (for testing only).
+  rpc RegisterCvm(DebugRegisterCvmRequest) returns (RegisterCvmResponse) {}
+  // Get the gateway info (for testing service availability).
+  rpc Info(google.protobuf.Empty) returns (InfoResponse) {}
+  // Get WaveKV sync data for testing (peer addresses, node info, instances).
+  rpc GetSyncData(google.protobuf.Empty) returns (DebugSyncDataResponse) {}
+}
+
+// Peer address entry
+message PeerAddrEntry {
+  uint64 node_id = 1;
+  string url = 2;
+}
+
+// Node info entry from the persistent store
+message NodeInfoEntry {
+  uint64 node_id = 1;
+  string url = 2;
+  string wg_public_key = 3;
+  string wg_endpoint = 4;
+  string wg_ip = 5;
+}
+
+// Instance info entry
+message InstanceEntry {
+  string instance_id = 1;
+  string app_id = 2;
+  string ip = 3;
+  string public_key = 4;
+}
+
+// Debug sync data response - returns all synced data for verification
+message DebugSyncDataResponse {
+  // This node's ID
+  uint64 my_node_id = 1;
+  // Peer addresses (from __peer_addr/* keys)
+  repeated PeerAddrEntry peer_addrs = 2;
+  // Node info (from node/* keys)
+  repeated NodeInfoEntry nodes = 3;
+  // Instances (from inst/* keys)
+  repeated InstanceEntry instances = 4;
+  // Total keys in persistent store
+  uint64 persistent_keys = 5;
+  // Total keys in ephemeral store
+  uint64 ephemeral_keys = 6;
 }
 
 message RenewCertResponse {

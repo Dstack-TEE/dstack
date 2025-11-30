@@ -7,6 +7,7 @@ use anyhow::Result;
 use rocket::{get, response::content::RawHtml, routes, Route, State};
 
 mod route_index;
+mod wavekv_sync;
 
 #[get("/")]
 async fn index(state: &State<Proxy>) -> Result<RawHtml<String>, String> {
@@ -15,4 +16,12 @@ async fn index(state: &State<Proxy>) -> Result<RawHtml<String>, String> {
 
 pub fn routes() -> Vec<Route> {
     routes![index]
+}
+
+pub fn wavekv_routes() -> Vec<Route> {
+    routes![
+        wavekv_sync::sync_persistent,
+        wavekv_sync::sync_ephemeral,
+        wavekv_sync::status
+    ]
 }

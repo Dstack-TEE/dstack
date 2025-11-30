@@ -27,6 +27,11 @@ timeout = "5s"
 enabled = false
 port = 8011
 
+[core.debug]
+enabled = false
+port = 8012
+address = "127.0.0.1"
+
 [core.certbot]
 enabled = false
 workdir = "/etc/certbot"
@@ -103,3 +108,9 @@ timeout = "2s"
 my_url = "https://localhost:8011"
 # The url of the bootnode used to join the network
 bootnode = "https://localhost:8011"
+# WaveKV node ID for this gateway (must be unique across cluster)
+node_id = 1
+# Peer node IDs for WaveKV sync (list all other gateway node IDs)
+peer_node_ids = []
+# Data directory for WaveKV persistence (WAL and snapshots)
+wavekv_data_dir = "/var/lib/dstack-gateway/wavekv"

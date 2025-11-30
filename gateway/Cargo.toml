@@ -10,7 +10,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-rocket = { workspace = true, features = ["mtls"] }
+rocket = { workspace = true, features = ["mtls", "json"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true
 anyhow.workspace = true
@@ -48,11 +48,17 @@ dstack-types.workspace = true
 serde-duration.workspace = true
 reqwest = { workspace = true, features = ["json"] }
 hyper = { workspace = true, features = ["server", "http1"] }
-hyper-util = { version = "0.1", features = ["tokio"] }
+hyper-util = { workspace = true, features = ["tokio"] }
+hyper-rustls.workspace = true
+http-body-util.workspace = true
+x509-parser.workspace = true
 jemallocator.workspace = true
+wavekv.workspace = true
+bincode.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 nix = { workspace = true, features = ["resource"] }
 
 [dev-dependencies]
 insta.workspace = true
+tempfile.workspace = true

@@ -83,6 +83,7 @@ sodiumbox = { path = "sodiumbox" }
 serde-duration = { path = "serde-duration" }
 dstack-mr = { path = "dstack-mr" }
 size-parser = { path = "size-parser" }
+wavekv = { path = "../wavekv" }
 
 # Core dependencies
 anyhow = { version = "1.0.97", default-features = false }
@@ -105,6 +106,7 @@ sd-notify = "0.4.5"
 jemallocator = "0.5.4"
 
 # Serialization/Parsing
+bincode = { version = "2.0.1", features = ["serde"] }
 borsh = { version = "1.5.7", default-features = false, features = ["derive"] }
 bon = { version = "3.4.0", default-features = false }
 base64 = "0.22.1"
@@ -136,6 +138,11 @@ hyper-util = { version = "0.1.10", features = [
     "client",
     "client-legacy",
     "http1",
+] }
+hyper-rustls = { version = "0.27", default-features = false, features = [
+    "ring",
+    "http1",
+    "tls12",
 ] }
 hyperlocal = "0.9.1"
 ipnet = { version = "2.11.0", features = ["serde"] }

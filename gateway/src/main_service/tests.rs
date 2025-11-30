@@ -3,17 +3,47 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
-use crate::config::{load_config_figment, Config};
+use crate::config::{load_config_figment, Config, MutualConfig};
+use tempfile::TempDir;
 
-async fn create_test_state() -> Proxy {
+struct TestState {
+    proxy: Proxy,
+    _temp_dir: TempDir,
+}
+
+impl std::ops::Deref for TestState {
+    type Target = Proxy;
+    fn deref(&self) -> &Self::Target {
+        &self.proxy
+    }
+}
+
+async fn create_test_state() -> TestState {
     let figment = load_config_figment(None);
     let mut config = figment.focus("core").extract::<Config>().unwrap();
     let cargo_dir = env!("CARGO_MANIFEST_DIR");
     config.proxy.cert_chain = format!("{cargo_dir}/assets/cert.pem");
     config.proxy.cert_key = format!("{cargo_dir}/assets/cert.key");
-    Proxy::new(config, None)
+    let temp_dir = TempDir::new().expect("failed to create temp dir");
+    config.sync.wavekv_data_dir = temp_dir.path().to_string_lossy().to_string();
+    let options = ProxyOptions {
+        config,
+        my_app_id: None,
+        tls_config: TlsConfig {
+            certs: "".to_string(),
+            key: "".to_string(),
+            mutual: MutualConfig {
+                ca_certs: "".to_string(),
+            },
+        },
+    };
+    let proxy = Proxy::new(options)
         .await
-        .expect("failed to create app state")
+        .expect("failed to create app state");
+    TestState {
+        proxy,
+        _temp_dir: temp_dir,
+    }
 }
 
 #[tokio::test]

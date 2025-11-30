@@ -130,6 +130,23 @@ pub struct SyncConfig {
     pub timeout: Duration,
     pub my_url: String,
     pub bootnode: String,
+    /// WaveKV node ID for this gateway (must be unique across cluster)
+    #[serde(default = "default_node_id")]
+    pub node_id: u32,
+    /// Peer node IDs for WaveKV sync
+    #[serde(default)]
+    pub peer_node_ids: Vec<u32>,
+    /// Data directory for WaveKV persistence
+    #[serde(default = "default_wavekv_data_dir")]
+    pub wavekv_data_dir: String,
+}
+
+fn default_node_id() -> u32 {
+    1
+}
+
+fn default_wavekv_data_dir() -> String {
+    "/var/lib/dstack-gateway/wavekv".to_string()
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -144,9 +161,18 @@ pub struct Config {
     pub rpc_domain: String,
     pub kms_url: String,
     pub admin: AdminConfig,
+    /// Debug server configuration (separate port for debug RPCs)
+    pub debug: DebugConfig,
     pub run_in_dstack: bool,
     pub sync: SyncConfig,
     pub auth: AuthConfig,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct DebugConfig {
+    /// Enable debug server
+    #[serde(default)]
+    pub enabled: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
