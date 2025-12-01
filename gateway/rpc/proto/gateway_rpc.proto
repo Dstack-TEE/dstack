@@ -183,8 +183,10 @@ service Debug {
   rpc RegisterCvm(DebugRegisterCvmRequest) returns (RegisterCvmResponse) {}
   // Get the gateway info (for testing service availability).
   rpc Info(google.protobuf.Empty) returns (InfoResponse) {}
-  // Get WaveKV sync data for testing (peer addresses, node info, instances).
+  // Get WaveKV sync data for testing (peer addresses, node info, instances from KvStore).
   rpc GetSyncData(google.protobuf.Empty) returns (DebugSyncDataResponse) {}
+  // Get Proxy State data for testing (instances from in-memory ProxyState).
+  rpc GetProxyState(google.protobuf.Empty) returns (DebugProxyStateResponse) {}
 }
 
 // Peer address entry
@@ -210,7 +212,7 @@ message InstanceEntry {
   string public_key = 4;
 }
 
-// Debug sync data response - returns all synced data for verification
+// Debug sync data response - returns all synced data from KvStore for verification
 message DebugSyncDataResponse {
   // This node's ID
   uint64 my_node_id = 1;
@@ -224,6 +226,23 @@ message DebugSyncDataResponse {
   uint64 persistent_keys = 5;
   // Total keys in ephemeral store
   uint64 ephemeral_keys = 6;
+}
+
+// Proxy state instance entry (from in-memory ProxyState)
+message ProxyStateInstance {
+  string instance_id = 1;
+  string app_id = 2;
+  string ip = 3;
+  string public_key = 4;
+  uint64 reg_time = 5;
+}
+
+// Debug proxy state response - returns in-memory ProxyState data for verification
+message DebugProxyStateResponse {
+  // All instances from ProxyState.instances
+  repeated ProxyStateInstance instances = 1;
+  // All allocated IP addresses
+  repeated string allocated_addresses = 2;
 }
 
 message RenewCertResponse {

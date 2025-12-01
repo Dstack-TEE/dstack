@@ -286,7 +286,7 @@ impl Proxy {
         if let Some(ref wavekv_sync) = self.wavekv_sync {
             start_wavekv_sync_task(self.clone(), wavekv_sync.clone()).await;
         }
-        start_wavekv_watch_task(self.clone());
+        start_wavekv_watch_task(self.clone()).context("Failed to start WaveKV watch task")?;
         start_certbot_task(self.clone()).await?;
         Ok(())
     }
@@ -513,14 +513,17 @@ async fn start_wavekv_sync_task(proxy: Proxy, wavekv_sync: Arc<WaveKvSyncService
     info!("WaveKV sync tasks started");
 }
 
-fn start_wavekv_watch_task(proxy: Proxy) {
+fn start_wavekv_watch_task(proxy: Proxy) -> Result<()> {
     let kv_store = proxy.kv_store.clone();
 
     // Watch for instance changes
     let proxy_clone = proxy.clone();
     let store_clone = kv_store.clone();
+    // Register watcher first, then do initial load to avoid race condition
+    let mut rx = store_clone.watch_instances();
+    reload_instances_from_kv_store(&proxy_clone, &store_clone)
+        .context("Failed to initial load instances from KvStore")?;
     tokio::spawn(async move {
-        let mut rx = store_clone.watch_instances();
         loop {
             if rx.changed().await.is_err() {
                 break;
@@ -532,9 +535,11 @@ fn start_wavekv_watch_task(proxy: Proxy) {
         }
     });
 
+    let mut rx = kv_store.watch_nodes();
+    reload_nodes_from_kv_store(&proxy, &kv_store)
+        .context("Failed to initial load nodes from KvStore")?;
     // Watch for node changes
     tokio::spawn(async move {
-        let mut rx = kv_store.watch_nodes();
         loop {
             if rx.changed().await.is_err() {
                 break;
@@ -545,6 +550,7 @@ fn start_wavekv_watch_task(proxy: Proxy) {
             }
         }
     });
+    Ok(())
 }
 
 fn reload_instances_from_kv_store(proxy: &Proxy, store: &KvStore) -> Result<()> {

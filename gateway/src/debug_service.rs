@@ -7,8 +7,8 @@
 use anyhow::Result;
 use dstack_gateway_rpc::{
     debug_server::{DebugRpc, DebugServer},
-    DebugRegisterCvmRequest, DebugSyncDataResponse, InfoResponse, InstanceEntry, NodeInfoEntry,
-    PeerAddrEntry, RegisterCvmResponse,
+    DebugProxyStateResponse, DebugRegisterCvmRequest, DebugSyncDataResponse, InfoResponse,
+    InstanceEntry, NodeInfoEntry, PeerAddrEntry, ProxyStateInstance, RegisterCvmResponse,
 };
 use ra_rpc::{CallContext, RpcCall};
 use tracing::warn;
@@ -97,6 +97,44 @@ impl DebugRpc for DebugRpcHandler {
             instances,
             persistent_keys,
             ephemeral_keys,
+        })
+    }
+
+    async fn get_proxy_state(self) -> Result<DebugProxyStateResponse> {
+        let state = self.state.lock();
+
+        // Get all instances from ProxyState
+        let instances: Vec<ProxyStateInstance> = state
+            .state
+            .instances
+            .values()
+            .map(|inst| {
+                let reg_time = inst
+                    .reg_time
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                ProxyStateInstance {
+                    instance_id: inst.id.clone(),
+                    app_id: inst.app_id.clone(),
+                    ip: inst.ip.to_string(),
+                    public_key: inst.public_key.clone(),
+                    reg_time,
+                }
+            })
+            .collect();
+
+        // Get all allocated addresses
+        let allocated_addresses: Vec<String> = state
+            .state
+            .allocated_addresses
+            .iter()
+            .map(|ip| ip.to_string())
+            .collect();
+
+        Ok(DebugProxyStateResponse {
+            instances,
+            allocated_addresses,
         })
     }
 }

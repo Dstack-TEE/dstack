@@ -302,7 +302,7 @@ except:
 " 2>/dev/null
 }
 
-# Get number of instances from sync data
+# Get number of instances from KvStore sync data
 # Usage: get_n_instances <debug_port>
 get_n_instances() {
     local debug_port=$1
@@ -315,6 +315,46 @@ try:
 except:
     print(0)
 " 2>/dev/null
+}
+
+# Get Proxy State from debug port (in-memory state)
+# Usage: debug_get_proxy_state <debug_port>
+# Returns: JSON response with instances and allocated_addresses
+debug_get_proxy_state() {
+    local debug_port=$1
+    curl -s -X POST "http://localhost:${debug_port}/prpc/GetProxyState" \
+        -H "Content-Type: application/json" -d '{}' 2>/dev/null
+}
+
+# Get number of instances from ProxyState (in-memory)
+# Usage: get_n_proxy_state_instances <debug_port>
+get_n_proxy_state_instances() {
+    local debug_port=$1
+    local response=$(debug_get_proxy_state "$debug_port")
+    echo "$response" | python3 -c "
+import sys, json
+try:
+    d = json.load(sys.stdin)
+    print(len(d.get('instances', [])))
+except:
+    print(0)
+" 2>/dev/null
+}
+
+# Check KvStore and ProxyState instance consistency
+# Usage: check_instance_consistency <debug_port>
+# Returns: 0 if consistent, 1 otherwise
+check_instance_consistency() {
+    local debug_port=$1
+    local kvstore_instances=$(get_n_instances "$debug_port")
+    local proxystate_instances=$(get_n_proxy_state_instances "$debug_port")
+
+    if [[ "$kvstore_instances" -eq "$proxystate_instances" ]]; then
+        return 0
+    else
+        log_error "Instance count mismatch: KvStore=$kvstore_instances, ProxyState=$proxystate_instances"
+        return 1
+    fi
 }
 
 # =============================================================================
@@ -362,8 +402,9 @@ test_multi_node_sync() {
     log_info "========== Test 2: Multi-node Sync =========="
     cleanup
 
-    # Clean up old data
+    # Clean up all state files to ensure fresh start
     rm -rf "$RUN_DIR/wavekv_node1" "$RUN_DIR/wavekv_node2" "$RUN_DIR/wavekv_node3"
+    rm -f "$RUN_DIR/gateway-state-node1.json" "$RUN_DIR/gateway-state-node2.json" "$RUN_DIR/gateway-state-node3.json"
 
     generate_config 1
     generate_config 2
@@ -427,7 +468,9 @@ test_node_recovery() {
     log_info "========== Test 3: Node Recovery =========="
     cleanup
 
+    # Clean up all state files to ensure fresh start
     rm -rf "$RUN_DIR/wavekv_node1" "$RUN_DIR/wavekv_node2"
+    rm -f "$RUN_DIR/gateway-state-node1.json" "$RUN_DIR/gateway-state-node2.json"
 
     generate_config 1
     generate_config 2
@@ -520,13 +563,15 @@ print('All status checks passed')
 }
 
 # =============================================================================
-# Test 5: Cross-node data sync verification
+# Test 5: Cross-node data sync verification (KvStore + ProxyState)
 # =============================================================================
 test_cross_node_data_sync() {
     log_info "========== Test 5: Cross-node Data Sync =========="
     cleanup
 
+    # Clean up all state files to ensure fresh start
     rm -rf "$RUN_DIR/wavekv_node1" "$RUN_DIR/wavekv_node2"
+    rm -f "$RUN_DIR/gateway-state-node1.json" "$RUN_DIR/gateway-state-node2.json"
 
     generate_config 1
     generate_config 2
@@ -563,20 +608,49 @@ test_cross_node_data_sync() {
     log_info "Waiting for sync..."
     sleep 10
 
-    # Check instance count on both nodes - this is the key verification
-    local instances1=$(get_n_instances $debug_port1)
-    local instances2=$(get_n_instances $debug_port2)
+    # Check KvStore instance count on both nodes
+    local kv_instances1=$(get_n_instances $debug_port1)
+    local kv_instances2=$(get_n_instances $debug_port2)
 
-    log_info "Node 1 instances: $instances1, Node 2 instances: $instances2"
+    # Check ProxyState instance count on both nodes
+    local ps_instances1=$(get_n_proxy_state_instances $debug_port1)
+    local ps_instances2=$(get_n_proxy_state_instances $debug_port2)
 
-    # The registered instance must appear on node 2 (synced from node 1)
-    if [[ "$instances1" -ge 1 ]] && [[ "$instances2" -ge 1 ]]; then
-        log_info "Cross-node data sync test PASSED (instance synced to node 2)"
+    log_info "Node 1: KvStore=$kv_instances1, ProxyState=$ps_instances1"
+    log_info "Node 2: KvStore=$kv_instances2, ProxyState=$ps_instances2"
+
+    local test_passed=true
+
+    # Verify KvStore sync
+    if [[ "$kv_instances1" -lt 1 ]] || [[ "$kv_instances2" -lt 1 ]]; then
+        log_error "KvStore sync failed: kv_instances1=$kv_instances1, kv_instances2=$kv_instances2"
+        test_passed=false
+    fi
+
+    # Verify ProxyState sync (node 2 should have loaded instance from KvStore)
+    if [[ "$ps_instances1" -lt 1 ]] || [[ "$ps_instances2" -lt 1 ]]; then
+        log_error "ProxyState sync failed: ps_instances1=$ps_instances1, ps_instances2=$ps_instances2"
+        test_passed=false
+    fi
+
+    # Verify consistency on each node
+    if [[ "$kv_instances1" -ne "$ps_instances1" ]]; then
+        log_error "Node 1 inconsistent: KvStore=$kv_instances1, ProxyState=$ps_instances1"
+        test_passed=false
+    fi
+    if [[ "$kv_instances2" -ne "$ps_instances2" ]]; then
+        log_error "Node 2 inconsistent: KvStore=$kv_instances2, ProxyState=$ps_instances2"
+        test_passed=false
+    fi
+
+    if [[ "$test_passed" == "true" ]]; then
+        log_info "Cross-node data sync test PASSED (KvStore and ProxyState consistent)"
         return 0
     else
-        log_error "Cross-node data sync test FAILED: instances1=$instances1, instances2=$instances2 (both should be >= 1)"
-        log_info "Sync data from node 1: $(debug_get_sync_data $debug_port1)"
-        log_info "Sync data from node 2: $(debug_get_sync_data $debug_port2)"
+        log_info "KvStore from node 1: $(debug_get_sync_data $debug_port1)"
+        log_info "KvStore from node 2: $(debug_get_sync_data $debug_port2)"
+        log_info "ProxyState from node 1: $(debug_get_proxy_state $debug_port1)"
+        log_info "ProxyState from node 2: $(debug_get_proxy_state $debug_port2)"
         return 1
     fi
 }
@@ -762,13 +836,15 @@ test_stress_writes() {
 }
 
 # =============================================================================
-# Test 10: Network partition simulation
+# Test 10: Network partition simulation (KvStore + ProxyState consistency)
 # =============================================================================
 test_network_partition() {
     log_info "========== Test 10: Network Partition Recovery =========="
     cleanup
 
+    # Clean up all state files to ensure fresh start
     rm -rf "$RUN_DIR/wavekv_node1" "$RUN_DIR/wavekv_node2"
+    rm -f "$RUN_DIR/gateway-state-node1.json" "$RUN_DIR/gateway-state-node2.json"
 
     generate_config 1
     generate_config 2
@@ -804,8 +880,9 @@ test_network_partition() {
     done
     log_info "Registered $success_count/3 clients during partition"
 
-    local instances1_during=$(get_n_instances $debug_port1)
-    log_info "Node 1 instances during partition: $instances1_during"
+    local kv1_during=$(get_n_instances $debug_port1)
+    local ps1_during=$(get_n_proxy_state_instances $debug_port1)
+    log_info "Node 1 during partition: KvStore=$kv1_during, ProxyState=$ps1_during"
 
     # Restore node 2
     log_info "Healing partition - restarting node 2..."
@@ -814,32 +891,65 @@ test_network_partition() {
     # Wait for sync
     sleep 15
 
-    # Node 2 should have caught up with node 1's instances after recovery
-    local instances1_after=$(get_n_instances $debug_port1)
-    local instances2_after=$(get_n_instances $debug_port2)
+    # Check KvStore and ProxyState on both nodes after recovery
+    local kv1_after=$(get_n_instances $debug_port1)
+    local kv2_after=$(get_n_instances $debug_port2)
+    local ps1_after=$(get_n_proxy_state_instances $debug_port1)
+    local ps2_after=$(get_n_proxy_state_instances $debug_port2)
 
-    log_info "Node 1 instances after recovery: $instances1_after"
-    log_info "Node 2 instances after recovery: $instances2_after"
+    log_info "Node 1 after recovery: KvStore=$kv1_after, ProxyState=$ps1_after"
+    log_info "Node 2 after recovery: KvStore=$kv2_after, ProxyState=$ps2_after"
 
-    # Verify node 2 synced all instances from node 1
-    if [[ "$success_count" -eq 3 ]] && [[ "$instances1_during" -ge 3 ]] && [[ "$instances2_after" -ge "$instances1_during" ]]; then
-        log_info "Network partition recovery test PASSED"
+    local test_passed=true
+
+    # Verify basic sync
+    if [[ "$success_count" -ne 3 ]] || [[ "$kv1_during" -lt 3 ]]; then
+        log_error "Registration or KvStore write failed during partition"
+        test_passed=false
+    fi
+
+    # Verify node 2 synced KvStore
+    if [[ "$kv2_after" -lt "$kv1_during" ]]; then
+        log_error "Node 2 KvStore sync failed: kv2_after=$kv2_after, expected >= $kv1_during"
+        test_passed=false
+    fi
+
+    # Verify node 2 ProxyState sync
+    if [[ "$ps2_after" -lt "$kv1_during" ]]; then
+        log_error "Node 2 ProxyState sync failed: ps2_after=$ps2_after, expected >= $kv1_during"
+        test_passed=false
+    fi
+
+    # Verify consistency on each node
+    if [[ "$kv1_after" -ne "$ps1_after" ]]; then
+        log_error "Node 1 inconsistent: KvStore=$kv1_after, ProxyState=$ps1_after"
+        test_passed=false
+    fi
+    if [[ "$kv2_after" -ne "$ps2_after" ]]; then
+        log_error "Node 2 inconsistent: KvStore=$kv2_after, ProxyState=$ps2_after"
+        test_passed=false
+    fi
+
+    if [[ "$test_passed" == "true" ]]; then
+        log_info "Network partition recovery test PASSED (KvStore and ProxyState consistent)"
         return 0
     else
-        log_error "Network partition recovery test FAILED: success_count=$success_count, instances1_during=$instances1_during, instances2_after=$instances2_after"
-        log_info "Sync data from node 2: $(debug_get_sync_data $debug_port2)"
+        log_info "KvStore from node 2: $(debug_get_sync_data $debug_port2)"
+        log_info "ProxyState from node 2: $(debug_get_proxy_state $debug_port2)"
         return 1
     fi
 }
 
 # =============================================================================
-# Test 11: Three-node cluster
+# Test 11: Three-node cluster (KvStore + ProxyState consistency)
 # =============================================================================
 test_three_node_cluster() {
     log_info "========== Test 11: Three-node Cluster =========="
     cleanup
 
+    # Clean up all state files to ensure fresh start
     rm -rf "$RUN_DIR/wavekv_node1" "$RUN_DIR/wavekv_node2" "$RUN_DIR/wavekv_node3"
+    rm -f "$RUN_DIR/gateway-state-node1.json" "$RUN_DIR/gateway-state-node2.json" "$RUN_DIR/gateway-state-node3.json"
 
     generate_config 1
     generate_config 2
@@ -875,24 +985,50 @@ test_three_node_cluster() {
     # Wait for sync across all nodes
     sleep 15
 
-    # Check instances on all three nodes
-    local instances1=$(get_n_instances $debug_port1)
-    local instances2=$(get_n_instances $debug_port2)
-    local instances3=$(get_n_instances $debug_port3)
+    # Check KvStore instances on all three nodes
+    local kv1=$(get_n_instances $debug_port1)
+    local kv2=$(get_n_instances $debug_port2)
+    local kv3=$(get_n_instances $debug_port3)
 
-    log_info "Node 1 instances: $instances1"
-    log_info "Node 2 instances: $instances2"
-    log_info "Node 3 instances: $instances3"
+    # Check ProxyState instances on all three nodes
+    local ps1=$(get_n_proxy_state_instances $debug_port1)
+    local ps2=$(get_n_proxy_state_instances $debug_port2)
+    local ps3=$(get_n_proxy_state_instances $debug_port3)
 
-    # All nodes should have synced the registered instance
-    if [[ "$instances1" -ge 1 ]] && [[ "$instances2" -ge 1 ]] && [[ "$instances3" -ge 1 ]]; then
-        log_info "Three-node cluster test PASSED"
+    log_info "Node 1: KvStore=$kv1, ProxyState=$ps1"
+    log_info "Node 2: KvStore=$kv2, ProxyState=$ps2"
+    log_info "Node 3: KvStore=$kv3, ProxyState=$ps3"
+
+    local test_passed=true
+
+    # Verify KvStore sync on all nodes
+    if [[ "$kv1" -lt 1 ]] || [[ "$kv2" -lt 1 ]] || [[ "$kv3" -lt 1 ]]; then
+        log_error "KvStore sync failed: kv1=$kv1, kv2=$kv2, kv3=$kv3"
+        test_passed=false
+    fi
+
+    # Verify ProxyState sync on all nodes
+    if [[ "$ps1" -lt 1 ]] || [[ "$ps2" -lt 1 ]] || [[ "$ps3" -lt 1 ]]; then
+        log_error "ProxyState sync failed: ps1=$ps1, ps2=$ps2, ps3=$ps3"
+        test_passed=false
+    fi
+
+    # Verify consistency on each node
+    if [[ "$kv1" -ne "$ps1" ]] || [[ "$kv2" -ne "$ps2" ]] || [[ "$kv3" -ne "$ps3" ]]; then
+        log_error "Inconsistency detected between KvStore and ProxyState"
+        test_passed=false
+    fi
+
+    if [[ "$test_passed" == "true" ]]; then
+        log_info "Three-node cluster test PASSED (KvStore and ProxyState consistent)"
         return 0
     else
-        log_error "Three-node cluster test FAILED: instances1=$instances1, instances2=$instances2, instances3=$instances3 (all should be >= 1)"
-        log_info "Sync data from node 1: $(debug_get_sync_data $debug_port1)"
-        log_info "Sync data from node 2: $(debug_get_sync_data $debug_port2)"
-        log_info "Sync data from node 3: $(debug_get_sync_data $debug_port3)"
+        log_info "KvStore from node 1: $(debug_get_sync_data $debug_port1)"
+        log_info "KvStore from node 2: $(debug_get_sync_data $debug_port2)"
+        log_info "KvStore from node 3: $(debug_get_sync_data $debug_port3)"
+        log_info "ProxyState from node 1: $(debug_get_proxy_state $debug_port1)"
+        log_info "ProxyState from node 2: $(debug_get_proxy_state $debug_port2)"
+        log_info "ProxyState from node 3: $(debug_get_proxy_state $debug_port3)"
         return 1
     fi
 }
