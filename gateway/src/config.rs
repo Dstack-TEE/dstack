@@ -213,7 +213,11 @@ impl Config {
 
         // Save UUID to file
         if let Err(err) = fs::write(&uuid_path, uuid.to_string()) {
-            tracing::warn!("failed to save node UUID to {}: {}", uuid_path.display(), err);
+            tracing::warn!(
+                "failed to save node UUID to {}: {}",
+                uuid_path.display(),
+                err
+            );
         } else {
             tracing::info!("generated new node UUID: {}", uuid);
         }

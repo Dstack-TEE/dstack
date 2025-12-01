@@ -250,13 +250,8 @@ SPDX-License-Identifier: Apache-2.0
             <td>{{ node.id }}</td>
             <td class="truncated-id" title="{{ node.uuid|hex }}">{{ node.uuid|hex }}</td>
             <td class="timestamp">{{ node.last_seen }}</td>
-            {% if let Some(wg_peer) = node.wg_peer %}
-            <td>{{ wg_peer.ip }}</td>
-            <td>{{ wg_peer.endpoint }}</td>
-            {% else %}
-            <td>N/A</td>
-            <td>N/A</td>
-            {% endif %}
+            <td>{{ node.wg_ip }}</td>
+            <td>{{ node.wg_endpoint }}</td>
             <td>{{ node.url }}</td>
         </tr>
         {% endfor %}

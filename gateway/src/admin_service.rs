@@ -43,19 +43,12 @@ impl AdminRpcHandler {
                 }
             })
             .collect::<Vec<_>>();
-        let nodes = state
-            .state
-            .nodes
-            .values()
-            .cloned()
-            .map(Into::into)
-            .collect::<Vec<_>>();
         Ok(StatusResponse {
             id: state.config.sync.node_id,
             url: state.config.sync.my_url.clone(),
             uuid: state.config.uuid(),
             bootnode_url: state.config.sync.bootnode.clone(),
-            nodes,
+            nodes: state.get_all_nodes(),
             hosts,
             num_connections: NUM_CONNECTIONS.load(Ordering::Relaxed),
         })

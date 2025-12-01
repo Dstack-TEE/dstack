@@ -19,8 +19,8 @@ use crate::distributed_certbot::DistributedCertBot;
 use cmd_lib::run_cmd as cmd;
 use dstack_gateway_rpc::{
     gateway_server::{GatewayRpc, GatewayServer},
-    AcmeInfoResponse, GuestAgentConfig, InfoResponse, QuotedPublicKey, RegisterCvmRequest,
-    RegisterCvmResponse, WireGuardConfig, WireGuardPeer,
+    AcmeInfoResponse, GatewayNodeInfo, GuestAgentConfig, InfoResponse, QuotedPublicKey,
+    RegisterCvmRequest, RegisterCvmResponse, WireGuardConfig, WireGuardPeer,
 };
 use dstack_guest_agent_rpc::{dstack_guest_client::DstackGuestClient, RawQuoteArgs};
 use fs_err as fs;
@@ -75,18 +75,8 @@ pub struct ProxyInner {
     pub(crate) wavekv_sync: Option<Arc<WaveKvSyncService>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct GatewayNodeInfo {
-    pub id: u32,
-    pub uuid: Vec<u8>,
-    pub url: String,
-    pub wg_peer: WireGuardPeer,
-    pub last_seen: SystemTime,
-}
-
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub(crate) struct ProxyStateMut {
-    pub(crate) nodes: BTreeMap<String, GatewayNodeInfo>,
     pub(crate) apps: BTreeMap<String, BTreeSet<String>>,
     pub(crate) instances: BTreeMap<String, InstanceInfo>,
     pub(crate) allocated_addresses: BTreeSet<Ipv4Addr>,
@@ -147,37 +137,17 @@ impl ProxyInner {
         // Load state from WaveKV or legacy JSON
         let instances = kv_store.load_all_instances();
         let nodes = kv_store.load_all_nodes();
-        let mut state = if !instances.is_empty() || !nodes.is_empty() {
+        let state = if !instances.is_empty() || !nodes.is_empty() {
             info!(
                 "Loaded state from WaveKV: {} instances, {} nodes",
                 instances.len(),
                 nodes.len()
             );
-            build_state_from_kv_store(instances, nodes, &config)
+            build_state_from_kv_store(instances)
         } else {
             // Fallback to legacy JSON state
             load_legacy_state(&config)
         };
-
-        state
-            .nodes
-            .retain(|_, info| info.wg_peer.ip != config.wg.ip.to_string());
-
-        // Register this node
-        let my_node_info = GatewayNodeInfo {
-            id: config.sync.node_id,
-            uuid: config.uuid(),
-            url: config.sync.my_url.clone(),
-            wg_peer: WireGuardPeer {
-                pk: config.wg.public_key.clone(),
-                ip: config.wg.ip.to_string(),
-                endpoint: config.wg.endpoint.clone(),
-            },
-            last_seen: SystemTime::now(),
-        };
-        state
-            .nodes
-            .insert(config.wg.public_key.clone(), my_node_info.clone());
 
         // Sync this node to KvStore
         let node_data = NodeData {
@@ -420,11 +390,14 @@ impl Proxy {
         if let Err(err) = state.reconfigure() {
             error!("failed to reconfigure: {}", err);
         }
-        let servers = state
-            .state
-            .nodes
-            .values()
-            .map(|n| n.wg_peer.clone())
+        let gateways = state.get_all_nodes();
+        let servers = gateways
+            .iter()
+            .map(|n| WireGuardPeer {
+                pk: n.wg_public_key.clone(),
+                ip: n.wg_ip.clone(),
+                endpoint: n.wg_endpoint.clone(),
+            })
             .collect::<Vec<_>>();
         let response = RegisterCvmResponse {
             wg: Some(WireGuardConfig {
@@ -437,6 +410,7 @@ impl Proxy {
                 domain: state.config.proxy.base_domain.clone(),
                 app_address_ns_prefix: state.config.proxy.app_address_ns_prefix.clone(),
             }),
+            gateways,
         };
         self.notify_state_updated.notify_one();
         Ok(response)
@@ -460,11 +434,7 @@ fn load_legacy_state(config: &Config) -> ProxyStateMut {
         .unwrap_or_default()
 }
 
-fn build_state_from_kv_store(
-    instances: BTreeMap<String, InstanceData>,
-    nodes: BTreeMap<wavekv::types::NodeId, NodeData>,
-    _config: &Config,
-) -> ProxyStateMut {
+fn build_state_from_kv_store(instances: BTreeMap<String, InstanceData>) -> ProxyStateMut {
     let mut state = ProxyStateMut::default();
 
     // Build instances
@@ -487,22 +457,6 @@ fn build_state_from_kv_store(
             .or_default()
             .insert(instance_id.clone());
         state.instances.insert(instance_id, info);
-    }
-
-    // Build nodes
-    for (node_id, data) in nodes {
-        let node_info = GatewayNodeInfo {
-            id: node_id,
-            uuid: data.uuid,
-            url: data.url,
-            wg_peer: WireGuardPeer {
-                pk: data.wg_public_key.clone(),
-                ip: data.wg_ip,
-                endpoint: data.wg_endpoint,
-            },
-            last_seen: SystemTime::now(),
-        };
-        state.nodes.insert(data.wg_public_key, node_info);
     }
 
     state
@@ -600,18 +554,19 @@ fn start_wavekv_watch_task(proxy: Proxy) -> Result<()> {
         }
     });
 
+    // Initial WireGuard configuration
+    proxy.lock().reconfigure()?;
+
+    // Watch for node changes and reconfigure WireGuard
     let mut rx = kv_store.watch_nodes();
-    reload_nodes_from_kv_store(&proxy, &kv_store)
-        .context("Failed to initial load nodes from KvStore")?;
-    // Watch for node changes
     tokio::spawn(async move {
         loop {
             if rx.changed().await.is_err() {
                 break;
             }
-            info!("WaveKV: detected remote node changes, reloading...");
-            if let Err(err) = reload_nodes_from_kv_store(&proxy, &kv_store) {
-                error!("Failed to reload nodes from KvStore: {err}");
+            info!("WaveKV: detected remote node changes, reconfiguring WireGuard...");
+            if let Err(err) = proxy.lock().reconfigure() {
+                error!("Failed to reconfigure WireGuard: {err}");
             }
         }
     });
@@ -662,35 +617,6 @@ fn reload_instances_from_kv_store(proxy: &Proxy, store: &KvStore) -> Result<()> 
     if wg_changed {
         state.reconfigure()?;
     }
-    Ok(())
-}
-
-fn reload_nodes_from_kv_store(proxy: &Proxy, store: &KvStore) -> Result<()> {
-    let nodes = store.load_all_nodes();
-    let mut state = proxy.lock();
-
-    for (node_id, data) in nodes {
-        // Skip self
-        if data.wg_public_key == state.config.wg.public_key {
-            continue;
-        }
-
-        let new_info = GatewayNodeInfo {
-            id: node_id,
-            uuid: data.uuid,
-            url: data.url,
-            wg_peer: WireGuardPeer {
-                pk: data.wg_public_key.clone(),
-                ip: data.wg_ip,
-                endpoint: data.wg_endpoint,
-            },
-            last_seen: SystemTime::now(),
-        };
-
-        // Update or insert node
-        state.state.nodes.insert(data.wg_public_key, new_info);
-    }
-
     Ok(())
 }
 
@@ -988,7 +914,6 @@ impl ProxyState {
         }
 
         // Note: Gateway nodes are not removed from KvStore, only marked offline/retired
-        // Local state.nodes cleanup happens in update_state when syncing from KvStore
 
         // Recycle stale CVM instances based on global last_seen (max across all nodes)
         let stale_timeout = self.config.recycle.timeout;
@@ -1036,77 +961,6 @@ impl ProxyState {
         std::process::exit(0);
     }
 
-    fn dedup_nodes(&mut self) {
-        // Dedup nodes by URL, keeping the latest one
-        let mut node_map = BTreeMap::<String, GatewayNodeInfo>::new();
-
-        for node in std::mem::take(&mut self.state.nodes).into_values() {
-            match node_map.get(&node.wg_peer.endpoint) {
-                Some(existing) if existing.last_seen >= node.last_seen => {}
-                _ => {
-                    node_map.insert(node.wg_peer.endpoint.clone(), node);
-                }
-            }
-        }
-        for node in node_map.into_values() {
-            self.state.nodes.insert(node.wg_peer.pk.clone(), node);
-        }
-    }
-
-    fn update_state(
-        &mut self,
-        proxy_nodes: Vec<GatewayNodeInfo>,
-        apps: Vec<InstanceInfo>,
-    ) -> Result<()> {
-        for node in proxy_nodes {
-            if node.wg_peer.pk == self.config.wg.public_key {
-                continue;
-            }
-            if node.url == self.config.sync.my_url {
-                continue;
-            }
-            if let Some(existing) = self.state.nodes.get(&node.wg_peer.pk) {
-                if node.last_seen <= existing.last_seen {
-                    continue;
-                }
-            }
-            self.state.nodes.insert(node.wg_peer.pk.clone(), node);
-        }
-        self.dedup_nodes();
-
-        let mut wg_changed = false;
-        for app in apps {
-            if let Some(existing) = self.state.instances.get(&app.id) {
-                let existing_ts = (existing.reg_time, existing.last_seen);
-                let update_ts = (app.reg_time, app.last_seen);
-                if update_ts <= existing_ts {
-                    continue;
-                }
-                if !wg_changed {
-                    wg_changed = existing.public_key != app.public_key || existing.ip != app.ip;
-                }
-            } else {
-                wg_changed = true;
-            }
-            self.add_instance(app);
-        }
-        info!("updated, wg_changed: {wg_changed}");
-        if wg_changed {
-            self.reconfigure()?;
-        } else {
-            self.save_state()?;
-        }
-        Ok(())
-    }
-
-    fn dump_state(&mut self) -> (Vec<GatewayNodeInfo>, Vec<InstanceInfo>) {
-        self.refresh_state().ok();
-        (
-            self.state.nodes.values().cloned().collect(),
-            self.state.instances.values().cloned().collect(),
-        )
-    }
-
     pub(crate) fn refresh_state(&mut self) -> Result<()> {
         // Get local WG handshakes and sync to KvStore
         let handshakes = self.latest_handshakes(None)?;
@@ -1128,8 +982,16 @@ impl ProxyState {
             }
         }
 
-        if let Some(node) = self.state.nodes.get_mut(&self.config.wg.public_key) {
-            node.last_seen = SystemTime::now();
+        // Update this node's last_seen in KvStore
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        if let Err(err) = self
+            .kv_store
+            .sync_node_last_seen(self.config.sync.node_id, now)
+        {
+            debug!("failed to sync node last_seen: {err}");
         }
         Ok(())
     }
@@ -1149,6 +1011,28 @@ impl ProxyState {
     /// Get latest handshake for an instance from KvStore (max across all nodes)
     pub(crate) fn get_instance_latest_handshake(&self, instance_id: &str) -> Option<u64> {
         self.kv_store.get_instance_latest_handshake(instance_id)
+    }
+
+    /// Get latest last_seen for a node from KvStore (max across all observers)
+    pub(crate) fn get_node_latest_last_seen(&self, node_id: u32) -> Option<u64> {
+        self.kv_store.get_node_latest_last_seen(node_id)
+    }
+
+    /// Get all nodes from KvStore (for admin API)
+    pub(crate) fn get_all_nodes(&self) -> Vec<GatewayNodeInfo> {
+        self.kv_store
+            .load_all_nodes()
+            .into_iter()
+            .map(|(id, node)| GatewayNodeInfo {
+                id,
+                uuid: node.uuid,
+                wg_public_key: node.wg_public_key,
+                wg_ip: node.wg_ip,
+                wg_endpoint: node.wg_endpoint,
+                url: node.url,
+                last_seen: self.kv_store.get_node_latest_last_seen(id).unwrap_or(0),
+            })
+            .collect()
     }
 }
 
@@ -1245,18 +1129,6 @@ impl RpcCall<Proxy> for RpcHandler {
             attestation: context.attestation,
             state: context.state.clone(),
         })
-    }
-}
-
-impl From<GatewayNodeInfo> for dstack_gateway_rpc::GatewayNodeInfo {
-    fn from(node: GatewayNodeInfo) -> Self {
-        Self {
-            id: node.id,
-            uuid: node.uuid,
-            wg_peer: Some(node.wg_peer),
-            last_seen: encode_ts(node.last_seen),
-            url: node.url,
-        }
     }
 }
 

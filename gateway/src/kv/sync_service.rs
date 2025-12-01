@@ -62,10 +62,7 @@ impl HttpSyncNetwork {
 
     /// Query the UUID for a given node ID from KvStore
     fn get_peer_uuid(&self, peer_id: NodeId) -> Option<Vec<u8>> {
-        let entry = self
-            .persistent_node
-            .read()
-            .get(&keys::node_info(peer_id))?;
+        let entry = self.persistent_node.read().get(&keys::node_info(peer_id))?;
         let bytes = entry.value?;
         let node_data: super::NodeData = super::decode(&bytes)?;
         Some(node_data.uuid)

@@ -30,6 +30,8 @@ message RegisterCvmResponse {
   WireGuardConfig wg = 1;
   // Agent configuration
   GuestAgentConfig agent = 2;
+  // All gateway nodes in the cluster
+  repeated GatewayNodeInfo gateways = 3;
 }
 
 message WireGuardPeer {
@@ -136,14 +138,18 @@ message GetMetaResponse {
 message GatewayNodeInfo {
   // The ID of the node.
   uint32 id = 1;
-  // The RPC URL of the node.
-  string url = 2;
-  // The last seen time of the node.
-  uint64 last_seen = 3;
-  // The wireguard peer info.
-  WireGuardPeer wg_peer = 4;
   // The uuid of the node.
-  bytes uuid = 5;
+  bytes uuid = 2;
+  // The RPC URL of the node.
+  string url = 3;
+  // The last seen time of the node.
+  uint64 last_seen = 4;
+  // The wireguard peer public key.
+  string wg_public_key = 5;
+  // The wireguard peer IP address.
+  string wg_ip = 6;
+  // The wireguard peer endpoint.
+  string wg_endpoint = 7;
 }
 
 message InfoResponse {

@@ -437,6 +437,14 @@ impl KvStore {
             .collect()
     }
 
+    /// Get the latest last_seen timestamp for a node (max across all observers)
+    pub fn get_node_latest_last_seen(&self, node_id: NodeId) -> Option<u64> {
+        self.get_node_last_seen_by_all(node_id)
+            .values()
+            .copied()
+            .max()
+    }
+
     // ==================== Watch for Remote Changes ====================
 
     /// Watch for remote instance changes (for updating local ProxyState)
