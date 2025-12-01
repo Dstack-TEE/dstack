@@ -20,6 +20,7 @@ use main_service::{Proxy, ProxyOptions, RpcHandler};
 mod admin_service;
 mod config;
 mod debug_service;
+mod distributed_certbot;
 mod kv;
 mod main_service;
 mod models;

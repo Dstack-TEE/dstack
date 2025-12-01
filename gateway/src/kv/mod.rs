@@ -50,6 +50,29 @@ pub struct NodeData {
     pub wg_ip: String,
 }
 
+/// Certificate credentials (ACME account)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CertCredentials {
+    pub acme_credentials: String,
+}
+
+/// Certificate data (cert + key)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CertData {
+    pub cert_pem: String,
+    pub key_pem: String,
+    pub not_after: u64,
+    pub issued_by: NodeId,
+    pub issued_at: u64,
+}
+
+/// Certificate renew lock
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CertRenewLock {
+    pub started_at: u64,
+    pub started_by: NodeId,
+}
+
 // Key prefixes and builders
 pub mod keys {
     use super::NodeId;
@@ -60,6 +83,7 @@ pub mod keys {
     pub const LAST_SEEN_INST_PREFIX: &str = "last_seen/inst/";
     pub const LAST_SEEN_NODE_PREFIX: &str = "last_seen/node/";
     pub const PEER_ADDR_PREFIX: &str = "__peer_addr/";
+    pub const CERT_PREFIX: &str = "cert/";
 
     pub fn inst(instance_id: &str) -> String {
         format!("{INST_PREFIX}{instance_id}")
@@ -91,6 +115,19 @@ pub mod keys {
 
     pub fn peer_addr(node_id: NodeId) -> String {
         format!("{PEER_ADDR_PREFIX}{node_id}")
+    }
+
+    // Certificate keys (per domain)
+    pub fn cert_credentials(domain: &str) -> String {
+        format!("{CERT_PREFIX}{domain}/credentials")
+    }
+
+    pub fn cert_data(domain: &str) -> String {
+        format!("{CERT_PREFIX}{domain}/data")
+    }
+
+    pub fn cert_renew_lock(domain: &str) -> String {
+        format!("{CERT_PREFIX}{domain}/renew_lock")
     }
 
     /// Parse instance_id from key
@@ -362,5 +399,86 @@ impl KvStore {
                 Some((node_id, url))
             })
             .collect()
+    }
+
+    // ==================== Certificate Sync ====================
+
+    /// Get certificate credentials for a domain
+    pub fn get_cert_credentials(&self, domain: &str) -> Option<CertCredentials> {
+        self.persistent()
+            .read()
+            .get(&keys::cert_credentials(domain))
+            .and_then(|entry| decode(entry.value.as_ref()?))
+    }
+
+    /// Save certificate credentials for a domain
+    pub fn save_cert_credentials(&self, domain: &str, creds: &CertCredentials) -> Result<()> {
+        self.persistent()
+            .write()
+            .put(keys::cert_credentials(domain), encode(creds))?;
+        Ok(())
+    }
+
+    /// Get certificate data for a domain
+    pub fn get_cert_data(&self, domain: &str) -> Option<CertData> {
+        self.persistent()
+            .read()
+            .get(&keys::cert_data(domain))
+            .and_then(|entry| decode(entry.value.as_ref()?))
+    }
+
+    /// Save certificate data for a domain
+    pub fn save_cert_data(&self, domain: &str, data: &CertData) -> Result<()> {
+        self.persistent()
+            .write()
+            .put(keys::cert_data(domain), encode(data))?;
+        Ok(())
+    }
+
+    /// Get certificate renew lock for a domain
+    pub fn get_cert_renew_lock(&self, domain: &str) -> Option<CertRenewLock> {
+        self.persistent()
+            .read()
+            .get(&keys::cert_renew_lock(domain))
+            .and_then(|entry| decode(entry.value.as_ref()?))
+    }
+
+    /// Try to acquire certificate renew lock
+    /// Returns true if lock acquired, false if already locked by another node
+    pub fn try_acquire_cert_renew_lock(&self, domain: &str, lock_timeout_secs: u64) -> bool {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        if let Some(existing) = self.get_cert_renew_lock(domain) {
+            // Check if lock is still valid (not expired)
+            if now < existing.started_at + lock_timeout_secs {
+                return false;
+            }
+        }
+
+        // Acquire the lock
+        let lock = CertRenewLock {
+            started_at: now,
+            started_by: self.my_node_id,
+        };
+        self.persistent()
+            .write()
+            .put(keys::cert_renew_lock(domain), encode(&lock))
+            .is_ok()
+    }
+
+    /// Release certificate renew lock
+    pub fn release_cert_renew_lock(&self, domain: &str) -> Result<()> {
+        self.persistent()
+            .write()
+            .delete(keys::cert_renew_lock(domain))?;
+        Ok(())
+    }
+
+    /// Watch for certificate data changes
+    pub fn watch_cert(&self, domain: &str) -> watch::Receiver<()> {
+        self.persistent().watch_prefix(&keys::cert_data(domain))
     }
 }

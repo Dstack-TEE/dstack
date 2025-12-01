@@ -13,7 +13,9 @@ use std::{
 
 use anyhow::{bail, Context, Result};
 use auth_client::AuthClient;
-use certbot::{CertBot, WorkDir};
+use certbot::WorkDir;
+
+use crate::distributed_certbot::DistributedCertBot;
 use cmd_lib::run_cmd as cmd;
 use dstack_gateway_rpc::{
     gateway_server::{GatewayRpc, GatewayServer},
@@ -57,7 +59,7 @@ impl Deref for Proxy {
 
 pub struct ProxyInner {
     pub(crate) config: Arc<Config>,
-    pub(crate) certbot: Option<Arc<CertBot>>,
+    pub(crate) certbot: Option<Arc<DistributedCertBot>>,
     my_app_id: Option<Vec<u8>>,
     state: Mutex<ProxyState>,
     pub(crate) notify_state_updated: Notify,
@@ -237,20 +239,27 @@ impl ProxyInner {
             kv_store: kv_store.clone(),
         });
         let auth_client = AuthClient::new(config.auth.clone());
+        // Bootstrap WaveKV first if sync is enabled, so certbot can load certs from peers
+        if let Some(ref wavekv_sync) = wavekv_sync {
+            info!("WaveKV: bootstrapping from peers...");
+            wavekv_sync.bootstrap().await;
+        }
+
+        // Now initialize certbot - it can access synced data from KvStore
         let certbot = match config.certbot.enabled {
             true => {
-                let certbot = config
-                    .certbot
-                    .build_bot()
+                let certbot = DistributedCertBot::new(config.certbot.clone(), kv_store.clone());
+                info!("Initializing DistributedCertBot...");
+                certbot
+                    .init()
                     .await
-                    .context("Failed to build certbot")?;
-                info!("Certbot built, renewing...");
-                // Try first renewal for the acceptor creation
-                certbot.renew(false).await.context("Failed to renew cert")?;
+                    .context("Failed to initialize distributed certbot")?;
                 Some(Arc::new(certbot))
             }
             false => None,
         };
+
+        // Create acceptors (cert files now exist)
         let acceptor = RwLock::new(
             create_acceptor(&config.proxy, false).context("Failed to create acceptor")?,
         );
@@ -282,7 +291,7 @@ impl ProxyInner {
 impl Proxy {
     pub(crate) async fn start_bg_tasks(&self) -> Result<()> {
         start_recycle_thread(self.clone());
-        // Start WaveKV sync
+        // Start WaveKV periodic sync (bootstrap already done in new())
         if let Some(ref wavekv_sync) = self.wavekv_sync {
             start_wavekv_sync_task(self.clone(), wavekv_sync.clone()).await;
         }
@@ -295,12 +304,26 @@ impl Proxy {
         let Some(certbot) = &self.certbot else {
             return Ok(false);
         };
-        let renewed = certbot.renew(force).await.context("Failed to renew cert")?;
-        if renewed {
+        let renewed = certbot
+            .try_renew(force)
+            .await
+            .context("Failed to renew cert")?;
+        Ok(renewed)
+    }
+
+    /// Reload certificate from KvStore (called when watcher triggers)
+    pub(crate) fn reload_cert_from_kvstore(&self) -> Result<bool> {
+        let Some(certbot) = &self.certbot else {
+            return Ok(false);
+        };
+        let reloaded = certbot
+            .reload_from_kvstore()
+            .context("Failed to reload cert from KvStore")?;
+        if reloaded {
             self.reload_certificates()
                 .context("Failed to reload certificates")?;
         }
-        Ok(renewed)
+        Ok(reloaded)
     }
 
     pub(crate) async fn acme_info(&self) -> Result<AcmeInfoResponse> {
@@ -476,6 +499,25 @@ async fn start_certbot_task(proxy: Proxy) -> Result<()> {
         info!("Certbot is not enabled");
         return Ok(());
     };
+
+    // Watch for cert changes from other nodes
+    let domain = certbot.domain().to_string();
+    let kv_store = proxy.kv_store.clone();
+    let proxy_for_watch = proxy.clone();
+    tokio::spawn(async move {
+        let mut rx = kv_store.watch_cert(&domain);
+        loop {
+            if rx.changed().await.is_err() {
+                break;
+            }
+            info!("WaveKV: detected certificate change for {domain}, reloading...");
+            if let Err(err) = proxy_for_watch.reload_cert_from_kvstore() {
+                error!("Failed to reload cert from KvStore: {err}");
+            }
+        }
+    });
+
+    // Periodic renewal task
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(certbot.renew_interval()).await;
@@ -500,11 +542,7 @@ async fn start_wavekv_sync_task(proxy: Proxy, wavekv_sync: Arc<WaveKvSyncService
         info!("WaveKV peer {peer_id} registered (URL will be discovered)");
     }
 
-    // Bootstrap from peers
-    info!("WaveKV: bootstrapping from peers...");
-    if let Err(err) = wavekv_sync.bootstrap().await {
-        error!("WaveKV bootstrap failed: {err}");
-    }
+    // Bootstrap already done in ProxyInner::new() before certbot init
 
     // Start periodic sync tasks (runs forever in background)
     tokio::spawn(async move {
