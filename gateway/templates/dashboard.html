@@ -152,6 +152,23 @@ SPDX-License-Identifier: Apache-2.0
             text-overflow: ellipsis;
             white-space: nowrap;
         }
+
+        .last-seen-cell {
+            white-space: nowrap;
+        }
+
+        .last-seen-row {
+            margin-bottom: 4px;
+        }
+
+        .last-seen-row:last-child {
+            margin-bottom: 0;
+        }
+
+        .observer-label {
+            color: #666;
+            font-size: 0.9em;
+        }
     </style>
     <title>Dashboard</title>
     <script>
@@ -357,8 +374,8 @@ SPDX-License-Identifier: Apache-2.0
                 for (const peer of store.peers) {
                     const lastSeenStr = peer.last_seen.length > 0
                         ? peer.last_seen.map(([observer, ts]) =>
-                            `<span class="timestamp" title="observed by ${observer}">${ts}</span>`
-                        ).join(', ')
+                            `<div class="last-seen-row"><span class="observer-label">by ${observer}:</span> <span class="timestamp">${ts}</span></div>`
+                        ).join('')
                         : 'N/A';
 
                     html += `
@@ -367,7 +384,7 @@ SPDX-License-Identifier: Apache-2.0
                             <td>${peer.local_ack}</td>
                             <td>${peer.peer_ack}</td>
                             <td>${peer.buffered_logs}</td>
-                            <td>${lastSeenStr}</td>
+                            <td class="last-seen-cell">${lastSeenStr}</td>
                         </tr>
                     `;
                 }
