@@ -40,7 +40,15 @@ pub struct InstanceData {
     pub reg_time: u64,
 }
 
-/// Gateway node data (persistent)
+/// Gateway node status (stored separately for independent updates)
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum NodeStatus {
+    #[default]
+    Up,
+    Down,
+}
+
+/// Gateway node data (persistent, rarely changes)
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct NodeData {
     pub id: Vec<u8>,
@@ -79,8 +87,11 @@ pub mod keys {
 
     pub const INST_PREFIX: &str = "inst/";
     pub const NODE_PREFIX: &str = "node/";
+    pub const NODE_INFO_PREFIX: &str = "node/info/";
+    pub const NODE_STATUS_PREFIX: &str = "node/status/";
     pub const CONN_PREFIX: &str = "conn/";
     pub const LAST_SEEN_INST_PREFIX: &str = "last_seen/inst/";
+    pub const HANDSHAKE_PREFIX: &str = "handshake/";
     pub const LAST_SEEN_NODE_PREFIX: &str = "last_seen/node/";
     pub const PEER_ADDR_PREFIX: &str = "__peer_addr/";
     pub const CERT_PREFIX: &str = "cert/";
@@ -89,8 +100,12 @@ pub mod keys {
         format!("{INST_PREFIX}{instance_id}")
     }
 
-    pub fn node(node_id: NodeId) -> String {
-        format!("{NODE_PREFIX}{node_id}")
+    pub fn node_info(node_id: NodeId) -> String {
+        format!("{NODE_INFO_PREFIX}{node_id}")
+    }
+
+    pub fn node_status(node_id: NodeId) -> String {
+        format!("{NODE_STATUS_PREFIX}{node_id}")
     }
 
     pub fn conn(instance_id: &str, node_id: NodeId) -> String {
@@ -103,6 +118,17 @@ pub mod keys {
 
     pub fn last_seen_inst(instance_id: &str) -> String {
         format!("{LAST_SEEN_INST_PREFIX}{instance_id}")
+    }
+
+    /// Key for instance handshake timestamp observed by a specific node
+    /// Format: handshake/{instance_id}/{observer_node_id}
+    pub fn handshake(instance_id: &str, observer_node_id: NodeId) -> String {
+        format!("{HANDSHAKE_PREFIX}{instance_id}/{observer_node_id}")
+    }
+
+    /// Prefix to iterate all handshake observations for an instance
+    pub fn handshake_prefix(instance_id: &str) -> String {
+        format!("{HANDSHAKE_PREFIX}{instance_id}/")
     }
 
     pub fn last_seen_node(node_id: NodeId, seen_by: NodeId) -> String {
@@ -135,9 +161,9 @@ pub mod keys {
         key.strip_prefix(INST_PREFIX)
     }
 
-    /// Parse node_id from key
-    pub fn parse_node_key(key: &str) -> Option<NodeId> {
-        key.strip_prefix(NODE_PREFIX)?.parse().ok()
+    /// Parse node_id from node/info/{node_id} key
+    pub fn parse_node_info_key(key: &str) -> Option<NodeId> {
+        key.strip_prefix(NODE_INFO_PREFIX)?.parse().ok()
     }
 }
 
@@ -215,6 +241,10 @@ impl KvStore {
         self.ephemeral()
             .write()
             .delete(keys::conn(instance_id, self.my_node_id))?;
+        // Delete this node's handshake record
+        self.ephemeral()
+            .write()
+            .delete(keys::handshake(instance_id, self.my_node_id))?;
         Ok(())
     }
 
@@ -237,13 +267,13 @@ impl KvStore {
     pub fn sync_node(&self, node_id: NodeId, data: &NodeData) -> Result<()> {
         self.persistent()
             .write()
-            .put(keys::node(node_id), encode(data))?;
+            .put(keys::node_info(node_id), encode(data))?;
         Ok(())
     }
 
     /// Sync node deletion
     pub fn sync_delete_node(&self, node_id: NodeId) -> Result<()> {
-        self.persistent().write().delete(keys::node(node_id))?;
+        self.persistent().write().delete(keys::node_info(node_id))?;
         Ok(())
     }
 
@@ -251,11 +281,43 @@ impl KvStore {
     pub fn load_all_nodes(&self) -> BTreeMap<NodeId, NodeData> {
         self.persistent()
             .read()
-            .iter_by_prefix(keys::NODE_PREFIX)
+            .iter_by_prefix(keys::NODE_INFO_PREFIX)
             .filter_map(|(key, entry)| {
-                let node_id = keys::parse_node_key(key)?;
+                let node_id = keys::parse_node_info_key(key)?;
                 let data: NodeData = decode(entry.value.as_ref()?)?;
                 Some((node_id, data))
+            })
+            .collect()
+    }
+
+    // ==================== Node Status Sync ====================
+
+    /// Set node status (stored separately from NodeData)
+    pub fn set_node_status(&self, node_id: NodeId, status: NodeStatus) -> Result<()> {
+        self.persistent()
+            .write()
+            .put(keys::node_status(node_id), encode(&status))?;
+        Ok(())
+    }
+
+    /// Get node status
+    pub fn get_node_status(&self, node_id: NodeId) -> NodeStatus {
+        self.persistent()
+            .read()
+            .get(&keys::node_status(node_id))
+            .and_then(|entry| decode(entry.value.as_ref()?))
+            .unwrap_or_default()
+    }
+
+    /// Load all node statuses
+    pub fn load_all_node_statuses(&self) -> BTreeMap<NodeId, NodeStatus> {
+        self.persistent()
+            .read()
+            .iter_by_prefix(keys::NODE_STATUS_PREFIX)
+            .filter_map(|(key, entry)| {
+                let node_id: NodeId = key.strip_prefix(keys::NODE_STATUS_PREFIX)?.parse().ok()?;
+                let status: NodeStatus = decode(entry.value.as_ref()?)?;
+                Some((node_id, status))
             })
             .collect()
     }
@@ -308,6 +370,48 @@ impl KvStore {
                 Some((instance_id.to_string(), ts))
             })
             .collect()
+    }
+
+    // ==================== Handshake Sync ====================
+
+    /// Sync handshake timestamp for an instance (as observed by this node)
+    pub fn sync_instance_handshake(&self, instance_id: &str, timestamp: u64) -> Result<()> {
+        self.ephemeral().write().put(
+            keys::handshake(instance_id, self.my_node_id),
+            encode(&timestamp),
+        )?;
+        Ok(())
+    }
+
+    /// Get all handshake observations for an instance (from all nodes)
+    pub fn get_instance_handshakes(&self, instance_id: &str) -> BTreeMap<NodeId, u64> {
+        self.ephemeral()
+            .read()
+            .iter_by_prefix(&keys::handshake_prefix(instance_id))
+            .filter_map(|(key, entry)| {
+                let suffix = key.strip_prefix(&keys::handshake_prefix(instance_id))?;
+                let observer: NodeId = suffix.parse().ok()?;
+                let ts: u64 = decode(entry.value.as_ref()?)?;
+                Some((observer, ts))
+            })
+            .collect()
+    }
+
+    /// Get the latest handshake timestamp for an instance (max across all nodes)
+    pub fn get_instance_latest_handshake(&self, instance_id: &str) -> Option<u64> {
+        self.get_instance_handshakes(instance_id)
+            .values()
+            .copied()
+            .max()
+    }
+
+    /// Delete handshake records for an instance (when instance is deleted)
+    pub fn delete_instance_handshakes(&self, instance_id: &str) -> Result<()> {
+        // Delete this node's handshake record
+        self.ephemeral()
+            .write()
+            .delete(keys::handshake(instance_id, self.my_node_id))?;
+        Ok(())
     }
 
     /// Sync node last_seen (as observed by this node)

@@ -38,7 +38,10 @@ use tracing::{debug, error, info, warn};
 
 use crate::{
     config::{Config, TlsConfig},
-    kv::{AppIdValidator, HttpsClientConfig, InstanceData, KvStore, NodeData, WaveKvSyncService},
+    kv::{
+        AppIdValidator, HttpsClientConfig, InstanceData, KvStore, NodeData, NodeStatus,
+        WaveKvSyncService,
+    },
     models::{InstanceInfo, WgConf},
     proxy::{create_acceptor, AddressGroup, AddressInfo},
 };
@@ -185,6 +188,10 @@ impl ProxyInner {
         if let Err(err) = kv_store.sync_node(config.sync.node_id, &node_data) {
             error!("Failed to sync this node to KvStore: {err}");
         }
+        // Set this node's status to Online
+        if let Err(err) = kv_store.set_node_status(config.sync.node_id, NodeStatus::Up) {
+            error!("Failed to set node status: {err}");
+        }
         // Register this node's sync URL in DB (for peer discovery)
         if let Err(err) = kv_store.register_peer_url(config.sync.node_id, &config.sync.my_url) {
             error!("Failed to register peer URL: {err}");
@@ -242,7 +249,9 @@ impl ProxyInner {
         // Bootstrap WaveKV first if sync is enabled, so certbot can load certs from peers
         if let Some(ref wavekv_sync) = wavekv_sync {
             info!("WaveKV: bootstrapping from peers...");
-            wavekv_sync.bootstrap().await;
+            if let Err(err) = wavekv_sync.bootstrap().await {
+                warn!("WaveKV bootstrap failed: {err}");
+            }
         }
 
         // Now initialize certbot - it can access synced data from KvStore
@@ -954,53 +963,51 @@ impl ProxyState {
     }
 
     fn recycle(&mut self) -> Result<()> {
-        // Refresh state from WireGuard (updates instance last_seen and syncs to KvStore)
+        // Refresh state: sync local handshakes to KvStore, update local last_seen from global
         if let Err(err) = self.refresh_state() {
-            warn!("Failed to refresh state: {err}");
+            warn!("failed to refresh state: {err}");
         }
 
-        // Recycle stale Gateway nodes
-        let mut staled_nodes = vec![];
-        for node in self.state.nodes.values() {
-            if node.wg_peer.pk == self.config.wg.public_key {
-                continue;
-            }
-            if node.last_seen.elapsed().unwrap_or_default() > self.config.recycle.node_timeout {
-                staled_nodes.push(node.wg_peer.pk.clone());
-            }
-        }
-        for id in staled_nodes {
-            self.state.nodes.remove(&id);
-        }
+        // Note: Gateway nodes are not removed from KvStore, only marked offline/retired
+        // Local state.nodes cleanup happens in update_state when syncing from KvStore
 
-        // Recycle stale CVM instances
+        // Recycle stale CVM instances based on global last_seen (max across all nodes)
         let stale_timeout = self.config.recycle.timeout;
-        let stale_handshakes = self.latest_handshakes(Some(stale_timeout))?;
-        if tracing::enabled!(tracing::Level::DEBUG) {
-            for (pubkey, (ts, elapsed)) in &stale_handshakes {
-                debug!("stale instance: {pubkey} recent={ts} ({elapsed:?} ago)");
-            }
-        }
-        // Find and remove instances with matching public keys
+        let now = SystemTime::now();
+
         let stale_instances: Vec<_> = self
             .state
             .instances
             .iter()
-            .filter(|(_, info)| {
-                stale_handshakes.contains_key(&info.public_key) && {
-                    info.reg_time.elapsed().unwrap_or_default() > stale_timeout
+            .filter(|(id, info)| {
+                // Skip if instance was registered recently
+                if info.reg_time.elapsed().unwrap_or_default() <= stale_timeout {
+                    return false;
+                }
+                // Check global last_seen from KvStore (max across all nodes)
+                let global_ts = self.kv_store.get_instance_latest_handshake(id);
+                let last_seen = global_ts.map(decode_ts).unwrap_or(info.reg_time);
+                let elapsed = now.duration_since(last_seen).unwrap_or_default();
+                if elapsed > stale_timeout {
+                    debug!(
+                        "stale instance: {} last_seen={:?} ({:?} ago)",
+                        id, last_seen, elapsed
+                    );
+                    true
+                } else {
+                    false
                 }
             })
-            .map(|(id, _info)| id.clone())
+            .map(|(id, _)| id.clone())
             .collect();
-        debug!("stale instances: {:#?}", stale_instances);
+
         let num_recycled = stale_instances.len();
         for id in stale_instances {
             self.remove_instance(&id)?;
         }
-        info!("recycled {num_recycled} stale instances");
-        // Reconfigure WireGuard with updated peers
+
         if num_recycled > 0 {
+            info!("recycled {num_recycled} stale instances");
             self.reconfigure()?;
         }
         Ok(())
@@ -1082,18 +1089,26 @@ impl ProxyState {
     }
 
     pub(crate) fn refresh_state(&mut self) -> Result<()> {
+        // Get local WG handshakes and sync to KvStore
         let handshakes = self.latest_handshakes(None)?;
-        for instance in self.state.instances.values_mut() {
-            let Some((ts, _)) = handshakes.get(&instance.public_key).copied() else {
-                continue;
-            };
-            instance.last_seen = decode_ts(ts);
 
-            // Sync last_seen to KvStore
-            if let Err(err) = self.kv_store.sync_instance_last_seen(&instance.id, ts) {
-                debug!("Failed to sync instance last_seen: {err}");
+        // Build a map from public_key to instance_id for lookup
+        let pk_to_id: BTreeMap<&str, &str> = self
+            .state
+            .instances
+            .iter()
+            .map(|(id, info)| (info.public_key.as_str(), id.as_str()))
+            .collect();
+
+        // Sync local handshake observations to KvStore
+        for (pk, (ts, _)) in &handshakes {
+            if let Some(&instance_id) = pk_to_id.get(pk.as_str()) {
+                if let Err(err) = self.kv_store.sync_instance_handshake(instance_id, *ts) {
+                    debug!("failed to sync instance handshake: {err}");
+                }
             }
         }
+
         if let Some(node) = self.state.nodes.get_mut(&self.config.wg.public_key) {
             node.last_seen = SystemTime::now();
         }
@@ -1110,6 +1125,11 @@ impl ProxyState {
     /// Get total connections for an instance from KvStore (across all nodes)
     pub(crate) fn get_total_connections(&self, instance_id: &str) -> u64 {
         self.kv_store.get_total_connections(instance_id)
+    }
+
+    /// Get latest handshake for an instance from KvStore (max across all nodes)
+    pub(crate) fn get_instance_latest_handshake(&self, instance_id: &str) -> Option<u64> {
+        self.kv_store.get_instance_latest_handshake(instance_id)
     }
 }
 

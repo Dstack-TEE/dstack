@@ -12,10 +12,7 @@ use dstack_gateway_rpc::{
 };
 use ra_rpc::{CallContext, RpcCall};
 
-use crate::{
-    main_service::{encode_ts, Proxy},
-    proxy::NUM_CONNECTIONS,
-};
+use crate::{main_service::Proxy, proxy::NUM_CONNECTIONS};
 
 pub struct AdminRpcHandler {
     state: Proxy,
@@ -30,14 +27,20 @@ impl AdminRpcHandler {
             .state
             .instances
             .values()
-            .map(|instance| HostInfo {
-                instance_id: instance.id.clone(),
-                ip: instance.ip.to_string(),
-                app_id: instance.app_id.clone(),
-                base_domain: base_domain.clone(),
-                port: state.config.proxy.listen_port as u32,
-                latest_handshake: encode_ts(instance.last_seen),
-                num_connections: instance.num_connections(),
+            .map(|instance| {
+                // Get global latest_handshake from KvStore (max across all nodes)
+                let latest_handshake = state
+                    .get_instance_latest_handshake(&instance.id)
+                    .unwrap_or(0);
+                HostInfo {
+                    instance_id: instance.id.clone(),
+                    ip: instance.ip.to_string(),
+                    app_id: instance.app_id.clone(),
+                    base_domain: base_domain.clone(),
+                    port: state.config.proxy.listen_port as u32,
+                    latest_handshake,
+                    num_connections: instance.num_connections(),
+                }
             })
             .collect::<Vec<_>>();
         let nodes = state
