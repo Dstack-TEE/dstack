@@ -70,7 +70,7 @@ async fn maybe_gen_certs(config: &Config, tls_config: &TlsConfig) -> Result<()> 
         return Ok(());
     }
 
-    if !config.danger_disable_attestation {
+    if !config.debug.insecure_skip_attestation {
         info!("Using dstack guest agent for certificate generation");
         let agent_client = dstack_agent().context("Failed to create dstack client")?;
         let response = agent_client
@@ -153,7 +153,7 @@ async fn main() -> Result<()> {
         set_max_ulimit()?;
     }
 
-    let my_app_id = if config.danger_disable_attestation {
+    let my_app_id = if config.debug.insecure_skip_attestation {
         None
     } else {
         let dstack_client = dstack_agent().context("Failed to create dstack client")?;
@@ -228,7 +228,7 @@ async fn main() -> Result<()> {
         }
     };
     let debug_srv = async move {
-        if debug_config.enabled {
+        if debug_config.insecure_enable_debug_rpc {
             rocket::custom(debug_figment)
                 .mount(
                     "/prpc",

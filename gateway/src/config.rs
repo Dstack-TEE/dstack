@@ -167,7 +167,6 @@ pub struct Config {
     pub admin: AdminConfig,
     /// Debug server configuration (separate port for debug RPCs)
     pub debug: DebugConfig,
-    pub danger_disable_attestation: bool,
     pub sync: SyncConfig,
     pub auth: AuthConfig,
 }
@@ -176,7 +175,9 @@ pub struct Config {
 pub struct DebugConfig {
     /// Enable debug server
     #[serde(default)]
-    pub enabled: bool,
+    pub insecure_enable_debug_rpc: bool,
+    #[serde(default)]
+    pub insecure_skip_attestation: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]

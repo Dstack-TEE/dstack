@@ -16,7 +16,6 @@ state_path = "./gateway-state.json"
 # auto set soft ulimit to hard ulimit
 set_ulimit = true
 rpc_domain = ""
-danger_disable_attestation = false
 
 [core.auth]
 enabled = false
@@ -28,7 +27,8 @@ enabled = false
 port = 8011
 
 [core.debug]
-enabled = false
+insecure_enable_debug_rpc = false
+insecure_skip_attestation = false
 port = 8012
 address = "127.0.0.1"
 

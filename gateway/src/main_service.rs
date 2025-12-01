@@ -1054,7 +1054,7 @@ pub struct RpcHandler {
 
 impl RpcHandler {
     fn ensure_from_gateway(&self) -> Result<()> {
-        if self.state.config.danger_disable_attestation {
+        if self.state.config.debug.insecure_skip_attestation {
             return Ok(());
         }
         if self.remote_app_id.is_none() {

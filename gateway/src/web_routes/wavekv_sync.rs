@@ -38,7 +38,7 @@ impl CertExt for RocketCert<'_> {
 /// Verify that the request is from a gateway with the same app_id (mTLS verification)
 fn verify_gateway_peer(state: &Proxy, cert: Option<Certificate<'_>>) -> Result<(), Status> {
     // Skip verification if not running in dstack (test mode)
-    if state.config.danger_disable_attestation {
+    if state.config.debug.insecure_skip_attestation {
         return Ok(());
     }
 

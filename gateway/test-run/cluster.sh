@@ -157,11 +157,11 @@ mandatory = false
 [core]
 kms_url = ""
 rpc_domain = "gateway.test.local"
-danger_disable_attestation = true
 state_path = "${RUN_DIR}/gateway-state-node${node_id}.json"
 
 [core.debug]
-enabled = true
+insecure_enable_debug_rpc = true
+insecure_skip_attestation = true
 port = ${debug_port}
 address = "127.0.0.1"
 
