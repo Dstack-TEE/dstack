@@ -188,11 +188,37 @@ pub struct AuthConfig {
 }
 
 impl Config {
+    /// Get or generate a unique node UUID.
+    /// The UUID is stored in `{wavekv_data_dir}/node_uuid` and persisted across restarts.
     pub fn id(&self) -> Vec<u8> {
-        use sha2::{Digest, Sha256};
-        let mut hasher = Sha256::new();
-        hasher.update(self.wg.public_key.as_bytes());
-        hasher.finalize()[..20].to_vec()
+        use std::fs;
+        use std::path::Path;
+
+        let uuid_path = Path::new(&self.sync.wavekv_data_dir).join("node_uuid");
+
+        // Try to read existing UUID
+        if let Ok(content) = fs::read_to_string(&uuid_path) {
+            if let Ok(uuid) = uuid::Uuid::parse_str(content.trim()) {
+                return uuid.as_bytes().to_vec();
+            }
+        }
+
+        // Generate new UUID
+        let uuid = uuid::Uuid::new_v4();
+
+        // Ensure directory exists
+        if let Some(parent) = uuid_path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+
+        // Save UUID to file
+        if let Err(err) = fs::write(&uuid_path, uuid.to_string()) {
+            tracing::warn!("failed to save node UUID to {}: {}", uuid_path.display(), err);
+        } else {
+            tracing::info!("generated new node UUID: {}", uuid);
+        }
+
+        uuid.as_bytes().to_vec()
     }
 }
 

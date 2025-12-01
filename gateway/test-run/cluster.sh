@@ -100,6 +100,15 @@ EXTEOF
             -subj "/CN=localhost" \
             2>/dev/null
     fi
+
+    # Generate unique WireGuard key pair for each node
+    for i in 1 2 3; do
+        if [[ ! -f "$CERTS_DIR/wg-node${i}.key" ]]; then
+            log_info "Generating WireGuard keys for node ${i}..."
+            wg genkey > "$CERTS_DIR/wg-node${i}.key"
+            wg pubkey < "$CERTS_DIR/wg-node${i}.key" > "$CERTS_DIR/wg-node${i}.pub"
+        fi
+    done
 }
 
 # Generate node config
@@ -113,6 +122,10 @@ generate_config() {
     local wg_ip="10.0.3${node_id}.1/24"
     local other_nodes=""
     local peer_urls=""
+
+    # Read WireGuard keys for this node
+    local wg_private_key=$(cat "$CERTS_DIR/wg-node${node_id}.key")
+    local wg_public_key=$(cat "$CERTS_DIR/wg-node${node_id}.pub")
 
     for i in 1 2 3; do
         if [[ $i -ne $node_id ]]; then
@@ -173,8 +186,8 @@ wavekv_data_dir = "${RUN_DIR}/wavekv_node${node_id}"
 enabled = false
 
 [core.wg]
-private_key = "SEcoI37oGWynhukxXo5Mi8/8zZBU6abg6T1TOJRMj1Y="
-public_key = "xc+7qkdeNFfl4g4xirGGGXHMc0cABuE5IHaLeCASVWM="
+private_key = "${wg_private_key}"
+public_key = "${wg_public_key}"
 listen_port = ${wg_port}
 ip = "${wg_ip}"
 reserved_net = ["10.0.3${node_id}.1/31"]
