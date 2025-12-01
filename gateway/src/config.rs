@@ -190,7 +190,7 @@ pub struct AuthConfig {
 impl Config {
     /// Get or generate a unique node UUID.
     /// The UUID is stored in `{wavekv_data_dir}/node_uuid` and persisted across restarts.
-    pub fn id(&self) -> Vec<u8> {
+    pub fn uuid(&self) -> Vec<u8> {
         use std::fs;
         use std::path::Path;
 

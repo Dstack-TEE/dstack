@@ -64,7 +64,7 @@ message GuestAgentConfig {
 // StatusResponse is the response for Status.
 message StatusResponse {
   // Peer id
-  bytes id = 1;
+  uint32 id = 1;
   // My URL.
   string url = 2;
   // The bootnode URL.
@@ -75,6 +75,8 @@ message StatusResponse {
   repeated HostInfo hosts = 5;
   // The list of proxy nodes.
   repeated GatewayNodeInfo nodes = 6;
+  // Peer uuid
+  bytes uuid = 7;
 }
 
 // HostInfo is the information of a host.
@@ -133,29 +135,17 @@ message GetMetaResponse {
 
 message GatewayNodeInfo {
   // The ID of the node.
-  bytes id = 1;
+  uint32 id = 1;
   // The RPC URL of the node.
   string url = 2;
   // The last seen time of the node.
   uint64 last_seen = 3;
   // The wireguard peer info.
   WireGuardPeer wg_peer = 4;
+  // The uuid of the node.
+  bytes uuid = 5;
 }
 
-message AppInstanceInfo {
-  string app_id = 1;
-  string instance_id = 2;
-  string ip = 3;
-  string public_key = 4;
-  uint64 reg_time = 5;
-  uint64 last_seen = 6;
-  uint64 num_connections = 7;
-}
-
-message GatewayState {
-  repeated GatewayNodeInfo nodes = 1;
-  repeated AppInstanceInfo apps = 2;
-}
 message InfoResponse {
   // The base domain of the ZT-HTTPS
   string base_domain = 1;
@@ -171,8 +161,6 @@ service Gateway {
   rpc RegisterCvm(RegisterCvmRequest) returns (RegisterCvmResponse) {}
   // List all ACME account URIs and the public key history of the certificates for the Content Addressable HTTPS.
   rpc AcmeInfo(google.protobuf.Empty) returns (AcmeInfoResponse) {}
-  // Merge state from other Gateway instances.
-  rpc UpdateState(GatewayState) returns (google.protobuf.Empty) {}
   // Get the gateway info
   rpc Info(google.protobuf.Empty) returns (InfoResponse) {}
 }

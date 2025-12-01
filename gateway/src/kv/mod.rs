@@ -51,7 +51,7 @@ pub enum NodeStatus {
 /// Gateway node data (persistent, rarely changes)
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct NodeData {
-    pub id: Vec<u8>,
+    pub uuid: Vec<u8>,
     pub url: String,
     pub wg_public_key: String,
     pub wg_endpoint: String,

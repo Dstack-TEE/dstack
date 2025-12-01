@@ -33,6 +33,8 @@ pub struct HttpSyncNetwork {
     ephemeral_node: Node,
     /// This node's ID (for recording who observed the peer)
     my_node_id: NodeId,
+    /// This node's UUID (for node ID reuse detection)
+    my_uuid: Vec<u8>,
     /// URL path suffix for this store (e.g., "persistent" or "ephemeral")
     store_path: &'static str,
 }
@@ -42,6 +44,7 @@ impl HttpSyncNetwork {
         persistent_node: Node,
         ephemeral_node: Node,
         my_node_id: NodeId,
+        my_uuid: Vec<u8>,
         store_path: &'static str,
         tls_config: &HttpsClientConfig,
     ) -> Result<Self> {
@@ -52,8 +55,20 @@ impl HttpSyncNetwork {
             persistent_node,
             ephemeral_node,
             my_node_id,
+            my_uuid,
             store_path,
         })
+    }
+
+    /// Query the UUID for a given node ID from KvStore
+    fn get_peer_uuid(&self, peer_id: NodeId) -> Option<Vec<u8>> {
+        let entry = self
+            .persistent_node
+            .read()
+            .get(&keys::node_info(peer_id))?;
+        let bytes = entry.value?;
+        let node_data: super::NodeData = super::decode(&bytes)?;
+        Some(node_data.uuid)
     }
 
     /// Get peer URL from persistent node
@@ -78,6 +93,14 @@ impl HttpSyncNetwork {
 }
 
 impl ExchangeInterface for HttpSyncNetwork {
+    fn uuid(&self) -> Vec<u8> {
+        self.my_uuid.clone()
+    }
+
+    fn query_uuid(&self, node_id: NodeId) -> Option<Vec<u8>> {
+        self.get_peer_uuid(node_id)
+    }
+
     async fn sync_to(&self, _node: &Node, peer: NodeId, msg: SyncMessage) -> Result<SyncResponse> {
         let url = self
             .get_peer_url(peer)
@@ -114,10 +137,12 @@ impl WaveKvSyncService {
     ///
     /// # Arguments
     /// * `kv_store` - The sync store containing persistent and ephemeral nodes
+    /// * `my_uuid` - This node's UUID for node ID reuse detection
     /// * `sync_interval` - Interval between sync attempts
     /// * `tls_config` - TLS configuration for mTLS peer authentication
     pub fn new(
         kv_store: &KvStore,
+        my_uuid: Vec<u8>,
         sync_config: &GwSyncConfig,
         tls_config: HttpsClientConfig,
     ) -> Result<Self> {
@@ -135,6 +160,7 @@ impl WaveKvSyncService {
             persistent_node.clone(),
             ephemeral_node.clone(),
             my_node_id,
+            my_uuid.clone(),
             "persistent",
             &tls_config,
         )?;
@@ -142,6 +168,7 @@ impl WaveKvSyncService {
             persistent_node,
             ephemeral_node,
             my_node_id,
+            my_uuid,
             "ephemeral",
             &tls_config,
         )?;

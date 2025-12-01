@@ -34,7 +34,7 @@ SPDX-License-Identifier: Apache-2.0
             border-collapse: collapse;
             background-color: white;
             border-radius: 8px;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
             margin: 20px 0;
         }
 
@@ -93,14 +93,14 @@ SPDX-License-Identifier: Apache-2.0
             font-size: 12px;
             white-space: nowrap;
             z-index: 1;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
         }
 
         .info-section {
             background: white;
             padding: 20px;
             border-radius: 8px;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
         }
 
         .info-group {
@@ -204,11 +204,11 @@ SPDX-License-Identifier: Apache-2.0
         </tr>
         <tr>
             <td>ID</td>
-            <td>{{ status.id|hex }}</td>
+            <td>{{ status.id }}</td>
         </tr>
         <tr>
-            <td>Bootnode URL</td>
-            <td>{{ status.bootnode_url }}</td>
+            <td>UUID</td>
+            <td>{{ status.uuid|hex }}</td>
         </tr>
         <tr>
             <td>Connections</td>
@@ -239,14 +239,16 @@ SPDX-License-Identifier: Apache-2.0
     <table>
         <tr>
             <th>ID</th>
+            <th>UUID</th>
             <th>Last Seen</th>
             <th>Wg IP</th>
             <th>Wg Endpoint</th>
             <th>URL</th>
         </tr>
         {% for node in status.nodes %}
-        <tr class="{% if node.id == status.id %}me{% endif %}">
-            <td class="truncated-id" title="{{ node.id|hex }}">{{ node.id|hex }}</td>
+        <tr class="{% if node.uuid == status.uuid %}me{% endif %}">
+            <td>{{ node.id }}</td>
+            <td class="truncated-id" title="{{ node.uuid|hex }}">{{ node.uuid|hex }}</td>
             <td class="timestamp">{{ node.last_seen }}</td>
             {% if let Some(wg_peer) = node.wg_peer %}
             <td>{{ wg_peer.ip }}</td>
@@ -361,7 +363,7 @@ SPDX-License-Identifier: Apache-2.0
                     const lastSeenStr = peer.last_seen.length > 0
                         ? peer.last_seen.map(([observer, ts]) =>
                             `<span class="timestamp" title="observed by ${observer}">${ts}</span>`
-                          ).join(', ')
+                        ).join(', ')
                         : 'N/A';
 
                     html += `
@@ -382,7 +384,7 @@ SPDX-License-Identifier: Apache-2.0
         }
 
         // Load WaveKV status after page loads
-        document.addEventListener('DOMContentLoaded', function() {
+        document.addEventListener('DOMContentLoaded', function () {
             loadWaveKvStatus();
         });
     </script>

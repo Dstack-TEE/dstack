@@ -51,8 +51,9 @@ impl AdminRpcHandler {
             .map(Into::into)
             .collect::<Vec<_>>();
         Ok(StatusResponse {
+            id: state.config.sync.node_id,
             url: state.config.sync.my_url.clone(),
-            id: state.config.id(),
+            uuid: state.config.uuid(),
             bootnode_url: state.config.sync.bootnode.clone(),
             nodes,
             hosts,

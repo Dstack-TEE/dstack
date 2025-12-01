@@ -19,8 +19,8 @@ use crate::distributed_certbot::DistributedCertBot;
 use cmd_lib::run_cmd as cmd;
 use dstack_gateway_rpc::{
     gateway_server::{GatewayRpc, GatewayServer},
-    AcmeInfoResponse, GatewayState, GuestAgentConfig, InfoResponse, QuotedPublicKey,
-    RegisterCvmRequest, RegisterCvmResponse, WireGuardConfig, WireGuardPeer,
+    AcmeInfoResponse, GuestAgentConfig, InfoResponse, QuotedPublicKey, RegisterCvmRequest,
+    RegisterCvmResponse, WireGuardConfig, WireGuardPeer,
 };
 use dstack_guest_agent_rpc::{dstack_guest_client::DstackGuestClient, RawQuoteArgs};
 use fs_err as fs;
@@ -77,7 +77,8 @@ pub struct ProxyInner {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct GatewayNodeInfo {
-    pub id: Vec<u8>,
+    pub id: u32,
+    pub uuid: Vec<u8>,
     pub url: String,
     pub wg_peer: WireGuardPeer,
     pub last_seen: SystemTime,
@@ -164,7 +165,8 @@ impl ProxyInner {
 
         // Register this node
         let my_node_info = GatewayNodeInfo {
-            id: config.id(),
+            id: config.sync.node_id,
+            uuid: config.uuid(),
             url: config.sync.my_url.clone(),
             wg_peer: WireGuardPeer {
                 pk: config.wg.public_key.clone(),
@@ -179,7 +181,7 @@ impl ProxyInner {
 
         // Sync this node to KvStore
         let node_data = NodeData {
-            id: config.id(),
+            uuid: config.uuid(),
             url: config.sync.my_url.clone(),
             wg_public_key: config.wg.public_key.clone(),
             wg_endpoint: config.wg.endpoint.clone(),
@@ -229,7 +231,8 @@ impl ProxyInner {
                     cert_validator,
                 }
             };
-            match WaveKvSyncService::new(&kv_store, &config.sync, https_config) {
+            let my_uuid = config.uuid();
+            match WaveKvSyncService::new(&kv_store, my_uuid, &config.sync, https_config) {
                 Ok(sync_service) => Some(Arc::new(sync_service)),
                 Err(err) => {
                     error!("Failed to create WaveKV sync service: {err}");
@@ -487,9 +490,10 @@ fn build_state_from_kv_store(
     }
 
     // Build nodes
-    for (_node_id, data) in nodes {
+    for (node_id, data) in nodes {
         let node_info = GatewayNodeInfo {
-            id: data.id,
+            id: node_id,
+            uuid: data.uuid,
             url: data.url,
             wg_peer: WireGuardPeer {
                 pk: data.wg_public_key.clone(),
@@ -665,14 +669,15 @@ fn reload_nodes_from_kv_store(proxy: &Proxy, store: &KvStore) -> Result<()> {
     let nodes = store.load_all_nodes();
     let mut state = proxy.lock();
 
-    for (_node_id, data) in nodes {
+    for (node_id, data) in nodes {
         // Skip self
         if data.wg_public_key == state.config.wg.public_key {
             continue;
         }
 
         let new_info = GatewayNodeInfo {
-            id: data.id,
+            id: node_id,
+            uuid: data.uuid,
             url: data.url,
             wg_peer: WireGuardPeer {
                 pk: data.wg_public_key.clone(),
@@ -1201,39 +1206,6 @@ impl GatewayRpc for RpcHandler {
         self.state.acme_info().await
     }
 
-    async fn update_state(self, request: GatewayState) -> Result<()> {
-        self.ensure_from_gateway()?;
-        let mut nodes = vec![];
-        let mut apps = vec![];
-
-        for node in request.nodes {
-            nodes.push(GatewayNodeInfo {
-                id: node.id,
-                wg_peer: node.wg_peer.context("wg_peer is missing")?,
-                last_seen: decode_ts(node.last_seen),
-                url: node.url,
-            });
-        }
-
-        for app in request.apps {
-            apps.push(InstanceInfo {
-                id: app.instance_id,
-                app_id: app.app_id,
-                ip: app.ip.parse().context("Invalid IP address")?,
-                public_key: app.public_key,
-                reg_time: decode_ts(app.reg_time),
-                last_seen: decode_ts(app.last_seen),
-                connections: Default::default(),
-            });
-        }
-
-        self.state
-            .lock()
-            .update_state(nodes, apps)
-            .context("failed to update state")?;
-        Ok(())
-    }
-
     async fn info(self) -> Result<InfoResponse> {
         let state = self.state.lock();
         Ok(InfoResponse {
@@ -1280,23 +1252,10 @@ impl From<GatewayNodeInfo> for dstack_gateway_rpc::GatewayNodeInfo {
     fn from(node: GatewayNodeInfo) -> Self {
         Self {
             id: node.id,
+            uuid: node.uuid,
             wg_peer: Some(node.wg_peer),
             last_seen: encode_ts(node.last_seen),
             url: node.url,
-        }
-    }
-}
-
-impl From<InstanceInfo> for dstack_gateway_rpc::AppInstanceInfo {
-    fn from(app: InstanceInfo) -> Self {
-        Self {
-            num_connections: app.num_connections(),
-            instance_id: app.id,
-            app_id: app.app_id,
-            ip: app.ip.to_string(),
-            public_key: app.public_key,
-            reg_time: encode_ts(app.reg_time),
-            last_seen: encode_ts(app.last_seen),
         }
     }
 }
