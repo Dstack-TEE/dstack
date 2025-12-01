@@ -212,17 +212,21 @@ impl DistributedCertBot {
     async fn do_request_new(&self) -> Result<()> {
         let acme_client = self.get_or_create_acme_client().await?;
         let domain = &self.config.domain;
+        let timeout = self.config.renew_timeout;
 
         // Generate new key pair
         let key = KeyPair::generate().context("failed to generate key")?;
         let key_pem = key.serialize_pem();
 
-        // Request certificate
+        // Request certificate with timeout
         info!("cert[{}]: requesting new certificate from ACME...", domain);
-        let cert_pem = acme_client
-            .request_new_certificate(&key_pem, &[domain.clone()])
-            .await
-            .context("failed to request new certificate")?;
+        let cert_pem = tokio::time::timeout(
+            timeout,
+            acme_client.request_new_certificate(&key_pem, &[domain.clone()]),
+        )
+        .await
+        .context("certificate request timed out")?
+        .context("failed to request new certificate")?;
 
         let not_after = get_cert_expiry(&cert_pem).context("failed to parse certificate expiry")?;
 
@@ -247,6 +251,7 @@ impl DistributedCertBot {
     async fn do_renew(&self) -> Result<bool> {
         let acme_client = self.get_or_create_acme_client().await?;
         let domain = &self.config.domain;
+        let timeout = self.config.renew_timeout;
 
         // Load current cert and key
         let cert_pem = fs::read_to_string(self.workdir.cert_path())
@@ -254,12 +259,13 @@ impl DistributedCertBot {
         let key_pem =
             fs::read_to_string(self.workdir.key_path()).context("failed to read current key")?;
 
-        // Renew
+        // Renew with timeout
         info!("cert[{}]: renewing certificate from ACME...", domain);
-        let new_cert_pem = acme_client
-            .renew_cert(&cert_pem, &key_pem)
-            .await
-            .context("failed to renew certificate")?;
+        let new_cert_pem =
+            tokio::time::timeout(timeout, acme_client.renew_cert(&cert_pem, &key_pem))
+                .await
+                .context("certificate renewal timed out")?
+                .context("failed to renew certificate")?;
 
         let not_after =
             get_cert_expiry(&new_cert_pem).context("failed to parse certificate expiry")?;

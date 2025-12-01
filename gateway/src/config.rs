@@ -125,8 +125,6 @@ pub struct SyncConfig {
     #[serde(with = "serde_duration")]
     pub interval: Duration,
     #[serde(with = "serde_duration")]
-    pub broadcast_interval: Duration,
-    #[serde(with = "serde_duration")]
     pub timeout: Duration,
     pub my_url: String,
     pub bootnode: String,
@@ -269,31 +267,6 @@ pub struct CertbotConfig {
     /// Renew timeout
     #[serde(with = "serde_duration")]
     pub renew_timeout: Duration,
-}
-
-impl CertbotConfig {
-    fn to_bot_config(&self) -> certbot::CertBotConfig {
-        let workdir = certbot::WorkDir::new(&self.workdir);
-        certbot::CertBotConfig::builder()
-            .auto_create_account(true)
-            .cert_dir(workdir.backup_dir())
-            .cert_file(workdir.cert_path())
-            .key_file(workdir.key_path())
-            .credentials_file(workdir.account_credentials_path())
-            .acme_url(self.acme_url.clone())
-            .cert_subject_alt_names(vec![self.domain.clone()])
-            .cf_zone_id(self.cf_zone_id.clone())
-            .cf_api_token(self.cf_api_token.clone())
-            .renew_interval(self.renew_interval)
-            .renew_timeout(self.renew_timeout)
-            .renew_expires_in(self.renew_before_expiration)
-            .auto_set_caa(self.auto_set_caa)
-            .build()
-    }
-
-    pub async fn build_bot(&self) -> Result<certbot::CertBot> {
-        self.to_bot_config().build_bot().await
-    }
 }
 
 pub const DEFAULT_CONFIG: &str = include_str!("../gateway.toml");

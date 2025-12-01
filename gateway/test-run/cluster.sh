@@ -174,7 +174,6 @@ address = "127.0.0.1"
 enabled = true
 interval = "5s"
 timeout = "10s"
-broadcast_interval = "30s"
 my_url = "https://localhost:${rpc_port}"
 bootnode = ""
 node_id = ${node_id}
