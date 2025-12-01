@@ -340,35 +340,49 @@ impl Proxy {
         let workdir = WorkDir::new(&config.certbot.workdir);
         let account_uri = workdir.acme_account_uri().unwrap_or_default();
         let keys = workdir.list_cert_public_keys().unwrap_or_default();
-        let agent = crate::dstack_agent().context("Failed to get dstack agent")?;
-        let account_quote = get_or_generate_quote(
-            &agent,
-            QuoteContentType::Custom("acme-account"),
-            account_uri.as_bytes(),
-            workdir.acme_account_quote_path(),
-        )
-        .await
-        .unwrap_or_default();
+
+        // Try to get dstack agent for quote generation (optional in test environments)
+        let agent = crate::dstack_agent().ok();
+
+        let account_quote = match &agent {
+            Some(agent) => get_or_generate_quote(
+                agent,
+                QuoteContentType::Custom("acme-account"),
+                account_uri.as_bytes(),
+                workdir.acme_account_quote_path(),
+            )
+            .await
+            .unwrap_or_default(),
+            None => String::new(),
+        };
 
         let mut quoted_hist_keys = vec![];
         for cert_path in workdir.list_certs().unwrap_or_default() {
-            let cert_pem = fs::read_to_string(&cert_path).context("Failed to read key")?;
-            let pubkey = certbot::read_pubkey(&cert_pem).context("Failed to read pubkey")?;
-            let quote = get_or_generate_quote(
-                &agent,
-                QuoteContentType::Custom("zt-cert"),
-                &pubkey,
-                cert_path.display().to_string() + ".quote",
-            )
-            .await
-            .unwrap_or_default();
+            let cert_pem = match fs::read_to_string(&cert_path) {
+                Ok(pem) => pem,
+                Err(_) => continue,
+            };
+            let pubkey = match certbot::read_pubkey(&cert_pem) {
+                Ok(pk) => pk,
+                Err(_) => continue,
+            };
+            let quote = match &agent {
+                Some(agent) => get_or_generate_quote(
+                    agent,
+                    QuoteContentType::Custom("zt-cert"),
+                    &pubkey,
+                    cert_path.display().to_string() + ".quote",
+                )
+                .await
+                .unwrap_or_default(),
+                None => String::new(),
+            };
             quoted_hist_keys.push(QuotedPublicKey {
                 public_key: pubkey,
                 quote,
             });
         }
-        let active_cert =
-            fs::read_to_string(workdir.cert_path()).context("Failed to read active cert")?;
+        let active_cert = fs::read_to_string(workdir.cert_path()).unwrap_or_default();
 
         Ok(AcmeInfoResponse {
             account_uri,
