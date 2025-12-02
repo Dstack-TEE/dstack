@@ -22,7 +22,7 @@ mod https_client;
 mod sync_service;
 
 pub use https_client::{AppIdValidator, HttpsClientConfig};
-pub use sync_service::WaveKvSyncService;
+pub use sync_service::{fetch_peers_from_bootnode, WaveKvSyncService};
 
 use std::{collections::BTreeMap, net::Ipv4Addr, path::Path};
 
@@ -42,6 +42,7 @@ pub struct InstanceData {
 
 /// Gateway node status (stored separately for independent updates)
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
 pub enum NodeStatus {
     #[default]
     Up,
@@ -271,12 +272,6 @@ impl KvStore {
         Ok(())
     }
 
-    /// Sync node deletion
-    pub fn sync_delete_node(&self, node_id: NodeId) -> Result<()> {
-        self.persistent().write().delete(keys::node_info(node_id))?;
-        Ok(())
-    }
-
     /// Load all nodes from sync store
     pub fn load_all_nodes(&self) -> BTreeMap<NodeId, NodeData> {
         self.persistent()
@@ -483,11 +478,21 @@ impl KvStore {
 
     // ==================== Peer Address (in DB) ====================
 
-    /// Register a node's sync URL in DB (will be synced to all nodes)
+    /// Register a node's sync URL in DB and add to peer list for sync
+    ///
+    /// This stores the URL in KvStore (for address lookup) and also adds the node
+    /// to the wavekv peer list (so SyncManager knows to sync with it).
     pub fn register_peer_url(&self, node_id: NodeId, url: &str) -> Result<()> {
+        // Store URL in persistent KvStore
         self.persistent()
             .write()
             .put(keys::peer_addr(node_id), url.as_bytes().to_vec())?;
+
+        // Add peer to wavekv's internal peer list for both stores
+        // This is needed so SyncManager.sync_to_all_peers() includes this peer
+        let _ = self.persistent().write().add_peer(node_id);
+        let _ = self.ephemeral().write().add_peer(node_id);
+
         Ok(())
     }
 

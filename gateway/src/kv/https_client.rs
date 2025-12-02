@@ -182,13 +182,6 @@ impl HttpsClient {
         .with_client_auth_cert(certs, key)
         .context("failed to set client auth cert")?;
 
-        info!(
-            "HTTPS client: mTLS enabled with cert={}, ca={}, custom_validator={}",
-            tls.cert_path,
-            tls.ca_cert_path,
-            tls.cert_validator.is_some()
-        );
-
         let https = HttpsConnectorBuilder::new()
             .with_tls_config(tls_config)
             .https_only()

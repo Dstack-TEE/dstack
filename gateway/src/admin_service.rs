@@ -8,11 +8,15 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result};
 use dstack_gateway_rpc::{
     admin_server::{AdminRpc, AdminServer},
-    GetInfoRequest, GetInfoResponse, GetMetaResponse, HostInfo, RenewCertResponse, StatusResponse,
+    GetInfoRequest, GetInfoResponse, GetMetaResponse, HostInfo, LastSeenEntry,
+    PeerSyncStatus as ProtoPeerSyncStatus, RenewCertResponse, SetNodeStatusRequest,
+    SetNodeUrlRequest, StatusResponse, StoreSyncStatus, WaveKvStatusResponse,
 };
 use ra_rpc::{CallContext, RpcCall};
+use tracing::info;
+use wavekv::node::NodeStatus as WaveKvNodeStatus;
 
-use crate::{main_service::Proxy, proxy::NUM_CONNECTIONS};
+use crate::{kv::NodeStatus, main_service::Proxy, proxy::NUM_CONNECTIONS};
 
 pub struct AdminRpcHandler {
     state: Proxy,
@@ -142,6 +146,85 @@ impl AdminRpc for AdminRpcHandler {
             registered: registered as u32,
             online: online as u32,
         })
+    }
+
+    async fn set_node_url(self, request: SetNodeUrlRequest) -> Result<()> {
+        let kv_store = self.state.kv_store();
+        kv_store.register_peer_url(request.id, &request.url)?;
+        info!("Updated peer URL: node {} -> {}", request.id, request.url);
+        Ok(())
+    }
+
+    async fn set_node_status(self, request: SetNodeStatusRequest) -> Result<()> {
+        let kv_store = self.state.kv_store();
+        let status = match request.status.as_str() {
+            "up" => NodeStatus::Up,
+            "down" => NodeStatus::Down,
+            _ => anyhow::bail!("invalid status: expected 'up' or 'down'"),
+        };
+        kv_store.set_node_status(request.id, status)?;
+        info!("Updated node status: node {} -> {:?}", request.id, status);
+        Ok(())
+    }
+
+    async fn wave_kv_status(self) -> Result<WaveKvStatusResponse> {
+        let kv_store = self.state.kv_store();
+
+        let persistent_status = kv_store.persistent().read().status();
+        let ephemeral_status = kv_store.ephemeral().read().status();
+
+        let get_peer_last_seen = |peer_id: u32| -> Vec<(u32, u64)> {
+            kv_store
+                .get_node_last_seen_by_all(peer_id)
+                .into_iter()
+                .collect()
+        };
+
+        Ok(WaveKvStatusResponse {
+            enabled: self.state.config.sync.enabled,
+            persistent: Some(build_store_status(
+                "persistent",
+                persistent_status,
+                &get_peer_last_seen,
+            )),
+            ephemeral: Some(build_store_status(
+                "ephemeral",
+                ephemeral_status,
+                &get_peer_last_seen,
+            )),
+        })
+    }
+}
+
+fn build_store_status(
+    name: &str,
+    status: WaveKvNodeStatus,
+    get_peer_last_seen: &impl Fn(u32) -> Vec<(u32, u64)>,
+) -> StoreSyncStatus {
+    StoreSyncStatus {
+        name: name.to_string(),
+        node_id: status.id,
+        n_keys: status.n_kvs as u64,
+        next_seq: status.next_seq,
+        dirty: status.dirty,
+        wal_enabled: status.wal,
+        peers: status
+            .peers
+            .into_iter()
+            .map(|p| {
+                let last_seen = get_peer_last_seen(p.id)
+                    .into_iter()
+                    .map(|(node_id, timestamp)| LastSeenEntry { node_id, timestamp })
+                    .collect();
+                ProtoPeerSyncStatus {
+                    id: p.id,
+                    local_ack: p.ack,
+                    peer_ack: p.pack,
+                    buffered_logs: p.logs as u64,
+                    last_seen,
+                }
+            })
+            .collect(),
     }
 }
 

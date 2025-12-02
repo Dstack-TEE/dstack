@@ -7,7 +7,7 @@ use clap::Parser;
 use config::{Config, TlsConfig};
 use dstack_guest_agent_rpc::{dstack_guest_client::DstackGuestClient, GetTlsKeyArgs};
 use http_client::prpc::PrpcClient;
-use ra_rpc::{client::RaClient, rocket_helper::QuoteVerifier};
+use ra_rpc::{client::RaClient, prpc_routes as prpc, rocket_helper::QuoteVerifier};
 use rocket::{
     fairing::AdHoc,
     figment::{providers::Serialized, Figment},
@@ -16,6 +16,8 @@ use tracing::info;
 
 use admin_service::AdminRpcHandler;
 use main_service::{Proxy, ProxyOptions, RpcHandler};
+
+use crate::debug_service::DebugRpcHandler;
 
 mod admin_service;
 mod config;
@@ -141,9 +143,18 @@ async fn main() -> Result<()> {
     let figment = config::load_config_figment(args.config.as_deref());
 
     let config = figment.focus("core").extract::<Config>()?;
+
+    // Validate node_id
+    if config.sync.enabled && config.sync.node_id == 0 {
+        anyhow::bail!("node_id must be greater than 0");
+    }
+
     config::setup_wireguard(&config.wg)?;
 
-    let tls_config = figment.focus("tls").extract::<TlsConfig>()?;
+    let tls_config = figment
+        .focus("tls")
+        .extract::<TlsConfig>()
+        .context("Failed to extract tls config")?;
     maybe_gen_certs(&config, &tls_config)
         .await
         .context("Failed to generate certs")?;
@@ -178,31 +189,25 @@ async fn main() -> Result<()> {
     state.lock().reconfigure()?;
     proxy::start(proxy_config, state.clone());
 
-    let admin_figment =
-        Figment::new()
-            .merge(rocket::Config::default())
-            .merge(Serialized::defaults(
-                figment
-                    .find_value("core.admin")
-                    .context("admin section not found")?,
-            ));
+    let admin_value = figment
+        .find_value("core.admin")
+        .context("admin section not found")?;
+    let debug_value = figment
+        .find_value("core.debug")
+        .context("debug section not found")?;
 
-    let debug_figment =
-        Figment::new()
-            .merge(rocket::Config::default())
-            .merge(Serialized::defaults(
-                figment
-                    .find_value("core.debug")
-                    .context("debug section not found")?,
-            ));
+    let admin_figment = Figment::new()
+        .merge(rocket::Config::default())
+        .merge(Serialized::defaults(admin_value));
+
+    let debug_figment = Figment::new()
+        .merge(rocket::Config::default())
+        .merge(Serialized::defaults(debug_value));
 
     let mut rocket = rocket::custom(figment)
-        .mount(
-            "/prpc",
-            ra_rpc::prpc_routes!(Proxy, RpcHandler, trim: "Tproxy."),
-        )
-        // Mount WaveKV sync endpoints
-        .mount("/", web_routes::wavekv_routes())
+        .mount("/prpc", prpc!(Proxy, RpcHandler, trim: "Tproxy."))
+        // Mount WaveKV sync endpoint (requires mTLS gateway auth)
+        .mount("/", web_routes::wavekv_sync_routes())
         .attach(AdHoc::on_response("Add app version header", |_req, res| {
             Box::pin(async move {
                 res.set_raw_header("X-App-Version", app_version());
@@ -218,8 +223,8 @@ async fn main() -> Result<()> {
         if admin_enabled {
             rocket::custom(admin_figment)
                 .mount("/", web_routes::routes())
-                .mount("/", web_routes::wavekv_routes())
-                .mount("/", ra_rpc::prpc_routes!(Proxy, AdminRpcHandler))
+                .mount("/", prpc!(Proxy, AdminRpcHandler, trim: "Admin."))
+                .mount("/prpc", prpc!(Proxy, AdminRpcHandler, trim: "Admin."))
                 .manage(admin_state)
                 .launch()
                 .await
@@ -230,10 +235,7 @@ async fn main() -> Result<()> {
     let debug_srv = async move {
         if debug_config.insecure_enable_debug_rpc {
             rocket::custom(debug_figment)
-                .mount(
-                    "/prpc",
-                    ra_rpc::prpc_routes!(Proxy, debug_service::DebugRpcHandler),
-                )
+                .mount("/prpc", prpc!(Proxy, DebugRpcHandler, trim: "Debug."))
                 .manage(debug_state)
                 .launch()
                 .await

@@ -18,10 +18,7 @@ pub fn routes() -> Vec<Route> {
     routes![index]
 }
 
-pub fn wavekv_routes() -> Vec<Route> {
-    routes![
-        wavekv_sync::sync_persistent,
-        wavekv_sync::sync_ephemeral,
-        wavekv_sync::status
-    ]
+/// WaveKV sync endpoint (for main server, requires mTLS gateway auth)
+pub fn wavekv_sync_routes() -> Vec<Route> {
+    routes![wavekv_sync::sync_store]
 }

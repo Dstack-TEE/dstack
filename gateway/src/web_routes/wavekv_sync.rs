@@ -3,24 +3,21 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! WaveKV sync HTTP endpoints
+//!
+//! Sync data is encoded using bincode + gzip compression for efficiency.
 
 use crate::main_service::Proxy;
+use flate2::{read::GzDecoder, write::GzEncoder, Compression};
 use ra_tls::traits::CertExt;
 use rocket::{
-    get,
-    http::Status,
+    data::{Data, ToByteUnit},
+    http::{ContentType, Status},
     mtls::{oid::Oid, Certificate},
-    post,
-    serde::json::Json,
-    State,
+    post, State,
 };
-use serde::Serialize;
+use std::io::{Read, Write};
 use tracing::warn;
-use wavekv::{
-    node::{NodeStatus, PeerStatus},
-    sync::{SyncMessage, SyncResponse},
-    types::NodeId,
-};
+use wavekv::sync::{SyncMessage, SyncResponse};
 
 /// Wrapper to implement CertExt for Rocket's Certificate
 struct RocketCert<'a>(&'a Certificate<'a>);
@@ -33,6 +30,47 @@ impl CertExt for RocketCert<'_> {
         };
         Ok(Some(ext.value.to_vec()))
     }
+}
+
+/// Decode compressed bincode data
+fn decode_sync_message(data: &[u8]) -> Result<SyncMessage, Status> {
+    // Decompress
+    let mut decoder = GzDecoder::new(data);
+    let mut decompressed = Vec::new();
+    decoder.read_to_end(&mut decompressed).map_err(|e| {
+        warn!("failed to decompress sync message: {e}");
+        Status::BadRequest
+    })?;
+
+    // Decode bincode
+    let config = bincode::config::standard();
+    bincode::serde::decode_from_slice(&decompressed, config)
+        .map(|(msg, _)| msg)
+        .map_err(|e| {
+            warn!("failed to decode sync message: {e}");
+            Status::BadRequest
+        })
+}
+
+/// Encode and compress sync response
+fn encode_sync_response(response: &SyncResponse) -> Result<Vec<u8>, Status> {
+    // Encode to bincode
+    let config = bincode::config::standard();
+    let encoded = bincode::serde::encode_to_vec(response, config).map_err(|e| {
+        warn!("failed to encode sync response: {e}");
+        Status::InternalServerError
+    })?;
+
+    // Compress
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::fast());
+    encoder.write_all(&encoded).map_err(|e| {
+        warn!("failed to compress sync response: {e}");
+        Status::InternalServerError
+    })?;
+    encoder.finish().map_err(|e| {
+        warn!("failed to finish compression: {e}");
+        Status::InternalServerError
+    })
 }
 
 /// Verify that the request is from a gateway with the same app_id (mTLS verification)
@@ -69,148 +107,47 @@ fn verify_gateway_peer(state: &Proxy, cert: Option<Certificate<'_>>) -> Result<(
     Ok(())
 }
 
-/// Handle persistent store sync request
-#[post("/wavekv/sync/persistent", data = "<msg>")]
-pub async fn sync_persistent(
+/// Handle sync request (bincode + gzip encoded)
+#[post("/wavekv/sync/<store>", data = "<data>")]
+pub async fn sync_store(
     state: &State<Proxy>,
     cert: Option<Certificate<'_>>,
-    msg: Json<SyncMessage>,
-) -> Result<Json<SyncResponse>, Status> {
+    store: &str,
+    data: Data<'_>,
+) -> Result<(ContentType, Vec<u8>), Status> {
     verify_gateway_peer(state, cert)?;
 
     let Some(ref wavekv_sync) = state.wavekv_sync else {
         return Err(Status::ServiceUnavailable);
     };
 
-    wavekv_sync
-        .handle_persistent_sync(msg.into_inner())
-        .map(Json)
-        .map_err(|e| {
-            tracing::error!("Persistent sync failed: {e}");
-            Status::InternalServerError
-        })
-}
+    // Read and decode request
+    let bytes = data
+        .open(16.mebibytes())
+        .into_bytes()
+        .await
+        .map_err(|_| Status::BadRequest)?;
+    let msg = decode_sync_message(&bytes)?;
 
-/// Handle ephemeral store sync request
-#[post("/wavekv/sync/ephemeral", data = "<msg>")]
-pub async fn sync_ephemeral(
-    state: &State<Proxy>,
-    cert: Option<Certificate<'_>>,
-    msg: Json<SyncMessage>,
-) -> Result<Json<SyncResponse>, Status> {
-    verify_gateway_peer(state, cert)?;
-
-    let Some(ref wavekv_sync) = state.wavekv_sync else {
-        return Err(Status::ServiceUnavailable);
-    };
-
-    wavekv_sync
-        .handle_ephemeral_sync(msg.into_inner())
-        .map(Json)
-        .map_err(|e| {
-            tracing::error!("Ephemeral sync failed: {e}");
-            Status::InternalServerError
-        })
-}
-
-/// WaveKV sync status for a single store
-#[derive(Debug, Clone, Serialize)]
-pub struct StoreStatus {
-    pub name: &'static str,
-    pub node_id: NodeId,
-    pub n_keys: usize,
-    pub next_seq: u64,
-    pub dirty: bool,
-    pub wal_enabled: bool,
-    pub peers: Vec<PeerSyncStatus>,
-}
-
-/// Peer sync status with last_seen info
-#[derive(Debug, Clone, Serialize)]
-pub struct PeerSyncStatus {
-    pub id: NodeId,
-    /// Our local ack for this peer's logs
-    pub local_ack: u64,
-    /// Peer's ack for our logs
-    pub peer_ack: u64,
-    /// Number of logs buffered from this peer
-    pub buffered_logs: usize,
-    /// Last seen timestamps (reported by each observing node)
-    pub last_seen: Vec<(NodeId, u64)>,
-}
-
-impl PeerSyncStatus {
-    fn from_peer_status(status: PeerStatus, last_seen: Vec<(NodeId, u64)>) -> Self {
-        Self {
-            id: status.id,
-            local_ack: status.ack,
-            peer_ack: status.pack,
-            buffered_logs: status.logs,
-            last_seen,
-        }
+    // Reject sync from node_id == 0
+    if msg.sender_id == 0 {
+        warn!("rejected sync from invalid node_id 0");
+        return Err(Status::BadRequest);
     }
-}
 
-impl StoreStatus {
-    fn from_node_status(
-        name: &'static str,
-        status: NodeStatus,
-        peer_last_seen: impl Fn(NodeId) -> Vec<(NodeId, u64)>,
-    ) -> Self {
-        Self {
-            name,
-            node_id: status.id,
-            n_keys: status.n_kvs,
-            next_seq: status.next_seq,
-            dirty: status.dirty,
-            wal_enabled: status.wal,
-            peers: status
-                .peers
-                .into_iter()
-                .map(|p| {
-                    let last_seen = peer_last_seen(p.id);
-                    PeerSyncStatus::from_peer_status(p, last_seen)
-                })
-                .collect(),
-        }
+    // Handle sync based on store type
+    let response = match store {
+        "persistent" => wavekv_sync.handle_persistent_sync(msg),
+        "ephemeral" => wavekv_sync.handle_ephemeral_sync(msg),
+        _ => return Err(Status::NotFound),
     }
-}
+    .map_err(|e| {
+        tracing::error!("{store} sync failed: {e}");
+        Status::InternalServerError
+    })?;
 
-/// Overall WaveKV sync status
-#[derive(Debug, Clone, Serialize)]
-pub struct WaveKvStatus {
-    pub enabled: bool,
-    pub persistent: Option<StoreStatus>,
-    pub ephemeral: Option<StoreStatus>,
-}
+    // Encode response
+    let encoded = encode_sync_response(&response)?;
 
-/// Get WaveKV sync status
-#[get("/wavekv/status")]
-pub async fn status(state: &State<Proxy>) -> Json<WaveKvStatus> {
-    let kv_store = state.kv_store();
-
-    let persistent_status = kv_store.persistent().read().status();
-    let ephemeral_status = kv_store.ephemeral().read().status();
-
-    // Get peer last_seen from ephemeral store
-    let get_peer_last_seen = |peer_id: NodeId| -> Vec<(NodeId, u64)> {
-        kv_store
-            .get_node_last_seen_by_all(peer_id)
-            .into_iter()
-            .collect()
-    };
-
-    Json(WaveKvStatus {
-        enabled: true,
-        persistent: Some(StoreStatus::from_node_status(
-            "persistent",
-            persistent_status,
-            get_peer_last_seen,
-        )),
-        ephemeral: Some(StoreStatus::from_node_status(
-            "ephemeral",
-            ephemeral_status,
-            get_peer_last_seen,
-        )),
-    })
+    Ok((ContentType::new("application", "x-bincode-gz"), encoded))
 }

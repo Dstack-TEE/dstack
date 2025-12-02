@@ -101,14 +101,13 @@ node_timeout = "10m"
 
 [core.sync]
 enabled = false
+# WaveKV node ID for this gateway (must be unique across cluster)
+node_id = 0
+my_url = "https://localhost:8011"
 interval = "1m"
 timeout = "30s"
-my_url = "https://localhost:8011"
-# The url of the bootnode used to join the network
-bootnode = "https://localhost:8011"
-# WaveKV node ID for this gateway (must be unique across cluster)
-node_id = 1
-# Peer node IDs for WaveKV sync (list all other gateway node IDs)
-peer_node_ids = []
+# The URL of the bootnode used to fetch initial peer list when joining the network.
+# Leave empty if this is the first node or peers are managed via Admin.SetNodeInfo RPC.
+bootnode = ""
 # Data directory for WaveKV persistence (WAL and snapshots)
-wavekv_data_dir = "/var/lib/dstack-gateway/wavekv"
+wavekv_data_dir = "/dstack-gateway/data"

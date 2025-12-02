@@ -161,6 +161,24 @@ message InfoResponse {
   string app_address_ns_prefix = 3;
 }
 
+// Peer info for GetPeers response
+message PeerInfo {
+  // The node ID
+  uint32 id = 1;
+  // The sync URL of the node
+  string url = 2;
+}
+
+// Response for GetPeers - returns all known peer nodes
+message GetPeersResponse {
+  // This node's ID
+  uint32 my_id = 1;
+  // This node's sync URL
+  string my_url = 2;
+  // All known peers (including self)
+  repeated PeerInfo peers = 3;
+}
+
 service Gateway {
 
   // Register a new proxied CVM.
@@ -169,6 +187,8 @@ service Gateway {
   rpc AcmeInfo(google.protobuf.Empty) returns (AcmeInfoResponse) {}
   // Get the gateway info
   rpc Info(google.protobuf.Empty) returns (InfoResponse) {}
+  // Get all known peers (requires gateway mTLS authentication)
+  rpc GetPeers(google.protobuf.Empty) returns (GetPeersResponse) {}
 }
 
 // Debug service - runs on a separate port when debug.enabled=true
@@ -244,6 +264,55 @@ message RenewCertResponse {
   bool renewed = 1;
 }
 
+// Request to set a node's sync URL
+message SetNodeUrlRequest {
+  // The node ID to update
+  uint32 id = 1;
+  // The new URL for this node
+  string url = 2;
+}
+
+// Request to set a node's status
+message SetNodeStatusRequest {
+  // The node ID to update
+  uint32 id = 1;
+  // The new status: "up" or "down"
+  string status = 2;
+}
+
+// Peer sync status
+message PeerSyncStatus {
+  uint32 id = 1;
+  uint64 local_ack = 2;
+  uint64 peer_ack = 3;
+  uint64 buffered_logs = 4;
+  // Last seen timestamps: [(observer_node_id, timestamp), ...]
+  repeated LastSeenEntry last_seen = 5;
+}
+
+message LastSeenEntry {
+  uint32 node_id = 1;
+  uint64 timestamp = 2;
+}
+
+// Store sync status
+message StoreSyncStatus {
+  string name = 1;
+  uint32 node_id = 2;
+  uint64 n_keys = 3;
+  uint64 next_seq = 4;
+  bool dirty = 5;
+  bool wal_enabled = 6;
+  repeated PeerSyncStatus peers = 7;
+}
+
+// WaveKV sync status response
+message WaveKvStatusResponse {
+  bool enabled = 1;
+  StoreSyncStatus persistent = 2;
+  StoreSyncStatus ephemeral = 3;
+}
+
 service Admin {
   // Get the status of the gateway.
   rpc Status(google.protobuf.Empty) returns (StatusResponse) {}
@@ -259,4 +328,10 @@ service Admin {
   rpc SetCaa(google.protobuf.Empty) returns (google.protobuf.Empty) {}
   // Summary API for inspect.
   rpc GetMeta(google.protobuf.Empty) returns (GetMetaResponse) {}
+  // Set a node's sync URL - used for dynamic peer management
+  rpc SetNodeUrl(SetNodeUrlRequest) returns (google.protobuf.Empty) {}
+  // Set a node's status (up/down)
+  rpc SetNodeStatus(SetNodeStatusRequest) returns (google.protobuf.Empty) {}
+  // Get WaveKV sync status
+  rpc WaveKvStatus(google.protobuf.Empty) returns (WaveKvStatusResponse) {}
 }

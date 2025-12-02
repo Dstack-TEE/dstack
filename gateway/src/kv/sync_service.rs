@@ -10,6 +10,7 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use dstack_gateway_rpc::GetPeersResponse;
 use tracing::{info, warn};
 use wavekv::{
     sync::{ExchangeInterface, SyncConfig as KvSyncConfig, SyncManager, SyncMessage, SyncResponse},
@@ -222,4 +223,66 @@ impl WaveKvSyncService {
     pub fn handle_ephemeral_sync(&self, msg: SyncMessage) -> Result<SyncResponse> {
         self.ephemeral_manager.handle_sync(msg)
     }
+}
+
+/// Fetch peer list from bootnode and register them in KvStore.
+///
+/// This is called during startup to bootstrap the peer list from a known bootnode.
+/// Uses Gateway.GetPeers RPC which requires mTLS gateway authentication.
+pub async fn fetch_peers_from_bootnode(
+    bootnode_url: &str,
+    kv_store: &KvStore,
+    my_node_id: NodeId,
+    tls_config: &HttpsClientConfig,
+) -> Result<()> {
+    if bootnode_url.is_empty() {
+        info!("no bootnode configured, skipping peer fetch");
+        return Ok(());
+    }
+
+    info!("fetching peers from bootnode: {}", bootnode_url);
+
+    // Create HTTPS client for bootnode communication (with mTLS)
+    let client = HttpsClient::new(tls_config).context("failed to create HTTPS client")?;
+
+    // Call Gateway.GetPeers RPC on bootnode (requires mTLS gateway auth)
+    let peers_url = format!("{}/prpc/GetPeers", bootnode_url.trim_end_matches('/'));
+
+    let response: GetPeersResponse = client
+        .post_json(&peers_url, &())
+        .await
+        .with_context(|| format!("failed to fetch peers from bootnode {bootnode_url}"))?;
+
+    info!(
+        "bootnode returned {} peers (bootnode_id={})",
+        response.peers.len(),
+        response.my_id
+    );
+
+    // Register each peer
+    for peer in &response.peers {
+        if peer.id == my_node_id {
+            continue; // Skip self
+        }
+
+        // Add peer to WaveKV
+        if let Err(e) = kv_store.add_peer(peer.id) {
+            warn!("failed to add peer {}: {}", peer.id, e);
+            continue;
+        }
+
+        // Register peer URL
+        if !peer.url.is_empty() {
+            if let Err(e) = kv_store.register_peer_url(peer.id, &peer.url) {
+                warn!("failed to register peer URL for node {}: {}", peer.id, e);
+            } else {
+                info!(
+                    "registered peer from bootnode: node {} -> {}",
+                    peer.id, peer.url
+                );
+            }
+        }
+    }
+
+    Ok(())
 }

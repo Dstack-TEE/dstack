@@ -127,24 +127,13 @@ pub struct SyncConfig {
     #[serde(with = "serde_duration")]
     pub timeout: Duration,
     pub my_url: String,
+    /// The URL of the bootnode used to fetch initial peer list when joining the network
     pub bootnode: String,
     /// WaveKV node ID for this gateway (must be unique across cluster)
-    #[serde(default = "default_node_id")]
     pub node_id: u32,
-    /// Peer node IDs for WaveKV sync
-    #[serde(default)]
-    pub peer_node_ids: Vec<u32>,
-    /// Peer URLs for initial bootstrap (maps node_id -> url)
-    /// Format: ["node_id:url", ...], e.g. ["2:https://node2:13012", "3:https://node3:13012"]
-    #[serde(default)]
-    pub peer_urls: Vec<String>,
     /// Data directory for WaveKV persistence
     #[serde(default = "default_wavekv_data_dir")]
     pub wavekv_data_dir: String,
-}
-
-fn default_node_id() -> u32 {
-    1
 }
 
 fn default_wavekv_data_dir() -> String {

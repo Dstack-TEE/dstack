@@ -19,8 +19,8 @@ use crate::distributed_certbot::DistributedCertBot;
 use cmd_lib::run_cmd as cmd;
 use dstack_gateway_rpc::{
     gateway_server::{GatewayRpc, GatewayServer},
-    AcmeInfoResponse, GatewayNodeInfo, GuestAgentConfig, InfoResponse, QuotedPublicKey,
-    RegisterCvmRequest, RegisterCvmResponse, WireGuardConfig, WireGuardPeer,
+    AcmeInfoResponse, GatewayNodeInfo, GetPeersResponse, GuestAgentConfig, InfoResponse, PeerInfo,
+    QuotedPublicKey, RegisterCvmRequest, RegisterCvmResponse, WireGuardConfig, WireGuardPeer,
 };
 use dstack_guest_agent_rpc::{dstack_guest_client::DstackGuestClient, RawQuoteArgs};
 use fs_err as fs;
@@ -39,8 +39,8 @@ use tracing::{debug, error, info, warn};
 use crate::{
     config::{Config, TlsConfig},
     kv::{
-        AppIdValidator, HttpsClientConfig, InstanceData, KvStore, NodeData, NodeStatus,
-        WaveKvSyncService,
+        fetch_peers_from_bootnode, AppIdValidator, HttpsClientConfig, InstanceData, KvStore,
+        NodeData, NodeStatus, WaveKvSyncService,
     },
     models::{InstanceInfo, WgConf},
     proxy::{create_acceptor, AddressGroup, AddressInfo},
@@ -120,18 +120,14 @@ impl ProxyInner {
         } = options;
         let config = Arc::new(config);
 
-        // Initialize WaveKV store (always used for persistence, sync is optional)
+        // Initialize WaveKV store without peers (peers will be added dynamically from bootnode)
         let kv_store = Arc::new(
-            KvStore::new(
-                config.sync.node_id,
-                config.sync.peer_node_ids.clone(),
-                &config.sync.wavekv_data_dir,
-            )
-            .context("failed to initialize WaveKV store")?,
+            KvStore::new(config.sync.node_id, vec![], &config.sync.wavekv_data_dir)
+                .context("failed to initialize WaveKV store")?,
         );
         info!(
-            "WaveKV store initialized: node_id={}, peers={:?}, sync_enabled={}",
-            config.sync.node_id, config.sync.peer_node_ids, config.sync.enabled
+            "WaveKV store initialized: node_id={}, sync_enabled={}",
+            config.sync.node_id, config.sync.enabled
         );
 
         // Load state from WaveKV or legacy JSON
@@ -169,38 +165,36 @@ impl ProxyInner {
             error!("Failed to register peer URL: {err}");
         }
 
-        // Register configured peer URLs for initial bootstrap
-        for peer_url_spec in &config.sync.peer_urls {
-            if let Some((node_id_str, url)) = peer_url_spec.split_once(':') {
-                if let Ok(node_id) = node_id_str.parse::<u32>() {
-                    if let Err(err) = kv_store.register_peer_url(node_id, url) {
-                        error!("Failed to register peer URL for node {node_id}: {err}");
-                    } else {
-                        info!("Registered peer URL: node {node_id} -> {url}");
-                    }
-                } else {
-                    warn!("Invalid peer_urls entry (bad node_id): {peer_url_spec}");
-                }
-            } else {
-                warn!("Invalid peer_urls entry (expected 'node_id:url'): {peer_url_spec}");
+        // Build HttpsClientConfig for mTLS communication
+        let https_config = {
+            let tls = &tls_config;
+            let cert_validator = my_app_id
+                .clone()
+                .map(|app_id| Arc::new(AppIdValidator::new(app_id)) as _);
+            HttpsClientConfig {
+                cert_path: tls.certs.clone(),
+                key_path: tls.key.clone(),
+                ca_cert_path: tls.mutual.ca_certs.clone(),
+                cert_validator,
+            }
+        };
+
+        // Fetch peers from bootnode if configured (only when sync is enabled)
+        if config.sync.enabled && !config.sync.bootnode.is_empty() {
+            if let Err(err) = fetch_peers_from_bootnode(
+                &config.sync.bootnode,
+                &kv_store,
+                config.sync.node_id,
+                &https_config,
+            )
+            .await
+            {
+                warn!("Failed to fetch peers from bootnode: {err}");
             }
         }
 
         // Create WaveKV sync service (only if sync is enabled)
         let wavekv_sync = if config.sync.enabled {
-            // Build HttpsClientConfig from Rocket's TlsConfig
-            let https_config = {
-                let tls = tls_config;
-                let cert_validator = my_app_id
-                    .clone()
-                    .map(|app_id| Arc::new(AppIdValidator::new(app_id)) as _);
-                HttpsClientConfig {
-                    cert_path: tls.certs,
-                    key_path: tls.key,
-                    ca_cert_path: tls.mutual.ca_certs,
-                    cert_validator,
-                }
-            };
             let my_uuid = config.uuid();
             match WaveKvSyncService::new(&kv_store, my_uuid, &config.sync, https_config) {
                 Ok(sync_service) => Some(Arc::new(sync_service)),
@@ -516,14 +510,8 @@ async fn start_wavekv_sync_task(proxy: Proxy, wavekv_sync: Arc<WaveKvSyncService
         return;
     }
 
-    // Add peer endpoints from config
-    for &peer_id in &proxy.config.sync.peer_node_ids {
-        // We need to discover peer URLs from stored node data or config
-        // For now, peer URLs will be added dynamically when nodes are discovered
-        info!("WaveKV peer {peer_id} registered (URL will be discovered)");
-    }
-
     // Bootstrap already done in ProxyInner::new() before certbot init
+    // Peers are discovered from bootnode or via Admin.SetNodeInfo RPC
 
     // Start periodic sync tasks (runs forever in background)
     tokio::spawn(async move {
@@ -1096,6 +1084,27 @@ impl GatewayRpc for RpcHandler {
             base_domain: state.config.proxy.base_domain.clone(),
             external_port: state.config.proxy.external_port as u32,
             app_address_ns_prefix: state.config.proxy.app_address_ns_prefix.clone(),
+        })
+    }
+
+    async fn get_peers(self) -> Result<GetPeersResponse> {
+        self.ensure_from_gateway()?;
+
+        let kv_store = self.state.kv_store();
+        let config = &self.state.config;
+
+        // Get all peer addresses from KvStore
+        let peer_addrs = kv_store.get_all_peer_addrs();
+
+        let peers: Vec<PeerInfo> = peer_addrs
+            .into_iter()
+            .map(|(id, url)| PeerInfo { id, url })
+            .collect();
+
+        Ok(GetPeersResponse {
+            my_id: config.sync.node_id,
+            my_url: config.sync.my_url.clone(),
+            peers,
         })
     }
 }
