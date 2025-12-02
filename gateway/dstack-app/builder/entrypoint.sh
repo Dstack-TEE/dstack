@@ -91,7 +91,6 @@ ca_certs = "$CERTS_DIR/gateway-ca.cert"
 mandatory = false
 
 [core]
-state_path = "$DATA_DIR/gateway-state.json"
 set_ulimit = true
 rpc_domain = "$RPC_DOMAIN"
 

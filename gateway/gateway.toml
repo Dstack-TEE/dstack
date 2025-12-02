@@ -12,7 +12,6 @@ address = "127.0.0.1:8010"
 
 [core]
 kms_url = ""
-state_path = "./gateway-state.json"
 # auto set soft ulimit to hard ulimit
 set_ulimit = true
 rpc_domain = ""

@@ -130,20 +130,15 @@ impl ProxyInner {
             config.sync.node_id, config.sync.enabled
         );
 
-        // Load state from WaveKV or legacy JSON
+        // Load state from WaveKV
         let instances = kv_store.load_all_instances();
         let nodes = kv_store.load_all_nodes();
-        let state = if !instances.is_empty() || !nodes.is_empty() {
-            info!(
-                "Loaded state from WaveKV: {} instances, {} nodes",
-                instances.len(),
-                nodes.len()
-            );
-            build_state_from_kv_store(instances)
-        } else {
-            // Fallback to legacy JSON state
-            load_legacy_state(&config)
-        };
+        info!(
+            "Loaded state from WaveKV: {} instances, {} nodes",
+            instances.len(),
+            nodes.len()
+        );
+        let state = build_state_from_kv_store(instances);
 
         // Sync this node to KvStore
         let node_data = NodeData {
@@ -409,23 +404,6 @@ impl Proxy {
         self.notify_state_updated.notify_one();
         Ok(response)
     }
-}
-
-fn load_state(state_path: &str) -> Result<ProxyStateMut> {
-    let state_str = fs::read_to_string(state_path).context("Failed to read state")?;
-    serde_json::from_str(&state_str).context("Failed to load state")
-}
-
-fn load_legacy_state(config: &Config) -> ProxyStateMut {
-    fs::metadata(&config.state_path)
-        .is_ok()
-        .then(|| load_state(&config.state_path))
-        .transpose()
-        .unwrap_or_else(|err| {
-            error!("Failed to load legacy state: {err}");
-            None
-        })
-        .unwrap_or_default()
 }
 
 fn build_state_from_kv_store(instances: BTreeMap<String, InstanceData>) -> ProxyStateMut {
@@ -726,13 +704,6 @@ impl ProxyState {
             Ok(_) => info!("wg config updated"),
             Err(e) => error!("failed to set wg config: {e}"),
         }
-        self.save_state()?;
-        Ok(())
-    }
-
-    fn save_state(&self) -> Result<()> {
-        let state_str = serde_json::to_string(&self.state).context("Failed to serialize state")?;
-        safe_write(&self.config.state_path, state_str).context("Failed to write state")?;
         Ok(())
     }
 

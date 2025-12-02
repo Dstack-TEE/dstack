@@ -81,7 +81,6 @@ mandatory = false
 # Empty kms_url to skip auto-cert generation (we use pre-generated certs)
 kms_url = ""
 rpc_domain = "gateway.tdxlab.dstack.org"
-state_path = "${RUN_DIR}/gateway-state-node${node_id}.json"
 
 [core.debug]
 insecure_enable_debug_rpc = true

@@ -147,7 +147,6 @@ pub struct Config {
     pub certbot: CertbotConfig,
     pub pccs_url: Option<String>,
     pub recycle: RecycleConfig,
-    pub state_path: String,
     pub set_ulimit: bool,
     pub rpc_domain: String,
     pub kms_url: String,

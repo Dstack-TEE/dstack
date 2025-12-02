@@ -153,7 +153,6 @@ mandatory = false
 [core]
 kms_url = ""
 rpc_domain = "gateway.tdxlab.dstack.org"
-state_path = "${RUN_DIR}/gateway-state-certbot-node${node_id}.json"
 
 [core.debug]
 insecure_enable_debug_rpc = true
