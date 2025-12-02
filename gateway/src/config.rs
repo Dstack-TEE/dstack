@@ -132,12 +132,10 @@ pub struct SyncConfig {
     /// WaveKV node ID for this gateway (must be unique across cluster)
     pub node_id: u32,
     /// Data directory for WaveKV persistence
-    #[serde(default = "default_wavekv_data_dir")]
     pub data_dir: String,
-}
-
-fn default_wavekv_data_dir() -> String {
-    "/var/lib/dstack-gateway/wavekv".to_string()
+    /// Interval for periodic WAL persistence (default: 10s)
+    #[serde(with = "serde_duration")]
+    pub persist_interval: Duration,
 }
 
 #[derive(Debug, Clone, Deserialize)]

@@ -110,3 +110,5 @@ timeout = "30s"
 bootnode = ""
 # Data directory for WaveKV persistence (WAL and snapshots)
 data_dir = "/dstack-gateway/data"
+# Interval for periodic persistence of WaveKV data (e.g., "5s", "1m", "1h")
+persist_interval = "5m"

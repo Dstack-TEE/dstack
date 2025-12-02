@@ -525,17 +525,37 @@ fn start_wavekv_watch_task(proxy: Proxy) -> Result<()> {
 
     // Watch for node changes and reconfigure WireGuard
     let mut rx = kv_store.watch_nodes();
+    let proxy_for_nodes = proxy.clone();
     tokio::spawn(async move {
         loop {
             if rx.changed().await.is_err() {
                 break;
             }
             info!("WaveKV: detected remote node changes, reconfiguring WireGuard...");
-            if let Err(err) = proxy.lock().reconfigure() {
+            if let Err(err) = proxy_for_nodes.lock().reconfigure() {
                 error!("Failed to reconfigure WireGuard: {err}");
             }
         }
     });
+
+    // Start periodic persistence task
+    let persist_interval = proxy.config.sync.persist_interval;
+    if !persist_interval.is_zero() {
+        let kv_store_for_persist = kv_store.clone();
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(persist_interval);
+            loop {
+                ticker.tick().await;
+                match kv_store_for_persist.persist_if_dirty() {
+                    Ok(true) => info!("WaveKV: periodic persist completed"),
+                    Ok(false) => {} // No changes to persist
+                    Err(err) => error!("WaveKV: periodic persist failed: {err}"),
+                }
+            }
+        });
+        info!("WaveKV: periodic persistence enabled (interval: {persist_interval:?})");
+    }
+
     Ok(())
 }
 

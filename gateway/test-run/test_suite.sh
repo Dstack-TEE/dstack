@@ -99,6 +99,7 @@ my_url = "https://localhost:${rpc_port}"
 bootnode = "${bootnode_url}"
 node_id = ${node_id}
 data_dir = "${RUN_DIR}/wavekv_node${node_id}"
+persist_interval = "5s"
 
 [core.certbot]
 enabled = false
@@ -1385,6 +1386,90 @@ test_node_id_reuse_rejected() {
 }
 
 # =============================================================================
+# Test 15: Periodic persistence
+# =============================================================================
+test_periodic_persistence() {
+	log_info "========== Test 15: Periodic Persistence =========="
+	cleanup
+
+	rm -rf "$RUN_DIR/wavekv_node1"
+
+	generate_config 1
+	start_node 1
+
+	local debug_port=13015
+	local admin_port=13016
+
+	# Verify debug service is available
+	if ! check_debug_service $debug_port; then
+		log_error "Debug service not available"
+		return 1
+	fi
+
+	# Register some clients to create data
+	log_info "Registering clients to create data..."
+	local success_count=0
+	for i in $(seq 1 3); do
+		local key=$(printf "persist%02d123456789012345678901234567890=" "$i")
+		local response=$(debug_register_cvm $debug_port "$key" "persist_app$i" "persist_inst$i")
+		if verify_register_response "$response" >/dev/null 2>&1; then
+			((success_count++))
+		fi
+	done
+	log_info "Registered $success_count/3 clients"
+
+	if [[ "$success_count" -ne 3 ]]; then
+		log_error "Failed to register all clients"
+		return 1
+	fi
+
+	# Get initial key count
+	local keys_before=$(get_n_keys $admin_port)
+	log_info "Keys before waiting for persist: $keys_before"
+
+	# Wait for periodic persistence (persist_interval is 5s in test config)
+	log_info "Waiting for periodic persistence (8s)..."
+	sleep 8
+
+	# Check log for periodic persist message
+	local log_file="${LOG_DIR}/${CURRENT_TEST}_node1.log"
+	if grep -q "periodic persist completed" "$log_file" 2>/dev/null; then
+		log_info "Found periodic persist message in log"
+	else
+		log_error "Periodic persist message not found in log - test FAILED"
+		return 1
+	fi
+
+	# Stop node
+	stop_node 1
+
+	# Check WAL file exists and has content
+	local wal_file="$RUN_DIR/wavekv_node1/node_1.wal"
+	if [[ ! -f "$wal_file" ]]; then
+		log_error "WAL file not found: $wal_file"
+		return 1
+	fi
+
+	local wal_size=$(stat -c%s "$wal_file" 2>/dev/null || stat -f%z "$wal_file" 2>/dev/null)
+	log_info "WAL file size after periodic persist: $wal_size bytes"
+
+	# Restart node and verify data is recovered
+	log_info "Restarting node to verify persistence..."
+	start_node 1
+
+	local keys_after=$(get_n_keys $admin_port)
+	log_info "Keys after restart: $keys_after"
+
+	if [[ "$keys_after" -ge "$keys_before" ]]; then
+		log_info "Periodic persistence test PASSED"
+		return 0
+	else
+		log_error "Periodic persistence test FAILED: keys_before=$keys_before, keys_after=$keys_after"
+		return 1
+	fi
+}
+
+# =============================================================================
 # Admin RPC helper functions
 # =============================================================================
 
@@ -1464,10 +1549,10 @@ except:
 }
 
 # =============================================================================
-# Test 15: Admin.SetNodeUrl RPC
+# Test 16: Admin.SetNodeUrl RPC
 # =============================================================================
 test_admin_set_node_url() {
-	log_info "========== Test 15: Admin.SetNodeUrl RPC =========="
+	log_info "========== Test 16: Admin.SetNodeUrl RPC =========="
 	cleanup
 
 	rm -rf "$RUN_DIR/wavekv_node1"
@@ -1514,10 +1599,10 @@ test_admin_set_node_url() {
 }
 
 # =============================================================================
-# Test 16: Admin.SetNodeStatus RPC
+# Test 17: Admin.SetNodeStatus RPC
 # =============================================================================
 test_admin_set_node_status() {
-	log_info "========== Test 16: Admin.SetNodeStatus RPC =========="
+	log_info "========== Test 17: Admin.SetNodeStatus RPC =========="
 	cleanup
 
 	rm -rf "$RUN_DIR/wavekv_node1"
@@ -1709,6 +1794,7 @@ main() {
 			log_info "  - test_three_node_cluster"
 			log_info "  - test_three_node_bootnode"
 			log_info "  - test_node_id_reuse_rejected"
+			log_info "  - test_periodic_persistence"
 			log_info "  - test_wal_integrity"
 			log_info "  - test_admin_set_node_url"
 			log_info "  - test_admin_set_node_status"
@@ -1795,6 +1881,7 @@ main() {
 		run_test test_three_node_cluster
 		run_test test_three_node_bootnode
 		run_test test_node_id_reuse_rejected
+		run_test test_periodic_persistence
 	fi
 
 	if [[ "$test_filter" == "all" ]] || [[ "$test_filter" == "admin" ]]; then
