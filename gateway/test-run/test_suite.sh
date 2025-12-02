@@ -99,7 +99,7 @@ timeout = "10s"
 my_url = "https://localhost:${rpc_port}"
 bootnode = "${bootnode_url}"
 node_id = ${node_id}
-wavekv_data_dir = "${RUN_DIR}/wavekv_node${node_id}"
+data_dir = "${RUN_DIR}/wavekv_node${node_id}"
 
 [core.certbot]
 enabled = false

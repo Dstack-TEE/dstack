@@ -179,7 +179,7 @@ bootnode = ""
 node_id = ${node_id}
 peer_node_ids = [${other_nodes}]
 peer_urls = [${peer_urls}]
-wavekv_data_dir = "${RUN_DIR}/wavekv_node${node_id}"
+data_dir = "${RUN_DIR}/wavekv_node${node_id}"
 
 [core.certbot]
 enabled = false

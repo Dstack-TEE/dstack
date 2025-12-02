@@ -133,7 +133,7 @@ pub struct SyncConfig {
     pub node_id: u32,
     /// Data directory for WaveKV persistence
     #[serde(default = "default_wavekv_data_dir")]
-    pub wavekv_data_dir: String,
+    pub data_dir: String,
 }
 
 fn default_wavekv_data_dir() -> String {
@@ -177,12 +177,12 @@ pub struct AuthConfig {
 
 impl Config {
     /// Get or generate a unique node UUID.
-    /// The UUID is stored in `{wavekv_data_dir}/node_uuid` and persisted across restarts.
+    /// The UUID is stored in `{data_dir}/node_uuid` and persisted across restarts.
     pub fn uuid(&self) -> Vec<u8> {
         use std::fs;
         use std::path::Path;
 
-        let uuid_path = Path::new(&self.sync.wavekv_data_dir).join("node_uuid");
+        let uuid_path = Path::new(&self.sync.data_dir).join("node_uuid");
 
         // Try to read existing UUID
         if let Ok(content) = fs::read_to_string(&uuid_path) {

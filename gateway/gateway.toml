@@ -110,4 +110,4 @@ timeout = "30s"
 # Leave empty if this is the first node or peers are managed via Admin.SetNodeInfo RPC.
 bootnode = ""
 # Data directory for WaveKV persistence (WAL and snapshots)
-wavekv_data_dir = "/dstack-gateway/data"
+data_dir = "/dstack-gateway/data"

@@ -25,7 +25,7 @@ async fn create_test_state() -> TestState {
     config.proxy.cert_chain = format!("{cargo_dir}/assets/cert.pem");
     config.proxy.cert_key = format!("{cargo_dir}/assets/cert.key");
     let temp_dir = TempDir::new().expect("failed to create temp dir");
-    config.sync.wavekv_data_dir = temp_dir.path().to_string_lossy().to_string();
+    config.sync.data_dir = temp_dir.path().to_string_lossy().to_string();
     let options = ProxyOptions {
         config,
         my_app_id: None,

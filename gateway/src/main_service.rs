@@ -122,7 +122,7 @@ impl ProxyInner {
 
         // Initialize WaveKV store without peers (peers will be added dynamically from bootnode)
         let kv_store = Arc::new(
-            KvStore::new(config.sync.node_id, vec![], &config.sync.wavekv_data_dir)
+            KvStore::new(config.sync.node_id, vec![], &config.sync.data_dir)
                 .context("failed to initialize WaveKV store")?,
         );
         info!(

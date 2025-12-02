@@ -22,7 +22,6 @@ use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime};
 use rustls::{DigitallySignedStruct, SignatureScheme};
 use serde::{de::DeserializeOwned, Serialize};
-use tracing::info;
 
 /// Custom certificate validator trait for TLS handshake verification.
 ///

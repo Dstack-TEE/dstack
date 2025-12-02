@@ -170,7 +170,7 @@ bootnode = ""
 node_id = ${node_id}
 peer_node_ids = [${other_node}]
 peer_urls = ["${other_node}:https://localhost:${other_rpc_port}"]
-wavekv_data_dir = "${RUN_DIR}/wavekv_certbot_node${node_id}"
+data_dir = "${RUN_DIR}/wavekv_certbot_node${node_id}"
 
 [core.certbot]
 enabled = true
