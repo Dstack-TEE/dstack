@@ -80,8 +80,7 @@ echo "RPC_DOMAIN: $RPC_DOMAIN"
 cat >$CONFIG_PATH <<EOF
 keep_alive = 10
 log_level = "info"
-address = "0.0.0.0"
-port = 8000
+address = "0.0.0.0:8000"
 
 [tls]
 key = "$CERTS_DIR/gateway-rpc.key"
@@ -104,8 +103,7 @@ bootnode = "$BOOTNODE_URL"
 
 [core.admin]
 enabled = true
-address = "0.0.0.0"
-port = 8001
+address = "0.0.0.0:8001"
 
 [core.certbot]
 enabled = true

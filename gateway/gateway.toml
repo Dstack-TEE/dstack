@@ -8,7 +8,7 @@ ident = "dstack Gateway"
 temp_dir = "/tmp"
 keep_alive = 10
 log_level = "info"
-port = 8010
+address = "127.0.0.1:8010"
 
 [core]
 kms_url = ""
@@ -24,13 +24,12 @@ timeout = "5s"
 
 [core.admin]
 enabled = false
-port = 8011
+address = "127.0.0.1:8011"
 
 [core.debug]
 insecure_enable_debug_rpc = false
 insecure_skip_attestation = false
-port = 8012
-address = "127.0.0.1"
+address = "127.0.0.1:8012"
 
 [core.certbot]
 enabled = false
