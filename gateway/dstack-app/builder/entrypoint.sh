@@ -51,6 +51,13 @@ validate_env "$CF_API_TOKEN"
 validate_env "$CF_ZONE_ID"
 validate_env "$SRV_DOMAIN"
 validate_env "$WG_ENDPOINT"
+validate_env "$NODE_ID"
+
+# Validate $NODE_ID, must be a number
+if [[ ! "$NODE_ID" =~ ^[0-9]+$ ]]; then
+    echo "Invalid NODE_ID: $NODE_ID"
+    exit 1
+fi
 
 # Validate $SUBNET_INDEX, valid range is 0-15
 if [[ ! "$SUBNET_INDEX" =~ ^[0-9]+$ ]] || [ "$SUBNET_INDEX" -lt 0 ] || [ "$SUBNET_INDEX" -gt 15 ]; then
@@ -96,9 +103,12 @@ rpc_domain = "$RPC_DOMAIN"
 
 [core.sync]
 enabled = $SYNC_ENABLED
-interval = "30s"
+node_id = $NODE_ID
+interval = "1m"
+timeout = "2m"
 my_url = "$MY_URL"
 bootnode = "$BOOTNODE_URL"
+data_dir = "$DATA_DIR"
 
 [core.admin]
 enabled = true

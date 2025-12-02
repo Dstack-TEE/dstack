@@ -165,10 +165,8 @@ enabled = true
 interval = "5s"
 timeout = "10s"
 my_url = "https://localhost:${rpc_port}"
-bootnode = ""
+bootnode = "https://localhost:${other_rpc_port}"
 node_id = ${node_id}
-peer_node_ids = [${other_node}]
-peer_urls = ["${other_node}:https://localhost:${other_rpc_port}"]
 data_dir = "${RUN_DIR}/wavekv_certbot_node${node_id}"
 
 [core.certbot]
