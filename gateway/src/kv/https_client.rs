@@ -5,9 +5,11 @@
 //! HTTPS client with mTLS and custom certificate verification during TLS handshake.
 
 use std::fmt::Debug;
+use std::io::{Read, Write};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use flate2::{read::GzDecoder, write::GzEncoder, Compression};
 use http_body_util::{BodyExt, Full};
 use hyper::body::Bytes;
 use hyper_rustls::HttpsConnectorBuilder;
@@ -230,6 +232,62 @@ impl HttpsClient {
             .to_bytes();
 
         serde_json::from_slice(&body).context("failed to parse response")
+    }
+
+    /// Send a POST request with bincode + gzip encoded body and receive bincode + gzip response
+    pub async fn post_bincode_gz<T: Serialize, R: DeserializeOwned>(
+        &self,
+        url: &str,
+        body: &T,
+    ) -> Result<R> {
+        // Encode to bincode
+        let config = bincode::config::standard();
+        let encoded =
+            bincode::serde::encode_to_vec(body, config).context("failed to encode request body")?;
+
+        // Compress with gzip
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::fast());
+        encoder
+            .write_all(&encoded)
+            .context("failed to compress request")?;
+        let compressed = encoder.finish().context("failed to finish compression")?;
+
+        let request = hyper::Request::builder()
+            .method(hyper::Method::POST)
+            .uri(url)
+            .header("content-type", "application/x-bincode-gz")
+            .body(Full::new(Bytes::from(compressed)))
+            .context("failed to build request")?;
+
+        let response = self
+            .client
+            .request(request)
+            .await
+            .with_context(|| format!("failed to send request to {url}"))?;
+
+        if !response.status().is_success() {
+            anyhow::bail!("request failed: {}", response.status());
+        }
+
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .context("failed to read response body")?
+            .to_bytes();
+
+        // Decompress
+        let mut decoder = GzDecoder::new(body.as_ref());
+        let mut decompressed = Vec::new();
+        decoder
+            .read_to_end(&mut decompressed)
+            .context("failed to decompress response")?;
+
+        // Decode bincode
+        let (result, _): (R, _) = bincode::serde::decode_from_slice(&decompressed, config)
+            .context("failed to decode response")?;
+
+        Ok(result)
     }
 }
 

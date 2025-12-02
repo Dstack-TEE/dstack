@@ -109,10 +109,11 @@ impl ExchangeInterface for HttpSyncNetwork {
             self.store_path
         );
 
-        // Send request - app_id verification happens during TLS handshake via AppIdVerifier
+        // Send request with bincode + gzip encoding
+        // app_id verification happens during TLS handshake via AppIdVerifier
         let sync_response: SyncResponse = self
             .client
-            .post_json(&sync_url, &msg)
+            .post_bincode_gz(&sync_url, &msg)
             .await
             .with_context(|| format!("failed to sync to peer {peer} at {sync_url}"))?;
 

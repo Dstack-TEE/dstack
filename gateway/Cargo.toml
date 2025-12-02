@@ -55,6 +55,7 @@ x509-parser.workspace = true
 jemallocator.workspace = true
 wavekv.workspace = true
 bincode.workspace = true
+flate2.workspace = true
 uuid = { workspace = true, features = ["v4"] }
 
 [target.'cfg(unix)'.dependencies]
