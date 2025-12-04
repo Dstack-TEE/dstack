@@ -23,6 +23,8 @@ use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime};
 use rustls::{DigitallySignedStruct, SignatureScheme};
 use serde::{de::DeserializeOwned, Serialize};
 
+use super::{decode, encode};
+
 /// Custom certificate validator trait for TLS handshake verification.
 ///
 /// Implementations can perform additional validation on the peer certificate
@@ -226,16 +228,13 @@ impl HttpsClient {
         serde_json::from_slice(&body).context("failed to parse response")
     }
 
-    /// Send a POST request with bincode + gzip encoded body and receive bincode + gzip response
-    pub async fn post_bincode_gz<T: Serialize, R: DeserializeOwned>(
+    /// Send a POST request with msgpack + gzip encoded body and receive msgpack + gzip response
+    pub async fn post_compressed_msg<T: Serialize, R: DeserializeOwned>(
         &self,
         url: &str,
         body: &T,
     ) -> Result<R> {
-        // Encode to bincode
-        let config = bincode::config::standard();
-        let encoded =
-            bincode::serde::encode_to_vec(body, config).context("failed to encode request body")?;
+        let encoded = encode(body).context("failed to encode request body")?;
 
         // Compress with gzip
         let mut encoder = GzEncoder::new(Vec::new(), Compression::fast());
@@ -247,7 +246,7 @@ impl HttpsClient {
         let request = hyper::Request::builder()
             .method(hyper::Method::POST)
             .uri(url)
-            .header("content-type", "application/x-bincode-gz")
+            .header("content-type", "application/x-msgpack-gz")
             .body(Full::new(Bytes::from(compressed)))
             .context("failed to build request")?;
 
@@ -275,11 +274,7 @@ impl HttpsClient {
             .read_to_end(&mut decompressed)
             .context("failed to decompress response")?;
 
-        // Decode bincode
-        let (result, _): (R, _) = bincode::serde::decode_from_slice(&decompressed, config)
-            .context("failed to decode response")?;
-
-        Ok(result)
+        decode(&decompressed).context("failed to decode response")
     }
 }
 

@@ -23,13 +23,14 @@ mod sync_service;
 
 pub use https_client::{AppIdValidator, HttpsClientConfig};
 pub use sync_service::{fetch_peers_from_bootnode, WaveKvSyncService};
+use tracing::warn;
 
 use std::{collections::BTreeMap, net::Ipv4Addr, path::Path};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
-use wavekv::{types::NodeId, Node};
+use wavekv::{node::NodeState, types::NodeId, Node};
 
 /// Instance core data (persistent)
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -168,14 +169,76 @@ pub mod keys {
     }
 }
 
-pub fn encode<T: Serialize>(value: &T) -> Vec<u8> {
-    bincode::serde::encode_to_vec(value, bincode::config::standard()).unwrap_or_default()
+pub fn encode<T: Serialize>(value: &T) -> Result<Vec<u8>> {
+    rmp_serde::encode::to_vec(value).context("failed to encode value")
 }
 
-pub fn decode<T: for<'de> Deserialize<'de>>(bytes: &[u8]) -> Option<T> {
-    bincode::serde::decode_from_slice(bytes, bincode::config::standard())
-        .ok()
-        .map(|(v, _)| v)
+pub fn decode<T: for<'de> Deserialize<'de>>(bytes: &[u8]) -> Result<T> {
+    rmp_serde::decode::from_slice(bytes).context("failed to decode value")
+}
+
+trait GetPutCodec {
+    fn decode<T: for<'de> serde::Deserialize<'de>>(&self, key: &str) -> Option<T>;
+    fn put_encoded<T: serde::Serialize>(&mut self, key: String, value: &T) -> Result<()>;
+    fn iter_decoded<T: for<'de> serde::Deserialize<'de>>(
+        &self,
+        prefix: &str,
+    ) -> impl Iterator<Item = (String, T)>;
+    fn iter_decoded_values<T: for<'de> serde::Deserialize<'de>>(
+        &self,
+        prefix: &str,
+    ) -> impl Iterator<Item = T>;
+}
+
+impl GetPutCodec for NodeState {
+    fn decode<T: for<'de> serde::Deserialize<'de>>(&self, key: &str) -> Option<T> {
+        self.get(key)
+            .and_then(|entry| match decode(entry.value.as_ref()?) {
+                Ok(value) => Some(value),
+                Err(e) => {
+                    warn!("failed to decode value for key {key}: {e:?}");
+                    None
+                }
+            })
+    }
+
+    fn put_encoded<T: serde::Serialize>(&mut self, key: String, value: &T) -> Result<()> {
+        self.put(key.clone(), encode(value)?)
+            .with_context(|| format!("failed to put key {key}"))?;
+        Ok(())
+    }
+
+    fn iter_decoded<T: for<'de> serde::Deserialize<'de>>(
+        &self,
+        prefix: &str,
+    ) -> impl Iterator<Item = (String, T)> {
+        self.iter_by_prefix(prefix).filter_map(|(key, entry)| {
+            let value = match decode(entry.value.as_ref()?) {
+                Ok(value) => value,
+                Err(e) => {
+                    warn!("failed to decode value for key {key}: {e:?}");
+                    return None;
+                }
+            };
+            Some((key.to_string(), value))
+        })
+    }
+
+    fn iter_decoded_values<T: for<'de> serde::Deserialize<'de>>(
+        &self,
+        prefix: &str,
+    ) -> impl Iterator<Item = T> {
+        self.iter_by_prefix(prefix).filter_map(|(key, entry)| {
+            let value = match decode(entry.value.as_ref()?) {
+                Ok(value) => value,
+                Err(e) => {
+                    warn!("failed to decode value for key {key}: {e:?}");
+                    return None;
+                }
+            };
+            Some(value)
+        })
+    }
 }
 
 /// Sync store wrapping two WaveKV Nodes (persistent and ephemeral).
@@ -227,23 +290,22 @@ impl KvStore {
 
     /// Sync instance data to other nodes
     pub fn sync_instance(&self, instance_id: &str, data: &InstanceData) -> Result<()> {
-        self.persistent()
+        self.persistent
             .write()
-            .put(keys::inst(instance_id), encode(data))?;
-        Ok(())
+            .put_encoded(keys::inst(instance_id), data)
     }
 
     /// Sync instance deletion to other nodes
     pub fn sync_delete_instance(&self, instance_id: &str) -> Result<()> {
-        self.persistent().write().delete(keys::inst(instance_id))?;
-        self.ephemeral()
+        self.persistent.write().delete(keys::inst(instance_id))?;
+        self.ephemeral
             .write()
             .delete(keys::last_seen_inst(instance_id))?;
-        self.ephemeral()
+        self.ephemeral
             .write()
             .delete(keys::conn(instance_id, self.my_node_id))?;
         // Delete this node's handshake record
-        self.ephemeral()
+        self.ephemeral
             .write()
             .delete(keys::handshake(instance_id, self.my_node_id))?;
         Ok(())
@@ -251,13 +313,12 @@ impl KvStore {
 
     /// Load all instances from sync store (for initial sync on startup)
     pub fn load_all_instances(&self) -> BTreeMap<String, InstanceData> {
-        self.persistent()
+        self.persistent
             .read()
-            .iter_by_prefix(keys::INST_PREFIX)
-            .filter_map(|(key, entry)| {
-                let instance_id = keys::parse_inst_key(key)?;
-                let data: InstanceData = decode(entry.value.as_ref()?)?;
-                Some((instance_id.to_string(), data))
+            .iter_decoded(keys::INST_PREFIX)
+            .filter_map(|(key, data)| {
+                let instance_id = keys::parse_inst_key(&key)?;
+                Some((instance_id.into(), data))
             })
             .collect()
     }
@@ -266,20 +327,18 @@ impl KvStore {
 
     /// Sync node data to other nodes
     pub fn sync_node(&self, node_id: NodeId, data: &NodeData) -> Result<()> {
-        self.persistent()
+        self.persistent
             .write()
-            .put(keys::node_info(node_id), encode(data))?;
-        Ok(())
+            .put_encoded(keys::node_info(node_id), data)
     }
 
     /// Load all nodes from sync store
     pub fn load_all_nodes(&self) -> BTreeMap<NodeId, NodeData> {
-        self.persistent()
+        self.persistent
             .read()
-            .iter_by_prefix(keys::NODE_INFO_PREFIX)
-            .filter_map(|(key, entry)| {
-                let node_id = keys::parse_node_info_key(key)?;
-                let data: NodeData = decode(entry.value.as_ref()?)?;
+            .iter_decoded(keys::NODE_INFO_PREFIX)
+            .filter_map(|(key, data)| {
+                let node_id = keys::parse_node_info_key(&key)?;
                 Some((node_id, data))
             })
             .collect()
@@ -289,29 +348,27 @@ impl KvStore {
 
     /// Set node status (stored separately from NodeData)
     pub fn set_node_status(&self, node_id: NodeId, status: NodeStatus) -> Result<()> {
-        self.persistent()
+        self.persistent
             .write()
-            .put(keys::node_status(node_id), encode(&status))?;
+            .put_encoded(keys::node_status(node_id), &status)?;
         Ok(())
     }
 
     /// Get node status
     pub fn get_node_status(&self, node_id: NodeId) -> NodeStatus {
-        self.persistent()
+        self.persistent
             .read()
-            .get(&keys::node_status(node_id))
-            .and_then(|entry| decode(entry.value.as_ref()?))
+            .decode(&keys::node_status(node_id))
             .unwrap_or_default()
     }
 
     /// Load all node statuses
     pub fn load_all_node_statuses(&self) -> BTreeMap<NodeId, NodeStatus> {
-        self.persistent()
+        self.persistent
             .read()
-            .iter_by_prefix(keys::NODE_STATUS_PREFIX)
-            .filter_map(|(key, entry)| {
+            .iter_decoded(keys::NODE_STATUS_PREFIX)
+            .filter_map(|(key, status)| {
                 let node_id: NodeId = key.strip_prefix(keys::NODE_STATUS_PREFIX)?.parse().ok()?;
-                let status: NodeStatus = decode(entry.value.as_ref()?)?;
                 Some((node_id, status))
             })
             .collect()
@@ -321,18 +378,17 @@ impl KvStore {
 
     /// Sync connection count for an instance (from this node)
     pub fn sync_connections(&self, instance_id: &str, count: u64) -> Result<()> {
-        self.ephemeral()
+        self.ephemeral
             .write()
-            .put(keys::conn(instance_id, self.my_node_id), encode(&count))?;
+            .put_encoded(keys::conn(instance_id, self.my_node_id), &count)?;
         Ok(())
     }
 
     /// Get total connections for an instance (sum from all nodes)
     pub fn get_total_connections(&self, instance_id: &str) -> u64 {
-        self.ephemeral()
+        self.ephemeral
             .read()
-            .iter_by_prefix(&keys::conn_prefix(instance_id))
-            .filter_map(|(_, entry)| decode::<u64>(entry.value.as_ref()?))
+            .iter_decoded_values::<u64>(&keys::conn_prefix(instance_id))
             .sum()
     }
 
@@ -340,28 +396,26 @@ impl KvStore {
 
     /// Sync instance last_seen
     pub fn sync_instance_last_seen(&self, instance_id: &str, timestamp: u64) -> Result<()> {
-        self.ephemeral()
+        self.ephemeral
             .write()
-            .put(keys::last_seen_inst(instance_id), encode(&timestamp))?;
+            .put_encoded(keys::last_seen_inst(instance_id), &timestamp)?;
         Ok(())
     }
 
     /// Get instance last_seen
     pub fn get_instance_last_seen(&self, instance_id: &str) -> Option<u64> {
-        self.ephemeral()
+        self.ephemeral
             .read()
-            .get(&keys::last_seen_inst(instance_id))
-            .and_then(|entry| decode(entry.value.as_ref()?))
+            .decode(&keys::last_seen_inst(instance_id))
     }
 
     /// Load all instances' last_seen
     pub fn load_all_instances_last_seen(&self) -> BTreeMap<String, u64> {
-        self.ephemeral()
+        self.ephemeral
             .read()
-            .iter_by_prefix(keys::LAST_SEEN_INST_PREFIX)
-            .filter_map(|(key, entry)| {
+            .iter_decoded(keys::LAST_SEEN_INST_PREFIX)
+            .filter_map(|(key, ts)| {
                 let instance_id = key.strip_prefix(keys::LAST_SEEN_INST_PREFIX)?;
-                let ts: u64 = decode(entry.value.as_ref()?)?;
                 Some((instance_id.to_string(), ts))
             })
             .collect()
@@ -371,22 +425,20 @@ impl KvStore {
 
     /// Sync handshake timestamp for an instance (as observed by this node)
     pub fn sync_instance_handshake(&self, instance_id: &str, timestamp: u64) -> Result<()> {
-        self.ephemeral().write().put(
-            keys::handshake(instance_id, self.my_node_id),
-            encode(&timestamp),
-        )?;
+        self.ephemeral
+            .write()
+            .put_encoded(keys::handshake(instance_id, self.my_node_id), &timestamp)?;
         Ok(())
     }
 
     /// Get all handshake observations for an instance (from all nodes)
     pub fn get_instance_handshakes(&self, instance_id: &str) -> BTreeMap<NodeId, u64> {
-        self.ephemeral()
+        self.ephemeral
             .read()
-            .iter_by_prefix(&keys::handshake_prefix(instance_id))
-            .filter_map(|(key, entry)| {
+            .iter_decoded(&keys::handshake_prefix(instance_id))
+            .filter_map(|(key, ts)| {
                 let suffix = key.strip_prefix(&keys::handshake_prefix(instance_id))?;
                 let observer: NodeId = suffix.parse().ok()?;
-                let ts: u64 = decode(entry.value.as_ref()?)?;
                 Some((observer, ts))
             })
             .collect()
@@ -394,16 +446,16 @@ impl KvStore {
 
     /// Get the latest handshake timestamp for an instance (max across all nodes)
     pub fn get_instance_latest_handshake(&self, instance_id: &str) -> Option<u64> {
-        self.get_instance_handshakes(instance_id)
-            .values()
-            .copied()
+        self.ephemeral
+            .read()
+            .iter_decoded_values(&keys::handshake_prefix(instance_id))
             .max()
     }
 
     /// Delete handshake records for an instance (when instance is deleted)
     pub fn delete_instance_handshakes(&self, instance_id: &str) -> Result<()> {
         // Delete this node's handshake record
-        self.ephemeral()
+        self.ephemeral
             .write()
             .delete(keys::handshake(instance_id, self.my_node_id))?;
         Ok(())
@@ -411,22 +463,20 @@ impl KvStore {
 
     /// Sync node last_seen (as observed by this node)
     pub fn sync_node_last_seen(&self, node_id: NodeId, timestamp: u64) -> Result<()> {
-        self.ephemeral().write().put(
-            keys::last_seen_node(node_id, self.my_node_id),
-            encode(&timestamp),
-        )?;
+        self.ephemeral
+            .write()
+            .put_encoded(keys::last_seen_node(node_id, self.my_node_id), &timestamp)?;
         Ok(())
     }
 
     /// Get all observations of a node's last_seen
     pub fn get_node_last_seen_by_all(&self, node_id: NodeId) -> BTreeMap<NodeId, u64> {
-        self.ephemeral()
+        self.ephemeral
             .read()
-            .iter_by_prefix(&keys::last_seen_node_prefix(node_id))
-            .filter_map(|(key, entry)| {
+            .iter_decoded(&keys::last_seen_node_prefix(node_id))
+            .filter_map(|(key, ts)| {
                 let suffix = key.strip_prefix(&keys::last_seen_node_prefix(node_id))?;
                 let seen_by: NodeId = suffix.parse().ok()?;
-                let ts: u64 = decode(entry.value.as_ref()?)?;
                 Some((seen_by, ts))
             })
             .collect()
@@ -434,9 +484,9 @@ impl KvStore {
 
     /// Get the latest last_seen timestamp for a node (max across all observers)
     pub fn get_node_latest_last_seen(&self, node_id: NodeId) -> Option<u64> {
-        self.get_node_last_seen_by_all(node_id)
-            .values()
-            .copied()
+        self.ephemeral
+            .read()
+            .iter_decoded_values(&keys::last_seen_node_prefix(node_id))
             .max()
     }
 
@@ -444,35 +494,35 @@ impl KvStore {
 
     /// Watch for remote instance changes (for updating local ProxyState)
     pub fn watch_instances(&self) -> watch::Receiver<()> {
-        self.persistent().watch_prefix(keys::INST_PREFIX)
+        self.persistent.watch_prefix(keys::INST_PREFIX)
     }
 
     /// Watch for remote node changes
     pub fn watch_nodes(&self) -> watch::Receiver<()> {
-        self.persistent().watch_prefix(keys::NODE_PREFIX)
+        self.persistent.watch_prefix(keys::NODE_PREFIX)
     }
 
     // ==================== Persistence ====================
 
     pub fn persist_if_dirty(&self) -> Result<bool> {
-        self.persistent().persist_if_dirty()
+        self.persistent.persist_if_dirty()
     }
 
     pub fn persist(&self) -> Result<()> {
-        self.persistent().persist()
+        self.persistent.persist()
     }
 
     // ==================== Peer Management ====================
 
     pub fn add_peer(&self, peer_id: NodeId) -> Result<()> {
-        self.persistent().write().add_peer(peer_id)?;
-        self.ephemeral().write().add_peer(peer_id)?;
+        self.persistent.write().add_peer(peer_id)?;
+        self.ephemeral.write().add_peer(peer_id)?;
         Ok(())
     }
 
     pub fn remove_peer(&self, peer_id: NodeId) -> Result<()> {
-        self.persistent().write().remove_peer(peer_id)?;
-        self.ephemeral().write().remove_peer(peer_id)?;
+        self.persistent.write().remove_peer(peer_id)?;
+        self.ephemeral.write().remove_peer(peer_id)?;
         Ok(())
     }
 
@@ -484,35 +534,26 @@ impl KvStore {
     /// to the wavekv peer list (so SyncManager knows to sync with it).
     pub fn register_peer_url(&self, node_id: NodeId, url: &str) -> Result<()> {
         // Store URL in persistent KvStore
-        self.persistent()
+        self.persistent
             .write()
-            .put(keys::peer_addr(node_id), url.as_bytes().to_vec())?;
+            .put_encoded(keys::peer_addr(node_id), &url)?;
 
-        // Add peer to wavekv's internal peer list for both stores
-        // This is needed so SyncManager.sync_to_all_peers() includes this peer
-        let _ = self.persistent().write().add_peer(node_id);
-        let _ = self.ephemeral().write().add_peer(node_id);
-
+        let _ = self.add_peer(node_id);
         Ok(())
     }
 
     /// Get a peer's sync URL from DB
     pub fn get_peer_url(&self, node_id: NodeId) -> Option<String> {
-        self.persistent()
-            .read()
-            .get(&keys::peer_addr(node_id))
-            .and_then(|entry| entry.value.clone())
-            .and_then(|bytes| String::from_utf8(bytes).ok())
+        self.persistent.read().decode(&keys::peer_addr(node_id))
     }
 
     /// Get all peer addresses from DB (for debugging/testing)
     pub fn get_all_peer_addrs(&self) -> BTreeMap<NodeId, String> {
-        self.persistent()
+        self.persistent
             .read()
-            .iter_by_prefix(keys::PEER_ADDR_PREFIX)
-            .filter_map(|(key, entry)| {
+            .iter_decoded(keys::PEER_ADDR_PREFIX)
+            .filter_map(|(key, url)| {
                 let node_id: NodeId = key.strip_prefix(keys::PEER_ADDR_PREFIX)?.parse().ok()?;
-                let url = String::from_utf8(entry.value.clone()?).ok()?;
                 Some((node_id, url))
             })
             .collect()
@@ -522,42 +563,37 @@ impl KvStore {
 
     /// Get certificate credentials for a domain
     pub fn get_cert_credentials(&self, domain: &str) -> Option<CertCredentials> {
-        self.persistent()
+        self.persistent
             .read()
-            .get(&keys::cert_credentials(domain))
-            .and_then(|entry| decode(entry.value.as_ref()?))
+            .decode(&keys::cert_credentials(domain))
     }
 
     /// Save certificate credentials for a domain
     pub fn save_cert_credentials(&self, domain: &str, creds: &CertCredentials) -> Result<()> {
-        self.persistent()
+        self.persistent
             .write()
-            .put(keys::cert_credentials(domain), encode(creds))?;
+            .put_encoded(keys::cert_credentials(domain), creds)?;
         Ok(())
     }
 
     /// Get certificate data for a domain
     pub fn get_cert_data(&self, domain: &str) -> Option<CertData> {
-        self.persistent()
-            .read()
-            .get(&keys::cert_data(domain))
-            .and_then(|entry| decode(entry.value.as_ref()?))
+        self.persistent.read().decode(&keys::cert_data(domain))
     }
 
     /// Save certificate data for a domain
     pub fn save_cert_data(&self, domain: &str, data: &CertData) -> Result<()> {
-        self.persistent()
+        self.persistent
             .write()
-            .put(keys::cert_data(domain), encode(data))?;
+            .put_encoded(keys::cert_data(domain), data)?;
         Ok(())
     }
 
     /// Get certificate renew lock for a domain
     pub fn get_cert_renew_lock(&self, domain: &str) -> Option<CertRenewLock> {
-        self.persistent()
+        self.persistent
             .read()
-            .get(&keys::cert_renew_lock(domain))
-            .and_then(|entry| decode(entry.value.as_ref()?))
+            .decode(&keys::cert_renew_lock(domain))
     }
 
     /// Try to acquire certificate renew lock
@@ -580,15 +616,15 @@ impl KvStore {
             started_at: now,
             started_by: self.my_node_id,
         };
-        self.persistent()
+        self.persistent
             .write()
-            .put(keys::cert_renew_lock(domain), encode(&lock))
+            .put_encoded(keys::cert_renew_lock(domain), &lock)
             .is_ok()
     }
 
     /// Release certificate renew lock
     pub fn release_cert_renew_lock(&self, domain: &str) -> Result<()> {
-        self.persistent()
+        self.persistent
             .write()
             .delete(keys::cert_renew_lock(domain))?;
         Ok(())
@@ -596,6 +632,6 @@ impl KvStore {
 
     /// Watch for certificate data changes
     pub fn watch_cert(&self, domain: &str) -> watch::Receiver<()> {
-        self.persistent().watch_prefix(&keys::cert_data(domain))
+        self.persistent.watch_prefix(&keys::cert_data(domain))
     }
 }

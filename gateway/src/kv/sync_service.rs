@@ -18,7 +18,7 @@ use wavekv::{
     Node,
 };
 
-use crate::config::SyncConfig as GwSyncConfig;
+use crate::{config::SyncConfig as GwSyncConfig, kv::GetPutCodec};
 
 use super::https_client::{HttpsClient, HttpsClientConfig};
 use super::{keys, KvStore};
@@ -65,15 +65,15 @@ impl HttpSyncNetwork {
     fn get_peer_uuid(&self, peer_id: NodeId) -> Option<Vec<u8>> {
         let entry = self.persistent_node.read().get(&keys::node_info(peer_id))?;
         let bytes = entry.value?;
-        let node_data: super::NodeData = super::decode(&bytes)?;
+        let node_data: super::NodeData = super::decode(&bytes).ok()?;
         Some(node_data.uuid)
     }
 
     /// Get peer URL from persistent node
     fn get_peer_url(&self, peer_id: NodeId) -> Option<String> {
-        let entry = self.persistent_node.read().get(&keys::peer_addr(peer_id))?;
-        let bytes = entry.value?;
-        String::from_utf8(bytes).ok()
+        self.persistent_node
+            .read()
+            .decode(&keys::peer_addr(peer_id))
     }
 
     /// Update peer last_seen timestamp in ephemeral store
@@ -83,9 +83,8 @@ impl HttpSyncNetwork {
             .map(|d| d.as_secs())
             .unwrap_or(0);
         let key = keys::last_seen_node(peer_id, self.my_node_id);
-        let value = super::encode(&ts);
-        if let Err(e) = self.ephemeral_node.write().put(key, value) {
-            warn!("failed to update peer {} last_seen: {}", peer_id, e);
+        if let Err(e) = self.ephemeral_node.write().put_encoded(key, &ts) {
+            warn!("failed to update peer {peer_id} last_seen: {e}");
         }
     }
 }
@@ -110,11 +109,11 @@ impl ExchangeInterface for HttpSyncNetwork {
             self.store_path
         );
 
-        // Send request with bincode + gzip encoding
+        // Send request with msgpack + gzip encoding
         // app_id verification happens during TLS handshake via AppIdVerifier
         let sync_response: SyncResponse = self
             .client
-            .post_bincode_gz(&sync_url, &msg)
+            .post_compressed_msg(&sync_url, &msg)
             .await
             .with_context(|| format!("failed to sync to peer {peer} at {sync_url}"))?;
 

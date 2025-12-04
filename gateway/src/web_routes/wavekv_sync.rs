@@ -4,9 +4,12 @@
 
 //! WaveKV sync HTTP endpoints
 //!
-//! Sync data is encoded using bincode + gzip compression for efficiency.
+//! Sync data is encoded using msgpack + gzip compression for efficiency.
 
-use crate::main_service::Proxy;
+use crate::{
+    kv::{decode, encode},
+    main_service::Proxy,
+};
 use flate2::{read::GzDecoder, write::GzEncoder, Compression};
 use ra_tls::traits::CertExt;
 use rocket::{
@@ -32,7 +35,7 @@ impl CertExt for RocketCert<'_> {
     }
 }
 
-/// Decode compressed bincode data
+/// Decode compressed msgpack data
 fn decode_sync_message(data: &[u8]) -> Result<SyncMessage, Status> {
     // Decompress
     let mut decoder = GzDecoder::new(data);
@@ -42,21 +45,15 @@ fn decode_sync_message(data: &[u8]) -> Result<SyncMessage, Status> {
         Status::BadRequest
     })?;
 
-    // Decode bincode
-    let config = bincode::config::standard();
-    bincode::serde::decode_from_slice(&decompressed, config)
-        .map(|(msg, _)| msg)
-        .map_err(|e| {
-            warn!("failed to decode sync message: {e}");
-            Status::BadRequest
-        })
+    decode(&decompressed).map_err(|e| {
+        warn!("failed to decode sync message: {e}");
+        Status::BadRequest
+    })
 }
 
 /// Encode and compress sync response
 fn encode_sync_response(response: &SyncResponse) -> Result<Vec<u8>, Status> {
-    // Encode to bincode
-    let config = bincode::config::standard();
-    let encoded = bincode::serde::encode_to_vec(response, config).map_err(|e| {
+    let encoded = encode(response).map_err(|e| {
         warn!("failed to encode sync response: {e}");
         Status::InternalServerError
     })?;
@@ -107,7 +104,7 @@ fn verify_gateway_peer(state: &Proxy, cert: Option<Certificate<'_>>) -> Result<(
     Ok(())
 }
 
-/// Handle sync request (bincode + gzip encoded)
+/// Handle sync request (msgpack + gzip encoded)
 #[post("/wavekv/sync/<store>", data = "<data>")]
 pub async fn sync_store(
     state: &State<Proxy>,
@@ -149,5 +146,5 @@ pub async fn sync_store(
     // Encode response
     let encoded = encode_sync_response(&response)?;
 
-    Ok((ContentType::new("application", "x-bincode-gz"), encoded))
+    Ok((ContentType::new("application", "x-msgpack-gz"), encoded))
 }
