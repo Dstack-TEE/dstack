@@ -190,8 +190,7 @@ impl ProxyInner {
 
         // Create WaveKV sync service (only if sync is enabled)
         let wavekv_sync = if config.sync.enabled {
-            let my_uuid = config.uuid();
-            match WaveKvSyncService::new(&kv_store, my_uuid, &config.sync, https_config) {
+            match WaveKvSyncService::new(&kv_store, &config.sync, https_config) {
                 Ok(sync_service) => Some(Arc::new(sync_service)),
                 Err(err) => {
                     error!("Failed to create WaveKV sync service: {err}");

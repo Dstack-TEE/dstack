@@ -245,6 +245,7 @@ impl GetPutCodec for NodeState {
 ///
 /// This is the sync layer - not the primary data store.
 /// ProxyState remains in memory for fast reads.
+#[derive(Clone)]
 pub struct KvStore {
     /// Persistent WaveKV Node (with WAL)
     persistent: Node,
@@ -545,6 +546,22 @@ impl KvStore {
     /// Get a peer's sync URL from DB
     pub fn get_peer_url(&self, node_id: NodeId) -> Option<String> {
         self.persistent.read().decode(&keys::peer_addr(node_id))
+    }
+
+    /// Query the UUID for a given node ID from KvStore
+    pub fn get_peer_uuid(&self, peer_id: NodeId) -> Option<Vec<u8>> {
+        self.persistent.read().decode(&keys::node_info(peer_id))
+    }
+
+    pub fn update_peer_last_seen(&self, peer_id: NodeId) {
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let key = keys::last_seen_node(peer_id, self.my_node_id);
+        if let Err(e) = self.ephemeral.write().put_encoded(key, &ts) {
+            warn!("failed to update peer {peer_id} last_seen: {e}");
+        }
     }
 
     /// Get all peer addresses from DB (for debugging/testing)

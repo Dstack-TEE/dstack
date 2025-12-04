@@ -18,10 +18,10 @@ use wavekv::{
     Node,
 };
 
-use crate::{config::SyncConfig as GwSyncConfig, kv::GetPutCodec};
+use crate::config::SyncConfig as GwSyncConfig;
 
 use super::https_client::{HttpsClient, HttpsClientConfig};
-use super::{keys, KvStore};
+use super::KvStore;
 
 /// HTTP-based network transport for WaveKV sync.
 /// Holds a reference to the persistent node for reading peer URLs.
@@ -29,11 +29,7 @@ use super::{keys, KvStore};
 pub struct HttpSyncNetwork {
     client: HttpsClient,
     /// Reference to persistent node for reading peer URLs
-    persistent_node: Node,
-    /// Reference to ephemeral node for updating peer last_seen
-    ephemeral_node: Node,
-    /// This node's ID (for recording who observed the peer)
-    my_node_id: NodeId,
+    kv_store: KvStore,
     /// This node's UUID (for node ID reuse detection)
     my_uuid: Vec<u8>,
     /// URL path suffix for this store (e.g., "persistent" or "ephemeral")
@@ -42,50 +38,25 @@ pub struct HttpSyncNetwork {
 
 impl HttpSyncNetwork {
     pub fn new(
-        persistent_node: Node,
-        ephemeral_node: Node,
-        my_node_id: NodeId,
-        my_uuid: Vec<u8>,
+        kv_store: KvStore,
         store_path: &'static str,
         tls_config: &HttpsClientConfig,
     ) -> Result<Self> {
         let client = HttpsClient::new(tls_config)?;
-
+        let my_uuid = kv_store
+            .get_peer_uuid(kv_store.my_node_id)
+            .context("failed to get my UUID")?;
         Ok(Self {
             client,
-            persistent_node,
-            ephemeral_node,
-            my_node_id,
+            kv_store,
             my_uuid,
             store_path,
         })
     }
 
-    /// Query the UUID for a given node ID from KvStore
-    fn get_peer_uuid(&self, peer_id: NodeId) -> Option<Vec<u8>> {
-        let entry = self.persistent_node.read().get(&keys::node_info(peer_id))?;
-        let bytes = entry.value?;
-        let node_data: super::NodeData = super::decode(&bytes).ok()?;
-        Some(node_data.uuid)
-    }
-
     /// Get peer URL from persistent node
     fn get_peer_url(&self, peer_id: NodeId) -> Option<String> {
-        self.persistent_node
-            .read()
-            .decode(&keys::peer_addr(peer_id))
-    }
-
-    /// Update peer last_seen timestamp in ephemeral store
-    fn update_peer_last_seen(&self, peer_id: NodeId) {
-        let ts = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-        let key = keys::last_seen_node(peer_id, self.my_node_id);
-        if let Err(e) = self.ephemeral_node.write().put_encoded(key, &ts) {
-            warn!("failed to update peer {peer_id} last_seen: {e}");
-        }
+        self.kv_store.get_peer_url(peer_id)
     }
 }
 
@@ -95,7 +66,7 @@ impl ExchangeInterface for HttpSyncNetwork {
     }
 
     fn query_uuid(&self, node_id: NodeId) -> Option<Vec<u8>> {
-        self.get_peer_uuid(node_id)
+        self.kv_store.get_peer_uuid(node_id)
     }
 
     async fn sync_to(&self, _node: &Node, peer: NodeId, msg: SyncMessage) -> Result<SyncResponse> {
@@ -118,7 +89,7 @@ impl ExchangeInterface for HttpSyncNetwork {
             .with_context(|| format!("failed to sync to peer {peer} at {sync_url}"))?;
 
         // Update peer last_seen on successful sync
-        self.update_peer_last_seen(peer);
+        self.kv_store.update_peer_last_seen(peer);
 
         Ok(sync_response)
     }
@@ -135,41 +106,21 @@ impl WaveKvSyncService {
     ///
     /// # Arguments
     /// * `kv_store` - The sync store containing persistent and ephemeral nodes
-    /// * `my_uuid` - This node's UUID for node ID reuse detection
-    /// * `sync_interval` - Interval between sync attempts
+    /// * `sync_config` - Sync configuration
     /// * `tls_config` - TLS configuration for mTLS peer authentication
     pub fn new(
         kv_store: &KvStore,
-        my_uuid: Vec<u8>,
         sync_config: &GwSyncConfig,
         tls_config: HttpsClientConfig,
     ) -> Result<Self> {
-        let persistent_node = kv_store.persistent().clone();
-        let ephemeral_node = kv_store.ephemeral().clone();
-        let my_node_id = kv_store.my_node_id();
-
         let sync_config = KvSyncConfig {
             interval: sync_config.interval,
             timeout: sync_config.timeout,
         };
 
         // Both networks use the same persistent node for URL lookup, but different paths
-        let persistent_network = HttpSyncNetwork::new(
-            persistent_node.clone(),
-            ephemeral_node.clone(),
-            my_node_id,
-            my_uuid.clone(),
-            "persistent",
-            &tls_config,
-        )?;
-        let ephemeral_network = HttpSyncNetwork::new(
-            persistent_node,
-            ephemeral_node,
-            my_node_id,
-            my_uuid,
-            "ephemeral",
-            &tls_config,
-        )?;
+        let persistent_network = HttpSyncNetwork::new(kv_store.clone(), "persistent", &tls_config)?;
+        let ephemeral_network = HttpSyncNetwork::new(kv_store.clone(), "ephemeral", &tls_config)?;
 
         let persistent_manager = Arc::new(SyncManager::with_config(
             kv_store.persistent().clone(),
