@@ -83,7 +83,7 @@ sodiumbox = { path = "sodiumbox" }
 serde-duration = { path = "serde-duration" }
 dstack-mr = { path = "dstack-mr" }
 size-parser = { path = "size-parser" }
-wavekv = { path = "../wavekv" }
+wavekv = "1.0.0"
 
 # Core dependencies
 anyhow = { version = "1.0.97", default-features = false }

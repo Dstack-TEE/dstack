@@ -7941,7 +7941,9 @@ dependencies = [
 
 [[package]]
 name = "wavekv"
-version = "0.1.0"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cf9b73bc556dfdb7ef33617a9d477b803198db43ea3df25463efaf43d4986fe8"
 dependencies = [
  "anyhow",
  "bincode 2.0.1",
@@ -7951,6 +7953,7 @@ dependencies = [
  "fs-err",
  "futures",
  "hex",
+ "rmp-serde",
  "serde",
  "serde-human-bytes",
  "serde_json",
