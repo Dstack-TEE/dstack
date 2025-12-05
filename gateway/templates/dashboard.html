@@ -34,7 +34,7 @@ SPDX-License-Identifier: Apache-2.0
             border-collapse: collapse;
             background-color: white;
             border-radius: 8px;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
             margin: 20px 0;
         }
 
@@ -93,14 +93,14 @@ SPDX-License-Identifier: Apache-2.0
             font-size: 12px;
             white-space: nowrap;
             z-index: 1;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
         }
 
         .info-section {
             background: white;
             padding: 20px;
             border-radius: 8px;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
         }
 
         .info-group {
@@ -151,6 +151,23 @@ SPDX-License-Identifier: Apache-2.0
             overflow: hidden;
             text-overflow: ellipsis;
             white-space: nowrap;
+        }
+
+        .last-seen-cell {
+            white-space: nowrap;
+        }
+
+        .last-seen-row {
+            margin-bottom: 4px;
+        }
+
+        .last-seen-row:last-child {
+            margin-bottom: 0;
+        }
+
+        .observer-label {
+            color: #666;
+            font-size: 0.9em;
         }
     </style>
     <title>Dashboard</title>
@@ -204,11 +221,11 @@ SPDX-License-Identifier: Apache-2.0
         </tr>
         <tr>
             <td>ID</td>
-            <td>{{ status.id|hex }}</td>
+            <td>{{ status.id }}</td>
         </tr>
         <tr>
-            <td>Bootnode URL</td>
-            <td>{{ status.bootnode_url }}</td>
+            <td>UUID</td>
+            <td>{{ status.uuid|hex }}</td>
         </tr>
         <tr>
             <td>Connections</td>
@@ -239,22 +256,19 @@ SPDX-License-Identifier: Apache-2.0
     <table>
         <tr>
             <th>ID</th>
+            <th>UUID</th>
             <th>Last Seen</th>
             <th>Wg IP</th>
             <th>Wg Endpoint</th>
             <th>URL</th>
         </tr>
         {% for node in status.nodes %}
-        <tr class="{% if node.id == status.id %}me{% endif %}">
-            <td class="truncated-id" title="{{ node.id|hex }}">{{ node.id|hex }}</td>
+        <tr class="{% if node.uuid == status.uuid %}me{% endif %}">
+            <td>{{ node.id }}</td>
+            <td class="truncated-id" title="{{ node.uuid|hex }}">{{ node.uuid|hex }}</td>
             <td class="timestamp">{{ node.last_seen }}</td>
-            {% if let Some(wg_peer) = node.wg_peer %}
-            <td>{{ wg_peer.ip }}</td>
-            <td>{{ wg_peer.endpoint }}</td>
-            {% else %}
-            <td>N/A</td>
-            <td>N/A</td>
-            {% endif %}
+            <td>{{ node.wg_ip }}</td>
+            <td>{{ node.wg_endpoint }}</td>
             <td>{{ node.url }}</td>
         </tr>
         {% endfor %}
@@ -278,6 +292,114 @@ SPDX-License-Identifier: Apache-2.0
         </tr>
         {% endfor %}
     </table>
+
+    <h2>WaveKV Sync Status</h2>
+    <div id="wavekv-status">
+        <p>Loading WaveKV status...</p>
+    </div>
+
+    <script>
+        async function loadWaveKvStatus() {
+            try {
+                const response = await fetch('/wavekv/status');
+                const data = await response.json();
+                renderWaveKvStatus(data);
+            } catch (e) {
+                document.getElementById('wavekv-status').innerHTML =
+                    '<p style="color: #666;">WaveKV sync status unavailable</p>';
+            }
+        }
+
+        function renderWaveKvStatus(data) {
+            const container = document.getElementById('wavekv-status');
+
+            if (!data.enabled) {
+                container.innerHTML = '<p style="color: #666;">WaveKV sync is disabled</p>';
+                return;
+            }
+
+            let html = '';
+
+            // Render persistent store
+            if (data.persistent) {
+                html += renderStoreStatus(data.persistent);
+            }
+
+            // Render ephemeral store
+            if (data.ephemeral) {
+                html += renderStoreStatus(data.ephemeral);
+            }
+
+            container.innerHTML = html;
+
+            // Apply timeAgo to new timestamps
+            const timestamps = container.querySelectorAll('.timestamp');
+            timestamps.forEach(cell => {
+                const timestamp = parseInt(cell.textContent);
+                if (!isNaN(timestamp) && timestamp > 0) {
+                    const date = new Date(timestamp * 1000);
+                    cell.setAttribute('data-original', date.toLocaleString());
+                    cell.textContent = timeAgo(timestamp);
+                }
+            });
+        }
+
+        function renderStoreStatus(store) {
+            let html = `
+                <table>
+                    <tr>
+                        <th colspan="5">${store.name.charAt(0).toUpperCase() + store.name.slice(1)} Store (Node: ${store.node_id})</th>
+                    </tr>
+                    <tr>
+                        <td>Keys: ${store.n_keys}</td>
+                        <td>Next Seq: ${store.next_seq}</td>
+                        <td>Dirty: ${store.dirty ? 'Yes' : 'No'}</td>
+                        <td colspan="2">WAL: ${store.wal_enabled ? 'Enabled' : 'Disabled'}</td>
+                    </tr>
+                </table>
+            `;
+
+            if (store.peers.length > 0) {
+                html += `
+                    <table>
+                        <tr>
+                            <th>Peer ID</th>
+                            <th>Local Ack</th>
+                            <th>Peer Ack</th>
+                            <th>Buffered</th>
+                            <th>Last Seen</th>
+                        </tr>
+                `;
+
+                for (const peer of store.peers) {
+                    const lastSeenStr = peer.last_seen.length > 0
+                        ? peer.last_seen.map(([observer, ts]) =>
+                            `<div class="last-seen-row"><span class="observer-label">by ${observer}:</span> <span class="timestamp">${ts}</span></div>`
+                        ).join('')
+                        : 'N/A';
+
+                    html += `
+                        <tr>
+                            <td class="truncated-id" title="${peer.id}">${peer.id}</td>
+                            <td>${peer.local_ack}</td>
+                            <td>${peer.peer_ack}</td>
+                            <td>${peer.buffered_logs}</td>
+                            <td class="last-seen-cell">${lastSeenStr}</td>
+                        </tr>
+                    `;
+                }
+
+                html += '</table>';
+            }
+
+            return html;
+        }
+
+        // Load WaveKV status after page loads
+        document.addEventListener('DOMContentLoaded', function () {
+            loadWaveKvStatus();
+        });
+    </script>
 </body>
 
 </html>

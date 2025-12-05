@@ -8,15 +8,13 @@ ident = "dstack Gateway"
 temp_dir = "/tmp"
 keep_alive = 10
 log_level = "info"
-port = 8010
+address = "127.0.0.1:8010"
 
 [core]
 kms_url = ""
-state_path = "./gateway-state.json"
 # auto set soft ulimit to hard ulimit
 set_ulimit = true
 rpc_domain = ""
-run_in_dstack = true
 
 [core.auth]
 enabled = false
@@ -25,7 +23,12 @@ timeout = "5s"
 
 [core.admin]
 enabled = false
-port = 8011
+address = "127.0.0.1:8011"
+
+[core.debug]
+insecure_enable_debug_rpc = false
+insecure_skip_attestation = false
+address = "127.0.0.1:8012"
 
 [core.certbot]
 enabled = false
@@ -97,9 +100,15 @@ node_timeout = "10m"
 
 [core.sync]
 enabled = false
-interval = "30s"
-broadcast_interval = "10m"
-timeout = "2s"
+# WaveKV node ID for this gateway (must be unique across cluster)
+node_id = 0
 my_url = "https://localhost:8011"
-# The url of the bootnode used to join the network
-bootnode = "https://localhost:8011"
+interval = "1m"
+timeout = "30s"
+# The URL of the bootnode used to fetch initial peer list when joining the network.
+# Leave empty if this is the first node or peers are managed via Admin.SetNodeInfo RPC.
+bootnode = ""
+# Data directory for WaveKV persistence (WAL and snapshots)
+data_dir = "/dstack-gateway/data"
+# Interval for periodic persistence of WaveKV data (e.g., "5s", "1m", "1h")
+persist_interval = "5m"

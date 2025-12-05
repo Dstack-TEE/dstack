@@ -14,12 +14,24 @@ message RegisterCvmRequest {
   string client_public_key = 1;
 }
 
+// DebugRegisterCvmRequest is the request for DebugRegisterCvm (only works when debug_mode is enabled).
+message DebugRegisterCvmRequest {
+  // The public key of the WireGuard interface of the CVM.
+  string client_public_key = 1;
+  // The app id (hex encoded).
+  string app_id = 2;
+  // The instance id (hex encoded).
+  string instance_id = 3;
+}
+
 // RegisterCvmResponse is the response for RegisterCvm.
 message RegisterCvmResponse {
   // WireGuard configuration
   WireGuardConfig wg = 1;
   // Agent configuration
   GuestAgentConfig agent = 2;
+  // All gateway nodes in the cluster
+  repeated GatewayNodeInfo gateways = 3;
 }
 
 message WireGuardPeer {
@@ -54,7 +66,7 @@ message GuestAgentConfig {
 // StatusResponse is the response for Status.
 message StatusResponse {
   // Peer id
-  bytes id = 1;
+  uint32 id = 1;
   // My URL.
   string url = 2;
   // The bootnode URL.
@@ -65,6 +77,8 @@ message StatusResponse {
   repeated HostInfo hosts = 5;
   // The list of proxy nodes.
   repeated GatewayNodeInfo nodes = 6;
+  // Peer uuid
+  bytes uuid = 7;
 }
 
 // HostInfo is the information of a host.
@@ -123,29 +137,21 @@ message GetMetaResponse {
 
 message GatewayNodeInfo {
   // The ID of the node.
-  bytes id = 1;
+  uint32 id = 1;
+  // The uuid of the node.
+  bytes uuid = 2;
   // The RPC URL of the node.
-  string url = 2;
+  string url = 3;
   // The last seen time of the node.
-  uint64 last_seen = 3;
-  // The wireguard peer info.
-  WireGuardPeer wg_peer = 4;
+  uint64 last_seen = 4;
+  // The wireguard peer public key.
+  string wg_public_key = 5;
+  // The wireguard peer IP address.
+  string wg_ip = 6;
+  // The wireguard peer endpoint.
+  string wg_endpoint = 7;
 }
 
-message AppInstanceInfo {
-  string app_id = 1;
-  string instance_id = 2;
-  string ip = 3;
-  string public_key = 4;
-  uint64 reg_time = 5;
-  uint64 last_seen = 6;
-  uint64 num_connections = 7;
-}
-
-message GatewayState {
-  repeated GatewayNodeInfo nodes = 1;
-  repeated AppInstanceInfo apps = 2;
-}
 message InfoResponse {
   // The base domain of the ZT-HTTPS
   string base_domain = 1;
@@ -155,21 +161,156 @@ message InfoResponse {
   string app_address_ns_prefix = 3;
 }
 
+// Peer info for GetPeers response
+message PeerInfo {
+  // The node ID
+  uint32 id = 1;
+  // The sync URL of the node
+  string url = 2;
+}
+
+// Response for GetPeers - returns all known peer nodes
+message GetPeersResponse {
+  // This node's ID
+  uint32 my_id = 1;
+  // This node's sync URL
+  string my_url = 2;
+  // All known peers (including self)
+  repeated PeerInfo peers = 3;
+}
+
 service Gateway {
 
   // Register a new proxied CVM.
   rpc RegisterCvm(RegisterCvmRequest) returns (RegisterCvmResponse) {}
   // List all ACME account URIs and the public key history of the certificates for the Content Addressable HTTPS.
   rpc AcmeInfo(google.protobuf.Empty) returns (AcmeInfoResponse) {}
-  // Merge state from other Gateway instances.
-  rpc UpdateState(GatewayState) returns (google.protobuf.Empty) {}
   // Get the gateway info
   rpc Info(google.protobuf.Empty) returns (InfoResponse) {}
+  // Get all known peers (requires gateway mTLS authentication)
+  rpc GetPeers(google.protobuf.Empty) returns (GetPeersResponse) {}
+}
+
+// Debug service - runs on a separate port when debug.enabled=true
+service Debug {
+  // Register a new proxied CVM without attestation (for testing only).
+  rpc RegisterCvm(DebugRegisterCvmRequest) returns (RegisterCvmResponse) {}
+  // Get the gateway info (for testing service availability).
+  rpc Info(google.protobuf.Empty) returns (InfoResponse) {}
+  // Get WaveKV sync data for testing (peer addresses, node info, instances from KvStore).
+  rpc GetSyncData(google.protobuf.Empty) returns (DebugSyncDataResponse) {}
+  // Get Proxy State data for testing (instances from in-memory ProxyState).
+  rpc GetProxyState(google.protobuf.Empty) returns (DebugProxyStateResponse) {}
+}
+
+// Peer address entry
+message PeerAddrEntry {
+  uint64 node_id = 1;
+  string url = 2;
+}
+
+// Node info entry from the persistent store
+message NodeInfoEntry {
+  uint64 node_id = 1;
+  string url = 2;
+  string wg_public_key = 3;
+  string wg_endpoint = 4;
+  string wg_ip = 5;
+}
+
+// Instance info entry
+message InstanceEntry {
+  string instance_id = 1;
+  string app_id = 2;
+  string ip = 3;
+  string public_key = 4;
+}
+
+// Debug sync data response - returns all synced data from KvStore for verification
+message DebugSyncDataResponse {
+  // This node's ID
+  uint64 my_node_id = 1;
+  // Peer addresses (from __peer_addr/* keys)
+  repeated PeerAddrEntry peer_addrs = 2;
+  // Node info (from node/* keys)
+  repeated NodeInfoEntry nodes = 3;
+  // Instances (from inst/* keys)
+  repeated InstanceEntry instances = 4;
+  // Total keys in persistent store
+  uint64 persistent_keys = 5;
+  // Total keys in ephemeral store
+  uint64 ephemeral_keys = 6;
+}
+
+// Proxy state instance entry (from in-memory ProxyState)
+message ProxyStateInstance {
+  string instance_id = 1;
+  string app_id = 2;
+  string ip = 3;
+  string public_key = 4;
+  uint64 reg_time = 5;
+}
+
+// Debug proxy state response - returns in-memory ProxyState data for verification
+message DebugProxyStateResponse {
+  // All instances from ProxyState.instances
+  repeated ProxyStateInstance instances = 1;
+  // All allocated IP addresses
+  repeated string allocated_addresses = 2;
 }
 
 message RenewCertResponse {
   // True if the certificate was renewed.
   bool renewed = 1;
+}
+
+// Request to set a node's sync URL
+message SetNodeUrlRequest {
+  // The node ID to update
+  uint32 id = 1;
+  // The new URL for this node
+  string url = 2;
+}
+
+// Request to set a node's status
+message SetNodeStatusRequest {
+  // The node ID to update
+  uint32 id = 1;
+  // The new status: "up" or "down"
+  string status = 2;
+}
+
+// Peer sync status
+message PeerSyncStatus {
+  uint32 id = 1;
+  uint64 local_ack = 2;
+  uint64 peer_ack = 3;
+  uint64 buffered_logs = 4;
+  // Last seen timestamps: [(observer_node_id, timestamp), ...]
+  repeated LastSeenEntry last_seen = 5;
+}
+
+message LastSeenEntry {
+  uint32 node_id = 1;
+  uint64 timestamp = 2;
+}
+
+// Store sync status
+message StoreSyncStatus {
+  string name = 1;
+  uint32 node_id = 2;
+  uint64 n_keys = 3;
+  uint64 next_seq = 4;
+  bool dirty = 5;
+  bool wal_enabled = 6;
+  repeated PeerSyncStatus peers = 7;
+}
+
+// WaveKV sync status response
+message WaveKvStatusResponse {
+  bool enabled = 1;
+  StoreSyncStatus persistent = 2;
+  StoreSyncStatus ephemeral = 3;
 }
 
 service Admin {
@@ -187,4 +328,10 @@ service Admin {
   rpc SetCaa(google.protobuf.Empty) returns (google.protobuf.Empty) {}
   // Summary API for inspect.
   rpc GetMeta(google.protobuf.Empty) returns (GetMetaResponse) {}
+  // Set a node's sync URL - used for dynamic peer management
+  rpc SetNodeUrl(SetNodeUrlRequest) returns (google.protobuf.Empty) {}
+  // Set a node's status (up/down)
+  rpc SetNodeStatus(SetNodeStatusRequest) returns (google.protobuf.Empty) {}
+  // Get WaveKV sync status
+  rpc WaveKvStatus(google.protobuf.Empty) returns (WaveKvStatusResponse) {}
 }

@@ -16,6 +16,7 @@ pub(crate) use tls_terminate::create_acceptor;
 use tokio::{
     io::AsyncReadExt,
     net::{TcpListener, TcpStream},
+    runtime::Runtime,
     time::timeout,
 };
 use tracing::{debug, error, info, info_span, Instrument};
@@ -160,14 +161,7 @@ async fn handle_connection(
 }
 
 #[inline(never)]
-pub async fn proxy_main(config: &ProxyConfig, proxy: Proxy) -> Result<()> {
-    let workers_rt = tokio::runtime::Builder::new_multi_thread()
-        .thread_name("proxy-worker")
-        .enable_all()
-        .worker_threads(config.workers)
-        .build()
-        .expect("Failed to build Tokio runtime");
-
+pub async fn proxy_main(rt: &Runtime, config: &ProxyConfig, proxy: Proxy) -> Result<()> {
     let dotted_base_domain = {
         let base_domain = config.base_domain.as_str();
         let base_domain = base_domain.strip_prefix(".").unwrap_or(base_domain);
@@ -196,7 +190,7 @@ pub async fn proxy_main(config: &ProxyConfig, proxy: Proxy) -> Result<()> {
                 info!(%from, "new connection");
                 let proxy = proxy.clone();
                 let dotted_base_domain = dotted_base_domain.clone();
-                workers_rt.spawn(
+                rt.spawn(
                     async move {
                         let _conn_entered = conn_entered;
                         let timeouts = &proxy.config.proxy.timeouts;
@@ -242,8 +236,15 @@ pub fn start(config: ProxyConfig, app_state: Proxy) {
                 .build()
                 .expect("Failed to build Tokio runtime");
 
+            let worker_rt = tokio::runtime::Builder::new_multi_thread()
+                .thread_name("proxy-worker")
+                .enable_all()
+                .worker_threads(config.workers)
+                .build()
+                .expect("Failed to build Tokio runtime");
+
             // Run the proxy_main function in this runtime
-            if let Err(err) = rt.block_on(proxy_main(&config, app_state)) {
+            if let Err(err) = rt.block_on(proxy_main(&worker_rt, &config, app_state)) {
                 error!(
                     "error on {}:{}: {err:?}",
                     config.listen_addr, config.listen_port
