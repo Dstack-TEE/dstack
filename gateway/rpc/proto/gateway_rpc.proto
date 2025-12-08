@@ -313,6 +313,41 @@ message WaveKvStatusResponse {
   StoreSyncStatus ephemeral = 3;
 }
 
+// Handshake observation entry
+message HandshakeEntry {
+  uint32 observer_node_id = 1;
+  uint64 timestamp = 2;
+}
+
+// Get instance handshakes request
+message GetInstanceHandshakesRequest {
+  string instance_id = 1;
+}
+
+// Get instance handshakes response
+message GetInstanceHandshakesResponse {
+  repeated HandshakeEntry handshakes = 1;
+}
+
+// Global connections statistics
+message GlobalConnectionsStats {
+  // Total connections across all nodes
+  uint64 total_connections = 1;
+  // Per-node connection counts
+  map<uint32, uint64> node_connections = 2;
+}
+
+// Node status entry
+message NodeStatusEntry {
+  uint32 node_id = 1;
+  string status = 2; // "up" or "down"
+}
+
+// Get node statuses response
+message GetNodeStatusesResponse {
+  repeated NodeStatusEntry statuses = 1;
+}
+
 service Admin {
   // Get the status of the gateway.
   rpc Status(google.protobuf.Empty) returns (StatusResponse) {}
@@ -334,4 +369,10 @@ service Admin {
   rpc SetNodeStatus(SetNodeStatusRequest) returns (google.protobuf.Empty) {}
   // Get WaveKV sync status
   rpc WaveKvStatus(google.protobuf.Empty) returns (WaveKvStatusResponse) {}
+  // Get instance handshakes from all nodes
+  rpc GetInstanceHandshakes(GetInstanceHandshakesRequest) returns (GetInstanceHandshakesResponse) {}
+  // Get global connections statistics
+  rpc GetGlobalConnections(google.protobuf.Empty) returns (GlobalConnectionsStats) {}
+  // Get all node statuses
+  rpc GetNodeStatuses(google.protobuf.Empty) returns (GetNodeStatusesResponse) {}
 }

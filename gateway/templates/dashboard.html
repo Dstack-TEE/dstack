@@ -169,6 +169,52 @@ SPDX-License-Identifier: Apache-2.0
             color: #666;
             font-size: 0.9em;
         }
+
+        .node-status {
+            font-weight: bold;
+        }
+
+        .node-status.up {
+            color: #4CAF50;
+        }
+
+        .node-status.down {
+            color: #f44336;
+        }
+
+        .status-controls {
+            display: flex;
+            gap: 5px;
+        }
+
+        .status-btn {
+            padding: 4px 8px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: bold;
+            transition: opacity 0.2s;
+        }
+
+        .status-btn:hover {
+            opacity: 0.8;
+        }
+
+        .status-btn.up {
+            background-color: #4CAF50;
+            color: white;
+        }
+
+        .status-btn.down {
+            background-color: #f44336;
+            color: white;
+        }
+
+        .status-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
     </style>
     <title>Dashboard</title>
     <script>
@@ -228,10 +274,15 @@ SPDX-License-Identifier: Apache-2.0
             <td>{{ status.uuid|hex }}</td>
         </tr>
         <tr>
-            <td>Connections</td>
+            <td>Connections (Local)</td>
             <td>{{ status.num_connections }}</td>
         </tr>
     </table>
+
+    <h2>Global Connections</h2>
+    <div id="global-connections">
+        <p>Loading global connection statistics...</p>
+    </div>
 
     <table>
         <tr>
@@ -257,19 +308,28 @@ SPDX-License-Identifier: Apache-2.0
         <tr>
             <th>ID</th>
             <th>UUID</th>
+            <th>Status</th>
             <th>Last Seen</th>
             <th>Wg IP</th>
             <th>Wg Endpoint</th>
             <th>URL</th>
+            <th>Actions</th>
         </tr>
         {% for node in status.nodes %}
         <tr class="{% if node.uuid == status.uuid %}me{% endif %}">
             <td>{{ node.id }}</td>
             <td class="truncated-id" title="{{ node.uuid|hex }}">{{ node.uuid|hex }}</td>
+            <td class="node-status" data-node-id="{{ node.id }}">-</td>
             <td class="timestamp">{{ node.last_seen }}</td>
             <td>{{ node.wg_ip }}</td>
             <td>{{ node.wg_endpoint }}</td>
             <td>{{ node.url }}</td>
+            <td>
+                <div class="status-controls">
+                    <button class="status-btn up" onclick="setNodeStatus({{ node.id }}, 'up')">Up</button>
+                    <button class="status-btn down" onclick="setNodeStatus({{ node.id }}, 'down')">Down</button>
+                </div>
+            </td>
         </tr>
         {% endfor %}
     </table>
@@ -398,7 +458,132 @@ SPDX-License-Identifier: Apache-2.0
         // Load WaveKV status after page loads
         document.addEventListener('DOMContentLoaded', function () {
             loadWaveKvStatus();
+            loadGlobalConnections();
+            loadNodeStatuses();
         });
+
+        async function loadGlobalConnections() {
+            try {
+                const response = await fetch('/prpc/Admin.GetGlobalConnections', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: '{}'
+                });
+                const data = await response.json();
+                renderGlobalConnections(data);
+            } catch (e) {
+                document.getElementById('global-connections').innerHTML =
+                    '<p style="color: #666;">Global connection statistics unavailable</p>';
+            }
+        }
+
+        function renderGlobalConnections(data) {
+            const container = document.getElementById('global-connections');
+
+            let html = `
+                <table>
+                    <tr>
+                        <th colspan="2">Connection Summary</th>
+                    </tr>
+                    <tr>
+                        <td>Total Connections (Cluster-wide)</td>
+                        <td><strong>${data.total_connections || 0}</strong></td>
+                    </tr>
+                </table>
+            `;
+
+            if (data.node_connections && Object.keys(data.node_connections).length > 0) {
+                html += `
+                    <table>
+                        <tr>
+                            <th>Node ID</th>
+                            <th>Connections</th>
+                        </tr>
+                `;
+
+                for (const [nodeId, count] of Object.entries(data.node_connections)) {
+                    html += `
+                        <tr>
+                            <td>Node ${nodeId}</td>
+                            <td>${count}</td>
+                        </tr>
+                    `;
+                }
+
+                html += '</table>';
+            }
+
+            container.innerHTML = html;
+        }
+
+        async function loadNodeStatuses() {
+            try {
+                const response = await fetch('/prpc/Admin.GetNodeStatuses', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: '{}'
+                });
+                const data = await response.json();
+                renderNodeStatuses(data);
+            } catch (e) {
+                console.error('Failed to load node statuses:', e);
+            }
+        }
+
+        function renderNodeStatuses(data) {
+            if (!data.statuses || data.statuses.length === 0) {
+                return;
+            }
+
+            // Create a map of node_id -> status
+            const statusMap = {};
+            for (const entry of data.statuses) {
+                statusMap[entry.node_id] = entry.status;
+            }
+
+            // Update each node status cell
+            const statusCells = document.querySelectorAll('.node-status');
+            statusCells.forEach(cell => {
+                const nodeId = parseInt(cell.getAttribute('data-node-id'));
+                const status = statusMap[nodeId] || 'up'; // default to "up"
+                cell.textContent = status;
+                cell.className = 'node-status ' + status;
+            });
+        }
+
+        async function setNodeStatus(nodeId, status) {
+            try {
+                // Disable all buttons for this node
+                const buttons = document.querySelectorAll(`button[onclick*="setNodeStatus(${nodeId}"]`);
+                buttons.forEach(btn => btn.disabled = true);
+
+                const response = await fetch('/prpc/Admin.SetNodeStatus', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        id: nodeId,
+                        status: status
+                    })
+                });
+
+                if (!response.ok) {
+                    throw new Error('Failed to set node status');
+                }
+
+                // Reload node statuses to update the display
+                await loadNodeStatuses();
+
+                // Re-enable buttons
+                buttons.forEach(btn => btn.disabled = false);
+            } catch (e) {
+                console.error('Failed to set node status:', e);
+                alert('Failed to set node status: ' + e.message);
+
+                // Re-enable buttons on error
+                const buttons = document.querySelectorAll(`button[onclick*="setNodeStatus(${nodeId}"]`);
+                buttons.forEach(btn => btn.disabled = false);
+            }
+        }
     </script>
 </body>
 

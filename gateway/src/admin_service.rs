@@ -8,9 +8,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result};
 use dstack_gateway_rpc::{
     admin_server::{AdminRpc, AdminServer},
-    GetInfoRequest, GetInfoResponse, GetMetaResponse, HostInfo, LastSeenEntry,
-    PeerSyncStatus as ProtoPeerSyncStatus, RenewCertResponse, SetNodeStatusRequest,
-    SetNodeUrlRequest, StatusResponse, StoreSyncStatus, WaveKvStatusResponse,
+    GetInfoRequest, GetInfoResponse, GetInstanceHandshakesRequest, GetInstanceHandshakesResponse,
+    GetMetaResponse, GetNodeStatusesResponse, GlobalConnectionsStats, HandshakeEntry, HostInfo,
+    LastSeenEntry, NodeStatusEntry, PeerSyncStatus as ProtoPeerSyncStatus, RenewCertResponse,
+    SetNodeStatusRequest, SetNodeUrlRequest, StatusResponse, StoreSyncStatus,
+    WaveKvStatusResponse,
 };
 use ra_rpc::{CallContext, RpcCall};
 use tracing::info;
@@ -193,6 +195,84 @@ impl AdminRpc for AdminRpcHandler {
                 &get_peer_last_seen,
             )),
         })
+    }
+
+    async fn get_instance_handshakes(
+        self,
+        request: GetInstanceHandshakesRequest,
+    ) -> Result<GetInstanceHandshakesResponse> {
+        let kv_store = self.state.kv_store();
+        let handshakes = kv_store.get_instance_handshakes(&request.instance_id);
+
+        let entries = handshakes
+            .into_iter()
+            .map(|(observer_node_id, timestamp)| HandshakeEntry {
+                observer_node_id,
+                timestamp,
+            })
+            .collect();
+
+        Ok(GetInstanceHandshakesResponse {
+            handshakes: entries,
+        })
+    }
+
+    async fn get_global_connections(self) -> Result<GlobalConnectionsStats> {
+        let state = self.state.lock();
+        let kv_store = self.state.kv_store();
+
+        let mut node_connections = std::collections::HashMap::new();
+        let mut total_connections = 0u64;
+
+        // Iterate through all instances and sum up connections per node
+        for instance_id in state.state.instances.keys() {
+            // Get connection counts from ephemeral KV for this instance
+            let conn_prefix = format!("conn/{}/", instance_id);
+            for (key, count) in kv_store
+                .ephemeral()
+                .read()
+                .iter_by_prefix(&conn_prefix)
+                .filter_map(|(k, entry)| {
+                    let value = entry.value.as_ref()?;
+                    let count: u64 = rmp_serde::decode::from_slice(value).ok()?;
+                    Some((k.to_string(), count))
+                })
+            {
+                // Parse node_id from key: "conn/{instance_id}/{node_id}"
+                if let Some(node_id_str) = key.strip_prefix(&conn_prefix) {
+                    if let Ok(node_id) = node_id_str.parse::<u32>() {
+                        *node_connections.entry(node_id).or_insert(0) += count;
+                        total_connections += count;
+                    }
+                }
+            }
+        }
+
+        Ok(GlobalConnectionsStats {
+            total_connections,
+            node_connections,
+        })
+    }
+
+    async fn get_node_statuses(self) -> Result<GetNodeStatusesResponse> {
+        let kv_store = self.state.kv_store();
+        let statuses = kv_store.load_all_node_statuses();
+
+        let entries = statuses
+            .into_iter()
+            .map(|(node_id, status)| {
+                let status_str = match status {
+                    NodeStatus::Up => "up",
+                    NodeStatus::Down => "down",
+                };
+                NodeStatusEntry {
+                    node_id,
+                    status: status_str.to_string(),
+                }
+            })
+            .collect();
+
+        Ok(GetNodeStatusesResponse { statuses: entries })
     }
 }
 
