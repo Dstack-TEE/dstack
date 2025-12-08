@@ -555,6 +555,27 @@ fn start_wavekv_watch_task(proxy: Proxy) -> Result<()> {
         info!("WaveKV: periodic persistence enabled (interval: {persist_interval:?})");
     }
 
+    // Start periodic connection sync task
+    if proxy.config.sync.sync_connections_enabled {
+        let sync_interval = proxy.config.sync.sync_connections_interval;
+        let proxy_for_sync = proxy.clone();
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(sync_interval);
+            loop {
+                ticker.tick().await;
+                let state = proxy_for_sync.lock();
+                for (instance_id, instance) in &state.state.instances {
+                    let count = instance.num_connections();
+                    state.sync_connections(instance_id, count);
+                }
+            }
+        });
+        info!(
+            "WaveKV: periodic connection sync enabled (interval: {:?})",
+            proxy.config.sync.sync_connections_interval
+        );
+    }
+
     Ok(())
 }
 

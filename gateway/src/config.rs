@@ -136,6 +136,11 @@ pub struct SyncConfig {
     /// Interval for periodic WAL persistence (default: 10s)
     #[serde(with = "serde_duration")]
     pub persist_interval: Duration,
+    /// Enable periodic sync of instance connections to KV store
+    pub sync_connections_enabled: bool,
+    /// Interval for syncing instance connections to KV store
+    #[serde(with = "serde_duration")]
+    pub sync_connections_interval: Duration,
 }
 
 #[derive(Debug, Clone, Deserialize)]

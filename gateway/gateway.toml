@@ -112,3 +112,7 @@ bootnode = ""
 data_dir = "/dstack-gateway/data"
 # Interval for periodic persistence of WaveKV data (e.g., "5s", "1m", "1h")
 persist_interval = "5m"
+# Enable periodic sync of instance connections to KV store
+sync_connections_enabled = true
+# Interval for syncing instance connections to KV store
+sync_connections_interval = "30s"
