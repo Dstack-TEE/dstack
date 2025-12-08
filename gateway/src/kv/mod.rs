@@ -92,7 +92,6 @@ pub mod keys {
     pub const NODE_INFO_PREFIX: &str = "node/info/";
     pub const NODE_STATUS_PREFIX: &str = "node/status/";
     pub const CONN_PREFIX: &str = "conn/";
-    pub const LAST_SEEN_INST_PREFIX: &str = "last_seen/inst/";
     pub const HANDSHAKE_PREFIX: &str = "handshake/";
     pub const LAST_SEEN_NODE_PREFIX: &str = "last_seen/node/";
     pub const PEER_ADDR_PREFIX: &str = "__peer_addr/";
@@ -112,14 +111,6 @@ pub mod keys {
 
     pub fn conn(instance_id: &str, node_id: NodeId) -> String {
         format!("{CONN_PREFIX}{instance_id}/{node_id}")
-    }
-
-    pub fn conn_prefix(instance_id: &str) -> String {
-        format!("{CONN_PREFIX}{instance_id}/")
-    }
-
-    pub fn last_seen_inst(instance_id: &str) -> String {
-        format!("{LAST_SEEN_INST_PREFIX}{instance_id}")
     }
 
     /// Key for instance handshake timestamp observed by a specific node
@@ -301,9 +292,6 @@ impl KvStore {
         self.persistent.write().delete(keys::inst(instance_id))?;
         self.ephemeral
             .write()
-            .delete(keys::last_seen_inst(instance_id))?;
-        self.ephemeral
-            .write()
             .delete(keys::conn(instance_id, self.my_node_id))?;
         // Delete this node's handshake record
         self.ephemeral
@@ -385,43 +373,6 @@ impl KvStore {
         Ok(())
     }
 
-    /// Get total connections for an instance (sum from all nodes)
-    pub fn get_total_connections(&self, instance_id: &str) -> u64 {
-        self.ephemeral
-            .read()
-            .iter_decoded_values::<u64>(&keys::conn_prefix(instance_id))
-            .sum()
-    }
-
-    // ==================== Last Seen Sync ====================
-
-    /// Sync instance last_seen
-    pub fn sync_instance_last_seen(&self, instance_id: &str, timestamp: u64) -> Result<()> {
-        self.ephemeral
-            .write()
-            .put_encoded(keys::last_seen_inst(instance_id), &timestamp)?;
-        Ok(())
-    }
-
-    /// Get instance last_seen
-    pub fn get_instance_last_seen(&self, instance_id: &str) -> Option<u64> {
-        self.ephemeral
-            .read()
-            .decode(&keys::last_seen_inst(instance_id))
-    }
-
-    /// Load all instances' last_seen
-    pub fn load_all_instances_last_seen(&self) -> BTreeMap<String, u64> {
-        self.ephemeral
-            .read()
-            .iter_decoded(keys::LAST_SEEN_INST_PREFIX)
-            .filter_map(|(key, ts)| {
-                let instance_id = key.strip_prefix(keys::LAST_SEEN_INST_PREFIX)?;
-                Some((instance_id.to_string(), ts))
-            })
-            .collect()
-    }
-
     // ==================== Handshake Sync ====================
 
     /// Sync handshake timestamp for an instance (as observed by this node)
@@ -453,14 +404,6 @@ impl KvStore {
             .max()
     }
 
-    /// Delete handshake records for an instance (when instance is deleted)
-    pub fn delete_instance_handshakes(&self, instance_id: &str) -> Result<()> {
-        // Delete this node's handshake record
-        self.ephemeral
-            .write()
-            .delete(keys::handshake(instance_id, self.my_node_id))?;
-        Ok(())
-    }
 
     /// Sync node last_seen (as observed by this node)
     pub fn sync_node_last_seen(&self, node_id: NodeId, timestamp: u64) -> Result<()> {
@@ -509,21 +452,11 @@ impl KvStore {
         self.persistent.persist_if_dirty()
     }
 
-    pub fn persist(&self) -> Result<()> {
-        self.persistent.persist()
-    }
-
     // ==================== Peer Management ====================
 
     pub fn add_peer(&self, peer_id: NodeId) -> Result<()> {
         self.persistent.write().add_peer(peer_id)?;
         self.ephemeral.write().add_peer(peer_id)?;
-        Ok(())
-    }
-
-    pub fn remove_peer(&self, peer_id: NodeId) -> Result<()> {
-        self.persistent.write().remove_peer(peer_id)?;
-        self.ephemeral.write().remove_peer(peer_id)?;
         Ok(())
     }
 

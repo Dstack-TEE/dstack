@@ -418,7 +418,6 @@ fn build_state_from_kv_store(instances: BTreeMap<String, InstanceData>) -> Proxy
             reg_time: UNIX_EPOCH
                 .checked_add(Duration::from_secs(data.reg_time))
                 .unwrap_or(UNIX_EPOCH),
-            last_seen: SystemTime::now(),
             connections: Default::default(),
         };
         state.allocated_addresses.insert(data.ip);
@@ -593,7 +592,6 @@ fn reload_instances_from_kv_store(proxy: &Proxy, store: &KvStore) -> Result<()> 
             reg_time: UNIX_EPOCH
                 .checked_add(Duration::from_secs(data.reg_time))
                 .unwrap_or(UNIX_EPOCH),
-            last_seen: SystemTime::now(),
             connections: Default::default(),
         };
 
@@ -697,7 +695,6 @@ impl ProxyState {
             ip,
             public_key: public_key.to_string(),
             reg_time: SystemTime::now(),
-            last_seen: SystemTime::now(),
             connections: Default::default(),
         };
         self.add_instance(host_info.clone());
