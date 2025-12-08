@@ -363,6 +363,13 @@ impl Proxy {
         client_public_key: &str,
     ) -> Result<RegisterCvmResponse> {
         let mut state = self.lock();
+
+        // Check if this node is marked as down
+        let my_status = state.kv_store.get_node_status(state.config.sync.node_id);
+        if matches!(my_status, NodeStatus::Down) {
+            bail!("this gateway node is marked as down and cannot accept new registrations");
+        }
+
         if app_id.is_empty() {
             bail!("[{instance_id}] app id is empty");
         }
@@ -378,7 +385,7 @@ impl Proxy {
         if let Err(err) = state.reconfigure() {
             error!("failed to reconfigure: {}", err);
         }
-        let gateways = state.get_all_nodes();
+        let gateways = state.get_active_nodes();
         let servers = gateways
             .iter()
             .map(|n| WireGuardPeer {
@@ -999,26 +1006,42 @@ impl ProxyState {
         }
     }
 
-    /// Get total connections for an instance from KvStore (across all nodes)
-    pub(crate) fn get_total_connections(&self, instance_id: &str) -> u64 {
-        self.kv_store.get_total_connections(instance_id)
-    }
-
     /// Get latest handshake for an instance from KvStore (max across all nodes)
     pub(crate) fn get_instance_latest_handshake(&self, instance_id: &str) -> Option<u64> {
         self.kv_store.get_instance_latest_handshake(instance_id)
     }
 
-    /// Get latest last_seen for a node from KvStore (max across all observers)
-    pub(crate) fn get_node_latest_last_seen(&self, node_id: u32) -> Option<u64> {
-        self.kv_store.get_node_latest_last_seen(node_id)
+    /// Get all nodes from KvStore (for admin API - includes all nodes)
+    pub(crate) fn get_all_nodes(&self) -> Vec<GatewayNodeInfo> {
+        self.get_all_nodes_filtered(false)
     }
 
-    /// Get all nodes from KvStore (for admin API)
-    pub(crate) fn get_all_nodes(&self) -> Vec<GatewayNodeInfo> {
+    /// Get nodes for CVM registration (excludes nodes with status "down")
+    pub(crate) fn get_active_nodes(&self) -> Vec<GatewayNodeInfo> {
+        self.get_all_nodes_filtered(true)
+    }
+
+    /// Get all nodes from KvStore with optional filtering
+    fn get_all_nodes_filtered(&self, exclude_down: bool) -> Vec<GatewayNodeInfo> {
+        let node_statuses = if exclude_down {
+            self.kv_store.load_all_node_statuses()
+        } else {
+            Default::default()
+        };
+
         self.kv_store
             .load_all_nodes()
             .into_iter()
+            .filter(|(id, _)| {
+                if !exclude_down {
+                    return true;
+                }
+                // Exclude nodes with status "down"
+                match node_statuses.get(id) {
+                    Some(NodeStatus::Down) => false,
+                    _ => true, // Include Up or nodes without explicit status
+                }
+            })
             .map(|(id, node)| GatewayNodeInfo {
                 id,
                 uuid: node.uuid,
