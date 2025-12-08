@@ -11,8 +11,7 @@ use dstack_gateway_rpc::{
     GetInfoRequest, GetInfoResponse, GetInstanceHandshakesRequest, GetInstanceHandshakesResponse,
     GetMetaResponse, GetNodeStatusesResponse, GlobalConnectionsStats, HandshakeEntry, HostInfo,
     LastSeenEntry, NodeStatusEntry, PeerSyncStatus as ProtoPeerSyncStatus, RenewCertResponse,
-    SetNodeStatusRequest, SetNodeUrlRequest, StatusResponse, StoreSyncStatus,
-    WaveKvStatusResponse,
+    SetNodeStatusRequest, SetNodeUrlRequest, StatusResponse, StoreSyncStatus, WaveKvStatusResponse,
 };
 use ra_rpc::{CallContext, RpcCall};
 use tracing::info;

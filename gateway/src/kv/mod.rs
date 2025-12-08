@@ -404,7 +404,6 @@ impl KvStore {
             .max()
     }
 
-
     /// Sync node last_seen (as observed by this node)
     pub fn sync_node_last_seen(&self, node_id: NodeId, timestamp: u64) -> Result<()> {
         self.ephemeral
