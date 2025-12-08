@@ -51,6 +51,13 @@ validate_env "$CF_API_TOKEN"
 validate_env "$CF_ZONE_ID"
 validate_env "$SRV_DOMAIN"
 validate_env "$WG_ENDPOINT"
+validate_env "$NODE_ID"
+
+# Validate $NODE_ID, must be a number
+if [[ ! "$NODE_ID" =~ ^[0-9]+$ ]]; then
+    echo "Invalid NODE_ID: $NODE_ID"
+    exit 1
+fi
 
 # Validate $SUBNET_INDEX, valid range is 0-15
 if [[ ! "$SUBNET_INDEX" =~ ^[0-9]+$ ]] || [ "$SUBNET_INDEX" -lt 0 ] || [ "$SUBNET_INDEX" -gt 15 ]; then
@@ -80,8 +87,7 @@ echo "RPC_DOMAIN: $RPC_DOMAIN"
 cat >$CONFIG_PATH <<EOF
 keep_alive = 10
 log_level = "info"
-address = "0.0.0.0"
-port = 8000
+address = "0.0.0.0:8000"
 
 [tls]
 key = "$CERTS_DIR/gateway-rpc.key"
@@ -92,21 +98,21 @@ ca_certs = "$CERTS_DIR/gateway-ca.cert"
 mandatory = false
 
 [core]
-state_path = "$DATA_DIR/gateway-state.json"
 set_ulimit = true
 rpc_domain = "$RPC_DOMAIN"
-run_in_dstack = true
 
 [core.sync]
 enabled = $SYNC_ENABLED
-interval = "30s"
+node_id = $NODE_ID
+interval = "1m"
+timeout = "2m"
 my_url = "$MY_URL"
 bootnode = "$BOOTNODE_URL"
+data_dir = "$DATA_DIR"
 
 [core.admin]
 enabled = true
-address = "0.0.0.0"
-port = 8001
+address = "0.0.0.0:8001"
 
 [core.certbot]
 enabled = true

@@ -125,11 +125,22 @@ pub struct SyncConfig {
     #[serde(with = "serde_duration")]
     pub interval: Duration,
     #[serde(with = "serde_duration")]
-    pub broadcast_interval: Duration,
-    #[serde(with = "serde_duration")]
     pub timeout: Duration,
     pub my_url: String,
+    /// The URL of the bootnode used to fetch initial peer list when joining the network
     pub bootnode: String,
+    /// WaveKV node ID for this gateway (must be unique across cluster)
+    pub node_id: u32,
+    /// Data directory for WaveKV persistence
+    pub data_dir: String,
+    /// Interval for periodic WAL persistence (default: 10s)
+    #[serde(with = "serde_duration")]
+    pub persist_interval: Duration,
+    /// Enable periodic sync of instance connections to KV store
+    pub sync_connections_enabled: bool,
+    /// Interval for syncing instance connections to KV store
+    #[serde(with = "serde_duration")]
+    pub sync_connections_interval: Duration,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -139,14 +150,23 @@ pub struct Config {
     pub certbot: CertbotConfig,
     pub pccs_url: Option<String>,
     pub recycle: RecycleConfig,
-    pub state_path: String,
     pub set_ulimit: bool,
     pub rpc_domain: String,
     pub kms_url: String,
     pub admin: AdminConfig,
-    pub run_in_dstack: bool,
+    /// Debug server configuration (separate port for debug RPCs)
+    pub debug: DebugConfig,
     pub sync: SyncConfig,
     pub auth: AuthConfig,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct DebugConfig {
+    /// Enable debug server
+    #[serde(default)]
+    pub insecure_enable_debug_rpc: bool,
+    #[serde(default)]
+    pub insecure_skip_attestation: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -158,11 +178,41 @@ pub struct AuthConfig {
 }
 
 impl Config {
-    pub fn id(&self) -> Vec<u8> {
-        use sha2::{Digest, Sha256};
-        let mut hasher = Sha256::new();
-        hasher.update(self.wg.public_key.as_bytes());
-        hasher.finalize()[..20].to_vec()
+    /// Get or generate a unique node UUID.
+    /// The UUID is stored in `{data_dir}/node_uuid` and persisted across restarts.
+    pub fn uuid(&self) -> Vec<u8> {
+        use std::fs;
+        use std::path::Path;
+
+        let uuid_path = Path::new(&self.sync.data_dir).join("node_uuid");
+
+        // Try to read existing UUID
+        if let Ok(content) = fs::read_to_string(&uuid_path) {
+            if let Ok(uuid) = uuid::Uuid::parse_str(content.trim()) {
+                return uuid.as_bytes().to_vec();
+            }
+        }
+
+        // Generate new UUID
+        let uuid = uuid::Uuid::new_v4();
+
+        // Ensure directory exists
+        if let Some(parent) = uuid_path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+
+        // Save UUID to file
+        if let Err(err) = fs::write(&uuid_path, uuid.to_string()) {
+            tracing::warn!(
+                "failed to save node UUID to {}: {}",
+                uuid_path.display(),
+                err
+            );
+        } else {
+            tracing::info!("generated new node UUID: {}", uuid);
+        }
+
+        uuid.as_bytes().to_vec()
     }
 }
 
@@ -208,31 +258,6 @@ pub struct CertbotConfig {
     /// Renew timeout
     #[serde(with = "serde_duration")]
     pub renew_timeout: Duration,
-}
-
-impl CertbotConfig {
-    fn to_bot_config(&self) -> certbot::CertBotConfig {
-        let workdir = certbot::WorkDir::new(&self.workdir);
-        certbot::CertBotConfig::builder()
-            .auto_create_account(true)
-            .cert_dir(workdir.backup_dir())
-            .cert_file(workdir.cert_path())
-            .key_file(workdir.key_path())
-            .credentials_file(workdir.account_credentials_path())
-            .acme_url(self.acme_url.clone())
-            .cert_subject_alt_names(vec![self.domain.clone()])
-            .cf_zone_id(self.cf_zone_id.clone())
-            .cf_api_token(self.cf_api_token.clone())
-            .renew_interval(self.renew_interval)
-            .renew_timeout(self.renew_timeout)
-            .renew_expires_in(self.renew_before_expiration)
-            .auto_set_caa(self.auto_set_caa)
-            .build()
-    }
-
-    pub async fn build_bot(&self) -> Result<certbot::CertBot> {
-        self.to_bot_config().build_bot().await
-    }
 }
 
 pub const DEFAULT_CONFIG: &str = include_str!("../gateway.toml");

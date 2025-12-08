@@ -7,6 +7,7 @@ use anyhow::Result;
 use rocket::{get, response::content::RawHtml, routes, Route, State};
 
 mod route_index;
+mod wavekv_sync;
 
 #[get("/")]
 async fn index(state: &State<Proxy>) -> Result<RawHtml<String>, String> {
@@ -15,4 +16,9 @@ async fn index(state: &State<Proxy>) -> Result<RawHtml<String>, String> {
 
 pub fn routes() -> Vec<Route> {
     routes![index]
+}
+
+/// WaveKV sync endpoint (for main server, requires mTLS gateway auth)
+pub fn wavekv_sync_routes() -> Vec<Route> {
+    routes![wavekv_sync::sync_store]
 }

@@ -7,7 +7,7 @@ use clap::Parser;
 use config::{Config, TlsConfig};
 use dstack_guest_agent_rpc::{dstack_guest_client::DstackGuestClient, GetTlsKeyArgs};
 use http_client::prpc::PrpcClient;
-use ra_rpc::{client::RaClient, rocket_helper::QuoteVerifier};
+use ra_rpc::{client::RaClient, prpc_routes as prpc, rocket_helper::QuoteVerifier};
 use rocket::{
     fairing::AdHoc,
     figment::{providers::Serialized, Figment},
@@ -15,10 +15,15 @@ use rocket::{
 use tracing::info;
 
 use admin_service::AdminRpcHandler;
-use main_service::{Proxy, RpcHandler};
+use main_service::{Proxy, ProxyOptions, RpcHandler};
+
+use crate::debug_service::DebugRpcHandler;
 
 mod admin_service;
 mod config;
+mod debug_service;
+mod distributed_certbot;
+mod kv;
 mod main_service;
 mod models;
 mod proxy;
@@ -67,7 +72,7 @@ async fn maybe_gen_certs(config: &Config, tls_config: &TlsConfig) -> Result<()> 
         return Ok(());
     }
 
-    if config.run_in_dstack {
+    if !config.debug.insecure_skip_attestation {
         info!("Using dstack guest agent for certificate generation");
         let agent_client = dstack_agent().context("Failed to create dstack client")?;
         let response = agent_client
@@ -138,9 +143,18 @@ async fn main() -> Result<()> {
     let figment = config::load_config_figment(args.config.as_deref());
 
     let config = figment.focus("core").extract::<Config>()?;
+
+    // Validate node_id
+    if config.sync.enabled && config.sync.node_id == 0 {
+        anyhow::bail!("node_id must be greater than 0");
+    }
+
     config::setup_wireguard(&config.wg)?;
 
-    let tls_config = figment.focus("tls").extract::<TlsConfig>()?;
+    let tls_config = figment
+        .focus("tls")
+        .extract::<TlsConfig>()
+        .context("Failed to extract tls config")?;
     maybe_gen_certs(&config, &tls_config)
         .await
         .context("Failed to generate certs")?;
@@ -150,39 +164,50 @@ async fn main() -> Result<()> {
         set_max_ulimit()?;
     }
 
-    let my_app_id = if config.run_in_dstack {
+    let my_app_id = if config.debug.insecure_skip_attestation {
+        None
+    } else {
         let dstack_client = dstack_agent().context("Failed to create dstack client")?;
         let info = dstack_client
             .info()
             .await
             .context("Failed to get app info")?;
         Some(info.app_id)
-    } else {
-        None
     };
     let proxy_config = config.proxy.clone();
     let pccs_url = config.pccs_url.clone();
     let admin_enabled = config.admin.enabled;
-    let state = main_service::Proxy::new(config, my_app_id).await?;
+    let debug_config = config.debug.clone();
+    let state = Proxy::new(ProxyOptions {
+        config,
+        my_app_id,
+        tls_config,
+    })
+    .await?;
     info!("Starting background tasks");
     state.start_bg_tasks().await?;
     state.lock().reconfigure()?;
     proxy::start(proxy_config, state.clone());
 
-    let admin_figment =
-        Figment::new()
-            .merge(rocket::Config::default())
-            .merge(Serialized::defaults(
-                figment
-                    .find_value("core.admin")
-                    .context("admin section not found")?,
-            ));
+    let admin_value = figment
+        .find_value("core.admin")
+        .context("admin section not found")?;
+    let debug_value = figment
+        .find_value("core.debug")
+        .context("debug section not found")?;
+
+    let admin_figment = Figment::new()
+        .merge(rocket::Config::default())
+        .merge(Serialized::defaults(admin_value));
+
+    let debug_figment = Figment::new()
+        .merge(rocket::Config::default())
+        .merge(Serialized::defaults(debug_value));
 
     let mut rocket = rocket::custom(figment)
-        .mount(
-            "/prpc",
-            ra_rpc::prpc_routes!(Proxy, RpcHandler, trim: "Tproxy."),
-        )
+        .mount("/prpc", prpc!(Proxy, RpcHandler, trim: "Tproxy."))
+        // Mount WaveKV sync endpoint (requires mTLS gateway auth)
+        .mount("/", web_routes::wavekv_sync_routes())
         .attach(AdHoc::on_response("Add app version header", |_req, res| {
             Box::pin(async move {
                 res.set_raw_header("X-App-Version", app_version());
@@ -192,12 +217,26 @@ async fn main() -> Result<()> {
     let verifier = QuoteVerifier::new(pccs_url);
     rocket = rocket.manage(verifier);
     let main_srv = rocket.launch();
+    let admin_state = state.clone();
+    let debug_state = state;
     let admin_srv = async move {
         if admin_enabled {
             rocket::custom(admin_figment)
                 .mount("/", web_routes::routes())
-                .mount("/", ra_rpc::prpc_routes!(Proxy, AdminRpcHandler))
-                .manage(state)
+                .mount("/", prpc!(Proxy, AdminRpcHandler, trim: "Admin."))
+                .mount("/prpc", prpc!(Proxy, AdminRpcHandler, trim: "Admin."))
+                .manage(admin_state)
+                .launch()
+                .await
+        } else {
+            std::future::pending().await
+        }
+    };
+    let debug_srv = async move {
+        if debug_config.insecure_enable_debug_rpc {
+            rocket::custom(debug_figment)
+                .mount("/prpc", prpc!(Proxy, DebugRpcHandler, trim: "Debug."))
+                .manage(debug_state)
                 .launch()
                 .await
         } else {
@@ -210,6 +249,9 @@ async fn main() -> Result<()> {
         }
         result = admin_srv => {
             result.map_err(|err| anyhow!("Failed to start admin server: {err:?}"))?;
+        }
+        result = debug_srv => {
+            result.map_err(|err| anyhow!("Failed to start debug server: {err:?}"))?;
         }
     }
     Ok(())

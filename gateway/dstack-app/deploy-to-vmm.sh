@@ -56,6 +56,12 @@ else
 # Public IP address
 PUBLIC_IP=$(curl -s4 ifconfig.me)
 
+# Node ID for this gateway instance.
+# Must be unique across all gateway instances in the network.
+# Must be 32-bit unsigned integer (0-4294967295)
+# Must be non-zero if deploying multiple gateways (1-4294967295)
+NODE_ID=1
+
 # The dstack-gateway application ID. Register the app in DstackKms first to get the app ID.
 # GATEWAY_APP_ID=31884c4b7775affe4c99735f6c2aff7d7bc6cfcd
 
@@ -103,6 +109,7 @@ required_env_vars=(
   "GATEWAY_APP_ID"
   "MY_URL"
   "APP_LAUNCH_TOKEN"
+  "NODE_ID"
   # "BOOTNODE_URL"
 )
 
@@ -143,6 +150,7 @@ BOOTNODE_URL=$BOOTNODE_URL
 SUBNET_INDEX=$SUBNET_INDEX
 APP_LAUNCH_TOKEN=$APP_LAUNCH_TOKEN
 RPC_DOMAIN=$RPC_DOMAIN
+NODE_ID=$NODE_ID
 EOF
 
 if [ -n "$APP_COMPOSE_FILE" ]; then
