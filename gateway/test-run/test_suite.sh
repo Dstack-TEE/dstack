@@ -1660,6 +1660,184 @@ test_admin_set_node_status() {
 }
 
 # =============================================================================
+# Test 18: Node down excluded from RegisterCvm response
+# =============================================================================
+test_node_status_register_exclude() {
+	log_info "========== Test 18: Node Down Excluded from Registration =========="
+	cleanup
+
+	rm -rf "$RUN_DIR/wavekv_node1" "$RUN_DIR/wavekv_node2"
+
+	generate_config 1
+	generate_config 2
+
+	start_node 1
+	start_node 2
+
+	# Register peers so nodes can discover each other
+	setup_peers 1 2
+
+	local admin_port1=13016
+	local admin_port2=13026
+	local debug_port1=13015
+
+	# Wait for sync
+	sleep 5
+
+	# Verify debug service is available
+	if ! check_debug_service $debug_port1; then
+		log_error "Debug service not available on node 1"
+		return 1
+	fi
+
+	# Set node 2 status to "down" via node 1's admin API
+	log_info "Setting node 2 status to 'down'..."
+	admin_set_node_status $admin_port1 2 "down"
+	sleep 2
+
+	# Register a client on node 1
+	log_info "Registering client on node 1 (node 2 is down)..."
+	local response=$(debug_register_cvm $debug_port1 "downtest12345678901234567890123456789012=" "downtest_app" "downtest_inst")
+	log_info "Register response: $response"
+
+	# Verify registration succeeded
+	local client_ip=$(verify_register_response "$response")
+	if [[ -z "$client_ip" ]]; then
+		log_error "Registration failed"
+		return 1
+	fi
+	log_info "Registered client with IP: $client_ip"
+
+	# Check gateways list in response - should NOT include node 2
+	local has_node2=$(echo "$response" | python3 -c "
+import sys, json
+try:
+    d = json.load(sys.stdin)
+    gateways = d.get('gateways', [])
+    for gw in gateways:
+        if gw.get('id') == 2:
+            sys.exit(0)
+    sys.exit(1)
+except:
+    sys.exit(1)
+" && echo "yes" || echo "no")
+
+	if [[ "$has_node2" == "yes" ]]; then
+		log_error "Node 2 (down) was included in registration response"
+		log_info "Response: $response"
+		return 1
+	else
+		log_info "Node 2 (down) correctly excluded from registration response"
+	fi
+
+	# Set node 2 status back to "up"
+	log_info "Setting node 2 status to 'up'..."
+	admin_set_node_status $admin_port1 2 "up"
+	sleep 2
+
+	# Register another client
+	log_info "Registering client on node 1 (node 2 is now up)..."
+	response=$(debug_register_cvm $debug_port1 "uptest123456789012345678901234567890123=" "uptest_app" "uptest_inst2")
+
+	# Check gateways list - should now include node 2
+	has_node2=$(echo "$response" | python3 -c "
+import sys, json
+try:
+    d = json.load(sys.stdin)
+    gateways = d.get('gateways', [])
+    for gw in gateways:
+        if gw.get('id') == 2:
+            sys.exit(0)
+    sys.exit(1)
+except:
+    sys.exit(1)
+" && echo "yes" || echo "no")
+
+	if [[ "$has_node2" == "no" ]]; then
+		log_error "Node 2 (up) was NOT included in registration response"
+		log_info "Response: $response"
+		return 1
+	else
+		log_info "Node 2 (up) correctly included in registration response"
+	fi
+
+	log_info "Node down excluded from registration test PASSED"
+	return 0
+}
+
+# =============================================================================
+# Test 19: Node down rejects RegisterCvm requests
+# =============================================================================
+test_node_status_register_reject() {
+	log_info "========== Test 19: Node Down Rejects Registration =========="
+	cleanup
+
+	rm -rf "$RUN_DIR/wavekv_node1"
+
+	generate_config 1
+	start_node 1
+
+	local admin_port=13016
+	local debug_port=13015
+
+	# Verify debug service is available
+	if ! check_debug_service $debug_port; then
+		log_error "Debug service not available"
+		return 1
+	fi
+
+	# Register a client when node is up (should succeed)
+	log_info "Registering client when node 1 is up..."
+	local response=$(debug_register_cvm $debug_port "upnode123456789012345678901234567890123=" "upnode_app" "upnode_inst")
+	local client_ip=$(verify_register_response "$response")
+	if [[ -z "$client_ip" ]]; then
+		log_error "Registration failed when node was up"
+		return 1
+	fi
+	log_info "Registration succeeded when node was up (IP: $client_ip)"
+
+	# Set node 1 status to "down" (marking itself as down)
+	log_info "Setting node 1 status to 'down'..."
+	admin_set_node_status $admin_port 1 "down"
+	sleep 2
+
+	# Try to register a client when node is down (should fail)
+	log_info "Attempting to register client when node 1 is down..."
+	response=$(debug_register_cvm $debug_port "downnode12345678901234567890123456789012=" "downnode_app" "downnode_inst")
+	log_info "Register response: $response"
+
+	# Check if response contains error about node being down
+	if echo "$response" | grep -qi "error"; then
+		log_info "Registration correctly rejected when node is down"
+		if echo "$response" | grep -qi "marked as down"; then
+			log_info "Error message mentions 'marked as down' (correct)"
+		fi
+	else
+		log_error "Registration was NOT rejected when node is down"
+		log_info "Response: $response"
+		return 1
+	fi
+
+	# Set node 1 status back to "up"
+	log_info "Setting node 1 status to 'up'..."
+	admin_set_node_status $admin_port 1 "up"
+	sleep 2
+
+	# Register a client again (should succeed)
+	log_info "Registering client when node 1 is back up..."
+	response=$(debug_register_cvm $debug_port "backup123456789012345678901234567890123=" "backup_app" "backup_inst")
+	client_ip=$(verify_register_response "$response")
+	if [[ -z "$client_ip" ]]; then
+		log_error "Registration failed when node was back up"
+		return 1
+	fi
+	log_info "Registration succeeded when node was back up (IP: $client_ip)"
+
+	log_info "Node down rejects registration test PASSED"
+	return 0
+}
+
+# =============================================================================
 # Clean command - remove all generated files
 # =============================================================================
 clean() {
@@ -1775,29 +1953,55 @@ main() {
 		exit 0
 	fi
 
+	# Handle ls command - list all test cases
+	if [[ "${1:-}" == "ls" ]]; then
+		echo "Available test cases:"
+		echo ""
+		echo "Quick tests:"
+		echo "  test_persistence                      - Single node persistence"
+		echo "  test_status_endpoint                  - Status endpoint structure"
+		echo "  test_prpc_register                    - prpc DebugRegisterCvm endpoint"
+		echo "  test_prpc_info                        - prpc Info endpoint"
+		echo "  test_wal_integrity                    - WAL file integrity"
+		echo ""
+		echo "Sync tests:"
+		echo "  test_multi_node_sync                  - Multi-node sync"
+		echo "  test_node_recovery                    - Node recovery after disconnect"
+		echo "  test_cross_node_data_sync             - Cross-node data sync verification"
+		echo ""
+		echo "Advanced tests:"
+		echo "  test_client_registration_persistence  - Client registration and persistence"
+		echo "  test_stress_writes                    - Stress test - multiple writes"
+		echo "  test_network_partition                - Network partition simulation"
+		echo "  test_three_node_cluster               - Three-node cluster"
+		echo "  test_three_node_bootnode              - Three-node cluster with bootnode"
+		echo "  test_node_id_reuse_rejected           - Node ID reuse rejection"
+		echo "  test_periodic_persistence             - Periodic persistence"
+		echo ""
+		echo "Admin RPC tests:"
+		echo "  test_admin_set_node_url               - Admin.SetNodeUrl RPC"
+		echo "  test_admin_set_node_status            - Admin.SetNodeStatus RPC"
+		echo "  test_node_status_register_exclude     - Node down excluded from registration"
+		echo "  test_node_status_register_reject      - Node down rejects registration"
+		echo ""
+		echo "Usage:"
+		echo "  $0              - Run all tests"
+		echo "  $0 quick        - Run quick tests only"
+		echo "  $0 sync         - Run sync tests only"
+		echo "  $0 advanced     - Run advanced tests only"
+		echo "  $0 admin        - Run admin RPC tests only"
+		echo "  $0 case <name>  - Run specific test case"
+		echo "  $0 ls           - List all test cases"
+		echo "  $0 clean        - Clean up generated files"
+		exit 0
+	fi
+
 	# Handle case command - run specific test case
 	if [[ "${1:-}" == "case" ]]; then
 		local test_case="${2:-}"
 		if [[ -z "$test_case" ]]; then
 			log_error "Usage: $0 case <testcase>"
-			log_info "Available test cases:"
-			log_info "  - test_persistence"
-			log_info "  - test_multi_node_sync"
-			log_info "  - test_node_recovery"
-			log_info "  - test_status_endpoint"
-			log_info "  - test_cross_node_data_sync"
-			log_info "  - test_prpc_register"
-			log_info "  - test_prpc_info"
-			log_info "  - test_client_registration_persistence"
-			log_info "  - test_stress_writes"
-			log_info "  - test_network_partition"
-			log_info "  - test_three_node_cluster"
-			log_info "  - test_three_node_bootnode"
-			log_info "  - test_node_id_reuse_rejected"
-			log_info "  - test_periodic_persistence"
-			log_info "  - test_wal_integrity"
-			log_info "  - test_admin_set_node_url"
-			log_info "  - test_admin_set_node_status"
+			log_info "Run '$0 ls' to see all available test cases"
 			exit 1
 		fi
 
@@ -1845,6 +2049,7 @@ main() {
 
 	local failed=0
 	local passed=0
+	local failed_tests=()
 
 	run_test() {
 		local test_name=$1
@@ -1853,6 +2058,7 @@ main() {
 			((passed++))
 		else
 			((failed++))
+			failed_tests+=("$test_name")
 		fi
 		cleanup
 	}
@@ -1887,6 +2093,8 @@ main() {
 	if [[ "$test_filter" == "all" ]] || [[ "$test_filter" == "admin" ]]; then
 		run_test test_admin_set_node_url
 		run_test test_admin_set_node_status
+		run_test test_node_status_register_exclude
+		run_test test_node_status_register_reject
 	fi
 
 	echo ""
@@ -1894,6 +2102,18 @@ main() {
 	log_info "Tests passed: $passed"
 	if [[ $failed -gt 0 ]]; then
 		log_error "Tests failed: $failed"
+		echo ""
+		log_error "Failed test cases:"
+		for test_name in "${failed_tests[@]}"; do
+			log_error "  - $test_name"
+		done
+		echo ""
+		log_info "To rerun a failed test:"
+		log_info "  $0 case <test_name>"
+		log_info "Example:"
+		if [[ ${#failed_tests[@]} -gt 0 ]]; then
+			log_info "  $0 case ${failed_tests[0]}"
+		fi
 	fi
 	log_info "=========================================="
 
