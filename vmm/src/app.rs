@@ -16,6 +16,7 @@ use dstack_vmm_rpc::{
 use fs_err as fs;
 use guest_api::client::DefaultClient as GuestClient;
 use id_pool::IdPool;
+use or_panic::ResultOrPanic;
 use ra_rpc::client::RaClient;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -123,7 +124,7 @@ pub struct App {
 
 impl App {
     fn lock(&self) -> MutexGuard<AppState> {
-        self.state.lock().unwrap()
+        self.state.lock().or_panic("mutex poisoned")
     }
 
     pub(crate) fn vm_dir(&self) -> PathBuf {
@@ -350,7 +351,7 @@ impl App {
                     .unwrap_or_default()
                     .is_cvm()
             })
-            .map(|(id, p)| (id.clone(), p.config.cid.unwrap()))
+            .flat_map(|(id, p)| p.config.cid.map(|cid| (id.clone(), cid)))
             .collect::<HashMap<_, _>>();
 
         // Update CID pool with running VMs

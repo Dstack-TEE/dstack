@@ -118,7 +118,7 @@ fn main() -> Result<()> {
                 .context("Failed to measure machine configuration")?;
 
             if config.json {
-                println!("{}", serde_json::to_string_pretty(&measurements).unwrap());
+                println!("{}", serde_json::to_string_pretty(&measurements)?);
             } else {
                 println!("Machine measurements:");
                 println!("MRTD: {}", hex::encode(measurements.mrtd));

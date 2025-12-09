@@ -18,6 +18,7 @@ use blake2::{
     digest::{Update, VariableOutput},
     Blake2bVar,
 };
+use or_panic::ResultOrPanic;
 use rand_core::OsRng;
 use xsalsa20poly1305::{aead::Aead, consts::U10, KeyInit, XSalsa20Poly1305};
 
@@ -94,14 +95,16 @@ pub fn seal(message: &[u8], recipient_pk: &PublicKey) -> Vec<u8> {
 
     // Compute nonce: blake2b(ephemeral_pk || recipient_pk, outlen=24)
     let nonce = derive_nonce(ephemeral_pk.as_bytes(), recipient_pk.as_bytes())
-        .expect("Failed to derive nonce");
+        .or_panic("Failed to derive nonce");
 
     // Create the XSalsa20Poly1305 cipher with the derived key
     let cipher = XSalsa20Poly1305::new_from_slice(&key_bytes)
-        .expect("Failed to create XSalsa20Poly1305 cipher");
+        .or_panic("Failed to create XSalsa20Poly1305 cipher");
 
     // Encrypt the message
-    let ciphertext = cipher.encrypt(&nonce, message).expect("Encryption failed");
+    let ciphertext = cipher
+        .encrypt(&nonce, message)
+        .or_panic("Encryption failed");
 
     // Combine the ephemeral public key and ciphertext to form the sealed box
     let mut sealed_box = Vec::with_capacity(PUBLICKEYBYTES + ciphertext.len());

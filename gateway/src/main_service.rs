@@ -23,6 +23,7 @@ use dstack_gateway_rpc::{
 use dstack_guest_agent_rpc::{dstack_guest_client::DstackGuestClient, RawQuoteArgs};
 use fs_err as fs;
 use http_client::prpc::PrpcClient;
+use or_panic::ResultOrPanic;
 use ra_rpc::{CallContext, RpcCall, VerifiedAttestation};
 use ra_tls::attestation::QuoteContentType;
 use rand::seq::IteratorRandom;
@@ -100,7 +101,7 @@ impl Proxy {
 
 impl ProxyInner {
     pub(crate) fn lock(&self) -> MutexGuard<ProxyState> {
-        self.state.lock().expect("Failed to lock AppState")
+        self.state.lock().or_panic("Failed to lock AppState")
     }
 
     pub async fn new(config: Config, my_app_id: Option<Vec<u8>>) -> Result<Self> {

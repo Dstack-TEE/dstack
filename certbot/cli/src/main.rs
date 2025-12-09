@@ -10,6 +10,7 @@ use certbot::{CertBotConfig, WorkDir};
 use clap::Parser;
 use documented::DocumentedFields;
 use fs_err as fs;
+use or_panic::ResultOrPanic;
 use serde::{Deserialize, Serialize};
 use toml_edit::ser::to_document;
 
@@ -166,7 +167,7 @@ async fn main() -> Result<()> {
     }
     rustls::crypto::ring::default_provider()
         .install_default()
-        .expect("Failed to install default crypto provider");
+        .or_panic("Failed to install default crypto provider");
 
     let args = Args::parse();
     match args.command {

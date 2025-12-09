@@ -7,6 +7,7 @@
 
 use anyhow::{bail, Context, Result};
 use log::debug;
+use scale::Decode;
 
 use crate::Machine;
 
@@ -392,6 +393,13 @@ fn qemu_loader_append(data: &mut Vec<u8>, cmd: LoaderCmd) {
     }
 }
 
+/// ACPI table header (first 8 bytes of every ACPI table)
+#[derive(Debug, Decode)]
+struct AcpiTableHeader {
+    signature: [u8; 4],
+    length: u32,
+}
+
 /// Searches for an ACPI table with the given signature and returns its offset,
 /// checksum offset, and length.
 fn find_acpi_table(tables: &[u8], signature: &str) -> Result<(u32, u32, u32)> {
@@ -407,22 +415,21 @@ fn find_acpi_table(tables: &[u8], signature: &str) -> Result<(u32, u32, u32)> {
             bail!("Table not found: {signature}");
         }
 
-        let tbl_sig = &tables[offset..offset + 4];
-        let tbl_len_bytes: [u8; 4] = tables[offset + 4..offset + 8].try_into().unwrap();
-        let tbl_len = u32::from_le_bytes(tbl_len_bytes) as usize;
+        let header = AcpiTableHeader::decode(&mut &tables[offset..])
+            .context("failed to decode ACPI table header")?;
 
-        if tbl_sig == sig_bytes {
+        if header.signature == sig_bytes {
             // Found the table
-            return Ok((offset as u32, (offset + 9) as u32, tbl_len as u32));
+            return Ok((offset as u32, (offset + 9) as u32, header.length));
         }
 
-        if tbl_len == 0 {
+        if header.length == 0 {
             // Invalid table length, stop searching
-            bail!("Found table with zero length at offset {offset}");
+            bail!("found table with zero length at offset {offset}");
         }
         // Move to the next table
-        offset += tbl_len;
+        offset += header.length as usize;
     }
 
-    bail!("Table not found: {signature}");
+    bail!("table not found: {signature}");
 }

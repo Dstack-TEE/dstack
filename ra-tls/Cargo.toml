@@ -33,3 +33,4 @@ scale.workspace = true
 
 cc-eventlog.workspace = true
 serde-human-bytes.workspace = true
+or-panic.workspace = true

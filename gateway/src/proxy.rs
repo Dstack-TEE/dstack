@@ -166,7 +166,7 @@ pub async fn proxy_main(config: &ProxyConfig, proxy: Proxy) -> Result<()> {
         .enable_all()
         .worker_threads(config.workers)
         .build()
-        .expect("Failed to build Tokio runtime");
+        .context("Failed to build Tokio runtime")?;
 
     let dotted_base_domain = {
         let base_domain = config.base_domain.as_str();
@@ -232,16 +232,16 @@ fn next_connection_id() -> usize {
     COUNTER.fetch_add(1, Ordering::Relaxed)
 }
 
-pub fn start(config: ProxyConfig, app_state: Proxy) {
+pub fn start(config: ProxyConfig, app_state: Proxy) -> Result<()> {
+    // Create a new single-threaded runtime
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("Failed to build Tokio runtime")?;
+
     std::thread::Builder::new()
         .name("proxy-main".to_string())
         .spawn(move || {
-            // Create a new single-threaded runtime
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("Failed to build Tokio runtime");
-
             // Run the proxy_main function in this runtime
             if let Err(err) = rt.block_on(proxy_main(&config, app_state)) {
                 error!(
@@ -250,7 +250,8 @@ pub fn start(config: ProxyConfig, app_state: Proxy) {
                 );
             }
         })
-        .expect("Failed to spawn proxy-main thread");
+        .context("Failed to spawn proxy-main thread")?;
+    Ok(())
 }
 
 #[cfg(test)]

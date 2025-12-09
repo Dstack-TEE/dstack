@@ -149,7 +149,7 @@ impl CertSigningRequest {
         // Sign the encoded CSR
         let signature = key_pair
             .sign(&rng, &encoded)
-            .expect("Failed to sign CSR")
+            .context("Failed to sign CSR")?
             .as_ref()
             .to_vec();
         Ok(signature)

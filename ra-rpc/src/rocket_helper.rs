@@ -308,7 +308,7 @@ pub async fn handle_prpc_impl<S, Call: RpcCall<S>>(
         (Some(quote_verifier), Some(attestation)) => {
             let pubkey = request
                 .certificate
-                .expect("certificate is missing")
+                .context("certificate is missing")?
                 .public_key()
                 .raw
                 .to_vec();

@@ -86,6 +86,7 @@ size-parser = { path = "size-parser" }
 
 # Core dependencies
 anyhow = { version = "1.0.97", default-features = false }
+or-panic = { version = "1.0", default-features = false }
 chrono = "0.4.40"
 clap = { version = "4.5.32", features = ["derive", "string"] }
 dashmap = "6.1.0"
