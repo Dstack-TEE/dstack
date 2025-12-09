@@ -27,6 +27,7 @@ pub struct AcmeClient {
     account: Account,
     credentials: Credentials,
     dns01_client: Dns01Client,
+    max_dns_wait: Duration,
 }
 
 #[derive(Debug, Clone)]
@@ -53,7 +54,11 @@ pub(crate) fn acme_matches(encoded_credentials: &str, acme_url: &str) -> bool {
 }
 
 impl AcmeClient {
-    pub async fn load(dns01_client: Dns01Client, encoded_credentials: &str) -> Result<Self> {
+    pub async fn load(
+        dns01_client: Dns01Client,
+        encoded_credentials: &str,
+        max_dns_wait: Duration,
+    ) -> Result<Self> {
         let credentials: Credentials = serde_json::from_str(encoded_credentials)?;
         let account = Account::from_credentials(credentials.credentials).await?;
         let credentials: Credentials = serde_json::from_str(encoded_credentials)?;
@@ -61,11 +66,16 @@ impl AcmeClient {
             account,
             dns01_client,
             credentials,
+            max_dns_wait,
         })
     }
 
     /// Create a new account.
-    pub async fn new_account(acme_url: &str, dns01_client: Dns01Client) -> Result<Self> {
+    pub async fn new_account(
+        acme_url: &str,
+        dns01_client: Dns01Client,
+        max_dns_wait: Duration,
+    ) -> Result<Self> {
         let (account, credentials) = Account::create(
             &NewAccount {
                 contact: &[],
@@ -86,6 +96,7 @@ impl AcmeClient {
             account,
             dns01_client,
             credentials,
+            max_dns_wait,
         })
     }
 
@@ -335,6 +346,8 @@ impl AcmeClient {
 
     /// Self check the TXT records for the given challenges.
     async fn check_dns(&self, challenges: &[Challenge]) -> Result<()> {
+        use tracing::warn;
+
         let mut delay = Duration::from_millis(250);
         let mut tries = 1u8;
 
@@ -342,10 +355,21 @@ impl AcmeClient {
 
         debug!("Unsettled challenges: {unsettled_challenges:#?}");
 
+        let start_time = std::time::Instant::now();
+
         'outer: loop {
             use hickory_resolver::AsyncResolver;
 
             sleep(delay).await;
+
+            let elapsed = start_time.elapsed();
+            if elapsed >= self.max_dns_wait {
+                warn!(
+                    "DNS propagation timeout after {elapsed:?}, max wait time is {max:?}. proceeding anyway as ACME server may have different DNS view",
+                    max = self.max_dns_wait
+                );
+                break;
+            }
 
             let dns_resolver =
                 AsyncResolver::tokio_from_system_conf().context("failed to create dns resolver")?;
@@ -374,6 +398,8 @@ impl AcmeClient {
                     debug!(
                         tries,
                         domain = &challenge.acme_domain,
+                        elapsed = ?elapsed,
+                        max_wait = ?self.max_dns_wait,
                         "challenge not found, waiting for {delay:?}"
                     );
                     unsettled_challenges.push(challenge);

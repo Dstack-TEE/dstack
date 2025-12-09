@@ -208,6 +208,9 @@ pub struct CertbotConfig {
     /// Renew timeout
     #[serde(with = "serde_duration")]
     pub renew_timeout: Duration,
+    /// Maximum time to wait for DNS propagation
+    #[serde(with = "serde_duration")]
+    pub max_dns_wait: Duration,
 }
 
 impl CertbotConfig {
@@ -227,6 +230,7 @@ impl CertbotConfig {
             .renew_timeout(self.renew_timeout)
             .renew_expires_in(self.renew_before_expiration)
             .auto_set_caa(self.auto_set_caa)
+            .max_dns_wait(self.max_dns_wait)
             .build()
     }
 

@@ -38,6 +38,7 @@ domain = "*.example.com"
 renew_interval = "1h"
 renew_before_expiration = "10d"
 renew_timeout = "120s"
+max_dns_wait = "5m"
 
 [core.wg]
 public_key = ""
