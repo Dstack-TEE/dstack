@@ -2347,15 +2347,20 @@ version = "0.5.5"
 dependencies = [
  "anyhow",
  "bon",
+ "dstack-types",
+ "flate2",
  "fs-err",
  "hex",
  "hex-literal 1.0.0",
  "log",
  "object",
+ "parity-scale-codec",
+ "reqwest",
  "serde",
  "serde-human-bytes",
  "serde_json",
  "sha2 0.10.9",
+ "tar",
  "thiserror 2.0.15",
 ]
 
@@ -2774,6 +2779,18 @@ dependencies = [
  "toml",
  "uncased",
  "version_check",
+]
+
+[[package]]
+name = "filetime"
+version = "0.2.26"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bc0505cd1b6fa6580283f6bdf70a73fcf4aba1184038c90902b92b3dd0df63ed"
+dependencies = [
+ "cfg-if",
+ "libc",
+ "libredox",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -4102,6 +4119,7 @@ checksum = "391290121bad3d37fbddad76d8f5d1c1c314cfc646d143d7e07a3086ddff0ce3"
 dependencies = [
  "bitflags 2.9.2",
  "libc",
+ "redox_syscall 0.5.17",
 ]
 
 [[package]]
@@ -7150,6 +7168,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "55937e1799185b12863d447f42597ed69d9928686b8d88a1df17376a097d8369"
 
 [[package]]
+name = "tar"
+version = "0.4.44"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1d863878d212c87a19c1a610eb53bb01fe12951c0501cf5a0d65f724914a667a"
+dependencies = [
+ "filetime",
+ "libc",
+ "xattr",
+]
+
+[[package]]
 name = "tdx-attest"
 version = "0.5.5"
 dependencies = [
@@ -8397,6 +8426,16 @@ dependencies = [
  "rusticata-macros",
  "thiserror 1.0.69",
  "time",
+]
+
+[[package]]
+name = "xattr"
+version = "1.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32e45ad4206f6d2479085147f02bc2ef834ac85886624a23575ae137c8aa8156"
+dependencies = [
+ "libc",
+ "rustix 1.0.8",
 ]
 
 [[package]]

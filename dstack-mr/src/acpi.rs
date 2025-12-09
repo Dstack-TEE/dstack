@@ -408,7 +408,9 @@ fn find_acpi_table(tables: &[u8], signature: &str) -> Result<(u32, u32, u32)> {
         }
 
         let tbl_sig = &tables[offset..offset + 4];
-        let tbl_len_bytes: [u8; 4] = tables[offset + 4..offset + 8].try_into().unwrap();
+        let tbl_len_bytes: [u8; 4] = tables[offset + 4..offset + 8]
+            .try_into()
+            .expect("header len checked");
         let tbl_len = u32::from_le_bytes(tbl_len_bytes) as usize;
 
         if tbl_sig == sig_bytes {

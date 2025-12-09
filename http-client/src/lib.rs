@@ -36,14 +36,14 @@ pub async fn http_request(
     body: &[u8],
 ) -> Result<(u16, Vec<u8>)> {
     debug!("Sending HTTP request to {base}, path={path}");
-    let mut response = if base.starts_with("unix:") {
+    let mut response = if let Some(uds) = base.strip_prefix("unix:") {
         let path = if path.starts_with("/") {
             path.to_string()
         } else {
             format!("/{path}")
         };
         let client: Client<UnixConnector, Full<Bytes>> = Client::unix();
-        let unix_uri: hyper::Uri = Uri::new(base.strip_prefix("unix:").unwrap(), &path).into();
+        let unix_uri: hyper::Uri = Uri::new(uds, &path).into();
         let req = Request::builder()
             .method(method)
             .uri(unix_uri)

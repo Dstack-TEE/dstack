@@ -78,13 +78,18 @@ impl AppStateInner {
 impl AppState {
     fn maybe_request_demo_cert(&self) {
         let state = self.inner.clone();
-        if !state.demo_cert.read().unwrap().is_empty() {
+        if !state
+            .demo_cert
+            .read()
+            .expect("lock shoud not fail")
+            .is_empty()
+        {
             return;
         }
         tokio::spawn(async move {
             match state.request_demo_cert().await {
                 Ok(demo_cert) => {
-                    *state.demo_cert.write().unwrap() = demo_cert;
+                    *state.demo_cert.write().expect("lock shoud not fail") = demo_cert;
                 }
                 Err(e) => {
                     error!("Failed to request demo cert: {e}");
@@ -179,7 +184,12 @@ pub async fn get_info(state: &AppState, external: bool) -> Result<AppInfo> {
         os_image_hash: app_info.os_image_hash.clone(),
         key_provider_info: String::from_utf8(app_info.key_provider_info).unwrap_or_default(),
         compose_hash: app_info.compose_hash.clone(),
-        app_cert: state.inner.demo_cert.read().unwrap().clone(),
+        app_cert: state
+            .inner
+            .demo_cert
+            .read()
+            .expect("lock should not faile")
+            .clone(),
         tcb_info,
         vm_config,
     })
@@ -351,7 +361,12 @@ impl DstackGuestRpc for InternalRpcHandler {
         let valid = match request.algorithm.as_str() {
             "ed25519" => {
                 let verifying_key = ed25519_dalek::VerifyingKey::from_bytes(
-                    &request.public_key.as_slice().try_into().unwrap(),
+                    &request
+                        .public_key
+                        .as_slice()
+                        .try_into()
+                        .ok()
+                        .context("invalid public key")?,
                 )?;
                 let signature = ed25519_dalek::Signature::from_slice(&request.signature)?;
                 verifying_key.verify(&request.data, &signature).is_ok()

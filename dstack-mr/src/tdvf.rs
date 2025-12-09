@@ -4,6 +4,7 @@
 
 use anyhow::{anyhow, bail, Context, Result};
 use hex_literal::hex;
+use scale::Decode;
 use sha2::{Digest, Sha384};
 
 use crate::acpi::Tables;
@@ -24,7 +25,13 @@ pub enum PageAddOrder {
     SinglePass,
 }
 
-#[derive(Debug)]
+/// Helper to decode little-endian integers from byte slice using scale codec
+fn decode_le<T: Decode>(data: &[u8], context: &str) -> Result<T> {
+    T::decode(&mut &data[..])
+        .with_context(|| format!("failed to decode {} as little-endian", context))
+}
+
+#[derive(Debug, Decode)]
 struct TdvfSection {
     data_offset: u32,
     raw_data_size: u32,
@@ -32,6 +39,14 @@ struct TdvfSection {
     memory_data_size: u64,
     sec_type: u32,
     attributes: u32,
+}
+
+#[derive(Debug, Decode)]
+struct TdvfDescriptor {
+    signature: [u8; 4], // "TDVF"
+    _length: u32,
+    version: u32,
+    num_sections: u32,
 }
 
 #[derive(Debug)]
@@ -77,6 +92,11 @@ fn measure_tdx_efi_variable(vendor_guid: &str, var_name: &str) -> Result<Vec<u8>
 }
 
 impl<'a> Tdvf<'a> {
+    /// Parse TDVF firmware metadata
+    ///
+    /// This function uses scale codec for clean, panic-free parsing.
+    /// Correctness is verified by integration test in tests/tdvf_parse.rs
+    /// which ensures identical measurements to the original implementation.
     pub fn parse(fw: &'a [u8]) -> Result<Tdvf<'a>> {
         const TDX_METADATA_OFFSET_GUID: &str = "e47a6535-984a-4798-865e-4685a7bf8ec2";
         const TABLE_FOOTER_GUID: &str = "96b582de-1fb2-45f7-baea-a366c55a082d";
@@ -99,8 +119,7 @@ impl<'a> Tdvf<'a> {
         if offset < 18 {
             bail!("TDVF firmware offset too small for tables length");
         }
-        let tables_len =
-            u16::from_le_bytes(fw[offset - 18..offset - 16].try_into().unwrap()) as usize;
+        let tables_len = decode_le::<u16>(&fw[offset - 18..offset - 16], "tables length")? as usize;
         if tables_len == 0 || tables_len > offset.saturating_sub(18) {
             bail!("Failed to parse TDVF metadata: Invalid tables length");
         }
@@ -133,37 +152,34 @@ impl<'a> Tdvf<'a> {
             bail!("TDVF metadata data too small");
         }
         let tdvf_meta_offset_raw =
-            u32::from_le_bytes(data[data.len() - 4..].try_into().unwrap()) as usize;
+            decode_le::<u32>(&data[data.len() - 4..], "TDVF metadata offset")? as usize;
         if tdvf_meta_offset_raw > fw.len() {
             bail!("TDVF metadata offset exceeds firmware size");
         }
         let tdvf_meta_offset = fw.len() - tdvf_meta_offset_raw;
-        let tdvf_meta_desc = &fw[tdvf_meta_offset..tdvf_meta_offset + 16];
 
-        if &tdvf_meta_desc[..4] != b"TDVF" {
+        // Decode TDVF descriptor using scale codec
+        let descriptor = TdvfDescriptor::decode(&mut &fw[tdvf_meta_offset..])
+            .context("failed to decode TDVF descriptor")?;
+
+        if &descriptor.signature != b"TDVF" {
             bail!("Failed to parse TDVF metadata: Invalid TDVF descriptor");
         }
-        let tdvf_version = u32::from_le_bytes(tdvf_meta_desc[8..12].try_into().unwrap());
-        if tdvf_version != 1 {
+        if descriptor.version != 1 {
             bail!("Failed to parse TDVF metadata: Unsupported TDVF version");
         }
-        let num_sections = u32::from_le_bytes(tdvf_meta_desc[12..16].try_into().unwrap()) as usize;
+        let num_sections = descriptor.num_sections as usize;
 
         let mut meta = Tdvf {
             fw,
             sections: Vec::new(),
         };
+
+        // Decode all sections using scale codec
         for i in 0..num_sections {
             let sec_offset = tdvf_meta_offset + 16 + 32 * i;
-            let sec_data = &fw[sec_offset..sec_offset + 32];
-            let s = TdvfSection {
-                data_offset: u32::from_le_bytes(sec_data[0..4].try_into().unwrap()),
-                raw_data_size: u32::from_le_bytes(sec_data[4..8].try_into().unwrap()),
-                memory_address: u64::from_le_bytes(sec_data[8..16].try_into().unwrap()),
-                memory_data_size: u64::from_le_bytes(sec_data[16..24].try_into().unwrap()),
-                sec_type: u32::from_le_bytes(sec_data[24..28].try_into().unwrap()),
-                attributes: u32::from_le_bytes(sec_data[28..32].try_into().unwrap()),
-            };
+            let s = TdvfSection::decode(&mut &fw[sec_offset..])
+                .with_context(|| format!("failed to decode TDVF section {}", i))?;
 
             if s.memory_address % PAGE_SIZE != 0 {
                 bail!("Failed to parse TDVF metadata: Section memory address not aligned");

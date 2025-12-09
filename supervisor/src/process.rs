@@ -104,8 +104,12 @@ mod systime {
         time: &Option<SystemTime>,
         serializer: S,
     ) -> Result<S::Ok, S::Error> {
-        time.map(|t| t.duration_since(UNIX_EPOCH).unwrap().as_secs())
-            .serialize(serializer)
+        time.map(|t| {
+            t.duration_since(UNIX_EPOCH)
+                .expect("since zero should not fail")
+                .as_secs()
+        })
+        .serialize(serializer)
     }
 
     pub(crate) fn deserialize<'de, D: Deserializer<'de>>(
@@ -162,7 +166,7 @@ impl Process {
     }
 
     pub(crate) fn lock(&self) -> MutexGuard<ProcessStateRT> {
-        self.state.lock().unwrap()
+        self.state.lock().expect("lock should not fail")
     }
 
     pub fn start(&self) -> Result<()> {
@@ -199,7 +203,7 @@ impl Process {
 
         // Update process state
         {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.lock();
             state.started_at = Some(SystemTime::now());
             state.status = ProcessStatus::Running;
             state.pid = pid;
@@ -263,7 +267,7 @@ impl Process {
                         }
                     };
                     if let Some(state) = state {
-                        let mut state = state.lock().unwrap();
+                        let mut state = state.lock().expect("lock should not fail");
                         state.status = next_status;
                         state.stopped_at = Some(SystemTime::now());
                     }
@@ -276,7 +280,7 @@ impl Process {
     }
 
     pub fn stop(&self) -> Result<()> {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.lock();
         state.started = false;
         let is_running = state.status.is_running();
         let Some(stop_tx) = state.kill_tx.take() else {
@@ -295,7 +299,7 @@ impl Process {
     }
 
     pub fn info(&self) -> ProcessInfo {
-        let state = self.state.lock().unwrap();
+        let state = self.lock();
         ProcessInfo {
             config: (*self.config).clone(),
             state: state.display(),

@@ -126,12 +126,10 @@ impl MemorySize {
         }
 
         // Handle numbers with suffixes
-        let len = s.len();
-        if len == 0 {
+        let Some(last_char) = s.chars().last() else {
             return Err(MemorySizeError::Empty);
-        }
+        };
 
-        let last_char = s.chars().last().unwrap();
         let multiplier = match last_char.to_ascii_lowercase() {
             'k' => 1024u64,
             'm' => 1024u64.saturating_mul(1024),
@@ -142,8 +140,7 @@ impl MemorySize {
                 .saturating_mul(1024),
             _ => return Err(MemorySizeError::UnknownSuffix(last_char)),
         };
-
-        let num_part = &s[0..len - 1];
+        let num_part = s.trim_end_matches(last_char);
         let num = num_part
             .parse::<u64>()
             .map_err(|_| MemorySizeError::InvalidNumber(num_part.to_string()))?;

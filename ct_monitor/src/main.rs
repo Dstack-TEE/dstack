@@ -140,7 +140,8 @@ impl Monitor {
 
 fn validate_domain(domain: &str) -> Result<()> {
     let domain_regex =
-        Regex::new(r"^(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$").unwrap();
+        Regex::new(r"^(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$")
+            .context("invalid regex")?;
     if !domain_regex.is_match(domain) {
         bail!("invalid domain name");
     }

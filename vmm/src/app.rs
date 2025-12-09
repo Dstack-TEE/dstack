@@ -123,7 +123,7 @@ pub struct App {
 
 impl App {
     fn lock(&self) -> MutexGuard<AppState> {
-        self.state.lock().unwrap()
+        self.state.lock().expect("mutex poisoned")
     }
 
     pub(crate) fn vm_dir(&self) -> PathBuf {
@@ -350,7 +350,7 @@ impl App {
                     .unwrap_or_default()
                     .is_cvm()
             })
-            .map(|(id, p)| (id.clone(), p.config.cid.unwrap()))
+            .flat_map(|(id, p)| p.config.cid.map(|cid| (id.clone(), cid)))
             .collect::<HashMap<_, _>>();
 
         // Update CID pool with running VMs
