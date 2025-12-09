@@ -18,6 +18,7 @@ use x509_parser::parse_x509_certificate;
 
 use crate::{oids, traits::CertExt};
 use cc_eventlog::TdxEventLog as EventLog;
+use or_panic::ResultOrPanic;
 use serde_human_bytes as hex_bytes;
 
 /// The content type of a quote. A CVM should only generate quotes for these types.
@@ -50,7 +51,7 @@ impl QuoteContentType<'_> {
     /// Convert the content to the report data.
     pub fn to_report_data(&self, content: &[u8]) -> [u8; 64] {
         self.to_report_data_with_hash(content, "")
-            .expect("sha512 hash should not fail")
+            .or_panic("sha512 hash should not fail")
     }
 
     /// Convert the content to the report data with a specific hash algorithm.

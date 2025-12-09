@@ -4,6 +4,7 @@
 
 use std::sync::Arc;
 
+use anyhow::{Context, Result};
 use clap::Parser;
 use figment::{
     providers::{Env, Format, Toml},
@@ -165,8 +166,8 @@ async fn run_oneshot(file_path: &str, config: &Config) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[rocket::launch]
-fn rocket() -> _ {
+#[rocket::main]
+async fn main() -> Result<()> {
     tracing_subscriber::fmt::try_init().ok();
 
     let cli = Cli::parse();
@@ -178,12 +179,12 @@ fn rocket() -> _ {
         .merge(Toml::file(&cli.config))
         .merge(Env::prefixed("DSTACK_VERIFIER_"));
 
-    let config: Config = figment.extract().expect("Failed to load configuration");
+    let config: Config = figment.extract().context("Failed to load configuration")?;
 
     // Check for oneshot mode
     if let Some(file_path) = cli.verify {
         // Run oneshot verification and exit
-        let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
+        let rt = tokio::runtime::Runtime::new().context("Failed to create runtime")?;
         rt.block_on(async {
             if let Err(e) = run_oneshot(&file_path, &config).await {
                 error!("Oneshot verification failed: {:#}", e);
@@ -207,4 +208,8 @@ fn rocket() -> _ {
                 info!("dstack-verifier started successfully");
             })
         }))
+        .launch()
+        .await
+        .map_err(|err| anyhow::anyhow!("launch rocket failed: {err:?}"))?;
+    Ok(())
 }

@@ -6,6 +6,7 @@ use anyhow::{bail, Result};
 use bon::Builder;
 use fs_err as fs;
 use notify::{RecursiveMode, Watcher};
+use or_panic::ResultOrPanic;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::Write;
@@ -97,6 +98,7 @@ impl ProcessStateRT {
 }
 
 mod systime {
+    use or_panic::ResultOrPanic;
     use serde::{de::Error, Deserialize, Deserializer, Serialize, Serializer};
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -106,7 +108,7 @@ mod systime {
     ) -> Result<S::Ok, S::Error> {
         time.map(|t| {
             t.duration_since(UNIX_EPOCH)
-                .expect("since zero should not fail")
+                .or_panic("since zero should never fail")
                 .as_secs()
         })
         .serialize(serializer)
@@ -166,7 +168,7 @@ impl Process {
     }
 
     pub(crate) fn lock(&self) -> MutexGuard<ProcessStateRT> {
-        self.state.lock().expect("lock should not fail")
+        self.state.lock().or_panic("lock should never fail")
     }
 
     pub fn start(&self) -> Result<()> {
@@ -267,7 +269,7 @@ impl Process {
                         }
                     };
                     if let Some(state) = state {
-                        let mut state = state.lock().expect("lock should not fail");
+                        let mut state = state.lock().or_panic("lock should never fail");
                         state.status = next_status;
                         state.stopped_at = Some(SystemTime::now());
                     }

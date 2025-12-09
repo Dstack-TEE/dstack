@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::{anyhow, Result};
+use or_panic::ResultOrPanic;
 use rocket::figment::Figment;
 use rocket::serde::json::Json;
 use rocket::{delete, get, post, routes, Build, Rocket, State};
@@ -108,13 +109,13 @@ async fn handle_shutdown_signals(supervisor: Supervisor) {
     let ctrl_c = async {
         signal::ctrl_c()
             .await
-            .expect("failed to install Ctrl+C handler");
+            .or_panic("failed to install Ctrl+C handler");
     };
 
     #[cfg(unix)]
     let terminate = async {
         signal::unix::signal(signal::unix::SignalKind::terminate())
-            .expect("failed to install signal handler")
+            .or_panic("failed to install signal handler")
             .recv()
             .await;
     };
@@ -133,5 +134,5 @@ async fn handle_shutdown_signals(supervisor: Supervisor) {
 
     perform_shutdown(&supervisor, true)
         .await
-        .expect("Force shutdown should never return");
+        .or_panic("Force shutdown should never return");
 }

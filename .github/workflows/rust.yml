@@ -25,7 +25,7 @@ jobs:
         components: clippy, rustfmt
 
     - name: Run Clippy
-      run: cargo clippy -- -D warnings --allow unused_variables
+      run: cargo clippy -- -D warnings -D clippy::expect_used -D clippy::unwrap_used --allow unused_variables
 
     - name: Cargo fmt check
       run: cargo fmt --check --all

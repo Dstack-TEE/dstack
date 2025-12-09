@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#![allow(clippy::expect_used)]
+
 fn main() {
     prpc_build::configure()
         .out_dir(std::env::var_os("OUT_DIR").expect("OUT_DIR not set"))

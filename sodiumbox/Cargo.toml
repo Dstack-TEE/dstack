@@ -17,3 +17,4 @@ xsalsa20poly1305.workspace = true
 salsa20.workspace = true
 rand_core.workspace = true
 blake2.workspace = true
+or-panic.workspace = true

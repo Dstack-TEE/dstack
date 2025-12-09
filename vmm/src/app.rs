@@ -16,6 +16,7 @@ use dstack_vmm_rpc::{
 use fs_err as fs;
 use guest_api::client::DefaultClient as GuestClient;
 use id_pool::IdPool;
+use or_panic::ResultOrPanic;
 use ra_rpc::client::RaClient;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -123,7 +124,7 @@ pub struct App {
 
 impl App {
     fn lock(&self) -> MutexGuard<AppState> {
-        self.state.lock().expect("mutex poisoned")
+        self.state.lock().or_panic("mutex poisoned")
     }
 
     pub(crate) fn vm_dir(&self) -> PathBuf {

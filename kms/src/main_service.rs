@@ -203,7 +203,9 @@ impl RpcHandler {
 
     fn cache_mrs(&self, key: &str, mrs: &Mrs) -> Result<()> {
         let path = self.mr_cache_dir().join(key);
-        fs::create_dir_all(path.parent().unwrap()).context("Failed to create cache directory")?;
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).context("Failed to create cache directory")?;
+        }
         safe_write::safe_write(
             &path,
             serde_json::to_string(mrs).context("Failed to serialize cached MRs")?,

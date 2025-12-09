@@ -23,6 +23,7 @@ rocket-vsock-listener = { workspace = true, optional = true }
 serde.workspace = true
 x509-parser.workspace = true
 prost-types = { workspace = true, optional = true }
+or-panic.workspace = true
 
 [features]
 default = ["rocket", "client"]

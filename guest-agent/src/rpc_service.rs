@@ -23,6 +23,7 @@ use ed25519_dalek::{
 };
 use fs_err as fs;
 use k256::ecdsa::SigningKey;
+use or_panic::ResultOrPanic;
 use ra_rpc::{Attestation, CallContext, RpcCall};
 use ra_tls::{
     attestation::{QuoteContentType, DEFAULT_HASH_ALGORITHM},
@@ -81,7 +82,7 @@ impl AppState {
         if !state
             .demo_cert
             .read()
-            .expect("lock shoud not fail")
+            .or_panic("lock shoud never fail")
             .is_empty()
         {
             return;
@@ -89,7 +90,7 @@ impl AppState {
         tokio::spawn(async move {
             match state.request_demo_cert().await {
                 Ok(demo_cert) => {
-                    *state.demo_cert.write().expect("lock shoud not fail") = demo_cert;
+                    *state.demo_cert.write().or_panic("lock shoud never fail") = demo_cert;
                 }
                 Err(e) => {
                     error!("Failed to request demo cert: {e}");
@@ -188,7 +189,7 @@ pub async fn get_info(state: &AppState, external: bool) -> Result<AppInfo> {
             .inner
             .demo_cert
             .read()
-            .expect("lock should not faile")
+            .or_panic("lock should not fail")
             .clone(),
         tcb_info,
         vm_config,
@@ -318,7 +319,11 @@ impl DstackGuestRpc for InternalRpcHandler {
             .await?;
         let (signature, public_key) = match request.algorithm.as_str() {
             "ed25519" => {
-                let key_bytes: [u8; 32] = key_response.key.try_into().expect("Key is incorrect");
+                let key_bytes: [u8; 32] = key_response
+                    .key
+                    .try_into()
+                    .ok()
+                    .context("Key is incorrect")?;
                 let signing_key = Ed25519SigningKey::from_bytes(&key_bytes);
                 let signature = signing_key.sign(&request.data);
                 let public_key = signing_key.verifying_key().to_bytes().to_vec();
@@ -577,7 +582,11 @@ impl WorkerRpc for ExternalRpcHandler {
 
         match request.algorithm.as_str() {
             "ed25519" => {
-                let key_bytes: [u8; 32] = key_response.key.try_into().expect("Key is incorrect");
+                let key_bytes: [u8; 32] = key_response
+                    .key
+                    .try_into()
+                    .ok()
+                    .context("Key is incorrect")?;
                 let ed25519_key = Ed25519SigningKey::from_bytes(&key_bytes);
                 let ed25519_pubkey = ed25519_key.verifying_key().to_bytes();
 

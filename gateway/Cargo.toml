@@ -50,6 +50,7 @@ reqwest = { workspace = true, features = ["json"] }
 hyper = { workspace = true, features = ["server", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 jemallocator.workspace = true
+or-panic.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 nix = { workspace = true, features = ["resource"] }

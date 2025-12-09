@@ -341,7 +341,7 @@ impl<'a> Tdvf<'a> {
             td_hob.extend_from_slice(&length.to_le_bytes());
         };
 
-        let (_, last_start, last_end) = memory_acceptor.ranges.pop().expect("No ranges");
+        let (_, last_start, last_end) = memory_acceptor.ranges.pop().context("No ranges")?;
 
         for (accepted, start, end) in memory_acceptor.ranges {
             if end < start {
