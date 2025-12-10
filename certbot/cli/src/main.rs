@@ -74,6 +74,8 @@ struct Config {
     renew_days_before: u64,
     /// Renew timeout in seconds
     renew_timeout: u64,
+    /// Maximum time to wait for DNS propagation in seconds
+    max_dns_wait: u64,
     /// Command to run after renewal
     #[serde(default)]
     renewed_hook: Option<String>,
@@ -91,6 +93,7 @@ impl Default for Config {
             renew_interval: 3600,
             renew_days_before: 10,
             renew_timeout: 120,
+            max_dns_wait: 300,
             renewed_hook: None,
         }
     }
@@ -125,6 +128,7 @@ fn load_config(config: &PathBuf) -> Result<CertBotConfig> {
     let renew_interval = Duration::from_secs(config.renew_interval);
     let renew_expires_in = Duration::from_secs(config.renew_days_before * 24 * 60 * 60);
     let renew_timeout = Duration::from_secs(config.renew_timeout);
+    let max_dns_wait = Duration::from_secs(config.max_dns_wait);
     let bot_config = CertBotConfig::builder()
         .acme_url(config.acme_url)
         .cert_dir(workdir.backup_dir())
@@ -137,6 +141,7 @@ fn load_config(config: &PathBuf) -> Result<CertBotConfig> {
         .renew_interval(renew_interval)
         .renew_timeout(renew_timeout)
         .renew_expires_in(renew_expires_in)
+        .max_dns_wait(max_dns_wait)
         .credentials_file(workdir.account_credentials_path())
         .auto_set_caa(config.auto_set_caa)
         .maybe_renewed_hook(config.renewed_hook)

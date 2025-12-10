@@ -25,6 +25,7 @@ async fn new_certbot() -> Result<CertBot> {
         .renew_interval(Duration::from_secs(30))
         .renew_timeout(Duration::from_secs(120))
         .renew_expires_in(Duration::from_secs(7772187))
+        .max_dns_wait(Duration::from_secs(300))
         .auto_set_caa(false)
         .build();
     config.build_bot().await

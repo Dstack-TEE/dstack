@@ -13,7 +13,7 @@ async fn new_acme_client() -> Result<AcmeClient> {
     );
     let credentials =
         std::env::var("LETSENCRYPT_CREDENTIAL").expect("LETSENCRYPT_CREDENTIAL not set");
-    AcmeClient::load(dns01_client, &credentials).await
+    AcmeClient::load(dns01_client, &credentials, Duration::from_secs(300)).await
 }
 
 #[tokio::test]
