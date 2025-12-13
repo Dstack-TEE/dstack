@@ -1,29 +1,11 @@
-# Dstack GCP Deployment Configuration
-# Copy this file to terraform.tfvars and fill in your values
+# Copy to terraform.tfvars and edit
 
-# Required: Your GCP project ID
 project_id = "your-project-id"
+region     = "us-central1"
+zone       = "us-central1-a"  # Must support TDX
 
-# Region and zone (must support Intel TDX)
-# See: https://cloud.google.com/confidential-computing/confidential-vm/docs/supported-configurations
-region = "us-central1"
-zone   = "us-central1-a"
-
-# Machine type (must be c3-standard-* for TDX)
-machine_type = "c3-standard-8"
-
-# Boot disk size
-disk_size_gb = 200
-
-# SSH public key (optional but recommended)
-# ssh_public_key = "ssh-rsa AAAAB3... user@host"
-
-# Dstack version
+machine_type   = "c3-standard-8"  # c3-* for TDX
+disk_size_gb   = 200
 dstack_version = "0.5.2"
 
-# Network name
-network_name = "dstack-network"
-
-# Enable GPU (requires a3-highgpu-1g and GPU quota)
-enable_gpu = false
-
+# ssh_public_key = "ssh-rsa AAAAB3... user@host"
