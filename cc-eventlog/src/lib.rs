@@ -120,11 +120,15 @@ impl TryFrom<TcgEventLog> for TdxEventLog {
             .try_into()
             .ok()
             .context("invalid digest size")?;
+        // TCG event logs use 1-based IMR indices (1-4), while TDX RTMRs are 0-based (0-3).
+        // Standard conversion: TCG IMR 1 → RTMR 0, TCG IMR 2 → RTMR 1, etc.
+        //
+        // However, some cloud platforms (notably GCP) may include events with IMR index 0
+        // in their CCEL tables. Rather than failing on these, we pass them through as RTMR 0.
+        // This maintains compatibility with both standard TCG format and GCP's implementation.
+        let imr = value.imr_index.saturating_sub(1);
         Ok(TdxEventLog {
-            imr: value
-                .imr_index
-                .checked_sub(1)
-                .context("invalid imr index")?,
+            imr,
             event_type: value.event_type,
             digest,
             event: Default::default(),
