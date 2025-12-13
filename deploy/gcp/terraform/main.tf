@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+# SPDX-License-Identifier: Apache-2.0
 # Dstack on GCP with Intel TDX
 # Supported zones: us-central1-a/b/c, us-east1-c/d, europe-west4-a/b/c, asia-southeast1-a/b/c
 

@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+# SPDX-License-Identifier: Apache-2.0
 # Copy to terraform.tfvars and edit
 
 project_id = "your-project-id"
