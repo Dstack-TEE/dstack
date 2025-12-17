@@ -211,7 +211,6 @@ VMM_RPC=unix:../../vmm-data/vmm.sock
 
 # Cloudflare API token for DNS challenge used to get the SSL certificate.
 CF_API_TOKEN=your_cloudflare_api_token
-CF_ZONE_ID=your_zone_id
 
 # Service domain
 SRV_DOMAIN=test2.dstack.phala.network

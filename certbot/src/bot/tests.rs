@@ -9,14 +9,12 @@ use instant_acme::LetsEncrypt;
 use super::*;
 
 async fn new_certbot() -> Result<CertBot> {
-    let cf_zone_id = std::env::var("CLOUDFLARE_ZONE_ID").expect("CLOUDFLARE_ZONE_ID not set");
     let cf_api_token = std::env::var("CLOUDFLARE_API_TOKEN").expect("CLOUDFLARE_API_TOKEN not set");
     let domains = vec![std::env::var("TEST_DOMAIN").expect("TEST_DOMAIN not set")];
     let config = CertBotConfig::builder()
         .acme_url(LetsEncrypt::Staging.url())
         .auto_create_account(true)
         .credentials_file("./test-workdir/credentials.json")
-        .cf_zone_id(cf_zone_id)
         .cf_api_token(cf_api_token)
         .cert_dir("./test-workdir/backup")
         .cert_file("./test-workdir/live/cert.pem")

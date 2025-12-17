@@ -32,7 +32,6 @@ enabled = false
 workdir = "/etc/certbot"
 acme_url = "https://acme-staging-v02.api.letsencrypt.org/directory"
 cf_api_token = ""
-cf_zone_id = ""
 auto_set_caa = true
 domain = "*.example.com"
 renew_interval = "1h"
