@@ -314,7 +314,6 @@ GATEWAY_CERT=${CERBOT_WORKDIR}/live/cert.pem
 GATEWAY_KEY=${CERBOT_WORKDIR}/live/key.pem
 
 # For certbot
-CF_ZONE_ID=cc0a40...
 CF_API_TOKEN=g-DwMH...
 # ACME_URL=https://acme-v02.api.letsencrypt.org/directory
 ACME_URL=https://acme-staging-v02.api.letsencrypt.org/directory

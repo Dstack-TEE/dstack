@@ -48,7 +48,6 @@ validate_env() {
 validate_env "$MY_URL"
 validate_env "$BOOTNODE_URL"
 validate_env "$CF_API_TOKEN"
-validate_env "$CF_ZONE_ID"
 validate_env "$SRV_DOMAIN"
 validate_env "$WG_ENDPOINT"
 
@@ -113,7 +112,6 @@ enabled = true
 workdir = "$CERTBOT_WORKDIR"
 acme_url = "$ACME_URL"
 cf_api_token = "$CF_API_TOKEN"
-cf_zone_id = "$CF_ZONE_ID"
 auto_set_caa = true
 domain = "*.$SRV_DOMAIN"
 renew_interval = "1h"

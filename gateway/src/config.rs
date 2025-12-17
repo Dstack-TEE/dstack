@@ -193,8 +193,6 @@ pub struct CertbotConfig {
     pub acme_url: String,
     /// Cloudflare API token
     pub cf_api_token: String,
-    /// Cloudflare zone ID
-    pub cf_zone_id: String,
     /// Auto set CAA record
     pub auto_set_caa: bool,
     /// Domain to issue certificates for
@@ -224,7 +222,6 @@ impl CertbotConfig {
             .credentials_file(workdir.account_credentials_path())
             .acme_url(self.acme_url.clone())
             .cert_subject_alt_names(vec![self.domain.clone()])
-            .cf_zone_id(self.cf_zone_id.clone())
             .cf_api_token(self.cf_api_token.clone())
             .renew_interval(self.renew_interval)
             .renew_timeout(self.renew_timeout)

@@ -27,7 +27,6 @@ pub struct CertBotConfig {
     auto_set_caa: bool,
     credentials_file: PathBuf,
     auto_create_account: bool,
-    cf_zone_id: String,
     cf_api_token: String,
     cert_file: PathBuf,
     key_file: PathBuf,
@@ -78,8 +77,16 @@ async fn create_new_account(
 impl CertBot {
     /// Build a new `CertBot` from a `CertBotConfig`.
     pub async fn build(config: CertBotConfig) -> Result<Self> {
+        let base_domain = config
+            .cert_subject_alt_names
+            .first()
+            .context("cert_subject_alt_names is empty")?
+            .trim()
+            .trim_start_matches("*.")
+            .trim_end_matches('.')
+            .to_string();
         let dns01_client =
-            Dns01Client::new_cloudflare(config.cf_zone_id.clone(), config.cf_api_token.clone());
+            Dns01Client::new_cloudflare(config.cf_api_token.clone(), base_domain).await?;
         let acme_client = match fs::read_to_string(&config.credentials_file) {
             Ok(credentials) => {
                 if acme_matches(&credentials, &config.acme_url) {

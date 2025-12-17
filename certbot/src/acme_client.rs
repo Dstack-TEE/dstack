@@ -321,14 +321,14 @@ impl AcmeClient {
             let Identifier::Dns(identifier) = &authz.identifier;
 
             let dns_value = order.key_authorization(challenge).dns_value();
-            debug!("creating dns record for {}", identifier);
+            debug!("creating dns record for {identifier}");
             let acme_domain = format!("_acme-challenge.{identifier}");
-            debug!("removing existing dns record for {}", acme_domain);
+            debug!("removing existing TXT record for {acme_domain}");
             self.dns01_client
                 .remove_txt_records(&acme_domain)
                 .await
                 .context("failed to remove existing dns record")?;
-            debug!("creating dns record for {}", acme_domain);
+            debug!("creating TXT record for {acme_domain}");
             let id = self
                 .dns01_client
                 .add_txt_record(&acme_domain, &dns_value)
