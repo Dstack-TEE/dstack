@@ -2,499 +2,129 @@
 
 ![dstack](./dstack-logo.svg)
 
-**Deploy containerized apps to TEE with end-to-end security in minutes.**
+### The open framework for confidential AI.
 
 [![GitHub Stars](https://img.shields.io/github/stars/dstack-tee/dstack?style=flat-square&logo=github)](https://github.com/Dstack-TEE/dstack/stargazers)
 [![License](https://img.shields.io/github/license/dstack-tee/dstack?style=flat-square)](https://github.com/Dstack-TEE/dstack/blob/master/LICENSE)
-[![REUSE status](https://api.reuse.software/badge/github.com/fsfe/reuse-tool)](https://api.reuse.software/info/github.com/fsfe/reuse-tool)
-[![Telegram](https://img.shields.io/badge/Community-blue?style=flat-square&logo=telegram&logoColor=fff)](https://t.me/+UO4bS4jflr45YmUx)
+[![REUSE status](https://api.reuse.software/badge/github.com/Dstack-TEE/dstack)](https://api.reuse.software/info/github.com/Dstack-TEE/dstack)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/Dstack-TEE/dstack)
+[![Telegram](https://img.shields.io/badge/Telegram-2CA5E0?style=flat-square&logo=telegram&logoColor=white)](https://t.me/+UO4bS4jflr45YmUx)
 
-[![Repobeats Analytics](https://repobeats.axiom.co/api/embed/0a001cc3c1f387fae08172a9e116b0ec367b8971.svg "Repobeats analytics image")](https://github.com/Dstack-TEE/dstack/pulse)
-
-</div>
-
----
-
-## 🚀 Overview
-
-dstack is a **developer friendly** and **security first** SDK to simplify the deployment of arbitrary containerized apps into TEE.
-
-### ✨ Key Features
-
-- 🔒 **Secure Deployment**: Deploy containerized apps securely in TEE in minutes
-- 🛠️ **Familiar Tools**: Use familiar tools - just write a docker-compose.yaml
-- 🔑 **Secret Management**: Safely manage secrets and sensitive data
-- 📡 **ZT-HTTPS**: Expose services via automated TLS termination
-
----
-
-## 👥 Community
-
-dstack is community driven. Open sourced and built by [Kevin Wang](https://github.com/kvinwang) and many others from [Phala Network](https://github.com/Phala-Network), inspired by [Andrew Miller](https://github.com/amiller) (Flashbots & Teleport), and contributed by [Nethermind](https://github.com/NethermindEth/nethermind) and [many others](#contributors).
-
----
-
-## 📋 Table of Contents
-
-- [Architecture](#%EF%B8%8F-architecture)
-- [Getting Started](#-getting-started)
-  - [Prerequisites](#prerequisites)
-  - [Install Dependencies](#install-dependencies)
-  - [Build and Run](#build-and-run)
-- [Usage](#-usage)
-  - [Deploy an App](#deploy-an-app)
-  - [Pass Secrets to Apps](#pass-secrets-to-apps)
-  - [Access the App](#access-the-app)
-  - [Getting TDX Quote](#getting-tdx-quote-in-docker-container)
-  - [Container Logs](#container-logs)
-  - [TLS Passthrough](#tls-passthrough-with-custom-domain)
-  - [Upgrade an App](#upgrade-an-app)
-- [Advanced Features](#-advanced-features)
-  - [Zero Trust HTTPS](#zero-trust-https)
-  - [Certificate Transparency Log Monitor](#certificate-transparency-log-monitor)
-- [Security](#-security)
-- [Troubleshooting](#-troubleshooting)
-- [Media Kit](#-media-kit)
-- [License](#-license)
-
----
-
-## 🏗️ Architecture
-
-<div align="center">
-
-<img src="./docs/assets/arch.png" alt="Architecture Diagram" height="300">
+[Documentation](https://docs.phala.com/dstack) · [Examples](https://github.com/Dstack-TEE/dstack-examples) · [Community](https://t.me/+UO4bS4jflr45YmUx)
 
 </div>
 
-- **`dstack-vmm`**: A service running in a bare TDX host to manage CVMs
-- **`dstack-gateway`**: A reverse proxy to forward TLS connections to CVMs
-- **`dstack-kms`**: A KMS server to generate keys for CVMs
-- **`dstack-guest-agent`**: A service running in CVM to serve containers' key derivation and attestation requests
-- **`meta-dstack`**: A Yocto meta layer to build CVM guest images
-
 ---
 
-## 🚀 Getting Started
+## What is dstack?
 
-### Prerequisites
+dstack is the open framework for confidential AI - deploy AI applications with cryptographic privacy guarantees.
 
-- A bare metal TDX server setup following [canonical/tdx](https://github.com/canonical/tdx)
-- Public IPv4 address assigned to the machine
-- At least 16GB RAM, 100GB free disk space
-- A domain with DNS access if you want to set up `dstack-gateway` for Zero Trust HTTPS
+AI providers ask users to trust them with sensitive data. But trust doesn't scale, and trust can't be verified. With dstack, your containers run inside confidential VMs (Intel TDX) with native support for NVIDIA Confidential Computing (H100, Blackwell). Users can cryptographically verify exactly what's running: private AI with your existing Docker workflow.
 
-> [!NOTE]
-> 
-> Check the [Hardware Requirements](https://docs.phala.network/dstack/hardware-requirements) for more information on buying a bare metal server or renting a server from cloud providers.
-> 
-> If you are looking for a cloud-managed dstack, go to the docs to learn how to [sign up for a Phala Cloud Account](https://docs.phala.network/phala-cloud/getting-started/sign-up-for-cloud-account) and [deploy your first CVM on dstack](https://docs.phala.network/phala-cloud/getting-started/start-from-cloud-ui).
+### Features
 
-### Install Dependencies
+**Zero friction onboarding**
+- **Docker Compose native**: Bring your docker-compose.yaml as-is. No SDK, no code changes.
+- **Encrypted by default**: Network traffic and disk storage encrypted out of the box.
 
-```bash
-# For Ubuntu 24.04
-sudo apt install -y build-essential chrpath diffstat lz4 wireguard-tools xorriso
+**Hardware-rooted security**
+- **Private by hardware**: Data encrypted in memory, inaccessible even to the host.
+- **Reproducible OS**: Deterministic builds mean anyone can verify the OS image hash.
+- **Workload identity**: Every app gets an attested identity users can verify cryptographically.
+- **Confidential GPUs**: Native support for NVIDIA Confidential Computing (H100, Blackwell).
 
-# Install Rust
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-```
+**Trustless operations**
+- **Isolated keys**: Per-app keys derived in TEE. Survives hardware failure. Never exposed to operators.
+- **Code governance**: Updates follow predefined rules (e.g., multi-party approval). Operators can't swap code or access secrets.
 
-### Build and Run
+## Getting Started
 
-#### 1. Build the Artifacts
-
-```bash
-git clone https://github.com/Dstack-TEE/meta-dstack.git --recursive
-cd meta-dstack/
-
-mkdir build
-cd build
-../build.sh hostcfg
-```
-
-This outputs the following message:
-```
-Config file ../build-config.sh created, please edit it to configure the build
-```
-
-Review and customize the `build-config.sh` configuration file according to your environment requirements. The file contains network ports, domain settings, and other important parameters.
-
-```bash
-vim ./build-config.sh
-```
-Once configured, run the build script again to generate the necessary artifacts:
-
-```bash
-../build.sh hostcfg
-```
-
-If everything is okay, you should see the built artifacts in the `build` directory:
-
-```bash
-$ ls
-certs  images  dstack-kms  kms.toml  run  dstack-vmm  vmm.toml  dstack-gateway  gateway.toml
-```
-
-#### 2. Download or Build Guest Image
-
-**Option A: Download guest image**
-```bash
-# This will download the guest image from the release page
-../build.sh dl 0.5.2
-```
-
-**Option B: Build from source**
-```bash
-# This will build the guest image from source using the yocto meta layer. This will take a while.
-../build.sh guest
-```
-
-> [!IMPORTANT]
-> **Note on Reproducible Builds**: The build command above does not guarantee reproducibility. For reproducible builds across different build environments, please refer to the [reproducible build instructions](https://github.com/Dstack-TEE/meta-dstack?tab=readme-ov-file#reproducible-build-the-guest-image) in the meta-dstack repository.
-
-#### 3. Run Components
-
-Now you can open 3 terminals to start the components:
-
-1. **KMS**: `./dstack-kms -c kms.toml`
-2. **Gateway**: `sudo ./dstack-gateway -c gateway.toml`
-3. **VMM**: `./dstack-vmm -c vmm.toml`
-
-> [!WARNING]
-> This configuration is for local development, and the kms is not secure. You should not use it in production. For production, you should follow the [deployment guide](./docs/deployment.md) and read the [security guide](./docs/security-guide/security-guide.md).
-
----
-
-## 📱 Usage
-
-You can manage VMs via the dashboard or [CLI](./docs/vmm-cli-user-guide.md).
-
-### Deploy an App
-
-Open the dstack-vmm webpage [http://localhost:9080](http://localhost:9080) (change the port according to your configuration) on your local machine to deploy a `docker-compose.yaml` file:
-
-<div align="center">
-
-<img src="./docs/assets/vmm.png" alt="VMM Interface" height="400">
-
-</div>
-
-After the container is deployed, it should take some time to start the CVM and the containers. Time would be vary depending on your workload.
-
-- **[Logs]**: Click this button to view the CVM logs and monitor container startup progress
-- **[Dashboard]**: Once the container is running, click this button to view container information and logs. (Note: This button is only visible when dstack-gateway is enabled. If disabled, you'll need to add a port mapping to port 8090 to access the CVM dashboard)
-
-<div align="center">
-
-<img src="./docs/assets/guest-agent.png" alt="Guest Agent Dashboard" height="300">
-
-</div>
-
-### Pass Secrets to Apps
-
-When deploying a new App, you can pass private data via Encrypted Environment Variables. These variables can be referenced in the docker-compose.yaml file as shown below:
-
-<div align="center">
-
-<img src="./docs/assets/secret.png" alt="Secret Management" height="300">
-
-</div>
-
-The environment variables will be encrypted in the client-side and decrypted in the CVM before being passed to the containers.
-
-### Access the App
-
-Once your app is deployed and listening on an HTTP port, you can access it through dstack-gateway's public domain using these ingress mapping rules:
-
-- `<id>[-[<port>][s|g]].<base_domain>` → maps to port `<port>` in the CVM
-
-**Examples**:
-
-- `3327603e03f5bd1f830812ca4a789277fc31f577-8080.test0.dstack.org` → port `8080` (TLS termination to any TCP)
-- `3327603e03f5bd1f830812ca4a789277fc31f577-8080g.test0.dstack.org` → port `8080` (TLS termination with HTTP/2 negotiation)
-- `3327603e03f5bd1f830812ca4a789277fc31f577-8080s.test0.dstack.org` → port `8080` (TLS passthrough to any TCP)
-
-The `<id>` can be either the app ID or instance ID. When using the app ID, the load balancer will select one of the available instances. Adding an `s` suffix enables TLS passthrough to the app instead of terminating at dstack-gateway. Adding a `g` suffix enables HTTPS/2 with TLS termination for gRPC applications.
-
-**Note**: If dstack-gateway is disabled, you'll need to use port mappings configured during deployment to access your application via the host's IP address and mapped ports.
-
-For development images (`dstack-x.x.x-dev`), you can SSH into the CVM for inspection:
-
-```bash
-# Find the CVM wg IP address in the dstack-vmm dashboard
-ssh root@10.0.3.2
-```
-
-### Getting TDX Quote in Docker Container
-
-To get a TDX quote within app containers:
-
-**1. Mount the socket in `docker-compose.yaml`**
+**1. Deploy a private LLM:**
 
 ```yaml
-version: '3'
+# docker-compose.yaml
 services:
-  nginx:
-    image: nginx:latest
-    volumes:
-      - /var/run/dstack.sock:/var/run/dstack.sock
+  vllm:
+    image: vllm/vllm-openai:latest
+    runtime: nvidia
+    command: --model Qwen/Qwen2.5-7B-Instruct
     ports:
-      - "8080:80"
-    restart: always
+      - "8000:8000"
 ```
 
-**2. Execute the quote request command**
+Deploy to any TDX host with the `dstack-nvidia-0.5.x` base image, or use [Phala Cloud](https://cloud.phala.network) for managed infrastructure.
 
-```bash
-# The argument report_data accepts binary data encoding in hex string.
-# The actual report_data passing the to the underlying TDX driver is sha2_256(report_data).
-curl --unix-socket /var/run/dstack.sock http://localhost/GetQuote?report_data=0x1234deadbeef | jq .  
-```
+**2. Verify what's running:**
 
-### Container Logs
+Every dstack deployment can generate a TDX attestation quote: cryptographic proof of the exact code running inside the confidential VM.
 
-Container logs can be obtained from the CVM's `dashboard` page or by curl:
+Try it: [dstack-demo.phala.com](https://dstack-demo.phala.com) → Click "Verify" → See the proof on [proof.t16z.com](https://proof.t16z.com)
 
-```bash
-curl 'http://<appid>.<the domain you set for dstack-gateway>:9090/logs/<container name>?since=0&until=0&follow=true&text=true&timestamps=true&bare=true'
-```
+Want to deploy a self hosted dstack? Check our [full deployment guide →](./docs/deployment.md)
 
-Replace `<appid>` and `<container name>` with actual values. Available parameters:
+## Architecture
 
-| Parameter | Description |
-|-----------|-------------|
-| `since=0` | Starting Unix timestamp for log retrieval |
-| `until=0` | Ending Unix timestamp for log retrieval |
-| `follow` | Enables continuous log streaming |
-| `text` | Returns human-readable text instead of base64 encoding |
-| `timestamps` | Adds timestamps to each log line |
-| `bare` | Returns the raw log lines without json format |
+![Architecture](./docs/assets/arch.png)
 
-**Example response:**
-```bash
-$ curl 'http://0.0.0.0:9190/logs/zk-provider-server?text&timestamps'
-{"channel":"stdout","message":"2024-09-29T03:05:45.209507046Z Initializing Rust backend...\n"}
-{"channel":"stdout","message":"2024-09-29T03:05:45.209543047Z Calling Rust function: init\n"}
-{"channel":"stdout","message":"2024-09-29T03:05:45.209544957Z [2024-09-29T03:05:44Z INFO  rust_prover] Initializing...\n"}
-{"channel":"stdout","message":"2024-09-29T03:05:45.209546381Z [2024-09-29T03:05:44Z INFO  rust_prover::groth16] Starting setup process\n"}
-```
+Your container runs inside a Confidential VM (Intel TDX) with optional GPU isolation via NVIDIA Confidential Computing. The CPU TEE protects application logic; the GPU TEE protects model weights and inference data.
 
-### TLS Passthrough with Custom Domain
+**Core components:**
 
-dstack-gateway supports TLS passthrough for custom domains.
+- **Guest Agent**: Runs inside each CVM. Generates TDX attestation quotes so users can verify exactly what's running. Provisions per-app cryptographic keys from KMS. Encrypts local storage. Apps interact via `/var/run/dstack.sock`.
 
-See the example [here](https://github.com/Dstack-TEE/dstack-examples/tree/main/custom-domain/dstack-ingress) for more details.
+- **KMS**: Runs in its own TEE. Verifies TDX quotes before releasing keys. Enforces authorization policies defined in on-chain smart contracts — operators cannot bypass these checks. Derives deterministic keys bound to each app's attested identity.
 
-### Upgrade an App
+- **Gateway**: Terminates TLS at the edge and provisions ACME certificates automatically. Routes traffic to CVMs. All internal communication uses RA-TLS for mutual attestation.
 
-Got to the dstack-vmm webpage, click the **[Upgrade]** button, select or paste the compose file you want to upgrade to, and click the **[Upgrade]** button again. The app id does not change after the upgrade. Stop and start the app to apply the upgrade.
+- **VMM**: Runs on bare-metal TDX hosts. Parses docker-compose files directly — no app changes needed. Boots CVMs from a reproducible OS image. Allocates CPU, memory, and confidential GPU resources.
 
----
+[Full security model →](./docs/security.md)
 
-## 🔐 Advanced Features
+## SDKs
 
-### Zero Trust HTTPS
+| Language | Install | Docs |
+|----------|---------|------|
+| Python | `pip install dstack-sdk` | [README](./sdk/python/README.md) |
+| TypeScript | `npm install @phala/dstack-sdk` | [README](./sdk/js/README.md) |
+| Rust | `cargo add dstack-sdk` | [README](./sdk/rust/README.md) |
+| Go | `go get github.com/Dstack-TEE/dstack/sdk/go` | [README](./sdk/go/README.md) |
 
-In the tutorial above, we used a TLS certificate with a private key external to the TEE. To establish trust, we need to generate and maintain the certificate's private key within the TEE and provide evidence that all TLS certificates for the domain originated solely from dstack-gateway CVM.
+## Documentation
 
-By combining Certificate Transparency Logs and CAA DNS records, we can make the best effort to minimize security risks. Here's our approach:
+**Use Cases**
+- [Private Inference](./docs/inference.md) - vLLM with attestation
+- [Secure Agents](./docs/agents.md) - LangChain/Claude SDK with protected credentials
+- [Confidential Training](./docs/training.md) - Fine-tuning on sensitive data
 
-- Set CAA records to allow only the account created in dstack-gateway CVM to request Certificates
-- Launch a program to monitor Certificate Transparency Log and give alarm once any certificate issued to a pubkey that isn't generated by dstack-gateway CVM
+**Guides**
+- [Usage Guide](./docs/usage.md) - Deploying and managing apps
+- [Deployment](./docs/deployment.md) - Self-hosting on TDX hardware
+- [On-Chain Governance](./docs/onchain-governance.md) - Smart contract-based authorization
+- [VMM CLI Guide](./docs/vmm-cli-user-guide.md) - Command-line deployment
 
-#### Configurations
+**Reference**
+- [Security](./docs/security.md) - Threat model and best practices
+- [CVM Boundaries](./docs/cvm-boundaries.md) - Information exchange and isolation
+- [App Compose Format](./docs/normalized-app-compose.md) - Compose file specification
+- [Gateway](./docs/dstack-gateway.md) - Gateway configuration
+- [Design Decisions](./docs/design-and-hardening-decisions.md) - Architecture rationale
+- [FAQ](./docs/faq.md) - Frequently asked questions
 
-To launch Certbot, you need to own a domain hosted on Cloudflare. Obtain an API token with DNS operation permissions from the Cloudflare dashboard. Configure it in the `build-config.sh`:
+## Community
 
-```bash
-# The directory to store the auto obtained TLS certificate and key
-GATEWAY_CERT=${CERBOT_WORKDIR}/live/cert.pem
-GATEWAY_KEY=${CERBOT_WORKDIR}/live/key.pem
+[Telegram](https://t.me/+UO4bS4jflr45YmUx) · [GitHub Discussions](https://github.com/Dstack-TEE/dstack/discussions) · [Examples](https://github.com/Dstack-TEE/dstack-examples)
 
-# For certbot
-CF_API_TOKEN=g-DwMH...
-# ACME_URL=https://acme-v02.api.letsencrypt.org/directory
-ACME_URL=https://acme-staging-v02.api.letsencrypt.org/directory
-```
+[![Repobeats](https://repobeats.axiom.co/api/embed/0a001cc3c1f387fae08172a9e116b0ec367b8971.svg)](https://github.com/Dstack-TEE/dstack/pulse)
 
-Then re-run the build script:
-
-```bash
-../build.sh
-```
-
-#### Launch Certbot
-
-Then run the certbot in the `build/` and you will see the following log:
-
-```text
-$ RUST_LOG=info,certbot=debug ./certbot renew -c certbot.toml
-2024-10-25T07:41:00.682990Z  INFO certbot::bot: creating new ACME account
-2024-10-25T07:41:00.869246Z  INFO certbot::bot: created new ACME account: https://acme-staging-v02.api.letsencrypt.org/acme/acct/168601853
-...
-2024-10-25T07:41:35.852790Z DEBUG certbot::acme_client: setting challenge ready for https://acme-staging-v02.api.letsencrypt.org/acme/chall-v3/14584884443/mQ-I2A
-2024-10-25T07:41:35.934425Z DEBUG certbot::acme_client: challenges are ready, waiting for order to be ready
-2024-10-25T07:41:37.972434Z DEBUG certbot::acme_client: order is ready, uploading csr
-2024-10-25T07:41:38.052901Z DEBUG certbot::acme_client: order is processing, waiting for challenge to be accepted
-2024-10-25T07:41:40.088190Z DEBUG certbot::acme_client: order is valid, getting certificate
-2024-10-25T07:41:40.125988Z DEBUG certbot::acme_client: removing dns record 6ab5724e8fa7e3e8f14e93333a98866a
-2024-10-25T07:41:40.377379Z DEBUG certbot::acme_client: stored new cert in /home/kvin/codes/meta-dstack/dstack/build/run/certbot/backup/2024-10-25T07:41:40.377174477Z
-2024-10-25T07:41:40.377472Z  INFO certbot::bot: checking if certificate needs to be renewed
-2024-10-25T07:41:40.377719Z DEBUG certbot::acme_client: will expire in Duration { seconds: 7772486, nanoseconds: 622281542 }
-2024-10-25T07:41:40.377752Z  INFO certbot::bot: certificate /home/kvin/codes/meta-dstack/dstack/build/run/certbot/live/cert.pem is up to date
-```
-
-**What the command does:**
-
-- Registered to letsencrypt and got a new account `https://acme-staging-v02.api.letsencrypt.org/acme/acct/168601853`
-- Auto set CAA records for the domain on cloudflare, you can open the CF dashboard to see the record:
-
-<div align="center">
-
-<img src="./docs/assets/certbot-caa.png" alt="Certbot CAA" height="300">
-
-</div>
-
-- Auto requested a new certificate from Let's Encrypt. Automatically renews the certificate to maintain its validity
-
-#### Launch dstack-gateway
-
-Execute dstack-gateway with `sudo ./dstack-gateway -c gateway.toml`, then access the web portal to check the dstack-gateway CVM managed Let's Encrypt account. The account's private key remains securely sealed within the TEE.
-
-<div align="center">
-
-<img src="./docs/assets/gateway-accountid.png" alt="Gateway Account ID" height="300">
-
-</div>
-
-### Certificate Transparency Log Monitor
-
-To enhance security, we've limited TLS certificate issuance to dstack-gateway via CAA records. However, since these records can be modified through Cloudflare's domain management, we need to implement global CA certificate monitoring to maintain security oversight.
-
-`ct_monitor` tracks Certificate Transparency logs via https://crt.sh, comparing their public key with the ones got from dstack-gateway RPC. It immediately alerts when detecting unauthorized certificates not issued through dstack-gateway:
-
-```text
-$ ./ct_monitor -t https://localhost:9010/prpc -d <YOUR_DOMAIN>
-2024-10-25T08:12:11.366463Z  INFO ct_monitor: monitoring <YOUR_DOMAIN>...
-2024-10-25T08:12:11.366488Z  INFO ct_monitor: fetching known public keys from https://localhost:9010/prpc
-2024-10-25T08:12:11.566222Z  INFO ct_monitor: got 2 known public keys
-2024-10-25T08:12:13.142122Z  INFO ct_monitor: ✅ checked log id=14705660685
-2024-10-25T08:12:13.802573Z  INFO ct_monitor: ✅ checked log id=14705656674
-2024-10-25T08:12:14.494944Z ERROR ct_monitor: ❌ error in CTLog { id: 14666084839, issuer_ca_id: 295815, issuer_name: "C=US, O=Let's Encrypt, CN=R11", common_name: "<YOUR_DOMAIN>", name_value: "*.<YOUR_DOMAIN>", not_before: "2024-09-24T02:23:15", not_after: "2024-12-23T02:23:14", serial_number: "03ae796f56a933c8ff7e32c7c0d662a253d4", result_count: 1, entry_timestamp: "2024-09-24T03:21:45.825" }
-2024-10-25T08:12:14.494998Z ERROR ct_monitor: error: certificate has issued to unknown pubkey: 30820122300d06092a864886f70d01010105000382010f003082010a02820101009de65c767caf117880626d1acc1ee78f3c6a992e3fe458f34066f92812ac550190a67e49ebf4f537003c393c000a8ec3e114da088c0cb02ffd0881fd39a2b32cc60d2e9989f0efab3345bee418262e0179d307d8d361fd0837f85d17eab92ec6f4126247e614aa01f4efcc05bc6303a8be68230f04326c9e85406fc4d234e9ce92089253b11d002cdf325582df45d5da42981cd546cbd2e9e49f0fa6636e747a345aaf8cefa02556aa258e1f7f90906be8fe51567ac9626f35bc46837e4f3203387fee59c71cea400000007c24e7537debc1941b36ff1612990233e4c219632e35858b1771f17a71944adf6c657dd7303583e3aeed199bd36a3152f49980f4f30203010001
-```
-
----
-
-## 🔒 Security
-
-dstack undergoes regular security audits to ensure the highest standards of security for TEE-based deployments.
-
-### Security Audit Report
-
-A comprehensive security audit was conducted to evaluate the security architecture and implementation of dstack. The audit report is available at:
-
-📄 **[Security Audit Report](./docs/security/dstack-audit.pdf)**
-
-The audit covers key security aspects including:
-- TEE integration and attestation mechanisms
-- Cryptographic implementations and key management
-- Network security and TLS configurations
-- Container isolation and runtime security
-- Smart contract security (for blockchain integrations)
-
-For additional security guidance and best practices, see the [Security Guide](./docs/security-guide/security-guide.md).
-
----
-
-## 🔧 Troubleshooting
-
-### Error: qemu-system-x86_64: vhost-vsock: unable to set guest cid: Address already in use
-
-`dstack-vmm` may throw this error when creating a new VM if the [Unix Socket CID](https://man7.org/linux/man-pages/man7/vsock.7.html) is occupied.
-
-**Solution:**
-
-1. **List the occupied CID:**
-   ```bash
-   ps aux | grep 'guest-cid='
-   ```
-
-2. **Choose a new range** of the CID not conflicting with the CID in use. You can change `build/vmm.toml` file and restart `dstack-vmm`. For example, you may find 33000-34000 free to use:
-   ```toml
-   [cvm]
-   cid_start = 33000
-   cid_pool_size = 1000
-   ```
-
-3. **When building from scratch**, change the CID configs in `build-config.sh` instead, because `vmm.toml` file is generated by `build.sh`.
-
-> [!NOTE]
-> You may encounter this problem when upgrading from an older version of dstack, because CID was introduced in `build-config.sh` in later versions. In such case, please follow the docs to add the missing entries in `build-config.sh` and rebuild dstack.
-
-### Error: Operation not permitted when building guest image
-
-When running `../build.sh guest`, you might encounter this error:
-
-```
-Traceback (most recent call last):
-  File "/meta-dstack/poky/bitbake/bin/bitbake-worker", line 278, in child
-    bb.utils.disable_network(uid, gid)
-  File "/meta-dstack/poky/bitbake/lib/bb/utils.py", line 1696, in disable_network
-    with open("/proc/self/uid_map", "w") as f:
-PermissionError: [Errno 1] Operation not permitted
-```
-
-**Solution:**
-
-This error occurs because Ubuntu 23.10 and later versions restrict unprivileged user namespaces by default.
-
-```bash
-sudo sysctl kernel.apparmor_restrict_unprivileged_userns=0
-```
-
-Then try building again. For more information about this restriction, see the [Ubuntu discourse post](https://discourse.ubuntu.com/t/spec-unprivileged-user-namespace-restrictions-via-apparmor-in-ubuntu-23-10/37626).
-
----
-
-## 🎨 Media Kit
+## Media Kit
 
 The dstack logo and branding assets are available in the [media kit](./docs/assets/Dstack%20Logo%20Kit/):
 
 - **Horizontal logos**: Primary and dark versions in PNG/SVG formats
-- **Vertical logos**: Primary and dark versions in PNG/SVG formats  
+- **Vertical logos**: Primary and dark versions in PNG/SVG formats
 - **Icons**: Primary and dark versions in PNG/SVG formats
 
-All assets are provided in high-resolution formats suitable for both digital and print use.
+## License
 
----
-
-## 📄 License
-
-```
-Copyright 2024 Phala Network and Contributors.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-```
-
----
-
-<div align="center">
-
-**[⬆ Back to top](#-Overview)**
-
-Made with ❤️ by the dstack community
-
-</div>
+Apache 2.0

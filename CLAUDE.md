@@ -224,3 +224,8 @@ RPC definitions use `prpc` framework with Protocol Buffers:
 - Design decisions: `docs/design-and-hardening-decisions.md`
 
 When need more detailed info, try to use deepwiki mcp.
+
+## Agent Resources
+
+The `.agent/` directory contains AI assistant resources:
+- `WRITING_GUIDE.md` — Documentation and README writing guidelines (messaging, style, audiences)
