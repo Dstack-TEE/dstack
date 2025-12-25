@@ -1731,9 +1731,8 @@ version = "0.5.5"
 dependencies = [
  "anyhow",
  "clap",
- "dstack-gateway-rpc",
+ "hex",
  "hex_fmt",
- "ra-rpc",
  "regex",
  "reqwest",
  "serde",

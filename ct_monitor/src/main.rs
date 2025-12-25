@@ -4,8 +4,6 @@
 
 use anyhow::{bail, Context, Result};
 use clap::Parser;
-use dstack_gateway_rpc::gateway_client::GatewayClient;
-use ra_rpc::client::RaClient;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -14,6 +12,13 @@ use tracing::{debug, error, info};
 use x509_parser::prelude::*;
 
 const BASE_URL: &str = "https://crt.sh";
+
+#[derive(Debug, Deserialize)]
+struct AcmeInfoResponse {
+    #[allow(dead_code)]
+    account_uri: String,
+    hist_keys: Vec<String>,
+}
 
 struct Monitor {
     gateway_uri: String,
@@ -48,12 +53,38 @@ impl Monitor {
     }
 
     async fn refresh_known_keys(&mut self) -> Result<()> {
-        info!("fetching known public keys from {}", self.gateway_uri);
-        // TODO: Use RA-TLS
-        let tls_no_check = true;
-        let rpc = GatewayClient::new(RaClient::new(self.gateway_uri.clone(), tls_no_check)?);
-        let info = rpc.acme_info().await?;
-        self.known_keys = info.hist_keys.into_iter().collect();
+        let acme_info_url = format!("{}/acme-info", self.gateway_uri.trim_end_matches('/'));
+        info!("fetching known public keys from {}", acme_info_url);
+
+        let client = reqwest::Client::builder()
+            .danger_accept_invalid_certs(true) // TODO: Use RA-TLS verification
+            .build()
+            .context("failed to build http client")?;
+
+        let response = client
+            .get(&acme_info_url)
+            .send()
+            .await
+            .context("failed to fetch acme-info")?;
+
+        if !response.status().is_success() {
+            bail!(
+                "failed to fetch acme-info: HTTP {}",
+                response.status().as_u16()
+            );
+        }
+
+        let info: AcmeInfoResponse = response
+            .json()
+            .await
+            .context("failed to parse acme-info response")?;
+
+        self.known_keys = info
+            .hist_keys
+            .into_iter()
+            .map(|hex_key| hex::decode(&hex_key).context("invalid hex in hist_keys"))
+            .collect::<Result<BTreeSet<_>>>()?;
+
         info!("got {} known public keys", self.known_keys.len());
         for key in self.known_keys.iter() {
             debug!("    {}", hex_fmt::HexFmt(key));
