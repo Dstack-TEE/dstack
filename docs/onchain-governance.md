@@ -14,6 +14,7 @@ On-chain governance adds:
 - Production dstack deployment with KMS and Gateway as CVMs (see [Deployment Guide](./deployment.md))
 - Ethereum wallet with funds on Sepolia testnet (or your target network)
 - Node.js and npm installed
+- Alchemy API key (for Sepolia) - get one at https://www.alchemy.com/
 
 ## Deploy DstackKms Contract
 
@@ -21,26 +22,49 @@ On-chain governance adds:
 cd dstack/kms/auth-eth
 npm install
 npx hardhat compile
-PRIVATE_KEY=<your-key> npx hardhat kms:deploy --with-app-impl --network sepolia
+PRIVATE_KEY=<your-key> ALCHEMY_API_KEY=<your-key> npx hardhat kms:deploy --with-app-impl --network sepolia
 ```
 
-Note the deployed contract address.
+The command will prompt for confirmation. Sample output:
+
+```
+✅ DstackApp implementation deployed to: 0x5FbDB2315678afecb367f032d93F642f64180aa3
+DstackKms Proxy deployed to: 0x9fE46736679d2D9a65F0992F2272dE9f3c7fa6e0
+Implementation deployed to: 0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512
+```
+
+Note the proxy address (e.g., `0x9fE4...`).
+
+Set environment variables for subsequent commands:
+
+```bash
+export KMS_CONTRACT_ADDRESS="<DstackKms-proxy-address>"
+export PRIVATE_KEY="<your-private-key>"
+export ALCHEMY_API_KEY="<your-alchemy-key>"
+```
 
 ## Configure KMS for On-Chain Auth
 
-Update KMS to use webhook auth mode pointing to your auth-api service.
+The KMS CVM includes an auth-api service that connects to your DstackKms contract. Configure it via environment variables in the KMS CVM:
 
-> **TODO:** Document auth-api service deployment and KMS webhook configuration.
+```bash
+KMS_CONTRACT_ADDR=<your-dstack-kms-contract-address>
+ETH_RPC_URL=<ethereum-rpc-endpoint>
+```
+
+Note: The auth-api uses `KMS_CONTRACT_ADDR`, while Hardhat tasks use `KMS_CONTRACT_ADDRESS`.
+
+The auth-api validates boot requests against the smart contract. See [Deployment Guide](./deployment.md#2-deploy-kms-as-cvm) for complete setup instructions.
 
 ## Whitelist OS Image
 
 ```bash
-cd dstack/kms/auth-eth
-npm install
 npx hardhat kms:add-image --network sepolia 0x<os-image-hash>
 ```
 
-The `os_image_hash` is in the `digest.txt` file from the image build.
+Output: `Image added successfully`
+
+The `os_image_hash` is in the `digest.txt` file from the guest OS image build (see [Building Guest Images](./deployment.md#building-guest-images)).
 
 ## Register Gateway App
 
@@ -48,7 +72,14 @@ The `os_image_hash` is in the `digest.txt` file from the image build.
 npx hardhat kms:create-app --network sepolia --allow-any-device
 ```
 
-Note the App ID from the output.
+Sample output:
+
+```
+✅ App deployed and registered successfully!
+Proxy Address (App Id): 0x75537828f2ce51be7289709686A69CbFDbB714F1
+```
+
+Note the App ID (Proxy Address) from the output.
 
 Set it as the gateway app:
 
@@ -56,11 +87,21 @@ Set it as the gateway app:
 npx hardhat kms:set-gateway --network sepolia <app-id>
 ```
 
-Add the compose hash to the whitelist:
+Output: `Gateway App ID set successfully`
+
+Add the gateway's compose hash to the whitelist. To compute the compose hash:
+
+```bash
+sha256sum /path/to/gateway-compose.json | awk '{print "0x"$1}'
+```
+
+Then add it:
 
 ```bash
 npx hardhat app:add-hash --network sepolia --app-id <app-id> <compose-hash>
 ```
+
+Output: `Compose hash added successfully`
 
 ## Register Apps On-Chain
 
@@ -72,7 +113,17 @@ For each app you want to deploy:
 npx hardhat kms:create-app --network sepolia --allow-any-device
 ```
 
+Note the App ID from the output.
+
 ### Add Compose Hash
+
+Compute your app's compose hash:
+
+```bash
+sha256sum /path/to/your-app-compose.json | awk '{print "0x"$1}'
+```
+
+Then add it:
 
 ```bash
 npx hardhat app:add-hash --network sepolia --app-id <app-id> <compose-hash>
@@ -80,7 +131,7 @@ npx hardhat app:add-hash --network sepolia --app-id <app-id> <compose-hash>
 
 ### Deploy via VMM
 
-Use the App ID when deploying through the VMM dashboard or CLI.
+Use the App ID when deploying through the VMM dashboard or [VMM CLI](./vmm-cli-user-guide.md).
 
 ## Smart Contract Reference
 
