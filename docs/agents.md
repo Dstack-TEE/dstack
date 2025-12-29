@@ -15,7 +15,7 @@ Running in a TEE ensures these secrets remain protected, and attestation proves 
 
 ```
 ┌────────────────────────────────────────────────────────────┐
-│                    dstack CVM (TDX)                        │
+│                       dstack CVM                           │
 │                                                            │
 │  ┌─────────────────────────────────────────────────────┐   │
 │  │                    Your Agent                        │   │
@@ -244,8 +244,8 @@ attestation = requests.get(
     params={"nonce": "random-challenge"}
 ).json()
 
-# Verify TDX quote via proof.t16z.com or programmatically
-is_valid = verify_tdx_quote(attestation['quote'])
+# Verify attestation quote via proof.t16z.com or programmatically
+is_valid = verify_quote(attestation['quote'])
 
 # Check agent code hash matches expected
 assert attestation['compose_hash'] == EXPECTED_AGENT_HASH
@@ -257,9 +257,9 @@ assert attestation['compose_hash'] == EXPECTED_AGENT_HASH
 |---------|------------|
 | API Keys | Encrypted at deploy, decrypted only in TEE |
 | Wallet Keys | Derived deterministically, never leave TEE |
-| Agent Code | Measured and attested via TDX |
+| Agent Code | Measured and attested via TEE |
 | Data in Transit | TLS termination inside TEE |
-| Execution Proof | TDX quotes for any operation |
+| Execution Proof | Attestation quotes for any operation |
 
 ## Production Considerations
 

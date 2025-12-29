@@ -19,7 +19,7 @@ Running training in a TEE ensures:
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│                      dstack CVM (TDX)                        │
+│                        dstack CVM                            │
 │                                                              │
 │  ┌────────────────────────────────────────────────────────┐  │
 │  │                    Training Pipeline                   │  │
@@ -282,8 +282,8 @@ With CC-enabled GPUs:
 | Stage | Protection |
 |-------|------------|
 | Dataset at rest | Encrypted storage |
-| Dataset in memory | TDX memory encryption |
-| Model weights | TDX + GPU CC memory encryption |
+| Dataset in memory | TEE memory encryption |
+| Model weights | TEE + GPU CC memory encryption |
 | Gradients | Never leave TEE |
 | Output model | Attestation-signed |
 

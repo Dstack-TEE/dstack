@@ -117,7 +117,7 @@ dstack uses encrypted environment variables to allow app developers to securely 
    - CVM performs basic regex validation on values
    - Final result is stored as /dstack/.hostshared/.decrypted-env and loaded system-wide via app-compose.service
 
-This file is not measured to RTMRs. But it is highly recommended to add application-specific integrity checks on encrypted environment variables at the application layer. See [security.md](security.md) for more details.
+This file is not measured to RTMRs. But it is highly recommended to add application-specific integrity checks on encrypted environment variables at the application layer. See [security-best-practices.md](security-best-practices.md) for more details.
 
 ### .user-config
 This is an optional application-specific configuration file that applications inside the CVM can access. dstack OS simply stores it at /dstack/user-config without any measurement or additional processing.

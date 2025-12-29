@@ -40,7 +40,9 @@ AI providers ask users to trust them with sensitive data. But trust doesn't scal
 
 ## Getting Started
 
-**1. Deploy a private LLM:**
+**Try it now:** Chat with LLMs running in TEE at [chat.redpill.ai](https://chat.redpill.ai). Click the shield icon to verify attestations from Intel TDX and NVIDIA GPUs.
+
+**Deploy your own:**
 
 ```yaml
 # docker-compose.yaml
@@ -54,12 +56,6 @@ services:
 ```
 
 Deploy to any TDX host with the `dstack-nvidia-0.5.x` base image, or use [Phala Cloud](https://cloud.phala.network) for managed infrastructure.
-
-**2. Verify what's running:**
-
-Every dstack deployment can generate a TDX attestation quote: cryptographic proof of the exact code running inside the confidential VM.
-
-Try it: [dstack-demo.phala.com](https://dstack-demo.phala.com) → Click "Verify" → See the proof on [proof.t16z.com](https://proof.t16z.com)
 
 Want to deploy a self hosted dstack? Check our [full deployment guide →](./docs/deployment.md)
 
@@ -82,6 +78,8 @@ Your container runs inside a Confidential VM (Intel TDX) with optional GPU isola
 [Full security model →](./docs/security.md)
 
 ## SDKs
+
+Apps communicate with the guest agent via HTTP over `/var/run/dstack.sock`. Use the [HTTP API](./sdk/curl/api.md) directly with curl, or use a language SDK:
 
 | Language | Install | Docs |
 |----------|---------|------|

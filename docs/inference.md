@@ -6,19 +6,19 @@ Run LLM inference with hardware attestation and cryptographic proof of responses
 
 ```
 ┌─────────────┐     ┌──────────────────────────────────────────────┐
-│   Client    │     │              dstack CVM (TDX)                │
+│   Client    │     │                 dstack CVM                    │
 │             │     │  ┌─────────────┐      ┌─────────────────┐    │
 │  Request ───┼────►│  │ vllm-proxy  │──────│  vLLM Backend   │    │
 │             │     │  │ (attestation│      │  (OpenAI API)   │    │
 │  ◄──────────┼─────│  │  + signing) │◄─────│                 │    │
 │  Response   │     │  └─────────────┘      └─────────────────┘    │
 │  + Signature│     │         │                                    │
-│  + TDX Quote│     │         └── /var/run/dstack.sock             │
+│  + TEE Quote│     │         └── /var/run/dstack.sock             │
 └─────────────┘     └──────────────────────────────────────────────┘
 ```
 
 **vllm-proxy** adds a security layer to vLLM:
-- **Hardware attestation** — TDX quotes proving execution in secure hardware
+- **Hardware attestation** — TEE quotes proving execution in secure hardware
 - **Response signing** — Every response cryptographically signed (ECDSA + ED25519)
 - **GPU attestation** — NVIDIA Confidential Computing verification (when available)
 
@@ -87,14 +87,14 @@ attestation = requests.get(
     params={"nonce": "your-random-nonce"}
 ).json()
 
-print(f"TDX quote: {attestation['tdx_quote'][:100]}...")
+print(f"TEE quote: {attestation['quote'][:100]}...")
 print(f"GPU evidence: {attestation.get('gpu_evidence', 'N/A')}")
 ```
 
 Or paste the attestation into [proof.t16z.com](https://proof.t16z.com) for visual verification.
 
 The attestation binds the signing key to the TEE hardware. Verify:
-1. TDX quote is valid (via [proof.t16z.com](https://proof.t16z.com) or dstack verifier)
+1. TEE quote is valid (via [proof.t16z.com](https://proof.t16z.com) or dstack verifier)
 2. Signing address in quote matches the one that signed responses
 3. Response hash matches your received content
 
