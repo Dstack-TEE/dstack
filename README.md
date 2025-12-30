@@ -75,7 +75,7 @@ Your container runs inside a Confidential VM (Intel TDX) with optional GPU isola
 
 - **VMM**: Runs on bare-metal TDX hosts. Parses docker-compose files directly — no app changes needed. Boots CVMs from a reproducible OS image. Allocates CPU, memory, and confidential GPU resources.
 
-[Full security model →](./docs/security.md)
+[Full security model →](./docs/security-model.md)
 
 ## SDKs
 
@@ -91,9 +91,7 @@ Apps communicate with the guest agent via HTTP over `/var/run/dstack.sock`. Use 
 ## Documentation
 
 **Use Cases**
-- [Private Inference](./docs/inference.md) - vLLM with attestation
-- [Secure Agents](./docs/agents.md) - LangChain/Claude SDK with protected credentials
-- [Confidential Training](./docs/training.md) - Fine-tuning on sensitive data
+- [Confidential AI](./docs/confidential-ai.md) - Inference, agents, and training with hardware privacy
 
 **Guides**
 - [Usage Guide](./docs/usage.md) - Deploying and managing apps
@@ -102,7 +100,8 @@ Apps communicate with the guest agent via HTTP over `/var/run/dstack.sock`. Use 
 - [VMM CLI Guide](./docs/vmm-cli-user-guide.md) - Command-line deployment
 
 **Reference**
-- [Security](./docs/security.md) - Threat model and best practices
+- [Security Model](./docs/security-model.md) - Threat model and trust boundaries
+- [Security Best Practices](./docs/security-best-practices.md) - Production hardening
 - [CVM Boundaries](./docs/cvm-boundaries.md) - Information exchange and isolation
 - [App Compose Format](./docs/normalized-app-compose.md) - Compose file specification
 - [Gateway](./docs/dstack-gateway.md) - Gateway configuration
