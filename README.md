@@ -108,6 +108,13 @@ Apps communicate with the guest agent via HTTP over `/var/run/dstack.sock`. Use 
 - [Design Decisions](./docs/design-and-hardening-decisions.md) - Architecture rationale
 - [FAQ](./docs/faq.md) - Frequently asked questions
 
+## Trusted by
+
+- [OpenRouter](https://openrouter.ai/provider/phala) - Confidential AI inference
+- [NEAR AI](https://x.com/ilblackdragon/status/1962920246148268235) - Private AI agents
+
+dstack is a [Confidential Computing Consortium](https://confidentialcomputing.io/2025/10/02/welcoming-phala-to-the-confidential-computing-consortium/) open source project.
+
 ## Community
 
 [Telegram](https://t.me/+UO4bS4jflr45YmUx) · [GitHub Discussions](https://github.com/Dstack-TEE/dstack/discussions) · [Examples](https://github.com/Dstack-TEE/dstack-examples)
