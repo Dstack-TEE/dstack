@@ -159,7 +159,7 @@ port = 10000
 
 Download guest images from [meta-dstack releases](https://github.com/Dstack-TEE/meta-dstack/releases) and extract to `./images/`.
 
-> For reproducible builds and verification, see [Security Guide](./security-guide/security-guide.md).
+> For reproducible builds and verification, see the [Security Model](./security/security-model.md).
 
 Start VMM:
 

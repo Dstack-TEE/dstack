@@ -234,10 +234,6 @@ Method changes:
 - `derive_key()` → `get_tls_key()` for TLS certificates
 - Socket path: `/var/run/tappd.sock` → `/var/run/dstack.sock`
 
-## Known Issues
-
-See [KNOWN_ISSUES.md](KNOWN_ISSUES.md) for current limitations and workarounds.
-
 ## License
 
 Apache License 2.0

@@ -2,6 +2,10 @@
 
 This document describes security considerations for deploying dstack apps in production.
 
+## Security Audit
+
+dstack has been audited by [zkSecurity](https://www.zksecurity.xyz/). The audit covered the KMS, guest agent, and attestation verification components. See the [full audit report](./dstack-audit.pdf) for findings and remediation status.
+
 ## Always pin image hash in your docker-compose.yaml
 
 When deploying applications in a TEE environment, it's critical to ensure the integrity and immutability of your container images. Using image digests (SHA256 hashes) instead of tags cryptographically ensures that the exact same image is always pulled, preventing supply chain attacks. This proves to users that your App is anchored to a specific code version.
@@ -38,11 +42,11 @@ dstack provides encrypted environment variable functionality. Although the CVM p
 
 If you use dstack-vmm's built-in UI, the prelaunch script has already been automatically filled in for you:
 
-![Prelaunch Script](./assets/prelaunch-script.png)
+![Prelaunch Script](../assets/prelaunch-script.png)
 
 You only need to add the `APP_LAUNCH_TOKEN` environment variable to enable LAUNCH_TOKEN checking.
 
-![Token Environment Variable](./assets/token-env.png)
+![Token Environment Variable](../assets/token-env.png)
 
 user_config is not encrypted, and similarly requires integrity checks at the application layer. For example, you can store a USER_CONFIG_HASH in encrypted environment variables and verify it in the prelaunch script.
 
@@ -119,7 +123,3 @@ services:
     image: nginx@sha256:eee5eae48e79b2e75178328c7c585b89d676eaae616f03f9a1813aaed820745a
     network_mode: host
 ```
-
-## Security Audit
-
-dstack has undergone a security audit. See the [full audit report](./security/dstack-audit.pdf).

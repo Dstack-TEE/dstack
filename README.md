@@ -55,7 +55,7 @@ services:
       - "8000:8000"
 ```
 
-Deploy to any TDX host with the `dstack-nvidia-0.5.x` base image, or use [Phala Cloud](https://cloud.phala.network) for managed infrastructure.
+Deploy to any TDX host with the [`dstack-nvidia-0.5.x` base image](https://github.com/Dstack-TEE/meta-dstack/releases), or use [Phala Cloud](https://cloud.phala.network) for managed infrastructure.
 
 Want to deploy a self hosted dstack? Check our [full deployment guide →](./docs/deployment.md)
 
@@ -75,7 +75,7 @@ Your container runs inside a Confidential VM (Intel TDX) with optional GPU isola
 
 - **VMM**: Runs on bare-metal TDX hosts. Parses docker-compose files directly — no app changes needed. Boots CVMs from a reproducible OS image. Allocates CPU, memory, and confidential GPU resources.
 
-[Full security model →](./docs/security-model.md)
+[Full security model →](./docs/security/security-model.md)
 
 ## SDKs
 
@@ -100,13 +100,18 @@ Apps communicate with the guest agent via HTTP over `/var/run/dstack.sock`. Use 
 - [VMM CLI Guide](./docs/vmm-cli-user-guide.md) - Command-line deployment
 
 **Reference**
-- [Security Model](./docs/security-model.md) - Threat model and trust boundaries
-- [Security Best Practices](./docs/security-best-practices.md) - Production hardening
-- [CVM Boundaries](./docs/cvm-boundaries.md) - Information exchange and isolation
 - [App Compose Format](./docs/normalized-app-compose.md) - Compose file specification
 - [Gateway](./docs/dstack-gateway.md) - Gateway configuration
 - [Design Decisions](./docs/design-and-hardening-decisions.md) - Architecture rationale
 - [FAQ](./docs/faq.md) - Frequently asked questions
+
+## Security
+
+- [Security Overview](./docs/security/) - Security documentation and responsible disclosure
+- [Security Model](./docs/security/security-model.md) - Threat model and trust boundaries
+- [Security Best Practices](./docs/security/security-best-practices.md) - Production hardening
+- [Security Audit](./docs/security/dstack-audit.pdf) - Third-party audit by zkSecurity
+- [CVM Boundaries](./docs/security/cvm-boundaries.md) - Information exchange and isolation
 
 ## Trusted by
 
@@ -123,7 +128,7 @@ dstack is a [Confidential Computing Consortium](https://confidentialcomputing.io
 
 ## Media Kit
 
-The dstack logo and branding assets are available in the [media kit](./docs/assets/Dstack%20Logo%20Kit/):
+The dstack logo and branding assets are available in the [media kit](./docs/assets/dstack-logo-kit/):
 
 - **Horizontal logos**: Primary and dark versions in PNG/SVG formats
 - **Vertical logos**: Primary and dark versions in PNG/SVG formats

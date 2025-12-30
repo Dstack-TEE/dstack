@@ -186,4 +186,4 @@ Source: [`kms/auth-eth/contracts/`](../kms/auth-eth/contracts/)
 ## See Also
 
 - [Deployment Guide](./deployment.md) - Setting up dstack infrastructure
-- [Security Best Practices](./security-best-practices.md)
+- [Security Best Practices](./security/security-best-practices.md)

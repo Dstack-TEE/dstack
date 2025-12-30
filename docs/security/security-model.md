@@ -120,7 +120,7 @@ Attestation proves which code is running, not that the code is bug-free. It prov
 
 ### Environment variables need application-layer authentication
 
-Encrypted environment variables prevent the host from reading your secrets. However, the host can replace encrypted values with different ones. Your application should verify authenticity using patterns like LAUNCH_TOKEN. See [security-best-practices.md](security-best-practices.md) for details.
+Encrypted environment variables prevent the host from reading your secrets. However, the host can replace encrypted values with different ones. Your application should verify authenticity using patterns like LAUNCH_TOKEN. See [security-best-practices.md](./security-best-practices.md) for details.
 
 ### KMS root key security
 
@@ -128,4 +128,4 @@ All keys derive from the KMS root key, which is protected by TEE isolation. Like
 
 ## Further Reading
 
-For production deployment guidance, see [security-best-practices.md](security-best-practices.md). For smart contract authorization details, see [onchain-governance.md](onchain-governance.md). For technical details about CVM boundaries and APIs, see [cvm-boundaries.md](cvm-boundaries.md).
+For production deployment guidance, see [security-best-practices.md](./security-best-practices.md). For smart contract authorization details, see [onchain-governance.md](../onchain-governance.md). For technical details about CVM boundaries and APIs, see [cvm-boundaries.md](./cvm-boundaries.md).

@@ -230,7 +230,7 @@ expected_hash = "sha256:abc123..."  # From your audited docker-compose
 assert attestation["compose_hash"] == expected_hash
 ```
 
-For visual verification, paste the quote into [proof.t16z.com](https://proof.t16z.com).
+For visual verification, paste the quote into [proof.t16z.com](https://proof.t16z.com), Phala's TEE attestation explorer that parses TDX quotes and displays the verification status, measurements, and TCB info in a readable format.
 
 The compose hash only tells you *what* is running. You still need to verify that code does what you expect—no secret logging, no data exfiltration, proper access controls.
 
@@ -244,7 +244,7 @@ See the [full benchmark report](https://docs.phala.network/dstack/phala-cloud/re
 
 1. Try [chat.redpill.ai](https://chat.redpill.ai) to see private inference in action
 2. Deploy your own with the [inference example](https://github.com/Dstack-TEE/dstack-examples/tree/main/ai/inference)
-3. Read the [Security Model](./security-model.md) for the full threat model
+3. Read the [Security Model](./security/security-model.md) for the full threat model
 
 ## Production
 
