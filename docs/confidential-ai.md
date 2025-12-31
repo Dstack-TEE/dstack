@@ -2,6 +2,14 @@
 
 Run AI workloads where the infrastructure operator can't see your data. dstack uses Intel TDX and NVIDIA Confidential Computing to encrypt everything in memory—your prompts, model weights, and intermediate computations stay private.
 
+## What You Can Build
+
+- **Private inference** - Users verify their prompts never leave encrypted memory
+- **Training on sensitive data** - Fine-tune models without exposing training data to operators
+- **Trustworthy agents** - Prove your agent code can't exfiltrate user data
+
+The key difference from self-hosting: users don't have to trust you. They can cryptographically verify what code runs and that the hardware is genuine.
+
 ## What Makes It Confidential
 
 Four things need to be true for the system to be actually confidential:
