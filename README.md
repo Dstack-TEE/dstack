@@ -187,6 +187,19 @@ dstack is a Linux Foundation [Confidential Computing Consortium](https://confide
 
 [![Repobeats](https://repobeats.axiom.co/api/embed/0a001cc3c1f387fae08172a9e116b0ec367b8971.svg)](https://github.com/Dstack-TEE/dstack/pulse)
 
+## Cite
+
+If you use dstack in your research, please cite:
+
+```bibtex
+@article{zhou2025dstack,
+  title={Dstack: A Zero Trust Framework for Confidential Containers},
+  author={Zhou, Shunfan and Wang, Kevin and Yin, Hang},
+  journal={arXiv preprint arXiv:2509.11555},
+  year={2025}
+}
+```
+
 ## Media Kit
 
 Logo and branding assets: [dstack-logo-kit](./docs/assets/dstack-logo-kit/)
