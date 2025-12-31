@@ -115,10 +115,10 @@ Apps communicate with the guest agent via HTTP over `/var/run/dstack.sock`. Use 
 
 ## Trusted by
 
-- [OpenRouter](https://openrouter.ai/provider/phala) - Confidential AI inference
-- [NEAR AI](https://x.com/ilblackdragon/status/1962920246148268235) - Private AI agents
+- [OpenRouter](https://openrouter.ai/provider/phala) - Confidential AI inference providers are powered by dstack
+- [NEAR AI](https://x.com/ilblackdragon/status/1962920246148268235) - Private AI infrastructure powered by dstack
 
-dstack is a [Confidential Computing Consortium](https://confidentialcomputing.io/2025/10/02/welcoming-phala-to-the-confidential-computing-consortium/) open source project.
+dstack is a Linux Foundation [Confidential Computing Consortium](https://confidentialcomputing.io/2025/10/02/welcoming-phala-to-the-confidential-computing-consortium/) open source project.
 
 ## Community
 
