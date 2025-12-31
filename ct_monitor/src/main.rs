@@ -56,10 +56,7 @@ impl Monitor {
         let acme_info_url = format!("{}/acme-info", self.gateway_uri.trim_end_matches('/'));
         info!("fetching known public keys from {}", acme_info_url);
 
-        let client = reqwest::Client::builder()
-            .danger_accept_invalid_certs(true) // TODO: Use RA-TLS verification
-            .build()
-            .context("failed to build http client")?;
+        let client = reqwest::Client::new();
 
         let response = client
             .get(&acme_info_url)
