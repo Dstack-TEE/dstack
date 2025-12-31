@@ -90,18 +90,19 @@ Apps communicate with the guest agent via HTTP over `/var/run/dstack.sock`. Use 
 
 ## Documentation
 
-**Use Cases**
+**For Developers**
 - [Confidential AI](./docs/confidential-ai.md) - Inference, agents, and training with hardware privacy
-
-**Guides**
 - [Usage Guide](./docs/usage.md) - Deploying and managing apps
+- [Verification](./docs/verification.md) - How to verify TEE attestation
+
+**For Operators**
 - [Deployment](./docs/deployment.md) - Self-hosting on TDX hardware
-- [On-Chain Governance](./docs/onchain-governance.md) - Smart contract-based authorization
-- [VMM CLI Guide](./docs/vmm-cli-user-guide.md) - Command-line deployment
+- [On-Chain Governance](./docs/onchain-governance.md) - Smart contract authorization
+- [Gateway](./docs/dstack-gateway.md) - Gateway configuration
 
 **Reference**
 - [App Compose Format](./docs/normalized-app-compose.md) - Compose file specification
-- [Gateway](./docs/dstack-gateway.md) - Gateway configuration
+- [VMM CLI Guide](./docs/vmm-cli-user-guide.md) - Command-line reference
 - [Design Decisions](./docs/design-and-hardening-decisions.md) - Architecture rationale
 - [FAQ](./docs/faq.md) - Frequently asked questions
 
