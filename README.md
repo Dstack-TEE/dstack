@@ -114,9 +114,69 @@ Apps communicate with the guest agent via HTTP over `/var/run/dstack.sock`. Use 
 - [Security Audit](./docs/security/dstack-audit.pdf) - Third-party audit by zkSecurity
 - [CVM Boundaries](./docs/security/cvm-boundaries.md) - Information exchange and isolation
 
+## FAQ
+
+<details>
+<summary><strong>Why not use AWS Nitro / Azure Confidential VMs / GCP directly?</strong></summary>
+
+You can — but you'll build everything yourself: attestation verification, key management, Docker orchestration, certificate provisioning, and governance. dstack provides all of this out of the box.
+
+| Approach | Docker native | GPU TEE | Key management | Attestation tooling | Open source |
+|----------|:-------------:|:-------:|:--------------:|:-------------------:|:-----------:|
+| **dstack** | ✓ | ✓ | ✓ | ✓ | ✓ |
+| AWS Nitro Enclaves | - | - | Manual | Manual | - |
+| Azure Confidential VMs | - | Preview | Manual | Manual | - |
+| GCP Confidential Computing | - | - | Manual | Manual | - |
+
+Cloud providers give you the hardware primitive. dstack gives you the full stack: reproducible OS images, automatic attestation, per-app key derivation, TLS certificates, and smart contract governance. No vendor lock-in.
+
+</details>
+
+<details>
+<summary><strong>How is this different from SGX/Gramine?</strong></summary>
+
+SGX requires porting applications to enclaves. dstack uses full-VM isolation (Intel TDX) — bring your Docker containers as-is. Plus GPU TEE support that SGX doesn't offer.
+
+</details>
+
+<details>
+<summary><strong>What's the performance overhead?</strong></summary>
+
+Minimal. Intel TDX adds ~2-5% overhead for CPU workloads. NVIDIA Confidential Computing has negligible impact on GPU inference. The main cost is memory encryption, which is hardware-accelerated on supported CPUs.
+
+</details>
+
+<details>
+<summary><strong>Is this production-ready?</strong></summary>
+
+Yes. dstack powers production AI infrastructure at [OpenRouter](https://openrouter.ai/provider/phala) and [NEAR AI](https://x.com/ilblackdragon/status/1962920246148268235). The framework has been [audited by zkSecurity](./docs/security/dstack-audit.pdf) and is a Linux Foundation Confidential Computing Consortium project.
+
+</details>
+
+<details>
+<summary><strong>Can I run this on my own hardware?</strong></summary>
+
+Yes. dstack runs on any Intel TDX-capable server. See the [deployment guide](./docs/deployment.md) for self-hosting instructions. You can also use [Phala Cloud](https://cloud.phala.network) for managed infrastructure.
+
+</details>
+
+<details>
+<summary><strong>What TEE hardware is supported?</strong></summary>
+
+Currently: Intel TDX (4th/5th Gen Xeon) and NVIDIA Confidential Computing (H100, Blackwell). AMD SEV-SNP support is planned.
+
+</details>
+
+<details>
+<summary><strong>How do users verify my deployment?</strong></summary>
+
+Your app exposes attestation quotes via the SDK. Users verify these quotes using [dstack-verifier](https://github.com/Dstack-TEE/dstack/tree/master/verifier), [dcap-qvl](https://github.com/Phala-Network/dcap-qvl), or the [Trust Center](https://trust.phala.com). See the [verification guide](./docs/verification.md) for details.
+
+</details>
+
 ## Trusted by
 
-- [OpenRouter](https://openrouter.ai/provider/phala) - Confidential AI inference providers are powered by dstack
+- [OpenRouter](https://openrouter.ai/provider/phala) - Confidential AI inference providers powered by dstack
 - [NEAR AI](https://x.com/ilblackdragon/status/1962920246148268235) - Private AI infrastructure powered by dstack
 
 dstack is a Linux Foundation [Confidential Computing Consortium](https://confidentialcomputing.io/2025/10/02/welcoming-phala-to-the-confidential-computing-consortium/) open source project.
@@ -129,11 +189,7 @@ dstack is a Linux Foundation [Confidential Computing Consortium](https://confide
 
 ## Media Kit
 
-The dstack logo and branding assets are available in the [media kit](./docs/assets/dstack-logo-kit/):
-
-- **Horizontal logos**: Primary and dark versions in PNG/SVG formats
-- **Vertical logos**: Primary and dark versions in PNG/SVG formats
-- **Icons**: Primary and dark versions in PNG/SVG formats
+Logo and branding assets: [dstack-logo-kit](./docs/assets/dstack-logo-kit/)
 
 ## License
 
