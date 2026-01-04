@@ -1,35 +1,145 @@
-# Deployment of dstack
+# Deploying dstack
 
-This document describes the deployment of dstack components on bare metal TDX hosts.
-It contains steps to deploy dstack-kms and dstack-gateway into CVMs.
+This guide covers deploying dstack on bare metal TDX hosts.
+
+## Overview
+
+dstack can be deployed in two ways:
+
+- **Dev Deployment**: All components run directly on the host. For local development and testing only - no security guarantees.
+- **Production Deployment**: KMS and Gateway run as CVMs with hardware-rooted security. Uses auth server for authorization and OS image whitelisting. Required for any deployment where security matters.
 
 ## Prerequisites
 
-- Follow the [TDX setup guide](https://github.com/canonical/tdx) to setup the TDX host.
-- Install `cargo` and `rustc`
+**Hardware:**
+- Bare metal TDX server ([setup guide](https://github.com/canonical/tdx))
+- At least 16GB RAM, 100GB free disk space
+- Public IPv4 address
+- Optional: NVIDIA H100 or Blackwell GPU for [Confidential Computing](https://www.nvidia.com/en-us/data-center/solutions/confidential-computing/) workloads
 
-## Clone the dstack repository
+**Network:**
+- Domain with DNS access (for Gateway TLS)
+
+> **Note:** See [Hardware Requirements](https://docs.phala.network/dstack/hardware-requirements) for server recommendations.
+
+---
+
+## Dev Deployment
+
+This approach runs all components directly on the host for local development and testing.
+
+> **Warning:** Dev deployment uses KMS in dev mode with no security guarantees. Do NOT use for production.
+
+### Install Dependencies
+
+```bash
+# Ubuntu 24.04
+sudo apt install -y build-essential chrpath diffstat lz4 wireguard-tools xorriso
+
+# Install Rust
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
+
+### Build Configuration
+
+```bash
+git clone https://github.com/Dstack-TEE/meta-dstack.git --recursive
+cd meta-dstack/
+mkdir build && cd build
+../build.sh hostcfg
+```
+
+Edit the generated `build-config.sh` for your environment. The minimal required changes are:
+
+| Variable | Description |
+|----------|-------------|
+| `KMS_DOMAIN` | DNS domain for KMS RPC (e.g., `kms.example.com`) |
+| `GATEWAY_DOMAIN` | DNS domain for Gateway RPC (e.g., `gateway.example.com`) |
+| `GATEWAY_PUBLIC_DOMAIN` | Public base domain for app routing (e.g., `apps.example.com`) |
+
+**TLS Certificates:**
+
+The Gateway requires TLS certificates. Configure Certbot with Cloudflare:
+
+```bash
+CERTBOT_ENABLED=true
+CF_API_TOKEN=<your-cloudflare-token>
+```
+
+The certificates will be obtained automatically via ACME DNS-01 challenge. The KMS auto-generates its own certificates during bootstrap.
+
+Other variables like ports and CID pool settings have sensible defaults.
+
+```bash
+vim ./build-config.sh
+../build.sh hostcfg
+```
+
+### Download Guest Image
+
+```bash
+../build.sh dl 0.5.5
+```
+
+### Run Components
+
+Start in separate terminals:
+
+1. **KMS**: `./dstack-kms -c kms.toml`
+2. **Gateway**: `sudo ./dstack-gateway -c gateway.toml`
+3. **VMM**: `./dstack-vmm -c vmm.toml`
+
+> **Note:** This deployment uses KMS in dev mode without an auth server. For production deployments with proper security, see [Production Deployment](#production-deployment) below.
+
+---
+
+## Production Deployment
+
+For production, deploy KMS and Gateway as CVMs with hardware-rooted security. Production deployments require:
+- KMS running in a CVM (not on the host)
+- Auth server for authorization (webhook mode)
+
+### Production Checklist
+
+**Required:**
+
+1. Set up TDX host with dstack-vmm
+2. Deploy KMS as CVM (with auth server)
+3. Deploy Gateway as CVM
+
+**Optional Add-ons:**
+
+4. [Zero Trust HTTPS](#4-zero-trust-https-optional)
+5. [Certificate Transparency monitoring](#5-certificate-transparency-monitoring-optional)
+6. [Multi-node deployment](#6-multi-node-deployment-optional)
+7. [On-chain governance](./onchain-governance.md) - Smart contract-based authorization
+
+---
+
+### 1. Set Up TDX Host
+
+Clone and build dstack-vmm:
+
 ```bash
 git clone https://github.com/Dstack-TEE/dstack
-```
-## Compile and Run dstack-vmm
-```bash
 cd dstack
 cargo build --release -p dstack-vmm -p supervisor
 mkdir -p vmm-data
 cp target/release/dstack-vmm vmm-data/
 cp target/release/supervisor vmm-data/
 cd vmm-data/
+```
 
-# create vmm.toml. Edit the config as needed.
-cat <<EOF > vmm.toml
-address = "unix:./vmm.sock"
+Create `vmm.toml`:
+
+```toml
+address = "tcp:0.0.0.0:9080"
 reuse = true
 image_path = "./images"
 run_path = "./run/vm"
 
 [cvm]
-kms_urls = ["https://kms.test2.dstack.phala.network:9201"]
+kms_urls = []
 gateway_urls = []
 cid_start = 30000
 cid_pool_size = 1000
@@ -43,333 +153,381 @@ range = [
 ]
 
 [host_api]
-port = 9300
-EOF
+address = "vsock:2"
+port = 10000
+```
 
-# Download Guest OS images
-DSTACK_VERSION=0.5.2
-wget "https://github.com/Dstack-TEE/meta-dstack/releases/download/v${DSTACK_VERSION}/dstack-${DSTACK_VERSION}.tar.gz"
-mkdir -p images/
-tar -xvf dstack-${DSTACK_VERSION}.tar.gz -C images/
-rm -f dstack-${DSTACK_VERSION}.tar.gz
+Download guest images from [meta-dstack releases](https://github.com/Dstack-TEE/meta-dstack/releases) and extract to `./images/`.
 
-# run dstack-vmm
+> For reproducible builds and verification, see the [Security Model](./security/security-model.md).
+
+Start VMM:
+
+```bash
 ./dstack-vmm -c vmm.toml
 ```
 
-## Deploy the DstackKms contract
+---
 
-A KMS node requires a DstackKms contract to be deployed on the Ethereum-compatible network.
+### 2. Deploy KMS as CVM
+
+Production KMS requires:
+- **KMS**: The key management service inside a CVM
+- **Auth server**: Webhook server that validates boot requests and returns authorization decisions
+
+#### Auth Server Options
+
+| Server | Use Case | Configuration |
+|--------|----------|---------------|
+| [auth-simple](../kms/auth-simple/) | Config-file-based whitelisting | JSON config file |
+| [auth-eth](../kms/auth-eth/) | On-chain governance via smart contracts | Ethereum RPC + contract |
+| Custom | Your own authorization logic | Implement webhook interface |
+
+All auth servers implement the same webhook interface:
+- `GET /` - Health check
+- `POST /bootAuth/app` - App boot authorization
+- `POST /bootAuth/kms` - KMS boot authorization
+
+#### Using auth-simple (Config-Based)
+
+auth-simple validates boot requests against a JSON config file.
+
+Create `auth-config.json` for initial KMS deployment:
+
+```json
+{
+  "osImages": ["0x<os-image-hash>"],
+  "kms": { "allowAnyDevice": true },
+  "apps": {}
+}
+```
+
+Run auth-simple:
 
 ```bash
-cd dstack/kms/auth-eth
-npm install
-npx hardhat compile
-PRIVATE_KEY=<your-private-key> npx hardhat kms:deploy --with-app-impl --network phala
-```
-It will deploy both the DstackApp implementation and DstackKms contract to the Phala network and print the contract addresses:
-
-```
-Step 1: Deploying DstackApp implementation...
-✅ DstackApp implementation deployed to: 0x5FbDB2315678afecb367f032d93F642f64180aa3
-Step 2: Deploying DstackKms...
-Deploying proxy...
-Waiting for deployment...
-DstackKms Proxy deployed to: 0xFE6C45aE66344CAEF5E5D7e2cbD476286D651875
-Implementation deployed to: 0x9fE46736679d2D9a65F0992F2272dE9f3c7fa6e0
-Deployment completed successfully
-Transaction hash: 0xd413d01a0640b6193048b0e98afb7c173abe58c74d9cf01f368166bc53f4fefe
-✅ Complete KMS setup deployed successfully!
-- DstackApp implementation: 0x5FbDB2315678afecb367f032d93F642f64180aa3
-- DstackKms proxy: 0xFE6C45aE66344CAEF5E5D7e2cbD476286D651875
-🚀 Ready for factory app deployments!
+cd kms/auth-simple
+bun install
+PORT=3001 AUTH_CONFIG_PATH=/path/to/auth-config.json bun run start
 ```
 
-## Deploy KMS into CVM
-The dstack-vmm is running now. Open another terminal and go to the `kms/dstack-app/` directory and run the following command:
+For adding Gateway, apps, and other config fields, see [auth-simple Operations Guide](./auth-simple-operations.md).
+
+#### Using auth-eth (On-Chain)
+
+For decentralized governance via smart contracts, see [On-Chain Governance](./onchain-governance.md).
+
+#### Getting OS Image Hash
+
+The OS image hash is in the `digest.txt` file inside the guest image tarball:
+
+```bash
+# Extract hash from release tarball
+tar -xzf dstack-0.5.5.tar.gz
+cat dstack-0.5.5/digest.txt
+# Output: 0b327bcd642788b0517de3ff46d31ebd3847b6c64ea40bacde268bb9f1c8ec83
+```
+
+Add `0x` prefix for auth-simple config: `0x0b327bcd...`
+
+#### Deploy KMS CVM
+
+Choose the deployment script based on your auth server:
+
+**For auth-simple (external webhook):**
+
+auth-simple runs on your infrastructure, outside the CVM.
 
 ```bash
 cd dstack/kms/dstack-app/
-./deploy-to-vmm.sh
 ```
-It will create a template `.env` file. Edit the `.env` file and set the required variables.
-Especially the `KMS_CONTRACT_ADDR` variable set to the address of the DstackKms Proxy contract deployed in the previous step.
-The `IMAGE_DOWNLOAD_URL` variable should be set to the URL of the dstack OS image used to verify the os_image_hash.
-```
-# .env
-VMM_RPC=unix:../../vmm-data/vmm.sock
-KMS_CONTRACT_ADDR=0xFE6C45aE66344CAEF5E5D7e2cbD476286D651875
+
+Edit `.env.simple`:
+
+```bash
+VMM_RPC=http://127.0.0.1:9080
+AUTH_WEBHOOK_URL=http://your-auth-server:3001
 KMS_RPC_ADDR=0.0.0.0:9201
 GUEST_AGENT_ADDR=127.0.0.1:9205
-ETH_RPC_URL=https://rpc.phala.network
-GIT_REV=HEAD
-OS_IMAGE=dstack-0.5.2
-IMAGE_DOWNLOAD_URL=https://download.dstack.org/os-images/mr_{OS_IMAGE_HASH}.tar.gz
+OS_IMAGE=dstack-0.5.5
+IMAGE_DOWNLOAD_URL=https://github.com/Dstack-TEE/meta-dstack/releases/download/v0.5.5/dstack-0.5.5.tar.gz
 ```
 
-Then run the script again.
-
-Then it will deploy the KMS CVM to the dstack-vmm. Outputs:
-
-```
-App compose file created at: .app-compose.json
-Compose hash: ec3d427f62bd60afd520fce0be3b368aba4516434f2ff761f74775f871f5b6e3
-Deploying KMS to dstack-vmm...
-App ID: ec3d427f62bd60afd520fce0be3b368aba451643
-Created VM with ID: f5299298-bf4f-43c0-839c-88c755391f3c
-```
-
-Go back to the vmm-data directory and check the status of the KMS CVM:
-```bash
-cd ../../vmm-data/
-tail -f run/vm/f5299298-bf4f-43c0-839c-88c755391f3c/serial.log
-```
-
-Wait until the KMS CVM is ready:
-```
-br-1df48b1c448a: port 2(veth36ab5cb) entered forwarding state
-app-compose.sh[882]:  Container dstack-kms-1  Started
-app-compose.sh[688]: Pruning unused images
-app-compose.sh[8347]: Total reclaimed space: 0B
-app-compose.sh[688]: Pruning unused volumes
-app-compose.sh[8356]: Total reclaimed space: 0B
-[  OK  ] Finished App Compose Service.
-[  OK  ] Reached target Multi-User System.
-         Starting Record Runlevel Change in UTMP...
-[  OK  ] Finished Record Runlevel Change in UTMP.
-```
-
-Now open your browser and go to the KMS listening address:
-```
-http://127.0.0.1:9201/
-```
-Click Bootstrap button then fill in the domain serving the KMS. For example: `kms.test2.dstack.phala.network`.
-![alt text](assets/kms-bootstrap.png)
-You should use the domain name that you will use to access the KMS.
-Then click [Bootstrap] -> [Finish setup].
-It will display the public key and corresponding TDX quote of the KMS as shown below:
-![alt text](assets/kms-bootstrap-result.png)
-The KMS info should be then set to the kms-auth-contract [here for this example](https://explorer.phala.network/address/0xFE6C45aE66344CAEF5E5D7e2cbD476286D651875?tab=write_proxy&source_address=0xa1b5B4Eb15E9366D2e11943F5fE319b62a6E9Da3#0x7d025352):
-![alt text](assets/kms-auth-set-info.png)
-The KMS instance is now ready to use.
-
-## Deploy dstack-gateway in CVM
-dstack-gateway can be deployed as a dstack app in the same host as the KMS or in a different host.
-
-### Add OS image hash to the KMS whitelist
-In order to run user workloads that use the KMS, the OS image hash must be added to the KMS whitelist.
-
-The `os_image_hash` is generated during the image build process. It is stored in the `digest.txt` file.
-
-After you get the `os_image_hash`, you can register it to the KMS whitelist by running the following command:
+Then run:
 
 ```bash
-cd dstack/kms/auth-eth
-npx hardhat kms:add-image --network phala 0x<os-image-hash>
+./deploy-simple.sh
 ```
 
-### Register dstack-gateway in KMS
-As a normal dstack app, it requires the app to be registered in the DstackKms contract first.
+**For auth-eth (on-chain governance):**
+
+> See [On-Chain Governance Guide](./onchain-governance.md) for deploying KMS with smart contract-based authorization.
+
+**Monitor startup:**
 
 ```bash
-cd dstack/kms/auth-eth
-npx hardhat kms:create-app --network phala --allow-any-device
+tail -f ../../vmm-data/run/vm/<vm-id>/serial.log
 ```
 
-This will deploy an DstackApp contract in the DstackKms contract and print the app ID:
+Wait for `[  OK  ] Finished App Compose Service.`
 
-```
-Deploying with account: 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266
-Account balance: 9999.988063729279315546
-Initial device: 0xda2d377e04b7133ec1287a18d465fa44ae9dbb08d929166c6bdb414f38a2acd3
-Initial compose hash: none
-Using factory method for single-transaction deployment...
-Waiting for transaction 0x46cf1959abf309fcde86bcab2518dcf28dd9eec70c74214f0562e7bf847c50de to be confirmed...
-✅ App deployed and registered successfully!
-Proxy Address (App Id): 0x32467b43BFa67273FC7dDda0999Ee9A12F2AaA08
-Owner: 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266
-Transaction hash: 0x46cf1959abf309fcde86bcab2518dcf28dd9eec70c74214f0562e7bf847c50de
-Deployed with 1 initial device and 0 initial compose hash
-```
+#### Bootstrap KMS
 
-Register the app ID to the kms as the gateway app ID:
+Open `http://127.0.0.1:9201/` in your browser.
+
+1. Click **Bootstrap**
+2. Enter the domain for your KMS (e.g., `kms.example.com`)
+3. Click **Finish setup**
+
+![KMS Bootstrap](assets/kms-bootstrap.png)
+
+The KMS will display its public key and TDX quote:
+
+![KMS Bootstrap Result](assets/kms-bootstrap-result.png)
+
+---
+
+### 3. Deploy Gateway as CVM
+
+#### Prerequisites
+
+Before deploying Gateway:
+1. Register the Gateway app in your auth server config (add to `apps` section in `auth-config.json`)
+2. Note the App ID you assign - you'll need it for the `.env` file
+
+For on-chain governance, see [On-Chain Governance](./onchain-governance.md#register-gateway-app) for registration steps.
+
+#### Deploy Gateway CVM
+
 ```bash
-npx hardhat kms:set-gateway --network phala 0x32467b43BFa67273FC7dDda0999Ee9A12F2AaA08
+cd dstack/gateway/dstack-app/
+./deploy-to-vmm.sh
 ```
 
-Now go to the `gateway/dstack-app/` directory and run the following command:
+Edit `.env` with required variables:
+
 ```bash
-cd ../../gateway/dstack-app/
-./deploy-to-vmm.sh 
-```
+# VMM connection (use TCP if VMM is on same host, or remote URL)
+VMM_RPC=http://127.0.0.1:9080
 
-It will create a template .env file. Edit the .env file and set the required variables.
-
-```
-# .env
-VMM_RPC=unix:../../vmm-data/vmm.sock
-
-# Cloudflare API token for DNS challenge used to get the SSL certificate.
+# Cloudflare (for DNS-01 ACME challenge)
 CF_API_TOKEN=your_cloudflare_api_token
 
-# Service domain
-SRV_DOMAIN=test2.dstack.phala.network
-
-# Public IP address
+# Domain configuration
+SRV_DOMAIN=example.com
 PUBLIC_IP=$(curl -s ifconfig.me)
 
-# Gateway application ID. Register the app in DstackKms first to get the app ID.
-GATEWAY_APP_ID=0x31884c4b7775affe4c99735f6c2aff7d7bc6cfcd
+# Gateway app ID (from registration above)
+GATEWAY_APP_ID=32467b43BFa67273FC7dDda0999Ee9A12F2AaA08
 
-# Whether to use ACME staging (yes/no)
-ACME_STAGING=yes
+# Gateway URLs
+MY_URL=https://gateway.example.com:9202
+BOOTNODE_URL=https://gateway.example.com:9202
 
-# Subnet index. 0~15
-SUBNET_INDEX=0
-
-# My URL. The URL will be synced to other nodes in the cluster so that each node can discover other nodes.
-MY_URL=https://gateway.test2.dstack.phala.network:9202
-
-# Bootnode URL. If you want to deploy a multi-node dstack-gateway cluster, set the bootnode URL to the URL of another node already deployed or planed to be deployed later.
-BOOTNODE_URL=https://gateway.test2.dstack.phala.network:9202
-
-# dstack OS image name
-OS_IMAGE=dstack-0.5.2
-
-# Set defaults for variables that might not be in .env
-GIT_REV=HEAD
-
-# Port configurations
-GATEWAY_RPC_ADDR=0.0.0.0:9202
-GATEWAY_ADMIN_RPC_ADDR=127.0.0.1:9203
-GATEWAY_SERVING_ADDR=0.0.0.0:9204
-GUEST_AGENT_ADDR=127.0.0.1:9206
+# WireGuard (uses same port as RPC)
 WG_ADDR=0.0.0.0:9202
+
+# Network settings
+SUBNET_INDEX=0
+ACME_STAGING=no  # Set to 'yes' for testing
+OS_IMAGE=dstack-0.5.5
 ```
 
-Then run the script again.
-It should show the prompt to confirm the deployment:
+**Note on hex formats:**
+- Gateway `.env` file: Use raw hex without `0x` prefix (e.g., `GATEWAY_APP_ID=32467b43...`)
+- auth-simple config: Use `0x` prefix (e.g., `"0x32467b43..."`). The server normalizes both formats.
+
+Run the script again:
+
+```bash
+./deploy-to-vmm.sh
 ```
-App compose file created at: .app-compose.json
-Compose hash: 700a50336df7c07c82457b116e144f526c29f6d8f4a0946b3e88065c9beba0f4
+
+The script will display the compose file and compose hash, then prompt for confirmation:
+
+```
+Docker compose file:
+...
+Compose hash: 0x700a50336df7c07c82457b116e144f526c29f6d8...
 Configuration:
-VMM_RPC: unix:../../build/vmm.sock
-SRV_DOMAIN: test5.dstack.phala.network
-PUBLIC_IP: 66.220.6.113
-GATEWAY_APP_ID: 31884c4b7775affe4c99735f6c2aff7d7bc6cfcd
-MY_URL: https://gateway.test5.dstack.phala.network:9202
-BOOTNODE_URL: https://gateway.test2.dstack.phala.network:9202
-SUBNET_INDEX: 0
-WG_ADDR: 0.0.0.0:9202
-GATEWAY_RPC_ADDR: 0.0.0.0:9202
-GATEWAY_ADMIN_RPC_ADDR: 127.0.0.1:9203
-GATEWAY_SERVING_ADDR: 0.0.0.0:9204
-GUEST_AGENT_ADDR: 127.0.0.1:9206
+...
 Continue? [y/N]
 ```
 
-Don't press `y` yet. We need to add the compose hash to the DstackApp contract first. Go back to the `kms/auth-eth` directory and run the following command:
+**Before pressing 'y'**, add the compose hash to your auth server whitelist:
+- For auth-simple: Add to `composeHashes` array in `auth-config.json`
+- For auth-eth: Use `app:add-hash` (see [On-Chain Governance](./onchain-governance.md#register-gateway-app))
 
-```bash
-npx hardhat app:add-hash --network phala --app-id 0x31884c4b7775affe4c99735f6c2aff7d7bc6cfcd 0x700a50336df7c07c82457b116e144f526c29f6d8f4a0946b3e88065c9beba0f4
-```
+Then return to the first terminal and press 'y' to deploy.
 
-After the transaction is confirmed, you can press `y` to continue the deployment.
+#### Update VMM Configuration
 
-Similar to the KMS deployment, it will deploy the dstack-gateway CVM to the dstack-vmm and it will start serving later.
+After Gateway is running, update `vmm.toml` with KMS and Gateway URLs:
 
-## Deploy dstack-vmm on other TDX hosts to serve user workloads
-After the KMS and dstack-gateway are deployed, you can deploy dstack-vmm on other TDX hosts to serve user workloads.
-You can follow the steps at the beginning of this document to deploy dstack-vmm on other TDX hosts.
-Edit the vmm.toml file to set the KMS and dstack-gateway URLs.
-
-```
-# vmm.toml
+```toml
 [cvm]
-kms_urls = ["https://kms.test2.dstack.phala.network:9201"]
-gateway_urls = ["https://gateway.test2.dstack.phala.network:9202"]
+kms_urls = ["https://kms.example.com:9201"]
+gateway_urls = ["https://gateway.example.com:9202"]
 ```
 
-Then restart the dstack-vmm.
+Restart dstack-vmm to apply changes.
 
-## Deploy app on the dstack-vmm
+---
 
-After the dstack-vmm is ready, you can deploy an app on it following the steps below.
+### 4. Zero Trust HTTPS (Optional)
 
-### 1. On-chain Registration
+Generate TLS certificates inside the TEE with automatic CAA record management.
 
-The on-chain registration process includes two steps:
-
-1. Deploy an App's control contract DstackApp. Developers can develop their own or choose the reference contract from the dstack repository. Custom contracts need to implement the IAppAuth interface.
-2. Call DstackKms.registerApp(appContractAddress) to register the contract.
-
-The dstack repository provides scripts to complete these two steps:
-
-**Option 1: Traditional deployment (2 transactions)**
-```bash
-git clone https://github.com/Dstack-TEE/dstack
-cd dstack/kms/auth-eth
-npm install
-npx hardhat compile
-export PRIVATE_KEY=<your eth private key here>
-export KMS_CONTRACT_ADDRESS=0xFE6C45aE66344CAEF5E5D7e2cbD476286D651875
-npx hardhat app:deploy --allow-any-device --network phala
-```
-
-**Option 2: Factory deployment (1 transaction, recommended)**
-```bash
-npx hardhat kms:create-app --allow-any-device --network phala
-```
-
-Command output:
-```
-Deploying with account: 0x8626f6940E2eb28930eFb4CeF49B2d1F2C9C1199
-Account balance: 9999.995278992293365404
-App ID: 0xA35b434eE853fdf9c2Bf48Fa1583Ac1332d50255
-Starting DstackApp deployment process...
-Deploying proxy...
-Waiting for deployment...
-DstackApp deployed to: 0xD4a546B1C7e63CD4CeD314b2C90108e49191A915
-Implementation deployed to: 0x5aC1671E1Df54994D023F0B05806821d6D84e086
-Deployment completed successfully
-Transaction hash: 0xceac2ac6d56a40fef903b947d3a05df42ccce66da7f356c5d54afda68277f9a9
-Waiting for transaction 0xe144e9007208079e5e82c04f727d2383c58184e74d4f860e62557b5f330ab832 to be confirmed...
-✅ App deployed and registered successfully!
-App ID: 0xA35b434eE853fdf9c2Bf48Fa1583Ac1332d50255
-Proxy Address: 0xD4a546B1C7e63CD4CeD314b2C90108e49191A915
-Owner: 0x8626f6940E2eb28930eFb4CeF49B2d1F2C9C1199
-Transaction hash: 0xe144e9007208079e5e82c04f727d2383c58184e74d4f860e62557b5f330ab832
-```
-
-Note the AppId, which needs to be filled in when deploying cvm.
-
-**Additional options:**
-- Add initial device ID: `--device 0x1234...`
-- Add initial compose hash: `--hash 0x5678...`
-- Both deployment methods support these optional parameters for pre-configuration during deployment.
-
-If you need to upgrade the contract in the future, please backup the `.openzeppelin/unknown-2035.json` file.
-
-### 2. Add the App compose hash to the whitelist
-
-Build app-compose.json and calculate its sha256 to get compose-hash. The compose hash can also be previewed in the dstack-vmm UI.
-
-Call the hardhat command to add it to the whitelist (using DstackApp as an example here; custom DstackApp follows its own custom permission control logic).
+Configure in `build-config.sh`:
 
 ```bash
-export PRIVATE_KEY=<your eth private key here>
-npx hardhat app:add-hash --network phala --app-id 0xA35b434eE853fdf9c2Bf48Fa1583Ac1332d50255 0x44d9cb98aaa6ab11f5729fc7d6fd58117585e0e3fbec621612dcee6b2dfbcde5
+GATEWAY_CERT=${CERTBOT_WORKDIR}/live/cert.pem
+GATEWAY_KEY=${CERTBOT_WORKDIR}/live/key.pem
+CF_API_TOKEN=<your-cloudflare-token>
+ACME_URL=https://acme-v02.api.letsencrypt.org/directory
 ```
 
-### 3. Deploy instances using dstack-vmm
+Run certbot:
 
-![app deploy](assets/app-deploy.png)
-- Select image `dstack-0.4.2`
-- Fill in the AppId applied in the contract during deployment
-- Currently, test DstackKms has set a whitelist for Base image, requiring instance memory to be `≥ 3G` or exactly `= 2G`
+```bash
+RUST_LOG=info,certbot=debug ./certbot renew -c certbot.toml
+```
 
-After the app starts normally, click [Board] to access.
+This will:
+- Create an ACME account
+- Set CAA DNS records on Cloudflare
+- Request and auto-renew certificates
 
-You can find the connections to dstack-gateway nodes, meaning that the app is now reachable from the internet:
+---
 
-![app board](assets/app-board.png)
+### 5. Certificate Transparency Monitoring (Optional)
+
+Monitor for unauthorized certificates issued to your domain.
+
+```bash
+cargo build --release -p ct_monitor
+./target/release/ct_monitor \
+  --gateway-uri https://<gateway-domain> \
+  --domain <your-domain>
+```
+
+**How it works:**
+1. Fetches known public keys from Gateway (`/acme-info` endpoint)
+2. Queries crt.sh for certificates issued to your domain
+3. Verifies each certificate's public key matches the known keys
+4. Logs errors (❌) when certificates are issued to unknown public keys
+
+The monitor runs in a loop, checking every 60 seconds. Integrate with your alerting system by monitoring stderr for error messages.
+
+---
+
+### 6. Multi-Node Deployment (Optional)
+
+Scale by adding VMM nodes and KMS replicas for high availability.
+
+#### Adding VMM Nodes
+
+On each additional TDX host:
+1. Set up dstack-vmm (see step 1)
+2. Configure `vmm.toml` with existing KMS/Gateway URLs
+3. Start VMM
+
+```toml
+[cvm]
+kms_urls = ["https://kms.example.com:9201"]
+gateway_urls = ["https://gateway.example.com:9202"]
+```
+
+#### Adding KMS Replicas (Onboarding)
+
+Additional KMS instances can onboard from an existing KMS to share the same root keys. This enables:
+- High availability (multiple KMS nodes)
+- Geographic distribution
+- Load balancing
+
+**How it works:**
+
+1. New KMS starts in onboard mode (empty `auto_bootstrap_domain`)
+2. New KMS calls `GetTempCaCert` on source KMS
+3. New KMS generates RA-TLS certificate with TDX quote
+4. New KMS calls `GetKmsKey` with mTLS authentication
+5. Source KMS verifies attestation via `bootAuth/kms` webhook
+6. If approved, source KMS returns root keys
+7. Both KMS instances now derive identical keys
+
+**Configure new KMS for onboarding:**
+
+```toml
+[core.onboard]
+enabled = true
+auto_bootstrap_domain = ""   # Empty = onboard mode
+quote_enabled = true         # Require TDX attestation
+address = "0.0.0.0"
+port = 9203                  # HTTP port for onboard UI
+```
+
+**Trigger onboard via API:**
+
+```bash
+curl -X POST http://<new-kms>:9203/prpc/Onboard.Onboard?json \
+  -H "Content-Type: application/json" \
+  -d '{"source_url": "https://<existing-kms>:9201/prpc", "domain": "kms2.example.com"}'
+```
+
+**Finish and restart:**
+
+```bash
+curl http://<new-kms>:9203/finish
+# Restart KMS - it will now serve as a full KMS with shared keys
+```
+
+> **Note:** For KMS onboarding with `quote_enabled = true`, add the KMS mrAggregated hash to your auth server's `kms.mrAggregated` whitelist.
+
+---
+
+## Deploying Apps
+
+After setup, deploy apps via the VMM dashboard or CLI.
+
+### Register App
+
+Before deploying, register your app in your auth server:
+- For auth-simple: See [auth-simple Operations Guide](./auth-simple-operations.md#adding-an-app)
+- For auth-eth: See [On-Chain Governance](./onchain-governance.md#register-apps-on-chain)
+
+### Deploy via UI
+
+Open `http://localhost:9080`:
+
+![App Deploy](assets/app-deploy.png)
+
+- Select the OS image
+- Enter the App ID (from registration above)
+- Upload your `docker-compose.yaml`
+
+After startup, click **Dashboard** to view:
+
+![App Board](assets/app-board.png)
+
+---
+
+## Troubleshooting
+
+### Error: vhost-vsock: unable to set guest cid: Address already in use
+
+The CID range conflicts with existing VMs.
+
+1. Find used CIDs: `ps aux | grep 'guest-cid='`
+2. Update `vmm.toml`:
+   ```toml
+   [cvm]
+   cid_start = 33000
+   cid_pool_size = 1000
+   ```
+
+### Error: Operation not permitted when building guest image
+
+Ubuntu 23.10+ restricts unprivileged user namespaces:
+
+```bash
+sudo sysctl kernel.apparmor_restrict_unprivileged_userns=0
+```

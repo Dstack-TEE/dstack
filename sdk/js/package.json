@@ -87,7 +87,11 @@
     "test:ci": "vitest --run",
     "release": "npm run clean && npm run build && npm publish --access public"
   },
-  "keywords": ["sdk", "dstack", "Phala"],
+  "keywords": [
+    "sdk",
+    "dstack",
+    "Phala"
+  ],
   "author": "Leechael Yim",
   "license": "Apache-2.0",
   "dependencies": {
@@ -99,15 +103,13 @@
     "vitest": "^3.2.4"
   },
   "optionalDependencies": {
-    "viem": "^2.21.0 <3.0.0",
     "@noble/curves": "^1.8.1",
-    "@solana/web3.js": "^1.98.0"
+    "@solana/web3.js": "^1.98.4",
+    "viem": "^2.43.3"
   },
   "peerDependencies": {
-    "viem": "^2.21.0 <3.0.0",
     "@noble/curves": "^1.8.1",
-    "@noble/hashes": "^1.6.1",
-    "@solana/web3.js": "^1.98.0"
+    "@noble/hashes": "^1.6.1"
   },
   "peerDependenciesMeta": {
     "viem": {

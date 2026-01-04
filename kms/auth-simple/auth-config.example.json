@@ -1,0 +1,19 @@
+{
+  "osImages": [
+    "0x0b327bcd642788b0517de3ff46d31ebd3847b6c64ea40bacde268bb9f1c8ec83"
+  ],
+  "kms": {
+    "mrAggregated": [],
+    "devices": [],
+    "allowAnyDevice": true
+  },
+  "apps": {
+    "0xYourAppId": {
+      "composeHashes": [
+        "0xYourComposeHash"
+      ],
+      "devices": [],
+      "allowAnyDevice": true
+    }
+  }
+}

@@ -1,0 +1,61 @@
+# SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# KMS deployment with external auth-simple webhook
+# auth-simple runs outside the CVM (operator infrastructure)
+
+services:
+  kms:
+    image: ${KMS_IMAGE}
+    volumes:
+      - kms-volume:/kms
+      - /var/run/dstack.sock:/var/run/dstack.sock
+    ports:
+      - 8000:8000
+    restart: unless-stopped
+    configs:
+      - source: kms_config
+        target: /kms/kms.toml
+    command: sh -c 'mkdir -p /kms/certs /kms/images && exec dstack-kms -c /kms/kms.toml'
+
+volumes:
+  kms-volume:
+
+configs:
+  kms_config:
+    content: |
+      [rpc]
+      address = "0.0.0.0"
+      port = 8000
+
+      [rpc.tls]
+      key = "/kms/certs/rpc.key"
+      certs = "/kms/certs/rpc.crt"
+
+      [rpc.tls.mutual]
+      ca_certs = "/kms/certs/tmp-ca.crt"
+      mandatory = false
+
+      [core]
+      cert_dir = "/kms/certs"
+      admin_token_hash = "${ADMIN_TOKEN_HASH}"
+
+      [core.image]
+      verify = true
+      cache_dir = "/kms/images"
+      download_url = "${IMAGE_DOWNLOAD_URL}"
+      download_timeout = "2m"
+
+      [core.auth_api]
+      type = "webhook"
+
+      [core.auth_api.webhook]
+      url = "${AUTH_WEBHOOK_URL}"
+
+      [core.onboard]
+      enabled = true
+      auto_bootstrap_domain = ""
+      quote_enabled = true
+      address = "0.0.0.0"
+      port = 8000
