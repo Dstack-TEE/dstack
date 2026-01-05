@@ -29,4 +29,10 @@ jobs:
 
     - name: Ensure vmm UI build is clean
       run: |
-        test -z "$(git status --porcelain)"
+        if [ -n "$(git status --porcelain)" ]; then
+          echo "VMM UI build produced uncommitted changes."
+          echo "Run: cd vmm/ui && npm ci && npm run build"
+          echo "Then commit the updated build output `vmm/src/console_v1.html`"
+          git status --porcelain
+          exit 1
+        fi
