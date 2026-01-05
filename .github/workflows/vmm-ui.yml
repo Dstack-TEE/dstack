@@ -1,0 +1,41 @@
+# SPDX-FileCopyrightText: © 2024-2025 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+name: VMM UI build
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: [ master, next, dev-* ]
+  pull_request:
+    branches: [ master, next, dev-* ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+
+    - name: Build vmm UI
+      run: |
+        npm ci
+        npm run build
+      working-directory: vmm/ui
+
+    - name: Ensure vmm UI build is clean
+      run: |
+        if [ -n "$(git status --porcelain)" ]; then
+          echo "VMM UI build produced uncommitted changes."
+          echo "Run: cd vmm/ui && npm ci && npm run build"
+          echo "Then commit the updated build output `vmm/src/console_v1.html`"
+          git status --porcelain
+          exit 1
+        fi
