@@ -4,6 +4,9 @@
 
 name: VMM UI build
 
+permissions:
+  contents: read
+
 on:
   push:
     branches: [ master, next, dev-* ]
