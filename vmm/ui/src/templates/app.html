@@ -18,41 +18,43 @@ SPDX-License-Identifier: Apache-2.0
       <div class="header-right">
         <button class="btn-primary" @click="showDeployDialog()">
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-            <path d="M8 3V13M3 8H13" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            <path d="M8 3V13M3 8H13" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
           </svg>
           Deploy Instance
         </button>
         <div class="system-menu">
           <button class="btn-icon system-menu-btn" @click="toggleSystemMenu($event)" title="System Menu">
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-              <path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+              <path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
             </svg>
           </button>
           <div class="dropdown-menu system-dropdown" :class="{ 'show': systemMenu.show }" @click.stop>
             <button class="dropdown-item" @click="reloadVMs(); closeSystemMenu()">
               <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                <path d="M1 7a6 6 0 1 0 6-6M7 1v6l3 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                <path d="M1 7a6 6 0 1 0 6-6M7 1v6l3 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"
+                  stroke-linejoin="round" />
               </svg>
               Reload VMs
             </button>
             <button class="dropdown-item" @click="openApiDocs()">
               <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                <path d="M3 3h8v8H3z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>
-                <path d="M5 5h4M5 7h4M5 9h2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+                <path d="M3 3h8v8H3z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" />
+                <path d="M5 5h4M5 7h4M5 9h2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" />
               </svg>
               API Docs
             </button>
             <button class="dropdown-item" @click="openLegacyUi()">
               <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                <path d="M3 3h8v8H3z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>
-                <path d="M4.5 6.5l1.5 1.5 3.5-3.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+                <path d="M3 3h8v8H3z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" />
+                <path d="M4.5 6.5l1.5 1.5 3.5-3.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"
+                  stroke-linejoin="round" />
               </svg>
               Legacy UI
             </button>
             <button class="dropdown-item" @click="toggleDevMode()">
               <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                <path d="M7 2v3M7 9v3M4 7H2M12 7h-2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
-                <circle cx="7" cy="7" r="2.5" stroke="currentColor" stroke-width="1.3"/>
+                <path d="M7 2v3M7 9v3M4 7H2M12 7h-2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" />
+                <circle cx="7" cy="7" r="2.5" stroke="currentColor" stroke-width="1.3" />
               </svg>
               Dev Mode: <strong>{{ devMode ? 'On' : 'Off' }}</strong>
             </button>
@@ -62,47 +64,26 @@ SPDX-License-Identifier: Apache-2.0
     </div>
   </header>
 
-  <create-vm-dialog
-    :visible="showCreateDialog"
-    :form="vmForm"
-    :available-images="availableImages"
-    :available-gpus="availableGpus"
-    :allow-attach-all-gpus="allowAttachAllGpus"
-    :kms-available="vmForm.kms_enabled"
-    :port-mapping-enabled="config.portMappingEnabled"
-    @close="showCreateDialog = false"
-    @submit="createVm"
-    @load-compose="loadComposeFile"
-  />
+  <create-vm-dialog :visible="showCreateDialog" :form="vmForm" :available-images="availableImages"
+    :available-gpus="availableGpus" :allow-attach-all-gpus="allowAttachAllGpus" :kms-available="vmForm.kms_enabled"
+    :port-mapping-enabled="config.portMappingEnabled" @close="showCreateDialog = false" @submit="createVm"
+    @load-compose="loadComposeFile" />
 
-  <update-vm-dialog
-    :visible="updateDialog.show"
-    :dialog="updateDialog"
-    :available-images="availableImages"
-    :available-gpus="availableGpus"
-    :allow-attach-all-gpus="allowAttachAllGpus"
-    :port-mapping-enabled="config.portMappingEnabled"
-    :kms-enabled="kmsEnabled(updateDialog.vm || {})"
-    :compose-hash-preview="updateComposeHashPreview"
-    @close="updateDialog.show = false"
-    @submit="updateVM"
-    @load-compose="loadUpdateFile"
-  />
+  <update-vm-dialog :visible="updateDialog.show" :dialog="updateDialog" :available-images="availableImages"
+    :available-gpus="availableGpus" :allow-attach-all-gpus="allowAttachAllGpus"
+    :port-mapping-enabled="config.portMappingEnabled" :kms-enabled="kmsEnabled(updateDialog.vm || {})"
+    :compose-hash-preview="updateComposeHashPreview" @close="updateDialog.show = false" @submit="updateVM"
+    @load-compose="loadUpdateFile" />
 
-  <fork-vm-dialog
-    :visible="cloneConfigDialog.show"
-    :dialog="cloneConfigDialog"
-    :available-images="availableImages"
-    @close="cloneConfigDialog.show = false"
-    @submit="cloneConfig"
-  />
+  <fork-vm-dialog :visible="cloneConfigDialog.show" :dialog="cloneConfigDialog" :available-images="availableImages"
+    @close="cloneConfigDialog.show = false" @submit="cloneConfig" />
 
   <div class="toolbar">
     <div class="toolbar-section">
       <div class="search-box">
         <svg class="search-icon" width="16" height="16" viewBox="0 0 16 16" fill="none">
-          <circle cx="7" cy="7" r="5" stroke="currentColor" stroke-width="1.5"/>
-          <path d="M11 11L14 14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          <circle cx="7" cy="7" r="5" stroke="currentColor" stroke-width="1.5" />
+          <path d="M11 11L14 14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
         </svg>
         <input type="text" v-model="searchQuery" placeholder="Search instances..." @keyup.enter="loadVMList()">
         <button class="btn-search" @click="loadVMList()">Search</button>
@@ -116,17 +97,20 @@ SPDX-License-Identifier: Apache-2.0
       <div class="pagination-controls">
         <button class="btn-pagination" @click="prevPage()" :disabled="currentPage === 1">
           <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-            <path d="M9 3L5 7L9 11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M9 3L5 7L9 11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"
+              stroke-linejoin="round" />
           </svg>
         </button>
         <div class="page-display">
-          <input type="number" v-model.number="pageInput" min="1" :max="maxPage" @keyup.enter="goToPage()" class="page-input">
+          <input type="number" v-model.number="pageInput" min="1" :max="maxPage" @keyup.enter="goToPage()"
+            class="page-input">
           <span class="page-separator">/</span>
           <span class="page-total">{{ maxPage || 1 }}</span>
         </div>
         <button class="btn-pagination" @click="nextPage()" :disabled="!hasMorePages">
           <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-            <path d="M5 3L9 7L5 11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M5 3L9 7L5 11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"
+              stroke-linejoin="round" />
           </svg>
         </button>
         <select v-model="pageSize" @change="onPageSizeChange()" class="page-size-select">
@@ -154,7 +138,8 @@ SPDX-License-Identifier: Apache-2.0
         <div class="vm-col-expand" @click.stop>
           <button class="btn-expand" @click="toggleDetails(vm)" :class="{ expanded: expandedVMs.has(vm.id) }">
             <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-              <path :d="expandedVMs.has(vm.id) ? 'M3 9L7 5L11 9' : 'M3 5L7 9L11 5'" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+              <path :d="expandedVMs.has(vm.id) ? 'M3 9L7 5L11 9' : 'M3 5L7 9L11 5'" stroke="currentColor"
+                stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
             </svg>
           </button>
         </div>
@@ -177,47 +162,50 @@ SPDX-License-Identifier: Apache-2.0
           <div class="dropdown">
             <button class="btn-actions" @click="toggleDropdown($event, vm)">
               <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                <circle cx="8" cy="4" r="1.5" fill="currentColor"/>
-                <circle cx="8" cy="8" r="1.5" fill="currentColor"/>
-                <circle cx="8" cy="12" r="1.5" fill="currentColor"/>
+                <circle cx="8" cy="4" r="1.5" fill="currentColor" />
+                <circle cx="8" cy="8" r="1.5" fill="currentColor" />
+                <circle cx="8" cy="12" r="1.5" fill="currentColor" />
               </svg>
             </button>
             <div class="dropdown-content" :id="'dropdown-' + vm.id">
               <button @click="startVm(vm.id); closeAllDropdowns()">
                 <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                  <path d="M4 2L11 7L4 12V2Z" fill="currentColor"/>
+                  <path d="M4 2L11 7L4 12V2Z" fill="currentColor" />
                 </svg>
                 Start
               </button>
               <button @click="shutdownVm(vm.id); closeAllDropdowns()">
                 <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                  <rect x="3" y="3" width="8" height="8" fill="currentColor"/>
+                  <rect x="3" y="3" width="8" height="8" fill="currentColor" />
                 </svg>
                 Shutdown
               </button>
               <button @click="stopVm(vm); closeAllDropdowns()">
                 <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                  <path d="M2 2L12 12M12 2L2 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                  <path d="M2 2L12 12M12 2L2 12" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
                 </svg>
                 Kill
               </button>
               <button @click="removeVm(vm); closeAllDropdowns()">
                 <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                  <path d="M5 1h4M1 3h12M11 3l-.5 8.5c-.1.8-.7 1.5-1.5 1.5H5c-.8 0-1.4-.7-1.5-1.5L3 3M5.5 5.5v5M8.5 5.5v5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+                  <path
+                    d="M5 1h4M1 3h12M11 3l-.5 8.5c-.1.8-.7 1.5-1.5 1.5H5c-.8 0-1.4-.7-1.5-1.5L3 3M5.5 5.5v5M8.5 5.5v5"
+                    stroke="currentColor" stroke-width="1.2" stroke-linecap="round" />
                 </svg>
                 Remove
               </button>
               <button @click="showUpdateDialog(vm); closeAllDropdowns()">
                 <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                  <path d="M7 11V3M7 3L4 6M7 3l3 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-                  <path d="M2 13h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                  <path d="M7 11V3M7 3L4 6M7 3l3 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"
+                    stroke-linejoin="round" />
+                  <path d="M2 13h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
                 </svg>
                 Update
               </button>
               <button @click="showCloneConfig(vm); closeAllDropdowns()">
                 <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                  <rect x="4" y="4" width="8" height="8" rx="1" stroke="currentColor" stroke-width="1.5"/>
-                  <path d="M10 2H3c-.6 0-1 .4-1 1v7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                  <rect x="4" y="4" width="8" height="8" rx="1" stroke="currentColor" stroke-width="1.5" />
+                  <path d="M10 2H3c-.6 0-1 .4-1 1v7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
                 </svg>
                 Clone Config
               </button>
@@ -234,8 +222,8 @@ SPDX-License-Identifier: Apache-2.0
               <span class="detail-value" :title="vm.id">{{ vm.id }}</span>
               <button class="copy-btn" @click="copyToClipboard(vm.id)" title="Copy">
                 <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                  <rect x="4" y="4" width="8" height="8" rx="1" stroke="currentColor" stroke-width="1.2"/>
-                  <path d="M10 2H3c-.6 0-1 .4-1 1v7" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+                  <rect x="4" y="4" width="8" height="8" rx="1" stroke="currentColor" stroke-width="1.2" />
+                  <path d="M10 2H3c-.6 0-1 .4-1 1v7" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" />
                 </svg>
               </button>
             </div>
@@ -246,8 +234,8 @@ SPDX-License-Identifier: Apache-2.0
               <span class="detail-value" :title="vm.instance_id">{{ vm.instance_id }}</span>
               <button class="copy-btn" @click="copyToClipboard(vm.instance_id)" title="Copy">
                 <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                  <rect x="4" y="4" width="8" height="8" rx="1" stroke="currentColor" stroke-width="1.2"/>
-                  <path d="M10 2H3c-.6 0-1 .4-1 1v7" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+                  <rect x="4" y="4" width="8" height="8" rx="1" stroke="currentColor" stroke-width="1.2" />
+                  <path d="M10 2H3c-.6 0-1 .4-1 1v7" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" />
                 </svg>
               </button>
             </div>
@@ -259,8 +247,8 @@ SPDX-License-Identifier: Apache-2.0
               <span class="detail-value" :title="vm.app_id">{{ vm.app_id }}</span>
               <button class="copy-btn" @click="copyToClipboard(vm.app_id)" title="Copy">
                 <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                  <rect x="4" y="4" width="8" height="8" rx="1" stroke="currentColor" stroke-width="1.2"/>
-                  <path d="M10 2H3c-.6 0-1 .4-1 1v7" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+                  <rect x="4" y="4" width="8" height="8" rx="1" stroke="currentColor" stroke-width="1.2" />
+                  <path d="M10 2H3c-.6 0-1 .4-1 1v7" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" />
                 </svg>
               </button>
             </div>
@@ -302,12 +290,9 @@ SPDX-License-Identifier: Apache-2.0
               </span>
             </div>
             <div v-else-if="vm.configuration.gpus?.gpus?.length" class="gpu-chip-list">
-              <span
-                class="gpu-chip"
-                v-for="(gpu, index) in vm.configuration.gpus.gpus"
+              <span class="gpu-chip" v-for="(gpu, index) in vm.configuration.gpus.gpus"
                 :key="gpu.slot || gpu.product_id || index"
-                :title="gpu.description || gpu.slot || gpu.product_id || ('GPU #' + (index + 1))"
-              >
+                :title="gpu.description || gpu.slot || gpu.product_id || ('GPU #' + (index + 1))">
                 {{ gpu.slot || gpu.product_id || ('GPU #' + (index + 1)) }}
               </span>
             </div>
@@ -320,7 +305,11 @@ SPDX-License-Identifier: Apache-2.0
         <div v-if="vm.configuration?.ports?.length" class="port-mappings">
           <h4>Port Mappings</h4>
           <div v-for="(port, index) in vm.configuration.ports" :key="index" class="port-item">
-            <span>{{ port.host_address === '127.0.0.1' ? 'Local' : 'Public' }}</span>
+            <span>{{
+              port.host_address === '127.0.0.1'
+              ? 'Local'
+              : (port.host_address === '0.0.0.0' ? 'Public' : port.host_address)
+              }}</span>
             <span>{{ port.protocol.toUpperCase() }}: {{ port.host_port }} → {{ port.vm_port }}</span>
           </div>
         </div>
@@ -337,8 +326,8 @@ SPDX-License-Identifier: Apache-2.0
               <div class="interface-header">
                 <div class="interface-name">
                   <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                    <rect x="2" y="3" width="12" height="10" rx="1" stroke="currentColor" stroke-width="1.5"/>
-                    <path d="M2 6h12M5 3v3M11 3v3" stroke="currentColor" stroke-width="1.5"/>
+                    <rect x="2" y="3" width="12" height="10" rx="1" stroke="currentColor" stroke-width="1.5" />
+                    <path d="M2 6h12M5 3v3M11 3v3" stroke="currentColor" stroke-width="1.5" />
                   </svg>
                   <span>{{ iface.name }}</span>
                 </div>
@@ -350,13 +339,15 @@ SPDX-License-Identifier: Apache-2.0
                 </div>
                 <div class="interface-detail-row">
                   <span class="detail-label">IP Address</span>
-                  <span class="detail-value">{{ iface.addresses.map(addr => addr.address + '/' + addr.prefix).join(', ') || '-' }}</span>
+                  <span class="detail-value">{{ iface.addresses.map(addr => addr.address + '/' + addr.prefix).join(', ')
+                    || '-' }}</span>
                 </div>
                 <div class="interface-stats">
                   <div class="stat-item">
                     <div class="stat-icon rx">
                       <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-                        <path d="M6 2v8M3 7l3 3 3-3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                        <path d="M6 2v8M3 7l3 3 3-3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"
+                          stroke-linejoin="round" />
                       </svg>
                     </div>
                     <div class="stat-content">
@@ -368,7 +359,8 @@ SPDX-License-Identifier: Apache-2.0
                   <div class="stat-item">
                     <div class="stat-icon tx">
                       <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-                        <path d="M6 10V2M3 5l3-3 3 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                        <path d="M6 10V2M3 5l3-3 3 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"
+                          stroke-linejoin="round" />
                       </svg>
                     </div>
                     <div class="stat-content">
@@ -384,8 +376,8 @@ SPDX-License-Identifier: Apache-2.0
           <div v-if="networkInfo[vm.id].wg_info" class="wireguard-section">
             <h4 class="section-title">
               <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                <circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.5"/>
-                <path d="M8 5v3l2 2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                <circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.5" />
+                <path d="M8 5v3l2 2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
               </svg>
               WireGuard Info
             </h4>
@@ -397,16 +389,18 @@ SPDX-License-Identifier: Apache-2.0
           <div class="section-header">
             <h4>App Compose</h4>
             <div class="section-actions">
-              <button class="copy-btn-small" @click="copyToClipboard(vm.appCompose?.docker_compose_file || '')" title="Copy Docker Compose">
+              <button class="copy-btn-small" @click="copyToClipboard(vm.appCompose?.docker_compose_file || '')"
+                title="Copy Docker Compose">
                 <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                  <rect x="4" y="4" width="8" height="8" rx="1" stroke="currentColor" stroke-width="1.2"/>
-                  <path d="M10 2H3c-.6 0-1 .4-1 1v7" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+                  <rect x="4" y="4" width="8" height="8" rx="1" stroke="currentColor" stroke-width="1.2" />
+                  <path d="M10 2H3c-.6 0-1 .4-1 1v7" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" />
                 </svg>
               </button>
               <button class="action-btn" @click="downloadAppCompose(vm)">
                 <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                  <path d="M7 2v8M7 10l3-3M7 10L4 7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-                  <path d="M2 12h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                  <path d="M7 2v8M7 10l3-3M7 10L4 7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"
+                    stroke-linejoin="round" />
+                  <path d="M2 12h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
                 </svg>
                 Download
               </button>
@@ -422,8 +416,9 @@ SPDX-License-Identifier: Apache-2.0
             <h4>User Config</h4>
             <button class="action-btn" @click="downloadUserConfig(vm)">
               <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                <path d="M7 2v8M7 10l3-3M7 10L4 7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-                <path d="M2 12h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                <path d="M7 2v8M7 10l3-3M7 10L4 7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"
+                  stroke-linejoin="round" />
+                <path d="M2 12h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
               </svg>
               Download
             </button>
