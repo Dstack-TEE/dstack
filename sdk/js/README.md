@@ -562,7 +562,6 @@ Generates a TDX attestation quote containing the provided report data.
 Generates a fresh, random TLS key pair with X.509 certificate for TLS/SSL connections. **Important**: This method generates different keys on each call - use `getKey()` for deterministic keys.
 
 **Parameters:** `TlsKeyOptions`
-- `path` (optional): Path parameter (unused in current implementation)
 - `subject` (optional): Certificate subject (Common Name) - typically the domain name (default: `""`)
 - `altNames` (optional): Subject Alternative Names - additional domains/IPs for the certificate (default: `[]`)
 - `usageRaTls` (optional): Include TDX attestation quote in certificate extension for remote verification (default: `false`)
