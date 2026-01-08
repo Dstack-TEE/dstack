@@ -1773,11 +1773,11 @@ const PortMappingEditorComponent = {
     props: {
         ports: { type: Array, required: true },
     },
-    // ✅ NEW: normalize on initial load
+    // normalize on initial load
     created() {
         this.ports.forEach((p) => this.normalizePort(p));
     },
-    // ✅ NEW: normalize again if parent replaces ports array (e.g. after refresh)
+    // normalize again if parent replaces ports array (e.g. after refresh)
     watch: {
         ports: {
             deep: true,
@@ -1817,7 +1817,7 @@ const PortMappingEditorComponent = {
     </div>
   `,
     methods: {
-        // ✅ NEW: derives mode + custom_ip from host_address when editing existing VMs
+        // derives mode + custom_ip from host_address when editing existing VMs
         normalizePort(port) {
             // If mode already set, keep it (don’t fight the user while editing)
             if (port.host_address_mode)
