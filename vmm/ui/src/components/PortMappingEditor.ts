@@ -3,7 +3,7 @@
 
 type PortEntry = {
   protocol: string;
-  host_address: string;          // Actual address sent to backend
+  host_address: string;
   host_address_mode?: string;    // "local" | "public" | "custom"
   host_port: number | null;
   vm_port: number | null;
@@ -23,12 +23,12 @@ const PortMappingEditorComponent = {
     ports: { type: Array, required: true },
   },
 
-  // ✅ NEW: normalize on initial load
+  // normalize on initial load
   created(this: ComponentInstance) {
     this.ports.forEach((p) => this.normalizePort(p));
   },
 
-  // ✅ NEW: normalize again if parent replaces ports array (e.g. after refresh)
+  // normalize again if parent replaces ports array (e.g. after refresh)
   watch: {
     ports: {
       deep: true,
@@ -70,7 +70,7 @@ const PortMappingEditorComponent = {
   `,
 
   methods: {
-    // ✅ NEW: derives mode + custom_ip from host_address when editing existing VMs
+    // derives mode + custom_ip from host_address when editing existing VMs
     normalizePort(this: ComponentInstance, port: PortEntry) {
       // If mode already set, keep it (don’t fight the user while editing)
       if (port.host_address_mode) return;
