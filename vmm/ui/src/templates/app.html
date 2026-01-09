@@ -320,7 +320,11 @@ SPDX-License-Identifier: Apache-2.0
         <div v-if="vm.configuration?.ports?.length" class="port-mappings">
           <h4>Port Mappings</h4>
           <div v-for="(port, index) in vm.configuration.ports" :key="index" class="port-item">
-            <span>{{ port.host_address === '127.0.0.1' ? 'Local' : 'Public' }}</span>
+            <span>{{
+              port.host_address === '127.0.0.1'
+              ? 'Local'
+              : (port.host_address === '0.0.0.0' ? 'Public' : port.host_address)
+              }}</span>
             <span>{{ port.protocol.toUpperCase() }}: {{ port.host_port }} → {{ port.vm_port }}</span>
           </div>
         </div>
