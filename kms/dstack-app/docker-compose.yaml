@@ -8,7 +8,7 @@ services:
     build:
       context: .
       dockerfile_inline: |
-        FROM rust:1.86-alpine@sha256:661d708cc863ce32007cf46807a72062a80d2944a6fae9e0d83742d2e04d5375
+        FROM rust:1.92.0@sha256:48851a839d6a67370c9dbe0e709bedc138e3e404b161c5233aedcf2b717366e4
         WORKDIR /app
         RUN apk add --no-cache git build-base openssl-dev protobuf protobuf-dev perl
         RUN git clone https://github.com/a16z/helios && \
@@ -57,7 +57,7 @@ services:
     build:
       context: .
       dockerfile_inline: |
-        FROM rust:1.86.0@sha256:300ec56abce8cc9448ddea2172747d048ed902a3090e6b57babb2bf19f754081
+        FROM rust:1.92.0@sha256:48851a839d6a67370c9dbe0e709bedc138e3e404b161c5233aedcf2b717366e4
         WORKDIR /app
         RUN apt-get update && apt-get install -y \
             git \
