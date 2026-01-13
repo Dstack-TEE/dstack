@@ -76,7 +76,6 @@ struct AppInfo {
     os_image_hash: Vec<u8>,
 }
 
-
 #[derive(Debug, Deserialize)]
 struct AcmeInfoResponse {
     #[allow(dead_code)]
