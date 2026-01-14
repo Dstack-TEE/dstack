@@ -17,7 +17,6 @@ use ra_tls::{
     kdf::{derive_ecdsa_key, derive_ecdsa_key_pair_from_bytes},
     rcgen::KeyPair,
 };
-use scale::Decode;
 use serde::Deserialize;
 use std::{collections::HashMap, path::Path};
 use std::{
@@ -235,41 +234,6 @@ fn cmd_rand(rand_args: RandArgs) -> Result<()> {
         .write_all(&data)
         .context("Failed to write random data")?;
     Ok(())
-}
-
-#[derive(Decode)]
-struct ParsedReport {
-    attributes: [u8; 8],
-    xfam: [u8; 8],
-    mrtd: [u8; 48],
-    mrconfigid: [u8; 48],
-    mrowner: [u8; 48],
-    mrownerconfig: [u8; 48],
-    rtmr0: [u8; 48],
-    rtmr1: [u8; 48],
-    rtmr2: [u8; 48],
-    rtmr3: [u8; 48],
-    servtd_hash: [u8; 48],
-}
-
-impl core::fmt::Debug for ParsedReport {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        use hex_fmt::HexFmt as HF;
-
-        f.debug_struct("ParsedReport")
-            .field("attributes", &HF(&self.attributes))
-            .field("xfam", &HF(&self.xfam))
-            .field("mrtd", &HF(&self.mrtd))
-            .field("mrconfigid", &HF(&self.mrconfigid))
-            .field("mrowner", &HF(&self.mrowner))
-            .field("mrownerconfig", &HF(&self.mrownerconfig))
-            .field("rtmr0", &HF(&self.rtmr0))
-            .field("rtmr1", &HF(&self.rtmr1))
-            .field("rtmr2", &HF(&self.rtmr2))
-            .field("rtmr3", &HF(&self.rtmr3))
-            .field("servtd_hash", &HF(&self.servtd_hash))
-            .finish()
-    }
 }
 
 fn cmd_show_mrs() -> Result<()> {

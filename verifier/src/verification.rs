@@ -760,27 +760,3 @@ impl Mrs {
         Ok(())
     }
 }
-
-mod upgrade_authority {
-    use serde::{Deserialize, Serialize};
-
-    #[derive(Debug, Serialize, Deserialize, Clone, Eq, PartialEq)]
-    pub struct BootInfo {
-        pub mrtd: Vec<u8>,
-        pub rtmr0: Vec<u8>,
-        pub rtmr1: Vec<u8>,
-        pub rtmr2: Vec<u8>,
-        pub rtmr3: Vec<u8>,
-        pub mr_aggregated: Vec<u8>,
-        pub os_image_hash: Vec<u8>,
-        pub mr_system: Vec<u8>,
-        pub app_id: Vec<u8>,
-        pub compose_hash: Vec<u8>,
-        pub instance_id: Vec<u8>,
-        pub device_id: Vec<u8>,
-        pub key_provider_info: Vec<u8>,
-        pub event_log: String,
-        pub tcb_status: String,
-        pub advisory_ids: Vec<String>,
-    }
-}

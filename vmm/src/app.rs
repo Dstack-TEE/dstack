@@ -123,7 +123,7 @@ pub struct App {
 }
 
 impl App {
-    fn lock(&self) -> MutexGuard<AppState> {
+    fn lock(&self) -> MutexGuard<'_, AppState> {
         self.state.lock().or_panic("mutex poisoned")
     }
 
