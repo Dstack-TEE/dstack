@@ -12,7 +12,7 @@ remappings = [
     "forge-std/=lib/forge-std/src/",
     "openzeppelin-foundry-upgrades/=lib/openzeppelin-foundry-upgrades/src/"
 ]
-solc_version = "0.8.22"
+solc_version = "0.8.24"
 optimizer = true
 optimizer_runs = 200
 via_ir = false
@@ -21,7 +21,7 @@ build_info = true
 extra_output = ["storageLayout"]
 
 [profile.ci]
-fuzz_runs = 10_000
+fuzz = { runs = 10_000 }
 
 [fmt]
 bracket_spacing = true

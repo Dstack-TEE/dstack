@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-pragma solidity ^0.8.22;
+pragma solidity ^0.8.24;
 
 import "./IAppAuth.sol";
 import "./IAppAuthBasicManagement.sol";
