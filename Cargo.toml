@@ -99,7 +99,7 @@ log = "0.4.26"
 notify = "8.0.0"
 rand = "0.8.5"
 tracing = "0.1.40"
-tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
 safe-write = "0.1.2"
 nix = "0.29.0"
 sd-notify = "0.4.5"
