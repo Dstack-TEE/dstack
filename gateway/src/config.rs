@@ -209,6 +209,14 @@ pub struct CertbotConfig {
     /// Maximum time to wait for DNS propagation
     #[serde(with = "serde_duration")]
     pub max_dns_wait: Duration,
+    /// TTL for DNS TXT records used in ACME challenges (in seconds).
+    /// Minimum is 60 for Cloudflare. Lower TTL means faster DNS propagation.
+    #[serde(default = "default_dns_txt_ttl")]
+    pub dns_txt_ttl: u32,
+}
+
+fn default_dns_txt_ttl() -> u32 {
+    60
 }
 
 impl CertbotConfig {
@@ -228,6 +236,7 @@ impl CertbotConfig {
             .renew_expires_in(self.renew_before_expiration)
             .auto_set_caa(self.auto_set_caa)
             .max_dns_wait(self.max_dns_wait)
+            .dns_txt_ttl(self.dns_txt_ttl)
             .build()
     }
 

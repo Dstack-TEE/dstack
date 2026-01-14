@@ -38,6 +38,9 @@ renew_interval = "1h"
 renew_before_expiration = "10d"
 renew_timeout = "120s"
 max_dns_wait = "5m"
+# TTL for DNS TXT records used in ACME challenges (in seconds).
+# Minimum is 60 for Cloudflare.
+dns_txt_ttl = 60
 
 [core.wg]
 public_key = ""

@@ -28,6 +28,8 @@ pub struct AcmeClient {
     credentials: Credentials,
     dns01_client: Dns01Client,
     max_dns_wait: Duration,
+    /// TTL for DNS TXT records used in ACME challenges (in seconds).
+    dns_txt_ttl: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -58,6 +60,7 @@ impl AcmeClient {
         dns01_client: Dns01Client,
         encoded_credentials: &str,
         max_dns_wait: Duration,
+        dns_txt_ttl: u32,
     ) -> Result<Self> {
         let credentials: Credentials = serde_json::from_str(encoded_credentials)?;
         let account = Account::from_credentials(credentials.credentials).await?;
@@ -67,6 +70,7 @@ impl AcmeClient {
             dns01_client,
             credentials,
             max_dns_wait,
+            dns_txt_ttl,
         })
     }
 
@@ -75,6 +79,7 @@ impl AcmeClient {
         acme_url: &str,
         dns01_client: Dns01Client,
         max_dns_wait: Duration,
+        dns_txt_ttl: u32,
     ) -> Result<Self> {
         let (account, credentials) = Account::create(
             &NewAccount {
@@ -97,6 +102,7 @@ impl AcmeClient {
             dns01_client,
             credentials,
             max_dns_wait,
+            dns_txt_ttl,
         })
     }
 
@@ -328,10 +334,13 @@ impl AcmeClient {
                 .remove_txt_records(&acme_domain)
                 .await
                 .context("failed to remove existing dns record")?;
-            debug!("creating TXT record for {acme_domain}");
+            debug!(
+                "creating TXT record for {acme_domain} with TTL {}s",
+                self.dns_txt_ttl
+            );
             let id = self
                 .dns01_client
-                .add_txt_record(&acme_domain, &dns_value)
+                .add_txt_record(&acme_domain, &dns_value, self.dns_txt_ttl)
                 .await
                 .context("failed to create dns record")?;
             challenges.push(Challenge {
