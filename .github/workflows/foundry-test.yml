@@ -15,6 +15,9 @@ on:
       - '.github/workflows/foundry-test.yml'
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 env:
   FOUNDRY_PROFILE: ci
 
