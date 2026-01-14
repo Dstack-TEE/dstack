@@ -16,12 +16,10 @@ abstract contract BaseScript is Script {
     DstackApp public app;
 
     function setUp() public virtual {
-        // Load from environment or use defaults
         address kmsAddr = vm.envOr("KMS_CONTRACT_ADDR", address(0));
         require(kmsAddr != address(0), "KMS_CONTRACT_ADDR not set");
         kms = DstackKms(kmsAddr);
 
-        // App address is optional for some scripts
         address appAddr = vm.envOr("APP_CONTRACT_ADDR", address(0));
         if (appAddr != address(0)) {
             app = DstackApp(appAddr);
@@ -34,7 +32,7 @@ contract AddKmsAggregatedMr is BaseScript {
     function run() external {
         bytes32 mrAggregated = vm.envBytes32("MR_AGGREGATED");
 
-        vm.startBroadcast();
+        vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
         kms.addKmsAggregatedMr(mrAggregated);
         vm.stopBroadcast();
 
@@ -46,7 +44,7 @@ contract RemoveKmsAggregatedMr is BaseScript {
     function run() external {
         bytes32 mrAggregated = vm.envBytes32("MR_AGGREGATED");
 
-        vm.startBroadcast();
+        vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
         kms.removeKmsAggregatedMr(mrAggregated);
         vm.stopBroadcast();
 
@@ -58,7 +56,7 @@ contract AddOsImage is BaseScript {
     function run() external {
         bytes32 imageHash = vm.envBytes32("OS_IMAGE_HASH");
 
-        vm.startBroadcast();
+        vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
         kms.addOsImageHash(imageHash);
         vm.stopBroadcast();
 
@@ -70,7 +68,7 @@ contract AddKmsDevice is BaseScript {
     function run() external {
         bytes32 deviceId = vm.envBytes32("DEVICE_ID");
 
-        vm.startBroadcast();
+        vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
         kms.addKmsDevice(deviceId);
         vm.stopBroadcast();
 
@@ -82,7 +80,7 @@ contract SetGatewayAppId is BaseScript {
     function run() external {
         string memory gatewayId = vm.envString("GATEWAY_APP_ID");
 
-        vm.startBroadcast();
+        vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
         kms.setGatewayAppId(gatewayId);
         vm.stopBroadcast();
 
@@ -97,7 +95,7 @@ contract SetKmsInfo is BaseScript {
         bytes memory quote = vm.envBytes("QUOTE");
         bytes memory eventlog = vm.envBytes("EVENTLOG");
 
-        vm.startBroadcast();
+        vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
         kms.setKmsInfo(
             DstackKms.KmsInfo({ k256Pubkey: k256Pubkey, caPubkey: caPubkey, quote: quote, eventlog: eventlog })
         );
@@ -117,7 +115,7 @@ contract AddComposeHash is BaseScript {
         require(address(app) != address(0), "APP_CONTRACT_ADDR not set");
         bytes32 composeHash = vm.envBytes32("COMPOSE_HASH");
 
-        vm.startBroadcast();
+        vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
         app.addComposeHash(composeHash);
         vm.stopBroadcast();
 
@@ -130,7 +128,7 @@ contract AddDevice is BaseScript {
         require(address(app) != address(0), "APP_CONTRACT_ADDR not set");
         bytes32 deviceId = vm.envBytes32("DEVICE_ID");
 
-        vm.startBroadcast();
+        vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
         app.addDevice(deviceId);
         vm.stopBroadcast();
 
@@ -143,7 +141,7 @@ contract SetAllowAnyDevice is BaseScript {
         require(address(app) != address(0), "APP_CONTRACT_ADDR not set");
         bool allow = vm.envBool("ALLOW_ANY_DEVICE");
 
-        vm.startBroadcast();
+        vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
         app.setAllowAnyDevice(allow);
         vm.stopBroadcast();
 
@@ -154,13 +152,14 @@ contract SetAllowAnyDevice is BaseScript {
 // Factory Deployment
 contract DeployApp is BaseScript {
     function run() external returns (address) {
-        address owner = vm.envOr("APP_OWNER", msg.sender);
+        uint256 pk = vm.envUint("PRIVATE_KEY");
+        address owner = vm.envOr("APP_OWNER", vm.addr(pk));
         bool disableUpgrades = vm.envOr("DISABLE_UPGRADES", false);
         bool allowAnyDevice = vm.envOr("ALLOW_ANY_DEVICE", true);
         bytes32 deviceId = vm.envOr("INITIAL_DEVICE_ID", bytes32(0));
         bytes32 composeHash = vm.envOr("INITIAL_COMPOSE_HASH", bytes32(0));
 
-        vm.startBroadcast();
+        vm.startBroadcast(pk);
         address appAddr = kms.deployAndRegisterApp(owner, disableUpgrades, allowAnyDevice, deviceId, composeHash);
         vm.stopBroadcast();
 
@@ -199,7 +198,7 @@ contract BatchKmsSetup is BaseScript {
         bytes32[] memory osImages = vm.envOr("OS_IMAGE_LIST", ",", new bytes32[](0));
         bytes32[] memory devices = vm.envOr("DEVICE_LIST", ",", new bytes32[](0));
 
-        vm.startBroadcast();
+        vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
 
         // Set gateway ID if provided
         if (bytes(gatewayId).length > 0) {
@@ -237,7 +236,7 @@ contract RemoveOsImage is BaseScript {
     function run() external {
         bytes32 imageHash = vm.envBytes32("OS_IMAGE_HASH");
 
-        vm.startBroadcast();
+        vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
         kms.removeOsImageHash(imageHash);
         vm.stopBroadcast();
 
@@ -249,7 +248,7 @@ contract RemoveKmsDevice is BaseScript {
     function run() external {
         bytes32 deviceId = vm.envBytes32("DEVICE_ID");
 
-        vm.startBroadcast();
+        vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
         kms.removeKmsDevice(deviceId);
         vm.stopBroadcast();
 
@@ -263,7 +262,7 @@ contract RemoveComposeHash is BaseScript {
         require(address(app) != address(0), "APP_CONTRACT_ADDR not set");
         bytes32 composeHash = vm.envBytes32("COMPOSE_HASH");
 
-        vm.startBroadcast();
+        vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
         app.removeComposeHash(composeHash);
         vm.stopBroadcast();
 
@@ -276,7 +275,7 @@ contract RemoveDevice is BaseScript {
         require(address(app) != address(0), "APP_CONTRACT_ADDR not set");
         bytes32 deviceId = vm.envBytes32("DEVICE_ID");
 
-        vm.startBroadcast();
+        vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
         app.removeDevice(deviceId);
         vm.stopBroadcast();
 
@@ -289,7 +288,7 @@ contract RegisterApp is BaseScript {
     function run() external {
         address appAddress = vm.envAddress("APP_ADDRESS");
 
-        vm.startBroadcast();
+        vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
         kms.registerApp(appAddress);
         vm.stopBroadcast();
 
@@ -302,7 +301,7 @@ contract SetAppImplementation is BaseScript {
     function run() external {
         address appImpl = vm.envAddress("APP_IMPLEMENTATION");
 
-        vm.startBroadcast();
+        vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
         kms.setAppImplementation(appImpl);
         vm.stopBroadcast();
 
@@ -315,7 +314,7 @@ contract DisableAppUpgrades is BaseScript {
     function run() external {
         require(address(app) != address(0), "APP_CONTRACT_ADDR not set");
 
-        vm.startBroadcast();
+        vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
         app.disableUpgrades();
         vm.stopBroadcast();
 
