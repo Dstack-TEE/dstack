@@ -81,7 +81,7 @@ curl --unix-socket /var/run/dstack.sock -X POST \
   -d '{
     "path": "my/key/path",
     "purpose": "signing",
-    "algorithm": "ed25519",
+    "algorithm": "ed25519"
   }'
 ```
 
@@ -193,7 +193,7 @@ curl --unix-socket /var/run/dstack.sock -X POST \
 **Response:**
 Empty response with HTTP 200 status code on success.
 
-### 6. Sign
+### 6. Sign (not yet released)
 
 Signs a payload.
 
@@ -230,7 +230,7 @@ curl --unix-socket /var/run/dstack.sock -X POST \
 }
 ```
 
-### 7. Verify
+### 7. Verify (not yet released)
 
 Verifies a signature.
 
@@ -265,8 +265,6 @@ curl --unix-socket /var/run/dstack.sock -X POST \
 }
 ```
 
-```
-
 ## Error Responses
 
 All endpoints may return the following HTTP status codes:
@@ -280,3 +278,4 @@ Error responses will include a JSON body with error details:
 {
   "error": "Error description"
 }
+```
