@@ -100,7 +100,7 @@ impl Proxy {
 }
 
 impl ProxyInner {
-    pub(crate) fn lock(&self) -> MutexGuard<ProxyState> {
+    pub(crate) fn lock(&self) -> MutexGuard<'_, ProxyState> {
         self.state.lock().or_panic("Failed to lock AppState")
     }
 

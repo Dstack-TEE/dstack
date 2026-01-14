@@ -15,7 +15,7 @@ use tdx_attest::{eventlog::read_event_logs, get_quote};
 
 pub enum CertRequestClient {
     Local {
-        ca: CaCert,
+        ca: Box<CaCert>,
     },
     Kms {
         client: KmsClient<RaClient>,
@@ -66,7 +66,7 @@ impl CertRequestClient {
             KeyProvider::None { key } | KeyProvider::Local { key, .. } => {
                 let ca = CaCert::new(keys.ca_cert.clone(), key.clone())
                     .context("Failed to create CA")?;
-                Ok(CertRequestClient::Local { ca })
+                Ok(CertRequestClient::Local { ca: Box::new(ca) })
             }
             KeyProvider::Kms {
                 url,

@@ -73,9 +73,3 @@ pub enum RtmrEventStatus {
     Extra,
     Missing,
 }
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ErrorResponse {
-    pub error: String,
-    pub details: Option<String>,
-}

@@ -10,7 +10,7 @@ pub fn extract_sni(b: &[u8]) -> Option<&[u8]> {
     extract_sni_inner(b).ok().map(|r| r.1)
 }
 
-fn extract_sni_inner(b: &[u8]) -> Result<(usize, &[u8]), PErr<u8>> {
+fn extract_sni_inner(b: &[u8]) -> Result<(usize, &[u8]), PErr<'_, u8>> {
     const HANDSHAKE_TYPE_CLIENT_HELLO: usize = 1;
     const EXTENSION_TYPE_SNI: usize = 0;
     const NAME_TYPE_HOST_NAME: usize = 0;
