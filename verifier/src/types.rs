@@ -5,11 +5,16 @@
 use ra_tls::attestation::AppInfo;
 use serde::{Deserialize, Serialize};
 
+use serde_human_bytes as serde_bytes;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VerificationRequest {
-    pub quote: String,
-    pub event_log: String,
-    pub vm_config: String,
+    #[serde(with = "serde_bytes")]
+    pub quote: Option<Vec<u8>>,
+    pub event_log: Option<String>,
+    pub vm_config: Option<String>,
+    #[serde(with = "serde_bytes")]
+    pub attestation: Option<Vec<u8>>,
     pub pccs_url: Option<String>,
     pub debug: Option<bool>,
 }
@@ -21,7 +26,7 @@ pub struct VerificationResponse {
     pub reason: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct VerificationDetails {
     pub quote_verified: bool,
     pub event_log_verified: bool,

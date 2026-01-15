@@ -14,6 +14,5 @@ anyhow.workspace = true
 dstack-types.workspace = true
 dstack-kms-rpc.workspace = true
 ra-rpc = { workspace = true, features = ["client"] }
-ra-tls.workspace = true
+ra-tls = { workspace = true, features = ["quote"] }
 serde_json.workspace = true
-tdx-attest.workspace = true

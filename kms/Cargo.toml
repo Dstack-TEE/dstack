@@ -45,6 +45,7 @@ dstack-types.workspace = true
 tokio = { workspace = true, features = ["process"] }
 tempfile.workspace = true
 serde-duration.workspace = true
+dstack-verifier = { workspace = true, default-features = false }
 dstack-mr.workspace = true
 
 [features]

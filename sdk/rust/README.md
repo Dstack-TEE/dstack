@@ -23,8 +23,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("{}", key.key);  // Same path always returns the same key
 
     // Generate an attestation quote
-    let quote = client.get_quote(b"my-app-state".to_vec()).await?;
-    println!("{}", quote.quote);
+    let resp = client.attest(b"my-app-state".to_vec()).await?;
+    println!("{}", resp.attestation);
 
     Ok(())
 }
@@ -96,6 +96,13 @@ println!("{}", info.tcb_info);
 - `tcb_info`: TCB measurements (JSON string)
 - `compose_hash`: Hash of the app configuration
 - `app_cert`: Application certificate (PEM)
+
+#### `attest(report_data: Vec<u8>) -> AttestResponse`
+Generates a versioned attestation with a custom 64-byte payload.
+- `attestation`: Hex-encoded attestation
+
+#### `emit_event(event: String, payload: Vec<u8>)`
+Sends an event log with associated binary payload to the runtime.
 
 ### Generate TLS Certificates
 

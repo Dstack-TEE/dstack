@@ -113,6 +113,21 @@ pub struct GetQuoteResponse {
     pub vm_config: String,
 }
 
+/// Response containing a versioned attestation
+#[derive(Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "borsh", derive(BorshSerialize, BorshDeserialize))]
+#[cfg_attr(feature = "borsh_schema", derive(BorshSchema))]
+pub struct AttestResponse {
+    /// The attestation in hexadecimal format
+    pub attestation: String,
+}
+
+impl AttestResponse {
+    pub fn decode_attestation(&self) -> Result<Vec<u8>, FromHexError> {
+        hex::decode(&self.attestation)
+    }
+}
+
 impl GetQuoteResponse {
     pub fn decode_quote(&self) -> Result<Vec<u8>, FromHexError> {
         hex::decode(&self.quote)

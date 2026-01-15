@@ -17,7 +17,7 @@ from typing import Literal
 from typing import Optional
 from typing import Union
 
-KeyProviderKind = Literal["none", "kms", "local"]
+KeyProviderKind = Literal["none", "kms", "local", "tpm"]
 
 
 class DockerConfig:

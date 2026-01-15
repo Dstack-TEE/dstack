@@ -250,7 +250,7 @@ Deploy your application with the compose file:
 - `--gpu`: GPU assignments
 - `--ppcie`: Enable PPCIE mode (attach ALL available GPUs and NVSwitches)
 - `--env-file`: Environment variables file
-- `--user-config`: Path to user config file (will be placed at `/dstack/.user-config` in the CVM)
+- `--user-config`: Path to user config file (will be placed at `/dstack/.host-shared/.user-config` in the CVM)
 - `--kms-url`: KMS server URL
 - `--gateway-url`: Gateway server URL
 - `--stopped`: Create VM in stopped state (requires dstack-vmm >= 0.5.4)

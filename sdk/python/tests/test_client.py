@@ -10,6 +10,7 @@ import pytest
 
 from dstack_sdk import AsyncDstackClient
 from dstack_sdk import AsyncTappdClient
+from dstack_sdk import AttestResponse
 from dstack_sdk import DstackClient
 from dstack_sdk import GetKeyResponse
 from dstack_sdk import GetQuoteResponse
@@ -41,6 +42,13 @@ def test_sync_client_get_quote():
     client = DstackClient()
     result = client.get_quote("test")
     assert isinstance(result, GetQuoteResponse)
+
+
+def test_sync_client_attest():
+    client = DstackClient()
+    result = client.attest("test")
+    assert isinstance(result, AttestResponse)
+    assert len(result.attestation) > 0
 
 
 def test_sync_client_get_tls_key():
@@ -96,6 +104,14 @@ async def test_async_client_get_quote():
     client = AsyncDstackClient()
     result = await client.get_quote("test")
     assert isinstance(result, GetQuoteResponse)
+
+
+@pytest.mark.asyncio
+async def test_async_client_attest():
+    client = AsyncDstackClient()
+    result = await client.attest("test")
+    assert isinstance(result, AttestResponse)
+    assert len(result.attestation) > 0
 
 
 @pytest.mark.asyncio

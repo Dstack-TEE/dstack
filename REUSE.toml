@@ -68,6 +68,7 @@ path = [
     "docs/security/dstack-audit.pdf",
     "dstack_Technical_Charter_Final_10-17-2025.pdf",
     "sdk/simulator/quote.hex",
+    "sdk/simulator/attestation.bin",
     "ra-tls/assets/tdx_quote",
     "cc-eventlog/samples/ccel.bin",
 ]
@@ -183,5 +184,10 @@ SPDX-License-Identifier = "CC0-1.0"
 
 [[annotations]]
 path = "verifier/builder/shared/*.txt"
+SPDX-FileCopyrightText = "NONE"
+SPDX-License-Identifier = "CC0-1.0"
+
+[[annotations]]
+path = "guest-agent/fixtures/*"
 SPDX-FileCopyrightText = "NONE"
 SPDX-License-Identifier = "CC0-1.0"

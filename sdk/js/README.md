@@ -347,6 +347,20 @@ Generates a TDX attestation quote containing the provided report data.
 - Cryptographic proof of execution environment
 - Audit trail generation
 
+##### `attest(reportData: string | Buffer | Uint8Array): Promise<AttestResponse>`
+
+Generates a versioned attestation containing the provided report data.
+
+**Parameters:**
+- `reportData`: Data to include in attestation (max 64 bytes)
+
+**Returns:** `AttestResponse`
+- `attestation`: Hex-encoded attestation payload
+
+**Use Cases:**
+- Remote attestation across multiple platform types
+- Verifier APIs that accept versioned attestations
+
 ##### `getTlsKey(options?: TlsKeyOptions): Promise<GetTlsKeyResponse>`
 
 Generates a fresh, random TLS key pair with X.509 certificate for TLS/SSL connections. **Important**: This method generates different keys on each call - use `getKey()` for deterministic keys.

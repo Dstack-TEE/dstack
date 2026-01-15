@@ -41,6 +41,11 @@ type GetQuoteResponse struct {
 	VmConfig   string `json:"vm_config"`
 }
 
+// Represents the response from an attestation request.
+type AttestResponse struct {
+	Attestation []byte
+}
+
 // Represents an event log entry in the TCB info
 type EventLog struct {
 	IMR          int    `json:"imr"`
@@ -409,6 +414,36 @@ func (c *DstackClient) GetQuote(ctx context.Context, reportData []byte) (*GetQuo
 		EventLog:   response.EventLog,
 		ReportData: reportDataBytes,
 	}, nil
+}
+
+// Gets a versioned attestation from the dstack service.
+func (c *DstackClient) Attest(ctx context.Context, reportData []byte) (*AttestResponse, error) {
+	if len(reportData) > 64 {
+		return nil, fmt.Errorf("report data is too large, it should be at most 64 bytes")
+	}
+
+	payload := map[string]interface{}{
+		"report_data": hex.EncodeToString(reportData),
+	}
+
+	data, err := c.sendRPCRequest(ctx, "/Attest", payload)
+	if err != nil {
+		return nil, err
+	}
+
+	var response struct {
+		Attestation string `json:"attestation"`
+	}
+	if err := json.Unmarshal(data, &response); err != nil {
+		return nil, err
+	}
+
+	attestation, err := hex.DecodeString(response.Attestation)
+	if err != nil {
+		return nil, err
+	}
+
+	return &AttestResponse{Attestation: attestation}, nil
 }
 
 // Sends a request to get information about the CVM instance

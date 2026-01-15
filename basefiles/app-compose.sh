@@ -23,9 +23,6 @@ case "$RUNNER" in
     if ! [ -f docker-compose.yaml ]; then
         jq -r '.docker_compose_file' app-compose.json >docker-compose.yaml
     fi
-    dstack-util remove-orphans -f docker-compose.yaml || true
-    chmod +x /usr/bin/containerd-shim-runc-v2
-    systemctl restart docker
 
     if ! docker compose up --remove-orphans -d --build; then
         dstack-util notify-host -e "boot.error" -d "failed to start containers"
@@ -37,7 +34,6 @@ case "$RUNNER" in
     docker volume prune -f
     ;;
 "bash")
-    chmod +x /usr/bin/containerd-shim-runc-v2
     echo "Running main script"
     dstack-util notify-host -e "boot.progress" -d "running main script" || true
     jq -r '.bash_script' app-compose.json | bash

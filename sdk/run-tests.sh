@@ -25,6 +25,7 @@ cargo test -p dstack-sdk-types --test no_std_test --no-default-features
 popd
 
 pushd go/
+go clean -testcache
 go test -v ./dstack
 DSTACK_SIMULATOR_ENDPOINT=$TAPPD_SIMULATOR_ENDPOINT go test -v ./tappd
 popd

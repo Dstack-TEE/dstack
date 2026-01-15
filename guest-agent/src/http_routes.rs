@@ -48,6 +48,8 @@ async fn index(state: &State<AppState>) -> Result<RawHtml<String>, String> {
         tcb_info,
         app_cert: _,
         vm_config: _,
+        cloud_vendor,
+        cloud_product,
     } = handler
         .info()
         .await
@@ -70,6 +72,8 @@ async fn index(state: &State<AppState>) -> Result<RawHtml<String>, String> {
         public_sysinfo,
         public_logs,
         public_tcbinfo,
+        cloud_vendor,
+        cloud_product,
     };
     match model.render() {
         Ok(html) => Ok(RawHtml(html)),

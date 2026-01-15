@@ -43,6 +43,10 @@ service DstackGuest {
   // Generates a TDX quote with given report data.
   rpc GetQuote(RawQuoteArgs) returns (GetQuoteResponse) {}
 
+  // Generates a versioned attestation with the given report data.
+  // Returns a dstack-defined attestation format that supports different attestation modes across platforms.
+  rpc Attest(RawQuoteArgs) returns (AttestResponse) {}
+
   // Emit an event. This extends the event to RTMR3 on TDX platform.
   rpc EmitEvent(EmitEventArgs) returns (google.protobuf.Empty) {}
 
@@ -169,6 +173,11 @@ message TdxQuoteResponse {
   string prefix = 4;
 }
 
+message AttestResponse {
+  // The attestation
+  bytes attestation = 1;
+}
+
 message GetQuoteResponse {
   // TDX quote
   bytes quote = 1;
@@ -211,6 +220,10 @@ message AppInfo {
   bytes compose_hash = 13;
   // VM config
   string vm_config = 14;
+  // Cloud provider sys_vendor (e.g. "Google")
+  string cloud_vendor = 15;
+  // Cloud provider product_name (e.g. "Google Compute Engine")
+  string cloud_product = 16;
 }
 
 // The response to a Version request

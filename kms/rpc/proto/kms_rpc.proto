@@ -115,8 +115,7 @@ message BootstrapRequest {
 message BootstrapResponse {
   bytes ca_pubkey = 1;
   bytes k256_pubkey = 2;
-  bytes quote = 3;
-  bytes eventlog = 4;
+  bytes attestation = 3;
 }
 
 message OnboardRequest {

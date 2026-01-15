@@ -17,8 +17,7 @@ sys_config_file = "sys-config.json"
 
 [default.core.simulator]
 enabled = true
-quote_file = "quote.hex"
-event_log_file = "eventlog.json"
+attestation_file = "attestation.bin"
 
 [internal-v0]
 address = "unix:./tappd.sock"
@@ -35,4 +34,3 @@ reuse = true
 [guest-api]
 address = "unix:./guest.sock"
 reuse = true
-

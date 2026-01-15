@@ -4,7 +4,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::codecs::VecOf;
+use crate::{codecs::VecOf, tdx::TdxEvent};
+use anyhow::{Context, Result};
+use scale::Decode;
+
+/// The path to boottime ccel file.
+const CCEL_FILE: &str = "/sys/firmware/acpi/tables/data/CCEL";
 
 pub const TPM_ALG_ERROR: u16 = 0x0;
 pub const TPM_ALG_RSA: u16 = 0x1;
@@ -204,4 +209,167 @@ impl TcgEfiSpecIdEvent {
 pub struct TcgEfiSpecIdEventAlgorithmSize {
     pub algo_id: u16,
     pub digest_size: u16,
+}
+
+/// This is the common struct for tcg event logs to be delivered in different formats.
+/// Currently TCG supports several event log formats defined in TCG_PCClient Spec,
+/// Canonical Eventlog Spec, etc.
+/// This struct provides the functionality to convey event logs in different format
+/// according to request.
+#[derive(Clone, scale::Decode)]
+pub struct TcgEvent {
+    /// IMR index, starts from 1
+    pub imr_index: u32,
+    /// Event type
+    pub event_type: u32,
+    /// List of digests
+    pub digests: VecOf<u32, TcgDigest>,
+    /// Raw event data
+    pub event: VecOf<u32, u8>,
+}
+
+impl core::fmt::Debug for TcgEvent {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("TcgEventLog")
+            .field("imr_index", &self.imr_index)
+            .field("event_type", &self.event_type)
+            .field(
+                "digests",
+                &self
+                    .digests
+                    .iter()
+                    .map(|d| hex::encode(&d.hash))
+                    .collect::<Vec<_>>(),
+            )
+            .field("event", &hex::encode(&self.event))
+            .finish()
+    }
+}
+
+const fn alg_id_to_digest_size(alg_id: u16) -> Option<u8> {
+    match alg_id {
+        TPM_ALG_SHA1 => Some(20),
+        TPM_ALG_SHA256 => Some(32),
+        TPM_ALG_SHA384 => Some(48),
+        TPM_ALG_SHA512 => Some(64),
+        _ => None,
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct TcgEventLog {
+    pub spec_id_header_event: TcgEfiSpecIdEvent,
+    pub event_logs: Vec<TcgEvent>,
+}
+
+impl scale::Decode for TcgDigest {
+    fn decode<I: scale::Input>(input: &mut I) -> Result<Self, scale::Error> {
+        let algo_id = u16::decode(input)?;
+        let digest_size =
+            alg_id_to_digest_size(algo_id).ok_or(scale::Error::from("Unsupported algorithm ID"))?;
+        let mut digest_data = vec![0; digest_size as usize];
+        input
+            .read(&mut digest_data)
+            .map_err(|_| scale::Error::from("failed to read digest_data"))?;
+        Ok(TcgDigest {
+            algo_id,
+            hash: digest_data,
+        })
+    }
+}
+
+impl TcgEventLog {
+    pub fn decode(input: &mut &[u8]) -> Result<Self> {
+        let (_spec_id_header, spec_id_header_event) =
+            parse_spec_id_event_log(input).context("Failed to parse spec id event")?;
+        let mut event_logs = vec![];
+        loop {
+            // A tmp head_buffer is used to peek the imr and event type
+            let head_buffer = &mut &input[..];
+            let imr = u32::decode(head_buffer).context("failed to decode imr")?;
+            if imr == 0xFFFFFFFF {
+                break;
+            }
+            let event_log = TcgEvent::decode(input).context("Failed to parse event log")?;
+            event_logs.push(event_log);
+        }
+        Ok(TcgEventLog {
+            spec_id_header_event,
+            event_logs,
+        })
+    }
+
+    pub fn decode_from_ccel_file() -> Result<Self> {
+        let data = fs_err::read(CCEL_FILE).context("Failed to read CCEL")?;
+        Self::decode(&mut data.as_slice())
+    }
+
+    pub fn to_cc_event_log(&self) -> Result<Vec<TdxEvent>> {
+        self.event_logs
+            .iter()
+            .filter(|log| log.imr_index > 0) // GCP fills some IMRs starting from 0
+            .cloned()
+            .map(TdxEvent::try_from)
+            .collect()
+    }
+}
+
+fn parse_spec_id_event_log<I: scale::Input>(
+    input: &mut I,
+) -> Result<(TcgEvent, TcgEfiSpecIdEvent)> {
+    #[derive(Decode)]
+    struct Header {
+        imr_index: u32,
+        header_event_type: u32,
+        digest_hash: [u8; 20],
+        header_event: VecOf<u32, u8>,
+    }
+
+    let decoded_header = Header::decode(input).context("failed to decode log_item")?;
+    // Parse EFI Spec Id Event structure
+    let input = &mut decoded_header.header_event.as_slice();
+    let spec_id_event =
+        TcgEfiSpecIdEvent::decode(input).context("failed to decode TcgEfiSpecIdEvent")?;
+
+    let digests = vec![TcgDigest {
+        algo_id: TPM_ALG_ERROR,
+        hash: decoded_header.digest_hash.to_vec(),
+    }];
+    let spec_id_header = TcgEvent {
+        imr_index: decoded_header.imr_index,
+        event_type: decoded_header.header_event_type,
+        digests: (digests.len() as u32, digests).into(),
+        event: decoded_header.header_event,
+    };
+    Ok((spec_id_header, spec_id_event))
+}
+
+impl TryFrom<TcgEvent> for TdxEvent {
+    type Error = anyhow::Error;
+
+    fn try_from(value: TcgEvent) -> Result<Self> {
+        if value.digests.len() != 1 {
+            return Err(anyhow::anyhow!(
+                "expected 1 digest, got {}",
+                value.digests.len()
+            ));
+        }
+        let digest = value
+            .digests
+            .into_inner()
+            .into_iter()
+            .next()
+            .context("digest not found")?
+            .hash;
+        Ok(TdxEvent {
+            imr: value
+                .imr_index
+                .checked_sub(1)
+                .context("invalid IMR index: must be >= 1")?,
+            event_type: value.event_type,
+            digest,
+            event: Default::default(),
+            event_payload: value.event.into(),
+        })
+    }
 }

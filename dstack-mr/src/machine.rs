@@ -30,6 +30,8 @@ pub struct Machine<'a> {
     pub num_nvswitches: u32,
     pub hotplug_off: bool,
     pub root_verity: bool,
+    #[builder(default)]
+    pub host_share_mode: String,
 }
 
 fn parse_version_tuple(v: &str) -> Result<(u32, u32, u32)> {

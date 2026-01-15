@@ -32,7 +32,7 @@ x25519-dalek.workspace = true
 
 dstack-kms-rpc.workspace = true
 ra-rpc = { workspace = true, features = ["client"] }
-ra-tls.workspace = true
+ra-tls = { workspace = true, features = ["quote"] }
 dstack-gateway-rpc.workspace = true
 tdx-attest.workspace = true
 host-api = { workspace = true, features = ["client"] }
@@ -43,14 +43,18 @@ k256 = { workspace = true, features = ["ecdsa"] }
 dstack-types.workspace = true
 rand.workspace = true
 sha3.workspace = true
+dstack-attest.workspace = true
 cert-client.workspace = true
 x509-parser.workspace = true
-serde_yaml2.workspace = true
+yaml-rust2.workspace = true
 bollard.workspace = true
 sodiumbox.workspace = true
 libc.workspace = true
 luks2.workspace = true
 scopeguard.workspace = true
+tempfile.workspace = true
+ez-hash.workspace = true
+cc-eventlog.workspace = true
 
 [dev-dependencies]
 rand.workspace = true

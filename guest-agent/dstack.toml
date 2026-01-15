@@ -18,9 +18,7 @@ data_disks = ["/"]
 
 [default.core.simulator]
 enabled = false
-quote_file = "quote.hex"
-event_log_file = "eventlog.json"
-sys_config_file = "sys-config.json"
+attestation_file = "attestation.bin"
 
 [internal-v0]
 address = "unix:/var/run/tappd.sock"

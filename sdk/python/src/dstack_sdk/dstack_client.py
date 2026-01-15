@@ -152,6 +152,13 @@ class GetQuoteResponse(BaseModel):
         return rtmrs
 
 
+class AttestResponse(BaseModel):
+    attestation: str
+
+    def decode_attestation(self) -> bytes:
+        return bytes.fromhex(self.attestation)
+
+
 class SignResponse(BaseModel):
     signature: str
     signature_chain: List[str]
@@ -378,6 +385,22 @@ class AsyncDstackClient(BaseClient):
         result = await self._send_rpc_request("GetQuote", {"report_data": hex})
         return GetQuoteResponse(**result)
 
+    async def attest(
+        self,
+        report_data: str | bytes,
+    ) -> AttestResponse:
+        """Request a versioned attestation for the provided report data."""
+        if not report_data or not isinstance(report_data, (bytes, str)):
+            raise ValueError("report_data can not be empty")
+        report_bytes: bytes = (
+            report_data.encode() if isinstance(report_data, str) else report_data
+        )
+        if len(report_bytes) > 64:
+            raise ValueError("report_data must be less than 64 bytes")
+        hex = binascii.hexlify(report_bytes).decode()
+        result = await self._send_rpc_request("Attest", {"report_data": hex})
+        return AttestResponse(**result)
+
     async def info(self) -> InfoResponse[TcbInfo]:
         """Fetch service information including parsed TCB info."""
         result = await self._send_rpc_request("Info", {})
@@ -492,6 +515,14 @@ class DstackClient(BaseClient):
         report_data: str | bytes,
     ) -> GetQuoteResponse:
         """Request an attestation quote for the provided report data."""
+        raise NotImplementedError
+
+    @call_async
+    def attest(
+        self,
+        report_data: str | bytes,
+    ) -> AttestResponse:
+        """Request a versioned attestation for the provided report data."""
         raise NotImplementedError
 
     @call_async
