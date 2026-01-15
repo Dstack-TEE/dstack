@@ -1,0 +1,13 @@
+# SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+# SPDX-License-Identifier: Apache-2.0
+# Copy to terraform.tfvars and edit
+
+project_id = "your-project-id"
+region     = "us-central1"
+zone       = "us-central1-a"  # Must support TDX
+
+machine_type   = "c3-standard-8"  # c3-* for TDX
+disk_size_gb   = 200
+dstack_version = "0.5.2"
+
+# ssh_public_key = "ssh-rsa AAAAB3... user@host"
