@@ -106,7 +106,7 @@ async fn maybe_gen_certs(config: &Config, tls_config: &TlsConfig) -> Result<()> 
     let cert = ra_tls::cert::CertRequest::builder()
         .key(&key)
         .subject("dstack-gateway")
-        .alt_names(&[config.rpc_domain.clone()])
+        .alt_names(std::slice::from_ref(&config.rpc_domain))
         .usage_server_auth(true)
         .build()
         .self_signed()

@@ -45,9 +45,6 @@ pub enum TdxAttestError {
 pub fn extend_rtmr(_index: u32, _event_type: u32, _digest: [u8; 48]) -> Result<()> {
     Err(TdxAttestError::NotSupported)
 }
-pub fn log_rtmr_event(_log: &TdxEventLog) -> Result<()> {
-    Err(TdxAttestError::NotSupported)
-}
 pub fn get_report(_report_data: &TdxReportData) -> Result<TdxReport> {
     Err(TdxAttestError::NotSupported)
 }

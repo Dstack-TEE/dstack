@@ -62,6 +62,14 @@ func main() {
 		return
 	}
 	fmt.Println(rtmrs)  // map[0:00000000000000000 ...
+
+	// Generate versioned attestation
+	attestResp, err := client.Attest(context.Background(), []byte("test"))
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	fmt.Println(attestResp.Attestation) // 0x00000000000000000 ...
 }
 ```
 
@@ -93,6 +101,7 @@ NOTE: Leave endpoint empty in production. You only need to add `volumes` in your
 - `Info(ctx context.Context) (*InfoResponse, error)`: Retrieves information about the CVM instance.
 - `GetKey(ctx context.Context, path string, purpose string, algorithm string) (*GetKeyResponse, error)`: Derives a key for the given path, purpose and algorithm.
 - `GetQuote(ctx context.Context, reportData []byte) (*GetQuoteResponse, error)`: Generates a TDX quote using SHA512 as the hash algorithm.
+- `Attest(ctx context.Context, reportData []byte) (*AttestResponse, error)`: Generates a versioned attestation with the given report data.
 - `GetTlsKey(ctx context.Context, path string, subject string, altNames []string, usageRaTls bool, usageServerAuth bool, usageClientAuth bool, randomSeed bool) (*GetTlsKeyResponse, error)`: Derives a key for the given path and purpose.
 - `Sign(ctx context.Context, algorithm string, data []byte) (*SignResponse, error)`: Signs a payload
 - `Verify(ctx context.Context, algorithm string, data []byte, signature []byte, public_key []byte) (*VerifyResponse, error)`: Verifies a payload

@@ -7,15 +7,14 @@ use dstack_kms_rpc::{kms_client::KmsClient, SignCertRequest};
 use dstack_types::{AppKeys, KeyProvider};
 use ra_rpc::client::{RaClient, RaClientConfig};
 use ra_tls::{
-    attestation::QuoteContentType,
-    cert::{generate_ra_cert, CaCert, CertConfig, CertSigningRequest},
+    attestation::{QuoteContentType, VersionedAttestation},
+    cert::{generate_ra_cert, CaCert, CertConfig, CertSigningRequestV2, Csr},
     rcgen::KeyPair,
 };
-use tdx_attest::{eventlog::read_event_logs, get_quote};
 
 pub enum CertRequestClient {
     Local {
-        ca: CaCert,
+        ca: Box<CaCert>,
     },
     Kms {
         client: KmsClient<RaClient>,
@@ -26,7 +25,7 @@ pub enum CertRequestClient {
 impl CertRequestClient {
     pub async fn sign_csr(
         &self,
-        csr: &CertSigningRequest,
+        csr: &CertSigningRequestV2,
         signature: &[u8],
     ) -> Result<Vec<String>> {
         match self {
@@ -39,7 +38,7 @@ impl CertRequestClient {
             CertRequestClient::Kms { client, vm_config } => {
                 let response = client
                     .sign_cert(SignCertRequest {
-                        api_version: 1,
+                        api_version: 2,
                         csr: csr.to_vec(),
                         signature: signature.to_vec(),
                         vm_config: vm_config.clone(),
@@ -63,9 +62,12 @@ impl CertRequestClient {
         vm_config: String,
     ) -> Result<CertRequestClient> {
         match &keys.key_provider {
-            KeyProvider::None { key } | KeyProvider::Local { key, .. } => {
+            KeyProvider::None { key }
+            | KeyProvider::Local { key, .. }
+            | KeyProvider::Tpm { key, .. } => {
                 let ca = CaCert::new(keys.ca_cert.clone(), key.clone())
                     .context("Failed to create CA")?;
+                let ca = Box::new(ca);
                 Ok(CertRequestClient::Local { ca })
             }
             KeyProvider::Kms {
@@ -96,26 +98,22 @@ impl CertRequestClient {
         &self,
         key: &KeyPair,
         config: CertConfig,
-        no_ra: bool,
+        attestation_override: Option<VersionedAttestation>,
     ) -> Result<Vec<String>> {
         let pubkey = key.public_key_der();
         let report_data = QuoteContentType::RaTlsCert.to_report_data(&pubkey);
-        let (quote, event_log) = if !no_ra {
-            let (_, quote) = get_quote(&report_data, None).context("Failed to get quote")?;
-            let event_log = read_event_logs().context("Failed to decode event log")?;
-            let event_log =
-                serde_json::to_vec(&event_log).context("Failed to serialize event log")?;
-            (quote, event_log)
-        } else {
-            (vec![], vec![])
+        let attestation = match attestation_override {
+            Some(attestation) => attestation,
+            None => ra_rpc::Attestation::quote(&report_data)
+                .context("Failed to get quote for cert pubkey")?
+                .into_versioned(),
         };
 
-        let csr = CertSigningRequest {
+        let csr = CertSigningRequestV2 {
             confirm: "please sign cert:".to_string(),
             pubkey,
             config,
-            quote,
-            event_log,
+            attestation,
         };
         let signature = csr.signed_by(key).context("Failed to sign the CSR")?;
         self.sign_csr(&csr, &signature)

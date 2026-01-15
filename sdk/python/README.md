@@ -532,6 +532,7 @@ All methods below are available in both synchronous and asynchronous clients wit
 | `client.info()` | `await async_client.info()` | Get TEE instance information |
 | `client.get_key(...)` | `await async_client.get_key(...)` | Derive deterministic keys |
 | `client.get_quote(...)` | `await async_client.get_quote(...)` | Generate attestation quote |
+| `client.attest(...)` | `await async_client.attest(...)` | Generate versioned attestation |
 | `client.get_tls_key(...)` | `await async_client.get_tls_key(...)` | Generate TLS certificate |
 | `client.emit_event(...)` | `await async_client.emit_event(...)` | Log custom events |
 | `client.is_reachable()` | `await async_client.is_reachable()` | Test connectivity |
@@ -615,6 +616,20 @@ Generates a TDX attestation quote containing the provided report data.
 - Remote attestation of application state
 - Cryptographic proof of execution environment
 - Audit trail generation
+
+##### `attest(report_data: str | bytes) -> AttestResponse`
+
+Generates a versioned attestation containing the provided report data.
+
+**Parameters:**
+- `report_data`: Data to include in attestation (max 64 bytes)
+
+**Returns:** `AttestResponse`
+- `attestation`: Hex-encoded attestation payload
+
+**Use Cases:**
+- Remote attestation across multiple platform types
+- Verifier APIs that accept versioned attestations
 
 ##### `get_tls_key(subject: str | None = None, alt_names: List[str] | None = None, usage_ra_tls: bool = False, usage_server_auth: bool = True, usage_client_auth: bool = False) -> GetTlsKeyResponse`
 

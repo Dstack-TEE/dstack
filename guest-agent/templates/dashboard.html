@@ -168,6 +168,12 @@ SPDX-License-Identifier: Apache-2.0
                 <div class="info-label">Key Provider Info</div>
                 <div class="info-value">{{key_provider_info}}</div>
             </div>
+            {% if !cloud_vendor.is_empty() || !cloud_product.is_empty() %}
+            <div class="info-row">
+                <div class="info-label">Machine Provider</div>
+                <div class="info-value">{{cloud_vendor}} ({{cloud_product}})</div>
+            </div>
+            {% endif %}
             {% if public_sysinfo %}
             <div class="info-row">
                 <div class="info-label">Operating System</div>

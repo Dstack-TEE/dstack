@@ -1,0 +1,36 @@
+# SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "dstack-attest"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+cc-eventlog.workspace = true
+dcap-qvl.workspace = true
+dstack-types.workspace = true
+ez-hash.workspace = true
+fs-err.workspace = true
+hex.workspace = true
+hex_fmt.workspace = true
+or-panic.workspace = true
+scale = { workspace = true, features = ["derive"] }
+serde.workspace = true
+serde-human-bytes.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+sha3.workspace = true
+tdx-attest.workspace = true
+insta.workspace = true
+
+[features]
+quote = []
+
+[dev-dependencies]
+futures = { workspace = true }
+tokio = { workspace = true, features = ["full"] }

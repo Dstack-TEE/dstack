@@ -35,6 +35,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let rtmrs = quote_resp.replay_rtmrs()?;
     println!("Replayed RTMRs: {:?}", rtmrs);
 
+    // Generate versioned attestation
+    let attest_resp = client.attest(b"test-data".to_vec()).await?;
+    println!("Attestation: {}", attest_resp.attestation);
+
     // Emit an event
     client.emit_event("BootComplete".to_string(), b"payload-data".to_vec()).await?;
 
@@ -113,6 +117,10 @@ Generates a TDX quote with a custom 64-byte payload.
 - `quote`: Hex-encoded quote
 - `event_log`: Serialized list of events
 - `replay_rtmrs()`: Reconstructs RTMR values from the event log
+
+#### `attest(report_data: Vec<u8>) -> AttestResponse`
+Generates a versioned attestation with a custom 64-byte payload.
+- `attestation`: Hex-encoded attestation
 
 #### `emit_event(event: String, payload: Vec<u8>)`
 Sends an event log with associated binary payload to the runtime.

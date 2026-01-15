@@ -167,7 +167,7 @@ impl Process {
         }
     }
 
-    pub(crate) fn lock(&self) -> MutexGuard<ProcessStateRT> {
+    pub(crate) fn lock(&self) -> MutexGuard<'_, ProcessStateRT> {
         self.state.lock().or_panic("lock should never fail")
     }
 

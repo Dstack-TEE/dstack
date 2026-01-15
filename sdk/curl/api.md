@@ -265,6 +265,38 @@ curl --unix-socket /var/run/dstack.sock -X POST \
 }
 ```
 
+### 8. Attest
+
+Generates a versioned attestation with the given report data. Returns a dstack-defined attestation format that supports different attestation modes across platforms.
+You can submit the returned `attestation` directly to the verifier `/verify` endpoint.
+
+**Endpoint:** `/Attest`
+
+**Request Parameters:**
+
+| Field | Type | Description | Example |
+|-------|------|-------------|----------|
+| `report_data` | string | Report data of max length 64 bytes. Padding with 0s if less than 64 bytes. | `"1234deadbeaf"` |
+
+**Example:**
+```bash
+curl --unix-socket /var/run/dstack.sock -X POST \
+  http://dstack/Attest \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "report_data": "1234deadbeaf"
+  }'
+```
+Or
+```bash
+curl --unix-socket /var/run/dstack.sock http://dstack/Attest?report_data=00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+```
+
+**Response:**
+```json
+{
+  "attestation": "<hex-encoded-attestation>"
+}
 ```
 
 ## Error Responses

@@ -20,6 +20,7 @@ members = [
     "ra-tls",
     "tdx-attest-sys",
     "tdx-attest",
+    "dstack-attest",
     "dstack-util",
     "iohash",
     "guest-agent",
@@ -69,6 +70,7 @@ supervisor = { path = "supervisor" }
 supervisor-client = { path = "supervisor/client" }
 tdx-attest = { path = "tdx-attest" }
 tdx-attest-sys = { path = "tdx-attest-sys" }
+dstack-attest = { path = "dstack-attest" }
 certbot = { path = "certbot" }
 rocket-vsock-listener = { path = "rocket-vsock-listener" }
 host-api = { path = "host-api", default-features = false }
@@ -82,6 +84,7 @@ lspci = { path = "lspci" }
 sodiumbox = { path = "sodiumbox" }
 serde-duration = { path = "serde-duration" }
 dstack-mr = { path = "dstack-mr" }
+dstack-verifier = { path = "verifier", default-features = false }
 size-parser = { path = "size-parser" }
 
 # Core dependencies
@@ -118,15 +121,19 @@ scale = { version = "3.7.4", package = "parity-scale-codec", features = [
     "derive",
 ] }
 serde = { version = "1.0.219", features = ["derive"], default-features = false }
-serde-human-bytes = "0.1.0"
+serde-human-bytes = "0.1.2"
 serde_json = { version = "1.0.140", default-features = false }
 serde_ini = "0.2.0"
 toml = "0.8.20"
 toml_edit = { version = "0.22.24", features = ["serde"] }
 yasna = "0.5.2"
 bytes = "1.10.1"
+nom = "7.1"
 figment = "0.10.19"
 object = "0.36.4"
+fatfs = "0.3.6"
+fscommon = "0.1.1"
+ciborium = "0.2"
 
 # Networking/HTTP
 bollard = "0.18.1"
@@ -158,14 +165,18 @@ default-net = "0.22.0"
 # Cryptography/Security
 aes-gcm = "0.10.3"
 curve25519-dalek = "4.1.3"
-dcap-qvl = "0.3.0"
+dcap-qvl = "0.3.8"
+dcap-qvl-webpki = "0.103"
 elliptic-curve = { version = "0.13.8", features = ["pkcs8"] }
 getrandom = "0.3.1"
 hkdf = "0.12.4"
 p256 = "0.13.2"
+p384 = "0.13"
+rsa = "0.9"
 ring = "0.17.14"
 rustls = "0.23.23"
-rustls-pki-types = "1.11.0"
+rustls-pki-types = "1.13.1"
+rustls-webpki = "0.103.8"
 schnorrkel = "0.11.4"
 sha2 = { version = "0.10.8", default-features = false }
 sha3 = "0.10.8"
@@ -179,10 +190,12 @@ xsalsa20poly1305 = "0.9.0"
 salsa20 = "0.10"
 rand_core = "0.6.4"
 alloy = { version = "1.0.32", default-features = false }
+ez-hash = "1.1.0"
 
 # Certificate/DNS
 hickory-resolver = "0.24.4"
 instant-acme = "0.7.2"
+pem = "3.0"
 rcgen = { version = "0.13.2", features = ["pem"] }
 x509-parser = "0.16.0"
 pkcs8 = { version = "0.10", default-features = false }
@@ -217,10 +230,12 @@ uuid = { version = "1.15.1", features = ["v4"] }
 which = "7.0.2"
 smallvec = "1.14.0"
 cmd_lib = "1.9.5"
-serde_yaml2 = "0.1.2"
+yaml-rust2 = "0.10.4"
 
 luks2 = "0.5.0"
 scopeguard = "1.2.0"
+flate2 = "1.1"
+tar = "0.4"
 
 [profile.release]
 panic = "abort"
