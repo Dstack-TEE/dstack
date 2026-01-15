@@ -6,14 +6,14 @@
 
 use std::{borrow::Cow, time::SystemTime};
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{anyhow, bail, Context, Result};
 use cc_eventlog::{RuntimeEvent, TdxEvent};
 use dcap_qvl::{
     quote::{EnclaveReport, Quote, Report, TDReport10, TDReport15},
     verify::VerifiedReport as TdxVerifiedReport,
 };
 use dstack_types::{Platform, VmConfig};
-use ez_hash::{Hasher, Sha384, sha256};
+use ez_hash::{sha256, Hasher, Sha384};
 use or_panic::ResultOrPanic;
 use scale::{Decode, Encode};
 use serde::{Deserialize, Serialize};
@@ -173,6 +173,7 @@ impl QuoteContentType<'_> {
     }
 }
 
+#[allow(clippy::large_enum_variant)]
 /// Represents a verified attestation
 #[derive(Clone)]
 pub enum DstackVerifiedReport {
@@ -264,8 +265,8 @@ impl AttestationQuote {
     pub fn mode(&self) -> AttestationMode {
         match self {
             AttestationQuote::DstackTdx { .. } => AttestationMode::DstackTdx,
-            AttestationQuote::DstackGcpTdx { .. } => AttestationMode::DstackGcpTdx,
-            AttestationQuote::DstackNitroEnclave { .. } => AttestationMode::DstackNitroEnclave,
+            AttestationQuote::DstackGcpTdx => AttestationMode::DstackGcpTdx,
+            AttestationQuote::DstackNitroEnclave => AttestationMode::DstackNitroEnclave,
         }
     }
 }
@@ -780,17 +781,13 @@ mod tests {
 
         // Test invalid raw content length
         let invalid_content = [42u8; 65];
-        assert!(
-            content_type
-                .to_report_data_with_hash(&invalid_content, "raw")
-                .is_err()
-        );
+        assert!(content_type
+            .to_report_data_with_hash(&invalid_content, "raw")
+            .is_err());
 
         // Test invalid hash algorithm
-        assert!(
-            content_type
-                .to_report_data_with_hash(content, "invalid")
-                .is_err()
-        );
+        assert!(content_type
+            .to_report_data_with_hash(content, "invalid")
+            .is_err());
     }
 }
