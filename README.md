@@ -183,7 +183,7 @@ dstack is a Linux Foundation [Confidential Computing Consortium](https://confide
 
 ## Community
 
-[Telegram](https://t.me/+UO4bS4jflr45YmUx) · [GitHub Discussions](https://github.com/Dstack-TEE/dstack/discussions) · [Examples](https://github.com/Dstack-TEE/dstack-examples)
+[Telegram](https://t.me/+UO4bS4jflr45YmUx) · [GitHub Issues](https://github.com/Dstack-TEE/dstack/issues) · [Examples](https://github.com/Dstack-TEE/dstack-examples)
 
 [![Repobeats](https://repobeats.axiom.co/api/embed/0a001cc3c1f387fae08172a9e116b0ec367b8971.svg)](https://github.com/Dstack-TEE/dstack/pulse)
 
