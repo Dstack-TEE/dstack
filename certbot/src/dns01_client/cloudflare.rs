@@ -270,12 +270,13 @@ impl Dns01Api for CloudflareClient {
         Ok(())
     }
 
-    async fn add_txt_record(&self, domain: &str, content: &str) -> Result<String> {
+    async fn add_txt_record(&self, domain: &str, content: &str, ttl: u32) -> Result<String> {
         let response = self
             .add_record(&json!({
                 "type": "TXT",
                 "name": domain,
                 "content": content,
+                "ttl": ttl,
             }))
             .await?;
         Ok(response.result.id)
@@ -358,7 +359,7 @@ mod tests {
         let subdomain = random_subdomain();
         println!("subdomain: {}", subdomain);
         let record_id = client
-            .add_txt_record(&subdomain, "1234567890")
+            .add_txt_record(&subdomain, "1234567890", 60)
             .await
             .unwrap();
         let record = client.get_txt_records(&subdomain).await.unwrap();
@@ -375,7 +376,7 @@ mod tests {
         let subdomain = random_subdomain();
         println!("subdomain: {}", subdomain);
         let record_id = client
-            .add_txt_record(&subdomain, "1234567890")
+            .add_txt_record(&subdomain, "1234567890", 60)
             .await
             .unwrap();
         let record = client.get_txt_records(&subdomain).await.unwrap();

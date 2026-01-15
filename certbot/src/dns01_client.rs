@@ -28,7 +28,8 @@ pub(crate) trait Dns01Api {
     /// Creates a TXT DNS record with the given domain and content.
     ///
     /// Returns the ID of the created record.
-    async fn add_txt_record(&self, domain: &str, content: &str) -> Result<String>;
+    /// The `ttl` parameter specifies the time-to-live in seconds (1 = auto, min 60 for Cloudflare).
+    async fn add_txt_record(&self, domain: &str, content: &str, ttl: u32) -> Result<String>;
 
     /// Add a CAA record for the given domain.
     async fn add_caa_record(

@@ -118,6 +118,7 @@ renew_interval = "1h"
 renew_before_expiration = "10d"
 renew_timeout = "5m"
 max_dns_wait = "${CERTBOT_MAX_DNS_WAIT:-5m}"
+dns_txt_ttl = "${CERTBOT_DNS_TXT_TTL:-60}"
 
 [core.wg]
 public_key = "$PUBLIC_KEY"
