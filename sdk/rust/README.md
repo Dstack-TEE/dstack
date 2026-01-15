@@ -1,6 +1,6 @@
-# dstack Crate
+# dstack SDK for Rust
 
-This crate provides rust clients for communicating with both the current dstack server and the legacy tappd service, which are available inside dstack.
+Access TEE features from your Rust application running inside dstack. Derive deterministic keys, generate attestation quotes, create TLS certificates, and sign data—all backed by hardware security.
 
 ## Installation
 
@@ -9,114 +9,93 @@ This crate provides rust clients for communicating with both the current dstack 
 dstack-sdk = { git = "https://github.com/Dstack-TEE/dstack.git" }
 ```
 
-## Basic Usage
-
-### DstackClient (Current API)
+## Quick Start
 
 ```rust
 use dstack_sdk::dstack_client::DstackClient;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let client = DstackClient::new(None); // Uses env var or default to Unix socket
+    let client = DstackClient::new(None);
 
-    // Get system info
-    let info = client.info().await?;
-    println!("Instance ID: {}", info.instance_id);
+    // Derive a deterministic key for your wallet
+    let key = client.get_key(Some("wallet/eth".to_string()), None).await?;
+    println!("{}", key.key);  // Same path always returns the same key
 
-    // Derive a key
-    let key_resp = client.get_key(Some("my-app".to_string()), None).await?;
-    println!("Key: {}", key_resp.key);
-    println!("Signature Chain: {:?}", key_resp.signature_chain);
-
-    // Generate TDX quote
-    let quote_resp = client.get_quote(b"test-data".to_vec()).await?;
-    println!("Quote: {}", quote_resp.quote);
-    let rtmrs = quote_resp.replay_rtmrs()?;
-    println!("Replayed RTMRs: {:?}", rtmrs);
-
-    // Generate versioned attestation
-    let attest_resp = client.attest(b"test-data".to_vec()).await?;
-    println!("Attestation: {}", attest_resp.attestation);
-
-    // Emit an event
-    client.emit_event("BootComplete".to_string(), b"payload-data".to_vec()).await?;
+    // Generate an attestation quote
+    let resp = client.attest(b"my-app-state".to_vec()).await?;
+    println!("{}", resp.attestation);
 
     Ok(())
 }
 ```
 
-### TappdClient (Legacy API)
+The client automatically connects to `/var/run/dstack.sock`. For local development with the simulator:
 
 ```rust
-use dstack_sdk::tappd_client::TappdClient;
-
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let client = TappdClient::new(None); // Uses env var or default to Unix socket
-
-    // Get system info
-    let info = client.info().await?;
-    println!("Instance ID: {}", info.instance_id);
-    println!("App Name: {}", info.app_name);
-
-    // Derive a key
-    let key_resp = client.derive_key("my-app").await?;
-    println!("Key: {}", key_resp.key);
-    println!("Certificate Chain: {:?}", key_resp.certificate_chain);
-
-    // Decode the key to bytes (extracts raw ECDSA P-256 private key - 32 bytes)
-    let key_bytes = key_resp.to_bytes()?;
-    println!("ECDSA P-256 private key bytes (32 bytes): {:?}", key_bytes.len());
-
-    // Generate quote (exactly 64 bytes of report data required)
-    let mut report_data = b"test-data".to_vec();
-    report_data.resize(64, 0); // Pad to 64 bytes
-    let quote_resp = client.get_quote(report_data).await?;
-    println!("Quote: {}", quote_resp.quote);
-    let rtmrs = quote_resp.replay_rtmrs()?;
-    println!("Replayed RTMRs: {:?}", rtmrs);
-
-    Ok(())
-}
+let client = DstackClient::new(Some("http://localhost:8090".to_string()));
 ```
 
-## Features
+## Core API
 
-### DstackClient Initialization
+### Derive Keys
+
+`get_key()` derives deterministic keys bound to your application's identity (`app_id`). The same path always produces the same key for your app, but different apps get different keys even with the same path.
 
 ```rust
-let client = DstackClient::new(Some("http://localhost:8000"));
-```
-- `endpoint`: Optional HTTP URL or Unix socket path (`/var/run/dstack.sock` by default)
-- Will use the `DSTACK_SIMULATOR_ENDPOINT` environment variable if set
+// Derive keys by path
+let eth_key = client.get_key(Some("wallet/ethereum".to_string()), None).await?;
+let btc_key = client.get_key(Some("wallet/bitcoin".to_string()), None).await?;
 
-### TappdClient Initialization (Legacy API)
+// Use path to separate keys
+let mainnet_key = client.get_key(Some("wallet/eth/mainnet".to_string()), None).await?;
+let testnet_key = client.get_key(Some("wallet/eth/testnet".to_string()), None).await?;
+```
+
+**Parameters:**
+- `path`: Key derivation path (determines the key)
+- `purpose` (optional): Included in signature chain message, does not affect the derived key
+
+**Returns:** `GetKeyResponse`
+- `key`: Hex-encoded private key
+- `signature_chain`: Signatures proving the key was derived in a genuine TEE
+
+### Generate Attestation Quotes
+
+`get_quote()` creates a TDX quote proving your code runs in a genuine TEE.
 
 ```rust
-let client = TappdClient::new(Some("/var/run/tappd.sock"));
+let quote = client.get_quote(b"user:alice:nonce123".to_vec()).await?;
+
+// Replay RTMRs from the event log
+let rtmrs = quote.replay_rtmrs()?;
+println!("{:?}", rtmrs);
 ```
-- `endpoint`: Optional HTTP URL or Unix socket path (`/var/run/tappd.sock` by default)
-- Will use the `TAPPD_SIMULATOR_ENDPOINT` environment variable if set
-- Supports the legacy tappd.sock API for backwards compatibility
 
-## API Methods
+**Parameters:**
+- `report_data`: Exactly 64 bytes recommended. If shorter, pad with zeros. If longer, hash it first (e.g., SHA-256).
 
-### DstackClient Methods
+**Returns:** `GetQuoteResponse`
+- `quote`: Hex-encoded TDX quote
+- `event_log`: JSON string of measured events
+- `replay_rtmrs()`: Method to compute RTMR values from event log
 
-#### `info(): InfoResponse`
-Fetches metadata and measurements about the CVM instance.
+### Get Instance Info
 
-#### `get_key(path: Option<String>, purpose: Option<String>) -> GetKeyResponse`
-Derives a key for a specified path and optional purpose.
-- `key`: Private key in hex format
-- `signature_chain`: Vec of X.509 certificate chain entries
+```rust
+let info = client.info().await?;
+println!("{}", info.app_id);
+println!("{}", info.instance_id);
+println!("{}", info.tcb_info);
+```
 
-#### `get_quote(report_data: Vec<u8>) -> GetQuoteResponse`
-Generates a TDX quote with a custom 64-byte payload.
-- `quote`: Hex-encoded quote
-- `event_log`: Serialized list of events
-- `replay_rtmrs()`: Reconstructs RTMR values from the event log
+**Returns:** `InfoResponse`
+- `app_id`: Application identifier
+- `instance_id`: Instance identifier
+- `app_name`: Application name
+- `tcb_info`: TCB measurements (JSON string)
+- `compose_hash`: Hash of the app configuration
+- `app_cert`: Application certificate (PEM)
 
 #### `attest(report_data: Vec<u8>) -> AttestResponse`
 Generates a versioned attestation with a custom 64-byte payload.
@@ -125,53 +104,103 @@ Generates a versioned attestation with a custom 64-byte payload.
 #### `emit_event(event: String, payload: Vec<u8>)`
 Sends an event log with associated binary payload to the runtime.
 
-#### `get_tls_key(...) -> GetTlsKeyResponse`
-Requests a key and X.509 certificate chain for RA-TLS or server/client authentication.
+### Generate TLS Certificates
 
-#### sign(algorithm: &str, data: Vec<u8>) -> SignResponse
-Signs a payload using a derived key.
+`get_tls_key()` creates fresh TLS certificates. Unlike `get_key()`, each call generates a new random key.
 
-#### verify(algorithm: &str, data: Vec<u8>, signature: Vec<u8>, public_key: Vec<u8>) -> VerifyResponse
-Verifies a payload signature.
+```rust
+use dstack_sdk_types::dstack::TlsKeyConfig;
 
-### TappdClient Methods (Legacy API)
+let tls_config = TlsKeyConfig::builder()
+    .subject("api.example.com")
+    .alt_names(vec!["localhost".to_string()])
+    .usage_ra_tls(true)  // Embed attestation in certificate
+    .usage_server_auth(true)
+    .build();
 
-#### `info(): TappdInfoResponse`
-Fetches metadata and measurements about the CVM instance.
+let tls = client.get_tls_key(tls_config).await?;
 
-#### `derive_key(path: &str) -> DeriveKeyResponse`
-Derives a key for a specified path.
-- `key`: ECDSA P-256 private key in PEM format
-- `certificate_chain`: Vec of X.509 certificate chain entries
-- `to_bytes()`: Extracts and returns the raw ECDSA P-256 private key bytes (32 bytes)
+println!("{}", tls.key);                // PEM private key
+println!("{:?}", tls.certificate_chain);  // Certificate chain
+```
 
-#### `derive_key_with_subject(path: &str, subject: &str) -> DeriveKeyResponse`
-Derives a key with a custom certificate subject.
+**TlsKeyConfig Options:**
+- `.subject(name)`: Certificate common name (e.g., domain name)
+- `.alt_names(names)`: List of subject alternative names
+- `.usage_ra_tls(bool)`: Embed TDX quote in certificate extension
+- `.usage_server_auth(bool)`: Enable for server authentication
+- `.usage_client_auth(bool)`: Enable for client authentication
 
-#### `derive_key_with_subject_and_alt_names(path: &str, subject: Option<&str>, alt_names: Option<Vec<String>>) -> DeriveKeyResponse`
-Derives a key with full certificate customization.
+**Returns:** `GetTlsKeyResponse`
+- `key`: PEM-encoded private key
+- `certificate_chain`: List of PEM certificates
 
-#### `get_quote(report_data: Vec<u8>) -> TdxQuoteResponse`
-Generates a TDX quote with exactly 64 bytes of raw report data.
+### Sign and Verify
 
-### Structures
-- `GetKeyResponse`: Holds derived key and signature chain
+Sign data using TEE-derived keys (not yet released):
 
-- `GetQuoteResponse`: Contains the TDX quote and event log, with RTMR replay support
+```rust
+let result = client.sign("ed25519", b"message to sign".to_vec()).await?;
+println!("{:?}", result.signature);
+println!("{:?}", result.public_key);
 
-- `InfoResponse`: CVM instance metadata, including image and runtime measurements
+// Verify the signature
+let valid = client.verify(
+    "ed25519",
+    b"message to sign".to_vec(),
+    result.signature.clone(),
+    result.public_key.clone()
+).await?;
+println!("{}", valid.valid);  // true
+```
 
-- `SignResponse`: Holds a signature, signature chain, and public key
+**`sign()` Parameters:**
+- `algorithm`: `"ed25519"`, `"secp256k1"`, or `"secp256k1_prehashed"`
+- `data`: Data to sign
 
-- `VerifyResponse`: Holds a boolean valid result
+**`sign()` Returns:** `SignResponse`
+- `signature`: Signature bytes
+- `public_key`: Public key bytes
+- `signature_chain`: Signatures proving TEE origin
 
-## API Reference
+**`verify()` Parameters:**
+- `algorithm`: Algorithm used for signing
+- `data`: Original data
+- `signature`: Signature to verify
+- `public_key`: Public key to verify against
 
-### Running the Simulator
+**`verify()` Returns:** `VerifyResponse`
+- `valid`: Boolean indicating if signature is valid
 
-For local development without TDX devices, you can use the simulator under `sdk/simulator`.
+### Emit Events
 
-Run the simulator with:
+Extend RTMR3 with custom measurements for your application's boot sequence (requires dstack OS 0.5.0+). These measurements are append-only and become part of the attestation record.
+
+```rust
+client.emit_event("config_loaded".to_string(), b"production".to_vec()).await?;
+client.emit_event("plugin_initialized".to_string(), b"auth-v2".to_vec()).await?;
+```
+
+**Parameters:**
+- `event`: Event name (string identifier)
+- `payload`: Event value (bytes)
+
+## Blockchain Integration
+
+### Ethereum with Alloy
+
+```rust
+use dstack_sdk::dstack_client::DstackClient;
+use dstack_sdk::ethereum::to_account;
+
+let key = client.get_key(Some("wallet/ethereum".to_string()), None).await?;
+let signer = to_account(&key)?;
+println!("Ethereum address: {}", signer.address());
+```
+
+## Development
+
+For local development without TDX hardware, use the simulator:
 
 ```bash
 git clone https://github.com/Dstack-TEE/dstack.git
@@ -179,25 +208,39 @@ cd dstack/sdk/simulator
 ./build.sh
 ./dstack-simulator
 ```
-Set the endpoint in your environment:
 
+Then set the endpoint:
+
+```bash
+export DSTACK_SIMULATOR_ENDPOINT=http://localhost:8090
 ```
-export DSTACK_SIMULATOR_ENDPOINT=/path/to/dstack-simulator/dstack.sock
-```
 
-## Examples
+Run examples:
 
-See the `examples/` directory for comprehensive usage examples:
-
-- `examples/dstack_client_usage.rs` - Complete example using the current DstackClient API
-- `examples/tappd_client_usage.rs` - Complete example using the legacy TappdClient API
-
-Run examples with:
 ```bash
 cargo run --example dstack_client_usage
-cargo run --example tappd_client_usage
 ```
+
+---
+
+## Migration from TappdClient
+
+Replace `TappdClient` with `DstackClient`:
+
+```rust
+// Before
+use dstack_sdk::tappd_client::TappdClient;
+let client = TappdClient::new(None);
+
+// After
+use dstack_sdk::dstack_client::DstackClient;
+let client = DstackClient::new(None);
+```
+
+Method changes:
+- `derive_key()` → `get_tls_key()` for TLS certificates
+- Socket path: `/var/run/tappd.sock` → `/var/run/dstack.sock`
 
 ## License
 
-Apache License
+Apache License 2.0

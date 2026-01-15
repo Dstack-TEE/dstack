@@ -276,7 +276,7 @@ export class DstackClient<T extends TcbInfo = TcbInfoV05x> {
   async isReachable(): Promise<boolean> {
     try {
       // Use info endpoint to test connectivity with 500ms timeout
-      await send_rpc_request(this.endpoint, '/prpc/Tappd.Info', '{}', 500)
+      await send_rpc_request(this.endpoint, '/Info', '{}', 500)
       return true
     } catch (error) {
       return false
@@ -460,5 +460,15 @@ export class TappdClient extends DstackClient<TcbInfoV03x> {
       configurable: false,
     })
     return Object.freeze(result)
+  }
+
+  async isReachable(): Promise<boolean> {
+    try {
+      // Use info endpoint to test connectivity with 500ms timeout
+      await send_rpc_request(this.endpoint, '/prpc/Tappd.Info', '{}', 500)
+      return true
+    } catch (error) {
+      return false
+    }
   }
 }

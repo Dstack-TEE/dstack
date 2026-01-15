@@ -16,7 +16,7 @@ mod verification;
 pub use dstack_mr::TdxMeasurements;
 
 pub use types::{
-    AcpiTables, ErrorResponse, RtmrEventEntry, RtmrEventStatus, RtmrMismatch, VerificationDetails,
+    AcpiTables, RtmrEventEntry, RtmrEventStatus, RtmrMismatch, VerificationDetails,
     VerificationRequest, VerificationResponse,
 };
 pub use verification::CvmVerifier;

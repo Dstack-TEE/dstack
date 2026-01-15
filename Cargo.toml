@@ -102,7 +102,7 @@ log = "0.4.26"
 notify = "8.0.0"
 rand = "0.8.5"
 tracing = "0.1.40"
-tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
 safe-write = "0.1.2"
 nix = "0.29.0"
 sd-notify = "0.4.5"
@@ -120,7 +120,7 @@ prost-types = "0.13.5"
 scale = { version = "3.7.4", package = "parity-scale-codec", features = [
     "derive",
 ] }
-serde = { version = "1.0.219", features = ["derive"], default-features = false }
+serde = { version = "1.0.228", features = ["derive"], default-features = false }
 serde-human-bytes = "0.1.2"
 serde_json = { version = "1.0.140", default-features = false }
 serde_ini = "0.2.0"
@@ -212,7 +212,7 @@ enum_dispatch = "0.3.13"
 insta = "1.42.2"
 num_enum = "0.7.3"
 thiserror = "2.0.12"
-derive_more = "2.0.1"
+derive_more = "2.1.1"
 tempfile = "3.18.0"
 
 # Utilities

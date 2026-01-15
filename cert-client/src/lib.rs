@@ -67,8 +67,7 @@ impl CertRequestClient {
             | KeyProvider::Tpm { key, .. } => {
                 let ca = CaCert::new(keys.ca_cert.clone(), key.clone())
                     .context("Failed to create CA")?;
-                let ca = Box::new(ca);
-                Ok(CertRequestClient::Local { ca })
+                Ok(CertRequestClient::Local { ca: Box::new(ca) })
             }
             KeyProvider::Kms {
                 url,

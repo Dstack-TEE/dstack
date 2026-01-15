@@ -104,7 +104,7 @@ impl DstackClient {
                     .send_request_json::<_, _, Value>(
                         path,
                         Method::POST,
-                        &[("Content-Type", "application/json")],
+                        &[("Content-Type", "application/json"), ("Host", "dstack")],
                         Some(&payload),
                     )
                     .await?;

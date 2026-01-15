@@ -1522,7 +1522,7 @@ h1, h2, h3, h4, h5, h6 {
 }
 
 .port-row {
-  grid-template-columns: 90px 100px 120px 120px 100px;
+  grid-template-columns: 90px 100px 120px 120px 160px 100px;
 }
 
 .gpu-config-items {
