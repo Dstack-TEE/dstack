@@ -20,6 +20,7 @@ use main_service::{Proxy, ProxyOptions, RpcHandler};
 use crate::debug_service::DebugRpcHandler;
 
 mod admin_service;
+mod cert_store;
 mod config;
 mod debug_service;
 mod distributed_certbot;

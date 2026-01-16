@@ -132,7 +132,7 @@ impl DistributedCertBot {
         // Try to acquire lock
         if !self
             .kv_store
-            .try_acquire_cert_renew_lock(domain, RENEW_LOCK_TIMEOUT_SECS)
+            .try_acquire_cert_lock(domain, RENEW_LOCK_TIMEOUT_SECS)
         {
             info!(
                 "another node is renewing certificate for {}, skipping",
@@ -147,7 +147,7 @@ impl DistributedCertBot {
         let result = self.do_renew().await;
 
         // Release lock regardless of result
-        if let Err(e) = self.kv_store.release_cert_renew_lock(domain) {
+        if let Err(e) = self.kv_store.release_cert_lock(domain) {
             error!("failed to release cert renew lock: {}", e);
         }
 
@@ -184,7 +184,7 @@ impl DistributedCertBot {
         // Try to acquire lock first
         if !self
             .kv_store
-            .try_acquire_cert_renew_lock(domain, RENEW_LOCK_TIMEOUT_SECS)
+            .try_acquire_cert_lock(domain, RENEW_LOCK_TIMEOUT_SECS)
         {
             // Another node is requesting, wait for it
             info!(
@@ -202,7 +202,7 @@ impl DistributedCertBot {
 
         let result = self.do_request_new().await;
 
-        if let Err(e) = self.kv_store.release_cert_renew_lock(domain) {
+        if let Err(e) = self.kv_store.release_cert_lock(domain) {
             error!("failed to release cert renew lock: {}", e);
         }
 
@@ -292,7 +292,7 @@ impl DistributedCertBot {
         );
 
         // Try to load credentials from KvStore
-        if let Some(creds) = self.kv_store.get_cert_credentials(&self.config.domain) {
+        if let Some(creds) = self.kv_store.get_cert_acme(&self.config.domain) {
             if acme_url_matches(&creds.acme_credentials, &self.config.acme_url) {
                 info!(
                     "acme[{}]: loaded account credentials from KvStore",
@@ -318,7 +318,7 @@ impl DistributedCertBot {
                     self.config.domain
                 );
                 // Save to KvStore for other nodes
-                self.kv_store.save_cert_credentials(
+                self.kv_store.save_cert_acme(
                     &self.config.domain,
                     &CertCredentials {
                         acme_credentials: creds_json.clone(),
@@ -351,7 +351,7 @@ impl DistributedCertBot {
         }
 
         // Save to KvStore
-        self.kv_store.save_cert_credentials(
+        self.kv_store.save_cert_acme(
             &self.config.domain,
             &CertCredentials {
                 acme_credentials: creds_json.clone(),

@@ -24,8 +24,7 @@ use tokio::time::timeout;
 use tokio_rustls::{rustls, server::TlsStream, TlsAcceptor};
 use tracing::{debug, info};
 
-use or_panic::ResultOrPanic;
-
+use crate::cert_store::CertStore;
 use crate::config::{CryptoProvider, ProxyConfig, TlsVersion};
 use crate::main_service::Proxy;
 
@@ -99,6 +98,7 @@ where
     }
 }
 
+/// Create a TLS acceptor from certificate files (legacy single-cert mode)
 pub(crate) fn create_acceptor(config: &ProxyConfig, h2: bool) -> Result<TlsAcceptor> {
     let cert_pem = fs::read(&config.cert_chain).context("failed to read certificate")?;
     let key_pem = fs::read(&config.cert_key).context("failed to read private key")?;
@@ -125,6 +125,40 @@ pub(crate) fn create_acceptor(config: &ProxyConfig, h2: bool) -> Result<TlsAccep
         .context("Failed to build TLS config")?
         .with_no_client_auth()
         .with_single_cert(certs, key)?;
+
+    if h2 {
+        config.alpn_protocols = vec![b"h2".to_vec()];
+    }
+
+    let acceptor = TlsAcceptor::from(Arc::new(config));
+
+    Ok(acceptor)
+}
+
+/// Create a TLS acceptor using CertStore for SNI-based certificate resolution
+pub(crate) fn create_acceptor_with_cert_store(
+    proxy_config: &ProxyConfig,
+    cert_store: Arc<CertStore>,
+    h2: bool,
+) -> Result<TlsAcceptor> {
+    let provider = match proxy_config.tls_crypto_provider {
+        CryptoProvider::AwsLcRs => rustls::crypto::aws_lc_rs::default_provider(),
+        CryptoProvider::Ring => rustls::crypto::ring::default_provider(),
+    };
+    let supported_versions = proxy_config
+        .tls_versions
+        .iter()
+        .map(|v| match v {
+            TlsVersion::Tls12 => &TLS12,
+            TlsVersion::Tls13 => &TLS13,
+        })
+        .collect::<Vec<_>>();
+
+    let mut config = rustls::ServerConfig::builder_with_provider(Arc::new(provider))
+        .with_protocol_versions(&supported_versions)
+        .context("failed to build TLS config")?
+        .with_no_client_auth()
+        .with_cert_resolver(cert_store);
 
     if h2 {
         config.alpn_protocols = vec![b"h2".to_vec()];
@@ -213,7 +247,7 @@ impl Proxy {
                     json_response(&app_info)
                 }
                 "/acme-info" => {
-                    let acme_info = self.acme_info().await.context("Failed to get acme info")?;
+                    let acme_info = self.acme_info(None).context("Failed to get acme info")?;
                     json_response(&acme_info)
                 }
                 _ => empty_response(StatusCode::NOT_FOUND),
@@ -280,12 +314,12 @@ impl Proxy {
         let acceptor = if h2 {
             self.h2_acceptor
                 .read()
-                .or_panic("lock should never fail")
+                .expect("Failed to acquire read lock for TLS acceptor")
                 .clone()
         } else {
             self.acceptor
                 .read()
-                .or_panic("lock should never fail")
+                .expect("Failed to acquire read lock for TLS acceptor")
                 .clone()
         };
         let tls_stream = timeout(

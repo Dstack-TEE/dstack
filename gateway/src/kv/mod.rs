@@ -12,6 +12,14 @@
 //! # Persistent WaveKV (needs persistence + sync)
 //! - `inst/{instance_id}` → InstanceData
 //! - `node/{node_id}` → NodeData
+//! - `dns_cred/{cred_id}` → DnsCredential
+//! - `dns_cred_default` → cred_id (default credential ID)
+//! - `cert/{domain}/config` → DomainCertConfig
+//! - `cert/{domain}/data` → CertData
+//! - `cert/{domain}/acme` → AcmeCredentials (ACME account for this domain)
+//! - `cert/{domain}/lock` → CertRenewLock
+//! - `cert/{domain}/attestation/latest` → CertAttestation
+//! - `cert/{domain}/attestation/{timestamp}` → CertAttestation (history)
 //!
 //! # Ephemeral WaveKV (no persistence, sync only)
 //! - `conn/{instance_id}/{node_id}` → u64 (connection count)
@@ -83,6 +91,60 @@ pub struct CertRenewLock {
     pub started_by: NodeId,
 }
 
+/// Certificate attestation (TDX Quote of certificate public key)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CertAttestation {
+    /// Certificate public key (DER encoded)
+    pub public_key: Vec<u8>,
+    /// TDX Quote (JSON serialized)
+    pub quote: String,
+    /// Node that generated this attestation
+    pub generated_by: NodeId,
+    /// Timestamp when this attestation was generated
+    pub generated_at: u64,
+}
+
+/// DNS credential configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DnsCredential {
+    /// Unique identifier
+    pub id: String,
+    /// Display name
+    pub name: String,
+    /// DNS provider configuration
+    pub provider: DnsProvider,
+    /// Creation timestamp
+    pub created_at: u64,
+    /// Last update timestamp
+    pub updated_at: u64,
+}
+
+/// DNS provider configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum DnsProvider {
+    Cloudflare {
+        api_token: String,
+        zone_id: String,
+    },
+    // Future providers can be added here
+}
+
+/// Domain certificate configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DomainCertConfig {
+    /// Domain name (e.g., "*.app.example.com")
+    pub domain: String,
+    /// DNS credential ID to use (None = use default)
+    pub dns_cred_id: Option<String>,
+    /// ACME server URL
+    pub acme_url: String,
+    /// Whether certificate management is enabled
+    pub enabled: bool,
+    /// Creation timestamp
+    pub created_at: u64,
+}
+
 // Key prefixes and builders
 pub mod keys {
     use super::NodeId;
@@ -96,6 +158,8 @@ pub mod keys {
     pub const LAST_SEEN_NODE_PREFIX: &str = "last_seen/node/";
     pub const PEER_ADDR_PREFIX: &str = "__peer_addr/";
     pub const CERT_PREFIX: &str = "cert/";
+    pub const DNS_CRED_PREFIX: &str = "dns_cred/";
+    pub const DNS_CRED_DEFAULT: &str = "dns_cred_default";
 
     pub fn inst(instance_id: &str) -> String {
         format!("{INST_PREFIX}{instance_id}")
@@ -136,18 +200,74 @@ pub mod keys {
         format!("{PEER_ADDR_PREFIX}{node_id}")
     }
 
-    // Certificate keys (per domain)
-    pub fn cert_credentials(domain: &str) -> String {
-        format!("{CERT_PREFIX}{domain}/credentials")
+    // ==================== DNS Credential keys ====================
+
+    /// Key for a DNS credential
+    pub fn dns_cred(cred_id: &str) -> String {
+        format!("{DNS_CRED_PREFIX}{cred_id}")
     }
 
+    /// Parse cred_id from dns_cred/{cred_id} key
+    pub fn parse_dns_cred_key(key: &str) -> Option<&str> {
+        key.strip_prefix(DNS_CRED_PREFIX)
+    }
+
+    // ==================== Certificate keys (per domain) ====================
+
+    /// Key for domain certificate configuration
+    pub fn cert_config(domain: &str) -> String {
+        format!("{CERT_PREFIX}{domain}/config")
+    }
+
+    /// Key for domain certificate data (cert + key)
     pub fn cert_data(domain: &str) -> String {
         format!("{CERT_PREFIX}{domain}/data")
     }
 
+    /// Key for domain ACME credentials
+    pub fn cert_acme(domain: &str) -> String {
+        format!("{CERT_PREFIX}{domain}/acme")
+    }
+
+    /// Key for domain certificate renew lock
+    pub fn cert_lock(domain: &str) -> String {
+        format!("{CERT_PREFIX}{domain}/lock")
+    }
+
+    /// Key for latest attestation of a domain
+    pub fn cert_attestation_latest(domain: &str) -> String {
+        format!("{CERT_PREFIX}{domain}/attestation/latest")
+    }
+
+    /// Key for historical attestation of a domain
+    pub fn cert_attestation_history(domain: &str, timestamp: u64) -> String {
+        format!("{CERT_PREFIX}{domain}/attestation/{timestamp}")
+    }
+
+    /// Prefix for all attestations of a domain (for iteration)
+    pub fn cert_attestation_prefix(domain: &str) -> String {
+        format!("{CERT_PREFIX}{domain}/attestation/")
+    }
+
+    /// Parse domain from cert/{domain}/... key
+    pub fn parse_cert_domain(key: &str) -> Option<&str> {
+        let rest = key.strip_prefix(CERT_PREFIX)?;
+        rest.split('/').next()
+    }
+
+    // ==================== Legacy keys (for migration) ====================
+
+    #[deprecated(note = "use cert_acme instead")]
+    pub fn cert_credentials(domain: &str) -> String {
+        format!("{CERT_PREFIX}{domain}/credentials")
+    }
+
+    #[deprecated(note = "use cert_lock instead")]
     pub fn cert_renew_lock(domain: &str) -> String {
         format!("{CERT_PREFIX}{domain}/renew_lock")
     }
+
+    // ==================== Parse helpers ====================
 
     /// Parse instance_id from key
     pub fn parse_inst_key(key: &str) -> Option<&str> {
@@ -508,22 +628,102 @@ impl KvStore {
             .collect()
     }
 
-    // ==================== Certificate Sync ====================
+    // ==================== DNS Credential Management ====================
 
-    /// Get certificate credentials for a domain
-    pub fn get_cert_credentials(&self, domain: &str) -> Option<CertCredentials> {
-        self.persistent
-            .read()
-            .decode(&keys::cert_credentials(domain))
+    /// Get a DNS credential by ID
+    pub fn get_dns_credential(&self, cred_id: &str) -> Option<DnsCredential> {
+        self.persistent.read().decode(&keys::dns_cred(cred_id))
     }
 
-    /// Save certificate credentials for a domain
-    pub fn save_cert_credentials(&self, domain: &str, creds: &CertCredentials) -> Result<()> {
+    /// Save a DNS credential
+    pub fn save_dns_credential(&self, cred: &DnsCredential) -> Result<()> {
         self.persistent
             .write()
-            .put_encoded(keys::cert_credentials(domain), creds)?;
+            .put_encoded(keys::dns_cred(&cred.id), cred)?;
         Ok(())
     }
+
+    /// Delete a DNS credential
+    pub fn delete_dns_credential(&self, cred_id: &str) -> Result<()> {
+        self.persistent.write().delete(keys::dns_cred(cred_id))?;
+        Ok(())
+    }
+
+    /// List all DNS credentials
+    pub fn list_dns_credentials(&self) -> Vec<DnsCredential> {
+        self.persistent
+            .read()
+            .iter_decoded_values(keys::DNS_CRED_PREFIX)
+            .collect()
+    }
+
+    /// Get the default DNS credential ID
+    pub fn get_default_dns_credential_id(&self) -> Option<String> {
+        self.persistent.read().decode(keys::DNS_CRED_DEFAULT)
+    }
+
+    /// Set the default DNS credential ID
+    pub fn set_default_dns_credential_id(&self, cred_id: &str) -> Result<()> {
+        self.persistent
+            .write()
+            .put_encoded(keys::DNS_CRED_DEFAULT.to_string(), &cred_id)?;
+        Ok(())
+    }
+
+    /// Get the default DNS credential (resolves the ID to the actual credential)
+    pub fn get_default_dns_credential(&self) -> Option<DnsCredential> {
+        let cred_id = self.get_default_dns_credential_id()?;
+        self.get_dns_credential(&cred_id)
+    }
+
+    /// Watch for DNS credential changes
+    pub fn watch_dns_credentials(&self) -> watch::Receiver<()> {
+        self.persistent.watch_prefix(keys::DNS_CRED_PREFIX)
+    }
+
+    // ==================== Domain Certificate Config ====================
+
+    /// Get domain certificate configuration
+    pub fn get_cert_config(&self, domain: &str) -> Option<DomainCertConfig> {
+        self.persistent.read().decode(&keys::cert_config(domain))
+    }
+
+    /// Save domain certificate configuration
+    pub fn save_cert_config(&self, config: &DomainCertConfig) -> Result<()> {
+        self.persistent
+            .write()
+            .put_encoded(keys::cert_config(&config.domain), config)?;
+        Ok(())
+    }
+
+    /// Delete domain certificate configuration
+    pub fn delete_cert_config(&self, domain: &str) -> Result<()> {
+        self.persistent.write().delete(keys::cert_config(domain))?;
+        Ok(())
+    }
+
+    /// List all domain certificate configurations
+    pub fn list_cert_configs(&self) -> Vec<DomainCertConfig> {
+        self.persistent
+            .read()
+            .iter_decoded(keys::CERT_PREFIX)
+            .filter_map(|(key, config): (String, DomainCertConfig)| {
+                // Only return config entries (not data/acme/lock/attestation)
+                if key.ends_with("/config") {
+                    Some(config)
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    /// Watch for domain certificate config changes
+    pub fn watch_cert_configs(&self) -> watch::Receiver<()> {
+        self.persistent.watch_prefix(keys::CERT_PREFIX)
+    }
+
+    // ==================== Certificate Data ====================
 
     /// Get certificate data for a domain
     pub fn get_cert_data(&self, domain: &str) -> Option<CertData> {
@@ -538,22 +738,59 @@ impl KvStore {
         Ok(())
     }
 
-    /// Get certificate renew lock for a domain
-    pub fn get_cert_renew_lock(&self, domain: &str) -> Option<CertRenewLock> {
+    /// Delete certificate data for a domain
+    pub fn delete_cert_data(&self, domain: &str) -> Result<()> {
+        self.persistent.write().delete(keys::cert_data(domain))?;
+        Ok(())
+    }
+
+    /// Load all certificate data (for startup)
+    pub fn load_all_cert_data(&self) -> BTreeMap<String, CertData> {
         self.persistent
             .read()
-            .decode(&keys::cert_renew_lock(domain))
+            .iter_decoded(keys::CERT_PREFIX)
+            .filter_map(|(key, data): (String, CertData)| {
+                if key.ends_with("/data") {
+                    let domain = keys::parse_cert_domain(&key)?;
+                    Some((domain.to_string(), data))
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    // ==================== ACME Credentials ====================
+
+    /// Get ACME credentials for a domain
+    pub fn get_cert_acme(&self, domain: &str) -> Option<CertCredentials> {
+        self.persistent.read().decode(&keys::cert_acme(domain))
+    }
+
+    /// Save ACME credentials for a domain
+    pub fn save_cert_acme(&self, domain: &str, creds: &CertCredentials) -> Result<()> {
+        self.persistent
+            .write()
+            .put_encoded(keys::cert_acme(domain), creds)?;
+        Ok(())
+    }
+
+    // ==================== Certificate Renew Lock ====================
+
+    /// Get certificate renew lock for a domain
+    pub fn get_cert_lock(&self, domain: &str) -> Option<CertRenewLock> {
+        self.persistent.read().decode(&keys::cert_lock(domain))
     }
 
     /// Try to acquire certificate renew lock
     /// Returns true if lock acquired, false if already locked by another node
-    pub fn try_acquire_cert_renew_lock(&self, domain: &str, lock_timeout_secs: u64) -> bool {
+    pub fn try_acquire_cert_lock(&self, domain: &str, lock_timeout_secs: u64) -> bool {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
 
-        if let Some(existing) = self.get_cert_renew_lock(domain) {
+        if let Some(existing) = self.get_cert_lock(domain) {
             // Check if lock is still valid (not expired)
             if now < existing.started_at + lock_timeout_secs {
                 return false;
@@ -567,19 +804,68 @@ impl KvStore {
         };
         self.persistent
             .write()
-            .put_encoded(keys::cert_renew_lock(domain), &lock)
+            .put_encoded(keys::cert_lock(domain), &lock)
             .is_ok()
     }
 
     /// Release certificate renew lock
-    pub fn release_cert_renew_lock(&self, domain: &str) -> Result<()> {
-        self.persistent
-            .write()
-            .delete(keys::cert_renew_lock(domain))?;
+    pub fn release_cert_lock(&self, domain: &str) -> Result<()> {
+        self.persistent.write().delete(keys::cert_lock(domain))?;
         Ok(())
     }
 
-    /// Watch for certificate data changes
+    // ==================== Certificate Attestation ====================
+
+    /// Get the latest attestation for a domain
+    pub fn get_cert_attestation_latest(&self, domain: &str) -> Option<CertAttestation> {
+        self.persistent
+            .read()
+            .decode(&keys::cert_attestation_latest(domain))
+    }
+
+    /// Save attestation for a domain (saves both latest and history)
+    pub fn save_cert_attestation(&self, domain: &str, attestation: &CertAttestation) -> Result<()> {
+        let mut state = self.persistent.write();
+        // Save to history
+        state.put_encoded(
+            keys::cert_attestation_history(domain, attestation.generated_at),
+            attestation,
+        )?;
+        // Update latest
+        state.put_encoded(keys::cert_attestation_latest(domain), attestation)?;
+        Ok(())
+    }
+
+    /// List all attestation history for a domain (sorted by timestamp descending)
+    pub fn list_cert_attestations(&self, domain: &str) -> Vec<CertAttestation> {
+        let prefix = keys::cert_attestation_prefix(domain);
+        let latest_key = keys::cert_attestation_latest(domain);
+        let mut attestations: Vec<CertAttestation> = self
+            .persistent
+            .read()
+            .iter_decoded(&prefix)
+            .filter_map(|(key, att): (String, CertAttestation)| {
+                // Skip the "latest" entry
+                if key == latest_key {
+                    None
+                } else {
+                    Some(att)
+                }
+            })
+            .collect();
+        // Sort by generated_at descending (newest first)
+        attestations.sort_by(|a, b| b.generated_at.cmp(&a.generated_at));
+        attestations
+    }
+
+    // ==================== Watch helpers ====================
+
+    /// Watch for certificate data changes (any domain)
+    pub fn watch_all_certs(&self) -> watch::Receiver<()> {
+        self.persistent.watch_prefix(keys::CERT_PREFIX)
+    }
+
+    /// Watch for certificate data changes (specific domain)
     pub fn watch_cert(&self, domain: &str) -> watch::Receiver<()> {
         self.persistent.watch_prefix(&keys::cert_data(domain))
     }
