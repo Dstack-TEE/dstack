@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-pragma solidity ^0.8.22;
+pragma solidity ^0.8.24;
 
 import "./IAppAuth.sol";
 import "./IAppAuthBasicManagement.sol";
@@ -49,7 +49,10 @@ contract DstackApp is
         bool _allowAnyDevice,
         bytes32 initialDeviceId,
         bytes32 initialComposeHash
-    ) public initializer {
+    )
+        public
+        initializer
+    {
         require(initialOwner != address(0), "invalid owner address");
 
         _upgradesDisabled = _disableUpgrades;
@@ -85,10 +88,9 @@ contract DstackApp is
         override(ERC165Upgradeable, IERC165)
         returns (bool)
     {
-        return
-            interfaceId == 0x1e079198 || // IAppAuth
-            interfaceId == 0x8fd37527 || // IAppAuthBasicManagement
-            super.supportsInterface(interfaceId);
+        return interfaceId == 0x1e079198 // IAppAuth
+            || interfaceId == 0x8fd37527 // IAppAuthBasicManagement
+            || super.supportsInterface(interfaceId);
     }
 
     // Function to authorize upgrades (required by UUPSUpgradeable)
@@ -127,9 +129,12 @@ contract DstackApp is
     }
 
     // Check if an app is allowed to boot
-    function isAppAllowed(
-        IAppAuth.AppBootInfo calldata bootInfo
-    ) external view override returns (bool isAllowed, string memory reason) {
+    function isAppAllowed(IAppAuth.AppBootInfo calldata bootInfo)
+        external
+        view
+        override
+        returns (bool isAllowed, string memory reason)
+    {
         // Check if compose hash is allowed
         if (!allowedComposeHashes[bootInfo.composeHash]) {
             return (false, "Compose hash not allowed");

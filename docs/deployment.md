@@ -355,7 +355,7 @@ Continue? [y/N]
 
 **Before pressing 'y'**, add the compose hash to your auth server whitelist:
 - For auth-simple: Add to `composeHashes` array in `auth-config.json`
-- For auth-eth: Use `app:add-hash` (see [On-Chain Governance](./onchain-governance.md#register-gateway-app))
+- For auth-eth: Use Foundry scripts (see [On-Chain Governance](./onchain-governance.md#register-gateway-app))
 
 Then return to the first terminal and press 'y' to deploy.
 

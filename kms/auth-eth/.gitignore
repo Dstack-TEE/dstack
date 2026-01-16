@@ -1,4 +1,13 @@
 /artifacts
+/broadcast
 /cache
+/coverage
 /dist
 /out
+
+# Test logs
+anvil-test.log
+anvil.log
+deploy.log
+server-test.log
+.env.test

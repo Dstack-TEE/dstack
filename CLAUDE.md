@@ -63,15 +63,20 @@ cargo clippy -- -D warnings --allow unused_variables
 
 ```bash
 cd kms/auth-eth
-npm install
-npm run build          # Compile TypeScript
-npm test              # Run tests
-npm run test:coverage # Run tests with coverage
+npm install       # Install Node.js dependencies for bootAuth server
+forge install     # Install Foundry dependencies (submodules)
 
-# Hardhat commands
-npx hardhat compile
-npx hardhat test
-npx hardhat node  # Start local node
+# Build
+forge build       # Compile smart contracts
+npm run build     # Build TypeScript server
+
+# Test
+forge test --ffi      # Run Foundry contract tests
+npm test              # Run TypeScript server tests
+npm run test:coverage # Run TypeScript tests with coverage
+
+# Local development
+anvil             # Start local Ethereum node
 ```
 
 ### Python SDK
@@ -174,8 +179,8 @@ This rule is enforced in `.cursorrules`.
 - Via Web UI: `http://localhost:9080` (or configured port)
 - Via CLI: `./vmm-cli.py` (see `docs/vmm-cli-user-guide.md`)
 - Requires:
-  1. On-chain app registration (`npx hardhat kms:create-app`)
-  2. Adding compose hash to whitelist (`npx hardhat app:add-hash`)
+  1. On-chain app registration (see `docs/onchain-governance.md`)
+  2. Adding compose hash to whitelist
   3. Deploying via VMM with App ID
 
 ### Accessing Deployed Apps

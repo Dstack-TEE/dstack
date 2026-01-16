@@ -69,26 +69,22 @@ jobs:
           subject-digest: ${{ steps.build-and-push.outputs.digest }}
           push-to-registry: true
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '18'
-          cache: 'npm'
-          cache-dependency-path: kms/auth-eth/package-lock.json
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
 
-      - name: Install dependencies and compile contracts
+      - name: Compile contracts with Foundry
         run: |
           cd kms/auth-eth
-          npm ci
-          npx hardhat compile
+          forge install
+          forge build
 
       - name: GitHub Release
         uses: softprops/action-gh-release@v1
         with:
           name: "KMS Release v${{ env.VERSION }}"
           files: |
-            kms/auth-eth/artifacts/contracts/DstackKms.sol/DstackKms.json
-            kms/auth-eth/artifacts/contracts/DstackApp.sol/DstackApp.json
+            kms/auth-eth/out/DstackKms.sol/DstackKms.json
+            kms/auth-eth/out/DstackApp.sol/DstackApp.json
           body: |
             ## Docker Image Information
 

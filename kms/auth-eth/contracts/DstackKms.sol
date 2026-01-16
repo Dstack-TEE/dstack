@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-pragma solidity ^0.8.22;
+pragma solidity ^0.8.24;
 
 import "./IAppAuth.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
@@ -13,13 +13,7 @@ import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/utils/introspection/ERC165Upgradeable.sol";
 import "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 
-contract DstackKms is
-    Initializable,
-    OwnableUpgradeable,
-    UUPSUpgradeable,
-    ERC165Upgradeable,
-    IAppAuth
-{
+contract DstackKms is Initializable, OwnableUpgradeable, UUPSUpgradeable, ERC165Upgradeable, IAppAuth {
     // Struct for KMS information
     struct KmsInfo {
         bytes k256Pubkey;
@@ -94,15 +88,12 @@ contract DstackKms is
         override(ERC165Upgradeable, IERC165)
         returns (bool)
     {
-        return
-            interfaceId == 0x1e079198 || // IAppAuth
-            super.supportsInterface(interfaceId);
+        return interfaceId == 0x1e079198 // IAppAuth
+            || super.supportsInterface(interfaceId);
     }
 
     // Function to authorize upgrades (required by UUPSUpgradeable)
-    function _authorizeUpgrade(
-        address newImplementation
-    ) internal override onlyOwner {}
+    function _authorizeUpgrade(address newImplementation) internal override onlyOwner { }
 
     // Function to set KMS information
     function setKmsInfo(KmsInfo memory info) external onlyOwner {
@@ -147,7 +138,10 @@ contract DstackKms is
         bool allowAnyDevice,
         bytes32 initialDeviceId,
         bytes32 initialComposeHash
-    ) external returns (address appId) {
+    )
+        external
+        returns (address appId)
+    {
         require(appImplementation != address(0), "DstackApp implementation not set");
         require(initialOwner != address(0), "Invalid owner address");
 
@@ -205,14 +199,9 @@ contract DstackKms is
     }
 
     // Function to check if KMS is allowed to boot
-    function isKmsAllowed(
-        AppBootInfo calldata bootInfo
-    ) external view returns (bool isAllowed, string memory reason) {
+    function isKmsAllowed(AppBootInfo calldata bootInfo) external view returns (bool isAllowed, string memory reason) {
         // Check if the TCB status is up to date
-        if (
-            keccak256(abi.encodePacked(bootInfo.tcbStatus)) !=
-            keccak256(abi.encodePacked("UpToDate"))
-        ) {
+        if (keccak256(abi.encodePacked(bootInfo.tcbStatus)) != keccak256(abi.encodePacked("UpToDate"))) {
             return (false, "TCB status is not up to date");
         }
 
@@ -235,9 +224,12 @@ contract DstackKms is
     }
 
     // Function to check if an app is allowed to boot
-    function isAppAllowed(
-        AppBootInfo calldata bootInfo
-    ) external view override returns (bool isAllowed, string memory reason) {
+    function isAppAllowed(AppBootInfo calldata bootInfo)
+        external
+        view
+        override
+        returns (bool isAllowed, string memory reason)
+    {
         // Check if app is registered
         if (!registeredApps[bootInfo.appId]) {
             return (false, "App not registered");
@@ -260,7 +252,7 @@ contract DstackKms is
     uint256[50] private __gap;
 }
 
-function isContract(address addr) view returns (bool){
+function isContract(address addr) view returns (bool) {
     uint32 size;
     assembly {
         size := extcodesize(addr)
