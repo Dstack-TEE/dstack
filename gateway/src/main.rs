@@ -23,10 +23,10 @@ mod admin_service;
 mod cert_store;
 mod config;
 mod debug_service;
-mod distributed_certbot;
 mod kv;
 mod main_service;
 mod models;
+mod multi_domain_certbot;
 mod proxy;
 mod web_routes;
 

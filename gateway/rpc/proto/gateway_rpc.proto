@@ -380,4 +380,217 @@ service Admin {
   rpc GetGlobalConnections(google.protobuf.Empty) returns (GlobalConnectionsStats) {}
   // Get all node statuses
   rpc GetNodeStatuses(google.protobuf.Empty) returns (GetNodeStatusesResponse) {}
+
+  // ==================== DNS Credential Management ====================
+  // List all DNS credentials
+  rpc ListDnsCredentials(google.protobuf.Empty) returns (ListDnsCredentialsResponse) {}
+  // Get a DNS credential by ID
+  rpc GetDnsCredential(GetDnsCredentialRequest) returns (DnsCredentialInfo) {}
+  // Create a new DNS credential
+  rpc CreateDnsCredential(CreateDnsCredentialRequest) returns (DnsCredentialInfo) {}
+  // Update a DNS credential
+  rpc UpdateDnsCredential(UpdateDnsCredentialRequest) returns (DnsCredentialInfo) {}
+  // Delete a DNS credential
+  rpc DeleteDnsCredential(DeleteDnsCredentialRequest) returns (google.protobuf.Empty) {}
+  // Get the default DNS credential ID
+  rpc GetDefaultDnsCredential(google.protobuf.Empty) returns (GetDefaultDnsCredentialResponse) {}
+  // Set the default DNS credential ID
+  rpc SetDefaultDnsCredential(SetDefaultDnsCredentialRequest) returns (google.protobuf.Empty) {}
+
+  // ==================== Domain Certificate Management ====================
+  // List all domain certificate configurations
+  rpc ListDomainCerts(google.protobuf.Empty) returns (ListDomainCertsResponse) {}
+  // Get a domain certificate configuration and status
+  rpc GetDomainCert(GetDomainCertRequest) returns (DomainCertInfo) {}
+  // Add a new domain for certificate management
+  rpc AddDomainCert(AddDomainCertRequest) returns (DomainCertInfo) {}
+  // Update a domain certificate configuration
+  rpc UpdateDomainCert(UpdateDomainCertRequest) returns (DomainCertInfo) {}
+  // Delete a domain certificate configuration
+  rpc DeleteDomainCert(DeleteDomainCertRequest) returns (google.protobuf.Empty) {}
+  // Manually trigger certificate renewal for a domain
+  rpc RenewDomainCert(RenewDomainCertRequest) returns (RenewDomainCertResponse) {}
+  // List certificate attestations for a domain
+  rpc ListCertAttestations(ListCertAttestationsRequest) returns (ListCertAttestationsResponse) {}
+}
+
+// ==================== DNS Credential Messages ====================
+
+// DNS credential information
+message DnsCredentialInfo {
+  string id = 1;
+  string name = 2;
+  // Provider type: "cloudflare"
+  string provider_type = 3;
+  // Cloudflare-specific fields (when provider_type = "cloudflare")
+  string cf_api_token = 4;
+  string cf_zone_id = 5;
+  // Timestamps
+  uint64 created_at = 6;
+  uint64 updated_at = 7;
+}
+
+// List DNS credentials response
+message ListDnsCredentialsResponse {
+  repeated DnsCredentialInfo credentials = 1;
+  // The default credential ID (if set)
+  optional string default_id = 2;
+}
+
+// Get DNS credential request
+message GetDnsCredentialRequest {
+  string id = 1;
+}
+
+// Create DNS credential request
+message CreateDnsCredentialRequest {
+  string name = 1;
+  // Provider type: "cloudflare"
+  string provider_type = 2;
+  // Cloudflare-specific fields (when provider_type = "cloudflare")
+  string cf_api_token = 3;
+  string cf_zone_id = 4;
+  // If true, set this as the default credential
+  bool set_as_default = 5;
+}
+
+// Update DNS credential request
+message UpdateDnsCredentialRequest {
+  string id = 1;
+  // Optional new name
+  optional string name = 2;
+  // Optional new Cloudflare api token
+  optional string cf_api_token = 3;
+  // Optional new Cloudflare zone id
+  optional string cf_zone_id = 4;
+}
+
+// Delete DNS credential request
+message DeleteDnsCredentialRequest {
+  string id = 1;
+}
+
+// Get default DNS credential response
+message GetDefaultDnsCredentialResponse {
+  // The default credential ID (empty if not set)
+  string default_id = 1;
+  // The default credential info (if exists)
+  optional DnsCredentialInfo credential = 2;
+}
+
+// Set default DNS credential request
+message SetDefaultDnsCredentialRequest {
+  string id = 1;
+}
+
+// ==================== Domain Certificate Messages ====================
+
+// Domain certificate information
+message DomainCertInfo {
+  // Domain name (e.g., "*.example.com")
+  string domain = 1;
+  // DNS credential ID (empty = use default)
+  string dns_cred_id = 2;
+  // ACME server URL
+  string acme_url = 3;
+  // Whether certificate management is enabled
+  bool enabled = 4;
+  // Configuration creation timestamp
+  uint64 created_at = 5;
+  // Certificate status
+  DomainCertStatus status = 6;
+}
+
+// Domain certificate status
+message DomainCertStatus {
+  // Whether a certificate is currently loaded
+  bool has_cert = 1;
+  // Certificate expiry timestamp (0 if no cert)
+  uint64 not_after = 2;
+  // Node that issued the current certificate
+  uint32 issued_by = 3;
+  // When the certificate was issued
+  uint64 issued_at = 4;
+  // Whether the certificate is loaded in memory
+  bool loaded_in_memory = 5;
+}
+
+// List domain certificates response
+message ListDomainCertsResponse {
+  repeated DomainCertInfo domains = 1;
+}
+
+// Get domain certificate request
+message GetDomainCertRequest {
+  string domain = 1;
+}
+
+// Add domain certificate request
+message AddDomainCertRequest {
+  // Domain name (e.g., "*.example.com")
+  string domain = 1;
+  // DNS credential ID (empty = use default)
+  string dns_cred_id = 2;
+  // ACME server URL (empty = use Let's Encrypt production)
+  string acme_url = 3;
+  // Whether to enable certificate management immediately
+  bool enabled = 4;
+}
+
+// Update domain certificate request
+message UpdateDomainCertRequest {
+  string domain = 1;
+  // Optional new DNS credential ID
+  optional string dns_cred_id = 2;
+  // Optional new ACME URL
+  optional string acme_url = 3;
+  // Optional enable/disable
+  optional bool enabled = 4;
+}
+
+// Delete domain certificate request
+message DeleteDomainCertRequest {
+  string domain = 1;
+}
+
+// Renew domain certificate request
+message RenewDomainCertRequest {
+  string domain = 1;
+  // Force renewal even if not near expiry
+  bool force = 2;
+}
+
+// Renew domain certificate response
+message RenewDomainCertResponse {
+  // True if renewal was performed
+  bool renewed = 1;
+  // New certificate expiry (if renewed)
+  uint64 not_after = 2;
+}
+
+// Certificate attestation info
+message CertAttestationInfo {
+  // Certificate public key (DER encoded)
+  bytes public_key = 1;
+  // TDX Quote (JSON serialized)
+  string quote = 2;
+  // Node that generated this attestation
+  uint32 generated_by = 3;
+  // Timestamp when this attestation was generated
+  uint64 generated_at = 4;
+}
+
+// List certificate attestations request
+message ListCertAttestationsRequest {
+  string domain = 1;
+  // Maximum number of attestations to return (0 = all)
+  uint32 limit = 2;
+}
+
+// List certificate attestations response
+message ListCertAttestationsResponse {
+  // Latest attestation (if exists)
+  optional CertAttestationInfo latest = 1;
+  // Historical attestations (sorted by generated_at descending)
+  repeated CertAttestationInfo history = 2;
 }

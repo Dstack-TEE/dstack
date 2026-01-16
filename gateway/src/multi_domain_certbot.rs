@@ -1,0 +1,474 @@
+// SPDX-FileCopyrightText: © 2024-2025 Phala Network <dstack@phala.network>
+//
+// SPDX-License-Identifier: Apache-2.0
+
+//! Multi-domain certificate management using WaveKV for synchronization.
+//!
+//! This module provides distributed certificate management for multiple domains
+//! with dynamic DNS credential configuration and attestation storage.
+
+use std::sync::Arc;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use anyhow::{bail, Context, Result};
+use certbot::{AcmeClient, Dns01Client};
+use ra_tls::rcgen::KeyPair;
+use tracing::{error, info, warn};
+
+use crate::cert_store::CertStore;
+use crate::kv::{CertAttestation, CertCredentials, CertData, DnsProvider, DomainCertConfig, KvStore};
+
+/// Lock timeout for certificate renewal (10 minutes)
+const RENEW_LOCK_TIMEOUT_SECS: u64 = 600;
+
+/// Default ACME URL (Let's Encrypt production)
+const DEFAULT_ACME_URL: &str = "https://acme-v02.api.letsencrypt.org/directory";
+
+/// Default renew-before-expiration period (30 days)
+const DEFAULT_RENEW_BEFORE_SECS: u64 = 30 * 24 * 3600;
+
+/// Multi-domain certificate manager
+pub struct MultiDomainCertBot {
+    kv_store: Arc<KvStore>,
+    cert_store: Arc<CertStore>,
+    renew_before_expiration: Duration,
+    renew_timeout: Duration,
+}
+
+impl MultiDomainCertBot {
+    pub fn new(
+        kv_store: Arc<KvStore>,
+        cert_store: Arc<CertStore>,
+        renew_before_expiration: Duration,
+        renew_timeout: Duration,
+    ) -> Self {
+        Self {
+            kv_store,
+            cert_store,
+            renew_before_expiration,
+            renew_timeout,
+        }
+    }
+
+    /// Initialize all enabled domain certificates
+    pub async fn init_all(&self) -> Result<()> {
+        let configs = self.kv_store.list_cert_configs();
+        for config in configs {
+            if config.enabled {
+                if let Err(e) = self.init_domain(&config.domain).await {
+                    error!("cert[{}]: failed to initialize: {}", config.domain, e);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Initialize certificate for a specific domain
+    pub async fn init_domain(&self, domain: &str) -> Result<()> {
+        // First, try to load from KvStore (synced from other nodes)
+        if let Some(cert_data) = self.kv_store.get_cert_data(domain) {
+            let now = now_secs();
+            if cert_data.not_after > now {
+                info!(
+                    "cert[{}]: loaded from KvStore (issued by node {}, expires in {} days)",
+                    domain,
+                    cert_data.issued_by,
+                    (cert_data.not_after - now) / 86400
+                );
+                self.cert_store.load_cert(domain, &cert_data)?;
+                return Ok(());
+            }
+            info!(
+                "cert[{}]: KvStore certificate expired, will request new one",
+                domain
+            );
+        }
+
+        // No valid cert, need to request new one
+        info!(
+            "cert[{}]: no valid certificate found, requesting from ACME",
+            domain
+        );
+        self.request_new_cert(domain).await
+    }
+
+    /// Try to renew all enabled domain certificates
+    pub async fn try_renew_all(&self) -> Result<()> {
+        let configs = self.kv_store.list_cert_configs();
+        for config in configs {
+            if config.enabled {
+                if let Err(e) = self.try_renew(&config.domain, false).await {
+                    error!("cert[{}]: failed to renew: {}", config.domain, e);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Try to renew certificate for a specific domain if needed
+    pub async fn try_renew(&self, domain: &str, force: bool) -> Result<bool> {
+        // Check if config exists and is enabled
+        let config = self
+            .kv_store
+            .get_cert_config(domain)
+            .context("domain certificate config not found")?;
+
+        if !config.enabled && !force {
+            info!("cert[{}]: certificate management is disabled", domain);
+            return Ok(false);
+        }
+
+        // Check if renewal is needed
+        let cert_data = self.kv_store.get_cert_data(domain);
+        let needs_renew = if force {
+            true
+        } else if let Some(ref data) = cert_data {
+            let now = now_secs();
+            let expires_in = data.not_after.saturating_sub(now);
+            expires_in < self.renew_before_expiration.as_secs()
+        } else {
+            true
+        };
+
+        if !needs_renew {
+            info!("cert[{}]: does not need renewal", domain);
+            return Ok(false);
+        }
+
+        // Try to acquire lock
+        if !self
+            .kv_store
+            .try_acquire_cert_lock(domain, RENEW_LOCK_TIMEOUT_SECS)
+        {
+            info!(
+                "cert[{}]: another node is renewing, skipping",
+                domain
+            );
+            return Ok(false);
+        }
+
+        info!("cert[{}]: acquired renew lock, starting renewal", domain);
+
+        // Perform renewal
+        let result = self.do_renew(domain, &config).await;
+
+        // Release lock regardless of result
+        if let Err(e) = self.kv_store.release_cert_lock(domain) {
+            error!("cert[{}]: failed to release lock: {}", domain, e);
+        }
+
+        result
+    }
+
+    /// Request new certificate for a domain
+    async fn request_new_cert(&self, domain: &str) -> Result<()> {
+        let config = self
+            .kv_store
+            .get_cert_config(domain)
+            .context("domain certificate config not found")?;
+
+        // Try to acquire lock first
+        if !self
+            .kv_store
+            .try_acquire_cert_lock(domain, RENEW_LOCK_TIMEOUT_SECS)
+        {
+            // Another node is requesting, wait for it
+            info!(
+                "cert[{}]: another node is requesting, waiting...",
+                domain
+            );
+            tokio::time::sleep(Duration::from_secs(30)).await;
+            if let Some(cert_data) = self.kv_store.get_cert_data(domain) {
+                self.cert_store.load_cert(domain, &cert_data)?;
+                return Ok(());
+            }
+            bail!("failed to get certificate from KvStore after waiting");
+        }
+
+        let result = self.do_request_new(domain, &config).await;
+
+        if let Err(e) = self.kv_store.release_cert_lock(domain) {
+            error!("cert[{}]: failed to release lock: {}", domain, e);
+        }
+
+        result
+    }
+
+    async fn do_request_new(&self, domain: &str, config: &DomainCertConfig) -> Result<()> {
+        let acme_client = self.get_or_create_acme_client(domain, config).await?;
+
+        // Generate new key pair (always use new key for security)
+        let key = KeyPair::generate().context("failed to generate key")?;
+        let key_pem = key.serialize_pem();
+        let public_key_der = key.public_key_der();
+
+        // Request certificate with timeout
+        info!("cert[{}]: requesting new certificate from ACME...", domain);
+        let cert_pem = tokio::time::timeout(
+            self.renew_timeout,
+            acme_client.request_new_certificate(&key_pem, &[domain.to_string()]),
+        )
+        .await
+        .context("certificate request timed out")?
+        .context("failed to request new certificate")?;
+
+        let not_after = get_cert_expiry(&cert_pem).context("failed to parse certificate expiry")?;
+
+        // Save certificate to KvStore
+        self.save_cert_to_kvstore(domain, &cert_pem, &key_pem, not_after)?;
+        info!(
+            "cert[{}]: new certificate obtained from ACME, saved to KvStore",
+            domain
+        );
+
+        // Generate and save attestation
+        self.generate_and_save_attestation(domain, &public_key_der).await?;
+
+        // Load into memory cert store
+        let cert_data = CertData {
+            cert_pem,
+            key_pem,
+            not_after,
+            issued_by: self.kv_store.my_node_id(),
+            issued_at: now_secs(),
+        };
+        self.cert_store.load_cert(domain, &cert_data)?;
+
+        info!(
+            "cert[{}]: new certificate loaded (expires in {} days)",
+            domain,
+            (not_after - now_secs()) / 86400
+        );
+        Ok(())
+    }
+
+    async fn do_renew(&self, domain: &str, config: &DomainCertConfig) -> Result<bool> {
+        let acme_client = self.get_or_create_acme_client(domain, config).await?;
+
+        // Generate new key pair (always use new key for each renewal)
+        let key = KeyPair::generate().context("failed to generate key")?;
+        let key_pem = key.serialize_pem();
+        let public_key_der = key.public_key_der();
+
+        // Verify there's a current cert (for audit trail, even though we don't use its key)
+        if self.kv_store.get_cert_data(domain).is_none() {
+            bail!("no current certificate to renew");
+        }
+
+        // Renew with new key
+        info!("cert[{}]: renewing certificate with new key from ACME...", domain);
+        let new_cert_pem = tokio::time::timeout(
+            self.renew_timeout,
+            // Note: we request a new cert rather than renew, since we have a new key
+            acme_client.request_new_certificate(&key_pem, &[domain.to_string()]),
+        )
+        .await
+        .context("certificate renewal timed out")?
+        .context("failed to renew certificate")?;
+
+        let not_after =
+            get_cert_expiry(&new_cert_pem).context("failed to parse certificate expiry")?;
+
+        // Save to KvStore
+        self.save_cert_to_kvstore(domain, &new_cert_pem, &key_pem, not_after)?;
+        info!("cert[{}]: renewed certificate saved to KvStore", domain);
+
+        // Generate and save attestation
+        self.generate_and_save_attestation(domain, &public_key_der).await?;
+
+        // Load into memory cert store
+        let cert_data = CertData {
+            cert_pem: new_cert_pem,
+            key_pem,
+            not_after,
+            issued_by: self.kv_store.my_node_id(),
+            issued_at: now_secs(),
+        };
+        self.cert_store.load_cert(domain, &cert_data)?;
+
+        info!(
+            "cert[{}]: renewed certificate loaded (expires in {} days)",
+            domain,
+            (not_after - now_secs()) / 86400
+        );
+        Ok(true)
+    }
+
+    async fn get_or_create_acme_client(
+        &self,
+        domain: &str,
+        config: &DomainCertConfig,
+    ) -> Result<AcmeClient> {
+        // Get DNS credential (from config or default)
+        let dns_cred = if let Some(ref cred_id) = config.dns_cred_id {
+            self.kv_store
+                .get_dns_credential(cred_id)
+                .context("specified DNS credential not found")?
+        } else {
+            self.kv_store
+                .get_default_dns_credential()
+                .context("no default DNS credential configured")?
+        };
+
+        // Create DNS client based on provider
+        let dns01_client = match &dns_cred.provider {
+            DnsProvider::Cloudflare { api_token, zone_id } => {
+                Dns01Client::new_cloudflare(zone_id.clone(), api_token.clone())
+            }
+        };
+
+        let acme_url = if config.acme_url.is_empty() {
+            DEFAULT_ACME_URL
+        } else {
+            &config.acme_url
+        };
+
+        // Try to load credentials from KvStore
+        if let Some(creds) = self.kv_store.get_cert_acme(domain) {
+            if acme_url_matches(&creds.acme_credentials, acme_url) {
+                info!(
+                    "acme[{}]: loaded account credentials from KvStore",
+                    domain
+                );
+                return AcmeClient::load(dns01_client, &creds.acme_credentials)
+                    .await
+                    .context("failed to load ACME client from KvStore credentials");
+            }
+            warn!(
+                "acme[{}]: URL mismatch in KvStore credentials, will create new account",
+                domain
+            );
+        }
+
+        // Create new account
+        info!(
+            "acme[{}]: creating new account at {}",
+            domain, acme_url
+        );
+        let client = AcmeClient::new_account(acme_url, dns01_client)
+            .await
+            .context("failed to create new ACME account")?;
+
+        let creds_json = client
+            .dump_credentials()
+            .context("failed to dump ACME credentials")?;
+
+        // Save to KvStore
+        self.kv_store.save_cert_acme(
+            domain,
+            &CertCredentials {
+                acme_credentials: creds_json,
+            },
+        )?;
+
+        Ok(client)
+    }
+
+    fn save_cert_to_kvstore(
+        &self,
+        domain: &str,
+        cert_pem: &str,
+        key_pem: &str,
+        not_after: u64,
+    ) -> Result<()> {
+        let cert_data = CertData {
+            cert_pem: cert_pem.to_string(),
+            key_pem: key_pem.to_string(),
+            not_after,
+            issued_by: self.kv_store.my_node_id(),
+            issued_at: now_secs(),
+        };
+        self.kv_store.save_cert_data(domain, &cert_data)
+    }
+
+    async fn generate_and_save_attestation(&self, domain: &str, public_key_der: &[u8]) -> Result<()> {
+        // Generate TDX quote for the public key
+        let quote = match generate_tdx_quote(public_key_der).await {
+            Ok(q) => q,
+            Err(e) => {
+                warn!("cert[{}]: failed to generate TDX quote: {}", domain, e);
+                // Don't fail the certificate process if attestation fails
+                // (might be running in non-TDX environment)
+                return Ok(());
+            }
+        };
+
+        let attestation = CertAttestation {
+            public_key: public_key_der.to_vec(),
+            quote,
+            generated_by: self.kv_store.my_node_id(),
+            generated_at: now_secs(),
+        };
+
+        self.kv_store.save_cert_attestation(domain, &attestation)?;
+        info!("cert[{}]: attestation saved to KvStore", domain);
+        Ok(())
+    }
+
+    /// Reload certificate from KvStore into memory (called when watcher triggers)
+    pub fn reload_from_kvstore(&self, domain: &str) -> Result<bool> {
+        let Some(cert_data) = self.kv_store.get_cert_data(domain) else {
+            return Ok(false);
+        };
+
+        // Check if we already have this cert loaded with same expiry
+        if let Some(current) = self.cert_store.get_cert_data(domain) {
+            if current.not_after >= cert_data.not_after {
+                return Ok(false);
+            }
+        }
+
+        info!(
+            "cert[{}]: reloading from KvStore (issued by node {})",
+            domain, cert_data.issued_by
+        );
+        self.cert_store.load_cert(domain, &cert_data)?;
+        Ok(true)
+    }
+}
+
+fn now_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+fn get_cert_expiry(cert_pem: &str) -> Option<u64> {
+    use x509_parser::prelude::*;
+    let pem = Pem::iter_from_buffer(cert_pem.as_bytes()).next()?.ok()?;
+    let cert = pem.parse_x509().ok()?;
+    Some(cert.validity().not_after.timestamp() as u64)
+}
+
+fn acme_url_matches(credentials_json: &str, expected_url: &str) -> bool {
+    #[derive(serde::Deserialize)]
+    struct Creds {
+        #[serde(default)]
+        acme_url: String,
+    }
+    serde_json::from_str::<Creds>(credentials_json)
+        .map(|c| c.acme_url == expected_url)
+        .unwrap_or(false)
+}
+
+/// Generate TDX quote for the given data (certificate public key)
+async fn generate_tdx_quote(data: &[u8]) -> Result<String> {
+    use sha2::{Digest, Sha256};
+
+    // Hash the public key to fit in report data (64 bytes max)
+    let mut hasher = Sha256::new();
+    hasher.update(data);
+    let hash = hasher.finalize();
+
+    // Prepare report data (64 bytes, padded with zeros)
+    let mut report_data = [0u8; 64];
+    report_data[..32].copy_from_slice(&hash);
+
+    // Try to get quote from TDX
+    let (_, quote) = tdx_attest::get_quote(&report_data, None)
+        .context("failed to get TDX quote")?;
+
+    // Return as hex-encoded string
+    Ok(hex::encode(&quote))
+}

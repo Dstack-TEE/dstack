@@ -223,13 +223,33 @@ mod tests {
     use super::*;
 
     fn make_test_cert_data() -> CertData {
-        // This is a self-signed test certificate - not for production use
+        // Generate a self-signed test certificate using rcgen
+        use ra_tls::rcgen::{self, CertificateParams, KeyPair};
+        use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+        let key_pair = KeyPair::generate().expect("failed to generate key pair");
+        let mut params = CertificateParams::new(vec!["test.example.com".to_string()])
+            .expect("failed to create cert params");
+        params.not_after = rcgen::date_time_ymd(2030, 1, 1);
+        let cert = params
+            .self_signed(&key_pair)
+            .expect("failed to generate self-signed cert");
+
+        let not_after = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+            + Duration::from_secs(365 * 24 * 3600).as_secs();
+
         CertData {
-            cert_pem: include_str!("../test_data/test_cert.pem").to_string(),
-            key_pem: include_str!("../test_data/test_key.pem").to_string(),
-            not_after: 0,
-            issued_by: 0,
-            issued_at: 0,
+            cert_pem: cert.pem(),
+            key_pem: key_pair.serialize_pem(),
+            not_after,
+            issued_by: 1,
+            issued_at: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
         }
     }
 
@@ -239,5 +259,73 @@ mod tests {
         assert!(store.list_domains().is_empty());
     }
 
-    // More tests would require actual test certificates
+    #[test]
+    fn test_cert_store_load_and_resolve() {
+        let store = CertStore::new();
+        let data = make_test_cert_data();
+
+        // Load certificate
+        store
+            .load_cert("test.example.com", &data)
+            .expect("failed to load cert");
+
+        // Check it's loaded
+        assert!(store.has_cert("test.example.com"));
+        assert_eq!(store.list_domains().len(), 1);
+
+        // Resolve exact match
+        assert!(store.resolve_cert("test.example.com").is_some());
+
+        // Should not resolve unknown domain
+        assert!(store.resolve_cert("unknown.example.com").is_none());
+    }
+
+    #[test]
+    fn test_cert_store_wildcard() {
+        let store = CertStore::new();
+
+        // Generate wildcard cert
+        use ra_tls::rcgen::{self, CertificateParams, KeyPair};
+        use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+        let key_pair = KeyPair::generate().expect("failed to generate key pair");
+        let mut params = CertificateParams::new(vec!["*.example.com".to_string()])
+            .expect("failed to create cert params");
+        params.not_after = rcgen::date_time_ymd(2030, 1, 1);
+        let cert = params
+            .self_signed(&key_pair)
+            .expect("failed to generate self-signed cert");
+
+        let not_after = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+            + Duration::from_secs(365 * 24 * 3600).as_secs();
+
+        let data = CertData {
+            cert_pem: cert.pem(),
+            key_pem: key_pair.serialize_pem(),
+            not_after,
+            issued_by: 1,
+            issued_at: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+        };
+
+        store
+            .load_cert("*.example.com", &data)
+            .expect("failed to load wildcard cert");
+
+        // Should resolve any subdomain
+        assert!(store.resolve_cert("foo.example.com").is_some());
+        assert!(store.resolve_cert("bar.example.com").is_some());
+
+        // Note: wildcard certs also match nested subdomains in our implementation
+        // This is intentional for ease of use with wildcard domains
+        assert!(store.resolve_cert("sub.foo.example.com").is_some());
+
+        // Should not resolve different domain
+        assert!(store.resolve_cert("example.org").is_none());
+    }
 }
