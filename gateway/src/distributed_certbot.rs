@@ -16,7 +16,9 @@ use ra_tls::rcgen::KeyPair;
 use tracing::{error, info, warn};
 
 use crate::cert_store::CertStore;
-use crate::kv::{CertAttestation, CertCredentials, CertData, DnsProvider, DomainCertConfig, KvStore};
+use crate::kv::{
+    CertAttestation, CertCredentials, CertData, DnsProvider, DomainCertConfig, KvStore,
+};
 
 /// Lock timeout for certificate renewal (10 minutes)
 const RENEW_LOCK_TIMEOUT_SECS: u64 = 600;
@@ -28,14 +30,14 @@ const DEFAULT_ACME_URL: &str = "https://acme-v02.api.letsencrypt.org/directory";
 const DEFAULT_RENEW_BEFORE_SECS: u64 = 30 * 24 * 3600;
 
 /// Multi-domain certificate manager
-pub struct MultiDomainCertBot {
+pub struct DistributedCertBot {
     kv_store: Arc<KvStore>,
     cert_store: Arc<CertStore>,
     renew_before_expiration: Duration,
     renew_timeout: Duration,
 }
 
-impl MultiDomainCertBot {
+impl DistributedCertBot {
     pub fn new(
         kv_store: Arc<KvStore>,
         cert_store: Arc<CertStore>,
@@ -70,25 +72,19 @@ impl MultiDomainCertBot {
             let now = now_secs();
             if cert_data.not_after > now {
                 info!(
-                    "cert[{}]: loaded from KvStore (issued by node {}, expires in {} days)",
                     domain,
+                    "loaded from KvStore (issued by node {}, expires in {} days)",
                     cert_data.issued_by,
                     (cert_data.not_after - now) / 86400
                 );
                 self.cert_store.load_cert(domain, &cert_data)?;
                 return Ok(());
             }
-            info!(
-                "cert[{}]: KvStore certificate expired, will request new one",
-                domain
-            );
+            info!(domain, "KvStore certificate expired, will request new one");
         }
 
         // No valid cert, need to request new one
-        info!(
-            "cert[{}]: no valid certificate found, requesting from ACME",
-            domain
-        );
+        info!(domain, "no valid certificate found, requesting from ACME");
         self.request_new_cert(domain).await
     }
 
@@ -106,6 +102,7 @@ impl MultiDomainCertBot {
     }
 
     /// Try to renew certificate for a specific domain if needed
+    #[tracing::instrument(skip(self))]
     pub async fn try_renew(&self, domain: &str, force: bool) -> Result<bool> {
         // Check if config exists and is enabled
         let config = self
@@ -114,7 +111,7 @@ impl MultiDomainCertBot {
             .context("domain certificate config not found")?;
 
         if !config.enabled && !force {
-            info!("cert[{}]: certificate management is disabled", domain);
+            info!("certificate management is disabled");
             return Ok(false);
         }
 
@@ -131,7 +128,7 @@ impl MultiDomainCertBot {
         };
 
         if !needs_renew {
-            info!("cert[{}]: does not need renewal", domain);
+            info!("does not need renewal");
             return Ok(false);
         }
 
@@ -140,27 +137,25 @@ impl MultiDomainCertBot {
             .kv_store
             .try_acquire_cert_lock(domain, RENEW_LOCK_TIMEOUT_SECS)
         {
-            info!(
-                "cert[{}]: another node is renewing, skipping",
-                domain
-            );
+            info!("another node is renewing, skipping");
             return Ok(false);
         }
 
-        info!("cert[{}]: acquired renew lock, starting renewal", domain);
+        info!("acquired renew lock, starting renewal");
 
         // Perform renewal
         let result = self.do_renew(domain, &config).await;
 
         // Release lock regardless of result
         if let Err(e) = self.kv_store.release_cert_lock(domain) {
-            error!("cert[{}]: failed to release lock: {}", domain, e);
+            error!("failed to release lock: {e}");
         }
 
         result
     }
 
     /// Request new certificate for a domain
+    #[tracing::instrument(skip(self))]
     async fn request_new_cert(&self, domain: &str) -> Result<()> {
         let config = self
             .kv_store
@@ -173,10 +168,7 @@ impl MultiDomainCertBot {
             .try_acquire_cert_lock(domain, RENEW_LOCK_TIMEOUT_SECS)
         {
             // Another node is requesting, wait for it
-            info!(
-                "cert[{}]: another node is requesting, waiting...",
-                domain
-            );
+            info!("another node is requesting, waiting...");
             tokio::time::sleep(Duration::from_secs(30)).await;
             if let Some(cert_data) = self.kv_store.get_cert_data(domain) {
                 self.cert_store.load_cert(domain, &cert_data)?;
@@ -188,7 +180,7 @@ impl MultiDomainCertBot {
         let result = self.do_request_new(domain, &config).await;
 
         if let Err(e) = self.kv_store.release_cert_lock(domain) {
-            error!("cert[{}]: failed to release lock: {}", domain, e);
+            error!("failed to release lock: {e}");
         }
 
         result
@@ -203,7 +195,7 @@ impl MultiDomainCertBot {
         let public_key_der = key.public_key_der();
 
         // Request certificate with timeout
-        info!("cert[{}]: requesting new certificate from ACME...", domain);
+        info!("requesting new certificate from ACME...");
         let cert_pem = tokio::time::timeout(
             self.renew_timeout,
             acme_client.request_new_certificate(&key_pem, &[domain.to_string()]),
@@ -216,13 +208,11 @@ impl MultiDomainCertBot {
 
         // Save certificate to KvStore
         self.save_cert_to_kvstore(domain, &cert_pem, &key_pem, not_after)?;
-        info!(
-            "cert[{}]: new certificate obtained from ACME, saved to KvStore",
-            domain
-        );
+        info!("new certificate obtained from ACME, saved to KvStore");
 
         // Generate and save attestation
-        self.generate_and_save_attestation(domain, &public_key_der).await?;
+        self.generate_and_save_attestation(domain, &public_key_der)
+            .await?;
 
         // Load into memory cert store
         let cert_data = CertData {
@@ -235,8 +225,7 @@ impl MultiDomainCertBot {
         self.cert_store.load_cert(domain, &cert_data)?;
 
         info!(
-            "cert[{}]: new certificate loaded (expires in {} days)",
-            domain,
+            "new certificate loaded (expires in {} days)",
             (not_after - now_secs()) / 86400
         );
         Ok(())
@@ -256,7 +245,7 @@ impl MultiDomainCertBot {
         }
 
         // Renew with new key
-        info!("cert[{}]: renewing certificate with new key from ACME...", domain);
+        info!("renewing certificate with new key from ACME...");
         let new_cert_pem = tokio::time::timeout(
             self.renew_timeout,
             // Note: we request a new cert rather than renew, since we have a new key
@@ -271,10 +260,11 @@ impl MultiDomainCertBot {
 
         // Save to KvStore
         self.save_cert_to_kvstore(domain, &new_cert_pem, &key_pem, not_after)?;
-        info!("cert[{}]: renewed certificate saved to KvStore", domain);
+        info!("renewed certificate saved to KvStore");
 
         // Generate and save attestation
-        self.generate_and_save_attestation(domain, &public_key_der).await?;
+        self.generate_and_save_attestation(domain, &public_key_der)
+            .await?;
 
         // Load into memory cert store
         let cert_data = CertData {
@@ -287,8 +277,7 @@ impl MultiDomainCertBot {
         self.cert_store.load_cert(domain, &cert_data)?;
 
         info!(
-            "cert[{}]: renewed certificate loaded (expires in {} days)",
-            domain,
+            "renewed certificate loaded (expires in {} days)",
             (not_after - now_secs()) / 86400
         );
         Ok(true)
@@ -312,9 +301,11 @@ impl MultiDomainCertBot {
 
         // Create DNS client based on provider
         let dns01_client = match &dns_cred.provider {
-            DnsProvider::Cloudflare { api_token, zone_id } => {
-                Dns01Client::new_cloudflare(zone_id.clone(), api_token.clone())
-            }
+            DnsProvider::Cloudflare {
+                api_token,
+                zone_id,
+                api_url,
+            } => Dns01Client::new_cloudflare(zone_id.clone(), api_token.clone(), api_url.clone()),
         };
 
         let acme_url = if config.acme_url.is_empty() {
@@ -326,25 +317,19 @@ impl MultiDomainCertBot {
         // Try to load credentials from KvStore
         if let Some(creds) = self.kv_store.get_cert_acme(domain) {
             if acme_url_matches(&creds.acme_credentials, acme_url) {
-                info!(
-                    "acme[{}]: loaded account credentials from KvStore",
-                    domain
-                );
+                info!(domain, "loaded account credentials from KvStore");
                 return AcmeClient::load(dns01_client, &creds.acme_credentials)
                     .await
                     .context("failed to load ACME client from KvStore credentials");
             }
             warn!(
-                "acme[{}]: URL mismatch in KvStore credentials, will create new account",
-                domain
+                domain,
+                "URL mismatch in KvStore credentials, will create new account"
             );
         }
 
         // Create new account
-        info!(
-            "acme[{}]: creating new account at {}",
-            domain, acme_url
-        );
+        info!(domain, "creating new account at {acme_url}");
         let client = AcmeClient::new_account(acme_url, dns01_client)
             .await
             .context("failed to create new ACME account")?;
@@ -381,12 +366,16 @@ impl MultiDomainCertBot {
         self.kv_store.save_cert_data(domain, &cert_data)
     }
 
-    async fn generate_and_save_attestation(&self, domain: &str, public_key_der: &[u8]) -> Result<()> {
+    async fn generate_and_save_attestation(
+        &self,
+        domain: &str,
+        public_key_der: &[u8],
+    ) -> Result<()> {
         // Generate TDX quote for the public key
         let quote = match generate_tdx_quote(public_key_der).await {
             Ok(q) => q,
             Err(e) => {
-                warn!("cert[{}]: failed to generate TDX quote: {}", domain, e);
+                warn!(domain, "failed to generate TDX quote: {e}");
                 // Don't fail the certificate process if attestation fails
                 // (might be running in non-TDX environment)
                 return Ok(());
@@ -401,7 +390,7 @@ impl MultiDomainCertBot {
         };
 
         self.kv_store.save_cert_attestation(domain, &attestation)?;
-        info!("cert[{}]: attestation saved to KvStore", domain);
+        info!(domain, "attestation saved to KvStore");
         Ok(())
     }
 
@@ -419,8 +408,8 @@ impl MultiDomainCertBot {
         }
 
         info!(
-            "cert[{}]: reloading from KvStore (issued by node {})",
-            domain, cert_data.issued_by
+            domain,
+            "reloading from KvStore (issued by node {})", cert_data.issued_by
         );
         self.cert_store.load_cert(domain, &cert_data)?;
         Ok(true)
@@ -466,8 +455,8 @@ async fn generate_tdx_quote(data: &[u8]) -> Result<String> {
     report_data[..32].copy_from_slice(&hash);
 
     // Try to get quote from TDX
-    let (_, quote) = tdx_attest::get_quote(&report_data, None)
-        .context("failed to get TDX quote")?;
+    let (_, quote) =
+        tdx_attest::get_quote(&report_data, None).context("failed to get TDX quote")?;
 
     // Return as hex-encoded string
     Ok(hex::encode(&quote))

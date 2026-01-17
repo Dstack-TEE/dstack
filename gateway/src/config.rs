@@ -69,10 +69,15 @@ pub enum TlsVersion {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ProxyConfig {
+    pub cert_chain: String,
+    pub cert_key: String,
     pub tls_crypto_provider: CryptoProvider,
     pub tls_versions: Vec<TlsVersion>,
+    pub base_domain: String,
+    pub external_port: u16,
     pub listen_addr: Ipv4Addr,
     pub listen_port: u16,
+    pub agent_port: u16,
     pub timeouts: Timeouts,
     pub buffer_size: usize,
     pub connect_top_n: usize,
@@ -142,6 +147,7 @@ pub struct SyncConfig {
 pub struct Config {
     pub wg: WgConfig,
     pub proxy: ProxyConfig,
+    pub certbot: CertbotConfig,
     pub pccs_url: Option<String>,
     pub recycle: RecycleConfig,
     pub set_ulimit: bool,
@@ -225,6 +231,71 @@ pub struct TlsConfig {
 #[derive(Debug, Clone, Deserialize)]
 pub struct MutualConfig {
     pub ca_certs: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct CertbotConfig {
+    /// Enable certbot
+    pub enabled: bool,
+    /// Path to the working directory
+    pub workdir: String,
+    /// ACME server URL
+    pub acme_url: String,
+    /// Cloudflare API token
+    pub cf_api_token: String,
+    /// Cloudflare API URL (defaults to https://api.cloudflare.com/client/v4)
+    #[serde(default)]
+    pub cf_api_url: Option<String>,
+    /// Auto set CAA record
+    pub auto_set_caa: bool,
+    /// Domain to issue certificates for
+    pub domain: String,
+    /// Renew interval
+    #[serde(with = "serde_duration")]
+    pub renew_interval: Duration,
+    /// Time gap before expiration to trigger renewal
+    #[serde(with = "serde_duration")]
+    pub renew_before_expiration: Duration,
+    /// Renew timeout
+    #[serde(with = "serde_duration")]
+    pub renew_timeout: Duration,
+    /// Maximum time to wait for DNS propagation
+    #[serde(with = "serde_duration")]
+    pub max_dns_wait: Duration,
+    /// TTL for DNS TXT records used in ACME challenges (in seconds).
+    /// Minimum is 60 for Cloudflare. Lower TTL means faster DNS propagation.
+    #[serde(default = "default_dns_txt_ttl")]
+    pub dns_txt_ttl: u32,
+}
+
+fn default_dns_txt_ttl() -> u32 {
+    60
+}
+
+impl CertbotConfig {
+    fn to_bot_config(&self) -> certbot::CertBotConfig {
+        let workdir = certbot::WorkDir::new(&self.workdir);
+        certbot::CertBotConfig::builder()
+            .auto_create_account(true)
+            .cert_dir(workdir.backup_dir())
+            .cert_file(workdir.cert_path())
+            .key_file(workdir.key_path())
+            .credentials_file(workdir.account_credentials_path())
+            .acme_url(self.acme_url.clone())
+            .cert_subject_alt_names(vec![self.domain.clone()])
+            .cf_api_token(self.cf_api_token.clone())
+            .renew_interval(self.renew_interval)
+            .renew_timeout(self.renew_timeout)
+            .renew_expires_in(self.renew_before_expiration)
+            .auto_set_caa(self.auto_set_caa)
+            .max_dns_wait(self.max_dns_wait)
+            .dns_txt_ttl(self.dns_txt_ttl)
+            .build()
+    }
+
+    pub async fn build_bot(&self) -> Result<certbot::CertBot> {
+        self.to_bot_config().build_bot().await
+    }
 }
 
 pub const DEFAULT_CONFIG: &str = include_str!("../gateway.toml");

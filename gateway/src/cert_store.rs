@@ -193,8 +193,8 @@ fn parse_certified_key(cert_pem: &str, key_pem: &str) -> Result<CertifiedKey> {
         anyhow::bail!("no certificates found in PEM");
     }
 
-    let key = PrivateKeyDer::from_pem_slice(key_pem.as_bytes())
-        .context("failed to parse private key")?;
+    let key =
+        PrivateKeyDer::from_pem_slice(key_pem.as_bytes()).context("failed to parse private key")?;
 
     let signing_key = rustls::crypto::aws_lc_rs::sign::any_supported_type(&key)
         .map_err(|e| anyhow::anyhow!("failed to create signing key: {:?}", e))?;

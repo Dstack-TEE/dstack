@@ -428,6 +428,8 @@ message DnsCredentialInfo {
   // Timestamps
   uint64 created_at = 6;
   uint64 updated_at = 7;
+  // Cloudflare API URL (empty means default)
+  string cf_api_url = 8;
 }
 
 // List DNS credentials response
@@ -452,6 +454,8 @@ message CreateDnsCredentialRequest {
   string cf_zone_id = 4;
   // If true, set this as the default credential
   bool set_as_default = 5;
+  // Optional Cloudflare API URL (defaults to https://api.cloudflare.com/client/v4)
+  optional string cf_api_url = 6;
 }
 
 // Update DNS credential request
@@ -463,6 +467,8 @@ message UpdateDnsCredentialRequest {
   optional string cf_api_token = 3;
   // Optional new Cloudflare zone id
   optional string cf_zone_id = 4;
+  // Optional new Cloudflare API URL
+  optional string cf_api_url = 5;
 }
 
 // Delete DNS credential request

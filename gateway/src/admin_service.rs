@@ -12,8 +12,8 @@ use dstack_gateway_rpc::{
     DeleteDnsCredentialRequest, DeleteDomainCertRequest, DnsCredentialInfo, DomainCertInfo,
     DomainCertStatus, GetDefaultDnsCredentialResponse, GetDnsCredentialRequest,
     GetDomainCertRequest, GetInfoRequest, GetInfoResponse, GetInstanceHandshakesRequest,
-    GetInstanceHandshakesResponse, GetMetaResponse, GetNodeStatusesResponse, GlobalConnectionsStats,
-    HandshakeEntry, HostInfo, LastSeenEntry, ListCertAttestationsRequest,
+    GetInstanceHandshakesResponse, GetMetaResponse, GetNodeStatusesResponse,
+    GlobalConnectionsStats, HandshakeEntry, HostInfo, LastSeenEntry, ListCertAttestationsRequest,
     ListCertAttestationsResponse, ListDnsCredentialsResponse, ListDomainCertsResponse,
     NodeStatusEntry, PeerSyncStatus as ProtoPeerSyncStatus, RenewCertResponse,
     RenewDomainCertRequest, RenewDomainCertResponse, SetDefaultDnsCredentialRequest,
@@ -298,7 +298,10 @@ impl AdminRpc for AdminRpcHandler {
         })
     }
 
-    async fn get_dns_credential(self, request: GetDnsCredentialRequest) -> Result<DnsCredentialInfo> {
+    async fn get_dns_credential(
+        self,
+        request: GetDnsCredentialRequest,
+    ) -> Result<DnsCredentialInfo> {
         let kv_store = self.state.kv_store();
         let cred = kv_store
             .get_dns_credential(&request.id)
@@ -317,6 +320,7 @@ impl AdminRpc for AdminRpcHandler {
             "cloudflare" => DnsProvider::Cloudflare {
                 api_token: request.cf_api_token,
                 zone_id: request.cf_zone_id,
+                api_url: request.cf_api_url,
             },
             _ => bail!("unsupported provider type: {}", request.provider_type),
         };
@@ -360,12 +364,19 @@ impl AdminRpc for AdminRpcHandler {
 
         // Update provider fields if provided
         match &mut cred.provider {
-            DnsProvider::Cloudflare { api_token, zone_id } => {
+            DnsProvider::Cloudflare {
+                api_token,
+                zone_id,
+                api_url,
+            } => {
                 if let Some(new_token) = request.cf_api_token {
                     *api_token = new_token;
                 }
                 if let Some(new_zone) = request.cf_zone_id {
                     *zone_id = new_zone;
+                }
+                if let Some(new_url) = request.cf_api_url {
+                    *api_url = Some(new_url);
                 }
             }
         }
@@ -413,7 +424,10 @@ impl AdminRpc for AdminRpcHandler {
         })
     }
 
-    async fn set_default_dns_credential(self, request: SetDefaultDnsCredentialRequest) -> Result<()> {
+    async fn set_default_dns_credential(
+        self,
+        request: SetDefaultDnsCredentialRequest,
+    ) -> Result<()> {
         let kv_store = self.state.kv_store();
 
         // Verify the credential exists
@@ -458,7 +472,10 @@ impl AdminRpc for AdminRpcHandler {
 
         // Check if domain already exists
         if kv_store.get_cert_config(&request.domain).is_some() {
-            bail!("domain certificate config already exists: {}", request.domain);
+            bail!(
+                "domain certificate config already exists: {}",
+                request.domain
+            );
         }
 
         // Validate DNS credential if specified
@@ -546,7 +563,10 @@ impl AdminRpc for AdminRpcHandler {
         Ok(())
     }
 
-    async fn renew_domain_cert(self, request: RenewDomainCertRequest) -> Result<RenewDomainCertResponse> {
+    async fn renew_domain_cert(
+        self,
+        request: RenewDomainCertRequest,
+    ) -> Result<RenewDomainCertResponse> {
         let certbot = &self.state.multi_domain_certbot;
         let renewed = certbot
             .try_renew(&request.domain, request.force)
@@ -665,10 +685,17 @@ fn generate_cred_id() -> String {
 }
 
 fn dns_cred_to_proto(cred: DnsCredential) -> DnsCredentialInfo {
-    let (provider_type, cf_api_token, cf_zone_id) = match &cred.provider {
-        DnsProvider::Cloudflare { api_token, zone_id } => {
-            ("cloudflare".to_string(), api_token.clone(), zone_id.clone())
-        }
+    let (provider_type, cf_api_token, cf_zone_id, cf_api_url) = match &cred.provider {
+        DnsProvider::Cloudflare {
+            api_token,
+            zone_id,
+            api_url,
+        } => (
+            "cloudflare".to_string(),
+            api_token.clone(),
+            zone_id.clone(),
+            api_url.clone().unwrap_or_default(),
+        ),
     };
     DnsCredentialInfo {
         id: cred.id,
@@ -676,6 +703,7 @@ fn dns_cred_to_proto(cred: DnsCredential) -> DnsCredentialInfo {
         provider_type,
         cf_api_token,
         cf_zone_id,
+        cf_api_url,
         created_at: cred.created_at,
         updated_at: cred.updated_at,
     }

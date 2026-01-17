@@ -126,6 +126,9 @@ pub enum DnsProvider {
     Cloudflare {
         api_token: String,
         zone_id: String,
+        /// Cloudflare API URL (defaults to https://api.cloudflare.com/client/v4 if not set)
+        #[serde(default)]
+        api_url: Option<String>,
     },
     // Future providers can be added here
 }
