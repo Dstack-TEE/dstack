@@ -8,40 +8,60 @@
 
 set -e
 
-# Colors
+# ==================== Configuration ====================
+
+# Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
 NC='\033[0m'
 
-log_info() { echo "${GREEN}[INFO]${NC} $1"; }
-log_warn() { echo "${YELLOW}[WARN]${NC} $1"; }
-log_error() { echo "${RED}[ERROR]${NC} $1"; }
-log_success() { echo "${GREEN}[PASS]${NC} $1"; }
-log_fail() { echo "${RED}[FAIL]${NC} $1"; }
+# Gateway endpoints
+GATEWAY_PROXIES="gateway-1:9014 gateway-2:9014 gateway-3:9014"
+GATEWAY_DEBUG_URLS="http://gateway-1:9015 http://gateway-2:9015 http://gateway-3:9015"
+GATEWAY_ADMIN="http://gateway-1:9016"
 
-# Test endpoints
+# External services
 MOCK_CF_API="http://mock-cf-dns-api:8080"
-PEBBLE_MGMT="https://pebble:15000"
-GATEWAY_1_DEBUG="http://gateway-1:9015"
-GATEWAY_2_DEBUG="http://gateway-2:9015"
-GATEWAY_3_DEBUG="http://gateway-3:9015"
-GATEWAY_1_ADMIN="http://gateway-1:9016"
-GATEWAY_1_PROXY="gateway-1:9014"
-GATEWAY_2_PROXY="gateway-2:9014"
-GATEWAY_3_PROXY="gateway-3:9014"
+PEBBLE_DIR="http://pebble:14000/dir"
 
-# Certificate config - Multiple wildcard domains
-# Each domain gets its own certificate: *.test0.local, *.test1.local, *.test2.local
+# Certificate domains to test
 CERT_DOMAINS="*.test0.local *.test1.local *.test2.local"
+
+# Cloudflare mock settings
 CF_API_TOKEN="test-token"
 CF_API_URL="http://mock-cf-dns-api:8080/client/v4"
 ACME_URL="http://pebble:14000/dir"
 
-# Test state
+# Test counters
 TESTS_PASSED=0
 TESTS_FAILED=0
 
+# ==================== Logging ====================
+
+log_info()    { printf "${BLUE}[INFO]${NC} %s\n" "$1"; }
+log_warn()    { printf "${YELLOW}[WARN]${NC} %s\n" "$1"; }
+log_error()   { printf "${RED}[ERROR]${NC} %s\n" "$1"; }
+log_success() { printf "${GREEN}[PASS]${NC} %s\n" "$1"; }
+log_fail()    { printf "${RED}[FAIL]${NC} %s\n" "$1"; }
+
+log_section() {
+    printf "\n"
+    log_info "=========================================="
+    log_info "$1"
+    log_info "=========================================="
+}
+
+log_phase() {
+    printf "\n"
+    log_info "Phase $1: $2"
+    log_info "------------------------------------------"
+}
+
+# ==================== Test Utilities ====================
+
+# Run a test and record result
 run_test() {
     local name="$1"
     local result="$2"
@@ -55,14 +75,14 @@ run_test() {
     fi
 }
 
-# Wait for a service to be ready
+# Wait for HTTP service to respond
 wait_for_service() {
     local url="$1"
     local name="$2"
     local max_wait="${3:-60}"
     local waited=0
 
-    log_info "Waiting for $name to be ready..."
+    log_info "Waiting for $name..."
     while [ $waited -lt $max_wait ]; do
         if curl -sf "$url" > /dev/null 2>&1; then
             log_info "$name is ready"
@@ -76,77 +96,103 @@ wait_for_service() {
     return 1
 }
 
-# Convert wildcard domain to test SNI: *.test0.local -> health.test0.local
-# Use "health" as the subdomain because it's a special app_id that doesn't require a backend
-wildcard_to_sni() {
-    local wildcard="$1"
-    echo "$wildcard" | sed 's/\*\./health./'
+# ==================== Domain Helpers ====================
+
+# Extract base domain: *.test0.local -> test0.local
+get_base_domain() {
+    echo "$1" | sed 's/^\*\.//'
 }
 
-# Get certificate info from proxy via TLS with specific SNI
-get_cert_serial() {
+# Convert wildcard to test SNI: *.test0.local -> gateway.test0.local
+# Uses "gateway" as it's a special app_id that proxies to gateway's own endpoints
+get_test_sni() {
+    local base=$(get_base_domain "$1")
+    echo "gateway.${base}"
+}
+
+# ==================== Certificate Helpers ====================
+
+# Get certificate via openssl s_client
+get_cert_pem() {
     local host="$1"
     local sni="$2"
-    echo | timeout 5 openssl s_client -connect "$host" -servername "$sni" 2>/dev/null | \
-        openssl x509 -noout -serial 2>/dev/null | cut -d= -f2
+    echo | timeout 5 openssl s_client -connect "$host" -servername "$sni" 2>/dev/null
+}
+
+get_cert_serial() {
+    get_cert_pem "$1" "$2" | openssl x509 -noout -serial 2>/dev/null | cut -d= -f2
 }
 
 get_cert_issuer() {
-    local host="$1"
-    local sni="$2"
-    echo | timeout 5 openssl s_client -connect "$host" -servername "$sni" 2>/dev/null | \
-        openssl x509 -noout -issuer 2>/dev/null
-}
-
-get_cert_subject() {
-    local host="$1"
-    local sni="$2"
-    echo | timeout 5 openssl s_client -connect "$host" -servername "$sni" 2>/dev/null | \
-        openssl x509 -noout -subject 2>/dev/null
+    get_cert_pem "$1" "$2" | openssl x509 -noout -issuer 2>/dev/null
 }
 
 get_cert_san() {
-    local host="$1"
-    local sni="$2"
-    echo | timeout 5 openssl s_client -connect "$host" -servername "$sni" 2>/dev/null | \
-        openssl x509 -noout -ext subjectAltName 2>/dev/null
+    get_cert_pem "$1" "$2" | openssl x509 -noout -ext subjectAltName 2>/dev/null
 }
 
-# Test TLS health endpoint on proxy port
-# Use "gateway.<basedomain>" which proxies to the gateway's own /health endpoint
-test_proxy_tls_health() {
+# ==================== Test Functions ====================
+
+test_http_health() {
+    curl -sf "$1" > /dev/null
+}
+
+test_certificate_issued() {
     local host="$1"
     local sni="$2"
-    # Extract base domain from SNI (e.g., health.test0.local -> test0.local)
-    local base_domain=$(echo "$sni" | cut -d. -f2-)
-    local gateway_sni="gateway.${base_domain}"
-    # Use --connect-to instead of --resolve since we have hostnames not IPs
+    [ -n "$(get_cert_serial "$host" "$sni")" ]
+}
+
+test_certificates_match() {
+    local sni="$1"
+    local serial1="" serial2="" serial3=""
+    local i=1
+
+    for proxy in $GATEWAY_PROXIES; do
+        eval "serial${i}=\"\$(get_cert_serial \"\$proxy\" \"\$sni\")\""
+        log_info "Gateway $i cert serial ($sni): $(eval echo \$serial$i)" >&2
+        i=$((i + 1))
+    done
+
+    [ "$serial1" = "$serial2" ] && [ "$serial2" = "$serial3" ] && [ -n "$serial1" ]
+}
+
+test_certificate_from_pebble() {
+    local sni="$1"
+    local proxy=$(echo "$GATEWAY_PROXIES" | cut -d' ' -f1)
+    get_cert_issuer "$proxy" "$sni" | grep -qi "pebble"
+}
+
+test_sni_cert_selection() {
+    local host="$1"
+    local sni="$2"
+    local expected_wildcard="$3"
+    get_cert_san "$host" "$sni" | grep -q "$expected_wildcard"
+}
+
+test_proxy_tls_health() {
+    local host="$1"
+    local gateway_sni="$2"
     curl -sf --connect-to "${gateway_sni}:9014:${host}" -k "https://${gateway_sni}:9014/health" > /dev/null 2>&1
 }
 
 # ==================== Setup ====================
 
-# Configure DNS credential and domain certs via Admin RPC
 setup_certbot_config() {
-    log_info "Setting up DNS credential and domain cert configs..."
+    log_info "Configuring certbot via Admin API..."
 
-    # Set certbot config including ACME URL
-    log_info "Setting certbot config (ACME URL: ${ACME_URL})..."
-    local config_response=$(curl -sf -X POST "${GATEWAY_1_ADMIN}/prpc/Admin.SetCertbotConfig" \
+    # Set ACME URL
+    log_info "Setting ACME URL: ${ACME_URL}"
+    if ! curl -sf -X POST "${GATEWAY_ADMIN}/prpc/Admin.SetCertbotConfig" \
         -H "Content-Type: application/json" \
-        -d '{
-            "acme_url": "'"${ACME_URL}"'"
-        }' 2>&1)
-
-    if [ $? -ne 0 ]; then
-        log_error "Failed to set certbot config: $config_response"
+        -d '{"acme_url": "'"${ACME_URL}"'"}' > /dev/null; then
+        log_error "Failed to set certbot config"
         return 1
     fi
-    log_info "Certbot config set: $config_response"
 
     # Create DNS credential
     log_info "Creating DNS credential..."
-    local cred_response=$(curl -sf -X POST "${GATEWAY_1_ADMIN}/prpc/Admin.CreateDnsCredential" \
+    if ! curl -sf -X POST "${GATEWAY_ADMIN}/prpc/Admin.CreateDnsCredential" \
         -H "Content-Type: application/json" \
         -d '{
             "name": "test-cloudflare",
@@ -156,176 +202,63 @@ setup_certbot_config() {
             "set_as_default": true,
             "dns_txt_ttl": 1,
             "max_dns_wait": 0
-        }' 2>&1)
-
-    if [ $? -ne 0 ]; then
-        log_error "Failed to create DNS credential: $cred_response"
+        }' > /dev/null; then
+        log_error "Failed to create DNS credential"
         return 1
     fi
-    log_info "DNS credential created: $cred_response"
 
-    # Add ZT-Domain config for each domain (no acme_url needed - uses global)
+    # Add domains and trigger renewal
     for domain in $CERT_DOMAINS; do
-        log_info "Adding ZT-Domain config for: $domain"
-        local domain_response=$(curl -sf -X POST "${GATEWAY_1_ADMIN}/prpc/Admin.AddZtDomain" \
+        log_info "Adding domain: $domain"
+        curl -sf -X POST "${GATEWAY_ADMIN}/prpc/Admin.AddZtDomain" \
             -H "Content-Type: application/json" \
-            -d '{
-                "domain": "'"${domain}"'"
-            }' 2>&1)
+            -d '{"domain": "'"${domain}"'"}' > /dev/null || true
 
-        if [ $? -ne 0 ]; then
-            log_error "Failed to add domain cert config for $domain: $domain_response"
-            return 1
-        fi
-        log_info "Domain cert config added: $domain_response"
-    done
-
-    # Trigger certificate renewal for each ZT-Domain
-    for domain in $CERT_DOMAINS; do
-        log_info "Triggering certificate renewal for: $domain"
-        local renew_response=$(curl -sf -X POST "${GATEWAY_1_ADMIN}/prpc/Admin.RenewZtDomainCert" \
+        log_info "Triggering renewal for: $domain"
+        curl -sf -X POST "${GATEWAY_ADMIN}/prpc/Admin.RenewZtDomainCert" \
             -H "Content-Type: application/json" \
-            -d '{
-                "domain": "'"${domain}"'",
-                "force": true
-            }' 2>&1)
-
-        if [ $? -ne 0 ]; then
-            log_warn "RenewCert failed for $domain (may retry): $renew_response"
-        else
-            log_info "RenewCert triggered for $domain: $renew_response"
-        fi
+            -d '{"domain": "'"${domain}"'", "force": true}' > /dev/null || \
+            log_warn "Renewal request failed for $domain (may retry)"
     done
 
     return 0
 }
 
-# ==================== Tests ====================
-
-test_mock_cf_api_health() {
-    curl -sf "${MOCK_CF_API}/health" > /dev/null
-}
-
-test_pebble_directory() {
-    curl -sf "http://pebble:14000/dir" > /dev/null
-}
-
-test_gateway_health() {
-    local node="$1"
-    local url="$2"
-    curl -sf "${url}/health" > /dev/null
-}
-
-test_dns_record_created() {
-    # Check if any TXT records were created in mock CF API
-    local records=$(curl -sf "${MOCK_CF_API}/api/records" 2>/dev/null)
-    if echo "$records" | grep -q "TXT"; then
-        return 0
-    fi
-    return 1
-}
-
-test_certificate_issued() {
-    local host="$1"
-    local sni="$2"
-    local serial=$(get_cert_serial "$host" "$sni")
-    if [ -n "$serial" ]; then
-        return 0
-    fi
-    return 1
-}
-
-test_certificates_match() {
-    local sni="$1"
-    local serial1=$(get_cert_serial "$GATEWAY_1_PROXY" "$sni")
-    local serial2=$(get_cert_serial "$GATEWAY_2_PROXY" "$sni")
-    local serial3=$(get_cert_serial "$GATEWAY_3_PROXY" "$sni")
-
-    # Use >&2 to output to stderr so it doesn't affect the return code capture
-    log_info "Gateway 1 cert serial ($sni): $serial1" >&2
-    log_info "Gateway 2 cert serial ($sni): $serial2" >&2
-    log_info "Gateway 3 cert serial ($sni): $serial3" >&2
-
-    if [ "$serial1" = "$serial2" ] && [ "$serial2" = "$serial3" ] && [ -n "$serial1" ]; then
-        return 0
-    fi
-    return 1
-}
-
-test_certificate_from_pebble() {
-    local sni="$1"
-    local issuer=$(get_cert_issuer "$GATEWAY_1_PROXY" "$sni")
-    if echo "$issuer" | grep -qi "pebble"; then
-        return 0
-    fi
-    return 1
-}
-
-# Test SNI-based certificate selection - verify correct wildcard cert is returned
-test_sni_cert_selection() {
-    local host="$1"
-    local sni="$2"
-    local expected_wildcard="$3"  # e.g., "*.test0.local"
-
-    local san=$(get_cert_san "$host" "$sni")
-    if echo "$san" | grep -q "$expected_wildcard"; then
-        return 0
-    fi
-    return 1
-}
-
 # ==================== Main ====================
 
 main() {
-    log_info "=========================================="
-    log_info "dstack-gateway Certbot E2E Test"
-    log_info "=========================================="
-    echo ""
+    log_section "dstack-gateway Certbot E2E Test"
 
-    # Phase 1: Check mock services
-    log_info "Phase 1: Verify mock services"
-    log_info "------------------------------------------"
+    # Phase 1: Mock services
+    log_phase 1 "Verify mock services"
+    run_test "Mock CF DNS API health" "$(test_http_health "${MOCK_CF_API}/health"; echo $?)"
+    run_test "Pebble ACME directory" "$(test_http_health "${PEBBLE_DIR}"; echo $?)"
 
-    run_test "Mock CF DNS API health" "$(test_mock_cf_api_health; echo $?)"
-    run_test "Pebble ACME directory" "$(test_pebble_directory; echo $?)"
+    # Phase 2: Gateway cluster
+    log_phase 2 "Verify gateway cluster"
+    local i=1
+    for url in $GATEWAY_DEBUG_URLS; do
+        run_test "Gateway $i health" "$(test_http_health "${url}/health"; echo $?)"
+        i=$((i + 1))
+    done
 
-    echo ""
-
-    # Phase 2: Check gateway cluster
-    log_info "Phase 2: Verify gateway cluster"
-    log_info "------------------------------------------"
-
-    run_test "Gateway 1 health" "$(test_gateway_health 1 "$GATEWAY_1_DEBUG"; echo $?)"
-    run_test "Gateway 2 health" "$(test_gateway_health 2 "$GATEWAY_2_DEBUG"; echo $?)"
-    run_test "Gateway 3 health" "$(test_gateway_health 3 "$GATEWAY_3_DEBUG"; echo $?)"
-
-    echo ""
-
-    # Phase 2.5: Configure certbot via Admin API
-    log_info "Phase 2.5: Configure certbot"
-    log_info "------------------------------------------"
-
+    # Phase 3: Configure certbot
+    log_phase 3 "Configure certbot"
     if ! setup_certbot_config; then
         log_error "Failed to setup certbot configuration"
     fi
 
-    echo ""
-
-    # Phase 3: Wait for certificate issuance
-    log_info "Phase 3: Certificate issuance (multi-domain)"
-    log_info "------------------------------------------"
-
-    # Wait for first certificate to be issued
+    # Phase 4: Certificate issuance
+    log_phase 4 "Certificate issuance"
     local first_domain=$(echo "$CERT_DOMAINS" | cut -d' ' -f1)
-    local first_sni=$(wildcard_to_sni "$first_domain")
-    log_info "Waiting for certificate to be issued (up to 120s)..."
-    log_info "First domain: $first_domain, SNI: $first_sni"
-    local waited=0
-    local max_wait=120
+    local first_sni=$(get_test_sni "$first_domain")
+    local first_proxy=$(echo "$GATEWAY_PROXIES" | cut -d' ' -f1)
 
-    while [ $waited -lt $max_wait ]; do
-        if test_certificate_issued "$GATEWAY_1_PROXY" "$first_sni"; then
-            log_info "Certificate detected on Gateway 1 for $first_sni!"
+    log_info "Waiting for certificates (up to 120s)..."
+    local waited=0
+    while [ $waited -lt 120 ]; do
+        if test_certificate_issued "$first_proxy" "$first_sni"; then
+            log_info "Certificate detected for $first_sni"
             break
         fi
         sleep 5
@@ -333,85 +266,59 @@ main() {
         log_info "Waiting... (${waited}s)"
     done
 
-    # Test certificate issuance for each domain
     for domain in $CERT_DOMAINS; do
-        local test_sni=$(wildcard_to_sni "$domain")
-        run_test "Certificate issued for $domain (SNI: $test_sni)" \
-            "$(test_certificate_issued "$GATEWAY_1_PROXY" "$test_sni"; echo $?)"
+        local sni=$(get_test_sni "$domain")
+        run_test "Certificate issued for $domain" \
+            "$(test_certificate_issued "$first_proxy" "$sni"; echo $?)"
     done
 
-    # Give time for sync
-    log_info "Waiting 20s for certificate sync across cluster..."
+    log_info "Waiting 20s for cluster sync..."
     sleep 20
 
-    echo ""
-
-    # Phase 4: Verify certificate consistency across cluster
-    log_info "Phase 4: Certificate consistency (multi-domain)"
-    log_info "------------------------------------------"
-
+    # Phase 5: Certificate consistency
+    log_phase 5 "Certificate consistency"
     for domain in $CERT_DOMAINS; do
-        local test_sni=$(wildcard_to_sni "$domain")
+        local sni=$(get_test_sni "$domain")
         run_test "All gateways have same cert for $domain" \
-            "$(test_certificates_match "$test_sni"; echo $?)"
+            "$(test_certificates_match "$sni"; echo $?)"
         run_test "Cert for $domain issued by Pebble" \
-            "$(test_certificate_from_pebble "$test_sni"; echo $?)"
+            "$(test_certificate_from_pebble "$sni"; echo $?)"
     done
 
-    echo ""
-
-    # Phase 5: Test SNI-based certificate selection
-    log_info "Phase 5: SNI-based certificate selection"
-    log_info "------------------------------------------"
-
+    # Phase 6: SNI-based selection
+    log_phase 6 "SNI-based certificate selection"
     for domain in $CERT_DOMAINS; do
-        local test_sni=$(wildcard_to_sni "$domain")
-        run_test "SNI $test_sni returns $domain cert" \
-            "$(test_sni_cert_selection "$GATEWAY_1_PROXY" "$test_sni" "$domain"; echo $?)"
+        local sni=$(get_test_sni "$domain")
+        run_test "SNI $sni returns $domain cert" \
+            "$(test_sni_cert_selection "$first_proxy" "$sni" "$domain"; echo $?)"
     done
 
-    echo ""
-
-    # Phase 6: Test proxy TLS health endpoint
-    log_info "Phase 6: Proxy TLS health endpoint"
-    log_info "------------------------------------------"
-
+    # Phase 7: Proxy TLS health
+    log_phase 7 "Proxy TLS health endpoint"
     for domain in $CERT_DOMAINS; do
-        local test_sni=$(wildcard_to_sni "$domain")
-        run_test "Gateway 1 proxy health via TLS ($test_sni)" \
-            "$(test_proxy_tls_health "$GATEWAY_1_PROXY" "$test_sni"; echo $?)"
-        run_test "Gateway 2 proxy health via TLS ($test_sni)" \
-            "$(test_proxy_tls_health "$GATEWAY_2_PROXY" "$test_sni"; echo $?)"
-        run_test "Gateway 3 proxy health via TLS ($test_sni)" \
-            "$(test_proxy_tls_health "$GATEWAY_3_PROXY" "$test_sni"; echo $?)"
+        local sni=$(get_test_sni "$domain")
+        local i=1
+        for proxy in $GATEWAY_PROXIES; do
+            run_test "Gateway $i TLS health ($sni)" \
+                "$(test_proxy_tls_health "$proxy" "$sni"; echo $?)"
+            i=$((i + 1))
+        done
     done
 
-    echo ""
-
-    # Phase 7: Check DNS records (optional - records only created for fresh cert issuance)
-    log_info "Phase 7: DNS-01 challenge records (informational)"
-    log_info "------------------------------------------"
-
-    if test_dns_record_created; then
-        log_success "DNS TXT records found in mock API"
+    # Phase 8: DNS records (informational)
+    log_phase 8 "DNS-01 challenge records"
+    local records=$(curl -sf "${MOCK_CF_API}/api/records" 2>/dev/null || echo "")
+    if echo "$records" | grep -q "TXT"; then
+        log_success "DNS TXT records found"
     else
-        log_info "No DNS TXT records found (expected if certs were reused from cache)"
+        log_info "No DNS TXT records (expected if certs cached)"
     fi
 
-    # Show DNS records for debugging
-    log_info "DNS records in mock API:"
-    curl -sf "${MOCK_CF_API}/api/records" 2>/dev/null | head -100 || true
-
-    echo ""
-
     # Summary
-    log_info "=========================================="
-    log_info "Test Summary"
-    log_info "=========================================="
+    log_section "Test Summary"
     log_info "Passed: $TESTS_PASSED"
     log_info "Failed: $TESTS_FAILED"
-    log_info "Domains tested: $(echo "$CERT_DOMAINS" | wc -w)"
-    log_info "Certificates: $CERT_DOMAINS"
+    log_info "Domains: $(echo "$CERT_DOMAINS" | wc -w)"
 
     if [ $TESTS_FAILED -eq 0 ]; then
         log_success "All tests passed!"
@@ -422,5 +329,4 @@ main() {
     fi
 }
 
-# Run main
 main
