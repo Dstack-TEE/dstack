@@ -367,13 +367,14 @@ impl Proxy {
             }
         }
 
+        let todo = "What the base domain now?";
         Ok(AcmeInfoResponse {
             account_uri: String::new(),   // Stored per-domain in KvStore now
             hist_keys: vec![],            // Deprecated, use quoted_hist_keys
             account_quote: String::new(), // Deprecated
             quoted_hist_keys,
             active_cert,
-            base_domain: config.proxy.base_domain.clone(),
+            base_domain: "".into(),
         })
     }
 
@@ -416,15 +417,17 @@ impl Proxy {
                 endpoint: n.wg_endpoint.clone(),
             })
             .collect::<Vec<_>>();
+        let todo = "What the base domain now?";
+        let todo = "What the external port now?";
         let response = RegisterCvmResponse {
             wg: Some(WireGuardConfig {
                 client_ip: client_info.ip.to_string(),
                 servers,
             }),
             agent: Some(GuestAgentConfig {
-                external_port: state.config.proxy.external_port as u32,
-                internal_port: state.config.proxy.agent_port as u32,
-                domain: state.config.proxy.base_domain.clone(),
+                external_port: 443,
+                internal_port: 8090,
+                domain: "".into(),
                 app_address_ns_prefix: state.config.proxy.app_address_ns_prefix.clone(),
             }),
             gateways,
@@ -1144,9 +1147,11 @@ impl GatewayRpc for RpcHandler {
 
     async fn info(self) -> Result<InfoResponse> {
         let state = self.state.lock();
+        let todo = "What the base domain now?";
+        let todo = "What the port now?";
         Ok(InfoResponse {
-            base_domain: state.config.proxy.base_domain.clone(),
-            external_port: state.config.proxy.external_port as u32,
+            base_domain: "".into(),
+            external_port: 0,
             app_address_ns_prefix: state.config.proxy.app_address_ns_prefix.clone(),
         })
     }

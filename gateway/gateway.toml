@@ -42,8 +42,6 @@ interface = "wg0"
 endpoint = "10.0.2.2:51820"
 
 [core.proxy]
-cert_chain = "/etc/rproxy/certs/cert.pem"
-cert_key = "/etc/rproxy/certs/key.pem"
 tls_crypto_provider = "aws-lc-rs"
 tls_versions = ["1.2"]
 base_domain = "app.localhost"

@@ -71,11 +71,8 @@ pub enum TlsVersion {
 pub struct ProxyConfig {
     pub tls_crypto_provider: CryptoProvider,
     pub tls_versions: Vec<TlsVersion>,
-    pub base_domain: String,
-    pub external_port: u16,
     pub listen_addr: Ipv4Addr,
     pub listen_port: u16,
-    pub agent_port: u16,
     pub timeouts: Timeouts,
     pub buffer_size: usize,
     pub connect_top_n: usize,

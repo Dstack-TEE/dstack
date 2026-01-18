@@ -76,10 +76,11 @@ wait_for_service() {
     return 1
 }
 
-# Convert wildcard domain to test SNI: *.test0.local -> app.test0.local
+# Convert wildcard domain to test SNI: *.test0.local -> health.test0.local
+# Use "health" as the subdomain because it's a special app_id that doesn't require a backend
 wildcard_to_sni() {
     local wildcard="$1"
-    echo "$wildcard" | sed 's/\*\./app./'
+    echo "$wildcard" | sed 's/\*\./health./'
 }
 
 # Get certificate info from proxy via TLS with specific SNI
@@ -112,11 +113,15 @@ get_cert_san() {
 }
 
 # Test TLS health endpoint on proxy port
+# Use "gateway.<basedomain>" which proxies to the gateway's own /health endpoint
 test_proxy_tls_health() {
     local host="$1"
     local sni="$2"
+    # Extract base domain from SNI (e.g., health.test0.local -> test0.local)
+    local base_domain=$(echo "$sni" | cut -d. -f2-)
+    local gateway_sni="gateway.${base_domain}"
     # Use --connect-to instead of --resolve since we have hostnames not IPs
-    curl -sf --connect-to "${sni}:9014:${host}" -k "https://${sni}:9014/health" > /dev/null 2>&1
+    curl -sf --connect-to "${gateway_sni}:9014:${host}" -k "https://${gateway_sni}:9014/health" > /dev/null 2>&1
 }
 
 # ==================== Setup ====================

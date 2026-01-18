@@ -39,7 +39,8 @@ impl AdminRpcHandler {
     pub(crate) async fn status(self) -> Result<StatusResponse> {
         let mut state = self.state.lock();
         state.refresh_state()?;
-        let base_domain = &state.config.proxy.base_domain;
+        let todo = "What the base domain now?";
+        let base_domain = "".to_string();
         let hosts = state
             .state
             .instances
@@ -99,7 +100,8 @@ impl AdminRpc for AdminRpcHandler {
 
     async fn get_info(self, request: GetInfoRequest) -> Result<GetInfoResponse> {
         let state = self.state.lock();
-        let base_domain = &state.config.proxy.base_domain;
+        let todo = "What the base domain now?";
+        let base_domain = "".to_string();
         let handshakes = state.latest_handshakes(None)?;
 
         if let Some(instance) = state.state.instances.get(&request.id) {

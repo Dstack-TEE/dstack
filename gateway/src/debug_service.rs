@@ -40,9 +40,11 @@ impl DebugRpc for DebugRpcHandler {
 
     async fn info(self) -> Result<InfoResponse> {
         let config = &self.state.config;
+        let todo = "What the base domain now?";
+        let todo = "What the port now?";
         Ok(InfoResponse {
-            base_domain: config.proxy.base_domain.clone(),
-            external_port: config.proxy.external_port as u32,
+            base_domain: "".into(),
+            external_port: 0,
             app_address_ns_prefix: config.proxy.app_address_ns_prefix.clone(),
         })
     }
