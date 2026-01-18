@@ -412,6 +412,12 @@ service Admin {
   rpc RenewDomainCert(RenewDomainCertRequest) returns (RenewDomainCertResponse) {}
   // List certificate attestations for a domain
   rpc ListCertAttestations(ListCertAttestationsRequest) returns (ListCertAttestationsResponse) {}
+
+  // ==================== Global ACME URL Configuration ====================
+  // Get the global ACME URL
+  rpc GetGlobalAcmeUrl(google.protobuf.Empty) returns (GetGlobalAcmeUrlResponse) {}
+  // Set the global ACME URL
+  rpc SetGlobalAcmeUrl(SetGlobalAcmeUrlRequest) returns (google.protobuf.Empty) {}
 }
 
 // ==================== DNS Credential Messages ====================
@@ -602,4 +608,18 @@ message ListCertAttestationsResponse {
   optional CertAttestationInfo latest = 1;
   // Historical attestations (sorted by generated_at descending)
   repeated CertAttestationInfo history = 2;
+}
+
+// ==================== Global ACME URL Messages ====================
+
+// Get global ACME URL response
+message GetGlobalAcmeUrlResponse {
+  // The global ACME URL (empty means default Let's Encrypt production)
+  string acme_url = 1;
+}
+
+// Set global ACME URL request
+message SetGlobalAcmeUrlRequest {
+  // The ACME URL to set (empty means use default Let's Encrypt production)
+  string acme_url = 1;
 }

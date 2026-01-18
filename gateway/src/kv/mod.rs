@@ -167,6 +167,7 @@ pub mod keys {
     pub const CERT_PREFIX: &str = "cert/";
     pub const DNS_CRED_PREFIX: &str = "dns_cred/";
     pub const DNS_CRED_DEFAULT: &str = "dns_cred_default";
+    pub const GLOBAL_ACME_URL: &str = "global/acme_url";
 
     pub fn inst(instance_id: &str) -> String {
         format!("{INST_PREFIX}{instance_id}")
@@ -675,6 +676,26 @@ impl KvStore {
     /// Watch for DNS credential changes
     pub fn watch_dns_credentials(&self) -> watch::Receiver<()> {
         self.persistent.watch_prefix(keys::DNS_CRED_PREFIX)
+    }
+
+    // ==================== Global ACME URL ====================
+
+    /// Get the global ACME URL (returns None if not set, meaning use default)
+    pub fn get_global_acme_url(&self) -> Option<String> {
+        self.persistent.read().decode(keys::GLOBAL_ACME_URL)
+    }
+
+    /// Set the global ACME URL (empty string clears it, meaning use default)
+    pub fn set_global_acme_url(&self, url: &str) -> Result<()> {
+        if url.is_empty() {
+            // Delete the key to use default
+            self.persistent.write().delete(keys::GLOBAL_ACME_URL.to_string())?;
+        } else {
+            self.persistent
+                .write()
+                .put_encoded(keys::GLOBAL_ACME_URL.to_string(), &url)?;
+        }
+        Ok(())
     }
 
     // ==================== Domain Certificate Config ====================

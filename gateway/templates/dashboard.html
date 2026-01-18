@@ -215,6 +215,179 @@ SPDX-License-Identifier: Apache-2.0
             opacity: 0.5;
             cursor: not-allowed;
         }
+
+        /* Certificate config styles */
+        .action-btn {
+            padding: 6px 12px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: bold;
+            transition: opacity 0.2s;
+            margin-right: 5px;
+        }
+
+        .action-btn:hover {
+            opacity: 0.8;
+        }
+
+        .action-btn.primary {
+            background-color: #4CAF50;
+            color: white;
+        }
+
+        .action-btn.danger {
+            background-color: #f44336;
+            color: white;
+        }
+
+        .action-btn.secondary {
+            background-color: #2196F3;
+            color: white;
+        }
+
+        .action-btn.warning {
+            background-color: #ff9800;
+            color: white;
+        }
+
+        .action-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .default-badge {
+            background-color: #4CAF50;
+            color: white;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: bold;
+        }
+
+        .cert-status {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .cert-status-item {
+            font-size: 12px;
+        }
+
+        .cert-status-item.has-cert {
+            color: #4CAF50;
+        }
+
+        .cert-status-item.no-cert {
+            color: #f44336;
+        }
+
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.5);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .modal-overlay.active {
+            display: flex;
+        }
+
+        .modal {
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+            min-width: 400px;
+            max-width: 500px;
+        }
+
+        .modal h3 {
+            margin-top: 0;
+            color: #333;
+            border-bottom: 2px solid #4CAF50;
+            padding-bottom: 10px;
+        }
+
+        .modal-field {
+            margin-bottom: 15px;
+        }
+
+        .modal-field label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+            color: #555;
+        }
+
+        .modal-field input,
+        .modal-field select {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            box-sizing: border-box;
+        }
+
+        .modal-field input[type="checkbox"] {
+            width: auto;
+        }
+
+        .modal-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 10px;
+            margin-top: 20px;
+        }
+
+        .toast {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            padding: 15px 25px;
+            border-radius: 4px;
+            color: white;
+            font-weight: bold;
+            z-index: 2000;
+            animation: slideIn 0.3s ease;
+        }
+
+        .toast.success {
+            background-color: #4CAF50;
+        }
+
+        .toast.error {
+            background-color: #f44336;
+        }
+
+        @keyframes slideIn {
+            from {
+                transform: translateX(100%);
+                opacity: 0;
+            }
+            to {
+                transform: translateX(0);
+                opacity: 1;
+            }
+        }
+
+        .section-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .section-header h2 {
+            margin: 0;
+        }
     </style>
     <title>Dashboard</title>
     <script>
@@ -358,6 +531,129 @@ SPDX-License-Identifier: Apache-2.0
         <p>Loading WaveKV status...</p>
     </div>
 
+    <h2>ACME Configuration</h2>
+    <table>
+        <tr>
+            <th>Setting</th>
+            <th>Value</th>
+            <th>Actions</th>
+        </tr>
+        <tr>
+            <td>Global ACME URL</td>
+            <td>
+                <input type="text" id="global-acme-url" placeholder="https://acme-v02.api.letsencrypt.org/directory (default)">
+            </td>
+            <td>
+                <button class="action-btn primary" onclick="saveGlobalAcmeUrl()">Save</button>
+                <button class="action-btn secondary" onclick="resetGlobalAcmeUrl()">Reset to Default</button>
+            </td>
+        </tr>
+    </table>
+
+    <div class="section-header">
+        <h2>DNS Credentials</h2>
+        <button class="action-btn primary" onclick="showAddDnsCredModal()">Add Credential</button>
+    </div>
+    <div id="dns-credentials">
+        <p>Loading DNS credentials...</p>
+    </div>
+
+    <div class="section-header">
+        <h2>Domain Certificates</h2>
+        <button class="action-btn primary" onclick="showAddDomainModal()">Add Domain</button>
+    </div>
+    <div id="domain-certs">
+        <p>Loading domain certificates...</p>
+    </div>
+
+    <!-- Add DNS Credential Modal -->
+    <div id="add-dns-cred-modal" class="modal-overlay">
+        <div class="modal">
+            <h3>Add DNS Credential</h3>
+            <div class="modal-field">
+                <label>Name</label>
+                <input type="text" id="dns-cred-name" placeholder="My Cloudflare Credential">
+            </div>
+            <div class="modal-field">
+                <label>Provider</label>
+                <select id="dns-cred-provider">
+                    <option value="cloudflare">Cloudflare</option>
+                </select>
+            </div>
+            <div class="modal-field">
+                <label>Cloudflare API Token</label>
+                <input type="password" id="dns-cred-token" placeholder="API Token with DNS edit permissions">
+            </div>
+            <div class="modal-field">
+                <label>Cloudflare API URL (optional)</label>
+                <input type="text" id="dns-cred-api-url" placeholder="https://api.cloudflare.com/client/v4 (default)">
+            </div>
+            <div class="modal-field">
+                <label>
+                    <input type="checkbox" id="dns-cred-default"> Set as default
+                </label>
+            </div>
+            <div class="modal-actions">
+                <button class="action-btn secondary" onclick="hideModal('add-dns-cred-modal')">Cancel</button>
+                <button class="action-btn primary" onclick="createDnsCredential()">Create</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Edit DNS Credential Modal -->
+    <div id="edit-dns-cred-modal" class="modal-overlay">
+        <div class="modal">
+            <h3>Edit DNS Credential</h3>
+            <input type="hidden" id="edit-dns-cred-id">
+            <div class="modal-field">
+                <label>Name</label>
+                <input type="text" id="edit-dns-cred-name" placeholder="My Cloudflare Credential">
+            </div>
+            <div class="modal-field">
+                <label>Provider</label>
+                <input type="text" id="edit-dns-cred-provider" readonly disabled>
+            </div>
+            <div class="modal-field">
+                <label>Cloudflare API Token (leave empty to keep current)</label>
+                <input type="password" id="edit-dns-cred-token" placeholder="Leave empty to keep current token">
+            </div>
+            <div class="modal-field">
+                <label>Cloudflare API URL (optional)</label>
+                <input type="text" id="edit-dns-cred-api-url" placeholder="https://api.cloudflare.com/client/v4 (default)">
+            </div>
+            <div class="modal-actions">
+                <button class="action-btn secondary" onclick="hideModal('edit-dns-cred-modal')">Cancel</button>
+                <button class="action-btn primary" onclick="updateDnsCredential()">Update</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Add Domain Certificate Modal -->
+    <div id="add-domain-modal" class="modal-overlay">
+        <div class="modal">
+            <h3>Add Domain Certificate</h3>
+            <div class="modal-field">
+                <label>Domain</label>
+                <input type="text" id="domain-name" placeholder="*.app.example.com">
+            </div>
+            <div class="modal-field">
+                <label>DNS Credential</label>
+                <select id="domain-dns-cred">
+                    <option value="">Use Default</option>
+                </select>
+            </div>
+            <div class="modal-field">
+                <label>
+                    <input type="checkbox" id="domain-enabled" checked> Enable certificate management
+                </label>
+            </div>
+            <div class="modal-actions">
+                <button class="action-btn secondary" onclick="hideModal('add-domain-modal')">Cancel</button>
+                <button class="action-btn primary" onclick="addDomainCert()">Add</button>
+            </div>
+        </div>
+    </div>
+
     <script>
         async function loadWaveKvStatus() {
             try {
@@ -460,7 +756,462 @@ SPDX-License-Identifier: Apache-2.0
             loadWaveKvStatus();
             loadGlobalConnections();
             loadNodeStatuses();
+            loadCertConfig();
         });
+
+        // ==================== Certificate Configuration ====================
+
+        async function loadCertConfig() {
+            await loadGlobalAcmeUrl();
+            await loadDnsCredentials();
+            await loadDomainCerts();
+        }
+
+        // ==================== Global ACME URL ====================
+
+        async function loadGlobalAcmeUrl() {
+            try {
+                const response = await fetch('/prpc/Admin.GetGlobalAcmeUrl', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: '{}'
+                });
+                const data = await response.json();
+                document.getElementById('global-acme-url').value = data.acme_url || '';
+            } catch (e) {
+                console.error('Failed to load global ACME URL:', e);
+            }
+        }
+
+        async function saveGlobalAcmeUrl() {
+            const url = document.getElementById('global-acme-url').value.trim();
+            try {
+                const response = await fetch('/prpc/Admin.SetGlobalAcmeUrl', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ acme_url: url })
+                });
+                if (!response.ok) throw new Error('Failed to save');
+                showToast('Global ACME URL saved', 'success');
+            } catch (e) {
+                showToast('Failed to save ACME URL: ' + e.message, 'error');
+            }
+        }
+
+        async function resetGlobalAcmeUrl() {
+            try {
+                const response = await fetch('/prpc/Admin.SetGlobalAcmeUrl', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ acme_url: '' })
+                });
+                if (!response.ok) throw new Error('Failed to reset');
+                document.getElementById('global-acme-url').value = '';
+                showToast('Global ACME URL reset to default', 'success');
+            } catch (e) {
+                showToast('Failed to reset ACME URL: ' + e.message, 'error');
+            }
+        }
+
+        // ==================== DNS Credentials ====================
+
+        let dnsCredentials = [];
+        let defaultDnsCredId = '';
+
+        async function loadDnsCredentials() {
+            try {
+                const response = await fetch('/prpc/Admin.ListDnsCredentials', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: '{}'
+                });
+                const data = await response.json();
+                dnsCredentials = data.credentials || [];
+                defaultDnsCredId = data.default_id || '';
+                renderDnsCredentials();
+                updateDnsCredSelect();
+            } catch (e) {
+                document.getElementById('dns-credentials').innerHTML =
+                    '<p style="color: #666;">Failed to load DNS credentials</p>';
+            }
+        }
+
+        function renderDnsCredentials() {
+            const container = document.getElementById('dns-credentials');
+            if (dnsCredentials.length === 0) {
+                container.innerHTML = '<p style="color: #666;">No DNS credentials configured</p>';
+                return;
+            }
+
+            let html = `
+                <table>
+                    <tr>
+                        <th>Name</th>
+                        <th>Provider</th>
+                        <th>Default</th>
+                        <th>Actions</th>
+                    </tr>
+            `;
+
+            for (const cred of dnsCredentials) {
+                const isDefault = cred.id === defaultDnsCredId;
+                html += `
+                    <tr>
+                        <td>${escapeHtml(cred.name)}</td>
+                        <td>${escapeHtml(cred.provider_type)}</td>
+                        <td>${isDefault ? '<span class="default-badge">DEFAULT</span>' : ''}</td>
+                        <td>
+                            <button class="action-btn secondary" onclick="showEditDnsCredModal('${cred.id}')">Edit</button>
+                            ${!isDefault ? `<button class="action-btn secondary" onclick="setDefaultDnsCredential('${cred.id}')">Set Default</button>` : ''}
+                            <button class="action-btn danger" onclick="deleteDnsCredential('${cred.id}')" ${isDefault ? 'disabled title="Cannot delete default credential"' : ''}>Delete</button>
+                        </td>
+                    </tr>
+                `;
+            }
+
+            html += '</table>';
+            container.innerHTML = html;
+        }
+
+        function updateDnsCredSelect() {
+            const select = document.getElementById('domain-dns-cred');
+            select.innerHTML = '<option value="">Use Default</option>';
+            for (const cred of dnsCredentials) {
+                const isDefault = cred.id === defaultDnsCredId;
+                select.innerHTML += `<option value="${cred.id}">${escapeHtml(cred.name)}${isDefault ? ' (default)' : ''}</option>`;
+            }
+        }
+
+        function showAddDnsCredModal() {
+            document.getElementById('dns-cred-name').value = '';
+            document.getElementById('dns-cred-token').value = '';
+            document.getElementById('dns-cred-api-url').value = '';
+            document.getElementById('dns-cred-default').checked = dnsCredentials.length === 0;
+            showModal('add-dns-cred-modal');
+        }
+
+        function showEditDnsCredModal(credId) {
+            const cred = dnsCredentials.find(c => c.id === credId);
+            if (!cred) {
+                showToast('Credential not found', 'error');
+                return;
+            }
+
+            document.getElementById('edit-dns-cred-id').value = cred.id;
+            document.getElementById('edit-dns-cred-name').value = cred.name;
+            document.getElementById('edit-dns-cred-provider').value = cred.provider_type;
+            document.getElementById('edit-dns-cred-token').value = '';
+            document.getElementById('edit-dns-cred-api-url').value = cred.cf_api_url || '';
+            showModal('edit-dns-cred-modal');
+        }
+
+        async function updateDnsCredential() {
+            const id = document.getElementById('edit-dns-cred-id').value;
+            const name = document.getElementById('edit-dns-cred-name').value.trim();
+            const token = document.getElementById('edit-dns-cred-token').value.trim();
+            const apiUrl = document.getElementById('edit-dns-cred-api-url').value.trim();
+
+            if (!name) {
+                showToast('Name is required', 'error');
+                return;
+            }
+
+            try {
+                const body = { id: id };
+                if (name) body.name = name;
+                if (token) body.cf_api_token = token;
+                if (apiUrl) body.cf_api_url = apiUrl;
+
+                const response = await fetch('/prpc/Admin.UpdateDnsCredential', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body)
+                });
+                if (!response.ok) {
+                    const err = await response.text();
+                    throw new Error(err);
+                }
+                hideModal('edit-dns-cred-modal');
+                showToast('DNS credential updated', 'success');
+                await loadDnsCredentials();
+            } catch (e) {
+                showToast('Failed to update credential: ' + e.message, 'error');
+            }
+        }
+
+        async function createDnsCredential() {
+            const name = document.getElementById('dns-cred-name').value.trim();
+            const token = document.getElementById('dns-cred-token').value.trim();
+            const apiUrl = document.getElementById('dns-cred-api-url').value.trim();
+            const setAsDefault = document.getElementById('dns-cred-default').checked;
+
+            if (!name || !token) {
+                showToast('Name and API Token are required', 'error');
+                return;
+            }
+
+            try {
+                const response = await fetch('/prpc/Admin.CreateDnsCredential', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        name: name,
+                        provider_type: 'cloudflare',
+                        cf_api_token: token,
+                        cf_api_url: apiUrl || undefined,
+                        set_as_default: setAsDefault
+                    })
+                });
+                if (!response.ok) {
+                    const err = await response.text();
+                    throw new Error(err);
+                }
+                hideModal('add-dns-cred-modal');
+                showToast('DNS credential created', 'success');
+                await loadDnsCredentials();
+            } catch (e) {
+                showToast('Failed to create credential: ' + e.message, 'error');
+            }
+        }
+
+        async function setDefaultDnsCredential(id) {
+            try {
+                const response = await fetch('/prpc/Admin.SetDefaultDnsCredential', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ id: id })
+                });
+                if (!response.ok) throw new Error('Failed to set default');
+                showToast('Default credential updated', 'success');
+                await loadDnsCredentials();
+            } catch (e) {
+                showToast('Failed to set default: ' + e.message, 'error');
+            }
+        }
+
+        async function deleteDnsCredential(id) {
+            if (!confirm('Are you sure you want to delete this DNS credential?')) return;
+
+            try {
+                const response = await fetch('/prpc/Admin.DeleteDnsCredential', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ id: id })
+                });
+                if (!response.ok) {
+                    const err = await response.text();
+                    throw new Error(err);
+                }
+                showToast('DNS credential deleted', 'success');
+                await loadDnsCredentials();
+            } catch (e) {
+                showToast('Failed to delete: ' + e.message, 'error');
+            }
+        }
+
+        // ==================== Domain Certificates ====================
+
+        async function loadDomainCerts() {
+            try {
+                const response = await fetch('/prpc/Admin.ListDomainCerts', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: '{}'
+                });
+                const data = await response.json();
+                renderDomainCerts(data.domains || []);
+            } catch (e) {
+                document.getElementById('domain-certs').innerHTML =
+                    '<p style="color: #666;">Failed to load domain certificates</p>';
+            }
+        }
+
+        function renderDomainCerts(domains) {
+            const container = document.getElementById('domain-certs');
+            if (domains.length === 0) {
+                container.innerHTML = '<p style="color: #666;">No domain certificates configured</p>';
+                return;
+            }
+
+            let html = `
+                <table>
+                    <tr>
+                        <th>Domain</th>
+                        <th>DNS Credential</th>
+                        <th>Status</th>
+                        <th>Expires</th>
+                        <th>Enabled</th>
+                        <th>Actions</th>
+                    </tr>
+            `;
+
+            for (const domain of domains) {
+                const status = domain.status || {};
+                const hasCert = status.has_cert;
+                const expiresAt = status.not_after ? new Date(status.not_after * 1000).toLocaleDateString() : 'N/A';
+                const dnsCredName = getDnsCredName(domain.dns_cred_id);
+
+                html += `
+                    <tr>
+                        <td>${escapeHtml(domain.domain)}</td>
+                        <td>${escapeHtml(dnsCredName)}</td>
+                        <td>
+                            <div class="cert-status">
+                                <span class="cert-status-item ${hasCert ? 'has-cert' : 'no-cert'}">
+                                    ${hasCert ? '✓ Certificate loaded' : '✗ No certificate'}
+                                </span>
+                                ${status.loaded_in_memory ? '<span class="cert-status-item has-cert">✓ In memory</span>' : ''}
+                            </div>
+                        </td>
+                        <td class="timestamp" data-original="${expiresAt}">${status.not_after || 0}</td>
+                        <td>${domain.enabled ? '✓' : '✗'}</td>
+                        <td>
+                            <button class="action-btn warning" onclick="renewDomainCert('${escapeHtml(domain.domain)}', false)">Renew</button>
+                            <button class="action-btn secondary" onclick="renewDomainCert('${escapeHtml(domain.domain)}', true)">Force Renew</button>
+                            <button class="action-btn danger" onclick="deleteDomainCert('${escapeHtml(domain.domain)}')">Delete</button>
+                        </td>
+                    </tr>
+                `;
+            }
+
+            html += '</table>';
+            container.innerHTML = html;
+
+            // Apply timeAgo to expiry timestamps
+            const timestamps = container.querySelectorAll('.timestamp');
+            timestamps.forEach(cell => {
+                const timestamp = parseInt(cell.textContent);
+                if (!isNaN(timestamp) && timestamp > 0) {
+                    const date = new Date(timestamp * 1000);
+                    cell.setAttribute('data-original', date.toLocaleString());
+                    cell.textContent = date.toLocaleDateString();
+                }
+            });
+        }
+
+        function getDnsCredName(credId) {
+            if (!credId) return '(default)';
+            const cred = dnsCredentials.find(c => c.id === credId);
+            return cred ? cred.name : credId;
+        }
+
+        function showAddDomainModal() {
+            document.getElementById('domain-name').value = '';
+            document.getElementById('domain-dns-cred').value = '';
+            document.getElementById('domain-enabled').checked = true;
+            showModal('add-domain-modal');
+        }
+
+        async function addDomainCert() {
+            const domain = document.getElementById('domain-name').value.trim();
+            const dnsCredId = document.getElementById('domain-dns-cred').value;
+            const enabled = document.getElementById('domain-enabled').checked;
+
+            if (!domain) {
+                showToast('Domain is required', 'error');
+                return;
+            }
+
+            try {
+                const response = await fetch('/prpc/Admin.AddDomainCert', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        domain: domain,
+                        dns_cred_id: dnsCredId,
+                        enabled: enabled
+                    })
+                });
+                if (!response.ok) {
+                    const err = await response.text();
+                    throw new Error(err);
+                }
+                hideModal('add-domain-modal');
+                showToast('Domain added', 'success');
+                await loadDomainCerts();
+            } catch (e) {
+                showToast('Failed to add domain: ' + e.message, 'error');
+            }
+        }
+
+        async function renewDomainCert(domain, force) {
+            const action = force ? 'force renew' : 'renew';
+            if (!confirm(`Are you sure you want to ${action} the certificate for ${domain}?`)) return;
+
+            try {
+                showToast(`Renewing certificate for ${domain}...`, 'success');
+                const response = await fetch('/prpc/Admin.RenewDomainCert', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        domain: domain,
+                        force: force
+                    })
+                });
+                if (!response.ok) {
+                    const err = await response.text();
+                    throw new Error(err);
+                }
+                const data = await response.json();
+                if (data.renewed) {
+                    showToast(`Certificate renewed for ${domain}`, 'success');
+                } else {
+                    showToast(`Certificate does not need renewal`, 'success');
+                }
+                await loadDomainCerts();
+            } catch (e) {
+                showToast('Failed to renew: ' + e.message, 'error');
+            }
+        }
+
+        async function deleteDomainCert(domain) {
+            if (!confirm(`Are you sure you want to delete the certificate config for ${domain}?`)) return;
+
+            try {
+                const response = await fetch('/prpc/Admin.DeleteDomainCert', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ domain: domain })
+                });
+                if (!response.ok) {
+                    const err = await response.text();
+                    throw new Error(err);
+                }
+                showToast('Domain deleted', 'success');
+                await loadDomainCerts();
+            } catch (e) {
+                showToast('Failed to delete: ' + e.message, 'error');
+            }
+        }
+
+        // ==================== UI Helpers ====================
+
+        function showModal(id) {
+            document.getElementById(id).classList.add('active');
+        }
+
+        function hideModal(id) {
+            document.getElementById(id).classList.remove('active');
+        }
+
+        function showToast(message, type) {
+            // Remove existing toasts
+            document.querySelectorAll('.toast').forEach(t => t.remove());
+
+            const toast = document.createElement('div');
+            toast.className = `toast ${type}`;
+            toast.textContent = message;
+            document.body.appendChild(toast);
+
+            setTimeout(() => toast.remove(), 3000);
+        }
+
+        function escapeHtml(text) {
+            if (!text) return '';
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
 
         async function loadGlobalConnections() {
             try {

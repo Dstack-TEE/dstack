@@ -313,11 +313,12 @@ impl DistributedCertBot {
             }
         };
 
-        let acme_url = if config.acme_url.is_empty() {
-            DEFAULT_ACME_URL
-        } else {
-            &config.acme_url
-        };
+        // Use global ACME URL from KvStore, fall back to default if not set
+        let global_acme_url = self.kv_store.get_global_acme_url();
+        let acme_url = global_acme_url
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .unwrap_or(DEFAULT_ACME_URL);
 
         // Try to load credentials from KvStore
         if let Some(creds) = self.kv_store.get_cert_acme(domain) {

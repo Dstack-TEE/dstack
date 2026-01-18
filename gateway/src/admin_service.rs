@@ -11,14 +11,15 @@ use dstack_gateway_rpc::{
     AddDomainCertRequest, CertAttestationInfo, CreateDnsCredentialRequest,
     DeleteDnsCredentialRequest, DeleteDomainCertRequest, DnsCredentialInfo, DomainCertInfo,
     DomainCertStatus, GetDefaultDnsCredentialResponse, GetDnsCredentialRequest,
-    GetDomainCertRequest, GetInfoRequest, GetInfoResponse, GetInstanceHandshakesRequest,
-    GetInstanceHandshakesResponse, GetMetaResponse, GetNodeStatusesResponse,
-    GlobalConnectionsStats, HandshakeEntry, HostInfo, LastSeenEntry, ListCertAttestationsRequest,
-    ListCertAttestationsResponse, ListDnsCredentialsResponse, ListDomainCertsResponse,
-    NodeStatusEntry, PeerSyncStatus as ProtoPeerSyncStatus, RenewCertResponse,
-    RenewDomainCertRequest, RenewDomainCertResponse, SetDefaultDnsCredentialRequest,
-    SetNodeStatusRequest, SetNodeUrlRequest, StatusResponse, StoreSyncStatus,
-    UpdateDnsCredentialRequest, UpdateDomainCertRequest, WaveKvStatusResponse,
+    GetDomainCertRequest, GetGlobalAcmeUrlResponse, GetInfoRequest, GetInfoResponse,
+    GetInstanceHandshakesRequest, GetInstanceHandshakesResponse, GetMetaResponse,
+    GetNodeStatusesResponse, GlobalConnectionsStats, HandshakeEntry, HostInfo, LastSeenEntry,
+    ListCertAttestationsRequest, ListCertAttestationsResponse, ListDnsCredentialsResponse,
+    ListDomainCertsResponse, NodeStatusEntry, PeerSyncStatus as ProtoPeerSyncStatus,
+    RenewCertResponse, RenewDomainCertRequest, RenewDomainCertResponse,
+    SetDefaultDnsCredentialRequest, SetGlobalAcmeUrlRequest, SetNodeStatusRequest,
+    SetNodeUrlRequest, StatusResponse, StoreSyncStatus, UpdateDnsCredentialRequest,
+    UpdateDomainCertRequest, WaveKvStatusResponse,
 };
 use ra_rpc::{CallContext, RpcCall};
 use tracing::info;
@@ -615,6 +616,25 @@ impl AdminRpc for AdminRpcHandler {
         }
 
         Ok(ListCertAttestationsResponse { latest, history })
+    }
+
+    // ==================== Global ACME URL Configuration ====================
+
+    async fn get_global_acme_url(self) -> Result<GetGlobalAcmeUrlResponse> {
+        let kv_store = self.state.kv_store();
+        let acme_url = kv_store.get_global_acme_url().unwrap_or_default();
+        Ok(GetGlobalAcmeUrlResponse { acme_url })
+    }
+
+    async fn set_global_acme_url(self, request: SetGlobalAcmeUrlRequest) -> Result<()> {
+        let kv_store = self.state.kv_store();
+        kv_store.set_global_acme_url(&request.acme_url)?;
+        if request.acme_url.is_empty() {
+            info!("Cleared global ACME URL (using default Let's Encrypt production)");
+        } else {
+            info!("Set global ACME URL: {}", request.acme_url);
+        }
+        Ok(())
     }
 }
 
