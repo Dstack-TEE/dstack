@@ -9,24 +9,24 @@ use anyhow::{bail, Context, Result};
 use dstack_gateway_rpc::{
     admin_server::{AdminRpc, AdminServer},
     AddZtDomainRequest, CertAttestationInfo, CreateDnsCredentialRequest,
-    DeleteDnsCredentialRequest, DeleteZtDomainRequest, DnsCredentialInfo, ZtDomainInfo,
-    ZtDomainCertStatus, GetDefaultDnsCredentialResponse, GetDnsCredentialRequest,
-    GetZtDomainRequest, GetGlobalAcmeUrlResponse, GetInfoRequest, GetInfoResponse,
-    GetInstanceHandshakesRequest, GetInstanceHandshakesResponse, GetMetaResponse,
-    GetNodeStatusesResponse, GlobalConnectionsStats, HandshakeEntry, HostInfo, LastSeenEntry,
-    ListCertAttestationsRequest, ListCertAttestationsResponse, ListDnsCredentialsResponse,
-    ListZtDomainsResponse, NodeStatusEntry, PeerSyncStatus as ProtoPeerSyncStatus,
-    RenewCertResponse, RenewZtDomainCertRequest, RenewZtDomainCertResponse,
-    SetDefaultDnsCredentialRequest, SetGlobalAcmeUrlRequest, SetNodeStatusRequest,
-    SetNodeUrlRequest, StatusResponse, StoreSyncStatus, UpdateDnsCredentialRequest,
-    UpdateZtDomainRequest, WaveKvStatusResponse,
+    DeleteDnsCredentialRequest, DeleteZtDomainRequest, DnsCredentialInfo,
+    GetDefaultDnsCredentialResponse, GetDnsCredentialRequest, GetGlobalAcmeUrlResponse,
+    GetInfoRequest, GetInfoResponse, GetInstanceHandshakesRequest, GetInstanceHandshakesResponse,
+    GetMetaResponse, GetNodeStatusesResponse, GetZtDomainRequest, GlobalConnectionsStats,
+    HandshakeEntry, HostInfo, LastSeenEntry, ListCertAttestationsRequest,
+    ListCertAttestationsResponse, ListDnsCredentialsResponse, ListZtDomainsResponse,
+    NodeStatusEntry, PeerSyncStatus as ProtoPeerSyncStatus, RenewCertResponse,
+    RenewZtDomainCertRequest, RenewZtDomainCertResponse, SetDefaultDnsCredentialRequest,
+    SetGlobalAcmeUrlRequest, SetNodeStatusRequest, SetNodeUrlRequest, StatusResponse,
+    StoreSyncStatus, UpdateDnsCredentialRequest, UpdateZtDomainRequest, WaveKvStatusResponse,
+    ZtDomainCertStatus, ZtDomainInfo,
 };
 use ra_rpc::{CallContext, RpcCall};
 use tracing::info;
 use wavekv::node::NodeStatus as WaveKvNodeStatus;
 
 use crate::{
-    kv::{DnsCredential, DnsProvider, ZtDomainConfig, NodeStatus},
+    kv::{DnsCredential, DnsProvider, NodeStatus, ZtDomainConfig},
     main_service::Proxy,
     proxy::NUM_CONNECTIONS,
 };
@@ -469,10 +469,7 @@ impl AdminRpc for AdminRpcHandler {
 
         // Check if domain already exists
         if kv_store.get_zt_domain_config(&request.domain).is_some() {
-            bail!(
-                "ZT-Domain config already exists: {}",
-                request.domain
-            );
+            bail!("ZT-Domain config already exists: {}", request.domain);
         }
 
         // Validate DNS credential if specified

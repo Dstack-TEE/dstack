@@ -16,9 +16,7 @@ use ra_tls::rcgen::KeyPair;
 use tracing::{error, info, warn};
 
 use crate::cert_store::CertStore;
-use crate::kv::{
-    CertAttestation, CertCredentials, CertData, DnsProvider, ZtDomainConfig, KvStore,
-};
+use crate::kv::{CertAttestation, CertCredentials, CertData, DnsProvider, KvStore, ZtDomainConfig};
 
 /// Lock timeout for certificate renewal (10 minutes)
 const RENEW_LOCK_TIMEOUT_SECS: u64 = 600;

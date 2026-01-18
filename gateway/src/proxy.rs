@@ -158,7 +158,10 @@ async fn handle_connection(
     } else if state.cert_store.has_cert_for_sni(&sni) {
         // SNI matches a managed certificate (e.g., wildcard cert for *.test0.local)
         // Handle as TLS termination with health check endpoint
-        debug!("SNI {} matches managed certificate, serving health endpoint", sni);
+        debug!(
+            sni,
+            "SNI matches managed certificate, serving health endpoint"
+        );
         state.handle_managed_cert_domain(inbound, buffer).await
     } else {
         tls_passthough::proxy_with_sni(state, inbound, buffer, &sni).await

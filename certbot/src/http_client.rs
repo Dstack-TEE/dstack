@@ -5,7 +5,6 @@
 //! Custom HTTP client for instant_acme that supports both HTTP and HTTPS.
 
 use bytes::Bytes;
-use tracing;
 use http::Request;
 use http_body_util::{BodyExt, Full};
 use instant_acme::{BytesResponse, HttpClient};
@@ -13,6 +12,7 @@ use reqwest::Client;
 use std::error::Error as StdError;
 use std::future::Future;
 use std::pin::Pin;
+use tracing;
 
 /// A HTTP client that supports both HTTP and HTTPS connections.
 /// This is needed because the default instant_acme client only supports HTTPS.
@@ -51,7 +51,9 @@ impl HttpClient for ReqwestHttpClient {
             let body_bytes = body
                 .collect()
                 .await
-                .map_err(|e| instant_acme::Error::Other(Box::new(e) as Box<dyn StdError + Send + Sync>))?
+                .map_err(|e| {
+                    instant_acme::Error::Other(Box::new(e) as Box<dyn StdError + Send + Sync>)
+                })?
                 .to_bytes();
 
             tracing::debug!(
@@ -67,9 +69,13 @@ impl HttpClient for ReqwestHttpClient {
                 builder = builder.header(name, value);
             }
 
-            let response = builder.body(body_bytes.to_vec()).send().await.map_err(|e| {
-                instant_acme::Error::Other(Box::new(e) as Box<dyn StdError + Send + Sync>)
-            })?;
+            let response = builder
+                .body(body_bytes.to_vec())
+                .send()
+                .await
+                .map_err(|e| {
+                    instant_acme::Error::Other(Box::new(e) as Box<dyn StdError + Send + Sync>)
+                })?;
 
             let status = response.status();
             let headers = response.headers().clone();

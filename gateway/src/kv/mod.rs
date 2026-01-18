@@ -685,7 +685,9 @@ impl KvStore {
     pub fn set_global_acme_url(&self, url: &str) -> Result<()> {
         if url.is_empty() {
             // Delete the key to use default
-            self.persistent.write().delete(keys::GLOBAL_ACME_URL.to_string())?;
+            self.persistent
+                .write()
+                .delete(keys::GLOBAL_ACME_URL.to_string())?;
         } else {
             self.persistent
                 .write()
@@ -698,7 +700,9 @@ impl KvStore {
 
     /// Get ZT-Domain configuration
     pub fn get_zt_domain_config(&self, domain: &str) -> Option<ZtDomainConfig> {
-        self.persistent.read().decode(&keys::zt_domain_config(domain))
+        self.persistent
+            .read()
+            .decode(&keys::zt_domain_config(domain))
     }
 
     /// Save ZT-Domain configuration
@@ -711,7 +715,9 @@ impl KvStore {
 
     /// Delete ZT-Domain configuration
     pub fn delete_zt_domain_config(&self, domain: &str) -> Result<()> {
-        self.persistent.write().delete(keys::zt_domain_config(domain))?;
+        self.persistent
+            .write()
+            .delete(keys::zt_domain_config(domain))?;
         Ok(())
     }
 
