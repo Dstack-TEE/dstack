@@ -14,8 +14,18 @@ async fn index(state: &State<Proxy>) -> Result<RawHtml<String>, String> {
     route_index::index(state).await.map_err(|e| format!("{e}"))
 }
 
+#[get("/health")]
+fn health() -> &'static str {
+    "OK"
+}
+
 pub fn routes() -> Vec<Route> {
     routes![index]
+}
+
+/// Health endpoint for simple liveness checks
+pub fn health_routes() -> Vec<Route> {
+    routes![health]
 }
 
 /// WaveKV sync endpoint (for main server, requires mTLS gateway auth)

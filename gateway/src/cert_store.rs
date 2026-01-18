@@ -139,6 +139,12 @@ impl CertStore {
         metadata.contains_key(domain)
     }
 
+    /// Check if a certificate can be resolved for a given SNI hostname
+    /// This returns true if either an exact match or wildcard match exists
+    pub fn has_cert_for_sni(&self, sni: &str) -> bool {
+        self.resolve_cert(sni).is_some()
+    }
+
     /// Resolve certificate for a given SNI hostname
     fn resolve_cert(&self, sni: &str) -> Option<Arc<CertifiedKey>> {
         // 1. Try exact match first

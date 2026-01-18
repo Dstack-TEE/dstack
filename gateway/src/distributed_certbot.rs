@@ -143,8 +143,14 @@ impl DistributedCertBot {
 
         info!("acquired renew lock, starting renewal");
 
-        // Perform renewal
-        let result = self.do_renew(domain, &config).await;
+        // Perform renewal or initial issuance
+        let result = if cert_data.is_some() {
+            self.do_renew(domain, &config).await
+        } else {
+            // No existing certificate, request new one
+            info!("no existing certificate, requesting new one");
+            self.do_request_new(domain, &config).await.map(|_| true)
+        };
 
         // Release lock regardless of result
         if let Err(e) = self.kv_store.release_cert_lock(domain) {
@@ -301,11 +307,10 @@ impl DistributedCertBot {
 
         // Create DNS client based on provider
         let dns01_client = match &dns_cred.provider {
-            DnsProvider::Cloudflare {
-                api_token,
-                zone_id,
-                api_url,
-            } => Dns01Client::new_cloudflare(zone_id.clone(), api_token.clone(), api_url.clone()),
+            DnsProvider::Cloudflare { api_token, api_url } => {
+                Dns01Client::new_cloudflare(domain.to_string(), api_token.clone(), api_url.clone())
+                    .await?
+            }
         };
 
         let acme_url = if config.acme_url.is_empty() {
@@ -318,9 +323,14 @@ impl DistributedCertBot {
         if let Some(creds) = self.kv_store.get_cert_acme(domain) {
             if acme_url_matches(&creds.acme_credentials, acme_url) {
                 info!(domain, "loaded account credentials from KvStore");
-                return AcmeClient::load(dns01_client, &creds.acme_credentials)
-                    .await
-                    .context("failed to load ACME client from KvStore credentials");
+                return AcmeClient::load(
+                    dns01_client,
+                    &creds.acme_credentials,
+                    dns_cred.max_dns_wait,
+                    dns_cred.dns_txt_ttl,
+                )
+                .await
+                .context("failed to load ACME client from KvStore credentials");
             }
             warn!(
                 domain,
@@ -330,9 +340,14 @@ impl DistributedCertBot {
 
         // Create new account
         info!(domain, "creating new account at {acme_url}");
-        let client = AcmeClient::new_account(acme_url, dns01_client)
-            .await
-            .context("failed to create new ACME account")?;
+        let client = AcmeClient::new_account(
+            acme_url,
+            dns01_client,
+            dns_cred.max_dns_wait,
+            dns_cred.dns_txt_ttl,
+        )
+        .await
+        .context("failed to create new ACME account")?;
 
         let creds_json = client
             .dump_credentials()

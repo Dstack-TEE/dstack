@@ -24,4 +24,5 @@ pub use workdir::WorkDir;
 mod acme_client;
 mod bot;
 mod dns01_client;
+mod http_client;
 mod workdir;

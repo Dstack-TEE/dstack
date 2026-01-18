@@ -155,6 +155,11 @@ async fn handle_connection(
                 .proxy(inbound, buffer, &dst.app_id, dst.port, dst.is_h2)
                 .await
         }
+    } else if state.cert_store.has_cert_for_sni(&sni) {
+        // SNI matches a managed certificate (e.g., wildcard cert for *.test0.local)
+        // Handle as TLS termination with health check endpoint
+        debug!("SNI {} matches managed certificate, serving health endpoint", sni);
+        state.handle_managed_cert_domain(inbound, buffer).await
     } else {
         tls_passthough::proxy_with_sni(state, inbound, buffer, &sni).await
     }
@@ -226,7 +231,7 @@ fn next_connection_id() -> usize {
     COUNTER.fetch_add(1, Ordering::Relaxed)
 }
 
-pub fn start(config: ProxyConfig, app_state: Proxy) {
+pub fn start(config: ProxyConfig, app_state: Proxy) -> Result<()> {
     std::thread::Builder::new()
         .name("proxy-main".to_string())
         .spawn(move || {
@@ -251,7 +256,8 @@ pub fn start(config: ProxyConfig, app_state: Proxy) {
                 );
             }
         })
-        .expect("Failed to spawn proxy-main thread");
+        .context("Failed to spawn proxy-main thread")?;
+    Ok(())
 }
 
 #[cfg(test)]

@@ -161,7 +161,11 @@ async fn run_oneshot(file_path: &str, config: &Config) -> anyhow::Result<()> {
 
 #[rocket::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt::try_init().ok();
+    {
+        use tracing_subscriber::{fmt, EnvFilter};
+        let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+        fmt().with_env_filter(filter).with_ansi(false).init();
+    }
 
     let cli = Cli::parse();
 

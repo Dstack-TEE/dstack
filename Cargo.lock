@@ -1349,9 +1349,12 @@ version = "0.5.5"
 dependencies = [
  "anyhow",
  "bon",
+ "bytes",
  "enum_dispatch",
  "fs-err",
  "hickory-resolver 0.24.4",
+ "http",
+ "http-body-util",
  "instant-acme",
  "path-absolutize",
  "rand 0.8.5",

@@ -99,7 +99,8 @@ impl CertBot {
             base_domain,
             config.cf_api_token.clone(),
             config.cf_api_url.clone(),
-        );
+        )
+        .await?;
         let acme_client = match fs::read_to_string(&config.credentials_file) {
             Ok(credentials) => {
                 if acme_matches(&credentials, &config.acme_url) {

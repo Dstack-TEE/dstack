@@ -424,12 +424,11 @@ message DnsCredentialInfo {
   string provider_type = 3;
   // Cloudflare-specific fields (when provider_type = "cloudflare")
   string cf_api_token = 4;
-  string cf_zone_id = 5;
+  // Cloudflare API URL (empty means default)
+  string cf_api_url = 5;
   // Timestamps
   uint64 created_at = 6;
   uint64 updated_at = 7;
-  // Cloudflare API URL (empty means default)
-  string cf_api_url = 8;
 }
 
 // List DNS credentials response
@@ -456,6 +455,10 @@ message CreateDnsCredentialRequest {
   bool set_as_default = 5;
   // Optional Cloudflare API URL (defaults to https://api.cloudflare.com/client/v4)
   optional string cf_api_url = 6;
+  // Optional Cloudflare DNS TXT record TTL (defaults to 60)
+  optional uint32 dns_txt_ttl = 7;
+  // Optional Cloudflare maximum DNS wait time (defaults to 60)
+  optional uint32 max_dns_wait = 8;
 }
 
 // Update DNS credential request

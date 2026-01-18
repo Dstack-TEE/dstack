@@ -1,0 +1,73 @@
+# Gateway Node 1 configuration for E2E testing
+log_level = "debug"
+address = "0.0.0.0"
+port = 9012
+
+[tls]
+key = "/etc/gateway/certs/gateway-rpc.key"
+certs = "/etc/gateway/certs/gateway-rpc.cert"
+
+[tls.mutual]
+ca_certs = "/etc/gateway/certs/gateway-ca.cert"
+mandatory = false
+
+[core]
+kms_url = ""
+rpc_domain = "gateway.test.local"
+
+[core.admin]
+enabled = true
+port = 9016
+address = "0.0.0.0"
+
+[core.debug]
+insecure_enable_debug_rpc = true
+insecure_skip_attestation = true
+port = 9015
+address = "0.0.0.0"
+
+[core.sync]
+enabled = true
+interval = "5s"
+timeout = "10s"
+my_url = "https://gateway-1:9012"
+bootnode = "https://gateway-2:9012"
+node_id = 1
+data_dir = "/var/lib/gateway/wavekv"
+
+[core.certbot]
+enabled = true
+workdir = "/var/lib/gateway/certbot"
+# Pebble ACME server (HTTP mode)
+acme_url = "http://pebble:14000/dir"
+# Mock Cloudflare DNS API
+cf_api_token = "test-token"
+cf_api_url = "http://mock-cf-dns-api:8080/client/v4"
+auto_set_caa = false
+domain = "*.app.test.local"
+renew_interval = "1m"
+renew_before_expiration = "720h"
+renew_timeout = "2m"
+max_dns_wait = "30s"
+dns_txt_ttl = 60
+
+[core.wg]
+private_key = "SEcoI37oGWynhukxXo5Mi8/8zZBU6abg6T1TOJRMj1Y="
+public_key = "xc+7qkdeNFfl4g4xirGGGXHMc0cABuE5IHaLeCASVWM="
+listen_port = 9013
+ip = "10.0.41.1/24"
+reserved_net = ["10.0.41.1/31"]
+client_ip_range = "10.0.41.1/24"
+config_path = "/var/lib/gateway/wg.conf"
+interface = "wg-test1"
+endpoint = "gateway-1:9013"
+
+[core.proxy]
+cert_chain = "/var/lib/gateway/certbot/live/cert.pem"
+cert_key = "/var/lib/gateway/certbot/live/key.pem"
+base_domain = "test.local"
+listen_addr = "0.0.0.0"
+listen_port = 9014
+tappd_port = 8090
+external_port = 9014
+inbound_pp_enabled = false

@@ -20,6 +20,7 @@ use dstack_gateway_rpc::{
     AcmeInfoResponse, GatewayNodeInfo, GetPeersResponse, GuestAgentConfig, InfoResponse, PeerInfo,
     QuotedPublicKey, RegisterCvmRequest, RegisterCvmResponse, WireGuardConfig, WireGuardPeer,
 };
+use or_panic::ResultOrPanic;
 use ra_rpc::{CallContext, RpcCall, VerifiedAttestation};
 use rand::seq::IteratorRandom;
 use rinja::Template as _;
@@ -38,7 +39,7 @@ use crate::{
         NodeData, NodeStatus, WaveKvSyncService,
     },
     models::{InstanceInfo, WgConf},
-    proxy::{create_acceptor, create_acceptor_with_cert_store, AddressGroup, AddressInfo},
+    proxy::{create_acceptor_with_cert_store, AddressGroup, AddressInfo},
 };
 
 mod auth_client;
@@ -106,8 +107,8 @@ impl Proxy {
 }
 
 impl ProxyInner {
-    pub(crate) fn lock(&self) -> MutexGuard<ProxyState> {
-        self.state.lock().expect("Failed to lock AppState")
+    pub(crate) fn lock(&self) -> MutexGuard<'_, ProxyState> {
+        self.state.lock().or_panic("Failed to lock AppState")
     }
 
     pub async fn new(options: ProxyOptions) -> Result<Self> {
@@ -238,33 +239,20 @@ impl ProxyInner {
             warn!("Failed to initialize multi-domain certbot: {}", err);
         }
 
-        // Create acceptors
-        // If CertStore has certificates, use SNI-based resolution
-        // Otherwise fall back to legacy single-cert mode from files
-        let (acceptor, h2_acceptor) = if cert_store.list_domains().is_empty() {
-            info!("No certificates in CertStore, using legacy file-based acceptor");
-            let acceptor = RwLock::new(
-                create_acceptor(&config.proxy, false).context("failed to create acceptor")?,
-            );
-            let h2_acceptor = RwLock::new(
-                create_acceptor(&config.proxy, true).context("failed to create h2 acceptor")?,
-            );
-            (acceptor, h2_acceptor)
-        } else {
-            info!(
-                "Using CertStore with {} domains for SNI-based TLS",
-                cert_store.list_domains().len()
-            );
-            let acceptor = RwLock::new(
-                create_acceptor_with_cert_store(&config.proxy, cert_store.clone(), false)
-                    .context("failed to create acceptor with cert store")?,
-            );
-            let h2_acceptor = RwLock::new(
-                create_acceptor_with_cert_store(&config.proxy, cert_store.clone(), true)
-                    .context("failed to create h2 acceptor with cert store")?,
-            );
-            (acceptor, h2_acceptor)
-        };
+        // Create TLS acceptors with CertStore for SNI-based resolution
+        // CertStore may be empty initially; certificates will be loaded later via certbot
+        info!(
+            "CertStore initialized with {} domains",
+            cert_store.list_domains().len()
+        );
+        let acceptor = RwLock::new(
+            create_acceptor_with_cert_store(&config.proxy, cert_store.clone(), false)
+                .context("failed to create acceptor with cert store")?,
+        );
+        let h2_acceptor = RwLock::new(
+            create_acceptor_with_cert_store(&config.proxy, cert_store.clone(), true)
+                .context("failed to create h2 acceptor with cert store")?,
+        );
 
         Ok(Self {
             config,

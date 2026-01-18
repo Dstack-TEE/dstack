@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::sync::atomic::Ordering;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{bail, Context, Result};
 use dstack_gateway_rpc::{
@@ -319,7 +319,6 @@ impl AdminRpc for AdminRpcHandler {
         let provider = match request.provider_type.as_str() {
             "cloudflare" => DnsProvider::Cloudflare {
                 api_token: request.cf_api_token,
-                zone_id: request.cf_zone_id,
                 api_url: request.cf_api_url,
             },
             _ => bail!("unsupported provider type: {}", request.provider_type),
@@ -327,12 +326,16 @@ impl AdminRpc for AdminRpcHandler {
 
         let now = now_secs();
         let id = generate_cred_id();
+        let dns_txt_ttl = request.dns_txt_ttl.unwrap_or(60);
+        let max_dns_wait = Duration::from_secs(request.max_dns_wait.unwrap_or(60 * 5).into());
         let cred = DnsCredential {
             id: id.clone(),
             name: request.name,
             provider,
             created_at: now,
             updated_at: now,
+            dns_txt_ttl,
+            max_dns_wait,
         };
 
         kv_store.save_dns_credential(&cred)?;
@@ -364,16 +367,9 @@ impl AdminRpc for AdminRpcHandler {
 
         // Update provider fields if provided
         match &mut cred.provider {
-            DnsProvider::Cloudflare {
-                api_token,
-                zone_id,
-                api_url,
-            } => {
+            DnsProvider::Cloudflare { api_token, api_url } => {
                 if let Some(new_token) = request.cf_api_token {
                     *api_token = new_token;
-                }
-                if let Some(new_zone) = request.cf_zone_id {
-                    *zone_id = new_zone;
                 }
                 if let Some(new_url) = request.cf_api_url {
                     *api_url = Some(new_url);
@@ -685,15 +681,10 @@ fn generate_cred_id() -> String {
 }
 
 fn dns_cred_to_proto(cred: DnsCredential) -> DnsCredentialInfo {
-    let (provider_type, cf_api_token, cf_zone_id, cf_api_url) = match &cred.provider {
-        DnsProvider::Cloudflare {
-            api_token,
-            zone_id,
-            api_url,
-        } => (
+    let (provider_type, cf_api_token, cf_api_url) = match &cred.provider {
+        DnsProvider::Cloudflare { api_token, api_url } => (
             "cloudflare".to_string(),
             api_token.clone(),
-            zone_id.clone(),
             api_url.clone().unwrap_or_default(),
         ),
     };
@@ -702,7 +693,6 @@ fn dns_cred_to_proto(cred: DnsCredential) -> DnsCredentialInfo {
         name: cred.name,
         provider_type,
         cf_api_token,
-        cf_zone_id,
         cf_api_url,
         created_at: cred.created_at,
         updated_at: cred.updated_at,

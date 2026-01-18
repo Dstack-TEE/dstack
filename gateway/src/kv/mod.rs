@@ -33,7 +33,7 @@ pub use https_client::{AppIdValidator, HttpsClientConfig};
 pub use sync_service::{fetch_peers_from_bootnode, WaveKvSyncService};
 use tracing::warn;
 
-use std::{collections::BTreeMap, net::Ipv4Addr, path::Path};
+use std::{collections::BTreeMap, net::Ipv4Addr, path::Path, time::Duration};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -113,6 +113,11 @@ pub struct DnsCredential {
     pub name: String,
     /// DNS provider configuration
     pub provider: DnsProvider,
+    /// Maximum DNS wait time
+    #[serde(with = "serde_duration")]
+    pub max_dns_wait: Duration,
+    /// DNS TXT record TTL
+    pub dns_txt_ttl: u32,
     /// Creation timestamp
     pub created_at: u64,
     /// Last update timestamp
@@ -125,9 +130,8 @@ pub struct DnsCredential {
 pub enum DnsProvider {
     Cloudflare {
         api_token: String,
-        zone_id: String,
         /// Cloudflare API URL (defaults to https://api.cloudflare.com/client/v4 if not set)
-        #[serde(default)]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         api_url: Option<String>,
     },
     // Future providers can be added here
@@ -256,18 +260,6 @@ pub mod keys {
     pub fn parse_cert_domain(key: &str) -> Option<&str> {
         let rest = key.strip_prefix(CERT_PREFIX)?;
         rest.split('/').next()
-    }
-
-    // ==================== Legacy keys (for migration) ====================
-
-    #[deprecated(note = "use cert_acme instead")]
-    pub fn cert_credentials(domain: &str) -> String {
-        format!("{CERT_PREFIX}{domain}/credentials")
-    }
-
-    #[deprecated(note = "use cert_lock instead")]
-    pub fn cert_renew_lock(domain: &str) -> String {
-        format!("{CERT_PREFIX}{domain}/renew_lock")
     }
 
     // ==================== Parse helpers ====================
@@ -605,7 +597,8 @@ impl KvStore {
 
     /// Query the UUID for a given node ID from KvStore
     pub fn get_peer_uuid(&self, peer_id: NodeId) -> Option<Vec<u8>> {
-        self.persistent.read().decode(&keys::node_info(peer_id))
+        let node_data: NodeData = self.persistent.read().decode(&keys::node_info(peer_id))?;
+        Some(node_data.uuid)
     }
 
     pub fn update_peer_last_seen(&self, peer_id: NodeId) {
@@ -707,15 +700,21 @@ impl KvStore {
 
     /// List all domain certificate configurations
     pub fn list_cert_configs(&self) -> Vec<DomainCertConfig> {
-        self.persistent
-            .read()
-            .iter_decoded(keys::CERT_PREFIX)
-            .filter_map(|(key, config): (String, DomainCertConfig)| {
-                // Only return config entries (not data/acme/lock/attestation)
-                if key.ends_with("/config") {
-                    Some(config)
-                } else {
-                    None
+        let state = self.persistent.read();
+        state
+            .iter_by_prefix(keys::CERT_PREFIX)
+            .filter_map(|(key, entry)| {
+                // Only decode config entries (not data/acme/lock/attestation)
+                if !key.ends_with("/config") {
+                    return None;
+                }
+                let value = entry.value.as_ref()?;
+                match decode(value) {
+                    Ok(config) => Some(config),
+                    Err(e) => {
+                        warn!("failed to decode cert config for key {key}: {e:?}");
+                        None
+                    }
                 }
             })
             .collect()
@@ -749,15 +748,22 @@ impl KvStore {
 
     /// Load all certificate data (for startup)
     pub fn load_all_cert_data(&self) -> BTreeMap<String, CertData> {
-        self.persistent
-            .read()
-            .iter_decoded(keys::CERT_PREFIX)
-            .filter_map(|(key, data): (String, CertData)| {
-                if key.ends_with("/data") {
-                    let domain = keys::parse_cert_domain(&key)?;
-                    Some((domain.to_string(), data))
-                } else {
-                    None
+        let state = self.persistent.read();
+        state
+            .iter_by_prefix(keys::CERT_PREFIX)
+            .filter_map(|(key, entry)| {
+                // Only decode data entries (not config/acme/lock/attestation)
+                if !key.ends_with("/data") {
+                    return None;
+                }
+                let domain = keys::parse_cert_domain(key)?;
+                let value = entry.value.as_ref()?;
+                match decode(value) {
+                    Ok(data) => Some((domain.to_string(), data)),
+                    Err(e) => {
+                        warn!("failed to decode cert data for key {key}: {e:?}");
+                        None
+                    }
                 }
             })
             .collect()
@@ -843,16 +849,21 @@ impl KvStore {
     pub fn list_cert_attestations(&self, domain: &str) -> Vec<CertAttestation> {
         let prefix = keys::cert_attestation_prefix(domain);
         let latest_key = keys::cert_attestation_latest(domain);
-        let mut attestations: Vec<CertAttestation> = self
-            .persistent
-            .read()
-            .iter_decoded(&prefix)
-            .filter_map(|(key, att): (String, CertAttestation)| {
+        let state = self.persistent.read();
+        let mut attestations: Vec<CertAttestation> = state
+            .iter_by_prefix(&prefix)
+            .filter_map(|(key, entry)| {
                 // Skip the "latest" entry
-                if key == latest_key {
-                    None
-                } else {
-                    Some(att)
+                if key == &latest_key {
+                    return None;
+                }
+                let value = entry.value.as_ref()?;
+                match decode(value) {
+                    Ok(att) => Some(att),
+                    Err(e) => {
+                        warn!("failed to decode attestation for key {key}: {e:?}");
+                        None
+                    }
                 }
             })
             .collect();

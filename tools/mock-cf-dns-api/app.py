@@ -199,7 +199,30 @@ def list_dns_records(zone_id):
     if name:
         records_list = [r for r in records_list if r["name"] == name]
 
-    resp = cf_response(records_list)
+    # Get pagination params
+    page = int(request.args.get("page", 1))
+    per_page = int(request.args.get("per_page", 100))
+
+    # Pagination
+    total_count = len(records_list)
+    total_pages = max(1, (total_count + per_page - 1) // per_page)
+    start_idx = (page - 1) * per_page
+    end_idx = start_idx + per_page
+    page_records = records_list[start_idx:end_idx]
+
+    resp = {
+        "success": True,
+        "errors": [],
+        "messages": [],
+        "result": page_records,
+        "result_info": {
+            "page": page,
+            "per_page": per_page,
+            "count": len(page_records),
+            "total_count": total_count,
+            "total_pages": total_pages
+        }
+    }
     log_request(zone_id, "GET", f"/zones/{zone_id}/dns_records", dict(request.args), resp, 200)
 
     return jsonify(resp), 200
@@ -277,15 +300,107 @@ def delete_dns_record(zone_id, record_id):
     return jsonify(resp), 200
 
 
-# ==================== Zone Endpoints (for completeness) ====================
+# ==================== Zone Endpoints ====================
+
+# Pre-configured zones for testing
+# Can be configured via MOCK_ZONES environment variable (JSON format)
+# Example: MOCK_ZONES='[{"id":"zone123","name":"example.com"},{"id":"zone456","name":"test.local"}]'
+DEFAULT_ZONES = [
+    {"id": "mock-zone-test-local", "name": "test.local"},
+    {"id": "mock-zone-example-com", "name": "example.com"},
+    {"id": "mock-zone-test0-local", "name": "test0.local"},
+    {"id": "mock-zone-test1-local", "name": "test1.local"},
+    {"id": "mock-zone-test2-local", "name": "test2.local"},
+]
+
+
+def get_configured_zones():
+    """Get zones from environment or use defaults."""
+    zones_json = os.environ.get("MOCK_ZONES")
+    if zones_json:
+        try:
+            return json.loads(zones_json)
+        except json.JSONDecodeError:
+            print(f"Warning: Invalid MOCK_ZONES JSON, using defaults")
+    return DEFAULT_ZONES
+
+
+@app.route("/client/v4/zones", methods=["GET"])
+@verify_auth
+def list_zones():
+    """List all zones (paginated)."""
+    page = int(request.args.get("page", 1))
+    per_page = int(request.args.get("per_page", 50))
+    name_filter = request.args.get("name")
+
+    zones = get_configured_zones()
+
+    # Filter by name if specified
+    if name_filter:
+        zones = [z for z in zones if z["name"] == name_filter]
+
+    # Build full zone objects
+    full_zones = []
+    for z in zones:
+        full_zones.append({
+            "id": z["id"],
+            "name": z["name"],
+            "status": "active",
+            "paused": False,
+            "type": "full",
+            "development_mode": 0,
+            "name_servers": [
+                "ns1.mock-cloudflare.com",
+                "ns2.mock-cloudflare.com"
+            ],
+            "created_on": "2024-01-01T00:00:00.000000Z",
+            "modified_on": get_current_time(),
+        })
+
+    # Pagination
+    total_count = len(full_zones)
+    total_pages = max(1, (total_count + per_page - 1) // per_page)
+    start_idx = (page - 1) * per_page
+    end_idx = start_idx + per_page
+    page_zones = full_zones[start_idx:end_idx]
+
+    result = {
+        "success": True,
+        "errors": [],
+        "messages": [],
+        "result": page_zones,
+        "result_info": {
+            "page": page,
+            "per_page": per_page,
+            "count": len(page_zones),
+            "total_count": total_count,
+            "total_pages": total_pages
+        }
+    }
+
+    log_request("*", "GET", "/zones", dict(request.args), result, 200)
+    print(f"[LIST ZONES] page={page}, per_page={per_page}, count={len(page_zones)}, total={total_count}")
+
+    return jsonify(result), 200
+
 
 @app.route("/client/v4/zones/<zone_id>", methods=["GET"])
 @verify_auth
 def get_zone(zone_id):
     """Get zone details (mock)."""
+    # Try to find zone in configured zones
+    zones = get_configured_zones()
+    zone_info = next((z for z in zones if z["id"] == zone_id), None)
+
+    if zone_info:
+        zone_name = zone_info["name"]
+    else:
+        # Fallback for unknown zone IDs
+        zone_name = f"zone-{zone_id[:8]}.example.com"
+
     zone = {
         "id": zone_id,
-        "name": f"zone-{zone_id[:8]}.example.com",
+        "name": zone_name,
         "status": "active",
         "paused": False,
         "type": "full",

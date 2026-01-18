@@ -262,6 +262,34 @@ impl Proxy {
         Ok(())
     }
 
+    /// Handle TLS connections for domains with managed certificates (e.g., wildcard certs)
+    /// This serves a health endpoint for any SNI that matches a certificate in CertStore
+    pub(crate) async fn handle_managed_cert_domain(
+        &self,
+        inbound: TcpStream,
+        buffer: Vec<u8>,
+    ) -> Result<()> {
+        let stream = self.tls_accept(inbound, buffer, false).await?;
+        let io = TokioIo::new(stream);
+
+        let service = service_fn(|req: Request<Incoming>| async move {
+            if req.method() != hyper::Method::GET {
+                return empty_response(StatusCode::METHOD_NOT_ALLOWED);
+            }
+            match req.uri().path() {
+                "/" | "/health" => empty_response(StatusCode::OK),
+                _ => empty_response(StatusCode::NOT_FOUND),
+            }
+        });
+
+        http1::Builder::new()
+            .serve_connection(io, service)
+            .await
+            .context("failed to serve managed cert domain HTTP connection")?;
+
+        Ok(())
+    }
+
     /// Deprecated legacy endpoint
     pub(crate) async fn handle_health_check(
         &self,

@@ -135,7 +135,7 @@ async fn main() -> Result<()> {
     {
         use tracing_subscriber::{fmt, EnvFilter};
         let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-        fmt().with_env_filter(filter).init();
+        fmt().with_env_filter(filter).with_ansi(false).init();
     }
 
     let _ = rustls::crypto::ring::default_provider().install_default();
@@ -238,6 +238,7 @@ async fn main() -> Result<()> {
         if debug_config.insecure_enable_debug_rpc {
             rocket::custom(debug_figment)
                 .mount("/prpc", prpc!(Proxy, DebugRpcHandler, trim: "Debug."))
+                .mount("/", web_routes::health_routes())
                 .manage(debug_state)
                 .launch()
                 .await
