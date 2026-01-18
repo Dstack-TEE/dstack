@@ -8,25 +8,25 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use anyhow::{bail, Context, Result};
 use dstack_gateway_rpc::{
     admin_server::{AdminRpc, AdminServer},
-    AddDomainCertRequest, CertAttestationInfo, CreateDnsCredentialRequest,
-    DeleteDnsCredentialRequest, DeleteDomainCertRequest, DnsCredentialInfo, DomainCertInfo,
-    DomainCertStatus, GetDefaultDnsCredentialResponse, GetDnsCredentialRequest,
-    GetDomainCertRequest, GetGlobalAcmeUrlResponse, GetInfoRequest, GetInfoResponse,
+    AddZtDomainRequest, CertAttestationInfo, CreateDnsCredentialRequest,
+    DeleteDnsCredentialRequest, DeleteZtDomainRequest, DnsCredentialInfo, ZtDomainInfo,
+    ZtDomainCertStatus, GetDefaultDnsCredentialResponse, GetDnsCredentialRequest,
+    GetZtDomainRequest, GetGlobalAcmeUrlResponse, GetInfoRequest, GetInfoResponse,
     GetInstanceHandshakesRequest, GetInstanceHandshakesResponse, GetMetaResponse,
     GetNodeStatusesResponse, GlobalConnectionsStats, HandshakeEntry, HostInfo, LastSeenEntry,
     ListCertAttestationsRequest, ListCertAttestationsResponse, ListDnsCredentialsResponse,
-    ListDomainCertsResponse, NodeStatusEntry, PeerSyncStatus as ProtoPeerSyncStatus,
-    RenewCertResponse, RenewDomainCertRequest, RenewDomainCertResponse,
+    ListZtDomainsResponse, NodeStatusEntry, PeerSyncStatus as ProtoPeerSyncStatus,
+    RenewCertResponse, RenewZtDomainCertRequest, RenewZtDomainCertResponse,
     SetDefaultDnsCredentialRequest, SetGlobalAcmeUrlRequest, SetNodeStatusRequest,
     SetNodeUrlRequest, StatusResponse, StoreSyncStatus, UpdateDnsCredentialRequest,
-    UpdateDomainCertRequest, WaveKvStatusResponse,
+    UpdateZtDomainRequest, WaveKvStatusResponse,
 };
 use ra_rpc::{CallContext, RpcCall};
 use tracing::info;
 use wavekv::node::NodeStatus as WaveKvNodeStatus;
 
 use crate::{
-    kv::{DnsCredential, DnsProvider, DomainCertConfig, NodeStatus},
+    kv::{DnsCredential, DnsProvider, ZtDomainConfig, NodeStatus},
     main_service::Proxy,
     proxy::NUM_CONNECTIONS,
 };
@@ -395,8 +395,8 @@ impl AdminRpc for AdminRpcHandler {
             }
         }
 
-        // Check if any domain configs reference this credential
-        let configs = kv_store.list_cert_configs();
+        // Check if any ZT-Domain configs reference this credential
+        let configs = kv_store.list_zt_domain_configs();
         for config in configs {
             if config.dns_cred_id.as_deref() == Some(&request.id) {
                 bail!(
@@ -437,40 +437,40 @@ impl AdminRpc for AdminRpcHandler {
         Ok(())
     }
 
-    // ==================== Domain Certificate Management ====================
+    // ==================== ZT-Domain Management ====================
 
-    async fn list_domain_certs(self) -> Result<ListDomainCertsResponse> {
+    async fn list_zt_domains(self) -> Result<ListZtDomainsResponse> {
         let kv_store = self.state.kv_store();
         let cert_store = &self.state.cert_store;
 
         let domains = kv_store
-            .list_cert_configs()
+            .list_zt_domain_configs()
             .into_iter()
-            .map(|config| domain_cert_to_proto(config, kv_store, cert_store))
+            .map(|config| zt_domain_to_proto(config, kv_store, cert_store))
             .collect();
 
-        Ok(ListDomainCertsResponse { domains })
+        Ok(ListZtDomainsResponse { domains })
     }
 
-    async fn get_domain_cert(self, request: GetDomainCertRequest) -> Result<DomainCertInfo> {
+    async fn get_zt_domain(self, request: GetZtDomainRequest) -> Result<ZtDomainInfo> {
         let kv_store = self.state.kv_store();
         let cert_store = &self.state.cert_store;
 
         let config = kv_store
-            .get_cert_config(&request.domain)
-            .context("domain certificate config not found")?;
+            .get_zt_domain_config(&request.domain)
+            .context("ZT-Domain config not found")?;
 
-        Ok(domain_cert_to_proto(config, kv_store, cert_store))
+        Ok(zt_domain_to_proto(config, kv_store, cert_store))
     }
 
-    async fn add_domain_cert(self, request: AddDomainCertRequest) -> Result<DomainCertInfo> {
+    async fn add_zt_domain(self, request: AddZtDomainRequest) -> Result<ZtDomainInfo> {
         let kv_store = self.state.kv_store();
         let cert_store = &self.state.cert_store;
 
         // Check if domain already exists
-        if kv_store.get_cert_config(&request.domain).is_some() {
+        if kv_store.get_zt_domain_config(&request.domain).is_some() {
             bail!(
-                "domain certificate config already exists: {}",
+                "ZT-Domain config already exists: {}",
                 request.domain
             );
         }
@@ -482,7 +482,7 @@ impl AdminRpc for AdminRpcHandler {
                 .context("specified dns credential not found")?;
         }
 
-        let config = DomainCertConfig {
+        let config = ZtDomainConfig {
             domain: request.domain.clone(),
             dns_cred_id: if request.dns_cred_id.is_empty() {
                 None
@@ -492,19 +492,19 @@ impl AdminRpc for AdminRpcHandler {
             created_at: now_secs(),
         };
 
-        kv_store.save_cert_config(&config)?;
-        info!("Added domain certificate config: {}", config.domain);
+        kv_store.save_zt_domain_config(&config)?;
+        info!("Added ZT-Domain config: {}", config.domain);
 
-        Ok(domain_cert_to_proto(config, kv_store, cert_store))
+        Ok(zt_domain_to_proto(config, kv_store, cert_store))
     }
 
-    async fn update_domain_cert(self, request: UpdateDomainCertRequest) -> Result<DomainCertInfo> {
+    async fn update_zt_domain(self, request: UpdateZtDomainRequest) -> Result<ZtDomainInfo> {
         let kv_store = self.state.kv_store();
         let cert_store = &self.state.cert_store;
 
         let mut config = kv_store
-            .get_cert_config(&request.domain)
-            .context("domain certificate config not found")?;
+            .get_zt_domain_config(&request.domain)
+            .context("ZT-Domain config not found")?;
 
         // Update fields if provided
         if let Some(dns_cred_id) = request.dns_cred_id {
@@ -518,30 +518,30 @@ impl AdminRpc for AdminRpcHandler {
             }
         }
 
-        kv_store.save_cert_config(&config)?;
-        info!("Updated domain certificate config: {}", config.domain);
+        kv_store.save_zt_domain_config(&config)?;
+        info!("Updated ZT-Domain config: {}", config.domain);
 
-        Ok(domain_cert_to_proto(config, kv_store, cert_store))
+        Ok(zt_domain_to_proto(config, kv_store, cert_store))
     }
 
-    async fn delete_domain_cert(self, request: DeleteDomainCertRequest) -> Result<()> {
+    async fn delete_zt_domain(self, request: DeleteZtDomainRequest) -> Result<()> {
         let kv_store = self.state.kv_store();
 
         // Check if config exists
         kv_store
-            .get_cert_config(&request.domain)
-            .context("domain certificate config not found")?;
+            .get_zt_domain_config(&request.domain)
+            .context("ZT-Domain config not found")?;
 
         // Delete config (cert data, acme, attestations are kept for historical purposes)
-        kv_store.delete_cert_config(&request.domain)?;
-        info!("Deleted domain certificate config: {}", request.domain);
+        kv_store.delete_zt_domain_config(&request.domain)?;
+        info!("Deleted ZT-Domain config: {}", request.domain);
         Ok(())
     }
 
-    async fn renew_domain_cert(
+    async fn renew_zt_domain_cert(
         self,
-        request: RenewDomainCertRequest,
-    ) -> Result<RenewDomainCertResponse> {
+        request: RenewZtDomainCertRequest,
+    ) -> Result<RenewZtDomainCertResponse> {
         let certbot = &self.state.multi_domain_certbot;
         let renewed = certbot
             .try_renew(&request.domain, request.force)
@@ -553,9 +553,9 @@ impl AdminRpc for AdminRpcHandler {
             let kv_store = self.state.kv_store();
             let cert_data = kv_store.get_cert_data(&request.domain);
             let not_after = cert_data.map(|d| d.not_after).unwrap_or(0);
-            Ok(RenewDomainCertResponse { renewed, not_after })
+            Ok(RenewZtDomainCertResponse { renewed, not_after })
         } else {
-            Ok(RenewDomainCertResponse {
+            Ok(RenewZtDomainCertResponse {
                 renewed: false,
                 not_after: 0,
             })
@@ -697,16 +697,16 @@ fn dns_cred_to_proto(cred: DnsCredential) -> DnsCredentialInfo {
     }
 }
 
-fn domain_cert_to_proto(
-    config: DomainCertConfig,
+fn zt_domain_to_proto(
+    config: ZtDomainConfig,
     kv_store: &crate::kv::KvStore,
     cert_store: &crate::cert_store::CertStore,
-) -> DomainCertInfo {
+) -> ZtDomainInfo {
     // Get certificate data for status
     let cert_data = kv_store.get_cert_data(&config.domain);
     let loaded_in_memory = cert_store.has_cert(&config.domain);
 
-    let status = Some(DomainCertStatus {
+    let status = Some(ZtDomainCertStatus {
         has_cert: cert_data.is_some(),
         not_after: cert_data.as_ref().map(|d| d.not_after).unwrap_or(0),
         issued_by: cert_data.as_ref().map(|d| d.issued_by).unwrap_or(0),
@@ -714,7 +714,7 @@ fn domain_cert_to_proto(
         loaded_in_memory,
     });
 
-    DomainCertInfo {
+    ZtDomainInfo {
         domain: config.domain,
         dns_cred_id: config.dns_cred_id.unwrap_or_default(),
         created_at: config.created_at,

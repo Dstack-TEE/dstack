@@ -351,7 +351,7 @@ impl Proxy {
         let domains: Vec<String> = match domain {
             Some(d) => vec![d.to_string()],
             None => kv_store
-                .list_cert_configs()
+                .list_zt_domain_configs()
                 .into_iter()
                 .map(|c| c.domain)
                 .collect(),

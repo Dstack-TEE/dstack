@@ -397,19 +397,19 @@ service Admin {
   // Set the default DNS credential ID
   rpc SetDefaultDnsCredential(SetDefaultDnsCredentialRequest) returns (google.protobuf.Empty) {}
 
-  // ==================== Domain Certificate Management ====================
-  // List all domain certificate configurations
-  rpc ListDomainCerts(google.protobuf.Empty) returns (ListDomainCertsResponse) {}
-  // Get a domain certificate configuration and status
-  rpc GetDomainCert(GetDomainCertRequest) returns (DomainCertInfo) {}
-  // Add a new domain for certificate management
-  rpc AddDomainCert(AddDomainCertRequest) returns (DomainCertInfo) {}
-  // Update a domain certificate configuration
-  rpc UpdateDomainCert(UpdateDomainCertRequest) returns (DomainCertInfo) {}
-  // Delete a domain certificate configuration
-  rpc DeleteDomainCert(DeleteDomainCertRequest) returns (google.protobuf.Empty) {}
-  // Manually trigger certificate renewal for a domain
-  rpc RenewDomainCert(RenewDomainCertRequest) returns (RenewDomainCertResponse) {}
+  // ==================== ZT-Domain Management ====================
+  // List all ZT-Domain configurations
+  rpc ListZtDomains(google.protobuf.Empty) returns (ListZtDomainsResponse) {}
+  // Get a ZT-Domain configuration and status
+  rpc GetZtDomain(GetZtDomainRequest) returns (ZtDomainInfo) {}
+  // Add a new ZT-Domain
+  rpc AddZtDomain(AddZtDomainRequest) returns (ZtDomainInfo) {}
+  // Update a ZT-Domain configuration
+  rpc UpdateZtDomain(UpdateZtDomainRequest) returns (ZtDomainInfo) {}
+  // Delete a ZT-Domain configuration
+  rpc DeleteZtDomain(DeleteZtDomainRequest) returns (google.protobuf.Empty) {}
+  // Manually trigger certificate renewal for a ZT-Domain
+  rpc RenewZtDomainCert(RenewZtDomainCertRequest) returns (RenewZtDomainCertResponse) {}
   // List certificate attestations for a domain
   rpc ListCertAttestations(ListCertAttestationsRequest) returns (ListCertAttestationsResponse) {}
 
@@ -498,10 +498,10 @@ message SetDefaultDnsCredentialRequest {
   string id = 1;
 }
 
-// ==================== Domain Certificate Messages ====================
+// ==================== ZT-Domain Messages ====================
 
-// Domain certificate information
-message DomainCertInfo {
+// ZT-Domain information
+message ZtDomainInfo {
   // Domain name (e.g., "*.example.com")
   string domain = 1;
   // DNS credential ID (empty = use default)
@@ -509,11 +509,11 @@ message DomainCertInfo {
   // Configuration creation timestamp
   uint64 created_at = 3;
   // Certificate status
-  DomainCertStatus status = 4;
+  ZtDomainCertStatus status = 4;
 }
 
-// Domain certificate status
-message DomainCertStatus {
+// ZT-Domain certificate status
+message ZtDomainCertStatus {
   // Whether a certificate is currently loaded
   bool has_cert = 1;
   // Certificate expiry timestamp (0 if no cert)
@@ -526,45 +526,45 @@ message DomainCertStatus {
   bool loaded_in_memory = 5;
 }
 
-// List domain certificates response
-message ListDomainCertsResponse {
-  repeated DomainCertInfo domains = 1;
+// List ZT-Domains response
+message ListZtDomainsResponse {
+  repeated ZtDomainInfo domains = 1;
 }
 
-// Get domain certificate request
-message GetDomainCertRequest {
+// Get ZT-Domain request
+message GetZtDomainRequest {
   string domain = 1;
 }
 
-// Add domain certificate request
-message AddDomainCertRequest {
+// Add ZT-Domain request
+message AddZtDomainRequest {
   // Domain name (e.g., "*.example.com")
   string domain = 1;
   // DNS credential ID (empty = use default)
   string dns_cred_id = 2;
 }
 
-// Update domain certificate request
-message UpdateDomainCertRequest {
+// Update ZT-Domain request
+message UpdateZtDomainRequest {
   string domain = 1;
   // Optional new DNS credential ID
   optional string dns_cred_id = 2;
 }
 
-// Delete domain certificate request
-message DeleteDomainCertRequest {
+// Delete ZT-Domain request
+message DeleteZtDomainRequest {
   string domain = 1;
 }
 
-// Renew domain certificate request
-message RenewDomainCertRequest {
+// Renew ZT-Domain certificate request
+message RenewZtDomainCertRequest {
   string domain = 1;
   // Force renewal even if not near expiry
   bool force = 2;
 }
 
-// Renew domain certificate response
-message RenewDomainCertResponse {
+// Renew ZT-Domain certificate response
+message RenewZtDomainCertResponse {
   // True if renewal was performed
   bool renewed = 1;
   // New certificate expiry (if renewed)

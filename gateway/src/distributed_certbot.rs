@@ -17,7 +17,7 @@ use tracing::{error, info, warn};
 
 use crate::cert_store::CertStore;
 use crate::kv::{
-    CertAttestation, CertCredentials, CertData, DnsProvider, DomainCertConfig, KvStore,
+    CertAttestation, CertCredentials, CertData, DnsProvider, ZtDomainConfig, KvStore,
 };
 
 /// Lock timeout for certificate renewal (10 minutes)
@@ -52,9 +52,9 @@ impl DistributedCertBot {
         }
     }
 
-    /// Initialize all domain certificates
+    /// Initialize all ZT-Domain certificates
     pub async fn init_all(&self) -> Result<()> {
-        let configs = self.kv_store.list_cert_configs();
+        let configs = self.kv_store.list_zt_domain_configs();
         for config in configs {
             if let Err(e) = self.init_domain(&config.domain).await {
                 error!("cert[{}]: failed to initialize: {}", config.domain, e);
@@ -86,9 +86,9 @@ impl DistributedCertBot {
         self.request_new_cert(domain).await
     }
 
-    /// Try to renew all domain certificates
+    /// Try to renew all ZT-Domain certificates
     pub async fn try_renew_all(&self) -> Result<()> {
-        let configs = self.kv_store.list_cert_configs();
+        let configs = self.kv_store.list_zt_domain_configs();
         for config in configs {
             if let Err(e) = self.try_renew(&config.domain, false).await {
                 error!("cert[{}]: failed to renew: {}", config.domain, e);
@@ -103,8 +103,8 @@ impl DistributedCertBot {
         // Check if config exists
         let config = self
             .kv_store
-            .get_cert_config(domain)
-            .context("domain certificate config not found")?;
+            .get_zt_domain_config(domain)
+            .context("ZT-Domain config not found")?;
 
         // Check if renewal is needed
         let cert_data = self.kv_store.get_cert_data(domain);
@@ -156,8 +156,8 @@ impl DistributedCertBot {
     async fn request_new_cert(&self, domain: &str) -> Result<()> {
         let config = self
             .kv_store
-            .get_cert_config(domain)
-            .context("domain certificate config not found")?;
+            .get_zt_domain_config(domain)
+            .context("ZT-Domain config not found")?;
 
         // Try to acquire lock first
         if !self
@@ -183,7 +183,7 @@ impl DistributedCertBot {
         result
     }
 
-    async fn do_request_new(&self, domain: &str, config: &DomainCertConfig) -> Result<()> {
+    async fn do_request_new(&self, domain: &str, config: &ZtDomainConfig) -> Result<()> {
         let acme_client = self.get_or_create_acme_client(domain, config).await?;
 
         // Generate new key pair (always use new key for security)
@@ -228,7 +228,7 @@ impl DistributedCertBot {
         Ok(())
     }
 
-    async fn do_renew(&self, domain: &str, config: &DomainCertConfig) -> Result<bool> {
+    async fn do_renew(&self, domain: &str, config: &ZtDomainConfig) -> Result<bool> {
         let acme_client = self.get_or_create_acme_client(domain, config).await?;
 
         // Generate new key pair (always use new key for each renewal)
@@ -283,7 +283,7 @@ impl DistributedCertBot {
     async fn get_or_create_acme_client(
         &self,
         domain: &str,
-        config: &DomainCertConfig,
+        config: &ZtDomainConfig,
     ) -> Result<AcmeClient> {
         // Get DNS credential (from config or default)
         let dns_cred = if let Some(ref cred_id) = config.dns_cred_id {

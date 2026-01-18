@@ -105,6 +105,7 @@ services:
       - "19022:9012"  # RPC
       - "19024:9014"  # Proxy
       - "19025:9015"  # Debug
+      - "19026:9016"  # Admin
     volumes:
       - ./configs/gateway-2.toml:/etc/gateway/gateway.toml:ro
       - ./certs:/etc/gateway/certs:ro
@@ -135,6 +136,7 @@ services:
       - "19032:9012"  # RPC
       - "19034:9014"  # Proxy
       - "19035:9015"  # Debug
+      - "19036:9016"  # Admin
     volumes:
       - ./configs/gateway-3.toml:/etc/gateway/gateway.toml:ro
       - ./certs:/etc/gateway/certs:ro

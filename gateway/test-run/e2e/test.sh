@@ -159,10 +159,10 @@ setup_certbot_config() {
     fi
     log_info "DNS credential created: $cred_response"
 
-    # Add domain cert config for each domain (no acme_url needed - uses global, always enabled)
+    # Add ZT-Domain config for each domain (no acme_url needed - uses global)
     for domain in $CERT_DOMAINS; do
-        log_info "Adding domain cert config for: $domain"
-        local domain_response=$(curl -sf -X POST "${GATEWAY_1_ADMIN}/prpc/Admin.AddDomainCert" \
+        log_info "Adding ZT-Domain config for: $domain"
+        local domain_response=$(curl -sf -X POST "${GATEWAY_1_ADMIN}/prpc/Admin.AddZtDomain" \
             -H "Content-Type: application/json" \
             -d '{
                 "domain": "'"${domain}"'"
@@ -175,10 +175,10 @@ setup_certbot_config() {
         log_info "Domain cert config added: $domain_response"
     done
 
-    # Trigger certificate renewal for each domain
+    # Trigger certificate renewal for each ZT-Domain
     for domain in $CERT_DOMAINS; do
         log_info "Triggering certificate renewal for: $domain"
-        local renew_response=$(curl -sf -X POST "${GATEWAY_1_ADMIN}/prpc/Admin.RenewDomainCert" \
+        local renew_response=$(curl -sf -X POST "${GATEWAY_1_ADMIN}/prpc/Admin.RenewZtDomainCert" \
             -H "Content-Type: application/json" \
             -d '{
                 "domain": "'"${domain}"'",

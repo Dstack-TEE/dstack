@@ -559,11 +559,11 @@ SPDX-License-Identifier: Apache-2.0
     </div>
 
     <div class="section-header">
-        <h2>Domain Certificates</h2>
-        <button class="action-btn primary" onclick="showAddDomainModal()">Add Domain</button>
+        <h2>ZT-Domains</h2>
+        <button class="action-btn primary" onclick="showAddZtDomainModal()">Add ZT-Domain</button>
     </div>
-    <div id="domain-certs">
-        <p>Loading domain certificates...</p>
+    <div id="zt-domains">
+        <p>Loading ZT-Domains...</p>
     </div>
 
     <!-- Add DNS Credential Modal -->
@@ -628,10 +628,10 @@ SPDX-License-Identifier: Apache-2.0
         </div>
     </div>
 
-    <!-- Add Domain Certificate Modal -->
-    <div id="add-domain-modal" class="modal-overlay">
+    <!-- Add ZT-Domain Modal -->
+    <div id="add-zt-domain-modal" class="modal-overlay">
         <div class="modal">
-            <h3>Add Domain Certificate</h3>
+            <h3>Add ZT-Domain</h3>
             <div class="modal-field">
                 <label>Domain</label>
                 <input type="text" id="domain-name" placeholder="*.app.example.com">
@@ -643,8 +643,8 @@ SPDX-License-Identifier: Apache-2.0
                 </select>
             </div>
             <div class="modal-actions">
-                <button class="action-btn secondary" onclick="hideModal('add-domain-modal')">Cancel</button>
-                <button class="action-btn primary" onclick="addDomainCert()">Add</button>
+                <button class="action-btn secondary" onclick="hideModal('add-zt-domain-modal')">Cancel</button>
+                <button class="action-btn primary" onclick="addZtDomain()">Add</button>
             </div>
         </div>
     </div>
@@ -759,7 +759,7 @@ SPDX-License-Identifier: Apache-2.0
         async function loadCertConfig() {
             await loadGlobalAcmeUrl();
             await loadDnsCredentials();
-            await loadDomainCerts();
+            await loadZtDomains();
         }
 
         // ==================== Global ACME URL ====================
@@ -1004,27 +1004,27 @@ SPDX-License-Identifier: Apache-2.0
             }
         }
 
-        // ==================== Domain Certificates ====================
+        // ==================== ZT-Domains ====================
 
-        async function loadDomainCerts() {
+        async function loadZtDomains() {
             try {
-                const response = await fetch('/prpc/Admin.ListDomainCerts', {
+                const response = await fetch('/prpc/Admin.ListZtDomains', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: '{}'
                 });
                 const data = await response.json();
-                renderDomainCerts(data.domains || []);
+                renderZtDomains(data.domains || []);
             } catch (e) {
-                document.getElementById('domain-certs').innerHTML =
-                    '<p style="color: #666;">Failed to load domain certificates</p>';
+                document.getElementById('zt-domains').innerHTML =
+                    '<p style="color: #666;">Failed to load ZT-Domains</p>';
             }
         }
 
-        function renderDomainCerts(domains) {
-            const container = document.getElementById('domain-certs');
+        function renderZtDomains(domains) {
+            const container = document.getElementById('zt-domains');
             if (domains.length === 0) {
-                container.innerHTML = '<p style="color: #666;">No domain certificates configured</p>';
+                container.innerHTML = '<p style="color: #666;">No ZT-Domains configured</p>';
                 return;
             }
 
@@ -1059,9 +1059,9 @@ SPDX-License-Identifier: Apache-2.0
                         </td>
                         <td class="timestamp" data-original="${expiresAt}">${status.not_after || 0}</td>
                         <td>
-                            <button class="action-btn warning" onclick="renewDomainCert('${escapeHtml(domain.domain)}', false)">Renew</button>
-                            <button class="action-btn secondary" onclick="renewDomainCert('${escapeHtml(domain.domain)}', true)">Force Renew</button>
-                            <button class="action-btn danger" onclick="deleteDomainCert('${escapeHtml(domain.domain)}')">Delete</button>
+                            <button class="action-btn warning" onclick="renewZtDomainCert('${escapeHtml(domain.domain)}', false)">Renew</button>
+                            <button class="action-btn secondary" onclick="renewZtDomainCert('${escapeHtml(domain.domain)}', true)">Force Renew</button>
+                            <button class="action-btn danger" onclick="deleteZtDomain('${escapeHtml(domain.domain)}')">Delete</button>
                         </td>
                     </tr>
                 `;
@@ -1088,13 +1088,13 @@ SPDX-License-Identifier: Apache-2.0
             return cred ? cred.name : credId;
         }
 
-        function showAddDomainModal() {
+        function showAddZtDomainModal() {
             document.getElementById('domain-name').value = '';
             document.getElementById('domain-dns-cred').value = '';
-            showModal('add-domain-modal');
+            showModal('add-zt-domain-modal');
         }
 
-        async function addDomainCert() {
+        async function addZtDomain() {
             const domain = document.getElementById('domain-name').value.trim();
             const dnsCredId = document.getElementById('domain-dns-cred').value;
 
@@ -1104,34 +1104,33 @@ SPDX-License-Identifier: Apache-2.0
             }
 
             try {
-                const response = await fetch('/prpc/Admin.AddDomainCert', {
+                const response = await fetch('/prpc/Admin.AddZtDomain', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         domain: domain,
-                        dns_cred_id: dnsCredId,
-                        enabled: true
+                        dns_cred_id: dnsCredId
                     })
                 });
                 if (!response.ok) {
                     const err = await response.text();
                     throw new Error(err);
                 }
-                hideModal('add-domain-modal');
-                showToast('Domain added', 'success');
-                await loadDomainCerts();
+                hideModal('add-zt-domain-modal');
+                showToast('ZT-Domain added', 'success');
+                await loadZtDomains();
             } catch (e) {
-                showToast('Failed to add domain: ' + e.message, 'error');
+                showToast('Failed to add ZT-Domain: ' + e.message, 'error');
             }
         }
 
-        async function renewDomainCert(domain, force) {
+        async function renewZtDomainCert(domain, force) {
             const action = force ? 'force renew' : 'renew';
             if (!confirm(`Are you sure you want to ${action} the certificate for ${domain}?`)) return;
 
             try {
                 showToast(`Renewing certificate for ${domain}...`, 'success');
-                const response = await fetch('/prpc/Admin.RenewDomainCert', {
+                const response = await fetch('/prpc/Admin.RenewZtDomainCert', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -1149,17 +1148,17 @@ SPDX-License-Identifier: Apache-2.0
                 } else {
                     showToast(`Certificate does not need renewal`, 'success');
                 }
-                await loadDomainCerts();
+                await loadZtDomains();
             } catch (e) {
                 showToast('Failed to renew: ' + e.message, 'error');
             }
         }
 
-        async function deleteDomainCert(domain) {
-            if (!confirm(`Are you sure you want to delete the certificate config for ${domain}?`)) return;
+        async function deleteZtDomain(domain) {
+            if (!confirm(`Are you sure you want to delete the ZT-Domain config for ${domain}?`)) return;
 
             try {
-                const response = await fetch('/prpc/Admin.DeleteDomainCert', {
+                const response = await fetch('/prpc/Admin.DeleteZtDomain', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ domain: domain })
@@ -1168,8 +1167,8 @@ SPDX-License-Identifier: Apache-2.0
                     const err = await response.text();
                     throw new Error(err);
                 }
-                showToast('Domain deleted', 'success');
-                await loadDomainCerts();
+                showToast('ZT-Domain deleted', 'success');
+                await loadZtDomains();
             } catch (e) {
                 showToast('Failed to delete: ' + e.message, 'error');
             }

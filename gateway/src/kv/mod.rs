@@ -14,7 +14,7 @@
 //! - `node/{node_id}` → NodeData
 //! - `dns_cred/{cred_id}` → DnsCredential
 //! - `dns_cred_default` → cred_id (default credential ID)
-//! - `cert/{domain}/config` → DomainCertConfig
+//! - `cert/{domain}/config` → ZtDomainConfig
 //! - `cert/{domain}/data` → CertData
 //! - `cert/{domain}/acme` → AcmeCredentials (ACME account for this domain)
 //! - `cert/{domain}/lock` → CertRenewLock
@@ -137,9 +137,9 @@ pub enum DnsProvider {
     // Future providers can be added here
 }
 
-/// Domain certificate configuration
+/// ZT-Domain configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DomainCertConfig {
+pub struct ZtDomainConfig {
     /// Domain name (e.g., "*.app.example.com")
     pub domain: String,
     /// DNS credential ID to use (None = use default)
@@ -218,8 +218,8 @@ pub mod keys {
 
     // ==================== Certificate keys (per domain) ====================
 
-    /// Key for domain certificate configuration
-    pub fn cert_config(domain: &str) -> String {
+    /// Key for ZT-Domain configuration
+    pub fn zt_domain_config(domain: &str) -> String {
         format!("{CERT_PREFIX}{domain}/config")
     }
 
@@ -694,29 +694,29 @@ impl KvStore {
         Ok(())
     }
 
-    // ==================== Domain Certificate Config ====================
+    // ==================== ZT-Domain Config ====================
 
-    /// Get domain certificate configuration
-    pub fn get_cert_config(&self, domain: &str) -> Option<DomainCertConfig> {
-        self.persistent.read().decode(&keys::cert_config(domain))
+    /// Get ZT-Domain configuration
+    pub fn get_zt_domain_config(&self, domain: &str) -> Option<ZtDomainConfig> {
+        self.persistent.read().decode(&keys::zt_domain_config(domain))
     }
 
-    /// Save domain certificate configuration
-    pub fn save_cert_config(&self, config: &DomainCertConfig) -> Result<()> {
+    /// Save ZT-Domain configuration
+    pub fn save_zt_domain_config(&self, config: &ZtDomainConfig) -> Result<()> {
         self.persistent
             .write()
-            .put_encoded(keys::cert_config(&config.domain), config)?;
+            .put_encoded(keys::zt_domain_config(&config.domain), config)?;
         Ok(())
     }
 
-    /// Delete domain certificate configuration
-    pub fn delete_cert_config(&self, domain: &str) -> Result<()> {
-        self.persistent.write().delete(keys::cert_config(domain))?;
+    /// Delete ZT-Domain configuration
+    pub fn delete_zt_domain_config(&self, domain: &str) -> Result<()> {
+        self.persistent.write().delete(keys::zt_domain_config(domain))?;
         Ok(())
     }
 
-    /// List all domain certificate configurations
-    pub fn list_cert_configs(&self) -> Vec<DomainCertConfig> {
+    /// List all ZT-Domain configurations
+    pub fn list_zt_domain_configs(&self) -> Vec<ZtDomainConfig> {
         let state = self.persistent.read();
         state
             .iter_by_prefix(keys::CERT_PREFIX)
@@ -737,8 +737,8 @@ impl KvStore {
             .collect()
     }
 
-    /// Watch for domain certificate config changes
-    pub fn watch_cert_configs(&self) -> watch::Receiver<()> {
+    /// Watch for ZT-Domain config changes
+    pub fn watch_zt_domain_configs(&self) -> watch::Receiver<()> {
         self.persistent.watch_prefix(keys::CERT_PREFIX)
     }
 
