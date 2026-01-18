@@ -52,14 +52,12 @@ impl DistributedCertBot {
         }
     }
 
-    /// Initialize all enabled domain certificates
+    /// Initialize all domain certificates
     pub async fn init_all(&self) -> Result<()> {
         let configs = self.kv_store.list_cert_configs();
         for config in configs {
-            if config.enabled {
-                if let Err(e) = self.init_domain(&config.domain).await {
-                    error!("cert[{}]: failed to initialize: {}", config.domain, e);
-                }
+            if let Err(e) = self.init_domain(&config.domain).await {
+                error!("cert[{}]: failed to initialize: {}", config.domain, e);
             }
         }
         Ok(())
@@ -88,14 +86,12 @@ impl DistributedCertBot {
         self.request_new_cert(domain).await
     }
 
-    /// Try to renew all enabled domain certificates
+    /// Try to renew all domain certificates
     pub async fn try_renew_all(&self) -> Result<()> {
         let configs = self.kv_store.list_cert_configs();
         for config in configs {
-            if config.enabled {
-                if let Err(e) = self.try_renew(&config.domain, false).await {
-                    error!("cert[{}]: failed to renew: {}", config.domain, e);
-                }
+            if let Err(e) = self.try_renew(&config.domain, false).await {
+                error!("cert[{}]: failed to renew: {}", config.domain, e);
             }
         }
         Ok(())
@@ -104,16 +100,11 @@ impl DistributedCertBot {
     /// Try to renew certificate for a specific domain if needed
     #[tracing::instrument(skip(self))]
     pub async fn try_renew(&self, domain: &str, force: bool) -> Result<bool> {
-        // Check if config exists and is enabled
+        // Check if config exists
         let config = self
             .kv_store
             .get_cert_config(domain)
             .context("domain certificate config not found")?;
-
-        if !config.enabled && !force {
-            info!("certificate management is disabled");
-            return Ok(false);
-        }
 
         // Check if renewal is needed
         let cert_data = self.kv_store.get_cert_data(domain);

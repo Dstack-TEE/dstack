@@ -159,14 +159,13 @@ setup_certbot_config() {
     fi
     log_info "DNS credential created: $cred_response"
 
-    # Add domain cert config for each domain (no acme_url needed - uses global)
+    # Add domain cert config for each domain (no acme_url needed - uses global, always enabled)
     for domain in $CERT_DOMAINS; do
         log_info "Adding domain cert config for: $domain"
         local domain_response=$(curl -sf -X POST "${GATEWAY_1_ADMIN}/prpc/Admin.AddDomainCert" \
             -H "Content-Type: application/json" \
             -d '{
-                "domain": "'"${domain}"'",
-                "enabled": true
+                "domain": "'"${domain}"'"
             }' 2>&1)
 
         if [ $? -ne 0 ]; then

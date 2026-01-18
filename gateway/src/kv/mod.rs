@@ -144,10 +144,6 @@ pub struct DomainCertConfig {
     pub domain: String,
     /// DNS credential ID to use (None = use default)
     pub dns_cred_id: Option<String>,
-    /// ACME server URL
-    pub acme_url: String,
-    /// Whether certificate management is enabled
-    pub enabled: bool,
     /// Creation timestamp
     pub created_at: u64,
 }

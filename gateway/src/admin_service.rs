@@ -482,12 +482,6 @@ impl AdminRpc for AdminRpcHandler {
                 .context("specified dns credential not found")?;
         }
 
-        let acme_url = if request.acme_url.is_empty() {
-            "https://acme-v02.api.letsencrypt.org/directory".to_string()
-        } else {
-            request.acme_url
-        };
-
         let config = DomainCertConfig {
             domain: request.domain.clone(),
             dns_cred_id: if request.dns_cred_id.is_empty() {
@@ -495,16 +489,11 @@ impl AdminRpc for AdminRpcHandler {
             } else {
                 Some(request.dns_cred_id)
             },
-            acme_url,
-            enabled: request.enabled,
             created_at: now_secs(),
         };
 
         kv_store.save_cert_config(&config)?;
-        info!(
-            "Added domain certificate config: {} (enabled={})",
-            config.domain, config.enabled
-        );
+        info!("Added domain certificate config: {}", config.domain);
 
         Ok(domain_cert_to_proto(config, kv_store, cert_store))
     }
@@ -529,19 +518,8 @@ impl AdminRpc for AdminRpcHandler {
             }
         }
 
-        if let Some(acme_url) = request.acme_url {
-            config.acme_url = acme_url;
-        }
-
-        if let Some(enabled) = request.enabled {
-            config.enabled = enabled;
-        }
-
         kv_store.save_cert_config(&config)?;
-        info!(
-            "Updated domain certificate config: {} (enabled={})",
-            config.domain, config.enabled
-        );
+        info!("Updated domain certificate config: {}", config.domain);
 
         Ok(domain_cert_to_proto(config, kv_store, cert_store))
     }
@@ -739,8 +717,6 @@ fn domain_cert_to_proto(
     DomainCertInfo {
         domain: config.domain,
         dns_cred_id: config.dns_cred_id.unwrap_or_default(),
-        acme_url: config.acme_url,
-        enabled: config.enabled,
         created_at: config.created_at,
         status,
     }

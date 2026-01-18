@@ -506,14 +506,10 @@ message DomainCertInfo {
   string domain = 1;
   // DNS credential ID (empty = use default)
   string dns_cred_id = 2;
-  // ACME server URL
-  string acme_url = 3;
-  // Whether certificate management is enabled
-  bool enabled = 4;
   // Configuration creation timestamp
-  uint64 created_at = 5;
+  uint64 created_at = 3;
   // Certificate status
-  DomainCertStatus status = 6;
+  DomainCertStatus status = 4;
 }
 
 // Domain certificate status
@@ -546,10 +542,6 @@ message AddDomainCertRequest {
   string domain = 1;
   // DNS credential ID (empty = use default)
   string dns_cred_id = 2;
-  // ACME server URL (empty = use Let's Encrypt production)
-  string acme_url = 3;
-  // Whether to enable certificate management immediately
-  bool enabled = 4;
 }
 
 // Update domain certificate request
@@ -557,10 +549,6 @@ message UpdateDomainCertRequest {
   string domain = 1;
   // Optional new DNS credential ID
   optional string dns_cred_id = 2;
-  // Optional new ACME URL
-  optional string acme_url = 3;
-  // Optional enable/disable
-  optional bool enabled = 4;
 }
 
 // Delete domain certificate request
