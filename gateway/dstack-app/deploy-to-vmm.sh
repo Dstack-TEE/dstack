@@ -46,6 +46,7 @@ else
 
 # Cloudflare API token for DNS challenge
 # CF_API_TOKEN=your_cloudflare_api_token
+# CF_ZONE_ID=your_cloudflare_zone_id
 
 # Service domain
 # SRV_DOMAIN=test5.dstack.phala.network
@@ -96,6 +97,7 @@ fi
 required_env_vars=(
   "VMM_RPC"
   "CF_API_TOKEN"
+  "CF_ZONE_ID"
   "SRV_DOMAIN"
   "PUBLIC_IP"
   "WG_ADDR"
@@ -134,6 +136,7 @@ cat "$COMPOSE_TMP"
 # Update .env file with current values
 cat <<EOF >.app_env
 CF_API_TOKEN=$CF_API_TOKEN
+CF_ZONE_ID=$CF_ZONE_ID
 SRV_DOMAIN=$SRV_DOMAIN
 WG_ENDPOINT=$PUBLIC_IP:$WG_PORT
 MY_URL=$MY_URL

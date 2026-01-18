@@ -15,6 +15,7 @@ services:
       - WG_ENDPOINT=${WG_ENDPOINT}
       - SRV_DOMAIN=${SRV_DOMAIN}
       - CF_API_TOKEN=${CF_API_TOKEN}
+      - CF_ZONE_ID=${CF_ZONE_ID}
       - MY_URL=${MY_URL}
       - BOOTNODE_URL=${BOOTNODE_URL}
       - ACME_STAGING=${ACME_STAGING}
