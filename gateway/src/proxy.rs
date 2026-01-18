@@ -12,7 +12,7 @@ use std::{
 
 use anyhow::{bail, Context, Result};
 use sni::extract_sni;
-pub(crate) use tls_terminate::{create_acceptor, create_acceptor_with_cert_store};
+pub(crate) use tls_terminate::create_acceptor_with_cert_resolver;
 use tokio::{
     io::AsyncReadExt,
     net::{TcpListener, TcpStream},
@@ -155,7 +155,7 @@ async fn handle_connection(
                 .proxy(inbound, buffer, &dst.app_id, dst.port, dst.is_h2)
                 .await
         }
-    } else if state.cert_store.has_cert_for_sni(&sni) {
+    } else if state.cert_resolver.get().has_cert_for_sni(&sni) {
         // SNI matches a managed certificate (e.g., wildcard cert for *.test0.local)
         // Handle as TLS termination with health check endpoint
         debug!(

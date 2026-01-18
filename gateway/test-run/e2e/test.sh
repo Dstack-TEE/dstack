@@ -125,19 +125,19 @@ test_proxy_tls_health() {
 setup_certbot_config() {
     log_info "Setting up DNS credential and domain cert configs..."
 
-    # Set global ACME URL
-    log_info "Setting global ACME URL..."
-    local acme_response=$(curl -sf -X POST "${GATEWAY_1_ADMIN}/prpc/Admin.SetGlobalAcmeUrl" \
+    # Set certbot config including ACME URL
+    log_info "Setting certbot config (ACME URL: ${ACME_URL})..."
+    local config_response=$(curl -sf -X POST "${GATEWAY_1_ADMIN}/prpc/Admin.SetCertbotConfig" \
         -H "Content-Type: application/json" \
         -d '{
             "acme_url": "'"${ACME_URL}"'"
         }' 2>&1)
 
     if [ $? -ne 0 ]; then
-        log_error "Failed to set global ACME URL: $acme_response"
+        log_error "Failed to set certbot config: $config_response"
         return 1
     fi
-    log_info "Global ACME URL set: $acme_response"
+    log_info "Certbot config set: $config_response"
 
     # Create DNS credential
     log_info "Creating DNS credential..."

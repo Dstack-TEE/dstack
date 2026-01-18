@@ -531,24 +531,45 @@ SPDX-License-Identifier: Apache-2.0
         <p>Loading WaveKV status...</p>
     </div>
 
-    <h2>ACME Configuration</h2>
+    <h2>Certbot Configuration</h2>
     <table>
         <tr>
             <th>Setting</th>
             <th>Value</th>
-            <th>Actions</th>
+            <th>Description</th>
         </tr>
         <tr>
-            <td>Global ACME URL</td>
+            <td>ACME URL</td>
             <td>
-                <input type="text" id="global-acme-url" placeholder="https://acme-v02.api.letsencrypt.org/directory (default)">
+                <input type="text" id="certbot-acme-url" placeholder="https://acme-v02.api.letsencrypt.org/directory (default)">
             </td>
+            <td>ACME server URL (empty = Let's Encrypt production)</td>
+        </tr>
+        <tr>
+            <td>Renewal Interval</td>
             <td>
-                <button class="action-btn primary" onclick="saveGlobalAcmeUrl()">Save</button>
-                <button class="action-btn secondary" onclick="resetGlobalAcmeUrl()">Reset to Default</button>
+                <input type="number" id="certbot-renew-interval" placeholder="43200" min="0"> seconds
             </td>
+            <td>How often to check for certificate renewal</td>
+        </tr>
+        <tr>
+            <td>Renew Before Expiry</td>
+            <td>
+                <input type="number" id="certbot-renew-before" placeholder="2592000" min="0"> seconds
+            </td>
+            <td>How many seconds before expiry to trigger renewal</td>
+        </tr>
+        <tr>
+            <td>Renewal Timeout</td>
+            <td>
+                <input type="number" id="certbot-renew-timeout" placeholder="300" min="0"> seconds
+            </td>
+            <td>Timeout for certificate renewal operations</td>
         </tr>
     </table>
+    <div style="margin-top: 10px;">
+        <button class="action-btn primary" onclick="saveCertbotConfig()">Save Configuration</button>
+    </div>
 
     <div class="section-header">
         <h2>DNS Credentials</h2>
@@ -757,54 +778,52 @@ SPDX-License-Identifier: Apache-2.0
         // ==================== Certificate Configuration ====================
 
         async function loadCertConfig() {
-            await loadGlobalAcmeUrl();
+            await loadCertbotConfig();
             await loadDnsCredentials();
             await loadZtDomains();
         }
 
-        // ==================== Global ACME URL ====================
+        // ==================== Certbot Configuration ====================
 
-        async function loadGlobalAcmeUrl() {
+        async function loadCertbotConfig() {
             try {
-                const response = await fetch('/prpc/Admin.GetGlobalAcmeUrl', {
+                const response = await fetch('/prpc/Admin.GetCertbotConfig', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: '{}'
                 });
                 const data = await response.json();
-                document.getElementById('global-acme-url').value = data.acme_url || '';
+                document.getElementById('certbot-acme-url').value = data.acme_url || '';
+                document.getElementById('certbot-renew-interval').value = data.renew_interval_secs || 43200;
+                document.getElementById('certbot-renew-before').value = data.renew_before_expiration_secs || 2592000;
+                document.getElementById('certbot-renew-timeout').value = data.renew_timeout_secs || 300;
             } catch (e) {
-                console.error('Failed to load global ACME URL:', e);
+                console.error('Failed to load certbot config:', e);
             }
         }
 
-        async function saveGlobalAcmeUrl() {
-            const url = document.getElementById('global-acme-url').value.trim();
+        async function saveCertbotConfig() {
+            const acmeUrl = document.getElementById('certbot-acme-url').value.trim();
+            const renewInterval = parseInt(document.getElementById('certbot-renew-interval').value) || undefined;
+            const renewBefore = parseInt(document.getElementById('certbot-renew-before').value) || undefined;
+            const renewTimeout = parseInt(document.getElementById('certbot-renew-timeout').value) || undefined;
+
             try {
-                const response = await fetch('/prpc/Admin.SetGlobalAcmeUrl', {
+                const body = {};
+                if (acmeUrl !== undefined) body.acme_url = acmeUrl;
+                if (renewInterval !== undefined) body.renew_interval_secs = renewInterval;
+                if (renewBefore !== undefined) body.renew_before_expiration_secs = renewBefore;
+                if (renewTimeout !== undefined) body.renew_timeout_secs = renewTimeout;
+
+                const response = await fetch('/prpc/Admin.SetCertbotConfig', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ acme_url: url })
+                    body: JSON.stringify(body)
                 });
                 if (!response.ok) throw new Error('Failed to save');
-                showToast('Global ACME URL saved', 'success');
+                showToast('Certbot configuration saved', 'success');
             } catch (e) {
-                showToast('Failed to save ACME URL: ' + e.message, 'error');
-            }
-        }
-
-        async function resetGlobalAcmeUrl() {
-            try {
-                const response = await fetch('/prpc/Admin.SetGlobalAcmeUrl', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ acme_url: '' })
-                });
-                if (!response.ok) throw new Error('Failed to reset');
-                document.getElementById('global-acme-url').value = '';
-                showToast('Global ACME URL reset to default', 'success');
-            } catch (e) {
-                showToast('Failed to reset ACME URL: ' + e.message, 'error');
+                showToast('Failed to save certbot config: ' + e.message, 'error');
             }
         }
 

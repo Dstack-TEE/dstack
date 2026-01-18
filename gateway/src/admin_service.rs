@@ -8,18 +8,18 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use anyhow::{bail, Context, Result};
 use dstack_gateway_rpc::{
     admin_server::{AdminRpc, AdminServer},
-    AddZtDomainRequest, CertAttestationInfo, CreateDnsCredentialRequest,
+    AddZtDomainRequest, CertAttestationInfo, CertbotConfigResponse, CreateDnsCredentialRequest,
     DeleteDnsCredentialRequest, DeleteZtDomainRequest, DnsCredentialInfo,
-    GetDefaultDnsCredentialResponse, GetDnsCredentialRequest, GetGlobalAcmeUrlResponse,
-    GetInfoRequest, GetInfoResponse, GetInstanceHandshakesRequest, GetInstanceHandshakesResponse,
-    GetMetaResponse, GetNodeStatusesResponse, GetZtDomainRequest, GlobalConnectionsStats,
-    HandshakeEntry, HostInfo, LastSeenEntry, ListCertAttestationsRequest,
-    ListCertAttestationsResponse, ListDnsCredentialsResponse, ListZtDomainsResponse,
-    NodeStatusEntry, PeerSyncStatus as ProtoPeerSyncStatus, RenewCertResponse,
-    RenewZtDomainCertRequest, RenewZtDomainCertResponse, SetDefaultDnsCredentialRequest,
-    SetGlobalAcmeUrlRequest, SetNodeStatusRequest, SetNodeUrlRequest, StatusResponse,
-    StoreSyncStatus, UpdateDnsCredentialRequest, UpdateZtDomainRequest, WaveKvStatusResponse,
-    ZtDomainCertStatus, ZtDomainInfo,
+    GetDefaultDnsCredentialResponse, GetDnsCredentialRequest, GetInfoRequest, GetInfoResponse,
+    GetInstanceHandshakesRequest, GetInstanceHandshakesResponse, GetMetaResponse,
+    GetNodeStatusesResponse, GetZtDomainRequest, GlobalConnectionsStats, HandshakeEntry, HostInfo,
+    LastSeenEntry, ListCertAttestationsRequest, ListCertAttestationsResponse,
+    ListDnsCredentialsResponse, ListZtDomainsResponse, NodeStatusEntry,
+    PeerSyncStatus as ProtoPeerSyncStatus, RenewCertResponse, RenewZtDomainCertRequest,
+    RenewZtDomainCertResponse, SetCertbotConfigRequest, SetDefaultDnsCredentialRequest,
+    SetNodeStatusRequest, SetNodeUrlRequest, StatusResponse, StoreSyncStatus,
+    UpdateDnsCredentialRequest, UpdateZtDomainRequest, WaveKvStatusResponse, ZtDomainCertStatus,
+    ZtDomainInfo,
 };
 use ra_rpc::{CallContext, RpcCall};
 use tracing::info;
@@ -90,7 +90,7 @@ impl AdminRpc for AdminRpcHandler {
     }
 
     async fn reload_cert(self) -> Result<()> {
-        self.state.reload_certificates()
+        self.state.reload_all_certs_from_kvstore()
     }
 
     async fn status(self) -> Result<StatusResponse> {
@@ -441,12 +441,12 @@ impl AdminRpc for AdminRpcHandler {
 
     async fn list_zt_domains(self) -> Result<ListZtDomainsResponse> {
         let kv_store = self.state.kv_store();
-        let cert_store = &self.state.cert_store;
+        let cert_resolver = &self.state.cert_resolver;
 
         let domains = kv_store
             .list_zt_domain_configs()
             .into_iter()
-            .map(|config| zt_domain_to_proto(config, kv_store, cert_store))
+            .map(|config| zt_domain_to_proto(config, kv_store, cert_resolver))
             .collect();
 
         Ok(ListZtDomainsResponse { domains })
@@ -454,18 +454,18 @@ impl AdminRpc for AdminRpcHandler {
 
     async fn get_zt_domain(self, request: GetZtDomainRequest) -> Result<ZtDomainInfo> {
         let kv_store = self.state.kv_store();
-        let cert_store = &self.state.cert_store;
+        let cert_resolver = &self.state.cert_resolver;
 
         let config = kv_store
             .get_zt_domain_config(&request.domain)
             .context("ZT-Domain config not found")?;
 
-        Ok(zt_domain_to_proto(config, kv_store, cert_store))
+        Ok(zt_domain_to_proto(config, kv_store, cert_resolver))
     }
 
     async fn add_zt_domain(self, request: AddZtDomainRequest) -> Result<ZtDomainInfo> {
         let kv_store = self.state.kv_store();
-        let cert_store = &self.state.cert_store;
+        let cert_resolver = &self.state.cert_resolver;
 
         // Check if domain already exists
         if kv_store.get_zt_domain_config(&request.domain).is_some() {
@@ -492,12 +492,12 @@ impl AdminRpc for AdminRpcHandler {
         kv_store.save_zt_domain_config(&config)?;
         info!("Added ZT-Domain config: {}", config.domain);
 
-        Ok(zt_domain_to_proto(config, kv_store, cert_store))
+        Ok(zt_domain_to_proto(config, kv_store, cert_resolver))
     }
 
     async fn update_zt_domain(self, request: UpdateZtDomainRequest) -> Result<ZtDomainInfo> {
         let kv_store = self.state.kv_store();
-        let cert_store = &self.state.cert_store;
+        let cert_resolver = &self.state.cert_resolver;
 
         let mut config = kv_store
             .get_zt_domain_config(&request.domain)
@@ -518,7 +518,7 @@ impl AdminRpc for AdminRpcHandler {
         kv_store.save_zt_domain_config(&config)?;
         info!("Updated ZT-Domain config: {}", config.domain);
 
-        Ok(zt_domain_to_proto(config, kv_store, cert_store))
+        Ok(zt_domain_to_proto(config, kv_store, cert_resolver))
     }
 
     async fn delete_zt_domain(self, request: DeleteZtDomainRequest) -> Result<()> {
@@ -593,22 +593,44 @@ impl AdminRpc for AdminRpcHandler {
         Ok(ListCertAttestationsResponse { latest, history })
     }
 
-    // ==================== Global ACME URL Configuration ====================
+    // ==================== Global Certbot Configuration ====================
 
-    async fn get_global_acme_url(self) -> Result<GetGlobalAcmeUrlResponse> {
-        let kv_store = self.state.kv_store();
-        let acme_url = kv_store.get_global_acme_url().unwrap_or_default();
-        Ok(GetGlobalAcmeUrlResponse { acme_url })
+    async fn get_certbot_config(self) -> Result<CertbotConfigResponse> {
+        let config = self.state.kv_store().get_certbot_config();
+        Ok(CertbotConfigResponse {
+            renew_interval_secs: config.renew_interval.as_secs(),
+            renew_before_expiration_secs: config.renew_before_expiration.as_secs(),
+            renew_timeout_secs: config.renew_timeout.as_secs(),
+            acme_url: config.acme_url,
+        })
     }
 
-    async fn set_global_acme_url(self, request: SetGlobalAcmeUrlRequest) -> Result<()> {
+    async fn set_certbot_config(self, request: SetCertbotConfigRequest) -> Result<()> {
         let kv_store = self.state.kv_store();
-        kv_store.set_global_acme_url(&request.acme_url)?;
-        if request.acme_url.is_empty() {
-            info!("Cleared global ACME URL (using default Let's Encrypt production)");
-        } else {
-            info!("Set global ACME URL: {}", request.acme_url);
+        let mut config = kv_store.get_certbot_config();
+
+        // Update only the fields that are specified
+        if let Some(secs) = request.renew_interval_secs {
+            config.renew_interval = Duration::from_secs(secs);
         }
+        if let Some(secs) = request.renew_before_expiration_secs {
+            config.renew_before_expiration = Duration::from_secs(secs);
+        }
+        if let Some(secs) = request.renew_timeout_secs {
+            config.renew_timeout = Duration::from_secs(secs);
+        }
+        if let Some(url) = request.acme_url {
+            config.acme_url = url;
+        }
+
+        kv_store.set_certbot_config(&config)?;
+        info!(
+            "Updated certbot config: renew_interval={:?}, renew_before_expiration={:?}, renew_timeout={:?}, acme_url={:?}",
+            config.renew_interval,
+            config.renew_before_expiration,
+            config.renew_timeout,
+            config.acme_url
+        );
         Ok(())
     }
 }
@@ -697,11 +719,11 @@ fn dns_cred_to_proto(cred: DnsCredential) -> DnsCredentialInfo {
 fn zt_domain_to_proto(
     config: ZtDomainConfig,
     kv_store: &crate::kv::KvStore,
-    cert_store: &crate::cert_store::CertStore,
+    cert_resolver: &crate::cert_store::CertResolver,
 ) -> ZtDomainInfo {
     // Get certificate data for status
     let cert_data = kv_store.get_cert_data(&config.domain);
-    let loaded_in_memory = cert_store.has_cert(&config.domain);
+    let loaded_in_memory = cert_resolver.has_cert(&config.domain);
 
     let status = Some(ZtDomainCertStatus {
         has_cert: cert_data.is_some(),

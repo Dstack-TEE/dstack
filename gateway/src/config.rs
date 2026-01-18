@@ -69,8 +69,6 @@ pub enum TlsVersion {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ProxyConfig {
-    pub cert_chain: String,
-    pub cert_key: String,
     pub tls_crypto_provider: CryptoProvider,
     pub tls_versions: Vec<TlsVersion>,
     pub base_domain: String,
@@ -147,7 +145,6 @@ pub struct SyncConfig {
 pub struct Config {
     pub wg: WgConfig,
     pub proxy: ProxyConfig,
-    pub certbot: CertbotConfig,
     pub pccs_url: Option<String>,
     pub recycle: RecycleConfig,
     pub set_ulimit: bool,
@@ -231,45 +228,6 @@ pub struct TlsConfig {
 #[derive(Debug, Clone, Deserialize)]
 pub struct MutualConfig {
     pub ca_certs: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct CertbotConfig {
-    /// Enable certbot
-    pub enabled: bool,
-    /// Path to the working directory
-    pub workdir: String,
-    /// ACME server URL
-    pub acme_url: String,
-    /// Cloudflare API token
-    pub cf_api_token: String,
-    /// Cloudflare API URL (defaults to https://api.cloudflare.com/client/v4)
-    #[serde(default)]
-    pub cf_api_url: Option<String>,
-    /// Auto set CAA record
-    pub auto_set_caa: bool,
-    /// Domain to issue certificates for
-    pub domain: String,
-    /// Renew interval
-    #[serde(with = "serde_duration")]
-    pub renew_interval: Duration,
-    /// Time gap before expiration to trigger renewal
-    #[serde(with = "serde_duration")]
-    pub renew_before_expiration: Duration,
-    /// Renew timeout
-    #[serde(with = "serde_duration")]
-    pub renew_timeout: Duration,
-    /// Maximum time to wait for DNS propagation
-    #[serde(with = "serde_duration")]
-    pub max_dns_wait: Duration,
-    /// TTL for DNS TXT records used in ACME challenges (in seconds).
-    /// Minimum is 60 for Cloudflare. Lower TTL means faster DNS propagation.
-    #[serde(default = "default_dns_txt_ttl")]
-    pub dns_txt_ttl: u32,
-}
-
-fn default_dns_txt_ttl() -> u32 {
-    60
 }
 
 pub const DEFAULT_CONFIG: &str = include_str!("../gateway.toml");

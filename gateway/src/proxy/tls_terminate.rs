@@ -8,23 +8,21 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use anyhow::{anyhow, bail, Context as _, Result};
-use fs_err as fs;
 use hyper::body::Incoming;
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Request, Response, StatusCode};
 use hyper_util::rt::tokio::TokioIo;
-use rustls::pki_types::pem::PemObject;
-use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::version::{TLS12, TLS13};
 use serde::Serialize;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::TcpStream;
 use tokio::time::timeout;
 use tokio_rustls::{rustls, server::TlsStream, TlsAcceptor};
-use tracing::{debug, info};
+use tracing::debug;
 
-use crate::cert_store::CertStore;
+use crate::cert_store::CertResolver;
+
 use crate::config::{CryptoProvider, ProxyConfig, TlsVersion};
 use crate::main_service::Proxy;
 
@@ -98,47 +96,12 @@ where
     }
 }
 
-/// Create a TLS acceptor from certificate files (legacy single-cert mode)
-pub(crate) fn create_acceptor(config: &ProxyConfig, h2: bool) -> Result<TlsAcceptor> {
-    let cert_pem = fs::read(&config.cert_chain).context("failed to read certificate")?;
-    let key_pem = fs::read(&config.cert_key).context("failed to read private key")?;
-    let certs = CertificateDer::pem_slice_iter(cert_pem.as_slice())
-        .collect::<Result<Vec<_>, _>>()
-        .context("failed to parse certificate")?;
-    let key =
-        PrivateKeyDer::from_pem_slice(key_pem.as_slice()).context("failed to parse private key")?;
-
-    let provider = match config.tls_crypto_provider {
-        CryptoProvider::AwsLcRs => rustls::crypto::aws_lc_rs::default_provider(),
-        CryptoProvider::Ring => rustls::crypto::ring::default_provider(),
-    };
-    let supported_versions = config
-        .tls_versions
-        .iter()
-        .map(|v| match v {
-            TlsVersion::Tls12 => &TLS12,
-            TlsVersion::Tls13 => &TLS13,
-        })
-        .collect::<Vec<_>>();
-    let mut config = rustls::ServerConfig::builder_with_provider(Arc::new(provider))
-        .with_protocol_versions(&supported_versions)
-        .context("Failed to build TLS config")?
-        .with_no_client_auth()
-        .with_single_cert(certs, key)?;
-
-    if h2 {
-        config.alpn_protocols = vec![b"h2".to_vec()];
-    }
-
-    let acceptor = TlsAcceptor::from(Arc::new(config));
-
-    Ok(acceptor)
-}
-
-/// Create a TLS acceptor using CertStore for SNI-based certificate resolution
-pub(crate) fn create_acceptor_with_cert_store(
+/// Create a TLS acceptor using CertResolver for SNI-based certificate resolution
+///
+/// The CertResolver allows atomic certificate updates without recreating the acceptor.
+pub(crate) fn create_acceptor_with_cert_resolver(
     proxy_config: &ProxyConfig,
-    cert_store: Arc<CertStore>,
+    cert_resolver: Arc<CertResolver>,
     h2: bool,
 ) -> Result<TlsAcceptor> {
     let provider = match proxy_config.tls_crypto_provider {
@@ -158,7 +121,7 @@ pub(crate) fn create_acceptor_with_cert_store(
         .with_protocol_versions(&supported_versions)
         .context("failed to build TLS config")?
         .with_no_client_auth()
-        .with_cert_resolver(cert_store);
+        .with_cert_resolver(cert_resolver);
 
     if h2 {
         config.alpn_protocols = vec![b"h2".to_vec()];
@@ -186,27 +149,6 @@ fn empty_response(status: StatusCode) -> Result<Response<String>> {
 }
 
 impl Proxy {
-    /// Reload the TLS acceptor with fresh certificates
-    pub fn reload_certificates(&self) -> Result<()> {
-        info!("Reloading TLS certificates");
-        // Replace the acceptor with the new one
-        if let Ok(mut acceptor) = self.acceptor.write() {
-            *acceptor = create_acceptor(&self.config.proxy, false)?;
-            info!("TLS certificates successfully reloaded");
-        } else {
-            bail!("Failed to acquire write lock for TLS acceptor");
-        }
-
-        if let Ok(mut acceptor) = self.h2_acceptor.write() {
-            *acceptor = create_acceptor(&self.config.proxy, true)?;
-            info!("TLS certificates successfully reloaded");
-        } else {
-            bail!("Failed to acquire write lock for TLS acceptor");
-        }
-
-        Ok(())
-    }
-
     pub(crate) async fn handle_this_node(
         &self,
         inbound: TcpStream,
@@ -262,34 +204,6 @@ impl Proxy {
         Ok(())
     }
 
-    /// Handle TLS connections for domains with managed certificates (e.g., wildcard certs)
-    /// This serves a health endpoint for any SNI that matches a certificate in CertStore
-    pub(crate) async fn handle_managed_cert_domain(
-        &self,
-        inbound: TcpStream,
-        buffer: Vec<u8>,
-    ) -> Result<()> {
-        let stream = self.tls_accept(inbound, buffer, false).await?;
-        let io = TokioIo::new(stream);
-
-        let service = service_fn(|req: Request<Incoming>| async move {
-            if req.method() != hyper::Method::GET {
-                return empty_response(StatusCode::METHOD_NOT_ALLOWED);
-            }
-            match req.uri().path() {
-                "/" | "/health" => empty_response(StatusCode::OK),
-                _ => empty_response(StatusCode::NOT_FOUND),
-            }
-        });
-
-        http1::Builder::new()
-            .serve_connection(io, service)
-            .await
-            .context("failed to serve managed cert domain HTTP connection")?;
-
-        Ok(())
-    }
-
     /// Deprecated legacy endpoint
     pub(crate) async fn handle_health_check(
         &self,
@@ -340,15 +254,9 @@ impl Proxy {
             inbound,
         };
         let acceptor = if h2 {
-            self.h2_acceptor
-                .read()
-                .expect("Failed to acquire read lock for TLS acceptor")
-                .clone()
+            &self.h2_acceptor
         } else {
-            self.acceptor
-                .read()
-                .expect("Failed to acquire read lock for TLS acceptor")
-                .clone()
+            &self.acceptor
         };
         let tls_stream = timeout(
             self.config.proxy.timeouts.handshake,
@@ -377,7 +285,7 @@ impl Proxy {
         let addresses = self
             .lock()
             .select_top_n_hosts(app_id)
-            .with_context(|| format!("app {app_id} not found"))?;
+            .with_context(|| format!("app <{app_id}> not found"))?;
         debug!("selected top n hosts: {addresses:?}");
         let tls_stream = self.tls_accept(inbound, buffer, h2).await?;
         let (outbound, _counter) = timeout(

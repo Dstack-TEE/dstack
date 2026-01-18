@@ -15,7 +15,7 @@ use certbot::{AcmeClient, Dns01Client};
 use ra_tls::rcgen::KeyPair;
 use tracing::{error, info, warn};
 
-use crate::cert_store::CertStore;
+use crate::cert_store::CertResolver;
 use crate::kv::{CertAttestation, CertCredentials, CertData, DnsProvider, KvStore, ZtDomainConfig};
 
 /// Lock timeout for certificate renewal (10 minutes)
@@ -24,30 +24,23 @@ const RENEW_LOCK_TIMEOUT_SECS: u64 = 600;
 /// Default ACME URL (Let's Encrypt production)
 const DEFAULT_ACME_URL: &str = "https://acme-v02.api.letsencrypt.org/directory";
 
-/// Default renew-before-expiration period (30 days)
-const DEFAULT_RENEW_BEFORE_SECS: u64 = 30 * 24 * 3600;
-
 /// Multi-domain certificate manager
 pub struct DistributedCertBot {
     kv_store: Arc<KvStore>,
-    cert_store: Arc<CertStore>,
-    renew_before_expiration: Duration,
-    renew_timeout: Duration,
+    cert_resolver: Arc<CertResolver>,
 }
 
 impl DistributedCertBot {
-    pub fn new(
-        kv_store: Arc<KvStore>,
-        cert_store: Arc<CertStore>,
-        renew_before_expiration: Duration,
-        renew_timeout: Duration,
-    ) -> Self {
+    pub fn new(kv_store: Arc<KvStore>, cert_resolver: Arc<CertResolver>) -> Self {
         Self {
             kv_store,
-            cert_store,
-            renew_before_expiration,
-            renew_timeout,
+            cert_resolver,
         }
+    }
+
+    /// Get the current certbot configuration from KV store
+    fn config(&self) -> crate::kv::GlobalCertbotConfig {
+        self.kv_store.get_certbot_config()
     }
 
     /// Initialize all ZT-Domain certificates
@@ -73,7 +66,7 @@ impl DistributedCertBot {
                     cert_data.issued_by,
                     (cert_data.not_after - now) / 86400
                 );
-                self.cert_store.load_cert(domain, &cert_data)?;
+                self.cert_resolver.update_cert(domain, &cert_data)?;
                 return Ok(());
             }
             info!(domain, "KvStore certificate expired, will request new one");
@@ -111,7 +104,7 @@ impl DistributedCertBot {
         } else if let Some(ref data) = cert_data {
             let now = now_secs();
             let expires_in = data.not_after.saturating_sub(now);
-            expires_in < self.renew_before_expiration.as_secs()
+            expires_in < self.config().renew_before_expiration.as_secs()
         } else {
             true
         };
@@ -166,7 +159,7 @@ impl DistributedCertBot {
             info!("another node is requesting, waiting...");
             tokio::time::sleep(Duration::from_secs(30)).await;
             if let Some(cert_data) = self.kv_store.get_cert_data(domain) {
-                self.cert_store.load_cert(domain, &cert_data)?;
+                self.cert_resolver.update_cert(domain, &cert_data)?;
                 return Ok(());
             }
             bail!("failed to get certificate from KvStore after waiting");
@@ -192,7 +185,7 @@ impl DistributedCertBot {
         // Request certificate with timeout
         info!("requesting new certificate from ACME...");
         let cert_pem = tokio::time::timeout(
-            self.renew_timeout,
+            self.config().renew_timeout,
             acme_client.request_new_certificate(&key_pem, &[domain.to_string()]),
         )
         .await
@@ -217,7 +210,7 @@ impl DistributedCertBot {
             issued_by: self.kv_store.my_node_id(),
             issued_at: now_secs(),
         };
-        self.cert_store.load_cert(domain, &cert_data)?;
+        self.cert_resolver.update_cert(domain, &cert_data)?;
 
         info!(
             "new certificate loaded (expires in {} days)",
@@ -242,7 +235,7 @@ impl DistributedCertBot {
         // Renew with new key
         info!("renewing certificate with new key from ACME...");
         let new_cert_pem = tokio::time::timeout(
-            self.renew_timeout,
+            self.config().renew_timeout,
             // Note: we request a new cert rather than renew, since we have a new key
             acme_client.request_new_certificate(&key_pem, &[domain.to_string()]),
         )
@@ -269,7 +262,7 @@ impl DistributedCertBot {
             issued_by: self.kv_store.my_node_id(),
             issued_at: now_secs(),
         };
-        self.cert_store.load_cert(domain, &cert_data)?;
+        self.cert_resolver.update_cert(domain, &cert_data)?;
 
         info!(
             "renewed certificate loaded (expires in {} days)",
@@ -302,12 +295,13 @@ impl DistributedCertBot {
             }
         };
 
-        // Use global ACME URL from KvStore, fall back to default if not set
-        let global_acme_url = self.kv_store.get_global_acme_url();
-        let acme_url = global_acme_url
-            .as_deref()
-            .filter(|s| !s.is_empty())
-            .unwrap_or(DEFAULT_ACME_URL);
+        // Use ACME URL from certbot config, fall back to default if not set
+        let config = self.config();
+        let acme_url = if config.acme_url.is_empty() {
+            DEFAULT_ACME_URL
+        } else {
+            &config.acme_url
+        };
 
         // Try to load credentials from KvStore
         if let Some(creds) = self.kv_store.get_cert_acme(domain) {
@@ -377,6 +371,7 @@ impl DistributedCertBot {
         public_key_der: &[u8],
     ) -> Result<()> {
         // Generate TDX quote for the public key
+        let todo = "Use dstack agent";
         let quote = match generate_tdx_quote(public_key_der).await {
             Ok(q) => q,
             Err(e) => {
@@ -397,27 +392,6 @@ impl DistributedCertBot {
         self.kv_store.save_cert_attestation(domain, &attestation)?;
         info!(domain, "attestation saved to KvStore");
         Ok(())
-    }
-
-    /// Reload certificate from KvStore into memory (called when watcher triggers)
-    pub fn reload_from_kvstore(&self, domain: &str) -> Result<bool> {
-        let Some(cert_data) = self.kv_store.get_cert_data(domain) else {
-            return Ok(false);
-        };
-
-        // Check if we already have this cert loaded with same expiry
-        if let Some(current) = self.cert_store.get_cert_data(domain) {
-            if current.not_after >= cert_data.not_after {
-                return Ok(false);
-            }
-        }
-
-        info!(
-            domain,
-            "reloading from KvStore (issued by node {})", cert_data.issued_by
-        );
-        self.cert_store.load_cert(domain, &cert_data)?;
-        Ok(true)
     }
 }
 

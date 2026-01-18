@@ -35,22 +35,6 @@ bootnode = "https://gateway-1:9012"
 node_id = 3
 data_dir = "/var/lib/gateway/wavekv"
 
-[core.certbot]
-enabled = true
-workdir = "/var/lib/gateway/certbot"
-# Pebble ACME server (HTTP mode)
-acme_url = "http://pebble:14000/dir"
-# Mock Cloudflare DNS API
-cf_api_token = "test-token"
-cf_api_url = "http://mock-cf-dns-api:8080/client/v4"
-auto_set_caa = false
-domain = "*.app.test.local"
-renew_interval = "1m"
-renew_before_expiration = "720h"
-renew_timeout = "2m"
-max_dns_wait = "30s"
-dns_txt_ttl = 60
-
 [core.wg]
 private_key = "SEcoI37oGWynhukxXo5Mi8/8zZBU6abg6T1TOJRMj1Y="
 public_key = "xc+7qkdeNFfl4g4xirGGGXHMc0cABuE5IHaLeCASVWM="

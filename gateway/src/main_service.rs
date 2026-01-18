@@ -6,7 +6,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     net::Ipv4Addr,
     ops::Deref,
-    sync::{Arc, Mutex, MutexGuard, RwLock},
+    sync::{Arc, Mutex, MutexGuard},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -32,14 +32,14 @@ use tokio_rustls::TlsAcceptor;
 use tracing::{debug, error, info, warn};
 
 use crate::{
-    cert_store::CertStore,
+    cert_store::{CertResolver, CertStoreBuilder},
     config::{Config, TlsConfig},
     kv::{
         fetch_peers_from_bootnode, AppIdValidator, HttpsClientConfig, InstanceData, KvStore,
         NodeData, NodeStatus, WaveKvSyncService,
     },
     models::{InstanceInfo, WgConf},
-    proxy::{create_acceptor_with_cert_store, AddressGroup, AddressInfo},
+    proxy::{create_acceptor_with_cert_resolver, AddressGroup, AddressInfo},
 };
 
 mod auth_client;
@@ -64,10 +64,10 @@ pub struct ProxyInner {
     state: Mutex<ProxyState>,
     pub(crate) notify_state_updated: Notify,
     auth_client: AuthClient,
-    pub(crate) acceptor: RwLock<TlsAcceptor>,
-    pub(crate) h2_acceptor: RwLock<TlsAcceptor>,
-    /// In-memory certificate store for SNI-based resolution
-    pub(crate) cert_store: Arc<CertStore>,
+    pub(crate) acceptor: TlsAcceptor,
+    pub(crate) h2_acceptor: TlsAcceptor,
+    /// Certificate resolver for SNI-based resolution (supports atomic updates)
+    pub(crate) cert_resolver: Arc<CertResolver>,
     /// WaveKV-based store for persistence (and cross-node sync when enabled)
     kv_store: Arc<KvStore>,
     /// WaveKV sync service for network synchronization
@@ -214,45 +214,45 @@ impl ProxyInner {
             }
         }
 
-        // Create CertStore and load certificates from KvStore
-        let cert_store = Arc::new(CertStore::new());
+        // Create CertResolver and load certificates from KvStore
+        let cert_resolver = Arc::new(CertResolver::new());
         let all_cert_data = kv_store.load_all_cert_data();
-        for (domain, data) in &all_cert_data {
-            if let Err(err) = cert_store.load_cert(domain, data) {
-                warn!("failed to load certificate for {}: {}", domain, err);
+        if !all_cert_data.is_empty() {
+            let mut builder = CertStoreBuilder::new();
+            for (domain, data) in &all_cert_data {
+                if let Err(err) = builder.add_cert(domain, data) {
+                    warn!("failed to load certificate for {}: {}", domain, err);
+                }
             }
+            cert_resolver.set(Arc::new(builder.build()));
+            info!(
+                "CertStore: loaded {} certificates from KvStore",
+                all_cert_data.len()
+            );
         }
-        info!(
-            "CertStore: loaded {} certificates from KvStore",
-            all_cert_data.len()
-        );
 
         // Create multi-domain certbot (uses KvStore configs for DNS credentials and domains)
         let multi_domain_certbot = Arc::new(DistributedCertBot::new(
             kv_store.clone(),
-            cert_store.clone(),
-            config.certbot.renew_before_expiration,
-            config.certbot.renew_timeout,
+            cert_resolver.clone(),
         ));
         // Initialize any configured domains
         if let Err(err) = multi_domain_certbot.init_all().await {
             warn!("Failed to initialize multi-domain certbot: {}", err);
         }
 
-        // Create TLS acceptors with CertStore for SNI-based resolution
-        // CertStore may be empty initially; certificates will be loaded later via certbot
+        // Create TLS acceptors with CertResolver for SNI-based resolution
+        // CertResolver allows atomic certificate updates without recreating acceptors
         info!(
-            "CertStore initialized with {} domains",
-            cert_store.list_domains().len()
+            "CertResolver initialized with {} domains",
+            cert_resolver.list_domains().len()
         );
-        let acceptor = RwLock::new(
-            create_acceptor_with_cert_store(&config.proxy, cert_store.clone(), false)
-                .context("failed to create acceptor with cert store")?,
-        );
-        let h2_acceptor = RwLock::new(
-            create_acceptor_with_cert_store(&config.proxy, cert_store.clone(), true)
-                .context("failed to create h2 acceptor with cert store")?,
-        );
+        let acceptor =
+            create_acceptor_with_cert_resolver(&config.proxy, cert_resolver.clone(), false)
+                .context("failed to create acceptor with cert resolver")?;
+        let h2_acceptor =
+            create_acceptor_with_cert_resolver(&config.proxy, cert_resolver.clone(), true)
+                .context("failed to create h2 acceptor with cert resolver")?;
 
         Ok(Self {
             config,
@@ -262,7 +262,7 @@ impl ProxyInner {
             auth_client,
             acceptor,
             h2_acceptor,
-            cert_store,
+            cert_resolver,
             multi_domain_certbot,
             kv_store,
             wavekv_sync,
@@ -286,37 +286,29 @@ impl Proxy {
             start_wavekv_sync_task(self.clone(), wavekv_sync.clone()).await;
         }
         start_wavekv_watch_task(self.clone()).context("Failed to start WaveKV watch task")?;
-        start_certbot_task(self.clone()).await?;
+        start_certbot_task(self.clone()).await;
         start_cert_store_watch_task(self.clone());
         Ok(())
     }
 
-    /// Reload all certificates from KvStore into CertStore and recreate TLS acceptors
+    /// Reload all certificates from KvStore into CertStore (atomic replacement)
     pub(crate) fn reload_all_certs_from_kvstore(&self) -> Result<()> {
         let all_cert_data = self.kv_store.load_all_cert_data();
+
+        // Build new CertStore from scratch
+        let mut builder = CertStoreBuilder::new();
         let mut loaded = 0;
         for (domain, data) in &all_cert_data {
-            if let Err(err) = self.cert_store.load_cert(domain, data) {
+            if let Err(err) = builder.add_cert(domain, data) {
                 warn!("failed to reload certificate for {}: {}", domain, err);
             } else {
                 loaded += 1;
             }
         }
+
+        // Atomically replace the CertStore (no need to recreate acceptors)
+        self.cert_resolver.set(Arc::new(builder.build()));
         info!("CertStore: reloaded {} certificates from KvStore", loaded);
-
-        // Recreate acceptors with updated CertStore
-        if !self.cert_store.list_domains().is_empty() {
-            let new_acceptor =
-                create_acceptor_with_cert_store(&self.config.proxy, self.cert_store.clone(), false)
-                    .context("failed to recreate acceptor")?;
-            let new_h2_acceptor =
-                create_acceptor_with_cert_store(&self.config.proxy, self.cert_store.clone(), true)
-                    .context("failed to recreate h2 acceptor")?;
-
-            *self.acceptor.write().unwrap() = new_acceptor;
-            *self.h2_acceptor.write().unwrap() = new_h2_acceptor;
-            info!("TLS acceptors recreated with updated CertStore");
-        }
         Ok(())
     }
 
@@ -483,30 +475,29 @@ fn start_recycle_thread(proxy: Proxy) {
 }
 
 /// Start periodic certificate renewal task for multi-domain certbot
-async fn start_certbot_task(proxy: Proxy) -> Result<()> {
-    let renew_interval = proxy.config.certbot.renew_interval;
-    if renew_interval.is_zero() {
-        info!("certificate renewal task is disabled (renew_interval is 0)");
-        return Ok(());
-    }
-
-    info!(
-        "starting certificate renewal task (interval: {:?})",
-        renew_interval
-    );
+async fn start_certbot_task(proxy: Proxy) {
+    info!("starting certificate renewal task");
 
     // Periodic renewal task for all domains
     tokio::spawn(async move {
-        // Wait for initial delay before first check
-        tokio::time::sleep(renew_interval).await;
         loop {
+            // Get current config from KV store (allows dynamic updates)
+            let renew_interval = proxy.kv_store.get_certbot_config().renew_interval;
+            if renew_interval.is_zero() {
+                // Check again later if disabled
+                tokio::time::sleep(Duration::from_secs(60)).await;
+                continue;
+            }
+
+            // Wait for the interval
+            tokio::time::sleep(renew_interval).await;
+
+            // Renew certificates
             if let Err(err) = proxy.renew_cert(None, false).await {
                 error!("failed to renew certificates: {err}");
             }
-            tokio::time::sleep(renew_interval).await;
         }
     });
-    Ok(())
 }
 
 /// Watch for certificate changes from KvStore and update CertStore

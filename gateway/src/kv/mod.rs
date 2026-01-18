@@ -14,6 +14,7 @@
 //! - `node/{node_id}` → NodeData
 //! - `dns_cred/{cred_id}` → DnsCredential
 //! - `dns_cred_default` → cred_id (default credential ID)
+//! - `global/certbot_config` → GlobalCertbotConfig
 //! - `cert/{domain}/config` → ZtDomainConfig
 //! - `cert/{domain}/data` → CertData
 //! - `cert/{domain}/acme` → AcmeCredentials (ACME account for this domain)
@@ -148,6 +149,33 @@ pub struct ZtDomainConfig {
     pub created_at: u64,
 }
 
+/// Global certbot configuration (stored in KV, synced across nodes)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GlobalCertbotConfig {
+    /// Interval between renewal checks
+    #[serde(with = "serde_duration")]
+    pub renew_interval: Duration,
+    /// Time before expiration to trigger renewal (e.g., 30 days)
+    #[serde(with = "serde_duration")]
+    pub renew_before_expiration: Duration,
+    /// Timeout for certificate renewal operations
+    #[serde(with = "serde_duration")]
+    pub renew_timeout: Duration,
+    /// ACME server URL (None means use default Let's Encrypt production)
+    pub acme_url: String,
+}
+
+impl Default for GlobalCertbotConfig {
+    fn default() -> Self {
+        Self {
+            renew_interval: Duration::from_secs(12 * 3600), // 12 hours
+            renew_before_expiration: Duration::from_secs(30 * 86400), // 30 days
+            renew_timeout: Duration::from_secs(300),        // 5 minutes
+            acme_url: Default::default(),                   // default Let's Encrypt
+        }
+    }
+}
+
 // Key prefixes and builders
 pub mod keys {
     use super::NodeId;
@@ -163,7 +191,7 @@ pub mod keys {
     pub const CERT_PREFIX: &str = "cert/";
     pub const DNS_CRED_PREFIX: &str = "dns_cred/";
     pub const DNS_CRED_DEFAULT: &str = "dns_cred_default";
-    pub const GLOBAL_ACME_URL: &str = "global/acme_url";
+    pub const GLOBAL_CERTBOT_CONFIG: &str = "global/certbot_config";
 
     pub fn inst(instance_id: &str) -> String {
         format!("{INST_PREFIX}{instance_id}")
@@ -674,25 +702,21 @@ impl KvStore {
         self.persistent.watch_prefix(keys::DNS_CRED_PREFIX)
     }
 
-    // ==================== Global ACME URL ====================
+    // ==================== Global Certbot Config ====================
 
-    /// Get the global ACME URL (returns None if not set, meaning use default)
-    pub fn get_global_acme_url(&self) -> Option<String> {
-        self.persistent.read().decode(keys::GLOBAL_ACME_URL)
+    /// Get global certbot configuration (returns default if not set)
+    pub fn get_certbot_config(&self) -> GlobalCertbotConfig {
+        self.persistent
+            .read()
+            .decode(keys::GLOBAL_CERTBOT_CONFIG)
+            .unwrap_or_default()
     }
 
-    /// Set the global ACME URL (empty string clears it, meaning use default)
-    pub fn set_global_acme_url(&self, url: &str) -> Result<()> {
-        if url.is_empty() {
-            // Delete the key to use default
-            self.persistent
-                .write()
-                .delete(keys::GLOBAL_ACME_URL.to_string())?;
-        } else {
-            self.persistent
-                .write()
-                .put_encoded(keys::GLOBAL_ACME_URL.to_string(), &url)?;
-        }
+    /// Set global certbot configuration
+    pub fn set_certbot_config(&self, config: &GlobalCertbotConfig) -> Result<()> {
+        self.persistent
+            .write()
+            .put_encoded(keys::GLOBAL_CERTBOT_CONFIG.to_string(), config)?;
         Ok(())
     }
 

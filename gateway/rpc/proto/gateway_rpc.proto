@@ -413,11 +413,11 @@ service Admin {
   // List certificate attestations for a domain
   rpc ListCertAttestations(ListCertAttestationsRequest) returns (ListCertAttestationsResponse) {}
 
-  // ==================== Global ACME URL Configuration ====================
-  // Get the global ACME URL
-  rpc GetGlobalAcmeUrl(google.protobuf.Empty) returns (GetGlobalAcmeUrlResponse) {}
-  // Set the global ACME URL
-  rpc SetGlobalAcmeUrl(SetGlobalAcmeUrlRequest) returns (google.protobuf.Empty) {}
+  // ==================== Global Certbot Configuration ====================
+  // Get global certbot configuration (includes ACME URL)
+  rpc GetCertbotConfig(google.protobuf.Empty) returns (CertbotConfigResponse) {}
+  // Set global certbot configuration (includes ACME URL)
+  rpc SetCertbotConfig(SetCertbotConfigRequest) returns (google.protobuf.Empty) {}
 }
 
 // ==================== DNS Credential Messages ====================
@@ -598,16 +598,28 @@ message ListCertAttestationsResponse {
   repeated CertAttestationInfo history = 2;
 }
 
-// ==================== Global ACME URL Messages ====================
+// ==================== Global Certbot Configuration Messages ====================
 
-// Get global ACME URL response
-message GetGlobalAcmeUrlResponse {
-  // The global ACME URL (empty means default Let's Encrypt production)
-  string acme_url = 1;
+// Certbot configuration response
+message CertbotConfigResponse {
+  // Interval between renewal checks (in seconds)
+  uint64 renew_interval_secs = 1;
+  // Time before expiration to trigger renewal (in seconds)
+  uint64 renew_before_expiration_secs = 2;
+  // Timeout for certificate renewal operations (in seconds)
+  uint64 renew_timeout_secs = 3;
+  // ACME server URL (empty means default Let's Encrypt production)
+  string acme_url = 4;
 }
 
-// Set global ACME URL request
-message SetGlobalAcmeUrlRequest {
-  // The ACME URL to set (empty means use default Let's Encrypt production)
-  string acme_url = 1;
+// Set certbot configuration request
+message SetCertbotConfigRequest {
+  // Interval between renewal checks (in seconds)
+  optional uint64 renew_interval_secs = 1;
+  // Time before expiration to trigger renewal (in seconds)
+  optional uint64 renew_before_expiration_secs = 2;
+  // Timeout for certificate renewal operations (in seconds)
+  optional uint64 renew_timeout_secs = 3;
+  // ACME server URL (empty means use default Let's Encrypt production)
+  optional string acme_url = 4;
 }
