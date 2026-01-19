@@ -64,7 +64,7 @@ impl AcmeClient {
         dns_txt_ttl: u32,
     ) -> Result<Self> {
         let credentials: Credentials = serde_json::from_str(encoded_credentials)?;
-        let http_client = Box::new(ReqwestHttpClient::new());
+        let http_client = Box::new(ReqwestHttpClient::new()?);
         let account =
             Account::from_credentials_and_http(credentials.credentials, http_client).await?;
         let credentials: Credentials = serde_json::from_str(encoded_credentials)?;
@@ -84,7 +84,7 @@ impl AcmeClient {
         max_dns_wait: Duration,
         dns_txt_ttl: u32,
     ) -> Result<Self> {
-        let http_client = Box::new(ReqwestHttpClient::new());
+        let http_client = Box::new(ReqwestHttpClient::new()?);
         let (account, credentials) = Account::create_with_http(
             &NewAccount {
                 contact: &[],

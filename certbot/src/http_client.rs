@@ -4,6 +4,7 @@
 
 //! Custom HTTP client for instant_acme that supports both HTTP and HTTPS.
 
+use anyhow::{Context, Result};
 use bytes::Bytes;
 use http::Request;
 use http_body_util::{BodyExt, Full};
@@ -22,18 +23,12 @@ pub struct ReqwestHttpClient {
 
 impl ReqwestHttpClient {
     /// Create a new HTTP client.
-    pub fn new() -> Self {
+    pub fn new() -> Result<Self> {
         let client = Client::builder()
             .user_agent("dstack-certbot/0.1")
             .build()
-            .expect("failed to build reqwest client");
-        Self { client }
-    }
-}
-
-impl Default for ReqwestHttpClient {
-    fn default() -> Self {
-        Self::new()
+            .context("failed to build reqwest client")?;
+        Ok(Self { client })
     }
 }
 

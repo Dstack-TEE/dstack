@@ -319,6 +319,13 @@ fn format_expiry(not_after: u64) -> String {
 mod tests {
     use super::*;
 
+    impl CertStore {
+        /// Check if a certificate can be resolved for a given SNI hostname
+        pub fn has_cert_for_sni(&self, sni: &str) -> bool {
+            self.resolve_cert(sni).is_some()
+        }
+    }
+
     fn make_test_cert_data() -> CertData {
         // Generate a self-signed test certificate using rcgen
         use ra_tls::rcgen::{self, CertificateParams, KeyPair};
@@ -427,9 +434,8 @@ mod tests {
         assert!(store.has_cert_for_sni("foo.example.com"));
         assert!(store.has_cert_for_sni("bar.example.com"));
 
-        // Note: wildcard certs also match nested subdomains in our implementation
-        // This is intentional for ease of use with wildcard domains
-        assert!(store.has_cert_for_sni("sub.foo.example.com"));
+        // Wildcard certs do not match nested subdomains
+        assert!(!store.has_cert_for_sni("sub.foo.example.com"));
 
         // Should not resolve different domain
         assert!(!store.has_cert_for_sni("example.org"));

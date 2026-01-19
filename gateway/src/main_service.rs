@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, HashSet},
     net::Ipv4Addr,
     ops::Deref,
     sync::{Arc, Mutex, MutexGuard},
@@ -528,41 +528,36 @@ fn start_zt_domain_watch_task(proxy: Proxy) {
     let kv_store = proxy.kv_store.clone();
     let certbot = proxy.certbot.clone();
 
-    // Track known domains to detect additions
-    let known_domains: std::sync::Arc<std::sync::Mutex<std::collections::HashSet<String>>> =
-        std::sync::Arc::new(std::sync::Mutex::new(
-            kv_store
-                .list_zt_domain_configs()
-                .into_iter()
-                .map(|c| c.domain)
-                .collect(),
-        ));
-
     let mut rx = kv_store.watch_zt_domain_configs();
     tokio::spawn(async move {
+        // Track known domains to detect additions
+        let mut known_domains = kv_store
+            .list_zt_domain_configs()
+            .into_iter()
+            .map(|c| c.domain)
+            .collect::<HashSet<_>>();
+
         loop {
             if rx.changed().await.is_err() {
                 break;
             }
 
             // Get current domains
-            let current_domains: std::collections::HashSet<String> = kv_store
+            let current_domains: HashSet<String> = kv_store
                 .list_zt_domain_configs()
                 .into_iter()
                 .map(|c| c.domain)
                 .collect();
 
             // Find newly added domains
-            let mut known = known_domains.lock().unwrap();
             let new_domains: Vec<String> = current_domains
                 .iter()
-                .filter(|d| !known.contains(*d))
+                .filter(|d| !known_domains.contains(*d))
                 .cloned()
                 .collect();
 
             // Update known domains
-            *known = current_domains;
-            drop(known);
+            known_domains = current_domains;
 
             // Trigger renewal for new domains
             for domain in new_domains {

@@ -21,9 +21,6 @@ impl std::ops::Deref for TestState {
 async fn create_test_state() -> TestState {
     let figment = load_config_figment(None);
     let mut config = figment.focus("core").extract::<Config>().unwrap();
-    let cargo_dir = env!("CARGO_MANIFEST_DIR");
-    config.proxy.cert_chain = format!("{cargo_dir}/assets/cert.pem");
-    config.proxy.cert_key = format!("{cargo_dir}/assets/cert.key");
     let temp_dir = TempDir::new().expect("failed to create temp dir");
     config.sync.data_dir = temp_dir.path().to_string_lossy().to_string();
     let options = ProxyOptions {

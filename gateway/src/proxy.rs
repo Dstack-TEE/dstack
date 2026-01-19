@@ -11,6 +11,7 @@ use std::{
 };
 
 use anyhow::{bail, Context, Result};
+use or_panic::ResultOrPanic;
 use sni::extract_sni;
 pub(crate) use tls_terminate::create_acceptor_with_cert_resolver;
 use tokio::{
@@ -212,14 +213,14 @@ pub fn start(config: ProxyConfig, app_state: Proxy) -> Result<()> {
             let rt = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
-                .expect("Failed to build Tokio runtime");
+                .or_panic("Failed to build Tokio runtime");
 
             let worker_rt = tokio::runtime::Builder::new_multi_thread()
                 .thread_name("proxy-worker")
                 .enable_all()
                 .worker_threads(config.workers)
                 .build()
-                .expect("Failed to build Tokio runtime");
+                .or_panic("Failed to build Tokio runtime");
 
             // Run the proxy_main function in this runtime
             if let Err(err) = rt.block_on(proxy_main(&worker_rt, &config, app_state)) {
@@ -239,8 +240,6 @@ mod tests {
 
     #[test]
     fn test_parse_destination() {
-        let base_domain = ".example.com";
-
         // Test basic app_id only
         let result = parse_dst_info("myapp").unwrap();
         assert_eq!(result.app_id, "myapp");
