@@ -17,7 +17,8 @@
 //! - `global/certbot_config` → GlobalCertbotConfig
 //! - `cert/{domain}/config` → ZtDomainConfig
 //! - `cert/{domain}/data` → CertData
-//! - `cert/{domain}/acme` → AcmeCredentials (ACME account for this domain)
+//! - `global/acme_credentials` → CertCredentials (shared ACME account)
+//! - `global/acme_attestation` → AcmeAttestation (TDX quote of ACME account URI)
 //! - `cert/{domain}/lock` → CertRenewLock
 //! - `cert/{domain}/attestation/latest` → CertAttestation
 //! - `cert/{domain}/attestation/{timestamp}` → CertAttestation (history)
@@ -73,6 +74,19 @@ pub struct NodeData {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CertCredentials {
     pub acme_credentials: String,
+}
+
+/// ACME account attestation (TDX Quote of account URI)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AcmeAttestation {
+    /// ACME account URI
+    pub account_uri: String,
+    /// TDX Quote (hex encoded)
+    pub quote: String,
+    /// Node that generated this attestation
+    pub generated_by: NodeId,
+    /// Timestamp when this attestation was generated
+    pub generated_at: u64,
 }
 
 /// Certificate data (cert + key)
@@ -202,6 +216,8 @@ pub mod keys {
     pub const DNS_CRED_PREFIX: &str = "dns_cred/";
     pub const DNS_CRED_DEFAULT: &str = "dns_cred_default";
     pub const GLOBAL_CERTBOT_CONFIG: &str = "global/certbot_config";
+    pub const GLOBAL_ACME_CREDENTIALS: &str = "global/acme_credentials";
+    pub const GLOBAL_ACME_ATTESTATION: &str = "global/acme_attestation";
 
     pub fn inst(instance_id: &str) -> String {
         format!("{INST_PREFIX}{instance_id}")
@@ -264,11 +280,6 @@ pub mod keys {
     /// Key for domain certificate data (cert + key)
     pub fn cert_data(domain: &str) -> String {
         format!("{CERT_PREFIX}{domain}/data")
-    }
-
-    /// Key for domain ACME credentials
-    pub fn cert_acme(domain: &str) -> String {
-        format!("{CERT_PREFIX}{domain}/acme")
     }
 
     /// Key for domain certificate renew lock
@@ -855,18 +866,31 @@ impl KvStore {
             .collect()
     }
 
-    // ==================== ACME Credentials ====================
+    // ==================== Global ACME Credentials ====================
 
-    /// Get ACME credentials for a domain
-    pub fn get_cert_acme(&self, domain: &str) -> Option<CertCredentials> {
-        self.persistent.read().decode(&keys::cert_acme(domain))
+    /// Get global ACME credentials (shared across all domains)
+    pub fn get_acme_credentials(&self) -> Option<CertCredentials> {
+        self.persistent.read().decode(keys::GLOBAL_ACME_CREDENTIALS)
     }
 
-    /// Save ACME credentials for a domain
-    pub fn save_cert_acme(&self, domain: &str, creds: &CertCredentials) -> Result<()> {
+    /// Save global ACME credentials
+    pub fn save_acme_credentials(&self, creds: &CertCredentials) -> Result<()> {
         self.persistent
             .write()
-            .put_encoded(keys::cert_acme(domain), creds)?;
+            .put_encoded(keys::GLOBAL_ACME_CREDENTIALS.to_string(), creds)?;
+        Ok(())
+    }
+
+    /// Get global ACME attestation (TDX quote of account URI)
+    pub fn get_acme_attestation(&self) -> Option<AcmeAttestation> {
+        self.persistent.read().decode(keys::GLOBAL_ACME_ATTESTATION)
+    }
+
+    /// Save global ACME attestation
+    pub fn save_acme_attestation(&self, attestation: &AcmeAttestation) -> Result<()> {
+        self.persistent
+            .write()
+            .put_encoded(keys::GLOBAL_ACME_ATTESTATION.to_string(), attestation)?;
         Ok(())
     }
 

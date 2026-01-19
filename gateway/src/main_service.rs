@@ -333,11 +333,9 @@ impl Proxy {
 
     /// Get ACME info for all managed domains (or a specific domain)
     pub(crate) fn acme_info(&self, domain: Option<&str>) -> Result<AcmeInfoResponse> {
-        let config = self.lock().config.clone();
         let kv_store = self.kv_store.clone();
 
         let mut quoted_hist_keys = vec![];
-        let mut active_cert = String::new();
 
         // Get domains to query
         let domains: Vec<String> = match domain {
@@ -349,6 +347,12 @@ impl Proxy {
                 .collect(),
         };
 
+        // Get account_uri and account_quote from global ACME attestation
+        let (account_uri, account_quote) = kv_store
+            .get_acme_attestation()
+            .map(|att| (att.account_uri, att.quote))
+            .unwrap_or_default();
+
         for domain in &domains {
             // Get all attestations for this domain
             let attestations = kv_store.list_cert_attestations(domain);
@@ -358,23 +362,11 @@ impl Proxy {
                     quote: att.quote,
                 });
             }
-
-            // Get active certificate
-            if let Some(cert_data) = kv_store.get_cert_data(domain) {
-                if active_cert.is_empty() {
-                    active_cert = cert_data.cert_pem;
-                }
-            }
         }
-
-        let (base_domain, _) = self.kv_store.get_best_zt_domain().unwrap_or_default();
         Ok(AcmeInfoResponse {
-            account_uri: String::new(),   // Stored per-domain in KvStore now
-            hist_keys: vec![],            // Deprecated, use quoted_hist_keys
-            account_quote: String::new(), // Deprecated
+            account_uri,
+            account_quote,
             quoted_hist_keys,
-            active_cert,
-            base_domain,
         })
     }
 

@@ -469,8 +469,8 @@ SPDX-License-Identifier: Apache-2.0
             <td>Historical Certificate Public Keys</td>
             <td>
                 <div class="key-list">
-                    {% for key in acme_info.hist_keys %}
-                    <input type="text" value="{{ key|hex }}" readonly>
+                    {% for key in acme_info.quoted_hist_keys %}
+                    <input type="text" value="{{ key.public_key|hex }}" readonly>
                     {% endfor %}
                 </div>
             </td>

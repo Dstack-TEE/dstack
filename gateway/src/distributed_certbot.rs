@@ -16,7 +16,10 @@ use ra_tls::rcgen::KeyPair;
 use tracing::{error, info, warn};
 
 use crate::cert_store::CertResolver;
-use crate::kv::{CertAttestation, CertCredentials, CertData, DnsProvider, KvStore, ZtDomainConfig};
+use crate::kv::{
+    AcmeAttestation, CertAttestation, CertCredentials, CertData, DnsProvider, KvStore,
+    ZtDomainConfig,
+};
 
 /// Lock timeout for certificate renewal (10 minutes)
 const RENEW_LOCK_TIMEOUT_SECS: u64 = 600;
@@ -311,10 +314,10 @@ impl DistributedCertBot {
             &config.acme_url
         };
 
-        // Try to load credentials from KvStore
-        if let Some(creds) = self.kv_store.get_cert_acme(domain) {
+        // Try to load global ACME credentials from KvStore
+        if let Some(creds) = self.kv_store.get_acme_credentials() {
             if acme_url_matches(&creds.acme_credentials, acme_url) {
-                info!(domain, "loaded account credentials from KvStore");
+                info!("loaded global ACME account credentials from KvStore");
                 return AcmeClient::load(
                     dns01_client,
                     &creds.acme_credentials,
@@ -324,14 +327,11 @@ impl DistributedCertBot {
                 .await
                 .context("failed to load ACME client from KvStore credentials");
             }
-            warn!(
-                domain,
-                "URL mismatch in KvStore credentials, will create new account"
-            );
+            warn!("ACME URL mismatch in KvStore credentials, will create new account");
         }
 
-        // Create new account
-        info!(domain, "creating new account at {acme_url}");
+        // Create new global ACME account
+        info!("creating new global ACME account at {acme_url}");
         let client = AcmeClient::new_account(
             acme_url,
             dns01_client,
@@ -345,15 +345,42 @@ impl DistributedCertBot {
             .dump_credentials()
             .context("failed to dump ACME credentials")?;
 
-        // Save to KvStore
-        self.kv_store.save_cert_acme(
-            domain,
-            &CertCredentials {
-                acme_credentials: creds_json,
-            },
-        )?;
+        // Save global ACME credentials to KvStore
+        self.kv_store.save_acme_credentials(&CertCredentials {
+            acme_credentials: creds_json.clone(),
+        })?;
+
+        // Generate and save ACME account attestation
+        if let Some(account_uri) = extract_account_uri(&creds_json) {
+            self.generate_and_save_acme_attestation(&account_uri)
+                .await?;
+        }
 
         Ok(client)
+    }
+
+    async fn generate_and_save_acme_attestation(&self, account_uri: &str) -> Result<()> {
+        // Generate TDX quote for the account URI
+        let todo = "Use dstack agent";
+        let quote = match generate_tdx_quote(account_uri.as_bytes()).await {
+            Ok(q) => q,
+            Err(e) => {
+                warn!("failed to generate TDX quote for ACME account: {e}");
+                // Don't fail if attestation fails (might be running in non-TDX environment)
+                return Ok(());
+            }
+        };
+
+        let attestation = AcmeAttestation {
+            account_uri: account_uri.to_string(),
+            quote,
+            generated_by: self.kv_store.my_node_id(),
+            generated_at: now_secs(),
+        };
+
+        self.kv_store.save_acme_attestation(&attestation)?;
+        info!("ACME account attestation saved to KvStore");
+        Ok(())
     }
 
     fn save_cert_to_kvstore(
@@ -426,6 +453,19 @@ fn acme_url_matches(credentials_json: &str, expected_url: &str) -> bool {
     serde_json::from_str::<Creds>(credentials_json)
         .map(|c| c.acme_url == expected_url)
         .unwrap_or(false)
+}
+
+/// Extract account_id (URI) from ACME credentials JSON
+fn extract_account_uri(credentials_json: &str) -> Option<String> {
+    #[derive(serde::Deserialize)]
+    struct Creds {
+        #[serde(default)]
+        account_id: String,
+    }
+    serde_json::from_str::<Creds>(credentials_json)
+        .ok()
+        .filter(|c| !c.account_id.is_empty())
+        .map(|c| c.account_id)
 }
 
 /// Generate TDX quote for the given data (certificate public key)
