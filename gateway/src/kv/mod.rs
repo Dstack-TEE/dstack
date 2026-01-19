@@ -277,11 +277,6 @@ pub mod keys {
         format!("{DNS_CRED_PREFIX}{cred_id}")
     }
 
-    /// Parse cred_id from dns_cred/{cred_id} key
-    pub fn parse_dns_cred_key(key: &str) -> Option<&str> {
-        key.strip_prefix(DNS_CRED_PREFIX)
-    }
-
     // ==================== Certificate keys (per domain) ====================
 
     /// Key for ZT-Domain configuration
@@ -730,11 +725,6 @@ impl KvStore {
         self.get_dns_credential(&cred_id)
     }
 
-    /// Watch for DNS credential changes
-    pub fn watch_dns_credentials(&self) -> watch::Receiver<()> {
-        self.persistent.watch_prefix(keys::DNS_CRED_PREFIX)
-    }
-
     // ==================== Global Certbot Config ====================
 
     /// Get global certbot configuration (returns default if not set)
@@ -846,12 +836,6 @@ impl KvStore {
         self.persistent
             .write()
             .put_encoded(keys::cert_data(domain), data)?;
-        Ok(())
-    }
-
-    /// Delete certificate data for a domain
-    pub fn delete_cert_data(&self, domain: &str) -> Result<()> {
-        self.persistent.write().delete(keys::cert_data(domain))?;
         Ok(())
     }
 
@@ -999,10 +983,5 @@ impl KvStore {
     /// Watch for certificate data changes (any domain)
     pub fn watch_all_certs(&self) -> watch::Receiver<()> {
         self.persistent.watch_prefix(keys::CERT_PREFIX)
-    }
-
-    /// Watch for certificate data changes (specific domain)
-    pub fn watch_cert(&self, domain: &str) -> watch::Receiver<()> {
-        self.persistent.watch_prefix(&keys::cert_data(domain))
     }
 }
