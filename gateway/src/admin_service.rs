@@ -8,7 +8,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use anyhow::{bail, Context, Result};
 use dstack_gateway_rpc::{
     admin_server::{AdminRpc, AdminServer},
-    AddZtDomainRequest, CertAttestationInfo, CertbotConfigResponse, CreateDnsCredentialRequest,
+    CertAttestationInfo, CertbotConfigResponse, CreateDnsCredentialRequest,
     DeleteDnsCredentialRequest, DeleteZtDomainRequest, DnsCredentialInfo,
     GetDefaultDnsCredentialResponse, GetDnsCredentialRequest, GetInfoRequest, GetInfoResponse,
     GetInstanceHandshakesRequest, GetInstanceHandshakesResponse, GetMetaResponse,
@@ -18,8 +18,8 @@ use dstack_gateway_rpc::{
     PeerSyncStatus as ProtoPeerSyncStatus, RenewCertResponse, RenewZtDomainCertRequest,
     RenewZtDomainCertResponse, SetCertbotConfigRequest, SetDefaultDnsCredentialRequest,
     SetNodeStatusRequest, SetNodeUrlRequest, StatusResponse, StoreSyncStatus,
-    UpdateDnsCredentialRequest, UpdateZtDomainRequest, WaveKvStatusResponse, ZtDomainCertStatus,
-    ZtDomainInfo,
+    UpdateDnsCredentialRequest, WaveKvStatusResponse, ZtDomainCertStatus,
+    ZtDomainConfig as ProtoZtDomainConfig, ZtDomainInfo,
 };
 use ra_rpc::{CallContext, RpcCall};
 use tracing::info;
@@ -465,7 +465,7 @@ impl AdminRpc for AdminRpcHandler {
         Ok(zt_domain_to_proto(config, kv_store, cert_resolver))
     }
 
-    async fn add_zt_domain(self, request: AddZtDomainRequest) -> Result<ZtDomainInfo> {
+    async fn add_zt_domain(self, request: ProtoZtDomainConfig) -> Result<ZtDomainInfo> {
         let kv_store = self.state.kv_store();
         let cert_resolver = &self.state.cert_resolver;
 
@@ -474,24 +474,7 @@ impl AdminRpc for AdminRpcHandler {
             bail!("ZT-Domain config already exists: {}", request.domain);
         }
 
-        // Validate DNS credential if specified
-        if !request.dns_cred_id.is_empty() {
-            kv_store
-                .get_dns_credential(&request.dns_cred_id)
-                .context("specified dns credential not found")?;
-        }
-
-        let config = ZtDomainConfig {
-            domain: request.domain.clone(),
-            dns_cred_id: if request.dns_cred_id.is_empty() {
-                None
-            } else {
-                Some(request.dns_cred_id)
-            },
-            port: request.port as u16,
-            node: request.node,
-            priority: request.priority,
-        };
+        let config = proto_to_zt_domain_config(&request, kv_store)?;
 
         kv_store.save_zt_domain_config(&config)?;
         info!("Added ZT-Domain config: {}", config.domain);
@@ -499,34 +482,16 @@ impl AdminRpc for AdminRpcHandler {
         Ok(zt_domain_to_proto(config, kv_store, cert_resolver))
     }
 
-    async fn update_zt_domain(self, request: UpdateZtDomainRequest) -> Result<ZtDomainInfo> {
+    async fn update_zt_domain(self, request: ProtoZtDomainConfig) -> Result<ZtDomainInfo> {
         let kv_store = self.state.kv_store();
         let cert_resolver = &self.state.cert_resolver;
 
         // Check if config exists
-        let old_config = kv_store
+        kv_store
             .get_zt_domain_config(&request.domain)
             .context("ZT-Domain config not found")?;
 
-        // Validate DNS credential if specified
-        if !request.dns_cred_id.is_empty() {
-            kv_store
-                .get_dns_credential(&request.dns_cred_id)
-                .context("specified dns credential not found")?;
-        }
-
-        // Replace all fields (keep created_at from old config)
-        let config = ZtDomainConfig {
-            domain: request.domain.clone(),
-            dns_cred_id: if request.dns_cred_id.is_empty() {
-                None
-            } else {
-                Some(request.dns_cred_id)
-            },
-            port: request.port as u16,
-            node: request.node,
-            priority: request.priority,
-        };
+        let config = proto_to_zt_domain_config(&request, kv_store)?;
 
         kv_store.save_zt_domain_config(&config)?;
         info!("Updated ZT-Domain config: {}", config.domain);
@@ -729,6 +694,28 @@ fn dns_cred_to_proto(cred: DnsCredential) -> DnsCredentialInfo {
     }
 }
 
+/// Convert proto ZtDomainConfig to internal ZtDomainConfig
+fn proto_to_zt_domain_config(
+    proto: &ProtoZtDomainConfig,
+    kv_store: &crate::kv::KvStore,
+) -> Result<ZtDomainConfig> {
+    // Validate DNS credential if specified
+    if let Some(ref cred_id) = proto.dns_cred_id {
+        kv_store
+            .get_dns_credential(cred_id)
+            .context("specified dns credential not found")?;
+    }
+
+    Ok(ZtDomainConfig {
+        domain: proto.domain.clone(),
+        dns_cred_id: proto.dns_cred_id.clone(),
+        port: proto.port.try_into().context("port out of range")?,
+        node: proto.node,
+        priority: proto.priority,
+    })
+}
+
+/// Convert internal ZtDomainConfig to proto ZtDomainInfo (with cert status)
 fn zt_domain_to_proto(
     config: ZtDomainConfig,
     kv_store: &crate::kv::KvStore,
@@ -738,7 +725,7 @@ fn zt_domain_to_proto(
     let cert_data = kv_store.get_cert_data(&config.domain);
     let loaded_in_memory = cert_resolver.has_cert(&config.domain);
 
-    let status = Some(ZtDomainCertStatus {
+    let cert_status = Some(ZtDomainCertStatus {
         has_cert: cert_data.is_some(),
         not_after: cert_data.as_ref().map(|d| d.not_after).unwrap_or(0),
         issued_by: cert_data.as_ref().map(|d| d.issued_by).unwrap_or(0),
@@ -747,11 +734,13 @@ fn zt_domain_to_proto(
     });
 
     ZtDomainInfo {
-        domain: config.domain,
-        dns_cred_id: config.dns_cred_id,
-        status,
-        port: config.port as u32,
-        node: config.node,
-        priority: config.priority,
+        config: Some(ProtoZtDomainConfig {
+            domain: config.domain,
+            dns_cred_id: config.dns_cred_id,
+            port: config.port.into(),
+            node: config.node,
+            priority: config.priority,
+        }),
+        cert_status,
     }
 }

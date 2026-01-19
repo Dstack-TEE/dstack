@@ -402,10 +402,10 @@ service Admin {
   rpc ListZtDomains(google.protobuf.Empty) returns (ListZtDomainsResponse) {}
   // Get a ZT-Domain configuration and status
   rpc GetZtDomain(GetZtDomainRequest) returns (ZtDomainInfo) {}
-  // Add a new ZT-Domain
-  rpc AddZtDomain(AddZtDomainRequest) returns (ZtDomainInfo) {}
-  // Update a ZT-Domain configuration
-  rpc UpdateZtDomain(UpdateZtDomainRequest) returns (ZtDomainInfo) {}
+  // Add a new ZT-Domain (config.domain must not exist)
+  rpc AddZtDomain(ZtDomainConfig) returns (ZtDomainInfo) {}
+  // Update a ZT-Domain configuration (config.domain must exist)
+  rpc UpdateZtDomain(ZtDomainConfig) returns (ZtDomainInfo) {}
   // Delete a ZT-Domain configuration
   rpc DeleteZtDomain(DeleteZtDomainRequest) returns (google.protobuf.Empty) {}
   // Manually trigger certificate renewal for a ZT-Domain
@@ -500,20 +500,26 @@ message SetDefaultDnsCredentialRequest {
 
 // ==================== ZT-Domain Messages ====================
 
-// ZT-Domain information
-message ZtDomainInfo {
+// ZT-Domain configuration (shared by Add/Update/Info)
+message ZtDomainConfig {
   // Base domain name (e.g., "example.com", certificate will be issued for "*.example.com")
   string domain = 1;
-  // DNS credential ID (empty = use default)
+  // DNS credential ID (None = use default)
   optional string dns_cred_id = 2;
-  // Certificate status
-  ZtDomainCertStatus status = 4;
   // Port this domain serves on (e.g., 443)
-  uint32 port = 5;
+  uint32 port = 3;
   // Node binding (None = any node can serve this domain)
-  optional uint32 node = 6;
+  optional uint32 node = 4;
   // Priority for default base_domain selection (higher = preferred)
-  int32 priority = 7;
+  int32 priority = 5;
+}
+
+// ZT-Domain information (config + certificate status)
+message ZtDomainInfo {
+  // Domain configuration
+  ZtDomainConfig config = 1;
+  // Certificate status
+  ZtDomainCertStatus cert_status = 2;
 }
 
 // ZT-Domain certificate status
@@ -538,34 +544,6 @@ message ListZtDomainsResponse {
 // Get ZT-Domain request
 message GetZtDomainRequest {
   string domain = 1;
-}
-
-// Add ZT-Domain request
-message AddZtDomainRequest {
-  // Base domain name (e.g., "example.com", certificate will be issued for "*.example.com")
-  string domain = 1;
-  // DNS credential ID (empty = use default)
-  string dns_cred_id = 2;
-  // Port this domain serves on (e.g., 443, default 0)
-  uint32 port = 3;
-  // Node binding (None = any node can serve this domain)
-  optional uint32 node = 4;
-  // Priority for default base_domain selection (higher = preferred, default 0)
-  int32 priority = 5;
-}
-
-// Update ZT-Domain request (replaces all fields)
-message UpdateZtDomainRequest {
-  // Base domain name (must match existing domain)
-  string domain = 1;
-  // DNS credential ID (empty = use default)
-  string dns_cred_id = 2;
-  // Port this domain serves on (e.g., 443)
-  uint32 port = 3;
-  // Node binding (None = any node can serve this domain)
-  optional uint32 node = 4;
-  // Priority for default base_domain selection (higher = preferred)
-  int32 priority = 5;
 }
 
 // Delete ZT-Domain request

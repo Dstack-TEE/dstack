@@ -1073,18 +1073,19 @@ SPDX-License-Identifier: Apache-2.0
                     </tr>
             `;
 
-            for (const domain of domains) {
-                const status = domain.status || {};
-                const hasCert = status.has_cert;
-                const expiresAt = status.not_after ? new Date(status.not_after * 1000).toLocaleDateString() : 'N/A';
-                const dnsCredName = getDnsCredName(domain.dns_cred_id);
-                const portDisplay = domain.port ? domain.port : '-';
-                const nodeDisplay = (domain.node !== undefined && domain.node !== null) ? `Node ${domain.node}` : 'Any';
-                const priorityDisplay = domain.priority || 0;
+            for (const item of domains) {
+                const config = item.config || {};
+                const certStatus = item.cert_status || {};
+                const hasCert = certStatus.has_cert;
+                const expiresAt = certStatus.not_after ? new Date(certStatus.not_after * 1000).toLocaleDateString() : 'N/A';
+                const dnsCredName = getDnsCredName(config.dns_cred_id);
+                const portDisplay = config.port ? config.port : '-';
+                const nodeDisplay = (config.node !== undefined && config.node !== null) ? `Node ${config.node}` : 'Any';
+                const priorityDisplay = config.priority || 0;
 
                 html += `
                     <tr>
-                        <td>*.${escapeHtml(domain.domain)}</td>
+                        <td>*.${escapeHtml(config.domain)}</td>
                         <td>${portDisplay}</td>
                         <td>${nodeDisplay}</td>
                         <td>${priorityDisplay}</td>
@@ -1094,14 +1095,14 @@ SPDX-License-Identifier: Apache-2.0
                                 <span class="cert-status-item ${hasCert ? 'has-cert' : 'no-cert'}">
                                     ${hasCert ? '✓ Certificate loaded' : '✗ No certificate'}
                                 </span>
-                                ${status.loaded_in_memory ? '<span class="cert-status-item has-cert">✓ In memory</span>' : ''}
+                                ${certStatus.loaded_in_memory ? '<span class="cert-status-item has-cert">✓ In memory</span>' : ''}
                             </div>
                         </td>
-                        <td class="timestamp" data-original="${expiresAt}">${status.not_after || 0}</td>
+                        <td class="timestamp" data-original="${expiresAt}">${certStatus.not_after || 0}</td>
                         <td>
-                            <button class="action-btn warning" onclick="renewZtDomainCert('${escapeHtml(domain.domain)}', false)">Renew</button>
-                            <button class="action-btn secondary" onclick="renewZtDomainCert('${escapeHtml(domain.domain)}', true)">Force Renew</button>
-                            <button class="action-btn danger" onclick="deleteZtDomain('${escapeHtml(domain.domain)}')">Delete</button>
+                            <button class="action-btn warning" onclick="renewZtDomainCert('${escapeHtml(config.domain)}', false)">Renew</button>
+                            <button class="action-btn secondary" onclick="renewZtDomainCert('${escapeHtml(config.domain)}', true)">Force Renew</button>
+                            <button class="action-btn danger" onclick="deleteZtDomain('${escapeHtml(config.domain)}')">Delete</button>
                         </td>
                     </tr>
                 `;
