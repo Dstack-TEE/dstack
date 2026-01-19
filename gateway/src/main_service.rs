@@ -59,7 +59,7 @@ impl Deref for Proxy {
 pub struct ProxyInner {
     pub(crate) config: Arc<Config>,
     /// Multi-domain certbot (from KvStore DNS credentials and domain configs)
-    pub(crate) multi_domain_certbot: Arc<DistributedCertBot>,
+    pub(crate) certbot: Arc<DistributedCertBot>,
     my_app_id: Option<Vec<u8>>,
     state: Mutex<ProxyState>,
     pub(crate) notify_state_updated: Notify,
@@ -232,12 +232,12 @@ impl ProxyInner {
         }
 
         // Create multi-domain certbot (uses KvStore configs for DNS credentials and domains)
-        let multi_domain_certbot = Arc::new(DistributedCertBot::new(
+        let certbot = Arc::new(DistributedCertBot::new(
             kv_store.clone(),
             cert_resolver.clone(),
         ));
         // Initialize any configured domains
-        if let Err(err) = multi_domain_certbot.init_all().await {
+        if let Err(err) = certbot.init_all().await {
             warn!("Failed to initialize multi-domain certbot: {}", err);
         }
 
@@ -263,7 +263,7 @@ impl ProxyInner {
             acceptor,
             h2_acceptor,
             cert_resolver,
-            multi_domain_certbot,
+            certbot,
             kv_store,
             wavekv_sync,
         })
@@ -288,6 +288,7 @@ impl Proxy {
         start_wavekv_watch_task(self.clone()).context("Failed to start WaveKV watch task")?;
         start_certbot_task(self.clone()).await;
         start_cert_store_watch_task(self.clone());
+        start_zt_domain_watch_task(self.clone());
         Ok(())
     }
 
@@ -316,13 +317,13 @@ impl Proxy {
     pub(crate) async fn renew_cert(&self, domain: Option<&str>, force: bool) -> Result<bool> {
         match domain {
             Some(domain) => self
-                .multi_domain_certbot
+                .certbot
                 .try_renew(domain, force)
                 .await
                 .context("failed to renew cert"),
             None => {
                 // Renew all domains
-                self.multi_domain_certbot
+                self.certbot
                     .try_renew_all()
                     .await
                     .context("failed to renew all certs")?;
@@ -476,6 +477,12 @@ async fn start_certbot_task(proxy: Proxy) {
 
     // Periodic renewal task for all domains
     tokio::spawn(async move {
+        // Run once at startup to check for any pending renewals
+        info!("running initial certificate renewal check");
+        if let Err(err) = proxy.renew_cert(None, false).await {
+            error!("failed initial certificate renewal: {err}");
+        }
+
         loop {
             // Get current config from KV store (allows dynamic updates)
             let renew_interval = proxy.kv_store.get_certbot_config().renew_interval;
@@ -514,6 +521,71 @@ fn start_cert_store_watch_task(proxy: Proxy) {
         }
     });
     info!("CertStore watch task started");
+}
+
+/// Watch for ZT-Domain config changes and auto-renew certificates
+fn start_zt_domain_watch_task(proxy: Proxy) {
+    let kv_store = proxy.kv_store.clone();
+    let certbot = proxy.certbot.clone();
+
+    // Track known domains to detect additions
+    let known_domains: std::sync::Arc<std::sync::Mutex<std::collections::HashSet<String>>> =
+        std::sync::Arc::new(std::sync::Mutex::new(
+            kv_store
+                .list_zt_domain_configs()
+                .into_iter()
+                .map(|c| c.domain)
+                .collect(),
+        ));
+
+    let mut rx = kv_store.watch_zt_domain_configs();
+    tokio::spawn(async move {
+        loop {
+            if rx.changed().await.is_err() {
+                break;
+            }
+
+            // Get current domains
+            let current_domains: std::collections::HashSet<String> = kv_store
+                .list_zt_domain_configs()
+                .into_iter()
+                .map(|c| c.domain)
+                .collect();
+
+            // Find newly added domains
+            let mut known = known_domains.lock().unwrap();
+            let new_domains: Vec<String> = current_domains
+                .iter()
+                .filter(|d| !known.contains(*d))
+                .cloned()
+                .collect();
+
+            // Update known domains
+            *known = current_domains;
+            drop(known);
+
+            // Trigger renewal for new domains
+            for domain in new_domains {
+                info!("ZT-Domain added: {domain}, attempting certificate request...");
+                let certbot = certbot.clone();
+                tokio::spawn(async move {
+                    match certbot.try_renew(&domain, false).await {
+                        Ok(renewed) => {
+                            if renewed {
+                                info!("cert[{domain}]: successfully issued/renewed");
+                            } else {
+                                info!("cert[{domain}]: renewal not needed or another node is handling it");
+                            }
+                        }
+                        Err(e) => {
+                            warn!("cert[{domain}]: auto-renewal failed: {e}");
+                        }
+                    }
+                });
+            }
+        }
+    });
+    info!("ZT-Domain watch task started");
 }
 
 async fn start_wavekv_sync_task(proxy: Proxy, wavekv_sync: Arc<WaveKvSyncService>) {

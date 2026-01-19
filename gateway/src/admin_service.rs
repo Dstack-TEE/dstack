@@ -523,7 +523,7 @@ impl AdminRpc for AdminRpcHandler {
         self,
         request: RenewZtDomainCertRequest,
     ) -> Result<RenewZtDomainCertResponse> {
-        let certbot = &self.state.multi_domain_certbot;
+        let certbot = &self.state.certbot;
         let renewed = certbot
             .try_renew(&request.domain, request.force)
             .await
