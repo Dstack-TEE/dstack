@@ -89,11 +89,6 @@ impl CertStore {
         self.cert_data.keys().cloned().collect()
     }
 
-    /// Check if a certificate can be resolved for a given SNI hostname
-    pub fn has_cert_for_sni(&self, sni: &str) -> bool {
-        self.resolve_cert(sni).is_some()
-    }
-
     /// Check if a wildcard certificate exists for a domain
     pub fn contains_wildcard(&self, base_domain: &str) -> bool {
         self.wildcard_certs.contains_key(base_domain)

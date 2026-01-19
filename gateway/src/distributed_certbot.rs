@@ -12,6 +12,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{bail, Context, Result};
 use certbot::{AcmeClient, Dns01Client};
+use dstack_guest_agent_rpc::RawQuoteArgs;
+use ra_tls::attestation::QuoteContentType;
 use ra_tls::rcgen::KeyPair;
 use tracing::{error, info, warn};
 
@@ -360,20 +362,45 @@ impl DistributedCertBot {
     }
 
     async fn generate_and_save_acme_attestation(&self, account_uri: &str) -> Result<()> {
-        // Generate TDX quote for the account URI
-        let todo = "Use dstack agent";
-        let quote = match generate_tdx_quote(account_uri.as_bytes()).await {
-            Ok(q) => q,
+        let agent = match crate::dstack_agent() {
+            Ok(a) => a,
             Err(e) => {
-                warn!("failed to generate TDX quote for ACME account: {e}");
-                // Don't fail if attestation fails (might be running in non-TDX environment)
+                warn!("failed to create dstack agent: {e}");
                 return Ok(());
+            }
+        };
+
+        let report_data = QuoteContentType::Custom("acme-account")
+            .to_report_data(account_uri.as_bytes())
+            .to_vec();
+
+        // Get quote
+        let quote = match agent
+            .get_quote(RawQuoteArgs {
+                report_data: report_data.clone(),
+            })
+            .await
+        {
+            Ok(resp) => serde_json::to_string(&resp).unwrap_or_default(),
+            Err(e) => {
+                warn!("failed to get TDX quote for ACME account: {e}");
+                return Ok(());
+            }
+        };
+
+        // Get attestation
+        let attestation_str = match agent.attest(RawQuoteArgs { report_data }).await {
+            Ok(resp) => serde_json::to_string(&resp).unwrap_or_default(),
+            Err(e) => {
+                warn!("failed to get attestation for ACME account: {e}");
+                String::new()
             }
         };
 
         let attestation = AcmeAttestation {
             account_uri: account_uri.to_string(),
             quote,
+            attestation: attestation_str,
             generated_by: self.kv_store.my_node_id(),
             generated_at: now_secs(),
         };
@@ -405,21 +432,45 @@ impl DistributedCertBot {
         domain: &str,
         public_key_der: &[u8],
     ) -> Result<()> {
-        // Generate TDX quote for the public key
-        let todo = "Use dstack agent";
-        let quote = match generate_tdx_quote(public_key_der).await {
-            Ok(q) => q,
+        let agent = match crate::dstack_agent() {
+            Ok(a) => a,
+            Err(e) => {
+                warn!(domain, "failed to create dstack agent: {e}");
+                return Ok(());
+            }
+        };
+
+        let report_data = QuoteContentType::Custom("zt-cert")
+            .to_report_data(public_key_der)
+            .to_vec();
+
+        // Get quote
+        let quote = match agent
+            .get_quote(RawQuoteArgs {
+                report_data: report_data.clone(),
+            })
+            .await
+        {
+            Ok(resp) => serde_json::to_string(&resp).unwrap_or_default(),
             Err(e) => {
                 warn!(domain, "failed to generate TDX quote: {e}");
-                // Don't fail the certificate process if attestation fails
-                // (might be running in non-TDX environment)
                 return Ok(());
+            }
+        };
+
+        // Get attestation
+        let attestation = match agent.attest(RawQuoteArgs { report_data }).await {
+            Ok(resp) => serde_json::to_string(&resp).unwrap_or_default(),
+            Err(e) => {
+                warn!(domain, "failed to get attestation: {e}");
+                String::new()
             }
         };
 
         let attestation = CertAttestation {
             public_key: public_key_der.to_vec(),
             quote,
+            attestation,
             generated_by: self.kv_store.my_node_id(),
             generated_at: now_secs(),
         };
@@ -466,25 +517,4 @@ fn extract_account_uri(credentials_json: &str) -> Option<String> {
         .ok()
         .filter(|c| !c.account_id.is_empty())
         .map(|c| c.account_id)
-}
-
-/// Generate TDX quote for the given data (certificate public key)
-async fn generate_tdx_quote(data: &[u8]) -> Result<String> {
-    use sha2::{Digest, Sha256};
-
-    // Hash the public key to fit in report data (64 bytes max)
-    let mut hasher = Sha256::new();
-    hasher.update(data);
-    let hash = hasher.finalize();
-
-    // Prepare report data (64 bytes, padded with zeros)
-    let mut report_data = [0u8; 64];
-    report_data[..32].copy_from_slice(&hash);
-
-    // Try to get quote from TDX
-    let (_, quote) =
-        tdx_attest::get_quote(&report_data, None).context("failed to get TDX quote")?;
-
-    // Return as hex-encoded string
-    Ok(hex::encode(&quote))
 }

@@ -77,15 +77,21 @@ pub struct CertCredentials {
 }
 
 /// ACME account attestation (TDX Quote of account URI)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AcmeAttestation {
     /// ACME account URI
     pub account_uri: String,
-    /// TDX Quote (hex encoded)
+    /// TDX Quote (JSON serialized)
+    #[serde(default)]
     pub quote: String,
+    /// Full attestation (JSON serialized)
+    #[serde(default)]
+    pub attestation: String,
     /// Node that generated this attestation
+    #[serde(default)]
     pub generated_by: NodeId,
     /// Timestamp when this attestation was generated
+    #[serde(default)]
     pub generated_at: u64,
 }
 
@@ -107,15 +113,21 @@ pub struct CertRenewLock {
 }
 
 /// Certificate attestation (TDX Quote of certificate public key)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct CertAttestation {
     /// Certificate public key (DER encoded)
     pub public_key: Vec<u8>,
     /// TDX Quote (JSON serialized)
+    #[serde(default)]
     pub quote: String,
+    /// Full attestation (JSON serialized)
+    #[serde(default)]
+    pub attestation: String,
     /// Node that generated this attestation
+    #[serde(default)]
     pub generated_by: NodeId,
     /// Timestamp when this attestation was generated
+    #[serde(default)]
     pub generated_at: u64,
 }
 

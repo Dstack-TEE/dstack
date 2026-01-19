@@ -347,10 +347,10 @@ impl Proxy {
                 .collect(),
         };
 
-        // Get account_uri and account_quote from global ACME attestation
-        let (account_uri, account_quote) = kv_store
+        // Get account_uri, account_quote and account_attestation from global ACME attestation
+        let (account_uri, account_quote, account_attestation) = kv_store
             .get_acme_attestation()
-            .map(|att| (att.account_uri, att.quote))
+            .map(|att| (att.account_uri, att.quote, att.attestation))
             .unwrap_or_default();
 
         for domain in &domains {
@@ -360,12 +360,14 @@ impl Proxy {
                 quoted_hist_keys.push(QuotedPublicKey {
                     public_key: att.public_key,
                     quote: att.quote,
+                    attestation: att.attestation,
                 });
             }
         }
         Ok(AcmeInfoResponse {
             account_uri,
             account_quote,
+            account_attestation,
             quoted_hist_keys,
         })
     }
