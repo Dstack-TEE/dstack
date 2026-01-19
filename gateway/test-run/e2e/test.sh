@@ -26,8 +26,8 @@ GATEWAY_ADMIN="http://gateway-1:9016"
 MOCK_CF_API="http://mock-cf-dns-api:8080"
 PEBBLE_DIR="http://pebble:14000/dir"
 
-# Certificate domains to test
-CERT_DOMAINS="*.test0.local *.test1.local *.test2.local"
+# Certificate domains to test (base domains, certs will be issued for *.domain)
+CERT_DOMAINS="test0.local test1.local test2.local"
 
 # Cloudflare mock settings
 CF_API_TOKEN="test-token"
@@ -98,16 +98,15 @@ wait_for_service() {
 
 # ==================== Domain Helpers ====================
 
-# Extract base domain: *.test0.local -> test0.local
-get_base_domain() {
-    echo "$1" | sed 's/^\*\.//'
-}
-
-# Convert wildcard to test SNI: *.test0.local -> gateway.test0.local
+# Convert base domain to test SNI: test0.local -> gateway.test0.local
 # Uses "gateway" as it's a special app_id that proxies to gateway's own endpoints
 get_test_sni() {
-    local base=$(get_base_domain "$1")
-    echo "gateway.${base}"
+    echo "gateway.${1}"
+}
+
+# Convert base domain to wildcard format for certificate SAN check
+get_wildcard_domain() {
+    echo "*.${1}"
 }
 
 # ==================== Certificate Helpers ====================
@@ -289,8 +288,9 @@ main() {
     log_phase 6 "SNI-based certificate selection"
     for domain in $CERT_DOMAINS; do
         local sni=$(get_test_sni "$domain")
-        run_test "SNI $sni returns $domain cert" \
-            "$(test_sni_cert_selection "$first_proxy" "$sni" "$domain"; echo $?)"
+        local wildcard=$(get_wildcard_domain "$domain")
+        run_test "SNI $sni returns $wildcard cert" \
+            "$(test_sni_cert_selection "$first_proxy" "$sni" "$wildcard"; echo $?)"
     done
 
     # Phase 7: Proxy TLS health

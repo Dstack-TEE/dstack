@@ -182,11 +182,15 @@ impl DistributedCertBot {
         let key_pem = key.serialize_pem();
         let public_key_der = key.public_key_der();
 
-        // Request certificate with timeout
-        info!("requesting new certificate from ACME...");
+        // Request wildcard certificate (domain in config is base domain, cert is *.domain)
+        let wildcard_domain = format!("*.{}", domain);
+        info!(
+            "requesting new certificate from ACME for {}...",
+            wildcard_domain
+        );
         let cert_pem = tokio::time::timeout(
             self.config().renew_timeout,
-            acme_client.request_new_certificate(&key_pem, &[domain.to_string()]),
+            acme_client.request_new_certificate(&key_pem, &[wildcard_domain]),
         )
         .await
         .context("certificate request timed out")?
@@ -232,12 +236,16 @@ impl DistributedCertBot {
             bail!("no current certificate to renew");
         }
 
-        // Renew with new key
-        info!("renewing certificate with new key from ACME...");
+        // Renew with new key (request wildcard certificate)
+        let wildcard_domain = format!("*.{}", domain);
+        info!(
+            "renewing certificate with new key from ACME for {}...",
+            wildcard_domain
+        );
         let new_cert_pem = tokio::time::timeout(
             self.config().renew_timeout,
             // Note: we request a new cert rather than renew, since we have a new key
-            acme_client.request_new_certificate(&key_pem, &[domain.to_string()]),
+            acme_client.request_new_certificate(&key_pem, &[wildcard_domain]),
         )
         .await
         .context("certificate renewal timed out")?

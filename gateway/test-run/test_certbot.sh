@@ -205,7 +205,6 @@ listen_addr = "0.0.0.0"
 listen_port = ${proxy_port}
 tappd_port = 8090
 external_port = ${proxy_port}
-inbound_pp_enabled = false
 EOF
     log_info "Generated certbot_node${node_id}.toml (rpc=${rpc_port}, debug=${debug_port}, proxy=${proxy_port})"
 }

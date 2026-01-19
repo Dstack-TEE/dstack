@@ -654,14 +654,26 @@ SPDX-License-Identifier: Apache-2.0
         <div class="modal">
             <h3>Add ZT-Domain</h3>
             <div class="modal-field">
-                <label>Domain</label>
-                <input type="text" id="domain-name" placeholder="*.app.example.com">
+                <label>Domain (base domain, e.g., app.example.com)</label>
+                <input type="text" id="domain-name" placeholder="app.example.com">
             </div>
             <div class="modal-field">
                 <label>DNS Credential</label>
                 <select id="domain-dns-cred">
                     <option value="">Use Default</option>
                 </select>
+            </div>
+            <div class="modal-field">
+                <label>Port (0 = default)</label>
+                <input type="number" id="domain-port" placeholder="443" min="0" max="65535" value="0">
+            </div>
+            <div class="modal-field">
+                <label>Node Binding (0 = any node)</label>
+                <input type="number" id="domain-node" placeholder="0" min="0" value="0">
+            </div>
+            <div class="modal-field">
+                <label>Priority (higher = preferred as default)</label>
+                <input type="number" id="domain-priority" placeholder="0" value="0">
             </div>
             <div class="modal-actions">
                 <button class="action-btn secondary" onclick="hideModal('add-zt-domain-modal')">Cancel</button>
@@ -1051,6 +1063,9 @@ SPDX-License-Identifier: Apache-2.0
                 <table>
                     <tr>
                         <th>Domain</th>
+                        <th>Port</th>
+                        <th>Node</th>
+                        <th>Priority</th>
                         <th>DNS Credential</th>
                         <th>Status</th>
                         <th>Expires</th>
@@ -1063,10 +1078,16 @@ SPDX-License-Identifier: Apache-2.0
                 const hasCert = status.has_cert;
                 const expiresAt = status.not_after ? new Date(status.not_after * 1000).toLocaleDateString() : 'N/A';
                 const dnsCredName = getDnsCredName(domain.dns_cred_id);
+                const portDisplay = domain.port ? domain.port : '-';
+                const nodeDisplay = (domain.node !== undefined && domain.node !== null) ? `Node ${domain.node}` : 'Any';
+                const priorityDisplay = domain.priority || 0;
 
                 html += `
                     <tr>
-                        <td>${escapeHtml(domain.domain)}</td>
+                        <td>*.${escapeHtml(domain.domain)}</td>
+                        <td>${portDisplay}</td>
+                        <td>${nodeDisplay}</td>
+                        <td>${priorityDisplay}</td>
                         <td>${escapeHtml(dnsCredName)}</td>
                         <td>
                             <div class="cert-status">
@@ -1110,26 +1131,40 @@ SPDX-License-Identifier: Apache-2.0
         function showAddZtDomainModal() {
             document.getElementById('domain-name').value = '';
             document.getElementById('domain-dns-cred').value = '';
+            document.getElementById('domain-port').value = '0';
+            document.getElementById('domain-node').value = '0';
+            document.getElementById('domain-priority').value = '0';
             showModal('add-zt-domain-modal');
         }
 
         async function addZtDomain() {
             const domain = document.getElementById('domain-name').value.trim();
             const dnsCredId = document.getElementById('domain-dns-cred').value;
+            const port = parseInt(document.getElementById('domain-port').value) || 0;
+            const nodeInput = document.getElementById('domain-node').value.trim();
+            const node = nodeInput ? parseInt(nodeInput) : null;
+            const priority = parseInt(document.getElementById('domain-priority').value) || 0;
 
             if (!domain) {
                 showToast('Domain is required', 'error');
                 return;
             }
 
+            const body = {
+                domain: domain,
+                dns_cred_id: dnsCredId,
+                port: port,
+                priority: priority
+            };
+            if (node !== null && node > 0) {
+                body.node = node;
+            }
+
             try {
                 const response = await fetch('/prpc/Admin.AddZtDomain', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        domain: domain,
-                        dns_cred_id: dnsCredId
-                    })
+                    body: JSON.stringify(body)
                 });
                 if (!response.ok) {
                     const err = await response.text();

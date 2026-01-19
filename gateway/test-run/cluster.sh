@@ -205,7 +205,6 @@ listen_addr = "0.0.0.0"
 listen_port = ${proxy_port}
 tappd_port = 8090
 external_port = ${proxy_port}
-inbound_pp_enabled = false
 
 [core.recycle]
 enabled = true

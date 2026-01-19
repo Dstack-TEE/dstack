@@ -502,14 +502,18 @@ message SetDefaultDnsCredentialRequest {
 
 // ZT-Domain information
 message ZtDomainInfo {
-  // Domain name (e.g., "*.example.com")
+  // Base domain name (e.g., "example.com", certificate will be issued for "*.example.com")
   string domain = 1;
   // DNS credential ID (empty = use default)
-  string dns_cred_id = 2;
-  // Configuration creation timestamp
-  uint64 created_at = 3;
+  optional string dns_cred_id = 2;
   // Certificate status
   ZtDomainCertStatus status = 4;
+  // Port this domain serves on (e.g., 443)
+  uint32 port = 5;
+  // Node binding (None = any node can serve this domain)
+  optional uint32 node = 6;
+  // Priority for default base_domain selection (higher = preferred)
+  int32 priority = 7;
 }
 
 // ZT-Domain certificate status
@@ -538,17 +542,30 @@ message GetZtDomainRequest {
 
 // Add ZT-Domain request
 message AddZtDomainRequest {
-  // Domain name (e.g., "*.example.com")
+  // Base domain name (e.g., "example.com", certificate will be issued for "*.example.com")
   string domain = 1;
   // DNS credential ID (empty = use default)
   string dns_cred_id = 2;
+  // Port this domain serves on (e.g., 443, default 0)
+  uint32 port = 3;
+  // Node binding (None = any node can serve this domain)
+  optional uint32 node = 4;
+  // Priority for default base_domain selection (higher = preferred, default 0)
+  int32 priority = 5;
 }
 
-// Update ZT-Domain request
+// Update ZT-Domain request (replaces all fields)
 message UpdateZtDomainRequest {
+  // Base domain name (must match existing domain)
   string domain = 1;
-  // Optional new DNS credential ID
-  optional string dns_cred_id = 2;
+  // DNS credential ID (empty = use default)
+  string dns_cred_id = 2;
+  // Port this domain serves on (e.g., 443)
+  uint32 port = 3;
+  // Node binding (None = any node can serve this domain)
+  optional uint32 node = 4;
+  // Priority for default base_domain selection (higher = preferred)
+  int32 priority = 5;
 }
 
 // Delete ZT-Domain request

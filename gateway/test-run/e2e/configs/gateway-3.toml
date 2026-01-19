@@ -47,11 +47,7 @@ interface = "wg-test3"
 endpoint = "gateway-3:9013"
 
 [core.proxy]
-cert_chain = "/var/lib/gateway/certbot/live/cert.pem"
-cert_key = "/var/lib/gateway/certbot/live/key.pem"
-base_domain = "test.local"
 listen_addr = "0.0.0.0"
 listen_port = 9014
 tappd_port = 8090
 external_port = 9014
-inbound_pp_enabled = false

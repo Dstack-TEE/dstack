@@ -141,12 +141,22 @@ pub enum DnsProvider {
 /// ZT-Domain configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ZtDomainConfig {
-    /// Domain name (e.g., "*.app.example.com")
+    /// Base domain name (e.g., "app.example.com")
+    /// Certificate will be issued for "*.{domain}" automatically
     pub domain: String,
     /// DNS credential ID to use (None = use default)
     pub dns_cred_id: Option<String>,
-    /// Creation timestamp
-    pub created_at: u64,
+    /// Port this domain serves on (e.g., 443)
+    #[serde(default)]
+    pub port: u16,
+    /// Node binding (None = any node can serve this domain)
+    /// If set, only this node will serve this domain
+    #[serde(default)]
+    pub node: Option<u32>,
+    /// Priority for default base_domain selection (higher = preferred)
+    /// The domain with highest priority is returned as the default base_domain in APIs
+    #[serde(default)]
+    pub priority: i32,
 }
 
 /// Global certbot configuration (stored in KV, synced across nodes)

@@ -128,7 +128,6 @@ listen_addr = "0.0.0.0"
 listen_port = ${proxy_port}
 tappd_port = 8090
 external_port = ${proxy_port}
-inbound_pp_enabled = false
 EOF
 	log_info "Generated node${node_id}.toml (rpc=${rpc_port}, debug=${debug_port}, admin=${admin_port}, bootnode=${bootnode_url:-none})"
 }

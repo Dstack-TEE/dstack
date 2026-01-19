@@ -244,31 +244,24 @@ impl CertStoreBuilder {
     }
 
     /// Add a certificate to the builder
+    ///
+    /// The domain is the base domain (e.g., "example.com").
+    /// All gateway certificates are wildcard certs for "*.{domain}".
     pub fn add_cert(&mut self, domain: &str, data: &CertData) -> Result<()> {
         let certified_key = parse_certified_key(&data.cert_pem, &data.key_pem)
             .with_context(|| format!("failed to parse certificate for {}", domain))?;
 
         let certified_key = Arc::new(certified_key);
 
-        // Determine if this is a wildcard cert
-        if let Some(parent_domain) = domain.strip_prefix("*.") {
-            // Wildcard certificate
-            self.wildcard_certs
-                .insert(parent_domain.to_string(), certified_key);
-            info!(
-                "cert_store: prepared wildcard certificate for *.{} (expires: {})",
-                parent_domain,
-                format_expiry(data.not_after)
-            );
-        } else {
-            // Exact domain certificate
-            self.exact_certs.insert(domain.to_string(), certified_key);
-            info!(
-                "cert_store: prepared certificate for {} (expires: {})",
-                domain,
-                format_expiry(data.not_after)
-            );
-        }
+        // Gateway certificates are always wildcard certs
+        // domain is the base domain (e.g., "example.com"), cert is for "*.example.com"
+        self.wildcard_certs
+            .insert(domain.to_string(), certified_key);
+        info!(
+            "cert_store: prepared wildcard certificate for *.{} (expires: {})",
+            domain,
+            format_expiry(data.not_after)
+        );
 
         // Store metadata
         self.cert_data.insert(domain.to_string(), data.clone());
@@ -372,23 +365,28 @@ mod tests {
     fn test_cert_store_builder() {
         let data = make_test_cert_data();
 
-        // Use builder
+        // Use builder - domain is base domain (e.g., "example.com")
+        // All gateway certs are wildcard certs
         let mut builder = CertStoreBuilder::new();
         builder
-            .add_cert("test.example.com", &data)
+            .add_cert("example.com", &data)
             .expect("failed to add cert");
 
         let store = builder.build();
 
-        // Check it's loaded
-        assert!(store.has_cert("test.example.com"));
+        // Check it's loaded (stored by base domain)
+        assert!(store.has_cert("example.com"));
         assert_eq!(store.list_domains().len(), 1);
 
-        // Resolve exact match
+        // Should resolve any subdomain via wildcard matching
         assert!(store.has_cert_for_sni("test.example.com"));
+        assert!(store.has_cert_for_sni("foo.example.com"));
 
-        // Should not resolve unknown domain
-        assert!(!store.has_cert_for_sni("unknown.example.com"));
+        // Should not resolve exact base domain (wildcard doesn't match base)
+        assert!(!store.has_cert_for_sni("example.com"));
+
+        // Should not resolve different domain
+        assert!(!store.has_cert_for_sni("example.org"));
     }
 
     #[test]
@@ -423,8 +421,9 @@ mod tests {
         };
 
         let mut builder = CertStoreBuilder::new();
+        // Now we use base domain format (without *. prefix)
         builder
-            .add_cert("*.example.com", &data)
+            .add_cert("example.com", &data)
             .expect("failed to add wildcard cert");
 
         let store = builder.build();

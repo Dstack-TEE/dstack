@@ -488,7 +488,9 @@ impl AdminRpc for AdminRpcHandler {
             } else {
                 Some(request.dns_cred_id)
             },
-            created_at: now_secs(),
+            port: request.port as u16,
+            node: request.node,
+            priority: request.priority,
         };
 
         kv_store.save_zt_domain_config(&config)?;
@@ -501,21 +503,30 @@ impl AdminRpc for AdminRpcHandler {
         let kv_store = self.state.kv_store();
         let cert_resolver = &self.state.cert_resolver;
 
-        let mut config = kv_store
+        // Check if config exists
+        let old_config = kv_store
             .get_zt_domain_config(&request.domain)
             .context("ZT-Domain config not found")?;
 
-        // Update fields if provided
-        if let Some(dns_cred_id) = request.dns_cred_id {
-            if !dns_cred_id.is_empty() {
-                kv_store
-                    .get_dns_credential(&dns_cred_id)
-                    .context("specified dns credential not found")?;
-                config.dns_cred_id = Some(dns_cred_id);
-            } else {
-                config.dns_cred_id = None;
-            }
+        // Validate DNS credential if specified
+        if !request.dns_cred_id.is_empty() {
+            kv_store
+                .get_dns_credential(&request.dns_cred_id)
+                .context("specified dns credential not found")?;
         }
+
+        // Replace all fields (keep created_at from old config)
+        let config = ZtDomainConfig {
+            domain: request.domain.clone(),
+            dns_cred_id: if request.dns_cred_id.is_empty() {
+                None
+            } else {
+                Some(request.dns_cred_id)
+            },
+            port: request.port as u16,
+            node: request.node,
+            priority: request.priority,
+        };
 
         kv_store.save_zt_domain_config(&config)?;
         info!("Updated ZT-Domain config: {}", config.domain);
@@ -737,8 +748,10 @@ fn zt_domain_to_proto(
 
     ZtDomainInfo {
         domain: config.domain,
-        dns_cred_id: config.dns_cred_id.unwrap_or_default(),
-        created_at: config.created_at,
+        dns_cred_id: config.dns_cred_id,
         status,
+        port: config.port as u32,
+        node: config.node,
+        priority: config.priority,
     }
 }
