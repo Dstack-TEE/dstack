@@ -6,15 +6,17 @@ use std::sync::{Arc, RwLock};
 
 use anyhow::{Context, Result};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use cc_eventlog::tdx::read_event_log;
 use cert_client::CertRequestClient;
+use dstack_attest::emit_runtime_event;
 use dstack_guest_agent_rpc::{
     dstack_guest_server::{DstackGuestRpc, DstackGuestServer},
     tappd_server::{TappdRpc, TappdServer},
     worker_server::{WorkerRpc, WorkerServer},
-    AppInfo, DeriveK256KeyResponse, DeriveKeyArgs, EmitEventArgs, GetAttestationForAppKeyRequest,
-    GetKeyArgs, GetKeyResponse, GetQuoteResponse, GetTlsKeyArgs, GetTlsKeyResponse, RawQuoteArgs,
-    SignRequest, SignResponse, TdxQuoteArgs, TdxQuoteResponse, VerifyRequest, VerifyResponse,
-    WorkerVersion,
+    AppInfo, AttestResponse, DeriveK256KeyResponse, DeriveKeyArgs, EmitEventArgs,
+    GetAttestationForAppKeyRequest, GetKeyArgs, GetKeyResponse, GetQuoteResponse, GetTlsKeyArgs,
+    GetTlsKeyResponse, RawQuoteArgs, SignRequest, SignResponse, TdxQuoteArgs, TdxQuoteResponse,
+    VerifyRequest, VerifyResponse, WorkerVersion,
 };
 use dstack_types::{AppKeys, SysConfig};
 use ed25519_dalek::ed25519::signature::hazmat::{PrehashSigner, PrehashVerifier};
@@ -23,9 +25,10 @@ use ed25519_dalek::{
 };
 use fs_err as fs;
 use k256::ecdsa::SigningKey;
+use or_panic::ResultOrPanic;
 use ra_rpc::{Attestation, CallContext, RpcCall};
 use ra_tls::{
-    attestation::{QuoteContentType, DEFAULT_HASH_ALGORITHM},
+    attestation::{QuoteContentType, VersionedAttestation, DEFAULT_HASH_ALGORITHM},
     cert::CertConfig,
     kdf::{derive_ecdsa_key, derive_ecdsa_key_pair_from_bytes},
 };
@@ -33,10 +36,15 @@ use rcgen::KeyPair;
 use ring::rand::{SecureRandom, SystemRandom};
 use serde_json::json;
 use sha3::{Digest, Keccak256};
-use tdx_attest::eventlog::read_event_logs;
 use tracing::error;
 
 use crate::config::Config;
+
+fn read_dmi_file(name: &str) -> String {
+    fs::read_to_string(format!("/sys/class/dmi/id/{name}"))
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default()
+}
 
 #[derive(Clone)]
 pub struct AppState {
@@ -52,8 +60,20 @@ struct AppStateInner {
 }
 
 impl AppStateInner {
+    fn simulator_attestation(&self) -> Result<Option<VersionedAttestation>> {
+        if !self.config.simulator.enabled {
+            return Ok(None);
+        }
+        let attestation_bytes = fs::read(&self.config.simulator.attestation_file)
+            .context("Failed to read simulator attestation file")?;
+        let attestation = VersionedAttestation::from_scale(&attestation_bytes)
+            .context("Failed to decode simulator attestation")?;
+        Ok(Some(attestation))
+    }
+
     async fn request_demo_cert(&self) -> Result<String> {
         let key = KeyPair::generate().context("Failed to generate demo key")?;
+        let attestation_override = self.simulator_attestation()?;
         let demo_cert = self
             .cert_client
             .request_cert(
@@ -66,7 +86,7 @@ impl AppStateInner {
                     usage_client_auth: true,
                     ext_quote: true,
                 },
-                self.config.simulator.enabled,
+                attestation_override,
             )
             .await
             .context("Failed to get app cert")?
@@ -78,13 +98,18 @@ impl AppStateInner {
 impl AppState {
     fn maybe_request_demo_cert(&self) {
         let state = self.inner.clone();
-        if !state.demo_cert.read().unwrap().is_empty() {
+        if !state
+            .demo_cert
+            .read()
+            .or_panic("lock shoud never fail")
+            .is_empty()
+        {
             return;
         }
         tokio::spawn(async move {
             match state.request_demo_cert().await {
                 Ok(demo_cert) => {
-                    *state.demo_cert.write().unwrap() = demo_cert;
+                    *state.demo_cert.write().or_panic("lock shoud never fail") = demo_cert;
                 }
                 Err(e) => {
                     error!("Failed to request demo cert: {e}");
@@ -128,33 +153,41 @@ pub struct InternalRpcHandler {
 
 pub async fn get_info(state: &AppState, external: bool) -> Result<AppInfo> {
     let hide_tcb_info = external && !state.config().app_compose.public_tcbinfo;
-    let response = InternalRpcHandler {
-        state: state.clone(),
-    }
-    .get_quote(RawQuoteArgs {
-        report_data: [0; 64].to_vec(),
-    })
-    .await;
-    let Ok(response) = response else {
-        return Ok(AppInfo::default());
-    };
-    let Ok(attestation) = Attestation::new(response.quote, response.event_log.into()) else {
-        return Ok(AppInfo::default());
+    let attestation = if let Some(attestation) = state.inner.simulator_attestation()? {
+        attestation.into_inner()
+    } else {
+        let Ok(attestation) = Attestation::local() else {
+            return Ok(AppInfo::default());
+        };
+        attestation
     };
     let app_info = attestation
         .decode_app_info(false)
         .context("Failed to decode app info")?;
-    let event_log = &attestation.event_log;
+    let event_log = attestation
+        .tdx_quote()
+        .map(|q| &q.event_log[..])
+        .unwrap_or_default();
     let tcb_info = if hide_tcb_info {
         "".to_string()
     } else {
         let app_compose = state.config().app_compose.raw.clone();
+        let td_report = match attestation.get_td10_report() {
+            Some(report) => json!({
+                "mrtd": hex::encode(report.mr_td),
+                "rtmr0": hex::encode(report.rt_mr0),
+                "rtmr1": hex::encode(report.rt_mr1),
+                "rtmr2": hex::encode(report.rt_mr2),
+                "rtmr3": hex::encode(report.rt_mr3),
+            }),
+            None => json!({}),
+        };
         serde_json::to_string_pretty(&json!({
-            "mrtd": hex::encode(app_info.mrtd),
-            "rtmr0": hex::encode(app_info.rtmr0),
-            "rtmr1": hex::encode(app_info.rtmr1),
-            "rtmr2": hex::encode(app_info.rtmr2),
-            "rtmr3": hex::encode(app_info.rtmr3),
+            "mrtd": td_report["mrtd"],
+            "rtmr0": td_report["rtmr0"],
+            "rtmr1": td_report["rtmr1"],
+            "rtmr2": td_report["rtmr2"],
+            "rtmr3": td_report["rtmr3"],
             "mr_aggregated": hex::encode(app_info.mr_aggregated),
             "os_image_hash": hex::encode(&app_info.os_image_hash),
             "compose_hash": hex::encode(&app_info.compose_hash),
@@ -179,9 +212,16 @@ pub async fn get_info(state: &AppState, external: bool) -> Result<AppInfo> {
         os_image_hash: app_info.os_image_hash.clone(),
         key_provider_info: String::from_utf8(app_info.key_provider_info).unwrap_or_default(),
         compose_hash: app_info.compose_hash.clone(),
-        app_cert: state.inner.demo_cert.read().unwrap().clone(),
+        app_cert: state
+            .inner
+            .demo_cert
+            .read()
+            .or_panic("lock should not fail")
+            .clone(),
         tcb_info,
         vm_config,
+        cloud_vendor: read_dmi_file("sys_vendor"),
+        cloud_product: read_dmi_file("product_name"),
     })
 }
 
@@ -201,11 +241,16 @@ impl DstackGuestRpc for InternalRpcHandler {
             usage_client_auth: request.usage_client_auth,
             ext_quote: request.usage_ra_tls,
         };
+        let attestation_override = self
+            .state
+            .inner
+            .simulator_attestation()
+            .context("Failed to load simulator attestation")?;
         let certificate_chain = self
             .state
             .inner
             .cert_client
-            .request_cert(&derived_key, config, self.state.config().simulator.enabled)
+            .request_cert(&derived_key, config, attestation_override)
             .await
             .context("Failed to sign the CSR")?;
         Ok(GetTlsKeyResponse {
@@ -257,14 +302,6 @@ impl DstackGuestRpc for InternalRpcHandler {
     }
 
     async fn get_quote(self, request: RawQuoteArgs) -> Result<GetQuoteResponse> {
-        fn pad64(data: &[u8]) -> Option<[u8; 64]> {
-            if data.len() > 64 {
-                return None;
-            }
-            let mut padded = [0u8; 64];
-            padded[..data.len()].copy_from_slice(data);
-            Some(padded)
-        }
         let report_data = pad64(&request.report_data).context("Report data is too long")?;
         if self.state.config().simulator.enabled {
             return simulate_quote(
@@ -273,15 +310,12 @@ impl DstackGuestRpc for InternalRpcHandler {
                 &self.state.inner.vm_config,
             );
         }
-        let (_, quote) =
-            tdx_attest::get_quote(&report_data, None).context("Failed to get quote")?;
-        let event_log = read_event_logs().context("Failed to decode event log")?;
-        let event_log =
-            serde_json::to_string(&event_log).context("Failed to serialize event log")?;
-
+        let attestation = Attestation::quote(&report_data).context("Failed to get quote")?;
+        let tdx_quote = attestation.get_tdx_quote_bytes();
+        let tdx_event_log = attestation.get_tdx_event_log_string();
         Ok(GetQuoteResponse {
-            quote,
-            event_log,
+            quote: tdx_quote.unwrap_or_default(),
+            event_log: tdx_event_log.unwrap_or_default(),
             report_data: report_data.to_vec(),
             vm_config: self.state.inner.vm_config.clone(),
         })
@@ -291,7 +325,7 @@ impl DstackGuestRpc for InternalRpcHandler {
         if self.state.config().simulator.enabled {
             return Ok(());
         }
-        tdx_attest::extend_rtmr3(&request.event, &request.payload)
+        emit_runtime_event(&request.event, &request.payload)
     }
 
     async fn info(self) -> Result<AppInfo> {
@@ -308,7 +342,11 @@ impl DstackGuestRpc for InternalRpcHandler {
             .await?;
         let (signature, public_key) = match request.algorithm.as_str() {
             "ed25519" => {
-                let key_bytes: [u8; 32] = key_response.key.try_into().expect("Key is incorrect");
+                let key_bytes: [u8; 32] = key_response
+                    .key
+                    .try_into()
+                    .ok()
+                    .context("Key is incorrect")?;
                 let signing_key = Ed25519SigningKey::from_bytes(&key_bytes);
                 let signature = signing_key.sign(&request.data);
                 let public_key = signing_key.verifying_key().to_bytes().to_vec();
@@ -351,7 +389,12 @@ impl DstackGuestRpc for InternalRpcHandler {
         let valid = match request.algorithm.as_str() {
             "ed25519" => {
                 let verifying_key = ed25519_dalek::VerifyingKey::from_bytes(
-                    &request.public_key.as_slice().try_into().unwrap(),
+                    &request
+                        .public_key
+                        .as_slice()
+                        .try_into()
+                        .ok()
+                        .context("invalid public key")?,
                 )?;
                 let signature = ed25519_dalek::Signature::from_slice(&request.signature)?;
                 verifying_key.verify(&request.data, &signature).is_ok()
@@ -374,6 +417,28 @@ impl DstackGuestRpc for InternalRpcHandler {
         };
         Ok(VerifyResponse { valid })
     }
+
+    async fn attest(self, request: RawQuoteArgs) -> Result<AttestResponse> {
+        let report_data = pad64(&request.report_data).context("Report data is too long")?;
+        if let Some(attestation) = self.state.inner.simulator_attestation()? {
+            return Ok(AttestResponse {
+                attestation: attestation.to_scale(),
+            });
+        }
+        let attestation = Attestation::quote(&report_data).context("Failed to get attestation")?;
+        Ok(AttestResponse {
+            attestation: attestation.into_versioned().to_scale(),
+        })
+    }
+}
+
+fn pad64(data: &[u8]) -> Option<[u8; 64]> {
+    if data.len() > 64 {
+        return None;
+    }
+    let mut padded = [0u8; 64];
+    padded[..data.len()].copy_from_slice(data);
+    Some(padded)
 }
 
 fn simulate_quote(
@@ -381,18 +446,21 @@ fn simulate_quote(
     report_data: [u8; 64],
     vm_config: &str,
 ) -> Result<GetQuoteResponse> {
-    let quote_file =
-        fs::read_to_string(&config.simulator.quote_file).context("Failed to read quote file")?;
-    let mut quote = hex::decode(quote_file.trim()).context("Failed to decode quote")?;
-    let event_log = fs::read_to_string(&config.simulator.event_log_file)
-        .context("Failed to read event log file")?;
-    if quote.len() < 632 {
-        return Err(anyhow::anyhow!("Quote is too short"));
-    }
-    quote[568..632].copy_from_slice(&report_data);
+    let attestation_bytes = fs::read(&config.simulator.attestation_file)
+        .context("Failed to read simulator attestation file")?;
+    let VersionedAttestation::V0 { attestation } =
+        VersionedAttestation::from_scale(&attestation_bytes)
+            .context("Failed to decode simulator attestation")?;
+    let mut attestation = attestation;
+    let Some(quote) = attestation.tdx_quote_mut() else {
+        return Err(anyhow::anyhow!("Quote not found"));
+    };
+
+    quote.quote[568..632].copy_from_slice(&report_data);
     Ok(GetQuoteResponse {
-        quote,
-        event_log,
+        quote: quote.quote.to_vec(),
+        event_log: serde_json::to_string(&quote.event_log)
+            .context("Failed to serialize event log")?,
         report_data: report_data.to_vec(),
         vm_config: vm_config.to_string(),
     })
@@ -433,11 +501,16 @@ impl TappdRpc for InternalRpcHandlerV0 {
             usage_client_auth: request.usage_client_auth,
             ext_quote: request.usage_ra_tls,
         };
+        let attestation_override = self
+            .state
+            .inner
+            .simulator_attestation()
+            .context("Failed to load simulator attestation")?;
         let certificate_chain = self
             .state
             .inner
             .cert_client
-            .request_cert(&derived_key, config, self.state.config().simulator.enabled)
+            .request_cert(&derived_key, config, attestation_override)
             .await
             .context("Failed to sign the CSR")?;
         Ok(GetTlsKeyResponse {
@@ -487,11 +560,10 @@ impl TappdRpc for InternalRpcHandlerV0 {
                 prefix,
             });
         }
-        let event_log = read_event_logs().context("Failed to decode event log")?;
+        let event_log = read_event_log().context("Failed to decode event log")?;
         let event_log =
             serde_json::to_string(&event_log).context("Failed to serialize event log")?;
-        let (_, quote) =
-            tdx_attest::get_quote(&report_data, None).context("Failed to get quote")?;
+        let quote = tdx_attest::get_quote(&report_data).context("Failed to get quote")?;
         Ok(TdxQuoteResponse {
             quote,
             event_log,
@@ -562,7 +634,11 @@ impl WorkerRpc for ExternalRpcHandler {
 
         match request.algorithm.as_str() {
             "ed25519" => {
-                let key_bytes: [u8; 32] = key_response.key.try_into().expect("Key is incorrect");
+                let key_bytes: [u8; 32] = key_response
+                    .key
+                    .try_into()
+                    .ok()
+                    .context("Key is incorrect")?;
                 let ed25519_key = Ed25519SigningKey::from_bytes(&key_bytes);
                 let ed25519_pubkey = ed25519_key.verifying_key().to_bytes();
 
@@ -579,11 +655,10 @@ impl WorkerRpc for ExternalRpcHandler {
                         &self.state.inner.vm_config,
                     )?)
                 } else {
-                    let ed25519_quote = tdx_attest::get_quote(&ed25519_report_data, None)
-                        .context("Failed to get ed25519 quote")?
-                        .1;
+                    let ed25519_quote = tdx_attest::get_quote(&ed25519_report_data)
+                        .context("Failed to get ed25519 quote")?;
                     let event_log = serde_json::to_string(
-                        &read_event_logs().context("Failed to read event log")?,
+                        &read_event_log().context("Failed to read event log")?,
                     )?;
                     Ok(GetQuoteResponse {
                         quote: ed25519_quote,
@@ -611,11 +686,10 @@ impl WorkerRpc for ExternalRpcHandler {
                         &self.state.inner.vm_config,
                     )?)
                 } else {
-                    let secp256k1_quote = tdx_attest::get_quote(&secp256k1_report_data, None)
-                        .context("Failed to get secp256k1 quote")?
-                        .1;
+                    let secp256k1_quote = tdx_attest::get_quote(&secp256k1_report_data)
+                        .context("Failed to get secp256k1 quote")?;
                     let event_log = serde_json::to_string(
-                        &read_event_logs().context("Failed to read event log")?,
+                        &read_event_log().context("Failed to read event log")?,
                     )?;
 
                     Ok(GetQuoteResponse {
@@ -673,18 +747,16 @@ mod tests {
         }
     }
 
-    async fn setup_test_state() -> (AppState, tempfile::NamedTempFile, tempfile::NamedTempFile) {
-        let mut dummy_quote_file = tempfile::NamedTempFile::new().unwrap();
-        let dummy_event_log_file = tempfile::NamedTempFile::new().unwrap();
+    async fn setup_test_state() -> (AppState, tempfile::NamedTempFile) {
+        let mut temp_attestation_file = tempfile::NamedTempFile::new().unwrap();
 
-        let dummy_quote = vec![b'0'; 10020];
-        dummy_quote_file.write_all(&dummy_quote).unwrap();
-        dummy_quote_file.flush().unwrap();
+        let attestation = include_bytes!("../fixtures/attestation.bin");
+        temp_attestation_file.write_all(attestation).unwrap();
+        temp_attestation_file.flush().unwrap();
 
         let dummy_simulator = Simulator {
             enabled: true,
-            quote_file: dummy_quote_file.path().to_str().unwrap().to_string(),
-            event_log_file: dummy_event_log_file.path().to_str().unwrap().to_string(),
+            attestation_file: temp_attestation_file.path().to_str().unwrap().to_string(),
         };
 
         let dummy_appcompose = AppCompose {
@@ -807,14 +879,13 @@ pNs85uhOZE8z2jr8Pg==
             AppState {
                 inner: Arc::new(inner),
             },
-            dummy_quote_file,
-            dummy_event_log_file,
+            temp_attestation_file,
         )
     }
 
     #[tokio::test]
     async fn test_verify_ed25519_success() {
-        let (state, _quote_file, _log_file) = setup_test_state().await;
+        let (state, _guard) = setup_test_state().await;
         let handler = InternalRpcHandler {
             state: state.clone(),
         };
@@ -841,7 +912,7 @@ pNs85uhOZE8z2jr8Pg==
 
     #[tokio::test]
     async fn test_verify_secp256k1_success() {
-        let (state, _quote_file, _log_file) = setup_test_state().await;
+        let (state, _guard) = setup_test_state().await;
         let handler = InternalRpcHandler {
             state: state.clone(),
         };
@@ -868,7 +939,7 @@ pNs85uhOZE8z2jr8Pg==
 
     #[tokio::test]
     async fn test_sign_ed25519_success() {
-        let (state, _quote_file, _log_file) = setup_test_state().await;
+        let (state, _guard) = setup_test_state().await;
         let handler = InternalRpcHandler {
             state: state.clone(),
         };
@@ -898,7 +969,7 @@ pNs85uhOZE8z2jr8Pg==
 
     #[tokio::test]
     async fn test_sign_secp256k1_success() {
-        let (state, _quote_file, _log_file) = setup_test_state().await;
+        let (state, _guard) = setup_test_state().await;
         let handler = InternalRpcHandler {
             state: state.clone(),
         };
@@ -930,7 +1001,7 @@ pNs85uhOZE8z2jr8Pg==
 
     #[tokio::test]
     async fn test_sign_secp256k1_prehashed_success() {
-        let (state, _quote_file, _log_file) = setup_test_state().await;
+        let (state, _guard) = setup_test_state().await;
         let handler = InternalRpcHandler {
             state: state.clone(),
         };
@@ -967,7 +1038,7 @@ pNs85uhOZE8z2jr8Pg==
 
     #[tokio::test]
     async fn test_sign_secp256k1_prehashed_invalid_length_fails() {
-        let (state, _quote_file, _log_file) = setup_test_state().await;
+        let (state, _guard) = setup_test_state().await;
         let handler = InternalRpcHandler {
             state: state.clone(),
         };
@@ -990,7 +1061,7 @@ pNs85uhOZE8z2jr8Pg==
 
     #[tokio::test]
     async fn test_sign_unsupported_algorithm_fails() {
-        let (state, _quote_file, _log_file) = setup_test_state().await;
+        let (state, _guard) = setup_test_state().await;
         let handler = InternalRpcHandler { state };
         let request = SignRequest {
             algorithm: "rsa".to_string(), // Unsupported algorithm
@@ -1004,7 +1075,7 @@ pNs85uhOZE8z2jr8Pg==
 
     #[tokio::test]
     async fn test_get_attestation_for_app_key_ed25519_success() {
-        let (state, _quote_file, _log_file) = setup_test_state().await;
+        let (state, _guard) = setup_test_state().await;
         let handler = ExternalRpcHandler::new(state.clone());
         let request = GetAttestationForAppKeyRequest {
             algorithm: "ed25519".to_string(),
@@ -1019,7 +1090,7 @@ pNs85uhOZE8z2jr8Pg==
 
     #[tokio::test]
     async fn test_get_attestation_for_app_key_secp256k1_success() {
-        let (state, _quote_file, _log_file) = setup_test_state().await;
+        let (state, _guard) = setup_test_state().await;
         let handler = ExternalRpcHandler::new(state.clone());
         let request = GetAttestationForAppKeyRequest {
             algorithm: "secp256k1".to_string(),
@@ -1034,7 +1105,7 @@ pNs85uhOZE8z2jr8Pg==
 
     #[tokio::test]
     async fn test_get_attestation_for_app_key_unsupported_algorithm_fails() {
-        let (state, _quote_file, _log_file) = setup_test_state().await;
+        let (state, _guard) = setup_test_state().await;
         let handler = ExternalRpcHandler::new(state);
         let request = GetAttestationForAppKeyRequest {
             algorithm: "ecdsa".to_string(), // Unsupported algorithm

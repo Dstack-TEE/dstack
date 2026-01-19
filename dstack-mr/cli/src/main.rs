@@ -39,12 +39,12 @@ struct MachineConfig {
     metadata: PathBuf,
 
     /// Enable two-pass add pages
-    #[arg(long, default_value = "true")]
-    two_pass_add_pages: Bool,
+    #[arg(long)]
+    two_pass_add_pages: Option<Bool>,
 
     /// Enable PIC
-    #[arg(long, default_value = "true")]
-    pic: Bool,
+    #[arg(long)]
+    pic: Option<Bool>,
 
     /// Enable SMM
     #[arg(long, default_value = "false")]
@@ -74,6 +74,10 @@ struct MachineConfig {
     #[arg(long, default_value = "true")]
     root_verity: Bool,
 
+    /// QEMU version
+    #[arg(long)]
+    qemu_version: Option<String>,
+
     /// Output JSON
     #[arg(long)]
     json: bool,
@@ -102,8 +106,8 @@ fn main() -> Result<()> {
                 .kernel(&kernel_path)
                 .initrd(&initrd_path)
                 .kernel_cmdline(&cmdline)
-                .two_pass_add_pages(config.two_pass_add_pages)
-                .pic(config.pic)
+                .maybe_two_pass_add_pages(config.two_pass_add_pages)
+                .maybe_pic(config.pic)
                 .smm(config.smm)
                 .maybe_pci_hole64_size(config.pci_hole64_size)
                 .hugepages(config.hugepages)
@@ -111,6 +115,7 @@ fn main() -> Result<()> {
                 .num_nvswitches(config.num_nvswitches)
                 .hotplug_off(config.hotplug_off)
                 .root_verity(config.root_verity)
+                .maybe_qemu_version(config.qemu_version.clone())
                 .build();
 
             let measurements = machine
@@ -118,7 +123,7 @@ fn main() -> Result<()> {
                 .context("Failed to measure machine configuration")?;
 
             if config.json {
-                println!("{}", serde_json::to_string_pretty(&measurements).unwrap());
+                println!("{}", serde_json::to_string_pretty(&measurements)?);
             } else {
                 println!("Machine measurements:");
                 println!("MRTD: {}", hex::encode(measurements.mrtd));

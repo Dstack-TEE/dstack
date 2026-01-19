@@ -101,7 +101,10 @@ message HostInfo {
 
 message QuotedPublicKey {
   bytes public_key = 1;
+  // The TDX quote of the public_key
   string quote = 2;
+  // The dstack attestation of the public key.
+  string attestation = 3;
 }
 
 // AcmeInfoResponse is the response for AcmeInfo.
@@ -118,6 +121,8 @@ message AcmeInfoResponse {
   string active_cert = 5;
   // The domain that serves ZT-HTTPS
   string base_domain = 6;
+  // The attestation of the ACME account URI.
+  string account_attestation = 7;
 }
 
 // Get HostInfo for associated instance id.

@@ -6,14 +6,12 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     net::Ipv4Addr,
     ops::Deref,
-    path::Path,
-    sync::{Arc, Mutex, MutexGuard, RwLock},
+    sync::{Arc, Mutex, MutexGuard},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{bail, Context, Result};
 use auth_client::AuthClient;
-use certbot::WorkDir;
 
 use crate::distributed_certbot::DistributedCertBot;
 use cmd_lib::run_cmd as cmd;
@@ -22,11 +20,8 @@ use dstack_gateway_rpc::{
     AcmeInfoResponse, GatewayNodeInfo, GetPeersResponse, GuestAgentConfig, InfoResponse, PeerInfo,
     QuotedPublicKey, RegisterCvmRequest, RegisterCvmResponse, WireGuardConfig, WireGuardPeer,
 };
-use dstack_guest_agent_rpc::{dstack_guest_client::DstackGuestClient, RawQuoteArgs};
-use fs_err as fs;
-use http_client::prpc::PrpcClient;
+use or_panic::ResultOrPanic;
 use ra_rpc::{CallContext, RpcCall, VerifiedAttestation};
-use ra_tls::attestation::QuoteContentType;
 use rand::seq::IteratorRandom;
 use rinja::Template as _;
 use safe_write::safe_write;
@@ -37,13 +32,14 @@ use tokio_rustls::TlsAcceptor;
 use tracing::{debug, error, info, warn};
 
 use crate::{
+    cert_store::{CertResolver, CertStoreBuilder},
     config::{Config, TlsConfig},
     kv::{
         fetch_peers_from_bootnode, AppIdValidator, HttpsClientConfig, InstanceData, KvStore,
         NodeData, NodeStatus, WaveKvSyncService,
     },
     models::{InstanceInfo, WgConf},
-    proxy::{create_acceptor, AddressGroup, AddressInfo},
+    proxy::{create_acceptor_with_cert_resolver, AddressGroup, AddressInfo},
 };
 
 mod auth_client;
@@ -62,13 +58,16 @@ impl Deref for Proxy {
 
 pub struct ProxyInner {
     pub(crate) config: Arc<Config>,
-    pub(crate) certbot: Option<Arc<DistributedCertBot>>,
+    /// Multi-domain certbot (from KvStore DNS credentials and domain configs)
+    pub(crate) multi_domain_certbot: Arc<DistributedCertBot>,
     my_app_id: Option<Vec<u8>>,
     state: Mutex<ProxyState>,
     pub(crate) notify_state_updated: Notify,
     auth_client: AuthClient,
-    pub(crate) acceptor: RwLock<TlsAcceptor>,
-    pub(crate) h2_acceptor: RwLock<TlsAcceptor>,
+    pub(crate) acceptor: TlsAcceptor,
+    pub(crate) h2_acceptor: TlsAcceptor,
+    /// Certificate resolver for SNI-based resolution (supports atomic updates)
+    pub(crate) cert_resolver: Arc<CertResolver>,
     /// WaveKV-based store for persistence (and cross-node sync when enabled)
     kv_store: Arc<KvStore>,
     /// WaveKV sync service for network synchronization
@@ -108,8 +107,8 @@ impl Proxy {
 }
 
 impl ProxyInner {
-    pub(crate) fn lock(&self) -> MutexGuard<ProxyState> {
-        self.state.lock().expect("Failed to lock AppState")
+    pub(crate) fn lock(&self) -> MutexGuard<'_, ProxyState> {
+        self.state.lock().or_panic("Failed to lock AppState")
     }
 
     pub async fn new(options: ProxyOptions) -> Result<Self> {
@@ -215,26 +214,46 @@ impl ProxyInner {
             }
         }
 
-        // Now initialize certbot - it can access synced data from KvStore
-        let certbot = match config.certbot.enabled {
-            true => {
-                let certbot = DistributedCertBot::new(config.certbot.clone(), kv_store.clone());
-                info!("Initializing DistributedCertBot...");
-                certbot
-                    .init()
-                    .await
-                    .context("Failed to initialize distributed certbot")?;
-                Some(Arc::new(certbot))
+        // Create CertResolver and load certificates from KvStore
+        let cert_resolver = Arc::new(CertResolver::new());
+        let all_cert_data = kv_store.load_all_cert_data();
+        if !all_cert_data.is_empty() {
+            let mut builder = CertStoreBuilder::new();
+            for (domain, data) in &all_cert_data {
+                if let Err(err) = builder.add_cert(domain, data) {
+                    warn!("failed to load certificate for {}: {}", domain, err);
+                }
             }
-            false => None,
-        };
+            cert_resolver.set(Arc::new(builder.build()));
+            info!(
+                "CertStore: loaded {} certificates from KvStore",
+                all_cert_data.len()
+            );
+        }
 
-        // Create acceptors (cert files now exist)
-        let acceptor = RwLock::new(
-            create_acceptor(&config.proxy, false).context("Failed to create acceptor")?,
+        // Create multi-domain certbot (uses KvStore configs for DNS credentials and domains)
+        let multi_domain_certbot = Arc::new(DistributedCertBot::new(
+            kv_store.clone(),
+            cert_resolver.clone(),
+        ));
+        // Initialize any configured domains
+        if let Err(err) = multi_domain_certbot.init_all().await {
+            warn!("Failed to initialize multi-domain certbot: {}", err);
+        }
+
+        // Create TLS acceptors with CertResolver for SNI-based resolution
+        // CertResolver allows atomic certificate updates without recreating acceptors
+        info!(
+            "CertResolver initialized with {} domains",
+            cert_resolver.list_domains().len()
         );
+        let acceptor =
+            create_acceptor_with_cert_resolver(&config.proxy, cert_resolver.clone(), false)
+                .context("failed to create acceptor with cert resolver")?;
         let h2_acceptor =
-            RwLock::new(create_acceptor(&config.proxy, true).context("Failed to create acceptor")?);
+            create_acceptor_with_cert_resolver(&config.proxy, cert_resolver.clone(), true)
+                .context("failed to create h2 acceptor with cert resolver")?;
+
         Ok(Self {
             config,
             state,
@@ -243,7 +262,8 @@ impl ProxyInner {
             auth_client,
             acceptor,
             h2_acceptor,
-            certbot,
+            cert_resolver,
+            multi_domain_certbot,
             kv_store,
             wavekv_sync,
         })
@@ -266,92 +286,87 @@ impl Proxy {
             start_wavekv_sync_task(self.clone(), wavekv_sync.clone()).await;
         }
         start_wavekv_watch_task(self.clone()).context("Failed to start WaveKV watch task")?;
-        start_certbot_task(self.clone()).await?;
+        start_certbot_task(self.clone()).await;
+        start_cert_store_watch_task(self.clone());
         Ok(())
     }
 
-    pub(crate) async fn renew_cert(&self, force: bool) -> Result<bool> {
-        let Some(certbot) = &self.certbot else {
-            return Ok(false);
-        };
-        let renewed = certbot
-            .try_renew(force)
-            .await
-            .context("Failed to renew cert")?;
-        Ok(renewed)
-    }
+    /// Reload all certificates from KvStore into CertStore (atomic replacement)
+    pub(crate) fn reload_all_certs_from_kvstore(&self) -> Result<()> {
+        let all_cert_data = self.kv_store.load_all_cert_data();
 
-    /// Reload certificate from KvStore (called when watcher triggers)
-    pub(crate) fn reload_cert_from_kvstore(&self) -> Result<bool> {
-        let Some(certbot) = &self.certbot else {
-            return Ok(false);
-        };
-        let reloaded = certbot
-            .reload_from_kvstore()
-            .context("Failed to reload cert from KvStore")?;
-        if reloaded {
-            self.reload_certificates()
-                .context("Failed to reload certificates")?;
+        // Build new CertStore from scratch
+        let mut builder = CertStoreBuilder::new();
+        let mut loaded = 0;
+        for (domain, data) in &all_cert_data {
+            if let Err(err) = builder.add_cert(domain, data) {
+                warn!("failed to reload certificate for {}: {}", domain, err);
+            } else {
+                loaded += 1;
+            }
         }
-        Ok(reloaded)
+
+        // Atomically replace the CertStore (no need to recreate acceptors)
+        self.cert_resolver.set(Arc::new(builder.build()));
+        info!("CertStore: reloaded {} certificates from KvStore", loaded);
+        Ok(())
     }
 
-    pub(crate) async fn acme_info(&self) -> Result<AcmeInfoResponse> {
-        let config = self.lock().config.clone();
-        let workdir = WorkDir::new(&config.certbot.workdir);
-        let account_uri = workdir.acme_account_uri().unwrap_or_default();
-        let keys = workdir.list_cert_public_keys().unwrap_or_default();
+    /// Renew a specific domain certificate or all domains
+    pub(crate) async fn renew_cert(&self, domain: Option<&str>, force: bool) -> Result<bool> {
+        match domain {
+            Some(domain) => self
+                .multi_domain_certbot
+                .try_renew(domain, force)
+                .await
+                .context("failed to renew cert"),
+            None => {
+                // Renew all domains
+                self.multi_domain_certbot
+                    .try_renew_all()
+                    .await
+                    .context("failed to renew all certs")?;
+                Ok(true)
+            }
+        }
+    }
 
-        // Try to get dstack agent for quote generation (optional in test environments)
-        let agent = crate::dstack_agent().ok();
-
-        let account_quote = match &agent {
-            Some(agent) => get_or_generate_quote(
-                agent,
-                QuoteContentType::Custom("acme-account"),
-                account_uri.as_bytes(),
-                workdir.acme_account_quote_path(),
-            )
-            .await
-            .unwrap_or_default(),
-            None => String::new(),
-        };
+    /// Get ACME info for all managed domains (or a specific domain)
+    pub(crate) fn acme_info(&self, domain: Option<&str>) -> Result<AcmeInfoResponse> {
+        let kv_store = self.kv_store.clone();
 
         let mut quoted_hist_keys = vec![];
-        for cert_path in workdir.list_certs().unwrap_or_default() {
-            let cert_pem = match fs::read_to_string(&cert_path) {
-                Ok(pem) => pem,
-                Err(_) => continue,
-            };
-            let pubkey = match certbot::read_pubkey(&cert_pem) {
-                Ok(pk) => pk,
-                Err(_) => continue,
-            };
-            let quote = match &agent {
-                Some(agent) => get_or_generate_quote(
-                    agent,
-                    QuoteContentType::Custom("zt-cert"),
-                    &pubkey,
-                    cert_path.display().to_string() + ".quote",
-                )
-                .await
-                .unwrap_or_default(),
-                None => String::new(),
-            };
-            quoted_hist_keys.push(QuotedPublicKey {
-                public_key: pubkey,
-                quote,
-            });
-        }
-        let active_cert = fs::read_to_string(workdir.cert_path()).unwrap_or_default();
 
+        // Get domains to query
+        let domains: Vec<String> = match domain {
+            Some(d) => vec![d.to_string()],
+            None => kv_store
+                .list_zt_domain_configs()
+                .into_iter()
+                .map(|c| c.domain)
+                .collect(),
+        };
+
+        // Get account_uri and account_quote from global ACME attestation
+        let (account_uri, account_quote) = kv_store
+            .get_acme_attestation()
+            .map(|att| (att.account_uri, att.quote))
+            .unwrap_or_default();
+
+        for domain in &domains {
+            // Get all attestations for this domain
+            let attestations = kv_store.list_cert_attestations(domain);
+            for att in attestations {
+                quoted_hist_keys.push(QuotedPublicKey {
+                    public_key: att.public_key,
+                    quote: att.quote,
+                });
+            }
+        }
         Ok(AcmeInfoResponse {
             account_uri,
-            hist_keys: keys.into_iter().collect(),
             account_quote,
             quoted_hist_keys,
-            active_cert,
-            base_domain: config.proxy.base_domain.clone(),
         })
     }
 
@@ -394,15 +409,16 @@ impl Proxy {
                 endpoint: n.wg_endpoint.clone(),
             })
             .collect::<Vec<_>>();
+        let (base_domain, port) = state.kv_store.get_best_zt_domain().unwrap_or_default();
         let response = RegisterCvmResponse {
             wg: Some(WireGuardConfig {
                 client_ip: client_info.ip.to_string(),
                 servers,
             }),
             agent: Some(GuestAgentConfig {
-                external_port: state.config.proxy.external_port as u32,
-                internal_port: state.config.proxy.agent_port as u32,
-                domain: state.config.proxy.base_domain.clone(),
+                external_port: port.into(),
+                internal_port: 8090,
+                domain: base_domain,
                 app_address_ns_prefix: state.config.proxy.app_address_ns_prefix.clone(),
             }),
             gateways,
@@ -452,39 +468,50 @@ fn start_recycle_thread(proxy: Proxy) {
     });
 }
 
-async fn start_certbot_task(proxy: Proxy) -> Result<()> {
-    let Some(certbot) = proxy.certbot.clone() else {
-        info!("Certbot is not enabled");
-        return Ok(());
-    };
+/// Start periodic certificate renewal task for multi-domain certbot
+async fn start_certbot_task(proxy: Proxy) {
+    info!("starting certificate renewal task");
 
-    // Watch for cert changes from other nodes
-    let domain = certbot.domain().to_string();
-    let kv_store = proxy.kv_store.clone();
-    let proxy_for_watch = proxy.clone();
+    // Periodic renewal task for all domains
     tokio::spawn(async move {
-        let mut rx = kv_store.watch_cert(&domain);
+        loop {
+            // Get current config from KV store (allows dynamic updates)
+            let renew_interval = proxy.kv_store.get_certbot_config().renew_interval;
+            if renew_interval.is_zero() {
+                // Check again later if disabled
+                tokio::time::sleep(Duration::from_secs(60)).await;
+                continue;
+            }
+
+            // Wait for the interval
+            tokio::time::sleep(renew_interval).await;
+
+            // Renew certificates
+            if let Err(err) = proxy.renew_cert(None, false).await {
+                error!("failed to renew certificates: {err}");
+            }
+        }
+    });
+}
+
+/// Watch for certificate changes from KvStore and update CertStore
+fn start_cert_store_watch_task(proxy: Proxy) {
+    let kv_store = proxy.kv_store.clone();
+
+    // Watch for any certificate changes (all domains)
+    let mut rx = kv_store.watch_all_certs();
+    tokio::spawn(async move {
         loop {
             if rx.changed().await.is_err() {
                 break;
             }
-            info!("WaveKV: detected certificate change for {domain}, reloading...");
-            if let Err(err) = proxy_for_watch.reload_cert_from_kvstore() {
-                error!("Failed to reload cert from KvStore: {err}");
+            info!("WaveKV: detected certificate changes, reloading CertStore...");
+            if let Err(err) = proxy.reload_all_certs_from_kvstore() {
+                error!("Failed to reload certificates from KvStore: {err}");
             }
         }
     });
-
-    // Periodic renewal task
-    tokio::spawn(async move {
-        loop {
-            tokio::time::sleep(certbot.renew_interval()).await;
-            if let Err(err) = proxy.renew_cert(false).await {
-                error!("Failed to renew cert: {err}");
-            }
-        }
-    });
-    Ok(())
+    info!("CertStore watch task started");
 }
 
 async fn start_wavekv_sync_task(proxy: Proxy, wavekv_sync: Arc<WaveKvSyncService>) {
@@ -1106,14 +1133,15 @@ impl GatewayRpc for RpcHandler {
     }
 
     async fn acme_info(self) -> Result<AcmeInfoResponse> {
-        self.state.acme_info().await
+        self.state.acme_info(None)
     }
 
     async fn info(self) -> Result<InfoResponse> {
         let state = self.state.lock();
+        let (base_domain, port) = state.kv_store.get_best_zt_domain().unwrap_or_default();
         Ok(InfoResponse {
-            base_domain: state.config.proxy.base_domain.clone(),
-            external_port: state.config.proxy.external_port as u32,
+            base_domain,
+            external_port: port.into(),
             app_address_ns_prefix: state.config.proxy.app_address_ns_prefix.clone(),
         })
     }
@@ -1138,26 +1166,6 @@ impl GatewayRpc for RpcHandler {
             peers,
         })
     }
-}
-
-async fn get_or_generate_quote(
-    agent: &DstackGuestClient<PrpcClient>,
-    content_type: QuoteContentType<'_>,
-    payload: &[u8],
-    quote_path: impl AsRef<Path>,
-) -> Result<String> {
-    let quote_path = quote_path.as_ref();
-    if fs::metadata(quote_path).is_ok() {
-        return fs::read_to_string(quote_path).context("Failed to read quote");
-    }
-    let report_data = content_type.to_report_data(payload).to_vec();
-    let response = agent
-        .get_quote(RawQuoteArgs { report_data })
-        .await
-        .context("Failed to get quote")?;
-    let quote = serde_json::to_string(&response).context("Failed to serialize quote")?;
-    safe_write(quote_path, &quote).context("Failed to write quote")?;
-    Ok(quote)
 }
 
 impl RpcCall<Proxy> for RpcHandler {

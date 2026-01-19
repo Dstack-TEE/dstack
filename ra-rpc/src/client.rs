@@ -9,10 +9,7 @@ use prpc::{
     client::{Error, RequestClient},
     Message,
 };
-use ra_tls::{
-    attestation::{Attestation, VerifiedAttestation},
-    traits::CertExt,
-};
+use ra_tls::{attestation::VerifiedAttestation, traits::CertExt};
 use reqwest::{tls::TlsInfo, Certificate, Client, Identity, Response};
 use serde::{de::DeserializeOwned, Serialize};
 
@@ -135,7 +132,7 @@ impl RaClient {
         let attestation = if !self.verify_server_attestation {
             None
         } else {
-            match Attestation::from_cert(&cert).context("Failed to parse attestation")? {
+            match ra_tls::attestation::from_cert(&cert).context("Failed to parse attestation")? {
                 None => None,
                 Some(attestation) => {
                     let verified_attestation = attestation

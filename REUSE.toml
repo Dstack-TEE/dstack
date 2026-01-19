@@ -27,6 +27,8 @@ path = [
     "**/package-lock.json",
     "kms/auth-eth/.openzeppelin/unknown-2035.json",
     "kms/auth-mock/.oxlintrc.json",
+    "kms/auth-simple/.oxlintrc.json",
+    "kms/auth-simple/auth-config.example.json",
     "sdk/simulator/*.json",
     "sdk/go/go.sum",
     "kms/dstack-app/builder/shared/kms-pinned-packages.txt",
@@ -66,6 +68,7 @@ path = [
     "docs/security/dstack-audit.pdf",
     "dstack_Technical_Charter_Final_10-17-2025.pdf",
     "sdk/simulator/quote.hex",
+    "sdk/simulator/attestation.bin",
     "ra-tls/assets/tdx_quote",
     "cc-eventlog/samples/ccel.bin",
 ]
@@ -84,6 +87,14 @@ path = [
 SPDX-FileCopyrightText = "Copyright (c) 2024-2025 The Project Contributors"
 SPDX-License-Identifier = "Apache-2.0"
 
+# Scripts with SPDX-like content (false positive prevention)
+
+[[annotations]]
+path = "scripts/add-spdx-attribution.py"
+SPDX-FileCopyrightText = "© 2025 Phala Network <dstack@phala.network>"
+SPDX-License-Identifier = "Apache-2.0"
+precedence = "override"
+
 # Vendor code
 
 [[annotations]]
@@ -96,11 +107,13 @@ precedence = "override"
 path = "kms/auth-eth/lib/openzeppelin-foundry-upgrades/**"
 SPDX-FileCopyrightText = "NONE"
 SPDX-License-Identifier = "MIT"
+precedence = "override"
 
 [[annotations]]
 path = "kms/auth-eth/lib/forge-std/**"
 SPDX-FileCopyrightText = "NONE"
 SPDX-License-Identifier = "Apache-2.0"
+precedence = "override"
 
 [[annotations]]
 path = "tdx-attest-sys/csrc/*"
@@ -171,5 +184,10 @@ SPDX-License-Identifier = "CC0-1.0"
 
 [[annotations]]
 path = "verifier/builder/shared/*.txt"
+SPDX-FileCopyrightText = "NONE"
+SPDX-License-Identifier = "CC0-1.0"
+
+[[annotations]]
+path = "guest-agent/fixtures/*"
 SPDX-FileCopyrightText = "NONE"
 SPDX-License-Identifier = "CC0-1.0"

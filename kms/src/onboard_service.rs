@@ -4,7 +4,7 @@
 
 use anyhow::{Context, Result};
 use dstack_guest_agent_rpc::{
-    dstack_guest_client::DstackGuestClient, GetQuoteResponse, RawQuoteArgs,
+    dstack_guest_client::DstackGuestClient, AttestResponse, RawQuoteArgs,
 };
 use dstack_kms_rpc::{
     kms_client::KmsClient,
@@ -16,7 +16,7 @@ use http_client::prpc::PrpcClient;
 use k256::ecdsa::SigningKey;
 use ra_rpc::{client::RaClient, CallContext, RpcCall};
 use ra_tls::{
-    attestation::QuoteContentType,
+    attestation::{QuoteContentType, VersionedAttestation},
     cert::{CaCert, CertRequest},
     rcgen::{Certificate, KeyPair, PKCS_ECDSA_P256_SHA256},
 };
@@ -58,21 +58,17 @@ impl OnboardRpc for OnboardHandler {
 
         let k256_pubkey = keys.k256_key.verifying_key().to_sec1_bytes().to_vec();
         let ca_pubkey = keys.ca_key.public_key_der();
-        let quote;
-        let eventlog;
-        if quote_enabled {
-            (quote, eventlog) = quote_keys(&ca_pubkey, &k256_pubkey).await?;
+        let attestation = if quote_enabled {
+            Some(attest_keys(&ca_pubkey, &k256_pubkey).await?)
         } else {
-            quote = vec![];
-            eventlog = vec![];
+            None
         };
 
         let cfg = &self.state.config;
         let response = BootstrapResponse {
             ca_pubkey,
             k256_pubkey,
-            quote,
-            eventlog,
+            attestation: attestation.unwrap_or_default(),
         };
         // Store the bootstrap info
         safe_write(cfg.bootstrap_info(), serde_json::to_vec(&response)?)?;
@@ -143,18 +139,17 @@ impl Keys {
             .key(&ca_key)
             .build()
             .self_signed()?;
-
-        let mut quote = None;
-        let mut event_log = None;
-
-        if quote_enabled {
+        let attestation = if quote_enabled {
             let pubkey = rpc_key.public_key_der();
             let report_data = QuoteContentType::RaTlsCert.to_report_data(&pubkey);
-            let resposne = app_quote(report_data.to_vec())
+            let response = app_attest(report_data.to_vec())
                 .await
                 .context("Failed to get quote")?;
-            quote = Some(resposne.quote);
-            event_log = Some(resposne.event_log.into_bytes());
+            let attestation = VersionedAttestation::from_scale(&response.attestation)
+                .context("Invalid attestation")?;
+            Some(attestation)
+        } else {
+            None
         };
 
         // Sign WWW server cert with KMS cert
@@ -162,8 +157,7 @@ impl Keys {
             .subject(domain)
             .alt_names(&[domain.to_string()])
             .special_usage("kms:rpc")
-            .maybe_quote(quote.as_deref())
-            .maybe_event_log(event_log.as_deref())
+            .maybe_attestation(attestation.as_ref())
             .key(&rpc_key)
             .build()
             .signed_by(&ca_cert, &ca_key)?;
@@ -302,21 +296,18 @@ fn dstack_client() -> DstackGuestClient<PrpcClient> {
     DstackGuestClient::new(http_client)
 }
 
-async fn app_quote(report_data: Vec<u8>) -> Result<GetQuoteResponse> {
-    let quote = dstack_client()
-        .get_quote(RawQuoteArgs { report_data })
-        .await?;
-    Ok(quote)
+async fn app_attest(report_data: Vec<u8>) -> Result<AttestResponse> {
+    dstack_client().attest(RawQuoteArgs { report_data }).await
 }
 
-async fn quote_keys(p256_pubkey: &[u8], k256_pubkey: &[u8]) -> Result<(Vec<u8>, Vec<u8>)> {
+async fn attest_keys(p256_pubkey: &[u8], k256_pubkey: &[u8]) -> Result<Vec<u8>> {
     let p256_hex = hex::encode(p256_pubkey);
     let k256_hex = hex::encode(k256_pubkey);
     let content_to_quote = format!("dstack-kms-genereted-keys-v1:{p256_hex};{k256_hex};");
     let hash = keccak256(content_to_quote.as_bytes());
     let report_data = pad64(hash);
-    let res = app_quote(report_data).await?;
-    Ok((res.quote, res.event_log.into()))
+    let res = app_attest(report_data).await?;
+    Ok(res.attestation)
 }
 
 fn keccak256(msg: &[u8]) -> [u8; 32] {
@@ -338,19 +329,17 @@ async fn gen_ra_cert(ca_cert_pem: String, ca_key_pem: String) -> Result<(String,
     use ra_tls::rcgen::{KeyPair, PKCS_ECDSA_P256_SHA256};
 
     let ca = CaCert::new(ca_cert_pem, ca_key_pem)?;
-
     let key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)?;
     let pubkey = key.public_key_der();
     let report_data = QuoteContentType::RaTlsCert.to_report_data(&pubkey);
-    let quote_res = app_quote(report_data.to_vec())
+    let response = app_attest(report_data.to_vec())
         .await
         .context("Failed to get quote")?;
-    let quote = quote_res.quote;
-    let event_log: Vec<u8> = quote_res.event_log.into();
+    let attestation =
+        VersionedAttestation::from_scale(&response.attestation).context("Invalid attestation")?;
     let req = CertRequest::builder()
         .subject("RA-TLS TEMP Cert")
-        .quote(&quote)
-        .event_log(&event_log)
+        .attestation(&attestation)
         .key(&key)
         .build();
     let cert = ca.sign(req).context("Failed to sign certificate")?;

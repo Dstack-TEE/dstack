@@ -10,6 +10,7 @@ use certbot::{CertBotConfig, WorkDir};
 use clap::Parser;
 use documented::DocumentedFields;
 use fs_err as fs;
+use or_panic::ResultOrPanic;
 use serde::{Deserialize, Serialize};
 use toml_edit::ser::to_document;
 
@@ -61,8 +62,6 @@ struct Config {
     acme_url: String,
     /// Cloudflare API token
     cf_api_token: String,
-    /// Cloudflare zone ID
-    cf_zone_id: String,
     /// Auto set CAA record
     auto_set_caa: bool,
     /// List of domains to issue certificates for
@@ -73,6 +72,8 @@ struct Config {
     renew_days_before: u64,
     /// Renew timeout in seconds
     renew_timeout: u64,
+    /// Maximum time to wait for DNS propagation in seconds
+    max_dns_wait: u64,
     /// Command to run after renewal
     #[serde(default)]
     renewed_hook: Option<String>,
@@ -84,12 +85,12 @@ impl Default for Config {
             workdir: ".".into(),
             acme_url: "https://acme-staging-v02.api.letsencrypt.org/directory".into(),
             cf_api_token: "".into(),
-            cf_zone_id: "".into(),
             auto_set_caa: true,
             domains: vec!["example.com".into()],
             renew_interval: 3600,
             renew_days_before: 10,
             renew_timeout: 120,
+            max_dns_wait: 300,
             renewed_hook: None,
         }
     }
@@ -124,6 +125,7 @@ fn load_config(config: &PathBuf) -> Result<CertBotConfig> {
     let renew_interval = Duration::from_secs(config.renew_interval);
     let renew_expires_in = Duration::from_secs(config.renew_days_before * 24 * 60 * 60);
     let renew_timeout = Duration::from_secs(config.renew_timeout);
+    let max_dns_wait = Duration::from_secs(config.max_dns_wait);
     let bot_config = CertBotConfig::builder()
         .acme_url(config.acme_url)
         .cert_dir(workdir.backup_dir())
@@ -131,11 +133,11 @@ fn load_config(config: &PathBuf) -> Result<CertBotConfig> {
         .key_file(workdir.key_path())
         .auto_create_account(true)
         .cert_subject_alt_names(config.domains)
-        .cf_zone_id(config.cf_zone_id)
         .cf_api_token(config.cf_api_token)
         .renew_interval(renew_interval)
         .renew_timeout(renew_timeout)
         .renew_expires_in(renew_expires_in)
+        .max_dns_wait(max_dns_wait)
         .credentials_file(workdir.account_credentials_path())
         .auto_set_caa(config.auto_set_caa)
         .maybe_renewed_hook(config.renewed_hook)
@@ -166,7 +168,7 @@ async fn main() -> Result<()> {
     }
     rustls::crypto::ring::default_provider()
         .install_default()
-        .expect("Failed to install default crypto provider");
+        .or_panic("Failed to install default crypto provider");
 
     let args = Args::parse();
     match args.command {

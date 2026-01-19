@@ -16,6 +16,7 @@ use dstack_vmm_rpc::{
 use fs_err as fs;
 use guest_api::client::DefaultClient as GuestClient;
 use id_pool::IdPool;
+use or_panic::ResultOrPanic;
 use ra_rpc::client::RaClient;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -122,8 +123,8 @@ pub struct App {
 }
 
 impl App {
-    fn lock(&self) -> MutexGuard<AppState> {
-        self.state.lock().unwrap()
+    fn lock(&self) -> MutexGuard<'_, AppState> {
+        self.state.lock().or_panic("mutex poisoned")
     }
 
     pub(crate) fn vm_dir(&self) -> PathBuf {
@@ -350,7 +351,7 @@ impl App {
                     .unwrap_or_default()
                     .is_cvm()
             })
-            .map(|(id, p)| (id.clone(), p.config.cid.unwrap()))
+            .flat_map(|(id, p)| p.config.cid.map(|cid| (id.clone(), cid)))
             .collect::<HashMap<_, _>>();
 
         // Update CID pool with running VMs
@@ -804,22 +805,21 @@ pub(crate) fn make_sys_config(cfg: &Config, manifest: &Manifest) -> Result<Strin
         "pccs_url": cfg.cvm.pccs_url,
         "docker_registry": cfg.cvm.docker_registry,
         "host_api_url": format!("vsock://2:{}/api", cfg.host_api.port),
-        "vm_config": serde_json::to_string(&make_vm_config(cfg, manifest, &image))?,
+        "vm_config": serde_json::to_string(&make_vm_config(cfg, manifest, &image)?)?,
     });
     let sys_config_str =
         serde_json::to_string(&sys_config).context("Failed to serialize vm config")?;
     Ok(sys_config_str)
 }
 
-fn make_vm_config(cfg: &Config, manifest: &Manifest, image: &Image) -> dstack_types::VmConfig {
+fn make_vm_config(cfg: &Config, manifest: &Manifest, image: &Image) -> Result<serde_json::Value> {
     let os_image_hash = image
         .digest
         .as_ref()
         .and_then(|d| hex::decode(d).ok())
         .unwrap_or_default();
     let gpus = manifest.gpus.clone().unwrap_or_default();
-    dstack_types::VmConfig {
-        spec_version: 1,
+    let mut config = serde_json::to_value(dstack_types::VmConfig {
         os_image_hash,
         cpu_count: manifest.vcpu,
         memory_size: manifest.memory as u64 * 1024 * 1024,
@@ -830,9 +830,13 @@ fn make_vm_config(cfg: &Config, manifest: &Manifest, image: &Image) -> dstack_ty
         hugepages: manifest.hugepages,
         num_gpus: gpus.gpus.len() as u32,
         num_nvswitches: gpus.bridges.len() as u32,
+        host_share_mode: cfg.cvm.host_share_mode.clone(),
         hotplug_off: cfg.cvm.qemu_hotplug_off,
         image: Some(manifest.image.clone()),
-    }
+    })?;
+    // For backward compatibility
+    config["spec_version"] = serde_json::Value::from(1);
+    Ok(config)
 }
 
 fn paginate<T>(items: Vec<T>, page: u32, page_size: u32) -> impl Iterator<Item = T> {

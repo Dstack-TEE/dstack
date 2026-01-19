@@ -2,11 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{
-    ffi::OsStr,
-    path::{Path, PathBuf},
-    sync::Arc,
-};
+use std::{path::PathBuf, sync::Arc};
 
 use anyhow::{bail, Context, Result};
 use dstack_kms_rpc::{
@@ -15,20 +11,18 @@ use dstack_kms_rpc::{
     GetMetaResponse, GetTempCaCertResponse, KmsKeyResponse, KmsKeys, PublicKeyResponse,
     SignCertRequest, SignCertResponse,
 };
-use dstack_types::VmConfig;
+use dstack_verifier::{CvmVerifier, VerificationDetails};
 use fs_err as fs;
 use k256::ecdsa::SigningKey;
-use ra_rpc::{Attestation, CallContext, RpcCall};
+use ra_rpc::{CallContext, RpcCall};
 use ra_tls::{
     attestation::VerifiedAttestation,
-    cert::{CaCert, CertRequest, CertSigningRequest},
+    cert::{CaCert, CertRequest, CertSigningRequestV1, CertSigningRequestV2, Csr},
     kdf,
 };
 use scale::Decode;
-use serde::{Deserialize, Serialize};
 use sha2::Digest;
-use tokio::{io::AsyncWriteExt, process::Command};
-use tracing::{debug, info};
+use tracing::info;
 use upgrade_authority::BootInfo;
 
 use crate::{
@@ -57,6 +51,7 @@ pub struct KmsStateInner {
     k256_key: SigningKey,
     temp_ca_cert: String,
     temp_ca_key: String,
+    verifier: CvmVerifier,
 }
 
 impl KmsState {
@@ -70,6 +65,11 @@ impl KmsState {
             fs::read_to_string(config.tmp_ca_key()).context("Faeild to read temp ca key")?;
         let temp_ca_cert =
             fs::read_to_string(config.tmp_ca_cert()).context("Faeild to read temp ca cert")?;
+        let verifier = CvmVerifier::new(
+            config.image.cache_dir.display().to_string(),
+            config.image.download_url.clone(),
+            config.image.download_timeout,
+        );
         Ok(Self {
             inner: Arc::new(KmsStateInner {
                 config,
@@ -77,6 +77,7 @@ impl KmsState {
                 k256_key,
                 temp_ca_cert,
                 temp_ca_key,
+                verifier,
             }),
         })
     }
@@ -90,50 +91,6 @@ pub struct RpcHandler {
 struct BootConfig {
     boot_info: BootInfo,
     gateway_app_id: String,
-    os_image_hash: Vec<u8>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, Eq, PartialEq)]
-struct Mrs {
-    mrtd: String,
-    rtmr0: String,
-    rtmr1: String,
-    rtmr2: String,
-}
-
-impl Mrs {
-    fn assert_eq(&self, other: &Self) -> Result<()> {
-        let Self {
-            mrtd,
-            rtmr0,
-            rtmr1,
-            rtmr2,
-        } = self;
-        if mrtd != &other.mrtd {
-            bail!("MRTD does not match");
-        }
-        if rtmr0 != &other.rtmr0 {
-            bail!("RTMR0 does not match");
-        }
-        if rtmr1 != &other.rtmr1 {
-            bail!("RTMR1 does not match");
-        }
-        if rtmr2 != &other.rtmr2 {
-            bail!("RTMR2 does not match");
-        }
-        Ok(())
-    }
-}
-
-impl From<&BootInfo> for Mrs {
-    fn from(report: &BootInfo) -> Self {
-        Self {
-            mrtd: hex::encode(&report.mrtd),
-            rtmr0: hex::encode(&report.rtmr0),
-            rtmr1: hex::encode(&report.rtmr1),
-            rtmr2: hex::encode(&report.rtmr2),
-        }
-    }
 }
 
 impl RpcHandler {
@@ -161,10 +118,6 @@ impl RpcHandler {
         self.state.config.image.cache_dir.join("images")
     }
 
-    fn mr_cache_dir(&self) -> PathBuf {
-        self.state.config.image.cache_dir.join("computed")
-    }
-
     fn remove_cache(&self, parent_dir: &PathBuf, sub_dir: &str) -> Result<()> {
         if sub_dir.is_empty() {
             return Ok(());
@@ -190,234 +143,21 @@ impl RpcHandler {
         Ok(())
     }
 
-    fn get_cached_mrs(&self, key: &str) -> Result<Mrs> {
-        let path = self.mr_cache_dir().join(key);
-        if !path.exists() {
-            bail!("Cached MRs not found");
-        }
-        let content = fs::read_to_string(path).context("Failed to read cached MRs")?;
-        let cached_mrs: Mrs =
-            serde_json::from_str(&content).context("Failed to parse cached MRs")?;
-        Ok(cached_mrs)
-    }
-
-    fn cache_mrs(&self, key: &str, mrs: &Mrs) -> Result<()> {
-        let path = self.mr_cache_dir().join(key);
-        fs::create_dir_all(path.parent().unwrap()).context("Failed to create cache directory")?;
-        safe_write::safe_write(
-            &path,
-            serde_json::to_string(mrs).context("Failed to serialize cached MRs")?,
-        )
-        .context("Failed to write cached MRs")?;
-        Ok(())
-    }
-
-    async fn verify_os_image_hash(&self, vm_config: &VmConfig, report: &BootInfo) -> Result<()> {
+    async fn verify_os_image_hash(
+        &self,
+        vm_config: String,
+        report: &VerifiedAttestation,
+    ) -> Result<()> {
         if !self.state.config.image.verify {
             info!("Image verification is disabled");
             return Ok(());
         }
-        let hex_os_image_hash = hex::encode(&vm_config.os_image_hash);
-        info!("Verifying image {hex_os_image_hash}");
-
-        let verified_mrs: Mrs = report.into();
-
-        let cache_key = {
-            let vm_config =
-                serde_json::to_vec(vm_config).context("Failed to serialize VM config")?;
-            hex::encode(sha2::Sha256::new_with_prefix(&vm_config).finalize())
-        };
-        if let Ok(cached_mrs) = self.get_cached_mrs(&cache_key) {
-            cached_mrs
-                .assert_eq(&verified_mrs)
-                .context("MRs do not match (cached)")?;
-            return Ok(());
-        }
-
-        // Create a directory for the image if it doesn't exist
-        let image_dir = self.image_cache_dir().join(&hex_os_image_hash);
-        // Check if metadata.json exists, if not download the image
-        let metadata_path = image_dir.join("metadata.json");
-        if !metadata_path.exists() {
-            info!("Image {} not found, downloading", hex_os_image_hash);
-            tokio::time::timeout(
-                self.state.config.image.download_timeout,
-                self.download_image(&hex_os_image_hash, &image_dir),
-            )
+        let mut detail = VerificationDetails::default();
+        self.state
+            .verifier
+            .verify_os_image_hash(vm_config, report, false, &mut detail)
             .await
-            .context("Download image timeout")?
-            .with_context(|| format!("Failed to download image {hex_os_image_hash}"))?;
-        }
-
-        let image_info =
-            fs::read_to_string(metadata_path).context("Failed to read image metadata")?;
-        let image_info: dstack_types::ImageInfo =
-            serde_json::from_str(&image_info).context("Failed to parse image metadata")?;
-
-        let fw_path = image_dir.join(&image_info.bios);
-        let kernel_path = image_dir.join(&image_info.kernel);
-        let initrd_path = image_dir.join(&image_info.initrd);
-        let kernel_cmdline = image_info.cmdline + " initrd=initrd";
-
-        let mrs = dstack_mr::Machine::builder()
-            .cpu_count(vm_config.cpu_count)
-            .memory_size(vm_config.memory_size)
-            .firmware(&fw_path.display().to_string())
-            .kernel(&kernel_path.display().to_string())
-            .initrd(&initrd_path.display().to_string())
-            .kernel_cmdline(&kernel_cmdline)
-            .root_verity(true)
-            .hotplug_off(vm_config.hotplug_off)
-            .maybe_two_pass_add_pages(vm_config.qemu_single_pass_add_pages)
-            .maybe_pic(vm_config.pic)
-            .maybe_qemu_version(vm_config.qemu_version.clone())
-            .maybe_pci_hole64_size(if vm_config.pci_hole64_size > 0 {
-                Some(vm_config.pci_hole64_size)
-            } else {
-                None
-            })
-            .hugepages(vm_config.hugepages)
-            .num_gpus(vm_config.num_gpus)
-            .num_nvswitches(vm_config.num_nvswitches)
-            .build()
-            .measure()
-            .context("Failed to compute expected MRs")?;
-
-        let expected_mrs: Mrs = Mrs {
-            mrtd: hex::encode(&mrs.mrtd),
-            rtmr0: hex::encode(&mrs.rtmr0),
-            rtmr1: hex::encode(&mrs.rtmr1),
-            rtmr2: hex::encode(&mrs.rtmr2),
-        };
-        self.cache_mrs(&cache_key, &expected_mrs)
-            .context("Failed to cache MRs")?;
-        expected_mrs
-            .assert_eq(&verified_mrs)
-            .context("MRs do not match")?;
-        Ok(())
-    }
-
-    async fn download_image(&self, hex_os_image_hash: &str, dst_dir: &Path) -> Result<()> {
-        // Create a hex representation of the os_image_hash for URL and directory naming
-        let url = self
-            .state
-            .config
-            .image
-            .download_url
-            .replace("{OS_IMAGE_HASH}", hex_os_image_hash);
-
-        // Create a temporary directory for extraction within the cache directory
-        let cache_dir = self.image_cache_dir().join("tmp");
-        fs::create_dir_all(&cache_dir).context("Failed to create cache directory")?;
-        let auto_delete_temp_dir = tempfile::Builder::new()
-            .prefix("tmp-download-")
-            .tempdir_in(&cache_dir)
-            .context("Failed to create temporary directory")?;
-        let tmp_dir = auto_delete_temp_dir.path();
-        // Download the image tarball
-        info!("Downloading image from {}", url);
-        let client = reqwest::Client::new();
-        let response = client
-            .get(&url)
-            .send()
-            .await
-            .context("Failed to download image")?;
-
-        if !response.status().is_success() {
-            bail!(
-                "Failed to download image: HTTP status {}, url: {url}",
-                response.status(),
-            );
-        }
-
-        // Save the tarball to a temporary file using streaming
-        let tarball_path = tmp_dir.join("image.tar.gz");
-        let mut file = tokio::fs::File::create(&tarball_path)
-            .await
-            .context("Failed to create tarball file")?;
-        let mut response = response;
-        while let Some(chunk) = response.chunk().await? {
-            file.write_all(&chunk)
-                .await
-                .context("Failed to write chunk to file")?;
-        }
-
-        let extracted_dir = tmp_dir.join("extracted");
-        fs::create_dir_all(&extracted_dir).context("Failed to create extraction directory")?;
-
-        // Extract the tarball
-        let output = Command::new("tar")
-            .arg("xzf")
-            .arg(&tarball_path)
-            .current_dir(&extracted_dir)
-            .output()
-            .await
-            .context("Failed to extract tarball")?;
-
-        if !output.status.success() {
-            bail!(
-                "Failed to extract tarball: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-        }
-
-        // Verify checksum
-        let output = Command::new("sha256sum")
-            .arg("-c")
-            .arg("sha256sum.txt")
-            .current_dir(&extracted_dir)
-            .output()
-            .await
-            .context("Failed to verify checksum")?;
-
-        if !output.status.success() {
-            bail!(
-                "Checksum verification failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-        }
-        // Remove the files that are not listed in sha256sum.txt
-        let sha256sum_path = extracted_dir.join("sha256sum.txt");
-        let files_doc =
-            fs::read_to_string(&sha256sum_path).context("Failed to read sha256sum.txt")?;
-        let listed_files: Vec<&OsStr> = files_doc
-            .lines()
-            .flat_map(|line| line.split_whitespace().nth(1))
-            .map(|s| s.as_ref())
-            .collect();
-        let files = fs::read_dir(&extracted_dir).context("Failed to read directory")?;
-        for file in files {
-            let file = file.context("Failed to read directory entry")?;
-            let filename = file.file_name();
-            if !listed_files.contains(&filename.as_os_str()) {
-                if file.path().is_dir() {
-                    fs::remove_dir_all(file.path()).context("Failed to remove directory")?;
-                } else {
-                    fs::remove_file(file.path()).context("Failed to remove file")?;
-                }
-            }
-        }
-
-        // os_image_hash should eq to sha256sum of the sha256sum.txt
-        let os_image_hash = sha2::Sha256::new_with_prefix(files_doc.as_bytes()).finalize();
-        if hex::encode(os_image_hash) != hex_os_image_hash {
-            bail!("os_image_hash does not match sha256sum of the sha256sum.txt");
-        }
-
-        // Move the extracted files to the destination directory
-        let metadata_path = extracted_dir.join("metadata.json");
-        if !metadata_path.exists() {
-            bail!("metadata.json not found in the extracted archive");
-        }
-
-        if dst_dir.exists() {
-            fs::remove_dir_all(dst_dir).context("Failed to remove destination directory")?;
-        }
-        let dst_dir_parent = dst_dir.parent().context("Failed to get parent directory")?;
-        fs::create_dir_all(dst_dir_parent).context("Failed to create parent directory")?;
-        // Move the extracted files to the destination directory
-        fs::rename(extracted_dir, dst_dir)
-            .context("Failed to move extracted files to destination directory")?;
+            .context("Failed to verify os image hash")?;
         Ok(())
     }
 
@@ -426,36 +166,33 @@ impl RpcHandler {
         att: &VerifiedAttestation,
         is_kms: bool,
         use_boottime_mr: bool,
-        vm_config: &str,
+        vm_config_str: &str,
     ) -> Result<BootConfig> {
-        let report = att
-            .report
-            .report
-            .as_td10()
-            .context("Failed to decode TD report")?;
-        let app_info = att.decode_app_info(use_boottime_mr)?;
-        debug!("vm_config: {vm_config}");
-        let vm_config: VmConfig =
-            serde_json::from_str(vm_config).context("Failed to decode VM config")?;
-        let os_image_hash = vm_config.os_image_hash.clone();
+        let tcb_status;
+        let advisory_ids;
+        match att.report.tdx_report() {
+            Some(report) => {
+                tcb_status = report.status.clone();
+                advisory_ids = report.advisory_ids.clone();
+            }
+            None => {
+                tcb_status = "".to_string();
+                advisory_ids = Vec::new();
+            }
+        };
+        let app_info = att.decode_app_info_ex(use_boottime_mr, vm_config_str)?;
         let boot_info = BootInfo {
-            mrtd: report.mr_td.to_vec(),
-            rtmr0: report.rt_mr0.to_vec(),
-            rtmr1: report.rt_mr1.to_vec(),
-            rtmr2: report.rt_mr2.to_vec(),
-            rtmr3: report.rt_mr3.to_vec(),
+            attestation_mode: att.quote.mode(),
             mr_aggregated: app_info.mr_aggregated.to_vec(),
-            os_image_hash: os_image_hash.clone(),
+            os_image_hash: app_info.os_image_hash,
             mr_system: app_info.mr_system.to_vec(),
             app_id: app_info.app_id,
             compose_hash: app_info.compose_hash,
             instance_id: app_info.instance_id,
             device_id: app_info.device_id,
             key_provider_info: app_info.key_provider_info,
-            event_log: String::from_utf8(att.raw_event_log.clone())
-                .context("Failed to serialize event log")?,
-            tcb_status: att.report.status.clone(),
-            advisory_ids: att.report.advisory_ids.clone(),
+            tcb_status,
+            advisory_ids,
         };
         let response = self
             .state
@@ -466,13 +203,12 @@ impl RpcHandler {
         if !response.is_allowed {
             bail!("Boot denied: {}", response.reason);
         }
-        self.verify_os_image_hash(&vm_config, &boot_info)
+        self.verify_os_image_hash(vm_config_str.into(), att)
             .await
             .context("Failed to verify os image hash")?;
         Ok(BootConfig {
             boot_info,
             gateway_app_id: response.gateway_app_id,
-            os_image_hash,
         })
     }
 
@@ -505,7 +241,6 @@ impl KmsRpc for RpcHandler {
         let BootConfig {
             boot_info,
             gateway_app_id,
-            os_image_hash,
         } = self
             .ensure_app_boot_allowed(&request.vm_config)
             .await
@@ -538,7 +273,7 @@ impl KmsRpc for RpcHandler {
             k256_signature,
             tproxy_app_id: gateway_app_id.clone(),
             gateway_app_id,
-            os_image_hash,
+            os_image_hash: boot_info.os_image_hash,
         })
     }
 
@@ -612,15 +347,27 @@ impl KmsRpc for RpcHandler {
     }
 
     async fn sign_cert(self, request: SignCertRequest) -> Result<SignCertResponse> {
-        if request.api_version > 1 {
-            bail!("Unsupported API version: {}", request.api_version);
-        }
-        let csr =
-            CertSigningRequest::decode(&mut &request.csr[..]).context("Failed to parse csr")?;
-        csr.verify(&request.signature)
-            .context("Failed to verify csr signature")?;
-        let attestation = Attestation::new(csr.quote.clone(), csr.event_log.clone())
-            .context("Failed to create attestation from quote and event log")?
+        let csr = match request.api_version {
+            1 => {
+                let csr = CertSigningRequestV1::decode(&mut &request.csr[..])
+                    .context("Failed to parse csr")?;
+                csr.verify(&request.signature)
+                    .context("Failed to verify csr signature")?;
+                csr.try_into().context("Failed to upgrade csr v1 to v2")?
+            }
+            2 => {
+                let csr = CertSigningRequestV2::decode(&mut &request.csr[..])
+                    .context("Failed to parse csr")?;
+                csr.verify(&request.signature)
+                    .context("Failed to verify csr signature")?;
+                csr
+            }
+            _ => bail!("Unsupported API version: {}", request.api_version),
+        };
+        let attestation = csr
+            .attestation
+            .clone()
+            .into_inner()
             .verify_with_ra_pubkey(&csr.pubkey, self.state.config.pccs_url.as_deref())
             .await
             .context("Quote verification failed")?;
@@ -644,8 +391,10 @@ impl KmsRpc for RpcHandler {
         self.ensure_admin(&request.token)?;
         self.remove_cache(&self.image_cache_dir(), &request.image_hash)
             .context("Failed to clear image cache")?;
-        self.remove_cache(&self.mr_cache_dir(), &request.config_hash)
-            .context("Failed to clear MR cache")?;
+        // Clear measurement cache (now handled by verifier's cache in measurements/ dir)
+        let mr_cache_dir = self.state.config.image.cache_dir.join("measurements");
+        self.remove_cache(&mr_cache_dir, &request.config_hash)
+            .context("Failed to clear measurement cache")?;
         Ok(())
     }
 }

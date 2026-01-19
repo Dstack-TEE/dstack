@@ -12,7 +12,7 @@ use rocket::response::content::{RawHtml, RawJson};
 use std::{borrow::Cow, sync::Arc};
 
 use anyhow::{Context, Result};
-use ra_tls::{attestation::Attestation, traits::CertExt};
+use ra_tls::traits::CertExt;
 use rocket::{
     data::{ByteUnit, Data, Limits, ToByteUnit},
     http::{uri::Origin, ContentType, Method, Status},
@@ -301,14 +301,14 @@ pub async fn handle_prpc_impl<S, Call: RpcCall<S>>(
     let attestation = request
         .certificate
         .as_ref()
-        .map(|cert| Attestation::from_der(cert.as_bytes()))
+        .map(|cert| ra_tls::attestation::from_der(cert.as_bytes()))
         .transpose()?
         .flatten();
     let attestation = match (request.quote_verifier, attestation) {
         (Some(quote_verifier), Some(attestation)) => {
             let pubkey = request
                 .certificate
-                .expect("certificate is missing")
+                .context("certificate is missing")?
                 .public_key()
                 .raw
                 .to_vec();

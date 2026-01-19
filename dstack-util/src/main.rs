@@ -3,23 +3,20 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::{Context, Result};
-use bollard::container::{ListContainersOptions, RemoveContainerOptions};
-use bollard::Docker;
 use clap::{Parser, Subcommand};
-use dstack_types::KeyProvider;
+use dstack_attest::emit_runtime_event;
+use dstack_types::{KeyProvider, KeyProviderKind};
 use fs_err as fs;
 use getrandom::fill as getrandom;
 use host_api::HostApi;
 use k256::schnorr::SigningKey;
+use ra_rpc::Attestation;
 use ra_tls::{
     attestation::QuoteContentType,
     cert::generate_ra_cert,
     kdf::{derive_ecdsa_key, derive_ecdsa_key_pair_from_bytes},
     rcgen::KeyPair,
 };
-use scale::Decode;
-use serde::Deserialize;
-use std::{collections::HashMap, path::Path};
 use std::{
     io::{self, Read, Write},
     path::PathBuf,
@@ -29,6 +26,7 @@ use tdx_attest as att;
 use utils::AppKeys;
 
 mod crypto;
+mod docker_compose;
 mod host_api;
 mod parse_env_file;
 mod system_setup;
@@ -44,14 +42,16 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Get TDX report given report data from stdin
-    Report,
     /// Generate a TDX quote given report data from stdin
     Quote,
+    /// Get TDX event logs
+    Eventlog,
     /// Extend RTMRs
     Extend(ExtendArgs),
     /// Show the current RTMR state
     Show,
+    /// Replay event log and show calculated IMR/RTMR values
+    ReplayImr,
     /// Hex encode data
     Hex(HexCommand),
     /// Generate a RA-TLS certificate
@@ -185,44 +185,46 @@ struct RemoveOrphansArgs {
     /// path to the docker-compose.yaml file
     #[arg(short = 'f', long)]
     compose: String,
-}
 
-#[derive(Debug, Deserialize)]
-struct ComposeConfig {
-    name: Option<String>,
-    services: HashMap<String, ComposeService>,
-}
+    /// show what would be removed without actually removing
+    #[arg(short = 'n', long)]
+    dry_run: bool,
 
-#[derive(Debug, Deserialize)]
-struct ComposeService {}
+    /// Offline mode: operate without Docker daemon by directly reading Docker data directory
+    #[arg(long)]
+    no_dockerd: bool,
+
+    /// Docker data root directory for offline mode (default: /var/lib/docker)
+    #[arg(short = 'd', long, default_value = "/var/lib/docker")]
+    docker_root: String,
+}
 
 fn cmd_quote() -> Result<()> {
     let mut report_data = [0; 64];
     io::stdin()
         .read_exact(&mut report_data)
         .context("Failed to read report data")?;
-    let (_key_id, quote) = att::get_quote(&report_data, None).context("Failed to get quote")?;
+    let quote = att::get_quote(&report_data).context("Failed to get quote")?;
     io::stdout()
         .write_all(&quote)
         .context("Failed to write quote")?;
     Ok(())
 }
 
-fn cmd_extend(extend_args: ExtendArgs) -> Result<()> {
-    let payload = hex::decode(&extend_args.payload).context("Failed to decode payload")?;
-    att::extend_rtmr3(&extend_args.event, &payload).context("Failed to extend RTMR")
+fn cmd_eventlog() -> Result<()> {
+    let event_logs = cc_eventlog::tdx::read_event_log().context("Failed to read event logs")?;
+    serde_json::to_writer_pretty(io::stdout(), &event_logs)
+        .context("Failed to write event logs")?;
+    Ok(())
 }
 
-fn cmd_report() -> Result<()> {
-    let mut report_data = [0; 64];
-    io::stdin()
-        .read_exact(&mut report_data)
-        .context("Failed to read report data")?;
-    let report = att::get_report(&report_data).context("Failed to get report")?;
-    io::stdout()
-        .write_all(&report.0)
-        .context("Failed to write report")?;
-    Ok(())
+fn hex_decode(hex_str: &str) -> Result<Vec<u8>> {
+    hex::decode(hex_str.trim_start_matches("0x")).context("Invalid hex string")
+}
+
+fn cmd_extend(extend_args: ExtendArgs) -> Result<()> {
+    let payload = hex_decode(&extend_args.payload).context("Failed to decode payload")?;
+    emit_runtime_event(&extend_args.event, &payload).context("Failed to extend RTMR")
 }
 
 fn cmd_rand(rand_args: RandArgs) -> Result<()> {
@@ -237,41 +239,6 @@ fn cmd_rand(rand_args: RandArgs) -> Result<()> {
     Ok(())
 }
 
-#[derive(Decode)]
-struct ParsedReport {
-    attributes: [u8; 8],
-    xfam: [u8; 8],
-    mrtd: [u8; 48],
-    mrconfigid: [u8; 48],
-    mrowner: [u8; 48],
-    mrownerconfig: [u8; 48],
-    rtmr0: [u8; 48],
-    rtmr1: [u8; 48],
-    rtmr2: [u8; 48],
-    rtmr3: [u8; 48],
-    servtd_hash: [u8; 48],
-}
-
-impl core::fmt::Debug for ParsedReport {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        use hex_fmt::HexFmt as HF;
-
-        f.debug_struct("ParsedReport")
-            .field("attributes", &HF(&self.attributes))
-            .field("xfam", &HF(&self.xfam))
-            .field("mrtd", &HF(&self.mrtd))
-            .field("mrconfigid", &HF(&self.mrconfigid))
-            .field("mrowner", &HF(&self.mrowner))
-            .field("mrownerconfig", &HF(&self.mrownerconfig))
-            .field("rtmr0", &HF(&self.rtmr0))
-            .field("rtmr1", &HF(&self.rtmr1))
-            .field("rtmr2", &HF(&self.rtmr2))
-            .field("rtmr3", &HF(&self.rtmr3))
-            .field("servtd_hash", &HF(&self.servtd_hash))
-            .finish()
-    }
-}
-
 fn cmd_show_mrs() -> Result<()> {
     let attestation =
         ra_tls::attestation::Attestation::local().context("Failed to get attestation")?;
@@ -280,6 +247,57 @@ fn cmd_show_mrs() -> Result<()> {
         .context("Failed to decode app info")?;
     serde_json::to_writer_pretty(io::stdout(), &app_info).context("Failed to write app info")?;
     println!();
+    Ok(())
+}
+
+fn cmd_replay_imr() -> Result<()> {
+    use sha2::Digest;
+
+    println!("=== Event Log Replay: Calculated IMR/RTMR Values ===\n");
+
+    // Read and replay event logs
+    let event_logs = att::eventlog::tdx::read_event_log().context("Failed to read event logs")?;
+
+    println!("Total events: {}", event_logs.len());
+
+    // Count events per IMR
+    let mut imr_counts = [0u32; 4];
+    for event in &event_logs {
+        if event.imr < 4 {
+            imr_counts[event.imr as usize] += 1;
+        }
+    }
+
+    println!("Event distribution:");
+    for (idx, count) in imr_counts.iter().enumerate() {
+        println!("  IMR {}: {} events", idx, count);
+    }
+    println!();
+
+    // Replay event logs to calculate IMR/RTMR values
+    println!("Replaying event log...");
+    let mut rtmrs: [[u8; 48]; 4] = [[0u8; 48]; 4];
+
+    for event in &event_logs {
+        if event.imr < 4 {
+            let mut hasher = sha2::Sha384::new();
+            hasher.update(rtmrs[event.imr as usize]);
+            hasher.update(event.digest());
+            rtmrs[event.imr as usize] = hasher.finalize().into();
+        }
+    }
+
+    println!("\nCalculated IMR/RTMR values from event log replay:\n");
+    println!("IMR 0 (CCEL) → {}", hex::encode(rtmrs[0]));
+    println!("IMR 1 (CCEL) → {}", hex::encode(rtmrs[1]));
+    println!("IMR 2 (CCEL) → {}", hex::encode(rtmrs[2]));
+    println!("IMR 3 (CCEL) → {}", hex::encode(rtmrs[3]));
+
+    println!("\n========================================");
+    println!("Note: These are the calculated values from replaying the CCEL event log.");
+    println!("The mapping between CCEL IMR indices and TDX RTMR indices may vary");
+    println!("depending on the platform implementation.");
+
     Ok(())
 }
 
@@ -321,14 +339,13 @@ fn cmd_gen_ca_cert(args: GenCaCertArgs) -> Result<()> {
     let key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)?;
     let pubkey = key.public_key_der();
     let report_data = QuoteContentType::KmsRootCa.to_report_data(&pubkey);
-    let (_, quote) = att::get_quote(&report_data, None).context("Failed to get quote")?;
-    let event_logs = att::eventlog::read_event_logs().context("Failed to read event logs")?;
-    let event_log = serde_json::to_vec(&event_logs).context("Failed to serialize event logs")?;
+    let attestation = Attestation::quote(&report_data)
+        .context("Failed to get attestation")?
+        .into_versioned();
 
     let req = CertRequest::builder()
         .subject("App Root CA")
-        .quote(&quote)
-        .event_log(&event_log)
+        .attestation(&attestation)
         .key(&key)
         .ca_level(args.ca_level)
         .build();
@@ -347,38 +364,60 @@ fn cmd_gen_app_keys(args: GenAppKeysArgs) -> Result<()> {
     let key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)?;
     let disk_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)?;
     let k256_key = SigningKey::random(&mut rand::thread_rng());
-    let app_keys = make_app_keys(key, disk_key, k256_key, args.ca_level, None)?;
+    let key_provider = KeyProvider::None {
+        key: key.serialize_pem(),
+    };
+    let app_keys = make_app_keys(&key, &disk_key, &k256_key, args.ca_level, key_provider)?;
     let app_keys = serde_json::to_string(&app_keys).context("Failed to serialize app keys")?;
     fs::write(&args.output, app_keys).context("Failed to write app keys")?;
     Ok(())
 }
 
-fn gen_app_keys_from_seed(seed: &[u8], mr: Option<Vec<u8>>) -> Result<AppKeys> {
+fn gen_app_keys_from_seed(
+    seed: &[u8],
+    provider: KeyProviderKind,
+    mr: Option<Vec<u8>>,
+) -> Result<AppKeys> {
     let key = derive_ecdsa_key_pair_from_bytes(seed, &["app-key".as_bytes()])?;
     let disk_key = derive_ecdsa_key_pair_from_bytes(seed, &["app-disk-key".as_bytes()])?;
     let k256_key = derive_ecdsa_key(seed, &["app-k256-key".as_bytes()], 32)?;
     let k256_key = SigningKey::from_bytes(&k256_key).context("Failed to parse k256 key")?;
-    make_app_keys(key, disk_key, k256_key, 1, mr)
+    let key_provider = match provider {
+        KeyProviderKind::None => KeyProvider::None {
+            key: key.serialize_pem(),
+        },
+        KeyProviderKind::Local => KeyProvider::Local {
+            mr: mr.context("Missing MR for local key provider")?,
+            key: key.serialize_pem(),
+        },
+        KeyProviderKind::Tpm => KeyProvider::Tpm {
+            key: key.serialize_pem(),
+            pubkey: key.public_key_der(),
+        },
+        KeyProviderKind::Kms => {
+            anyhow::bail!("KMS keys must be fetched from the KMS server")
+        }
+    };
+    make_app_keys(&key, &disk_key, &k256_key, 1, key_provider)
 }
 
 fn make_app_keys(
-    app_key: KeyPair,
-    disk_key: KeyPair,
-    k256_key: SigningKey,
+    app_key: &KeyPair,
+    disk_key: &KeyPair,
+    k256_key: &SigningKey,
     ca_level: u8,
-    mr: Option<Vec<u8>>,
+    key_provider: KeyProvider,
 ) -> Result<AppKeys> {
     use ra_tls::cert::CertRequest;
     let pubkey = app_key.public_key_der();
     let report_data = QuoteContentType::RaTlsCert.to_report_data(&pubkey);
-    let (_, quote) = att::get_quote(&report_data, None).context("Failed to get quote")?;
-    let event_logs = att::eventlog::read_event_logs().context("Failed to read event logs")?;
-    let event_log = serde_json::to_vec(&event_logs).context("Failed to serialize event logs")?;
+    let attestation = Attestation::quote(&report_data)
+        .context("Failed to get attestation")?
+        .into_versioned();
     let req = CertRequest::builder()
         .subject("App Root Cert")
-        .quote(&quote)
-        .event_log(&event_log)
-        .key(&app_key)
+        .attestation(&attestation)
+        .key(app_key)
         .ca_level(ca_level)
         .build();
     let cert = req
@@ -392,15 +431,7 @@ fn make_app_keys(
         k256_signature: vec![],
         gateway_app_id: "".to_string(),
         ca_cert: cert.pem(),
-        key_provider: match mr {
-            Some(mr) => KeyProvider::Local {
-                mr,
-                key: app_key.serialize_pem(),
-            },
-            None => KeyProvider::None {
-                key: app_key.serialize_pem(),
-            },
-        },
+        key_provider,
     })
 }
 
@@ -417,89 +448,6 @@ fn sha256(data: &[u8]) -> [u8; 32] {
     sha256.finalize().into()
 }
 
-fn get_project_name(compose_file: impl AsRef<Path>) -> Result<String> {
-    let project_name = fs::canonicalize(compose_file)
-        .context("Failed to canonicalize compose file")?
-        .parent()
-        .context("Failed to get parent directory of compose file")?
-        .file_name()
-        .context("Failed to get file name of compose file")?
-        .to_string_lossy()
-        .into_owned();
-    Ok(project_name)
-}
-
-async fn cmd_remove_orphans(compose_file: impl AsRef<Path>) -> Result<()> {
-    // Connect to Docker daemon
-    let docker =
-        Docker::connect_with_local_defaults().context("Failed to connect to Docker daemon")?;
-
-    // Read and parse docker-compose.yaml to get project name
-    let compose_content =
-        fs::read_to_string(compose_file.as_ref()).context("Failed to read docker-compose.yaml")?;
-    let docker_compose: ComposeConfig =
-        serde_yaml2::from_str(&compose_content).context("Failed to parse docker-compose.yaml")?;
-
-    // Get current project name from compose file or directory name
-    let project_name = match docker_compose.name {
-        Some(name) => name,
-        None => get_project_name(compose_file)?,
-    };
-
-    // List all containers
-    let options = ListContainersOptions::<String> {
-        all: true,
-        ..Default::default()
-    };
-
-    let containers = docker
-        .list_containers(Some(options))
-        .await
-        .context("Failed to list containers")?;
-
-    // Find and remove orphaned containers
-    for container in containers {
-        let Some(labels) = container.labels else {
-            continue;
-        };
-
-        // Check if container belongs to current project
-        let Some(container_project) = labels.get("com.docker.compose.project") else {
-            continue;
-        };
-
-        if container_project != &project_name {
-            continue;
-        }
-        // Check if service still exists in compose file
-        let Some(service_name) = labels.get("com.docker.compose.service") else {
-            continue;
-        };
-        if docker_compose.services.contains_key(service_name) {
-            continue;
-        }
-        // Service no longer exists in compose file, remove the container
-        let Some(container_id) = container.id else {
-            continue;
-        };
-
-        println!("Removing orphaned container {service_name} {container_id}");
-        docker
-            .remove_container(
-                &container_id,
-                Some(RemoveContainerOptions {
-                    v: true,
-                    force: true,
-                    ..Default::default()
-                }),
-            )
-            .await
-            .with_context(|| format!("Failed to remove container {}", container_id))?;
-    }
-
-    Ok(())
-}
-
 #[tokio::main]
 async fn main() -> Result<()> {
     {
@@ -511,9 +459,10 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Report => cmd_report()?,
         Commands::Quote => cmd_quote()?,
+        Commands::Eventlog => cmd_eventlog()?,
         Commands::Show => cmd_show_mrs()?,
+        Commands::ReplayImr => cmd_replay_imr()?,
         Commands::Extend(extend_args) => {
             cmd_extend(extend_args)?;
         }
@@ -542,7 +491,15 @@ async fn main() -> Result<()> {
             cmd_notify_host(args).await?;
         }
         Commands::RemoveOrphans(args) => {
-            cmd_remove_orphans(args.compose).await?;
+            if args.no_dockerd {
+                docker_compose::remove_orphans_direct(
+                    args.compose,
+                    args.docker_root,
+                    args.dry_run,
+                )?;
+            } else {
+                docker_compose::remove_orphans(args.compose, args.dry_run).await?;
+            }
         }
     }
 

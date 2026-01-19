@@ -4,7 +4,11 @@
 
 use std::sync::Arc;
 
+use anyhow::{Context, Result};
 use clap::Parser;
+use dstack_verifier::{
+    CvmVerifier, VerificationDetails, VerificationRequest, VerificationResponse,
+};
 use figment::{
     providers::{Env, Format, Toml},
     Figment,
@@ -12,12 +16,6 @@ use figment::{
 use rocket::{fairing::AdHoc, get, post, serde::json::Json, State};
 use serde::{Deserialize, Serialize};
 use tracing::{error, info};
-
-mod types;
-mod verification;
-
-use types::{VerificationRequest, VerificationResponse};
-use verification::CvmVerifier;
 
 #[derive(Parser)]
 #[command(name = "dstack-verifier")]
@@ -46,13 +44,13 @@ async fn verify_cvm(
     verifier: &State<Arc<CvmVerifier>>,
     request: Json<VerificationRequest>,
 ) -> Json<VerificationResponse> {
-    match verifier.verify(&request.into_inner()).await {
+    match verifier.verify(request.into_inner()).await {
         Ok(response) => Json(response),
         Err(e) => {
             error!("Verification failed: {:?}", e);
             Json(VerificationResponse {
                 is_valid: false,
-                details: types::VerificationDetails {
+                details: VerificationDetails {
                     quote_verified: false,
                     event_log_verified: false,
                     os_image_hash_verified: false,
@@ -102,7 +100,7 @@ async fn run_oneshot(file_path: &str, config: &Config) -> anyhow::Result<()> {
 
     // Run verification
     info!("Starting verification...");
-    let response = verifier.verify(&request).await?;
+    let response = verifier.verify(request).await?;
 
     // Persist response next to the input file for convenience
     let output_path = format!("{file_path}.verification.json");
@@ -151,10 +149,6 @@ async fn run_oneshot(file_path: &str, config: &Config) -> anyhow::Result<()> {
         println!("App ID: {}", hex::encode(&app_info.app_id));
         println!("Instance ID: {}", hex::encode(&app_info.instance_id));
         println!("Compose hash: {}", hex::encode(&app_info.compose_hash));
-        println!("MRTD: {}", hex::encode(app_info.mrtd));
-        println!("RTMR0: {}", hex::encode(app_info.rtmr0));
-        println!("RTMR1: {}", hex::encode(app_info.rtmr1));
-        println!("RTMR2: {}", hex::encode(app_info.rtmr2));
     }
 
     // Exit with appropriate code
@@ -165,8 +159,8 @@ async fn run_oneshot(file_path: &str, config: &Config) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[rocket::launch]
-fn rocket() -> _ {
+#[rocket::main]
+async fn main() -> Result<()> {
     tracing_subscriber::fmt::try_init().ok();
 
     let cli = Cli::parse();
@@ -178,18 +172,14 @@ fn rocket() -> _ {
         .merge(Toml::file(&cli.config))
         .merge(Env::prefixed("DSTACK_VERIFIER_"));
 
-    let config: Config = figment.extract().expect("Failed to load configuration");
+    let config: Config = figment.extract().context("Failed to load configuration")?;
 
     // Check for oneshot mode
     if let Some(file_path) = cli.verify {
-        // Run oneshot verification and exit
-        let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
-        rt.block_on(async {
-            if let Err(e) = run_oneshot(&file_path, &config).await {
-                error!("Oneshot verification failed: {:#}", e);
-                std::process::exit(1);
-            }
-        });
+        if let Err(e) = run_oneshot(&file_path, &config).await {
+            error!("Oneshot verification failed: {:#}", e);
+            std::process::exit(1);
+        }
         std::process::exit(0);
     }
 
@@ -207,4 +197,8 @@ fn rocket() -> _ {
                 info!("dstack-verifier started successfully");
             })
         }))
+        .launch()
+        .await
+        .map_err(|err| anyhow::anyhow!("launch rocket failed: {err:?}"))?;
+    Ok(())
 }

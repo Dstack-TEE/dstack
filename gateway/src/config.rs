@@ -69,15 +69,10 @@ pub enum TlsVersion {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ProxyConfig {
-    pub cert_chain: String,
-    pub cert_key: String,
     pub tls_crypto_provider: CryptoProvider,
     pub tls_versions: Vec<TlsVersion>,
-    pub base_domain: String,
-    pub external_port: u16,
     pub listen_addr: Ipv4Addr,
     pub listen_port: u16,
-    pub agent_port: u16,
     pub timeouts: Timeouts,
     pub buffer_size: usize,
     pub connect_top_n: usize,
@@ -147,7 +142,6 @@ pub struct SyncConfig {
 pub struct Config {
     pub wg: WgConfig,
     pub proxy: ProxyConfig,
-    pub certbot: CertbotConfig,
     pub pccs_url: Option<String>,
     pub recycle: RecycleConfig,
     pub set_ulimit: bool,
@@ -231,33 +225,6 @@ pub struct TlsConfig {
 #[derive(Debug, Clone, Deserialize)]
 pub struct MutualConfig {
     pub ca_certs: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct CertbotConfig {
-    /// Enable certbot
-    pub enabled: bool,
-    /// Path to the working directory
-    pub workdir: String,
-    /// ACME server URL
-    pub acme_url: String,
-    /// Cloudflare API token
-    pub cf_api_token: String,
-    /// Cloudflare zone ID
-    pub cf_zone_id: String,
-    /// Auto set CAA record
-    pub auto_set_caa: bool,
-    /// Domain to issue certificates for
-    pub domain: String,
-    /// Renew interval
-    #[serde(with = "serde_duration")]
-    pub renew_interval: Duration,
-    /// Time gap before expiration to trigger renewal
-    #[serde(with = "serde_duration")]
-    pub renew_before_expiration: Duration,
-    /// Renew timeout
-    #[serde(with = "serde_duration")]
-    pub renew_timeout: Duration,
 }
 
 pub const DEFAULT_CONFIG: &str = include_str!("../gateway.toml");

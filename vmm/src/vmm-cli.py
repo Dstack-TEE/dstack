@@ -521,6 +521,8 @@ class VmmCLI:
             "no_instance_id": args.no_instance_id,
             "secure_time": args.secure_time,
         }
+        if args.key_provider:
+            app_compose["key_provider"] = args.key_provider
         if args.prelaunch_script:
             app_compose["pre_launch_script"] = open(
                 args.prelaunch_script, 'rb').read().decode('utf-8')
@@ -1160,6 +1162,9 @@ def main():
         '--gateway', action='store_true', help='Enable dstack-gateway')
     compose_parser.add_argument(
         '--local-key-provider', action='store_true', help='Enable local key provider')
+    compose_parser.add_argument(
+        '--key-provider', choices=['none', 'kms', 'local'], default=None,
+        help='Override key provider type (none, kms, local)')
     compose_parser.add_argument(
         '--key-provider-id', default=None, help='Key provider ID if you want to bind to a specific key provider')
     compose_parser.add_argument(

@@ -12,17 +12,10 @@ Set up a second-level wildcard domain using Cloudflare; make sure to disable pro
 
 You need to get a Cloudflare API Key and ensure the API can manage this domain.
 
-You can check your Cloudflare API key and get `cf_zone_id` using this command:
-
-```shell
-curl -X GET "https://api.cloudflare.com/client/v4/zones" -H "Authorization: Bearer <API_KEY>" -H "Content-Type: application/json" | jq .
-```
-
 Open your `certbot.toml`, and update these fields:
 
 - `acme_url`: change to `https://acme-v02.api.letsencrypt.org/directory`
 - `cf_api_token`: Obtain from Cloudflare
-- `cf_zone_id`: Obtain from the API call above
 
 ## Step 3: Run Certbot Manually and Get First SSL Certificates
 

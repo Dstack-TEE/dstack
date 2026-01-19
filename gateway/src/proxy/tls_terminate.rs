@@ -24,6 +24,8 @@ use tokio::time::timeout;
 use tokio_rustls::{rustls, server::TlsStream, TlsAcceptor};
 use tracing::{debug, info};
 
+use or_panic::ResultOrPanic;
+
 use crate::config::{CryptoProvider, ProxyConfig, TlsVersion};
 use crate::main_service::Proxy;
 
@@ -278,12 +280,12 @@ impl Proxy {
         let acceptor = if h2 {
             self.h2_acceptor
                 .read()
-                .expect("Failed to acquire read lock for TLS acceptor")
+                .or_panic("lock should never fail")
                 .clone()
         } else {
             self.acceptor
                 .read()
-                .expect("Failed to acquire read lock for TLS acceptor")
+                .or_panic("lock should never fail")
                 .clone()
         };
         let tls_stream = timeout(

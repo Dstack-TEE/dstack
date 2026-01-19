@@ -6,6 +6,7 @@ use anyhow::Result;
 use cloudflare::CloudflareClient;
 use enum_dispatch::enum_dispatch;
 use serde::{Deserialize, Serialize};
+use tracing::debug;
 
 mod cloudflare;
 
@@ -27,7 +28,8 @@ pub(crate) trait Dns01Api {
     /// Creates a TXT DNS record with the given domain and content.
     ///
     /// Returns the ID of the created record.
-    async fn add_txt_record(&self, domain: &str, content: &str) -> Result<String>;
+    /// The `ttl` parameter specifies the time-to-live in seconds (1 = auto, min 60 for Cloudflare).
+    async fn add_txt_record(&self, domain: &str, content: &str, ttl: u32) -> Result<String>;
 
     /// Add a CAA record for the given domain.
     async fn add_caa_record(
@@ -51,9 +53,11 @@ pub(crate) trait Dns01Api {
     /// Deletes all TXT DNS records matching the given domain.
     async fn remove_txt_records(&self, domain: &str) -> Result<()> {
         for record in self.get_records(domain).await? {
-            if record.r#type == "TXT" {
-                self.remove_record(&record.id).await?;
+            if record.r#type != "TXT" {
+                continue;
             }
+            debug!(domain = %domain, id = %record.id, "removing txt record");
+            self.remove_record(&record.id).await?;
         }
         Ok(())
     }
@@ -68,7 +72,9 @@ pub enum Dns01Client {
 }
 
 impl Dns01Client {
-    pub fn new_cloudflare(zone_id: String, api_token: String) -> Self {
-        Self::Cloudflare(CloudflareClient::new(zone_id, api_token))
+    pub async fn new_cloudflare(api_token: String, base_domain: String) -> Result<Self> {
+        Ok(Self::Cloudflare(
+            CloudflareClient::new(api_token, base_domain).await?,
+        ))
     }
 }

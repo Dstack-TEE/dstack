@@ -111,7 +111,7 @@ async fn maybe_gen_certs(config: &Config, tls_config: &TlsConfig) -> Result<()> 
     let cert = ra_tls::cert::CertRequest::builder()
         .key(&key)
         .subject("dstack-gateway")
-        .alt_names(&[config.rpc_domain.clone()])
+        .alt_names(std::slice::from_ref(&config.rpc_domain))
         .usage_server_auth(true)
         .build()
         .self_signed()
@@ -187,7 +187,8 @@ async fn main() -> Result<()> {
     info!("Starting background tasks");
     state.start_bg_tasks().await?;
     state.lock().reconfigure()?;
-    proxy::start(proxy_config, state.clone());
+
+    proxy::start(proxy_config, state.clone()).context("failed to start the proxy")?;
 
     let admin_value = figment
         .find_value("core.admin")

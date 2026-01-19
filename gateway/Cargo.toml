@@ -10,6 +10,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+arc-swap.workspace = true
 rocket = { workspace = true, features = ["mtls", "json"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true
@@ -54,9 +55,11 @@ http-body-util.workspace = true
 x509-parser.workspace = true
 jemallocator.workspace = true
 wavekv.workspace = true
+tdx-attest.workspace = true
 flate2.workspace = true
 uuid = { workspace = true, features = ["v4"] }
 rmp-serde.workspace = true
+or-panic.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 nix = { workspace = true, features = ["resource"] }

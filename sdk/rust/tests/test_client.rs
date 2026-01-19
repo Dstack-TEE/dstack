@@ -25,6 +25,17 @@ async fn test_async_client_get_quote() {
 }
 
 #[tokio::test]
+async fn test_async_client_attest() {
+    let client = AsyncDstackClient::new(None);
+    let result = client.attest(b"test".to_vec()).await.unwrap();
+    let attestation = result.decode_attestation().unwrap();
+    assert!(!attestation.is_empty());
+
+    let too_large = client.attest(vec![0_u8; 65]).await;
+    assert!(too_large.is_err());
+}
+
+#[tokio::test]
 async fn test_async_client_get_tls_key() {
     let client = AsyncDstackClient::new(None);
     let key_config = dstack_sdk_types::dstack::TlsKeyConfig::builder().build();

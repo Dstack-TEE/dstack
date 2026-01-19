@@ -6,14 +6,22 @@ A HTTP server that provides dstack quote verification services using the same ve
 
 ### POST /verify
 
-Verifies a dstack quote with the provided quote and VM configuration. The body can be grabbed via [getQuote](https://github.com/Dstack-TEE/dstack/blob/master/sdk/curl/api.md#3-get-quote).
+Verifies a dstack attestation or quote with the provided data and VM configuration. The body can be grabbed via [getQuote](https://github.com/Dstack-TEE/dstack/blob/master/sdk/curl/api.md#3-get-quote) or [attest](https://github.com/Dstack-TEE/dstack/blob/master/sdk/curl/api.md#8-attest).
 
 **Request Body:**
+Provide either `attestation` or (`quote` + `event_log` + `vm_config`).
+
 ```json
 {
   "quote": "hex-encoded-quote",
   "event_log": "hex-encoded-event-log",
   "vm_config": "json-vm-config-string",
+}
+```
+or
+```json
+{
+  "attestation": "hex-encoded-attestation",
 }
 ```
 
@@ -26,7 +34,7 @@ Verifies a dstack quote with the provided quote and VM configuration. The body c
     "event_log_verified": true,
     "os_image_hash_verified": true,
     "report_data": "hex-encoded-64-byte-report-data",
-    "tcb_status": "OK",
+    "tcb_status": "UpToDate",
     "advisory_ids": [],
     "app_info": {
       "app_id": "hex-string",
@@ -113,7 +121,18 @@ Save the docker compose file as `docker-compose.yml` and run `docker compose up 
 
 ### Request verification
 
-Grab a quote from your app. It's depends on your app how to grab a quote.
+Grab an attestation or quote from your app. It's depends on your app how to grab it.
+
+```bash
+# Grab an attestation from the demo app
+curl https://712eab2f507b963e11144ae67218177e93ac2a24-3000.test0.dstack.org:12004/Attest?report_data=0x1234 -o attest.json
+```
+
+Send the attestation to the verifier.
+
+```bash
+$ curl -s -d @attest.json localhost:8080/verify | jq
+```
 
 ```bash
 # Grab a quote from the demo app

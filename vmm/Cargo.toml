@@ -50,6 +50,12 @@ lspci.workspace = true
 base64.workspace = true
 serde-human-bytes.workspace = true
 size-parser = { workspace = true, features = ["serde"] }
+fatfs.workspace = true
+fscommon.workspace = true
+or-panic.workspace = true
 
 [dev-dependencies]
 insta.workspace = true
+
+[build-dependencies]
+or-panic.workspace = true

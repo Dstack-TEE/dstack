@@ -1,6 +1,7 @@
 [Unit]
 Description=dstack Guest Preparation Service
-After=network.target chronyd.service
+After=network.target network-online.target chronyd.service
+Wants=network-online.target
 Before=app-compose.service dstack-guest-agent.service docker.service
 OnFailure=reboot.target
 

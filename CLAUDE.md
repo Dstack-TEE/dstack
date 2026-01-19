@@ -224,3 +224,9 @@ RPC definitions use `prpc` framework with Protocol Buffers:
 - Design decisions: `docs/design-and-hardening-decisions.md`
 
 When need more detailed info, try to use deepwiki mcp.
+
+## Agent Resources
+
+The `.agent/` directory contains AI assistant resources:
+- `WRITING_GUIDE.md` — Documentation and README writing guidelines (messaging, style, audiences)
+- `GPU_TEE_DEPLOYMENT.md` — GPU deployment to Phala Cloud (instance types, docker-compose config, debugging)

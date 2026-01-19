@@ -28,7 +28,7 @@ CVMs running in dstack support three boot modes:
 - Supports application upgrades
 - Requires control contract configuration
 - `key-provider` in RTMR: `{"type": "kms", "id": "<kms-root-pubkey>"}`
-- `app-id` is derived from the deployer's eth address + salt
+- `app-id` is equal to the address of the deployed App Smart Contract.
 
 ## KMS Implementation
 

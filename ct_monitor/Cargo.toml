@@ -11,16 +11,16 @@ license.workspace = true
 
 [dependencies]
 anyhow.workspace = true
-clap = { workspace = true, features = ["derive"] }
+clap = { workspace = true, features = ["derive", "env"] }
+hex = { workspace = true, features = ["alloc", "std"] }
 hex_fmt.workspace = true
 regex.workspace = true
 reqwest = { workspace = true, default-features = false, features = ["json", "rustls-tls", "charset", "hickory-dns"] }
 serde = { workspace = true, features = ["derive"] }
+serde-human-bytes.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 tokio = { workspace = true, features = ["full"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true
 x509-parser.workspace = true
-
-dstack-gateway-rpc.workspace = true
-ra-rpc = { workspace = true, default-features = false, features = ["client"] }

@@ -28,8 +28,17 @@ x509-parser.workspace = true
 yasna.workspace = true
 tracing.workspace = true
 sha3.workspace = true
-tdx-attest.workspace = true
 scale.workspace = true
 
 cc-eventlog.workspace = true
 serde-human-bytes.workspace = true
+flate2.workspace = true
+or-panic.workspace = true
+rand.workspace = true
+dstack-types.workspace = true
+hex_fmt.workspace = true
+ez-hash.workspace = true
+dstack-attest.workspace = true
+
+[features]
+quote = ["dstack-attest/quote"]

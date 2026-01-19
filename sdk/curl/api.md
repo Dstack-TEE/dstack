@@ -81,7 +81,7 @@ curl --unix-socket /var/run/dstack.sock -X POST \
   -d '{
     "path": "my/key/path",
     "purpose": "signing",
-    "algorithm": "ed25519",
+    "algorithm": "ed25519"
   }'
 ```
 
@@ -193,7 +193,7 @@ curl --unix-socket /var/run/dstack.sock -X POST \
 **Response:**
 Empty response with HTTP 200 status code on success.
 
-### 6. Sign
+### 6. Sign (not yet released)
 
 Signs a payload.
 
@@ -230,7 +230,7 @@ curl --unix-socket /var/run/dstack.sock -X POST \
 }
 ```
 
-### 7. Verify
+### 7. Verify (not yet released)
 
 Verifies a signature.
 
@@ -265,6 +265,38 @@ curl --unix-socket /var/run/dstack.sock -X POST \
 }
 ```
 
+### 8. Attest
+
+Generates a versioned attestation with the given report data. Returns a dstack-defined attestation format that supports different attestation modes across platforms.
+You can submit the returned `attestation` directly to the verifier `/verify` endpoint.
+
+**Endpoint:** `/Attest`
+
+**Request Parameters:**
+
+| Field | Type | Description | Example |
+|-------|------|-------------|----------|
+| `report_data` | string | Report data of max length 64 bytes. Padding with 0s if less than 64 bytes. | `"1234deadbeaf"` |
+
+**Example:**
+```bash
+curl --unix-socket /var/run/dstack.sock -X POST \
+  http://dstack/Attest \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "report_data": "1234deadbeaf"
+  }'
+```
+Or
+```bash
+curl --unix-socket /var/run/dstack.sock http://dstack/Attest?report_data=00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+```
+
+**Response:**
+```json
+{
+  "attestation": "<hex-encoded-attestation>"
+}
 ```
 
 ## Error Responses
@@ -280,3 +312,4 @@ Error responses will include a JSON body with error details:
 {
   "error": "Error description"
 }
+```

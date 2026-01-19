@@ -104,7 +104,7 @@ impl DstackClient {
                     .send_request_json::<_, _, Value>(
                         path,
                         Method::POST,
-                        &[("Content-Type", "application/json")],
+                        &[("Content-Type", "application/json"), ("Host", "dstack")],
                         Some(&payload),
                     )
                     .await?;
@@ -137,6 +137,18 @@ impl DstackClient {
         let data = json!({ "report_data": hex_data });
         let response = self.send_rpc_request("/GetQuote", &data).await?;
         let response = serde_json::from_value::<GetQuoteResponse>(response)?;
+
+        Ok(response)
+    }
+
+    pub async fn attest(&self, report_data: Vec<u8>) -> Result<AttestResponse> {
+        if report_data.is_empty() || report_data.len() > 64 {
+            anyhow::bail!("Invalid report data length")
+        }
+        let hex_data = hex_encode(report_data);
+        let data = json!({ "report_data": hex_data });
+        let response = self.send_rpc_request("/Attest", &data).await?;
+        let response = serde_json::from_value::<AttestResponse>(response)?;
 
         Ok(response)
     }

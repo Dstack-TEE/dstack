@@ -2,18 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use anyhow::Context;
-use cc_eventlog::TdxEventLog;
-
 use tdx_attest_sys as sys;
 
-use std::io::Write;
 use std::ptr;
 use std::slice;
 
 use sys::*;
 
-use fs_err as fs;
 use num_enum::FromPrimitive;
 use thiserror::Error;
 
@@ -53,22 +48,17 @@ pub enum TdxAttestError {
     UnknownError(u32),
 }
 
-pub fn get_quote(
-    report_data: &TdxReportData,
-    att_key_id_list: Option<&[TdxUuid]>,
-) -> Result<(TdxUuid, Vec<u8>)> {
+pub fn get_quote(report_data: &TdxReportData) -> Result<Vec<u8>> {
     let mut att_key_id = TdxUuid([0; TDX_UUID_SIZE as usize]);
     let mut quote_ptr = ptr::null_mut();
     let mut quote_size = 0;
 
     let error = unsafe {
-        let key_id_list_ptr = att_key_id_list
-            .map(|list| list.as_ptr() as *const tdx_uuid_t)
-            .unwrap_or(ptr::null());
+        let key_id_list_ptr = ptr::null();
         tdx_att_get_quote(
             report_data as *const TdxReportData as *const tdx_report_data_t,
             key_id_list_ptr,
-            att_key_id_list.map_or(0, |list| list.len() as u32),
+            0,
             &mut att_key_id as *mut TdxUuid as *mut tdx_uuid_t,
             &mut quote_ptr,
             &mut quote_size,
@@ -86,7 +76,7 @@ pub fn get_quote(
         tdx_att_free_quote(quote_ptr);
     }
 
-    Ok((att_key_id, quote))
+    Ok(quote)
 }
 
 pub fn get_report(report_data: &TdxReportData) -> Result<TdxReport> {
@@ -104,30 +94,6 @@ pub fn get_report(report_data: &TdxReportData) -> Result<TdxReport> {
     }
 
     Ok(report)
-}
-
-pub fn log_rtmr_event(log: &TdxEventLog) -> anyhow::Result<()> {
-    // Append to event log
-    let logline = serde_json::to_string(&log).context("Failed to serialize event log")?;
-
-    let logfile_path = std::path::Path::new(cc_eventlog::RUNTIME_EVENT_LOG_FILE);
-    let logfile_dir = logfile_path
-        .parent()
-        .context("Failed to get event log directory")?;
-    fs::create_dir_all(logfile_dir).context("Failed to create event log directory")?;
-
-    let mut logfile = fs::OpenOptions::new()
-        .append(true)
-        .create(true)
-        .open(logfile_path)
-        .context("Failed to open event log file")?;
-    logfile
-        .write_all(logline.as_bytes())
-        .context("Failed to write to event log file")?;
-    logfile
-        .write_all(b"\n")
-        .context("Failed to write to event log file")?;
-    Ok(())
 }
 
 pub fn extend_rtmr(index: u32, event_type: u32, digest: [u8; 48]) -> Result<()> {

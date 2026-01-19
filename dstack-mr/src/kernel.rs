@@ -129,7 +129,7 @@ fn patch_kernel(
 
     let mut kd = kernel_data.to_vec();
 
-    let protocol = u16::from_le_bytes(kd[0x206..0x208].try_into().unwrap());
+    let protocol = u16::from_le_bytes(kd[0x206..0x208].try_into().context("impossible failure")?);
 
     let (real_addr, cmdline_addr) = if protocol < 0x200 || (kd[0x211] & 0x01) == 0 {
         (0x90000_u32, 0x9a000_u32)
@@ -158,14 +158,16 @@ fn patch_kernel(
             bail!("the kernel image is too old for ramdisk");
         }
         let mut initrd_max = if protocol >= 0x20c {
-            let xlf = u16::from_le_bytes(kd[0x236..0x238].try_into().unwrap());
+            let xlf =
+                u16::from_le_bytes(kd[0x236..0x238].try_into().context("impossible failure")?);
             if (xlf & 0x40) != 0 {
                 u32::MAX
             } else {
                 0x37ffffff
             }
         } else if protocol >= 0x203 {
-            let max = u32::from_le_bytes(kd[0x22c..0x230].try_into().unwrap());
+            let max =
+                u32::from_le_bytes(kd[0x22c..0x230].try_into().context("impossible failure")?);
             if max == 0 {
                 0x37ffffff
             } else {

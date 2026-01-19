@@ -20,12 +20,13 @@ jobs:
     - uses: actions/checkout@v4
 
     - name: Install Rust
-      uses: dtolnay/rust-toolchain@1.86
+      uses: dtolnay/rust-toolchain@master
       with:
+        toolchain: 1.92.0
         components: clippy, rustfmt
 
     - name: Run Clippy
-      run: cargo clippy -- -D warnings --allow unused_variables
+      run: cargo clippy -- -D warnings -D clippy::expect_used -D clippy::unwrap_used --allow unused_variables
 
     - name: Cargo fmt check
       run: cargo fmt --check --all

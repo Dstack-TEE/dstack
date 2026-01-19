@@ -29,7 +29,7 @@ rinja.workspace = true
 git-version.workspace = true
 ra-rpc = { workspace = true, features = ["client", "rocket"] }
 dstack-guest-agent-rpc.workspace = true
-ra-tls.workspace = true
+ra-tls = { workspace = true, features = ["quote"] }
 tdx-attest.workspace = true
 guest-api = { workspace = true, features = ["client"] }
 host-api = { workspace = true, features = ["client"] }
@@ -46,7 +46,10 @@ dstack-types.workspace = true
 sha3.workspace = true
 strip-ansi-escapes.workspace = true
 cert-client.workspace = true
+dstack-attest.workspace = true
 ring.workspace = true
 ed25519-dalek.workspace = true
 tempfile.workspace = true
 rand.workspace = true
+or-panic.workspace = true
+cc-eventlog.workspace = true

@@ -12,11 +12,11 @@ where
     if duration == &Duration::MAX {
         return serializer.serialize_str("never");
     }
-    let (value, unit) = if duration.as_secs() % (24 * 3600) == 0 {
+    let (value, unit) = if duration.as_secs().is_multiple_of(24 * 3600) {
         (duration.as_secs() / (24 * 3600), "d")
-    } else if duration.as_secs() % 3600 == 0 {
+    } else if duration.as_secs().is_multiple_of(3600) {
         (duration.as_secs() / 3600, "h")
-    } else if duration.as_secs() % 60 == 0 {
+    } else if duration.as_secs().is_multiple_of(60) {
         (duration.as_secs() / 60, "m")
     } else {
         (duration.as_secs(), "s")

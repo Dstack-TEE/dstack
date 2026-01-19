@@ -47,9 +47,6 @@ else
 # Cloudflare API token for DNS challenge
 # CF_API_TOKEN=your_cloudflare_api_token
 
-# Cloudflare Zone ID
-# CF_ZONE_ID=your_zone_id
-
 # Service domain
 # SRV_DOMAIN=test5.dstack.phala.network
 
@@ -90,6 +87,9 @@ GATEWAY_SERVING_ADDR=0.0.0.0:9204
 GUEST_AGENT_ADDR=127.0.0.1:9206
 WG_ADDR=0.0.0.0:9202
 
+CERTBOT_MAX_DNS_WAIT=5m
+CERTBOT_DNS_TXT_TTL=60
+
 # The token used to launch the App
 APP_LAUNCH_TOKEN=$(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 32 | head -n 1)
 
@@ -102,7 +102,6 @@ fi
 required_env_vars=(
   "VMM_RPC"
   "CF_API_TOKEN"
-  "CF_ZONE_ID"
   "SRV_DOMAIN"
   "PUBLIC_IP"
   "WG_ADDR"
@@ -142,7 +141,6 @@ cat "$COMPOSE_TMP"
 # Update .env file with current values
 cat <<EOF >.app_env
 CF_API_TOKEN=$CF_API_TOKEN
-CF_ZONE_ID=$CF_ZONE_ID
 SRV_DOMAIN=$SRV_DOMAIN
 WG_ENDPOINT=$PUBLIC_IP:$WG_PORT
 MY_URL=$MY_URL
@@ -151,6 +149,8 @@ SUBNET_INDEX=$SUBNET_INDEX
 APP_LAUNCH_TOKEN=$APP_LAUNCH_TOKEN
 RPC_DOMAIN=$RPC_DOMAIN
 NODE_ID=$NODE_ID
+CERTBOT_MAX_DNS_WAIT=$CERTBOT_MAX_DNS_WAIT
+CERTBOT_DNS_TXT_TTL=$CERTBOT_DNS_TXT_TTL
 EOF
 
 if [ -n "$APP_COMPOSE_FILE" ]; then
