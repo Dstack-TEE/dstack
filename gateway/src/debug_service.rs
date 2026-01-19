@@ -40,11 +40,14 @@ impl DebugRpc for DebugRpcHandler {
 
     async fn info(self) -> Result<InfoResponse> {
         let config = &self.state.config;
-        let todo = "What the base domain now?";
-        let todo = "What the port now?";
+        let (base_domain, port) = self
+            .state
+            .kv_store()
+            .get_best_zt_domain()
+            .unwrap_or_default();
         Ok(InfoResponse {
-            base_domain: "".into(),
-            external_port: 0,
+            base_domain,
+            external_port: port.into(),
             app_address_ns_prefix: config.proxy.app_address_ns_prefix.clone(),
         })
     }

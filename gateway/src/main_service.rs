@@ -367,14 +367,14 @@ impl Proxy {
             }
         }
 
-        let todo = "What the base domain now?";
+        let (base_domain, _) = self.kv_store.get_best_zt_domain().unwrap_or_default();
         Ok(AcmeInfoResponse {
             account_uri: String::new(),   // Stored per-domain in KvStore now
             hist_keys: vec![],            // Deprecated, use quoted_hist_keys
             account_quote: String::new(), // Deprecated
             quoted_hist_keys,
             active_cert,
-            base_domain: "".into(),
+            base_domain,
         })
     }
 
@@ -417,17 +417,16 @@ impl Proxy {
                 endpoint: n.wg_endpoint.clone(),
             })
             .collect::<Vec<_>>();
-        let todo = "What the base domain now?";
-        let todo = "What the external port now?";
+        let (base_domain, port) = state.kv_store.get_best_zt_domain().unwrap_or_default();
         let response = RegisterCvmResponse {
             wg: Some(WireGuardConfig {
                 client_ip: client_info.ip.to_string(),
                 servers,
             }),
             agent: Some(GuestAgentConfig {
-                external_port: 443,
+                external_port: port.into(),
                 internal_port: 8090,
-                domain: "".into(),
+                domain: base_domain,
                 app_address_ns_prefix: state.config.proxy.app_address_ns_prefix.clone(),
             }),
             gateways,
@@ -1147,11 +1146,10 @@ impl GatewayRpc for RpcHandler {
 
     async fn info(self) -> Result<InfoResponse> {
         let state = self.state.lock();
-        let todo = "What the base domain now?";
-        let todo = "What the port now?";
+        let (base_domain, port) = state.kv_store.get_best_zt_domain().unwrap_or_default();
         Ok(InfoResponse {
-            base_domain: "".into(),
-            external_port: 0,
+            base_domain,
+            external_port: port.into(),
             app_address_ns_prefix: state.config.proxy.app_address_ns_prefix.clone(),
         })
     }

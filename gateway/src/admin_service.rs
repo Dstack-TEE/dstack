@@ -37,10 +37,13 @@ pub struct AdminRpcHandler {
 
 impl AdminRpcHandler {
     pub(crate) async fn status(self) -> Result<StatusResponse> {
+        let (base_domain, port) = self
+            .state
+            .kv_store()
+            .get_best_zt_domain()
+            .unwrap_or_default();
         let mut state = self.state.lock();
         state.refresh_state()?;
-        let todo = "What the base domain now?";
-        let base_domain = "".to_string();
         let hosts = state
             .state
             .instances
@@ -55,7 +58,7 @@ impl AdminRpcHandler {
                     ip: instance.ip.to_string(),
                     app_id: instance.app_id.clone(),
                     base_domain: base_domain.clone(),
-                    port: state.config.proxy.listen_port as u32,
+                    port: port.into(),
                     latest_handshake,
                     num_connections: instance.num_connections(),
                 }
@@ -99,9 +102,12 @@ impl AdminRpc for AdminRpcHandler {
     }
 
     async fn get_info(self, request: GetInfoRequest) -> Result<GetInfoResponse> {
+        let (base_domain, port) = self
+            .state
+            .kv_store()
+            .get_best_zt_domain()
+            .unwrap_or_default();
         let state = self.state.lock();
-        let todo = "What the base domain now?";
-        let base_domain = "".to_string();
         let handshakes = state.latest_handshakes(None)?;
 
         if let Some(instance) = state.state.instances.get(&request.id) {
@@ -109,8 +115,8 @@ impl AdminRpc for AdminRpcHandler {
                 instance_id: instance.id.clone(),
                 ip: instance.ip.to_string(),
                 app_id: instance.app_id.clone(),
-                base_domain: base_domain.clone(),
-                port: state.config.proxy.listen_port as u32,
+                base_domain,
+                port: port.into(),
                 latest_handshake: {
                     let (ts, _) = handshakes
                         .get(&instance.public_key)

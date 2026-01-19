@@ -782,6 +782,35 @@ impl KvStore {
         self.persistent.watch_prefix(keys::CERT_PREFIX)
     }
 
+    /// Get the best ZT-Domain config for this node.
+    ///
+    /// Selection rules:
+    /// 1. Only considers domains where node == None or node == my_node_id
+    /// 2. Higher priority wins
+    /// 3. If priority is equal, node == None wins (global domains preferred over node-specific)
+    ///
+    /// Returns (domain, port) of the best match, or None if no domains configured.
+    pub fn get_best_zt_domain(&self) -> Option<(String, u16)> {
+        let my_node_id = self.my_node_id;
+        let configs = self.list_zt_domain_configs();
+
+        configs
+            .into_iter()
+            .filter(|c| c.node.is_none() || c.node == Some(my_node_id))
+            .max_by(|a, b| {
+                // Compare by priority first (higher wins)
+                match a.priority.cmp(&b.priority) {
+                    std::cmp::Ordering::Equal => {
+                        // If priority equal, None (global) wins over Some (node-specific)
+                        // None < Some in Option ordering, so we reverse
+                        b.node.cmp(&a.node)
+                    }
+                    other => other,
+                }
+            })
+            .map(|c| (c.domain, c.port))
+    }
+
     // ==================== Certificate Data ====================
 
     /// Get certificate data for a domain
