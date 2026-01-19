@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # E2E test environment for dstack-gateway certbot functionality
-# Uses mock services: Pebble (ACME) + mock-cf-dns-api (Cloudflare DNS)
+# Uses mock services: Pebble (ACME) + mock-cf-dns-api (Cloudflare DNS) + dstack-simulator
 
 networks:
   certbot-test:
@@ -56,6 +56,28 @@ services:
       timeout: 3s
       retries: 10
 
+  # dstack-simulator - provides mock dstack agent API
+  dstack-simulator:
+    image: ${SIMULATOR_IMAGE:-dstack-simulator:test}
+    container_name: dstack-simulator
+    networks:
+      certbot-test:
+        ipv4_address: 172.30.0.5
+    ports:
+      - "18090:8090"  # HTTP API
+    volumes:
+      - ../../../sdk/simulator:/sdk:ro
+      - ./simulator/dstack.toml:/app/dstack.toml:ro
+    working_dir: /app
+    command: ["/sdk/dstack-simulator", "-c", "/app/dstack.toml"]
+    environment:
+      - RUST_LOG=info,dstack_guest_agent=debug
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8090/Info"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   # ==================== Gateway Cluster ====================
 
   # Gateway Node 1 - Will be the first to request certificate
@@ -77,10 +99,13 @@ services:
       - /var/lib/gateway
     environment:
       - RUST_LOG=info,dstack_gateway=debug,certbot=debug
+      - DSTACK_AGENT_ADDRESS=http://172.30.0.5:8090
     depends_on:
       mock-cf-dns-api:
         condition: service_healthy
       pebble:
+        condition: service_healthy
+      dstack-simulator:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9015/health"]
@@ -113,8 +138,11 @@ services:
       - /var/lib/gateway
     environment:
       - RUST_LOG=info,dstack_gateway=debug,certbot=debug
+      - DSTACK_AGENT_ADDRESS=http://172.30.0.5:8090
     depends_on:
       gateway-1:
+        condition: service_healthy
+      dstack-simulator:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9015/health"]
@@ -144,8 +172,11 @@ services:
       - /var/lib/gateway
     environment:
       - RUST_LOG=info,dstack_gateway=debug,certbot=debug
+      - DSTACK_AGENT_ADDRESS=http://172.30.0.5:8090
     depends_on:
       gateway-2:
+        condition: service_healthy
+      dstack-simulator:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9015/health"]
@@ -166,7 +197,7 @@ services:
         ipv4_address: 172.30.0.100
     volumes:
       - ./test.sh:/test.sh:ro
-    entrypoint: ["/bin/sh", "-c", "apk add --no-cache curl openssl && /bin/sh /test.sh"]
+    entrypoint: ["/bin/sh", "-c", "apk add --no-cache curl openssl jq && /bin/sh /test.sh"]
     depends_on:
       gateway-1:
         condition: service_healthy

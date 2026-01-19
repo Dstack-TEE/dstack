@@ -91,31 +91,62 @@ EOF
     log_info "Certificates generated in $certs_dir"
 }
 
-# Build gateway Docker image
+# Build simulator (musl static)
+build_simulator() {
+    local repo_dir="$SCRIPT_DIR/../../.."
+
+    if [[ -n "$SKIP_SIMULATOR_BUILD" ]]; then
+        log_info "Skipping simulator build (SKIP_SIMULATOR_BUILD is set)"
+        return 0
+    fi
+
+    log_info "Building dstack-simulator (musl static)..."
+    cd "$repo_dir"
+    cargo build --release -p dstack-guest-agent --target x86_64-unknown-linux-musl
+
+    # Copy binary to simulator directory
+    cp target/x86_64-unknown-linux-musl/release/dstack-guest-agent sdk/simulator/
+    ln -sf dstack-guest-agent sdk/simulator/dstack-simulator
+
+    log_info "Simulator built: sdk/simulator/dstack-simulator"
+
+    # Create simulator docker image (alpine for musl)
+    log_info "Building simulator Docker image..."
+    cat > /tmp/Dockerfile.simulator << 'EOF'
+FROM alpine:latest
+RUN apk add --no-cache curl ca-certificates
+WORKDIR /app
+EOF
+    docker build -t dstack-simulator:test -f /tmp/Dockerfile.simulator .
+    rm /tmp/Dockerfile.simulator
+
+    log_info "Simulator Docker image built: dstack-simulator:test"
+}
+
+# Build gateway Docker image (musl static)
 build_gateway_image() {
-    local gateway_dir="$SCRIPT_DIR/../../.."
+    local repo_dir="$SCRIPT_DIR/../../.."
 
     if [[ -n "$SKIP_BUILD" ]]; then
         log_info "Skipping gateway build (SKIP_BUILD is set)"
         return 0
     fi
 
-    log_info "Building dstack-gateway..."
-    cd "$gateway_dir"
-    cargo build --release -p dstack-gateway
+    log_info "Building dstack-gateway (musl static)..."
+    cd "$repo_dir"
+    cargo build --release -p dstack-gateway --target x86_64-unknown-linux-musl
 
     log_info "Building Docker image..."
 
-    # Create a minimal Dockerfile for testing
+    # Create a minimal Dockerfile for testing (alpine for musl)
     cat > "$SCRIPT_DIR/Dockerfile.gateway" << 'EOF'
-FROM ubuntu:24.04
+FROM alpine:latest
 
-RUN apt-get update && apt-get install -y \
+RUN apk add --no-cache \
     ca-certificates \
     curl \
     iproute2 \
-    wireguard-tools \
-    && rm -rf /var/lib/apt/lists/*
+    wireguard-tools
 
 COPY dstack-gateway /usr/local/bin/dstack-gateway
 
@@ -126,7 +157,7 @@ WORKDIR /etc/gateway
 ENTRYPOINT ["/usr/local/bin/dstack-gateway", "-c", "/etc/gateway/gateway.toml"]
 EOF
 
-    cp "$gateway_dir/target/release/dstack-gateway" "$SCRIPT_DIR/"
+    cp "$repo_dir/target/x86_64-unknown-linux-musl/release/dstack-gateway" "$SCRIPT_DIR/"
     docker build -t dstack-gateway:test -f "$SCRIPT_DIR/Dockerfile.gateway" "$SCRIPT_DIR"
     rm -f "$SCRIPT_DIR/dstack-gateway" "$SCRIPT_DIR/Dockerfile.gateway"
 
@@ -138,18 +169,20 @@ main() {
     log_info "Setting up E2E test environment..."
 
     generate_certs
+    build_simulator
     build_gateway_image
 
     log_info ""
     log_info "Setup complete! Run the tests with:"
-    log_info "  docker compose up --abort-on-container-exit"
+    log_info "  ./run-e2e.sh"
     log_info ""
     log_info "Or run individual services:"
-    log_info "  docker compose up -d mock-cf-dns-api pebble"
+    log_info "  docker compose up -d mock-cf-dns-api pebble dstack-simulator"
     log_info "  docker compose up gateway-1 gateway-2 gateway-3"
     log_info ""
     log_info "View mock CF DNS API: http://localhost:18080"
     log_info "View Pebble mgmt:     https://localhost:15000"
+    log_info "View Simulator:       http://localhost:18090"
 }
 
 main "$@"
