@@ -10,6 +10,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+scale = { workspace = true, features = ["derive"] }
 serde = { workspace = true, features = ["derive"] }
 serde-human-bytes.workspace = true
 sha3.workspace = true

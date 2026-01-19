@@ -141,6 +141,18 @@ impl DstackClient {
         Ok(response)
     }
 
+    pub async fn attest(&self, report_data: Vec<u8>) -> Result<AttestResponse> {
+        if report_data.is_empty() || report_data.len() > 64 {
+            anyhow::bail!("Invalid report data length")
+        }
+        let hex_data = hex_encode(report_data);
+        let data = json!({ "report_data": hex_data });
+        let response = self.send_rpc_request("/Attest", &data).await?;
+        let response = serde_json::from_value::<AttestResponse>(response)?;
+
+        Ok(response)
+    }
+
     pub async fn info(&self) -> Result<InfoResponse> {
         let response = self.send_rpc_request("/Info", &json!({})).await?;
         Ok(InfoResponse::validated_from_value(response)?)

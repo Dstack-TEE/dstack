@@ -208,7 +208,10 @@ pub async fn notify_host(event: &str, payload: &str) -> Result<()> {
     let local_config: SysConfig = serde_json::from_str(&fs::read_to_string(format!(
         "{HOST_SHARED_DIR}/{SYS_CONFIG}"
     ))?)?;
-    let nc = host_api::client::new_client(local_config.host_api_url);
+    let Some(host_api_url) = local_config.host_api_url else {
+        anyhow::bail!("host_api_url not configured");
+    };
+    let nc = host_api::client::new_client(host_api_url);
     nc.notify(Notification {
         event: event.to_string(),
         payload: payload.to_string(),

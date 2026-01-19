@@ -97,6 +97,12 @@ export interface GetQuoteResponse {
   replayRtmrs: () => string[]
 }
 
+export interface AttestResponse {
+  __name__: Readonly<'AttestResponse'>
+
+  attestation: Hex
+}
+
 export function to_hex(data: string | Buffer | Uint8Array): string {
   if (typeof data === 'string') {
     return Buffer.from(data).toString('hex');
@@ -240,6 +246,23 @@ export class DstackClient<T extends TcbInfo = TcbInfoV05x> {
       configurable: false,
     })
     return Object.freeze(result)
+  }
+
+  async attest(report_data: string | Buffer | Uint8Array): Promise<AttestResponse> {
+    let hex = to_hex(report_data)
+    if (hex.length > 128) {
+      throw new Error(`Report data is too large, it should be less than 64 bytes.`)
+    }
+    const payload = JSON.stringify({ report_data: hex })
+    const result = await send_rpc_request<{ attestation: string }>(this.endpoint, '/Attest', payload)
+    if ('error' in (result as any)) {
+      const err = (result as any)['error'] as string
+      throw new Error(err)
+    }
+    return Object.freeze({
+      __name__: 'AttestResponse',
+      attestation: result.attestation as Hex,
+    })
   }
 
   async info(): Promise<InfoResponse<T>> {

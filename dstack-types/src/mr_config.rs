@@ -37,6 +37,7 @@ impl MrConfig<'_> {
                     KeyProviderKind::None => 0_u8,
                     KeyProviderKind::Local => 1,
                     KeyProviderKind::Kms => 2,
+                    KeyProviderKind::Tpm => 3,
                 };
                 let mut hasher = Keccak256::new();
                 hasher.update(compose_hash);

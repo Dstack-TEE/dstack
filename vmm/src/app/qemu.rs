@@ -22,8 +22,10 @@ use base64::prelude::*;
 use bon::Builder;
 use dstack_types::{
     mr_config::MrConfig,
-    shared_filenames::{APP_COMPOSE, ENCRYPTED_ENV, INSTANCE_INFO, USER_CONFIG},
-    AppCompose,
+    shared_filenames::{
+        APP_COMPOSE, ENCRYPTED_ENV, HOST_SHARED_DISK_LABEL, INSTANCE_INFO, USER_CONFIG,
+    },
+    AppCompose, KeyProviderKind,
 };
 use dstack_vmm_rpc as pb;
 use fs_err as fs;
@@ -90,6 +92,70 @@ fn create_hd(
             String::from_utf8_lossy(&output.stderr)
         );
     }
+    Ok(())
+}
+
+/// Create a FAT32 disk image from a directory
+fn create_shared_disk(disk_path: impl AsRef<Path>, shared_dir: impl AsRef<Path>) -> Result<()> {
+    use fatfs::{FileSystem, FormatVolumeOptions, FsOptions};
+    use std::io::{Cursor, Seek, SeekFrom, Write};
+
+    let disk_path = disk_path.as_ref();
+    let shared_dir = shared_dir.as_ref();
+
+    const DISK_SIZE: usize = 8 * 1024 * 1024;
+    let mut disk_data = vec![0u8; DISK_SIZE];
+
+    {
+        let cursor = Cursor::new(&mut disk_data);
+        let mut label_bytes = [b' '; 11];
+        let label_str = HOST_SHARED_DISK_LABEL.as_bytes();
+        let copy_len = label_str.len().min(11);
+        label_bytes[..copy_len].copy_from_slice(&label_str[..copy_len]);
+        let format_opts = FormatVolumeOptions::new()
+            .fat_type(fatfs::FatType::Fat32)
+            .volume_label(label_bytes);
+        fatfs::format_volume(cursor, format_opts).context("Failed to format disk as FAT32")?;
+    }
+
+    // Open the formatted filesystem in memory and copy files
+    {
+        let mut cursor = Cursor::new(&mut disk_data);
+        cursor
+            .seek(SeekFrom::Start(0))
+            .context("Failed to seek to start")?;
+        let fs =
+            FileSystem::new(cursor, FsOptions::new()).context("Failed to open FAT32 filesystem")?;
+        let root_dir = fs.root_dir();
+
+        // Copy all files from shared_dir to the FAT32 root
+        for entry in fs::read_dir(shared_dir).context("Failed to read shared directory")? {
+            let entry = entry.context("Failed to read directory entry")?;
+            let path = entry.path();
+
+            if path.is_file() {
+                let filename = entry.file_name();
+                let filename_str = filename.to_string_lossy();
+
+                // Read source file
+                let content = fs::read(&path)
+                    .with_context(|| format!("Failed to read file {}", path.display()))?;
+
+                // Write to FAT32 filesystem
+                let mut fat_file = root_dir
+                    .create_file(&filename_str)
+                    .with_context(|| format!("Failed to create file {filename_str} in FAT32"))?;
+                fat_file
+                    .write_all(&content)
+                    .with_context(|| format!("Failed to write file {filename_str} to FAT32"))?;
+                fat_file.flush().context("Failed to flush FAT32 file")?;
+            }
+        }
+    }
+
+    fs::write(disk_path, &disk_data)
+        .with_context(|| format!("Failed to write disk image to {}", disk_path.display()))?;
+
     Ok(())
 }
 
@@ -362,6 +428,7 @@ impl VmConfig {
         if !shared_dir.exists() {
             fs::create_dir_all(&shared_dir)?;
         }
+        let app_compose = workdir.app_compose().context("Failed to get app compose")?;
         let qemu = &cfg.qemu_path;
         let mut smp = self.manifest.vcpu.max(1);
         let mut mem = self.manifest.memory;
@@ -464,21 +531,74 @@ impl VmConfig {
         command.arg("-netdev").arg(netdev);
         command.arg("-device").arg("virtio-net-pci,netdev=net0");
 
-        self.configure_machine(&mut command, &workdir, cfg)?;
+        self.configure_machine(&mut command, &workdir, cfg, &app_compose)?;
+        self.configure_smbios(&mut command, cfg);
+
+        if matches!(app_compose.key_provider(), KeyProviderKind::Tpm) {
+            let tpm_path = if Path::new("/dev/tpmrm0").exists() {
+                "/dev/tpmrm0"
+            } else if Path::new("/dev/tpm0").exists() {
+                "/dev/tpm0"
+            } else {
+                bail!("TPM key provider requested but no TPM device found on host");
+            };
+            command
+                .arg("-tpmdev")
+                .arg(format!("passthrough,id=tpm0,path={tpm_path}"))
+                .arg("-device")
+                .arg("tpm-tis,tpmdev=tpm0");
+        }
 
         command
             .arg("-device")
             .arg(format!("vhost-vsock-pci,guest-cid={}", self.cid));
 
-        let ro = if self.image.info.shared_ro {
-            "on"
-        } else {
-            "off"
-        };
-        command.arg("-virtfs").arg(format!(
-            "local,path={},mount_tag=host-shared,readonly={ro},security_model=mapped,id=virtfs0",
-            shared_dir.display(),
-        ));
+        // Configure shared files delivery: either via disk or 9p
+        match cfg.host_share_mode.as_str() {
+            "9p" => {
+                // Use 9p virtfs (default)
+                let ro = if self.image.info.shared_ro {
+                    "on"
+                } else {
+                    "off"
+                };
+                command.arg("-virtfs").arg(format!(
+                    "local,path={},mount_tag=host-shared,readonly={ro},security_model=mapped,id=virtfs0",
+                    shared_dir.display(),
+                ));
+            }
+            "vvfat" => {
+                command
+                    .arg("-blockdev")
+                    .arg(format!(
+                        "driver=vvfat,node-name=vvfat0,read-only=on,dir={},label={}",
+                        shared_dir.display(),
+                        HOST_SHARED_DISK_LABEL
+                    ))
+                    .arg("-device")
+                    .arg("virtio-blk-pci,drive=vvfat0");
+            }
+            "vhd" => {
+                // Use a second virtual disk (hd2) to share files
+                let shared_disk_path = workdir.shared_disk_path();
+                if shared_disk_path.exists() {
+                    fs::remove_file(&shared_disk_path).context("Failed to remove shared disk")?;
+                }
+                create_shared_disk(&shared_disk_path, &shared_dir)
+                    .context("Failed to create shared disk")?;
+                command
+                    .arg("-drive")
+                    .arg(format!(
+                        "file={},if=none,id=hd2,format=raw,readonly=on",
+                        shared_disk_path.display()
+                    ))
+                    .arg("-device")
+                    .arg("virtio-blk-pci,drive=hd2");
+            }
+            _ => {
+                bail!("Invalid host sharing mode: {}", cfg.host_share_mode);
+            }
+        }
 
         let hugepages = self.manifest.hugepages;
         let pin_numa = self.manifest.pin_numa;
@@ -658,6 +778,7 @@ impl VmConfig {
         command: &mut Command,
         workdir: &VmWorkDir,
         cfg: &CvmConfig,
+        app_compose: &AppCompose,
     ) -> Result<()> {
         if self.manifest.no_tee {
             command
@@ -672,8 +793,9 @@ impl VmConfig {
 
         let img_ver = self.image.info.version_tuple().unwrap_or_default();
         let support_mr_config_id = img_ver >= (0, 5, 2);
-        let tdx_object = if cfg.use_mrconfigid && support_mr_config_id {
-            let app_compose = workdir.app_compose().context("Failed to get app compose")?;
+
+        // Compute mrconfigid if needed
+        let mrconfigid = if cfg.use_mrconfigid && support_mr_config_id {
             let compose_hash = workdir
                 .app_compose_hash()
                 .context("Failed to get compose hash")?;
@@ -700,13 +822,93 @@ impl VmConfig {
                     key_provider_id,
                 }
             };
-            let mrconfigid = BASE64_STANDARD.encode(mr_config.to_mr_config_id());
-            format!("tdx-guest,id=tdx,mrconfigid={mrconfigid}")
+            Some(BASE64_STANDARD.encode(mr_config.to_mr_config_id()))
         } else {
-            "tdx-guest,id=tdx".to_string()
+            None
         };
-        command.arg("-object").arg(tdx_object);
+
+        // Build tdx-guest object with optional quote-generation-socket for kernel-level TSM support
+        #[derive(Serialize)]
+        struct QgsSocket {
+            r#type: &'static str,
+            cid: &'static str,
+            port: String,
+        }
+
+        #[derive(Serialize)]
+        struct TdxGuestObject {
+            #[serde(rename = "qom-type")]
+            qom_type: &'static str,
+            id: &'static str,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            mrconfigid: Option<String>,
+            #[serde(
+                rename = "quote-generation-socket",
+                skip_serializing_if = "Option::is_none"
+            )]
+            quote_generation_socket: Option<QgsSocket>,
+        }
+
+        let tdx_object = TdxGuestObject {
+            qom_type: "tdx-guest",
+            id: "tdx",
+            mrconfigid: mrconfigid.clone(),
+            quote_generation_socket: cfg.qgs_port.map(|port| QgsSocket {
+                r#type: "vsock",
+                cid: "2",
+                port: port.to_string(),
+            }),
+        };
+
+        // Use JSON format when quote-generation-socket is needed, otherwise use simple format
+        let tdx_object_arg =
+            serde_json::to_string(&tdx_object).context("failed to serialize tdx-guest object")?;
+        command.arg("-object").arg(tdx_object_arg);
         Ok(())
+    }
+
+    fn configure_smbios(&self, command: &mut Command, cfg: &CvmConfig) {
+        let p = &cfg.product;
+
+        fn cfg_if(ty: &mut Vec<String>, name: &str, v: &Option<String>) {
+            if let Some(v) = v {
+                ty.push(format!("{name}={v}"));
+            }
+        }
+
+        let mut types = [const { Vec::new() }; 4];
+        // SMBIOS type=0 (BIOS Information)
+        cfg_if(&mut types[0], "vendor", &p.bios_vendor);
+        cfg_if(&mut types[0], "version", &p.bios_version);
+        cfg_if(&mut types[0], "date", &p.bios_date);
+        cfg_if(&mut types[0], "release", &p.bios_release);
+        // SMBIOS type=1 (System Information)
+        cfg_if(&mut types[1], "manufacturer", &p.sys_vendor);
+        cfg_if(&mut types[1], "product", &p.product_name);
+        cfg_if(&mut types[1], "version", &p.product_version);
+        cfg_if(&mut types[1], "serial", &p.product_serial);
+        cfg_if(&mut types[1], "uuid", &p.product_uuid);
+        cfg_if(&mut types[1], "family", &p.product_family);
+        cfg_if(&mut types[1], "sku", &p.product_sku);
+        // SMBIOS type=2 (Baseboard Information)
+        cfg_if(&mut types[2], "manufacturer", &p.board_vendor);
+        cfg_if(&mut types[2], "product", &p.board_name);
+        cfg_if(&mut types[2], "version", &p.board_version);
+        cfg_if(&mut types[2], "serial", &p.board_serial);
+        cfg_if(&mut types[2], "asset", &p.board_asset_tag);
+        // SMBIOS type=3 (Chassis Information)
+        cfg_if(&mut types[3], "manufacturer", &p.chassis_vendor);
+        cfg_if(&mut types[3], "version", &p.chassis_version);
+        cfg_if(&mut types[3], "serial", &p.chassis_serial);
+        cfg_if(&mut types[3], "asset", &p.chassis_asset_tag);
+
+        for (i, t) in types.iter().enumerate() {
+            if !t.is_empty() {
+                command
+                    .arg("-smbios")
+                    .arg(format!("type={i},{}", t.join(",")));
+            }
+        }
     }
 }
 
@@ -876,6 +1078,10 @@ impl VmWorkDir {
 
     pub fn hda_path(&self) -> PathBuf {
         self.workdir.join("hda.img")
+    }
+
+    pub fn shared_disk_path(&self) -> PathBuf {
+        self.workdir.join("shared.img")
     }
 
     pub fn qmp_socket(&self) -> PathBuf {

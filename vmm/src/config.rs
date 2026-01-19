@@ -190,6 +190,52 @@ pub struct CvmConfig {
 
     /// Networking configuration
     pub networking: Networking,
+
+    /// Host sharing mode. (9p, vhd, vvfat)
+    pub host_share_mode: String,
+
+    /// QGS (Quote Generation Service) vsock port for kernel-level TSM support.
+    /// When set, QEMU will pass this port to tdx-guest for configfs-tsm quote generation.
+    /// The guest kernel will use this vsock port to communicate with the host QGS.
+    /// Default is None (disabled), common value is 4050.
+    pub qgs_port: Option<u32>,
+
+    /// SMBIOS product information for cloud environment detection
+    #[serde(default)]
+    pub product: ProductConfig,
+}
+
+/// SMBIOS product information configuration.
+/// Field names correspond to /sys/class/dmi/id/ entries in guest.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ProductConfig {
+    // SMBIOS type=0 (BIOS Information)
+    pub bios_vendor: Option<String>,
+    pub bios_version: Option<String>,
+    pub bios_date: Option<String>,
+    pub bios_release: Option<String>,
+
+    // SMBIOS type=1 (System Information)
+    pub sys_vendor: Option<String>,
+    pub product_name: Option<String>,
+    pub product_version: Option<String>,
+    pub product_serial: Option<String>,
+    pub product_uuid: Option<String>,
+    pub product_family: Option<String>,
+    pub product_sku: Option<String>,
+
+    // SMBIOS type=2 (Baseboard Information)
+    pub board_vendor: Option<String>,
+    pub board_name: Option<String>,
+    pub board_version: Option<String>,
+    pub board_serial: Option<String>,
+    pub board_asset_tag: Option<String>,
+
+    // SMBIOS type=3 (Chassis Information)
+    pub chassis_vendor: Option<String>,
+    pub chassis_version: Option<String>,
+    pub chassis_serial: Option<String>,
+    pub chassis_asset_tag: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

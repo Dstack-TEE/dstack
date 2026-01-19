@@ -28,8 +28,8 @@ func main() {
 	fmt.Println(key.Key)  // Same path always returns the same key
 
 	// Generate an attestation quote
-	quote, _ := client.GetQuote(context.Background(), []byte("my-app-state"))
-	fmt.Println(quote.Quote)
+	attest, _ := client.Attest(context.Background(), []byte("my-app-state"))
+	fmt.Println(attest.Attestation)
 }
 ```
 
@@ -86,6 +86,19 @@ fmt.Println(rtmrs)
 - `Quote`: TDX quote as bytes
 - `EventLog`: JSON string of measured events
 - `ReplayRTMRs()`: Method to compute RTMR values from event log
+
+`Attest()` creates a versioned attestation with the given report data.
+
+```go
+attest, _ := client.Attest(ctx, []byte("my-app-state"))
+fmt.Println(attest.Attestation)
+```
+
+**Parameters:**
+- `reportData`: Exactly 64 bytes recommended. If shorter, pad with zeros. If longer, hash it first (e.g., SHA-256).
+
+**Returns:** `*AttestResponse`
+- `Attestation`: Versioned attestation as bytes
 
 ### Get Instance Info
 

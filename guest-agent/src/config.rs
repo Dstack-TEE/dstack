@@ -71,6 +71,5 @@ where
 #[derive(Debug, Clone, Deserialize)]
 pub struct Simulator {
     pub enabled: bool,
-    pub quote_file: String,
-    pub event_log_file: String,
+    pub attestation_file: String,
 }

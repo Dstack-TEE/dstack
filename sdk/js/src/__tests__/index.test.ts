@@ -49,6 +49,13 @@ describe('DstackClient', () => {
     expect(result.replayRtmrs().length).toBe(4)
   })
 
+  it('should be able to attest', async () => {
+    const client = new DstackClient()
+    const result = await client.attest('test')
+    expect(result).toHaveProperty('attestation')
+    expect(result.attestation).not.toBe('')
+  })
+
   it('should able to get derive key result as uint8array', async () => {
     const client = new DstackClient()
     const result = await client.getKey('/', 'test')
@@ -85,6 +92,11 @@ describe('DstackClient', () => {
     const client = new DstackClient()
     const input = new Uint8Array(65).fill(0)
     await expect(() => client.getQuote(input)).rejects.toThrow()
+  })
+
+  it('should throw error on attest report_data larger than 64 bytes', async () => {
+    const client = new DstackClient()
+    await expect(() => client.attest(Buffer.alloc(65))).rejects.toThrow()
   })
 
   it('should be able to get info', async () => {

@@ -124,10 +124,22 @@ const CreateVmDialogComponent = {
             </div>
 
             <div class="form-group full-width">
+              <label for="keyProviderSelect">Key Provider</label>
+              <select id="keyProviderSelect" v-model="form.key_provider">
+                <option value="none">None</option>
+                <option value="kms">KMS</option>
+                <option value="local">Local</option>
+              </select>
+            </div>
+
+            <div class="form-group full-width" v-if="form.key_provider !== 'none'">
+              <label for="keyProviderId">Key Provider ID</label>
+              <input id="keyProviderId" v-model="form.key_provider_id" type="text" placeholder="Optional provider ID">
+            </div>
+
+            <div class="form-group full-width">
               <label>Features</label>
               <div class="feature-checkboxes">
-                <label><input type="checkbox" v-model="form.kms_enabled"> Enable KMS</label>
-                <label><input type="checkbox" v-model="form.local_key_provider_enabled"> Enable local key provider</label>
                 <label><input type="checkbox" v-model="form.gateway_enabled"> Enable dstack-gateway</label>
                 <label><input type="checkbox" v-model="form.public_logs"> Public logs</label>
                 <label><input type="checkbox" v-model="form.public_sysinfo"> Public sysinfo</label>
@@ -136,11 +148,6 @@ const CreateVmDialogComponent = {
                 <label><input type="checkbox" v-model="form.pin_numa"> Pin NUMA</label>
                 <label><input type="checkbox" v-model="form.hugepages"> Huge pages</label>
               </div>
-            </div>
-
-            <div class="form-group full-width" v-if="form.kms_enabled || form.local_key_provider_enabled">
-              <label for="keyProviderId">Key Provider ID</label>
-              <input id="keyProviderId" v-model="form.key_provider_id" type="text" placeholder="Optional provider ID">
             </div>
 
             <div class="form-group full-width" v-if="kmsAvailable">

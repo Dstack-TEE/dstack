@@ -2,6 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+use std::path::Path;
+
+use scale::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 use serde_human_bytes as hex_bytes;
 use size_parser::human_size;
@@ -69,6 +72,7 @@ pub enum KeyProviderKind {
     None,
     Kms,
     Local,
+    Tpm,
 }
 
 impl KeyProviderKind {
@@ -78,6 +82,10 @@ impl KeyProviderKind {
 
     pub fn is_kms(&self) -> bool {
         matches!(self, KeyProviderKind::Kms)
+    }
+
+    pub fn is_tpm(&self) -> bool {
+        matches!(self, KeyProviderKind::Tpm)
     }
 }
 
@@ -101,7 +109,7 @@ impl AppCompose {
     }
 
     pub fn kms_enabled(&self) -> bool {
-        self.kms_enabled || self.feature_enabled("kms")
+        self.key_provider().is_kms()
     }
 
     pub fn key_provider(&self) -> KeyProviderKind {
@@ -128,17 +136,18 @@ pub struct SysConfig {
     pub gateway_urls: Vec<String>,
     pub pccs_url: Option<String>,
     pub docker_registry: Option<String>,
-    pub host_api_url: String,
+    pub host_api_url: Option<String>,
     // JSON serialized VmConfig
     pub vm_config: String,
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct VmConfig {
-    pub spec_version: u32,
-    #[serde(with = "hex_bytes")]
+    #[serde(with = "hex_bytes", default)]
     pub os_image_hash: Vec<u8>,
+    #[serde(default)]
     pub cpu_count: u32,
+    #[serde(default)]
     pub memory_size: u64,
     // https://github.com/intel-staging/qemu-tdx/issues/1
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -159,6 +168,10 @@ pub struct VmConfig {
     pub hotplug_off: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image: Option<String>,
+    /// If true, shared files are provided via a second virtual disk (hd2)
+    /// If false (default), shared files are provided via 9p virtfs
+    #[serde(default)]
+    pub host_share_mode: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -186,6 +199,11 @@ pub enum KeyProvider {
         #[serde(with = "hex_bytes")]
         mr: Vec<u8>,
     },
+    Tpm {
+        key: String,
+        #[serde(with = "hex_bytes")]
+        pubkey: Vec<u8>,
+    },
     Kms {
         url: String,
         #[serde(with = "hex_bytes")]
@@ -200,6 +218,7 @@ impl KeyProvider {
         match self {
             KeyProvider::None { .. } => KeyProviderKind::None,
             KeyProvider::Local { .. } => KeyProviderKind::Local,
+            KeyProvider::Tpm { .. } => KeyProviderKind::Tpm,
             KeyProvider::Kms { .. } => KeyProviderKind::Kms,
         }
     }
@@ -208,6 +227,7 @@ impl KeyProvider {
         match self {
             KeyProvider::None { .. } => &[],
             KeyProvider::Local { mr, .. } => mr,
+            KeyProvider::Tpm { pubkey, .. } => pubkey,
             KeyProvider::Kms { pubkey, .. } => pubkey,
         }
     }
@@ -243,4 +263,49 @@ pub fn dstack_agent_address() -> String {
         return address;
     }
     "unix:/var/run/dstack.sock".into()
+}
+
+/// Hardware/Cloud Platform
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Encode, Decode)]
+#[serde(rename_all = "lowercase")]
+pub enum Platform {
+    /// dstack bare platform
+    Dstack,
+    /// Google Cloud Platform
+    Gcp,
+    /// AWS Nitro Enclave
+    NitroEnclave,
+}
+
+impl Platform {
+    /// Detect platform from system DMI information
+    pub fn detect() -> Option<Self> {
+        // Nitro Enclave: NSM device exists only inside enclave
+        if Path::new("/dev/nsm").exists() {
+            return Some(Self::NitroEnclave);
+        }
+
+        if let Ok(board_name) = std::fs::read_to_string("/sys/class/dmi/id/product_name") {
+            match board_name.trim() {
+                "dstack" | "qemu" => return Some(Self::Dstack),
+                "Google Compute Engine" => return Some(Self::Gcp),
+                _ => {}
+            }
+        }
+        None
+    }
+
+    /// Detect platform from system DMI information, default to Dstack if cannot detect
+    pub fn detect_or_dstack() -> Self {
+        Self::detect().unwrap_or(Self::Dstack)
+    }
+
+    /// Get platform name as string
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Dstack => "dstack",
+            Self::Gcp => "gcp",
+            Self::NitroEnclave => "aws-nitro-enclave",
+        }
+    }
 }

@@ -202,6 +202,14 @@ impl Proxy {
         )
         .await
         .unwrap_or_default();
+        let account_attestation = get_or_generate_attestation(
+            &agent,
+            QuoteContentType::Custom("acme-account"),
+            account_uri.as_bytes(),
+            workdir.acme_account_quote_path(),
+        )
+        .await
+        .unwrap_or_default();
 
         let mut quoted_hist_keys = vec![];
         for cert_path in workdir.list_certs().unwrap_or_default() {
@@ -215,9 +223,18 @@ impl Proxy {
             )
             .await
             .unwrap_or_default();
+            let attestation = get_or_generate_attestation(
+                &agent,
+                QuoteContentType::Custom("zt-cert"),
+                &pubkey,
+                cert_path.display().to_string() + ".quote",
+            )
+            .await
+            .unwrap_or_default();
             quoted_hist_keys.push(QuotedPublicKey {
                 public_key: pubkey,
                 quote,
+                attestation,
             });
         }
         let active_cert =
@@ -227,6 +244,7 @@ impl Proxy {
             account_uri,
             hist_keys: keys.into_iter().collect(),
             account_quote,
+            account_attestation,
             quoted_hist_keys,
             active_cert,
             base_domain: config.proxy.base_domain.clone(),
@@ -823,6 +841,26 @@ async fn get_or_generate_quote(
     let quote = serde_json::to_string(&response).context("Failed to serialize quote")?;
     safe_write(quote_path, &quote).context("Failed to write quote")?;
     Ok(quote)
+}
+
+async fn get_or_generate_attestation(
+    agent: &DstackGuestClient<PrpcClient>,
+    content_type: QuoteContentType<'_>,
+    payload: &[u8],
+    quote_path: impl AsRef<Path>,
+) -> Result<String> {
+    let quote_path = quote_path.as_ref();
+    if fs::metadata(quote_path).is_ok() {
+        return fs::read_to_string(quote_path).context("Failed to read quote");
+    }
+    let report_data = content_type.to_report_data(payload).to_vec();
+    let response = agent
+        .attest(RawQuoteArgs { report_data })
+        .await
+        .context("Failed to get quote")?;
+    let attestation = serde_json::to_string(&response).context("Failed to serialize quote")?;
+    safe_write(quote_path, &attestation).context("Failed to write quote")?;
+    Ok(attestation)
 }
 
 impl RpcCall<Proxy> for RpcHandler {

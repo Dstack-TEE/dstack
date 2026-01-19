@@ -7,7 +7,7 @@ use dstack_types::{mr_config::MrConfig, KeyProviderKind};
 use tracing::info;
 
 fn read_mr_config_id() -> Result<[u8; 48]> {
-    let (_, quote) = tdx_attest::get_quote(&[0u8; 64], None).context("Failed to get quote")?;
+    let quote = tdx_attest::get_quote(&[0u8; 64]).context("Failed to get quote")?;
     let quote = dcap_qvl::quote::Quote::parse(&quote).context("Failed to parse quote")?;
     let configid = quote
         .report
@@ -27,7 +27,7 @@ fn read_mr_config_id() -> Result<[u8; 48]> {
 /// Where the instance info is a concatenated bytes of the following fields:
 /// - compose_hash: [u8; 32]
 /// - app_id: [u8; 20]
-/// - key_provider_type: u8 // 0: none, 1: local, 2: kms
+/// - key_provider_type: u8 // 0: none, 1: local, 2: kms, 3: tpm
 /// - key_provider_id: [u8] // the ca pubkey for KMS or the MR enclave for local-sgx provider, empty for none
 pub fn verify_mr_config_id(
     compose_hash: &[u8; 32],

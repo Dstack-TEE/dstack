@@ -34,7 +34,7 @@ function sortObject(obj: SortableValue): SortableValue {
   return obj;
 }
 
-export type KeyProviderKind = "none" | "kms" | "local";
+export type KeyProviderKind = "none" | "kms" | "local" | "tpm";
 
 export interface DockerConfig extends SortableObject {
   registry?: string;

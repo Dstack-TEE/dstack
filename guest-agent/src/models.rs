@@ -48,6 +48,8 @@ pub struct Dashboard {
     pub public_sysinfo: bool,
     pub public_logs: bool,
     pub public_tcbinfo: bool,
+    pub cloud_vendor: String,
+    pub cloud_product: String,
 }
 
 #[derive(Template)]

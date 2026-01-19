@@ -1,0 +1,47 @@
+# SPDX-FileCopyrightText: © 2024-2025 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+x-common: &common-config
+  restart: always
+  logging:
+    driver: "json-file"
+    options:
+      max-size: "100m"
+      max-file: "5"
+
+services:
+  aesmd:
+    <<: *common-config
+    container_name: aesmd
+    build:
+      context: .
+      dockerfile: Dockerfile.aesmd
+    privileged: true
+    devices:
+      - "/dev/sgx_enclave:/dev/sgx_enclave"
+      - "/dev/sgx_provision:/dev/sgx_provision"
+    volumes:
+      - "./sgx_default_qcnl.conf:/etc/sgx_default_qcnl.conf"
+      - "aesmd:/var/run/aesmd/"
+    network_mode: "host"
+  
+  gramine-sealing-key-provider:
+    <<: *common-config
+    container_name: gramine-sealing-key-provider
+    build:
+      context: .
+      dockerfile: Dockerfile.key-provider
+    privileged: true
+    devices:
+      - "/dev/sgx_enclave:/dev/sgx_enclave"
+      - "/dev/sgx_provision:/dev/sgx_provision"
+    depends_on:
+      - aesmd
+    volumes:
+      - "aesmd:/var/run/aesmd/"
+    ports:
+      - "127.0.0.1:3443:3443"
+
+volumes:
+  aesmd:
