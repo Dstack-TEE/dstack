@@ -12,6 +12,8 @@ use dcap_qvl::{
     quote::{EnclaveReport, Quote, Report, TDReport10, TDReport15},
     verify::VerifiedReport as TdxVerifiedReport,
 };
+#[cfg(feature = "quote")]
+use dstack_types::SysConfig;
 use dstack_types::{Platform, VmConfig};
 use ez_hash::{sha256, Hasher, Sha384};
 use or_panic::ResultOrPanic;
@@ -23,6 +25,21 @@ use sha2::Digest as _;
 const DSTACK_TDX: &str = "dstack-tdx";
 const DSTACK_GCP_TDX: &str = "dstack-gcp-tdx";
 const DSTACK_NITRO_ENCLAVE: &str = "dstack-nitro-enclave";
+#[cfg(feature = "quote")]
+const SYS_CONFIG_PATH: &str = "/dstack/.host-shared/.sys-config.json";
+
+/// Read vm_config from sys-config.json
+#[cfg(feature = "quote")]
+fn read_vm_config() -> Result<String> {
+    let content = match fs_err::read_to_string(SYS_CONFIG_PATH) {
+        Ok(content) => content,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(String::new()),
+        Err(err) => return Err(err).context("Failed to read sys-config"),
+    };
+    let sys_config: SysConfig =
+        serde_json::from_str(&content).context("Failed to parse sys-config")?;
+    Ok(sys_config.vm_config)
+}
 
 /// Attestation mode
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Encode, Decode, Serialize, Deserialize)]
@@ -579,8 +596,7 @@ impl Attestation {
         };
         let config = match &quote {
             AttestationQuote::DstackTdx(_) => {
-                // TODO: Find a better way handling this hardcode path
-                fs_err::read_to_string("/dstack/.host-shared/.sys-config.json").unwrap_or_default()
+                read_vm_config().context("Failed to read VM config")?
             }
             AttestationQuote::DstackGcpTdx | AttestationQuote::DstackNitroEnclave => {
                 bail!("Unsupported attestation mode: {mode:?}");
