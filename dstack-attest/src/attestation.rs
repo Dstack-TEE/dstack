@@ -28,6 +28,10 @@ const DSTACK_NITRO_ENCLAVE: &str = "dstack-nitro-enclave";
 #[cfg(feature = "quote")]
 const SYS_CONFIG_PATH: &str = "/dstack/.host-shared/.sys-config.json";
 
+/// Global lock for quote generation. The underlying TDX driver does not support concurrent access.
+#[cfg(feature = "quote")]
+static QUOTE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Read vm_config from sys-config.json
 #[cfg(feature = "quote")]
 fn read_vm_config() -> Result<String> {
@@ -574,6 +578,11 @@ impl Attestation {
     }
 
     pub fn quote_with_app_id(report_data: &[u8; 64], app_id: Option<[u8; 20]>) -> Result<Self> {
+        // Lock to prevent concurrent quote generation (TDX driver doesn't support it)
+        let _guard = QUOTE_LOCK
+            .lock()
+            .map_err(|_| anyhow!("Quote lock poisoned"))?;
+
         let mode = AttestationMode::detect()?;
         let runtime_events = if mode.is_composable() {
             RuntimeEvent::read_all().context("Failed to read runtime events")?
