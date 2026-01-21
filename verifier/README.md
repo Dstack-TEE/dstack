@@ -78,7 +78,7 @@ You usually don't need to edit the config file. Just using the default is fine, 
 - `image_cache_dir`: Directory for cached OS images (default: "/tmp/dstack-verifier/cache")
 - `image_download_url`: URL template for downloading OS images (default: dstack official releases URL)
 - `image_download_timeout_secs`: Download timeout in seconds (default: 300)
-- `pccs_url`: Optional PCCS URL for quote verification
+- `pccs_url`: PCCS URL for quote verification (default: uses Intel's public PCCS)
 
 ### Example Configuration File
 
@@ -88,7 +88,7 @@ port = 8080
 image_cache_dir = "/tmp/dstack-verifier/cache"
 image_download_url = "https://download.dstack.org/os-images/mr_{OS_IMAGE_HASH}.tar.gz"
 image_download_timeout_secs = 300
-pccs_url = "https://pccs.phala.network"
+# pccs_url = "https://pccs.phala.network"
 ```
 
 ## Usage

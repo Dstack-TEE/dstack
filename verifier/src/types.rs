@@ -15,7 +15,6 @@ pub struct VerificationRequest {
     pub vm_config: Option<String>,
     #[serde(with = "serde_bytes")]
     pub attestation: Option<Vec<u8>>,
-    pub pccs_url: Option<String>,
     pub debug: Option<bool>,
 }
 

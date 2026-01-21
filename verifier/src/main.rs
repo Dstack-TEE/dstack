@@ -85,17 +85,15 @@ async fn run_oneshot(file_path: &str, config: &Config) -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("Failed to read file {}: {}", file_path, e))?;
 
     // Parse as VerificationRequest
-    let mut request: VerificationRequest = serde_json::from_str(&content)
+    let request: VerificationRequest = serde_json::from_str(&content)
         .map_err(|e| anyhow::anyhow!("Failed to parse JSON: {}", e))?;
-
-    // Ensure PCCS URL is populated from config when the report omits it
-    request.pccs_url = request.pccs_url.or_else(|| config.pccs_url.clone());
 
     // Create verifier
     let verifier = CvmVerifier::new(
         config.image_cache_dir.clone(),
         config.image_download_url.clone(),
         std::time::Duration::from_secs(config.image_download_timeout_secs),
+        config.pccs_url.clone(),
     );
 
     // Run verification
@@ -187,6 +185,7 @@ async fn main() -> Result<()> {
         config.image_cache_dir.clone(),
         config.image_download_url.clone(),
         std::time::Duration::from_secs(config.image_download_timeout_secs),
+        config.pccs_url.clone(),
     ));
 
     rocket::custom(figment)
