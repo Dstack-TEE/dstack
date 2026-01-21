@@ -17,7 +17,7 @@ use k256::ecdsa::SigningKey;
 use ra_rpc::{client::RaClient, CallContext, RpcCall};
 use ra_tls::{
     attestation::{QuoteContentType, VersionedAttestation},
-    cert::{CaCert, CertRequest},
+    cert::{client_cert_not_after, server_cert_not_after, CaCert, CertRequest},
     rcgen::{Certificate, KeyPair, PKCS_ECDSA_P256_SHA256},
 };
 use safe_write::safe_write;
@@ -128,6 +128,7 @@ impl Keys {
             .subject("Dstack Client Temp CA")
             .ca_level(0)
             .key(&tmp_ca_key)
+            .not_after(server_cert_not_after())
             .build()
             .self_signed()?;
 
@@ -137,6 +138,7 @@ impl Keys {
             .subject("Dstack KMS CA")
             .ca_level(1)
             .key(&ca_key)
+            .not_after(server_cert_not_after())
             .build()
             .self_signed()?;
         let attestation = if quote_enabled {
@@ -159,6 +161,7 @@ impl Keys {
             .special_usage("kms:rpc")
             .maybe_attestation(attestation.as_ref())
             .key(&rpc_key)
+            .not_after(server_cert_not_after())
             .build()
             .signed_by(&ca_cert, &ca_key)?;
         Ok(Keys {
@@ -341,6 +344,7 @@ async fn gen_ra_cert(ca_cert_pem: String, ca_key_pem: String) -> Result<(String,
         .subject("RA-TLS TEMP Cert")
         .attestation(&attestation)
         .key(&key)
+        .not_after(client_cert_not_after())
         .build();
     let cert = ca.sign(req).context("Failed to sign certificate")?;
     Ok((cert.pem(), key.serialize_pem()))

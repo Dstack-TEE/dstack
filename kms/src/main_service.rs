@@ -17,7 +17,9 @@ use k256::ecdsa::SigningKey;
 use ra_rpc::{CallContext, RpcCall};
 use ra_tls::{
     attestation::VerifiedAttestation,
-    cert::{CaCert, CertRequest, CertSigningRequestV1, CertSigningRequestV2, Csr},
+    cert::{
+        server_cert_not_after, CaCert, CertRequest, CertSigningRequestV1, CertSigningRequestV2, Csr,
+    },
     kdf,
 };
 use scale::Decode;
@@ -224,6 +226,7 @@ impl RpcHandler {
             .ca_level(0)
             .app_id(app_id)
             .special_usage("app:ca")
+            .not_after(server_cert_not_after())
             .build();
         let app_ca = self
             .state

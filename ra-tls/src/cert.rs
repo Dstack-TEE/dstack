@@ -32,6 +32,18 @@ use crate::traits::CertExt;
 use dstack_attest::attestation::QuoteContentType;
 use dstack_attest::attestation::{Attestation, AttestationQuote, VersionedAttestation};
 
+/// Returns the expiration time for long-lived server certificates (10 years from now).
+pub fn server_cert_not_after() -> SystemTime {
+    let day = Duration::from_secs(86400);
+    SystemTime::now() + day * 365 * 10
+}
+
+/// Returns the expiration time for short-lived client certificates (10 minutes from now).
+pub fn client_cert_not_after() -> SystemTime {
+    let minute = Duration::from_secs(60);
+    SystemTime::now() + minute * 10
+}
+
 /// A CA certificate and private key.
 pub struct CaCert {
     /// The original PEM certificate.
@@ -402,8 +414,8 @@ impl<Key> CertRequest<'_, Key> {
             .not_after
             .unwrap_or_else(|| {
                 let now = SystemTime::now();
-                let day = Duration::from_secs(86400);
-                now + day * 365 * 10
+                let hour = Duration::from_secs(3600);
+                now + hour
             })
             .into();
         Ok(params)
@@ -550,6 +562,7 @@ pub fn generate_ra_cert_with_app_id(
         .subject("RA-TLS TEMP Cert")
         .key(&key)
         .attestation(&attestation)
+        .not_after(client_cert_not_after())
         .build();
     let cert = ca.sign(req).context("Failed to sign certificate")?;
     Ok(CertPair {
