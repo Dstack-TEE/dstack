@@ -38,7 +38,7 @@ use_mrconfigid = true
 qemu_pci_hole64_size = 0
 qemu_hotplug_off = false
 
-host_share_mode = "vvfat"
+host_share_mode = "9p"
 
 # QGS (Quote Generation Service) vsock port for kernel-level TSM support.
 # When set, QEMU will pass this port to tdx-guest for configfs-tsm quote generation.
