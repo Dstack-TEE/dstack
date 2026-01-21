@@ -15,7 +15,6 @@ pub struct VerificationRequest {
     pub vm_config: Option<String>,
     #[serde(with = "serde_bytes")]
     pub attestation: Option<Vec<u8>>,
-    pub pccs_url: Option<String>,
     pub debug: Option<bool>,
 }
 
@@ -29,6 +28,13 @@ pub struct VerificationResponse {
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct VerificationDetails {
     pub quote_verified: bool,
+    /// Indicates that the event log was verified against the quote.
+    ///
+    /// For RTMR3 (runtime measurements), both the digest and payload integrity are verified
+    /// by replaying the event log and comparing against the quote. For RTMR 0-2 (boot-time
+    /// measurements), only the digests are verified through replay comparison with the quote;
+    /// the payload content is not validated. dstack does not define semantics for RTMR 0-2
+    /// event log payloads.
     pub event_log_verified: bool,
     pub os_image_hash_verified: bool,
     pub report_data: Option<String>,

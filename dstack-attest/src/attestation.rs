@@ -12,6 +12,8 @@ use dcap_qvl::{
     quote::{EnclaveReport, Quote, Report, TDReport10, TDReport15},
     verify::VerifiedReport as TdxVerifiedReport,
 };
+#[cfg(feature = "quote")]
+use dstack_types::SysConfig;
 use dstack_types::{Platform, VmConfig};
 use ez_hash::{sha256, Hasher, Sha384};
 use or_panic::ResultOrPanic;
@@ -23,6 +25,25 @@ use sha2::Digest as _;
 const DSTACK_TDX: &str = "dstack-tdx";
 const DSTACK_GCP_TDX: &str = "dstack-gcp-tdx";
 const DSTACK_NITRO_ENCLAVE: &str = "dstack-nitro-enclave";
+#[cfg(feature = "quote")]
+const SYS_CONFIG_PATH: &str = "/dstack/.host-shared/.sys-config.json";
+
+/// Global lock for quote generation. The underlying TDX driver does not support concurrent access.
+#[cfg(feature = "quote")]
+static QUOTE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Read vm_config from sys-config.json
+#[cfg(feature = "quote")]
+fn read_vm_config() -> Result<String> {
+    let content = match fs_err::read_to_string(SYS_CONFIG_PATH) {
+        Ok(content) => content,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(String::new()),
+        Err(err) => return Err(err).context("Failed to read sys-config"),
+    };
+    let sys_config: SysConfig =
+        serde_json::from_str(&content).context("Failed to parse sys-config")?;
+    Ok(sys_config.vm_config)
+}
 
 /// Attestation mode
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Encode, Decode, Serialize, Deserialize)]
@@ -318,10 +339,13 @@ impl<T> Attestation<T> {
             .map(|q| serde_json::to_vec(&q.event_log).unwrap_or_default())
     }
 
-    /// Get TDX event log string
+    /// Get TDX event log string with RTMR[0-2] payloads stripped to reduce size.
+    /// Only digests are kept for boot-time events; runtime events (RTMR3) retain full payload.
     pub fn get_tdx_event_log_string(&self) -> Option<String> {
-        self.tdx_quote()
-            .map(|q| serde_json::to_string(&q.event_log).unwrap_or_default())
+        self.tdx_quote().map(|q| {
+            let stripped: Vec<_> = q.event_log.iter().map(|e| e.stripped()).collect();
+            serde_json::to_string(&stripped).unwrap_or_default()
+        })
     }
 
     pub fn get_td10_report(&self) -> Option<TDReport10> {
@@ -557,6 +581,11 @@ impl Attestation {
     }
 
     pub fn quote_with_app_id(report_data: &[u8; 64], app_id: Option<[u8; 20]>) -> Result<Self> {
+        // Lock to prevent concurrent quote generation (TDX driver doesn't support it)
+        let _guard = QUOTE_LOCK
+            .lock()
+            .map_err(|_| anyhow!("Quote lock poisoned"))?;
+
         let mode = AttestationMode::detect()?;
         let runtime_events = if mode.is_composable() {
             RuntimeEvent::read_all().context("Failed to read runtime events")?
@@ -579,8 +608,7 @@ impl Attestation {
         };
         let config = match &quote {
             AttestationQuote::DstackTdx(_) => {
-                // TODO: Find a better way handling this hardcode path
-                fs_err::read_to_string("/dstack/.host-shared/.sys-config.json").unwrap_or_default()
+                read_vm_config().context("Failed to read VM config")?
             }
             AttestationQuote::DstackGcpTdx | AttestationQuote::DstackNitroEnclave => {
                 bail!("Unsupported attestation mode: {mode:?}");

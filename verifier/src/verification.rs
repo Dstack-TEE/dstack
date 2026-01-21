@@ -137,14 +137,21 @@ pub struct CvmVerifier {
     pub image_cache_dir: String,
     pub download_url: String,
     pub download_timeout: Duration,
+    pub pccs_url: Option<String>,
 }
 
 impl CvmVerifier {
-    pub fn new(image_cache_dir: String, download_url: String, download_timeout: Duration) -> Self {
+    pub fn new(
+        image_cache_dir: String,
+        download_url: String,
+        download_timeout: Duration,
+        pccs_url: Option<String>,
+    ) -> Self {
         Self {
             image_cache_dir,
             download_url,
             download_timeout,
+            pccs_url,
         }
     }
 
@@ -408,7 +415,7 @@ impl CvmVerifier {
 
         let attestation = attestation.into_inner();
         let debug = request.debug.unwrap_or(false);
-        let verified = attestation.verify(request.pccs_url.as_deref()).await;
+        let verified = attestation.verify(self.pccs_url.as_deref()).await;
         let verified_attestation = match verified {
             Ok(att) => {
                 details.quote_verified = true;

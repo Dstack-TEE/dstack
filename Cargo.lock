@@ -1316,7 +1316,7 @@ dependencies = [
 
 [[package]]
 name = "cc-eventlog"
-version = "0.5.5"
+version = "0.5.6"
 dependencies = [
  "anyhow",
  "digest 0.10.7",
@@ -1333,7 +1333,7 @@ dependencies = [
 
 [[package]]
 name = "cert-client"
-version = "0.5.5"
+version = "0.5.6"
 dependencies = [
  "anyhow",
  "dstack-kms-rpc",
@@ -1345,7 +1345,7 @@ dependencies = [
 
 [[package]]
 name = "certbot"
-version = "0.5.5"
+version = "0.5.6"
 dependencies = [
  "anyhow",
  "bon",
@@ -1371,7 +1371,7 @@ dependencies = [
 
 [[package]]
 name = "certbot-cli"
-version = "0.5.5"
+version = "0.5.6"
 dependencies = [
  "anyhow",
  "certbot",
@@ -1788,7 +1788,7 @@ dependencies = [
 
 [[package]]
 name = "ct_monitor"
-version = "0.5.5"
+version = "0.5.6"
 dependencies = [
  "anyhow",
  "clap",
@@ -1911,9 +1911,9 @@ checksum = "2a2330da5de22e8a3cb63252ce2abb30116bf5265e89c0e01bc17015ce30a476"
 
 [[package]]
 name = "dcap-qvl"
-version = "0.3.8"
+version = "0.3.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "82f4049f76ea6a67262a7501b82f9cda2425c022a86b45902d195d70fa67a4f7"
+checksum = "3696cfa3d2b8b26df6dadafa67dd1fa69376c1e38971c207984bc3a9f0621d05"
 dependencies = [
  "anyhow",
  "asn1_der",
@@ -1928,15 +1928,16 @@ dependencies = [
  "futures",
  "hex",
  "log",
+ "p256",
  "parity-scale-codec",
  "pem",
  "reqwest",
- "ring",
- "rustls-webpki 0.102.8",
+ "rustls-pki-types",
  "scale-info",
  "serde",
  "serde-human-bytes",
  "serde_json",
+ "sha2 0.10.9",
  "tracing",
  "urlencoding",
  "wasm-bindgen-futures",
@@ -1945,12 +1946,19 @@ dependencies = [
 
 [[package]]
 name = "dcap-qvl-webpki"
-version = "0.103.3"
+version = "0.103.4+dcap.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "70ebdcd097c369fe3422cf3978540e0406148435ec0f4d8ecbbf201c746f19c9"
+checksum = "d0af040afe66c4f26ca05f308482d98bd75a35a80a227d877c2e28c9947a9fa6"
 dependencies = [
+ "ecdsa",
+ "ed25519-dalek",
+ "p256",
+ "p384",
  "ring",
+ "rsa",
  "rustls-pki-types",
+ "sha2 0.10.9",
+ "signature",
  "untrusted 0.9.0",
 ]
 
@@ -2200,7 +2208,7 @@ dependencies = [
 
 [[package]]
 name = "dstack-attest"
-version = "0.5.5"
+version = "0.5.6"
 dependencies = [
  "anyhow",
  "cc-eventlog",
@@ -2225,7 +2233,7 @@ dependencies = [
 
 [[package]]
 name = "dstack-gateway"
-version = "0.5.5"
+version = "0.5.6"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -2284,7 +2292,7 @@ dependencies = [
 
 [[package]]
 name = "dstack-gateway-rpc"
-version = "0.5.5"
+version = "0.5.6"
 dependencies = [
  "anyhow",
  "parity-scale-codec",
@@ -2297,7 +2305,7 @@ dependencies = [
 
 [[package]]
 name = "dstack-guest-agent"
-version = "0.5.5"
+version = "0.5.6"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -2346,7 +2354,7 @@ dependencies = [
 
 [[package]]
 name = "dstack-guest-agent-rpc"
-version = "0.5.5"
+version = "0.5.6"
 dependencies = [
  "anyhow",
  "parity-scale-codec",
@@ -2359,7 +2367,7 @@ dependencies = [
 
 [[package]]
 name = "dstack-kms"
-version = "0.5.5"
+version = "0.5.6"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2401,7 +2409,7 @@ dependencies = [
 
 [[package]]
 name = "dstack-kms-rpc"
-version = "0.5.5"
+version = "0.5.6"
 dependencies = [
  "anyhow",
  "fs-err",
@@ -2415,7 +2423,7 @@ dependencies = [
 
 [[package]]
 name = "dstack-mr"
-version = "0.5.5"
+version = "0.5.6"
 dependencies = [
  "anyhow",
  "bon",
@@ -2489,7 +2497,7 @@ dependencies = [
 
 [[package]]
 name = "dstack-types"
-version = "0.5.5"
+version = "0.5.6"
 dependencies = [
  "parity-scale-codec",
  "serde",
@@ -2500,7 +2508,7 @@ dependencies = [
 
 [[package]]
 name = "dstack-util"
-version = "0.5.5"
+version = "0.5.6"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -2550,7 +2558,7 @@ dependencies = [
 
 [[package]]
 name = "dstack-verifier"
-version = "0.5.5"
+version = "0.5.6"
 dependencies = [
  "anyhow",
  "cc-eventlog",
@@ -2578,7 +2586,7 @@ dependencies = [
 
 [[package]]
 name = "dstack-vmm"
-version = "0.5.5"
+version = "0.5.6"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -2627,7 +2635,7 @@ dependencies = [
 
 [[package]]
 name = "dstack-vmm-rpc"
-version = "0.5.5"
+version = "0.5.6"
 dependencies = [
  "anyhow",
  "parity-scale-codec",
@@ -3263,7 +3271,7 @@ dependencies = [
 
 [[package]]
 name = "guest-api"
-version = "0.5.5"
+version = "0.5.6"
 dependencies = [
  "anyhow",
  "http-client",
@@ -3540,7 +3548,7 @@ dependencies = [
 
 [[package]]
 name = "host-api"
-version = "0.5.5"
+version = "0.5.6"
 dependencies = [
  "anyhow",
  "http-client",
@@ -3586,7 +3594,7 @@ dependencies = [
 
 [[package]]
 name = "http-client"
-version = "0.5.5"
+version = "0.5.6"
 dependencies = [
  "anyhow",
  "http-body-util",
@@ -4004,7 +4012,7 @@ dependencies = [
 
 [[package]]
 name = "iohash"
-version = "0.5.5"
+version = "0.5.6"
 dependencies = [
  "anyhow",
  "blake2",
@@ -4172,7 +4180,7 @@ dependencies = [
 
 [[package]]
 name = "key-provider-client"
-version = "0.5.5"
+version = "0.5.6"
 dependencies = [
  "anyhow",
  "serde",
@@ -4205,6 +4213,9 @@ name = "lazy_static"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
+dependencies = [
+ "spin",
+]
 
 [[package]]
 name = "libc"
@@ -4265,7 +4276,7 @@ checksum = "6373607a59f0be73a39b6fe456b8192fcc3585f602af20751600e974dd455e77"
 
 [[package]]
 name = "load_config"
-version = "0.5.5"
+version = "0.5.6"
 dependencies = [
  "figment",
  "rocket",
@@ -4320,7 +4331,7 @@ checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
 
 [[package]]
 name = "lspci"
-version = "0.5.5"
+version = "0.5.6"
 dependencies = [
  "anyhow",
  "insta",
@@ -4688,6 +4699,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "num-bigint-dig"
+version = "0.8.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e661dda6640fad38e827a6d4a310ff4763082116fe217f279885c97f511bb0b7"
+dependencies = [
+ "lazy_static",
+ "libm",
+ "num-integer",
+ "num-iter",
+ "num-traits",
+ "rand 0.8.5",
+ "smallvec",
+ "zeroize",
+]
+
+[[package]]
 name = "num-conv"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4699,6 +4726,17 @@ version = "0.1.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7969661fd2958a5cb096e56c8e1ad0444ac2bbcd0061bd28660485a44879858f"
 dependencies = [
+ "num-traits",
+]
+
+[[package]]
+name = "num-iter"
+version = "0.1.45"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1429034a0490724d0075ebb2bc9e875d6503c3cf69e235a8941aa757d83ef5bf"
+dependencies = [
+ "autocfg",
+ "num-integer",
  "num-traits",
 ]
 
@@ -4873,6 +4911,18 @@ name = "p256"
 version = "0.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c9863ad85fa8f4460f9c48cb909d38a0d689dba1f6f6988a5e3e0d31071bcd4b"
+dependencies = [
+ "ecdsa",
+ "elliptic-curve",
+ "primeorder",
+ "sha2 0.10.9",
+]
+
+[[package]]
+name = "p384"
+version = "0.13.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fe42f1670a52a47d448f14b6a5c61dd78fce51856e68edaa38f7ae3a46b8d6b6"
 dependencies = [
  "ecdsa",
  "elliptic-curve",
@@ -5162,6 +5212,17 @@ name = "pin-utils"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8b870d8c151b6f2fb93e84a13146138f05d02ed11c7e7c54f8826aaaf7c9f184"
+
+[[package]]
+name = "pkcs1"
+version = "0.7.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c8ffb9f10fa047879315e6625af03c164b16962a5368d724ed16323b68ace47f"
+dependencies = [
+ "der",
+ "pkcs8",
+ "spki",
+]
 
 [[package]]
 name = "pkcs8"
@@ -5586,7 +5647,7 @@ checksum = "69cdb34c158ceb288df11e18b4bd39de994f6657d83847bdffdbd7f346754b0f"
 
 [[package]]
 name = "ra-rpc"
-version = "0.5.5"
+version = "0.5.6"
 dependencies = [
  "anyhow",
  "bon",
@@ -5605,7 +5666,7 @@ dependencies = [
 
 [[package]]
 name = "ra-tls"
-version = "0.5.5"
+version = "0.5.6"
 dependencies = [
  "anyhow",
  "bon",
@@ -6066,7 +6127,7 @@ dependencies = [
 
 [[package]]
 name = "rocket-vsock-listener"
-version = "0.5.5"
+version = "0.5.6"
 dependencies = [
  "anyhow",
  "derive_more 2.1.1",
@@ -6112,6 +6173,27 @@ dependencies = [
  "time",
  "tinyvec",
  "uncased",
+]
+
+[[package]]
+name = "rsa"
+version = "0.9.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b8573f03f5883dcaebdfcf4725caa1ecb9c15b2ef50c43a07b816e06799bb12d"
+dependencies = [
+ "const-oid",
+ "digest 0.10.7",
+ "num-bigint-dig",
+ "num-integer",
+ "num-traits",
+ "pkcs1",
+ "pkcs8",
+ "rand_core 0.6.4",
+ "sha2 0.10.9",
+ "signature",
+ "spki",
+ "subtle",
+ "zeroize",
 ]
 
 [[package]]
@@ -6236,7 +6318,7 @@ dependencies = [
  "once_cell",
  "ring",
  "rustls-pki-types",
- "rustls-webpki 0.103.8",
+ "rustls-webpki",
  "subtle",
  "zeroize",
 ]
@@ -6270,17 +6352,6 @@ checksum = "708c0f9d5f54ba0272468c1d306a52c495b31fa155e91bc25371e6df7996908c"
 dependencies = [
  "web-time",
  "zeroize",
-]
-
-[[package]]
-name = "rustls-webpki"
-version = "0.102.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "64ca1bc8749bd4cf37b5ce386cc146580777b4e8572c7b97baf22c83f444bee9"
-dependencies = [
- "ring",
- "rustls-pki-types",
- "untrusted 0.9.0",
 ]
 
 [[package]]
@@ -6696,7 +6767,7 @@ dependencies = [
 
 [[package]]
 name = "serde-duration"
-version = "0.5.5"
+version = "0.5.6"
 dependencies = [
  "serde",
 ]
@@ -7003,7 +7074,7 @@ checksum = "56199f7ddabf13fe5074ce809e7d3f42b42ae711800501b5b16ea82ad029c39d"
 
 [[package]]
 name = "size-parser"
-version = "0.5.5"
+version = "0.5.6"
 dependencies = [
  "anyhow",
  "serde",
@@ -7148,7 +7219,7 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
 name = "supervisor"
-version = "0.5.5"
+version = "0.5.6"
 dependencies = [
  "anyhow",
  "bon",
@@ -7171,7 +7242,7 @@ dependencies = [
 
 [[package]]
 name = "supervisor-client"
-version = "0.5.5"
+version = "0.5.6"
 dependencies = [
  "anyhow",
  "clap",
@@ -7315,7 +7386,7 @@ dependencies = [
 
 [[package]]
 name = "tdx-attest"
-version = "0.5.5"
+version = "0.5.6"
 dependencies = [
  "anyhow",
  "cc-eventlog",
@@ -7334,7 +7405,7 @@ dependencies = [
 
 [[package]]
 name = "tdx-attest-sys"
-version = "0.5.5"
+version = "0.5.6"
 dependencies = [
  "bindgen",
  "cc",

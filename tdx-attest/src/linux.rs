@@ -6,8 +6,12 @@ use tdx_attest_sys as sys;
 
 use std::ptr;
 use std::slice;
+use std::sync::Mutex;
 
 use sys::*;
+
+/// Global lock for TDX attestation operations. The TDX driver does not support concurrent access.
+static TDX_LOCK: Mutex<()> = Mutex::new(());
 
 use num_enum::FromPrimitive;
 use thiserror::Error;
@@ -49,6 +53,9 @@ pub enum TdxAttestError {
 }
 
 pub fn get_quote(report_data: &TdxReportData) -> Result<Vec<u8>> {
+    // Lock to prevent concurrent access - TDX driver doesn't support it
+    let _guard = TDX_LOCK.lock().map_err(|_| TdxAttestError::Busy)?;
+
     let mut att_key_id = TdxUuid([0; TDX_UUID_SIZE as usize]);
     let mut quote_ptr = ptr::null_mut();
     let mut quote_size = 0;

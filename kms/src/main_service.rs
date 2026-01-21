@@ -69,6 +69,7 @@ impl KmsState {
             config.image.cache_dir.display().to_string(),
             config.image.download_url.clone(),
             config.image.download_timeout,
+            config.pccs_url.clone(),
         );
         Ok(Self {
             inner: Arc::new(KmsStateInner {

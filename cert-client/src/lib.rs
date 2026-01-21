@@ -8,7 +8,7 @@ use dstack_types::{AppKeys, KeyProvider};
 use ra_rpc::client::{RaClient, RaClientConfig};
 use ra_tls::{
     attestation::{QuoteContentType, VersionedAttestation},
-    cert::{generate_ra_cert, CaCert, CertConfig, CertSigningRequestV2, Csr},
+    cert::{generate_ra_cert, CaCert, CertConfigV2, CertSigningRequestV2, Csr},
     rcgen::KeyPair,
 };
 
@@ -96,7 +96,7 @@ impl CertRequestClient {
     pub async fn request_cert(
         &self,
         key: &KeyPair,
-        config: CertConfig,
+        config: CertConfigV2,
         attestation_override: Option<VersionedAttestation>,
     ) -> Result<Vec<String>> {
         let pubkey = key.public_key_der();

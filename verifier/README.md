@@ -31,7 +31,7 @@ or
   "is_valid": true,
   "details": {
     "quote_verified": true,
-    "event_log_verified": true,
+    "event_log_verified": true,  // See "Verification Process" for semantics
     "os_image_hash_verified": true,
     "report_data": "hex-encoded-64-byte-report-data",
     "tcb_status": "UpToDate",
@@ -78,7 +78,7 @@ You usually don't need to edit the config file. Just using the default is fine, 
 - `image_cache_dir`: Directory for cached OS images (default: "/tmp/dstack-verifier/cache")
 - `image_download_url`: URL template for downloading OS images (default: dstack official releases URL)
 - `image_download_timeout_secs`: Download timeout in seconds (default: 300)
-- `pccs_url`: Optional PCCS URL for quote verification
+- `pccs_url`: PCCS URL for quote verification (default: uses Intel's public PCCS)
 
 ### Example Configuration File
 
@@ -88,7 +88,7 @@ port = 8080
 image_cache_dir = "/tmp/dstack-verifier/cache"
 image_download_url = "https://download.dstack.org/os-images/mr_{OS_IMAGE_HASH}.tar.gz"
 image_download_timeout_secs = 300
-pccs_url = "https://pccs.phala.network"
+# pccs_url = "https://pccs.phala.network"
 ```
 
 ## Usage
@@ -178,7 +178,7 @@ $ curl -s -d @quote.json localhost:8080/verify | jq
 The verifier performs three main verification steps:
 
 1. **Quote Verification**: Validates the TDX quote using dcap-qvl, checking the quote signature and TCB status
-2. **Event Log Verification**: Replays event logs to ensure RTMR values match and extracts app information
+2. **Event Log Verification**: Replays event logs to ensure RTMR values match and extracts app information. For RTMR3 (runtime measurements), both the digest and payload integrity are verified. For RTMR 0-2 (boot-time measurements), only the digests are verified; the payload content is not validated as dstack does not define semantics for these payloads
 3. **OS Image Hash Verification**:
    - Automatically downloads OS images if not cached locally
    - Uses dstack-mr to compute expected measurements

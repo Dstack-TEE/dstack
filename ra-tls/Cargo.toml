@@ -19,7 +19,7 @@ hex.workspace = true
 hkdf.workspace = true
 p256.workspace = true
 rcgen = { workspace = true, features = ["x509-parser", "pem"] }
-ring.workspace = true
+ring = { workspace = true, features = ["std"] }
 rustls-pki-types.workspace = true
 serde.workspace = true
 serde_json.workspace = true
