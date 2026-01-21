@@ -339,10 +339,13 @@ impl<T> Attestation<T> {
             .map(|q| serde_json::to_vec(&q.event_log).unwrap_or_default())
     }
 
-    /// Get TDX event log string
+    /// Get TDX event log string with RTMR[0-2] payloads stripped to reduce size.
+    /// Only digests are kept for boot-time events; runtime events (RTMR3) retain full payload.
     pub fn get_tdx_event_log_string(&self) -> Option<String> {
-        self.tdx_quote()
-            .map(|q| serde_json::to_string(&q.event_log).unwrap_or_default())
+        self.tdx_quote().map(|q| {
+            let stripped: Vec<_> = q.event_log.iter().map(|e| e.stripped()).collect();
+            serde_json::to_string(&stripped).unwrap_or_default()
+        })
     }
 
     pub fn get_td10_report(&self) -> Option<TDReport10> {

@@ -561,8 +561,10 @@ impl TappdRpc for InternalRpcHandlerV0 {
             });
         }
         let event_log = read_event_log().context("Failed to decode event log")?;
+        // Strip RTMR[0-2] payloads, keep only digests
+        let stripped: Vec<_> = event_log.iter().map(|e| e.stripped()).collect();
         let event_log =
-            serde_json::to_string(&event_log).context("Failed to serialize event log")?;
+            serde_json::to_string(&stripped).context("Failed to serialize event log")?;
         let quote = tdx_attest::get_quote(&report_data).context("Failed to get quote")?;
         Ok(TdxQuoteResponse {
             quote,
@@ -657,12 +659,13 @@ impl WorkerRpc for ExternalRpcHandler {
                 } else {
                     let ed25519_quote = tdx_attest::get_quote(&ed25519_report_data)
                         .context("Failed to get ed25519 quote")?;
-                    let event_log = serde_json::to_string(
-                        &read_event_log().context("Failed to read event log")?,
-                    )?;
+                    let raw_event_log = read_event_log().context("Failed to read event log")?;
+                    // Strip RTMR[0-2] payloads, keep only digests
+                    let stripped: Vec<_> = raw_event_log.iter().map(|e| e.stripped()).collect();
+                    let event_log = serde_json::to_string(&stripped)?;
                     Ok(GetQuoteResponse {
                         quote: ed25519_quote,
-                        event_log: event_log.clone(),
+                        event_log,
                         report_data: ed25519_report_data.to_vec(),
                         vm_config: self.state.inner.vm_config.clone(),
                     })
@@ -688,9 +691,10 @@ impl WorkerRpc for ExternalRpcHandler {
                 } else {
                     let secp256k1_quote = tdx_attest::get_quote(&secp256k1_report_data)
                         .context("Failed to get secp256k1 quote")?;
-                    let event_log = serde_json::to_string(
-                        &read_event_log().context("Failed to read event log")?,
-                    )?;
+                    let raw_event_log = read_event_log().context("Failed to read event log")?;
+                    // Strip RTMR[0-2] payloads, keep only digests
+                    let stripped: Vec<_> = raw_event_log.iter().map(|e| e.stripped()).collect();
+                    let event_log = serde_json::to_string(&stripped)?;
 
                     Ok(GetQuoteResponse {
                         quote: secp256k1_quote,

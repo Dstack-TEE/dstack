@@ -132,11 +132,14 @@ curl --unix-socket /var/run/dstack.sock http://dstack/GetQuote?report_data=00000
 ```json
 {
   "quote": "<hex-encoded-quote>",
-  "event_log": "quote generation log",
+  "event_log": "<json-event-log>",
   "report_data": "<hex-encoded-report-data>",
   "vm_config": "<json-vm-config-string>"
 }
 ```
+
+**Note on Event Log:**
+The `event_log` field contains a JSON array of TDX event log entries. For RTMR 0-2 (boot-time measurements), only the digest is included; the payload is stripped to reduce response size. For RTMR3 (runtime measurements), both digest and payload are included. To verify the event log, submit it along with the quote to the [verifier service](../../verifier/README.md).
 
 ### 4. Get Info
 

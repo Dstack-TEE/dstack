@@ -128,11 +128,14 @@ curl --unix-socket /var/run/tappd.sock -X POST \
 ```json
 {
   "quote": "<hex-encoded-quote>",
-  "event_log": "quote generation log",
+  "event_log": "<json-event-log>",
   "hash_algorithm": "sha512",
   "prefix": "app-data:"
 }
 ```
+
+**Note on Event Log:**
+The `event_log` field contains a JSON array of TDX event log entries. For RTMR 0-2 (boot-time measurements), only the digest is included; the payload is stripped to reduce response size. For RTMR3 (runtime measurements), both digest and payload are included.
 
 ### 4. Raw Quote
 
@@ -166,9 +169,12 @@ curl --unix-socket /var/run/tappd.sock http://localhost/prpc/Tappd.RawQuote?repo
 ```json
 {
   "quote": "<hex-encoded-quote>",
-  "event_log": "quote generation log"
+  "event_log": "<json-event-log>"
 }
 ```
+
+**Note on Event Log:**
+The `event_log` field contains a JSON array of TDX event log entries. For RTMR 0-2 (boot-time measurements), only the digest is included; the payload is stripped to reduce response size. For RTMR3 (runtime measurements), both digest and payload are included.
 
 ### 5. Info
 
