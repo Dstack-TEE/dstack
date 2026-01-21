@@ -82,7 +82,7 @@ async fn maybe_gen_certs(config: &Config, tls_config: &TlsConfig) -> Result<()> 
                 alt_names: vec![config.rpc_domain.clone()],
                 usage_ra_tls: true,
                 usage_server_auth: true,
-                usage_client_auth: false,
+                usage_client_auth: true,
                 not_before: None,
                 not_after: None,
             })
