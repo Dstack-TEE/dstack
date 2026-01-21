@@ -165,7 +165,7 @@ default-net = "0.22.0"
 # Cryptography/Security
 aes-gcm = "0.10.3"
 curve25519-dalek = "4.1.3"
-dcap-qvl = "0.3.9"
+dcap-qvl = "0.3.10"
 elliptic-curve = { version = "0.13.8", features = ["pkcs8"] }
 getrandom = "0.3.1"
 hkdf = "0.12.4"
