@@ -131,14 +131,7 @@ docker build -t dstack-gateway:test -f Dockerfile.gateway .
 rm Dockerfile.gateway
 log_success "Gateway image created: dstack-gateway:test"
 
-# Step 3: Generate certificates if not exist
-if [ ! -f "certs/gateway.crt" ]; then
-    log_info "Generating test certificates..."
-    ./setup.sh
-    log_success "Certificates generated"
-fi
-
-# Step 4: Run docker compose
+# Step 3: Run docker compose
 log_info "Starting e2e test environment..."
 
 export GATEWAY_IMAGE=dstack-gateway:test
@@ -151,12 +144,12 @@ docker compose up -d gateway-1 gateway-2 gateway-3
 log_info "Waiting for gateway cluster to be healthy..."
 sleep 10
 
-# Step 5: Run tests
+# Step 4: Run tests
 log_info "Running tests..."
 docker compose run --rm test-runner
 TEST_EXIT_CODE=$?
 
-# Step 6: Report result (cleanup handled by trap)
+# Step 5: Report result (cleanup handled by trap)
 if [ $TEST_EXIT_CODE -eq 0 ]; then
     log_success "All tests passed!"
 else

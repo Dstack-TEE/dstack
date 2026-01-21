@@ -1,2 +1,3 @@
 /run/
 .env
+/e2e/dstack-gateway
