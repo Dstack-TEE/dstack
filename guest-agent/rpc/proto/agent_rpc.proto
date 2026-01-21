@@ -72,6 +72,10 @@ message GetTlsKeyArgs {
   bool usage_server_auth = 4;
   // Key usage client auth
   bool usage_client_auth = 5;
+  // Certificate validity start time as seconds since UNIX epoch
+  optional uint64 not_before = 6;
+  // Certificate validity end time as seconds since UNIX epoch
+  optional uint64 not_after = 7;
 }
 
 // The request to derive a key

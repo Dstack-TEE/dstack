@@ -29,7 +29,7 @@ use or_panic::ResultOrPanic;
 use ra_rpc::{Attestation, CallContext, RpcCall};
 use ra_tls::{
     attestation::{QuoteContentType, VersionedAttestation, DEFAULT_HASH_ALGORITHM},
-    cert::CertConfig,
+    cert::CertConfigV2,
     kdf::{derive_ecdsa_key, derive_ecdsa_key_pair_from_bytes},
 };
 use rcgen::KeyPair;
@@ -78,13 +78,15 @@ impl AppStateInner {
             .cert_client
             .request_cert(
                 &key,
-                CertConfig {
+                CertConfigV2 {
                     org_name: None,
                     subject: "demo-cert".to_string(),
                     subject_alt_names: vec![],
                     usage_server_auth: false,
                     usage_client_auth: true,
                     ext_quote: true,
+                    not_after: None,
+                    not_before: None,
                 },
                 attestation_override,
             )
@@ -233,13 +235,15 @@ impl DstackGuestRpc for InternalRpcHandler {
             .context("Failed to generate secure seed")?;
         let derived_key =
             derive_ecdsa_key_pair_from_bytes(&seed, &[]).context("Failed to derive key")?;
-        let config = CertConfig {
+        let config = CertConfigV2 {
             org_name: None,
             subject: request.subject,
             subject_alt_names: request.alt_names,
             usage_server_auth: request.usage_server_auth,
             usage_client_auth: request.usage_client_auth,
             ext_quote: request.usage_ra_tls,
+            not_after: request.not_after,
+            not_before: request.not_before,
         };
         let attestation_override = self
             .state
@@ -493,13 +497,15 @@ impl TappdRpc for InternalRpcHandlerV0 {
         };
         let derived_key = derive_ecdsa_key_pair_from_bytes(seed, &[request.path.as_bytes()])
             .context("Failed to derive key")?;
-        let config = CertConfig {
+        let config = CertConfigV2 {
             org_name: None,
             subject: request.subject,
             subject_alt_names: request.alt_names,
             usage_server_auth: request.usage_server_auth,
             usage_client_auth: request.usage_client_auth,
             ext_quote: request.usage_ra_tls,
+            not_before: None,
+            not_after: None,
         };
         let attestation_override = self
             .state

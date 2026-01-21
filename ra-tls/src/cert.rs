@@ -4,7 +4,7 @@
 
 //! Certificate creation functions.
 
-use std::time::SystemTime;
+use std::time::{SystemTime, UNIX_EPOCH};
 use std::{path::Path, time::Duration};
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -99,6 +99,8 @@ impl CaCert {
             .maybe_attestation(attestation)
             .maybe_app_id(app_id)
             .special_usage(usage)
+            .maybe_not_before(cfg.not_before.map(unix_time_to_system_time))
+            .maybe_not_after(cfg.not_after.map(unix_time_to_system_time))
             .build();
         self.sign(req).context("Failed to sign certificate")
     }
@@ -119,6 +121,42 @@ pub struct CertConfig {
     pub usage_client_auth: bool,
     /// Whether the certificate is quoted.
     pub ext_quote: bool,
+}
+
+/// The configuration of the certificate with optional validity overrides.
+#[derive(Encode, Decode, Clone, PartialEq)]
+pub struct CertConfigV2 {
+    /// The organization name of the certificate.
+    pub org_name: Option<String>,
+    /// The subject of the certificate.
+    pub subject: String,
+    /// The subject alternative names of the certificate.
+    pub subject_alt_names: Vec<String>,
+    /// The purpose of the certificate.
+    pub usage_server_auth: bool,
+    /// The purpose of the certificate.
+    pub usage_client_auth: bool,
+    /// Whether the certificate is quoted.
+    pub ext_quote: bool,
+    /// The certificate validity start time as seconds since UNIX epoch.
+    pub not_before: Option<u64>,
+    /// The certificate validity end time as seconds since UNIX epoch.
+    pub not_after: Option<u64>,
+}
+
+impl From<CertConfig> for CertConfigV2 {
+    fn from(config: CertConfig) -> Self {
+        Self {
+            org_name: config.org_name,
+            subject: config.subject,
+            subject_alt_names: config.subject_alt_names,
+            usage_server_auth: config.usage_server_auth,
+            usage_client_auth: config.usage_client_auth,
+            ext_quote: config.ext_quote,
+            not_before: None,
+            not_after: None,
+        }
+    }
 }
 
 /// A certificate signing request.
@@ -240,7 +278,7 @@ pub struct CertSigningRequestV2 {
     /// The public key of the certificate.
     pub pubkey: Vec<u8>,
     /// The certificate configuration.
-    pub config: CertConfig,
+    pub config: CertConfigV2,
     /// The attestation.
     pub attestation: VersionedAttestation,
 }
@@ -251,7 +289,7 @@ impl TryFrom<CertSigningRequestV1> for CertSigningRequestV2 {
         Ok(Self {
             confirm: v0.confirm,
             pubkey: v0.pubkey,
-            config: v0.config,
+            config: v0.config.into(),
             attestation: Attestation::from_tdx_quote(v0.quote, &v0.event_log)?.into_versioned(),
         })
     }
@@ -379,6 +417,10 @@ fn add_ext(params: &mut CertificateParams, oid: &[u64], content: impl AsRef<[u8]
     params
         .custom_extensions
         .push(CustomExtension::from_oid_content(oid, content));
+}
+
+fn unix_time_to_system_time(secs: u64) -> SystemTime {
+    UNIX_EPOCH + Duration::from_secs(secs)
 }
 
 impl CertRequest<'_, KeyPair> {
@@ -624,13 +666,15 @@ mod tests {
         let csr = CertSigningRequestV2 {
             confirm: "please sign cert:".to_string(),
             pubkey: vec![1, 2, 3],
-            config: CertConfig {
+            config: CertConfigV2 {
                 org_name: None,
                 subject: "test.example.com".to_string(),
                 subject_alt_names: vec![],
                 usage_server_auth: true,
                 usage_client_auth: false,
                 ext_quote: false,
+                not_before: None,
+                not_after: None,
             },
             attestation: Attestation {
                 quote: AttestationQuote::DstackTdx(TdxQuote {
@@ -646,7 +690,7 @@ mod tests {
         };
 
         let actual = hex::encode(csr.encode());
-        let expected = "44706c65617365207369676e20636572743a0c0102030040746573742e6578616d706c652e636f6d0001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000";
+        let expected = "44706c65617365207369676e20636572743a0c0102030040746573742e6578616d706c652e636f6d00010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000";
         assert_eq!(actual, expected);
     }
 
@@ -655,13 +699,15 @@ mod tests {
         let csr = CertSigningRequestV2 {
             confirm: "please sign cert:".to_string(),
             pubkey: vec![1, 2, 3],
-            config: CertConfig {
+            config: CertConfigV2 {
                 org_name: None,
                 subject: "test.example.com".to_string(),
                 subject_alt_names: vec![],
                 usage_server_auth: true,
                 usage_client_auth: false,
                 ext_quote: true,
+                not_before: None,
+                not_after: None,
             },
             attestation: Attestation {
                 quote: AttestationQuote::DstackTdx(TdxQuote {
@@ -677,7 +723,7 @@ mod tests {
         };
 
         let actual = hex::encode(csr.encode());
-        let expected = "44706c65617365207369676e20636572743a0c0102030040746573742e6578616d706c652e636f6d000100010000040900000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000";
+        let expected = "44706c65617365207369676e20636572743a0c0102030040746573742e6578616d706c652e636f6d0001000100000000040900000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000";
         assert_eq!(actual, expected);
     }
 }

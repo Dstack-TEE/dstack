@@ -28,7 +28,7 @@ use luks2::{
     LuksSegmentSize,
 };
 use ra_rpc::client::{CertInfo, RaClient, RaClientConfig};
-use ra_tls::cert::generate_ra_cert;
+use ra_tls::cert::{generate_ra_cert, CertConfigV2};
 use rand::Rng as _;
 use scopeguard::defer;
 use serde::{Deserialize, Serialize};
@@ -48,10 +48,7 @@ use cmd_lib::run_fun as cmd;
 use dstack_gateway_rpc::{
     gateway_client::GatewayClient, RegisterCvmRequest, RegisterCvmResponse, WireGuardPeer,
 };
-use ra_tls::{
-    cert::CertConfig,
-    rcgen::{KeyPair, PKCS_ECDSA_P256_SHA256},
-};
+use ra_tls::rcgen::{KeyPair, PKCS_ECDSA_P256_SHA256};
 use serde_human_bytes as hex_bytes;
 use serde_json::Value;
 
@@ -388,13 +385,15 @@ impl<'a> GatewayContext<'a> {
         let sk = cmd!(wg genkey)?;
         let pk = cmd!(echo $sk | wg pubkey).or(Err(anyhow!("Failed to generate public key")))?;
 
-        let config = CertConfig {
+        let config = CertConfigV2 {
             org_name: None,
             subject: "dstack-guest-agent".to_string(),
             subject_alt_names: vec![],
             usage_server_auth: false,
             usage_client_auth: true,
             ext_quote: true,
+            not_before: None,
+            not_after: None,
         };
         let cert_client = CertRequestClient::create(
             self.keys,
