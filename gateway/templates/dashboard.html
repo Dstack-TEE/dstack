@@ -720,12 +720,20 @@ SPDX-License-Identifier: Apache-2.0
     <script>
         async function loadWaveKvStatus() {
             try {
-                const response = await fetch('/wavekv/status');
+                const response = await fetch('/prpc/Admin.WaveKvStatus', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: '{}'
+                });
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
                 const data = await response.json();
                 renderWaveKvStatus(data);
             } catch (e) {
+                console.error('WaveKV status error:', e);
                 document.getElementById('wavekv-status').innerHTML =
-                    '<p style="color: #666;">WaveKV sync status unavailable</p>';
+                    `<p style="color: #666;">WaveKV sync status unavailable: ${e.message}</p>`;
             }
         }
 
@@ -764,21 +772,26 @@ SPDX-License-Identifier: Apache-2.0
         }
 
         function renderStoreStatus(store) {
+            const nodeId = store.node_id || store.nodeId;
+            const nKeys = store.n_keys || store.nKeys || 0;
+            const nextSeq = store.next_seq || store.nextSeq || 0;
+            const walEnabled = store.wal_enabled || store.walEnabled;
+            const peers = store.peers || [];
             let html = `
                 <table>
                     <tr>
-                        <th colspan="5">${store.name.charAt(0).toUpperCase() + store.name.slice(1)} Store (Node: ${store.node_id})</th>
+                        <th colspan="5">${store.name.charAt(0).toUpperCase() + store.name.slice(1)} Store (Node: ${nodeId})</th>
                     </tr>
                     <tr>
-                        <td>Keys: ${store.n_keys}</td>
-                        <td>Next Seq: ${store.next_seq}</td>
+                        <td>Keys: ${nKeys}</td>
+                        <td>Next Seq: ${nextSeq}</td>
                         <td>Dirty: ${store.dirty ? 'Yes' : 'No'}</td>
-                        <td colspan="2">WAL: ${store.wal_enabled ? 'Enabled' : 'Disabled'}</td>
+                        <td colspan="2">WAL: ${walEnabled ? 'Enabled' : 'Disabled'}</td>
                     </tr>
                 </table>
             `;
 
-            if (store.peers.length > 0) {
+            if (peers.length > 0) {
                 html += `
                     <table>
                         <tr>
@@ -790,19 +803,25 @@ SPDX-License-Identifier: Apache-2.0
                         </tr>
                 `;
 
-                for (const peer of store.peers) {
-                    const lastSeenStr = peer.last_seen.length > 0
-                        ? peer.last_seen.map(([observer, ts]) =>
-                            `<div class="last-seen-row"><span class="observer-label">by ${observer}:</span> <span class="timestamp">${ts}</span></div>`
-                        ).join('')
+                for (const peer of peers) {
+                    const lastSeenArr = peer.last_seen || peer.lastSeen || [];
+                    const lastSeenStr = lastSeenArr.length > 0
+                        ? lastSeenArr.map(entry => {
+                            const observer = entry.node_id || entry.nodeId;
+                            const ts = entry.timestamp;
+                            return `<div class="last-seen-row"><span class="observer-label">by ${observer}:</span> <span class="timestamp">${ts}</span></div>`;
+                        }).join('')
                         : 'N/A';
+                    const localAck = peer.local_ack || peer.localAck || 0;
+                    const peerAck = peer.peer_ack || peer.peerAck || 0;
+                    const bufferedLogs = peer.buffered_logs || peer.bufferedLogs || 0;
 
                     html += `
                         <tr>
                             <td class="truncated-id" title="${peer.id}">${peer.id}</td>
-                            <td>${peer.local_ack}</td>
-                            <td>${peer.peer_ack}</td>
-                            <td>${peer.buffered_logs}</td>
+                            <td>${localAck}</td>
+                            <td>${peerAck}</td>
+                            <td>${bufferedLogs}</td>
                             <td class="last-seen-cell">${lastSeenStr}</td>
                         </tr>
                     `;
