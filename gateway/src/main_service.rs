@@ -782,6 +782,10 @@ fn reload_instances_from_kv_store(proxy: &Proxy, store: &KvStore) -> Result<()> 
 
 impl ProxyState {
     fn valid_ip(&self, ip: Ipv4Addr) -> bool {
+        // Must be within client IP range
+        if !self.config.wg.client_ip_range.contains(&ip) {
+            return false;
+        }
         if self.config.wg.ip.broadcast() == ip {
             return false;
         }
