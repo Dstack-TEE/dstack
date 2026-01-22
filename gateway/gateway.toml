@@ -28,6 +28,7 @@ address = "127.0.0.1:8011"
 [core.debug]
 insecure_enable_debug_rpc = false
 insecure_skip_attestation = false
+key_file = "debug_key.json"
 address = "127.0.0.1:8012"
 
 [core.wg]

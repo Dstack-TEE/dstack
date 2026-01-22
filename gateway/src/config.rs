@@ -161,6 +161,9 @@ pub struct DebugConfig {
     pub insecure_enable_debug_rpc: bool,
     #[serde(default)]
     pub insecure_skip_attestation: bool,
+    /// Path to pre-generated debug key data file (JSON format containing key, quote, event_log, and vm_config)
+    #[serde(default)]
+    pub key_file: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]

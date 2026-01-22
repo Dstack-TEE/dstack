@@ -1,17 +1,22 @@
-// SPDX-FileCopyrightText: © 2024-2025 Phala Network <dstack@phala.network>
+// SPDX-FileCopyrightText: 2024-2025 Phala Network dstack@phala.network
 //
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::{anyhow, Context, Result};
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use clap::Parser;
 use config::{Config, TlsConfig};
 use dstack_guest_agent_rpc::{dstack_guest_client::DstackGuestClient, GetTlsKeyArgs};
+use dstack_kms_rpc::SignCertRequest;
 use http_client::prpc::PrpcClient;
 use ra_rpc::{client::RaClient, prpc_routes as prpc, rocket_helper::QuoteVerifier};
+use ra_tls::cert::{CertConfigV2, CertSigningRequestV2, Csr};
+use ra_tls::rcgen::KeyPair;
 use rocket::{
     fairing::AdHoc,
     figment::{providers::Serialized, Figment},
 };
+use serde::{Deserialize, Serialize};
 use tracing::info;
 
 use admin_service::AdminRpcHandler;
@@ -29,6 +34,18 @@ mod main_service;
 mod models;
 mod proxy;
 mod web_routes;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct DebugKeyData {
+    /// Private key in PEM format
+    key_pem: String,
+    /// TDX quote in base64 format
+    quote_base64: String,
+    /// Event log in JSON string format
+    event_log: String,
+    /// VM config in JSON string format
+    vm_config: String,
+}
 
 #[global_allocator]
 static ALLOCATOR: jemallocator::Jemalloc = jemallocator::Jemalloc;
@@ -126,29 +143,78 @@ async fn gen_debug_certs(
         info!("KMS URL is empty, skipping cert generation");
         return Ok(());
     }
+
+    // Check if debug key file is configured
+    if config.debug.key_file.is_empty() {
+        info!("Debug key file not configured, skipping cert generation");
+        return Ok(());
+    }
+
+    // Load pre-generated key pair and quote data from JSON file
+    info!("Loading debug key data from: {}", config.debug.key_file);
+    let ctx = "Failed to read debug key, run `cargo run --bin gen_debug_key -- <simulator_url>` to generate it";
+    let json_content = fs_err::read_to_string(&config.debug.key_file).context(ctx)?;
+    let debug_data: DebugKeyData =
+        serde_json::from_str(&json_content).context("Failed to parse debug key JSON")?;
+
+    let key_pem = debug_data.key_pem;
+    let quote_bin = STANDARD
+        .decode(&debug_data.quote_base64)
+        .context("Failed to decode quote from base64")?;
+    let event_log_json = debug_data.event_log;
+    let vm_config_json = debug_data.vm_config;
+
+    // Parse key pair
+    let key = KeyPair::from_pem(&key_pem).context("Failed to parse debug key")?;
+    let pubkey = key.public_key_der();
+
+    // Build CSR with attestation from debug quote
+    let attestation =
+        ra_tls::attestation::Attestation::from_tdx_quote(quote_bin, event_log_json.as_bytes())
+            .context("Failed to create attestation from debug quote")?
+            .into_versioned();
+
+    let csr = CertSigningRequestV2 {
+        confirm: "please sign cert:".to_string(),
+        pubkey,
+        config: CertConfigV2 {
+            org_name: None,
+            subject: "dstack-gateway".to_string(),
+            subject_alt_names: alt_names,
+            usage_server_auth: true,
+            usage_client_auth: true,
+            ext_quote: true,
+            not_before: None,
+            not_after: None,
+        },
+        attestation,
+    };
+    let signature = csr.signed_by(&key).context("Failed to sign CSR")?;
+
+    // Send CSR to KMS for signing
     let kms_url = format!("{kms_url}/prpc");
-    info!("Getting temp CA cert from {kms_url}");
-    let client = RaClient::new(kms_url, true).context("Failed to create kms client")?;
-    let client = dstack_kms_rpc::kms_client::KmsClient::new(client);
-    let temp_ca_response = client.get_temp_ca_cert().await?;
-    let ca_cert = temp_ca_response.temp_ca_cert.clone();
-    let temp_ca =
-        ra_tls::cert::CaCert::new(temp_ca_response.temp_ca_cert, temp_ca_response.temp_ca_key)
-            .context("Failed to create temp CA")?;
-    let key = ra_tls::rcgen::KeyPair::generate().context("Failed to generate key")?;
-    let cert_req = ra_tls::cert::CertRequest::builder()
-        .key(&key)
-        .subject("dstack-gateway")
-        .alt_names(&alt_names)
-        .usage_server_auth(true)
-        .usage_client_auth(true)
-        .build();
-    let cert = temp_ca
-        .sign(cert_req)
-        .context("Failed to sign rpc cert with temp CA")?;
+    info!("Sending CSR to KMS for signing: {kms_url}");
+    let kms_client = RaClient::new(kms_url, true).context("Failed to create kms client")?;
+    let kms_client = dstack_kms_rpc::kms_client::KmsClient::new(kms_client);
+    let sign_response = kms_client
+        .sign_cert(SignCertRequest {
+            api_version: 2,
+            csr: csr.to_vec(),
+            signature,
+            vm_config: vm_config_json.to_string(),
+        })
+        .await
+        .context("Failed to sign certificate via KMS")?;
+
+    let ca_cert = sign_response
+        .certificate_chain
+        .last()
+        .context("Empty certificate chain")?
+        .to_string();
+    let certs = sign_response.certificate_chain.join("\n");
 
     write_cert(&tls_config.mutual.ca_certs, &ca_cert)?;
-    write_cert(&tls_config.certs, &cert.pem())?;
+    write_cert(&tls_config.certs, &certs)?;
     write_cert(&tls_config.key, &key.serialize_pem())?;
     Ok(())
 }
