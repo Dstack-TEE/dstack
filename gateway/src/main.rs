@@ -110,6 +110,7 @@ async fn maybe_gen_certs(config: &Config, tls_config: &TlsConfig) -> Result<()> 
         .subject("dstack-gateway")
         .alt_names(std::slice::from_ref(&config.rpc_domain))
         .usage_server_auth(true)
+        .not_after(ra_tls::cert::server_cert_not_after())
         .build()
         .self_signed()
         .context("Failed to self-sign rpc cert")?;

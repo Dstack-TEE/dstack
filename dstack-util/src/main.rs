@@ -13,7 +13,7 @@ use k256::schnorr::SigningKey;
 use ra_rpc::Attestation;
 use ra_tls::{
     attestation::QuoteContentType,
-    cert::generate_ra_cert,
+    cert::{generate_ra_cert, server_cert_not_after},
     kdf::{derive_ecdsa_key, derive_ecdsa_key_pair_from_bytes},
     rcgen::KeyPair,
 };
@@ -348,6 +348,7 @@ fn cmd_gen_ca_cert(args: GenCaCertArgs) -> Result<()> {
         .attestation(&attestation)
         .key(&key)
         .ca_level(args.ca_level)
+        .not_after(server_cert_not_after())
         .build();
 
     let cert = req
@@ -419,6 +420,7 @@ fn make_app_keys(
         .attestation(&attestation)
         .key(app_key)
         .ca_level(ca_level)
+        .not_after(server_cert_not_after())
         .build();
     let cert = req
         .self_signed()
