@@ -52,8 +52,6 @@ impl GuestApiRpc for GuestApiHandler {
 
     async fn shutdown(self) -> Result<()> {
         tokio::spawn(async move {
-            notify_host("shutdown.progress", "stopping app").await.ok();
-            perr(cmd!(systemctl stop app-compose));
             notify_host("shutdown.progress", "powering off").await.ok();
             perr(cmd!(systemctl poweroff));
         });
