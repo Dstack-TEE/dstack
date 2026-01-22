@@ -82,53 +82,70 @@ async fn maybe_gen_certs(config: &Config, tls_config: &TlsConfig) -> Result<()> 
             }
         }
     }
-    if !config.debug.insecure_skip_attestation {
-        info!("Using dstack guest agent for certificate generation");
-        let agent_client = dstack_agent().context("Failed to create dstack client")?;
-
-        let response = agent_client
-            .get_tls_key(GetTlsKeyArgs {
-                subject: "dstack-gateway".to_string(),
-                alt_names,
-                usage_ra_tls: true,
-                usage_server_auth: true,
-                usage_client_auth: true,
-                not_before: None,
-                not_after: None,
-            })
-            .await?;
-
-        let ca_cert = response
-            .certificate_chain
-            .last()
-            .context("Empty certificate chain")?
-            .to_string();
-        let certs = response.certificate_chain.join("\n");
-        write_cert(&tls_config.mutual.ca_certs, &ca_cert)?;
-        write_cert(&tls_config.certs, &certs)?;
-        write_cert(&tls_config.key, &response.key)?;
-        return Ok(());
+    match config.debug.insecure_skip_attestation {
+        true => gen_debug_certs(config, tls_config, alt_names).await,
+        false => gen_prod_certs(tls_config, alt_names).await,
     }
+}
 
+async fn gen_prod_certs(tls_config: &TlsConfig, alt_names: Vec<String>) -> Result<()> {
+    info!("Using dstack guest agent for certificate generation");
+    let agent_client = dstack_agent().context("Failed to create dstack client")?;
+
+    let response = agent_client
+        .get_tls_key(GetTlsKeyArgs {
+            subject: "dstack-gateway".to_string(),
+            alt_names,
+            usage_ra_tls: true,
+            usage_server_auth: true,
+            usage_client_auth: true,
+            not_before: None,
+            not_after: None,
+        })
+        .await?;
+
+    let ca_cert = response
+        .certificate_chain
+        .last()
+        .context("Empty certificate chain")?
+        .to_string();
+    let certs = response.certificate_chain.join("\n");
+    write_cert(&tls_config.mutual.ca_certs, &ca_cert)?;
+    write_cert(&tls_config.certs, &certs)?;
+    write_cert(&tls_config.key, &response.key)?;
+    Ok(())
+}
+
+async fn gen_debug_certs(
+    config: &Config,
+    tls_config: &TlsConfig,
+    alt_names: Vec<String>,
+) -> Result<()> {
     let kms_url = config.kms_url.clone();
     if kms_url.is_empty() {
         info!("KMS URL is empty, skipping cert generation");
         return Ok(());
     }
     let kms_url = format!("{kms_url}/prpc");
-    info!("Getting CA cert from {kms_url}");
+    info!("Getting temp CA cert from {kms_url}");
     let client = RaClient::new(kms_url, true).context("Failed to create kms client")?;
     let client = dstack_kms_rpc::kms_client::KmsClient::new(client);
-    let ca_cert = client.get_meta().await?.ca_cert;
+    let temp_ca_response = client.get_temp_ca_cert().await?;
+    let ca_cert = temp_ca_response.temp_ca_cert.clone();
+    let temp_ca =
+        ra_tls::cert::CaCert::new(temp_ca_response.temp_ca_cert, temp_ca_response.temp_ca_key)
+            .context("Failed to create temp CA")?;
     let key = ra_tls::rcgen::KeyPair::generate().context("Failed to generate key")?;
-    let cert = ra_tls::cert::CertRequest::builder()
+    let cert_req = ra_tls::cert::CertRequest::builder()
         .key(&key)
         .subject("dstack-gateway")
         .alt_names(&alt_names)
         .usage_server_auth(true)
-        .build()
-        .self_signed()
-        .context("Failed to self-sign rpc cert")?;
+        .usage_client_auth(true)
+        .build();
+    let cert = temp_ca
+        .sign(cert_req)
+        .context("Failed to sign rpc cert with temp CA")?;
 
     write_cert(&tls_config.mutual.ca_certs, &ca_cert)?;
     write_cert(&tls_config.certs, &cert.pem())?;
