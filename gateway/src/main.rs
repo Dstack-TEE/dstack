@@ -73,13 +73,23 @@ async fn maybe_gen_certs(config: &Config, tls_config: &TlsConfig) -> Result<()> 
         return Ok(());
     }
 
+    // Build alt_names: include rpc_domain and hostname from my_url
+    let mut alt_names = vec![config.rpc_domain.clone()];
+    if let Ok(url) = reqwest::Url::parse(&config.sync.my_url) {
+        if let Some(host) = url.host_str() {
+            if host != config.rpc_domain {
+                alt_names.push(host.to_string());
+            }
+        }
+    }
     if !config.debug.insecure_skip_attestation {
         info!("Using dstack guest agent for certificate generation");
         let agent_client = dstack_agent().context("Failed to create dstack client")?;
+
         let response = agent_client
             .get_tls_key(GetTlsKeyArgs {
                 subject: "dstack-gateway".to_string(),
-                alt_names: vec![config.rpc_domain.clone()],
+                alt_names,
                 usage_ra_tls: true,
                 usage_server_auth: true,
                 usage_client_auth: true,
@@ -114,7 +124,7 @@ async fn maybe_gen_certs(config: &Config, tls_config: &TlsConfig) -> Result<()> 
     let cert = ra_tls::cert::CertRequest::builder()
         .key(&key)
         .subject("dstack-gateway")
-        .alt_names(std::slice::from_ref(&config.rpc_domain))
+        .alt_names(&alt_names)
         .usage_server_auth(true)
         .build()
         .self_signed()

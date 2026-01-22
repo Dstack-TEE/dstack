@@ -4,16 +4,16 @@ address = "0.0.0.0"
 port = 9012
 
 [tls]
-key = "/etc/gateway/certs/gateway-rpc.key"
-certs = "/etc/gateway/certs/gateway-rpc.cert"
+key = "/var/lib/gateway/certs/gateway-rpc.key"
+certs = "/var/lib/gateway/certs/gateway-rpc.cert"
 
 [tls.mutual]
-ca_certs = "/etc/gateway/certs/gateway-ca.cert"
+ca_certs = "/var/lib/gateway/certs/gateway-ca.cert"
 mandatory = false
 
 [core]
 kms_url = ""
-rpc_domain = "gateway.test.local"
+rpc_domain = "gateway-2"
 
 [core.admin]
 enabled = true
@@ -22,7 +22,7 @@ address = "0.0.0.0"
 
 [core.debug]
 insecure_enable_debug_rpc = true
-insecure_skip_attestation = true
+insecure_skip_attestation = false
 port = 9015
 address = "0.0.0.0"
 

@@ -72,6 +72,8 @@ pub struct ProxyInner {
     kv_store: Arc<KvStore>,
     /// WaveKV sync service for network synchronization
     pub(crate) wavekv_sync: Option<Arc<WaveKvSyncService>>,
+    /// HTTPS client config for mTLS (used for bootnode peer discovery)
+    https_config: Option<HttpsClientConfig>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -189,7 +191,7 @@ impl ProxyInner {
 
         // Create WaveKV sync service (only if sync is enabled)
         let wavekv_sync = if config.sync.enabled {
-            match WaveKvSyncService::new(&kv_store, &config.sync, https_config) {
+            match WaveKvSyncService::new(&kv_store, &config.sync, https_config.clone()) {
                 Ok(sync_service) => Some(Arc::new(sync_service)),
                 Err(err) => {
                     error!("Failed to create WaveKV sync service: {err}");
@@ -266,6 +268,7 @@ impl ProxyInner {
             certbot,
             kv_store,
             wavekv_sync,
+            https_config: Some(https_config),
         })
     }
 
@@ -289,6 +292,7 @@ impl Proxy {
         start_certbot_task(self.clone()).await;
         start_cert_store_watch_task(self.clone());
         start_zt_domain_watch_task(self.clone());
+        start_bootnode_discovery_task(self.clone());
         Ok(())
     }
 
@@ -581,6 +585,48 @@ fn start_zt_domain_watch_task(proxy: Proxy) {
         }
     });
     info!("ZT-Domain watch task started");
+}
+
+/// Periodically retry bootnode peer discovery if no peers are available
+fn start_bootnode_discovery_task(proxy: Proxy) {
+    if !proxy.config.sync.enabled || proxy.config.sync.bootnode.is_empty() {
+        return;
+    }
+
+    let bootnode = proxy.config.sync.bootnode.clone();
+    let node_id = proxy.config.sync.node_id;
+    let kv_store = proxy.kv_store.clone();
+    let https_config = match &proxy.https_config {
+        Some(config) => config.clone(),
+        None => return,
+    };
+
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(10));
+        loop {
+            interval.tick().await;
+            // Check if we already have peers
+            let n_peers = kv_store
+                .load_all_node_statuses()
+                .keys()
+                .filter(|&id| *id != node_id)
+                .count();
+            if n_peers > 0 {
+                info!("bootnode peer discovery finished, {n_peers} peers found");
+                break;
+            }
+            // Try to fetch peers from bootnode
+            debug!("retrying bootnode peer discovery...");
+            if let Err(err) =
+                fetch_peers_from_bootnode(&bootnode, &kv_store, node_id, &https_config).await
+            {
+                debug!("bootnode discovery retry failed: {err}");
+            } else {
+                info!("bootnode peer discovery succeeded");
+            }
+        }
+    });
+    info!("Bootnode discovery task started (will retry every 10s if no peers)");
 }
 
 async fn start_wavekv_sync_task(proxy: Proxy, wavekv_sync: Arc<WaveKvSyncService>) {
