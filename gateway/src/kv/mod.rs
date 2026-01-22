@@ -425,7 +425,17 @@ impl KvStore {
             Node::new_with_persistence(my_node_id, peer_ids.clone(), data_dir.as_ref())
                 .context("failed to create persistent wavekv node")?;
 
-        let ephemeral = Node::new(my_node_id, peer_ids);
+        // Get peers from persistent store (may have been restored from WAL)
+        // and include them when creating ephemeral store
+        let persistent_peers = persistent.read().status().peers;
+        let mut all_peer_ids = peer_ids;
+        for peer_status in persistent_peers {
+            if !all_peer_ids.contains(&peer_status.id) {
+                all_peer_ids.push(peer_status.id);
+            }
+        }
+
+        let ephemeral = Node::new(my_node_id, all_peer_ids);
 
         Ok(Self {
             persistent,
