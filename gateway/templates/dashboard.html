@@ -699,8 +699,8 @@ SPDX-License-Identifier: Apache-2.0
                 </select>
             </div>
             <div class="modal-field">
-                <label>Port (0 = default)</label>
-                <input type="number" id="domain-port" placeholder="443" min="0" max="65535" value="0">
+                <label>Port</label>
+                <input type="number" id="domain-port" placeholder="443" min="0" max="65535" value="443">
             </div>
             <div class="modal-field">
                 <label>Node Binding (0 = any node)</label>
@@ -1190,7 +1190,7 @@ SPDX-License-Identifier: Apache-2.0
         function showAddZtDomainModal() {
             document.getElementById('domain-name').value = '';
             document.getElementById('domain-dns-cred').value = '';
-            document.getElementById('domain-port').value = '0';
+            document.getElementById('domain-port').value = '443';
             document.getElementById('domain-node').value = '0';
             document.getElementById('domain-priority').value = '0';
             showModal('add-zt-domain-modal');
