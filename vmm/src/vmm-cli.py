@@ -424,15 +424,31 @@ class VmmCLI:
                 'GetAppEnvEncryptPubKey', {'app_id': app_id})
 
         # Verify the signature if available
-        if 'signature' not in response:
+        if 'signature' not in response and 'signature_v1' not in response:
             if not self.confirm_untrusted_signer("none"):
                 raise Exception("Aborted due to invalid signature")
             return response['public_key']
 
         public_key = bytes.fromhex(response['public_key'])
-        signature = bytes.fromhex(response['signature'])
 
-        signer_pubkey = verify_signature(public_key, signature, app_id)
+        # Prefer signature_v1 (with timestamp) if available
+        signer_pubkey = None
+        if 'signature_v1' in response and 'timestamp' in response:
+            signature_v1 = bytes.fromhex(response['signature_v1'])
+            timestamp = response['timestamp']
+            signer_pubkey = verify_signature_v1(public_key, signature_v1, app_id, timestamp)
+            if signer_pubkey:
+                print(f"Verified signature_v1 (with timestamp) from: {signer_pubkey}")
+
+        # Fall back to legacy signature if signature_v1 verification failed or not available
+        if not signer_pubkey and 'signature' in response:
+            print("WARNING: Using legacy signature without timestamp protection. "
+                  "Consider upgrading your KMS to support signature_v1.", file=sys.stderr)
+            signature = bytes.fromhex(response['signature'])
+            signer_pubkey = verify_signature(public_key, signature, app_id)
+            if signer_pubkey:
+                print(f"Verified legacy signature from: {signer_pubkey}")
+
         if signer_pubkey:
             whitelist = load_whitelist()
             if whitelist and signer_pubkey not in whitelist:
@@ -440,8 +456,6 @@ class VmmCLI:
                     f"WARNING: Signer {signer_pubkey} is not in the trusted whitelist!")
                 if not self.confirm_untrusted_signer(signer_pubkey):
                     raise Exception("Aborted due to untrusted signer")
-            else:
-                print(f"Verified signature from: {signer_pubkey}")
         else:
             print("WARNING: Could not verify signature!")
             if not self.confirm_untrusted_signer("unknown"):
@@ -1007,9 +1021,52 @@ def parse_disk_size(s: str) -> int:
     return parse_size(s, "GB")
 
 
+def verify_signature_v1(public_key: bytes, signature: bytes, app_id: str, timestamp: int) -> Optional[str]:
+    """
+    Verify the v1 signature (with timestamp) of a public key.
+
+    Args:
+        public_key: The public key bytes to verify
+        signature: The signature bytes (65 bytes)
+        app_id: The application ID
+        timestamp: Unix timestamp in seconds when the response was generated
+
+    Returns:
+        The compressed public key if valid, None otherwise
+    """
+    if not CRYPTO_AVAILABLE:
+        raise ImportError(
+            "Cryptography libraries not available. Please install them with:\n"
+            "pip install cryptography eth-keys eth-utils"
+        )
+
+    if len(signature) != 65:
+        return None
+
+    # Create the message to verify
+    # Signs: Keccak256("dstack-env-encrypt-pubkey" + ":" + app_id + timestamp_be_bytes + public_key)
+    prefix = b"dstack-env-encrypt-pubkey"
+    if app_id.startswith("0x"):
+        app_id = app_id[2:]
+    timestamp_bytes = timestamp.to_bytes(8, byteorder='big')
+    message = prefix + b":" + bytes.fromhex(app_id) + timestamp_bytes + public_key
+
+    # Hash the message with Keccak-256
+    message_hash = keccak(message)
+
+    # Recover the public key from the signature
+    try:
+        sig = keys.Signature(signature_bytes=signature)
+        recovered_key = sig.recover_public_key_from_msg_hash(message_hash)
+        return '0x' + recovered_key.to_compressed_bytes().hex()
+    except Exception as e:
+        print(f"Signature v1 verification failed: {e}", file=sys.stderr)
+        return None
+
+
 def verify_signature(public_key: bytes, signature: bytes, app_id: str) -> Optional[str]:
     """
-    Verify the signature of a public key.
+    Verify the legacy signature (without timestamp) of a public key.
 
     Args:
         public_key: The public key bytes to verify
@@ -1037,6 +1094,7 @@ def verify_signature(public_key: bytes, signature: bytes, app_id: str) -> Option
         return None
 
     # Create the message to verify
+    # Signs: Keccak256("dstack-env-encrypt-pubkey" + ":" + app_id + public_key)
     prefix = b"dstack-env-encrypt-pubkey"
     if app_id.startswith("0x"):
         app_id = app_id[2:]

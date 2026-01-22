@@ -179,6 +179,16 @@ The keys are derived with app id which guarantees apps can not get the keys from
 
 The `GetAppEnvEncryptPubKey` RPC is used by the frontend web page to request the app environment encryption public key when deploying a new app. This key is used to encrypt the app environment variables, which can only be decrypted by the app in TEE.
 
+The response includes:
+- `public_key`: The X25519 public key for encrypting environment variables
+- `timestamp`: Unix timestamp (seconds) when the response was generated
+- `signature`: Legacy signature for backward compatibility
+  - Signs: `Keccak256("dstack-env-encrypt-pubkey" + ":" + app_id + public_key)`
+- `signature_v1`: New signature with timestamp to prevent replay attacks
+  - Signs: `Keccak256("dstack-env-encrypt-pubkey" + ":" + app_id + timestamp_be_bytes + public_key)`
+
+Clients should prefer verifying `signature_v1` with timestamp to protect against replay attacks. Fall back to `signature` only for backward compatibility with older KMS versions.
+
 ### SignCert
 
 The `SignCert` RPC is used by the dstack app to sign a TLS certificate. In this RPC, the KMS node will:

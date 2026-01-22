@@ -19,7 +19,14 @@ message AppId {
 
 message PublicKeyResponse {
   bytes public_key = 1;
+  // Legacy signature without timestamp (for backward compatibility).
+  // Signs: Keccak256("dstack-env-encrypt-pubkey" + ":" + app_id + public_key)
   bytes signature = 2;
+  // Unix timestamp in seconds when the response was generated.
+  uint64 timestamp = 3;
+  // New signature with timestamp to prevent replay attacks.
+  // Signs: Keccak256("dstack-env-encrypt-pubkey" + ":" + app_id + timestamp_be_bytes + public_key)
+  bytes signature_v1 = 4;
 }
 
 message AppKeyResponse {
