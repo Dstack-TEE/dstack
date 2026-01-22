@@ -744,6 +744,7 @@ fn reload_instances_from_kv_store(proxy: &Proxy, store: &KvStore) -> Result<()> 
             connections: Default::default(),
         };
 
+        let old_ip = state.state.instances.get(&instance_id).map(|e| e.ip);
         if let Some(existing) = state.state.instances.get(&instance_id) {
             // Check if wg config needs update
             if existing.public_key != data.public_key || existing.ip != data.ip {
@@ -757,6 +758,12 @@ fn reload_instances_from_kv_store(proxy: &Proxy, store: &KvStore) -> Result<()> 
             wg_changed = true;
         }
 
+        // Release old IP if it changed (prevent IP leak)
+        if let Some(old_ip) = old_ip {
+            if old_ip != data.ip {
+                state.state.allocated_addresses.remove(&old_ip);
+            }
+        }
         state.state.allocated_addresses.insert(data.ip);
         state
             .state
