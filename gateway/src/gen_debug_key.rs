@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+//
+// SPDX-License-Identifier: Apache-2.0
+
 // Run with: cargo run --bin gen_debug_key -- <simulator_url>
 // Example: cargo run --bin gen_debug_key -- https://daee134c3b9f66aa2401c3b5ea64f1d34038f45d-3000.tdxlab.dstack.org:12004
 
@@ -71,7 +75,7 @@ async fn main() -> Result<()> {
     println!("insecure_skip_attestation = true");
     println!(
         "key_file = \"{}\"",
-        fs_err::canonicalize(&output_file)
+        fs_err::canonicalize(output_file)
             .unwrap_or_default()
             .display()
     );
