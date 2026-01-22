@@ -476,61 +476,6 @@ SPDX-License-Identifier: Apache-2.0
             </td>
         </tr>
     </table>
-    <h2>Cluster</h2>
-    <table>
-        <tr>
-            <th>ID</th>
-            <th>UUID</th>
-            <th>Status</th>
-            <th>Last Seen</th>
-            <th>Wg IP</th>
-            <th>Wg Endpoint</th>
-            <th>URL</th>
-            <th>Actions</th>
-        </tr>
-        {% for node in status.nodes %}
-        <tr class="{% if node.uuid == status.uuid %}me{% endif %}">
-            <td>{{ node.id }}</td>
-            <td class="truncated-id" title="{{ node.uuid|hex }}">{{ node.uuid|hex }}</td>
-            <td class="node-status" data-node-id="{{ node.id }}">-</td>
-            <td class="timestamp">{{ node.last_seen }}</td>
-            <td>{{ node.wg_ip }}</td>
-            <td>{{ node.wg_endpoint }}</td>
-            <td>{{ node.url }}</td>
-            <td>
-                <div class="status-controls">
-                    <button class="status-btn up" onclick="setNodeStatus({{ node.id }}, 'up')">Up</button>
-                    <button class="status-btn down" onclick="setNodeStatus({{ node.id }}, 'down')">Down</button>
-                </div>
-            </td>
-        </tr>
-        {% endfor %}
-    </table>
-    <h2>CVM List</h2>
-    <table>
-        <tr>
-            <th>Instance ID</th>
-            <th>App ID</th>
-            <th>IP</th>
-            <th>Last Seen</th>
-            <th>Connections</th>
-        </tr>
-        {% for host in status.hosts %}
-        <tr>
-            <td class="truncated-id" title="{{ host.instance_id }}">{{ host.instance_id }}</td>
-            <td class="truncated-id" title="{{ host.app_id }}">{{ host.app_id }}</td>
-            <td>{{ host.ip }}</td>
-            <td class="timestamp">{{ host.latest_handshake }}</td>
-            <td>{{ host.num_connections }}</td>
-        </tr>
-        {% endfor %}
-    </table>
-
-    <h2>WaveKV Sync Status</h2>
-    <div id="wavekv-status">
-        <p>Loading WaveKV status...</p>
-    </div>
-
     <h2>Certbot Configuration</h2>
     <table>
         <tr>
@@ -586,6 +531,62 @@ SPDX-License-Identifier: Apache-2.0
     <div id="zt-domains">
         <p>Loading ZT-Domains...</p>
     </div>
+
+    <h2>Cluster</h2>
+    <table>
+        <tr>
+            <th>ID</th>
+            <th>UUID</th>
+            <th>Status</th>
+            <th>Last Seen</th>
+            <th>Wg IP</th>
+            <th>Wg Endpoint</th>
+            <th>URL</th>
+            <th>Actions</th>
+        </tr>
+        {% for node in status.nodes %}
+        <tr class="{% if node.uuid == status.uuid %}me{% endif %}">
+            <td>{{ node.id }}</td>
+            <td class="truncated-id" title="{{ node.uuid|hex }}">{{ node.uuid|hex }}</td>
+            <td class="node-status" data-node-id="{{ node.id }}">-</td>
+            <td class="timestamp">{{ node.last_seen }}</td>
+            <td>{{ node.wg_ip }}</td>
+            <td>{{ node.wg_endpoint }}</td>
+            <td>{{ node.url }}</td>
+            <td>
+                <div class="status-controls">
+                    <button class="status-btn up" onclick="setNodeStatus({{ node.id }}, 'up')">Up</button>
+                    <button class="status-btn down" onclick="setNodeStatus({{ node.id }}, 'down')">Down</button>
+                </div>
+            </td>
+        </tr>
+        {% endfor %}
+    </table>
+
+    <h2>WaveKV Sync Status</h2>
+    <div id="wavekv-status">
+        <p>Loading WaveKV status...</p>
+    </div>
+
+    <h2>CVM List</h2>
+    <table>
+        <tr>
+            <th>Instance ID</th>
+            <th>App ID</th>
+            <th>IP</th>
+            <th>Last Seen</th>
+            <th>Connections</th>
+        </tr>
+        {% for host in status.hosts %}
+        <tr>
+            <td class="truncated-id" title="{{ host.instance_id }}">{{ host.instance_id }}</td>
+            <td class="truncated-id" title="{{ host.app_id }}">{{ host.app_id }}</td>
+            <td>{{ host.ip }}</td>
+            <td class="timestamp">{{ host.latest_handshake }}</td>
+            <td>{{ host.num_connections }}</td>
+        </tr>
+        {% endfor %}
+    </table>
 
     <!-- Add DNS Credential Modal -->
     <div id="add-dns-cred-modal" class="modal-overlay">
