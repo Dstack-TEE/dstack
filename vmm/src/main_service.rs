@@ -429,6 +429,8 @@ impl VmmRpc for RpcHandler {
         Ok(PublicKeyResponse {
             public_key: response.public_key,
             signature: response.signature,
+            timestamp: response.timestamp,
+            signature_v1: response.signature_v1,
         })
     }
 
