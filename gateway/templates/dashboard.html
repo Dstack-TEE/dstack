@@ -1240,10 +1240,13 @@ SPDX-License-Identifier: Apache-2.0
 
             const body = {
                 domain: domain,
-                dns_cred_id: dnsCredId,
                 port: port,
                 priority: priority
             };
+            // Only include dns_cred_id if not empty (empty means use default)
+            if (dnsCredId) {
+                body.dns_cred_id = dnsCredId;
+            }
             if (node !== null && node > 0) {
                 body.node = node;
             }
@@ -1281,10 +1284,13 @@ SPDX-License-Identifier: Apache-2.0
 
             const body = {
                 domain: domain,
-                dns_cred_id: dnsCredId,
                 port: port,
                 priority: priority
             };
+            // Only include dns_cred_id if not empty (empty means use default)
+            if (dnsCredId) {
+                body.dns_cred_id = dnsCredId;
+            }
             if (node !== null && node > 0) {
                 body.node = node;
             }

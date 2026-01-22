@@ -705,8 +705,15 @@ fn proto_to_zt_domain_config(
     proto: &ProtoZtDomainConfig,
     kv_store: &crate::kv::KvStore,
 ) -> Result<ZtDomainConfig> {
+    // Normalize dns_cred_id: treat empty string as None (use default)
+    let dns_cred_id = proto
+        .dns_cred_id
+        .as_ref()
+        .filter(|s| !s.is_empty())
+        .cloned();
+
     // Validate DNS credential if specified
-    if let Some(ref cred_id) = proto.dns_cred_id {
+    if let Some(ref cred_id) = dns_cred_id {
         kv_store
             .get_dns_credential(cred_id)
             .context("specified dns credential not found")?;
@@ -714,7 +721,7 @@ fn proto_to_zt_domain_config(
 
     Ok(ZtDomainConfig {
         domain: proto.domain.clone(),
-        dns_cred_id: proto.dns_cred_id.clone(),
+        dns_cred_id,
         port: proto.port.try_into().context("port out of range")?,
         node: proto.node,
         priority: proto.priority,
