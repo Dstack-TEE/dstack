@@ -511,6 +511,15 @@ fn emit_key_provider_info(provider_info: &KeyProviderInfo) -> Result<()> {
 
 pub async fn cmd_sys_setup(args: SetupArgs) -> Result<()> {
     let stage0 = Stage0::load(&args)?;
+    let vmm = stage0.host_api();
+    let result = do_sys_setup(stage0).await;
+    if let Err(err) = &result {
+        vmm.notify_q("boot.error", &format!("{err:#}")).await;
+    }
+    result
+}
+
+async fn do_sys_setup(stage0: Stage0<'_>) -> Result<()> {
     if stage0.shared.app_compose.secure_time {
         info!("Waiting for the system time to be synchronized");
         cmd! {
@@ -585,6 +594,12 @@ struct Stage1<'a> {
 }
 
 impl<'a> Stage0<'a> {
+    fn host_api(&self) -> HostApi {
+        HostApi::new(
+            self.shared.sys_config.host_api_url.clone(),
+            self.shared.sys_config.pccs_url.clone(),
+        )
+    }
     fn load(args: &'a SetupArgs) -> Result<Self> {
         let host_shared_copy_dir = args.work_dir.join(HOST_SHARED_DIR_NAME);
         let host_shared = HostShared::copy("/tmp/.host-shared".as_ref(), &host_shared_copy_dir)?;
@@ -1155,7 +1170,10 @@ impl<'a> Stage0<'a> {
         self.vmm
             .notify_q("boot.progress", "requesting app keys")
             .await;
-        let app_keys = self.request_app_keys().await?;
+        let app_keys = self
+            .request_app_keys()
+            .await
+            .context("Failed to request app keys")?;
         if app_keys.disk_crypt_key.is_empty() {
             bail!("Failed to get valid key phrase from KMS");
         }
