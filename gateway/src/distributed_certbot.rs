@@ -52,8 +52,8 @@ impl DistributedCertBot {
     pub async fn init_all(&self) -> Result<()> {
         let configs = self.kv_store.list_zt_domain_configs();
         for config in configs {
-            if let Err(e) = self.init_domain(&config.domain).await {
-                error!("cert[{}]: failed to initialize: {}", config.domain, e);
+            if let Err(err) = self.init_domain(&config.domain).await {
+                error!("cert[{}]: failed to initialize: {err:?}", config.domain);
             }
         }
         Ok(())
@@ -86,8 +86,8 @@ impl DistributedCertBot {
     pub async fn try_renew_all(&self) -> Result<()> {
         let configs = self.kv_store.list_zt_domain_configs();
         for config in configs {
-            if let Err(e) = self.try_renew(&config.domain, false).await {
-                error!("cert[{}]: failed to renew: {}", config.domain, e);
+            if let Err(err) = self.try_renew(&config.domain, false).await {
+                error!("cert[{}]: failed to renew: {err:?}", config.domain);
             }
         }
         Ok(())
@@ -140,8 +140,8 @@ impl DistributedCertBot {
         };
 
         // Release lock regardless of result
-        if let Err(e) = self.kv_store.release_cert_lock(domain) {
-            error!("failed to release lock: {e}");
+        if let Err(err) = self.kv_store.release_cert_lock(domain) {
+            error!("failed to release lock: {err:?}");
         }
 
         result
@@ -172,8 +172,8 @@ impl DistributedCertBot {
 
         let result = self.do_request_new(domain, &config).await;
 
-        if let Err(e) = self.kv_store.release_cert_lock(domain) {
-            error!("failed to release lock: {e}");
+        if let Err(err) = self.kv_store.release_cert_lock(domain) {
+            error!("failed to release lock: {err:?}");
         }
 
         result
@@ -364,8 +364,8 @@ impl DistributedCertBot {
     async fn generate_and_save_acme_attestation(&self, account_uri: &str) -> Result<()> {
         let agent = match crate::dstack_agent() {
             Ok(a) => a,
-            Err(e) => {
-                warn!("failed to create dstack agent: {e}");
+            Err(err) => {
+                warn!("failed to create dstack agent: {err:?}");
                 return Ok(());
             }
         };
@@ -382,8 +382,8 @@ impl DistributedCertBot {
             .await
         {
             Ok(resp) => serde_json::to_string(&resp).unwrap_or_default(),
-            Err(e) => {
-                warn!("failed to get TDX quote for ACME account: {e}");
+            Err(err) => {
+                warn!("failed to get TDX quote for ACME account: {err:?}");
                 return Ok(());
             }
         };
@@ -391,8 +391,8 @@ impl DistributedCertBot {
         // Get attestation
         let attestation_str = match agent.attest(RawQuoteArgs { report_data }).await {
             Ok(resp) => serde_json::to_string(&resp).unwrap_or_default(),
-            Err(e) => {
-                warn!("failed to get attestation for ACME account: {e}");
+            Err(err) => {
+                warn!("failed to get attestation for ACME account: {err:?}");
                 String::new()
             }
         };
@@ -434,8 +434,8 @@ impl DistributedCertBot {
     ) -> Result<()> {
         let agent = match crate::dstack_agent() {
             Ok(a) => a,
-            Err(e) => {
-                warn!(domain, "failed to create dstack agent: {e}");
+            Err(err) => {
+                warn!(domain, "failed to create dstack agent: {err:?}");
                 return Ok(());
             }
         };
@@ -452,8 +452,8 @@ impl DistributedCertBot {
             .await
         {
             Ok(resp) => serde_json::to_string(&resp).unwrap_or_default(),
-            Err(e) => {
-                warn!(domain, "failed to generate TDX quote: {e}");
+            Err(err) => {
+                warn!(domain, "failed to generate TDX quote: {err:?}");
                 return Ok(());
             }
         };
@@ -461,8 +461,8 @@ impl DistributedCertBot {
         // Get attestation
         let attestation = match agent.attest(RawQuoteArgs { report_data }).await {
             Ok(resp) => serde_json::to_string(&resp).unwrap_or_default(),
-            Err(e) => {
-                warn!(domain, "failed to get attestation: {e}");
+            Err(err) => {
+                warn!(domain, "failed to get attestation: {err:?}");
                 String::new()
             }
         };

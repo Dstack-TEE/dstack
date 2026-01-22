@@ -150,15 +150,15 @@ impl ProxyInner {
             wg_ip: config.wg.ip.to_string(),
         };
         if let Err(err) = kv_store.sync_node(config.sync.node_id, &node_data) {
-            error!("Failed to sync this node to KvStore: {err}");
+            error!("Failed to sync this node to KvStore: {err:?}");
         }
         // Set this node's status to Online
         if let Err(err) = kv_store.set_node_status(config.sync.node_id, NodeStatus::Up) {
-            error!("Failed to set node status: {err}");
+            error!("Failed to set node status: {err:?}");
         }
         // Register this node's sync URL in DB (for peer discovery)
         if let Err(err) = kv_store.register_peer_url(config.sync.node_id, &config.sync.my_url) {
-            error!("Failed to register peer URL: {err}");
+            error!("Failed to register peer URL: {err:?}");
         }
 
         // Build HttpsClientConfig for mTLS communication
@@ -185,7 +185,7 @@ impl ProxyInner {
             )
             .await
             {
-                warn!("Failed to fetch peers from bootnode: {err}");
+                warn!("Failed to fetch peers from bootnode: {err:?}");
             }
         }
 
@@ -194,7 +194,7 @@ impl ProxyInner {
             match WaveKvSyncService::new(&kv_store, &config.sync, https_config.clone()) {
                 Ok(sync_service) => Some(Arc::new(sync_service)),
                 Err(err) => {
-                    error!("Failed to create WaveKV sync service: {err}");
+                    error!("Failed to create WaveKV sync service: {err:?}");
                     None
                 }
             }
@@ -212,7 +212,7 @@ impl ProxyInner {
         if let Some(ref wavekv_sync) = wavekv_sync {
             info!("WaveKV: bootstrapping from peers...");
             if let Err(err) = wavekv_sync.bootstrap().await {
-                warn!("WaveKV bootstrap failed: {err}");
+                warn!("WaveKV bootstrap failed: {err:?}");
             }
         }
 
@@ -223,7 +223,7 @@ impl ProxyInner {
             let mut builder = CertStoreBuilder::new();
             for (domain, data) in &all_cert_data {
                 if let Err(err) = builder.add_cert(domain, data) {
-                    warn!("failed to load certificate for {}: {}", domain, err);
+                    warn!("failed to load certificate for {domain}: {err:?}");
                 }
             }
             cert_resolver.set(Arc::new(builder.build()));
@@ -240,7 +240,7 @@ impl ProxyInner {
         ));
         // Initialize any configured domains
         if let Err(err) = certbot.init_all().await {
-            warn!("Failed to initialize multi-domain certbot: {}", err);
+            warn!("Failed to initialize multi-domain certbot: {err:?}");
         }
 
         // Create TLS acceptors with CertResolver for SNI-based resolution
@@ -305,7 +305,7 @@ impl Proxy {
         let mut loaded = 0;
         for (domain, data) in &all_cert_data {
             if let Err(err) = builder.add_cert(domain, data) {
-                warn!("failed to reload certificate for {}: {}", domain, err);
+                warn!("failed to reload certificate for {domain}: {err:?}");
             } else {
                 loaded += 1;
             }
@@ -313,7 +313,7 @@ impl Proxy {
 
         // Atomically replace the CertStore (no need to recreate acceptors)
         self.cert_resolver.set(Arc::new(builder.build()));
-        info!("CertStore: reloaded {} certificates from KvStore", loaded);
+        info!("CertStore: reloaded {loaded} certificates from KvStore");
         Ok(())
     }
 
@@ -405,7 +405,7 @@ impl Proxy {
             .new_client_by_id(instance_id, app_id, client_public_key)
             .context("failed to allocate IP address for client")?;
         if let Err(err) = state.reconfigure() {
-            error!("failed to reconfigure: {}", err);
+            error!("failed to reconfigure: {err:?}");
         }
         let gateways = state.get_active_nodes();
         let servers = gateways
@@ -470,7 +470,7 @@ fn start_recycle_thread(proxy: Proxy) {
     std::thread::spawn(move || loop {
         std::thread::sleep(proxy.config.recycle.interval);
         if let Err(err) = proxy.lock().recycle() {
-            error!("failed to run recycle: {err}");
+            error!("failed to run recycle: {err:?}");
         };
     });
 }
@@ -484,7 +484,7 @@ async fn start_certbot_task(proxy: Proxy) {
         // Run once at startup to check for any pending renewals
         info!("running initial certificate renewal check");
         if let Err(err) = proxy.renew_cert(None, false).await {
-            error!("failed initial certificate renewal: {err}");
+            error!("failed initial certificate renewal: {err:?}");
         }
 
         loop {
@@ -501,7 +501,7 @@ async fn start_certbot_task(proxy: Proxy) {
 
             // Renew certificates
             if let Err(err) = proxy.renew_cert(None, false).await {
-                error!("failed to renew certificates: {err}");
+                error!("failed to renew certificates: {err:?}");
             }
         }
     });
@@ -520,7 +520,7 @@ fn start_cert_store_watch_task(proxy: Proxy) {
             }
             info!("WaveKV: detected certificate changes, reloading CertStore...");
             if let Err(err) = proxy.reload_all_certs_from_kvstore() {
-                error!("Failed to reload certificates from KvStore: {err}");
+                error!("Failed to reload certificates from KvStore: {err:?}");
             }
         }
     });
@@ -577,7 +577,7 @@ fn start_zt_domain_watch_task(proxy: Proxy) {
                             }
                         }
                         Err(e) => {
-                            warn!("cert[{domain}]: auto-renewal failed: {e}");
+                            warn!("cert[{domain}]: auto-renewal failed: {e:?}");
                         }
                     }
                 });
@@ -620,7 +620,7 @@ fn start_bootnode_discovery_task(proxy: Proxy) {
             if let Err(err) =
                 fetch_peers_from_bootnode(&bootnode, &kv_store, node_id, &https_config).await
             {
-                debug!("bootnode discovery retry failed: {err}");
+                warn!("bootnode discovery retry failed: {err:?}");
             } else {
                 info!("bootnode peer discovery succeeded");
             }
@@ -662,7 +662,7 @@ fn start_wavekv_watch_task(proxy: Proxy) -> Result<()> {
             }
             info!("WaveKV: detected remote instance changes, reloading...");
             if let Err(err) = reload_instances_from_kv_store(&proxy_clone, &store_clone) {
-                error!("Failed to reload instances from KvStore: {err}");
+                error!("Failed to reload instances from KvStore: {err:?}");
             }
         }
     });
@@ -680,7 +680,7 @@ fn start_wavekv_watch_task(proxy: Proxy) -> Result<()> {
             }
             info!("WaveKV: detected remote node changes, reconfiguring WireGuard...");
             if let Err(err) = proxy_for_nodes.lock().reconfigure() {
-                error!("Failed to reconfigure WireGuard: {err}");
+                error!("Failed to reconfigure WireGuard: {err:?}");
             }
         }
     });
@@ -696,7 +696,7 @@ fn start_wavekv_watch_task(proxy: Proxy) -> Result<()> {
                 match kv_store_for_persist.persist_if_dirty() {
                     Ok(true) => info!("WaveKV: periodic persist completed"),
                     Ok(false) => {} // No changes to persist
-                    Err(err) => error!("WaveKV: periodic persist failed: {err}"),
+                    Err(err) => error!("WaveKV: periodic persist failed: {err:?}"),
                 }
             }
         });
@@ -830,7 +830,7 @@ impl ProxyState {
                     reg_time: encode_ts(existing.reg_time),
                 };
                 if let Err(err) = self.kv_store.sync_instance(&existing.id, &data) {
-                    error!("failed to sync existing instance to KvStore: {err}");
+                    error!("failed to sync existing instance to KvStore: {err:?}");
                 }
                 return Some(existing);
             }
@@ -859,7 +859,7 @@ impl ProxyState {
             reg_time: encode_ts(info.reg_time),
         };
         if let Err(err) = self.kv_store.sync_instance(&info.id, &data) {
-            error!("failed to sync instance to KvStore: {err}");
+            error!("failed to sync instance to KvStore: {err:?}");
         }
 
         self.state
@@ -888,7 +888,7 @@ impl ProxyState {
 
         match cmd!(wg syncconf $ifname $config_path) {
             Ok(_) => info!("wg config updated"),
-            Err(e) => error!("failed to set wg config: {e}"),
+            Err(err) => error!("failed to set wg config: {err:?}"),
         }
         Ok(())
     }
@@ -924,7 +924,7 @@ impl ProxyState {
         let handshakes = self.latest_handshakes(None);
         let mut instances = match handshakes {
             Err(err) => {
-                warn!("Failed to get handshakes, fallback to random selection: {err}");
+                warn!("Failed to get handshakes, fallback to random selection: {err:?}");
                 return Ok(self.random_select_a_host(id).unwrap_or_default());
             }
             Ok(handshakes) => app_instances
@@ -1039,7 +1039,7 @@ impl ProxyState {
 
         // Sync deletion to KvStore
         if let Err(err) = self.kv_store.sync_delete_instance(id) {
-            error!("Failed to sync instance deletion to KvStore: {err}");
+            error!("Failed to sync instance deletion to KvStore: {err:?}");
         }
 
         self.state.allocated_addresses.remove(&info.ip);
@@ -1055,7 +1055,7 @@ impl ProxyState {
     fn recycle(&mut self) -> Result<()> {
         // Refresh state: sync local handshakes to KvStore, update local last_seen from global
         if let Err(err) = self.refresh_state() {
-            warn!("failed to refresh state: {err}");
+            warn!("failed to refresh state: {err:?}");
         }
 
         // Note: Gateway nodes are not removed from KvStore, only marked offline/retired
@@ -1122,7 +1122,7 @@ impl ProxyState {
         for (pk, (ts, _)) in &handshakes {
             if let Some(&instance_id) = pk_to_id.get(pk.as_str()) {
                 if let Err(err) = self.kv_store.sync_instance_handshake(instance_id, *ts) {
-                    debug!("failed to sync instance handshake: {err}");
+                    debug!("failed to sync instance handshake: {err:?}");
                 }
             }
         }
@@ -1136,7 +1136,7 @@ impl ProxyState {
             .kv_store
             .sync_node_last_seen(self.config.sync.node_id, now)
         {
-            debug!("failed to sync node last_seen: {err}");
+            debug!("failed to sync node last_seen: {err:?}");
         }
         Ok(())
     }
@@ -1144,7 +1144,7 @@ impl ProxyState {
     /// Sync connection count for an instance to KvStore
     pub(crate) fn sync_connections(&self, instance_id: &str, count: u64) {
         if let Err(err) = self.kv_store.sync_connections(instance_id, count) {
-            debug!("Failed to sync connections: {err}");
+            debug!("Failed to sync connections: {err:?}");
         }
     }
 
