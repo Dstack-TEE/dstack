@@ -27,7 +27,7 @@ use upgrade_authority::BootInfo;
 
 use crate::{
     config::KmsConfig,
-    crypto::{derive_k256_key, sign_message},
+    crypto::{derive_k256_key, sign_message, sign_message_with_timestamp},
 };
 
 mod upgrade_authority;
@@ -288,6 +288,12 @@ impl KmsRpc for RpcHandler {
         let pubkey = x25519_dalek::PublicKey::from(&secret);
 
         let public_key = pubkey.to_bytes().to_vec();
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .context("System time before UNIX epoch")?
+            .as_secs();
+
+        // Legacy signature (without timestamp) for backward compatibility
         let signature = sign_message(
             &self.state.k256_key,
             b"dstack-env-encrypt-pubkey",
@@ -296,9 +302,21 @@ impl KmsRpc for RpcHandler {
         )
         .context("Failed to sign the public key")?;
 
+        // New signature with timestamp to prevent replay attacks
+        let signature_v1 = sign_message_with_timestamp(
+            &self.state.k256_key,
+            b"dstack-env-encrypt-pubkey",
+            &request.app_id,
+            timestamp,
+            &public_key,
+        )
+        .context("Failed to sign the public key with timestamp")?;
+
         Ok(PublicKeyResponse {
             public_key,
             signature,
+            timestamp,
+            signature_v1,
         })
     }
 
