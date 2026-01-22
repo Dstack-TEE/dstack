@@ -4,7 +4,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{net::SocketAddr, path::PathBuf};
+use std::{fmt::Display, net::SocketAddr, path::PathBuf};
 
 use anyhow::Result;
 use prpc::{codec::encode_message_to_vec, server::Service as PrpcService};
@@ -74,18 +74,19 @@ async fn dispatch_prpc(
         Ok(data) => (200, data),
         Err(err) => {
             error!("rpc error: {err:?}");
-            (400, encode_error(json, format!("{err:?}")))
+            (400, encode_error(json, &err))
         }
     };
     (code, data)
 }
 
-pub fn encode_error(json: bool, error: impl Into<String>) -> Vec<u8> {
+pub fn encode_error(json: bool, error: &impl Display) -> Vec<u8> {
+    let error = format!("{error:#}");
     if json {
-        serde_json::to_string_pretty(&serde_json::json!({ "error": error.into() }))
+        serde_json::to_string_pretty(&serde_json::json!({ "error": error }))
             .unwrap_or_else(|_| r#"{"error": "failed to encode the error"}"#.to_string())
             .into_bytes()
     } else {
-        encode_message_to_vec(&::prpc::server::ProtoError::new(error.into()))
+        encode_message_to_vec(&::prpc::server::ProtoError::new(error))
     }
 }

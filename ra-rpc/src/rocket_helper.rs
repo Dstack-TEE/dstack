@@ -247,10 +247,9 @@ impl<S> PrpcHandler<'_, '_, S> {
         let result = handle_prpc_impl::<S, Call>(self).await;
         match result {
             Ok(output) => output,
-            Err(e) => {
-                let estr = format!("{e:?}");
-                warn!("error handling prpc: {estr}");
-                let body = encode_error(json, estr);
+            Err(err) => {
+                warn!("error handling prpc: {err:?}");
+                let body = encode_error(json, &err);
                 RpcResponse {
                     is_json: json,
                     status: Status::BadRequest,
