@@ -649,6 +649,40 @@ SPDX-License-Identifier: Apache-2.0
         </div>
     </div>
 
+    <!-- Edit ZT-Domain Modal -->
+    <div id="edit-zt-domain-modal" class="modal-overlay">
+        <div class="modal">
+            <h3>Edit ZT-Domain</h3>
+            <input type="hidden" id="edit-domain-original">
+            <div class="modal-field">
+                <label>Domain (cannot be changed)</label>
+                <input type="text" id="edit-domain-name" readonly disabled>
+            </div>
+            <div class="modal-field">
+                <label>DNS Credential</label>
+                <select id="edit-domain-dns-cred">
+                    <option value="">Use Default</option>
+                </select>
+            </div>
+            <div class="modal-field">
+                <label>Port (0 = default)</label>
+                <input type="number" id="edit-domain-port" placeholder="443" min="0" max="65535">
+            </div>
+            <div class="modal-field">
+                <label>Node Binding (0 = any node)</label>
+                <input type="number" id="edit-domain-node" placeholder="0" min="0">
+            </div>
+            <div class="modal-field">
+                <label>Priority (higher = preferred as default)</label>
+                <input type="number" id="edit-domain-priority" placeholder="0">
+            </div>
+            <div class="modal-actions">
+                <button class="action-btn secondary" onclick="hideModal('edit-zt-domain-modal')">Cancel</button>
+                <button class="action-btn primary" onclick="updateZtDomain()">Update</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Add ZT-Domain Modal -->
     <div id="add-zt-domain-modal" class="modal-overlay">
         <div class="modal">
@@ -1037,6 +1071,8 @@ SPDX-License-Identifier: Apache-2.0
 
         // ==================== ZT-Domains ====================
 
+        let ztDomains = [];
+
         async function loadZtDomains() {
             try {
                 const response = await fetch('/prpc/Admin.ListZtDomains', {
@@ -1045,7 +1081,8 @@ SPDX-License-Identifier: Apache-2.0
                     body: '{}'
                 });
                 const data = await response.json();
-                renderZtDomains(data.domains || []);
+                ztDomains = data.domains || [];
+                renderZtDomains(ztDomains);
             } catch (e) {
                 document.getElementById('zt-domains').innerHTML =
                     '<p style="color: #666;">Failed to load ZT-Domains</p>';
@@ -1100,6 +1137,7 @@ SPDX-License-Identifier: Apache-2.0
                         </td>
                         <td class="timestamp" data-original="${expiresAt}">${certStatus.not_after || 0}</td>
                         <td>
+                            <button class="action-btn secondary" onclick="showEditZtDomainModal('${escapeHtml(config.domain)}')">Edit</button>
                             <button class="action-btn warning" onclick="renewZtDomainCert('${escapeHtml(config.domain)}', false)">Renew</button>
                             <button class="action-btn secondary" onclick="renewZtDomainCert('${escapeHtml(config.domain)}', true)">Force Renew</button>
                             <button class="action-btn danger" onclick="deleteZtDomain('${escapeHtml(config.domain)}')">Delete</button>
@@ -1136,6 +1174,76 @@ SPDX-License-Identifier: Apache-2.0
             document.getElementById('domain-node').value = '0';
             document.getElementById('domain-priority').value = '0';
             showModal('add-zt-domain-modal');
+        }
+
+        function updateEditDnsCredSelect() {
+            const select = document.getElementById('edit-domain-dns-cred');
+            select.innerHTML = '<option value="">Use Default</option>';
+            for (const cred of dnsCredentials) {
+                const isDefault = cred.id === defaultDnsCredId;
+                select.innerHTML += `<option value="${cred.id}">${escapeHtml(cred.name)}${isDefault ? ' (default)' : ''}</option>`;
+            }
+        }
+
+        function showEditZtDomainModal(domain) {
+            const item = ztDomains.find(d => d.config && d.config.domain === domain);
+            if (!item) {
+                showToast('ZT-Domain not found', 'error');
+                return;
+            }
+
+            const config = item.config;
+            document.getElementById('edit-domain-original').value = config.domain;
+            document.getElementById('edit-domain-name').value = config.domain;
+            document.getElementById('edit-domain-port').value = config.port || 0;
+            document.getElementById('edit-domain-node').value = (config.node !== undefined && config.node !== null) ? config.node : 0;
+            document.getElementById('edit-domain-priority').value = config.priority || 0;
+
+            updateEditDnsCredSelect();
+            document.getElementById('edit-domain-dns-cred').value = config.dns_cred_id || '';
+
+            showModal('edit-zt-domain-modal');
+        }
+
+        async function updateZtDomain() {
+            const domain = document.getElementById('edit-domain-original').value;
+            const dnsCredId = document.getElementById('edit-domain-dns-cred').value;
+            const port = parseInt(document.getElementById('edit-domain-port').value) || 0;
+            const nodeInput = document.getElementById('edit-domain-node').value.trim();
+            const node = (nodeInput && nodeInput !== '0') ? parseInt(nodeInput) : null;
+            const priority = parseInt(document.getElementById('edit-domain-priority').value) || 0;
+
+            if (!domain) {
+                showToast('Domain is required', 'error');
+                return;
+            }
+
+            const body = {
+                domain: domain,
+                dns_cred_id: dnsCredId,
+                port: port,
+                priority: priority
+            };
+            if (node !== null && node > 0) {
+                body.node = node;
+            }
+
+            try {
+                const response = await fetch('/prpc/Admin.UpdateZtDomain', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body)
+                });
+                if (!response.ok) {
+                    const err = await response.text();
+                    throw new Error(err);
+                }
+                hideModal('edit-zt-domain-modal');
+                showToast('ZT-Domain updated', 'success');
+                await loadZtDomains();
+            } catch (e) {
+                showToast('Failed to update ZT-Domain: ' + e.message, 'error');
+            }
         }
 
         async function addZtDomain() {
