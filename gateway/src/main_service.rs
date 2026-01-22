@@ -816,9 +816,12 @@ impl ProxyState {
             return None;
         }
         if let Some(existing) = self.state.instances.get_mut(id) {
-            if existing.public_key != public_key {
+            let pubkey_changed = existing.public_key != public_key;
+            if pubkey_changed {
                 info!("public key changed for instance {id}, new key: {public_key}");
                 existing.public_key = public_key.to_string();
+                // Update reg_time so other nodes will pick up the change
+                existing.reg_time = SystemTime::now();
             }
             let existing = existing.clone();
             if self.valid_ip(existing.ip) {
