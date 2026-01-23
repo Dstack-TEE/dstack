@@ -8,7 +8,7 @@ Type=simple
 ExecStart=/bin/wg-checker.sh
 Restart=always
 RestartSec=10
-StandardOutput=journal+console
+StandardOutput=journal
 StandardError=journal+console
 
 [Install]
