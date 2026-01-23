@@ -85,6 +85,7 @@ impl AppStateInner {
                     usage_server_auth: false,
                     usage_client_auth: true,
                     ext_quote: true,
+                    ext_app_info: false,
                     not_after: None,
                     not_before: None,
                 },
@@ -242,6 +243,7 @@ impl DstackGuestRpc for InternalRpcHandler {
             usage_server_auth: request.usage_server_auth,
             usage_client_auth: request.usage_client_auth,
             ext_quote: request.usage_ra_tls,
+            ext_app_info: request.with_app_info,
             not_after: request.not_after,
             not_before: request.not_before,
         };
@@ -504,6 +506,7 @@ impl TappdRpc for InternalRpcHandlerV0 {
             usage_server_auth: request.usage_server_auth,
             usage_client_auth: request.usage_client_auth,
             ext_quote: request.usage_ra_tls,
+            ext_app_info: false,
             not_before: None,
             not_after: None,
         };

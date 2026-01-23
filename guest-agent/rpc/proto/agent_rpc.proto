@@ -76,6 +76,8 @@ message GetTlsKeyArgs {
   optional uint64 not_before = 6;
   // Certificate validity end time as seconds since UNIX epoch
   optional uint64 not_after = 7;
+  // Includes app info in the certificate
+  bool with_app_info = 8;
 }
 
 // The request to derive a key

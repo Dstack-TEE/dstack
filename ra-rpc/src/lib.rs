@@ -8,6 +8,7 @@ use std::{fmt::Display, net::SocketAddr, path::PathBuf};
 
 use anyhow::Result;
 use prpc::{codec::encode_message_to_vec, server::Service as PrpcService};
+use ra_tls::attestation::AppInfo;
 use tracing::{error, info};
 
 pub use ra_tls::attestation::{Attestation, VerifiedAttestation};
@@ -36,6 +37,7 @@ pub struct CallContext<'a, State> {
     pub attestation: Option<VerifiedAttestation>,
     pub remote_endpoint: Option<RemoteEndpoint>,
     pub remote_app_id: Option<Vec<u8>>,
+    pub remote_app_info: Option<AppInfo>,
 }
 
 pub trait RpcCall<State>: Sized {

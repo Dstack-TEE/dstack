@@ -90,6 +90,7 @@ pub(crate) async fn sync_task(proxy: Proxy) -> Result<()> {
                 usage_ra_tls: false,
                 usage_server_auth: false,
                 usage_client_auth: true,
+                with_app_info: false,
                 not_after: None,
                 not_before: None,
             })

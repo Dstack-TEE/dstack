@@ -24,13 +24,13 @@ use x509_parser::public_key::PublicKey;
 use x509_parser::x509::SubjectPublicKeyInfo;
 
 use crate::oids::{
-    PHALA_RATLS_APP_ID, PHALA_RATLS_ATTESTATION, PHALA_RATLS_CERT_USAGE, PHALA_RATLS_EVENT_LOG,
-    PHALA_RATLS_TDX_QUOTE,
+    PHALA_RATLS_APP_ID, PHALA_RATLS_APP_INFO, PHALA_RATLS_ATTESTATION, PHALA_RATLS_CERT_USAGE,
+    PHALA_RATLS_EVENT_LOG, PHALA_RATLS_TDX_QUOTE,
 };
 use crate::traits::CertExt;
 #[cfg(feature = "quote")]
 use dstack_attest::attestation::QuoteContentType;
-use dstack_attest::attestation::{Attestation, AttestationQuote, VersionedAttestation};
+use dstack_attest::attestation::{AppInfo, Attestation, AttestationQuote, VersionedAttestation};
 
 /// A CA certificate and private key.
 pub struct CaCert {
@@ -88,6 +88,11 @@ impl CaCert {
         let pki = rcgen::SubjectPublicKeyInfo::from_der(&csr.pubkey)
             .context("Failed to parse signature")?;
         let cfg = &csr.config;
+        let app_info = if cfg.ext_app_info {
+            Some(csr.attestation.decode_app_info(false)?)
+        } else {
+            None
+        };
         let attestation = cfg.ext_quote.then_some(&csr.attestation);
         let req = CertRequest::builder()
             .key(&pki)
@@ -98,6 +103,7 @@ impl CaCert {
             .usage_client_auth(cfg.usage_client_auth)
             .maybe_attestation(attestation)
             .maybe_app_id(app_id)
+            .maybe_app_info(app_info.as_ref())
             .special_usage(usage)
             .maybe_not_before(cfg.not_before.map(unix_time_to_system_time))
             .maybe_not_after(cfg.not_after.map(unix_time_to_system_time))
@@ -138,6 +144,8 @@ pub struct CertConfigV2 {
     pub usage_client_auth: bool,
     /// Whether the certificate is quoted.
     pub ext_quote: bool,
+    /// Whether embed app info.
+    pub ext_app_info: bool,
     /// The certificate validity start time as seconds since UNIX epoch.
     pub not_before: Option<u64>,
     /// The certificate validity end time as seconds since UNIX epoch.
@@ -153,6 +161,7 @@ impl From<CertConfig> for CertConfigV2 {
             usage_server_auth: config.usage_server_auth,
             usage_client_auth: config.usage_client_auth,
             ext_quote: config.ext_quote,
+            ext_app_info: false,
             not_before: None,
             not_after: None,
         }
@@ -330,6 +339,7 @@ pub struct CertRequest<'a, Key> {
     alt_names: Option<&'a [String]>,
     ca_level: Option<u8>,
     app_id: Option<&'a [u8]>,
+    app_info: Option<&'a AppInfo>,
     special_usage: Option<&'a str>,
     attestation: Option<&'a VersionedAttestation>,
     not_before: Option<SystemTime>,
@@ -369,6 +379,11 @@ impl<Key> CertRequest<'_, Key> {
         }
         if let Some(app_id) = self.app_id {
             add_ext(&mut params, PHALA_RATLS_APP_ID, app_id);
+        }
+        if let Some(app_info) = self.app_info {
+            let app_info_bytes =
+                rmp_serde::to_vec(&app_info).context("Failed to serialize app info")?;
+            add_ext(&mut params, PHALA_RATLS_APP_INFO, app_info_bytes);
         }
         if let Some(usage) = self.special_usage {
             add_ext(&mut params, PHALA_RATLS_CERT_USAGE, usage);
@@ -673,6 +688,7 @@ mod tests {
                 usage_server_auth: true,
                 usage_client_auth: false,
                 ext_quote: false,
+                ext_app_info: false,
                 not_before: None,
                 not_after: None,
             },
@@ -706,6 +722,7 @@ mod tests {
                 usage_server_auth: true,
                 usage_client_auth: false,
                 ext_quote: true,
+                ext_app_info: false,
                 not_before: None,
                 not_after: None,
             },

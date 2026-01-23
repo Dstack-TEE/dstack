@@ -291,12 +291,19 @@ pub async fn handle_prpc_impl<S, Call: RpcCall<S>>(
         data,
     } = args;
     let method = method.trim_start_matches(method_trim_prefix.unwrap_or_default());
-    let remote_app_id = request
+    let info = request
         .certificate
         .as_ref()
-        .map(|cert| RocketCertificate(cert).get_app_id())
-        .transpose()?
-        .flatten();
+        .map(|cert| -> Result<_> {
+            let app_id = RocketCertificate(cert).get_app_id()?;
+            let app_info = RocketCertificate(cert).get_app_info()?;
+            Ok((app_id, app_info))
+        })
+        .transpose()?;
+    let (remote_app_id, remote_app_info) = match info {
+        Some((app_id, app_info)) => (app_id, app_info),
+        None => (None, None),
+    };
     let attestation = request
         .certificate
         .as_ref()
@@ -337,6 +344,7 @@ pub async fn handle_prpc_impl<S, Call: RpcCall<S>>(
         attestation,
         remote_endpoint: request.remote_addr.cloned().map(RemoteEndpoint::from),
         remote_app_id,
+        remote_app_info,
     };
     let call = Call::construct(context).context("failed to construct call")?;
     let (status_code, output) = call

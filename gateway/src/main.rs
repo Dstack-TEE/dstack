@@ -77,6 +77,7 @@ async fn maybe_gen_certs(config: &Config, tls_config: &TlsConfig) -> Result<()> 
                 usage_ra_tls: true,
                 usage_server_auth: true,
                 usage_client_auth: false,
+                with_app_info: false,
                 not_before: None,
                 not_after: None,
             })

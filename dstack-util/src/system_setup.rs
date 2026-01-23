@@ -391,7 +391,8 @@ impl<'a> GatewayContext<'a> {
             subject_alt_names: vec![],
             usage_server_auth: false,
             usage_client_auth: true,
-            ext_quote: true,
+            ext_quote: false,
+            ext_app_info: true,
             not_before: None,
             not_after: None,
         };
