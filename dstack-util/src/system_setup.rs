@@ -30,6 +30,7 @@ use luks2::{
 use ra_rpc::client::{CertInfo, RaClient, RaClientConfig};
 use ra_tls::cert::{generate_ra_cert, CertConfigV2};
 use rand::Rng as _;
+use safe_write::safe_write;
 use scopeguard::defer;
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
@@ -327,6 +328,40 @@ impl HostShared {
     }
 }
 
+const GATEWAY_CERT_CACHE_PATH: &str = "/run/dstack/gateway-client-cert-cache.json";
+/// Certificate validity period in seconds (10 days)
+const CERT_VALIDITY_SECS: u64 = 10 * 24 * 3600;
+
+#[derive(Serialize, Deserialize)]
+struct CachedClientCert {
+    cert: String,
+    key: String,
+    /// Certificate expiry time as seconds since UNIX epoch
+    not_after: u64,
+}
+
+impl CachedClientCert {
+    fn load() -> Option<Self> {
+        let content = fs::read_to_string(GATEWAY_CERT_CACHE_PATH).ok()?;
+        serde_json::from_str(&content).ok()
+    }
+
+    fn save(&self) -> Result<()> {
+        let content = serde_json::to_string(self).context("Failed to serialize cert cache")?;
+        safe_write(GATEWAY_CERT_CACHE_PATH, &content).context("Failed to write cert cache")?;
+        Ok(())
+    }
+
+    fn is_valid(&self) -> bool {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        // Valid if at least 10 minutes remaining
+        now + 600 < self.not_after
+    }
+}
+
 struct GatewayContext<'a> {
     shared: &'a HostShared,
     keys: &'a AppKeys,
@@ -371,6 +406,58 @@ impl<'a> GatewayContext<'a> {
             .context("Failed to register CVM")
     }
 
+    async fn get_or_request_client_cert(&self) -> Result<(String, String)> {
+        if let Some(cached) = CachedClientCert::load().filter(|c| c.is_valid()) {
+            info!("Using cached client certificate");
+            return Ok((cached.cert, cached.key));
+        }
+
+        info!("Requesting new client certificate");
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let not_after = now + CERT_VALIDITY_SECS;
+        let config = CertConfigV2 {
+            org_name: None,
+            subject: "dstack-guest-agent".to_string(),
+            subject_alt_names: vec![],
+            usage_server_auth: false,
+            usage_client_auth: true,
+            ext_quote: false,
+            ext_app_info: true,
+            not_before: None,
+            not_after: Some(not_after),
+        };
+        let cert_client = CertRequestClient::create(
+            self.keys,
+            self.shared.sys_config.pccs_url.as_deref(),
+            self.shared.sys_config.vm_config.clone(),
+        )
+        .await
+        .context("Failed to create cert client")?;
+        let key =
+            KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).context("Failed to generate key")?;
+        let certs = cert_client
+            .request_cert(&key, config, None)
+            .await
+            .context("Failed to request cert")?;
+        let cert = certs.join("\n");
+        let key = key.serialize_pem();
+
+        // Cache the certificate for future use
+        let cached = CachedClientCert {
+            cert: cert.clone(),
+            key: key.clone(),
+            not_after,
+        };
+        if let Err(e) = cached.save() {
+            warn!("Failed to cache client certificate: {e:?}");
+        }
+
+        Ok((cert, key))
+    }
+
     async fn setup(&self) -> Result<()> {
         if !self.shared.app_compose.gateway_enabled() {
             info!("dstack-gateway is not enabled");
@@ -385,32 +472,7 @@ impl<'a> GatewayContext<'a> {
         let sk = cmd!(wg genkey)?;
         let pk = cmd!(echo $sk | wg pubkey).or(Err(anyhow!("Failed to generate public key")))?;
 
-        let config = CertConfigV2 {
-            org_name: None,
-            subject: "dstack-guest-agent".to_string(),
-            subject_alt_names: vec![],
-            usage_server_auth: false,
-            usage_client_auth: true,
-            ext_quote: false,
-            ext_app_info: true,
-            not_before: None,
-            not_after: None,
-        };
-        let cert_client = CertRequestClient::create(
-            self.keys,
-            self.shared.sys_config.pccs_url.as_deref(),
-            self.shared.sys_config.vm_config.clone(),
-        )
-        .await
-        .context("Failed to create cert client")?;
-        let client_key =
-            KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).context("Failed to generate key")?;
-        let client_certs = cert_client
-            .request_cert(&client_key, config, None)
-            .await
-            .context("Failed to request cert")?;
-        let client_cert = client_certs.join("\n");
-        let client_key = client_key.serialize_pem();
+        let (client_cert, client_key) = self.get_or_request_client_cert().await?;
 
         if self.shared.sys_config.gateway_urls.is_empty() {
             bail!("Missing gateway urls");

@@ -2496,6 +2496,7 @@ dependencies = [
  "ra-tls",
  "rand 0.8.5",
  "regex",
+ "safe-write",
  "schnorrkel",
  "scopeguard",
  "serde",
