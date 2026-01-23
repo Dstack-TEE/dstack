@@ -56,7 +56,7 @@ async fn resolve_app_address(prefix: &str, sni: &str, compat: bool) -> Result<Ap
             };
             return AppAddress::parse(data).context("failed to parse app address");
         }
-        anyhow::bail!("failed to resolve app address");
+        anyhow::bail!("failed to resolve legacy app address");
     } else {
         let lookup = resolver
             .txt_lookup(txt_domain)

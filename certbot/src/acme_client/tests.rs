@@ -10,6 +10,7 @@ async fn new_acme_client() -> Result<AcmeClient> {
     let dns01_client = Dns01Client::new_cloudflare(
         std::env::var("CLOUDFLARE_ZONE_ID").expect("CLOUDFLARE_ZONE_ID not set"),
         std::env::var("CLOUDFLARE_API_TOKEN").expect("CLOUDFLARE_API_TOKEN not set"),
+        std::env::var("CLOUDFLARE_API_URL").ok(),
     );
     let credentials =
         std::env::var("LETSENCRYPT_CREDENTIAL").expect("LETSENCRYPT_CREDENTIAL not set");

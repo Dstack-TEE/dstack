@@ -72,9 +72,12 @@ pub enum Dns01Client {
 }
 
 impl Dns01Client {
-    pub async fn new_cloudflare(api_token: String, base_domain: String) -> Result<Self> {
-        Ok(Self::Cloudflare(
-            CloudflareClient::new(api_token, base_domain).await?,
-        ))
+    pub async fn new_cloudflare(
+        base_domain: String,
+        api_token: String,
+        api_url: Option<String>,
+    ) -> Result<Self> {
+        let client = CloudflareClient::new(base_domain, api_token, api_url).await?;
+        Ok(Self::Cloudflare(client))
     }
 }

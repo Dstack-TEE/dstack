@@ -14,12 +14,18 @@ use crate::dns01_client::Record;
 
 use super::Dns01Api;
 
-const CLOUDFLARE_API_URL: &str = "https://api.cloudflare.com/client/v4";
+const DEFAULT_CLOUDFLARE_API_URL: &str = "https://api.cloudflare.com/client/v4";
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CloudflareClient {
     zone_id: String,
     api_token: String,
+    #[serde(default = "default_api_url")]
+    api_url: String,
+}
+
+fn default_api_url() -> String {
+    DEFAULT_CLOUDFLARE_API_URL.to_string()
 }
 
 #[derive(Deserialize)]
@@ -59,12 +65,21 @@ struct ZonesResultInfo {
 }
 
 impl CloudflareClient {
-    pub async fn new(api_token: String, base_domain: String) -> Result<Self> {
-        let zone_id = Self::resolve_zone_id(&api_token, &base_domain).await?;
-        Ok(Self { api_token, zone_id })
+    pub async fn new(
+        base_domain: String,
+        api_token: String,
+        api_url: Option<String>,
+    ) -> Result<Self> {
+        let api_url = api_url.unwrap_or_else(|| DEFAULT_CLOUDFLARE_API_URL.to_string());
+        let zone_id = Self::resolve_zone_id(&api_token, &base_domain, &api_url).await?;
+        Ok(Self {
+            zone_id,
+            api_token,
+            api_url,
+        })
     }
 
-    async fn resolve_zone_id(api_token: &str, base_domain: &str) -> Result<String> {
+    async fn resolve_zone_id(api_token: &str, base_domain: &str, api_url: &str) -> Result<String> {
         let base = base_domain
             .trim()
             .trim_start_matches("*.")
@@ -72,7 +87,7 @@ impl CloudflareClient {
             .to_lowercase();
 
         let client = Client::new();
-        let url = format!("{CLOUDFLARE_API_URL}/zones");
+        let url = format!("{api_url}/zones");
 
         let per_page = 50u32;
         let mut page = 1u32;
@@ -150,8 +165,7 @@ impl CloudflareClient {
 
     async fn add_record(&self, record: &impl Serialize) -> Result<Response> {
         let client = Client::new();
-        let url = format!("{CLOUDFLARE_API_URL}/zones/{}/dns_records", self.zone_id);
-
+        let url = format!("{}/zones/{}/dns_records", self.api_url, self.zone_id);
         let response = client
             .post(&url)
             .header("Authorization", format!("Bearer {}", self.api_token))
@@ -176,8 +190,8 @@ impl CloudflareClient {
     async fn remove_record_inner(&self, record_id: &str) -> Result<()> {
         let client = Client::new();
         let url = format!(
-            "{CLOUDFLARE_API_URL}/zones/{zone_id}/dns_records/{record_id}",
-            zone_id = self.zone_id
+            "{}/zones/{}/dns_records/{}",
+            self.api_url, self.zone_id, record_id
         );
 
         debug!(url = %url, "cloudflare remove_record request");
@@ -201,7 +215,7 @@ impl CloudflareClient {
 
     async fn get_records_inner(&self, domain: &str) -> Result<Vec<Record>> {
         let client = Client::new();
-        let url = format!("{CLOUDFLARE_API_URL}/zones/{}/dns_records", self.zone_id);
+        let url = format!("{}/zones/{}/dns_records", self.api_url, self.zone_id);
 
         let per_page = 100u32;
         let mut records = Vec::new();
@@ -338,8 +352,9 @@ mod tests {
 
     async fn create_client() -> CloudflareClient {
         CloudflareClient::new(
-            std::env::var("CLOUDFLARE_API_TOKEN").expect("CLOUDFLARE_API_TOKEN not set"),
             std::env::var("TEST_DOMAIN").expect("TEST_DOMAIN not set"),
+            std::env::var("CLOUDFLARE_API_TOKEN").expect("CLOUDFLARE_API_TOKEN not set"),
+            std::env::var("CLOUDFLARE_API_URL").ok(),
         )
         .await
         .unwrap()

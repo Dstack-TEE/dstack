@@ -1,0 +1,53 @@
+# Gateway Node 1 configuration for E2E testing
+log_level = "debug"
+address = "0.0.0.0"
+port = 9012
+
+[tls]
+key = "/var/lib/gateway/certs/gateway-rpc.key"
+certs = "/var/lib/gateway/certs/gateway-rpc.cert"
+
+[tls.mutual]
+ca_certs = "/var/lib/gateway/certs/gateway-ca.cert"
+mandatory = false
+
+[core]
+kms_url = ""
+rpc_domain = "gateway-1"
+
+[core.admin]
+enabled = true
+port = 9016
+address = "0.0.0.0"
+
+[core.debug]
+insecure_enable_debug_rpc = true
+insecure_skip_attestation = false
+port = 9015
+address = "0.0.0.0"
+
+[core.sync]
+enabled = true
+interval = "5s"
+timeout = "10s"
+my_url = "https://gateway-1:9012"
+bootnode = "https://gateway-2:9012"
+node_id = 1
+data_dir = "/var/lib/gateway/wavekv"
+
+[core.wg]
+private_key = "SEcoI37oGWynhukxXo5Mi8/8zZBU6abg6T1TOJRMj1Y="
+public_key = "xc+7qkdeNFfl4g4xirGGGXHMc0cABuE5IHaLeCASVWM="
+listen_port = 9013
+ip = "10.0.41.1/24"
+reserved_net = ["10.0.41.1/31"]
+client_ip_range = "10.0.41.1/24"
+config_path = "/var/lib/gateway/wg.conf"
+interface = "wg-test1"
+endpoint = "gateway-1:9013"
+
+[core.proxy]
+listen_addr = "0.0.0.0"
+listen_port = 9014
+tappd_port = 8090
+external_port = 9014

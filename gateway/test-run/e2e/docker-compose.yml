@@ -1,0 +1,177 @@
+# SPDX-FileCopyrightText: 2024-2025 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# E2E test environment for dstack-gateway certbot functionality
+# Uses mock services: Pebble (ACME) + mock-cf-dns-api (Cloudflare DNS)
+# Uses real TDX endpoint for attestation
+
+networks:
+  certbot-test:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
+
+volumes:
+  pebble-certs:
+
+services:
+  # ==================== Mock Services ====================
+
+  # Mock Cloudflare DNS API
+  mock-cf-dns-api:
+    image: kvin/mock-cf-dns-api:latest
+    container_name: mock-cf-dns-api
+    networks:
+      certbot-test:
+        ipv4_address: 172.30.0.10
+    ports:
+      - "18080:8080"
+    environment:
+      - PORT=8080
+      - DEBUG=true
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # Pebble - Let's Encrypt test server (custom build with HTTP support)
+  pebble:
+    image: kvin/pebble:latest
+    container_name: pebble
+    command: ["-http", "-dnsserver", "172.30.0.10:53"]
+    networks:
+      certbot-test:
+        ipv4_address: 172.30.0.11
+    ports:
+      - "14000:14000"  # ACME directory
+      - "15000:15000"  # Management interface
+    environment:
+      - PEBBLE_VA_NOSLEEP=1
+      - PEBBLE_VA_ALWAYS_VALID=1  # Skip actual DNS validation for testing
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:14000/dir"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # ==================== Gateway Cluster ====================
+
+  # Gateway Node 1 - Will be the first to request certificate
+  gateway-1:
+    image: ${GATEWAY_IMAGE:-dstack-gateway:test}
+    container_name: gateway-1
+    networks:
+      certbot-test:
+        ipv4_address: 172.30.0.21
+    ports:
+      - "19012:9012"  # RPC
+      - "19014:9014"  # Proxy
+      - "19015:9015"  # Debug
+      - "19016:9016"  # Admin
+    volumes:
+      - ./configs/gateway-1.toml:/etc/gateway/gateway.toml:ro
+    tmpfs:
+      - /var/lib/gateway
+    environment:
+      - RUST_LOG=info,dstack_gateway=debug,certbot=debug
+      - DSTACK_AGENT_ADDRESS=https://712eab2f507b963e11144ae67218177e93ac2a24-3000.tdxlab.dstack.org:12004/
+    depends_on:
+      mock-cf-dns-api:
+        condition: service_healthy
+      pebble:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9015/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 30s
+    cap_add:
+      - NET_ADMIN
+    extra_hosts:
+      # Pebble returns localhost in directory URLs, so we need to resolve localhost to pebble's IP
+      - "localhost:172.30.0.11"
+
+  # Gateway Node 2 - Will sync certificate from Node 1
+  gateway-2:
+    image: ${GATEWAY_IMAGE:-dstack-gateway:test}
+    container_name: gateway-2
+    networks:
+      certbot-test:
+        ipv4_address: 172.30.0.22
+    ports:
+      - "19022:9012"  # RPC
+      - "19024:9014"  # Proxy
+      - "19025:9015"  # Debug
+      - "19026:9016"  # Admin
+    volumes:
+      - ./configs/gateway-2.toml:/etc/gateway/gateway.toml:ro
+    tmpfs:
+      - /var/lib/gateway
+    environment:
+      - RUST_LOG=info,dstack_gateway=debug,certbot=debug
+      - DSTACK_AGENT_ADDRESS=https://712eab2f507b963e11144ae67218177e93ac2a24-3000.tdxlab.dstack.org:12004/
+    depends_on:
+      gateway-1:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9015/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 30s
+    cap_add:
+      - NET_ADMIN
+
+  # Gateway Node 3 - Will sync certificate from cluster
+  gateway-3:
+    image: ${GATEWAY_IMAGE:-dstack-gateway:test}
+    container_name: gateway-3
+    networks:
+      certbot-test:
+        ipv4_address: 172.30.0.23
+    ports:
+      - "19032:9012"  # RPC
+      - "19034:9014"  # Proxy
+      - "19035:9015"  # Debug
+      - "19036:9016"  # Admin
+    volumes:
+      - ./configs/gateway-3.toml:/etc/gateway/gateway.toml:ro
+    tmpfs:
+      - /var/lib/gateway
+    environment:
+      - RUST_LOG=info,dstack_gateway=debug,certbot=debug
+      - DSTACK_AGENT_ADDRESS=https://712eab2f507b963e11144ae67218177e93ac2a24-3000.tdxlab.dstack.org:12004/
+    depends_on:
+      gateway-2:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9015/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 30s
+    cap_add:
+      - NET_ADMIN
+
+  # ==================== Test Runner ====================
+
+  test-runner:
+    image: alpine:latest
+    container_name: test-runner
+    networks:
+      certbot-test:
+        ipv4_address: 172.30.0.100
+    volumes:
+      - ./test.sh:/test.sh:ro
+    entrypoint: ["/bin/sh", "-c", "apk add --no-cache curl openssl jq && /bin/sh /test.sh"]
+    depends_on:
+      gateway-1:
+        condition: service_healthy
+      gateway-2:
+        condition: service_healthy
+      gateway-3:
+        condition: service_healthy

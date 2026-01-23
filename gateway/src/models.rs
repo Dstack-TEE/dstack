@@ -60,7 +60,6 @@ pub struct InstanceInfo {
     pub ip: Ipv4Addr,
     pub public_key: String,
     pub reg_time: SystemTime,
-    pub last_seen: SystemTime,
     #[serde(skip)]
     pub connections: Arc<AtomicU64>,
 }
