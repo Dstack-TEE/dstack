@@ -719,8 +719,15 @@ fn proto_to_zt_domain_config(
             .context("specified dns credential not found")?;
     }
 
+    // Strip wildcard prefix if user entered it
+    let domain = proto
+        .domain
+        .strip_prefix("*.")
+        .unwrap_or(&proto.domain)
+        .to_string();
+
     Ok(ZtDomainConfig {
-        domain: proto.domain.clone(),
+        domain,
         dns_cred_id,
         port: proto.port.try_into().context("port out of range")?,
         node: proto.node,
