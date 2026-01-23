@@ -416,7 +416,8 @@ impl<'a> GatewayContext<'a> {
         }
         // Read config and make API call
         let response = 'out: {
-            for url in self.shared.sys_config.gateway_urls.iter() {
+            let mut error = anyhow!("unknown error");
+            for (i, url) in self.shared.sys_config.gateway_urls.iter().enumerate() {
                 let response = self
                     .register_cvm(url, client_key.clone(), client_cert.clone(), pk.clone())
                     .await;
@@ -426,10 +427,13 @@ impl<'a> GatewayContext<'a> {
                     }
                     Err(err) => {
                         warn!("Failed to register CVM: {err:?}, retrying with next dstack-gateway");
+                        if i == 0 {
+                            error = err;
+                        }
                     }
                 }
             }
-            bail!("Failed to register CVM, all dstack-gateway urls are down");
+            return Err(error).context("Failed to register CVM, all dstack-gateway urls are down");
         };
         let wg_info = response.wg.context("Missing wg info")?;
 
@@ -699,7 +703,8 @@ impl<'a> Stage0<'a> {
             bail!("No KMS URLs are set");
         }
         let keys = 'out: {
-            for kms_url in self.shared.sys_config.kms_urls.iter() {
+            let mut error = anyhow!("unknown error");
+            for (i, kms_url) in self.shared.sys_config.kms_urls.iter().enumerate() {
                 let kms_url = format!("{kms_url}/prpc");
                 let response = self.request_app_keys_from_kms_url(kms_url.clone()).await;
                 match response {
@@ -708,10 +713,14 @@ impl<'a> Stage0<'a> {
                     }
                     Err(err) => {
                         warn!("Failed to get app keys from KMS {kms_url}: {err:?}");
+                        // Record the first error
+                        if i == 0 {
+                            error = err;
+                        }
                     }
                 }
             }
-            bail!("Failed to get app keys from KMS");
+            return Err(error).context("Failed to get app keys from KMS");
         };
         Ok(keys)
     }
