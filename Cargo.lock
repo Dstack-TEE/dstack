@@ -2482,6 +2482,7 @@ dependencies = [
  "dstack-gateway-rpc",
  "dstack-kms-rpc",
  "dstack-types",
+ "errify",
  "ez-hash",
  "fs-err",
  "getrandom 0.3.4",

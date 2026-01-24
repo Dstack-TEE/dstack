@@ -336,10 +336,12 @@ const WG_CONFIG_PATH: &str = "/etc/wireguard/dstack-wg0.conf";
 /// Certificate validity period in seconds (10 days)
 const CERT_VALIDITY_SECS: u64 = 10 * 24 * 3600;
 
-#[derive(Serialize, Deserialize)]
-struct GatewayCache {
+#[derive(Serialize, Deserialize, Clone)]
+struct GatewayKeyStore {
     /// Client certificate chain
     client_cert: String,
+    /// Client certificate chain with quote
+    client_cert_with_quote: String,
     /// Client private key
     client_key: String,
     /// Certificate expiry time as seconds since UNIX epoch
@@ -350,7 +352,7 @@ struct GatewayCache {
     wg_pk: String,
 }
 
-impl GatewayCache {
+impl GatewayKeyStore {
     fn load() -> Option<Self> {
         let content = fs::read_to_string(GATEWAY_CACHE_PATH).ok()?;
         serde_json::from_str(&content).ok()
@@ -382,13 +384,13 @@ impl<'a> GatewayContext<'a> {
         Self { shared, keys }
     }
 
-    async fn register_cvm(
+    #[errify::errify("Failed to create gateway client for {gateway_url}")]
+    fn create_gateway_client(
         &self,
         gateway_url: &str,
-        client_key: String,
-        client_cert: String,
-        wg_pk: String,
-    ) -> Result<RegisterCvmResponse> {
+        client_key: &str,
+        client_cert: &str,
+    ) -> Result<GatewayClient<RaClient>> {
         let url = format!("{}/prpc", gateway_url);
         let ca_cert = self.keys.ca_cert.clone();
         let cert_validator = AppIdValidator {
@@ -397,8 +399,8 @@ impl<'a> GatewayContext<'a> {
         let client = RaClientConfig::builder()
             .remote_uri(url)
             .maybe_pccs_url(self.shared.sys_config.pccs_url.clone())
-            .tls_client_cert(client_cert)
-            .tls_client_key(client_key)
+            .tls_client_cert(client_cert.to_string())
+            .tls_client_key(client_key.to_string())
             .tls_ca_cert(ca_cert)
             .tls_built_in_root_certs(false)
             .tls_no_check(self.keys.gateway_app_id == "any")
@@ -407,54 +409,75 @@ impl<'a> GatewayContext<'a> {
             .build()
             .into_client()
             .context("Failed to create RA client")?;
-        let client = GatewayClient::new(client);
+        Ok(GatewayClient::new(client))
+    }
+
+    async fn register_cvm(
+        &self,
+        gateway_url: &str,
+        key_store: &GatewayKeyStore,
+    ) -> Result<RegisterCvmResponse> {
+        let client =
+            self.create_gateway_client(gateway_url, &key_store.client_key, &key_store.client_cert)?;
+        let result = client
+            .register_cvm(RegisterCvmRequest {
+                client_public_key: key_store.wg_pk.clone(),
+            })
+            .await
+            .context("Failed to register CVM");
+        let Err(err) = &result else {
+            return result;
+        };
+        // If the error contains "no attestation provided", it's likely an older gateway version
+        let is_legacy_gateway = format!("{err:#}").contains("no attestation provided");
+        if !is_legacy_gateway {
+            return result;
+        }
+        info!("Seems like the gateway is an older version, retrying with quote cert");
+        let client = self.create_gateway_client(
+            gateway_url,
+            &key_store.client_key,
+            &key_store.client_cert_with_quote,
+        )?;
         client
             .register_cvm(RegisterCvmRequest {
-                client_public_key: wg_pk,
+                client_public_key: key_store.wg_pk.clone(),
             })
             .await
             .context("Failed to register CVM")
     }
 
-    fn get_or_generate_wg_keys(cache: Option<&GatewayCache>) -> Result<(String, String)> {
-        if let Some(cache) = cache {
-            info!("Using cached WireGuard keys");
-            return Ok((cache.wg_sk.clone(), cache.wg_pk.clone()));
+    async fn get_or_generate_key_store(&self) -> Result<GatewayKeyStore> {
+        // Try to load existing cache
+        let cache = GatewayKeyStore::load();
+
+        // If cache is fully valid, return it
+        if let Some(ref cache) = cache {
+            if cache.is_cert_valid() {
+                info!("Using cached gateway key store");
+                return Ok(cache.clone());
+            }
         }
 
-        info!("Generating new WireGuard keys");
-        let sk = cmd!(wg genkey)?;
-        let pk = cmd!(echo $sk | wg pubkey).or(Err(anyhow!("Failed to generate public key")))?;
-        Ok((sk, pk))
-    }
+        // Reuse WireGuard keys from cache if available, otherwise generate new ones
+        let (wg_sk, wg_pk) = if let Some(ref cache) = cache {
+            info!("Reusing cached WireGuard keys");
+            (cache.wg_sk.clone(), cache.wg_pk.clone())
+        } else {
+            info!("Generating new WireGuard keys");
+            let sk = cmd!(wg genkey)?;
+            let pk =
+                cmd!(echo $sk | wg pubkey).or(Err(anyhow!("Failed to generate public key")))?;
+            (sk, pk)
+        };
 
-    async fn get_or_request_client_cert(
-        &self,
-        cache: Option<&GatewayCache>,
-    ) -> Result<(String, String)> {
-        if let Some(cache) = cache.filter(|c| c.is_cert_valid()) {
-            info!("Using cached client certificate");
-            return Ok((cache.client_cert.clone(), cache.client_key.clone()));
-        }
-
-        info!("Requesting new client certificate");
+        // Request new client certificates
+        info!("Requesting new client certificates");
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
-        let not_after = now + CERT_VALIDITY_SECS;
-        let config = CertConfigV2 {
-            org_name: None,
-            subject: "dstack-guest-agent".to_string(),
-            subject_alt_names: vec![],
-            usage_server_auth: false,
-            usage_client_auth: true,
-            // TODO: Disable this once pre-0.5.6 gateways are deprecated
-            ext_quote: true,
-            ext_app_info: true,
-            not_before: None,
-            not_after: Some(not_after),
-        };
+        let cert_not_after = now + CERT_VALIDITY_SECS;
         let cert_client = CertRequestClient::create(
             self.keys,
             self.shared.sys_config.pccs_url.as_deref(),
@@ -464,14 +487,53 @@ impl<'a> GatewayContext<'a> {
         .context("Failed to create cert client")?;
         let key =
             KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).context("Failed to generate key")?;
+
+        // Request certificate without quote (for new gateways)
+        let config = CertConfigV2 {
+            org_name: None,
+            subject: "dstack-guest-agent".to_string(),
+            subject_alt_names: vec![],
+            usage_server_auth: false,
+            usage_client_auth: true,
+            ext_quote: false,
+            ext_app_info: true,
+            not_before: None,
+            not_after: Some(cert_not_after),
+        };
         let certs = cert_client
             .request_cert(&key, config, None)
             .await
             .context("Failed to request cert")?;
-        let cert = certs.join("\n");
-        let key = key.serialize_pem();
+        let client_cert = certs.join("\n");
+        let client_key = key.serialize_pem();
 
-        Ok((cert, key))
+        // Request certificate with quote (for pre-0.5.6 gateways)
+        // TODO: Remove this once pre-0.5.6 gateways are deprecated
+        let config_with_quote = CertConfigV2 {
+            org_name: None,
+            subject: "dstack-guest-agent".to_string(),
+            subject_alt_names: vec![],
+            usage_server_auth: false,
+            usage_client_auth: true,
+            ext_quote: true,
+            ext_app_info: true,
+            not_before: None,
+            not_after: Some(cert_not_after),
+        };
+        let certs_with_quote = cert_client
+            .request_cert(&key, config_with_quote, None)
+            .await
+            .context("Failed to request cert with quote")?;
+        let client_cert_with_quote = certs_with_quote.join("\n");
+
+        Ok(GatewayKeyStore {
+            client_cert,
+            client_cert_with_quote,
+            client_key,
+            cert_not_after,
+            wg_sk,
+            wg_pk,
+        })
     }
 
     async fn setup(&self, force: bool) -> Result<()> {
@@ -485,27 +547,8 @@ impl<'a> GatewayContext<'a> {
 
         info!("Setting up dstack-gateway");
 
-        // Load cached data if available
-        let cache = GatewayCache::load();
-
-        // Get or generate WireGuard keys
-        let (wg_sk, wg_pk) = Self::get_or_generate_wg_keys(cache.as_ref())?;
-
-        // Get or request client certificate
-        let (client_cert, client_key) = self.get_or_request_client_cert(cache.as_ref()).await?;
-
-        // Calculate cert expiry for cache
-        let cert_not_after = cache
-            .as_ref()
-            .filter(|c| c.is_cert_valid())
-            .map(|c| c.cert_not_after)
-            .unwrap_or_else(|| {
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_secs())
-                    .unwrap_or(0);
-                now + CERT_VALIDITY_SECS
-            });
+        // Get or generate key store (includes WireGuard keys and client certificate)
+        let key_store = self.get_or_generate_key_store().await?;
 
         if self.shared.sys_config.gateway_urls.is_empty() {
             bail!("Missing gateway urls");
@@ -514,9 +557,7 @@ impl<'a> GatewayContext<'a> {
         let response = 'out: {
             let mut error = anyhow!("unknown error");
             for (i, url) in self.shared.sys_config.gateway_urls.iter().enumerate() {
-                let response = self
-                    .register_cvm(url, client_key.clone(), client_cert.clone(), wg_pk.clone())
-                    .await;
+                let response = self.register_cvm(url, &key_store).await;
                 match response {
                     Ok(response) => {
                         break 'out response;
@@ -542,9 +583,10 @@ impl<'a> GatewayContext<'a> {
         let wg_listen_port = "9182";
         let mut new_config = format!(
             "[Interface]\n\
-            PrivateKey = {wg_sk}\n\
+            PrivateKey = {}\n\
             ListenPort = {wg_listen_port}\n\
-            Address = {client_ip}/32\n\n"
+            Address = {client_ip}/32\n\n",
+            key_store.wg_sk
         );
         for WireGuardPeer { pk, ip, endpoint } in &wg_info.servers {
             let ip = ip.split('/').next().unwrap_or_default();
@@ -558,14 +600,7 @@ impl<'a> GatewayContext<'a> {
         }
 
         // Save cache
-        let new_cache = GatewayCache {
-            client_cert,
-            client_key,
-            cert_not_after,
-            wg_sk,
-            wg_pk,
-        };
-        if let Err(e) = new_cache.save() {
+        if let Err(e) = key_store.save() {
             warn!("Failed to save gateway cache: {e:?}");
         }
 

@@ -255,6 +255,7 @@ pub struct ImageInfo {
 
 pub mod mr_config;
 pub mod shared_filenames;
+pub mod version;
 
 /// Get the address of the dstack agent
 pub fn dstack_agent_address() -> String {
