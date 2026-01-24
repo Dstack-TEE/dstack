@@ -74,7 +74,7 @@ async fn maybe_gen_certs(config: &Config, tls_config: &TlsConfig) -> Result<()> 
             .get_tls_key(GetTlsKeyArgs {
                 subject: "dstack-gateway".to_string(),
                 alt_names: vec![config.rpc_domain.clone()],
-                usage_ra_tls: true,
+                usage_ra_tls: false,
                 usage_server_auth: true,
                 usage_client_auth: false,
                 with_app_info: false,
