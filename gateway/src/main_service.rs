@@ -824,6 +824,7 @@ impl GatewayRpc for RpcHandler {
             base_domain: state.config.proxy.base_domain.clone(),
             external_port: state.config.proxy.external_port as u32,
             app_address_ns_prefix: state.config.proxy.app_address_ns_prefix.clone(),
+            version: env!("CARGO_PKG_VERSION").to_string(),
         })
     }
 }

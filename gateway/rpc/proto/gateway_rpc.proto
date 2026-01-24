@@ -158,6 +158,8 @@ message InfoResponse {
   uint32 external_port = 2;
   // The app address namespace prefix
   string app_address_ns_prefix = 3;
+  // The version of the gateway
+  string version = 4;
 }
 
 service Gateway {
