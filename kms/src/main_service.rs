@@ -215,7 +215,7 @@ impl RpcHandler {
 
     fn derive_app_ca(&self, app_id: &[u8]) -> Result<CaCert> {
         let context_data = vec![app_id, b"app-ca"];
-        let app_key = kdf::derive_ecdsa_key_pair(&self.state.root_ca.key, &context_data)
+        let app_key = kdf::derive_p256_key_pair(&self.state.root_ca.key, &context_data)
             .context("Failed to derive app disk key")?;
         let req = CertRequest::builder()
             .key(&app_key)
