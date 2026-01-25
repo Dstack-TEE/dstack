@@ -162,6 +162,11 @@ fn create_shared_disk(disk_path: impl AsRef<Path>, shared_dir: impl AsRef<Path>)
 impl VmInfo {
     pub fn to_pb(&self, gw: &GatewayConfig, brief: bool) -> pb::VmInfo {
         let workdir = VmWorkDir::new(&self.workdir);
+        let vm_config = workdir.manifest();
+        let custom_gateway_urls = vm_config
+            .as_ref()
+            .map(|c| c.gateway_urls.clone())
+            .unwrap_or_default();
         pb::VmInfo {
             id: self.manifest.id.clone(),
             name: self.manifest.name.clone(),
@@ -174,14 +179,9 @@ impl VmInfo {
             configuration: if brief {
                 None
             } else {
-                let vm_config = workdir.manifest();
                 let kms_urls = vm_config
                     .as_ref()
                     .map(|c| c.kms_urls.clone())
-                    .unwrap_or_default();
-                let gateway_urls = vm_config
-                    .as_ref()
-                    .map(|c| c.gateway_urls.clone())
                     .unwrap_or_default();
                 let no_tee = vm_config
                     .as_ref()
@@ -227,7 +227,7 @@ impl VmInfo {
                             .collect(),
                     }),
                     kms_urls,
-                    gateway_urls,
+                    gateway_urls: custom_gateway_urls.clone(),
                     stopped,
                     no_tee,
                 })
@@ -237,6 +237,19 @@ impl VmInfo {
                 .then_some(self.instance_id.as_ref())
                 .flatten()
                 .map(|id| {
+                    // Use custom gateway URL if available, otherwise fall back to global config
+                    if let Some(custom_gw_url) = custom_gateway_urls.first() {
+                        if let Ok(url) = url::Url::parse(custom_gw_url) {
+                            let host = url.host_str().unwrap_or(&gw.base_domain);
+                            let port = url.port().unwrap_or(443);
+                            if port == 443 {
+                                return format!("https://{id}-{}.{}", gw.agent_port, host);
+                            } else {
+                                return format!("https://{id}-{}.{}:{}", gw.agent_port, host, port);
+                            }
+                        }
+                    }
+                    // Fall back to global gateway config
                     if gw.port == 443 {
                         format!("https://{id}-{}.{}", gw.agent_port, gw.base_domain)
                     } else {

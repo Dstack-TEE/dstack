@@ -163,6 +163,7 @@ tokio = { version = "1.46.1" }
 tokio-vsock = "0.7.0"
 sysinfo = "0.35.2"
 default-net = "0.22.0"
+url = "2.5"
 
 # Cryptography/Security
 aes-gcm = "0.10.3"
