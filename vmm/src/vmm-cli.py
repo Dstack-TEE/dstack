@@ -520,6 +520,11 @@ class VmmCLI:
     def create_app_compose(self, args) -> None:
         """Create a new app compose file"""
         envs = parse_env_file(args.env_file) or {}
+
+        # Validate: --env-file requires --kms
+        if envs and not args.kms:
+            raise Exception("--env-file requires --kms to enable KMS for environment variable decryption")
+
         app_compose = {
             "manifest_version": 2,
             "name": args.name,
@@ -564,6 +569,17 @@ class VmmCLI:
         compose_content = read_utf8(args.compose)
 
         envs = parse_env_file(args.env_file)
+
+        # Validate: --env-file requires --kms-url and kms_enabled in compose
+        if envs:
+            if not args.kms_url:
+                raise Exception("--env-file requires --kms-url to encrypt environment variables")
+            try:
+                compose_json = json.loads(compose_content)
+                if not compose_json.get('kms_enabled', False):
+                    raise Exception("--env-file requires kms_enabled=true in the compose file (use --kms when creating compose)")
+            except json.JSONDecodeError:
+                pass  # Let the server handle invalid JSON
 
         # Read user config file if provided
         user_config = ""
@@ -620,6 +636,10 @@ class VmmCLI:
 
     def update_vm_env(self, vm_id: str, envs: Dict[str, str], kms_urls: Optional[List[str]] = None) -> None:
         """Update environment variables for a VM"""
+        # Validate: requires --kms-url
+        if not kms_urls:
+            raise Exception("--kms-url is required to encrypt environment variables")
+
         envs = envs or {}
         # First get the VM info to retrieve the app_id
         vm_info_response = self.rpc_call('GetInfo', {'id': vm_id})
@@ -709,6 +729,10 @@ class VmmCLI:
         no_tee: Optional[bool] = None,
     ) -> None:
         """Update multiple aspects of a VM in one command"""
+        # Validate: --env-file requires --kms-url
+        if env_file and not kms_urls:
+            raise Exception("--env-file requires --kms-url to encrypt environment variables")
+
         updates = []
 
         # handle resize operations (vcpu, memory, disk, image)
