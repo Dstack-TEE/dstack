@@ -53,6 +53,7 @@ size-parser = { workspace = true, features = ["serde"] }
 fatfs.workspace = true
 fscommon.workspace = true
 or-panic.workspace = true
+url.workspace = true
 
 [dev-dependencies]
 insta.workspace = true
