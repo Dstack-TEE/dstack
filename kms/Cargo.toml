@@ -47,6 +47,18 @@ tempfile.workspace = true
 serde-duration.workspace = true
 dstack-verifier = { workspace = true, default-features = false }
 dstack-mr.workspace = true
+base64.workspace = true
+
+# BLS12-381 for MPC key derivation
+blstrs = "0.7"
+elliptic-curve = "0.13"
+hkdf = "0.12.4"
+bs58 = "0.5"
+rand_core = { version = "0.6", features = ["getrandom"] }
+
+# NEAR integration
+near-api = "0.8"
+near-crypto = "0.26"  # Still needed for InMemorySigner in onboard_service.rs
 
 [features]
 default = []

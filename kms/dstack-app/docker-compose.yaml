@@ -27,7 +27,7 @@ services:
       "--execution-rpc", "https://ethereum-rpc.publicnode.com"
     ]
 
-  # Auth API is a webhook server that authenticates KMS instances and Apps launches
+  # Auth API is a webhook server that authenticates KMS instances and Apps launches (Ethereum)
   auth-api:
     build:
       context: .
@@ -51,6 +51,29 @@ services:
       - KMS_CONTRACT_ADDR=0x515cd0dd984Adc75EE8625131FcC3d2D91f7F140
     depends_on:
       - helios
+
+  # Auth NEAR is a webhook server that authenticates KMS instances and Apps launches (NEAR Protocol)
+  auth-near:
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM oven/bun:1.1.0-alpine
+        WORKDIR /app
+
+        RUN apk add --no-cache git
+        RUN git clone https://github.com/Dstack-TEE/dstack.git && \
+            cd dstack && \
+            git checkout 78057c975fe4b9e21f557fb888d72eeecfb21178
+        WORKDIR /app/dstack/kms/auth-near
+        RUN bun install
+        CMD bun run index.ts
+    environment:
+      - PORT=3000
+      - NEAR_RPC_URL=${NEAR_RPC_URL:-https://free.rpc.fastnear.com}
+      - NEAR_NETWORK_ID=${NEAR_NETWORK_ID:-mainnet}
+      - KMS_CONTRACT_ID=${KMS_CONTRACT_ID}
+    ports:
+      - 3000:3000
 
   # KMS handles the TEE Remote Attestation
   kms:

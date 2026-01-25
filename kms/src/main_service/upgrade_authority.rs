@@ -82,6 +82,21 @@ impl AuthApi {
                 }
                 Ok(response.json().await?)
             }
+            AuthApi::Near { near } => {
+                // For NEAR, we use webhook-style HTTP calls to auth-near service
+                let client = reqwest::Client::new();
+                let path = if is_kms {
+                    "bootAuth/kms"
+                } else {
+                    "bootAuth/app"
+                };
+                let url = url_join(&near.url, path);
+                let response = client.post(&url).json(&boot_info).send().await?;
+                if !response.status().is_success() {
+                    bail!("Failed to check boot auth: {}", response.text().await?);
+                }
+                Ok(response.json().await?)
+            }
         }
     }
 
@@ -98,6 +113,22 @@ impl AuthApi {
                 let client = reqwest::Client::new();
                 let response = client.get(&webhook.url).send().await?;
                 println!("url: {}", webhook.url);
+                let info: AuthApiInfoResponse = response.json().await?;
+                Ok(GetInfoResponse {
+                    is_dev: false,
+                    kms_contract_address: Some(info.kms_contract_addr.clone()),
+                    chain_id: Some(info.chain_id),
+                    gateway_app_id: Some(info.gateway_app_id.clone()),
+                    app_implementation: Some(info.app_implementation.clone()),
+                })
+            }
+            AuthApi::Near { near } => {
+                // For NEAR, fetch info from auth-near service
+                let client = reqwest::Client::new();
+                let response = client.get(&near.url).send().await?;
+                if !response.status().is_success() {
+                    bail!("Failed to get NEAR auth info: {}", response.text().await?);
+                }
                 let info: AuthApiInfoResponse = response.json().await?;
                 Ok(GetInfoResponse {
                     is_dev: false,

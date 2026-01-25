@@ -97,6 +97,8 @@ pub(crate) enum AuthApi {
     Dev { dev: Dev },
     #[serde(rename = "webhook")]
     Webhook { webhook: Webhook },
+    #[serde(rename = "near")]
+    Near { near: Near },
 }
 
 impl AuthApi {
@@ -113,6 +115,28 @@ pub(crate) struct Webhook {
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct Dev {
     pub gateway_app_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct Near {
+    /// URL to the auth-near webhook service
+    pub url: String,
+    /// NEAR RPC URL (optional, for info/metadata)
+    pub rpc_url: Option<String>,
+    /// NEAR network ID (optional, for info/metadata)
+    pub network_id: Option<String>,
+    /// NEAR KMS contract ID (for info/metadata)
+    pub contract_id: String,
+    /// MPC contract ID (for key derivation, optional)
+    #[serde(default)]
+    pub mpc_contract_id: Option<String>,
+    /// MPC domain ID (for key derivation, optional, default: 2)
+    #[serde(default = "default_mpc_domain_id")]
+    pub mpc_domain_id: u64,
+}
+
+fn default_mpc_domain_id() -> u64 {
+    2
 }
 
 #[derive(Debug, Clone, Deserialize)]
