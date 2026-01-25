@@ -591,7 +591,7 @@ class VmmCLI:
             if swap_bytes > 0:
                 params["swap_size"] = swap_bytes
 
-        if args.ppcie:
+        if args.ppcie or (args.gpu and "all" in args.gpu):
             params["gpus"] = {
                 "attach_mode": "all"
             }
@@ -831,8 +831,9 @@ class VmmCLI:
             upgrade_params["ports"] = port_mappings
 
         # handle GPU updates - only update if one of the GPU flags is set
-        if attach_all or no_gpus or gpu_slots is not None:
-            if attach_all:
+        gpu_all = gpu_slots and "all" in gpu_slots
+        if attach_all or gpu_all or no_gpus or gpu_slots is not None:
+            if attach_all or gpu_all:
                 gpu_config = {"attach_mode": "all"}
                 updates.append("GPUs (all)")
             elif no_gpus:
@@ -1264,7 +1265,7 @@ def main():
     deploy_parser.add_argument('--port', action='append', type=str,
                                help='Port mapping in format: protocol[:address]:from:to')
     deploy_parser.add_argument('--gpu', action='append', type=str,
-                               help='GPU slot to attach (can be used multiple times)')
+                               help='GPU slot to attach (can be used multiple times), or "all" to attach all GPUs')
     deploy_parser.add_argument('--ppcie', action='store_true',
                                help='Enable PPCIE (Protected PCIe) mode - attach all available GPUs')
     deploy_parser.add_argument('--pin-numa', action='store_true',
@@ -1407,7 +1408,7 @@ def main():
         "--gpu",
         action="append",
         type=str,
-        help="GPU slot to attach (can be used multiple times)",
+        help="GPU slot to attach (can be used multiple times), or \"all\" to attach all GPUs",
     )
     gpu_group.add_argument(
         "--ppcie",
