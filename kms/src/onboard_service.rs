@@ -28,11 +28,9 @@ use crate::ckd::{
 use crate::config::{AuthApi, KmsConfig};
 use crate::near_kms_client::{load_or_generate_near_signer, NearKmsClient};
 use dcap_qvl::collateral;
-use near_api::{contract::Contract, types::AccountId, Chain};
-use ra_tls::attestation::VersionedAttestation;
+use near_api::{types::AccountId, Chain};
 use ra_tls::kdf;
 use serde_json::json;
-use std::str::FromStr;
 
 #[derive(Clone)]
 pub struct OnboardState {
