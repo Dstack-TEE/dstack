@@ -99,6 +99,10 @@ pub struct Timeouts {
     #[serde(with = "serde_duration")]
     pub cache_top_n: Duration,
 
+    /// Timeout for DNS TXT record resolution (app address lookup).
+    #[serde(with = "serde_duration")]
+    pub dns_resolve: Duration,
+
     pub data_timeout_enabled: bool,
     #[serde(with = "serde_duration")]
     pub idle: Duration,

@@ -79,6 +79,8 @@ handshake = "5s"
 
 # Timeout for top n hosts selection
 cache_top_n = "30s"
+# Timeout for DNS TXT record resolution (app address lookup).
+dns_resolve = "5s"
 
 # Enable data transfer timeouts below. This might impact performance. Turn off if
 # bad performance is observed.

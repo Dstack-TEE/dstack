@@ -79,8 +79,10 @@ pub(crate) async fn proxy_with_sni(
 ) -> Result<()> {
     let ns_prefix = &state.config.proxy.app_address_ns_prefix;
     let compat = state.config.proxy.app_address_ns_compat;
-    let addr = resolve_app_address(ns_prefix, sni, compat)
+    let dns_timeout = state.config.proxy.timeouts.dns_resolve;
+    let addr = timeout(dns_timeout, resolve_app_address(ns_prefix, sni, compat))
         .await
+        .context("DNS TXT resolve timeout")?
         .context("failed to resolve app address")?;
     debug!("target address is {}:{}", addr.app_id, addr.port);
     proxy_to_app(state, inbound, buffer, &addr.app_id, addr.port).await
