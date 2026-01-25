@@ -44,7 +44,7 @@ impl Version {
         // Strip prerelease (-...) and build metadata (+...) suffixes
         // Find the first occurrence of '-' or '+'
         let version = version
-            .split_once(|c| c == '-' || c == '+')
+            .split_once(['-', '+'])
             .map(|(v, _)| v)
             .unwrap_or(version);
 
