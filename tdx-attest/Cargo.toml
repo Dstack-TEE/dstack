@@ -23,7 +23,8 @@ fs-err.workspace = true
 serde_json = { workspace = true, features = ["alloc"] }
 sha2.workspace = true
 
-[target.'cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))'.dependencies]
+# Linux x86_64 with glibc or musl
+[target.'cfg(all(target_os = "linux", target_arch = "x86_64"))'.dependencies]
 tdx-attest-sys.workspace = true
 
 [dev-dependencies]

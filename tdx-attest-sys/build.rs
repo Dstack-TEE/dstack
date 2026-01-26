@@ -10,6 +10,7 @@ use std::path::PathBuf;
 fn main() {
     println!("cargo:rerun-if-changed=csrc/tdx_attest.c");
     println!("cargo:rerun-if-changed=csrc/qgs_msg_lib.cpp");
+    println!("cargo:rerun-if-changed=csrc/linux/vm_sockets.h");
     let output_path = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR not set"));
     bindgen::Builder::default()
         .header("bindings.h")
@@ -21,5 +22,8 @@ fn main() {
     cc::Build::new()
         .file("csrc/tdx_attest.c")
         .file("csrc/qgs_msg_lib.cpp")
+        // Add csrc to include path first so our vendored linux/vm_sockets.h is found
+        // before system headers (needed for MUSL builds)
+        .include("csrc")
         .compile("tdx_attest");
 }
