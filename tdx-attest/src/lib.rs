@@ -18,9 +18,6 @@ pub use cc_eventlog as eventlog;
 
 pub type Result<T> = std::result::Result<T, TdxAttestError>;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct TdxUuid(pub [u8; 16]);
-
 pub type TdxReportData = [u8; 64];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -116,11 +116,6 @@ SPDX-License-Identifier = "Apache-2.0"
 precedence = "override"
 
 [[annotations]]
-path = "tdx-attest-sys/csrc/*"
-SPDX-FileCopyrightText = "Copyright (C) 2011-2021 Intel Corporation. All rights reserved."
-SPDX-License-Identifier = "BSD-3-Clause"
-
-[[annotations]]
 path = "mod-tdx-guest/Kconfig"
 SPDX-FileCopyrightText = "© 2022 Intel Corporation"
 SPDX-License-Identifier = "GPL-2.0-only"

@@ -210,8 +210,7 @@ RPC definitions use `prpc` framework with Protocol Buffers:
 
 ### Working with TDX Quotes
 
-- Low-level bindings: `tdx-attest-sys/` (FFI to libtdx-attest)
-- High-level API: `tdx-attest/`
+- Pure Rust API: `tdx-attest/`
 - Verification: `verifier/` using `dcap-qvl`
 - Event log parsing: `cc-eventlog/`
 
