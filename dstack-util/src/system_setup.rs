@@ -1053,11 +1053,12 @@ impl<'a> Stage0<'a> {
             }
         };
 
-        // For encrypted ZFS, need both LUKS header AND zpool to exist
-        let initialized = if opts.storage_encrypted && opts.storage_fs == FsType::Zfs {
-            has_luks && has_fs
+        // For encrypted filesystems, we can only detect the filesystem after LUKS is opened
+        // So we rely on LUKS header presence as the indicator for both ext4 and ZFS
+        let initialized = if opts.storage_encrypted {
+            has_luks
         } else {
-            has_luks || has_fs
+            has_fs
         };
 
         if !initialized {
