@@ -33,6 +33,9 @@ CVMs running in dstack support three boot modes:
 ## KMS Implementation
 
 ### Components
+
+#### Ethereum/Base/Phala KMS
+
 1. **dstack-kms**
    - Main RPC service for app key requests
    - Quote verification and boot info validation
@@ -56,11 +59,49 @@ CVMs running in dstack support three boot modes:
       - Controls permissions for individual apps
       - Maintains the allowed compose hashes for each app
 
+#### NEAR KMS
+
+1. **dstack-kms** (same as above)
+   - Can be configured to use NEAR auth API instead of Ethereum
+
+2. **dstack-kms-auth-near**
+   - NEAR Protocol chain interface for permission checks
+   - Two-step validation (same as auth-eth):
+     1. KMS control contract check
+     2. App control contract check
+   - Handles hex → NEAR AccountId conversion
+   - See [auth-near README](auth-near/README.md) for details
+
+3. **NEAR Authorization Contracts**
+   - `near-dstack-kms` (Rust contract)
+      - Maintains a registry for all Applications
+      - Maintains the allowed KMS Instance MRs
+      - Maintains the allowed OS Images
+      - Supports MPC-based root key derivation from NEAR MPC network
+      - Factory method `register_app()` for deploying app contracts
+   - `near-dstack-app` (Rust contract)
+      - Deployed as subaccounts: `{app_id}.{kms_contract_id}`
+      - Controls permissions for individual apps
+      - Maintains the allowed compose hashes and device IDs per app
+
+4. **MPC Key Derivation** (NEAR-specific)
+   - KMS can derive deterministic root keys from NEAR MPC network
+   - Uses BLS12-381 cryptography for secure key derivation
+   - All KMS instances derive the same keys when using the same MPC domain
+   - Falls back to local key generation if MPC config is incomplete
+
 ### Deployment
-The first two components are deployed as an dstack app on dstack in Local-Key-Provider mode.
+
+The KMS components are deployed as a dstack app on dstack in Local-Key-Provider mode.
 The docker compose file would look like [this](dstack-app/docker-compose.yaml).
 
-The solidity contracts are deployed on an ethereum compatible chain.
+**Authorization Contracts:**
+- **Ethereum/Base/Phala**: Solidity contracts deployed on an Ethereum-compatible chain
+- **NEAR**: Rust contracts deployed on NEAR Protocol (see [near-kms README](../near-kms/README.md))
+
+**App Contract Deployment:**
+- **Ethereum**: Use Hardhat tasks (`app:deploy`, `app:add-hash`) or factory method `deployAndRegisterApp()`
+- **NEAR**: Use CLI commands (`bun run app:deploy`, `bun run app:add-hash`) or KMS contract's `register_app()` method
 
 
 ## Trustness
@@ -89,11 +130,24 @@ On startup, the KMS node will either:
 - Onboard: Obtain root keys from an existing KMS instance
 
 #### Bootstrapping
+
+**Ethereum/Base/Phala KMS:**
 During bootstrapping, the KMS node generates two root keys:
 1. CA root key: Used to issue x509 certificates for Apps, enabling HTTPS traffic
 2. K256 root key: Used to derive Ethereum-compatible keys for Apps
 
 After generating the root keys, their public portions can be obtained along with the corresponding TDX quote and registered in the DstackKms contract.
+
+**NEAR KMS with MPC:**
+When configured with NEAR MPC, the KMS node derives deterministic root keys from the NEAR MPC network:
+1. Generates ephemeral BLS12-381 G1 keypair
+2. Calls MPC contract's `request_app_private_key()` with derivation path "kms-root-key"
+3. Receives encrypted response and decrypts using ephemeral private key
+4. Verifies MPC signature using BLS pairing
+5. Derives 32-byte root key using HKDF
+6. Converts root key to CA, tmp CA, RPC, and K256 keys using deterministic key derivation
+
+All KMS instances using the same MPC domain will derive identical root keys, enabling seamless replication without key transfer. If MPC configuration is incomplete, the system automatically falls back to local key generation (same as Ethereum).
 
 #### KMS Self Replication
 When deploying a new KMS instance (`B`) using an existing instance (`A`), the process follows these steps:
@@ -117,8 +171,13 @@ Once onboarded, the KMS node begins listening for app key provisioning requests.
 
 When a KMS node receives a key provisioning request, it:
 1. Validates the TDX quote of the requesting App
-2. Queries the DstackKms contract for provisioning allowance
+2. Queries the authorization contract (DstackKms or near-dstack-kms) for provisioning allowance
 3. If allowed, generates and sends the keys to the App
+
+**NEAR-specific notes:**
+- App contracts are deployed as subaccounts: `{app_id}.{kms_contract_id}`
+- Compose hashes are stored as hex strings (without `0x` prefix)
+- Use `auth-near` CLI commands for app deployment and compose hash management (see [auth-near README](auth-near/README.md#cli-commands))
 
 ### Attestation
 
