@@ -62,42 +62,50 @@ const UpdateVmDialogComponent = {
           <input id="upgradeDiskSize" v-model.number="dialog.disk_size" type="number" placeholder="Disk size in GB" required>
         </div>
 
-        <div v-if="kmsEnabled">
+        <div v-if="kmsEnabled" class="form-group">
+          <label for="upgradeImage">Image</label>
+          <select id="upgradeImage" v-model="dialog.image" required>
+            <option value="" disabled>Select an image</option>
+            <option v-for="image in availableImages" :key="image.name" :value="image.name">
+              {{ image.name }}
+            </option>
+          </select>
+        </div>
+
+        <div class="checkbox-grid">
+          <label><input type="checkbox" v-model="dialog.updateCompose"> Update App Compose</label>
+        </div>
+
+        <div v-if="dialog.updateCompose" class="compose-update">
           <div class="form-group">
-            <label for="upgradeImage">Image</label>
-            <select id="upgradeImage" v-model="dialog.image" required>
-              <option value="" disabled>Select an image</option>
-              <option v-for="image in availableImages" :key="image.name" :value="image.name">
-                {{ image.name }}
-              </option>
-            </select>
-          </div>
-
-          <div class="checkbox-grid">
-            <label><input type="checkbox" v-model="dialog.updateCompose"> Update App Compose</label>
-          </div>
-
-          <div v-if="dialog.updateCompose" class="compose-update">
-            <div class="form-group">
-              <label for="upgradeCompose">Docker Compose File</label>
-              <div class="file-input-row">
-                <div class="file-input-actions">
-                  <button type="button" class="action-btn" @click="$refs.composeFile.click()">Upload File</button>
-                  <span class="help-text">or paste below</span>
-                  <input ref="composeFile" type="file" accept=".yml,.yaml,.txt" @change="$emit('load-compose', $event)">
-                </div>
-                <textarea id="upgradeCompose" v-model="dialog.dockerComposeFile" placeholder="Paste your new docker-compose.yml here" rows="8" required></textarea>
+            <label for="upgradeCompose">Docker Compose File</label>
+            <div class="file-input-row">
+              <div class="file-input-actions">
+                <button type="button" class="action-btn" @click="$refs.composeFile.click()">Upload File</button>
+                <span class="help-text">or paste below</span>
+                <input ref="composeFile" type="file" accept=".yml,.yaml,.txt" @change="$emit('load-compose', $event)">
               </div>
-            </div>
-            <div class="form-group">
-              <label for="upgradePrelauncher">Pre-launch Script</label>
-              <textarea id="upgradePrelauncher" v-model="dialog.preLaunchScript" placeholder="Optional: Bash script to run before starting containers"></textarea>
-            </div>
-            <div class="app-id-preview">
-              Compose Hash: 0x{{ composeHashPreview }}
+              <textarea id="upgradeCompose" v-model="dialog.dockerComposeFile" placeholder="Paste your new docker-compose.yml here" rows="8" required></textarea>
             </div>
           </div>
+          <div class="form-group">
+            <label for="upgradeInitScript">Init Script
+              <span class="help-icon" title="Executed before dockerd starts. Use for early system setup.">?</span>
+            </label>
+            <textarea id="upgradeInitScript" v-model="dialog.initScript" placeholder="Optional: Bash script executed before dockerd startup" rows="3"></textarea>
+          </div>
+          <div class="form-group">
+            <label for="upgradePrelauncher">Pre-launch Script
+              <span class="help-icon" title="Executed after dockerd starts, before containers launch.">?</span>
+            </label>
+            <textarea id="upgradePrelauncher" v-model="dialog.preLaunchScript" placeholder="Optional: Bash script to run before starting containers" rows="3"></textarea>
+          </div>
+          <div class="app-id-preview">
+            Compose Hash: 0x{{ composeHashPreview }}
+          </div>
+        </div>
 
+        <div v-if="kmsEnabled">
           <div class="checkbox-grid">
             <label><input type="checkbox" v-model="dialog.resetSecrets"> Reset secrets</label>
           </div>
