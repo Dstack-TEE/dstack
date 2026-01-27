@@ -30,6 +30,7 @@ type AppCompose = {
   swap_size: number;
   launch_token_hash?: string;
   pre_launch_script?: string;
+  init_script?: string;
 };
 
 type KeyProviderKind = 'none' | 'kms' | 'local' | 'tpm';
@@ -80,6 +81,7 @@ type VmFormState = {
   name: string;
   image: string;
   dockerComposeFile: string;
+  initScript: string;
   preLaunchScript: string;
   vcpu: number;
   memory: number;
@@ -115,6 +117,7 @@ type UpdateDialogState = {
   vm: VmListItem | null;
   updateCompose: boolean;
   dockerComposeFile: string;
+  initScript: string;
   preLaunchScript: string;
   encryptedEnvs: EncryptedEnvEntry[];
   resetSecrets: boolean;
@@ -160,6 +163,7 @@ function createVmFormState(preLaunchScript: string): VmFormState {
     name: '',
     image: '',
     dockerComposeFile: '',
+    initScript: '',
     preLaunchScript,
     vcpu: 1,
     memory: 2048,
@@ -197,6 +201,7 @@ function createUpdateDialogState(): UpdateDialogState {
     vm: null,
     updateCompose: false,
     dockerComposeFile: '',
+    initScript: '',
     preLaunchScript: '',
     encryptedEnvs: [],
     resetSecrets: false,
@@ -732,6 +737,10 @@ type CreateVmPayloadSource = {
       appCompose.storage_fs = vmForm.value.storage_fs;
     }
 
+    if (vmForm.value.initScript?.trim()) {
+      appCompose.init_script = vmForm.value.initScript;
+    }
+
     if (vmForm.value.preLaunchScript?.trim()) {
       appCompose.pre_launch_script = vmForm.value.preLaunchScript;
     }
@@ -769,7 +778,8 @@ type CreateVmPayloadSource = {
         appCompose.launch_token_hash = await calcComposeHash(launchToken.value);
       }
     }
-    appCompose.pre_launch_script = updateDialog.value.preLaunchScript?.trim();
+    appCompose.init_script = updateDialog.value.initScript?.trim() || undefined;
+    appCompose.pre_launch_script = updateDialog.value.preLaunchScript?.trim() || undefined;
 
     const swapBytes = Math.max(0, Math.round(updateDialog.value.swap_size || 0));
     if (swapBytes > 0) {
@@ -857,6 +867,7 @@ type CreateVmPayloadSource = {
       vm: detailedVm,
       updateCompose: false,
       dockerComposeFile: detailedVm.appCompose.docker_compose_file || '',
+      initScript: detailedVm.appCompose.init_script || '',
       preLaunchScript: detailedVm.appCompose.pre_launch_script || '',
       encryptedEnvs: [],
       resetSecrets: false,
@@ -1088,6 +1099,7 @@ type CreateVmPayloadSource = {
       name: `${config.name || vm.name}`,
       image: config.image || '',
       dockerComposeFile: theVm.appCompose?.docker_compose_file || '',
+      initScript: theVm.appCompose?.init_script || '',
       preLaunchScript: theVm.appCompose?.pre_launch_script || '',
       vcpu: config.vcpu || 1,
       memory: config.memory || 0,

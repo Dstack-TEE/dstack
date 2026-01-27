@@ -2056,8 +2056,17 @@ const CreateVmDialogComponent = {
             </div>
 
             <div class="form-group full-width">
-              <label for="preLaunchScript">Pre-launch Script</label>
-              <textarea id="preLaunchScript" v-model="form.preLaunchScript" placeholder="Optional script executed before launch" rows="6"></textarea>
+              <label for="initScript">Init Script
+                <span class="help-icon" title="Executed before dockerd starts. Use for early system setup.">?</span>
+              </label>
+              <textarea id="initScript" v-model="form.initScript" placeholder="Optional script executed before dockerd startup" rows="4"></textarea>
+            </div>
+
+            <div class="form-group full-width">
+              <label for="preLaunchScript">Pre-launch Script
+                <span class="help-icon" title="Executed after dockerd starts, before containers launch.">?</span>
+              </label>
+              <textarea id="preLaunchScript" v-model="form.preLaunchScript" placeholder="Optional script executed before container launch" rows="4"></textarea>
             </div>
 
             <div class="form-group full-width">
@@ -2101,7 +2110,7 @@ const CreateVmDialogComponent = {
               </div>
             </div>
 
-            <div class="form-group full-width" v-if="kmsAvailable">
+            <div class="form-group full-width" v-if="form.key_provider === 'kms'">
               <encrypted-env-editor :env-vars="form.encryptedEnvs" />
             </div>
 
@@ -2186,42 +2195,50 @@ const UpdateVmDialogComponent = {
           <input id="upgradeDiskSize" v-model.number="dialog.disk_size" type="number" placeholder="Disk size in GB" required>
         </div>
 
-        <div v-if="kmsEnabled">
+        <div v-if="kmsEnabled" class="form-group">
+          <label for="upgradeImage">Image</label>
+          <select id="upgradeImage" v-model="dialog.image" required>
+            <option value="" disabled>Select an image</option>
+            <option v-for="image in availableImages" :key="image.name" :value="image.name">
+              {{ image.name }}
+            </option>
+          </select>
+        </div>
+
+        <div class="checkbox-grid">
+          <label><input type="checkbox" v-model="dialog.updateCompose"> Update App Compose</label>
+        </div>
+
+        <div v-if="dialog.updateCompose" class="compose-update">
           <div class="form-group">
-            <label for="upgradeImage">Image</label>
-            <select id="upgradeImage" v-model="dialog.image" required>
-              <option value="" disabled>Select an image</option>
-              <option v-for="image in availableImages" :key="image.name" :value="image.name">
-                {{ image.name }}
-              </option>
-            </select>
-          </div>
-
-          <div class="checkbox-grid">
-            <label><input type="checkbox" v-model="dialog.updateCompose"> Update App Compose</label>
-          </div>
-
-          <div v-if="dialog.updateCompose" class="compose-update">
-            <div class="form-group">
-              <label for="upgradeCompose">Docker Compose File</label>
-              <div class="file-input-row">
-                <div class="file-input-actions">
-                  <button type="button" class="action-btn" @click="$refs.composeFile.click()">Upload File</button>
-                  <span class="help-text">or paste below</span>
-                  <input ref="composeFile" type="file" accept=".yml,.yaml,.txt" @change="$emit('load-compose', $event)">
-                </div>
-                <textarea id="upgradeCompose" v-model="dialog.dockerComposeFile" placeholder="Paste your new docker-compose.yml here" rows="8" required></textarea>
+            <label for="upgradeCompose">Docker Compose File</label>
+            <div class="file-input-row">
+              <div class="file-input-actions">
+                <button type="button" class="action-btn" @click="$refs.composeFile.click()">Upload File</button>
+                <span class="help-text">or paste below</span>
+                <input ref="composeFile" type="file" accept=".yml,.yaml,.txt" @change="$emit('load-compose', $event)">
               </div>
-            </div>
-            <div class="form-group">
-              <label for="upgradePrelauncher">Pre-launch Script</label>
-              <textarea id="upgradePrelauncher" v-model="dialog.preLaunchScript" placeholder="Optional: Bash script to run before starting containers"></textarea>
-            </div>
-            <div class="app-id-preview">
-              Compose Hash: 0x{{ composeHashPreview }}
+              <textarea id="upgradeCompose" v-model="dialog.dockerComposeFile" placeholder="Paste your new docker-compose.yml here" rows="8" required></textarea>
             </div>
           </div>
+          <div class="form-group">
+            <label for="upgradeInitScript">Init Script
+              <span class="help-icon" title="Executed before dockerd starts. Use for early system setup.">?</span>
+            </label>
+            <textarea id="upgradeInitScript" v-model="dialog.initScript" placeholder="Optional: Bash script executed before dockerd startup" rows="3"></textarea>
+          </div>
+          <div class="form-group">
+            <label for="upgradePrelauncher">Pre-launch Script
+              <span class="help-icon" title="Executed after dockerd starts, before containers launch.">?</span>
+            </label>
+            <textarea id="upgradePrelauncher" v-model="dialog.preLaunchScript" placeholder="Optional: Bash script to run before starting containers" rows="3"></textarea>
+          </div>
+          <div class="app-id-preview">
+            Compose Hash: 0x{{ composeHashPreview }}
+          </div>
+        </div>
 
+        <div v-if="kmsEnabled">
           <div class="checkbox-grid">
             <label><input type="checkbox" v-model="dialog.resetSecrets"> Reset secrets</label>
           </div>
@@ -2342,6 +2359,7 @@ function createVmFormState(preLaunchScript) {
         name: '',
         image: '',
         dockerComposeFile: '',
+        initScript: '',
         preLaunchScript,
         vcpu: 1,
         memory: 2048,
@@ -2378,6 +2396,7 @@ function createUpdateDialogState() {
         vm: null,
         updateCompose: false,
         dockerComposeFile: '',
+        initScript: '',
         preLaunchScript: '',
         encryptedEnvs: [],
         resetSecrets: false,
@@ -2816,7 +2835,7 @@ fi
             .join('');
     }
     async function makeAppComposeFile() {
-        var _a;
+        var _a, _b;
         const appCompose = {
             manifest_version: 2,
             name: vmForm.value.name,
@@ -2844,7 +2863,10 @@ fi
         if (vmForm.value.storage_fs) {
             appCompose.storage_fs = vmForm.value.storage_fs;
         }
-        if ((_a = vmForm.value.preLaunchScript) === null || _a === void 0 ? void 0 : _a.trim()) {
+        if ((_a = vmForm.value.initScript) === null || _a === void 0 ? void 0 : _a.trim()) {
+            appCompose.init_script = vmForm.value.initScript;
+        }
+        if ((_b = vmForm.value.preLaunchScript) === null || _b === void 0 ? void 0 : _b.trim()) {
             appCompose.pre_launch_script = vmForm.value.preLaunchScript;
         }
         const swapBytes = Math.max(0, Math.round(vmForm.value.swap_size || 0));
@@ -2863,7 +2885,7 @@ fi
         return JSON.stringify(appCompose);
     }
     async function makeUpdateComposeFile() {
-        var _a;
+        var _a, _b;
         const currentAppCompose = updateDialog.value.vm.appCompose;
         const appCompose = {
             ...currentAppCompose,
@@ -2877,7 +2899,8 @@ fi
                 appCompose.launch_token_hash = await calcComposeHash(launchToken.value);
             }
         }
-        appCompose.pre_launch_script = (_a = updateDialog.value.preLaunchScript) === null || _a === void 0 ? void 0 : _a.trim();
+        appCompose.init_script = ((_a = updateDialog.value.initScript) === null || _a === void 0 ? void 0 : _a.trim()) || undefined;
+        appCompose.pre_launch_script = ((_b = updateDialog.value.preLaunchScript) === null || _b === void 0 ? void 0 : _b.trim()) || undefined;
         const swapBytes = Math.max(0, Math.round(updateDialog.value.swap_size || 0));
         if (swapBytes > 0) {
             appCompose.swap_size = swapBytes;
@@ -2955,6 +2978,7 @@ fi
             vm: detailedVm,
             updateCompose: false,
             dockerComposeFile: detailedVm.appCompose.docker_compose_file || '',
+            initScript: detailedVm.appCompose.init_script || '',
             preLaunchScript: detailedVm.appCompose.pre_launch_script || '',
             encryptedEnvs: [],
             resetSecrets: false,
@@ -3145,7 +3169,7 @@ fi
         return 'none';
     }
     async function showCloneConfig(vm) {
-        var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m;
+        var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o;
         const theVm = await ensureVmDetails(vm);
         if (!((_a = theVm === null || theVm === void 0 ? void 0 : theVm.configuration) === null || _a === void 0 ? void 0 : _a.compose_file)) {
             alert('Compose file not available for this VM. Please open its details first.');
@@ -3157,29 +3181,30 @@ fi
             name: `${config.name || vm.name}`,
             image: config.image || '',
             dockerComposeFile: ((_b = theVm.appCompose) === null || _b === void 0 ? void 0 : _b.docker_compose_file) || '',
-            preLaunchScript: ((_c = theVm.appCompose) === null || _c === void 0 ? void 0 : _c.pre_launch_script) || '',
+            initScript: ((_c = theVm.appCompose) === null || _c === void 0 ? void 0 : _c.init_script) || '',
+            preLaunchScript: ((_d = theVm.appCompose) === null || _d === void 0 ? void 0 : _d.pre_launch_script) || '',
             vcpu: config.vcpu || 1,
             memory: config.memory || 0,
             memoryValue: autoMemoryDisplay(config.memory || 0).memoryValue,
             memoryUnit: autoMemoryDisplay(config.memory || 0).memoryUnit,
-            swap_size: ((_d = theVm.appCompose) === null || _d === void 0 ? void 0 : _d.swap_size) || 0,
-            swapValue: autoMemoryDisplay(bytesToMB(((_e = theVm.appCompose) === null || _e === void 0 ? void 0 : _e.swap_size) || 0)).memoryValue,
-            swapUnit: autoMemoryDisplay(bytesToMB(((_f = theVm.appCompose) === null || _f === void 0 ? void 0 : _f.swap_size) || 0)).memoryUnit,
+            swap_size: ((_e = theVm.appCompose) === null || _e === void 0 ? void 0 : _e.swap_size) || 0,
+            swapValue: autoMemoryDisplay(bytesToMB(((_f = theVm.appCompose) === null || _f === void 0 ? void 0 : _f.swap_size) || 0)).memoryValue,
+            swapUnit: autoMemoryDisplay(bytesToMB(((_g = theVm.appCompose) === null || _g === void 0 ? void 0 : _g.swap_size) || 0)).memoryUnit,
             disk_size: config.disk_size || 0,
             selectedGpus: [],
             attachAllGpus: false,
             encryptedEnvs: [], // Clear environment variables
             ports: [], // Clear port mappings
-            storage_fs: ((_g = theVm.appCompose) === null || _g === void 0 ? void 0 : _g.storage_fs) || 'zfs',
+            storage_fs: ((_h = theVm.appCompose) === null || _h === void 0 ? void 0 : _h.storage_fs) || 'zfs',
             app_id: config.app_id || '',
             kms_urls: config.kms_urls || [],
             key_provider: getKeyProvider(theVm),
-            key_provider_id: ((_h = theVm.appCompose) === null || _h === void 0 ? void 0 : _h.key_provider_id) || '',
-            gateway_enabled: !!((_j = theVm.appCompose) === null || _j === void 0 ? void 0 : _j.gateway_enabled),
+            key_provider_id: ((_j = theVm.appCompose) === null || _j === void 0 ? void 0 : _j.key_provider_id) || '',
+            gateway_enabled: !!((_k = theVm.appCompose) === null || _k === void 0 ? void 0 : _k.gateway_enabled),
             gateway_urls: config.gateway_urls || [],
-            public_logs: !!((_k = theVm.appCompose) === null || _k === void 0 ? void 0 : _k.public_logs),
-            public_sysinfo: !!((_l = theVm.appCompose) === null || _l === void 0 ? void 0 : _l.public_sysinfo),
-            public_tcbinfo: !!((_m = theVm.appCompose) === null || _m === void 0 ? void 0 : _m.public_tcbinfo),
+            public_logs: !!((_l = theVm.appCompose) === null || _l === void 0 ? void 0 : _l.public_logs),
+            public_sysinfo: !!((_m = theVm.appCompose) === null || _m === void 0 ? void 0 : _m.public_sysinfo),
+            public_tcbinfo: !!((_o = theVm.appCompose) === null || _o === void 0 ? void 0 : _o.public_tcbinfo),
             pin_numa: !!config.pin_numa,
             hugepages: !!config.hugepages,
             no_tee: !!config.no_tee,

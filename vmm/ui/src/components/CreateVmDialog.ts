@@ -105,8 +105,17 @@ const CreateVmDialogComponent = {
             </div>
 
             <div class="form-group full-width">
-              <label for="preLaunchScript">Pre-launch Script</label>
-              <textarea id="preLaunchScript" v-model="form.preLaunchScript" placeholder="Optional script executed before launch" rows="6"></textarea>
+              <label for="initScript">Init Script
+                <span class="help-icon" title="Executed before dockerd starts. Use for early system setup.">?</span>
+              </label>
+              <textarea id="initScript" v-model="form.initScript" placeholder="Optional script executed before dockerd startup" rows="4"></textarea>
+            </div>
+
+            <div class="form-group full-width">
+              <label for="preLaunchScript">Pre-launch Script
+                <span class="help-icon" title="Executed after dockerd starts, before containers launch.">?</span>
+              </label>
+              <textarea id="preLaunchScript" v-model="form.preLaunchScript" placeholder="Optional script executed before container launch" rows="4"></textarea>
             </div>
 
             <div class="form-group full-width">
@@ -150,7 +159,7 @@ const CreateVmDialogComponent = {
               </div>
             </div>
 
-            <div class="form-group full-width" v-if="kmsAvailable">
+            <div class="form-group full-width" v-if="form.key_provider === 'kms'">
               <encrypted-env-editor :env-vars="form.encryptedEnvs" />
             </div>
 
