@@ -2,17 +2,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use num_enum::FromPrimitive;
+//! Dummy implementation for non-Linux/non-x86_64 platforms.
+//!
+//! All functions return `NotSupported` error.
+
 use thiserror::Error;
 
-use crate::{TdxReport, TdxReportData, TdxUuid};
+use crate::{Result, TdxReport, TdxReportData};
 
-type Result<T> = std::result::Result<T, TdxAttestError>;
-
-#[repr(u32)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, FromPrimitive, Error)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum TdxAttestError {
-    #[error("unexpected")]
+    #[error("unexpected error")]
     Unexpected,
     #[error("invalid parameter")]
     InvalidParameter,
@@ -28,28 +28,24 @@ pub enum TdxAttestError {
     NotSupported,
     #[error("quote failure")]
     QuoteFailure,
-    #[error("busy")]
+    #[error("device busy")]
     Busy,
     #[error("device failure")]
     DeviceFailure,
-    #[error("invalid rtmr index")]
+    #[error("invalid RTMR index")]
     InvalidRtmrIndex,
-    #[error("unsupported att key id")]
+    #[error("unsupported attestation key ID")]
     UnsupportedAttKeyId,
-    #[num_enum(catch_all)]
-    #[error("unknown error ({0})")]
-    UnknownError(u32),
 }
 
-pub fn extend_rtmr(_index: u32, _event_type: u32, _digest: [u8; 48]) -> Result<()> {
-    Err(TdxAttestError::NotSupported)
-}
-pub fn get_report(_report_data: &TdxReportData) -> Result<TdxReport> {
-    Err(TdxAttestError::NotSupported)
-}
 pub fn get_quote(_report_data: &TdxReportData) -> Result<Vec<u8>> {
     Err(TdxAttestError::NotSupported)
 }
-pub fn get_supported_att_key_ids() -> Result<Vec<TdxUuid>> {
+
+pub fn get_report(_report_data: &TdxReportData) -> Result<TdxReport> {
+    Err(TdxAttestError::NotSupported)
+}
+
+pub fn extend_rtmr(_index: u32, _event_type: u32, _digest: [u8; 48]) -> Result<()> {
     Err(TdxAttestError::NotSupported)
 }

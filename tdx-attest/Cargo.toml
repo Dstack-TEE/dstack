@@ -13,7 +13,6 @@ license.workspace = true
 [dependencies]
 anyhow.workspace = true
 hex.workspace = true
-num_enum.workspace = true
 scale.workspace = true
 serde.workspace = true
 serde-human-bytes.workspace = true
@@ -23,9 +22,13 @@ fs-err.workspace = true
 serde_json = { workspace = true, features = ["alloc"] }
 sha2.workspace = true
 
-[target.'cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))'.dependencies]
-tdx-attest-sys.workspace = true
+# Linux x86_64 - pure Rust implementation using libc for syscalls
+[target.'cfg(all(target_os = "linux", target_arch = "x86_64"))'.dependencies]
+libc.workspace = true
+vsock = "0.5"
 
 [dev-dependencies]
 insta.workspace = true
 serde_json.workspace = true
+dcap-qvl.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

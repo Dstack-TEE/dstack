@@ -18,7 +18,6 @@ members = [
     "kms/rpc",
     "ra-rpc",
     "ra-tls",
-    "tdx-attest-sys",
     "tdx-attest",
     "dstack-attest",
     "dstack-util",
@@ -69,7 +68,6 @@ cc-eventlog = { path = "cc-eventlog" }
 supervisor = { path = "supervisor" }
 supervisor-client = { path = "supervisor/client" }
 tdx-attest = { path = "tdx-attest" }
-tdx-attest-sys = { path = "tdx-attest-sys" }
 dstack-attest = { path = "dstack-attest" }
 certbot = { path = "certbot" }
 rocket-vsock-listener = { path = "rocket-vsock-listener" }
