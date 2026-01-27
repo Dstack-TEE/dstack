@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use cc_eventlog::TdxEventLog;
 use num_enum::FromPrimitive;
 use thiserror::Error;
 
@@ -48,11 +47,7 @@ pub fn extend_rtmr(_index: u32, _event_type: u32, _digest: [u8; 48]) -> Result<(
 pub fn get_report(_report_data: &TdxReportData) -> Result<TdxReport> {
     Err(TdxAttestError::NotSupported)
 }
-pub fn get_quote(
-    _report_data: &TdxReportData,
-    _att_key_id_list: Option<&[TdxUuid]>,
-) -> Result<(TdxUuid, Vec<u8>)> {
-    let _ = _report_data;
+pub fn get_quote(_report_data: &TdxReportData) -> Result<Vec<u8>> {
     Err(TdxAttestError::NotSupported)
 }
 pub fn get_supported_att_key_ids() -> Result<Vec<TdxUuid>> {
