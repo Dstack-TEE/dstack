@@ -21,7 +21,14 @@ fn get_tappd_endpoint(endpoint: Option<&str>) -> String {
     if let Ok(sim_endpoint) = env::var("TAPPD_SIMULATOR_ENDPOINT") {
         return sim_endpoint;
     }
-    "/var/run/tappd.sock".to_string()
+    // Try new path first, fall back to old path for backward compatibility
+    const SOCKET_PATHS: &[&str] = &["/var/run/dstack/tappd.sock", "/var/run/tappd.sock"];
+    for path in SOCKET_PATHS {
+        if std::path::Path::new(path).exists() {
+            return path.to_string();
+        }
+    }
+    SOCKET_PATHS[0].to_string()
 }
 
 #[derive(Debug)]

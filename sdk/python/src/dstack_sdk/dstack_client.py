@@ -51,7 +51,16 @@ def get_endpoint(endpoint: str | None = None) -> str:
             f"Using simulator endpoint: {os.environ['DSTACK_SIMULATOR_ENDPOINT']}"
         )
         return os.environ["DSTACK_SIMULATOR_ENDPOINT"]
-    return "/var/run/dstack.sock"
+    # Try new path first, fall back to old path for backward compatibility
+    socket_paths = [
+        "/var/run/dstack/dstack.sock",
+        "/var/run/dstack.sock",
+    ]
+    for path in socket_paths:
+        if os.path.exists(path):
+            return path
+    # Default to new path even if not exists (will fail with clear error)
+    return socket_paths[0]
 
 
 def get_tappd_endpoint(endpoint: str | None = None) -> str:
@@ -60,7 +69,15 @@ def get_tappd_endpoint(endpoint: str | None = None) -> str:
     if "TAPPD_SIMULATOR_ENDPOINT" in os.environ:
         logger.info(f"Using tappd endpoint: {os.environ['TAPPD_SIMULATOR_ENDPOINT']}")
         return os.environ["TAPPD_SIMULATOR_ENDPOINT"]
-    return "/var/run/tappd.sock"
+    # Try new path first, fall back to old path for backward compatibility
+    socket_paths = [
+        "/var/run/dstack/tappd.sock",
+        "/var/run/tappd.sock",
+    ]
+    for path in socket_paths:
+        if os.path.exists(path):
+            return path
+    return socket_paths[0]
 
 
 def emit_deprecation_warning(message: str, stacklevel: int = 2) -> None:

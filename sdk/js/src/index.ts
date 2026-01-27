@@ -179,7 +179,12 @@ export class DstackClient<T extends TcbInfo = TcbInfoV05x> {
         console.warn(`Using simulator endpoint: ${process.env.DSTACK_SIMULATOR_ENDPOINT}`)
         endpoint = process.env.DSTACK_SIMULATOR_ENDPOINT
       } else {
-        endpoint = '/var/run/dstack.sock'
+        // Try new path first, fall back to old path for backward compatibility
+        const socketPaths = [
+          '/var/run/dstack/dstack.sock',
+          '/var/run/dstack.sock',
+        ]
+        endpoint = socketPaths.find(p => fs.existsSync(p)) ?? socketPaths[0]
       }
     }
     if (endpoint.startsWith('/') && !fs.existsSync(endpoint)) {
@@ -402,7 +407,12 @@ export class TappdClient extends DstackClient<TcbInfoV03x> {
         console.warn(`Using tappd endpoint: ${process.env.TAPPD_SIMULATOR_ENDPOINT}`)
         endpoint = process.env.TAPPD_SIMULATOR_ENDPOINT
       } else {
-        endpoint = '/var/run/tappd.sock'
+        // Try new path first, fall back to old path for backward compatibility
+        const socketPaths = [
+          '/var/run/dstack/tappd.sock',
+          '/var/run/tappd.sock',
+        ]
+        endpoint = socketPaths.find(p => fs.existsSync(p)) ?? socketPaths[0]
       }
     }
     console.warn('TappdClient is deprecated, please use DstackClient instead')

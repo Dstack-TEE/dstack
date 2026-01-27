@@ -229,8 +229,9 @@ func NewDstackClient(opts ...DstackClientOption) *DstackClient {
 
 // Returns the appropriate endpoint based on environment and input. If the
 // endpoint is empty, it will use the simulator endpoint if it is set in the
-// environment through DSTACK_SIMULATOR_ENDPOINT. Otherwise, it will use the
-// default endpoint at /var/run/dstack.sock.
+// environment through DSTACK_SIMULATOR_ENDPOINT. Otherwise, it will try
+// /var/run/dstack/dstack.sock first, falling back to /var/run/dstack.sock
+// for backward compatibility.
 func (c *DstackClient) getEndpoint() string {
 	if c.endpoint != "" {
 		return c.endpoint
@@ -239,7 +240,18 @@ func (c *DstackClient) getEndpoint() string {
 		c.logger.Info("using simulator endpoint", "endpoint", simEndpoint)
 		return simEndpoint
 	}
-	return "/var/run/dstack.sock"
+	// Try new path first, fall back to old path for backward compatibility
+	socketPaths := []string{
+		"/var/run/dstack/dstack.sock",
+		"/var/run/dstack.sock",
+	}
+	for _, path := range socketPaths {
+		if _, err := os.Stat(path); err == nil {
+			return path
+		}
+	}
+	// Default to new path even if not exists (will fail with clear error)
+	return socketPaths[0]
 }
 
 // Sends an RPC request to the dstack service.

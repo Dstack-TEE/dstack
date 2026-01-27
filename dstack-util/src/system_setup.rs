@@ -1440,6 +1440,7 @@ impl Stage1<'_> {
     async fn setup(&self) -> Result<()> {
         let _envs = self.unseal_env_vars()?;
         self.link_files()?;
+        self.setup_socket_dir()?;
         self.setup_guest_agent_config()?;
         self.vmm
             .notify_q("boot.progress", "setting up dstack-gateway")
@@ -1461,6 +1462,13 @@ impl Stage1<'_> {
             ln -sf ${HOST_SHARED_DIR_NAME}/${APP_COMPOSE};
             ln -sf ${HOST_SHARED_DIR_NAME}/${USER_CONFIG} user_config;
         }?;
+        Ok(())
+    }
+
+    /// Setup socket directory for dstack-guest-agent.
+    fn setup_socket_dir(&self) -> Result<()> {
+        info!("Setting up socket directory");
+        fs::create_dir_all("/var/run/dstack").context("Failed to create socket directory")?;
         Ok(())
     }
 
