@@ -240,10 +240,12 @@ func (c *DstackClient) getEndpoint() string {
 		c.logger.Info("using simulator endpoint", "endpoint", simEndpoint)
 		return simEndpoint
 	}
-	// Try new path first, fall back to old path for backward compatibility
+	// Try paths in order: legacy paths first, then namespaced paths
 	socketPaths := []string{
-		"/var/run/dstack/dstack.sock",
 		"/var/run/dstack.sock",
+		"/run/dstack.sock",
+		"/var/run/dstack/dstack.sock",
+		"/run/dstack/dstack.sock",
 	}
 	for _, path := range socketPaths {
 		if _, err := os.Stat(path); err == nil {

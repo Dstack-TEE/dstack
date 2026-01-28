@@ -36,8 +36,13 @@ fn get_endpoint(endpoint: Option<&str>) -> String {
     if let Ok(sim_endpoint) = env::var("DSTACK_SIMULATOR_ENDPOINT") {
         return sim_endpoint;
     }
-    // Try new path first, fall back to old path for backward compatibility
-    const SOCKET_PATHS: &[&str] = &["/var/run/dstack/dstack.sock", "/var/run/dstack.sock"];
+    // Try paths in order: legacy paths first, then namespaced paths
+    const SOCKET_PATHS: &[&str] = &[
+        "/var/run/dstack.sock",
+        "/run/dstack.sock",
+        "/var/run/dstack/dstack.sock",
+        "/run/dstack/dstack.sock",
+    ];
     for path in SOCKET_PATHS {
         if std::path::Path::new(path).exists() {
             return path.to_string();

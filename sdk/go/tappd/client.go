@@ -230,10 +230,12 @@ func (c *TappdClient) getEndpoint() string {
 		c.logger.Info("using simulator endpoint", "endpoint", simEndpoint)
 		return simEndpoint
 	}
-	// Try new path first, fall back to old path for backward compatibility
+	// Try paths in order: legacy paths first, then namespaced paths
 	socketPaths := []string{
-		"/var/run/dstack/tappd.sock",
 		"/var/run/tappd.sock",
+		"/run/tappd.sock",
+		"/var/run/dstack/tappd.sock",
+		"/run/dstack/tappd.sock",
 	}
 	for _, path := range socketPaths {
 		if _, err := os.Stat(path); err == nil {

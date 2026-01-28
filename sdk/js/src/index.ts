@@ -179,10 +179,12 @@ export class DstackClient<T extends TcbInfo = TcbInfoV05x> {
         console.warn(`Using simulator endpoint: ${process.env.DSTACK_SIMULATOR_ENDPOINT}`)
         endpoint = process.env.DSTACK_SIMULATOR_ENDPOINT
       } else {
-        // Try new path first, fall back to old path for backward compatibility
+        // Try paths in order: legacy paths first, then namespaced paths
         const socketPaths = [
-          '/var/run/dstack/dstack.sock',
           '/var/run/dstack.sock',
+          '/run/dstack.sock',
+          '/var/run/dstack/dstack.sock',
+          '/run/dstack/dstack.sock',
         ]
         endpoint = socketPaths.find(p => fs.existsSync(p)) ?? socketPaths[0]
       }
@@ -407,10 +409,12 @@ export class TappdClient extends DstackClient<TcbInfoV03x> {
         console.warn(`Using tappd endpoint: ${process.env.TAPPD_SIMULATOR_ENDPOINT}`)
         endpoint = process.env.TAPPD_SIMULATOR_ENDPOINT
       } else {
-        // Try new path first, fall back to old path for backward compatibility
+        // Try paths in order: legacy paths first, then namespaced paths
         const socketPaths = [
-          '/var/run/dstack/tappd.sock',
           '/var/run/tappd.sock',
+          '/run/tappd.sock',
+          '/var/run/dstack/tappd.sock',
+          '/run/dstack/tappd.sock',
         ]
         endpoint = socketPaths.find(p => fs.existsSync(p)) ?? socketPaths[0]
       }

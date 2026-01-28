@@ -51,10 +51,12 @@ def get_endpoint(endpoint: str | None = None) -> str:
             f"Using simulator endpoint: {os.environ['DSTACK_SIMULATOR_ENDPOINT']}"
         )
         return os.environ["DSTACK_SIMULATOR_ENDPOINT"]
-    # Try new path first, fall back to old path for backward compatibility
+    # Try paths in order: legacy paths first, then namespaced paths
     socket_paths = [
-        "/var/run/dstack/dstack.sock",
         "/var/run/dstack.sock",
+        "/run/dstack.sock",
+        "/var/run/dstack/dstack.sock",
+        "/run/dstack/dstack.sock",
     ]
     for path in socket_paths:
         if os.path.exists(path):
@@ -69,10 +71,12 @@ def get_tappd_endpoint(endpoint: str | None = None) -> str:
     if "TAPPD_SIMULATOR_ENDPOINT" in os.environ:
         logger.info(f"Using tappd endpoint: {os.environ['TAPPD_SIMULATOR_ENDPOINT']}")
         return os.environ["TAPPD_SIMULATOR_ENDPOINT"]
-    # Try new path first, fall back to old path for backward compatibility
+    # Try paths in order: legacy paths first, then namespaced paths
     socket_paths = [
-        "/var/run/dstack/tappd.sock",
         "/var/run/tappd.sock",
+        "/run/tappd.sock",
+        "/var/run/dstack/tappd.sock",
+        "/run/dstack/tappd.sock",
     ]
     for path in socket_paths:
         if os.path.exists(path):
