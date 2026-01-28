@@ -10,8 +10,8 @@
 Description=dstack guest agent sockets
 
 [Socket]
-ListenStream=/var/run/dstack.sock
-ListenStream=/var/run/tappd.sock
+ListenStream=/run/dstack.sock
+ListenStream=/run/tappd.sock
 SocketMode=0777
 
 [Install]
