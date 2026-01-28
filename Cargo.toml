@@ -105,6 +105,7 @@ tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
 safe-write = "0.1.2"
 nix = "0.29.0"
 sd-notify = "0.4.5"
+listenfd = "1.0"
 jemallocator = "0.5.4"
 
 # Serialization/Parsing

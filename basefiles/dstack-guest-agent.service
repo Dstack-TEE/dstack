@@ -1,6 +1,7 @@
 [Unit]
 Description=dstack Guest Agent Service
-After=network.target tboot.service
+Requires=dstack-guest-agent.socket
+After=network.target tboot.service dstack-guest-agent.socket
 Before=docker.service
 
 [Service]
