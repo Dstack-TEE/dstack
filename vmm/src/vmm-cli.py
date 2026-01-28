@@ -29,9 +29,27 @@ try:
 except ImportError:
     CRYPTO_AVAILABLE = False
 
-# Default whitelist file location
+# Default config file locations
+DEFAULT_CONFIG_PATH = os.path.expanduser("~/.dstack-vmm/config.json")
 DEFAULT_KMS_WHITELIST_PATH = os.path.expanduser(
     "~/.dstack-vmm/kms-whitelist.json")
+
+
+def load_config() -> Dict[str, Any]:
+    """
+    Load configuration from the default config file.
+
+    Returns:
+        Dictionary with configuration values (url, auth_user, auth_password)
+    """
+    if not os.path.exists(DEFAULT_CONFIG_PATH):
+        return {}
+
+    try:
+        with open(DEFAULT_CONFIG_PATH, 'r') as f:
+            return json.load(f)
+    except (json.JSONDecodeError, FileNotFoundError):
+        return {}
 
 
 def encrypt_env(envs, hex_public_key: str) -> str:
@@ -1174,19 +1192,31 @@ def save_whitelist(whitelist: List[str]) -> None:
 def main():
     parser = argparse.ArgumentParser(description='dstack-vmm CLI - Manage VMs')
 
-    # Get default URL from environment variable or use localhost
-    default_url = os.environ.get('DSTACK_VMM_URL', 'http://localhost:8080')
+    # Load config file defaults
+    config = load_config()
+
+    # Priority: command line > environment variable > config file > default
+    default_url = os.environ.get(
+        'DSTACK_VMM_URL',
+        config.get('url', 'http://localhost:8080'))
+    default_auth_user = os.environ.get(
+        'DSTACK_VMM_AUTH_USER',
+        config.get('auth_user'))
+    default_auth_password = os.environ.get(
+        'DSTACK_VMM_AUTH_PASSWORD',
+        config.get('auth_password'))
 
     parser.add_argument(
-        '--url', default=default_url, help='dstack-vmm API URL (can also be set via DSTACK_VMM_URL env var)')
+        '--url', default=default_url,
+        help='dstack-vmm API URL (can also be set via DSTACK_VMM_URL env var or config file)')
 
     # Basic authentication arguments
     parser.add_argument(
-        '--auth-user', default=os.environ.get('DSTACK_VMM_AUTH_USER'),
-        help='Basic auth username (can also be set via DSTACK_VMM_AUTH_USER env var)')
+        '--auth-user', default=default_auth_user,
+        help='Basic auth username (can also be set via DSTACK_VMM_AUTH_USER env var or config file)')
     parser.add_argument(
-        '--auth-password', default=os.environ.get('DSTACK_VMM_AUTH_PASSWORD'),
-        help='Basic auth password (can also be set via DSTACK_VMM_AUTH_PASSWORD env var)')
+        '--auth-password', default=default_auth_password,
+        help='Basic auth password (can also be set via DSTACK_VMM_AUTH_PASSWORD env var or config file)')
 
     subparsers = parser.add_subparsers(dest='command', help='Commands')
 
