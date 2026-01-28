@@ -1,0 +1,18 @@
+# SPDX-FileCopyrightText: 2025 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# Socket activation for dstack-guest-agent.
+# Provides backward compatibility for containers that mount sockets directly.
+# Socket order: dstack.sock (index 0), tappd.sock (index 1)
+
+[Unit]
+Description=dstack guest agent sockets
+
+[Socket]
+ListenStream=/run/dstack.sock
+ListenStream=/run/tappd.sock
+SocketMode=0777
+
+[Install]
+WantedBy=sockets.target
