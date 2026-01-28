@@ -409,6 +409,22 @@ pub struct HostApiConfig {
     pub port: u32,
 }
 
+impl HostApiConfig {
+    /// Validate that the host API address is a vsock address.
+    /// The host API must only listen on vsock for security reasons.
+    /// TCP/Unix socket listening is not supported.
+    pub fn validate(&self) -> Result<()> {
+        if !self.address.starts_with("vsock:") {
+            anyhow::bail!(
+                "Host API address must be a vsock address (e.g., 'vsock:2'), got: '{}'. \
+                TCP/Unix socket listening is not supported for the host API.",
+                self.address
+            );
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct KeyProviderConfig {
     pub enabled: bool,
