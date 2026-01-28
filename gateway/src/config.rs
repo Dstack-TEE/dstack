@@ -85,6 +85,8 @@ pub struct ProxyConfig {
     pub workers: usize,
     pub app_address_ns_prefix: String,
     pub app_address_ns_compat: bool,
+    /// Maximum concurrent connections per app. 0 means unlimited.
+    pub max_connections_per_app: u64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
