@@ -337,9 +337,15 @@ impl ProxyState {
         id: &str,
         app_id: &str,
         public_key: &str,
-    ) -> Option<InstanceInfo> {
-        if id.is_empty() || public_key.is_empty() || app_id.is_empty() {
-            return None;
+    ) -> Result<InstanceInfo> {
+        if id.is_empty() {
+            bail!("instance_id is empty (no_instance_id is set?)");
+        }
+        if app_id.is_empty() {
+            bail!("app_id is empty");
+        }
+        if public_key.is_empty() {
+            bail!("public_key is empty");
         }
         if let Some(existing) = self.state.instances.get_mut(id) {
             if existing.public_key != public_key {
@@ -348,12 +354,14 @@ impl ProxyState {
             }
             let existing = existing.clone();
             if self.valid_ip(existing.ip) {
-                return Some(existing);
+                return Ok(existing);
             }
             info!("ip {} is invalid, removing", existing.ip);
             self.state.allocated_addresses.remove(&existing.ip);
         }
-        let ip = self.alloc_ip()?;
+        let ip = self
+            .alloc_ip()
+            .context("IP pool exhausted, no available addresses in client_ip_range")?;
         let host_info = InstanceInfo {
             id: id.to_string(),
             app_id: app_id.to_string(),
@@ -364,7 +372,7 @@ impl ProxyState {
             connections: Default::default(),
         };
         self.add_instance(host_info.clone());
-        Some(host_info)
+        Ok(host_info)
     }
 
     fn add_instance(&mut self, info: InstanceInfo) {
@@ -755,7 +763,7 @@ impl GatewayRpc for RpcHandler {
         }
         let client_info = state
             .new_client_by_id(&instance_id, &app_id, &request.client_public_key)
-            .context("failed to allocate IP address for client")?;
+            .context("failed to register client")?;
         if let Err(err) = state.reconfigure() {
             error!("failed to reconfigure: {}", err);
         }
