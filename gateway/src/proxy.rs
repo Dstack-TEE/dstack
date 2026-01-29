@@ -8,19 +8,90 @@ use std::{
         atomic::{AtomicU64, AtomicUsize, Ordering},
         Arc,
     },
+    time::Duration,
 };
+
+use std::io;
+use std::pin::Pin;
+use std::task::{Context as TaskContext, Poll};
 
 use anyhow::{bail, Context, Result};
 use sni::extract_sni;
 pub(crate) use tls_terminate::create_acceptor;
 use tokio::{
-    io::AsyncReadExt,
+    io::{AsyncRead, AsyncReadExt, AsyncWrite, ReadBuf},
     net::{TcpListener, TcpStream},
     time::timeout,
 };
+use tokio_util::compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
 use tracing::{debug, error, info, info_span, Instrument};
 
 use crate::{config::ProxyConfig, main_service::Proxy, models::EnteredCounter};
+
+/// Abstraction over inbound connection types (TCP or yamux stream).
+#[pin_project::pin_project(project = InboundStreamProj)]
+pub(crate) enum InboundStream {
+    Tcp(#[pin] TcpStream),
+    Yamux(#[pin] tokio_util::compat::Compat<yamux::Stream>),
+}
+
+impl AsyncRead for InboundStream {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut TaskContext<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        match self.project() {
+            InboundStreamProj::Tcp(s) => s.poll_read(cx, buf),
+            InboundStreamProj::Yamux(s) => s.poll_read(cx, buf),
+        }
+    }
+}
+
+impl AsyncWrite for InboundStream {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut TaskContext<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        match self.project() {
+            InboundStreamProj::Tcp(s) => s.poll_write(cx, buf),
+            InboundStreamProj::Yamux(s) => s.poll_write(cx, buf),
+        }
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<io::Result<()>> {
+        match self.project() {
+            InboundStreamProj::Tcp(s) => s.poll_flush(cx),
+            InboundStreamProj::Yamux(s) => s.poll_flush(cx),
+        }
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<io::Result<()>> {
+        match self.project() {
+            InboundStreamProj::Tcp(s) => s.poll_shutdown(cx),
+            InboundStreamProj::Yamux(s) => s.poll_shutdown(cx),
+        }
+    }
+
+    fn poll_write_vectored(
+        self: Pin<&mut Self>,
+        cx: &mut TaskContext<'_>,
+        bufs: &[io::IoSlice<'_>],
+    ) -> Poll<io::Result<usize>> {
+        match self.project() {
+            InboundStreamProj::Tcp(s) => s.poll_write_vectored(cx, bufs),
+            InboundStreamProj::Yamux(s) => s.poll_write_vectored(cx, bufs),
+        }
+    }
+
+    fn is_write_vectored(&self) -> bool {
+        match self {
+            InboundStream::Tcp(s) => s.is_write_vectored(),
+            InboundStream::Yamux(s) => s.is_write_vectored(),
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub(crate) struct AddressInfo {
@@ -35,7 +106,7 @@ mod sni;
 mod tls_passthough;
 mod tls_terminate;
 
-async fn take_sni(stream: &mut TcpStream) -> Result<(Option<String>, Vec<u8>)> {
+async fn take_sni(stream: &mut (impl AsyncRead + Unpin)) -> Result<(Option<String>, Vec<u8>)> {
     let mut buffer = vec![0u8; 4096];
     let mut data_len = 0;
     loop {
@@ -132,7 +203,7 @@ fn parse_destination(sni: &str, dotted_base_domain: &str) -> Result<DstInfo> {
 pub static NUM_CONNECTIONS: AtomicU64 = AtomicU64::new(0);
 
 async fn handle_connection(
-    mut inbound: TcpStream,
+    mut inbound: InboundStream,
     state: Proxy,
     dotted_base_domain: &str,
 ) -> Result<()> {
@@ -173,7 +244,7 @@ pub async fn proxy_main(config: &ProxyConfig, proxy: Proxy) -> Result<()> {
         let base_domain = base_domain.strip_prefix(".").unwrap_or(base_domain);
         Arc::new(format!(".{base_domain}"))
     };
-    let listener = TcpListener::bind((config.listen_addr, config.listen_port))
+    let tcp_listener = TcpListener::bind((config.listen_addr, config.listen_port))
         .await
         .with_context(|| {
             format!(
@@ -186,17 +257,134 @@ pub async fn proxy_main(config: &ProxyConfig, proxy: Proxy) -> Result<()> {
         config.listen_addr, config.listen_port
     );
 
+    let mut yamux_config = yamux::Config::default();
+    if config.timeouts.yamux_ping != Duration::ZERO {
+        yamux_config.set_ping_timeout(Some(config.timeouts.yamux_ping));
+    }
+
+    let yamux_listener = if let Some(yamux_port) = config.yamux_listen_port {
+        let listener = TcpListener::bind(format!("0.0.0.0:{yamux_port}"))
+            .await
+            .with_context(|| format!("failed to bind yamux port {yamux_port}"))?;
+        info!("yamux bridge listening on TCP port {yamux_port}");
+        Some(listener)
+    } else {
+        None
+    };
+
     loop {
-        match listener.accept().await {
-            Ok((inbound, from)) => {
+        if let Some(ref yamux_listener) = yamux_listener {
+            tokio::select! {
+                result = tcp_listener.accept() => {
+                    match result {
+                        Ok((stream, from)) => {
+                            spawn_connection(
+                                &workers_rt,
+                                InboundStream::Tcp(stream),
+                                from.to_string(),
+                                proxy.clone(),
+                                dotted_base_domain.clone(),
+                            );
+                        }
+                        Err(e) => error!("failed to accept tcp connection: {e:?}"),
+                    }
+                }
+                result = yamux_listener.accept() => {
+                    match result {
+                        Ok((stream, from)) => {
+                            let proxy = proxy.clone();
+                            let dotted_base_domain = dotted_base_domain.clone();
+                            let handle = workers_rt.handle().clone();
+                            let yamux_config = yamux_config.clone();
+                            tokio::spawn(async move {
+                                let from = format!("yamux:{from}");
+                                info!(%from, "new yamux connection");
+                                handle_yamux_connection(
+                                    stream, yamux_config, &handle, proxy, dotted_base_domain,
+                                ).await;
+                            });
+                        }
+                        Err(e) => error!("failed to accept yamux connection: {e:?}"),
+                    }
+                }
+            }
+        } else {
+            match tcp_listener.accept().await {
+                Ok((stream, from)) => {
+                    spawn_connection(
+                        &workers_rt,
+                        InboundStream::Tcp(stream),
+                        from.to_string(),
+                        proxy.clone(),
+                        dotted_base_domain.clone(),
+                    );
+                }
+                Err(e) => error!("failed to accept tcp connection: {e:?}"),
+            }
+        };
+    }
+}
+
+/// Spawn a single inbound connection handler on the worker runtime.
+fn spawn_connection(
+    workers_rt: &tokio::runtime::Runtime,
+    inbound: InboundStream,
+    from: String,
+    proxy: Proxy,
+    dotted_base_domain: Arc<String>,
+) {
+    let span = info_span!("conn", id = next_connection_id());
+    let _enter = span.enter();
+    let conn_entered = EnteredCounter::new(&NUM_CONNECTIONS);
+
+    info!(%from, "new connection");
+    workers_rt.spawn(
+        async move {
+            let _conn_entered = conn_entered;
+            let timeouts = &proxy.config.proxy.timeouts;
+            let result = timeout(
+                timeouts.total,
+                handle_connection(inbound, proxy, &dotted_base_domain),
+            )
+            .await;
+            match result {
+                Ok(Ok(_)) => {
+                    info!("connection closed");
+                }
+                Ok(Err(e)) => {
+                    error!("connection error: {e:?}");
+                }
+                Err(_) => {
+                    error!("connection kept too long, force closing");
+                }
+            }
+        }
+        .in_current_span(),
+    );
+}
+
+/// Handle a yamux connection.
+/// Each accepted yamux stream becomes an independent inbound connection.
+async fn handle_yamux_connection(
+    tcp_stream: TcpStream,
+    yamux_config: yamux::Config,
+    workers_handle: &tokio::runtime::Handle,
+    proxy: Proxy,
+    dotted_base_domain: Arc<String>,
+) {
+    let mut conn = yamux::Connection::new(tcp_stream.compat(), yamux_config, yamux::Mode::Server);
+    loop {
+        match std::future::poll_fn(|cx| conn.poll_next_inbound(cx)).await {
+            Some(Ok(stream)) => {
+                let inbound = InboundStream::Yamux(stream.compat());
                 let span = info_span!("conn", id = next_connection_id());
                 let _enter = span.enter();
                 let conn_entered = EnteredCounter::new(&NUM_CONNECTIONS);
 
-                info!(%from, "new connection");
+                debug!("new yamux stream");
                 let proxy = proxy.clone();
                 let dotted_base_domain = dotted_base_domain.clone();
-                workers_rt.spawn(
+                workers_handle.spawn(
                     async move {
                         let _conn_entered = conn_entered;
                         let timeouts = &proxy.config.proxy.timeouts;
@@ -220,8 +408,13 @@ pub async fn proxy_main(config: &ProxyConfig, proxy: Proxy) -> Result<()> {
                     .in_current_span(),
                 );
             }
-            Err(e) => {
-                error!("failed to accept connection: {e:?}");
+            Some(Err(e)) => {
+                error!("yamux accept error: {e}");
+                break;
+            }
+            None => {
+                info!("yamux connection closed by peer");
+                break;
             }
         }
     }
@@ -257,6 +450,7 @@ pub fn start(config: ProxyConfig, app_state: Proxy) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::io::AsyncWriteExt as _;
 
     #[test]
     fn test_parse_destination() {
@@ -319,5 +513,89 @@ mod tests {
         // Test empty app_id
         assert!(parse_destination("-8080.example.com", base_domain).is_err());
         assert!(parse_destination("myapp-8080ss.example.com", base_domain).is_err());
+    }
+
+    #[tokio::test]
+    async fn test_inbound_stream_tcp_read_write() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let client_handle = tokio::spawn(async move {
+            let stream = TcpStream::connect(addr).await.unwrap();
+            let mut inbound = InboundStream::Tcp(stream);
+            inbound.write_all(b"hello vsock").await.unwrap();
+            inbound.flush().await.unwrap();
+            let mut buf = vec![0u8; 64];
+            let n = inbound.read(&mut buf).await.unwrap();
+            String::from_utf8(buf[..n].to_vec()).unwrap()
+        });
+
+        let (server_stream, _) = listener.accept().await.unwrap();
+        let mut server = server_stream;
+        let mut buf = vec![0u8; 64];
+        let n = server.read(&mut buf).await.unwrap();
+        assert_eq!(&buf[..n], b"hello vsock");
+        server.write_all(b"echo back").await.unwrap();
+        server.shutdown().await.unwrap();
+
+        let response = client_handle.await.unwrap();
+        assert_eq!(response, "echo back");
+    }
+
+    #[tokio::test]
+    async fn test_take_sni_with_inbound_stream() {
+        // Verify take_sni works with InboundStream (via impl AsyncRead + Unpin)
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        // Send a TLS ClientHello with SNI "test.example.com"
+        let client_handle = tokio::spawn(async move {
+            let mut stream = TcpStream::connect(addr).await.unwrap();
+            // Minimal TLS ClientHello with SNI extension
+            // Record header: ContentType=22 (Handshake), Version=0x0301, Length
+            // Handshake: Type=1 (ClientHello)
+            let sni_hostname = b"test.example.com";
+            let _sni_entry_len = (sni_hostname.len() + 3) as u16;
+            let sni_list_len = (sni_hostname.len() + 5) as u16;
+            let ext_data_len = (sni_hostname.len() + 7) as u16;
+            let extensions_len = ext_data_len + 4; // type(2) + len(2) + data
+            let client_hello_body_len = 2 + 32 + 1 + 2 + 1 + 2 + extensions_len;
+            let handshake_len = client_hello_body_len + 4; // type(1) + len(3)
+            let mut hello = Vec::new();
+            // TLS record header
+            hello.push(0x16); // ContentType: Handshake
+            hello.extend_from_slice(&[0x03, 0x01]); // Version: TLS 1.0
+            hello.extend_from_slice(&(handshake_len as u16).to_be_bytes());
+            // Handshake header
+            hello.push(0x01); // ClientHello
+            hello.push(0x00);
+            hello.extend_from_slice(&(client_hello_body_len as u16).to_be_bytes());
+            // ClientHello body
+            hello.extend_from_slice(&[0x03, 0x03]); // Version: TLS 1.2
+            hello.extend_from_slice(&[0u8; 32]); // Random
+            hello.push(0x00); // Session ID length
+            hello.extend_from_slice(&[0x00, 0x02]); // Cipher suites length
+            hello.extend_from_slice(&[0x00, 0x2f]); // TLS_RSA_WITH_AES_128_CBC_SHA
+            hello.push(0x01); // Compression methods length
+            hello.push(0x00); // null compression
+            hello.extend_from_slice(&extensions_len.to_be_bytes());
+            // SNI extension
+            hello.extend_from_slice(&[0x00, 0x00]); // Extension type: SNI
+            hello.extend_from_slice(&ext_data_len.to_be_bytes());
+            hello.extend_from_slice(&sni_list_len.to_be_bytes());
+            hello.push(0x00); // Host name type
+            hello.extend_from_slice(&(sni_hostname.len() as u16).to_be_bytes());
+            hello.extend_from_slice(sni_hostname);
+
+            stream.write_all(&hello).await.unwrap();
+            stream.shutdown().await.unwrap();
+        });
+
+        let (server_stream, _) = listener.accept().await.unwrap();
+        let mut inbound = InboundStream::Tcp(server_stream);
+        let (sni, _buffer) = take_sni(&mut inbound).await.unwrap();
+        assert_eq!(sni.as_deref(), Some("test.example.com"));
+
+        client_handle.await.unwrap();
     }
 }

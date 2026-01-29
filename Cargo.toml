@@ -52,6 +52,7 @@ members = [
     "verifier",
     "no_std_check",
     "size-parser",
+    "uds2yamux",
 ]
 resolver = "2"
 
@@ -159,7 +160,10 @@ rocket = { git = "https://github.com/rwf2/Rocket", branch = "master", features =
 ] }
 rocket-apitoken = { git = "https://github.com/kvinwang/rocket-apitoken", branch = "dev" }
 tokio = { version = "1.46.1" }
+tokio-util = { version = "0.7", features = ["compat"] }
 tokio-vsock = "0.7.0"
+yamux = { git = "https://github.com/kvinwang/rust-yamux", branch = "feat/ping-timeout" }
+quinn = { path = "/home/kvin/src/quinn-plain/quinn", default-features = false, features = ["runtime-tokio", "null-crypto"] }
 sysinfo = "0.35.2"
 default-net = "0.22.0"
 url = "2.5"

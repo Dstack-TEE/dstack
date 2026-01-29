@@ -55,6 +55,11 @@ impl Supervisor {
         if self.freezed() {
             bail!("Supervisor is freezed");
         }
+        if let Some(meta) = tracing::Span::current().metadata() {
+            info!(current_span = meta.name(), "deploy span");
+        } else {
+            info!("deploy span: none");
+        }
         let id = config.id.clone();
         if id.is_empty() {
             return Err(anyhow::anyhow!("Process ID is empty"));

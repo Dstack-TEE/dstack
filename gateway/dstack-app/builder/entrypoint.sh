@@ -149,6 +149,7 @@ idle = "10m"
 write = "5s"
 shutdown = "5s"
 total = "5h"
+yamux_ping = "${YAMUX_PING_TIMEOUT:-15s}"
 
 [core.recycle]
 enabled = true

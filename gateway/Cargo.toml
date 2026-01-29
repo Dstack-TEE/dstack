@@ -20,6 +20,7 @@ fs-err.workspace = true
 clap = { workspace = true, features = ["derive", "string"] }
 shared_child.workspace = true
 tokio = { workspace = true, features = ["full"] }
+tokio-util = { workspace = true, features = ["compat"] }
 rustls.workspace = true
 tokio-rustls = { workspace = true, features = ["ring"] }
 rinja.workspace = true
@@ -37,6 +38,7 @@ bytes.workspace = true
 safe-write.workspace = true
 smallvec.workspace = true
 futures.workspace = true
+yamux.workspace = true
 cmd_lib.workspace = true
 load_config.workspace = true
 dstack-kms-rpc.workspace = true

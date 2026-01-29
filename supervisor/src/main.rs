@@ -14,7 +14,7 @@ use rocket::{
 };
 use supervisor::web_api;
 use tracing::error;
-use tracing_subscriber::EnvFilter;
+use tracing_subscriber::{fmt::format::FmtSpan, EnvFilter};
 
 pub const DEFAULT_CONFIG: &str = include_str!("../supervisor.toml");
 
@@ -89,11 +89,13 @@ fn main() -> Result<()> {
             .context("Failed to open log file")?;
         tracing_subscriber::fmt()
             .with_env_filter(EnvFilter::from_default_env())
+            .with_span_events(FmtSpan::ENTER | FmtSpan::EXIT)
             .with_writer(file)
             .init();
     } else {
         tracing_subscriber::fmt()
             .with_env_filter(EnvFilter::from_default_env())
+            .with_span_events(FmtSpan::ENTER | FmtSpan::EXIT)
             .init();
     }
     #[cfg(unix)]

@@ -85,6 +85,7 @@ pub struct ProxyConfig {
     pub workers: usize,
     pub app_address_ns_prefix: String,
     pub app_address_ns_compat: bool,
+    pub yamux_listen_port: Option<u16>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -110,6 +111,10 @@ pub struct Timeouts {
     pub write: Duration,
     #[serde(with = "serde_duration")]
     pub shutdown: Duration,
+
+    /// Ping timeout for yamux connections. Set to 0s to disable.
+    #[serde(with = "serde_duration")]
+    pub yamux_ping: Duration,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
