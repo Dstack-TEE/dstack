@@ -68,6 +68,7 @@ connect_top_n = 3
 localhost_enabled = false
 app_address_ns_prefix = "_dstack-app-address"
 app_address_ns_compat = true
+# vsock_listen_port = 443
 workers = 32
 external_port = 443
 

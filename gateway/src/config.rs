@@ -85,6 +85,7 @@ pub struct ProxyConfig {
     pub workers: usize,
     pub app_address_ns_prefix: String,
     pub app_address_ns_compat: bool,
+    pub quic_listen_port: Option<u16>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

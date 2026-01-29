@@ -12,7 +12,7 @@ use crate::{
     models::{Counting, EnteredCounter},
 };
 
-use super::{io_bridge::bridge, AddressGroup};
+use super::{io_bridge::bridge, AddressGroup, InboundStream};
 
 #[derive(Debug)]
 struct AppAddress {
@@ -73,7 +73,7 @@ async fn resolve_app_address(prefix: &str, sni: &str, compat: bool) -> Result<Ap
 
 pub(crate) async fn proxy_with_sni(
     state: Proxy,
-    inbound: TcpStream,
+    inbound: InboundStream,
     buffer: Vec<u8>,
     sni: &str,
 ) -> Result<()> {
@@ -121,7 +121,7 @@ pub(crate) async fn connect_multiple_hosts(
 
 pub(crate) async fn proxy_to_app(
     state: Proxy,
-    inbound: TcpStream,
+    inbound: InboundStream,
     buffer: Vec<u8>,
     app_id: &str,
     port: u16,

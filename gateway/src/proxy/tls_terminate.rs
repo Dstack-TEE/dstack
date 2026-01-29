@@ -7,6 +7,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
+use super::InboundStream;
 use anyhow::{anyhow, bail, Context as _, Result};
 use fs_err as fs;
 use hyper::body::Incoming;
@@ -19,7 +20,6 @@ use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::version::{TLS12, TLS13};
 use serde::Serialize;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
-use tokio::net::TcpStream;
 use tokio::time::timeout;
 use tokio_rustls::{rustls, server::TlsStream, TlsAcceptor};
 use tracing::{debug, info};
@@ -175,7 +175,7 @@ impl Proxy {
 
     pub(crate) async fn handle_this_node(
         &self,
-        inbound: TcpStream,
+        inbound: InboundStream,
         buffer: Vec<u8>,
         port: u16,
         h2: bool,
@@ -231,7 +231,7 @@ impl Proxy {
     /// Deprecated legacy endpoint
     pub(crate) async fn handle_health_check(
         &self,
-        inbound: TcpStream,
+        inbound: InboundStream,
         buffer: Vec<u8>,
         port: u16,
         h2: bool,
@@ -268,10 +268,10 @@ impl Proxy {
 
     async fn tls_accept(
         &self,
-        inbound: TcpStream,
+        inbound: InboundStream,
         buffer: Vec<u8>,
         h2: bool,
-    ) -> Result<TlsStream<MergedStream>> {
+    ) -> Result<TlsStream<MergedStream<InboundStream>>> {
         let stream = MergedStream {
             buffer,
             buffer_cursor: 0,
@@ -300,7 +300,7 @@ impl Proxy {
 
     pub(crate) async fn proxy(
         &self,
-        inbound: TcpStream,
+        inbound: InboundStream,
         buffer: Vec<u8>,
         app_id: &str,
         port: u16,
@@ -337,14 +337,14 @@ impl Proxy {
 }
 
 #[pin_project::pin_project]
-struct MergedStream {
+struct MergedStream<S> {
     buffer: Vec<u8>,
     buffer_cursor: usize,
     #[pin]
-    inbound: TcpStream,
+    inbound: S,
 }
 
-impl AsyncRead for MergedStream {
+impl<S: AsyncRead + Unpin> AsyncRead for MergedStream<S> {
     fn poll_read(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -366,7 +366,7 @@ impl AsyncRead for MergedStream {
         this.inbound.poll_read(cx, buf)
     }
 }
-impl AsyncWrite for MergedStream {
+impl<S: AsyncWrite + Unpin> AsyncWrite for MergedStream<S> {
     fn poll_write(
         self: std::pin::Pin<&mut Self>,
         cx: &mut Context<'_>,
