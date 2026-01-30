@@ -242,7 +242,7 @@ impl Process {
             let process_uuid = self.config.id.clone();
             let weak_state = Arc::downgrade(&self.state);
 
-            let span = tracing::info_span!("process", id = process_uuid);
+            let span = tracing::info_span!(parent: None, "process", id = process_uuid);
             tokio::spawn(
                 async move {
                     info!("Started");
