@@ -2202,6 +2202,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "shared_child",
+ "size-parser",
  "smallvec",
  "tokio",
  "tokio-rustls",

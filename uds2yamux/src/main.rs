@@ -4,11 +4,13 @@
 
 //! Forward UDS connections to a remote yamux endpoint over TCP.
 //!
-//! Maintains a single TCP connection and multiplexes each incoming UDS
+//! Maintains a pool of TCP connections and multiplexes each incoming UDS
 //! connection onto a yamux stream.
 
 use anyhow::{Context, Result};
 use clap::Parser;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use tokio::net::{TcpStream, UnixListener};
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
@@ -24,7 +26,13 @@ struct Args {
     /// Yamux server address (host:port)
     #[arg(long)]
     yamux_addr: String,
+
+    /// Number of TCP connections in the yamux pool
+    #[arg(long, default_value = "1")]
+    yamux_conns: usize,
 }
+
+type YamuxRequest = oneshot::Sender<anyhow::Result<yamux::Stream>>;
 
 async fn connect_yamux(
     addr: &str,
@@ -44,37 +52,110 @@ async fn connect_yamux(
     ))
 }
 
-async fn drive_yamux(
-    mut conn: yamux::Connection<tokio_util::compat::Compat<TcpStream>>,
-    mut requests: mpsc::Receiver<oneshot::Sender<anyhow::Result<yamux::Stream>>>,
-) {
+async fn drive_yamux(addr: String, mut requests: mpsc::Receiver<YamuxRequest>) {
+    use futures::FutureExt;
+
+    let mut pending: Vec<YamuxRequest> = Vec::new();
+    let mut backoff = std::time::Duration::from_secs(1);
+    let max_backoff = std::time::Duration::from_secs(60);
+
     loop {
-        tokio::select! {
-            inbound = std::future::poll_fn(|cx| conn.poll_next_inbound(cx)) => {
-                match inbound {
-                    Some(Ok(stream)) => {
-                        info!("yamux: inbound stream {stream}");
-                    }
-                    Some(Err(e)) => {
-                        error!("yamux: inbound error: {e}");
-                        break;
-                    }
-                    None => {
-                        info!("yamux: connection closed by peer");
-                        break;
+        let mut conn = loop {
+            match connect_yamux(&addr).await {
+                Ok(conn) => {
+                    backoff = std::time::Duration::from_secs(1);
+                    info!("yamux: connected to {addr}");
+                    break conn;
+                }
+                Err(e) => {
+                    error!("yamux: connect error: {e}");
+                    let delay = tokio::time::sleep(backoff);
+                    tokio::pin!(delay);
+                    tokio::select! {
+                        _ = &mut delay => {
+                            backoff = std::cmp::min(backoff * 2, max_backoff);
+                        }
+                        request = requests.recv() => {
+                            match request {
+                                Some(reply) => pending.push(reply),
+                                None => return,
+                            }
+                        }
                     }
                 }
             }
-            request = requests.recv() => {
-                let Some(reply) = request else {
-                    break;
-                };
-                let result = std::future::poll_fn(|cx| conn.poll_new_outbound(cx))
-                    .await
-                    .map_err(|e| anyhow::anyhow!("failed to open yamux stream: {e}"));
-                let _ = reply.send(result);
+        };
+
+        loop {
+            let request_fut = if let Some(reply) = pending.pop() {
+                futures::future::ready(Some(reply)).boxed()
+            } else {
+                requests.recv().boxed()
+            };
+
+            tokio::select! {
+                inbound = std::future::poll_fn(|cx| conn.poll_next_inbound(cx)) => {
+                    match inbound {
+                        Some(Ok(stream)) => {
+                            info!("yamux: inbound stream {stream}");
+                        }
+                        Some(Err(e)) => {
+                            error!("yamux: inbound error: {e}");
+                            break;
+                        }
+                        None => {
+                            info!("yamux: connection closed by peer");
+                            break;
+                        }
+                    }
+                }
+                request = request_fut => {
+                    let Some(reply) = request else {
+                        return;
+                    };
+                    let result = std::future::poll_fn(|cx| conn.poll_new_outbound(cx))
+                        .await
+                        .map_err(|e| anyhow::anyhow!("failed to open yamux stream: {e}"));
+                    let _ = reply.send(result);
+                }
             }
         }
+    }
+}
+
+async fn spawn_yamux_driver(addr: &str) -> Result<mpsc::Sender<YamuxRequest>> {
+    let (request_tx, request_rx) = mpsc::channel(128);
+    tokio::spawn(drive_yamux(addr.to_string(), request_rx));
+    Ok(request_tx)
+}
+
+struct YamuxPool {
+    senders: Vec<mpsc::Sender<YamuxRequest>>,
+    next: AtomicUsize,
+}
+
+impl YamuxPool {
+    async fn new(addr: &str, num_conns: usize) -> Result<Self> {
+        let mut senders = Vec::with_capacity(num_conns);
+        for _ in 0..num_conns {
+            senders.push(spawn_yamux_driver(addr).await?);
+        }
+        Ok(Self {
+            senders,
+            next: AtomicUsize::new(0),
+        })
+    }
+
+    async fn open_stream(&self) -> Result<yamux::Stream> {
+        let idx = self.next.fetch_add(1, Ordering::Relaxed) % self.senders.len();
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.senders[idx]
+            .send(reply_tx)
+            .await
+            .map_err(|_| anyhow::anyhow!("yamux driver closed"))?;
+        reply_rx
+            .await
+            .map_err(|_| anyhow::anyhow!("yamux driver dropped response channel"))?
     }
 }
 
@@ -82,22 +163,24 @@ async fn drive_yamux(
 async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
     let args = Args::parse();
+    if args.yamux_conns == 0 {
+        anyhow::bail!("yamux_conns must be >= 1");
+    }
 
     let _ = std::fs::remove_file(&args.uds);
 
     let listener = UnixListener::bind(&args.uds)
         .with_context(|| format!("failed to bind UDS at {}", args.uds))?;
 
-    let connection = connect_yamux(&args.yamux_addr)
-        .await
-        .context("failed to connect yamux")?;
-
-    let (request_tx, request_rx) = mpsc::channel(128);
-    tokio::spawn(drive_yamux(connection, request_rx));
+    let pool = Arc::new(
+        YamuxPool::new(&args.yamux_addr, args.yamux_conns)
+            .await
+            .context("failed to connect yamux")?,
+    );
 
     info!(
-        "listening on {}, forwarding to yamux {}",
-        args.uds, args.yamux_addr
+        "listening on {}, forwarding to yamux {} (pool size {})",
+        args.uds, args.yamux_addr, args.yamux_conns
     );
 
     loop {
@@ -106,22 +189,12 @@ async fn main() -> Result<()> {
             .await
             .context("failed to accept UDS connection")?;
 
-        let request_tx = request_tx.clone();
+        let pool = pool.clone();
         tokio::spawn(async move {
-            let (reply_tx, reply_rx) = oneshot::channel();
-            if request_tx.send(reply_tx).await.is_err() {
-                error!("yamux driver closed");
-                return;
-            }
-
-            let stream = match reply_rx.await {
-                Ok(Ok(stream)) => stream,
-                Ok(Err(e)) => {
+            let stream = match pool.open_stream().await {
+                Ok(stream) => stream,
+                Err(e) => {
                     error!("failed to open yamux stream: {e}");
-                    return;
-                }
-                Err(_) => {
-                    error!("yamux driver dropped response channel");
                     return;
                 }
             };

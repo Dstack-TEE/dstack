@@ -68,9 +68,18 @@ connect_top_n = 3
 localhost_enabled = false
 app_address_ns_prefix = "_dstack-app-address"
 app_address_ns_compat = true
-# yamux_listen_port = 4433
 workers = 32
 external_port = 443
+
+[core.proxy.yamux]
+listen_addr = "0.0.0.0"
+listen_port = 4433
+# max_connection_receive_window = 0 to disable limit
+max_connection_receive_window = "1G"
+max_num_streams = 4096
+read_after_close = true
+split_send_size = "16K"
+ping_timeout = "15s"
 
 [core.proxy.timeouts]
 # Timeout for establishing a connection to the target app.
@@ -94,8 +103,6 @@ write = "5s"
 shutdown = "5s"
 # Timeout for total connection duration.
 total = "5h"
-# Yamux ping timeout (0s disables).
-yamux_ping = "15s"
 
 [core.recycle]
 enabled = true

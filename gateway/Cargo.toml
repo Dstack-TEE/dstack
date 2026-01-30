@@ -48,6 +48,7 @@ http-client = { workspace = true, features = ["prpc"] }
 sha2.workspace = true
 dstack-types.workspace = true
 serde-duration.workspace = true
+size-parser = { workspace = true, features = ["serde"] }
 reqwest = { workspace = true, features = ["json"] }
 hyper = { workspace = true, features = ["server", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio"] }

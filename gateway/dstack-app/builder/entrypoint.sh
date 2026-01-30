@@ -149,7 +149,16 @@ idle = "10m"
 write = "5s"
 shutdown = "5s"
 total = "5h"
-yamux_ping = "${YAMUX_PING_TIMEOUT:-15s}"
+
+[core.proxy.yamux]
+listen_addr = "${YAMUX_LISTEN_ADDR:-0.0.0.0}"
+listen_port = ${YAMUX_LISTEN_PORT:-0}
+## Set to 0 to disable max connection receive window limit.
+max_connection_receive_window = ${YAMUX_MAX_CONNECTION_RECEIVE_WINDOW:-1073741824}
+max_num_streams = ${YAMUX_MAX_NUM_STREAMS:-512}
+read_after_close = ${YAMUX_READ_AFTER_CLOSE:-true}
+split_send_size = ${YAMUX_SPLIT_SEND_SIZE:-16384}
+ping_timeout = "${YAMUX_PING_TIMEOUT:-15s}"
 
 [core.recycle]
 enabled = true

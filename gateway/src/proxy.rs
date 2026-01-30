@@ -257,16 +257,29 @@ pub async fn proxy_main(config: &ProxyConfig, proxy: Proxy) -> Result<()> {
         config.listen_addr, config.listen_port
     );
 
+    let yamux_cfg = &config.yamux;
     let mut yamux_config = yamux::Config::default();
-    if config.timeouts.yamux_ping != Duration::ZERO {
-        yamux_config.set_ping_timeout(Some(config.timeouts.yamux_ping));
+    let max_conn_window = if yamux_cfg.max_connection_receive_window == 0 {
+        None
+    } else {
+        Some(yamux_cfg.max_connection_receive_window)
+    };
+    yamux_config.set_max_connection_receive_window(max_conn_window);
+    yamux_config.set_max_num_streams(yamux_cfg.max_num_streams);
+    yamux_config.set_read_after_close(yamux_cfg.read_after_close);
+    yamux_config.set_split_send_size(yamux_cfg.split_send_size);
+    if yamux_cfg.ping_timeout != Duration::ZERO {
+        yamux_config.set_ping_timeout(Some(yamux_cfg.ping_timeout));
     }
 
-    let yamux_listener = if let Some(yamux_port) = config.yamux_listen_port {
-        let listener = TcpListener::bind(format!("0.0.0.0:{yamux_port}"))
+    let yamux_listener = if let Some(yamux_port) = yamux_cfg.listen_port.filter(|p| *p != 0) {
+        let listener = TcpListener::bind((yamux_cfg.listen_addr, yamux_port))
             .await
-            .with_context(|| format!("failed to bind yamux port {yamux_port}"))?;
-        info!("yamux bridge listening on TCP port {yamux_port}");
+            .with_context(|| format!("failed to bind yamux {}:{yamux_port}", yamux_cfg.listen_addr))?;
+        info!(
+            "yamux bridge listening on {}:{}",
+            yamux_cfg.listen_addr, yamux_port
+        );
         Some(listener)
     } else {
         None

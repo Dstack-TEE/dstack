@@ -85,7 +85,8 @@ pub struct ProxyConfig {
     pub workers: usize,
     pub app_address_ns_prefix: String,
     pub app_address_ns_compat: bool,
-    pub yamux_listen_port: Option<u16>,
+    #[serde(default)]
+    pub yamux: YamuxConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -111,10 +112,35 @@ pub struct Timeouts {
     pub write: Duration,
     #[serde(with = "serde_duration")]
     pub shutdown: Duration,
+}
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct YamuxConfig {
+    pub listen_addr: Ipv4Addr,
+    pub listen_port: Option<u16>,
+    #[serde(with = "size_parser::human_size")]
+    pub max_connection_receive_window: usize,
+    pub max_num_streams: usize,
+    pub read_after_close: bool,
+    #[serde(with = "size_parser::human_size")]
+    pub split_send_size: usize,
     /// Ping timeout for yamux connections. Set to 0s to disable.
     #[serde(with = "serde_duration")]
-    pub yamux_ping: Duration,
+    pub ping_timeout: Duration,
+}
+
+impl Default for YamuxConfig {
+    fn default() -> Self {
+        Self {
+            listen_addr: Ipv4Addr::new(0, 0, 0, 0),
+            listen_port: None,
+            max_connection_receive_window: 1024 * 1024 * 1024,
+            max_num_streams: 4096,
+            read_after_close: true,
+            split_send_size: 16 * 1024,
+            ping_timeout: Duration::from_secs(15),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
