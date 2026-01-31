@@ -382,13 +382,14 @@ impl VmConfig {
                 Protocol::Udp => udp_ports.push(port_spec),
             }
         }
-        // Add TCP port forwarding if any
-        if !tcp_ports.is_empty() {
-            passt_cmd.arg("--tcp-ports").arg(tcp_ports.join(","));
+        // Add TCP port forwarding — one --tcp-ports per spec to avoid
+        // exceeding passt's single-argument parser limit.
+        for spec in &tcp_ports {
+            passt_cmd.arg("--tcp-ports").arg(spec);
         }
-        // Add UDP port forwarding if any
-        if !udp_ports.is_empty() {
-            passt_cmd.arg("--udp-ports").arg(udp_ports.join(","));
+        // Add UDP port forwarding
+        for spec in &udp_ports {
+            passt_cmd.arg("--udp-ports").arg(spec);
         }
         passt_cmd.arg("-f").arg("-1");
 
