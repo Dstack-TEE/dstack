@@ -287,7 +287,7 @@ class VmmCLI:
 
         headers = ['VM ID', 'App ID', 'Name', 'Status', 'Uptime']
         if verbose:
-            headers.extend(['vCPU', 'Memory', 'Disk', 'Image', 'GPUs'])
+            headers.extend(['Instance ID', 'vCPU', 'Memory', 'Disk', 'Image', 'GPUs'])
 
         rows = []
         for vm in vms:
@@ -303,6 +303,7 @@ class VmmCLI:
                 config = vm.get('configuration', {})
                 gpu_info = self._format_gpu_info(config.get('gpus'))
                 row.extend([
+                    vm.get('instance_id', '-') or '-',
                     config.get('vcpu', '-'),
                     f"{config.get('memory', '-')}MB",
                     f"{config.get('disk_size', '-')}GB",
@@ -911,6 +912,50 @@ class VmmCLI:
         else:
             print(f"No updates specified for VM {vm_id}")
 
+    def show_info(self, vm_id: str, json_output: bool = False) -> None:
+        """Show detailed information about a VM"""
+        response = self.rpc_call('GetInfo', {'id': vm_id})
+
+        if not response.get('found', False) or 'info' not in response:
+            print(f"VM with ID {vm_id} not found")
+            return
+
+        info = response['info']
+
+        if json_output:
+            print(json.dumps(info, indent=2))
+            return
+
+        config = info.get('configuration', {})
+
+        print(f"VM ID:         {info.get('id', '-')}")
+        print(f"Name:          {info.get('name', '-')}")
+        print(f"Status:        {info.get('status', '-')}")
+        print(f"Uptime:        {info.get('uptime', '-')}")
+        print(f"App ID:        {info.get('app_id', '-')}")
+        print(f"Instance ID:   {info.get('instance_id', '-') or '-'}")
+        print(f"App URL:       {info.get('app_url', '-') or '-'}")
+        print(f"Image:         {config.get('image', '-')}")
+        print(f"Image Version: {info.get('image_version', '-')}")
+        print(f"vCPU:          {config.get('vcpu', '-')}")
+        print(f"Memory:        {config.get('memory', '-')}MB")
+        print(f"Disk:          {config.get('disk_size', '-')}GB")
+        print(f"GPUs:          {self._format_gpu_info(config.get('gpus'))}")
+        print(f"Boot Progress: {info.get('boot_progress', '-')}")
+        if info.get('boot_error'):
+            print(f"Boot Error:    {info['boot_error']}")
+        if info.get('exited_at'):
+            print(f"Exited At:     {info['exited_at']}")
+        if info.get('shutdown_progress'):
+            print(f"Shutdown:      {info['shutdown_progress']}")
+
+        events = info.get('events', [])
+        if events:
+            print(f"\nRecent Events:")
+            for event in events[-10:]:
+                ts = event.get('timestamp', 0)
+                print(f"  [{event.get('event', '')}] {event.get('body', '')} (ts: {ts})")
+
     def list_gpus(self, json_output: bool = False) -> None:
         """List all available GPUs"""
         response = self.rpc_call('ListGpus')
@@ -1227,6 +1272,12 @@ def main():
     lsvm_parser.add_argument(
         '--json', action='store_true', help='Output in JSON format for automation')
 
+    # Info command
+    info_parser = subparsers.add_parser('info', help='Show detailed VM information')
+    info_parser.add_argument('vm_id', help='VM ID to show info for')
+    info_parser.add_argument(
+        '--json', action='store_true', help='Output in JSON format for automation')
+
     # Start command
     start_parser = subparsers.add_parser('start', help='Start a VM')
     start_parser.add_argument('vm_id', help='VM ID to start')
@@ -1502,6 +1553,8 @@ def main():
 
     if args.command == 'lsvm':
         cli.list_vms(args.verbose, args.json)
+    elif args.command == 'info':
+        cli.show_info(args.vm_id, args.json)
     elif args.command == 'start':
         cli.start_vm(args.vm_id)
     elif args.command == 'stop':
