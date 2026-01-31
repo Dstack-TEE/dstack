@@ -60,6 +60,7 @@ tls_crypto_provider = "aws-lc-rs"
 tls_versions = ["1.2"]
 base_domain = "app.localhost"
 listen_addr = "0.0.0.0"
+# listen_port = 8443 or listen_port = "8443-8543" (range, max 10000)
 listen_port = 8443
 agent_port = 8090
 buffer_size = 8192

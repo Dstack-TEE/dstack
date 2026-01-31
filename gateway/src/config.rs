@@ -67,6 +67,42 @@ pub enum TlsVersion {
     Tls13,
 }
 
+/// Deserialize listen ports:
+///   listen_port = 8443           # single port
+///   listen_port = "8443-8543"    # range (inclusive, max 10000 ports)
+fn deserialize_listen_ports<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<u16>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum PortSpec {
+        Single(u16),
+        Range(String),
+    }
+    match PortSpec::deserialize(deserializer)? {
+        PortSpec::Single(port) => Ok(vec![port]),
+        PortSpec::Range(s) => {
+            let (start, end) = s
+                .split_once('-')
+                .ok_or_else(|| serde::de::Error::custom("expected format \"start-end\""))?;
+            let start: u16 = start.trim().parse().map_err(serde::de::Error::custom)?;
+            let end: u16 = end.trim().parse().map_err(serde::de::Error::custom)?;
+            if start > end {
+                return Err(serde::de::Error::custom(format!(
+                    "invalid port range: {start} > {end}"
+                )));
+            }
+            let count = (end - start) as usize + 1;
+            if count > 10000 {
+                return Err(serde::de::Error::custom(format!(
+                    "port range too large: {count} ports (max 10000)"
+                )));
+            }
+            Ok((start..=end).collect())
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct ProxyConfig {
     pub cert_chain: String,
@@ -76,7 +112,8 @@ pub struct ProxyConfig {
     pub base_domain: String,
     pub external_port: u16,
     pub listen_addr: Ipv4Addr,
-    pub listen_port: u16,
+    #[serde(deserialize_with = "deserialize_listen_ports")]
+    pub listen_port: Vec<u16>,
     pub agent_port: u16,
     pub timeouts: Timeouts,
     pub buffer_size: usize,
@@ -118,6 +155,7 @@ pub struct Timeouts {
 pub struct YamuxConfig {
     pub listen_addr: Ipv4Addr,
     pub listen_port: Option<u16>,
+    /// Max receive window per connection. Set to 0 to use yamux default.
     #[serde(with = "size_parser::human_size")]
     pub max_connection_receive_window: usize,
     pub max_num_streams: usize,

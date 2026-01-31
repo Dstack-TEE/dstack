@@ -244,18 +244,17 @@ pub async fn proxy_main(config: &ProxyConfig, proxy: Proxy) -> Result<()> {
         let base_domain = base_domain.strip_prefix(".").unwrap_or(base_domain);
         Arc::new(format!(".{base_domain}"))
     };
-    let tcp_listener = TcpListener::bind((config.listen_addr, config.listen_port))
-        .await
-        .with_context(|| {
-            format!(
-                "failed to bind {}:{}",
-                config.listen_addr, config.listen_port
-            )
-        })?;
-    info!(
-        "tcp bridge listening on {}:{}",
-        config.listen_addr, config.listen_port
-    );
+    let mut tcp_listeners = Vec::new();
+    for &port in &config.listen_port {
+        let listener = TcpListener::bind((config.listen_addr, port))
+            .await
+            .with_context(|| format!("failed to bind {}:{}", config.listen_addr, port))?;
+        info!("tcp bridge listening on {}:{}", config.listen_addr, port);
+        tcp_listeners.push(listener);
+    }
+    if tcp_listeners.is_empty() {
+        bail!("no tcp listen ports configured");
+    }
 
     let yamux_cfg = &config.yamux;
     let mut yamux_config = yamux::Config::default();
@@ -285,47 +284,40 @@ pub async fn proxy_main(config: &ProxyConfig, proxy: Proxy) -> Result<()> {
         None
     };
 
+    let poll_counter = AtomicUsize::new(0);
     loop {
-        if let Some(ref yamux_listener) = yamux_listener {
-            tokio::select! {
-                result = tcp_listener.accept() => {
-                    match result {
-                        Ok((stream, from)) => {
-                            spawn_connection(
-                                &workers_rt,
-                                InboundStream::Tcp(stream),
-                                from.to_string(),
-                                proxy.clone(),
-                                dotted_base_domain.clone(),
-                            );
-                        }
-                        Err(e) => error!("failed to accept tcp connection: {e:?}"),
-                    }
-                }
-                result = yamux_listener.accept() => {
-                    match result {
-                        Ok((stream, from)) => {
-                            let proxy = proxy.clone();
-                            let dotted_base_domain = dotted_base_domain.clone();
-                            let handle = workers_rt.handle().clone();
-                            let yamux_config = yamux_config.clone();
-                            tokio::spawn(async move {
-                                let from = format!("yamux:{from}");
-                                info!(%from, "new yamux connection");
-                                handle_yamux_connection(
-                                    stream, yamux_config, &handle, proxy, dotted_base_domain,
-                                ).await;
-                            });
-                        }
-                        Err(e) => error!("failed to accept yamux connection: {e:?}"),
-                    }
+        // Accept from any TCP listener or the yamux listener via poll_fn.
+        // Linear poll over all listeners — at ~100 listeners, a few hundred
+        // nanoseconds per round, cheaper than FuturesUnordered's waker bookkeeping.
+        // Round-robin start index to avoid starving higher-indexed listeners.
+        enum Accepted {
+            Tcp(std::io::Result<(TcpStream, std::net::SocketAddr)>),
+            Yamux(std::io::Result<(TcpStream, std::net::SocketAddr)>),
+        }
+
+        let poll_start = poll_counter.fetch_add(1, Ordering::Relaxed);
+        let n = tcp_listeners.len();
+        let accepted = std::future::poll_fn(|cx| {
+            for j in 0..n {
+                let i = (poll_start + j) % n;
+                if let Poll::Ready(result) = tcp_listeners[i].poll_accept(cx) {
+                    return Poll::Ready(Accepted::Tcp(result));
                 }
             }
-        } else {
-            match tcp_listener.accept().await {
+            if let Some(ref l) = yamux_listener {
+                if let Poll::Ready(result) = l.poll_accept(cx) {
+                    return Poll::Ready(Accepted::Yamux(result));
+                }
+            }
+            Poll::Pending
+        })
+        .await;
+
+        match accepted {
+            Accepted::Tcp(result) => match result {
                 Ok((stream, from)) => {
                     spawn_connection(
-                        &workers_rt,
+                        workers_rt.handle(),
                         InboundStream::Tcp(stream),
                         from.to_string(),
                         proxy.clone(),
@@ -333,14 +325,31 @@ pub async fn proxy_main(config: &ProxyConfig, proxy: Proxy) -> Result<()> {
                     );
                 }
                 Err(e) => error!("failed to accept tcp connection: {e:?}"),
-            }
-        };
+            },
+            Accepted::Yamux(result) => match result {
+                Ok((stream, from)) => {
+                    let proxy = proxy.clone();
+                    let dotted_base_domain = dotted_base_domain.clone();
+                    let handle = workers_rt.handle().clone();
+                    let yamux_config = yamux_config.clone();
+                    tokio::spawn(async move {
+                        let from = format!("yamux:{from}");
+                        info!(%from, "new yamux connection");
+                        handle_yamux_connection(
+                            stream, yamux_config, &handle, proxy, dotted_base_domain,
+                        )
+                        .await;
+                    });
+                }
+                Err(e) => error!("failed to accept yamux connection: {e:?}"),
+            },
+        }
     }
 }
 
 /// Spawn a single inbound connection handler on the worker runtime.
 fn spawn_connection(
-    workers_rt: &tokio::runtime::Runtime,
+    handle: &tokio::runtime::Handle,
     inbound: InboundStream,
     from: String,
     proxy: Proxy,
@@ -351,7 +360,7 @@ fn spawn_connection(
     let conn_entered = EnteredCounter::new(&NUM_CONNECTIONS);
 
     info!(%from, "new connection");
-    workers_rt.spawn(
+    handle.spawn(
         async move {
             let _conn_entered = conn_entered;
             let timeouts = &proxy.config.proxy.timeouts;
@@ -385,40 +394,21 @@ async fn handle_yamux_connection(
     proxy: Proxy,
     dotted_base_domain: Arc<String>,
 ) {
+    let peer = tcp_stream.peer_addr().ok();
     let mut conn = yamux::Connection::new(tcp_stream.compat(), yamux_config, yamux::Mode::Server);
     loop {
         match std::future::poll_fn(|cx| conn.poll_next_inbound(cx)).await {
             Some(Ok(stream)) => {
-                let inbound = InboundStream::Yamux(stream.compat());
-                let span = info_span!("conn", id = next_connection_id());
-                let _enter = span.enter();
-                let conn_entered = EnteredCounter::new(&NUM_CONNECTIONS);
-
-                debug!("new yamux stream");
-                let proxy = proxy.clone();
-                let dotted_base_domain = dotted_base_domain.clone();
-                workers_handle.spawn(
-                    async move {
-                        let _conn_entered = conn_entered;
-                        let timeouts = &proxy.config.proxy.timeouts;
-                        let result = timeout(
-                            timeouts.total,
-                            handle_connection(inbound, proxy, &dotted_base_domain),
-                        )
-                        .await;
-                        match result {
-                            Ok(Ok(_)) => {
-                                info!("connection closed");
-                            }
-                            Ok(Err(e)) => {
-                                error!("connection error: {e:?}");
-                            }
-                            Err(_) => {
-                                error!("connection kept too long, force closing");
-                            }
-                        }
-                    }
-                    .in_current_span(),
+                let from = match &peer {
+                    Some(addr) => format!("yamux:{addr}"),
+                    None => "yamux:unknown".to_string(),
+                };
+                spawn_connection(
+                    workers_handle,
+                    InboundStream::Yamux(stream.compat()),
+                    from,
+                    proxy.clone(),
+                    dotted_base_domain.clone(),
                 );
             }
             Some(Err(e)) => {
@@ -451,7 +441,7 @@ pub fn start(config: ProxyConfig, app_state: Proxy) -> Result<()> {
             // Run the proxy_main function in this runtime
             if let Err(err) = rt.block_on(proxy_main(&config, app_state)) {
                 error!(
-                    "error on {}:{}: {err:?}",
+                    "error on {}:{:?}: {err:?}",
                     config.listen_addr, config.listen_port
                 );
             }
