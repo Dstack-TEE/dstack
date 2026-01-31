@@ -374,7 +374,7 @@ fn spawn_connection(
                     info!("connection closed");
                 }
                 Ok(Err(e)) => {
-                    error!("connection error: {e:?}");
+                    error!("connection error: {e:#}");
                 }
                 Err(_) => {
                     error!("connection kept too long, force closing");
