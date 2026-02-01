@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::config::{Config, ProcessAnnotation, Protocol};
+use crate::config::{Config, Networking, ProcessAnnotation, Protocol};
 
 use anyhow::{bail, Context, Result};
 use bon::Builder;
@@ -66,6 +66,8 @@ pub struct Manifest {
     pub gateway_urls: Vec<String>,
     #[serde(default)]
     pub no_tee: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub networking: Option<Networking>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -223,7 +225,12 @@ impl App {
         };
         if !is_running {
             // Try to stop passt if already running
-            if self.config.cvm.networking.is_passt() {
+            let networking = vm_config
+                .manifest
+                .networking
+                .as_ref()
+                .unwrap_or(&self.config.cvm.networking);
+            if networking.is_passt() {
                 self.supervisor.stop(&format!("passt-{}", id)).await.ok();
             }
 
@@ -275,15 +282,13 @@ impl App {
                 self.supervisor.stop(id).await?;
             }
             self.supervisor.remove(id).await?;
-            if self.config.cvm.networking.is_passt() {
-                let passt_id = format!("passt-{}", id);
-                let info = self.supervisor.info(&passt_id).await.ok().flatten();
-                if let Some(info) = info {
-                    if info.state.status.is_running() {
-                        self.supervisor.stop(&passt_id).await?;
-                    }
-                    self.supervisor.remove(&passt_id).await?;
+            // Try to clean up passt process if it exists (safe no-op if not passt mode)
+            let passt_id = format!("passt-{}", id);
+            if let Some(info) = self.supervisor.info(&passt_id).await.ok().flatten() {
+                if info.state.status.is_running() {
+                    self.supervisor.stop(&passt_id).await?;
                 }
+                self.supervisor.remove(&passt_id).await?;
             }
         }
 

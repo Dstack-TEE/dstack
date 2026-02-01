@@ -99,6 +99,14 @@ message VmConfiguration {
   bool stopped = 16;
   // Disable confidential computing (fallback to non-TEE VM).
   bool no_tee = 17;
+  // Per-VM networking mode override (if unset, uses global cvm.networking).
+  optional NetworkingConfig networking = 18;
+}
+
+// Per-VM networking configuration.
+message NetworkingConfig {
+  // Networking mode: "passt", "bridge", "user"
+  string mode = 1;
 }
 
 // Requested GPU layout for a CVM.
