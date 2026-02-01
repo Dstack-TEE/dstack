@@ -27,7 +27,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::SystemTime;
 use supervisor_client::SupervisorClient;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 pub use image::{Image, ImageInfo};
 pub use qemu::{VmConfig, VmWorkDir};
@@ -309,6 +309,33 @@ impl App {
         let vm_path = self.work_dir(id);
         fs::remove_dir_all(&vm_path).context("Failed to remove VM directory")?;
         Ok(())
+    }
+
+    /// Handle a DHCP lease notification: look up VM by MAC address, persist
+    /// the guest IP, and reconfigure port forwarding.
+    pub async fn report_dhcp_lease(&self, mac: &str, ip: &str) {
+        use crate::app::qemu::mac_address_for_vm;
+
+        let vm_id = {
+            let mut state = self.lock();
+            let prefix = self.config.cvm.networking.mac_prefix_bytes();
+            let found = state.vms.iter_mut().find(|(id, _)| {
+                mac_address_for_vm(id, &prefix) == mac
+            });
+            let Some((id, vm)) = found else {
+                debug!(mac, ip, "DHCP lease for unknown MAC, ignoring");
+                return;
+            };
+            let vm_id = id.clone();
+            let workdir = VmWorkDir::new(vm.config.workdir.clone());
+            if let Err(e) = workdir.set_guest_ip(ip) {
+                error!(mac, ip, "failed to persist guest IP: {e}");
+            }
+            vm.state.guest_ip = ip.to_string();
+            info!(mac, ip, id = %vm_id, "DHCP lease updated");
+            vm_id
+        };
+        self.reconfigure_port_forward(&vm_id).await;
     }
 
     /// Reconfigure port forwarding for a bridge-mode VM.
@@ -722,17 +749,11 @@ impl App {
         Ok(Some(info))
     }
 
-    /// Process a guest event. Returns the VM ID if port forwarding needs reconfiguration.
-    pub(crate) fn vm_event_report(
-        &self,
-        cid: u32,
-        event: &str,
-        body: String,
-    ) -> Result<Option<String>> {
+    pub(crate) fn vm_event_report(&self, cid: u32, event: &str, body: String) -> Result<()> {
         info!(cid, event, "VM event");
         if body.len() > 1024 * 4 {
             error!("Event body too large, skipping");
-            return Ok(None);
+            return Ok(());
         }
         let mut state = self.lock();
         let Some(vm) = state.vms.values_mut().find(|vm| vm.config.cid == cid) else {
@@ -749,7 +770,6 @@ impl App {
         while vm.state.events.len() > self.config.event_buffer_size {
             vm.state.events.pop_front();
         }
-        let mut needs_reconfigure = None;
         match event {
             "boot.progress" => {
                 vm.state.boot_progress = body;
@@ -768,21 +788,11 @@ impl App {
                 let instancd_info_path = workdir.instance_info_path();
                 safe_write::safe_write(&instancd_info_path, &body)?;
             }
-            "network.eth0" => {
-                info!(cid, ip = %body, "guest reported eth0 IP");
-                let vm_id = vm.config.manifest.id.clone();
-                let workdir = VmWorkDir::new(vm.config.workdir.clone());
-                if let Err(e) = workdir.set_guest_ip(&body) {
-                    error!("failed to persist guest IP: {e}");
-                }
-                vm.state.guest_ip = body;
-                needs_reconfigure = Some(vm_id);
-            }
             _ => {
                 error!("Guest reported unknown event: {event}");
             }
         }
-        Ok(needs_reconfigure)
+        Ok(())
     }
 
     pub(crate) fn compose_file_path(&self, id: &str) -> PathBuf {
