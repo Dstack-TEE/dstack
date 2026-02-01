@@ -2383,6 +2383,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "dstack-port-forward"
+version = "0.5.6"
+dependencies = [
+ "anyhow",
+ "nix 0.29.0",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
 name = "dstack-sdk"
 version = "0.1.2"
 dependencies = [
@@ -2519,6 +2530,7 @@ dependencies = [
  "clap",
  "dirs",
  "dstack-kms-rpc",
+ "dstack-port-forward",
  "dstack-types",
  "dstack-vmm-rpc",
  "fatfs",
@@ -4560,6 +4572,7 @@ dependencies = [
  "cfg-if",
  "cfg_aliases",
  "libc",
+ "memoffset",
 ]
 
 [[package]]
@@ -7569,6 +7582,7 @@ dependencies = [
  "futures-core",
  "futures-io",
  "futures-sink",
+ "futures-util",
  "pin-project-lite",
  "tokio",
 ]

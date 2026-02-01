@@ -1152,6 +1152,21 @@ impl VmWorkDir {
         self.shared_dir().join(INSTANCE_INFO)
     }
 
+    pub fn guest_ip_path(&self) -> PathBuf {
+        self.workdir.join("guest-ip")
+    }
+
+    pub fn guest_ip(&self) -> Option<String> {
+        fs::read_to_string(self.guest_ip_path())
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+    }
+
+    pub fn set_guest_ip(&self, ip: &str) -> Result<()> {
+        fs::write(self.guest_ip_path(), ip).context("failed to write guest IP")
+    }
+
     pub fn serial_file(&self) -> PathBuf {
         self.workdir.join("serial.log")
     }
