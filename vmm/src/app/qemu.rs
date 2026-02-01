@@ -5,7 +5,10 @@
 //! QEMU related code
 use crate::{
     app::Manifest,
-    config::{CvmConfig, GatewayConfig, Networking, PasstNetworking, ProcessAnnotation, Protocol},
+    config::{
+        BridgeNetworking, CvmConfig, GatewayConfig, Networking, PasstNetworking,
+        ProcessAnnotation, Protocol,
+    },
 };
 use std::{collections::HashMap, os::unix::fs::PermissionsExt};
 use std::{
@@ -32,6 +35,18 @@ use fs_err as fs;
 use serde::{Deserialize, Serialize};
 use serde_human_bytes as hex_bytes;
 use supervisor_client::supervisor::{ProcessConfig, ProcessInfo};
+
+fn networking_to_proto(n: &Networking) -> pb::NetworkingConfig {
+    let mode = match n {
+        Networking::Bridge(_) => "bridge",
+        Networking::User(_) => "user",
+        Networking::Passt(_) => "passt",
+        Networking::Custom(_) => "custom",
+    };
+    pb::NetworkingConfig {
+        mode: mode.into(),
+    }
+}
 
 #[derive(Debug, Deserialize)]
 pub struct InstanceInfo {
@@ -230,6 +245,9 @@ impl VmInfo {
                     gateway_urls: custom_gateway_urls.clone(),
                     stopped,
                     no_tee,
+                    networking: self.manifest.networking.as_ref().map(|n| {
+                        networking_to_proto(n)
+                    }),
                 })
             },
             app_url: self
@@ -420,6 +438,46 @@ impl VmConfig {
         Ok(process_config)
     }
 
+    /// Configure bridge networking using QEMU's built-in bridge helper.
+    /// The helper (qemu-bridge-helper) creates and manages TAP devices automatically,
+    /// so VMM does not need root or CAP_NET_ADMIN. Requires /etc/qemu/bridge.conf
+    /// to allow the bridge (e.g., "allow virbr0").
+    /// Guest IP is assigned by an external DHCP server on the bridge.
+    /// Returns (netdev_arg, device_arg).
+    fn config_bridge(
+        &self,
+        _workdir: &VmWorkDir,
+        netcfg: &BridgeNetworking,
+    ) -> Result<(String, String)> {
+        use sha2::{Digest, Sha256};
+
+        let vm_id = &self.manifest.id;
+
+        // Derive MAC from VM ID. Set locally-administered + unicast bits (0x02).
+        let hash = Sha256::digest(vm_id.as_bytes());
+        let mac = format!(
+            "{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+            (hash[0] & 0xfe) | 0x02,
+            hash[1],
+            hash[2],
+            hash[3],
+            hash[4],
+            hash[5]
+        );
+
+        // Use QEMU's bridge netdev: QEMU calls qemu-bridge-helper to create/attach
+        // the TAP device. TAP is automatically destroyed when QEMU exits.
+        let netdev = format!("bridge,id=net0,br={}", netcfg.bridge);
+        let device = format!("virtio-net-pci,netdev=net0,mac={mac}");
+
+        tracing::info!(
+            "bridge networking: mac={mac} bridge={}",
+            netcfg.bridge
+        );
+
+        Ok((netdev, device))
+    }
+
     pub fn config_qemu(
         &self,
         workdir: impl AsRef<Path>,
@@ -511,7 +569,24 @@ impl VmConfig {
             .arg(format!("file={},if=none,id=hd1", hda_path.display()))
             .arg("-device")
             .arg("virtio-blk-pci,drive=hd1");
-        let netdev = match &cfg.networking {
+        let mut net_device = "virtio-net-pci,netdev=net0".to_string();
+        let resolved_networking;
+        let networking = match self.manifest.networking.as_ref() {
+            Some(Networking::Bridge(vm_br)) if vm_br.bridge.is_empty() => {
+                // per-VM selected bridge mode but bridge name comes from global config
+                if let Networking::Bridge(global_br) = &cfg.networking {
+                    resolved_networking = Networking::Bridge(global_br.clone());
+                } else {
+                    resolved_networking = Networking::Bridge(BridgeNetworking {
+                        bridge: "virbr0".to_string(),
+                    });
+                }
+                &resolved_networking
+            }
+            Some(n) => n,
+            None => &cfg.networking,
+        };
+        let netdev = match networking {
             Networking::User(netcfg) => {
                 let mut netdev = format!(
                     "user,id=net0,net={},dhcpstart={},restrict={}",
@@ -540,10 +615,17 @@ impl VmConfig {
                     workdir.passt_socket().display()
                 )
             }
+            Networking::Bridge(netcfg) => {
+                let (netdev, device) = self
+                    .config_bridge(&workdir, netcfg)
+                    .context("failed to configure bridge networking")?;
+                net_device = device;
+                netdev
+            }
             Networking::Custom(netcfg) => netcfg.netdev.clone(),
         };
         command.arg("-netdev").arg(netdev);
-        command.arg("-device").arg("virtio-net-pci,netdev=net0");
+        command.arg("-device").arg(net_device);
 
         self.configure_machine(&mut command, &workdir, cfg, &app_compose)?;
         self.configure_smbios(&mut command, cfg);
@@ -1118,6 +1200,7 @@ impl VmWorkDir {
         self.workdir.join("passt.log")
     }
 
+
     pub fn path(&self) -> &Path {
         &self.workdir
     }
@@ -1135,4 +1218,5 @@ impl VmWorkDir {
         let compose: AppCompose = serde_json::from_str(&fs::read_to_string(compose_file)?)?;
         Ok(compose)
     }
+
 }

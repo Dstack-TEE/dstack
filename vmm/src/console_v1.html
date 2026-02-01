@@ -2097,6 +2097,16 @@ const CreateVmDialogComponent = {
               <input id="keyProviderId" v-model="form.key_provider_id" type="text" placeholder="Optional provider ID">
             </div>
 
+            <div class="form-group">
+              <label for="netMode">Networking</label>
+              <select id="netMode" v-model="form.net_mode">
+                <option value="">Default</option>
+                <option value="bridge">Bridge</option>
+                <option value="passt">Passt</option>
+                <option value="user">User</option>
+              </select>
+            </div>
+
             <div class="form-group full-width">
               <label>Features</label>
               <div class="feature-checkboxes">
@@ -2384,6 +2394,7 @@ function createVmFormState(preLaunchScript) {
         no_tee: false,
         pin_numa: false,
         hugepages: false,
+        net_mode: '',
         user_config: '',
         kms_urls: [],
         gateway_urls: [],
@@ -2602,6 +2613,7 @@ fi
             hugepages: !!source.hugepages,
             pin_numa: !!source.pin_numa,
             no_tee: (_a = source.no_tee) !== null && _a !== void 0 ? _a : false,
+            networking: source.net_mode ? { mode: source.net_mode } : undefined,
             gpus: source.gpus,
             kms_urls: (_c = (_b = source.kms_urls) === null || _b === void 0 ? void 0 : _b.filter((url) => url && url.trim().length)) !== null && _c !== void 0 ? _c : [],
             gateway_urls: (_e = (_d = source.gateway_urls) === null || _d === void 0 ? void 0 : _d.filter((url) => url && url.trim().length)) !== null && _e !== void 0 ? _e : [],
@@ -3064,6 +3076,7 @@ fi
                 hugepages: vmForm.value.hugepages,
                 pin_numa: vmForm.value.pin_numa,
                 no_tee: vmForm.value.no_tee,
+                net_mode: vmForm.value.net_mode,
                 gpus: configGpu(vmForm.value) || undefined,
                 kms_urls: vmForm.value.kms_urls,
                 gateway_urls: vmForm.value.gateway_urls,
@@ -3169,7 +3182,7 @@ fi
         return 'none';
     }
     async function showCloneConfig(vm) {
-        var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o;
+        var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o, _p;
         const theVm = await ensureVmDetails(vm);
         if (!((_a = theVm === null || theVm === void 0 ? void 0 : theVm.configuration) === null || _a === void 0 ? void 0 : _a.compose_file)) {
             alert('Compose file not available for this VM. Please open its details first.');
@@ -3208,6 +3221,7 @@ fi
             pin_numa: !!config.pin_numa,
             hugepages: !!config.hugepages,
             no_tee: !!config.no_tee,
+            net_mode: ((_p = config.networking) === null || _p === void 0 ? void 0 : _p.mode) || '',
             user_config: config.user_config || '',
             stopped: !!config.stopped,
         };
@@ -6587,6 +6601,7 @@ $root.vmm = (function () {
          * @property {Array.<string>|null} [gateway_urls] VmConfiguration gateway_urls
          * @property {boolean|null} [stopped] VmConfiguration stopped
          * @property {boolean|null} [no_tee] VmConfiguration no_tee
+         * @property {vmm.INetworkingConfig|null} [networking] VmConfiguration networking
          */
         /**
          * Constructs a new VmConfiguration.
@@ -6724,6 +6739,13 @@ $root.vmm = (function () {
          * @instance
          */
         VmConfiguration.prototype.no_tee = false;
+        /**
+         * VmConfiguration networking.
+         * @member {vmm.INetworkingConfig|null|undefined} networking
+         * @memberof vmm.VmConfiguration
+         * @instance
+         */
+        VmConfiguration.prototype.networking = null;
         // OneOf field names bound to virtual getters and setters
         var $oneOfFields;
         /**
@@ -6734,6 +6756,16 @@ $root.vmm = (function () {
          */
         Object.defineProperty(VmConfiguration.prototype, "_app_id", {
             get: $util.oneOfGetter($oneOfFields = ["app_id"]),
+            set: $util.oneOfSetter($oneOfFields)
+        });
+        /**
+         * VmConfiguration _networking.
+         * @member {"networking"|undefined} _networking
+         * @memberof vmm.VmConfiguration
+         * @instance
+         */
+        Object.defineProperty(VmConfiguration.prototype, "_networking", {
+            get: $util.oneOfGetter($oneOfFields = ["networking"]),
             set: $util.oneOfSetter($oneOfFields)
         });
         /**
@@ -6796,6 +6828,8 @@ $root.vmm = (function () {
                 writer.uint32(/* id 16, wireType 0 =*/ 128).bool(message.stopped);
             if (message.no_tee != null && Object.hasOwnProperty.call(message, "no_tee"))
                 writer.uint32(/* id 17, wireType 0 =*/ 136).bool(message.no_tee);
+            if (message.networking != null && Object.hasOwnProperty.call(message, "networking"))
+                $root.vmm.NetworkingConfig.encode(message.networking, writer.uint32(/* id 18, wireType 2 =*/ 146).fork()).ldelim();
             return writer;
         };
         /**
@@ -6904,6 +6938,10 @@ $root.vmm = (function () {
                         message.no_tee = reader.bool();
                         break;
                     }
+                    case 18: {
+                        message.networking = $root.vmm.NetworkingConfig.decode(reader, reader.uint32());
+                        break;
+                    }
                     default:
                         reader.skipType(tag & 7);
                         break;
@@ -7007,6 +7045,14 @@ $root.vmm = (function () {
             if (message.no_tee != null && message.hasOwnProperty("no_tee"))
                 if (typeof message.no_tee !== "boolean")
                     return "no_tee: boolean expected";
+            if (message.networking != null && message.hasOwnProperty("networking")) {
+                properties._networking = 1;
+                {
+                    var error = $root.vmm.NetworkingConfig.verify(message.networking);
+                    if (error)
+                        return "networking." + error;
+                }
+            }
             return null;
         };
         /**
@@ -7079,6 +7125,11 @@ $root.vmm = (function () {
                 message.stopped = Boolean(object.stopped);
             if (object.no_tee != null)
                 message.no_tee = Boolean(object.no_tee);
+            if (object.networking != null) {
+                if (typeof object.networking !== "object")
+                    throw TypeError(".vmm.VmConfiguration.networking: object expected");
+                message.networking = $root.vmm.NetworkingConfig.fromObject(object.networking);
+            }
             return message;
         };
         /**
@@ -7166,6 +7217,11 @@ $root.vmm = (function () {
                 object.stopped = message.stopped;
             if (message.no_tee != null && message.hasOwnProperty("no_tee"))
                 object.no_tee = message.no_tee;
+            if (message.networking != null && message.hasOwnProperty("networking")) {
+                object.networking = $root.vmm.NetworkingConfig.toObject(message.networking, options);
+                if (options.oneofs)
+                    object._networking = "networking";
+            }
             return object;
         };
         /**
@@ -7193,6 +7249,196 @@ $root.vmm = (function () {
             return typeUrlPrefix + "/vmm.VmConfiguration";
         };
         return VmConfiguration;
+    })();
+    vmm.NetworkingConfig = (function () {
+        /**
+         * Properties of a NetworkingConfig.
+         * @memberof vmm
+         * @interface INetworkingConfig
+         * @property {string|null} [mode] NetworkingConfig mode
+         */
+        /**
+         * Constructs a new NetworkingConfig.
+         * @memberof vmm
+         * @classdesc Represents a NetworkingConfig.
+         * @implements INetworkingConfig
+         * @constructor
+         * @param {vmm.INetworkingConfig=} [properties] Properties to set
+         */
+        function NetworkingConfig(properties) {
+            if (properties)
+                for (var keys = Object.keys(properties), i = 0; i < keys.length; ++i)
+                    if (properties[keys[i]] != null)
+                        this[keys[i]] = properties[keys[i]];
+        }
+        /**
+         * NetworkingConfig mode.
+         * @member {string} mode
+         * @memberof vmm.NetworkingConfig
+         * @instance
+         */
+        NetworkingConfig.prototype.mode = "";
+        /**
+         * Creates a new NetworkingConfig instance using the specified properties.
+         * @function create
+         * @memberof vmm.NetworkingConfig
+         * @static
+         * @param {vmm.INetworkingConfig=} [properties] Properties to set
+         * @returns {vmm.NetworkingConfig} NetworkingConfig instance
+         */
+        NetworkingConfig.create = function create(properties) {
+            return new NetworkingConfig(properties);
+        };
+        /**
+         * Encodes the specified NetworkingConfig message. Does not implicitly {@link vmm.NetworkingConfig.verify|verify} messages.
+         * @function encode
+         * @memberof vmm.NetworkingConfig
+         * @static
+         * @param {vmm.INetworkingConfig} message NetworkingConfig message or plain object to encode
+         * @param {$protobuf.Writer} [writer] Writer to encode to
+         * @returns {$protobuf.Writer} Writer
+         */
+        NetworkingConfig.encode = function encode(message, writer) {
+            if (!writer)
+                writer = $Writer.create();
+            if (message.mode != null && Object.hasOwnProperty.call(message, "mode"))
+                writer.uint32(/* id 1, wireType 2 =*/ 10).string(message.mode);
+            return writer;
+        };
+        /**
+         * Encodes the specified NetworkingConfig message, length delimited. Does not implicitly {@link vmm.NetworkingConfig.verify|verify} messages.
+         * @function encodeDelimited
+         * @memberof vmm.NetworkingConfig
+         * @static
+         * @param {vmm.INetworkingConfig} message NetworkingConfig message or plain object to encode
+         * @param {$protobuf.Writer} [writer] Writer to encode to
+         * @returns {$protobuf.Writer} Writer
+         */
+        NetworkingConfig.encodeDelimited = function encodeDelimited(message, writer) {
+            return this.encode(message, writer).ldelim();
+        };
+        /**
+         * Decodes a NetworkingConfig message from the specified reader or buffer.
+         * @function decode
+         * @memberof vmm.NetworkingConfig
+         * @static
+         * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
+         * @param {number} [length] Message length if known beforehand
+         * @returns {vmm.NetworkingConfig} NetworkingConfig
+         * @throws {Error} If the payload is not a reader or valid buffer
+         * @throws {$protobuf.util.ProtocolError} If required fields are missing
+         */
+        NetworkingConfig.decode = function decode(reader, length, error) {
+            if (!(reader instanceof $Reader))
+                reader = $Reader.create(reader);
+            var end = length === undefined ? reader.len : reader.pos + length, message = new $root.vmm.NetworkingConfig();
+            while (reader.pos < end) {
+                var tag = reader.uint32();
+                if (tag === error)
+                    break;
+                switch (tag >>> 3) {
+                    case 1: {
+                        message.mode = reader.string();
+                        break;
+                    }
+                    default:
+                        reader.skipType(tag & 7);
+                        break;
+                }
+            }
+            return message;
+        };
+        /**
+         * Decodes a NetworkingConfig message from the specified reader or buffer, length delimited.
+         * @function decodeDelimited
+         * @memberof vmm.NetworkingConfig
+         * @static
+         * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
+         * @returns {vmm.NetworkingConfig} NetworkingConfig
+         * @throws {Error} If the payload is not a reader or valid buffer
+         * @throws {$protobuf.util.ProtocolError} If required fields are missing
+         */
+        NetworkingConfig.decodeDelimited = function decodeDelimited(reader) {
+            if (!(reader instanceof $Reader))
+                reader = new $Reader(reader);
+            return this.decode(reader, reader.uint32());
+        };
+        /**
+         * Verifies a NetworkingConfig message.
+         * @function verify
+         * @memberof vmm.NetworkingConfig
+         * @static
+         * @param {Object.<string,*>} message Plain object to verify
+         * @returns {string|null} `null` if valid, otherwise the reason why it is not
+         */
+        NetworkingConfig.verify = function verify(message) {
+            if (typeof message !== "object" || message === null)
+                return "object expected";
+            if (message.mode != null && message.hasOwnProperty("mode"))
+                if (!$util.isString(message.mode))
+                    return "mode: string expected";
+            return null;
+        };
+        /**
+         * Creates a NetworkingConfig message from a plain object. Also converts values to their respective internal types.
+         * @function fromObject
+         * @memberof vmm.NetworkingConfig
+         * @static
+         * @param {Object.<string,*>} object Plain object
+         * @returns {vmm.NetworkingConfig} NetworkingConfig
+         */
+        NetworkingConfig.fromObject = function fromObject(object) {
+            if (object instanceof $root.vmm.NetworkingConfig)
+                return object;
+            var message = new $root.vmm.NetworkingConfig();
+            if (object.mode != null)
+                message.mode = String(object.mode);
+            return message;
+        };
+        /**
+         * Creates a plain object from a NetworkingConfig message. Also converts values to other types if specified.
+         * @function toObject
+         * @memberof vmm.NetworkingConfig
+         * @static
+         * @param {vmm.NetworkingConfig} message NetworkingConfig
+         * @param {$protobuf.IConversionOptions} [options] Conversion options
+         * @returns {Object.<string,*>} Plain object
+         */
+        NetworkingConfig.toObject = function toObject(message, options) {
+            if (!options)
+                options = {};
+            var object = {};
+            if (options.defaults)
+                object.mode = "";
+            if (message.mode != null && message.hasOwnProperty("mode"))
+                object.mode = message.mode;
+            return object;
+        };
+        /**
+         * Converts this NetworkingConfig to JSON.
+         * @function toJSON
+         * @memberof vmm.NetworkingConfig
+         * @instance
+         * @returns {Object.<string,*>} JSON object
+         */
+        NetworkingConfig.prototype.toJSON = function toJSON() {
+            return this.constructor.toObject(this, $protobuf.util.toJSONOptions);
+        };
+        /**
+         * Gets the default type url for NetworkingConfig
+         * @function getTypeUrl
+         * @memberof vmm.NetworkingConfig
+         * @static
+         * @param {string} [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
+         * @returns {string} The default type url
+         */
+        NetworkingConfig.getTypeUrl = function getTypeUrl(typeUrlPrefix) {
+            if (typeUrlPrefix === undefined) {
+                typeUrlPrefix = "type.googleapis.com";
+            }
+            return typeUrlPrefix + "/vmm.NetworkingConfig";
+        };
+        return NetworkingConfig;
     })();
     vmm.GpuConfig = (function () {
         /**

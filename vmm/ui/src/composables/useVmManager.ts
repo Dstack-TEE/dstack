@@ -106,6 +106,7 @@ type VmFormState = {
   no_tee: boolean;
   pin_numa: boolean;
   hugepages: boolean;
+  net_mode: string;
   user_config: string;
   kms_urls: string[];
   gateway_urls: string[];
@@ -188,6 +189,7 @@ function createVmFormState(preLaunchScript: string): VmFormState {
     no_tee: false,
     pin_numa: false,
     hugepages: false,
+    net_mode: '',
     user_config: '',
     kms_urls: [],
     gateway_urls: [],
@@ -430,6 +432,7 @@ type CreateVmPayloadSource = {
   hugepages?: boolean;
   pin_numa?: boolean;
   no_tee?: boolean;
+  net_mode?: string;
     gpus?: VmmTypes.IGpuConfig;
     kms_urls?: string[];
     gateway_urls?: string[];
@@ -452,6 +455,7 @@ type CreateVmPayloadSource = {
       hugepages: !!source.hugepages,
       pin_numa: !!source.pin_numa,
       no_tee: source.no_tee ?? false,
+      networking: source.net_mode ? { mode: source.net_mode } : undefined,
       gpus: source.gpus,
       kms_urls: source.kms_urls?.filter((url) => url && url.trim().length) ?? [],
       gateway_urls: source.gateway_urls?.filter((url) => url && url.trim().length) ?? [],
@@ -976,6 +980,7 @@ type CreateVmPayloadSource = {
         hugepages: vmForm.value.hugepages,
         pin_numa: vmForm.value.pin_numa,
         no_tee: vmForm.value.no_tee,
+        net_mode: vmForm.value.net_mode,
         gpus: configGpu(vmForm.value) || undefined,
         kms_urls: vmForm.value.kms_urls,
         gateway_urls: vmForm.value.gateway_urls,
@@ -1126,6 +1131,7 @@ type CreateVmPayloadSource = {
       pin_numa: !!config.pin_numa,
       hugepages: !!config.hugepages,
       no_tee: !!config.no_tee,
+      net_mode: config.networking?.mode || '',
       user_config: config.user_config || '',
       stopped: !!config.stopped,
     };

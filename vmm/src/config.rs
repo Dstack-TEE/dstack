@@ -368,6 +368,7 @@ impl Config {
 pub enum Networking {
     User(UserNetworking),
     Passt(PasstNetworking),
+    Bridge(BridgeNetworking),
     Custom(CustomNetworking),
 }
 
@@ -396,6 +397,12 @@ pub struct PasstNetworking {
     pub map_guest_addr: String,
     pub no_map_gw: bool,
     pub ipv4_only: bool,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct BridgeNetworking {
+    /// Bridge interface to attach TAP device to (e.g., "virbr0")
+    pub bridge: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

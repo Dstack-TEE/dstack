@@ -639,6 +639,8 @@ class VmmCLI:
             params["kms_urls"] = args.kms_url
         if args.gateway_url:
             params["gateway_urls"] = args.gateway_url
+        if args.net:
+            params["networking"] = {"mode": args.net}
 
         app_id = args.app_id or self.calc_app_id(compose_content)
         print(f"App ID: {app_id}")
@@ -1388,6 +1390,9 @@ def main():
     deploy_parser.add_argument('--tee', dest='no_tee', action='store_false',
                                help='Force-enable Intel TDX (default)')
     deploy_parser.set_defaults(no_tee=False)
+    deploy_parser.add_argument('--net', choices=['bridge', 'passt', 'user'],
+                               help='Networking mode (default: use global config)')
+
 
     # Images command
     lsimage_parser = subparsers.add_parser(

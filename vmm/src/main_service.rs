@@ -193,7 +193,23 @@ pub fn create_manifest_from_vm_config(
         kms_urls: request.kms_urls.clone(),
         gateway_urls: request.gateway_urls.clone(),
         no_tee: request.no_tee,
+        networking: request.networking.as_ref().and_then(networking_from_proto),
     })
+}
+
+fn networking_from_proto(proto: &rpc::NetworkingConfig) -> Option<crate::config::Networking> {
+    match proto.mode.as_str() {
+        "bridge" => Some(crate::config::Networking::Bridge(
+            crate::config::BridgeNetworking {
+                bridge: String::new(), // resolved from global config at runtime
+            },
+        )),
+        "" => None, // not set, use global default
+        other => {
+            tracing::warn!("unsupported per-VM networking mode '{other}', using global default");
+            None
+        }
+    }
 }
 
 impl RpcHandler {

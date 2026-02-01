@@ -97,6 +97,9 @@ map_guest_addr = "none"
 no_map_gw = true
 ipv4_only = true
 
+# for mode = "bridge"
+# bridge = "virbr0"
+
 [cvm.port_mapping]
 enabled = false
 address = "127.0.0.1"
