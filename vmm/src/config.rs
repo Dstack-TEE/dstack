@@ -376,6 +376,10 @@ impl Networking {
     pub fn is_passt(&self) -> bool {
         matches!(self, Networking::Passt(_))
     }
+
+    pub fn is_bridge(&self) -> bool {
+        matches!(self, Networking::Bridge(_))
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
