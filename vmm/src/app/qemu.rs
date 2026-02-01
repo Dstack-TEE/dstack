@@ -6,8 +6,7 @@
 use crate::{
     app::Manifest,
     config::{
-        BridgeNetworking, CvmConfig, GatewayConfig, Networking, PasstNetworking,
-        ProcessAnnotation, Protocol,
+        CvmConfig, GatewayConfig, Networking, NetworkingMode, ProcessAnnotation, Protocol,
     },
 };
 use std::{collections::HashMap, os::unix::fs::PermissionsExt};
@@ -31,17 +30,43 @@ use dstack_types::{
     AppCompose, KeyProviderKind,
 };
 use dstack_vmm_rpc as pb;
+use sha2::{Digest, Sha256};
+
+/// Derive a deterministic MAC address from a VM ID using SHA256.
+/// Sets locally-administered + unicast bits (0x02) per IEEE 802.
+/// Derive a deterministic MAC address from a VM ID.
+///
+/// `prefix` may contain 0-3 fixed bytes. The first byte always has the
+/// locally-administered + unicast bits set (0x02). Remaining bytes are
+/// filled from SHA256(vm_id).
+pub fn mac_address_for_vm(vm_id: &str, prefix: &[u8]) -> String {
+    let hash = Sha256::digest(vm_id.as_bytes());
+    let prefix_len = prefix.len().min(3);
+    let mut bytes = [0u8; 6];
+    // Fill prefix bytes
+    bytes[..prefix_len].copy_from_slice(&prefix[..prefix_len]);
+    // Fill remaining bytes from hash
+    for i in prefix_len..6 {
+        bytes[i] = hash[i - prefix_len];
+    }
+    // Ensure locally-administered + unicast on first byte
+    bytes[0] = (bytes[0] & 0xfe) | 0x02;
+    format!(
+        "{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5]
+    )
+}
 use fs_err as fs;
 use serde::{Deserialize, Serialize};
 use serde_human_bytes as hex_bytes;
 use supervisor_client::supervisor::{ProcessConfig, ProcessInfo};
 
 fn networking_to_proto(n: &Networking) -> pb::NetworkingConfig {
-    let mode = match n {
-        Networking::Bridge(_) => "bridge",
-        Networking::User(_) => "user",
-        Networking::Passt(_) => "passt",
-        Networking::Custom(_) => "custom",
+    let mode = match n.mode {
+        NetworkingMode::Bridge => "bridge",
+        NetworkingMode::User => "user",
+        NetworkingMode::Passt => "passt",
+        NetworkingMode::Custom => "custom",
     };
     pb::NetworkingConfig {
         mode: mode.into(),
@@ -332,8 +357,8 @@ impl VmState {
 }
 
 impl VmConfig {
-    fn config_passt(&self, workdir: &VmWorkDir, netcfg: &PasstNetworking) -> Result<ProcessConfig> {
-        let PasstNetworking {
+    fn config_passt(&self, workdir: &VmWorkDir, netcfg: &Networking) -> Result<ProcessConfig> {
+        let Networking {
             passt_exec,
             interface,
             address,
@@ -344,6 +369,7 @@ impl VmConfig {
             map_guest_addr,
             no_map_gw,
             ipv4_only,
+            ..
         } = netcfg;
 
         let passt_socket = workdir.passt_socket();
@@ -438,46 +464,6 @@ impl VmConfig {
         Ok(process_config)
     }
 
-    /// Configure bridge networking using QEMU's built-in bridge helper.
-    /// The helper (qemu-bridge-helper) creates and manages TAP devices automatically,
-    /// so VMM does not need root or CAP_NET_ADMIN. Requires /etc/qemu/bridge.conf
-    /// to allow the bridge (e.g., "allow virbr0").
-    /// Guest IP is assigned by an external DHCP server on the bridge.
-    /// Returns (netdev_arg, device_arg).
-    fn config_bridge(
-        &self,
-        _workdir: &VmWorkDir,
-        netcfg: &BridgeNetworking,
-    ) -> Result<(String, String)> {
-        use sha2::{Digest, Sha256};
-
-        let vm_id = &self.manifest.id;
-
-        // Derive MAC from VM ID. Set locally-administered + unicast bits (0x02).
-        let hash = Sha256::digest(vm_id.as_bytes());
-        let mac = format!(
-            "{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
-            (hash[0] & 0xfe) | 0x02,
-            hash[1],
-            hash[2],
-            hash[3],
-            hash[4],
-            hash[5]
-        );
-
-        // Use QEMU's bridge netdev: QEMU calls qemu-bridge-helper to create/attach
-        // the TAP device. TAP is automatically destroyed when QEMU exits.
-        let netdev = format!("bridge,id=net0,br={}", netcfg.bridge);
-        let device = format!("virtio-net-pci,netdev=net0,mac={mac}");
-
-        tracing::info!(
-            "bridge networking: mac={mac} bridge={}",
-            netcfg.bridge
-        );
-
-        Ok((netdev, device))
-    }
-
     pub fn config_qemu(
         &self,
         workdir: impl AsRef<Path>,
@@ -569,30 +555,37 @@ impl VmConfig {
             .arg(format!("file={},if=none,id=hd1", hda_path.display()))
             .arg("-device")
             .arg("virtio-blk-pci,drive=hd1");
-        let mut net_device = "virtio-net-pci,netdev=net0".to_string();
+        // Resolve per-VM networking override against global config.
+        // Per-VM only sets mode; shared fields (bridge name, mac_prefix, etc.)
+        // are merged from global config.
         let resolved_networking;
         let networking = match self.manifest.networking.as_ref() {
-            Some(Networking::Bridge(vm_br)) if vm_br.bridge.is_empty() => {
-                // per-VM selected bridge mode but bridge name comes from global config
-                if let Networking::Bridge(global_br) = &cfg.networking {
-                    resolved_networking = Networking::Bridge(global_br.clone());
-                } else {
-                    resolved_networking = Networking::Bridge(BridgeNetworking {
-                        bridge: "virbr0".to_string(),
-                    });
-                }
+            Some(vm_net) => {
+                // Per-VM override: take mode from VM, fill other fields from global
+                resolved_networking = Networking {
+                    mode: vm_net.mode,
+                    bridge: if vm_net.bridge.is_empty() {
+                        cfg.networking.bridge.clone()
+                    } else {
+                        vm_net.bridge.clone()
+                    },
+                    ..cfg.networking.clone()
+                };
                 &resolved_networking
             }
-            Some(n) => n,
             None => &cfg.networking,
         };
-        let netdev = match networking {
-            Networking::User(netcfg) => {
+        // Generate deterministic MAC for all networking modes
+        let prefix = networking.mac_prefix_bytes();
+        let mac = mac_address_for_vm(&self.manifest.id, &prefix);
+        let net_device = format!("virtio-net-pci,netdev=net0,mac={mac}");
+        let netdev = match networking.mode {
+            NetworkingMode::User => {
                 let mut netdev = format!(
                     "user,id=net0,net={},dhcpstart={},restrict={}",
-                    netcfg.net,
-                    netcfg.dhcp_start,
-                    if netcfg.restrict { "yes" } else { "no" }
+                    networking.net,
+                    networking.dhcp_start,
+                    if networking.restrict { "yes" } else { "no" }
                 );
                 for pm in &self.manifest.port_map {
                     netdev.push_str(&format!(
@@ -605,9 +598,9 @@ impl VmConfig {
                 }
                 netdev
             }
-            Networking::Passt(netcfg) => {
+            NetworkingMode::Passt => {
                 processes.push(
-                    self.config_passt(&workdir, netcfg)
+                    self.config_passt(&workdir, networking)
                         .context("Failed to configure passt")?,
                 );
                 format!(
@@ -615,14 +608,14 @@ impl VmConfig {
                     workdir.passt_socket().display()
                 )
             }
-            Networking::Bridge(netcfg) => {
-                let (netdev, device) = self
-                    .config_bridge(&workdir, netcfg)
-                    .context("failed to configure bridge networking")?;
-                net_device = device;
-                netdev
+            NetworkingMode::Bridge => {
+                tracing::info!(
+                    "bridge networking: mac={mac} bridge={}",
+                    networking.bridge
+                );
+                format!("bridge,id=net0,br={}", networking.bridge)
             }
-            Networking::Custom(netcfg) => netcfg.netdev.clone(),
+            NetworkingMode::Custom => networking.netdev.clone(),
         };
         command.arg("-netdev").arg(netdev);
         command.arg("-device").arg(net_device);

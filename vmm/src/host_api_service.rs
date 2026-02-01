@@ -42,13 +42,8 @@ impl HostApiRpc for HostApiHandler {
     }
 
     async fn notify(self, request: Notification) -> Result<()> {
-        let vm_id = self
-            .app
-            .vm_event_report(self.endpoint.cid, &request.event, request.payload)?;
-        if let Some(id) = vm_id {
-            self.app.reconfigure_port_forward(&id).await;
-        }
-        Ok(())
+        self.app
+            .vm_event_report(self.endpoint.cid, &request.event, request.payload)
     }
 
     async fn get_sealing_key(self, request: GetSealingKeyRequest) -> Result<GetSealingKeyResponse> {

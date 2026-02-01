@@ -278,13 +278,6 @@ echo "============================"
 
 cd /dstack
 
-# Report eth0 IP address to VMM for bridge-mode port forwarding
-ETH0_IP=$(ip -4 -o addr show eth0 2>/dev/null | awk '{print $4}' | cut -d/ -f1 || true)
-if [ -n "$ETH0_IP" ]; then
-	log "Reporting eth0 IP: $ETH0_IP"
-	dstack-util notify-host -e "network.eth0" -d "$ETH0_IP" || true
-fi
-
 if [ $(jq 'has("init_script")' app-compose.json) == true ]; then
 	log "Running init script"
 	dstack-util notify-host -e "boot.progress" -d "init-script" || true
