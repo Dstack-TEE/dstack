@@ -192,6 +192,47 @@ check_dhcp() {
     check_info "Run: $(basename "$0") setup --mode standalone --bridge $BRIDGE"
 }
 
+check_dhcp_notify() {
+    echo
+    bold "DHCP lease notification"
+
+    local provider
+    provider=$(detect_bridge_provider)
+
+    if [[ "$provider" == libvirt:* ]]; then
+        check_warn "libvirt DHCP does not support dhcp-script callback"
+        check_info "port forwarding requires manual PRPC call or alternative notification"
+        return
+    fi
+
+    # Check dnsmasq config for dhcp-script
+    local conf_files=(/etc/dnsmasq.d/*"$BRIDGE"* /etc/dnsmasq.d/*.conf)
+    local found_script=""
+    for f in "${conf_files[@]}"; do
+        [[ -f "$f" ]] || continue
+        local script_path
+        script_path=$(grep -oP '^dhcp-script=\K.*' "$f" 2>/dev/null || true)
+        if [[ -n "$script_path" ]]; then
+            found_script="$script_path"
+            break
+        fi
+    done
+
+    if [[ -z "$found_script" ]]; then
+        check_warn "no dhcp-script configured in dnsmasq"
+        check_info "port forwarding will not be set up automatically"
+        check_info "add 'dhcp-script=/usr/local/bin/dhcp-notify.sh' to dnsmasq config"
+        return
+    fi
+
+    if [[ -x "$found_script" ]]; then
+        check_pass "dhcp-script configured: $found_script"
+    else
+        check_fail "dhcp-script $found_script is not executable or missing"
+        check_info "Fix: sudo chmod +x $found_script"
+    fi
+}
+
 check_ip_forward() {
     echo
     bold "IP forwarding"
@@ -252,6 +293,45 @@ print(iface.network)
     check_fail "no NAT masquerade rules found for $net_cidr"
     check_info "Libvirt adds these automatically."
     check_info "For standalone: systemd-networkd IPMasquerade=both or manual nftables rules."
+}
+
+check_dhcp_firewall() {
+    echo
+    bold "DHCP/DNS firewall rules"
+
+    local nft_rules=""
+    if command -v nft &>/dev/null; then
+        nft_rules=$(sudo nft list ruleset 2>/dev/null || true)
+    fi
+
+    if [[ -z "$nft_rules" ]]; then
+        check_warn "nft not available, cannot check firewall rules"
+        return
+    fi
+
+    # Check INPUT policy
+    local input_policy
+    input_policy=$(echo "$nft_rules" | grep -A1 'chain INPUT' | grep -oP 'policy \K\w+' | head -1 || echo "")
+
+    if [[ "$input_policy" == "accept" ]]; then
+        check_pass "INPUT policy is accept (DHCP/DNS allowed by default)"
+        return
+    fi
+
+    # Restrictive INPUT policy — need explicit rules
+    if echo "$nft_rules" | grep -q "iifname \"$BRIDGE\".*udp dport 67.*accept"; then
+        check_pass "DHCP input rule for $BRIDGE"
+    else
+        check_fail "no DHCP input rule for $BRIDGE (INPUT policy: ${input_policy:-unknown})"
+        check_info "VMs will not get DHCP leases without this rule"
+        check_info "Fix: sudo nft add rule ip filter INPUT iifname \"$BRIDGE\" udp dport 67 counter accept"
+    fi
+
+    if echo "$nft_rules" | grep -q "iifname \"$BRIDGE\".*udp dport 53.*accept"; then
+        check_pass "DNS input rule for $BRIDGE"
+    else
+        check_warn "no DNS input rule for $BRIDGE"
+    fi
 }
 
 check_forward_rules() {
@@ -462,12 +542,28 @@ sudo mv /tmp/.dstack-br-network $network"
             dhcp_end="${prefix}.254"
         fi
 
+        # Install dhcp-notify.sh if present
+        local notify_script="/usr/local/bin/dhcp-notify.sh"
+        local dhcp_script_line=""
+        local src_notify
+        src_notify="$(cd "$(dirname "$0")" && pwd)/dhcp-notify.sh"
+        if [[ -f "$src_notify" ]]; then
+            run_cmd sudo cp "$src_notify" "$notify_script"
+            run_cmd sudo chmod +x "$notify_script"
+            dhcp_script_line="dhcp-script=${notify_script}"
+            echo "  installed $notify_script"
+        else
+            echo "  $(yellow '[WARN]') dhcp-notify.sh not found at $src_notify"
+            echo "  VM port forwarding will not be set up automatically"
+        fi
+
         run_cmd bash -c "cat > /tmp/.dstack-dnsmasq <<HEREDOC
 interface=$BRIDGE
 bind-interfaces
 dhcp-range=${dhcp_start},${dhcp_end},255.255.255.0,12h
 dhcp-option=option:router,${bridge_ip}
 dhcp-option=option:dns-server,8.8.8.8,1.1.1.1
+${dhcp_script_line}
 HEREDOC
 sudo mv /tmp/.dstack-dnsmasq $conf"
         echo "  created $conf"
@@ -475,8 +571,97 @@ sudo mv /tmp/.dstack-dnsmasq $conf"
         echo "  restarted dnsmasq"
     fi
 
+    # 3. Firewall rules for standalone bridge
+    setup_standalone_firewall
+
     echo
-    echo "  standalone provides: bridge, DHCP (dnsmasq), NAT (systemd-networkd IPMasquerade)"
+    echo "  standalone provides: bridge, DHCP (dnsmasq), NAT, firewall rules"
+}
+
+# --- Setup: standalone firewall ---
+
+setup_standalone_firewall() {
+    echo
+    bold "Setting up firewall rules for $BRIDGE"
+
+    local subnet
+    subnet=$(ip -4 -o addr show "$BRIDGE" 2>/dev/null | awk '{print $4}' | head -1)
+    if [[ -z "$subnet" ]]; then
+        echo "  $(red 'ERROR'): bridge $BRIDGE has no IP, cannot configure firewall"
+        return 1
+    fi
+
+    local net_cidr
+    net_cidr=$(python3 -c "
+import ipaddress
+iface = ipaddress.ip_interface('$subnet')
+print(iface.network)
+" 2>/dev/null || echo "")
+
+    if [[ -z "$net_cidr" ]]; then
+        echo "  $(red 'ERROR'): cannot parse subnet $subnet"
+        return 1
+    fi
+
+    if ! command -v nft &>/dev/null; then
+        echo "  $(yellow '[WARN]') nft not found, skipping firewall setup"
+        echo "  you may need to configure iptables manually"
+        return 0
+    fi
+
+    # Detect whether to use libvirt chains or default chains
+    local inp_chain="INPUT"
+    local out_chain="OUTPUT"
+    local fwd_chain="FORWARD"
+    local nat_chain="POSTROUTING"
+
+    if sudo nft list chain ip filter LIBVIRT_INP &>/dev/null 2>&1; then
+        inp_chain="LIBVIRT_INP"
+        out_chain="LIBVIRT_OUT"
+        echo "  using libvirt filter chains (LIBVIRT_INP/LIBVIRT_OUT)"
+    fi
+    if sudo nft list chain ip filter LIBVIRT_FWO &>/dev/null 2>&1; then
+        fwd_chain=""  # use individual libvirt chains
+        echo "  using libvirt forward chains (LIBVIRT_FWO/FWI/FWX)"
+    fi
+    if sudo nft list chain ip nat LIBVIRT_PRT &>/dev/null 2>&1; then
+        nat_chain="LIBVIRT_PRT"
+        echo "  using libvirt NAT chain (LIBVIRT_PRT)"
+    fi
+
+    # Check if rules already exist (simple heuristic: look for bridge name in ruleset)
+    local existing
+    existing=$(sudo nft list ruleset 2>/dev/null || true)
+    if echo "$existing" | grep -q "iifname \"$BRIDGE\".*udp dport 67.*accept"; then
+        echo "  firewall rules for $BRIDGE already present, skipping"
+        return 0
+    fi
+
+    echo "  adding INPUT/OUTPUT rules for DHCP and DNS"
+    run_cmd sudo nft add rule ip filter "$inp_chain" iifname "$BRIDGE" udp dport 67 counter accept
+    run_cmd sudo nft add rule ip filter "$inp_chain" iifname "$BRIDGE" udp dport 53 counter accept
+    run_cmd sudo nft add rule ip filter "$inp_chain" iifname "$BRIDGE" tcp dport 53 counter accept
+    run_cmd sudo nft add rule ip filter "$out_chain" oifname "$BRIDGE" udp dport 68 counter accept
+    run_cmd sudo nft add rule ip filter "$out_chain" oifname "$BRIDGE" udp dport 53 counter accept
+
+    echo "  adding FORWARD rules for $net_cidr"
+    if [[ -z "$fwd_chain" ]]; then
+        # libvirt forward chains
+        run_cmd sudo nft add rule ip filter LIBVIRT_FWO ip saddr "$net_cidr" iifname "$BRIDGE" counter accept
+        run_cmd sudo nft add rule ip filter LIBVIRT_FWI ip daddr "$net_cidr" oifname "$BRIDGE" ct state related,established counter accept
+        run_cmd sudo nft add rule ip filter LIBVIRT_FWX iifname "$BRIDGE" oifname "$BRIDGE" counter accept
+    else
+        run_cmd sudo nft add rule ip filter FORWARD ip saddr "$net_cidr" iifname "$BRIDGE" counter accept
+        run_cmd sudo nft add rule ip filter FORWARD ip daddr "$net_cidr" oifname "$BRIDGE" ct state related,established counter accept
+        run_cmd sudo nft add rule ip filter FORWARD iifname "$BRIDGE" oifname "$BRIDGE" counter accept
+    fi
+
+    echo "  adding NAT masquerade for $net_cidr"
+    run_cmd sudo nft add rule ip nat "$nat_chain" ip saddr "$net_cidr" ip daddr 224.0.0.0/24 counter return
+    run_cmd sudo nft add rule ip nat "$nat_chain" ip saddr "$net_cidr" ip daddr 255.255.255.255 counter return
+    run_cmd sudo nft add rule ip nat "$nat_chain" ip saddr "$net_cidr" ip daddr != "$net_cidr" counter masquerade
+
+    echo "  firewall rules configured"
 }
 
 # --- Main ---
@@ -557,6 +742,8 @@ cmd_check() {
     check_bridge_conf
     check_bridge_interface
     check_dhcp
+    check_dhcp_notify
+    check_dhcp_firewall
     check_ip_forward
     check_nat_rules
     check_forward_rules
