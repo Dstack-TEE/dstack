@@ -452,6 +452,9 @@ impl VmmRpc for RpcHandler {
             .load_vm(&vm_work_dir, &Default::default(), false)
             .await
             .context("Failed to load VM")?;
+        if request.update_ports {
+            self.app.reconfigure_port_forward(&new_id).await;
+        }
         Ok(Id { id: new_id })
     }
 
