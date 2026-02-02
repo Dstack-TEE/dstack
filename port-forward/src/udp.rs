@@ -86,15 +86,17 @@ pub async fn run_udp_forwarder(
                 let entry = match map.entry(client_addr) {
                     std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
                     std::collections::hash_map::Entry::Vacant(e) => {
-                        let std_sock = match std::net::UdpSocket::bind("0.0.0.0:0") {
+                        let socket = match (|| -> anyhow::Result<Arc<UdpSocket>> {
+                            let std_sock = std::net::UdpSocket::bind("0.0.0.0:0")?;
+                            std_sock.set_nonblocking(true)?;
+                            Ok(Arc::new(UdpSocket::from_std(std_sock)?))
+                        })() {
                             Ok(s) => s,
                             Err(e) => {
-                                tracing::warn!("udp ephemeral bind for {client_addr}: {e}");
+                                tracing::warn!("udp ephemeral socket for {client_addr}: {e}");
                                 continue;
                             }
                         };
-                        std_sock.set_nonblocking(true).unwrap();
-                        let socket = Arc::new(UdpSocket::from_std(std_sock).unwrap());
 
                         let return_cancel = cancel.child_token();
                         tokio::spawn(udp_return_path(

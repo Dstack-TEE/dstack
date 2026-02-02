@@ -13362,7 +13362,250 @@ $root.vmm = (function () {
          * @returns {Promise<vmm.ReloadVmsResponse>} Promise
          * @variation 2
          */
+        /**
+         * Callback as used by {@link vmm.Vmm#reportDhcpLease}.
+         * @memberof vmm.Vmm
+         * @typedef ReportDhcpLeaseCallback
+         * @type {function}
+         * @param {Error|null} error Error, if any
+         * @param {google.protobuf.Empty} [response] Empty
+         */
+        /**
+         * Calls ReportDhcpLease.
+         * @function reportDhcpLease
+         * @memberof vmm.Vmm
+         * @instance
+         * @param {vmm.IDhcpLeaseRequest} request DhcpLeaseRequest message or plain object
+         * @param {vmm.Vmm.ReportDhcpLeaseCallback} callback Node-style callback called with the error, if any, and Empty
+         * @returns {undefined}
+         * @variation 1
+         */
+        Object.defineProperty(Vmm.prototype.reportDhcpLease = function reportDhcpLease(request, callback) {
+            return this.rpcCall(reportDhcpLease, $root.vmm.DhcpLeaseRequest, $root.google.protobuf.Empty, request, callback);
+        }, "name", { value: "ReportDhcpLease" });
+        /**
+         * Calls ReportDhcpLease.
+         * @function reportDhcpLease
+         * @memberof vmm.Vmm
+         * @instance
+         * @param {vmm.IDhcpLeaseRequest} request DhcpLeaseRequest message or plain object
+         * @returns {Promise<google.protobuf.Empty>} Promise
+         * @variation 2
+         */
         return Vmm;
+    })();
+    vmm.DhcpLeaseRequest = (function () {
+        /**
+         * Properties of a DhcpLeaseRequest.
+         * @memberof vmm
+         * @interface IDhcpLeaseRequest
+         * @property {string|null} [mac] DhcpLeaseRequest mac
+         * @property {string|null} [ip] DhcpLeaseRequest ip
+         */
+        /**
+         * Constructs a new DhcpLeaseRequest.
+         * @memberof vmm
+         * @classdesc Represents a DhcpLeaseRequest.
+         * @implements IDhcpLeaseRequest
+         * @constructor
+         * @param {vmm.IDhcpLeaseRequest=} [properties] Properties to set
+         */
+        function DhcpLeaseRequest(properties) {
+            if (properties)
+                for (var keys = Object.keys(properties), i = 0; i < keys.length; ++i)
+                    if (properties[keys[i]] != null)
+                        this[keys[i]] = properties[keys[i]];
+        }
+        /**
+         * DhcpLeaseRequest mac.
+         * @member {string} mac
+         * @memberof vmm.DhcpLeaseRequest
+         * @instance
+         */
+        DhcpLeaseRequest.prototype.mac = "";
+        /**
+         * DhcpLeaseRequest ip.
+         * @member {string} ip
+         * @memberof vmm.DhcpLeaseRequest
+         * @instance
+         */
+        DhcpLeaseRequest.prototype.ip = "";
+        /**
+         * Creates a new DhcpLeaseRequest instance using the specified properties.
+         * @function create
+         * @memberof vmm.DhcpLeaseRequest
+         * @static
+         * @param {vmm.IDhcpLeaseRequest=} [properties] Properties to set
+         * @returns {vmm.DhcpLeaseRequest} DhcpLeaseRequest instance
+         */
+        DhcpLeaseRequest.create = function create(properties) {
+            return new DhcpLeaseRequest(properties);
+        };
+        /**
+         * Encodes the specified DhcpLeaseRequest message. Does not implicitly {@link vmm.DhcpLeaseRequest.verify|verify} messages.
+         * @function encode
+         * @memberof vmm.DhcpLeaseRequest
+         * @static
+         * @param {vmm.IDhcpLeaseRequest} message DhcpLeaseRequest message or plain object to encode
+         * @param {$protobuf.Writer} [writer] Writer to encode to
+         * @returns {$protobuf.Writer} Writer
+         */
+        DhcpLeaseRequest.encode = function encode(message, writer) {
+            if (!writer)
+                writer = $Writer.create();
+            if (message.mac != null && Object.hasOwnProperty.call(message, "mac"))
+                writer.uint32(/* id 1, wireType 2 =*/ 10).string(message.mac);
+            if (message.ip != null && Object.hasOwnProperty.call(message, "ip"))
+                writer.uint32(/* id 2, wireType 2 =*/ 18).string(message.ip);
+            return writer;
+        };
+        /**
+         * Encodes the specified DhcpLeaseRequest message, length delimited. Does not implicitly {@link vmm.DhcpLeaseRequest.verify|verify} messages.
+         * @function encodeDelimited
+         * @memberof vmm.DhcpLeaseRequest
+         * @static
+         * @param {vmm.IDhcpLeaseRequest} message DhcpLeaseRequest message or plain object to encode
+         * @param {$protobuf.Writer} [writer] Writer to encode to
+         * @returns {$protobuf.Writer} Writer
+         */
+        DhcpLeaseRequest.encodeDelimited = function encodeDelimited(message, writer) {
+            return this.encode(message, writer).ldelim();
+        };
+        /**
+         * Decodes a DhcpLeaseRequest message from the specified reader or buffer.
+         * @function decode
+         * @memberof vmm.DhcpLeaseRequest
+         * @static
+         * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
+         * @param {number} [length] Message length if known beforehand
+         * @returns {vmm.DhcpLeaseRequest} DhcpLeaseRequest
+         * @throws {Error} If the payload is not a reader or valid buffer
+         * @throws {$protobuf.util.ProtocolError} If required fields are missing
+         */
+        DhcpLeaseRequest.decode = function decode(reader, length, error) {
+            if (!(reader instanceof $Reader))
+                reader = $Reader.create(reader);
+            var end = length === undefined ? reader.len : reader.pos + length, message = new $root.vmm.DhcpLeaseRequest();
+            while (reader.pos < end) {
+                var tag = reader.uint32();
+                if (tag === error)
+                    break;
+                switch (tag >>> 3) {
+                    case 1: {
+                        message.mac = reader.string();
+                        break;
+                    }
+                    case 2: {
+                        message.ip = reader.string();
+                        break;
+                    }
+                    default:
+                        reader.skipType(tag & 7);
+                        break;
+                }
+            }
+            return message;
+        };
+        /**
+         * Decodes a DhcpLeaseRequest message from the specified reader or buffer, length delimited.
+         * @function decodeDelimited
+         * @memberof vmm.DhcpLeaseRequest
+         * @static
+         * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
+         * @returns {vmm.DhcpLeaseRequest} DhcpLeaseRequest
+         * @throws {Error} If the payload is not a reader or valid buffer
+         * @throws {$protobuf.util.ProtocolError} If required fields are missing
+         */
+        DhcpLeaseRequest.decodeDelimited = function decodeDelimited(reader) {
+            if (!(reader instanceof $Reader))
+                reader = new $Reader(reader);
+            return this.decode(reader, reader.uint32());
+        };
+        /**
+         * Verifies a DhcpLeaseRequest message.
+         * @function verify
+         * @memberof vmm.DhcpLeaseRequest
+         * @static
+         * @param {Object.<string,*>} message Plain object to verify
+         * @returns {string|null} `null` if valid, otherwise the reason why it is not
+         */
+        DhcpLeaseRequest.verify = function verify(message) {
+            if (typeof message !== "object" || message === null)
+                return "object expected";
+            if (message.mac != null && message.hasOwnProperty("mac"))
+                if (!$util.isString(message.mac))
+                    return "mac: string expected";
+            if (message.ip != null && message.hasOwnProperty("ip"))
+                if (!$util.isString(message.ip))
+                    return "ip: string expected";
+            return null;
+        };
+        /**
+         * Creates a DhcpLeaseRequest message from a plain object. Also converts values to their respective internal types.
+         * @function fromObject
+         * @memberof vmm.DhcpLeaseRequest
+         * @static
+         * @param {Object.<string,*>} object Plain object
+         * @returns {vmm.DhcpLeaseRequest} DhcpLeaseRequest
+         */
+        DhcpLeaseRequest.fromObject = function fromObject(object) {
+            if (object instanceof $root.vmm.DhcpLeaseRequest)
+                return object;
+            var message = new $root.vmm.DhcpLeaseRequest();
+            if (object.mac != null)
+                message.mac = String(object.mac);
+            if (object.ip != null)
+                message.ip = String(object.ip);
+            return message;
+        };
+        /**
+         * Creates a plain object from a DhcpLeaseRequest message. Also converts values to other types if specified.
+         * @function toObject
+         * @memberof vmm.DhcpLeaseRequest
+         * @static
+         * @param {vmm.DhcpLeaseRequest} message DhcpLeaseRequest
+         * @param {$protobuf.IConversionOptions} [options] Conversion options
+         * @returns {Object.<string,*>} Plain object
+         */
+        DhcpLeaseRequest.toObject = function toObject(message, options) {
+            if (!options)
+                options = {};
+            var object = {};
+            if (options.defaults) {
+                object.mac = "";
+                object.ip = "";
+            }
+            if (message.mac != null && message.hasOwnProperty("mac"))
+                object.mac = message.mac;
+            if (message.ip != null && message.hasOwnProperty("ip"))
+                object.ip = message.ip;
+            return object;
+        };
+        /**
+         * Converts this DhcpLeaseRequest to JSON.
+         * @function toJSON
+         * @memberof vmm.DhcpLeaseRequest
+         * @instance
+         * @returns {Object.<string,*>} JSON object
+         */
+        DhcpLeaseRequest.prototype.toJSON = function toJSON() {
+            return this.constructor.toObject(this, $protobuf.util.toJSONOptions);
+        };
+        /**
+         * Gets the default type url for DhcpLeaseRequest
+         * @function getTypeUrl
+         * @memberof vmm.DhcpLeaseRequest
+         * @static
+         * @param {string} [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
+         * @returns {string} The default type url
+         */
+        DhcpLeaseRequest.getTypeUrl = function getTypeUrl(typeUrlPrefix) {
+            if (typeUrlPrefix === undefined) {
+                typeUrlPrefix = "type.googleapis.com";
+            }
+            return typeUrlPrefix + "/vmm.DhcpLeaseRequest";
+        };
+        return DhcpLeaseRequest;
     })();
     return vmm;
 })();
