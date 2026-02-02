@@ -5,9 +5,7 @@
 //! QEMU related code
 use crate::{
     app::Manifest,
-    config::{
-        CvmConfig, GatewayConfig, Networking, NetworkingMode, ProcessAnnotation, Protocol,
-    },
+    config::{CvmConfig, GatewayConfig, Networking, NetworkingMode, ProcessAnnotation, Protocol},
 };
 use std::{collections::HashMap, os::unix::fs::PermissionsExt};
 use std::{
@@ -68,9 +66,7 @@ fn networking_to_proto(n: &Networking) -> pb::NetworkingConfig {
         NetworkingMode::Passt => "passt",
         NetworkingMode::Custom => "custom",
     };
-    pb::NetworkingConfig {
-        mode: mode.into(),
-    }
+    pb::NetworkingConfig { mode: mode.into() }
 }
 
 #[derive(Debug, Deserialize)]
@@ -270,9 +266,7 @@ impl VmInfo {
                     gateway_urls: custom_gateway_urls.clone(),
                     stopped,
                     no_tee,
-                    networking: self.manifest.networking.as_ref().map(|n| {
-                        networking_to_proto(n)
-                    }),
+                    networking: self.manifest.networking.as_ref().map(networking_to_proto),
                 })
             },
             app_url: self
@@ -609,10 +603,7 @@ impl VmConfig {
                 )
             }
             NetworkingMode::Bridge => {
-                tracing::info!(
-                    "bridge networking: mac={mac} bridge={}",
-                    networking.bridge
-                );
+                tracing::info!("bridge networking: mac={mac} bridge={}", networking.bridge);
                 format!("bridge,id=net0,br={}", networking.bridge)
             }
             NetworkingMode::Custom => networking.netdev.clone(),
@@ -1208,7 +1199,6 @@ impl VmWorkDir {
         self.workdir.join("passt.log")
     }
 
-
     pub fn path(&self) -> &Path {
         &self.workdir
     }
@@ -1226,5 +1216,4 @@ impl VmWorkDir {
         let compose: AppCompose = serde_json::from_str(&fs::read_to_string(compose_file)?)?;
         Ok(compose)
     }
-
 }

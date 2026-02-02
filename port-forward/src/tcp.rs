@@ -109,8 +109,7 @@ async fn splice_one_direction(
     use nix::fcntl::{splice, SpliceFFlags};
     use nix::unistd::pipe;
 
-    let (pipe_r, pipe_w): (OwnedFd, OwnedFd) =
-        pipe().map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+    let (pipe_r, pipe_w): (OwnedFd, OwnedFd) = pipe().map_err(io::Error::other)?;
 
     let flags = SpliceFFlags::SPLICE_F_NONBLOCK | SpliceFFlags::SPLICE_F_MOVE;
     let chunk: usize = 65536;
@@ -129,7 +128,7 @@ async fn splice_one_direction(
                     io::ErrorKind::Unsupported,
                     "splice not supported for this fd type",
                 )),
-                Err(e) => Err(io::Error::new(io::ErrorKind::Other, e)),
+                Err(e) => Err(io::Error::other(e)),
             }
         }) {
             Ok(0) => return Ok(()),
@@ -145,7 +144,7 @@ async fn splice_one_direction(
                 match splice(pipe_r.as_fd(), None, dst_bfd, None, n - written, flags) {
                     Ok(w) => Ok(w),
                     Err(nix::errno::Errno::EAGAIN) => Err(io::ErrorKind::WouldBlock.into()),
-                    Err(e) => Err(io::Error::new(io::ErrorKind::Other, e)),
+                    Err(e) => Err(io::Error::other(e)),
                 }
             }) {
                 Ok(w) => written += w,
@@ -197,13 +196,10 @@ mod tests {
         conn.write_all(b"hello splice").await.unwrap();
 
         let mut buf = vec![0u8; 64];
-        let n = tokio::time::timeout(
-            std::time::Duration::from_secs(2),
-            conn.read(&mut buf),
-        )
-        .await
-        .unwrap()
-        .unwrap();
+        let n = tokio::time::timeout(std::time::Duration::from_secs(2), conn.read(&mut buf))
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(&buf[..n], b"hello splice");
 
         cancel.cancel();

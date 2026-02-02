@@ -83,34 +83,34 @@ pub async fn run_udp_forwarder(
                 let mut map = clients.lock().await;
 
                 // Get or create per-client ephemeral socket
-                if !map.contains_key(&client_addr) {
-                    let std_sock = match std::net::UdpSocket::bind("0.0.0.0:0") {
-                        Ok(s) => s,
-                        Err(e) => {
-                            tracing::warn!("udp ephemeral bind for {client_addr}: {e}");
-                            continue;
-                        }
-                    };
-                    std_sock.set_nonblocking(true).unwrap();
-                    let socket = Arc::new(UdpSocket::from_std(std_sock).unwrap());
+                let entry = match map.entry(client_addr) {
+                    std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
+                    std::collections::hash_map::Entry::Vacant(e) => {
+                        let std_sock = match std::net::UdpSocket::bind("0.0.0.0:0") {
+                            Ok(s) => s,
+                            Err(e) => {
+                                tracing::warn!("udp ephemeral bind for {client_addr}: {e}");
+                                continue;
+                            }
+                        };
+                        std_sock.set_nonblocking(true).unwrap();
+                        let socket = Arc::new(UdpSocket::from_std(std_sock).unwrap());
 
-                    let return_cancel = cancel.child_token();
-                    // Spawn return-path task
-                    tokio::spawn(udp_return_path(
-                        host_socket.clone(),
-                        socket.clone(),
-                        client_addr,
-                        return_cancel.child_token(),
-                    ));
+                        let return_cancel = cancel.child_token();
+                        tokio::spawn(udp_return_path(
+                            host_socket.clone(),
+                            socket.clone(),
+                            client_addr,
+                            return_cancel.child_token(),
+                        ));
 
-                    map.insert(client_addr, ClientState {
-                        socket,
-                        last_active: Instant::now(),
-                        _cancel: return_cancel,
-                    });
-                }
-
-                let entry = map.get_mut(&client_addr).unwrap();
+                        e.insert(ClientState {
+                            socket,
+                            last_active: Instant::now(),
+                            _cancel: return_cancel,
+                        })
+                    }
+                };
                 entry.last_active = Instant::now();
 
                 // Forward client data to target
@@ -164,7 +164,9 @@ mod tests {
             let mut buf = vec![0u8; UDP_BUF_SIZE];
             loop {
                 match echo.recv_from(&mut buf).await {
-                    Ok((n, from)) => { let _ = echo.send_to(&buf[..n], from).await; }
+                    Ok((n, from)) => {
+                        let _ = echo.send_to(&buf[..n], from).await;
+                    }
                     Err(_) => break,
                 }
             }
@@ -186,10 +188,10 @@ mod tests {
         client.send_to(b"hello udp", fwd_addr).await.unwrap();
 
         let mut buf = vec![0u8; 64];
-        let (n, _) = tokio::time::timeout(
-            Duration::from_secs(2),
-            client.recv_from(&mut buf),
-        ).await.unwrap().unwrap();
+        let (n, _) = tokio::time::timeout(Duration::from_secs(2), client.recv_from(&mut buf))
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(&buf[..n], b"hello udp");
 
         cancel.cancel();

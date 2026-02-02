@@ -74,8 +74,17 @@ impl ForwardService {
             Protocol::Udp => tokio::spawn(udp::run_udp_forwarder(listen, target, token.clone())),
         };
 
-        tracing::info!("added forwarding rule: {listen} -> {target} ({:?})", rule.protocol);
-        self.rules.insert(rule, RunningRule { cancel: token, task });
+        tracing::info!(
+            "added forwarding rule: {listen} -> {target} ({:?})",
+            rule.protocol
+        );
+        self.rules.insert(
+            rule,
+            RunningRule {
+                cancel: token,
+                task,
+            },
+        );
         Ok(())
     }
 

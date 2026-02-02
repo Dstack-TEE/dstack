@@ -319,9 +319,10 @@ impl App {
         let vm_id = {
             let mut state = self.lock();
             let prefix = self.config.cvm.networking.mac_prefix_bytes();
-            let found = state.vms.iter_mut().find(|(id, _)| {
-                mac_address_for_vm(id, &prefix) == mac
-            });
+            let found = state
+                .vms
+                .iter_mut()
+                .find(|(id, _)| mac_address_for_vm(id, &prefix) == mac);
             let Some((id, vm)) = found else {
                 debug!(mac, ip, "DHCP lease for unknown MAC, ignoring");
                 return;
@@ -386,7 +387,12 @@ impl App {
             })
             .collect();
 
-        let old_rules = self.lock().active_forwards.get(id).cloned().unwrap_or_default();
+        let old_rules = self
+            .lock()
+            .active_forwards
+            .get(id)
+            .cloned()
+            .unwrap_or_default();
 
         let old_set: HashSet<_> = old_rules.iter().collect();
         let new_set: HashSet<_> = new_rules.iter().collect();
@@ -408,7 +414,9 @@ impl App {
         }
 
         drop(fwd);
-        self.lock().active_forwards.insert(id.to_string(), new_rules);
+        self.lock()
+            .active_forwards
+            .insert(id.to_string(), new_rules);
         info!(id, "port forwarding reconfigured");
     }
 
