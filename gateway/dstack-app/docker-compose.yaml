@@ -22,6 +22,7 @@ services:
       - RUST_LOG=info,certbot=debug
       - PCCS_URL=${PCCS_URL}
       - RPC_DOMAIN=${RPC_DOMAIN}
+      - SERVING_NUM_PORTS=${SERVING_NUM_PORTS:-1}
     restart: always
 
 volumes:
