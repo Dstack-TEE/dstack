@@ -35,7 +35,6 @@ impl AdminRpcHandler {
                 ip: instance.ip.to_string(),
                 app_id: instance.app_id.clone(),
                 base_domain: base_domain.clone(),
-                port: state.config.proxy.listen_port as u32,
                 latest_handshake: encode_ts(instance.last_seen),
                 num_connections: instance.num_connections(),
             })
@@ -97,7 +96,6 @@ impl AdminRpc for AdminRpcHandler {
                 ip: instance.ip.to_string(),
                 app_id: instance.app_id.clone(),
                 base_domain: base_domain.clone(),
-                port: state.config.proxy.listen_port as u32,
                 latest_handshake: {
                     let (ts, _) = handshakes
                         .get(&instance.public_key)
