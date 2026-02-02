@@ -67,6 +67,40 @@ pub enum TlsVersion {
     Tls13,
 }
 
+/// Deserialize a port range from either a single integer (443) or a string range ("443-543").
+fn deserialize_port_range<'de, D>(deserializer: D) -> std::result::Result<Vec<u16>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de;
+
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum PortSpec {
+        Single(u16),
+        Range(String),
+    }
+
+    match PortSpec::deserialize(deserializer)? {
+        PortSpec::Single(p) => Ok(vec![p]),
+        PortSpec::Range(s) => {
+            if let Some((start, end)) = s.split_once('-') {
+                let start: u16 = start.trim().parse().map_err(de::Error::custom)?;
+                let end: u16 = end.trim().parse().map_err(de::Error::custom)?;
+                if start > end {
+                    return Err(de::Error::custom(format!(
+                        "invalid port range: {start} > {end}"
+                    )));
+                }
+                Ok((start..=end).collect())
+            } else {
+                let p: u16 = s.trim().parse().map_err(de::Error::custom)?;
+                Ok(vec![p])
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct ProxyConfig {
     pub cert_chain: String,
@@ -76,7 +110,8 @@ pub struct ProxyConfig {
     pub base_domain: String,
     pub external_port: u16,
     pub listen_addr: Ipv4Addr,
-    pub listen_port: u16,
+    #[serde(deserialize_with = "deserialize_port_range")]
+    pub listen_port: Vec<u16>,
     pub agent_port: u16,
     pub timeouts: Timeouts,
     pub buffer_size: usize,

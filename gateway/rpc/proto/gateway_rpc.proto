@@ -77,8 +77,6 @@ message HostInfo {
   string app_id = 3;
   // The base domain of the HTTPS endpoint of the host.
   string base_domain = 4;
-  // The external port of the host.
-  uint32 port = 5;
   // The latest handshake time of the host.
   uint64 latest_handshake = 6;
   // The number of connections of the host.
