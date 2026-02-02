@@ -229,6 +229,7 @@ fn networking_from_proto(proto: &rpc::NetworkingConfig) -> Option<crate::config:
         no_map_gw: false,
         ipv4_only: false,
         netdev: String::new(),
+        forward_service_enabled: false,
     })
 }
 

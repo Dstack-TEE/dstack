@@ -356,7 +356,7 @@ impl App {
                 .networking
                 .as_ref()
                 .unwrap_or(&self.config.cvm.networking);
-            if !networking.is_bridge() {
+            if !networking.is_bridge() || !networking.forward_service_enabled {
                 return;
             }
             let guest_ip = vm.state.guest_ip.clone();

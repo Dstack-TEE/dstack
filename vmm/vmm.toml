@@ -99,6 +99,7 @@ ipv4_only = true
 
 # for mode = "bridge"
 # bridge = "virbr0"
+forward_service_enabled = false
 
 [cvm.port_mapping]
 enabled = false
