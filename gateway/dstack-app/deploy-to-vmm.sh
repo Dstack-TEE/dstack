@@ -59,7 +59,7 @@ PUBLIC_IP=$(curl -s4 ifconfig.me)
 # Whether to use ACME staging (yes/no)
 ACME_STAGING=no
 
-# Networking mode: bridge or passt (default: passt)
+# Networking mode: bridge or user (default: user)
 # NET_MODE=bridge
 
 # Subnet index. 0~15
