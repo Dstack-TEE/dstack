@@ -168,13 +168,14 @@ describe('Browser Compatibility Tests', () => {
     const testPublicKey = new Uint8Array(32).fill(1) // 32 bytes
     const testSignature = new Uint8Array(65).fill(2) // 65 bytes
     const testAppId = 'test-app-id'
+    const testTimestamp = BigInt(Math.floor(Date.now() / 1000))
 
     it('should accept the same input parameters', async () => {
-      const nodeResult = await nodeVerifyEnvEncryptPublicKey.verifyEnvEncryptPublicKey(
-        testPublicKey, testSignature, testAppId
+      const nodeResult = nodeVerifyEnvEncryptPublicKey.verifyEnvEncryptPublicKey(
+        testPublicKey, testSignature, testAppId, testTimestamp
       )
       const browserResult = await browserVerifyEnvEncryptPublicKey.verifyEnvEncryptPublicKey(
-        testPublicKey, testSignature, testAppId
+        testPublicKey, testSignature, testAppId, testTimestamp
       )
 
       // Both should return string or null
@@ -187,18 +188,18 @@ describe('Browser Compatibility Tests', () => {
       const invalidSignature = new Uint8Array(32) // Wrong size
 
       // Both should handle invalid inputs similarly
-      const nodeResult1 = await nodeVerifyEnvEncryptPublicKey.verifyEnvEncryptPublicKey(
-        invalidPublicKey, testSignature, testAppId
+      const nodeResult1 = nodeVerifyEnvEncryptPublicKey.verifyEnvEncryptPublicKey(
+        invalidPublicKey, testSignature, testAppId, testTimestamp
       )
       const browserResult1 = await browserVerifyEnvEncryptPublicKey.verifyEnvEncryptPublicKey(
-        invalidPublicKey, testSignature, testAppId
+        invalidPublicKey, testSignature, testAppId, testTimestamp
       )
 
-      const nodeResult2 = await nodeVerifyEnvEncryptPublicKey.verifyEnvEncryptPublicKey(
-        testPublicKey, invalidSignature, testAppId
+      const nodeResult2 = nodeVerifyEnvEncryptPublicKey.verifyEnvEncryptPublicKey(
+        testPublicKey, invalidSignature, testAppId, testTimestamp
       )
       const browserResult2 = await browserVerifyEnvEncryptPublicKey.verifyEnvEncryptPublicKey(
-        testPublicKey, invalidSignature, testAppId
+        testPublicKey, invalidSignature, testAppId, testTimestamp
       )
 
       // Both should return null for invalid inputs (or handle errors consistently)
@@ -209,15 +210,31 @@ describe('Browser Compatibility Tests', () => {
     })
 
     it('should handle empty/invalid app ID consistently', async () => {
-      const nodeResult = await nodeVerifyEnvEncryptPublicKey.verifyEnvEncryptPublicKey(
-        testPublicKey, testSignature, ''
+      const nodeResult = nodeVerifyEnvEncryptPublicKey.verifyEnvEncryptPublicKey(
+        testPublicKey, testSignature, '', testTimestamp
       )
       const browserResult = await browserVerifyEnvEncryptPublicKey.verifyEnvEncryptPublicKey(
-        testPublicKey, testSignature, ''
+        testPublicKey, testSignature, '', testTimestamp
       )
 
       expect(nodeResult).toBeNull()
       expect(browserResult).toBeNull()
+    })
+
+    it('should have matching legacy function exports', async () => {
+      // Test legacy functions exist and have the same interface
+      expect(typeof nodeVerifyEnvEncryptPublicKey.verifyEnvEncryptPublicKeyLegacy).toBe('function')
+      expect(typeof browserVerifyEnvEncryptPublicKey.verifyEnvEncryptPublicKeyLegacy).toBe('function')
+
+      const nodeResult = nodeVerifyEnvEncryptPublicKey.verifyEnvEncryptPublicKeyLegacy(
+        testPublicKey, testSignature, testAppId
+      )
+      const browserResult = await browserVerifyEnvEncryptPublicKey.verifyEnvEncryptPublicKeyLegacy(
+        testPublicKey, testSignature, testAppId
+      )
+
+      expect(nodeResult === null || typeof nodeResult === 'string').toBeTruthy()
+      expect(browserResult === null || typeof browserResult === 'string').toBeTruthy()
     })
   })
 
@@ -226,11 +243,12 @@ describe('Browser Compatibility Tests', () => {
       // These checks ensure TypeScript compatibility
       const nodeEncryptFn: typeof nodeEncryptEnvVars.encryptEnvVars = browserEncryptEnvVars.encryptEnvVars
       const nodeHashFn: typeof nodeGetComposeHash.getComposeHash = browserGetComposeHash.getComposeHash
-      const nodeVerifyFn: typeof nodeVerifyEnvEncryptPublicKey.verifyEnvEncryptPublicKey = browserVerifyEnvEncryptPublicKey.verifyEnvEncryptPublicKey
+      // Note: verify functions have slightly different signatures (sync vs async) but same parameters
+      expect(typeof browserVerifyEnvEncryptPublicKey.verifyEnvEncryptPublicKey).toBe('function')
+      expect(typeof nodeVerifyEnvEncryptPublicKey.verifyEnvEncryptPublicKey).toBe('function')
 
       expect(typeof nodeEncryptFn).toBe('function')
       expect(typeof nodeHashFn).toBe('function')
-      expect(typeof nodeVerifyFn).toBe('function')
     })
   })
 })

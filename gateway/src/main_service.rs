@@ -22,6 +22,7 @@ use dstack_gateway_rpc::{
 };
 use or_panic::ResultOrPanic;
 use ra_rpc::{CallContext, RpcCall, VerifiedAttestation};
+use ra_tls::attestation::AppInfo;
 use rand::seq::IteratorRandom;
 use rinja::Template as _;
 use safe_write::safe_write;
@@ -822,9 +823,15 @@ impl ProxyState {
         id: &str,
         app_id: &str,
         public_key: &str,
-    ) -> Option<InstanceInfo> {
-        if id.is_empty() || public_key.is_empty() || app_id.is_empty() {
-            return None;
+    ) -> Result<InstanceInfo> {
+        if id.is_empty() {
+            bail!("instance_id is empty (no_instance_id is set?)");
+        }
+        if app_id.is_empty() {
+            bail!("app_id is empty");
+        }
+        if public_key.is_empty() {
+            bail!("public_key is empty");
         }
         if let Some(existing) = self.state.instances.get_mut(id) {
             let pubkey_changed = existing.public_key != public_key;
@@ -846,12 +853,14 @@ impl ProxyState {
                 if let Err(err) = self.kv_store.sync_instance(&existing.id, &data) {
                     error!("failed to sync existing instance to KvStore: {err:?}");
                 }
-                return Some(existing);
+                return Ok(existing);
             }
             info!("ip {} is invalid, removing", existing.ip);
             self.state.allocated_addresses.remove(&existing.ip);
         }
-        let ip = self.alloc_ip()?;
+        let ip = self
+            .alloc_ip()
+            .context("IP pool exhausted, no available addresses in client_ip_range")?;
         let host_info = InstanceInfo {
             id: id.to_string(),
             app_id: app_id.to_string(),
@@ -861,7 +870,7 @@ impl ProxyState {
             connections: Default::default(),
         };
         self.add_instance(host_info.clone());
-        Some(host_info)
+        Ok(host_info)
     }
 
     fn add_instance(&mut self, info: InstanceInfo) {
@@ -1223,6 +1232,7 @@ pub(crate) fn encode_ts(ts: SystemTime) -> u64 {
 
 pub struct RpcHandler {
     remote_app_id: Option<Vec<u8>>,
+    remote_app_info: Option<AppInfo>,
     attestation: Option<VerifiedAttestation>,
     state: Proxy,
 }
@@ -1244,12 +1254,16 @@ impl RpcHandler {
 
 impl GatewayRpc for RpcHandler {
     async fn register_cvm(self, request: RegisterCvmRequest) -> Result<RegisterCvmResponse> {
-        let Some(ra) = &self.attestation else {
-            bail!("no attestation provided");
+        let app_info = match self.remote_app_info {
+            Some(app_info) => app_info,
+            None => {
+                let Some(ra) = &self.attestation else {
+                    bail!("neither app-info nor attestation provided");
+                };
+                ra.decode_app_info(false)
+                    .context("failed to decode app-info from attestation")?
+            }
         };
-        let app_info = ra
-            .decode_app_info(false)
-            .context("failed to decode app-info from attestation")?;
         self.state
             .auth_client
             .ensure_app_authorized(&app_info)
@@ -1272,6 +1286,7 @@ impl GatewayRpc for RpcHandler {
             base_domain,
             external_port: port.into(),
             app_address_ns_prefix: state.config.proxy.app_address_ns_prefix.clone(),
+            version: env!("CARGO_PKG_VERSION").to_string(),
         })
     }
 
@@ -1303,6 +1318,7 @@ impl RpcCall<Proxy> for RpcHandler {
     fn construct(context: CallContext<'_, Proxy>) -> Result<Self> {
         Ok(RpcHandler {
             remote_app_id: context.remote_app_id,
+            remote_app_info: context.remote_app_info,
             attestation: context.attestation,
             state: context.state.clone(),
         })

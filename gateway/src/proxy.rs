@@ -8,6 +8,7 @@ use std::{
         atomic::{AtomicU64, AtomicUsize, Ordering},
         Arc,
     },
+    task::Poll,
 };
 
 use anyhow::{bail, Context, Result};
@@ -150,21 +151,35 @@ async fn handle_connection(mut inbound: TcpStream, state: Proxy) -> Result<()> {
 
 #[inline(never)]
 pub async fn proxy_main(rt: &Runtime, config: &ProxyConfig, proxy: Proxy) -> Result<()> {
-    let listener = TcpListener::bind((config.listen_addr, config.listen_port))
-        .await
-        .with_context(|| {
-            format!(
-                "failed to bind {}:{}",
-                config.listen_addr, config.listen_port
-            )
-        })?;
-    info!(
-        "tcp bridge listening on {}:{}",
-        config.listen_addr, config.listen_port
-    );
+    let mut tcp_listeners = Vec::new();
+    for &port in &config.listen_port {
+        let listener = TcpListener::bind((config.listen_addr, port))
+            .await
+            .with_context(|| format!("failed to bind {}:{}", config.listen_addr, port))?;
+        info!("tcp bridge listening on {}:{}", config.listen_addr, port);
+        tcp_listeners.push(listener);
+    }
+    if tcp_listeners.is_empty() {
+        bail!("no tcp listen ports configured");
+    }
 
+    let poll_counter = AtomicUsize::new(0);
     loop {
-        match listener.accept().await {
+        // Accept from any TCP listener via round-robin poll.
+        let poll_start = poll_counter.fetch_add(1, Ordering::Relaxed);
+        let n = tcp_listeners.len();
+        let accepted: std::io::Result<(TcpStream, std::net::SocketAddr)> =
+            std::future::poll_fn(|cx| {
+                for j in 0..n {
+                    let i = (poll_start + j) % n;
+                    if let Poll::Ready(result) = tcp_listeners[i].poll_accept(cx) {
+                        return Poll::Ready(result);
+                    }
+                }
+                Poll::Pending
+            })
+            .await;
+        match accepted {
             Ok((inbound, from)) => {
                 let span = info_span!("conn", id = next_connection_id());
                 let _enter = span.enter();
@@ -183,7 +198,7 @@ pub async fn proxy_main(rt: &Runtime, config: &ProxyConfig, proxy: Proxy) -> Res
                                 info!("connection closed");
                             }
                             Ok(Err(e)) => {
-                                error!("connection error: {e:?}");
+                                error!("connection error: {e:#}");
                             }
                             Err(_) => {
                                 error!("connection kept too long, force closing");
@@ -225,7 +240,7 @@ pub fn start(config: ProxyConfig, app_state: Proxy) -> Result<()> {
             // Run the proxy_main function in this runtime
             if let Err(err) = rt.block_on(proxy_main(&worker_rt, &config, app_state)) {
                 error!(
-                    "error on {}:{}: {err:?}",
+                    "error on {}:{:?}: {err:?}",
                     config.listen_addr, config.listen_port
                 );
             }

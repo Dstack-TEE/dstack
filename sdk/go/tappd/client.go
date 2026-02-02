@@ -185,7 +185,8 @@ func WithLogger(logger *slog.Logger) TappdClientOption {
 // Creates a new TappdClient instance based on the provided endpoint.
 // If the endpoint is empty, it will use the simulator endpoint if it is
 // set in the environment through DSTACK_SIMULATOR_ENDPOINT. Otherwise, it
-// will use the default endpoint at /var/run/tappd.sock.
+// will try /var/run/dstack/tappd.sock first, falling back to /var/run/tappd.sock
+// for backward compatibility.
 func NewTappdClient(opts ...TappdClientOption) *TappdClient {
 	client := &TappdClient{
 		endpoint:   "",
@@ -218,8 +219,9 @@ func NewTappdClient(opts ...TappdClientOption) *TappdClient {
 
 // Returns the appropriate endpoint based on environment and input. If the
 // endpoint is empty, it will use the simulator endpoint if it is set in the
-// environment through DSTACK_SIMULATOR_ENDPOINT. Otherwise, it will use the
-// default endpoint at /var/run/tappd.sock.
+// environment through DSTACK_SIMULATOR_ENDPOINT. Otherwise, it will try
+// /var/run/dstack/tappd.sock first, falling back to /var/run/tappd.sock
+// for backward compatibility.
 func (c *TappdClient) getEndpoint() string {
 	if c.endpoint != "" {
 		return c.endpoint
@@ -228,7 +230,19 @@ func (c *TappdClient) getEndpoint() string {
 		c.logger.Info("using simulator endpoint", "endpoint", simEndpoint)
 		return simEndpoint
 	}
-	return "/var/run/tappd.sock"
+	// Try paths in order: legacy paths first, then namespaced paths
+	socketPaths := []string{
+		"/var/run/tappd.sock",
+		"/run/tappd.sock",
+		"/var/run/dstack/tappd.sock",
+		"/run/dstack/tappd.sock",
+	}
+	for _, path := range socketPaths {
+		if _, err := os.Stat(path); err == nil {
+			return path
+		}
+	}
+	return socketPaths[0]
 }
 
 // Sends an RPC request to the Tappd service.

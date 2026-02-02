@@ -255,6 +255,7 @@ pub struct ImageInfo {
 
 pub mod mr_config;
 pub mod shared_filenames;
+pub mod version;
 
 /// Get the address of the dstack agent
 pub fn dstack_agent_address() -> String {
@@ -262,7 +263,14 @@ pub fn dstack_agent_address() -> String {
     if let Ok(address) = std::env::var("DSTACK_AGENT_ADDRESS") {
         return address;
     }
-    "unix:/var/run/dstack.sock".into()
+    // Try new path first, fall back to old path for backward compatibility
+    const SOCKET_PATHS: &[&str] = &["/var/run/dstack/dstack.sock", "/var/run/dstack.sock"];
+    for path in SOCKET_PATHS {
+        if std::path::Path::new(path).exists() {
+            return format!("unix:{}", path);
+        }
+    }
+    format!("unix:{}", SOCKET_PATHS[0])
 }
 
 /// Hardware/Cloud Platform

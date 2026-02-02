@@ -14,3 +14,5 @@ pub const PHALA_RATLS_APP_ID: &[u64] = &[1, 3, 6, 1, 4, 1, 62397, 1, 3];
 pub const PHALA_RATLS_CERT_USAGE: &[u64] = &[1, 3, 6, 1, 4, 1, 62397, 1, 4];
 /// OID for dstack attestation (the successor of TDX quote)
 pub const PHALA_RATLS_ATTESTATION: &[u64] = &[1, 3, 6, 1, 4, 1, 62397, 1, 8];
+/// OID for app info
+pub const PHALA_RATLS_APP_INFO: &[u64] = &[1, 3, 6, 1, 4, 1, 62397, 1, 9];

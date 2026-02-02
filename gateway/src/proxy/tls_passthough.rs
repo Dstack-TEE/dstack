@@ -2,10 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use anyhow::{Context, Result};
 use std::fmt::Debug;
+use std::sync::atomic::Ordering;
+
+use anyhow::{bail, Context, Result};
 use tokio::{io::AsyncWriteExt, net::TcpStream, task::JoinSet, time::timeout};
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use crate::{
     main_service::Proxy,
@@ -79,18 +81,47 @@ pub(crate) async fn proxy_with_sni(
 ) -> Result<()> {
     let ns_prefix = &state.config.proxy.app_address_ns_prefix;
     let compat = state.config.proxy.app_address_ns_compat;
-    let addr = resolve_app_address(ns_prefix, sni, compat)
+    let dns_timeout = state.config.proxy.timeouts.dns_resolve;
+    let addr = timeout(dns_timeout, resolve_app_address(ns_prefix, sni, compat))
         .await
+        .context("DNS TXT resolve timeout")?
         .context("failed to resolve app address")?;
     debug!("target address is {}:{}", addr.app_id, addr.port);
     proxy_to_app(state, inbound, buffer, &addr.app_id, addr.port).await
+}
+
+/// Check if app has reached max connections limit
+fn check_connection_limit(
+    addresses: &AddressGroup,
+    max_connections: u64,
+    app_id: &str,
+) -> Result<()> {
+    if max_connections == 0 {
+        return Ok(());
+    }
+    let total: u64 = addresses
+        .iter()
+        .map(|a| a.counter.load(Ordering::Relaxed))
+        .sum();
+    if total >= max_connections {
+        warn!(
+            app_id,
+            total, max_connections, "app connection limit exceeded"
+        );
+        bail!("app connection limit exceeded: {total}/{max_connections}");
+    }
+    Ok(())
 }
 
 /// connect to multiple hosts simultaneously and return the first successful connection
 pub(crate) async fn connect_multiple_hosts(
     addresses: AddressGroup,
     port: u16,
+    max_connections: u64,
+    app_id: &str,
 ) -> Result<(TcpStream, EnteredCounter)> {
+    check_connection_limit(&addresses, max_connections, app_id)?;
+
     let mut join_set = JoinSet::new();
     for addr in addresses {
         let counter = addr.counter.enter();
@@ -125,9 +156,10 @@ pub(crate) async fn proxy_to_app(
     port: u16,
 ) -> Result<()> {
     let addresses = state.lock().select_top_n_hosts(app_id)?;
+    let max_connections = state.config.proxy.max_connections_per_app;
     let (mut outbound, _counter) = timeout(
         state.config.proxy.timeouts.connect,
-        connect_multiple_hosts(addresses.clone(), port),
+        connect_multiple_hosts(addresses.clone(), port, max_connections, app_id),
     )
     .await
     .with_context(|| format!("connecting timeout to app {app_id}: {addresses:?}:{port}"))?

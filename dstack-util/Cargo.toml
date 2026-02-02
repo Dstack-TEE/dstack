@@ -55,6 +55,8 @@ scopeguard.workspace = true
 tempfile.workspace = true
 ez-hash.workspace = true
 cc-eventlog.workspace = true
+safe-write.workspace = true
+errify.workspace = true
 
 [dev-dependencies]
 rand.workspace = true

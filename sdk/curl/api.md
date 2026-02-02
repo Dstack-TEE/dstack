@@ -33,6 +33,9 @@ Derives a cryptographic key and returns it along with its TLS certificate chain.
 | `usage_ra_tls` | boolean | Whether to include quote in the certificate for RA-TLS | `true` |
 | `usage_server_auth` | boolean | Enable certificate for server authentication | `true` |
 | `usage_client_auth` | boolean | Enable certificate for client authentication | `false` |
+| `not_before` | uint64 | Certificate validity start time as seconds since UNIX epoch | `0` |
+| `not_after` | uint64 | Certificate validity end time as seconds since UNIX epoch | `0` |
+| `with_app_info` | boolean | Whether to include app info in the certificate | `false` |
 
 **Example:**
 ```bash

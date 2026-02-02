@@ -56,6 +56,8 @@ app_address_ns_prefix = "_dstack-app-address"
 app_address_ns_compat = true
 workers = 32
 external_port = 443
+# Maximum concurrent connections per app. 0 means unlimited.
+max_connections_per_app = 2000
 
 [core.proxy.timeouts]
 # Timeout for establishing a connection to the target app.
@@ -65,6 +67,8 @@ handshake = "5s"
 
 # Timeout for top n hosts selection
 cache_top_n = "30s"
+# Timeout for DNS TXT record resolution (app address lookup).
+dns_resolve = "5s"
 
 # Enable data transfer timeouts below. This might impact performance. Turn off if
 # bad performance is observed.

@@ -219,13 +219,20 @@ These utilities are for deployment scripts, not runtime SDK operations.
 Encrypt secrets before deploying to dstack:
 
 ```typescript
-import { encryptEnvVars, verifyEnvEncryptPublicKey, type EnvVar } from '@phala/dstack-sdk';
+import { encryptEnvVars, verifyEnvEncryptPublicKey, verifyEnvEncryptPublicKeyLegacy, type EnvVar } from '@phala/dstack-sdk';
 
 // Get and verify the KMS public key
-// (obtain public_key and signature from KMS API)
-const kmsIdentity = verifyEnvEncryptPublicKey(publicKeyBytes, signatureBytes, appId);
+// (obtain public_key, signature_v1, and timestamp from KMS API)
+
+// Prefer signature_v1 with timestamp (prevents replay attacks)
+const kmsIdentity = verifyEnvEncryptPublicKey(publicKeyBytes, signatureV1Bytes, appId, timestamp);
 if (!kmsIdentity) {
-  throw new Error('Invalid KMS key');
+  // Fall back to legacy signature for backward compatibility with older KMS
+  const legacyIdentity = verifyEnvEncryptPublicKeyLegacy(publicKeyBytes, signatureBytes, appId);
+  if (!legacyIdentity) {
+    throw new Error('Invalid KMS key');
+  }
+  console.warn('Using legacy signature without timestamp protection');
 }
 
 // Encrypt variables

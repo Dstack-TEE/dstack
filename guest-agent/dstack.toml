@@ -21,11 +21,11 @@ enabled = false
 attestation_file = "attestation.bin"
 
 [internal-v0]
-address = "unix:/var/run/tappd.sock"
+address = "unix:/var/run/dstack/tappd.sock"
 reuse = true
 
 [internal]
-address = "unix:/var/run/dstack.sock"
+address = "unix:/var/run/dstack/dstack.sock"
 reuse = true
 
 [external]

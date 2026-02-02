@@ -5,7 +5,7 @@
 //! QEMU related code
 use crate::{
     app::Manifest,
-    config::{CvmConfig, GatewayConfig, Networking, PasstNetworking, ProcessAnnotation, Protocol},
+    config::{CvmConfig, GatewayConfig, Networking, NetworkingMode, ProcessAnnotation, Protocol},
 };
 use std::{collections::HashMap, os::unix::fs::PermissionsExt};
 use std::{
@@ -28,10 +28,46 @@ use dstack_types::{
     AppCompose, KeyProviderKind,
 };
 use dstack_vmm_rpc as pb;
+use sha2::{Digest, Sha256};
+
+/// Derive a deterministic MAC address from a VM ID using SHA256.
+/// Sets locally-administered + unicast bits (0x02) per IEEE 802.
+/// Derive a deterministic MAC address from a VM ID.
+///
+/// `prefix` may contain 0-3 fixed bytes. The first byte always has the
+/// locally-administered + unicast bits set (0x02). Remaining bytes are
+/// filled from SHA256(vm_id).
+pub fn mac_address_for_vm(vm_id: &str, prefix: &[u8]) -> String {
+    let hash = Sha256::digest(vm_id.as_bytes());
+    let prefix_len = prefix.len().min(3);
+    let mut bytes = [0u8; 6];
+    // Fill prefix bytes
+    bytes[..prefix_len].copy_from_slice(&prefix[..prefix_len]);
+    // Fill remaining bytes from hash
+    for i in prefix_len..6 {
+        bytes[i] = hash[i - prefix_len];
+    }
+    // Ensure locally-administered + unicast on first byte
+    bytes[0] = (bytes[0] & 0xfe) | 0x02;
+    format!(
+        "{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5]
+    )
+}
 use fs_err as fs;
 use serde::{Deserialize, Serialize};
 use serde_human_bytes as hex_bytes;
 use supervisor_client::supervisor::{ProcessConfig, ProcessInfo};
+
+fn networking_to_proto(n: &Networking) -> pb::NetworkingConfig {
+    let mode = match n.mode {
+        NetworkingMode::Bridge => "bridge",
+        NetworkingMode::User => "user",
+        NetworkingMode::Passt => "passt",
+        NetworkingMode::Custom => "custom",
+    };
+    pb::NetworkingConfig { mode: mode.into() }
+}
 
 #[derive(Debug, Deserialize)]
 pub struct InstanceInfo {
@@ -162,6 +198,11 @@ fn create_shared_disk(disk_path: impl AsRef<Path>, shared_dir: impl AsRef<Path>)
 impl VmInfo {
     pub fn to_pb(&self, gw: &GatewayConfig, brief: bool) -> pb::VmInfo {
         let workdir = VmWorkDir::new(&self.workdir);
+        let vm_config = workdir.manifest();
+        let custom_gateway_urls = vm_config
+            .as_ref()
+            .map(|c| c.gateway_urls.clone())
+            .unwrap_or_default();
         pb::VmInfo {
             id: self.manifest.id.clone(),
             name: self.manifest.name.clone(),
@@ -174,14 +215,9 @@ impl VmInfo {
             configuration: if brief {
                 None
             } else {
-                let vm_config = workdir.manifest();
                 let kms_urls = vm_config
                     .as_ref()
                     .map(|c| c.kms_urls.clone())
-                    .unwrap_or_default();
-                let gateway_urls = vm_config
-                    .as_ref()
-                    .map(|c| c.gateway_urls.clone())
                     .unwrap_or_default();
                 let no_tee = vm_config
                     .as_ref()
@@ -227,9 +263,10 @@ impl VmInfo {
                             .collect(),
                     }),
                     kms_urls,
-                    gateway_urls,
+                    gateway_urls: custom_gateway_urls.clone(),
                     stopped,
                     no_tee,
+                    networking: self.manifest.networking.as_ref().map(networking_to_proto),
                 })
             },
             app_url: self
@@ -237,6 +274,19 @@ impl VmInfo {
                 .then_some(self.instance_id.as_ref())
                 .flatten()
                 .map(|id| {
+                    // Use custom gateway URL if available, otherwise fall back to global config
+                    if let Some(custom_gw_url) = custom_gateway_urls.first() {
+                        if let Ok(url) = url::Url::parse(custom_gw_url) {
+                            let host = url.host_str().unwrap_or(&gw.base_domain);
+                            let port = url.port().unwrap_or(443);
+                            if port == 443 {
+                                return format!("https://{id}-{}.{}", gw.agent_port, host);
+                            } else {
+                                return format!("https://{id}-{}.{}:{}", gw.agent_port, host, port);
+                            }
+                        }
+                    }
+                    // Fall back to global gateway config
                     if gw.port == 443 {
                         format!("https://{id}-{}.{}", gw.agent_port, gw.base_domain)
                     } else {
@@ -301,8 +351,8 @@ impl VmState {
 }
 
 impl VmConfig {
-    fn config_passt(&self, workdir: &VmWorkDir, netcfg: &PasstNetworking) -> Result<ProcessConfig> {
-        let PasstNetworking {
+    fn config_passt(&self, workdir: &VmWorkDir, netcfg: &Networking) -> Result<ProcessConfig> {
+        let Networking {
             passt_exec,
             interface,
             address,
@@ -313,6 +363,7 @@ impl VmConfig {
             map_guest_addr,
             no_map_gw,
             ipv4_only,
+            ..
         } = netcfg;
 
         let passt_socket = workdir.passt_socket();
@@ -369,13 +420,14 @@ impl VmConfig {
                 Protocol::Udp => udp_ports.push(port_spec),
             }
         }
-        // Add TCP port forwarding if any
-        if !tcp_ports.is_empty() {
-            passt_cmd.arg("--tcp-ports").arg(tcp_ports.join(","));
+        // Add TCP port forwarding — one --tcp-ports per spec to avoid
+        // exceeding passt's single-argument parser limit.
+        for spec in &tcp_ports {
+            passt_cmd.arg("--tcp-ports").arg(spec);
         }
-        // Add UDP port forwarding if any
-        if !udp_ports.is_empty() {
-            passt_cmd.arg("--udp-ports").arg(udp_ports.join(","));
+        // Add UDP port forwarding
+        for spec in &udp_ports {
+            passt_cmd.arg("--udp-ports").arg(spec);
         }
         passt_cmd.arg("-f").arg("-1");
 
@@ -497,13 +549,37 @@ impl VmConfig {
             .arg(format!("file={},if=none,id=hd1", hda_path.display()))
             .arg("-device")
             .arg("virtio-blk-pci,drive=hd1");
-        let netdev = match &cfg.networking {
-            Networking::User(netcfg) => {
+        // Resolve per-VM networking override against global config.
+        // Per-VM only sets mode; shared fields (bridge name, mac_prefix, etc.)
+        // are merged from global config.
+        let resolved_networking;
+        let networking = match self.manifest.networking.as_ref() {
+            Some(vm_net) => {
+                // Per-VM override: take mode from VM, fill other fields from global
+                resolved_networking = Networking {
+                    mode: vm_net.mode,
+                    bridge: if vm_net.bridge.is_empty() {
+                        cfg.networking.bridge.clone()
+                    } else {
+                        vm_net.bridge.clone()
+                    },
+                    ..cfg.networking.clone()
+                };
+                &resolved_networking
+            }
+            None => &cfg.networking,
+        };
+        // Generate deterministic MAC for all networking modes
+        let prefix = networking.mac_prefix_bytes();
+        let mac = mac_address_for_vm(&self.manifest.id, &prefix);
+        let net_device = format!("virtio-net-pci,netdev=net0,mac={mac}");
+        let netdev = match networking.mode {
+            NetworkingMode::User => {
                 let mut netdev = format!(
                     "user,id=net0,net={},dhcpstart={},restrict={}",
-                    netcfg.net,
-                    netcfg.dhcp_start,
-                    if netcfg.restrict { "yes" } else { "no" }
+                    networking.net,
+                    networking.dhcp_start,
+                    if networking.restrict { "yes" } else { "no" }
                 );
                 for pm in &self.manifest.port_map {
                     netdev.push_str(&format!(
@@ -516,9 +592,9 @@ impl VmConfig {
                 }
                 netdev
             }
-            Networking::Passt(netcfg) => {
+            NetworkingMode::Passt => {
                 processes.push(
-                    self.config_passt(&workdir, netcfg)
+                    self.config_passt(&workdir, networking)
                         .context("Failed to configure passt")?,
                 );
                 format!(
@@ -526,10 +602,14 @@ impl VmConfig {
                     workdir.passt_socket().display()
                 )
             }
-            Networking::Custom(netcfg) => netcfg.netdev.clone(),
+            NetworkingMode::Bridge => {
+                tracing::info!("bridge networking: mac={mac} bridge={}", networking.bridge);
+                format!("bridge,id=net0,br={}", networking.bridge)
+            }
+            NetworkingMode::Custom => networking.netdev.clone(),
         };
         command.arg("-netdev").arg(netdev);
-        command.arg("-device").arg("virtio-net-pci,netdev=net0");
+        command.arg("-device").arg(net_device);
 
         self.configure_machine(&mut command, &workdir, cfg, &app_compose)?;
         self.configure_smbios(&mut command, cfg);
@@ -1054,6 +1134,21 @@ impl VmWorkDir {
 
     pub fn instance_info_path(&self) -> PathBuf {
         self.shared_dir().join(INSTANCE_INFO)
+    }
+
+    pub fn guest_ip_path(&self) -> PathBuf {
+        self.workdir.join("guest-ip")
+    }
+
+    pub fn guest_ip(&self) -> Option<String> {
+        fs::read_to_string(self.guest_ip_path())
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+    }
+
+    pub fn set_guest_ip(&self, ip: &str) -> Result<()> {
+        fs::write(self.guest_ip_path(), ip).context("failed to write guest IP")
     }
 
     pub fn serial_file(&self) -> PathBuf {

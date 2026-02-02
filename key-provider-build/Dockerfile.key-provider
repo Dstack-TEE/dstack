@@ -8,7 +8,7 @@ RUN apt-get update && apt-get install -y \
     build-essential=12.8ubuntu1.1 \
     && rm -rf /var/lib/apt/lists/*
 
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- --default-toolchain 1.80 -y
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- --default-toolchain 1.92 -y
 ENV PATH="/root/.cargo/bin:${PATH}"
 
 # Set environment variables
@@ -19,9 +19,11 @@ ENV GRAMINE=gramine-sgx
 ENV RUST_LOG=info
 
 # Clone and checkout the repository
-RUN git clone https://github.com/MoeMahhouk/gramine-sealing-key-provider && \
+# Using kvinwang fork with dcap-qvl 0.3.10 security fix
+# See: https://github.com/Phala-Network/dcap-qvl/security/advisories/GHSA-796p-j2gh-9m2q
+RUN git clone https://github.com/kvinwang/gramine-sealing-key-provider && \
     cd gramine-sealing-key-provider && \
-    git checkout 6b4658d3d2158615b6c78879ad61612885372712
+    git checkout b50e81246b0987058411b63f797a9a3720c7f154
 
 WORKDIR /gramine-sealing-key-provider
 COPY Cargo.lock .

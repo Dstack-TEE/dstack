@@ -118,6 +118,7 @@ async fn gen_prod_certs(tls_config: &TlsConfig, alt_names: Vec<String>) -> Resul
             usage_client_auth: true,
             not_before: None,
             not_after: None,
+            with_app_info: true,
         })
         .await?;
 
@@ -184,6 +185,7 @@ async fn gen_debug_certs(
             usage_server_auth: true,
             usage_client_auth: true,
             ext_quote: true,
+            ext_app_info: true,
             not_before: None,
             not_after: None,
         },

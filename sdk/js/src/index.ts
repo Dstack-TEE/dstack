@@ -6,7 +6,8 @@ import fs from 'fs'
 import crypto from 'crypto'
 import { send_rpc_request } from './send-rpc-request'
 export { getComposeHash } from './get-compose-hash'
-export { verifyEnvEncryptPublicKey } from './verify-env-encrypt-public-key'
+export { verifyEnvEncryptPublicKey, verifyEnvEncryptPublicKeyLegacy } from './verify-env-encrypt-public-key'
+export type { VerifyOptions } from './verify-env-encrypt-public-key'
 
 export interface GetTlsKeyResponse {
   __name__: Readonly<'GetTlsKeyResponse'>
@@ -178,7 +179,14 @@ export class DstackClient<T extends TcbInfo = TcbInfoV05x> {
         console.warn(`Using simulator endpoint: ${process.env.DSTACK_SIMULATOR_ENDPOINT}`)
         endpoint = process.env.DSTACK_SIMULATOR_ENDPOINT
       } else {
-        endpoint = '/var/run/dstack.sock'
+        // Try paths in order: legacy paths first, then namespaced paths
+        const socketPaths = [
+          '/var/run/dstack.sock',
+          '/run/dstack.sock',
+          '/var/run/dstack/dstack.sock',
+          '/run/dstack/dstack.sock',
+        ]
+        endpoint = socketPaths.find(p => fs.existsSync(p)) ?? socketPaths[0]
       }
     }
     if (endpoint.startsWith('/') && !fs.existsSync(endpoint)) {
@@ -401,7 +409,14 @@ export class TappdClient extends DstackClient<TcbInfoV03x> {
         console.warn(`Using tappd endpoint: ${process.env.TAPPD_SIMULATOR_ENDPOINT}`)
         endpoint = process.env.TAPPD_SIMULATOR_ENDPOINT
       } else {
-        endpoint = '/var/run/tappd.sock'
+        // Try paths in order: legacy paths first, then namespaced paths
+        const socketPaths = [
+          '/var/run/tappd.sock',
+          '/run/tappd.sock',
+          '/var/run/dstack/tappd.sock',
+          '/run/dstack/tappd.sock',
+        ]
+        endpoint = socketPaths.find(p => fs.existsSync(p)) ?? socketPaths[0]
       }
     }
     console.warn('TappdClient is deprecated, please use DstackClient instead')

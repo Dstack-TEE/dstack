@@ -20,7 +20,7 @@ impl KeyType for AnySizeKey {
 }
 
 /// Derives a key using HKDF-SHA256.
-pub fn derive_ecdsa_key(
+pub fn derive_key(
     input_key_material: &[u8],
     context_data: &[&[u8]],
     key_size: usize,
@@ -34,21 +34,18 @@ pub fn derive_ecdsa_key(
     Ok(result)
 }
 
-/// Derives a key pair from a given key pair.
-pub fn derive_ecdsa_key_pair(from: &KeyPair, context_data: &[&[u8]]) -> Result<KeyPair> {
+/// Derives a P-256 key pair from a given key pair.
+pub fn derive_p256_key_pair(from: &KeyPair, context_data: &[&[u8]]) -> Result<KeyPair> {
     let der_bytes = from.serialized_der();
     let sk = p256::SecretKey::from_pkcs8_der(der_bytes).context("failed to decode secret key")?;
     let sk_bytes = sk.as_scalar_primitive().to_bytes();
-    derive_ecdsa_key_pair_from_bytes(&sk_bytes, context_data)
+    derive_p256_key_pair_from_bytes(&sk_bytes, context_data)
 }
 
-/// Derives a key pair from a given private key bytes.
-pub fn derive_ecdsa_key_pair_from_bytes(
-    sk_bytes: &[u8],
-    context_data: &[&[u8]],
-) -> Result<KeyPair> {
+/// Derives a P-256 key pair from a given private key bytes.
+pub fn derive_p256_key_pair_from_bytes(sk_bytes: &[u8], context_data: &[&[u8]]) -> Result<KeyPair> {
     let derived_sk_bytes =
-        derive_ecdsa_key(sk_bytes, context_data, 32).or(Err(anyhow!("failed to derive key")))?;
+        derive_key(sk_bytes, context_data, 32).or(Err(anyhow!("failed to derive key")))?;
     let derived_sk = p256::SecretKey::from_slice(&derived_sk_bytes)
         .context("failed to decode derived secret key")?;
     let derived_sk_der = derived_sk
@@ -70,7 +67,7 @@ fn sha256(data: &[u8]) -> [u8; 32] {
 
 /// Derives a X25519 secret from a given key pair.
 pub fn derive_dh_secret(from: &KeyPair, context_data: &[&[u8]]) -> Result<[u8; 32]> {
-    let key_pair = derive_ecdsa_key_pair(from, context_data)?;
+    let key_pair = derive_p256_key_pair(from, context_data)?;
     let derived_secret = sha256(key_pair.serialized_der());
     Ok(derived_secret)
 }
@@ -81,14 +78,14 @@ mod tests {
 
     #[test]
     fn test_derive_key32() {
-        let key = derive_ecdsa_key(b"input key material", &[b"context one"], 32).unwrap();
+        let key = derive_key(b"input key material", &[b"context one"], 32).unwrap();
         assert_eq!(key.len(), 32);
         assert!(key.iter().any(|&x| x != 0));
     }
 
     #[test]
     fn test_derive_key256() {
-        let key = derive_ecdsa_key(b"input key material", &[b"context one"], 256).unwrap();
+        let key = derive_key(b"input key material", &[b"context one"], 256).unwrap();
         assert_eq!(key.len(), 256);
         assert!(key.iter().any(|&x| x != 0));
     }
@@ -96,6 +93,6 @@ mod tests {
     #[test]
     fn test_derive_key_pair() {
         let key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
-        let _derived_key = derive_ecdsa_key_pair(&key, &[b"context one"]).unwrap();
+        let _derived_key = derive_p256_key_pair(&key, &[b"context one"]).unwrap();
     }
 }

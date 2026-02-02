@@ -37,7 +37,7 @@ pub struct AdminRpcHandler {
 
 impl AdminRpcHandler {
     pub(crate) async fn status(self) -> Result<StatusResponse> {
-        let (base_domain, port) = self
+        let (base_domain, _port) = self
             .state
             .kv_store()
             .get_best_zt_domain()
@@ -58,7 +58,6 @@ impl AdminRpcHandler {
                     ip: instance.ip.to_string(),
                     app_id: instance.app_id.clone(),
                     base_domain: base_domain.clone(),
-                    port: port.into(),
                     latest_handshake,
                     num_connections: instance.num_connections(),
                 }
@@ -102,7 +101,7 @@ impl AdminRpc for AdminRpcHandler {
     }
 
     async fn get_info(self, request: GetInfoRequest) -> Result<GetInfoResponse> {
-        let (base_domain, port) = self
+        let (base_domain, _port) = self
             .state
             .kv_store()
             .get_best_zt_domain()
@@ -116,7 +115,6 @@ impl AdminRpc for AdminRpcHandler {
                 ip: instance.ip.to_string(),
                 app_id: instance.app_id.clone(),
                 base_domain,
-                port: port.into(),
                 latest_handshake: {
                     let (ts, _) = handshakes
                         .get(&instance.public_key)

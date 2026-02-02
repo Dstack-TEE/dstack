@@ -52,8 +52,6 @@ impl GuestApiRpc for GuestApiHandler {
 
     async fn shutdown(self) -> Result<()> {
         tokio::spawn(async move {
-            notify_host("shutdown.progress", "stopping app").await.ok();
-            perr(cmd!(systemctl stop app-compose));
             notify_host("shutdown.progress", "powering off").await.ok();
             perr(cmd!(systemctl poweroff));
         });
@@ -147,8 +145,11 @@ fn get_interfaces() -> Vec<Interface> {
     sysinfo::Networks::new_with_refreshed_list()
         .into_iter()
         .filter_map(|(interface_name, network)| {
-            if !(interface_name == "dstack-wg0" || interface_name.starts_with("enp")) {
-                // We only get dstack-wg0 and enp interfaces.
+            if !(interface_name == "dstack-wg0"
+                || interface_name.starts_with("enp")
+                || interface_name.starts_with("eth"))
+            {
+                // We only get dstack-wg0, enp and eth interfaces.
                 // Docker bridge is not included due to privacy concerns.
                 return None;
             }

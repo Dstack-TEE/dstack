@@ -67,12 +67,47 @@ pub enum TlsVersion {
     Tls13,
 }
 
+/// Deserialize a port range from either a single integer (443) or a string range ("443-543").
+fn deserialize_port_range<'de, D>(deserializer: D) -> std::result::Result<Vec<u16>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de;
+
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum PortSpec {
+        Single(u16),
+        Range(String),
+    }
+
+    match PortSpec::deserialize(deserializer)? {
+        PortSpec::Single(p) => Ok(vec![p]),
+        PortSpec::Range(s) => {
+            if let Some((start, end)) = s.split_once('-') {
+                let start: u16 = start.trim().parse().map_err(de::Error::custom)?;
+                let end: u16 = end.trim().parse().map_err(de::Error::custom)?;
+                if start > end {
+                    return Err(de::Error::custom(format!(
+                        "invalid port range: {start} > {end}"
+                    )));
+                }
+                Ok((start..=end).collect())
+            } else {
+                let p: u16 = s.trim().parse().map_err(de::Error::custom)?;
+                Ok(vec![p])
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct ProxyConfig {
     pub tls_crypto_provider: CryptoProvider,
     pub tls_versions: Vec<TlsVersion>,
     pub listen_addr: Ipv4Addr,
-    pub listen_port: u16,
+    #[serde(deserialize_with = "deserialize_port_range")]
+    pub listen_port: Vec<u16>,
     pub timeouts: Timeouts,
     pub buffer_size: usize,
     pub connect_top_n: usize,
@@ -80,6 +115,8 @@ pub struct ProxyConfig {
     pub workers: usize,
     pub app_address_ns_prefix: String,
     pub app_address_ns_compat: bool,
+    /// Maximum concurrent connections per app. 0 means unlimited.
+    pub max_connections_per_app: u64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -93,6 +130,10 @@ pub struct Timeouts {
 
     #[serde(with = "serde_duration")]
     pub cache_top_n: Duration,
+
+    /// Timeout for DNS TXT record resolution (app address lookup).
+    #[serde(with = "serde_duration")]
+    pub dns_resolve: Duration,
 
     pub data_timeout_enabled: bool,
     #[serde(with = "serde_duration")]

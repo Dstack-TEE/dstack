@@ -49,6 +49,7 @@ impl DebugRpc for DebugRpcHandler {
             base_domain,
             external_port: port.into(),
             app_address_ns_prefix: config.proxy.app_address_ns_prefix.clone(),
+            version: env!("CARGO_PKG_VERSION").to_string(),
         })
     }
 

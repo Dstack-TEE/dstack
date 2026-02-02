@@ -39,6 +39,8 @@ dstack-types.workspace = true
 hex_fmt.workspace = true
 ez-hash.workspace = true
 dstack-attest.workspace = true
+errify.workspace = true
+rmp-serde.workspace = true
 
 [features]
 quote = ["dstack-attest/quote"]

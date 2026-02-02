@@ -288,9 +288,10 @@ impl Proxy {
             .with_context(|| format!("app <{app_id}> not found"))?;
         debug!("selected top n hosts: {addresses:?}");
         let tls_stream = self.tls_accept(inbound, buffer, h2).await?;
+        let max_connections = self.config.proxy.max_connections_per_app;
         let (outbound, _counter) = timeout(
             self.config.proxy.timeouts.connect,
-            connect_multiple_hosts(addresses, port),
+            connect_multiple_hosts(addresses, port, max_connections, app_id),
         )
         .await
         .map_err(|_| anyhow!("connecting timeout"))?

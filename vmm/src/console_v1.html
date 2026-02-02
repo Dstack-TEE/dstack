@@ -2056,8 +2056,17 @@ const CreateVmDialogComponent = {
             </div>
 
             <div class="form-group full-width">
-              <label for="preLaunchScript">Pre-launch Script</label>
-              <textarea id="preLaunchScript" v-model="form.preLaunchScript" placeholder="Optional script executed before launch" rows="6"></textarea>
+              <label for="initScript">Init Script
+                <span class="help-icon" title="Executed before dockerd starts. Use for early system setup.">?</span>
+              </label>
+              <textarea id="initScript" v-model="form.initScript" placeholder="Optional script executed before dockerd startup" rows="4"></textarea>
+            </div>
+
+            <div class="form-group full-width">
+              <label for="preLaunchScript">Pre-launch Script
+                <span class="help-icon" title="Executed after dockerd starts, before containers launch.">?</span>
+              </label>
+              <textarea id="preLaunchScript" v-model="form.preLaunchScript" placeholder="Optional script executed before container launch" rows="4"></textarea>
             </div>
 
             <div class="form-group full-width">
@@ -2088,6 +2097,16 @@ const CreateVmDialogComponent = {
               <input id="keyProviderId" v-model="form.key_provider_id" type="text" placeholder="Optional provider ID">
             </div>
 
+            <div class="form-group">
+              <label for="netMode">Networking</label>
+              <select id="netMode" v-model="form.net_mode">
+                <option value="">Default</option>
+                <option value="bridge">Bridge</option>
+                <option value="passt">Passt</option>
+                <option value="user">User</option>
+              </select>
+            </div>
+
             <div class="form-group full-width">
               <label>Features</label>
               <div class="feature-checkboxes">
@@ -2101,7 +2120,7 @@ const CreateVmDialogComponent = {
               </div>
             </div>
 
-            <div class="form-group full-width" v-if="kmsAvailable">
+            <div class="form-group full-width" v-if="form.key_provider === 'kms'">
               <encrypted-env-editor :env-vars="form.encryptedEnvs" />
             </div>
 
@@ -2186,42 +2205,50 @@ const UpdateVmDialogComponent = {
           <input id="upgradeDiskSize" v-model.number="dialog.disk_size" type="number" placeholder="Disk size in GB" required>
         </div>
 
-        <div v-if="kmsEnabled">
+        <div v-if="kmsEnabled" class="form-group">
+          <label for="upgradeImage">Image</label>
+          <select id="upgradeImage" v-model="dialog.image" required>
+            <option value="" disabled>Select an image</option>
+            <option v-for="image in availableImages" :key="image.name" :value="image.name">
+              {{ image.name }}
+            </option>
+          </select>
+        </div>
+
+        <div class="checkbox-grid">
+          <label><input type="checkbox" v-model="dialog.updateCompose"> Update App Compose</label>
+        </div>
+
+        <div v-if="dialog.updateCompose" class="compose-update">
           <div class="form-group">
-            <label for="upgradeImage">Image</label>
-            <select id="upgradeImage" v-model="dialog.image" required>
-              <option value="" disabled>Select an image</option>
-              <option v-for="image in availableImages" :key="image.name" :value="image.name">
-                {{ image.name }}
-              </option>
-            </select>
-          </div>
-
-          <div class="checkbox-grid">
-            <label><input type="checkbox" v-model="dialog.updateCompose"> Update App Compose</label>
-          </div>
-
-          <div v-if="dialog.updateCompose" class="compose-update">
-            <div class="form-group">
-              <label for="upgradeCompose">Docker Compose File</label>
-              <div class="file-input-row">
-                <div class="file-input-actions">
-                  <button type="button" class="action-btn" @click="$refs.composeFile.click()">Upload File</button>
-                  <span class="help-text">or paste below</span>
-                  <input ref="composeFile" type="file" accept=".yml,.yaml,.txt" @change="$emit('load-compose', $event)">
-                </div>
-                <textarea id="upgradeCompose" v-model="dialog.dockerComposeFile" placeholder="Paste your new docker-compose.yml here" rows="8" required></textarea>
+            <label for="upgradeCompose">Docker Compose File</label>
+            <div class="file-input-row">
+              <div class="file-input-actions">
+                <button type="button" class="action-btn" @click="$refs.composeFile.click()">Upload File</button>
+                <span class="help-text">or paste below</span>
+                <input ref="composeFile" type="file" accept=".yml,.yaml,.txt" @change="$emit('load-compose', $event)">
               </div>
-            </div>
-            <div class="form-group">
-              <label for="upgradePrelauncher">Pre-launch Script</label>
-              <textarea id="upgradePrelauncher" v-model="dialog.preLaunchScript" placeholder="Optional: Bash script to run before starting containers"></textarea>
-            </div>
-            <div class="app-id-preview">
-              Compose Hash: 0x{{ composeHashPreview }}
+              <textarea id="upgradeCompose" v-model="dialog.dockerComposeFile" placeholder="Paste your new docker-compose.yml here" rows="8" required></textarea>
             </div>
           </div>
+          <div class="form-group">
+            <label for="upgradeInitScript">Init Script
+              <span class="help-icon" title="Executed before dockerd starts. Use for early system setup.">?</span>
+            </label>
+            <textarea id="upgradeInitScript" v-model="dialog.initScript" placeholder="Optional: Bash script executed before dockerd startup" rows="3"></textarea>
+          </div>
+          <div class="form-group">
+            <label for="upgradePrelauncher">Pre-launch Script
+              <span class="help-icon" title="Executed after dockerd starts, before containers launch.">?</span>
+            </label>
+            <textarea id="upgradePrelauncher" v-model="dialog.preLaunchScript" placeholder="Optional: Bash script to run before starting containers" rows="3"></textarea>
+          </div>
+          <div class="app-id-preview">
+            Compose Hash: 0x{{ composeHashPreview }}
+          </div>
+        </div>
 
+        <div v-if="kmsEnabled">
           <div class="checkbox-grid">
             <label><input type="checkbox" v-model="dialog.resetSecrets"> Reset secrets</label>
           </div>
@@ -2342,6 +2369,7 @@ function createVmFormState(preLaunchScript) {
         name: '',
         image: '',
         dockerComposeFile: '',
+        initScript: '',
         preLaunchScript,
         vcpu: 1,
         memory: 2048,
@@ -2366,6 +2394,7 @@ function createVmFormState(preLaunchScript) {
         no_tee: false,
         pin_numa: false,
         hugepages: false,
+        net_mode: '',
         user_config: '',
         kms_urls: [],
         gateway_urls: [],
@@ -2378,6 +2407,7 @@ function createUpdateDialogState() {
         vm: null,
         updateCompose: false,
         dockerComposeFile: '',
+        initScript: '',
         preLaunchScript: '',
         encryptedEnvs: [],
         resetSecrets: false,
@@ -2583,6 +2613,7 @@ fi
             hugepages: !!source.hugepages,
             pin_numa: !!source.pin_numa,
             no_tee: (_a = source.no_tee) !== null && _a !== void 0 ? _a : false,
+            networking: source.net_mode ? { mode: source.net_mode } : undefined,
             gpus: source.gpus,
             kms_urls: (_c = (_b = source.kms_urls) === null || _b === void 0 ? void 0 : _b.filter((url) => url && url.trim().length)) !== null && _c !== void 0 ? _c : [],
             gateway_urls: (_e = (_d = source.gateway_urls) === null || _d === void 0 ? void 0 : _d.filter((url) => url && url.trim().length)) !== null && _e !== void 0 ? _e : [],
@@ -2816,7 +2847,7 @@ fi
             .join('');
     }
     async function makeAppComposeFile() {
-        var _a;
+        var _a, _b;
         const appCompose = {
             manifest_version: 2,
             name: vmForm.value.name,
@@ -2844,7 +2875,10 @@ fi
         if (vmForm.value.storage_fs) {
             appCompose.storage_fs = vmForm.value.storage_fs;
         }
-        if ((_a = vmForm.value.preLaunchScript) === null || _a === void 0 ? void 0 : _a.trim()) {
+        if ((_a = vmForm.value.initScript) === null || _a === void 0 ? void 0 : _a.trim()) {
+            appCompose.init_script = vmForm.value.initScript;
+        }
+        if ((_b = vmForm.value.preLaunchScript) === null || _b === void 0 ? void 0 : _b.trim()) {
             appCompose.pre_launch_script = vmForm.value.preLaunchScript;
         }
         const swapBytes = Math.max(0, Math.round(vmForm.value.swap_size || 0));
@@ -2863,7 +2897,7 @@ fi
         return JSON.stringify(appCompose);
     }
     async function makeUpdateComposeFile() {
-        var _a;
+        var _a, _b;
         const currentAppCompose = updateDialog.value.vm.appCompose;
         const appCompose = {
             ...currentAppCompose,
@@ -2877,7 +2911,8 @@ fi
                 appCompose.launch_token_hash = await calcComposeHash(launchToken.value);
             }
         }
-        appCompose.pre_launch_script = (_a = updateDialog.value.preLaunchScript) === null || _a === void 0 ? void 0 : _a.trim();
+        appCompose.init_script = ((_a = updateDialog.value.initScript) === null || _a === void 0 ? void 0 : _a.trim()) || undefined;
+        appCompose.pre_launch_script = ((_b = updateDialog.value.preLaunchScript) === null || _b === void 0 ? void 0 : _b.trim()) || undefined;
         const swapBytes = Math.max(0, Math.round(updateDialog.value.swap_size || 0));
         if (swapBytes > 0) {
             appCompose.swap_size = swapBytes;
@@ -2955,6 +2990,7 @@ fi
             vm: detailedVm,
             updateCompose: false,
             dockerComposeFile: detailedVm.appCompose.docker_compose_file || '',
+            initScript: detailedVm.appCompose.init_script || '',
             preLaunchScript: detailedVm.appCompose.pre_launch_script || '',
             encryptedEnvs: [],
             resetSecrets: false,
@@ -3040,6 +3076,7 @@ fi
                 hugepages: vmForm.value.hugepages,
                 pin_numa: vmForm.value.pin_numa,
                 no_tee: vmForm.value.no_tee,
+                net_mode: vmForm.value.net_mode,
                 gpus: configGpu(vmForm.value) || undefined,
                 kms_urls: vmForm.value.kms_urls,
                 gateway_urls: vmForm.value.gateway_urls,
@@ -3145,7 +3182,7 @@ fi
         return 'none';
     }
     async function showCloneConfig(vm) {
-        var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m;
+        var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o, _p;
         const theVm = await ensureVmDetails(vm);
         if (!((_a = theVm === null || theVm === void 0 ? void 0 : theVm.configuration) === null || _a === void 0 ? void 0 : _a.compose_file)) {
             alert('Compose file not available for this VM. Please open its details first.');
@@ -3157,32 +3194,34 @@ fi
             name: `${config.name || vm.name}`,
             image: config.image || '',
             dockerComposeFile: ((_b = theVm.appCompose) === null || _b === void 0 ? void 0 : _b.docker_compose_file) || '',
-            preLaunchScript: ((_c = theVm.appCompose) === null || _c === void 0 ? void 0 : _c.pre_launch_script) || '',
+            initScript: ((_c = theVm.appCompose) === null || _c === void 0 ? void 0 : _c.init_script) || '',
+            preLaunchScript: ((_d = theVm.appCompose) === null || _d === void 0 ? void 0 : _d.pre_launch_script) || '',
             vcpu: config.vcpu || 1,
             memory: config.memory || 0,
             memoryValue: autoMemoryDisplay(config.memory || 0).memoryValue,
             memoryUnit: autoMemoryDisplay(config.memory || 0).memoryUnit,
-            swap_size: ((_d = theVm.appCompose) === null || _d === void 0 ? void 0 : _d.swap_size) || 0,
-            swapValue: autoMemoryDisplay(bytesToMB(((_e = theVm.appCompose) === null || _e === void 0 ? void 0 : _e.swap_size) || 0)).memoryValue,
-            swapUnit: autoMemoryDisplay(bytesToMB(((_f = theVm.appCompose) === null || _f === void 0 ? void 0 : _f.swap_size) || 0)).memoryUnit,
+            swap_size: ((_e = theVm.appCompose) === null || _e === void 0 ? void 0 : _e.swap_size) || 0,
+            swapValue: autoMemoryDisplay(bytesToMB(((_f = theVm.appCompose) === null || _f === void 0 ? void 0 : _f.swap_size) || 0)).memoryValue,
+            swapUnit: autoMemoryDisplay(bytesToMB(((_g = theVm.appCompose) === null || _g === void 0 ? void 0 : _g.swap_size) || 0)).memoryUnit,
             disk_size: config.disk_size || 0,
             selectedGpus: [],
             attachAllGpus: false,
             encryptedEnvs: [], // Clear environment variables
             ports: [], // Clear port mappings
-            storage_fs: ((_g = theVm.appCompose) === null || _g === void 0 ? void 0 : _g.storage_fs) || 'zfs',
+            storage_fs: ((_h = theVm.appCompose) === null || _h === void 0 ? void 0 : _h.storage_fs) || 'zfs',
             app_id: config.app_id || '',
             kms_urls: config.kms_urls || [],
             key_provider: getKeyProvider(theVm),
-            key_provider_id: ((_h = theVm.appCompose) === null || _h === void 0 ? void 0 : _h.key_provider_id) || '',
-            gateway_enabled: !!((_j = theVm.appCompose) === null || _j === void 0 ? void 0 : _j.gateway_enabled),
+            key_provider_id: ((_j = theVm.appCompose) === null || _j === void 0 ? void 0 : _j.key_provider_id) || '',
+            gateway_enabled: !!((_k = theVm.appCompose) === null || _k === void 0 ? void 0 : _k.gateway_enabled),
             gateway_urls: config.gateway_urls || [],
-            public_logs: !!((_k = theVm.appCompose) === null || _k === void 0 ? void 0 : _k.public_logs),
-            public_sysinfo: !!((_l = theVm.appCompose) === null || _l === void 0 ? void 0 : _l.public_sysinfo),
-            public_tcbinfo: !!((_m = theVm.appCompose) === null || _m === void 0 ? void 0 : _m.public_tcbinfo),
+            public_logs: !!((_l = theVm.appCompose) === null || _l === void 0 ? void 0 : _l.public_logs),
+            public_sysinfo: !!((_m = theVm.appCompose) === null || _m === void 0 ? void 0 : _m.public_sysinfo),
+            public_tcbinfo: !!((_o = theVm.appCompose) === null || _o === void 0 ? void 0 : _o.public_tcbinfo),
             pin_numa: !!config.pin_numa,
             hugepages: !!config.hugepages,
             no_tee: !!config.no_tee,
+            net_mode: ((_p = config.networking) === null || _p === void 0 ? void 0 : _p.mode) || '',
             user_config: config.user_config || '',
             stopped: !!config.stopped,
         };
@@ -6562,6 +6601,7 @@ $root.vmm = (function () {
          * @property {Array.<string>|null} [gateway_urls] VmConfiguration gateway_urls
          * @property {boolean|null} [stopped] VmConfiguration stopped
          * @property {boolean|null} [no_tee] VmConfiguration no_tee
+         * @property {vmm.INetworkingConfig|null} [networking] VmConfiguration networking
          */
         /**
          * Constructs a new VmConfiguration.
@@ -6699,6 +6739,13 @@ $root.vmm = (function () {
          * @instance
          */
         VmConfiguration.prototype.no_tee = false;
+        /**
+         * VmConfiguration networking.
+         * @member {vmm.INetworkingConfig|null|undefined} networking
+         * @memberof vmm.VmConfiguration
+         * @instance
+         */
+        VmConfiguration.prototype.networking = null;
         // OneOf field names bound to virtual getters and setters
         var $oneOfFields;
         /**
@@ -6709,6 +6756,16 @@ $root.vmm = (function () {
          */
         Object.defineProperty(VmConfiguration.prototype, "_app_id", {
             get: $util.oneOfGetter($oneOfFields = ["app_id"]),
+            set: $util.oneOfSetter($oneOfFields)
+        });
+        /**
+         * VmConfiguration _networking.
+         * @member {"networking"|undefined} _networking
+         * @memberof vmm.VmConfiguration
+         * @instance
+         */
+        Object.defineProperty(VmConfiguration.prototype, "_networking", {
+            get: $util.oneOfGetter($oneOfFields = ["networking"]),
             set: $util.oneOfSetter($oneOfFields)
         });
         /**
@@ -6771,6 +6828,8 @@ $root.vmm = (function () {
                 writer.uint32(/* id 16, wireType 0 =*/ 128).bool(message.stopped);
             if (message.no_tee != null && Object.hasOwnProperty.call(message, "no_tee"))
                 writer.uint32(/* id 17, wireType 0 =*/ 136).bool(message.no_tee);
+            if (message.networking != null && Object.hasOwnProperty.call(message, "networking"))
+                $root.vmm.NetworkingConfig.encode(message.networking, writer.uint32(/* id 18, wireType 2 =*/ 146).fork()).ldelim();
             return writer;
         };
         /**
@@ -6879,6 +6938,10 @@ $root.vmm = (function () {
                         message.no_tee = reader.bool();
                         break;
                     }
+                    case 18: {
+                        message.networking = $root.vmm.NetworkingConfig.decode(reader, reader.uint32());
+                        break;
+                    }
                     default:
                         reader.skipType(tag & 7);
                         break;
@@ -6982,6 +7045,14 @@ $root.vmm = (function () {
             if (message.no_tee != null && message.hasOwnProperty("no_tee"))
                 if (typeof message.no_tee !== "boolean")
                     return "no_tee: boolean expected";
+            if (message.networking != null && message.hasOwnProperty("networking")) {
+                properties._networking = 1;
+                {
+                    var error = $root.vmm.NetworkingConfig.verify(message.networking);
+                    if (error)
+                        return "networking." + error;
+                }
+            }
             return null;
         };
         /**
@@ -7054,6 +7125,11 @@ $root.vmm = (function () {
                 message.stopped = Boolean(object.stopped);
             if (object.no_tee != null)
                 message.no_tee = Boolean(object.no_tee);
+            if (object.networking != null) {
+                if (typeof object.networking !== "object")
+                    throw TypeError(".vmm.VmConfiguration.networking: object expected");
+                message.networking = $root.vmm.NetworkingConfig.fromObject(object.networking);
+            }
             return message;
         };
         /**
@@ -7141,6 +7217,11 @@ $root.vmm = (function () {
                 object.stopped = message.stopped;
             if (message.no_tee != null && message.hasOwnProperty("no_tee"))
                 object.no_tee = message.no_tee;
+            if (message.networking != null && message.hasOwnProperty("networking")) {
+                object.networking = $root.vmm.NetworkingConfig.toObject(message.networking, options);
+                if (options.oneofs)
+                    object._networking = "networking";
+            }
             return object;
         };
         /**
@@ -7168,6 +7249,196 @@ $root.vmm = (function () {
             return typeUrlPrefix + "/vmm.VmConfiguration";
         };
         return VmConfiguration;
+    })();
+    vmm.NetworkingConfig = (function () {
+        /**
+         * Properties of a NetworkingConfig.
+         * @memberof vmm
+         * @interface INetworkingConfig
+         * @property {string|null} [mode] NetworkingConfig mode
+         */
+        /**
+         * Constructs a new NetworkingConfig.
+         * @memberof vmm
+         * @classdesc Represents a NetworkingConfig.
+         * @implements INetworkingConfig
+         * @constructor
+         * @param {vmm.INetworkingConfig=} [properties] Properties to set
+         */
+        function NetworkingConfig(properties) {
+            if (properties)
+                for (var keys = Object.keys(properties), i = 0; i < keys.length; ++i)
+                    if (properties[keys[i]] != null)
+                        this[keys[i]] = properties[keys[i]];
+        }
+        /**
+         * NetworkingConfig mode.
+         * @member {string} mode
+         * @memberof vmm.NetworkingConfig
+         * @instance
+         */
+        NetworkingConfig.prototype.mode = "";
+        /**
+         * Creates a new NetworkingConfig instance using the specified properties.
+         * @function create
+         * @memberof vmm.NetworkingConfig
+         * @static
+         * @param {vmm.INetworkingConfig=} [properties] Properties to set
+         * @returns {vmm.NetworkingConfig} NetworkingConfig instance
+         */
+        NetworkingConfig.create = function create(properties) {
+            return new NetworkingConfig(properties);
+        };
+        /**
+         * Encodes the specified NetworkingConfig message. Does not implicitly {@link vmm.NetworkingConfig.verify|verify} messages.
+         * @function encode
+         * @memberof vmm.NetworkingConfig
+         * @static
+         * @param {vmm.INetworkingConfig} message NetworkingConfig message or plain object to encode
+         * @param {$protobuf.Writer} [writer] Writer to encode to
+         * @returns {$protobuf.Writer} Writer
+         */
+        NetworkingConfig.encode = function encode(message, writer) {
+            if (!writer)
+                writer = $Writer.create();
+            if (message.mode != null && Object.hasOwnProperty.call(message, "mode"))
+                writer.uint32(/* id 1, wireType 2 =*/ 10).string(message.mode);
+            return writer;
+        };
+        /**
+         * Encodes the specified NetworkingConfig message, length delimited. Does not implicitly {@link vmm.NetworkingConfig.verify|verify} messages.
+         * @function encodeDelimited
+         * @memberof vmm.NetworkingConfig
+         * @static
+         * @param {vmm.INetworkingConfig} message NetworkingConfig message or plain object to encode
+         * @param {$protobuf.Writer} [writer] Writer to encode to
+         * @returns {$protobuf.Writer} Writer
+         */
+        NetworkingConfig.encodeDelimited = function encodeDelimited(message, writer) {
+            return this.encode(message, writer).ldelim();
+        };
+        /**
+         * Decodes a NetworkingConfig message from the specified reader or buffer.
+         * @function decode
+         * @memberof vmm.NetworkingConfig
+         * @static
+         * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
+         * @param {number} [length] Message length if known beforehand
+         * @returns {vmm.NetworkingConfig} NetworkingConfig
+         * @throws {Error} If the payload is not a reader or valid buffer
+         * @throws {$protobuf.util.ProtocolError} If required fields are missing
+         */
+        NetworkingConfig.decode = function decode(reader, length, error) {
+            if (!(reader instanceof $Reader))
+                reader = $Reader.create(reader);
+            var end = length === undefined ? reader.len : reader.pos + length, message = new $root.vmm.NetworkingConfig();
+            while (reader.pos < end) {
+                var tag = reader.uint32();
+                if (tag === error)
+                    break;
+                switch (tag >>> 3) {
+                    case 1: {
+                        message.mode = reader.string();
+                        break;
+                    }
+                    default:
+                        reader.skipType(tag & 7);
+                        break;
+                }
+            }
+            return message;
+        };
+        /**
+         * Decodes a NetworkingConfig message from the specified reader or buffer, length delimited.
+         * @function decodeDelimited
+         * @memberof vmm.NetworkingConfig
+         * @static
+         * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
+         * @returns {vmm.NetworkingConfig} NetworkingConfig
+         * @throws {Error} If the payload is not a reader or valid buffer
+         * @throws {$protobuf.util.ProtocolError} If required fields are missing
+         */
+        NetworkingConfig.decodeDelimited = function decodeDelimited(reader) {
+            if (!(reader instanceof $Reader))
+                reader = new $Reader(reader);
+            return this.decode(reader, reader.uint32());
+        };
+        /**
+         * Verifies a NetworkingConfig message.
+         * @function verify
+         * @memberof vmm.NetworkingConfig
+         * @static
+         * @param {Object.<string,*>} message Plain object to verify
+         * @returns {string|null} `null` if valid, otherwise the reason why it is not
+         */
+        NetworkingConfig.verify = function verify(message) {
+            if (typeof message !== "object" || message === null)
+                return "object expected";
+            if (message.mode != null && message.hasOwnProperty("mode"))
+                if (!$util.isString(message.mode))
+                    return "mode: string expected";
+            return null;
+        };
+        /**
+         * Creates a NetworkingConfig message from a plain object. Also converts values to their respective internal types.
+         * @function fromObject
+         * @memberof vmm.NetworkingConfig
+         * @static
+         * @param {Object.<string,*>} object Plain object
+         * @returns {vmm.NetworkingConfig} NetworkingConfig
+         */
+        NetworkingConfig.fromObject = function fromObject(object) {
+            if (object instanceof $root.vmm.NetworkingConfig)
+                return object;
+            var message = new $root.vmm.NetworkingConfig();
+            if (object.mode != null)
+                message.mode = String(object.mode);
+            return message;
+        };
+        /**
+         * Creates a plain object from a NetworkingConfig message. Also converts values to other types if specified.
+         * @function toObject
+         * @memberof vmm.NetworkingConfig
+         * @static
+         * @param {vmm.NetworkingConfig} message NetworkingConfig
+         * @param {$protobuf.IConversionOptions} [options] Conversion options
+         * @returns {Object.<string,*>} Plain object
+         */
+        NetworkingConfig.toObject = function toObject(message, options) {
+            if (!options)
+                options = {};
+            var object = {};
+            if (options.defaults)
+                object.mode = "";
+            if (message.mode != null && message.hasOwnProperty("mode"))
+                object.mode = message.mode;
+            return object;
+        };
+        /**
+         * Converts this NetworkingConfig to JSON.
+         * @function toJSON
+         * @memberof vmm.NetworkingConfig
+         * @instance
+         * @returns {Object.<string,*>} JSON object
+         */
+        NetworkingConfig.prototype.toJSON = function toJSON() {
+            return this.constructor.toObject(this, $protobuf.util.toJSONOptions);
+        };
+        /**
+         * Gets the default type url for NetworkingConfig
+         * @function getTypeUrl
+         * @memberof vmm.NetworkingConfig
+         * @static
+         * @param {string} [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
+         * @returns {string} The default type url
+         */
+        NetworkingConfig.getTypeUrl = function getTypeUrl(typeUrlPrefix) {
+            if (typeUrlPrefix === undefined) {
+                typeUrlPrefix = "type.googleapis.com";
+            }
+            return typeUrlPrefix + "/vmm.NetworkingConfig";
+        };
+        return NetworkingConfig;
     })();
     vmm.GpuConfig = (function () {
         /**
@@ -9740,6 +10011,8 @@ $root.vmm = (function () {
          * @interface IPublicKeyResponse
          * @property {Uint8Array|null} [public_key] PublicKeyResponse public_key
          * @property {Uint8Array|null} [signature] PublicKeyResponse signature
+         * @property {number|Long|null} [timestamp] PublicKeyResponse timestamp
+         * @property {Uint8Array|null} [signature_v1] PublicKeyResponse signature_v1
          */
         /**
          * Constructs a new PublicKeyResponse.
@@ -9770,6 +10043,20 @@ $root.vmm = (function () {
          */
         PublicKeyResponse.prototype.signature = $util.newBuffer([]);
         /**
+         * PublicKeyResponse timestamp.
+         * @member {number|Long} timestamp
+         * @memberof vmm.PublicKeyResponse
+         * @instance
+         */
+        PublicKeyResponse.prototype.timestamp = $util.Long ? $util.Long.fromBits(0, 0, true) : 0;
+        /**
+         * PublicKeyResponse signature_v1.
+         * @member {Uint8Array} signature_v1
+         * @memberof vmm.PublicKeyResponse
+         * @instance
+         */
+        PublicKeyResponse.prototype.signature_v1 = $util.newBuffer([]);
+        /**
          * Creates a new PublicKeyResponse instance using the specified properties.
          * @function create
          * @memberof vmm.PublicKeyResponse
@@ -9796,6 +10083,10 @@ $root.vmm = (function () {
                 writer.uint32(/* id 1, wireType 2 =*/ 10).bytes(message.public_key);
             if (message.signature != null && Object.hasOwnProperty.call(message, "signature"))
                 writer.uint32(/* id 2, wireType 2 =*/ 18).bytes(message.signature);
+            if (message.timestamp != null && Object.hasOwnProperty.call(message, "timestamp"))
+                writer.uint32(/* id 3, wireType 0 =*/ 24).uint64(message.timestamp);
+            if (message.signature_v1 != null && Object.hasOwnProperty.call(message, "signature_v1"))
+                writer.uint32(/* id 4, wireType 2 =*/ 34).bytes(message.signature_v1);
             return writer;
         };
         /**
@@ -9838,6 +10129,14 @@ $root.vmm = (function () {
                         message.signature = reader.bytes();
                         break;
                     }
+                    case 3: {
+                        message.timestamp = reader.uint64();
+                        break;
+                    }
+                    case 4: {
+                        message.signature_v1 = reader.bytes();
+                        break;
+                    }
                     default:
                         reader.skipType(tag & 7);
                         break;
@@ -9877,6 +10176,12 @@ $root.vmm = (function () {
             if (message.signature != null && message.hasOwnProperty("signature"))
                 if (!(message.signature && typeof message.signature.length === "number" || $util.isString(message.signature)))
                     return "signature: buffer expected";
+            if (message.timestamp != null && message.hasOwnProperty("timestamp"))
+                if (!$util.isInteger(message.timestamp) && !(message.timestamp && $util.isInteger(message.timestamp.low) && $util.isInteger(message.timestamp.high)))
+                    return "timestamp: integer|Long expected";
+            if (message.signature_v1 != null && message.hasOwnProperty("signature_v1"))
+                if (!(message.signature_v1 && typeof message.signature_v1.length === "number" || $util.isString(message.signature_v1)))
+                    return "signature_v1: buffer expected";
             return null;
         };
         /**
@@ -9901,6 +10206,20 @@ $root.vmm = (function () {
                     $util.base64.decode(object.signature, message.signature = $util.newBuffer($util.base64.length(object.signature)), 0);
                 else if (object.signature.length >= 0)
                     message.signature = object.signature;
+            if (object.timestamp != null)
+                if ($util.Long)
+                    (message.timestamp = $util.Long.fromValue(object.timestamp)).unsigned = true;
+                else if (typeof object.timestamp === "string")
+                    message.timestamp = parseInt(object.timestamp, 10);
+                else if (typeof object.timestamp === "number")
+                    message.timestamp = object.timestamp;
+                else if (typeof object.timestamp === "object")
+                    message.timestamp = new $util.LongBits(object.timestamp.low >>> 0, object.timestamp.high >>> 0).toNumber(true);
+            if (object.signature_v1 != null)
+                if (typeof object.signature_v1 === "string")
+                    $util.base64.decode(object.signature_v1, message.signature_v1 = $util.newBuffer($util.base64.length(object.signature_v1)), 0);
+                else if (object.signature_v1.length >= 0)
+                    message.signature_v1 = object.signature_v1;
             return message;
         };
         /**
@@ -9931,11 +10250,31 @@ $root.vmm = (function () {
                     if (options.bytes !== Array)
                         object.signature = $util.newBuffer(object.signature);
                 }
+                if ($util.Long) {
+                    var long = new $util.Long(0, 0, true);
+                    object.timestamp = options.longs === String ? long.toString() : options.longs === Number ? long.toNumber() : long;
+                }
+                else
+                    object.timestamp = options.longs === String ? "0" : 0;
+                if (options.bytes === String)
+                    object.signature_v1 = "";
+                else {
+                    object.signature_v1 = [];
+                    if (options.bytes !== Array)
+                        object.signature_v1 = $util.newBuffer(object.signature_v1);
+                }
             }
             if (message.public_key != null && message.hasOwnProperty("public_key"))
                 object.public_key = options.bytes === String ? $util.base64.encode(message.public_key, 0, message.public_key.length) : options.bytes === Array ? Array.prototype.slice.call(message.public_key) : message.public_key;
             if (message.signature != null && message.hasOwnProperty("signature"))
                 object.signature = options.bytes === String ? $util.base64.encode(message.signature, 0, message.signature.length) : options.bytes === Array ? Array.prototype.slice.call(message.signature) : message.signature;
+            if (message.timestamp != null && message.hasOwnProperty("timestamp"))
+                if (typeof message.timestamp === "number")
+                    object.timestamp = options.longs === String ? String(message.timestamp) : message.timestamp;
+                else
+                    object.timestamp = options.longs === String ? $util.Long.prototype.toString.call(message.timestamp) : options.longs === Number ? new $util.LongBits(message.timestamp.low >>> 0, message.timestamp.high >>> 0).toNumber(true) : message.timestamp;
+            if (message.signature_v1 != null && message.hasOwnProperty("signature_v1"))
+                object.signature_v1 = options.bytes === String ? $util.base64.encode(message.signature_v1, 0, message.signature_v1.length) : options.bytes === Array ? Array.prototype.slice.call(message.signature_v1) : message.signature_v1;
             return object;
         };
         /**
@@ -13023,7 +13362,250 @@ $root.vmm = (function () {
          * @returns {Promise<vmm.ReloadVmsResponse>} Promise
          * @variation 2
          */
+        /**
+         * Callback as used by {@link vmm.Vmm#reportDhcpLease}.
+         * @memberof vmm.Vmm
+         * @typedef ReportDhcpLeaseCallback
+         * @type {function}
+         * @param {Error|null} error Error, if any
+         * @param {google.protobuf.Empty} [response] Empty
+         */
+        /**
+         * Calls ReportDhcpLease.
+         * @function reportDhcpLease
+         * @memberof vmm.Vmm
+         * @instance
+         * @param {vmm.IDhcpLeaseRequest} request DhcpLeaseRequest message or plain object
+         * @param {vmm.Vmm.ReportDhcpLeaseCallback} callback Node-style callback called with the error, if any, and Empty
+         * @returns {undefined}
+         * @variation 1
+         */
+        Object.defineProperty(Vmm.prototype.reportDhcpLease = function reportDhcpLease(request, callback) {
+            return this.rpcCall(reportDhcpLease, $root.vmm.DhcpLeaseRequest, $root.google.protobuf.Empty, request, callback);
+        }, "name", { value: "ReportDhcpLease" });
+        /**
+         * Calls ReportDhcpLease.
+         * @function reportDhcpLease
+         * @memberof vmm.Vmm
+         * @instance
+         * @param {vmm.IDhcpLeaseRequest} request DhcpLeaseRequest message or plain object
+         * @returns {Promise<google.protobuf.Empty>} Promise
+         * @variation 2
+         */
         return Vmm;
+    })();
+    vmm.DhcpLeaseRequest = (function () {
+        /**
+         * Properties of a DhcpLeaseRequest.
+         * @memberof vmm
+         * @interface IDhcpLeaseRequest
+         * @property {string|null} [mac] DhcpLeaseRequest mac
+         * @property {string|null} [ip] DhcpLeaseRequest ip
+         */
+        /**
+         * Constructs a new DhcpLeaseRequest.
+         * @memberof vmm
+         * @classdesc Represents a DhcpLeaseRequest.
+         * @implements IDhcpLeaseRequest
+         * @constructor
+         * @param {vmm.IDhcpLeaseRequest=} [properties] Properties to set
+         */
+        function DhcpLeaseRequest(properties) {
+            if (properties)
+                for (var keys = Object.keys(properties), i = 0; i < keys.length; ++i)
+                    if (properties[keys[i]] != null)
+                        this[keys[i]] = properties[keys[i]];
+        }
+        /**
+         * DhcpLeaseRequest mac.
+         * @member {string} mac
+         * @memberof vmm.DhcpLeaseRequest
+         * @instance
+         */
+        DhcpLeaseRequest.prototype.mac = "";
+        /**
+         * DhcpLeaseRequest ip.
+         * @member {string} ip
+         * @memberof vmm.DhcpLeaseRequest
+         * @instance
+         */
+        DhcpLeaseRequest.prototype.ip = "";
+        /**
+         * Creates a new DhcpLeaseRequest instance using the specified properties.
+         * @function create
+         * @memberof vmm.DhcpLeaseRequest
+         * @static
+         * @param {vmm.IDhcpLeaseRequest=} [properties] Properties to set
+         * @returns {vmm.DhcpLeaseRequest} DhcpLeaseRequest instance
+         */
+        DhcpLeaseRequest.create = function create(properties) {
+            return new DhcpLeaseRequest(properties);
+        };
+        /**
+         * Encodes the specified DhcpLeaseRequest message. Does not implicitly {@link vmm.DhcpLeaseRequest.verify|verify} messages.
+         * @function encode
+         * @memberof vmm.DhcpLeaseRequest
+         * @static
+         * @param {vmm.IDhcpLeaseRequest} message DhcpLeaseRequest message or plain object to encode
+         * @param {$protobuf.Writer} [writer] Writer to encode to
+         * @returns {$protobuf.Writer} Writer
+         */
+        DhcpLeaseRequest.encode = function encode(message, writer) {
+            if (!writer)
+                writer = $Writer.create();
+            if (message.mac != null && Object.hasOwnProperty.call(message, "mac"))
+                writer.uint32(/* id 1, wireType 2 =*/ 10).string(message.mac);
+            if (message.ip != null && Object.hasOwnProperty.call(message, "ip"))
+                writer.uint32(/* id 2, wireType 2 =*/ 18).string(message.ip);
+            return writer;
+        };
+        /**
+         * Encodes the specified DhcpLeaseRequest message, length delimited. Does not implicitly {@link vmm.DhcpLeaseRequest.verify|verify} messages.
+         * @function encodeDelimited
+         * @memberof vmm.DhcpLeaseRequest
+         * @static
+         * @param {vmm.IDhcpLeaseRequest} message DhcpLeaseRequest message or plain object to encode
+         * @param {$protobuf.Writer} [writer] Writer to encode to
+         * @returns {$protobuf.Writer} Writer
+         */
+        DhcpLeaseRequest.encodeDelimited = function encodeDelimited(message, writer) {
+            return this.encode(message, writer).ldelim();
+        };
+        /**
+         * Decodes a DhcpLeaseRequest message from the specified reader or buffer.
+         * @function decode
+         * @memberof vmm.DhcpLeaseRequest
+         * @static
+         * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
+         * @param {number} [length] Message length if known beforehand
+         * @returns {vmm.DhcpLeaseRequest} DhcpLeaseRequest
+         * @throws {Error} If the payload is not a reader or valid buffer
+         * @throws {$protobuf.util.ProtocolError} If required fields are missing
+         */
+        DhcpLeaseRequest.decode = function decode(reader, length, error) {
+            if (!(reader instanceof $Reader))
+                reader = $Reader.create(reader);
+            var end = length === undefined ? reader.len : reader.pos + length, message = new $root.vmm.DhcpLeaseRequest();
+            while (reader.pos < end) {
+                var tag = reader.uint32();
+                if (tag === error)
+                    break;
+                switch (tag >>> 3) {
+                    case 1: {
+                        message.mac = reader.string();
+                        break;
+                    }
+                    case 2: {
+                        message.ip = reader.string();
+                        break;
+                    }
+                    default:
+                        reader.skipType(tag & 7);
+                        break;
+                }
+            }
+            return message;
+        };
+        /**
+         * Decodes a DhcpLeaseRequest message from the specified reader or buffer, length delimited.
+         * @function decodeDelimited
+         * @memberof vmm.DhcpLeaseRequest
+         * @static
+         * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
+         * @returns {vmm.DhcpLeaseRequest} DhcpLeaseRequest
+         * @throws {Error} If the payload is not a reader or valid buffer
+         * @throws {$protobuf.util.ProtocolError} If required fields are missing
+         */
+        DhcpLeaseRequest.decodeDelimited = function decodeDelimited(reader) {
+            if (!(reader instanceof $Reader))
+                reader = new $Reader(reader);
+            return this.decode(reader, reader.uint32());
+        };
+        /**
+         * Verifies a DhcpLeaseRequest message.
+         * @function verify
+         * @memberof vmm.DhcpLeaseRequest
+         * @static
+         * @param {Object.<string,*>} message Plain object to verify
+         * @returns {string|null} `null` if valid, otherwise the reason why it is not
+         */
+        DhcpLeaseRequest.verify = function verify(message) {
+            if (typeof message !== "object" || message === null)
+                return "object expected";
+            if (message.mac != null && message.hasOwnProperty("mac"))
+                if (!$util.isString(message.mac))
+                    return "mac: string expected";
+            if (message.ip != null && message.hasOwnProperty("ip"))
+                if (!$util.isString(message.ip))
+                    return "ip: string expected";
+            return null;
+        };
+        /**
+         * Creates a DhcpLeaseRequest message from a plain object. Also converts values to their respective internal types.
+         * @function fromObject
+         * @memberof vmm.DhcpLeaseRequest
+         * @static
+         * @param {Object.<string,*>} object Plain object
+         * @returns {vmm.DhcpLeaseRequest} DhcpLeaseRequest
+         */
+        DhcpLeaseRequest.fromObject = function fromObject(object) {
+            if (object instanceof $root.vmm.DhcpLeaseRequest)
+                return object;
+            var message = new $root.vmm.DhcpLeaseRequest();
+            if (object.mac != null)
+                message.mac = String(object.mac);
+            if (object.ip != null)
+                message.ip = String(object.ip);
+            return message;
+        };
+        /**
+         * Creates a plain object from a DhcpLeaseRequest message. Also converts values to other types if specified.
+         * @function toObject
+         * @memberof vmm.DhcpLeaseRequest
+         * @static
+         * @param {vmm.DhcpLeaseRequest} message DhcpLeaseRequest
+         * @param {$protobuf.IConversionOptions} [options] Conversion options
+         * @returns {Object.<string,*>} Plain object
+         */
+        DhcpLeaseRequest.toObject = function toObject(message, options) {
+            if (!options)
+                options = {};
+            var object = {};
+            if (options.defaults) {
+                object.mac = "";
+                object.ip = "";
+            }
+            if (message.mac != null && message.hasOwnProperty("mac"))
+                object.mac = message.mac;
+            if (message.ip != null && message.hasOwnProperty("ip"))
+                object.ip = message.ip;
+            return object;
+        };
+        /**
+         * Converts this DhcpLeaseRequest to JSON.
+         * @function toJSON
+         * @memberof vmm.DhcpLeaseRequest
+         * @instance
+         * @returns {Object.<string,*>} JSON object
+         */
+        DhcpLeaseRequest.prototype.toJSON = function toJSON() {
+            return this.constructor.toObject(this, $protobuf.util.toJSONOptions);
+        };
+        /**
+         * Gets the default type url for DhcpLeaseRequest
+         * @function getTypeUrl
+         * @memberof vmm.DhcpLeaseRequest
+         * @static
+         * @param {string} [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
+         * @returns {string} The default type url
+         */
+        DhcpLeaseRequest.getTypeUrl = function getTypeUrl(typeUrlPrefix) {
+            if (typeUrlPrefix === undefined) {
+                typeUrlPrefix = "type.googleapis.com";
+            }
+            return typeUrlPrefix + "/vmm.DhcpLeaseRequest";
+        };
+        return DhcpLeaseRequest;
     })();
     return vmm;
 })();

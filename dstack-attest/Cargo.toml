@@ -27,6 +27,7 @@ sha2.workspace = true
 sha3.workspace = true
 tdx-attest.workspace = true
 insta.workspace = true
+errify.workspace = true
 
 [features]
 quote = []

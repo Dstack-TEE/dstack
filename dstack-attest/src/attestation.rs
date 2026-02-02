@@ -260,6 +260,13 @@ impl VersionedAttestation {
         }
     }
 
+    /// Get app info
+    pub fn decode_app_info(&self, boottime_mr: bool) -> Result<AppInfo> {
+        match self {
+            Self::V0 { attestation } => attestation.decode_app_info(boottime_mr),
+        }
+    }
+
     /// Strip data for certificate embedding (e.g. keep RTMR3 event logs only).
     pub fn into_stripped(mut self) -> Self {
         let VersionedAttestation::V0 { attestation } = &mut self;
@@ -444,6 +451,7 @@ impl<T: GetDeviceId> Attestation<T> {
         self.decode_app_info_ex(boottime_mr, "")
     }
 
+    #[errify::errify("decode app info")]
     pub fn decode_app_info_ex(&self, boottime_mr: bool, vm_config: &str) -> Result<AppInfo> {
         let key_provider_info = if boottime_mr {
             vec![]
@@ -739,7 +747,7 @@ pub fn validate_tcb(report: &TdxVerifiedReport) -> Result<()> {
 }
 
 /// Information about the app extracted from event log
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppInfo {
     /// App ID
     #[serde(with = "hex_bytes")]

@@ -2,7 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::config::{Config, ProcessAnnotation, Protocol};
+use crate::config::{Config, Networking, ProcessAnnotation, Protocol};
+use dstack_port_forward::{ForwardRule, ForwardService, Protocol as FwdProtocol};
 
 use anyhow::{bail, Context, Result};
 use bon::Builder;
@@ -26,7 +27,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::SystemTime;
 use supervisor_client::SupervisorClient;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 pub use image::{Image, ImageInfo};
 pub use qemu::{VmConfig, VmWorkDir};
@@ -66,6 +67,8 @@ pub struct Manifest {
     pub gateway_urls: Vec<String>,
     #[serde(default)]
     pub no_tee: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub networking: Option<Networking>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -120,6 +123,7 @@ pub struct App {
     pub config: Arc<Config>,
     pub supervisor: SupervisorClient,
     state: Arc<Mutex<AppState>>,
+    forward_service: Arc<tokio::sync::Mutex<ForwardService>>,
 }
 
 impl App {
@@ -144,8 +148,10 @@ impl App {
             state: Arc::new(Mutex::new(AppState {
                 cid_pool,
                 vms: HashMap::new(),
+                active_forwards: HashMap::new(),
             })),
             config: Arc::new(config),
+            forward_service: Arc::new(tokio::sync::Mutex::new(ForwardService::new())),
         }
     }
 
@@ -223,7 +229,12 @@ impl App {
         };
         if !is_running {
             // Try to stop passt if already running
-            if self.config.cvm.networking.is_passt() {
+            let networking = vm_config
+                .manifest
+                .networking
+                .as_ref()
+                .unwrap_or(&self.config.cvm.networking);
+            if networking.is_passt() {
                 self.supervisor.stop(&format!("passt-{}", id)).await.ok();
             }
 
@@ -259,6 +270,7 @@ impl App {
 
     pub async fn stop_vm(&self, id: &str) -> Result<()> {
         self.set_started(id, false)?;
+        self.cleanup_port_forward(id).await;
         self.supervisor.stop(id).await?;
         Ok(())
     }
@@ -275,15 +287,13 @@ impl App {
                 self.supervisor.stop(id).await?;
             }
             self.supervisor.remove(id).await?;
-            if self.config.cvm.networking.is_passt() {
-                let passt_id = format!("passt-{}", id);
-                let info = self.supervisor.info(&passt_id).await.ok().flatten();
-                if let Some(info) = info {
-                    if info.state.status.is_running() {
-                        self.supervisor.stop(&passt_id).await?;
-                    }
-                    self.supervisor.remove(&passt_id).await?;
+            // Try to clean up passt process if it exists (safe no-op if not passt mode)
+            let passt_id = format!("passt-{}", id);
+            if let Some(info) = self.supervisor.info(&passt_id).await.ok().flatten() {
+                if info.state.status.is_running() {
+                    self.supervisor.stop(&passt_id).await?;
                 }
+                self.supervisor.remove(&passt_id).await?;
             }
         }
 
@@ -294,9 +304,135 @@ impl App {
             }
         }
 
+        self.cleanup_port_forward(id).await;
+
         let vm_path = self.work_dir(id);
         fs::remove_dir_all(&vm_path).context("Failed to remove VM directory")?;
         Ok(())
+    }
+
+    /// Handle a DHCP lease notification: look up VM by MAC address, persist
+    /// the guest IP, and reconfigure port forwarding.
+    pub async fn report_dhcp_lease(&self, mac: &str, ip: &str) {
+        use crate::app::qemu::mac_address_for_vm;
+
+        let vm_id = {
+            let mut state = self.lock();
+            let prefix = self.config.cvm.networking.mac_prefix_bytes();
+            let found = state
+                .vms
+                .iter_mut()
+                .find(|(id, _)| mac_address_for_vm(id, &prefix) == mac);
+            let Some((id, vm)) = found else {
+                debug!(mac, ip, "DHCP lease for unknown MAC, ignoring");
+                return;
+            };
+            let vm_id = id.clone();
+            let workdir = VmWorkDir::new(vm.config.workdir.clone());
+            if let Err(e) = workdir.set_guest_ip(ip) {
+                error!(mac, ip, "failed to persist guest IP: {e}");
+            }
+            vm.state.guest_ip = ip.to_string();
+            info!(mac, ip, id = %vm_id, "DHCP lease updated");
+            vm_id
+        };
+        self.reconfigure_port_forward(&vm_id).await;
+    }
+
+    /// Reconfigure port forwarding for a bridge-mode VM.
+    ///
+    /// Computes desired rules from the VM's port_map and guest_ip, then diffs
+    /// against currently active rules. Only changed rules are added/removed so
+    /// existing connections on unchanged rules are not interrupted.
+    pub async fn reconfigure_port_forward(&self, id: &str) {
+        let info = {
+            let state = self.lock();
+            let Some(vm) = state.get(id) else {
+                return;
+            };
+            let networking = vm
+                .config
+                .manifest
+                .networking
+                .as_ref()
+                .unwrap_or(&self.config.cvm.networking);
+            if !networking.is_bridge() || !networking.forward_service_enabled {
+                return;
+            }
+            let guest_ip = vm.state.guest_ip.clone();
+            let port_map = vm.config.manifest.port_map.clone();
+            (guest_ip, port_map)
+        };
+
+        let (guest_ip_str, port_map) = info;
+        if guest_ip_str.is_empty() {
+            return;
+        }
+        let Ok(guest_ip) = guest_ip_str.parse::<IpAddr>() else {
+            warn!(id, ip = %guest_ip_str, "invalid guest IP, skipping port forward");
+            return;
+        };
+
+        let new_rules: Vec<ForwardRule> = port_map
+            .iter()
+            .map(|pm| ForwardRule {
+                protocol: match pm.protocol {
+                    Protocol::Tcp => FwdProtocol::Tcp,
+                    Protocol::Udp => FwdProtocol::Udp,
+                },
+                listen_addr: pm.address,
+                listen_port: pm.from,
+                target_ip: guest_ip,
+                target_port: pm.to,
+            })
+            .collect();
+
+        let old_rules = self
+            .lock()
+            .active_forwards
+            .get(id)
+            .cloned()
+            .unwrap_or_default();
+
+        let old_set: HashSet<_> = old_rules.iter().collect();
+        let new_set: HashSet<_> = new_rules.iter().collect();
+
+        let mut fwd = self.forward_service.lock().await;
+
+        // Remove rules no longer needed
+        for rule in old_rules.iter().filter(|r| !new_set.contains(r)) {
+            if let Err(e) = fwd.remove_rule(rule).await {
+                warn!(id, ?rule, "failed to remove forwarding rule: {e}");
+            }
+        }
+
+        // Add new rules
+        for rule in new_rules.iter().filter(|r| !old_set.contains(r)) {
+            if let Err(e) = fwd.add_rule(rule.clone()) {
+                warn!(id, ?rule, "failed to add forwarding rule: {e}");
+            }
+        }
+
+        drop(fwd);
+        self.lock()
+            .active_forwards
+            .insert(id.to_string(), new_rules);
+        info!(id, "port forwarding reconfigured");
+    }
+
+    /// Remove all port forwarding rules for a VM.
+    pub async fn cleanup_port_forward(&self, id: &str) {
+        let old_rules = self.lock().active_forwards.remove(id).unwrap_or_default();
+        if old_rules.is_empty() {
+            return;
+        }
+        let mut fwd = self.forward_service.lock().await;
+        for rule in &old_rules {
+            if let Err(e) = fwd.remove_rule(rule).await {
+                warn!(id, ?rule, "failed to remove forwarding rule: {e}");
+            }
+        }
+        info!(id, count = old_rules.len(), "port forwarding cleaned up");
     }
 
     pub async fn reload_vms(&self) -> Result<()> {
@@ -328,6 +464,22 @@ impl App {
                 }
             }
         }
+
+        // Restore port forwarding for running bridge-mode VMs with persisted guest IPs
+        let vm_ids: Vec<String> = self.lock().vms.keys().cloned().collect();
+        for id in vm_ids {
+            let workdir = self.work_dir(&id);
+            if let Some(ip) = workdir.guest_ip() {
+                {
+                    let mut state = self.lock();
+                    if let Some(vm) = state.get_mut(&id) {
+                        vm.state.guest_ip = ip;
+                    }
+                }
+                self.reconfigure_port_forward(&id).await;
+            }
+        }
+
         Ok(())
     }
 
@@ -865,6 +1017,7 @@ struct VmStateMut {
     boot_progress: String,
     boot_error: String,
     shutdown_progress: String,
+    guest_ip: String,
     devices: GpuConfig,
     events: VecDeque<pb::GuestEvent>,
 }
@@ -899,6 +1052,8 @@ impl VmState {
 pub(crate) struct AppState {
     cid_pool: IdPool<u32>,
     vms: HashMap<String, VmState>,
+    /// Tracks active port forwarding rules per VM ID (bridge mode only).
+    active_forwards: HashMap<String, Vec<ForwardRule>>,
 }
 
 impl AppState {
