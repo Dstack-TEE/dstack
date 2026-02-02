@@ -142,7 +142,11 @@ cert_chain = "$CERTBOT_WORKDIR/live/cert.pem"
 cert_key = "$CERTBOT_WORKDIR/live/key.pem"
 base_domain = "$SRV_DOMAIN"
 listen_addr = "0.0.0.0"
-listen_port = 443
+$(if [ "${SERVING_NUM_PORTS:-1}" -gt 1 ]; then
+    echo "listen_port = \"443-$((443 + SERVING_NUM_PORTS - 1))\""
+else
+    echo "listen_port = 443"
+fi)
 connect_top_n = 3
 localhost_enabled = false
 
