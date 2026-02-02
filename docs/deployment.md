@@ -524,6 +524,36 @@ The CID range conflicts with existing VMs.
    cid_pool_size = 1000
    ```
 
+### High-concurrency deployments: conntrack table full
+
+When running Gateway with many concurrent connections (>100K), the host's conntrack table may fill up, causing silent packet drops:
+
+```
+dmesg: nf_conntrack: table full, dropping packet
+```
+
+Each proxied connection creates multiple conntrack entries (client→gateway, gateway→WireGuard→backend). The default `nf_conntrack_max` (typically 262,144) is insufficient for high-concurrency gateways.
+
+**Fix:**
+
+```bash
+# Check current limit
+sysctl net.netfilter.nf_conntrack_max
+
+# Increase for production (persistent)
+echo "net.netfilter.nf_conntrack_max = 1048576" >> /etc/sysctl.d/99-dstack.conf
+echo "net.netfilter.nf_conntrack_buckets = 262144" >> /etc/sysctl.d/99-dstack.conf
+sysctl -p /etc/sysctl.d/99-dstack.conf
+```
+
+Also increase inside bridge-mode CVMs if they handle many connections:
+
+```bash
+sysctl -w net.netfilter.nf_conntrack_max=524288
+```
+
+**Sizing rule of thumb:** Set `nf_conntrack_max` to at least 4× your target concurrent connection count (each connection may use 2-3 conntrack entries across NAT/bridge layers).
+
 ### Error: Operation not permitted when building guest image
 
 Ubuntu 23.10+ restricts unprivileged user namespaces:
