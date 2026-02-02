@@ -404,6 +404,8 @@ service Admin {
   rpc DeleteZtDomain(DeleteZtDomainRequest) returns (google.protobuf.Empty) {}
   // Manually trigger certificate renewal for a ZT-Domain
   rpc RenewZtDomainCert(RenewZtDomainCertRequest) returns (RenewZtDomainCertResponse) {}
+  // Force release certificate renewal lock for a ZT-Domain
+  rpc ForceReleaseCertLock(ForceReleaseCertLockRequest) returns (google.protobuf.Empty) {}
   // List certificate attestations for a domain
   rpc ListCertAttestations(ListCertAttestationsRequest) returns (ListCertAttestationsResponse) {}
 
@@ -426,9 +428,13 @@ message DnsCredentialInfo {
   string cf_api_token = 4;
   // Cloudflare API URL (empty means default)
   string cf_api_url = 5;
+  // DNS TXT record TTL in seconds (optional)
+  optional uint32 dns_txt_ttl = 6;
+  // Maximum DNS wait time in seconds (optional)
+  optional uint32 max_dns_wait = 7;
   // Timestamps
-  uint64 created_at = 6;
-  uint64 updated_at = 7;
+  uint64 created_at = 8;
+  uint64 updated_at = 9;
 }
 
 // List DNS credentials response
@@ -558,6 +564,11 @@ message RenewZtDomainCertResponse {
   bool renewed = 1;
   // New certificate expiry (if renewed)
   uint64 not_after = 2;
+}
+
+// Force release certificate lock request
+message ForceReleaseCertLockRequest {
+  string domain = 1;
 }
 
 // Certificate attestation info

@@ -10,15 +10,15 @@ use dstack_gateway_rpc::{
     admin_server::{AdminRpc, AdminServer},
     CertAttestationInfo, CertbotConfigResponse, CreateDnsCredentialRequest,
     DeleteDnsCredentialRequest, DeleteZtDomainRequest, DnsCredentialInfo,
-    GetDefaultDnsCredentialResponse, GetDnsCredentialRequest, GetInfoRequest, GetInfoResponse,
-    GetInstanceHandshakesRequest, GetInstanceHandshakesResponse, GetMetaResponse,
-    GetNodeStatusesResponse, GetZtDomainRequest, GlobalConnectionsStats, HandshakeEntry, HostInfo,
-    LastSeenEntry, ListCertAttestationsRequest, ListCertAttestationsResponse,
-    ListDnsCredentialsResponse, ListZtDomainsResponse, NodeStatusEntry,
-    PeerSyncStatus as ProtoPeerSyncStatus, RenewCertResponse, RenewZtDomainCertRequest,
-    RenewZtDomainCertResponse, SetCertbotConfigRequest, SetDefaultDnsCredentialRequest,
-    SetNodeStatusRequest, SetNodeUrlRequest, StatusResponse, StoreSyncStatus,
-    UpdateDnsCredentialRequest, WaveKvStatusResponse, ZtDomainCertStatus,
+    ForceReleaseCertLockRequest, GetDefaultDnsCredentialResponse, GetDnsCredentialRequest,
+    GetInfoRequest, GetInfoResponse, GetInstanceHandshakesRequest, GetInstanceHandshakesResponse,
+    GetMetaResponse, GetNodeStatusesResponse, GetZtDomainRequest, GlobalConnectionsStats,
+    HandshakeEntry, HostInfo, LastSeenEntry, ListCertAttestationsRequest,
+    ListCertAttestationsResponse, ListDnsCredentialsResponse, ListZtDomainsResponse,
+    NodeStatusEntry, PeerSyncStatus as ProtoPeerSyncStatus, RenewCertResponse,
+    RenewZtDomainCertRequest, RenewZtDomainCertResponse, SetCertbotConfigRequest,
+    SetDefaultDnsCredentialRequest, SetNodeStatusRequest, SetNodeUrlRequest, StatusResponse,
+    StoreSyncStatus, UpdateDnsCredentialRequest, WaveKvStatusResponse, ZtDomainCertStatus,
     ZtDomainConfig as ProtoZtDomainConfig, ZtDomainInfo,
 };
 use ra_rpc::{CallContext, RpcCall};
@@ -541,6 +541,16 @@ impl AdminRpc for AdminRpcHandler {
         }
     }
 
+    async fn force_release_cert_lock(self, request: ForceReleaseCertLockRequest) -> Result<()> {
+        let kv_store = self.state.kv_store();
+        kv_store.release_cert_lock(&request.domain)?;
+        info!(
+            "Force released certificate lock for domain: {}",
+            request.domain
+        );
+        Ok(())
+    }
+
     async fn list_cert_attestations(
         self,
         request: ListCertAttestationsRequest,
@@ -695,6 +705,8 @@ fn dns_cred_to_proto(cred: DnsCredential) -> DnsCredentialInfo {
         cf_api_url,
         created_at: cred.created_at,
         updated_at: cred.updated_at,
+        dns_txt_ttl: Some(cred.dns_txt_ttl),
+        max_dns_wait: Some(cred.max_dns_wait.as_secs() as u32),
     }
 }
 
