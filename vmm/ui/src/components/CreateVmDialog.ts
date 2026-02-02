@@ -146,6 +146,16 @@ const CreateVmDialogComponent = {
               <input id="keyProviderId" v-model="form.key_provider_id" type="text" placeholder="Optional provider ID">
             </div>
 
+            <div class="form-group">
+              <label for="netMode">Networking</label>
+              <select id="netMode" v-model="form.net_mode">
+                <option value="">Default</option>
+                <option value="bridge">Bridge</option>
+                <option value="passt">Passt</option>
+                <option value="user">User</option>
+              </select>
+            </div>
+
             <div class="form-group full-width">
               <label>Features</label>
               <div class="feature-checkboxes">

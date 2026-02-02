@@ -363,44 +363,91 @@ impl Config {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum NetworkingMode {
+    User,
+    Passt,
+    Bridge,
+    Custom,
+}
+
+/// Flat networking configuration. The `mode` field selects which backend is
+/// active; the remaining fields are only relevant for their respective mode
+/// and carry serde defaults so they can be omitted in the config file.
 #[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(tag = "mode", rename_all = "lowercase")]
-pub enum Networking {
-    User(UserNetworking),
-    Passt(PasstNetworking),
-    Custom(CustomNetworking),
+pub struct Networking {
+    pub mode: NetworkingMode,
+
+    // ── Bridge fields ──────────────────────────────────────────────
+    /// Bridge interface to attach TAP device to (e.g., "virbr0")
+    #[serde(default)]
+    pub bridge: String,
+
+    /// Enable userspace port forwarding for bridge-mode VMs.
+    pub forward_service_enabled: bool,
+
+    // ── MAC prefix ─────────────────────────────────────────────────
+    /// Fixed MAC address prefix (0-3 colon-separated hex bytes, e.g. "02:ab:cd").
+    /// Remaining bytes are derived from the VM ID hash.
+    #[serde(default)]
+    pub mac_prefix: String,
+
+    // ── User-mode fields ───────────────────────────────────────────
+    #[serde(default)]
+    pub net: String,
+    #[serde(default)]
+    pub dhcp_start: String,
+    #[serde(default)]
+    pub restrict: bool,
+
+    // ── Passt fields ───────────────────────────────────────────────
+    #[serde(default)]
+    pub passt_exec: String,
+    #[serde(default)]
+    pub interface: String,
+    #[serde(default)]
+    pub address: String,
+    #[serde(default)]
+    pub netmask: String,
+    #[serde(default)]
+    pub gateway: String,
+    #[serde(default)]
+    pub dns: Vec<String>,
+    #[serde(default)]
+    pub map_host_loopback: String,
+    #[serde(default)]
+    pub map_guest_addr: String,
+    #[serde(default)]
+    pub no_map_gw: bool,
+    #[serde(default)]
+    pub ipv4_only: bool,
+
+    // ── Custom fields ──────────────────────────────────────────────
+    #[serde(default)]
+    pub netdev: String,
 }
 
 impl Networking {
     pub fn is_passt(&self) -> bool {
-        matches!(self, Networking::Passt(_))
+        self.mode == NetworkingMode::Passt
     }
-}
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct UserNetworking {
-    pub net: String,
-    pub dhcp_start: String,
-    pub restrict: bool,
-}
+    pub fn is_bridge(&self) -> bool {
+        self.mode == NetworkingMode::Bridge
+    }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct PasstNetworking {
-    pub passt_exec: String,
-    pub interface: String,
-    pub address: String,
-    pub netmask: String,
-    pub gateway: String,
-    pub dns: Vec<String>,
-    pub map_host_loopback: String,
-    pub map_guest_addr: String,
-    pub no_map_gw: bool,
-    pub ipv4_only: bool,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct CustomNetworking {
-    pub netdev: String,
+    /// Parse the mac_prefix into bytes. Returns 0-3 bytes.
+    pub fn mac_prefix_bytes(&self) -> Vec<u8> {
+        if self.mac_prefix.is_empty() {
+            return vec![];
+        }
+        self.mac_prefix
+            .split(':')
+            .filter_map(|s| u8::from_str_radix(s, 16).ok())
+            .take(3)
+            .collect()
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

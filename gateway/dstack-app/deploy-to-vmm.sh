@@ -59,6 +59,9 @@ PUBLIC_IP=$(curl -s4 ifconfig.me)
 # Whether to use ACME staging (yes/no)
 ACME_STAGING=no
 
+# Networking mode: bridge or user (default: user)
+# NET_MODE=bridge
+
 # Subnet index. 0~15
 SUBNET_INDEX=0
 
@@ -219,17 +222,27 @@ fi
 
 echo "Deploying dstack-gateway to dstack-vmm..."
 
-$CLI deploy \
-  --name dstack-gateway \
-  --app-id "$GATEWAY_APP_ID" \
-  --compose .app-compose.json \
-  --env-file .app_env \
-  --image $OS_IMAGE \
-  --port tcp:$GATEWAY_RPC_ADDR:8000 \
-  --port tcp:$GATEWAY_ADMIN_RPC_ADDR:8001 \
-  --port tcp:$GATEWAY_SERVING_ADDR:443 \
-  --port tcp:$GUEST_AGENT_ADDR:8090 \
-  --port udp:$WG_ADDR:51820 \
-  --vcpu 32 \
-  --memory 32G \
+DEPLOY_ARGS=(
+  --name dstack-gateway
+  --app-id "$GATEWAY_APP_ID"
+  --compose .app-compose.json
+  --env-file .app_env
+  --image "$OS_IMAGE"
+  --vcpu 32
+  --memory 32G
+)
+
+if [ "${NET_MODE:-}" = "bridge" ]; then
+  DEPLOY_ARGS+=(--net bridge)
+else
+  DEPLOY_ARGS+=(
+    --port "tcp:$GATEWAY_RPC_ADDR:8000"
+    --port "tcp:$GATEWAY_ADMIN_RPC_ADDR:8001"
+    --port "tcp:$GATEWAY_SERVING_ADDR:443"
+    --port "tcp:$GUEST_AGENT_ADDR:8090"
+    --port "udp:$WG_ADDR:51820"
+  )
+fi
+
+$CLI deploy "${DEPLOY_ARGS[@]}"
 

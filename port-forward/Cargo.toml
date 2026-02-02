@@ -1,0 +1,18 @@
+# SPDX-FileCopyrightText: © 2024-2025 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "dstack-port-forward"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+tracing.workspace = true
+tokio = { workspace = true, features = ["net", "rt", "io-util", "macros", "sync", "time"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+nix = { workspace = true, features = ["fs", "net", "zerocopy"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full"] }

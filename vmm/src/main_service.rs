@@ -10,10 +10,10 @@ use dstack_types::AppCompose;
 use dstack_vmm_rpc as rpc;
 use dstack_vmm_rpc::vmm_server::{VmmRpc, VmmServer};
 use dstack_vmm_rpc::{
-    AppId, ComposeHash as RpcComposeHash, GatewaySettings, GetInfoResponse, GetMetaResponse, Id,
-    ImageInfo as RpcImageInfo, ImageListResponse, KmsSettings, ListGpusResponse, PublicKeyResponse,
-    ReloadVmsResponse, ResizeVmRequest, ResourcesSettings, StatusRequest, StatusResponse,
-    UpdateVmRequest, VersionResponse, VmConfiguration,
+    AppId, ComposeHash as RpcComposeHash, DhcpLeaseRequest, GatewaySettings, GetInfoResponse,
+    GetMetaResponse, Id, ImageInfo as RpcImageInfo, ImageListResponse, KmsSettings,
+    ListGpusResponse, PublicKeyResponse, ReloadVmsResponse, ResizeVmRequest, ResourcesSettings,
+    StatusRequest, StatusResponse, UpdateVmRequest, VersionResponse, VmConfiguration,
 };
 use fs_err as fs;
 use ra_rpc::{CallContext, RpcCall};
@@ -193,6 +193,43 @@ pub fn create_manifest_from_vm_config(
         kms_urls: request.kms_urls.clone(),
         gateway_urls: request.gateway_urls.clone(),
         no_tee: request.no_tee,
+        networking: request.networking.as_ref().and_then(networking_from_proto),
+    })
+}
+
+fn networking_from_proto(proto: &rpc::NetworkingConfig) -> Option<crate::config::Networking> {
+    use crate::config::NetworkingMode;
+    let mode = match proto.mode.as_str() {
+        "bridge" => NetworkingMode::Bridge,
+        "passt" => NetworkingMode::Passt,
+        "user" => NetworkingMode::User,
+        "custom" => NetworkingMode::Custom,
+        "" => return None, // not set, use global default
+        other => {
+            tracing::warn!("unsupported per-VM networking mode '{other}', using global default");
+            return None;
+        }
+    };
+    // Only set mode; other fields will be merged from global config at runtime
+    Some(crate::config::Networking {
+        mode,
+        bridge: String::new(),
+        mac_prefix: String::new(),
+        net: String::new(),
+        dhcp_start: String::new(),
+        restrict: false,
+        passt_exec: String::new(),
+        interface: String::new(),
+        address: String::new(),
+        netmask: String::new(),
+        gateway: String::new(),
+        dns: vec![],
+        map_host_loopback: String::new(),
+        map_guest_addr: String::new(),
+        no_map_gw: false,
+        ipv4_only: false,
+        netdev: String::new(),
+        forward_service_enabled: false,
     })
 }
 
@@ -416,6 +453,9 @@ impl VmmRpc for RpcHandler {
             .load_vm(&vm_work_dir, &Default::default(), false)
             .await
             .context("Failed to load VM")?;
+        if request.update_ports {
+            self.app.reconfigure_port_forward(&new_id).await;
+        }
         Ok(Id { id: new_id })
     }
 
@@ -541,6 +581,11 @@ impl VmmRpc for RpcHandler {
     async fn reload_vms(self) -> Result<ReloadVmsResponse> {
         info!("Reloading VMs directory and syncing with memory state");
         self.app.reload_vms_sync().await
+    }
+
+    async fn report_dhcp_lease(self, request: DhcpLeaseRequest) -> Result<()> {
+        self.app.report_dhcp_lease(&request.mac, &request.ip).await;
+        Ok(())
     }
 }
 
