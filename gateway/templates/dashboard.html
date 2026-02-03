@@ -34,7 +34,7 @@ SPDX-License-Identifier: Apache-2.0
             border-collapse: collapse;
             background-color: white;
             border-radius: 8px;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
             margin: 20px 0;
         }
 
@@ -93,14 +93,14 @@ SPDX-License-Identifier: Apache-2.0
             font-size: 12px;
             white-space: nowrap;
             z-index: 1;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
         }
 
         .info-section {
             background: white;
             padding: 20px;
             border-radius: 8px;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
         }
 
         .info-group {
@@ -151,6 +151,242 @@ SPDX-License-Identifier: Apache-2.0
             overflow: hidden;
             text-overflow: ellipsis;
             white-space: nowrap;
+        }
+
+        .last-seen-cell {
+            white-space: nowrap;
+        }
+
+        .last-seen-row {
+            margin-bottom: 4px;
+        }
+
+        .last-seen-row:last-child {
+            margin-bottom: 0;
+        }
+
+        .observer-label {
+            color: #666;
+            font-size: 0.9em;
+        }
+
+        .node-status {
+            font-weight: bold;
+        }
+
+        .node-status.up {
+            color: #4CAF50;
+        }
+
+        .node-status.down {
+            color: #f44336;
+        }
+
+        .status-controls {
+            display: flex;
+            gap: 5px;
+        }
+
+        .status-btn {
+            padding: 4px 8px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: bold;
+            transition: opacity 0.2s;
+        }
+
+        .status-btn:hover {
+            opacity: 0.8;
+        }
+
+        .status-btn.up {
+            background-color: #4CAF50;
+            color: white;
+        }
+
+        .status-btn.down {
+            background-color: #f44336;
+            color: white;
+        }
+
+        .status-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        /* Certificate config styles */
+        .action-btn {
+            padding: 6px 12px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: bold;
+            transition: opacity 0.2s;
+            margin-right: 5px;
+        }
+
+        .action-btn:hover {
+            opacity: 0.8;
+        }
+
+        .action-btn.primary {
+            background-color: #4CAF50;
+            color: white;
+        }
+
+        .action-btn.danger {
+            background-color: #f44336;
+            color: white;
+        }
+
+        .action-btn.secondary {
+            background-color: #2196F3;
+            color: white;
+        }
+
+        .action-btn.warning {
+            background-color: #ff9800;
+            color: white;
+        }
+
+        .action-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .default-badge {
+            background-color: #4CAF50;
+            color: white;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: bold;
+        }
+
+        .cert-status {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .cert-status-item {
+            font-size: 12px;
+        }
+
+        .cert-status-item.has-cert {
+            color: #4CAF50;
+        }
+
+        .cert-status-item.no-cert {
+            color: #f44336;
+        }
+
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.5);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .modal-overlay.active {
+            display: flex;
+        }
+
+        .modal {
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+            min-width: 400px;
+            max-width: 500px;
+        }
+
+        .modal h3 {
+            margin-top: 0;
+            color: #333;
+            border-bottom: 2px solid #4CAF50;
+            padding-bottom: 10px;
+        }
+
+        .modal-field {
+            margin-bottom: 15px;
+        }
+
+        .modal-field label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+            color: #555;
+        }
+
+        .modal-field input,
+        .modal-field select {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            box-sizing: border-box;
+        }
+
+        .modal-field input[type="checkbox"] {
+            width: auto;
+        }
+
+        .modal-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 10px;
+            margin-top: 20px;
+        }
+
+        .toast {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            padding: 15px 25px;
+            border-radius: 4px;
+            color: white;
+            font-weight: bold;
+            z-index: 2000;
+            animation: slideIn 0.3s ease;
+        }
+
+        .toast.success {
+            background-color: #4CAF50;
+        }
+
+        .toast.error {
+            background-color: #f44336;
+        }
+
+        @keyframes slideIn {
+            from {
+                transform: translateX(100%);
+                opacity: 0;
+            }
+            to {
+                transform: translateX(0);
+                opacity: 1;
+            }
+        }
+
+        .section-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .section-header h2 {
+            margin: 0;
         }
     </style>
     <title>Dashboard</title>
@@ -204,17 +440,22 @@ SPDX-License-Identifier: Apache-2.0
         </tr>
         <tr>
             <td>ID</td>
-            <td>{{ status.id|hex }}</td>
+            <td>{{ status.id }}</td>
         </tr>
         <tr>
-            <td>Bootnode URL</td>
-            <td>{{ status.bootnode_url }}</td>
+            <td>UUID</td>
+            <td>{{ status.uuid|hex }}</td>
         </tr>
         <tr>
-            <td>Connections</td>
+            <td>Connections (Local)</td>
             <td>{{ status.num_connections }}</td>
         </tr>
     </table>
+
+    <h2>Global Connections</h2>
+    <div id="global-connections">
+        <p>Loading global connection statistics...</p>
+    </div>
 
     <table>
         <tr>
@@ -228,37 +469,105 @@ SPDX-License-Identifier: Apache-2.0
             <td>Historical Certificate Public Keys</td>
             <td>
                 <div class="key-list">
-                    {% for key in acme_info.hist_keys %}
-                    <input type="text" value="{{ key|hex }}" readonly>
+                    {% for key in acme_info.quoted_hist_keys %}
+                    <input type="text" value="{{ key.public_key|hex }}" readonly>
                     {% endfor %}
                 </div>
             </td>
         </tr>
     </table>
+    <h2>Certbot Configuration</h2>
+    <table>
+        <tr>
+            <th>Setting</th>
+            <th>Value</th>
+            <th>Description</th>
+        </tr>
+        <tr>
+            <td>ACME URL</td>
+            <td>
+                <input type="text" id="certbot-acme-url" placeholder="https://acme-v02.api.letsencrypt.org/directory (default)">
+            </td>
+            <td>ACME server URL (empty = Let's Encrypt production)</td>
+        </tr>
+        <tr>
+            <td>Renewal Interval</td>
+            <td>
+                <input type="number" id="certbot-renew-interval" placeholder="43200" min="0"> seconds
+            </td>
+            <td>How often to check for certificate renewal</td>
+        </tr>
+        <tr>
+            <td>Renew Before Expiry</td>
+            <td>
+                <input type="number" id="certbot-renew-before" placeholder="2592000" min="0"> seconds
+            </td>
+            <td>How many seconds before expiry to trigger renewal</td>
+        </tr>
+        <tr>
+            <td>Renewal Timeout</td>
+            <td>
+                <input type="number" id="certbot-renew-timeout" placeholder="300" min="0"> seconds
+            </td>
+            <td>Timeout for certificate renewal operations</td>
+        </tr>
+    </table>
+    <div style="margin-top: 10px;">
+        <button class="action-btn primary" onclick="saveCertbotConfig()">Save Configuration</button>
+    </div>
+
+    <div class="section-header">
+        <h2>DNS Credentials</h2>
+        <button class="action-btn primary" onclick="showAddDnsCredModal()">Add Credential</button>
+    </div>
+    <div id="dns-credentials">
+        <p>Loading DNS credentials...</p>
+    </div>
+
+    <div class="section-header">
+        <h2>ZT-Domains</h2>
+        <button class="action-btn primary" onclick="showAddZtDomainModal()">Add ZT-Domain</button>
+    </div>
+    <div id="zt-domains">
+        <p>Loading ZT-Domains...</p>
+    </div>
+
     <h2>Cluster</h2>
     <table>
         <tr>
             <th>ID</th>
+            <th>UUID</th>
+            <th>Status</th>
             <th>Last Seen</th>
             <th>Wg IP</th>
             <th>Wg Endpoint</th>
             <th>URL</th>
+            <th>Actions</th>
         </tr>
         {% for node in status.nodes %}
-        <tr class="{% if node.id == status.id %}me{% endif %}">
-            <td class="truncated-id" title="{{ node.id|hex }}">{{ node.id|hex }}</td>
+        <tr class="{% if node.uuid == status.uuid %}me{% endif %}">
+            <td>{{ node.id }}</td>
+            <td class="truncated-id" title="{{ node.uuid|hex }}">{{ node.uuid|hex }}</td>
+            <td class="node-status" data-node-id="{{ node.id }}">-</td>
             <td class="timestamp">{{ node.last_seen }}</td>
-            {% if let Some(wg_peer) = node.wg_peer %}
-            <td>{{ wg_peer.ip }}</td>
-            <td>{{ wg_peer.endpoint }}</td>
-            {% else %}
-            <td>N/A</td>
-            <td>N/A</td>
-            {% endif %}
+            <td>{{ node.wg_ip }}</td>
+            <td>{{ node.wg_endpoint }}</td>
             <td>{{ node.url }}</td>
+            <td>
+                <div class="status-controls">
+                    <button class="status-btn up" onclick="setNodeStatus({{ node.id }}, 'up')">Up</button>
+                    <button class="status-btn down" onclick="setNodeStatus({{ node.id }}, 'down')">Down</button>
+                </div>
+            </td>
         </tr>
         {% endfor %}
     </table>
+
+    <h2>WaveKV Sync Status</h2>
+    <div id="wavekv-status">
+        <p>Loading WaveKV status...</p>
+    </div>
+
     <h2>CVM List</h2>
     <table>
         <tr>
@@ -278,6 +587,962 @@ SPDX-License-Identifier: Apache-2.0
         </tr>
         {% endfor %}
     </table>
+
+    <!-- Add DNS Credential Modal -->
+    <div id="add-dns-cred-modal" class="modal-overlay">
+        <div class="modal">
+            <h3>Add DNS Credential</h3>
+            <div class="modal-field">
+                <label>Name</label>
+                <input type="text" id="dns-cred-name" placeholder="My Cloudflare Credential">
+            </div>
+            <div class="modal-field">
+                <label>Provider</label>
+                <select id="dns-cred-provider">
+                    <option value="cloudflare">Cloudflare</option>
+                </select>
+            </div>
+            <div class="modal-field">
+                <label>Cloudflare API Token</label>
+                <input type="password" id="dns-cred-token" placeholder="API Token with DNS edit permissions">
+            </div>
+            <div class="modal-field">
+                <label>Cloudflare API URL (optional)</label>
+                <input type="text" id="dns-cred-api-url" placeholder="https://api.cloudflare.com/client/v4 (default)">
+            </div>
+            <div class="modal-field">
+                <label>DNS TXT TTL (seconds, optional)</label>
+                <input type="number" id="dns-cred-ttl" placeholder="e.g. 60 (default from config)">
+            </div>
+            <div class="modal-field">
+                <label>Max DNS Wait (seconds, optional)</label>
+                <input type="number" id="dns-cred-max-wait" placeholder="e.g. 300 (default from config)">
+            </div>
+            <div class="modal-field">
+                <label>
+                    <input type="checkbox" id="dns-cred-default"> Set as default
+                </label>
+            </div>
+            <div class="modal-actions">
+                <button class="action-btn secondary" onclick="hideModal('add-dns-cred-modal')">Cancel</button>
+                <button class="action-btn primary" onclick="createDnsCredential()">Create</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Edit DNS Credential Modal -->
+    <div id="edit-dns-cred-modal" class="modal-overlay">
+        <div class="modal">
+            <h3>Edit DNS Credential</h3>
+            <input type="hidden" id="edit-dns-cred-id">
+            <div class="modal-field">
+                <label>Name</label>
+                <input type="text" id="edit-dns-cred-name" placeholder="My Cloudflare Credential">
+            </div>
+            <div class="modal-field">
+                <label>Provider</label>
+                <input type="text" id="edit-dns-cred-provider" readonly disabled>
+            </div>
+            <div class="modal-field">
+                <label>Cloudflare API Token (leave empty to keep current)</label>
+                <input type="password" id="edit-dns-cred-token" placeholder="Leave empty to keep current token">
+            </div>
+            <div class="modal-field">
+                <label>Cloudflare API URL (optional)</label>
+                <input type="text" id="edit-dns-cred-api-url" placeholder="https://api.cloudflare.com/client/v4 (default)">
+            </div>
+            <div class="modal-field">
+                <label>DNS TXT TTL (seconds, optional)</label>
+                <input type="number" id="edit-dns-cred-ttl" placeholder="e.g. 60 (default from config)">
+            </div>
+            <div class="modal-field">
+                <label>Max DNS Wait (seconds, optional)</label>
+                <input type="number" id="edit-dns-cred-max-wait" placeholder="e.g. 300 (default from config)">
+            </div>
+            <div class="modal-actions">
+                <button class="action-btn secondary" onclick="hideModal('edit-dns-cred-modal')">Cancel</button>
+                <button class="action-btn primary" onclick="updateDnsCredential()">Update</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Edit ZT-Domain Modal -->
+    <div id="edit-zt-domain-modal" class="modal-overlay">
+        <div class="modal">
+            <h3>Edit ZT-Domain</h3>
+            <input type="hidden" id="edit-domain-original">
+            <div class="modal-field">
+                <label>Domain (cannot be changed)</label>
+                <input type="text" id="edit-domain-name" readonly disabled>
+            </div>
+            <div class="modal-field">
+                <label>DNS Credential</label>
+                <select id="edit-domain-dns-cred">
+                    <option value="">Use Default</option>
+                </select>
+            </div>
+            <div class="modal-field">
+                <label>Port (0 = default)</label>
+                <input type="number" id="edit-domain-port" placeholder="443" min="0" max="65535">
+            </div>
+            <div class="modal-field">
+                <label>Node Binding (0 = any node)</label>
+                <input type="number" id="edit-domain-node" placeholder="0" min="0">
+            </div>
+            <div class="modal-field">
+                <label>Priority (higher = preferred as default)</label>
+                <input type="number" id="edit-domain-priority" placeholder="0">
+            </div>
+            <div class="modal-actions">
+                <button class="action-btn secondary" onclick="hideModal('edit-zt-domain-modal')">Cancel</button>
+                <button class="action-btn primary" onclick="updateZtDomain()">Update</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Add ZT-Domain Modal -->
+    <div id="add-zt-domain-modal" class="modal-overlay">
+        <div class="modal">
+            <h3>Add ZT-Domain</h3>
+            <div class="modal-field">
+                <label>Domain (base domain, e.g., app.example.com)</label>
+                <input type="text" id="domain-name" placeholder="app.example.com">
+            </div>
+            <div class="modal-field">
+                <label>DNS Credential</label>
+                <select id="domain-dns-cred">
+                    <option value="">Use Default</option>
+                </select>
+            </div>
+            <div class="modal-field">
+                <label>Port</label>
+                <input type="number" id="domain-port" placeholder="443" min="0" max="65535" value="443">
+            </div>
+            <div class="modal-field">
+                <label>Node Binding (0 = any node)</label>
+                <input type="number" id="domain-node" placeholder="0" min="0" value="0">
+            </div>
+            <div class="modal-field">
+                <label>Priority (higher = preferred as default)</label>
+                <input type="number" id="domain-priority" placeholder="0" value="0">
+            </div>
+            <div class="modal-actions">
+                <button class="action-btn secondary" onclick="hideModal('add-zt-domain-modal')">Cancel</button>
+                <button class="action-btn primary" onclick="addZtDomain()">Add</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        async function loadWaveKvStatus() {
+            try {
+                const response = await fetch('/prpc/Admin.WaveKvStatus', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: '{}'
+                });
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+                const data = await response.json();
+                renderWaveKvStatus(data);
+            } catch (e) {
+                console.error('WaveKV status error:', e);
+                document.getElementById('wavekv-status').innerHTML =
+                    `<p style="color: #666;">WaveKV sync status unavailable: ${e.message}</p>`;
+            }
+        }
+
+        function renderWaveKvStatus(data) {
+            const container = document.getElementById('wavekv-status');
+
+            if (!data.enabled) {
+                container.innerHTML = '<p style="color: #666;">WaveKV sync is disabled</p>';
+                return;
+            }
+
+            let html = '';
+
+            // Render persistent store
+            if (data.persistent) {
+                html += renderStoreStatus(data.persistent);
+            }
+
+            // Render ephemeral store
+            if (data.ephemeral) {
+                html += renderStoreStatus(data.ephemeral);
+            }
+
+            container.innerHTML = html;
+
+            // Apply timeAgo to new timestamps
+            const timestamps = container.querySelectorAll('.timestamp');
+            timestamps.forEach(cell => {
+                const timestamp = parseInt(cell.textContent);
+                if (!isNaN(timestamp) && timestamp > 0) {
+                    const date = new Date(timestamp * 1000);
+                    cell.setAttribute('data-original', date.toLocaleString());
+                    cell.textContent = timeAgo(timestamp);
+                }
+            });
+        }
+
+        function renderStoreStatus(store) {
+            const nodeId = store.node_id || store.nodeId;
+            const nKeys = store.n_keys || store.nKeys || 0;
+            const nextSeq = store.next_seq || store.nextSeq || 0;
+            const walEnabled = store.wal_enabled || store.walEnabled;
+            const peers = store.peers || [];
+            let html = `
+                <table>
+                    <tr>
+                        <th colspan="5">${store.name.charAt(0).toUpperCase() + store.name.slice(1)} Store (Node: ${nodeId})</th>
+                    </tr>
+                    <tr>
+                        <td>Keys: ${nKeys}</td>
+                        <td>Next Seq: ${nextSeq}</td>
+                        <td>Dirty: ${store.dirty ? 'Yes' : 'No'}</td>
+                        <td colspan="2">WAL: ${walEnabled ? 'Enabled' : 'Disabled'}</td>
+                    </tr>
+                </table>
+            `;
+
+            if (peers.length > 0) {
+                html += `
+                    <table>
+                        <tr>
+                            <th>Peer ID</th>
+                            <th>Local Ack</th>
+                            <th>Peer Ack</th>
+                            <th>Buffered</th>
+                            <th>Last Seen</th>
+                        </tr>
+                `;
+
+                for (const peer of peers) {
+                    const lastSeenArr = peer.last_seen || peer.lastSeen || [];
+                    const lastSeenStr = lastSeenArr.length > 0
+                        ? lastSeenArr.map(entry => {
+                            const observer = entry.node_id || entry.nodeId;
+                            const ts = entry.timestamp;
+                            return `<div class="last-seen-row"><span class="observer-label">by ${observer}:</span> <span class="timestamp">${ts}</span></div>`;
+                        }).join('')
+                        : 'N/A';
+                    const localAck = peer.local_ack || peer.localAck || 0;
+                    const peerAck = peer.peer_ack || peer.peerAck || 0;
+                    const bufferedLogs = peer.buffered_logs || peer.bufferedLogs || 0;
+
+                    html += `
+                        <tr>
+                            <td class="truncated-id" title="${peer.id}">${peer.id}</td>
+                            <td>${localAck}</td>
+                            <td>${peerAck}</td>
+                            <td>${bufferedLogs}</td>
+                            <td class="last-seen-cell">${lastSeenStr}</td>
+                        </tr>
+                    `;
+                }
+
+                html += '</table>';
+            }
+
+            return html;
+        }
+
+        // Load WaveKV status after page loads
+        document.addEventListener('DOMContentLoaded', function () {
+            loadWaveKvStatus();
+            loadGlobalConnections();
+            loadNodeStatuses();
+            loadCertConfig();
+        });
+
+        // ==================== Certificate Configuration ====================
+
+        async function loadCertConfig() {
+            await loadCertbotConfig();
+            await loadDnsCredentials();
+            await loadZtDomains();
+        }
+
+        // ==================== Certbot Configuration ====================
+
+        async function loadCertbotConfig() {
+            try {
+                const response = await fetch('/prpc/Admin.GetCertbotConfig', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: '{}'
+                });
+                const data = await response.json();
+                document.getElementById('certbot-acme-url').value = data.acme_url || '';
+                document.getElementById('certbot-renew-interval').value = data.renew_interval_secs || 43200;
+                document.getElementById('certbot-renew-before').value = data.renew_before_expiration_secs || 2592000;
+                document.getElementById('certbot-renew-timeout').value = data.renew_timeout_secs || 300;
+            } catch (e) {
+                console.error('Failed to load certbot config:', e);
+            }
+        }
+
+        async function saveCertbotConfig() {
+            const acmeUrl = document.getElementById('certbot-acme-url').value.trim();
+            const renewInterval = parseInt(document.getElementById('certbot-renew-interval').value) || undefined;
+            const renewBefore = parseInt(document.getElementById('certbot-renew-before').value) || undefined;
+            const renewTimeout = parseInt(document.getElementById('certbot-renew-timeout').value) || undefined;
+
+            try {
+                const body = {};
+                if (acmeUrl !== undefined) body.acme_url = acmeUrl;
+                if (renewInterval !== undefined) body.renew_interval_secs = renewInterval;
+                if (renewBefore !== undefined) body.renew_before_expiration_secs = renewBefore;
+                if (renewTimeout !== undefined) body.renew_timeout_secs = renewTimeout;
+
+                const response = await fetch('/prpc/Admin.SetCertbotConfig', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body)
+                });
+                if (!response.ok) throw new Error('Failed to save');
+                showToast('Certbot configuration saved', 'success');
+            } catch (e) {
+                showToast('Failed to save certbot config: ' + e.message, 'error');
+            }
+        }
+
+        // ==================== DNS Credentials ====================
+
+        let dnsCredentials = [];
+        let defaultDnsCredId = '';
+
+        async function loadDnsCredentials() {
+            try {
+                const response = await fetch('/prpc/Admin.ListDnsCredentials', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: '{}'
+                });
+                const data = await response.json();
+                dnsCredentials = data.credentials || [];
+                defaultDnsCredId = data.default_id || '';
+                renderDnsCredentials();
+                updateDnsCredSelect();
+            } catch (e) {
+                document.getElementById('dns-credentials').innerHTML =
+                    '<p style="color: #666;">Failed to load DNS credentials</p>';
+            }
+        }
+
+        function renderDnsCredentials() {
+            const container = document.getElementById('dns-credentials');
+            if (dnsCredentials.length === 0) {
+                container.innerHTML = '<p style="color: #666;">No DNS credentials configured</p>';
+                return;
+            }
+
+            let html = `
+                <table>
+                    <tr>
+                        <th>Name</th>
+                        <th>Provider</th>
+                        <th>Default</th>
+                        <th>Actions</th>
+                    </tr>
+            `;
+
+            for (const cred of dnsCredentials) {
+                const isDefault = cred.id === defaultDnsCredId;
+                html += `
+                    <tr>
+                        <td>${escapeHtml(cred.name)}</td>
+                        <td>${escapeHtml(cred.provider_type)}</td>
+                        <td>${isDefault ? '<span class="default-badge">DEFAULT</span>' : ''}</td>
+                        <td>
+                            <button class="action-btn secondary" onclick="showEditDnsCredModal('${cred.id}')">Edit</button>
+                            ${!isDefault ? `<button class="action-btn secondary" onclick="setDefaultDnsCredential('${cred.id}')">Set Default</button>` : ''}
+                            <button class="action-btn danger" onclick="deleteDnsCredential('${cred.id}')" ${isDefault ? 'disabled title="Cannot delete default credential"' : ''}>Delete</button>
+                        </td>
+                    </tr>
+                `;
+            }
+
+            html += '</table>';
+            container.innerHTML = html;
+        }
+
+        function updateDnsCredSelect() {
+            const select = document.getElementById('domain-dns-cred');
+            select.innerHTML = '<option value="">Use Default</option>';
+            for (const cred of dnsCredentials) {
+                const isDefault = cred.id === defaultDnsCredId;
+                select.innerHTML += `<option value="${cred.id}">${escapeHtml(cred.name)}${isDefault ? ' (default)' : ''}</option>`;
+            }
+        }
+
+        function showAddDnsCredModal() {
+            document.getElementById('dns-cred-name').value = '';
+            document.getElementById('dns-cred-token').value = '';
+            document.getElementById('dns-cred-api-url').value = '';
+            document.getElementById('dns-cred-default').checked = dnsCredentials.length === 0;
+            showModal('add-dns-cred-modal');
+        }
+
+        function showEditDnsCredModal(credId) {
+            const cred = dnsCredentials.find(c => c.id === credId);
+            if (!cred) {
+                showToast('Credential not found', 'error');
+                return;
+            }
+
+            document.getElementById('edit-dns-cred-id').value = cred.id;
+            document.getElementById('edit-dns-cred-name').value = cred.name;
+            document.getElementById('edit-dns-cred-provider').value = cred.provider_type;
+            document.getElementById('edit-dns-cred-token').value = '';
+            document.getElementById('edit-dns-cred-api-url').value = cred.cf_api_url || '';
+            document.getElementById('edit-dns-cred-ttl').value = cred.dns_txt_ttl || '';
+            document.getElementById('edit-dns-cred-max-wait').value = cred.max_dns_wait || '';
+            showModal('edit-dns-cred-modal');
+        }
+
+        async function updateDnsCredential() {
+            const id = document.getElementById('edit-dns-cred-id').value;
+            const name = document.getElementById('edit-dns-cred-name').value.trim();
+            const token = document.getElementById('edit-dns-cred-token').value.trim();
+            const apiUrl = document.getElementById('edit-dns-cred-api-url').value.trim();
+            const ttl = document.getElementById('edit-dns-cred-ttl').value.trim();
+            const maxWait = document.getElementById('edit-dns-cred-max-wait').value.trim();
+
+            if (!name) {
+                showToast('Name is required', 'error');
+                return;
+            }
+
+            try {
+                const body = { id: id };
+                if (name) body.name = name;
+                if (token) body.cf_api_token = token;
+                if (apiUrl) body.cf_api_url = apiUrl;
+                if (ttl) body.dns_txt_ttl = parseInt(ttl);
+                if (maxWait) body.max_dns_wait = parseInt(maxWait);
+
+                const response = await fetch('/prpc/Admin.UpdateDnsCredential', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body)
+                });
+                if (!response.ok) {
+                    const err = await response.text();
+                    throw new Error(err);
+                }
+                hideModal('edit-dns-cred-modal');
+                showToast('DNS credential updated', 'success');
+                await loadDnsCredentials();
+            } catch (e) {
+                showToast('Failed to update credential: ' + e.message, 'error');
+            }
+        }
+
+        async function createDnsCredential() {
+            const name = document.getElementById('dns-cred-name').value.trim();
+            const token = document.getElementById('dns-cred-token').value.trim();
+            const apiUrl = document.getElementById('dns-cred-api-url').value.trim();
+            const ttl = document.getElementById('dns-cred-ttl').value.trim();
+            const maxWait = document.getElementById('dns-cred-max-wait').value.trim();
+            const setAsDefault = document.getElementById('dns-cred-default').checked;
+
+            if (!name || !token) {
+                showToast('Name and API Token are required', 'error');
+                return;
+            }
+
+            try {
+                const body = {
+                    name: name,
+                    provider_type: 'cloudflare',
+                    cf_api_token: token,
+                    cf_api_url: apiUrl || undefined,
+                    set_as_default: setAsDefault
+                };
+                if (ttl) body.dns_txt_ttl = parseInt(ttl);
+                if (maxWait) body.max_dns_wait = parseInt(maxWait);
+
+                const response = await fetch('/prpc/Admin.CreateDnsCredential', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body)
+                });
+                if (!response.ok) {
+                    const err = await response.text();
+                    throw new Error(err);
+                }
+                hideModal('add-dns-cred-modal');
+                showToast('DNS credential created', 'success');
+                await loadDnsCredentials();
+            } catch (e) {
+                showToast('Failed to create credential: ' + e.message, 'error');
+            }
+        }
+
+        async function setDefaultDnsCredential(id) {
+            try {
+                const response = await fetch('/prpc/Admin.SetDefaultDnsCredential', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ id: id })
+                });
+                if (!response.ok) throw new Error('Failed to set default');
+                showToast('Default credential updated', 'success');
+                await loadDnsCredentials();
+            } catch (e) {
+                showToast('Failed to set default: ' + e.message, 'error');
+            }
+        }
+
+        async function deleteDnsCredential(id) {
+            if (!confirm('Are you sure you want to delete this DNS credential?')) return;
+
+            try {
+                const response = await fetch('/prpc/Admin.DeleteDnsCredential', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ id: id })
+                });
+                if (!response.ok) {
+                    const err = await response.text();
+                    throw new Error(err);
+                }
+                showToast('DNS credential deleted', 'success');
+                await loadDnsCredentials();
+            } catch (e) {
+                showToast('Failed to delete: ' + e.message, 'error');
+            }
+        }
+
+        // ==================== ZT-Domains ====================
+
+        let ztDomains = [];
+
+        async function loadZtDomains() {
+            try {
+                const response = await fetch('/prpc/Admin.ListZtDomains', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: '{}'
+                });
+                const data = await response.json();
+                ztDomains = data.domains || [];
+                renderZtDomains(ztDomains);
+            } catch (e) {
+                document.getElementById('zt-domains').innerHTML =
+                    '<p style="color: #666;">Failed to load ZT-Domains</p>';
+            }
+        }
+
+        function renderZtDomains(domains) {
+            const container = document.getElementById('zt-domains');
+            if (domains.length === 0) {
+                container.innerHTML = '<p style="color: #666;">No ZT-Domains configured</p>';
+                return;
+            }
+
+            let html = `
+                <table>
+                    <tr>
+                        <th>Domain</th>
+                        <th>Port</th>
+                        <th>Node</th>
+                        <th>Priority</th>
+                        <th>DNS Credential</th>
+                        <th>Status</th>
+                        <th>Expires</th>
+                        <th>Actions</th>
+                    </tr>
+            `;
+
+            for (const item of domains) {
+                const config = item.config || {};
+                const certStatus = item.cert_status || {};
+                const hasCert = certStatus.has_cert;
+                const expiresAt = certStatus.not_after ? new Date(certStatus.not_after * 1000).toLocaleDateString() : 'N/A';
+                const dnsCredName = getDnsCredName(config.dns_cred_id);
+                const portDisplay = config.port ? config.port : '-';
+                const nodeDisplay = (config.node !== undefined && config.node !== null) ? `Node ${config.node}` : 'Any';
+                const priorityDisplay = config.priority || 0;
+
+                html += `
+                    <tr>
+                        <td>*.${escapeHtml(config.domain)}</td>
+                        <td>${portDisplay}</td>
+                        <td>${nodeDisplay}</td>
+                        <td>${priorityDisplay}</td>
+                        <td>${escapeHtml(dnsCredName)}</td>
+                        <td>
+                            <div class="cert-status">
+                                <span class="cert-status-item ${hasCert ? 'has-cert' : 'no-cert'}">
+                                    ${hasCert ? '✓ Certificate loaded' : '✗ No certificate'}
+                                </span>
+                                ${certStatus.loaded_in_memory ? '<span class="cert-status-item has-cert">✓ In memory</span>' : ''}
+                            </div>
+                        </td>
+                        <td class="timestamp" data-original="${expiresAt}">${certStatus.not_after || 0}</td>
+                        <td>
+                            <button class="action-btn secondary" onclick="showEditZtDomainModal('${escapeHtml(config.domain)}')">Edit</button>
+                            <button class="action-btn warning" onclick="renewZtDomainCert('${escapeHtml(config.domain)}', false)">Renew</button>
+                            <button class="action-btn secondary" onclick="renewZtDomainCert('${escapeHtml(config.domain)}', true)">Force Renew</button>
+                            <button class="action-btn danger" onclick="deleteZtDomain('${escapeHtml(config.domain)}')">Delete</button>
+                        </td>
+                    </tr>
+                `;
+            }
+
+            html += '</table>';
+            container.innerHTML = html;
+
+            // Apply timeAgo to expiry timestamps
+            const timestamps = container.querySelectorAll('.timestamp');
+            timestamps.forEach(cell => {
+                const timestamp = parseInt(cell.textContent);
+                if (!isNaN(timestamp) && timestamp > 0) {
+                    const date = new Date(timestamp * 1000);
+                    cell.setAttribute('data-original', date.toLocaleString());
+                    cell.textContent = date.toLocaleDateString();
+                }
+            });
+        }
+
+        function getDnsCredName(credId) {
+            if (!credId) return '(default)';
+            const cred = dnsCredentials.find(c => c.id === credId);
+            return cred ? cred.name : credId;
+        }
+
+        function showAddZtDomainModal() {
+            document.getElementById('domain-name').value = '';
+            document.getElementById('domain-dns-cred').value = '';
+            document.getElementById('domain-port').value = '443';
+            document.getElementById('domain-node').value = '0';
+            document.getElementById('domain-priority').value = '0';
+            showModal('add-zt-domain-modal');
+        }
+
+        function updateEditDnsCredSelect() {
+            const select = document.getElementById('edit-domain-dns-cred');
+            select.innerHTML = '<option value="">Use Default</option>';
+            for (const cred of dnsCredentials) {
+                const isDefault = cred.id === defaultDnsCredId;
+                select.innerHTML += `<option value="${cred.id}">${escapeHtml(cred.name)}${isDefault ? ' (default)' : ''}</option>`;
+            }
+        }
+
+        function showEditZtDomainModal(domain) {
+            const item = ztDomains.find(d => d.config && d.config.domain === domain);
+            if (!item) {
+                showToast('ZT-Domain not found', 'error');
+                return;
+            }
+
+            const config = item.config;
+            document.getElementById('edit-domain-original').value = config.domain;
+            document.getElementById('edit-domain-name').value = config.domain;
+            document.getElementById('edit-domain-port').value = config.port || 0;
+            document.getElementById('edit-domain-node').value = (config.node !== undefined && config.node !== null) ? config.node : 0;
+            document.getElementById('edit-domain-priority').value = config.priority || 0;
+
+            updateEditDnsCredSelect();
+            document.getElementById('edit-domain-dns-cred').value = config.dns_cred_id || '';
+
+            showModal('edit-zt-domain-modal');
+        }
+
+        async function updateZtDomain() {
+            const domain = document.getElementById('edit-domain-original').value;
+            const dnsCredId = document.getElementById('edit-domain-dns-cred').value;
+            const port = parseInt(document.getElementById('edit-domain-port').value) || 0;
+            const nodeInput = document.getElementById('edit-domain-node').value.trim();
+            const node = (nodeInput && nodeInput !== '0') ? parseInt(nodeInput) : null;
+            const priority = parseInt(document.getElementById('edit-domain-priority').value) || 0;
+
+            if (!domain) {
+                showToast('Domain is required', 'error');
+                return;
+            }
+
+            const body = {
+                domain: domain,
+                port: port,
+                priority: priority
+            };
+            // Only include dns_cred_id if not empty (empty means use default)
+            if (dnsCredId) {
+                body.dns_cred_id = dnsCredId;
+            }
+            if (node !== null && node > 0) {
+                body.node = node;
+            }
+
+            try {
+                const response = await fetch('/prpc/Admin.UpdateZtDomain', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body)
+                });
+                if (!response.ok) {
+                    const err = await response.text();
+                    throw new Error(err);
+                }
+                hideModal('edit-zt-domain-modal');
+                showToast('ZT-Domain updated', 'success');
+                await loadZtDomains();
+            } catch (e) {
+                showToast('Failed to update ZT-Domain: ' + e.message, 'error');
+            }
+        }
+
+        async function addZtDomain() {
+            const domain = document.getElementById('domain-name').value.trim();
+            const dnsCredId = document.getElementById('domain-dns-cred').value;
+            const port = parseInt(document.getElementById('domain-port').value) || 0;
+            const nodeInput = document.getElementById('domain-node').value.trim();
+            const node = nodeInput ? parseInt(nodeInput) : null;
+            const priority = parseInt(document.getElementById('domain-priority').value) || 0;
+
+            if (!domain) {
+                showToast('Domain is required', 'error');
+                return;
+            }
+
+            const body = {
+                domain: domain,
+                port: port,
+                priority: priority
+            };
+            // Only include dns_cred_id if not empty (empty means use default)
+            if (dnsCredId) {
+                body.dns_cred_id = dnsCredId;
+            }
+            if (node !== null && node > 0) {
+                body.node = node;
+            }
+
+            try {
+                const response = await fetch('/prpc/Admin.AddZtDomain', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body)
+                });
+                if (!response.ok) {
+                    const err = await response.text();
+                    throw new Error(err);
+                }
+                hideModal('add-zt-domain-modal');
+                showToast('ZT-Domain added', 'success');
+                await loadZtDomains();
+            } catch (e) {
+                showToast('Failed to add ZT-Domain: ' + e.message, 'error');
+            }
+        }
+
+        async function renewZtDomainCert(domain, force) {
+            const action = force ? 'force renew' : 'renew';
+            if (!confirm(`Are you sure you want to ${action} the certificate for ${domain}?`)) return;
+
+            try {
+                showToast(`Renewing certificate for ${domain}...`, 'success');
+                const response = await fetch('/prpc/Admin.RenewZtDomainCert', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        domain: domain,
+                        force: force
+                    })
+                });
+                if (!response.ok) {
+                    const err = await response.text();
+                    throw new Error(err);
+                }
+                const data = await response.json();
+                if (data.renewed) {
+                    showToast(`Certificate renewed for ${domain}`, 'success');
+                } else {
+                    showToast(`Certificate does not need renewal`, 'success');
+                }
+                await loadZtDomains();
+            } catch (e) {
+                showToast('Failed to renew: ' + e.message, 'error');
+            }
+        }
+
+        async function deleteZtDomain(domain) {
+            if (!confirm(`Are you sure you want to delete the ZT-Domain config for ${domain}?`)) return;
+
+            try {
+                const response = await fetch('/prpc/Admin.DeleteZtDomain', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ domain: domain })
+                });
+                if (!response.ok) {
+                    const err = await response.text();
+                    throw new Error(err);
+                }
+                showToast('ZT-Domain deleted', 'success');
+                await loadZtDomains();
+            } catch (e) {
+                showToast('Failed to delete: ' + e.message, 'error');
+            }
+        }
+
+        // ==================== UI Helpers ====================
+
+        function showModal(id) {
+            document.getElementById(id).classList.add('active');
+        }
+
+        function hideModal(id) {
+            document.getElementById(id).classList.remove('active');
+        }
+
+        function showToast(message, type) {
+            // Remove existing toasts
+            document.querySelectorAll('.toast').forEach(t => t.remove());
+
+            const toast = document.createElement('div');
+            toast.className = `toast ${type}`;
+            toast.textContent = message;
+            document.body.appendChild(toast);
+
+            setTimeout(() => toast.remove(), 3000);
+        }
+
+        function escapeHtml(text) {
+            if (!text) return '';
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        async function loadGlobalConnections() {
+            try {
+                const response = await fetch('/prpc/Admin.GetGlobalConnections', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: '{}'
+                });
+                const data = await response.json();
+                renderGlobalConnections(data);
+            } catch (e) {
+                document.getElementById('global-connections').innerHTML =
+                    '<p style="color: #666;">Global connection statistics unavailable</p>';
+            }
+        }
+
+        function renderGlobalConnections(data) {
+            const container = document.getElementById('global-connections');
+
+            let html = `
+                <table>
+                    <tr>
+                        <th colspan="2">Connection Summary</th>
+                    </tr>
+                    <tr>
+                        <td>Total Connections (Cluster-wide)</td>
+                        <td><strong>${data.total_connections || 0}</strong></td>
+                    </tr>
+                </table>
+            `;
+
+            if (data.node_connections && Object.keys(data.node_connections).length > 0) {
+                html += `
+                    <table>
+                        <tr>
+                            <th>Node ID</th>
+                            <th>Connections</th>
+                        </tr>
+                `;
+
+                for (const [nodeId, count] of Object.entries(data.node_connections)) {
+                    html += `
+                        <tr>
+                            <td>Node ${nodeId}</td>
+                            <td>${count}</td>
+                        </tr>
+                    `;
+                }
+
+                html += '</table>';
+            }
+
+            container.innerHTML = html;
+        }
+
+        async function loadNodeStatuses() {
+            try {
+                const response = await fetch('/prpc/Admin.GetNodeStatuses', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: '{}'
+                });
+                const data = await response.json();
+                renderNodeStatuses(data);
+            } catch (e) {
+                console.error('Failed to load node statuses:', e);
+            }
+        }
+
+        function renderNodeStatuses(data) {
+            if (!data.statuses || data.statuses.length === 0) {
+                return;
+            }
+
+            // Create a map of node_id -> status
+            const statusMap = {};
+            for (const entry of data.statuses) {
+                statusMap[entry.node_id] = entry.status;
+            }
+
+            // Update each node status cell
+            const statusCells = document.querySelectorAll('.node-status');
+            statusCells.forEach(cell => {
+                const nodeId = parseInt(cell.getAttribute('data-node-id'));
+                const status = statusMap[nodeId] || 'up'; // default to "up"
+                cell.textContent = status;
+                cell.className = 'node-status ' + status;
+            });
+        }
+
+        async function setNodeStatus(nodeId, status) {
+            try {
+                // Disable all buttons for this node
+                const buttons = document.querySelectorAll(`button[onclick*="setNodeStatus(${nodeId}"]`);
+                buttons.forEach(btn => btn.disabled = true);
+
+                const response = await fetch('/prpc/Admin.SetNodeStatus', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        id: nodeId,
+                        status: status
+                    })
+                });
+
+                if (!response.ok) {
+                    throw new Error('Failed to set node status');
+                }
+
+                // Reload node statuses to update the display
+                await loadNodeStatuses();
+
+                // Re-enable buttons
+                buttons.forEach(btn => btn.disabled = false);
+            } catch (e) {
+                console.error('Failed to set node status:', e);
+                alert('Failed to set node status: ' + e.message);
+
+                // Re-enable buttons on error
+                const buttons = document.querySelectorAll(`button[onclick*="setNodeStatus(${nodeId}"]`);
+                buttons.forEach(btn => btn.disabled = false);
+            }
+        }
+    </script>
 </body>
 
 </html>

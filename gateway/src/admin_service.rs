@@ -3,17 +3,31 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::sync::atomic::Ordering;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use dstack_gateway_rpc::{
     admin_server::{AdminRpc, AdminServer},
-    GetInfoRequest, GetInfoResponse, GetMetaResponse, HostInfo, RenewCertResponse, StatusResponse,
+    CertAttestationInfo, CertbotConfigResponse, CreateDnsCredentialRequest,
+    DeleteDnsCredentialRequest, DeleteZtDomainRequest, DnsCredentialInfo,
+    ForceReleaseCertLockRequest, GetDefaultDnsCredentialResponse, GetDnsCredentialRequest,
+    GetInfoRequest, GetInfoResponse, GetInstanceHandshakesRequest, GetInstanceHandshakesResponse,
+    GetMetaResponse, GetNodeStatusesResponse, GetZtDomainRequest, GlobalConnectionsStats,
+    HandshakeEntry, HostInfo, LastSeenEntry, ListCertAttestationsRequest,
+    ListCertAttestationsResponse, ListDnsCredentialsResponse, ListZtDomainsResponse,
+    NodeStatusEntry, PeerSyncStatus as ProtoPeerSyncStatus, RenewCertResponse,
+    RenewZtDomainCertRequest, RenewZtDomainCertResponse, SetCertbotConfigRequest,
+    SetDefaultDnsCredentialRequest, SetNodeStatusRequest, SetNodeUrlRequest, StatusResponse,
+    StoreSyncStatus, UpdateDnsCredentialRequest, WaveKvStatusResponse, ZtDomainCertStatus,
+    ZtDomainConfig as ProtoZtDomainConfig, ZtDomainInfo,
 };
 use ra_rpc::{CallContext, RpcCall};
+use tracing::info;
+use wavekv::node::NodeStatus as WaveKvNodeStatus;
 
 use crate::{
-    main_service::{encode_ts, Proxy},
+    kv::{DnsCredential, DnsProvider, NodeStatus, ZtDomainConfig},
+    main_service::Proxy,
     proxy::NUM_CONNECTIONS,
 };
 
@@ -23,34 +37,38 @@ pub struct AdminRpcHandler {
 
 impl AdminRpcHandler {
     pub(crate) async fn status(self) -> Result<StatusResponse> {
+        let (base_domain, _port) = self
+            .state
+            .kv_store()
+            .get_best_zt_domain()
+            .unwrap_or_default();
         let mut state = self.state.lock();
         state.refresh_state()?;
-        let base_domain = &state.config.proxy.base_domain;
         let hosts = state
             .state
             .instances
             .values()
-            .map(|instance| HostInfo {
-                instance_id: instance.id.clone(),
-                ip: instance.ip.to_string(),
-                app_id: instance.app_id.clone(),
-                base_domain: base_domain.clone(),
-                latest_handshake: encode_ts(instance.last_seen),
-                num_connections: instance.num_connections(),
+            .map(|instance| {
+                // Get global latest_handshake from KvStore (max across all nodes)
+                let latest_handshake = state
+                    .get_instance_latest_handshake(&instance.id)
+                    .unwrap_or(0);
+                HostInfo {
+                    instance_id: instance.id.clone(),
+                    ip: instance.ip.to_string(),
+                    app_id: instance.app_id.clone(),
+                    base_domain: base_domain.clone(),
+                    latest_handshake,
+                    num_connections: instance.num_connections(),
+                }
             })
             .collect::<Vec<_>>();
-        let nodes = state
-            .state
-            .nodes
-            .values()
-            .cloned()
-            .map(Into::into)
-            .collect::<Vec<_>>();
         Ok(StatusResponse {
+            id: state.config.sync.node_id,
             url: state.config.sync.my_url.clone(),
-            id: state.config.id(),
+            uuid: state.config.uuid(),
             bootnode_url: state.config.sync.bootnode.clone(),
-            nodes,
+            nodes: state.get_all_nodes(),
             hosts,
             num_connections: NUM_CONNECTIONS.load(Ordering::Relaxed),
         })
@@ -63,22 +81,19 @@ impl AdminRpc for AdminRpcHandler {
     }
 
     async fn renew_cert(self) -> Result<RenewCertResponse> {
-        let renewed = self.state.renew_cert(true).await?;
+        // Renew all domains with force=true
+        let renewed = self.state.renew_cert(None, true).await?;
         Ok(RenewCertResponse { renewed })
     }
 
     async fn set_caa(self) -> Result<()> {
-        self.state
-            .certbot
-            .as_ref()
-            .context("Certbot is not enabled")?
-            .set_caa()
-            .await?;
-        Ok(())
+        // TODO: Implement CAA setting for multi-domain certificates
+        // This requires iterating over all domain configurations and setting CAA records
+        bail!("set_caa is not implemented for multi-domain certificates yet");
     }
 
     async fn reload_cert(self) -> Result<()> {
-        self.state.reload_certificates()
+        self.state.reload_all_certs_from_kvstore()
     }
 
     async fn status(self) -> Result<StatusResponse> {
@@ -86,8 +101,12 @@ impl AdminRpc for AdminRpcHandler {
     }
 
     async fn get_info(self, request: GetInfoRequest) -> Result<GetInfoResponse> {
+        let (base_domain, _port) = self
+            .state
+            .kv_store()
+            .get_best_zt_domain()
+            .unwrap_or_default();
         let state = self.state.lock();
-        let base_domain = &state.config.proxy.base_domain;
         let handshakes = state.latest_handshakes(None)?;
 
         if let Some(instance) = state.state.instances.get(&request.id) {
@@ -95,7 +114,7 @@ impl AdminRpc for AdminRpcHandler {
                 instance_id: instance.id.clone(),
                 ip: instance.ip.to_string(),
                 app_id: instance.app_id.clone(),
-                base_domain: base_domain.clone(),
+                base_domain,
                 latest_handshake: {
                     let (ts, _) = handshakes
                         .get(&instance.public_key)
@@ -144,6 +163,500 @@ impl AdminRpc for AdminRpcHandler {
             online: online as u32,
         })
     }
+
+    async fn set_node_url(self, request: SetNodeUrlRequest) -> Result<()> {
+        let kv_store = self.state.kv_store();
+        kv_store.register_peer_url(request.id, &request.url)?;
+        info!("Updated peer URL: node {} -> {}", request.id, request.url);
+        Ok(())
+    }
+
+    async fn set_node_status(self, request: SetNodeStatusRequest) -> Result<()> {
+        let kv_store = self.state.kv_store();
+        let status = match request.status.as_str() {
+            "up" => NodeStatus::Up,
+            "down" => NodeStatus::Down,
+            _ => anyhow::bail!("invalid status: expected 'up' or 'down'"),
+        };
+        kv_store.set_node_status(request.id, status)?;
+        info!("Updated node status: node {} -> {:?}", request.id, status);
+        Ok(())
+    }
+
+    async fn wave_kv_status(self) -> Result<WaveKvStatusResponse> {
+        let kv_store = self.state.kv_store();
+
+        let persistent_status = kv_store.persistent().read().status();
+        let ephemeral_status = kv_store.ephemeral().read().status();
+
+        let get_peer_last_seen = |peer_id: u32| -> Vec<(u32, u64)> {
+            kv_store
+                .get_node_last_seen_by_all(peer_id)
+                .into_iter()
+                .collect()
+        };
+
+        Ok(WaveKvStatusResponse {
+            enabled: self.state.config.sync.enabled,
+            persistent: Some(build_store_status(
+                "persistent",
+                persistent_status,
+                &get_peer_last_seen,
+            )),
+            ephemeral: Some(build_store_status(
+                "ephemeral",
+                ephemeral_status,
+                &get_peer_last_seen,
+            )),
+        })
+    }
+
+    async fn get_instance_handshakes(
+        self,
+        request: GetInstanceHandshakesRequest,
+    ) -> Result<GetInstanceHandshakesResponse> {
+        let kv_store = self.state.kv_store();
+        let handshakes = kv_store.get_instance_handshakes(&request.instance_id);
+
+        let entries = handshakes
+            .into_iter()
+            .map(|(observer_node_id, timestamp)| HandshakeEntry {
+                observer_node_id,
+                timestamp,
+            })
+            .collect();
+
+        Ok(GetInstanceHandshakesResponse {
+            handshakes: entries,
+        })
+    }
+
+    async fn get_global_connections(self) -> Result<GlobalConnectionsStats> {
+        let state = self.state.lock();
+        let kv_store = self.state.kv_store();
+
+        let mut node_connections = std::collections::HashMap::new();
+        let mut total_connections = 0u64;
+
+        // Iterate through all instances and sum up connections per node
+        for instance_id in state.state.instances.keys() {
+            // Get connection counts from ephemeral KV for this instance
+            let conn_prefix = format!("conn/{}/", instance_id);
+            for (key, count) in kv_store
+                .ephemeral()
+                .read()
+                .iter_by_prefix(&conn_prefix)
+                .filter_map(|(k, entry)| {
+                    let value = entry.value.as_ref()?;
+                    let count: u64 = rmp_serde::decode::from_slice(value).ok()?;
+                    Some((k.to_string(), count))
+                })
+            {
+                // Parse node_id from key: "conn/{instance_id}/{node_id}"
+                if let Some(node_id_str) = key.strip_prefix(&conn_prefix) {
+                    if let Ok(node_id) = node_id_str.parse::<u32>() {
+                        *node_connections.entry(node_id).or_insert(0) += count;
+                        total_connections += count;
+                    }
+                }
+            }
+        }
+
+        Ok(GlobalConnectionsStats {
+            total_connections,
+            node_connections,
+        })
+    }
+
+    async fn get_node_statuses(self) -> Result<GetNodeStatusesResponse> {
+        let kv_store = self.state.kv_store();
+        let statuses = kv_store.load_all_node_statuses();
+
+        let entries = statuses
+            .into_iter()
+            .map(|(node_id, status)| {
+                let status_str = match status {
+                    NodeStatus::Up => "up",
+                    NodeStatus::Down => "down",
+                };
+                NodeStatusEntry {
+                    node_id,
+                    status: status_str.to_string(),
+                }
+            })
+            .collect();
+
+        Ok(GetNodeStatusesResponse { statuses: entries })
+    }
+
+    // ==================== DNS Credential Management ====================
+
+    async fn list_dns_credentials(self) -> Result<ListDnsCredentialsResponse> {
+        let kv_store = self.state.kv_store();
+        let credentials = kv_store
+            .list_dns_credentials()
+            .into_iter()
+            .map(dns_cred_to_proto)
+            .collect();
+        let default_id = kv_store.get_default_dns_credential_id();
+        Ok(ListDnsCredentialsResponse {
+            credentials,
+            default_id,
+        })
+    }
+
+    async fn get_dns_credential(
+        self,
+        request: GetDnsCredentialRequest,
+    ) -> Result<DnsCredentialInfo> {
+        let kv_store = self.state.kv_store();
+        let cred = kv_store
+            .get_dns_credential(&request.id)
+            .context("dns credential not found")?;
+        Ok(dns_cred_to_proto(cred))
+    }
+
+    async fn create_dns_credential(
+        self,
+        request: CreateDnsCredentialRequest,
+    ) -> Result<DnsCredentialInfo> {
+        let kv_store = self.state.kv_store();
+
+        // Validate provider type
+        let provider = match request.provider_type.as_str() {
+            "cloudflare" => DnsProvider::Cloudflare {
+                api_token: request.cf_api_token,
+                api_url: request.cf_api_url,
+            },
+            _ => bail!("unsupported provider type: {}", request.provider_type),
+        };
+
+        let now = now_secs();
+        let id = generate_cred_id();
+        let dns_txt_ttl = request.dns_txt_ttl.unwrap_or(60);
+        let max_dns_wait = Duration::from_secs(request.max_dns_wait.unwrap_or(60 * 5).into());
+        let cred = DnsCredential {
+            id: id.clone(),
+            name: request.name,
+            provider,
+            created_at: now,
+            updated_at: now,
+            dns_txt_ttl,
+            max_dns_wait,
+        };
+
+        kv_store.save_dns_credential(&cred)?;
+        info!("Created DNS credential: {} ({})", cred.name, cred.id);
+
+        // Set as default if requested
+        if request.set_as_default {
+            kv_store.set_default_dns_credential_id(&id)?;
+            info!("Set DNS credential {} as default", id);
+        }
+
+        Ok(dns_cred_to_proto(cred))
+    }
+
+    async fn update_dns_credential(
+        self,
+        request: UpdateDnsCredentialRequest,
+    ) -> Result<DnsCredentialInfo> {
+        let kv_store = self.state.kv_store();
+
+        let mut cred = kv_store
+            .get_dns_credential(&request.id)
+            .context("dns credential not found")?;
+
+        // Update name if provided
+        if let Some(name) = request.name {
+            cred.name = name;
+        }
+
+        // Update provider fields if provided
+        match &mut cred.provider {
+            DnsProvider::Cloudflare { api_token, api_url } => {
+                if let Some(new_token) = request.cf_api_token {
+                    *api_token = new_token;
+                }
+                if let Some(new_url) = request.cf_api_url {
+                    *api_url = Some(new_url);
+                }
+            }
+        }
+
+        cred.updated_at = now_secs();
+        kv_store.save_dns_credential(&cred)?;
+        info!("Updated DNS credential: {} ({})", cred.name, cred.id);
+
+        Ok(dns_cred_to_proto(cred))
+    }
+
+    async fn delete_dns_credential(self, request: DeleteDnsCredentialRequest) -> Result<()> {
+        let kv_store = self.state.kv_store();
+
+        // Check if this is the default credential
+        if let Some(default_id) = kv_store.get_default_dns_credential_id() {
+            if default_id == request.id {
+                bail!("cannot delete the default DNS credential; set a different default first");
+            }
+        }
+
+        // Check if any ZT-Domain configs reference this credential
+        let configs = kv_store.list_zt_domain_configs();
+        for config in configs {
+            if config.dns_cred_id.as_deref() == Some(&request.id) {
+                bail!(
+                    "cannot delete DNS credential: domain {} uses it",
+                    config.domain
+                );
+            }
+        }
+
+        kv_store.delete_dns_credential(&request.id)?;
+        info!("Deleted DNS credential: {}", request.id);
+        Ok(())
+    }
+
+    async fn get_default_dns_credential(self) -> Result<GetDefaultDnsCredentialResponse> {
+        let kv_store = self.state.kv_store();
+        let default_id = kv_store.get_default_dns_credential_id().unwrap_or_default();
+        let credential = kv_store.get_default_dns_credential().map(dns_cred_to_proto);
+        Ok(GetDefaultDnsCredentialResponse {
+            default_id,
+            credential,
+        })
+    }
+
+    async fn set_default_dns_credential(
+        self,
+        request: SetDefaultDnsCredentialRequest,
+    ) -> Result<()> {
+        let kv_store = self.state.kv_store();
+
+        // Verify the credential exists
+        kv_store
+            .get_dns_credential(&request.id)
+            .context("dns credential not found")?;
+
+        kv_store.set_default_dns_credential_id(&request.id)?;
+        info!("Set default DNS credential: {}", request.id);
+        Ok(())
+    }
+
+    // ==================== ZT-Domain Management ====================
+
+    async fn list_zt_domains(self) -> Result<ListZtDomainsResponse> {
+        let kv_store = self.state.kv_store();
+        let cert_resolver = &self.state.cert_resolver;
+
+        let domains = kv_store
+            .list_zt_domain_configs()
+            .into_iter()
+            .map(|config| zt_domain_to_proto(config, kv_store, cert_resolver))
+            .collect();
+
+        Ok(ListZtDomainsResponse { domains })
+    }
+
+    async fn get_zt_domain(self, request: GetZtDomainRequest) -> Result<ZtDomainInfo> {
+        let kv_store = self.state.kv_store();
+        let cert_resolver = &self.state.cert_resolver;
+
+        let config = kv_store
+            .get_zt_domain_config(&request.domain)
+            .context("ZT-Domain config not found")?;
+
+        Ok(zt_domain_to_proto(config, kv_store, cert_resolver))
+    }
+
+    async fn add_zt_domain(self, request: ProtoZtDomainConfig) -> Result<ZtDomainInfo> {
+        let kv_store = self.state.kv_store();
+        let cert_resolver = &self.state.cert_resolver;
+
+        // Check if domain already exists
+        if kv_store.get_zt_domain_config(&request.domain).is_some() {
+            bail!("ZT-Domain config already exists: {}", request.domain);
+        }
+
+        let config = proto_to_zt_domain_config(&request, kv_store)?;
+
+        kv_store.save_zt_domain_config(&config)?;
+        info!("Added ZT-Domain config: {}", config.domain);
+
+        Ok(zt_domain_to_proto(config, kv_store, cert_resolver))
+    }
+
+    async fn update_zt_domain(self, request: ProtoZtDomainConfig) -> Result<ZtDomainInfo> {
+        let kv_store = self.state.kv_store();
+        let cert_resolver = &self.state.cert_resolver;
+
+        // Check if config exists
+        kv_store
+            .get_zt_domain_config(&request.domain)
+            .context("ZT-Domain config not found")?;
+
+        let config = proto_to_zt_domain_config(&request, kv_store)?;
+
+        kv_store.save_zt_domain_config(&config)?;
+        info!("Updated ZT-Domain config: {}", config.domain);
+
+        Ok(zt_domain_to_proto(config, kv_store, cert_resolver))
+    }
+
+    async fn delete_zt_domain(self, request: DeleteZtDomainRequest) -> Result<()> {
+        let kv_store = self.state.kv_store();
+
+        // Check if config exists
+        kv_store
+            .get_zt_domain_config(&request.domain)
+            .context("ZT-Domain config not found")?;
+
+        // Delete config (cert data, acme, attestations are kept for historical purposes)
+        kv_store.delete_zt_domain_config(&request.domain)?;
+        info!("Deleted ZT-Domain config: {}", request.domain);
+        Ok(())
+    }
+
+    async fn renew_zt_domain_cert(
+        self,
+        request: RenewZtDomainCertRequest,
+    ) -> Result<RenewZtDomainCertResponse> {
+        let certbot = &self.state.certbot;
+        let renewed = certbot
+            .try_renew(&request.domain, request.force)
+            .await
+            .context("certificate renewal failed")?;
+
+        if renewed {
+            // Get the new certificate data for response
+            let kv_store = self.state.kv_store();
+            let cert_data = kv_store.get_cert_data(&request.domain);
+            let not_after = cert_data.map(|d| d.not_after).unwrap_or(0);
+            Ok(RenewZtDomainCertResponse { renewed, not_after })
+        } else {
+            Ok(RenewZtDomainCertResponse {
+                renewed: false,
+                not_after: 0,
+            })
+        }
+    }
+
+    async fn force_release_cert_lock(self, request: ForceReleaseCertLockRequest) -> Result<()> {
+        let kv_store = self.state.kv_store();
+        kv_store.release_cert_lock(&request.domain)?;
+        info!(
+            "Force released certificate lock for domain: {}",
+            request.domain
+        );
+        Ok(())
+    }
+
+    async fn list_cert_attestations(
+        self,
+        request: ListCertAttestationsRequest,
+    ) -> Result<ListCertAttestationsResponse> {
+        let kv_store = self.state.kv_store();
+
+        let latest = kv_store
+            .get_cert_attestation_latest(&request.domain)
+            .map(|att| CertAttestationInfo {
+                public_key: att.public_key,
+                quote: att.quote,
+                generated_by: att.generated_by,
+                generated_at: att.generated_at,
+            });
+
+        let mut history: Vec<CertAttestationInfo> = kv_store
+            .list_cert_attestations(&request.domain)
+            .into_iter()
+            .map(|att| CertAttestationInfo {
+                public_key: att.public_key,
+                quote: att.quote,
+                generated_by: att.generated_by,
+                generated_at: att.generated_at,
+            })
+            .collect();
+
+        // Apply limit if specified
+        if request.limit > 0 {
+            history.truncate(request.limit as usize);
+        }
+
+        Ok(ListCertAttestationsResponse { latest, history })
+    }
+
+    // ==================== Global Certbot Configuration ====================
+
+    async fn get_certbot_config(self) -> Result<CertbotConfigResponse> {
+        let config = self.state.kv_store().get_certbot_config();
+        Ok(CertbotConfigResponse {
+            renew_interval_secs: config.renew_interval.as_secs(),
+            renew_before_expiration_secs: config.renew_before_expiration.as_secs(),
+            renew_timeout_secs: config.renew_timeout.as_secs(),
+            acme_url: config.acme_url,
+        })
+    }
+
+    async fn set_certbot_config(self, request: SetCertbotConfigRequest) -> Result<()> {
+        let kv_store = self.state.kv_store();
+        let mut config = kv_store.get_certbot_config();
+
+        // Update only the fields that are specified
+        if let Some(secs) = request.renew_interval_secs {
+            config.renew_interval = Duration::from_secs(secs);
+        }
+        if let Some(secs) = request.renew_before_expiration_secs {
+            config.renew_before_expiration = Duration::from_secs(secs);
+        }
+        if let Some(secs) = request.renew_timeout_secs {
+            config.renew_timeout = Duration::from_secs(secs);
+        }
+        if let Some(url) = request.acme_url {
+            config.acme_url = url;
+        }
+
+        kv_store.set_certbot_config(&config)?;
+        info!(
+            "Updated certbot config: renew_interval={:?}, renew_before_expiration={:?}, renew_timeout={:?}, acme_url={:?}",
+            config.renew_interval,
+            config.renew_before_expiration,
+            config.renew_timeout,
+            config.acme_url
+        );
+        Ok(())
+    }
+}
+
+fn build_store_status(
+    name: &str,
+    status: WaveKvNodeStatus,
+    get_peer_last_seen: &impl Fn(u32) -> Vec<(u32, u64)>,
+) -> StoreSyncStatus {
+    StoreSyncStatus {
+        name: name.to_string(),
+        node_id: status.id,
+        n_keys: status.n_kvs as u64,
+        next_seq: status.next_seq,
+        dirty: status.dirty,
+        wal_enabled: status.wal,
+        peers: status
+            .peers
+            .into_iter()
+            .map(|p| {
+                let last_seen = get_peer_last_seen(p.id)
+                    .into_iter()
+                    .map(|(node_id, timestamp)| LastSeenEntry { node_id, timestamp })
+                    .collect();
+                ProtoPeerSyncStatus {
+                    id: p.id,
+                    local_ack: p.ack,
+                    peer_ack: p.pack,
+                    buffered_logs: p.logs as u64,
+                    last_seen,
+                }
+            })
+            .collect(),
+    }
 }
 
 impl RpcCall<Proxy> for AdminRpcHandler {
@@ -153,5 +666,111 @@ impl RpcCall<Proxy> for AdminRpcHandler {
         Ok(AdminRpcHandler {
             state: context.state.clone(),
         })
+    }
+}
+
+// ==================== Helper Functions ====================
+
+fn now_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+fn generate_cred_id() -> String {
+    use std::time::SystemTime;
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    // Simple ID: timestamp + random suffix
+    let random: u32 = rand::random();
+    format!("{:x}{:08x}", ts, random)
+}
+
+fn dns_cred_to_proto(cred: DnsCredential) -> DnsCredentialInfo {
+    let (provider_type, cf_api_token, cf_api_url) = match &cred.provider {
+        DnsProvider::Cloudflare { api_token, api_url } => (
+            "cloudflare".to_string(),
+            api_token.clone(),
+            api_url.clone().unwrap_or_default(),
+        ),
+    };
+    DnsCredentialInfo {
+        id: cred.id,
+        name: cred.name,
+        provider_type,
+        cf_api_token,
+        cf_api_url,
+        created_at: cred.created_at,
+        updated_at: cred.updated_at,
+        dns_txt_ttl: Some(cred.dns_txt_ttl),
+        max_dns_wait: Some(cred.max_dns_wait.as_secs() as u32),
+    }
+}
+
+/// Convert proto ZtDomainConfig to internal ZtDomainConfig
+fn proto_to_zt_domain_config(
+    proto: &ProtoZtDomainConfig,
+    kv_store: &crate::kv::KvStore,
+) -> Result<ZtDomainConfig> {
+    // Normalize dns_cred_id: treat empty string as None (use default)
+    let dns_cred_id = proto
+        .dns_cred_id
+        .as_ref()
+        .filter(|s| !s.is_empty())
+        .cloned();
+
+    // Validate DNS credential if specified
+    if let Some(ref cred_id) = dns_cred_id {
+        kv_store
+            .get_dns_credential(cred_id)
+            .context("specified dns credential not found")?;
+    }
+
+    // Strip wildcard prefix if user entered it
+    let domain = proto
+        .domain
+        .strip_prefix("*.")
+        .unwrap_or(&proto.domain)
+        .to_string();
+
+    Ok(ZtDomainConfig {
+        domain,
+        dns_cred_id,
+        port: proto.port.try_into().context("port out of range")?,
+        node: proto.node,
+        priority: proto.priority,
+    })
+}
+
+/// Convert internal ZtDomainConfig to proto ZtDomainInfo (with cert status)
+fn zt_domain_to_proto(
+    config: ZtDomainConfig,
+    kv_store: &crate::kv::KvStore,
+    cert_resolver: &crate::cert_store::CertResolver,
+) -> ZtDomainInfo {
+    // Get certificate data for status
+    let cert_data = kv_store.get_cert_data(&config.domain);
+    let loaded_in_memory = cert_resolver.has_cert(&config.domain);
+
+    let cert_status = Some(ZtDomainCertStatus {
+        has_cert: cert_data.is_some(),
+        not_after: cert_data.as_ref().map(|d| d.not_after).unwrap_or(0),
+        issued_by: cert_data.as_ref().map(|d| d.issued_by).unwrap_or(0),
+        issued_at: cert_data.as_ref().map(|d| d.issued_at).unwrap_or(0),
+        loaded_in_memory,
+    });
+
+    ZtDomainInfo {
+        config: Some(ProtoZtDomainConfig {
+            domain: config.domain,
+            dns_cred_id: config.dns_cred_id,
+            port: config.port.into(),
+            node: config.node,
+            priority: config.priority,
+        }),
+        cert_status,
     }
 }

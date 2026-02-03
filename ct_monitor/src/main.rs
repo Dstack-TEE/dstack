@@ -413,7 +413,7 @@ async fn main() -> anyhow::Result<()> {
     {
         use tracing_subscriber::{fmt, EnvFilter};
         let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-        fmt().with_env_filter(filter).init();
+        fmt().with_env_filter(filter).with_ansi(false).init();
     }
     let args = Args::parse();
     let mut monitor = Monitor::new(args.gateway, args.verifier_url, args.pccs_url)?;

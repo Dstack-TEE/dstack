@@ -12,11 +12,13 @@ use std::{
 };
 
 use anyhow::{bail, Context, Result};
+use or_panic::ResultOrPanic;
 use sni::extract_sni;
-pub(crate) use tls_terminate::create_acceptor;
+pub(crate) use tls_terminate::create_acceptor_with_cert_resolver;
 use tokio::{
     io::AsyncReadExt,
     net::{TcpListener, TcpStream},
+    runtime::Runtime,
     time::timeout,
 };
 use tracing::{debug, error, info, info_span, Instrument};
@@ -61,10 +63,6 @@ async fn take_sni(stream: &mut TcpStream) -> Result<(Option<String>, Vec<u8>)> {
     Ok((None, buffer))
 }
 
-fn is_subdomain(sni: &str, base_domain: &str) -> bool {
-    sni.ends_with(base_domain)
-}
-
 #[derive(Debug)]
 struct DstInfo {
     app_id: String,
@@ -73,14 +71,7 @@ struct DstInfo {
     is_h2: bool,
 }
 
-fn parse_destination(sni: &str, dotted_base_domain: &str) -> Result<DstInfo> {
-    // format: <app_id>[-<port>][s].<base_domain>
-    let subdomain = sni
-        .strip_suffix(dotted_base_domain)
-        .context("invalid sni format")?;
-    if subdomain.contains('.') {
-        bail!("only one level of subdomain is supported, got sni={sni}, subdomain={subdomain}");
-    }
+fn parse_dst_info(subdomain: &str) -> Result<DstInfo> {
     let mut parts = subdomain.split('-');
     let app_id = parts.next().context("no app id found")?.to_owned();
     if app_id.is_empty() {
@@ -132,11 +123,7 @@ fn parse_destination(sni: &str, dotted_base_domain: &str) -> Result<DstInfo> {
 
 pub static NUM_CONNECTIONS: AtomicU64 = AtomicU64::new(0);
 
-async fn handle_connection(
-    mut inbound: TcpStream,
-    state: Proxy,
-    dotted_base_domain: &str,
-) -> Result<()> {
+async fn handle_connection(mut inbound: TcpStream, state: Proxy) -> Result<()> {
     let timeouts = &state.config.proxy.timeouts;
     let (sni, buffer) = timeout(timeouts.handshake, take_sni(&mut inbound))
         .await
@@ -145,8 +132,10 @@ async fn handle_connection(
     let Some(sni) = sni else {
         bail!("no sni found");
     };
-    if is_subdomain(&sni, dotted_base_domain) {
-        let dst = parse_destination(&sni, dotted_base_domain)?;
+
+    let (subdomain, base_domain) = sni.split_once('.').context("invalid sni")?;
+    if state.cert_resolver.get().contains_wildcard(base_domain) {
+        let dst = parse_dst_info(subdomain)?;
         debug!("dst: {dst:?}");
         if dst.is_tls {
             tls_passthough::proxy_to_app(state, inbound, buffer, &dst.app_id, dst.port).await
@@ -161,19 +150,7 @@ async fn handle_connection(
 }
 
 #[inline(never)]
-pub async fn proxy_main(config: &ProxyConfig, proxy: Proxy) -> Result<()> {
-    let workers_rt = tokio::runtime::Builder::new_multi_thread()
-        .thread_name("proxy-worker")
-        .enable_all()
-        .worker_threads(config.workers)
-        .build()
-        .context("Failed to build Tokio runtime")?;
-
-    let dotted_base_domain = {
-        let base_domain = config.base_domain.as_str();
-        let base_domain = base_domain.strip_prefix(".").unwrap_or(base_domain);
-        Arc::new(format!(".{base_domain}"))
-    };
+pub async fn proxy_main(rt: &Runtime, config: &ProxyConfig, proxy: Proxy) -> Result<()> {
     let mut tcp_listeners = Vec::new();
     for &port in &config.listen_port {
         let listener = TcpListener::bind((config.listen_addr, port))
@@ -210,16 +187,12 @@ pub async fn proxy_main(config: &ProxyConfig, proxy: Proxy) -> Result<()> {
 
                 info!(%from, "new connection");
                 let proxy = proxy.clone();
-                let dotted_base_domain = dotted_base_domain.clone();
-                workers_rt.spawn(
+                rt.spawn(
                     async move {
                         let _conn_entered = conn_entered;
                         let timeouts = &proxy.config.proxy.timeouts;
-                        let result = timeout(
-                            timeouts.total,
-                            handle_connection(inbound, proxy, &dotted_base_domain),
-                        )
-                        .await;
+                        let result =
+                            timeout(timeouts.total, handle_connection(inbound, proxy)).await;
                         match result {
                             Ok(Ok(_)) => {
                                 info!("connection closed");
@@ -248,17 +221,24 @@ fn next_connection_id() -> usize {
 }
 
 pub fn start(config: ProxyConfig, app_state: Proxy) -> Result<()> {
-    // Create a new single-threaded runtime
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .context("Failed to build Tokio runtime")?;
-
     std::thread::Builder::new()
         .name("proxy-main".to_string())
         .spawn(move || {
+            // Create a new single-threaded runtime
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .or_panic("Failed to build Tokio runtime");
+
+            let worker_rt = tokio::runtime::Builder::new_multi_thread()
+                .thread_name("proxy-worker")
+                .enable_all()
+                .worker_threads(config.workers)
+                .build()
+                .or_panic("Failed to build Tokio runtime");
+
             // Run the proxy_main function in this runtime
-            if let Err(err) = rt.block_on(proxy_main(&config, app_state)) {
+            if let Err(err) = rt.block_on(proxy_main(&worker_rt, &config, app_state)) {
                 error!(
                     "error on {}:{:?}: {err:?}",
                     config.listen_addr, config.listen_port
@@ -275,64 +255,40 @@ mod tests {
 
     #[test]
     fn test_parse_destination() {
-        let base_domain = ".example.com";
-
         // Test basic app_id only
-        let result = parse_destination("myapp.example.com", base_domain).unwrap();
+        let result = parse_dst_info("myapp").unwrap();
         assert_eq!(result.app_id, "myapp");
         assert_eq!(result.port, 80);
         assert!(!result.is_tls);
 
         // Test app_id with custom port
-        let result = parse_destination("myapp-8080.example.com", base_domain).unwrap();
+        let result = parse_dst_info("myapp-8080").unwrap();
         assert_eq!(result.app_id, "myapp");
         assert_eq!(result.port, 8080);
         assert!(!result.is_tls);
 
         // Test app_id with TLS
-        let result = parse_destination("myapp-443s.example.com", base_domain).unwrap();
+        let result = parse_dst_info("myapp-443s").unwrap();
         assert_eq!(result.app_id, "myapp");
         assert_eq!(result.port, 443);
         assert!(result.is_tls);
 
         // Test app_id with custom port and TLS
-        let result = parse_destination("myapp-8443s.example.com", base_domain).unwrap();
+        let result = parse_dst_info("myapp-8443s").unwrap();
         assert_eq!(result.app_id, "myapp");
         assert_eq!(result.port, 8443);
         assert!(result.is_tls);
 
         // Test default port but ends with s
-        let result = parse_destination("myapps.example.com", base_domain).unwrap();
+        let result = parse_dst_info("myapps").unwrap();
         assert_eq!(result.app_id, "myapps");
         assert_eq!(result.port, 80);
         assert!(!result.is_tls);
 
         // Test default port but ends with s in port part
-        let result = parse_destination("myapp-s.example.com", base_domain).unwrap();
+        let result = parse_dst_info("myapp-s").unwrap();
         assert_eq!(result.app_id, "myapp");
         assert_eq!(result.port, 443);
         assert!(result.is_tls);
-    }
-
-    #[test]
-    fn test_parse_destination_errors() {
-        let base_domain = ".example.com";
-
-        // Test invalid domain suffix
-        assert!(parse_destination("myapp.wrong.com", base_domain).is_err());
-
-        // Test multiple subdomains
-        assert!(parse_destination("invalid.myapp.example.com", base_domain).is_err());
-
-        // Test invalid port format
-        assert!(parse_destination("myapp-65536.example.com", base_domain).is_err());
-        assert!(parse_destination("myapp-abc.example.com", base_domain).is_err());
-
-        // Test too many parts
-        assert!(parse_destination("myapp-8080-extra.example.com", base_domain).is_err());
-
-        // Test empty app_id
-        assert!(parse_destination("-8080.example.com", base_domain).is_err());
-        assert!(parse_destination("myapp-8080ss.example.com", base_domain).is_err());
     }
 }

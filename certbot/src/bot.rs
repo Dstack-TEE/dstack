@@ -28,6 +28,7 @@ pub struct CertBotConfig {
     credentials_file: PathBuf,
     auto_create_account: bool,
     cf_api_token: String,
+    cf_api_url: Option<String>,
     cert_file: PathBuf,
     key_file: PathBuf,
     cert_dir: PathBuf,
@@ -94,8 +95,12 @@ impl CertBot {
             .trim_start_matches("*.")
             .trim_end_matches('.')
             .to_string();
-        let dns01_client =
-            Dns01Client::new_cloudflare(config.cf_api_token.clone(), base_domain).await?;
+        let dns01_client = Dns01Client::new_cloudflare(
+            base_domain,
+            config.cf_api_token.clone(),
+            config.cf_api_url.clone(),
+        )
+        .await?;
         let acme_client = match fs::read_to_string(&config.credentials_file) {
             Ok(credentials) => {
                 if acme_matches(&credentials, &config.acme_url) {

@@ -21,6 +21,7 @@ use tracing::{debug, error, info};
 use x509_parser::prelude::{GeneralName, Pem};
 
 use super::dns01_client::{Dns01Api, Dns01Client};
+use super::http_client::ReqwestHttpClient;
 
 /// A AcmeClient instance.
 pub struct AcmeClient {
@@ -63,7 +64,9 @@ impl AcmeClient {
         dns_txt_ttl: u32,
     ) -> Result<Self> {
         let credentials: Credentials = serde_json::from_str(encoded_credentials)?;
-        let account = Account::from_credentials(credentials.credentials).await?;
+        let http_client = Box::new(ReqwestHttpClient::new()?);
+        let account =
+            Account::from_credentials_and_http(credentials.credentials, http_client).await?;
         let credentials: Credentials = serde_json::from_str(encoded_credentials)?;
         Ok(Self {
             account,
@@ -81,7 +84,8 @@ impl AcmeClient {
         max_dns_wait: Duration,
         dns_txt_ttl: u32,
     ) -> Result<Self> {
-        let (account, credentials) = Account::create(
+        let http_client = Box::new(ReqwestHttpClient::new()?);
+        let (account, credentials) = Account::create_with_http(
             &NewAccount {
                 contact: &[],
                 terms_of_service_agreed: true,
@@ -89,6 +93,7 @@ impl AcmeClient {
             },
             acme_url,
             None,
+            http_client,
         )
         .await
         .with_context(|| format!("failed to create ACME account for {acme_url}"))?;
