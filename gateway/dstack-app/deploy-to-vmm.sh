@@ -142,9 +142,10 @@ if [ -z "$RPC_DOMAIN" ]; then
 fi
 
 # Calculate WireGuard IP allocation from SUBNET_INDEX
-WG_IP="10.4.0.$((SUBNET_INDEX + 1))/16"
-WG_RESERVED_NET="10.4.0.0/27"
-WG_CLIENT_RANGE="10.4.$((SUBNET_INDEX * 16)).0/20"
+WG_IP_PREFIX="10.$((SUBNET_INDEX + 240)).0"
+WG_IP="${WG_IP_PREFIX}.1/12"
+WG_RESERVED_NET="${WG_IP_PREFIX}.1/32"
+WG_CLIENT_RANGE="${WG_IP_PREFIX}.0/16"
 
 # Calculate listen port for proxy
 if [ "${GATEWAY_SERVING_NUM_PORTS:-1}" -gt 1 ]; then
