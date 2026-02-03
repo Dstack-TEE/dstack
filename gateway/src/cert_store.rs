@@ -57,21 +57,16 @@ impl CertStore {
     fn resolve_cert(&self, sni: &str) -> Option<Arc<CertifiedKey>> {
         // 1. Try exact match first
         if let Some(cert) = self.exact_certs.get(sni) {
-            debug!("exact match for {sni}");
             return Some(cert.clone());
         }
 
         // 2. Try wildcard match (only one level deep per TLS spec)
         // For "foo.bar.example.com", only try "bar.example.com"
         if let Some((_, parent)) = sni.split_once('.') {
-            if let Some(cert) = self.wildcard_certs.get(parent) {
-                debug!("wildcard match *.{parent} for {sni}");
-                return Some(cert.clone());
-            }
+            self.wildcard_certs.get(parent).cloned()
+        } else {
+            None
         }
-
-        debug!("no certificate found for {sni}");
-        None
     }
 
     /// Check if a certificate exists for a domain
