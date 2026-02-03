@@ -133,7 +133,7 @@ serde_ini = "0.2.0"
 toml = "0.8.20"
 toml_edit = { version = "0.22.24", features = ["serde"] }
 yasna = "0.5.2"
-bytes = "1.10.1"
+bytes = "1.11.1"
 nom = "7.1"
 figment = "0.10.19"
 object = "0.36.4"
