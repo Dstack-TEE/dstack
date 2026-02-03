@@ -25,7 +25,7 @@ use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::server::{ClientHello, ResolvesServerCert};
 use rustls::sign::CertifiedKey;
-use tracing::{debug, info};
+use tracing::info;
 
 use crate::kv::CertData;
 

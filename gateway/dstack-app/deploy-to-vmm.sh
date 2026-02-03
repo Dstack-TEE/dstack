@@ -91,9 +91,6 @@ GATEWAY_SERVING_NUM_PORTS=1
 GUEST_AGENT_ADDR=127.0.0.1:9206
 WG_ADDR=0.0.0.0:9202
 
-CERTBOT_MAX_DNS_WAIT=5m
-CERTBOT_DNS_TXT_TTL=60
-
 # The token used to launch the App
 APP_LAUNCH_TOKEN=$(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 32 | head -n 1)
 
@@ -113,6 +110,7 @@ required_env_vars=(
   "MY_URL"
   "APP_LAUNCH_TOKEN"
   "NODE_ID"
+  "KMS_URL"
   # "BOOTNODE_URL"
 )
 
@@ -137,25 +135,39 @@ subvar() {
 }
 
 subvar GATEWAY_IMAGE
-subvar ACME_STAGING
+
+# Default RPC_DOMAIN from SRV_DOMAIN if not set
+if [ -z "$RPC_DOMAIN" ]; then
+  RPC_DOMAIN="gateway.$SRV_DOMAIN"
+fi
+
+# Calculate WireGuard IP allocation from SUBNET_INDEX
+WG_IP="10.4.0.$((SUBNET_INDEX + 1))/16"
+WG_RESERVED_NET="10.4.0.0/27"
+WG_CLIENT_RANGE="10.4.$((SUBNET_INDEX * 16)).0/20"
+
+# Calculate listen port for proxy
+if [ "${GATEWAY_SERVING_NUM_PORTS:-1}" -gt 1 ]; then
+  PROXY_LISTEN_PORT="443-$((443 + GATEWAY_SERVING_NUM_PORTS - 1))"
+else
+  PROXY_LISTEN_PORT=443
+fi
 
 echo "Docker compose file:"
 cat "$COMPOSE_TMP"
 
 # Update .env file with current values
 cat <<EOF >.app_env
-CF_API_TOKEN=$CF_API_TOKEN
-SRV_DOMAIN=$SRV_DOMAIN
 WG_ENDPOINT=$PUBLIC_IP:$WG_PORT
 MY_URL=$MY_URL
 BOOTNODE_URL=$BOOTNODE_URL
-SUBNET_INDEX=$SUBNET_INDEX
+WG_IP=$WG_IP
+WG_RESERVED_NET=$WG_RESERVED_NET
+WG_CLIENT_RANGE=$WG_CLIENT_RANGE
 APP_LAUNCH_TOKEN=$APP_LAUNCH_TOKEN
 RPC_DOMAIN=$RPC_DOMAIN
 NODE_ID=$NODE_ID
-CERTBOT_MAX_DNS_WAIT=$CERTBOT_MAX_DNS_WAIT
-CERTBOT_DNS_TXT_TTL=$CERTBOT_DNS_TXT_TTL
-SERVING_NUM_PORTS=$GATEWAY_SERVING_NUM_PORTS
+PROXY_LISTEN_PORT=$PROXY_LISTEN_PORT
 EOF
 
 if [ -n "$APP_COMPOSE_FILE" ]; then
@@ -212,7 +224,9 @@ echo "PUBLIC_IP: $PUBLIC_IP"
 echo "GATEWAY_APP_ID: $GATEWAY_APP_ID"
 echo "MY_URL: $MY_URL"
 echo "BOOTNODE_URL: $BOOTNODE_URL"
-echo "SUBNET_INDEX: $SUBNET_INDEX"
+echo "WG_IP: $WG_IP"
+echo "WG_RESERVED_NET: $WG_RESERVED_NET"
+echo "WG_CLIENT_RANGE: $WG_CLIENT_RANGE"
 echo "WG_ADDR: $WG_ADDR"
 echo "GATEWAY_RPC_ADDR: $GATEWAY_RPC_ADDR"
 echo "GATEWAY_ADMIN_RPC_ADDR: $GATEWAY_ADMIN_RPC_ADDR"
@@ -237,12 +251,13 @@ DEPLOY_ARGS=(
   --app-id "$GATEWAY_APP_ID"
   --compose .app-compose.json
   --env-file .app_env
+  --kms-url "$KMS_URL"
   --image "$OS_IMAGE"
   --vcpu 32
   --memory 32G
 )
 
-if [ "${NET_MODE:-}" = "bridge" ]; then
+if [ "${NET_MODE:-bridge}" = "bridge" ]; then
   DEPLOY_ARGS+=(--net bridge)
 else
   DEPLOY_ARGS+=(
@@ -262,3 +277,137 @@ fi
 
 $CLI deploy "${DEPLOY_ARGS[@]}"
 
+# Bootstrap Admin RPC configuration
+# Wait for the gateway admin API to be ready, then configure DNS credentials, domain, and certbot
+vmm_curl() {
+  # Calls VMM RPC via curl, handling both unix socket and HTTP URLs
+  local path="$1"; shift
+  if [[ "$VMM_RPC" == unix:* ]]; then
+    local sock="${VMM_RPC#unix:}"
+    curl --unix-socket "$sock" -sf "http://localhost$path" "$@"
+  else
+    curl -sf "${VMM_RPC}${path}" "$@"
+  fi
+}
+
+get_vm_id() {
+  # Resolve VM ID from name via VMM Status RPC
+  local vm_name="$1"
+  local status
+  status=$(vmm_curl "/prpc/Status" -X POST -H "Content-Type: application/json" -d '{}' 2>/dev/null) || true
+  echo "$status" | jq -r --arg name "$vm_name" '.vms[]? | select(.name == $name) | .id' 2>/dev/null | head -1
+}
+
+get_admin_addr() {
+  # In bridge mode, get guest IP from VMM guest API and use port 8001
+  # In other modes, use the configured GATEWAY_ADMIN_RPC_ADDR
+  if [ "${NET_MODE:-bridge}" = "bridge" ]; then
+    local vm_id
+    vm_id=$(get_vm_id "dstack-gateway")
+    if [ -z "$vm_id" ]; then
+      echo "WARN: could not find VM ID for dstack-gateway" >&2
+      echo "$GATEWAY_ADMIN_RPC_ADDR"
+      return
+    fi
+    echo "Bridge mode: VM ID=$vm_id, waiting for guest network info..." >&2
+    local max_retries=30
+    local retry=0
+    while [ $retry -lt $max_retries ]; do
+      local net_info
+      net_info=$(vmm_curl "/guest/NetworkInfo" \
+        -X POST -H "Content-Type: application/json" \
+        -d "{\"id\":\"$vm_id\"}" 2>/dev/null) || true
+      if [ -n "$net_info" ]; then
+        local guest_ip
+        guest_ip=$(echo "$net_info" | jq -r '
+          .interfaces[]? |
+          select(.name != "lo") |
+          .addresses[]? |
+          .address' 2>/dev/null | head -1)
+        if [ -n "$guest_ip" ] && [ "$guest_ip" != "null" ]; then
+          echo "  Guest IP: $guest_ip" >&2
+          echo "${guest_ip}:8001"
+          return
+        fi
+      fi
+      retry=$((retry + 1))
+      sleep 5
+    done
+    echo "WARN: could not get guest IP, falling back to $GATEWAY_ADMIN_RPC_ADDR" >&2
+  fi
+  echo "$GATEWAY_ADMIN_RPC_ADDR"
+}
+
+bootstrap_admin() {
+  local admin_addr
+  admin_addr=$(get_admin_addr)
+  local max_retries=60
+  local retry=0
+
+  echo "Waiting for gateway admin API at $admin_addr..."
+  while [ $retry -lt $max_retries ]; do
+    if curl -sf "http://$admin_addr/prpc/Status" >/dev/null 2>&1; then
+      break
+    fi
+    retry=$((retry + 1))
+    sleep 5
+  done
+
+  if [ $retry -eq $max_retries ]; then
+    echo "WARN: admin API not ready after $max_retries retries, skipping bootstrap"
+    echo "You can configure the gateway manually via the Web UI at http://$admin_addr"
+    return
+  fi
+
+  echo "Admin API ready, bootstrapping configuration..."
+
+  # Set ACME URL
+  if [ "$ACME_STAGING" = "yes" ]; then
+    ACME_URL="https://acme-staging-v02.api.letsencrypt.org/directory"
+  else
+    ACME_URL="https://acme-v02.api.letsencrypt.org/directory"
+  fi
+
+  echo "Setting certbot config (ACME URL: $ACME_URL)..."
+  curl -sf -X POST "http://$admin_addr/prpc/SetCertbotConfig" \
+    -H "Content-Type: application/json" \
+    -d '{"acme_url":"'"$ACME_URL"'","renew_interval_secs":3600,"renew_before_expiration_secs":864000,"renew_timeout_secs":300}' >/dev/null \
+    && echo "  Certbot config set" || echo "  WARN: failed to set certbot config"
+
+  # Create DNS credential if CF_API_TOKEN is provided and no credentials exist yet
+  if [ -n "$CF_API_TOKEN" ]; then
+    existing=$(curl -sf "http://$admin_addr/prpc/ListDnsCredentials" 2>/dev/null)
+    cred_count=$(echo "$existing" | jq -r '.credentials | length' 2>/dev/null || echo "0")
+
+    if [ "$cred_count" = "0" ]; then
+      echo "Creating default DNS credential..."
+      curl -sf -X POST "http://$admin_addr/prpc/CreateDnsCredential" \
+        -H "Content-Type: application/json" \
+        -d '{"name":"cloudflare","provider_type":"cloudflare","cf_api_token":"'"$CF_API_TOKEN"'","set_as_default":true}' >/dev/null \
+        && echo "  DNS credential created" || echo "  WARN: failed to create DNS credential"
+    else
+      echo "  DNS credentials already exist ($cred_count), skipping"
+    fi
+  fi
+
+  # Add ZT-Domain if SRV_DOMAIN is provided and domain doesn't exist yet
+  if [ -n "$SRV_DOMAIN" ]; then
+    existing=$(curl -sf "http://$admin_addr/prpc/ListZtDomains" 2>/dev/null)
+    has_domain=$(echo "$existing" | jq -r '.domains[]? | select(.domain=="'"$SRV_DOMAIN"'") | .domain' 2>/dev/null)
+
+    if [ -z "$has_domain" ]; then
+      echo "Adding ZT-Domain: $SRV_DOMAIN..."
+      curl -sf -X POST "http://$admin_addr/prpc/AddZtDomain" \
+        -H "Content-Type: application/json" \
+        -d '{"domain":"'"$SRV_DOMAIN"'","port":443,"priority":100}' >/dev/null \
+        && echo "  ZT-Domain added" || echo "  WARN: failed to add ZT-Domain"
+    else
+      echo "  ZT-Domain $SRV_DOMAIN already exists, skipping"
+    fi
+  fi
+
+  echo "Bootstrap complete"
+  echo "Gateway Web UI: http://$admin_addr"
+}
+
+bootstrap_admin
