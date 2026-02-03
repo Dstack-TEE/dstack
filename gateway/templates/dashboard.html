@@ -611,6 +611,14 @@ SPDX-License-Identifier: Apache-2.0
                 <input type="text" id="dns-cred-api-url" placeholder="https://api.cloudflare.com/client/v4 (default)">
             </div>
             <div class="modal-field">
+                <label>DNS TXT TTL (seconds, optional)</label>
+                <input type="number" id="dns-cred-ttl" placeholder="e.g. 60 (default from config)">
+            </div>
+            <div class="modal-field">
+                <label>Max DNS Wait (seconds, optional)</label>
+                <input type="number" id="dns-cred-max-wait" placeholder="e.g. 300 (default from config)">
+            </div>
+            <div class="modal-field">
                 <label>
                     <input type="checkbox" id="dns-cred-default"> Set as default
                 </label>
@@ -642,6 +650,14 @@ SPDX-License-Identifier: Apache-2.0
             <div class="modal-field">
                 <label>Cloudflare API URL (optional)</label>
                 <input type="text" id="edit-dns-cred-api-url" placeholder="https://api.cloudflare.com/client/v4 (default)">
+            </div>
+            <div class="modal-field">
+                <label>DNS TXT TTL (seconds, optional)</label>
+                <input type="number" id="edit-dns-cred-ttl" placeholder="e.g. 60 (default from config)">
+            </div>
+            <div class="modal-field">
+                <label>Max DNS Wait (seconds, optional)</label>
+                <input type="number" id="edit-dns-cred-max-wait" placeholder="e.g. 300 (default from config)">
             </div>
             <div class="modal-actions">
                 <button class="action-btn secondary" onclick="hideModal('edit-dns-cred-modal')">Cancel</button>
@@ -982,6 +998,8 @@ SPDX-License-Identifier: Apache-2.0
             document.getElementById('edit-dns-cred-provider').value = cred.provider_type;
             document.getElementById('edit-dns-cred-token').value = '';
             document.getElementById('edit-dns-cred-api-url').value = cred.cf_api_url || '';
+            document.getElementById('edit-dns-cred-ttl').value = cred.dns_txt_ttl || '';
+            document.getElementById('edit-dns-cred-max-wait').value = cred.max_dns_wait || '';
             showModal('edit-dns-cred-modal');
         }
 
@@ -990,6 +1008,8 @@ SPDX-License-Identifier: Apache-2.0
             const name = document.getElementById('edit-dns-cred-name').value.trim();
             const token = document.getElementById('edit-dns-cred-token').value.trim();
             const apiUrl = document.getElementById('edit-dns-cred-api-url').value.trim();
+            const ttl = document.getElementById('edit-dns-cred-ttl').value.trim();
+            const maxWait = document.getElementById('edit-dns-cred-max-wait').value.trim();
 
             if (!name) {
                 showToast('Name is required', 'error');
@@ -1001,6 +1021,8 @@ SPDX-License-Identifier: Apache-2.0
                 if (name) body.name = name;
                 if (token) body.cf_api_token = token;
                 if (apiUrl) body.cf_api_url = apiUrl;
+                if (ttl) body.dns_txt_ttl = parseInt(ttl);
+                if (maxWait) body.max_dns_wait = parseInt(maxWait);
 
                 const response = await fetch('/prpc/Admin.UpdateDnsCredential', {
                     method: 'POST',
@@ -1023,6 +1045,8 @@ SPDX-License-Identifier: Apache-2.0
             const name = document.getElementById('dns-cred-name').value.trim();
             const token = document.getElementById('dns-cred-token').value.trim();
             const apiUrl = document.getElementById('dns-cred-api-url').value.trim();
+            const ttl = document.getElementById('dns-cred-ttl').value.trim();
+            const maxWait = document.getElementById('dns-cred-max-wait').value.trim();
             const setAsDefault = document.getElementById('dns-cred-default').checked;
 
             if (!name || !token) {
@@ -1031,16 +1055,20 @@ SPDX-License-Identifier: Apache-2.0
             }
 
             try {
+                const body = {
+                    name: name,
+                    provider_type: 'cloudflare',
+                    cf_api_token: token,
+                    cf_api_url: apiUrl || undefined,
+                    set_as_default: setAsDefault
+                };
+                if (ttl) body.dns_txt_ttl = parseInt(ttl);
+                if (maxWait) body.max_dns_wait = parseInt(maxWait);
+
                 const response = await fetch('/prpc/Admin.CreateDnsCredential', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        name: name,
-                        provider_type: 'cloudflare',
-                        cf_api_token: token,
-                        cf_api_url: apiUrl || undefined,
-                        set_as_default: setAsDefault
-                    })
+                    body: JSON.stringify(body)
                 });
                 if (!response.ok) {
                     const err = await response.text();
