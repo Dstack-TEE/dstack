@@ -5,6 +5,52 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.6] - 2026-02-03
+
+### Added
+- guest-agent: Attest API for generating versioned attestations
+- gateway: WaveKV backend with peer discovery, bootnode support, periodic persistence, and improved cluster orchestration
+- gateway: multi-domain certificate management with SNI-based resolution, cert configuration UI, ACME account attestation, and configurable DNS TXT TTL/max wait
+- gateway: multi-port TCP listening via port ranges and deployment script support for multi-port serving
+- gateway: per-app connection rate limiting
+- vmm: bridge networking support, DHCP lease PRPC API, and userspace port forwarding
+- vmm: management APIs UpdateVm and ReloadVms, plus additional metadata in CLI output
+- vmm-cli: config file support and new update subcommand
+- vmm-ui: revamped UI (now default), improved layout, device/TEE state display, log follow, git rev display, and dedicated IP UI
+- guest-agent: systemd socket activation and compatibility socket proxy
+- kms: auth-simple configuration-based authorization server
+- sdk: Verifiable Message Signing (Sign/Verify) with signature chain and public key fields
+- docs: conntrack tuning guide for high-concurrency gateways
+- docs: bridge networking guide updates and cluster deployment documentation
+- vmm: OpenAPI documentation output
+
+### Changed
+- gateway: deployment scripts refactored to externalize config and add bootstrap flow
+- gateway: IP allocation scheme updated for larger address space
+- gateway: DNS configuration defaults and UI settings refined (TTL, max wait, default port behaviors)
+- toolchain: Rust pinned to 1.92 and additional no_std target added for CI
+- attestation: refactored for multi-provider support
+- vmm: default shared mode set to 9p
+- dependencies: updated dcap-qvl to 0.3.10 and various dependency bumps (lodash, hono, go-ethereum, tracing-subscriber, etc.)
+- docs: reorganized and consolidated (confidential AI, verification tutorial, GPU TEE guide, FAQ, SDK docs, main index)
+- vmm-ui: regenerated and synchronized UI assets
+
+### Fixed
+- vmm: VM config loading issues and multiple UI display bugs
+- host-api: forbid listening on non-vsock addresses
+- vmm: trigger port forward reconfiguration on update-ports
+- runtime: Docker mount socket path compatibility (/run vs /var/run)
+- runtime: create mount points before rbind mount
+- sdk/js: isReachable behavior for v0.5.x
+- gateway: improved error messages for client registration and cert flows
+- ct_monitor: TLS certificate verification behavior
+- tooling: clippy warnings, formatting, and CI stability fixes
+
+### Security
+- upgraded dcap-qvl to 0.3.10 to address CVE-2026-22696
+- verifier: removed pccs_url from public API to reduce SSRF risk
+- ct_monitor: enabled TLS certificate verification
+
 ## [0.5.5] - 2025-10-20
 
 ### Added
