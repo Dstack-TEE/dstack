@@ -8,15 +8,13 @@ ident = "dstack Gateway"
 temp_dir = "/tmp"
 keep_alive = 10
 log_level = "info"
-port = 8010
+address = "127.0.0.1:8010"
 
 [core]
 kms_url = ""
-state_path = "./gateway-state.json"
 # auto set soft ulimit to hard ulimit
 set_ulimit = true
 rpc_domain = ""
-run_in_dstack = true
 
 [core.auth]
 enabled = false
@@ -25,22 +23,13 @@ timeout = "5s"
 
 [core.admin]
 enabled = false
-port = 8011
+address = "127.0.0.1:8011"
 
-[core.certbot]
-enabled = false
-workdir = "/etc/certbot"
-acme_url = "https://acme-staging-v02.api.letsencrypt.org/directory"
-cf_api_token = ""
-auto_set_caa = true
-domain = "*.example.com"
-renew_interval = "1h"
-renew_before_expiration = "10d"
-renew_timeout = "120s"
-max_dns_wait = "5m"
-# TTL for DNS TXT records used in ACME challenges (in seconds).
-# Minimum is 60 for Cloudflare.
-dns_txt_ttl = 60
+[core.debug]
+insecure_enable_debug_rpc = false
+insecure_skip_attestation = false
+key_file = "debug_key.json"
+address = "127.0.0.1:8012"
 
 [core.wg]
 public_key = ""
@@ -54,11 +43,8 @@ interface = "wg0"
 endpoint = "10.0.2.2:51820"
 
 [core.proxy]
-cert_chain = "/etc/rproxy/certs/cert.pem"
-cert_key = "/etc/rproxy/certs/key.pem"
 tls_crypto_provider = "aws-lc-rs"
 tls_versions = ["1.2"]
-base_domain = "app.localhost"
 listen_addr = "0.0.0.0"
 listen_port = 8443
 agent_port = 8090
@@ -70,6 +56,8 @@ app_address_ns_prefix = "_dstack-app-address"
 app_address_ns_compat = true
 workers = 32
 external_port = 443
+# Maximum concurrent connections per app. 0 means unlimited.
+max_connections_per_app = 2000
 
 [core.proxy.timeouts]
 # Timeout for establishing a connection to the target app.
@@ -79,6 +67,8 @@ handshake = "5s"
 
 # Timeout for top n hosts selection
 cache_top_n = "30s"
+# Timeout for DNS TXT record resolution (app address lookup).
+dns_resolve = "5s"
 
 # Enable data transfer timeouts below. This might impact performance. Turn off if
 # bad performance is observed.
@@ -100,9 +90,19 @@ node_timeout = "10m"
 
 [core.sync]
 enabled = false
-interval = "30s"
-broadcast_interval = "10m"
-timeout = "2s"
+# WaveKV node ID for this gateway (must be unique across cluster)
+node_id = 0
 my_url = "https://localhost:8011"
-# The url of the bootnode used to join the network
-bootnode = "https://localhost:8011"
+interval = "1m"
+timeout = "30s"
+# The URL of the bootnode used to fetch initial peer list when joining the network.
+# Leave empty if this is the first node or peers are managed via Admin.SetNodeInfo RPC.
+bootnode = ""
+# Data directory for WaveKV persistence (WAL and snapshots)
+data_dir = "/dstack-gateway/data"
+# Interval for periodic persistence of WaveKV data (e.g., "5s", "1m", "1h")
+persist_interval = "5m"
+# Enable periodic sync of instance connections to KV store
+sync_connections_enabled = true
+# Interval for syncing instance connections to KV store
+sync_connections_interval = "30s"

@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{fs::Permissions, future::pending, os::unix::fs::PermissionsExt};
+use std::{future::pending, os::unix::net::UnixListener as StdUnixListener};
 
 use anyhow::{anyhow, Context, Result};
 use clap::Parser;
@@ -16,6 +16,7 @@ use rocket::{
 use rocket_vsock_listener::VsockListener;
 use rpc_service::{AppState, ExternalRpcHandler, InternalRpcHandler, InternalRpcHandlerV0};
 use sd_notify::{notify as sd_notify, NotifyState};
+use socket_activation::{ActivatedSockets, ActivatedUnixListener};
 use std::time::Duration;
 use tokio::sync::oneshot;
 use tracing::{error, info};
@@ -25,6 +26,7 @@ mod guest_api_service;
 mod http_routes;
 mod models;
 mod rpc_service;
+mod socket_activation;
 
 const CARGO_PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
 const GIT_REV: &str = git_version::git_version!(
@@ -52,6 +54,7 @@ struct Args {
 async fn run_internal_v0(
     state: AppState,
     figment: Figment,
+    activated_socket: Option<StdUnixListener>,
     sock_ready_tx: oneshot::Sender<()>,
 ) -> Result<()> {
     let rocket = rocket::custom(figment)
@@ -64,26 +67,36 @@ async fn run_internal_v0(
         .ignite()
         .await
         .map_err(|err| anyhow!("Failed to ignite rocket: {err}"))?;
-    let endpoint = DefaultListener::bind_endpoint(&ignite)
-        .map_err(|err| anyhow!("Failed to get endpoint: {err}"))?;
-    let listener = DefaultListener::bind(&ignite)
-        .await
-        .map_err(|err| anyhow!("Failed to bind on {endpoint}: {err}"))?;
-    if let Some(path) = endpoint.unix() {
-        // Allow any user to connect to the socket
-        fs_err::set_permissions(path, Permissions::from_mode(0o777))?;
+
+    if let Some(std_listener) = activated_socket {
+        // Use systemd-activated socket
+        info!("Using systemd-activated socket for tappd.sock");
+        let listener = ActivatedUnixListener::new(std_listener)?;
+        sock_ready_tx.send(()).ok();
+        ignite
+            .launch_on(listener)
+            .await
+            .map_err(|err: rocket::Error| anyhow!(err.to_string()))?;
+    } else {
+        // Fall back to binding our own socket
+        let endpoint = DefaultListener::bind_endpoint(&ignite)
+            .map_err(|err| anyhow!("Failed to get endpoint: {err}"))?;
+        let listener = DefaultListener::bind(&ignite)
+            .await
+            .map_err(|err| anyhow!("Failed to bind on {endpoint}: {err}"))?;
+        sock_ready_tx.send(()).ok();
+        ignite
+            .launch_on(listener)
+            .await
+            .map_err(|err| anyhow!(err.to_string()))?;
     }
-    sock_ready_tx.send(()).ok();
-    ignite
-        .launch_on(listener)
-        .await
-        .map_err(|err| anyhow!(err.to_string()))?;
     Ok(())
 }
 
 async fn run_internal(
     state: AppState,
     figment: Figment,
+    activated_socket: Option<StdUnixListener>,
     sock_ready_tx: oneshot::Sender<()>,
 ) -> Result<()> {
     let rocket = rocket::custom(figment)
@@ -93,20 +106,29 @@ async fn run_internal(
         .ignite()
         .await
         .map_err(|err| anyhow!("Failed to ignite rocket: {err}"))?;
-    let endpoint = DefaultListener::bind_endpoint(&ignite)
-        .map_err(|err| anyhow!("Failed to get endpoint: {err}"))?;
-    let listener = DefaultListener::bind(&ignite)
-        .await
-        .map_err(|err| anyhow!("Failed to bind on {endpoint}: {err}"))?;
-    if let Some(path) = endpoint.unix() {
-        // Allow any user to connect to the socket
-        fs_err::set_permissions(path, Permissions::from_mode(0o777))?;
+
+    if let Some(std_listener) = activated_socket {
+        // Use systemd-activated socket
+        info!("Using systemd-activated socket for dstack.sock");
+        let listener = ActivatedUnixListener::new(std_listener)?;
+        sock_ready_tx.send(()).ok();
+        ignite
+            .launch_on(listener)
+            .await
+            .map_err(|err: rocket::Error| anyhow!(err.to_string()))?;
+    } else {
+        // Fall back to binding our own socket
+        let endpoint = DefaultListener::bind_endpoint(&ignite)
+            .map_err(|err| anyhow!("Failed to get endpoint: {err}"))?;
+        let listener = DefaultListener::bind(&ignite)
+            .await
+            .map_err(|err| anyhow!("Failed to bind on {endpoint}: {err}"))?;
+        sock_ready_tx.send(()).ok();
+        ignite
+            .launch_on(listener)
+            .await
+            .map_err(|err| anyhow!(err.to_string()))?;
     }
-    sock_ready_tx.send(()).ok();
-    ignite
-        .launch_on(listener)
-        .await
-        .map_err(|err| anyhow!(err.to_string()))?;
     Ok(())
 }
 
@@ -205,7 +227,7 @@ async fn main() -> Result<()> {
     {
         use tracing_subscriber::{fmt, EnvFilter};
         let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-        fmt().with_env_filter(filter).init();
+        fmt().with_env_filter(filter).with_ansi(false).init();
     }
     let args = Args::parse();
     let figment = config::load_config_figment(args.config.as_deref());
@@ -219,11 +241,18 @@ async fn main() -> Result<()> {
         .extract()
         .context("Failed to extract bind address")?;
     let guest_api_figment = figment.select("guest-api");
+
+    // Get systemd-activated sockets if available
+    let activated = ActivatedSockets::from_env();
+    if activated.any_activated() {
+        info!("Systemd socket activation detected");
+    }
+
     let (tappd_ready_tx, tappd_ready_rx) = oneshot::channel();
     let (sock_ready_tx, sock_ready_rx) = oneshot::channel();
     tokio::select!(
-        res = run_internal_v0(state.clone(), internal_v0_figment, tappd_ready_tx) => res?,
-        res = run_internal(state.clone(), internal_figment, sock_ready_tx) => res?,
+        res = run_internal_v0(state.clone(), internal_v0_figment, activated.tappd, tappd_ready_tx) => res?,
+        res = run_internal(state.clone(), internal_figment, activated.dstack, sock_ready_tx) => res?,
         res = run_external(state.clone(), external_figment) => res?,
         res = run_guest_api(state.clone(), guest_api_figment) => res?,
         _ = async {

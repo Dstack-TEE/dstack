@@ -8,23 +8,20 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use anyhow::{anyhow, bail, Context as _, Result};
-use fs_err as fs;
 use hyper::body::Incoming;
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Request, Response, StatusCode};
 use hyper_util::rt::tokio::TokioIo;
-use rustls::pki_types::pem::PemObject;
-use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::version::{TLS12, TLS13};
 use serde::Serialize;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::TcpStream;
 use tokio::time::timeout;
 use tokio_rustls::{rustls, server::TlsStream, TlsAcceptor};
-use tracing::{debug, info};
+use tracing::debug;
 
-use or_panic::ResultOrPanic;
+use crate::cert_store::CertResolver;
 
 use crate::config::{CryptoProvider, ProxyConfig, TlsVersion};
 use crate::main_service::Proxy;
@@ -99,20 +96,19 @@ where
     }
 }
 
-pub(crate) fn create_acceptor(config: &ProxyConfig, h2: bool) -> Result<TlsAcceptor> {
-    let cert_pem = fs::read(&config.cert_chain).context("failed to read certificate")?;
-    let key_pem = fs::read(&config.cert_key).context("failed to read private key")?;
-    let certs = CertificateDer::pem_slice_iter(cert_pem.as_slice())
-        .collect::<Result<Vec<_>, _>>()
-        .context("failed to parse certificate")?;
-    let key =
-        PrivateKeyDer::from_pem_slice(key_pem.as_slice()).context("failed to parse private key")?;
-
-    let provider = match config.tls_crypto_provider {
+/// Create a TLS acceptor using CertResolver for SNI-based certificate resolution
+///
+/// The CertResolver allows atomic certificate updates without recreating the acceptor.
+pub(crate) fn create_acceptor_with_cert_resolver(
+    proxy_config: &ProxyConfig,
+    cert_resolver: Arc<CertResolver>,
+    h2: bool,
+) -> Result<TlsAcceptor> {
+    let provider = match proxy_config.tls_crypto_provider {
         CryptoProvider::AwsLcRs => rustls::crypto::aws_lc_rs::default_provider(),
         CryptoProvider::Ring => rustls::crypto::ring::default_provider(),
     };
-    let supported_versions = config
+    let supported_versions = proxy_config
         .tls_versions
         .iter()
         .map(|v| match v {
@@ -120,11 +116,12 @@ pub(crate) fn create_acceptor(config: &ProxyConfig, h2: bool) -> Result<TlsAccep
             TlsVersion::Tls13 => &TLS13,
         })
         .collect::<Vec<_>>();
+
     let mut config = rustls::ServerConfig::builder_with_provider(Arc::new(provider))
         .with_protocol_versions(&supported_versions)
-        .context("Failed to build TLS config")?
+        .context("failed to build TLS config")?
         .with_no_client_auth()
-        .with_single_cert(certs, key)?;
+        .with_cert_resolver(cert_resolver);
 
     if h2 {
         config.alpn_protocols = vec![b"h2".to_vec()];
@@ -152,27 +149,6 @@ fn empty_response(status: StatusCode) -> Result<Response<String>> {
 }
 
 impl Proxy {
-    /// Reload the TLS acceptor with fresh certificates
-    pub fn reload_certificates(&self) -> Result<()> {
-        info!("Reloading TLS certificates");
-        // Replace the acceptor with the new one
-        if let Ok(mut acceptor) = self.acceptor.write() {
-            *acceptor = create_acceptor(&self.config.proxy, false)?;
-            info!("TLS certificates successfully reloaded");
-        } else {
-            bail!("Failed to acquire write lock for TLS acceptor");
-        }
-
-        if let Ok(mut acceptor) = self.h2_acceptor.write() {
-            *acceptor = create_acceptor(&self.config.proxy, true)?;
-            info!("TLS certificates successfully reloaded");
-        } else {
-            bail!("Failed to acquire write lock for TLS acceptor");
-        }
-
-        Ok(())
-    }
-
     pub(crate) async fn handle_this_node(
         &self,
         inbound: TcpStream,
@@ -213,7 +189,7 @@ impl Proxy {
                     json_response(&app_info)
                 }
                 "/acme-info" => {
-                    let acme_info = self.acme_info().await.context("Failed to get acme info")?;
+                    let acme_info = self.acme_info(None).context("Failed to get acme info")?;
                     json_response(&acme_info)
                 }
                 _ => empty_response(StatusCode::NOT_FOUND),
@@ -278,15 +254,9 @@ impl Proxy {
             inbound,
         };
         let acceptor = if h2 {
-            self.h2_acceptor
-                .read()
-                .or_panic("lock should never fail")
-                .clone()
+            &self.h2_acceptor
         } else {
-            self.acceptor
-                .read()
-                .or_panic("lock should never fail")
-                .clone()
+            &self.acceptor
         };
         let tls_stream = timeout(
             self.config.proxy.timeouts.handshake,
@@ -315,12 +285,13 @@ impl Proxy {
         let addresses = self
             .lock()
             .select_top_n_hosts(app_id)
-            .with_context(|| format!("app {app_id} not found"))?;
+            .with_context(|| format!("app <{app_id}> not found"))?;
         debug!("selected top n hosts: {addresses:?}");
         let tls_stream = self.tls_accept(inbound, buffer, h2).await?;
+        let max_connections = self.config.proxy.max_connections_per_app;
         let (outbound, _counter) = timeout(
             self.config.proxy.timeouts.connect,
-            connect_multiple_hosts(addresses, port),
+            connect_multiple_hosts(addresses, port, max_connections, app_id),
         )
         .await
         .map_err(|_| anyhow!("connecting timeout"))?

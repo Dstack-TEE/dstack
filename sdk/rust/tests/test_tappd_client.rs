@@ -11,27 +11,18 @@ use std::env;
 async fn test_tappd_client_creation() {
     // Test client creation with default endpoint
     let _client = TappdClient::new(None);
-
-    // This should succeed without panicking
-    assert!(true);
 }
 
 #[tokio::test]
 async fn test_tappd_client_with_custom_endpoint() {
     // Test client creation with custom endpoint
     let _client = TappdClient::new(Some("/custom/path/tappd.sock"));
-
-    // This should succeed without panicking
-    assert!(true);
 }
 
 #[tokio::test]
 async fn test_tappd_client_with_http_endpoint() {
     // Test client creation with HTTP endpoint
     let _client = TappdClient::new(Some("http://localhost:8080"));
-
-    // This should succeed without panicking
-    assert!(true);
 }
 
 // Integration tests that require a running tappd service

@@ -90,10 +90,12 @@ fn main() -> Result<()> {
         tracing_subscriber::fmt()
             .with_env_filter(EnvFilter::from_default_env())
             .with_writer(file)
+            .with_ansi(false)
             .init();
     } else {
         tracing_subscriber::fmt()
             .with_env_filter(EnvFilter::from_default_env())
+            .with_ansi(false)
             .init();
     }
     #[cfg(unix)]

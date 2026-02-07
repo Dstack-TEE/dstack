@@ -12,9 +12,12 @@ license.workspace = true
 [dependencies]
 anyhow.workspace = true
 bon.workspace = true
+bytes.workspace = true
 enum_dispatch.workspace = true
 fs-err.workspace = true
 hickory-resolver.workspace = true
+http.workspace = true
+http-body-util.workspace = true
 instant-acme.workspace = true
 path-absolutize.workspace = true
 rcgen.workspace = true

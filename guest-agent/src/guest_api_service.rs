@@ -145,8 +145,11 @@ fn get_interfaces() -> Vec<Interface> {
     sysinfo::Networks::new_with_refreshed_list()
         .into_iter()
         .filter_map(|(interface_name, network)| {
-            if !(interface_name == "dstack-wg0" || interface_name.starts_with("enp")) {
-                // We only get dstack-wg0 and enp interfaces.
+            if !(interface_name == "dstack-wg0"
+                || interface_name.starts_with("enp")
+                || interface_name.starts_with("eth"))
+            {
+                // We only get dstack-wg0, enp and eth interfaces.
                 // Docker bridge is not included due to privacy concerns.
                 return None;
             }

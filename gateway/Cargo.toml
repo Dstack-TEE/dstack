@@ -10,7 +10,8 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-rocket = { workspace = true, features = ["mtls"] }
+arc-swap.workspace = true
+rocket = { workspace = true, features = ["mtls", "json"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true
 anyhow.workspace = true
@@ -48,12 +49,26 @@ dstack-types.workspace = true
 serde-duration.workspace = true
 reqwest = { workspace = true, features = ["json"] }
 hyper = { workspace = true, features = ["server", "http1"] }
-hyper-util = { version = "0.1", features = ["tokio"] }
+hyper-util = { workspace = true, features = ["tokio"] }
+hyper-rustls.workspace = true
+http-body-util.workspace = true
+x509-parser.workspace = true
 jemallocator.workspace = true
+wavekv.workspace = true
+tdx-attest.workspace = true
+flate2.workspace = true
+uuid = { workspace = true, features = ["v4"] }
+rmp-serde.workspace = true
 or-panic.workspace = true
+base64.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 nix = { workspace = true, features = ["resource"] }
 
+[[bin]]
+name = "gen_debug_key"
+path = "src/gen_debug_key.rs"
+
 [dev-dependencies]
 insta.workspace = true
+tempfile.workspace = true

@@ -21,7 +21,19 @@ fn get_tappd_endpoint(endpoint: Option<&str>) -> String {
     if let Ok(sim_endpoint) = env::var("TAPPD_SIMULATOR_ENDPOINT") {
         return sim_endpoint;
     }
-    "/var/run/tappd.sock".to_string()
+    // Try paths in order: legacy paths first, then namespaced paths
+    const SOCKET_PATHS: &[&str] = &[
+        "/var/run/tappd.sock",
+        "/run/tappd.sock",
+        "/var/run/dstack/tappd.sock",
+        "/run/dstack/tappd.sock",
+    ];
+    for path in SOCKET_PATHS {
+        if std::path::Path::new(path).exists() {
+            return path.to_string();
+        }
+    }
+    SOCKET_PATHS[0].to_string()
 }
 
 #[derive(Debug)]

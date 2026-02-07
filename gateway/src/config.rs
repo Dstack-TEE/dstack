@@ -67,17 +67,47 @@ pub enum TlsVersion {
     Tls13,
 }
 
+/// Deserialize a port range from either a single integer (443) or a string range ("443-543").
+fn deserialize_port_range<'de, D>(deserializer: D) -> std::result::Result<Vec<u16>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de;
+
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum PortSpec {
+        Single(u16),
+        Range(String),
+    }
+
+    match PortSpec::deserialize(deserializer)? {
+        PortSpec::Single(p) => Ok(vec![p]),
+        PortSpec::Range(s) => {
+            if let Some((start, end)) = s.split_once('-') {
+                let start: u16 = start.trim().parse().map_err(de::Error::custom)?;
+                let end: u16 = end.trim().parse().map_err(de::Error::custom)?;
+                if start > end {
+                    return Err(de::Error::custom(format!(
+                        "invalid port range: {start} > {end}"
+                    )));
+                }
+                Ok((start..=end).collect())
+            } else {
+                let p: u16 = s.trim().parse().map_err(de::Error::custom)?;
+                Ok(vec![p])
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct ProxyConfig {
-    pub cert_chain: String,
-    pub cert_key: String,
     pub tls_crypto_provider: CryptoProvider,
     pub tls_versions: Vec<TlsVersion>,
-    pub base_domain: String,
-    pub external_port: u16,
     pub listen_addr: Ipv4Addr,
-    pub listen_port: u16,
-    pub agent_port: u16,
+    #[serde(deserialize_with = "deserialize_port_range")]
+    pub listen_port: Vec<u16>,
     pub timeouts: Timeouts,
     pub buffer_size: usize,
     pub connect_top_n: usize,
@@ -85,6 +115,8 @@ pub struct ProxyConfig {
     pub workers: usize,
     pub app_address_ns_prefix: String,
     pub app_address_ns_compat: bool,
+    /// Maximum concurrent connections per app. 0 means unlimited.
+    pub max_connections_per_app: u64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -98,6 +130,10 @@ pub struct Timeouts {
 
     #[serde(with = "serde_duration")]
     pub cache_top_n: Duration,
+
+    /// Timeout for DNS TXT record resolution (app address lookup).
+    #[serde(with = "serde_duration")]
+    pub dns_resolve: Duration,
 
     pub data_timeout_enabled: bool,
     #[serde(with = "serde_duration")]
@@ -125,28 +161,50 @@ pub struct SyncConfig {
     #[serde(with = "serde_duration")]
     pub interval: Duration,
     #[serde(with = "serde_duration")]
-    pub broadcast_interval: Duration,
-    #[serde(with = "serde_duration")]
     pub timeout: Duration,
     pub my_url: String,
+    /// The URL of the bootnode used to fetch initial peer list when joining the network
     pub bootnode: String,
+    /// WaveKV node ID for this gateway (must be unique across cluster)
+    pub node_id: u32,
+    /// Data directory for WaveKV persistence
+    pub data_dir: String,
+    /// Interval for periodic WAL persistence (default: 10s)
+    #[serde(with = "serde_duration")]
+    pub persist_interval: Duration,
+    /// Enable periodic sync of instance connections to KV store
+    pub sync_connections_enabled: bool,
+    /// Interval for syncing instance connections to KV store
+    #[serde(with = "serde_duration")]
+    pub sync_connections_interval: Duration,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
     pub wg: WgConfig,
     pub proxy: ProxyConfig,
-    pub certbot: CertbotConfig,
     pub pccs_url: Option<String>,
     pub recycle: RecycleConfig,
-    pub state_path: String,
     pub set_ulimit: bool,
     pub rpc_domain: String,
     pub kms_url: String,
     pub admin: AdminConfig,
-    pub run_in_dstack: bool,
+    /// Debug server configuration (separate port for debug RPCs)
+    pub debug: DebugConfig,
     pub sync: SyncConfig,
     pub auth: AuthConfig,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct DebugConfig {
+    /// Enable debug server
+    #[serde(default)]
+    pub insecure_enable_debug_rpc: bool,
+    #[serde(default)]
+    pub insecure_skip_attestation: bool,
+    /// Path to pre-generated debug key data file (JSON format containing key, quote, event_log, and vm_config)
+    #[serde(default)]
+    pub key_file: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -158,11 +216,41 @@ pub struct AuthConfig {
 }
 
 impl Config {
-    pub fn id(&self) -> Vec<u8> {
-        use sha2::{Digest, Sha256};
-        let mut hasher = Sha256::new();
-        hasher.update(self.wg.public_key.as_bytes());
-        hasher.finalize()[..20].to_vec()
+    /// Get or generate a unique node UUID.
+    /// The UUID is stored in `{data_dir}/node_uuid` and persisted across restarts.
+    pub fn uuid(&self) -> Vec<u8> {
+        use std::fs;
+        use std::path::Path;
+
+        let uuid_path = Path::new(&self.sync.data_dir).join("node_uuid");
+
+        // Try to read existing UUID
+        if let Ok(content) = fs::read_to_string(&uuid_path) {
+            if let Ok(uuid) = uuid::Uuid::parse_str(content.trim()) {
+                return uuid.as_bytes().to_vec();
+            }
+        }
+
+        // Generate new UUID
+        let uuid = uuid::Uuid::new_v4();
+
+        // Ensure directory exists
+        if let Some(parent) = uuid_path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+
+        // Save UUID to file
+        if let Err(err) = fs::write(&uuid_path, uuid.to_string()) {
+            tracing::warn!(
+                "failed to save node UUID to {}: {}",
+                uuid_path.display(),
+                err
+            );
+        } else {
+            tracing::info!("generated new node UUID: {}", uuid);
+        }
+
+        uuid.as_bytes().to_vec()
     }
 }
 
@@ -181,68 +269,6 @@ pub struct TlsConfig {
 #[derive(Debug, Clone, Deserialize)]
 pub struct MutualConfig {
     pub ca_certs: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct CertbotConfig {
-    /// Enable certbot
-    pub enabled: bool,
-    /// Path to the working directory
-    pub workdir: String,
-    /// ACME server URL
-    pub acme_url: String,
-    /// Cloudflare API token
-    pub cf_api_token: String,
-    /// Auto set CAA record
-    pub auto_set_caa: bool,
-    /// Domain to issue certificates for
-    pub domain: String,
-    /// Renew interval
-    #[serde(with = "serde_duration")]
-    pub renew_interval: Duration,
-    /// Time gap before expiration to trigger renewal
-    #[serde(with = "serde_duration")]
-    pub renew_before_expiration: Duration,
-    /// Renew timeout
-    #[serde(with = "serde_duration")]
-    pub renew_timeout: Duration,
-    /// Maximum time to wait for DNS propagation
-    #[serde(with = "serde_duration")]
-    pub max_dns_wait: Duration,
-    /// TTL for DNS TXT records used in ACME challenges (in seconds).
-    /// Minimum is 60 for Cloudflare. Lower TTL means faster DNS propagation.
-    #[serde(default = "default_dns_txt_ttl")]
-    pub dns_txt_ttl: u32,
-}
-
-fn default_dns_txt_ttl() -> u32 {
-    60
-}
-
-impl CertbotConfig {
-    fn to_bot_config(&self) -> certbot::CertBotConfig {
-        let workdir = certbot::WorkDir::new(&self.workdir);
-        certbot::CertBotConfig::builder()
-            .auto_create_account(true)
-            .cert_dir(workdir.backup_dir())
-            .cert_file(workdir.cert_path())
-            .key_file(workdir.key_path())
-            .credentials_file(workdir.account_credentials_path())
-            .acme_url(self.acme_url.clone())
-            .cert_subject_alt_names(vec![self.domain.clone()])
-            .cf_api_token(self.cf_api_token.clone())
-            .renew_interval(self.renew_interval)
-            .renew_timeout(self.renew_timeout)
-            .renew_expires_in(self.renew_before_expiration)
-            .auto_set_caa(self.auto_set_caa)
-            .max_dns_wait(self.max_dns_wait)
-            .dns_txt_ttl(self.dns_txt_ttl)
-            .build()
-    }
-
-    pub async fn build_bot(&self) -> Result<certbot::CertBot> {
-        self.to_bot_config().build_bot().await
-    }
 }
 
 pub const DEFAULT_CONFIG: &str = include_str!("../gateway.toml");

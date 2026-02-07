@@ -14,7 +14,7 @@ use ra_rpc::Attestation;
 use ra_tls::{
     attestation::QuoteContentType,
     cert::generate_ra_cert,
-    kdf::{derive_ecdsa_key, derive_ecdsa_key_pair_from_bytes},
+    kdf::{derive_key, derive_p256_key_pair_from_bytes},
     rcgen::KeyPair,
 };
 use std::{
@@ -378,9 +378,9 @@ fn gen_app_keys_from_seed(
     provider: KeyProviderKind,
     mr: Option<Vec<u8>>,
 ) -> Result<AppKeys> {
-    let key = derive_ecdsa_key_pair_from_bytes(seed, &["app-key".as_bytes()])?;
-    let disk_key = derive_ecdsa_key_pair_from_bytes(seed, &["app-disk-key".as_bytes()])?;
-    let k256_key = derive_ecdsa_key(seed, &["app-k256-key".as_bytes()], 32)?;
+    let key = derive_p256_key_pair_from_bytes(seed, &["app-key".as_bytes()])?;
+    let disk_key = derive_p256_key_pair_from_bytes(seed, &["app-disk-key".as_bytes()])?;
+    let k256_key = derive_key(seed, &["app-k256-key".as_bytes()], 32)?;
     let k256_key = SigningKey::from_bytes(&k256_key).context("Failed to parse k256 key")?;
     let key_provider = match provider {
         KeyProviderKind::None => KeyProvider::None {
@@ -453,7 +453,7 @@ async fn main() -> Result<()> {
     {
         use tracing_subscriber::{fmt, EnvFilter};
         let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-        fmt().with_env_filter(filter).init();
+        fmt().with_env_filter(filter).with_ansi(false).init();
     }
 
     let cli = Cli::parse();

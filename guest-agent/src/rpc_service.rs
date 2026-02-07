@@ -30,7 +30,7 @@ use ra_rpc::{Attestation, CallContext, RpcCall};
 use ra_tls::{
     attestation::{QuoteContentType, VersionedAttestation, DEFAULT_HASH_ALGORITHM},
     cert::CertConfigV2,
-    kdf::{derive_ecdsa_key, derive_ecdsa_key_pair_from_bytes},
+    kdf::{derive_key, derive_p256_key_pair_from_bytes},
 };
 use rcgen::KeyPair;
 use ring::rand::{SecureRandom, SystemRandom};
@@ -235,7 +235,7 @@ impl DstackGuestRpc for InternalRpcHandler {
             .fill(&mut seed)
             .context("Failed to generate secure seed")?;
         let derived_key =
-            derive_ecdsa_key_pair_from_bytes(&seed, &[]).context("Failed to derive key")?;
+            derive_p256_key_pair_from_bytes(&seed, &[]).context("Failed to derive key")?;
         let config = CertConfigV2 {
             org_name: None,
             subject: request.subject,
@@ -270,7 +270,7 @@ impl DstackGuestRpc for InternalRpcHandler {
 
         let (key, pubkey_hex) = match request.algorithm.as_str() {
             "ed25519" => {
-                let derived_key = derive_ecdsa_key(k256_app_key, &[request.path.as_bytes()], 32)
+                let derived_key = derive_key(k256_app_key, &[request.path.as_bytes()], 32)
                     .context("Failed to derive ed25519 key")?;
                 let signing_key = Ed25519SigningKey::from_bytes(
                     &derived_key
@@ -282,7 +282,7 @@ impl DstackGuestRpc for InternalRpcHandler {
                 (derived_key, pubkey_hex)
             }
             "secp256k1" | "secp256k1_prehashed" | "" => {
-                let derived_key = derive_ecdsa_key(k256_app_key, &[request.path.as_bytes()], 32)
+                let derived_key = derive_key(k256_app_key, &[request.path.as_bytes()], 32)
                     .context("Failed to derive k256 key")?;
 
                 let signing_key =
@@ -497,7 +497,7 @@ impl TappdRpc for InternalRpcHandlerV0 {
         } else {
             &self.state.inner.keys.k256_key
         };
-        let derived_key = derive_ecdsa_key_pair_from_bytes(seed, &[request.path.as_bytes()])
+        let derived_key = derive_p256_key_pair_from_bytes(seed, &[request.path.as_bytes()])
             .context("Failed to derive key")?;
         let config = CertConfigV2 {
             org_name: None,

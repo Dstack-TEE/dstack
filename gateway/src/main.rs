@@ -1,28 +1,51 @@
-// SPDX-FileCopyrightText: © 2024-2025 Phala Network <dstack@phala.network>
+// SPDX-FileCopyrightText: 2024-2025 Phala Network dstack@phala.network
 //
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::{anyhow, Context, Result};
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use clap::Parser;
 use config::{Config, TlsConfig};
 use dstack_guest_agent_rpc::{dstack_guest_client::DstackGuestClient, GetTlsKeyArgs};
+use dstack_kms_rpc::SignCertRequest;
 use http_client::prpc::PrpcClient;
-use ra_rpc::{client::RaClient, rocket_helper::QuoteVerifier};
+use ra_rpc::{client::RaClient, prpc_routes as prpc, rocket_helper::QuoteVerifier};
+use ra_tls::cert::{CertConfigV2, CertSigningRequestV2, Csr};
+use ra_tls::rcgen::KeyPair;
 use rocket::{
     fairing::AdHoc,
     figment::{providers::Serialized, Figment},
 };
+use serde::{Deserialize, Serialize};
 use tracing::info;
 
 use admin_service::AdminRpcHandler;
-use main_service::{Proxy, RpcHandler};
+use main_service::{Proxy, ProxyOptions, RpcHandler};
+
+use crate::debug_service::DebugRpcHandler;
 
 mod admin_service;
+mod cert_store;
 mod config;
+mod debug_service;
+mod distributed_certbot;
+mod kv;
 mod main_service;
 mod models;
 mod proxy;
 mod web_routes;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct DebugKeyData {
+    /// Private key in PEM format
+    key_pem: String,
+    /// TDX quote in base64 format
+    quote_base64: String,
+    /// Event log in JSON string format
+    event_log: String,
+    /// VM config in JSON string format
+    vm_config: String,
+}
 
 #[global_allocator]
 static ALLOCATOR: jemallocator::Jemalloc = jemallocator::Jemalloc;
@@ -67,56 +90,133 @@ async fn maybe_gen_certs(config: &Config, tls_config: &TlsConfig) -> Result<()> 
         return Ok(());
     }
 
-    if config.run_in_dstack {
-        info!("Using dstack guest agent for certificate generation");
-        let agent_client = dstack_agent().context("Failed to create dstack client")?;
-        let response = agent_client
-            .get_tls_key(GetTlsKeyArgs {
-                subject: "dstack-gateway".to_string(),
-                alt_names: vec![config.rpc_domain.clone()],
-                usage_ra_tls: false,
-                usage_server_auth: true,
-                usage_client_auth: false,
-                with_app_info: false,
-                not_before: None,
-                not_after: None,
-            })
-            .await?;
-
-        let ca_cert = response
-            .certificate_chain
-            .last()
-            .context("Empty certificate chain")?
-            .to_string();
-        let certs = response.certificate_chain.join("\n");
-        write_cert(&tls_config.mutual.ca_certs, &ca_cert)?;
-        write_cert(&tls_config.certs, &certs)?;
-        write_cert(&tls_config.key, &response.key)?;
-        return Ok(());
+    // Build alt_names: include rpc_domain and hostname from my_url
+    let mut alt_names = vec![config.rpc_domain.clone()];
+    if let Ok(url) = reqwest::Url::parse(&config.sync.my_url) {
+        if let Some(host) = url.host_str() {
+            if host != config.rpc_domain {
+                alt_names.push(host.to_string());
+            }
+        }
     }
+    match config.debug.insecure_skip_attestation {
+        true => gen_debug_certs(config, tls_config, alt_names).await,
+        false => gen_prod_certs(tls_config, alt_names).await,
+    }
+}
 
+async fn gen_prod_certs(tls_config: &TlsConfig, alt_names: Vec<String>) -> Result<()> {
+    info!("Using dstack guest agent for certificate generation");
+    let agent_client = dstack_agent().context("Failed to create dstack client")?;
+
+    let response = agent_client
+        .get_tls_key(GetTlsKeyArgs {
+            subject: "dstack-gateway".to_string(),
+            alt_names,
+            usage_ra_tls: true,
+            usage_server_auth: true,
+            usage_client_auth: true,
+            not_before: None,
+            not_after: None,
+            with_app_info: true,
+        })
+        .await?;
+
+    let ca_cert = response
+        .certificate_chain
+        .last()
+        .context("Empty certificate chain")?
+        .to_string();
+    let certs = response.certificate_chain.join("\n");
+    write_cert(&tls_config.mutual.ca_certs, &ca_cert)?;
+    write_cert(&tls_config.certs, &certs)?;
+    write_cert(&tls_config.key, &response.key)?;
+    Ok(())
+}
+
+async fn gen_debug_certs(
+    config: &Config,
+    tls_config: &TlsConfig,
+    alt_names: Vec<String>,
+) -> Result<()> {
     let kms_url = config.kms_url.clone();
     if kms_url.is_empty() {
         info!("KMS URL is empty, skipping cert generation");
         return Ok(());
     }
+
+    // Check if debug key file is configured
+    if config.debug.key_file.is_empty() {
+        info!("Debug key file not configured, skipping cert generation");
+        return Ok(());
+    }
+
+    // Load pre-generated key pair and quote data from JSON file
+    info!("Loading debug key data from: {}", config.debug.key_file);
+    let ctx = "Failed to read debug key, run `cargo run --bin gen_debug_key -- <simulator_url>` to generate it";
+    let json_content = fs_err::read_to_string(&config.debug.key_file).context(ctx)?;
+    let debug_data: DebugKeyData =
+        serde_json::from_str(&json_content).context("Failed to parse debug key JSON")?;
+
+    let key_pem = debug_data.key_pem;
+    let quote_bin = STANDARD
+        .decode(&debug_data.quote_base64)
+        .context("Failed to decode quote from base64")?;
+    let event_log_json = debug_data.event_log;
+    let vm_config_json = debug_data.vm_config;
+
+    // Parse key pair
+    let key = KeyPair::from_pem(&key_pem).context("Failed to parse debug key")?;
+    let pubkey = key.public_key_der();
+
+    // Build CSR with attestation from debug quote
+    let attestation =
+        ra_tls::attestation::Attestation::from_tdx_quote(quote_bin, event_log_json.as_bytes())
+            .context("Failed to create attestation from debug quote")?
+            .into_versioned();
+
+    let csr = CertSigningRequestV2 {
+        confirm: "please sign cert:".to_string(),
+        pubkey,
+        config: CertConfigV2 {
+            org_name: None,
+            subject: "dstack-gateway".to_string(),
+            subject_alt_names: alt_names,
+            usage_server_auth: true,
+            usage_client_auth: true,
+            ext_quote: true,
+            ext_app_info: true,
+            not_before: None,
+            not_after: None,
+        },
+        attestation,
+    };
+    let signature = csr.signed_by(&key).context("Failed to sign CSR")?;
+
+    // Send CSR to KMS for signing
     let kms_url = format!("{kms_url}/prpc");
-    info!("Getting CA cert from {kms_url}");
-    let client = RaClient::new(kms_url, true).context("Failed to create kms client")?;
-    let client = dstack_kms_rpc::kms_client::KmsClient::new(client);
-    let ca_cert = client.get_meta().await?.ca_cert;
-    let key = ra_tls::rcgen::KeyPair::generate().context("Failed to generate key")?;
-    let cert = ra_tls::cert::CertRequest::builder()
-        .key(&key)
-        .subject("dstack-gateway")
-        .alt_names(std::slice::from_ref(&config.rpc_domain))
-        .usage_server_auth(true)
-        .build()
-        .self_signed()
-        .context("Failed to self-sign rpc cert")?;
+    info!("Sending CSR to KMS for signing: {kms_url}");
+    let kms_client = RaClient::new(kms_url, true).context("Failed to create kms client")?;
+    let kms_client = dstack_kms_rpc::kms_client::KmsClient::new(kms_client);
+    let sign_response = kms_client
+        .sign_cert(SignCertRequest {
+            api_version: 2,
+            csr: csr.to_vec(),
+            signature,
+            vm_config: vm_config_json.to_string(),
+        })
+        .await
+        .context("Failed to sign certificate via KMS")?;
+
+    let ca_cert = sign_response
+        .certificate_chain
+        .last()
+        .context("Empty certificate chain")?
+        .to_string();
+    let certs = sign_response.certificate_chain.join("\n");
 
     write_cert(&tls_config.mutual.ca_certs, &ca_cert)?;
-    write_cert(&tls_config.certs, &cert.pem())?;
+    write_cert(&tls_config.certs, &certs)?;
     write_cert(&tls_config.key, &key.serialize_pem())?;
     Ok(())
 }
@@ -132,7 +232,7 @@ async fn main() -> Result<()> {
     {
         use tracing_subscriber::{fmt, EnvFilter};
         let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-        fmt().with_env_filter(filter).init();
+        fmt().with_env_filter(filter).with_ansi(false).init();
     }
 
     let _ = rustls::crypto::ring::default_provider().install_default();
@@ -141,9 +241,18 @@ async fn main() -> Result<()> {
     let figment = config::load_config_figment(args.config.as_deref());
 
     let config = figment.focus("core").extract::<Config>()?;
+
+    // Validate node_id
+    if config.sync.enabled && config.sync.node_id == 0 {
+        anyhow::bail!("node_id must be greater than 0");
+    }
+
     config::setup_wireguard(&config.wg)?;
 
-    let tls_config = figment.focus("tls").extract::<TlsConfig>()?;
+    let tls_config = figment
+        .focus("tls")
+        .extract::<TlsConfig>()
+        .context("Failed to extract tls config")?;
     maybe_gen_certs(&config, &tls_config)
         .await
         .context("Failed to generate certs")?;
@@ -153,40 +262,51 @@ async fn main() -> Result<()> {
         set_max_ulimit()?;
     }
 
-    let my_app_id = if config.run_in_dstack {
+    let my_app_id = if config.debug.insecure_skip_attestation {
+        None
+    } else {
         let dstack_client = dstack_agent().context("Failed to create dstack client")?;
         let info = dstack_client
             .info()
             .await
             .context("Failed to get app info")?;
         Some(info.app_id)
-    } else {
-        None
     };
     let proxy_config = config.proxy.clone();
     let pccs_url = config.pccs_url.clone();
     let admin_enabled = config.admin.enabled;
-    let state = main_service::Proxy::new(config, my_app_id).await?;
+    let debug_config = config.debug.clone();
+    let state = Proxy::new(ProxyOptions {
+        config,
+        my_app_id,
+        tls_config,
+    })
+    .await?;
     info!("Starting background tasks");
     state.start_bg_tasks().await?;
     state.lock().reconfigure()?;
 
     proxy::start(proxy_config, state.clone()).context("failed to start the proxy")?;
 
-    let admin_figment =
-        Figment::new()
-            .merge(rocket::Config::default())
-            .merge(Serialized::defaults(
-                figment
-                    .find_value("core.admin")
-                    .context("admin section not found")?,
-            ));
+    let admin_value = figment
+        .find_value("core.admin")
+        .context("admin section not found")?;
+    let debug_value = figment
+        .find_value("core.debug")
+        .context("debug section not found")?;
+
+    let admin_figment = Figment::new()
+        .merge(rocket::Config::default())
+        .merge(Serialized::defaults(admin_value));
+
+    let debug_figment = Figment::new()
+        .merge(rocket::Config::default())
+        .merge(Serialized::defaults(debug_value));
 
     let mut rocket = rocket::custom(figment)
-        .mount(
-            "/prpc",
-            ra_rpc::prpc_routes!(Proxy, RpcHandler, trim: "Tproxy."),
-        )
+        .mount("/prpc", prpc!(Proxy, RpcHandler, trim: "Tproxy."))
+        // Mount WaveKV sync endpoint (requires mTLS gateway auth)
+        .mount("/", web_routes::wavekv_sync_routes())
         .attach(AdHoc::on_response("Add app version header", |_req, res| {
             Box::pin(async move {
                 res.set_raw_header("X-App-Version", app_version());
@@ -196,12 +316,27 @@ async fn main() -> Result<()> {
     let verifier = QuoteVerifier::new(pccs_url);
     rocket = rocket.manage(verifier);
     let main_srv = rocket.launch();
+    let admin_state = state.clone();
+    let debug_state = state;
     let admin_srv = async move {
         if admin_enabled {
             rocket::custom(admin_figment)
                 .mount("/", web_routes::routes())
-                .mount("/", ra_rpc::prpc_routes!(Proxy, AdminRpcHandler))
-                .manage(state)
+                .mount("/", prpc!(Proxy, AdminRpcHandler, trim: "Admin."))
+                .mount("/prpc", prpc!(Proxy, AdminRpcHandler, trim: "Admin."))
+                .manage(admin_state)
+                .launch()
+                .await
+        } else {
+            std::future::pending().await
+        }
+    };
+    let debug_srv = async move {
+        if debug_config.insecure_enable_debug_rpc {
+            rocket::custom(debug_figment)
+                .mount("/prpc", prpc!(Proxy, DebugRpcHandler, trim: "Debug."))
+                .mount("/", web_routes::health_routes())
+                .manage(debug_state)
                 .launch()
                 .await
         } else {
@@ -214,6 +349,9 @@ async fn main() -> Result<()> {
         }
         result = admin_srv => {
             result.map_err(|err| anyhow!("Failed to start admin server: {err:?}"))?;
+        }
+        result = debug_srv => {
+            result.map_err(|err| anyhow!("Failed to start debug server: {err:?}"))?;
         }
     }
     Ok(())

@@ -18,7 +18,6 @@ members = [
     "kms/rpc",
     "ra-rpc",
     "ra-tls",
-    "tdx-attest-sys",
     "tdx-attest",
     "dstack-attest",
     "dstack-util",
@@ -53,6 +52,7 @@ members = [
     "verifier",
     "no_std_check",
     "size-parser",
+    "port-forward",
 ]
 resolver = "2"
 
@@ -65,11 +65,11 @@ dstack-gateway-rpc = { path = "gateway/rpc" }
 dstack-kms-rpc = { path = "kms/rpc" }
 dstack-guest-agent-rpc = { path = "guest-agent/rpc" }
 dstack-vmm-rpc = { path = "vmm/rpc" }
+dstack-port-forward = { path = "port-forward" }
 cc-eventlog = { path = "cc-eventlog" }
 supervisor = { path = "supervisor" }
 supervisor-client = { path = "supervisor/client" }
 tdx-attest = { path = "tdx-attest" }
-tdx-attest-sys = { path = "tdx-attest-sys" }
 dstack-attest = { path = "dstack-attest" }
 certbot = { path = "certbot" }
 rocket-vsock-listener = { path = "rocket-vsock-listener" }
@@ -86,9 +86,11 @@ serde-duration = { path = "serde-duration" }
 dstack-mr = { path = "dstack-mr" }
 dstack-verifier = { path = "verifier", default-features = false }
 size-parser = { path = "size-parser" }
+wavekv = "1.0.0"
 
 # Core dependencies
 anyhow = { version = "1.0.97", default-features = false }
+arc-swap = "1"
 errify = { version = "0.3.0", features = ["anyhow"] }
 or-panic = { version = "1.0", default-features = false }
 chrono = "0.4.40"
@@ -107,9 +109,11 @@ tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
 safe-write = "0.1.2"
 nix = "0.29.0"
 sd-notify = "0.4.5"
+listenfd = "1.0"
 jemallocator = "0.5.4"
 
 # Serialization/Parsing
+flate2 = "1.1"
 borsh = { version = "1.5.7", default-features = false, features = ["derive"] }
 bon = { version = "3.4.0", default-features = false }
 base64 = "0.22.1"
@@ -123,9 +127,9 @@ scale = { version = "3.7.4", package = "parity-scale-codec", features = [
 ] }
 serde = { version = "1.0.228", features = ["derive"], default-features = false }
 serde-human-bytes = "0.1.2"
+rmp-serde = "1.3.1"
 serde_json = { version = "1.0.140", default-features = false }
 serde_ini = "0.2.0"
-rmp-serde = "1.3.1"
 toml = "0.8.20"
 toml_edit = { version = "0.22.24", features = ["serde"] }
 yasna = "0.5.2"
@@ -147,6 +151,11 @@ hyper-util = { version = "0.1.10", features = [
     "client-legacy",
     "http1",
 ] }
+hyper-rustls = { version = "0.27", default-features = false, features = [
+    "ring",
+    "http1",
+    "tls12",
+] }
 hyperlocal = "0.9.1"
 ipnet = { version = "2.11.0", features = ["serde"] }
 reqwest = { version = "0.12.14", default-features = false, features = [
@@ -163,6 +172,7 @@ tokio = { version = "1.46.1" }
 tokio-vsock = "0.7.0"
 sysinfo = "0.35.2"
 default-net = "0.22.0"
+url = "2.5"
 
 # Cryptography/Security
 aes-gcm = "0.10.3"
@@ -235,7 +245,6 @@ yaml-rust2 = "0.10.4"
 
 luks2 = "0.5.0"
 scopeguard = "1.2.0"
-flate2 = "1.1"
 tar = "0.4"
 
 [profile.release]

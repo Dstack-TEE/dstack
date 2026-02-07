@@ -14,12 +14,24 @@ message RegisterCvmRequest {
   string client_public_key = 1;
 }
 
+// DebugRegisterCvmRequest is the request for DebugRegisterCvm (only works when debug_mode is enabled).
+message DebugRegisterCvmRequest {
+  // The public key of the WireGuard interface of the CVM.
+  string client_public_key = 1;
+  // The app id (hex encoded).
+  string app_id = 2;
+  // The instance id (hex encoded).
+  string instance_id = 3;
+}
+
 // RegisterCvmResponse is the response for RegisterCvm.
 message RegisterCvmResponse {
   // WireGuard configuration
   WireGuardConfig wg = 1;
   // Agent configuration
   GuestAgentConfig agent = 2;
+  // All gateway nodes in the cluster
+  repeated GatewayNodeInfo gateways = 3;
 }
 
 message WireGuardPeer {
@@ -54,7 +66,7 @@ message GuestAgentConfig {
 // StatusResponse is the response for Status.
 message StatusResponse {
   // Peer id
-  bytes id = 1;
+  uint32 id = 1;
   // My URL.
   string url = 2;
   // The bootnode URL.
@@ -65,6 +77,8 @@ message StatusResponse {
   repeated HostInfo hosts = 5;
   // The list of proxy nodes.
   repeated GatewayNodeInfo nodes = 6;
+  // Peer uuid
+  bytes uuid = 7;
 }
 
 // HostInfo is the information of a host.
@@ -77,8 +91,6 @@ message HostInfo {
   string app_id = 3;
   // The base domain of the HTTPS endpoint of the host.
   string base_domain = 4;
-  // The external port of the host.
-  uint32 port = 5;
   // The latest handshake time of the host.
   uint64 latest_handshake = 6;
   // The number of connections of the host.
@@ -97,18 +109,12 @@ message QuotedPublicKey {
 message AcmeInfoResponse {
   // The ACME account URI.
   string account_uri = 1;
-  // The public key history of the certificate.
-  repeated bytes hist_keys = 2;
   // The quoted public key of the certificate.
   repeated QuotedPublicKey quoted_hist_keys = 3;
   // The quote of the ACME account URI.
   string account_quote = 4;
-  // Active certificate
-  string active_cert = 5;
-  // The domain that serves ZT-HTTPS
-  string base_domain = 6;
   // The attestation of the ACME account URI.
-  string account_attestation = 7;
+  string account_attestation = 5;
 }
 
 // Get HostInfo for associated instance id.
@@ -128,29 +134,21 @@ message GetMetaResponse {
 
 message GatewayNodeInfo {
   // The ID of the node.
-  bytes id = 1;
+  uint32 id = 1;
+  // The uuid of the node.
+  bytes uuid = 2;
   // The RPC URL of the node.
-  string url = 2;
+  string url = 3;
   // The last seen time of the node.
-  uint64 last_seen = 3;
-  // The wireguard peer info.
-  WireGuardPeer wg_peer = 4;
+  uint64 last_seen = 4;
+  // The wireguard peer public key.
+  string wg_public_key = 5;
+  // The wireguard peer IP address.
+  string wg_ip = 6;
+  // The wireguard peer endpoint.
+  string wg_endpoint = 7;
 }
 
-message AppInstanceInfo {
-  string app_id = 1;
-  string instance_id = 2;
-  string ip = 3;
-  string public_key = 4;
-  uint64 reg_time = 5;
-  uint64 last_seen = 6;
-  uint64 num_connections = 7;
-}
-
-message GatewayState {
-  repeated GatewayNodeInfo nodes = 1;
-  repeated AppInstanceInfo apps = 2;
-}
 message InfoResponse {
   // The base domain of the ZT-HTTPS
   string base_domain = 1;
@@ -162,21 +160,191 @@ message InfoResponse {
   string version = 4;
 }
 
+// Peer info for GetPeers response
+message PeerInfo {
+  // The node ID
+  uint32 id = 1;
+  // The sync URL of the node
+  string url = 2;
+}
+
+// Response for GetPeers - returns all known peer nodes
+message GetPeersResponse {
+  // This node's ID
+  uint32 my_id = 1;
+  // This node's sync URL
+  string my_url = 2;
+  // All known peers (including self)
+  repeated PeerInfo peers = 3;
+}
+
 service Gateway {
 
   // Register a new proxied CVM.
   rpc RegisterCvm(RegisterCvmRequest) returns (RegisterCvmResponse) {}
   // List all ACME account URIs and the public key history of the certificates for the Content Addressable HTTPS.
   rpc AcmeInfo(google.protobuf.Empty) returns (AcmeInfoResponse) {}
-  // Merge state from other Gateway instances.
-  rpc UpdateState(GatewayState) returns (google.protobuf.Empty) {}
   // Get the gateway info
   rpc Info(google.protobuf.Empty) returns (InfoResponse) {}
+  // Get all known peers (requires gateway mTLS authentication)
+  rpc GetPeers(google.protobuf.Empty) returns (GetPeersResponse) {}
+}
+
+// Debug service - runs on a separate port when debug.enabled=true
+service Debug {
+  // Register a new proxied CVM without attestation (for testing only).
+  rpc RegisterCvm(DebugRegisterCvmRequest) returns (RegisterCvmResponse) {}
+  // Get the gateway info (for testing service availability).
+  rpc Info(google.protobuf.Empty) returns (InfoResponse) {}
+  // Get WaveKV sync data for testing (peer addresses, node info, instances from KvStore).
+  rpc GetSyncData(google.protobuf.Empty) returns (DebugSyncDataResponse) {}
+  // Get Proxy State data for testing (instances from in-memory ProxyState).
+  rpc GetProxyState(google.protobuf.Empty) returns (DebugProxyStateResponse) {}
+}
+
+// Peer address entry
+message PeerAddrEntry {
+  uint64 node_id = 1;
+  string url = 2;
+}
+
+// Node info entry from the persistent store
+message NodeInfoEntry {
+  uint64 node_id = 1;
+  string url = 2;
+  string wg_public_key = 3;
+  string wg_endpoint = 4;
+  string wg_ip = 5;
+}
+
+// Instance info entry
+message InstanceEntry {
+  string instance_id = 1;
+  string app_id = 2;
+  string ip = 3;
+  string public_key = 4;
+}
+
+// Debug sync data response - returns all synced data from KvStore for verification
+message DebugSyncDataResponse {
+  // This node's ID
+  uint64 my_node_id = 1;
+  // Peer addresses (from __peer_addr/* keys)
+  repeated PeerAddrEntry peer_addrs = 2;
+  // Node info (from node/* keys)
+  repeated NodeInfoEntry nodes = 3;
+  // Instances (from inst/* keys)
+  repeated InstanceEntry instances = 4;
+  // Total keys in persistent store
+  uint64 persistent_keys = 5;
+  // Total keys in ephemeral store
+  uint64 ephemeral_keys = 6;
+}
+
+// Proxy state instance entry (from in-memory ProxyState)
+message ProxyStateInstance {
+  string instance_id = 1;
+  string app_id = 2;
+  string ip = 3;
+  string public_key = 4;
+  uint64 reg_time = 5;
+}
+
+// Debug proxy state response - returns in-memory ProxyState data for verification
+message DebugProxyStateResponse {
+  // All instances from ProxyState.instances
+  repeated ProxyStateInstance instances = 1;
+  // All allocated IP addresses
+  repeated string allocated_addresses = 2;
 }
 
 message RenewCertResponse {
   // True if the certificate was renewed.
   bool renewed = 1;
+}
+
+// Request to set a node's sync URL
+message SetNodeUrlRequest {
+  // The node ID to update
+  uint32 id = 1;
+  // The new URL for this node
+  string url = 2;
+}
+
+// Request to set a node's status
+message SetNodeStatusRequest {
+  // The node ID to update
+  uint32 id = 1;
+  // The new status: "up" or "down"
+  string status = 2;
+}
+
+// Peer sync status
+message PeerSyncStatus {
+  uint32 id = 1;
+  uint64 local_ack = 2;
+  uint64 peer_ack = 3;
+  uint64 buffered_logs = 4;
+  // Last seen timestamps: [(observer_node_id, timestamp), ...]
+  repeated LastSeenEntry last_seen = 5;
+}
+
+message LastSeenEntry {
+  uint32 node_id = 1;
+  uint64 timestamp = 2;
+}
+
+// Store sync status
+message StoreSyncStatus {
+  string name = 1;
+  uint32 node_id = 2;
+  uint64 n_keys = 3;
+  uint64 next_seq = 4;
+  bool dirty = 5;
+  bool wal_enabled = 6;
+  repeated PeerSyncStatus peers = 7;
+}
+
+// WaveKV sync status response
+message WaveKvStatusResponse {
+  bool enabled = 1;
+  StoreSyncStatus persistent = 2;
+  StoreSyncStatus ephemeral = 3;
+}
+
+// Handshake observation entry
+message HandshakeEntry {
+  uint32 observer_node_id = 1;
+  uint64 timestamp = 2;
+}
+
+// Get instance handshakes request
+message GetInstanceHandshakesRequest {
+  string instance_id = 1;
+}
+
+// Get instance handshakes response
+message GetInstanceHandshakesResponse {
+  repeated HandshakeEntry handshakes = 1;
+}
+
+// Global connections statistics
+message GlobalConnectionsStats {
+  // Total connections across all nodes
+  uint64 total_connections = 1;
+  // Per-node connection counts
+  map<uint32, uint64> node_connections = 2;
+}
+
+// Node status entry
+message NodeStatusEntry {
+  uint32 node_id = 1;
+  string status = 2; // "up" or "down"
+}
+
+// Get node statuses response
+message GetNodeStatusesResponse {
+  repeated NodeStatusEntry statuses = 1;
 }
 
 service Admin {
@@ -194,4 +362,264 @@ service Admin {
   rpc SetCaa(google.protobuf.Empty) returns (google.protobuf.Empty) {}
   // Summary API for inspect.
   rpc GetMeta(google.protobuf.Empty) returns (GetMetaResponse) {}
+  // Set a node's sync URL - used for dynamic peer management
+  rpc SetNodeUrl(SetNodeUrlRequest) returns (google.protobuf.Empty) {}
+  // Set a node's status (up/down)
+  rpc SetNodeStatus(SetNodeStatusRequest) returns (google.protobuf.Empty) {}
+  // Get WaveKV sync status
+  rpc WaveKvStatus(google.protobuf.Empty) returns (WaveKvStatusResponse) {}
+  // Get instance handshakes from all nodes
+  rpc GetInstanceHandshakes(GetInstanceHandshakesRequest) returns (GetInstanceHandshakesResponse) {}
+  // Get global connections statistics
+  rpc GetGlobalConnections(google.protobuf.Empty) returns (GlobalConnectionsStats) {}
+  // Get all node statuses
+  rpc GetNodeStatuses(google.protobuf.Empty) returns (GetNodeStatusesResponse) {}
+
+  // ==================== DNS Credential Management ====================
+  // List all DNS credentials
+  rpc ListDnsCredentials(google.protobuf.Empty) returns (ListDnsCredentialsResponse) {}
+  // Get a DNS credential by ID
+  rpc GetDnsCredential(GetDnsCredentialRequest) returns (DnsCredentialInfo) {}
+  // Create a new DNS credential
+  rpc CreateDnsCredential(CreateDnsCredentialRequest) returns (DnsCredentialInfo) {}
+  // Update a DNS credential
+  rpc UpdateDnsCredential(UpdateDnsCredentialRequest) returns (DnsCredentialInfo) {}
+  // Delete a DNS credential
+  rpc DeleteDnsCredential(DeleteDnsCredentialRequest) returns (google.protobuf.Empty) {}
+  // Get the default DNS credential ID
+  rpc GetDefaultDnsCredential(google.protobuf.Empty) returns (GetDefaultDnsCredentialResponse) {}
+  // Set the default DNS credential ID
+  rpc SetDefaultDnsCredential(SetDefaultDnsCredentialRequest) returns (google.protobuf.Empty) {}
+
+  // ==================== ZT-Domain Management ====================
+  // List all ZT-Domain configurations
+  rpc ListZtDomains(google.protobuf.Empty) returns (ListZtDomainsResponse) {}
+  // Get a ZT-Domain configuration and status
+  rpc GetZtDomain(GetZtDomainRequest) returns (ZtDomainInfo) {}
+  // Add a new ZT-Domain (config.domain must not exist)
+  rpc AddZtDomain(ZtDomainConfig) returns (ZtDomainInfo) {}
+  // Update a ZT-Domain configuration (config.domain must exist)
+  rpc UpdateZtDomain(ZtDomainConfig) returns (ZtDomainInfo) {}
+  // Delete a ZT-Domain configuration
+  rpc DeleteZtDomain(DeleteZtDomainRequest) returns (google.protobuf.Empty) {}
+  // Manually trigger certificate renewal for a ZT-Domain
+  rpc RenewZtDomainCert(RenewZtDomainCertRequest) returns (RenewZtDomainCertResponse) {}
+  // Force release certificate renewal lock for a ZT-Domain
+  rpc ForceReleaseCertLock(ForceReleaseCertLockRequest) returns (google.protobuf.Empty) {}
+  // List certificate attestations for a domain
+  rpc ListCertAttestations(ListCertAttestationsRequest) returns (ListCertAttestationsResponse) {}
+
+  // ==================== Global Certbot Configuration ====================
+  // Get global certbot configuration (includes ACME URL)
+  rpc GetCertbotConfig(google.protobuf.Empty) returns (CertbotConfigResponse) {}
+  // Set global certbot configuration (includes ACME URL)
+  rpc SetCertbotConfig(SetCertbotConfigRequest) returns (google.protobuf.Empty) {}
+}
+
+// ==================== DNS Credential Messages ====================
+
+// DNS credential information
+message DnsCredentialInfo {
+  string id = 1;
+  string name = 2;
+  // Provider type: "cloudflare"
+  string provider_type = 3;
+  // Cloudflare-specific fields (when provider_type = "cloudflare")
+  string cf_api_token = 4;
+  // Cloudflare API URL (empty means default)
+  string cf_api_url = 5;
+  // DNS TXT record TTL in seconds (optional)
+  optional uint32 dns_txt_ttl = 6;
+  // Maximum DNS wait time in seconds (optional)
+  optional uint32 max_dns_wait = 7;
+  // Timestamps
+  uint64 created_at = 8;
+  uint64 updated_at = 9;
+}
+
+// List DNS credentials response
+message ListDnsCredentialsResponse {
+  repeated DnsCredentialInfo credentials = 1;
+  // The default credential ID (if set)
+  optional string default_id = 2;
+}
+
+// Get DNS credential request
+message GetDnsCredentialRequest {
+  string id = 1;
+}
+
+// Create DNS credential request
+message CreateDnsCredentialRequest {
+  string name = 1;
+  // Provider type: "cloudflare"
+  string provider_type = 2;
+  // Cloudflare-specific fields (when provider_type = "cloudflare")
+  string cf_api_token = 3;
+  string cf_zone_id = 4;
+  // If true, set this as the default credential
+  bool set_as_default = 5;
+  // Optional Cloudflare API URL (defaults to https://api.cloudflare.com/client/v4)
+  optional string cf_api_url = 6;
+  // Optional Cloudflare DNS TXT record TTL (defaults to 60)
+  optional uint32 dns_txt_ttl = 7;
+  // Optional Cloudflare maximum DNS wait time (defaults to 60)
+  optional uint32 max_dns_wait = 8;
+}
+
+// Update DNS credential request
+message UpdateDnsCredentialRequest {
+  string id = 1;
+  // Optional new name
+  optional string name = 2;
+  // Optional new Cloudflare api token
+  optional string cf_api_token = 3;
+  // Optional new Cloudflare zone id
+  optional string cf_zone_id = 4;
+  // Optional new Cloudflare API URL
+  optional string cf_api_url = 5;
+}
+
+// Delete DNS credential request
+message DeleteDnsCredentialRequest {
+  string id = 1;
+}
+
+// Get default DNS credential response
+message GetDefaultDnsCredentialResponse {
+  // The default credential ID (empty if not set)
+  string default_id = 1;
+  // The default credential info (if exists)
+  optional DnsCredentialInfo credential = 2;
+}
+
+// Set default DNS credential request
+message SetDefaultDnsCredentialRequest {
+  string id = 1;
+}
+
+// ==================== ZT-Domain Messages ====================
+
+// ZT-Domain configuration (shared by Add/Update/Info)
+message ZtDomainConfig {
+  // Base domain name (e.g., "example.com", certificate will be issued for "*.example.com")
+  string domain = 1;
+  // DNS credential ID (None = use default)
+  optional string dns_cred_id = 2;
+  // Port this domain serves on (e.g., 443)
+  uint32 port = 3;
+  // Node binding (None = any node can serve this domain)
+  optional uint32 node = 4;
+  // Priority for default base_domain selection (higher = preferred)
+  int32 priority = 5;
+}
+
+// ZT-Domain information (config + certificate status)
+message ZtDomainInfo {
+  // Domain configuration
+  ZtDomainConfig config = 1;
+  // Certificate status
+  ZtDomainCertStatus cert_status = 2;
+}
+
+// ZT-Domain certificate status
+message ZtDomainCertStatus {
+  // Whether a certificate is currently loaded
+  bool has_cert = 1;
+  // Certificate expiry timestamp (0 if no cert)
+  uint64 not_after = 2;
+  // Node that issued the current certificate
+  uint32 issued_by = 3;
+  // When the certificate was issued
+  uint64 issued_at = 4;
+  // Whether the certificate is loaded in memory
+  bool loaded_in_memory = 5;
+}
+
+// List ZT-Domains response
+message ListZtDomainsResponse {
+  repeated ZtDomainInfo domains = 1;
+}
+
+// Get ZT-Domain request
+message GetZtDomainRequest {
+  string domain = 1;
+}
+
+// Delete ZT-Domain request
+message DeleteZtDomainRequest {
+  string domain = 1;
+}
+
+// Renew ZT-Domain certificate request
+message RenewZtDomainCertRequest {
+  string domain = 1;
+  // Force renewal even if not near expiry
+  bool force = 2;
+}
+
+// Renew ZT-Domain certificate response
+message RenewZtDomainCertResponse {
+  // True if renewal was performed
+  bool renewed = 1;
+  // New certificate expiry (if renewed)
+  uint64 not_after = 2;
+}
+
+// Force release certificate lock request
+message ForceReleaseCertLockRequest {
+  string domain = 1;
+}
+
+// Certificate attestation info
+message CertAttestationInfo {
+  // Certificate public key (DER encoded)
+  bytes public_key = 1;
+  // TDX Quote (JSON serialized)
+  string quote = 2;
+  // Node that generated this attestation
+  uint32 generated_by = 3;
+  // Timestamp when this attestation was generated
+  uint64 generated_at = 4;
+}
+
+// List certificate attestations request
+message ListCertAttestationsRequest {
+  string domain = 1;
+  // Maximum number of attestations to return (0 = all)
+  uint32 limit = 2;
+}
+
+// List certificate attestations response
+message ListCertAttestationsResponse {
+  // Latest attestation (if exists)
+  optional CertAttestationInfo latest = 1;
+  // Historical attestations (sorted by generated_at descending)
+  repeated CertAttestationInfo history = 2;
+}
+
+// ==================== Global Certbot Configuration Messages ====================
+
+// Certbot configuration response
+message CertbotConfigResponse {
+  // Interval between renewal checks (in seconds)
+  uint64 renew_interval_secs = 1;
+  // Time before expiration to trigger renewal (in seconds)
+  uint64 renew_before_expiration_secs = 2;
+  // Timeout for certificate renewal operations (in seconds)
+  uint64 renew_timeout_secs = 3;
+  // ACME server URL (empty means default Let's Encrypt production)
+  string acme_url = 4;
+}
+
+// Set certbot configuration request
+message SetCertbotConfigRequest {
+  // Interval between renewal checks (in seconds)
+  optional uint64 renew_interval_secs = 1;
+  // Time before expiration to trigger renewal (in seconds)
+  optional uint64 renew_before_expiration_secs = 2;
+  // Timeout for certificate renewal operations (in seconds)
+  optional uint64 renew_timeout_secs = 3;
+  // ACME server URL (empty means use default Let's Encrypt production)
+  optional string acme_url = 4;
 }

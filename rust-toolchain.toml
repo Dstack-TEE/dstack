@@ -1,0 +1,8 @@
+# SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+[toolchain]
+channel = "1.92"
+components = ["rustfmt", "clippy", "rust-analyzer"]
+targets = ["wasm32-unknown-unknown", "x86_64-unknown-linux-musl", "thumbv6m-none-eabi"]

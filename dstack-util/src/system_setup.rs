@@ -1053,11 +1053,12 @@ impl<'a> Stage0<'a> {
             }
         };
 
-        // For encrypted ZFS, need both LUKS header AND zpool to exist
-        let initialized = if opts.storage_encrypted && opts.storage_fs == FsType::Zfs {
-            has_luks && has_fs
+        // For encrypted filesystems, we can only detect the filesystem after LUKS is opened
+        // So we rely on LUKS header presence as the indicator for both ext4 and ZFS
+        let initialized = if opts.storage_encrypted {
+            has_luks
         } else {
-            has_luks || has_fs
+            has_fs
         };
 
         if !initialized {
@@ -1439,6 +1440,7 @@ impl Stage1<'_> {
     async fn setup(&self) -> Result<()> {
         let _envs = self.unseal_env_vars()?;
         self.link_files()?;
+        self.setup_socket_dir()?;
         self.setup_guest_agent_config()?;
         self.vmm
             .notify_q("boot.progress", "setting up dstack-gateway")
@@ -1460,6 +1462,13 @@ impl Stage1<'_> {
             ln -sf ${HOST_SHARED_DIR_NAME}/${APP_COMPOSE};
             ln -sf ${HOST_SHARED_DIR_NAME}/${USER_CONFIG} user_config;
         }?;
+        Ok(())
+    }
+
+    /// Setup socket directory for dstack-guest-agent.
+    fn setup_socket_dir(&self) -> Result<()> {
+        info!("Setting up socket directory");
+        fs::create_dir_all("/var/run/dstack").context("Failed to create socket directory")?;
         Ok(())
     }
 

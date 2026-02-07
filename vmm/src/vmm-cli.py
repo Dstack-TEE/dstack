@@ -29,9 +29,27 @@ try:
 except ImportError:
     CRYPTO_AVAILABLE = False
 
-# Default whitelist file location
+# Default config file locations
+DEFAULT_CONFIG_PATH = os.path.expanduser("~/.dstack-vmm/config.json")
 DEFAULT_KMS_WHITELIST_PATH = os.path.expanduser(
     "~/.dstack-vmm/kms-whitelist.json")
+
+
+def load_config() -> Dict[str, Any]:
+    """
+    Load configuration from the default config file.
+
+    Returns:
+        Dictionary with configuration values (url, auth_user, auth_password)
+    """
+    if not os.path.exists(DEFAULT_CONFIG_PATH):
+        return {}
+
+    try:
+        with open(DEFAULT_CONFIG_PATH, 'r') as f:
+            return json.load(f)
+    except (json.JSONDecodeError, FileNotFoundError):
+        return {}
 
 
 def encrypt_env(envs, hex_public_key: str) -> str:
@@ -269,7 +287,7 @@ class VmmCLI:
 
         headers = ['VM ID', 'App ID', 'Name', 'Status', 'Uptime']
         if verbose:
-            headers.extend(['vCPU', 'Memory', 'Disk', 'Image', 'GPUs'])
+            headers.extend(['Instance ID', 'vCPU', 'Memory', 'Disk', 'Image', 'GPUs'])
 
         rows = []
         for vm in vms:
@@ -285,6 +303,7 @@ class VmmCLI:
                 config = vm.get('configuration', {})
                 gpu_info = self._format_gpu_info(config.get('gpus'))
                 row.extend([
+                    vm.get('instance_id', '-') or '-',
                     config.get('vcpu', '-'),
                     f"{config.get('memory', '-')}MB",
                     f"{config.get('disk_size', '-')}GB",
@@ -520,6 +539,11 @@ class VmmCLI:
     def create_app_compose(self, args) -> None:
         """Create a new app compose file"""
         envs = parse_env_file(args.env_file) or {}
+
+        # Validate: --env-file requires --kms
+        if envs and not args.kms:
+            raise Exception("--env-file requires --kms to enable KMS for environment variable decryption")
+
         app_compose = {
             "manifest_version": 2,
             "name": args.name,
@@ -565,6 +589,17 @@ class VmmCLI:
 
         envs = parse_env_file(args.env_file)
 
+        # Validate: --env-file requires --kms-url and kms_enabled in compose
+        if envs:
+            if not args.kms_url:
+                raise Exception("--env-file requires --kms-url to encrypt environment variables")
+            try:
+                compose_json = json.loads(compose_content)
+                if not compose_json.get('kms_enabled', False):
+                    raise Exception("--env-file requires kms_enabled=true in the compose file (use --kms when creating compose)")
+            except json.JSONDecodeError:
+                pass  # Let the server handle invalid JSON
+
         # Read user config file if provided
         user_config = ""
         if args.user_config:
@@ -591,7 +626,7 @@ class VmmCLI:
             if swap_bytes > 0:
                 params["swap_size"] = swap_bytes
 
-        if args.ppcie:
+        if args.ppcie or (args.gpu and "all" in args.gpu):
             params["gpus"] = {
                 "attach_mode": "all"
             }
@@ -604,6 +639,8 @@ class VmmCLI:
             params["kms_urls"] = args.kms_url
         if args.gateway_url:
             params["gateway_urls"] = args.gateway_url
+        if args.net:
+            params["networking"] = {"mode": args.net}
 
         app_id = args.app_id or self.calc_app_id(compose_content)
         print(f"App ID: {app_id}")
@@ -620,6 +657,10 @@ class VmmCLI:
 
     def update_vm_env(self, vm_id: str, envs: Dict[str, str], kms_urls: Optional[List[str]] = None) -> None:
         """Update environment variables for a VM"""
+        # Validate: requires --kms-url
+        if not kms_urls:
+            raise Exception("--kms-url is required to encrypt environment variables")
+
         envs = envs or {}
         # First get the VM info to retrieve the app_id
         vm_info_response = self.rpc_call('GetInfo', {'id': vm_id})
@@ -709,6 +750,10 @@ class VmmCLI:
         no_tee: Optional[bool] = None,
     ) -> None:
         """Update multiple aspects of a VM in one command"""
+        # Validate: --env-file requires --kms-url
+        if env_file and not kms_urls:
+            raise Exception("--env-file requires --kms-url to encrypt environment variables")
+
         updates = []
 
         # handle resize operations (vcpu, memory, disk, image)
@@ -831,8 +876,9 @@ class VmmCLI:
             upgrade_params["ports"] = port_mappings
 
         # handle GPU updates - only update if one of the GPU flags is set
-        if attach_all or no_gpus or gpu_slots is not None:
-            if attach_all:
+        gpu_all = gpu_slots and "all" in gpu_slots
+        if attach_all or gpu_all or no_gpus or gpu_slots is not None:
+            if attach_all or gpu_all:
                 gpu_config = {"attach_mode": "all"}
                 updates.append("GPUs (all)")
             elif no_gpus:
@@ -867,6 +913,50 @@ class VmmCLI:
             print(f"Updated VM {vm_id}: {', '.join(updates)}")
         else:
             print(f"No updates specified for VM {vm_id}")
+
+    def show_info(self, vm_id: str, json_output: bool = False) -> None:
+        """Show detailed information about a VM"""
+        response = self.rpc_call('GetInfo', {'id': vm_id})
+
+        if not response.get('found', False) or 'info' not in response:
+            print(f"VM with ID {vm_id} not found")
+            return
+
+        info = response['info']
+
+        if json_output:
+            print(json.dumps(info, indent=2))
+            return
+
+        config = info.get('configuration', {})
+
+        print(f"VM ID:         {info.get('id', '-')}")
+        print(f"Name:          {info.get('name', '-')}")
+        print(f"Status:        {info.get('status', '-')}")
+        print(f"Uptime:        {info.get('uptime', '-')}")
+        print(f"App ID:        {info.get('app_id', '-')}")
+        print(f"Instance ID:   {info.get('instance_id', '-') or '-'}")
+        print(f"App URL:       {info.get('app_url', '-') or '-'}")
+        print(f"Image:         {config.get('image', '-')}")
+        print(f"Image Version: {info.get('image_version', '-')}")
+        print(f"vCPU:          {config.get('vcpu', '-')}")
+        print(f"Memory:        {config.get('memory', '-')}MB")
+        print(f"Disk:          {config.get('disk_size', '-')}GB")
+        print(f"GPUs:          {self._format_gpu_info(config.get('gpus'))}")
+        print(f"Boot Progress: {info.get('boot_progress', '-')}")
+        if info.get('boot_error'):
+            print(f"Boot Error:    {info['boot_error']}")
+        if info.get('exited_at'):
+            print(f"Exited At:     {info['exited_at']}")
+        if info.get('shutdown_progress'):
+            print(f"Shutdown:      {info['shutdown_progress']}")
+
+        events = info.get('events', [])
+        if events:
+            print(f"\nRecent Events:")
+            for event in events[-10:]:
+                ts = event.get('timestamp', 0)
+                print(f"  [{event.get('event', '')}] {event.get('body', '')} (ts: {ts})")
 
     def list_gpus(self, json_output: bool = False) -> None:
         """List all available GPUs"""
@@ -1149,19 +1239,31 @@ def save_whitelist(whitelist: List[str]) -> None:
 def main():
     parser = argparse.ArgumentParser(description='dstack-vmm CLI - Manage VMs')
 
-    # Get default URL from environment variable or use localhost
-    default_url = os.environ.get('DSTACK_VMM_URL', 'http://localhost:8080')
+    # Load config file defaults
+    config = load_config()
+
+    # Priority: command line > environment variable > config file > default
+    default_url = os.environ.get(
+        'DSTACK_VMM_URL',
+        config.get('url', 'http://localhost:8080'))
+    default_auth_user = os.environ.get(
+        'DSTACK_VMM_AUTH_USER',
+        config.get('auth_user'))
+    default_auth_password = os.environ.get(
+        'DSTACK_VMM_AUTH_PASSWORD',
+        config.get('auth_password'))
 
     parser.add_argument(
-        '--url', default=default_url, help='dstack-vmm API URL (can also be set via DSTACK_VMM_URL env var)')
+        '--url', default=default_url,
+        help='dstack-vmm API URL (can also be set via DSTACK_VMM_URL env var or config file)')
 
     # Basic authentication arguments
     parser.add_argument(
-        '--auth-user', default=os.environ.get('DSTACK_VMM_AUTH_USER'),
-        help='Basic auth username (can also be set via DSTACK_VMM_AUTH_USER env var)')
+        '--auth-user', default=default_auth_user,
+        help='Basic auth username (can also be set via DSTACK_VMM_AUTH_USER env var or config file)')
     parser.add_argument(
-        '--auth-password', default=os.environ.get('DSTACK_VMM_AUTH_PASSWORD'),
-        help='Basic auth password (can also be set via DSTACK_VMM_AUTH_PASSWORD env var)')
+        '--auth-password', default=default_auth_password,
+        help='Basic auth password (can also be set via DSTACK_VMM_AUTH_PASSWORD env var or config file)')
 
     subparsers = parser.add_subparsers(dest='command', help='Commands')
 
@@ -1170,6 +1272,12 @@ def main():
     lsvm_parser.add_argument(
         '-v', '--verbose', action='store_true', help='Show detailed information')
     lsvm_parser.add_argument(
+        '--json', action='store_true', help='Output in JSON format for automation')
+
+    # Info command
+    info_parser = subparsers.add_parser('info', help='Show detailed VM information')
+    info_parser.add_argument('vm_id', help='VM ID to show info for')
+    info_parser.add_argument(
         '--json', action='store_true', help='Output in JSON format for automation')
 
     # Start command
@@ -1264,7 +1372,7 @@ def main():
     deploy_parser.add_argument('--port', action='append', type=str,
                                help='Port mapping in format: protocol[:address]:from:to')
     deploy_parser.add_argument('--gpu', action='append', type=str,
-                               help='GPU slot to attach (can be used multiple times)')
+                               help='GPU slot to attach (can be used multiple times), or "all" to attach all GPUs')
     deploy_parser.add_argument('--ppcie', action='store_true',
                                help='Enable PPCIE (Protected PCIe) mode - attach all available GPUs')
     deploy_parser.add_argument('--pin-numa', action='store_true',
@@ -1282,6 +1390,9 @@ def main():
     deploy_parser.add_argument('--tee', dest='no_tee', action='store_false',
                                help='Force-enable Intel TDX (default)')
     deploy_parser.set_defaults(no_tee=False)
+    deploy_parser.add_argument('--net', choices=['bridge', 'passt', 'user'],
+                               help='Networking mode (default: use global config)')
+
 
     # Images command
     lsimage_parser = subparsers.add_parser(
@@ -1407,7 +1518,7 @@ def main():
         "--gpu",
         action="append",
         type=str,
-        help="GPU slot to attach (can be used multiple times)",
+        help="GPU slot to attach (can be used multiple times), or \"all\" to attach all GPUs",
     )
     gpu_group.add_argument(
         "--ppcie",
@@ -1447,6 +1558,8 @@ def main():
 
     if args.command == 'lsvm':
         cli.list_vms(args.verbose, args.json)
+    elif args.command == 'info':
+        cli.show_info(args.vm_id, args.json)
     elif args.command == 'start':
         cli.start_vm(args.vm_id)
     elif args.command == 'stop':

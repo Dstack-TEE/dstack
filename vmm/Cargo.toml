@@ -44,6 +44,7 @@ safe-write.workspace = true
 guest-api = { workspace = true, features = ["client"] }
 load_config.workspace = true
 key-provider-client.workspace = true
+dstack-port-forward.workspace = true
 dstack-types.workspace = true
 hex_fmt.workspace = true
 lspci.workspace = true
@@ -53,6 +54,7 @@ size-parser = { workspace = true, features = ["serde"] }
 fatfs.workspace = true
 fscommon.workspace = true
 or-panic.workspace = true
+url.workspace = true
 
 [dev-dependencies]
 insta.workspace = true

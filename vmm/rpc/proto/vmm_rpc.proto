@@ -99,6 +99,14 @@ message VmConfiguration {
   bool stopped = 16;
   // Disable confidential computing (fallback to non-TEE VM).
   bool no_tee = 17;
+  // Per-VM networking mode override (if unset, uses global cvm.networking).
+  optional NetworkingConfig networking = 18;
+}
+
+// Per-VM networking configuration.
+message NetworkingConfig {
+  // Networking mode: "passt", "bridge", "user"
+  string mode = 1;
 }
 
 // Requested GPU layout for a CVM.
@@ -331,4 +339,16 @@ service Vmm {
 
   // Reload VMs directory and sync with memory state
   rpc ReloadVms(google.protobuf.Empty) returns (ReloadVmsResponse);
+
+  // Report a DHCP lease event (called by the DHCP server, e.g. dnsmasq --dhcp-script).
+  // The VMM resolves the MAC address to a VM and reconfigures port forwarding.
+  rpc ReportDhcpLease(DhcpLeaseRequest) returns (google.protobuf.Empty);
+}
+
+// DHCP lease event reported by the host DHCP server.
+message DhcpLeaseRequest {
+  // MAC address of the guest NIC (e.g. "02:ab:cd:ef:01:23")
+  string mac = 1;
+  // IPv4 address assigned by DHCP (e.g. "192.168.122.100")
+  string ip = 2;
 }
