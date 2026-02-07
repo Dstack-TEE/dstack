@@ -10,7 +10,6 @@
 use anyhow::{Context, Result};
 use byte_slice_cast::AsByteSlice;
 use fs_err as fs;
-use hex;
 use near_api::{
     types::{AccountId, Data},
     Contract, NetworkConfig, SecretKey, Signer,
@@ -258,9 +257,7 @@ pub fn load_or_generate_near_signer(config: &KmsConfig) -> Result<Option<InMemor
 ///
 /// # Errors
 /// Returns an error if the public key is not ED25519 (only ED25519 keys are supported for NEAR implicit accounts)
-pub fn near_public_key_to_report_data(
-    public_key: &near_crypto::PublicKey,
-) -> Result<[u8; 64]> {
+pub fn near_public_key_to_report_data(public_key: &near_crypto::PublicKey) -> Result<[u8; 64]> {
     const REPORT_DATA_SIZE: usize = 64;
     const BINARY_VERSION_SIZE: usize = 2;
     const PUBLIC_KEYS_HASH_SIZE: usize = 48;
@@ -359,11 +356,17 @@ mod tests {
 
         // Verify hash bytes are non-zero (bytes 2-50 should contain the hash)
         let hash_section = &report_data[2..50];
-        assert!(!hash_section.iter().all(|&b| b == 0), "Hash should not be all zeros");
+        assert!(
+            !hash_section.iter().all(|&b| b == 0),
+            "Hash should not be all zeros"
+        );
 
         // Verify padding bytes are zero (bytes 50-64 should be zero)
         let padding_section = &report_data[50..64];
-        assert!(padding_section.iter().all(|&b| b == 0), "Padding should be zeros");
+        assert!(
+            padding_section.iter().all(|&b| b == 0),
+            "Padding should be zeros"
+        );
     }
 
     #[test]

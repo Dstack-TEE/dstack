@@ -32,21 +32,6 @@ const OUTPUT_SECRET_SIZE: usize = 32;
 const APP_ID_DERIVATION_PREFIX: &str = "near-mpc v0.1.0 app_id derivation:";
 const KMS_ROOT_KEY_DERIVATION_PATH: &str = "kms-root-key";
 
-/// MPC configuration for key derivation
-#[derive(Debug, Clone)]
-pub struct MpcConfig {
-    /// MPC contract ID (e.g., "v1.signer.testnet")
-    pub mpc_contract_id: String,
-    /// MPC domain ID for BLS12-381 (usually 2)
-    pub mpc_domain_id: u64,
-    /// MPC public key for the domain (BLS12-381 G2) in NEAR format
-    pub mpc_public_key: String,
-    /// NEAR KMS contract ID
-    pub kms_contract_id: String,
-    /// NEAR RPC URL
-    pub near_rpc_url: String,
-}
-
 #[derive(Clone, Debug, Deserialize)]
 pub struct Bls12381G1PublicKey(String);
 
@@ -208,7 +193,7 @@ pub fn derive_final_key(
 pub fn derive_root_key_from_mpc(
     mpc_response: &CkdResponse,
     ephemeral_private_key: Scalar,
-    mpc_config: &MpcConfig,
+    mpc_public_key: &str,
     kms_account_id: &str,
 ) -> Result<[u8; OUTPUT_SECRET_SIZE]> {
     // Derive app_id (must match MPC contract derivation)
@@ -219,7 +204,7 @@ pub fn derive_root_key_from_mpc(
         &mpc_response.big_y,
         &mpc_response.big_c,
         ephemeral_private_key,
-        &mpc_config.mpc_public_key,
+        mpc_public_key,
         &app_id,
     )?;
 

@@ -22,11 +22,11 @@ use ra_tls::{
 };
 use safe_write::safe_write;
 
-use crate::ckd::{
-    derive_root_key_from_mpc, g1_to_near_format, generate_ephemeral_keypair, MpcConfig,
-};
+use crate::ckd::{derive_root_key_from_mpc, g1_to_near_format, generate_ephemeral_keypair};
 use crate::config::{AuthApi, KmsConfig};
-use crate::near_kms_client::{load_or_generate_near_signer, near_public_key_to_report_data, NearKmsClient};
+use crate::near_kms_client::{
+    load_or_generate_near_signer, near_public_key_to_report_data, NearKmsClient,
+};
 use dcap_qvl::collateral;
 use near_api::NetworkConfig;
 use ra_tls::kdf;
@@ -426,7 +426,10 @@ async fn try_derive_keys_from_mpc(
     let mpc_domain_id = near.mpc_domain_id;
 
     let network_id = near.network_id.as_deref().unwrap_or("testnet");
-    let network_config = NetworkConfig::from_rpc_url(network_id, rpc_url.parse().unwrap());
+    let network_config = NetworkConfig::from_rpc_url(
+        network_id,
+        rpc_url.parse().context("Failed to parse RPC URL")?,
+    );
 
     // Load or generate NEAR signer (implicit account)
     let signer = load_or_generate_near_signer(cfg)?;
@@ -471,15 +474,6 @@ async fn try_derive_keys_from_mpc(
 
     tracing::debug!("Generated ephemeral BLS12-381 keypair");
 
-    // Create MPC config
-    let mpc_config = MpcConfig {
-        mpc_contract_id: mpc_contract_id.clone(),
-        mpc_domain_id,
-        mpc_public_key: mpc_public_key.clone(),
-        kms_contract_id: kms_contract_id.clone(),
-        near_rpc_url: rpc_url.to_string(),
-    };
-
     // Get TDX attestation (quote, collateral, tcb_info) for KMS contract
     // The KMS contract's request_kms_root_key() requires attestation verification
     let (quote_hex, collateral_json, tcb_info_json) = if quote_enabled {
@@ -498,7 +492,7 @@ async fn try_derive_keys_from_mpc(
         let quote_bytes = attestation
             .into_inner()
             .tdx_quote()
-            .and_then(|q| Some(q.quote.clone()))
+            .map(|q| q.quote.clone())
             .context("Failed to get TDX quote bytes")?;
         let quote_hex = hex::encode(&quote_bytes);
 
@@ -552,7 +546,7 @@ async fn try_derive_keys_from_mpc(
     let root_key = derive_root_key_from_mpc(
         &mpc_response,
         ephemeral_private_key,
-        &mpc_config,
+        &mpc_public_key,
         kms_contract_id,
     )
     .context("Failed to derive root key from MPC response")?;
