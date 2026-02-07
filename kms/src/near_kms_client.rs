@@ -22,6 +22,8 @@ use std::sync::Arc;
 use crate::ckd::CkdResponse;
 use crate::config::KmsConfig;
 
+const NEAR_SIGNER_FILE: &str = "near_signer.json";
+
 /// Request KMS root key arguments (matching NEAR KMS contract interface)
 #[derive(Debug, Serialize, Deserialize)]
 pub struct RequestKmsRootKeyArgs {
@@ -136,7 +138,7 @@ impl NearKmsClient {
             .kms_contract
             .call_function("request_kms_root_key", args)
             .transaction()
-            .with_signer(signer_account_id, signer.clone())
+            .with_signer(signer_account_id.clone(), signer.clone())
             .send_to(&self.network_config)
             .await
             .context("Failed to call KMS contract")?;
@@ -195,28 +197,29 @@ pub fn generate_near_implicit_signer() -> Result<InMemorySigner> {
         _ => anyhow::bail!("Unexpected key type for NEAR implicit account"),
     };
 
-    // InMemorySigner::from_secret_key expects AccountId which can be parsed from string
-    // The AccountId type is re-exported from near-account-id crate
-    let account_id: near_account_id::AccountId = account_id
+    let account_id: AccountId = account_id
         .parse()
         .context("Failed to parse generated account ID")?;
 
-    Ok(InMemorySigner::from_secret_key(account_id, secret_key))
+    let public_key = secret_key.public_key();
+    Ok(InMemorySigner {
+        account_id,
+        secret_key,
+        public_key,
+    })
 }
 
 /// Load or generate NEAR signer (stored persistently)
 ///
 /// This function checks if a signer already exists in the cert_dir, and if not,
 /// generates a new random NEAR implicit account signer and saves it.
-pub fn load_or_generate_near_signer(
-    config: &KmsConfig,
-) -> Result<Option<near_crypto::InMemorySigner>> {
+pub fn load_or_generate_near_signer(config: &KmsConfig) -> Result<Option<InMemorySigner>> {
     // Only generate if using NEAR auth
     if !matches!(&config.auth_api, crate::config::AuthApi::Near { .. }) {
         return Ok(None);
     }
 
-    let signer_path = config.cert_dir.join("near_signer.json");
+    let signer_path = config.cert_dir.join(NEAR_SIGNER_FILE);
 
     if signer_path.exists() {
         // Load existing signer
@@ -232,17 +235,20 @@ pub fn load_or_generate_near_signer(
             .as_str()
             .context("Missing secret_key in signer file")?;
 
-        let account_id_parsed: near_account_id::AccountId = account_id_str
+        let account_id_parsed: AccountId = account_id_str
             .parse()
             .context("Failed to parse account ID from signer file")?;
         let secret_key = near_crypto::SecretKey::from_str(secret_key_str)
             .context("Failed to parse secret key from signer file")?;
 
         tracing::info!("Loaded existing NEAR signer: {}", account_id_str);
-        Ok(Some(InMemorySigner::from_secret_key(
-            account_id_parsed,
+        let public_key = secret_key.public_key();
+        let signer = InMemorySigner {
+            account_id: account_id_parsed,
             secret_key,
-        )))
+            public_key,
+        };
+        Ok(Some(signer))
     } else {
         // Generate new signer
         let signer = generate_near_implicit_signer()?;
