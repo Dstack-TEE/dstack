@@ -209,6 +209,14 @@ impl App {
     }
 
     pub async fn start_vm(&self, id: &str) -> Result<()> {
+        {
+            let state = self.lock();
+            if let Some(vm) = state.get(id) {
+                if vm.state.removing {
+                    bail!("VM is being removed");
+                }
+            }
+        }
         self.sync_dynamic_config(id)?;
         let is_running = self
             .supervisor
@@ -266,19 +274,87 @@ impl App {
     }
 
     pub async fn remove_vm(&self, id: &str) -> Result<()> {
-        let info = self.supervisor.info(id).await?;
-        let is_running = info.as_ref().is_some_and(|i| i.state.status.is_running());
-        if is_running {
-            bail!("VM is running, stop it first");
-        }
-
-        if let Some(info) = info {
-            if !info.state.status.is_stopped() {
-                self.supervisor.stop(id).await?;
+        {
+            let mut state = self.lock();
+            let vm = state.get_mut(id).context("VM not found")?;
+            if vm.state.removing {
+                // Already being removed — idempotent
+                return Ok(());
             }
-            self.supervisor.remove(id).await?;
+            vm.state.removing = true;
         }
 
+        // Persist the removing marker so crash recovery can resume
+        let work_dir = self.work_dir(id);
+        if let Err(err) = work_dir.set_removing() {
+            warn!("Failed to write .removing marker for {id}: {err:?}");
+        }
+
+        // Clean up port forwarding immediately
+        self.cleanup_port_forward(id).await;
+
+        // Spawn background cleanup coroutine
+        let app = self.clone();
+        let id = id.to_string();
+        tokio::spawn(async move {
+            if let Err(err) = app.finish_remove_vm(&id).await {
+                error!("Background cleanup failed for {id}: {err:?}");
+            }
+        });
+
+        Ok(())
+    }
+
+    /// Background cleanup: stop supervisor process, wait for it to exit,
+    /// remove from supervisor, delete workdir, and free CID.
+    async fn finish_remove_vm(&self, id: &str) -> Result<()> {
+        // Stop the supervisor process (idempotent if already stopped)
+        if let Err(err) = self.supervisor.stop(id).await {
+            debug!("supervisor.stop({id}) during removal: {err:?}");
+        }
+
+        // Poll until the process is no longer running, then remove it.
+        // Some VMs take a long time to stop (e.g. 2+ hours), so we wait indefinitely.
+        let mut poll_count: u64 = 0;
+        loop {
+            match self.supervisor.info(id).await {
+                Ok(Some(info)) if info.state.status.is_running() => {
+                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                    poll_count += 1;
+                    if poll_count.is_multiple_of(30) {
+                        info!(
+                            "VM {id} still running after {}m during removal, waiting...",
+                            poll_count * 2 / 60
+                        );
+                    }
+                }
+                Ok(Some(_)) => {
+                    // Not running — remove from supervisor
+                    if let Err(err) = self.supervisor.remove(id).await {
+                        warn!("supervisor.remove({id}) failed: {err:?}");
+                    }
+                    break;
+                }
+                Ok(None) => {
+                    // Already gone from supervisor
+                    break;
+                }
+                Err(err) => {
+                    warn!("supervisor.info({id}) failed during removal: {err:?}");
+                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                }
+            }
+        }
+
+        // Delete the workdir (may already be gone, e.g. manual deletion before reload)
+        let vm_path = self.work_dir(id);
+        if vm_path.path().exists() {
+            if let Err(err) = fs::remove_dir_all(&vm_path) {
+                error!("Failed to remove VM directory for {id}: {err:?}");
+            }
+        }
+
+        // Free CID and remove from memory (last step)
         {
             let mut state = self.lock();
             if let Some(vm_state) = state.remove(id) {
@@ -286,11 +362,33 @@ impl App {
             }
         }
 
-        self.cleanup_port_forward(id).await;
-
-        let vm_path = self.work_dir(id);
-        fs::remove_dir_all(&vm_path).context("Failed to remove VM directory")?;
+        info!("VM {id} removed successfully");
         Ok(())
+    }
+
+    /// Spawn a background task to clean up a VM (stop + remove from supervisor + delete workdir).
+    /// Returns false if a cleanup task is already running for this VM.
+    fn spawn_finish_remove(&self, id: &str) -> bool {
+        {
+            let mut state = self.lock();
+            if let Some(vm) = state.get_mut(id) {
+                if vm.state.removing {
+                    // Already being cleaned up — skip
+                    return false;
+                }
+                vm.state.removing = true;
+            }
+            // If VM is not in memory (e.g. orphaned supervisor process), no entry to guard
+            // but we still need to clean up the supervisor process and workdir.
+        }
+        let app = self.clone();
+        let id = id.to_string();
+        tokio::spawn(async move {
+            if let Err(err) = app.finish_remove_vm(&id).await {
+                error!("Background cleanup failed for {id}: {err:?}");
+            }
+        });
+        true
     }
 
     /// Handle a DHCP lease notification: look up VM by MAC address, persist
@@ -435,15 +533,45 @@ impl App {
                 state.cid_pool.occupy(*cid)?;
             }
         }
+
+        // Track VMs with .removing marker — load them but resume cleanup
+        let mut removing_ids = Vec::new();
+
         if vm_path.exists() {
-            for entry in fs::read_dir(vm_path).context("Failed to read VM directory")? {
+            for entry in fs::read_dir(&vm_path).context("Failed to read VM directory")? {
                 let entry = entry.context("Failed to read directory entry")?;
                 let vm_path = entry.path();
                 if vm_path.is_dir() {
-                    if let Err(err) = self.load_vm(vm_path, &occupied_cids, true).await {
+                    let workdir = VmWorkDir::new(&vm_path);
+                    let is_removing = workdir.is_removing();
+                    // Load all VMs into memory (including removing ones, so they show in UI)
+                    if let Err(err) = self.load_vm(&vm_path, &occupied_cids, !is_removing).await {
                         error!("Failed to load VM: {err:?}");
                     }
+                    if is_removing {
+                        if let Some(id) = vm_path.file_name().and_then(|n| n.to_str()) {
+                            info!("Found VM {id} with .removing marker, resuming cleanup");
+                            removing_ids.push(id.to_string());
+                        }
+                    }
                 }
+            }
+        }
+
+        // Resume cleanup for VMs with .removing marker
+        for id in removing_ids {
+            self.spawn_finish_remove(&id);
+        }
+
+        // Clean up orphaned supervisor processes (in supervisor but not loaded as VMs)
+        let loaded_vm_ids: HashSet<String> = self.lock().vms.keys().cloned().collect();
+        for (_, process) in &running_vms {
+            if !loaded_vm_ids.contains(&process.config.id) {
+                info!(
+                    "Cleaning up orphaned supervisor process: {}",
+                    process.config.id
+                );
+                self.spawn_finish_remove(&process.config.id);
             }
         }
 
@@ -524,32 +652,24 @@ impl App {
 
         // Remove VMs that no longer exist in filesystem
         let to_remove: Vec<String> = memory_vm_ids.difference(&fs_vm_ids).cloned().collect();
-        if !to_remove.is_empty() {
-            for vm_id in &to_remove {
-                // Stop the VM process first if it's running
-                if running_vms_map.contains_key(vm_id) {
-                    if let Err(err) = self.supervisor.stop(vm_id).await {
-                        warn!("Failed to stop VM process {vm_id}: {err:?}");
-                    }
-                }
-
-                // Remove from memory and free CID
-                let mut state = self.lock();
-                if let Some(vm) = state.vms.remove(vm_id) {
-                    state.cid_pool.free(vm.config.cid);
-                    removed += 1;
-                    info!("Removed VM {vm_id} from memory (directory no longer exists)");
-                }
+        for vm_id in &to_remove {
+            if self.spawn_finish_remove(vm_id) {
+                removed += 1;
+                info!("VM {vm_id} scheduled for removal (directory no longer exists)");
             }
         }
 
         // Load or update VMs from filesystem
+        let mut removing_ids = Vec::new();
         if vm_path.exists() {
             for entry in fs::read_dir(vm_path).context("Failed to read VM directory")? {
                 let entry = entry.context("Failed to read directory entry")?;
                 let vm_path = entry.path();
                 if vm_path.is_dir() {
-                    match self.load_or_update_vm(&vm_path, &occupied_cids, true).await {
+                    let workdir = VmWorkDir::new(&vm_path);
+                    let is_removing = workdir.is_removing();
+                    // Load all VMs (including removing ones, so they show in UI)
+                    match self.load_or_update_vm(&vm_path, &occupied_cids, !is_removing).await {
                         Ok(is_new) => {
                             if is_new {
                                 loaded += 1;
@@ -561,7 +681,17 @@ impl App {
                             error!("Failed to load or update VM: {err:?}");
                         }
                     }
+                    if is_removing {
+                        if let Some(id) = vm_path.file_name().and_then(|n| n.to_str()) {
+                            removing_ids.push(id.to_string());
+                        }
+                    }
                 }
+            }
+        }
+        for id in &removing_ids {
+            if self.spawn_finish_remove(id) {
+                info!("Resuming cleanup for VM {id} (.removing marker)");
             }
         }
 
@@ -901,6 +1031,9 @@ impl App {
             .lock()
             .iter_vms()
             .filter(|vm| {
+                if vm.state.removing {
+                    return false;
+                }
                 let workdir = self.work_dir(&vm.config.manifest.id);
                 let started = workdir.started().unwrap_or(false);
                 started && !running_vms.contains(&vm.config.manifest.id)
@@ -1002,6 +1135,8 @@ struct VmStateMut {
     guest_ip: String,
     devices: GpuConfig,
     events: VecDeque<pb::GuestEvent>,
+    /// True when the VM is being removed (cleanup in progress).
+    removing: bool,
 }
 
 impl VmStateMut {
