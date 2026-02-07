@@ -105,7 +105,7 @@ message VmConfiguration {
 
 // Per-VM networking configuration.
 message NetworkingConfig {
-  // Networking mode: "passt", "bridge", "user"
+  // Networking mode: "bridge", "user"
   string mode = 1;
 }
 

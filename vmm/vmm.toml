@@ -85,18 +85,6 @@ net = "10.0.2.0/24"
 dhcp_start = "10.0.2.10"
 restrict = false
 
-# for mode = "passt"
-passt_exec = ""
-interface = ""
-address = "10.0.2.10"
-netmask = "255.255.255.0"
-gateway = "10.0.2.2"
-dns = ["1.1.1.1", "1.0.0.1"]
-map_host_loopback = "none"
-map_guest_addr = "none"
-no_map_gw = true
-ipv4_only = true
-
 # for mode = "bridge"
 # bridge = "virbr0"
 forward_service_enabled = false

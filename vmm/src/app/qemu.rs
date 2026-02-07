@@ -5,7 +5,7 @@
 //! QEMU related code
 use crate::{
     app::Manifest,
-    config::{CvmConfig, GatewayConfig, Networking, NetworkingMode, ProcessAnnotation, Protocol},
+    config::{CvmConfig, GatewayConfig, Networking, NetworkingMode, ProcessAnnotation},
 };
 use std::{collections::HashMap, os::unix::fs::PermissionsExt};
 use std::{
@@ -63,7 +63,7 @@ fn networking_to_proto(n: &Networking) -> pb::NetworkingConfig {
     let mode = match n.mode {
         NetworkingMode::Bridge => "bridge",
         NetworkingMode::User => "user",
-        NetworkingMode::Passt => "passt",
+
         NetworkingMode::Custom => "custom",
     };
     pb::NetworkingConfig { mode: mode.into() }
@@ -351,113 +351,6 @@ impl VmState {
 }
 
 impl VmConfig {
-    fn config_passt(&self, workdir: &VmWorkDir, netcfg: &Networking) -> Result<ProcessConfig> {
-        let Networking {
-            passt_exec,
-            interface,
-            address,
-            netmask,
-            gateway,
-            dns,
-            map_host_loopback,
-            map_guest_addr,
-            no_map_gw,
-            ipv4_only,
-            ..
-        } = netcfg;
-
-        let passt_socket = workdir.passt_socket();
-        if passt_socket.exists() {
-            fs_err::remove_file(&passt_socket).context("Failed to remove passt socket")?;
-        }
-        let passt_exec = if passt_exec.is_empty() {
-            "passt"
-        } else {
-            passt_exec
-        };
-
-        let passt_log = workdir.passt_log();
-
-        let mut passt_cmd = Command::new(passt_exec);
-        passt_cmd.arg("--socket").arg(&passt_socket);
-        passt_cmd.arg("--log-file").arg(&passt_log);
-
-        if !interface.is_empty() {
-            passt_cmd.arg("--interface").arg(interface);
-        }
-        if !address.is_empty() {
-            passt_cmd.arg("--address").arg(address);
-        }
-        if !netmask.is_empty() {
-            passt_cmd.arg("--netmask").arg(netmask);
-        }
-        if !gateway.is_empty() {
-            passt_cmd.arg("--gateway").arg(gateway);
-        }
-        for dns in dns {
-            passt_cmd.arg("--dns").arg(dns);
-        }
-        if !map_host_loopback.is_empty() {
-            passt_cmd.arg("--map-host-loopback").arg(map_host_loopback);
-        }
-        if !map_guest_addr.is_empty() {
-            passt_cmd.arg("--map-guest-addr").arg(map_guest_addr);
-        }
-        if *no_map_gw {
-            passt_cmd.arg("--no-map-gw");
-        }
-        if *ipv4_only {
-            passt_cmd.arg("--ipv4-only");
-        }
-        // Group port mappings by protocol
-        let mut tcp_ports = Vec::new();
-        let mut udp_ports = Vec::new();
-
-        for pm in &self.manifest.port_map {
-            let port_spec = format!("{}/{}:{}", pm.address, pm.from, pm.to);
-            match pm.protocol {
-                Protocol::Tcp => tcp_ports.push(port_spec),
-                Protocol::Udp => udp_ports.push(port_spec),
-            }
-        }
-        // Add TCP port forwarding — one --tcp-ports per spec to avoid
-        // exceeding passt's single-argument parser limit.
-        for spec in &tcp_ports {
-            passt_cmd.arg("--tcp-ports").arg(spec);
-        }
-        // Add UDP port forwarding
-        for spec in &udp_ports {
-            passt_cmd.arg("--udp-ports").arg(spec);
-        }
-        passt_cmd.arg("-f").arg("-1");
-
-        let args = passt_cmd
-            .get_args()
-            .map(|arg| arg.to_string_lossy().to_string())
-            .collect::<Vec<_>>();
-        let stdout_path = workdir.passt_stdout();
-        let stderr_path = workdir.passt_stderr();
-        let note = ProcessAnnotation {
-            kind: "passt".to_string(),
-            live_for: Some(self.manifest.id.clone()),
-        };
-        let note = serde_json::to_string(&note)?;
-        let process_config = ProcessConfig {
-            id: format!("passt-{}", self.manifest.id),
-            args,
-            name: format!("passt-{}", self.manifest.name),
-            command: passt_exec.to_string(),
-            env: Default::default(),
-            cwd: workdir.to_string_lossy().to_string(),
-            stdout: stdout_path.to_string_lossy().to_string(),
-            stderr: stderr_path.to_string_lossy().to_string(),
-            pidfile: Default::default(),
-            cid: None,
-            note,
-        };
-        Ok(process_config)
-    }
-
     pub fn config_qemu(
         &self,
         workdir: impl AsRef<Path>,
@@ -591,16 +484,6 @@ impl VmConfig {
                     ));
                 }
                 netdev
-            }
-            NetworkingMode::Passt => {
-                processes.push(
-                    self.config_passt(&workdir, networking)
-                        .context("Failed to configure passt")?,
-                );
-                format!(
-                    "stream,id=net0,server=off,addr.type=unix,addr.path={}",
-                    workdir.passt_socket().display()
-                )
             }
             NetworkingMode::Bridge => {
                 tracing::info!("bridge networking: mac={mac} bridge={}", networking.bridge);
@@ -1181,22 +1064,6 @@ impl VmWorkDir {
 
     pub fn qmp_socket(&self) -> PathBuf {
         self.workdir.join("qmp.sock")
-    }
-
-    pub fn passt_socket(&self) -> PathBuf {
-        self.workdir.join("passt.sock")
-    }
-
-    pub fn passt_stdout(&self) -> PathBuf {
-        self.workdir.join("passt.stdout")
-    }
-
-    pub fn passt_stderr(&self) -> PathBuf {
-        self.workdir.join("passt.stderr")
-    }
-
-    pub fn passt_log(&self) -> PathBuf {
-        self.workdir.join("passt.log")
     }
 
     pub fn path(&self) -> &Path {

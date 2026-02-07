@@ -367,7 +367,6 @@ impl Config {
 #[serde(rename_all = "lowercase")]
 pub enum NetworkingMode {
     User,
-    Passt,
     Bridge,
     Custom,
 }
@@ -401,38 +400,12 @@ pub struct Networking {
     #[serde(default)]
     pub restrict: bool,
 
-    // ── Passt fields ───────────────────────────────────────────────
-    #[serde(default)]
-    pub passt_exec: String,
-    #[serde(default)]
-    pub interface: String,
-    #[serde(default)]
-    pub address: String,
-    #[serde(default)]
-    pub netmask: String,
-    #[serde(default)]
-    pub gateway: String,
-    #[serde(default)]
-    pub dns: Vec<String>,
-    #[serde(default)]
-    pub map_host_loopback: String,
-    #[serde(default)]
-    pub map_guest_addr: String,
-    #[serde(default)]
-    pub no_map_gw: bool,
-    #[serde(default)]
-    pub ipv4_only: bool,
-
     // ── Custom fields ──────────────────────────────────────────────
     #[serde(default)]
     pub netdev: String,
 }
 
 impl Networking {
-    pub fn is_passt(&self) -> bool {
-        self.mode == NetworkingMode::Passt
-    }
-
     pub fn is_bridge(&self) -> bool {
         self.mode == NetworkingMode::Bridge
     }
