@@ -1,0 +1,44 @@
+{
+  "name": "auth-near",
+  "version": "1.0.0",
+  "description": "dstack KMS NEAR Protocol backend with bun + hono + zod",
+  "main": "index.ts",
+  "scripts": {
+    "dev": "bun run --watch index.ts",
+    "start": "bun run index.ts",
+    "build": "bun build index.ts --outdir ./dist --target bun",
+    "test": "vitest",
+    "test:run": "vitest run",
+    "lint": "oxlint .",
+    "lint:fix": "oxlint --fix .",
+    "fmt": "oxlint --fix .",
+    "check": "bun run lint && bun run test:run",
+    "app:deploy": "bun cli.ts deploy",
+    "app:add-hash": "bun cli.ts add-hash",
+    "app:remove-hash": "bun cli.ts remove-hash",
+    "kms:add-os-image": "bun cli.ts add-os-image",
+    "kms:remove-os-image": "bun cli.ts remove-os-image",
+    "kms:add-device": "bun cli.ts add-device",
+    "kms:remove-device": "bun cli.ts remove-device",
+    "kms:add-mr": "bun cli.ts add-mr",
+    "kms:remove-mr": "bun cli.ts remove-mr"
+  },
+  "dependencies": {
+    "hono": "4.11.4",
+    "@hono/zod-validator": "0.2.2",
+    "zod": "3.25.76",
+    "near-api-js": "^2.1.4"
+  },
+  "devDependencies": {
+    "@types/bun": "1.2.18",
+    "@types/node": "^24.0.14",
+    "@vitest/ui": "1.6.1",
+    "openapi-types": "12.1.3",
+    "oxlint": "0.9.10",
+    "typescript": "5.8.3",
+    "vitest": "1.6.1"
+  },
+  "type": "module"
+}
+
+

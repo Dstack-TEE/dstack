@@ -17,8 +17,10 @@ use tracing::{info, warn};
 
 mod config;
 // mod ct_log;
+mod ckd;
 mod crypto;
 mod main_service;
+mod near_kms_client;
 mod onboard_service;
 
 fn app_version() -> String {
