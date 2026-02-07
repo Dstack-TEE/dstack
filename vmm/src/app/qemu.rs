@@ -314,11 +314,15 @@ impl VmState {
             None => false,
         };
         let started = workdir.started().unwrap_or(false);
-        let status = match (started, is_running) {
-            (true, true) => "running",
-            (true, false) => "exited",
-            (false, true) => "stopping",
-            (false, false) => "stopped",
+        let status = if self.state.removing {
+            "removing"
+        } else {
+            match (started, is_running) {
+                (true, true) => "running",
+                (true, false) => "exited",
+                (false, true) => "stopping",
+                (false, false) => "stopped",
+            }
         };
 
         fn display_ts(t: Option<&SystemTime>) -> String {
@@ -1064,6 +1068,18 @@ impl VmWorkDir {
 
     pub fn qmp_socket(&self) -> PathBuf {
         self.workdir.join("qmp.sock")
+    }
+
+    pub fn removing_marker(&self) -> PathBuf {
+        self.workdir.join(".removing")
+    }
+
+    pub fn is_removing(&self) -> bool {
+        self.removing_marker().exists()
+    }
+
+    pub fn set_removing(&self) -> Result<()> {
+        fs::write(self.removing_marker(), "").context("Failed to write .removing marker")
     }
 
     pub fn path(&self) -> &Path {
