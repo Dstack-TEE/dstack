@@ -669,7 +669,10 @@ impl App {
                     let workdir = VmWorkDir::new(&vm_path);
                     let is_removing = workdir.is_removing();
                     // Load all VMs (including removing ones, so they show in UI)
-                    match self.load_or_update_vm(&vm_path, &occupied_cids, !is_removing).await {
+                    match self
+                        .load_or_update_vm(&vm_path, &occupied_cids, !is_removing)
+                        .await
+                    {
                         Ok(is_new) => {
                             if is_new {
                                 loaded += 1;
