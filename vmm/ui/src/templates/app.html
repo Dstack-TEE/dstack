@@ -363,7 +363,7 @@ SPDX-License-Identifier: Apache-2.0
                 </div>
                 <div class="interface-detail-row">
                   <span class="detail-label">IP Address</span>
-                  <span class="detail-value">{{ iface.addresses.map(addr => addr.address + '/' + addr.prefix).join(', ') || '-' }}</span>
+                  <span class="detail-value" style="white-space: pre-line">{{ iface.addresses.map(addr => addr.address + '/' + addr.prefix).join('\n') || '-' }}</span>
                 </div>
                 <div class="interface-stats">
                   <div class="stat-item">
