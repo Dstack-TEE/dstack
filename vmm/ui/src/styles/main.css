@@ -1551,3 +1551,191 @@ h1, h2, h3, h4, h5, h6 {
   padding: 8px 12px;
   border-radius: var(--radius-sm);
 }
+
+/* Process Manager Overlay */
+.process-manager-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 1000;
+  background: var(--color-bg-primary);
+  display: flex;
+  flex-direction: column;
+  animation: fadeIn 0.15s ease;
+}
+
+.process-manager-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 24px;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-bg-secondary);
+}
+
+.process-manager-header h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.process-manager-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.process-manager-body {
+  flex: 1;
+  overflow: auto;
+  padding: 16px 24px;
+}
+
+.process-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.process-table th {
+  text-align: left;
+  padding: 10px 12px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  border-bottom: 2px solid var(--color-border);
+  white-space: nowrap;
+  position: sticky;
+  top: 0;
+  background: var(--color-bg-primary);
+}
+
+.process-table td {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--color-border);
+  vertical-align: middle;
+}
+
+.process-table tr:hover td {
+  background: var(--color-bg-tertiary);
+}
+
+.process-table .col-id {
+  font-family: 'SF Mono', 'Monaco', 'Cascadia Code', monospace;
+  font-size: 12px;
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.process-table .col-name {
+  font-weight: 500;
+}
+
+.process-table .col-actions {
+  white-space: nowrap;
+}
+
+.process-table .col-actions button {
+  padding: 4px 10px;
+  font-size: 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
+  background: transparent;
+  cursor: pointer;
+  margin-right: 4px;
+  transition: all 0.15s ease;
+}
+
+.process-table .col-actions button:hover {
+  background: var(--color-bg-tertiary);
+}
+
+.process-table .col-actions button.btn-danger {
+  color: var(--color-danger);
+  border-color: var(--color-danger);
+}
+
+.process-table .col-actions button.btn-danger:hover {
+  background: var(--color-danger);
+  color: #fff;
+}
+
+.sv-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.sv-status-running {
+  background: rgba(52, 211, 153, 0.1);
+  color: #34d399;
+}
+
+.sv-status-stopped {
+  background: rgba(156, 163, 175, 0.1);
+  color: #9ca3af;
+}
+
+.sv-status-exited {
+  background: rgba(251, 191, 36, 0.1);
+  color: #fbbf24;
+}
+
+.sv-status-error {
+  background: rgba(248, 113, 113, 0.1);
+  color: #f87171;
+}
+
+.sv-status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.btn-clear-stopped {
+  padding: 6px 14px;
+  font-size: 13px;
+  font-weight: 500;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.btn-clear-stopped:hover {
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-primary);
+}
+
+.btn-close-overlay {
+  padding: 6px 14px;
+  font-size: 13px;
+  font-weight: 500;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.btn-close-overlay:hover {
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-primary);
+}
+
+.process-empty {
+  text-align: center;
+  padding: 48px;
+  color: var(--color-text-secondary);
+}

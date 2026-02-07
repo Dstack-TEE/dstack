@@ -35,6 +35,15 @@ SPDX-License-Identifier: Apache-2.0
               </svg>
               Reload VMs
             </button>
+            <button class="dropdown-item" @click="openProcessManager(); closeSystemMenu()">
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                <path d="M2 3h10M2 7h10M2 11h10" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+                <circle cx="11" cy="3" r="1.5" fill="currentColor"/>
+                <circle cx="5" cy="7" r="1.5" fill="currentColor"/>
+                <circle cx="9" cy="11" r="1.5" fill="currentColor"/>
+              </svg>
+              Processes
+            </button>
             <button class="dropdown-item" @click="openApiDocs()">
               <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
                 <path d="M3 3h8v8H3z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>
@@ -441,6 +450,48 @@ SPDX-License-Identifier: Apache-2.0
           <button class="vm-log-button" @click="showLogs(vm.id, 'stderr')">Stderr</button>
         </div>
       </div>
+    </div>
+  </div>
+
+  <div v-if="showProcessManager" class="process-manager-overlay">
+    <div class="process-manager-header">
+      <h2>Supervisor Processes</h2>
+      <div class="process-manager-actions">
+        <button class="btn-clear-stopped" @click="svClear()">Clear Stopped</button>
+        <button class="btn-clear-stopped" @click="loadSupervisorProcesses()">Refresh</button>
+        <button class="btn-close-overlay" @click="showProcessManager = false">Close</button>
+      </div>
+    </div>
+    <div class="process-manager-body">
+      <table class="process-table" v-if="supervisorProcesses.length">
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>ID</th>
+            <th>Status</th>
+            <th>PID</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="p in supervisorProcesses" :key="p.id">
+            <td class="col-name">{{ p.name }}</td>
+            <td class="col-id" :title="p.id">{{ p.id }}</td>
+            <td>
+              <span class="sv-status" :class="svStatusClass(p)">
+                <span class="sv-status-dot"></span>
+                {{ p.status }}
+              </span>
+            </td>
+            <td>{{ p.pid || '-' }}</td>
+            <td class="col-actions">
+              <button v-if="svIsRunning(p)" @click="svStop(p.id)">Stop</button>
+              <button v-if="svIsStopped(p)" class="btn-danger" @click="svRemove(p.id)">Remove</button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      <div v-else class="process-empty">No processes found</div>
     </div>
   </div>
 
