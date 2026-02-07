@@ -10,11 +10,16 @@
 use anyhow::{Context, Result};
 use fs_err as fs;
 use hex;
-use near_api::{signer::SecretKey, types::AccountId, Account, Chain, NearToken, Signer};
+use near_api::{
+    SecretKey,
+    types::{AccountId, Data},
+    Contract, NetworkConfig, Signer,
+};
+use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
-use crate::ckd::MpcResponse;
+use crate::ckd::CkdResponse;
 use crate::config::KmsConfig;
 
 /// Request KMS root key arguments (matching NEAR KMS contract interface)
@@ -28,28 +33,29 @@ pub struct RequestKmsRootKeyArgs {
 
 /// NEAR KMS client for requesting root keys
 pub struct NearKmsClient {
-    chain: Chain,
-    kms_contract_id: AccountId,
-    account: Option<Account>,
+    network_config: NetworkConfig,
+    mpc_contract: Contract,
+    kms_contract: Contract,
+    signer_account_id: Option<AccountId>,
+    signer: Option<Arc<Signer>>,
 }
 
 impl NearKmsClient {
     /// Create a new NEAR KMS client
     pub fn new(
-        rpc_url: &str,
+        network_config: NetworkConfig,
+        mpc_contract_id: String,
         kms_contract_id: String,
         signer: Option<near_crypto::InMemorySigner>,
     ) -> Result<Self> {
-        let chain =
-            Chain::from_rpc_url(rpc_url).context("Failed to create NEAR chain from RPC URL")?;
+        let mpc_contract_id: AccountId = mpc_contract_id.parse()
+            .context("Failed to parse MPC contract ID")?;
 
-        let kms_contract_id: AccountId = kms_contract_id
-            .parse()
+        let kms_contract_id: AccountId = kms_contract_id.parse()
             .context("Failed to parse KMS contract ID")?;
 
-        let account = if let Some(in_memory_signer) = signer {
+        let (signer_account_id, near_api_signer) = if let Some(in_memory_signer) = signer {
             // Convert near_crypto::InMemorySigner to near-api Signer
-            // near_crypto::SecretKey implements Display, so we can get the string representation
             let secret_key_str = in_memory_signer.secret_key.to_string();
             let near_api_secret_key = SecretKey::from_str(&secret_key_str)
                 .context("Failed to parse secret key for near-api Signer")?;
@@ -58,16 +64,36 @@ impl NearKmsClient {
             let signer = Signer::from_secret_key(near_api_secret_key)
                 .context("Failed to create near-api Signer")?;
 
-            Some(chain.account(in_memory_signer.account_id.clone(), signer))
+            let account_id: AccountId = in_memory_signer.account_id.to_string()
+                .parse()
+                .context("Failed to parse account ID")?;
+
+            (Some(account_id.clone()), Some(signer))
         } else {
-            None
+            (None, None)
         };
 
+        let mpc_contract = Contract(mpc_contract_id);
+        let kms_contract = Contract(kms_contract_id);
+
         Ok(Self {
-            chain,
-            kms_contract_id,
-            account,
+            network_config,
+            mpc_contract,
+            kms_contract,
+            signer_account_id,
+            signer: near_api_signer,
         })
+    }
+
+    /// Get MPC public key from the contract
+    pub async fn get_mpc_public_key(&self, domain_id: u64) -> Result<String> {
+        let current_value: Data<String> = self.mpc_contract
+            .call_function("public_key", serde_json::json!({ "domain_id": domain_id }))
+            .read_only()
+            .fetch_from(&self.network_config)
+            .await?;
+
+        Ok(current_value.data)
     }
 
     /// Request root key from KMS contract
@@ -75,21 +101,19 @@ impl NearKmsClient {
     /// This calls the KMS contract's `request_kms_root_key()` which:
     /// 1. Verifies the TDX attestation (quote, collateral, tcb_info)
     /// 2. Calls the MPC contract to derive the key
-    /// 3. Returns a Promise that resolves with the MPC response
-    ///
-    /// Note: The MPC response comes back via a Promise callback. We need to wait
-    /// for the transaction to complete and then extract the result from the receipt.
+    /// 3. Returns the MPC response (big_y, big_c)
     pub async fn request_kms_root_key(
         &self,
         quote_hex: &str,
         collateral: &str,
         tcb_info: &str,
         worker_public_key: &str,
-    ) -> Result<MpcResponse> {
-        let account = self
-            .account
+    ) -> Result<CkdResponse> {
+        let signer = self
+            .signer
             .as_ref()
             .context("NEAR signer required for KMS root key requests")?;
+        let signer_account_id = self.signer_account_id.expect("Signer account ID required for KMS root key requests")?;
 
         // Create request arguments
         let args = RequestKmsRootKeyArgs {
@@ -100,53 +124,48 @@ impl NearKmsClient {
         };
 
         // Call the contract method using near-api
-        // The contract returns a Promise that resolves with the MPC response
-        let result = account
-            .contract(self.kms_contract_id.clone())
-            .call("request_kms_root_key")
-            .args_json(args)
-            .gas(300_000_000_000_000u64) // 300 TGas
-            .deposit(NearToken::from_yoctonear(1)) // 1 yoctoNEAR (required by KMS contract)
-            .transact()
+        let execution_result = self
+            .kms_contract
+            .call_function("request_kms_root_key", args)
+            .transaction()
+            .with_signer(self.signer_account_id.clone(), signer.clone())
+            .send_to(&self.network_config)
             .await
             .context("Failed to call KMS contract")?;
 
-        // Extract the MPC response from the transaction result
-        // The response comes via Promise callback, so we need to check the receipt outcomes
-        // Note: The actual result type may need adjustment based on near-api version
-        match result {
-            near_api::types::TxExecutionStatus::Success { .. } => {
-                // For now, return an error indicating this needs proper implementation
-                // TODO: Implement proper MPC response extraction from receipt outcomes
-                anyhow::bail!(
-                    "MPC response extraction needs proper implementation. The response comes via Promise callback. \
-                    You may need to poll the transaction or check receipt outcomes after the Promise resolves."
-                )
-            }
-            near_api::types::TxExecutionStatus::Failure(err) => {
-                Err(anyhow::anyhow!("KMS transaction failed: {:?}", err))
-            }
-        }
+        // Assert that the transaction succeeded and get receipt outcomes
+        // Note: assert_success() may consume the result, so we need to handle this carefully
+        let receipt_outcomes = execution_result.receipt_outcomes().to_vec();
+        execution_result.assert_success();
+
+        // Extract the return value from the transaction result
+        // The return value comes via Promise callback in the receipt outcomes
+        // We need to find the return value in one of the receipt outcomes
+        // TODO: Implement proper extraction based on the actual near-api API
+        // The return value from Promise callbacks needs to be extracted from the appropriate receipt outcome
+        // This may require checking the receipt IDs and following the Promise chain, or using
+        // a helper method if the API provides one
+        
+        // For now, return an error indicating this needs implementation
+        // The actual implementation will depend on how the near-api library exposes
+        // the return values from Promise callbacks in receipt outcomes
+        anyhow::bail!(
+            "MPC response extraction needs proper implementation. \
+            The response comes via Promise callback in receipt outcomes. \
+            Please check the near-api documentation for the correct way to extract return values from ExecutionFinalResult. \
+            Receipt outcomes count: {}",
+            receipt_outcomes.len()
+        )
     }
 
     /// Parse MPC response from transaction receipt value
-    fn parse_mpc_response(&self, value: &[u8]) -> Result<MpcResponse> {
-        // The MPC contract returns CKDResponse which has Bls12381G1PublicKey wrappers
-        #[derive(Deserialize)]
-        struct Bls12381G1PublicKey(String);
-
-        #[derive(Deserialize)]
-        struct CkdResponse {
-            big_y: Bls12381G1PublicKey,
-            big_c: Bls12381G1PublicKey,
-        }
-
+    fn parse_ckd_response(&self, value: &[u8]) -> Result<CkdResponse> {
         let ckd_response: CkdResponse =
             serde_json::from_slice(value).context("Failed to parse MPC response")?;
 
-        Ok(MpcResponse {
-            big_y: ckd_response.big_y.0,
-            big_c: ckd_response.big_c.0,
+        Ok(CkdResponse {
+            big_y: ckd_response.big_y,
+            big_c: ckd_response.big_c,
         })
     }
 }
@@ -161,7 +180,8 @@ pub fn generate_near_implicit_signer() -> Result<near_crypto::InMemorySigner> {
 
     // Derive implicit account ID from public key (hex encode the 32-byte public key)
     let public_key = secret_key.public_key();
-    let account_id = match public_key {
+        use byte_slice_cast::AsByteSlice;
+        let account_id = match public_key {
         near_crypto::PublicKey::ED25519(pk) => {
             // Implicit account ID is the hex-encoded public key (64 characters)
             hex::encode(pk.as_byte_slice())
@@ -169,7 +189,9 @@ pub fn generate_near_implicit_signer() -> Result<near_crypto::InMemorySigner> {
         _ => anyhow::bail!("Unexpected key type for NEAR implicit account"),
     };
 
-    let account_id: AccountId = account_id
+    // InMemorySigner::from_secret_key expects AccountId which can be parsed from string
+    // The AccountId type is re-exported from near-account-id crate
+    let account_id: near_account_id::AccountId = account_id
         .parse()
         .context("Failed to parse generated account ID")?;
 
@@ -206,15 +228,15 @@ pub fn load_or_generate_near_signer(
 
         use near_crypto::{InMemorySigner, SecretKey};
 
-        let account_id: AccountId = account_id_str
+        let account_id_parsed: near_account_id::AccountId = account_id_str
             .parse()
             .context("Failed to parse account ID from signer file")?;
-        let secret_key = SecretKey::from_str(secret_key_str)
+        let secret_key = near_crypto::SecretKey::from_str(secret_key_str)
             .context("Failed to parse secret key from signer file")?;
 
-        tracing::info!("Loaded existing NEAR signer: {}", account_id);
+        tracing::info!("Loaded existing NEAR signer: {}", account_id_str);
         Ok(Some(InMemorySigner::from_secret_key(
-            account_id, secret_key,
+            account_id_parsed, secret_key,
         )))
     } else {
         // Generate new signer

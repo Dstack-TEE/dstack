@@ -23,12 +23,12 @@ use ra_tls::{
 use safe_write::safe_write;
 
 use crate::ckd::{
-    derive_root_key_from_mpc, g1_to_near_format, generate_ephemeral_keypair, MpcConfig, MpcResponse,
+    derive_root_key_from_mpc, g1_to_near_format, generate_ephemeral_keypair, MpcConfig,
 };
 use crate::config::{AuthApi, KmsConfig};
 use crate::near_kms_client::{load_or_generate_near_signer, NearKmsClient};
 use dcap_qvl::collateral;
-use near_api::{types::AccountId, Chain};
+use near_api::NetworkConfig;
 use ra_tls::kdf;
 use serde_json::json;
 
@@ -220,9 +220,12 @@ impl Keys {
         // Sign WWW server cert with KMS cert
         let rpc_cert = CertRequest::builder()
             .subject(domain)
+            .alt_names(&[domain.to_string()])
+            .special_usage("kms:rpc")
+            .maybe_attestation(attestation.as_ref())
             .key(&rpc_key)
             .build()
-            .signed(&ca_key, &ca_cert, attestation.as_ref())?;
+            .signed_by(&ca_cert, &ca_key)?;
 
         Ok(Self {
             k256_key,
@@ -237,19 +240,35 @@ impl Keys {
     }
 
     async fn onboard(
-        source_url: &str,
+        other_kms_url: &str,
         domain: &str,
         quote_enabled: bool,
         pccs_url: Option<String>,
     ) -> Result<Self> {
-        let client = KmsClient::new(source_url.parse()?);
-        let response = client
-            .get_kms_key(GetKmsKeyRequest {})
-            .await
-            .context("Failed to get KMS key")?;
-        let root_ca_key_pem = response.ca_key_pem;
-        let tmp_ca_key_pem = response.tmp_ca_key_pem;
-        let root_k256_key = response.k256_key;
+        let kms_client = RaClient::new(other_kms_url.into(), true)?;
+        let mut kms_client = KmsClient::new(kms_client);
+
+        if quote_enabled {
+            let tmp_ca = kms_client.get_temp_ca_cert().await?;
+            let (ra_cert, ra_key) = gen_ra_cert(tmp_ca.temp_ca_cert, tmp_ca.temp_ca_key).await?;
+            let ra_client = RaClient::new_mtls(other_kms_url.into(), ra_cert, ra_key, pccs_url)
+                .context("Failed to create client")?;
+            kms_client = KmsClient::new(ra_client);
+        }
+
+        let info = dstack_client().info().await.context("Failed to get info")?;
+        let keys_res = kms_client
+            .get_kms_key(GetKmsKeyRequest {
+                vm_config: info.vm_config,
+            })
+            .await?;
+        if keys_res.keys.len() != 1 {
+            return Err(anyhow::anyhow!("Invalid keys"));
+        }
+        let keys = keys_res.keys[0].clone();
+        let tmp_ca_key_pem = keys_res.temp_ca_key;
+        let root_ca_key_pem = keys.ca_key;
+        let root_k256_key = keys.k256_key;
         let rpc_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)?;
         let ca_key = KeyPair::from_pem(&root_ca_key_pem).context("Failed to parse CA key")?;
         let tmp_ca_key =
@@ -389,6 +408,12 @@ async fn try_derive_keys_from_mpc(
         return Ok(None);
     };
 
+    let rpc_url = near
+        .rpc_url
+        .as_deref()
+        .unwrap_or("https://free.rpc.fastnear.com")
+        .to_string();
+
     // Check if MPC configuration is complete
     let mpc_contract_id = match &near.mpc_contract_id {
         Some(id) => id.clone(),
@@ -397,41 +422,33 @@ async fn try_derive_keys_from_mpc(
             return Ok(None);
         }
     };
-
-    let rpc_url = near
-        .rpc_url
-        .as_deref()
-        .unwrap_or("https://free.rpc.fastnear.com")
-        .to_string();
     let kms_contract_id = &near.contract_id;
     let mpc_domain_id = near.mpc_domain_id;
 
+    let network_id = near.network_id.as_deref().unwrap_or("testnet");
+    let network_config = NetworkConfig::from_rpc_url(network_id, &rpc_url);
+
+    // Load or generate NEAR signer (implicit account)
+    let signer = load_or_generate_near_signer(cfg)?;
+    let signer = match signer {
+        Some(s) => s,
+        None => {
+            tracing::warn!("Failed to load or generate NEAR signer, cannot call KMS contract");
+            return Ok(None);
+        }
+    };
+
     tracing::info!("Attempting MPC key derivation from NEAR network...");
+    tracing::info!("  Network ID: {}", network_id);
+    tracing::info!("  RPC URL: {}", rpc_url);
     tracing::info!("  MPC Contract: {}", mpc_contract_id);
     tracing::info!("  KMS Contract: {}", kms_contract_id);
     tracing::info!("  Domain ID: {}", mpc_domain_id);
+    tracing::info!("  Signer Account ID: {}", signer.account_id);
 
-    // Fetch MPC public key from the contract using near-api
-    let chain =
-        Chain::from_rpc_url(&rpc_url).context("Failed to create NEAR chain from RPC URL")?;
-    let contract_id: AccountId = mpc_contract_id
-        .parse()
-        .context("Failed to parse MPC contract ID")?;
+    let kms_client = NearKmsClient::new(network_config, mpc_contract_id.clone(), kms_contract_id.clone(), Some(signer))?;
 
-    let args = if mpc_domain_id != 2 {
-        // If domain_id is not default (2), pass it explicitly
-        serde_json::json!({ "domain_id": mpc_domain_id })
-    } else {
-        // Default domain (2) - pass empty object
-        serde_json::json!({})
-    };
-
-    let mpc_public_key: String = chain
-        .contract(contract_id)
-        .view("public_key")
-        .args_json(args)
-        .await
-        .context("Failed to fetch MPC public key from contract")?;
+    let mpc_public_key = kms_client.get_mpc_public_key(mpc_domain_id).await?;
 
     tracing::info!(
         "✅ Fetched MPC public key from contract: {}",
@@ -512,18 +529,6 @@ async fn try_derive_keys_from_mpc(
     } else {
         anyhow::bail!("Quote must be enabled for NEAR MPC key derivation (attestation required)");
     };
-
-    // Load or generate NEAR signer (implicit account)
-    let signer = load_or_generate_near_signer(cfg)?;
-    let signer = match signer {
-        Some(s) => s,
-        None => {
-            tracing::warn!("Failed to load or generate NEAR signer, cannot call KMS contract");
-            return Ok(None);
-        }
-    };
-
-    let kms_client = NearKmsClient::new(&rpc_url, kms_contract_id.clone(), Some(signer))?;
 
     // Request root key from KMS contract (which will verify attestation and call MPC)
     tracing::info!("Calling KMS contract's request_kms_root_key() with attestation...");

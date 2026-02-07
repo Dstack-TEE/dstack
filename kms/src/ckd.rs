@@ -23,6 +23,7 @@ use hkdf::Hkdf;
 use rand_core::OsRng;
 use sha2::Sha256;
 use sha3::{Digest, Sha3_256};
+use serde::{Deserialize, Serialize};
 
 // Constants matching NEAR MPC contract
 const BLS12381G1_PUBLIC_KEY_SIZE: usize = 48;
@@ -46,11 +47,14 @@ pub struct MpcConfig {
     pub near_rpc_url: String,
 }
 
+#[derive(Deserialize)]
+struct Bls12381G1PublicKey(String);
+
 /// MPC CKD response (big_y, big_c from MPC network)
-#[derive(Debug, Clone)]
-pub struct MpcResponse {
-    pub big_y: String, // BLS12-381 G1 point in NEAR format
-    pub big_c: String, // BLS12-381 G1 point in NEAR format
+#[derive(Debug, Clone, Deserialize)]
+pub struct CkdResponse {
+    pub big_y: Bls12381G1PublicKey,
+    pub big_c: Bls12381G1PublicKey,
 }
 
 /// Derive app_id the same way MPC contract does
@@ -202,7 +206,7 @@ pub fn derive_final_key(
 /// 3. Derives the final 32-byte key using HKDF
 /// 4. Returns the key that can be used as K256 signing key
 pub fn derive_root_key_from_mpc(
-    mpc_response: &MpcResponse,
+    mpc_response: &CKDResponse,
     ephemeral_private_key: Scalar,
     mpc_config: &MpcConfig,
     kms_account_id: &str,
