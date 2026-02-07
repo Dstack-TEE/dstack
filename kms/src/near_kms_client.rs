@@ -135,7 +135,7 @@ impl NearKmsClient {
             worker_public_key: worker_public_key.to_string(),
         };
 
-        // Call the contract method using near-api
+        // Call the contract method
         let execution_result = self
             .kms_contract
             .call_function("request_kms_root_key", args)
@@ -145,29 +145,15 @@ impl NearKmsClient {
             .await
             .context("Failed to call KMS contract")?;
 
-        // Assert that the transaction succeeded and get receipt outcomes
-        // Note: assert_success() may consume the result, so we need to handle this carefully
-        let receipt_outcomes = execution_result.receipt_outcomes().to_vec();
-        execution_result.assert_success();
-
         // Extract the return value from the transaction result
-        // The return value comes via Promise callback in the receipt outcomes
-        // We need to find the return value in one of the receipt outcomes
-        // TODO: Implement proper extraction based on the actual near-api API
-        // The return value from Promise callbacks needs to be extracted from the appropriate receipt outcome
-        // This may require checking the receipt IDs and following the Promise chain, or using
-        // a helper method if the API provides one
+        let execution_success = execution_result
+            .into_result()
+            .context("Transaction execution failed")?;
+        let ckd_response: CkdResponse = execution_success
+            .json()
+            .context("Failed to deserialize CkdResponse from transaction return value")?;
 
-        // For now, return an error indicating this needs implementation
-        // The actual implementation will depend on how the near-api library exposes
-        // the return values from Promise callbacks in receipt outcomes
-        anyhow::bail!(
-            "MPC response extraction needs proper implementation. \
-            The response comes via Promise callback in receipt outcomes. \
-            Please check the near-api documentation for the correct way to extract return values from ExecutionFinalResult. \
-            Receipt outcomes count: {}",
-            receipt_outcomes.len()
-        )
+        Ok(ckd_response)
     }
 
     /// Parse MPC response from transaction receipt value
@@ -313,4 +299,183 @@ pub fn near_public_key_to_report_data(
     // Remaining bytes (50..64) are already zero-padded
 
     Ok(report_data)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use near_crypto::PublicKey;
+    use sha3::{Digest, Sha3_384};
+
+    #[test]
+    fn test_generate_near_implicit_signer() {
+        // Test that we can generate a signer
+        let signer = generate_near_implicit_signer().expect("Should generate a signer");
+
+        // Verify the signer has valid fields
+        assert!(!signer.account_id.to_string().is_empty());
+        assert_eq!(signer.account_id.to_string().len(), 64); // Hex-encoded 32-byte public key = 64 chars
+
+        // Verify the public key matches the account ID derivation
+        let public_key_bytes = match &signer.public_key {
+            PublicKey::ED25519(pk) => pk.as_byte_slice(),
+            _ => panic!("Expected ED25519 key"),
+        };
+        let expected_account_id = hex::encode(public_key_bytes);
+        assert_eq!(signer.account_id.to_string(), expected_account_id);
+
+        // Verify the signer can be used (secret key and public key match)
+        let derived_public_key = signer.secret_key.public_key();
+        assert_eq!(signer.public_key, derived_public_key);
+    }
+
+    #[test]
+    fn test_generate_multiple_signers_are_different() {
+        // Generate multiple signers and verify they're different
+        let signer1 = generate_near_implicit_signer().expect("Should generate signer 1");
+        let signer2 = generate_near_implicit_signer().expect("Should generate signer 2");
+        let signer3 = generate_near_implicit_signer().expect("Should generate signer 3");
+
+        // All should have different account IDs
+        assert_ne!(signer1.account_id, signer2.account_id);
+        assert_ne!(signer2.account_id, signer3.account_id);
+        assert_ne!(signer1.account_id, signer3.account_id);
+
+        // All should have different secret keys
+        assert_ne!(
+            signer1.secret_key.to_string(),
+            signer2.secret_key.to_string()
+        );
+        assert_ne!(
+            signer2.secret_key.to_string(),
+            signer3.secret_key.to_string()
+        );
+    }
+
+    #[test]
+    fn test_near_public_key_to_report_data_format() {
+        // Generate a test public key
+        let secret_key = near_crypto::SecretKey::from_random(near_crypto::KeyType::ED25519);
+        let public_key = secret_key.public_key();
+
+        // Convert to report_data
+        let report_data = near_public_key_to_report_data(&public_key)
+            .expect("Should convert public key to report_data");
+
+        // Verify size
+        assert_eq!(report_data.len(), 64);
+
+        // Verify version bytes (first 2 bytes should be [0, 1] for version 1)
+        assert_eq!(report_data[0..2], [0, 1]);
+
+        // Verify hash bytes are non-zero (bytes 2-50 should contain the hash)
+        let hash_section = &report_data[2..50];
+        assert!(!hash_section.iter().all(|&b| b == 0), "Hash should not be all zeros");
+
+        // Verify padding bytes are zero (bytes 50-64 should be zero)
+        let padding_section = &report_data[50..64];
+        assert!(padding_section.iter().all(|&b| b == 0), "Padding should be zeros");
+    }
+
+    #[test]
+    fn test_near_public_key_to_report_data_hash_correctness() {
+        // Generate a test public key
+        let secret_key = near_crypto::SecretKey::from_random(near_crypto::KeyType::ED25519);
+        let public_key = secret_key.public_key();
+
+        // Convert to report_data
+        let report_data = near_public_key_to_report_data(&public_key)
+            .expect("Should convert public key to report_data");
+
+        // Manually compute the expected hash
+        let public_key_bytes = match &public_key {
+            PublicKey::ED25519(pk) => pk.as_byte_slice(),
+            _ => panic!("Expected ED25519 key"),
+        };
+
+        let mut hasher = Sha3_384::new();
+        hasher.update(&public_key_bytes[1..]); // Skip first byte (curve type)
+        let expected_hash: [u8; 48] = hasher.finalize().into();
+
+        // Verify the hash matches
+        assert_eq!(&report_data[2..50], &expected_hash);
+    }
+
+    #[test]
+    fn test_near_public_key_to_report_data_deterministic() {
+        // Generate a test public key
+        let secret_key = near_crypto::SecretKey::from_random(near_crypto::KeyType::ED25519);
+        let public_key = secret_key.public_key();
+
+        // Convert multiple times - should be deterministic
+        let report_data1 = near_public_key_to_report_data(&public_key)
+            .expect("Should convert public key to report_data");
+        let report_data2 = near_public_key_to_report_data(&public_key)
+            .expect("Should convert public key to report_data");
+        let report_data3 = near_public_key_to_report_data(&public_key)
+            .expect("Should convert public key to report_data");
+
+        // All should be identical
+        assert_eq!(report_data1, report_data2);
+        assert_eq!(report_data2, report_data3);
+    }
+
+    #[test]
+    fn test_near_public_key_to_report_data_different_keys_different_output() {
+        // Generate two different public keys
+        let secret_key1 = near_crypto::SecretKey::from_random(near_crypto::KeyType::ED25519);
+        let public_key1 = secret_key1.public_key();
+
+        let secret_key2 = near_crypto::SecretKey::from_random(near_crypto::KeyType::ED25519);
+        let public_key2 = secret_key2.public_key();
+
+        // Convert both to report_data
+        let report_data1 = near_public_key_to_report_data(&public_key1)
+            .expect("Should convert public key 1 to report_data");
+        let report_data2 = near_public_key_to_report_data(&public_key2)
+            .expect("Should convert public key 2 to report_data");
+
+        // They should be different
+        assert_ne!(report_data1, report_data2);
+    }
+
+    #[test]
+    fn test_parse_ckd_response_valid_json() {
+        // Create valid CkdResponse JSON
+        let json_data = r#"{
+            "big_y": "ed25519:test_y_key",
+            "big_c": "ed25519:test_c_key"
+        }"#;
+
+        // Parse the response directly
+        let result: Result<CkdResponse, _> = serde_json::from_str(json_data);
+        assert!(result.is_ok(), "Should parse valid JSON");
+
+        let ckd_response = result.unwrap();
+        // Verify the response was parsed correctly by checking the string representation
+        // (Bls12381G1PublicKey wraps a String, but we can't access it directly)
+        // We can at least verify the struct was created successfully
+        let _ = ckd_response.big_y;
+        let _ = ckd_response.big_c;
+    }
+
+    #[test]
+    fn test_parse_ckd_response_invalid_json() {
+        use crate::ckd::CkdResponse;
+
+        // Try to parse invalid JSON
+        let invalid_json = "{ invalid json }";
+        let result: Result<CkdResponse, _> = serde_json::from_str(invalid_json);
+        assert!(result.is_err(), "Should fail to parse invalid JSON");
+    }
+
+    #[test]
+    fn test_parse_ckd_response_missing_fields() {
+        use crate::ckd::CkdResponse;
+
+        // Try to parse JSON with missing fields
+        let incomplete_json = r#"{"big_y": "ed25519:test_y_key"}"#;
+        let result: Result<CkdResponse, _> = serde_json::from_str(incomplete_json);
+        assert!(result.is_err(), "Should fail to parse incomplete JSON");
+    }
 }
