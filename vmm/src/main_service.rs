@@ -201,7 +201,7 @@ fn networking_from_proto(proto: &rpc::NetworkingConfig) -> Option<crate::config:
     use crate::config::NetworkingMode;
     let mode = match proto.mode.as_str() {
         "bridge" => NetworkingMode::Bridge,
-        "passt" => NetworkingMode::Passt,
+
         "user" => NetworkingMode::User,
         "custom" => NetworkingMode::Custom,
         "" => return None, // not set, use global default
@@ -218,16 +218,6 @@ fn networking_from_proto(proto: &rpc::NetworkingConfig) -> Option<crate::config:
         net: String::new(),
         dhcp_start: String::new(),
         restrict: false,
-        passt_exec: String::new(),
-        interface: String::new(),
-        address: String::new(),
-        netmask: String::new(),
-        gateway: String::new(),
-        dns: vec![],
-        map_host_loopback: String::new(),
-        map_guest_addr: String::new(),
-        no_map_gw: false,
-        ipv4_only: false,
         netdev: String::new(),
         forward_service_enabled: false,
     })

@@ -228,16 +228,6 @@ impl App {
             vm_state.config.clone()
         };
         if !is_running {
-            // Try to stop passt if already running
-            let networking = vm_config
-                .manifest
-                .networking
-                .as_ref()
-                .unwrap_or(&self.config.cvm.networking);
-            if networking.is_passt() {
-                self.supervisor.stop(&format!("passt-{}", id)).await.ok();
-            }
-
             let work_dir = self.work_dir(id);
             for path in [work_dir.serial_pty(), work_dir.qmp_socket()] {
                 if path.symlink_metadata().is_ok() {
@@ -287,14 +277,6 @@ impl App {
                 self.supervisor.stop(id).await?;
             }
             self.supervisor.remove(id).await?;
-            // Try to clean up passt process if it exists (safe no-op if not passt mode)
-            let passt_id = format!("passt-{}", id);
-            if let Some(info) = self.supervisor.info(&passt_id).await.ok().flatten() {
-                if info.state.status.is_running() {
-                    self.supervisor.stop(&passt_id).await?;
-                }
-                self.supervisor.remove(&passt_id).await?;
-            }
         }
 
         {

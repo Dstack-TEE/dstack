@@ -1390,7 +1390,7 @@ def main():
     deploy_parser.add_argument('--tee', dest='no_tee', action='store_false',
                                help='Force-enable Intel TDX (default)')
     deploy_parser.set_defaults(no_tee=False)
-    deploy_parser.add_argument('--net', choices=['bridge', 'passt', 'user'],
+    deploy_parser.add_argument('--net', choices=['bridge', 'user'],
                                help='Networking mode (default: use global config)')
 
 
