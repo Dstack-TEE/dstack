@@ -8,6 +8,7 @@
 //! which verifies attestation and requests keys from the MPC network.
 
 use anyhow::{Context, Result};
+use byte_slice_cast::AsByteSlice;
 use fs_err as fs;
 use hex;
 use near_api::{
@@ -16,6 +17,7 @@ use near_api::{
 };
 use near_crypto::InMemorySigner;
 use serde::{Deserialize, Serialize};
+use sha3::{Digest, Sha3_384};
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -266,4 +268,49 @@ pub fn load_or_generate_near_signer(config: &KmsConfig) -> Result<Option<InMemor
         tracing::info!("Generated new NEAR implicit account signer: {}", account_id);
         Ok(Some(signer))
     }
+}
+
+/// Converts a NEAR public key to the report_data format required by the NEAR KMS contract.
+///
+/// The format matches `ReportData::new()` in the contract:
+/// `[version(2 bytes big endian) || SHA3-384(public_key_bytes[1..]) || zero padding]`
+///
+/// # Arguments
+/// * `public_key` - The NEAR account public key (must be ED25519)
+///
+/// # Returns
+/// A 64-byte array containing the report_data in the format expected by the KMS contract
+///
+/// # Errors
+/// Returns an error if the public key is not ED25519 (only ED25519 keys are supported for NEAR implicit accounts)
+pub fn near_public_key_to_report_data(
+    public_key: &near_crypto::PublicKey,
+) -> Result<[u8; 64]> {
+    const REPORT_DATA_SIZE: usize = 64;
+    const BINARY_VERSION_SIZE: usize = 2;
+    const PUBLIC_KEYS_HASH_SIZE: usize = 48;
+    const PUBLIC_KEYS_OFFSET: usize = BINARY_VERSION_SIZE;
+
+    let mut report_data = [0u8; REPORT_DATA_SIZE];
+
+    // Version: 1 (2 bytes, big endian)
+    report_data[0..BINARY_VERSION_SIZE].copy_from_slice(&1u16.to_be_bytes());
+
+    // Get public key bytes (skip first byte which is curve type identifier)
+    let public_key_bytes = match public_key {
+        near_crypto::PublicKey::ED25519(pk) => pk.as_byte_slice(),
+        _ => anyhow::bail!("Only ED25519 keys are supported for NEAR implicit accounts"),
+    };
+
+    // Hash public key bytes (skip first byte) with SHA3-384
+    let mut hasher = Sha3_384::new();
+    hasher.update(&public_key_bytes[1..]); // Skip first byte (curve type)
+    let hash: [u8; PUBLIC_KEYS_HASH_SIZE] = hasher.finalize().into();
+
+    // Copy hash to report_data (offset 2, length 48)
+    report_data[PUBLIC_KEYS_OFFSET..PUBLIC_KEYS_OFFSET + PUBLIC_KEYS_HASH_SIZE]
+        .copy_from_slice(&hash);
+    // Remaining bytes (50..64) are already zero-padded
+
+    Ok(report_data)
 }

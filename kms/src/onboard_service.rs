@@ -26,7 +26,7 @@ use crate::ckd::{
     derive_root_key_from_mpc, g1_to_near_format, generate_ephemeral_keypair, MpcConfig,
 };
 use crate::config::{AuthApi, KmsConfig};
-use crate::near_kms_client::{load_or_generate_near_signer, NearKmsClient};
+use crate::near_kms_client::{load_or_generate_near_signer, near_public_key_to_report_data, NearKmsClient};
 use dcap_qvl::collateral;
 use near_api::NetworkConfig;
 use ra_tls::kdf;
@@ -446,6 +446,10 @@ async fn try_derive_keys_from_mpc(
     tracing::info!("  Domain ID: {}", mpc_domain_id);
     tracing::info!("  Signer Account ID: {}", signer.account_id);
 
+    // Get the NEAR account public key for report_data (clone before moving signer)
+    // The signer's public_key field contains the NEAR account public key
+    let near_account_public_key = signer.public_key.clone();
+
     let kms_client = NearKmsClient::new(
         network_config,
         mpc_contract_id.clone(),
@@ -479,28 +483,20 @@ async fn try_derive_keys_from_mpc(
     // Get TDX attestation (quote, collateral, tcb_info) for KMS contract
     // The KMS contract's request_kms_root_key() requires attestation verification
     let (quote_hex, collateral_json, tcb_info_json) = if quote_enabled {
-        // Generate a quote with the worker public key as report_data
-        let worker_pubkey_bytes = ephemeral_public_key.to_compressed();
-        let mut report_data = vec![0u8; 64];
-        // Put worker public key in report_data (first 48 bytes for BLS12-381 G1)
-        if worker_pubkey_bytes.len() <= 48 {
-            report_data[..worker_pubkey_bytes.len()].copy_from_slice(&worker_pubkey_bytes);
-        } else {
-            // Hash if too long
-            use sha2::{Digest, Sha256};
-            let hash = Sha256::digest(&worker_pubkey_bytes);
-            report_data[..32].copy_from_slice(&hash);
-        }
+        // Generate report_data from NEAR account public key using helper function
+        let report_data = near_public_key_to_report_data(&near_account_public_key)
+            .context("Failed to convert NEAR public key to report_data format")?;
 
-        let attest_response = app_attest(report_data)
+        let attest_response = app_attest(report_data.to_vec())
             .await
             .context("Failed to get TDX quote for MPC request")?;
 
         let attestation = VersionedAttestation::from_scale(&attest_response.attestation)
             .context("Failed to parse attestation")?;
 
-        // Get quote bytes
+        // Get quote bytes - need to call into_inner() first to get Attestation
         let quote_bytes = attestation
+            .into_inner()
             .tdx_quote()
             .and_then(|q| Some(q.quote.clone()))
             .context("Failed to get TDX quote bytes")?;
@@ -512,8 +508,11 @@ async fn try_derive_keys_from_mpc(
             .await
             .context("Failed to get collateral and verify quote")?;
 
-        let collateral_json = serde_json::to_string(&verified_report.collateral)
-            .context("Failed to serialize collateral")?;
+        // Extract collateral from verified_report
+        // The verified_report contains the quote verification result
+        // We need to serialize the entire verified_report or extract the needed fields
+        let collateral_json = serde_json::to_string(&verified_report)
+            .context("Failed to serialize verified report as collateral")?;
 
         // Get TCB info from verified report
         let td_report = verified_report
