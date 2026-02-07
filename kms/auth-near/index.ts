@@ -60,7 +60,7 @@ class NearBackend {
     return hex;
   }
 
-    async checkBoot(bootInfo: BootInfo, isKms: boolean): Promise<BootResponse> {
+  async checkBoot(bootInfo: BootInfo, isKms: boolean): Promise<BootResponse> {
     // Create boot info struct for NEAR contract call
     const bootInfoStruct = {
       app_id: this.hexToAccountId(bootInfo.appId),
