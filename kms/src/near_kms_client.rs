@@ -155,17 +155,6 @@ impl NearKmsClient {
 
         Ok(ckd_response)
     }
-
-    /// Parse MPC response from transaction receipt value
-    fn parse_ckd_response(&self, value: &[u8]) -> Result<CkdResponse> {
-        let ckd_response: CkdResponse =
-            serde_json::from_slice(value).context("Failed to parse MPC response")?;
-
-        Ok(CkdResponse {
-            big_y: ckd_response.big_y,
-            big_c: ckd_response.big_c,
-        })
-    }
 }
 
 /// Generate a random NEAR implicit account signer
