@@ -1475,6 +1475,82 @@ type CreateVmPayloadSource = {
     return features.length > 0 ? features.join(', ') : 'None';
   }
 
+  // ── Process Manager ─────────────────────────────────────────────
+  const showProcessManager = ref(false);
+  const supervisorProcesses = ref([] as any[]);
+
+  function svStatusClass(p: any): string {
+    const s = p.status || '';
+    if (s === 'running') return 'sv-status-running';
+    if (s === 'stopped') return 'sv-status-stopped';
+    if (s.startsWith('exited')) return 'sv-status-exited';
+    return 'sv-status-error';
+  }
+
+  function svIsRunning(p: any): boolean {
+    return p.status === 'running';
+  }
+
+  function svIsStopped(p: any): boolean {
+    return p.status !== 'running';
+  }
+
+  async function loadSupervisorProcesses() {
+    try {
+      const resp = await baseRpcCall('/prpc/SvList');
+      const json = await resp.json();
+      supervisorProcesses.value = json.processes || [];
+    } catch (error) {
+      recordError('Failed to load processes', error);
+    }
+  }
+
+  let svRefreshTimer: ReturnType<typeof setInterval> | null = null;
+
+  async function openProcessManager() {
+    showProcessManager.value = true;
+    await loadSupervisorProcesses();
+    svRefreshTimer = setInterval(loadSupervisorProcesses, 3000);
+  }
+
+  watch(showProcessManager, (open) => {
+    if (!open && svRefreshTimer) {
+      clearInterval(svRefreshTimer);
+      svRefreshTimer = null;
+    }
+  });
+
+  async function svStop(id: string) {
+    try {
+      await baseRpcCall('/prpc/SvStop', { id });
+      await new Promise(r => setTimeout(r, 500));
+      await loadSupervisorProcesses();
+    } catch (error) {
+      recordError('Failed to stop process', error);
+    }
+  }
+
+  async function svRemove(id: string) {
+    try {
+      await baseRpcCall('/prpc/SvRemove', { id });
+      await loadSupervisorProcesses();
+    } catch (error) {
+      recordError('Failed to remove process', error);
+    }
+  }
+
+  async function svClear() {
+    try {
+      const stopped = supervisorProcesses.value.filter(p => svIsStopped(p));
+      for (const p of stopped) {
+        await baseRpcCall('/prpc/SvRemove', { id: p.id });
+      }
+      await loadSupervisorProcesses();
+    } catch (error) {
+      recordError('Failed to clear stopped processes', error);
+    }
+  }
+
   onMounted(() => {
     watchVmList();
     loadImages();
@@ -1550,6 +1626,16 @@ type CreateVmPayloadSource = {
     devMode,
     toggleDevMode,
     shortUptime,
+    showProcessManager,
+    supervisorProcesses,
+    openProcessManager,
+    loadSupervisorProcesses,
+    svStop,
+    svRemove,
+    svClear,
+    svStatusClass,
+    svIsRunning,
+    svIsStopped,
   };
 }
 

@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::app::App;
-use anyhow::Result;
 use fs_err as fs;
 use rocket::{
     get,

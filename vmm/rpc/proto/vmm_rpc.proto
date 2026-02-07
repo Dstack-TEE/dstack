@@ -343,6 +343,13 @@ service Vmm {
   // Report a DHCP lease event (called by the DHCP server, e.g. dnsmasq --dhcp-script).
   // The VMM resolves the MAC address to a VM and reconfigures port forwarding.
   rpc ReportDhcpLease(DhcpLeaseRequest) returns (google.protobuf.Empty);
+
+  // List all supervisor processes.
+  rpc SvList(google.protobuf.Empty) returns (SvListResponse);
+  // Stop a supervisor process by ID.
+  rpc SvStop(Id) returns (google.protobuf.Empty);
+  // Remove a stopped supervisor process by ID.
+  rpc SvRemove(Id) returns (google.protobuf.Empty);
 }
 
 // DHCP lease event reported by the host DHCP server.
@@ -351,4 +358,20 @@ message DhcpLeaseRequest {
   string mac = 1;
   // IPv4 address assigned by DHCP (e.g. "192.168.122.100")
   string ip = 2;
+}
+
+// Response containing a list of supervisor processes.
+message SvListResponse {
+  repeated SvProcessInfo processes = 1;
+}
+
+// Information about a single supervisor process.
+message SvProcessInfo {
+  string id = 1;
+  string name = 2;
+  // Status: "running", "stopped", "exited(<code>)", "error(<msg>)"
+  string status = 3;
+  optional uint32 pid = 4;
+  string command = 5;
+  string note = 6;
 }

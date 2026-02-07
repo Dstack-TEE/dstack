@@ -1564,6 +1564,194 @@ h1, h2, h3, h4, h5, h6 {
   border-radius: var(--radius-sm);
 }
 
+/* Process Manager Overlay */
+.process-manager-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 1000;
+  background: var(--color-bg-primary);
+  display: flex;
+  flex-direction: column;
+  animation: fadeIn 0.15s ease;
+}
+
+.process-manager-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 24px;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-bg-secondary);
+}
+
+.process-manager-header h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.process-manager-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.process-manager-body {
+  flex: 1;
+  overflow: auto;
+  padding: 16px 24px;
+}
+
+.process-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.process-table th {
+  text-align: left;
+  padding: 10px 12px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  border-bottom: 2px solid var(--color-border);
+  white-space: nowrap;
+  position: sticky;
+  top: 0;
+  background: var(--color-bg-primary);
+}
+
+.process-table td {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--color-border);
+  vertical-align: middle;
+}
+
+.process-table tr:hover td {
+  background: var(--color-bg-tertiary);
+}
+
+.process-table .col-id {
+  font-family: 'SF Mono', 'Monaco', 'Cascadia Code', monospace;
+  font-size: 12px;
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.process-table .col-name {
+  font-weight: 500;
+}
+
+.process-table .col-actions {
+  white-space: nowrap;
+}
+
+.process-table .col-actions button {
+  padding: 4px 10px;
+  font-size: 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
+  background: transparent;
+  cursor: pointer;
+  margin-right: 4px;
+  transition: all 0.15s ease;
+}
+
+.process-table .col-actions button:hover {
+  background: var(--color-bg-tertiary);
+}
+
+.process-table .col-actions button.btn-danger {
+  color: var(--color-danger);
+  border-color: var(--color-danger);
+}
+
+.process-table .col-actions button.btn-danger:hover {
+  background: var(--color-danger);
+  color: #fff;
+}
+
+.sv-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.sv-status-running {
+  background: rgba(52, 211, 153, 0.1);
+  color: #34d399;
+}
+
+.sv-status-stopped {
+  background: rgba(156, 163, 175, 0.1);
+  color: #9ca3af;
+}
+
+.sv-status-exited {
+  background: rgba(251, 191, 36, 0.1);
+  color: #fbbf24;
+}
+
+.sv-status-error {
+  background: rgba(248, 113, 113, 0.1);
+  color: #f87171;
+}
+
+.sv-status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.btn-clear-stopped {
+  padding: 6px 14px;
+  font-size: 13px;
+  font-weight: 500;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.btn-clear-stopped:hover {
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-primary);
+}
+
+.btn-close-overlay {
+  padding: 6px 14px;
+  font-size: 13px;
+  font-weight: 500;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.btn-close-overlay:hover {
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-primary);
+}
+
+.process-empty {
+  text-align: center;
+  padding: 48px;
+  color: var(--color-text-secondary);
+}
+
 </style>
 </head>
 
@@ -3543,6 +3731,78 @@ fi
             features.push("tcbinfo");
         return features.length > 0 ? features.join(', ') : 'None';
     }
+    // ── Process Manager ─────────────────────────────────────────────
+    const showProcessManager = ref(false);
+    const supervisorProcesses = ref([]);
+    function svStatusClass(p) {
+        const s = p.status || '';
+        if (s === 'running')
+            return 'sv-status-running';
+        if (s === 'stopped')
+            return 'sv-status-stopped';
+        if (s.startsWith('exited'))
+            return 'sv-status-exited';
+        return 'sv-status-error';
+    }
+    function svIsRunning(p) {
+        return p.status === 'running';
+    }
+    function svIsStopped(p) {
+        return p.status !== 'running';
+    }
+    async function loadSupervisorProcesses() {
+        try {
+            const resp = await baseRpcCall('/prpc/SvList');
+            const json = await resp.json();
+            supervisorProcesses.value = json.processes || [];
+        }
+        catch (error) {
+            recordError('Failed to load processes', error);
+        }
+    }
+    let svRefreshTimer = null;
+    async function openProcessManager() {
+        showProcessManager.value = true;
+        await loadSupervisorProcesses();
+        svRefreshTimer = setInterval(loadSupervisorProcesses, 3000);
+    }
+    watch(showProcessManager, (open) => {
+        if (!open && svRefreshTimer) {
+            clearInterval(svRefreshTimer);
+            svRefreshTimer = null;
+        }
+    });
+    async function svStop(id) {
+        try {
+            await baseRpcCall('/prpc/SvStop', { id });
+            await new Promise(r => setTimeout(r, 500));
+            await loadSupervisorProcesses();
+        }
+        catch (error) {
+            recordError('Failed to stop process', error);
+        }
+    }
+    async function svRemove(id) {
+        try {
+            await baseRpcCall('/prpc/SvRemove', { id });
+            await loadSupervisorProcesses();
+        }
+        catch (error) {
+            recordError('Failed to remove process', error);
+        }
+    }
+    async function svClear() {
+        try {
+            const stopped = supervisorProcesses.value.filter(p => svIsStopped(p));
+            for (const p of stopped) {
+                await baseRpcCall('/prpc/SvRemove', { id: p.id });
+            }
+            await loadSupervisorProcesses();
+        }
+        catch (error) {
+            recordError('Failed to clear stopped processes', error);
+        }
+    }
     onMounted(() => {
         watchVmList();
         loadImages();
@@ -3617,6 +3877,16 @@ fi
         devMode,
         toggleDevMode,
         shortUptime,
+        showProcessManager,
+        supervisorProcesses,
+        openProcessManager,
+        loadSupervisorProcesses,
+        svStop,
+        svRemove,
+        svClear,
+        svStatusClass,
+        svIsRunning,
+        svIsStopped,
     };
 }
 
@@ -13392,6 +13662,96 @@ $root.vmm = (function () {
          * @returns {Promise<google.protobuf.Empty>} Promise
          * @variation 2
          */
+        /**
+         * Callback as used by {@link vmm.Vmm#svList}.
+         * @memberof vmm.Vmm
+         * @typedef SvListCallback
+         * @type {function}
+         * @param {Error|null} error Error, if any
+         * @param {vmm.SvListResponse} [response] SvListResponse
+         */
+        /**
+         * Calls SvList.
+         * @function svList
+         * @memberof vmm.Vmm
+         * @instance
+         * @param {google.protobuf.IEmpty} request Empty message or plain object
+         * @param {vmm.Vmm.SvListCallback} callback Node-style callback called with the error, if any, and SvListResponse
+         * @returns {undefined}
+         * @variation 1
+         */
+        Object.defineProperty(Vmm.prototype.svList = function svList(request, callback) {
+            return this.rpcCall(svList, $root.google.protobuf.Empty, $root.vmm.SvListResponse, request, callback);
+        }, "name", { value: "SvList" });
+        /**
+         * Calls SvList.
+         * @function svList
+         * @memberof vmm.Vmm
+         * @instance
+         * @param {google.protobuf.IEmpty} request Empty message or plain object
+         * @returns {Promise<vmm.SvListResponse>} Promise
+         * @variation 2
+         */
+        /**
+         * Callback as used by {@link vmm.Vmm#svStop}.
+         * @memberof vmm.Vmm
+         * @typedef SvStopCallback
+         * @type {function}
+         * @param {Error|null} error Error, if any
+         * @param {google.protobuf.Empty} [response] Empty
+         */
+        /**
+         * Calls SvStop.
+         * @function svStop
+         * @memberof vmm.Vmm
+         * @instance
+         * @param {vmm.IId} request Id message or plain object
+         * @param {vmm.Vmm.SvStopCallback} callback Node-style callback called with the error, if any, and Empty
+         * @returns {undefined}
+         * @variation 1
+         */
+        Object.defineProperty(Vmm.prototype.svStop = function svStop(request, callback) {
+            return this.rpcCall(svStop, $root.vmm.Id, $root.google.protobuf.Empty, request, callback);
+        }, "name", { value: "SvStop" });
+        /**
+         * Calls SvStop.
+         * @function svStop
+         * @memberof vmm.Vmm
+         * @instance
+         * @param {vmm.IId} request Id message or plain object
+         * @returns {Promise<google.protobuf.Empty>} Promise
+         * @variation 2
+         */
+        /**
+         * Callback as used by {@link vmm.Vmm#svRemove}.
+         * @memberof vmm.Vmm
+         * @typedef SvRemoveCallback
+         * @type {function}
+         * @param {Error|null} error Error, if any
+         * @param {google.protobuf.Empty} [response] Empty
+         */
+        /**
+         * Calls SvRemove.
+         * @function svRemove
+         * @memberof vmm.Vmm
+         * @instance
+         * @param {vmm.IId} request Id message or plain object
+         * @param {vmm.Vmm.SvRemoveCallback} callback Node-style callback called with the error, if any, and Empty
+         * @returns {undefined}
+         * @variation 1
+         */
+        Object.defineProperty(Vmm.prototype.svRemove = function svRemove(request, callback) {
+            return this.rpcCall(svRemove, $root.vmm.Id, $root.google.protobuf.Empty, request, callback);
+        }, "name", { value: "SvRemove" });
+        /**
+         * Calls SvRemove.
+         * @function svRemove
+         * @memberof vmm.Vmm
+         * @instance
+         * @param {vmm.IId} request Id message or plain object
+         * @returns {Promise<google.protobuf.Empty>} Promise
+         * @variation 2
+         */
         return Vmm;
     })();
     vmm.DhcpLeaseRequest = (function () {
@@ -13606,6 +13966,535 @@ $root.vmm = (function () {
             return typeUrlPrefix + "/vmm.DhcpLeaseRequest";
         };
         return DhcpLeaseRequest;
+    })();
+    vmm.SvListResponse = (function () {
+        /**
+         * Properties of a SvListResponse.
+         * @memberof vmm
+         * @interface ISvListResponse
+         * @property {Array.<vmm.ISvProcessInfo>|null} [processes] SvListResponse processes
+         */
+        /**
+         * Constructs a new SvListResponse.
+         * @memberof vmm
+         * @classdesc Represents a SvListResponse.
+         * @implements ISvListResponse
+         * @constructor
+         * @param {vmm.ISvListResponse=} [properties] Properties to set
+         */
+        function SvListResponse(properties) {
+            this.processes = [];
+            if (properties)
+                for (var keys = Object.keys(properties), i = 0; i < keys.length; ++i)
+                    if (properties[keys[i]] != null)
+                        this[keys[i]] = properties[keys[i]];
+        }
+        /**
+         * SvListResponse processes.
+         * @member {Array.<vmm.ISvProcessInfo>} processes
+         * @memberof vmm.SvListResponse
+         * @instance
+         */
+        SvListResponse.prototype.processes = $util.emptyArray;
+        /**
+         * Creates a new SvListResponse instance using the specified properties.
+         * @function create
+         * @memberof vmm.SvListResponse
+         * @static
+         * @param {vmm.ISvListResponse=} [properties] Properties to set
+         * @returns {vmm.SvListResponse} SvListResponse instance
+         */
+        SvListResponse.create = function create(properties) {
+            return new SvListResponse(properties);
+        };
+        /**
+         * Encodes the specified SvListResponse message. Does not implicitly {@link vmm.SvListResponse.verify|verify} messages.
+         * @function encode
+         * @memberof vmm.SvListResponse
+         * @static
+         * @param {vmm.ISvListResponse} message SvListResponse message or plain object to encode
+         * @param {$protobuf.Writer} [writer] Writer to encode to
+         * @returns {$protobuf.Writer} Writer
+         */
+        SvListResponse.encode = function encode(message, writer) {
+            if (!writer)
+                writer = $Writer.create();
+            if (message.processes != null && message.processes.length)
+                for (var i = 0; i < message.processes.length; ++i)
+                    $root.vmm.SvProcessInfo.encode(message.processes[i], writer.uint32(/* id 1, wireType 2 =*/ 10).fork()).ldelim();
+            return writer;
+        };
+        /**
+         * Encodes the specified SvListResponse message, length delimited. Does not implicitly {@link vmm.SvListResponse.verify|verify} messages.
+         * @function encodeDelimited
+         * @memberof vmm.SvListResponse
+         * @static
+         * @param {vmm.ISvListResponse} message SvListResponse message or plain object to encode
+         * @param {$protobuf.Writer} [writer] Writer to encode to
+         * @returns {$protobuf.Writer} Writer
+         */
+        SvListResponse.encodeDelimited = function encodeDelimited(message, writer) {
+            return this.encode(message, writer).ldelim();
+        };
+        /**
+         * Decodes a SvListResponse message from the specified reader or buffer.
+         * @function decode
+         * @memberof vmm.SvListResponse
+         * @static
+         * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
+         * @param {number} [length] Message length if known beforehand
+         * @returns {vmm.SvListResponse} SvListResponse
+         * @throws {Error} If the payload is not a reader or valid buffer
+         * @throws {$protobuf.util.ProtocolError} If required fields are missing
+         */
+        SvListResponse.decode = function decode(reader, length, error) {
+            if (!(reader instanceof $Reader))
+                reader = $Reader.create(reader);
+            var end = length === undefined ? reader.len : reader.pos + length, message = new $root.vmm.SvListResponse();
+            while (reader.pos < end) {
+                var tag = reader.uint32();
+                if (tag === error)
+                    break;
+                switch (tag >>> 3) {
+                    case 1: {
+                        if (!(message.processes && message.processes.length))
+                            message.processes = [];
+                        message.processes.push($root.vmm.SvProcessInfo.decode(reader, reader.uint32()));
+                        break;
+                    }
+                    default:
+                        reader.skipType(tag & 7);
+                        break;
+                }
+            }
+            return message;
+        };
+        /**
+         * Decodes a SvListResponse message from the specified reader or buffer, length delimited.
+         * @function decodeDelimited
+         * @memberof vmm.SvListResponse
+         * @static
+         * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
+         * @returns {vmm.SvListResponse} SvListResponse
+         * @throws {Error} If the payload is not a reader or valid buffer
+         * @throws {$protobuf.util.ProtocolError} If required fields are missing
+         */
+        SvListResponse.decodeDelimited = function decodeDelimited(reader) {
+            if (!(reader instanceof $Reader))
+                reader = new $Reader(reader);
+            return this.decode(reader, reader.uint32());
+        };
+        /**
+         * Verifies a SvListResponse message.
+         * @function verify
+         * @memberof vmm.SvListResponse
+         * @static
+         * @param {Object.<string,*>} message Plain object to verify
+         * @returns {string|null} `null` if valid, otherwise the reason why it is not
+         */
+        SvListResponse.verify = function verify(message) {
+            if (typeof message !== "object" || message === null)
+                return "object expected";
+            if (message.processes != null && message.hasOwnProperty("processes")) {
+                if (!Array.isArray(message.processes))
+                    return "processes: array expected";
+                for (var i = 0; i < message.processes.length; ++i) {
+                    var error = $root.vmm.SvProcessInfo.verify(message.processes[i]);
+                    if (error)
+                        return "processes." + error;
+                }
+            }
+            return null;
+        };
+        /**
+         * Creates a SvListResponse message from a plain object. Also converts values to their respective internal types.
+         * @function fromObject
+         * @memberof vmm.SvListResponse
+         * @static
+         * @param {Object.<string,*>} object Plain object
+         * @returns {vmm.SvListResponse} SvListResponse
+         */
+        SvListResponse.fromObject = function fromObject(object) {
+            if (object instanceof $root.vmm.SvListResponse)
+                return object;
+            var message = new $root.vmm.SvListResponse();
+            if (object.processes) {
+                if (!Array.isArray(object.processes))
+                    throw TypeError(".vmm.SvListResponse.processes: array expected");
+                message.processes = [];
+                for (var i = 0; i < object.processes.length; ++i) {
+                    if (typeof object.processes[i] !== "object")
+                        throw TypeError(".vmm.SvListResponse.processes: object expected");
+                    message.processes[i] = $root.vmm.SvProcessInfo.fromObject(object.processes[i]);
+                }
+            }
+            return message;
+        };
+        /**
+         * Creates a plain object from a SvListResponse message. Also converts values to other types if specified.
+         * @function toObject
+         * @memberof vmm.SvListResponse
+         * @static
+         * @param {vmm.SvListResponse} message SvListResponse
+         * @param {$protobuf.IConversionOptions} [options] Conversion options
+         * @returns {Object.<string,*>} Plain object
+         */
+        SvListResponse.toObject = function toObject(message, options) {
+            if (!options)
+                options = {};
+            var object = {};
+            if (options.arrays || options.defaults)
+                object.processes = [];
+            if (message.processes && message.processes.length) {
+                object.processes = [];
+                for (var j = 0; j < message.processes.length; ++j)
+                    object.processes[j] = $root.vmm.SvProcessInfo.toObject(message.processes[j], options);
+            }
+            return object;
+        };
+        /**
+         * Converts this SvListResponse to JSON.
+         * @function toJSON
+         * @memberof vmm.SvListResponse
+         * @instance
+         * @returns {Object.<string,*>} JSON object
+         */
+        SvListResponse.prototype.toJSON = function toJSON() {
+            return this.constructor.toObject(this, $protobuf.util.toJSONOptions);
+        };
+        /**
+         * Gets the default type url for SvListResponse
+         * @function getTypeUrl
+         * @memberof vmm.SvListResponse
+         * @static
+         * @param {string} [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
+         * @returns {string} The default type url
+         */
+        SvListResponse.getTypeUrl = function getTypeUrl(typeUrlPrefix) {
+            if (typeUrlPrefix === undefined) {
+                typeUrlPrefix = "type.googleapis.com";
+            }
+            return typeUrlPrefix + "/vmm.SvListResponse";
+        };
+        return SvListResponse;
+    })();
+    vmm.SvProcessInfo = (function () {
+        /**
+         * Properties of a SvProcessInfo.
+         * @memberof vmm
+         * @interface ISvProcessInfo
+         * @property {string|null} [id] SvProcessInfo id
+         * @property {string|null} [name] SvProcessInfo name
+         * @property {string|null} [status] SvProcessInfo status
+         * @property {number|null} [pid] SvProcessInfo pid
+         * @property {string|null} [command] SvProcessInfo command
+         * @property {string|null} [note] SvProcessInfo note
+         */
+        /**
+         * Constructs a new SvProcessInfo.
+         * @memberof vmm
+         * @classdesc Represents a SvProcessInfo.
+         * @implements ISvProcessInfo
+         * @constructor
+         * @param {vmm.ISvProcessInfo=} [properties] Properties to set
+         */
+        function SvProcessInfo(properties) {
+            if (properties)
+                for (var keys = Object.keys(properties), i = 0; i < keys.length; ++i)
+                    if (properties[keys[i]] != null)
+                        this[keys[i]] = properties[keys[i]];
+        }
+        /**
+         * SvProcessInfo id.
+         * @member {string} id
+         * @memberof vmm.SvProcessInfo
+         * @instance
+         */
+        SvProcessInfo.prototype.id = "";
+        /**
+         * SvProcessInfo name.
+         * @member {string} name
+         * @memberof vmm.SvProcessInfo
+         * @instance
+         */
+        SvProcessInfo.prototype.name = "";
+        /**
+         * SvProcessInfo status.
+         * @member {string} status
+         * @memberof vmm.SvProcessInfo
+         * @instance
+         */
+        SvProcessInfo.prototype.status = "";
+        /**
+         * SvProcessInfo pid.
+         * @member {number|null|undefined} pid
+         * @memberof vmm.SvProcessInfo
+         * @instance
+         */
+        SvProcessInfo.prototype.pid = null;
+        /**
+         * SvProcessInfo command.
+         * @member {string} command
+         * @memberof vmm.SvProcessInfo
+         * @instance
+         */
+        SvProcessInfo.prototype.command = "";
+        /**
+         * SvProcessInfo note.
+         * @member {string} note
+         * @memberof vmm.SvProcessInfo
+         * @instance
+         */
+        SvProcessInfo.prototype.note = "";
+        // OneOf field names bound to virtual getters and setters
+        var $oneOfFields;
+        /**
+         * SvProcessInfo _pid.
+         * @member {"pid"|undefined} _pid
+         * @memberof vmm.SvProcessInfo
+         * @instance
+         */
+        Object.defineProperty(SvProcessInfo.prototype, "_pid", {
+            get: $util.oneOfGetter($oneOfFields = ["pid"]),
+            set: $util.oneOfSetter($oneOfFields)
+        });
+        /**
+         * Creates a new SvProcessInfo instance using the specified properties.
+         * @function create
+         * @memberof vmm.SvProcessInfo
+         * @static
+         * @param {vmm.ISvProcessInfo=} [properties] Properties to set
+         * @returns {vmm.SvProcessInfo} SvProcessInfo instance
+         */
+        SvProcessInfo.create = function create(properties) {
+            return new SvProcessInfo(properties);
+        };
+        /**
+         * Encodes the specified SvProcessInfo message. Does not implicitly {@link vmm.SvProcessInfo.verify|verify} messages.
+         * @function encode
+         * @memberof vmm.SvProcessInfo
+         * @static
+         * @param {vmm.ISvProcessInfo} message SvProcessInfo message or plain object to encode
+         * @param {$protobuf.Writer} [writer] Writer to encode to
+         * @returns {$protobuf.Writer} Writer
+         */
+        SvProcessInfo.encode = function encode(message, writer) {
+            if (!writer)
+                writer = $Writer.create();
+            if (message.id != null && Object.hasOwnProperty.call(message, "id"))
+                writer.uint32(/* id 1, wireType 2 =*/ 10).string(message.id);
+            if (message.name != null && Object.hasOwnProperty.call(message, "name"))
+                writer.uint32(/* id 2, wireType 2 =*/ 18).string(message.name);
+            if (message.status != null && Object.hasOwnProperty.call(message, "status"))
+                writer.uint32(/* id 3, wireType 2 =*/ 26).string(message.status);
+            if (message.pid != null && Object.hasOwnProperty.call(message, "pid"))
+                writer.uint32(/* id 4, wireType 0 =*/ 32).uint32(message.pid);
+            if (message.command != null && Object.hasOwnProperty.call(message, "command"))
+                writer.uint32(/* id 5, wireType 2 =*/ 42).string(message.command);
+            if (message.note != null && Object.hasOwnProperty.call(message, "note"))
+                writer.uint32(/* id 6, wireType 2 =*/ 50).string(message.note);
+            return writer;
+        };
+        /**
+         * Encodes the specified SvProcessInfo message, length delimited. Does not implicitly {@link vmm.SvProcessInfo.verify|verify} messages.
+         * @function encodeDelimited
+         * @memberof vmm.SvProcessInfo
+         * @static
+         * @param {vmm.ISvProcessInfo} message SvProcessInfo message or plain object to encode
+         * @param {$protobuf.Writer} [writer] Writer to encode to
+         * @returns {$protobuf.Writer} Writer
+         */
+        SvProcessInfo.encodeDelimited = function encodeDelimited(message, writer) {
+            return this.encode(message, writer).ldelim();
+        };
+        /**
+         * Decodes a SvProcessInfo message from the specified reader or buffer.
+         * @function decode
+         * @memberof vmm.SvProcessInfo
+         * @static
+         * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
+         * @param {number} [length] Message length if known beforehand
+         * @returns {vmm.SvProcessInfo} SvProcessInfo
+         * @throws {Error} If the payload is not a reader or valid buffer
+         * @throws {$protobuf.util.ProtocolError} If required fields are missing
+         */
+        SvProcessInfo.decode = function decode(reader, length, error) {
+            if (!(reader instanceof $Reader))
+                reader = $Reader.create(reader);
+            var end = length === undefined ? reader.len : reader.pos + length, message = new $root.vmm.SvProcessInfo();
+            while (reader.pos < end) {
+                var tag = reader.uint32();
+                if (tag === error)
+                    break;
+                switch (tag >>> 3) {
+                    case 1: {
+                        message.id = reader.string();
+                        break;
+                    }
+                    case 2: {
+                        message.name = reader.string();
+                        break;
+                    }
+                    case 3: {
+                        message.status = reader.string();
+                        break;
+                    }
+                    case 4: {
+                        message.pid = reader.uint32();
+                        break;
+                    }
+                    case 5: {
+                        message.command = reader.string();
+                        break;
+                    }
+                    case 6: {
+                        message.note = reader.string();
+                        break;
+                    }
+                    default:
+                        reader.skipType(tag & 7);
+                        break;
+                }
+            }
+            return message;
+        };
+        /**
+         * Decodes a SvProcessInfo message from the specified reader or buffer, length delimited.
+         * @function decodeDelimited
+         * @memberof vmm.SvProcessInfo
+         * @static
+         * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
+         * @returns {vmm.SvProcessInfo} SvProcessInfo
+         * @throws {Error} If the payload is not a reader or valid buffer
+         * @throws {$protobuf.util.ProtocolError} If required fields are missing
+         */
+        SvProcessInfo.decodeDelimited = function decodeDelimited(reader) {
+            if (!(reader instanceof $Reader))
+                reader = new $Reader(reader);
+            return this.decode(reader, reader.uint32());
+        };
+        /**
+         * Verifies a SvProcessInfo message.
+         * @function verify
+         * @memberof vmm.SvProcessInfo
+         * @static
+         * @param {Object.<string,*>} message Plain object to verify
+         * @returns {string|null} `null` if valid, otherwise the reason why it is not
+         */
+        SvProcessInfo.verify = function verify(message) {
+            if (typeof message !== "object" || message === null)
+                return "object expected";
+            var properties = {};
+            if (message.id != null && message.hasOwnProperty("id"))
+                if (!$util.isString(message.id))
+                    return "id: string expected";
+            if (message.name != null && message.hasOwnProperty("name"))
+                if (!$util.isString(message.name))
+                    return "name: string expected";
+            if (message.status != null && message.hasOwnProperty("status"))
+                if (!$util.isString(message.status))
+                    return "status: string expected";
+            if (message.pid != null && message.hasOwnProperty("pid")) {
+                properties._pid = 1;
+                if (!$util.isInteger(message.pid))
+                    return "pid: integer expected";
+            }
+            if (message.command != null && message.hasOwnProperty("command"))
+                if (!$util.isString(message.command))
+                    return "command: string expected";
+            if (message.note != null && message.hasOwnProperty("note"))
+                if (!$util.isString(message.note))
+                    return "note: string expected";
+            return null;
+        };
+        /**
+         * Creates a SvProcessInfo message from a plain object. Also converts values to their respective internal types.
+         * @function fromObject
+         * @memberof vmm.SvProcessInfo
+         * @static
+         * @param {Object.<string,*>} object Plain object
+         * @returns {vmm.SvProcessInfo} SvProcessInfo
+         */
+        SvProcessInfo.fromObject = function fromObject(object) {
+            if (object instanceof $root.vmm.SvProcessInfo)
+                return object;
+            var message = new $root.vmm.SvProcessInfo();
+            if (object.id != null)
+                message.id = String(object.id);
+            if (object.name != null)
+                message.name = String(object.name);
+            if (object.status != null)
+                message.status = String(object.status);
+            if (object.pid != null)
+                message.pid = object.pid >>> 0;
+            if (object.command != null)
+                message.command = String(object.command);
+            if (object.note != null)
+                message.note = String(object.note);
+            return message;
+        };
+        /**
+         * Creates a plain object from a SvProcessInfo message. Also converts values to other types if specified.
+         * @function toObject
+         * @memberof vmm.SvProcessInfo
+         * @static
+         * @param {vmm.SvProcessInfo} message SvProcessInfo
+         * @param {$protobuf.IConversionOptions} [options] Conversion options
+         * @returns {Object.<string,*>} Plain object
+         */
+        SvProcessInfo.toObject = function toObject(message, options) {
+            if (!options)
+                options = {};
+            var object = {};
+            if (options.defaults) {
+                object.id = "";
+                object.name = "";
+                object.status = "";
+                object.command = "";
+                object.note = "";
+            }
+            if (message.id != null && message.hasOwnProperty("id"))
+                object.id = message.id;
+            if (message.name != null && message.hasOwnProperty("name"))
+                object.name = message.name;
+            if (message.status != null && message.hasOwnProperty("status"))
+                object.status = message.status;
+            if (message.pid != null && message.hasOwnProperty("pid")) {
+                object.pid = message.pid;
+                if (options.oneofs)
+                    object._pid = "pid";
+            }
+            if (message.command != null && message.hasOwnProperty("command"))
+                object.command = message.command;
+            if (message.note != null && message.hasOwnProperty("note"))
+                object.note = message.note;
+            return object;
+        };
+        /**
+         * Converts this SvProcessInfo to JSON.
+         * @function toJSON
+         * @memberof vmm.SvProcessInfo
+         * @instance
+         * @returns {Object.<string,*>} JSON object
+         */
+        SvProcessInfo.prototype.toJSON = function toJSON() {
+            return this.constructor.toObject(this, $protobuf.util.toJSONOptions);
+        };
+        /**
+         * Gets the default type url for SvProcessInfo
+         * @function getTypeUrl
+         * @memberof vmm.SvProcessInfo
+         * @static
+         * @param {string} [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
+         * @returns {string} The default type url
+         */
+        SvProcessInfo.getTypeUrl = function getTypeUrl(typeUrlPrefix) {
+            if (typeUrlPrefix === undefined) {
+                typeUrlPrefix = "type.googleapis.com";
+            }
+            return typeUrlPrefix + "/vmm.SvProcessInfo";
+        };
+        return SvProcessInfo;
     })();
     return vmm;
 })();
@@ -16721,7 +17610,7 @@ module.exports = $root;
 
 }, map: {"protobufjs/minimal":"node_modules/protobufjs/minimal.js"} },
 'build/ts/templates/app.html': { factory: function(module, exports, require) {
-module.exports = "<!--\nSPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>\nSPDX-License-Identifier: Apache-2.0\n-->\n\n<div class=\"console-root\">\n  <header class=\"app-header\">\n    <div class=\"header-content\">\n      <div class=\"header-left\">\n        <h1 class=\"app-title\">dstack-vmm</h1>\n        <span class=\"version-badge\">\n          v{{ version.version }}\n          <template v-if=\"version.rev\">\n            ({{ version.rev.slice(0, 14) }})\n          </template>\n        </span>\n      </div>\n      <div class=\"header-right\">\n        <button class=\"btn-primary\" @click=\"showDeployDialog()\">\n          <svg width=\"16\" height=\"16\" viewBox=\"0 0 16 16\" fill=\"none\">\n            <path d=\"M8 3V13M3 8H13\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\"/>\n          </svg>\n          Deploy Instance\n        </button>\n        <div class=\"system-menu\">\n          <button class=\"btn-icon system-menu-btn\" @click=\"toggleSystemMenu($event)\" title=\"System Menu\">\n            <svg width=\"16\" height=\"16\" viewBox=\"0 0 16 16\" fill=\"none\">\n              <path d=\"M2 4h12M2 8h12M2 12h12\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\"/>\n            </svg>\n          </button>\n          <div class=\"dropdown-menu system-dropdown\" :class=\"{ 'show': systemMenu.show }\" @click.stop>\n            <button class=\"dropdown-item\" @click=\"reloadVMs(); closeSystemMenu()\">\n              <svg width=\"14\" height=\"14\" viewBox=\"0 0 14 14\" fill=\"none\">\n                <path d=\"M1 7a6 6 0 1 0 6-6M7 1v6l3 3\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/>\n              </svg>\n              Reload VMs\n            </button>\n            <button class=\"dropdown-item\" @click=\"openApiDocs()\">\n              <svg width=\"14\" height=\"14\" viewBox=\"0 0 14 14\" fill=\"none\">\n                <path d=\"M3 3h8v8H3z\" stroke=\"currentColor\" stroke-width=\"1.3\" stroke-linejoin=\"round\"/>\n                <path d=\"M5 5h4M5 7h4M5 9h2\" stroke=\"currentColor\" stroke-width=\"1.3\" stroke-linecap=\"round\"/>\n              </svg>\n              API Docs\n            </button>\n            <button class=\"dropdown-item\" @click=\"openLegacyUi()\">\n              <svg width=\"14\" height=\"14\" viewBox=\"0 0 14 14\" fill=\"none\">\n                <path d=\"M3 3h8v8H3z\" stroke=\"currentColor\" stroke-width=\"1.3\" stroke-linejoin=\"round\"/>\n                <path d=\"M4.5 6.5l1.5 1.5 3.5-3.5\" stroke=\"currentColor\" stroke-width=\"1.3\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/>\n              </svg>\n              Legacy UI\n            </button>\n            <button class=\"dropdown-item\" @click=\"toggleDevMode()\">\n              <svg width=\"14\" height=\"14\" viewBox=\"0 0 14 14\" fill=\"none\">\n                <path d=\"M7 2v3M7 9v3M4 7H2M12 7h-2\" stroke=\"currentColor\" stroke-width=\"1.3\" stroke-linecap=\"round\"/>\n                <circle cx=\"7\" cy=\"7\" r=\"2.5\" stroke=\"currentColor\" stroke-width=\"1.3\"/>\n              </svg>\n              Dev Mode: <strong>{{ devMode ? 'On' : 'Off' }}</strong>\n            </button>\n          </div>\n        </div>\n      </div>\n    </div>\n  </header>\n\n  <create-vm-dialog\n    :visible=\"showCreateDialog\"\n    :form=\"vmForm\"\n    :available-images=\"availableImages\"\n    :available-gpus=\"availableGpus\"\n    :allow-attach-all-gpus=\"allowAttachAllGpus\"\n    :kms-available=\"vmForm.kms_enabled\"\n    :port-mapping-enabled=\"config.portMappingEnabled\"\n    @close=\"showCreateDialog = false\"\n    @submit=\"createVm\"\n    @load-compose=\"loadComposeFile\"\n  />\n\n  <update-vm-dialog\n    :visible=\"updateDialog.show\"\n    :dialog=\"updateDialog\"\n    :available-images=\"availableImages\"\n    :available-gpus=\"availableGpus\"\n    :allow-attach-all-gpus=\"allowAttachAllGpus\"\n    :port-mapping-enabled=\"config.portMappingEnabled\"\n    :kms-enabled=\"kmsEnabled(updateDialog.vm || {})\"\n    :compose-hash-preview=\"updateComposeHashPreview\"\n    @close=\"updateDialog.show = false\"\n    @submit=\"updateVM\"\n    @load-compose=\"loadUpdateFile\"\n  />\n\n  <fork-vm-dialog\n    :visible=\"cloneConfigDialog.show\"\n    :dialog=\"cloneConfigDialog\"\n    :available-images=\"availableImages\"\n    @close=\"cloneConfigDialog.show = false\"\n    @submit=\"cloneConfig\"\n  />\n\n  <div class=\"toolbar\">\n    <div class=\"toolbar-section\">\n      <div class=\"search-box\">\n        <svg class=\"search-icon\" width=\"16\" height=\"16\" viewBox=\"0 0 16 16\" fill=\"none\">\n          <circle cx=\"7\" cy=\"7\" r=\"5\" stroke=\"currentColor\" stroke-width=\"1.5\"/>\n          <path d=\"M11 11L14 14\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\"/>\n        </svg>\n        <input type=\"text\" v-model=\"searchQuery\" placeholder=\"Search instances...\" @keyup.enter=\"loadVMList()\">\n        <button class=\"btn-search\" @click=\"loadVMList()\">Search</button>\n      </div>\n      <div class=\"vm-count\">\n        <span class=\"count-label\">Total Instances:</span>\n        <span class=\"count-value\">{{ totalVMs }}</span>\n      </div>\n    </div>\n    <div class=\"toolbar-section\">\n      <div class=\"pagination-controls\">\n        <button class=\"btn-pagination\" @click=\"prevPage()\" :disabled=\"currentPage === 1\">\n          <svg width=\"14\" height=\"14\" viewBox=\"0 0 14 14\" fill=\"none\">\n            <path d=\"M9 3L5 7L9 11\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/>\n          </svg>\n        </button>\n        <div class=\"page-display\">\n          <input type=\"number\" v-model.number=\"pageInput\" min=\"1\" :max=\"maxPage\" @keyup.enter=\"goToPage()\" class=\"page-input\">\n          <span class=\"page-separator\">/</span>\n          <span class=\"page-total\">{{ maxPage || 1 }}</span>\n        </div>\n        <button class=\"btn-pagination\" @click=\"nextPage()\" :disabled=\"!hasMorePages\">\n          <svg width=\"14\" height=\"14\" viewBox=\"0 0 14 14\" fill=\"none\">\n            <path d=\"M5 3L9 7L5 11\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/>\n          </svg>\n        </button>\n        <select v-model=\"pageSize\" @change=\"onPageSizeChange()\" class=\"page-size-select\">\n          <option :value=\"10\">10 / page</option>\n          <option :value=\"25\">25 / page</option>\n          <option :value=\"50\">50 / page</option>\n          <option :value=\"100\">100 / page</option>\n        </select>\n      </div>\n    </div>\n  </div>\n\n  <div class=\"vm-table\">\n    <div class=\"vm-table-header\">\n      <div class=\"vm-col-expand\"></div>\n      <div class=\"vm-col-name\">Name</div>\n      <div class=\"vm-col-status\">Status</div>\n      <div class=\"vm-col-uptime\">Uptime</div>\n      <div class=\"vm-col-view\">View</div>\n      <div class=\"vm-col-actions\">Actions</div>\n    </div>\n\n    <div v-for=\"vm in vms\" :key=\"vm.id\" class=\"vm-row\">\n      <div class=\"vm-row-main\" @click=\"toggleDetails(vm)\">\n        <div class=\"vm-col-expand\" @click.stop>\n          <button class=\"btn-expand\" @click=\"toggleDetails(vm)\" :class=\"{ expanded: expandedVMs.has(vm.id) }\">\n            <svg width=\"14\" height=\"14\" viewBox=\"0 0 14 14\" fill=\"none\">\n              <path :d=\"expandedVMs.has(vm.id) ? 'M3 9L7 5L11 9' : 'M3 5L7 9L11 5'\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/>\n            </svg>\n          </button>\n        </div>\n        <div class=\"vm-col-name\">\n          <span class=\"vm-name\">{{ vm.name }}</span>\n        </div>\n        <div class=\"vm-col-status\">\n          <span class=\"status-badge\" :class=\"'status-' + vmStatus(vm).replace(/\\s+/g, '-')\">\n            <span class=\"status-dot\"></span>\n            {{ vmStatus(vm) }}\n          </span>\n        </div>\n        <div class=\"vm-col-uptime\">{{ vm.status !== 'stopped' ? shortUptime(vm.uptime) : '-' }}</div>\n        <div class=\"vm-col-view\" @click.stop>\n          <a class=\"view-link\" @click.prevent=\"showLogs(vm.id, 'serial')\" href=\"#\">Logs</a>\n          <a class=\"view-link\" @click.prevent=\"showLogs(vm.id, 'stderr')\" href=\"#\">Stderr</a>\n          <a class=\"view-link\" @click.prevent=\"showDashboard(vm)\" href=\"#\">Board</a>\n        </div>\n        <div class=\"vm-col-actions\" @click.stop>\n          <div class=\"dropdown\">\n            <button class=\"btn-actions\" @click=\"toggleDropdown($event, vm)\">\n              <svg width=\"16\" height=\"16\" viewBox=\"0 0 16 16\" fill=\"none\">\n                <circle cx=\"8\" cy=\"4\" r=\"1.5\" fill=\"currentColor\"/>\n                <circle cx=\"8\" cy=\"8\" r=\"1.5\" fill=\"currentColor\"/>\n                <circle cx=\"8\" cy=\"12\" r=\"1.5\" fill=\"currentColor\"/>\n              </svg>\n            </button>\n            <div class=\"dropdown-content\" :id=\"'dropdown-' + vm.id\">\n              <button @click=\"startVm(vm.id); closeAllDropdowns()\">\n                <svg width=\"14\" height=\"14\" viewBox=\"0 0 14 14\" fill=\"none\">\n                  <path d=\"M4 2L11 7L4 12V2Z\" fill=\"currentColor\"/>\n                </svg>\n                Start\n              </button>\n              <button @click=\"shutdownVm(vm.id); closeAllDropdowns()\">\n                <svg width=\"14\" height=\"14\" viewBox=\"0 0 14 14\" fill=\"none\">\n                  <rect x=\"3\" y=\"3\" width=\"8\" height=\"8\" fill=\"currentColor\"/>\n                </svg>\n                Shutdown\n              </button>\n              <button @click=\"stopVm(vm); closeAllDropdowns()\">\n                <svg width=\"14\" height=\"14\" viewBox=\"0 0 14 14\" fill=\"none\">\n                  <path d=\"M2 2L12 12M12 2L2 12\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\"/>\n                </svg>\n                Kill\n              </button>\n              <button @click=\"removeVm(vm); closeAllDropdowns()\">\n                <svg width=\"14\" height=\"14\" viewBox=\"0 0 14 14\" fill=\"none\">\n                  <path d=\"M5 1h4M1 3h12M11 3l-.5 8.5c-.1.8-.7 1.5-1.5 1.5H5c-.8 0-1.4-.7-1.5-1.5L3 3M5.5 5.5v5M8.5 5.5v5\" stroke=\"currentColor\" stroke-width=\"1.2\" stroke-linecap=\"round\"/>\n                </svg>\n                Remove\n              </button>\n              <button @click=\"showUpdateDialog(vm); closeAllDropdowns()\">\n                <svg width=\"14\" height=\"14\" viewBox=\"0 0 14 14\" fill=\"none\">\n                  <path d=\"M7 11V3M7 3L4 6M7 3l3 3\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/>\n                  <path d=\"M2 13h10\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\"/>\n                </svg>\n                Update\n              </button>\n              <button @click=\"showCloneConfig(vm); closeAllDropdowns()\">\n                <svg width=\"14\" height=\"14\" viewBox=\"0 0 14 14\" fill=\"none\">\n                  <rect x=\"4\" y=\"4\" width=\"8\" height=\"8\" rx=\"1\" stroke=\"currentColor\" stroke-width=\"1.5\"/>\n                  <path d=\"M10 2H3c-.6 0-1 .4-1 1v7\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\"/>\n                </svg>\n                Clone Config\n              </button>\n            </div>\n          </div>\n        </div>\n      </div>\n\n      <div v-if=\"expandedVMs.has(vm.id)\" class=\"vm-details\">\n        <div class=\"details-grid\">\n          <div class=\"detail-item\">\n            <span class=\"detail-label\">VM ID</span>\n            <div class=\"detail-value-with-copy\">\n              <span class=\"detail-value\" :title=\"vm.id\">{{ vm.id }}</span>\n              <button class=\"copy-btn\" @click=\"copyToClipboard(vm.id)\" title=\"Copy\">\n                <svg width=\"14\" height=\"14\" viewBox=\"0 0 14 14\" fill=\"none\">\n                  <rect x=\"4\" y=\"4\" width=\"8\" height=\"8\" rx=\"1\" stroke=\"currentColor\" stroke-width=\"1.2\"/>\n                  <path d=\"M10 2H3c-.6 0-1 .4-1 1v7\" stroke=\"currentColor\" stroke-width=\"1.2\" stroke-linecap=\"round\"/>\n                </svg>\n              </button>\n            </div>\n          </div>\n          <div class=\"detail-item\">\n            <span class=\"detail-label\">Instance ID</span>\n            <div class=\"detail-value-with-copy\" v-if=\"vm.instance_id\">\n              <span class=\"detail-value\" :title=\"vm.instance_id\">{{ vm.instance_id }}</span>\n              <button class=\"copy-btn\" @click=\"copyToClipboard(vm.instance_id)\" title=\"Copy\">\n                <svg width=\"14\" height=\"14\" viewBox=\"0 0 14 14\" fill=\"none\">\n                  <rect x=\"4\" y=\"4\" width=\"8\" height=\"8\" rx=\"1\" stroke=\"currentColor\" stroke-width=\"1.2\"/>\n                  <path d=\"M10 2H3c-.6 0-1 .4-1 1v7\" stroke=\"currentColor\" stroke-width=\"1.2\" stroke-linecap=\"round\"/>\n                </svg>\n              </button>\n            </div>\n            <span class=\"detail-value\" v-else>-</span>\n          </div>\n          <div class=\"detail-item\">\n            <span class=\"detail-label\">App ID</span>\n            <div class=\"detail-value-with-copy\" v-if=\"vm.app_id\">\n              <span class=\"detail-value\" :title=\"vm.app_id\">{{ vm.app_id }}</span>\n              <button class=\"copy-btn\" @click=\"copyToClipboard(vm.app_id)\" title=\"Copy\">\n                <svg width=\"14\" height=\"14\" viewBox=\"0 0 14 14\" fill=\"none\">\n                  <rect x=\"4\" y=\"4\" width=\"8\" height=\"8\" rx=\"1\" stroke=\"currentColor\" stroke-width=\"1.2\"/>\n                  <path d=\"M10 2H3c-.6 0-1 .4-1 1v7\" stroke=\"currentColor\" stroke-width=\"1.2\" stroke-linecap=\"round\"/>\n                </svg>\n              </button>\n            </div>\n            <span class=\"detail-value\" v-else>-</span>\n          </div>\n          <div class=\"detail-item\">\n            <span class=\"detail-label\">Image</span>\n            <span class=\"detail-value\">{{ vm.configuration?.image }}</span>\n          </div>\n          <div class=\"detail-item\">\n            <span class=\"detail-label\">vCPUs</span>\n            <span class=\"detail-value\">{{ vm.configuration?.vcpu }}</span>\n          </div>\n          <div class=\"detail-item\">\n            <span class=\"detail-label\">Memory</span>\n            <span class=\"detail-value\">{{ formatMemory(vm.configuration?.memory) }}</span>\n          </div>\n          <div class=\"detail-item\" v-if=\"vm.configuration?.swap_size\">\n            <span class=\"detail-label\">Swap</span>\n            <span class=\"detail-value\">{{ formatMemory(bytesToMB(vm.configuration.swap_size)) }}</span>\n          </div>\n          <div class=\"detail-item\">\n            <span class=\"detail-label\">Disk Size</span>\n            <span class=\"detail-value\">{{ vm.configuration?.disk_size }} GB</span>\n          </div>\n          <div class=\"detail-item\">\n            <span class=\"detail-label\">Disk Type</span>\n            <span class=\"detail-value\">{{ vm.configuration?.disk_type || 'virtio-pci' }}</span>\n          </div>\n          <div class=\"detail-item\">\n            <span class=\"detail-label\">TEE</span>\n            <span class=\"detail-value\">{{ vm.configuration?.no_tee ? 'Disabled' : 'Enabled' }}</span>\n          </div>\n          <div class=\"detail-item detail-item--gpus\" v-if=\"vm.configuration?.gpus\">\n            <span class=\"detail-label\">GPUs</span>\n            <div v-if=\"vm.configuration.gpus.attach_mode === 'all'\" class=\"gpu-chip-list\">\n              <span class=\"gpu-chip gpu-chip--all\" title=\"All available GPUs and NVSwitches are attached\">\n                All GPUs\n              </span>\n            </div>\n            <div v-else-if=\"vm.configuration.gpus?.gpus?.length\" class=\"gpu-chip-list\">\n              <span\n                class=\"gpu-chip\"\n                v-for=\"(gpu, index) in vm.configuration.gpus.gpus\"\n                :key=\"gpu.slot || gpu.product_id || index\"\n                :title=\"gpu.description || gpu.slot || gpu.product_id || ('GPU #' + (index + 1))\"\n              >\n                {{ gpu.slot || gpu.product_id || ('GPU #' + (index + 1)) }}\n              </span>\n            </div>\n            <div v-else class=\"detail-value\">\n              None\n            </div>\n          </div>\n        </div>\n\n        <div v-if=\"vm.configuration?.ports?.length\" class=\"port-mappings\">\n          <h4>Port Mappings</h4>\n          <div v-for=\"(port, index) in vm.configuration.ports\" :key=\"index\" class=\"port-item\">\n            <span>{{\n              port.host_address === '127.0.0.1'\n              ? 'Local'\n              : (port.host_address === '0.0.0.0' ? 'Public' : port.host_address)\n              }}</span>\n            <span>{{ port.protocol.toUpperCase() }}: {{ port.host_port }} → {{ port.vm_port }}</span>\n          </div>\n        </div>\n\n        <div class=\"features-section\">\n          <h4>Features</h4>\n          <span class=\"features-text\">{{ getVmFeatures(vm) }}</span>\n        </div>\n\n        <div v-if=\"networkInfo[vm.id]\" class=\"network-section\">\n          <h4 class=\"section-title\">Network Interfaces</h4>\n          <div class=\"network-interfaces\">\n            <div v-for=\"iface in networkInfo[vm.id].interfaces\" :key=\"iface.name\" class=\"network-interface-card\">\n              <div class=\"interface-header\">\n                <div class=\"interface-name\">\n                  <svg width=\"16\" height=\"16\" viewBox=\"0 0 16 16\" fill=\"none\">\n                    <rect x=\"2\" y=\"3\" width=\"12\" height=\"10\" rx=\"1\" stroke=\"currentColor\" stroke-width=\"1.5\"/>\n                    <path d=\"M2 6h12M5 3v3M11 3v3\" stroke=\"currentColor\" stroke-width=\"1.5\"/>\n                  </svg>\n                  <span>{{ iface.name }}</span>\n                </div>\n              </div>\n              <div class=\"interface-details\">\n                <div class=\"interface-detail-row\">\n                  <span class=\"detail-label\">MAC Address</span>\n                  <span class=\"detail-value\">{{ iface.mac || '-' }}</span>\n                </div>\n                <div class=\"interface-detail-row\">\n                  <span class=\"detail-label\">IP Address</span>\n                  <span class=\"detail-value\">{{ iface.addresses.map(addr => addr.address + '/' + addr.prefix).join(', ') || '-' }}</span>\n                </div>\n                <div class=\"interface-stats\">\n                  <div class=\"stat-item\">\n                    <div class=\"stat-icon rx\">\n                      <svg width=\"12\" height=\"12\" viewBox=\"0 0 12 12\" fill=\"none\">\n                        <path d=\"M6 2v8M3 7l3 3 3-3\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/>\n                      </svg>\n                    </div>\n                    <div class=\"stat-content\">\n                      <span class=\"stat-label\">RX</span>\n                      <span class=\"stat-value\">{{ iface.rx_bytes }} bytes</span>\n                      <span class=\"stat-errors\" v-if=\"iface.rx_errors > 0\">({{ iface.rx_errors }} errors)</span>\n                    </div>\n                  </div>\n                  <div class=\"stat-item\">\n                    <div class=\"stat-icon tx\">\n                      <svg width=\"12\" height=\"12\" viewBox=\"0 0 12 12\" fill=\"none\">\n                        <path d=\"M6 10V2M3 5l3-3 3 3\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/>\n                      </svg>\n                    </div>\n                    <div class=\"stat-content\">\n                      <span class=\"stat-label\">TX</span>\n                      <span class=\"stat-value\">{{ iface.tx_bytes }} bytes</span>\n                      <span class=\"stat-errors\" v-if=\"iface.tx_errors > 0\">({{ iface.tx_errors }} errors)</span>\n                    </div>\n                  </div>\n                </div>\n              </div>\n            </div>\n          </div>\n          <div v-if=\"networkInfo[vm.id].wg_info\" class=\"wireguard-section\">\n            <h4 class=\"section-title\">\n              <svg width=\"16\" height=\"16\" viewBox=\"0 0 16 16\" fill=\"none\">\n                <circle cx=\"8\" cy=\"8\" r=\"6\" stroke=\"currentColor\" stroke-width=\"1.5\"/>\n                <path d=\"M8 5v3l2 2\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\"/>\n              </svg>\n              WireGuard Info\n            </h4>\n            <pre class=\"wireguard-info-text\">{{ networkInfo[vm.id].wg_info }}</pre>\n          </div>\n        </div>\n\n        <div v-if=\"vm.configuration?.compose_file\" class=\"compose-section\">\n          <div class=\"section-header\">\n            <h4>App Compose</h4>\n            <div class=\"section-actions\">\n              <button class=\"copy-btn-small\" @click=\"copyToClipboard(vm.appCompose?.docker_compose_file || '')\" title=\"Copy Docker Compose\">\n                <svg width=\"14\" height=\"14\" viewBox=\"0 0 14 14\" fill=\"none\">\n                  <rect x=\"4\" y=\"4\" width=\"8\" height=\"8\" rx=\"1\" stroke=\"currentColor\" stroke-width=\"1.2\"/>\n                  <path d=\"M10 2H3c-.6 0-1 .4-1 1v7\" stroke=\"currentColor\" stroke-width=\"1.2\" stroke-linecap=\"round\"/>\n                </svg>\n              </button>\n              <button class=\"action-btn\" @click=\"downloadAppCompose(vm)\">\n                <svg width=\"14\" height=\"14\" viewBox=\"0 0 14 14\" fill=\"none\">\n                  <path d=\"M7 2v8M7 10l3-3M7 10L4 7\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/>\n                  <path d=\"M2 12h10\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\"/>\n                </svg>\n                Download\n              </button>\n            </div>\n          </div>\n          <div class=\"compose-content\">\n            <pre>{{ vm.appCompose?.docker_compose_file || 'Docker Compose content not available' }}</pre>\n          </div>\n        </div>\n\n        <div v-if=\"vm.configuration?.user_config\" class=\"user-config-section\">\n          <div class=\"section-header\">\n            <h4>User Config</h4>\n            <button class=\"action-btn\" @click=\"downloadUserConfig(vm)\">\n              <svg width=\"14\" height=\"14\" viewBox=\"0 0 14 14\" fill=\"none\">\n                <path d=\"M7 2v8M7 10l3-3M7 10L4 7\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/>\n                <path d=\"M2 12h10\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\"/>\n              </svg>\n              Download\n            </button>\n          </div>\n          <pre class=\"user-config-content\">{{ vm.configuration.user_config }}</pre>\n        </div>\n\n        <div class=\"vm-log-tabs\">\n          <button class=\"vm-log-button\" @click=\"showLogs(vm.id, 'serial')\">Serial Logs</button>\n          <button class=\"vm-log-button\" @click=\"showLogs(vm.id, 'stdout')\">Stdout</button>\n          <button class=\"vm-log-button\" @click=\"showLogs(vm.id, 'stderr')\">Stderr</button>\n        </div>\n      </div>\n    </div>\n  </div>\n\n  <div class=\"message-container\">\n    <div v-if=\"updateMessage\" class=\"message success-message\">\n      <button class=\"close-btn\" @click=\"updateMessage = ''\">×</button>\n      <div v-html=\"updateMessage\"></div>\n    </div>\n    <div v-if=\"successMessage\" class=\"message success-message\">\n      <button class=\"close-btn\" @click=\"successMessage = ''\">×</button>\n      <div v-html=\"successMessage\"></div>\n    </div>\n    <div v-if=\"errorMessage\" class=\"message error-message\">\n      {{ errorMessage }}\n      <button class=\"close-btn\" @click=\"errorMessage = ''\">×</button>\n    </div>\n  </div>\n</div>\n";
+module.exports = "<!--\nSPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>\nSPDX-License-Identifier: Apache-2.0\n-->\n\n<div class=\"console-root\">\n  <header class=\"app-header\">\n    <div class=\"header-content\">\n      <div class=\"header-left\">\n        <h1 class=\"app-title\">dstack-vmm</h1>\n        <span class=\"version-badge\">\n          v{{ version.version }}\n          <template v-if=\"version.rev\">\n            ({{ version.rev.slice(0, 14) }})\n          </template>\n        </span>\n      </div>\n      <div class=\"header-right\">\n        <button class=\"btn-primary\" @click=\"showDeployDialog()\">\n          <svg width=\"16\" height=\"16\" viewBox=\"0 0 16 16\" fill=\"none\">\n            <path d=\"M8 3V13M3 8H13\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\"/>\n          </svg>\n          Deploy Instance\n        </button>\n        <div class=\"system-menu\">\n          <button class=\"btn-icon system-menu-btn\" @click=\"toggleSystemMenu($event)\" title=\"System Menu\">\n            <svg width=\"16\" height=\"16\" viewBox=\"0 0 16 16\" fill=\"none\">\n              <path d=\"M2 4h12M2 8h12M2 12h12\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\"/>\n            </svg>\n          </button>\n          <div class=\"dropdown-menu system-dropdown\" :class=\"{ 'show': systemMenu.show }\" @click.stop>\n            <button class=\"dropdown-item\" @click=\"reloadVMs(); closeSystemMenu()\">\n              <svg width=\"14\" height=\"14\" viewBox=\"0 0 14 14\" fill=\"none\">\n                <path d=\"M1 7a6 6 0 1 0 6-6M7 1v6l3 3\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/>\n              </svg>\n              Reload VMs\n            </button>\n            <button class=\"dropdown-item\" @click=\"openProcessManager(); closeSystemMenu()\">\n              <svg width=\"14\" height=\"14\" viewBox=\"0 0 14 14\" fill=\"none\">\n                <path d=\"M2 3h10M2 7h10M2 11h10\" stroke=\"currentColor\" stroke-width=\"1.3\" stroke-linecap=\"round\"/>\n                <circle cx=\"11\" cy=\"3\" r=\"1.5\" fill=\"currentColor\"/>\n                <circle cx=\"5\" cy=\"7\" r=\"1.5\" fill=\"currentColor\"/>\n                <circle cx=\"9\" cy=\"11\" r=\"1.5\" fill=\"currentColor\"/>\n              </svg>\n              Processes\n            </button>\n            <button class=\"dropdown-item\" @click=\"openApiDocs()\">\n              <svg width=\"14\" height=\"14\" viewBox=\"0 0 14 14\" fill=\"none\">\n                <path d=\"M3 3h8v8H3z\" stroke=\"currentColor\" stroke-width=\"1.3\" stroke-linejoin=\"round\"/>\n                <path d=\"M5 5h4M5 7h4M5 9h2\" stroke=\"currentColor\" stroke-width=\"1.3\" stroke-linecap=\"round\"/>\n              </svg>\n              API Docs\n            </button>\n            <button class=\"dropdown-item\" @click=\"openLegacyUi()\">\n              <svg width=\"14\" height=\"14\" viewBox=\"0 0 14 14\" fill=\"none\">\n                <path d=\"M3 3h8v8H3z\" stroke=\"currentColor\" stroke-width=\"1.3\" stroke-linejoin=\"round\"/>\n                <path d=\"M4.5 6.5l1.5 1.5 3.5-3.5\" stroke=\"currentColor\" stroke-width=\"1.3\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/>\n              </svg>\n              Legacy UI\n            </button>\n            <button class=\"dropdown-item\" @click=\"toggleDevMode()\">\n              <svg width=\"14\" height=\"14\" viewBox=\"0 0 14 14\" fill=\"none\">\n                <path d=\"M7 2v3M7 9v3M4 7H2M12 7h-2\" stroke=\"currentColor\" stroke-width=\"1.3\" stroke-linecap=\"round\"/>\n                <circle cx=\"7\" cy=\"7\" r=\"2.5\" stroke=\"currentColor\" stroke-width=\"1.3\"/>\n              </svg>\n              Dev Mode: <strong>{{ devMode ? 'On' : 'Off' }}</strong>\n            </button>\n          </div>\n        </div>\n      </div>\n    </div>\n  </header>\n\n  <create-vm-dialog\n    :visible=\"showCreateDialog\"\n    :form=\"vmForm\"\n    :available-images=\"availableImages\"\n    :available-gpus=\"availableGpus\"\n    :allow-attach-all-gpus=\"allowAttachAllGpus\"\n    :kms-available=\"vmForm.kms_enabled\"\n    :port-mapping-enabled=\"config.portMappingEnabled\"\n    @close=\"showCreateDialog = false\"\n    @submit=\"createVm\"\n    @load-compose=\"loadComposeFile\"\n  />\n\n  <update-vm-dialog\n    :visible=\"updateDialog.show\"\n    :dialog=\"updateDialog\"\n    :available-images=\"availableImages\"\n    :available-gpus=\"availableGpus\"\n    :allow-attach-all-gpus=\"allowAttachAllGpus\"\n    :port-mapping-enabled=\"config.portMappingEnabled\"\n    :kms-enabled=\"kmsEnabled(updateDialog.vm || {})\"\n    :compose-hash-preview=\"updateComposeHashPreview\"\n    @close=\"updateDialog.show = false\"\n    @submit=\"updateVM\"\n    @load-compose=\"loadUpdateFile\"\n  />\n\n  <fork-vm-dialog\n    :visible=\"cloneConfigDialog.show\"\n    :dialog=\"cloneConfigDialog\"\n    :available-images=\"availableImages\"\n    @close=\"cloneConfigDialog.show = false\"\n    @submit=\"cloneConfig\"\n  />\n\n  <div class=\"toolbar\">\n    <div class=\"toolbar-section\">\n      <div class=\"search-box\">\n        <svg class=\"search-icon\" width=\"16\" height=\"16\" viewBox=\"0 0 16 16\" fill=\"none\">\n          <circle cx=\"7\" cy=\"7\" r=\"5\" stroke=\"currentColor\" stroke-width=\"1.5\"/>\n          <path d=\"M11 11L14 14\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\"/>\n        </svg>\n        <input type=\"text\" v-model=\"searchQuery\" placeholder=\"Search instances...\" @keyup.enter=\"loadVMList()\">\n        <button class=\"btn-search\" @click=\"loadVMList()\">Search</button>\n      </div>\n      <div class=\"vm-count\">\n        <span class=\"count-label\">Total Instances:</span>\n        <span class=\"count-value\">{{ totalVMs }}</span>\n      </div>\n    </div>\n    <div class=\"toolbar-section\">\n      <div class=\"pagination-controls\">\n        <button class=\"btn-pagination\" @click=\"prevPage()\" :disabled=\"currentPage === 1\">\n          <svg width=\"14\" height=\"14\" viewBox=\"0 0 14 14\" fill=\"none\">\n            <path d=\"M9 3L5 7L9 11\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/>\n          </svg>\n        </button>\n        <div class=\"page-display\">\n          <input type=\"number\" v-model.number=\"pageInput\" min=\"1\" :max=\"maxPage\" @keyup.enter=\"goToPage()\" class=\"page-input\">\n          <span class=\"page-separator\">/</span>\n          <span class=\"page-total\">{{ maxPage || 1 }}</span>\n        </div>\n        <button class=\"btn-pagination\" @click=\"nextPage()\" :disabled=\"!hasMorePages\">\n          <svg width=\"14\" height=\"14\" viewBox=\"0 0 14 14\" fill=\"none\">\n            <path d=\"M5 3L9 7L5 11\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/>\n          </svg>\n        </button>\n        <select v-model=\"pageSize\" @change=\"onPageSizeChange()\" class=\"page-size-select\">\n          <option :value=\"10\">10 / page</option>\n          <option :value=\"25\">25 / page</option>\n          <option :value=\"50\">50 / page</option>\n          <option :value=\"100\">100 / page</option>\n        </select>\n      </div>\n    </div>\n  </div>\n\n  <div class=\"vm-table\">\n    <div class=\"vm-table-header\">\n      <div class=\"vm-col-expand\"></div>\n      <div class=\"vm-col-name\">Name</div>\n      <div class=\"vm-col-status\">Status</div>\n      <div class=\"vm-col-uptime\">Uptime</div>\n      <div class=\"vm-col-view\">View</div>\n      <div class=\"vm-col-actions\">Actions</div>\n    </div>\n\n    <div v-for=\"vm in vms\" :key=\"vm.id\" class=\"vm-row\">\n      <div class=\"vm-row-main\" @click=\"toggleDetails(vm)\">\n        <div class=\"vm-col-expand\" @click.stop>\n          <button class=\"btn-expand\" @click=\"toggleDetails(vm)\" :class=\"{ expanded: expandedVMs.has(vm.id) }\">\n            <svg width=\"14\" height=\"14\" viewBox=\"0 0 14 14\" fill=\"none\">\n              <path :d=\"expandedVMs.has(vm.id) ? 'M3 9L7 5L11 9' : 'M3 5L7 9L11 5'\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/>\n            </svg>\n          </button>\n        </div>\n        <div class=\"vm-col-name\">\n          <span class=\"vm-name\">{{ vm.name }}</span>\n        </div>\n        <div class=\"vm-col-status\">\n          <span class=\"status-badge\" :class=\"'status-' + vmStatus(vm).replace(/\\s+/g, '-')\">\n            <span class=\"status-dot\"></span>\n            {{ vmStatus(vm) }}\n          </span>\n        </div>\n        <div class=\"vm-col-uptime\">{{ vm.status !== 'stopped' ? shortUptime(vm.uptime) : '-' }}</div>\n        <div class=\"vm-col-view\" @click.stop>\n          <a class=\"view-link\" @click.prevent=\"showLogs(vm.id, 'serial')\" href=\"#\">Logs</a>\n          <a class=\"view-link\" @click.prevent=\"showLogs(vm.id, 'stderr')\" href=\"#\">Stderr</a>\n          <a class=\"view-link\" @click.prevent=\"showDashboard(vm)\" href=\"#\">Board</a>\n        </div>\n        <div class=\"vm-col-actions\" @click.stop>\n          <div class=\"dropdown\">\n            <button class=\"btn-actions\" @click=\"toggleDropdown($event, vm)\">\n              <svg width=\"16\" height=\"16\" viewBox=\"0 0 16 16\" fill=\"none\">\n                <circle cx=\"8\" cy=\"4\" r=\"1.5\" fill=\"currentColor\"/>\n                <circle cx=\"8\" cy=\"8\" r=\"1.5\" fill=\"currentColor\"/>\n                <circle cx=\"8\" cy=\"12\" r=\"1.5\" fill=\"currentColor\"/>\n              </svg>\n            </button>\n            <div class=\"dropdown-content\" :id=\"'dropdown-' + vm.id\">\n              <button @click=\"startVm(vm.id); closeAllDropdowns()\">\n                <svg width=\"14\" height=\"14\" viewBox=\"0 0 14 14\" fill=\"none\">\n                  <path d=\"M4 2L11 7L4 12V2Z\" fill=\"currentColor\"/>\n                </svg>\n                Start\n              </button>\n              <button @click=\"shutdownVm(vm.id); closeAllDropdowns()\">\n                <svg width=\"14\" height=\"14\" viewBox=\"0 0 14 14\" fill=\"none\">\n                  <rect x=\"3\" y=\"3\" width=\"8\" height=\"8\" fill=\"currentColor\"/>\n                </svg>\n                Shutdown\n              </button>\n              <button @click=\"stopVm(vm); closeAllDropdowns()\">\n                <svg width=\"14\" height=\"14\" viewBox=\"0 0 14 14\" fill=\"none\">\n                  <path d=\"M2 2L12 12M12 2L2 12\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\"/>\n                </svg>\n                Kill\n              </button>\n              <button @click=\"removeVm(vm); closeAllDropdowns()\">\n                <svg width=\"14\" height=\"14\" viewBox=\"0 0 14 14\" fill=\"none\">\n                  <path d=\"M5 1h4M1 3h12M11 3l-.5 8.5c-.1.8-.7 1.5-1.5 1.5H5c-.8 0-1.4-.7-1.5-1.5L3 3M5.5 5.5v5M8.5 5.5v5\" stroke=\"currentColor\" stroke-width=\"1.2\" stroke-linecap=\"round\"/>\n                </svg>\n                Remove\n              </button>\n              <button @click=\"showUpdateDialog(vm); closeAllDropdowns()\">\n                <svg width=\"14\" height=\"14\" viewBox=\"0 0 14 14\" fill=\"none\">\n                  <path d=\"M7 11V3M7 3L4 6M7 3l3 3\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/>\n                  <path d=\"M2 13h10\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\"/>\n                </svg>\n                Update\n              </button>\n              <button @click=\"showCloneConfig(vm); closeAllDropdowns()\">\n                <svg width=\"14\" height=\"14\" viewBox=\"0 0 14 14\" fill=\"none\">\n                  <rect x=\"4\" y=\"4\" width=\"8\" height=\"8\" rx=\"1\" stroke=\"currentColor\" stroke-width=\"1.5\"/>\n                  <path d=\"M10 2H3c-.6 0-1 .4-1 1v7\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\"/>\n                </svg>\n                Clone Config\n              </button>\n            </div>\n          </div>\n        </div>\n      </div>\n\n      <div v-if=\"expandedVMs.has(vm.id)\" class=\"vm-details\">\n        <div class=\"details-grid\">\n          <div class=\"detail-item\">\n            <span class=\"detail-label\">VM ID</span>\n            <div class=\"detail-value-with-copy\">\n              <span class=\"detail-value\" :title=\"vm.id\">{{ vm.id }}</span>\n              <button class=\"copy-btn\" @click=\"copyToClipboard(vm.id)\" title=\"Copy\">\n                <svg width=\"14\" height=\"14\" viewBox=\"0 0 14 14\" fill=\"none\">\n                  <rect x=\"4\" y=\"4\" width=\"8\" height=\"8\" rx=\"1\" stroke=\"currentColor\" stroke-width=\"1.2\"/>\n                  <path d=\"M10 2H3c-.6 0-1 .4-1 1v7\" stroke=\"currentColor\" stroke-width=\"1.2\" stroke-linecap=\"round\"/>\n                </svg>\n              </button>\n            </div>\n          </div>\n          <div class=\"detail-item\">\n            <span class=\"detail-label\">Instance ID</span>\n            <div class=\"detail-value-with-copy\" v-if=\"vm.instance_id\">\n              <span class=\"detail-value\" :title=\"vm.instance_id\">{{ vm.instance_id }}</span>\n              <button class=\"copy-btn\" @click=\"copyToClipboard(vm.instance_id)\" title=\"Copy\">\n                <svg width=\"14\" height=\"14\" viewBox=\"0 0 14 14\" fill=\"none\">\n                  <rect x=\"4\" y=\"4\" width=\"8\" height=\"8\" rx=\"1\" stroke=\"currentColor\" stroke-width=\"1.2\"/>\n                  <path d=\"M10 2H3c-.6 0-1 .4-1 1v7\" stroke=\"currentColor\" stroke-width=\"1.2\" stroke-linecap=\"round\"/>\n                </svg>\n              </button>\n            </div>\n            <span class=\"detail-value\" v-else>-</span>\n          </div>\n          <div class=\"detail-item\">\n            <span class=\"detail-label\">App ID</span>\n            <div class=\"detail-value-with-copy\" v-if=\"vm.app_id\">\n              <span class=\"detail-value\" :title=\"vm.app_id\">{{ vm.app_id }}</span>\n              <button class=\"copy-btn\" @click=\"copyToClipboard(vm.app_id)\" title=\"Copy\">\n                <svg width=\"14\" height=\"14\" viewBox=\"0 0 14 14\" fill=\"none\">\n                  <rect x=\"4\" y=\"4\" width=\"8\" height=\"8\" rx=\"1\" stroke=\"currentColor\" stroke-width=\"1.2\"/>\n                  <path d=\"M10 2H3c-.6 0-1 .4-1 1v7\" stroke=\"currentColor\" stroke-width=\"1.2\" stroke-linecap=\"round\"/>\n                </svg>\n              </button>\n            </div>\n            <span class=\"detail-value\" v-else>-</span>\n          </div>\n          <div class=\"detail-item\">\n            <span class=\"detail-label\">Image</span>\n            <span class=\"detail-value\">{{ vm.configuration?.image }}</span>\n          </div>\n          <div class=\"detail-item\">\n            <span class=\"detail-label\">vCPUs</span>\n            <span class=\"detail-value\">{{ vm.configuration?.vcpu }}</span>\n          </div>\n          <div class=\"detail-item\">\n            <span class=\"detail-label\">Memory</span>\n            <span class=\"detail-value\">{{ formatMemory(vm.configuration?.memory) }}</span>\n          </div>\n          <div class=\"detail-item\" v-if=\"vm.configuration?.swap_size\">\n            <span class=\"detail-label\">Swap</span>\n            <span class=\"detail-value\">{{ formatMemory(bytesToMB(vm.configuration.swap_size)) }}</span>\n          </div>\n          <div class=\"detail-item\">\n            <span class=\"detail-label\">Disk Size</span>\n            <span class=\"detail-value\">{{ vm.configuration?.disk_size }} GB</span>\n          </div>\n          <div class=\"detail-item\">\n            <span class=\"detail-label\">Disk Type</span>\n            <span class=\"detail-value\">{{ vm.configuration?.disk_type || 'virtio-pci' }}</span>\n          </div>\n          <div class=\"detail-item\">\n            <span class=\"detail-label\">TEE</span>\n            <span class=\"detail-value\">{{ vm.configuration?.no_tee ? 'Disabled' : 'Enabled' }}</span>\n          </div>\n          <div class=\"detail-item detail-item--gpus\" v-if=\"vm.configuration?.gpus\">\n            <span class=\"detail-label\">GPUs</span>\n            <div v-if=\"vm.configuration.gpus.attach_mode === 'all'\" class=\"gpu-chip-list\">\n              <span class=\"gpu-chip gpu-chip--all\" title=\"All available GPUs and NVSwitches are attached\">\n                All GPUs\n              </span>\n            </div>\n            <div v-else-if=\"vm.configuration.gpus?.gpus?.length\" class=\"gpu-chip-list\">\n              <span\n                class=\"gpu-chip\"\n                v-for=\"(gpu, index) in vm.configuration.gpus.gpus\"\n                :key=\"gpu.slot || gpu.product_id || index\"\n                :title=\"gpu.description || gpu.slot || gpu.product_id || ('GPU #' + (index + 1))\"\n              >\n                {{ gpu.slot || gpu.product_id || ('GPU #' + (index + 1)) }}\n              </span>\n            </div>\n            <div v-else class=\"detail-value\">\n              None\n            </div>\n          </div>\n        </div>\n\n        <div v-if=\"vm.configuration?.ports?.length\" class=\"port-mappings\">\n          <h4>Port Mappings</h4>\n          <div v-for=\"(port, index) in vm.configuration.ports\" :key=\"index\" class=\"port-item\">\n            <span>{{\n              port.host_address === '127.0.0.1'\n              ? 'Local'\n              : (port.host_address === '0.0.0.0' ? 'Public' : port.host_address)\n              }}</span>\n            <span>{{ port.protocol.toUpperCase() }}: {{ port.host_port }} → {{ port.vm_port }}</span>\n          </div>\n        </div>\n\n        <div class=\"features-section\">\n          <h4>Features</h4>\n          <span class=\"features-text\">{{ getVmFeatures(vm) }}</span>\n        </div>\n\n        <div v-if=\"networkInfo[vm.id]\" class=\"network-section\">\n          <h4 class=\"section-title\">Network Interfaces</h4>\n          <div class=\"network-interfaces\">\n            <div v-for=\"iface in networkInfo[vm.id].interfaces\" :key=\"iface.name\" class=\"network-interface-card\">\n              <div class=\"interface-header\">\n                <div class=\"interface-name\">\n                  <svg width=\"16\" height=\"16\" viewBox=\"0 0 16 16\" fill=\"none\">\n                    <rect x=\"2\" y=\"3\" width=\"12\" height=\"10\" rx=\"1\" stroke=\"currentColor\" stroke-width=\"1.5\"/>\n                    <path d=\"M2 6h12M5 3v3M11 3v3\" stroke=\"currentColor\" stroke-width=\"1.5\"/>\n                  </svg>\n                  <span>{{ iface.name }}</span>\n                </div>\n              </div>\n              <div class=\"interface-details\">\n                <div class=\"interface-detail-row\">\n                  <span class=\"detail-label\">MAC Address</span>\n                  <span class=\"detail-value\">{{ iface.mac || '-' }}</span>\n                </div>\n                <div class=\"interface-detail-row\">\n                  <span class=\"detail-label\">IP Address</span>\n                  <span class=\"detail-value\">{{ iface.addresses.map(addr => addr.address + '/' + addr.prefix).join(', ') || '-' }}</span>\n                </div>\n                <div class=\"interface-stats\">\n                  <div class=\"stat-item\">\n                    <div class=\"stat-icon rx\">\n                      <svg width=\"12\" height=\"12\" viewBox=\"0 0 12 12\" fill=\"none\">\n                        <path d=\"M6 2v8M3 7l3 3 3-3\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/>\n                      </svg>\n                    </div>\n                    <div class=\"stat-content\">\n                      <span class=\"stat-label\">RX</span>\n                      <span class=\"stat-value\">{{ iface.rx_bytes }} bytes</span>\n                      <span class=\"stat-errors\" v-if=\"iface.rx_errors > 0\">({{ iface.rx_errors }} errors)</span>\n                    </div>\n                  </div>\n                  <div class=\"stat-item\">\n                    <div class=\"stat-icon tx\">\n                      <svg width=\"12\" height=\"12\" viewBox=\"0 0 12 12\" fill=\"none\">\n                        <path d=\"M6 10V2M3 5l3-3 3 3\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/>\n                      </svg>\n                    </div>\n                    <div class=\"stat-content\">\n                      <span class=\"stat-label\">TX</span>\n                      <span class=\"stat-value\">{{ iface.tx_bytes }} bytes</span>\n                      <span class=\"stat-errors\" v-if=\"iface.tx_errors > 0\">({{ iface.tx_errors }} errors)</span>\n                    </div>\n                  </div>\n                </div>\n              </div>\n            </div>\n          </div>\n          <div v-if=\"networkInfo[vm.id].wg_info\" class=\"wireguard-section\">\n            <h4 class=\"section-title\">\n              <svg width=\"16\" height=\"16\" viewBox=\"0 0 16 16\" fill=\"none\">\n                <circle cx=\"8\" cy=\"8\" r=\"6\" stroke=\"currentColor\" stroke-width=\"1.5\"/>\n                <path d=\"M8 5v3l2 2\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\"/>\n              </svg>\n              WireGuard Info\n            </h4>\n            <pre class=\"wireguard-info-text\">{{ networkInfo[vm.id].wg_info }}</pre>\n          </div>\n        </div>\n\n        <div v-if=\"vm.configuration?.compose_file\" class=\"compose-section\">\n          <div class=\"section-header\">\n            <h4>App Compose</h4>\n            <div class=\"section-actions\">\n              <button class=\"copy-btn-small\" @click=\"copyToClipboard(vm.appCompose?.docker_compose_file || '')\" title=\"Copy Docker Compose\">\n                <svg width=\"14\" height=\"14\" viewBox=\"0 0 14 14\" fill=\"none\">\n                  <rect x=\"4\" y=\"4\" width=\"8\" height=\"8\" rx=\"1\" stroke=\"currentColor\" stroke-width=\"1.2\"/>\n                  <path d=\"M10 2H3c-.6 0-1 .4-1 1v7\" stroke=\"currentColor\" stroke-width=\"1.2\" stroke-linecap=\"round\"/>\n                </svg>\n              </button>\n              <button class=\"action-btn\" @click=\"downloadAppCompose(vm)\">\n                <svg width=\"14\" height=\"14\" viewBox=\"0 0 14 14\" fill=\"none\">\n                  <path d=\"M7 2v8M7 10l3-3M7 10L4 7\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/>\n                  <path d=\"M2 12h10\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\"/>\n                </svg>\n                Download\n              </button>\n            </div>\n          </div>\n          <div class=\"compose-content\">\n            <pre>{{ vm.appCompose?.docker_compose_file || 'Docker Compose content not available' }}</pre>\n          </div>\n        </div>\n\n        <div v-if=\"vm.configuration?.user_config\" class=\"user-config-section\">\n          <div class=\"section-header\">\n            <h4>User Config</h4>\n            <button class=\"action-btn\" @click=\"downloadUserConfig(vm)\">\n              <svg width=\"14\" height=\"14\" viewBox=\"0 0 14 14\" fill=\"none\">\n                <path d=\"M7 2v8M7 10l3-3M7 10L4 7\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/>\n                <path d=\"M2 12h10\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\"/>\n              </svg>\n              Download\n            </button>\n          </div>\n          <pre class=\"user-config-content\">{{ vm.configuration.user_config }}</pre>\n        </div>\n\n        <div class=\"vm-log-tabs\">\n          <button class=\"vm-log-button\" @click=\"showLogs(vm.id, 'serial')\">Serial Logs</button>\n          <button class=\"vm-log-button\" @click=\"showLogs(vm.id, 'stdout')\">Stdout</button>\n          <button class=\"vm-log-button\" @click=\"showLogs(vm.id, 'stderr')\">Stderr</button>\n        </div>\n      </div>\n    </div>\n  </div>\n\n  <div v-if=\"showProcessManager\" class=\"process-manager-overlay\">\n    <div class=\"process-manager-header\">\n      <h2>Supervisor Processes</h2>\n      <div class=\"process-manager-actions\">\n        <button class=\"btn-clear-stopped\" @click=\"svClear()\">Clear Stopped</button>\n        <button class=\"btn-clear-stopped\" @click=\"loadSupervisorProcesses()\">Refresh</button>\n        <button class=\"btn-close-overlay\" @click=\"showProcessManager = false\">Close</button>\n      </div>\n    </div>\n    <div class=\"process-manager-body\">\n      <table class=\"process-table\" v-if=\"supervisorProcesses.length\">\n        <thead>\n          <tr>\n            <th>Name</th>\n            <th>ID</th>\n            <th>Status</th>\n            <th>PID</th>\n            <th>Actions</th>\n          </tr>\n        </thead>\n        <tbody>\n          <tr v-for=\"p in supervisorProcesses\" :key=\"p.id\">\n            <td class=\"col-name\">{{ p.name }}</td>\n            <td class=\"col-id\" :title=\"p.id\">{{ p.id }}</td>\n            <td>\n              <span class=\"sv-status\" :class=\"svStatusClass(p)\">\n                <span class=\"sv-status-dot\"></span>\n                {{ p.status }}\n              </span>\n            </td>\n            <td>{{ p.pid || '-' }}</td>\n            <td class=\"col-actions\">\n              <button v-if=\"svIsRunning(p)\" @click=\"svStop(p.id)\">Stop</button>\n              <button v-if=\"svIsStopped(p)\" class=\"btn-danger\" @click=\"svRemove(p.id)\">Remove</button>\n            </td>\n          </tr>\n        </tbody>\n      </table>\n      <div v-else class=\"process-empty\">No processes found</div>\n    </div>\n  </div>\n\n  <div class=\"message-container\">\n    <div v-if=\"updateMessage\" class=\"message success-message\">\n      <button class=\"close-btn\" @click=\"updateMessage = ''\">×</button>\n      <div v-html=\"updateMessage\"></div>\n    </div>\n    <div v-if=\"successMessage\" class=\"message success-message\">\n      <button class=\"close-btn\" @click=\"successMessage = ''\">×</button>\n      <div v-html=\"successMessage\"></div>\n    </div>\n    <div v-if=\"errorMessage\" class=\"message error-message\">\n      {{ errorMessage }}\n      <button class=\"close-btn\" @click=\"errorMessage = ''\">×</button>\n    </div>\n  </div>\n</div>\n";
 }, map: {} }
   };
   const cache = {};

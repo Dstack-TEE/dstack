@@ -13,7 +13,8 @@ use dstack_vmm_rpc::{
     AppId, ComposeHash as RpcComposeHash, DhcpLeaseRequest, GatewaySettings, GetInfoResponse,
     GetMetaResponse, Id, ImageInfo as RpcImageInfo, ImageListResponse, KmsSettings,
     ListGpusResponse, PublicKeyResponse, ReloadVmsResponse, ResizeVmRequest, ResourcesSettings,
-    StatusRequest, StatusResponse, UpdateVmRequest, VersionResponse, VmConfiguration,
+    StatusRequest, StatusResponse, SvListResponse, SvProcessInfo, UpdateVmRequest, VersionResponse,
+    VmConfiguration,
 };
 use fs_err as fs;
 use ra_rpc::{CallContext, RpcCall};
@@ -575,6 +576,41 @@ impl VmmRpc for RpcHandler {
 
     async fn report_dhcp_lease(self, request: DhcpLeaseRequest) -> Result<()> {
         self.app.report_dhcp_lease(&request.mac, &request.ip).await;
+        Ok(())
+    }
+
+    async fn sv_list(self) -> Result<SvListResponse> {
+        use supervisor_client::supervisor::ProcessStatus;
+        let list = self.app.supervisor.list().await?;
+        let processes = list
+            .into_iter()
+            .map(|p| {
+                let status = match &p.state.status {
+                    ProcessStatus::Running => "running".into(),
+                    ProcessStatus::Stopped => "stopped".into(),
+                    ProcessStatus::Exited(code) => format!("exited({code})"),
+                    ProcessStatus::Error(msg) => format!("error({msg})"),
+                };
+                SvProcessInfo {
+                    id: p.config.id,
+                    name: p.config.name,
+                    status,
+                    pid: p.state.pid,
+                    command: p.config.command,
+                    note: p.config.note,
+                }
+            })
+            .collect();
+        Ok(SvListResponse { processes })
+    }
+
+    async fn sv_stop(self, request: Id) -> Result<()> {
+        self.app.supervisor.stop(&request.id).await?;
+        Ok(())
+    }
+
+    async fn sv_remove(self, request: Id) -> Result<()> {
+        self.app.supervisor.remove(&request.id).await?;
         Ok(())
     }
 }
