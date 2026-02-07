@@ -21,9 +21,9 @@ use blstrs::{G1Affine, G1Projective, G2Affine, G2Projective, Scalar};
 use elliptic_curve::{group::prime::PrimeCurveAffine as _, Field as _, Group as _};
 use hkdf::Hkdf;
 use rand_core::OsRng;
+use serde::Deserialize;
 use sha2::Sha256;
 use sha3::{Digest, Sha3_256};
-use serde::{Deserialize, Serialize};
 
 // Constants matching NEAR MPC contract
 const BLS12381G1_PUBLIC_KEY_SIZE: usize = 48;
@@ -47,11 +47,11 @@ pub struct MpcConfig {
     pub near_rpc_url: String,
 }
 
-#[derive(Deserialize)]
-struct Bls12381G1PublicKey(String);
+#[derive(Clone, Debug, Deserialize)]
+pub struct Bls12381G1PublicKey(String);
 
 /// MPC CKD response (big_y, big_c from MPC network)
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct CkdResponse {
     pub big_y: Bls12381G1PublicKey,
     pub big_c: Bls12381G1PublicKey,
@@ -136,15 +136,15 @@ pub fn near_format_to_g2(s: &str) -> Result<G2Projective> {
 
 /// Decrypt MPC response and verify signature
 pub fn decrypt_and_verify_mpc_response(
-    big_y: &str,
-    big_c: &str,
+    big_y: &Bls12381G1PublicKey,
+    big_c: &Bls12381G1PublicKey,
     ephemeral_private_key: Scalar,
     mpc_public_key: &str,
     app_id: &[u8],
 ) -> Result<[u8; BLS12381G1_PUBLIC_KEY_SIZE]> {
     // Parse G1 points
-    let big_y_point = near_format_to_g1(big_y)?;
-    let big_c_point = near_format_to_g1(big_c)?;
+    let big_y_point = near_format_to_g1(&big_y.0)?;
+    let big_c_point = near_format_to_g1(&big_c.0)?;
 
     // Parse MPC public key (G2)
     let mpc_pk = near_format_to_g2(mpc_public_key)?;
@@ -206,7 +206,7 @@ pub fn derive_final_key(
 /// 3. Derives the final 32-byte key using HKDF
 /// 4. Returns the key that can be used as K256 signing key
 pub fn derive_root_key_from_mpc(
-    mpc_response: &CKDResponse,
+    mpc_response: &CkdResponse,
     ephemeral_private_key: Scalar,
     mpc_config: &MpcConfig,
     kms_account_id: &str,

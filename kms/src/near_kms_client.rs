@@ -11,13 +11,13 @@ use anyhow::{Context, Result};
 use fs_err as fs;
 use hex;
 use near_api::{
-    SecretKey,
     types::{AccountId, Data},
-    Contract, NetworkConfig, Signer,
+    Contract, NetworkConfig, SecretKey, Signer,
 };
-use std::sync::Arc;
+use near_crypto::InMemorySigner;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
+use std::sync::Arc;
 
 use crate::ckd::CkdResponse;
 use crate::config::KmsConfig;
@@ -46,12 +46,14 @@ impl NearKmsClient {
         network_config: NetworkConfig,
         mpc_contract_id: String,
         kms_contract_id: String,
-        signer: Option<near_crypto::InMemorySigner>,
+        signer: Option<InMemorySigner>,
     ) -> Result<Self> {
-        let mpc_contract_id: AccountId = mpc_contract_id.parse()
+        let mpc_contract_id: AccountId = mpc_contract_id
+            .parse()
             .context("Failed to parse MPC contract ID")?;
 
-        let kms_contract_id: AccountId = kms_contract_id.parse()
+        let kms_contract_id: AccountId = kms_contract_id
+            .parse()
             .context("Failed to parse KMS contract ID")?;
 
         let (signer_account_id, near_api_signer) = if let Some(in_memory_signer) = signer {
@@ -64,7 +66,9 @@ impl NearKmsClient {
             let signer = Signer::from_secret_key(near_api_secret_key)
                 .context("Failed to create near-api Signer")?;
 
-            let account_id: AccountId = in_memory_signer.account_id.to_string()
+            let account_id: AccountId = in_memory_signer
+                .account_id
+                .to_string()
                 .parse()
                 .context("Failed to parse account ID")?;
 
@@ -87,7 +91,8 @@ impl NearKmsClient {
 
     /// Get MPC public key from the contract
     pub async fn get_mpc_public_key(&self, domain_id: u64) -> Result<String> {
-        let current_value: Data<String> = self.mpc_contract
+        let current_value: Data<String> = self
+            .mpc_contract
             .call_function("public_key", serde_json::json!({ "domain_id": domain_id }))
             .read_only()
             .fetch_from(&self.network_config)
@@ -113,7 +118,10 @@ impl NearKmsClient {
             .signer
             .as_ref()
             .context("NEAR signer required for KMS root key requests")?;
-        let signer_account_id = self.signer_account_id.expect("Signer account ID required for KMS root key requests")?;
+        let signer_account_id = self
+            .signer_account_id
+            .as_ref()
+            .context("Signer account ID required for KMS root key requests")?;
 
         // Create request arguments
         let args = RequestKmsRootKeyArgs {
@@ -128,7 +136,7 @@ impl NearKmsClient {
             .kms_contract
             .call_function("request_kms_root_key", args)
             .transaction()
-            .with_signer(self.signer_account_id.clone(), signer.clone())
+            .with_signer(signer_account_id, signer.clone())
             .send_to(&self.network_config)
             .await
             .context("Failed to call KMS contract")?;
@@ -145,7 +153,7 @@ impl NearKmsClient {
         // The return value from Promise callbacks needs to be extracted from the appropriate receipt outcome
         // This may require checking the receipt IDs and following the Promise chain, or using
         // a helper method if the API provides one
-        
+
         // For now, return an error indicating this needs implementation
         // The actual implementation will depend on how the near-api library exposes
         // the return values from Promise callbacks in receipt outcomes
@@ -172,16 +180,14 @@ impl NearKmsClient {
 
 /// Generate a random NEAR implicit account signer
 /// The account ID is derived from the Ed25519 public key (64 hex characters)
-pub fn generate_near_implicit_signer() -> Result<near_crypto::InMemorySigner> {
-    use near_crypto::{InMemorySigner, SecretKey};
-
+pub fn generate_near_implicit_signer() -> Result<InMemorySigner> {
     // Generate random Ed25519 keypair
-    let secret_key = SecretKey::from_random(near_crypto::KeyType::ED25519);
+    let secret_key = near_crypto::SecretKey::from_random(near_crypto::KeyType::ED25519);
 
     // Derive implicit account ID from public key (hex encode the 32-byte public key)
     let public_key = secret_key.public_key();
-        use byte_slice_cast::AsByteSlice;
-        let account_id = match public_key {
+    use byte_slice_cast::AsByteSlice;
+    let account_id = match public_key {
         near_crypto::PublicKey::ED25519(pk) => {
             // Implicit account ID is the hex-encoded public key (64 characters)
             hex::encode(pk.as_byte_slice())
@@ -226,8 +232,6 @@ pub fn load_or_generate_near_signer(
             .as_str()
             .context("Missing secret_key in signer file")?;
 
-        use near_crypto::{InMemorySigner, SecretKey};
-
         let account_id_parsed: near_account_id::AccountId = account_id_str
             .parse()
             .context("Failed to parse account ID from signer file")?;
@@ -236,7 +240,8 @@ pub fn load_or_generate_near_signer(
 
         tracing::info!("Loaded existing NEAR signer: {}", account_id_str);
         Ok(Some(InMemorySigner::from_secret_key(
-            account_id_parsed, secret_key,
+            account_id_parsed,
+            secret_key,
         )))
     } else {
         // Generate new signer

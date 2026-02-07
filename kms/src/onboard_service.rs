@@ -162,15 +162,15 @@ impl Keys {
         quote_enabled: bool,
     ) -> Result<Self> {
         // Derive CA key from root key using deterministic key derivation
-        let ca_key = kdf::derive_ecdsa_key_pair_from_bytes(&root_key, &[b"ca-key"])
+        let ca_key = kdf::derive_p256_key_pair_from_bytes(&root_key, &[b"ca-key"])
             .context("Failed to derive CA key from MPC root key")?;
 
         // Derive tmp CA key from root key
-        let tmp_ca_key = kdf::derive_ecdsa_key_pair_from_bytes(&root_key, &[b"tmp-ca-key"])
+        let tmp_ca_key = kdf::derive_p256_key_pair_from_bytes(&root_key, &[b"tmp-ca-key"])
             .context("Failed to derive tmp CA key from MPC root key")?;
 
         // Derive RPC key from root key
-        let rpc_key = kdf::derive_ecdsa_key_pair_from_bytes(&root_key, &[b"rpc-key"])
+        let rpc_key = kdf::derive_p256_key_pair_from_bytes(&root_key, &[b"rpc-key"])
             .context("Failed to derive RPC key from MPC root key")?;
 
         // Use root key directly as K256 key (it's already 32 bytes)
@@ -426,7 +426,7 @@ async fn try_derive_keys_from_mpc(
     let mpc_domain_id = near.mpc_domain_id;
 
     let network_id = near.network_id.as_deref().unwrap_or("testnet");
-    let network_config = NetworkConfig::from_rpc_url(network_id, &rpc_url);
+    let network_config = NetworkConfig::from_rpc_url(network_id, rpc_url.parse().unwrap());
 
     // Load or generate NEAR signer (implicit account)
     let signer = load_or_generate_near_signer(cfg)?;
@@ -446,7 +446,12 @@ async fn try_derive_keys_from_mpc(
     tracing::info!("  Domain ID: {}", mpc_domain_id);
     tracing::info!("  Signer Account ID: {}", signer.account_id);
 
-    let kms_client = NearKmsClient::new(network_config, mpc_contract_id.clone(), kms_contract_id.clone(), Some(signer))?;
+    let kms_client = NearKmsClient::new(
+        network_config,
+        mpc_contract_id.clone(),
+        kms_contract_id.clone(),
+        Some(signer),
+    )?;
 
     let mpc_public_key = kms_client.get_mpc_public_key(mpc_domain_id).await?;
 
