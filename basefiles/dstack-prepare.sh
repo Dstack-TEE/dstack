@@ -261,15 +261,16 @@ fi
 
 dstack-util setup --work-dir $WORK_DIR --device "$DATA_DEVICE" --mount-point $DATA_MNT
 
-log "Mounting docker dirs to persistent storage"
-# Mount docker dirs to DATA_MNT
+log "Mounting container runtime dirs to persistent storage"
 mkdir -p $DATA_MNT/var/lib/docker
 mkdir -p $DATA_MNT/var/lib/containerd
-# Create mount points (containerd may not have started yet to create them)
+mkdir -p $DATA_MNT/var/lib/sysbox
 mkdir -p /var/lib/docker
 mkdir -p /var/lib/containerd
+mkdir -p /var/lib/sysbox
 mount --rbind $DATA_MNT/var/lib/docker /var/lib/docker
 mount --rbind $DATA_MNT/var/lib/containerd /var/lib/containerd
+mount --rbind $DATA_MNT/var/lib/sysbox /var/lib/sysbox
 mount --rbind $WORK_DIR /dstack
 
 echo "======== Disk usage ========"
