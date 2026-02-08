@@ -269,6 +269,7 @@ impl Keys {
         let tmp_ca_key_pem = keys_res.temp_ca_key;
         let root_ca_key_pem = keys.ca_key;
         let root_k256_key = keys.k256_key;
+
         let rpc_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)?;
         let ca_key = KeyPair::from_pem(&root_ca_key_pem).context("Failed to parse CA key")?;
         let tmp_ca_key =
