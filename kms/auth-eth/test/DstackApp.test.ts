@@ -18,19 +18,23 @@ describe("DstackApp", function () {
   beforeEach(async function () {
     [owner, user] = await ethers.getSigners();
     appAuth = await deployContract(hre, "DstackApp", [
-      owner.address, 
+      owner.address,
       false,  // _disableUpgrades
       false,  // _requireTcbUpToDate
       true,   // _allowAnyDevice
       ethers.ZeroHash,  // initialDeviceId (empty)
       ethers.ZeroHash   // initialComposeHash (empty)
-    ], true) as DstackApp;
+    ], true, "initialize(address,bool,bool,bool,bytes32,bytes32)") as DstackApp;
     appId = await appAuth.getAddress();
   });
 
   describe("Basic functionality", function () {
     it("Should set the correct owner", async function () {
       expect(await appAuth.owner()).to.equal(owner.address);
+    });
+
+    it("Should return version 2", async function () {
+      expect(await appAuth.version()).to.equal(2);
     });
   });
 
@@ -59,6 +63,68 @@ describe("DstackApp", function () {
       await expect(appAuth.removeComposeHash(testHash))
         .to.emit(appAuth, "ComposeHashRemoved")
         .withArgs(testHash);
+    });
+  });
+
+  describe("TCB requirement via initialize", function () {
+    it("Should reject outdated TCB when initialized with requireTcbUpToDate=true", async function () {
+      const tcbApp = await deployContract(hre, "DstackApp", [
+        owner.address,
+        false,  // _disableUpgrades
+        true,   // _requireTcbUpToDate
+        true,   // _allowAnyDevice
+        ethers.ZeroHash,
+        ethers.ZeroHash
+      ], true, "initialize(address,bool,bool,bool,bytes32,bytes32)") as DstackApp;
+
+      const composeHash = ethers.randomBytes(32);
+      await tcbApp.addComposeHash(composeHash);
+
+      const bootInfo = {
+        appId: await tcbApp.getAddress(),
+        composeHash,
+        instanceId: ethers.Wallet.createRandom().address,
+        deviceId: ethers.randomBytes(32),
+        mrAggregated: ethers.randomBytes(32),
+        mrSystem: ethers.randomBytes(32),
+        osImageHash: ethers.randomBytes(32),
+        tcbStatus: "OutOfDate",
+        advisoryIds: []
+      };
+
+      const [isAllowed, reason] = await tcbApp.isAppAllowed(bootInfo);
+      expect(isAllowed).to.be.false;
+      expect(reason).to.equal("TCB status is not up to date");
+    });
+
+    it("Should allow UpToDate TCB when initialized with requireTcbUpToDate=true", async function () {
+      const tcbApp = await deployContract(hre, "DstackApp", [
+        owner.address,
+        false,
+        true,   // _requireTcbUpToDate
+        true,   // _allowAnyDevice
+        ethers.ZeroHash,
+        ethers.ZeroHash
+      ], true, "initialize(address,bool,bool,bool,bytes32,bytes32)") as DstackApp;
+
+      const composeHash = ethers.randomBytes(32);
+      await tcbApp.addComposeHash(composeHash);
+
+      const bootInfo = {
+        appId: await tcbApp.getAddress(),
+        composeHash,
+        instanceId: ethers.Wallet.createRandom().address,
+        deviceId: ethers.randomBytes(32),
+        mrAggregated: ethers.randomBytes(32),
+        mrSystem: ethers.randomBytes(32),
+        osImageHash: ethers.randomBytes(32),
+        tcbStatus: "UpToDate",
+        advisoryIds: []
+      };
+
+      const [isAllowed, reason] = await tcbApp.isAppAllowed(bootInfo);
+      expect(isAllowed).to.be.true;
+      expect(reason).to.equal("");
     });
   });
 
@@ -160,8 +226,9 @@ describe("DstackApp", function () {
       appAuthWithData = await hre.upgrades.deployProxy(
         contractFactory,
         [owner.address, false, false, false, testDevice, testHash],
-        { 
-          kind: 'uups'
+        {
+          kind: 'uups',
+          initializer: 'initialize(address,bool,bool,bool,bytes32,bytes32)'
         }
       ) as DstackApp;
       
@@ -260,7 +327,8 @@ describe("DstackApp", function () {
         contractFactory,
         [owner.address, false, false, false, ethers.ZeroHash, ethers.ZeroHash],
         {
-          kind: 'uups'
+          kind: 'uups',
+          initializer: 'initialize(address,bool,bool,bool,bytes32,bytes32)'
         }
       ) as DstackApp;
 
