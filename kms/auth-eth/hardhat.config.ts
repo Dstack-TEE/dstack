@@ -244,6 +244,7 @@ task("kms:get-app-implementation", "Get current DstackApp implementation address
 
 task("app:deploy", "Deploy DstackApp with a UUPS proxy")
   .addFlag("allowAnyDevice", "Allow any device to boot this app")
+  .addFlag("requireTcbUpToDate", "Require TCB status to be UpToDate")
   .addOptionalParam("device", "Initial device ID", "", types.string)
   .addOptionalParam("hash", "Initial compose hash", "", types.string)
   .setAction(async (taskArgs, hre) => {
@@ -267,14 +268,14 @@ task("app:deploy", "Deploy DstackApp with a UUPS proxy")
       console.log("Initial compose hash:", composeHash === "0x0000000000000000000000000000000000000000000000000000000000000000" ? "none" : composeHash);
     }
 
-    // Use standard deployment - all cases use the same 6-parameter initializer
     const appContract = await deployContract(hre, "DstackApp", [
-      deployerAddress, 
-      false, 
-      taskArgs.allowAnyDevice,
+      deployerAddress,
+      false,                          // _disableUpgrades
+      taskArgs.requireTcbUpToDate,    // _requireTcbUpToDate
+      taskArgs.allowAnyDevice,        // _allowAnyDevice
       deviceId,
       composeHash
-    ]);
+    ], false, "initialize(address,bool,bool,bool,bytes32,bytes32)");
     
     if (!appContract) {
       return;

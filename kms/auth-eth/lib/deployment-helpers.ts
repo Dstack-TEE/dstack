@@ -62,14 +62,15 @@ export async function accountBalance(ethers: any, address: string) {
 export async function estimateDeploymentCost(
     hre: HardhatRuntimeEnvironment,
     contractName: string,
-    initializerArgs: any[] = []
+    initializerArgs: any[] = [],
+    initializer?: string
 ) {
     console.log("Estimating deployment costs...");
     const factory = await hre.ethers.getContractFactory(contractName);
 
     // Get the data for initialize function
     const initData = factory.interface.encodeFunctionData(
-        "initialize",
+        initializer || "initialize",
         initializerArgs
     );
 
