@@ -46,7 +46,18 @@ contract DstackApp is
         _disableInitializers();
     }
 
-    // Initialize the contract
+    // Old initialize — preserved for upgrade compatibility
+    function initialize(
+        address initialOwner,
+        bool _disableUpgrades,
+        bool _allowAnyDevice,
+        bytes32 initialDeviceId,
+        bytes32 initialComposeHash
+    ) public initializer {
+        _initializeCommon(initialOwner, _disableUpgrades, _allowAnyDevice, initialDeviceId, initialComposeHash);
+    }
+
+    // New initialize — includes requireTcbUpToDate
     function initialize(
         address initialOwner,
         bool _disableUpgrades,
@@ -55,10 +66,20 @@ contract DstackApp is
         bytes32 initialDeviceId,
         bytes32 initialComposeHash
     ) public initializer {
+        requireTcbUpToDate = _requireTcbUpToDate;
+        _initializeCommon(initialOwner, _disableUpgrades, _allowAnyDevice, initialDeviceId, initialComposeHash);
+    }
+
+    function _initializeCommon(
+        address initialOwner,
+        bool _disableUpgrades,
+        bool _allowAnyDevice,
+        bytes32 initialDeviceId,
+        bytes32 initialComposeHash
+    ) internal {
         require(initialOwner != address(0), "invalid owner address");
 
         _upgradesDisabled = _disableUpgrades;
-        requireTcbUpToDate = _requireTcbUpToDate;
         allowAnyDevice = _allowAnyDevice;
 
         // Add initial device if provided
@@ -76,6 +97,10 @@ contract DstackApp is
         __Ownable_init(initialOwner);
         __UUPSUpgradeable_init();
         __ERC165_init();
+    }
+
+    function version() public pure returns (uint256) {
+        return 2;
     }
 
     /**

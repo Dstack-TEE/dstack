@@ -69,7 +69,8 @@ export interface DstackAppInterface extends Interface {
       | "allowedComposeHashes"
       | "allowedDeviceIds"
       | "disableUpgrades"
-      | "initialize"
+      | "initialize(address,bool,bool,bytes32,bytes32)"
+      | "initialize(address,bool,bool,bool,bytes32,bytes32)"
       | "isAppAllowed"
       | "owner"
       | "proxiableUUID"
@@ -82,6 +83,7 @@ export interface DstackAppInterface extends Interface {
       | "supportsInterface"
       | "transferOwnership"
       | "upgradeToAndCall"
+      | "version"
   ): FunctionFragment;
 
   getEvent(
@@ -127,7 +129,11 @@ export interface DstackAppInterface extends Interface {
     values?: undefined
   ): string;
   encodeFunctionData(
-    functionFragment: "initialize",
+    functionFragment: "initialize(address,bool,bool,bytes32,bytes32)",
+    values: [AddressLike, boolean, boolean, BytesLike, BytesLike]
+  ): string;
+  encodeFunctionData(
+    functionFragment: "initialize(address,bool,bool,bool,bytes32,bytes32)",
     values: [AddressLike, boolean, boolean, boolean, BytesLike, BytesLike]
   ): string;
   encodeFunctionData(
@@ -175,6 +181,7 @@ export interface DstackAppInterface extends Interface {
     functionFragment: "upgradeToAndCall",
     values: [AddressLike, BytesLike]
   ): string;
+  encodeFunctionData(functionFragment: "version", values?: undefined): string;
 
   decodeFunctionResult(
     functionFragment: "UPGRADE_INTERFACE_VERSION",
@@ -201,7 +208,14 @@ export interface DstackAppInterface extends Interface {
     functionFragment: "disableUpgrades",
     data: BytesLike
   ): Result;
-  decodeFunctionResult(functionFragment: "initialize", data: BytesLike): Result;
+  decodeFunctionResult(
+    functionFragment: "initialize(address,bool,bool,bytes32,bytes32)",
+    data: BytesLike
+  ): Result;
+  decodeFunctionResult(
+    functionFragment: "initialize(address,bool,bool,bool,bytes32,bytes32)",
+    data: BytesLike
+  ): Result;
   decodeFunctionResult(
     functionFragment: "isAppAllowed",
     data: BytesLike
@@ -247,6 +261,7 @@ export interface DstackAppInterface extends Interface {
     functionFragment: "upgradeToAndCall",
     data: BytesLike
   ): Result;
+  decodeFunctionResult(functionFragment: "version", data: BytesLike): Result;
 }
 
 export namespace AllowAnyDeviceSetEvent {
@@ -433,7 +448,19 @@ export interface DstackApp extends BaseContract {
 
   disableUpgrades: TypedContractMethod<[], [void], "nonpayable">;
 
-  initialize: TypedContractMethod<
+  "initialize(address,bool,bool,bytes32,bytes32)": TypedContractMethod<
+    [
+      initialOwner: AddressLike,
+      _disableUpgrades: boolean,
+      _allowAnyDevice: boolean,
+      initialDeviceId: BytesLike,
+      initialComposeHash: BytesLike
+    ],
+    [void],
+    "nonpayable"
+  >;
+
+  "initialize(address,bool,bool,bool,bytes32,bytes32)": TypedContractMethod<
     [
       initialOwner: AddressLike,
       _disableUpgrades: boolean,
@@ -502,6 +529,8 @@ export interface DstackApp extends BaseContract {
     "payable"
   >;
 
+  version: TypedContractMethod<[], [bigint], "view">;
+
   getFunction<T extends ContractMethod = ContractMethod>(
     key: string | FunctionFragment
   ): T;
@@ -528,7 +557,20 @@ export interface DstackApp extends BaseContract {
     nameOrSignature: "disableUpgrades"
   ): TypedContractMethod<[], [void], "nonpayable">;
   getFunction(
-    nameOrSignature: "initialize"
+    nameOrSignature: "initialize(address,bool,bool,bytes32,bytes32)"
+  ): TypedContractMethod<
+    [
+      initialOwner: AddressLike,
+      _disableUpgrades: boolean,
+      _allowAnyDevice: boolean,
+      initialDeviceId: BytesLike,
+      initialComposeHash: BytesLike
+    ],
+    [void],
+    "nonpayable"
+  >;
+  getFunction(
+    nameOrSignature: "initialize(address,bool,bool,bool,bytes32,bytes32)"
   ): TypedContractMethod<
     [
       initialOwner: AddressLike,
@@ -585,6 +627,9 @@ export interface DstackApp extends BaseContract {
     [void],
     "payable"
   >;
+  getFunction(
+    nameOrSignature: "version"
+  ): TypedContractMethod<[], [bigint], "view">;
 
   getEvent(
     key: "AllowAnyDeviceSet"
