@@ -33,6 +33,7 @@ beforeAll(async () => {
   const appAuth = await deployContract(hre, "DstackApp", [
     owner.address, 
     false,  // _disableUpgrades
+    false,  // _requireTcbUpToDate
     true,   // _allowAnyDevice
     ethers.ZeroHash,  // initialDeviceId (empty)
     ethers.ZeroHash   // initialComposeHash (empty)

@@ -333,6 +333,7 @@ task("app:deploy", "Deploy DstackApp with a UUPS proxy")
 
 task("kms:create-app", "Create DstackApp via KMS factory method (single transaction)")
   .addFlag("allowAnyDevice", "Allow any device to boot this app")
+  .addFlag("requireTcbUpToDate", "Require TCB status to be UpToDate")
   .addOptionalParam("device", "Initial device ID", "", types.string)
   .addOptionalParam("hash", "Initial compose hash", "", types.string)
   .setAction(async (taskArgs, hre) => {
@@ -355,6 +356,7 @@ task("kms:create-app", "Create DstackApp via KMS factory method (single transact
     const tx = await kmsContract.deployAndRegisterApp(
       deployerAddress,  // deployer owns the contract
       false,           // disableUpgrades
+      taskArgs.requireTcbUpToDate,
       taskArgs.allowAnyDevice,
       deviceId,
       composeHash

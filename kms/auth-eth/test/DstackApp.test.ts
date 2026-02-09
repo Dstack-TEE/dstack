@@ -20,6 +20,7 @@ describe("DstackApp", function () {
     appAuth = await deployContract(hre, "DstackApp", [
       owner.address, 
       false,  // _disableUpgrades
+      false,  // _requireTcbUpToDate
       true,   // _allowAnyDevice
       ethers.ZeroHash,  // initialDeviceId (empty)
       ethers.ZeroHash   // initialComposeHash (empty)
@@ -91,6 +92,26 @@ describe("DstackApp", function () {
       expect(isAllowed).to.be.true;
     });
 
+    it("Should reject outdated TCB when required", async function () {
+      await appAuth.setRequireTcbUpToDate(true);
+
+      const bootInfo = {
+        appId: appId,
+        composeHash,
+        instanceId,
+        deviceId,
+        mrAggregated,
+        mrSystem,
+        osImageHash,
+        tcbStatus: "OutOfDate",
+        advisoryIds: []
+      };
+
+      const [isAllowed, reason] = await appAuth.isAppAllowed(bootInfo);
+      expect(isAllowed).to.be.false;
+      expect(reason).to.equal("TCB status is not up to date");
+    });
+
     it("Should reject unallowed compose hash", async function () {
       const bootInfo = {
         tcbStatus: "UpToDate",
@@ -138,7 +159,7 @@ describe("DstackApp", function () {
       const contractFactory = await ethers.getContractFactory("DstackApp");
       appAuthWithData = await hre.upgrades.deployProxy(
         contractFactory,
-        [owner.address, false, false, testDevice, testHash],
+        [owner.address, false, false, false, testDevice, testHash],
         { 
           kind: 'uups'
         }
@@ -237,7 +258,7 @@ describe("DstackApp", function () {
       const contractFactory = await ethers.getContractFactory("DstackApp");
       const appAuthEmpty = await hre.upgrades.deployProxy(
         contractFactory,
-        [owner.address, false, false, ethers.ZeroHash, ethers.ZeroHash],
+        [owner.address, false, false, false, ethers.ZeroHash, ethers.ZeroHash],
         {
           kind: 'uups'
         }
