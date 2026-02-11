@@ -177,7 +177,7 @@ export interface TlsKeyOptions {
   usageClientAuth?: boolean;
 }
 
-const SECP256K1_ALGORITHMS = new Set(['secp256k1', 'secp256k1_prehashed', 'k256', ''])
+const SECP256K1_ALGORITHMS = new Set(['secp256k1', 'k256', ''])
 
 export class DstackClient<T extends TcbInfo = TcbInfoV05x> {
   protected endpoint: string

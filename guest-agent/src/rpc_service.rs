@@ -282,7 +282,7 @@ impl DstackGuestRpc for InternalRpcHandler {
                 let pubkey_hex = hex::encode(signing_key.verifying_key().as_bytes());
                 (derived_key, pubkey_hex)
             }
-            "secp256k1" | "secp256k1_prehashed" | "" => {
+            "secp256k1" | "" => {
                 let derived_key = derive_key(k256_app_key, &[request.path.as_bytes()], 32)
                     .context("Failed to derive k256 key")?;
 

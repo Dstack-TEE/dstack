@@ -372,7 +372,7 @@ func (c *DstackClient) GetTlsKey(
 // requiresVersionCheck returns true for algorithms that need OS >= 0.5.7.
 func requiresVersionCheck(algorithm string) bool {
 	switch algorithm {
-	case "secp256k1", "secp256k1_prehashed", "k256", "":
+	case "secp256k1", "k256", "":
 		return false
 	default:
 		return true

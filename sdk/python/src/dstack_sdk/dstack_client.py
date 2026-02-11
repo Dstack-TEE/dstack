@@ -382,7 +382,7 @@ class AsyncDstackClient(BaseClient):
 
     async def _ensure_algorithm_supported(self, algorithm: str) -> None:
         """Check OS version when a non-secp256k1 algorithm is requested."""
-        if algorithm in ("secp256k1", "secp256k1_prehashed", "k256", ""):
+        if algorithm in ("secp256k1", "k256", ""):
             return
         try:
             await self.version()
