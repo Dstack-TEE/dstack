@@ -1155,4 +1155,154 @@ pNs85uhOZE8z2jr8Pg==
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().to_string(), "Unsupported algorithm");
     }
+
+    #[test]
+    fn test_normalize_algorithm() {
+        assert_eq!(normalize_algorithm("k256"), "secp256k1");
+        assert_eq!(normalize_algorithm("secp256k1"), "secp256k1");
+        assert_eq!(normalize_algorithm("ed25519"), "ed25519");
+        assert_eq!(normalize_algorithm(""), "");
+        assert_eq!(normalize_algorithm("unknown"), "unknown");
+    }
+
+    #[tokio::test]
+    async fn test_get_key_k256_alias() {
+        let (state, _guard) = setup_test_state().await;
+        let handler_k256 = InternalRpcHandler {
+            state: state.clone(),
+        };
+        let handler_secp = InternalRpcHandler {
+            state: state.clone(),
+        };
+
+        let req_k256 = GetKeyArgs {
+            path: "test".to_string(),
+            purpose: "signing".to_string(),
+            algorithm: "k256".to_string(),
+        };
+        let req_secp = GetKeyArgs {
+            path: "test".to_string(),
+            purpose: "signing".to_string(),
+            algorithm: "secp256k1".to_string(),
+        };
+
+        let resp_k256 = handler_k256.get_key(req_k256).await.unwrap();
+        let resp_secp = handler_secp.get_key(req_secp).await.unwrap();
+
+        // k256 alias should produce the same key as secp256k1
+        assert_eq!(resp_k256.key, resp_secp.key);
+    }
+
+    #[tokio::test]
+    async fn test_get_key_secp256k1_prehashed_rejected() {
+        let (state, _guard) = setup_test_state().await;
+        let handler = InternalRpcHandler { state };
+
+        let request = GetKeyArgs {
+            path: "test".to_string(),
+            purpose: "signing".to_string(),
+            algorithm: "secp256k1_prehashed".to_string(),
+        };
+
+        let result = handler.get_key(request).await;
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().to_string(), "Unsupported algorithm");
+    }
+
+    #[tokio::test]
+    async fn test_get_key_ed25519_success() {
+        let (state, _guard) = setup_test_state().await;
+        let handler = InternalRpcHandler { state };
+
+        let request = GetKeyArgs {
+            path: "test".to_string(),
+            purpose: "signing".to_string(),
+            algorithm: "ed25519".to_string(),
+        };
+
+        let response = handler.get_key(request).await.unwrap();
+        assert!(!response.key.is_empty());
+        assert_eq!(response.signature_chain.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_get_key_default_algorithm() {
+        let (state, _guard) = setup_test_state().await;
+        let handler_default = InternalRpcHandler {
+            state: state.clone(),
+        };
+        let handler_secp = InternalRpcHandler {
+            state: state.clone(),
+        };
+
+        let req_default = GetKeyArgs {
+            path: "test".to_string(),
+            purpose: "signing".to_string(),
+            algorithm: "".to_string(),
+        };
+        let req_secp = GetKeyArgs {
+            path: "test".to_string(),
+            purpose: "signing".to_string(),
+            algorithm: "secp256k1".to_string(),
+        };
+
+        let resp_default = handler_default.get_key(req_default).await.unwrap();
+        let resp_secp = handler_secp.get_key(req_secp).await.unwrap();
+
+        // Empty algorithm should default to secp256k1
+        assert_eq!(resp_default.key, resp_secp.key);
+    }
+
+    #[tokio::test]
+    async fn test_get_key_unsupported_algorithm_fails() {
+        let (state, _guard) = setup_test_state().await;
+        let handler = InternalRpcHandler { state };
+
+        let request = GetKeyArgs {
+            path: "test".to_string(),
+            purpose: "signing".to_string(),
+            algorithm: "rsa".to_string(),
+        };
+
+        let result = handler.get_key(request).await;
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().to_string(), "Unsupported algorithm");
+    }
+
+    #[tokio::test]
+    async fn test_version() {
+        let (state, _guard) = setup_test_state().await;
+        let handler = InternalRpcHandler { state };
+
+        let response = handler.version().await.unwrap();
+        assert!(!response.version.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_sign_k256_alias() {
+        let (state, _guard) = setup_test_state().await;
+        let handler_k256 = InternalRpcHandler {
+            state: state.clone(),
+        };
+        let handler_secp = InternalRpcHandler {
+            state: state.clone(),
+        };
+
+        let data = b"test message".to_vec();
+
+        let req_k256 = SignRequest {
+            algorithm: "k256".to_string(),
+            data: data.clone(),
+        };
+        let req_secp = SignRequest {
+            algorithm: "secp256k1".to_string(),
+            data: data.clone(),
+        };
+
+        let resp_k256 = handler_k256.sign(req_k256).await.unwrap();
+        let resp_secp = handler_secp.sign(req_secp).await.unwrap();
+
+        // k256 alias should produce the same public key as secp256k1
+        assert_eq!(resp_k256.public_key, resp_secp.public_key);
+    }
 }

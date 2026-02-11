@@ -258,6 +258,25 @@ describe('DstackClient', () => {
     })
   })
 
+  it('should be able to get version', async () => {
+    const client = new DstackClient()
+    const result = await client.version()
+    expect(result).toHaveProperty('version')
+    expect(result.version).not.toBe('')
+  })
+
+  it('should get key with k256 alias producing same result as secp256k1', async () => {
+    const client = new DstackClient()
+    const resultK256 = await client.getKey('/test', 'purpose', 'k256')
+    const resultSecp = await client.getKey('/test', 'purpose', 'secp256k1')
+    expect(resultK256.key).toEqual(resultSecp.key)
+  })
+
+  it('should reject secp256k1_prehashed in getKey', async () => {
+    const client = new DstackClient()
+    await expect(() => client.getKey('/test', 'purpose', 'secp256k1_prehashed')).rejects.toThrow()
+  })
+
   describe('deprecated methods with TappdClient', () => {
     it('should support deprecated deriveKey method with warning', async () => {
       const client = new TappdClient()

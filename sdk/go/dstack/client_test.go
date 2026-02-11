@@ -737,3 +737,63 @@ func TestSignAndVerifySecp256k1Prehashed(t *testing.T) {
 		t.Errorf("expected error to mention '32-byte digest', got: %v", err)
 	}
 }
+
+func TestGetVersion(t *testing.T) {
+	client := dstack.NewDstackClient()
+	resp, err := client.GetVersion(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if resp.Version == "" {
+		t.Error("expected version to not be empty")
+	}
+}
+
+func TestGetKeyK256Alias(t *testing.T) {
+	client := dstack.NewDstackClient()
+
+	respK256, err := client.GetKey(context.Background(), "/test", "purpose", "k256")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	respSecp, err := client.GetKey(context.Background(), "/test", "purpose", "secp256k1")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// k256 is an alias for secp256k1, should produce the same key
+	if respK256.Key != respSecp.Key {
+		t.Error("expected k256 and secp256k1 to produce the same key")
+	}
+}
+
+func TestGetKeyUnsupportedAlgorithm(t *testing.T) {
+	client := dstack.NewDstackClient()
+	_, err := client.GetKey(context.Background(), "/test", "purpose", "rsa")
+	if err == nil {
+		t.Fatal("expected error for unsupported algorithm")
+	}
+}
+
+func TestGetKeySecp256k1PrehashedRejected(t *testing.T) {
+	client := dstack.NewDstackClient()
+	_, err := client.GetKey(context.Background(), "/test", "purpose", "secp256k1_prehashed")
+	if err == nil {
+		t.Fatal("expected error for secp256k1_prehashed in GetKey")
+	}
+}
+
+func TestGetKeyAlgorithmValidation(t *testing.T) {
+	client := dstack.NewDstackClient()
+
+	// ed25519 should succeed (Version RPC is available on the simulator)
+	resp, err := client.GetKey(context.Background(), "/test", "purpose", "ed25519")
+	if err != nil {
+		t.Fatalf("expected ed25519 to succeed: %v", err)
+	}
+	if resp.Key == "" {
+		t.Error("expected key to not be empty")
+	}
+}

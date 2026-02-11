@@ -18,6 +18,7 @@ from dstack_sdk import GetTlsKeyResponse
 from dstack_sdk import SignResponse
 from dstack_sdk import TappdClient
 from dstack_sdk import VerifyResponse
+from dstack_sdk import VersionResponse
 from dstack_sdk.dstack_client import InfoResponse
 from dstack_sdk.dstack_client import TcbInfo
 
@@ -535,6 +536,50 @@ async def test_async_tappd_client_tdx_quote_deprecated():
         warning_messages = [str(warning.message) for warning in w]
         assert any("AsyncTappdClient is deprecated" in msg for msg in warning_messages)
         assert any("tdx_quote is deprecated" in msg for msg in warning_messages)
+
+
+def test_sync_client_version():
+    client = DstackClient()
+    result = client.version()
+    assert isinstance(result, VersionResponse)
+    assert result.version != ""
+
+
+@pytest.mark.asyncio
+async def test_async_client_version():
+    client = AsyncDstackClient()
+    result = await client.version()
+    assert isinstance(result, VersionResponse)
+    assert result.version != ""
+
+
+def test_sync_client_get_key_k256_alias():
+    client = DstackClient()
+    result_k256 = client.get_key(path="/test", purpose="p", algorithm="k256")
+    result_secp = client.get_key(path="/test", purpose="p", algorithm="secp256k1")
+    # k256 is an alias for secp256k1, should produce the same key
+    assert result_k256.decode_key() == result_secp.decode_key()
+
+
+@pytest.mark.asyncio
+async def test_async_client_get_key_k256_alias():
+    client = AsyncDstackClient()
+    result_k256 = await client.get_key(path="/test", purpose="p", algorithm="k256")
+    result_secp = await client.get_key(path="/test", purpose="p", algorithm="secp256k1")
+    assert result_k256.decode_key() == result_secp.decode_key()
+
+
+def test_sync_client_get_key_secp256k1_prehashed_rejected():
+    client = DstackClient()
+    with pytest.raises(Exception):
+        client.get_key(algorithm="secp256k1_prehashed")
+
+
+@pytest.mark.asyncio
+async def test_async_client_get_key_secp256k1_prehashed_rejected():
+    client = AsyncDstackClient()
+    with pytest.raises(Exception):
+        await client.get_key(algorithm="secp256k1_prehashed")
 
 
 @pytest.mark.asyncio
