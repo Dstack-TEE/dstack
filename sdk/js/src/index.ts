@@ -177,6 +177,8 @@ export interface TlsKeyOptions {
   usageClientAuth?: boolean;
 }
 
+const SECP256K1_ALGORITHMS = new Set(['secp256k1', 'secp256k1_prehashed', 'k256', ''])
+
 export class DstackClient<T extends TcbInfo = TcbInfoV05x> {
   protected endpoint: string
 
@@ -202,7 +204,17 @@ export class DstackClient<T extends TcbInfo = TcbInfoV05x> {
     this.endpoint = endpoint
   }
 
+  private async ensureAlgorithmSupported(algorithm: string): Promise<void> {
+    if (SECP256K1_ALGORITHMS.has(algorithm)) return
+    try {
+      await this.version()
+    } catch {
+      throw new Error(`algorithm "${algorithm}" is not supported: OS version too old (Version RPC unavailable)`)
+    }
+  }
+
   async getKey(path: string, purpose: string = '', algorithm: string = 'secp256k1'): Promise<GetKeyResponse> {
+    await this.ensureAlgorithmSupported(algorithm)
     const payload = JSON.stringify({
       path: path,
       purpose: purpose,

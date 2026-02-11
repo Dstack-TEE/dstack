@@ -380,6 +380,18 @@ class AsyncDstackClient(BaseClient):
                 self._sync_client.close()
                 self._sync_client = None
 
+    async def _ensure_algorithm_supported(self, algorithm: str) -> None:
+        """Check OS version when a non-secp256k1 algorithm is requested."""
+        if algorithm in ("secp256k1", "secp256k1_prehashed", "k256", ""):
+            return
+        try:
+            await self.version()
+        except Exception:
+            raise RuntimeError(
+                f'algorithm "{algorithm}" is not supported: '
+                "OS version too old (Version RPC unavailable)"
+            )
+
     async def get_key(
         self,
         path: str | None = None,
@@ -387,6 +399,7 @@ class AsyncDstackClient(BaseClient):
         algorithm: str = "secp256k1",
     ) -> GetKeyResponse:
         """Derive a key from the given path, purpose, and algorithm."""
+        await self._ensure_algorithm_supported(algorithm)
         data: Dict[str, Any] = {
             "path": path or "",
             "purpose": purpose or "",

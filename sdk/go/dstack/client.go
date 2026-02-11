@@ -369,8 +369,33 @@ func (c *DstackClient) GetTlsKey(
 	return &response, nil
 }
 
+// requiresVersionCheck returns true for algorithms that need OS >= 0.5.7.
+func requiresVersionCheck(algorithm string) bool {
+	switch algorithm {
+	case "secp256k1", "secp256k1_prehashed", "k256", "":
+		return false
+	default:
+		return true
+	}
+}
+
+// ensureAlgorithmSupported checks the OS version when a non-secp256k1 algorithm is requested.
+// On old OS (no Version RPC), it returns an error to prevent silent key type mismatch.
+func (c *DstackClient) ensureAlgorithmSupported(ctx context.Context, algorithm string) error {
+	if !requiresVersionCheck(algorithm) {
+		return nil
+	}
+	if _, err := c.GetVersion(ctx); err != nil {
+		return fmt.Errorf("algorithm %q is not supported: OS version too old (Version RPC unavailable)", algorithm)
+	}
+	return nil
+}
+
 // Gets a key from the dstack service.
 func (c *DstackClient) GetKey(ctx context.Context, path string, purpose string, algorithm string) (*GetKeyResponse, error) {
+	if err := c.ensureAlgorithmSupported(ctx, algorithm); err != nil {
+		return nil, err
+	}
 	payload := map[string]interface{}{
 		"path":      path,
 		"purpose":   purpose,
