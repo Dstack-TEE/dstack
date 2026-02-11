@@ -187,7 +187,10 @@ async fn test_async_client_version() {
 async fn test_async_client_get_key_k256_alias() {
     let client = AsyncDstackClient::new(None);
     // k256 should work as an alias for secp256k1
-    let result = client.get_key(Some("test".to_string()), None).await.unwrap();
+    let result = client
+        .get_key(Some("test".to_string()), None)
+        .await
+        .unwrap();
     assert!(!result.key.is_empty());
     assert_eq!(result.decode_key().unwrap().len(), 32);
 }
