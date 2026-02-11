@@ -439,6 +439,13 @@ impl DstackGuestRpc for InternalRpcHandler {
             attestation: attestation.into_versioned().to_scale(),
         })
     }
+
+    async fn version(self) -> Result<WorkerVersion> {
+        Ok(WorkerVersion {
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            rev: super::GIT_REV.to_string(),
+        })
+    }
 }
 
 /// Normalize algorithm name to canonical form.
@@ -606,6 +613,13 @@ impl TappdRpc for InternalRpcHandlerV0 {
 
     async fn info(self) -> Result<AppInfo> {
         get_info(&self.state, false).await
+    }
+
+    async fn version(self) -> Result<WorkerVersion> {
+        Ok(WorkerVersion {
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            rev: super::GIT_REV.to_string(),
+        })
     }
 }
 
