@@ -1,6 +1,6 @@
 annotated-types==0.7.0
 cffi==1.17.1
-cryptography==44.0.2
+cryptography==46.0.5
 cytoolz==1.0.1
 eth-hash==0.7.1
 eth-keys==0.7.0
