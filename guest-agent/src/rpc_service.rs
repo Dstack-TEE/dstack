@@ -340,14 +340,19 @@ impl DstackGuestRpc for InternalRpcHandler {
     }
 
     async fn sign(self, request: SignRequest) -> Result<SignResponse> {
+        let algorithm = normalize_algorithm(&request.algorithm);
+        // Use the base algorithm for key derivation (e.g. secp256k1_prehashed -> secp256k1)
+        let key_algorithm = match algorithm {
+            "secp256k1_prehashed" => "secp256k1",
+            other => other,
+        };
         let key_response = self
             .get_key(GetKeyArgs {
                 path: "vms".to_string(),
                 purpose: "signing".to_string(),
-                algorithm: request.algorithm.clone(),
+                algorithm: key_algorithm.to_string(),
             })
             .await?;
-        let algorithm = normalize_algorithm(&request.algorithm);
         let (signature, public_key) = match algorithm {
             "ed25519" => {
                 let key_bytes: [u8; 32] = key_response
