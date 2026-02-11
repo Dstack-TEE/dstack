@@ -104,6 +104,13 @@ export interface AttestResponse {
   attestation: Hex
 }
 
+export interface VersionResponse {
+  __name__: Readonly<'VersionResponse'>
+
+  version: string
+  rev: string
+}
+
 export function to_hex(data: string | Buffer | Uint8Array): string {
   if (typeof data === 'string') {
     return Buffer.from(data).toString('hex');
@@ -278,6 +285,20 @@ export class DstackClient<T extends TcbInfo = TcbInfoV05x> {
     return Object.freeze({
       ...result,
       tcb_info: JSON.parse(result.tcb_info) as T,
+    })
+  }
+
+  /**
+   * Query the guest-agent version.
+   *
+   * Returns the version on OS >= 0.5.7.
+   * Throws on older OS versions that lack the Version RPC.
+   */
+  async version(): Promise<VersionResponse> {
+    const result = await send_rpc_request<{ version: string, rev: string }>(this.endpoint, '/Version', '{}')
+    return Object.freeze({
+      ...result,
+      __name__: 'VersionResponse',
     })
   }
 

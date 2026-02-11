@@ -171,6 +171,16 @@ impl DstackClient {
         Ok(InfoResponse::validated_from_value(response)?)
     }
 
+    /// Query the guest-agent version.
+    ///
+    /// Returns `Ok(VersionResponse)` on OS >= 0.5.7.
+    /// Returns an error on older OS versions that lack the Version RPC.
+    pub async fn version(&self) -> Result<VersionResponse> {
+        let response = self.send_rpc_request("/Version", &json!({})).await?;
+        let response = serde_json::from_value::<VersionResponse>(response)?;
+        Ok(response)
+    }
+
     pub async fn emit_event(&self, event: String, payload: Vec<u8>) -> Result<()> {
         if event.is_empty() {
             anyhow::bail!("Event name cannot be empty")

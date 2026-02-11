@@ -15,6 +15,7 @@ from .dstack_client import SignResponse
 from .dstack_client import TappdClient
 from .dstack_client import TcbInfo
 from .dstack_client import VerifyResponse
+from .dstack_client import VersionResponse
 from .encrypt_env_vars import EnvVar
 from .encrypt_env_vars import encrypt_env_vars
 from .encrypt_env_vars import encrypt_env_vars_sync
@@ -38,6 +39,7 @@ __all__ = [
     "InfoResponse",
     "TcbInfo",
     "EventLog",
+    "VersionResponse",
     # Utility functions
     "encrypt_env_vars_sync",
     "encrypt_env_vars",

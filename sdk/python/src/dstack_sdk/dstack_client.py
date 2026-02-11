@@ -199,6 +199,11 @@ class VerifyResponse(BaseModel):
     valid: bool
 
 
+class VersionResponse(BaseModel):
+    version: str
+    rev: str
+
+
 class EventLog(BaseModel):
     imr: int
     event_type: int
@@ -498,6 +503,15 @@ class AsyncDstackClient(BaseClient):
         result = await self._send_rpc_request("Verify", payload)
         return VerifyResponse(**result)
 
+    async def version(self) -> VersionResponse:
+        """Query the guest-agent version.
+
+        Returns the version on OS >= 0.5.7.
+        Raises an error on older OS versions that lack the Version RPC.
+        """
+        result = await self._send_rpc_request("Version", {})
+        return VersionResponse(**result)
+
     async def is_reachable(self) -> bool:
         """Return True if the service responds to a quick health call."""
         try:
@@ -586,6 +600,11 @@ class DstackClient(BaseClient):
         public_key: str | bytes,
     ) -> VerifyResponse:
         """Verify a signature."""
+        raise NotImplementedError
+
+    @call_async
+    def version(self) -> VersionResponse:
+        """Query the guest-agent version."""
         raise NotImplementedError
 
     @call_async

@@ -278,3 +278,14 @@ pub struct VerifyResponse {
     /// Whether the signature is valid
     pub valid: bool,
 }
+
+/// Response from a Version request
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "borsh", derive(BorshSerialize, BorshDeserialize))]
+#[cfg_attr(feature = "borsh_schema", derive(BorshSchema))]
+pub struct VersionResponse {
+    /// The dstack version (e.g. "0.5.7")
+    pub version: String,
+    /// Git revision
+    pub rev: String,
+}
