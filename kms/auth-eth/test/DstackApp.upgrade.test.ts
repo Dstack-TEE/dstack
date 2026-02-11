@@ -176,7 +176,7 @@ describe("DstackApp upgrade", function () {
       const composeHash = ethers.encodeBytes32String("factory-hash");
 
       // Deploy app with requireTcbUpToDate = true via factory
-      const tx = await kms.deployAndRegisterApp(
+      const tx = await kms["deployAndRegisterApp(address,bool,bool,bool,bytes32,bytes32)"](
         owner.address,
         false,          // disableUpgrades
         true,           // requireTcbUpToDate
@@ -255,7 +255,7 @@ describe("DstackApp upgrade", function () {
 
       const composeHash = ethers.encodeBytes32String("no-tcb-hash");
 
-      const tx = await kms.deployAndRegisterApp(
+      const tx = await kms["deployAndRegisterApp(address,bool,bool,bool,bytes32,bytes32)"](
         owner.address,
         false,          // disableUpgrades
         false,          // requireTcbUpToDate = false

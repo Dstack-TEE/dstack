@@ -353,8 +353,8 @@ task("kms:create-app", "Create DstackApp via KMS factory method (single transact
     console.log("Initial compose hash:", composeHash === "0x0000000000000000000000000000000000000000000000000000000000000000" ? "none" : composeHash);
     console.log("Using factory method for single-transaction deployment...");
     
-    // Single transaction deployment via factory
-    const tx = await kmsContract.deployAndRegisterApp(
+    // Single transaction deployment via factory (explicit signature to disambiguate overloads)
+    const tx = await kmsContract["deployAndRegisterApp(address,bool,bool,bool,bytes32,bytes32)"](
       deployerAddress,  // deployer owns the contract
       false,           // disableUpgrades
       taskArgs.requireTcbUpToDate,

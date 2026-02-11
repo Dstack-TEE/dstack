@@ -148,7 +148,7 @@ contract DstackKms is
         bool allowAnyDevice,
         bytes32 initialDeviceId,
         bytes32 initialComposeHash
-    ) external returns (address appId) {
+    ) public returns (address appId) {
         require(appImplementation != address(0), "DstackApp implementation not set");
         require(initialOwner != address(0), "Invalid owner address");
 
@@ -165,6 +165,24 @@ contract DstackKms is
         appId = address(new ERC1967Proxy(appImplementation, initData));
         registerApp(appId);
         emit AppDeployedViaFactory(appId, msg.sender);
+    }
+
+    // Backward compatible factory method for old SDK callers (pre TCB flag)
+    function deployAndRegisterApp(
+        address initialOwner,
+        bool disableUpgrades,
+        bool allowAnyDevice,
+        bytes32 initialDeviceId,
+        bytes32 initialComposeHash
+    ) external returns (address appId) {
+        return deployAndRegisterApp(
+            initialOwner,
+            disableUpgrades,
+            false,
+            allowAnyDevice,
+            initialDeviceId,
+            initialComposeHash
+        );
     }
 
     // Function to register an aggregated MR measurement
