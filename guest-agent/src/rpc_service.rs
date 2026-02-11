@@ -268,7 +268,8 @@ impl DstackGuestRpc for InternalRpcHandler {
     async fn get_key(self, request: GetKeyArgs) -> Result<GetKeyResponse> {
         let k256_app_key = &self.state.inner.keys.k256_key;
 
-        let (key, pubkey_hex) = match request.algorithm.as_str() {
+        let algorithm = normalize_algorithm(&request.algorithm);
+        let (key, pubkey_hex) = match algorithm {
             "ed25519" => {
                 let derived_key = derive_key(k256_app_key, &[request.path.as_bytes()], 32)
                     .context("Failed to derive ed25519 key")?;
@@ -346,7 +347,8 @@ impl DstackGuestRpc for InternalRpcHandler {
                 algorithm: request.algorithm.clone(),
             })
             .await?;
-        let (signature, public_key) = match request.algorithm.as_str() {
+        let algorithm = normalize_algorithm(&request.algorithm);
+        let (signature, public_key) = match algorithm {
             "ed25519" => {
                 let key_bytes: [u8; 32] = key_response
                     .key
@@ -392,7 +394,8 @@ impl DstackGuestRpc for InternalRpcHandler {
     }
 
     async fn verify(self, request: VerifyRequest) -> Result<VerifyResponse> {
-        let valid = match request.algorithm.as_str() {
+        let algorithm = normalize_algorithm(&request.algorithm);
+        let valid = match algorithm {
             "ed25519" => {
                 let verifying_key = ed25519_dalek::VerifyingKey::from_bytes(
                     &request
@@ -435,6 +438,15 @@ impl DstackGuestRpc for InternalRpcHandler {
         Ok(AttestResponse {
             attestation: attestation.into_versioned().to_scale(),
         })
+    }
+}
+
+/// Normalize algorithm name to canonical form.
+/// Accepts "k256" as an alias for "secp256k1".
+fn normalize_algorithm(algorithm: &str) -> &str {
+    match algorithm {
+        "k256" => "secp256k1",
+        other => other,
     }
 }
 
@@ -643,7 +655,8 @@ impl WorkerRpc for ExternalRpcHandler {
         })
         .await?;
 
-        match request.algorithm.as_str() {
+        let algorithm = normalize_algorithm(&request.algorithm);
+        match algorithm {
             "ed25519" => {
                 let key_bytes: [u8; 32] = key_response
                     .key
