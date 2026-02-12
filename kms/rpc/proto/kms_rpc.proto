@@ -133,12 +133,26 @@ message OnboardRequest {
 message OnboardResponse {
 }
 
+// Attestation info needed for on-chain KMS authorization.
+message AttestationInfoResponse {
+  // Device ID (SHA256 of platform device identifier)
+  bytes device_id = 1;
+  // Aggregated measurement of the VM execution environment
+  bytes mr_aggregated = 2;
+  // OS image hash
+  bytes os_image_hash = 3;
+  // Attestation mode (e.g. "dstack-tdx", "dstack-gcp-tdx")
+  string attestation_mode = 4;
+}
+
 // The Onboard RPC service.
 service Onboard {
   // Bootstrap a new KMS
   rpc Bootstrap(BootstrapRequest) returns (BootstrapResponse);
   // Onboard from existing KMS
   rpc Onboard(OnboardRequest) returns (OnboardResponse);
+  // Get attestation info for on-chain KMS authorization
+  rpc GetAttestationInfo(google.protobuf.Empty) returns (AttestationInfoResponse);
   // Finish onboarding
   rpc Finish(google.protobuf.Empty) returns (google.protobuf.Empty);
 }

@@ -113,12 +113,70 @@ SPDX-License-Identifier: Apache-2.0
         .fade-leave-to {
             opacity: 0;
         }
+
+        .attestation-info {
+            background-color: #f0f4f8;
+            border: 1px solid #ccd;
+            border-radius: 4px;
+            padding: 15px;
+            margin-bottom: 20px;
+        }
+
+        .attestation-info h3 {
+            margin-top: 0;
+            color: #444;
+        }
+
+        .info-row {
+            display: flex;
+            margin-bottom: 8px;
+            font-size: 0.9em;
+        }
+
+        .info-label {
+            font-weight: bold;
+            min-width: 160px;
+            color: #555;
+        }
+
+        .info-value {
+            font-family: monospace;
+            word-break: break-all;
+            color: #333;
+        }
+
+        .loading {
+            color: #888;
+            font-style: italic;
+        }
     </style>
 </head>
 
 <body>
     <div id="app" class="container">
         <h1>dstack KMS Setup</h1>
+
+        <div v-if="attestationLoading" class="loading">Loading attestation info...</div>
+        <div v-else-if="attestationError" class="error">Attestation info: {{ attestationError }}</div>
+        <div v-else-if="attestationInfo" class="attestation-info">
+            <h3>Attestation Info (for on-chain registration)</h3>
+            <div class="info-row">
+                <span class="info-label">Attestation Mode:</span>
+                <span class="info-value">{{ attestationInfo.attestation_mode }}</span>
+            </div>
+            <div class="info-row">
+                <span class="info-label">Device ID:</span>
+                <span class="info-value">0x{{ attestationInfo.device_id }}</span>
+            </div>
+            <div class="info-row">
+                <span class="info-label">MR Aggregated:</span>
+                <span class="info-value">0x{{ attestationInfo.mr_aggregated }}</span>
+            </div>
+            <div class="info-row">
+                <span class="info-label">OS Image Hash:</span>
+                <span class="info-value">0x{{ attestationInfo.os_image_hash }}</span>
+            </div>
+        </div>
 
         <div v-if="!setupFinished">
             <div v-if="!selectedOption" class="initial-buttons">
@@ -200,7 +258,24 @@ SPDX-License-Identifier: Apache-2.0
                     error: '',
                     success: '',
                     result: '',
-                    setupFinished: false
+                    setupFinished: false,
+                    attestationInfo: null,
+                    attestationLoading: true,
+                    attestationError: ''
+                }
+            },
+            async mounted() {
+                try {
+                    const data = await rpcCall('GetAttestationInfo', {});
+                    if (data.error) {
+                        this.attestationError = data.error;
+                    } else {
+                        this.attestationInfo = data;
+                    }
+                } catch (err) {
+                    this.attestationError = err.message;
+                } finally {
+                    this.attestationLoading = false;
                 }
             },
             methods: {
