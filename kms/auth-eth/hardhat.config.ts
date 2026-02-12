@@ -40,7 +40,7 @@ const config: HardhatUserConfig = {
       url: 'https://mainnet.base.org',
       accounts: [PRIVATE_KEY],
     },
-    test: {
+    custom: {
       url: process.env.RPC_URL || 'http://127.0.0.1:8545/',
       accounts: [PRIVATE_KEY],
     }
