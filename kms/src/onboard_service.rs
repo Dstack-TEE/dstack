@@ -327,6 +327,29 @@ pub(crate) async fn update_certs(cfg: &KmsConfig) -> Result<()> {
     Ok(())
 }
 
+pub(crate) async fn auto_onboard_keys(cfg: &KmsConfig) -> Result<()> {
+    let source_url = cfg
+        .onboard
+        .auto_onboard_url
+        .trim_end_matches('/')
+        .to_string();
+    let source_url = if source_url.ends_with("/prpc") {
+        source_url
+    } else {
+        format!("{source_url}/prpc")
+    };
+    let keys = Keys::onboard(
+        &source_url,
+        &cfg.onboard.auto_bootstrap_domain,
+        cfg.onboard.quote_enabled,
+        cfg.pccs_url.clone(),
+    )
+    .await
+    .context("failed to auto-onboard from source KMS")?;
+    keys.store(cfg)?;
+    Ok(())
+}
+
 pub(crate) async fn bootstrap_keys(cfg: &KmsConfig) -> Result<()> {
     let keys = Keys::generate(
         &cfg.onboard.auto_bootstrap_domain,
