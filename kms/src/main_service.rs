@@ -28,6 +28,7 @@ use upgrade_authority::BootInfo;
 use crate::{
     config::KmsConfig,
     crypto::{derive_k256_key, sign_message, sign_message_with_timestamp},
+    near_kms_client,
 };
 
 mod upgrade_authority;
@@ -52,6 +53,8 @@ pub struct KmsStateInner {
     temp_ca_cert: String,
     temp_ca_key: String,
     verifier: CvmVerifier,
+    /// NEAR signer for MPC key derivation (generated automatically as implicit account)
+    near_signer: Option<near_crypto::InMemorySigner>,
 }
 
 impl KmsState {
@@ -71,6 +74,10 @@ impl KmsState {
             config.image.download_timeout,
             config.pccs_url.clone(),
         );
+
+        // Load or generate NEAR implicit account signer if using NEAR auth
+        let near_signer = near_kms_client::load_or_generate_near_signer(&config)?;
+
         Ok(Self {
             inner: Arc::new(KmsStateInner {
                 config,
@@ -79,8 +86,14 @@ impl KmsState {
                 temp_ca_cert,
                 temp_ca_key,
                 verifier,
+                near_signer,
             }),
         })
+    }
+
+    /// Get NEAR signer account ID (implicit account)
+    pub fn near_signer_account_id(&self) -> Option<String> {
+        self.near_signer.as_ref().map(|s| s.account_id.to_string())
     }
 }
 
@@ -341,6 +354,7 @@ impl KmsRpc for RpcHandler {
             chain_id: info.chain_id,
             gateway_app_id: info.gateway_app_id,
             app_auth_implementation: info.app_implementation,
+            near_signer_account_id: self.state.near_signer_account_id(),
         })
     }
 

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::net::SocketAddr;
+#[cfg(target_os = "linux")]
 use std::os::unix::io::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
 
 use tokio::io;
@@ -85,6 +86,7 @@ async fn relay(client: &mut TcpStream, server: &mut TcpStream) -> io::Result<()>
 /// Zero-copy bidirectional TCP relay using Linux splice(2).
 ///
 /// When one direction hits EOF, select! drops the other direction.
+#[cfg(target_os = "linux")]
 async fn splice_bidirectional(a: &TcpStream, b: &TcpStream) -> io::Result<()> {
     let a_fd = a.as_raw_fd();
     let b_fd = b.as_raw_fd();
@@ -95,11 +97,21 @@ async fn splice_bidirectional(a: &TcpStream, b: &TcpStream) -> io::Result<()> {
     }
 }
 
+/// On non-Linux platforms, splice is not available, so return Unsupported.
+#[cfg(not(target_os = "linux"))]
+async fn splice_bidirectional(_a: &TcpStream, _b: &TcpStream) -> io::Result<()> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "splice not supported on this platform",
+    ))
+}
+
 /// Splice data from src fd to dst fd via an intermediate pipe.
 ///
 /// Uses `TcpStream::try_io` for proper readiness handling: when splice returns
 /// EAGAIN, try_io automatically clears the readiness flag so the next
 /// `readable().await` / `writable().await` blocks until the fd is truly ready.
+#[cfg(target_os = "linux")]
 async fn splice_one_direction(
     src: &TcpStream,
     src_fd: i32,

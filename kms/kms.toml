@@ -42,6 +42,21 @@ url = "http://auth-api:8000"
 [core.auth_api.dev]
 gateway_app_id = "any"
 
+# NEAR Protocol authentication (alternative to webhook)
+# [core.auth_api]
+# type = "near"
+#
+# [core.auth_api.near]
+# url = "http://auth-near:3000"
+# rpc_url = "https://free.rpc.fastnear.com"
+# network_id = "mainnet"
+# contract_id = "kms.dstack.near"
+# mpc_contract_id = "v1.signer.testnet" # MPC contract ID (required for MPC key derivation)
+# mpc_domain_id = 2 # MPC domain ID for BLS12-381 (default: 2)
+# # Note: MPC public key is automatically fetched from the contract
+# # Note: NEAR signer is automatically generated as an implicit account (64 hex chars) on startup
+# # The signer account ID is available via GetMeta RPC method
+
 [core.onboard]
 enabled = true
 auto_bootstrap_domain = ""
