@@ -289,6 +289,7 @@ The SDK provides end-to-end encryption capabilities for securely transmitting se
 import (
 	"encoding/hex"
 	"fmt"
+	"time"
 	
 	"github.com/Dstack-TEE/dstack/sdk/go/dstack"
 )
@@ -310,12 +311,22 @@ signature := "e1f2g3h4..." // From KMS API
 publicKeyBytes, _ := hex.DecodeString(publicKey)
 signatureBytes, _ := hex.DecodeString(signature)
 
-trustedPubkey, err := dstack.VerifyEnvEncryptPublicKey(publicKeyBytes, signatureBytes, "your-app-id-hex")
+// Prefer timestamped verification to prevent replay attacks.
+timestamp := uint64(time.Now().Unix()) // should come from KMS API response
+trustedPubkey, err := dstack.VerifyEnvEncryptPublicKeyWithTimestamp(
+	publicKeyBytes,
+	signatureBytes,
+	"your-app-id-hex",
+	timestamp,
+	nil, // use default freshness policy (max age 300s)
+)
 if err != nil || trustedPubkey == nil {
 	log.Fatal("KMS API provided untrusted encryption key")
 }
 
 fmt.Println("Verified KMS public key:", hex.EncodeToString(trustedPubkey))
+
+// Note: VerifyEnvEncryptPublicKey() is kept for legacy compatibility (without timestamp check).
 
 // 4. Encrypt environment variables for secure deployment
 encryptedData, err := dstack.EncryptEnvVars(envVars, publicKey)
@@ -608,6 +619,7 @@ Verify the authenticity of encryption public keys provided by KMS APIs:
 ```go
 import (
 	"encoding/hex"
+	"time"
 	"github.com/Dstack-TEE/dstack/sdk/go/dstack"
 )
 
@@ -616,7 +628,8 @@ publicKey, _ := hex.DecodeString("e33a1832c6562067ff8f844a61e51ad051f1180b66ec25
 signature, _ := hex.DecodeString("8542c49081fbf4e03f62034f13fbf70630bdf256a53032e38465a27c36fd6bed7a5e7111652004aef37f7fd92fbfc1285212c4ae6a6154203a48f5e16cad2cef00")
 appID := "0000000000000000000000000000000000000000"
 
-kmsIdentity, err := dstack.VerifyEnvEncryptPublicKey(publicKey, signature, appID)
+timestamp := uint64(time.Now().Unix()) // should come from KMS API response
+kmsIdentity, err := dstack.VerifyEnvEncryptPublicKeyWithTimestamp(publicKey, signature, appID, timestamp, nil)
 
 if err == nil && kmsIdentity != nil {
 	fmt.Println("Trusted KMS identity:", hex.EncodeToString(kmsIdentity))
