@@ -328,7 +328,11 @@ pub(crate) async fn update_certs(cfg: &KmsConfig) -> Result<()> {
 }
 
 pub(crate) async fn auto_onboard_keys(cfg: &KmsConfig) -> Result<()> {
-    let source_url = cfg.onboard.auto_onboard_url.trim_end_matches('/').to_string();
+    let source_url = cfg
+        .onboard
+        .auto_onboard_url
+        .trim_end_matches('/')
+        .to_string();
     let source_url = if source_url.ends_with("/prpc") {
         source_url
     } else {
