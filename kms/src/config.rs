@@ -120,4 +120,5 @@ pub(crate) struct OnboardConfig {
     pub enabled: bool,
     pub quote_enabled: bool,
     pub auto_bootstrap_domain: String,
+    pub auto_onboard_url: String,
 }
