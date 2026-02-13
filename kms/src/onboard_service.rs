@@ -9,7 +9,8 @@ use dstack_guest_agent_rpc::{
 use dstack_kms_rpc::{
     kms_client::KmsClient,
     onboard_server::{OnboardRpc, OnboardServer},
-    BootstrapRequest, BootstrapResponse, GetKmsKeyRequest, OnboardRequest, OnboardResponse,
+    AttestationInfoResponse, BootstrapRequest, BootstrapResponse, GetKmsKeyRequest, OnboardRequest,
+    OnboardResponse,
 };
 use fs_err as fs;
 use http_client::prpc::PrpcClient;
@@ -88,6 +89,47 @@ impl OnboardRpc for OnboardHandler {
         keys.store(&self.state.config)
             .context("Failed to store keys")?;
         Ok(OnboardResponse {})
+    }
+
+    async fn get_attestation_info(self) -> Result<AttestationInfoResponse> {
+        let pccs_url = self.state.config.pccs_url.clone();
+
+        // Get attestation from guest agent
+        let report_data = pad64([0u8; 32]);
+        let response = app_attest(report_data)
+            .await
+            .context("Failed to get attestation")?;
+
+        // Decode and verify the attestation to get real device ID
+        let attestation = VersionedAttestation::from_scale(&response.attestation)
+            .context("Failed to decode attestation")?
+            .into_inner();
+        let attestation_mode = serde_json::to_value(attestation.quote.mode())
+            .ok()
+            .and_then(|v| v.as_str().map(String::from))
+            .unwrap_or_else(|| format!("{:?}", attestation.quote.mode()));
+        let verified = attestation
+            .verify(pccs_url.as_deref())
+            .await
+            .context("Failed to verify attestation")?;
+
+        // Get vm_config from guest agent
+        let info = dstack_client()
+            .info()
+            .await
+            .context("Failed to get VM info")?;
+
+        // Decode app info to get device_id, mr_aggregated, os_image_hash, mr_system
+        let app_info = verified
+            .decode_app_info_ex(false, &info.vm_config)
+            .context("Failed to decode app info")?;
+
+        Ok(AttestationInfoResponse {
+            device_id: app_info.device_id,
+            mr_aggregated: app_info.mr_aggregated.to_vec(),
+            os_image_hash: app_info.os_image_hash,
+            attestation_mode,
+        })
     }
 
     async fn finish(self) -> anyhow::Result<()> {
