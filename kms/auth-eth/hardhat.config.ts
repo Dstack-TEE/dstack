@@ -108,8 +108,19 @@ task("kms:deploy", "Deploy the DstackKms contract")
       await appContractImpl.waitForDeployment();
       appImplementation = await appContractImpl.getAddress();
       console.log("✅ DstackApp implementation deployed to:", appImplementation);
+
+      // Wait for RPC nonce to catch up (public RPCs may return stale nonce)
+      const tx = appContractImpl.deploymentTransaction();
+      if (tx) {
+        const expectedNonce = tx.nonce + 1;
+        for (let i = 0; i < 10; i++) {
+          const latestNonce = await ethers.provider.getTransactionCount(deployerAddress, "latest");
+          if (latestNonce >= expectedNonce) break;
+          await new Promise(r => setTimeout(r, 1500));
+        }
+      }
     }
-    
+
     if (appImplementation !== ethers.ZeroAddress) {
       console.log("Setting DstackApp implementation during initialization:", appImplementation);
     }
