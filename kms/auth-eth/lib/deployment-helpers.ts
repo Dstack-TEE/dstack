@@ -110,17 +110,34 @@ export async function estimateDeploymentCost(
 }
 
 /**
- * Verify contract deployment
+ * Verify contract deployment with retry logic for public RPCs.
+ *
+ * Public RPC endpoints may return stale data immediately after a transaction
+ * is mined, causing `getCode()` to return `'0x'` even though the contract was
+ * deployed successfully.  We retry a few times with exponential back-off
+ * before giving up.
  */
 export async function verifyDeployment(
     hre: HardhatRuntimeEnvironment,
     contractAddress: string,
     quiet: boolean = false
 ) {
-    // Verify that contract was deployed successfully
-    const code = await hre.ethers.provider.getCode(contractAddress);
-    if (code === '0x') {
-        throw new Error('Contract deployment failed - no code at address');
+    const maxRetries = 5;
+    const baseDelayMs = 2000;
+
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        const code = await hre.ethers.provider.getCode(contractAddress);
+        if (code !== '0x') {
+            break;
+        }
+        if (attempt === maxRetries) {
+            throw new Error('Contract deployment failed - no code at address after ' + maxRetries + ' attempts');
+        }
+        const delay = baseDelayMs * attempt;
+        if (!quiet) {
+            console.log(`Waiting for contract code at ${contractAddress} (attempt ${attempt}/${maxRetries}, next retry in ${delay}ms)...`);
+        }
+        await new Promise(resolve => setTimeout(resolve, delay));
     }
 
     // Get implementation contract address
