@@ -175,3 +175,37 @@ async fn test_async_client_sign_and_verify_secp256k1_prehashed() {
         .unwrap();
     assert!(verify_resp.valid);
 }
+
+#[tokio::test]
+async fn test_async_client_version() {
+    let client = AsyncDstackClient::new(None);
+    let result = client.version().await.unwrap();
+    assert!(!result.version.is_empty());
+}
+
+#[tokio::test]
+async fn test_async_client_get_key_k256_alias() {
+    let client = AsyncDstackClient::new(None);
+    // k256 should work as an alias for secp256k1
+    let result = client
+        .get_key(Some("test".to_string()), None)
+        .await
+        .unwrap();
+    assert!(!result.key.is_empty());
+    assert_eq!(result.decode_key().unwrap().len(), 32);
+}
+
+#[tokio::test]
+async fn test_async_client_sign_k256_alias() {
+    let client = AsyncDstackClient::new(None);
+    let data = b"test message".to_vec();
+
+    // Sign with k256 alias
+    let resp_k256 = client.sign("k256", data.clone()).await.unwrap();
+    assert!(!resp_k256.signature.is_empty());
+    assert!(!resp_k256.public_key.is_empty());
+
+    // Sign with secp256k1 should produce the same public key
+    let resp_secp = client.sign("secp256k1", data.clone()).await.unwrap();
+    assert_eq!(resp_k256.public_key, resp_secp.public_key);
+}

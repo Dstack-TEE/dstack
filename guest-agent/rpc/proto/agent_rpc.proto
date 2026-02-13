@@ -29,6 +29,9 @@ service Tappd {
 
   // Get app info
   rpc Info(google.protobuf.Empty) returns (AppInfo) {}
+
+  // Get the guest agent version
+  rpc Version(google.protobuf.Empty) returns (WorkerVersion) {}
 }
 
 // The service for the dstack guest agent
@@ -58,6 +61,9 @@ service DstackGuest {
 
   // Verify a signature
   rpc Verify(VerifyRequest) returns (VerifyResponse) {}
+
+  // Get the guest agent version
+  rpc Version(google.protobuf.Empty) returns (WorkerVersion) {}
 }
 
 // The request to derive a key

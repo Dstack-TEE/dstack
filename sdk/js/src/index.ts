@@ -104,6 +104,13 @@ export interface AttestResponse {
   attestation: Hex
 }
 
+export interface VersionResponse {
+  __name__: Readonly<'VersionResponse'>
+
+  version: string
+  rev: string
+}
+
 export function to_hex(data: string | Buffer | Uint8Array): string {
   if (typeof data === 'string') {
     return Buffer.from(data).toString('hex');
@@ -170,6 +177,8 @@ export interface TlsKeyOptions {
   usageClientAuth?: boolean;
 }
 
+const SECP256K1_ALGORITHMS = new Set(['secp256k1', 'k256', ''])
+
 export class DstackClient<T extends TcbInfo = TcbInfoV05x> {
   protected endpoint: string
 
@@ -195,7 +204,17 @@ export class DstackClient<T extends TcbInfo = TcbInfoV05x> {
     this.endpoint = endpoint
   }
 
+  private async ensureAlgorithmSupported(algorithm: string): Promise<void> {
+    if (SECP256K1_ALGORITHMS.has(algorithm)) return
+    try {
+      await this.version()
+    } catch {
+      throw new Error(`algorithm "${algorithm}" is not supported: OS version too old (Version RPC unavailable)`)
+    }
+  }
+
   async getKey(path: string, purpose: string = '', algorithm: string = 'secp256k1'): Promise<GetKeyResponse> {
+    await this.ensureAlgorithmSupported(algorithm)
     const payload = JSON.stringify({
       path: path,
       purpose: purpose,
@@ -278,6 +297,20 @@ export class DstackClient<T extends TcbInfo = TcbInfoV05x> {
     return Object.freeze({
       ...result,
       tcb_info: JSON.parse(result.tcb_info) as T,
+    })
+  }
+
+  /**
+   * Query the guest-agent version.
+   *
+   * Returns the version on OS >= 0.5.7.
+   * Throws on older OS versions that lack the Version RPC.
+   */
+  async version(): Promise<VersionResponse> {
+    const result = await send_rpc_request<{ version: string, rev: string }>(this.endpoint, '/Version', '{}')
+    return Object.freeze({
+      ...result,
+      __name__: 'VersionResponse',
     })
   }
 

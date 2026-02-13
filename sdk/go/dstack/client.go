@@ -369,8 +369,33 @@ func (c *DstackClient) GetTlsKey(
 	return &response, nil
 }
 
+// requiresVersionCheck returns true for algorithms that need OS >= 0.5.7.
+func requiresVersionCheck(algorithm string) bool {
+	switch algorithm {
+	case "secp256k1", "k256", "":
+		return false
+	default:
+		return true
+	}
+}
+
+// ensureAlgorithmSupported checks the OS version when a non-secp256k1 algorithm is requested.
+// On old OS (no Version RPC), it returns an error to prevent silent key type mismatch.
+func (c *DstackClient) ensureAlgorithmSupported(ctx context.Context, algorithm string) error {
+	if !requiresVersionCheck(algorithm) {
+		return nil
+	}
+	if _, err := c.GetVersion(ctx); err != nil {
+		return fmt.Errorf("algorithm %q is not supported: OS version too old (Version RPC unavailable)", algorithm)
+	}
+	return nil
+}
+
 // Gets a key from the dstack service.
 func (c *DstackClient) GetKey(ctx context.Context, path string, purpose string, algorithm string) (*GetKeyResponse, error) {
+	if err := c.ensureAlgorithmSupported(ctx, algorithm); err != nil {
+		return nil, err
+	}
 	payload := map[string]interface{}{
 		"path":      path,
 		"purpose":   purpose,
@@ -458,6 +483,29 @@ func (c *DstackClient) Attest(ctx context.Context, reportData []byte) (*AttestRe
 	}
 
 	return &AttestResponse{Attestation: attestation}, nil
+}
+
+// Represents the response from a Version request.
+type VersionResponse struct {
+	Version string `json:"version"`
+	Rev     string `json:"rev"`
+}
+
+// Gets the guest-agent version.
+//
+// Returns the version on OS >= 0.5.7.
+// Returns an error on older OS versions that lack the Version RPC.
+func (c *DstackClient) GetVersion(ctx context.Context) (*VersionResponse, error) {
+	data, err := c.sendRPCRequest(ctx, "/Version", map[string]interface{}{})
+	if err != nil {
+		return nil, err
+	}
+
+	var response VersionResponse
+	if err := json.Unmarshal(data, &response); err != nil {
+		return nil, err
+	}
+	return &response, nil
 }
 
 // Sends a request to get information about the CVM instance
