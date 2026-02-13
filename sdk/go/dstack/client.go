@@ -9,9 +9,13 @@ package dstack
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/sha512"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"log/slog"
@@ -30,25 +34,30 @@ type GetTlsKeyResponse struct {
 
 // AsUint8Array converts the private key to bytes, optionally limiting the length
 func (r *GetTlsKeyResponse) AsUint8Array(maxLength ...int) ([]byte, error) {
-	content := r.Key
-	content = strings.Replace(content, "-----BEGIN PRIVATE KEY-----", "", 1)
-	content = strings.Replace(content, "-----END PRIVATE KEY-----", "", 1)
-	content = strings.Replace(content, "\n", "", -1)
-	content = strings.Replace(content, " ", "", -1)
-
-	// For now, assume base64 encoding - would need actual implementation
-	// This is a placeholder that matches the JavaScript version behavior
-	if len(maxLength) > 0 && maxLength[0] > 0 {
-		result := make([]byte, maxLength[0])
-		// For testing, return a fixed pattern
-		for i := 0; i < maxLength[0] && i < len(content); i++ {
-			result[i] = byte(i % 256)
-		}
-		return result, nil
+	block, _ := pem.Decode([]byte(r.Key))
+	if block == nil {
+		return nil, fmt.Errorf("failed to decode pem private key")
 	}
 
-	// Return content as bytes for testing
-	return []byte(content), nil
+	key, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse private key: %w", err)
+	}
+
+	var keyBytes []byte
+	switch k := key.(type) {
+	case *ecdsa.PrivateKey:
+		keyBytes = k.D.FillBytes(make([]byte, (k.Curve.Params().N.BitLen()+7)/8))
+	case ed25519.PrivateKey:
+		keyBytes = k.Seed()
+	default:
+		return nil, fmt.Errorf("unsupported key type: %T", key)
+	}
+
+	if len(maxLength) > 0 && maxLength[0] > 0 && maxLength[0] < len(keyBytes) {
+		return keyBytes[:maxLength[0]], nil
+	}
+	return keyBytes, nil
 }
 
 // Represents the response from a key derivation request.
@@ -77,10 +86,20 @@ func (r *GetKeyResponse) DecodeSignatureChain() ([][]byte, error) {
 
 // Represents the response from a quote request.
 type GetQuoteResponse struct {
-	Quote      []byte `json:"quote"`
+	Quote      string `json:"quote"`
 	EventLog   string `json:"event_log"`
-	ReportData []byte `json:"report_data"`
+	ReportData string `json:"report_data"`
 	VmConfig   string `json:"vm_config"`
+}
+
+// DecodeQuote returns the quote bytes
+func (r *GetQuoteResponse) DecodeQuote() ([]byte, error) {
+	return hex.DecodeString(r.Quote)
+}
+
+// DecodeReportData returns the report data bytes
+func (r *GetQuoteResponse) DecodeReportData() ([]byte, error) {
+	return hex.DecodeString(r.ReportData)
 }
 
 // DecodeEventLog returns the event log as structured data
@@ -106,17 +125,20 @@ type EventLog struct {
 
 // Represents the TCB information
 type TcbInfo struct {
-	Mrtd  string `json:"mrtd"`
-	Rtmr0 string `json:"rtmr0"`
-	Rtmr1 string `json:"rtmr1"`
-	Rtmr2 string `json:"rtmr2"`
-	Rtmr3 string `json:"rtmr3"`
-	// The hash of the OS image. This is empty if the OS image is not measured by KMS.
-	OsImageHash string     `json:"os_image_hash,omitempty"`
-	ComposeHash string     `json:"compose_hash"`
-	DeviceID    string     `json:"device_id"`
-	AppCompose  string     `json:"app_compose"`
-	EventLog    []EventLog `json:"event_log"`
+	Mrtd       string     `json:"mrtd"`
+	Rtmr0      string     `json:"rtmr0"`
+	Rtmr1      string     `json:"rtmr1"`
+	Rtmr2      string     `json:"rtmr2"`
+	Rtmr3      string     `json:"rtmr3"`
+	AppCompose string     `json:"app_compose"`
+	EventLog   []EventLog `json:"event_log"`
+	// V0.3.x fields
+	RootfsHash string `json:"rootfs_hash,omitempty"`
+	// V0.5.x fields
+	MrAggregated string `json:"mr_aggregated,omitempty"`
+	OsImageHash  string `json:"os_image_hash,omitempty"`
+	ComposeHash  string `json:"compose_hash,omitempty"`
+	DeviceID     string `json:"device_id,omitempty"`
 }
 
 // Represents the response from an info request
@@ -130,9 +152,11 @@ type InfoResponse struct {
 	MrAggregated    string `json:"mr_aggregated,omitempty"`
 	KeyProviderInfo string `json:"key_provider_info"`
 	// Optional: empty if OS image is not measured by KMS
-	OsImageHash string `json:"os_image_hash,omitempty"`
-	ComposeHash string `json:"compose_hash"`
-	VmConfig    string `json:"vm_config,omitempty"`
+	OsImageHash  string `json:"os_image_hash,omitempty"`
+	ComposeHash  string `json:"compose_hash"`
+	VmConfig     string `json:"vm_config,omitempty"`
+	CloudVendor  string `json:"cloud_vendor,omitempty"`
+	CloudProduct string `json:"cloud_product,omitempty"`
 }
 
 // DecodeTcbInfo decodes the TcbInfo string into a TcbInfo struct
@@ -347,6 +371,9 @@ type tlsKeyOptions struct {
 	usageRaTls      bool
 	usageServerAuth bool
 	usageClientAuth bool
+	notBefore       *uint64
+	notAfter        *uint64
+	withAppInfo     *bool
 }
 
 // WithSubject sets the subject for the TLS key
@@ -384,6 +411,27 @@ func WithUsageClientAuth(usage bool) TlsKeyOption {
 	}
 }
 
+// WithNotBefore sets the not_before timestamp for the certificate
+func WithNotBefore(t uint64) TlsKeyOption {
+	return func(opts *tlsKeyOptions) {
+		opts.notBefore = &t
+	}
+}
+
+// WithNotAfter sets the not_after timestamp for the certificate
+func WithNotAfter(t uint64) TlsKeyOption {
+	return func(opts *tlsKeyOptions) {
+		opts.notAfter = &t
+	}
+}
+
+// WithAppInfo sets the with_app_info flag for the certificate
+func WithAppInfo(enabled bool) TlsKeyOption {
+	return func(opts *tlsKeyOptions) {
+		opts.withAppInfo = &enabled
+	}
+}
+
 // Gets a TLS key from the dstack service with optional parameters.
 func (c *DstackClient) GetTlsKey(
 	ctx context.Context,
@@ -405,6 +453,15 @@ func (c *DstackClient) GetTlsKey(
 	}
 	if len(opts.altNames) > 0 {
 		payload["alt_names"] = opts.altNames
+	}
+	if opts.notBefore != nil {
+		payload["not_before"] = *opts.notBefore
+	}
+	if opts.notAfter != nil {
+		payload["not_after"] = *opts.notAfter
+	}
+	if opts.withAppInfo != nil {
+		payload["with_app_info"] = *opts.withAppInfo
 	}
 
 	data, err := c.sendRPCRequest(ctx, "/GetTlsKey", payload)
@@ -684,7 +741,7 @@ type TappdClient struct {
 func NewTappdClient(opts ...DstackClientOption) *TappdClient {
 	// Create a modified option to use TAPPD_SIMULATOR_ENDPOINT
 	tappdOpts := make([]DstackClientOption, 0, len(opts)+1)
-	
+
 	// Add default endpoint option that checks TAPPD_SIMULATOR_ENDPOINT
 	tappdOpts = append(tappdOpts, func(c *DstackClient) {
 		if c.endpoint == "" {
@@ -696,13 +753,13 @@ func NewTappdClient(opts ...DstackClientOption) *TappdClient {
 			}
 		}
 	})
-	
+
 	// Add user-provided options
 	tappdOpts = append(tappdOpts, opts...)
-	
+
 	client := NewDstackClient(tappdOpts...)
 	client.logger.Warn("TappdClient is deprecated, please use DstackClient instead")
-	
+
 	return &TappdClient{
 		DstackClient: client,
 	}
@@ -714,7 +771,7 @@ func NewTappdClient(opts ...DstackClientOption) *TappdClient {
 // Deprecated: Use GetKey instead.
 func (tc *TappdClient) DeriveKey(ctx context.Context, path string, subject string, altNames []string) (*GetTlsKeyResponse, error) {
 	tc.logger.Warn("deriveKey is deprecated, please use GetKey instead")
-	
+
 	if subject == "" {
 		subject = path
 	}
@@ -743,7 +800,7 @@ func (tc *TappdClient) DeriveKey(ctx context.Context, path string, subject strin
 // Deprecated: Use GetQuote instead.
 func (tc *TappdClient) TdxQuote(ctx context.Context, reportData []byte, hashAlgorithm string) (*GetQuoteResponse, error) {
 	tc.logger.Warn("tdxQuote is deprecated, please use GetQuote instead")
-	
+
 	if hashAlgorithm == "raw" {
 		if len(reportData) > 64 {
 			return nil, fmt.Errorf("report data is too large, it should be at most 64 bytes when hashAlgorithm is raw")
