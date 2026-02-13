@@ -196,7 +196,7 @@ task("kms:add-device", "Add a device ID of an KMS instance")
     const kmsContract = await getKmsContract(ethers);
     const tx = await kmsContract.addKmsDevice(deviceId);
     await waitTx(tx);
-    console.log("Device compose hash added successfully");
+    console.log("Device ID added successfully");
   });
 
 task("kms:remove-device", "Remove a device ID")
