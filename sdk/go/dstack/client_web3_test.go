@@ -1,5 +1,5 @@
-//go:build web3
-// +build web3
+//go:build ethereum
+// +build ethereum
 
 // SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
 //
