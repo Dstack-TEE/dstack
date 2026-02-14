@@ -1,3 +1,6 @@
+//go:build web3
+// +build web3
+
 // SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
 //
 // SPDX-License-Identifier: Apache-2.0
@@ -26,42 +29,42 @@ func ToEthereumAccount(keyResponse interface{}) (*EthereumAccount, error) {
 	case *GetTlsKeyResponse:
 		// Legacy behavior for GetTlsKeyResponse with warning
 		fmt.Println("Warning: toEthereumAccount: Please don't use GetTlsKey method to get key, use GetKey instead.")
-		
+
 		keyBytes, err := resp.AsUint8Array(32)
 		if err != nil {
 			return nil, fmt.Errorf("failed to extract key bytes: %w", err)
 		}
-		
+
 		privateKey, err := crypto.ToECDSA(keyBytes)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create ECDSA private key: %w", err)
 		}
-		
+
 		address := crypto.PubkeyToAddress(privateKey.PublicKey)
-		
+
 		return &EthereumAccount{
 			Address:    address,
 			PrivateKey: privateKey,
 		}, nil
-		
+
 	case *GetKeyResponse:
 		keyBytes, err := resp.DecodeKey()
 		if err != nil {
 			return nil, fmt.Errorf("failed to decode key: %w", err)
 		}
-		
+
 		privateKey, err := crypto.ToECDSA(keyBytes)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create ECDSA private key: %w", err)
 		}
-		
+
 		address := crypto.PubkeyToAddress(privateKey.PublicKey)
-		
+
 		return &EthereumAccount{
 			Address:    address,
 			PrivateKey: privateKey,
 		}, nil
-		
+
 	default:
 		return nil, fmt.Errorf("unsupported key response type")
 	}
@@ -74,45 +77,45 @@ func ToEthereumAccountSecure(keyResponse interface{}) (*EthereumAccount, error) 
 	case *GetTlsKeyResponse:
 		// Legacy behavior for GetTlsKeyResponse with warning
 		fmt.Println("Warning: toEthereumAccountSecure: Please don't use GetTlsKey method to get key, use GetKey instead.")
-		
+
 		keyBytes, err := resp.AsUint8Array()
 		if err != nil {
 			return nil, fmt.Errorf("failed to extract key bytes: %w", err)
 		}
-		
+
 		// Apply SHA256 hashing for security
 		hash := sha256.Sum256(keyBytes)
-		
+
 		privateKey, err := crypto.ToECDSA(hash[:])
 		if err != nil {
 			return nil, fmt.Errorf("failed to create ECDSA private key: %w", err)
 		}
-		
+
 		address := crypto.PubkeyToAddress(privateKey.PublicKey)
-		
+
 		return &EthereumAccount{
 			Address:    address,
 			PrivateKey: privateKey,
 		}, nil
-		
+
 	case *GetKeyResponse:
 		keyBytes, err := resp.DecodeKey()
 		if err != nil {
 			return nil, fmt.Errorf("failed to decode key: %w", err)
 		}
-		
+
 		privateKey, err := crypto.ToECDSA(keyBytes)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create ECDSA private key: %w", err)
 		}
-		
+
 		address := crypto.PubkeyToAddress(privateKey.PublicKey)
-		
+
 		return &EthereumAccount{
 			Address:    address,
 			PrivateKey: privateKey,
 		}, nil
-		
+
 	default:
 		return nil, fmt.Errorf("unsupported key response type")
 	}

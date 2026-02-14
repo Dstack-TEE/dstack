@@ -12,7 +12,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ethereum/go-ethereum/crypto"
+	secp256k1 "github.com/decred/dcrd/dcrec/secp256k1/v4"
+	secp256k1ecdsa "github.com/decred/dcrd/dcrec/secp256k1/v4/ecdsa"
 	"golang.org/x/crypto/sha3"
 )
 
@@ -59,34 +60,53 @@ func buildVerifyMessage(publicKey []byte, appID string) ([]byte, error) {
 	return bytes.Join([][]byte{prefix, separator, appIDBytes, publicKey}, nil), nil
 }
 
+func keccak256(data []byte) []byte {
+	hasher := sha3.NewLegacyKeccak256()
+	hasher.Write(data)
+	return hasher.Sum(nil)
+}
+
+func toCompactSignature(signature []byte) ([]byte, error) {
+	if len(signature) != 65 {
+		return nil, nil
+	}
+
+	recovery := signature[64]
+	if recovery >= 27 {
+		recovery -= 27
+	}
+	if recovery > 3 {
+		return nil, nil
+	}
+
+	compact := make([]byte, 65)
+	compact[0] = 27 + recovery + 4 // compressed key
+	copy(compact[1:33], signature[:32])
+	copy(compact[33:65], signature[32:64])
+	return compact, nil
+}
+
 func recoverCompressedPublicKey(message []byte, signature []byte) ([]byte, error) {
 	if len(signature) != 65 {
 		return nil, nil
 	}
 
-	hasher := sha3.NewLegacyKeccak256()
-	hasher.Write(message)
-	messageHash := hasher.Sum(nil)
+	compactSig, err := toCompactSignature(signature)
+	if err != nil || compactSig == nil {
+		return nil, err
+	}
 
-	r := signature[0:32]
-	s := signature[32:64]
-	recovery := signature[64]
-
-	sigBytes := make([]byte, 64)
-	copy(sigBytes[0:32], r)
-	copy(sigBytes[32:64], s)
-
-	recoveredPubKey, err := crypto.SigToPub(messageHash, append(sigBytes, recovery))
+	messageHash := keccak256(message)
+	pubKey, _, err := secp256k1ecdsa.RecoverCompact(compactSig, messageHash)
 	if err != nil {
 		return nil, nil
 	}
 
-	compressedPubKey := crypto.CompressPubkey(recoveredPubKey)
-	result := make([]byte, len(compressedPubKey)+2)
+	compressed := pubKey.SerializeCompressed()
+	result := make([]byte, 2+hex.EncodedLen(len(compressed)))
 	result[0] = '0'
 	result[1] = 'x'
-	copy(result[2:], []byte(hex.EncodeToString(compressedPubKey)))
-
+	hex.Encode(result[2:], compressed)
 	return result, nil
 }
 
@@ -138,13 +158,26 @@ func VerifyEnvEncryptPublicKeyWithTimestamp(
 	return recoverCompressedPublicKey(message, signature)
 }
 
-// VerifySignatureSimple is a simplified version for basic signature verification
+// VerifySignatureSimple is a simplified version for basic signature verification.
 func VerifySignatureSimple(message []byte, signature []byte, expectedPubKey []byte) bool {
 	if len(signature) != 65 {
 		return false
 	}
 
-	hash := crypto.Keccak256Hash(message)
-	sig := signature[:64]
-	return crypto.VerifySignature(expectedPubKey, hash.Bytes(), sig)
+	pubKey, err := secp256k1.ParsePubKey(expectedPubKey)
+	if err != nil {
+		return false
+	}
+
+	r := new(secp256k1.ModNScalar)
+	s := new(secp256k1.ModNScalar)
+	if r.SetByteSlice(signature[:32]) {
+		return false
+	}
+	if s.SetByteSlice(signature[32:64]) {
+		return false
+	}
+
+	sig := secp256k1ecdsa.NewSignature(r, s)
+	return sig.Verify(keccak256(message), pubKey)
 }

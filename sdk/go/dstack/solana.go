@@ -1,3 +1,6 @@
+//go:build web3
+// +build web3
+
 // SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
 //
 // SPDX-License-Identifier: Apache-2.0
@@ -23,42 +26,42 @@ func ToSolanaKeypair(keyResponse interface{}) (*SolanaKeypair, error) {
 	case *GetTlsKeyResponse:
 		// Legacy behavior for GetTlsKeyResponse with warning
 		fmt.Println("Warning: toSolanaKeypair: Please don't use GetTlsKey method to get key, use GetKey instead.")
-		
+
 		// Use first 32 bytes directly for legacy compatibility
 		keyBytes, err := resp.AsUint8Array(32)
 		if err != nil {
 			return nil, fmt.Errorf("failed to extract key bytes: %w", err)
 		}
-		
+
 		// Generate Ed25519 keypair from seed
 		privateKey := ed25519.NewKeyFromSeed(keyBytes)
 		publicKey := privateKey.Public().(ed25519.PublicKey)
-		
+
 		return &SolanaKeypair{
 			PublicKey:  publicKey,
 			PrivateKey: privateKey,
 		}, nil
-		
+
 	case *GetKeyResponse:
 		keyBytes, err := resp.DecodeKey()
 		if err != nil {
 			return nil, fmt.Errorf("failed to decode key: %w", err)
 		}
-		
+
 		if len(keyBytes) < 32 {
 			return nil, fmt.Errorf("key too short, need at least 32 bytes")
 		}
-		
+
 		// Use first 32 bytes as seed
 		seed := keyBytes[:32]
 		privateKey := ed25519.NewKeyFromSeed(seed)
 		publicKey := privateKey.Public().(ed25519.PublicKey)
-		
+
 		return &SolanaKeypair{
 			PublicKey:  publicKey,
 			PrivateKey: privateKey,
 		}, nil
-		
+
 	default:
 		return nil, fmt.Errorf("unsupported key response type")
 	}
@@ -71,43 +74,43 @@ func ToSolanaKeypairSecure(keyResponse interface{}) (*SolanaKeypair, error) {
 	case *GetTlsKeyResponse:
 		// Legacy behavior for GetTlsKeyResponse with warning
 		fmt.Println("Warning: toSolanaKeypairSecure: Please don't use GetTlsKey method to get key, use GetKey instead.")
-		
+
 		keyBytes, err := resp.AsUint8Array()
 		if err != nil {
 			return nil, fmt.Errorf("failed to extract key bytes: %w", err)
 		}
-		
+
 		// Apply SHA256 hashing for security
 		hash := sha256.Sum256(keyBytes)
-		
+
 		privateKey := ed25519.NewKeyFromSeed(hash[:])
 		publicKey := privateKey.Public().(ed25519.PublicKey)
-		
+
 		return &SolanaKeypair{
 			PublicKey:  publicKey,
 			PrivateKey: privateKey,
 		}, nil
-		
+
 	case *GetKeyResponse:
 		keyBytes, err := resp.DecodeKey()
 		if err != nil {
 			return nil, fmt.Errorf("failed to decode key: %w", err)
 		}
-		
+
 		if len(keyBytes) < 32 {
 			return nil, fmt.Errorf("key too short, need at least 32 bytes")
 		}
-		
+
 		// Use first 32 bytes as seed for legacy compatibility
 		seed := keyBytes[:32]
 		privateKey := ed25519.NewKeyFromSeed(seed)
 		publicKey := privateKey.Public().(ed25519.PublicKey)
-		
+
 		return &SolanaKeypair{
 			PublicKey:  publicKey,
 			PrivateKey: privateKey,
 		}, nil
-		
+
 	default:
 		return nil, fmt.Errorf("unsupported key response type")
 	}
