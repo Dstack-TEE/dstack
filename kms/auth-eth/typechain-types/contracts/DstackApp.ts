@@ -69,17 +69,21 @@ export interface DstackAppInterface extends Interface {
       | "allowedComposeHashes"
       | "allowedDeviceIds"
       | "disableUpgrades"
-      | "initialize"
+      | "initialize(address,bool,bool,bytes32,bytes32)"
+      | "initialize(address,bool,bool,bool,bytes32,bytes32)"
       | "isAppAllowed"
       | "owner"
       | "proxiableUUID"
       | "removeComposeHash"
       | "removeDevice"
       | "renounceOwnership"
+      | "requireTcbUpToDate"
       | "setAllowAnyDevice"
+      | "setRequireTcbUpToDate"
       | "supportsInterface"
       | "transferOwnership"
       | "upgradeToAndCall"
+      | "version"
   ): FunctionFragment;
 
   getEvent(
@@ -91,6 +95,7 @@ export interface DstackAppInterface extends Interface {
       | "DeviceRemoved"
       | "Initialized"
       | "OwnershipTransferred"
+      | "RequireTcbUpToDateSet"
       | "Upgraded"
       | "UpgradesDisabled"
   ): EventFragment;
@@ -124,8 +129,12 @@ export interface DstackAppInterface extends Interface {
     values?: undefined
   ): string;
   encodeFunctionData(
-    functionFragment: "initialize",
+    functionFragment: "initialize(address,bool,bool,bytes32,bytes32)",
     values: [AddressLike, boolean, boolean, BytesLike, BytesLike]
+  ): string;
+  encodeFunctionData(
+    functionFragment: "initialize(address,bool,bool,bool,bytes32,bytes32)",
+    values: [AddressLike, boolean, boolean, boolean, BytesLike, BytesLike]
   ): string;
   encodeFunctionData(
     functionFragment: "isAppAllowed",
@@ -149,7 +158,15 @@ export interface DstackAppInterface extends Interface {
     values?: undefined
   ): string;
   encodeFunctionData(
+    functionFragment: "requireTcbUpToDate",
+    values?: undefined
+  ): string;
+  encodeFunctionData(
     functionFragment: "setAllowAnyDevice",
+    values: [boolean]
+  ): string;
+  encodeFunctionData(
+    functionFragment: "setRequireTcbUpToDate",
     values: [boolean]
   ): string;
   encodeFunctionData(
@@ -164,6 +181,7 @@ export interface DstackAppInterface extends Interface {
     functionFragment: "upgradeToAndCall",
     values: [AddressLike, BytesLike]
   ): string;
+  encodeFunctionData(functionFragment: "version", values?: undefined): string;
 
   decodeFunctionResult(
     functionFragment: "UPGRADE_INTERFACE_VERSION",
@@ -190,7 +208,14 @@ export interface DstackAppInterface extends Interface {
     functionFragment: "disableUpgrades",
     data: BytesLike
   ): Result;
-  decodeFunctionResult(functionFragment: "initialize", data: BytesLike): Result;
+  decodeFunctionResult(
+    functionFragment: "initialize(address,bool,bool,bytes32,bytes32)",
+    data: BytesLike
+  ): Result;
+  decodeFunctionResult(
+    functionFragment: "initialize(address,bool,bool,bool,bytes32,bytes32)",
+    data: BytesLike
+  ): Result;
   decodeFunctionResult(
     functionFragment: "isAppAllowed",
     data: BytesLike
@@ -213,7 +238,15 @@ export interface DstackAppInterface extends Interface {
     data: BytesLike
   ): Result;
   decodeFunctionResult(
+    functionFragment: "requireTcbUpToDate",
+    data: BytesLike
+  ): Result;
+  decodeFunctionResult(
     functionFragment: "setAllowAnyDevice",
+    data: BytesLike
+  ): Result;
+  decodeFunctionResult(
+    functionFragment: "setRequireTcbUpToDate",
     data: BytesLike
   ): Result;
   decodeFunctionResult(
@@ -228,6 +261,7 @@ export interface DstackAppInterface extends Interface {
     functionFragment: "upgradeToAndCall",
     data: BytesLike
   ): Result;
+  decodeFunctionResult(functionFragment: "version", data: BytesLike): Result;
 }
 
 export namespace AllowAnyDeviceSetEvent {
@@ -308,6 +342,18 @@ export namespace OwnershipTransferredEvent {
   export interface OutputObject {
     previousOwner: string;
     newOwner: string;
+  }
+  export type Event = TypedContractEvent<InputTuple, OutputTuple, OutputObject>;
+  export type Filter = TypedDeferredTopicFilter<Event>;
+  export type Log = TypedEventLog<Event>;
+  export type LogDescription = TypedLogDescription<Event>;
+}
+
+export namespace RequireTcbUpToDateSetEvent {
+  export type InputTuple = [requireUpToDate: boolean];
+  export type OutputTuple = [requireUpToDate: boolean];
+  export interface OutputObject {
+    requireUpToDate: boolean;
   }
   export type Event = TypedContractEvent<InputTuple, OutputTuple, OutputObject>;
   export type Filter = TypedDeferredTopicFilter<Event>;
@@ -402,10 +448,23 @@ export interface DstackApp extends BaseContract {
 
   disableUpgrades: TypedContractMethod<[], [void], "nonpayable">;
 
-  initialize: TypedContractMethod<
+  "initialize(address,bool,bool,bytes32,bytes32)": TypedContractMethod<
     [
       initialOwner: AddressLike,
       _disableUpgrades: boolean,
+      _allowAnyDevice: boolean,
+      initialDeviceId: BytesLike,
+      initialComposeHash: BytesLike
+    ],
+    [void],
+    "nonpayable"
+  >;
+
+  "initialize(address,bool,bool,bool,bytes32,bytes32)": TypedContractMethod<
+    [
+      initialOwner: AddressLike,
+      _disableUpgrades: boolean,
+      _requireTcbUpToDate: boolean,
       _allowAnyDevice: boolean,
       initialDeviceId: BytesLike,
       initialComposeHash: BytesLike
@@ -438,8 +497,16 @@ export interface DstackApp extends BaseContract {
 
   renounceOwnership: TypedContractMethod<[], [void], "nonpayable">;
 
+  requireTcbUpToDate: TypedContractMethod<[], [boolean], "view">;
+
   setAllowAnyDevice: TypedContractMethod<
     [_allowAnyDevice: boolean],
+    [void],
+    "nonpayable"
+  >;
+
+  setRequireTcbUpToDate: TypedContractMethod<
+    [_requireUpToDate: boolean],
     [void],
     "nonpayable"
   >;
@@ -461,6 +528,8 @@ export interface DstackApp extends BaseContract {
     [void],
     "payable"
   >;
+
+  version: TypedContractMethod<[], [bigint], "view">;
 
   getFunction<T extends ContractMethod = ContractMethod>(
     key: string | FunctionFragment
@@ -488,11 +557,25 @@ export interface DstackApp extends BaseContract {
     nameOrSignature: "disableUpgrades"
   ): TypedContractMethod<[], [void], "nonpayable">;
   getFunction(
-    nameOrSignature: "initialize"
+    nameOrSignature: "initialize(address,bool,bool,bytes32,bytes32)"
   ): TypedContractMethod<
     [
       initialOwner: AddressLike,
       _disableUpgrades: boolean,
+      _allowAnyDevice: boolean,
+      initialDeviceId: BytesLike,
+      initialComposeHash: BytesLike
+    ],
+    [void],
+    "nonpayable"
+  >;
+  getFunction(
+    nameOrSignature: "initialize(address,bool,bool,bool,bytes32,bytes32)"
+  ): TypedContractMethod<
+    [
+      initialOwner: AddressLike,
+      _disableUpgrades: boolean,
+      _requireTcbUpToDate: boolean,
       _allowAnyDevice: boolean,
       initialDeviceId: BytesLike,
       initialComposeHash: BytesLike
@@ -523,8 +606,14 @@ export interface DstackApp extends BaseContract {
     nameOrSignature: "renounceOwnership"
   ): TypedContractMethod<[], [void], "nonpayable">;
   getFunction(
+    nameOrSignature: "requireTcbUpToDate"
+  ): TypedContractMethod<[], [boolean], "view">;
+  getFunction(
     nameOrSignature: "setAllowAnyDevice"
   ): TypedContractMethod<[_allowAnyDevice: boolean], [void], "nonpayable">;
+  getFunction(
+    nameOrSignature: "setRequireTcbUpToDate"
+  ): TypedContractMethod<[_requireUpToDate: boolean], [void], "nonpayable">;
   getFunction(
     nameOrSignature: "supportsInterface"
   ): TypedContractMethod<[interfaceId: BytesLike], [boolean], "view">;
@@ -538,6 +627,9 @@ export interface DstackApp extends BaseContract {
     [void],
     "payable"
   >;
+  getFunction(
+    nameOrSignature: "version"
+  ): TypedContractMethod<[], [bigint], "view">;
 
   getEvent(
     key: "AllowAnyDeviceSet"
@@ -587,6 +679,13 @@ export interface DstackApp extends BaseContract {
     OwnershipTransferredEvent.InputTuple,
     OwnershipTransferredEvent.OutputTuple,
     OwnershipTransferredEvent.OutputObject
+  >;
+  getEvent(
+    key: "RequireTcbUpToDateSet"
+  ): TypedContractEvent<
+    RequireTcbUpToDateSetEvent.InputTuple,
+    RequireTcbUpToDateSetEvent.OutputTuple,
+    RequireTcbUpToDateSetEvent.OutputObject
   >;
   getEvent(
     key: "Upgraded"
@@ -679,6 +778,17 @@ export interface DstackApp extends BaseContract {
       OwnershipTransferredEvent.InputTuple,
       OwnershipTransferredEvent.OutputTuple,
       OwnershipTransferredEvent.OutputObject
+    >;
+
+    "RequireTcbUpToDateSet(bool)": TypedContractEvent<
+      RequireTcbUpToDateSetEvent.InputTuple,
+      RequireTcbUpToDateSetEvent.OutputTuple,
+      RequireTcbUpToDateSetEvent.OutputObject
+    >;
+    RequireTcbUpToDateSet: TypedContractEvent<
+      RequireTcbUpToDateSetEvent.InputTuple,
+      RequireTcbUpToDateSetEvent.OutputTuple,
+      RequireTcbUpToDateSetEvent.OutputObject
     >;
 
     "Upgraded(address)": TypedContractEvent<

@@ -33,16 +33,20 @@ contract DstackApp is
     // Mapping of allowed device IDs for this app
     mapping(bytes32 => bool) public allowedDeviceIds;
 
+    // Whether to require TCB status to be UpToDate
+    bool public requireTcbUpToDate;
+
     // Additional events specific to DstackApp
     event UpgradesDisabled();
     event AllowAnyDeviceSet(bool allowAny);
+    event RequireTcbUpToDateSet(bool requireUpToDate);
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
         _disableInitializers();
     }
 
-    // Initialize the contract
+    // Old initialize — preserved for upgrade compatibility
     function initialize(
         address initialOwner,
         bool _disableUpgrades,
@@ -50,6 +54,29 @@ contract DstackApp is
         bytes32 initialDeviceId,
         bytes32 initialComposeHash
     ) public initializer {
+        _initializeCommon(initialOwner, _disableUpgrades, _allowAnyDevice, initialDeviceId, initialComposeHash);
+    }
+
+    // New initialize — includes requireTcbUpToDate
+    function initialize(
+        address initialOwner,
+        bool _disableUpgrades,
+        bool _requireTcbUpToDate,
+        bool _allowAnyDevice,
+        bytes32 initialDeviceId,
+        bytes32 initialComposeHash
+    ) public initializer {
+        requireTcbUpToDate = _requireTcbUpToDate;
+        _initializeCommon(initialOwner, _disableUpgrades, _allowAnyDevice, initialDeviceId, initialComposeHash);
+    }
+
+    function _initializeCommon(
+        address initialOwner,
+        bool _disableUpgrades,
+        bool _allowAnyDevice,
+        bytes32 initialDeviceId,
+        bytes32 initialComposeHash
+    ) internal {
         require(initialOwner != address(0), "invalid owner address");
 
         _upgradesDisabled = _disableUpgrades;
@@ -70,6 +97,10 @@ contract DstackApp is
         __Ownable_init(initialOwner);
         __UUPSUpgradeable_init();
         __ERC165_init();
+    }
+
+    function version() public pure returns (uint256) {
+        return 2;
     }
 
     /**
@@ -114,6 +145,12 @@ contract DstackApp is
         emit AllowAnyDeviceSet(_allowAnyDevice);
     }
 
+    // Set whether TCB status must be UpToDate to boot this app
+    function setRequireTcbUpToDate(bool _requireUpToDate) external onlyOwner {
+        requireTcbUpToDate = _requireUpToDate;
+        emit RequireTcbUpToDateSet(_requireUpToDate);
+    }
+
     // Add a device ID to allowed list
     function addDevice(bytes32 deviceId) external onlyOwner {
         allowedDeviceIds[deviceId] = true;
@@ -130,6 +167,15 @@ contract DstackApp is
     function isAppAllowed(
         IAppAuth.AppBootInfo calldata bootInfo
     ) external view override returns (bool isAllowed, string memory reason) {
+        // Optionally require TCB status to be up to date
+        if (
+            requireTcbUpToDate &&
+            keccak256(abi.encodePacked(bootInfo.tcbStatus)) !=
+            keccak256(abi.encodePacked("UpToDate"))
+        ) {
+            return (false, "TCB status is not up to date");
+        }
+
         // Check if compose hash is allowed
         if (!allowedComposeHashes[bootInfo.composeHash]) {
             return (false, "Compose hash not allowed");
@@ -150,5 +196,5 @@ contract DstackApp is
     }
 
     // Add storage gap for upgradeable contracts
-    uint256[50] private __gap;
+    uint256[49] private __gap;
 }

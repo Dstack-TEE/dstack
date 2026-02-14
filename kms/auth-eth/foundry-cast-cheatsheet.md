@@ -84,6 +84,10 @@ npx hardhat kms:deploy-impl --network test
 cast send $KMS_CONTRACT_ADDRESS "upgradeTo(address)" "NEW_IMPL_ADDRESS" \
   --private-key $PRIVATE_KEY --rpc-url $RPC_URL --gas-limit 500000
 
+# Note: Existing KMS proxy deployments can be upgraded in-place using the steps above.
+# This release only adds optional app boot TCB checks in DstackApp and keeps the KMS
+# storage layout unchanged, so no initializer is required for the KMS upgrade.
+
 # Verify upgrade success
 cast storage $KMS_CONTRACT_ADDRESS 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc --rpc-url $RPC_URL
 # Should show the new implementation address
@@ -181,18 +185,18 @@ cast send $KMS_CONTRACT_ADDRESS "removeKmsDevice(bytes32)" \
 
 ```bash
 # kms:create-app - Deploy and register DstackApp in single transaction
-cast send $KMS_CONTRACT_ADDRESS "deployAndRegisterApp(address,bool,bool,bytes32,bytes32)" \
-  "$DEPLOYER_ADDRESS" false true \
+cast send $KMS_CONTRACT_ADDRESS "deployAndRegisterApp(address,bool,bool,bool,bytes32,bytes32)" \
+  "$DEPLOYER_ADDRESS" false false true \
   "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef" \
   "0xfedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321" \
   --private-key $PRIVATE_KEY --rpc-url $RPC_URL
-# Parameters: (owner, disableUpgrades, allowAnyDevice, initialDeviceId, initialComposeHash)
+# Parameters: (owner, disableUpgrades, requireTcbUpToDate, allowAnyDevice, initialDeviceId, initialComposeHash)
 # Use 0x0000...0000 for empty device/hash values
-# To decode return: cast abi-decode "deployAndRegisterApp(address,bool,bool,bytes32,bytes32)(address,address)" RETURN_DATA
+# To decode return: cast abi-decode "deployAndRegisterApp(address,bool,bool,bool,bytes32,bytes32)(address,address)" RETURN_DATA
 
 # Example with no initial data:
-cast send $KMS_CONTRACT_ADDRESS "deployAndRegisterApp(address,bool,bool,bytes32,bytes32)" \
-  "$DEPLOYER_ADDRESS" false true \
+cast send $KMS_CONTRACT_ADDRESS "deployAndRegisterApp(address,bool,bool,bool,bytes32,bytes32)" \
+  "$DEPLOYER_ADDRESS" false false true \
   "0x0000000000000000000000000000000000000000000000000000000000000000" \
   "0x0000000000000000000000000000000000000000000000000000000000000000" \
   --private-key $PRIVATE_KEY --rpc-url $RPC_URL
@@ -379,7 +383,7 @@ cast abi-decode "kmsAllowedAggregatedMrs(bytes32)(bool)" RETURN_DATA
 cast abi-decode "isAppAllowed((address,bytes32,address,bytes32,bytes32,bytes32,bytes32,string,string[]))(bool,string)" RETURN_DATA
 
 # Decode factory deployment response
-cast abi-decode "deployAndRegisterApp(address,bool,bool,bytes32,bytes32)(address,address)" RETURN_DATA
+cast abi-decode "deployAndRegisterApp(address,bool,bool,bool,bytes32,bytes32)(address,address)" RETURN_DATA
 ```
 
 ### Get Contract Information
@@ -459,7 +463,7 @@ cast send $KMS_CONTRACT_ADDRESS "addKmsAggregatedMr(bytes32)" "0x..." \
   --private-key $PRIVATE_KEY --rpc-url $RPC_URL
 
 # 3. Users can now deploy apps via factory immediately!
-cast send $KMS_CONTRACT_ADDRESS "deployAndRegisterApp(address,bool,bool,bytes32,bytes32)" \
+cast send $KMS_CONTRACT_ADDRESS "deployAndRegisterApp(address,bool,bool,bool,bytes32,bytes32)" \
   "$USER_ADDRESS" false true "0x..." "0x..." \
   --private-key $USER_PRIVATE_KEY --rpc-url $RPC_URL
 ```
@@ -485,7 +489,7 @@ cast send $KMS_CONTRACT_ADDRESS "addKmsAggregatedMr(bytes32)" "0x..." \
   --private-key $PRIVATE_KEY --rpc-url $RPC_URL
 
 # 5. Users can now deploy apps via factory
-cast send $KMS_CONTRACT_ADDRESS "deployAndRegisterApp(address,bool,bool,bytes32,bytes32)" \
+cast send $KMS_CONTRACT_ADDRESS "deployAndRegisterApp(address,bool,bool,bool,bytes32,bytes32)" \
   "$USER_ADDRESS" false true "0x..." "0x..." \
   --private-key $USER_PRIVATE_KEY --rpc-url $RPC_URL
 ```
@@ -547,7 +551,7 @@ mycast send $APP_AUTH_ADDRESS "addDevice(bytes32)" \
   "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
 
 # Example: Factory deployment
-mycast send $KMS_CONTRACT_ADDRESS "deployAndRegisterApp(address,bool,bool,bytes32,bytes32)" \
+mycast send $KMS_CONTRACT_ADDRESS "deployAndRegisterApp(address,bool,bool,bool,bytes32,bytes32)" \
   "$DEPLOYER_ADDRESS" false true \
   "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef" \
   "0xfedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321"
