@@ -199,29 +199,47 @@ var events []interface{}
 json.Unmarshal([]byte(quote.EventLog), &events)
 ```
 
-## Optional Web3 Helpers (build tag)
+## Optional blockchain helpers (build tags)
 
 By default, the Go SDK builds a **core profile** (attestation, key derivation, info, signing, env encryption).
 
-Web3 helper utilities are behind build tag `web3`:
+Optional helpers are split by tags:
 
-- `ToEthereumAccount()`
-- `ToEthereumAccountSecure()`
-- `ToSolanaKeypair()`
-- `ToSolanaKeypairSecure()`
+- `ethereum` tag:
+  - `ToEthereumAccount()`
+  - `ToEthereumAccountSecure()`
+- `solana` tag:
+  - `ToSolanaKeypair()`
+  - `ToSolanaKeypairSecure()`
 
-### Enable Web3 helpers
+### Enable Ethereum helpers
 
 ```bash
 # add optional dependency
 go get github.com/ethereum/go-ethereum@v1.16.8
 
-# build/run with web3 helpers enabled
-go build -tags web3 ./...
-go test -tags web3 ./...
+# build/test with ethereum helpers enabled
+go build -tags ethereum ./...
+go test -tags ethereum ./...
 ```
 
-If you don't need Web3 helper APIs, do not use `-tags web3` and you won't pull those optional imports.
+### Enable Solana helpers
+
+```bash
+# no extra dependency is required for solana helper APIs
+go build -tags solana ./...
+go test -tags solana ./...
+```
+
+### Enable both
+
+```bash
+go get github.com/ethereum/go-ethereum@v1.16.8
+go build -tags "ethereum solana" ./...
+go test -tags "ethereum solana" ./...
+```
+
+If you don't need blockchain helper APIs, do not use these tags and you won't pull optional helper imports.
 
 ### Testing against a local starter app
 
@@ -239,18 +257,25 @@ go mod tidy
 go run .
 ```
 
-If your starter enables Web3 routes, add and build with tag:
+If your starter enables optional blockchain routes, run with matching tags:
 
 ```bash
+# ethereum only
 go get github.com/ethereum/go-ethereum@v1.16.8
-go run -tags web3 .
+go run -tags ethereum .
+
+# solana only
+go run -tags solana .
+
+# both
+go run -tags "ethereum solana" .
 ```
 
 ## Blockchain Integration
 
 ### Ethereum
 
-> requires build tag: `web3`
+> requires build tag: `ethereum`
 
 ```go
 import (
@@ -289,7 +314,7 @@ if err != nil {
 
 ### Solana
 
-> requires build tag: `web3`
+> requires build tag: `solana`
 
 ```go
 import (
