@@ -25,6 +25,10 @@ The same `app_id` always derives the same key pair.
 app_id = SHA256(app-compose.json)[0..20]    // first 20 bytes, 40 hex characters
 ```
 
+`app-compose.json` here means the normalized JSON bytes that dstack uses for
+compose hashing. Do not recompute from a re-formatted or re-serialized variant,
+or you may get a different `app_id`.
+
 Example:
 
 ```javascript
@@ -196,6 +200,20 @@ Rust externally tagged enum — an object with exactly one key:
 ```
 
 The tag is one of `"None"` / `"Local"` / `"Tpm"` / `"Kms"`.
+
+## Runtime File/Path Contract (dstack)
+
+For dstack runtime integration, treat these names/locations as protocol-level
+conventions, not arbitrary user-defined outputs:
+
+- `/dstack/.host-shared/app-compose.json`
+- `/dstack/.host-shared/.encrypted-env`
+- `/dstack/.host-shared/.appkeys.json`
+- `/dstack/.host-shared/.decrypted-env`
+- `/dstack/.host-shared/.decrypted-env.json`
+
+Language examples below may use local relative paths for demonstration, but
+production integrations should follow the dstack runtime contract above.
 
 ## Language Implementation Guides
 
