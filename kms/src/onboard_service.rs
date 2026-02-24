@@ -159,12 +159,12 @@ struct Keys {
 }
 
 impl Keys {
-    async fn generate(domain: &str) -> Result<Self> {
+    async fn generate(domain: &str, quote_enabled: bool) -> Result<Self> {
         let tmp_ca_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)?;
         let ca_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)?;
         let rpc_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)?;
         let k256_key = SigningKey::random(&mut rand::rngs::OsRng);
-        Self::from_keys(tmp_ca_key, ca_key, rpc_key, k256_key, domain).await
+        Self::from_keys(tmp_ca_key, ca_key, rpc_key, k256_key, domain, quote_enabled).await
     }
 
     async fn from_keys(
@@ -173,6 +173,7 @@ impl Keys {
         rpc_key: KeyPair,
         k256_key: SigningKey,
         domain: &str,
+        quote_enabled: bool,
     ) -> Result<Self> {
         let tmp_ca_cert = CertRequest::builder()
             .org_name("Dstack")
@@ -190,20 +191,25 @@ impl Keys {
             .key(&ca_key)
             .build()
             .self_signed()?;
-        let pubkey = rpc_key.public_key_der();
-        let report_data = QuoteContentType::RaTlsCert.to_report_data(&pubkey);
-        let response = app_attest(report_data.to_vec())
-            .await
-            .context("Failed to get quote")?;
-        let attestation = VersionedAttestation::from_scale(&response.attestation)
-            .context("Invalid attestation")?;
+        let attestation = if quote_enabled {
+            let pubkey = rpc_key.public_key_der();
+            let report_data = QuoteContentType::RaTlsCert.to_report_data(&pubkey);
+            let response = app_attest(report_data.to_vec())
+                .await
+                .context("Failed to get quote")?;
+            let attestation = VersionedAttestation::from_scale(&response.attestation)
+                .context("Invalid attestation")?;
+            Some(attestation)
+        } else {
+            None
+        };
 
         // Sign WWW server cert with KMS cert
         let rpc_cert = CertRequest::builder()
             .subject(domain)
             .alt_names(&[domain.to_string()])
             .special_usage("kms:rpc")
-            .maybe_attestation(Some(&attestation))
+            .maybe_attestation(attestation.as_ref())
             .key(&rpc_key)
             .build()
             .signed_by(&ca_cert, &ca_key)?;
@@ -308,6 +314,16 @@ impl Keys {
     }
 }
 
+fn validate_domain(domain: &str, source: &str) -> Result<String> {
+    let domain = domain.trim();
+    if domain.is_empty() {
+        return Err(anyhow::anyhow!(
+            "invalid domain from {source}: empty or whitespace-only"
+        ));
+    }
+    Ok(domain.to_string())
+}
+
 pub(crate) async fn update_certs(cfg: &KmsConfig) -> Result<()> {
     // Read existing keys
     let tmp_ca_key = KeyPair::from_pem(&fs::read_to_string(cfg.tmp_ca_key())?)?;
@@ -318,17 +334,26 @@ pub(crate) async fn update_certs(cfg: &KmsConfig) -> Result<()> {
     let k256_key_bytes = fs::read(cfg.k256_key())?;
     let k256_key = SigningKey::from_slice(&k256_key_bytes)?;
 
-    let domain = if cfg.onboard.auto_bootstrap_domain.is_empty() {
-        fs::read_to_string(cfg.rpc_domain())?
+    let domain = if cfg.onboard.auto_bootstrap_domain.trim().is_empty() {
+        validate_domain(&fs::read_to_string(cfg.rpc_domain())?, "stored rpc_domain")?
     } else {
-        cfg.onboard.auto_bootstrap_domain.clone()
+        validate_domain(
+            &cfg.onboard.auto_bootstrap_domain,
+            "core.onboard.auto_bootstrap_domain",
+        )?
     };
-    let domain = domain.trim();
 
     // Regenerate certificates using existing keys
-    let keys = Keys::from_keys(tmp_ca_key, ca_key, rpc_key, k256_key, domain)
-        .await
-        .context("Failed to regenerate certificates")?;
+    let keys = Keys::from_keys(
+        tmp_ca_key,
+        ca_key,
+        rpc_key,
+        k256_key,
+        &domain,
+        cfg.onboard.quote_enabled,
+    )
+    .await
+    .context("Failed to regenerate certificates")?;
 
     // Write the new certificates to files
     keys.store_certs(cfg)?;
@@ -347,9 +372,13 @@ pub(crate) async fn auto_onboard_keys(cfg: &KmsConfig) -> Result<()> {
     } else {
         format!("{source_url}/prpc")
     };
+    let domain = validate_domain(
+        &cfg.onboard.auto_bootstrap_domain,
+        "core.onboard.auto_bootstrap_domain",
+    )?;
     let keys = Keys::onboard(
         &source_url,
-        &cfg.onboard.auto_bootstrap_domain,
+        &domain,
         cfg.onboard.quote_enabled,
         cfg.pccs_url.clone(),
     )
@@ -363,7 +392,11 @@ pub(crate) async fn bootstrap_keys(cfg: &KmsConfig) -> Result<()> {
     ensure_self_kms_allowed(cfg)
         .await
         .context("KMS is not allowed to auto-bootstrap")?;
-    let keys = Keys::generate(&cfg.onboard.auto_bootstrap_domain)
+    let domain = validate_domain(
+        &cfg.onboard.auto_bootstrap_domain,
+        "core.onboard.auto_bootstrap_domain",
+    )?;
+    let keys = Keys::generate(&domain, cfg.onboard.quote_enabled)
         .await
         .context("Failed to generate keys")?;
     keys.store(cfg)?;
