@@ -292,6 +292,16 @@ impl Keys {
     }
 }
 
+fn validate_domain(domain: &str, source: &str) -> Result<String> {
+    let domain = domain.trim();
+    if domain.is_empty() {
+        return Err(anyhow::anyhow!(
+            "invalid domain from {source}: empty or whitespace-only"
+        ));
+    }
+    Ok(domain.to_string())
+}
+
 pub(crate) async fn update_certs(cfg: &KmsConfig) -> Result<()> {
     // Read existing keys
     let tmp_ca_key = KeyPair::from_pem(&fs::read_to_string(cfg.tmp_ca_key())?)?;
@@ -302,12 +312,14 @@ pub(crate) async fn update_certs(cfg: &KmsConfig) -> Result<()> {
     let k256_key_bytes = fs::read(cfg.k256_key())?;
     let k256_key = SigningKey::from_slice(&k256_key_bytes)?;
 
-    let domain = if cfg.onboard.auto_bootstrap_domain.is_empty() {
-        fs::read_to_string(cfg.rpc_domain())?
+    let domain = if cfg.onboard.auto_bootstrap_domain.trim().is_empty() {
+        validate_domain(&fs::read_to_string(cfg.rpc_domain())?, "stored rpc_domain")?
     } else {
-        cfg.onboard.auto_bootstrap_domain.clone()
+        validate_domain(
+            &cfg.onboard.auto_bootstrap_domain,
+            "core.onboard.auto_bootstrap_domain",
+        )?
     };
-    let domain = domain.trim();
 
     // Regenerate certificates using existing keys
     let keys = Keys::from_keys(
@@ -315,7 +327,7 @@ pub(crate) async fn update_certs(cfg: &KmsConfig) -> Result<()> {
         ca_key,
         rpc_key,
         k256_key,
-        domain,
+        &domain,
         cfg.onboard.quote_enabled,
     )
     .await
@@ -338,9 +350,13 @@ pub(crate) async fn auto_onboard_keys(cfg: &KmsConfig) -> Result<()> {
     } else {
         format!("{source_url}/prpc")
     };
+    let domain = validate_domain(
+        &cfg.onboard.auto_bootstrap_domain,
+        "core.onboard.auto_bootstrap_domain",
+    )?;
     let keys = Keys::onboard(
         &source_url,
-        &cfg.onboard.auto_bootstrap_domain,
+        &domain,
         cfg.onboard.quote_enabled,
         cfg.pccs_url.clone(),
     )
@@ -351,12 +367,13 @@ pub(crate) async fn auto_onboard_keys(cfg: &KmsConfig) -> Result<()> {
 }
 
 pub(crate) async fn bootstrap_keys(cfg: &KmsConfig) -> Result<()> {
-    let keys = Keys::generate(
+    let domain = validate_domain(
         &cfg.onboard.auto_bootstrap_domain,
-        cfg.onboard.quote_enabled,
-    )
-    .await
-    .context("Failed to generate keys")?;
+        "core.onboard.auto_bootstrap_domain",
+    )?;
+    let keys = Keys::generate(&domain, cfg.onboard.quote_enabled)
+        .await
+        .context("Failed to generate keys")?;
     keys.store(cfg)?;
     Ok(())
 }
