@@ -411,6 +411,40 @@ async function encrypt(envs: EnvVar[], publicKey: Uint8Array): Promise<Uint8Arra
 }
 ```
 
+## Security Considerations
+
+### Encryption provides confidentiality, not origin authentication
+
+This scheme ensures only the target CVM can decrypt env vars (confidentiality), but it
+cannot prove who created them (origin authentication). Because `app_id` is public and
+`GetAppEnvEncryptPubKey` is callable with that `app_id`, any party with VMM access can:
+
+1. fetch the app encryption public key,
+2. encrypt a different env payload,
+3. submit the replacement payload.
+
+The CVM will decrypt and use that payload if decryption succeeds.
+
+### Developer responsibility: add application-layer authenticity checks
+
+Applications must validate env authenticity at startup. Recommended patterns:
+
+1. **APP_LAUNCH_TOKEN pattern**: include `APP_LAUNCH_TOKEN` in encrypted env vars and
+   verify its hash in prelaunch (the hash is measured via `app-compose.json`).
+2. **custom signature**: sign env payload off-chain with a developer-held key and
+   verify inside the app before use.
+3. **embedded shared secret**: include a developer/app-only secret in env vars and
+   fail startup if it does not match expected value.
+
+For production guidance, see:
+- [security-best-practices.md](./security/security-best-practices.md#authenticated-envs-and-user_config)
+- [security-model.md](./security/security-model.md#environment-variables-need-application-layer-authentication)
+
+### Related caveat: `user_config`
+
+`user_config` has the same integrity/authenticity risk and should be validated at the
+application layer as well.
+
 ## End-to-End Flow
 
 ```
