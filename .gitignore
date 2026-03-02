@@ -1,3 +1,5 @@
+.DS_Store
+
 /target
 /certs
 /build-config.sh
