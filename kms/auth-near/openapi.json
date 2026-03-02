@@ -1,0 +1,234 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "dstack KMS NEAR Protocol Backend API",
+    "description": "API for dstack KMS NEAR Protocol backend authentication and system information",
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "url": "http://localhost:3000",
+      "description": "Development server"
+    }
+  ],
+  "paths": {
+    "/": {
+      "get": {
+        "summary": "Health check and system information",
+        "description": "Returns system status and configuration information",
+        "operationId": "getSystemInfo",
+        "responses": {
+          "200": {
+            "description": "System information",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SystemInfo"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/bootAuth/app": {
+      "post": {
+        "summary": "Application boot authentication",
+        "description": "Validates application boot information against NEAR smart contracts",
+        "operationId": "authenticateAppBoot",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BootInfo"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Authentication result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BootResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/bootAuth/kms": {
+      "post": {
+        "summary": "KMS boot authentication",
+        "description": "Validates KMS boot information against NEAR smart contracts",
+        "operationId": "authenticateKmsBoot",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BootInfo"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Authentication result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BootResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "BootInfo": {
+        "type": "object",
+        "required": [
+          "mrAggregated",
+          "osImageHash",
+          "appId",
+          "composeHash",
+          "instanceId",
+          "deviceId"
+        ],
+        "properties": {
+          "mrAggregated": {
+            "type": "string",
+            "description": "Aggregated MR measurement (hex string)"
+          },
+          "osImageHash": {
+            "type": "string",
+            "description": "OS Image hash (hex string)"
+          },
+          "appId": {
+            "type": "string",
+            "description": "Application ID (hex string, converted to NEAR AccountId)"
+          },
+          "composeHash": {
+            "type": "string",
+            "description": "Compose hash (hex string)"
+          },
+          "instanceId": {
+            "type": "string",
+            "description": "Instance ID (hex string, converted to NEAR AccountId)"
+          },
+          "deviceId": {
+            "type": "string",
+            "description": "Device ID (hex string)"
+          },
+          "tcbStatus": {
+            "type": "string",
+            "description": "TCB status (e.g., 'UpToDate')",
+            "default": ""
+          },
+          "advisoryIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Security advisory IDs",
+            "default": []
+          },
+          "mrSystem": {
+            "type": "string",
+            "description": "System MR measurement (hex string)",
+            "default": ""
+          }
+        }
+      },
+      "BootResponse": {
+        "type": "object",
+        "required": [
+          "isAllowed",
+          "reason",
+          "gatewayAppId"
+        ],
+        "properties": {
+          "isAllowed": {
+            "type": "boolean",
+            "description": "Whether the boot is allowed"
+          },
+          "reason": {
+            "type": "string",
+            "description": "Reason for allow/deny decision"
+          },
+          "gatewayAppId": {
+            "type": "string",
+            "description": "Gateway app ID (NEAR AccountId)"
+          }
+        }
+      },
+      "SystemInfo": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "description": "Service status",
+            "example": "ok"
+          },
+          "kmsContractAddr": {
+            "type": "string",
+            "description": "NEAR KMS contract account ID",
+            "example": "kms.dstack.near"
+          },
+          "gatewayAppId": {
+            "type": "string",
+            "description": "Gateway app ID",
+            "example": "gateway.dstack.near"
+          },
+          "chainId": {
+            "type": "string",
+            "description": "NEAR network ID",
+            "example": "mainnet"
+          },
+          "appAuthImplementation": {
+            "type": "string",
+            "description": "App auth implementation (backward compatibility)",
+            "example": ""
+          },
+          "appImplementation": {
+            "type": "string",
+            "description": "App implementation",
+            "example": ""
+          }
+        }
+      },
+      "Error": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "example": "error"
+          },
+          "message": {
+            "type": "string",
+            "description": "Error message"
+          }
+        }
+      }
+    }
+  }
+}
+
+

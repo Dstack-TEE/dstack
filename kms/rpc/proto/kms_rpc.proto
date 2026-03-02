@@ -58,6 +58,7 @@ message GetMetaResponse {
   optional string kms_contract_address = 7;
   optional uint64 chain_id = 8;
   optional string app_auth_implementation = 9;
+  optional string near_signer_account_id = 10; // NEAR implicit account ID for MPC key derivation
 }
 
 message GetKmsKeyRequest {
