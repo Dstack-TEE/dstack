@@ -143,7 +143,7 @@ impl DstackClient {
     }
 
     pub async fn get_quote(&self, report_data: Vec<u8>) -> Result<GetQuoteResponse> {
-        if report_data.is_empty() || report_data.len() > 64 {
+        if report_data.len() > 64 {
             anyhow::bail!("Invalid report data length")
         }
         let hex_data = hex_encode(report_data);
