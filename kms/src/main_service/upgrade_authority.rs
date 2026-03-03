@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::config::AuthApi;
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use ra_tls::attestation::AttestationMode;
 use serde::{Deserialize, Serialize};
 use serde_human_bytes as hex_bytes;
@@ -60,6 +60,14 @@ pub(crate) struct GetInfoResponse {
     pub app_implementation: Option<String>,
 }
 
+fn http_client() -> Result<reqwest::Client> {
+    static USER_AGENT: &str = concat!("dstack-kms/", env!("CARGO_PKG_VERSION"));
+    reqwest::Client::builder()
+        .user_agent(USER_AGENT)
+        .build()
+        .context("failed to build http client")
+}
+
 impl AuthApi {
     pub async fn is_app_allowed(&self, boot_info: &BootInfo, is_kms: bool) -> Result<BootResponse> {
         match self {
@@ -69,7 +77,7 @@ impl AuthApi {
                 gateway_app_id: dev.gateway_app_id.clone(),
             }),
             AuthApi::Webhook { webhook } => {
-                let client = reqwest::Client::new();
+                let client = http_client()?;
                 let path = if is_kms {
                     "bootAuth/kms"
                 } else {
@@ -95,10 +103,16 @@ impl AuthApi {
                 app_implementation: None,
             }),
             AuthApi::Webhook { webhook } => {
-                let client = reqwest::Client::new();
+                let client = http_client()?;
                 let response = client.get(&webhook.url).send().await?;
-                println!("url: {}", webhook.url);
-                let info: AuthApiInfoResponse = response.json().await?;
+                let status = response.status();
+                let body = response.text().await?;
+                let info: AuthApiInfoResponse = serde_json::from_str(&body).with_context(|| {
+                    format!(
+                        "failed to decode auth api response from {}, status={status}, body={body}",
+                        webhook.url
+                    )
+                })?;
                 Ok(GetInfoResponse {
                     is_dev: false,
                     kms_contract_address: Some(info.kms_contract_addr.clone()),
