@@ -1,14 +1,14 @@
 # SPDX-FileCopyrightText: © 2024-2025 Phala Network <dstack@phala.network>
 #
 # SPDX-License-Identifier: Apache-2.0
-FROM gramineproject/gramine:v1.5@sha256:615849089db84477f03cd13209c08eaf6b6a3a68b4df733e097db56781935589
+FROM gramineproject/gramine:1.9-jammy@sha256:84b3d222e0bd9ab941f0078a462af0dbc5518156b99b147c10a7b83722ac0c38
 
 RUN apt-get update && apt-get install -y \
-    git=1:2.25.1-1ubuntu3.14 \
-    build-essential=12.8ubuntu1.1 \
+    git=1:2.34.1-1ubuntu1.17 \
+    build-essential=12.9ubuntu3 \
     && rm -rf /var/lib/apt/lists/*
 
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- --default-toolchain 1.92 -y
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- --default-toolchain 1.85 -y
 ENV PATH="/root/.cargo/bin:${PATH}"
 
 # Set environment variables
@@ -18,12 +18,10 @@ ENV DEV_MODE=0
 ENV GRAMINE=gramine-sgx
 ENV RUST_LOG=info
 
-# Clone and checkout the repository
-# Using kvinwang fork with dcap-qvl 0.3.10 security fix
-# See: https://github.com/Phala-Network/dcap-qvl/security/advisories/GHSA-796p-j2gh-9m2q
-RUN git clone https://github.com/kvinwang/gramine-sealing-key-provider && \
+# Clone upstream repository (dcap-qvl 0.3.10 security fix is included upstream)
+RUN git clone https://github.com/MoeMahhouk/gramine-sealing-key-provider && \
     cd gramine-sealing-key-provider && \
-    git checkout b50e81246b0987058411b63f797a9a3720c7f154
+    git checkout 180ff4691dce5aae7cd7d6c1344c3e1ec872f174
 
 WORKDIR /gramine-sealing-key-provider
 COPY Cargo.lock .
@@ -39,4 +37,4 @@ RUN gramine-sgx-sigstruct-view --output-format json gramine-sealing-key-provider
 COPY entrypoint-key-provider.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
-ENTRYPOINT ["/entrypoint.sh"] 
+ENTRYPOINT ["/entrypoint.sh"]
