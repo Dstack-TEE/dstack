@@ -84,7 +84,8 @@ export interface DstackKmsInterface extends Interface {
       | "addOsImageHash"
       | "allowedOsImages"
       | "appImplementation"
-      | "deployAndRegisterApp"
+      | "deployAndRegisterApp(address,bool,bool,bytes32,bytes32)"
+      | "deployAndRegisterApp(address,bool,bool,bool,bytes32,bytes32)"
       | "gatewayAppId"
       | "initialize"
       | "isAppAllowed"
@@ -153,8 +154,12 @@ export interface DstackKmsInterface extends Interface {
     values?: undefined
   ): string;
   encodeFunctionData(
-    functionFragment: "deployAndRegisterApp",
+    functionFragment: "deployAndRegisterApp(address,bool,bool,bytes32,bytes32)",
     values: [AddressLike, boolean, boolean, BytesLike, BytesLike]
+  ): string;
+  encodeFunctionData(
+    functionFragment: "deployAndRegisterApp(address,bool,bool,bool,bytes32,bytes32)",
+    values: [AddressLike, boolean, boolean, boolean, BytesLike, BytesLike]
   ): string;
   encodeFunctionData(
     functionFragment: "gatewayAppId",
@@ -268,7 +273,11 @@ export interface DstackKmsInterface extends Interface {
     data: BytesLike
   ): Result;
   decodeFunctionResult(
-    functionFragment: "deployAndRegisterApp",
+    functionFragment: "deployAndRegisterApp(address,bool,bool,bytes32,bytes32)",
+    data: BytesLike
+  ): Result;
+  decodeFunctionResult(
+    functionFragment: "deployAndRegisterApp(address,bool,bool,bool,bytes32,bytes32)",
     data: BytesLike
   ): Result;
   decodeFunctionResult(
@@ -590,10 +599,23 @@ export interface DstackKms extends BaseContract {
 
   appImplementation: TypedContractMethod<[], [string], "view">;
 
-  deployAndRegisterApp: TypedContractMethod<
+  "deployAndRegisterApp(address,bool,bool,bytes32,bytes32)": TypedContractMethod<
     [
       initialOwner: AddressLike,
       disableUpgrades: boolean,
+      allowAnyDevice: boolean,
+      initialDeviceId: BytesLike,
+      initialComposeHash: BytesLike
+    ],
+    [string],
+    "nonpayable"
+  >;
+
+  "deployAndRegisterApp(address,bool,bool,bool,bytes32,bytes32)": TypedContractMethod<
+    [
+      initialOwner: AddressLike,
+      disableUpgrades: boolean,
+      requireTcbUpToDate: boolean,
       allowAnyDevice: boolean,
       initialDeviceId: BytesLike,
       initialComposeHash: BytesLike
@@ -738,11 +760,25 @@ export interface DstackKms extends BaseContract {
     nameOrSignature: "appImplementation"
   ): TypedContractMethod<[], [string], "view">;
   getFunction(
-    nameOrSignature: "deployAndRegisterApp"
+    nameOrSignature: "deployAndRegisterApp(address,bool,bool,bytes32,bytes32)"
   ): TypedContractMethod<
     [
       initialOwner: AddressLike,
       disableUpgrades: boolean,
+      allowAnyDevice: boolean,
+      initialDeviceId: BytesLike,
+      initialComposeHash: BytesLike
+    ],
+    [string],
+    "nonpayable"
+  >;
+  getFunction(
+    nameOrSignature: "deployAndRegisterApp(address,bool,bool,bool,bytes32,bytes32)"
+  ): TypedContractMethod<
+    [
+      initialOwner: AddressLike,
+      disableUpgrades: boolean,
+      requireTcbUpToDate: boolean,
       allowAnyDevice: boolean,
       initialDeviceId: BytesLike,
       initialComposeHash: BytesLike

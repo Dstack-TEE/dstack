@@ -6,7 +6,7 @@ import { HardhatRuntimeEnvironment } from "hardhat/types";
 import * as helpers from "../lib/deployment-helpers";
 
 // This function should be called directly by Hardhat tasks
-export async function deployContract(hre: HardhatRuntimeEnvironment, contractName: string, initializerArgs: any[] = [], quiet: boolean = false) {
+export async function deployContract(hre: HardhatRuntimeEnvironment, contractName: string, initializerArgs: any[] = [], quiet: boolean = false, initializer?: string) {
   try {
     function log(...msgs: any[]) {
       if (!quiet) {
@@ -29,7 +29,8 @@ export async function deployContract(hre: HardhatRuntimeEnvironment, contractNam
       await helpers.estimateDeploymentCost(
         hre,
         contractName,
-        initializerArgs
+        initializerArgs,
+        initializer
       );
 
       // Prompt for confirmation
@@ -43,7 +44,7 @@ export async function deployContract(hre: HardhatRuntimeEnvironment, contractNam
     log("Deploying proxy...");
     const contract = await hre.upgrades.deployProxy(contractFactory,
       initializerArgs,
-      { kind: 'uups' }
+      { kind: 'uups', ...(initializer ? { initializer } : {}) }
     );
     log("Waiting for deployment...");
     await contract.waitForDeployment();
