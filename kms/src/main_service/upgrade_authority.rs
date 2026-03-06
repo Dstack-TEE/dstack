@@ -3,8 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::config::AuthApi;
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use ra_tls::attestation::AttestationMode;
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_human_bytes as hex_bytes;
 
@@ -60,6 +61,28 @@ pub(crate) struct GetInfoResponse {
     pub app_implementation: Option<String>,
 }
 
+async fn http_get<R: DeserializeOwned>(url: &str) -> Result<R> {
+    send_request(reqwest::Client::new().get(url), url).await
+}
+
+async fn http_post<R: DeserializeOwned>(url: &str, body: &impl Serialize) -> Result<R> {
+    send_request(reqwest::Client::new().post(url).json(body), url).await
+}
+
+async fn send_request<R: DeserializeOwned>(req: reqwest::RequestBuilder, url: &str) -> Result<R> {
+    static USER_AGENT: &str = concat!("dstack-kms/", env!("CARGO_PKG_VERSION"));
+    let response = req.header("User-Agent", USER_AGENT).send().await?;
+    let status = response.status();
+    let body = response.text().await?;
+    let short_body = &body[..body.len().min(512)];
+    if !status.is_success() {
+        bail!("auth api {url} returned {status}: {short_body}");
+    }
+    serde_json::from_str(&body).with_context(|| {
+        format!("failed to decode response from {url}, status={status}, body={short_body}")
+    })
+}
+
 impl AuthApi {
     pub async fn is_app_allowed(&self, boot_info: &BootInfo, is_kms: bool) -> Result<BootResponse> {
         match self {
@@ -69,18 +92,13 @@ impl AuthApi {
                 gateway_app_id: dev.gateway_app_id.clone(),
             }),
             AuthApi::Webhook { webhook } => {
-                let client = reqwest::Client::new();
                 let path = if is_kms {
                     "bootAuth/kms"
                 } else {
                     "bootAuth/app"
                 };
                 let url = url_join(&webhook.url, path);
-                let response = client.post(&url).json(&boot_info).send().await?;
-                if !response.status().is_success() {
-                    bail!("Failed to check boot auth: {}", response.text().await?);
-                }
-                Ok(response.json().await?)
+                http_post(&url, &boot_info).await
             }
         }
     }
@@ -95,10 +113,7 @@ impl AuthApi {
                 app_implementation: None,
             }),
             AuthApi::Webhook { webhook } => {
-                let client = reqwest::Client::new();
-                let response = client.get(&webhook.url).send().await?;
-                println!("url: {}", webhook.url);
-                let info: AuthApiInfoResponse = response.json().await?;
+                let info: AuthApiInfoResponse = http_get(&webhook.url).await?;
                 Ok(GetInfoResponse {
                     is_dev: false,
                     kms_contract_address: Some(info.kms_contract_addr.clone()),
