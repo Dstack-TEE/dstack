@@ -155,6 +155,8 @@ func validateTCB(quote *dcap.Quote) error {
 		if len(quote.Report.Attributes) > 0 && quote.Report.Attributes[0]&0x02 != 0 {
 			return fmt.Errorf("debug mode is not allowed")
 		}
+	default:
+		return fmt.Errorf("unknown report type: %s", quote.Report.Type)
 	}
 	return nil
 }
