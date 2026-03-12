@@ -10,7 +10,12 @@ import { BootInfo } from '../src/types';
 jest.mock('../src/ethereum', () => {
   return {
     EthereumBackend: jest.fn().mockImplementation(() => ({
-      checkBoot: jest.fn()
+      checkBoot: jest.fn(),
+      getAppPolicy: jest.fn(),
+      getKmsPolicy: jest.fn(),
+      getGatewayAppId: jest.fn().mockResolvedValue('0x1234'),
+      getChainId: jest.fn().mockResolvedValue(1),
+      getAppImplementation: jest.fn().mockResolvedValue('0x0000000000000000000000000000000000000000'),
     }))
   };
 });
@@ -112,6 +117,81 @@ describe('Server', () => {
       const result = JSON.parse(response.payload);
       expect(result.isAllowed).toBe(false);
       expect(result.reason).toMatch(/Test backend error/);
+    });
+  });
+
+  describe('GET /policy/app/:appId', () => {
+    it('should return tcbPolicy from backend', async () => {
+      const policy = '{"version":1,"intel_qal":["test"]}';
+      app.ethereum.getAppPolicy = jest.fn().mockResolvedValue({ tcbPolicy: policy });
+
+      const response = await app.inject({
+        method: 'GET',
+        url: '/policy/app/0x9012345678901234567890123456789012345678',
+      });
+
+      expect(response.statusCode).toBe(200);
+      const result = JSON.parse(response.payload);
+      expect(result.tcbPolicy).toBe(policy);
+    });
+
+    it('should return empty tcbPolicy when none set', async () => {
+      app.ethereum.getAppPolicy = jest.fn().mockResolvedValue({ tcbPolicy: '' });
+
+      const response = await app.inject({
+        method: 'GET',
+        url: '/policy/app/0x9012345678901234567890123456789012345678',
+      });
+
+      expect(response.statusCode).toBe(200);
+      const result = JSON.parse(response.payload);
+      expect(result.tcbPolicy).toBe('');
+    });
+  });
+
+  describe('GET /policy/kms', () => {
+    it('should return tcbPolicy from backend', async () => {
+      const policy = '{"version":1,"intel_qal":[]}';
+      app.ethereum.getKmsPolicy = jest.fn().mockResolvedValue({ tcbPolicy: policy });
+
+      const response = await app.inject({
+        method: 'GET',
+        url: '/policy/kms',
+      });
+
+      expect(response.statusCode).toBe(200);
+      const result = JSON.parse(response.payload);
+      expect(result.tcbPolicy).toBe(policy);
+    });
+
+    it('should return empty tcbPolicy when none set', async () => {
+      app.ethereum.getKmsPolicy = jest.fn().mockResolvedValue({ tcbPolicy: '' });
+
+      const response = await app.inject({
+        method: 'GET',
+        url: '/policy/kms',
+      });
+
+      expect(response.statusCode).toBe(200);
+      const result = JSON.parse(response.payload);
+      expect(result.tcbPolicy).toBe('');
+    });
+  });
+
+  describe('GET /', () => {
+    it('should return server info', async () => {
+      const response = await app.inject({
+        method: 'GET',
+        url: '/',
+      });
+
+      expect(response.statusCode).toBe(200);
+      const result = JSON.parse(response.payload);
+      expect(result.status).toBe('ok');
+      expect(result).toHaveProperty('kmsContractAddr');
+      expect(result).toHaveProperty('gatewayAppId');
+      expect(result).toHaveProperty('chainId');
+      expect(result).toHaveProperty('appImplementation');
     });
   });
 });
