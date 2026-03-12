@@ -47,6 +47,7 @@ tempfile.workspace = true
 serde-duration.workspace = true
 dstack-verifier = { workspace = true, default-features = false }
 dstack-mr.workspace = true
+dcap-qvl.workspace = true
 
 [features]
 default = []

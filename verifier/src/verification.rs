@@ -419,12 +419,10 @@ impl CvmVerifier {
         let verified_attestation = match verified {
             Ok(att) => {
                 details.quote_verified = true;
-                details.tcb_status = att.report.tdx_report().map(|r| r.status.clone());
-                details.advisory_ids = att
-                    .report
-                    .tdx_report()
-                    .map(|r| r.advisory_ids.clone())
-                    .unwrap_or_default();
+                if let Some(report) = att.report.tdx_report() {
+                    details.tcb_status = Some(report.status);
+                    details.advisory_ids = report.advisory_ids;
+                }
                 details.report_data = Some(hex::encode(att.report_data));
                 att
             }
@@ -510,7 +508,7 @@ impl CvmVerifier {
         debug: bool,
         details: &mut VerificationDetails,
     ) -> Result<()> {
-        let Some(report) = &attestation.report.tdx_report() else {
+        let Some(tdx_report) = attestation.report.tdx_report() else {
             bail!("No TDX report");
         };
         let Some(tdx_quote) = attestation.tdx_quote() else {
@@ -518,7 +516,7 @@ impl CvmVerifier {
         };
         let event_log = &tdx_quote.event_log;
         // Get boot info from attestation
-        let report = report
+        let report = tdx_report
             .report
             .as_td10()
             .context("Failed to decode TD report")?;

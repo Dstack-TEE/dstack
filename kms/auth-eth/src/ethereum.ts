@@ -6,6 +6,7 @@ import { ethers } from 'ethers';
 import { BootInfo, BootResponse } from './types';
 import { DstackKms__factory } from '../typechain-types/factories/contracts/DstackKms__factory';
 import { DstackKms } from '../typechain-types/contracts/DstackKms';
+import { IAppTcbPolicy__factory } from '../typechain-types/factories/contracts/IAppTcbPolicy__factory';
 import { HardhatEthersProvider } from '@nomicfoundation/hardhat-ethers/internal/hardhat-ethers-provider';
 
 export class EthereumBackend {
@@ -31,6 +32,20 @@ export class EthereumBackend {
     return '0x' + hex;
   }
 
+  /**
+   * Try to read tcbPolicy() from a contract address.
+   * Returns empty string if the contract doesn't implement IAppTcbPolicy.
+   */
+  private async tryReadTcbPolicy(address: string): Promise<string> {
+    try {
+      const contract = IAppTcbPolicy__factory.connect(address, this.provider);
+      return await contract.tcbPolicy();
+    } catch {
+      // Old contract without IAppTcbPolicy support
+      return '';
+    }
+  }
+
   async checkBoot(bootInfo: BootInfo, isKms: boolean): Promise<BootResponse> {
     // Create boot info struct for contract call
     const bootInfoStruct = {
@@ -52,10 +67,24 @@ export class EthereumBackend {
     }
     const [isAllowed, reason] = response;
     const gatewayAppId = await this.kmsContract.gatewayAppId();
+
+    // Read TCB policy from the relevant contract
+    let tcbPolicy = '';
+    if (isAllowed) {
+      if (isKms) {
+        // KMS boot: read policy from KMS contract itself
+        tcbPolicy = await this.tryReadTcbPolicy(await this.kmsContract.getAddress());
+      } else {
+        // App boot: read policy from the app contract
+        tcbPolicy = await this.tryReadTcbPolicy(bootInfoStruct.appId);
+      }
+    }
+
     return {
       isAllowed,
       reason,
       gatewayAppId,
+      tcbPolicy,
     }
   }
 

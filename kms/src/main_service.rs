@@ -5,6 +5,7 @@
 use std::{path::PathBuf, sync::Arc};
 
 use anyhow::{bail, Context, Result};
+use dcap_qvl::{verify::QuoteVerificationResult, Policy as _, RegoPolicySet};
 use dstack_kms_rpc::{
     kms_server::{KmsRpc, KmsServer},
     AppId, AppKeyResponse, ClearImageCacheRequest, GetAppKeyRequest, GetKmsKeyRequest,
@@ -31,6 +32,52 @@ use crate::{
 };
 
 mod upgrade_authority;
+
+/// On-chain TCB policy document. Versioned JSON wrapper for extensibility.
+///
+/// Format: `{"version": 1, "intel_qal": ["<policy_json>", ...]}`
+///
+/// Fail-close: unknown versions are rejected.
+#[derive(serde::Deserialize)]
+struct TcbPolicyDoc {
+    version: u32,
+    #[serde(default)]
+    intel_qal: Vec<String>,
+}
+
+/// Validate a TDX QuoteVerificationResult against an on-chain TCB policy.
+///
+/// If `policy_json` is empty, no additional validation is performed (backward compatible
+/// with old contracts that don't set a policy).
+fn validate_onchain_tcb_policy(
+    qvr: &QuoteVerificationResult,
+    policy_json: &str,
+) -> Result<()> {
+    if policy_json.is_empty() {
+        return Ok(());
+    }
+    let doc: TcbPolicyDoc =
+        serde_json::from_str(policy_json).context("Failed to parse on-chain TCB policy JSON")?;
+    if doc.version != 1 {
+        bail!(
+            "Unsupported TCB policy version {}: refusing to proceed (fail-close)",
+            doc.version
+        );
+    }
+    if doc.intel_qal.is_empty() {
+        return Ok(());
+    }
+    let policy_refs: Vec<&str> = doc.intel_qal.iter().map(|s| s.as_str()).collect();
+    let policy_set =
+        RegoPolicySet::new(&policy_refs).context("Failed to build RegoPolicySet from on-chain policy")?;
+    let supplemental = qvr
+        .supplemental()
+        .context("Failed to build supplemental data for on-chain policy validation")?;
+    policy_set
+        .validate(&supplemental)
+        .context("On-chain TCB policy validation failed")?;
+    Ok(())
+}
 
 #[derive(Clone)]
 pub struct KmsState {
@@ -173,8 +220,8 @@ impl RpcHandler {
         let advisory_ids;
         match att.report.tdx_report() {
             Some(report) => {
-                tcb_status = report.status.clone();
-                advisory_ids = report.advisory_ids.clone();
+                tcb_status = report.status;
+                advisory_ids = report.advisory_ids;
             }
             None => {
                 tcb_status = "".to_string();
@@ -203,6 +250,11 @@ impl RpcHandler {
             .await?;
         if !response.is_allowed {
             bail!("Boot denied: {}", response.reason);
+        }
+        // Apply on-chain TCB policy (if set) to the TDX QuoteVerificationResult
+        if let Some(qvr) = att.report.tdx_qvr() {
+            validate_onchain_tcb_policy(qvr, &response.tcb_policy)
+                .context("On-chain TCB policy check failed")?;
         }
         self.verify_os_image_hash(vm_config_str.into(), att)
             .await

@@ -18,6 +18,7 @@ export interface BootResponse {
   isAllowed: boolean;
   gatewayAppId: string;
   reason: string;
+  tcbPolicy: string;
 }
 
 // Removed KMS_CONTRACT_ABI and APP_CONTRACT_ABI since we're using typechain types now

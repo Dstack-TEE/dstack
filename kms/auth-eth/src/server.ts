@@ -41,6 +41,7 @@ export async function build(): Promise<FastifyInstance> {
       isAllowed: { type: 'boolean' },
       reason: { type: 'string' },
       gatewayAppId: { type: 'string' },
+      tcbPolicy: { type: 'string' },
     }
   });
 
@@ -85,7 +86,8 @@ export async function build(): Promise<FastifyInstance> {
       reply.code(200).send({
         isAllowed: false,
         gatewayAppId: '',
-        reason: `${error instanceof Error ? error.message : String(error)}`
+        reason: `${error instanceof Error ? error.message : String(error)}`,
+        tcbPolicy: ''
       });
     }
   });
@@ -110,7 +112,8 @@ export async function build(): Promise<FastifyInstance> {
       reply.code(200).send({
         isAllowed: false,
         gatewayAppId: '',
-        reason: `${error instanceof Error ? error.message : String(error)}`
+        reason: `${error instanceof Error ? error.message : String(error)}`,
+        tcbPolicy: ''
       });
     }
   });

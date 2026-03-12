@@ -39,6 +39,8 @@ pub(crate) struct BootResponse {
     pub is_allowed: bool,
     pub gateway_app_id: String,
     pub reason: String,
+    #[serde(default)]
+    pub tcb_policy: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -90,6 +92,7 @@ impl AuthApi {
                 is_allowed: true,
                 reason: "".to_string(),
                 gateway_app_id: dev.gateway_app_id.clone(),
+                tcb_policy: String::new(),
             }),
             AuthApi::Webhook { webhook } => {
                 let path = if is_kms {
