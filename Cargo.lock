@@ -1951,7 +1951,7 @@ checksum = "d7a1e2f27636f116493b8b860f5546edb47c8d8f8ea73e1d2a20be88e28d1fea"
 [[package]]
 name = "dcap-qvl"
 version = "0.3.12"
-source = "git+https://github.com/Phala-Network/dcap-qvl?branch=policy#ebd1f0d36cb6a8364936826f041380251f6574b5"
+source = "git+https://github.com/Phala-Network/dcap-qvl?branch=policy#4c2e3b36c8faec5c4adad303d73de9d6f8aeda0c"
 dependencies = [
  "anyhow",
  "asn1_der",

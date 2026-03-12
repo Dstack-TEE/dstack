@@ -390,10 +390,7 @@ impl GetDeviceId for () {
 impl GetDeviceId for DstackVerifiedReport {
     fn get_devide_id(&self) -> Vec<u8> {
         match self {
-            DstackVerifiedReport::DstackTdx(qvr) => qvr
-                .supplemental()
-                .map(|s| s.platform.pck.ppid)
-                .unwrap_or_default(),
+            DstackVerifiedReport::DstackTdx(qvr) => qvr.ppid().to_vec(),
             DstackVerifiedReport::DstackGcpTdx => Vec::new(),
             DstackVerifiedReport::DstackNitroEnclave => Vec::new(),
         }
