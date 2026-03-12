@@ -222,20 +222,8 @@ impl DstackVerifiedReport {
     /// Returns `None` for non-TDX reports.
     pub fn validate_tdx(self, policy: &dyn Policy) -> Result<Option<TdxVerifiedReport>> {
         match self {
-            DstackVerifiedReport::DstackTdx(qvr) => {
-                Ok(Some(qvr.validate(policy)?))
-            }
+            DstackVerifiedReport::DstackTdx(qvr) => Ok(Some(qvr.validate(policy)?)),
             _ => Ok(None),
-        }
-    }
-
-    /// Get a [`TdxVerifiedReport`] without additional policy checks.
-    ///
-    /// Safe to call because the baseline policy was already validated during verification.
-    pub fn tdx_report(&self) -> Option<TdxVerifiedReport> {
-        match self {
-            DstackVerifiedReport::DstackTdx(qvr) => Some(qvr.clone().into_report_unchecked()),
-            _ => None,
         }
     }
 }
@@ -402,9 +390,10 @@ impl GetDeviceId for () {
 impl GetDeviceId for DstackVerifiedReport {
     fn get_devide_id(&self) -> Vec<u8> {
         match self {
-            DstackVerifiedReport::DstackTdx(qvr) => {
-                qvr.clone().into_report_unchecked().ppid
-            }
+            DstackVerifiedReport::DstackTdx(qvr) => qvr
+                .supplemental()
+                .map(|s| s.platform.pck.ppid)
+                .unwrap_or_default(),
             DstackVerifiedReport::DstackGcpTdx => Vec::new(),
             DstackVerifiedReport::DstackNitroEnclave => Vec::new(),
         }
@@ -730,13 +719,14 @@ impl Attestation {
             .duration_since(SystemTime::UNIX_EPOCH)
             .context("system time before epoch")?
             .as_secs();
-        let qvr =
-            dcap_qvl::collateral::get_collateral_and_verify(quote, Some(pccs_url.as_ref()))
-                .await
-                .context("Failed to get collateral")?;
+        let qvr = dcap_qvl::collateral::get_collateral_and_verify(quote, Some(pccs_url.as_ref()))
+            .await
+            .context("Failed to get collateral")?;
 
         // Baseline policy validation (business layer can apply stricter policies on the returned QVR)
-        let supplemental = qvr.supplemental().context("Failed to build supplemental data")?;
+        let supplemental = qvr
+            .supplemental()
+            .context("Failed to build supplemental data")?;
         default_policy(now_secs)
             .validate(&supplemental)
             .context("TCB policy validation failed")?;
@@ -809,7 +799,7 @@ pub fn default_policy(now_secs: u64) -> SimplePolicy {
     SimplePolicy::strict(now_secs)
         .allow_status(TcbStatus::OutOfDate)
         .platform_grace_period(Duration::from_secs(30 * 24 * 3600))
-        .qe_grace_period(Duration::from_secs(14 * 24 * 3600))
+        .qe_grace_period(Duration::from_secs(30 * 24 * 3600))
         .allow_smt(true)
         .reject_advisory("INTEL-SA-01397")
         .reject_advisory("INTEL-SA-01367")

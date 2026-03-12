@@ -18,6 +18,9 @@ export interface BootResponse {
   isAllowed: boolean;
   gatewayAppId: string;
   reason: string;
+}
+
+export interface PolicyResponse {
   tcbPolicy: string;
 }
 

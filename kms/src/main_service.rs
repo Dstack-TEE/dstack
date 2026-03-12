@@ -49,10 +49,7 @@ struct TcbPolicyDoc {
 ///
 /// If `policy_json` is empty, no additional validation is performed (backward compatible
 /// with old contracts that don't set a policy).
-fn validate_onchain_tcb_policy(
-    qvr: &QuoteVerificationResult,
-    policy_json: &str,
-) -> Result<()> {
+fn validate_onchain_tcb_policy(qvr: &QuoteVerificationResult, policy_json: &str) -> Result<()> {
     if policy_json.is_empty() {
         return Ok(());
     }
@@ -68,8 +65,8 @@ fn validate_onchain_tcb_policy(
         return Ok(());
     }
     let policy_refs: Vec<&str> = doc.intel_qal.iter().map(|s| s.as_str()).collect();
-    let policy_set =
-        RegoPolicySet::new(&policy_refs).context("Failed to build RegoPolicySet from on-chain policy")?;
+    let policy_set = RegoPolicySet::new(&policy_refs)
+        .context("Failed to build RegoPolicySet from on-chain policy")?;
     let supplemental = qvr
         .supplemental()
         .context("Failed to build supplemental data for on-chain policy validation")?;
@@ -216,17 +213,15 @@ impl RpcHandler {
         use_boottime_mr: bool,
         vm_config_str: &str,
     ) -> Result<BootConfig> {
-        let tcb_status;
-        let advisory_ids;
-        match att.report.tdx_report() {
-            Some(report) => {
-                tcb_status = report.status;
-                advisory_ids = report.advisory_ids;
+        let (tcb_status, advisory_ids) = match att.report.tdx_qvr() {
+            Some(qvr) => {
+                let supplemental = qvr.supplemental().context("Failed to build supplemental")?;
+                (
+                    supplemental.tcb.status.to_string(),
+                    supplemental.tcb.advisory_ids,
+                )
             }
-            None => {
-                tcb_status = "".to_string();
-                advisory_ids = Vec::new();
-            }
+            None => (String::new(), Vec::new()),
         };
         let app_info = att.decode_app_info_ex(use_boottime_mr, vm_config_str)?;
         let boot_info = BootInfo {
@@ -242,6 +237,23 @@ impl RpcHandler {
             tcb_status,
             advisory_ids,
         };
+
+        // Validate on-chain TCB policy before contract-level boot authorization
+        if let Some(qvr) = att.report.tdx_qvr() {
+            let policy = if is_kms {
+                self.state.config.auth_api.get_kms_policy().await?
+            } else {
+                let app_id_hex = hex::encode(&boot_info.app_id);
+                self.state
+                    .config
+                    .auth_api
+                    .get_app_policy(&format!("0x{app_id_hex}"))
+                    .await?
+            };
+            validate_onchain_tcb_policy(qvr, &policy.tcb_policy)
+                .context("On-chain TCB policy check failed")?;
+        }
+
         let response = self
             .state
             .config
@@ -250,11 +262,6 @@ impl RpcHandler {
             .await?;
         if !response.is_allowed {
             bail!("Boot denied: {}", response.reason);
-        }
-        // Apply on-chain TCB policy (if set) to the TDX QuoteVerificationResult
-        if let Some(qvr) = att.report.tdx_qvr() {
-            validate_onchain_tcb_policy(qvr, &response.tcb_policy)
-                .context("On-chain TCB policy check failed")?;
         }
         self.verify_os_image_hash(vm_config_str.into(), att)
             .await

@@ -39,6 +39,11 @@ pub(crate) struct BootResponse {
     pub is_allowed: bool,
     pub gateway_app_id: String,
     pub reason: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PolicyResponse {
     #[serde(default)]
     pub tcb_policy: String,
 }
@@ -92,7 +97,6 @@ impl AuthApi {
                 is_allowed: true,
                 reason: "".to_string(),
                 gateway_app_id: dev.gateway_app_id.clone(),
-                tcb_policy: String::new(),
             }),
             AuthApi::Webhook { webhook } => {
                 let path = if is_kms {
@@ -102,6 +106,30 @@ impl AuthApi {
                 };
                 let url = url_join(&webhook.url, path);
                 http_post(&url, &boot_info).await
+            }
+        }
+    }
+
+    pub async fn get_app_policy(&self, app_id: &str) -> Result<PolicyResponse> {
+        match self {
+            AuthApi::Dev { .. } => Ok(PolicyResponse {
+                tcb_policy: String::new(),
+            }),
+            AuthApi::Webhook { webhook } => {
+                let url = url_join(&webhook.url, &format!("policy/app/{app_id}"));
+                http_get(&url).await
+            }
+        }
+    }
+
+    pub async fn get_kms_policy(&self) -> Result<PolicyResponse> {
+        match self {
+            AuthApi::Dev { .. } => Ok(PolicyResponse {
+                tcb_policy: String::new(),
+            }),
+            AuthApi::Webhook { webhook } => {
+                let url = url_join(&webhook.url, "policy/kms");
+                http_get(&url).await
             }
         }
     }

@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { ethers } from 'ethers';
-import { BootInfo, BootResponse } from './types';
+import { BootInfo, BootResponse, PolicyResponse } from './types';
 import { DstackKms__factory } from '../typechain-types/factories/contracts/DstackKms__factory';
 import { DstackKms } from '../typechain-types/contracts/DstackKms';
 import { IAppTcbPolicy__factory } from '../typechain-types/factories/contracts/IAppTcbPolicy__factory';
@@ -68,23 +68,10 @@ export class EthereumBackend {
     const [isAllowed, reason] = response;
     const gatewayAppId = await this.kmsContract.gatewayAppId();
 
-    // Read TCB policy from the relevant contract
-    let tcbPolicy = '';
-    if (isAllowed) {
-      if (isKms) {
-        // KMS boot: read policy from KMS contract itself
-        tcbPolicy = await this.tryReadTcbPolicy(await this.kmsContract.getAddress());
-      } else {
-        // App boot: read policy from the app contract
-        tcbPolicy = await this.tryReadTcbPolicy(bootInfoStruct.appId);
-      }
-    }
-
     return {
       isAllowed,
       reason,
       gatewayAppId,
-      tcbPolicy,
     }
   }
 
@@ -95,6 +82,16 @@ export class EthereumBackend {
   async getChainId(): Promise<number> {
     const chainId = await this.provider.getNetwork().then((network) => network.chainId);
     return Number(chainId);
+  }
+
+  async getAppPolicy(appId: string): Promise<PolicyResponse> {
+    const tcbPolicy = await this.tryReadTcbPolicy(appId);
+    return { tcbPolicy };
+  }
+
+  async getKmsPolicy(): Promise<PolicyResponse> {
+    const tcbPolicy = await this.tryReadTcbPolicy(await this.kmsContract.getAddress());
+    return { tcbPolicy };
   }
 
   async getAppImplementation(): Promise<string> {
