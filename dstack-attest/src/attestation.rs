@@ -213,7 +213,8 @@ impl DstackVerifiedReport {
     pub fn tdx_qvr(&self) -> Option<&QuoteVerificationResult> {
         match self {
             DstackVerifiedReport::DstackTdx(qvr) => Some(qvr),
-            _ => None,
+            DstackVerifiedReport::DstackGcpTdx => None,
+            DstackVerifiedReport::DstackNitroEnclave => None,
         }
     }
 
@@ -223,7 +224,8 @@ impl DstackVerifiedReport {
     pub fn validate_tdx(self, policy: &dyn Policy) -> Result<Option<TdxVerifiedReport>> {
         match self {
             DstackVerifiedReport::DstackTdx(qvr) => Ok(Some(qvr.validate(policy)?)),
-            _ => Ok(None),
+            DstackVerifiedReport::DstackGcpTdx => Ok(None),
+            DstackVerifiedReport::DstackNitroEnclave => Ok(None),
         }
     }
 }
