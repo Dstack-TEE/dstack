@@ -1,0 +1,26 @@
+[package]
+name = "kms-e2e-client"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "kms-e2e-client"
+path = "src/main.rs"
+
+[dependencies]
+ra-tls = { workspace = true }
+ra-rpc = { workspace = true, features = ["client"] }
+dstack-kms-rpc = { workspace = true }
+dstack-guest-agent-rpc = { workspace = true }
+dstack-attest = { workspace = true }
+http-client = { workspace = true, features = ["prpc"] }
+anyhow = { workspace = true, features = ["std"] }
+serde_json = "1"
+serde = { workspace = true }
+hex = { workspace = true }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+clap = { workspace = true, features = ["env"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+scale = { workspace = true }

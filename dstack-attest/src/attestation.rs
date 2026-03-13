@@ -800,6 +800,8 @@ pub fn default_policy(now_secs: u64) -> SimplePolicy {
         .platform_grace_period(Duration::from_secs(30 * 24 * 3600))
         .qe_grace_period(Duration::from_secs(30 * 24 * 3600))
         .allow_smt(true)
+        .allow_dynamic_platform(true)
+        .allow_cached_keys(true)
         .reject_advisory("INTEL-SA-01397")
         .reject_advisory("INTEL-SA-01367")
         .reject_advisory("INTEL-SA-01314")

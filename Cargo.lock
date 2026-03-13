@@ -4284,6 +4284,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "kms-e2e-client"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "dstack-attest",
+ "dstack-guest-agent-rpc",
+ "dstack-kms-rpc",
+ "hex",
+ "http-client",
+ "parity-scale-codec",
+ "ra-rpc",
+ "ra-tls",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "kqueue"
 version = "1.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

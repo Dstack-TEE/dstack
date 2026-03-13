@@ -53,6 +53,7 @@ members = [
     "no_std_check",
     "size-parser",
     "port-forward",
+    "kms/e2e",
 ]
 resolver = "2"
 
