@@ -1,0 +1,49 @@
+# KMS E2E test configuration template
+# Placeholders are replaced by run-e2e.sh at runtime
+
+[default]
+workers = 2
+max_blocking = 8
+ident = "DStack KMS E2E"
+temp_dir = "/tmp"
+keep_alive = 10
+log_level = "info"
+
+[rpc]
+address = "0.0.0.0"
+port = {{KMS_PORT}}
+
+[rpc.tls]
+key = "{{CERT_DIR}}/rpc.key"
+certs = "{{CERT_DIR}}/rpc.crt"
+
+[rpc.tls.mutual]
+ca_certs = "{{CERT_DIR}}/tmp-ca.crt"
+mandatory = false
+
+[core]
+cert_dir = "{{CERT_DIR}}"
+subject_postfix = ".dstack-e2e"
+admin_token_hash = ""
+
+[core.image]
+verify = false
+cache_dir = "{{IMAGE_CACHE_DIR}}"
+download_url = "http://localhost:8000/{OS_IMAGE_HASH}.tar.gz"
+download_timeout = "2m"
+
+[core.auth_api]
+type = "webhook"
+
+[core.auth_api.webhook]
+url = "http://127.0.0.1:{{AUTH_ETH_PORT}}"
+
+[core.auth_api.dev]
+gateway_app_id = "any"
+
+[core.onboard]
+enabled = true
+auto_bootstrap_domain = "e2e-test.local"
+quote_enabled = true
+address = "0.0.0.0"
+port = {{KMS_PORT}}

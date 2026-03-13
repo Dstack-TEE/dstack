@@ -81,4 +81,38 @@ describe('EthereumBackend', () => {
       expect(result.isAllowed).toBe(false);
     });
   });
+
+  describe('getAppPolicy', () => {
+    it('should return empty tcbPolicy by default', async () => {
+      const result = await backend.getAppPolicy(appId);
+      expect(result.tcbPolicy).toBe('');
+    });
+
+    it('should return set tcbPolicy', async () => {
+      const policy = '{"version":1,"intel_qal":["test-policy"]}';
+      await appAuth.setTcbPolicy(policy);
+      const result = await backend.getAppPolicy(appId);
+      expect(result.tcbPolicy).toBe(policy);
+    });
+
+    it('should return empty string for address without IAppTcbPolicy', async () => {
+      const randomAddr = ethers.Wallet.createRandom().address;
+      const result = await backend.getAppPolicy(randomAddr);
+      expect(result.tcbPolicy).toBe('');
+    });
+  });
+
+  describe('getKmsPolicy', () => {
+    it('should return empty tcbPolicy by default', async () => {
+      const result = await backend.getKmsPolicy();
+      expect(result.tcbPolicy).toBe('');
+    });
+
+    it('should return set tcbPolicy', async () => {
+      const policy = '{"version":1,"intel_qal":[]}';
+      await kmsContract.setTcbPolicy(policy);
+      const result = await backend.getKmsPolicy();
+      expect(result.tcbPolicy).toBe(policy);
+    });
+  });
 });

@@ -3,9 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { ethers } from 'ethers';
-import { BootInfo, BootResponse } from './types';
+import { BootInfo, BootResponse, PolicyResponse } from './types';
 import { DstackKms__factory } from '../typechain-types/factories/contracts/DstackKms__factory';
 import { DstackKms } from '../typechain-types/contracts/DstackKms';
+import { IAppTcbPolicy__factory } from '../typechain-types/factories/contracts/IAppTcbPolicy__factory';
 import { HardhatEthersProvider } from '@nomicfoundation/hardhat-ethers/internal/hardhat-ethers-provider';
 
 export class EthereumBackend {
@@ -31,6 +32,20 @@ export class EthereumBackend {
     return '0x' + hex;
   }
 
+  /**
+   * Try to read tcbPolicy() from a contract address.
+   * Returns empty string if the contract doesn't implement IAppTcbPolicy.
+   */
+  private async tryReadTcbPolicy(address: string): Promise<string> {
+    try {
+      const contract = IAppTcbPolicy__factory.connect(address, this.provider);
+      return await contract.tcbPolicy();
+    } catch {
+      // Old contract without IAppTcbPolicy support
+      return '';
+    }
+  }
+
   async checkBoot(bootInfo: BootInfo, isKms: boolean): Promise<BootResponse> {
     // Create boot info struct for contract call
     const bootInfoStruct = {
@@ -52,6 +67,7 @@ export class EthereumBackend {
     }
     const [isAllowed, reason] = response;
     const gatewayAppId = await this.kmsContract.gatewayAppId();
+
     return {
       isAllowed,
       reason,
@@ -66,6 +82,16 @@ export class EthereumBackend {
   async getChainId(): Promise<number> {
     const chainId = await this.provider.getNetwork().then((network) => network.chainId);
     return Number(chainId);
+  }
+
+  async getAppPolicy(appId: string): Promise<PolicyResponse> {
+    const tcbPolicy = await this.tryReadTcbPolicy(appId);
+    return { tcbPolicy };
+  }
+
+  async getKmsPolicy(): Promise<PolicyResponse> {
+    const tcbPolicy = await this.tryReadTcbPolicy(await this.kmsContract.getAddress());
+    return { tcbPolicy };
   }
 
   async getAppImplementation(): Promise<string> {

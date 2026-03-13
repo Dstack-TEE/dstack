@@ -5,3 +5,4 @@ export { DstackApp__factory } from "./DstackApp__factory";
 export { DstackKms__factory } from "./DstackKms__factory";
 export { IAppAuth__factory } from "./IAppAuth__factory";
 export { IAppAuthBasicManagement__factory } from "./IAppAuthBasicManagement__factory";
+export { IAppTcbPolicy__factory } from "./IAppTcbPolicy__factory";

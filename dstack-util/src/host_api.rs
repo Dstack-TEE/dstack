@@ -12,7 +12,7 @@ use host_api::{
     client::{new_client, DefaultClient},
     Notification,
 };
-use ra_tls::attestation::validate_tcb;
+use ra_tls::attestation::{default_policy, validate_tcb};
 use sodiumbox::{generate_keypair, open_sealed_box, PUBLICKEYBYTES};
 use tracing::warn;
 
@@ -94,13 +94,20 @@ impl HostApi {
             .map_err(|err| anyhow!("Failed to get sealing key: {err:?}"))?;
 
         // verify the key provider quote
+        let now_secs = std::time::SystemTime::now()
+            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+            .context("system time before epoch")?
+            .as_secs();
+        let policy = default_policy(now_secs);
         let verified_report = dcap_qvl::collateral::get_collateral_and_verify(
             &provision.provider_quote,
             self.pccs_url.as_deref(),
         )
         .await
-        .context("Failed to get quote collateral")?;
-        validate_tcb(&verified_report)?;
+        .context("Failed to get quote collateral")?
+        .validate(&policy)
+        .context("TCB policy validation failed")?;
+        validate_tcb(&verified_report.report)?;
         let sgx_report = verified_report
             .report
             .as_sgx()

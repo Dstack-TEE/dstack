@@ -42,3 +42,5 @@ export type { IAppAuth } from "./contracts/IAppAuth";
 export { IAppAuth__factory } from "./factories/contracts/IAppAuth__factory";
 export type { IAppAuthBasicManagement } from "./contracts/IAppAuthBasicManagement";
 export { IAppAuthBasicManagement__factory } from "./factories/contracts/IAppAuthBasicManagement__factory";
+export type { IAppTcbPolicy } from "./contracts/IAppTcbPolicy";
+export { IAppTcbPolicy__factory } from "./factories/contracts/IAppTcbPolicy__factory";

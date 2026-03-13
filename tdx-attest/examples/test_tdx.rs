@@ -65,9 +65,10 @@ async fn main() {
             pccs_url.as_deref().unwrap_or("(default)")
         );
         match get_collateral_and_verify(quote, pccs_url.as_deref()).await {
-            Ok(verified) => {
+            Ok(result) => {
+                let verified = result.into_report_unchecked();
                 println!("   ✓ Quote verified!");
-                println!("   QE status: {:?}", verified.qe_status);
+                println!("   TCB status: {}", verified.status);
                 if let Some(report) = verified.report.as_td10() {
                     if report.report_data[..] == report_data[..] {
                         println!("   ✓ Report data matches");

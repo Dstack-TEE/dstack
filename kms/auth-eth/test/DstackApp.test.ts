@@ -127,6 +127,51 @@ describe("DstackApp", function () {
     });
   });
 
+  describe("TCB policy (IAppTcbPolicy)", function () {
+    const testPolicy = '{"version":1,"intel_qal":["policy1"]}';
+
+    it("Should return empty string by default", async function () {
+      expect(await appAuth.tcbPolicy()).to.equal("");
+    });
+
+    it("Should allow owner to set TCB policy", async function () {
+      await appAuth.setTcbPolicy(testPolicy);
+      expect(await appAuth.tcbPolicy()).to.equal(testPolicy);
+    });
+
+    it("Should emit TcbPolicySet event", async function () {
+      await expect(appAuth.setTcbPolicy(testPolicy))
+        .to.emit(appAuth, "TcbPolicySet")
+        .withArgs(testPolicy);
+    });
+
+    it("Should allow clearing TCB policy with empty string", async function () {
+      await appAuth.setTcbPolicy(testPolicy);
+      await appAuth.setTcbPolicy("");
+      expect(await appAuth.tcbPolicy()).to.equal("");
+    });
+
+    it("Should prevent non-owners from setting TCB policy", async function () {
+      await expect(
+        appAuth.connect(user).setTcbPolicy(testPolicy)
+      ).to.be.revertedWithCustomError(appAuth, "OwnableUnauthorizedAccount");
+    });
+
+    it("Should support IAppTcbPolicy interface (ERC-165)", async function () {
+      // IAppTcbPolicy interfaceId = tcbPolicy() ^ setTcbPolicy(string)
+      // We verify via supportsInterface
+      const iface = new ethers.Interface([
+        "function tcbPolicy() view returns (string)",
+        "function setTcbPolicy(string)",
+      ]);
+      const interfaceId =
+        BigInt(iface.getFunction("tcbPolicy")!.selector) ^
+        BigInt(iface.getFunction("setTcbPolicy")!.selector);
+      const id = "0x" + (interfaceId & BigInt("0xffffffff")).toString(16).padStart(8, "0");
+      expect(await appAuth.supportsInterface(id)).to.be.true;
+    });
+  });
+
   describe("Initialize with device and hash", function () {
     let appAuthWithData: DstackApp;
     const testDevice = ethers.randomBytes(32);
@@ -249,5 +294,54 @@ describe("DstackApp", function () {
       expect(await appAuthEmpty.allowedDeviceIds(testDevice)).to.be.false;
       expect(await appAuthEmpty.allowedComposeHashes(testHash)).to.be.false;
     });
+  });
+});
+
+describe("DstackKms TCB policy", function () {
+  let kmsContract: any;
+  let owner: SignerWithAddress;
+  let user: SignerWithAddress;
+
+  beforeEach(async function () {
+    [owner, user] = await ethers.getSigners();
+    kmsContract = await deployContract(hre, "DstackKms", [
+      owner.address,
+      ethers.ZeroAddress,
+    ], true);
+  });
+
+  it("Should return empty string by default", async function () {
+    expect(await kmsContract.tcbPolicy()).to.equal("");
+  });
+
+  it("Should allow owner to set TCB policy", async function () {
+    const policy = '{"version":1,"intel_qal":[]}';
+    await kmsContract.setTcbPolicy(policy);
+    expect(await kmsContract.tcbPolicy()).to.equal(policy);
+  });
+
+  it("Should emit TcbPolicySet event", async function () {
+    const policy = '{"version":1}';
+    await expect(kmsContract.setTcbPolicy(policy))
+      .to.emit(kmsContract, "TcbPolicySet")
+      .withArgs(policy);
+  });
+
+  it("Should prevent non-owners from setting TCB policy", async function () {
+    await expect(
+      kmsContract.connect(user).setTcbPolicy("test")
+    ).to.be.revertedWithCustomError(kmsContract, "OwnableUnauthorizedAccount");
+  });
+
+  it("Should support IAppTcbPolicy interface (ERC-165)", async function () {
+    const iface = new ethers.Interface([
+      "function tcbPolicy() view returns (string)",
+      "function setTcbPolicy(string)",
+    ]);
+    const interfaceId =
+      BigInt(iface.getFunction("tcbPolicy")!.selector) ^
+      BigInt(iface.getFunction("setTcbPolicy")!.selector);
+    const id = "0x" + (interfaceId & BigInt("0xffffffff")).toString(16).padStart(8, "0");
+    expect(await kmsContract.supportsInterface(id)).to.be.true;
   });
 });
