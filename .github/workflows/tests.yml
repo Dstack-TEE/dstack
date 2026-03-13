@@ -1,0 +1,52 @@
+# SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+name: Tests
+
+on:
+  push:
+    branches: [ master, next, dev-* ]
+  pull_request:
+    branches: [ master, next, dev-* ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust-tests:
+    name: Rust tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.92.0
+
+      - name: Run tests
+        run: ./run-tests.sh
+
+  auth-eth-tests:
+    name: auth-eth tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: kms/auth-eth/package-lock.json
+
+      - name: Install dependencies
+        run: |
+          cd kms/auth-eth
+          npm ci
+
+      - name: Run tests
+        run: |
+          cd kms/auth-eth
+          npm test
