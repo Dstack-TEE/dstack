@@ -165,3 +165,58 @@ fn url_join(url: &str, path: &str) -> String {
     url.push_str(path);
     url
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// BootInfo: KMS is the producer (serializer).
+    /// Verify that Rust serialization output matches the shared fixture exactly.
+    #[test]
+    fn boot_info_serialization_matches_fixture() {
+        let fixture_json = include_str!("../../tests/fixtures/boot_info.json");
+        // Deserialize to construct the value, then re-serialize and compare.
+        // This proves Rust's serialization produces JSON that TS can consume.
+        let info: BootInfo =
+            serde_json::from_str(fixture_json).expect("deserialize BootInfo from fixture");
+        let serialized = serde_json::to_value(&info).expect("serialize BootInfo");
+        let expected: serde_json::Value =
+            serde_json::from_str(fixture_json).expect("parse fixture");
+        assert_eq!(
+            serialized, expected,
+            "Rust BootInfo serialization must match fixture (consumed by TS auth-eth)"
+        );
+    }
+
+    /// BootResponse: auth-eth is the producer, KMS is the consumer (deserializer).
+    /// Verify that Rust can deserialize the shared fixture correctly.
+    #[test]
+    fn boot_response_deserialization_from_fixture() {
+        let fixture_json = include_str!("../../tests/fixtures/boot_response.json");
+        let resp: BootResponse =
+            serde_json::from_str(fixture_json).expect("deserialize BootResponse from fixture");
+        assert!(resp.is_allowed);
+        assert_eq!(resp.gateway_app_id, "0x1234567890abcdef1234567890abcdef12345678");
+        assert!(resp.reason.is_empty());
+    }
+
+    /// PolicyResponse: auth-eth is the producer, KMS is the consumer (deserializer).
+    /// Verify that Rust can deserialize the shared fixture correctly.
+    #[test]
+    fn policy_response_deserialization_from_fixture() {
+        let fixture_json = include_str!("../../tests/fixtures/policy_response.json");
+        let resp: PolicyResponse =
+            serde_json::from_str(fixture_json).expect("deserialize PolicyResponse from fixture");
+        assert!(!resp.tcb_policy.is_empty());
+        // Verify the embedded JSON is valid
+        let policy: serde_json::Value =
+            serde_json::from_str(&resp.tcb_policy).expect("parse embedded tcbPolicy JSON");
+        assert_eq!(policy["version"], 1);
+    }
+
+    #[test]
+    fn url_join_appends_path_correctly() {
+        assert_eq!(url_join("http://host", "path"), "http://host/path");
+        assert_eq!(url_join("http://host/", "path"), "http://host/path");
+    }
+}
