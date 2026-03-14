@@ -102,7 +102,10 @@ impl CertRequestClient {
         let pubkey = key.public_key_der();
         let report_data = QuoteContentType::RaTlsCert.to_report_data(&pubkey);
         let attestation = match attestation_override {
-            Some(attestation) => attestation,
+            Some(mut attestation) => {
+                attestation.set_report_data(report_data);
+                attestation
+            }
             None => ra_rpc::Attestation::quote(&report_data)
                 .context("Failed to get quote for cert pubkey")?
                 .into_versioned(),
