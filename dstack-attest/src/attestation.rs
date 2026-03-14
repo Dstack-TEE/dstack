@@ -4,6 +4,11 @@
 
 //! Attestation functions
 
+/// Byte range of the REPORT_DATA field within a TDX quote.
+/// In Intel TDX ECDSA quote format, the TD Report body starts at offset 568
+/// and REPORT_DATA occupies bytes 568..632 (64 bytes).
+pub const TDX_QUOTE_REPORT_DATA_RANGE: std::ops::Range<usize> = 568..632;
+
 use std::{borrow::Cow, time::SystemTime};
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -274,8 +279,14 @@ impl VersionedAttestation {
         let VersionedAttestation::V0 { attestation } = self;
         attestation.report_data = report_data;
         if let Some(tdx_quote) = attestation.tdx_quote_mut() {
-            if tdx_quote.quote.len() >= 632 {
-                tdx_quote.quote[568..632].copy_from_slice(&report_data);
+            if tdx_quote.quote.len() >= TDX_QUOTE_REPORT_DATA_RANGE.end {
+                tdx_quote.quote[TDX_QUOTE_REPORT_DATA_RANGE].copy_from_slice(&report_data);
+            } else {
+                tracing::warn!(
+                    "TDX quote too short to patch report_data ({} < {})",
+                    tdx_quote.quote.len(),
+                    TDX_QUOTE_REPORT_DATA_RANGE.end
+                );
             }
         }
     }

@@ -26,6 +26,7 @@ serde_json.workspace = true
 sha2.workspace = true
 sha3.workspace = true
 tdx-attest.workspace = true
+tracing.workspace = true
 insta.workspace = true
 errify.workspace = true
 
