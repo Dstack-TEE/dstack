@@ -29,8 +29,7 @@ use or_panic::ResultOrPanic;
 use ra_rpc::{Attestation, CallContext, RpcCall};
 use ra_tls::{
     attestation::{
-        QuoteContentType, VersionedAttestation, DEFAULT_HASH_ALGORITHM,
-        TDX_QUOTE_REPORT_DATA_RANGE,
+        QuoteContentType, VersionedAttestation, DEFAULT_HASH_ALGORITHM, TDX_QUOTE_REPORT_DATA_RANGE,
     },
     cert::CertConfigV2,
     kdf::{derive_key, derive_p256_key_pair_from_bytes},
