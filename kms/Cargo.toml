@@ -47,6 +47,9 @@ tempfile.workspace = true
 serde-duration.workspace = true
 dstack-verifier = { workspace = true, default-features = false }
 dstack-mr.workspace = true
+# AMD SEV-SNP attestation verification (cert chain + report signature)
+sev = { workspace = true }
+base64.workspace = true
 
 [features]
 default = []

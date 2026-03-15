@@ -7,9 +7,9 @@ use std::{path::PathBuf, sync::Arc};
 use anyhow::{bail, Context, Result};
 use dstack_kms_rpc::{
     kms_server::{KmsRpc, KmsServer},
-    AppId, AppKeyResponse, ClearImageCacheRequest, GetAppKeyRequest, GetKmsKeyRequest,
-    GetMetaResponse, GetTempCaCertResponse, KmsKeyResponse, KmsKeys, PublicKeyResponse,
-    SignCertRequest, SignCertResponse,
+    AppId, AppKeyResponse, ClearImageCacheRequest, GetAppKeyAmdRequest, GetAppKeyRequest,
+    GetKmsKeyRequest, GetMetaResponse, GetTempCaCertResponse, KmsKeyResponse, KmsKeys,
+    PublicKeyResponse, SignCertRequest, SignCertResponse,
 };
 use dstack_verifier::{CvmVerifier, VerificationDetails};
 use fs_err as fs;
@@ -31,6 +31,7 @@ use crate::{
     crypto::{derive_k256_key, sign_message, sign_message_with_timestamp},
 };
 
+mod amd_attest;
 pub(crate) mod upgrade_authority;
 
 #[derive(Clone)]
@@ -426,6 +427,155 @@ impl KmsRpc for RpcHandler {
         self.remove_cache(&mr_cache_dir, &request.config_hash)
             .context("Failed to clear measurement cache")?;
         Ok(())
+    }
+
+    async fn get_app_key_amd(self, request: GetAppKeyAmdRequest) -> Result<AppKeyResponse> {
+        use amd_attest::{
+            compute_expected_measurement, validate_app_id, verify_amd_attestation, AmdAttestInput,
+            OvmfSectionParam,
+        };
+        use ra_tls::attestation::AttestationMode;
+
+        // 1. Decode hex app_id → bytes and validate.
+        let app_id = hex::decode(&request.app_id).context("app_id is not valid hex")?;
+        validate_app_id(&app_id).context("Invalid app_id")?;
+
+        // 2. Verify AMD cert chain + SNP report signature.
+        //    This proves the MEASUREMENT in the report is hardware-attested.
+        let verified = verify_amd_attestation(&AmdAttestInput {
+            report: &request.snp_report,
+            ask_pem: &request.ask_pem,
+            vcek_pem: &request.vcek_pem,
+        })
+        .context("AMD attestation verification failed")?;
+
+        // 3. Verify that compose_hash / rootfs_hash match the attested MEASUREMENT.
+        //    Without this check a malicious VM could send a genuine SNP report
+        //    but lie about compose_hash/rootfs_hash to get keys for a different app.
+        //
+        //    We recompute the expected MEASUREMENT from the image fingerprints
+        //    (kernel/initrd hashes + cmdline containing compose_hash + rootfs_hash)
+        //    and compare byte-for-byte with the hardware-attested value.
+        //
+        //    If [core.sev_snp] is absent the check is skipped (dev/non-AMD deployments).
+        if !request.kernel_hash.is_empty() && request.vcpus > 0 {
+            if let Some(cfg) = &self.state.config.sev_snp {
+                // Convert proto OvmfSection list to the internal param type.
+                let ovmf_sections: Vec<OvmfSectionParam> = request
+                    .ovmf_sections
+                    .iter()
+                    .map(|s| OvmfSectionParam {
+                        gpa: s.gpa,
+                        size: s.size,
+                        section_type: s.section_type,
+                    })
+                    .collect();
+
+                let expected = compute_expected_measurement(
+                    cfg,
+                    &request.ovmf_hash,
+                    request.sev_hashes_table_gpa,
+                    request.sev_es_reset_eip,
+                    &ovmf_sections,
+                    &request.kernel_hash,
+                    &request.initrd_hash,
+                    request.vcpus,
+                    &request.vcpu_type,
+                    &request.compose_hash,
+                    &request.rootfs_hash,
+                    if request.docker_files_hash.is_empty() {
+                        None
+                    } else {
+                        Some(&request.docker_files_hash)
+                    },
+                )
+                .context("Failed to recompute expected SNP MEASUREMENT")?;
+                if expected != verified.measurement {
+                    bail!(
+                        "MEASUREMENT mismatch: compose_hash/rootfs_hash do not match the \
+                         hardware-attested measurement (expected={}, got={})",
+                        hex::encode(expected),
+                        hex::encode(verified.measurement),
+                    );
+                }
+            } else {
+                tracing::warn!(
+                    "AMD measurement verification skipped: [core.sev_snp] not configured"
+                );
+            }
+        }
+
+        // 3. Build BootInfo.
+        //    mr_aggregated = the hardware-attested SNP MEASUREMENT (48 bytes).
+        //    It covers OVMF + kernel + initrd + cmdline (which includes
+        //    compose_hash and rootfs_hash), so the auth webhook can verify
+        //    whether this measurement is in its allowlist.
+        //
+        //    instance_id = first 32 bytes of report_data.
+        //    The VM sets report_data = SHA512(pubkey || vm_uid)[0:64], so the
+        //    first 32 bytes are unique per VM boot, analogous to TDX instance_id.
+        let instance_id = verified.report_data[..32].to_vec();
+        let device_id = sha2::Sha256::digest(&verified.chip_id).to_vec();
+
+        // Hex-decode hash fields for BootInfo (consistent with how TDX stores them).
+        let os_image_hash =
+            hex::decode(&request.rootfs_hash).context("rootfs_hash is not valid hex")?;
+        let compose_hash =
+            hex::decode(&request.compose_hash).context("compose_hash is not valid hex")?;
+
+        let boot_info = BootInfo {
+            attestation_mode: AttestationMode::DstackSevSnp,
+            mr_aggregated: verified.measurement.to_vec(),
+            os_image_hash,
+            mr_system: vec![0u8; 32],
+            app_id: app_id.clone(),
+            compose_hash,
+            instance_id,
+            device_id,
+            key_provider_info: vec![],
+            tcb_status: String::new(),
+            advisory_ids: vec![],
+        };
+
+        // 4. Ask the auth API whether this app is allowed to boot.
+        let response = self
+            .state
+            .config
+            .auth_api
+            .is_app_allowed(&boot_info, false)
+            .await
+            .context("Auth API request failed")?;
+        if !response.is_allowed {
+            bail!("Boot denied: {}", response.reason);
+        }
+
+        // 5. Derive keys deterministically from app_id (same derivation as TDX).
+        let instance_id_bytes = &boot_info.instance_id;
+
+        let context_data = vec![&app_id[..], &instance_id_bytes[..], b"app-disk-crypt-key"];
+        let app_disk_key = kdf::derive_dh_secret(&self.state.root_ca.key, &context_data)
+            .context("Failed to derive app disk key")?;
+
+        let env_crypt_key = {
+            let secret =
+                kdf::derive_dh_secret(&self.state.root_ca.key, &[&app_id[..], b"env-encrypt-key"])
+                    .context("Failed to derive env encrypt key")?;
+            x25519_dalek::StaticSecret::from(secret).to_bytes()
+        };
+
+        let (k256_app_key, k256_signature) =
+            derive_k256_key(&self.state.k256_key, &app_id).context("Failed to derive k256 key")?;
+
+        Ok(AppKeyResponse {
+            ca_cert: self.state.root_ca.pem_cert.clone(),
+            disk_crypt_key: app_disk_key.to_vec(),
+            env_crypt_key: env_crypt_key.to_vec(),
+            k256_key: k256_app_key.to_bytes().to_vec(),
+            k256_signature,
+            tproxy_app_id: response.gateway_app_id.clone(),
+            gateway_app_id: response.gateway_app_id,
+            os_image_hash: boot_info.os_image_hash,
+        })
     }
 }
 

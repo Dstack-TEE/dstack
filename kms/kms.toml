@@ -47,3 +47,20 @@ enabled = true
 auto_bootstrap_domain = ""
 address = "0.0.0.0"
 port = 8000
+
+# AMD SEV-SNP measurement verification (optional).
+# When configured, the KMS recomputes the expected MEASUREMENT from the image
+# fingerprints in the request and rejects requests where they do not match.
+# Omit this section to skip measurement recomputation (dev / non-AMD deployments).
+#
+# ovmf_path is OPTIONAL when the VM sends ovmf_sections in the request (i.e.
+# the launcher ran extract_ovmf_info.py before starting the VM).  In that case
+# the KMS does not need the OVMF file on disk at all.
+# ovmf_path is needed only as a fallback for older VMs that do not send sections.
+#
+# [core.sev_snp]
+# # Optional fallback: path to the AMD SEV-SNP OVMF binary.
+# # Not needed when the VM provides ovmf_sections in the request.
+# ovmf_path = "/usr/share/dstack/ovmf-amd-sev.fd"
+# # SNP guest features bitmask (0x1 = kernel hashes enabled).
+# guest_features = 1

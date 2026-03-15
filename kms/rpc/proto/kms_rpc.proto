@@ -95,6 +95,8 @@ message SignCertResponse {
 service KMS {
   // Request the app key given the app id and tdx quote
   rpc GetAppKey(GetAppKeyRequest) returns (AppKeyResponse);
+  // Request the app key using AMD SEV-SNP attestation
+  rpc GetAppKeyAmd(GetAppKeyAmdRequest) returns (AppKeyResponse);
   // KMS key handover
   rpc GetKmsKey(GetKmsKeyRequest) returns (KmsKeyResponse);
   // Request the app environment encryption public key given the app id
@@ -113,6 +115,75 @@ message ClearImageCacheRequest {
   string token = 1;
   string image_hash = 2;
   string config_hash = 3;
+}
+
+// One OVMF SEV metadata section descriptor.
+// Extracted from the OVMF binary by extract_ovmf_info.py before VM launch
+// and sent inside the VM so the KMS does not need the OVMF file.
+// section_type values: 1=SNP_SEC_MEMORY, 2=SNP_SECRETS, 3=CPUID,
+//                      4=SVSM_CAA, 0x10=SNP_KERNEL_HASHES.
+message OvmfSection {
+  uint32 gpa          = 1;
+  uint32 size         = 2;
+  uint32 section_type = 3;
+}
+
+// Request message for AMD SEV-SNP attestation-based app key retrieval.
+message GetAppKeyAmdRequest {
+  // Raw 1184-byte SNP attestation report binary.
+  bytes snp_report = 1;
+  // ASK (AMD SEV Key) certificate in PEM format.
+  bytes ask_pem = 2;
+  // VCEK (Versioned Chip Endorsement Key) certificate in PEM format.
+  bytes vcek_pem = 3;
+
+  // Application identifier (hex-encoded, e.g. 20-byte Ethereum address).
+  // Determines which derived keys are returned.
+  string app_id = 4;
+
+  // SHA-256 of docker-compose.yaml as a hex string (64 chars).
+  // This is embedded in the kernel cmdline, so it is covered by MEASUREMENT.
+  string compose_hash = 5;
+
+  // SHA-256 of the rootfs ISO image as a hex string (64 chars).
+  // Also embedded in the kernel cmdline and covered by MEASUREMENT.
+  string rootfs_hash = 6;
+
+  // Image fingerprints — needed by KMS to recompute and verify MEASUREMENT.
+  // If these fields are present the KMS MUST verify that
+  //   sev-snp-measure(ovmf_hash, kernel_hash, initrd_hash, cmdline, vcpus, vcpu_type)
+  //   == report.MEASUREMENT.
+
+  // GCTX-based hash of the OVMF binary (hex, 96 chars = 48 bytes).
+  // Compute with: sev-snp-measure --mode snp:ovmf-hash --ovmf ovmf.fd
+  string ovmf_hash = 7;
+
+  // SHA-256 of the kernel binary (bzImage) as a hex string (64 chars).
+  string kernel_hash = 8;
+
+  // SHA-256 of the initrd binary (initramfs.cpio.gz) as a hex string.
+  string initrd_hash = 9;
+
+  // Number of vCPUs the VM was launched with (affects VMSA and MEASUREMENT).
+  uint32 vcpus = 10;
+
+  // vCPU type string matching sev-snp-measure --vcpu-type (e.g. "EPYC-v4").
+  string vcpu_type = 11;
+
+  // Optional: SHA-256 of docker-files.tar (hex) for docker_additional_files_hash cmdline param.
+  string docker_files_hash = 12;
+
+  // OVMF-derived metadata, extracted by extract_ovmf_info.py on the launcher
+  // host before VM launch and written into the VM's guest_config virtfs mount.
+  // When ovmf_sections is non-empty the KMS does NOT need an OVMF file on disk.
+  // Any lie about these values causes MEASUREMENT mismatch → request rejected.
+
+  // GPA of the SEV hashes table within the SNP_KERNEL_HASHES page.
+  uint64 sev_hashes_table_gpa = 13;
+  // AP reset EIP (entry point for all APs, from SEV_ES_RESET_BLOCK).
+  uint32 sev_es_reset_eip     = 14;
+  // Ordered list of OVMF SEV metadata sections (determines GCTX page sequence).
+  repeated OvmfSection ovmf_sections = 15;
 }
 
 message BootstrapRequest {
