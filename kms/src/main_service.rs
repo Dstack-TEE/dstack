@@ -138,7 +138,8 @@ impl RpcHandler {
 
     fn ensure_admin(&self, token: &str) -> Result<()> {
         let token_hash = sha2::Sha256::new_with_prefix(token).finalize();
-        if token_hash.as_slice() != self.state.config.admin_token_hash.as_slice() {
+        use subtle::ConstantTimeEq;
+        if !bool::from(token_hash.as_slice().ct_eq(self.state.config.admin_token_hash.as_slice())) {
             bail!("Invalid token");
         }
         Ok(())
