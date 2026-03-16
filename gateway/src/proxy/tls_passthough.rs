@@ -58,7 +58,6 @@ async fn resolve_app_address(prefix: &str, sni: &str, compat: bool) -> Result<Ap
             };
             return AppAddress::parse(data).context("failed to parse app address");
         }
-        anyhow::bail!("failed to resolve legacy app address");
     } else {
         let lookup = resolver
             .txt_lookup(txt_domain)
@@ -69,8 +68,25 @@ async fn resolve_app_address(prefix: &str, sni: &str, compat: bool) -> Result<Ap
             .txt_data()
             .first()
             .context("no data in txt record")?;
-        AppAddress::parse(data).context("failed to parse app address")
+        return AppAddress::parse(data).context("failed to parse app address");
     }
+
+    // wildcard fallback: try {prefix}-wildcard.{parent_domain}
+    if let Some((_, parent)) = sni.split_once('.') {
+        let wildcard_domain = format!("{prefix}-wildcard.{parent}");
+        let lookup = resolver
+            .txt_lookup(wildcard_domain)
+            .await
+            .context("failed to lookup wildcard app address")?;
+        let txt_record = lookup.iter().next().context("no txt record found")?;
+        let data = txt_record
+            .txt_data()
+            .first()
+            .context("no data in txt record")?;
+        return AppAddress::parse(data).context("failed to parse app address");
+    }
+
+    anyhow::bail!("failed to resolve app address for {sni}");
 }
 
 pub(crate) async fn proxy_with_sni(
