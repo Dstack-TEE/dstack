@@ -58,17 +58,12 @@ async fn resolve_app_address(prefix: &str, sni: &str, compat: bool) -> Result<Ap
             };
             return AppAddress::parse(data).context("failed to parse app address");
         }
-    } else {
-        let lookup = resolver
-            .txt_lookup(txt_domain)
-            .await
-            .context("failed to lookup app address")?;
-        let txt_record = lookup.iter().next().context("no txt record found")?;
-        let data = txt_record
-            .txt_data()
-            .first()
-            .context("no data in txt record")?;
-        return AppAddress::parse(data).context("failed to parse app address");
+    } else if let Ok(lookup) = resolver.txt_lookup(txt_domain).await {
+        if let Some(txt_record) = lookup.iter().next() {
+            if let Some(data) = txt_record.txt_data().first() {
+                return AppAddress::parse(data).context("failed to parse app address");
+            }
+        }
     }
 
     // wildcard fallback: try {prefix}-wildcard.{parent_domain}
