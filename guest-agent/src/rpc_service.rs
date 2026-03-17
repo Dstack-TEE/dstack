@@ -28,7 +28,9 @@ use k256::ecdsa::SigningKey;
 use or_panic::ResultOrPanic;
 use ra_rpc::{Attestation, CallContext, RpcCall};
 use ra_tls::{
-    attestation::{QuoteContentType, VersionedAttestation, DEFAULT_HASH_ALGORITHM},
+    attestation::{
+        QuoteContentType, VersionedAttestation, DEFAULT_HASH_ALGORITHM, TDX_QUOTE_REPORT_DATA_RANGE,
+    },
     cert::CertConfigV2,
     kdf::{derive_key, derive_p256_key_pair_from_bytes},
 };
@@ -486,7 +488,7 @@ fn simulate_quote(
         return Err(anyhow::anyhow!("Quote not found"));
     };
 
-    quote.quote[568..632].copy_from_slice(&report_data);
+    quote.quote[TDX_QUOTE_REPORT_DATA_RANGE].copy_from_slice(&report_data);
     Ok(GetQuoteResponse {
         quote: quote.quote.to_vec(),
         event_log: serde_json::to_string(&quote.event_log)
