@@ -242,6 +242,11 @@ impl App {
                     fs::remove_file(path)?;
                 }
             }
+            // Append current serial.log to serial.history.log before QEMU truncates it.
+            rotate_serial_log(&work_dir, self.config.cvm.serial_history_max_bytes);
+            // Add boot separator to stdout/stderr (they are opened in append mode).
+            append_boot_separator(&work_dir.stdout_file());
+            append_boot_separator(&work_dir.stderr_file());
 
             let devices = self.try_allocate_gpus(&vm_config.manifest)?;
             let processes = vm_config.config_qemu(&work_dir, &self.config.cvm, &devices)?;
@@ -1048,6 +1053,64 @@ impl App {
             self.start_vm(&id).await?;
         }
         Ok(())
+    }
+}
+
+/// Append a boot separator line with timestamp to an append-mode log file.
+fn append_boot_separator(path: &std::path::Path) {
+    use std::io::Write;
+    if !path.exists() {
+        return;
+    }
+    let Ok(mut file) = std::fs::OpenOptions::new().append(true).open(path) else {
+        return;
+    };
+    let timestamp = humantime::format_rfc3339_seconds(std::time::SystemTime::now());
+    let _ = writeln!(file, "\n===== boot @ {timestamp} =====\n");
+}
+
+/// Append current serial.log into serial.history.log with a boot separator,
+/// then truncate history if it exceeds `max_bytes`.
+fn rotate_serial_log(work_dir: &VmWorkDir, max_bytes: u64) {
+    use std::io::Write;
+
+    let serial = work_dir.serial_file();
+    if !serial.exists() {
+        return;
+    }
+    let Ok(content) = fs::read(&serial) else {
+        return;
+    };
+    if content.is_empty() {
+        return;
+    }
+    let history = work_dir.serial_history_file();
+    let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&history)
+    else {
+        return;
+    };
+    let timestamp = humantime::format_rfc3339_seconds(std::time::SystemTime::now());
+    let _ = writeln!(file, "\n===== boot @ {timestamp} =====\n");
+    let _ = file.write_all(&content);
+    drop(file);
+
+    // Truncate from the front if history exceeds max_bytes.
+    if let Ok(meta) = fs::metadata(&history) {
+        if meta.len() > max_bytes {
+            if let Ok(data) = fs::read(&history) {
+                let skip = data.len() - max_bytes as usize;
+                // Find the next newline after skip point to avoid cutting mid-line.
+                let start = data[skip..]
+                    .iter()
+                    .position(|&b| b == b'\n')
+                    .map(|p| skip + p + 1)
+                    .unwrap_or(skip);
+                let _ = fs::write(&history, &data[start..]);
+            }
+        }
     }
 }
 

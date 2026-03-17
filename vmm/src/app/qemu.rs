@@ -1042,6 +1042,10 @@ impl VmWorkDir {
         self.workdir.join("serial.log")
     }
 
+    pub fn serial_history_file(&self) -> PathBuf {
+        self.workdir.join("serial.history.log")
+    }
+
     pub fn serial_pty(&self) -> PathBuf {
         self.workdir.join("serial.pty")
     }

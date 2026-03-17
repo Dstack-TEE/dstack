@@ -203,6 +203,13 @@ pub struct CvmConfig {
     /// SMBIOS product information for cloud environment detection
     #[serde(default)]
     pub product: ProductConfig,
+
+    /// Max size in bytes for serial.history.log (default 4MB).
+    /// Previous boot serial logs are appended here before each restart.
+    /// Accepts human-readable sizes like "4MB", "512KB".
+    #[serde(default = "default_serial_history_max_bytes")]
+    #[serde(with = "size_parser::human_size")]
+    pub serial_history_max_bytes: u64,
 }
 
 /// SMBIOS product information configuration.
@@ -450,6 +457,10 @@ pub struct KeyProviderConfig {
     pub enabled: bool,
     pub address: IpAddr,
     pub port: u16,
+}
+
+fn default_serial_history_max_bytes() -> u64 {
+    4 * 1024 * 1024 // 4MB
 }
 
 const CLIENT_CONF_PATH: &str = "/etc/dstack/client.conf";
