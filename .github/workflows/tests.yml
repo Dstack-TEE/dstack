@@ -4,6 +4,9 @@
 
 name: Tests
 
+permissions:
+  contents: read
+
 on:
   push:
     branches: [ master, next, dev-* ]
