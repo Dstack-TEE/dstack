@@ -30,7 +30,7 @@ jobs:
           platforms: linux/amd64
           provenance: false
           build-args: |
-            DSTACK_REV=${{ github.sha }}
+            DSTACK_REV=${{ github.event.pull_request.head.sha || github.sha }}
             DSTACK_SRC_URL=${{ github.server_url }}/${{ github.repository }}
 
       - name: Build KMS contracts
@@ -55,7 +55,7 @@ jobs:
           platforms: linux/amd64
           provenance: false
           build-args: |
-            DSTACK_REV=${{ github.sha }}
+            DSTACK_REV=${{ github.event.pull_request.head.sha || github.sha }}
 
   verifier:
     runs-on: ubuntu-latest
@@ -74,4 +74,4 @@ jobs:
           platforms: linux/amd64
           provenance: false
           build-args: |
-            DSTACK_REV=${{ github.sha }}
+            DSTACK_REV=${{ github.event.pull_request.head.sha || github.sha }}
