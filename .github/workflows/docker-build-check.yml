@@ -1,0 +1,77 @@
+# SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+name: Docker Build Check
+
+on:
+  push:
+    branches: [ master, next, dev-* ]
+  pull_request:
+    branches: [ master, next, dev-* ]
+
+jobs:
+  kms:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Write GIT_REV
+        run: git rev-parse HEAD > kms/dstack-app/builder/.GIT_REV
+
+      - name: Build KMS Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: kms/dstack-app/builder
+          push: false
+          platforms: linux/amd64
+          provenance: false
+          build-args: |
+            DSTACK_REV=${{ github.sha }}
+            DSTACK_SRC_URL=${{ github.server_url }}/${{ github.repository }}
+
+      - name: Build KMS contracts
+        run: |
+          cd kms/auth-eth
+          npm ci
+          npx hardhat compile
+
+  gateway:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Gateway Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: gateway/dstack-app/builder
+          push: false
+          platforms: linux/amd64
+          provenance: false
+          build-args: |
+            DSTACK_REV=${{ github.sha }}
+
+  verifier:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Verifier Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: verifier
+          file: verifier/builder/Dockerfile
+          push: false
+          platforms: linux/amd64
+          provenance: false
+          build-args: |
+            DSTACK_REV=${{ github.sha }}
