@@ -7,8 +7,8 @@
 set -e
 PKG_LIST=$1
 
-echo 'deb [check-valid-until=no] https://snapshot.debian.org/archive/debian/20250626T204007Z bookworm main' > /etc/apt/sources.list
-echo 'deb [check-valid-until=no] https://snapshot.debian.org/archive/debian-security/20250626T204007Z bookworm-security main' >> /etc/apt/sources.list
+echo 'deb [check-valid-until=no] https://snapshot.debian.org/archive/debian/20260317T000000Z bookworm main' > /etc/apt/sources.list
+echo 'deb [check-valid-until=no] https://snapshot.debian.org/archive/debian-security/20260317T000000Z bookworm-security main' >> /etc/apt/sources.list
 echo 'Acquire::Check-Valid-Until "false";' > /etc/apt/apt.conf.d/10no-check-valid-until
 
 mkdir -p /etc/apt/preferences.d

@@ -9,7 +9,7 @@ ARG DSTACK_SRC_URL=https://github.com/Dstack-TEE/dstack.git
 WORKDIR /build
 RUN ./shared/pin-packages.sh ./shared/builder-pinned-packages.txt
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends --allow-downgrades \
+    apt-get install -y --no-install-recommends \
     git \
     build-essential \
     musl-tools \
