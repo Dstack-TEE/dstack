@@ -515,7 +515,10 @@ impl KmsRpc for RpcHandler {
         //    The auth-eth contract represents instanceId as `address` (20 bytes),
         //    so AMD path must provide a 20-byte value here.
         let instance_id = verified.report_data[..20].to_vec();
-        let device_id = sha2::Sha256::digest(&verified.chip_id).to_vec();
+        // chip_id is 64 bytes; hash to bytes32 for contract compatibility.
+        let device_id = sha2::Sha256::digest(verified.chip_id).to_vec();
+        // measurement is 48 bytes (SNP GCTX); hash to bytes32 for contract compatibility.
+        let mr_aggregated = sha2::Sha256::digest(verified.measurement).to_vec();
 
         // Hex-decode hash fields for BootInfo (consistent with how TDX stores them).
         let os_image_hash =
@@ -525,7 +528,7 @@ impl KmsRpc for RpcHandler {
 
         let boot_info = BootInfo {
             attestation_mode: AttestationMode::DstackSevSnp,
-            mr_aggregated: verified.measurement.to_vec(),
+            mr_aggregated,
             os_image_hash,
             mr_system: vec![0u8; 32],
             app_id: app_id.clone(),
