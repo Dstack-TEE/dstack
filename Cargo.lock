@@ -1311,7 +1311,7 @@ dependencies = [
 
 [[package]]
 name = "cc-eventlog"
-version = "0.5.7"
+version = "0.5.8"
 dependencies = [
  "anyhow",
  "digest 0.10.7",
@@ -1328,7 +1328,7 @@ dependencies = [
 
 [[package]]
 name = "cert-client"
-version = "0.5.7"
+version = "0.5.8"
 dependencies = [
  "anyhow",
  "dstack-kms-rpc",
@@ -1340,7 +1340,7 @@ dependencies = [
 
 [[package]]
 name = "certbot"
-version = "0.5.7"
+version = "0.5.8"
 dependencies = [
  "anyhow",
  "bon",
@@ -1366,7 +1366,7 @@ dependencies = [
 
 [[package]]
 name = "certbot-cli"
-version = "0.5.7"
+version = "0.5.8"
 dependencies = [
  "anyhow",
  "certbot",
@@ -1783,7 +1783,7 @@ dependencies = [
 
 [[package]]
 name = "ct_monitor"
-version = "0.5.7"
+version = "0.5.8"
 dependencies = [
  "anyhow",
  "clap",
@@ -2239,7 +2239,7 @@ dependencies = [
 
 [[package]]
 name = "dstack-attest"
-version = "0.5.7"
+version = "0.5.8"
 dependencies = [
  "anyhow",
  "cc-eventlog",
@@ -2266,7 +2266,7 @@ dependencies = [
 
 [[package]]
 name = "dstack-gateway"
-version = "0.5.7"
+version = "0.5.8"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -2326,7 +2326,7 @@ dependencies = [
 
 [[package]]
 name = "dstack-gateway-rpc"
-version = "0.5.7"
+version = "0.5.8"
 dependencies = [
  "anyhow",
  "parity-scale-codec",
@@ -2339,7 +2339,7 @@ dependencies = [
 
 [[package]]
 name = "dstack-guest-agent"
-version = "0.5.7"
+version = "0.5.8"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -2389,7 +2389,7 @@ dependencies = [
 
 [[package]]
 name = "dstack-guest-agent-rpc"
-version = "0.5.7"
+version = "0.5.8"
 dependencies = [
  "anyhow",
  "parity-scale-codec",
@@ -2402,7 +2402,7 @@ dependencies = [
 
 [[package]]
 name = "dstack-kms"
-version = "0.5.7"
+version = "0.5.8"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2444,7 +2444,7 @@ dependencies = [
 
 [[package]]
 name = "dstack-kms-rpc"
-version = "0.5.7"
+version = "0.5.8"
 dependencies = [
  "anyhow",
  "fs-err",
@@ -2458,7 +2458,7 @@ dependencies = [
 
 [[package]]
 name = "dstack-mr"
-version = "0.5.7"
+version = "0.5.8"
 dependencies = [
  "anyhow",
  "bon",
@@ -2496,7 +2496,7 @@ dependencies = [
 
 [[package]]
 name = "dstack-port-forward"
-version = "0.5.7"
+version = "0.5.8"
 dependencies = [
  "anyhow",
  "nix 0.29.0",
@@ -2543,7 +2543,7 @@ dependencies = [
 
 [[package]]
 name = "dstack-types"
-version = "0.5.7"
+version = "0.5.8"
 dependencies = [
  "parity-scale-codec",
  "serde",
@@ -2554,7 +2554,7 @@ dependencies = [
 
 [[package]]
 name = "dstack-util"
-version = "0.5.7"
+version = "0.5.8"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -2606,7 +2606,7 @@ dependencies = [
 
 [[package]]
 name = "dstack-verifier"
-version = "0.5.7"
+version = "0.5.8"
 dependencies = [
  "anyhow",
  "cc-eventlog",
@@ -2634,7 +2634,7 @@ dependencies = [
 
 [[package]]
 name = "dstack-vmm"
-version = "0.5.7"
+version = "0.5.8"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -2685,7 +2685,7 @@ dependencies = [
 
 [[package]]
 name = "dstack-vmm-rpc"
-version = "0.5.7"
+version = "0.5.8"
 dependencies = [
  "anyhow",
  "parity-scale-codec",
@@ -3355,7 +3355,7 @@ dependencies = [
 
 [[package]]
 name = "guest-api"
-version = "0.5.7"
+version = "0.5.8"
 dependencies = [
  "anyhow",
  "http-client",
@@ -3626,7 +3626,7 @@ dependencies = [
 
 [[package]]
 name = "host-api"
-version = "0.5.7"
+version = "0.5.8"
 dependencies = [
  "anyhow",
  "http-client",
@@ -3672,7 +3672,7 @@ dependencies = [
 
 [[package]]
 name = "http-client"
-version = "0.5.7"
+version = "0.5.8"
 dependencies = [
  "anyhow",
  "http-body-util",
@@ -4096,7 +4096,7 @@ dependencies = [
 
 [[package]]
 name = "iohash"
-version = "0.5.7"
+version = "0.5.8"
 dependencies = [
  "anyhow",
  "blake2",
@@ -4264,7 +4264,7 @@ dependencies = [
 
 [[package]]
 name = "key-provider-client"
-version = "0.5.7"
+version = "0.5.8"
 dependencies = [
  "anyhow",
  "serde",
@@ -4368,7 +4368,7 @@ checksum = "6373607a59f0be73a39b6fe456b8192fcc3585f602af20751600e974dd455e77"
 
 [[package]]
 name = "load_config"
-version = "0.5.7"
+version = "0.5.8"
 dependencies = [
  "figment",
  "rocket",
@@ -4423,7 +4423,7 @@ checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
 
 [[package]]
 name = "lspci"
-version = "0.5.7"
+version = "0.5.8"
 dependencies = [
  "anyhow",
  "insta",
@@ -5732,7 +5732,7 @@ checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
 name = "ra-rpc"
-version = "0.5.7"
+version = "0.5.8"
 dependencies = [
  "anyhow",
  "bon",
@@ -5751,7 +5751,7 @@ dependencies = [
 
 [[package]]
 name = "ra-tls"
-version = "0.5.7"
+version = "0.5.8"
 dependencies = [
  "anyhow",
  "bon",
@@ -6246,7 +6246,7 @@ dependencies = [
 
 [[package]]
 name = "rocket-vsock-listener"
-version = "0.5.7"
+version = "0.5.8"
 dependencies = [
  "anyhow",
  "derive_more 2.1.1",
@@ -6886,7 +6886,7 @@ dependencies = [
 
 [[package]]
 name = "serde-duration"
-version = "0.5.7"
+version = "0.5.8"
 dependencies = [
  "serde",
 ]
@@ -7194,7 +7194,7 @@ checksum = "b2aa850e253778c88a04c3d7323b043aeda9d3e30d5971937c1855769763678e"
 
 [[package]]
 name = "size-parser"
-version = "0.5.7"
+version = "0.5.8"
 dependencies = [
  "anyhow",
  "serde",
@@ -7339,7 +7339,7 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
 name = "supervisor"
-version = "0.5.7"
+version = "0.5.8"
 dependencies = [
  "anyhow",
  "bon",
@@ -7362,7 +7362,7 @@ dependencies = [
 
 [[package]]
 name = "supervisor-client"
-version = "0.5.7"
+version = "0.5.8"
 dependencies = [
  "anyhow",
  "clap",
@@ -7506,7 +7506,7 @@ dependencies = [
 
 [[package]]
 name = "tdx-attest"
-version = "0.5.7"
+version = "0.5.8"
 dependencies = [
  "anyhow",
  "cc-eventlog",
