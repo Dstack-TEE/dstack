@@ -511,10 +511,10 @@ impl KmsRpc for RpcHandler {
         //    compose_hash and rootfs_hash), so the auth webhook can verify
         //    whether this measurement is in its allowlist.
         //
-        //    instance_id = first 32 bytes of report_data.
-        //    The VM sets report_data = SHA512(pubkey || vm_uid)[0:64], so the
-        //    first 32 bytes are unique per VM boot, analogous to TDX instance_id.
-        let instance_id = verified.report_data[..32].to_vec();
+        //    instance_id = first 20 bytes of report_data.
+        //    The auth-eth contract represents instanceId as `address` (20 bytes),
+        //    so AMD path must provide a 20-byte value here.
+        let instance_id = verified.report_data[..20].to_vec();
         let device_id = sha2::Sha256::digest(&verified.chip_id).to_vec();
 
         // Hex-decode hash fields for BootInfo (consistent with how TDX stores them).
