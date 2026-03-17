@@ -85,6 +85,10 @@ declare module "hardhat/types/runtime" {
       name: "IAppAuthBasicManagement",
       signerOrOptions?: ethers.Signer | FactoryOptions
     ): Promise<Contracts.IAppAuthBasicManagement__factory>;
+    getContractFactory(
+      name: "IAppTcbPolicy",
+      signerOrOptions?: ethers.Signer | FactoryOptions
+    ): Promise<Contracts.IAppTcbPolicy__factory>;
 
     getContractAt(
       name: "OwnableUpgradeable",
@@ -176,6 +180,11 @@ declare module "hardhat/types/runtime" {
       address: string | ethers.Addressable,
       signer?: ethers.Signer
     ): Promise<Contracts.IAppAuthBasicManagement>;
+    getContractAt(
+      name: "IAppTcbPolicy",
+      address: string | ethers.Addressable,
+      signer?: ethers.Signer
+    ): Promise<Contracts.IAppTcbPolicy>;
 
     deployContract(
       name: "OwnableUpgradeable",
@@ -249,6 +258,10 @@ declare module "hardhat/types/runtime" {
       name: "IAppAuthBasicManagement",
       signerOrOptions?: ethers.Signer | DeployContractOptions
     ): Promise<Contracts.IAppAuthBasicManagement>;
+    deployContract(
+      name: "IAppTcbPolicy",
+      signerOrOptions?: ethers.Signer | DeployContractOptions
+    ): Promise<Contracts.IAppTcbPolicy>;
 
     deployContract(
       name: "OwnableUpgradeable",
@@ -340,6 +353,11 @@ declare module "hardhat/types/runtime" {
       args: any[],
       signerOrOptions?: ethers.Signer | DeployContractOptions
     ): Promise<Contracts.IAppAuthBasicManagement>;
+    deployContract(
+      name: "IAppTcbPolicy",
+      args: any[],
+      signerOrOptions?: ethers.Signer | DeployContractOptions
+    ): Promise<Contracts.IAppTcbPolicy>;
 
     // default types
     getContractFactory(

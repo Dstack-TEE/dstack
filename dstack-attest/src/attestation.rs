@@ -15,7 +15,8 @@ use anyhow::{anyhow, bail, Context, Result};
 use cc_eventlog::{RuntimeEvent, TdxEvent};
 use dcap_qvl::{
     quote::{EnclaveReport, Quote, Report, TDReport10, TDReport15},
-    verify::VerifiedReport as TdxVerifiedReport,
+    verify::{QuoteVerificationResult, VerifiedReport as TdxVerifiedReport},
+    Policy, SimplePolicy, TcbStatus,
 };
 #[cfg(feature = "quote")]
 use dstack_types::SysConfig;
@@ -200,20 +201,36 @@ impl QuoteContentType<'_> {
 }
 
 #[allow(clippy::large_enum_variant)]
-/// Represents a verified attestation
+/// Represents a verified attestation report.
+///
+/// For TDX, holds the full [`QuoteVerificationResult`] so that callers
+/// can apply additional (stricter) policies via [`QuoteVerificationResult::validate`]
+/// before converting to a [`VerifiedReport`](TdxVerifiedReport).
 #[derive(Clone)]
 pub enum DstackVerifiedReport {
-    DstackTdx(TdxVerifiedReport),
+    DstackTdx(QuoteVerificationResult),
     DstackGcpTdx,
     DstackNitroEnclave,
 }
 
 impl DstackVerifiedReport {
-    pub fn tdx_report(&self) -> Option<&TdxVerifiedReport> {
+    /// Get the TDX [`QuoteVerificationResult`] for further policy validation.
+    pub fn tdx_qvr(&self) -> Option<&QuoteVerificationResult> {
         match self {
-            DstackVerifiedReport::DstackTdx(report) => Some(report),
+            DstackVerifiedReport::DstackTdx(qvr) => Some(qvr),
             DstackVerifiedReport::DstackGcpTdx => None,
             DstackVerifiedReport::DstackNitroEnclave => None,
+        }
+    }
+
+    /// Consume self and apply a policy to the TDX quote, returning a [`TdxVerifiedReport`].
+    ///
+    /// Returns `None` for non-TDX reports.
+    pub fn validate_tdx(self, policy: &dyn Policy) -> Result<Option<TdxVerifiedReport>> {
+        match self {
+            DstackVerifiedReport::DstackTdx(qvr) => Ok(Some(qvr.validate(policy)?)),
+            DstackVerifiedReport::DstackGcpTdx => Ok(None),
+            DstackVerifiedReport::DstackNitroEnclave => Ok(None),
         }
     }
 }
@@ -399,7 +416,7 @@ impl GetDeviceId for () {
 impl GetDeviceId for DstackVerifiedReport {
     fn get_devide_id(&self) -> Vec<u8> {
         match self {
-            DstackVerifiedReport::DstackTdx(tdx_report) => tdx_report.ppid.to_vec(),
+            DstackVerifiedReport::DstackTdx(qvr) => qvr.ppid().to_vec(),
             DstackVerifiedReport::DstackGcpTdx => Vec::new(),
             DstackVerifiedReport::DstackNitroEnclave => Vec::new(),
         }
@@ -662,12 +679,12 @@ impl Attestation {
     pub async fn verify_with_time(
         self,
         pccs_url: Option<&str>,
-        _now: Option<SystemTime>,
+        now: Option<SystemTime>,
     ) -> Result<VerifiedAttestation> {
         let report = match &self.quote {
             AttestationQuote::DstackTdx(q) => {
-                let report = self.verify_tdx(pccs_url, &q.quote).await?;
-                DstackVerifiedReport::DstackTdx(report)
+                let qvr = self.verify_tdx(pccs_url, &q.quote, now).await?;
+                DstackVerifiedReport::DstackTdx(qvr)
             }
             AttestationQuote::DstackGcpTdx | AttestationQuote::DstackNitroEnclave => {
                 bail!("Unsupported attestation mode: {:?}", self.quote.mode());
@@ -706,7 +723,12 @@ impl Attestation {
         self.verify_with_time(pccs_url, None).await
     }
 
-    async fn verify_tdx(&self, pccs_url: Option<&str>, quote: &[u8]) -> Result<TdxVerifiedReport> {
+    async fn verify_tdx(
+        &self,
+        pccs_url: Option<&str>,
+        quote: &[u8],
+        now: Option<SystemTime>,
+    ) -> Result<QuoteVerificationResult> {
         let mut pccs_url = Cow::Borrowed(pccs_url.unwrap_or_default());
         if pccs_url.is_empty() {
             // try to read from PCCS_URL env var
@@ -715,13 +737,27 @@ impl Attestation {
                 Err(_) => Cow::Borrowed(""),
             };
         }
-        let tdx_report =
-            dcap_qvl::collateral::get_collateral_and_verify(quote, Some(pccs_url.as_ref()))
-                .await
-                .context("Failed to get collateral")?;
-        validate_tcb(&tdx_report)?;
+        let now_secs = now
+            .unwrap_or_else(SystemTime::now)
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .context("system time before epoch")?
+            .as_secs();
+        let qvr = dcap_qvl::collateral::get_collateral_and_verify(quote, Some(pccs_url.as_ref()))
+            .await
+            .context("Failed to get collateral")?;
 
-        let td_report = tdx_report.report.as_td10().context("no td report")?;
+        // Baseline policy validation (business layer can apply stricter policies on the returned QVR)
+        let supplemental = qvr
+            .supplemental()
+            .context("Failed to build supplemental data")?;
+        default_policy(now_secs)
+            .validate(&supplemental)
+            .context("TCB policy validation failed")?;
+
+        // Validate TEE attributes (debug mode, signer, etc.)
+        validate_tcb(&supplemental.report)?;
+
+        let td_report = supplemental.report.as_td10().context("no td report")?;
         let replayed_rtmr = self.replay_runtime_events::<Sha384>(None);
         if replayed_rtmr != td_report.rt_mr3 {
             bail!(
@@ -734,12 +770,12 @@ impl Attestation {
         if td_report.report_data != self.report_data[..] {
             bail!("tdx report_data mismatch");
         }
-        Ok(tdx_report)
+        Ok(qvr)
     }
 }
 
-/// Validate the TCB attributes
-pub fn validate_tcb(report: &TdxVerifiedReport) -> Result<()> {
+/// Validate the TEE report attributes (debug mode, signer, etc.)
+pub fn validate_tcb(report: &Report) -> Result<()> {
     fn validate_td10(report: &TDReport10) -> Result<()> {
         let is_debug = report.td_attributes[0] & 0x01 != 0;
         if is_debug {
@@ -763,11 +799,37 @@ pub fn validate_tcb(report: &TdxVerifiedReport) -> Result<()> {
         }
         Ok(())
     }
-    match &report.report {
+    match report {
         Report::TD15(report) => validate_td15(report),
         Report::TD10(report) => validate_td10(report),
         Report::SgxEnclave(report) => validate_sgx(report),
     }
+}
+
+/// Default TCB policy for dstack attestation.
+///
+/// Accepts common non-critical TCB statuses (`SWHardeningNeeded`, `ConfigurationNeeded`,
+/// `ConfigurationAndSWHardeningNeeded`, `OutOfDate`, `OutOfDateConfigurationNeeded`)
+/// with a 90-day collateral grace period, and allows SMT (hyperthreading).
+///
+/// Rejects quotes carrying high-severity advisories that directly compromise TEE guarantees:
+/// - INTEL-SA-01397: TDX migration → debuggable TD (CVSS 8.4, full TDX compromise)
+/// - INTEL-SA-01367: OOB write in SGX/TDX memory subsystem (CVSS 7.2)
+/// - INTEL-SA-01314: OOB write in TDX module
+/// - INTEL-SA-00837: Unauthorized error injection in SGX/TDX (CVSS 7.2)
+pub fn default_policy(now_secs: u64) -> SimplePolicy {
+    use core::time::Duration;
+    SimplePolicy::strict(now_secs)
+        .allow_status(TcbStatus::OutOfDate)
+        .platform_grace_period(Duration::from_secs(30 * 24 * 3600))
+        .qe_grace_period(Duration::from_secs(30 * 24 * 3600))
+        .allow_smt(true)
+        .allow_dynamic_platform(true)
+        .allow_cached_keys(true)
+        .reject_advisory("INTEL-SA-01397")
+        .reject_advisory("INTEL-SA-01367")
+        .reject_advisory("INTEL-SA-01314")
+        .reject_advisory("INTEL-SA-00837")
 }
 
 /// Information about the app extracted from event log

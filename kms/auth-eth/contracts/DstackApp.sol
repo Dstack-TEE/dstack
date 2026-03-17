@@ -8,6 +8,7 @@ pragma solidity ^0.8.22;
 
 import "./IAppAuth.sol";
 import "./IAppAuthBasicManagement.sol";
+import "./IAppTcbPolicy.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
@@ -19,7 +20,8 @@ contract DstackApp is
     UUPSUpgradeable,
     ERC165Upgradeable,
     IAppAuth,
-    IAppAuthBasicManagement
+    IAppAuthBasicManagement,
+    IAppTcbPolicy
 {
     // Mapping of allowed compose hashes for this app
     mapping(bytes32 => bool) public allowedComposeHashes;
@@ -32,6 +34,9 @@ contract DstackApp is
 
     // Mapping of allowed device IDs for this app
     mapping(bytes32 => bool) public allowedDeviceIds;
+
+    // TCB policy JSON string (opaque, interpreted by KMS)
+    string private _tcbPolicy;
 
     // Additional events specific to DstackApp
     event UpgradesDisabled();
@@ -88,6 +93,7 @@ contract DstackApp is
         return
             interfaceId == 0x1e079198 || // IAppAuth
             interfaceId == 0x8fd37527 || // IAppAuthBasicManagement
+            interfaceId == type(IAppTcbPolicy).interfaceId ||
             super.supportsInterface(interfaceId);
     }
 
@@ -141,6 +147,17 @@ contract DstackApp is
         }
 
         return (true, "");
+    }
+
+    // Get the TCB policy JSON
+    function tcbPolicy() external view override returns (string memory) {
+        return _tcbPolicy;
+    }
+
+    // Set the TCB policy JSON
+    function setTcbPolicy(string calldata policy) external override onlyOwner {
+        _tcbPolicy = policy;
+        emit TcbPolicySet(policy);
     }
 
     // Function to permanently disable upgrades

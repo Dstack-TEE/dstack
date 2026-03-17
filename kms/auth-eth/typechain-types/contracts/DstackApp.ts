@@ -77,7 +77,9 @@ export interface DstackAppInterface extends Interface {
       | "removeDevice"
       | "renounceOwnership"
       | "setAllowAnyDevice"
+      | "setTcbPolicy"
       | "supportsInterface"
+      | "tcbPolicy"
       | "transferOwnership"
       | "upgradeToAndCall"
   ): FunctionFragment;
@@ -91,6 +93,7 @@ export interface DstackAppInterface extends Interface {
       | "DeviceRemoved"
       | "Initialized"
       | "OwnershipTransferred"
+      | "TcbPolicySet"
       | "Upgraded"
       | "UpgradesDisabled"
   ): EventFragment;
@@ -153,9 +156,14 @@ export interface DstackAppInterface extends Interface {
     values: [boolean]
   ): string;
   encodeFunctionData(
+    functionFragment: "setTcbPolicy",
+    values: [string]
+  ): string;
+  encodeFunctionData(
     functionFragment: "supportsInterface",
     values: [BytesLike]
   ): string;
+  encodeFunctionData(functionFragment: "tcbPolicy", values?: undefined): string;
   encodeFunctionData(
     functionFragment: "transferOwnership",
     values: [AddressLike]
@@ -217,9 +225,14 @@ export interface DstackAppInterface extends Interface {
     data: BytesLike
   ): Result;
   decodeFunctionResult(
+    functionFragment: "setTcbPolicy",
+    data: BytesLike
+  ): Result;
+  decodeFunctionResult(
     functionFragment: "supportsInterface",
     data: BytesLike
   ): Result;
+  decodeFunctionResult(functionFragment: "tcbPolicy", data: BytesLike): Result;
   decodeFunctionResult(
     functionFragment: "transferOwnership",
     data: BytesLike
@@ -308,6 +321,18 @@ export namespace OwnershipTransferredEvent {
   export interface OutputObject {
     previousOwner: string;
     newOwner: string;
+  }
+  export type Event = TypedContractEvent<InputTuple, OutputTuple, OutputObject>;
+  export type Filter = TypedDeferredTopicFilter<Event>;
+  export type Log = TypedEventLog<Event>;
+  export type LogDescription = TypedLogDescription<Event>;
+}
+
+export namespace TcbPolicySetEvent {
+  export type InputTuple = [policy: string];
+  export type OutputTuple = [policy: string];
+  export interface OutputObject {
+    policy: string;
   }
   export type Event = TypedContractEvent<InputTuple, OutputTuple, OutputObject>;
   export type Filter = TypedDeferredTopicFilter<Event>;
@@ -444,11 +469,15 @@ export interface DstackApp extends BaseContract {
     "nonpayable"
   >;
 
+  setTcbPolicy: TypedContractMethod<[policy: string], [void], "nonpayable">;
+
   supportsInterface: TypedContractMethod<
     [interfaceId: BytesLike],
     [boolean],
     "view"
   >;
+
+  tcbPolicy: TypedContractMethod<[], [string], "view">;
 
   transferOwnership: TypedContractMethod<
     [newOwner: AddressLike],
@@ -526,8 +555,14 @@ export interface DstackApp extends BaseContract {
     nameOrSignature: "setAllowAnyDevice"
   ): TypedContractMethod<[_allowAnyDevice: boolean], [void], "nonpayable">;
   getFunction(
+    nameOrSignature: "setTcbPolicy"
+  ): TypedContractMethod<[policy: string], [void], "nonpayable">;
+  getFunction(
     nameOrSignature: "supportsInterface"
   ): TypedContractMethod<[interfaceId: BytesLike], [boolean], "view">;
+  getFunction(
+    nameOrSignature: "tcbPolicy"
+  ): TypedContractMethod<[], [string], "view">;
   getFunction(
     nameOrSignature: "transferOwnership"
   ): TypedContractMethod<[newOwner: AddressLike], [void], "nonpayable">;
@@ -587,6 +622,13 @@ export interface DstackApp extends BaseContract {
     OwnershipTransferredEvent.InputTuple,
     OwnershipTransferredEvent.OutputTuple,
     OwnershipTransferredEvent.OutputObject
+  >;
+  getEvent(
+    key: "TcbPolicySet"
+  ): TypedContractEvent<
+    TcbPolicySetEvent.InputTuple,
+    TcbPolicySetEvent.OutputTuple,
+    TcbPolicySetEvent.OutputObject
   >;
   getEvent(
     key: "Upgraded"
@@ -679,6 +721,17 @@ export interface DstackApp extends BaseContract {
       OwnershipTransferredEvent.InputTuple,
       OwnershipTransferredEvent.OutputTuple,
       OwnershipTransferredEvent.OutputObject
+    >;
+
+    "TcbPolicySet(string)": TypedContractEvent<
+      TcbPolicySetEvent.InputTuple,
+      TcbPolicySetEvent.OutputTuple,
+      TcbPolicySetEvent.OutputObject
+    >;
+    TcbPolicySet: TypedContractEvent<
+      TcbPolicySetEvent.InputTuple,
+      TcbPolicySetEvent.OutputTuple,
+      TcbPolicySetEvent.OutputObject
     >;
 
     "Upgraded(address)": TypedContractEvent<

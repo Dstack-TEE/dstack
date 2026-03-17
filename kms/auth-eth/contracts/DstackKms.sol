@@ -7,6 +7,7 @@
 pragma solidity ^0.8.22;
 
 import "./IAppAuth.sol";
+import "./IAppTcbPolicy.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
@@ -18,7 +19,8 @@ contract DstackKms is
     OwnableUpgradeable,
     UUPSUpgradeable,
     ERC165Upgradeable,
-    IAppAuth
+    IAppAuth,
+    IAppTcbPolicy
 {
     // Struct for KMS information
     struct KmsInfo {
@@ -49,6 +51,9 @@ contract DstackKms is
 
     // DstackApp implementation contract address for factory deployment
     address public appImplementation;
+
+    // TCB policy JSON for KMS boot validation (opaque, interpreted by KMS)
+    string private _tcbPolicy;
 
     // Events
     event AppRegistered(address appId);
@@ -96,6 +101,7 @@ contract DstackKms is
     {
         return
             interfaceId == 0x1e079198 || // IAppAuth
+            interfaceId == type(IAppTcbPolicy).interfaceId ||
             super.supportsInterface(interfaceId);
     }
 
@@ -254,6 +260,17 @@ contract DstackKms is
 
         // Call the app's isAppAllowed function
         return IAppAuth(bootInfo.appId).isAppAllowed(bootInfo);
+    }
+
+    // Get the KMS TCB policy JSON
+    function tcbPolicy() external view override returns (string memory) {
+        return _tcbPolicy;
+    }
+
+    // Set the KMS TCB policy JSON
+    function setTcbPolicy(string calldata policy) external override onlyOwner {
+        _tcbPolicy = policy;
+        emit TcbPolicySet(policy);
     }
 
     // Add storage gap for upgradeable contracts

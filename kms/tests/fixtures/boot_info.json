@@ -1,0 +1,13 @@
+{
+  "attestationMode": "dstack-tdx",
+  "mrAggregated": "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+  "osImageHash": "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
+  "mrSystem": "9876543210fedcba9876543210fedcba9876543210fedcba9876543210fedcba",
+  "appId": "1234567890123456789012345678901234567890",
+  "composeHash": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+  "instanceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "deviceId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "keyProviderInfo": "",
+  "tcbStatus": "UpToDate",
+  "advisoryIds": ["INTEL-SA-00001"]
+}

@@ -419,12 +419,12 @@ impl CvmVerifier {
         let verified_attestation = match verified {
             Ok(att) => {
                 details.quote_verified = true;
-                details.tcb_status = att.report.tdx_report().map(|r| r.status.clone());
-                details.advisory_ids = att
-                    .report
-                    .tdx_report()
-                    .map(|r| r.advisory_ids.clone())
-                    .unwrap_or_default();
+                if let Some(qvr) = att.report.tdx_qvr() {
+                    if let Ok(supplemental) = qvr.supplemental() {
+                        details.tcb_status = Some(supplemental.tcb.status.to_string());
+                        details.advisory_ids = supplemental.tcb.advisory_ids;
+                    }
+                }
                 details.report_data = Some(hex::encode(att.report_data));
                 att
             }
@@ -510,15 +510,17 @@ impl CvmVerifier {
         debug: bool,
         details: &mut VerificationDetails,
     ) -> Result<()> {
-        let Some(report) = &attestation.report.tdx_report() else {
-            bail!("No TDX report");
-        };
+        let qvr = attestation
+            .report
+            .tdx_qvr()
+            .context("No TDX QuoteVerificationResult")?;
+        let supplemental = qvr.supplemental().context("Failed to build supplemental")?;
         let Some(tdx_quote) = attestation.tdx_quote() else {
             bail!("No TDX quote");
         };
         let event_log = &tdx_quote.event_log;
         // Get boot info from attestation
-        let report = report
+        let report = supplemental
             .report
             .as_td10()
             .context("Failed to decode TD report")?;

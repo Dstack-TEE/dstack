@@ -5,3 +5,4 @@ export type { DstackApp } from "./DstackApp";
 export type { DstackKms } from "./DstackKms";
 export type { IAppAuth } from "./IAppAuth";
 export type { IAppAuthBasicManagement } from "./IAppAuthBasicManagement";
+export type { IAppTcbPolicy } from "./IAppTcbPolicy";

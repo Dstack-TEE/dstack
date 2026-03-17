@@ -5,6 +5,7 @@
 use std::{path::PathBuf, sync::Arc};
 
 use anyhow::{bail, Context, Result};
+use dcap_qvl::{verify::QuoteVerificationResult, Policy as _, RegoPolicySet};
 use dstack_kms_rpc::{
     kms_server::{KmsRpc, KmsServer},
     AppId, AppKeyResponse, ClearImageCacheRequest, GetAppKeyRequest, GetKmsKeyRequest,
@@ -31,6 +32,49 @@ use crate::{
 };
 
 mod upgrade_authority;
+
+/// On-chain TCB policy document. Versioned JSON wrapper for extensibility.
+///
+/// Format: `{"version": 1, "intel_qal": ["<policy_json>", ...]}`
+///
+/// Fail-close: unknown versions are rejected.
+#[derive(serde::Deserialize)]
+struct TcbPolicyDoc {
+    version: u32,
+    #[serde(default)]
+    intel_qal: Vec<String>,
+}
+
+/// Validate a TDX QuoteVerificationResult against an on-chain TCB policy.
+///
+/// If `policy_json` is empty, no additional validation is performed (backward compatible
+/// with old contracts that don't set a policy).
+fn validate_onchain_tcb_policy(qvr: &QuoteVerificationResult, policy_json: &str) -> Result<()> {
+    if policy_json.is_empty() {
+        return Ok(());
+    }
+    let doc: TcbPolicyDoc =
+        serde_json::from_str(policy_json).context("Failed to parse on-chain TCB policy JSON")?;
+    if doc.version != 1 {
+        bail!(
+            "Unsupported TCB policy version {}: refusing to proceed (fail-close)",
+            doc.version
+        );
+    }
+    if doc.intel_qal.is_empty() {
+        return Ok(());
+    }
+    let policy_refs: Vec<&str> = doc.intel_qal.iter().map(|s| s.as_str()).collect();
+    let policy_set = RegoPolicySet::new(&policy_refs)
+        .context("Failed to build RegoPolicySet from on-chain policy")?;
+    let supplemental = qvr
+        .supplemental()
+        .context("Failed to build supplemental data for on-chain policy validation")?;
+    policy_set
+        .validate(&supplemental)
+        .context("On-chain TCB policy validation failed")?;
+    Ok(())
+}
 
 #[derive(Clone)]
 pub struct KmsState {
@@ -169,17 +213,15 @@ impl RpcHandler {
         use_boottime_mr: bool,
         vm_config_str: &str,
     ) -> Result<BootConfig> {
-        let tcb_status;
-        let advisory_ids;
-        match att.report.tdx_report() {
-            Some(report) => {
-                tcb_status = report.status.clone();
-                advisory_ids = report.advisory_ids.clone();
+        let (tcb_status, advisory_ids) = match att.report.tdx_qvr() {
+            Some(qvr) => {
+                let supplemental = qvr.supplemental().context("Failed to build supplemental")?;
+                (
+                    supplemental.tcb.status.to_string(),
+                    supplemental.tcb.advisory_ids,
+                )
             }
-            None => {
-                tcb_status = "".to_string();
-                advisory_ids = Vec::new();
-            }
+            None => (String::new(), Vec::new()),
         };
         let app_info = att.decode_app_info_ex(use_boottime_mr, vm_config_str)?;
         let boot_info = BootInfo {
@@ -195,6 +237,23 @@ impl RpcHandler {
             tcb_status,
             advisory_ids,
         };
+
+        // Validate on-chain TCB policy before contract-level boot authorization
+        if let Some(qvr) = att.report.tdx_qvr() {
+            let policy = if is_kms {
+                self.state.config.auth_api.get_kms_policy().await?
+            } else {
+                let app_id_hex = hex::encode(&boot_info.app_id);
+                self.state
+                    .config
+                    .auth_api
+                    .get_app_policy(&format!("0x{app_id_hex}"))
+                    .await?
+            };
+            validate_onchain_tcb_policy(qvr, &policy.tcb_policy)
+                .context("On-chain TCB policy check failed")?;
+        }
+
         let response = self
             .state
             .config
@@ -431,4 +490,92 @@ impl RpcCall<KmsState> for RpcHandler {
 
 pub fn rpc_methods() -> &'static [&'static str] {
     <KmsServer<RpcHandler>>::supported_methods()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Build a QuoteVerificationResult from the bundled TDX sample fixtures.
+    fn sample_qvr() -> QuoteVerificationResult {
+        let raw_quote = include_bytes!("../tests/fixtures/tdx_quote");
+        let collateral: dcap_qvl::QuoteCollateralV3 =
+            serde_json::from_slice(include_bytes!("../tests/fixtures/tdx_quote_collateral.json"))
+                .expect("parse collateral");
+        // Timestamp within the collateral validity window
+        let now = 1_750_400_000;
+        dcap_qvl::verify::QuoteVerifier::new_prod_default_crypto()
+            .verify(raw_quote, collateral, now)
+            .expect("verify sample quote")
+    }
+
+    #[test]
+    fn empty_policy_is_noop() {
+        let qvr = sample_qvr();
+        validate_onchain_tcb_policy(&qvr, "").unwrap();
+    }
+
+    #[test]
+    fn version1_empty_intel_qal_is_noop() {
+        let qvr = sample_qvr();
+        validate_onchain_tcb_policy(&qvr, r#"{"version":1,"intel_qal":[]}"#).unwrap();
+    }
+
+    #[test]
+    fn unknown_version_is_rejected() {
+        let qvr = sample_qvr();
+        let err = validate_onchain_tcb_policy(&qvr, r#"{"version":99,"intel_qal":[]}"#)
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("Unsupported TCB policy version 99"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn malformed_json_is_rejected() {
+        let qvr = sample_qvr();
+        let err = validate_onchain_tcb_policy(&qvr, "not json").unwrap_err();
+        assert!(
+            err.to_string().contains("Failed to parse"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn missing_version_field_is_rejected() {
+        let qvr = sample_qvr();
+        let err = validate_onchain_tcb_policy(&qvr, r#"{"intel_qal":[]}"#).unwrap_err();
+        // version is required — serde fails, wrapped with "Failed to parse" context
+        assert!(
+            err.to_string().contains("Failed to parse"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn tcb_policy_doc_deserialization() {
+        let doc: TcbPolicyDoc =
+            serde_json::from_str(r#"{"version":1,"intel_qal":["policy1","policy2"]}"#).unwrap();
+        assert_eq!(doc.version, 1);
+        assert_eq!(doc.intel_qal.len(), 2);
+
+        // intel_qal defaults to empty when omitted
+        let doc: TcbPolicyDoc = serde_json::from_str(r#"{"version":1}"#).unwrap();
+        assert!(doc.intel_qal.is_empty());
+    }
+
+    #[test]
+    fn invalid_rego_policy_is_rejected() {
+        let qvr = sample_qvr();
+        let err = validate_onchain_tcb_policy(
+            &qvr,
+            r#"{"version":1,"intel_qal":["not valid rego json"]}"#,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("Failed to build RegoPolicySet"),
+            "unexpected error: {err}"
+        );
+    }
 }

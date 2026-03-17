@@ -4,7 +4,7 @@
 
 import fastify, { FastifyInstance } from 'fastify';
 import { EthereumBackend } from './ethereum';
-import { BootInfo, BootResponse } from './types';
+import { BootInfo, BootResponse, PolicyResponse } from './types';
 import { ethers } from 'ethers';
 
 declare module 'fastify' {
@@ -41,6 +41,15 @@ export async function build(): Promise<FastifyInstance> {
       isAllowed: { type: 'boolean' },
       reason: { type: 'string' },
       gatewayAppId: { type: 'string' },
+    }
+  });
+
+  server.addSchema({
+    $id: 'policyResponse',
+    type: 'object',
+    required: ['tcbPolicy'],
+    properties: {
+      tcbPolicy: { type: 'string' },
     }
   });
 
@@ -113,6 +122,33 @@ export async function build(): Promise<FastifyInstance> {
         reason: `${error instanceof Error ? error.message : String(error)}`
       });
     }
+  });
+
+  // TCB policy endpoints
+  server.get<{
+    Params: { appId: string };
+    Reply: PolicyResponse;
+  }>('/policy/app/:appId', {
+    schema: {
+      response: {
+        200: { $ref: 'policyResponse#' }
+      }
+    }
+  }, async (request, reply) => {
+    const appId = ethers.getAddress(request.params.appId);
+    return await server.ethereum.getAppPolicy(appId);
+  });
+
+  server.get<{
+    Reply: PolicyResponse;
+  }>('/policy/kms', {
+    schema: {
+      response: {
+        200: { $ref: 'policyResponse#' }
+      }
+    }
+  }, async (request, reply) => {
+    return await server.ethereum.getKmsPolicy();
   });
 
   return server;
