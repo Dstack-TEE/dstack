@@ -56,12 +56,14 @@ async fn resolve_app_address(prefix: &str, sni: &str, compat: bool) -> Result<Ap
             let Some(data) = txt_record.txt_data().first() else {
                 continue;
             };
-            return AppAddress::parse(data).context("failed to parse app address");
+            return AppAddress::parse(data)
+                .with_context(|| format!("failed to parse app address for {sni}"));
         }
     } else if let Ok(lookup) = resolver.txt_lookup(txt_domain).await {
         if let Some(txt_record) = lookup.iter().next() {
             if let Some(data) = txt_record.txt_data().first() {
-                return AppAddress::parse(data).context("failed to parse app address");
+                return AppAddress::parse(data)
+                    .with_context(|| format!("failed to parse app address for {sni}"));
             }
         }
     }
@@ -70,15 +72,22 @@ async fn resolve_app_address(prefix: &str, sni: &str, compat: bool) -> Result<Ap
     if let Some((_, parent)) = sni.split_once('.') {
         let wildcard_domain = format!("{prefix}-wildcard.{parent}");
         let lookup = resolver
-            .txt_lookup(wildcard_domain)
+            .txt_lookup(&wildcard_domain)
             .await
-            .context("failed to lookup wildcard app address")?;
-        let txt_record = lookup.iter().next().context("no txt record found")?;
+            .with_context(|| {
+                format!("failed to lookup wildcard app address for {sni} via {wildcard_domain}")
+            })?;
+        let txt_record = lookup
+            .iter()
+            .next()
+            .with_context(|| format!("no txt record found for {sni} via {wildcard_domain}"))?;
         let data = txt_record
             .txt_data()
             .first()
-            .context("no data in txt record")?;
-        return AppAddress::parse(data).context("failed to parse app address");
+            .with_context(|| format!("no data in txt record for {sni} via {wildcard_domain}"))?;
+        return AppAddress::parse(data).with_context(|| {
+            format!("failed to parse app address for {sni} via {wildcard_domain}")
+        });
     }
 
     anyhow::bail!("failed to resolve app address for {sni}");
@@ -95,8 +104,8 @@ pub(crate) async fn proxy_with_sni(
     let dns_timeout = state.config.proxy.timeouts.dns_resolve;
     let addr = timeout(dns_timeout, resolve_app_address(ns_prefix, sni, compat))
         .await
-        .context("DNS TXT resolve timeout")?
-        .context("failed to resolve app address")?;
+        .with_context(|| format!("DNS TXT resolve timeout for {sni}"))?
+        .with_context(|| format!("failed to resolve app address for {sni}"))?;
     debug!("target address is {}:{}", addr.app_id, addr.port);
     proxy_to_app(state, inbound, buffer, &addr.app_id, addr.port).await
 }
