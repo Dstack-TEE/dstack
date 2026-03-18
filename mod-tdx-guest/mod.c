@@ -107,6 +107,11 @@ static long tdx_extend_rtmr(struct tdx_extend_rtmr_req __user *req)
 		goto out;
 	}
 
+	if (index > 3) {
+		ret = -EINVAL;
+		goto out;
+	}
+
 	{
 		struct tdx_module_args args = {
 			.rcx = virt_to_phys(data),
@@ -164,12 +169,7 @@ static int __init tdx_guest_init(void)
 	if (ret)
 		return ret;
 
-
 	return 0;
-
-	misc_deregister(&tdx_misc_dev);
-
-	return ret;
 }
 module_init(tdx_guest_init);
 
