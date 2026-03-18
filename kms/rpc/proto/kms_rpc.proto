@@ -48,6 +48,29 @@ message AppKeyResponse {
   bytes os_image_hash = 8;
 }
 
+// Response for GetAppKeyAmd. Keys are encrypted with the VM's X25519 public key.
+// Decrypt using: crypt-tool decrypt -s $SEED -d <hex_encrypted_key> -p <hex(key_provider_pubkey)>
+message AppKeyAmdResponse {
+  // TLS CA certificate which is used as the trust anchor for all HTTPS RPCs in the system.
+  string ca_cert = 1;
+  // Disk encryption key encrypted with the VM's X25519 pubkey (AES-128-SIV).
+  bytes disk_crypt_key = 2;
+  // X25519 env encryption key encrypted with the VM's X25519 pubkey (AES-128-SIV).
+  bytes env_crypt_key = 3;
+  // ECDSA k256 key encrypted with the VM's X25519 pubkey (AES-128-SIV).
+  bytes k256_key = 4;
+  // Signature of the k256 key signed by the root k256 key (plaintext).
+  bytes k256_signature = 5;
+  // Reverse proxy app ID from DstackKms contract. (Deprecated. For backward compatibility)
+  string tproxy_app_id = 6;
+  // Reverse proxy app ID from DstackKms contract.
+  string gateway_app_id = 7;
+  // OS Image hash (plaintext).
+  bytes os_image_hash = 8;
+  // Ephemeral KMS X25519 public key used to encrypt disk_crypt_key, env_crypt_key, and k256_key.
+  bytes key_provider_pubkey = 9;
+}
+
 message GetMetaResponse {
   string ca_cert = 1;
   bool allow_any_upgrade = 2;
@@ -96,7 +119,7 @@ service KMS {
   // Request the app key given the app id and tdx quote
   rpc GetAppKey(GetAppKeyRequest) returns (AppKeyResponse);
   // Request the app key using AMD SEV-SNP attestation
-  rpc GetAppKeyAmd(GetAppKeyAmdRequest) returns (AppKeyResponse);
+  rpc GetAppKeyAmd(GetAppKeyAmdRequest) returns (AppKeyAmdResponse);
   // KMS key handover
   rpc GetKmsKey(GetKmsKeyRequest) returns (KmsKeyResponse);
   // Request the app environment encryption public key given the app id

@@ -4,12 +4,13 @@
 
 use std::{path::PathBuf, sync::Arc};
 
+use aes_siv::KeyInit;
 use anyhow::{bail, Context, Result};
 use dstack_kms_rpc::{
     kms_server::{KmsRpc, KmsServer},
-    AppId, AppKeyResponse, ClearImageCacheRequest, GetAppKeyAmdRequest, GetAppKeyRequest,
-    GetKmsKeyRequest, GetMetaResponse, GetTempCaCertResponse, KmsKeyResponse, KmsKeys,
-    PublicKeyResponse, SignCertRequest, SignCertResponse,
+    AppId, AppKeyAmdResponse, AppKeyResponse, ClearImageCacheRequest, GetAppKeyAmdRequest,
+    GetAppKeyRequest, GetKmsKeyRequest, GetMetaResponse, GetTempCaCertResponse, KmsKeyResponse,
+    KmsKeys, PublicKeyResponse, SignCertRequest, SignCertResponse,
 };
 use dstack_verifier::{CvmVerifier, VerificationDetails};
 use fs_err as fs;
@@ -429,7 +430,7 @@ impl KmsRpc for RpcHandler {
         Ok(())
     }
 
-    async fn get_app_key_amd(self, request: GetAppKeyAmdRequest) -> Result<AppKeyResponse> {
+    async fn get_app_key_amd(self, request: GetAppKeyAmdRequest) -> Result<AppKeyAmdResponse> {
         use amd_attest::{
             compute_expected_measurement, validate_app_id, verify_amd_attestation, AmdAttestInput,
             OvmfSectionParam,
@@ -569,15 +570,49 @@ impl KmsRpc for RpcHandler {
         let (k256_app_key, k256_signature) =
             derive_k256_key(&self.state.k256_key, &app_id).context("Failed to derive k256 key")?;
 
-        Ok(AppKeyResponse {
+        // 6. Encrypt the derived keys with the VM's X25519 public key embedded in report_data[0..32].
+        //    This ensures only the attested VM (which holds the SEED) can decrypt the keys.
+        //    The VM decrypts with: crypt-tool decrypt -s $SEED -d <hex_ciphertext> -p <hex(key_provider_pubkey)>
+        if verified.report_data.len() < 32 {
+            bail!("report_data too short to contain VM public key (need >=32 bytes)");
+        }
+        let vm_pk_bytes: [u8; 32] = verified.report_data[..32]
+            .try_into()
+            .context("Failed to extract VM public key from report_data")?;
+        if vm_pk_bytes == [0u8; 32] {
+            bail!("VM public key in report_data is all-zeros; VM must embed its X25519 pubkey");
+        }
+        let vm_pk = x25519_dalek::PublicKey::from(vm_pk_bytes);
+
+        // Generate an ephemeral KMS keypair for this response.
+        let kms_ephem_sk = x25519_dalek::StaticSecret::random_from_rng(rand::rngs::OsRng);
+        let kms_ephem_pk = x25519_dalek::PublicKey::from(&kms_ephem_sk);
+        let shared_secret = kms_ephem_sk.diffie_hellman(&vm_pk);
+
+        // Encrypt using AES-128-SIV (same scheme as crypt-tool decrypt: ECDH → Aes128Siv key).
+        let mut cipher = aes_siv::siv::Aes128Siv::new(shared_secret.as_bytes().into());
+        let encrypted_disk_key = cipher
+            .encrypt(&[&[]], app_disk_key.as_ref())
+            .map_err(|_| anyhow::anyhow!("Failed to encrypt disk_crypt_key"))?;
+        let mut cipher = aes_siv::siv::Aes128Siv::new(shared_secret.as_bytes().into());
+        let encrypted_env_key = cipher
+            .encrypt(&[&[]], env_crypt_key.as_ref())
+            .map_err(|_| anyhow::anyhow!("Failed to encrypt env_crypt_key"))?;
+        let mut cipher = aes_siv::siv::Aes128Siv::new(shared_secret.as_bytes().into());
+        let encrypted_k256_key = cipher
+            .encrypt(&[&[]], k256_app_key.to_bytes().as_ref())
+            .map_err(|_| anyhow::anyhow!("Failed to encrypt k256_key"))?;
+
+        Ok(AppKeyAmdResponse {
             ca_cert: self.state.root_ca.pem_cert.clone(),
-            disk_crypt_key: app_disk_key.to_vec(),
-            env_crypt_key: env_crypt_key.to_vec(),
-            k256_key: k256_app_key.to_bytes().to_vec(),
+            disk_crypt_key: encrypted_disk_key,
+            env_crypt_key: encrypted_env_key,
+            k256_key: encrypted_k256_key,
             k256_signature,
             tproxy_app_id: response.gateway_app_id.clone(),
             gateway_app_id: response.gateway_app_id,
             os_image_hash: boot_info.os_image_hash,
+            key_provider_pubkey: kms_ephem_pk.as_bytes().to_vec(),
         })
     }
 }

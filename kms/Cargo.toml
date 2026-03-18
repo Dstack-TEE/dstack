@@ -23,6 +23,7 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 x25519-dalek.workspace = true
 yasna.workspace = true
+aes-siv.workspace = true
 
 dstack-kms-rpc.workspace = true
 ra-rpc = { workspace = true, features = ["client", "rocket"] }
