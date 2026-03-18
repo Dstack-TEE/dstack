@@ -31,12 +31,13 @@ beforeAll(async () => {
   ], true) as DstackKms;
 
   const appAuth = await deployContract(hre, "DstackApp", [
-    owner.address, 
+    owner.address,
     false,  // _disableUpgrades
+    false,  // _requireTcbUpToDate
     true,   // _allowAnyDevice
     ethers.ZeroHash,  // initialDeviceId (empty)
     ethers.ZeroHash   // initialComposeHash (empty)
-  ], true) as DstackApp;
+  ], true, "initialize(address,bool,bool,bool,bytes32,bytes32)") as DstackApp;
 
   const appId = await appAuth.getAddress();
   await kmsContract.registerApp(appId);
