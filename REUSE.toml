@@ -31,6 +31,7 @@ path = [
     "kms/auth-simple/auth-config.example.json",
     "sdk/simulator/*.json",
     "sdk/go/go.sum",
+    "sdk/go/ratls/go.sum",
     "kms/dstack-app/builder/shared/kms-pinned-packages.txt",
     "kms/dstack-app/builder/shared/qemu-pinned-packages.txt",
     "gateway/dstack-app/builder/shared/builder-pinned-packages.txt",

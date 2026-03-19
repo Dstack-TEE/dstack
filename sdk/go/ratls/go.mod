@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+//
+// SPDX-License-Identifier: Apache-2.0
+
 module github.com/Dstack-TEE/dstack/sdk/go/ratls
 
 go 1.24.0
