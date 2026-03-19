@@ -2,16 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+mod simulator;
+
 use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
 use clap::Parser;
 use dstack_guest_agent::{
-    backend::{
-        load_versioned_attestation, simulated_attest_response,
-        simulated_certificate_attestation, simulated_info_attestation,
-        simulated_quote_response, PlatformBackend,
-    },
+    backend::PlatformBackend,
     config::{self, Config},
     AppState, run_server,
 };
@@ -58,20 +56,20 @@ impl SimulatorPlatform {
 }
 
 impl PlatformBackend for SimulatorPlatform {
-    fn attestation_for_info(&self) -> Result<Option<Attestation>> {
-        Ok(Some(simulated_info_attestation(&self.attestation)))
+    fn attestation_for_info(&self) -> Result<Attestation> {
+        Ok(simulator::simulated_info_attestation(&self.attestation))
     }
 
     fn certificate_attestation(&self, pubkey: &[u8]) -> Result<VersionedAttestation> {
-        Ok(simulated_certificate_attestation(&self.attestation, pubkey))
+        Ok(simulator::simulated_certificate_attestation(&self.attestation, pubkey))
     }
 
     fn quote_response(&self, report_data: [u8; 64], vm_config: &str) -> Result<GetQuoteResponse> {
-        simulated_quote_response(&self.attestation, report_data, vm_config)
+        simulator::simulated_quote_response(&self.attestation, report_data, vm_config)
     }
 
     fn attest_response(&self, _report_data: [u8; 64]) -> Result<AttestResponse> {
-        Ok(simulated_attest_response(&self.attestation))
+        Ok(simulator::simulated_attest_response(&self.attestation))
     }
 
     fn emit_event(&self, event: &str, _payload: &[u8]) -> Result<()> {
@@ -93,7 +91,7 @@ async fn main() -> Result<()> {
         .extract()
         .context("Failed to extract simulator core config")?;
     warn!(attestation_file = %sim_config.simulator.attestation_file, "starting dstack guest-agent simulator");
-    let attestation = load_versioned_attestation(&sim_config.simulator.attestation_file)?;
+    let attestation = simulator::load_versioned_attestation(&sim_config.simulator.attestation_file)?;
     let state = AppState::new(sim_config.core, Arc::new(SimulatorPlatform::new(attestation)))
         .await
         .context("Failed to create simulator app state")?;
@@ -106,7 +104,7 @@ mod tests {
     use super::*;
 
     fn load_fixture_platform() -> SimulatorPlatform {
-        let fixture = load_versioned_attestation(
+        let fixture = simulator::load_versioned_attestation(
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../guest-agent/fixtures/attestation.bin"),
         )
         .expect("fixture attestation should load");
@@ -125,6 +123,6 @@ mod tests {
         let platform = load_fixture_platform();
         let cert_attestation = platform.certificate_attestation(b"test-public-key").unwrap();
         assert!(cert_attestation.decode_app_info(false).is_ok());
-        assert!(platform.attestation_for_info().unwrap().is_some());
+        let _ = platform.attestation_for_info().unwrap();
     }
 }

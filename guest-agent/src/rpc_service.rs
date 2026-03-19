@@ -62,7 +62,7 @@ struct AppStateInner {
 }
 
 impl AppStateInner {
-    fn info_attestation(&self) -> Result<Option<ra_rpc::Attestation>> {
+    fn info_attestation(&self) -> Result<ra_rpc::Attestation> {
         self.platform.attestation_for_info()
     }
 
@@ -178,9 +178,7 @@ pub struct InternalRpcHandler {
 
 pub async fn get_info(state: &AppState, external: bool) -> Result<AppInfo> {
     let hide_tcb_info = external && !state.config().app_compose.public_tcbinfo;
-    let Some(attestation) = state.inner.info_attestation()? else {
-        return Ok(AppInfo::default());
-    };
+    let attestation = state.inner.info_attestation()?;
     let app_info = attestation
         .decode_app_info(false)
         .context("Failed to decode app info")?;
@@ -651,14 +649,7 @@ impl RpcCall<AppState> for ExternalRpcHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        backend::{
-            load_versioned_attestation, simulated_attest_response,
-            simulated_certificate_attestation, simulated_info_attestation,
-            simulated_quote_response, PlatformBackend,
-        },
-        config::{AppComposeWrapper, Config},
-    };
+    use crate::{backend::PlatformBackend, config::{AppComposeWrapper, Config}};
     use dstack_guest_agent_rpc::{GetAttestationForAppKeyRequest, SignRequest};
     use ra_tls::attestation::VersionedAttestation;
     use dstack_types::{AppCompose, AppKeys, KeyProvider};
@@ -807,12 +798,15 @@ pNs85uhOZE8z2jr8Pg==
         }
 
         impl PlatformBackend for TestSimulatorPlatform {
-            fn attestation_for_info(&self) -> Result<Option<ra_rpc::Attestation>> {
-                Ok(Some(simulated_info_attestation(&self.attestation)))
+            fn attestation_for_info(&self) -> Result<ra_rpc::Attestation> {
+                Ok(self.attestation.clone().into_inner())
             }
 
             fn certificate_attestation(&self, pubkey: &[u8]) -> Result<VersionedAttestation> {
-                Ok(simulated_certificate_attestation(&self.attestation, pubkey))
+                let mut attestation = self.attestation.clone();
+                let report_data = ra_tls::attestation::QuoteContentType::RaTlsCert.to_report_data(pubkey);
+                attestation.set_report_data(report_data);
+                Ok(attestation)
             }
 
             fn quote_response(
@@ -820,11 +814,24 @@ pNs85uhOZE8z2jr8Pg==
                 report_data: [u8; 64],
                 vm_config: &str,
             ) -> Result<GetQuoteResponse> {
-                simulated_quote_response(&self.attestation, report_data, vm_config)
+                let ra_tls::attestation::VersionedAttestation::V0 { attestation } = self.attestation.clone();
+                let mut attestation = attestation;
+                let Some(quote) = attestation.tdx_quote_mut() else {
+                    return Err(anyhow::anyhow!("Quote not found"));
+                };
+                quote.quote[ra_tls::attestation::TDX_QUOTE_REPORT_DATA_RANGE].copy_from_slice(&report_data);
+                Ok(GetQuoteResponse {
+                    quote: quote.quote.to_vec(),
+                    event_log: serde_json::to_string(&quote.event_log).context("Failed to serialize event log")?,
+                    report_data: report_data.to_vec(),
+                    vm_config: vm_config.to_string(),
+                })
             }
 
             fn attest_response(&self, _report_data: [u8; 64]) -> Result<AttestResponse> {
-                Ok(simulated_attest_response(&self.attestation))
+                Ok(AttestResponse {
+                    attestation: self.attestation.to_scale(),
+                })
             }
 
             fn emit_event(&self, _event: &str, _payload: &[u8]) -> Result<()> {
@@ -839,7 +846,7 @@ pNs85uhOZE8z2jr8Pg==
             cert_client: dummy_cert_client,
             demo_cert: RwLock::new(String::new()),
             platform: Arc::new(TestSimulatorPlatform {
-                attestation: load_versioned_attestation(temp_attestation_file.path()).unwrap(),
+                attestation: VersionedAttestation::from_scale(&std::fs::read(temp_attestation_file.path()).unwrap()).unwrap(),
             }),
         };
 

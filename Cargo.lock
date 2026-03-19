@@ -2412,6 +2412,7 @@ dependencies = [
  "ra-tls",
  "rocket",
  "serde",
+ "serde_json",
  "tracing",
  "tracing-subscriber",
 ]
