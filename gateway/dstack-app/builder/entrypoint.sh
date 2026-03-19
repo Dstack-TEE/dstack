@@ -43,7 +43,11 @@ if [[ ! "$NODE_ID" =~ ^[0-9]+$ ]]; then
     exit 1
 fi
 
-SYNC_ENABLED=$([ -z "$BOOTNODE_URL" ] && echo "false" || echo "true")
+# Sync is always enabled when NODE_ID > 0. Peer auto-discovery works via incoming
+# sync connections: when another node syncs to us, we learn about it automatically
+# through WaveKV's handle_sync, which auto-adds the sender as a peer.
+# BOOTNODE_URL is optional — it speeds up initial discovery but is not required.
+SYNC_ENABLED=$([ "$NODE_ID" -gt 0 ] && echo "true" || echo "false")
 
 echo "WG_IP: $WG_IP"
 echo "WG_RESERVED_NET: $WG_RESERVED_NET"
