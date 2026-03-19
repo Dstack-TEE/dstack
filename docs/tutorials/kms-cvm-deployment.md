@@ -188,7 +188,6 @@ configs:
       [core.onboard]
       enabled = true
       auto_bootstrap_domain = ""
-      quote_enabled = true
       address = "0.0.0.0"
       port = 9100
 EOF
@@ -314,12 +313,41 @@ Onboarding
 ```
 
 > **Important:** KMS is now in onboard mode — a plain HTTP server waiting for bootstrap. It will **not** serve TLS or respond to `KMS.GetMeta` until you complete the next step.
+>
+> **Critical prerequisite:** before bootstrap can succeed, the KMS must already be authorized by your auth backend.
+>
+> - For `auth-simple`, add the KMS `mrAggregated` to `kms.mrAggregated`
+> - For `auth-eth`, add the KMS `mrAggregated` on-chain with `addKmsAggregatedMr(...)`
+>
+> You can fetch the value before bootstrap with:
+>
+> ```bash
+> curl -s -X POST \
+>   -H "Content-Type: application/json" \
+>   -d '{}' \
+>   "http://localhost:9100/prpc/Onboard.GetAttestationInfo?json" | jq .
+> ```
+>
+> If you skip this step, `Onboard.Bootstrap` will fail with a KMS authorization error and the KMS will not enter normal service.
+>
+> **Pre-bootstrap checklist:**
+>
+> 1. `Onboard.GetAttestationInfo` returns the current KMS measurement
+> 2. that `mrAggregated` has been allowlisted in your auth backend
+> 3. the auth backend is reachable from the KMS CVM
+> 4. you are still calling the onboard HTTP endpoint, not the post-bootstrap TLS endpoint
 
 ### Step 6: Bootstrap KMS
 
 With KMS in onboard mode, trigger key generation by calling the Bootstrap RPC endpoint. This generates root keys, a TDX attestation quote, and writes `bootstrap-info.json`:
 
 ```bash
+# Inspect the KMS measurement before bootstrap
+curl -s -X POST \
+  -H "Content-Type: application/json" \
+  -d '{}' \
+  "http://localhost:9100/prpc/Onboard.GetAttestationInfo?json" | jq .
+
 # Replace kms.yourdomain.com with your actual KMS domain
 curl -s -X POST \
   -H "Content-Type: application/json" \
@@ -327,7 +355,7 @@ curl -s -X POST \
   "http://localhost:9100/prpc/Onboard.Bootstrap?json" | tee ~/kms-deploy/bootstrap-info.json | jq .
 ```
 
-> **Note:** This uses plain `http://` — KMS is still in onboard mode (no TLS yet). The `tee` command saves the response to `bootstrap-info.json` while also displaying it. You'll need this file later to register KMS on-chain.
+> **Note:** This uses plain `http://` — KMS is still in onboard mode (no TLS yet). The `tee` command saves the response to `bootstrap-info.json` while also displaying it. You'll need this file later to register KMS on-chain. If this call fails with a KMS authorization error, allowlist the `mrAggregated` value first and retry.
 
 Expected response:
 

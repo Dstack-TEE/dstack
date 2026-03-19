@@ -98,13 +98,16 @@ Start in separate terminals:
 For production, deploy KMS and Gateway as CVMs with hardware-rooted security. Production deployments require:
 - KMS running in a CVM (not on the host)
 - Auth server for authorization (webhook mode)
+- KMS measurements allowlisted before bootstrap / onboarding / trusted RPCs can succeed
+
+If you skip the KMS allowlist step, the VM may boot and the onboard UI may still appear, but the KMS will reject bootstrap, onboarding, or later trusted RPCs with authorization errors.
 
 ### Production Checklist
 
 **Required:**
 
 1. Set up TDX host with dstack-vmm
-2. Deploy KMS as CVM (with auth server)
+2. Deploy KMS as CVM (with auth server, capture its attestation info, and allowlist the KMS `mrAggregated` before bootstrap)
 3. Deploy Gateway as CVM
 
 **Optional Add-ons:**
@@ -197,10 +200,15 @@ Create `auth-config.json` for initial KMS deployment:
 ```json
 {
   "osImages": ["0x<os-image-hash>"],
-  "kms": { "allowAnyDevice": true },
+  "kms": {
+    "mrAggregated": ["0x<kms-mr-aggregated>"],
+    "allowAnyDevice": true
+  },
   "apps": {}
 }
 ```
+
+> **Important:** `auth-simple` now treats an empty `kms.mrAggregated` allowlist as deny-all for KMS. Capture the current KMS measurement with `Onboard.GetAttestationInfo` and add it before bootstrap.
 
 Run auth-simple:
 
@@ -460,7 +468,6 @@ Additional KMS instances can onboard from an existing KMS to share the same root
 [core.onboard]
 enabled = true
 auto_bootstrap_domain = ""   # Empty = onboard mode
-quote_enabled = true         # Require TDX attestation
 address = "0.0.0.0"
 port = 9203                  # HTTP port for onboard UI
 ```
@@ -480,7 +487,12 @@ curl http://<new-kms>:9203/finish
 # Restart KMS - it will now serve as a full KMS with shared keys
 ```
 
-> **Note:** For KMS onboarding with `quote_enabled = true`, add the KMS mrAggregated hash to your auth server's `kms.mrAggregated` whitelist.
+> **Note:** KMS onboarding requires attested KMS instances, and both sides must already be authorized. Add the relevant KMS `mrAggregated` hashes to your auth backend first:
+>
+> - the destination KMS must allow the source KMS
+> - the source KMS must allow the destination KMS
+>
+> If you skip this, `Onboard.Onboard` or later trusted RPCs will fail with KMS authorization errors.
 
 ---
 

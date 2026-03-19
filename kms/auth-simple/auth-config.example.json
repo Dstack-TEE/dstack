@@ -3,7 +3,9 @@
     "0x0b327bcd642788b0517de3ff46d31ebd3847b6c64ea40bacde268bb9f1c8ec83"
   ],
   "kms": {
-    "mrAggregated": [],
+    "mrAggregated": [
+      "0x<kms-mr-aggregated>"
+    ],
     "devices": [],
     "allowAnyDevice": true
   },

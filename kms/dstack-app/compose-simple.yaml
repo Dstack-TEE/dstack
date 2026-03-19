@@ -56,6 +56,5 @@ configs:
       [core.onboard]
       enabled = true
       auto_bootstrap_domain = ""
-      quote_enabled = true
       address = "0.0.0.0"
       port = 8000

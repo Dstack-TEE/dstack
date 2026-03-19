@@ -1,13 +1,13 @@
 # KMS Self-Authorization Manual Integration Test Guide
 
-This document describes a manual, AI-executable integration test flow for the KMS self-authorization changes introduced in PR #573.
+This document describes a manual, AI-executable integration test flow for KMS self-authorization and quote-required KMS behavior.
 
 The goal is to validate the following behaviors without depending on `kms/e2e/` from PR #538:
 
-1. **Bootstrap self-check**: a KMS with `quote_enabled = true` must call the auth API and verify that **itself** is allowed before bootstrap succeeds.
-2. **Onboard receiver-side source check**: a new KMS with `quote_enabled = true` must reject onboarding if the **source KMS** is not allowed by the receiver's auth policy.
+1. **Bootstrap self-check**: a KMS must call the auth API and verify that **itself** is allowed before bootstrap succeeds.
+2. **Onboard receiver-side source check**: a new KMS must reject onboarding if the **source KMS** is not allowed by the receiver's auth policy.
 3. **Trusted RPC self-check**: trusted KMS RPCs such as `GetTempCaCert`, `GetKmsKey`, `GetAppKey`, and `SignCert` must fail when the running KMS is no longer allowed by its auth policy.
-4. **Compatibility**: when `quote_enabled = false`, the new bootstrap/onboard self-authorization checks should be skipped.
+4. **Attestation requirement**: KMS always requires attestation; for local development without TDX hardware, use `sdk/simulator`.
 
 This guide is written as a deployment-and-test runbook so an AI agent can follow it end-to-end.
 
@@ -20,10 +20,9 @@ This guide is written as a deployment-and-test runbook so an AI agent can follow
 > 3. `Boot Progress: done` only means the VM guest boot finished. It does **not** guarantee the KMS onboard endpoint is already ready.
 > 4. If you inject helper scripts through `docker-compose.yaml`, prefer inline `configs.content` over `configs.file` unless you have confirmed the extra files are copied into the deployment bundle.
 > 5. The onboard completion endpoint is **GET `/finish`**, not POST.
-> 6. Do **not** reuse a previously captured `mr_aggregated` across redeploys. In practice, the measured value changed across fresh `kms-noquote` redeploys, so auth policies must be generated from the attestation of the **current** VM under test.
-> 7. With `quote_enabled = false`, `Onboard.Bootstrap` skipped the new auth check as expected and returned an empty `attestation` field.
-> 8. With `quote_enabled = false`, runtime trusted RPC self-checks were also skipped: `KMS.GetTempCaCert` still succeeded under a deny policy.
-> 9. End-to-end onboard into a `quote_enabled = false` receiver did **not** complete against a quoted source KMS. The new receiver-side source check was skipped, but the flow later failed on the existing source-side `GetKmsKey` requirement with `No attestation provided`.
+> 6. Do **not** reuse a previously captured `mr_aggregated` across redeploys. Auth policies must be generated from the attestation of the **current** VM under test.
+> 7. KMS now always requires quote/attestation. For local development without TDX hardware, use `sdk/simulator` instead of trying to run a no-attestation KMS flow.
+> 8. For `auth-simple`, `kms.mrAggregated = []` is a deny-all policy for KMS. Use that as the baseline deny configuration, then add the measured KMS MR values for allow cases.
 
 ---
 
@@ -38,7 +37,7 @@ This guide is written as a deployment-and-test runbook so an AI agent can follow
 7. [Test case 2: bootstrap succeeds after self is whitelisted](#7-test-case-2-bootstrap-succeeds-after-self-is-whitelisted)
 8. [Test case 3: receiver rejects onboarding from a denied source KMS](#8-test-case-3-receiver-rejects-onboarding-from-a-denied-source-kms)
 9. [Test case 4: trusted RPCs fail when the running KMS is no longer allowed](#9-test-case-4-trusted-rpcs-fail-when-the-running-kms-is-no-longer-allowed)
-10. [Test case 5: `quote_enabled = false` remains compatible](#10-test-case-5-quote_enabled--false-remains-compatible)
+10. [Test case 5: local development should use the simulator](#10-test-case-5-local-development-should-use-the-simulator)
 11. [Evidence to capture](#11-evidence-to-capture)
 12. [Cleanup](#12-cleanup)
 
@@ -58,7 +57,7 @@ This keeps the test independent from PR #538 while still exercising real deploym
 
 ## 2. Test strategy
 
-Use **real KMS CVMs** with `quote_enabled = true` and a hot-reloadable `auth-simple` policy.
+Use **real KMS CVMs** with a hot-reloadable `auth-simple` policy.
 
 Why `auth-simple`:
 
@@ -80,7 +79,6 @@ Host / operator machine
 ├── auth-simple-dst  (target KMS auth policy)
 ├── kms-src          (bootstrapped, later used as source KMS)
 ├── kms-dst          (fresh KMS used for onboard tests)
-└── optional kms-noquote (fresh KMS with quote_enabled = false)
 ```
 
 Policy responsibilities:
@@ -194,6 +192,8 @@ cat > /tmp/kms-self-auth/auth-dst.json <<'EOF'
 EOF
 ```
 
+These placeholder configs intentionally deny all KMS boots until you populate `kms.mrAggregated` with the measured source or destination KMS values for the current run.
+
 Start the services:
 
 ```bash
@@ -222,7 +222,6 @@ Requirements for **both** VMs:
 
 - `core.onboard.enabled = true`
 - `core.onboard.auto_bootstrap_domain = ""`
-- `core.onboard.quote_enabled = true`
 - `core.auth_api.type = "webhook"`
 
 Point them at different auth services or sidecars:
@@ -392,7 +391,7 @@ cp /tmp/kms-self-auth/auth-dst-allow-src.json /tmp/kms-self-auth/auth-dst.json
 
 ### Purpose
 
-Verify that a KMS with `quote_enabled = true` refuses bootstrap if the auth API denies **its own** measurements.
+Verify that a KMS refuses bootstrap if the auth API denies **its own** measurements.
 
 ### Steps
 
@@ -619,85 +618,31 @@ The important part is that the running KMS must not rely only on bootstrap-time 
 
 ---
 
-## 10. Test case 5: `quote_enabled = false` remains compatible
+## 10. Test case 5: local development should use the simulator
 
 ### Purpose
 
-Verify that the new checks are skipped when `quote_enabled = false`.
+KMS now always requires attestation. For local development without TDX hardware, use `sdk/simulator` so bootstrap, onboard, and trusted RPC flows still exercise the quoted path.
 
 ### Suggested minimal coverage
 
-Deploy an extra KMS named `kms-noquote` with:
-
-```toml
-[core.onboard]
-enabled = true
-auto_bootstrap_domain = ""
-quote_enabled = false
-```
-
-Point it to an auth policy that would otherwise deny it.
-
-### Check A: bootstrap compatibility
-
-1. Deploy `kms-noquote` with a deny policy.
-2. Call:
+1. Start the simulator:
 
 ```bash
-curl -sf -X POST "${KMS_NOQUOTE_ONBOARD%/}/prpc/Onboard.Bootstrap?json" \
-  -H 'Content-Type: application/json' \
-  -d '{"domain":"kms-noquote.example.test"}' \
-  | tee /tmp/kms-self-auth/bootstrap-noquote.json | jq .
+cd dstack/sdk/simulator
+./build.sh
+./dstack-simulator
 ```
+
+2. Point the guest agent client at the simulator endpoint as documented in the SDK README.
+3. Run KMS locally against the simulator-backed guest agent.
+4. Verify bootstrap and trusted RPCs still produce attestation-backed behavior.
 
 ### Expected result
 
-- bootstrap succeeds even though the auth policy would deny a quoted KMS
-- the response's `attestation` field is empty
-
-### Optional runtime compatibility check
-
-After bootstrap and `GET /finish`, probe a trusted RPC while the auth policy still denies the KMS:
-
-```bash
-curl -sk "${KMS_NOQUOTE_RUNTIME%/}/prpc/KMS.GetTempCaCert?json" \
-  | tee /tmp/kms-self-auth/get-temp-ca-noquote-deny.json | jq .
-```
-
-Expected result:
-
-- `GetTempCaCert` still succeeds, because the new runtime self-check is skipped when `quote_enabled = false`
-
-### Check B: noquote receiver still cannot onboard from a quoted source
-
-If you want to test the onboard path too:
-
-1. keep `kms-src` allowed on the source side
-2. deploy `kms-noquote` as a fresh onboarding target
-3. keep the receiver-side policy in deny mode
-4. call `Onboard.Onboard`
-
-Expected result:
-
-- the new receiver-side source authorization check is skipped
-- but end-to-end onboarding still fails later with a source-side error similar to:
-
-```json
-{
-  "error": "Failed to onboard: Request failed with status=400 Bad Request, error={\"error\":\"No attestation provided\"}"
-}
-```
-
-Reason:
-
-- this failure is **not** from the new receiver-side check added in PR #573
-- it comes from the existing source-side `GetKmsKey` path, which still expects attestation from the onboarding target
-- therefore this failure is **correct** when the target KMS has `quote_enabled = false` but the source KMS still requires attested callers
-- so `quote_enabled = false` compatibility is intentionally limited to:
-  - bootstrap
-  - skipping the new receiver-side source check
-  - skipping the new runtime self-check
-- it does **not** mean end-to-end noquote onboarding into a quoted source KMS should succeed
+- local development still uses the same quote-required logic
+- there is no separate no-quote KMS mode to validate anymore
+- simulator-backed development should be treated as the replacement for the old noquote/dev workflow
 
 ---
 
@@ -737,9 +682,8 @@ Then remove test CVMs using your normal `vmm-cli.py remove` or teepod cleanup fl
 
 The change is considered validated if all of the following are true:
 
-1. bootstrap fails under deny policy when `quote_enabled = true`
+1. bootstrap fails under deny policy
 2. bootstrap succeeds after self allowlisting
 3. onboarding rejects a denied source KMS on the receiver side
 4. runtime trusted RPCs stop working after the source KMS is removed from the allowlist
-5. with `quote_enabled = false`, bootstrap and runtime trusted RPCs skip the new checks
-6. with `quote_enabled = false`, receiver-side onboarding does not fail on the **new** source-authorization check, but it still correctly fails against a quoted source KMS that requires attested callers
+5. local development without TDX hardware is expected to use `sdk/simulator` rather than a no-quote KMS mode

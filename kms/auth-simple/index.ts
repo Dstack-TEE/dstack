@@ -122,7 +122,7 @@ class ConfigBackend {
 
     // check aggregated MR
     const allowedMrs = config.kms.mrAggregated.map(normalizeHex);
-    if (allowedMrs.length > 0 && !allowedMrs.includes(mrAggregated)) {
+    if (!allowedMrs.includes(mrAggregated)) {
       return {
         isAllowed: false,
         reason: 'aggregated MR not allowed',

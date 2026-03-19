@@ -241,7 +241,7 @@ export DSTACK_VMM_AUTH_PASSWORD=$(cat ~/.dstack/secrets/vmm-auth-token)
 "quote": null
 ```
 
-This indicates quote_enabled might be false, guest-agent issues, or **SGX not properly configured**:
+This indicates guest-agent issues, simulator misconfiguration, or **SGX not properly configured**:
 
 ```bash
 # Check CVM logs for TDX-related errors (replace VM_ID with actual ID from lsvm)
@@ -259,9 +259,7 @@ curl -s -H "Authorization: Bearer $(cat ~/.dstack/secrets/vmm-auth-token)" \
 
 2. **SGX Auto MP Registration not enabled** - Without this BIOS setting, your platform isn't registered with Intel's PCS, and attestation quotes cannot be verified. Re-enter BIOS and enable "SGX Auto MP Registration".
 
-3. **quote_enabled is false** - Verify your `kms.toml` has `quote_enabled = true` in the `[core.onboard]` section.
-
-4. **Guest-agent not running** - The `/var/run/dstack.sock` socket must exist inside the CVM.
+3. **Guest-agent / simulator not running** - The KMS must be able to reach a working dstack guest agent endpoint. In a real CVM, `/var/run/dstack.sock` must exist. For local development, start `sdk/simulator` first.
 
 ### CVM Fails with "QGS error code: 0x12001"
 
