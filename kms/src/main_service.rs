@@ -23,14 +23,14 @@ use ra_tls::{
 use scale::Decode;
 use sha2::Digest;
 use tracing::info;
-use upgrade_authority::BootInfo;
+use upgrade_authority::{build_boot_info, BootInfo};
 
 use crate::{
     config::KmsConfig,
     crypto::{derive_k256_key, sign_message, sign_message_with_timestamp},
 };
 
-mod upgrade_authority;
+pub(crate) mod upgrade_authority;
 
 #[derive(Clone)]
 pub struct KmsState {
@@ -169,32 +169,7 @@ impl RpcHandler {
         use_boottime_mr: bool,
         vm_config_str: &str,
     ) -> Result<BootConfig> {
-        let tcb_status;
-        let advisory_ids;
-        match att.report.tdx_report() {
-            Some(report) => {
-                tcb_status = report.status.clone();
-                advisory_ids = report.advisory_ids.clone();
-            }
-            None => {
-                tcb_status = "".to_string();
-                advisory_ids = Vec::new();
-            }
-        };
-        let app_info = att.decode_app_info_ex(use_boottime_mr, vm_config_str)?;
-        let boot_info = BootInfo {
-            attestation_mode: att.quote.mode(),
-            mr_aggregated: app_info.mr_aggregated.to_vec(),
-            os_image_hash: app_info.os_image_hash,
-            mr_system: app_info.mr_system.to_vec(),
-            app_id: app_info.app_id,
-            compose_hash: app_info.compose_hash,
-            instance_id: app_info.instance_id,
-            device_id: app_info.device_id,
-            key_provider_info: app_info.key_provider_info,
-            tcb_status,
-            advisory_ids,
-        };
+        let boot_info = build_boot_info(att, use_boottime_mr, vm_config_str)?;
         let response = self
             .state
             .config
