@@ -78,8 +78,8 @@ Recommended minimum per gateway node:
 | Workload | vCPU | Memory | Disk |
 |----------|------|--------|------|
 | Small (< 100 CVMs) | 4 | 4 GB | 20 GB |
-| Medium (100-1000 CVMs) | 8 | 8 GB | 40 GB |
-| Large (> 1000 CVMs) | 16+ | 16+ GB | 40+ GB |
+| Medium (100-1000 CVMs) | 8 | 8 GB | 20 GB |
+| Large (> 1000 CVMs) | 16+ | 16+ GB | 20 GB |
 
 ### Networking Modes
 
@@ -108,7 +108,7 @@ bridge = "dstack-br0"
 
 | Node | node_id | Gateway IP | Client IP range | bootnode |
 |------|---------|------------|-----------------|----------|
-| gateway-1 | 1 | 10.8.0.1/16 | 10.8.0.0/18 | (none or gateway-2) |
+| gateway-1 | 1 | 10.8.0.1/16 | 10.8.0.0/18 | none |
 | gateway-2 | 2 | 10.8.64.1/16 | 10.8.64.0/18 | gateway-1 |
 
 Notes:
