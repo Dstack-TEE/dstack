@@ -24,6 +24,7 @@ members = [
     "iohash",
     "guest-agent",
     "guest-agent/rpc",
+    "guest-agent-simulator",
     "vmm",
     "vmm/rpc",
     "gateway",
