@@ -28,7 +28,10 @@ use ra_tls::{
 };
 use safe_write::safe_write;
 
-use crate::{config::KmsConfig, main_service::upgrade_authority::build_boot_info};
+use crate::{
+    config::KmsConfig,
+    main_service::upgrade_authority::{build_boot_info, local_kms_boot_info},
+};
 
 #[derive(Clone)]
 pub struct OnboardState {
@@ -400,17 +403,18 @@ async fn app_attest(report_data: Vec<u8>) -> Result<AttestResponse> {
 }
 
 async fn ensure_self_kms_allowed(cfg: &KmsConfig) -> Result<()> {
-    let response = app_attest(pad64([0u8; 32]))
+    let boot_info = local_kms_boot_info(cfg.pccs_url.as_deref())
         .await
-        .context("Failed to get local KMS attestation")?;
-    let attestation = VersionedAttestation::from_scale(&response.attestation)
-        .context("Failed to decode local KMS attestation")?
-        .into_inner();
-    let verified = attestation
-        .verify(cfg.pccs_url.as_deref())
+        .context("Failed to build local KMS boot info")?;
+    let response = cfg
+        .auth_api
+        .is_app_allowed(&boot_info, true)
         .await
-        .context("Failed to verify local KMS attestation")?;
-    ensure_kms_allowed(cfg, &verified).await
+        .context("Failed to call KMS auth check")?;
+    if !response.is_allowed {
+        bail!("Boot denied: {}", response.reason);
+    }
+    Ok(())
 }
 
 async fn ensure_remote_kms_allowed(
