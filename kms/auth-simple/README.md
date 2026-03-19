@@ -20,12 +20,13 @@ bun install
 
 Create `auth-config.json` (see `auth-config.example.json`).
 
-For initial KMS deployment, you only need the OS image hash:
+For KMS deployment, you must allowlist both the OS image hash and the KMS `mrAggregated` value:
 
 ```json
 {
   "osImages": ["0x0b327bcd642788b0517de3ff46d31ebd3847b6c64ea40bacde268bb9f1c8ec83"],
   "kms": {
+    "mrAggregated": ["0x<kms-mr-aggregated>"],
     "allowAnyDevice": true
   },
   "apps": {}
@@ -39,7 +40,7 @@ Add more fields as you deploy Gateway and apps:
   "osImages": ["0x..."],
   "gatewayAppId": "0x...",
   "kms": {
-    "mrAggregated": [],
+    "mrAggregated": ["0x..."],
     "devices": [],
     "allowAnyDevice": true
   },
@@ -59,7 +60,7 @@ Add more fields as you deploy Gateway and apps:
 |-------|----------|-------------|
 | `osImages` | Yes | Allowed OS image hashes (from `digest.txt`) |
 | `gatewayAppId` | No | Gateway app ID (add after Gateway deployment) |
-| `kms.mrAggregated` | No | Allowed KMS aggregated MR values |
+| `kms.mrAggregated` | Yes for KMS authorization | Allowed KMS aggregated MR values. An empty array denies all KMS boots. |
 | `kms.devices` | No | Allowed KMS device IDs |
 | `kms.allowAnyDevice` | No | If true, skip device ID check for KMS |
 | `apps.<appId>.composeHashes` | No | Allowed compose hashes for this app |
@@ -160,7 +161,7 @@ KMS boot authorization.
 
 1. `tcbStatus` must be "UpToDate"
 2. `osImageHash` must be in `osImages` array
-3. `mrAggregated` must be in `kms.mrAggregated` (if non-empty)
+3. `mrAggregated` must be in `kms.mrAggregated`
 4. `deviceId` must be in `kms.devices` (unless `allowAnyDevice` is true)
 
 ### App Boot Validation

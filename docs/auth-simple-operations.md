@@ -36,7 +36,7 @@ The config is re-read on each request, so changes take effect immediately withou
 }
 ```
 
-> **Note:** Only `osImages` is required. Add `gatewayAppId` after deploying the Gateway. Add `apps` entries as you deploy applications.
+> **Note:** `osImages` is always required. For KMS authorization, you must also populate `kms.mrAggregated`; if it is left empty, auth-simple denies all KMS boots. Add `gatewayAppId` after deploying the Gateway. Add `apps` entries as you deploy applications.
 
 ---
 
@@ -240,7 +240,7 @@ The `mrAggregated` is sent by the booting KMS in its auth request. To get this v
    KMS boot auth request: { osImageHash: '0x...', mrAggregated: '0x...', ... }
    ```
 
-2. **Initial setup**: Leave `kms.mrAggregated` empty for the first KMS (empty array allows any). After it boots, check the logs and add the value.
+2. **Initial setup**: capture the first KMS measurement with `Onboard.GetAttestationInfo` or from auth logs, then add it to `kms.mrAggregated` before bootstrap. An empty array now denies all KMS boots.
 
 ### Add to Config
 

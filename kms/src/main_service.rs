@@ -99,9 +99,6 @@ struct BootConfig {
 
 impl RpcHandler {
     async fn ensure_self_allowed(&self) -> Result<()> {
-        if !self.state.config.onboard.quote_enabled {
-            return Ok(());
-        }
         let boot_info = self
             .state
             .self_boot_info
@@ -355,9 +352,7 @@ impl KmsRpc for RpcHandler {
         self.ensure_self_allowed()
             .await
             .context("KMS self authorization failed")?;
-        if self.state.config.onboard.quote_enabled {
-            let _info = self.ensure_kms_allowed(&request.vm_config).await?;
-        }
+        let _info = self.ensure_kms_allowed(&request.vm_config).await?;
         Ok(KmsKeyResponse {
             temp_ca_key: self.state.inner.temp_ca_key.clone(),
             keys: vec![KmsKeys {

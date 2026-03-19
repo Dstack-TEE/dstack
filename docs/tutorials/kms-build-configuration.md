@@ -207,7 +207,6 @@ url = "http://127.0.0.1:9200"
 [core.onboard]
 enabled = true
 auto_bootstrap_domain = ""
-quote_enabled = true
 address = "0.0.0.0"
 port = 9100
 EOF
@@ -495,7 +494,6 @@ enabled = true
 # Empty domain = manual bootstrap mode (ensures bootstrap-info.json is written)
 auto_bootstrap_domain = ""
 # Enable TDX quotes - works because KMS runs in CVM
-quote_enabled = true
 address = "0.0.0.0"
 port = 9100
 EOF
