@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+//
+// SPDX-License-Identifier: Apache-2.0
+
 // Package ratls provides RA-TLS certificate verification for dstack TEE applications.
 //
 // RA-TLS embeds TDX attestation quotes into X.509 certificate extensions.
