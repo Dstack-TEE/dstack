@@ -8,7 +8,8 @@ use anyhow::{bail, Context, Result};
 use clap::Parser;
 use dstack_guest_agent::{
     backend::{
-        load_versioned_attestation, simulated_attest_response, simulated_info_attestation,
+        load_versioned_attestation, simulated_attest_response,
+        simulated_certificate_attestation, simulated_info_attestation,
         simulated_quote_response, PlatformBackend,
     },
     config::{self, Config},
@@ -61,8 +62,8 @@ impl PlatformBackend for SimulatorPlatform {
         Ok(Some(simulated_info_attestation(&self.attestation)))
     }
 
-    fn attestation_override(&self) -> Result<Option<VersionedAttestation>> {
-        Ok(Some(self.attestation.clone()))
+    fn certificate_attestation(&self, pubkey: &[u8]) -> Result<VersionedAttestation> {
+        Ok(simulated_certificate_attestation(&self.attestation, pubkey))
     }
 
     fn quote_response(&self, report_data: [u8; 64], vm_config: &str) -> Result<GetQuoteResponse> {
@@ -120,9 +121,10 @@ mod tests {
     }
 
     #[test]
-    fn simulator_provides_attestation_override() {
+    fn simulator_provides_certificate_attestation() {
         let platform = load_fixture_platform();
-        assert!(platform.attestation_override().unwrap().is_some());
+        let cert_attestation = platform.certificate_attestation(b"test-public-key").unwrap();
+        assert!(cert_attestation.decode_app_info(false).is_ok());
         assert!(platform.attestation_for_info().unwrap().is_some());
     }
 }

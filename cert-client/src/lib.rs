@@ -93,23 +93,24 @@ impl CertRequestClient {
         }
     }
 
-    pub async fn request_cert(
+    pub async fn request_cert(&self, key: &KeyPair, config: CertConfigV2) -> Result<Vec<String>> {
+        let pubkey = key.public_key_der();
+        let report_data = QuoteContentType::RaTlsCert.to_report_data(&pubkey);
+        let attestation = ra_rpc::Attestation::quote(&report_data)
+            .context("Failed to get quote for cert pubkey")?
+            .into_versioned();
+        self.sign_cert_with_attestation(key, config, attestation).await
+    }
+
+    pub async fn sign_cert_with_attestation(
         &self,
         key: &KeyPair,
         config: CertConfigV2,
-        attestation_override: Option<VersionedAttestation>,
+        mut attestation: VersionedAttestation,
     ) -> Result<Vec<String>> {
         let pubkey = key.public_key_der();
         let report_data = QuoteContentType::RaTlsCert.to_report_data(&pubkey);
-        let attestation = match attestation_override {
-            Some(mut attestation) => {
-                attestation.set_report_data(report_data);
-                attestation
-            }
-            None => ra_rpc::Attestation::quote(&report_data)
-                .context("Failed to get quote for cert pubkey")?
-                .into_versioned(),
-        };
+        attestation.set_report_data(report_data);
 
         let csr = CertSigningRequestV2 {
             confirm: "please sign cert:".to_string(),

@@ -26,7 +26,7 @@ use k256::ecdsa::SigningKey;
 use or_panic::ResultOrPanic;
 use ra_rpc::{CallContext, RpcCall};
 use ra_tls::{
-    attestation::{QuoteContentType, VersionedAttestation, DEFAULT_HASH_ALGORITHM},
+    attestation::{QuoteContentType, DEFAULT_HASH_ALGORITHM},
     cert::CertConfigV2,
     kdf::{derive_key, derive_p256_key_pair_from_bytes},
 };
@@ -62,20 +62,25 @@ struct AppStateInner {
 }
 
 impl AppStateInner {
-    fn attestation_override(&self) -> Result<Option<VersionedAttestation>> {
-        self.platform.attestation_override()
-    }
-
     fn info_attestation(&self) -> Result<Option<ra_rpc::Attestation>> {
         self.platform.attestation_for_info()
     }
 
+    async fn issue_cert(&self, key: &KeyPair, config: CertConfigV2) -> Result<Vec<String>> {
+        let attestation = self
+            .platform
+            .certificate_attestation(&key.public_key_der())
+            .context("Failed to get certificate attestation")?;
+        self.cert_client
+            .sign_cert_with_attestation(key, config, attestation)
+            .await
+            .context("Failed to sign the CSR")
+    }
+
     async fn request_demo_cert(&self) -> Result<String> {
         let key = KeyPair::generate().context("Failed to generate demo key")?;
-        let attestation_override = self.attestation_override()?;
         let demo_cert = self
-            .cert_client
-            .request_cert(
+            .issue_cert(
                 &key,
                 CertConfigV2 {
                     org_name: None,
@@ -88,7 +93,6 @@ impl AppStateInner {
                     not_after: None,
                     not_before: None,
                 },
-                attestation_override,
             )
             .await
             .context("Failed to get app cert")?
@@ -260,18 +264,7 @@ impl DstackGuestRpc for InternalRpcHandler {
             not_after: request.not_after,
             not_before: request.not_before,
         };
-        let attestation_override = self
-            .state
-            .inner
-            .attestation_override()
-            .context("Failed to load platform attestation override")?;
-        let certificate_chain = self
-            .state
-            .inner
-            .cert_client
-            .request_cert(&derived_key, config, attestation_override)
-            .await
-            .context("Failed to sign the CSR")?;
+        let certificate_chain = self.state.inner.issue_cert(&derived_key, config).await?;
         Ok(GetTlsKeyResponse {
             key: derived_key.serialize_pem(),
             certificate_chain,
@@ -497,18 +490,7 @@ impl TappdRpc for InternalRpcHandlerV0 {
             not_before: None,
             not_after: None,
         };
-        let attestation_override = self
-            .state
-            .inner
-            .attestation_override()
-            .context("Failed to load platform attestation override")?;
-        let certificate_chain = self
-            .state
-            .inner
-            .cert_client
-            .request_cert(&derived_key, config, attestation_override)
-            .await
-            .context("Failed to sign the CSR")?;
+        let certificate_chain = self.state.inner.issue_cert(&derived_key, config).await?;
         Ok(GetTlsKeyResponse {
             key: derived_key.serialize_pem(),
             certificate_chain,
@@ -671,12 +653,14 @@ mod tests {
     use super::*;
     use crate::{
         backend::{
-            load_versioned_attestation, simulated_attest_response, simulated_info_attestation,
+            load_versioned_attestation, simulated_attest_response,
+            simulated_certificate_attestation, simulated_info_attestation,
             simulated_quote_response, PlatformBackend,
         },
         config::{AppComposeWrapper, Config},
     };
     use dstack_guest_agent_rpc::{GetAttestationForAppKeyRequest, SignRequest};
+    use ra_tls::attestation::VersionedAttestation;
     use dstack_types::{AppCompose, AppKeys, KeyProvider};
     use ed25519_dalek::ed25519::signature::hazmat::PrehashVerifier;
     use ed25519_dalek::{
@@ -827,8 +811,8 @@ pNs85uhOZE8z2jr8Pg==
                 Ok(Some(simulated_info_attestation(&self.attestation)))
             }
 
-            fn attestation_override(&self) -> Result<Option<VersionedAttestation>> {
-                Ok(Some(self.attestation.clone()))
+            fn certificate_attestation(&self, pubkey: &[u8]) -> Result<VersionedAttestation> {
+                Ok(simulated_certificate_attestation(&self.attestation, pubkey))
             }
 
             fn quote_response(

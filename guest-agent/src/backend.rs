@@ -9,11 +9,13 @@ use dstack_attest::emit_runtime_event;
 use dstack_guest_agent_rpc::{AttestResponse, GetQuoteResponse};
 use fs_err as fs;
 use ra_rpc::Attestation;
-use ra_tls::attestation::{VersionedAttestation, TDX_QUOTE_REPORT_DATA_RANGE};
+use ra_tls::attestation::{
+    QuoteContentType, VersionedAttestation, TDX_QUOTE_REPORT_DATA_RANGE,
+};
 
 pub trait PlatformBackend: Send + Sync {
     fn attestation_for_info(&self) -> Result<Option<Attestation>>;
-    fn attestation_override(&self) -> Result<Option<VersionedAttestation>>;
+    fn certificate_attestation(&self, pubkey: &[u8]) -> Result<VersionedAttestation>;
     fn quote_response(&self, report_data: [u8; 64], vm_config: &str) -> Result<GetQuoteResponse>;
     fn attest_response(&self, report_data: [u8; 64]) -> Result<AttestResponse>;
     fn emit_event(&self, event: &str, payload: &[u8]) -> Result<()>;
@@ -27,8 +29,11 @@ impl PlatformBackend for RealPlatform {
         Ok(Attestation::local().ok())
     }
 
-    fn attestation_override(&self) -> Result<Option<VersionedAttestation>> {
-        Ok(None)
+    fn certificate_attestation(&self, pubkey: &[u8]) -> Result<VersionedAttestation> {
+        let report_data = QuoteContentType::RaTlsCert.to_report_data(pubkey);
+        Ok(Attestation::quote(&report_data)
+            .context("Failed to get quote for cert pubkey")?
+            .into_versioned())
     }
 
     fn quote_response(&self, report_data: [u8; 64], vm_config: &str) -> Result<GetQuoteResponse> {
@@ -96,4 +101,14 @@ pub fn simulated_attest_response(attestation: &VersionedAttestation) -> AttestRe
 
 pub fn simulated_info_attestation(attestation: &VersionedAttestation) -> Attestation {
     attestation.clone().into_inner()
+}
+
+pub fn simulated_certificate_attestation(
+    attestation: &VersionedAttestation,
+    pubkey: &[u8],
+) -> VersionedAttestation {
+    let mut attestation = attestation.clone();
+    let report_data = QuoteContentType::RaTlsCert.to_report_data(pubkey);
+    attestation.set_report_data(report_data);
+    attestation
 }
