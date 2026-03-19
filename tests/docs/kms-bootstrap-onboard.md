@@ -26,7 +26,7 @@ It also includes a compact deny-case matrix for common service-rejection paths s
 
 For a deeper authorization-focused runbook, also see:
 
-- `tests/docs/kms-self-authrization.md`
+- `tests/docs/kms-self-authorization.md`
 
 ---
 
@@ -68,7 +68,7 @@ Recommended references:
 - `docs/tutorials/kms-cvm-deployment.md`
 - `docs/tutorials/troubleshooting-kms-deployment.md`
 - `kms/auth-simple/README.md`
-- `tests/docs/kms-self-authrization.md`
+- `tests/docs/kms-self-authorization.md`
 
 Operational notes:
 
@@ -336,7 +336,7 @@ Expected result:
 
 - trusted runtime RPCs fail after the KMS is no longer authorized
 
-This overlaps with `kms-self-authrization.md`, but is useful as a quick post-deploy sanity check.
+This overlaps with `kms-self-authorization.md`, but is useful as a quick post-deploy sanity check.
 
 ### 7.6 Recommended deny-case checks
 
