@@ -693,7 +693,7 @@ fn dns_cred_to_proto(cred: DnsCredential) -> DnsCredentialInfo {
     let (provider_type, cf_api_token, cf_api_url) = match &cred.provider {
         DnsProvider::Cloudflare { api_token, api_url } => (
             "cloudflare".to_string(),
-            api_token.clone(),
+            redact_token(api_token),
             api_url.clone().unwrap_or_default(),
         ),
     };
@@ -707,6 +707,15 @@ fn dns_cred_to_proto(cred: DnsCredential) -> DnsCredentialInfo {
         updated_at: cred.updated_at,
         dns_txt_ttl: Some(cred.dns_txt_ttl),
         max_dns_wait: Some(cred.max_dns_wait.as_secs() as u32),
+    }
+}
+
+fn redact_token(token: &str) -> String {
+    let len = token.len();
+    if len <= 8 {
+        "*".repeat(len)
+    } else {
+        format!("{}...{}", &token[..4], &token[len - 4..])
     }
 }
 
