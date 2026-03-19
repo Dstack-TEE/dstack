@@ -5,7 +5,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 APP_COMPOSE_FILE=""
-
 usage() {
   echo "Usage: $0 [-c <app compose file>]"
   echo "  -c  App compose file"
@@ -68,7 +67,8 @@ ACME_STAGING=no
 # Networking mode: bridge or user (default: user)
 # NET_MODE=bridge
 
-# Subnet index. 0~15
+# Subnet index (0~3). Each index gets a /18 range within 10.8.0.0/16.
+# Must be unique per gateway node in the cluster.
 SUBNET_INDEX=0
 
 # My URL
@@ -142,10 +142,16 @@ if [ -z "$RPC_DOMAIN" ]; then
 fi
 
 # Calculate WireGuard IP allocation from SUBNET_INDEX
-WG_IP_PREFIX="10.$((SUBNET_INDEX + 240)).0"
-WG_IP="${WG_IP_PREFIX}.1/12"
-WG_RESERVED_NET="${WG_IP_PREFIX}.1/32"
-WG_CLIENT_RANGE="${WG_IP_PREFIX}.0/16"
+# Each node gets a /18 client range (16k addresses) within the 10.8.0.0/16 network.
+# Gateway IP uses /16 so it can route to all client ranges across the cluster.
+# SUBNET_INDEX 0 → client_ip_range 10.8.0.0/18   (10.8.0.0 ~ 10.8.63.255)
+# SUBNET_INDEX 1 → client_ip_range 10.8.64.0/18  (10.8.64.0 ~ 10.8.127.255)
+# SUBNET_INDEX 2 → client_ip_range 10.8.128.0/18 (10.8.128.0 ~ 10.8.191.255)
+# SUBNET_INDEX 3 → client_ip_range 10.8.192.0/18 (10.8.192.0 ~ 10.8.255.255)
+WG_THIRD_OCTET=$((SUBNET_INDEX * 64))
+WG_IP="10.8.${WG_THIRD_OCTET}.1/16"
+WG_RESERVED_NET="10.8.${WG_THIRD_OCTET}.1/32"
+WG_CLIENT_RANGE="10.8.${WG_THIRD_OCTET}.0/18"
 
 # Calculate listen port for proxy
 if [ "${GATEWAY_SERVING_NUM_PORTS:-1}" -gt 1 ]; then
@@ -278,137 +284,9 @@ fi
 
 $CLI deploy "${DEPLOY_ARGS[@]}"
 
-# Bootstrap Admin RPC configuration
-# Wait for the gateway admin API to be ready, then configure DNS credentials, domain, and certbot
-vmm_curl() {
-  # Calls VMM RPC via curl, handling both unix socket and HTTP URLs
-  local path="$1"; shift
-  if [[ "$VMM_RPC" == unix:* ]]; then
-    local sock="${VMM_RPC#unix:}"
-    curl --unix-socket "$sock" -sf "http://localhost$path" "$@"
-  else
-    curl -sf "${VMM_RPC}${path}" "$@"
-  fi
-}
-
-get_vm_id() {
-  # Resolve VM ID from name via VMM Status RPC
-  local vm_name="$1"
-  local status
-  status=$(vmm_curl "/prpc/Status" -X POST -H "Content-Type: application/json" -d '{}' 2>/dev/null) || true
-  echo "$status" | jq -r --arg name "$vm_name" '.vms[]? | select(.name == $name) | .id' 2>/dev/null | head -1
-}
-
-get_admin_addr() {
-  # In bridge mode, get guest IP from VMM guest API and use port 8001
-  # In other modes, use the configured GATEWAY_ADMIN_RPC_ADDR
-  if [ "${NET_MODE:-bridge}" = "bridge" ]; then
-    local vm_id
-    vm_id=$(get_vm_id "dstack-gateway")
-    if [ -z "$vm_id" ]; then
-      echo "WARN: could not find VM ID for dstack-gateway" >&2
-      echo "$GATEWAY_ADMIN_RPC_ADDR"
-      return
-    fi
-    echo "Bridge mode: VM ID=$vm_id, waiting for guest network info..." >&2
-    local max_retries=30
-    local retry=0
-    while [ $retry -lt $max_retries ]; do
-      local net_info
-      net_info=$(vmm_curl "/guest/NetworkInfo" \
-        -X POST -H "Content-Type: application/json" \
-        -d "{\"id\":\"$vm_id\"}" 2>/dev/null) || true
-      if [ -n "$net_info" ]; then
-        local guest_ip
-        guest_ip=$(echo "$net_info" | jq -r '
-          .interfaces[]? |
-          select(.name != "lo") |
-          .addresses[]? |
-          .address' 2>/dev/null | head -1)
-        if [ -n "$guest_ip" ] && [ "$guest_ip" != "null" ]; then
-          echo "  Guest IP: $guest_ip" >&2
-          echo "${guest_ip}:8001"
-          return
-        fi
-      fi
-      retry=$((retry + 1))
-      sleep 5
-    done
-    echo "WARN: could not get guest IP, falling back to $GATEWAY_ADMIN_RPC_ADDR" >&2
-  fi
-  echo "$GATEWAY_ADMIN_RPC_ADDR"
-}
-
-bootstrap_admin() {
-  local admin_addr
-  admin_addr=$(get_admin_addr)
-  local max_retries=60
-  local retry=0
-
-  echo "Waiting for gateway admin API at $admin_addr..."
-  while [ $retry -lt $max_retries ]; do
-    if curl -sf "http://$admin_addr/prpc/Status" >/dev/null 2>&1; then
-      break
-    fi
-    retry=$((retry + 1))
-    sleep 5
-  done
-
-  if [ $retry -eq $max_retries ]; then
-    echo "WARN: admin API not ready after $max_retries retries, skipping bootstrap"
-    echo "You can configure the gateway manually via the Web UI at http://$admin_addr"
-    return
-  fi
-
-  echo "Admin API ready, bootstrapping configuration..."
-
-  # Set ACME URL
-  if [ "$ACME_STAGING" = "yes" ]; then
-    ACME_URL="https://acme-staging-v02.api.letsencrypt.org/directory"
-  else
-    ACME_URL="https://acme-v02.api.letsencrypt.org/directory"
-  fi
-
-  echo "Setting certbot config (ACME URL: $ACME_URL)..."
-  curl -sf -X POST "http://$admin_addr/prpc/SetCertbotConfig" \
-    -H "Content-Type: application/json" \
-    -d '{"acme_url":"'"$ACME_URL"'","renew_interval_secs":3600,"renew_before_expiration_secs":864000,"renew_timeout_secs":300}' >/dev/null \
-    && echo "  Certbot config set" || echo "  WARN: failed to set certbot config"
-
-  # Create DNS credential if CF_API_TOKEN is provided and no credentials exist yet
-  if [ -n "$CF_API_TOKEN" ]; then
-    existing=$(curl -sf "http://$admin_addr/prpc/ListDnsCredentials" 2>/dev/null)
-    cred_count=$(echo "$existing" | jq -r '.credentials | length' 2>/dev/null || echo "0")
-
-    if [ "$cred_count" = "0" ]; then
-      echo "Creating default DNS credential..."
-      curl -sf -X POST "http://$admin_addr/prpc/CreateDnsCredential" \
-        -H "Content-Type: application/json" \
-        -d '{"name":"cloudflare","provider_type":"cloudflare","cf_api_token":"'"$CF_API_TOKEN"'","set_as_default":true}' >/dev/null \
-        && echo "  DNS credential created" || echo "  WARN: failed to create DNS credential"
-    else
-      echo "  DNS credentials already exist ($cred_count), skipping"
-    fi
-  fi
-
-  # Add ZT-Domain if SRV_DOMAIN is provided and domain doesn't exist yet
-  if [ -n "$SRV_DOMAIN" ]; then
-    existing=$(curl -sf "http://$admin_addr/prpc/ListZtDomains" 2>/dev/null)
-    has_domain=$(echo "$existing" | jq -r '.domains[]? | select(.domain=="'"$SRV_DOMAIN"'") | .domain' 2>/dev/null)
-
-    if [ -z "$has_domain" ]; then
-      echo "Adding ZT-Domain: $SRV_DOMAIN..."
-      curl -sf -X POST "http://$admin_addr/prpc/AddZtDomain" \
-        -H "Content-Type: application/json" \
-        -d '{"domain":"'"$SRV_DOMAIN"'","port":443,"priority":100}' >/dev/null \
-        && echo "  ZT-Domain added" || echo "  WARN: failed to add ZT-Domain"
-    else
-      echo "  ZT-Domain $SRV_DOMAIN already exists, skipping"
-    fi
-  fi
-
-  echo "Bootstrap complete"
-  echo "Gateway Web UI: http://$admin_addr"
-}
-
-bootstrap_admin
+# Run bootstrap-cluster.sh to configure ACME, DNS credentials, and ZT-Domain.
+# This only needs to run once per cluster — additional nodes sync config automatically.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+echo ""
+echo "To bootstrap admin config (only needed for the first node in a cluster):"
+echo "  bash $SCRIPT_DIR/bootstrap-cluster.sh"
