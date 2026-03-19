@@ -11,7 +11,7 @@ use clap::Parser;
 use dstack_guest_agent::{
     backend::PlatformBackend,
     config::{self, Config},
-    AppState, run_server,
+    run_server, AppState,
 };
 use dstack_guest_agent_rpc::{AttestResponse, GetQuoteResponse};
 use ra_rpc::Attestation;
@@ -61,7 +61,10 @@ impl PlatformBackend for SimulatorPlatform {
     }
 
     fn certificate_attestation(&self, pubkey: &[u8]) -> Result<VersionedAttestation> {
-        Ok(simulator::simulated_certificate_attestation(&self.attestation, pubkey))
+        Ok(simulator::simulated_certificate_attestation(
+            &self.attestation,
+            pubkey,
+        ))
     }
 
     fn quote_response(&self, report_data: [u8; 64], vm_config: &str) -> Result<GetQuoteResponse> {
@@ -91,13 +94,16 @@ async fn main() -> Result<()> {
         .extract()
         .context("Failed to extract simulator core config")?;
     warn!(attestation_file = %sim_config.simulator.attestation_file, "starting dstack guest-agent simulator");
-    let attestation = simulator::load_versioned_attestation(&sim_config.simulator.attestation_file)?;
-    let state = AppState::new(sim_config.core, Arc::new(SimulatorPlatform::new(attestation)))
-        .await
-        .context("Failed to create simulator app state")?;
+    let attestation =
+        simulator::load_versioned_attestation(&sim_config.simulator.attestation_file)?;
+    let state = AppState::new(
+        sim_config.core,
+        Arc::new(SimulatorPlatform::new(attestation)),
+    )
+    .await
+    .context("Failed to create simulator app state")?;
     run_server(state, figment, args.watchdog).await
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -105,7 +111,8 @@ mod tests {
 
     fn load_fixture_platform() -> SimulatorPlatform {
         let fixture = simulator::load_versioned_attestation(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../guest-agent/fixtures/attestation.bin"),
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../guest-agent/fixtures/attestation.bin"),
         )
         .expect("fixture attestation should load");
         SimulatorPlatform::new(fixture)
@@ -121,7 +128,9 @@ mod tests {
     #[test]
     fn simulator_provides_certificate_attestation() {
         let platform = load_fixture_platform();
-        let cert_attestation = platform.certificate_attestation(b"test-public-key").unwrap();
+        let cert_attestation = platform
+            .certificate_attestation(b"test-public-key")
+            .unwrap();
         assert!(cert_attestation.decode_app_info(false).is_ok());
         let _ = platform.attestation_for_info().unwrap();
     }

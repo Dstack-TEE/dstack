@@ -457,7 +457,6 @@ fn pad64(data: &[u8]) -> Option<[u8; 64]> {
     Some(padded)
 }
 
-
 impl RpcCall<AppState> for InternalRpcHandler {
     type PrpcService = DstackGuestServer<Self>;
 
@@ -657,15 +656,18 @@ impl RpcCall<AppState> for ExternalRpcHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{backend::PlatformBackend, config::{AppComposeWrapper, Config}};
+    use crate::{
+        backend::PlatformBackend,
+        config::{AppComposeWrapper, Config},
+    };
     use dstack_guest_agent_rpc::{GetAttestationForAppKeyRequest, SignRequest};
-    use ra_tls::attestation::VersionedAttestation;
     use dstack_types::{AppCompose, AppKeys, KeyProvider};
     use ed25519_dalek::ed25519::signature::hazmat::PrehashVerifier;
     use ed25519_dalek::{
         Signature as Ed25519Signature, Verifier, VerifyingKey as Ed25519VerifyingKey,
     };
     use k256::ecdsa::{Signature as K256Signature, VerifyingKey};
+    use ra_tls::attestation::VersionedAttestation;
     use sha2::Sha256;
     use std::collections::HashSet;
     use std::convert::TryFrom;
@@ -812,7 +814,8 @@ pNs85uhOZE8z2jr8Pg==
 
             fn certificate_attestation(&self, pubkey: &[u8]) -> Result<VersionedAttestation> {
                 let mut attestation = self.attestation.clone();
-                let report_data = ra_tls::attestation::QuoteContentType::RaTlsCert.to_report_data(pubkey);
+                let report_data =
+                    ra_tls::attestation::QuoteContentType::RaTlsCert.to_report_data(pubkey);
                 attestation.set_report_data(report_data);
                 Ok(attestation)
             }
@@ -822,15 +825,18 @@ pNs85uhOZE8z2jr8Pg==
                 report_data: [u8; 64],
                 vm_config: &str,
             ) -> Result<GetQuoteResponse> {
-                let ra_tls::attestation::VersionedAttestation::V0 { attestation } = self.attestation.clone();
+                let ra_tls::attestation::VersionedAttestation::V0 { attestation } =
+                    self.attestation.clone();
                 let mut attestation = attestation;
                 let Some(quote) = attestation.tdx_quote_mut() else {
                     return Err(anyhow::anyhow!("Quote not found"));
                 };
-                quote.quote[ra_tls::attestation::TDX_QUOTE_REPORT_DATA_RANGE].copy_from_slice(&report_data);
+                quote.quote[ra_tls::attestation::TDX_QUOTE_REPORT_DATA_RANGE]
+                    .copy_from_slice(&report_data);
                 Ok(GetQuoteResponse {
                     quote: quote.quote.to_vec(),
-                    event_log: serde_json::to_string(&quote.event_log).context("Failed to serialize event log")?,
+                    event_log: serde_json::to_string(&quote.event_log)
+                        .context("Failed to serialize event log")?,
                     report_data: report_data.to_vec(),
                     vm_config: vm_config.to_string(),
                 })
@@ -854,7 +860,10 @@ pNs85uhOZE8z2jr8Pg==
             cert_client: dummy_cert_client,
             demo_cert: RwLock::new(String::new()),
             platform: Arc::new(TestSimulatorPlatform {
-                attestation: VersionedAttestation::from_scale(&std::fs::read(temp_attestation_file.path()).unwrap()).unwrap(),
+                attestation: VersionedAttestation::from_scale(
+                    &std::fs::read(temp_attestation_file.path()).unwrap(),
+                )
+                .unwrap(),
             }),
         };
 

@@ -14,6 +14,7 @@ log_level = "debug"
 keys_file = "appkeys.json"
 compose_file = "app-compose.json"
 sys_config_file = "sys-config.json"
+data_disks = ["/"]
 
 [default.core.simulator]
 attestation_file = "attestation.bin"

@@ -4,7 +4,7 @@
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use dstack_guest_agent::{config, AppState, run_server};
+use dstack_guest_agent::{config, run_server, AppState};
 
 #[derive(Parser)]
 #[command(author, version, about, long_version = dstack_guest_agent::app_version())]

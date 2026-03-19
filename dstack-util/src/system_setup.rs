@@ -27,7 +27,10 @@ use luks2::{
     LuksAf, LuksConfig, LuksDigest, LuksHeader, LuksJson, LuksKdf, LuksKeyslot, LuksSegment,
     LuksSegmentSize,
 };
-use ra_rpc::{client::{CertInfo, RaClient, RaClientConfig}, Attestation};
+use ra_rpc::{
+    client::{CertInfo, RaClient, RaClientConfig},
+    Attestation,
+};
 use ra_tls::{
     attestation::QuoteContentType,
     cert::{generate_ra_cert, CertConfigV2, CertSigningRequestV2, Csr},
@@ -55,7 +58,6 @@ use dstack_gateway_rpc::{
 use ra_tls::rcgen::{KeyPair, PKCS_ECDSA_P256_SHA256};
 use serde_human_bytes as hex_bytes;
 use serde_json::Value;
-
 
 async fn sign_cert_request(
     cert_client: &CertRequestClient,

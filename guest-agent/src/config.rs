@@ -16,7 +16,10 @@ pub fn load_config_figment(config_file: Option<&str>) -> Figment {
     load_config_figment_with_default(DEFAULT_CONFIG, config_file)
 }
 
-pub fn load_config_figment_with_default(default_config: &str, config_file: Option<&str>) -> Figment {
+pub fn load_config_figment_with_default(
+    default_config: &str,
+    config_file: Option<&str>,
+) -> Figment {
     load_config("dstack", default_config, config_file, true)
 }
 

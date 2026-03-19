@@ -4,12 +4,12 @@
 
 use std::{future::pending, os::unix::net::UnixListener as StdUnixListener, time::Duration};
 
-use anyhow::{anyhow, Context, Result};
 use crate::config::BindAddr;
 use crate::guest_api_service::GuestApiHandler;
 use crate::http_routes;
 use crate::rpc_service::{AppState, ExternalRpcHandler, InternalRpcHandler, InternalRpcHandlerV0};
 use crate::socket_activation::{ActivatedSockets, ActivatedUnixListener};
+use anyhow::{anyhow, Context, Result};
 use rocket::{
     fairing::AdHoc,
     figment::Figment,
@@ -191,9 +191,15 @@ pub async fn run(state: AppState, figment: Figment, watchdog: bool) -> Result<()
     let internal_v0_figment = figment.clone().select("internal-v0");
     let internal_figment = figment.clone().select("internal");
     let external_figment = figment.clone().select("external");
-    let bind_addr: BindAddr = external_figment
-        .extract()
-        .context("Failed to extract bind address")?;
+    let bind_addr = if watchdog {
+        Some(
+            external_figment
+                .extract::<BindAddr>()
+                .context("Failed to extract bind address")?,
+        )
+    } else {
+        None
+    };
     let guest_api_figment = figment.select("guest-api");
 
     let activated = ActivatedSockets::from_env();
@@ -211,7 +217,7 @@ pub async fn run(state: AppState, figment: Figment, watchdog: bool) -> Result<()
         _ = async {
             let _ = tappd_ready_rx.await;
             let _ = sock_ready_rx.await;
-            if watchdog {
+            if let Some(bind_addr) = bind_addr {
                 run_watchdog(bind_addr.port).await;
             } else {
                 pending::<()>().await;

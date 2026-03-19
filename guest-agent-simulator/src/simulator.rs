@@ -6,11 +6,9 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use dstack_guest_agent_rpc::{AttestResponse, GetQuoteResponse};
-use std::fs;
 use ra_rpc::Attestation;
-use ra_tls::attestation::{
-    QuoteContentType, VersionedAttestation, TDX_QUOTE_REPORT_DATA_RANGE,
-};
+use ra_tls::attestation::{QuoteContentType, VersionedAttestation, TDX_QUOTE_REPORT_DATA_RANGE};
+use std::fs;
 
 pub fn load_versioned_attestation(path: impl AsRef<Path>) -> Result<VersionedAttestation> {
     let path = path.as_ref();
