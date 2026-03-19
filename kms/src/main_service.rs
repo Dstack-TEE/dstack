@@ -105,9 +105,7 @@ impl RpcHandler {
         let boot_info = self
             .state
             .self_boot_info
-            .get_or_try_init(|| async {
-                local_kms_boot_info(self.state.config.pccs_url.as_deref()).await
-            })
+            .get_or_try_init(|| local_kms_boot_info(self.state.config.pccs_url.as_deref()))
             .await
             .context("Failed to load cached self boot info")?;
         let response = self
