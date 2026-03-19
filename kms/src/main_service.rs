@@ -22,15 +22,16 @@ use ra_tls::{
 };
 use scale::Decode;
 use sha2::Digest;
+use tokio::sync::OnceCell;
 use tracing::info;
-use upgrade_authority::BootInfo;
+use upgrade_authority::{build_boot_info, local_kms_boot_info, BootInfo};
 
 use crate::{
     config::KmsConfig,
     crypto::{derive_k256_key, sign_message, sign_message_with_timestamp},
 };
 
-mod upgrade_authority;
+pub(crate) mod upgrade_authority;
 
 #[derive(Clone)]
 pub struct KmsState {
@@ -52,6 +53,7 @@ pub struct KmsStateInner {
     temp_ca_cert: String,
     temp_ca_key: String,
     verifier: CvmVerifier,
+    self_boot_info: OnceCell<BootInfo>,
 }
 
 impl KmsState {
@@ -79,6 +81,7 @@ impl KmsState {
                 temp_ca_cert,
                 temp_ca_key,
                 verifier,
+                self_boot_info: OnceCell::new(),
             }),
         })
     }
@@ -95,6 +98,29 @@ struct BootConfig {
 }
 
 impl RpcHandler {
+    async fn ensure_self_allowed(&self) -> Result<()> {
+        if !self.state.config.onboard.quote_enabled {
+            return Ok(());
+        }
+        let boot_info = self
+            .state
+            .self_boot_info
+            .get_or_try_init(|| local_kms_boot_info(self.state.config.pccs_url.as_deref()))
+            .await
+            .context("Failed to load cached self boot info")?;
+        let response = self
+            .state
+            .config
+            .auth_api
+            .is_app_allowed(boot_info, true)
+            .await
+            .context("Failed to call self KMS auth check")?;
+        if !response.is_allowed {
+            bail!("KMS is not allowed: {}", response.reason);
+        }
+        Ok(())
+    }
+
     fn ensure_attested(&self) -> Result<&VerifiedAttestation> {
         let Some(attestation) = &self.attestation else {
             bail!("No attestation provided");
@@ -169,32 +195,7 @@ impl RpcHandler {
         use_boottime_mr: bool,
         vm_config_str: &str,
     ) -> Result<BootConfig> {
-        let tcb_status;
-        let advisory_ids;
-        match att.report.tdx_report() {
-            Some(report) => {
-                tcb_status = report.status.clone();
-                advisory_ids = report.advisory_ids.clone();
-            }
-            None => {
-                tcb_status = "".to_string();
-                advisory_ids = Vec::new();
-            }
-        };
-        let app_info = att.decode_app_info_ex(use_boottime_mr, vm_config_str)?;
-        let boot_info = BootInfo {
-            attestation_mode: att.quote.mode(),
-            mr_aggregated: app_info.mr_aggregated.to_vec(),
-            os_image_hash: app_info.os_image_hash,
-            mr_system: app_info.mr_system.to_vec(),
-            app_id: app_info.app_id,
-            compose_hash: app_info.compose_hash,
-            instance_id: app_info.instance_id,
-            device_id: app_info.device_id,
-            key_provider_info: app_info.key_provider_info,
-            tcb_status,
-            advisory_ids,
-        };
+        let boot_info = build_boot_info(att, use_boottime_mr, vm_config_str)?;
         let response = self
             .state
             .config
@@ -239,6 +240,9 @@ impl KmsRpc for RpcHandler {
         if request.api_version > 1 {
             bail!("Unsupported API version: {}", request.api_version);
         }
+        self.ensure_self_allowed()
+            .await
+            .context("KMS self authorization failed")?;
         let BootConfig {
             boot_info,
             gateway_app_id,
@@ -279,6 +283,9 @@ impl KmsRpc for RpcHandler {
     }
 
     async fn get_app_env_encrypt_pub_key(self, request: AppId) -> Result<PublicKeyResponse> {
+        self.ensure_self_allowed()
+            .await
+            .context("KMS self authorization failed")?;
         let secret = kdf::derive_dh_secret(
             &self.state.root_ca.key,
             &[&request.app_id[..], "env-encrypt-key".as_bytes()],
@@ -345,6 +352,9 @@ impl KmsRpc for RpcHandler {
     }
 
     async fn get_kms_key(self, request: GetKmsKeyRequest) -> Result<KmsKeyResponse> {
+        self.ensure_self_allowed()
+            .await
+            .context("KMS self authorization failed")?;
         if self.state.config.onboard.quote_enabled {
             let _info = self.ensure_kms_allowed(&request.vm_config).await?;
         }
@@ -358,6 +368,9 @@ impl KmsRpc for RpcHandler {
     }
 
     async fn get_temp_ca_cert(self) -> Result<GetTempCaCertResponse> {
+        self.ensure_self_allowed()
+            .await
+            .context("KMS self authorization failed")?;
         Ok(GetTempCaCertResponse {
             temp_ca_cert: self.state.inner.temp_ca_cert.clone(),
             temp_ca_key: self.state.inner.temp_ca_key.clone(),
@@ -366,6 +379,9 @@ impl KmsRpc for RpcHandler {
     }
 
     async fn sign_cert(self, request: SignCertRequest) -> Result<SignCertResponse> {
+        self.ensure_self_allowed()
+            .await
+            .context("KMS self authorization failed")?;
         let csr = match request.api_version {
             1 => {
                 let csr = CertSigningRequestV1::decode(&mut &request.csr[..])

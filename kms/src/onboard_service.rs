@@ -2,7 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use anyhow::{Context, Result};
+use std::sync::{Arc, Mutex};
+
+use anyhow::{bail, Context, Result};
 use dstack_guest_agent_rpc::{
     dstack_guest_client::DstackGuestClient, AttestResponse, RawQuoteArgs,
 };
@@ -15,15 +17,21 @@ use dstack_kms_rpc::{
 use fs_err as fs;
 use http_client::prpc::PrpcClient;
 use k256::ecdsa::SigningKey;
-use ra_rpc::{client::RaClient, CallContext, RpcCall};
+use ra_rpc::{
+    client::{CertInfo, RaClient, RaClientConfig},
+    CallContext, RpcCall,
+};
 use ra_tls::{
-    attestation::{QuoteContentType, VersionedAttestation},
+    attestation::{QuoteContentType, VerifiedAttestation, VersionedAttestation},
     cert::{CaCert, CertRequest},
     rcgen::{Certificate, KeyPair, PKCS_ECDSA_P256_SHA256},
 };
 use safe_write::safe_write;
 
-use crate::config::KmsConfig;
+use crate::{
+    config::KmsConfig,
+    main_service::upgrade_authority::{build_boot_info, local_kms_boot_info},
+};
 
 #[derive(Clone)]
 pub struct OnboardState {
@@ -53,6 +61,11 @@ impl RpcCall<OnboardState> for OnboardHandler {
 impl OnboardRpc for OnboardHandler {
     async fn bootstrap(self, request: BootstrapRequest) -> Result<BootstrapResponse> {
         let quote_enabled = self.state.config.onboard.quote_enabled;
+        if quote_enabled {
+            ensure_self_kms_allowed(&self.state.config)
+                .await
+                .context("KMS is not allowed to bootstrap")?;
+        }
         let keys = Keys::generate(&request.domain, quote_enabled)
             .await
             .context("Failed to generate keys")?;
@@ -85,6 +98,7 @@ impl OnboardRpc for OnboardHandler {
             format!("{source_url}/prpc")
         };
         let keys = Keys::onboard(
+            &self.state.config,
             &source_url,
             &request.domain,
             self.state.config.onboard.quote_enabled,
@@ -222,13 +236,40 @@ impl Keys {
     }
 
     async fn onboard(
+        cfg: &KmsConfig,
         other_kms_url: &str,
         domain: &str,
         quote_enabled: bool,
         pccs_url: Option<String>,
     ) -> Result<Self> {
-        let kms_client = RaClient::new(other_kms_url.into(), true)?;
-        let mut kms_client = KmsClient::new(kms_client);
+        let mut source_attestation_slot = None;
+        let mut kms_client = if quote_enabled {
+            let attestation_slot = Arc::new(Mutex::new(None::<VerifiedAttestation>));
+            let attestation_slot_out = attestation_slot.clone();
+            let client = RaClientConfig::builder()
+                .tls_no_check(true)
+                .remote_uri(other_kms_url.to_string())
+                .cert_validator(Box::new(move |info: Option<CertInfo>| {
+                    let Some(info) = info else {
+                        bail!("Source KMS did not present a TLS certificate");
+                    };
+                    let Some(attestation) = info.attestation else {
+                        bail!("Source KMS certificate does not contain attestation");
+                    };
+                    let mut slot = attestation_slot_out
+                        .lock()
+                        .map_err(|_| anyhow::anyhow!("source attestation mutex poisoned"))?;
+                    *slot = Some(attestation);
+                    Ok(())
+                }))
+                .maybe_pccs_url(pccs_url.clone())
+                .build()
+                .into_client()?;
+            source_attestation_slot = Some(attestation_slot);
+            KmsClient::new(client)
+        } else {
+            KmsClient::new(RaClient::new(other_kms_url.into(), true)?)
+        };
 
         if quote_enabled {
             let tmp_ca = kms_client.get_temp_ca_cert().await?;
@@ -236,6 +277,15 @@ impl Keys {
             let ra_client = RaClient::new_mtls(other_kms_url.into(), ra_cert, ra_key, pccs_url)
                 .context("Failed to create client")?;
             kms_client = KmsClient::new(ra_client);
+            let source_attestation = source_attestation_slot
+                .context("source attestation slot missing")?
+                .lock()
+                .map_err(|_| anyhow::anyhow!("source attestation mutex poisoned"))?
+                .clone()
+                .context("Missing source KMS attestation")?;
+            ensure_remote_kms_allowed(cfg, &source_attestation)
+                .await
+                .context("Source KMS is not allowed for onboarding")?;
         }
 
         let info = dstack_client().info().await.context("Failed to get info")?;
@@ -328,6 +378,11 @@ pub(crate) async fn update_certs(cfg: &KmsConfig) -> Result<()> {
 }
 
 pub(crate) async fn bootstrap_keys(cfg: &KmsConfig) -> Result<()> {
+    if cfg.onboard.quote_enabled {
+        ensure_self_kms_allowed(cfg)
+            .await
+            .context("KMS is not allowed to auto-bootstrap")?;
+    }
     let keys = Keys::generate(
         &cfg.onboard.auto_bootstrap_domain,
         cfg.onboard.quote_enabled,
@@ -346,6 +401,42 @@ fn dstack_client() -> DstackGuestClient<PrpcClient> {
 
 async fn app_attest(report_data: Vec<u8>) -> Result<AttestResponse> {
     dstack_client().attest(RawQuoteArgs { report_data }).await
+}
+
+async fn ensure_self_kms_allowed(cfg: &KmsConfig) -> Result<()> {
+    let boot_info = local_kms_boot_info(cfg.pccs_url.as_deref())
+        .await
+        .context("Failed to build local KMS boot info")?;
+    let response = cfg
+        .auth_api
+        .is_app_allowed(&boot_info, true)
+        .await
+        .context("Failed to call KMS auth check")?;
+    if !response.is_allowed {
+        bail!("Boot denied: {}", response.reason);
+    }
+    Ok(())
+}
+
+async fn ensure_remote_kms_allowed(
+    cfg: &KmsConfig,
+    attestation: &VerifiedAttestation,
+) -> Result<()> {
+    ensure_kms_allowed(cfg, attestation).await
+}
+
+async fn ensure_kms_allowed(cfg: &KmsConfig, attestation: &VerifiedAttestation) -> Result<()> {
+    let boot_info = build_boot_info(attestation, false, "")
+        .context("Failed to build KMS boot info from attestation")?;
+    let response = cfg
+        .auth_api
+        .is_app_allowed(&boot_info, true)
+        .await
+        .context("Failed to call KMS auth check")?;
+    if !response.is_allowed {
+        bail!("Boot denied: {}", response.reason);
+    }
+    Ok(())
 }
 
 async fn attest_keys(p256_pubkey: &[u8], k256_pubkey: &[u8]) -> Result<Vec<u8>> {

@@ -4,7 +4,13 @@
 
 use crate::config::AuthApi;
 use anyhow::{bail, Context, Result};
+use dstack_guest_agent_rpc::{
+    dstack_guest_client::DstackGuestClient, AttestResponse, RawQuoteArgs,
+};
+use http_client::prpc::PrpcClient;
 use ra_tls::attestation::AttestationMode;
+use ra_tls::attestation::VerifiedAttestation;
+use ra_tls::attestation::VersionedAttestation;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_human_bytes as hex_bytes;
@@ -31,6 +37,53 @@ pub(crate) struct BootInfo {
     pub key_provider_info: Vec<u8>,
     pub tcb_status: String,
     pub advisory_ids: Vec<String>,
+}
+
+pub(crate) fn build_boot_info(
+    att: &VerifiedAttestation,
+    use_boottime_mr: bool,
+    vm_config_str: &str,
+) -> Result<BootInfo> {
+    let tcb_status;
+    let advisory_ids;
+    match att.report.tdx_report() {
+        Some(report) => {
+            tcb_status = report.status.clone();
+            advisory_ids = report.advisory_ids.clone();
+        }
+        None => {
+            tcb_status = "".to_string();
+            advisory_ids = Vec::new();
+        }
+    };
+    let app_info = att.decode_app_info_ex(use_boottime_mr, vm_config_str)?;
+    Ok(BootInfo {
+        attestation_mode: att.quote.mode(),
+        mr_aggregated: app_info.mr_aggregated.to_vec(),
+        os_image_hash: app_info.os_image_hash,
+        mr_system: app_info.mr_system.to_vec(),
+        app_id: app_info.app_id,
+        compose_hash: app_info.compose_hash,
+        instance_id: app_info.instance_id,
+        device_id: app_info.device_id,
+        key_provider_info: app_info.key_provider_info,
+        tcb_status,
+        advisory_ids,
+    })
+}
+
+pub(crate) async fn local_kms_boot_info(pccs_url: Option<&str>) -> Result<BootInfo> {
+    let response = app_attest(pad64([0u8; 32]))
+        .await
+        .context("Failed to get local KMS attestation")?;
+    let attestation = VersionedAttestation::from_scale(&response.attestation)
+        .context("Failed to decode local KMS attestation")?
+        .into_inner();
+    let verified = attestation
+        .verify(pccs_url)
+        .await
+        .context("Failed to verify local KMS attestation")?;
+    build_boot_info(&verified, false, "")
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -133,4 +186,21 @@ fn url_join(url: &str, path: &str) -> String {
     }
     url.push_str(path);
     url
+}
+
+fn dstack_client() -> DstackGuestClient<PrpcClient> {
+    let address = dstack_types::dstack_agent_address();
+    let http_client = PrpcClient::new(address);
+    DstackGuestClient::new(http_client)
+}
+
+async fn app_attest(report_data: Vec<u8>) -> Result<AttestResponse> {
+    dstack_client().attest(RawQuoteArgs { report_data }).await
+}
+
+fn pad64(hash: [u8; 32]) -> Vec<u8> {
+    let mut padded = Vec::with_capacity(64);
+    padded.extend_from_slice(&hash);
+    padded.resize(64, 0);
+    padded
 }
