@@ -256,9 +256,10 @@ impl Keys {
                     let Some(attestation) = info.attestation else {
                         bail!("Source KMS certificate does not contain attestation");
                     };
-                    *attestation_slot_out
+                    let mut slot = attestation_slot_out
                         .lock()
-                        .expect("source attestation mutex poisoned") = Some(attestation);
+                        .map_err(|_| anyhow::anyhow!("source attestation mutex poisoned"))?;
+                    *slot = Some(attestation);
                     Ok(())
                 }))
                 .maybe_pccs_url(pccs_url.clone())
@@ -277,9 +278,9 @@ impl Keys {
                 .context("Failed to create client")?;
             kms_client = KmsClient::new(ra_client);
             let source_attestation = source_attestation_slot
-                .expect("source attestation slot missing")
+                .context("source attestation slot missing")?
                 .lock()
-                .expect("source attestation mutex poisoned")
+                .map_err(|_| anyhow::anyhow!("source attestation mutex poisoned"))?
                 .clone()
                 .context("Missing source KMS attestation")?;
             ensure_remote_kms_allowed(cfg, &source_attestation)
