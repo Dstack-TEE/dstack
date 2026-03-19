@@ -6,11 +6,7 @@ use anyhow::{Context, Result};
 use dstack_kms_rpc::{kms_client::KmsClient, SignCertRequest};
 use dstack_types::{AppKeys, KeyProvider};
 use ra_rpc::client::{RaClient, RaClientConfig};
-use ra_tls::{
-    attestation::{QuoteContentType, VersionedAttestation},
-    cert::{generate_ra_cert, CaCert, CertConfigV2, CertSigningRequestV2, Csr},
-    rcgen::KeyPair,
-};
+use ra_tls::cert::{generate_ra_cert, CaCert, CertSigningRequestV2};
 
 pub enum CertRequestClient {
     Local {
@@ -91,36 +87,5 @@ impl CertRequestClient {
                 Ok(CertRequestClient::Kms { client, vm_config })
             }
         }
-    }
-
-    pub async fn request_cert(&self, key: &KeyPair, config: CertConfigV2) -> Result<Vec<String>> {
-        let pubkey = key.public_key_der();
-        let report_data = QuoteContentType::RaTlsCert.to_report_data(&pubkey);
-        let attestation = ra_rpc::Attestation::quote(&report_data)
-            .context("Failed to get quote for cert pubkey")?
-            .into_versioned();
-        self.sign_cert_with_attestation(key, config, attestation).await
-    }
-
-    pub async fn sign_cert_with_attestation(
-        &self,
-        key: &KeyPair,
-        config: CertConfigV2,
-        mut attestation: VersionedAttestation,
-    ) -> Result<Vec<String>> {
-        let pubkey = key.public_key_der();
-        let report_data = QuoteContentType::RaTlsCert.to_report_data(&pubkey);
-        attestation.set_report_data(report_data);
-
-        let csr = CertSigningRequestV2 {
-            confirm: "please sign cert:".to_string(),
-            pubkey,
-            config,
-            attestation,
-        };
-        let signature = csr.signed_by(key).context("Failed to sign the CSR")?;
-        self.sign_csr(&csr, &signature)
-            .await
-            .context("Failed to sign the CSR")
     }
 }

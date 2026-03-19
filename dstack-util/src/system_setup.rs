@@ -27,8 +27,11 @@ use luks2::{
     LuksAf, LuksConfig, LuksDigest, LuksHeader, LuksJson, LuksKdf, LuksKeyslot, LuksSegment,
     LuksSegmentSize,
 };
-use ra_rpc::client::{CertInfo, RaClient, RaClientConfig};
-use ra_tls::cert::{generate_ra_cert, CertConfigV2};
+use ra_rpc::{client::{CertInfo, RaClient, RaClientConfig}, Attestation};
+use ra_tls::{
+    attestation::QuoteContentType,
+    cert::{generate_ra_cert, CertConfigV2, CertSigningRequestV2, Csr},
+};
 use rand::Rng as _;
 use safe_write::safe_write;
 use scopeguard::defer;
@@ -52,6 +55,30 @@ use dstack_gateway_rpc::{
 use ra_tls::rcgen::{KeyPair, PKCS_ECDSA_P256_SHA256};
 use serde_human_bytes as hex_bytes;
 use serde_json::Value;
+
+
+async fn sign_cert_request(
+    cert_client: &CertRequestClient,
+    key: &KeyPair,
+    config: CertConfigV2,
+) -> Result<Vec<String>> {
+    let pubkey = key.public_key_der();
+    let report_data = QuoteContentType::RaTlsCert.to_report_data(&pubkey);
+    let attestation = Attestation::quote(&report_data)
+        .context("Failed to get quote for cert pubkey")?
+        .into_versioned();
+    let csr = CertSigningRequestV2 {
+        confirm: "please sign cert:".to_string(),
+        pubkey,
+        config,
+        attestation,
+    };
+    let signature = csr.signed_by(key).context("Failed to sign the CSR")?;
+    cert_client
+        .sign_csr(&csr, &signature)
+        .await
+        .context("Failed to sign the CSR")
+}
 
 mod config_id_verifier;
 
@@ -500,8 +527,7 @@ impl<'a> GatewayContext<'a> {
             not_before: None,
             not_after: Some(cert_not_after),
         };
-        let certs = cert_client
-            .request_cert(&key, config, None)
+        let certs = sign_cert_request(&cert_client, &key, config)
             .await
             .context("Failed to request cert")?;
         let client_cert = certs.join("\n");
@@ -520,8 +546,7 @@ impl<'a> GatewayContext<'a> {
             not_before: None,
             not_after: Some(cert_not_after),
         };
-        let certs_with_quote = cert_client
-            .request_cert(&key, config_with_quote, None)
+        let certs_with_quote = sign_cert_request(&cert_client, &key, config_with_quote)
             .await
             .context("Failed to request cert with quote")?;
         let client_cert_with_quote = certs_with_quote.join("\n");

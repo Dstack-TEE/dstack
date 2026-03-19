@@ -27,7 +27,7 @@ use or_panic::ResultOrPanic;
 use ra_rpc::{CallContext, RpcCall};
 use ra_tls::{
     attestation::{QuoteContentType, DEFAULT_HASH_ALGORITHM},
-    cert::CertConfigV2,
+    cert::{CertConfigV2, CertSigningRequestV2, Csr},
     kdf::{derive_key, derive_p256_key_pair_from_bytes},
 };
 use rcgen::KeyPair;
@@ -67,12 +67,20 @@ impl AppStateInner {
     }
 
     async fn issue_cert(&self, key: &KeyPair, config: CertConfigV2) -> Result<Vec<String>> {
+        let pubkey = key.public_key_der();
         let attestation = self
             .platform
-            .certificate_attestation(&key.public_key_der())
+            .certificate_attestation(&pubkey)
             .context("Failed to get certificate attestation")?;
+        let csr = CertSigningRequestV2 {
+            confirm: "please sign cert:".to_string(),
+            pubkey,
+            config,
+            attestation,
+        };
+        let signature = csr.signed_by(key).context("Failed to sign the CSR")?;
         self.cert_client
-            .sign_cert_with_attestation(key, config, attestation)
+            .sign_csr(&csr, &signature)
             .await
             .context("Failed to sign the CSR")
     }
