@@ -1,0 +1,96 @@
+# SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+name: Simulator Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (for example: 0.5.8)'
+        required: true
+        type: string
+  push:
+    tags:
+      - 'simulator-v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    env:
+      TARGET_TRIPLE: x86_64-unknown-linux-musl
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Resolve version and tag
+        run: |
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            VERSION="${GITHUB_REF#refs/tags/simulator-v}"
+          fi
+          VERSION="${VERSION#simulator-v}"
+          TAG="simulator-v${VERSION}"
+          echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
+          echo "TAG=${TAG}" >> "$GITHUB_ENV"
+          echo "Resolved release version: ${VERSION}"
+
+      - name: Install musl toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ env.TARGET_TRIPLE }}
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build musl simulator binary
+        run: cargo build --locked --release --target "${TARGET_TRIPLE}" -p dstack-guest-agent-simulator
+
+      - name: Package release bundle
+        run: ./guest-agent-simulator/package-release.sh "${VERSION}" "${TARGET_TRIPLE}"
+
+      - name: GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ env.TAG }}
+          name: "Simulator Release v${{ env.VERSION }}"
+          files: |
+            guest-agent-simulator/dist/dstack-simulator-${{ env.VERSION }}-${{ env.TARGET_TRIPLE }}.tar.gz
+            guest-agent-simulator/dist/dstack-simulator-${{ env.VERSION }}-${{ env.TARGET_TRIPLE }}.tar.gz.sha256
+            guest-agent-simulator/install-systemd.sh
+          body: |
+            ## Release Assets
+
+            - `dstack-simulator-${{ env.VERSION }}-${{ env.TARGET_TRIPLE }}.tar.gz`
+            - `dstack-simulator-${{ env.VERSION }}-${{ env.TARGET_TRIPLE }}.tar.gz.sha256`
+            - `install-systemd.sh`
+
+            The tarball contains the musl-linked `dstack-simulator` binary together with the default
+            simulator config, fixture data, and a systemd unit template.
+
+            ## Quick Start
+
+            Download and run directly:
+
+            ```bash
+            curl -LO https://github.com/${{ github.repository }}/releases/download/${{ env.TAG }}/dstack-simulator-${{ env.VERSION }}-${{ env.TARGET_TRIPLE }}.tar.gz
+            tar -xzf dstack-simulator-${{ env.VERSION }}-${{ env.TARGET_TRIPLE }}.tar.gz
+            cd dstack-simulator-${{ env.VERSION }}-${{ env.TARGET_TRIPLE }}
+            ./dstack-simulator -c dstack.toml
+            ```
+
+            Install to systemd:
+
+            ```bash
+            curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/${{ env.TAG }}/guest-agent-simulator/install-systemd.sh | sudo bash -s -- --version ${{ env.VERSION }}
+            ```

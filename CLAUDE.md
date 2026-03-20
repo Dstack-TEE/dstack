@@ -48,6 +48,7 @@ cargo build --release -p dstack-vmm
 cargo build --release -p dstack-kms
 cargo build --release -p dstack-gateway
 cargo build --release -p dstack-guest-agent
+cargo build --release -p dstack-guest-agent-simulator
 
 # Check code
 cargo check --all-features

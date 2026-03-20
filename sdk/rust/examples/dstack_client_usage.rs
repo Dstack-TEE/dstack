@@ -67,10 +67,16 @@ async fn main() -> anyhow::Result<()> {
 
     // 4. Emit an event
     let event_payload = b"Application started successfully".to_vec();
-    client
+    match client
         .emit_event("AppStart".to_string(), event_payload)
-        .await?;
-    println!("Event emitted successfully!");
+        .await
+    {
+        Ok(()) => println!("Event emitted successfully!"),
+        Err(err) if std::env::var_os("DSTACK_SIMULATOR_ENDPOINT").is_some() => {
+            println!("Event emission is unavailable in simulator mode: {err}");
+        }
+        Err(err) => return Err(err),
+    }
 
     // 5. Get TLS key for server authentication
     let tls_config = TlsKeyConfig::builder()

@@ -16,9 +16,6 @@ compose_file = "/dstack/.host-shared/app-compose.json"
 sys_config_file = "/dstack/.host-shared/.sys-config.json"
 data_disks = ["/"]
 
-[default.core.simulator]
-enabled = false
-attestation_file = "attestation.bin"
 
 [internal-v0]
 address = "unix:/var/run/dstack/tappd.sock"

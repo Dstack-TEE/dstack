@@ -1,0 +1,27 @@
+# SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "dstack-guest-agent-simulator"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "dstack-simulator"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+rocket.workspace = true
+ra-rpc = { workspace = true, features = ["rocket"] }
+ra-tls = { workspace = true, features = ["quote"] }
+dstack-guest-agent = { path = "../guest-agent" }
+dstack-guest-agent-rpc.workspace = true

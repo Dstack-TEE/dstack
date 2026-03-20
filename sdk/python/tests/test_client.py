@@ -3,9 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import hashlib
+import os
 import warnings
 
 from evidence_api.tdx.quote import TdxQuote
+import httpx
 import pytest
 
 from dstack_sdk import AsyncDstackClient
@@ -248,6 +250,14 @@ def test_unix_socket_file_not_exist():
             os.environ["DSTACK_SIMULATOR_ENDPOINT"] = saved_env
 
 
+def assert_emit_event_behavior(error: Exception | None) -> None:
+    if "DSTACK_SIMULATOR_ENDPOINT" in os.environ:
+        assert isinstance(error, httpx.HTTPStatusError)
+        assert error.response.status_code == 400
+    else:
+        assert error is None, f"emit_event unexpectedly failed: {error}"
+
+
 def test_non_unix_socket_endpoints():
     """Test that client doesn't throw error for non-unix socket paths."""
     import os
@@ -272,17 +282,25 @@ def test_non_unix_socket_endpoints():
 async def test_emit_event():
     """Test emit event functionality."""
     client = AsyncDstackClient()
-    # This should not raise an error
-    await client.emit_event("test-event", "test payload")
-    await client.emit_event("test-event-bytes", b"test payload bytes")
+    error = None
+    try:
+        await client.emit_event("test-event", "test payload")
+        await client.emit_event("test-event-bytes", b"test payload bytes")
+    except Exception as exc:  # pragma: no cover - behavior depends on runtime mode
+        error = exc
+    assert_emit_event_behavior(error)
 
 
 def test_sync_emit_event():
     """Test sync emit event functionality."""
     client = DstackClient()
-    # This should not raise an error
-    client.emit_event("test-event", "test payload")
-    client.emit_event("test-event-bytes", b"test payload bytes")
+    error = None
+    try:
+        client.emit_event("test-event", "test payload")
+        client.emit_event("test-event-bytes", b"test payload bytes")
+    except Exception as exc:  # pragma: no cover - behavior depends on runtime mode
+        error = exc
+    assert_emit_event_behavior(error)
 
 
 def test_emit_event_validation():

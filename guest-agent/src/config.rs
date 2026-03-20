@@ -13,7 +13,14 @@ use serde::{de::Error, Deserialize};
 pub const DEFAULT_CONFIG: &str = include_str!("../dstack.toml");
 
 pub fn load_config_figment(config_file: Option<&str>) -> Figment {
-    load_config("dstack", DEFAULT_CONFIG, config_file, true)
+    load_config_figment_with_default(DEFAULT_CONFIG, config_file)
+}
+
+pub fn load_config_figment_with_default(
+    default_config: &str,
+    config_file: Option<&str>,
+) -> Figment {
+    load_config("dstack", default_config, config_file, true)
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]
@@ -43,8 +50,6 @@ pub struct Config {
     pub sys_config_file: PathBuf,
     #[serde(default)]
     pub pccs_url: Option<String>,
-    pub simulator: Simulator,
-    // List of disks to be shown in the dashboard
     pub data_disks: HashSet<PathBuf>,
 }
 
@@ -66,10 +71,4 @@ where
         app_compose,
         raw: content,
     })
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct Simulator {
-    pub enabled: bool,
-    pub attestation_file: String,
 }
