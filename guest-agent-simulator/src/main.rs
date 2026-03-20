@@ -36,6 +36,8 @@ struct Args {
 #[derive(Debug, Clone, Deserialize)]
 struct SimulatorSettings {
     attestation_file: String,
+    #[serde(default = "default_patch_report_data")]
+    patch_report_data: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -47,12 +49,20 @@ struct SimulatorCoreConfig {
 
 struct SimulatorPlatform {
     attestation: VersionedAttestation,
+    patch_report_data: bool,
 }
 
 impl SimulatorPlatform {
-    fn new(attestation: VersionedAttestation) -> Self {
-        Self { attestation }
+    fn new(attestation: VersionedAttestation, patch_report_data: bool) -> Self {
+        Self {
+            attestation,
+            patch_report_data,
+        }
     }
+}
+
+fn default_patch_report_data() -> bool {
+    true
 }
 
 impl PlatformBackend for SimulatorPlatform {
@@ -64,17 +74,24 @@ impl PlatformBackend for SimulatorPlatform {
         Ok(simulator::simulated_certificate_attestation(
             &self.attestation,
             pubkey,
+            self.patch_report_data,
         ))
     }
 
     fn quote_response(&self, report_data: [u8; 64], vm_config: &str) -> Result<GetQuoteResponse> {
-        simulator::simulated_quote_response(&self.attestation, report_data, vm_config)
+        simulator::simulated_quote_response(
+            &self.attestation,
+            report_data,
+            vm_config,
+            self.patch_report_data,
+        )
     }
 
     fn attest_response(&self, report_data: [u8; 64]) -> Result<AttestResponse> {
         Ok(simulator::simulated_attest_response(
             &self.attestation,
             report_data,
+            self.patch_report_data,
         ))
     }
 
@@ -96,12 +113,24 @@ async fn main() -> Result<()> {
         .focus("core")
         .extract()
         .context("Failed to extract simulator core config")?;
-    warn!(attestation_file = %sim_config.simulator.attestation_file, "starting dstack guest-agent simulator");
+    warn!(
+        attestation_file = %sim_config.simulator.attestation_file,
+        patch_report_data = sim_config.simulator.patch_report_data,
+        "starting dstack guest-agent simulator"
+    );
+    if sim_config.simulator.patch_report_data {
+        warn!("simulator will rewrite report_data to match requests; quote verification may fail against the original fixture signature");
+    } else {
+        warn!("simulator will preserve fixture report_data; cert/key binding and requested report_data may not match");
+    }
     let attestation =
         simulator::load_versioned_attestation(&sim_config.simulator.attestation_file)?;
     let state = AppState::new(
         sim_config.core,
-        Arc::new(SimulatorPlatform::new(attestation)),
+        Arc::new(SimulatorPlatform::new(
+            attestation,
+            sim_config.simulator.patch_report_data,
+        )),
     )
     .await
     .context("Failed to create simulator app state")?;
@@ -118,7 +147,7 @@ mod tests {
                 .join("../guest-agent/fixtures/attestation.bin"),
         )
         .expect("fixture attestation should load");
-        SimulatorPlatform::new(fixture)
+        SimulatorPlatform::new(fixture, true)
     }
 
     #[test]
@@ -146,5 +175,22 @@ mod tests {
         let patched = VersionedAttestation::from_scale(&response.attestation).unwrap();
         let VersionedAttestation::V0 { attestation } = patched;
         assert_eq!(attestation.report_data, report_data);
+    }
+
+    #[test]
+    fn simulator_can_preserve_fixture_report_data() {
+        let fixture = simulator::load_versioned_attestation(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../guest-agent/fixtures/attestation.bin"),
+        )
+        .expect("fixture attestation should load");
+        let original = fixture.clone().into_inner().report_data;
+        let platform = SimulatorPlatform::new(fixture, false);
+        let report_data = [0x5a; 64];
+        let response = platform.attest_response(report_data).unwrap();
+        let patched = VersionedAttestation::from_scale(&response.attestation).unwrap();
+        let VersionedAttestation::V0 { attestation } = patched;
+        assert_eq!(attestation.report_data, original);
+        assert_ne!(attestation.report_data, report_data);
     }
 }

@@ -18,6 +18,7 @@ data_disks = ["/"]
 
 [default.core.simulator]
 attestation_file = "attestation.bin"
+patch_report_data = true
 
 [internal-v0]
 address = "unix:./tappd.sock"
