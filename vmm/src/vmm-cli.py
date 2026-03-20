@@ -39,16 +39,20 @@ def encrypt_env(envs, hex_public_key: str) -> str:
 
     This function does the following:
       1. Converts the given environment variables to JSON bytes.
-      2. Removes a leading "0x" from the provided public key (if present) and converts it to bytes.
+      2. Removes a leading "0x" from the provided public key
+         (if present) and converts it to bytes.
       3. Generates an ephemeral X25519 key pair.
-      4. Computes a shared secret using this ephemeral private key and the remote public key.
+      4. Computes a shared secret using this ephemeral private
+         key and the remote public key.
       5. Uses the shared key directly as the 32-byte key for AES-GCM.
-      6. Encrypts the JSON string with AES-GCM using a randomly generated IV.
-      7. Concatenates the ephemeral public key, IV, and ciphertext and returns it as a hex string.
+      6. Encrypts the JSON string with AES-GCM using a random IV.
+      7. Concatenates the ephemeral public key, IV, and ciphertext
+         and returns it as a hex string.
 
     Args:
-        envs: The environment variables to encrypt. This can be any JSON-serializable data structure.
-        hex_public_key: The remote encryption public key in hexadecimal format.
+        envs: The environment variables to encrypt. This can be
+            any JSON-serializable data structure.
+        hex_public_key: The remote encryption public key in hex.
 
     Returns:
         A hexadecimal string that is the concatenation of:
@@ -372,7 +376,8 @@ class VmmCLI:
 
         if len(params) == 1:
             raise Exception(
-                "at least one parameter must be specified for resize: --vcpu, --memory, --disk, or --image"
+                "at least one parameter must be specified for resize:"
+                " --vcpu, --memory, --disk, or --image"
             )
 
         self.rpc_call("ResizeVm", params)
@@ -849,7 +854,7 @@ class VmmCLI:
                 port_mappings = [parse_port_mapping(port) for port in ports]
                 updates.append("port mappings")
             else:
-                # ports is an empty list - shouldn't happen with mutually exclusive group
+                # ports is empty - shouldn't happen with exclusive group
                 port_mappings = []
                 updates.append("port mappings (none)")
             upgrade_params["update_ports"] = True
@@ -870,7 +875,7 @@ class VmmCLI:
                 }
                 updates.append(f"GPUs ({len(gpu_slots)} devices)")
             else:
-                # gpu_slots is an empty list ([] not None) - shouldn't happen with mutually exclusive group
+                # gpu_slots is empty - shouldn't happen with exclusive group
                 gpu_config = {"attach_mode": "listed", "gpus": []}
                 updates.append("GPUs (none)")
             upgrade_params["gpus"] = gpu_config
@@ -1052,8 +1057,15 @@ def verify_signature(public_key: bytes, signature: bytes, app_id: str) -> Option
         The compressed public key if valid, None otherwise
 
     Examples:
-        >>> public_key = bytes.fromhex('e33a1832c6562067ff8f844a61e51ad051f1180b66ec2551fb0251735f3ee90a')
-        >>> signature = bytes.fromhex('8542c49081fbf4e03f62034f13fbf70630bdf256a53032e38465a27c36fd6bed7a5e7111652004aef37f7fd92fbfc1285212c4ae6a6154203a48f5e16cad2cef00')
+        >>> pk_hex = 'e33a1832c6562067ff8f844a61e51ad051f1180b66ec2551fb0251735f3ee90a'
+        >>> public_key = bytes.fromhex(pk_hex)
+        >>> sig_hex = (
+        ...     '8542c49081fbf4e03f62034f13fbf70630bdf256'
+        ...     'a53032e38465a27c36fd6bed7a5e7111652004ae'
+        ...     'f37f7fd92fbfc1285212c4ae6a6154203a48f5e1'
+        ...     '6cad2cef00'
+        ... )
+        >>> signature = bytes.fromhex(sig_hex)
         >>> app_id = '00' * 20
         >>> compressed_pubkey = verify_signature(public_key, signature, app_id)
         >>> print(compressed_pubkey)
@@ -1141,7 +1153,7 @@ def main():
     parser.add_argument(
         "--auth-password",
         default=os.environ.get("DSTACK_VMM_AUTH_PASSWORD"),
-        help="Basic auth password (can also be set via DSTACK_VMM_AUTH_PASSWORD env var)",
+        help="Basic auth password (env: DSTACK_VMM_AUTH_PASSWORD)",
     )
 
     subparsers = parser.add_subparsers(dest="command", help="Commands")
@@ -1387,7 +1399,7 @@ def main():
         action="append",
         type=str,
         required=True,
-        help="Port mapping in format: protocol[:address]:from:to (can be used multiple times)",
+        help="Port mapping: protocol[:address]:from:to (repeatable)",
     )
 
     # Update (all-in-one) command
@@ -1421,7 +1433,7 @@ def main():
         "--port",
         action="append",
         type=str,
-        help="Port mapping in format: protocol[:address]:from:to (can be used multiple times)",
+        help="Port mapping: protocol[:address]:from:to (repeatable)",
     )
     port_group.add_argument(
         "--no-ports",
