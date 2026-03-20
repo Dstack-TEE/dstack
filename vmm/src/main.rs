@@ -23,6 +23,7 @@ use tracing::{error, info};
 
 mod app;
 mod config;
+mod discovery;
 mod guest_api_service;
 mod host_api_service;
 mod main_routes;
@@ -178,6 +179,31 @@ async fn main() -> Result<()> {
             // Default server mode - continue to main server logic
         }
     }
+
+    // Register this VMM instance for local discovery
+    discovery::cleanup_stale_registrations();
+    let listen_address = {
+        // Use Rocket's Endpoint type to parse the address exactly as Rocket would,
+        // then override the port with the figment's port value (matching Rocket's behavior).
+        let endpoint: rocket::listener::Endpoint =
+            figment.extract_inner("address").unwrap_or_default();
+        match endpoint.tcp() {
+            Some(addr) => {
+                let port: u16 = figment.extract_inner("port").unwrap_or(addr.port());
+                format!("{}:{port}", addr.ip())
+            }
+            None => endpoint.to_string(),
+        }
+    };
+    let _discovery_reg = discovery::DiscoveryRegistration::register(
+        &listen_address,
+        args.config.as_deref(),
+        &config.image_path,
+        &config.run_path,
+        &config.node_name,
+        &app_version(),
+    )
+    .context("failed to register VMM instance for discovery")?;
 
     let api_auth = ApiToken::new(config.auth.tokens.clone(), config.auth.enabled);
     let supervisor = {
