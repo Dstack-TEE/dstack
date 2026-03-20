@@ -391,6 +391,7 @@ pub struct Networking {
     pub bridge: String,
 
     /// Enable userspace port forwarding for bridge-mode VMs.
+    #[serde(default)]
     pub forward_service_enabled: bool,
 
     // ── MAC prefix ─────────────────────────────────────────────────
