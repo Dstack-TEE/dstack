@@ -30,8 +30,208 @@ try:
 except ImportError:
     CRYPTO_AVAILABLE = False
 
-# Default whitelist file location
+# Default config file locations
+DEFAULT_CONFIG_PATH = os.path.expanduser("~/.dstack-vmm/config.json")
 DEFAULT_KMS_WHITELIST_PATH = os.path.expanduser("~/.dstack-vmm/kms-whitelist.json")
+
+# VMM discovery directory
+DISCOVERY_DIR = "/run/dstack-vmm"
+
+
+def load_config() -> Dict[str, Any]:
+    """Load configuration from the default config file.
+
+    Returns:
+        Dictionary with configuration values (url, auth_user, auth_password)
+
+    """
+    if not os.path.exists(DEFAULT_CONFIG_PATH):
+        return {}
+
+    try:
+        with open(DEFAULT_CONFIG_PATH, "r") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, FileNotFoundError):
+        return {}
+
+
+def discover_vmm_instances() -> List[Dict[str, Any]]:
+    """Discover all running VMM instances from the discovery directory.
+
+    Returns:
+        List of VMM instance info dicts, sorted by started_at.
+
+    """
+    instances = []
+    if not os.path.isdir(DISCOVERY_DIR):
+        return instances
+
+    for fname in os.listdir(DISCOVERY_DIR):
+        if not fname.endswith(".json"):
+            continue
+        fpath = os.path.join(DISCOVERY_DIR, fname)
+        try:
+            with open(fpath, "r") as f:
+                info = json.load(f)
+            # Check if process is still alive
+            pid = info.get("pid")
+            if pid and not os.path.exists(f"/proc/{pid}"):
+                # Stale file, skip
+                continue
+            instances.append(info)
+        except (json.JSONDecodeError, FileNotFoundError, PermissionError):
+            continue
+
+    instances.sort(key=lambda x: x.get("started_at", 0))
+    return instances
+
+
+def resolve_vmm_url(
+    instances: List[Dict[str, Any]],
+    config: Dict[str, Any],
+    explicit_url: Optional[str] = None,
+) -> str:
+    """Resolve the VMM URL to connect to.
+
+    Priority:
+    1. Explicit --url flag
+    2. DSTACK_VMM_URL env var
+    3. Config file url
+    4. If exactly one VMM instance is discovered, use that
+    5. If active instance is set in config, use that
+    6. Fall back to default
+
+    Returns the URL string.
+    """
+    # If user explicitly provided --url or env var, honor it
+    env_url = os.environ.get("DSTACK_VMM_URL")
+    if explicit_url and explicit_url != "http://localhost:8080":
+        return explicit_url
+    if env_url:
+        return env_url
+    config_url = config.get("url")
+    if config_url:
+        return config_url
+
+    # Try auto-discovery
+    active_id = config.get("active_vmm")
+    if active_id:
+        for inst in instances:
+            if inst["id"] == active_id or inst["id"].startswith(active_id):
+                return vmm_address_to_url(inst)
+
+    if len(instances) == 1:
+        return vmm_address_to_url(instances[0])
+
+    return "http://localhost:8080"
+
+
+def vmm_address_to_url(instance: Dict[str, Any]) -> str:
+    """Convert a VMM instance info dict to a connection URL."""
+    addr = instance.get("address", "")
+    if addr.startswith("unix:"):
+        # Resolve relative socket path against working directory
+        socket_path = addr[5:]
+        if not os.path.isabs(socket_path):
+            working_dir = instance.get("working_dir", "")
+            socket_path = os.path.join(working_dir, socket_path)
+        return f"unix:{socket_path}"
+    elif addr.startswith("http://") or addr.startswith("https://"):
+        return addr
+    else:
+        # host:port format from discovery
+        host, _, port = addr.rpartition(":")
+        if host == "0.0.0.0":
+            host = "127.0.0.1"
+        return f"http://{host}:{port}"
+
+
+def save_active_vmm(vmm_id: str):
+    """Save the active VMM instance ID to the config file."""
+    config = load_config()
+    config["active_vmm"] = vmm_id
+    os.makedirs(os.path.dirname(DEFAULT_CONFIG_PATH), exist_ok=True)
+    with open(DEFAULT_CONFIG_PATH, "w") as f:
+        json.dump(config, f, indent=2)
+
+
+def cmd_ls_vmm(args):
+    """List all discovered VMM instances."""
+    instances = discover_vmm_instances()
+    config = load_config()
+    active_id = config.get("active_vmm")
+
+    if not instances:
+        print("No running VMM instances found.")
+        print(f"  (discovery directory: {DISCOVERY_DIR})")
+        return
+
+    if getattr(args, "json", False):
+        print(json.dumps(instances, indent=2))
+        return
+
+    # Table output
+
+    fmt = "  {active} {id:<12s} {pid:<8s} {node:<12s} {address:<24s} {workdir}"
+    print(
+        fmt.format(
+            active="",
+            id="ID",
+            pid="PID",
+            node="NAME",
+            address="ADDRESS",
+            workdir="WORKING DIR",
+        )
+    )
+    print("  " + "-" * 90)
+
+    for inst in instances:
+        short_id = inst["id"][:8]
+        is_active = "*" if active_id and inst["id"].startswith(active_id) else " "
+        node_name = inst.get("node_name", "") or "-"
+        address = inst.get("address", "?")
+
+        print(
+            fmt.format(
+                active=is_active,
+                id=short_id,
+                pid=str(inst.get("pid", "?")),
+                node=node_name[:12],
+                address=address[:24],
+                workdir=inst.get("working_dir", "?"),
+            )
+        )
+
+
+def cmd_switch_vmm(args):
+    """Switch the active VMM instance."""
+    target = args.vmm_id
+    instances = discover_vmm_instances()
+
+    if not instances:
+        print("No running VMM instances found.")
+        return
+
+    # Find matching instance by prefix
+    matches = [i for i in instances if i["id"].startswith(target)]
+    if len(matches) == 0:
+        print(f"No VMM instance matching '{target}'.")
+        print("Available instances:")
+        for inst in instances:
+            print(
+                f"  {inst['id'][:8]}  {inst.get('address', '?')}  {inst.get('working_dir', '?')}"
+            )
+        return
+    if len(matches) > 1:
+        print(f"Ambiguous ID '{target}', matches multiple instances:")
+        for inst in matches:
+            print(f"  {inst['id'][:8]}  {inst.get('address', '?')}")
+        return
+
+    selected = matches[0]
+    save_active_vmm(selected["id"])
+    url = vmm_address_to_url(selected)
+    print(f"Switched to VMM {selected['id'][:8]} ({url})")
 
 
 def encrypt_env(envs, hex_public_key: str) -> str:
@@ -39,20 +239,16 @@ def encrypt_env(envs, hex_public_key: str) -> str:
 
     This function does the following:
       1. Converts the given environment variables to JSON bytes.
-      2. Removes a leading "0x" from the provided public key
-         (if present) and converts it to bytes.
+      2. Removes a leading "0x" from the provided public key (if present) and converts it to bytes.
       3. Generates an ephemeral X25519 key pair.
-      4. Computes a shared secret using this ephemeral private
-         key and the remote public key.
+      4. Computes a shared secret using this ephemeral private key and the remote public key.
       5. Uses the shared key directly as the 32-byte key for AES-GCM.
-      6. Encrypts the JSON string with AES-GCM using a random IV.
-      7. Concatenates the ephemeral public key, IV, and ciphertext
-         and returns it as a hex string.
+      6. Encrypts the JSON string with AES-GCM using a randomly generated IV.
+      7. Concatenates the ephemeral public key, IV, and ciphertext and returns it as a hex string.
 
     Args:
-        envs: The environment variables to encrypt. This can be
-            any JSON-serializable data structure.
-        hex_public_key: The remote encryption public key in hex.
+        envs: The environment variables to encrypt. This can be any JSON-serializable data structure.
+        hex_public_key: The remote encryption public key in hexadecimal format.
 
     Returns:
         A hexadecimal string that is the concatenation of:
@@ -131,7 +327,7 @@ class UnixSocketHTTPConnection(http.client.HTTPConnection):
     """HTTPConnection that connects to a Unix domain socket."""
 
     def __init__(self, socket_path, timeout=None):
-        """Initialize with a Unix socket path and optional timeout."""
+        """Initialize with the given Unix socket path."""
         super().__init__("localhost", timeout=timeout)
         self.socket_path = socket_path
 
@@ -153,7 +349,7 @@ class VmmClient:
         auth_user: Optional[str] = None,
         auth_password: Optional[str] = None,
     ):
-        """Initialize the client with a base URL and optional authentication."""
+        """Initialize the client with a base URL and optional auth credentials."""
         self.base_url = base_url.rstrip("/")
         self.use_uds = self.base_url.startswith("unix:")
         self.auth_user = auth_user
@@ -254,7 +450,7 @@ class VmmClient:
 
 
 class VmmCLI:
-    """Command-line interface for managing dstack-vmm virtual machines."""
+    """Command-line interface for the dstack-vmm API."""
 
     def __init__(
         self,
@@ -262,7 +458,7 @@ class VmmCLI:
         auth_user: Optional[str] = None,
         auth_password: Optional[str] = None,
     ):
-        """Initialize the CLI with a base URL and optional authentication."""
+        """Initialize the CLI with a base URL and optional auth credentials."""
         self.base_url = base_url.rstrip("/")
         self.headers = {"Content-Type": "application/json"}
         self.client = VmmClient(base_url, auth_user, auth_password)
@@ -299,7 +495,7 @@ class VmmCLI:
 
         headers = ["VM ID", "App ID", "Name", "Status", "Uptime"]
         if verbose:
-            headers.extend(["vCPU", "Memory", "Disk", "Image", "GPUs"])
+            headers.extend(["Instance ID", "vCPU", "Memory", "Disk", "Image", "GPUs"])
 
         rows = []
         for vm in vms:
@@ -316,6 +512,7 @@ class VmmCLI:
                 gpu_info = self._format_gpu_info(config.get("gpus"))
                 row.extend(
                     [
+                        vm.get("instance_id", "-") or "-",
                         config.get("vcpu", "-"),
                         f"{config.get('memory', '-')}MB",
                         f"{config.get('disk_size', '-')}GB",
@@ -384,8 +581,7 @@ class VmmCLI:
 
         if len(params) == 1:
             raise Exception(
-                "at least one parameter must be specified for resize:"
-                " --vcpu, --memory, --disk, or --image"
+                "at least one parameter must be specified for resize: --vcpu, --memory, --disk, or --image"
             )
 
         self.rpc_call("ResizeVm", params)
@@ -426,7 +622,7 @@ class VmmCLI:
             print(response)
 
     def list_images(self, json_output: bool = False) -> None:
-        """Get list of available images."""
+        """List available images."""
         response = self.rpc_call("ListImages")
         images = response["images"]
 
@@ -461,15 +657,36 @@ class VmmCLI:
             response = self.rpc_call("GetAppEnvEncryptPubKey", {"app_id": app_id})
 
         # Verify the signature if available
-        if "signature" not in response:
+        if "signature" not in response and "signature_v1" not in response:
             if not self.confirm_untrusted_signer("none"):
                 raise Exception("Aborted due to invalid signature")
             return response["public_key"]
 
         public_key = bytes.fromhex(response["public_key"])
-        signature = bytes.fromhex(response["signature"])
 
-        signer_pubkey = verify_signature(public_key, signature, app_id)
+        # Prefer signature_v1 (with timestamp) if available
+        signer_pubkey = None
+        if "signature_v1" in response and "timestamp" in response:
+            signature_v1 = bytes.fromhex(response["signature_v1"])
+            timestamp = response["timestamp"]
+            signer_pubkey = verify_signature_v1(
+                public_key, signature_v1, app_id, timestamp
+            )
+            if signer_pubkey:
+                print(f"Verified signature_v1 (with timestamp) from: {signer_pubkey}")
+
+        # Fall back to legacy signature if signature_v1 verification failed or not available
+        if not signer_pubkey and "signature" in response:
+            print(
+                "WARNING: Using legacy signature without timestamp protection. "
+                "Consider upgrading your KMS to support signature_v1.",
+                file=sys.stderr,
+            )
+            signature = bytes.fromhex(response["signature"])
+            signer_pubkey = verify_signature(public_key, signature, app_id)
+            if signer_pubkey:
+                print(f"Verified legacy signature from: {signer_pubkey}")
+
         if signer_pubkey:
             whitelist = load_whitelist()
             if whitelist and signer_pubkey not in whitelist:
@@ -478,8 +695,6 @@ class VmmCLI:
                 )
                 if not self.confirm_untrusted_signer(signer_pubkey):
                     raise Exception("Aborted due to untrusted signer")
-            else:
-                print(f"Verified signature from: {signer_pubkey}")
         else:
             print("WARNING: Could not verify signature!")
             if not self.confirm_untrusted_signer("unknown"):
@@ -544,6 +759,13 @@ class VmmCLI:
     def create_app_compose(self, args) -> None:
         """Create a new app compose file."""
         envs = parse_env_file(args.env_file) or {}
+
+        # Validate: --env-file requires --kms
+        if envs and not args.kms:
+            raise Exception(
+                "--env-file requires --kms to enable KMS for environment variable decryption"
+            )
+
         app_compose = {
             "manifest_version": 2,
             "name": args.name,
@@ -561,6 +783,8 @@ class VmmCLI:
             "no_instance_id": args.no_instance_id,
             "secure_time": args.secure_time,
         }
+        if args.key_provider:
+            app_compose["key_provider"] = args.key_provider
         if args.prelaunch_script:
             app_compose["pre_launch_script"] = (
                 open(args.prelaunch_script, "rb").read().decode("utf-8")
@@ -591,6 +815,21 @@ class VmmCLI:
 
         envs = parse_env_file(args.env_file)
 
+        # Validate: --env-file requires --kms-url and kms_enabled in compose
+        if envs:
+            if not args.kms_url:
+                raise Exception(
+                    "--env-file requires --kms-url to encrypt environment variables"
+                )
+            try:
+                compose_json = json.loads(compose_content)
+                if not compose_json.get("kms_enabled", False):
+                    raise Exception(
+                        "--env-file requires kms_enabled=true in the compose file (use --kms when creating compose)"
+                    )
+            except json.JSONDecodeError:
+                pass  # Let the server handle invalid JSON
+
         # Read user config file if provided
         user_config = ""
         if args.user_config:
@@ -617,7 +856,7 @@ class VmmCLI:
             if swap_bytes > 0:
                 params["swap_size"] = swap_bytes
 
-        if args.ppcie:
+        if args.ppcie or (args.gpu and "all" in args.gpu):
             params["gpus"] = {"attach_mode": "all"}
         elif args.gpu:
             params["gpus"] = {
@@ -628,6 +867,8 @@ class VmmCLI:
             params["kms_urls"] = args.kms_url
         if args.gateway_url:
             params["gateway_urls"] = args.gateway_url
+        if args.net:
+            params["networking"] = {"mode": args.net}
 
         app_id = args.app_id or self.calc_app_id(compose_content)
         print(f"App ID: {app_id}")
@@ -646,6 +887,10 @@ class VmmCLI:
         self, vm_id: str, envs: Dict[str, str], kms_urls: Optional[List[str]] = None
     ) -> None:
         """Update environment variables for a VM."""
+        # Validate: requires --kms-url
+        if not kms_urls:
+            raise Exception("--kms-url is required to encrypt environment variables")
+
         envs = envs or {}
         # First get the VM info to retrieve the app_id
         vm_info_response = self.rpc_call("GetInfo", {"id": vm_id})
@@ -734,6 +979,12 @@ class VmmCLI:
         no_tee: Optional[bool] = None,
     ) -> None:
         """Update multiple aspects of a VM in one command."""
+        # Validate: --env-file requires --kms-url
+        if env_file and not kms_urls:
+            raise Exception(
+                "--env-file requires --kms-url to encrypt environment variables"
+            )
+
         updates = []
 
         # handle resize operations (vcpu, memory, disk, image)
@@ -862,15 +1113,16 @@ class VmmCLI:
                 port_mappings = [parse_port_mapping(port) for port in ports]
                 updates.append("port mappings")
             else:
-                # ports is empty - shouldn't happen with exclusive group
+                # ports is an empty list - shouldn't happen with mutually exclusive group
                 port_mappings = []
                 updates.append("port mappings (none)")
             upgrade_params["update_ports"] = True
             upgrade_params["ports"] = port_mappings
 
         # handle GPU updates - only update if one of the GPU flags is set
-        if attach_all or no_gpus or gpu_slots is not None:
-            if attach_all:
+        gpu_all = gpu_slots and "all" in gpu_slots
+        if attach_all or gpu_all or no_gpus or gpu_slots is not None:
+            if attach_all or gpu_all:
                 gpu_config = {"attach_mode": "all"}
                 updates.append("GPUs (all)")
             elif no_gpus:
@@ -883,7 +1135,7 @@ class VmmCLI:
                 }
                 updates.append(f"GPUs ({len(gpu_slots)} devices)")
             else:
-                # gpu_slots is empty - shouldn't happen with exclusive group
+                # gpu_slots is an empty list ([] not None) - shouldn't happen with mutually exclusive group
                 gpu_config = {"attach_mode": "listed", "gpus": []}
                 updates.append("GPUs (none)")
             upgrade_params["gpus"] = gpu_config
@@ -899,6 +1151,52 @@ class VmmCLI:
             print(f"Updated VM {vm_id}: {', '.join(updates)}")
         else:
             print(f"No updates specified for VM {vm_id}")
+
+    def show_info(self, vm_id: str, json_output: bool = False) -> None:
+        """Show detailed information about a VM."""
+        response = self.rpc_call("GetInfo", {"id": vm_id})
+
+        if not response.get("found", False) or "info" not in response:
+            print(f"VM with ID {vm_id} not found")
+            return
+
+        info = response["info"]
+
+        if json_output:
+            print(json.dumps(info, indent=2))
+            return
+
+        config = info.get("configuration", {})
+
+        print(f"VM ID:         {info.get('id', '-')}")
+        print(f"Name:          {info.get('name', '-')}")
+        print(f"Status:        {info.get('status', '-')}")
+        print(f"Uptime:        {info.get('uptime', '-')}")
+        print(f"App ID:        {info.get('app_id', '-')}")
+        print(f"Instance ID:   {info.get('instance_id', '-') or '-'}")
+        print(f"App URL:       {info.get('app_url', '-') or '-'}")
+        print(f"Image:         {config.get('image', '-')}")
+        print(f"Image Version: {info.get('image_version', '-')}")
+        print(f"vCPU:          {config.get('vcpu', '-')}")
+        print(f"Memory:        {config.get('memory', '-')}MB")
+        print(f"Disk:          {config.get('disk_size', '-')}GB")
+        print(f"GPUs:          {self._format_gpu_info(config.get('gpus'))}")
+        print(f"Boot Progress: {info.get('boot_progress', '-')}")
+        if info.get("boot_error"):
+            print(f"Boot Error:    {info['boot_error']}")
+        if info.get("exited_at"):
+            print(f"Exited At:     {info['exited_at']}")
+        if info.get("shutdown_progress"):
+            print(f"Shutdown:      {info['shutdown_progress']}")
+
+        events = info.get("events", [])
+        if events:
+            print("\nRecent Events:")
+            for event in events[-10:]:
+                ts = event.get("timestamp", 0)
+                print(
+                    f"  [{event.get('event', '')}] {event.get('body', '')} (ts: {ts})"
+                )
 
     def list_gpus(self, json_output: bool = False) -> None:
         """List all available GPUs."""
@@ -929,7 +1227,7 @@ class VmmCLI:
 
 
 def format_table(rows, headers):
-    """Format rows and headers into an aligned table."""
+    """Format rows and headers into a table string."""
     if not rows:
         return ""
 
@@ -959,6 +1257,7 @@ def parse_env_file(file_path: str) -> Dict[str, str]:
 
     Each line should be formatted as KEY=Value.
     Lines that are empty or start with '#' are ignored.
+
     """
     if not file_path:
         return {}
@@ -978,6 +1277,8 @@ def parse_env_file(file_path: str) -> Dict[str, str]:
 
 def parse_size(s: str, target_unit: str) -> int:
     """Parse a human-readable size string and return the size in the target unit.
+
+    Accept strings like "1G" or "100M".
 
     Args:
         s: The size string provided.
@@ -1050,8 +1351,53 @@ def parse_disk_size(s: str) -> int:
     return parse_size(s, "GB")
 
 
+def verify_signature_v1(
+    public_key: bytes, signature: bytes, app_id: str, timestamp: int
+) -> Optional[str]:
+    """Verify the v1 signature (with timestamp) of a public key.
+
+    Args:
+        public_key: The public key bytes to verify
+        signature: The signature bytes (65 bytes)
+        app_id: The application ID
+        timestamp: Unix timestamp in seconds when the response was generated
+
+    Returns:
+        The compressed public key if valid, None otherwise
+
+    """
+    if not CRYPTO_AVAILABLE:
+        raise ImportError(
+            "Cryptography libraries not available. Please install them with:\n"
+            "pip install cryptography eth-keys eth-utils"
+        )
+
+    if len(signature) != 65:
+        return None
+
+    # Create the message to verify
+    # Signs: Keccak256("dstack-env-encrypt-pubkey" + ":" + app_id + timestamp_be_bytes + public_key)
+    prefix = b"dstack-env-encrypt-pubkey"
+    if app_id.startswith("0x"):
+        app_id = app_id[2:]
+    timestamp_bytes = timestamp.to_bytes(8, byteorder="big")
+    message = prefix + b":" + bytes.fromhex(app_id) + timestamp_bytes + public_key
+
+    # Hash the message with Keccak-256
+    message_hash = keccak(message)
+
+    # Recover the public key from the signature
+    try:
+        sig = keys.Signature(signature_bytes=signature)
+        recovered_key = sig.recover_public_key_from_msg_hash(message_hash)
+        return "0x" + recovered_key.to_compressed_bytes().hex()
+    except Exception as e:
+        print(f"Signature v1 verification failed: {e}", file=sys.stderr)
+        return None
+
+
 def verify_signature(public_key: bytes, signature: bytes, app_id: str) -> Optional[str]:
-    """Verify the signature of a public key.
+    """Verify the legacy signature (without timestamp) of a public key.
 
     Args:
         public_key: The public key bytes to verify
@@ -1062,15 +1408,8 @@ def verify_signature(public_key: bytes, signature: bytes, app_id: str) -> Option
         The compressed public key if valid, None otherwise
 
     Examples:
-        >>> pk_hex = 'e33a1832c6562067ff8f844a61e51ad051f1180b66ec2551fb0251735f3ee90a'
-        >>> public_key = bytes.fromhex(pk_hex)
-        >>> sig_hex = (
-        ...     '8542c49081fbf4e03f62034f13fbf70630bdf256'
-        ...     'a53032e38465a27c36fd6bed7a5e7111652004ae'
-        ...     'f37f7fd92fbfc1285212c4ae6a6154203a48f5e1'
-        ...     '6cad2cef00'
-        ... )
-        >>> signature = bytes.fromhex(sig_hex)
+        >>> public_key = bytes.fromhex('e33a1832c6562067ff8f844a61e51ad051f1180b66ec2551fb0251735f3ee90a')
+        >>> signature = bytes.fromhex('8542c49081fbf4e03f62034f13fbf70630bdf256a53032e38465a27c36fd6bed7a5e7111652004aef37f7fd92fbfc1285212c4ae6a6154203a48f5e16cad2cef00')
         >>> app_id = '00' * 20
         >>> compressed_pubkey = verify_signature(public_key, signature, app_id)
         >>> print(compressed_pubkey)
@@ -1087,6 +1426,7 @@ def verify_signature(public_key: bytes, signature: bytes, app_id: str) -> Option
         return None
 
     # Create the message to verify
+    # Signs: Keccak256("dstack-env-encrypt-pubkey" + ":" + app_id + public_key)
     prefix = b"dstack-env-encrypt-pubkey"
     if app_id.startswith("0x"):
         app_id = app_id[2:]
@@ -1139,31 +1479,58 @@ def save_whitelist(whitelist: List[str]) -> None:
 
 
 def main():
-    """Run the dstack-vmm CLI."""
+    """Parse arguments and dispatch to the appropriate command handler."""
     parser = argparse.ArgumentParser(description="dstack-vmm CLI - Manage VMs")
 
-    # Get default URL from environment variable or use localhost
-    default_url = os.environ.get("DSTACK_VMM_URL", "http://localhost:8080")
+    # Load config file defaults
+    config = load_config()
+
+    # Discover running VMM instances
+    instances = discover_vmm_instances()
+
+    # Priority: command line > environment variable > config file > auto-discovery > default
+    default_url = os.environ.get(
+        "DSTACK_VMM_URL", config.get("url", "http://localhost:8080")
+    )
+    default_auth_user = os.environ.get("DSTACK_VMM_AUTH_USER", config.get("auth_user"))
+    default_auth_password = os.environ.get(
+        "DSTACK_VMM_AUTH_PASSWORD", config.get("auth_password")
+    )
 
     parser.add_argument(
         "--url",
         default=default_url,
-        help="dstack-vmm API URL (can also be set via DSTACK_VMM_URL env var)",
+        help="dstack-vmm API URL (can also be set via DSTACK_VMM_URL env var or config file)",
     )
 
     # Basic authentication arguments
     parser.add_argument(
         "--auth-user",
-        default=os.environ.get("DSTACK_VMM_AUTH_USER"),
-        help="Basic auth username (can also be set via DSTACK_VMM_AUTH_USER env var)",
+        default=default_auth_user,
+        help="Basic auth username (can also be set via DSTACK_VMM_AUTH_USER env var or config file)",
     )
     parser.add_argument(
         "--auth-password",
-        default=os.environ.get("DSTACK_VMM_AUTH_PASSWORD"),
-        help="Basic auth password (env: DSTACK_VMM_AUTH_PASSWORD)",
+        default=default_auth_password,
+        help="Basic auth password (can also be set via DSTACK_VMM_AUTH_PASSWORD env var or config file)",
     )
 
     subparsers = parser.add_subparsers(dest="command", help="Commands")
+
+    # VMM discovery commands
+    ls_vmm_parser = subparsers.add_parser(
+        "ls-vmm", help="List all running VMM instances on this host"
+    )
+    ls_vmm_parser.add_argument(
+        "--json", action="store_true", help="Output in JSON format"
+    )
+
+    switch_vmm_parser = subparsers.add_parser(
+        "switch-vmm", help="Switch active VMM instance"
+    )
+    switch_vmm_parser.add_argument(
+        "vmm_id", help="VMM instance ID (prefix match supported)"
+    )
 
     # List command
     lsvm_parser = subparsers.add_parser("lsvm", help="List VMs")
@@ -1171,6 +1538,13 @@ def main():
         "-v", "--verbose", action="store_true", help="Show detailed information"
     )
     lsvm_parser.add_argument(
+        "--json", action="store_true", help="Output in JSON format for automation"
+    )
+
+    # Info command
+    info_parser = subparsers.add_parser("info", help="Show detailed VM information")
+    info_parser.add_argument("vm_id", help="VM ID to show info for")
+    info_parser.add_argument(
         "--json", action="store_true", help="Output in JSON format for automation"
     )
 
@@ -1228,6 +1602,12 @@ def main():
     )
     compose_parser.add_argument(
         "--local-key-provider", action="store_true", help="Enable local key provider"
+    )
+    compose_parser.add_argument(
+        "--key-provider",
+        choices=["none", "kms", "local"],
+        default=None,
+        help="Override key provider type (none, kms, local)",
     )
     compose_parser.add_argument(
         "--key-provider-id",
@@ -1299,7 +1679,7 @@ def main():
         "--gpu",
         action="append",
         type=str,
-        help="GPU slot to attach (can be used multiple times)",
+        help='GPU slot to attach (can be used multiple times), or "all" to attach all GPUs',
     )
     deploy_parser.add_argument(
         "--ppcie",
@@ -1334,6 +1714,11 @@ def main():
         help="Force-enable Intel TDX (default)",
     )
     deploy_parser.set_defaults(no_tee=False)
+    deploy_parser.add_argument(
+        "--net",
+        choices=["bridge", "user"],
+        help="Networking mode (default: use global config)",
+    )
 
     # Images command
     lsimage_parser = subparsers.add_parser("lsimage", help="List available images")
@@ -1406,7 +1791,7 @@ def main():
         action="append",
         type=str,
         required=True,
-        help="Port mapping: protocol[:address]:from:to (repeatable)",
+        help="Port mapping in format: protocol[:address]:from:to (can be used multiple times)",
     )
 
     # Update (all-in-one) command
@@ -1440,7 +1825,7 @@ def main():
         "--port",
         action="append",
         type=str,
-        help="Port mapping: protocol[:address]:from:to (repeatable)",
+        help="Port mapping in format: protocol[:address]:from:to (can be used multiple times)",
     )
     port_group.add_argument(
         "--no-ports",
@@ -1459,7 +1844,7 @@ def main():
         "--gpu",
         action="append",
         type=str,
-        help="GPU slot to attach (can be used multiple times)",
+        help='GPU slot to attach (can be used multiple times), or "all" to attach all GPUs',
     )
     gpu_group.add_argument(
         "--ppcie",
@@ -1493,10 +1878,22 @@ def main():
 
     args = parser.parse_args()
 
-    cli = VmmCLI(args.url, args.auth_user, args.auth_password)
+    # Handle discovery commands before creating CLI (they don't need a connection)
+    if args.command == "ls-vmm":
+        cmd_ls_vmm(args)
+        return
+    elif args.command == "switch-vmm":
+        cmd_switch_vmm(args)
+        return
+
+    # Resolve the URL with auto-discovery
+    url = resolve_vmm_url(instances, config, args.url)
+    cli = VmmCLI(url, args.auth_user, args.auth_password)
 
     if args.command == "lsvm":
         cli.list_vms(args.verbose, args.json)
+    elif args.command == "info":
+        cli.show_info(args.vm_id, args.json)
     elif args.command == "start":
         cli.start_vm(args.vm_id)
     elif args.command == "stop":
