@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 [Unit]
 Description=dstack Simulator Service
 After=network.target
