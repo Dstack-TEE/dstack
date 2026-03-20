@@ -4,25 +4,24 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-import os
-import sys
-import json
 import argparse
+import base64
 import hashlib
+import http.client
+import json
+import os
 import re
 import socket
-import http.client
-import urllib.parse
 import ssl
-import base64
-
-from typing import Optional, Dict, List, Tuple, Union, BinaryIO, Any
+import sys
+import urllib.parse
+from typing import Any, BinaryIO, Dict, List, Optional, Tuple, Union
 
 # Optional cryptography imports - only needed for encrypted environment variables
 try:
+    from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.primitives.asymmetric import x25519
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-    from cryptography.hazmat.primitives import serialization
     from eth_keys import keys
     from eth_utils import keccak
 
