@@ -78,7 +78,7 @@ Operational notes:
 4. On teepod with gateway, onboard mode usually uses the `-8000` URL, while runtime TLS KMS RPC usually uses the `-8000s` URL. **Port forwarding** (`--port tcp:0.0.0.0:<host-port>:8000`) is simpler than gateway for testing, because gateway requires the auth API to return a `gatewayAppId` at boot time.
 5. If you use a very small custom webhook instead of the real auth service, `KMS.GetMeta` may fail because `auth_api.get_info()` expects extra chain / contract metadata fields. In that case, use `GetTempCaCert` as the runtime readiness probe.
 6. dstack CVMs use QEMU user-mode networking — the host is reachable at **`10.0.2.2`** from inside the CVM. The `source_url` in `Onboard.Onboard` must use a CVM-reachable address (e.g., `https://10.0.2.2:<port>/prpc`), not `127.0.0.1`.
-7. **Remote KMS attestation has an empty `osImageHash`.** When the receiver verifies the source KMS during onboard, the `osImageHash` is empty because `vm_config` is unavailable for remote attestation. Auth configs for receiver-side checks must include `"0x"` in the `osImages` array.
+7. **~~Remote KMS attestation has an empty `osImageHash`.~~** Fixed: RA-TLS certs now use the unified `PHALA_RATLS_ATTESTATION` format which preserves `vm_config`. For old source KMS instances, the receiver-side check fills `osImageHash` from the local KMS's own value automatically. No special `"0x"` entry in `osImages` is needed anymore.
 
 ---
 
@@ -109,7 +109,7 @@ At minimum, both policies must allow the KMS instance they serve. During onboard
 
 For `auth-simple`, `kms.mrAggregated = []` is a deny-all policy for KMS. Add the current KMS MR values explicitly when switching a test from deny to allow.
 
-Include `"0x"` in the `osImages` array for configs used in receiver-side onboard checks (see operational note 7 above).
+You no longer need `"0x"` in the `osImages` array — the receiver-side check now resolves `osImageHash` automatically.
 
 ### 4.3 Deploy `kms-src` and `kms-dst`
 
