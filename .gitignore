@@ -1,7 +1,8 @@
 /target
 /certs
 /build-config.sh
-/build
+/build/*
+!/build/shared/
 generated/
 node_modules/
 /.cargo

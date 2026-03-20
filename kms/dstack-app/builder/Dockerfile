@@ -7,7 +7,7 @@ COPY ./shared /build
 ARG DSTACK_REV
 ARG DSTACK_SRC_URL=https://github.com/Dstack-TEE/dstack.git
 WORKDIR /build
-RUN ./pin-packages.sh ./kms-pinned-packages.txt
+RUN ./pin-packages.sh ./builder-pinned-packages.txt
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     git \
@@ -23,6 +23,7 @@ RUN git clone ${DSTACK_SRC_URL} && \
     git checkout ${DSTACK_REV}
 RUN rustup target add x86_64-unknown-linux-musl
 RUN cd dstack && cargo build --release -p dstack-kms --target x86_64-unknown-linux-musl
+RUN echo "${DSTACK_REV}" > /build/.GIT_REV
 
 FROM debian:bookworm@sha256:0d8498a0e9e6a60011df39aab78534cfe940785e7c59d19dfae1eb53ea59babe
 COPY ./shared /build
@@ -58,5 +59,5 @@ RUN git clone https://github.com/kvinwang/qemu-tdx.git --depth 1 --branch dstack
     install -m 644 pc-bios/linuxboot_dma.bin /usr/local/share/qemu/ && \
     cd .. && rm -rf qemu-tdx
 COPY --from=kms-builder /build/dstack/target/x86_64-unknown-linux-musl/release/dstack-kms /usr/local/bin/dstack-kms
-COPY .GIT_REV /etc/.GIT_REV
+COPY --from=kms-builder /build/.GIT_REV /etc/
 CMD ["dstack-kms"]
