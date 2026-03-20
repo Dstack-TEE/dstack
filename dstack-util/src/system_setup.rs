@@ -709,7 +709,7 @@ async fn do_sys_setup(stage0: Stage0<'_>) -> Result<()> {
     if stage0.shared.app_compose.secure_time {
         info!("Waiting for the system time to be synchronized");
         cmd! {
-            chronyc waitsync 20 0.1;
+            chronyc waitsync 30 0.1 0 5;
         }
         .context("Failed to sync system time")?;
     } else {
