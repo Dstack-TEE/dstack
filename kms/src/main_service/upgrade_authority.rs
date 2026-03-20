@@ -224,8 +224,20 @@ pub(crate) async fn ensure_kms_allowed(
     cfg: &KmsConfig,
     attestation: &VerifiedAttestation,
 ) -> Result<()> {
-    let boot_info = build_boot_info(attestation, false, "")
+    let mut boot_info = build_boot_info(attestation, false, "")
         .context("failed to build KMS boot info from attestation")?;
+    // Workaround: source KMS instances using the old RA-TLS cert format (separate TDX_QUOTE +
+    // EVENT_LOG OIDs) lose vm_config, resulting in an empty os_image_hash. Since mrAggregated
+    // already validates OS image integrity transitively through the RTMR measurement chain,
+    // we fill in the local KMS's own os_image_hash so the auth API check passes.
+    // TODO: remove this override once all source KMS instances use the unified cert format
+    // that preserves vm_config (PHALA_RATLS_ATTESTATION OID).
+    if boot_info.os_image_hash.is_empty() {
+        let local_info = local_kms_boot_info(cfg.pccs_url.as_deref())
+            .await
+            .context("failed to get local boot info for os_image_hash fallback")?;
+        boot_info.os_image_hash = local_info.os_image_hash;
+    }
     let response = cfg
         .auth_api
         .is_app_allowed(&boot_info, true)

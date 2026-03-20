@@ -25,12 +25,11 @@ use x509_parser::x509::SubjectPublicKeyInfo;
 
 use crate::oids::{
     PHALA_RATLS_APP_ID, PHALA_RATLS_APP_INFO, PHALA_RATLS_ATTESTATION, PHALA_RATLS_CERT_USAGE,
-    PHALA_RATLS_EVENT_LOG, PHALA_RATLS_TDX_QUOTE,
 };
 use crate::traits::CertExt;
 #[cfg(feature = "quote")]
 use dstack_attest::attestation::QuoteContentType;
-use dstack_attest::attestation::{AppInfo, Attestation, AttestationQuote, VersionedAttestation};
+use dstack_attest::attestation::{AppInfo, Attestation, VersionedAttestation};
 
 /// A CA certificate and private key.
 pub struct CaCert {
@@ -389,21 +388,10 @@ impl<Key> CertRequest<'_, Key> {
             add_ext(&mut params, PHALA_RATLS_CERT_USAGE, usage);
         }
         if let Some(ver_att) = self.attestation {
-            let VersionedAttestation::V0 { attestation } = &ver_att;
-            match &attestation.quote {
-                AttestationQuote::DstackTdx(tdx_quote) => {
-                    // For backward compatibility, we serialize the quote to the classic oids.
-                    let event_log = serde_json::to_vec(&tdx_quote.event_log)
-                        .context("Failed to serialize event log")?;
-                    add_ext(&mut params, PHALA_RATLS_TDX_QUOTE, &tdx_quote.quote);
-                    add_ext(&mut params, PHALA_RATLS_EVENT_LOG, &event_log);
-                }
-                _ => {
-                    // The event logs are too large on GCP TDX to put in the certificate, so we strip them
-                    let attestation_bytes = ver_att.clone().into_stripped().to_scale();
-                    add_ext(&mut params, PHALA_RATLS_ATTESTATION, &attestation_bytes);
-                }
-            }
+            // Use the unified PHALA_RATLS_ATTESTATION OID for all attestation types.
+            // Event logs are stripped to reduce cert size (only IMR 3 events are kept).
+            let attestation_bytes = ver_att.clone().into_stripped().to_scale();
+            add_ext(&mut params, PHALA_RATLS_ATTESTATION, &attestation_bytes);
         }
         if let Some(ca_level) = self.ca_level {
             params.is_ca = IsCa::Ca(BasicConstraints::Constrained(ca_level));
@@ -576,7 +564,7 @@ pub fn generate_ra_cert_with_app_id(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dstack_attest::attestation::TdxQuote;
+    use dstack_attest::attestation::{AttestationQuote, TdxQuote};
     use rcgen::PKCS_ECDSA_P256_SHA256;
     use scale::Encode;
 
