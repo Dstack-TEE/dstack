@@ -1,0 +1,18 @@
+[Unit]
+Description=dstack Simulator Service
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=@INSTALL_DIR@
+ExecStart=@INSTALL_DIR@/dstack-simulator -c @INSTALL_DIR@/dstack.toml
+Restart=on-failure
+RestartSec=2s
+User=@USER@
+Group=@GROUP@
+Environment=RUST_LOG=@RUST_LOG@
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
