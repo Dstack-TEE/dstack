@@ -27,7 +27,7 @@ async fn main() -> Result<()> {
     }
     let args = Args::parse();
     let figment = config::load_config_figment(args.config.as_deref());
-    let state = AppState::new_real(figment.focus("core").extract()?)
+    let state = AppState::new(figment.focus("core").extract()?)
         .await
         .context("Failed to create app state")?;
     run_server(state, figment, args.watchdog).await

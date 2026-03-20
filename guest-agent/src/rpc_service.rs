@@ -132,7 +132,10 @@ impl AppState {
         });
     }
 
-    pub async fn new(config: Config, platform: Arc<dyn PlatformBackend>) -> Result<Self> {
+    pub async fn new_with_platform(
+        config: Config,
+        platform: Arc<dyn PlatformBackend>,
+    ) -> Result<Self> {
         let keys: AppKeys = serde_json::from_str(&fs::read_to_string(&config.keys_file)?)
             .context("Failed to parse app keys")?;
         let sys_config: SysConfig =
@@ -157,8 +160,8 @@ impl AppState {
         Ok(me)
     }
 
-    pub async fn new_real(config: Config) -> Result<Self> {
-        Self::new(config, Arc::new(RealPlatform)).await
+    pub async fn new(config: Config) -> Result<Self> {
+        Self::new_with_platform(config, Arc::new(RealPlatform)).await
     }
 
     pub fn config(&self) -> &Config {

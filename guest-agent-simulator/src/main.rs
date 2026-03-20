@@ -125,7 +125,7 @@ async fn main() -> Result<()> {
     }
     let attestation =
         simulator::load_versioned_attestation(&sim_config.simulator.attestation_file)?;
-    let state = AppState::new(
+    let state = AppState::new_with_platform(
         sim_config.core,
         Arc::new(SimulatorPlatform::new(
             attestation,
