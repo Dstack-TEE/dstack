@@ -1,0 +1,72 @@
+# SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# =============================================================================
+# prek configuration for dstack
+# =============================================================================
+
+# --- General hooks (trailing whitespace, file checks, etc.) ---
+[[repos]]
+repo = "https://github.com/pre-commit/pre-commit-hooks"
+rev = "v5.0.0"
+hooks = [
+    { id = "trailing-whitespace", args = ["--markdown-linebreak-ext=md"] },
+    { id = "end-of-file-fixer" },
+    { id = "check-yaml", args = ["--allow-multiple-documents"], exclude = "gateway/templates/" },
+    { id = "check-toml" },
+    { id = "check-json" },
+    { id = "check-merge-conflict" },
+    { id = "check-added-large-files", args = ["--maxkb=500"] },
+    { id = "check-symlinks" },
+    { id = "mixed-line-ending", args = ["--fix=lf"] },
+]
+
+# --- Rust: rustfmt ---
+[[repos]]
+repo = "local"
+
+[[repos.hooks]]
+id = "cargo-fmt"
+name = "cargo fmt"
+entry = "cargo fmt --all"
+language = "system"
+types = ["rust"]
+pass_filenames = false
+
+# --- Python: ruff (lint + format) ---
+[[repos]]
+repo = "https://github.com/astral-sh/ruff-pre-commit"
+rev = "v0.11.4"
+hooks = [
+    { id = "ruff", args = ["--fix", "--select", "E,F,I,D", "--ignore", "D203,D213,E501"] },
+    { id = "ruff-format" },
+]
+
+# --- Go: go vet ---
+[[repos]]
+repo = "local"
+
+[[repos.hooks]]
+id = "go-vet"
+name = "go vet"
+entry = "bash -c 'cd sdk/go && go vet ./...'"
+language = "system"
+files = "sdk/go/.*\\.go$"
+pass_filenames = false
+
+# --- Shell: shellcheck ---
+[[repos]]
+repo = "https://github.com/shellcheck-py/shellcheck-py"
+rev = "v0.10.0.1"
+hooks = [
+    { id = "shellcheck" },
+]
+
+# --- Conventional commits (used by cliff.toml for changelog) ---
+[[repos]]
+repo = "https://github.com/compilerla/conventional-pre-commit"
+rev = "v4.1.0"
+hooks = [
+    { id = "conventional-pre-commit", stages = ["commit-msg"] },
+]

@@ -3,8 +3,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-Mock Cloudflare DNS API Server
+"""Mock Cloudflare DNS API server.
 
 A mock server that simulates Cloudflare's DNS API for testing purposes.
 Supports the following endpoints used by certbot:
@@ -13,13 +12,13 @@ Supports the following endpoints used by certbot:
 - DELETE /client/v4/zones/{zone_id}/dns_records/{record_id} - Delete DNS record
 """
 
+import json
 import os
 import uuid
-import time
-import json
 from datetime import datetime
-from flask import Flask, request, jsonify, render_template_string
 from functools import wraps
+
+from flask import Flask, jsonify, render_template_string, request
 
 app = Flask(__name__)
 
@@ -32,7 +31,11 @@ request_logs = []
 MAX_LOGS = 100
 
 # Valid API tokens (for testing, accept any non-empty token or use env var)
-VALID_TOKENS = os.environ.get("CF_API_TOKENS", "").split(",") if os.environ.get("CF_API_TOKENS") else None
+VALID_TOKENS = (
+    os.environ.get("CF_API_TOKENS", "").split(",")
+    if os.environ.get("CF_API_TOKENS")
+    else None
+)
 
 
 def log_request(zone_id, method, path, req_data, resp_data, status_code):
@@ -62,30 +65,36 @@ def get_current_time():
 
 
 def verify_auth(f):
-    """Decorator to verify Bearer token authentication."""
+    """Verify Bearer token authentication."""
+
     @wraps(f)
     def decorated(*args, **kwargs):
         auth_header = request.headers.get("Authorization", "")
         if not auth_header.startswith("Bearer "):
-            return jsonify({
-                "success": False,
-                "errors": [{"code": 10000, "message": "Authentication error"}],
-                "messages": [],
-                "result": None
-            }), 401
+            return jsonify(
+                {
+                    "success": False,
+                    "errors": [{"code": 10000, "message": "Authentication error"}],
+                    "messages": [],
+                    "result": None,
+                }
+            ), 401
 
         token = auth_header[7:]  # Remove "Bearer " prefix
 
         # If VALID_TOKENS is set, validate against it; otherwise accept any token
         if VALID_TOKENS and token not in VALID_TOKENS:
-            return jsonify({
-                "success": False,
-                "errors": [{"code": 10000, "message": "Invalid API token"}],
-                "messages": [],
-                "result": None
-            }), 403
+            return jsonify(
+                {
+                    "success": False,
+                    "errors": [{"code": 10000, "message": "Invalid API token"}],
+                    "messages": [],
+                    "result": None,
+                }
+            ), 403
 
         return f(*args, **kwargs)
+
     return decorated
 
 
@@ -95,7 +104,7 @@ def cf_response(result, success=True, errors=None, messages=None):
         "success": success,
         "errors": errors or [],
         "messages": messages or [],
-        "result": result
+        "result": result,
     }
 
 
@@ -105,6 +114,7 @@ def cf_error(message, code=1000):
 
 
 # ==================== DNS Record Endpoints ====================
+
 
 @app.route("/client/v4/zones/<zone_id>/dns_records", methods=["POST"])
 @verify_auth
@@ -148,8 +158,8 @@ def create_dns_record(zone_id):
         "meta": {
             "auto_added": False,
             "managed_by_apps": False,
-            "managed_by_argo_tunnel": False
-        }
+            "managed_by_argo_tunnel": False,
+        },
     }
 
     # Handle different record types
@@ -177,7 +187,9 @@ def create_dns_record(zone_id):
     resp = cf_response(record)
     log_request(zone_id, "POST", f"/zones/{zone_id}/dns_records", data, resp, 200)
 
-    print(f"[CREATE] Zone: {zone_id}, Record: {record_id}, Type: {record_type}, Name: {name}")
+    print(
+        f"[CREATE] Zone: {zone_id}, Record: {record_id}, Type: {record_type}, Name: {name}"
+    )
 
     return jsonify(resp), 200
 
@@ -220,10 +232,12 @@ def list_dns_records(zone_id):
             "per_page": per_page,
             "count": len(page_records),
             "total_count": total_count,
-            "total_pages": total_pages
-        }
+            "total_pages": total_pages,
+        },
     }
-    log_request(zone_id, "GET", f"/zones/{zone_id}/dns_records", dict(request.args), resp, 200)
+    log_request(
+        zone_id, "GET", f"/zones/{zone_id}/dns_records", dict(request.args), resp, 200
+    )
 
     return jsonify(resp), 200
 
@@ -237,11 +251,15 @@ def get_dns_record(zone_id, record_id):
 
     if not record:
         resp = cf_error("Record not found", 81044)
-        log_request(zone_id, "GET", f"/zones/{zone_id}/dns_records/{record_id}", None, resp, 404)
+        log_request(
+            zone_id, "GET", f"/zones/{zone_id}/dns_records/{record_id}", None, resp, 404
+        )
         return jsonify(resp), 404
 
     resp = cf_response(record)
-    log_request(zone_id, "GET", f"/zones/{zone_id}/dns_records/{record_id}", None, resp, 200)
+    log_request(
+        zone_id, "GET", f"/zones/{zone_id}/dns_records/{record_id}", None, resp, 200
+    )
 
     return jsonify(resp), 200
 
@@ -255,13 +273,17 @@ def update_dns_record(zone_id, record_id):
 
     if not record:
         resp = cf_error("Record not found", 81044)
-        log_request(zone_id, "PUT", f"/zones/{zone_id}/dns_records/{record_id}", None, resp, 404)
+        log_request(
+            zone_id, "PUT", f"/zones/{zone_id}/dns_records/{record_id}", None, resp, 404
+        )
         return jsonify(resp), 404
 
     data = request.get_json()
     if not data:
         resp = cf_error("Invalid request body")
-        log_request(zone_id, "PUT", f"/zones/{zone_id}/dns_records/{record_id}", None, resp, 400)
+        log_request(
+            zone_id, "PUT", f"/zones/{zone_id}/dns_records/{record_id}", None, resp, 400
+        )
         return jsonify(resp), 400
 
     # Update allowed fields
@@ -272,7 +294,9 @@ def update_dns_record(zone_id, record_id):
     record["modified_on"] = get_current_time()
 
     resp = cf_response(record)
-    log_request(zone_id, "PUT", f"/zones/{zone_id}/dns_records/{record_id}", data, resp, 200)
+    log_request(
+        zone_id, "PUT", f"/zones/{zone_id}/dns_records/{record_id}", data, resp, 200
+    )
 
     print(f"[UPDATE] Zone: {zone_id}, Record: {record_id}")
 
@@ -287,13 +311,22 @@ def delete_dns_record(zone_id, record_id):
 
     if record_id not in zone_records:
         resp = cf_error("Record not found", 81044)
-        log_request(zone_id, "DELETE", f"/zones/{zone_id}/dns_records/{record_id}", None, resp, 404)
+        log_request(
+            zone_id,
+            "DELETE",
+            f"/zones/{zone_id}/dns_records/{record_id}",
+            None,
+            resp,
+            404,
+        )
         return jsonify(resp), 404
 
     del zone_records[record_id]
 
     resp = cf_response({"id": record_id})
-    log_request(zone_id, "DELETE", f"/zones/{zone_id}/dns_records/{record_id}", None, resp, 200)
+    log_request(
+        zone_id, "DELETE", f"/zones/{zone_id}/dns_records/{record_id}", None, resp, 200
+    )
 
     print(f"[DELETE] Zone: {zone_id}, Record: {record_id}")
 
@@ -321,7 +354,7 @@ def get_configured_zones():
         try:
             return json.loads(zones_json)
         except json.JSONDecodeError:
-            print(f"Warning: Invalid MOCK_ZONES JSON, using defaults")
+            print("Warning: Invalid MOCK_ZONES JSON, using defaults")
     return DEFAULT_ZONES
 
 
@@ -342,20 +375,19 @@ def list_zones():
     # Build full zone objects
     full_zones = []
     for z in zones:
-        full_zones.append({
-            "id": z["id"],
-            "name": z["name"],
-            "status": "active",
-            "paused": False,
-            "type": "full",
-            "development_mode": 0,
-            "name_servers": [
-                "ns1.mock-cloudflare.com",
-                "ns2.mock-cloudflare.com"
-            ],
-            "created_on": "2024-01-01T00:00:00.000000Z",
-            "modified_on": get_current_time(),
-        })
+        full_zones.append(
+            {
+                "id": z["id"],
+                "name": z["name"],
+                "status": "active",
+                "paused": False,
+                "type": "full",
+                "development_mode": 0,
+                "name_servers": ["ns1.mock-cloudflare.com", "ns2.mock-cloudflare.com"],
+                "created_on": "2024-01-01T00:00:00.000000Z",
+                "modified_on": get_current_time(),
+            }
+        )
 
     # Pagination
     total_count = len(full_zones)
@@ -374,12 +406,14 @@ def list_zones():
             "per_page": per_page,
             "count": len(page_zones),
             "total_count": total_count,
-            "total_pages": total_pages
-        }
+            "total_pages": total_pages,
+        },
     }
 
     log_request("*", "GET", "/zones", dict(request.args), result, 200)
-    print(f"[LIST ZONES] page={page}, per_page={per_page}, count={len(page_zones)}, total={total_count}")
+    print(
+        f"[LIST ZONES] page={page}, per_page={per_page}, count={len(page_zones)}, total={total_count}"
+    )
 
     return jsonify(result), 200
 
@@ -405,10 +439,7 @@ def get_zone(zone_id):
         "paused": False,
         "type": "full",
         "development_mode": 0,
-        "name_servers": [
-            "ns1.mock-cloudflare.com",
-            "ns2.mock-cloudflare.com"
-        ],
+        "name_servers": ["ns1.mock-cloudflare.com", "ns2.mock-cloudflare.com"],
         "created_on": "2024-01-01T00:00:00.000000Z",
         "modified_on": get_current_time(),
     }
@@ -789,11 +820,12 @@ def management_ui():
         request_count=len(request_logs),
         records=all_records,
         logs=request_logs[:20],
-        port=os.environ.get("PORT", 8080)
+        port=os.environ.get("PORT", 8080),
     )
 
 
 # ==================== Management API ====================
+
 
 @app.route("/api/records", methods=["DELETE"])
 def clear_all_records():
@@ -829,7 +861,9 @@ def get_all_records():
 @app.route("/health")
 def health():
     """Health check endpoint."""
-    return jsonify({"status": "healthy", "records": sum(len(r) for r in dns_records.values())})
+    return jsonify(
+        {"status": "healthy", "records": sum(len(r) for r in dns_records.values())}
+    )
 
 
 if __name__ == "__main__":

@@ -2,20 +2,20 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+"""Test script for verifying Python SDK outputs."""
+
 import asyncio
 import sys
 
-from dstack_sdk import (
-    DstackClient,
-    AsyncDstackClient,
-    TappdClient,
-    AsyncTappdClient,
-    get_compose_hash,
-    verify_env_encrypt_public_key,
-)
+from dstack_sdk import AsyncDstackClient
+from dstack_sdk import AsyncTappdClient
+from dstack_sdk import DstackClient
+from dstack_sdk import TappdClient
+from dstack_sdk import get_compose_hash
+from dstack_sdk import verify_env_encrypt_public_key
 
 
-async def main():
+async def main():  # noqa: D103
     print("=== Python SDK Output Test ===")
 
     try:
@@ -49,7 +49,7 @@ async def main():
 
             account = to_account(eth_key)
             print(f"  address: {account.address}")
-            print(f"  type: ethereum account")
+            print("  type: ethereum account")
         except ImportError:
             print(
                 "  error: Ethereum integration not available (install with pip install 'dstack-sdk[eth]')"
@@ -63,7 +63,7 @@ async def main():
 
             account_secure = to_account_secure(eth_key)
             print(f"  address: {account_secure.address}")
-            print(f"  type: ethereum account")
+            print("  type: ethereum account")
         except ImportError:
             print(
                 "  error: Ethereum integration not available (install with pip install 'dstack-sdk[eth]')"
