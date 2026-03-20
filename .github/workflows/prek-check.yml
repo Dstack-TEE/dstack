@@ -1,0 +1,47 @@
+# SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+name: Pre-commit checks
+
+on:
+  push:
+    branches: [ master, next, dev-* ]
+  pull_request:
+    branches: [ master, next, dev-* ]
+
+jobs:
+  pre-commit:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@master
+      with:
+        toolchain: 1.92.0
+        components: rustfmt
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.22'
+
+    - name: Install prek
+      run: pip install prek
+
+    - name: Run pre-commit checks (PR)
+      if: github.event_name == 'pull_request'
+      run: prek run --from-ref ${{ github.event.pull_request.base.sha }} --to-ref ${{ github.event.pull_request.head.sha }} --show-diff-on-failure
+
+    - name: Run pre-commit checks (push)
+      if: github.event_name == 'push'
+      run: prek run --from-ref ${{ github.event.before }} --to-ref ${{ github.event.after }} --show-diff-on-failure
