@@ -272,25 +272,6 @@ impl VersionedAttestation {
         }
     }
 
-    /// Set the report_data field in the attestation and in the raw TDX quote bytes (offset 568..632).
-    /// This is used by the simulator to patch a canned attestation with the correct report_data
-    /// that binds to the actual TLS public key.
-    pub fn set_report_data(&mut self, report_data: [u8; 64]) {
-        let VersionedAttestation::V0 { attestation } = self;
-        attestation.report_data = report_data;
-        if let Some(tdx_quote) = attestation.tdx_quote_mut() {
-            if tdx_quote.quote.len() >= TDX_QUOTE_REPORT_DATA_RANGE.end {
-                tdx_quote.quote[TDX_QUOTE_REPORT_DATA_RANGE].copy_from_slice(&report_data);
-            } else {
-                tracing::warn!(
-                    "TDX quote too short to patch report_data ({} < {})",
-                    tdx_quote.quote.len(),
-                    TDX_QUOTE_REPORT_DATA_RANGE.end
-                );
-            }
-        }
-    }
-
     /// Strip data for certificate embedding (e.g. keep RTMR3 event logs only).
     pub fn into_stripped(mut self) -> Self {
         let VersionedAttestation::V0 { attestation } = &mut self;

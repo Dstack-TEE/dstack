@@ -71,8 +71,11 @@ impl PlatformBackend for SimulatorPlatform {
         simulator::simulated_quote_response(&self.attestation, report_data, vm_config)
     }
 
-    fn attest_response(&self, _report_data: [u8; 64]) -> Result<AttestResponse> {
-        Ok(simulator::simulated_attest_response(&self.attestation))
+    fn attest_response(&self, report_data: [u8; 64]) -> Result<AttestResponse> {
+        Ok(simulator::simulated_attest_response(
+            &self.attestation,
+            report_data,
+        ))
     }
 
     fn emit_event(&self, event: &str, _payload: &[u8]) -> Result<()> {
@@ -133,5 +136,15 @@ mod tests {
             .unwrap();
         assert!(cert_attestation.decode_app_info(false).is_ok());
         let _ = platform.attestation_for_info().unwrap();
+    }
+
+    #[test]
+    fn simulator_attest_response_uses_supplied_report_data() {
+        let platform = load_fixture_platform();
+        let report_data = [0x5a; 64];
+        let response = platform.attest_response(report_data).unwrap();
+        let patched = VersionedAttestation::from_scale(&response.attestation).unwrap();
+        let VersionedAttestation::V0 { attestation } = patched;
+        assert_eq!(attestation.report_data, report_data);
     }
 }

@@ -807,17 +807,37 @@ pNs85uhOZE8z2jr8Pg==
             attestation: VersionedAttestation,
         }
 
+        fn patch_report_data(
+            attestation: &VersionedAttestation,
+            report_data: [u8; 64],
+        ) -> VersionedAttestation {
+            let ra_tls::attestation::VersionedAttestation::V0 { attestation } = attestation.clone();
+            let mut attestation = attestation;
+            attestation.report_data = report_data;
+            if let Some(tdx_quote) = attestation.tdx_quote_mut() {
+                if tdx_quote.quote.len() >= ra_tls::attestation::TDX_QUOTE_REPORT_DATA_RANGE.end {
+                    tdx_quote.quote[ra_tls::attestation::TDX_QUOTE_REPORT_DATA_RANGE]
+                        .copy_from_slice(&report_data);
+                } else {
+                    tracing::warn!(
+                        "TDX quote too short to patch report_data ({} < {})",
+                        tdx_quote.quote.len(),
+                        ra_tls::attestation::TDX_QUOTE_REPORT_DATA_RANGE.end
+                    );
+                }
+            }
+            ra_tls::attestation::VersionedAttestation::V0 { attestation }
+        }
+
         impl PlatformBackend for TestSimulatorPlatform {
             fn attestation_for_info(&self) -> Result<ra_rpc::Attestation> {
                 Ok(self.attestation.clone().into_inner())
             }
 
             fn certificate_attestation(&self, pubkey: &[u8]) -> Result<VersionedAttestation> {
-                let mut attestation = self.attestation.clone();
                 let report_data =
                     ra_tls::attestation::QuoteContentType::RaTlsCert.to_report_data(pubkey);
-                attestation.set_report_data(report_data);
-                Ok(attestation)
+                Ok(patch_report_data(&self.attestation, report_data))
             }
 
             fn quote_response(
@@ -826,13 +846,11 @@ pNs85uhOZE8z2jr8Pg==
                 vm_config: &str,
             ) -> Result<GetQuoteResponse> {
                 let ra_tls::attestation::VersionedAttestation::V0 { attestation } =
-                    self.attestation.clone();
+                    patch_report_data(&self.attestation, report_data);
                 let mut attestation = attestation;
                 let Some(quote) = attestation.tdx_quote_mut() else {
                     return Err(anyhow::anyhow!("Quote not found"));
                 };
-                quote.quote[ra_tls::attestation::TDX_QUOTE_REPORT_DATA_RANGE]
-                    .copy_from_slice(&report_data);
                 Ok(GetQuoteResponse {
                     quote: quote.quote.to_vec(),
                     event_log: serde_json::to_string(&quote.event_log)
@@ -842,9 +860,9 @@ pNs85uhOZE8z2jr8Pg==
                 })
             }
 
-            fn attest_response(&self, _report_data: [u8; 64]) -> Result<AttestResponse> {
+            fn attest_response(&self, report_data: [u8; 64]) -> Result<AttestResponse> {
                 Ok(AttestResponse {
-                    attestation: self.attestation.to_scale(),
+                    attestation: patch_report_data(&self.attestation, report_data).to_scale(),
                 })
             }
 

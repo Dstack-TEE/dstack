@@ -27,13 +27,12 @@ pub fn simulated_quote_response(
     report_data: [u8; 64],
     vm_config: &str,
 ) -> Result<GetQuoteResponse> {
-    let VersionedAttestation::V0 { attestation } = attestation.clone();
+    let VersionedAttestation::V0 { attestation } = patch_report_data(attestation, report_data);
     let mut attestation = attestation;
     let Some(quote) = attestation.tdx_quote_mut() else {
         return Err(anyhow::anyhow!("Quote not found"));
     };
 
-    quote.quote[TDX_QUOTE_REPORT_DATA_RANGE].copy_from_slice(&report_data);
     Ok(GetQuoteResponse {
         quote: quote.quote.to_vec(),
         event_log: serde_json::to_string(&quote.event_log)
@@ -43,9 +42,12 @@ pub fn simulated_quote_response(
     })
 }
 
-pub fn simulated_attest_response(attestation: &VersionedAttestation) -> AttestResponse {
+pub fn simulated_attest_response(
+    attestation: &VersionedAttestation,
+    report_data: [u8; 64],
+) -> AttestResponse {
     AttestResponse {
-        attestation: attestation.to_scale(),
+        attestation: patch_report_data(attestation, report_data).to_scale(),
     }
 }
 
@@ -57,8 +59,27 @@ pub fn simulated_certificate_attestation(
     attestation: &VersionedAttestation,
     pubkey: &[u8],
 ) -> VersionedAttestation {
-    let mut attestation = attestation.clone();
     let report_data = QuoteContentType::RaTlsCert.to_report_data(pubkey);
-    attestation.set_report_data(report_data);
-    attestation
+    patch_report_data(attestation, report_data)
+}
+
+fn patch_report_data(
+    attestation: &VersionedAttestation,
+    report_data: [u8; 64],
+) -> VersionedAttestation {
+    let VersionedAttestation::V0 { attestation } = attestation.clone();
+    let mut attestation = attestation;
+    attestation.report_data = report_data;
+    if let Some(tdx_quote) = attestation.tdx_quote_mut() {
+        if tdx_quote.quote.len() >= TDX_QUOTE_REPORT_DATA_RANGE.end {
+            tdx_quote.quote[TDX_QUOTE_REPORT_DATA_RANGE].copy_from_slice(&report_data);
+        } else {
+            tracing::warn!(
+                "TDX quote too short to patch report_data ({} < {})",
+                tdx_quote.quote.len(),
+                TDX_QUOTE_REPORT_DATA_RANGE.end
+            );
+        }
+    }
+    VersionedAttestation::V0 { attestation }
 }
