@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::config::AuthApi;
+use crate::config::{AuthApi, KmsConfig};
 use anyhow::{bail, Context, Result};
 use dstack_guest_agent_rpc::{
     dstack_guest_client::DstackGuestClient, AttestResponse, RawQuoteArgs,
@@ -188,19 +188,51 @@ fn url_join(url: &str, path: &str) -> String {
     url
 }
 
-fn dstack_client() -> DstackGuestClient<PrpcClient> {
+pub(crate) fn dstack_client() -> DstackGuestClient<PrpcClient> {
     let address = dstack_types::dstack_agent_address();
     let http_client = PrpcClient::new(address);
     DstackGuestClient::new(http_client)
 }
 
-async fn app_attest(report_data: Vec<u8>) -> Result<AttestResponse> {
+pub(crate) async fn app_attest(report_data: Vec<u8>) -> Result<AttestResponse> {
     dstack_client().attest(RawQuoteArgs { report_data }).await
 }
 
-fn pad64(hash: [u8; 32]) -> Vec<u8> {
+pub(crate) fn pad64(hash: [u8; 32]) -> Vec<u8> {
     let mut padded = Vec::with_capacity(64);
     padded.extend_from_slice(&hash);
     padded.resize(64, 0);
     padded
+}
+
+pub(crate) async fn ensure_self_kms_allowed(cfg: &KmsConfig) -> Result<()> {
+    let boot_info = local_kms_boot_info(cfg.pccs_url.as_deref())
+        .await
+        .context("failed to build local KMS boot info")?;
+    let response = cfg
+        .auth_api
+        .is_app_allowed(&boot_info, true)
+        .await
+        .context("failed to call KMS auth check")?;
+    if !response.is_allowed {
+        bail!("boot denied: {}", response.reason);
+    }
+    Ok(())
+}
+
+pub(crate) async fn ensure_kms_allowed(
+    cfg: &KmsConfig,
+    attestation: &VerifiedAttestation,
+) -> Result<()> {
+    let boot_info = build_boot_info(attestation, false, "")
+        .context("failed to build KMS boot info from attestation")?;
+    let response = cfg
+        .auth_api
+        .is_app_allowed(&boot_info, true)
+        .await
+        .context("failed to call KMS auth check")?;
+    if !response.is_allowed {
+        bail!("boot denied: {}", response.reason);
+    }
+    Ok(())
 }

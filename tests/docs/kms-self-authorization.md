@@ -11,18 +11,22 @@ The goal is to validate the following behaviors without depending on `kms/e2e/` 
 
 This guide is written as a deployment-and-test runbook so an AI agent can follow it end-to-end.
 
-> **Execution notes from a real run on teepod2 (2026-03-19):**
+> **Execution notes from real runs on teepod2 (2026-03-19):**
 >
 > 1. Do **not** assume a host-local `auth-simple` instance is reachable from a CVM. In practice, the auth API must be:
 >    - publicly reachable by the CVM, or
 >    - deployed as a sidecar/internal service inside the same test environment.
-> 2. For PR validation, prefer a **prebuilt KMS test image**. The run documented here used `cr.kvin.wang/dstack-kms:kms-auth-checks-157ad4ba`.
+>    - dstack CVMs use QEMU user-mode networking — the host is reachable at **`10.0.2.2`** from inside the CVM.
+> 2. For PR validation, prefer a **prebuilt KMS test image**.
 > 3. `Boot Progress: done` only means the VM guest boot finished. It does **not** guarantee the KMS onboard endpoint is already ready.
 > 4. If you inject helper scripts through `docker-compose.yaml`, prefer inline `configs.content` over `configs.file` unless you have confirmed the extra files are copied into the deployment bundle.
 > 5. The onboard completion endpoint is **GET `/finish`**, not POST.
 > 6. Do **not** reuse a previously captured `mr_aggregated` across redeploys. Auth policies must be generated from the attestation of the **current** VM under test.
 > 7. KMS now always requires quote/attestation. For local development without TDX hardware, use `sdk/simulator` instead of trying to run a no-attestation KMS flow.
 > 8. For `auth-simple`, `kms.mrAggregated = []` is a deny-all policy for KMS. Use that as the baseline deny configuration, then add the measured KMS MR values for allow cases.
+> 9. **Port forwarding is simpler than gateway for testing.** Using `--gateway` requires the auth API to return a valid `gatewayAppId`, which adds unnecessary complexity. Use `--port tcp:0.0.0.0:<host-port>:8000` instead.
+> 10. **Remote KMS attestation has an empty `osImageHash`.** When the receiver verifies the source KMS during onboard, the `osImageHash` field in the attestation is empty (because `vm_config` is not available for the remote attestation). Auth configs for receiver-side checks must include `"0x"` in the `osImages` array to match this empty hash.
+> 11. The `source_url` in the `Onboard.Onboard` request must use an address **reachable from inside the CVM** (e.g., `https://10.0.2.2:<port>/prpc`), not `127.0.0.1` which is the CVM's own loopback.
 
 ---
 
@@ -119,10 +123,10 @@ Strong recommendation for this manual test:
 
 Using a prebuilt image significantly reduces ambiguity when a failure happens: you can focus on KMS authorization logic rather than image build or registry behavior.
 
-Teepod/gateway URL convention observed during a real run:
+If you use teepod gateway instead of port forwarding:
 
-- **onboard mode:** use the `-8000` style URL
-- **runtime TLS KMS RPC after bootstrap/onboard:** use the `-8000s` style URL
+- **onboard mode:** use the `-8000` style URL (plain HTTP)
+- **runtime TLS KMS RPC after bootstrap/onboard:** use the `-8000s` style URL (TLS passthrough)
 
 Do not assume the same external URL works before and after onboarding is finished.
 
@@ -144,9 +148,9 @@ The original plan was to run two host-local `auth-simple` processes. In practice
 
 Choose one of these options:
 
-1. **Preferred:** deploy the auth API as a separate public service or CVM
-2. **Also fine:** run the auth API as a sidecar in the same KMS test deployment
-3. **Only if reachable:** run `auth-simple` on the operator host and point KMS at that reachable host/IP
+1. **Preferred:** run `auth-simple` on the operator host and point KMS at `http://10.0.2.2:<port>` (QEMU host gateway). This is the simplest if the CVMs use QEMU user-mode networking.
+2. **Also fine:** deploy the auth API as a separate public service or CVM
+3. **Sidecar:** run the auth API as a sidecar in the same KMS test deployment
 
 If you use the sidecar/public-service pattern, keep the same logical split:
 
@@ -224,12 +228,17 @@ Requirements for **both** VMs:
 - `core.onboard.auto_bootstrap_domain = ""`
 - `core.auth_api.type = "webhook"`
 
-Point them at different auth services or sidecars:
+Point them at different auth services. If using host-local `auth-simple` with QEMU user-mode networking:
 
-- `kms-src` → `http://<host-reachable-ip>:3101`
-- `kms-dst` → `http://<host-reachable-ip>:3102`
+- `kms-src` → `http://10.0.2.2:3101`
+- `kms-dst` → `http://10.0.2.2:3102`
 
-If you use sidecars instead of host-local auth servers, replace those URLs with the sidecar/internal service addresses.
+**Recommended deploy method:** use port forwarding (`--port`) instead of gateway. Gateway requires the auth API to return a `gatewayAppId` at boot, which makes testing harder. With port forwarding, the KMS onboard and runtime endpoints are directly accessible on the host:
+
+```bash
+vmm-cli.py deploy --name kms-src ... --port tcp:0.0.0.0:9301:8000
+vmm-cli.py deploy --name kms-dst ... --port tcp:0.0.0.0:9302:8000
+```
 
 If you need an example deployment template, adapt the flow in:
 
@@ -238,14 +247,18 @@ If you need an example deployment template, adapt the flow in:
 Record these values:
 
 ```bash
-export KMS_SRC_ONBOARD='https://<kms-src-onboard-host>/'
-export KMS_DST_ONBOARD='https://<kms-dst-onboard-host>/'
+# With port forwarding:
+export KMS_SRC_ONBOARD='http://127.0.0.1:9301'
+export KMS_DST_ONBOARD='http://127.0.0.1:9302'
+export KMS_SRC_RUNTIME='https://127.0.0.1:9301'
+export KMS_DST_RUNTIME='https://127.0.0.1:9302'
 ```
 
 Notes:
 
-- The onboard endpoint is plain onboarding mode, so use `Onboard.*`
-- The runtime KMS endpoint is available only after bootstrap/onboard and `/finish`
+- The onboard endpoint serves plain HTTP, so use `http://` for `KMS_*_ONBOARD`
+- After bootstrap/onboard + `/finish`, the KMS restarts with TLS — use `https://` for `KMS_*_RUNTIME`
+- The `source_url` in `Onboard.Onboard` must be reachable from inside the CVM (e.g., `https://10.0.2.2:9301/prpc`)
 
 Wait until the onboard endpoint is actually ready before continuing. A simple probe loop is recommended:
 
@@ -300,12 +313,14 @@ All three values above are expected to be hex strings **without** the `0x` prefi
 
 #### Deny-by-MR config
 
-Use a wrong `mrAggregated` value while allowing the observed OS image:
+Use a wrong `mrAggregated` value while allowing the observed OS image.
+
+> **Important:** include `"0x"` in `osImages` to handle remote KMS attestation during onboard receiver-side checks, where `osImageHash` is empty because `vm_config` is unavailable for the remote attestation.
 
 ```bash
 cat > /tmp/kms-self-auth/deny-by-mr.json <<'EOF'
 {
-  "osImages": ["0xREPLACE_OS"],
+  "osImages": ["0xREPLACE_OS", "0x"],
   "gatewayAppId": "any",
   "kms": {
     "mrAggregated": ["0x0000000000000000000000000000000000000000000000000000000000000000"],
@@ -322,7 +337,7 @@ EOF
 ```bash
 cat > /tmp/kms-self-auth/allow-single.json <<'EOF'
 {
-  "osImages": ["0xREPLACE_OS"],
+  "osImages": ["0xREPLACE_OS", "0x"],
   "gatewayAppId": "any",
   "kms": {
     "mrAggregated": ["0xREPLACE_MR"],
@@ -339,7 +354,7 @@ EOF
 ```bash
 cat > /tmp/kms-self-auth/allow-src-and-dst.json <<'EOF'
 {
-  "osImages": ["0xREPLACE_SRC_OS", "0xREPLACE_DST_OS"],
+  "osImages": ["0xREPLACE_SRC_OS", "0xREPLACE_DST_OS", "0x"],
   "gatewayAppId": "any",
   "kms": {
     "mrAggregated": ["0xREPLACE_SRC_MR", "0xREPLACE_DST_MR"],

@@ -75,8 +75,10 @@ Operational notes:
 1. Prefer a **prebuilt KMS image**.
 2. `Boot Progress: done` does **not** guarantee the onboard endpoint is ready.
 3. The onboarding completion endpoint is **GET `/finish`**.
-4. On teepod, onboard mode usually uses the `-8000` URL, while runtime TLS KMS RPC usually uses the `-8000s` URL.
+4. On teepod with gateway, onboard mode usually uses the `-8000` URL, while runtime TLS KMS RPC usually uses the `-8000s` URL. **Port forwarding** (`--port tcp:0.0.0.0:<host-port>:8000`) is simpler than gateway for testing, because gateway requires the auth API to return a `gatewayAppId` at boot time.
 5. If you use a very small custom webhook instead of the real auth service, `KMS.GetMeta` may fail because `auth_api.get_info()` expects extra chain / contract metadata fields. In that case, use `GetTempCaCert` as the runtime readiness probe.
+6. dstack CVMs use QEMU user-mode networking — the host is reachable at **`10.0.2.2`** from inside the CVM. The `source_url` in `Onboard.Onboard` must use a CVM-reachable address (e.g., `https://10.0.2.2:<port>/prpc`), not `127.0.0.1`.
+7. **Remote KMS attestation has an empty `osImageHash`.** When the receiver verifies the source KMS during onboard, the `osImageHash` is empty because `vm_config` is unavailable for remote attestation. Auth configs for receiver-side checks must include `"0x"` in the `osImages` array.
 
 ---
 
@@ -99,13 +101,15 @@ Use two independently controllable auth services:
 
 They can be:
 
-1. host-local if reachable by CVMs
+1. **Preferred:** host-local, accessed from CVMs via `http://10.0.2.2:<port>` (QEMU host gateway)
 2. public services
 3. sidecars inside each KMS deployment
 
 At minimum, both policies must allow the KMS instance they serve. During onboard, source-side policy must also allow the destination KMS caller.
 
 For `auth-simple`, `kms.mrAggregated = []` is a deny-all policy for KMS. Add the current KMS MR values explicitly when switching a test from deny to allow.
+
+Include `"0x"` in the `osImages` array for configs used in receiver-side onboard checks (see operational note 7 above).
 
 ### 4.3 Deploy `kms-src` and `kms-dst`
 
