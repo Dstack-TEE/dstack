@@ -54,6 +54,8 @@ jobs:
           tags: ${{ vars.DOCKERHUB_ORG }}/dstack-verifier:${{ env.VERSION }}
           platforms: linux/amd64
           provenance: false
+          build-contexts: |
+            build-shared=build/shared
           build-args: |
             DSTACK_REV=${{ env.GIT_REV }}
             DSTACK_SRC_URL=${{ github.server_url }}/${{ github.repository }}.git

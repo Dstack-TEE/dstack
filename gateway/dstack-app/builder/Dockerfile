@@ -3,7 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 FROM rust:1.92.0@sha256:48851a839d6a67370c9dbe0e709bedc138e3e404b161c5233aedcf2b717366e4 AS gateway-builder
-COPY ./shared /build
+COPY --from=build-shared pin-packages.sh /build/
+COPY ./shared/*-pinned-packages.txt /build/
 ARG DSTACK_REV
 ARG DSTACK_SRC_URL=https://github.com/Dstack-TEE/dstack.git
 WORKDIR /build
@@ -26,7 +27,8 @@ RUN cd dstack && cargo build --release -p dstack-gateway --target x86_64-unknown
 RUN echo "${DSTACK_REV}" > /build/.GIT_REV
 
 FROM debian:bookworm@sha256:0d8498a0e9e6a60011df39aab78534cfe940785e7c59d19dfae1eb53ea59babe
-COPY ./shared /build
+COPY --from=build-shared pin-packages.sh /build/
+COPY ./shared/pinned-packages.txt /build/
 WORKDIR /build
 RUN ./pin-packages.sh ./pinned-packages.txt && \
     apt-get update && \

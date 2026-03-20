@@ -11,41 +11,8 @@ on:
     branches: [ master, next, dev-* ]
 
 jobs:
-  check-shared-scripts:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Verify shared build scripts are in sync
-        run: |
-          failed=false
-          for dir in gateway/dstack-app/builder/shared kms/dstack-app/builder/shared verifier/builder/shared; do
-            if ! diff -q build/shared/pin-packages.sh "$dir/pin-packages.sh" >/dev/null 2>&1; then
-              echo "ERROR: $dir/pin-packages.sh is out of sync with build/shared/pin-packages.sh"
-              failed=true
-            fi
-          done
-          for dir in kms/dstack-app/builder/shared verifier/builder/shared; do
-            if ! diff -q build/shared/config-qemu.sh "$dir/config-qemu.sh" >/dev/null 2>&1; then
-              echo "ERROR: $dir/config-qemu.sh is out of sync with build/shared/config-qemu.sh"
-              failed=true
-            fi
-          done
-          if [ "$failed" = "true" ]; then
-            echo ""
-            echo "Run the following to fix:"
-            echo "  cp build/shared/pin-packages.sh gateway/dstack-app/builder/shared/"
-            echo "  cp build/shared/pin-packages.sh kms/dstack-app/builder/shared/"
-            echo "  cp build/shared/pin-packages.sh verifier/builder/shared/"
-            echo "  cp build/shared/config-qemu.sh kms/dstack-app/builder/shared/"
-            echo "  cp build/shared/config-qemu.sh verifier/builder/shared/"
-            exit 1
-          fi
-          echo "All shared build scripts are in sync."
-
   gateway:
     runs-on: ubuntu-latest
-    needs: check-shared-scripts
     steps:
       - uses: actions/checkout@v4
 
@@ -60,6 +27,8 @@ jobs:
           load: true
           tags: dstack-gateway-check:latest
           provenance: false
+          build-contexts: |
+            build-shared=build/shared
           build-args: |
             DSTACK_REV=${{ github.event.pull_request.head.sha || github.sha }}
             DSTACK_SRC_URL=${{ github.server_url }}/${{ github.repository }}
@@ -76,6 +45,7 @@ jobs:
             --target gateway-builder \
             --tag gateway-builder-check:latest \
             --provenance=false \
+            --build-context build-shared=build/shared \
             --build-arg "DSTACK_REV=${{ github.event.pull_request.head.sha || github.sha }}" \
             --build-arg "DSTACK_SRC_URL=${{ github.server_url }}/${{ github.repository }}" \
             gateway/dstack-app/builder
@@ -87,7 +57,6 @@ jobs:
 
   kms:
     runs-on: ubuntu-latest
-    needs: check-shared-scripts
     steps:
       - uses: actions/checkout@v4
 
@@ -102,6 +71,8 @@ jobs:
           load: true
           tags: dstack-kms-check:latest
           provenance: false
+          build-contexts: |
+            build-shared=build/shared
           build-args: |
             DSTACK_REV=${{ github.event.pull_request.head.sha || github.sha }}
             DSTACK_SRC_URL=${{ github.server_url }}/${{ github.repository }}
@@ -118,6 +89,7 @@ jobs:
             --target kms-builder \
             --tag kms-builder-check:latest \
             --provenance=false \
+            --build-context build-shared=build/shared \
             --build-arg "DSTACK_REV=${{ github.event.pull_request.head.sha || github.sha }}" \
             --build-arg "DSTACK_SRC_URL=${{ github.server_url }}/${{ github.repository }}" \
             kms/dstack-app/builder
@@ -135,7 +107,6 @@ jobs:
 
   verifier:
     runs-on: ubuntu-latest
-    needs: check-shared-scripts
     steps:
       - uses: actions/checkout@v4
 
@@ -151,6 +122,8 @@ jobs:
           load: true
           tags: dstack-verifier-check:latest
           provenance: false
+          build-contexts: |
+            build-shared=build/shared
           build-args: |
             DSTACK_REV=${{ github.event.pull_request.head.sha || github.sha }}
             DSTACK_SRC_URL=${{ github.server_url }}/${{ github.repository }}
@@ -168,6 +141,7 @@ jobs:
             --tag verifier-builder-check:latest \
             --provenance=false \
             --file verifier/builder/Dockerfile \
+            --build-context build-shared=build/shared \
             --build-arg "DSTACK_REV=${{ github.event.pull_request.head.sha || github.sha }}" \
             --build-arg "DSTACK_SRC_URL=${{ github.server_url }}/${{ github.repository }}" \
             verifier
@@ -185,6 +159,7 @@ jobs:
             --tag verifier-acpi-check:latest \
             --provenance=false \
             --file verifier/builder/Dockerfile \
+            --build-context build-shared=build/shared \
             --build-arg "DSTACK_REV=${{ github.event.pull_request.head.sha || github.sha }}" \
             --build-arg "DSTACK_SRC_URL=${{ github.server_url }}/${{ github.repository }}" \
             verifier

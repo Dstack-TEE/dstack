@@ -17,6 +17,7 @@ set -euo pipefail
 
 BUILDKIT_VERSION="v0.20.2"
 BUILDKIT_BUILDER="buildkit_20"
+BUILD_SHARED_DIR="$REPO_ROOT/build/shared"
 
 ensure_buildkit() {
     if ! docker buildx inspect "$BUILDKIT_BUILDER" &>/dev/null; then
@@ -47,6 +48,7 @@ docker_build() {
         --builder "$BUILDKIT_BUILDER"
         --progress=plain
         --output "type=docker,name=$image_name,rewrite-timestamp=true"
+        --build-context "build-shared=$BUILD_SHARED_DIR"
         --build-arg "SOURCE_DATE_EPOCH=$commit_timestamp"
         --build-arg "DSTACK_REV=$GIT_REV"
         --build-arg "DSTACK_SRC_URL=$DSTACK_SRC_URL"
@@ -65,30 +67,6 @@ docker_build() {
         "$CONTEXT_DIR"
 
     extract_packages "$image_name" "$pkg_list_file"
-}
-
-# Verify that local copies of shared scripts match the canonical versions in build/shared/.
-check_shared_scripts() {
-    local dest_dir=$1
-    local need_qemu=${2:-false}
-    local canonical="$REPO_ROOT/build/shared"
-    local failed=false
-
-    if ! diff -q "$canonical/pin-packages.sh" "$dest_dir/pin-packages.sh" &>/dev/null; then
-        echo "ERROR: $dest_dir/pin-packages.sh is out of sync with build/shared/pin-packages.sh" >&2
-        echo "  Run: cp build/shared/pin-packages.sh $dest_dir/" >&2
-        failed=true
-    fi
-    if [ "$need_qemu" = "true" ]; then
-        if ! diff -q "$canonical/config-qemu.sh" "$dest_dir/config-qemu.sh" &>/dev/null; then
-            echo "ERROR: $dest_dir/config-qemu.sh is out of sync with build/shared/config-qemu.sh" >&2
-            echo "  Run: cp build/shared/config-qemu.sh $dest_dir/" >&2
-            failed=true
-        fi
-    fi
-    if [ "$failed" = "true" ]; then
-        exit 1
-    fi
 }
 
 # Verify that pinned-packages files haven't changed (idempotency check).

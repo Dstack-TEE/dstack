@@ -26,7 +26,6 @@ GIT_REV=$(git -C "$REPO_ROOT" rev-parse "$GIT_REV")
 DSTACK_SRC_URL=${DSTACK_SRC_URL:-https://github.com/Dstack-TEE/dstack.git}
 
 ensure_buildkit
-check_shared_scripts "$SHARED_DIR" true
 
 mkdir -p "$SHARED_DIR"
 touch "$SHARED_DIR/builder-pinned-packages.txt"
