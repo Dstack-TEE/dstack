@@ -25,7 +25,7 @@ This guide is written as a deployment-and-test runbook so an AI agent can follow
 > 7. KMS now always requires quote/attestation. For local development without TDX hardware, use `sdk/simulator` instead of trying to run a no-attestation KMS flow.
 > 8. For `auth-simple`, `kms.mrAggregated = []` is a deny-all policy for KMS. Use that as the baseline deny configuration, then add the measured KMS MR values for allow cases.
 > 9. **Port forwarding is simpler than gateway for testing.** Using `--gateway` requires the auth API to return a valid `gatewayAppId`, which adds unnecessary complexity. Use `--port tcp:0.0.0.0:<host-port>:8000` instead.
-> 10. **Remote KMS attestation has an empty `osImageHash`.** When the receiver verifies the source KMS during onboard, the `osImageHash` field in the attestation is empty (because `vm_config` is not available for the remote attestation). Auth configs for receiver-side checks must include `"0x"` in the `osImages` array to match this empty hash.
+> 10. **~~Remote KMS attestation has an empty `osImageHash`.~~** Fixed: RA-TLS certs now use the unified `PHALA_RATLS_ATTESTATION` format which preserves `vm_config`. For old source KMS instances that still use the legacy cert format, the receiver-side `ensure_kms_allowed` automatically fills `osImageHash` from the local KMS's own value. No special `"0x"` entry in `osImages` is needed anymore.
 > 11. The `source_url` in the `Onboard.Onboard` request must use an address **reachable from inside the CVM** (e.g., `https://10.0.2.2:<port>/prpc`), not `127.0.0.1` which is the CVM's own loopback.
 
 ---
@@ -49,13 +49,13 @@ This guide is written as a deployment-and-test runbook so an AI agent can follow
 
 ## 1. Why this document exists
 
-PR #538 already proposes a richer `kms/e2e/` framework, but as of **2026-03-19** it is still open/draft and touches overlapping KMS files. To avoid waiting for that PR, this guide uses:
+This guide provides a standalone test procedure that does not depend on a dedicated e2e framework. It uses:
 
 - existing KMS deploy flows
 - `auth-simple` as a controllable auth API
 - manual RPC calls via `curl`
 
-This keeps the test independent from PR #538 while still exercising real deployment paths.
+This exercises real deployment paths with minimal dependencies.
 
 ---
 
@@ -98,7 +98,7 @@ Policy responsibilities:
 
 Before starting, make sure the following are available:
 
-1. A branch or image containing the PR #573 KMS changes
+1. A KMS image built from current `master` (includes PR #573 auth checks, #579 mandatory attestation, #581 dedup refactor)
 2. A working `dstack-vmm` or teepod deployment target
 3. Two routable KMS onboard URLs
 4. `bun` installed on the host, because `kms/auth-simple` runs on Bun
@@ -315,12 +315,10 @@ All three values above are expected to be hex strings **without** the `0x` prefi
 
 Use a wrong `mrAggregated` value while allowing the observed OS image.
 
-> **Important:** include `"0x"` in `osImages` to handle remote KMS attestation during onboard receiver-side checks, where `osImageHash` is empty because `vm_config` is unavailable for the remote attestation.
-
 ```bash
 cat > /tmp/kms-self-auth/deny-by-mr.json <<'EOF'
 {
-  "osImages": ["0xREPLACE_OS", "0x"],
+  "osImages": ["0xREPLACE_OS"],
   "gatewayAppId": "any",
   "kms": {
     "mrAggregated": ["0x0000000000000000000000000000000000000000000000000000000000000000"],
@@ -337,7 +335,7 @@ EOF
 ```bash
 cat > /tmp/kms-self-auth/allow-single.json <<'EOF'
 {
-  "osImages": ["0xREPLACE_OS", "0x"],
+  "osImages": ["0xREPLACE_OS"],
   "gatewayAppId": "any",
   "kms": {
     "mrAggregated": ["0xREPLACE_MR"],
@@ -354,7 +352,7 @@ EOF
 ```bash
 cat > /tmp/kms-self-auth/allow-src-and-dst.json <<'EOF'
 {
-  "osImages": ["0xREPLACE_SRC_OS", "0xREPLACE_DST_OS", "0x"],
+  "osImages": ["0xREPLACE_SRC_OS", "0xREPLACE_DST_OS"],
   "gatewayAppId": "any",
   "kms": {
     "mrAggregated": ["0xREPLACE_SRC_MR", "0xREPLACE_DST_MR"],
