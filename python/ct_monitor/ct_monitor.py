@@ -2,10 +2,11 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import argparse
 import sys
 import time
+
 import requests
-import argparse
 from cryptography import x509
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import serialization
@@ -28,24 +29,29 @@ class Monitor:
         url = f"{BASE_URL}/?q={self.domain}&output=json&limit={count}"
         response = requests.get(url)
         return response.json()
-    
+
     def check_one_log(self, log: object):
         log_id = log["id"]
         cert_url = f"{BASE_URL}/?d={log_id}"
         cert_data = requests.get(cert_url).text
         # Extract PEM-encoded certificate
         import re
-        pem_match = re.search(r'-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----', cert_data, re.DOTALL)
+
+        pem_match = re.search(
+            r"-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----",
+            cert_data,
+            re.DOTALL,
+        )
         if pem_match:
             pem_cert = pem_match.group(0)
-            
+
             # Parse PEM certificate
             cert = x509.load_pem_x509_certificate(pem_cert.encode(), default_backend())
             # Extract the public key
             public_key = cert.public_key()
             pem_public_key = public_key.public_bytes(
                 encoding=serialization.Encoding.PEM,
-                format=serialization.PublicFormat.SubjectPublicKeyInfo
+                format=serialization.PublicFormat.SubjectPublicKeyInfo,
             )
             print("Public Key:")
             print(pem_public_key.hex())
@@ -65,11 +71,11 @@ class Monitor:
         logs = self.get_logs(count=10000)
         print("num logs", len(logs))
         for log in logs:
-            print(f"log id={log["id"]}")
+            print(f"log id={log['id']}")
             if log["id"] <= (self.last_checked or 0):
                 break
             self.check_one_log(log)
-            print('next')
+            print("next")
         if len(logs) > 0:
             self.last_checked = logs[0]["id"]
 
@@ -92,7 +98,7 @@ class Monitor:
 
         # Regular expression for validating domain names
         domain_regex = re.compile(
-            r'^(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$'
+            r"^(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$"
         )
 
         if not domain_regex.match(domain):
@@ -102,7 +108,9 @@ class Monitor:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Monitor certificate transparency logs")
+    parser = argparse.ArgumentParser(
+        description="Monitor certificate transparency logs"
+    )
     parser.add_argument("-d", "--domain", help="The domain to monitor")
     args = parser.parse_args()
     monitor = Monitor(args.domain)
