@@ -19,8 +19,10 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Write GIT_REV
-        run: git rev-parse HEAD > kms/dstack-app/builder/.GIT_REV
+      - name: Copy shared build scripts
+        run: |
+          cp build/shared/pin-packages.sh kms/dstack-app/builder/shared/
+          cp build/shared/config-qemu.sh kms/dstack-app/builder/shared/
 
       - name: Build KMS Docker image
         uses: docker/build-push-action@v5
@@ -47,6 +49,9 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      - name: Copy shared build scripts
+        run: cp build/shared/pin-packages.sh gateway/dstack-app/builder/shared/
+
       - name: Build Gateway Docker image
         uses: docker/build-push-action@v5
         with:
@@ -64,6 +69,11 @@ jobs:
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+
+      - name: Copy shared build scripts
+        run: |
+          cp build/shared/pin-packages.sh verifier/builder/shared/
+          cp build/shared/config-qemu.sh verifier/builder/shared/
 
       - name: Build Verifier Docker image
         uses: docker/build-push-action@v5

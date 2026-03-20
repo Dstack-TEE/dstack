@@ -38,8 +38,10 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Write GIT_REV
-        run: git rev-parse HEAD > kms/dstack-app/builder/.GIT_REV
+      - name: Copy shared build scripts
+        run: |
+          cp build/shared/pin-packages.sh kms/dstack-app/builder/shared/
+          cp build/shared/config-qemu.sh kms/dstack-app/builder/shared/
 
       - name: Get Git commit timestamps
         run: |
