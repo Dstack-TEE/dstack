@@ -4,66 +4,33 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-set -e
+set -euo pipefail
 
-NO_CACHE=--no-cache
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+REPO_ROOT=$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel)
+CONTEXT_DIR="$SCRIPT_DIR"
+SHARED_DIR="$SCRIPT_DIR/shared"
+DOCKERFILE="$SCRIPT_DIR/Dockerfile"
 
-extract-packages() {
-    local name=$1
-    local pkg_list_file=$2
-    if [ -z "$pkg_list_file" ]; then
-        return
-    fi
-    docker run --rm --entrypoint bash $name -c "dpkg -l | grep '^ii' | awk '{print \$2\"=\"\$3}' | sort" > "$pkg_list_file"
-}
+source "$REPO_ROOT/build/shared/build-lib.sh"
 
-# Function to build Docker image and optionally extract package list
-docker-build() {
-    local name=$1
-    local target=$2
-    local pkg_list_file=$3
-    # Get the commit timestamp for SOURCE_DATE_EPOCH
-    local commit_timestamp=$(git show -s --format=%ct $GIT_REV)
-    local build_args="--build-arg SOURCE_DATE_EPOCH=$commit_timestamp --build-arg DSTACK_REV=$GIT_REV"
-
-    local args="--builder buildkit_20 $NO_CACHE $build_args"
-
-    # Add target if specified
-    if [ -n "$target" ]; then
-        args="$args --target $target"
-    fi
-
-    # Build the image
-    docker buildx build $args --output type=docker,name=$name,rewrite-timestamp=true --progress=plain .
-    extract-packages $name $pkg_list_file
-}
-
-NAME=$1
+NAME=${1:-}
 if [ -z "$NAME" ]; then
-    echo "Usage: $0 <name>[:<tag>]"
+    echo "Usage: $0 <image-name>[:<tag>]" >&2
     exit 1
 fi
 
-# Check if buildkit_20 already exists before creating it
-if ! docker buildx inspect buildkit_20 &>/dev/null; then
-    docker buildx create --use --driver-opt image=moby/buildkit:v0.20.2 --name buildkit_20
-fi
-
-touch shared/kms-pinned-packages.txt
-touch shared/qemu-pinned-packages.txt
+NO_CACHE=${NO_CACHE:-}
 GIT_REV=${GIT_REV:-HEAD}
-GIT_REV=$(git rev-parse $GIT_REV)
-echo $GIT_REV > .GIT_REV
+GIT_REV=$(git -C "$REPO_ROOT" rev-parse "$GIT_REV")
+DSTACK_SRC_URL=${DSTACK_SRC_URL:-https://github.com/Dstack-TEE/dstack.git}
 
-# First build the qemu-builder stage and extract package list
-docker-build "$NAME" "" "shared/qemu-pinned-packages.txt"
-# Then build the kms-builder stage and extract package list
-docker-build "kms-builder-temp" "kms-builder" "shared/kms-pinned-packages.txt"
+ensure_buildkit
 
-git_status=$(git status --porcelain -- shared/)
-if [ -n "$git_status" ]; then
-    echo "The working tree is not clean, please commit or stash your changes before re-running the build"
-    exit 1
-fi
+touch "$SHARED_DIR/builder-pinned-packages.txt"
+touch "$SHARED_DIR/qemu-pinned-packages.txt"
 
-rm .GIT_REV
+docker_build "$NAME" "" "$SHARED_DIR/qemu-pinned-packages.txt"
+docker_build "kms-builder-temp" "kms-builder" "$SHARED_DIR/builder-pinned-packages.txt"
+
+check_clean_tree "$SHARED_DIR"

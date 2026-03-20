@@ -3,11 +3,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 FROM rust:1.92.0-bookworm@sha256:e90e846de4124376164ddfbaab4b0774c7bdeef5e738866295e5a90a34a307a2 AS verifier-builder
-COPY builder/shared /build/shared
+COPY --from=build-shared pin-packages.sh /build/
+COPY builder/shared/*-pinned-packages.txt /build/
 ARG DSTACK_REV
 ARG DSTACK_SRC_URL=https://github.com/Dstack-TEE/dstack.git
 WORKDIR /build
-RUN ./shared/pin-packages.sh ./shared/builder-pinned-packages.txt
+RUN ./pin-packages.sh ./builder-pinned-packages.txt
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     git \
@@ -30,7 +31,8 @@ RUN cd dstack && cargo build --release -p dstack-verifier --target x86_64-unknow
 RUN echo "${DSTACK_REV}" > /build/.GIT_REV
 
 FROM debian:bookworm@sha256:0d8498a0e9e6a60011df39aab78534cfe940785e7c59d19dfae1eb53ea59babe AS acpi-builder
-COPY builder/shared /build
+COPY --from=build-shared pin-packages.sh config-qemu.sh /build/
+COPY builder/shared/qemu-pinned-packages.txt /build/
 WORKDIR /build
 ARG QEMU_REV=dbcec07c0854bf873d346a09e87e4c993ccf2633
 RUN ./pin-packages.sh ./qemu-pinned-packages.txt && \
@@ -64,7 +66,8 @@ RUN git clone https://github.com/kvinwang/qemu-tdx.git --depth 1 --branch dstack
     cd .. && rm -rf qemu-tdx
 
 FROM debian:bookworm@sha256:0d8498a0e9e6a60011df39aab78534cfe940785e7c59d19dfae1eb53ea59babe
-COPY builder/shared /build
+COPY --from=build-shared pin-packages.sh /build/
+COPY builder/shared/pinned-packages.txt /build/
 WORKDIR /build
 RUN ./pin-packages.sh ./pinned-packages.txt && \
     apt-get update && \

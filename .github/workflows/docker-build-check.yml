@@ -11,34 +11,6 @@ on:
     branches: [ master, next, dev-* ]
 
 jobs:
-  kms:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Write GIT_REV
-        run: git rev-parse HEAD > kms/dstack-app/builder/.GIT_REV
-
-      - name: Build KMS Docker image
-        uses: docker/build-push-action@v5
-        with:
-          context: kms/dstack-app/builder
-          push: false
-          platforms: linux/amd64
-          provenance: false
-          build-args: |
-            DSTACK_REV=${{ github.event.pull_request.head.sha || github.sha }}
-            DSTACK_SRC_URL=${{ github.server_url }}/${{ github.repository }}
-
-      - name: Build KMS contracts
-        run: |
-          cd kms/auth-eth
-          npm ci
-          npx hardhat compile
-
   gateway:
     runs-on: ubuntu-latest
     steps:
@@ -52,10 +24,86 @@ jobs:
         with:
           context: gateway/dstack-app/builder
           push: false
-          platforms: linux/amd64
+          load: true
+          tags: dstack-gateway-check:latest
           provenance: false
+          build-contexts: |
+            build-shared=build/shared
           build-args: |
             DSTACK_REV=${{ github.event.pull_request.head.sha || github.sha }}
+            DSTACK_SRC_URL=${{ github.server_url }}/${{ github.repository }}
+
+      - name: Verify pinned packages
+        run: |
+          build/shared/verify-pinned-packages.sh dstack-gateway-check:latest \
+            gateway/dstack-app/builder/shared/pinned-packages.txt
+
+      - name: Build gateway-builder target
+        run: |
+          docker buildx build \
+            --load \
+            --target gateway-builder \
+            --tag gateway-builder-check:latest \
+            --provenance=false \
+            --build-context build-shared=build/shared \
+            --build-arg "DSTACK_REV=${{ github.event.pull_request.head.sha || github.sha }}" \
+            --build-arg "DSTACK_SRC_URL=${{ github.server_url }}/${{ github.repository }}" \
+            gateway/dstack-app/builder
+
+      - name: Verify builder pinned packages
+        run: |
+          build/shared/verify-pinned-packages.sh gateway-builder-check:latest \
+            gateway/dstack-app/builder/shared/builder-pinned-packages.txt
+
+  kms:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build KMS Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: kms/dstack-app/builder
+          push: false
+          load: true
+          tags: dstack-kms-check:latest
+          provenance: false
+          build-contexts: |
+            build-shared=build/shared
+          build-args: |
+            DSTACK_REV=${{ github.event.pull_request.head.sha || github.sha }}
+            DSTACK_SRC_URL=${{ github.server_url }}/${{ github.repository }}
+
+      - name: Verify pinned packages (qemu stage)
+        run: |
+          build/shared/verify-pinned-packages.sh dstack-kms-check:latest \
+            kms/dstack-app/builder/shared/qemu-pinned-packages.txt
+
+      - name: Build kms-builder target
+        run: |
+          docker buildx build \
+            --load \
+            --target kms-builder \
+            --tag kms-builder-check:latest \
+            --provenance=false \
+            --build-context build-shared=build/shared \
+            --build-arg "DSTACK_REV=${{ github.event.pull_request.head.sha || github.sha }}" \
+            --build-arg "DSTACK_SRC_URL=${{ github.server_url }}/${{ github.repository }}" \
+            kms/dstack-app/builder
+
+      - name: Verify builder pinned packages
+        run: |
+          build/shared/verify-pinned-packages.sh kms-builder-check:latest \
+            kms/dstack-app/builder/shared/builder-pinned-packages.txt
+
+      - name: Build KMS contracts
+        run: |
+          cd kms/auth-eth
+          npm ci
+          npx hardhat compile
 
   verifier:
     runs-on: ubuntu-latest
@@ -71,7 +119,52 @@ jobs:
           context: verifier
           file: verifier/builder/Dockerfile
           push: false
-          platforms: linux/amd64
+          load: true
+          tags: dstack-verifier-check:latest
           provenance: false
+          build-contexts: |
+            build-shared=build/shared
           build-args: |
             DSTACK_REV=${{ github.event.pull_request.head.sha || github.sha }}
+            DSTACK_SRC_URL=${{ github.server_url }}/${{ github.repository }}
+
+      - name: Verify pinned packages (runtime)
+        run: |
+          build/shared/verify-pinned-packages.sh dstack-verifier-check:latest \
+            verifier/builder/shared/pinned-packages.txt
+
+      - name: Build verifier-builder target
+        run: |
+          docker buildx build \
+            --load \
+            --target verifier-builder \
+            --tag verifier-builder-check:latest \
+            --provenance=false \
+            --file verifier/builder/Dockerfile \
+            --build-context build-shared=build/shared \
+            --build-arg "DSTACK_REV=${{ github.event.pull_request.head.sha || github.sha }}" \
+            --build-arg "DSTACK_SRC_URL=${{ github.server_url }}/${{ github.repository }}" \
+            verifier
+
+      - name: Verify builder pinned packages
+        run: |
+          build/shared/verify-pinned-packages.sh verifier-builder-check:latest \
+            verifier/builder/shared/builder-pinned-packages.txt
+
+      - name: Build acpi-builder target
+        run: |
+          docker buildx build \
+            --load \
+            --target acpi-builder \
+            --tag verifier-acpi-check:latest \
+            --provenance=false \
+            --file verifier/builder/Dockerfile \
+            --build-context build-shared=build/shared \
+            --build-arg "DSTACK_REV=${{ github.event.pull_request.head.sha || github.sha }}" \
+            --build-arg "DSTACK_SRC_URL=${{ github.server_url }}/${{ github.repository }}" \
+            verifier
+
+      - name: Verify qemu pinned packages
+        run: |
+          build/shared/verify-pinned-packages.sh verifier-acpi-check:latest \
+            verifier/builder/shared/qemu-pinned-packages.txt

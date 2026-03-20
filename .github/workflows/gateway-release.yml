@@ -54,6 +54,8 @@ jobs:
           tags: ${{ vars.DOCKERHUB_ORG }}/dstack-gateway:${{ env.VERSION }}
           platforms: linux/amd64
           provenance: false
+          build-contexts: |
+            build-shared=build/shared
           build-args: |
             DSTACK_REV=${{ env.GIT_REV }}
             SOURCE_DATE_EPOCH=${{ env.TIMESTAMP }}

@@ -38,9 +38,6 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Write GIT_REV
-        run: git rev-parse HEAD > kms/dstack-app/builder/.GIT_REV
-
       - name: Get Git commit timestamps
         run: |
           echo "TIMESTAMP=$(git log -1 --pretty=%ct)" >> $GITHUB_ENV
@@ -57,6 +54,8 @@ jobs:
           tags: ${{ vars.DOCKERHUB_ORG }}/dstack-kms:${{ env.VERSION }}
           platforms: linux/amd64
           provenance: false
+          build-contexts: |
+            build-shared=build/shared
           build-args: |
             DSTACK_REV=${{ env.GIT_REV }}
             DSTACK_SRC_URL=${{ github.server_url }}/${{ github.repository }}
