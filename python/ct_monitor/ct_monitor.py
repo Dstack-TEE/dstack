@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2024 Phala Network <dstack@phala.network>
 #
 # SPDX-License-Identifier: Apache-2.0
+"""Monitor certificate transparency logs for a given domain."""
 
 import argparse
 import sys
@@ -15,22 +16,29 @@ BASE_URL = "https://crt.sh"
 
 
 class PoisonedLog(Exception):
+    """Indicate a poisoned certificate transparency log entry."""
+
     pass
 
 
 class Monitor:
+    """Monitor certificate transparency logs for a domain."""
+
     def __init__(self, domain: str):
+        """Initialize the monitor with a validated domain."""
         if not self.validate_domain(domain):
             raise ValueError("Invalid domain name")
         self.domain = domain
         self.last_checked = None
 
     def get_logs(self, count: int = 100):
+        """Fetch recent certificate transparency log entries."""
         url = f"{BASE_URL}/?q={self.domain}&output=json&limit={count}"
         response = requests.get(url)
         return response.json()
 
     def check_one_log(self, log: object):
+        """Fetch and inspect a single certificate log entry."""
         log_id = log["id"]
         cert_url = f"{BASE_URL}/?d={log_id}"
         cert_data = requests.get(cert_url).text
@@ -68,6 +76,7 @@ class Monitor:
             print("No valid certificate found in the response.")
 
     def check_new_logs(self):
+        """Check for new log entries since the last check."""
         logs = self.get_logs(count=10000)
         print("num logs", len(logs))
         for log in logs:
@@ -80,6 +89,7 @@ class Monitor:
             self.last_checked = logs[0]["id"]
 
     def run(self):
+        """Run the monitor loop indefinitely."""
         print(f"Monitoring {self.domain}...")
         while True:
             try:
@@ -93,7 +103,7 @@ class Monitor:
 
     @staticmethod
     def validate_domain(domain: str):
-        # ensure domain is a valid DNS domain
+        """Validate that the given string is a well-formed DNS domain name."""
         import re
 
         # Regular expression for validating domain names
@@ -108,6 +118,7 @@ class Monitor:
 
 
 def main():
+    """Parse arguments and start the certificate transparency monitor."""
     parser = argparse.ArgumentParser(
         description="Monitor certificate transparency logs"
     )

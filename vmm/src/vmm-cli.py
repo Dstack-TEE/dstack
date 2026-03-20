@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+"""CLI tool for managing dstack-vmm virtual machines."""
 
 # SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
 #
@@ -34,8 +35,7 @@ DEFAULT_KMS_WHITELIST_PATH = os.path.expanduser("~/.dstack-vmm/kms-whitelist.jso
 
 
 def encrypt_env(envs, hex_public_key: str) -> str:
-    """
-    Encrypts environment variables using a one-time X25519 key exchange and AES-GCM.
+    """Encrypts environment variables using a one-time X25519 key exchange and AES-GCM.
 
     This function does the following:
       1. Converts the given environment variables to JSON bytes.
@@ -57,6 +57,7 @@ def encrypt_env(envs, hex_public_key: str) -> str:
     Returns:
         A hexadecimal string that is the concatenation of:
           (ephemeral public key || IV || ciphertext).
+
     """
     if not CRYPTO_AVAILABLE:
         raise ImportError(
@@ -100,7 +101,7 @@ def encrypt_env(envs, hex_public_key: str) -> str:
 
 
 def parse_port_mapping(port_str: str) -> Dict:
-    """Parse a port mapping string into a dictionary"""
+    """Parse a port mapping string into a dictionary."""
     parts = port_str.split(":")
     if len(parts) == 3:
         return {
@@ -121,6 +122,7 @@ def parse_port_mapping(port_str: str) -> Dict:
 
 
 def read_utf8(filepath: str) -> str:
+    """Read a file and return its contents as a UTF-8 string."""
     with open(filepath, "rb") as f:
         return f.read().decode("utf-8")
 
@@ -129,10 +131,12 @@ class UnixSocketHTTPConnection(http.client.HTTPConnection):
     """HTTPConnection that connects to a Unix domain socket."""
 
     def __init__(self, socket_path, timeout=None):
+        """Initialize with a Unix socket path and optional timeout."""
         super().__init__("localhost", timeout=timeout)
         self.socket_path = socket_path
 
     def connect(self):
+        """Connect to the Unix domain socket."""
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         if self.timeout:
             sock.settimeout(self.timeout)
@@ -149,6 +153,7 @@ class VmmClient:
         auth_user: Optional[str] = None,
         auth_password: Optional[str] = None,
     ):
+        """Initialize the client with a base URL and optional authentication."""
         self.base_url = base_url.rstrip("/")
         self.use_uds = self.base_url.startswith("unix:")
         self.auth_user = auth_user
@@ -170,8 +175,7 @@ class VmmClient:
         body: Any = None,
         stream: bool = False,
     ) -> Tuple[int, Union[Dict, str, BinaryIO]]:
-        """
-        Make an HTTP request to the server.
+        """Make an HTTP request to the server.
 
         Args:
             method: HTTP method (GET, POST, etc.)
@@ -182,6 +186,7 @@ class VmmClient:
 
         Returns:
             Tuple of (status_code, response_data)
+
         """
         if headers is None:
             headers = {}
@@ -249,18 +254,21 @@ class VmmClient:
 
 
 class VmmCLI:
+    """Command-line interface for managing dstack-vmm virtual machines."""
+
     def __init__(
         self,
         base_url: str,
         auth_user: Optional[str] = None,
         auth_password: Optional[str] = None,
     ):
+        """Initialize the CLI with a base URL and optional authentication."""
         self.base_url = base_url.rstrip("/")
         self.headers = {"Content-Type": "application/json"}
         self.client = VmmClient(base_url, auth_user, auth_password)
 
     def rpc_call(self, method: str, params: Optional[Dict] = None) -> Dict:
-        """Make an RPC call to the dstack-vmm API"""
+        """Make an RPC call to the dstack-vmm API."""
         path = f"/prpc/{method}?json"
         status, response = self.client.request(
             "POST", path, headers=self.headers, body=params or {}
@@ -276,7 +284,7 @@ class VmmCLI:
         return response
 
     def list_vms(self, verbose: bool = False, json_output: bool = False) -> None:
-        """List all VMs and their status"""
+        """List all VMs and their status."""
         response = self.rpc_call("Status")
         vms = response["vms"]
 
@@ -321,7 +329,7 @@ class VmmCLI:
         print(format_table(rows, headers))
 
     def _format_gpu_info(self, gpu_config):
-        """Format GPU configuration for display"""
+        """Format GPU configuration for display."""
         if not gpu_config:
             return "-"
 
@@ -337,12 +345,12 @@ class VmmCLI:
             return "-"
 
     def start_vm(self, vm_id: str) -> None:
-        """Start a VM"""
+        """Start a VM."""
         self.rpc_call("StartVm", {"id": vm_id})
         print(f"Started VM {vm_id}")
 
     def stop_vm(self, vm_id: str, force: bool = False) -> None:
-        """Stop a VM"""
+        """Stop a VM."""
         if force:
             self.rpc_call("StopVm", {"id": vm_id})
             print(f"Forcefully stopped VM {vm_id}")
@@ -351,7 +359,7 @@ class VmmCLI:
             print(f"Gracefully shutting down VM {vm_id}")
 
     def remove_vm(self, vm_id: str) -> None:
-        """Remove a VM"""
+        """Remove a VM."""
         self.rpc_call("RemoveVm", {"id": vm_id})
         print(f"Removed VM {vm_id}")
 
@@ -363,7 +371,7 @@ class VmmCLI:
         disk_size: Optional[int] = None,
         image: Optional[str] = None,
     ) -> None:
-        """Resize a VM"""
+        """Resize a VM."""
         params = {"id": vm_id}
         if vcpu is not None:
             params["vcpu"] = vcpu
@@ -384,7 +392,7 @@ class VmmCLI:
         print(f"Resized VM {vm_id}")
 
     def show_logs(self, vm_id: str, lines: int = 20, follow: bool = False) -> None:
-        """Show VM logs"""
+        """Show VM logs."""
         path = f"/logs?id={vm_id}&follow={str(follow).lower()}&ansi=false&lines={lines}"
 
         status, response = self.client.request(
@@ -418,7 +426,7 @@ class VmmCLI:
             print(response)
 
     def list_images(self, json_output: bool = False) -> None:
-        """Get list of available images"""
+        """Get list of available images."""
         response = self.rpc_call("ListImages")
         images = response["images"]
 
@@ -438,7 +446,7 @@ class VmmCLI:
     def get_app_env_encrypt_pub_key(
         self, app_id: str, kms_url: Optional[str] = None
     ) -> Dict:
-        """Get the encryption public key for the specified application ID"""
+        """Get the encryption public key for the specified application ID."""
         if kms_url:
             client = VmmClient(kms_url)
             path = "/prpc/GetAppEnvEncryptPubKey?json"
@@ -480,12 +488,12 @@ class VmmCLI:
         return response["public_key"]
 
     def confirm_untrusted_signer(self, signer: str) -> bool:
-        """Ask user to confirm using an untrusted signer"""
+        """Ask user to confirm using an untrusted signer."""
         response = input(f"Continue with untrusted signer {signer}? (y/N): ")
         return response.lower() in ("y", "yes")
 
     def manage_kms_whitelist(self, action: str, pubkey: str = None) -> None:
-        """Manage the whitelist of trusted signers"""
+        """Manage the whitelist of trusted signers."""
         whitelist = load_whitelist()
 
         if action == "list":
@@ -529,12 +537,12 @@ class VmmCLI:
             raise Exception(f"Unknown action: {action}")
 
     def calc_app_id(self, compose_file: str) -> str:
-        """Calculate the application ID from the compose file"""
+        """Calculate the application ID from the compose file."""
         compose_hash = hashlib.sha256(compose_file.encode()).hexdigest()
         return compose_hash[:40]
 
     def create_app_compose(self, args) -> None:
-        """Create a new app compose file"""
+        """Create a new app compose file."""
         envs = parse_env_file(args.env_file) or {}
         app_compose = {
             "manifest_version": 2,
@@ -574,7 +582,7 @@ class VmmCLI:
         print(f"Compose hash: {compose_hash}")
 
     def create_vm(self, args) -> None:
-        """Create a new VM"""
+        """Create a new VM."""
         # Read and validate compose file
         if not os.path.exists(args.compose):
             raise Exception(f"Compose file not found: {args.compose}")
@@ -637,7 +645,7 @@ class VmmCLI:
     def update_vm_env(
         self, vm_id: str, envs: Dict[str, str], kms_urls: Optional[List[str]] = None
     ) -> None:
-        """Update environment variables for a VM"""
+        """Update environment variables for a VM."""
         envs = envs or {}
         # First get the VM info to retrieve the app_id
         vm_info_response = self.rpc_call("GetInfo", {"id": vm_id})
@@ -688,17 +696,17 @@ class VmmCLI:
         print(f"Environment variables updated for VM {vm_id}")
 
     def update_vm_user_config(self, vm_id: str, user_config: str) -> None:
-        """Update user config for a VM"""
+        """Update user config for a VM."""
         self.rpc_call("UpgradeApp", {"id": vm_id, "user_config": user_config})
         print(f"User config updated for VM {vm_id}")
 
     def update_vm_app_compose(self, vm_id: str, app_compose: str) -> None:
-        """Update app compose for a VM"""
+        """Update app compose for a VM."""
         self.rpc_call("UpgradeApp", {"id": vm_id, "compose_file": app_compose})
         print(f"App compose updated for VM {vm_id}")
 
     def update_vm_ports(self, vm_id: str, ports: List[str]) -> None:
-        """Update port mapping for a VM"""
+        """Update port mapping for a VM."""
         port_mappings = [parse_port_mapping(port) for port in ports]
         self.rpc_call(
             "UpgradeApp", {"id": vm_id, "update_ports": True, "ports": port_mappings}
@@ -725,7 +733,7 @@ class VmmCLI:
         kms_urls: Optional[List[str]] = None,
         no_tee: Optional[bool] = None,
     ) -> None:
-        """Update multiple aspects of a VM in one command"""
+        """Update multiple aspects of a VM in one command."""
         updates = []
 
         # handle resize operations (vcpu, memory, disk, image)
@@ -893,7 +901,7 @@ class VmmCLI:
             print(f"No updates specified for VM {vm_id}")
 
     def list_gpus(self, json_output: bool = False) -> None:
-        """List all available GPUs"""
+        """List all available GPUs."""
         response = self.rpc_call("ListGpus")
         gpus = response.get("gpus", [])
 
@@ -921,7 +929,7 @@ class VmmCLI:
 
 
 def format_table(rows, headers):
-    """Simple table formatter"""
+    """Format rows and headers into an aligned table."""
     if not rows:
         return ""
 
@@ -947,10 +955,9 @@ def format_table(rows, headers):
 
 
 def parse_env_file(file_path: str) -> Dict[str, str]:
-    """
-    Parse an environment file where each line is formatted as:
-      KEY=Value
+    """Parse an environment file into a dictionary of key-value pairs.
 
+    Each line should be formatted as KEY=Value.
     Lines that are empty or start with '#' are ignored.
     """
     if not file_path:
@@ -970,9 +977,7 @@ def parse_env_file(file_path: str) -> Dict[str, str]:
 
 
 def parse_size(s: str, target_unit: str) -> int:
-    """
-    Parse a human-readable size string (e.g. "1G", "100M") and return the size
-    in the specified target unit.
+    """Parse a human-readable size string and return the size in the target unit.
 
     Args:
         s: The size string provided.
@@ -984,6 +989,7 @@ def parse_size(s: str, target_unit: str) -> int:
     Raises:
         argparse.ArgumentTypeError: if the format is invalid or if conversion turns
                                       out to be fractional.
+
     """
     s = s.strip()
     m = re.fullmatch(r"(\d+(?:\.\d+)?)([a-zA-Z]{1,2})?", s)
@@ -1045,8 +1051,7 @@ def parse_disk_size(s: str) -> int:
 
 
 def verify_signature(public_key: bytes, signature: bytes, app_id: str) -> Optional[str]:
-    """
-    Verify the signature of a public key.
+    """Verify the signature of a public key.
 
     Args:
         public_key: The public key bytes to verify
@@ -1070,6 +1075,7 @@ def verify_signature(public_key: bytes, signature: bytes, app_id: str) -> Option
         >>> compressed_pubkey = verify_signature(public_key, signature, app_id)
         >>> print(compressed_pubkey)
         0x0217610d74cbd39b6143842c6d8bc310d79da1d82cc9d17f8876376221eda0c38f
+
     """
     if not CRYPTO_AVAILABLE:
         raise ImportError(
@@ -1102,11 +1108,11 @@ def verify_signature(public_key: bytes, signature: bytes, app_id: str) -> Option
 
 
 def load_whitelist() -> List[str]:
-    """
-    Load the whitelist of trusted signers from a file.
+    """Load the whitelist of trusted signers from a file.
 
     Returns:
         List of trusted Ethereum addresses
+
     """
     if not os.path.exists(DEFAULT_KMS_WHITELIST_PATH):
         os.makedirs(os.path.dirname(DEFAULT_KMS_WHITELIST_PATH), exist_ok=True)
@@ -1121,11 +1127,11 @@ def load_whitelist() -> List[str]:
 
 
 def save_whitelist(whitelist: List[str]) -> None:
-    """
-    Save the whitelist of trusted signers to a file.
+    """Save the whitelist of trusted signers to a file.
 
     Args:
         whitelist: List of trusted Ethereum addresses
+
     """
     os.makedirs(os.path.dirname(DEFAULT_KMS_WHITELIST_PATH), exist_ok=True)
     with open(DEFAULT_KMS_WHITELIST_PATH, "w") as f:
@@ -1133,6 +1139,7 @@ def save_whitelist(whitelist: List[str]) -> None:
 
 
 def main():
+    """Run the dstack-vmm CLI."""
     parser = argparse.ArgumentParser(description="dstack-vmm CLI - Manage VMs")
 
     # Get default URL from environment variable or use localhost

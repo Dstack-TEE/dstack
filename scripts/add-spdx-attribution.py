@@ -2,11 +2,10 @@
 # SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
 #
 # SPDX-License-Identifier: Apache-2.0
-"""
-SPDX Header Attribution Script
+"""SPDX header attribution script.
 
-This script automatically analyzes git blame data to determine contributors
-and adds appropriate SPDX-FileCopyrightText headers using the REUSE tool.
+Analyze git blame data to determine contributors and add appropriate
+SPDX-FileCopyrightText headers using the REUSE tool.
 
 Features:
 - Excludes third-party code based on .spdx-exclude patterns
@@ -27,7 +26,10 @@ from typing import Dict, List, Optional, Set, Tuple
 
 
 class SPDXAttributor:
+    """Add SPDX attribution headers to source files based on git blame."""
+
     def __init__(self, repo_root: str, dry_run: bool = False):
+        """Initialize the attributor with a repository root and options."""
         self.repo_root = Path(repo_root).resolve()
         self.dry_run = dry_run
         self.exclude_patterns = self._load_exclude_patterns()
@@ -491,6 +493,7 @@ class SPDXAttributor:
 
 
 def main():
+    """Parse arguments and run SPDX attribution on source files."""
     parser = argparse.ArgumentParser(
         description="Add SPDX attribution headers to source files"
     )

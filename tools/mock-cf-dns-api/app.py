@@ -3,8 +3,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-Mock Cloudflare DNS API Server
+"""Mock Cloudflare DNS API server.
 
 A mock server that simulates Cloudflare's DNS API for testing purposes.
 Supports the following endpoints used by certbot:
@@ -66,7 +65,7 @@ def get_current_time():
 
 
 def verify_auth(f):
-    """Decorator to verify Bearer token authentication."""
+    """Verify Bearer token authentication."""
 
     @wraps(f)
     def decorated(*args, **kwargs):
