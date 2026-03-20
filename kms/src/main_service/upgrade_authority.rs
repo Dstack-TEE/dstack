@@ -99,6 +99,8 @@ pub(crate) struct BootResponse {
 pub(crate) struct AuthApiInfoResponse {
     pub status: String,
     pub kms_contract_addr: String,
+    #[serde(default)]
+    pub eth_rpc_url: String,
     pub gateway_app_id: String,
     pub chain_id: u64,
     pub app_implementation: String,
@@ -110,6 +112,7 @@ pub(crate) struct GetInfoResponse {
     pub is_dev: bool,
     pub gateway_app_id: Option<String>,
     pub kms_contract_address: Option<String>,
+    pub eth_rpc_url: Option<String>,
     pub chain_id: Option<u64>,
     pub app_implementation: Option<String>,
 }
@@ -161,15 +164,22 @@ impl AuthApi {
             AuthApi::Dev { dev } => Ok(GetInfoResponse {
                 is_dev: true,
                 kms_contract_address: None,
+                eth_rpc_url: None,
                 gateway_app_id: Some(dev.gateway_app_id.clone()),
                 chain_id: None,
                 app_implementation: None,
             }),
             AuthApi::Webhook { webhook } => {
                 let info: AuthApiInfoResponse = http_get(&webhook.url).await?;
+                let eth_rpc_url = if info.eth_rpc_url.is_empty() {
+                    None
+                } else {
+                    Some(info.eth_rpc_url.clone())
+                };
                 Ok(GetInfoResponse {
                     is_dev: false,
                     kms_contract_address: Some(info.kms_contract_addr.clone()),
+                    eth_rpc_url,
                     chain_id: Some(info.chain_id),
                     gateway_app_id: Some(info.gateway_app_id.clone()),
                     app_implementation: Some(info.app_implementation.clone()),
