@@ -34,6 +34,9 @@ DEFAULT_CONFIG_PATH = os.path.expanduser("~/.dstack-vmm/config.json")
 DEFAULT_KMS_WHITELIST_PATH = os.path.expanduser(
     "~/.dstack-vmm/kms-whitelist.json")
 
+# VMM discovery directory
+DISCOVERY_DIR = "/run/dstack-vmm"
+
 
 def load_config() -> Dict[str, Any]:
     """
@@ -50,6 +53,173 @@ def load_config() -> Dict[str, Any]:
             return json.load(f)
     except (json.JSONDecodeError, FileNotFoundError):
         return {}
+
+
+def discover_vmm_instances() -> List[Dict[str, Any]]:
+    """
+    Discover all running VMM instances from the discovery directory.
+
+    Returns:
+        List of VMM instance info dicts, sorted by started_at.
+    """
+    instances = []
+    if not os.path.isdir(DISCOVERY_DIR):
+        return instances
+
+    for fname in os.listdir(DISCOVERY_DIR):
+        if not fname.endswith('.json'):
+            continue
+        fpath = os.path.join(DISCOVERY_DIR, fname)
+        try:
+            with open(fpath, 'r') as f:
+                info = json.load(f)
+            # Check if process is still alive
+            pid = info.get('pid')
+            if pid and not os.path.exists(f'/proc/{pid}'):
+                # Stale file, skip
+                continue
+            instances.append(info)
+        except (json.JSONDecodeError, FileNotFoundError, PermissionError):
+            continue
+
+    instances.sort(key=lambda x: x.get('started_at', 0))
+    return instances
+
+
+def resolve_vmm_url(instances: List[Dict[str, Any]], config: Dict[str, Any],
+                     explicit_url: Optional[str] = None) -> str:
+    """
+    Resolve the VMM URL to connect to.
+
+    Priority:
+    1. Explicit --url flag
+    2. DSTACK_VMM_URL env var
+    3. Config file url
+    4. If exactly one VMM instance is discovered, use that
+    5. If active instance is set in config, use that
+    6. Fall back to default
+
+    Returns the URL string.
+    """
+    # If user explicitly provided --url or env var, honor it
+    env_url = os.environ.get('DSTACK_VMM_URL')
+    if explicit_url and explicit_url != 'http://localhost:8080':
+        return explicit_url
+    if env_url:
+        return env_url
+    config_url = config.get('url')
+    if config_url:
+        return config_url
+
+    # Try auto-discovery
+    active_id = config.get('active_vmm')
+    if active_id:
+        for inst in instances:
+            if inst['id'] == active_id or inst['id'].startswith(active_id):
+                return vmm_address_to_url(inst)
+
+    if len(instances) == 1:
+        return vmm_address_to_url(instances[0])
+
+    return 'http://localhost:8080'
+
+
+def vmm_address_to_url(instance: Dict[str, Any]) -> str:
+    """Convert a VMM instance info dict to a connection URL."""
+    addr = instance.get('address', '')
+    if addr.startswith('unix:'):
+        # Resolve relative socket path against working directory
+        socket_path = addr[5:]
+        if not os.path.isabs(socket_path):
+            working_dir = instance.get('working_dir', '')
+            socket_path = os.path.join(working_dir, socket_path)
+        return f'unix:{socket_path}'
+    elif addr.startswith('http://') or addr.startswith('https://'):
+        return addr
+    else:
+        # host:port format from discovery
+        host, _, port = addr.rpartition(':')
+        if host == '0.0.0.0':
+            host = '127.0.0.1'
+        return f'http://{host}:{port}'
+
+
+def save_active_vmm(vmm_id: str):
+    """Save the active VMM instance ID to the config file."""
+    config = load_config()
+    config['active_vmm'] = vmm_id
+    os.makedirs(os.path.dirname(DEFAULT_CONFIG_PATH), exist_ok=True)
+    with open(DEFAULT_CONFIG_PATH, 'w') as f:
+        json.dump(config, f, indent=2)
+
+
+def cmd_ls_vmm(args):
+    """List all discovered VMM instances."""
+    instances = discover_vmm_instances()
+    config = load_config()
+    active_id = config.get('active_vmm')
+
+    if not instances:
+        print("No running VMM instances found.")
+        print(f"  (discovery directory: {DISCOVERY_DIR})")
+        return
+
+    if getattr(args, 'json', False):
+        print(json.dumps(instances, indent=2))
+        return
+
+    # Table output
+    from datetime import datetime
+
+    fmt = "  {active} {id:<12s} {pid:<8s} {node:<12s} {address:<24s} {workdir}"
+    print(fmt.format(
+        active='', id='ID', pid='PID', node='NAME',
+        address='ADDRESS', workdir='WORKING DIR'))
+    print("  " + "-" * 90)
+
+    for inst in instances:
+        short_id = inst['id'][:8]
+        is_active = '*' if active_id and inst['id'].startswith(active_id) else ' '
+        node_name = inst.get('node_name', '') or '-'
+        address = inst.get('address', '?')
+
+        print(fmt.format(
+            active=is_active,
+            id=short_id,
+            pid=str(inst.get('pid', '?')),
+            node=node_name[:12],
+            address=address[:24],
+            workdir=inst.get('working_dir', '?'),
+        ))
+
+
+def cmd_switch_vmm(args):
+    """Switch the active VMM instance."""
+    target = args.vmm_id
+    instances = discover_vmm_instances()
+
+    if not instances:
+        print("No running VMM instances found.")
+        return
+
+    # Find matching instance by prefix
+    matches = [i for i in instances if i['id'].startswith(target)]
+    if len(matches) == 0:
+        print(f"No VMM instance matching '{target}'.")
+        print("Available instances:")
+        for inst in instances:
+            print(f"  {inst['id'][:8]}  {inst.get('address', '?')}  {inst.get('working_dir', '?')}")
+        return
+    if len(matches) > 1:
+        print(f"Ambiguous ID '{target}', matches multiple instances:")
+        for inst in matches:
+            print(f"  {inst['id'][:8]}  {inst.get('address', '?')}")
+        return
+
+    selected = matches[0]
+    save_active_vmm(selected['id'])
+    url = vmm_address_to_url(selected)
+    print(f"Switched to VMM {selected['id'][:8]} ({url})")
 
 
 def encrypt_env(envs, hex_public_key: str) -> str:
@@ -1242,7 +1412,10 @@ def main():
     # Load config file defaults
     config = load_config()
 
-    # Priority: command line > environment variable > config file > default
+    # Discover running VMM instances
+    instances = discover_vmm_instances()
+
+    # Priority: command line > environment variable > config file > auto-discovery > default
     default_url = os.environ.get(
         'DSTACK_VMM_URL',
         config.get('url', 'http://localhost:8080'))
@@ -1266,6 +1439,17 @@ def main():
         help='Basic auth password (can also be set via DSTACK_VMM_AUTH_PASSWORD env var or config file)')
 
     subparsers = parser.add_subparsers(dest='command', help='Commands')
+
+    # VMM discovery commands
+    ls_vmm_parser = subparsers.add_parser(
+        'ls-vmm', help='List all running VMM instances on this host')
+    ls_vmm_parser.add_argument(
+        '--json', action='store_true', help='Output in JSON format')
+
+    switch_vmm_parser = subparsers.add_parser(
+        'switch-vmm', help='Switch active VMM instance')
+    switch_vmm_parser.add_argument(
+        'vmm_id', help='VMM instance ID (prefix match supported)')
 
     # List command
     lsvm_parser = subparsers.add_parser('lsvm', help='List VMs')
@@ -1554,7 +1738,17 @@ def main():
 
     args = parser.parse_args()
 
-    cli = VmmCLI(args.url, args.auth_user, args.auth_password)
+    # Handle discovery commands before creating CLI (they don't need a connection)
+    if args.command == 'ls-vmm':
+        cmd_ls_vmm(args)
+        return
+    elif args.command == 'switch-vmm':
+        cmd_switch_vmm(args)
+        return
+
+    # Resolve the URL with auto-discovery
+    url = resolve_vmm_url(instances, config, args.url)
+    cli = VmmCLI(url, args.auth_user, args.auth_password)
 
     if args.command == 'lsvm':
         cli.list_vms(args.verbose, args.json)
