@@ -1,3 +1,0 @@
-# Copied from build/shared/ at build time by build-image.sh
-pin-packages.sh
-config-qemu.sh

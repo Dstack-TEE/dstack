@@ -11,18 +11,46 @@ on:
     branches: [ master, next, dev-* ]
 
 jobs:
+  check-shared-scripts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify shared build scripts are in sync
+        run: |
+          failed=false
+          for dir in gateway/dstack-app/builder/shared kms/dstack-app/builder/shared verifier/builder/shared; do
+            if ! diff -q build/shared/pin-packages.sh "$dir/pin-packages.sh" >/dev/null 2>&1; then
+              echo "ERROR: $dir/pin-packages.sh is out of sync with build/shared/pin-packages.sh"
+              failed=true
+            fi
+          done
+          for dir in kms/dstack-app/builder/shared verifier/builder/shared; do
+            if ! diff -q build/shared/config-qemu.sh "$dir/config-qemu.sh" >/dev/null 2>&1; then
+              echo "ERROR: $dir/config-qemu.sh is out of sync with build/shared/config-qemu.sh"
+              failed=true
+            fi
+          done
+          if [ "$failed" = "true" ]; then
+            echo ""
+            echo "Run the following to fix:"
+            echo "  cp build/shared/pin-packages.sh gateway/dstack-app/builder/shared/"
+            echo "  cp build/shared/pin-packages.sh kms/dstack-app/builder/shared/"
+            echo "  cp build/shared/pin-packages.sh verifier/builder/shared/"
+            echo "  cp build/shared/config-qemu.sh kms/dstack-app/builder/shared/"
+            echo "  cp build/shared/config-qemu.sh verifier/builder/shared/"
+            exit 1
+          fi
+          echo "All shared build scripts are in sync."
+
   kms:
     runs-on: ubuntu-latest
+    needs: check-shared-scripts
     steps:
       - uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-
-      - name: Copy shared build scripts
-        run: |
-          cp build/shared/pin-packages.sh kms/dstack-app/builder/shared/
-          cp build/shared/config-qemu.sh kms/dstack-app/builder/shared/
 
       - name: Build KMS Docker image
         uses: docker/build-push-action@v5
@@ -43,14 +71,12 @@ jobs:
 
   gateway:
     runs-on: ubuntu-latest
+    needs: check-shared-scripts
     steps:
       - uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-
-      - name: Copy shared build scripts
-        run: cp build/shared/pin-packages.sh gateway/dstack-app/builder/shared/
 
       - name: Build Gateway Docker image
         uses: docker/build-push-action@v5
@@ -61,19 +87,16 @@ jobs:
           provenance: false
           build-args: |
             DSTACK_REV=${{ github.event.pull_request.head.sha || github.sha }}
+            DSTACK_SRC_URL=${{ github.server_url }}/${{ github.repository }}
 
   verifier:
     runs-on: ubuntu-latest
+    needs: check-shared-scripts
     steps:
       - uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-
-      - name: Copy shared build scripts
-        run: |
-          cp build/shared/pin-packages.sh verifier/builder/shared/
-          cp build/shared/config-qemu.sh verifier/builder/shared/
 
       - name: Build Verifier Docker image
         uses: docker/build-push-action@v5
@@ -85,3 +108,4 @@ jobs:
           provenance: false
           build-args: |
             DSTACK_REV=${{ github.event.pull_request.head.sha || github.sha }}
+            DSTACK_SRC_URL=${{ github.server_url }}/${{ github.repository }}

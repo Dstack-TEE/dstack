@@ -37,11 +37,6 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Copy shared build scripts
-        run: |
-          cp build/shared/pin-packages.sh verifier/builder/shared/
-          cp build/shared/config-qemu.sh verifier/builder/shared/
-
       - name: Get Git commit timestamps
         run: |
           echo "TIMESTAMP=$(git log -1 --pretty=%ct)" >> $GITHUB_ENV

@@ -67,14 +67,27 @@ docker_build() {
     extract_packages "$image_name" "$pkg_list_file"
 }
 
-# Copy shared build scripts into the local shared directory used by Dockerfile COPY.
-sync_shared_scripts() {
+# Verify that local copies of shared scripts match the canonical versions in build/shared/.
+check_shared_scripts() {
     local dest_dir=$1
     local need_qemu=${2:-false}
+    local canonical="$REPO_ROOT/build/shared"
+    local failed=false
 
-    cp "$REPO_ROOT/build/shared/pin-packages.sh" "$dest_dir/pin-packages.sh"
+    if ! diff -q "$canonical/pin-packages.sh" "$dest_dir/pin-packages.sh" &>/dev/null; then
+        echo "ERROR: $dest_dir/pin-packages.sh is out of sync with build/shared/pin-packages.sh" >&2
+        echo "  Run: cp build/shared/pin-packages.sh $dest_dir/" >&2
+        failed=true
+    fi
     if [ "$need_qemu" = "true" ]; then
-        cp "$REPO_ROOT/build/shared/config-qemu.sh" "$dest_dir/config-qemu.sh"
+        if ! diff -q "$canonical/config-qemu.sh" "$dest_dir/config-qemu.sh" &>/dev/null; then
+            echo "ERROR: $dest_dir/config-qemu.sh is out of sync with build/shared/config-qemu.sh" >&2
+            echo "  Run: cp build/shared/config-qemu.sh $dest_dir/" >&2
+            failed=true
+        fi
+    fi
+    if [ "$failed" = "true" ]; then
+        exit 1
     fi
 }
 
