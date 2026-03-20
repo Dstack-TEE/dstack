@@ -40,6 +40,8 @@ pub(crate) struct KmsConfig {
     pub image: ImageConfig,
     #[serde(with = "serde_human_bytes")]
     pub admin_token_hash: Vec<u8>,
+    #[serde(default)]
+    pub site_name: String,
 }
 
 impl KmsConfig {
