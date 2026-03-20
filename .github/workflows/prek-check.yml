@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-name: Pre-commit checks
+name: Prek checks
 
 on:
   push:
@@ -14,7 +14,7 @@ permissions:
   contents: read
 
 jobs:
-  pre-commit:
+  prek:
     runs-on: ubuntu-latest
 
     steps:
@@ -41,10 +41,10 @@ jobs:
     - name: Install prek
       run: pip install prek
 
-    - name: Run pre-commit checks (PR)
+    - name: Run prek checks (PR)
       if: github.event_name == 'pull_request'
       run: prek run --from-ref ${{ github.event.pull_request.base.sha }} --to-ref ${{ github.event.pull_request.head.sha }} --show-diff-on-failure
 
-    - name: Run pre-commit checks (push)
+    - name: Run prek checks (push)
       if: github.event_name == 'push'
       run: prek run --from-ref ${{ github.event.before }} --to-ref ${{ github.event.after }} --show-diff-on-failure
