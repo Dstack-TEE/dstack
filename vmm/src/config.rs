@@ -309,10 +309,21 @@ pub struct GatewayConfig {
     pub agent_port: u16,
 }
 
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct ImageConfig {
+    /// Path to guest image directory
+    #[serde(default)]
+    pub path: PathBuf,
+    /// OCI image registry for guest images (e.g., "dstacktee/guest-image")
+    #[serde(default)]
+    pub registry: String,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
+    /// Deprecated: use `[image] path` instead. Kept for backward compatibility.
     #[serde(default)]
-    pub image_path: PathBuf,
+    image_path: PathBuf,
     #[serde(default)]
     pub run_path: PathBuf,
     /// The URL of the KMS server
@@ -321,6 +332,10 @@ pub struct Config {
     /// Node name (optional, used as prefix in UI title)
     #[serde(default)]
     pub node_name: String,
+
+    /// Image configuration
+    #[serde(default)]
+    pub image: ImageConfig,
 
     /// The buffer size in VMM process for guest events
     pub event_buffer_size: usize,
@@ -361,12 +376,10 @@ impl ProcessAnnotation {
 }
 
 impl Config {
-    pub fn abs_path(self) -> Result<Self> {
-        Ok(Self {
-            image_path: self.image_path.absolutize()?.to_path_buf(),
-            run_path: self.run_path.absolutize()?.to_path_buf(),
-            ..self
-        })
+    pub fn abs_path(mut self) -> Result<Self> {
+        self.image.path = self.image.path.absolutize()?.to_path_buf();
+        self.run_path = self.run_path.absolutize()?.to_path_buf();
+        Ok(self)
     }
 }
 
@@ -496,8 +509,20 @@ impl Config {
         {
             let home = dirs::home_dir().context("Failed to get home directory")?;
             let app_home = home.join(".dstack-vmm");
-            if me.image_path == PathBuf::default() {
-                me.image_path = app_home.join("image");
+            // Migrate deprecated top-level `image_path` to `[image] path`
+            if me.image_path != PathBuf::default() {
+                if me.image.path == PathBuf::default() {
+                    warn!(
+                        "config: top-level `image_path` is deprecated, use `[image] path` instead"
+                    );
+                    me.image.path = me.image_path.clone();
+                } else {
+                    warn!("config: both `image_path` and `[image] path` are set, using `[image] path`");
+                }
+                me.image_path = PathBuf::default();
+            }
+            if me.image.path == PathBuf::default() {
+                me.image.path = app_home.join("image");
             }
             if me.run_path == PathBuf::default() {
                 me.run_path = app_home.join("vm");

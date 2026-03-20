@@ -198,7 +198,7 @@ async fn main() -> Result<()> {
     let _discovery_reg = discovery::DiscoveryRegistration::register(
         &listen_address,
         args.config.as_deref(),
-        &config.image_path,
+        &config.image.path,
         &config.run_path,
         &config.node_name,
         &app_version(),

@@ -35,6 +35,12 @@ SPDX-License-Identifier: Apache-2.0
               </svg>
               Reload VMs
             </button>
+            <button class="dropdown-item" @click="openImageRegistry(); closeSystemMenu()">
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                <path d="M7 2v4l3 3M2 7a5 5 0 1 0 10 0 5 5 0 0 0-10 0" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+              </svg>
+              Images
+            </button>
             <button class="dropdown-item" @click="openProcessManager(); closeSystemMenu()">
               <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
                 <path d="M2 3h10M2 7h10M2 11h10" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
@@ -450,6 +456,93 @@ SPDX-License-Identifier: Apache-2.0
           <button class="vm-log-button" @click="showLogs(vm.id, 'stderr')">Stderr</button>
         </div>
       </div>
+    </div>
+  </div>
+
+  <div v-if="showImageRegistry" class="process-manager-overlay">
+    <div class="process-manager-header">
+      <h2>Images</h2>
+      <div class="process-manager-actions">
+        <button class="btn-clear-stopped" @click="loadImages(); loadRegistryImages()">Refresh</button>
+        <button class="btn-close-overlay" @click="showImageRegistry = false">Close</button>
+      </div>
+    </div>
+    <div class="process-manager-body">
+      <!-- Local Images -->
+      <h3 style="margin: 0 0 8px 0; font-size: 0.95em; color: var(--color-text-secondary, #6b7280);">Local</h3>
+      <div v-if="availableImages.length === 0" class="process-empty" style="margin-bottom: 16px;">No local images found.</div>
+      <table class="process-table" v-else style="margin-bottom: 20px;">
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Version</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="img in availableImages" :key="img.name">
+            <td class="col-name">{{ img.name }}</td>
+            <td>{{ img.version }}</td>
+            <td class="col-actions">
+              <button style="color: var(--color-error, #ef4444);" @click="deleteImage(img.name)">Delete</button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+
+      <!-- Registry Images -->
+      <h3 style="margin: 0 0 8px 0; font-size: 0.95em; color: var(--color-text-secondary, #6b7280);">Registry</h3>
+      <div v-if="registryLoading" class="process-empty">Loading registry tags...</div>
+      <div v-else-if="registryImages.length === 0" class="process-empty">
+        No registry configured. Set <code>[image] registry</code> in vmm.toml.
+      </div>
+      <table class="process-table" v-else>
+        <thead>
+          <tr>
+            <th>Tag</th>
+            <th>Status</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="img in registryImages" :key="img.tag">
+            <td class="col-name">{{ img.tag }}</td>
+            <td>
+              <span v-if="img.pulling" class="sv-status sv-status-exited">
+                <span class="sv-status-dot"></span>
+                Pulling...
+              </span>
+              <span v-else-if="img.error" class="sv-status sv-status-fatal" :title="img.error">
+                <span class="sv-status-dot"></span>
+                Failed
+              </span>
+              <span v-else-if="img.local" class="sv-status sv-status-running">
+                <span class="sv-status-dot"></span>
+                Local
+              </span>
+              <span v-else class="sv-status sv-status-stopped">
+                <span class="sv-status-dot"></span>
+                Remote
+              </span>
+            </td>
+            <td class="col-actions">
+              <button
+                v-if="!img.local && !img.pulling"
+                @click="pullRegistryImage(img.tag)"
+              >
+                {{ img.error ? 'Retry' : 'Pull' }}
+              </button>
+              <span v-else-if="img.pulling" style="color: var(--color-warning, #f59e0b); font-size: 0.85em;">Downloading</span>
+              <span v-else style="color: var(--color-success, #22c55e); font-size: 0.85em;">Downloaded</span>
+            </td>
+          </tr>
+          <tr v-for="img in registryImages.filter(i => i.error)" :key="img.tag + '-err'">
+            <td colspan="3" style="color: var(--color-error, #ef4444); font-size: 0.85em; padding-top: 0; border-top: none;">
+              ⚠ {{ img.error }}
+            </td>
+          </tr>
+        </tbody>
+      </table>
     </div>
   </div>
 

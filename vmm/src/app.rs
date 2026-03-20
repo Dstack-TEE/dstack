@@ -35,6 +35,7 @@ pub use qemu::{VmConfig, VmWorkDir};
 mod id_pool;
 mod image;
 mod qemu;
+pub(crate) mod registry;
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct PortMapping {
@@ -118,16 +119,24 @@ pub struct GpuSpec {
     pub slot: String,
 }
 
+#[derive(Clone, Debug)]
+pub(crate) enum PullStatus {
+    Pulling,
+    Failed(String),
+}
+
 #[derive(Clone)]
 pub struct App {
     pub config: Arc<Config>,
     pub supervisor: SupervisorClient,
     state: Arc<Mutex<AppState>>,
     forward_service: Arc<tokio::sync::Mutex<ForwardService>>,
+    /// Pull status for registry images: tag → status.
+    pub(crate) pull_status: Arc<Mutex<std::collections::HashMap<String, PullStatus>>>,
 }
 
 impl App {
-    fn lock(&self) -> MutexGuard<'_, AppState> {
+    pub(crate) fn lock(&self) -> MutexGuard<'_, AppState> {
         self.state.lock().or_panic("mutex poisoned")
     }
 
@@ -152,6 +161,7 @@ impl App {
             })),
             config: Arc::new(config),
             forward_service: Arc::new(tokio::sync::Mutex::new(ForwardService::new())),
+            pull_status: Arc::new(Mutex::new(std::collections::HashMap::new())),
         }
     }
 
@@ -172,7 +182,7 @@ impl App {
         {
             bail!("Invalid image name");
         }
-        let image_path = self.config.image_path.join(&manifest.image);
+        let image_path = self.config.image.path.join(&manifest.image);
         let image = Image::load(&image_path).context("Failed to load image")?;
         let vm_id = manifest.id.clone();
         let app_compose = vm_work_dir
@@ -739,7 +749,7 @@ impl App {
         {
             bail!("Invalid image name");
         }
-        let image_path = self.config.image_path.join(&manifest.image);
+        let image_path = self.config.image.path.join(&manifest.image);
         let image = Image::load(&image_path).context("Failed to load image")?;
         let vm_id = manifest.id.clone();
         let already_running = cids_assigned.contains_key(&vm_id);
@@ -854,7 +864,7 @@ impl App {
     }
 
     pub fn list_images(&self) -> Result<Vec<(String, ImageInfo)>> {
-        let image_path = self.config.image_path.clone();
+        let image_path = self.config.image.path.clone();
         let images = fs::read_dir(image_path).context("Failed to read image directory")?;
         Ok(images
             .flat_map(|entry| {
@@ -1115,7 +1125,7 @@ fn rotate_serial_log(work_dir: &VmWorkDir, max_bytes: u64) {
 }
 
 pub(crate) fn make_sys_config(cfg: &Config, manifest: &Manifest) -> Result<String> {
-    let image_path = cfg.image_path.join(&manifest.image);
+    let image_path = cfg.image.path.join(&manifest.image);
     let image = Image::load(image_path).context("Failed to load image info")?;
     let img_ver = image.info.version_tuple().unwrap_or((0, 0, 0));
     let kms_urls = if manifest.kms_urls.is_empty() {

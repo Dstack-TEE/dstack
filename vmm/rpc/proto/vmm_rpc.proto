@@ -350,6 +350,13 @@ service Vmm {
   rpc SvStop(Id) returns (google.protobuf.Empty);
   // Remove a stopped supervisor process by ID.
   rpc SvRemove(Id) returns (google.protobuf.Empty);
+
+  // List images available in the configured OCI registry.
+  rpc ListRegistryImages(google.protobuf.Empty) returns (RegistryImageListResponse);
+  // Pull an image from the OCI registry to local storage.
+  rpc PullRegistryImage(PullRegistryImageRequest) returns (google.protobuf.Empty);
+  // Delete a local guest image by name.
+  rpc DeleteImage(Id) returns (google.protobuf.Empty);
 }
 
 // DHCP lease event reported by the host DHCP server.
@@ -363,6 +370,29 @@ message DhcpLeaseRequest {
 // Response containing a list of supervisor processes.
 message SvListResponse {
   repeated SvProcessInfo processes = 1;
+}
+
+// Available images discovered from the OCI registry.
+message RegistryImageListResponse {
+  repeated RegistryImageInfo images = 1;
+}
+
+// Metadata for an image tag in the OCI registry.
+message RegistryImageInfo {
+  // Tag name (e.g., "0.5.8", "nvidia-0.5.8")
+  string tag = 1;
+  // Whether this image is already downloaded locally
+  bool local = 2;
+  // Whether this image is currently being pulled
+  bool pulling = 3;
+  // Error message from the last failed pull attempt (empty if no error)
+  string error = 4;
+}
+
+// Request to pull an image from the OCI registry.
+message PullRegistryImageRequest {
+  // Tag to pull (e.g., "0.5.8")
+  string tag = 1;
 }
 
 // Information about a single supervisor process.
