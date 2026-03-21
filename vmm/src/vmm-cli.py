@@ -1527,18 +1527,25 @@ def main():
 
     subparsers = parser.add_subparsers(dest="command", help="Commands")
 
-    # VMM discovery commands
-    ls_vmm_parser = subparsers.add_parser(
-        "ls-vmm", help="List all running VMM instances on this host"
+    # VMM discovery commands (vmm ls / vmm switch)
+    vmm_parser = subparsers.add_parser(
+        "vmm", help="VMM instance management (ls, switch)"
     )
-    ls_vmm_parser.add_argument(
+    vmm_subparsers = vmm_parser.add_subparsers(
+        dest="vmm_command", help="VMM sub-commands"
+    )
+
+    vmm_ls_parser = vmm_subparsers.add_parser(
+        "ls", help="List all running VMM instances on this host"
+    )
+    vmm_ls_parser.add_argument(
         "--json", action="store_true", help="Output in JSON format"
     )
 
-    switch_vmm_parser = subparsers.add_parser(
-        "switch-vmm", help="Switch active VMM instance"
+    vmm_switch_parser = vmm_subparsers.add_parser(
+        "switch", help="Switch active VMM instance"
     )
-    switch_vmm_parser.add_argument(
+    vmm_switch_parser.add_argument(
         "vmm_id", help="VMM instance ID (prefix match supported)"
     )
 
@@ -1889,11 +1896,13 @@ def main():
     args = parser.parse_args()
 
     # Handle discovery commands before creating CLI (they don't need a connection)
-    if args.command == "ls-vmm":
-        cmd_ls_vmm(args)
-        return
-    elif args.command == "switch-vmm":
-        cmd_switch_vmm(args)
+    if args.command == "vmm":
+        if args.vmm_command == "ls":
+            cmd_ls_vmm(args)
+        elif args.vmm_command == "switch":
+            cmd_switch_vmm(args)
+        else:
+            vmm_parser.print_help()
         return
 
     # Resolve the URL with auto-discovery
