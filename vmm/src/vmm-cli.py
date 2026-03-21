@@ -76,8 +76,19 @@ def discover_vmm_instances() -> List[Dict[str, Any]]:
         List of VMM instance info dicts, sorted by started_at.
 
     """
+    import pwd
     instances = []
     for discovery_dir in _get_discovery_dirs():
+        # Extract uid from /run/user/<uid>/dstack-vmm path
+        parts = discovery_dir.split('/')
+        uid_str = parts[3] if len(parts) > 3 and parts[1] == 'run' and parts[2] == 'user' else None
+        username = None
+        if uid_str and uid_str.isdigit():
+            try:
+                username = pwd.getpwuid(int(uid_str)).pw_name
+            except KeyError:
+                username = f"uid:{uid_str}"
+
         for fname in os.listdir(discovery_dir):
             if not fname.endswith(".json"):
                 continue
@@ -88,6 +99,8 @@ def discover_vmm_instances() -> List[Dict[str, Any]]:
                 pid = info.get("pid")
                 if pid and not os.path.exists(f"/proc/{pid}"):
                     continue
+                if username:
+                    info['user'] = username
                 instances.append(info)
             except (json.JSONDecodeError, FileNotFoundError, PermissionError):
                 continue
@@ -182,18 +195,19 @@ def cmd_ls_vmm(args):
 
     # Table output
 
-    fmt = "  {active} {id:<12s} {pid:<8s} {node:<12s} {address:<24s} {workdir}"
+    fmt = "  {active} {id:<12s} {pid:<8s} {user:<10s} {node:<12s} {address:<24s} {workdir}"
     print(
         fmt.format(
             active="",
             id="ID",
             pid="PID",
+            user="USER",
             node="NAME",
             address="ADDRESS",
             workdir="WORKING DIR",
         )
     )
-    print("  " + "-" * 90)
+    print("  " + "-" * 100)
 
     for inst in instances:
         short_id = inst["id"][:8]
@@ -206,6 +220,7 @@ def cmd_ls_vmm(args):
                 active=is_active,
                 id=short_id,
                 pid=str(inst.get("pid", "?")),
+                user=inst.get("user", "?")[:10],
                 node=node_name[:12],
                 address=address[:24],
                 workdir=inst.get("working_dir", "?"),
