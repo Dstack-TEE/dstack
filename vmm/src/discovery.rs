@@ -19,16 +19,7 @@ fn discovery_dir() -> PathBuf {
     if let Ok(xdg) = std::env::var("XDG_RUNTIME_DIR") {
         return PathBuf::from(xdg).join("dstack-vmm");
     }
-    // Read real uid from /proc/self/status to avoid adding a libc dependency.
-    let uid = std::fs::read_to_string("/proc/self/status")
-        .ok()
-        .and_then(|s| {
-            s.lines()
-                .find(|l| l.starts_with("Uid:"))
-                .and_then(|l| l.split_whitespace().nth(1))
-                .and_then(|v| v.parse::<u32>().ok())
-        })
-        .expect("failed to determine uid from /proc/self/status");
+    let uid = nix::unistd::getuid();
     PathBuf::from(format!("/run/user/{uid}/dstack-vmm"))
 }
 

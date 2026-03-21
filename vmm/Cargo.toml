@@ -23,6 +23,7 @@ uuid = { workspace = true, features = ["v4"] }
 sha2.workspace = true
 hex.workspace = true
 fs-err.workspace = true
+nix = { workspace = true, features = ["user"] }
 dirs.workspace = true
 which.workspace = true
 clap = { workspace = true, features = ["derive", "string"] }
