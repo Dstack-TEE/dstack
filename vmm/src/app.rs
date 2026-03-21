@@ -302,17 +302,17 @@ impl App {
         // Persist the removing marker so crash recovery can resume
         let work_dir = self.work_dir(id);
         if let Err(err) = work_dir.set_removing() {
-            warn!("Failed to write .removing marker for {id}: {err:?}");
+            warn!("failed to write .removing marker for {id}: {err:?}");
         }
 
         // Clean up port forwarding immediately
         self.cleanup_port_forward(id).await;
 
-        // Spawn background cleanup coroutine
+        // User-initiated removal always deletes the workdir
         let app = self.clone();
         let id = id.to_string();
         tokio::spawn(async move {
-            if let Err(err) = app.finish_remove_vm(&id).await {
+            if let Err(err) = app.finish_remove_vm(&id, true).await {
                 error!("Background cleanup failed for {id}: {err:?}");
             }
         });
@@ -321,8 +321,10 @@ impl App {
     }
 
     /// Background cleanup: stop supervisor process, wait for it to exit,
-    /// remove from supervisor, delete workdir, and free CID.
-    async fn finish_remove_vm(&self, id: &str) -> Result<()> {
+    /// remove from supervisor, optionally delete workdir, and free CID.
+    ///
+    /// `delete_workdir`: true for user-initiated removal, false for orphan cleanup.
+    async fn finish_remove_vm(&self, id: &str, delete_workdir: bool) -> Result<()> {
         // Stop the supervisor process (idempotent if already stopped)
         if let Err(err) = self.supervisor.stop(id).await {
             debug!("supervisor.stop({id}) during removal: {err:?}");
@@ -361,12 +363,20 @@ impl App {
             }
         }
 
-        // Delete the workdir (may already be gone, e.g. manual deletion before reload)
+        // Only delete the workdir for user-initiated removal or if .removing marker exists.
+        // Orphaned supervisor processes without the marker keep their data intact.
         let vm_path = self.work_dir(id);
-        if vm_path.path().exists() {
-            if let Err(err) = fs::remove_dir_all(&vm_path) {
-                error!("Failed to remove VM directory for {id}: {err:?}");
+        if delete_workdir || vm_path.is_removing() {
+            if vm_path.path().exists() {
+                if let Err(err) = fs::remove_dir_all(&vm_path) {
+                    error!("failed to remove VM directory for {id}: {err:?}");
+                }
             }
+        } else if vm_path.path().exists() {
+            info!(
+                "VM {id} workdir preserved (orphan cleanup): {}",
+                vm_path.path().display()
+            );
         }
 
         // Free CID and remove from memory (last step)
@@ -381,7 +391,8 @@ impl App {
         Ok(())
     }
 
-    /// Spawn a background task to clean up a VM (stop + remove from supervisor + delete workdir).
+    /// Spawn a background task to clean up a VM (stop + remove from supervisor).
+    /// Workdir deletion is based on the `.removing` marker (only present for user-initiated removal).
     /// Returns false if a cleanup task is already running for this VM.
     fn spawn_finish_remove(&self, id: &str) -> bool {
         {
@@ -394,12 +405,13 @@ impl App {
                 vm.state.removing = true;
             }
             // If VM is not in memory (e.g. orphaned supervisor process), no entry to guard
-            // but we still need to clean up the supervisor process and workdir.
+            // but we still need to clean up the supervisor process.
         }
         let app = self.clone();
         let id = id.to_string();
         tokio::spawn(async move {
-            if let Err(err) = app.finish_remove_vm(&id).await {
+            // Don't pass delete_workdir=true; rely on .removing marker check inside
+            if let Err(err) = app.finish_remove_vm(&id, false).await {
                 error!("Background cleanup failed for {id}: {err:?}");
             }
         });
