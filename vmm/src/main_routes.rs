@@ -16,6 +16,8 @@ use std::time::Duration;
 use tokio::time::timeout;
 use tracing::{debug, info};
 
+const CONSOLE_V1: &str = include_str!(concat!(env!("OUT_DIR"), "/console_v1.html"));
+
 macro_rules! file_or_include_str {
     ($path:literal) => {
         fs::metadata($path)
@@ -42,7 +44,7 @@ fn render_console(html: String, app: &State<App>) -> (ContentType, String) {
 
 #[get("/")]
 async fn index(app: &State<App>) -> (ContentType, String) {
-    render_console(file_or_include_str!("console_v1.html"), app)
+    render_console(CONSOLE_V1.to_string(), app)
 }
 
 #[get("/v1")]

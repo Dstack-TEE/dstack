@@ -204,7 +204,10 @@ async function build({ watch = false } = {}) {
   const distFile = path.join(DIST_DIR, 'index.html');
   await fs.writeFile(distFile, html);
 
-  const targetFile = path.resolve(ROOT, '../src/console_v1.html');
+  const targetFile = process.env.DSTACK_UI_OUT
+    ? path.resolve(process.env.DSTACK_UI_OUT)
+    : path.resolve(ROOT, '../src/console_v1.html');
+  await fs.mkdir(path.dirname(targetFile), { recursive: true });
   await fs.writeFile(targetFile, html);
 
   if (watch) {
@@ -239,6 +242,7 @@ async function build({ watch = false } = {}) {
         ]);
         await fs.writeFile(distFile, rehtml);
         const spdxHeader = '<!-- SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>\n     SPDX-License-Identifier: Apache-2.0 -->\n';
+        await fs.mkdir(path.dirname(targetFile), { recursive: true });
         await fs.writeFile(targetFile, spdxHeader + rehtml);
         console.log('Rebuilt console');
       } catch (err) {

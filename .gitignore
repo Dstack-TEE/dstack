@@ -11,3 +11,4 @@ node_modules/
 .claude/settings.local.json
 __pycache__
 .planning/
+/vmm/src/console_v1.html
