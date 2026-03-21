@@ -79,7 +79,7 @@ pub async fn run_one_shot(
     let manifest = create_manifest_from_vm_config(vm_config.clone(), &config.cvm)?;
 
     // Load image
-    let image_path = config.image_path.join(&manifest.image);
+    let image_path = config.image.path.join(&manifest.image);
     let image = Image::load(&image_path)
         .with_context(|| format!("Failed to load image: {}", image_path.display()))?;
 

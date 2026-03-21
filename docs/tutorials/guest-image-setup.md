@@ -230,6 +230,59 @@ The `image_path` should point to `/var/lib/dstack/images`.
 
 If VMM isn't finding the images, verify the path in the configuration matches where you installed them.
 
+## OCI Registry Setup
+
+Guest images can be stored in any OCI-compatible container registry (Docker Hub, GHCR, Harbor, etc.), allowing VMM to discover and pull images directly from the web UI.
+
+### Pushing Images to a Registry
+
+Use the `dstack-image-oci.sh` script to package and push a guest image directory:
+
+```bash
+# Push a standard image (auto-tags: version + sha256-hash)
+./scripts/dstack-image-oci.sh push /var/lib/dstack/images/dstack-0.5.8 ghcr.io/your-org/guest-image
+
+# Push an nvidia variant
+./scripts/dstack-image-oci.sh push /var/lib/dstack/images/dstack-nvidia-0.5.8 ghcr.io/your-org/guest-image
+
+# Push with a custom tag
+./scripts/dstack-image-oci.sh push /var/lib/dstack/images/dstack-0.5.8 ghcr.io/your-org/guest-image --tag latest
+
+# List tags in the registry
+./scripts/dstack-image-oci.sh list ghcr.io/your-org/guest-image
+```
+
+The script reads `metadata.json` and `digest.txt` from the image directory and auto-generates tags:
+
+| Image directory | Generated tags |
+|---|---|
+| `dstack-0.5.8` | `0.5.8`, `sha256-<hash>` |
+| `dstack-dev-0.5.8` | `dev-0.5.8`, `sha256-<hash>` |
+| `dstack-nvidia-0.5.8` | `nvidia-0.5.8`, `sha256-<hash>` |
+
+Prerequisites: `docker` CLI (for building), `python3`, registry login (`docker login`).
+
+### Configuring VMM to Use a Registry
+
+Add the `[image]` section to `vmm.toml`:
+
+```toml
+[image]
+# Local image directory (default: ~/.dstack-vmm/image)
+# path = "/var/lib/dstack/images"
+
+# OCI registry for discovering and pulling images
+registry = "ghcr.io/your-org/guest-image"
+```
+
+After restarting VMM, click **Images** in the web UI to browse the registry. Click **Pull** to download an image — it will be extracted to the local image directory automatically.
+
+### How It Works
+
+- **Push**: The script builds a `FROM scratch` Docker image containing the guest image files (kernel, initrd, rootfs, firmware, metadata) and pushes it to the registry.
+- **Pull**: VMM fetches the OCI manifest via the Registry HTTP API v2, downloads each layer blob, and extracts the tar contents into the local image directory. No Docker daemon required on the VMM host.
+- **Discovery**: VMM queries the registry's tag list API to show available versions alongside locally installed images.
+
 ## Managing Multiple Image Versions
 
 You can have multiple image versions installed simultaneously:

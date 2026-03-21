@@ -1475,6 +1475,82 @@ type CreateVmPayloadSource = {
     return features.length > 0 ? features.join(', ') : 'None';
   }
 
+  // ── Image Registry ─────────────────────────────────────────────
+  const showImageRegistry = ref(false);
+  const registryImages = ref([] as Array<{ tag: string; local: boolean; pulling: boolean; error: string }>);
+  const registryLoading = ref(false);
+  let registryRefreshTimer: ReturnType<typeof setInterval> | null = null;
+
+  async function loadRegistryImages() {
+    const isInitialLoad = registryImages.value.length === 0;
+    if (isInitialLoad) {
+      registryLoading.value = true;
+    }
+    try {
+      const data = await vmmRpc.listRegistryImages({});
+      registryImages.value = (data.images || []).sort((a: any, b: any) => {
+        // Sort by tag descending (newest versions first)
+        return (b.tag || '').localeCompare(a.tag || '', undefined, { numeric: true });
+      });
+      // If any image is pulling, refresh local images too
+      if (registryImages.value.some((img: any) => img.pulling)) {
+        loadImages();
+      }
+    } catch (error) {
+      recordError('failed to load registry images', error);
+    } finally {
+      registryLoading.value = false;
+    }
+  }
+
+  async function pullRegistryImage(tag: string) {
+    // Optimistic update: mark as pulling immediately, clear previous error
+    const img = registryImages.value.find((i: any) => i.tag === tag);
+    if (img) {
+      img.pulling = true;
+      img.error = '';
+    }
+    try {
+      await vmmRpc.pullRegistryImage({ tag });
+    } catch (error) {
+      // Revert optimistic update on failure
+      if (img) {
+        img.pulling = false;
+      }
+      recordError(`failed to pull image ${tag}`, error);
+    }
+  }
+
+  async function deleteImage(name: string) {
+    if (!confirm(`Delete local image "${name}"?`)) return;
+    try {
+      await vmmRpc.deleteImage({ id: name });
+      await loadImages();
+      await loadRegistryImages();
+    } catch (error) {
+      recordError(`failed to delete image ${name}`, error);
+    }
+  }
+
+  async function openImageRegistry() {
+    showImageRegistry.value = true;
+    await Promise.all([loadImages(), loadRegistryImages()]);
+    registryRefreshTimer = setInterval(async () => {
+      await loadRegistryImages();
+      // Refresh local images if something just finished pulling
+      if (registryImages.value.some((img: any) => img.pulling)) {
+        await loadImages();
+      }
+    }, 3000);
+  }
+
+  watch(showImageRegistry, (open) => {
+    if (!open && registryRefreshTimer) {
+      clearInterval(registryRefreshTimer);
+      registryRefreshTimer = null;
+    }
+  });
+
   // ── Process Manager ─────────────────────────────────────────────
   const showProcessManager = ref(false);
   const supervisorProcesses = ref([] as any[]);
@@ -1636,6 +1712,13 @@ type CreateVmPayloadSource = {
     svStatusClass,
     svIsRunning,
     svIsStopped,
+    showImageRegistry,
+    registryImages,
+    registryLoading,
+    loadRegistryImages,
+    pullRegistryImage,
+    deleteImage,
+    openImageRegistry,
   };
 }
 
