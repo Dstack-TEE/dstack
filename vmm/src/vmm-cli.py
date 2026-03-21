@@ -35,7 +35,7 @@ DEFAULT_CONFIG_PATH = os.path.expanduser("~/.dstack-vmm/config.json")
 DEFAULT_KMS_WHITELIST_PATH = os.path.expanduser("~/.dstack-vmm/kms-whitelist.json")
 
 # VMM discovery directory
-DISCOVERY_DIR = "/run/dstack-vmm"
+DISCOVERY_DIR = os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/run"), "dstack-vmm")
 
 
 def load_config() -> Dict[str, Any]:

@@ -13,8 +13,15 @@ use std::path::{Path, PathBuf};
 use tracing::{info, warn};
 use uuid::Uuid;
 
-/// Well-known directory where VMM instances register themselves.
-const DISCOVERY_DIR: &str = "/run/dstack-vmm";
+/// Returns the discovery directory path.
+/// Uses $XDG_RUNTIME_DIR/dstack-vmm if set, otherwise falls back to /run/dstack-vmm.
+fn discovery_dir() -> PathBuf {
+    if let Ok(xdg) = std::env::var("XDG_RUNTIME_DIR") {
+        PathBuf::from(xdg).join("dstack-vmm")
+    } else {
+        PathBuf::from("/run/dstack-vmm")
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VmmInstanceInfo {
@@ -57,8 +64,8 @@ impl DiscoveryRegistration {
         node_name: &str,
         version: &str,
     ) -> Result<Self> {
-        let dir = Path::new(DISCOVERY_DIR);
-        fs_err::create_dir_all(dir).context("failed to create discovery directory")?;
+        let dir = discovery_dir();
+        fs_err::create_dir_all(&dir).context("failed to create discovery directory")?;
 
         let id = Uuid::new_v4().to_string();
         let path = dir.join(format!("{id}.json"));
@@ -104,7 +111,7 @@ impl Drop for DiscoveryRegistration {
 
 /// Clean up stale discovery files from dead processes.
 pub fn cleanup_stale_registrations() {
-    let dir = Path::new(DISCOVERY_DIR);
+    let dir = discovery_dir();
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
         Err(_) => return,
