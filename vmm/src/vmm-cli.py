@@ -34,12 +34,14 @@ except ImportError:
 DEFAULT_CONFIG_PATH = os.path.expanduser("~/.dstack-vmm/config.json")
 DEFAULT_KMS_WHITELIST_PATH = os.path.expanduser("~/.dstack-vmm/kms-whitelist.json")
 
+
 # VMM discovery directories
 # Each user's instances are in $XDG_RUNTIME_DIR/dstack-vmm (typically /run/user/<uid>/dstack-vmm).
 # CLI scans all users' directories so operators can see every instance on the host.
 def _get_discovery_dirs() -> List[Tuple[str, Optional[str]]]:
     """Return list of (discovery_dir, username) tuples."""
     import pwd
+
     dirs = []
     run_user = "/run/user"
     if os.path.isdir(run_user):
@@ -180,7 +182,9 @@ def cmd_ls_vmm(args):
 
     if not instances:
         print("No running VMM instances found.")
-        print(f"  (scanned: {', '.join(d for d, _ in _get_discovery_dirs()) or '/run/user/*/dstack-vmm'})")
+        print(
+            f"  (scanned: {', '.join(d for d, _ in _get_discovery_dirs()) or '/run/user/*/dstack-vmm'})"
+        )
         return
 
     if getattr(args, "json", False):
@@ -1560,12 +1564,13 @@ def main():
 
     # Register nested subcommands for top-level help display
     _nested_commands = {
-        'vmm ls': 'List all running VMM instances on this host',
-        'vmm switch': 'Switch active VMM instance',
+        "vmm ls": "List all running VMM instances on this host",
+        "vmm switch": "Switch active VMM instance",
     }
 
     # Patch parser's format_help to show nested subcommands
     _orig_format_help = parser.format_help
+
     def _patched_format_help():
         text = _orig_format_help()
         # Append nested subcommands after the subparser listing
@@ -1573,6 +1578,7 @@ def main():
         for cmd, desc in _nested_commands.items():
             extra += f"    {cmd:<24s}{desc}\n"
         return text + extra
+
     parser.format_help = _patched_format_help
 
     # List command
