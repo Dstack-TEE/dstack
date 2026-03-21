@@ -13,14 +13,23 @@ use std::path::{Path, PathBuf};
 use tracing::{info, warn};
 use uuid::Uuid;
 
-/// Returns the discovery directory path.
-/// Uses $XDG_RUNTIME_DIR/dstack-vmm if set, otherwise falls back to /run/dstack-vmm.
+/// Returns the discovery directory path under $XDG_RUNTIME_DIR/dstack-vmm.
+/// Falls back to /run/user/<uid>/dstack-vmm if XDG_RUNTIME_DIR is not set.
 fn discovery_dir() -> PathBuf {
     if let Ok(xdg) = std::env::var("XDG_RUNTIME_DIR") {
-        PathBuf::from(xdg).join("dstack-vmm")
-    } else {
-        PathBuf::from("/run/dstack-vmm")
+        return PathBuf::from(xdg).join("dstack-vmm");
     }
+    // Read real uid from /proc/self/status to avoid adding a libc dependency.
+    let uid = std::fs::read_to_string("/proc/self/status")
+        .ok()
+        .and_then(|s| {
+            s.lines()
+                .find(|l| l.starts_with("Uid:"))
+                .and_then(|l| l.split_whitespace().nth(1))
+                .and_then(|v| v.parse::<u32>().ok())
+        })
+        .expect("failed to determine uid from /proc/self/status");
+    PathBuf::from(format!("/run/user/{uid}/dstack-vmm"))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

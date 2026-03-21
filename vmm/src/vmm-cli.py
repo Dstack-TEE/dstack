@@ -34,8 +34,22 @@ except ImportError:
 DEFAULT_CONFIG_PATH = os.path.expanduser("~/.dstack-vmm/config.json")
 DEFAULT_KMS_WHITELIST_PATH = os.path.expanduser("~/.dstack-vmm/kms-whitelist.json")
 
-# VMM discovery directory
-DISCOVERY_DIR = os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/run"), "dstack-vmm")
+# VMM discovery directories
+# Each user's instances are in $XDG_RUNTIME_DIR/dstack-vmm (typically /run/user/<uid>/dstack-vmm).
+# CLI scans all users' directories so operators can see every instance on the host.
+def _get_discovery_dirs() -> List[str]:
+    dirs = []
+    # Scan all /run/user/*/dstack-vmm
+    run_user = "/run/user"
+    if os.path.isdir(run_user):
+        try:
+            for uid_dir in os.listdir(run_user):
+                candidate = os.path.join(run_user, uid_dir, "dstack-vmm")
+                if os.path.isdir(candidate):
+                    dirs.append(candidate)
+        except PermissionError:
+            pass
+    return dirs
 
 
 def load_config() -> Dict[str, Any]:
@@ -56,31 +70,27 @@ def load_config() -> Dict[str, Any]:
 
 
 def discover_vmm_instances() -> List[Dict[str, Any]]:
-    """Discover all running VMM instances from the discovery directory.
+    """Discover all running VMM instances across all users on the host.
 
     Returns:
         List of VMM instance info dicts, sorted by started_at.
 
     """
     instances = []
-    if not os.path.isdir(DISCOVERY_DIR):
-        return instances
-
-    for fname in os.listdir(DISCOVERY_DIR):
-        if not fname.endswith(".json"):
-            continue
-        fpath = os.path.join(DISCOVERY_DIR, fname)
-        try:
-            with open(fpath, "r") as f:
-                info = json.load(f)
-            # Check if process is still alive
-            pid = info.get("pid")
-            if pid and not os.path.exists(f"/proc/{pid}"):
-                # Stale file, skip
+    for discovery_dir in _get_discovery_dirs():
+        for fname in os.listdir(discovery_dir):
+            if not fname.endswith(".json"):
                 continue
-            instances.append(info)
-        except (json.JSONDecodeError, FileNotFoundError, PermissionError):
-            continue
+            fpath = os.path.join(discovery_dir, fname)
+            try:
+                with open(fpath, "r") as f:
+                    info = json.load(f)
+                pid = info.get("pid")
+                if pid and not os.path.exists(f"/proc/{pid}"):
+                    continue
+                instances.append(info)
+            except (json.JSONDecodeError, FileNotFoundError, PermissionError):
+                continue
 
     instances.sort(key=lambda x: x.get("started_at", 0))
     return instances
@@ -163,7 +173,7 @@ def cmd_ls_vmm(args):
 
     if not instances:
         print("No running VMM instances found.")
-        print(f"  (discovery directory: {DISCOVERY_DIR})")
+        print(f"  (scanned: {', '.join(_get_discovery_dirs()) or '/run/user/*/dstack-vmm'})")
         return
 
     if getattr(args, "json", False):
