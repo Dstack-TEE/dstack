@@ -1549,6 +1549,23 @@ def main():
         "vmm_id", help="VMM instance ID (prefix match supported)"
     )
 
+    # Register nested subcommands for top-level help display
+    _nested_commands = {
+        'vmm ls': 'List all running VMM instances on this host',
+        'vmm switch': 'Switch active VMM instance',
+    }
+
+    # Patch parser's format_help to show nested subcommands
+    _orig_format_help = parser.format_help
+    def _patched_format_help():
+        text = _orig_format_help()
+        # Append nested subcommands after the subparser listing
+        extra = "\nnested commands:\n"
+        for cmd, desc in _nested_commands.items():
+            extra += f"    {cmd:<24s}{desc}\n"
+        return text + extra
+    parser.format_help = _patched_format_help
+
     # List command
     lsvm_parser = subparsers.add_parser("lsvm", help="List VMs")
     lsvm_parser.add_argument(
