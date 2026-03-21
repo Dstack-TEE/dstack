@@ -2675,6 +2675,7 @@ dependencies = [
  "key-provider-client",
  "load_config",
  "lspci",
+ "nix 0.29.0",
  "or-panic",
  "path-absolutize",
  "ra-rpc",

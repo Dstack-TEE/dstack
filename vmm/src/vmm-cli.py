@@ -34,8 +34,29 @@ except ImportError:
 DEFAULT_CONFIG_PATH = os.path.expanduser("~/.dstack-vmm/config.json")
 DEFAULT_KMS_WHITELIST_PATH = os.path.expanduser("~/.dstack-vmm/kms-whitelist.json")
 
-# VMM discovery directory
-DISCOVERY_DIR = "/run/dstack-vmm"
+
+# VMM discovery directories
+# Each user's instances are in $XDG_RUNTIME_DIR/dstack-vmm (typically /run/user/<uid>/dstack-vmm).
+# CLI scans all users' directories so operators can see every instance on the host.
+def _get_discovery_dirs() -> List[Tuple[str, Optional[str]]]:
+    """Return list of (discovery_dir, username) tuples."""
+    import pwd
+
+    dirs = []
+    run_user = "/run/user"
+    if os.path.isdir(run_user):
+        try:
+            for uid_str in os.listdir(run_user):
+                candidate = os.path.join(run_user, uid_str, "dstack-vmm")
+                if os.path.isdir(candidate):
+                    try:
+                        username = pwd.getpwuid(int(uid_str)).pw_name
+                    except (KeyError, ValueError):
+                        username = f"uid:{uid_str}"
+                    dirs.append((candidate, username))
+        except PermissionError:
+            pass
+    return dirs
 
 
 def load_config() -> Dict[str, Any]:
@@ -56,31 +77,29 @@ def load_config() -> Dict[str, Any]:
 
 
 def discover_vmm_instances() -> List[Dict[str, Any]]:
-    """Discover all running VMM instances from the discovery directory.
+    """Discover all running VMM instances across all users on the host.
 
     Returns:
         List of VMM instance info dicts, sorted by started_at.
 
     """
     instances = []
-    if not os.path.isdir(DISCOVERY_DIR):
-        return instances
-
-    for fname in os.listdir(DISCOVERY_DIR):
-        if not fname.endswith(".json"):
-            continue
-        fpath = os.path.join(DISCOVERY_DIR, fname)
-        try:
-            with open(fpath, "r") as f:
-                info = json.load(f)
-            # Check if process is still alive
-            pid = info.get("pid")
-            if pid and not os.path.exists(f"/proc/{pid}"):
-                # Stale file, skip
+    for discovery_dir, username in _get_discovery_dirs():
+        for fname in os.listdir(discovery_dir):
+            if not fname.endswith(".json"):
                 continue
-            instances.append(info)
-        except (json.JSONDecodeError, FileNotFoundError, PermissionError):
-            continue
+            fpath = os.path.join(discovery_dir, fname)
+            try:
+                with open(fpath, "r") as f:
+                    info = json.load(f)
+                pid = info.get("pid")
+                if pid and not os.path.exists(f"/proc/{pid}"):
+                    continue
+                if username:
+                    info["user"] = username
+                instances.append(info)
+            except (json.JSONDecodeError, FileNotFoundError, PermissionError):
+                continue
 
     instances.sort(key=lambda x: x.get("started_at", 0))
     return instances
@@ -163,7 +182,9 @@ def cmd_ls_vmm(args):
 
     if not instances:
         print("No running VMM instances found.")
-        print(f"  (discovery directory: {DISCOVERY_DIR})")
+        print(
+            f"  (scanned: {', '.join(d for d, _ in _get_discovery_dirs()) or '/run/user/*/dstack-vmm'})"
+        )
         return
 
     if getattr(args, "json", False):
@@ -172,18 +193,19 @@ def cmd_ls_vmm(args):
 
     # Table output
 
-    fmt = "  {active} {id:<12s} {pid:<8s} {node:<12s} {address:<24s} {workdir}"
+    fmt = "  {active} {id:<12s} {pid:<8s} {user:<10s} {node:<12s} {address:<24s} {workdir}"
     print(
         fmt.format(
             active="",
             id="ID",
             pid="PID",
+            user="USER",
             node="NAME",
             address="ADDRESS",
             workdir="WORKING DIR",
         )
     )
-    print("  " + "-" * 90)
+    print("  " + "-" * 100)
 
     for inst in instances:
         short_id = inst["id"][:8]
@@ -196,6 +218,7 @@ def cmd_ls_vmm(args):
                 active=is_active,
                 id=short_id,
                 pid=str(inst.get("pid", "?")),
+                user=inst.get("user", "?")[:10],
                 node=node_name[:12],
                 address=address[:24],
                 workdir=inst.get("working_dir", "?"),
@@ -1517,20 +1540,46 @@ def main():
 
     subparsers = parser.add_subparsers(dest="command", help="Commands")
 
-    # VMM discovery commands
-    ls_vmm_parser = subparsers.add_parser(
-        "ls-vmm", help="List all running VMM instances on this host"
+    # VMM discovery commands (vmm ls / vmm switch)
+    vmm_parser = subparsers.add_parser(
+        "vmm", help="VMM instance management (ls, switch)"
     )
-    ls_vmm_parser.add_argument(
+    vmm_subparsers = vmm_parser.add_subparsers(
+        dest="vmm_command", help="VMM sub-commands"
+    )
+
+    vmm_ls_parser = vmm_subparsers.add_parser(
+        "ls", help="List all running VMM instances on this host"
+    )
+    vmm_ls_parser.add_argument(
         "--json", action="store_true", help="Output in JSON format"
     )
 
-    switch_vmm_parser = subparsers.add_parser(
-        "switch-vmm", help="Switch active VMM instance"
+    vmm_switch_parser = vmm_subparsers.add_parser(
+        "switch", help="Switch active VMM instance"
     )
-    switch_vmm_parser.add_argument(
+    vmm_switch_parser.add_argument(
         "vmm_id", help="VMM instance ID (prefix match supported)"
     )
+
+    # Register nested subcommands for top-level help display
+    _nested_commands = {
+        "vmm ls": "List all running VMM instances on this host",
+        "vmm switch": "Switch active VMM instance",
+    }
+
+    # Patch parser's format_help to show nested subcommands
+    _orig_format_help = parser.format_help
+
+    def _patched_format_help():
+        text = _orig_format_help()
+        # Append nested subcommands after the subparser listing
+        extra = "\nnested commands:\n"
+        for cmd, desc in _nested_commands.items():
+            extra += f"    {cmd:<24s}{desc}\n"
+        return text + extra
+
+    parser.format_help = _patched_format_help
 
     # List command
     lsvm_parser = subparsers.add_parser("lsvm", help="List VMs")
@@ -1879,11 +1928,13 @@ def main():
     args = parser.parse_args()
 
     # Handle discovery commands before creating CLI (they don't need a connection)
-    if args.command == "ls-vmm":
-        cmd_ls_vmm(args)
-        return
-    elif args.command == "switch-vmm":
-        cmd_switch_vmm(args)
+    if args.command == "vmm":
+        if args.vmm_command == "ls":
+            cmd_ls_vmm(args)
+        elif args.vmm_command == "switch":
+            cmd_switch_vmm(args)
+        else:
+            vmm_parser.print_help()
         return
 
     # Resolve the URL with auto-discovery
