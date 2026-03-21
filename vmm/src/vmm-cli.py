@@ -37,16 +37,21 @@ DEFAULT_KMS_WHITELIST_PATH = os.path.expanduser("~/.dstack-vmm/kms-whitelist.jso
 # VMM discovery directories
 # Each user's instances are in $XDG_RUNTIME_DIR/dstack-vmm (typically /run/user/<uid>/dstack-vmm).
 # CLI scans all users' directories so operators can see every instance on the host.
-def _get_discovery_dirs() -> List[str]:
+def _get_discovery_dirs() -> List[Tuple[str, Optional[str]]]:
+    """Return list of (discovery_dir, username) tuples."""
+    import pwd
     dirs = []
-    # Scan all /run/user/*/dstack-vmm
     run_user = "/run/user"
     if os.path.isdir(run_user):
         try:
-            for uid_dir in os.listdir(run_user):
-                candidate = os.path.join(run_user, uid_dir, "dstack-vmm")
+            for uid_str in os.listdir(run_user):
+                candidate = os.path.join(run_user, uid_str, "dstack-vmm")
                 if os.path.isdir(candidate):
-                    dirs.append(candidate)
+                    try:
+                        username = pwd.getpwuid(int(uid_str)).pw_name
+                    except (KeyError, ValueError):
+                        username = f"uid:{uid_str}"
+                    dirs.append((candidate, username))
         except PermissionError:
             pass
     return dirs
@@ -76,19 +81,8 @@ def discover_vmm_instances() -> List[Dict[str, Any]]:
         List of VMM instance info dicts, sorted by started_at.
 
     """
-    import pwd
     instances = []
-    for discovery_dir in _get_discovery_dirs():
-        # Extract uid from /run/user/<uid>/dstack-vmm path
-        parts = discovery_dir.split('/')
-        uid_str = parts[3] if len(parts) > 3 and parts[1] == 'run' and parts[2] == 'user' else None
-        username = None
-        if uid_str and uid_str.isdigit():
-            try:
-                username = pwd.getpwuid(int(uid_str)).pw_name
-            except KeyError:
-                username = f"uid:{uid_str}"
-
+    for discovery_dir, username in _get_discovery_dirs():
         for fname in os.listdir(discovery_dir):
             if not fname.endswith(".json"):
                 continue
@@ -100,7 +94,7 @@ def discover_vmm_instances() -> List[Dict[str, Any]]:
                 if pid and not os.path.exists(f"/proc/{pid}"):
                     continue
                 if username:
-                    info['user'] = username
+                    info["user"] = username
                 instances.append(info)
             except (json.JSONDecodeError, FileNotFoundError, PermissionError):
                 continue
@@ -186,7 +180,7 @@ def cmd_ls_vmm(args):
 
     if not instances:
         print("No running VMM instances found.")
-        print(f"  (scanned: {', '.join(_get_discovery_dirs()) or '/run/user/*/dstack-vmm'})")
+        print(f"  (scanned: {', '.join(d for d, _ in _get_discovery_dirs()) or '/run/user/*/dstack-vmm'})")
         return
 
     if getattr(args, "json", False):
