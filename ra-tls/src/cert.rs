@@ -478,6 +478,13 @@ pub struct CertPair {
 /// Magic prefix for gzip-compressed event log (version 1)
 pub const EVENTLOG_GZIP_MAGIC: &[u8] = b"ELGZv1";
 
+/// Maximum allowed decompressed size of the event log extension (in bytes).
+///
+/// This protects against gzip decompression bombs in RA-TLS certificate
+/// extensions by bounding the amount of memory we are willing to allocate.
+/// 16 KiB is sufficient for typical event logs we embed in certs.
+pub const MAX_EVENTLOG_EXT_SIZE: u64 = 16 * 1024;
+
 /// Compress a certificate extension value
 pub fn compress_ext_value(data: &[u8]) -> Result<Vec<u8>> {
     use flate2::write::GzEncoder;
@@ -507,11 +514,19 @@ pub fn decompress_ext_value(data: &[u8]) -> Result<Vec<u8>> {
     if data.starts_with(EVENTLOG_GZIP_MAGIC) {
         // Compressed format
         let compressed = &data[EVENTLOG_GZIP_MAGIC.len()..];
-        let mut decoder = GzDecoder::new(compressed);
+        let decoder = GzDecoder::new(compressed);
+        // Limit the total amount of decompressed data to avoid gzip bombs.
+        let mut limited = decoder.take(MAX_EVENTLOG_EXT_SIZE + 1);
         let mut decompressed = Vec::new();
-        decoder
+        limited
             .read_to_end(&mut decompressed)
             .context("failed to decompress event log")?;
+        if decompressed.len() as u64 > MAX_EVENTLOG_EXT_SIZE {
+            bail!(
+                "event log extension too large (>{} bytes)",
+                MAX_EVENTLOG_EXT_SIZE
+            );
+        }
         Ok(decompressed)
     } else {
         // Uncompressed format (backwards compatibility)
