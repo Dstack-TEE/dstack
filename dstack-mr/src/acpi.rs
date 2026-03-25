@@ -23,6 +23,96 @@ pub struct Tables {
 
 impl Machine<'_> {
     fn create_tables(&self) -> Result<Vec<u8>> {
+        if self.is_uki_mode() {
+            return self.create_tables_uefi_disk();
+        }
+        self.create_tables_direct_kernel()
+    }
+
+    /// Generate ACPI tables for UEFI disk boot (UKI mode).
+    /// Device config: single disk (hd0) + net. No vsock, no 9p, no -kernel.
+    fn create_tables_uefi_disk(&self) -> Result<Vec<u8>> {
+        if self.cpu_count == 0 {
+            bail!("cpuCount must be greater than 0");
+        }
+        let mem_size_mb = self.memory_size / (1024 * 1024);
+        let dummy_disk = "/bin/sh";
+
+        let mut cmd = std::process::Command::new("dstack-acpi-tables");
+        cmd.args([
+            "-cpu",
+            "qemu64",
+            "-smp",
+            &self.cpu_count.to_string(),
+            "-m",
+            &format!("{mem_size_mb}M"),
+            "-nographic",
+            "-nodefaults",
+            "-serial",
+            "stdio",
+            "-bios",
+            self.firmware,
+            // No -kernel/-initrd: UEFI disk boot loads from ESP
+            "-drive",
+            &format!("file={dummy_disk},if=none,id=hd0,format=raw,readonly=on"),
+            "-device",
+            "virtio-blk-pci,drive=hd0",
+            "-netdev",
+            "user,id=net0",
+            "-device",
+            "virtio-net-pci,netdev=net0",
+            "-object",
+            "tdx-guest,id=tdx",
+            // No vsock, no 9p — UKI mode uses simple device config
+        ]);
+
+        let mut machine =
+            "q35,kernel-irqchip=split,confidential-guest-support=tdx,hpet=off".to_string();
+        if self.smm {
+            machine.push_str(",smm=on");
+        } else {
+            machine.push_str(",smm=off");
+        }
+        let vopt = self
+            .versioned_options()
+            .context("Failed to get versioned options")?;
+        if vopt.pic {
+            machine.push_str(",pic=on");
+        } else {
+            machine.push_str(",pic=off");
+        }
+        cmd.args(["-machine", &machine]);
+
+        if self.hotplug_off {
+            cmd.args([
+                "-global",
+                "ICH9-LPC.acpi-pci-hotplug-with-bridge-support=off",
+            ]);
+        }
+        if let Some(pci_hole64_size) = self.pci_hole64_size {
+            cmd.args([
+                "-global",
+                &format!("q35-pcihost.pci-hole64-size=0x{:x}", pci_hole64_size),
+            ]);
+        }
+
+        let ver = vopt.version;
+        let output = cmd
+            .env(
+                "QEMU_ACPI_COMPAT_VER",
+                format!("{}.{}.{}", ver.0, ver.1, ver.2),
+            )
+            .output()
+            .context("failed to execute dstack-acpi-tables")?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            bail!("dstack-acpi-tables failed: {stderr}");
+        }
+        Ok(output.stdout)
+    }
+
+    fn create_tables_direct_kernel(&self) -> Result<Vec<u8>> {
         if self.cpu_count == 0 {
             bail!("cpuCount must be greater than 0");
         }
