@@ -654,17 +654,9 @@ mod tests {
 
     #[test]
     fn test_event_log_compression_ratio() {
-        // Simulate a large event log with repetitive data (like certificates)
-        let mut large_data = Vec::new();
-        for i in 0..100 {
-            large_data.extend_from_slice(format!(
-                r#"{{"imr":{},"event_type":1,"digest":"{}","event":"test{}","event_payload":"{}"}},"#,
-                i % 4,
-                "a".repeat(96),
-                i,
-                "deadbeef".repeat(100)
-            ).as_bytes());
-        }
+        // Simulate a reasonably large, highly repetitive event log payload.
+        // Keep it well below MAX_EVENTLOG_EXT_SIZE so decompression succeeds.
+        let large_data = vec![b'a'; (MAX_EVENTLOG_EXT_SIZE / 2) as usize];
 
         let compressed = compress_ext_value(&large_data).unwrap();
         let ratio = compressed.len() as f64 / large_data.len() as f64;
