@@ -304,6 +304,106 @@ impl<'a> Tdvf<'a> {
         ))
     }
 
+    /// RTMR[0] event log for UEFI disk boot (UKI mode).
+    ///
+    /// Differences from direct kernel boot (-kernel mode):
+    /// - EFI variables have different values (SecureBoot not enforced, empty PK/KEK/db/dbx)
+    ///   but the digest calculation is the same (measure_tdx_efi_variable with data_len=0)
+    /// - BootOrder contains 2 entries [0x0000, 0x0001] instead of 1
+    ///   Digest = SHA384(variable_data_bytes), not SHA384(UEFI_VARIABLE_DATA struct)
+    /// - Boot0001 added: UEFI Misc Device (virtio-blk disk)
+    ///   Digest = SHA384(EFI_LOAD_OPTION bytes)
+    /// - Boot0000 is the same (UiApp from OVMF)
+    /// - Second separator at the end
+    ///
+    /// Verified against TDX hardware CCEL event log.
+    pub fn rtmr0_log_uefi_disk(
+        &self,
+        machine: &Machine,
+        _bootloader_data: &[u8],
+    ) -> Result<(RtmrLog, Tables)> {
+        let td_hob_hash = self.measure_td_hob(machine.memory_size)?;
+        let cfv_image_hash = hex!(
+            "344BC51C980BA621AAA00DA3ED7436F7D6E549197DFE699515DFA2C6583D95E6412AF21C097D473155875FFD561D6790"
+        );
+        // Boot0000: UiApp from OVMF (fixed, same in both boot modes).
+        // Digest = SHA384(EFI_LOAD_OPTION variable data).
+        let boot000_hash = hex!(
+            "23ADA07F5261F12F34A0BD8E46760962D6B4D576A416F1FEA1C64BC656B1D28EACF7047AE6E967C58FD2A98BFA74C298"
+        );
+
+        let tables = machine.build_tables()?;
+        let acpi_tables_hash = measure_sha384(&tables.tables);
+        let acpi_rsdp_hash = measure_sha384(&tables.rsdp);
+        let acpi_loader_hash = measure_sha384(&tables.loader);
+
+        // BootOrder for UEFI disk boot: [0x0000, 0x0001] (2 boot entries).
+        // Digest = SHA384(variable_data_bytes), NOT SHA384(UEFI_VARIABLE_DATA struct).
+        let boot_order_data: [u8; 4] = [0x00, 0x00, 0x01, 0x00]; // LE u16: 0, 1
+        let boot_order_hash = measure_sha384(&boot_order_data);
+
+        // Boot0001: "UEFI Misc Device" at PciRoot(0x0)/Pci(0x1,0x0) — first virtio-blk.
+        // This is the EFI_LOAD_OPTION structure for the disk boot entry.
+        // The device path encodes PciRoot(0x0)/Pci(0x1,0x0)/End.
+        // Digest = SHA384(EFI_LOAD_OPTION variable data).
+        //
+        // EFI_LOAD_OPTION layout:
+        //   Attributes(4): 0x00000001 (LOAD_OPTION_ACTIVE)
+        //   FilePathListLength(2): 0x0016 (22 bytes)
+        //   Description(UTF-16LE+null): "UEFI Misc Device\0"
+        //   FilePathList: PciRoot(0x0)/Pci(0x1,0x0)/End
+        //   OptionalData: VenMedia GUID (virtio device signature)
+        let boot0001_data: Vec<u8> = {
+            let mut d = Vec::new();
+            // Attributes: LOAD_OPTION_ACTIVE
+            d.extend_from_slice(&0x00000001u32.to_le_bytes());
+            // FilePathListLength
+            d.extend_from_slice(&0x0016u16.to_le_bytes());
+            // Description: "UEFI Misc Device" in UTF-16LE + null terminator
+            for c in "UEFI Misc Device".encode_utf16() {
+                d.extend_from_slice(&c.to_le_bytes());
+            }
+            d.extend_from_slice(&[0x00, 0x00]); // null terminator
+                                                // FilePathList: PciRoot(0x0)/Pci(0x1,0x0)/End
+                                                // ACPI device path: type=0x02, subtype=0x01, length=0x0c, HID=0x0a0341d0(PNP0A03), UID=0
+            d.extend_from_slice(&[0x02, 0x01, 0x0c, 0x00]);
+            d.extend_from_slice(&0x0a0341d0u32.to_le_bytes()); // PNP0A03 (PCI root)
+            d.extend_from_slice(&0x00000000u32.to_le_bytes()); // UID=0
+                                                               // PCI device path: type=0x01, subtype=0x01, length=0x06, Function=0, Device=1
+            d.extend_from_slice(&[0x01, 0x01, 0x06, 0x00, 0x00, 0x01]);
+            // End device path: type=0x7f, subtype=0xff, length=0x04
+            d.extend_from_slice(&[0x7f, 0xff, 0x04, 0x00]);
+            // OptionalData: VenMedia GUID for virtio device signature
+            // 4e ac 08 81 11 9f 59 4d 85 0e e2 1a 52 2c 59 b2
+            d.extend_from_slice(&[
+                0x4e, 0xac, 0x08, 0x81, 0x11, 0x9f, 0x59, 0x4d, 0x85, 0x0e, 0xe2, 0x1a, 0x52, 0x2c,
+                0x59, 0xb2,
+            ]);
+            d
+        };
+        let boot0001_hash = measure_sha384(&boot0001_data);
+
+        Ok((
+            vec![
+                td_hob_hash,
+                cfv_image_hash.to_vec(),
+                measure_tdx_efi_variable("8BE4DF61-93CA-11D2-AA0D-00E098032B8C", "SecureBoot")?,
+                measure_tdx_efi_variable("8BE4DF61-93CA-11D2-AA0D-00E098032B8C", "PK")?,
+                measure_tdx_efi_variable("8BE4DF61-93CA-11D2-AA0D-00E098032B8C", "KEK")?,
+                measure_tdx_efi_variable("D719B2CB-3D3A-4596-A3BC-DAD00E67656F", "db")?,
+                measure_tdx_efi_variable("D719B2CB-3D3A-4596-A3BC-DAD00E67656F", "dbx")?,
+                measure_sha384(&[0x00, 0x00, 0x00, 0x00]), // Separator
+                acpi_loader_hash,
+                acpi_rsdp_hash,
+                acpi_tables_hash,
+                boot_order_hash,
+                boot000_hash.to_vec(),
+                boot0001_hash,
+            ],
+            tables,
+        ))
+    }
+
     fn measure_td_hob(&self, memory_size: u64) -> Result<Vec<u8>> {
         let mut memory_acceptor = MemoryAcceptor::new(0, memory_size);
         let mut td_hob = Vec::new();
