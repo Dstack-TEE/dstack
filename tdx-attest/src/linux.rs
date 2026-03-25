@@ -18,7 +18,7 @@ use std::os::unix::io::AsRawFd;
 use std::path::Path;
 use std::sync::Mutex;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use thiserror::Error;
 
@@ -52,6 +52,10 @@ const QGS_MSG_GET_QUOTE_RESP: u32 = 1;
 // QGS message version
 const QGS_MSG_VERSION_MAJOR: u16 = 1;
 const QGS_MSG_VERSION_MINOR: u16 = 0;
+
+// ConfigFS generation wait parameters
+const CONFIGFS_GEN_WAIT_TIMEOUT_SECS: u64 = 5;
+const CONFIGFS_GEN_POLL_INTERVAL_MS: u64 = 10;
 
 // ============================================================================
 // ioctl definitions for /dev/tdx_guest
@@ -431,12 +435,19 @@ fn write_inblob_with_retry(path: &str, data: &TdxReportData) -> Result<()> {
 }
 
 fn wait_for_generation_change(path: &str, current: i64) -> Result<i64> {
+    let deadline = Instant::now() + Duration::from_secs(CONFIGFS_GEN_WAIT_TIMEOUT_SECS);
+
     loop {
         let gen = read_generation(path)?;
         if gen != current {
             return Ok(gen);
         }
-        thread::sleep(Duration::from_micros(1));
+        if Instant::now() >= deadline {
+            return Err(TdxAttestError::QuoteFailure(
+                "timed out waiting for configfs generation to advance".to_string(),
+            ));
+        }
+        thread::sleep(Duration::from_millis(CONFIGFS_GEN_POLL_INTERVAL_MS));
     }
 }
 
