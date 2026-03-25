@@ -337,9 +337,10 @@ impl<'a> Tdvf<'a> {
         let acpi_rsdp_hash = measure_sha384(&tables.rsdp);
         let acpi_loader_hash = measure_sha384(&tables.loader);
 
-        // BootOrder for UEFI disk boot: [0x0000, 0x0001] (2 boot entries).
+        // BootOrder for UEFI disk boot: [0x0000, 0x0001, 0x0002] (3 boot entries).
+        // Boot0000=UiApp, Boot0001=OS disk (vda), Boot0002=data disk (vdb).
         // Digest = SHA384(variable_data_bytes), NOT SHA384(UEFI_VARIABLE_DATA struct).
-        let boot_order_data: [u8; 4] = [0x00, 0x00, 0x01, 0x00]; // LE u16: 0, 1
+        let boot_order_data: [u8; 6] = [0x00, 0x00, 0x01, 0x00, 0x02, 0x00]; // LE u16: 0, 1, 2
         let boot_order_hash = measure_sha384(&boot_order_data);
 
         // Boot0001: "UEFI Misc Device" at PciRoot(0x0)/Pci(0x1,0x0) — first virtio-blk.
@@ -383,6 +384,29 @@ impl<'a> Tdvf<'a> {
         };
         let boot0001_hash = measure_sha384(&boot0001_data);
 
+        // Boot0002: "UEFI Misc Device 2" at PciRoot(0x0)/Pci(0x2,0x0) — second virtio-blk (data disk).
+        // Same structure as Boot0001 but with Device=2 and description "UEFI Misc Device 2".
+        let boot0002_data: Vec<u8> = {
+            let mut d = Vec::new();
+            d.extend_from_slice(&0x00000001u32.to_le_bytes()); // LOAD_OPTION_ACTIVE
+            d.extend_from_slice(&0x0016u16.to_le_bytes()); // FilePathListLength
+            for c in "UEFI Misc Device 2".encode_utf16() {
+                d.extend_from_slice(&c.to_le_bytes());
+            }
+            d.extend_from_slice(&[0x00, 0x00]); // null terminator
+            d.extend_from_slice(&[0x02, 0x01, 0x0c, 0x00]); // ACPI device path
+            d.extend_from_slice(&0x0a0341d0u32.to_le_bytes()); // PNP0A03
+            d.extend_from_slice(&0x00000000u32.to_le_bytes()); // UID=0
+            d.extend_from_slice(&[0x01, 0x01, 0x06, 0x00, 0x00, 0x02]); // PCI: Device=2
+            d.extend_from_slice(&[0x7f, 0xff, 0x04, 0x00]); // End
+            d.extend_from_slice(&[
+                0x4e, 0xac, 0x08, 0x81, 0x11, 0x9f, 0x59, 0x4d, 0x85, 0x0e, 0xe2, 0x1a, 0x52, 0x2c,
+                0x59, 0xb2,
+            ]); // VenMedia GUID
+            d
+        };
+        let boot0002_hash = measure_sha384(&boot0002_data);
+
         Ok((
             vec![
                 td_hob_hash,
@@ -399,6 +423,7 @@ impl<'a> Tdvf<'a> {
                 boot_order_hash,
                 boot000_hash.to_vec(),
                 boot0001_hash,
+                boot0002_hash,
             ],
             tables,
         ))

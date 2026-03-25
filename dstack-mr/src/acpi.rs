@@ -57,6 +57,11 @@ impl Machine<'_> {
             &format!("file={dummy_disk},if=none,id=hd0,format=raw,readonly=on"),
             "-device",
             "virtio-blk-pci,drive=hd0",
+            // Second disk (data disk) — separate from OS disk for RTMR stability
+            "-drive",
+            &format!("file={dummy_disk},if=none,id=hd1,format=raw,readonly=on"),
+            "-device",
+            "virtio-blk-pci,drive=hd1",
             "-netdev",
             "user,id=net0",
             "-device",
