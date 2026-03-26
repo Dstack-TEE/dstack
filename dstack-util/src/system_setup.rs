@@ -1288,6 +1288,12 @@ impl<'a> Stage0<'a> {
         if instance_info.app_id.is_empty() {
             instance_info.app_id = truncated_compose_hash.to_vec();
         }
+        if instance_info.app_id.len() != 20 {
+            bail!(
+                "Invalid app id length: expected 20 bytes, got {}",
+                instance_info.app_id.len()
+            );
+        }
 
         let disk_reusable = !key_provider.is_none();
         if (!disk_reusable) || instance_info.instance_id_seed.is_empty() {
