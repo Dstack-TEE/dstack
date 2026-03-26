@@ -2,7 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use anyhow::{bail, Context, Result};
 use dstack_kms_rpc::{
@@ -142,19 +145,56 @@ impl RpcHandler {
         self.state.config.image.cache_dir.join("images")
     }
 
-    fn remove_cache(&self, parent_dir: &PathBuf, sub_dir: &str) -> Result<()> {
+    fn remove_cache(&self, parent_dir: &Path, sub_dir: &str) -> Result<()> {
         if sub_dir.is_empty() {
             return Ok(());
         }
         if sub_dir == "all" {
             fs::remove_dir_all(parent_dir)?;
-        } else {
-            let path = parent_dir.join(sub_dir);
-            if path.is_dir() {
-                fs::remove_dir_all(path)?;
-            } else {
-                fs::remove_file(path)?;
+
+            return Ok(());
+        }
+
+        let sub_path = Path::new(sub_dir);
+        if sub_path.is_absolute() {
+            bail!("Invalid cache path");
+        }
+
+        let mut cleaned = PathBuf::new();
+        for component in sub_path.components() {
+            use std::path::Component;
+
+            match component {
+                Component::Normal(part) => cleaned.push(part),
+                Component::CurDir => {}
+                Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+                    bail!("Invalid cache path");
+                }
             }
+        }
+
+        if cleaned.as_os_str().is_empty() {
+            // Only separators or current-dir components – nothing to do.
+            return Ok(());
+        }
+
+        let path = parent_dir.join(&cleaned);
+
+        let canonical_parent = parent_dir
+            .canonicalize()
+            .unwrap_or_else(|_| parent_dir.to_path_buf());
+        let canonical = path
+            .canonicalize()
+            .unwrap_or_else(|_| canonical_parent.join(&cleaned));
+
+        if !canonical.starts_with(&canonical_parent) {
+            bail!("Invalid cache path");
+        }
+
+        if canonical.is_dir() {
+            fs::remove_dir_all(canonical)?;
+        } else {
+            fs::remove_file(canonical)?;
         }
         Ok(())
     }
