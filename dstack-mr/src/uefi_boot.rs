@@ -111,7 +111,7 @@ fn compute_gpt_event_digest(disk_path: &str) -> Result<Vec<u8>> {
             break;
         }
         let type_guid = &data[entry_off..entry_off + 16];
-        if type_guid != &[0u8; 16] {
+        if type_guid != [0u8; 16] {
             actual_partitions.push(&data[entry_off..entry_off + entry_size]);
         }
     }
