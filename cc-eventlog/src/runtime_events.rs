@@ -64,9 +64,18 @@ impl RuntimeEvent {
             .context("failed to get event log directory")?;
         fs::create_dir_all(logfile_dir).context("failed to create event log directory")?;
 
-        let mut logfile = fs::OpenOptions::new()
-            .append(true)
-            .create(true)
+        let mut options = fs::OpenOptions::new();
+        options.append(true).create(true);
+
+        // Restrict runtime event log visibility and writability to the owner (root).
+        // This avoids other processes in the CVM tampering with or reading the log.
+        #[cfg(unix)]
+        {
+            use fs_err::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+
+        let mut logfile = options
             .open(logfile_path)
             .context("failed to open event log file")?;
 
