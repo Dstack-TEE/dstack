@@ -30,6 +30,29 @@ const BootResponseSchema = z.object({
 type BootInfo = z.infer<typeof BootInfoSchema>;
 type BootResponse = z.infer<typeof BootResponseSchema>;
 
+// authorization policy - configurable via environment variables
+// MOCK_POLICY: "allow-all" (default), "deny-kms", "deny-app", "deny-all",
+//              "allowlist-device", "allowlist-mr"
+// MOCK_ALLOWED_DEVICE_IDS: comma-separated device IDs (for allowlist-device policy)
+// MOCK_ALLOWED_MR_AGGREGATED: comma-separated MR aggregated values (for allowlist-mr policy)
+
+type MockPolicy = 'allow-all' | 'deny-kms' | 'deny-app' | 'deny-all' | 'allowlist-device' | 'allowlist-mr';
+
+function getPolicy(): MockPolicy {
+  const policy = process.env.MOCK_POLICY || 'allow-all';
+  const valid: MockPolicy[] = ['allow-all', 'deny-kms', 'deny-app', 'deny-all', 'allowlist-device', 'allowlist-mr'];
+  if (!valid.includes(policy as MockPolicy)) {
+    console.warn(`unknown MOCK_POLICY "${policy}", falling back to allow-all`);
+    return 'allow-all';
+  }
+  return policy as MockPolicy;
+}
+
+function parseList(envVar: string): Set<string> {
+  const raw = process.env[envVar] || '';
+  return new Set(raw.split(',').map(s => s.trim().toLowerCase()).filter(Boolean));
+}
+
 // mock backend class - no blockchain interaction
 class MockBackend {
   private mockGatewayAppId: string;
@@ -44,14 +67,45 @@ class MockBackend {
   }
 
   async checkBoot(bootInfo: BootInfo, isKms: boolean): Promise<BootResponse> {
-    // always return success for mock backend
-    const reason = isKms ? 'mock KMS always allowed' : 'mock app always allowed';
-    
-    return {
+    const policy = getPolicy();
+    const deny = (reason: string): BootResponse => ({
+      isAllowed: false,
+      reason,
+      gatewayAppId: '',
+    });
+    const allow = (reason: string): BootResponse => ({
       isAllowed: true,
       reason,
       gatewayAppId: this.mockGatewayAppId,
-    };
+    });
+
+    switch (policy) {
+      case 'deny-all':
+        return deny(`mock policy: deny-all`);
+      case 'deny-kms':
+        if (isKms) return deny(`mock policy: deny-kms`);
+        return allow('mock app allowed (deny-kms policy)');
+      case 'deny-app':
+        if (!isKms) return deny(`mock policy: deny-app`);
+        return allow('mock KMS allowed (deny-app policy)');
+      case 'allowlist-device': {
+        const allowed = parseList('MOCK_ALLOWED_DEVICE_IDS');
+        const deviceId = bootInfo.deviceId.toLowerCase().replace(/^0x/, '');
+        if (allowed.size === 0) return deny('mock policy: allowlist-device with empty list');
+        if (!allowed.has(deviceId)) return deny(`mock policy: device ${bootInfo.deviceId} not in allowlist`);
+        return allow(`mock policy: device ${bootInfo.deviceId} allowed`);
+      }
+      case 'allowlist-mr': {
+        const allowed = parseList('MOCK_ALLOWED_MR_AGGREGATED');
+        const mr = bootInfo.mrAggregated.toLowerCase().replace(/^0x/, '');
+        if (allowed.size === 0) return deny('mock policy: allowlist-mr with empty list');
+        if (!allowed.has(mr)) return deny(`mock policy: mrAggregated ${bootInfo.mrAggregated} not in allowlist`);
+        return allow(`mock policy: mrAggregated ${bootInfo.mrAggregated} allowed`);
+      }
+      case 'allow-all':
+      default:
+        return allow(isKms ? 'mock KMS always allowed' : 'mock app always allowed');
+    }
   }
 
   async getGatewayAppId(): Promise<string> {
@@ -85,6 +139,7 @@ app.get('/', async (c) => {
     return c.json({
       status: 'ok',
       kmsContractAddr: process.env.KMS_CONTRACT_ADDR || '0xmockcontract1234567890123456789012345678',
+      ethRpcUrl: process.env.ETH_RPC_URL || '',
       gatewayAppId: batch[0],
       chainId: batch[1],
       appAuthImplementation: batch[2], // NOTE: for backward compatibility
@@ -155,8 +210,8 @@ app.post('/bootAuth/kms',
 
 // start server
 const port = parseInt(process.env.PORT || '3000');
-console.log(`starting mock auth server on port ${port}`);
-console.log('note: this is a mock backend - all authentications will succeed');
+const policy = getPolicy();
+console.log(`starting mock auth server on port ${port} (policy: ${policy})`);
 
 export default {
   port,

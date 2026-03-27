@@ -96,9 +96,10 @@ impl OnboardRpc for OnboardHandler {
         )
         .await
         .context("Failed to onboard")?;
+        let k256_pubkey = keys.k256_key.verifying_key().to_sec1_bytes().to_vec();
         keys.store(&self.state.config)
             .context("Failed to store keys")?;
-        Ok(OnboardResponse {})
+        Ok(OnboardResponse { k256_pubkey })
     }
 
     async fn get_attestation_info(self) -> Result<AttestationInfoResponse> {
@@ -134,11 +135,26 @@ impl OnboardRpc for OnboardHandler {
             .decode_app_info_ex(false, &info.vm_config)
             .context("Failed to decode app info")?;
 
+        let (eth_rpc_url, kms_contract_address) = match self.state.config.auth_api.get_info().await
+        {
+            Ok(info) => (
+                info.eth_rpc_url.unwrap_or_default(),
+                info.kms_contract_address.unwrap_or_default(),
+            ),
+            Err(err) => {
+                tracing::warn!("failed to get auth api info: {err}");
+                (String::new(), String::new())
+            }
+        };
+
         Ok(AttestationInfoResponse {
             device_id: app_info.device_id,
             mr_aggregated: app_info.mr_aggregated.to_vec(),
             os_image_hash: app_info.os_image_hash,
             attestation_mode,
+            site_name: self.state.config.site_name.clone(),
+            eth_rpc_url,
+            kms_contract_address,
         })
     }
 

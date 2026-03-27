@@ -26,6 +26,7 @@ mandatory = false
 cert_dir = "/etc/kms/certs"
 subject_postfix = ".dstack"
 admin_token_hash = ""
+site_name = ""
 
 [core.image]
 verify = true
