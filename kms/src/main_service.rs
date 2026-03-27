@@ -149,53 +149,24 @@ impl RpcHandler {
         if sub_dir.is_empty() {
             return Ok(());
         }
+
         if sub_dir == "all" {
             fs::remove_dir_all(parent_dir)?;
-
             return Ok(());
         }
 
-        let sub_path = Path::new(sub_dir);
-        if sub_path.is_absolute() {
-            bail!("Invalid cache path");
+        if !sub_dir.chars().all(|c| c.is_ascii_hexdigit()) {
+            bail!("Invalid cache key");
         }
 
-        let mut cleaned = PathBuf::new();
-        for component in sub_path.components() {
-            use std::path::Component;
+        let path = parent_dir.join(sub_dir);
 
-            match component {
-                Component::Normal(part) => cleaned.push(part),
-                Component::CurDir => {}
-                Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
-                    bail!("Invalid cache path");
-                }
-            }
+        if path.is_dir() {
+            fs::remove_dir_all(path)?;
+        } else if path.is_file() {
+            fs::remove_file(path)?;
         }
 
-        if cleaned.as_os_str().is_empty() {
-            // Only separators or current-dir components – nothing to do.
-            return Ok(());
-        }
-
-        let path = parent_dir.join(&cleaned);
-
-        let canonical_parent = parent_dir
-            .canonicalize()
-            .unwrap_or_else(|_| parent_dir.to_path_buf());
-        let canonical = path
-            .canonicalize()
-            .unwrap_or_else(|_| canonical_parent.join(&cleaned));
-
-        if !canonical.starts_with(&canonical_parent) {
-            bail!("Invalid cache path");
-        }
-
-        if canonical.is_dir() {
-            fs::remove_dir_all(canonical)?;
-        } else {
-            fs::remove_file(canonical)?;
-        }
         Ok(())
     }
 
