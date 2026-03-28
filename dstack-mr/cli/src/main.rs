@@ -81,6 +81,20 @@ struct MachineConfig {
     /// Output JSON
     #[arg(long)]
     json: bool,
+
+    // --- UEFI disk boot (UKI mode) ---
+    /// Path to UKI EFI binary. When set, uses UEFI disk boot measurement path
+    /// instead of -kernel mode. Boot chain: OVMF → systemd-boot → UKI → vmlinuz.
+    #[arg(long)]
+    uki: Option<PathBuf>,
+
+    /// Path to systemd-boot EFI binary (BOOTX64.EFI). Required with --uki.
+    #[arg(long)]
+    bootloader: Option<PathBuf>,
+
+    /// Path to raw disk image (for GPT event measurement). Required with --uki.
+    #[arg(long)]
+    disk: Option<PathBuf>,
 }
 
 fn main() -> Result<()> {
@@ -97,7 +111,18 @@ fn main() -> Result<()> {
             let firmware_path = parent_dir.join(&image_info.bios).display().to_string();
             let kernel_path = parent_dir.join(&image_info.kernel).display().to_string();
             let initrd_path = parent_dir.join(&image_info.initrd).display().to_string();
-            let cmdline = image_info.cmdline + " initrd=initrd";
+            // In -kernel mode, QEMU appends " initrd=initrd" to cmdline.
+            // In UKI mode, cmdline is embedded in the UKI as-is (no append).
+            let cmdline = if config.uki.is_some() {
+                image_info.cmdline
+            } else {
+                image_info.cmdline + " initrd=initrd"
+            };
+
+            // Resolve UKI-related paths
+            let uki_path = config.uki.as_ref().map(|p| p.display().to_string());
+            let bootloader_path = config.bootloader.as_ref().map(|p| p.display().to_string());
+            let disk_path = config.disk.as_ref().map(|p| p.display().to_string());
 
             let machine = Machine::builder()
                 .cpu_count(config.cpu)
@@ -116,6 +141,9 @@ fn main() -> Result<()> {
                 .hotplug_off(config.hotplug_off)
                 .root_verity(config.root_verity)
                 .maybe_qemu_version(config.qemu_version.clone())
+                .maybe_uki(uki_path.as_deref())
+                .maybe_bootloader(bootloader_path.as_deref())
+                .maybe_disk(disk_path.as_deref())
                 .build();
 
             let measurements = machine
