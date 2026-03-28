@@ -188,7 +188,7 @@ rsa = "0.9"
 ring = "0.17.14"
 rustls = "0.23.23"
 rustls-pki-types = "1.13.1"
-rustls-webpki = "0.103.8"
+rustls-webpki = "0.103.10"
 schnorrkel = "0.11.4"
 sha2 = { version = "0.10.8", default-features = false }
 sha3 = "0.10.8"
