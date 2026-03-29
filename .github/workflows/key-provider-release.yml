@@ -1,0 +1,59 @@
+# SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+name: Key Provider Release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'key-provider-v*'
+
+permissions:
+  attestations: write
+  id-token: write
+  contents: write
+  packages: write
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Parse version from tag
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/key-provider-v}
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          echo "Parsed version: $VERSION"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push Docker image
+        id: build-and-push
+        uses: docker/build-push-action@v5
+        with:
+          context: key-provider-build
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}/gramine-sealing-key-provider:${{ env.VERSION }}
+            ghcr.io/${{ github.repository }}/gramine-sealing-key-provider:latest
+          platforms: linux/amd64
+          provenance: false
+
+      - name: Generate artifact attestation
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-name: "ghcr.io/${{ github.repository }}/gramine-sealing-key-provider"
+          subject-digest: ${{ steps.build-and-push.outputs.digest }}
+          push-to-registry: true
