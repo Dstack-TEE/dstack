@@ -1,0 +1,22 @@
+[Unit]
+Description=Gramine Sealing Key Provider
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+ExecStartPre=-/usr/bin/docker rm -f gramine-sealing-key-provider
+ExecStart=/usr/bin/docker run --rm \
+    --name gramine-sealing-key-provider \
+    --privileged \
+    --device /dev/sgx_enclave:/dev/sgx_enclave \
+    --device /dev/sgx_provision:/dev/sgx_provision \
+    -v /etc/dstack-key-provider/sgx_default_qcnl.conf:/etc/sgx_default_qcnl.conf \
+    -p 127.0.0.1:3443:3443 \
+    ghcr.io/dstack-tee/dstack/gramine-sealing-key-provider:latest
+ExecStop=/usr/bin/docker stop gramine-sealing-key-provider
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
