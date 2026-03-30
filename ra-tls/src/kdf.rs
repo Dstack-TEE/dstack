@@ -116,17 +116,33 @@ mod tests {
     }
 
     #[test]
-    fn test_derive_dh_secret_compatible_with_previous_encoding() {
-        let root_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
+    fn test_derive_dh_secret_stable_output() {
+        // Fixed test vector generated from the original rcgen-based implementation.
+        // If this test fails after a dependency upgrade, the PKCS#8 encoding has
+        // changed and deployed secrets would be silently broken.
+        // Do NOT update the expected value — fix the encoding instead.
+        let root_der = hex::decode(
+            "308187020100301306072a8648ce3d020106082a8648ce3d030107046d306b02\
+             01010420f57527cea4ab7ffb49af99b158cdc0e3ec06398f528349ea236b7d2a\
+             fe19cec1a1440342000491f50522407ce29dce3ed7d31a15d80c1c42f13a2355\
+             2d2b33a0ce09ee11e47bce95936f3e7f80d195f879e28e1b144ef37ac9ab8e36\
+             a690cbf930b775897b27",
+        )
+        .unwrap();
+        let expected_secret = "663afd58820be8ad645f9c035e93199d114ab16f738db62393bc1d7d623e8813";
+
+        let root_key = KeyPair::from_der_and_sign_algo(
+            &PrivateKeyDer::try_from(root_der.as_slice()).unwrap(),
+            &PKCS_ECDSA_P256_SHA256,
+        )
+        .unwrap();
         let context = [b"context one".as_ref(), b"context two".as_ref()];
+        let secret = derive_dh_secret(&root_key, &context).unwrap();
 
-        // New implementation under test.
-        let new_secret = derive_dh_secret(&root_key, &context).unwrap();
-
-        // Previous behaviour: derive P-256 key pair with HKDF, then hash PKCS#8 DER.
-        let old_key_pair = derive_p256_key_pair(&root_key, &context).unwrap();
-        let old_secret = sha256(old_key_pair.serialized_der());
-
-        assert_eq!(new_secret, old_secret);
+        assert_eq!(
+            hex::encode(secret),
+            expected_secret,
+            "derive_dh_secret output changed — this would break existing deployments"
+        );
     }
 }
