@@ -65,29 +65,30 @@ fn sha256(data: &[u8]) -> [u8; 32] {
     hasher.finalize().into()
 }
 
-/// Derives a X25519 secret from a given key pair.
+/// Returns the canonical PKCS#8 DER encoding of a P-256 key pair.
 ///
-/// This derives a P-256 scalar from `from` via HKDF, encodes it as PKCS#8
-/// DER using the p256 crate, and hashes the result with SHA-256.
+/// This uses `p256::SecretKey::to_pkcs8_der()` directly instead of
+/// `rcgen::KeyPair::serialized_der()` to decouple the encoding from the
+/// rcgen library version. The p256 crate produces canonical ASN.1 DER which
+/// is deterministic and identical to rcgen's current output.
 ///
-/// The p256 crate's PKCS#8 encoding is deterministic (canonical ASN.1 DER)
-/// and produces output identical to the previous rcgen-based implementation.
-pub fn derive_dh_secret(from: &KeyPair, context_data: &[&[u8]]) -> Result<[u8; 32]> {
-    let der_bytes = from.serialized_der();
-    let sk =
-        p256::SecretKey::from_pkcs8_der(der_bytes).context("failed to decode root secret key")?;
-    let sk_bytes = sk.as_scalar_primitive().to_bytes();
-
-    let derived_sk_bytes = derive_key(sk_bytes.as_slice(), context_data, 32)
-        .or(Err(anyhow!("failed to derive key")))?;
-
-    let derived_sk = p256::SecretKey::from_slice(&derived_sk_bytes)
-        .context("failed to decode derived secret key")?;
-    let pkcs8_der = derived_sk
+/// This matters because `derive_dh_secret` hashes the PKCS#8 DER bytes
+/// (including the public key) to produce a secret — a historical design
+/// choice that we must preserve for backward compatibility.
+fn p256_keypair_to_pkcs8_der(key_pair: &KeyPair) -> Result<Vec<u8>> {
+    let sk = p256::SecretKey::from_pkcs8_der(key_pair.serialized_der())
+        .context("failed to decode secret key")?;
+    let pkcs8_der = sk
         .to_pkcs8_der()
-        .context("failed to encode derived secret key")?;
+        .context("failed to encode secret key to PKCS#8 DER")?;
+    Ok(pkcs8_der.as_bytes().to_vec())
+}
 
-    Ok(sha256(pkcs8_der.as_bytes()))
+/// Derives a X25519 secret from a given key pair.
+pub fn derive_dh_secret(from: &KeyPair, context_data: &[&[u8]]) -> Result<[u8; 32]> {
+    let key_pair = derive_p256_key_pair(from, context_data)?;
+    let derived_secret = sha256(&p256_keypair_to_pkcs8_der(&key_pair)?);
+    Ok(derived_secret)
 }
 
 #[cfg(test)]
