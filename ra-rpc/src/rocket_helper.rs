@@ -3,6 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::convert::Infallible;
+use std::fmt;
+use std::io;
+use std::path::PathBuf;
+use std::pin::Pin;
+use std::task::{Context as TaskContext, Poll};
 
 #[cfg(all(feature = "rocket", feature = "openapi"))]
 use crate::openapi::{OpenApiDoc, RenderedDoc};
@@ -13,6 +18,12 @@ use std::{borrow::Cow, sync::Arc};
 
 use anyhow::{Context, Result};
 use ra_tls::traits::CertExt;
+#[cfg(unix)]
+use rocket::listener::unix::UnixStream;
+#[cfg(unix)]
+use rocket::listener::{Connection, Listener};
+#[cfg(unix)]
+use rocket::tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use rocket::{
     data::{ByteUnit, Data, Limits, ToByteUnit},
     http::{uri::Origin, ContentType, Method, Status},
@@ -25,7 +36,7 @@ use rocket::{
 use rocket_vsock_listener::VsockEndpoint;
 use tracing::warn;
 
-use crate::{encode_error, CallContext, RemoteEndpoint, RpcCall};
+use crate::{encode_error, CallContext, RemoteEndpoint, RpcCall, UnixPeerCred};
 
 pub struct RpcResponse {
     is_json: bool,
@@ -46,6 +57,141 @@ impl<'r> Responder<'r, 'static> for RpcResponse {
             .header(content_type)
             .ok()
     }
+}
+
+#[cfg(unix)]
+#[derive(Debug, Clone)]
+struct UnixPeerEndpoint {
+    path: PathBuf,
+    peer: Option<UnixPeerCred>,
+}
+
+#[cfg(unix)]
+impl fmt::Display for UnixPeerEndpoint {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "unix:{}", self.path.display())
+    }
+}
+
+#[cfg(unix)]
+pub struct UnixPeerCredListener<L> {
+    inner: L,
+}
+
+#[cfg(unix)]
+impl<L> UnixPeerCredListener<L> {
+    pub fn new(inner: L) -> Self {
+        Self { inner }
+    }
+}
+
+#[cfg(unix)]
+pub struct UnixPeerCredConnection {
+    stream: UnixStream,
+    endpoint: rocket::listener::Endpoint,
+}
+
+#[cfg(unix)]
+impl AsyncRead for UnixPeerCredConnection {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut TaskContext<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.stream).poll_read(cx, buf)
+    }
+}
+
+#[cfg(unix)]
+impl AsyncWrite for UnixPeerCredConnection {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut TaskContext<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.stream).poll_write(cx, buf)
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.stream).poll_flush(cx)
+    }
+
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.stream).poll_shutdown(cx)
+    }
+
+    fn is_write_vectored(&self) -> bool {
+        self.stream.is_write_vectored()
+    }
+
+    fn poll_write_vectored(
+        mut self: Pin<&mut Self>,
+        cx: &mut TaskContext<'_>,
+        bufs: &[io::IoSlice<'_>],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.stream).poll_write_vectored(cx, bufs)
+    }
+}
+
+#[cfg(unix)]
+impl Connection for UnixPeerCredConnection {
+    fn endpoint(&self) -> io::Result<rocket::listener::Endpoint> {
+        Ok(self.endpoint.clone())
+    }
+}
+
+#[cfg(unix)]
+impl<L> Listener for UnixPeerCredListener<L>
+where
+    L: Listener<Accept = UnixStream, Connection = UnixStream>,
+{
+    type Accept = UnixStream;
+    type Connection = UnixPeerCredConnection;
+
+    async fn accept(&self) -> io::Result<Self::Accept> {
+        self.inner.accept().await
+    }
+
+    async fn connect(&self, accept: Self::Accept) -> io::Result<Self::Connection> {
+        let path = accept
+            .local_addr()?
+            .as_pathname()
+            .map(PathBuf::from)
+            .or_else(|| {
+                self.inner
+                    .endpoint()
+                    .ok()
+                    .and_then(|e| e.unix().map(PathBuf::from))
+            });
+
+        let endpoint = match path {
+            Some(path) => rocket::listener::Endpoint::new(UnixPeerEndpoint {
+                path,
+                peer: unix_peer_cred(&accept),
+            }),
+            None => accept.local_addr()?.try_into()?,
+        };
+
+        Ok(UnixPeerCredConnection {
+            stream: accept,
+            endpoint,
+        })
+    }
+
+    fn endpoint(&self) -> io::Result<rocket::listener::Endpoint> {
+        self.inner.endpoint()
+    }
+}
+
+#[cfg(unix)]
+fn unix_peer_cred(stream: &UnixStream) -> Option<UnixPeerCred> {
+    let cred = stream.peer_cred().ok()?;
+    let pid = cred.pid()?;
+    Some(UnixPeerCred {
+        pid: pid as u64,
+        uid: cred.uid() as u64,
+        gid: cred.gid() as u64,
+    })
 }
 
 #[derive(Debug, Clone)]
@@ -266,6 +412,27 @@ impl From<Endpoint> for RemoteEndpoint {
             Endpoint::Tcp(addr) => RemoteEndpoint::Tcp(addr),
             Endpoint::Quic(addr) => RemoteEndpoint::Quic(addr),
             Endpoint::Unix(path) => RemoteEndpoint::Unix { path, peer: None },
+            #[cfg(unix)]
+            Endpoint::Custom(endpoint) => {
+                if let Some(endpoint) =
+                    (endpoint.as_ref() as &dyn std::any::Any).downcast_ref::<UnixPeerEndpoint>()
+                {
+                    RemoteEndpoint::Unix {
+                        path: endpoint.path.clone(),
+                        peer: endpoint.peer.clone(),
+                    }
+                } else {
+                    let address = endpoint.to_string();
+                    match address.parse::<VsockEndpoint>() {
+                        Ok(addr) => RemoteEndpoint::Vsock {
+                            cid: addr.cid,
+                            port: addr.port,
+                        },
+                        Err(_) => RemoteEndpoint::Other(address),
+                    }
+                }
+            }
+            Endpoint::Tls(inner, _) => RemoteEndpoint::from((*inner).clone()),
             _ => {
                 let address = endpoint.to_string();
                 match address.parse::<VsockEndpoint>() {
@@ -277,6 +444,74 @@ impl From<Endpoint> for RemoteEndpoint {
                 }
             }
         }
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use rocket::listener::unix::UnixListener;
+    use rocket::tokio;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn custom_unix_endpoint_maps_to_remote_endpoint() {
+        let endpoint = Endpoint::new(UnixPeerEndpoint {
+            path: PathBuf::from("/tmp/test.sock"),
+            peer: Some(UnixPeerCred {
+                pid: 1,
+                uid: 2,
+                gid: 3,
+            }),
+        });
+
+        let remote = RemoteEndpoint::from(endpoint);
+        assert_eq!(
+            remote,
+            RemoteEndpoint::Unix {
+                path: PathBuf::from("/tmp/test.sock"),
+                peer: Some(UnixPeerCred {
+                    pid: 1,
+                    uid: 2,
+                    gid: 3,
+                }),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn unix_peer_cred_listener_populates_peer() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("ra-rpc-peer-{unique}.sock"));
+
+        let listener = UnixListener::bind(&path, false).await.unwrap();
+        let listener = UnixPeerCredListener::new(listener);
+
+        let client = tokio::spawn({
+            let path = path.clone();
+            async move { tokio::net::UnixStream::connect(path).await }
+        });
+        let accepted = listener.accept().await.unwrap();
+        let _client = client.await.unwrap().unwrap();
+        let conn = listener.connect(accepted).await.unwrap();
+
+        let remote = RemoteEndpoint::from(conn.endpoint().unwrap());
+        match remote {
+            RemoteEndpoint::Unix {
+                path: got_path,
+                peer,
+            } => {
+                assert_eq!(got_path, path);
+                let peer = peer.expect("expected unix peer credentials");
+                assert_eq!(peer.pid, std::process::id() as u64);
+            }
+            other => panic!("unexpected remote endpoint: {other:?}"),
+        }
+
+        let _ = std::fs::remove_file(path);
     }
 }
 

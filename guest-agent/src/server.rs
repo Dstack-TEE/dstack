@@ -10,10 +10,12 @@ use crate::http_routes;
 use crate::rpc_service::{AppState, ExternalRpcHandler, InternalRpcHandler, InternalRpcHandlerV0};
 use crate::socket_activation::{ActivatedSockets, ActivatedUnixListener};
 use anyhow::{anyhow, Context, Result};
+#[cfg(unix)]
+use ra_rpc::rocket_helper::UnixPeerCredListener;
 use rocket::{
     fairing::AdHoc,
     figment::Figment,
-    listener::{Bind, DefaultListener},
+    listener::{unix::UnixListener, Bind, DefaultListener},
 };
 use rocket_vsock_listener::VsockListener;
 use sd_notify::{notify as sd_notify, NotifyState};
@@ -43,18 +45,20 @@ async fn run_internal_v0(
 
     if let Some(std_listener) = activated_socket {
         info!("Using systemd-activated socket for tappd.sock");
-        let listener = ActivatedUnixListener::new(std_listener)?;
+        let listener = UnixPeerCredListener::new(ActivatedUnixListener::new(std_listener)?);
         sock_ready_tx.send(()).ok();
         ignite
             .launch_on(listener)
             .await
             .map_err(|err: rocket::Error| anyhow!(err.to_string()))?;
     } else {
-        let endpoint = DefaultListener::bind_endpoint(&ignite)
+        let endpoint = UnixListener::bind_endpoint(&ignite)
             .map_err(|err| anyhow!("Failed to get endpoint: {err}"))?;
-        let listener = DefaultListener::bind(&ignite)
-            .await
-            .map_err(|err| anyhow!("Failed to bind on {endpoint}: {err}"))?;
+        let listener = UnixPeerCredListener::new(
+            <UnixListener as Bind>::bind(&ignite)
+                .await
+                .map_err(|err| anyhow!("Failed to bind on {endpoint}: {err}"))?,
+        );
         sock_ready_tx.send(()).ok();
         ignite
             .launch_on(listener)
@@ -80,18 +84,20 @@ async fn run_internal(
 
     if let Some(std_listener) = activated_socket {
         info!("Using systemd-activated socket for dstack.sock");
-        let listener = ActivatedUnixListener::new(std_listener)?;
+        let listener = UnixPeerCredListener::new(ActivatedUnixListener::new(std_listener)?);
         sock_ready_tx.send(()).ok();
         ignite
             .launch_on(listener)
             .await
             .map_err(|err: rocket::Error| anyhow!(err.to_string()))?;
     } else {
-        let endpoint = DefaultListener::bind_endpoint(&ignite)
+        let endpoint = UnixListener::bind_endpoint(&ignite)
             .map_err(|err| anyhow!("Failed to get endpoint: {err}"))?;
-        let listener = DefaultListener::bind(&ignite)
-            .await
-            .map_err(|err| anyhow!("Failed to bind on {endpoint}: {err}"))?;
+        let listener = UnixPeerCredListener::new(
+            <UnixListener as Bind>::bind(&ignite)
+                .await
+                .map_err(|err| anyhow!("Failed to bind on {endpoint}: {err}"))?,
+        );
         sock_ready_tx.send(()).ok();
         ignite
             .launch_on(listener)
