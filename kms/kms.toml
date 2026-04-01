@@ -54,7 +54,7 @@ port = 8000
 # Omit this section to skip measurement recomputation (dev / non-AMD deployments).
 #
 # ovmf_path is OPTIONAL when the VM sends ovmf_sections in the request (i.e.
-# the launcher ran extract_ovmf_info.py before starting the VM).  In that case
+# the launcher extracted OVMF metadata before starting the VM).  In that case
 # the KMS does not need the OVMF file on disk at all.
 # ovmf_path is needed only as a fallback for older VMs that do not send sections.
 #

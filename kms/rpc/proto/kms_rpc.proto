@@ -141,7 +141,7 @@ message ClearImageCacheRequest {
 }
 
 // One OVMF SEV metadata section descriptor.
-// Extracted from the OVMF binary by extract_ovmf_info.py before VM launch
+// Extracted from the OVMF binary by the launcher before VM launch
 // and sent inside the VM so the KMS does not need the OVMF file.
 // section_type values: 1=SNP_SEC_MEMORY, 2=SNP_SECRETS, 3=CPUID,
 //                      4=SVSM_CAA, 0x10=SNP_KERNEL_HASHES.
@@ -196,8 +196,7 @@ message GetAppKeyAmdRequest {
   // Optional: SHA-256 of docker-files.tar (hex) for docker_additional_files_hash cmdline param.
   string docker_files_hash = 12;
 
-  // OVMF-derived metadata, extracted by extract_ovmf_info.py on the launcher
-  // host before VM launch and written into the VM's guest_config virtfs mount.
+  // OVMF-derived metadata extracted by the launcher before VM launch.
   // When ovmf_sections is non-empty the KMS does NOT need an OVMF file on disk.
   // Any lie about these values causes MEASUREMENT mismatch → request rejected.
 

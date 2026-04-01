@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // AMD SEV-SNP attestation verification.
-// Adapted from secret-vm-kms/src/amd_attest.rs.
 
 use anyhow::{bail, Context, Result};
 use base64::engine::general_purpose::STANDARD;
@@ -612,9 +611,9 @@ fn build_vmsa_page(eip: u32, vcpu_sig: u32, sev_features: u64) -> Box<[u8; 4096]
 
 /// One OVMF SEV metadata section descriptor supplied from the VM request.
 ///
-/// Extracted by `extract_ovmf_info.py` on the launcher host before VM launch
-/// and passed inside the VM via the guest_config virtfs mount.  Any lie about
-/// these values causes MEASUREMENT mismatch ⇒ the KMS rejects the request.
+/// The launcher extracts these values from the OVMF binary before VM launch
+/// and passes them to the guest.  Any lie about these values causes MEASUREMENT
+/// mismatch ⇒ the KMS rejects the request.
 pub struct OvmfSectionParam {
     pub gpa: u32,
     pub size: u32,
@@ -628,9 +627,9 @@ pub struct OvmfSectionParam {
 /// Two code paths:
 ///
 /// 1. **VM-provided OVMF metadata** (`ovmf_sections` is non-empty):  
-///    The launcher host ran `extract_ovmf_info.py` on the OVMF binary, stored
-///    the results in the guest_config virtfs, and the VM included them in the
-///    request.  The KMS never needs the OVMF file on disk.  `ovmf_hash` *must*
+///    The launcher extracted OVMF metadata before VM launch and the guest
+///    included it in the request.
+///    The KMS never needs the OVMF file on disk.  `ovmf_hash` *must*
 ///    be provided in this case (it is the GCTX seed after processing OVMF pages).
 ///
 /// 2. **OVMF file on KMS disk** (`ovmf_sections` is empty):  
@@ -714,7 +713,7 @@ pub fn compute_expected_measurement(
         let path = cfg.ovmf_path.as_deref().ok_or_else(|| {
             anyhow::anyhow!(
                 "SNP MEASUREMENT verification requires either ovmf_sections in the \
-                 request (extracted by extract_ovmf_info.py) or ovmf_path \
+                 request or ovmf_path \
                  configured in [core.sev_snp] on the KMS host"
             )
         })?;
@@ -788,7 +787,7 @@ pub fn compute_expected_measurement(
 //   [OVMF_PATH=/path/to/ovmf.fd] \
 //   cargo test -p dstack-kms -- --ignored amd::compute_measurement_from_fingerprints --nocapture
 //
-// FINGERPRINTS must be the JSON written by start_vm_{dev,prod}_sev.sh, e.g.:
+// FINGERPRINTS must be a JSON file with the following fields, e.g.:
 //   {
 //     "kernel_hash":            "<64 hex>",
 //     "initrd_hash":            "<64 hex>",

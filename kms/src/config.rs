@@ -39,8 +39,8 @@ pub(crate) struct ImageConfig {
 pub(crate) struct SevSnpMeasureConfig {
     /// Path to the AMD SEV-SNP OVMF binary (ovmf.fd) used for this VM image.
     ///
-    /// **Optional** when the VM sends `ovmf_sections` in the request (extracted
-    /// by `extract_ovmf_info.py` on the launcher host before launch).  In that
+    /// **Optional** when the VM sends `ovmf_sections` in the request (metadata
+    /// extracted by the launcher from the OVMF binary before launch).  In that
     /// case the KMS never reads the OVMF file and this field may be omitted.
     ///
     /// Required only as a fallback for older VM images that do not send
