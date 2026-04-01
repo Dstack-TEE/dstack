@@ -23,11 +23,30 @@ pub mod client;
 pub mod openapi;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnixPeerCred {
+    /// Peer process ID (platform-independent representation)
+    pub pid: u64,
+    /// Peer user ID
+    pub uid: u64,
+    /// Peer group ID
+    pub gid: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RemoteEndpoint {
     Tcp(SocketAddr),
     Quic(SocketAddr),
-    Unix(PathBuf),
-    Vsock { cid: u32, port: u32 },
+    /// Unix domain socket endpoint.
+    ///
+    /// When available, `peer` can carry SO_PEERCRED (pid/uid/gid) of the caller.
+    Unix {
+        path: PathBuf,
+        peer: Option<UnixPeerCred>,
+    },
+    Vsock {
+        cid: u32,
+        port: u32,
+    },
     Other(String),
 }
 
