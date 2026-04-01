@@ -5,7 +5,7 @@
 use std::convert::Infallible;
 
 #[cfg(all(feature = "rocket", feature = "openapi"))]
-use crate::openapi::{OpenApiDoc, RenderedDoc};
+    use crate::openapi::{OpenApiDoc, RenderedDoc};
 #[cfg(all(feature = "rocket", feature = "openapi"))]
 use rocket::response::content::{RawHtml, RawJson};
 #[cfg(all(feature = "rocket", feature = "openapi"))]
@@ -265,7 +265,10 @@ impl From<Endpoint> for RemoteEndpoint {
         match endpoint {
             Endpoint::Tcp(addr) => RemoteEndpoint::Tcp(addr),
             Endpoint::Quic(addr) => RemoteEndpoint::Quic(addr),
-            Endpoint::Unix(path) => RemoteEndpoint::Unix(path),
+            Endpoint::Unix(path) => RemoteEndpoint::Unix {
+                path,
+                peer: None,
+            },
             _ => {
                 let address = endpoint.to_string();
                 match address.parse::<VsockEndpoint>() {
