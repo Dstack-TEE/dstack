@@ -39,8 +39,14 @@ pub enum RemoteEndpoint {
     /// Unix domain socket endpoint.
     ///
     /// When available, `peer` can carry SO_PEERCRED (pid/uid/gid) of the caller.
-    Unix { path: PathBuf, peer: Option<UnixPeerCred> },
-    Vsock { cid: u32, port: u32 },
+    Unix {
+        path: PathBuf,
+        peer: Option<UnixPeerCred>,
+    },
+    Vsock {
+        cid: u32,
+        port: u32,
+    },
     Other(String),
 }
 
