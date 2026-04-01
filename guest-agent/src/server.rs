@@ -14,7 +14,7 @@ use ra_rpc::rocket_helper::UnixPeerCredListener;
 use rocket::{
     fairing::AdHoc,
     figment::Figment,
-    listener::{unix::UnixListener, Bind, DefaultListener},
+    listener::{unix::UnixListener, Bind, DefaultListener, Endpoint},
 };
 use rocket_vsock_listener::VsockListener;
 use sd_notify::{notify as sd_notify, NotifyState};
@@ -51,18 +51,31 @@ async fn run_internal_v0(
             .await
             .map_err(|err: rocket::Error| anyhow!(err.to_string()))?;
     } else {
-        let endpoint = UnixListener::bind_endpoint(&ignite)
+        let endpoint = DefaultListener::bind_endpoint(&ignite)
             .map_err(|err| anyhow!("Failed to get endpoint: {err}"))?;
-        let listener = UnixPeerCredListener::new(
-            <UnixListener as Bind>::bind(&ignite)
-                .await
-                .map_err(|err| anyhow!("Failed to bind on {endpoint}: {err}"))?,
-        );
         sock_ready_tx.send(()).ok();
-        ignite
-            .launch_on(listener)
-            .await
-            .map_err(|err| anyhow!(err.to_string()))?;
+        match endpoint {
+            Endpoint::Unix(_) => {
+                let listener = UnixPeerCredListener::new(
+                    <UnixListener as Bind>::bind(&ignite)
+                        .await
+                        .map_err(|err| anyhow!("Failed to bind on {endpoint}: {err}"))?,
+                );
+                ignite
+                    .launch_on(listener)
+                    .await
+                    .map_err(|err| anyhow!(err.to_string()))?;
+            }
+            _ => {
+                let listener = DefaultListener::bind(&ignite)
+                    .await
+                    .map_err(|err| anyhow!("Failed to bind on {endpoint}: {err}"))?;
+                ignite
+                    .launch_on(listener)
+                    .await
+                    .map_err(|err| anyhow!(err.to_string()))?;
+            }
+        }
     }
     Ok(())
 }
@@ -90,18 +103,31 @@ async fn run_internal(
             .await
             .map_err(|err: rocket::Error| anyhow!(err.to_string()))?;
     } else {
-        let endpoint = UnixListener::bind_endpoint(&ignite)
+        let endpoint = DefaultListener::bind_endpoint(&ignite)
             .map_err(|err| anyhow!("Failed to get endpoint: {err}"))?;
-        let listener = UnixPeerCredListener::new(
-            <UnixListener as Bind>::bind(&ignite)
-                .await
-                .map_err(|err| anyhow!("Failed to bind on {endpoint}: {err}"))?,
-        );
         sock_ready_tx.send(()).ok();
-        ignite
-            .launch_on(listener)
-            .await
-            .map_err(|err| anyhow!(err.to_string()))?;
+        match endpoint {
+            Endpoint::Unix(_) => {
+                let listener = UnixPeerCredListener::new(
+                    <UnixListener as Bind>::bind(&ignite)
+                        .await
+                        .map_err(|err| anyhow!("Failed to bind on {endpoint}: {err}"))?,
+                );
+                ignite
+                    .launch_on(listener)
+                    .await
+                    .map_err(|err| anyhow!(err.to_string()))?;
+            }
+            _ => {
+                let listener = DefaultListener::bind(&ignite)
+                    .await
+                    .map_err(|err| anyhow!("Failed to bind on {endpoint}: {err}"))?;
+                ignite
+                    .launch_on(listener)
+                    .await
+                    .map_err(|err| anyhow!(err.to_string()))?;
+            }
+        }
     }
     Ok(())
 }
