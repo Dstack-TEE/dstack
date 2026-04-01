@@ -18,11 +18,8 @@ use std::{borrow::Cow, sync::Arc};
 
 use anyhow::{Context, Result};
 use ra_tls::traits::CertExt;
-#[cfg(unix)]
 use rocket::listener::unix::UnixStream;
-#[cfg(unix)]
 use rocket::listener::{Connection, Listener};
-#[cfg(unix)]
 use rocket::tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use rocket::{
     data::{ByteUnit, Data, Limits, ToByteUnit},
@@ -59,39 +56,33 @@ impl<'r> Responder<'r, 'static> for RpcResponse {
     }
 }
 
-#[cfg(unix)]
 #[derive(Debug, Clone)]
 struct UnixPeerEndpoint {
     path: PathBuf,
     peer: Option<UnixPeerCred>,
 }
 
-#[cfg(unix)]
 impl fmt::Display for UnixPeerEndpoint {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "unix:{}", self.path.display())
     }
 }
 
-#[cfg(unix)]
 pub struct UnixPeerCredListener<L> {
     inner: L,
 }
 
-#[cfg(unix)]
 impl<L> UnixPeerCredListener<L> {
     pub fn new(inner: L) -> Self {
         Self { inner }
     }
 }
 
-#[cfg(unix)]
 pub struct UnixPeerCredConnection {
     stream: UnixStream,
     endpoint: rocket::listener::Endpoint,
 }
 
-#[cfg(unix)]
 impl AsyncRead for UnixPeerCredConnection {
     fn poll_read(
         mut self: Pin<&mut Self>,
@@ -102,7 +93,6 @@ impl AsyncRead for UnixPeerCredConnection {
     }
 }
 
-#[cfg(unix)]
 impl AsyncWrite for UnixPeerCredConnection {
     fn poll_write(
         mut self: Pin<&mut Self>,
@@ -133,14 +123,12 @@ impl AsyncWrite for UnixPeerCredConnection {
     }
 }
 
-#[cfg(unix)]
 impl Connection for UnixPeerCredConnection {
     fn endpoint(&self) -> io::Result<rocket::listener::Endpoint> {
         Ok(self.endpoint.clone())
     }
 }
 
-#[cfg(unix)]
 impl<L> Listener for UnixPeerCredListener<L>
 where
     L: Listener<Accept = UnixStream, Connection = UnixStream>,
@@ -183,7 +171,6 @@ where
     }
 }
 
-#[cfg(unix)]
 fn unix_peer_cred(stream: &UnixStream) -> Option<UnixPeerCred> {
     let cred = stream.peer_cred().ok()?;
     let pid = cred.pid()?;
@@ -412,7 +399,6 @@ impl From<Endpoint> for RemoteEndpoint {
             Endpoint::Tcp(addr) => RemoteEndpoint::Tcp(addr),
             Endpoint::Quic(addr) => RemoteEndpoint::Quic(addr),
             Endpoint::Unix(path) => RemoteEndpoint::Unix { path, peer: None },
-            #[cfg(unix)]
             Endpoint::Custom(endpoint) => {
                 if let Some(endpoint) =
                     (endpoint.as_ref() as &dyn std::any::Any).downcast_ref::<UnixPeerEndpoint>()
@@ -447,7 +433,7 @@ impl From<Endpoint> for RemoteEndpoint {
     }
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod tests {
     use super::*;
     use rocket::listener::unix::UnixListener;

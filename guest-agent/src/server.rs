@@ -10,7 +10,6 @@ use crate::http_routes;
 use crate::rpc_service::{AppState, ExternalRpcHandler, InternalRpcHandler, InternalRpcHandlerV0};
 use crate::socket_activation::{ActivatedSockets, ActivatedUnixListener};
 use anyhow::{anyhow, Context, Result};
-#[cfg(unix)]
 use ra_rpc::rocket_helper::UnixPeerCredListener;
 use rocket::{
     fairing::AdHoc,
