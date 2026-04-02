@@ -397,7 +397,7 @@ impl KmsRpc for RpcHandler {
         let attestation = csr
             .attestation
             .clone()
-            .into_inner()
+            .into_v1()
             .verify_with_ra_pubkey(&csr.pubkey, self.state.config.pccs_url.as_deref())
             .await
             .context("Quote verification failed")?;

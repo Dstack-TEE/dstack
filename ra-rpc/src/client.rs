@@ -136,6 +136,7 @@ impl RaClient {
                 None => None,
                 Some(attestation) => {
                     let verified_attestation = attestation
+                        .into_v1()
                         .verify_with_ra_pubkey(cert.public_key().raw, self.pccs_url.as_deref())
                         .await
                         .context("Failed to verify the attestation report")?;

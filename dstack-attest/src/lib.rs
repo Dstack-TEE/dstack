@@ -11,6 +11,7 @@ pub use tdx_attest as tdx;
 use crate::attestation::AttestationMode;
 
 pub mod attestation;
+mod v1;
 
 /// Emit a runtime event that extends RTMR3 and logs the event.
 pub fn emit_runtime_event(event: &str, payload: &[u8]) -> anyhow::Result<()> {

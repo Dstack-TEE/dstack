@@ -14,7 +14,6 @@ use dstack_guest_agent::{
     run_server, AppState,
 };
 use dstack_guest_agent_rpc::{AttestResponse, GetQuoteResponse};
-use ra_rpc::Attestation;
 use ra_tls::attestation::VersionedAttestation;
 use serde::Deserialize;
 use tracing::warn;
@@ -66,7 +65,7 @@ fn default_patch_report_data() -> bool {
 }
 
 impl PlatformBackend for SimulatorPlatform {
-    fn attestation_for_info(&self) -> Result<Attestation> {
+    fn attestation_for_info(&self) -> Result<VersionedAttestation> {
         Ok(simulator::simulated_info_attestation(&self.attestation))
     }
 
@@ -163,7 +162,7 @@ mod tests {
         let cert_attestation = platform
             .certificate_attestation(b"test-public-key")
             .unwrap();
-        assert!(cert_attestation.decode_app_info(false).is_ok());
+        assert!(cert_attestation.into_v1().decode_app_info(false).is_ok());
         let _ = platform.attestation_for_info().unwrap();
     }
 
@@ -172,9 +171,10 @@ mod tests {
         let platform = load_fixture_platform();
         let report_data = [0x5a; 64];
         let response = platform.attest_response(report_data).unwrap();
-        let patched = VersionedAttestation::from_scale(&response.attestation).unwrap();
-        let VersionedAttestation::V0 { attestation } = patched;
-        assert_eq!(attestation.report_data, report_data);
+        let patched = VersionedAttestation::from_bytes(&response.attestation)
+            .unwrap()
+            .into_v1();
+        assert_eq!(patched.report_data().unwrap(), report_data);
     }
 
     #[test]
@@ -184,13 +184,14 @@ mod tests {
                 .join("../guest-agent/fixtures/attestation.bin"),
         )
         .expect("fixture attestation should load");
-        let original = fixture.clone().into_inner().report_data;
+        let original = fixture.clone().into_v1().report_data().unwrap();
         let platform = SimulatorPlatform::new(fixture, false);
         let report_data = [0x5a; 64];
         let response = platform.attest_response(report_data).unwrap();
-        let patched = VersionedAttestation::from_scale(&response.attestation).unwrap();
-        let VersionedAttestation::V0 { attestation } = patched;
-        assert_eq!(attestation.report_data, original);
-        assert_ne!(attestation.report_data, report_data);
+        let patched = VersionedAttestation::from_bytes(&response.attestation)
+            .unwrap()
+            .into_v1();
+        assert_eq!(patched.report_data().unwrap(), original);
+        assert_ne!(patched.report_data().unwrap(), report_data);
     }
 }

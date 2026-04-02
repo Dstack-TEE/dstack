@@ -540,6 +540,7 @@ pub async fn handle_prpc_impl<S, Call: RpcCall<S>>(
                 .raw
                 .to_vec();
             let verified = attestation
+                .into_v1()
                 .verify_with_ra_pubkey(&pubkey, quote_verifier.pccs_url.as_deref())
                 .await
                 .context("invalid quote")?;
