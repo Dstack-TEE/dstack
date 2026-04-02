@@ -655,11 +655,11 @@ pub struct MeasurementInput<'a> {
 ///
 /// Two code paths:
 ///
-/// 1. **VM-provided OVMF metadata** (`input.ovmf_sections` is non-empty):  
+/// 1. **VM-provided OVMF metadata** (`input.ovmf_sections` is non-empty):
 ///    The KMS never needs the OVMF file on disk.  `input.ovmf_hash` *must*
 ///    be provided.
 ///
-/// 2. **OVMF file on KMS disk** (`input.ovmf_sections` is empty):  
+/// 2. **OVMF file on KMS disk** (`input.ovmf_sections` is empty):
 ///    The KMS reads `cfg.ovmf_path` (which must be `Some`).
 ///
 /// Returns the expected 48-byte GCTX launch digest.

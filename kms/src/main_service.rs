@@ -594,16 +594,16 @@ impl KmsRpc for RpcHandler {
         // Encrypt using AES-128-SIV (same scheme as crypt-tool decrypt: ECDH → Aes128Siv key).
         let mut cipher = aes_siv::siv::Aes128Siv::new(shared_secret.as_bytes().into());
         let encrypted_disk_key = cipher
-            .encrypt(&[&[]], &app_disk_key)
+            .encrypt([&[]], &app_disk_key)
             .map_err(|_| anyhow::anyhow!("Failed to encrypt disk_crypt_key"))?;
         let mut cipher = aes_siv::siv::Aes128Siv::new(shared_secret.as_bytes().into());
         let encrypted_env_key = cipher
-            .encrypt(&[&[]], &env_crypt_key)
+            .encrypt([&[]], &env_crypt_key)
             .map_err(|_| anyhow::anyhow!("Failed to encrypt env_crypt_key"))?;
         let mut cipher = aes_siv::siv::Aes128Siv::new(shared_secret.as_bytes().into());
         let k256_key_bytes = k256_app_key.to_bytes();
         let encrypted_k256_key = cipher
-            .encrypt(&[&[]], &k256_key_bytes)
+            .encrypt([&[]], &k256_key_bytes)
             .map_err(|_| anyhow::anyhow!("Failed to encrypt k256_key"))?;
 
         Ok(AppKeyAmdResponse {
