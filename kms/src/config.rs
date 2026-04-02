@@ -31,6 +31,32 @@ pub(crate) struct ImageConfig {
     pub download_timeout: Duration,
 }
 
+/// Configuration for AMD SEV-SNP measurement verification.
+/// When present, the KMS recomputes the expected SNP MEASUREMENT in pure Rust
+/// (no external tooling required) and compares it against the hardware-attested
+/// value in the SNP attestation report.
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct SevSnpMeasureConfig {
+    /// Path to the AMD SEV-SNP OVMF binary (ovmf.fd) used for this VM image.
+    ///
+    /// **Optional** when the VM sends `ovmf_sections` in the request (metadata
+    /// extracted by the launcher from the OVMF binary before launch).  In that
+    /// case the KMS never reads the OVMF file and this field may be omitted.
+    ///
+    /// Required only as a fallback for older VM images that do not send
+    /// `ovmf_sections`.  The file is parsed for GPA metadata only
+    /// (section descriptors, reset EIP, sev_hashes_table_gpa).
+    pub ovmf_path: Option<String>,
+    /// SNP guest features bitmask (0x1 = SNP with kernel hashes enabled).
+    /// Must match the value used when the VM was launched.
+    #[serde(default = "default_guest_features")]
+    pub guest_features: u64,
+}
+
+fn default_guest_features() -> u64 {
+    0x1
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct KmsConfig {
     pub cert_dir: PathBuf,
@@ -40,6 +66,9 @@ pub(crate) struct KmsConfig {
     pub image: ImageConfig,
     #[serde(with = "serde_human_bytes")]
     pub admin_token_hash: Vec<u8>,
+    /// AMD SEV-SNP measurement verification. Optional: if absent, measurement
+    /// recomputation is skipped (useful for dev environments without OVMF).
+    pub sev_snp: Option<SevSnpMeasureConfig>,
 }
 
 impl KmsConfig {
