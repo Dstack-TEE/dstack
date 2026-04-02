@@ -384,10 +384,10 @@ const GUID_SEV_META_DATA: [u8; 16] = [
 ];
 
 fn read_u16_le(buf: &[u8], off: usize) -> u16 {
-    u16::from_le_bytes(buf[off..off + 2].try_into().unwrap())
+    u16::from_le_bytes([buf[off], buf[off + 1]])
 }
 fn read_u32_le(buf: &[u8], off: usize) -> u32 {
-    u32::from_le_bytes(buf[off..off + 4].try_into().unwrap())
+    u32::from_le_bytes([buf[off], buf[off + 1], buf[off + 2], buf[off + 3]])
 }
 
 impl OvmfInfo {
@@ -622,51 +622,62 @@ pub struct OvmfSectionParam {
     pub section_type: u32,
 }
 
+/// Per-request inputs for [`compute_expected_measurement`].
+///
+/// Separate from [`SevSnpMeasureConfig`] (KMS host config) so the function
+/// stays within the clippy argument-count limit.
+pub struct MeasurementInput<'a> {
+    /// 96-char hex GCTX seed for OVMF pages; `""` → compute from file.
+    pub ovmf_hash: &'a str,
+    /// GPA of the SevHashTable (from request; ignored when loading OVMF file).
+    pub sev_hashes_table_gpa: u64,
+    /// AP reset EIP (from request; ignored when loading OVMF file).
+    pub sev_es_reset_eip: u32,
+    /// Sections from request; empty → fall back to loading file.
+    pub ovmf_sections: &'a [OvmfSectionParam],
+    /// 64-char hex SHA-256 of the kernel.
+    pub kernel_hash: &'a str,
+    /// 64-char hex SHA-256 of the initrd (`""` = empty initrd).
+    pub initrd_hash: &'a str,
+    /// vCPU count (must match the VM launch value).
+    pub vcpus: u32,
+    /// QEMU CPU model string, e.g. `"EPYC-v4"`.
+    pub vcpu_type: &'a str,
+    /// 64-char hex placed in `docker_compose_hash=` cmdline arg.
+    pub compose_hash: &'a str,
+    /// 64-char hex placed in `rootfs_hash=` cmdline arg.
+    pub rootfs_hash: &'a str,
+    /// Optional 64-char hex placed in `docker_additional_files_hash=`.
+    pub docker_files_hash: Option<&'a str>,
+}
+
 /// Recompute the expected SNP MEASUREMENT in pure Rust.
 ///
 /// Two code paths:
 ///
-/// 1. **VM-provided OVMF metadata** (`ovmf_sections` is non-empty):  
-///    The launcher extracted OVMF metadata before VM launch and the guest
-///    included it in the request.
-///    The KMS never needs the OVMF file on disk.  `ovmf_hash` *must*
-///    be provided in this case (it is the GCTX seed after processing OVMF pages).
+/// 1. **VM-provided OVMF metadata** (`input.ovmf_sections` is non-empty):  
+///    The KMS never needs the OVMF file on disk.  `input.ovmf_hash` *must*
+///    be provided.
 ///
-/// 2. **OVMF file on KMS disk** (`ovmf_sections` is empty):  
-///    The KMS reads `cfg.ovmf_path` (which must be `Some`) to obtain section
-///    metadata.  `ovmf_hash` may be `""` — in that case the full GCTX is
-///    computed from the file contents.
+/// 2. **OVMF file on KMS disk** (`input.ovmf_sections` is empty):  
+///    The KMS reads `cfg.ovmf_path` (which must be `Some`).
 ///
-/// Returns the expected 48-byte GCTX launch digest.  Compare byte-for-byte
-/// with `VerifiedAmdReport::measurement` to prove integrity.
-///
-/// # Arguments
-/// * `cfg`                  – KMS `[core.sev_snp]` config (optional OVMF path, guest features)
-/// * `ovmf_hash`            – 96-char hex GCTX seed for OVMF pages; `""` → compute from file
-/// * `sev_hashes_table_gpa` – GPA of the SevHashTable (from request; ignored when loading file)
-/// * `sev_es_reset_eip`     – AP reset EIP (from request; ignored when loading file)
-/// * `ovmf_sections`        – sections from request; empty → fall back to loading file
-/// * `kernel_hash`          – 64-char hex SHA-256 of the kernel
-/// * `initrd_hash`          – 64-char hex SHA-256 of the initrd (`""` = empty initrd)
-/// * `vcpus`                – vCPU count (must match the VM launch value)
-/// * `vcpu_type_str`        – QEMU CPU model string, e.g. `"EPYC-v4"`
-/// * `compose_hash`         – 64-char hex (placed in `docker_compose_hash=` cmdline arg)
-/// * `rootfs_hash`          – 64-char hex (placed in `rootfs_hash=` cmdline arg)
-/// * `docker_files_hash`    – optional 64-char hex (placed in `docker_additional_files_hash=`)
+/// Returns the expected 48-byte GCTX launch digest.
 pub fn compute_expected_measurement(
     cfg: &SevSnpMeasureConfig,
-    ovmf_hash: &str,
-    sev_hashes_table_gpa: u64,
-    sev_es_reset_eip: u32,
-    ovmf_sections: &[OvmfSectionParam],
-    kernel_hash: &str,
-    initrd_hash: &str,
-    vcpus: u32,
-    vcpu_type_str: &str,
-    compose_hash: &str,
-    rootfs_hash: &str,
-    docker_files_hash: Option<&str>,
+    input: &MeasurementInput<'_>,
 ) -> Result<[u8; 48]> {
+    let ovmf_hash = input.ovmf_hash;
+    let sev_hashes_table_gpa = input.sev_hashes_table_gpa;
+    let sev_es_reset_eip = input.sev_es_reset_eip;
+    let ovmf_sections = input.ovmf_sections;
+    let kernel_hash = input.kernel_hash;
+    let initrd_hash = input.initrd_hash;
+    let vcpus = input.vcpus;
+    let vcpu_type_str = input.vcpu_type;
+    let compose_hash = input.compose_hash;
+    let rootfs_hash = input.rootfs_hash;
+    let docker_files_hash = input.docker_files_hash;
     // Reconstruct the kernel cmdline exactly as produced by the VM launcher.
     let mut cmdline = format!(
         "console=ttyS0 loglevel=7 docker_compose_hash={compose_hash} rootfs_hash={rootfs_hash}"
