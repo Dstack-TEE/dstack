@@ -948,17 +948,19 @@ mod amd {
         // ---- compute -----------------------------------------------------
         let measurement = compute_expected_measurement(
             &cfg,
-            &fp.ovmf_hash,
-            fp.sev_hashes_table_gpa,
-            fp.sev_es_reset_eip,
-            &sections,
-            &fp.kernel_hash,
-            &fp.initrd_hash,
-            fp.vcpus,
-            &fp.vcpu_type,
-            &compose_hash,
-            &rootfs_hash,
-            docker_files_hash.as_deref(),
+            &MeasurementInput {
+                ovmf_hash: &fp.ovmf_hash,
+                sev_hashes_table_gpa: fp.sev_hashes_table_gpa,
+                sev_es_reset_eip: fp.sev_es_reset_eip,
+                ovmf_sections: &sections,
+                kernel_hash: &fp.kernel_hash,
+                initrd_hash: &fp.initrd_hash,
+                vcpus: fp.vcpus,
+                vcpu_type: &fp.vcpu_type,
+                compose_hash: &compose_hash,
+                rootfs_hash: &rootfs_hash,
+                docker_files_hash: docker_files_hash.as_deref(),
+            },
         )
         .expect("compute_expected_measurement failed");
 
