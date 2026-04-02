@@ -69,6 +69,10 @@ fn networking_to_proto(n: &Networking) -> pb::NetworkingConfig {
     pb::NetworkingConfig { mode: mode.into() }
 }
 
+fn sanitize_optional<T: AsRef<str>>(value: Option<T>) -> Option<T> {
+    value.filter(|value| !value.as_ref().trim().is_empty())
+}
+
 #[derive(Debug, Deserialize)]
 pub struct InstanceInfo {
     #[serde(default)]
@@ -271,8 +275,9 @@ impl VmInfo {
             },
             app_url: self
                 .gateway_enabled
-                .then_some(self.instance_id.as_ref())
+                .then_some(self.instance_id.as_deref())
                 .flatten()
+                .and_then(|id| sanitize_optional(Some(id)))
                 .map(|id| {
                     // Use custom gateway URL if available, otherwise fall back to global config
                     if let Some(custom_gw_url) = custom_gateway_urls.first() {
@@ -297,7 +302,7 @@ impl VmInfo {
                     }
                 }),
             app_id: self.manifest.app_id.clone(),
-            instance_id: self.instance_id.as_deref().map(Into::into),
+            instance_id: sanitize_optional(self.instance_id.clone()),
             exited_at: self.exited_at.clone(),
             events: self.events.clone(),
         }
@@ -336,7 +341,8 @@ impl VmState {
         }
         let uptime = display_ts(proc_state.and_then(|info| info.state.started_at.as_ref()));
         let exited_at = display_ts(proc_state.and_then(|info| info.state.stopped_at.as_ref()));
-        let instance_id = workdir.instance_info().ok().map(|info| info.instance_id);
+        let instance_id =
+            sanitize_optional(workdir.instance_info().ok().map(|info| info.instance_id));
         VmInfo {
             manifest: self.config.manifest.clone(),
             workdir: workdir.path().to_path_buf(),
@@ -351,6 +357,31 @@ impl VmState {
             gateway_enabled: self.config.gateway_enabled,
             events: self.state.events.clone().into(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sanitize_optional;
+
+    #[test]
+    fn sanitize_optional_filters_empty_owned_values() {
+        assert_eq!(sanitize_optional(Some(String::new())), None);
+        assert_eq!(sanitize_optional(Some("   ".to_string())), None);
+        assert_eq!(
+            sanitize_optional(Some("instance-123".to_string())),
+            Some("instance-123".to_string())
+        );
+    }
+
+    #[test]
+    fn sanitize_optional_filters_empty_borrowed_values() {
+        assert_eq!(sanitize_optional(Some("")), None);
+        assert_eq!(sanitize_optional(Some("   ")), None);
+        assert_eq!(
+            sanitize_optional(Some("instance-123")),
+            Some("instance-123")
+        );
     }
 }
 
