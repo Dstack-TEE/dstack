@@ -389,7 +389,7 @@ impl CvmVerifier {
 
     pub async fn verify(&self, request: VerificationRequest) -> Result<VerificationResponse> {
         let attestation = if let Some(attestation) = &request.attestation {
-            VersionedAttestation::from_scale(attestation).context("Failed to decode attestaion")?
+            VersionedAttestation::from_bytes(attestation).context("Failed to decode attestaion")?
         } else if let Some(tdx_quote) = request.quote {
             let event_log = request
                 .event_log
@@ -413,9 +413,8 @@ impl CvmVerifier {
             rtmr_debug: None,
         };
 
-        let attestation = attestation.into_inner();
         let debug = request.debug.unwrap_or(false);
-        let verified = attestation.verify(self.pccs_url.as_deref()).await;
+        let verified = attestation.into_v1().verify(self.pccs_url.as_deref()).await;
         let verified_attestation = match verified {
             Ok(att) => {
                 details.quote_verified = true;

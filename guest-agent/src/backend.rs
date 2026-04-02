@@ -5,11 +5,11 @@
 use anyhow::{Context, Result};
 use dstack_attest::emit_runtime_event;
 use dstack_guest_agent_rpc::{AttestResponse, GetQuoteResponse};
-use ra_rpc::Attestation;
+use ra_tls::attestation::Attestation;
 use ra_tls::attestation::{QuoteContentType, VersionedAttestation};
 
 pub trait PlatformBackend: Send + Sync {
-    fn attestation_for_info(&self) -> Result<Attestation>;
+    fn attestation_for_info(&self) -> Result<VersionedAttestation>;
     fn certificate_attestation(&self, pubkey: &[u8]) -> Result<VersionedAttestation>;
     fn quote_response(&self, report_data: [u8; 64], vm_config: &str) -> Result<GetQuoteResponse>;
     fn attest_response(&self, report_data: [u8; 64]) -> Result<AttestResponse>;
@@ -20,8 +20,10 @@ pub trait PlatformBackend: Send + Sync {
 pub struct RealPlatform;
 
 impl PlatformBackend for RealPlatform {
-    fn attestation_for_info(&self) -> Result<Attestation> {
-        Attestation::local().context("Failed to get local attestation")
+    fn attestation_for_info(&self) -> Result<VersionedAttestation> {
+        Ok(Attestation::local()
+            .context("Failed to get local attestation")?
+            .into_versioned())
     }
 
     fn certificate_attestation(&self, pubkey: &[u8]) -> Result<VersionedAttestation> {
@@ -46,7 +48,7 @@ impl PlatformBackend for RealPlatform {
     fn attest_response(&self, report_data: [u8; 64]) -> Result<AttestResponse> {
         let attestation = Attestation::quote(&report_data).context("Failed to get attestation")?;
         Ok(AttestResponse {
-            attestation: attestation.into_versioned().to_scale(),
+            attestation: attestation.into_versioned().to_bytes(),
         })
     }
 

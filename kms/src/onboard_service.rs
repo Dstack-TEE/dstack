@@ -18,7 +18,7 @@ use ra_rpc::{
     CallContext, RpcCall,
 };
 use ra_tls::{
-    attestation::{QuoteContentType, VerifiedAttestation, VersionedAttestation},
+    attestation::{PlatformEvidence, QuoteContentType, VerifiedAttestation, VersionedAttestation},
     cert::{CaCert, CertRequest},
     rcgen::{Certificate, KeyPair, PKCS_ECDSA_P256_SHA256},
 };
@@ -111,14 +111,16 @@ impl OnboardRpc for OnboardHandler {
             .context("Failed to get attestation")?;
 
         // Decode and verify the attestation to get real device ID
-        let attestation = VersionedAttestation::from_scale(&response.attestation)
-            .context("Failed to decode attestation")?
-            .into_inner();
-        let attestation_mode = serde_json::to_value(attestation.quote.mode())
-            .ok()
-            .and_then(|v| v.as_str().map(String::from))
-            .unwrap_or_else(|| format!("{:?}", attestation.quote.mode()));
+        let attestation = VersionedAttestation::from_bytes(&response.attestation)
+            .context("Failed to decode attestation")?;
+        let attestation_mode = match &attestation.clone().into_v1().platform {
+            PlatformEvidence::Tdx { .. } => "dstack-tdx",
+            PlatformEvidence::GcpTdx => "dstack-gcp-tdx",
+            PlatformEvidence::NitroEnclave => "dstack-nitro-enclave",
+        }
+        .to_string();
         let verified = attestation
+            .into_v1()
             .verify(pccs_url.as_deref())
             .await
             .context("Failed to verify attestation")?;
@@ -195,7 +197,7 @@ impl Keys {
         let response = app_attest(report_data.to_vec())
             .await
             .context("Failed to get quote")?;
-        let attestation = VersionedAttestation::from_scale(&response.attestation)
+        let attestation = VersionedAttestation::from_bytes(&response.attestation)
             .context("Invalid attestation")?;
 
         // Sign WWW server cert with KMS cert
@@ -376,7 +378,7 @@ async fn gen_ra_cert(ca_cert_pem: String, ca_key_pem: String) -> Result<(String,
         .await
         .context("Failed to get quote")?;
     let attestation =
-        VersionedAttestation::from_scale(&response.attestation).context("Invalid attestation")?;
+        VersionedAttestation::from_bytes(&response.attestation).context("Invalid attestation")?;
     let req = CertRequest::builder()
         .subject("RA-TLS TEMP Cert")
         .attestation(&attestation)
