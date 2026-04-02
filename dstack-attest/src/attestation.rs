@@ -245,6 +245,13 @@ pub enum VersionedAttestation {
         /// The attestation report
         attestation: Attestation,
     },
+    /// Version 1
+    V1 {
+        /// The attestation report
+        attestation: Attestation,
+        /// Canonical payload whose SHA-256 is embedded into report_data
+        report_data_payload: String,
+    },
 }
 
 impl VersionedAttestation {
@@ -262,6 +269,18 @@ impl VersionedAttestation {
     pub fn into_inner(self) -> Attestation {
         match self {
             Self::V0 { attestation } => attestation,
+            Self::V1 { attestation, .. } => attestation,
+        }
+    }
+
+    /// Get report_data payload if present.
+    pub fn report_data_payload(&self) -> Option<&str> {
+        match self {
+            Self::V0 { .. } => None,
+            Self::V1 {
+                report_data_payload,
+                ..
+            } => Some(report_data_payload),
         }
     }
 
@@ -269,12 +288,16 @@ impl VersionedAttestation {
     pub fn decode_app_info(&self, boottime_mr: bool) -> Result<AppInfo> {
         match self {
             Self::V0 { attestation } => attestation.decode_app_info(boottime_mr),
+            Self::V1 { attestation, .. } => attestation.decode_app_info(boottime_mr),
         }
     }
 
     /// Strip data for certificate embedding (e.g. keep RTMR3 event logs only).
     pub fn into_stripped(mut self) -> Self {
-        let VersionedAttestation::V0 { attestation } = &mut self;
+        let attestation = match &mut self {
+            VersionedAttestation::V0 { attestation } => attestation,
+            VersionedAttestation::V1 { attestation, .. } => attestation,
+        };
         if let Some(tdx_quote) = attestation.tdx_quote_mut() {
             tdx_quote.event_log = tdx_quote
                 .event_log
@@ -667,6 +690,17 @@ impl Attestation {
     /// Wrap into a versioned attestation for encoding
     pub fn into_versioned(self) -> VersionedAttestation {
         VersionedAttestation::V0 { attestation: self }
+    }
+
+    /// Wrap into a versioned attestation carrying the report_data payload preimage.
+    pub fn into_versioned_with_report_data_payload(
+        self,
+        report_data_payload: String,
+    ) -> VersionedAttestation {
+        VersionedAttestation::V1 {
+            attestation: self,
+            report_data_payload,
+        }
     }
 
     /// Verify the quote

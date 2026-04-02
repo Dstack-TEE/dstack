@@ -27,9 +27,9 @@ pub fn from_ext_getter(
 ) -> Result<Option<Attestation>> {
     // Try to detect attestation mode from certificate extension
     if let Some(attestation_bytes) = get_ext(oids::PHALA_RATLS_ATTESTATION)? {
-        let VersionedAttestation::V0 { attestation } =
-            VersionedAttestation::from_scale(&attestation_bytes)
-                .context("Failed to decode attestation from cert extension")?;
+        let attestation = VersionedAttestation::from_scale(&attestation_bytes)
+            .context("Failed to decode attestation from cert extension")?
+            .into_inner();
         return Ok(Some(attestation));
     }
     // Backward compatibility: if PHALA_RATLS_ATTESTATION

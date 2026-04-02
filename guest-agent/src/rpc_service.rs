@@ -814,22 +814,42 @@ pNs85uhOZE8z2jr8Pg==
             attestation: &VersionedAttestation,
             report_data: [u8; 64],
         ) -> VersionedAttestation {
-            let ra_tls::attestation::VersionedAttestation::V0 { attestation } = attestation.clone();
-            let mut attestation = attestation;
-            attestation.report_data = report_data;
-            if let Some(tdx_quote) = attestation.tdx_quote_mut() {
-                if tdx_quote.quote.len() >= ra_tls::attestation::TDX_QUOTE_REPORT_DATA_RANGE.end {
-                    tdx_quote.quote[ra_tls::attestation::TDX_QUOTE_REPORT_DATA_RANGE]
-                        .copy_from_slice(&report_data);
-                } else {
-                    tracing::warn!(
-                        "TDX quote too short to patch report_data ({} < {})",
-                        tdx_quote.quote.len(),
-                        ra_tls::attestation::TDX_QUOTE_REPORT_DATA_RANGE.end
-                    );
+            fn patch_inner_report_data(
+                attestation: &mut ra_tls::attestation::Attestation,
+                report_data: [u8; 64],
+            ) {
+                attestation.report_data = report_data;
+                if let Some(tdx_quote) = attestation.tdx_quote_mut() {
+                    if tdx_quote.quote.len() >= ra_tls::attestation::TDX_QUOTE_REPORT_DATA_RANGE.end
+                    {
+                        tdx_quote.quote[ra_tls::attestation::TDX_QUOTE_REPORT_DATA_RANGE]
+                            .copy_from_slice(&report_data);
+                    } else {
+                        tracing::warn!(
+                            "TDX quote too short to patch report_data ({} < {})",
+                            tdx_quote.quote.len(),
+                            ra_tls::attestation::TDX_QUOTE_REPORT_DATA_RANGE.end
+                        );
+                    }
                 }
             }
-            ra_tls::attestation::VersionedAttestation::V0 { attestation }
+
+            match attestation.clone() {
+                ra_tls::attestation::VersionedAttestation::V0 { mut attestation } => {
+                    patch_inner_report_data(&mut attestation, report_data);
+                    ra_tls::attestation::VersionedAttestation::V0 { attestation }
+                }
+                ra_tls::attestation::VersionedAttestation::V1 {
+                    mut attestation,
+                    report_data_payload,
+                } => {
+                    patch_inner_report_data(&mut attestation, report_data);
+                    ra_tls::attestation::VersionedAttestation::V1 {
+                        attestation,
+                        report_data_payload,
+                    }
+                }
+            }
         }
 
         impl PlatformBackend for TestSimulatorPlatform {
@@ -848,9 +868,8 @@ pNs85uhOZE8z2jr8Pg==
                 report_data: [u8; 64],
                 vm_config: &str,
             ) -> Result<GetQuoteResponse> {
-                let ra_tls::attestation::VersionedAttestation::V0 { attestation } =
-                    patch_report_data(&self.attestation, report_data);
-                let mut attestation = attestation;
+                let mut attestation =
+                    patch_report_data(&self.attestation, report_data).into_inner();
                 let Some(quote) = attestation.tdx_quote_mut() else {
                     return Err(anyhow::anyhow!("Quote not found"));
                 };

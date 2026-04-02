@@ -29,9 +29,8 @@ pub fn simulated_quote_response(
     vm_config: &str,
     patch_report_data: bool,
 ) -> Result<GetQuoteResponse> {
-    let VersionedAttestation::V0 { attestation } =
-        maybe_patch_report_data(attestation, report_data, patch_report_data, "quote");
-    let mut attestation = attestation;
+    let mut attestation =
+        maybe_patch_report_data(attestation, report_data, patch_report_data, "quote").into_inner();
     let Some(quote) = attestation.tdx_quote_mut() else {
         return Err(anyhow::anyhow!("Quote not found"));
     };
@@ -89,19 +88,35 @@ fn maybe_patch_report_data(
         return attestation.clone();
     }
 
-    let VersionedAttestation::V0 { attestation } = attestation.clone();
-    let mut attestation = attestation;
-    attestation.report_data = report_data;
-    if let Some(tdx_quote) = attestation.tdx_quote_mut() {
-        if tdx_quote.quote.len() >= TDX_QUOTE_REPORT_DATA_RANGE.end {
-            tdx_quote.quote[TDX_QUOTE_REPORT_DATA_RANGE].copy_from_slice(&report_data);
-        } else {
-            warn!(
-                "TDX quote too short to patch report_data ({} < {})",
-                tdx_quote.quote.len(),
-                TDX_QUOTE_REPORT_DATA_RANGE.end
-            );
+    fn patch_inner_report_data(attestation: &mut Attestation, report_data: [u8; 64]) {
+        attestation.report_data = report_data;
+        if let Some(tdx_quote) = attestation.tdx_quote_mut() {
+            if tdx_quote.quote.len() >= TDX_QUOTE_REPORT_DATA_RANGE.end {
+                tdx_quote.quote[TDX_QUOTE_REPORT_DATA_RANGE].copy_from_slice(&report_data);
+            } else {
+                warn!(
+                    "TDX quote too short to patch report_data ({} < {})",
+                    tdx_quote.quote.len(),
+                    TDX_QUOTE_REPORT_DATA_RANGE.end
+                );
+            }
         }
     }
-    VersionedAttestation::V0 { attestation }
+
+    match attestation.clone() {
+        VersionedAttestation::V0 { mut attestation } => {
+            patch_inner_report_data(&mut attestation, report_data);
+            VersionedAttestation::V0 { attestation }
+        }
+        VersionedAttestation::V1 {
+            mut attestation,
+            report_data_payload,
+        } => {
+            patch_inner_report_data(&mut attestation, report_data);
+            VersionedAttestation::V1 {
+                attestation,
+                report_data_payload,
+            }
+        }
+    }
 }

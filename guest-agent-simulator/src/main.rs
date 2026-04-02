@@ -173,7 +173,7 @@ mod tests {
         let report_data = [0x5a; 64];
         let response = platform.attest_response(report_data).unwrap();
         let patched = VersionedAttestation::from_scale(&response.attestation).unwrap();
-        let VersionedAttestation::V0 { attestation } = patched;
+        let attestation = patched.into_inner();
         assert_eq!(attestation.report_data, report_data);
     }
 
@@ -189,7 +189,7 @@ mod tests {
         let report_data = [0x5a; 64];
         let response = platform.attest_response(report_data).unwrap();
         let patched = VersionedAttestation::from_scale(&response.attestation).unwrap();
-        let VersionedAttestation::V0 { attestation } = patched;
+        let attestation = patched.into_inner();
         assert_eq!(attestation.report_data, original);
         assert_ne!(attestation.report_data, report_data);
     }
