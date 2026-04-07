@@ -355,15 +355,13 @@ pub enum VersionedAttestation {
 
 impl Encode for VersionedAttestation {
     fn size_hint(&self) -> usize {
-        self.to_bytes()
-            .map(|b| b.len())
-            .unwrap_or(0)
+        self.to_bytes().map(|b| b.len()).unwrap_or(0)
     }
 
     fn encode_to<T: Output + ?Sized>(&self, dest: &mut T) {
         let bytes = self
             .to_bytes()
-            .expect("VersionedAttestation should always encode successfully");
+            .or_panic("VersionedAttestation should always encode successfully");
         dest.write(&bytes);
     }
 }
