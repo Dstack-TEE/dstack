@@ -26,7 +26,9 @@ use k256::ecdsa::SigningKey;
 use or_panic::ResultOrPanic;
 use ra_rpc::{CallContext, RpcCall};
 use ra_tls::{
-    attestation::{QuoteContentType, DEFAULT_HASH_ALGORITHM},
+    attestation::{
+        QuoteContentType, TdxAttestationExt, VersionedAttestation, DEFAULT_HASH_ALGORITHM,
+    },
     cert::{CertConfigV2, CertSigningRequestV2, Csr},
     kdf::{derive_key, derive_p256_key_pair_from_bytes},
 };
@@ -62,7 +64,7 @@ struct AppStateInner {
 }
 
 impl AppStateInner {
-    fn info_attestation(&self) -> Result<ra_rpc::Attestation> {
+    fn info_attestation(&self) -> Result<VersionedAttestation> {
         self.platform.attestation_for_info()
     }
 
@@ -189,19 +191,17 @@ pub struct InternalRpcHandler {
 
 pub async fn get_info(state: &AppState, external: bool) -> Result<AppInfo> {
     let hide_tcb_info = external && !state.config().app_compose.public_tcbinfo;
-    let attestation = state.inner.info_attestation()?;
+    let versioned_attestation = state.inner.info_attestation()?;
+    let attestation = versioned_attestation.into_v1();
     let app_info = attestation
         .decode_app_info(false)
         .context("Failed to decode app info")?;
-    let event_log = attestation
-        .tdx_quote()
-        .map(|q| &q.event_log[..])
-        .unwrap_or_default();
+    let event_log = attestation.tdx_event_log().unwrap_or_default();
     let tcb_info = if hide_tcb_info {
         "".to_string()
     } else {
         let app_compose = state.config().app_compose.raw.clone();
-        let td_report = match attestation.get_td10_report() {
+        let td_report = match attestation.td10_report() {
             Some(report) => json!({
                 "mrtd": hex::encode(report.mr_td),
                 "rtmr0": hex::encode(report.rt_mr0),
@@ -670,7 +670,10 @@ mod tests {
         Signature as Ed25519Signature, Verifier, VerifyingKey as Ed25519VerifyingKey,
     };
     use k256::ecdsa::{Signature as K256Signature, VerifyingKey};
-    use ra_tls::attestation::VersionedAttestation;
+    use ra_tls::attestation::{
+        AttestationV1, PlatformEvidence, StackEvidence, VersionedAttestation,
+        TDX_QUOTE_REPORT_DATA_RANGE,
+    };
     use sha2::Sha256;
     use std::collections::HashSet;
     use std::convert::TryFrom;
@@ -813,34 +816,64 @@ pNs85uhOZE8z2jr8Pg==
         fn patch_report_data(
             attestation: &VersionedAttestation,
             report_data: [u8; 64],
-        ) -> VersionedAttestation {
-            let ra_tls::attestation::VersionedAttestation::V0 { attestation } = attestation.clone();
-            let mut attestation = attestation;
-            attestation.report_data = report_data;
-            if let Some(tdx_quote) = attestation.tdx_quote_mut() {
-                if tdx_quote.quote.len() >= ra_tls::attestation::TDX_QUOTE_REPORT_DATA_RANGE.end {
-                    tdx_quote.quote[ra_tls::attestation::TDX_QUOTE_REPORT_DATA_RANGE]
-                        .copy_from_slice(&report_data);
-                } else {
-                    tracing::warn!(
-                        "TDX quote too short to patch report_data ({} < {})",
-                        tdx_quote.quote.len(),
-                        ra_tls::attestation::TDX_QUOTE_REPORT_DATA_RANGE.end
-                    );
+        ) -> AttestationV1 {
+            let attestation = attestation.clone().into_v1();
+            let AttestationV1 {
+                version,
+                platform,
+                stack,
+            } = attestation;
+            let platform = match platform {
+                PlatformEvidence::Tdx {
+                    mut quote,
+                    event_log,
+                } => {
+                    if quote.len() >= TDX_QUOTE_REPORT_DATA_RANGE.end {
+                        quote[TDX_QUOTE_REPORT_DATA_RANGE].copy_from_slice(&report_data);
+                    }
+                    PlatformEvidence::Tdx { quote, event_log }
                 }
+                other => other,
+            };
+            let stack = match stack {
+                StackEvidence::Dstack {
+                    runtime_events,
+                    config,
+                    ..
+                } => StackEvidence::Dstack {
+                    report_data: report_data.to_vec(),
+                    runtime_events,
+                    config,
+                },
+                StackEvidence::DstackPod {
+                    runtime_events,
+                    config,
+                    report_data_payload,
+                    ..
+                } => StackEvidence::DstackPod {
+                    report_data: report_data.to_vec(),
+                    runtime_events,
+                    config,
+                    report_data_payload,
+                },
+            };
+            AttestationV1 {
+                version,
+                platform,
+                stack,
             }
-            ra_tls::attestation::VersionedAttestation::V0 { attestation }
         }
 
         impl PlatformBackend for TestSimulatorPlatform {
-            fn attestation_for_info(&self) -> Result<ra_rpc::Attestation> {
-                Ok(self.attestation.clone().into_inner())
+            fn attestation_for_info(&self) -> Result<VersionedAttestation> {
+                Ok(self.attestation.clone())
             }
 
             fn certificate_attestation(&self, pubkey: &[u8]) -> Result<VersionedAttestation> {
                 let report_data =
                     ra_tls::attestation::QuoteContentType::RaTlsCert.to_report_data(pubkey);
-                Ok(patch_report_data(&self.attestation, report_data))
+                let attestation = patch_report_data(&self.attestation, report_data);
+                Ok(VersionedAttestation::V1 { attestation })
             }
 
             fn quote_response(
@@ -848,24 +881,25 @@ pNs85uhOZE8z2jr8Pg==
                 report_data: [u8; 64],
                 vm_config: &str,
             ) -> Result<GetQuoteResponse> {
-                let ra_tls::attestation::VersionedAttestation::V0 { attestation } =
-                    patch_report_data(&self.attestation, report_data);
-                let mut attestation = attestation;
-                let Some(quote) = attestation.tdx_quote_mut() else {
+                let attestation = patch_report_data(&self.attestation, report_data);
+                let Some(quote) = attestation.platform.tdx_quote().map(ToOwned::to_owned) else {
                     return Err(anyhow::anyhow!("Quote not found"));
                 };
                 Ok(GetQuoteResponse {
-                    quote: quote.quote.to_vec(),
-                    event_log: serde_json::to_string(&quote.event_log)
-                        .context("Failed to serialize event log")?,
+                    quote,
+                    event_log: serde_json::to_string(
+                        attestation.tdx_event_log().unwrap_or_default(),
+                    )
+                    .unwrap_or_default(),
                     report_data: report_data.to_vec(),
                     vm_config: vm_config.to_string(),
                 })
             }
 
             fn attest_response(&self, report_data: [u8; 64]) -> Result<AttestResponse> {
+                let attestation = patch_report_data(&self.attestation, report_data);
                 Ok(AttestResponse {
-                    attestation: patch_report_data(&self.attestation, report_data).to_scale(),
+                    attestation: VersionedAttestation::V1 { attestation }.to_bytes()?,
                 })
             }
 
@@ -881,7 +915,7 @@ pNs85uhOZE8z2jr8Pg==
             cert_client: dummy_cert_client,
             demo_cert: RwLock::new(String::new()),
             platform: Arc::new(TestSimulatorPlatform {
-                attestation: VersionedAttestation::from_scale(
+                attestation: VersionedAttestation::from_bytes(
                     &std::fs::read(temp_attestation_file.path()).unwrap(),
                 )
                 .unwrap(),

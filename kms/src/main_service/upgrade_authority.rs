@@ -76,10 +76,10 @@ pub(crate) async fn local_kms_boot_info(pccs_url: Option<&str>) -> Result<BootIn
     let response = app_attest(pad64([0u8; 32]))
         .await
         .context("Failed to get local KMS attestation")?;
-    let attestation = VersionedAttestation::from_scale(&response.attestation)
-        .context("Failed to decode local KMS attestation")?
-        .into_inner();
+    let attestation = VersionedAttestation::from_bytes(&response.attestation)
+        .context("Failed to decode local KMS attestation")?;
     let verified = attestation
+        .into_v1()
         .verify(pccs_url)
         .await
         .context("Failed to verify local KMS attestation")?;

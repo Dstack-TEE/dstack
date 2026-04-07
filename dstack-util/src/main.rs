@@ -243,6 +243,7 @@ fn cmd_show_mrs() -> Result<()> {
     let attestation =
         ra_tls::attestation::Attestation::local().context("Failed to get attestation")?;
     let app_info = attestation
+        .into_v1()
         .decode_app_info(false)
         .context("Failed to decode app info")?;
     serde_json::to_writer_pretty(io::stdout(), &app_info).context("Failed to write app info")?;

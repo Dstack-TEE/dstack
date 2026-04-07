@@ -22,10 +22,12 @@ use dstack_types::SysConfig;
 use dstack_types::{Platform, VmConfig};
 use ez_hash::{sha256, Hasher, Sha384};
 use or_panic::ResultOrPanic;
-use scale::{Decode, Encode};
+use scale::{Decode, Encode, Error as ScaleError, Input, Output};
 use serde::{Deserialize, Serialize};
 use serde_human_bytes as hex_bytes;
 use sha2::Digest as _;
+
+pub use crate::v1::{Attestation as AttestationV1, PlatformEvidence, StackEvidence};
 
 const DSTACK_TDX: &str = "dstack-tdx";
 const DSTACK_GCP_TDX: &str = "dstack-gcp-tdx";
@@ -48,6 +50,91 @@ fn read_vm_config() -> Result<String> {
     let sys_config: SysConfig =
         serde_json::from_str(&content).context("Failed to parse sys-config")?;
     Ok(sys_config.vm_config)
+}
+
+fn is_cbor_map_prefix(byte: u8) -> bool {
+    matches!(byte, 0xa0..=0xbf)
+}
+
+impl From<Attestation> for AttestationV1 {
+    fn from(attestation: Attestation) -> Self {
+        let Attestation {
+            quote,
+            runtime_events,
+            report_data,
+            config,
+            report: _,
+        } = attestation;
+
+        let platform = platform_from_legacy_quote(quote);
+        let stack = StackEvidence::Dstack {
+            report_data: report_data.to_vec(),
+            runtime_events,
+            config,
+        };
+        Self::new(platform, stack)
+    }
+}
+
+fn platform_from_legacy_quote(quote: AttestationQuote) -> PlatformEvidence {
+    match quote {
+        AttestationQuote::DstackTdx(TdxQuote { quote, event_log }) => {
+            PlatformEvidence::Tdx { quote, event_log }
+        }
+        AttestationQuote::DstackGcpTdx => PlatformEvidence::GcpTdx,
+        AttestationQuote::DstackNitroEnclave => PlatformEvidence::NitroEnclave,
+    }
+}
+
+fn platform_into_legacy_quote(platform: PlatformEvidence) -> AttestationQuote {
+    match platform {
+        PlatformEvidence::Tdx { quote, event_log } => {
+            AttestationQuote::DstackTdx(TdxQuote { quote, event_log })
+        }
+        PlatformEvidence::GcpTdx => AttestationQuote::DstackGcpTdx,
+        PlatformEvidence::NitroEnclave => AttestationQuote::DstackNitroEnclave,
+    }
+}
+
+fn platform_attestation_mode(platform: &PlatformEvidence) -> AttestationMode {
+    match platform {
+        PlatformEvidence::Tdx { .. } => AttestationMode::DstackTdx,
+        PlatformEvidence::GcpTdx => AttestationMode::DstackGcpTdx,
+        PlatformEvidence::NitroEnclave => AttestationMode::DstackNitroEnclave,
+    }
+}
+
+fn replay_runtime_events<H: Hasher>(
+    runtime_events: &[RuntimeEvent],
+    to_event: Option<&str>,
+) -> H::Output {
+    cc_eventlog::replay_events::<H>(runtime_events, to_event)
+}
+
+fn find_event(runtime_events: &[RuntimeEvent], name: &str) -> Result<RuntimeEvent> {
+    for event in runtime_events {
+        if event.event == "system-ready" {
+            break;
+        }
+        if event.event == name {
+            return Ok(event.clone());
+        }
+    }
+    Err(anyhow!("event {name} not found"))
+}
+
+fn find_event_payload(runtime_events: &[RuntimeEvent], event: &str) -> Result<Vec<u8>> {
+    find_event(runtime_events, event).map(|event| event.payload)
+}
+
+fn decode_vm_config_with_fallback(config: &str, fallback_config: &str) -> Result<VmConfig> {
+    let config = if config.is_empty() {
+        fallback_config
+    } else {
+        config
+    };
+    let config = if config.is_empty() { "{}" } else { config };
+    serde_json::from_str(config).context("Failed to parse vm config")
 }
 
 /// Attestation mode
@@ -237,53 +324,315 @@ pub struct NsmQuote {
     pub document: Vec<u8>,
 }
 
-/// Represents a versioned attestation
 #[derive(Clone, Encode, Decode)]
+enum LegacyVersionedAttestation {
+    V0 { attestation: Attestation },
+}
+
+/// Maximum size for encoded attestation bytes (10 MiB).
+/// Prevents OOM when decoding untrusted input.
+const MAX_ATTESTATION_BYTES: usize = 10 * 1024 * 1024;
+
+/// Represents a versioned attestation.
+///
+/// **SCALE note**: `VersionedAttestation` implements `Encode`/`Decode` so it can
+/// be embedded in SCALE structs (e.g. `CertSigningRequestV2`).  The `Decode` impl
+/// consumes all remaining input, so it **must** be the last field in any SCALE
+/// container.
+#[derive(Clone)]
 pub enum VersionedAttestation {
-    /// Version 0
+    /// Legacy SCALE-encoded attestation.
     V0 {
         /// The attestation report
         attestation: Attestation,
     },
+    /// CBOR-encoded attestation schema.
+    V1 {
+        /// The version 1 attestation.
+        attestation: AttestationV1,
+    },
+}
+
+impl Encode for VersionedAttestation {
+    fn size_hint(&self) -> usize {
+        self.to_bytes().map(|b| b.len()).unwrap_or(0)
+    }
+
+    fn encode_to<T: Output + ?Sized>(&self, dest: &mut T) {
+        let bytes = self
+            .to_bytes()
+            .or_panic("VersionedAttestation should always encode successfully");
+        dest.write(&bytes);
+    }
+}
+
+impl Decode for VersionedAttestation {
+    fn decode<I: Input>(input: &mut I) -> Result<Self, ScaleError> {
+        let Some(remaining_len) = input.remaining_len()? else {
+            return Err(ScaleError::from(
+                "VersionedAttestation requires a bounded input to decode",
+            ));
+        };
+        if remaining_len > MAX_ATTESTATION_BYTES {
+            return Err(ScaleError::from(
+                "attestation bytes exceed maximum allowed size",
+            ));
+        }
+        let mut bytes = vec![0u8; remaining_len];
+        input.read(&mut bytes)?;
+        Self::from_bytes(&bytes).map_err(|err| {
+            ScaleError::from(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                err.to_string(),
+            ))
+        })
+    }
 }
 
 impl VersionedAttestation {
-    /// Decode VerifiedAttestation from scale encoded bytes
-    pub fn from_scale(scale: &[u8]) -> Result<Self> {
-        Self::decode(&mut &scale[..]).context("Failed to decode VersionedAttestation")
+    /// Decode versioned attestation bytes.
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
+        if bytes.len() > MAX_ATTESTATION_BYTES {
+            bail!(
+                "attestation bytes too large: {} > {}",
+                bytes.len(),
+                MAX_ATTESTATION_BYTES
+            );
+        }
+        let Some(first) = bytes.first().copied() else {
+            bail!("Empty attestation bytes");
+        };
+        if first == 0x00 {
+            let legacy = LegacyVersionedAttestation::decode(&mut &bytes[..])
+                .context("Failed to decode legacy VersionedAttestation")?;
+            return match legacy {
+                LegacyVersionedAttestation::V0 { attestation } => Ok(Self::V0 { attestation }),
+            };
+        }
+        if is_cbor_map_prefix(first) {
+            let attestation = AttestationV1::from_cbor(bytes)?;
+            return Ok(Self::V1 { attestation });
+        }
+        bail!("Unknown attestation wire format");
     }
 
-    /// Encode to scale encoded bytes
-    pub fn to_scale(&self) -> Vec<u8> {
-        self.encode()
-    }
-
-    /// Turn into latest version of attestation
-    pub fn into_inner(self) -> Attestation {
+    /// Encode versioned attestation bytes.
+    pub fn to_bytes(&self) -> Result<Vec<u8>> {
         match self {
-            Self::V0 { attestation } => attestation,
+            Self::V0 { attestation } => Ok(LegacyVersionedAttestation::V0 {
+                attestation: attestation.clone(),
+            }
+            .encode()),
+            Self::V1 { attestation } => attestation.to_cbor(),
         }
     }
 
-    /// Get app info
-    pub fn decode_app_info(&self, boottime_mr: bool) -> Result<AppInfo> {
+    #[doc(hidden)]
+    pub fn from_scale(bytes: &[u8]) -> Result<Self> {
+        Self::from_bytes(bytes)
+    }
+
+    #[doc(hidden)]
+    pub fn to_scale(&self) -> Result<Vec<u8>> {
+        self.to_bytes()
+    }
+
+    /// Project any version into the V1 attestation schema.
+    pub fn into_v1(self) -> AttestationV1 {
         match self {
-            Self::V0 { attestation } => attestation.decode_app_info(boottime_mr),
+            Self::V0 { attestation } => attestation.into_v1(),
+            Self::V1 { attestation } => attestation,
         }
     }
 
     /// Strip data for certificate embedding (e.g. keep RTMR3 event logs only).
-    pub fn into_stripped(mut self) -> Self {
-        let VersionedAttestation::V0 { attestation } = &mut self;
-        if let Some(tdx_quote) = attestation.tdx_quote_mut() {
-            tdx_quote.event_log = tdx_quote
-                .event_log
-                .iter()
-                .filter(|e| e.imr == 3)
-                .map(|e| e.stripped())
-                .collect();
+    pub fn into_stripped(self) -> Self {
+        match self {
+            Self::V0 { mut attestation } => {
+                if let Some(tdx_quote) = attestation.tdx_quote_mut() {
+                    tdx_quote.event_log = tdx_quote
+                        .event_log
+                        .iter()
+                        .filter(|e| e.imr == 3)
+                        .map(|e| e.stripped())
+                        .collect();
+                }
+                Self::V0 { attestation }
+            }
+            Self::V1 { attestation } => Self::V1 {
+                attestation: attestation.into_stripped(),
+            },
         }
-        self
+    }
+}
+
+/// TDX-specific helpers for attestation schemas that carry TDX platform evidence.
+pub trait TdxAttestationExt {
+    /// Returns the raw TDX quote bytes if the attestation is backed by TDX.
+    fn tdx_quote_bytes(&self) -> Option<Vec<u8>>;
+
+    /// Returns the parsed TDX event log if the attestation is backed by TDX.
+    fn tdx_event_log(&self) -> Option<&[TdxEvent]>;
+
+    /// Returns the TDX event log serialized as JSON.
+    fn tdx_event_log_string(&self) -> Option<String> {
+        self.tdx_event_log()
+            .map(|event_log| serde_json::to_string(event_log).unwrap_or_default())
+    }
+
+    /// Returns the parsed TD10 report from the embedded TDX quote.
+    fn td10_report(&self) -> Option<TDReport10>;
+}
+
+impl TdxAttestationExt for AttestationV1 {
+    fn tdx_quote_bytes(&self) -> Option<Vec<u8>> {
+        self.platform.tdx_quote().map(|quote| quote.to_vec())
+    }
+
+    fn tdx_event_log(&self) -> Option<&[TdxEvent]> {
+        self.platform.tdx_event_log()
+    }
+
+    fn td10_report(&self) -> Option<TDReport10> {
+        self.platform
+            .tdx_quote()
+            .and_then(|quote| Quote::parse(quote).ok())
+            .and_then(|quote| quote.report.as_td10().cloned())
+    }
+}
+
+impl AttestationV1 {
+    /// Decode the VM config from the external or embedded config.
+    pub fn decode_vm_config<'a>(&'a self, config: &'a str) -> Result<VmConfig> {
+        decode_vm_config_with_fallback(config, self.stack.config())
+    }
+
+    /// Decode the app info from the event log.
+    pub fn decode_app_info(&self, boottime_mr: bool) -> Result<AppInfo> {
+        self.decode_app_info_ex(boottime_mr, "")
+    }
+
+    /// Decode the app info from the event log with an optional external vm_config.
+    #[errify::errify("decode app info")]
+    pub fn decode_app_info_ex(&self, boottime_mr: bool, vm_config: &str) -> Result<AppInfo> {
+        let runtime_events = self.stack.runtime_events();
+        let key_provider_info = if boottime_mr {
+            vec![]
+        } else {
+            find_event_payload(runtime_events, "key-provider").unwrap_or_default()
+        };
+        let mr_key_provider = if key_provider_info.is_empty() {
+            [0u8; 32]
+        } else {
+            sha256(&key_provider_info)
+        };
+        let os_image_hash = self
+            .decode_vm_config(vm_config)
+            .context("Failed to decode os image hash")?
+            .os_image_hash;
+        let mrs = match &self.platform {
+            PlatformEvidence::Tdx { quote, .. } => {
+                decode_mr_tdx_from_quote(boottime_mr, &mr_key_provider, quote, runtime_events)?
+            }
+            PlatformEvidence::GcpTdx | PlatformEvidence::NitroEnclave => {
+                bail!("Unsupported attestation quote");
+            }
+        };
+        let compose_hash = if platform_attestation_mode(&self.platform).is_composable() {
+            find_event_payload(runtime_events, "compose-hash").unwrap_or_default()
+        } else {
+            os_image_hash.clone()
+        };
+        Ok(AppInfo {
+            app_id: find_event_payload(runtime_events, "app-id").unwrap_or_default(),
+            instance_id: find_event_payload(runtime_events, "instance-id").unwrap_or_default(),
+            device_id: sha256(Vec::<u8>::new()).to_vec(),
+            mr_system: mrs.mr_system,
+            mr_aggregated: mrs.mr_aggregated,
+            key_provider_info,
+            os_image_hash,
+            compose_hash,
+        })
+    }
+
+    /// Verify the quote with optional custom time (testing hook).
+    pub async fn verify_with_time(
+        self,
+        pccs_url: Option<&str>,
+        _now: Option<SystemTime>,
+    ) -> Result<VerifiedAttestation> {
+        let AttestationV1 {
+            version: _,
+            platform,
+            stack,
+        } = self;
+        // Verify report_data_payload binding: if present, the report_data must
+        // be derived from the payload via the AppData content type scheme.
+        if let Some(payload) = stack.report_data_payload() {
+            let report_data: [u8; 64] = stack.report_data()?;
+            let expected = QuoteContentType::AppData.to_report_data(payload.as_bytes());
+            if report_data != expected {
+                bail!("report_data does not match report_data_payload");
+            }
+        }
+        let (report_data, runtime_events, config) = match stack {
+            StackEvidence::Dstack {
+                report_data,
+                runtime_events,
+                config,
+            }
+            | StackEvidence::DstackPod {
+                report_data,
+                runtime_events,
+                config,
+                ..
+            } => (
+                report_data
+                    .as_slice()
+                    .try_into()
+                    .map_err(|_| anyhow!("stack.report_data must be 64 bytes"))?,
+                runtime_events,
+                config,
+            ),
+        };
+        let report = match &platform {
+            PlatformEvidence::Tdx { quote, .. } => DstackVerifiedReport::DstackTdx(
+                verify_tdx_quote_with_events(pccs_url, quote, &runtime_events, &report_data)
+                    .await?,
+            ),
+            PlatformEvidence::GcpTdx | PlatformEvidence::NitroEnclave => {
+                bail!(
+                    "Unsupported attestation mode: {:?}",
+                    platform_attestation_mode(&platform)
+                );
+            }
+        };
+
+        Ok(VerifiedAttestation {
+            quote: platform_into_legacy_quote(platform),
+            runtime_events,
+            report_data,
+            config,
+            report,
+        })
+    }
+
+    /// Verify the quote against a RA-TLS public key.
+    pub async fn verify_with_ra_pubkey(
+        self,
+        ra_pubkey_der: &[u8],
+        pccs_url: Option<&str>,
+    ) -> Result<VerifiedAttestation> {
+        let expected_report_data = QuoteContentType::RaTlsCert.to_report_data(ra_pubkey_der);
+        if self.report_data()? != expected_report_data {
+            bail!("report data mismatch");
+        }
+        self.verify(pccs_url).await
+    }
+
+    /// Verify the quote.
+    pub async fn verify(self, pccs_url: Option<&str>) -> Result<VerifiedAttestation> {
+        self.verify_with_time(pccs_url, None).await
     }
 }
 
@@ -324,6 +673,10 @@ pub struct Attestation<R = ()> {
 }
 
 impl<T> Attestation<T> {
+    pub fn report_data_payload(&self) -> Option<&str> {
+        None
+    }
+
     pub fn tdx_quote_mut(&mut self) -> Option<&mut TdxQuote> {
         match &mut self.quote {
             AttestationQuote::DstackTdx(quote) => Some(quote),
@@ -390,6 +743,85 @@ impl GetDeviceId for DstackVerifiedReport {
 struct Mrs {
     mr_system: [u8; 32],
     mr_aggregated: [u8; 32],
+}
+
+fn decode_mr_tdx_from_quote(
+    boottime_mr: bool,
+    mr_key_provider: &[u8],
+    quote: &[u8],
+    runtime_events: &[RuntimeEvent],
+) -> Result<Mrs> {
+    let quote = Quote::parse(quote).context("Failed to parse quote")?;
+    let rtmr3 =
+        replay_runtime_events::<Sha384>(runtime_events, boottime_mr.then_some("boot-mr-done"));
+    let td_report = quote.report.as_td10().context("TDX report not found")?;
+    let mr_system = sha256([
+        &td_report.mr_td[..],
+        &td_report.rt_mr0,
+        &td_report.rt_mr1,
+        &td_report.rt_mr2,
+        mr_key_provider,
+    ]);
+    let mr_aggregated = {
+        let mut hasher = sha2::Sha256::new();
+        for d in [
+            &td_report.mr_td,
+            &td_report.rt_mr0,
+            &td_report.rt_mr1,
+            &td_report.rt_mr2,
+            &rtmr3,
+        ] {
+            hasher.update(d);
+        }
+        if td_report.mr_config_id != [0u8; 48]
+            || td_report.mr_owner != [0u8; 48]
+            || td_report.mr_owner_config != [0u8; 48]
+        {
+            hasher.update(td_report.mr_config_id);
+            hasher.update(td_report.mr_owner);
+            hasher.update(td_report.mr_owner_config);
+        }
+        hasher.finalize().into()
+    };
+    Ok(Mrs {
+        mr_system,
+        mr_aggregated,
+    })
+}
+
+async fn verify_tdx_quote_with_events(
+    pccs_url: Option<&str>,
+    quote: &[u8],
+    runtime_events: &[RuntimeEvent],
+    report_data: &[u8; 64],
+) -> Result<TdxVerifiedReport> {
+    let mut pccs_url = Cow::Borrowed(pccs_url.unwrap_or_default());
+    if pccs_url.is_empty() {
+        pccs_url = match std::env::var("PCCS_URL") {
+            Ok(url) => Cow::Owned(url),
+            Err(_) => Cow::Borrowed(""),
+        };
+    }
+    let tdx_report =
+        dcap_qvl::collateral::get_collateral_and_verify(quote, Some(pccs_url.as_ref()))
+            .await
+            .context("Failed to get collateral")?;
+    validate_tcb(&tdx_report)?;
+
+    let td_report = tdx_report.report.as_td10().context("no td report")?;
+    let replayed_rtmr = replay_runtime_events::<Sha384>(runtime_events, None);
+    if replayed_rtmr != td_report.rt_mr3 {
+        bail!(
+            "RTMR3 mismatch, quoted: {}, replayed: {}",
+            hex::encode(td_report.rt_mr3),
+            hex::encode(replayed_rtmr)
+        );
+    }
+
+    if td_report.report_data != report_data[..] {
+        bail!("tdx report_data mismatch");
+    }
+    Ok(tdx_report)
 }
 
 impl<T: GetDeviceId> Attestation<T> {
@@ -639,6 +1071,10 @@ impl Attestation {
 }
 
 impl Attestation {
+    pub fn into_v1(self) -> AttestationV1 {
+        self.into()
+    }
+
     /// Verify the quote with optional custom time (testing hook)
     pub async fn verify_with_time(
         self,
@@ -784,6 +1220,66 @@ pub struct AppInfo {
 mod tests {
     use super::*;
 
+    fn patch_v1_report_data(attestation: AttestationV1, report_data: [u8; 64]) -> AttestationV1 {
+        let AttestationV1 {
+            version,
+            platform,
+            stack,
+        } = attestation;
+        let platform = match platform {
+            PlatformEvidence::Tdx {
+                mut quote,
+                event_log,
+            } => {
+                if quote.len() >= TDX_QUOTE_REPORT_DATA_RANGE.end {
+                    quote[TDX_QUOTE_REPORT_DATA_RANGE].copy_from_slice(&report_data);
+                }
+                PlatformEvidence::Tdx { quote, event_log }
+            }
+            other => other,
+        };
+        let stack = match stack {
+            StackEvidence::Dstack {
+                runtime_events,
+                config,
+                ..
+            } => StackEvidence::Dstack {
+                report_data: report_data.to_vec(),
+                runtime_events,
+                config,
+            },
+            StackEvidence::DstackPod {
+                runtime_events,
+                config,
+                report_data_payload,
+                ..
+            } => StackEvidence::DstackPod {
+                report_data: report_data.to_vec(),
+                runtime_events,
+                config,
+                report_data_payload,
+            },
+        };
+        AttestationV1 {
+            version,
+            platform,
+            stack,
+        }
+    }
+
+    fn dummy_tdx_attestation(report_data: [u8; 64]) -> Attestation {
+        Attestation {
+            quote: AttestationQuote::DstackTdx(TdxQuote {
+                quote: vec![0u8; TDX_QUOTE_REPORT_DATA_RANGE.end],
+                event_log: Vec::new(),
+            }),
+            runtime_events: Vec::new(),
+            report_data,
+            config: "{}".into(),
+            report: (),
+        }
+    }
+
     #[test]
     fn test_to_report_data_with_hash() {
         let content_type = QuoteContentType::AppData;
@@ -830,5 +1326,64 @@ mod tests {
         assert!(content_type
             .to_report_data_with_hash(content, "invalid")
             .is_err());
+    }
+
+    #[test]
+    fn v1_roundtrip_preserves_payload_in_stack() {
+        let report_data = [42u8; 64];
+        let payload = r#"{"pod_uid":"abc","workload_id":"default/app"}"#.to_string();
+        let attestation = dummy_tdx_attestation(report_data)
+            .into_v1()
+            .into_dstack_pod(payload.clone());
+        let encoded = VersionedAttestation::V1 { attestation }.to_bytes().unwrap();
+        assert!(matches!(encoded.first(), Some(0xa0..=0xbf)));
+        let decoded = VersionedAttestation::from_bytes(&encoded)
+            .expect("decode attestation")
+            .into_v1();
+        assert_eq!(decoded.report_data_payload(), Some(payload.as_str()));
+        assert_eq!(decoded.report_data().unwrap(), report_data);
+        let attestation = decoded;
+        assert!(matches!(attestation.platform, PlatformEvidence::Tdx { .. }));
+        assert!(matches!(
+            attestation.stack,
+            StackEvidence::DstackPod {
+                report_data_payload, ..
+            } if report_data_payload == payload
+        ));
+    }
+
+    #[test]
+    fn patching_v1_report_data_preserves_payload_in_stack() {
+        let original = dummy_tdx_attestation([1u8; 64])
+            .into_v1()
+            .into_dstack_pod("payload".into());
+        let patched = patch_v1_report_data(original, [9u8; 64]);
+        assert_eq!(patched.report_data_payload(), Some("payload"));
+        assert_eq!(patched.report_data().unwrap(), [9u8; 64]);
+    }
+
+    #[test]
+    fn legacy_v0_upgrade_uses_dstack_stack() {
+        let upgraded = dummy_tdx_attestation([3u8; 64]).into_v1();
+        assert!(matches!(upgraded.platform, PlatformEvidence::Tdx { .. }));
+        assert!(matches!(upgraded.stack, StackEvidence::Dstack { .. }));
+    }
+
+    #[test]
+    fn versioned_v0_projects_to_v1() {
+        let projected = dummy_tdx_attestation([5u8; 64]).into_versioned().into_v1();
+        assert!(matches!(projected.platform, PlatformEvidence::Tdx { .. }));
+        match projected.stack {
+            StackEvidence::Dstack {
+                report_data,
+                runtime_events,
+                config,
+            } => {
+                assert_eq!(report_data, vec![5u8; 64]);
+                assert!(runtime_events.is_empty());
+                assert_eq!(config, "{}");
+            }
+            _ => panic!("expected dstack stack"),
+        }
     }
 }

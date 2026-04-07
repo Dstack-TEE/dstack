@@ -88,7 +88,7 @@ impl CaCert {
             .context("Failed to parse signature")?;
         let cfg = &csr.config;
         let app_info = if cfg.ext_app_info {
-            Some(csr.attestation.decode_app_info(false)?)
+            Some(csr.attestation.clone().into_v1().decode_app_info(false)?)
         } else {
             None
         };
@@ -388,7 +388,7 @@ impl<Key> CertRequest<'_, Key> {
             add_ext(&mut params, PHALA_RATLS_CERT_USAGE, usage);
         }
         if let Some(ver_att) = self.attestation {
-            let attestation_bytes = ver_att.clone().into_stripped().to_scale();
+            let attestation_bytes = ver_att.clone().into_stripped().to_bytes()?;
             add_ext(&mut params, PHALA_RATLS_ATTESTATION, &attestation_bytes);
         }
         if let Some(ca_level) = self.ca_level {
