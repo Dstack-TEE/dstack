@@ -87,11 +87,7 @@ impl PlatformBackend for SimulatorPlatform {
     }
 
     fn attest_response(&self, report_data: [u8; 64]) -> Result<AttestResponse> {
-        simulator::simulated_attest_response(
-            &self.attestation,
-            report_data,
-            self.patch_report_data,
-        )
+        simulator::simulated_attest_response(&self.attestation, report_data, self.patch_report_data)
     }
 
     fn emit_event(&self, event: &str, _payload: &[u8]) -> Result<()> {

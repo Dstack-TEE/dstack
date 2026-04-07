@@ -22,7 +22,7 @@ use dstack_types::SysConfig;
 use dstack_types::{Platform, VmConfig};
 use ez_hash::{sha256, Hasher, Sha384};
 use or_panic::ResultOrPanic;
-use scale::{Decode, Encode};
+use scale::{Decode, Encode, Error as ScaleError, Input, Output};
 use serde::{Deserialize, Serialize};
 use serde_human_bytes as hex_bytes;
 use sha2::Digest as _;
@@ -329,7 +329,16 @@ enum LegacyVersionedAttestation {
     V0 { attestation: Attestation },
 }
 
+/// Maximum size for encoded attestation bytes (10 MiB).
+/// Prevents OOM when decoding untrusted input.
+const MAX_ATTESTATION_BYTES: usize = 10 * 1024 * 1024;
+
 /// Represents a versioned attestation.
+///
+/// **SCALE note**: `VersionedAttestation` implements `Encode`/`Decode` so it can
+/// be embedded in SCALE structs (e.g. `CertSigningRequestV2`).  The `Decode` impl
+/// consumes all remaining input, so it **must** be the last field in any SCALE
+/// container.
 #[derive(Clone)]
 pub enum VersionedAttestation {
     /// Legacy SCALE-encoded attestation.
@@ -344,9 +353,54 @@ pub enum VersionedAttestation {
     },
 }
 
+impl Encode for VersionedAttestation {
+    fn size_hint(&self) -> usize {
+        self.to_bytes()
+            .map(|b| b.len())
+            .unwrap_or(0)
+    }
+
+    fn encode_to<T: Output + ?Sized>(&self, dest: &mut T) {
+        let bytes = self
+            .to_bytes()
+            .expect("VersionedAttestation should always encode successfully");
+        dest.write(&bytes);
+    }
+}
+
+impl Decode for VersionedAttestation {
+    fn decode<I: Input>(input: &mut I) -> Result<Self, ScaleError> {
+        let Some(remaining_len) = input.remaining_len()? else {
+            return Err(ScaleError::from(
+                "VersionedAttestation requires a bounded input to decode",
+            ));
+        };
+        if remaining_len > MAX_ATTESTATION_BYTES {
+            return Err(ScaleError::from(
+                "attestation bytes exceed maximum allowed size",
+            ));
+        }
+        let mut bytes = vec![0u8; remaining_len];
+        input.read(&mut bytes)?;
+        Self::from_bytes(&bytes).map_err(|err| {
+            ScaleError::from(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                err.to_string(),
+            ))
+        })
+    }
+}
+
 impl VersionedAttestation {
     /// Decode versioned attestation bytes.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
+        if bytes.len() > MAX_ATTESTATION_BYTES {
+            bail!(
+                "attestation bytes too large: {} > {}",
+                bytes.len(),
+                MAX_ATTESTATION_BYTES
+            );
+        }
         let Some(first) = bytes.first().copied() else {
             bail!("Empty attestation bytes");
         };
