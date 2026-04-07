@@ -22,7 +22,7 @@ use dstack_types::SysConfig;
 use dstack_types::{Platform, VmConfig};
 use ez_hash::{sha256, Hasher, Sha384};
 use or_panic::ResultOrPanic;
-use scale::{Decode, Encode, Error as ScaleError, Input, Output};
+use scale::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 use serde_human_bytes as hex_bytes;
 use sha2::Digest as _;
@@ -53,7 +53,7 @@ fn read_vm_config() -> Result<String> {
 }
 
 fn is_cbor_map_prefix(byte: u8) -> bool {
-    matches!(byte, 0xa0..=0xbb | 0xbf)
+    matches!(byte, 0xa0..=0xbf)
 }
 
 impl From<Attestation> for AttestationV1 {
@@ -344,34 +344,6 @@ pub enum VersionedAttestation {
     },
 }
 
-impl Encode for VersionedAttestation {
-    fn size_hint(&self) -> usize {
-        self.to_bytes().len()
-    }
-
-    fn encode_to<T: Output + ?Sized>(&self, dest: &mut T) {
-        dest.write(&self.to_bytes());
-    }
-}
-
-impl Decode for VersionedAttestation {
-    fn decode<I: Input>(input: &mut I) -> Result<Self, ScaleError> {
-        let Some(remaining_len) = input.remaining_len()? else {
-            return Err(ScaleError::from(
-                "VersionedAttestation requires a bounded input to decode",
-            ));
-        };
-        let mut bytes = vec![0u8; remaining_len];
-        input.read(&mut bytes)?;
-        Self::from_bytes(&bytes).map_err(|err| {
-            ScaleError::from(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                err.to_string(),
-            ))
-        })
-    }
-}
-
 impl VersionedAttestation {
     /// Decode versioned attestation bytes.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
@@ -389,23 +361,17 @@ impl VersionedAttestation {
             let attestation = AttestationV1::from_cbor(bytes)?;
             return Ok(Self::V1 { attestation });
         }
-        if first == 0x01 && bytes.get(1).is_some_and(|byte| is_cbor_map_prefix(*byte)) {
-            let attestation = AttestationV1::from_cbor(&bytes[1..])?;
-            return Ok(Self::V1 { attestation });
-        }
         bail!("Unknown attestation wire format");
     }
 
     /// Encode versioned attestation bytes.
-    pub fn to_bytes(&self) -> Vec<u8> {
+    pub fn to_bytes(&self) -> Result<Vec<u8>> {
         match self {
-            Self::V0 { attestation } => LegacyVersionedAttestation::V0 {
+            Self::V0 { attestation } => Ok(LegacyVersionedAttestation::V0 {
                 attestation: attestation.clone(),
             }
-            .encode(),
-            Self::V1 { attestation } => attestation
-                .to_cbor()
-                .or_panic("attestation schema should encode as CBOR"),
+            .encode()),
+            Self::V1 { attestation } => attestation.to_cbor(),
         }
     }
 
@@ -415,7 +381,7 @@ impl VersionedAttestation {
     }
 
     #[doc(hidden)]
-    pub fn to_scale(&self) -> Vec<u8> {
+    pub fn to_scale(&self) -> Result<Vec<u8>> {
         self.to_bytes()
     }
 
@@ -548,6 +514,15 @@ impl AttestationV1 {
             platform,
             stack,
         } = self;
+        // Verify report_data_payload binding: if present, the report_data must
+        // be derived from the payload via the AppData content type scheme.
+        if let Some(payload) = stack.report_data_payload() {
+            let report_data: [u8; 64] = stack.report_data()?;
+            let expected = QuoteContentType::AppData.to_report_data(payload.as_bytes());
+            if report_data != expected {
+                bail!("report_data does not match report_data_payload");
+            }
+        }
         let (report_data, runtime_events, config) = match stack {
             StackEvidence::Dstack {
                 report_data,
@@ -1308,7 +1283,7 @@ mod tests {
         let attestation = dummy_tdx_attestation(report_data)
             .into_v1()
             .into_dstack_pod(payload.clone());
-        let encoded = VersionedAttestation::V1 { attestation }.to_bytes();
+        let encoded = VersionedAttestation::V1 { attestation }.to_bytes().unwrap();
         assert!(matches!(encoded.first(), Some(0xa0..=0xbf)));
         let decoded = VersionedAttestation::from_bytes(&encoded)
             .expect("decode attestation")

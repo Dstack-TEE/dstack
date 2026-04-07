@@ -48,12 +48,12 @@ pub fn simulated_attest_response(
     attestation: &VersionedAttestation,
     report_data: [u8; 64],
     patch_report_data: bool,
-) -> AttestResponse {
+) -> Result<AttestResponse> {
     let attestation =
         maybe_patch_report_data(attestation, report_data, patch_report_data, "attest");
-    AttestResponse {
-        attestation: VersionedAttestation::V1 { attestation }.to_bytes(),
-    }
+    Ok(AttestResponse {
+        attestation: VersionedAttestation::V1 { attestation }.to_bytes()?,
+    })
 }
 
 pub fn simulated_info_attestation(attestation: &VersionedAttestation) -> VersionedAttestation {
@@ -64,7 +64,7 @@ pub fn simulated_certificate_attestation(
     attestation: &VersionedAttestation,
     pubkey: &[u8],
     patch_report_data: bool,
-) -> VersionedAttestation {
+) -> Result<VersionedAttestation> {
     let report_data = QuoteContentType::RaTlsCert.to_report_data(pubkey);
     let attestation = maybe_patch_report_data(
         attestation,
@@ -72,7 +72,7 @@ pub fn simulated_certificate_attestation(
         patch_report_data,
         "certificate_attestation",
     );
-    VersionedAttestation::V1 { attestation }
+    Ok(VersionedAttestation::V1 { attestation })
 }
 
 fn maybe_patch_report_data(

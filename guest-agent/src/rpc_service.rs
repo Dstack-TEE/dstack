@@ -899,7 +899,7 @@ pNs85uhOZE8z2jr8Pg==
             fn attest_response(&self, report_data: [u8; 64]) -> Result<AttestResponse> {
                 let attestation = patch_report_data(&self.attestation, report_data);
                 Ok(AttestResponse {
-                    attestation: VersionedAttestation::V1 { attestation }.to_bytes(),
+                    attestation: VersionedAttestation::V1 { attestation }.to_bytes()?,
                 })
             }
 

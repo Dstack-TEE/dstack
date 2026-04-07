@@ -48,7 +48,7 @@ impl PlatformBackend for RealPlatform {
     fn attest_response(&self, report_data: [u8; 64]) -> Result<AttestResponse> {
         let attestation = Attestation::quote(&report_data).context("Failed to get attestation")?;
         Ok(AttestResponse {
-            attestation: attestation.into_versioned().to_bytes(),
+            attestation: attestation.into_versioned().to_bytes()?,
         })
     }
 

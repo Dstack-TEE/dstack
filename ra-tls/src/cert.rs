@@ -388,7 +388,7 @@ impl<Key> CertRequest<'_, Key> {
             add_ext(&mut params, PHALA_RATLS_CERT_USAGE, usage);
         }
         if let Some(ver_att) = self.attestation {
-            let attestation_bytes = ver_att.clone().into_stripped().to_bytes();
+            let attestation_bytes = ver_att.clone().into_stripped().to_bytes()?;
             add_ext(&mut params, PHALA_RATLS_ATTESTATION, &attestation_bytes);
         }
         if let Some(ca_level) = self.ca_level {
