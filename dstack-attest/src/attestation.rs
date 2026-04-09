@@ -52,8 +52,9 @@ fn read_vm_config() -> Result<String> {
     Ok(sys_config.vm_config)
 }
 
-fn is_cbor_map_prefix(byte: u8) -> bool {
-    matches!(byte, 0xa0..=0xbf)
+fn is_msgpack_map_prefix(byte: u8) -> bool {
+    // fixmap (0x80..=0x8f), map16 (0xde), map32 (0xdf)
+    matches!(byte, 0x80..=0x8f | 0xde | 0xdf)
 }
 
 impl From<Attestation> for AttestationV1 {
@@ -355,7 +356,7 @@ pub enum VersionedAttestation {
 
 impl Encode for VersionedAttestation {
     fn size_hint(&self) -> usize {
-        self.to_bytes().map(|b| b.len()).unwrap_or(0)
+        0
     }
 
     fn encode_to<T: Output + ?Sized>(&self, dest: &mut T) {
@@ -409,8 +410,8 @@ impl VersionedAttestation {
                 LegacyVersionedAttestation::V0 { attestation } => Ok(Self::V0 { attestation }),
             };
         }
-        if is_cbor_map_prefix(first) {
-            let attestation = AttestationV1::from_cbor(bytes)?;
+        if is_msgpack_map_prefix(first) {
+            let attestation = AttestationV1::from_msgpack(bytes)?;
             return Ok(Self::V1 { attestation });
         }
         bail!("Unknown attestation wire format");
@@ -423,7 +424,7 @@ impl VersionedAttestation {
                 attestation: attestation.clone(),
             }
             .encode()),
-            Self::V1 { attestation } => attestation.to_cbor(),
+            Self::V1 { attestation } => attestation.to_msgpack(),
         }
     }
 
@@ -1221,50 +1222,7 @@ mod tests {
     use super::*;
 
     fn patch_v1_report_data(attestation: AttestationV1, report_data: [u8; 64]) -> AttestationV1 {
-        let AttestationV1 {
-            version,
-            platform,
-            stack,
-        } = attestation;
-        let platform = match platform {
-            PlatformEvidence::Tdx {
-                mut quote,
-                event_log,
-            } => {
-                if quote.len() >= TDX_QUOTE_REPORT_DATA_RANGE.end {
-                    quote[TDX_QUOTE_REPORT_DATA_RANGE].copy_from_slice(&report_data);
-                }
-                PlatformEvidence::Tdx { quote, event_log }
-            }
-            other => other,
-        };
-        let stack = match stack {
-            StackEvidence::Dstack {
-                runtime_events,
-                config,
-                ..
-            } => StackEvidence::Dstack {
-                report_data: report_data.to_vec(),
-                runtime_events,
-                config,
-            },
-            StackEvidence::DstackPod {
-                runtime_events,
-                config,
-                report_data_payload,
-                ..
-            } => StackEvidence::DstackPod {
-                report_data: report_data.to_vec(),
-                runtime_events,
-                config,
-                report_data_payload,
-            },
-        };
-        AttestationV1 {
-            version,
-            platform,
-            stack,
-        }
+        attestation.with_report_data(report_data)
     }
 
     fn dummy_tdx_attestation(report_data: [u8; 64]) -> Attestation {
@@ -1336,7 +1294,7 @@ mod tests {
             .into_v1()
             .into_dstack_pod(payload.clone());
         let encoded = VersionedAttestation::V1 { attestation }.to_bytes().unwrap();
-        assert!(matches!(encoded.first(), Some(0xa0..=0xbf)));
+        assert!(matches!(encoded.first(), Some(0x80..=0x8f)));
         let decoded = VersionedAttestation::from_bytes(&encoded)
             .expect("decode attestation")
             .into_v1();

@@ -12,7 +12,7 @@ license.workspace = true
 [dependencies]
 anyhow.workspace = true
 cc-eventlog.workspace = true
-ciborium.workspace = true
+rmp-serde.workspace = true
 dcap-qvl.workspace = true
 dstack-types.workspace = true
 ez-hash.workspace = true

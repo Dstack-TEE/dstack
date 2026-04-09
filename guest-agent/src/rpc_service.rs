@@ -670,10 +670,7 @@ mod tests {
         Signature as Ed25519Signature, Verifier, VerifyingKey as Ed25519VerifyingKey,
     };
     use k256::ecdsa::{Signature as K256Signature, VerifyingKey};
-    use ra_tls::attestation::{
-        AttestationV1, PlatformEvidence, StackEvidence, VersionedAttestation,
-        TDX_QUOTE_REPORT_DATA_RANGE,
-    };
+    use ra_tls::attestation::{AttestationV1, VersionedAttestation};
     use sha2::Sha256;
     use std::collections::HashSet;
     use std::convert::TryFrom;
@@ -817,51 +814,7 @@ pNs85uhOZE8z2jr8Pg==
             attestation: &VersionedAttestation,
             report_data: [u8; 64],
         ) -> AttestationV1 {
-            let attestation = attestation.clone().into_v1();
-            let AttestationV1 {
-                version,
-                platform,
-                stack,
-            } = attestation;
-            let platform = match platform {
-                PlatformEvidence::Tdx {
-                    mut quote,
-                    event_log,
-                } => {
-                    if quote.len() >= TDX_QUOTE_REPORT_DATA_RANGE.end {
-                        quote[TDX_QUOTE_REPORT_DATA_RANGE].copy_from_slice(&report_data);
-                    }
-                    PlatformEvidence::Tdx { quote, event_log }
-                }
-                other => other,
-            };
-            let stack = match stack {
-                StackEvidence::Dstack {
-                    runtime_events,
-                    config,
-                    ..
-                } => StackEvidence::Dstack {
-                    report_data: report_data.to_vec(),
-                    runtime_events,
-                    config,
-                },
-                StackEvidence::DstackPod {
-                    runtime_events,
-                    config,
-                    report_data_payload,
-                    ..
-                } => StackEvidence::DstackPod {
-                    report_data: report_data.to_vec(),
-                    runtime_events,
-                    config,
-                    report_data_payload,
-                },
-            };
-            AttestationV1 {
-                version,
-                platform,
-                stack,
-            }
+            attestation.clone().into_v1().with_report_data(report_data)
         }
 
         impl PlatformBackend for TestSimulatorPlatform {

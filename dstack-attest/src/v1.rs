@@ -147,21 +147,18 @@ impl Attestation {
         }
     }
 
-    pub fn to_cbor(&self) -> Result<Vec<u8>> {
+    pub fn to_msgpack(&self) -> Result<Vec<u8>> {
         let mut normalized = self.clone();
         normalized.version = ATTESTATION_VERSION;
-        let mut bytes = Vec::new();
-        ciborium::into_writer(&normalized, &mut bytes)
-            .context("Failed to encode attestation as CBOR")?;
-        Ok(bytes)
+        rmp_serde::to_vec_named(&normalized).context("failed to encode attestation as msgpack")
     }
 
-    pub fn from_cbor(bytes: &[u8]) -> Result<Self> {
+    pub fn from_msgpack(bytes: &[u8]) -> Result<Self> {
         let value: Self =
-            ciborium::from_reader(bytes).context("Failed to decode attestation from CBOR")?;
+            rmp_serde::from_slice(bytes).context("failed to decode attestation from msgpack")?;
         if value.version != ATTESTATION_VERSION {
             bail!(
-                "Unsupported attestation version: expected {}, got {}",
+                "unsupported attestation version: expected {}, got {}",
                 ATTESTATION_VERSION,
                 value.version
             );
@@ -192,6 +189,51 @@ impl Attestation {
             stack: self.stack.into_dstack_pod(report_data_payload),
         }
     }
+
+    /// Return a new attestation with the report_data patched in both platform quote and stack.
+    pub fn with_report_data(self, report_data: [u8; 64]) -> Self {
+        use crate::attestation::TDX_QUOTE_REPORT_DATA_RANGE;
+
+        let platform = match self.platform {
+            PlatformEvidence::Tdx {
+                mut quote,
+                event_log,
+            } => {
+                if quote.len() >= TDX_QUOTE_REPORT_DATA_RANGE.end {
+                    quote[TDX_QUOTE_REPORT_DATA_RANGE].copy_from_slice(&report_data);
+                }
+                PlatformEvidence::Tdx { quote, event_log }
+            }
+            other => other,
+        };
+        let stack = match self.stack {
+            StackEvidence::Dstack {
+                runtime_events,
+                config,
+                ..
+            } => StackEvidence::Dstack {
+                report_data: report_data.to_vec(),
+                runtime_events,
+                config,
+            },
+            StackEvidence::DstackPod {
+                runtime_events,
+                config,
+                report_data_payload,
+                ..
+            } => StackEvidence::DstackPod {
+                report_data: report_data.to_vec(),
+                runtime_events,
+                config,
+                report_data_payload,
+            },
+        };
+        Self {
+            version: self.version,
+            platform,
+            stack,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -199,7 +241,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn cbor_roundtrip_preserves_attestation() {
+    fn msgpack_roundtrip_preserves_attestation() {
         let attestation = Attestation::new(
             PlatformEvidence::Tdx {
                 quote: vec![1u8, 2, 3],
@@ -222,9 +264,9 @@ mod tests {
             },
         );
 
-        let encoded = attestation.to_cbor().expect("encode cbor");
-        assert!(matches!(encoded.first(), Some(0xa0..=0xbf)));
-        let decoded = Attestation::from_cbor(&encoded).expect("decode cbor");
+        let encoded = attestation.to_msgpack().expect("encode msgpack");
+        assert!(matches!(encoded.first(), Some(0x80..=0x8f)));
+        let decoded = Attestation::from_msgpack(&encoded).expect("decode msgpack");
         assert_eq!(decoded.version, ATTESTATION_VERSION);
         match decoded.platform {
             PlatformEvidence::Tdx { quote, event_log } => {
