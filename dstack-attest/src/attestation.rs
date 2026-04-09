@@ -52,8 +52,9 @@ fn read_vm_config() -> Result<String> {
     Ok(sys_config.vm_config)
 }
 
-fn is_cbor_map_prefix(byte: u8) -> bool {
-    matches!(byte, 0xa0..=0xbf)
+fn is_msgpack_map_prefix(byte: u8) -> bool {
+    // fixmap (0x80..=0x8f), map16 (0xde), map32 (0xdf)
+    matches!(byte, 0x80..=0x8f | 0xde | 0xdf)
 }
 
 impl From<Attestation> for AttestationV1 {
@@ -409,8 +410,8 @@ impl VersionedAttestation {
                 LegacyVersionedAttestation::V0 { attestation } => Ok(Self::V0 { attestation }),
             };
         }
-        if is_cbor_map_prefix(first) {
-            let attestation = AttestationV1::from_cbor(bytes)?;
+        if is_msgpack_map_prefix(first) {
+            let attestation = AttestationV1::from_msgpack(bytes)?;
             return Ok(Self::V1 { attestation });
         }
         bail!("Unknown attestation wire format");
@@ -423,7 +424,7 @@ impl VersionedAttestation {
                 attestation: attestation.clone(),
             }
             .encode()),
-            Self::V1 { attestation } => attestation.to_cbor(),
+            Self::V1 { attestation } => attestation.to_msgpack(),
         }
     }
 
@@ -1336,7 +1337,7 @@ mod tests {
             .into_v1()
             .into_dstack_pod(payload.clone());
         let encoded = VersionedAttestation::V1 { attestation }.to_bytes().unwrap();
-        assert!(matches!(encoded.first(), Some(0xa0..=0xbf)));
+        assert!(matches!(encoded.first(), Some(0x80..=0x8f)));
         let decoded = VersionedAttestation::from_bytes(&encoded)
             .expect("decode attestation")
             .into_v1();
