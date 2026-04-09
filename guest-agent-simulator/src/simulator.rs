@@ -7,8 +7,7 @@ use std::path::Path;
 use anyhow::{anyhow, Context, Result};
 use dstack_guest_agent_rpc::{AttestResponse, GetQuoteResponse};
 use ra_tls::attestation::{
-    AttestationV1, PlatformEvidence, QuoteContentType, StackEvidence, TdxAttestationExt,
-    VersionedAttestation, TDX_QUOTE_REPORT_DATA_RANGE,
+    AttestationV1, QuoteContentType, TdxAttestationExt, VersionedAttestation,
 };
 use std::fs;
 use tracing::warn;
@@ -89,52 +88,5 @@ fn maybe_patch_report_data(
         );
         return attestation.clone().into_v1();
     }
-    patch_v1_report_data(attestation.clone().into_v1(), report_data)
-}
-
-fn patch_v1_report_data(attestation: AttestationV1, report_data: [u8; 64]) -> AttestationV1 {
-    let AttestationV1 {
-        version,
-        platform,
-        stack,
-    } = attestation;
-    let platform = match platform {
-        PlatformEvidence::Tdx {
-            mut quote,
-            event_log,
-        } => {
-            if quote.len() >= TDX_QUOTE_REPORT_DATA_RANGE.end {
-                quote[TDX_QUOTE_REPORT_DATA_RANGE].copy_from_slice(&report_data);
-            }
-            PlatformEvidence::Tdx { quote, event_log }
-        }
-        other => other,
-    };
-    let stack = match stack {
-        StackEvidence::Dstack {
-            runtime_events,
-            config,
-            ..
-        } => StackEvidence::Dstack {
-            report_data: report_data.to_vec(),
-            runtime_events,
-            config,
-        },
-        StackEvidence::DstackPod {
-            runtime_events,
-            config,
-            report_data_payload,
-            ..
-        } => StackEvidence::DstackPod {
-            report_data: report_data.to_vec(),
-            runtime_events,
-            config,
-            report_data_payload,
-        },
-    };
-    AttestationV1 {
-        version,
-        platform,
-        stack,
-    }
+    attestation.clone().into_v1().with_report_data(report_data)
 }

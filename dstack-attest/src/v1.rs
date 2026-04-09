@@ -189,6 +189,51 @@ impl Attestation {
             stack: self.stack.into_dstack_pod(report_data_payload),
         }
     }
+
+    /// Return a new attestation with the report_data patched in both platform quote and stack.
+    pub fn with_report_data(self, report_data: [u8; 64]) -> Self {
+        use crate::attestation::TDX_QUOTE_REPORT_DATA_RANGE;
+
+        let platform = match self.platform {
+            PlatformEvidence::Tdx {
+                mut quote,
+                event_log,
+            } => {
+                if quote.len() >= TDX_QUOTE_REPORT_DATA_RANGE.end {
+                    quote[TDX_QUOTE_REPORT_DATA_RANGE].copy_from_slice(&report_data);
+                }
+                PlatformEvidence::Tdx { quote, event_log }
+            }
+            other => other,
+        };
+        let stack = match self.stack {
+            StackEvidence::Dstack {
+                runtime_events,
+                config,
+                ..
+            } => StackEvidence::Dstack {
+                report_data: report_data.to_vec(),
+                runtime_events,
+                config,
+            },
+            StackEvidence::DstackPod {
+                runtime_events,
+                config,
+                report_data_payload,
+                ..
+            } => StackEvidence::DstackPod {
+                report_data: report_data.to_vec(),
+                runtime_events,
+                config,
+                report_data_payload,
+            },
+        };
+        Self {
+            version: self.version,
+            platform,
+            stack,
+        }
+    }
 }
 
 #[cfg(test)]
