@@ -355,7 +355,7 @@ pub enum VersionedAttestation {
 
 impl Encode for VersionedAttestation {
     fn size_hint(&self) -> usize {
-        self.to_bytes().map(|b| b.len()).unwrap_or(0)
+        0
     }
 
     fn encode_to<T: Output + ?Sized>(&self, dest: &mut T) {
