@@ -2,7 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use anyhow::{bail, Context, Result};
 use dstack_kms_rpc::{
@@ -142,20 +145,28 @@ impl RpcHandler {
         self.state.config.image.cache_dir.join("images")
     }
 
-    fn remove_cache(&self, parent_dir: &PathBuf, sub_dir: &str) -> Result<()> {
+    fn remove_cache(&self, parent_dir: &Path, sub_dir: &str) -> Result<()> {
         if sub_dir.is_empty() {
             return Ok(());
         }
+
         if sub_dir == "all" {
             fs::remove_dir_all(parent_dir)?;
-        } else {
-            let path = parent_dir.join(sub_dir);
-            if path.is_dir() {
-                fs::remove_dir_all(path)?;
-            } else {
-                fs::remove_file(path)?;
-            }
+            return Ok(());
         }
+
+        if !sub_dir.chars().all(|c| c.is_ascii_hexdigit()) {
+            bail!("Invalid cache key");
+        }
+
+        let path = parent_dir.join(sub_dir);
+
+        if path.is_dir() {
+            fs::remove_dir_all(path)?;
+        } else if path.is_file() {
+            fs::remove_file(path)?;
+        }
+
         Ok(())
     }
 
