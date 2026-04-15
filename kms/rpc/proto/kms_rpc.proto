@@ -46,7 +46,7 @@ message AppKeyResponse {
   string tproxy_app_id = 6;
   // Reverse proxy app ID from DstackKms contract.
   string gateway_app_id = 7;
-  // OS Image hash 
+  // OS Image hash
   bytes os_image_hash = 8;
 }
 
