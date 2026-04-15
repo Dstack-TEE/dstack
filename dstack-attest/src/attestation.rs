@@ -32,6 +32,7 @@ pub use crate::v1::{Attestation as AttestationV1, PlatformEvidence, StackEvidenc
 const DSTACK_TDX: &str = "dstack-tdx";
 const DSTACK_GCP_TDX: &str = "dstack-gcp-tdx";
 const DSTACK_NITRO_ENCLAVE: &str = "dstack-nitro-enclave";
+const DSTACK_SEV_SNP: &str = "dstack-sev-snp";
 #[cfg(feature = "quote")]
 const SYS_CONFIG_PATH: &str = "/dstack/.host-shared/.sys-config.json";
 
@@ -151,6 +152,9 @@ pub enum AttestationMode {
     /// Dstack attestation SDK in AWS Nitro Enclave
     #[serde(rename = "dstack-nitro-enclave")]
     DstackNitroEnclave,
+    /// AMD SEV-SNP attestation
+    #[serde(rename = "dstack-sev-snp")]
+    DstackSevSnp,
 }
 
 impl AttestationMode {
@@ -184,6 +188,7 @@ impl AttestationMode {
             Self::DstackTdx => true,
             Self::DstackGcpTdx => true,
             Self::DstackNitroEnclave => false,
+            Self::DstackSevSnp => false,
         }
     }
 
@@ -193,6 +198,7 @@ impl AttestationMode {
             Self::DstackGcpTdx => Some(14),
             Self::DstackTdx => None,
             Self::DstackNitroEnclave => None,
+            Self::DstackSevSnp => None,
         }
     }
 
@@ -202,6 +208,7 @@ impl AttestationMode {
             Self::DstackTdx => DSTACK_TDX,
             Self::DstackGcpTdx => DSTACK_GCP_TDX,
             Self::DstackNitroEnclave => DSTACK_NITRO_ENCLAVE,
+            Self::DstackSevSnp => DSTACK_SEV_SNP,
         }
     }
 
@@ -211,6 +218,8 @@ impl AttestationMode {
             Self::DstackTdx => true,
             Self::DstackGcpTdx => true,
             Self::DstackNitroEnclave => false,
+            // SEV-SNP: compose_hash and rootfs_hash are separate fields in the request
+            Self::DstackSevSnp => true,
         }
     }
 }
@@ -1048,7 +1057,9 @@ impl Attestation {
                     cc_eventlog::tdx::read_event_log().context("Failed to read event log")?;
                 AttestationQuote::DstackTdx(TdxQuote { quote, event_log })
             }
-            AttestationMode::DstackGcpTdx | AttestationMode::DstackNitroEnclave => {
+            AttestationMode::DstackGcpTdx
+            | AttestationMode::DstackNitroEnclave
+            | AttestationMode::DstackSevSnp => {
                 bail!("Unsupported attestation mode: {mode:?}");
             }
         };
