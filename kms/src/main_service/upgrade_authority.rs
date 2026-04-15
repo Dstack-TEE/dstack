@@ -37,6 +37,8 @@ pub(crate) struct BootInfo {
     pub key_provider_info: Vec<u8>,
     pub tcb_status: String,
     pub advisory_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub extra_info: String,
 }
 
 pub(crate) fn build_boot_info(
@@ -69,6 +71,7 @@ pub(crate) fn build_boot_info(
         key_provider_info: app_info.key_provider_info,
         tcb_status,
         advisory_ids,
+        extra_info: String::new(),
     })
 }
 
