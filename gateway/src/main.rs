@@ -32,6 +32,7 @@ mod distributed_certbot;
 mod kv;
 mod main_service;
 mod models;
+mod pp;
 mod proxy;
 mod web_routes;
 

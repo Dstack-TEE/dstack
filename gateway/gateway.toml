@@ -58,6 +58,10 @@ workers = 32
 external_port = 443
 # Maximum concurrent connections per app. 0 means unlimited.
 max_connections_per_app = 2000
+# Whether to read PROXY protocol from inbound connections (e.g. from Cloudflare).
+inbound_pp_enabled = false
+# Whether to send PROXY protocol headers to backend apps.
+outbound_pp_enabled = false
 
 [core.proxy.timeouts]
 # Timeout for establishing a connection to the target app.
@@ -81,6 +85,8 @@ write = "5s"
 shutdown = "5s"
 # Timeout for total connection duration.
 total = "5h"
+# Timeout for proxy protocol header.
+pp_header = "5s"
 
 [core.recycle]
 enabled = true

@@ -117,6 +117,14 @@ pub struct ProxyConfig {
     pub app_address_ns_compat: bool,
     /// Maximum concurrent connections per app. 0 means unlimited.
     pub max_connections_per_app: u64,
+    /// Whether to read PROXY protocol headers from inbound connections
+    /// (e.g. when behind a PP-aware load balancer like Cloudflare).
+    #[serde(default)]
+    pub inbound_pp_enabled: bool,
+    /// Whether to send PROXY protocol headers on outbound connections to backend apps.
+    /// This is a server-side setting; it must NOT be controlled by client input (e.g. SNI).
+    #[serde(default)]
+    pub outbound_pp_enabled: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -142,6 +150,9 @@ pub struct Timeouts {
     pub write: Duration,
     #[serde(with = "serde_duration")]
     pub shutdown: Duration,
+    /// Timeout for reading the proxy protocol header from inbound connections.
+    #[serde(with = "serde_duration")]
+    pub pp_header: Duration,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
