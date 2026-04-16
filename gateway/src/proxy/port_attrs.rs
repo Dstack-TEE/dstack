@@ -45,13 +45,12 @@ pub(crate) fn should_send_pp(state: &Proxy, instance_id: &str, port: u16) -> boo
 /// Spawn the background lazy-fetch worker. Should be called once at startup.
 pub(crate) fn spawn_fetcher(state: Proxy, mut rx: UnboundedReceiver<String>) {
     let in_flight: Arc<Mutex<HashSet<String>>> = Default::default();
-    let timeout = state.config.proxy.timeouts.port_attrs_fetch;
     tokio::spawn(async move {
         while let Some(instance_id) = rx.recv().await {
-            // Dedupe: only spawn one fetch per instance at a time. After the
-            // fetch completes, the entry is removed so a later registration
-            // (with new compose_hash) can trigger a fresh fetch via the same
-            // path.
+            // Dedupe: only one fetch per instance at a time. The entry is
+            // removed once the retry loop terminates (success, exhausted,
+            // or unknown-instance), so a later registration with a new
+            // compose_hash can re-trigger via the same path.
             {
                 let mut in_flight = in_flight.lock().expect("port_attrs in_flight poisoned");
                 if !in_flight.insert(instance_id.clone()) {
@@ -62,15 +61,7 @@ pub(crate) fn spawn_fetcher(state: Proxy, mut rx: UnboundedReceiver<String>) {
             let in_flight = in_flight.clone();
             let id = instance_id.clone();
             tokio::spawn(async move {
-                match tokio::time::timeout(timeout, fetch_and_store(&state, &id)).await {
-                    Ok(Ok(())) => debug!("port_attrs cached for instance {id}"),
-                    Ok(Err(err)) => {
-                        warn!("port_attrs fetch for instance {id} failed: {err:#}")
-                    }
-                    Err(_) => {
-                        warn!("port_attrs fetch for instance {id} timed out after {timeout:?}")
-                    }
-                }
+                fetch_with_retry(&state, &id).await;
                 in_flight
                     .lock()
                     .expect("port_attrs in_flight poisoned")
@@ -78,6 +69,50 @@ pub(crate) fn spawn_fetcher(state: Proxy, mut rx: UnboundedReceiver<String>) {
             });
         }
     });
+}
+
+async fn fetch_with_retry(state: &Proxy, instance_id: &str) {
+    let cfg = &state.config.proxy.port_attrs_fetch;
+    let mut attempt = 0u32;
+    let mut backoff = cfg.backoff_initial;
+    loop {
+        match tokio::time::timeout(cfg.timeout, fetch_and_store(state, instance_id)).await {
+            Ok(Ok(())) => {
+                debug!("port_attrs cached for instance {instance_id} (attempt {attempt})");
+                return;
+            }
+            Ok(Err(err)) if is_unknown_instance(&err) => {
+                // Instance was recycled while the fetch was queued. No
+                // point retrying — the instance is gone.
+                debug!("port_attrs fetch for {instance_id}: instance no longer exists, giving up");
+                return;
+            }
+            Ok(Err(err)) => {
+                warn!("port_attrs fetch for {instance_id} failed (attempt {attempt}): {err:#}");
+            }
+            Err(_) => {
+                warn!(
+                    "port_attrs fetch for {instance_id} timed out after {:?} (attempt {attempt})",
+                    cfg.timeout
+                );
+            }
+        }
+        if attempt >= cfg.max_retries {
+            warn!(
+                "port_attrs fetch for {instance_id} giving up after {} attempts",
+                attempt + 1
+            );
+            return;
+        }
+        tokio::time::sleep(backoff).await;
+        attempt += 1;
+        backoff = (backoff * 2).min(cfg.backoff_max);
+    }
+}
+
+fn is_unknown_instance(err: &anyhow::Error) -> bool {
+    err.chain()
+        .any(|e| e.to_string().contains("unknown instance"))
 }
 
 async fn fetch_and_store(state: &Proxy, instance_id: &str) -> Result<()> {

@@ -124,6 +124,25 @@ pub struct ProxyConfig {
     /// (e.g. when behind a PP-aware load balancer like Cloudflare).
     #[serde(default)]
     pub inbound_pp_enabled: bool,
+    /// Background lazy-fetch behaviour for `port_attrs` (legacy CVMs).
+    pub port_attrs_fetch: PortAttrsFetchConfig,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct PortAttrsFetchConfig {
+    /// Timeout for a single `Info()` RPC attempt.
+    #[serde(with = "serde_duration")]
+    pub timeout: Duration,
+    /// Maximum number of attempts after the initial try (0 = no retry).
+    /// Retries cover the window where a freshly-registered CVM hasn't
+    /// finished its WireGuard handshake yet.
+    pub max_retries: u32,
+    /// Delay before the first retry; doubles on each subsequent retry,
+    /// capped at `backoff_max`.
+    #[serde(with = "serde_duration")]
+    pub backoff_initial: Duration,
+    #[serde(with = "serde_duration")]
+    pub backoff_max: Duration,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -152,10 +171,6 @@ pub struct Timeouts {
     /// Timeout for reading the proxy protocol header from inbound connections.
     #[serde(with = "serde_duration")]
     pub pp_header: Duration,
-    /// Timeout for the background lazy fetch of `port_attrs` from a legacy CVM
-    /// agent's `Info()` RPC.
-    #[serde(with = "serde_duration")]
-    pub port_attrs_fetch: Duration,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
