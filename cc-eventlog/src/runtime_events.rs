@@ -286,4 +286,48 @@ mod tests {
             "event\"with\\special\nchars"
         );
     }
+
+    #[test]
+    fn mixed_v1_v2_replay() {
+        let events = vec![
+            RuntimeEvent::new("app-id".to_string(), vec![1, 2], EventLogVersion::V1),
+            RuntimeEvent::new("compose-hash".to_string(), vec![3, 4], EventLogVersion::V2),
+            RuntimeEvent::new("instance-id".to_string(), vec![5, 6], EventLogVersion::V1),
+        ];
+        let mr = replay_events::<Sha384>(&events, None);
+        // Replay manually to verify
+        let mut expected = Sha384::zeros();
+        expected = Sha384::hash((expected, events[0].digest::<Sha384>()));
+        expected = Sha384::hash((expected, events[1].digest::<Sha384>()));
+        expected = Sha384::hash((expected, events[2].digest::<Sha384>()));
+        assert_eq!(mr, expected, "mixed v1/v2 replay must work correctly");
+    }
+
+    #[test]
+    fn scale_roundtrip_preserves_event_data() {
+        use scale::{Decode, Encode};
+        // V1 event
+        let v1 = RuntimeEvent::new("test".to_string(), vec![1, 2, 3], EventLogVersion::V1);
+        let encoded = v1.encode();
+        let decoded = RuntimeEvent::decode(&mut &encoded[..]).unwrap();
+        assert_eq!(decoded.event, v1.event);
+        assert_eq!(decoded.payload, v1.payload);
+        // version is #[codec(skip)] so it defaults to V1 on decode
+        assert_eq!(decoded.version, EventLogVersion::V1);
+    }
+
+    #[test]
+    fn scale_decode_old_format_without_version() {
+        use scale::{Decode, Encode};
+        // Encode a current RuntimeEvent (version is skipped by codec),
+        // then decode — simulates reading data from before version was added
+        let original =
+            RuntimeEvent::new("app-id".to_string(), vec![0xaa, 0xbb], EventLogVersion::V2);
+        let encoded = original.encode();
+        let decoded = RuntimeEvent::decode(&mut &encoded[..]).unwrap();
+        assert_eq!(decoded.event, "app-id");
+        assert_eq!(decoded.payload, vec![0xaa, 0xbb]);
+        // version is #[codec(skip)] so always decodes as default (V1)
+        assert_eq!(decoded.version, EventLogVersion::V1);
+    }
 }
