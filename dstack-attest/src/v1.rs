@@ -246,6 +246,7 @@ impl Attestation {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dstack_types::EventLogVersion;
 
     #[test]
     fn msgpack_roundtrip_preserves_attestation() {
@@ -258,6 +259,8 @@ mod tests {
                     digest: vec![0xaa, 0xbb, 0xcc],
                     event: "pod".into(),
                     event_payload: vec![0xde, 0xad, 0xbe, 0xef],
+                    version: EventLogVersion::V1,
+                    hash_input: None,
                 }],
             },
             StackEvidence::DstackPod {
@@ -265,6 +268,7 @@ mod tests {
                 runtime_events: vec![RuntimeEvent {
                     event: "pod".into(),
                     payload: vec![0xca, 0xfe, 0xba, 0xbe],
+                    version: EventLogVersion::V1,
                 }],
                 config: "{}".into(),
                 report_data_payload: "{\"hello\":\"world\"}".into(),

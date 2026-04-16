@@ -12,7 +12,9 @@ pub const TDX_QUOTE_REPORT_DATA_RANGE: std::ops::Range<usize> = 568..632;
 use std::{borrow::Cow, time::SystemTime};
 
 use anyhow::{anyhow, bail, Context, Result};
-use cc_eventlog::{EventLogVersion, RuntimeEvent, TdxEvent};
+#[cfg(feature = "quote")]
+use cc_eventlog::EventLogVersion;
+use cc_eventlog::{RuntimeEvent, TdxEvent};
 use dcap_qvl::{
     quote::{EnclaveReport, Quote, Report, TDReport10, TDReport15},
     verify::VerifiedReport as TdxVerifiedReport,
