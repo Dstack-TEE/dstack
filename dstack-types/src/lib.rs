@@ -45,6 +45,18 @@ pub struct AppCompose {
     pub storage_fs: Option<String>,
     #[serde(default, with = "human_size")]
     pub swap_size: u64,
+    /// Per-port attributes consumed by the gateway (e.g. PROXY protocol).
+    #[serde(default)]
+    pub ports: Vec<PortAttrs>,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone)]
+pub struct PortAttrs {
+    pub port: u16,
+    /// Whether the gateway should send a PROXY protocol header on outbound
+    /// connections to this port.
+    #[serde(default)]
+    pub pp: bool,
 }
 
 fn default_true() -> bool {

@@ -34,11 +34,15 @@ use crate::{
 pub(crate) struct AddressInfo {
     pub ip: Ipv4Addr,
     pub counter: Arc<AtomicU64>,
+    /// Instance id this address belongs to. Used to look up per-instance state
+    /// (e.g. port_attrs) after the racing connect picks a winner.
+    pub instance_id: String,
 }
 
 pub(crate) type AddressGroup = smallvec::SmallVec<[AddressInfo; 4]>;
 
 mod io_bridge;
+mod port_attrs;
 mod sni;
 mod tls_passthough;
 mod tls_terminate;

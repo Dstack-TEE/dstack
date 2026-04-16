@@ -12,6 +12,25 @@ package gateway;
 message RegisterCvmRequest {
   // The public key of the WireGuard interface of the CVM.
   string client_public_key = 1;
+  // Per-port attributes the gateway should apply when proxying to this CVM.
+  // Wrapped in a message so we can distinguish "not reported" (old CVM →
+  // gateway falls back to fetching app-compose via Info()) from "reported
+  // empty" (new CVM with no special port behaviour).
+  optional PortAttrsList port_attrs = 2;
+}
+
+// PortAttrsList wraps a list of PortAttrs so it can be optional on the wire.
+message PortAttrsList {
+  repeated PortAttrs attrs = 1;
+}
+
+// PortAttrs declares per-port behaviour for the gateway.
+message PortAttrs {
+  // The CVM port these attributes apply to.
+  uint32 port = 1;
+  // Whether the gateway should send a PROXY protocol header on outbound
+  // connections to this port.
+  bool pp = 2;
 }
 
 // DebugRegisterCvmRequest is the request for DebugRegisterCvm (only works when debug_mode is enabled).

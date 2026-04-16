@@ -15,6 +15,8 @@ use std::{
     time::SystemTime,
 };
 
+use crate::kv::PortFlags;
+
 mod filters {
     pub fn hex(data: impl AsRef<[u8]>) -> rinja::Result<String> {
         Ok(hex::encode(data))
@@ -60,6 +62,10 @@ pub struct InstanceInfo {
     pub ip: Ipv4Addr,
     pub public_key: String,
     pub reg_time: SystemTime,
+    /// Per-port flags. `None` means the CVM didn't report any (legacy);
+    /// gateway will lazily populate via Info() on first proxied connection.
+    #[serde(default)]
+    pub port_attrs: Option<BTreeMap<u16, PortFlags>>,
     #[serde(skip)]
     pub connections: Arc<AtomicU64>,
 }

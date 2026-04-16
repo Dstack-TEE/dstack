@@ -12,5 +12,6 @@ InstanceInfo {
         tv_sec: 0,
         tv_nsec: 0,
     },
+    port_attrs: None,
     connections: 0,
 }

@@ -35,6 +35,7 @@ impl DebugRpc for DebugRpcHandler {
             &request.app_id,
             &request.instance_id,
             &request.client_public_key,
+            None,
         )
     }
 

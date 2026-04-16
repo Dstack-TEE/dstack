@@ -37,7 +37,7 @@ use crate::{
     config::{Config, TlsConfig},
     kv::{
         fetch_peers_from_bootnode, AppIdValidator, HttpsClientConfig, InstanceData, KvStore,
-        NodeData, NodeStatus, WaveKvSyncService,
+        NodeData, NodeStatus, PortFlags, WaveKvSyncService,
     },
     models::{InstanceInfo, WgConf},
     proxy::{create_acceptor_with_cert_resolver, AddressGroup, AddressInfo},
@@ -378,12 +378,16 @@ impl Proxy {
         })
     }
 
-    /// Register a CVM with the given app_id, instance_id and client_public_key
+    /// Register a CVM with the given app_id, instance_id and client_public_key.
+    ///
+    /// `port_attrs = None` means the CVM didn't report port attributes (legacy
+    /// CVM). The gateway will lazily fetch them via Info() on first connection.
     pub fn do_register_cvm(
         &self,
         app_id: &str,
         instance_id: &str,
         client_public_key: &str,
+        port_attrs: Option<BTreeMap<u16, PortFlags>>,
     ) -> Result<RegisterCvmResponse> {
         let mut state = self.lock();
 
@@ -403,7 +407,7 @@ impl Proxy {
             bail!("[{instance_id}] client public key is empty");
         }
         let client_info = state
-            .new_client_by_id(instance_id, app_id, client_public_key)
+            .new_client_by_id(instance_id, app_id, client_public_key, port_attrs)
             .context("failed to allocate IP address for client")?;
         if let Err(err) = state.reconfigure() {
             error!("failed to reconfigure: {err:?}");
@@ -425,7 +429,7 @@ impl Proxy {
             }),
             agent: Some(GuestAgentConfig {
                 external_port: port.into(),
-                internal_port: 8090,
+                internal_port: state.config.proxy.agent_port.into(),
                 domain: base_domain,
                 app_address_ns_prefix: state.config.proxy.app_address_ns_prefix.clone(),
             }),
@@ -449,6 +453,7 @@ fn build_state_from_kv_store(instances: BTreeMap<String, InstanceData>) -> Proxy
             reg_time: UNIX_EPOCH
                 .checked_add(Duration::from_secs(data.reg_time))
                 .unwrap_or(UNIX_EPOCH),
+            port_attrs: data.port_attrs,
             connections: Default::default(),
         };
         state.allocated_addresses.insert(data.ip);
@@ -742,6 +747,7 @@ fn reload_instances_from_kv_store(proxy: &Proxy, store: &KvStore) -> Result<()> 
             reg_time: UNIX_EPOCH
                 .checked_add(Duration::from_secs(data.reg_time))
                 .unwrap_or(UNIX_EPOCH),
+            port_attrs: data.port_attrs.clone(),
             connections: Default::default(),
         };
 
@@ -823,6 +829,7 @@ impl ProxyState {
         id: &str,
         app_id: &str,
         public_key: &str,
+        port_attrs: Option<BTreeMap<u16, PortFlags>>,
     ) -> Result<InstanceInfo> {
         if id.is_empty() {
             bail!("instance_id is empty (no_instance_id is set?)");
@@ -841,6 +848,10 @@ impl ProxyState {
                 // Update reg_time so other nodes will pick up the change
                 existing.reg_time = SystemTime::now();
             }
+            // Always update port_attrs from the latest registration so changes
+            // take effect across re-registrations. A `None` here (legacy CVM)
+            // wipes any previously-cached attrs so the lazy fetch path runs again.
+            existing.port_attrs = port_attrs.clone();
             let existing = existing.clone();
             if self.valid_ip(existing.ip) {
                 // Sync existing instance to KvStore (might be from legacy state)
@@ -849,6 +860,7 @@ impl ProxyState {
                     ip: existing.ip,
                     public_key: existing.public_key.clone(),
                     reg_time: encode_ts(existing.reg_time),
+                    port_attrs: existing.port_attrs.clone(),
                 };
                 if let Err(err) = self.kv_store.sync_instance(&existing.id, &data) {
                     error!("failed to sync existing instance to KvStore: {err:?}");
@@ -867,10 +879,48 @@ impl ProxyState {
             ip,
             public_key: public_key.to_string(),
             reg_time: SystemTime::now(),
+            port_attrs,
             connections: Default::default(),
         };
         self.add_instance(host_info.clone());
         Ok(host_info)
+    }
+
+    /// Lookup an instance's IP. Returns `None` if the instance is unknown.
+    pub(crate) fn instance_ip(&self, instance_id: &str) -> Option<Ipv4Addr> {
+        self.state.instances.get(instance_id).map(|i| i.ip)
+    }
+
+    /// Lookup an instance's port_attrs. `None` means the CVM never reported
+    /// them (legacy CVM), so the caller should fall back to fetching via Info().
+    pub(crate) fn instance_port_attrs(
+        &self,
+        instance_id: &str,
+    ) -> Option<BTreeMap<u16, PortFlags>> {
+        self.state.instances.get(instance_id)?.port_attrs.clone()
+    }
+
+    /// Update an instance's port_attrs (used after a lazy fetch via Info()).
+    /// Persists to the WaveKV store so other gateway nodes pick it up.
+    pub(crate) fn update_instance_port_attrs(
+        &mut self,
+        instance_id: &str,
+        attrs: BTreeMap<u16, PortFlags>,
+    ) {
+        let Some(info) = self.state.instances.get_mut(instance_id) else {
+            return;
+        };
+        info.port_attrs = Some(attrs.clone());
+        let data = InstanceData {
+            app_id: info.app_id.clone(),
+            ip: info.ip,
+            public_key: info.public_key.clone(),
+            reg_time: encode_ts(info.reg_time),
+            port_attrs: Some(attrs),
+        };
+        if let Err(err) = self.kv_store.sync_instance(instance_id, &data) {
+            error!("failed to sync updated port_attrs to KvStore: {err:?}");
+        }
     }
 
     fn add_instance(&mut self, info: InstanceInfo) {
@@ -880,6 +930,7 @@ impl ProxyState {
             ip: info.ip,
             public_key: info.public_key.clone(),
             reg_time: encode_ts(info.reg_time),
+            port_attrs: info.port_attrs.clone(),
         };
         if let Err(err) = self.kv_store.sync_instance(&info.id, &data) {
             error!("failed to sync instance to KvStore: {err:?}");
@@ -921,6 +972,7 @@ impl ProxyState {
             return Ok(smallvec![AddressInfo {
                 ip: Ipv4Addr::new(127, 0, 0, 1),
                 counter: Default::default(),
+                instance_id: "localhost".to_string(),
             }]);
         }
         let n = self.config.proxy.connect_top_n;
@@ -928,6 +980,7 @@ impl ProxyState {
             return Ok(smallvec![AddressInfo {
                 ip: instance.ip,
                 counter: instance.connections.clone(),
+                instance_id: instance.id.clone(),
             }]);
         };
         let app_instances = self.state.apps.get(id).context("app not found")?;
@@ -955,7 +1008,12 @@ impl ProxyState {
                 .filter_map(|instance_id| {
                     let instance = self.state.instances.get(instance_id)?;
                     let (_, elapsed) = handshakes.get(&instance.public_key)?;
-                    Some((instance.ip, *elapsed, instance.connections.clone()))
+                    Some((
+                        instance.ip,
+                        *elapsed,
+                        instance.connections.clone(),
+                        instance.id.clone(),
+                    ))
                 })
                 .collect::<SmallVec<[_; 4]>>(),
         };
@@ -963,7 +1021,11 @@ impl ProxyState {
         instances.truncate(n);
         Ok(instances
             .into_iter()
-            .map(|(ip, _, counter)| AddressInfo { ip, counter })
+            .map(|(ip, _, counter, instance_id)| AddressInfo {
+                ip,
+                counter,
+                instance_id,
+            })
             .collect())
     }
 
@@ -973,6 +1035,7 @@ impl ProxyState {
             return Some(smallvec![AddressInfo {
                 ip: info.ip,
                 counter: info.connections.clone(),
+                instance_id: info.id.clone(),
             }]);
         }
 
@@ -999,6 +1062,7 @@ impl ProxyState {
             smallvec![AddressInfo {
                 ip: info.ip,
                 counter: info.connections.clone(),
+                instance_id: info.id.clone(),
             }]
         })
     }
@@ -1271,8 +1335,14 @@ impl GatewayRpc for RpcHandler {
             .context("App authorization failed")?;
         let app_id = hex::encode(&app_info.app_id);
         let instance_id = hex::encode(&app_info.instance_id);
+        let port_attrs = request.port_attrs.map(|list| {
+            list.attrs
+                .into_iter()
+                .map(|p| (p.port as u16, PortFlags { pp: p.pp }))
+                .collect::<BTreeMap<u16, PortFlags>>()
+        });
         self.state
-            .do_register_cvm(&app_id, &instance_id, &request.client_public_key)
+            .do_register_cvm(&app_id, &instance_id, &request.client_public_key, port_attrs)
     }
 
     async fn acme_info(self) -> Result<AcmeInfoResponse> {

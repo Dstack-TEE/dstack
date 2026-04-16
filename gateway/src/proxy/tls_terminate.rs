@@ -28,6 +28,7 @@ use crate::config::{CryptoProvider, ProxyConfig, TlsVersion};
 use crate::main_service::Proxy;
 
 use super::io_bridge::bridge;
+use super::port_attrs::should_send_pp;
 use super::tls_passthough::connect_multiple_hosts;
 
 #[pin_project::pin_project]
@@ -291,14 +292,14 @@ impl Proxy {
         debug!("selected top n hosts: {addresses:?}");
         let tls_stream = self.tls_accept(inbound, buffer, h2).await?;
         let max_connections = self.config.proxy.max_connections_per_app;
-        let (mut outbound, _counter) = timeout(
+        let (mut outbound, _counter, instance_id) = timeout(
             self.config.proxy.timeouts.connect,
             connect_multiple_hosts(addresses, port, max_connections, app_id),
         )
         .await
         .map_err(|_| anyhow!("connecting timeout"))?
         .context("failed to connect to app")?;
-        if self.config.proxy.outbound_pp_enabled {
+        if should_send_pp(self, &instance_id, port).await {
             let pp_header_bin =
                 proxy_protocol::encode(pp_header).context("failed to encode pp header")?;
             outbound.write_all(&pp_header_bin).await?;

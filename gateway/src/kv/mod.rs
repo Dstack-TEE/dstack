@@ -42,6 +42,14 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
 use wavekv::{node::NodeState, types::NodeId, Node};
 
+/// Per-port flags applied by the gateway when proxying to a CVM port.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct PortFlags {
+    /// Send a PROXY protocol header on outbound connections to this port.
+    #[serde(default)]
+    pub pp: bool,
+}
+
 /// Instance core data (persistent)
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct InstanceData {
@@ -49,6 +57,11 @@ pub struct InstanceData {
     pub ip: Ipv4Addr,
     pub public_key: String,
     pub reg_time: u64,
+    /// Per-port flags reported at registration. `None` means "not reported"
+    /// (legacy CVM); the gateway will fall back to fetching app-compose via
+    /// Info() on first connection and populate this lazily.
+    #[serde(default)]
+    pub port_attrs: Option<BTreeMap<u16, PortFlags>>,
 }
 
 /// Gateway node status (stored separately for independent updates)

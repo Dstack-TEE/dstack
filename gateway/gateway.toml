@@ -60,8 +60,6 @@ external_port = 443
 max_connections_per_app = 2000
 # Whether to read PROXY protocol from inbound connections (e.g. from Cloudflare).
 inbound_pp_enabled = false
-# Whether to send PROXY protocol headers to backend apps.
-outbound_pp_enabled = false
 
 [core.proxy.timeouts]
 # Timeout for establishing a connection to the target app.
