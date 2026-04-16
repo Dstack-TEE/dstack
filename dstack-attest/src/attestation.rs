@@ -1399,4 +1399,39 @@ mod tests {
             _ => panic!("expected dstack stack"),
         }
     }
+
+    #[test]
+    fn into_versioned_uses_v0_when_all_events_are_v1() {
+        let mut att = dummy_tdx_attestation([7u8; 64]);
+        att.runtime_events.push(cc_eventlog::RuntimeEvent::new(
+            "app-id".into(),
+            vec![1, 2, 3],
+            cc_eventlog::EventLogVersion::V1,
+        ));
+        let versioned = att.into_versioned();
+        assert!(
+            matches!(versioned, VersionedAttestation::V0 { .. }),
+            "V1-only events should stay on the V0/SCALE wire format"
+        );
+    }
+
+    #[test]
+    fn into_versioned_upgrades_to_v1_when_any_event_is_v2() {
+        let mut att = dummy_tdx_attestation([8u8; 64]);
+        att.runtime_events.push(cc_eventlog::RuntimeEvent::new(
+            "app-id".into(),
+            vec![1, 2, 3],
+            cc_eventlog::EventLogVersion::V1,
+        ));
+        att.runtime_events.push(cc_eventlog::RuntimeEvent::new(
+            "compose-hash".into(),
+            vec![4, 5, 6],
+            cc_eventlog::EventLogVersion::V2,
+        ));
+        let versioned = att.into_versioned();
+        assert!(
+            matches!(versioned, VersionedAttestation::V1 { .. }),
+            "presence of a V2 event must force the V1 msgpack wire format to preserve `version`"
+        );
+    }
 }
