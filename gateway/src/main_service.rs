@@ -848,10 +848,14 @@ impl ProxyState {
                 // Update reg_time so other nodes will pick up the change
                 existing.reg_time = SystemTime::now();
             }
-            // Always update port_attrs from the latest registration so changes
-            // take effect across re-registrations. A `None` here (legacy CVM)
-            // wipes any previously-cached attrs so the lazy fetch path runs again.
-            existing.port_attrs = port_attrs.clone();
+            // Only override cached port_attrs when the caller actually reports
+            // them. A `None` request (legacy CVM) means "I don't know" — don't
+            // wipe attrs learned at an earlier registration or lazy fetch. Same
+            // instance_id implies same compose_hash, so cached attrs can't be
+            // stale relative to the real app-compose.
+            if port_attrs.is_some() {
+                existing.port_attrs = port_attrs.clone();
+            }
             let existing = existing.clone();
             if self.valid_ip(existing.ip) {
                 // Sync existing instance to KvStore (might be from legacy state)
