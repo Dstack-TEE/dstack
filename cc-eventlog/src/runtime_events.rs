@@ -140,35 +140,15 @@ impl RuntimeEvent {
 
 /// Construct JCS (RFC 8785) canonical JSON for a runtime event.
 ///
-/// Keys are sorted alphabetically: `event`, `event_type`, `payload`.
+/// Uses `BTreeMap` to guarantee alphabetical key ordering per JCS.
 /// The payload is hex-encoded for human readability.
-///
-/// Output: `{"event":"<name>","event_type":<type>,"payload":"<hex>"}`
 pub fn canonical_event_json(event: &str, event_type: u32, payload: &[u8]) -> String {
-    // Per JCS, strings must use minimal JSON escaping.
-    let escaped_event = json_escape_string(event);
-    let hex_payload = hex::encode(payload);
-    format!(r#"{{"event":"{escaped_event}","event_type":{event_type},"payload":"{hex_payload}"}}"#,)
-}
-
-/// Minimal JSON string escaping per RFC 8259.
-fn json_escape_string(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for ch in s.chars() {
-        match ch {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if c < '\x20' => {
-                use std::fmt::Write;
-                let _ = write!(out, "\\u{:04x}", c as u32);
-            }
-            c => out.push(c),
-        }
-    }
-    out
+    use std::collections::BTreeMap;
+    let mut map = BTreeMap::new();
+    map.insert("event", serde_json::Value::String(event.to_string()));
+    map.insert("event_type", serde_json::Value::Number(event_type.into()));
+    map.insert("payload", serde_json::Value::String(hex::encode(payload)));
+    serde_json::to_string(&map).unwrap_or_default()
 }
 
 /// Replay event logs
