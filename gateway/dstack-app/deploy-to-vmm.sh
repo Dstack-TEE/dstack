@@ -94,6 +94,13 @@ WG_ADDR=0.0.0.0:9202
 # The token used to launch the App
 APP_LAUNCH_TOKEN=$(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 32 | head -n 1)
 
+# PROXY protocol: read v1/v2 header from inbound connections (e.g. when this
+# gateway sits behind a PP-aware L4 LB such as Cloudflare Spectrum or haproxy
+# with send-proxy). Set to "true" only if the upstream LB is configured to
+# send PROXY headers; otherwise leave disabled or every connection will be
+# rejected.
+# INBOUND_PP_ENABLED=false
+
 EOF
   echo "Please edit the .env file and set the required variables, then run this script again."
   exit 1
@@ -175,6 +182,7 @@ APP_LAUNCH_TOKEN=$APP_LAUNCH_TOKEN
 RPC_DOMAIN=$RPC_DOMAIN
 NODE_ID=$NODE_ID
 PROXY_LISTEN_PORT=$PROXY_LISTEN_PORT
+INBOUND_PP_ENABLED=${INBOUND_PP_ENABLED:-false}
 EOF
 
 if [ -n "$APP_COMPOSE_FILE" ]; then

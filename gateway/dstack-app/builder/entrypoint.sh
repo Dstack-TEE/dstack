@@ -111,6 +111,7 @@ localhost_enabled = false
 app_address_ns_compat = true
 workers = ${PROXY_WORKERS:-32}
 max_connections_per_app = ${MAX_CONNECTIONS_PER_APP:-0}
+inbound_pp_enabled = ${INBOUND_PP_ENABLED:-false}
 
 [core.proxy.timeouts]
 connect = "${TIMEOUT_CONNECT:-5s}"
@@ -122,6 +123,13 @@ idle = "${TIMEOUT_IDLE:-10m}"
 write = "${TIMEOUT_WRITE:-5s}"
 shutdown = "${TIMEOUT_SHUTDOWN:-5s}"
 total = "${TIMEOUT_TOTAL:-5h}"
+pp_header = "${TIMEOUT_PP_HEADER:-5s}"
+
+[core.proxy.port_attrs_fetch]
+timeout = "${PORT_ATTRS_FETCH_TIMEOUT:-10s}"
+max_retries = ${PORT_ATTRS_FETCH_MAX_RETRIES:-5}
+backoff_initial = "${PORT_ATTRS_FETCH_BACKOFF_INITIAL:-1s}"
+backoff_max = "${PORT_ATTRS_FETCH_BACKOFF_MAX:-30s}"
 
 [core.recycle]
 enabled = true
