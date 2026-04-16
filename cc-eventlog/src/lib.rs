@@ -4,7 +4,7 @@
 
 pub use dstack_types::EventLogVersion;
 pub use runtime_events::{
-    canonical_event_json, replay_events, RuntimeEvent, DSTACK_RUNTIME_EVENT_TYPE_V2,
+    canonical_event_json_v2, replay_events, RuntimeEvent, DSTACK_RUNTIME_EVENT_TYPE,
 };
 pub use tdx::TdxEvent;
 

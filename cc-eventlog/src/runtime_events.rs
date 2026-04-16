@@ -12,14 +12,14 @@ use std::io::Write;
 
 use ez_hash::{Hasher, Sha256, Sha384};
 
-/// The event type for dstack runtime events (v1).
+/// The event type for dstack runtime events.
 /// This code is not defined in the TCG specification.
 /// See https://trustedcomputinggroup.org/wp-content/uploads/PC-ClientSpecific_Platform_Profile_for_TPM_2p0_Systems_v51.pdf
+///
+/// V1 and V2 use the same event type; the digest format is distinguished by
+/// `EventLogVersion` (carried on `RuntimeEvent`/`TdxEvent` or inferred from
+/// the v2 canonical JSON content).
 pub const DSTACK_RUNTIME_EVENT_TYPE: u32 = 0x08000001;
-/// The event type for dstack runtime events (v2, JSON canonical content).
-/// V2 events use JCS (RFC 8785) canonical JSON as the digest input, enabling
-/// relying parties to define fine-grained trust policies on individual event claims.
-pub const DSTACK_RUNTIME_EVENT_TYPE_V2: u32 = 0x08000002;
 /// The path to the userspace TDX event log file.
 pub const RUNTIME_EVENT_LOG_FILE: &str = "/run/log/dstack/runtime_events.log";
 
@@ -112,7 +112,7 @@ impl RuntimeEvent {
     /// Compute the digest of the event.
     ///
     /// - V1: `SHA(event_type_le || ":" || event_name || ":" || payload)`
-    /// - V2: `SHA(canonical_json({"event":"...","event_type":134217730,"payload":"hex..."}))`
+    /// - V2: `SHA(canonical_json({"event":"...","event_type":134217729,"payload":"hex...","version":2}))`
     pub fn digest<H: Hasher>(&self) -> H::Output {
         match self.version {
             EventLogVersion::V1 => H::hash([
@@ -123,31 +123,30 @@ impl RuntimeEvent {
                 &self.payload,
             ]),
             EventLogVersion::V2 => {
-                let canonical =
-                    canonical_event_json(&self.event, DSTACK_RUNTIME_EVENT_TYPE_V2, &self.payload);
+                let canonical = canonical_event_json_v2(&self.event, &self.payload);
                 H::hash([canonical.as_bytes()])
             }
         }
     }
 
+    /// The event type used when extending RTMR. Always `DSTACK_RUNTIME_EVENT_TYPE`.
+    /// Version is distinguished via `EventLogVersion`, not the event type.
     pub fn cc_event_type(&self) -> u32 {
-        match self.version {
-            EventLogVersion::V1 => DSTACK_RUNTIME_EVENT_TYPE,
-            EventLogVersion::V2 => DSTACK_RUNTIME_EVENT_TYPE_V2,
-        }
+        DSTACK_RUNTIME_EVENT_TYPE
     }
 }
 
-/// Construct JCS (RFC 8785) canonical JSON for a runtime event.
+/// Construct the JCS (RFC 8785) canonical JSON used as the v2 digest input.
 ///
-/// Uses `serde_jcs` for deterministic serialization per RFC 8785,
-/// including alphabetical key ordering and canonical number/string formatting.
-/// The payload is hex-encoded for human readability.
-pub fn canonical_event_json(event: &str, event_type: u32, payload: &[u8]) -> String {
+/// The JSON includes an explicit `version: 2` field so the content is
+/// self-describing for relying parties that don't know dstack's event schema.
+/// Keys and number/string formatting are handled by `serde_jcs` per RFC 8785.
+pub fn canonical_event_json_v2(event: &str, payload: &[u8]) -> String {
     let obj = serde_json::json!({
         "event": event,
-        "event_type": event_type,
+        "event_type": DSTACK_RUNTIME_EVENT_TYPE,
         "payload": hex::encode(payload),
+        "version": 2,
     });
     serde_jcs::to_string(&obj).unwrap_or_default()
 }
@@ -195,11 +194,10 @@ mod tests {
             vec![0xab, 0xcd],
             EventLogVersion::V2,
         );
-        let canonical =
-            canonical_event_json(&event.event, DSTACK_RUNTIME_EVENT_TYPE_V2, &event.payload);
+        let canonical = canonical_event_json_v2(&event.event, &event.payload);
         assert_eq!(
             canonical,
-            r#"{"event":"compose-hash","event_type":134217730,"payload":"abcd"}"#
+            r#"{"event":"compose-hash","event_type":134217729,"payload":"abcd","version":2}"#
         );
         let digest = event.digest::<Sha384>();
         let expected = Sha384::hash([canonical.as_bytes()]);
@@ -225,8 +223,9 @@ mod tests {
 
     #[test]
     fn v2_event_type() {
+        // v2 uses the same event_type as v1 — version is carried separately
         let event = RuntimeEvent::new("test".to_string(), vec![], EventLogVersion::V2);
-        assert_eq!(event.cc_event_type(), DSTACK_RUNTIME_EVENT_TYPE_V2);
+        assert_eq!(event.cc_event_type(), DSTACK_RUNTIME_EVENT_TYPE);
     }
 
     #[test]
@@ -255,11 +254,7 @@ mod tests {
 
     #[test]
     fn canonical_json_escapes_special_chars() {
-        let canonical = canonical_event_json(
-            "event\"with\\special\nchars",
-            DSTACK_RUNTIME_EVENT_TYPE_V2,
-            &[0xff],
-        );
+        let canonical = canonical_event_json_v2("event\"with\\special\nchars", &[0xff]);
         // Verify it's valid JSON
         let parsed: serde_json::Value = serde_json::from_str(&canonical).unwrap();
         assert_eq!(
