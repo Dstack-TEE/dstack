@@ -28,7 +28,10 @@ use rinja::Template as _;
 use safe_write::safe_write;
 use serde::{Deserialize, Serialize};
 use smallvec::{smallvec, SmallVec};
-use tokio::sync::Notify;
+use tokio::sync::{
+    mpsc::{unbounded_channel, UnboundedSender},
+    Notify,
+};
 use tokio_rustls::TlsAcceptor;
 use tracing::{debug, error, info, warn};
 
@@ -78,7 +81,7 @@ pub struct ProxyInner {
     /// Sender for the background port_attrs lazy-fetch worker. The proxy fast
     /// path enqueues unknown instance_ids and immediately returns `pp=false`
     /// so a missing cache never blocks a connection.
-    pub(crate) port_attrs_tx: tokio::sync::mpsc::UnboundedSender<String>,
+    pub(crate) port_attrs_tx: UnboundedSender<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -107,7 +110,7 @@ pub struct ProxyOptions {
 
 impl Proxy {
     pub async fn new(options: ProxyOptions) -> Result<Self> {
-        let (port_attrs_tx, port_attrs_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (port_attrs_tx, port_attrs_rx) = unbounded_channel();
         let inner = ProxyInner::new(options, port_attrs_tx).await?;
         let proxy = Self {
             _inner: Arc::new(inner),
@@ -124,7 +127,7 @@ impl ProxyInner {
 
     pub async fn new(
         options: ProxyOptions,
-        port_attrs_tx: tokio::sync::mpsc::UnboundedSender<String>,
+        port_attrs_tx: UnboundedSender<String>,
     ) -> Result<Self> {
         let ProxyOptions {
             config,
