@@ -45,10 +45,16 @@ pub struct AppCompose {
     pub storage_fs: Option<String>,
     #[serde(default, with = "human_size")]
     pub swap_size: u64,
+    #[serde(default = "default_event_log_version")]
+    pub event_log_version: u32,
 }
 
 fn default_true() -> bool {
     true
+}
+
+fn default_event_log_version() -> u32 {
+    1
 }
 
 fn deserialize_gateway_enabled<'de, D>(deserializer: D) -> Result<bool, D::Error>

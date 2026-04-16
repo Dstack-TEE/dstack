@@ -7,7 +7,7 @@ use scale::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    runtime_events::{RuntimeEvent, DSTACK_RUNTIME_EVENT_TYPE},
+    runtime_events::{RuntimeEvent, DSTACK_RUNTIME_EVENT_TYPE, DSTACK_RUNTIME_EVENT_TYPE_V2},
     tcg::TcgEventLog,
 };
 
@@ -16,7 +16,9 @@ use crate::{
 /// and the raw event data. The IMR index is zero-based, unlike the TCG event log format
 /// which is one-based.
 ///
-/// As for RTMR3, the digest extended is calculated as `sha384(event_type.to_ne_bytes() || b":" || event || b":" || event_payload)`.
+/// As for RTMR3:
+/// - V1 (event_type 0x08000001): digest = `sha384(event_type_le || ":" || event || ":" || payload)`
+/// - V2 (event_type 0x08000002): digest = `sha384(canonical_json({"event":"...","event_type":134217730,"payload":"hex..."}))`
 #[derive(Clone, Debug, Serialize, Deserialize, Encode, Decode)]
 pub struct TdxEvent {
     /// IMR index, starts from 0
@@ -75,22 +77,34 @@ impl TdxEvent {
 
     pub fn is_runtime_event(&self) -> bool {
         self.event_type == DSTACK_RUNTIME_EVENT_TYPE
+            || self.event_type == DSTACK_RUNTIME_EVENT_TYPE_V2
     }
 
     pub fn to_runtime_event(&self) -> Option<RuntimeEvent> {
-        self.is_runtime_event().then_some(RuntimeEvent {
+        if !self.is_runtime_event() {
+            return None;
+        }
+        let version = if self.event_type == DSTACK_RUNTIME_EVENT_TYPE_V2 {
+            2
+        } else {
+            0
+        };
+        Some(RuntimeEvent {
             event: self.event.clone(),
             payload: self.event_payload.clone(),
+            version,
         })
     }
 }
 
 impl From<RuntimeEvent> for TdxEvent {
     fn from(value: RuntimeEvent) -> Self {
+        let event_type = value.cc_event_type();
+        let digest = value.sha384_digest().to_vec();
         TdxEvent {
             imr: 3,
-            event_type: DSTACK_RUNTIME_EVENT_TYPE,
-            digest: value.sha384_digest().to_vec(),
+            event_type,
+            digest,
             event: value.event,
             event_payload: value.payload,
         }

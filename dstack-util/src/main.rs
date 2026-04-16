@@ -90,6 +90,10 @@ struct ExtendArgs {
     #[clap(short, long)]
     /// hex encoded payload of the event
     payload: String,
+
+    #[clap(long, default_value_t = 1)]
+    /// event log version (1 = legacy, 2 = JSON canonical)
+    event_log_version: u32,
 }
 
 #[derive(Parser)]
@@ -224,7 +228,8 @@ fn hex_decode(hex_str: &str) -> Result<Vec<u8>> {
 
 fn cmd_extend(extend_args: ExtendArgs) -> Result<()> {
     let payload = hex_decode(&extend_args.payload).context("Failed to decode payload")?;
-    emit_runtime_event(&extend_args.event, &payload).context("Failed to extend RTMR")
+    emit_runtime_event(&extend_args.event, &payload, extend_args.event_log_version)
+        .context("Failed to extend RTMR")
 }
 
 fn cmd_rand(rand_args: RandArgs) -> Result<()> {

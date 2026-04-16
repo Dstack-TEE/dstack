@@ -2,7 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-pub use runtime_events::{replay_events, RuntimeEvent};
+pub use runtime_events::{
+    canonical_event_json, replay_events, RuntimeEvent, DSTACK_RUNTIME_EVENT_TYPE_V2,
+};
 pub use tdx::TdxEvent;
 
 mod codecs;

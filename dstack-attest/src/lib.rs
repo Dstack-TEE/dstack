@@ -14,8 +14,14 @@ pub mod attestation;
 mod v1;
 
 /// Emit a runtime event that extends RTMR3 and logs the event.
-pub fn emit_runtime_event(event: &str, payload: &[u8]) -> anyhow::Result<()> {
-    let event = RuntimeEvent::new(event.to_string(), payload.to_vec());
+///
+/// `event_log_version`: 1 for legacy binary digest, 2 for JSON canonical digest.
+pub fn emit_runtime_event(
+    event: &str,
+    payload: &[u8],
+    event_log_version: u32,
+) -> anyhow::Result<()> {
+    let event = RuntimeEvent::new(event.to_string(), payload.to_vec(), event_log_version);
 
     let mode = AttestationMode::detect()?;
 

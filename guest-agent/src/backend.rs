@@ -13,7 +13,7 @@ pub trait PlatformBackend: Send + Sync {
     fn certificate_attestation(&self, pubkey: &[u8]) -> Result<VersionedAttestation>;
     fn quote_response(&self, report_data: [u8; 64], vm_config: &str) -> Result<GetQuoteResponse>;
     fn attest_response(&self, report_data: [u8; 64]) -> Result<AttestResponse>;
-    fn emit_event(&self, event: &str, payload: &[u8]) -> Result<()>;
+    fn emit_event(&self, event: &str, payload: &[u8], event_log_version: u32) -> Result<()>;
 }
 
 #[derive(Debug, Default)]
@@ -52,7 +52,7 @@ impl PlatformBackend for RealPlatform {
         })
     }
 
-    fn emit_event(&self, event: &str, payload: &[u8]) -> Result<()> {
-        emit_runtime_event(event, payload)
+    fn emit_event(&self, event: &str, payload: &[u8], event_log_version: u32) -> Result<()> {
+        emit_runtime_event(event, payload, event_log_version)
     }
 }

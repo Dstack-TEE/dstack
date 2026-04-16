@@ -688,10 +688,10 @@ fn truncate(s: &[u8], len: usize) -> &[u8] {
     }
 }
 
-fn emit_key_provider_info(provider_info: &KeyProviderInfo) -> Result<()> {
+fn emit_key_provider_info(provider_info: &KeyProviderInfo, event_log_version: u32) -> Result<()> {
     info!("Key provider info: {provider_info:?}");
     let provider_info_json = serde_json::to_vec(&provider_info)?;
-    emit_runtime_event("key-provider", &provider_info_json)?;
+    emit_runtime_event("key-provider", &provider_info_json, event_log_version)?;
     Ok(())
 }
 
@@ -824,25 +824,28 @@ impl<'a> Stage0<'a> {
             .tls_client_key(cert_pair.key_pem)
             .tls_ca_cert(tmp_ca.ca_cert.clone())
             .maybe_pccs_url(self.shared.sys_config.pccs_url.clone())
-            .cert_validator(Box::new(|cert| {
-                let Some(cert) = cert else {
-                    bail!("Missing server cert");
-                };
-                let Some(usage) = cert.special_usage else {
-                    bail!("Missing server cert usage");
-                };
-                if usage != "kms:rpc" {
-                    bail!("Invalid server cert usage: {usage}");
-                }
-                if let Some(att) = &cert.attestation {
-                    let kms_info = att
-                        .decode_app_info(false)
-                        .context("Failed to decode app_info")?;
-                    emit_runtime_event("mr-kms", &kms_info.mr_aggregated)
-                        .context("Failed to extend mr-kms to RTMR3")?;
-                }
-                Ok(())
-            }))
+            .cert_validator({
+                let elv = self.shared.app_compose.event_log_version;
+                Box::new(move |cert| {
+                    let Some(cert) = cert else {
+                        bail!("Missing server cert");
+                    };
+                    let Some(usage) = cert.special_usage else {
+                        bail!("Missing server cert usage");
+                    };
+                    if usage != "kms:rpc" {
+                        bail!("Invalid server cert usage: {usage}");
+                    }
+                    if let Some(att) = &cert.attestation {
+                        let kms_info = att
+                            .decode_app_info(false)
+                            .context("Failed to decode app_info")?;
+                        emit_runtime_event("mr-kms", &kms_info.mr_aggregated, elv)
+                            .context("Failed to extend mr-kms to RTMR3")?;
+                    }
+                    Ok(())
+                })
+            })
             .build()
             .into_client()
             .context("Failed to create client")?;
@@ -855,8 +858,12 @@ impl<'a> Stage0<'a> {
             .await
             .context("Failed to get app key")?;
 
-        emit_runtime_event("os-image-hash", &response.os_image_hash)
-            .context("Failed to extend os-image-hash to RTMR3")?;
+        emit_runtime_event(
+            "os-image-hash",
+            &response.os_image_hash,
+            self.shared.app_compose.event_log_version,
+        )
+        .context("Failed to extend os-image-hash to RTMR3")?;
 
         let (_, ca_pem) = x509_parser::pem::parse_x509_pem(tmp_ca.ca_cert.as_bytes())
             .context("Failed to parse ca cert")?;
@@ -1317,11 +1324,12 @@ impl<'a> Stage0<'a> {
             truncated_compose_hash.to_vec()
         };
 
-        emit_runtime_event("system-preparing", &[])?;
-        emit_runtime_event("app-id", &app_id)?;
-        emit_runtime_event("compose-hash", &compose_hash)?;
-        emit_runtime_event("instance-id", &instance_id)?;
-        emit_runtime_event("boot-mr-done", &[])?;
+        let elv = self.shared.app_compose.event_log_version;
+        emit_runtime_event("system-preparing", &[], elv)?;
+        emit_runtime_event("app-id", &app_id, elv)?;
+        emit_runtime_event("compose-hash", &compose_hash, elv)?;
+        emit_runtime_event("instance-id", &instance_id, elv)?;
+        emit_runtime_event("boot-mr-done", &[], elv)?;
         Ok(AppInfo {
             instance_info,
             compose_hash,
@@ -1354,7 +1362,7 @@ impl<'a> Stage0<'a> {
                 KeyProviderInfo::new("kms".into(), hex::encode(pubkey))
             }
         };
-        emit_key_provider_info(&kp_info)?;
+        emit_key_provider_info(&kp_info, self.shared.app_compose.event_log_version)?;
         Ok(())
     }
 
@@ -1385,7 +1393,11 @@ impl<'a> Stage0<'a> {
 
         // Parse kernel command line options
         let opts = parse_dstack_options(&self.shared).context("Failed to parse kernel cmdline")?;
-        emit_runtime_event("storage-fs", opts.storage_fs.to_string().as_bytes())?;
+        emit_runtime_event(
+            "storage-fs",
+            opts.storage_fs.to_string().as_bytes(),
+            self.shared.app_compose.event_log_version,
+        )?;
         info!(
             "Filesystem options: encryption={}, filesystem={:?}",
             opts.storage_encrypted, opts.storage_fs
@@ -1401,7 +1413,11 @@ impl<'a> Stage0<'a> {
                 &serde_json::to_string(&app_info.instance_info)?,
             )
             .await;
-        emit_runtime_event("system-ready", &[])?;
+        emit_runtime_event(
+            "system-ready",
+            &[],
+            self.shared.app_compose.event_log_version,
+        )?;
         self.vmm.notify_q("boot.progress", "data disk ready").await;
 
         if !self.shared.app_compose.key_provider().is_kms() {

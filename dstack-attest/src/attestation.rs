@@ -1036,7 +1036,7 @@ impl Attestation {
         let runtime_events = if mode.is_composable() {
             RuntimeEvent::read_all().context("Failed to read runtime events")?
         } else if let Some(app_id) = app_id {
-            vec![RuntimeEvent::new("app-id".to_string(), app_id.to_vec())]
+            vec![RuntimeEvent::new("app-id".to_string(), app_id.to_vec(), 0)]
         } else {
             vec![]
         };

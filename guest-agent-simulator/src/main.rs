@@ -90,7 +90,7 @@ impl PlatformBackend for SimulatorPlatform {
         simulator::simulated_attest_response(&self.attestation, report_data, self.patch_report_data)
     }
 
-    fn emit_event(&self, event: &str, _payload: &[u8]) -> Result<()> {
+    fn emit_event(&self, event: &str, _payload: &[u8], _event_log_version: u32) -> Result<()> {
         bail!("runtime event emission is unavailable in simulator mode: {event}")
     }
 }
@@ -148,7 +148,9 @@ mod tests {
     #[test]
     fn simulator_rejects_runtime_event_emission() {
         let platform = load_fixture_platform();
-        let err = platform.emit_event("test.event", b"payload").unwrap_err();
+        let err = platform
+            .emit_event("test.event", b"payload", 1)
+            .unwrap_err();
         assert!(err.to_string().contains("unavailable in simulator mode"));
     }
 

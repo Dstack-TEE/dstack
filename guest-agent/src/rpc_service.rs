@@ -181,7 +181,10 @@ impl AppState {
     }
 
     fn emit_event(&self, event: &str, payload: &[u8]) -> Result<()> {
-        self.inner.platform.emit_event(event, payload)
+        let event_log_version = self.inner.config.app_compose.event_log_version;
+        self.inner
+            .platform
+            .emit_event(event, payload, event_log_version)
     }
 }
 
@@ -856,7 +859,12 @@ pNs85uhOZE8z2jr8Pg==
                 })
             }
 
-            fn emit_event(&self, _event: &str, _payload: &[u8]) -> Result<()> {
+            fn emit_event(
+                &self,
+                _event: &str,
+                _payload: &[u8],
+                _event_log_version: u32,
+            ) -> Result<()> {
                 Ok(())
             }
         }

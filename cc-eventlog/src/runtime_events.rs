@@ -11,10 +11,14 @@ use std::io::Write;
 
 use ez_hash::{Hasher, Sha256, Sha384};
 
-/// The event type for dstack runtime events.
+/// The event type for dstack runtime events (v1).
 /// This code is not defined in the TCG specification.
 /// See https://trustedcomputinggroup.org/wp-content/uploads/PC-ClientSpecific_Platform_Profile_for_TPM_2p0_Systems_v51.pdf
 pub const DSTACK_RUNTIME_EVENT_TYPE: u32 = 0x08000001;
+/// The event type for dstack runtime events (v2, JSON canonical content).
+/// V2 events use JCS (RFC 8785) canonical JSON as the digest input, enabling
+/// relying parties to define fine-grained trust policies on individual event claims.
+pub const DSTACK_RUNTIME_EVENT_TYPE_V2: u32 = 0x08000002;
 /// The path to the userspace TDX event log file.
 pub const RUNTIME_EVENT_LOG_FILE: &str = "/run/log/dstack/runtime_events.log";
 
@@ -26,11 +30,18 @@ pub struct RuntimeEvent {
     /// Event payload
     #[serde(with = "base64")]
     pub payload: Vec<u8>,
+    /// Event log version (0 or absent = v1, 2 = v2 JSON canonical)
+    #[serde(default, skip_serializing)]
+    pub version: u32,
 }
 
 impl RuntimeEvent {
-    pub fn new(event: String, payload: Vec<u8>) -> Self {
-        Self { event, payload }
+    pub fn new(event: String, payload: Vec<u8>, version: u32) -> Self {
+        Self {
+            event,
+            payload,
+            version,
+        }
     }
 
     pub fn read_all() -> Result<Vec<RuntimeEvent>> {
@@ -97,7 +108,18 @@ impl RuntimeEvent {
     }
 
     /// Compute the digest of the event.
+    ///
+    /// For v1 (version 0 or 1): `SHA(event_type_le || ":" || event_name || ":" || payload)`
+    /// For v2 (version 2): `SHA(canonical_json({"event":"...","event_type":134217730,"payload":"hex..."}))`
     pub fn digest<H: Hasher>(&self) -> H::Output {
+        if self.is_v2() {
+            self.digest_v2::<H>()
+        } else {
+            self.digest_v1::<H>()
+        }
+    }
+
+    fn digest_v1<H: Hasher>(&self) -> H::Output {
         H::hash([
             &DSTACK_RUNTIME_EVENT_TYPE.to_ne_bytes()[..],
             b":",
@@ -107,9 +129,44 @@ impl RuntimeEvent {
         ])
     }
 
-    pub fn cc_event_type(&self) -> u32 {
-        DSTACK_RUNTIME_EVENT_TYPE
+    /// Compute the v2 digest using JCS (RFC 8785) canonical JSON.
+    ///
+    /// The canonical JSON has keys sorted alphabetically:
+    /// `{"event":"<name>","event_type":134217730,"payload":"<hex>"}`
+    fn digest_v2<H: Hasher>(&self) -> H::Output {
+        let canonical =
+            canonical_event_json(&self.event, DSTACK_RUNTIME_EVENT_TYPE_V2, &self.payload);
+        H::hash([canonical.as_bytes()])
     }
+
+    pub fn is_v2(&self) -> bool {
+        self.version == 2
+    }
+
+    pub fn cc_event_type(&self) -> u32 {
+        if self.is_v2() {
+            DSTACK_RUNTIME_EVENT_TYPE_V2
+        } else {
+            DSTACK_RUNTIME_EVENT_TYPE
+        }
+    }
+}
+
+/// Construct JCS (RFC 8785) canonical JSON for a runtime event.
+///
+/// Keys are sorted alphabetically: `event`, `event_type`, `payload`.
+/// The payload is hex-encoded for human readability.
+///
+/// Output: `{"event":"<name>","event_type":<type>,"payload":"<hex>"}`
+pub fn canonical_event_json(event: &str, event_type: u32, payload: &[u8]) -> String {
+    // Per JCS, strings must use minimal JSON escaping.
+    // We use serde_json to correctly escape the event name.
+    let escaped_event = serde_json::to_string(event).expect("failed to serialize event name");
+    let hex_payload = hex::encode(payload);
+    format!(
+        r#"{{"event":{},"event_type":{},"payload":"{}"}}"#,
+        escaped_event, event_type, hex_payload
+    )
 }
 
 /// Replay event logs
@@ -124,4 +181,100 @@ pub fn replay_events<H: Hasher>(eventlog: &[RuntimeEvent], to_event: Option<&str
         }
     }
     mr
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn v1_digest_unchanged() {
+        let event = RuntimeEvent::new("app-id".to_string(), vec![0xde, 0xad, 0xbe, 0xef], 1);
+        let digest = event.digest::<Sha384>();
+        let expected = Sha384::hash([
+            &DSTACK_RUNTIME_EVENT_TYPE.to_ne_bytes()[..],
+            b":",
+            b"app-id",
+            b":",
+            &[0xde, 0xad, 0xbe, 0xef],
+        ]);
+        assert_eq!(digest, expected, "v1 digest must be backward compatible");
+    }
+
+    #[test]
+    fn v2_digest_is_canonical_json_hash() {
+        let event = RuntimeEvent::new("compose-hash".to_string(), vec![0xab, 0xcd], 2);
+        let canonical =
+            canonical_event_json(&event.event, DSTACK_RUNTIME_EVENT_TYPE_V2, &event.payload);
+        assert_eq!(
+            canonical,
+            r#"{"event":"compose-hash","event_type":134217730,"payload":"abcd"}"#
+        );
+        let digest = event.digest::<Sha384>();
+        let expected = Sha384::hash([canonical.as_bytes()]);
+        assert_eq!(digest, expected);
+    }
+
+    #[test]
+    fn v2_digest_differs_from_v1() {
+        let v1 = RuntimeEvent::new("test".to_string(), vec![1, 2, 3], 1);
+        let v2 = RuntimeEvent::new("test".to_string(), vec![1, 2, 3], 2);
+        assert_ne!(
+            v1.digest::<Sha384>(),
+            v2.digest::<Sha384>(),
+            "v1 and v2 digests must differ"
+        );
+    }
+
+    #[test]
+    fn v1_event_type() {
+        let event = RuntimeEvent::new("test".to_string(), vec![], 1);
+        assert_eq!(event.cc_event_type(), DSTACK_RUNTIME_EVENT_TYPE);
+    }
+
+    #[test]
+    fn v2_event_type() {
+        let event = RuntimeEvent::new("test".to_string(), vec![], 2);
+        assert_eq!(event.cc_event_type(), DSTACK_RUNTIME_EVENT_TYPE_V2);
+    }
+
+    #[test]
+    fn deserialize_v1_without_version_field() {
+        let json = r#"{"event":"app-id","payload":"AQID"}"#;
+        let event: RuntimeEvent = serde_json::from_str(json).unwrap();
+        assert_eq!(event.version, 0);
+        assert!(!event.is_v2());
+        assert_eq!(event.cc_event_type(), DSTACK_RUNTIME_EVENT_TYPE);
+    }
+
+    #[test]
+    fn serialize_omits_version() {
+        let v1 = RuntimeEvent::new("test".to_string(), vec![1], 1);
+        let v2 = RuntimeEvent::new("test".to_string(), vec![1], 2);
+        let json_v1 = serde_json::to_string(&v1).unwrap();
+        let json_v2 = serde_json::to_string(&v2).unwrap();
+        assert!(
+            !json_v1.contains("version"),
+            "version should never be serialized"
+        );
+        assert!(
+            !json_v2.contains("version"),
+            "version should never be serialized"
+        );
+    }
+
+    #[test]
+    fn canonical_json_escapes_special_chars() {
+        let canonical = canonical_event_json(
+            "event\"with\\special\nchars",
+            DSTACK_RUNTIME_EVENT_TYPE_V2,
+            &[0xff],
+        );
+        // Verify it's valid JSON
+        let parsed: serde_json::Value = serde_json::from_str(&canonical).unwrap();
+        assert_eq!(
+            parsed["event"].as_str().unwrap(),
+            "event\"with\\special\nchars"
+        );
+    }
 }
