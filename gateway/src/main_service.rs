@@ -434,6 +434,12 @@ impl Proxy {
         if let Err(err) = state.reconfigure() {
             error!("failed to reconfigure: {err:?}");
         }
+        // Capture the prewarm decision before continuing under the lock.
+        // If the instance arrived without port_attrs (legacy CVM, or
+        // compose_hash mismatch invalidated the cache), enqueue a
+        // background fetch so the first proxied connection isn't the one
+        // that triggers it. The fetcher dedupes, so this is safe.
+        let needs_prewarm = client_info.port_attrs.is_none();
         let gateways = state.get_active_nodes();
         let servers = gateways
             .iter()
@@ -457,6 +463,10 @@ impl Proxy {
             }),
             gateways,
         };
+        drop(state);
+        if needs_prewarm {
+            let _ = self.port_attrs_tx.send(instance_id.to_string());
+        }
         self.notify_state_updated.notify_one();
         Ok(response)
     }
