@@ -151,6 +151,8 @@ message AttestationInfoResponse {
   string eth_rpc_url = 6;
   // KMS contract address from auth API
   string kms_contract_address = 7;
+  // Raw platform provisioning ID
+  bytes ppid = 8;
 }
 
 // The Onboard RPC service.

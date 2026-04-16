@@ -136,6 +136,11 @@ impl OnboardRpc for OnboardHandler {
         let app_info = verified
             .decode_app_info_ex(false, &info.vm_config)
             .context("Failed to decode app info")?;
+        let ppid = verified
+            .report
+            .tdx_report()
+            .map(|report| report.ppid.to_vec())
+            .unwrap_or_default();
 
         let (eth_rpc_url, kms_contract_address) = match self.state.config.auth_api.get_info().await
         {
@@ -157,6 +162,7 @@ impl OnboardRpc for OnboardHandler {
             site_name: self.state.config.site_name.clone(),
             eth_rpc_url,
             kms_contract_address,
+            ppid,
         })
     }
 
