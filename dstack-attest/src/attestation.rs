@@ -12,9 +12,7 @@ pub const TDX_QUOTE_REPORT_DATA_RANGE: std::ops::Range<usize> = 568..632;
 use std::{borrow::Cow, time::SystemTime};
 
 use anyhow::{anyhow, bail, Context, Result};
-#[cfg(feature = "quote")]
-use cc_eventlog::EventLogVersion;
-use cc_eventlog::{RuntimeEvent, TdxEvent};
+use cc_eventlog::{EventLogVersion, RuntimeEvent, TdxEvent};
 use dcap_qvl::{
     quote::{EnclaveReport, Quote, Report, TDReport10, TDReport15},
     verify::VerifiedReport as TdxVerifiedReport,
@@ -1143,9 +1141,24 @@ impl Attestation {
         })
     }
 
-    /// Wrap into a versioned attestation for encoding
+    /// Wrap into a versioned attestation for encoding.
+    ///
+    /// When any runtime event uses a non-V1 event-log version, force the V1
+    /// msgpack wire format so the `version` field is preserved (SCALE
+    /// V0 skips it for legacy binary compat). Otherwise default to V0 for
+    /// backward compat with callers that expect the SCALE format.
     pub fn into_versioned(self) -> VersionedAttestation {
-        VersionedAttestation::V0 { attestation: self }
+        let has_v2 = self
+            .runtime_events
+            .iter()
+            .any(|e| !matches!(e.version, EventLogVersion::V1));
+        if has_v2 {
+            VersionedAttestation::V1 {
+                attestation: self.into(),
+            }
+        } else {
+            VersionedAttestation::V0 { attestation: self }
+        }
     }
 
     /// Verify the quote
