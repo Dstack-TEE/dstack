@@ -26,6 +26,16 @@ use tracing::{debug, warn};
 
 use crate::{kv::PortFlags, main_service::Proxy};
 
+/// Outcome of a single fetch attempt, distinguishing what we can usefully retry.
+enum FetchError {
+    /// Transient: connection failed, RPC timed out, agent returned 5xx, etc.
+    /// The CVM might just be warming up — retry with backoff.
+    Transient(anyhow::Error),
+    /// Permanent: instance is gone, or the CVM responded with data we can't
+    /// parse (malformed tcb_info, schema mismatch). Retrying won't help.
+    Permanent(anyhow::Error),
+}
+
 /// Decide whether the gateway should send a PROXY protocol header on the
 /// outbound connection to (`instance_id`, `port`).
 ///
@@ -76,25 +86,30 @@ async fn fetch_with_retry(state: &Proxy, instance_id: &str) {
     let mut attempt = 0u32;
     let mut backoff = cfg.backoff_initial;
     loop {
-        match tokio::time::timeout(cfg.timeout, fetch_and_store(state, instance_id)).await {
-            Ok(Ok(())) => {
+        let result =
+            match tokio::time::timeout(cfg.timeout, fetch_and_store(state, instance_id)).await {
+                Ok(r) => r,
+                // The Info() RPC took too long. Treat as transient — the CVM
+                // may just be slow to come up.
+                Err(_) => Err(FetchError::Transient(anyhow::anyhow!(
+                    "Info() rpc timed out after {:?}",
+                    cfg.timeout
+                ))),
+            };
+        match result {
+            Ok(()) => {
                 debug!("port_attrs cached for instance {instance_id} (attempt {attempt})");
                 return;
             }
-            Ok(Err(err)) if is_unknown_instance(&err) => {
-                // Instance was recycled while the fetch was queued. No
-                // point retrying — the instance is gone.
-                debug!("port_attrs fetch for {instance_id}: instance no longer exists, giving up");
+            Err(FetchError::Permanent(err)) => {
+                // Either the instance was recycled while queued, or the
+                // agent responded with data we can't parse. Retrying won't
+                // change either; bail.
+                debug!("port_attrs fetch for {instance_id}: permanent failure: {err:#}");
                 return;
             }
-            Ok(Err(err)) => {
+            Err(FetchError::Transient(err)) => {
                 warn!("port_attrs fetch for {instance_id} failed (attempt {attempt}): {err:#}");
-            }
-            Err(_) => {
-                warn!(
-                    "port_attrs fetch for {instance_id} timed out after {:?} (attempt {attempt})",
-                    cfg.timeout
-                );
             }
         }
         if attempt >= cfg.max_retries {
@@ -110,15 +125,13 @@ async fn fetch_with_retry(state: &Proxy, instance_id: &str) {
     }
 }
 
-fn is_unknown_instance(err: &anyhow::Error) -> bool {
-    err.chain()
-        .any(|e| e.to_string().contains("unknown instance"))
-}
-
-async fn fetch_and_store(state: &Proxy, instance_id: &str) -> Result<()> {
+async fn fetch_and_store(state: &Proxy, instance_id: &str) -> Result<(), FetchError> {
     let (ip, agent_port) = {
         let guard = state.lock();
-        let ip = guard.instance_ip(instance_id).context("unknown instance")?;
+        let ip = guard
+            .instance_ip(instance_id)
+            // Instance was recycled — never coming back under this id.
+            .ok_or_else(|| FetchError::Permanent(anyhow::anyhow!("unknown instance")))?;
         (ip, guard.config.proxy.agent_port)
     };
     let attrs = fetch_port_attrs(ip, agent_port).await?;
@@ -126,23 +139,36 @@ async fn fetch_and_store(state: &Proxy, instance_id: &str) -> Result<()> {
     Ok(())
 }
 
-async fn fetch_port_attrs(ip: Ipv4Addr, agent_port: u16) -> Result<BTreeMap<u16, PortFlags>> {
+async fn fetch_port_attrs(
+    ip: Ipv4Addr,
+    agent_port: u16,
+) -> Result<BTreeMap<u16, PortFlags>, FetchError> {
     let url = format!("http://{ip}:{agent_port}/prpc");
     let client = DstackGuestClient::new(PrpcClient::new(url));
-    let info = client.info().await.context("agent Info() rpc failed")?;
+    // Network/RPC errors here are transient: agent might still be coming up.
+    let info = client
+        .info()
+        .await
+        .context("agent Info() rpc failed")
+        .map_err(FetchError::Transient)?;
+
+    // Anything below this point is the agent telling us something we can't
+    // turn into port_attrs — treat as permanent.
     if info.tcb_info.is_empty() {
         // Legacy CVM with public_tcbinfo=false; we cannot inspect app-compose
         // remotely. Cache an empty map so we don't keep retrying.
         return Ok(BTreeMap::new());
     }
-    let tcb: serde_json::Value =
-        serde_json::from_str(&info.tcb_info).context("invalid tcb_info json")?;
+    let tcb: serde_json::Value = serde_json::from_str(&info.tcb_info)
+        .context("invalid tcb_info json")
+        .map_err(FetchError::Permanent)?;
     let raw = tcb
         .get("app_compose")
         .and_then(|v| v.as_str())
-        .context("tcb_info missing app_compose")?;
-    let app_compose: AppCompose =
-        serde_json::from_str(raw).context("failed to parse app_compose from tcb_info")?;
+        .ok_or_else(|| FetchError::Permanent(anyhow::anyhow!("tcb_info missing app_compose")))?;
+    let app_compose: AppCompose = serde_json::from_str(raw)
+        .context("failed to parse app_compose from tcb_info")
+        .map_err(FetchError::Permanent)?;
     Ok(app_compose
         .ports
         .into_iter()
