@@ -113,7 +113,7 @@ impl RuntimeEvent {
     /// Compute the digest of the event.
     ///
     /// - V1: `SHA(event_type_le || ":" || event_name || ":" || payload)`
-    /// - V2: `SHA(canonical_json({"name":"...","type":134217729,"content":"hex..."}))`
+    /// - V2: `SHA(canonical_json({"name":"...","type":134217729,"payload":"hex..."}))`
     pub fn digest<H: Hasher>(&self) -> H::Output {
         H::hash([self.hash_input().as_slice()])
     }
@@ -156,7 +156,7 @@ pub fn canonical_event_json_v2(event: &str, payload: &[u8]) -> String {
     let obj = serde_json::json!({
         "name": event,
         "type": DSTACK_RUNTIME_EVENT_TYPE,
-        "content": hex::encode(payload),
+        "payload": hex::encode(payload),
     });
     serde_jcs::to_string(&obj).or_panic("canonical JSON serialization failed")
 }
@@ -207,7 +207,7 @@ mod tests {
         let canonical = canonical_event_json_v2(&event.event, &event.payload);
         assert_eq!(
             canonical,
-            r#"{"content":"abcd","name":"compose-hash","type":134217729}"#
+            r#"{"name":"compose-hash","payload":"abcd","type":134217729}"#
         );
         let digest = event.digest::<Sha384>();
         let expected = Sha384::hash([canonical.as_bytes()]);
@@ -268,7 +268,7 @@ mod tests {
         // Exact bytewise output — JCS must be deterministic
         assert_eq!(
             canonical,
-            r#"{"content":"ff","name":"event\"with\\special\nchars","type":134217729}"#
+            r#"{"name":"event\"with\\special\nchars","payload":"ff","type":134217729}"#
         );
     }
 
@@ -277,17 +277,17 @@ mod tests {
         // JCS RFC 8785 requires keys sorted by UTF-16 code unit order.
         // For ASCII keys, this is alphabetical.
         let canonical = canonical_event_json_v2("test", &[0x01]);
-        let content_pos = canonical.find(r#""content":"#).unwrap();
         let name_pos = canonical.find(r#""name":"#).unwrap();
+        let payload_pos = canonical.find(r#""payload":"#).unwrap();
         let type_pos = canonical.find(r#""type":"#).unwrap();
-        assert!(content_pos < name_pos);
-        assert!(name_pos < type_pos);
+        assert!(name_pos < payload_pos);
+        assert!(payload_pos < type_pos);
     }
 
     #[test]
     fn canonical_json_empty_event_and_payload() {
         let canonical = canonical_event_json_v2("", &[]);
-        assert_eq!(canonical, r#"{"content":"","name":"","type":134217729}"#);
+        assert_eq!(canonical, r#"{"name":"","payload":"","type":134217729}"#);
     }
 
     #[test]
@@ -326,11 +326,11 @@ mod tests {
     }
 
     #[test]
-    fn canonical_json_content_lowercase_hex() {
-        // Content payload must be hex-encoded lowercase for determinism.
+    fn canonical_json_payload_lowercase_hex() {
+        // Payload must be hex-encoded lowercase for determinism.
         let canonical = canonical_event_json_v2("test", &[0xAB, 0xCD, 0xEF]);
         assert!(
-            canonical.contains(r#""content":"abcdef""#),
+            canonical.contains(r#""payload":"abcdef""#),
             "got: {canonical}"
         );
     }
