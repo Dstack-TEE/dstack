@@ -135,7 +135,7 @@ app.get('/', async (c) => {
       mockBackend.getChainId(),
       mockBackend.getAppImplementation(),
     ]);
-    
+
     return c.json({
       status: 'ok',
       kmsContractAddr: process.env.KMS_CONTRACT_ADDR || '0xmockcontract1234567890123456789012345678',
@@ -148,15 +148,15 @@ app.get('/', async (c) => {
     });
   } catch (error) {
     console.error('error in health check:', error);
-    return c.json({ 
-      status: 'error', 
-      message: error instanceof Error ? error.message : String(error) 
+    return c.json({
+      status: 'error',
+      message: error instanceof Error ? error.message : String(error)
     }, 500);
   }
 });
 
 // app boot authentication
-app.post('/bootAuth/app', 
+app.post('/bootAuth/app',
   zValidator('json', BootInfoSchema),
   async (c) => {
     try {
@@ -166,7 +166,7 @@ app.post('/bootAuth/app',
         instanceId: bootInfo.instanceId,
         note: 'always returning success'
       });
-      
+
       const result = await mockBackend.checkBoot(bootInfo, false);
       return c.json(result);
     } catch (error) {
@@ -191,7 +191,7 @@ app.post('/bootAuth/kms',
         instanceId: bootInfo.instanceId,
         note: 'always returning success'
       });
-      
+
       const result = await mockBackend.checkBoot(bootInfo, true);
       return c.json(result);
     } catch (error) {
@@ -216,4 +216,4 @@ console.log(`starting mock auth server on port ${port} (policy: ${policy})`);
 export default {
   port,
   fetch: app.fetch,
-}; 
+};
