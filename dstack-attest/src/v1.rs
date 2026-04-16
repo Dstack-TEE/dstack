@@ -37,6 +37,13 @@ impl PlatformEvidence {
         }
     }
 
+    pub fn tdx_event_log_mut(&mut self) -> Option<&mut Vec<TdxEvent>> {
+        match self {
+            Self::Tdx { event_log, .. } => Some(event_log),
+            _ => None,
+        }
+    }
+
     pub fn into_stripped(self) -> Self {
         match self {
             Self::Tdx { quote, event_log } => Self::Tdx {

@@ -195,7 +195,12 @@ pub(crate) fn dstack_client() -> DstackGuestClient<PrpcClient> {
 }
 
 pub(crate) async fn app_attest(report_data: Vec<u8>) -> Result<AttestResponse> {
-    dstack_client().attest(RawQuoteArgs { report_data }).await
+    dstack_client()
+        .attest(RawQuoteArgs {
+            report_data,
+            include_hash_inputs: false,
+        })
+        .await
 }
 
 pub(crate) fn pad64(hash: [u8; 32]) -> Vec<u8> {

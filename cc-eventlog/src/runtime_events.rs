@@ -114,18 +114,28 @@ impl RuntimeEvent {
     /// - V1: `SHA(event_type_le || ":" || event_name || ":" || payload)`
     /// - V2: `SHA(canonical_json({"event":"...","event_type":134217729,"payload":"hex...","version":2}))`
     pub fn digest<H: Hasher>(&self) -> H::Output {
+        H::hash([self.hash_input().as_slice()])
+    }
+
+    /// The exact byte sequence that gets hashed to produce the digest.
+    ///
+    /// Useful for relying parties that want to verify the digest computation
+    /// or inspect event content without knowing the dstack schema.
+    ///
+    /// - V1: binary concatenation `event_type_le || ":" || name || ":" || payload`
+    /// - V2: UTF-8 bytes of the JCS canonical JSON
+    pub fn hash_input(&self) -> Vec<u8> {
         match self.version {
-            EventLogVersion::V1 => H::hash([
-                &DSTACK_RUNTIME_EVENT_TYPE.to_ne_bytes()[..],
-                b":",
-                self.event.as_bytes(),
-                b":",
-                &self.payload,
-            ]),
-            EventLogVersion::V2 => {
-                let canonical = canonical_event_json_v2(&self.event, &self.payload);
-                H::hash([canonical.as_bytes()])
+            EventLogVersion::V1 => {
+                let mut buf = Vec::with_capacity(4 + 1 + self.event.len() + 1 + self.payload.len());
+                buf.extend_from_slice(&DSTACK_RUNTIME_EVENT_TYPE.to_ne_bytes());
+                buf.push(b':');
+                buf.extend_from_slice(self.event.as_bytes());
+                buf.push(b':');
+                buf.extend_from_slice(&self.payload);
+                buf
             }
+            EventLogVersion::V2 => canonical_event_json_v2(&self.event, &self.payload).into_bytes(),
         }
     }
 

@@ -12,8 +12,17 @@ use ra_tls::attestation::{QuoteContentType, VersionedAttestation};
 pub trait PlatformBackend: Send + Sync {
     fn attestation_for_info(&self) -> Result<VersionedAttestation>;
     fn certificate_attestation(&self, pubkey: &[u8]) -> Result<VersionedAttestation>;
-    fn quote_response(&self, report_data: [u8; 64], vm_config: &str) -> Result<GetQuoteResponse>;
-    fn attest_response(&self, report_data: [u8; 64]) -> Result<AttestResponse>;
+    fn quote_response(
+        &self,
+        report_data: [u8; 64],
+        vm_config: &str,
+        include_hash_inputs: bool,
+    ) -> Result<GetQuoteResponse>;
+    fn attest_response(
+        &self,
+        report_data: [u8; 64],
+        include_hash_inputs: bool,
+    ) -> Result<AttestResponse>;
     fn emit_event(&self, event: &str, payload: &[u8], version: EventLogVersion) -> Result<()>;
 }
 
@@ -34,10 +43,15 @@ impl PlatformBackend for RealPlatform {
             .into_versioned())
     }
 
-    fn quote_response(&self, report_data: [u8; 64], vm_config: &str) -> Result<GetQuoteResponse> {
+    fn quote_response(
+        &self,
+        report_data: [u8; 64],
+        vm_config: &str,
+        include_hash_inputs: bool,
+    ) -> Result<GetQuoteResponse> {
         let attestation = Attestation::quote(&report_data).context("Failed to get quote")?;
         let tdx_quote = attestation.get_tdx_quote_bytes();
-        let tdx_event_log = attestation.get_tdx_event_log_string();
+        let tdx_event_log = attestation.get_tdx_event_log_string(include_hash_inputs);
         Ok(GetQuoteResponse {
             quote: tdx_quote.unwrap_or_default(),
             event_log: tdx_event_log.unwrap_or_default(),
@@ -46,8 +60,16 @@ impl PlatformBackend for RealPlatform {
         })
     }
 
-    fn attest_response(&self, report_data: [u8; 64]) -> Result<AttestResponse> {
-        let attestation = Attestation::quote(&report_data).context("Failed to get attestation")?;
+    fn attest_response(
+        &self,
+        report_data: [u8; 64],
+        include_hash_inputs: bool,
+    ) -> Result<AttestResponse> {
+        let mut attestation =
+            Attestation::quote(&report_data).context("Failed to get attestation")?;
+        if include_hash_inputs {
+            attestation.fill_event_hash_inputs();
+        }
         Ok(AttestResponse {
             attestation: attestation.into_versioned().to_bytes()?,
         })

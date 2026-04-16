@@ -371,6 +371,7 @@ impl TryFrom<TcgEvent> for TdxEvent {
             event: Default::default(),
             event_payload: value.event.into(),
             version: Default::default(),
+            hash_input: None,
         })
     }
 }

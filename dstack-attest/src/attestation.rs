@@ -476,9 +476,21 @@ pub trait TdxAttestationExt {
     fn tdx_event_log(&self) -> Option<&[TdxEvent]>;
 
     /// Returns the TDX event log serialized as JSON.
-    fn tdx_event_log_string(&self) -> Option<String> {
-        self.tdx_event_log()
-            .map(|event_log| serde_json::to_string(event_log).unwrap_or_default())
+    ///
+    /// When `include_hash_inputs` is true, each runtime event carries its
+    /// digest pre-image (hex-encoded) so relying parties can verify it directly.
+    fn tdx_event_log_string(&self, include_hash_inputs: bool) -> Option<String> {
+        self.tdx_event_log().map(|event_log| {
+            if include_hash_inputs {
+                let mut events: Vec<TdxEvent> = event_log.to_vec();
+                for event in &mut events {
+                    event.fill_hash_input();
+                }
+                serde_json::to_string(&events).unwrap_or_default()
+            } else {
+                serde_json::to_string(event_log).unwrap_or_default()
+            }
+        })
     }
 
     /// Returns the parsed TD10 report from the embedded TDX quote.
@@ -699,6 +711,18 @@ impl<T> Attestation<T> {
         self.tdx_quote().map(|q| q.quote.clone())
     }
 
+    /// Populate `hash_input` on every runtime event in the TDX event log.
+    ///
+    /// Useful before serializing an attestation so relying parties get the
+    /// digest pre-images alongside events.
+    pub fn fill_event_hash_inputs(&mut self) {
+        if let Some(q) = self.tdx_quote_mut() {
+            for event in &mut q.event_log {
+                event.fill_hash_input();
+            }
+        }
+    }
+
     /// Get TDX event log bytes
     pub fn get_tdx_event_log_bytes(&self) -> Option<Vec<u8>> {
         self.tdx_quote()
@@ -707,9 +731,17 @@ impl<T> Attestation<T> {
 
     /// Get TDX event log string with RTMR[0-2] payloads stripped to reduce size.
     /// Only digests are kept for boot-time events; runtime events (RTMR3) retain full payload.
-    pub fn get_tdx_event_log_string(&self) -> Option<String> {
+    ///
+    /// When `include_hash_inputs` is true, each runtime event carries its digest
+    /// pre-image (hex-encoded) so relying parties can verify or inspect it directly.
+    pub fn get_tdx_event_log_string(&self, include_hash_inputs: bool) -> Option<String> {
         self.tdx_quote().map(|q| {
-            let stripped: Vec<_> = q.event_log.iter().map(|e| e.stripped()).collect();
+            let mut stripped: Vec<_> = q.event_log.iter().map(|e| e.stripped()).collect();
+            if include_hash_inputs {
+                for event in &mut stripped {
+                    event.fill_hash_input();
+                }
+            }
             serde_json::to_string(&stripped).unwrap_or_default()
         })
     }
