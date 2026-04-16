@@ -40,6 +40,16 @@ pub(crate) struct KmsConfig {
     pub image: ImageConfig,
     #[serde(with = "serde_human_bytes")]
     pub admin_token_hash: Vec<u8>,
+    /// Whether trusted RPCs require the KMS to first attest itself to its
+    /// own auth API. Defaults to `true` (strict). Set `false` only for local
+    /// dev/testing where the KMS runs outside a TEE and cannot reach a guest
+    /// agent socket.
+    #[serde(default = "default_true")]
+    pub enforce_self_authorization: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl KmsConfig {

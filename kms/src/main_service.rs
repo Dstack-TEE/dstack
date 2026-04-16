@@ -102,6 +102,9 @@ struct BootConfig {
 
 impl RpcHandler {
     async fn ensure_self_allowed(&self) -> Result<()> {
+        if !self.state.config.enforce_self_authorization {
+            return Ok(());
+        }
         let boot_info = self
             .state
             .self_boot_info
