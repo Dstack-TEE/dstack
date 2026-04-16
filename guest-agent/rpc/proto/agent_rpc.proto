@@ -171,8 +171,10 @@ message RawQuoteArgs {
   // 64 bytes of report data
   bytes report_data = 1;
   // If true, include the digest hash input for each event in the response.
-  // For v2 runtime events this is the canonical JSON content; for v1 it's
-  // the binary concatenation of event_type, name, and payload.
+  // The hash_input is hex-encoded bytes of the digest pre-image:
+  // - v2 runtime events: hex of UTF-8 JCS canonical JSON
+  // - v1 runtime events: hex of binary concat (event_type_le || ":" || name || ":" || payload)
+  // Clients can verify: sha384(hex_decode(hash_input)) == event.digest
   // Enables relying parties to verify digests or inspect claims without
   // knowing the dstack event schema.
   bool include_hash_inputs = 2;
