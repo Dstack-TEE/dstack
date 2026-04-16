@@ -140,15 +140,16 @@ impl RuntimeEvent {
 
 /// Construct JCS (RFC 8785) canonical JSON for a runtime event.
 ///
-/// Uses `BTreeMap` to guarantee alphabetical key ordering per JCS.
+/// Uses `serde_jcs` for deterministic serialization per RFC 8785,
+/// including alphabetical key ordering and canonical number/string formatting.
 /// The payload is hex-encoded for human readability.
 pub fn canonical_event_json(event: &str, event_type: u32, payload: &[u8]) -> String {
-    use std::collections::BTreeMap;
-    let mut map = BTreeMap::new();
-    map.insert("event", serde_json::Value::String(event.to_string()));
-    map.insert("event_type", serde_json::Value::Number(event_type.into()));
-    map.insert("payload", serde_json::Value::String(hex::encode(payload)));
-    serde_json::to_string(&map).unwrap_or_default()
+    let obj = serde_json::json!({
+        "event": event,
+        "event_type": event_type,
+        "payload": hex::encode(payload),
+    });
+    serde_jcs::to_string(&obj).unwrap_or_default()
 }
 
 /// Replay event logs

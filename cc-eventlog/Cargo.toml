@@ -20,6 +20,7 @@ hex.workspace = true
 scale.workspace = true
 serde.workspace = true
 serde-human-bytes.workspace = true
+serde_jcs = "0.2.0"
 serde_json = { workspace = true, features = ["alloc"] }
 sha2.workspace = true
 
