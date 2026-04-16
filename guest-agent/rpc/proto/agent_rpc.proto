@@ -170,7 +170,8 @@ message TdxQuoteArgs {
 message RawQuoteArgs {
   // 64 bytes of report data
   bytes report_data = 1;
-  // If true, include the digest hash input for each event in the response.
+  // If true, include the digest hash input for each runtime event in the response.
+  // Non-runtime events (boot-time/TCG events) will have hash_input unset.
   // The hash_input is hex-encoded bytes of the digest pre-image:
   // - v2 runtime events: hex of UTF-8 JCS canonical JSON
   // - v1 runtime events: hex of binary concat (event_type_le || ":" || name || ":" || payload)
