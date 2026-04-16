@@ -949,8 +949,8 @@ impl ProxyState {
     pub(crate) fn instance_port_attrs(
         &self,
         instance_id: &str,
-    ) -> Option<BTreeMap<u16, PortFlags>> {
-        self.state.instances.get(instance_id)?.port_attrs.clone()
+    ) -> Option<&BTreeMap<u16, PortFlags>> {
+        self.state.instances.get(instance_id)?.port_attrs.as_ref()
     }
 
     /// Update an instance's port_attrs (used after a lazy fetch via Info()).
