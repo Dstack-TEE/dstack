@@ -15,11 +15,11 @@ use size_parser::human_size;
 /// forces all match sites to be updated.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum EventLogVersion {
-    /// Legacy binary digest: `SHA(event_type_le || ":" || name || ":" || payload)`
+    /// Legacy binary digest: `SHA384(event_type_le || ":" || name || ":" || payload)`
     #[default]
     V1,
-    /// JSON canonical digest (JCS RFC 8785):
-    /// `SHA({"name":"...","type":134217729,"payload":"hex..."})`
+    /// JSON canonical digest (JCS RFC 8785), hashed as canonical JSON bytes:
+    /// `SHA384({"name":"...","payload":"hex...","type":134217729})`
     V2,
 }
 
