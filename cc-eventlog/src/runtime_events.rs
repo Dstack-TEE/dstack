@@ -255,12 +255,92 @@ mod tests {
     #[test]
     fn canonical_json_escapes_special_chars() {
         let canonical = canonical_event_json_v2("event\"with\\special\nchars", &[0xff]);
-        // Verify it's valid JSON
-        let parsed: serde_json::Value = serde_json::from_str(&canonical).unwrap();
+        // Exact bytewise output — JCS must be deterministic
         assert_eq!(
-            parsed["event"].as_str().unwrap(),
-            "event\"with\\special\nchars"
+            canonical,
+            r#"{"event":"event\"with\\special\nchars","event_type":134217729,"payload":"ff","version":2}"#
         );
+    }
+
+    #[test]
+    fn canonical_json_keys_are_sorted_alphabetically() {
+        // JCS RFC 8785 requires keys sorted by UTF-16 code unit order.
+        // For ASCII keys, this is alphabetical.
+        let canonical = canonical_event_json_v2("test", &[0x01]);
+        let event_pos = canonical.find(r#""event":"#).unwrap();
+        let event_type_pos = canonical.find(r#""event_type":"#).unwrap();
+        let payload_pos = canonical.find(r#""payload":"#).unwrap();
+        let version_pos = canonical.find(r#""version":"#).unwrap();
+        assert!(event_pos < event_type_pos);
+        assert!(event_type_pos < payload_pos);
+        assert!(payload_pos < version_pos);
+    }
+
+    #[test]
+    fn canonical_json_empty_event_and_payload() {
+        let canonical = canonical_event_json_v2("", &[]);
+        assert_eq!(
+            canonical,
+            r#"{"event":"","event_type":134217729,"payload":"","version":2}"#
+        );
+    }
+
+    #[test]
+    fn canonical_json_idempotent() {
+        // Same input must always produce bytewise-identical output.
+        // HashMap randomization internally shouldn't affect output.
+        let reference = canonical_event_json_v2("compose-hash", &[0xde, 0xad, 0xbe, 0xef]);
+        for _ in 0..100 {
+            assert_eq!(
+                canonical_event_json_v2("compose-hash", &[0xde, 0xad, 0xbe, 0xef]),
+                reference
+            );
+        }
+    }
+
+    #[test]
+    fn canonical_json_non_ascii_unicode() {
+        // JCS requires UTF-8 output; non-ASCII characters that don't need
+        // escaping (i.e., not control chars, not " or \) must be emitted as-is.
+        let canonical = canonical_event_json_v2("测试-emoji-🦀", &[]);
+        // Event name should appear verbatim in the JSON (no \uXXXX escaping)
+        assert!(canonical.contains("测试-emoji-🦀"), "got: {canonical}");
+        // Must still be parseable and roundtrip
+        let parsed: serde_json::Value = serde_json::from_str(&canonical).unwrap();
+        assert_eq!(parsed["event"].as_str().unwrap(), "测试-emoji-🦀");
+    }
+
+    #[test]
+    fn canonical_json_control_character_escaping() {
+        // JCS (via RFC 8259) uses short escapes for \b \f \n \r \t and \uXXXX for other controls.
+        let canonical = canonical_event_json_v2("\x08\x0c\n\r\t\x01", &[]);
+        assert!(
+            canonical.contains(r#""event":"\b\f\n\r\t\u0001""#),
+            "got: {canonical}"
+        );
+    }
+
+    #[test]
+    fn canonical_json_payload_lowercase_hex() {
+        // Payload must be hex-encoded lowercase for determinism.
+        let canonical = canonical_event_json_v2("test", &[0xAB, 0xCD, 0xEF]);
+        assert!(
+            canonical.contains(r#""payload":"abcdef""#),
+            "got: {canonical}"
+        );
+    }
+
+    #[test]
+    fn canonical_json_is_valid_rfc8785_structure() {
+        // No whitespace, no trailing commas, proper JSON
+        let canonical = canonical_event_json_v2("x", &[0xff]);
+        assert!(!canonical.contains(' '));
+        assert!(!canonical.contains('\n'));
+        assert!(!canonical.contains('\t'));
+        assert!(canonical.starts_with('{'));
+        assert!(canonical.ends_with('}'));
+        // Must parse back
+        let _: serde_json::Value = serde_json::from_str(&canonical).unwrap();
     }
 
     #[test]
