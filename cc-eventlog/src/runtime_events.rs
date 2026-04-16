@@ -113,7 +113,7 @@ impl RuntimeEvent {
     /// Compute the digest of the event.
     ///
     /// - V1: `SHA(event_type_le || ":" || event_name || ":" || payload)`
-    /// - V2: `SHA(canonical_json({"event":"...","event_type":134217729,"payload":"hex...","version":2}))`
+    /// - V2: `SHA(canonical_json({"event":"...","event_type":134217729,"payload":"hex..."}))`
     pub fn digest<H: Hasher>(&self) -> H::Output {
         H::hash([self.hash_input().as_slice()])
     }
@@ -149,15 +149,14 @@ impl RuntimeEvent {
 
 /// Construct the JCS (RFC 8785) canonical JSON used as the v2 digest input.
 ///
-/// The JSON includes an explicit `version: 2` field so the content is
-/// self-describing for relying parties that don't know dstack's event schema.
 /// Keys and number/string formatting are handled by `serde_jcs` per RFC 8785.
+/// Version is carried out-of-band via `RuntimeEvent::version`, not in the
+/// hashed content.
 pub fn canonical_event_json_v2(event: &str, payload: &[u8]) -> String {
     let obj = serde_json::json!({
         "event": event,
         "event_type": DSTACK_RUNTIME_EVENT_TYPE,
         "payload": hex::encode(payload),
-        "version": 2,
     });
     serde_jcs::to_string(&obj).or_panic("canonical JSON serialization failed")
 }
@@ -208,7 +207,7 @@ mod tests {
         let canonical = canonical_event_json_v2(&event.event, &event.payload);
         assert_eq!(
             canonical,
-            r#"{"event":"compose-hash","event_type":134217729,"payload":"abcd","version":2}"#
+            r#"{"event":"compose-hash","event_type":134217729,"payload":"abcd"}"#
         );
         let digest = event.digest::<Sha384>();
         let expected = Sha384::hash([canonical.as_bytes()]);
@@ -269,7 +268,7 @@ mod tests {
         // Exact bytewise output — JCS must be deterministic
         assert_eq!(
             canonical,
-            r#"{"event":"event\"with\\special\nchars","event_type":134217729,"payload":"ff","version":2}"#
+            r#"{"event":"event\"with\\special\nchars","event_type":134217729,"payload":"ff"}"#
         );
     }
 
@@ -281,10 +280,8 @@ mod tests {
         let event_pos = canonical.find(r#""event":"#).unwrap();
         let event_type_pos = canonical.find(r#""event_type":"#).unwrap();
         let payload_pos = canonical.find(r#""payload":"#).unwrap();
-        let version_pos = canonical.find(r#""version":"#).unwrap();
         assert!(event_pos < event_type_pos);
         assert!(event_type_pos < payload_pos);
-        assert!(payload_pos < version_pos);
     }
 
     #[test]
@@ -292,7 +289,7 @@ mod tests {
         let canonical = canonical_event_json_v2("", &[]);
         assert_eq!(
             canonical,
-            r#"{"event":"","event_type":134217729,"payload":"","version":2}"#
+            r#"{"event":"","event_type":134217729,"payload":""}"#
         );
     }
 
