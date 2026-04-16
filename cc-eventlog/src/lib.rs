@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+pub use dstack_types::EventLogVersion;
 pub use runtime_events::{
     canonical_event_json, replay_events, RuntimeEvent, DSTACK_RUNTIME_EVENT_TYPE_V2,
 };

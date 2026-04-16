@@ -1315,6 +1315,7 @@ version = "0.5.8"
 dependencies = [
  "anyhow",
  "digest 0.10.7",
+ "dstack-types",
  "ez-hash",
  "fs-err",
  "hex",
@@ -2409,6 +2410,7 @@ dependencies = [
  "clap",
  "dstack-guest-agent",
  "dstack-guest-agent-rpc",
+ "dstack-types",
  "ra-rpc",
  "ra-tls",
  "rocket",

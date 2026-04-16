@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::{Context, Result};
+use dstack_types::EventLogVersion;
 use fs_err as fs;
 use scale::{Decode, Encode};
 use serde::{Deserialize, Serialize};
@@ -30,13 +31,13 @@ pub struct RuntimeEvent {
     /// Event payload
     #[serde(with = "base64")]
     pub payload: Vec<u8>,
-    /// Event log version (0 or absent = v1, 2 = v2 JSON canonical)
+    /// Event log version
     #[serde(default, skip_serializing)]
-    pub version: u32,
+    pub version: EventLogVersion,
 }
 
 impl RuntimeEvent {
-    pub fn new(event: String, payload: Vec<u8>, version: u32) -> Self {
+    pub fn new(event: String, payload: Vec<u8>, version: EventLogVersion) -> Self {
         Self {
             event,
             payload,
@@ -109,45 +110,29 @@ impl RuntimeEvent {
 
     /// Compute the digest of the event.
     ///
-    /// For v1 (version 0 or 1): `SHA(event_type_le || ":" || event_name || ":" || payload)`
-    /// For v2 (version 2): `SHA(canonical_json({"event":"...","event_type":134217730,"payload":"hex..."}))`
+    /// - V1: `SHA(event_type_le || ":" || event_name || ":" || payload)`
+    /// - V2: `SHA(canonical_json({"event":"...","event_type":134217730,"payload":"hex..."}))`
     pub fn digest<H: Hasher>(&self) -> H::Output {
-        if self.is_v2() {
-            self.digest_v2::<H>()
-        } else {
-            self.digest_v1::<H>()
+        match self.version {
+            EventLogVersion::V1 => H::hash([
+                &DSTACK_RUNTIME_EVENT_TYPE.to_ne_bytes()[..],
+                b":",
+                self.event.as_bytes(),
+                b":",
+                &self.payload,
+            ]),
+            EventLogVersion::V2 => {
+                let canonical =
+                    canonical_event_json(&self.event, DSTACK_RUNTIME_EVENT_TYPE_V2, &self.payload);
+                H::hash([canonical.as_bytes()])
+            }
         }
     }
 
-    fn digest_v1<H: Hasher>(&self) -> H::Output {
-        H::hash([
-            &DSTACK_RUNTIME_EVENT_TYPE.to_ne_bytes()[..],
-            b":",
-            self.event.as_bytes(),
-            b":",
-            &self.payload,
-        ])
-    }
-
-    /// Compute the v2 digest using JCS (RFC 8785) canonical JSON.
-    ///
-    /// The canonical JSON has keys sorted alphabetically:
-    /// `{"event":"<name>","event_type":134217730,"payload":"<hex>"}`
-    fn digest_v2<H: Hasher>(&self) -> H::Output {
-        let canonical =
-            canonical_event_json(&self.event, DSTACK_RUNTIME_EVENT_TYPE_V2, &self.payload);
-        H::hash([canonical.as_bytes()])
-    }
-
-    pub fn is_v2(&self) -> bool {
-        self.version == 2
-    }
-
     pub fn cc_event_type(&self) -> u32 {
-        if self.is_v2() {
-            DSTACK_RUNTIME_EVENT_TYPE_V2
-        } else {
-            DSTACK_RUNTIME_EVENT_TYPE
+        match self.version {
+            EventLogVersion::V1 => DSTACK_RUNTIME_EVENT_TYPE,
+            EventLogVersion::V2 => DSTACK_RUNTIME_EVENT_TYPE_V2,
         }
     }
 }
@@ -189,7 +174,11 @@ mod tests {
 
     #[test]
     fn v1_digest_unchanged() {
-        let event = RuntimeEvent::new("app-id".to_string(), vec![0xde, 0xad, 0xbe, 0xef], 1);
+        let event = RuntimeEvent::new(
+            "app-id".to_string(),
+            vec![0xde, 0xad, 0xbe, 0xef],
+            EventLogVersion::V1,
+        );
         let digest = event.digest::<Sha384>();
         let expected = Sha384::hash([
             &DSTACK_RUNTIME_EVENT_TYPE.to_ne_bytes()[..],
@@ -203,7 +192,11 @@ mod tests {
 
     #[test]
     fn v2_digest_is_canonical_json_hash() {
-        let event = RuntimeEvent::new("compose-hash".to_string(), vec![0xab, 0xcd], 2);
+        let event = RuntimeEvent::new(
+            "compose-hash".to_string(),
+            vec![0xab, 0xcd],
+            EventLogVersion::V2,
+        );
         let canonical =
             canonical_event_json(&event.event, DSTACK_RUNTIME_EVENT_TYPE_V2, &event.payload);
         assert_eq!(
@@ -217,8 +210,8 @@ mod tests {
 
     #[test]
     fn v2_digest_differs_from_v1() {
-        let v1 = RuntimeEvent::new("test".to_string(), vec![1, 2, 3], 1);
-        let v2 = RuntimeEvent::new("test".to_string(), vec![1, 2, 3], 2);
+        let v1 = RuntimeEvent::new("test".to_string(), vec![1, 2, 3], EventLogVersion::V1);
+        let v2 = RuntimeEvent::new("test".to_string(), vec![1, 2, 3], EventLogVersion::V2);
         assert_ne!(
             v1.digest::<Sha384>(),
             v2.digest::<Sha384>(),
@@ -228,13 +221,13 @@ mod tests {
 
     #[test]
     fn v1_event_type() {
-        let event = RuntimeEvent::new("test".to_string(), vec![], 1);
+        let event = RuntimeEvent::new("test".to_string(), vec![], EventLogVersion::V1);
         assert_eq!(event.cc_event_type(), DSTACK_RUNTIME_EVENT_TYPE);
     }
 
     #[test]
     fn v2_event_type() {
-        let event = RuntimeEvent::new("test".to_string(), vec![], 2);
+        let event = RuntimeEvent::new("test".to_string(), vec![], EventLogVersion::V2);
         assert_eq!(event.cc_event_type(), DSTACK_RUNTIME_EVENT_TYPE_V2);
     }
 
@@ -242,15 +235,14 @@ mod tests {
     fn deserialize_v1_without_version_field() {
         let json = r#"{"event":"app-id","payload":"AQID"}"#;
         let event: RuntimeEvent = serde_json::from_str(json).unwrap();
-        assert_eq!(event.version, 0);
-        assert!(!event.is_v2());
+        assert_eq!(event.version, EventLogVersion::V1);
         assert_eq!(event.cc_event_type(), DSTACK_RUNTIME_EVENT_TYPE);
     }
 
     #[test]
     fn serialize_omits_version() {
-        let v1 = RuntimeEvent::new("test".to_string(), vec![1], 1);
-        let v2 = RuntimeEvent::new("test".to_string(), vec![1], 2);
+        let v1 = RuntimeEvent::new("test".to_string(), vec![1], EventLogVersion::V1);
+        let v2 = RuntimeEvent::new("test".to_string(), vec![1], EventLogVersion::V2);
         let json_v1 = serde_json::to_string(&v1).unwrap();
         let json_v2 = serde_json::to_string(&v2).unwrap();
         assert!(

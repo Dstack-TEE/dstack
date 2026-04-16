@@ -20,7 +20,7 @@ use dstack_types::{
         APP_COMPOSE, APP_KEYS, DECRYPTED_ENV, DECRYPTED_ENV_JSON, ENCRYPTED_ENV,
         HOST_SHARED_DIR_NAME, HOST_SHARED_DISK_LABEL, INSTANCE_INFO, SYS_CONFIG, USER_CONFIG,
     },
-    KeyProvider, KeyProviderInfo,
+    EventLogVersion, KeyProvider, KeyProviderInfo,
 };
 use fs_err as fs;
 use luks2::{
@@ -688,7 +688,10 @@ fn truncate(s: &[u8], len: usize) -> &[u8] {
     }
 }
 
-fn emit_key_provider_info(provider_info: &KeyProviderInfo, event_log_version: u32) -> Result<()> {
+fn emit_key_provider_info(
+    provider_info: &KeyProviderInfo,
+    event_log_version: EventLogVersion,
+) -> Result<()> {
     info!("Key provider info: {provider_info:?}");
     let provider_info_json = serde_json::to_vec(&provider_info)?;
     emit_runtime_event("key-provider", &provider_info_json, event_log_version)?;

@@ -14,6 +14,7 @@ use dstack_guest_agent::{
     run_server, AppState,
 };
 use dstack_guest_agent_rpc::{AttestResponse, GetQuoteResponse};
+use dstack_types::EventLogVersion;
 use ra_tls::attestation::VersionedAttestation;
 use serde::Deserialize;
 use tracing::warn;
@@ -90,7 +91,7 @@ impl PlatformBackend for SimulatorPlatform {
         simulator::simulated_attest_response(&self.attestation, report_data, self.patch_report_data)
     }
 
-    fn emit_event(&self, event: &str, _payload: &[u8], _event_log_version: u32) -> Result<()> {
+    fn emit_event(&self, event: &str, _payload: &[u8], _version: EventLogVersion) -> Result<()> {
         bail!("runtime event emission is unavailable in simulator mode: {event}")
     }
 }
@@ -149,7 +150,7 @@ mod tests {
     fn simulator_rejects_runtime_event_emission() {
         let platform = load_fixture_platform();
         let err = platform
-            .emit_event("test.event", b"payload", 1)
+            .emit_event("test.event", b"payload", EventLogVersion::V1)
             .unwrap_err();
         assert!(err.to_string().contains("unavailable in simulator mode"));
     }

@@ -84,10 +84,11 @@ impl TdxEvent {
         if !self.is_runtime_event() {
             return None;
         }
+        use dstack_types::EventLogVersion;
         let version = if self.event_type == DSTACK_RUNTIME_EVENT_TYPE_V2 {
-            2
+            EventLogVersion::V2
         } else {
-            0
+            EventLogVersion::V1
         };
         Some(RuntimeEvent {
             event: self.event.clone(),

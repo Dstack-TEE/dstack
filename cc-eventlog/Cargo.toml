@@ -13,6 +13,7 @@ license.workspace = true
 [dependencies]
 anyhow.workspace = true
 digest = "0.10.7"
+dstack-types.workspace = true
 ez-hash.workspace = true
 fs-err.workspace = true
 hex.workspace = true

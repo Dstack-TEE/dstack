@@ -12,7 +12,7 @@ pub const TDX_QUOTE_REPORT_DATA_RANGE: std::ops::Range<usize> = 568..632;
 use std::{borrow::Cow, time::SystemTime};
 
 use anyhow::{anyhow, bail, Context, Result};
-use cc_eventlog::{RuntimeEvent, TdxEvent};
+use cc_eventlog::{EventLogVersion, RuntimeEvent, TdxEvent};
 use dcap_qvl::{
     quote::{EnclaveReport, Quote, Report, TDReport10, TDReport15},
     verify::VerifiedReport as TdxVerifiedReport,
@@ -1036,7 +1036,11 @@ impl Attestation {
         let runtime_events = if mode.is_composable() {
             RuntimeEvent::read_all().context("Failed to read runtime events")?
         } else if let Some(app_id) = app_id {
-            vec![RuntimeEvent::new("app-id".to_string(), app_id.to_vec(), 0)]
+            vec![RuntimeEvent::new(
+                "app-id".to_string(),
+                app_id.to_vec(),
+                EventLogVersion::V1,
+            )]
         } else {
             vec![]
         };

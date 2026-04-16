@@ -9,6 +9,45 @@ use serde::{Deserialize, Serialize};
 use serde_human_bytes as hex_bytes;
 use size_parser::human_size;
 
+/// Event log version controlling the digest format.
+///
+/// Using an enum ensures exhaustive matching — adding a new version
+/// forces all match sites to be updated.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Encode, Decode)]
+pub enum EventLogVersion {
+    /// Legacy binary digest: `SHA(event_type_le || ":" || name || ":" || payload)`
+    #[default]
+    V1,
+    /// JSON canonical digest (JCS RFC 8785):
+    /// `SHA({"event":"...","event_type":134217730,"payload":"hex..."})`
+    V2,
+}
+
+impl EventLogVersion {
+    pub fn from_u32(v: u32) -> Self {
+        match v {
+            2 => EventLogVersion::V2,
+            _ => EventLogVersion::V1,
+        }
+    }
+}
+
+impl Serialize for EventLogVersion {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            EventLogVersion::V1 => serializer.serialize_u32(1),
+            EventLogVersion::V2 => serializer.serialize_u32(2),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for EventLogVersion {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let v = u32::deserialize(deserializer)?;
+        Ok(EventLogVersion::from_u32(v))
+    }
+}
+
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct AppCompose {
     pub manifest_version: u32,
@@ -45,16 +84,12 @@ pub struct AppCompose {
     pub storage_fs: Option<String>,
     #[serde(default, with = "human_size")]
     pub swap_size: u64,
-    #[serde(default = "default_event_log_version")]
-    pub event_log_version: u32,
+    #[serde(default)]
+    pub event_log_version: EventLogVersion,
 }
 
 fn default_true() -> bool {
     true
-}
-
-fn default_event_log_version() -> u32 {
-    1
 }
 
 fn deserialize_gateway_enabled<'de, D>(deserializer: D) -> Result<bool, D::Error>
