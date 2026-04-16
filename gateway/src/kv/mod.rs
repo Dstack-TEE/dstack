@@ -62,6 +62,11 @@ pub struct InstanceData {
     /// Info() on first connection and populate this lazily.
     #[serde(default)]
     pub port_attrs: Option<BTreeMap<u16, PortFlags>>,
+    /// Hex-encoded compose_hash that `port_attrs` was learned against.
+    /// When a re-registration presents a different compose_hash (app upgrade),
+    /// the cache is invalidated and re-fetched lazily.
+    #[serde(default)]
+    pub port_attrs_hash: String,
 }
 
 /// Gateway node status (stored separately for independent updates)

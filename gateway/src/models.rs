@@ -66,6 +66,10 @@ pub struct InstanceInfo {
     /// gateway will lazily populate via Info() on first proxied connection.
     #[serde(default)]
     pub port_attrs: Option<BTreeMap<u16, PortFlags>>,
+    /// Hex-encoded compose_hash that `port_attrs` was learned against. The
+    /// cache is invalidated when a new registration presents a different hash.
+    #[serde(default)]
+    pub port_attrs_hash: String,
     #[serde(skip)]
     pub connections: Arc<AtomicU64>,
 }

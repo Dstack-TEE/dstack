@@ -55,14 +55,14 @@ async fn test_config() {
     let state = create_test_state().await;
     let mut info = state
         .lock()
-        .new_client_by_id("test-id-0", "app-id-0", "test-pubkey-0", None)
+        .new_client_by_id("test-id-0", "app-id-0", "test-pubkey-0", "", None)
         .unwrap();
 
     info.reg_time = SystemTime::UNIX_EPOCH;
     insta::assert_debug_snapshot!(info);
     let mut info1 = state
         .lock()
-        .new_client_by_id("test-id-1", "app-id-1", "test-pubkey-1", None)
+        .new_client_by_id("test-id-1", "app-id-1", "test-pubkey-1", "", None)
         .unwrap();
     info1.reg_time = SystemTime::UNIX_EPOCH;
     insta::assert_debug_snapshot!(info1);

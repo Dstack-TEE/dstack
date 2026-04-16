@@ -382,11 +382,15 @@ impl Proxy {
     ///
     /// `port_attrs = None` means the CVM didn't report port attributes (legacy
     /// CVM). The gateway will lazily fetch them via Info() on first connection.
+    ///
+    /// `compose_hash` is the attested compose_hash — used to invalidate any
+    /// cached `port_attrs` when the app is upgraded.
     pub fn do_register_cvm(
         &self,
         app_id: &str,
         instance_id: &str,
         client_public_key: &str,
+        compose_hash: &str,
         port_attrs: Option<BTreeMap<u16, PortFlags>>,
     ) -> Result<RegisterCvmResponse> {
         let mut state = self.lock();
@@ -407,7 +411,13 @@ impl Proxy {
             bail!("[{instance_id}] client public key is empty");
         }
         let client_info = state
-            .new_client_by_id(instance_id, app_id, client_public_key, port_attrs)
+            .new_client_by_id(
+                instance_id,
+                app_id,
+                client_public_key,
+                compose_hash,
+                port_attrs,
+            )
             .context("failed to allocate IP address for client")?;
         if let Err(err) = state.reconfigure() {
             error!("failed to reconfigure: {err:?}");
@@ -454,6 +464,7 @@ fn build_state_from_kv_store(instances: BTreeMap<String, InstanceData>) -> Proxy
                 .checked_add(Duration::from_secs(data.reg_time))
                 .unwrap_or(UNIX_EPOCH),
             port_attrs: data.port_attrs,
+            port_attrs_hash: data.port_attrs_hash,
             connections: Default::default(),
         };
         state.allocated_addresses.insert(data.ip);
@@ -748,6 +759,7 @@ fn reload_instances_from_kv_store(proxy: &Proxy, store: &KvStore) -> Result<()> 
                 .checked_add(Duration::from_secs(data.reg_time))
                 .unwrap_or(UNIX_EPOCH),
             port_attrs: data.port_attrs.clone(),
+            port_attrs_hash: data.port_attrs_hash.clone(),
             connections: Default::default(),
         };
 
@@ -829,6 +841,7 @@ impl ProxyState {
         id: &str,
         app_id: &str,
         public_key: &str,
+        compose_hash: &str,
         port_attrs: Option<BTreeMap<u16, PortFlags>>,
     ) -> Result<InstanceInfo> {
         if id.is_empty() {
@@ -848,11 +861,20 @@ impl ProxyState {
                 // Update reg_time so other nodes will pick up the change
                 existing.reg_time = SystemTime::now();
             }
+            // App upgrade detection: a different attested compose_hash invalidates
+            // any cached port_attrs from the previous code.
+            if existing.port_attrs_hash != compose_hash {
+                info!(
+                    "compose_hash changed for instance {id} ({} -> {compose_hash}), \
+                     invalidating cached port_attrs",
+                    existing.port_attrs_hash
+                );
+                existing.port_attrs = None;
+                existing.port_attrs_hash = compose_hash.to_string();
+            }
             // Only override cached port_attrs when the caller actually reports
-            // them. A `None` request (legacy CVM) means "I don't know" — don't
-            // wipe attrs learned at an earlier registration or lazy fetch. Same
-            // instance_id implies same compose_hash, so cached attrs can't be
-            // stale relative to the real app-compose.
+            // them. A `None` request (legacy CVM) means "I don't know" — let
+            // the lazy fetch path run again.
             if port_attrs.is_some() {
                 existing.port_attrs = port_attrs.clone();
             }
@@ -865,6 +887,7 @@ impl ProxyState {
                     public_key: existing.public_key.clone(),
                     reg_time: encode_ts(existing.reg_time),
                     port_attrs: existing.port_attrs.clone(),
+                    port_attrs_hash: existing.port_attrs_hash.clone(),
                 };
                 if let Err(err) = self.kv_store.sync_instance(&existing.id, &data) {
                     error!("failed to sync existing instance to KvStore: {err:?}");
@@ -884,6 +907,7 @@ impl ProxyState {
             public_key: public_key.to_string(),
             reg_time: SystemTime::now(),
             port_attrs,
+            port_attrs_hash: compose_hash.to_string(),
             connections: Default::default(),
         };
         self.add_instance(host_info.clone());
@@ -921,6 +945,7 @@ impl ProxyState {
             public_key: info.public_key.clone(),
             reg_time: encode_ts(info.reg_time),
             port_attrs: Some(attrs),
+            port_attrs_hash: info.port_attrs_hash.clone(),
         };
         if let Err(err) = self.kv_store.sync_instance(instance_id, &data) {
             error!("failed to sync updated port_attrs to KvStore: {err:?}");
@@ -935,6 +960,7 @@ impl ProxyState {
             public_key: info.public_key.clone(),
             reg_time: encode_ts(info.reg_time),
             port_attrs: info.port_attrs.clone(),
+            port_attrs_hash: info.port_attrs_hash.clone(),
         };
         if let Err(err) = self.kv_store.sync_instance(&info.id, &data) {
             error!("failed to sync instance to KvStore: {err:?}");
@@ -1339,14 +1365,20 @@ impl GatewayRpc for RpcHandler {
             .context("App authorization failed")?;
         let app_id = hex::encode(&app_info.app_id);
         let instance_id = hex::encode(&app_info.instance_id);
+        let compose_hash = hex::encode(&app_info.compose_hash);
         let port_attrs = request.port_attrs.map(|list| {
             list.attrs
                 .into_iter()
                 .map(|p| (p.port as u16, PortFlags { pp: p.pp }))
                 .collect::<BTreeMap<u16, PortFlags>>()
         });
-        self.state
-            .do_register_cvm(&app_id, &instance_id, &request.client_public_key, port_attrs)
+        self.state.do_register_cvm(
+            &app_id,
+            &instance_id,
+            &request.client_public_key,
+            &compose_hash,
+            port_attrs,
+        )
     }
 
     async fn acme_info(self) -> Result<AcmeInfoResponse> {
