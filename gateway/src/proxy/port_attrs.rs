@@ -39,9 +39,7 @@ pub(crate) async fn should_send_pp(state: &Proxy, instance_id: &str, port: u16) 
 async fn lazy_fetch(state: &Proxy, instance_id: &str) -> Result<BTreeMap<u16, PortFlags>> {
     let (ip, agent_port) = {
         let guard = state.lock();
-        let ip = guard
-            .instance_ip(instance_id)
-            .context("unknown instance")?;
+        let ip = guard.instance_ip(instance_id).context("unknown instance")?;
         (ip, guard.config.proxy.agent_port)
     };
 
@@ -59,10 +57,7 @@ async fn lazy_fetch(state: &Proxy, instance_id: &str) -> Result<BTreeMap<u16, Po
 async fn fetch_port_attrs(ip: Ipv4Addr, agent_port: u16) -> Result<BTreeMap<u16, PortFlags>> {
     let url = format!("http://{ip}:{agent_port}/prpc");
     let client = DstackGuestClient::new(PrpcClient::new(url));
-    let info = client
-        .info()
-        .await
-        .context("agent Info() rpc failed")?;
+    let info = client.info().await.context("agent Info() rpc failed")?;
     if info.tcb_info.is_empty() {
         // Legacy CVM with public_tcbinfo=false; we cannot inspect app-compose
         // remotely. Cache an empty map so we don't keep retrying.
