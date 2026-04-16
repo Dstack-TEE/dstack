@@ -113,7 +113,7 @@ impl RuntimeEvent {
     /// Compute the digest of the event.
     ///
     /// - V1: `SHA(event_type_le || ":" || event_name || ":" || payload)`
-    /// - V2: `SHA(canonical_json({"event":"...","event_type":134217729,"payload":"hex..."}))`
+    /// - V2: `SHA(canonical_json({"name":"...","type":134217729,"content":"hex..."}))`
     pub fn digest<H: Hasher>(&self) -> H::Output {
         H::hash([self.hash_input().as_slice()])
     }
@@ -154,9 +154,9 @@ impl RuntimeEvent {
 /// hashed content.
 pub fn canonical_event_json_v2(event: &str, payload: &[u8]) -> String {
     let obj = serde_json::json!({
-        "event": event,
-        "event_type": DSTACK_RUNTIME_EVENT_TYPE,
-        "payload": hex::encode(payload),
+        "name": event,
+        "type": DSTACK_RUNTIME_EVENT_TYPE,
+        "content": hex::encode(payload),
     });
     serde_jcs::to_string(&obj).or_panic("canonical JSON serialization failed")
 }
@@ -207,7 +207,7 @@ mod tests {
         let canonical = canonical_event_json_v2(&event.event, &event.payload);
         assert_eq!(
             canonical,
-            r#"{"event":"compose-hash","event_type":134217729,"payload":"abcd"}"#
+            r#"{"content":"abcd","name":"compose-hash","type":134217729}"#
         );
         let digest = event.digest::<Sha384>();
         let expected = Sha384::hash([canonical.as_bytes()]);
@@ -268,7 +268,7 @@ mod tests {
         // Exact bytewise output — JCS must be deterministic
         assert_eq!(
             canonical,
-            r#"{"event":"event\"with\\special\nchars","event_type":134217729,"payload":"ff"}"#
+            r#"{"content":"ff","name":"event\"with\\special\nchars","type":134217729}"#
         );
     }
 
@@ -277,20 +277,17 @@ mod tests {
         // JCS RFC 8785 requires keys sorted by UTF-16 code unit order.
         // For ASCII keys, this is alphabetical.
         let canonical = canonical_event_json_v2("test", &[0x01]);
-        let event_pos = canonical.find(r#""event":"#).unwrap();
-        let event_type_pos = canonical.find(r#""event_type":"#).unwrap();
-        let payload_pos = canonical.find(r#""payload":"#).unwrap();
-        assert!(event_pos < event_type_pos);
-        assert!(event_type_pos < payload_pos);
+        let content_pos = canonical.find(r#""content":"#).unwrap();
+        let name_pos = canonical.find(r#""name":"#).unwrap();
+        let type_pos = canonical.find(r#""type":"#).unwrap();
+        assert!(content_pos < name_pos);
+        assert!(name_pos < type_pos);
     }
 
     #[test]
     fn canonical_json_empty_event_and_payload() {
         let canonical = canonical_event_json_v2("", &[]);
-        assert_eq!(
-            canonical,
-            r#"{"event":"","event_type":134217729,"payload":""}"#
-        );
+        assert_eq!(canonical, r#"{"content":"","name":"","type":134217729}"#);
     }
 
     #[test]
@@ -315,7 +312,7 @@ mod tests {
         assert!(canonical.contains("测试-emoji-🦀"), "got: {canonical}");
         // Must still be parseable and roundtrip
         let parsed: serde_json::Value = serde_json::from_str(&canonical).unwrap();
-        assert_eq!(parsed["event"].as_str().unwrap(), "测试-emoji-🦀");
+        assert_eq!(parsed["name"].as_str().unwrap(), "测试-emoji-🦀");
     }
 
     #[test]
@@ -323,17 +320,17 @@ mod tests {
         // JCS (via RFC 8259) uses short escapes for \b \f \n \r \t and \uXXXX for other controls.
         let canonical = canonical_event_json_v2("\x08\x0c\n\r\t\x01", &[]);
         assert!(
-            canonical.contains(r#""event":"\b\f\n\r\t\u0001""#),
+            canonical.contains(r#""name":"\b\f\n\r\t\u0001""#),
             "got: {canonical}"
         );
     }
 
     #[test]
-    fn canonical_json_payload_lowercase_hex() {
-        // Payload must be hex-encoded lowercase for determinism.
+    fn canonical_json_content_lowercase_hex() {
+        // Content payload must be hex-encoded lowercase for determinism.
         let canonical = canonical_event_json_v2("test", &[0xAB, 0xCD, 0xEF]);
         assert!(
-            canonical.contains(r#""payload":"abcdef""#),
+            canonical.contains(r#""content":"abcdef""#),
             "got: {canonical}"
         );
     }

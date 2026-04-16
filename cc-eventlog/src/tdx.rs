@@ -19,7 +19,7 @@ use crate::{
 ///
 /// For dstack runtime events (`event_type == DSTACK_RUNTIME_EVENT_TYPE`), the digest is:
 /// - V1: `sha384(event_type_le || ":" || event || ":" || payload)`
-/// - V2: `sha384(canonical_json({"event":"...","event_type":134217729,"payload":"hex..."}))`
+/// - V2: `sha384(canonical_json({"name":"...","type":134217729,"content":"hex..."}))`
 #[derive(Clone, Debug, Serialize, Deserialize, Encode, Decode)]
 pub struct TdxEvent {
     /// IMR index, starts from 0
@@ -184,9 +184,9 @@ mod tests {
         let input = hex::decode(input_hex).unwrap();
         let input_str = std::str::from_utf8(&input).unwrap();
         // V2 hash_input is the canonical JSON (version is carried out-of-band)
-        assert!(input_str.contains(r#""event":"compose-hash""#));
-        assert!(input_str.contains(r#""event_type":134217729"#));
-        assert!(input_str.contains(r#""payload":"abcd""#));
+        assert!(input_str.contains(r#""name":"compose-hash""#));
+        assert!(input_str.contains(r#""type":134217729"#));
+        assert!(input_str.contains(r#""content":"abcd""#));
         assert!(!input_str.contains(r#""version""#));
         // And hashing it reproduces the digest
         let actual = Sha384::hash([input.as_slice()]);

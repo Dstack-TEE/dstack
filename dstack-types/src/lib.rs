@@ -19,7 +19,7 @@ pub enum EventLogVersion {
     #[default]
     V1,
     /// JSON canonical digest (JCS RFC 8785):
-    /// `SHA({"event":"...","event_type":134217729,"payload":"hex..."})`
+    /// `SHA({"name":"...","type":134217729,"content":"hex..."})`
     V2,
 }
 
