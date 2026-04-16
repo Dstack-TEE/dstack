@@ -32,7 +32,7 @@ pub struct RuntimeEvent {
     #[serde(with = "base64")]
     pub payload: Vec<u8>,
     /// Event log version
-    #[serde(default, skip_serializing)]
+    #[serde(default)]
     #[codec(skip)]
     pub version: EventLogVersion,
 }
@@ -238,19 +238,19 @@ mod tests {
     }
 
     #[test]
-    fn serialize_omits_version() {
-        let v1 = RuntimeEvent::new("test".to_string(), vec![1], EventLogVersion::V1);
+    fn serde_roundtrip_preserves_version() {
         let v2 = RuntimeEvent::new("test".to_string(), vec![1], EventLogVersion::V2);
-        let json_v1 = serde_json::to_string(&v1).unwrap();
-        let json_v2 = serde_json::to_string(&v2).unwrap();
-        assert!(
-            !json_v1.contains("version"),
-            "version should never be serialized"
-        );
-        assert!(
-            !json_v2.contains("version"),
-            "version should never be serialized"
-        );
+        let json = serde_json::to_string(&v2).unwrap();
+        assert!(json.contains(r#""version":2"#), "v2 must serialize version");
+        let decoded: RuntimeEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.version, EventLogVersion::V2);
+    }
+
+    #[test]
+    fn deserialize_without_version_defaults_to_v1() {
+        let json = r#"{"event":"test","payload":"AQ=="}"#;
+        let decoded: RuntimeEvent = serde_json::from_str(json).unwrap();
+        assert_eq!(decoded.version, EventLogVersion::V1);
     }
 
     #[test]
