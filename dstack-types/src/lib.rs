@@ -13,7 +13,7 @@ use size_parser::human_size;
 ///
 /// Using an enum ensures exhaustive matching — adding a new version
 /// forces all match sites to be updated.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum EventLogVersion {
     /// Legacy binary digest: `SHA(event_type_le || ":" || name || ":" || payload)`
     #[default]

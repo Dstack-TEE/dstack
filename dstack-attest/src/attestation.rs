@@ -1023,10 +1023,14 @@ impl Attestation {
 
     /// Create an attestation from a report data
     pub fn quote(report_data: &[u8; 64]) -> Result<Self> {
-        Self::quote_with_app_id(report_data, None)
+        Self::quote_with_app_id(report_data, None, EventLogVersion::default())
     }
 
-    pub fn quote_with_app_id(report_data: &[u8; 64], app_id: Option<[u8; 20]>) -> Result<Self> {
+    pub fn quote_with_app_id(
+        report_data: &[u8; 64],
+        app_id: Option<[u8; 20]>,
+        event_log_version: EventLogVersion,
+    ) -> Result<Self> {
         // Lock to prevent concurrent quote generation (TDX driver doesn't support it)
         let _guard = QUOTE_LOCK
             .lock()
@@ -1039,7 +1043,7 @@ impl Attestation {
             vec![RuntimeEvent::new(
                 "app-id".to_string(),
                 app_id.to_vec(),
-                EventLogVersion::V1,
+                event_log_version,
             )]
         } else {
             vec![]

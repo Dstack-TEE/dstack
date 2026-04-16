@@ -33,6 +33,7 @@ pub struct RuntimeEvent {
     pub payload: Vec<u8>,
     /// Event log version
     #[serde(default, skip_serializing)]
+    #[codec(skip)]
     pub version: EventLogVersion,
 }
 
@@ -145,13 +146,29 @@ impl RuntimeEvent {
 /// Output: `{"event":"<name>","event_type":<type>,"payload":"<hex>"}`
 pub fn canonical_event_json(event: &str, event_type: u32, payload: &[u8]) -> String {
     // Per JCS, strings must use minimal JSON escaping.
-    // We use serde_json to correctly escape the event name.
-    let escaped_event = serde_json::to_string(event).expect("failed to serialize event name");
+    let escaped_event = json_escape_string(event);
     let hex_payload = hex::encode(payload);
-    format!(
-        r#"{{"event":{},"event_type":{},"payload":"{}"}}"#,
-        escaped_event, event_type, hex_payload
-    )
+    format!(r#"{{"event":"{escaped_event}","event_type":{event_type},"payload":"{hex_payload}"}}"#,)
+}
+
+/// Minimal JSON string escaping per RFC 8259.
+fn json_escape_string(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if c < '\x20' => {
+                use std::fmt::Write;
+                let _ = write!(out, "\\u{:04x}", c as u32);
+            }
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 /// Replay event logs
