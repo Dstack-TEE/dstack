@@ -228,7 +228,8 @@ fn hex_decode(hex_str: &str) -> Result<Vec<u8>> {
 
 fn cmd_extend(extend_args: ExtendArgs) -> Result<()> {
     let payload = hex_decode(&extend_args.payload).context("Failed to decode payload")?;
-    let version = dstack_types::EventLogVersion::from_u32(extend_args.event_log_version);
+    let version = dstack_types::EventLogVersion::from_u32(extend_args.event_log_version)
+        .context("unsupported event log version")?;
     emit_runtime_event(&extend_args.event, &payload, version).context("Failed to extend RTMR")
 }
 

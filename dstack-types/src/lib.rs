@@ -24,10 +24,11 @@ pub enum EventLogVersion {
 }
 
 impl EventLogVersion {
-    pub fn from_u32(v: u32) -> Self {
+    pub fn from_u32(v: u32) -> Option<Self> {
         match v {
-            2 => EventLogVersion::V2,
-            _ => EventLogVersion::V1,
+            1 => Some(EventLogVersion::V1),
+            2 => Some(EventLogVersion::V2),
+            _ => None,
         }
     }
 }
@@ -44,7 +45,8 @@ impl Serialize for EventLogVersion {
 impl<'de> Deserialize<'de> for EventLogVersion {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let v = u32::deserialize(deserializer)?;
-        Ok(EventLogVersion::from_u32(v))
+        EventLogVersion::from_u32(v)
+            .ok_or_else(|| serde::de::Error::custom(format!("unknown event log version: {v}")))
     }
 }
 
