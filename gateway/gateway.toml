@@ -85,6 +85,8 @@ shutdown = "5s"
 total = "5h"
 # Timeout for proxy protocol header.
 pp_header = "5s"
+# Timeout for the background lazy fetch of port_attrs from a legacy CVM.
+port_attrs_fetch = "10s"
 
 [core.recycle]
 enabled = true

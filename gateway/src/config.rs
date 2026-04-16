@@ -152,6 +152,10 @@ pub struct Timeouts {
     /// Timeout for reading the proxy protocol header from inbound connections.
     #[serde(with = "serde_duration")]
     pub pp_header: Duration,
+    /// Timeout for the background lazy fetch of `port_attrs` from a legacy CVM
+    /// agent's `Info()` RPC.
+    #[serde(with = "serde_duration")]
+    pub port_attrs_fetch: Duration,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

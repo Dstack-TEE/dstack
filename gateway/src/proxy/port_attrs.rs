@@ -2,14 +2,26 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-//! Per-port attribute lookup with lazy fetch from legacy CVMs.
+//! Per-port attribute lookup with background lazy fetch from legacy CVMs.
+//!
+//! Two paths:
+//!
+//! - Fast path (`should_send_pp`): a synchronous, non-blocking lookup. On a
+//!   cache miss it enqueues the instance for the background worker and
+//!   optimistically returns `pp = false` so the connection isn't blocked.
+//! - Slow path ([`spawn_fetcher`]): a single background task that drains the
+//!   queue, dedupes in-flight instances, calls the agent's `Info()` RPC with
+//!   a timeout, and writes the result back to WaveKV.
 
-use std::{collections::BTreeMap, net::Ipv4Addr};
+use std::collections::{BTreeMap, HashSet};
+use std::net::Ipv4Addr;
+use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
 use dstack_guest_agent_rpc::dstack_guest_client::DstackGuestClient;
 use dstack_types::AppCompose;
 use http_client::prpc::PrpcClient;
+use tokio::sync::mpsc::UnboundedReceiver;
 use tracing::{debug, warn};
 
 use crate::{kv::PortFlags, main_service::Proxy};
@@ -17,41 +29,66 @@ use crate::{kv::PortFlags, main_service::Proxy};
 /// Decide whether the gateway should send a PROXY protocol header on the
 /// outbound connection to (`instance_id`, `port`).
 ///
-/// Lookup order:
-///
-/// 1. In-memory `port_attrs` populated at registration (new CVMs).
-/// 2. Lazy fetch via the agent's `Info()` RPC (legacy CVMs that didn't report
-///    attributes at registration). Result is cached on success.
-/// 3. Default `false` on any failure.
-pub(crate) async fn should_send_pp(state: &Proxy, instance_id: &str, port: u16) -> bool {
+/// Cache hit returns the declared value. Cache miss returns `false` and asks
+/// the background worker to populate the cache for the next request — this
+/// keeps the data path off the critical Info() RPC.
+pub(crate) fn should_send_pp(state: &Proxy, instance_id: &str, port: u16) -> bool {
     if let Some(attrs) = state.lock().instance_port_attrs(instance_id) {
         return attrs.get(&port).map(|f| f.pp).unwrap_or(false);
     }
-    match lazy_fetch(state, instance_id).await {
-        Ok(attrs) => attrs.get(&port).map(|f| f.pp).unwrap_or(false),
-        Err(err) => {
-            warn!("port_attrs lazy fetch for instance {instance_id} failed: {err:#}");
-            false
-        }
-    }
+    // Best-effort enqueue. If the channel is closed (shutdown) or the worker
+    // is gone, silently drop — `false` is the conservative default anyway.
+    let _ = state.port_attrs_tx.send(instance_id.to_string());
+    false
 }
 
-async fn lazy_fetch(state: &Proxy, instance_id: &str) -> Result<BTreeMap<u16, PortFlags>> {
+/// Spawn the background lazy-fetch worker. Should be called once at startup.
+pub(crate) fn spawn_fetcher(state: Proxy, mut rx: UnboundedReceiver<String>) {
+    let in_flight: Arc<Mutex<HashSet<String>>> = Default::default();
+    let timeout = state.config.proxy.timeouts.port_attrs_fetch;
+    tokio::spawn(async move {
+        while let Some(instance_id) = rx.recv().await {
+            // Dedupe: only spawn one fetch per instance at a time. After the
+            // fetch completes, the entry is removed so a later registration
+            // (with new compose_hash) can trigger a fresh fetch via the same
+            // path.
+            {
+                let mut in_flight = in_flight.lock().expect("port_attrs in_flight poisoned");
+                if !in_flight.insert(instance_id.clone()) {
+                    continue;
+                }
+            }
+            let state = state.clone();
+            let in_flight = in_flight.clone();
+            let id = instance_id.clone();
+            tokio::spawn(async move {
+                match tokio::time::timeout(timeout, fetch_and_store(&state, &id)).await {
+                    Ok(Ok(())) => debug!("port_attrs cached for instance {id}"),
+                    Ok(Err(err)) => {
+                        warn!("port_attrs fetch for instance {id} failed: {err:#}")
+                    }
+                    Err(_) => {
+                        warn!("port_attrs fetch for instance {id} timed out after {timeout:?}")
+                    }
+                }
+                in_flight
+                    .lock()
+                    .expect("port_attrs in_flight poisoned")
+                    .remove(&id);
+            });
+        }
+    });
+}
+
+async fn fetch_and_store(state: &Proxy, instance_id: &str) -> Result<()> {
     let (ip, agent_port) = {
         let guard = state.lock();
         let ip = guard.instance_ip(instance_id).context("unknown instance")?;
         (ip, guard.config.proxy.agent_port)
     };
-
     let attrs = fetch_port_attrs(ip, agent_port).await?;
-    state
-        .lock()
-        .update_instance_port_attrs(instance_id, attrs.clone());
-    debug!(
-        "fetched port_attrs for legacy instance {instance_id} via Info(): {} entries",
-        attrs.len()
-    );
-    Ok(attrs)
+    state.lock().update_instance_port_attrs(instance_id, attrs);
+    Ok(())
 }
 
 async fn fetch_port_attrs(ip: Ipv4Addr, agent_port: u16) -> Result<BTreeMap<u16, PortFlags>> {

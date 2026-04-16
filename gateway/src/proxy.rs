@@ -42,7 +42,7 @@ pub(crate) struct AddressInfo {
 pub(crate) type AddressGroup = smallvec::SmallVec<[AddressInfo; 4]>;
 
 mod io_bridge;
-mod port_attrs;
+pub(crate) mod port_attrs;
 mod sni;
 mod tls_passthough;
 mod tls_terminate;

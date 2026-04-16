@@ -75,6 +75,10 @@ pub struct ProxyInner {
     pub(crate) wavekv_sync: Option<Arc<WaveKvSyncService>>,
     /// HTTPS client config for mTLS (used for bootnode peer discovery)
     https_config: Option<HttpsClientConfig>,
+    /// Sender for the background port_attrs lazy-fetch worker. The proxy fast
+    /// path enqueues unknown instance_ids and immediately returns `pp=false`
+    /// so a missing cache never blocks a connection.
+    pub(crate) port_attrs_tx: tokio::sync::mpsc::UnboundedSender<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -103,9 +107,13 @@ pub struct ProxyOptions {
 
 impl Proxy {
     pub async fn new(options: ProxyOptions) -> Result<Self> {
-        Ok(Self {
-            _inner: Arc::new(ProxyInner::new(options).await?),
-        })
+        let (port_attrs_tx, port_attrs_rx) = tokio::sync::mpsc::unbounded_channel();
+        let inner = ProxyInner::new(options, port_attrs_tx).await?;
+        let proxy = Self {
+            _inner: Arc::new(inner),
+        };
+        crate::proxy::port_attrs::spawn_fetcher(proxy.clone(), port_attrs_rx);
+        Ok(proxy)
     }
 }
 
@@ -114,7 +122,10 @@ impl ProxyInner {
         self.state.lock().or_panic("Failed to lock AppState")
     }
 
-    pub async fn new(options: ProxyOptions) -> Result<Self> {
+    pub async fn new(
+        options: ProxyOptions,
+        port_attrs_tx: tokio::sync::mpsc::UnboundedSender<String>,
+    ) -> Result<Self> {
         let ProxyOptions {
             config,
             my_app_id,
@@ -270,6 +281,7 @@ impl ProxyInner {
             kv_store,
             wavekv_sync,
             https_config: Some(https_config),
+            port_attrs_tx,
         })
     }
 
@@ -1369,7 +1381,12 @@ impl GatewayRpc for RpcHandler {
         let port_attrs = request.port_attrs.map(|list| {
             list.attrs
                 .into_iter()
-                .map(|p| (p.port as u16, PortFlags { pp: p.pp }))
+                .filter_map(|p| {
+                    // Wire format is uint32 to avoid varint shenanigans, but valid TCP
+                    // ports fit in u16. Drop out-of-range entries instead of truncating.
+                    let port = u16::try_from(p.port).ok()?;
+                    Some((port, PortFlags { pp: p.pp }))
+                })
                 .collect::<BTreeMap<u16, PortFlags>>()
         });
         self.state.do_register_cvm(

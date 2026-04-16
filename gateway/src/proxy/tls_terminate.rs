@@ -299,7 +299,7 @@ impl Proxy {
         .await
         .map_err(|_| anyhow!("connecting timeout"))?
         .context("failed to connect to app")?;
-        if should_send_pp(self, &instance_id, port).await {
+        if should_send_pp(self, &instance_id, port) {
             let pp_header_bin =
                 proxy_protocol::encode(pp_header).context("failed to encode pp header")?;
             outbound.write_all(&pp_header_bin).await?;

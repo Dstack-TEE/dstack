@@ -195,7 +195,7 @@ pub(crate) async fn proxy_to_app(
     .await
     .with_context(|| format!("connecting timeout to app {app_id}: {addresses:?}:{port}"))?
     .with_context(|| format!("failed to connect to app {app_id}: {addresses:?}:{port}"))?;
-    if should_send_pp(&state, &instance_id, port).await {
+    if should_send_pp(&state, &instance_id, port) {
         let pp_header_bin =
             proxy_protocol::encode(pp_header).context("failed to encode pp header")?;
         outbound.write_all(&pp_header_bin).await?;
