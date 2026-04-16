@@ -21,6 +21,7 @@ use anyhow::{Context, Result};
 use dstack_guest_agent_rpc::dstack_guest_client::DstackGuestClient;
 use dstack_types::AppCompose;
 use http_client::prpc::PrpcClient;
+use or_panic::ResultOrPanic;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tracing::{debug, warn};
 
@@ -62,7 +63,7 @@ pub(crate) fn spawn_fetcher(state: Proxy, mut rx: UnboundedReceiver<String>) {
             // or unknown-instance), so a later registration with a new
             // compose_hash can re-trigger via the same path.
             {
-                let mut in_flight = in_flight.lock().expect("port_attrs in_flight poisoned");
+                let mut in_flight = in_flight.lock().or_panic("port_attrs in_flight poisoned");
                 if !in_flight.insert(instance_id.clone()) {
                     continue;
                 }
@@ -74,7 +75,7 @@ pub(crate) fn spawn_fetcher(state: Proxy, mut rx: UnboundedReceiver<String>) {
                 fetch_with_retry(&state, &id).await;
                 in_flight
                     .lock()
-                    .expect("port_attrs in_flight poisoned")
+                    .or_panic("port_attrs in_flight poisoned")
                     .remove(&id);
             });
         }
