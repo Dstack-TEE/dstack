@@ -17,6 +17,7 @@ dstack-types.workspace = true
 ez-hash.workspace = true
 fs-err.workspace = true
 hex.workspace = true
+or-panic.workspace = true
 scale.workspace = true
 serde.workspace = true
 serde-human-bytes.workspace = true

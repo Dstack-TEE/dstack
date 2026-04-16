@@ -5,6 +5,7 @@
 use anyhow::{Context, Result};
 use dstack_types::EventLogVersion;
 use fs_err as fs;
+use or_panic::ResultOrPanic;
 use scale::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 use serde_human_bytes::base64;
@@ -128,7 +129,7 @@ impl RuntimeEvent {
         match self.version {
             EventLogVersion::V1 => {
                 let mut buf = Vec::with_capacity(4 + 1 + self.event.len() + 1 + self.payload.len());
-                buf.extend_from_slice(&DSTACK_RUNTIME_EVENT_TYPE.to_ne_bytes());
+                buf.extend_from_slice(&DSTACK_RUNTIME_EVENT_TYPE.to_le_bytes());
                 buf.push(b':');
                 buf.extend_from_slice(self.event.as_bytes());
                 buf.push(b':');
@@ -158,7 +159,7 @@ pub fn canonical_event_json_v2(event: &str, payload: &[u8]) -> String {
         "payload": hex::encode(payload),
         "version": 2,
     });
-    serde_jcs::to_string(&obj).unwrap_or_default()
+    serde_jcs::to_string(&obj).or_panic("canonical JSON serialization failed")
 }
 
 /// Replay event logs
@@ -188,7 +189,7 @@ mod tests {
         );
         let digest = event.digest::<Sha384>();
         let expected = Sha384::hash([
-            &DSTACK_RUNTIME_EVENT_TYPE.to_ne_bytes()[..],
+            &DSTACK_RUNTIME_EVENT_TYPE.to_le_bytes()[..],
             b":",
             b"app-id",
             b":",

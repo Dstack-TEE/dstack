@@ -1320,6 +1320,7 @@ dependencies = [
  "fs-err",
  "hex",
  "insta",
+ "or-panic",
  "parity-scale-codec",
  "serde",
  "serde-human-bytes",
