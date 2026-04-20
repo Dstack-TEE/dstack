@@ -11,6 +11,8 @@ package kms;
 message GetAppKeyRequest {
   uint32 api_version = 1;
   string vm_config = 2;
+  // Custom info to be passed through to the auth API for decision-making.
+  string extra_info = 3;
 }
 
 message AppId {
@@ -44,7 +46,7 @@ message AppKeyResponse {
   string tproxy_app_id = 6;
   // Reverse proxy app ID from DstackKms contract.
   string gateway_app_id = 7;
-  // OS Image hash 
+  // OS Image hash
   bytes os_image_hash = 8;
 }
 
