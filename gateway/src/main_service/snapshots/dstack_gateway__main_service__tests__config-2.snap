@@ -14,5 +14,6 @@ InstanceInfo {
     },
     port_policy: None,
     port_policy_hash: "",
+    admin_port_policy: None,
     connections: 0,
 }

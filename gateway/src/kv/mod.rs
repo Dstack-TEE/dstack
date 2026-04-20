@@ -81,6 +81,12 @@ pub struct InstanceData {
     /// the cache is invalidated and re-fetched lazily.
     #[serde(default)]
     pub port_policy_hash: String,
+    /// Operator-set override applied via the Admin RPC. Takes precedence over
+    /// the instance-reported `port_policy` when set, and survives app upgrades
+    /// (compose_hash changes do not clear it). Cleared explicitly via
+    /// ClearInstancePortPolicy.
+    #[serde(default)]
+    pub admin_port_policy: Option<PortPolicy>,
 }
 
 /// Gateway node status (stored separately for independent updates)

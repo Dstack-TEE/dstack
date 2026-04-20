@@ -8,16 +8,18 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use anyhow::{bail, Context, Result};
 use dstack_gateway_rpc::{
     admin_server::{AdminRpc, AdminServer},
-    CertAttestationInfo, CertbotConfigResponse, CreateDnsCredentialRequest,
-    DeleteDnsCredentialRequest, DeleteZtDomainRequest, DnsCredentialInfo,
-    ForceReleaseCertLockRequest, GetDefaultDnsCredentialResponse, GetDnsCredentialRequest,
-    GetInfoRequest, GetInfoResponse, GetInstanceHandshakesRequest, GetInstanceHandshakesResponse,
+    CertAttestationInfo, CertbotConfigResponse, ClearInstancePortPolicyRequest,
+    CreateDnsCredentialRequest, DeleteDnsCredentialRequest, DeleteZtDomainRequest,
+    DnsCredentialInfo, ForceReleaseCertLockRequest, GetDefaultDnsCredentialResponse,
+    GetDnsCredentialRequest, GetInfoRequest, GetInfoResponse, GetInstanceHandshakesRequest,
+    GetInstanceHandshakesResponse, GetInstancePortPolicyRequest, GetInstancePortPolicyResponse,
     GetMetaResponse, GetNodeStatusesResponse, GetZtDomainRequest, GlobalConnectionsStats,
     HandshakeEntry, HostInfo, LastSeenEntry, ListCertAttestationsRequest,
     ListCertAttestationsResponse, ListDnsCredentialsResponse, ListZtDomainsResponse,
-    NodeStatusEntry, PeerSyncStatus as ProtoPeerSyncStatus, RenewCertResponse,
-    RenewZtDomainCertRequest, RenewZtDomainCertResponse, SetCertbotConfigRequest,
-    SetDefaultDnsCredentialRequest, SetNodeStatusRequest, SetNodeUrlRequest, StatusResponse,
+    NodeStatusEntry, PeerSyncStatus as ProtoPeerSyncStatus, PortAttrs as RpcPortAttrs,
+    PortPolicy as RpcPortPolicy, RenewCertResponse, RenewZtDomainCertRequest,
+    RenewZtDomainCertResponse, SetCertbotConfigRequest, SetDefaultDnsCredentialRequest,
+    SetInstancePortPolicyRequest, SetNodeStatusRequest, SetNodeUrlRequest, StatusResponse,
     StoreSyncStatus, UpdateDnsCredentialRequest, WaveKvStatusResponse, ZtDomainCertStatus,
     ZtDomainConfig as ProtoZtDomainConfig, ZtDomainInfo,
 };
@@ -26,8 +28,9 @@ use tracing::info;
 use wavekv::node::NodeStatus as WaveKvNodeStatus;
 
 use crate::{
-    kv::{DnsCredential, DnsProvider, NodeStatus, ZtDomainConfig},
+    kv::{DnsCredential, DnsProvider, NodeStatus, PortFlags, PortPolicy, ZtDomainConfig},
     main_service::Proxy,
+    models::PortPolicyView,
     proxy::NUM_CONNECTIONS,
 };
 
@@ -624,6 +627,73 @@ impl AdminRpc for AdminRpcHandler {
             config.acme_url
         );
         Ok(())
+    }
+
+    async fn set_instance_port_policy(self, request: SetInstancePortPolicyRequest) -> Result<()> {
+        let proto = request.policy.context("port policy is required")?;
+        let policy = port_policy_from_proto(proto)?;
+        self.state
+            .lock()
+            .set_admin_port_policy(&request.instance_id, policy)
+    }
+
+    async fn clear_instance_port_policy(
+        self,
+        request: ClearInstancePortPolicyRequest,
+    ) -> Result<()> {
+        self.state
+            .lock()
+            .clear_admin_port_policy(&request.instance_id)
+    }
+
+    async fn get_instance_port_policy(
+        self,
+        request: GetInstancePortPolicyRequest,
+    ) -> Result<GetInstancePortPolicyResponse> {
+        let view = self
+            .state
+            .lock()
+            .instance_port_policy_view(&request.instance_id)
+            .with_context(|| format!("instance {} not found", request.instance_id))?;
+        Ok(port_policy_view_to_proto(view))
+    }
+}
+
+fn port_policy_from_proto(proto: RpcPortPolicy) -> Result<PortPolicy> {
+    let mut ports = std::collections::BTreeMap::new();
+    for attr in proto.ports {
+        let port = u16::try_from(attr.port)
+            .with_context(|| format!("port {} out of u16 range", attr.port))?;
+        ports.insert(port, PortFlags { pp: attr.pp });
+    }
+    Ok(PortPolicy {
+        ports,
+        restrict_mode: proto.restrict_mode,
+    })
+}
+
+fn port_policy_to_proto(policy: &PortPolicy) -> RpcPortPolicy {
+    RpcPortPolicy {
+        ports: policy
+            .ports
+            .iter()
+            .map(|(port, flags)| RpcPortAttrs {
+                port: u32::from(*port),
+                pp: flags.pp,
+            })
+            .collect(),
+        restrict_mode: policy.restrict_mode,
+    }
+}
+
+fn port_policy_view_to_proto(view: PortPolicyView) -> GetInstancePortPolicyResponse {
+    let source = view.source().to_string();
+    let effective = view.effective().map(port_policy_to_proto);
+    GetInstancePortPolicyResponse {
+        effective,
+        source,
+        instance_reported: view.instance_reported.as_ref().map(port_policy_to_proto),
+        admin_override: view.admin_override.as_ref().map(port_policy_to_proto),
     }
 }
 

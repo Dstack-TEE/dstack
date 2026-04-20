@@ -42,7 +42,7 @@ use crate::{
         fetch_peers_from_bootnode, AppIdValidator, HttpsClientConfig, InstanceData, KvStore,
         NodeData, NodeStatus, PortPolicy, WaveKvSyncService,
     },
-    models::{InstanceInfo, WgConf},
+    models::{InstanceInfo, PortPolicyView, WgConf},
     proxy::{create_acceptor_with_cert_resolver, AddressGroup, AddressInfo},
 };
 
@@ -78,10 +78,12 @@ pub struct ProxyInner {
     pub(crate) wavekv_sync: Option<Arc<WaveKvSyncService>>,
     /// HTTPS client config for mTLS (used for bootnode peer discovery)
     https_config: Option<HttpsClientConfig>,
-    /// Sender for the background port_policy lazy-fetch worker. The proxy
-    /// data path enqueues unknown instance_ids and waits for the cache to
-    /// populate (fail-close): without a known policy, restrict_mode is
-    /// indeterminate and we cannot safely allow traffic.
+    /// Sender for the background port_policy lazy-fetch worker. On a cache
+    /// miss the proxy data path enqueues the instance_id and immediately
+    /// rejects the connection (fail-close); the fetch populates the cache
+    /// asynchronously so subsequent connections can proceed. Without a
+    /// known policy, `restrict_mode` is indeterminate and we cannot safely
+    /// allow traffic.
     pub(crate) port_policy_tx: UnboundedSender<String>,
 }
 
@@ -491,6 +493,7 @@ fn build_state_from_kv_store(instances: BTreeMap<String, InstanceData>) -> Proxy
                 .unwrap_or(UNIX_EPOCH),
             port_policy: data.port_policy,
             port_policy_hash: data.port_policy_hash,
+            admin_port_policy: data.admin_port_policy,
             connections: Default::default(),
         };
         state.allocated_addresses.insert(data.ip);
@@ -786,6 +789,7 @@ fn reload_instances_from_kv_store(proxy: &Proxy, store: &KvStore) -> Result<()> 
                 .unwrap_or(UNIX_EPOCH),
             port_policy: data.port_policy.clone(),
             port_policy_hash: data.port_policy_hash.clone(),
+            admin_port_policy: data.admin_port_policy.clone(),
             connections: Default::default(),
         };
 
@@ -914,6 +918,7 @@ impl ProxyState {
                     reg_time: encode_ts(existing.reg_time),
                     port_policy: existing.port_policy.clone(),
                     port_policy_hash: existing.port_policy_hash.clone(),
+                    admin_port_policy: existing.admin_port_policy.clone(),
                 };
                 if let Err(err) = self.kv_store.sync_instance(&existing.id, &data) {
                     error!("failed to sync existing instance to KvStore: {err:?}");
@@ -934,6 +939,7 @@ impl ProxyState {
             reg_time: SystemTime::now(),
             port_policy,
             port_policy_hash: compose_hash.to_string(),
+            admin_port_policy: None,
             connections: Default::default(),
         };
         self.add_instance(host_info.clone());
@@ -945,10 +951,14 @@ impl ProxyState {
         self.state.instances.get(instance_id).map(|i| i.ip)
     }
 
-    /// Lookup an instance's port_policy. `None` means the CVM never reported
-    /// it (legacy CVM), so the caller should fall back to fetching via Info().
+    /// Lookup the effective port_policy for an instance: admin override wins,
+    /// otherwise fall back to the instance-reported policy. `None` means
+    /// neither is set — caller fails closed and may schedule a lazy fetch.
     pub(crate) fn instance_port_policy(&self, instance_id: &str) -> Option<&PortPolicy> {
-        self.state.instances.get(instance_id)?.port_policy.as_ref()
+        let info = self.state.instances.get(instance_id)?;
+        info.admin_port_policy
+            .as_ref()
+            .or(info.port_policy.as_ref())
     }
 
     /// Update an instance's port_policy (used after a lazy fetch via Info()).
@@ -957,17 +967,71 @@ impl ProxyState {
         let Some(info) = self.state.instances.get_mut(instance_id) else {
             return;
         };
-        info.port_policy = Some(policy.clone());
+        info.port_policy = Some(policy);
+        self.persist_instance_record(instance_id);
+    }
+
+    /// Snapshot view of an instance's port-policy state for inspection.
+    pub(crate) fn instance_port_policy_view(&self, instance_id: &str) -> Option<PortPolicyView> {
+        let info = self.state.instances.get(instance_id)?;
+        Some(PortPolicyView {
+            instance_reported: info.port_policy.clone(),
+            admin_override: info.admin_port_policy.clone(),
+        })
+    }
+
+    /// Set an admin override. Errors if the instance is not registered.
+    pub(crate) fn set_admin_port_policy(
+        &mut self,
+        instance_id: &str,
+        policy: PortPolicy,
+    ) -> Result<()> {
+        let Some(info) = self.state.instances.get_mut(instance_id) else {
+            bail!("instance {instance_id} not found");
+        };
+        let prev = info.admin_port_policy.take();
+        info.admin_port_policy = Some(policy.clone());
+        info!(
+            "admin set port_policy for instance {instance_id}: \
+             restrict_mode={}, ports={} (prev: {})",
+            policy.restrict_mode,
+            policy.ports.len(),
+            prev.is_some(),
+        );
+        self.persist_instance_record(instance_id);
+        Ok(())
+    }
+
+    /// Clear any admin override. Errors if the instance is not registered.
+    /// No-op (still Ok) if no override was set.
+    pub(crate) fn clear_admin_port_policy(&mut self, instance_id: &str) -> Result<()> {
+        let Some(info) = self.state.instances.get_mut(instance_id) else {
+            bail!("instance {instance_id} not found");
+        };
+        let had_override = info.admin_port_policy.take().is_some();
+        info!("admin cleared port_policy for instance {instance_id} (was set: {had_override})");
+        if had_override {
+            self.persist_instance_record(instance_id);
+        }
+        Ok(())
+    }
+
+    /// Persist the current in-memory `InstanceInfo` snapshot to WaveKV.
+    fn persist_instance_record(&self, instance_id: &str) {
+        let Some(info) = self.state.instances.get(instance_id) else {
+            return;
+        };
         let data = InstanceData {
             app_id: info.app_id.clone(),
             ip: info.ip,
             public_key: info.public_key.clone(),
             reg_time: encode_ts(info.reg_time),
-            port_policy: Some(policy),
+            port_policy: info.port_policy.clone(),
             port_policy_hash: info.port_policy_hash.clone(),
+            admin_port_policy: info.admin_port_policy.clone(),
         };
         if let Err(err) = self.kv_store.sync_instance(instance_id, &data) {
-            error!("failed to sync updated port_policy to KvStore: {err:?}");
+            error!("failed to sync instance {instance_id} to KvStore: {err:?}");
         }
     }
 
@@ -980,6 +1044,7 @@ impl ProxyState {
             reg_time: encode_ts(info.reg_time),
             port_policy: info.port_policy.clone(),
             port_policy_hash: info.port_policy_hash.clone(),
+            admin_port_policy: info.admin_port_policy.clone(),
         };
         if let Err(err) = self.kv_store.sync_instance(&info.id, &data) {
             error!("failed to sync instance to KvStore: {err:?}");

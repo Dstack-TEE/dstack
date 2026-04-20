@@ -124,6 +124,128 @@ async fn test_port_policy_unknown_instance_bypasses_check() {
 }
 
 #[tokio::test]
+async fn test_admin_override_takes_precedence() {
+    let state = create_test_state().await;
+    // Instance reports a permissive policy (port 8080 allowed).
+    state
+        .lock()
+        .new_client_by_id(
+            "inst-ovr",
+            "app-ovr",
+            "pubkey-ovr",
+            "hash-ovr",
+            Some(policy(true, &[8080])),
+        )
+        .unwrap();
+    assert!(is_port_allowed(&state.proxy, "inst-ovr", 8080).is_ok());
+    // Admin overrides with a stricter policy (only port 9090 allowed).
+    state
+        .lock()
+        .set_admin_port_policy("inst-ovr", policy(true, &[9090]))
+        .unwrap();
+    assert!(is_port_allowed(&state.proxy, "inst-ovr", 8080).is_err());
+    assert!(is_port_allowed(&state.proxy, "inst-ovr", 9090).is_ok());
+}
+
+#[tokio::test]
+async fn test_admin_override_can_open_what_instance_restricts() {
+    let state = create_test_state().await;
+    // Instance restricts to nothing (effectively a lockdown).
+    state
+        .lock()
+        .new_client_by_id(
+            "inst-lock",
+            "app-lock",
+            "pubkey-lock",
+            "hash-lock",
+            Some(policy(true, &[])),
+        )
+        .unwrap();
+    assert!(is_port_allowed(&state.proxy, "inst-lock", 8080).is_err());
+    // Admin opens it back up (restrict_mode=false → allow all).
+    state
+        .lock()
+        .set_admin_port_policy("inst-lock", policy(false, &[]))
+        .unwrap();
+    assert!(is_port_allowed(&state.proxy, "inst-lock", 8080).is_ok());
+}
+
+#[tokio::test]
+async fn test_clear_admin_override_reverts_to_instance_policy() {
+    let state = create_test_state().await;
+    state
+        .lock()
+        .new_client_by_id(
+            "inst-revert",
+            "app-revert",
+            "pubkey-revert",
+            "hash-revert",
+            Some(policy(true, &[8080])),
+        )
+        .unwrap();
+    state
+        .lock()
+        .set_admin_port_policy("inst-revert", policy(true, &[9090]))
+        .unwrap();
+    assert!(is_port_allowed(&state.proxy, "inst-revert", 9090).is_ok());
+    state.lock().clear_admin_port_policy("inst-revert").unwrap();
+    // Back to instance policy: 8080 yes, 9090 no.
+    assert!(is_port_allowed(&state.proxy, "inst-revert", 8080).is_ok());
+    assert!(is_port_allowed(&state.proxy, "inst-revert", 9090).is_err());
+}
+
+#[tokio::test]
+async fn test_admin_override_unknown_instance_errors() {
+    let state = create_test_state().await;
+    let err = state
+        .lock()
+        .set_admin_port_policy("never-registered", policy(true, &[8080]))
+        .unwrap_err();
+    assert!(format!("{err:#}").contains("not found"));
+    let err = state
+        .lock()
+        .clear_admin_port_policy("never-registered")
+        .unwrap_err();
+    assert!(format!("{err:#}").contains("not found"));
+}
+
+#[tokio::test]
+async fn test_admin_override_survives_compose_hash_change() {
+    let state = create_test_state().await;
+    // Initial registration with one compose_hash.
+    state
+        .lock()
+        .new_client_by_id(
+            "inst-upgrade",
+            "app-upgrade",
+            "pubkey-upgrade",
+            "hash-v1",
+            Some(policy(true, &[8080])),
+        )
+        .unwrap();
+    state
+        .lock()
+        .set_admin_port_policy("inst-upgrade", policy(true, &[9090]))
+        .unwrap();
+    // Re-register with a different compose_hash (simulating an app upgrade).
+    // Instance reports a new permissive policy.
+    state
+        .lock()
+        .new_client_by_id(
+            "inst-upgrade",
+            "app-upgrade",
+            "pubkey-upgrade",
+            "hash-v2",
+            Some(policy(true, &[7070, 8080])),
+        )
+        .unwrap();
+    // Admin override must still be in effect.
+    assert!(is_port_allowed(&state.proxy, "inst-upgrade", 9090).is_ok());
+    assert!(is_port_allowed(&state.proxy, "inst-upgrade", 7070).is_err());
+    assert!(is_port_allowed(&state.proxy, "inst-upgrade", 8080).is_err());
+}
+
+#[tokio::test]
 async fn test_config() {
     let state = create_test_state().await;
     let mut info = state
