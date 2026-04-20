@@ -1314,7 +1314,6 @@ name = "cc-eventlog"
 version = "0.5.8"
 dependencies = [
  "anyhow",
- "dcap-qvl",
  "digest 0.10.7",
  "dstack-types",
  "ez-hash",
@@ -1328,7 +1327,6 @@ dependencies = [
  "serde_jcs",
  "serde_json",
  "sha2 0.10.9",
- "tdx-attest",
 ]
 
 [[package]]

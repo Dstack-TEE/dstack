@@ -26,6 +26,4 @@ serde_json = { workspace = true, features = ["alloc"] }
 sha2.workspace = true
 
 [dev-dependencies]
-dcap-qvl.workspace = true
 insta.workspace = true
-tdx-attest.workspace = true
