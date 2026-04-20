@@ -208,6 +208,27 @@ message GetQuoteResponse {
   bytes report_data = 3;
   // Hw config
   string vm_config = 4;
+  // TCG binary Confidential Computing Event Log (CCEL) containing both
+  // boot-time events (from the ACPI CCEL table) and dstack runtime events
+  // (RTMR3) merged into a single stream.
+  //
+  // Encoding per TCG PC Client Platform Firmware Profile:
+  // - Starts with a Spec ID header event (TCG_PCClientPCREvent).
+  // - Boot-time events are copied verbatim from the ACPI CCEL table
+  //   (TCG_PCR_EVENT2 with the digests the firmware wrote).
+  // - Runtime events (event_type = 0x08000001) are appended as
+  //   TCG_PCR_EVENT2 records with:
+  //     * pcrIndex  = imr + 1 (so RTMR3 becomes 4)
+  //     * eventType = 0x08000001
+  //     * digests   = [{ algId: TPM_ALG_SHA384 (0xC), hash: 48 bytes }]
+  //     * event     = the digest pre-image bytes, so that
+  //                   sha384(event) == digest holds independently of the
+  //                   dstack schema. The pre-image is:
+  //                     V1: event_type_le || ":" || name || ":" || payload
+  //                     V2: canonical JSON (UTF-8)
+  //
+  // Empty on platforms without an ACPI CCEL table (e.g. Nitro Enclaves).
+  bytes event_log_ccel = 5;
 }
 
 message EmitEventArgs {

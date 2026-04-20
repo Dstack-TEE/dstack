@@ -751,6 +751,18 @@ impl<T> Attestation<T> {
             .and_then(|q| Quote::parse(&q.quote).ok())
             .and_then(|quote| quote.report.as_td10().cloned())
     }
+
+    /// Get the merged TCG binary CCEL event log (boot-time CCEL + runtime
+    /// events encoded as TCG_PCR_EVENT2 records).
+    ///
+    /// Returns an empty `Vec` on platforms without a TDX quote (e.g. Nitro).
+    /// Propagates errors from reading or parsing the ACPI CCEL file.
+    pub fn get_tdx_event_log_ccel(&self) -> Result<Vec<u8>> {
+        let Some(q) = self.tdx_quote() else {
+            return Ok(Vec::new());
+        };
+        cc_eventlog::tdx::build_ccel_event_log(&q.event_log)
+    }
 }
 
 pub trait GetDeviceId {
