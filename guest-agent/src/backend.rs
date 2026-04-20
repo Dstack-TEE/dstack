@@ -52,9 +52,7 @@ impl PlatformBackend for RealPlatform {
         let attestation = Attestation::quote(&report_data).context("Failed to get quote")?;
         let tdx_quote = attestation.get_tdx_quote_bytes();
         let tdx_event_log = attestation.get_tdx_event_log_string(include_hash_inputs);
-        let event_log_ccel = attestation
-            .get_tdx_event_log_ccel()
-            .context("failed to build CCEL event log")?;
+        let event_log_ccel = attestation.get_tdx_event_log_ccel().unwrap_or_default();
         Ok(GetQuoteResponse {
             quote: tdx_quote.unwrap_or_default(),
             event_log: tdx_event_log.unwrap_or_default(),
