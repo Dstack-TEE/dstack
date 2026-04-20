@@ -15,7 +15,7 @@ use std::{
     time::SystemTime,
 };
 
-use crate::kv::PortFlags;
+use crate::kv::PortPolicy;
 
 mod filters {
     pub fn hex(data: impl AsRef<[u8]>) -> rinja::Result<String> {
@@ -62,14 +62,14 @@ pub struct InstanceInfo {
     pub ip: Ipv4Addr,
     pub public_key: String,
     pub reg_time: SystemTime,
-    /// Per-port flags. `None` means the CVM didn't report any (legacy);
+    /// Port policy. `None` means the CVM didn't report any (legacy);
     /// gateway will lazily populate via Info() on first proxied connection.
     #[serde(default)]
-    pub port_attrs: Option<BTreeMap<u16, PortFlags>>,
-    /// Hex-encoded compose_hash that `port_attrs` was learned against. The
+    pub port_policy: Option<PortPolicy>,
+    /// Hex-encoded compose_hash that `port_policy` was learned against. The
     /// cache is invalidated when a new registration presents a different hash.
     #[serde(default)]
-    pub port_attrs_hash: String,
+    pub port_policy_hash: String,
     #[serde(skip)]
     pub connections: Arc<AtomicU64>,
 }

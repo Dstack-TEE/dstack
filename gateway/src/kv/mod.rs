@@ -50,6 +50,20 @@ pub struct PortFlags {
     pub pp: bool,
 }
 
+/// Gateway-relevant per-port policy declared by the app in its compose file.
+/// Reported atomically at CVM registration; `Option<PortPolicy>` distinguishes
+/// "not reported" (legacy CVM) from "reported with no entries".
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct PortPolicy {
+    /// Per-port flags (PROXY protocol opt-in, etc.).
+    #[serde(default)]
+    pub ports: BTreeMap<u16, PortFlags>,
+    /// When true, only ports listed in `ports` are forwarded; connections to
+    /// any other port are rejected at TCP-accept time.
+    #[serde(default)]
+    pub restrict_mode: bool,
+}
+
 /// Instance core data (persistent)
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct InstanceData {
@@ -57,16 +71,16 @@ pub struct InstanceData {
     pub ip: Ipv4Addr,
     pub public_key: String,
     pub reg_time: u64,
-    /// Per-port flags reported at registration. `None` means "not reported"
+    /// Port policy reported at registration. `None` means "not reported"
     /// (legacy CVM); the gateway will fall back to fetching app-compose via
     /// Info() on first connection and populate this lazily.
     #[serde(default)]
-    pub port_attrs: Option<BTreeMap<u16, PortFlags>>,
-    /// Hex-encoded compose_hash that `port_attrs` was learned against.
+    pub port_policy: Option<PortPolicy>,
+    /// Hex-encoded compose_hash that `port_policy` was learned against.
     /// When a re-registration presents a different compose_hash (app upgrade),
     /// the cache is invalidated and re-fetched lazily.
     #[serde(default)]
-    pub port_attrs_hash: String,
+    pub port_policy_hash: String,
 }
 
 /// Gateway node status (stored separately for independent updates)

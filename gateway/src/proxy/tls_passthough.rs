@@ -15,7 +15,11 @@ use crate::{
     models::{Counting, EnteredCounter},
 };
 
-use super::{io_bridge::bridge, port_attrs::should_send_pp, AddressGroup};
+use super::{
+    io_bridge::bridge,
+    port_policy::{filter_allowed_addresses, should_send_pp},
+    AddressGroup,
+};
 
 #[derive(Debug)]
 struct AppAddress {
@@ -187,6 +191,7 @@ pub(crate) async fn proxy_to_app(
     port: u16,
 ) -> Result<()> {
     let addresses = state.lock().select_top_n_hosts(app_id)?;
+    let addresses = filter_allowed_addresses(&state, addresses, app_id, port)?;
     let max_connections = state.config.proxy.max_connections_per_app;
     let (mut outbound, _counter, instance_id) = timeout(
         state.config.proxy.timeouts.connect,

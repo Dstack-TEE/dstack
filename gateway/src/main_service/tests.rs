@@ -4,6 +4,8 @@
 
 use super::*;
 use crate::config::{load_config_figment, Config, MutualConfig};
+use crate::kv::PortFlags;
+use crate::proxy::port_policy::is_port_allowed;
 use tempfile::TempDir;
 
 struct TestState {
@@ -48,6 +50,77 @@ async fn test_empty_config() {
     let state = create_test_state().await;
     let wg_config = state.lock().generate_wg_config().unwrap();
     insta::assert_snapshot!(wg_config);
+}
+
+fn policy(restrict: bool, ports: &[u16]) -> PortPolicy {
+    PortPolicy {
+        ports: ports
+            .iter()
+            .map(|p| (*p, PortFlags { pp: false }))
+            .collect(),
+        restrict_mode: restrict,
+    }
+}
+
+#[tokio::test]
+async fn test_port_policy_restrict_mode_allows_listed_only() {
+    let state = create_test_state().await;
+    state
+        .lock()
+        .new_client_by_id(
+            "inst-allow",
+            "app-allow",
+            "pubkey-allow",
+            "hash-allow",
+            Some(policy(true, &[8080, 9090])),
+        )
+        .unwrap();
+    assert!(is_port_allowed(&state.proxy, "inst-allow", 8080).is_ok());
+    assert!(is_port_allowed(&state.proxy, "inst-allow", 9090).is_ok());
+    assert!(is_port_allowed(&state.proxy, "inst-allow", 7070).is_err());
+}
+
+#[tokio::test]
+async fn test_port_policy_disabled_allows_all() {
+    let state = create_test_state().await;
+    state
+        .lock()
+        .new_client_by_id(
+            "inst-open",
+            "app-open",
+            "pubkey-open",
+            "hash-open",
+            // restrict_mode = false, but with `ports` listed: still open.
+            Some(policy(false, &[8080])),
+        )
+        .unwrap();
+    assert!(is_port_allowed(&state.proxy, "inst-open", 8080).is_ok());
+    assert!(is_port_allowed(&state.proxy, "inst-open", 9999).is_ok());
+}
+
+#[tokio::test]
+async fn test_port_policy_unknown_fails_closed() {
+    let state = create_test_state().await;
+    // Register without a policy (legacy CVM): policy is None.
+    state
+        .lock()
+        .new_client_by_id(
+            "inst-legacy",
+            "app-legacy",
+            "pubkey-legacy",
+            "hash-legacy",
+            None,
+        )
+        .unwrap();
+    assert!(is_port_allowed(&state.proxy, "inst-legacy", 8080).is_err());
+}
+
+#[tokio::test]
+async fn test_port_policy_unknown_instance_bypasses_check() {
+    let state = create_test_state().await;
+    // No registration for "localhost" (or any other id) → not a CVM, allow.
+    assert!(is_port_allowed(&state.proxy, "localhost", 8080).is_ok());
+    assert!(is_port_allowed(&state.proxy, "never-registered", 80).is_ok());
 }
 
 #[tokio::test]

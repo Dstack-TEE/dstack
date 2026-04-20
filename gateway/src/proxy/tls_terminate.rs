@@ -28,7 +28,7 @@ use crate::config::{CryptoProvider, ProxyConfig, TlsVersion};
 use crate::main_service::Proxy;
 
 use super::io_bridge::bridge;
-use super::port_attrs::should_send_pp;
+use super::port_policy::{filter_allowed_addresses, should_send_pp};
 use super::tls_passthough::connect_multiple_hosts;
 
 #[pin_project::pin_project]
@@ -289,6 +289,7 @@ impl Proxy {
             .lock()
             .select_top_n_hosts(app_id)
             .with_context(|| format!("app <{app_id}> not found"))?;
+        let addresses = filter_allowed_addresses(self, addresses, app_id, port)?;
         debug!("selected top n hosts: {addresses:?}");
         let tls_stream = self.tls_accept(inbound, buffer, h2).await?;
         let max_connections = self.config.proxy.max_connections_per_app;

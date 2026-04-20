@@ -45,9 +45,21 @@ pub struct AppCompose {
     pub storage_fs: Option<String>,
     #[serde(default, with = "human_size")]
     pub swap_size: u64,
-    /// Per-port attributes consumed by the gateway (e.g. PROXY protocol).
+    /// Per-port policy consumed by the gateway (PROXY protocol opt-in,
+    /// optional port whitelist).
+    #[serde(default)]
+    pub port_policy: PortPolicy,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone, Default)]
+pub struct PortPolicy {
+    /// Per-port attributes (PROXY protocol opt-in, etc.).
     #[serde(default)]
     pub ports: Vec<PortAttrs>,
+    /// When true, the gateway only forwards traffic to ports listed in `ports`.
+    /// All other ports are rejected at TCP-accept time.
+    #[serde(default)]
+    pub restrict_mode: bool,
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]

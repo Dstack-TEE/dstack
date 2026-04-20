@@ -12,7 +12,7 @@ InstanceInfo {
         tv_sec: 0,
         tv_nsec: 0,
     },
-    port_attrs: None,
-    port_attrs_hash: "",
+    port_policy: None,
+    port_policy_hash: "",
     connections: 0,
 }

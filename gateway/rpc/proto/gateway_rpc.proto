@@ -12,16 +12,22 @@ package gateway;
 message RegisterCvmRequest {
   // The public key of the WireGuard interface of the CVM.
   string client_public_key = 1;
-  // Per-port attributes the gateway should apply when proxying to this CVM.
+  // Per-port policy the gateway should apply when proxying to this CVM.
   // Wrapped in a message so we can distinguish "not reported" (old CVM →
   // gateway falls back to fetching app-compose via Info()) from "reported
   // empty" (new CVM with no special port behaviour).
-  optional PortAttrsList port_attrs = 2;
+  optional PortPolicy port_policy = 2;
 }
 
-// PortAttrsList wraps a list of PortAttrs so it can be optional on the wire.
-message PortAttrsList {
-  repeated PortAttrs attrs = 1;
+// PortPolicy carries the gateway-relevant per-port configuration declared by
+// the app in its compose file. Keeping `ports` and `restrict_mode` together
+// lets a single Option distinguish "not reported" from "reported".
+message PortPolicy {
+  // Per-port attributes (PROXY protocol opt-in, etc.).
+  repeated PortAttrs ports = 1;
+  // When true, the gateway only forwards traffic to ports listed in `ports`
+  // and rejects connections to any other port at TCP-accept time.
+  bool restrict_mode = 2;
 }
 
 // PortAttrs declares per-port behaviour for the gateway.

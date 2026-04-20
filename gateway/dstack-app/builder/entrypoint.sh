@@ -125,11 +125,11 @@ shutdown = "${TIMEOUT_SHUTDOWN:-5s}"
 total = "${TIMEOUT_TOTAL:-5h}"
 pp_header = "${TIMEOUT_PP_HEADER:-5s}"
 
-[core.proxy.port_attrs_fetch]
-timeout = "${PORT_ATTRS_FETCH_TIMEOUT:-10s}"
-max_retries = ${PORT_ATTRS_FETCH_MAX_RETRIES:-5}
-backoff_initial = "${PORT_ATTRS_FETCH_BACKOFF_INITIAL:-1s}"
-backoff_max = "${PORT_ATTRS_FETCH_BACKOFF_MAX:-30s}"
+[core.proxy.port_policy_fetch]
+timeout = "${PORT_POLICY_FETCH_TIMEOUT:-10s}"
+max_retries = ${PORT_POLICY_FETCH_MAX_RETRIES:-5}
+backoff_initial = "${PORT_POLICY_FETCH_BACKOFF_INITIAL:-1s}"
+backoff_max = "${PORT_POLICY_FETCH_BACKOFF_MAX:-30s}"
 
 [core.recycle]
 enabled = true

@@ -35,14 +35,14 @@ pub(crate) struct AddressInfo {
     pub ip: Ipv4Addr,
     pub counter: Arc<AtomicU64>,
     /// Instance id this address belongs to. Used to look up per-instance state
-    /// (e.g. port_attrs) after the racing connect picks a winner.
+    /// (e.g. port_policy) after the racing connect picks a winner.
     pub instance_id: String,
 }
 
 pub(crate) type AddressGroup = smallvec::SmallVec<[AddressInfo; 4]>;
 
 mod io_bridge;
-pub(crate) mod port_attrs;
+pub(crate) mod port_policy;
 mod sni;
 mod tls_passthough;
 mod tls_terminate;

@@ -40,7 +40,7 @@ use crate::{
     config::{Config, TlsConfig},
     kv::{
         fetch_peers_from_bootnode, AppIdValidator, HttpsClientConfig, InstanceData, KvStore,
-        NodeData, NodeStatus, PortFlags, WaveKvSyncService,
+        NodeData, NodeStatus, PortPolicy, WaveKvSyncService,
     },
     models::{InstanceInfo, WgConf},
     proxy::{create_acceptor_with_cert_resolver, AddressGroup, AddressInfo},
@@ -78,10 +78,11 @@ pub struct ProxyInner {
     pub(crate) wavekv_sync: Option<Arc<WaveKvSyncService>>,
     /// HTTPS client config for mTLS (used for bootnode peer discovery)
     https_config: Option<HttpsClientConfig>,
-    /// Sender for the background port_attrs lazy-fetch worker. The proxy fast
-    /// path enqueues unknown instance_ids and immediately returns `pp=false`
-    /// so a missing cache never blocks a connection.
-    pub(crate) port_attrs_tx: UnboundedSender<String>,
+    /// Sender for the background port_policy lazy-fetch worker. The proxy
+    /// data path enqueues unknown instance_ids and waits for the cache to
+    /// populate (fail-close): without a known policy, restrict_mode is
+    /// indeterminate and we cannot safely allow traffic.
+    pub(crate) port_policy_tx: UnboundedSender<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -110,12 +111,12 @@ pub struct ProxyOptions {
 
 impl Proxy {
     pub async fn new(options: ProxyOptions) -> Result<Self> {
-        let (port_attrs_tx, port_attrs_rx) = unbounded_channel();
-        let inner = ProxyInner::new(options, port_attrs_tx).await?;
+        let (port_policy_tx, port_policy_rx) = unbounded_channel();
+        let inner = ProxyInner::new(options, port_policy_tx).await?;
         let proxy = Self {
             _inner: Arc::new(inner),
         };
-        crate::proxy::port_attrs::spawn_fetcher(proxy.clone(), port_attrs_rx);
+        crate::proxy::port_policy::spawn_fetcher(proxy.clone(), port_policy_rx);
         Ok(proxy)
     }
 }
@@ -127,7 +128,7 @@ impl ProxyInner {
 
     pub async fn new(
         options: ProxyOptions,
-        port_attrs_tx: UnboundedSender<String>,
+        port_policy_tx: UnboundedSender<String>,
     ) -> Result<Self> {
         let ProxyOptions {
             config,
@@ -284,7 +285,7 @@ impl ProxyInner {
             kv_store,
             wavekv_sync,
             https_config: Some(https_config),
-            port_attrs_tx,
+            port_policy_tx,
         })
     }
 
@@ -395,18 +396,18 @@ impl Proxy {
 
     /// Register a CVM with the given app_id, instance_id and client_public_key.
     ///
-    /// `port_attrs = None` means the CVM didn't report port attributes (legacy
-    /// CVM). The gateway will lazily fetch them via Info() on first connection.
+    /// `port_policy = None` means the CVM didn't report any policy (legacy
+    /// CVM). The gateway will lazily fetch it via Info() on first connection.
     ///
     /// `compose_hash` is the attested compose_hash — used to invalidate any
-    /// cached `port_attrs` when the app is upgraded.
+    /// cached `port_policy` when the app is upgraded.
     pub fn do_register_cvm(
         &self,
         app_id: &str,
         instance_id: &str,
         client_public_key: &str,
         compose_hash: &str,
-        port_attrs: Option<BTreeMap<u16, PortFlags>>,
+        port_policy: Option<PortPolicy>,
     ) -> Result<RegisterCvmResponse> {
         let mut state = self.lock();
 
@@ -431,18 +432,18 @@ impl Proxy {
                 app_id,
                 client_public_key,
                 compose_hash,
-                port_attrs,
+                port_policy,
             )
             .context("failed to allocate IP address for client")?;
         if let Err(err) = state.reconfigure() {
             error!("failed to reconfigure: {err:?}");
         }
         // Capture the prewarm decision before continuing under the lock.
-        // If the instance arrived without port_attrs (legacy CVM, or
+        // If the instance arrived without port_policy (legacy CVM, or
         // compose_hash mismatch invalidated the cache), enqueue a
         // background fetch so the first proxied connection isn't the one
         // that triggers it. The fetcher dedupes, so this is safe.
-        let needs_prewarm = client_info.port_attrs.is_none();
+        let needs_prewarm = client_info.port_policy.is_none();
         let gateways = state.get_active_nodes();
         let servers = gateways
             .iter()
@@ -468,7 +469,7 @@ impl Proxy {
         };
         drop(state);
         if needs_prewarm {
-            let _ = self.port_attrs_tx.send(instance_id.to_string());
+            let _ = self.port_policy_tx.send(instance_id.to_string());
         }
         self.notify_state_updated.notify_one();
         Ok(response)
@@ -488,8 +489,8 @@ fn build_state_from_kv_store(instances: BTreeMap<String, InstanceData>) -> Proxy
             reg_time: UNIX_EPOCH
                 .checked_add(Duration::from_secs(data.reg_time))
                 .unwrap_or(UNIX_EPOCH),
-            port_attrs: data.port_attrs,
-            port_attrs_hash: data.port_attrs_hash,
+            port_policy: data.port_policy,
+            port_policy_hash: data.port_policy_hash,
             connections: Default::default(),
         };
         state.allocated_addresses.insert(data.ip);
@@ -783,8 +784,8 @@ fn reload_instances_from_kv_store(proxy: &Proxy, store: &KvStore) -> Result<()> 
             reg_time: UNIX_EPOCH
                 .checked_add(Duration::from_secs(data.reg_time))
                 .unwrap_or(UNIX_EPOCH),
-            port_attrs: data.port_attrs.clone(),
-            port_attrs_hash: data.port_attrs_hash.clone(),
+            port_policy: data.port_policy.clone(),
+            port_policy_hash: data.port_policy_hash.clone(),
             connections: Default::default(),
         };
 
@@ -867,7 +868,7 @@ impl ProxyState {
         app_id: &str,
         public_key: &str,
         compose_hash: &str,
-        port_attrs: Option<BTreeMap<u16, PortFlags>>,
+        port_policy: Option<PortPolicy>,
     ) -> Result<InstanceInfo> {
         if id.is_empty() {
             bail!("instance_id is empty (no_instance_id is set?)");
@@ -887,21 +888,21 @@ impl ProxyState {
                 existing.reg_time = SystemTime::now();
             }
             // App upgrade detection: a different attested compose_hash invalidates
-            // any cached port_attrs from the previous code.
-            if existing.port_attrs_hash != compose_hash {
+            // any cached port_policy from the previous code.
+            if existing.port_policy_hash != compose_hash {
                 info!(
                     "compose_hash changed for instance {id} ({} -> {compose_hash}), \
-                     invalidating cached port_attrs",
-                    existing.port_attrs_hash
+                     invalidating cached port_policy",
+                    existing.port_policy_hash
                 );
-                existing.port_attrs = None;
-                existing.port_attrs_hash = compose_hash.to_string();
+                existing.port_policy = None;
+                existing.port_policy_hash = compose_hash.to_string();
             }
-            // Only override cached port_attrs when the caller actually reports
-            // them. A `None` request (legacy CVM) means "I don't know" — let
+            // Only override cached port_policy when the caller actually reports
+            // one. A `None` request (legacy CVM) means "I don't know" — let
             // the lazy fetch path run again.
-            if port_attrs.is_some() {
-                existing.port_attrs = port_attrs.clone();
+            if port_policy.is_some() {
+                existing.port_policy = port_policy.clone();
             }
             let existing = existing.clone();
             if self.valid_ip(existing.ip) {
@@ -911,8 +912,8 @@ impl ProxyState {
                     ip: existing.ip,
                     public_key: existing.public_key.clone(),
                     reg_time: encode_ts(existing.reg_time),
-                    port_attrs: existing.port_attrs.clone(),
-                    port_attrs_hash: existing.port_attrs_hash.clone(),
+                    port_policy: existing.port_policy.clone(),
+                    port_policy_hash: existing.port_policy_hash.clone(),
                 };
                 if let Err(err) = self.kv_store.sync_instance(&existing.id, &data) {
                     error!("failed to sync existing instance to KvStore: {err:?}");
@@ -931,8 +932,8 @@ impl ProxyState {
             ip,
             public_key: public_key.to_string(),
             reg_time: SystemTime::now(),
-            port_attrs,
-            port_attrs_hash: compose_hash.to_string(),
+            port_policy,
+            port_policy_hash: compose_hash.to_string(),
             connections: Default::default(),
         };
         self.add_instance(host_info.clone());
@@ -944,36 +945,29 @@ impl ProxyState {
         self.state.instances.get(instance_id).map(|i| i.ip)
     }
 
-    /// Lookup an instance's port_attrs. `None` means the CVM never reported
-    /// them (legacy CVM), so the caller should fall back to fetching via Info().
-    pub(crate) fn instance_port_attrs(
-        &self,
-        instance_id: &str,
-    ) -> Option<&BTreeMap<u16, PortFlags>> {
-        self.state.instances.get(instance_id)?.port_attrs.as_ref()
+    /// Lookup an instance's port_policy. `None` means the CVM never reported
+    /// it (legacy CVM), so the caller should fall back to fetching via Info().
+    pub(crate) fn instance_port_policy(&self, instance_id: &str) -> Option<&PortPolicy> {
+        self.state.instances.get(instance_id)?.port_policy.as_ref()
     }
 
-    /// Update an instance's port_attrs (used after a lazy fetch via Info()).
+    /// Update an instance's port_policy (used after a lazy fetch via Info()).
     /// Persists to the WaveKV store so other gateway nodes pick it up.
-    pub(crate) fn update_instance_port_attrs(
-        &mut self,
-        instance_id: &str,
-        attrs: BTreeMap<u16, PortFlags>,
-    ) {
+    pub(crate) fn update_instance_port_policy(&mut self, instance_id: &str, policy: PortPolicy) {
         let Some(info) = self.state.instances.get_mut(instance_id) else {
             return;
         };
-        info.port_attrs = Some(attrs.clone());
+        info.port_policy = Some(policy.clone());
         let data = InstanceData {
             app_id: info.app_id.clone(),
             ip: info.ip,
             public_key: info.public_key.clone(),
             reg_time: encode_ts(info.reg_time),
-            port_attrs: Some(attrs),
-            port_attrs_hash: info.port_attrs_hash.clone(),
+            port_policy: Some(policy),
+            port_policy_hash: info.port_policy_hash.clone(),
         };
         if let Err(err) = self.kv_store.sync_instance(instance_id, &data) {
-            error!("failed to sync updated port_attrs to KvStore: {err:?}");
+            error!("failed to sync updated port_policy to KvStore: {err:?}");
         }
     }
 
@@ -984,8 +978,8 @@ impl ProxyState {
             ip: info.ip,
             public_key: info.public_key.clone(),
             reg_time: encode_ts(info.reg_time),
-            port_attrs: info.port_attrs.clone(),
-            port_attrs_hash: info.port_attrs_hash.clone(),
+            port_policy: info.port_policy.clone(),
+            port_policy_hash: info.port_policy_hash.clone(),
         };
         if let Err(err) = self.kv_store.sync_instance(&info.id, &data) {
             error!("failed to sync instance to KvStore: {err:?}");
@@ -1391,23 +1385,28 @@ impl GatewayRpc for RpcHandler {
         let app_id = hex::encode(&app_info.app_id);
         let instance_id = hex::encode(&app_info.instance_id);
         let compose_hash = hex::encode(&app_info.compose_hash);
-        let port_attrs = request.port_attrs.map(|list| {
-            list.attrs
+        let port_policy = request.port_policy.map(|p| {
+            let ports = p
+                .ports
                 .into_iter()
-                .filter_map(|p| {
+                .filter_map(|attr| {
                     // Wire format is uint32 to avoid varint shenanigans, but valid TCP
                     // ports fit in u16. Drop out-of-range entries instead of truncating.
-                    let port = u16::try_from(p.port).ok()?;
-                    Some((port, PortFlags { pp: p.pp }))
+                    let port = u16::try_from(attr.port).ok()?;
+                    Some((port, crate::kv::PortFlags { pp: attr.pp }))
                 })
-                .collect::<BTreeMap<u16, PortFlags>>()
+                .collect();
+            PortPolicy {
+                ports,
+                restrict_mode: p.restrict_mode,
+            }
         });
         self.state.do_register_cvm(
             &app_id,
             &instance_id,
             &request.client_public_key,
             &compose_hash,
-            port_attrs,
+            port_policy,
         )
     }
 

@@ -118,18 +118,18 @@ pub struct ProxyConfig {
     /// Maximum concurrent connections per app. 0 means unlimited.
     pub max_connections_per_app: u64,
     /// Port the dstack guest-agent listens on inside each CVM. Used by the
-    /// gateway to fetch app metadata (e.g. port_attrs for legacy CVMs).
+    /// gateway to fetch app metadata (e.g. port_policy for legacy CVMs).
     pub agent_port: u16,
     /// Whether to read PROXY protocol headers from inbound connections
     /// (e.g. when behind a PP-aware load balancer like Cloudflare).
     #[serde(default)]
     pub inbound_pp_enabled: bool,
-    /// Background lazy-fetch behaviour for `port_attrs` (legacy CVMs).
-    pub port_attrs_fetch: PortAttrsFetchConfig,
+    /// Background lazy-fetch behaviour for `port_policy` (legacy CVMs).
+    pub port_policy_fetch: PortPolicyFetchConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct PortAttrsFetchConfig {
+pub struct PortPolicyFetchConfig {
     /// Timeout for a single `Info()` RPC attempt.
     #[serde(with = "serde_duration")]
     pub timeout: Duration,

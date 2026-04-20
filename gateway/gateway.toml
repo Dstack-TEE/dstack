@@ -61,8 +61,8 @@ max_connections_per_app = 2000
 # Whether to read PROXY protocol from inbound connections (e.g. from Cloudflare).
 inbound_pp_enabled = false
 
-[core.proxy.port_attrs_fetch]
-# Background lazy-fetch of port_attrs from legacy CVM agents.
+[core.proxy.port_policy_fetch]
+# Background lazy-fetch of port_policy from legacy CVM agents.
 # Single Info() RPC timeout.
 timeout = "10s"
 # Retries cover the WireGuard / agent warmup window after registration.
