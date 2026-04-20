@@ -1315,13 +1315,16 @@ version = "0.5.8"
 dependencies = [
  "anyhow",
  "digest 0.10.7",
+ "dstack-types",
  "ez-hash",
  "fs-err",
  "hex",
  "insta",
+ "or-panic",
  "parity-scale-codec",
  "serde",
  "serde-human-bytes",
+ "serde_jcs",
  "serde_json",
  "sha2 0.10.9",
 ]
@@ -2409,6 +2412,7 @@ dependencies = [
  "clap",
  "dstack-guest-agent",
  "dstack-guest-agent-rpc",
+ "dstack-types",
  "ra-rpc",
  "ra-tls",
  "rocket",
@@ -6541,6 +6545,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
 
 [[package]]
+name = "ryu-js"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6518fc26bced4d53678a22d6e423e9d8716377def84545fe328236e3af070e7f"
+
+[[package]]
 name = "s2n-codec"
 version = "0.76.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6963,6 +6973,17 @@ dependencies = [
  "result",
  "serde",
  "void",
+]
+
+[[package]]
+name = "serde_jcs"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d3a60f3fda61525e439ef6d67422118f11e986566997d9021c56867ad814a0aa"
+dependencies = [
+ "ryu-js",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

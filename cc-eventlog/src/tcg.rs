@@ -300,7 +300,7 @@ impl TcgEventLog {
     }
 
     pub fn decode_from_ccel_file() -> Result<Self> {
-        let data = fs_err::read(CCEL_FILE).context("Failed to read CCEL")?;
+        let data = read_ccel_raw()?;
         Self::decode(&mut data.as_slice())
     }
 
@@ -312,6 +312,51 @@ impl TcgEventLog {
             .map(TdxEvent::try_from)
             .collect()
     }
+}
+
+/// Read the raw ACPI CCEL table bytes from `/sys/firmware/acpi/tables/data/CCEL`.
+pub fn read_ccel_raw() -> Result<Vec<u8>> {
+    fs_err::read(CCEL_FILE).context("Failed to read CCEL")
+}
+
+/// Return the length of the valid TCG event log prefix within a raw CCEL buffer.
+///
+/// ACPI CCEL tables are fixed-size regions padded with 0xFF; the event stream
+/// either ends with a 0xFFFFFFFF terminator or by running into that padding.
+/// This parses the buffer to find where real events end so the trailer can be
+/// stripped before appending runtime events.
+pub fn ccel_content_len(raw: &[u8]) -> Result<usize> {
+    let input = &mut &raw[..];
+    TcgEventLog::decode(input)?;
+    Ok(raw.len() - input.len())
+}
+
+/// Encode dstack runtime events as TCG_PCR_EVENT2 records.
+///
+/// Non-runtime events in the slice are skipped. Each runtime event becomes:
+/// - pcrIndex  = imr + 1 (0-based TdxEvent -> 1-based TCG pcrIndex)
+/// - eventType = DSTACK_RUNTIME_EVENT_TYPE
+/// - digests   = [{ TPM_ALG_SHA384, <48-byte digest> }]
+/// - event     = the digest pre-image bytes (`hash_input`), so that
+///   sha384(event) == digest holds for any TCG parser.
+pub fn encode_runtime_events_as_tcg(events: &[TdxEvent]) -> Vec<u8> {
+    let mut out = Vec::new();
+    for event in events {
+        let Some(runtime) = event.to_runtime_event() else {
+            continue;
+        };
+        let hash_input = runtime.hash_input();
+        let digest = event.digest();
+        let pcr_index = event.imr.saturating_add(1);
+        out.extend_from_slice(&pcr_index.to_le_bytes());
+        out.extend_from_slice(&event.event_type.to_le_bytes());
+        out.extend_from_slice(&1u32.to_le_bytes());
+        out.extend_from_slice(&TPM_ALG_SHA384.to_le_bytes());
+        out.extend_from_slice(&digest);
+        out.extend_from_slice(&(hash_input.len() as u32).to_le_bytes());
+        out.extend_from_slice(&hash_input);
+    }
+    out
 }
 
 fn parse_spec_id_event_log<I: scale::Input>(
@@ -370,6 +415,8 @@ impl TryFrom<TcgEvent> for TdxEvent {
             digest,
             event: Default::default(),
             event_payload: value.event.into(),
+            version: Default::default(),
+            hash_input: None,
         })
     }
 }

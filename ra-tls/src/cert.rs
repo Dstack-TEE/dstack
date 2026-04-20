@@ -542,7 +542,7 @@ pub fn generate_ra_cert_with_app_id(
 
     let report_data = QuoteContentType::RaTlsCert.to_report_data(&pubkey);
 
-    let attestation = Attestation::quote_with_app_id(&report_data, app_id)
+    let attestation = Attestation::quote_with_app_id(&report_data, app_id, Default::default())
         .context("Failed to get quote for cert pubkey")?
         .into_versioned();
 

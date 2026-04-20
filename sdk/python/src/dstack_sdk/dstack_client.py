@@ -155,12 +155,16 @@ class GetQuoteResponse(BaseModel):
     event_log: str
     report_data: str = ""
     vm_config: str = ""
+    event_log_ccel: str = ""
 
     def decode_quote(self) -> bytes:
         return bytes.fromhex(self.quote)
 
     def decode_event_log(self) -> "List[EventLog]":
         return [EventLog(**event) for event in json.loads(self.event_log)]
+
+    def decode_event_log_ccel(self) -> bytes:
+        return bytes.fromhex(self.event_log_ccel)
 
     def replay_rtmrs(self) -> Dict[int, str]:
         parsed_event_log = json.loads(self.event_log)
