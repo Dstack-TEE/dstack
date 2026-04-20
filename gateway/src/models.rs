@@ -15,6 +15,8 @@ use std::{
     time::SystemTime,
 };
 
+use crate::kv::PortPolicy;
+
 mod filters {
     pub fn hex(data: impl AsRef<[u8]>) -> rinja::Result<String> {
         Ok(hex::encode(data))
@@ -60,6 +62,18 @@ pub struct InstanceInfo {
     pub ip: Ipv4Addr,
     pub public_key: String,
     pub reg_time: SystemTime,
+    /// Port policy. `None` means the CVM didn't report any (legacy);
+    /// gateway will lazily populate via Info() on first proxied connection.
+    #[serde(default)]
+    pub port_policy: Option<PortPolicy>,
+    /// Hex-encoded compose_hash that `port_policy` was learned against. The
+    /// cache is invalidated when a new registration presents a different hash.
+    #[serde(default)]
+    pub port_policy_hash: String,
+    /// Operator-set override (Admin RPC). Takes precedence over `port_policy`
+    /// when set; survives app upgrades.
+    #[serde(default)]
+    pub admin_port_policy: Option<PortPolicy>,
     #[serde(skip)]
     pub connections: Arc<AtomicU64>,
 }
@@ -67,6 +81,35 @@ pub struct InstanceInfo {
 impl InstanceInfo {
     pub fn num_connections(&self) -> u64 {
         self.connections.load(Ordering::Relaxed)
+    }
+}
+
+/// Snapshot of an instance's port-policy state for admin inspection.
+#[derive(Debug, Clone)]
+pub struct PortPolicyView {
+    /// What the instance most recently reported (registration or lazy fetch).
+    pub instance_reported: Option<PortPolicy>,
+    /// What the operator set via Admin RPC, if any.
+    pub admin_override: Option<PortPolicy>,
+}
+
+impl PortPolicyView {
+    /// The policy the proxy will actually enforce (admin override wins).
+    pub fn effective(&self) -> Option<&PortPolicy> {
+        self.admin_override
+            .as_ref()
+            .or(self.instance_reported.as_ref())
+    }
+
+    /// `"admin"`, `"instance"`, or `"none"`.
+    pub fn source(&self) -> &'static str {
+        if self.admin_override.is_some() {
+            "admin"
+        } else if self.instance_reported.is_some() {
+            "instance"
+        } else {
+            "none"
+        }
     }
 }
 

@@ -54,6 +54,7 @@ hyper-rustls.workspace = true
 http-body-util.workspace = true
 x509-parser.workspace = true
 jemallocator.workspace = true
+proxy-protocol.workspace = true
 wavekv.workspace = true
 tdx-attest.workspace = true
 flate2.workspace = true

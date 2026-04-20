@@ -53,7 +53,8 @@ use crate::{
 use cert_client::CertRequestClient;
 use cmd_lib::run_fun as cmd;
 use dstack_gateway_rpc::{
-    gateway_client::GatewayClient, RegisterCvmRequest, RegisterCvmResponse, WireGuardPeer,
+    gateway_client::GatewayClient, PortAttrs as RpcPortAttrs, PortPolicy as RpcPortPolicy,
+    RegisterCvmRequest, RegisterCvmResponse, WireGuardPeer,
 };
 use ra_tls::rcgen::{KeyPair, PKCS_ECDSA_P256_SHA256};
 use serde_human_bytes as hex_bytes;
@@ -446,11 +447,26 @@ impl<'a> GatewayContext<'a> {
         gateway_url: &str,
         key_store: &GatewayKeyStore,
     ) -> Result<RegisterCvmResponse> {
+        let port_policy = RpcPortPolicy {
+            ports: self
+                .shared
+                .app_compose
+                .port_policy
+                .ports
+                .iter()
+                .map(|p| RpcPortAttrs {
+                    port: p.port as u32,
+                    pp: p.pp,
+                })
+                .collect(),
+            restrict_mode: self.shared.app_compose.port_policy.restrict_mode,
+        };
         let client =
             self.create_gateway_client(gateway_url, &key_store.client_key, &key_store.client_cert)?;
         let result = client
             .register_cvm(RegisterCvmRequest {
                 client_public_key: key_store.wg_pk.clone(),
+                port_policy: Some(port_policy.clone()),
             })
             .await
             .context("Failed to register CVM");
@@ -471,6 +487,7 @@ impl<'a> GatewayContext<'a> {
         client
             .register_cvm(RegisterCvmRequest {
                 client_public_key: key_store.wg_pk.clone(),
+                port_policy: Some(port_policy),
             })
             .await
             .context("Failed to register CVM")

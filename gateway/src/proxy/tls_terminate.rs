@@ -13,9 +13,10 @@ use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Request, Response, StatusCode};
 use hyper_util::rt::tokio::TokioIo;
+use proxy_protocol::ProxyHeader;
 use rustls::version::{TLS12, TLS13};
 use serde::Serialize;
-use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt as _, ReadBuf};
 use tokio::net::TcpStream;
 use tokio::time::timeout;
 use tokio_rustls::{rustls, server::TlsStream, TlsAcceptor};
@@ -27,6 +28,7 @@ use crate::config::{CryptoProvider, ProxyConfig, TlsVersion};
 use crate::main_service::Proxy;
 
 use super::io_bridge::bridge;
+use super::port_policy::{filter_allowed_addresses, should_send_pp};
 use super::tls_passthough::connect_multiple_hosts;
 
 #[pin_project::pin_project]
@@ -268,9 +270,10 @@ impl Proxy {
         Ok(tls_stream)
     }
 
-    pub(crate) async fn proxy(
+    pub(super) async fn proxy(
         &self,
         inbound: TcpStream,
+        pp_header: ProxyHeader,
         buffer: Vec<u8>,
         app_id: &str,
         port: u16,
@@ -286,16 +289,22 @@ impl Proxy {
             .lock()
             .select_top_n_hosts(app_id)
             .with_context(|| format!("app <{app_id}> not found"))?;
+        let addresses = filter_allowed_addresses(self, addresses, app_id, port)?;
         debug!("selected top n hosts: {addresses:?}");
         let tls_stream = self.tls_accept(inbound, buffer, h2).await?;
         let max_connections = self.config.proxy.max_connections_per_app;
-        let (outbound, _counter) = timeout(
+        let (mut outbound, _counter, instance_id) = timeout(
             self.config.proxy.timeouts.connect,
             connect_multiple_hosts(addresses, port, max_connections, app_id),
         )
         .await
         .map_err(|_| anyhow!("connecting timeout"))?
         .context("failed to connect to app")?;
+        if should_send_pp(self, &instance_id, port) {
+            let pp_header_bin =
+                proxy_protocol::encode(pp_header).context("failed to encode pp header")?;
+            outbound.write_all(&pp_header_bin).await?;
+        }
         bridge(
             IgnoreUnexpectedEofStream::new(tls_stream),
             outbound,
