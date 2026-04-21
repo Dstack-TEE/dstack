@@ -136,14 +136,18 @@ impl RpcHandler {
 
     async fn ensure_kms_allowed(&self, vm_config: &str) -> Result<BootInfo> {
         let att = self.ensure_attested()?;
-        self.ensure_app_attestation_allowed(att, true, false, vm_config)
+        self.ensure_app_attestation_allowed(att, true, false, vm_config, "")
             .await
             .map(|c| c.boot_info)
     }
 
-    async fn ensure_app_boot_allowed(&self, vm_config: &str) -> Result<BootConfig> {
+    async fn ensure_app_boot_allowed(
+        &self,
+        vm_config: &str,
+        extra_info: &str,
+    ) -> Result<BootConfig> {
         let att = self.ensure_attested()?;
-        self.ensure_app_attestation_allowed(att, false, false, vm_config)
+        self.ensure_app_attestation_allowed(att, false, false, vm_config, extra_info)
             .await
     }
 
@@ -208,8 +212,10 @@ impl RpcHandler {
         is_kms: bool,
         use_boottime_mr: bool,
         vm_config_str: &str,
+        extra_info: &str,
     ) -> Result<BootConfig> {
-        let boot_info = build_boot_info(att, use_boottime_mr, vm_config_str)?;
+        let mut boot_info = build_boot_info(att, use_boottime_mr, vm_config_str)?;
+        boot_info.extra_info = extra_info.to_string();
         let response = self
             .state
             .config
@@ -261,7 +267,7 @@ impl KmsRpc for RpcHandler {
             boot_info,
             gateway_app_id,
         } = self
-            .ensure_app_boot_allowed(&request.vm_config)
+            .ensure_app_boot_allowed(&request.vm_config, &request.extra_info)
             .await
             .context("App not allowed")?;
         let app_id = boot_info.app_id;
@@ -419,7 +425,7 @@ impl KmsRpc for RpcHandler {
             .await
             .context("Quote verification failed")?;
         let app_info = self
-            .ensure_app_attestation_allowed(&attestation, false, true, &request.vm_config)
+            .ensure_app_attestation_allowed(&attestation, false, true, &request.vm_config, "")
             .await?;
         let app_ca = self.derive_app_ca(&app_info.boot_info.app_id)?;
         let cert = app_ca
