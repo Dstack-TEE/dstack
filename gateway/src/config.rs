@@ -117,6 +117,32 @@ pub struct ProxyConfig {
     pub app_address_ns_compat: bool,
     /// Maximum concurrent connections per app. 0 means unlimited.
     pub max_connections_per_app: u64,
+    /// Port the dstack guest-agent listens on inside each CVM. Used by the
+    /// gateway to fetch app metadata (e.g. port_policy for legacy CVMs).
+    pub agent_port: u16,
+    /// Whether to read PROXY protocol headers from inbound connections
+    /// (e.g. when behind a PP-aware load balancer like Cloudflare).
+    #[serde(default)]
+    pub inbound_pp_enabled: bool,
+    /// Background lazy-fetch behaviour for `port_policy` (legacy CVMs).
+    pub port_policy_fetch: PortPolicyFetchConfig,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct PortPolicyFetchConfig {
+    /// Timeout for a single `Info()` RPC attempt.
+    #[serde(with = "serde_duration")]
+    pub timeout: Duration,
+    /// Maximum number of attempts after the initial try (0 = no retry).
+    /// Retries cover the window where a freshly-registered CVM hasn't
+    /// finished its WireGuard handshake yet.
+    pub max_retries: u32,
+    /// Delay before the first retry; doubles on each subsequent retry,
+    /// capped at `backoff_max`.
+    #[serde(with = "serde_duration")]
+    pub backoff_initial: Duration,
+    #[serde(with = "serde_duration")]
+    pub backoff_max: Duration,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -142,6 +168,9 @@ pub struct Timeouts {
     pub write: Duration,
     #[serde(with = "serde_duration")]
     pub shutdown: Duration,
+    /// Timeout for reading the proxy protocol header from inbound connections.
+    #[serde(with = "serde_duration")]
+    pub pp_header: Duration,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

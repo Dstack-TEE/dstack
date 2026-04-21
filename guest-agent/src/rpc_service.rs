@@ -718,6 +718,7 @@ mod tests {
             secure_time: false,
             storage_fs: None,
             swap_size: 0,
+            port_policy: Default::default(),
         };
 
         let dummy_appcompose_wrapper = AppComposeWrapper {
