@@ -10,6 +10,10 @@ on:
   pull_request:
     branches: [ master, next, dev-* ]
 
+env:
+  DSTACK_REV: ${{ github.event.pull_request.head.sha || github.sha }}
+  DSTACK_SRC_URL: ${{ github.event.pull_request.head.repo.clone_url || format('{0}/{1}', github.server_url, github.repository) }}
+
 jobs:
   gateway:
     runs-on: ubuntu-latest
@@ -30,8 +34,8 @@ jobs:
           build-contexts: |
             build-shared=build/shared
           build-args: |
-            DSTACK_REV=${{ github.event.pull_request.head.sha || github.sha }}
-            DSTACK_SRC_URL=${{ github.server_url }}/${{ github.repository }}
+            DSTACK_REV=${{ env.DSTACK_REV }}
+            DSTACK_SRC_URL=${{ env.DSTACK_SRC_URL }}
 
       - name: Verify pinned packages
         run: |
@@ -46,8 +50,8 @@ jobs:
             --tag gateway-builder-check:latest \
             --provenance=false \
             --build-context build-shared=build/shared \
-            --build-arg "DSTACK_REV=${{ github.event.pull_request.head.sha || github.sha }}" \
-            --build-arg "DSTACK_SRC_URL=${{ github.server_url }}/${{ github.repository }}" \
+            --build-arg "DSTACK_REV=${DSTACK_REV}" \
+            --build-arg "DSTACK_SRC_URL=${DSTACK_SRC_URL}" \
             gateway/dstack-app/builder
 
       - name: Verify builder pinned packages
@@ -74,8 +78,8 @@ jobs:
           build-contexts: |
             build-shared=build/shared
           build-args: |
-            DSTACK_REV=${{ github.event.pull_request.head.sha || github.sha }}
-            DSTACK_SRC_URL=${{ github.server_url }}/${{ github.repository }}
+            DSTACK_REV=${{ env.DSTACK_REV }}
+            DSTACK_SRC_URL=${{ env.DSTACK_SRC_URL }}
 
       - name: Verify pinned packages (qemu stage)
         run: |
@@ -90,8 +94,8 @@ jobs:
             --tag kms-builder-check:latest \
             --provenance=false \
             --build-context build-shared=build/shared \
-            --build-arg "DSTACK_REV=${{ github.event.pull_request.head.sha || github.sha }}" \
-            --build-arg "DSTACK_SRC_URL=${{ github.server_url }}/${{ github.repository }}" \
+            --build-arg "DSTACK_REV=${DSTACK_REV}" \
+            --build-arg "DSTACK_SRC_URL=${DSTACK_SRC_URL}" \
             kms/dstack-app/builder
 
       - name: Verify builder pinned packages
@@ -125,8 +129,8 @@ jobs:
           build-contexts: |
             build-shared=build/shared
           build-args: |
-            DSTACK_REV=${{ github.event.pull_request.head.sha || github.sha }}
-            DSTACK_SRC_URL=${{ github.server_url }}/${{ github.repository }}
+            DSTACK_REV=${{ env.DSTACK_REV }}
+            DSTACK_SRC_URL=${{ env.DSTACK_SRC_URL }}
 
       - name: Verify pinned packages (runtime)
         run: |
@@ -142,8 +146,8 @@ jobs:
             --provenance=false \
             --file verifier/builder/Dockerfile \
             --build-context build-shared=build/shared \
-            --build-arg "DSTACK_REV=${{ github.event.pull_request.head.sha || github.sha }}" \
-            --build-arg "DSTACK_SRC_URL=${{ github.server_url }}/${{ github.repository }}" \
+            --build-arg "DSTACK_REV=${DSTACK_REV}" \
+            --build-arg "DSTACK_SRC_URL=${DSTACK_SRC_URL}" \
             verifier
 
       - name: Verify builder pinned packages
@@ -160,8 +164,8 @@ jobs:
             --provenance=false \
             --file verifier/builder/Dockerfile \
             --build-context build-shared=build/shared \
-            --build-arg "DSTACK_REV=${{ github.event.pull_request.head.sha || github.sha }}" \
-            --build-arg "DSTACK_SRC_URL=${{ github.server_url }}/${{ github.repository }}" \
+            --build-arg "DSTACK_REV=${DSTACK_REV}" \
+            --build-arg "DSTACK_SRC_URL=${DSTACK_SRC_URL}" \
             verifier
 
       - name: Verify qemu pinned packages
