@@ -12,7 +12,7 @@ pub const TDX_QUOTE_REPORT_DATA_RANGE: std::ops::Range<usize> = 568..632;
 use std::{borrow::Cow, time::SystemTime};
 
 use anyhow::{anyhow, bail, Context, Result};
-use cc_eventlog::{RuntimeEvent, TdxEvent};
+use cc_eventlog::{EventLogVersion, RuntimeEvent, TdxEvent};
 use dcap_qvl::{
     quote::{EnclaveReport, Quote, Report, TDReport10, TDReport15},
     verify::VerifiedReport as TdxVerifiedReport,
@@ -476,9 +476,21 @@ pub trait TdxAttestationExt {
     fn tdx_event_log(&self) -> Option<&[TdxEvent]>;
 
     /// Returns the TDX event log serialized as JSON.
-    fn tdx_event_log_string(&self) -> Option<String> {
-        self.tdx_event_log()
-            .map(|event_log| serde_json::to_string(event_log).unwrap_or_default())
+    ///
+    /// When `include_hash_inputs` is true, each runtime event carries its
+    /// digest pre-image (hex-encoded) so relying parties can verify it directly.
+    fn tdx_event_log_string(&self, include_hash_inputs: bool) -> Option<String> {
+        self.tdx_event_log().map(|event_log| {
+            if include_hash_inputs {
+                let mut events: Vec<TdxEvent> = event_log.to_vec();
+                for event in &mut events {
+                    event.fill_hash_input();
+                }
+                serde_json::to_string(&events).unwrap_or_default()
+            } else {
+                serde_json::to_string(event_log).unwrap_or_default()
+            }
+        })
     }
 
     /// Returns the parsed TD10 report from the embedded TDX quote.
@@ -699,6 +711,18 @@ impl<T> Attestation<T> {
         self.tdx_quote().map(|q| q.quote.clone())
     }
 
+    /// Populate `hash_input` on every runtime event in the TDX event log.
+    ///
+    /// Useful before serializing an attestation so relying parties get the
+    /// digest pre-images alongside events.
+    pub fn fill_event_hash_inputs(&mut self) {
+        if let Some(q) = self.tdx_quote_mut() {
+            for event in &mut q.event_log {
+                event.fill_hash_input();
+            }
+        }
+    }
+
     /// Get TDX event log bytes
     pub fn get_tdx_event_log_bytes(&self) -> Option<Vec<u8>> {
         self.tdx_quote()
@@ -707,9 +731,17 @@ impl<T> Attestation<T> {
 
     /// Get TDX event log string with RTMR[0-2] payloads stripped to reduce size.
     /// Only digests are kept for boot-time events; runtime events (RTMR3) retain full payload.
-    pub fn get_tdx_event_log_string(&self) -> Option<String> {
+    ///
+    /// When `include_hash_inputs` is true, each runtime event carries its digest
+    /// pre-image (hex-encoded) so relying parties can verify or inspect it directly.
+    pub fn get_tdx_event_log_string(&self, include_hash_inputs: bool) -> Option<String> {
         self.tdx_quote().map(|q| {
-            let stripped: Vec<_> = q.event_log.iter().map(|e| e.stripped()).collect();
+            let mut stripped: Vec<_> = q.event_log.iter().map(|e| e.stripped()).collect();
+            if include_hash_inputs {
+                for event in &mut stripped {
+                    event.fill_hash_input();
+                }
+            }
             serde_json::to_string(&stripped).unwrap_or_default()
         })
     }
@@ -718,6 +750,18 @@ impl<T> Attestation<T> {
         self.tdx_quote()
             .and_then(|q| Quote::parse(&q.quote).ok())
             .and_then(|quote| quote.report.as_td10().cloned())
+    }
+
+    /// Get the merged TCG binary CCEL event log (boot-time CCEL + runtime
+    /// events encoded as TCG_PCR_EVENT2 records).
+    ///
+    /// Returns an empty `Vec` on platforms without a TDX quote (e.g. Nitro).
+    /// Propagates errors from reading or parsing the ACPI CCEL file.
+    pub fn get_tdx_event_log_ccel(&self) -> Result<Vec<u8>> {
+        let Some(q) = self.tdx_quote() else {
+            return Ok(Vec::new());
+        };
+        cc_eventlog::tdx::build_ccel_event_log(&q.event_log)
     }
 }
 
@@ -1023,10 +1067,14 @@ impl Attestation {
 
     /// Create an attestation from a report data
     pub fn quote(report_data: &[u8; 64]) -> Result<Self> {
-        Self::quote_with_app_id(report_data, None)
+        Self::quote_with_app_id(report_data, None, EventLogVersion::default())
     }
 
-    pub fn quote_with_app_id(report_data: &[u8; 64], app_id: Option<[u8; 20]>) -> Result<Self> {
+    pub fn quote_with_app_id(
+        report_data: &[u8; 64],
+        app_id: Option<[u8; 20]>,
+        event_log_version: EventLogVersion,
+    ) -> Result<Self> {
         // Lock to prevent concurrent quote generation (TDX driver doesn't support it)
         let _guard = QUOTE_LOCK
             .lock()
@@ -1036,7 +1084,11 @@ impl Attestation {
         let runtime_events = if mode.is_composable() {
             RuntimeEvent::read_all().context("Failed to read runtime events")?
         } else if let Some(app_id) = app_id {
-            vec![RuntimeEvent::new("app-id".to_string(), app_id.to_vec())]
+            vec![RuntimeEvent::new(
+                "app-id".to_string(),
+                app_id.to_vec(),
+                event_log_version,
+            )]
         } else {
             vec![]
         };
@@ -1101,9 +1153,24 @@ impl Attestation {
         })
     }
 
-    /// Wrap into a versioned attestation for encoding
+    /// Wrap into a versioned attestation for encoding.
+    ///
+    /// When any runtime event uses a non-V1 event-log version, force the V1
+    /// msgpack wire format so the `version` field is preserved (SCALE
+    /// V0 skips it for legacy binary compat). Otherwise default to V0 for
+    /// backward compat with callers that expect the SCALE format.
     pub fn into_versioned(self) -> VersionedAttestation {
-        VersionedAttestation::V0 { attestation: self }
+        let has_v2 = self
+            .runtime_events
+            .iter()
+            .any(|e| !matches!(e.version, EventLogVersion::V1));
+        if has_v2 {
+            VersionedAttestation::V1 {
+                attestation: self.into(),
+            }
+        } else {
+            VersionedAttestation::V0 { attestation: self }
+        }
     }
 
     /// Verify the quote
@@ -1343,5 +1410,40 @@ mod tests {
             }
             _ => panic!("expected dstack stack"),
         }
+    }
+
+    #[test]
+    fn into_versioned_uses_v0_when_all_events_are_v1() {
+        let mut att = dummy_tdx_attestation([7u8; 64]);
+        att.runtime_events.push(cc_eventlog::RuntimeEvent::new(
+            "app-id".into(),
+            vec![1, 2, 3],
+            cc_eventlog::EventLogVersion::V1,
+        ));
+        let versioned = att.into_versioned();
+        assert!(
+            matches!(versioned, VersionedAttestation::V0 { .. }),
+            "V1-only events should stay on the V0/SCALE wire format"
+        );
+    }
+
+    #[test]
+    fn into_versioned_upgrades_to_v1_when_any_event_is_v2() {
+        let mut att = dummy_tdx_attestation([8u8; 64]);
+        att.runtime_events.push(cc_eventlog::RuntimeEvent::new(
+            "app-id".into(),
+            vec![1, 2, 3],
+            cc_eventlog::EventLogVersion::V1,
+        ));
+        att.runtime_events.push(cc_eventlog::RuntimeEvent::new(
+            "compose-hash".into(),
+            vec![4, 5, 6],
+            cc_eventlog::EventLogVersion::V2,
+        ));
+        let versioned = att.into_versioned();
+        assert!(
+            matches!(versioned, VersionedAttestation::V1 { .. }),
+            "presence of a V2 event must force the V1 msgpack wire format to preserve `version`"
+        );
     }
 }

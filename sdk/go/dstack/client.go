@@ -86,10 +86,11 @@ func (r *GetKeyResponse) DecodeSignatureChain() ([][]byte, error) {
 
 // Represents the response from a quote request.
 type GetQuoteResponse struct {
-	Quote      string `json:"quote"`
-	EventLog   string `json:"event_log"`
-	ReportData string `json:"report_data"`
-	VmConfig   string `json:"vm_config"`
+	Quote        string `json:"quote"`
+	EventLog     string `json:"event_log"`
+	ReportData   string `json:"report_data"`
+	VmConfig     string `json:"vm_config"`
+	EventLogCCEL string `json:"event_log_ccel"`
 }
 
 // DecodeQuote returns the quote bytes
@@ -107,6 +108,11 @@ func (r *GetQuoteResponse) DecodeEventLog() ([]EventLog, error) {
 	var events []EventLog
 	err := json.Unmarshal([]byte(r.EventLog), &events)
 	return events, err
+}
+
+// DecodeEventLogCCEL returns the TCG binary CCEL event log bytes.
+func (r *GetQuoteResponse) DecodeEventLogCCEL() ([]byte, error) {
+	return hex.DecodeString(r.EventLogCCEL)
 }
 
 // Represents the response from an attestation request.
