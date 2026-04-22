@@ -26,7 +26,7 @@ use ra_tls::{
 use scale::Decode;
 use sha2::Digest;
 use tokio::sync::OnceCell;
-use tracing::info;
+use tracing::{info, warn};
 use upgrade_authority::{build_boot_info, local_kms_boot_info, BootInfo};
 
 use crate::{
@@ -76,6 +76,9 @@ impl KmsState {
             config.image.download_timeout,
             config.pccs_url.clone(),
         );
+        if !config.enforce_self_authorization {
+            warn!("self-authorization is disabled; trusted RPCs will not be gated by KMS self-attestation - do not use in production TEE deployments");
+        }
         Ok(Self {
             inner: Arc::new(KmsStateInner {
                 config,
@@ -102,6 +105,9 @@ struct BootConfig {
 
 impl RpcHandler {
     async fn ensure_self_allowed(&self) -> Result<()> {
+        if !self.state.config.enforce_self_authorization {
+            return Ok(());
+        }
         let boot_info = self
             .state
             .self_boot_info

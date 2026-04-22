@@ -88,6 +88,30 @@ pub struct AppCompose {
     pub swap_size: u64,
     #[serde(default)]
     pub event_log_version: EventLogVersion,
+    /// Per-port policy consumed by the gateway (PROXY protocol opt-in,
+    /// optional port whitelist).
+    #[serde(default)]
+    pub port_policy: PortPolicy,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone, Default)]
+pub struct PortPolicy {
+    /// Per-port attributes (PROXY protocol opt-in, etc.).
+    #[serde(default)]
+    pub ports: Vec<PortAttrs>,
+    /// When true, the gateway only forwards traffic to ports listed in `ports`.
+    /// All other ports are rejected at TCP-accept time.
+    #[serde(default)]
+    pub restrict_mode: bool,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone)]
+pub struct PortAttrs {
+    pub port: u16,
+    /// Whether the gateway should send a PROXY protocol header on outbound
+    /// connections to this port.
+    #[serde(default)]
+    pub pp: bool,
 }
 
 fn default_true() -> bool {

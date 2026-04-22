@@ -211,6 +211,9 @@ pub(crate) fn pad64(hash: [u8; 32]) -> Vec<u8> {
 }
 
 pub(crate) async fn ensure_self_kms_allowed(cfg: &KmsConfig) -> Result<()> {
+    if !cfg.enforce_self_authorization {
+        return Ok(());
+    }
     let boot_info = local_kms_boot_info(cfg.pccs_url.as_deref())
         .await
         .context("failed to build local KMS boot info")?;

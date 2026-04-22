@@ -478,6 +478,13 @@ pub struct CertPair {
 /// Magic prefix for gzip-compressed event log (version 1)
 pub const EVENTLOG_GZIP_MAGIC: &[u8] = b"ELGZv1";
 
+/// Maximum allowed decompressed size of the event log extension (in bytes).
+///
+/// This protects against gzip decompression bombs in RA-TLS certificate
+/// extensions by bounding the amount of memory we are willing to allocate.
+/// 16 KiB is sufficient for typical event logs we embed in certs.
+pub const MAX_EVENTLOG_EXT_SIZE: u64 = 16 * 1024;
+
 /// Compress a certificate extension value
 pub fn compress_ext_value(data: &[u8]) -> Result<Vec<u8>> {
     use flate2::write::GzEncoder;
@@ -507,11 +514,19 @@ pub fn decompress_ext_value(data: &[u8]) -> Result<Vec<u8>> {
     if data.starts_with(EVENTLOG_GZIP_MAGIC) {
         // Compressed format
         let compressed = &data[EVENTLOG_GZIP_MAGIC.len()..];
-        let mut decoder = GzDecoder::new(compressed);
+        let decoder = GzDecoder::new(compressed);
+        // Limit the total amount of decompressed data to avoid gzip bombs.
+        let mut limited = decoder.take(MAX_EVENTLOG_EXT_SIZE + 1);
         let mut decompressed = Vec::new();
-        decoder
+        limited
             .read_to_end(&mut decompressed)
             .context("failed to decompress event log")?;
+        if decompressed.len() as u64 > MAX_EVENTLOG_EXT_SIZE {
+            bail!(
+                "event log extension too large (>{} bytes)",
+                MAX_EVENTLOG_EXT_SIZE
+            );
+        }
         Ok(decompressed)
     } else {
         // Uncompressed format (backwards compatibility)
@@ -639,17 +654,9 @@ mod tests {
 
     #[test]
     fn test_event_log_compression_ratio() {
-        // Simulate a large event log with repetitive data (like certificates)
-        let mut large_data = Vec::new();
-        for i in 0..100 {
-            large_data.extend_from_slice(format!(
-                r#"{{"imr":{},"event_type":1,"digest":"{}","event":"test{}","event_payload":"{}"}},"#,
-                i % 4,
-                "a".repeat(96),
-                i,
-                "deadbeef".repeat(100)
-            ).as_bytes());
-        }
+        // Simulate a reasonably large, highly repetitive event log payload.
+        // Keep it well below MAX_EVENTLOG_EXT_SIZE so decompression succeeds.
+        let large_data = vec![b'a'; (MAX_EVENTLOG_EXT_SIZE / 2) as usize];
 
         let compressed = compress_ext_value(&large_data).unwrap();
         let ratio = compressed.len() as f64 / large_data.len() as f64;

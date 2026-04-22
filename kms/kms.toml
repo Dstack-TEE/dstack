@@ -26,6 +26,11 @@ mandatory = false
 cert_dir = "/etc/kms/certs"
 subject_postfix = ".dstack"
 admin_token_hash = ""
+# Whether trusted RPCs require the KMS to first attest itself to its own
+# auth API. Defaults to true (strict). Set to false ONLY when running KMS
+# outside a TEE (e.g. local dev/testing) where the local guest agent socket
+# is unavailable.
+enforce_self_authorization = true
 
 [core.image]
 verify = true

@@ -734,6 +734,7 @@ mod tests {
             storage_fs: None,
             swap_size: 0,
             event_log_version: EventLogVersion::V1,
+            port_policy: Default::default(),
         };
 
         let dummy_appcompose_wrapper = AppComposeWrapper {
