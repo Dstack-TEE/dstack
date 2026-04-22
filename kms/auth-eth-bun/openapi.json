@@ -106,7 +106,7 @@
         "type": "object",
         "required": [
           "mrAggregated",
-          "osImageHash", 
+          "osImageHash",
           "appId",
           "composeHash",
           "instanceId",
@@ -118,7 +118,7 @@
             "description": "Aggregated MR measurement"
           },
           "osImageHash": {
-            "type": "string", 
+            "type": "string",
             "description": "OS Image hash"
           },
           "appId": {
@@ -158,7 +158,7 @@
         "type": "object",
         "required": [
           "isAllowed",
-          "reason", 
+          "reason",
           "gatewayAppId"
         ],
         "properties": {
@@ -181,6 +181,7 @@
         "required": [
           "status",
           "kmsContractAddr",
+          "ethRpcUrl",
           "gatewayAppId",
           "chainId",
           "appAuthImplementation",
@@ -196,8 +197,12 @@
             "type": "string",
             "description": "KMS contract address"
           },
+          "ethRpcUrl": {
+            "type": "string",
+            "description": "Ethereum RPC URL"
+          },
           "gatewayAppId": {
-            "type": "string", 
+            "type": "string",
             "description": "Gateway application ID"
           },
           "chainId": {
@@ -233,4 +238,4 @@
       }
     }
   }
-} 
+}
