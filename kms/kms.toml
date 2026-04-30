@@ -38,6 +38,12 @@ cache_dir = "/usr/share/dstack/images"
 download_url = "http://localhost:8000/{OS_IMAGE_HASH}.tar.gz"
 download_timeout = "2m"
 
+[core.metrics]
+# Expose unauthenticated Prometheus metrics on /metrics.
+# Disable this if the KMS RPC listener is not protected by network policy
+# or another access-control layer.
+enabled = true
+
 [core.auth_api]
 type = "webhook"
 

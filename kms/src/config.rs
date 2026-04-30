@@ -46,6 +46,13 @@ pub(crate) struct KmsConfig {
     /// agent socket.
     #[serde(default = "default_true")]
     pub enforce_self_authorization: bool,
+    pub metrics: MetricsConfig,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct MetricsConfig {
+    /// Whether to expose the unauthenticated Prometheus `/metrics` endpoint.
+    pub enabled: bool,
 }
 
 fn default_true() -> bool {

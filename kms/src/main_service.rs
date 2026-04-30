@@ -4,7 +4,10 @@
 
 use std::{
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
 };
 
 use anyhow::{bail, Context, Result};
@@ -57,6 +60,38 @@ pub struct KmsStateInner {
     temp_ca_key: String,
     verifier: CvmVerifier,
     self_boot_info: OnceCell<BootInfo>,
+    metrics: KmsMetrics,
+}
+
+#[derive(Default)]
+pub(crate) struct KmsMetrics {
+    attestation_requests_total: AtomicU64,
+    attestation_failures_total: AtomicU64,
+}
+
+impl KmsMetrics {
+    pub(crate) fn record_attestation_request(&self, failed: bool) {
+        self.attestation_requests_total
+            .fetch_add(1, Ordering::Relaxed);
+        if failed {
+            self.attestation_failures_total
+                .fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    pub(crate) fn render_prometheus(&self) -> String {
+        let attestation_requests_total = self.attestation_requests_total.load(Ordering::Relaxed);
+        let attestation_failures_total = self.attestation_failures_total.load(Ordering::Relaxed);
+
+        format!(
+            "# HELP dstack_kms_attestation_requests_total Total number of KMS attestation requests.\n\
+             # TYPE dstack_kms_attestation_requests_total counter\n\
+             dstack_kms_attestation_requests_total {attestation_requests_total}\n\
+             # HELP dstack_kms_attestation_failures_total Total number of failed KMS attestation requests.\n\
+             # TYPE dstack_kms_attestation_failures_total counter\n\
+             dstack_kms_attestation_failures_total {attestation_failures_total}\n"
+        )
+    }
 }
 
 impl KmsState {
@@ -77,7 +112,9 @@ impl KmsState {
             config.pccs_url.clone(),
         );
         if !config.enforce_self_authorization {
-            warn!("self-authorization is disabled; trusted RPCs will not be gated by KMS self-attestation - do not use in production TEE deployments");
+            warn!(
+                "self-authorization is disabled; trusted RPCs will not be gated by KMS self-attestation - do not use in production TEE deployments"
+            );
         }
         Ok(Self {
             inner: Arc::new(KmsStateInner {
@@ -88,8 +125,13 @@ impl KmsState {
                 temp_ca_key,
                 verifier,
                 self_boot_info: OnceCell::new(),
+                metrics: KmsMetrics::default(),
             }),
         })
+    }
+
+    pub(crate) fn metrics(&self) -> &KmsMetrics {
+        &self.inner.metrics
     }
 }
 
