@@ -137,6 +137,7 @@ async fn main() -> Result<()> {
     }
 
     let pccs_url = config.pccs_url.clone();
+    let metrics_enabled = config.metrics.enabled;
     let state = main_service::KmsState::new(config).context("Failed to initialize KMS state")?;
     let figment = figment
         .clone()
@@ -147,16 +148,21 @@ async fn main() -> Result<()> {
                 res.set_raw_header("X-App-Version", app_version());
             })
         }))
-        .attach(AdHoc::on_response(
-            "Record KMS attestation metrics",
-            |req, res| Box::pin(async move { record_attestation_metrics(req, res) }),
-        ))
         .mount(
             "/prpc",
             ra_rpc::prpc_routes!(KmsState, RpcHandler, trim: "KMS."),
         )
-        .mount("/", rocket::routes![metrics])
         .manage(state);
+
+    if metrics_enabled {
+        info!("Prometheus metrics endpoint enabled at /metrics");
+        rocket = rocket
+            .attach(AdHoc::on_response(
+                "Record KMS attestation metrics",
+                |req, res| Box::pin(async move { record_attestation_metrics(req, res) }),
+            ))
+            .mount("/", rocket::routes![metrics]);
+    }
 
     let verifier = QuoteVerifier::new(pccs_url);
     rocket = rocket.manage(verifier);
