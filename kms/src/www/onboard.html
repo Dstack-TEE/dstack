@@ -145,6 +145,19 @@ SPDX-License-Identifier: Apache-2.0
             color: #333;
         }
 
+        .chain-info {
+            background-color: #f8f4e8;
+            border: 1px solid #ddc;
+            border-radius: 4px;
+            padding: 15px;
+            margin-bottom: 20px;
+        }
+
+        .chain-info h3 {
+            margin-top: 0;
+            color: #444;
+        }
+
         .loading {
             color: #888;
             font-style: italic;
@@ -154,7 +167,7 @@ SPDX-License-Identifier: Apache-2.0
 
 <body>
     <div id="app" class="container">
-        <h1>dstack KMS Setup</h1>
+        <h1>{{ siteName || 'dstack KMS Setup' }}</h1>
 
         <div v-if="attestationLoading" class="loading">Loading attestation info...</div>
         <div v-else-if="attestationError" class="error">Attestation info: {{ attestationError }}</div>
@@ -163,6 +176,10 @@ SPDX-License-Identifier: Apache-2.0
             <div class="info-row">
                 <span class="info-label">Attestation Mode:</span>
                 <span class="info-value">{{ attestationInfo.attestation_mode }}</span>
+            </div>
+            <div class="info-row" v-if="attestationInfo.ppid">
+                <span class="info-label">PPID:</span>
+                <span class="info-value">{{ attestationInfo.ppid }}</span>
             </div>
             <div class="info-row">
                 <span class="info-label">Device ID:</span>
@@ -175,6 +192,18 @@ SPDX-License-Identifier: Apache-2.0
             <div class="info-row">
                 <span class="info-label">OS Image Hash:</span>
                 <span class="info-value">0x{{ attestationInfo.os_image_hash }}</span>
+            </div>
+        </div>
+
+        <div v-if="attestationInfo && (attestationInfo.eth_rpc_url || attestationInfo.kms_contract_address)" class="chain-info">
+            <h3>Chain Info</h3>
+            <div v-if="attestationInfo.eth_rpc_url" class="info-row">
+                <span class="info-label">ETH RPC URL:</span>
+                <span class="info-value">{{ attestationInfo.eth_rpc_url }}</span>
+            </div>
+            <div v-if="attestationInfo.kms_contract_address" class="info-row">
+                <span class="info-label">KMS Contract:</span>
+                <span class="info-value">{{ attestationInfo.kms_contract_address }}</span>
             </div>
         </div>
 
@@ -261,7 +290,8 @@ SPDX-License-Identifier: Apache-2.0
                     setupFinished: false,
                     attestationInfo: null,
                     attestationLoading: true,
-                    attestationError: ''
+                    attestationError: '',
+                    siteName: ''
                 }
             },
             async mounted() {
@@ -271,6 +301,10 @@ SPDX-License-Identifier: Apache-2.0
                         this.attestationError = data.error;
                     } else {
                         this.attestationInfo = data;
+                        if (data.site_name) {
+                            this.siteName = data.site_name;
+                            document.title = data.site_name;
+                        }
                     }
                 } catch (err) {
                     this.attestationError = err.message;
@@ -310,6 +344,9 @@ SPDX-License-Identifier: Apache-2.0
                         if (data.error) throw new Error(data.error);
 
                         this.success = 'Onboarding successful!';
+                        this.result = JSON.stringify({
+                            k256Pubkey: '0x' + data.k256_pubkey,
+                        }, null, 2);
                         this.error = '';
                     } catch (err) {
                         this.error = err.message;

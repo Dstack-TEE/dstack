@@ -26,7 +26,7 @@ beforeAll(async () => {
   process.env.ETH_RPC_URL = 'http://localhost:8545';
   process.env.KMS_CONTRACT_ADDR = '0x1234567890123456789012345678901234567890';
   process.env.PORT = '3001';
-  
+
   // Import the app after mocking
   const indexModule = await import('./index.ts');
   appFetch = indexModule.default.fetch;
@@ -58,6 +58,7 @@ describe('API Compatibility Tests', () => {
       expect(data).toMatchObject({
         status: 'ok',
         kmsContractAddr: '0x1234567890123456789012345678901234567890',
+        ethRpcUrl: 'http://localhost:8545',
         gatewayAppId: expect.any(String),
         chainId: expect.any(Number),
         appAuthImplementation: expect.any(String),
@@ -67,7 +68,7 @@ describe('API Compatibility Tests', () => {
       // Verify response structure matches OpenAPI spec
       const systemInfoSchema = openApiSpec.components.schemas.SystemInfo;
       const requiredFields = systemInfoSchema.required;
-      
+
       requiredFields.forEach(field => {
         expect(data).toHaveProperty(field);
       });
@@ -128,7 +129,7 @@ describe('API Compatibility Tests', () => {
       // Verify response matches OpenAPI spec
       const bootResponseSchema = openApiSpec.components.schemas.BootResponse;
       const requiredFields = bootResponseSchema.required;
-      
+
       requiredFields.forEach(field => {
         expect(data).toHaveProperty(field);
       });
@@ -263,7 +264,7 @@ describe('API Compatibility Tests', () => {
 
     it('should not log "Test backend error" messages', async () => {
       const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-      
+
       mockReadContract.mockRejectedValue(new Error('Test backend error'));
 
       const response = await appFetch(new Request('http://localhost:3001/bootAuth/kms', {
@@ -277,16 +278,16 @@ describe('API Compatibility Tests', () => {
       expect(response.status).toBe(200);
       expect(data.isAllowed).toBe(false);
       expect(data.reason).toBe('Test backend error');
-      
+
       // Verify that console.error was not called for test errors
       expect(consoleSpy).not.toHaveBeenCalled();
-      
+
       consoleSpy.mockRestore();
     });
 
     it('should log other error messages', async () => {
       const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-      
+
       mockReadContract.mockRejectedValue(new Error('real error'));
 
       const response = await appFetch(new Request('http://localhost:3001/bootAuth/kms', {
@@ -300,10 +301,10 @@ describe('API Compatibility Tests', () => {
       expect(response.status).toBe(200);
       expect(data.isAllowed).toBe(false);
       expect(data.reason).toBe('real error');
-      
+
       // Verify that console.error was called for real errors
       expect(consoleSpy).toHaveBeenCalledWith('error in KMS boot auth:', expect.any(Error));
-      
+
       consoleSpy.mockRestore();
     });
   });
@@ -312,7 +313,7 @@ describe('API Compatibility Tests', () => {
 describe('API Schema Compatibility', () => {
   it('should match BootInfo schema requirements', () => {
     const bootInfoSchema = openApiSpec.components.schemas.BootInfo;
-    
+
     // Required fields should match original fastify schema
     expect(bootInfoSchema.required).toEqual([
       'mrAggregated',
@@ -331,7 +332,7 @@ describe('API Schema Compatibility', () => {
 
   it('should match BootResponse schema requirements', () => {
     const bootResponseSchema = openApiSpec.components.schemas.BootResponse;
-    
+
     expect(bootResponseSchema.required).toEqual([
       'isAllowed',
       'reason',
@@ -341,10 +342,11 @@ describe('API Schema Compatibility', () => {
 
   it('should match SystemInfo schema requirements', () => {
     const systemInfoSchema = openApiSpec.components.schemas.SystemInfo;
-    
+
     expect(systemInfoSchema.required).toEqual([
       'status',
       'kmsContractAddr',
+      'ethRpcUrl',
       'gatewayAppId',
       'chainId',
       'appAuthImplementation',
@@ -385,4 +387,4 @@ describe('Hex Decoding Compatibility', () => {
 
     expect(response.status).toBe(200);
   });
-}); 
+});
