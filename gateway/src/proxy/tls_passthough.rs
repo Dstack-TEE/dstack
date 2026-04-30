@@ -6,6 +6,7 @@ use std::fmt::Debug;
 use std::sync::atomic::Ordering;
 
 use anyhow::{bail, Context, Result};
+use proxy_protocol::ProxyHeader;
 use tokio::{io::AsyncWriteExt, net::TcpStream, task::JoinSet, time::timeout};
 use tracing::{debug, info, warn};
 
@@ -14,7 +15,11 @@ use crate::{
     models::{Counting, EnteredCounter},
 };
 
-use super::{io_bridge::bridge, AddressGroup};
+use super::{
+    io_bridge::bridge,
+    port_policy::{filter_allowed_addresses, should_send_pp},
+    AddressGroup,
+};
 
 #[derive(Debug)]
 struct AppAddress {
@@ -96,6 +101,7 @@ async fn resolve_app_address(prefix: &str, sni: &str, compat: bool) -> Result<Ap
 pub(crate) async fn proxy_with_sni(
     state: Proxy,
     inbound: TcpStream,
+    pp_header: ProxyHeader,
     buffer: Vec<u8>,
     sni: &str,
 ) -> Result<()> {
@@ -107,7 +113,7 @@ pub(crate) async fn proxy_with_sni(
         .with_context(|| format!("DNS TXT resolve timeout for {sni}"))?
         .with_context(|| format!("failed to resolve app address for {sni}"))?;
     debug!("target address is {}:{}", addr.app_id, addr.port);
-    proxy_to_app(state, inbound, buffer, &addr.app_id, addr.port).await
+    proxy_to_app(state, inbound, pp_header, buffer, &addr.app_id, addr.port).await
 }
 
 /// Check if app has reached max connections limit
@@ -134,56 +140,71 @@ fn check_connection_limit(
 }
 
 /// connect to multiple hosts simultaneously and return the first successful connection
+/// along with the instance_id of the winning address.
 pub(crate) async fn connect_multiple_hosts(
     addresses: AddressGroup,
     port: u16,
     max_connections: u64,
     app_id: &str,
-) -> Result<(TcpStream, EnteredCounter)> {
+) -> Result<(TcpStream, EnteredCounter, String)> {
     check_connection_limit(&addresses, max_connections, app_id)?;
 
     let mut join_set = JoinSet::new();
     for addr in addresses {
         let counter = addr.counter.enter();
-        let addr = addr.ip;
-        debug!("connecting to {addr}:{port}");
-        let future = TcpStream::connect((addr, port));
-        join_set.spawn(async move { (future.await.map_err(|e| (e, addr, port)), counter) });
+        let ip = addr.ip;
+        let instance_id = addr.instance_id;
+        debug!("connecting to {ip}:{port}");
+        let future = TcpStream::connect((ip, port));
+        join_set.spawn(async move {
+            (
+                future.await.map_err(|e| (e, ip, port)),
+                counter,
+                instance_id,
+            )
+        });
     }
     // select the first successful connection
-    let (connection, counter) = loop {
-        let (result, counter) = join_set
+    let (connection, counter, instance_id) = loop {
+        let (result, counter, instance_id) = join_set
             .join_next()
             .await
             .context("No connection success")?
             .context("Failed to join the connect task")?;
         match result {
-            Ok(connection) => break (connection, counter),
+            Ok(connection) => break (connection, counter, instance_id),
             Err((e, addr, port)) => {
                 info!("failed to connect to app@{addr}:{port}: {e}");
             }
         }
     };
     debug!("connected to {:?}", connection.peer_addr());
-    Ok((connection, counter))
+    Ok((connection, counter, instance_id))
 }
 
 pub(crate) async fn proxy_to_app(
     state: Proxy,
     inbound: TcpStream,
+    pp_header: ProxyHeader,
     buffer: Vec<u8>,
     app_id: &str,
     port: u16,
 ) -> Result<()> {
     let addresses = state.lock().select_top_n_hosts(app_id)?;
+    let addresses = filter_allowed_addresses(&state, addresses, app_id, port)?;
     let max_connections = state.config.proxy.max_connections_per_app;
-    let (mut outbound, _counter) = timeout(
+    let (mut outbound, _counter, instance_id) = timeout(
         state.config.proxy.timeouts.connect,
         connect_multiple_hosts(addresses.clone(), port, max_connections, app_id),
     )
     .await
     .with_context(|| format!("connecting timeout to app {app_id}: {addresses:?}:{port}"))?
     .with_context(|| format!("failed to connect to app {app_id}: {addresses:?}:{port}"))?;
+    if should_send_pp(&state, &instance_id, port) {
+        let pp_header_bin =
+            proxy_protocol::encode(pp_header).context("failed to encode pp header")?;
+        outbound.write_all(&pp_header_bin).await?;
+    }
     outbound
         .write_all(&buffer)
         .await

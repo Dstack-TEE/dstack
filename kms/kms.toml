@@ -26,12 +26,23 @@ mandatory = false
 cert_dir = "/etc/kms/certs"
 subject_postfix = ".dstack"
 admin_token_hash = ""
+# Whether trusted RPCs require the KMS to first attest itself to its own
+# auth API. Defaults to true (strict). Set to false ONLY when running KMS
+# outside a TEE (e.g. local dev/testing) where the local guest agent socket
+# is unavailable.
+enforce_self_authorization = true
 
 [core.image]
 verify = true
 cache_dir = "/usr/share/dstack/images"
 download_url = "http://localhost:8000/{OS_IMAGE_HASH}.tar.gz"
 download_timeout = "2m"
+
+[core.metrics]
+# Expose unauthenticated Prometheus metrics on /metrics.
+# Disable this if the KMS RPC listener is not protected by network policy
+# or another access-control layer.
+enabled = true
 
 [core.auth_api]
 type = "webhook"

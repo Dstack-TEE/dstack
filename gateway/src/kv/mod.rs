@@ -42,6 +42,28 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
 use wavekv::{node::NodeState, types::NodeId, Node};
 
+/// Per-port flags applied by the gateway when proxying to a CVM port.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct PortFlags {
+    /// Send a PROXY protocol header on outbound connections to this port.
+    #[serde(default)]
+    pub pp: bool,
+}
+
+/// Gateway-relevant per-port policy declared by the app in its compose file.
+/// Reported atomically at CVM registration; `Option<PortPolicy>` distinguishes
+/// "not reported" (legacy CVM) from "reported with no entries".
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct PortPolicy {
+    /// Per-port flags (PROXY protocol opt-in, etc.).
+    #[serde(default)]
+    pub ports: BTreeMap<u16, PortFlags>,
+    /// When true, only ports listed in `ports` are forwarded; connections to
+    /// any other port are rejected at TCP-accept time.
+    #[serde(default)]
+    pub restrict_mode: bool,
+}
+
 /// Instance core data (persistent)
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct InstanceData {
@@ -49,6 +71,22 @@ pub struct InstanceData {
     pub ip: Ipv4Addr,
     pub public_key: String,
     pub reg_time: u64,
+    /// Port policy reported at registration. `None` means "not reported"
+    /// (legacy CVM); the gateway will fall back to fetching app-compose via
+    /// Info() on first connection and populate this lazily.
+    #[serde(default)]
+    pub port_policy: Option<PortPolicy>,
+    /// Hex-encoded compose_hash that `port_policy` was learned against.
+    /// When a re-registration presents a different compose_hash (app upgrade),
+    /// the cache is invalidated and re-fetched lazily.
+    #[serde(default)]
+    pub port_policy_hash: String,
+    /// Operator-set override applied via the Admin RPC. Takes precedence over
+    /// the instance-reported `port_policy` when set, and survives app upgrades
+    /// (compose_hash changes do not clear it). Cleared explicitly via
+    /// ClearInstancePortPolicy.
+    #[serde(default)]
+    pub admin_port_policy: Option<PortPolicy>,
 }
 
 /// Gateway node status (stored separately for independent updates)

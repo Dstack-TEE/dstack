@@ -12,6 +12,31 @@ package gateway;
 message RegisterCvmRequest {
   // The public key of the WireGuard interface of the CVM.
   string client_public_key = 1;
+  // Per-port policy the gateway should apply when proxying to this CVM.
+  // Wrapped in a message so we can distinguish "not reported" (old CVM →
+  // gateway falls back to fetching app-compose via Info()) from "reported
+  // empty" (new CVM with no special port behaviour).
+  optional PortPolicy port_policy = 2;
+}
+
+// PortPolicy carries the gateway-relevant per-port configuration declared by
+// the app in its compose file. Keeping `ports` and `restrict_mode` together
+// lets a single Option distinguish "not reported" from "reported".
+message PortPolicy {
+  // Per-port attributes (PROXY protocol opt-in, etc.).
+  repeated PortAttrs ports = 1;
+  // When true, the gateway only forwards traffic to ports listed in `ports`
+  // and rejects connections to any other port at TCP-accept time.
+  bool restrict_mode = 2;
+}
+
+// PortAttrs declares per-port behaviour for the gateway.
+message PortAttrs {
+  // The CVM port these attributes apply to.
+  uint32 port = 1;
+  // Whether the gateway should send a PROXY protocol header on outbound
+  // connections to this port.
+  bool pp = 2;
 }
 
 // DebugRegisterCvmRequest is the request for DebugRegisterCvm (only works when debug_mode is enabled).
@@ -414,6 +439,18 @@ service Admin {
   rpc GetCertbotConfig(google.protobuf.Empty) returns (CertbotConfigResponse) {}
   // Set global certbot configuration (includes ACME URL)
   rpc SetCertbotConfig(SetCertbotConfigRequest) returns (google.protobuf.Empty) {}
+
+  // ==================== Per-Instance Port Policy Override ====================
+  // Set an admin override for an instance's port policy. Takes precedence
+  // over the policy reported by the instance itself, and survives app
+  // upgrades. Errors if the instance is not registered.
+  rpc SetInstancePortPolicy(SetInstancePortPolicyRequest) returns (google.protobuf.Empty) {}
+  // Clear the admin override for an instance, reverting to the
+  // instance-reported policy. Errors if the instance is not registered.
+  rpc ClearInstancePortPolicy(ClearInstancePortPolicyRequest) returns (google.protobuf.Empty) {}
+  // Inspect both the admin override and the instance-reported policy for an
+  // instance, plus the effective policy the proxy will enforce.
+  rpc GetInstancePortPolicy(GetInstancePortPolicyRequest) returns (GetInstancePortPolicyResponse) {}
 }
 
 // ==================== DNS Credential Messages ====================
@@ -622,4 +659,37 @@ message SetCertbotConfigRequest {
   optional uint64 renew_timeout_secs = 3;
   // ACME server URL (empty means use default Let's Encrypt production)
   optional string acme_url = 4;
+}
+
+// ==================== Per-Instance Port Policy Override Messages ====================
+
+// Set an admin override for an instance.
+message SetInstancePortPolicyRequest {
+  // The instance to override.
+  string instance_id = 1;
+  // The policy to apply. An empty `ports` list with `restrict_mode = true`
+  // is a valid "deny everything" lockdown.
+  PortPolicy policy = 2;
+}
+
+// Clear the admin override for an instance.
+message ClearInstancePortPolicyRequest {
+  string instance_id = 1;
+}
+
+// Inspect an instance's port-policy state.
+message GetInstancePortPolicyRequest {
+  string instance_id = 1;
+}
+
+message GetInstancePortPolicyResponse {
+  // The policy the proxy will actually enforce. Absent when neither admin
+  // nor instance has set anything (fail-close until populated).
+  optional PortPolicy effective = 1;
+  // Where `effective` came from: "admin", "instance", or "none".
+  string source = 2;
+  // The policy reported by the instance itself, if any.
+  optional PortPolicy instance_reported = 3;
+  // The admin override, if any.
+  optional PortPolicy admin_override = 4;
 }

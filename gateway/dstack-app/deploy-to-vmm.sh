@@ -31,6 +31,7 @@ if [ -f ".env" ]; then
   # Load variables from .env
   echo "Loading environment variables from .env file..."
   set -a
+  # shellcheck disable=SC1091
   source .env
   set +a
 else
@@ -92,7 +93,14 @@ GUEST_AGENT_ADDR=127.0.0.1:9206
 WG_ADDR=0.0.0.0:9202
 
 # The token used to launch the App
-APP_LAUNCH_TOKEN=$(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 32 | head -n 1)
+APP_LAUNCH_TOKEN=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | fold -w 32 | head -n 1)
+
+# PROXY protocol: read v1/v2 header from inbound connections (e.g. when this
+# gateway sits behind a PP-aware L4 LB such as Cloudflare Spectrum or haproxy
+# with send-proxy). Set to "true" only if the upstream LB is configured to
+# send PROXY headers; otherwise leave disabled or every connection will be
+# rejected.
+# INBOUND_PP_ENABLED=false
 
 EOF
   echo "Please edit the .env file and set the required variables, then run this script again."
@@ -125,7 +133,7 @@ done
 
 CLI="../../vmm/src/vmm-cli.py --url $VMM_RPC"
 
-WG_PORT=$(echo $WG_ADDR | cut -d':' -f2)
+WG_PORT=$(echo "$WG_ADDR" | cut -d':' -f2)
 COMPOSE_TMP=$(mktemp)
 
 cp docker-compose.yaml "$COMPOSE_TMP"
@@ -175,6 +183,7 @@ APP_LAUNCH_TOKEN=$APP_LAUNCH_TOKEN
 RPC_DOMAIN=$RPC_DOMAIN
 NODE_ID=$NODE_ID
 PROXY_LISTEN_PORT=$PROXY_LISTEN_PORT
+INBOUND_PP_ENABLED=${INBOUND_PP_ENABLED:-false}
 EOF
 
 if [ -n "$APP_COMPOSE_FILE" ]; then

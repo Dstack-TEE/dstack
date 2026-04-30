@@ -18,7 +18,7 @@
     "@openzeppelin/contracts-upgradeable": "5.4.0",
     "dotenv": "^16.3.1",
     "ethers": "^6.13.5",
-    "fastify": "^5.8.3",
+    "fastify": "^5.8.5",
     "yargs": "^17.7.2"
   },
   "devDependencies": {

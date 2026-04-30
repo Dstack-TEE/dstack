@@ -10,8 +10,8 @@ use ra_rpc::rocket_helper::QuoteVerifier;
 use rocket::{
     fairing::AdHoc,
     figment::{providers::Serialized, Figment},
-    response::content::RawHtml,
-    Shutdown,
+    response::content::{RawHtml, RawText},
+    Shutdown, State,
 };
 use tracing::{info, warn};
 
@@ -77,6 +77,34 @@ async fn run_onboard_service(kms_config: KmsConfig, figment: Figment) -> Result<
     Ok(())
 }
 
+#[rocket::get("/metrics")]
+fn metrics(state: &State<KmsState>) -> RawText<String> {
+    RawText(state.metrics().render_prometheus())
+}
+
+// Count only RPCs whose primary job is to verify caller/app attestation.
+// Recording in a response fairing also catches failures that happen before
+// RpcHandler is constructed, such as malformed RA-TLS attestation.
+fn is_attestation_rpc_path(path: &str) -> bool {
+    let Some(method) = path.strip_prefix("/prpc/") else {
+        return false;
+    };
+    let method = method.trim_start_matches("KMS.");
+    matches!(method, "GetAppKey" | "GetKmsKey" | "SignCert")
+}
+
+fn record_attestation_metrics(req: &rocket::Request<'_>, res: &rocket::Response<'_>) {
+    if !is_attestation_rpc_path(req.uri().path().as_str()) {
+        return;
+    }
+    let Some(state) = req.rocket().state::<KmsState>() else {
+        return;
+    };
+    state
+        .metrics()
+        .record_attestation_request(res.status().code >= 400);
+}
+
 #[rocket::main]
 async fn main() -> Result<()> {
     {
@@ -109,6 +137,7 @@ async fn main() -> Result<()> {
     }
 
     let pccs_url = config.pccs_url.clone();
+    let metrics_enabled = config.metrics.enabled;
     let state = main_service::KmsState::new(config).context("Failed to initialize KMS state")?;
     let figment = figment
         .clone()
@@ -124,6 +153,16 @@ async fn main() -> Result<()> {
             ra_rpc::prpc_routes!(KmsState, RpcHandler, trim: "KMS."),
         )
         .manage(state);
+
+    if metrics_enabled {
+        info!("Prometheus metrics endpoint enabled at /metrics");
+        rocket = rocket
+            .attach(AdHoc::on_response(
+                "Record KMS attestation metrics",
+                |req, res| Box::pin(async move { record_attestation_metrics(req, res) }),
+            ))
+            .mount("/", rocket::routes![metrics]);
+    }
 
     let verifier = QuoteVerifier::new(pccs_url);
     rocket = rocket.manage(verifier);
