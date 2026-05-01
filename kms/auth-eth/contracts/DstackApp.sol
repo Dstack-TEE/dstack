@@ -22,24 +22,26 @@ contract DstackApp is
     IAppAuthBasicManagement
 {
     // Mapping of allowed compose hashes for this app
-    mapping(bytes32 => bool) public allowedComposeHashes;
+    // (override on the auto-generated getter satisfies IAppAuthBasicManagement.allowedComposeHashes)
+    mapping(bytes32 => bool) public override allowedComposeHashes;
 
     // State variable to track if upgrades are disabled
     bool private _upgradesDisabled;
 
     // Whether allow any device to boot this app or only allow devices
-    bool public allowAnyDevice;
+    bool public override allowAnyDevice;
 
     // Mapping of allowed device IDs for this app
-    mapping(bytes32 => bool) public allowedDeviceIds;
+    mapping(bytes32 => bool) public override allowedDeviceIds;
 
     // Whether to require TCB status to be UpToDate
-    bool public requireTcbUpToDate;
+    bool public override requireTcbUpToDate;
 
-    // Additional events specific to DstackApp
+    // Additional event specific to DstackApp.
+    // (AllowAnyDeviceSet and RequireTcbUpToDateSet are now declared by
+    //  IAppAuthBasicManagement; we inherit them from there to avoid
+    //  duplicate-event-definition compile errors.)
     event UpgradesDisabled();
-    event AllowAnyDeviceSet(bool allowAny);
-    event RequireTcbUpToDateSet(bool requireUpToDate);
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -99,8 +101,20 @@ contract DstackApp is
         __ERC165_init();
     }
 
-    function version() public pure returns (uint256) {
+    function version() public pure override(IAppAuthBasicManagement) returns (uint256) {
         return 2;
+    }
+
+    /// @notice Authority for every mutator on this contract; satisfies
+    ///         both `OwnableUpgradeable` and `IAppAuthBasicManagement`.
+    function owner()
+        public
+        view
+        virtual
+        override(OwnableUpgradeable, IAppAuthBasicManagement)
+        returns (address)
+    {
+        return OwnableUpgradeable.owner();
     }
 
     /**
@@ -108,6 +122,19 @@ contract DstackApp is
      * @notice Returns true if this contract implements the interface defined by interfaceId
      * @param interfaceId The interface identifier, as specified in ERC-165
      * @return True if the contract implements `interfaceId`
+     *
+     *      Style note (not required by the interface change in this PR):
+     *      this function previously used hardcoded selectors —
+     *      `interfaceId == 0x1e079198` (IAppAuth) and
+     *      `interfaceId == 0x8fd37527` (IAppAuthBasicManagement). With the
+     *      IAppAuthBasicManagement expansion the second literal is no longer
+     *      correct; the new ID is 0xea8447a1. We switch to
+     *      `type(I…).interfaceId` so the literal cannot drift from the
+     *      interface set as it evolves. If
+     *      maintainer house style prefers the literal form, swap to
+     *      `interfaceId == 0xea8447a1` here; the new unit test in
+     *      `test/DstackApp.test.ts` pins both the current ID (true) and
+     *      the old one (false) so either form stays correct.
      */
     function supportsInterface(bytes4 interfaceId)
         public
@@ -117,8 +144,8 @@ contract DstackApp is
         returns (bool)
     {
         return
-            interfaceId == 0x1e079198 || // IAppAuth
-            interfaceId == 0x8fd37527 || // IAppAuthBasicManagement
+            interfaceId == type(IAppAuth).interfaceId ||
+            interfaceId == type(IAppAuthBasicManagement).interfaceId ||
             super.supportsInterface(interfaceId);
     }
 
@@ -128,37 +155,37 @@ contract DstackApp is
     }
 
     // Add a compose hash to allowed list
-    function addComposeHash(bytes32 composeHash) external onlyOwner {
+    function addComposeHash(bytes32 composeHash) external override onlyOwner {
         allowedComposeHashes[composeHash] = true;
         emit ComposeHashAdded(composeHash);
     }
 
     // Remove a compose hash from allowed list
-    function removeComposeHash(bytes32 composeHash) external onlyOwner {
+    function removeComposeHash(bytes32 composeHash) external override onlyOwner {
         allowedComposeHashes[composeHash] = false;
         emit ComposeHashRemoved(composeHash);
     }
 
     // Set whether any device is allowed to boot this app
-    function setAllowAnyDevice(bool _allowAnyDevice) external onlyOwner {
+    function setAllowAnyDevice(bool _allowAnyDevice) external override onlyOwner {
         allowAnyDevice = _allowAnyDevice;
         emit AllowAnyDeviceSet(_allowAnyDevice);
     }
 
     // Set whether TCB status must be UpToDate to boot this app
-    function setRequireTcbUpToDate(bool _requireUpToDate) external onlyOwner {
+    function setRequireTcbUpToDate(bool _requireUpToDate) external override onlyOwner {
         requireTcbUpToDate = _requireUpToDate;
         emit RequireTcbUpToDateSet(_requireUpToDate);
     }
 
     // Add a device ID to allowed list
-    function addDevice(bytes32 deviceId) external onlyOwner {
+    function addDevice(bytes32 deviceId) external override onlyOwner {
         allowedDeviceIds[deviceId] = true;
         emit DeviceAdded(deviceId);
     }
 
     // Remove a device ID from allowed list
-    function removeDevice(bytes32 deviceId) external onlyOwner {
+    function removeDevice(bytes32 deviceId) external override onlyOwner {
         allowedDeviceIds[deviceId] = false;
         emit DeviceRemoved(deviceId);
     }

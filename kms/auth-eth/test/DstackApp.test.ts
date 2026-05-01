@@ -36,6 +36,23 @@ describe("DstackApp", function () {
     it("Should return version 2", async function () {
       expect(await appAuth.version()).to.equal(2);
     });
+
+    it("Should advertise IAppAuth and IAppAuthBasicManagement via supportsInterface", async function () {
+      // IAppAuth — unchanged (only `isAppAllowed` + ERC-165).
+      expect(await appAuth.supportsInterface("0x1e079198")).to.be.true;
+      // IAppAuthBasicManagement — extended with read getters + the
+      // setAllowAnyDevice / setRequireTcbUpToDate mutators + owner() /
+      // version(), so the interface ID is now 0xea8447a1 (was
+      // 0x8fd37527 in the original 4-mutator-only version).
+      expect(await appAuth.supportsInterface("0xea8447a1")).to.be.true;
+      // ERC-165 itself.
+      expect(await appAuth.supportsInterface("0x01ffc9a7")).to.be.true;
+      // Sanity: an unrelated id is rejected.
+      expect(await appAuth.supportsInterface("0xdeadbeef")).to.be.false;
+      // The previous IAppAuthBasicManagement id should NOT be claimed —
+      // tooling that hardcoded it must update.
+      expect(await appAuth.supportsInterface("0x8fd37527")).to.be.false;
+    });
   });
 
   describe("Compose hash management", function () {
