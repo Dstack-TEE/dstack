@@ -36,6 +36,23 @@ describe("DstackApp", function () {
     it("Should return version 2", async function () {
       expect(await appAuth.version()).to.equal(2);
     });
+
+    it("Should advertise IAppAuth and IAppAuthBasicManagement via supportsInterface", async function () {
+      // IAppAuth — unchanged (only `isAppAllowed` + ERC-165).
+      expect(await appAuth.supportsInterface("0x1e079198")).to.be.true;
+      // IAppAuthBasicManagement — extended with read getters + the
+      // setAllowAnyDevice / setRequireTcbUpToDate mutators + owner() /
+      // version(), so the interface ID is now 0xea8447a1 (was
+      // 0x8fd37527 in the original 4-mutator-only version).
+      expect(await appAuth.supportsInterface("0xea8447a1")).to.be.true;
+      // ERC-165 itself.
+      expect(await appAuth.supportsInterface("0x01ffc9a7")).to.be.true;
+      // Sanity: an unrelated id is rejected.
+      expect(await appAuth.supportsInterface("0xdeadbeef")).to.be.false;
+      // The previous IAppAuthBasicManagement id should NOT be claimed —
+      // tooling that hardcoded it must update.
+      expect(await appAuth.supportsInterface("0x8fd37527")).to.be.false;
+    });
   });
 
   describe("Compose hash management", function () {
@@ -231,7 +248,7 @@ describe("DstackApp", function () {
           initializer: 'initialize(address,bool,bool,bool,bytes32,bytes32)'
         }
       ) as DstackApp;
-      
+
       await appAuthWithData.waitForDeployment();
       appIdWithData = await appAuthWithData.getAddress();
     });
@@ -253,7 +270,7 @@ describe("DstackApp", function () {
       // Check that events were emitted during initialization
       const deploymentTx = await appAuthWithData.deploymentTransaction();
       const receipt = await deploymentTx?.wait();
-      
+
       // Count DeviceAdded and ComposeHashAdded events
       const deviceEvents = receipt?.logs.filter(log => {
         try {
@@ -266,7 +283,7 @@ describe("DstackApp", function () {
           return false;
         }
       }) || [];
-      
+
       const hashEvents = receipt?.logs.filter(log => {
         try {
           const parsed = appAuthWithData.interface.parseLog({
@@ -278,7 +295,7 @@ describe("DstackApp", function () {
           return false;
         }
       }) || [];
-      
+
       expect(deviceEvents.length).to.equal(1);
       expect(hashEvents.length).to.equal(1);
     });
@@ -303,7 +320,7 @@ describe("DstackApp", function () {
 
     it("Should reject unauthorized device when allowAnyDevice is false", async function () {
       const unauthorizedDevice = ethers.randomBytes(32);
-      
+
       const bootInfo = {
         appId: appIdWithData,
         composeHash: testHash,
