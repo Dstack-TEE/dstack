@@ -248,7 +248,7 @@ describe("DstackApp", function () {
           initializer: 'initialize(address,bool,bool,bool,bytes32,bytes32)'
         }
       ) as DstackApp;
-      
+
       await appAuthWithData.waitForDeployment();
       appIdWithData = await appAuthWithData.getAddress();
     });
@@ -270,7 +270,7 @@ describe("DstackApp", function () {
       // Check that events were emitted during initialization
       const deploymentTx = await appAuthWithData.deploymentTransaction();
       const receipt = await deploymentTx?.wait();
-      
+
       // Count DeviceAdded and ComposeHashAdded events
       const deviceEvents = receipt?.logs.filter(log => {
         try {
@@ -283,7 +283,7 @@ describe("DstackApp", function () {
           return false;
         }
       }) || [];
-      
+
       const hashEvents = receipt?.logs.filter(log => {
         try {
           const parsed = appAuthWithData.interface.parseLog({
@@ -295,7 +295,7 @@ describe("DstackApp", function () {
           return false;
         }
       }) || [];
-      
+
       expect(deviceEvents.length).to.equal(1);
       expect(hashEvents.length).to.equal(1);
     });
@@ -320,7 +320,7 @@ describe("DstackApp", function () {
 
     it("Should reject unauthorized device when allowAnyDevice is false", async function () {
       const unauthorizedDevice = ethers.randomBytes(32);
-      
+
       const bootInfo = {
         appId: appIdWithData,
         composeHash: testHash,
