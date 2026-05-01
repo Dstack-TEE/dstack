@@ -21,7 +21,7 @@ bon.workspace = true
 hex = { workspace = true, features = ["std"] }
 http.workspace = true
 http-client-unix-domain-socket = "0.1.1"
-reqwest = { workspace = true, features = ["json"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "charset"] }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
