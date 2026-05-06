@@ -450,6 +450,7 @@ impl VmConfig {
             ]);
         }
         if let Some(rootfs) = &self.image.rootfs {
+            let img_ver = self.image.info.version_tuple().unwrap_or_default();
             let ext = rootfs
                 .extension()
                 .unwrap_or_default()
@@ -457,6 +458,11 @@ impl VmConfig {
                 .unwrap_or_default();
             match ext {
                 "iso" => {
+                    if img_ver >= (0, 5, 0) {
+                        bail!(
+                            "Unsupported rootfs type: {ext}. Image versions >= 0.5.0 must use verity rootfs"
+                        );
+                    }
                     command.arg("-cdrom").arg(rootfs);
                 }
                 "verity" => {
