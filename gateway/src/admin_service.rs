@@ -157,7 +157,7 @@ impl AdminRpc for AdminRpcHandler {
             .values()
             .filter(|(ts, _)| {
                 // Skip instances that never connected (ts == 0)
-                *ts != 0 && (now - *ts) < 300
+                *ts != 0 && now.saturating_sub(*ts) < 300
             })
             .count();
 
