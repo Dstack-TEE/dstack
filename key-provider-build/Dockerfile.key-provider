@@ -3,12 +3,45 @@
 # SPDX-License-Identifier: Apache-2.0
 FROM gramineproject/gramine:1.9-jammy@sha256:84b3d222e0bd9ab941f0078a462af0dbc5518156b99b147c10a7b83722ac0c38
 
-RUN apt-get update && apt-get install -y \
-    git=1:2.34.1-1ubuntu1.17 \
-    build-essential=12.9ubuntu3 \
-    && rm -rf /var/lib/apt/lists/*
+# Pin Ubuntu apt sources to a fixed snapshot date so transitive dependencies
+# (e.g. libcurl3-gnutls, libc6) don't drift between builds. Without this,
+# Ubuntu point updates to packages pulled in by `build-essential` change the
+# bytes of files referenced by the Gramine manifest's trusted_files list,
+# which changes mr_enclave — breaking any attestation flow that pins to a
+# specific expected value.
+#
+# Each consumer should override APT_SNAPSHOT to the date that matches their
+# expected mr_enclave:
+#
+#   docker build --build-arg APT_SNAPSHOT=YYYYMMDDT000000Z ...
+ARG APT_SNAPSHOT=20260423T000000Z
+RUN { \
+      echo "deb https://snapshot.ubuntu.com/ubuntu/${APT_SNAPSHOT} jammy main universe restricted multiverse"; \
+      echo "deb https://snapshot.ubuntu.com/ubuntu/${APT_SNAPSHOT} jammy-updates main universe restricted multiverse"; \
+      echo "deb https://snapshot.ubuntu.com/ubuntu/${APT_SNAPSHOT} jammy-security main universe restricted multiverse"; \
+    } > /etc/apt/sources.list \
+ && rm -rf /etc/apt/sources.list.d/* \
+ && apt-get update && apt-get install -y \
+      git=1:2.34.1-1ubuntu1.17 \
+      build-essential=12.9ubuntu3 \
+ && rm -rf /var/lib/apt/lists/*
 
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- --default-toolchain 1.85 -y
+# Pin rustup-init by sha256 instead of `curl https://sh.rustup.rs | sh` so the
+# installer bytes are deterministic. Pin --default-toolchain to the exact patch
+# version (1.85 alone resolves to the latest 1.85.x at install time).
+#
+# To bump RUSTUP_VERSION, fetch the matching sha256 with:
+#   curl -sf https://static.rust-lang.org/rustup/archive/<VERSION>/x86_64-unknown-linux-gnu/rustup-init.sha256
+ARG RUSTUP_VERSION=1.28.2
+ARG RUSTUP_INIT_SHA256=20a06e644b0d9bd2fbdbfd52d42540bdde820ea7df86e92e533c073da0cdd43c
+ARG RUST_TOOLCHAIN=1.85.1
+RUN curl --proto '=https' --tlsv1.2 -fsSL \
+      "https://static.rust-lang.org/rustup/archive/${RUSTUP_VERSION}/x86_64-unknown-linux-gnu/rustup-init" \
+      -o /tmp/rustup-init \
+ && echo "${RUSTUP_INIT_SHA256}  /tmp/rustup-init" | sha256sum -c - \
+ && chmod +x /tmp/rustup-init \
+ && /tmp/rustup-init -y --default-toolchain "${RUST_TOOLCHAIN}" \
+ && rm /tmp/rustup-init
 ENV PATH="/root/.cargo/bin:${PATH}"
 
 # Set environment variables
