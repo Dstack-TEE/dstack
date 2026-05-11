@@ -1186,12 +1186,40 @@ fn make_vm_config(cfg: &Config, manifest: &Manifest, image: &Image) -> Result<se
         num_gpus: gpus.gpus.len() as u32,
         num_nvswitches: gpus.bridges.len() as u32,
         host_share_mode: cfg.cvm.host_share_mode.clone(),
+        qgs_port: cfg.cvm.qgs_port,
+        product: product_config(&cfg.cvm.product),
+        virtfs_security_model: Some("none".to_string()),
         hotplug_off: cfg.cvm.qemu_hotplug_off,
         image: Some(manifest.image.clone()),
     })?;
     // For backward compatibility
     config["spec_version"] = serde_json::Value::from(1);
     Ok(config)
+}
+
+fn product_config(product: &crate::config::ProductConfig) -> dstack_types::SmbiosConfig {
+    dstack_types::SmbiosConfig {
+        bios_vendor: product.bios_vendor.clone(),
+        bios_version: product.bios_version.clone(),
+        bios_date: product.bios_date.clone(),
+        bios_release: product.bios_release.clone(),
+        sys_vendor: product.sys_vendor.clone(),
+        product_name: product.product_name.clone(),
+        product_version: product.product_version.clone(),
+        product_serial: product.product_serial.clone(),
+        product_uuid: product.product_uuid.clone(),
+        product_family: product.product_family.clone(),
+        product_sku: product.product_sku.clone(),
+        board_vendor: product.board_vendor.clone(),
+        board_name: product.board_name.clone(),
+        board_version: product.board_version.clone(),
+        board_serial: product.board_serial.clone(),
+        board_asset_tag: product.board_asset_tag.clone(),
+        chassis_vendor: product.chassis_vendor.clone(),
+        chassis_version: product.chassis_version.clone(),
+        chassis_serial: product.chassis_serial.clone(),
+        chassis_asset_tag: product.chassis_asset_tag.clone(),
+    }
 }
 
 fn paginate<T>(items: Vec<T>, page: u32, page_size: u32) -> impl Iterator<Item = T> {

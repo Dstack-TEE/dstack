@@ -567,7 +567,7 @@ impl VmConfig {
                     "off"
                 };
                 command.arg("-virtfs").arg(format!(
-                    "local,path={},mount_tag=host-shared,readonly={ro},security_model=mapped,id=virtfs0",
+                    "local,path={},mount_tag=host-shared,readonly={ro},security_model=none,id=virtfs0",
                     shared_dir.display(),
                 ));
             }

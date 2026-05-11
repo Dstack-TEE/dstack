@@ -9,7 +9,7 @@ use anyhow::{bail, Context, Result};
 use log::debug;
 use scale::Decode;
 
-use crate::Machine;
+use crate::{Machine, SmbiosConfig};
 
 const LDR_LENGTH: usize = 4096;
 const FIXED_STRING_LEN: usize = 56;
@@ -19,6 +19,42 @@ pub struct Tables {
     pub tables: Vec<u8>,
     pub rsdp: Vec<u8>,
     pub loader: Vec<u8>,
+}
+
+fn cfg_if(ty: &mut Vec<String>, name: &str, v: &Option<String>) {
+    if let Some(v) = v {
+        ty.push(format!("{name}={v}"));
+    }
+}
+
+fn append_smbios(cmd: &mut std::process::Command, smbios: &SmbiosConfig) {
+    let mut types: [Vec<String>; 4] = Default::default();
+    cfg_if(&mut types[0], "vendor", &smbios.bios_vendor);
+    cfg_if(&mut types[0], "version", &smbios.bios_version);
+    cfg_if(&mut types[0], "date", &smbios.bios_date);
+    cfg_if(&mut types[0], "release", &smbios.bios_release);
+    cfg_if(&mut types[1], "manufacturer", &smbios.sys_vendor);
+    cfg_if(&mut types[1], "product", &smbios.product_name);
+    cfg_if(&mut types[1], "version", &smbios.product_version);
+    cfg_if(&mut types[1], "serial", &smbios.product_serial);
+    cfg_if(&mut types[1], "uuid", &smbios.product_uuid);
+    cfg_if(&mut types[1], "family", &smbios.product_family);
+    cfg_if(&mut types[1], "sku", &smbios.product_sku);
+    cfg_if(&mut types[2], "manufacturer", &smbios.board_vendor);
+    cfg_if(&mut types[2], "product", &smbios.board_name);
+    cfg_if(&mut types[2], "version", &smbios.board_version);
+    cfg_if(&mut types[2], "serial", &smbios.board_serial);
+    cfg_if(&mut types[2], "asset", &smbios.board_asset_tag);
+    cfg_if(&mut types[3], "manufacturer", &smbios.chassis_vendor);
+    cfg_if(&mut types[3], "version", &smbios.chassis_version);
+    cfg_if(&mut types[3], "serial", &smbios.chassis_serial);
+    cfg_if(&mut types[3], "asset", &smbios.chassis_asset_tag);
+
+    for (i, t) in types.iter().enumerate() {
+        if !t.is_empty() {
+            cmd.arg("-smbios").arg(format!("type={i},{}", t.join(",")));
+        }
+    }
 }
 
 impl Machine<'_> {
@@ -61,18 +97,24 @@ impl Machine<'_> {
             "virtio-net-pci,netdev=net0",
             "-object",
             "tdx-guest,id=tdx",
-            "-device",
-            "vhost-vsock-pci,guest-cid=3",
         ]);
+        append_smbios(&mut cmd, &self.smbios);
+        cmd.args(["-device", "vhost-vsock-pci,guest-cid=3"]);
 
         // Configure shared files delivery: either via disk or 9p
         match self.host_share_mode.as_str() {
             "" | "9p" => {
                 // Use 9p virtfs (default)
+                let security_model = self.virtfs_security_model.as_str();
+                let security_model = if security_model.is_empty() {
+                    "none"
+                } else {
+                    security_model
+                };
                 cmd.args([
                 "-virtfs",
                 &format!(
-                    "local,path={shared_dir},mount_tag=host-shared,readonly=on,security_model=none,id=virtfs0",
+                    "local,path={shared_dir},mount_tag=host-shared,readonly=on,security_model={security_model},id=virtfs0",
                 ),
             ]);
             }

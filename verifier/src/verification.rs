@@ -271,6 +271,13 @@ impl CvmVerifier {
             .num_gpus(vm_config.num_gpus)
             .num_nvswitches(vm_config.num_nvswitches)
             .host_share_mode(vm_config.host_share_mode.clone())
+            .smbios(smbios_config(&vm_config.product))
+            .virtfs_security_model(
+                vm_config
+                    .virtfs_security_model
+                    .clone()
+                    .unwrap_or_else(|| "none".to_string()),
+            )
             .build()
             .measure_with_logs()
             .context("Failed to compute expected MRs")?;
@@ -746,6 +753,31 @@ impl CvmVerifier {
         fs_err::rename(extracted_dir, dst_dir)
             .context("Failed to move extracted files to destination directory")?;
         Ok(())
+    }
+}
+
+fn smbios_config(product: &dstack_types::SmbiosConfig) -> dstack_mr::SmbiosConfig {
+    dstack_mr::SmbiosConfig {
+        bios_vendor: product.bios_vendor.clone(),
+        bios_version: product.bios_version.clone(),
+        bios_date: product.bios_date.clone(),
+        bios_release: product.bios_release.clone(),
+        sys_vendor: product.sys_vendor.clone(),
+        product_name: product.product_name.clone(),
+        product_version: product.product_version.clone(),
+        product_serial: product.product_serial.clone(),
+        product_uuid: product.product_uuid.clone(),
+        product_family: product.product_family.clone(),
+        product_sku: product.product_sku.clone(),
+        board_vendor: product.board_vendor.clone(),
+        board_name: product.board_name.clone(),
+        board_version: product.board_version.clone(),
+        board_serial: product.board_serial.clone(),
+        board_asset_tag: product.board_asset_tag.clone(),
+        chassis_vendor: product.chassis_vendor.clone(),
+        chassis_version: product.chassis_version.clone(),
+        chassis_serial: product.chassis_serial.clone(),
+        chassis_asset_tag: product.chassis_asset_tag.clone(),
     }
 }
 

@@ -5,7 +5,7 @@
 use serde::{Deserialize, Serialize};
 use serde_human_bytes as hex_bytes;
 
-pub use machine::{Machine, TdxMeasurementDetails};
+pub use machine::{Machine, SmbiosConfig, TdxMeasurementDetails};
 
 use util::{measure_log, measure_sha384, utf16_encode};
 

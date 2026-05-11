@@ -11,6 +11,30 @@ use anyhow::{bail, Context, Result};
 use fs_err as fs;
 use log::debug;
 
+#[derive(Debug, Clone, Default)]
+pub struct SmbiosConfig {
+    pub bios_vendor: Option<String>,
+    pub bios_version: Option<String>,
+    pub bios_date: Option<String>,
+    pub bios_release: Option<String>,
+    pub sys_vendor: Option<String>,
+    pub product_name: Option<String>,
+    pub product_version: Option<String>,
+    pub product_serial: Option<String>,
+    pub product_uuid: Option<String>,
+    pub product_family: Option<String>,
+    pub product_sku: Option<String>,
+    pub board_vendor: Option<String>,
+    pub board_name: Option<String>,
+    pub board_version: Option<String>,
+    pub board_serial: Option<String>,
+    pub board_asset_tag: Option<String>,
+    pub chassis_vendor: Option<String>,
+    pub chassis_version: Option<String>,
+    pub chassis_serial: Option<String>,
+    pub chassis_asset_tag: Option<String>,
+}
+
 #[derive(Debug, bon::Builder)]
 pub struct Machine<'a> {
     pub cpu_count: u32,
@@ -32,6 +56,10 @@ pub struct Machine<'a> {
     pub root_verity: bool,
     #[builder(default)]
     pub host_share_mode: String,
+    #[builder(default)]
+    pub smbios: SmbiosConfig,
+    #[builder(default)]
+    pub virtfs_security_model: String,
 }
 
 fn parse_version_tuple(v: &str) -> Result<(u32, u32, u32)> {

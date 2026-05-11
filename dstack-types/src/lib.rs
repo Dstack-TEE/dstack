@@ -196,6 +196,42 @@ pub struct VmConfig {
     /// If false (default), shared files are provided via 9p virtfs
     #[serde(default)]
     pub host_share_mode: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub qgs_port: Option<u32>,
+    #[serde(default, skip_serializing_if = "SmbiosConfig::is_empty")]
+    pub product: SmbiosConfig,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub virtfs_security_model: Option<String>,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct SmbiosConfig {
+    pub bios_vendor: Option<String>,
+    pub bios_version: Option<String>,
+    pub bios_date: Option<String>,
+    pub bios_release: Option<String>,
+    pub sys_vendor: Option<String>,
+    pub product_name: Option<String>,
+    pub product_version: Option<String>,
+    pub product_serial: Option<String>,
+    pub product_uuid: Option<String>,
+    pub product_family: Option<String>,
+    pub product_sku: Option<String>,
+    pub board_vendor: Option<String>,
+    pub board_name: Option<String>,
+    pub board_version: Option<String>,
+    pub board_serial: Option<String>,
+    pub board_asset_tag: Option<String>,
+    pub chassis_vendor: Option<String>,
+    pub chassis_version: Option<String>,
+    pub chassis_serial: Option<String>,
+    pub chassis_asset_tag: Option<String>,
+}
+
+impl SmbiosConfig {
+    pub fn is_empty(&self) -> bool {
+        self == &Self::default()
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
