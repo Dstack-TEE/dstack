@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 # SPDX-FileCopyrightText: 2024-2025 Phala Network <dstack@phala.network>
 #
 # SPDX-License-Identifier: Apache-2.0
@@ -162,7 +162,8 @@ test_certificates_match() {
 
 test_certificate_from_pebble() {
     local sni="$1"
-    local proxy=$(echo "$GATEWAY_PROXIES" | cut -d' ' -f1)
+    local proxy
+    proxy=$(echo "$GATEWAY_PROXIES" | cut -d' ' -f1)
     get_cert_issuer "$proxy" "$sni" | grep -qi "pebble"
 }
 
@@ -287,9 +288,10 @@ main() {
 
     # Phase 5: Certificate issuance
     log_phase 5 "Certificate issuance"
-    local first_domain=$(echo "$CERT_DOMAINS" | cut -d' ' -f1)
-    local first_sni=$(get_test_sni "$first_domain")
-    local first_proxy=$(echo "$GATEWAY_PROXIES" | cut -d' ' -f1)
+    local first_domain first_sni first_proxy
+    first_domain=$(echo "$CERT_DOMAINS" | cut -d' ' -f1)
+    first_sni=$(get_test_sni "$first_domain")
+    first_proxy=$(echo "$GATEWAY_PROXIES" | cut -d' ' -f1)
 
     log_info "Waiting for certificates (up to 120s)..."
     local waited=0
@@ -303,8 +305,9 @@ main() {
         log_info "Waiting... (${waited}s)"
     done
 
+    local sni wildcard
     for domain in $CERT_DOMAINS; do
-        local sni=$(get_test_sni "$domain")
+        sni=$(get_test_sni "$domain")
         run_test "Certificate issued for $domain" \
             "$(test_certificate_issued "$first_proxy" "$sni"; echo $?)"
     done
@@ -315,7 +318,7 @@ main() {
     # Phase 6: Certificate consistency
     log_phase 6 "Certificate consistency"
     for domain in $CERT_DOMAINS; do
-        local sni=$(get_test_sni "$domain")
+        sni=$(get_test_sni "$domain")
         run_test "All gateways have same cert for $domain" \
             "$(test_certificates_match "$sni"; echo $?)"
         run_test "Cert for $domain issued by Pebble" \
@@ -325,17 +328,18 @@ main() {
     # Phase 7: SNI-based selection
     log_phase 7 "SNI-based certificate selection"
     for domain in $CERT_DOMAINS; do
-        local sni=$(get_test_sni "$domain")
-        local wildcard=$(get_wildcard_domain "$domain")
+        sni=$(get_test_sni "$domain")
+        wildcard=$(get_wildcard_domain "$domain")
         run_test "SNI $sni returns $wildcard cert" \
             "$(test_sni_cert_selection "$first_proxy" "$sni" "$wildcard"; echo $?)"
     done
 
     # Phase 8: Proxy TLS health
     log_phase 8 "Proxy TLS health endpoint"
+    local i
     for domain in $CERT_DOMAINS; do
-        local sni=$(get_test_sni "$domain")
-        local i=1
+        sni=$(get_test_sni "$domain")
+        i=1
         for proxy in $GATEWAY_PROXIES; do
             run_test "Gateway $i TLS health ($sni)" \
                 "$(test_proxy_tls_health "$proxy" "$sni"; echo $?)"
@@ -345,7 +349,8 @@ main() {
 
     # Phase 9: DNS records (informational)
     log_phase 9 "DNS-01 challenge records"
-    local records=$(curl -sf "${MOCK_CF_API}/api/records" 2>/dev/null || echo "")
+    local records
+    records=$(curl -sf "${MOCK_CF_API}/api/records" 2>/dev/null || echo "")
     if echo "$records" | grep -q "TXT"; then
         log_success "DNS TXT records found"
     else
