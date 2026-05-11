@@ -22,6 +22,10 @@ GATEWAY_PROXIES="gateway-1:9014 gateway-2:9014 gateway-3:9014"
 GATEWAY_DEBUG_URLS="http://gateway-1:9015 http://gateway-2:9015 http://gateway-3:9015"
 GATEWAY_ADMIN="http://gateway-1:9016"
 
+# Must match `admin_token` in configs/gateway-*.toml
+ADMIN_TOKEN="e2e-admin-token"
+ADMIN_AUTH_HEADER="Authorization: Bearer ${ADMIN_TOKEN}"
+
 # External services
 MOCK_CF_API="http://mock-cf-dns-api:8080"
 PEBBLE_DIR="http://pebble:14000/dir"
@@ -183,6 +187,7 @@ setup_certbot_config() {
     # Set ACME URL
     log_info "Setting ACME URL: ${ACME_URL}"
     if ! curl -sf -X POST "${GATEWAY_ADMIN}/prpc/Admin.SetCertbotConfig" \
+        -H "${ADMIN_AUTH_HEADER}" \
         -H "Content-Type: application/json" \
         -d '{"acme_url": "'"${ACME_URL}"'"}' > /dev/null; then
         log_error "Failed to set certbot config"
@@ -192,6 +197,7 @@ setup_certbot_config() {
     # Create DNS credential
     log_info "Creating DNS credential..."
     if ! curl -sf -X POST "${GATEWAY_ADMIN}/prpc/Admin.CreateDnsCredential" \
+        -H "${ADMIN_AUTH_HEADER}" \
         -H "Content-Type: application/json" \
         -d '{
             "name": "test-cloudflare",
@@ -210,17 +216,44 @@ setup_certbot_config() {
     for domain in $CERT_DOMAINS; do
         log_info "Adding domain: $domain"
         curl -sf -X POST "${GATEWAY_ADMIN}/prpc/Admin.AddZtDomain" \
+            -H "${ADMIN_AUTH_HEADER}" \
             -H "Content-Type: application/json" \
             -d '{"domain": "'"${domain}"'"}' > /dev/null || true
 
         log_info "Triggering renewal for: $domain"
         curl -sf -X POST "${GATEWAY_ADMIN}/prpc/Admin.RenewZtDomainCert" \
+            -H "${ADMIN_AUTH_HEADER}" \
             -H "Content-Type: application/json" \
             -d '{"domain": "'"${domain}"'", "force": true}' > /dev/null || \
             log_warn "Renewal request failed for $domain (may retry)"
     done
 
     return 0
+}
+
+# Returns 0 if HTTP status code from $1 args equals $2.
+http_status_eq() {
+    local expected="$1"
+    shift
+    local actual
+    actual=$(curl -s -o /dev/null -w '%{http_code}' "$@")
+    [ "$actual" = "$expected" ]
+}
+
+# Returns 0 if all three admin auth checks pass: missing 401, wrong 401, right 200.
+test_admin_auth() {
+    log_info "checking admin auth on ${GATEWAY_ADMIN}"
+    # Missing token → 401
+    http_status_eq 401 "${GATEWAY_ADMIN}/prpc/Admin.Status" \
+        || { log_error "no-token request did not return 401"; return 1; }
+    # Wrong token → 401
+    http_status_eq 401 "${GATEWAY_ADMIN}/prpc/Admin.Status" \
+        -H "Authorization: Bearer wrong-token" \
+        || { log_error "wrong-token request did not return 401"; return 1; }
+    # Correct token → 200
+    http_status_eq 200 "${GATEWAY_ADMIN}/prpc/Admin.Status" \
+        -H "${ADMIN_AUTH_HEADER}" \
+        || { log_error "valid-token request did not return 200"; return 1; }
 }
 
 # ==================== Main ====================
@@ -241,14 +274,19 @@ main() {
         i=$((i + 1))
     done
 
-    # Phase 3: Configure certbot
-    log_phase 3 "Configure certbot"
+    # Phase 3: Admin auth gating
+    log_phase 3 "Admin token auth"
+    run_test "Admin endpoint accepts valid token and rejects missing/wrong" \
+        "$(test_admin_auth; echo $?)"
+
+    # Phase 4: Configure certbot
+    log_phase 4 "Configure certbot"
     if ! setup_certbot_config; then
         log_error "Failed to setup certbot configuration"
     fi
 
-    # Phase 4: Certificate issuance
-    log_phase 4 "Certificate issuance"
+    # Phase 5: Certificate issuance
+    log_phase 5 "Certificate issuance"
     local first_domain=$(echo "$CERT_DOMAINS" | cut -d' ' -f1)
     local first_sni=$(get_test_sni "$first_domain")
     local first_proxy=$(echo "$GATEWAY_PROXIES" | cut -d' ' -f1)
@@ -274,8 +312,8 @@ main() {
     log_info "Waiting 20s for cluster sync..."
     sleep 20
 
-    # Phase 5: Certificate consistency
-    log_phase 5 "Certificate consistency"
+    # Phase 6: Certificate consistency
+    log_phase 6 "Certificate consistency"
     for domain in $CERT_DOMAINS; do
         local sni=$(get_test_sni "$domain")
         run_test "All gateways have same cert for $domain" \
@@ -284,8 +322,8 @@ main() {
             "$(test_certificate_from_pebble "$sni"; echo $?)"
     done
 
-    # Phase 6: SNI-based selection
-    log_phase 6 "SNI-based certificate selection"
+    # Phase 7: SNI-based selection
+    log_phase 7 "SNI-based certificate selection"
     for domain in $CERT_DOMAINS; do
         local sni=$(get_test_sni "$domain")
         local wildcard=$(get_wildcard_domain "$domain")
@@ -293,8 +331,8 @@ main() {
             "$(test_sni_cert_selection "$first_proxy" "$sni" "$wildcard"; echo $?)"
     done
 
-    # Phase 7: Proxy TLS health
-    log_phase 7 "Proxy TLS health endpoint"
+    # Phase 8: Proxy TLS health
+    log_phase 8 "Proxy TLS health endpoint"
     for domain in $CERT_DOMAINS; do
         local sni=$(get_test_sni "$domain")
         local i=1
@@ -305,8 +343,8 @@ main() {
         done
     done
 
-    # Phase 8: DNS records (informational)
-    log_phase 8 "DNS-01 challenge records"
+    # Phase 9: DNS records (informational)
+    log_phase 9 "DNS-01 challenge records"
     local records=$(curl -sf "${MOCK_CF_API}/api/records" 2>/dev/null || echo "")
     if echo "$records" | grep -q "TXT"; then
         log_success "DNS TXT records found"

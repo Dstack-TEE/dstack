@@ -19,7 +19,7 @@ rpc_domain = "gateway-1"
 enabled = true
 port = 9016
 address = "0.0.0.0"
-insecure_no_auth = true
+admin_token = "e2e-admin-token"
 
 [core.debug]
 insecure_enable_debug_rpc = true
