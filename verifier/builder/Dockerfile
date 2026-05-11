@@ -30,12 +30,10 @@ RUN rustup target add x86_64-unknown-linux-musl
 RUN cd dstack && cargo build --release -p dstack-verifier --target x86_64-unknown-linux-musl
 RUN echo "${DSTACK_REV}" > /build/.GIT_REV
 
-FROM debian:bookworm@sha256:0d8498a0e9e6a60011df39aab78534cfe940785e7c59d19dfae1eb53ea59babe AS acpi-builder
+FROM debian:bookworm@sha256:0d8498a0e9e6a60011df39aab78534cfe940785e7c59d19dfae1eb53ea59babe AS acpi-builder-base
 COPY --from=build-shared pin-packages.sh config-qemu.sh /build/
 COPY builder/shared/qemu-pinned-packages.txt /build/
 WORKDIR /build
-ARG QEMU_8_REV=d98440811192c08eafc07c7af110593c6b3758ff
-ARG QEMU_9_REV=dbcec07c0854bf873d346a09e87e4c993ccf2633
 RUN ./pin-packages.sh ./qemu-pinned-packages.txt && \
     apt-get update && \
     apt-get install -y --no-install-recommends \
@@ -51,6 +49,9 @@ RUN ./pin-packages.sh ./qemu-pinned-packages.txt && \
     flex \
     bison && \
     rm -rf /var/lib/apt/lists/* /var/log/* /var/cache/ldconfig/aux-cache
+
+FROM acpi-builder-base AS acpi-builder-8
+ARG QEMU_8_REV=d98440811192c08eafc07c7af110593c6b3758ff
 RUN git clone https://github.com/kvinwang/qemu-tdx.git --depth 1 --branch passthrough-dump-acpi --single-branch qemu-tdx-8 && \
     cd qemu-tdx-8 && git fetch --depth 1 origin ${QEMU_8_REV} && \
     git checkout ${QEMU_8_REV} && \
@@ -65,6 +66,9 @@ RUN git clone https://github.com/kvinwang/qemu-tdx.git --depth 1 --branch passth
     install -m 644 pc-bios/kvmvapic.bin /usr/local/share/qemu-8.2.2/ && \
     install -m 644 pc-bios/linuxboot_dma.bin /usr/local/share/qemu-8.2.2/ && \
     cd .. && rm -rf qemu-tdx-8
+
+FROM acpi-builder-base AS acpi-builder-9
+ARG QEMU_9_REV=dbcec07c0854bf873d346a09e87e4c993ccf2633
 RUN git clone https://github.com/kvinwang/qemu-tdx.git --depth 1 --branch dstack-qemu-9.2.1 --single-branch qemu-tdx-9 && \
     cd qemu-tdx-9 && git fetch --depth 1 origin ${QEMU_9_REV} && \
     git checkout ${QEMU_9_REV} && \
@@ -96,11 +100,11 @@ RUN ./pin-packages.sh ./pinned-packages.txt && \
     && rm -rf /var/lib/apt/lists/* /var/log/* /var/cache/ldconfig/aux-cache
 COPY --from=verifier-builder /build/dstack/target/x86_64-unknown-linux-musl/release/dstack-verifier /usr/local/bin/dstack-verifier
 COPY --from=verifier-builder /build/.GIT_REV /etc/
-COPY --from=acpi-builder /usr/local/bin/dstack-acpi-tables-8.2.2 /usr/local/bin/dstack-acpi-tables-8.2.2
-COPY --from=acpi-builder /usr/local/bin/dstack-acpi-tables-9.2.1 /usr/local/bin/dstack-acpi-tables-9.2.1
+COPY --from=acpi-builder-8 /usr/local/bin/dstack-acpi-tables-8.2.2 /usr/local/bin/dstack-acpi-tables-8.2.2
+COPY --from=acpi-builder-9 /usr/local/bin/dstack-acpi-tables-9.2.1 /usr/local/bin/dstack-acpi-tables-9.2.1
 RUN ln -sf dstack-acpi-tables-9.2.1 /usr/local/bin/dstack-acpi-tables
-COPY --from=acpi-builder /usr/local/share/qemu-8.2.2 /usr/local/share/qemu-8.2.2
-COPY --from=acpi-builder /usr/local/share/qemu-9.2.1 /usr/local/share/qemu-9.2.1
+COPY --from=acpi-builder-8 /usr/local/share/qemu-8.2.2 /usr/local/share/qemu-8.2.2
+COPY --from=acpi-builder-9 /usr/local/share/qemu-9.2.1 /usr/local/share/qemu-9.2.1
 RUN ln -sfn qemu-9.2.1 /usr/local/share/qemu
 RUN mkdir -p /etc/dstack
 COPY dstack-verifier.toml /etc/dstack/dstack-verifier.toml
