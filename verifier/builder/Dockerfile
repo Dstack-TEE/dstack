@@ -86,6 +86,13 @@ RUN git clone https://github.com/kvinwang/qemu-tdx.git --depth 1 --branch dstack
     ln -sfn qemu-9.2.1 /usr/local/share/qemu && \
     cd .. && rm -rf qemu-tdx-9
 
+FROM acpi-builder-9 AS acpi-builder
+COPY --from=acpi-builder-8 /usr/local/bin/dstack-acpi-tables-8.2.2 /usr/local/bin/dstack-acpi-tables-8.2.2
+COPY --from=acpi-builder-8 /usr/local/share/qemu-8.2.2 /usr/local/share/qemu-8.2.2
+RUN test -x /usr/local/bin/dstack-acpi-tables-8.2.2 && \
+    test -x /usr/local/bin/dstack-acpi-tables-9.2.1 && \
+    test -x /usr/local/bin/dstack-acpi-tables
+
 FROM debian:bookworm@sha256:0d8498a0e9e6a60011df39aab78534cfe940785e7c59d19dfae1eb53ea59babe
 COPY --from=build-shared pin-packages.sh /build/
 COPY builder/shared/pinned-packages.txt /build/
@@ -101,11 +108,11 @@ RUN ./pin-packages.sh ./pinned-packages.txt && \
     && rm -rf /var/lib/apt/lists/* /var/log/* /var/cache/ldconfig/aux-cache
 COPY --from=verifier-builder /build/dstack/target/x86_64-unknown-linux-musl/release/dstack-verifier /usr/local/bin/dstack-verifier
 COPY --from=verifier-builder /build/.GIT_REV /etc/
-COPY --from=acpi-builder-8 /usr/local/bin/dstack-acpi-tables-8.2.2 /usr/local/bin/dstack-acpi-tables-8.2.2
-COPY --from=acpi-builder-9 /usr/local/bin/dstack-acpi-tables-9.2.1 /usr/local/bin/dstack-acpi-tables-9.2.1
+COPY --from=acpi-builder /usr/local/bin/dstack-acpi-tables-8.2.2 /usr/local/bin/dstack-acpi-tables-8.2.2
+COPY --from=acpi-builder /usr/local/bin/dstack-acpi-tables-9.2.1 /usr/local/bin/dstack-acpi-tables-9.2.1
 RUN ln -sf dstack-acpi-tables-9.2.1 /usr/local/bin/dstack-acpi-tables
-COPY --from=acpi-builder-8 /usr/local/share/qemu-8.2.2 /usr/local/share/qemu-8.2.2
-COPY --from=acpi-builder-9 /usr/local/share/qemu-9.2.1 /usr/local/share/qemu-9.2.1
+COPY --from=acpi-builder /usr/local/share/qemu-8.2.2 /usr/local/share/qemu-8.2.2
+COPY --from=acpi-builder /usr/local/share/qemu-9.2.1 /usr/local/share/qemu-9.2.1
 RUN ln -sfn qemu-9.2.1 /usr/local/share/qemu
 RUN test -x /usr/local/bin/dstack-acpi-tables-8.2.2 && \
     test -x /usr/local/bin/dstack-acpi-tables-9.2.1 && \

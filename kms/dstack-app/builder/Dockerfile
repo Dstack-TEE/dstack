@@ -82,7 +82,7 @@ RUN git clone https://github.com/kvinwang/qemu-tdx.git --depth 1 --branch dstack
     ln -sfn qemu-9.2.1 /usr/local/share/qemu && \
     cd .. && rm -rf qemu-tdx-9
 
-FROM acpi-builder-9
+FROM acpi-builder-9 AS acpi-builder
 COPY --from=acpi-builder-8 /usr/local/bin/dstack-acpi-tables-8.2.2 /usr/local/bin/dstack-acpi-tables-8.2.2
 COPY --from=acpi-builder-8 /usr/local/share/qemu-8.2.2 /usr/local/share/qemu-8.2.2
 RUN test -x /usr/local/bin/dstack-acpi-tables-8.2.2 && \
