@@ -24,6 +24,10 @@ timeout = "5s"
 [core.admin]
 enabled = false
 address = "127.0.0.1:8011"
+# Shared secret required by every admin endpoint (RPC + dashboard) when
+# non-empty. Clients send it via the `X-Admin-Token` header (or `?token=...`
+# for the dashboard / browser links). Empty disables auth.
+admin_token = ""
 
 [core.debug]
 insecure_enable_debug_rpc = false

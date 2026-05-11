@@ -286,6 +286,11 @@ impl Config {
 #[derive(Debug, Clone, Deserialize)]
 pub struct AdminConfig {
     pub enabled: bool,
+    /// Shared secret required to call any admin endpoint (RPC + dashboard).
+    /// Empty disables authentication; operators are warned at startup so the
+    /// historical "network-isolation only" deployments keep working.
+    #[serde(default)]
+    pub admin_token: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]

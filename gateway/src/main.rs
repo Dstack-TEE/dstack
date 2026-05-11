@@ -24,6 +24,7 @@ use main_service::{Proxy, ProxyOptions, RpcHandler};
 
 use crate::debug_service::DebugRpcHandler;
 
+mod admin_auth;
 mod admin_service;
 mod cert_store;
 mod config;
@@ -276,6 +277,7 @@ async fn main() -> Result<()> {
     let proxy_config = config.proxy.clone();
     let pccs_url = config.pccs_url.clone();
     let admin_enabled = config.admin.enabled;
+    let admin_token = config.admin.admin_token.clone();
     let debug_config = config.debug.clone();
     let state = Proxy::new(ProxyOptions {
         config,
@@ -321,7 +323,16 @@ async fn main() -> Result<()> {
     let debug_state = state;
     let admin_srv = async move {
         if admin_enabled {
+            if admin_token.is_empty() {
+                tracing::warn!(
+                    "admin server enabled without admin_token; admin API is exposed without authentication"
+                );
+            } else {
+                tracing::info!("admin server authentication enabled");
+            }
             rocket::custom(admin_figment)
+                .attach(admin_auth::AdminAuthFairing::new(admin_token))
+                .mount("/", admin_auth::routes())
                 .mount("/", web_routes::routes())
                 .mount("/", prpc!(Proxy, AdminRpcHandler, trim: "Admin."))
                 .mount("/prpc", prpc!(Proxy, AdminRpcHandler, trim: "Admin."))
