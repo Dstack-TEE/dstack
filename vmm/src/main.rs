@@ -19,7 +19,7 @@ use rocket::{
 use rocket_apitoken::ApiToken;
 use rocket_vsock_listener::VsockListener;
 use supervisor_client::SupervisorClient;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 mod app;
 mod config;
@@ -195,15 +195,20 @@ async fn main() -> Result<()> {
             None => endpoint.to_string(),
         }
     };
-    let _discovery_reg = discovery::DiscoveryRegistration::register(
+    let _discovery_reg = match discovery::DiscoveryRegistration::register(
         &listen_address,
         args.config.as_deref(),
         &config.image.path,
         &config.run_path,
         &config.node_name,
         &app_version(),
-    )
-    .context("failed to register VMM instance for discovery")?;
+    ) {
+        Ok(registration) => Some(registration),
+        Err(err) => {
+            warn!("failed to register VMM instance for discovery: {err:#}");
+            None
+        }
+    };
 
     let api_auth = ApiToken::new(config.auth.tokens.clone(), config.auth.enabled);
     let supervisor = {
