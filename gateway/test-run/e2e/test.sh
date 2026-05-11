@@ -79,27 +79,6 @@ run_test() {
     fi
 }
 
-# Wait for HTTP service to respond
-wait_for_service() {
-    local url="$1"
-    local name="$2"
-    local max_wait="${3:-60}"
-    local waited=0
-
-    log_info "Waiting for $name..."
-    while [ $waited -lt $max_wait ]; do
-        if curl -sf "$url" > /dev/null 2>&1; then
-            log_info "$name is ready"
-            return 0
-        fi
-        sleep 2
-        waited=$((waited + 2))
-    done
-
-    log_error "$name failed to become ready within ${max_wait}s"
-    return 1
-}
-
 # ==================== Domain Helpers ====================
 
 # Convert base domain to test SNI: test0.local -> gateway.test0.local
