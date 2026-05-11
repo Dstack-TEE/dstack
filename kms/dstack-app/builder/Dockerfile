@@ -85,6 +85,9 @@ RUN git clone https://github.com/kvinwang/qemu-tdx.git --depth 1 --branch dstack
 FROM acpi-builder-9
 COPY --from=acpi-builder-8 /usr/local/bin/dstack-acpi-tables-8.2.2 /usr/local/bin/dstack-acpi-tables-8.2.2
 COPY --from=acpi-builder-8 /usr/local/share/qemu-8.2.2 /usr/local/share/qemu-8.2.2
+RUN test -x /usr/local/bin/dstack-acpi-tables-8.2.2 && \
+    test -x /usr/local/bin/dstack-acpi-tables-9.2.1 && \
+    test -x /usr/local/bin/dstack-acpi-tables
 COPY --from=kms-builder /build/dstack/target/x86_64-unknown-linux-musl/release/dstack-kms /usr/local/bin/dstack-kms
 COPY --from=kms-builder /build/.GIT_REV /etc/
 CMD ["dstack-kms"]

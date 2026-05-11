@@ -106,6 +106,9 @@ RUN ln -sf dstack-acpi-tables-9.2.1 /usr/local/bin/dstack-acpi-tables
 COPY --from=acpi-builder-8 /usr/local/share/qemu-8.2.2 /usr/local/share/qemu-8.2.2
 COPY --from=acpi-builder-9 /usr/local/share/qemu-9.2.1 /usr/local/share/qemu-9.2.1
 RUN ln -sfn qemu-9.2.1 /usr/local/share/qemu
+RUN test -x /usr/local/bin/dstack-acpi-tables-8.2.2 && \
+    test -x /usr/local/bin/dstack-acpi-tables-9.2.1 && \
+    test -x /usr/local/bin/dstack-acpi-tables
 RUN mkdir -p /etc/dstack
 COPY dstack-verifier.toml /etc/dstack/dstack-verifier.toml
 WORKDIR /var/lib/dstack-verifier

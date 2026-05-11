@@ -16,9 +16,15 @@ const FIXED_STRING_LEN: usize = 56;
 
 fn acpi_tables_tool(version: (u32, u32, u32)) -> (&'static str, &'static str) {
     if version < (9, 0, 0) {
-        ("dstack-acpi-tables-8.2.2", "/usr/local/share/qemu-8.2.2")
+        (
+            "/usr/local/bin/dstack-acpi-tables-8.2.2",
+            "/usr/local/share/qemu-8.2.2",
+        )
     } else {
-        ("dstack-acpi-tables-9.2.1", "/usr/local/share/qemu-9.2.1")
+        (
+            "/usr/local/bin/dstack-acpi-tables-9.2.1",
+            "/usr/local/share/qemu-9.2.1",
+        )
     }
 }
 
@@ -237,7 +243,7 @@ impl Machine<'_> {
                 format!("{}.{}.{}", ver.0, ver.1, ver.2),
             )
             .output()
-            .context("failed to execute dstack-acpi-tables")?;
+            .with_context(|| format!("failed to execute {acpi_tables_bin}"))?;
 
         // Check if the command was successful
         if !output.status.success() {
@@ -388,11 +394,17 @@ mod tests {
     fn selects_acpi_tables_tool_by_qemu_major_version() {
         assert_eq!(
             acpi_tables_tool((8, 2, 2)),
-            ("dstack-acpi-tables-8.2.2", "/usr/local/share/qemu-8.2.2")
+            (
+                "/usr/local/bin/dstack-acpi-tables-8.2.2",
+                "/usr/local/share/qemu-8.2.2"
+            )
         );
         assert_eq!(
             acpi_tables_tool((9, 2, 1)),
-            ("dstack-acpi-tables-9.2.1", "/usr/local/share/qemu-9.2.1")
+            (
+                "/usr/local/bin/dstack-acpi-tables-9.2.1",
+                "/usr/local/share/qemu-9.2.1"
+            )
         );
     }
 }
