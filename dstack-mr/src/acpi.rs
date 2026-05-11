@@ -14,6 +14,14 @@ use crate::{Machine, SmbiosConfig};
 const LDR_LENGTH: usize = 4096;
 const FIXED_STRING_LEN: usize = 56;
 
+fn acpi_tables_tool(version: (u32, u32, u32)) -> (&'static str, &'static str) {
+    if version < (9, 0, 0) {
+        ("dstack-acpi-tables-8.2.2", "/usr/local/share/qemu-8.2.2")
+    } else {
+        ("dstack-acpi-tables-9.2.1", "/usr/local/share/qemu-9.2.1")
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Tables {
     pub tables: Vec<u8>,
@@ -68,9 +76,16 @@ impl Machine<'_> {
         let dummy_disk = "/bin/sh";
         let shared_dir = "/bin";
 
+        let vopt = self
+            .versioned_options()
+            .context("Failed to get versioned options")?;
+        let (acpi_tables_bin, qemu_data_dir) = acpi_tables_tool(vopt.version);
+
         // Prepare the command arguments
-        let mut cmd = std::process::Command::new("dstack-acpi-tables");
+        let mut cmd = std::process::Command::new(acpi_tables_bin);
         cmd.args([
+            "-L",
+            qemu_data_dir,
             "-cpu",
             "qemu64",
             "-smp",
@@ -150,10 +165,6 @@ impl Machine<'_> {
         } else {
             machine.push_str(",smm=off");
         }
-
-        let vopt = self
-            .versioned_options()
-            .context("Failed to get versioned options")?;
 
         if vopt.pic {
             machine.push_str(",pic=on");
@@ -366,6 +377,23 @@ impl Machine<'_> {
             rsdp,
             loader: ldr.buffer,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::acpi_tables_tool;
+
+    #[test]
+    fn selects_acpi_tables_tool_by_qemu_major_version() {
+        assert_eq!(
+            acpi_tables_tool((8, 2, 2)),
+            ("dstack-acpi-tables-8.2.2", "/usr/local/share/qemu-8.2.2")
+        );
+        assert_eq!(
+            acpi_tables_tool((9, 2, 1)),
+            ("dstack-acpi-tables-9.2.1", "/usr/local/share/qemu-9.2.1")
+        );
     }
 }
 

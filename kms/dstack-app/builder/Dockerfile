@@ -30,7 +30,8 @@ FROM debian:bookworm@sha256:0d8498a0e9e6a60011df39aab78534cfe940785e7c59d19dfae1
 COPY --from=build-shared /pin-packages.sh /config-qemu.sh /build/
 COPY ./shared/qemu-pinned-packages.txt /build/
 WORKDIR /build
-ARG QEMU_REV=dbcec07c0854bf873d346a09e87e4c993ccf2633
+ARG QEMU_8_REV=d98440811192c08eafc07c7af110593c6b3758ff
+ARG QEMU_9_REV=dbcec07c0854bf873d346a09e87e4c993ccf2633
 RUN ./pin-packages.sh ./qemu-pinned-packages.txt && \
     apt-get update && \
     apt-get install -y --no-install-recommends \
@@ -46,20 +47,36 @@ RUN ./pin-packages.sh ./qemu-pinned-packages.txt && \
     flex \
     bison && \
     rm -rf /var/lib/apt/lists/* /var/log/* /var/cache/ldconfig/aux-cache
-RUN git clone https://github.com/kvinwang/qemu-tdx.git --depth 1 --branch dstack-qemu-9.2.1 --single-branch && \
-    cd qemu-tdx && git fetch --depth 1 origin ${QEMU_REV} && \
-    git checkout ${QEMU_REV} && \
+RUN git clone https://github.com/kvinwang/qemu-tdx.git --depth 1 --branch passthrough-dump-acpi --single-branch qemu-tdx-8 && \
+    cd qemu-tdx-8 && git fetch --depth 1 origin ${QEMU_8_REV} && \
+    git checkout ${QEMU_8_REV} && \
     ../config-qemu.sh ./build /usr/local && \
     cd build && \
     ninja && \
     strip qemu-system-x86_64 && \
-    install -m 755 qemu-system-x86_64 /usr/local/bin/dstack-acpi-tables && \
+    install -m 755 qemu-system-x86_64 /usr/local/bin/dstack-acpi-tables-8.2.2 && \
     cd ../ && \
-    install -d /usr/local/share/qemu && \
-    install -m 644 pc-bios/efi-virtio.rom /usr/local/share/qemu/ && \
-    install -m 644 pc-bios/kvmvapic.bin /usr/local/share/qemu/ && \
-    install -m 644 pc-bios/linuxboot_dma.bin /usr/local/share/qemu/ && \
-    cd .. && rm -rf qemu-tdx
+    install -d /usr/local/share/qemu-8.2.2 && \
+    install -m 644 pc-bios/efi-virtio.rom /usr/local/share/qemu-8.2.2/ && \
+    install -m 644 pc-bios/kvmvapic.bin /usr/local/share/qemu-8.2.2/ && \
+    install -m 644 pc-bios/linuxboot_dma.bin /usr/local/share/qemu-8.2.2/ && \
+    cd .. && rm -rf qemu-tdx-8
+RUN git clone https://github.com/kvinwang/qemu-tdx.git --depth 1 --branch dstack-qemu-9.2.1 --single-branch qemu-tdx-9 && \
+    cd qemu-tdx-9 && git fetch --depth 1 origin ${QEMU_9_REV} && \
+    git checkout ${QEMU_9_REV} && \
+    ../config-qemu.sh ./build /usr/local && \
+    cd build && \
+    ninja && \
+    strip qemu-system-x86_64 && \
+    install -m 755 qemu-system-x86_64 /usr/local/bin/dstack-acpi-tables-9.2.1 && \
+    ln -sf dstack-acpi-tables-9.2.1 /usr/local/bin/dstack-acpi-tables && \
+    cd ../ && \
+    install -d /usr/local/share/qemu-9.2.1 && \
+    install -m 644 pc-bios/efi-virtio.rom /usr/local/share/qemu-9.2.1/ && \
+    install -m 644 pc-bios/kvmvapic.bin /usr/local/share/qemu-9.2.1/ && \
+    install -m 644 pc-bios/linuxboot_dma.bin /usr/local/share/qemu-9.2.1/ && \
+    ln -sfn qemu-9.2.1 /usr/local/share/qemu && \
+    cd .. && rm -rf qemu-tdx-9
 COPY --from=kms-builder /build/dstack/target/x86_64-unknown-linux-musl/release/dstack-kms /usr/local/bin/dstack-kms
 COPY --from=kms-builder /build/.GIT_REV /etc/
 CMD ["dstack-kms"]
