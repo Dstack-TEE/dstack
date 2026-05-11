@@ -67,6 +67,7 @@ libpam-runtime=1.5.2-6+deb12u1
 libpam0g:amd64=1.5.2-6+deb12u1
 libpcre2-8-0:amd64=10.42-1
 libpsl5:amd64=0.21.2-1
+libpixman-1-0:amd64=0.42.2-1
 librtmp1:amd64=2.4+20151223.gitfa8646d.1-2+b2
 libsasl2-2:amd64=2.1.28+dfsg-10
 libsasl2-modules-db:amd64=2.1.28+dfsg-10

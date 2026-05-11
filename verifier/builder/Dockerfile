@@ -96,6 +96,7 @@ RUN ./pin-packages.sh ./pinned-packages.txt && \
     ca-certificates \
     curl \
     libglib2.0-0 \
+    libpixman-1-0 \
     libslirp0 \
     && rm -rf /var/lib/apt/lists/* /var/log/* /var/cache/ldconfig/aux-cache
 COPY --from=verifier-builder /build/dstack/target/x86_64-unknown-linux-musl/release/dstack-verifier /usr/local/bin/dstack-verifier
