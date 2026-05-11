@@ -55,6 +55,11 @@ echo "WG_CLIENT_RANGE: $WG_CLIENT_RANGE"
 echo "SYNC_ENABLED: $SYNC_ENABLED"
 echo "RPC_DOMAIN: $RPC_DOMAIN"
 
+if [ -z "${DSTACK_GATEWAY_ADMIN_TOKEN:-}" ]; then
+    echo "DSTACK_GATEWAY_ADMIN_TOKEN must be set when admin API is enabled"
+    exit 1
+fi
+
 # Create gateway.toml configuration
 cat >$CONFIG_PATH <<EOF
 keep_alive = 10

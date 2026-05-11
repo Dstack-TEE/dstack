@@ -19,11 +19,12 @@ use rocket::{
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
-use admin_service::AdminRpcHandler;
 use main_service::{Proxy, ProxyOptions, RpcHandler};
 
 use crate::debug_service::DebugRpcHandler;
 
+mod admin_auth;
+mod admin_routes;
 mod admin_service;
 mod cert_store;
 mod config;
@@ -276,6 +277,7 @@ async fn main() -> Result<()> {
     let proxy_config = config.proxy.clone();
     let pccs_url = config.pccs_url.clone();
     let admin_enabled = config.admin.enabled;
+    let admin_auth = admin_auth::AdminAuth::from_config(&config.admin)?;
     let debug_config = config.debug.clone();
     let state = Proxy::new(ProxyOptions {
         config,
@@ -323,8 +325,9 @@ async fn main() -> Result<()> {
         if admin_enabled {
             rocket::custom(admin_figment)
                 .mount("/", web_routes::routes())
-                .mount("/", prpc!(Proxy, AdminRpcHandler, trim: "Admin."))
-                .mount("/prpc", prpc!(Proxy, AdminRpcHandler, trim: "Admin."))
+                .mount("/", admin_routes::routes())
+                .mount("/prpc", admin_routes::routes())
+                .manage(admin_auth)
                 .manage(admin_state)
                 .launch()
                 .await

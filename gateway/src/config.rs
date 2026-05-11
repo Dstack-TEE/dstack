@@ -286,6 +286,10 @@ impl Config {
 #[derive(Debug, Clone, Deserialize)]
 pub struct AdminConfig {
     pub enabled: bool,
+    #[serde(default)]
+    pub api_token: Option<String>,
+    #[serde(default)]
+    pub insecure_no_auth: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]

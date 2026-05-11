@@ -24,6 +24,10 @@ timeout = "5s"
 [core.admin]
 enabled = false
 address = "127.0.0.1:8011"
+# Required when admin.enabled = true, unless DSTACK_GATEWAY_ADMIN_TOKEN is set.
+api_token = ""
+# Development/testing escape hatch only. Never enable this on a reachable admin interface.
+insecure_no_auth = false
 
 [core.debug]
 insecure_enable_debug_rpc = false
