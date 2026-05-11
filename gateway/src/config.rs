@@ -287,10 +287,14 @@ impl Config {
 pub struct AdminConfig {
     pub enabled: bool,
     /// Shared secret required to call any admin endpoint (RPC + dashboard).
-    /// Empty disables authentication; operators are warned at startup so the
-    /// historical "network-isolation only" deployments keep working.
+    /// Can also be supplied via `DSTACK_GATEWAY_ADMIN_TOKEN` / `ADMIN_API_TOKEN`
+    /// env vars. Required unless `insecure_no_auth = true`.
     #[serde(default)]
     pub admin_token: String,
+    /// Disable authentication entirely. Development/testing only; never enable
+    /// on an admin interface that is reachable from the network.
+    #[serde(default)]
+    pub insecure_no_auth: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]

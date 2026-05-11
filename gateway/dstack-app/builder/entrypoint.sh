@@ -36,7 +36,12 @@ validate_env "$NODE_ID"
 validate_env "$WG_IP"
 validate_env "$WG_RESERVED_NET"
 validate_env "$WG_CLIENT_RANGE"
-validate_env "$ADMIN_TOKEN"
+validate_env "$ADMIN_API_TOKEN"
+
+if [ -z "$ADMIN_API_TOKEN" ]; then
+    echo "ADMIN_API_TOKEN must be set when admin API is enabled"
+    exit 1
+fi
 
 # Validate $NODE_ID, must be a number
 if [[ ! "$NODE_ID" =~ ^[0-9]+$ ]]; then
@@ -90,7 +95,7 @@ sync_connections_interval = "${SYNC_CONNECTIONS_INTERVAL:-30s}"
 enabled = true
 address = "${ADMIN_LISTEN_ADDR:-0.0.0.0}"
 port = ${ADMIN_LISTEN_PORT:-8001}
-admin_token = "${ADMIN_TOKEN}"
+admin_token = "${ADMIN_API_TOKEN}"
 
 [core.wg]
 public_key = "$PUBLIC_KEY"

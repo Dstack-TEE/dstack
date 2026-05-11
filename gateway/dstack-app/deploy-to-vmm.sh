@@ -95,6 +95,11 @@ WG_ADDR=0.0.0.0:9202
 # The token used to launch the App
 APP_LAUNCH_TOKEN=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | fold -w 32 | head -n 1)
 
+# Bearer token required by the gateway admin API. Used by bootstrap-cluster.sh
+# and any operator who calls the admin API. Persisted into .env so cluster
+# bootstrap can reach the API after deploy.
+ADMIN_API_TOKEN=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | fold -w 48 | head -n 1)
+
 # PROXY protocol: read v1/v2 header from inbound connections (e.g. when this
 # gateway sits behind a PP-aware L4 LB such as Cloudflare Spectrum or haproxy
 # with send-proxy). Set to "true" only if the upstream LB is configured to
@@ -117,6 +122,7 @@ required_env_vars=(
   "GATEWAY_APP_ID"
   "MY_URL"
   "APP_LAUNCH_TOKEN"
+  "ADMIN_API_TOKEN"
   "NODE_ID"
   "KMS_URL"
   # "BOOTNODE_URL"
@@ -180,6 +186,7 @@ WG_IP=$WG_IP
 WG_RESERVED_NET=$WG_RESERVED_NET
 WG_CLIENT_RANGE=$WG_CLIENT_RANGE
 APP_LAUNCH_TOKEN=$APP_LAUNCH_TOKEN
+ADMIN_API_TOKEN=$ADMIN_API_TOKEN
 RPC_DOMAIN=$RPC_DOMAIN
 NODE_ID=$NODE_ID
 PROXY_LISTEN_PORT=$PROXY_LISTEN_PORT

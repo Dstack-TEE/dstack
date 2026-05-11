@@ -17,28 +17,64 @@
 //! Rejected requests are forwarded to a sentinel route that returns HTTP 401,
 //! so all admin routes (prpc-generated and dashboard) are protected by a single
 //! attachment without modifying the route declarations.
+//!
+//! The token is only ever held in memory as its SHA-256 hash; the configured
+//! plaintext is dropped right after the fairing is constructed.
 
+use anyhow::{bail, Result};
 use rocket::{
     fairing::{Fairing, Info, Kind},
     http::{uri::Origin, Method, Status},
     Data, Request, Route,
 };
+use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
+
+use crate::config::AdminConfig;
 
 const UNAUTH_URI: &str = "/__admin_unauthorized";
 const HEADER_NAME: &str = "X-Admin-Token";
 const QUERY_PARAM: &str = "token";
+const ENV_ADMIN_TOKEN: &str = "DSTACK_GATEWAY_ADMIN_TOKEN";
+const ENV_ADMIN_TOKEN_COMPAT: &str = "ADMIN_API_TOKEN";
 
 pub struct AdminAuthFairing {
-    /// `None` means auth is disabled (empty config); any request is allowed.
-    token: Option<String>,
+    /// SHA-256 of the configured token. `None` = auth disabled (insecure mode).
+    token_hash: Option<[u8; 32]>,
 }
 
 impl AdminAuthFairing {
-    pub fn new(token: String) -> Self {
+    /// Build a fairing from a resolved plaintext token. Empty disables auth.
+    pub fn new(token: &str) -> Self {
         Self {
-            token: (!token.is_empty()).then_some(token),
+            token_hash: (!token.is_empty()).then(|| sha256(token.as_bytes())),
         }
+    }
+
+    /// Resolve a token from config + env, applying the auth policy:
+    ///   - `insecure_no_auth = true` → disabled (caller is expected to warn)
+    ///   - else require a non-empty token from `admin_token`,
+    ///     `DSTACK_GATEWAY_ADMIN_TOKEN`, or `ADMIN_API_TOKEN`.
+    pub fn from_config(config: &AdminConfig) -> Result<Self> {
+        if config.insecure_no_auth {
+            return Ok(Self { token_hash: None });
+        }
+        let token = if !config.admin_token.is_empty() {
+            config.admin_token.clone()
+        } else {
+            std::env::var(ENV_ADMIN_TOKEN)
+                .or_else(|_| std::env::var(ENV_ADMIN_TOKEN_COMPAT))
+                .unwrap_or_default()
+        };
+        let token = token.trim();
+        if token.is_empty() {
+            bail!(
+                "admin API is enabled but no admin_token is configured; \
+                 set core.admin.admin_token, {ENV_ADMIN_TOKEN}, or {ENV_ADMIN_TOKEN_COMPAT}, \
+                 or set core.admin.insecure_no_auth = true (testing only)"
+            );
+        }
+        Ok(Self::new(token))
     }
 
     fn extract_token(req: &Request<'_>) -> Option<String> {
@@ -61,6 +97,10 @@ impl AdminAuthFairing {
         }
         None
     }
+}
+
+fn sha256(bytes: &[u8]) -> [u8; 32] {
+    Sha256::digest(bytes).into()
 }
 
 /// Rebuild the request URI without the `token` query parameter, if present.
@@ -99,7 +139,7 @@ impl Fairing for AdminAuthFairing {
     }
 
     async fn on_request(&self, req: &mut Request<'_>, _: &mut Data<'_>) {
-        let Some(expected) = self.token.as_deref() else {
+        let Some(expected_hash) = self.token_hash.as_ref() else {
             return;
         };
         // Avoid infinite re-routing if the fairing fires on the sentinel itself.
@@ -107,7 +147,8 @@ impl Fairing for AdminAuthFairing {
             return;
         }
         let provided = Self::extract_token(req).unwrap_or_default();
-        let matches: bool = provided.as_bytes().ct_eq(expected.as_bytes()).into();
+        let provided_hash = sha256(provided.as_bytes());
+        let matches: bool = provided_hash.ct_eq(expected_hash).into();
         if !matches {
             if let Ok(origin) = Origin::parse_owned(UNAUTH_URI.to_string()) {
                 req.set_uri(origin);
@@ -198,7 +239,7 @@ mod tests {
 
     async fn make_client(token: &str) -> Client {
         let r = rocket::build()
-            .attach(AdminAuthFairing::new(token.to_string()))
+            .attach(AdminAuthFairing::new(token))
             .mount("/", routes())
             .mount("/", rocket::routes![protected_get, protected_post, echo]);
         Client::tracked(r).await.unwrap()
@@ -306,6 +347,86 @@ mod tests {
         assert_eq!(resp.status(), Status::Ok);
         let body = resp.into_string().await.unwrap();
         assert_eq!(body, "token=<absent> other=keep");
+    }
+
+    fn hash_of(fairing: &AdminAuthFairing) -> Option<[u8; 32]> {
+        fairing.token_hash
+    }
+
+    #[test]
+    fn from_config_disabled_when_insecure_flag_set() {
+        let cfg = AdminConfig {
+            enabled: true,
+            admin_token: String::new(),
+            insecure_no_auth: true,
+        };
+        let fairing = match AdminAuthFairing::from_config(&cfg) {
+            Ok(f) => f,
+            Err(e) => panic!("expected Ok, got err: {e}"),
+        };
+        assert!(hash_of(&fairing).is_none());
+    }
+
+    #[test]
+    fn from_config_uses_config_token() {
+        let cfg = AdminConfig {
+            enabled: true,
+            admin_token: "from-config".into(),
+            insecure_no_auth: false,
+        };
+        let fairing = match AdminAuthFairing::from_config(&cfg) {
+            Ok(f) => f,
+            Err(e) => panic!("expected Ok, got err: {e}"),
+        };
+        assert_eq!(hash_of(&fairing), Some(sha256(b"from-config")));
+    }
+
+    // Env-touching cases are combined into a single test so cargo's parallel
+    // runner doesn't race on `DSTACK_GATEWAY_ADMIN_TOKEN` / `ADMIN_API_TOKEN`.
+    #[test]
+    fn from_config_env_paths() {
+        let empty_cfg = AdminConfig {
+            enabled: true,
+            admin_token: String::new(),
+            insecure_no_auth: false,
+        };
+
+        // Baseline: no env, no config token → error.
+        unsafe {
+            std::env::remove_var(ENV_ADMIN_TOKEN);
+            std::env::remove_var(ENV_ADMIN_TOKEN_COMPAT);
+        }
+        let err = match AdminAuthFairing::from_config(&empty_cfg) {
+            Err(e) => e,
+            Ok(_) => panic!("expected error, got Ok"),
+        };
+        assert!(err.to_string().contains("no admin_token is configured"));
+
+        // Primary env var picked up.
+        unsafe {
+            std::env::set_var(ENV_ADMIN_TOKEN, "from-env");
+        }
+        let fairing = match AdminAuthFairing::from_config(&empty_cfg) {
+            Ok(f) => f,
+            Err(e) => panic!("expected Ok, got err: {e}"),
+        };
+        assert_eq!(hash_of(&fairing), Some(sha256(b"from-env")));
+        unsafe {
+            std::env::remove_var(ENV_ADMIN_TOKEN);
+        }
+
+        // Compat env var picked up when primary is absent.
+        unsafe {
+            std::env::set_var(ENV_ADMIN_TOKEN_COMPAT, "from-compat");
+        }
+        let fairing = match AdminAuthFairing::from_config(&empty_cfg) {
+            Ok(f) => f,
+            Err(e) => panic!("expected Ok, got err: {e}"),
+        };
+        assert_eq!(hash_of(&fairing), Some(sha256(b"from-compat")));
+        unsafe {
+            std::env::remove_var(ENV_ADMIN_TOKEN_COMPAT);
+        }
     }
 
     #[rocket::async_test]
