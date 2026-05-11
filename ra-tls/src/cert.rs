@@ -11,7 +11,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use fs_err as fs;
 use rcgen::{
     BasicConstraints, Certificate, CertificateParams, CustomExtension, DistinguishedName, DnType,
-    ExtendedKeyUsagePurpose, IsCa, KeyPair, KeyUsagePurpose, PublicKeyData, SanType,
+    ExtendedKeyUsagePurpose, IsCa, KeyPair, KeyUsagePurpose, PublicKeyData,
 };
 use ring::rand::SystemRandom;
 use ring::signature::{
@@ -351,7 +351,7 @@ pub struct CertRequest<'a, Key> {
 
 impl<Key> CertRequest<'_, Key> {
     fn into_cert_params(self) -> Result<CertificateParams> {
-        let mut params = CertificateParams::new(vec![])?;
+        let mut params = CertificateParams::new(self.alt_names.unwrap_or_default().to_vec())?;
         let mut dn = DistinguishedName::new();
         if let Some(org_name) = self.org_name {
             dn.push(DnType::OrganizationName, org_name);
@@ -368,13 +368,6 @@ impl<Key> CertRequest<'_, Key> {
             params
                 .extended_key_usages
                 .push(ExtendedKeyUsagePurpose::ClientAuth);
-        }
-        if let Some(alt_names) = self.alt_names {
-            for alt_name in alt_names {
-                params
-                    .subject_alt_names
-                    .push(SanType::DnsName(alt_name.clone().try_into()?));
-            }
         }
         if let Some(app_id) = self.app_id {
             add_ext(&mut params, PHALA_RATLS_APP_ID, app_id);
@@ -578,8 +571,9 @@ pub fn generate_ra_cert_with_app_id(
 mod tests {
     use super::*;
     use dstack_attest::attestation::{AttestationQuote, TdxQuote};
-    use rcgen::PKCS_ECDSA_P256_SHA256;
+    use rcgen::{SanType, PKCS_ECDSA_P256_SHA256};
     use scale::Encode;
+    use std::net::IpAddr;
 
     #[test]
     fn test_csr_signing_and_verification() {
@@ -631,6 +625,26 @@ mod tests {
 
         let signature = csr.signed_by(&key_pair).unwrap();
         assert!(csr.verify(&signature).is_err());
+    }
+
+    #[test]
+    fn test_cert_request_parses_ip_alt_names_as_ip_sans() {
+        let key_pair = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
+        let ip = "203.0.113.10".parse::<IpAddr>().unwrap();
+        let alt_names = vec!["203.0.113.10".to_string(), "test.example.com".to_string()];
+
+        let params = CertRequest::builder()
+            .key(&key_pair)
+            .subject("test.example.com")
+            .alt_names(&alt_names)
+            .build()
+            .into_cert_params()
+            .unwrap();
+
+        assert!(params.subject_alt_names.contains(&SanType::IpAddress(ip)));
+        assert!(params.subject_alt_names.iter().any(
+            |san| matches!(san, SanType::DnsName(name) if name.as_str() == "test.example.com")
+        ));
     }
 
     #[test]
