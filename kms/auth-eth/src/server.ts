@@ -59,6 +59,7 @@ export async function build(): Promise<FastifyInstance> {
     return {
       status: 'ok',
       kmsContractAddr: kmsContractAddr,
+      ethRpcUrl: rpcUrl,
       gatewayAppId: batch[0],
       chainId: batch[1],
       appAuthImplementation: batch[2], // NOTE: for backward compatibility

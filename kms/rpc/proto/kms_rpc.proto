@@ -44,7 +44,7 @@ message AppKeyResponse {
   string tproxy_app_id = 6;
   // Reverse proxy app ID from DstackKms contract.
   string gateway_app_id = 7;
-  // OS Image hash 
+  // OS Image hash
   bytes os_image_hash = 8;
 }
 
@@ -131,6 +131,8 @@ message OnboardRequest {
 }
 
 message OnboardResponse {
+  // k256 public key (secp256k1) inherited from source KMS
+  bytes k256_pubkey = 1;
 }
 
 // Attestation info needed for on-chain KMS authorization.
@@ -143,6 +145,14 @@ message AttestationInfoResponse {
   bytes os_image_hash = 3;
   // Attestation mode (e.g. "dstack-tdx", "dstack-gcp-tdx")
   string attestation_mode = 4;
+  // Custom site name for display
+  string site_name = 5;
+  // Ethereum RPC URL from auth API
+  string eth_rpc_url = 6;
+  // KMS contract address from auth API
+  string kms_contract_address = 7;
+  // Raw platform provisioning ID
+  bytes ppid = 8;
 }
 
 // The Onboard RPC service.

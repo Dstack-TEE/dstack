@@ -150,14 +150,14 @@ class EthereumBackend {
         args: [bootInfoStruct]
       });
     }
-    
+
     const [isAllowed, reason] = response;
     const gatewayAppId = await this.client.readContract({
       address: this.kmsContractAddr,
       abi: DSTACK_KMS_ABI,
       functionName: 'gatewayAppId'
     });
-    
+
     return {
       isAllowed,
       reason,
@@ -209,10 +209,11 @@ app.get('/', async (c) => {
       ethereum.getAppImplementation(),
     ]);
     console.log('batch', batch);
-    
+
     return c.json({
       status: 'ok',
       kmsContractAddr: kmsContractAddr,
+      ethRpcUrl: rpcUrl,
       gatewayAppId: batch[0],
       chainId: batch[1],
       appAuthImplementation: batch[2], // NOTE: for backward compatibility
@@ -220,15 +221,15 @@ app.get('/', async (c) => {
     });
   } catch (error) {
     console.error('error in health check:', error);
-    return c.json({ 
-      status: 'error', 
-      message: error instanceof Error ? error.message : String(error) 
+    return c.json({
+      status: 'error',
+      message: error instanceof Error ? error.message : String(error)
     }, 500);
   }
 });
 
 // app boot authentication
-app.post('/bootAuth/app', 
+app.post('/bootAuth/app',
   zValidator('json', BootInfoSchema),
   async (c) => {
     try {
@@ -275,4 +276,4 @@ console.log(`starting server on port ${port}`);
 export default {
   port,
   fetch: app.fetch,
-}; 
+};
