@@ -103,7 +103,7 @@ fn main() -> Result<()> {
             let firmware_path = parent_dir.join(&image_info.bios).display().to_string();
             let kernel_path = parent_dir.join(&image_info.kernel).display().to_string();
             let initrd_path = parent_dir.join(&image_info.initrd).display().to_string();
-            let cmdline = image_info.cmdline.clone() + " initrd=initrd";
+            let cmdline = image_info.cmdline + " initrd=initrd";
 
             // CLI flag wins, then the explicit `ovmf_variant` in metadata.json,
             // and finally the OS version field. Older metadata.json files may

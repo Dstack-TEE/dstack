@@ -11,10 +11,17 @@ use size_parser::human_size;
 
 /// Identifies which OVMF flavour the guest image was built with.
 ///
-/// dstack switched OVMF from an untagged 2024-09 snapshot to edk2-stable202505 in
-/// the run-up to 0.5.9 (commit f9f11f3 on meta-dstack). The newer firmware emits
-/// more boot-time measurement events into RTMR[0], so quote replay needs a
-/// different expected event list for the two flavours.
+/// The firmware switch happened in meta-dstack commit f9f11f3 (upgrade from an
+/// untagged 2024-09 snapshot to edk2-stable202505): 0.5.7 and earlier shipped
+/// `Pre202505`, 0.5.9 onwards ships `Stable202505`. The newer firmware emits
+/// more boot-time events into RTMR[0], so quote replay needs a different
+/// expected event list for the two flavours.
+///
+/// When the variant isn't carried explicitly in `VmConfig`, the runtime cutoff
+/// rule in `dstack_mr::ovmf_variant_for_version` draws the line at OS version
+/// `0.5.10` (and again at `0.6.1`) — a deliberate policy decision that doesn't
+/// follow the firmware-flip date exactly. See that function's docs for the
+/// authoritative selection rule.
 #[derive(Deserialize, Serialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum OvmfVariant {
