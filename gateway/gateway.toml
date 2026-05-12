@@ -25,7 +25,9 @@ timeout = "5s"
 enabled = false
 address = "127.0.0.1:8011"
 # Required when admin.enabled = true, unless DSTACK_GATEWAY_ADMIN_TOKEN is set.
-api_token = ""
+# Leave unset (do not assign ""): an empty string here would shadow the env-var
+# fallback in AdminAuth::from_config.
+# api_token = ""
 # Development/testing escape hatch only. Never enable this on a reachable admin interface.
 insecure_no_auth = false
 

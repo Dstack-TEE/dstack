@@ -327,6 +327,7 @@ async fn main() -> Result<()> {
                 .mount("/", web_routes::routes())
                 .mount("/", admin_routes::routes())
                 .mount("/prpc", admin_routes::routes())
+                .register("/", admin_auth::catchers())
                 .manage(admin_auth)
                 .manage(admin_state)
                 .launch()
