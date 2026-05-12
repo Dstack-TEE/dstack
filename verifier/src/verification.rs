@@ -758,13 +758,20 @@ impl CvmVerifier {
 }
 
 fn smbios_config(product: &dstack_types::SmbiosConfig) -> dstack_mr::SmbiosConfig {
+    let default_type1 = product.is_empty();
     dstack_mr::SmbiosConfig {
         bios_vendor: product.bios_vendor.clone(),
         bios_version: product.bios_version.clone(),
         bios_date: product.bios_date.clone(),
         bios_release: product.bios_release.clone(),
-        sys_vendor: product.sys_vendor.clone(),
-        product_name: product.product_name.clone(),
+        sys_vendor: product
+            .sys_vendor
+            .clone()
+            .or_else(|| default_type1.then(|| "dstack".to_string())),
+        product_name: product
+            .product_name
+            .clone()
+            .or_else(|| default_type1.then(|| "dstack".to_string())),
         product_version: product.product_version.clone(),
         product_serial: product.product_serial.clone(),
         product_uuid: product.product_uuid.clone(),
