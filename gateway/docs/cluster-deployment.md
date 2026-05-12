@@ -289,12 +289,18 @@ Important:
 
 ### 2.7 Verify Cluster Sync
 
+The admin API requires a bearer token (see `core.admin.admin_token` in `gateway.toml`,
+or the `ADMIN_API_TOKEN` env injected by `deploy-to-vmm.sh`). Export it once:
+
 ```bash
+export ADMIN_API_TOKEN=...   # value from .env or gateway.toml
+ADMIN_AUTH=(-H "Authorization: Bearer $ADMIN_API_TOKEN")
+
 # Check sync status on any node (replace port with your admin port)
-curl -s http://localhost:9016/prpc/WaveKvStatus | jq .
+curl -s "${ADMIN_AUTH[@]}" http://localhost:9016/prpc/WaveKvStatus | jq .
 
 # List known cluster nodes
-curl -s http://localhost:9016/prpc/Status | jq '.nodes'
+curl -s "${ADMIN_AUTH[@]}" http://localhost:9016/prpc/Status | jq '.nodes'
 ```
 
 A healthy cluster sync shows:
@@ -567,7 +573,8 @@ $CLI info <vm-id>
 Check that the gateway sees the new app:
 
 ```bash
-curl -s http://localhost:<admin-port>/prpc/Status | jq '.hosts'
+curl -s -H "Authorization: Bearer $ADMIN_API_TOKEN" \
+  http://localhost:<admin-port>/prpc/Status | jq '.hosts'
 ```
 
 Expected output should include an entry with the app's `instance_id` and an assigned WireGuard IP:
@@ -619,8 +626,11 @@ Gateway supports automatic TLS certificate management via the ACME protocol. Con
 ### 6.1 Configure ACME Service
 
 ```bash
+ADMIN_AUTH=(-H "Authorization: Bearer $ADMIN_API_TOKEN")
+
 # Set ACME URL (Let's Encrypt production)
-curl -X POST "http://localhost:9016/prpc/SetCertbotConfig" \
+curl -X POST "${ADMIN_AUTH[@]}" \
+  "http://localhost:9016/prpc/SetCertbotConfig" \
   -H "Content-Type: application/json" \
   -d '{"acme_url": "https://acme-v02.api.letsencrypt.org/directory"}'
 
@@ -637,7 +647,8 @@ The Cloudflare API token needs the **DNS:Edit** permission on the target zone. C
 Cloudflare example:
 
 ```bash
-curl -X POST "http://localhost:9016/prpc/CreateDnsCredential" \
+curl -X POST "${ADMIN_AUTH[@]}" \
+  "http://localhost:9016/prpc/CreateDnsCredential" \
   -H "Content-Type: application/json" \
   -d '{
     "name": "cloudflare-prod",
@@ -669,7 +680,8 @@ Parameter description:
 Basic usage (using default DNS credential):
 
 ```bash
-curl -X POST "http://localhost:9016/prpc/AddZtDomain" \
+curl -X POST "${ADMIN_AUTH[@]}" \
+  "http://localhost:9016/prpc/AddZtDomain" \
   -H "Content-Type: application/json" \
   -d '{"domain": "example.com", "port": 443}'
 ```
@@ -677,7 +689,8 @@ curl -X POST "http://localhost:9016/prpc/AddZtDomain" \
 Specifying DNS credential and node binding:
 
 ```bash
-curl -X POST "http://localhost:9016/prpc/AddZtDomain" \
+curl -X POST "${ADMIN_AUTH[@]}" \
+  "http://localhost:9016/prpc/AddZtDomain" \
   -H "Content-Type: application/json" \
   -d '{
     "domain": "internal.example.com",
@@ -711,7 +724,8 @@ Note: After adding a domain, the certificate is not issued immediately. Gateway 
 ### 6.4 Manually Trigger Certificate Renewal
 
 ```bash
-curl -X POST "http://localhost:9016/prpc/RenewZtDomainCert" \
+curl -X POST "${ADMIN_AUTH[@]}" \
+  "http://localhost:9016/prpc/RenewZtDomainCert" \
   -H "Content-Type: application/json" \
   -d '{"domain": "example.com", "force": true}'
 ```
@@ -719,7 +733,7 @@ curl -X POST "http://localhost:9016/prpc/RenewZtDomainCert" \
 ### 6.5 Check Certificate Status
 
 ```bash
-curl -s http://localhost:9016/prpc/ListZtDomains | jq .
+curl -s "${ADMIN_AUTH[@]}" http://localhost:9016/prpc/ListZtDomains | jq .
 ```
 
 A healthy certificate shows `has_cert: true` and `loaded_in_memory: true`:

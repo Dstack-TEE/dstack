@@ -24,6 +24,15 @@ timeout = "5s"
 [core.admin]
 enabled = false
 address = "127.0.0.1:8011"
+# Shared secret required by every admin endpoint (RPC + dashboard). Can also
+# be supplied via the `DSTACK_GATEWAY_ADMIN_TOKEN` or `ADMIN_API_TOKEN` env
+# vars. Clients send it as `Authorization: Bearer <token>`, `X-Admin-Token`,
+# or (GET only, for dashboard links) `?token=...`. Required unless
+# `insecure_no_auth = true`.
+admin_token = ""
+# Development/testing escape hatch only. Never enable this on an admin
+# interface that is reachable from the network.
+insecure_no_auth = false
 
 [core.debug]
 insecure_enable_debug_rpc = false
