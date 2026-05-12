@@ -45,23 +45,34 @@ pub fn ovmf_variant_for_version(version: &str) -> Result<OvmfVariant> {
     })
 }
 
-/// Extract a dotted version suffix (e.g. "0.5.10") from a dstack image name like
-/// `dstack-0.5.10`, `dstack-dev-0.5.10`, or `dstack-nvidia-0.5.10`.
+/// Extract the `MAJOR.MINOR.PATCH` version suffix from a dstack image name.
 ///
-/// Returns `None` when the image name does not end with a recognisable
-/// `MAJOR.MINOR.PATCH` segment.
+/// Recognises any `<prefix>-MAJOR.MINOR.PATCH[.SUFFIX]` shape, e.g.
+/// `dstack-0.5.10`, `dstack-dev-0.5.10`, `dstack-nvidia-0.5.10`,
+/// `dstack-nvidia-dev-0.5.10`, `dstack-0.5.10.rc1`, `dstack-dev-0.6.1.dev`.
+///
+/// The optional `.SUFFIX` is permitted to be non-numeric (pre-release tag,
+/// build label, etc.) and is dropped from the returned slice — only the
+/// numeric `X.Y.Z` is needed to pick the OVMF variant.
+///
+/// Returns `None` when the segment after the last `-` is not at least a valid
+/// `X.Y.Z` triple of non-empty numeric components.
 pub fn extract_version_from_image_name(image: &str) -> Option<&str> {
     let tail = image.rsplit('-').next()?;
     let parts: Vec<&str> = tail.split('.').collect();
-    if parts.len() == 3
-        && parts
-            .iter()
-            .all(|p| !p.is_empty() && p.parse::<u32>().is_ok())
-    {
-        Some(tail)
-    } else {
-        None
+    if !(3..=4).contains(&parts.len()) {
+        return None;
     }
+    let core_numeric = parts[..3]
+        .iter()
+        .all(|p| !p.is_empty() && p.parse::<u32>().is_ok());
+    let suffix_ok = parts.len() == 3 || !parts[3].is_empty();
+    if !(core_numeric && suffix_ok) {
+        return None;
+    }
+    // Slice off the optional `.SUFFIX` so callers get just `X.Y.Z`.
+    let core_len = parts[0].len() + 1 + parts[1].len() + 1 + parts[2].len();
+    Some(&tail[..core_len])
 }
 
 /// Pick the OVMF variant from an image name like `dstack-0.5.10`.
@@ -111,6 +122,7 @@ mod ovmf_variant_tests {
 
     #[test]
     fn parses_version_from_image_name() {
+        // Three-segment plain versions across the known prefix shapes.
         assert_eq!(
             extract_version_from_image_name("dstack-0.5.10"),
             Some("0.5.10")
@@ -127,9 +139,27 @@ mod ovmf_variant_tests {
             extract_version_from_image_name("dstack-nvidia-dev-0.6.1"),
             Some("0.6.1")
         );
+        // Optional .SUFFIX is allowed and dropped; suffix may be non-numeric.
+        assert_eq!(
+            extract_version_from_image_name("dstack-0.5.10.rc1"),
+            Some("0.5.10")
+        );
+        assert_eq!(
+            extract_version_from_image_name("dstack-dev-0.6.1.dev"),
+            Some("0.6.1")
+        );
+        assert_eq!(
+            extract_version_from_image_name("dstack-nvidia-dev-0.5.10.1"),
+            Some("0.5.10")
+        );
+        // Rejections.
         assert_eq!(extract_version_from_image_name("dstack"), None);
         assert_eq!(extract_version_from_image_name("dstack-rc1"), None);
         assert_eq!(extract_version_from_image_name("dstack-0.5"), None);
+        assert_eq!(extract_version_from_image_name("dstack-0.5.10."), None);
+        assert_eq!(extract_version_from_image_name("dstack-0.5.10.1.2"), None);
+        assert_eq!(extract_version_from_image_name("dstack-0..10"), None);
+        assert_eq!(extract_version_from_image_name("dstack-a.b.c"), None);
     }
 
     #[test]
