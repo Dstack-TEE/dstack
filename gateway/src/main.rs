@@ -312,6 +312,7 @@ async fn main() -> Result<()> {
 
     let mut rocket = rocket::custom(figment)
         .mount("/prpc", prpc!(Proxy, RpcHandler, trim: "Tproxy."))
+        .mount("/", web_routes::health_routes())
         // Mount WaveKV sync endpoint (requires mTLS gateway auth)
         .mount("/", web_routes::wavekv_sync_routes())
         .attach(AdHoc::on_response("Add app version header", |_req, res| {
