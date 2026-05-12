@@ -32,6 +32,18 @@ pub struct Machine<'a> {
     pub root_verity: bool,
     #[builder(default)]
     pub host_share_mode: String,
+
+    // --- UEFI disk boot (UKI) mode ---
+    // When `uki` is set, use UEFI disk boot measurement path instead of -kernel mode.
+    // In this mode: OVMF → systemd-boot → UKI → vmlinuz (3 EFI app measurements).
+    // The `kernel` field points to vmlinuz, `initrd` to the dracut initrd,
+    // and `kernel_cmdline` to the embedded cmdline — all extracted from the UKI.
+    /// Path to UKI EFI binary. When set, enables UEFI disk boot measurement mode.
+    pub uki: Option<&'a str>,
+    /// Path to systemd-boot EFI binary (BOOTX64.EFI). Required when `uki` is set.
+    pub bootloader: Option<&'a str>,
+    /// Path to raw disk image (for GPT event). Required when `uki` is set.
+    pub disk: Option<&'a str>,
 }
 
 fn parse_version_tuple(v: &str) -> Result<(u32, u32, u32)> {
@@ -93,6 +105,11 @@ impl Machine<'_> {
         self.measure_with_logs().map(|details| details.measurements)
     }
 
+    /// Returns true if this machine is configured for UEFI disk boot (UKI mode).
+    pub fn is_uki_mode(&self) -> bool {
+        self.uki.is_some()
+    }
+
     pub fn measure_with_logs(&self) -> Result<TdxMeasurementDetails> {
         debug!("measuring machine: {self:#?}");
         let fw_data = fs::read(self.firmware)?;
@@ -102,6 +119,21 @@ impl Machine<'_> {
 
         let mrtd = tdvf.mrtd(self).context("Failed to compute MR TD")?;
 
+        if self.is_uki_mode() {
+            self.measure_uefi_disk_boot(&tdvf, &kernel_data, &initrd_data, mrtd)
+        } else {
+            self.measure_direct_kernel_boot(&tdvf, &kernel_data, &initrd_data, mrtd)
+        }
+    }
+
+    /// Direct kernel boot (-kernel mode): original dstack measurement path.
+    fn measure_direct_kernel_boot(
+        &self,
+        tdvf: &Tdvf,
+        kernel_data: &[u8],
+        initrd_data: &[u8],
+        mrtd: Vec<u8>,
+    ) -> Result<TdxMeasurementDetails> {
         let (rtmr0_log, acpi_tables) = tdvf
             .rtmr0_log(self)
             .context("Failed to compute RTMR0 log")?;
@@ -109,7 +141,7 @@ impl Machine<'_> {
         let rtmr0 = measure_log(&rtmr0_log);
 
         let rtmr1_log = kernel::rtmr1_log(
-            &kernel_data,
+            kernel_data,
             initrd_data.len() as u32,
             self.memory_size,
             0x28000,
@@ -119,8 +151,61 @@ impl Machine<'_> {
 
         let rtmr2_log = vec![
             kernel::measure_cmdline(self.kernel_cmdline),
-            measure_sha384(&initrd_data),
+            measure_sha384(initrd_data),
         ];
+        debug_print_log("RTMR2", &rtmr2_log);
+        let rtmr2 = measure_log(&rtmr2_log);
+
+        Ok(TdxMeasurementDetails {
+            measurements: TdxMeasurements {
+                mrtd,
+                rtmr0,
+                rtmr1,
+                rtmr2,
+            },
+            rtmr_logs: [rtmr0_log, rtmr1_log, rtmr2_log],
+            acpi_tables,
+        })
+    }
+
+    /// UEFI disk boot (UKI mode): OVMF → systemd-boot → UKI → vmlinuz.
+    /// Verified against TDX hardware CCEL event log.
+    fn measure_uefi_disk_boot(
+        &self,
+        tdvf: &Tdvf,
+        kernel_data: &[u8],
+        initrd_data: &[u8],
+        mrtd: Vec<u8>,
+    ) -> Result<TdxMeasurementDetails> {
+        let uki_path = self
+            .uki
+            .context("UKI path required for UEFI disk boot mode")?;
+        let bootloader_path = self
+            .bootloader
+            .context("bootloader path required for UEFI disk boot mode")?;
+
+        let uki_data = fs::read(uki_path)?;
+        let bootloader_data = fs::read(bootloader_path)?;
+
+        // RTMR[0]: same structure as direct kernel boot but with UEFI disk boot
+        // differences in boot variables (BootOrder has 2 entries, Boot0001 added).
+        let (rtmr0_log, acpi_tables) = tdvf
+            .rtmr0_log_uefi_disk(self, &bootloader_data)
+            .context("Failed to compute RTMR0 log for UEFI disk boot")?;
+        debug_print_log("RTMR0", &rtmr0_log);
+        let rtmr0 = measure_log(&rtmr0_log);
+
+        // RTMR[1]: EFI application measurements (verified against hardware).
+        // Events: Calling EFI App, separator, GPT, systemd-boot, UKI, vmlinuz,
+        //         Exit Boot Services Invocation, Exit Boot Services Returned.
+        let rtmr1_log =
+            crate::uefi_boot::rtmr1_log(&bootloader_data, &uki_data, kernel_data, self.disk)?;
+        debug_print_log("RTMR1", &rtmr1_log);
+        let rtmr1 = measure_log(&rtmr1_log);
+
+        // RTMR[2]: cmdline (UTF-16LE) + initrd data hash.
+        // Linux EFI stub converts cmdline to UTF-16LE before measuring.
+        let rtmr2_log = crate::uefi_boot::rtmr2_log(self.kernel_cmdline, initrd_data);
         debug_print_log("RTMR2", &rtmr2_log);
         let rtmr2 = measure_log(&rtmr2_log);
 

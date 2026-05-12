@@ -17,6 +17,7 @@ mod kernel;
 mod machine;
 mod num;
 mod tdvf;
+pub(crate) mod uefi_boot;
 mod util;
 
 /// Contains all the measurement values for TDX.

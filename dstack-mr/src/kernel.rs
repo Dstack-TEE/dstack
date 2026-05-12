@@ -7,8 +7,9 @@ use anyhow::{bail, Context, Result};
 use object::pe;
 use sha2::{Digest, Sha384};
 
-/// Calculates the Authenticode hash of a PE/COFF file
-fn authenticode_sha384_hash(data: &[u8]) -> Result<Vec<u8>> {
+/// Calculates the Authenticode hash of a PE/COFF file.
+/// Used by both direct kernel boot (patched kernel) and UEFI disk boot (EFI apps).
+pub(crate) fn authenticode_sha384_hash(data: &[u8]) -> Result<Vec<u8>> {
     let lfanew_offset = 0x3c;
     let lfanew: u32 = read_le(data, lfanew_offset, "DOS header")?;
 
