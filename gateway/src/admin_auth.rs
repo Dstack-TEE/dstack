@@ -8,24 +8,31 @@
 //! present the configured shared secret. The token is accepted via, in order:
 //!   1. `X-Admin-Token` header (any method)
 //!   2. `Authorization: Bearer <token>` header (any method)
-//!   3. `?token=<token>` query parameter (GET only, for dashboard links)
+//!   3. `Authorization: Basic <base64(user:token)>` (any method; token may be
+//!      in either the user or password field — needed so plain browsers can
+//!      authenticate to the dashboard via the native HTTP-auth prompt)
+//!   4. `?token=<token>` query parameter (GET only, for dashboard links)
 //!
-//! For (3), the `token` query parameter is stripped from the request URI after
+//! For (4), the `token` query parameter is stripped from the request URI after
 //! successful validation so it doesn't propagate to access logs, downstream
 //! handlers, or the Referer header.
 //!
-//! Rejected requests are forwarded to a sentinel route that returns HTTP 401,
-//! so all admin routes (prpc-generated and dashboard) are protected by a single
-//! attachment without modifying the route declarations.
+//! Rejected requests are forwarded to a sentinel route that returns HTTP 401
+//! with `WWW-Authenticate: Basic realm="dstack-gateway admin"` so browsers
+//! show the native login prompt. All admin routes (prpc-generated and
+//! dashboard) are protected by this single fairing attachment without
+//! modifying the route declarations.
 //!
 //! The token is only ever held in memory as its SHA-256 hash; the configured
 //! plaintext is dropped right after the fairing is constructed.
 
 use anyhow::{bail, Result};
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use rocket::{
     fairing::{Fairing, Info, Kind},
-    http::{uri::Origin, Method, Status},
-    Data, Request, Route,
+    http::{uri::Origin, Header, Method, Status},
+    response::Responder,
+    Data, Request, Response, Route,
 };
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
@@ -37,6 +44,7 @@ const HEADER_NAME: &str = "X-Admin-Token";
 const QUERY_PARAM: &str = "token";
 const ENV_ADMIN_TOKEN: &str = "DSTACK_GATEWAY_ADMIN_TOKEN";
 const ENV_ADMIN_TOKEN_COMPAT: &str = "ADMIN_API_TOKEN";
+const BASIC_REALM: &str = "dstack-gateway admin";
 
 pub struct AdminAuthFairing {
     /// SHA-256 of the configured token. `None` = auth disabled (insecure mode).
@@ -83,7 +91,12 @@ impl AdminAuthFairing {
         }
         if let Some(auth) = req.headers().get_one("Authorization") {
             if let Some(t) = auth.strip_prefix("Bearer ") {
-                return Some(t.to_string());
+                return Some(t.trim().to_string());
+            }
+            if let Some(b64) = auth.strip_prefix("Basic ") {
+                if let Some(t) = basic_auth_token(b64.trim()) {
+                    return Some(t);
+                }
             }
         }
         // Query token is intended for browser links to the dashboard, so only
@@ -101,6 +114,37 @@ impl AdminAuthFairing {
 
 fn sha256(bytes: &[u8]) -> [u8; 32] {
     Sha256::digest(bytes).into()
+}
+
+/// Decode a `Basic` credential and return whichever of user/password is
+/// non-empty (we accept either so the browser prompt's two fields are
+/// interchangeable for the operator).
+fn basic_auth_token(b64: &str) -> Option<String> {
+    let decoded = BASE64.decode(b64).ok()?;
+    let text = std::str::from_utf8(&decoded).ok()?;
+    let (user, pass) = text.split_once(':').unwrap_or((text, ""));
+    if !pass.is_empty() {
+        return Some(pass.to_string());
+    }
+    if !user.is_empty() {
+        return Some(user.to_string());
+    }
+    None
+}
+
+/// 401 response that triggers the browser's native HTTP-auth prompt.
+struct Unauthorized;
+
+impl<'r> Responder<'r, 'static> for Unauthorized {
+    fn respond_to(self, _req: &'r Request<'_>) -> rocket::response::Result<'static> {
+        Response::build()
+            .status(Status::Unauthorized)
+            .header(Header::new(
+                "WWW-Authenticate",
+                format!("Basic realm=\"{BASIC_REALM}\""),
+            ))
+            .ok()
+    }
 }
 
 /// Rebuild the request URI without the `token` query parameter, if present.
@@ -166,38 +210,38 @@ impl Fairing for AdminAuthFairing {
 // enumerate them because Rocket doesn't support a method-agnostic route.
 
 #[rocket::get("/__admin_unauthorized")]
-fn unauth_get() -> Status {
-    Status::Unauthorized
+fn unauth_get() -> Unauthorized {
+    Unauthorized
 }
 
 #[rocket::post("/__admin_unauthorized", data = "<_data>")]
-fn unauth_post(_data: Data<'_>) -> Status {
-    Status::Unauthorized
+fn unauth_post(_data: Data<'_>) -> Unauthorized {
+    Unauthorized
 }
 
 #[rocket::put("/__admin_unauthorized", data = "<_data>")]
-fn unauth_put(_data: Data<'_>) -> Status {
-    Status::Unauthorized
+fn unauth_put(_data: Data<'_>) -> Unauthorized {
+    Unauthorized
 }
 
 #[rocket::patch("/__admin_unauthorized", data = "<_data>")]
-fn unauth_patch(_data: Data<'_>) -> Status {
-    Status::Unauthorized
+fn unauth_patch(_data: Data<'_>) -> Unauthorized {
+    Unauthorized
 }
 
 #[rocket::delete("/__admin_unauthorized")]
-fn unauth_delete() -> Status {
-    Status::Unauthorized
+fn unauth_delete() -> Unauthorized {
+    Unauthorized
 }
 
 #[rocket::options("/__admin_unauthorized")]
-fn unauth_options() -> Status {
-    Status::Unauthorized
+fn unauth_options() -> Unauthorized {
+    Unauthorized
 }
 
 #[rocket::head("/__admin_unauthorized")]
-fn unauth_head() -> Status {
-    Status::Unauthorized
+fn unauth_head() -> Unauthorized {
+    Unauthorized
 }
 
 pub fn routes() -> Vec<Route> {
@@ -443,5 +487,72 @@ mod tests {
                 resp.status()
             );
         }
+    }
+
+    fn basic_header(user: &str, pass: &str) -> Header<'static> {
+        let creds = format!("{user}:{pass}");
+        Header::new("Authorization", format!("Basic {}", BASE64.encode(creds)))
+    }
+
+    #[rocket::async_test]
+    async fn basic_auth_password_field_accepted() {
+        let client = make_client("s3cret").await;
+        let resp = client
+            .get("/protected")
+            .header(basic_header("admin", "s3cret"))
+            .dispatch()
+            .await;
+        assert_eq!(resp.status(), Status::Ok);
+    }
+
+    #[rocket::async_test]
+    async fn basic_auth_user_field_accepted_when_password_empty() {
+        let client = make_client("s3cret").await;
+        // Some browser users paste the token into the username field by mistake.
+        let resp = client
+            .get("/protected")
+            .header(basic_header("s3cret", ""))
+            .dispatch()
+            .await;
+        assert_eq!(resp.status(), Status::Ok);
+    }
+
+    #[rocket::async_test]
+    async fn basic_auth_wrong_password_rejected() {
+        let client = make_client("s3cret").await;
+        let resp = client
+            .get("/protected")
+            .header(basic_header("admin", "wrong"))
+            .dispatch()
+            .await;
+        assert_eq!(resp.status(), Status::Unauthorized);
+    }
+
+    #[rocket::async_test]
+    async fn basic_auth_malformed_rejected() {
+        let client = make_client("s3cret").await;
+        // Not valid base64 at all.
+        let resp = client
+            .get("/protected")
+            .header(Header::new("Authorization", "Basic !!not-base64!!"))
+            .dispatch()
+            .await;
+        assert_eq!(resp.status(), Status::Unauthorized);
+    }
+
+    #[rocket::async_test]
+    async fn unauthorized_response_includes_www_authenticate() {
+        let client = make_client("s3cret").await;
+        let resp = client.get("/protected").dispatch().await;
+        assert_eq!(resp.status(), Status::Unauthorized);
+        let www = resp
+            .headers()
+            .get_one("WWW-Authenticate")
+            .expect("missing WWW-Authenticate header");
+        assert!(
+            www.starts_with("Basic realm="),
+            "expected Basic challenge, got {www:?}"
+        );
+        assert!(www.contains("dstack-gateway admin"));
     }
 }
