@@ -791,9 +791,12 @@ impl VmConfig {
             return Ok(());
         }
 
-        command
-            .arg("-machine")
-            .arg("q35,kernel-irqchip=split,confidential-guest-support=tdx,hpet=off");
+        let mut machine =
+            "q35,kernel-irqchip=split,confidential-guest-support=tdx,hpet=off".to_string();
+        if let Some(pic) = cfg.qemu_pic {
+            machine.push_str(if pic { ",pic=on" } else { ",pic=off" });
+        }
+        command.arg("-machine").arg(machine);
 
         let img_ver = self.image.info.version_tuple().unwrap_or_default();
         let support_mr_config_id = img_ver >= (0, 5, 2);
