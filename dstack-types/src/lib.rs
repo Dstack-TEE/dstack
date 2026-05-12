@@ -9,6 +9,30 @@ use serde::{Deserialize, Serialize};
 use serde_human_bytes as hex_bytes;
 use size_parser::human_size;
 
+/// Identifies which OVMF flavour the guest image was built with.
+///
+/// The firmware switch happened in meta-dstack commit f9f11f3 (upgrade from an
+/// untagged 2024-09 snapshot to edk2-stable202505): 0.5.7 and earlier shipped
+/// `Pre202505`, 0.5.9 onwards ships `Stable202505`. The newer firmware emits
+/// more boot-time events into RTMR[0], so quote replay needs a different
+/// expected event list for the two flavours.
+///
+/// When the variant isn't carried explicitly in `VmConfig`, the runtime cutoff
+/// rule in `dstack_mr::ovmf_variant_for_version` draws the line at OS version
+/// `0.5.10` (and again at `0.6.1`) — a deliberate policy decision that doesn't
+/// follow the firmware-flip date exactly. See that function's docs for the
+/// authoritative selection rule.
+#[derive(Deserialize, Serialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum OvmfVariant {
+    /// Pre-edk2-stable202505 OVMF (13 RTMR[0] events).
+    #[default]
+    Pre202505,
+    /// edk2-stable202505+ OVMF (17 RTMR[0] events: new fw_cfg, VARIABLE_AUTHORITY
+    /// and BootXXXX entries).
+    Stable202505,
+}
+
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct AppCompose {
     pub manifest_version: u32,
@@ -196,6 +220,12 @@ pub struct VmConfig {
     /// If false (default), shared files are provided via 9p virtfs
     #[serde(default)]
     pub host_share_mode: String,
+    /// OVMF measurement layout declared by the OS image. When present, verifiers
+    /// should treat this as the source of truth. Absent on images built before
+    /// this field was introduced — callers must fall back to other heuristics
+    /// (e.g. parsing the OS version out of `image`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ovmf_variant: Option<OvmfVariant>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -275,6 +305,15 @@ pub struct ImageInfo {
     pub kernel: String,
     pub initrd: String,
     pub bios: String,
+    /// Optional dstack OS version (e.g. "0.5.10"). Older metadata.json files
+    /// may omit it, so callers should treat its absence as "unknown".
+    #[serde(default)]
+    pub version: String,
+    /// Optional OVMF measurement layout declared by the image. Older
+    /// metadata.json files do not carry this — treat absence as "unknown" and
+    /// fall back to version-based heuristics.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ovmf_variant: Option<OvmfVariant>,
 }
 
 pub mod mr_config;

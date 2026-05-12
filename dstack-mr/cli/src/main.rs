@@ -4,7 +4,7 @@
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use dstack_mr::Machine;
+use dstack_mr::{Machine, OvmfVariant, ovmf_variant_for_version};
 use dstack_types::ImageInfo;
 use fs_err as fs;
 use size_parser::parse_memory_size;
@@ -78,6 +78,12 @@ struct MachineConfig {
     #[arg(long)]
     qemu_version: Option<String>,
 
+    /// dstack OS version (MAJOR.MINOR.PATCH), used to pick the OVMF measurement layout.
+    /// 0.5.10 <= ver < 0.6.0 and ver >= 0.6.1 use the edk2-stable202505 layout; everything
+    /// else uses the legacy layout. If omitted, falls back to `image_info.version`.
+    #[arg(long)]
+    dstack_os_version: Option<String>,
+
     /// Output JSON
     #[arg(long)]
     json: bool,
@@ -99,6 +105,21 @@ fn main() -> Result<()> {
             let initrd_path = parent_dir.join(&image_info.initrd).display().to_string();
             let cmdline = image_info.cmdline + " initrd=initrd";
 
+            // CLI flag wins, then the explicit `ovmf_variant` in metadata.json,
+            // and finally the OS version field. Older metadata.json files may
+            // carry neither, in which case fall back to the default.
+            let ovmf_variant = if let Some(v) = config.dstack_os_version.as_deref() {
+                ovmf_variant_for_version(v)
+                    .with_context(|| format!("invalid dstack OS version: {v}"))?
+            } else if let Some(variant) = image_info.ovmf_variant {
+                variant
+            } else if !image_info.version.is_empty() {
+                ovmf_variant_for_version(&image_info.version)
+                    .with_context(|| format!("invalid dstack OS version: {}", image_info.version))?
+            } else {
+                OvmfVariant::default()
+            };
+
             let machine = Machine::builder()
                 .cpu_count(config.cpu)
                 .memory_size(config.memory)
@@ -116,6 +137,7 @@ fn main() -> Result<()> {
                 .hotplug_off(config.hotplug_off)
                 .root_verity(config.root_verity)
                 .maybe_qemu_version(config.qemu_version.clone())
+                .ovmf_variant(ovmf_variant)
                 .build();
 
             let measurements = machine

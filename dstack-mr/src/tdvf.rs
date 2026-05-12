@@ -9,10 +9,34 @@ use sha2::{Digest, Sha384};
 
 use crate::acpi::Tables;
 use crate::num::read_le;
-use crate::{measure_log, measure_sha384, utf16_encode, Machine, RtmrLog};
+use crate::uefi_var::{
+    boot_option_bytes, boot_order_bytes, fv_file_node, fv_node, END_OF_DEVICE_PATH,
+};
+use crate::{measure_log, measure_sha384, utf16_encode, Machine, OvmfVariant, RtmrLog};
 
 const PAGE_SIZE: u64 = 0x1000;
 const MR_EXTEND_GRANULARITY: usize = 0x100;
+
+// OVMF firmware-volume identifiers used by edk2-stable202505. These are baked
+// into the OVMF binary at build time; if the firmware is regenerated against a
+// different EDK2 source these constants may need refreshing.
+//
+// Each GUID is stored in the on-the-wire little-endian byte form OVMF puts in
+// the EFI_DEVICE_PATH MEDIA_FV / MEDIA_FV_FILE nodes — the first three GUID
+// fields are byte-swapped relative to the canonical string form.
+//
+// canonical: 7cb8bdc9-f8eb-4f34-aaea-3ee4af6516a1
+const OVMF_FV_GUID_LE: [u8; 16] = [
+    0xc9, 0xbd, 0xb8, 0x7c, 0xeb, 0xf8, 0x34, 0x4f, 0xaa, 0xea, 0x3e, 0xe4, 0xaf, 0x65, 0x16, 0xa1,
+];
+// canonical: eec25bdc-67f2-4d95-b1d5-f81b2039d11d  (MdeModulePkg UiApp)
+const OVMF_UIAPP_FILE_GUID_LE: [u8; 16] = [
+    0xdc, 0x5b, 0xc2, 0xee, 0xf2, 0x67, 0x95, 0x4d, 0xb1, 0xd5, 0xf8, 0x1b, 0x20, 0x39, 0xd1, 0x1d,
+];
+// canonical: 462caa21-7614-4503-836e-8ab6f4662331  (MdeModulePkg BootMaintenance / FrontPage)
+const OVMF_FRONTPAGE_FILE_GUID_LE: [u8; 16] = [
+    0x21, 0xaa, 0x2c, 0x46, 0x14, 0x76, 0x03, 0x45, 0x83, 0x6e, 0x8a, 0xb6, 0xf4, 0x66, 0x23, 0x31,
+];
 
 const ATTRIBUTE_MR_EXTEND: u32 = 0x00000001;
 const ATTRIBUTE_PAGE_AUG: u32 = 0x00000002;
@@ -275,33 +299,131 @@ impl<'a> Tdvf<'a> {
     pub fn rtmr0_log(&self, machine: &Machine) -> Result<(RtmrLog, Tables)> {
         let td_hob_hash = self.measure_td_hob(machine.memory_size)?;
         let cfv_image_hash = hex!("344BC51C980BA621AAA00DA3ED7436F7D6E549197DFE699515DFA2C6583D95E6412AF21C097D473155875FFD561D6790");
-        let boot000_hash = hex!("23ADA07F5261F12F34A0BD8E46760962D6B4D576A416F1FEA1C64BC656B1D28EACF7047AE6E967C58FD2A98BFA74C298");
 
         let tables = machine.build_tables()?;
         let acpi_tables_hash = measure_sha384(&tables.tables);
         let acpi_rsdp_hash = measure_sha384(&tables.rsdp);
         let acpi_loader_hash = measure_sha384(&tables.loader);
 
-        // RTMR0 calculation
+        let secureboot_hash =
+            measure_tdx_efi_variable("8BE4DF61-93CA-11D2-AA0D-00E098032B8C", "SecureBoot")?;
+        let pk_hash = measure_tdx_efi_variable("8BE4DF61-93CA-11D2-AA0D-00E098032B8C", "PK")?;
+        let kek_hash = measure_tdx_efi_variable("8BE4DF61-93CA-11D2-AA0D-00E098032B8C", "KEK")?;
+        let db_hash = measure_tdx_efi_variable("D719B2CB-3D3A-4596-A3BC-DAD00E67656F", "db")?;
+        let dbx_hash = measure_tdx_efi_variable("D719B2CB-3D3A-4596-A3BC-DAD00E67656F", "dbx")?;
+        let separator_hash = measure_sha384(&[0x00, 0x00, 0x00, 0x00]);
 
-        Ok((
-            vec![
-                td_hob_hash,
-                cfv_image_hash.to_vec(),
-                measure_tdx_efi_variable("8BE4DF61-93CA-11D2-AA0D-00E098032B8C", "SecureBoot")?,
-                measure_tdx_efi_variable("8BE4DF61-93CA-11D2-AA0D-00E098032B8C", "PK")?,
-                measure_tdx_efi_variable("8BE4DF61-93CA-11D2-AA0D-00E098032B8C", "KEK")?,
-                measure_tdx_efi_variable("D719B2CB-3D3A-4596-A3BC-DAD00E67656F", "db")?,
-                measure_tdx_efi_variable("D719B2CB-3D3A-4596-A3BC-DAD00E67656F", "dbx")?,
-                measure_sha384(&[0x00, 0x00, 0x00, 0x00]), // Separator
-                acpi_loader_hash,
-                acpi_rsdp_hash,
-                acpi_tables_hash,
-                measure_sha384(&[0x00, 0x00]), // BootOrder
-                boot000_hash.to_vec(),
-            ],
-            tables,
-        ))
+        let log = match machine.ovmf_variant {
+            OvmfVariant::Pre202505 => {
+                // Boot0000 = OVMF UiApp (fixed digest for pre-202505 firmware).
+                let boot000_hash = hex!("23ADA07F5261F12F34A0BD8E46760962D6B4D576A416F1FEA1C64BC656B1D28EACF7047AE6E967C58FD2A98BFA74C298");
+                vec![
+                    td_hob_hash,
+                    cfv_image_hash.to_vec(),
+                    secureboot_hash,
+                    pk_hash,
+                    kek_hash,
+                    db_hash,
+                    dbx_hash,
+                    separator_hash,
+                    acpi_loader_hash,
+                    acpi_rsdp_hash,
+                    acpi_tables_hash,
+                    measure_sha384(&[0x00, 0x00]), // BootOrder (raw 2 bytes in legacy OVMF)
+                    boot000_hash.to_vec(),
+                ]
+            }
+            OvmfVariant::Stable202505 => {
+                // edk2-stable202505 emits 17 RTMR[0] events instead of 13. The
+                // boot-option set is fully derivable from OVMF-internal
+                // constants (FV and file GUIDs, descriptions, attributes); the
+                // remaining two — the bootorder fw_cfg measurement and
+                // EV_EFI_VARIABLE_AUTHORITY — stay as captured digests because
+                // their content depends on QEMU's emitted device list and on
+                // OVMF-internal logic that's not worth shadowing here.
+
+                // fw_cfg `BootMenu` is a u16; dstack doesn't pass `-boot
+                // menu=on`, so it defaults to 0x0000.
+                let bootmenu_fwcfg_hash = measure_sha384(&[0x00, 0x00]);
+
+                // fw_cfg `bootorder` is the NUL-separated list of QEMU device
+                // paths whose backing devices have `bootindex` set. For
+                // `-kernel` boot, QEMU (hw/i386/x86.c::x86_load_linux) injects
+                // a single option ROM with `bootindex = 0`:
+                //   * `linuxboot_dma.bin`  if fw_cfg DMA is enabled (q35 default)
+                //   * `linuxboot.bin`      otherwise
+                // dstack-vmm always uses q35 → DMA is on → the bootorder file
+                // contains just the single path below (31 bytes, trailing
+                // NUL). No other dstack device gets an implicit bootindex.
+                //
+                // Verified end-to-end: gdb-attached the live QEMU and called
+                // get_boot_devices_list() — returned exactly these 31 bytes.
+                let bootorder_fwcfg_hash = measure_sha384(b"/rom@genroms/linuxboot_dma.bin\0");
+
+                // EV_EFI_VARIABLE_AUTHORITY: OVMF emits this once during BDS
+                // even when Secure Boot is disabled. The 32-byte event blob in
+                // the log is a sentinel; the actual measured payload is
+                // OVMF-internal. Captured digest is a constant for the
+                // edk2-stable202505 build dstack ships.
+                let variable_authority_hash =
+                    hex!("FB66919801F1DFC9C4C273B6A739380790CB0FD3CB706A42F6AC050510EBC8618E7FBA53A1564522F5C6F0DC9E1F41A6");
+
+                // BootOrder UEFI variable holds [0x0000, 0x0001] — the two
+                // boot options OVMF's BDS publishes (UiApp and FrontPage).
+                // The TCG digest for `EV_EFI_VARIABLE_BOOT2` is over the raw
+                // variable data, NOT a UEFI_VARIABLE_DATA wrapper.
+                let boot_order_var_hash = measure_sha384(&boot_order_bytes(&[0x0000, 0x0001]));
+
+                // Boot0000 = OVMF's BootManagerMenuApp; Boot0001 = "EFI
+                // Firmware Setup" (FrontPage). Both live in the OVMF FV and
+                // are baked into the firmware at build time. The attribute
+                // bits and descriptions come from MdeModulePkg's
+                // BdsBootManagerLib in edk2-stable202505.
+                //   0x101 = LOAD_OPTION_ACTIVE | LOAD_OPTION_CATEGORY_APP
+                //   0x109 = + LOAD_OPTION_HIDDEN
+                let boot0000_hash = measure_sha384(&boot_option_bytes(
+                    0x0000_0109,
+                    "BootManagerMenuApp",
+                    &[
+                        fv_node(&OVMF_FV_GUID_LE),
+                        fv_file_node(&OVMF_UIAPP_FILE_GUID_LE),
+                        END_OF_DEVICE_PATH,
+                    ],
+                    &[],
+                ));
+                let boot0001_hash = measure_sha384(&boot_option_bytes(
+                    0x0000_0101,
+                    "EFI Firmware Setup",
+                    &[
+                        fv_node(&OVMF_FV_GUID_LE),
+                        fv_file_node(&OVMF_FRONTPAGE_FILE_GUID_LE),
+                        END_OF_DEVICE_PATH,
+                    ],
+                    &[],
+                ));
+                vec![
+                    td_hob_hash,
+                    cfv_image_hash.to_vec(),
+                    bootmenu_fwcfg_hash,
+                    bootorder_fwcfg_hash.to_vec(),
+                    secureboot_hash,
+                    pk_hash,
+                    kek_hash,
+                    db_hash,
+                    dbx_hash,
+                    separator_hash,
+                    acpi_loader_hash,
+                    acpi_rsdp_hash,
+                    acpi_tables_hash,
+                    variable_authority_hash.to_vec(),
+                    boot_order_var_hash,
+                    boot0000_hash,
+                    boot0001_hash,
+                ]
+            }
+        };
+
+        Ok((log, tables))
     }
 
     fn measure_td_hob(&self, memory_size: u64) -> Result<Vec<u8>> {

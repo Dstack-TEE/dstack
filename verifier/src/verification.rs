@@ -118,7 +118,10 @@ fn collect_rtmr_mismatch(
     }
 }
 
-const MEASUREMENT_CACHE_VERSION: u32 = 1;
+// Bump whenever expected RTMR computation changes so stale entries get ignored.
+// v2: edk2-stable202505 OVMF RTMR[0] layout (added 4 events, reshaped BootOrder
+// and Boot0000); the legacy 13-event log no longer matches any in-field image.
+const MEASUREMENT_CACHE_VERSION: u32 = 2;
 
 #[derive(Clone, Serialize, Deserialize)]
 struct CachedMeasurement {
@@ -250,6 +253,12 @@ impl CvmVerifier {
         let kernel = kernel_path.display().to_string();
         let initrd = initrd_path.display().to_string();
 
+        // Prefer the explicit variant the image declared; fall back to parsing
+        // the version out of the image name for pre-`ovmf_variant` deployments.
+        let ovmf_variant = vm_config
+            .ovmf_variant
+            .unwrap_or_else(|| dstack_mr::ovmf_variant_for_image(vm_config.image.as_deref()));
+
         let details = dstack_mr::Machine::builder()
             .cpu_count(vm_config.cpu_count)
             .memory_size(vm_config.memory_size)
@@ -271,6 +280,7 @@ impl CvmVerifier {
             .num_gpus(vm_config.num_gpus)
             .num_nvswitches(vm_config.num_nvswitches)
             .host_share_mode(vm_config.host_share_mode.clone())
+            .ovmf_variant(ovmf_variant)
             .build()
             .measure_with_logs()
             .context("Failed to compute expected MRs")?;

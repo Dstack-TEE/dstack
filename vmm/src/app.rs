@@ -1188,6 +1188,7 @@ fn make_vm_config(cfg: &Config, manifest: &Manifest, image: &Image) -> Result<se
         host_share_mode: cfg.cvm.host_share_mode.clone(),
         hotplug_off: cfg.cvm.qemu_hotplug_off,
         image: Some(manifest.image.clone()),
+        ovmf_variant: image.info.ovmf_variant,
     })?;
     // For backward compatibility
     config["spec_version"] = serde_json::Value::from(1);
