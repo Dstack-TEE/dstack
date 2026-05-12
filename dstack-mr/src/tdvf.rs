@@ -346,14 +346,19 @@ impl<'a> Tdvf<'a> {
                 // menu=on`, so it defaults to 0x0000.
                 let bootmenu_fwcfg_hash = measure_sha384(&[0x00, 0x00]);
 
-                // fw_cfg `bootorder` is QEMU's generated bootorder string for
-                // the current device topology. dstack-vmm's QEMU command (9p +
-                // virtio-blk + vhost-vsock, no `-boot order=` / `bootindex=`)
-                // is fixed, so this is a constant. If the QEMU command line is
-                // ever changed (different host_share_mode, GPU passthrough,
-                // extra bootable devices) this digest will need re-capturing.
-                let bootorder_fwcfg_hash =
-                    hex!("53D3DBC00691328371E74C1B1C77BDF1BF4FF79DD1B55222B694FE8341CD8B0ADB3A9AB9286552C681272883B9B0FC1D");
+                // fw_cfg `bootorder` is the NUL-separated list of QEMU device
+                // paths whose backing devices have `bootindex` set. For
+                // `-kernel` boot, QEMU (hw/i386/x86.c::x86_load_linux) injects
+                // a single option ROM with `bootindex = 0`:
+                //   * `linuxboot_dma.bin`  if fw_cfg DMA is enabled (q35 default)
+                //   * `linuxboot.bin`      otherwise
+                // dstack-vmm always uses q35 → DMA is on → the bootorder file
+                // contains just the single path below (31 bytes, trailing
+                // NUL). No other dstack device gets an implicit bootindex.
+                //
+                // Verified end-to-end: gdb-attached the live QEMU and called
+                // get_boot_devices_list() — returned exactly these 31 bytes.
+                let bootorder_fwcfg_hash = measure_sha384(b"/rom@genroms/linuxboot_dma.bin\0");
 
                 // EV_EFI_VARIABLE_AUTHORITY: OVMF emits this once during BDS
                 // even when Secure Boot is disabled. The 32-byte event blob in
