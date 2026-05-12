@@ -156,6 +156,16 @@ const CreateVmDialogComponent = {
               </select>
             </div>
 
+            <div class="form-group">
+              <label for="eventLogVersion">Event log format
+                <span class="help-icon" title="V2 (JCS canonical JSON) enables per-event policy evaluation. V1 is the legacy binary format. Requires guest image with v2 support.">?</span>
+              </label>
+              <select id="eventLogVersion" v-model.number="form.event_log_version">
+                <option :value="1">V1 (legacy binary)</option>
+                <option :value="2">V2 (JCS canonical JSON)</option>
+              </select>
+            </div>
+
             <div class="form-group full-width">
               <label>Features</label>
               <div class="feature-checkboxes">

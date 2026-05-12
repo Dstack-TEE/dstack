@@ -224,7 +224,20 @@ fn hex_decode(hex_str: &str) -> Result<Vec<u8>> {
 
 fn cmd_extend(extend_args: ExtendArgs) -> Result<()> {
     let payload = hex_decode(&extend_args.payload).context("Failed to decode payload")?;
-    emit_runtime_event(&extend_args.event, &payload).context("Failed to extend RTMR")
+    let version = read_event_log_version();
+    emit_runtime_event(&extend_args.event, &payload, version).context("Failed to extend RTMR")
+}
+
+fn read_event_log_version() -> dstack_types::EventLogVersion {
+    let path = std::path::Path::new(dstack_types::shared_filenames::HOST_SHARED_DIR)
+        .join(dstack_types::shared_filenames::APP_COMPOSE);
+    let Ok(data) = std::fs::read_to_string(&path) else {
+        return Default::default();
+    };
+    let Ok(compose) = serde_json::from_str::<dstack_types::AppCompose>(&data) else {
+        return Default::default();
+    };
+    compose.event_log_version
 }
 
 fn cmd_rand(rand_args: RandArgs) -> Result<()> {

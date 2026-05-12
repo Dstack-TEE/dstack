@@ -13,12 +13,15 @@ license.workspace = true
 [dependencies]
 anyhow.workspace = true
 digest = "0.10.7"
+dstack-types.workspace = true
 ez-hash.workspace = true
 fs-err.workspace = true
 hex.workspace = true
+or-panic.workspace = true
 scale.workspace = true
 serde.workspace = true
 serde-human-bytes.workspace = true
+serde_jcs = "0.2.0"
 serde_json = { workspace = true, features = ["alloc"] }
 sha2.workspace = true
 
