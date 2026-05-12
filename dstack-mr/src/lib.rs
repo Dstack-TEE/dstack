@@ -19,6 +19,7 @@ mod kernel;
 mod machine;
 mod num;
 mod tdvf;
+mod uefi_var;
 mod util;
 
 /// Pick the OVMF variant for a given dstack OS version string ("MAJOR.MINOR.PATCH").
