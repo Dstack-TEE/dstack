@@ -278,6 +278,7 @@ impl CvmVerifier {
                     .clone()
                     .unwrap_or_else(|| "none".to_string()),
             )
+            .maybe_qgs_port(vm_config.qgs_port)
             .build()
             .measure_with_logs()
             .context("Failed to compute expected MRs")?;

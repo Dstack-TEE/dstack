@@ -60,6 +60,7 @@ pub struct Machine<'a> {
     pub smbios: SmbiosConfig,
     #[builder(default)]
     pub virtfs_security_model: String,
+    pub qgs_port: Option<u32>,
 }
 
 fn parse_version_tuple(v: &str) -> Result<(u32, u32, u32)> {

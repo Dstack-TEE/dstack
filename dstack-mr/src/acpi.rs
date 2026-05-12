@@ -87,6 +87,20 @@ impl Machine<'_> {
             .context("Failed to get versioned options")?;
         let (acpi_tables_bin, qemu_data_dir) = acpi_tables_tool(vopt.version);
 
+        let tdx_object_arg = match self.qgs_port {
+            Some(port) => serde_json::json!({
+                "qom-type": "tdx-guest",
+                "id": "tdx",
+                "quote-generation-socket": {
+                    "type": "vsock",
+                    "cid": "2",
+                    "port": port.to_string(),
+                },
+            })
+            .to_string(),
+            None => "tdx-guest,id=tdx".to_string(),
+        };
+
         // Prepare the command arguments
         let mut cmd = std::process::Command::new(acpi_tables_bin);
         cmd.args([
@@ -116,9 +130,8 @@ impl Machine<'_> {
             "user,id=net0",
             "-device",
             "virtio-net-pci,netdev=net0",
-            "-object",
-            "tdx-guest,id=tdx",
         ]);
+        cmd.args(["-object", &tdx_object_arg]);
         append_smbios(&mut cmd, &self.smbios);
         cmd.args(["-device", "vhost-vsock-pci,guest-cid=3"]);
 

@@ -51,8 +51,8 @@ RUN ./pin-packages.sh ./qemu-pinned-packages.txt && \
     rm -rf /var/lib/apt/lists/* /var/log/* /var/cache/ldconfig/aux-cache
 
 FROM acpi-builder-base AS acpi-builder-8
-ARG QEMU_8_REV=d98440811192c08eafc07c7af110593c6b3758ff
-RUN git clone https://github.com/kvinwang/qemu-tdx.git --depth 1 --branch passthrough-dump-acpi --single-branch qemu-tdx-8 && \
+ARG QEMU_8_REV=8a609a153956e35d756269b742e5299dcb7788be
+RUN git clone https://github.com/Leechael/qemu-tdx.git --depth 1 --branch dstack-qemu-8.2.2-qgs --single-branch qemu-tdx-8 && \
     cd qemu-tdx-8 && git fetch --depth 1 origin ${QEMU_8_REV} && \
     git checkout ${QEMU_8_REV} && \
     ../config-qemu.sh ./build /usr/local && \
