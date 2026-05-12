@@ -9,7 +9,7 @@ use sha2::{Digest, Sha384};
 
 use crate::acpi::Tables;
 use crate::num::read_le;
-use crate::{measure_log, measure_sha384, utf16_encode, Machine, RtmrLog};
+use crate::{measure_log, measure_sha384, utf16_encode, Machine, OvmfVariant, RtmrLog};
 
 const PAGE_SIZE: u64 = 0x1000;
 const MR_EXTEND_GRANULARITY: usize = 0x100;
@@ -275,33 +275,79 @@ impl<'a> Tdvf<'a> {
     pub fn rtmr0_log(&self, machine: &Machine) -> Result<(RtmrLog, Tables)> {
         let td_hob_hash = self.measure_td_hob(machine.memory_size)?;
         let cfv_image_hash = hex!("344BC51C980BA621AAA00DA3ED7436F7D6E549197DFE699515DFA2C6583D95E6412AF21C097D473155875FFD561D6790");
-        let boot000_hash = hex!("23ADA07F5261F12F34A0BD8E46760962D6B4D576A416F1FEA1C64BC656B1D28EACF7047AE6E967C58FD2A98BFA74C298");
 
         let tables = machine.build_tables()?;
         let acpi_tables_hash = measure_sha384(&tables.tables);
         let acpi_rsdp_hash = measure_sha384(&tables.rsdp);
         let acpi_loader_hash = measure_sha384(&tables.loader);
 
-        // RTMR0 calculation
+        let secureboot_hash =
+            measure_tdx_efi_variable("8BE4DF61-93CA-11D2-AA0D-00E098032B8C", "SecureBoot")?;
+        let pk_hash = measure_tdx_efi_variable("8BE4DF61-93CA-11D2-AA0D-00E098032B8C", "PK")?;
+        let kek_hash = measure_tdx_efi_variable("8BE4DF61-93CA-11D2-AA0D-00E098032B8C", "KEK")?;
+        let db_hash = measure_tdx_efi_variable("D719B2CB-3D3A-4596-A3BC-DAD00E67656F", "db")?;
+        let dbx_hash = measure_tdx_efi_variable("D719B2CB-3D3A-4596-A3BC-DAD00E67656F", "dbx")?;
+        let separator_hash = measure_sha384(&[0x00, 0x00, 0x00, 0x00]);
 
-        Ok((
-            vec![
-                td_hob_hash,
-                cfv_image_hash.to_vec(),
-                measure_tdx_efi_variable("8BE4DF61-93CA-11D2-AA0D-00E098032B8C", "SecureBoot")?,
-                measure_tdx_efi_variable("8BE4DF61-93CA-11D2-AA0D-00E098032B8C", "PK")?,
-                measure_tdx_efi_variable("8BE4DF61-93CA-11D2-AA0D-00E098032B8C", "KEK")?,
-                measure_tdx_efi_variable("D719B2CB-3D3A-4596-A3BC-DAD00E67656F", "db")?,
-                measure_tdx_efi_variable("D719B2CB-3D3A-4596-A3BC-DAD00E67656F", "dbx")?,
-                measure_sha384(&[0x00, 0x00, 0x00, 0x00]), // Separator
-                acpi_loader_hash,
-                acpi_rsdp_hash,
-                acpi_tables_hash,
-                measure_sha384(&[0x00, 0x00]), // BootOrder
-                boot000_hash.to_vec(),
-            ],
-            tables,
-        ))
+        let log = match machine.ovmf_variant {
+            OvmfVariant::Pre202505 => {
+                // Boot0000 = OVMF UiApp (fixed digest for pre-202505 firmware).
+                let boot000_hash = hex!("23ADA07F5261F12F34A0BD8E46760962D6B4D576A416F1FEA1C64BC656B1D28EACF7047AE6E967C58FD2A98BFA74C298");
+                vec![
+                    td_hob_hash,
+                    cfv_image_hash.to_vec(),
+                    secureboot_hash,
+                    pk_hash,
+                    kek_hash,
+                    db_hash,
+                    dbx_hash,
+                    separator_hash,
+                    acpi_loader_hash,
+                    acpi_rsdp_hash,
+                    acpi_tables_hash,
+                    measure_sha384(&[0x00, 0x00]), // BootOrder (raw 2 bytes in legacy OVMF)
+                    boot000_hash.to_vec(),
+                ]
+            }
+            OvmfVariant::Stable202505 => {
+                // edk2-stable202505 adds 4 new events and re-formats BootOrder/Boot0000
+                // in RTMR[0]. Digests captured from a 0.5.10 dstack CVM running the
+                // standard -kernel boot config (9p host_share_mode); they are firmware
+                // constants for this OVMF build.
+                let bootmenu_fwcfg_hash = measure_sha384(&[0x00, 0x00]); // BootMenu fw_cfg = 0x0000
+                let bootorder_fwcfg_hash =
+                    hex!("53D3DBC00691328371E74C1B1C77BDF1BF4FF79DD1B55222B694FE8341CD8B0ADB3A9AB9286552C681272883B9B0FC1D");
+                let variable_authority_hash =
+                    hex!("FB66919801F1DFC9C4C273B6A739380790CB0FD3CB706A42F6AC050510EBC8618E7FBA53A1564522F5C6F0DC9E1F41A6");
+                let boot_order_var_hash =
+                    hex!("52B9A02DE946B947364B57D8210C63113B9058996E2A3BA7CEAD54AF11AE0873B085D1E52BC01E4FEBE57CA05CA1332B");
+                let boot0000_hash =
+                    hex!("5068E6A9DED2A1C3A8EBB5D26004410EA8670742D8F444C5C3D161B76C66FA23A7B1D2FB3F9840570B675384B5818F2D");
+                let boot0001_hash =
+                    hex!("DD424F2EEB35F3E8A2C2F50F6CC87FF90B7577E92CE63E13A22869D07D104FD5EA9800E6E4F12C5058FC4EAA78374F20");
+                vec![
+                    td_hob_hash,
+                    cfv_image_hash.to_vec(),
+                    bootmenu_fwcfg_hash,
+                    bootorder_fwcfg_hash.to_vec(),
+                    secureboot_hash,
+                    pk_hash,
+                    kek_hash,
+                    db_hash,
+                    dbx_hash,
+                    separator_hash,
+                    acpi_loader_hash,
+                    acpi_rsdp_hash,
+                    acpi_tables_hash,
+                    variable_authority_hash.to_vec(),
+                    boot_order_var_hash.to_vec(),
+                    boot0000_hash.to_vec(),
+                    boot0001_hash.to_vec(),
+                ]
+            }
+        };
+
+        Ok((log, tables))
     }
 
     fn measure_td_hob(&self, memory_size: u64) -> Result<Vec<u8>> {

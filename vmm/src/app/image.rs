@@ -25,6 +25,11 @@ pub struct ImageInfo {
     pub version: String,
     #[serde(default)]
     pub is_dev: bool,
+    /// OVMF measurement layout declared by the image. Older metadata.json files
+    /// do not have this — verifiers fall back to version-based heuristics when
+    /// it's missing.
+    #[serde(default)]
+    pub ovmf_variant: Option<dstack_types::OvmfVariant>,
 }
 
 impl ImageInfo {

@@ -250,6 +250,12 @@ impl CvmVerifier {
         let kernel = kernel_path.display().to_string();
         let initrd = initrd_path.display().to_string();
 
+        // Prefer the explicit variant the image declared; fall back to parsing
+        // the version out of the image name for pre-`ovmf_variant` deployments.
+        let ovmf_variant = vm_config
+            .ovmf_variant
+            .unwrap_or_else(|| dstack_mr::ovmf_variant_for_image(vm_config.image.as_deref()));
+
         let details = dstack_mr::Machine::builder()
             .cpu_count(vm_config.cpu_count)
             .memory_size(vm_config.memory_size)
@@ -271,6 +277,7 @@ impl CvmVerifier {
             .num_gpus(vm_config.num_gpus)
             .num_nvswitches(vm_config.num_nvswitches)
             .host_share_mode(vm_config.host_share_mode.clone())
+            .ovmf_variant(ovmf_variant)
             .build()
             .measure_with_logs()
             .context("Failed to compute expected MRs")?;

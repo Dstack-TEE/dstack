@@ -25,9 +25,9 @@ fs-err.workspace = true
 bon.workspace = true
 log.workspace = true
 scale.workspace = true
+dstack-types.workspace = true
 
 [dev-dependencies]
-dstack-types.workspace = true
 reqwest = { workspace = true, features = ["blocking"] }
 flate2.workspace = true
 tar.workspace = true

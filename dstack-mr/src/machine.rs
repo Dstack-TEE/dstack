@@ -5,7 +5,7 @@
 use crate::acpi::Tables;
 use crate::tdvf::Tdvf;
 use crate::util::debug_print_log;
-use crate::{kernel, RtmrLogs, TdxMeasurements};
+use crate::{kernel, OvmfVariant, RtmrLogs, TdxMeasurements};
 use crate::{measure_log, measure_sha384};
 use anyhow::{bail, Context, Result};
 use fs_err as fs;
@@ -32,6 +32,10 @@ pub struct Machine<'a> {
     pub root_verity: bool,
     #[builder(default)]
     pub host_share_mode: String,
+    /// Selects which OVMF measurement event layout to expect.
+    /// Defaults to the pre-edk2-stable202505 layout for backwards compatibility.
+    #[builder(default)]
+    pub ovmf_variant: OvmfVariant,
 }
 
 fn parse_version_tuple(v: &str) -> Result<(u32, u32, u32)> {
