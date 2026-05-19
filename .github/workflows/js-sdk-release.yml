@@ -20,7 +20,7 @@ on:
 
 permissions:
   id-token: write
-  contents: read
+  contents: write
 
 jobs:
   publish:
@@ -74,12 +74,13 @@ jobs:
       - name: Determine npm dist-tag
         id: tag
         run: |
+          VERSION="${GITHUB_REF_NAME#js-sdk-v}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "tag=${{ github.event.inputs.npm_tag }}" >> "$GITHUB_OUTPUT"
           else
             # auto-detect from git tag: js-sdk-v0.5.8-beta.1 -> beta
-            RAW_TAG="${GITHUB_REF_NAME}"
-            if echo "$RAW_TAG" | grep -qiE '(beta|alpha|rc|preview)'; then
+            if echo "$VERSION" | grep -qiE '(beta|alpha|rc|preview)'; then
               echo "tag=beta" >> "$GITHUB_OUTPUT"
             else
               echo "tag=latest" >> "$GITHUB_OUTPUT"
@@ -92,3 +93,19 @@ jobs:
           NPM_TAG="${{ steps.tag.outputs.tag }}"
           echo "Publishing with dist-tag: $NPM_TAG"
           npm publish --access public --provenance --tag "$NPM_TAG"
+
+      - name: GitHub Release
+        if: github.event_name == 'push'
+        uses: softprops/action-gh-release@v1
+        with:
+          name: "JS SDK v${{ steps.tag.outputs.version }}"
+          body: |
+            ## npm Package
+
+            **Package**: `@phala/dstack-sdk@${{ steps.tag.outputs.version }}`
+
+            **Install**: `npm install @phala/dstack-sdk@${{ steps.tag.outputs.version }}`
+
+            **Dist-tag**: `${{ steps.tag.outputs.tag }}`
+
+            **Registry**: https://www.npmjs.com/package/@phala/dstack-sdk/v/${{ steps.tag.outputs.version }}

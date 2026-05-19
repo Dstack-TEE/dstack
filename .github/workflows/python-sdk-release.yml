@@ -19,7 +19,7 @@ on:
 
 permissions:
   id-token: write
-  contents: read
+  contents: write
 
 jobs:
   publish:
@@ -38,6 +38,10 @@ jobs:
         working-directory: sdk/python
         run: pdm build
 
+      - name: Parse version
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#python-sdk-v}" >> "$GITHUB_OUTPUT"
+
       - name: Publish to PyPI
         if: github.event_name == 'push' || github.event.inputs.target == 'pypi'
         uses: pypa/gh-action-pypi-publish@release/v1
@@ -50,3 +54,17 @@ jobs:
         with:
           repository-url: https://test.pypi.org/legacy/
           packages-dir: sdk/python/dist
+
+      - name: GitHub Release
+        if: github.event_name == 'push'
+        uses: softprops/action-gh-release@v1
+        with:
+          name: "Python SDK v${{ steps.version.outputs.version }}"
+          body: |
+            ## PyPI Package
+
+            **Package**: `dstack-sdk ${{ steps.version.outputs.version }}`
+
+            **Install**: `pip install dstack-sdk==${{ steps.version.outputs.version }}`
+
+            **Registry**: https://pypi.org/project/dstack-sdk/${{ steps.version.outputs.version }}/
