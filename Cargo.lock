@@ -2668,6 +2668,7 @@ dependencies = [
  "clap",
  "dirs",
  "dstack-kms-rpc",
+ "dstack-mr",
  "dstack-port-forward",
  "dstack-types",
  "dstack-vmm-rpc",
