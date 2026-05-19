@@ -1,25 +1,56 @@
-# SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+# SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network>
 #
 # SPDX-License-Identifier: Apache-2.0
 
-name: Publish SDK to crates.io
+name: Release-plz
+
 on:
   push:
-    tags: ['rust-sdk-v*']
+    branches:
+      - master
+
 jobs:
-  publish:
+  release-plz-pr:
+    name: Release-plz PR
     runs-on: ubuntu-latest
+    if: ${{ github.repository_owner == 'Dstack-TEE' }}
+    permissions:
+      contents: write
+      pull-requests: write
+    concurrency:
+      group: release-plz-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Run release-plz
+        uses: release-plz/action@v0.5
+        with:
+          command: release-pr
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  release-plz-release:
+    name: Release-plz release
+    runs-on: ubuntu-latest
+    if: ${{ github.repository_owner == 'Dstack-TEE' }}
     environment: sdk-release
     permissions:
+      contents: write
+      pull-requests: read
       id-token: write
     steps:
-    - uses: actions/checkout@v5
-    - uses: rust-lang/crates-io-auth-action@v1
-      id: auth
-    - run: cargo publish -p dstack-sdk-types
-      env:
-        CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
-    - run: cargo publish -p dstack-sdk
-      env:
-        CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
-
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Run release-plz
+        uses: release-plz/action@v0.5
+        with:
+          command: release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
