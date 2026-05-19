@@ -97,27 +97,28 @@
   "author": "Leechael Yim",
   "license": "Apache-2.0",
   "devDependencies": {
+    "@noble/curves": "^1.8.1",
+    "@noble/hashes": "^1.6.1",
+    "@solana/web3.js": "^1.98.4",
     "@types/node": "latest",
     "typescript": "^5.7.0",
+    "viem": "^2.43.3",
     "vitest": "^3.2.4"
-  },
-  "optionalDependencies": {
-    "@noble/curves": "^1.8.1",
-    "@solana/web3.js": "^1.98.4",
-    "viem": "^2.43.3"
   },
   "peerDependencies": {
     "@noble/curves": "^1.8.1",
-    "@noble/hashes": "^1.6.1"
+    "@noble/hashes": "^1.6.1",
+    "@solana/web3.js": "^1.98.4",
+    "viem": "^2.43.3"
   },
   "peerDependenciesMeta": {
-    "viem": {
-      "optional": true
-    },
     "@noble/curves": {
       "optional": true
     },
     "@solana/web3.js": {
+      "optional": true
+    },
+    "viem": {
       "optional": true
     }
   }
