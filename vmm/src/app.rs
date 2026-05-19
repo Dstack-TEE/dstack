@@ -1188,7 +1188,16 @@ fn make_vm_config(cfg: &Config, manifest: &Manifest, image: &Image) -> Result<se
         host_share_mode: cfg.cvm.host_share_mode.clone(),
         hotplug_off: cfg.cvm.qemu_hotplug_off,
         image: Some(manifest.image.clone()),
-        ovmf_variant: image.info.ovmf_variant,
+        // Prefer the explicit field from metadata.json; fall back to deriving
+        // the variant from the image's `version` string. Without this fallback,
+        // pre-0.5.11 OS images (whose metadata.json predates the ovmf_variant
+        // field) ship with `None` and force verifiers to guess from the image
+        // directory name — which fails for the standard `dstack-X.Y.Z-<hash>`
+        // naming convention.
+        ovmf_variant: image
+            .info
+            .ovmf_variant
+            .or_else(|| dstack_mr::ovmf_variant_for_version(&image.info.version).ok()),
     })?;
     // For backward compatibility
     config["spec_version"] = serde_json::Value::from(1);

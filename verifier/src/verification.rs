@@ -121,7 +121,10 @@ fn collect_rtmr_mismatch(
 // Bump whenever expected RTMR computation changes so stale entries get ignored.
 // v2: edk2-stable202505 OVMF RTMR[0] layout (added 4 events, reshaped BootOrder
 // and Boot0000); the legacy 13-event log no longer matches any in-field image.
-const MEASUREMENT_CACHE_VERSION: u32 = 2;
+// v3: resolve OVMF variant from the image's metadata.json (explicit field, or
+// `version`) when vm_config doesn't declare one; previous versions silently
+// fell back to image-name parsing which fails for `dstack-X.Y.Z-<hash>` dirs.
+const MEASUREMENT_CACHE_VERSION: u32 = 3;
 
 #[derive(Clone, Serialize, Deserialize)]
 struct CachedMeasurement {
@@ -134,6 +137,11 @@ struct ImagePaths {
     kernel_path: PathBuf,
     initrd_path: PathBuf,
     kernel_cmdline: String,
+    /// OVMF variant resolved from the image's metadata.json: the explicit
+    /// `ovmf_variant` field when present, otherwise derived from `version`.
+    /// `None` only when metadata.json declares neither — callers should then
+    /// fall back to image-name heuristics.
+    image_ovmf_variant: Option<dstack_types::OvmfVariant>,
 }
 
 pub struct CvmVerifier {
@@ -248,15 +256,25 @@ impl CvmVerifier {
         kernel_path: &Path,
         initrd_path: &Path,
         kernel_cmdline: &str,
+        image_ovmf_variant: Option<dstack_types::OvmfVariant>,
     ) -> Result<TdxMeasurementDetails> {
         let firmware = fw_path.display().to_string();
         let kernel = kernel_path.display().to_string();
         let initrd = initrd_path.display().to_string();
 
-        // Prefer the explicit variant the image declared; fall back to parsing
-        // the version out of the image name for pre-`ovmf_variant` deployments.
+        // Resolve OVMF variant in priority order:
+        //   1. `vm_config.ovmf_variant` — explicit declaration from the VMM
+        //      (only emitted by VMM 0.5.11+; deployments persisted by older
+        //      VMMs are `None` and need a fallback).
+        //   2. `image_ovmf_variant` — resolved from the downloaded image's
+        //      metadata.json (explicit field, or derived from `version`).
+        //      This catches the common case of an old VMM serving a new image.
+        //   3. `ovmf_variant_for_image` on `vm_config.image` — last-resort
+        //      parsing of the image directory name, kept only for legacy
+        //      images whose metadata.json predates the `version` field.
         let ovmf_variant = vm_config
             .ovmf_variant
+            .or(image_ovmf_variant)
             .unwrap_or_else(|| dstack_mr::ovmf_variant_for_image(vm_config.image.as_deref()));
 
         let details = dstack_mr::Machine::builder()
@@ -295,6 +313,7 @@ impl CvmVerifier {
         kernel_path: &Path,
         initrd_path: &Path,
         kernel_cmdline: &str,
+        image_ovmf_variant: Option<dstack_types::OvmfVariant>,
     ) -> Result<TdxMeasurements> {
         self.compute_measurement_details(
             vm_config,
@@ -302,6 +321,7 @@ impl CvmVerifier {
             kernel_path,
             initrd_path,
             kernel_cmdline,
+            image_ovmf_variant,
         )
         .map(|details| details.measurements)
     }
@@ -313,6 +333,7 @@ impl CvmVerifier {
         kernel_path: &Path,
         initrd_path: &Path,
         kernel_cmdline: &str,
+        image_ovmf_variant: Option<dstack_types::OvmfVariant>,
     ) -> Result<TdxMeasurements> {
         let cache_key = Self::vm_config_cache_key(vm_config)?;
 
@@ -326,6 +347,7 @@ impl CvmVerifier {
             kernel_path,
             initrd_path,
             kernel_cmdline,
+            image_ovmf_variant,
         )?;
 
         if let Err(e) = self.store_measurements_in_cache(&cache_key, &measurements) {
@@ -367,6 +389,9 @@ impl CvmVerifier {
         let fw_path = image_dir.join(&image_info.bios);
         let kernel_path = image_dir.join(&image_info.kernel);
         let initrd_path = image_dir.join(&image_info.initrd);
+        let image_ovmf_variant = image_info
+            .ovmf_variant
+            .or_else(|| dstack_mr::ovmf_variant_for_version(&image_info.version).ok());
         let kernel_cmdline = image_info.cmdline + " initrd=initrd";
 
         Ok(ImagePaths {
@@ -374,6 +399,7 @@ impl CvmVerifier {
             kernel_path,
             initrd_path,
             kernel_cmdline,
+            image_ovmf_variant,
         })
     }
 
@@ -394,6 +420,7 @@ impl CvmVerifier {
             &image_paths.kernel_path,
             &image_paths.initrd_path,
             &image_paths.kernel_cmdline,
+            image_paths.image_ovmf_variant,
         )
     }
 
@@ -556,6 +583,7 @@ impl CvmVerifier {
                     &image_paths.kernel_path,
                     &image_paths.initrd_path,
                     &image_paths.kernel_cmdline,
+                    image_paths.image_ovmf_variant,
                 )
                 .context("Failed to compute expected measurements")?;
 
