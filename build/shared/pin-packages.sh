@@ -27,6 +27,7 @@ fi
 # sources.list.d/*.sources), so we must wipe both and rewrite from scratch
 # pointing at the frozen snapshot for this exact suite. Otherwise the base
 # image's default live sources stay active and packages drift on every build.
+# shellcheck source=/dev/null
 SUITE=$(. /etc/os-release && echo "${VERSION_CODENAME:-}")
 if [ -z "$SUITE" ]; then
     echo "could not detect Debian suite from /etc/os-release" >&2
