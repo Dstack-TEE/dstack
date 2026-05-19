@@ -1,0 +1,52 @@
+# SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+name: Publish Python SDK to PyPI
+on:
+  push:
+    tags: ['python-sdk-v*']
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Publish target'
+        required: true
+        default: 'pypi'
+        type: choice
+        options:
+          - pypi
+          - testpypi
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install PDM
+        run: pip install pdm
+
+      - name: Build distribution
+        working-directory: sdk/python
+        run: pdm build
+
+      - name: Publish to PyPI
+        if: github.event_name == 'push' || github.event.inputs.target == 'pypi'
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: sdk/python/dist
+
+      - name: Publish to TestPyPI
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.target == 'testpypi'
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          packages-dir: sdk/python/dist
