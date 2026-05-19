@@ -4,9 +4,6 @@
   "description": "dstack SDK",
   "main": "dist/node/index.js",
   "types": "dist/node/index.d.ts",
-  "browser": {
-    "crypto": "crypto-browserify"
-  },
   "exports": {
     ".": {
       "import": "./dist/node/index.js",
@@ -99,9 +96,6 @@
   },
   "author": "Leechael Yim",
   "license": "Apache-2.0",
-  "dependencies": {
-    "crypto-browserify": "^3.12.0"
-  },
   "devDependencies": {
     "@types/node": "latest",
     "typescript": "^5.7.0",
