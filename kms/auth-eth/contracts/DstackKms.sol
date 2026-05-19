@@ -45,6 +45,8 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
     address public appImplementation;
 
     // Events
+    // appId is unindexed for backward compatibility with deployed log indexers.
+    // slither-disable-next-line unindexed-event-address
     event AppRegistered(address appId);
     event KmsInfoSet(bytes k256Pubkey);
     event KmsAggregatedMrAdded(bytes32 mrAggregated);
@@ -54,6 +56,7 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
     event OsImageHashAdded(bytes32 osImageHash);
     event OsImageHashRemoved(bytes32 osImageHash);
     event GatewayAppIdSet(string gatewayAppId);
+    // slither-disable-next-line unindexed-event-address
     event AppImplementationSet(address implementation);
     event AppDeployedViaFactory(address indexed appId, address indexed deployer);
 
@@ -164,6 +167,14 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
             initialComposeHash
         );
 
+        // The ERC1967Proxy constructor delegatecalls into `appImplementation`'s
+        // initializer. The owner sets `appImplementation` via
+        // setAppImplementation; safety here rests on owner trust, not on a
+        // structural reentrancy impossibility — a malicious owner could in
+        // principle install an impl whose `initialize` reenters this contract.
+        // See docs/specification.md §1 for the owner trust scope and §6.1 for
+        // the malicious-registered-app threat model.
+        // slither-disable-next-line reentrancy-benign,reentrancy-events
         appId = address(new ERC1967Proxy(appImplementation, initData));
         registerApp(appId);
         emit AppDeployedViaFactory(appId, msg.sender);
@@ -267,7 +278,10 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
             return (false, "App not deployed or invalid address");
         }
 
-        // Call the app's isAppAllowed function
+        // Call the app's isAppAllowed function. The tuple is forwarded as the
+        // function's return value; the slither detector trips on the named
+        // return + forward pattern but the value is actually used.
+        // slither-disable-next-line unused-return
         return IAppAuth(bootInfo.appId).isAppAllowed(bootInfo);
     }
 

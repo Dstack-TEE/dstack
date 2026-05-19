@@ -128,6 +128,26 @@ npm run build && npm start
 npm test
 ```
 
+## Static Analysis & Symbolic Verification (local only)
+
+We run [Slither](https://github.com/crytic/slither) and
+[Halmos](https://github.com/a16z/halmos) locally during development. They
+are intentionally not part of CI — symbolic proofs are slow, sensitive to
+solver versions, and most valuable as an interactive design check rather
+than a gate.
+
+```bash
+pipx install slither-analyzer halmos
+slither .
+halmos --contract DstackAppSymbolicTest
+halmos --contract DstackKmsSymbolicTest
+```
+
+Configuration lives in `slither.config.json` and `foundry.toml`.
+See `docs/formal-verification.md` for the verification roadmap, what each
+symbolic property proves, and the deeper-verification plan for a future
+audit-firm engagement.
+
 ## Additional Commands
 
 ```bash
