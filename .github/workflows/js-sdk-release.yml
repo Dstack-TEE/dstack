@@ -65,7 +65,7 @@ jobs:
 
       - name: Install dependencies
         working-directory: sdk/js
-        run: npm ci
+        run: npm install
 
       - name: Build
         working-directory: sdk/js

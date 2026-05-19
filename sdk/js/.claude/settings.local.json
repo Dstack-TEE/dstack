@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm run clean:*)",
+      "Bash(npm run build:*)",
+      "Bash(npm test)",
+      "Bash(export DSTACK_SIMULATOR_ENDPOINT=/Users/leechael/workshop/phala/dstack/sdk/simulator/dstack.sock)",
+      "Bash(export TAPPD_SIMULATOR_ENDPOINT=/Users/leechael/workshop/phala/dstack/sdk/simulator/tappd.sock)",
+      "Bash(node:*)",
+      "Bash(rm:*)",
+      "Bash(npm run test:ci:*)",
+      "Bash(grep:*)",
+      "Bash(npm test:*)",
+      "Bash(npm install)",
+      "Bash(npm run test:*)",
+      "Bash(npx tsc:*)"
+    ],
+    "deny": []
+  }
+}
