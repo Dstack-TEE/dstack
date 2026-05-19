@@ -3,7 +3,8 @@
 /build-config.sh
 /build/*
 !/build/shared/
-generated/
+**/generated/*
+!**/generated/mod.rs
 node_modules/
 /.cargo
 .venv
