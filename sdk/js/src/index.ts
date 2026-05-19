@@ -179,6 +179,12 @@ export interface TlsKeyOptions {
   usageRaTls?: boolean;
   usageServerAuth?: boolean;
   usageClientAuth?: boolean;
+  // Certificate validity start (seconds since UNIX epoch). Requires dstack OS >= 0.5.7.
+  notBefore?: number;
+  // Certificate validity end (seconds since UNIX epoch). Requires dstack OS >= 0.5.7.
+  notAfter?: number;
+  // Embed app info into the certificate. Requires dstack OS >= 0.5.7.
+  withAppInfo?: boolean;
 }
 
 const SECP256K1_ALGORITHMS = new Set(['secp256k1', 'k256', ''])
@@ -217,6 +223,14 @@ export class DstackClient<T extends TcbInfo = TcbInfoV05x> {
     }
   }
 
+  private async ensureTlsKeyOptionsSupported(featureNames: string[]): Promise<void> {
+    try {
+      await this.version()
+    } catch {
+      throw new Error(`TLS key options [${featureNames.join(', ')}] are not supported: OS version too old (Version RPC unavailable)`)
+    }
+  }
+
   async getKey(path: string = '', purpose: string = '', algorithm: string = 'secp256k1'): Promise<GetKeyResponse> {
     await this.ensureAlgorithmSupported(algorithm)
     const payload = JSON.stringify({
@@ -239,7 +253,18 @@ export class DstackClient<T extends TcbInfo = TcbInfoV05x> {
       usageRaTls = false,
       usageServerAuth = true,
       usageClientAuth = false,
+      notBefore,
+      notAfter,
+      withAppInfo,
     } = options;
+
+    const newFeatures: string[] = []
+    if (notBefore !== undefined) newFeatures.push('notBefore')
+    if (notAfter !== undefined) newFeatures.push('notAfter')
+    if (withAppInfo !== undefined) newFeatures.push('withAppInfo')
+    if (newFeatures.length > 0) {
+      await this.ensureTlsKeyOptionsSupported(newFeatures)
+    }
 
     let raw: Record<string, any> = {
       subject,
@@ -249,6 +274,15 @@ export class DstackClient<T extends TcbInfo = TcbInfoV05x> {
     }
     if (altNames && altNames.length) {
       raw['alt_names'] = altNames
+    }
+    if (notBefore !== undefined) {
+      raw['not_before'] = notBefore
+    }
+    if (notAfter !== undefined) {
+      raw['not_after'] = notAfter
+    }
+    if (withAppInfo !== undefined) {
+      raw['with_app_info'] = withAppInfo
     }
     const payload = JSON.stringify(raw)
     const result = await send_rpc_request<GetTlsKeyResponse>(this.endpoint, '/GetTlsKey', payload)
