@@ -89,6 +89,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.ver.outputs.version }}
         run: |
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::notice::GitHub Release $GITHUB_REF_NAME already exists; skipping"
+            exit 0
+          fi
           gh release create "$GITHUB_REF_NAME" \
             --title "dstack-sdk $VERSION" \
             --notes "Published to crates.io: [dstack-sdk@$VERSION](https://crates.io/crates/dstack-sdk/$VERSION), [dstack-sdk-types@$VERSION](https://crates.io/crates/dstack-sdk-types/$VERSION)" \
