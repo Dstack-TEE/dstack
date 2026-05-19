@@ -2533,7 +2533,7 @@ dependencies = [
 
 [[package]]
 name = "dstack-sdk"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "alloy",
  "anyhow",
@@ -2553,7 +2553,7 @@ dependencies = [
 
 [[package]]
 name = "dstack-sdk-types"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "bon",
