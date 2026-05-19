@@ -213,7 +213,7 @@ export class DstackClient<T extends TcbInfo = TcbInfoV05x> {
     }
   }
 
-  async getKey(path: string, purpose: string = '', algorithm: string = 'secp256k1'): Promise<GetKeyResponse> {
+  async getKey(path: string = '', purpose: string = '', algorithm: string = 'secp256k1'): Promise<GetKeyResponse> {
     await this.ensureAlgorithmSupported(algorithm)
     const payload = JSON.stringify({
       path: path,
