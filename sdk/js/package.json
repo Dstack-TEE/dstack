@@ -92,6 +92,11 @@
     "dstack",
     "Phala"
   ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Dstack-TEE/dstack",
+    "directory": "sdk/js"
+  },
   "author": "Leechael Yim",
   "license": "Apache-2.0",
   "dependencies": {
