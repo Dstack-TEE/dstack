@@ -2,7 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-import crypto from 'crypto'
+import { sha256 } from '@noble/hashes/sha256'
+import { bytesToHex } from '@noble/hashes/utils'
 import { type GetKeyResponse, type GetTlsKeyResponse } from './index'
 import { privateKeyToAccount } from 'viem/accounts'
 
@@ -29,13 +30,8 @@ export function toViemAccountSecure(keyResponse: GetKeyResponse | GetTlsKeyRespo
   // Keep legacy behavior for GetTlsKeyResponse, but with warning.
   if (keyResponse.__name__ === 'GetTlsKeyResponse') {
     console.warn('toViemAccountSecure: Please don\'t use `deriveKey` method to get key, use `getKey` instead.')
-    try {
-      // Get supported hash algorithm by `openssl list -digest-algorithms`, but it's not guaranteed to be supported by node.js
-      const hex = crypto.createHash('sha256').update(keyResponse.asUint8Array()).digest('hex')
-      return privateKeyToAccount(`0x${hex}`)
-    } catch (err) {
-      throw new Error('toViemAccountSecure: missing sha256 support, please upgrade your openssl and node.js')
-    }
+    const hex = bytesToHex(sha256(keyResponse.asUint8Array()))
+    return privateKeyToAccount(`0x${hex}`)
   }
   const hex = Array.from(keyResponse.key).map(b => b.toString(16).padStart(2, '0')).join('')
   return privateKeyToAccount(`0x${hex}`)

@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import fs from 'fs'
-import crypto from 'crypto'
+import { sha384 } from '@noble/hashes/sha512'
 import { send_rpc_request } from './send-rpc-request'
 export { getComposeHash } from './get-compose-hash'
 export { verifyEnvEncryptPublicKey, verifyEnvEncryptPublicKeyLegacy } from './verify-env-encrypt-public-key'
@@ -154,9 +154,7 @@ function replay_rtmr(history: string[]): string {
       const padding = Buffer.alloc(48 - contentBuffer.length, 0)
       contentBuffer = Buffer.concat([contentBuffer, padding])
     }
-    mr = Buffer.from(crypto.createHash('sha384')
-      .update(Buffer.concat([mr, contentBuffer]))
-      .digest())
+    mr = Buffer.from(sha384(Buffer.concat([mr, contentBuffer])))
   }
   return mr.toString('hex')
 }

@@ -2,7 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-import crypto from "crypto";
+import { sha256 } from "@noble/hashes/sha256";
+import { bytesToHex } from "@noble/hashes/utils";
 
 type SortableValue = string | number | boolean | null | undefined | SortableObject | SortableArray;
 interface SortableObject {
@@ -104,5 +105,5 @@ export function getComposeHash(app_compose: AppCompose, normalize: boolean = fal
     app_compose = preprocessAppCompose(app_compose);
   }
   const manifest_str = toDeterministicJson(app_compose);
-  return crypto.createHash("sha256").update(manifest_str, "utf8").digest("hex");
+  return bytesToHex(sha256(new TextEncoder().encode(manifest_str)));
 }

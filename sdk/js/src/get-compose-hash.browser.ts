@@ -2,7 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-import crypto from 'crypto';
+import { sha256 } from '@noble/hashes/sha256';
+import { bytesToHex } from '@noble/hashes/utils';
 
 type SortableValue = string | number | boolean | null | undefined | SortableObject | SortableArray;
 interface SortableObject {
@@ -27,15 +28,8 @@ function sortObjectKeys(obj: SortableValue): SortableValue {
   return sortedObj;
 }
 
-/**
- * Browser-compatible SHA-256 hash using crypto-browserify
- * @param data - Data to hash
- * @returns Promise resolving to hex-encoded hash
- */
 async function sha256Hash(data: string): Promise<string> {
-  const hash = crypto.createHash('sha256');
-  hash.update(data, 'utf8');
-  return hash.digest('hex');
+  return bytesToHex(sha256(new TextEncoder().encode(data)));
 }
 
 /**
