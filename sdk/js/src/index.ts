@@ -87,6 +87,10 @@ export interface InfoResponse<VersionTcbInfo extends TcbInfo> {
   key_provider_info: string
   compose_hash: string
   vm_config?: string
+  // Cloud provider sys_vendor (e.g. "Google"). Available on dstack OS >= 0.5.7.
+  cloud_vendor?: string
+  // Cloud provider product_name (e.g. "Google Compute Engine"). Available on dstack OS >= 0.5.7.
+  cloud_product?: string
 }
 
 export interface GetQuoteResponse {
