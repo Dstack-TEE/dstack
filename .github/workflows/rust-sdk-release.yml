@@ -2,55 +2,98 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-name: Release-plz
+name: Publish SDK to crates.io
 
 on:
   push:
-    branches:
-      - master
+    tags: ['dstack-sdk-v*']
 
 jobs:
-  release-plz-pr:
-    name: Release-plz PR
+  publish:
     runs-on: ubuntu-latest
-    if: ${{ github.repository_owner == 'Dstack-TEE' }}
-    permissions:
-      contents: write
-      pull-requests: write
-    concurrency:
-      group: release-plz-${{ github.ref }}
-      cancel-in-progress: false
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Run release-plz
-        uses: release-plz/action@v0.5
-        with:
-          command: release-pr
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  release-plz-release:
-    name: Release-plz release
-    runs-on: ubuntu-latest
-    if: ${{ github.repository_owner == 'Dstack-TEE' }}
     environment: sdk-release
     permissions:
-      contents: write
-      pull-requests: read
       id-token: write
+      contents: write
     steps:
       - uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Run release-plz
-        uses: release-plz/action@v0.5
-        with:
-          command: release
+
+      - name: Extract version from tag
+        id: ver
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          version="${tag#dstack-sdk-v}"
+          if [[ -z "$version" || "$version" == "$tag" ]]; then
+            echo "::error::tag '$tag' does not start with 'dstack-sdk-v'"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Publishing version: $version"
+
+      - name: Verify Cargo.toml versions match tag
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          python3 <<'PY'
+          import os, sys, tomllib
+
+          want = os.environ["VERSION"]
+
+          def pkg_version(path):
+              with open(path, "rb") as f:
+                  return tomllib.load(f)["package"]["version"]
+
+          def ws_dep_version(path, name):
+              with open(path, "rb") as f:
+                  dep = tomllib.load(f)["workspace"]["dependencies"][name]
+              return dep["version"] if isinstance(dep, dict) else dep
+
+          checks = [
+              ("sdk/rust/types/Cargo.toml [package.version]",
+                  pkg_version("sdk/rust/types/Cargo.toml")),
+              ("sdk/rust/Cargo.toml [package.version]",
+                  pkg_version("sdk/rust/Cargo.toml")),
+              ("Cargo.toml [workspace.dependencies.dstack-sdk-types.version]",
+                  ws_dep_version("Cargo.toml", "dstack-sdk-types")),
+          ]
+
+          fail = False
+          for label, got in checks:
+              ok = got == want
+              fail = fail or not ok
+              print(f"  {'OK ' if ok else 'BAD'}  {label}: {got}")
+
+          if fail:
+              print(f"\ntag is dstack-sdk-v{want}; bump all three to {want} before tagging.",
+                    file=sys.stderr)
+              sys.exit(1)
+          PY
+
+      - uses: rust-lang/crates-io-auth-action@v1
+        id: auth
+
+      - name: Publish dstack-sdk-types
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: .github/scripts/cargo-publish-idempotent.sh dstack-sdk-types
+
+      - name: Publish dstack-sdk
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: .github/scripts/cargo-publish-idempotent.sh dstack-sdk
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::notice::GitHub Release $GITHUB_REF_NAME already exists; skipping"
+            exit 0
+          fi
+          gh release create "$GITHUB_REF_NAME" \
+            --title "dstack-sdk $VERSION" \
+            --notes "Published to crates.io: [dstack-sdk@$VERSION](https://crates.io/crates/dstack-sdk/$VERSION), [dstack-sdk-types@$VERSION](https://crates.io/crates/dstack-sdk-types/$VERSION)" \
+            --verify-tag
