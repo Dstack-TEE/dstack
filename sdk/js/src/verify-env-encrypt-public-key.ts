@@ -2,170 +2,122 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-import { keccak_256 } from "@noble/hashes/sha3";
-import { secp256k1 } from "@noble/curves/secp256k1";
+import { keccak_256 } from "@noble/hashes/sha3"
+import { secp256k1 } from "@noble/curves/secp256k1"
 
-/** Default maximum age for timestamp verification (5 minutes) */
-const DEFAULT_MAX_AGE_SECONDS = 300;
+const DEFAULT_MAX_AGE_SECONDS = 300
 
-/**
- * Options for verifying env encrypt public key
- */
 export interface VerifyOptions {
-  /**
-   * Maximum age of the response in seconds.
-   * If the timestamp is older than this, verification fails.
-   * Default: 300 (5 minutes)
-   */
-  maxAgeSeconds?: number;
+  /** Maximum age of the signed response in seconds. Default: 300 (5 minutes). */
+  maxAgeSeconds?: number
+}
+
+function bigintToBeBytes(value: bigint, length: number): Uint8Array {
+  const bytes = new Uint8Array(length)
+  for (let i = length - 1; i >= 0; i--) {
+    bytes[i] = Number(value & 0xffn)
+    value >>= 8n
+  }
+  return bytes
+}
+
+function hexToBytes(hex: string): Uint8Array {
+  if (hex.startsWith("0x")) hex = hex.slice(2)
+  const bytes = new Uint8Array(hex.length / 2)
+  for (let i = 0; i < hex.length; i += 2) {
+    bytes[i / 2] = parseInt(hex.substr(i, 2), 16)
+  }
+  return bytes
+}
+
+function bytesToHex(bytes: Uint8Array): string {
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("")
+}
+
+function concat(...parts: Uint8Array[]): Uint8Array {
+  const total = parts.reduce((n, p) => n + p.length, 0)
+  const out = new Uint8Array(total)
+  let offset = 0
+  for (const part of parts) {
+    out.set(part, offset)
+    offset += part.length
+  }
+  return out
+}
+
+function recoverSigner(
+  messageHash: Uint8Array,
+  signature: Uint8Array,
+): string | null {
+  try {
+    const sigBytes = signature.slice(0, 64)
+    const recovery = signature[64]
+    const recoveredPubKey = secp256k1.Signature.fromCompact(sigBytes)
+      .addRecoveryBit(recovery)
+      .recoverPublicKey(messageHash)
+    return "0x" + bytesToHex(recoveredPubKey.toRawBytes(true))
+  } catch (error) {
+    console.error("signature verification failed:", error)
+    return null
+  }
 }
 
 /**
- * Verify the signature of a public key with timestamp validation.
+ * Verify a timestamp-protected KMS env-encrypt public key signature.
  *
- * @param publicKey - The public key bytes to verify (32 bytes)
- * @param signature - The signature bytes (65 bytes)
- * @param appId - The application ID
- * @param timestamp - Unix timestamp in seconds when the response was generated
- * @param options - Optional verification options
- * @returns The compressed public key if valid, null otherwise
- *
- * @example
- * ```typescript
- * const publicKey = new Uint8Array(Buffer.from('e33a1832c6562067ff8f844a61e51ad051f1180b66ec2551fb0251735f3ee90a', 'hex'));
- * const signature = new Uint8Array(Buffer.from('...', 'hex'));
- * const appId = '00'.repeat(20);
- * const timestamp = 1700000000n;
- * const compressedPubkey = verifyEnvEncryptPublicKey(publicKey, signature, appId, timestamp);
- * ```
+ * Returns the signer's compressed secp256k1 public key on success, or `null`
+ * on failure (bad length, expired timestamp, invalid signature).
  */
 export function verifyEnvEncryptPublicKey(
   publicKey: Uint8Array,
   signature: Uint8Array,
   appId: string,
   timestamp: bigint | number,
-  options?: VerifyOptions
+  options?: VerifyOptions,
 ): string | null {
-  if (signature.length !== 65) {
-    return null;
+  if (signature.length !== 65) return null
+
+  const ts = typeof timestamp === "bigint" ? timestamp : BigInt(timestamp)
+  const maxAge = options?.maxAgeSeconds ?? DEFAULT_MAX_AGE_SECONDS
+  const now = BigInt(Math.floor(Date.now() / 1000))
+  const age = now - ts
+  if (age < -60n) {
+    console.error("timestamp is too far in the future")
+    return null
+  }
+  if (age > BigInt(maxAge)) {
+    console.error(`timestamp is too old: ${age}s > ${maxAge}s`)
+    return null
   }
 
-  // Convert timestamp to bigint for consistent handling
-  const ts = typeof timestamp === 'bigint' ? timestamp : BigInt(timestamp);
-
-  // Validate timestamp freshness
-  const maxAge = options?.maxAgeSeconds ?? DEFAULT_MAX_AGE_SECONDS;
-  const now = BigInt(Math.floor(Date.now() / 1000));
-  const age = now - ts;
-
-  if (age < 0n) {
-    // Timestamp is in the future - allow small clock skew (60 seconds)
-    if (age < -60n) {
-      console.error('timestamp is too far in the future');
-      return null;
-    }
-  } else if (age > BigInt(maxAge)) {
-    console.error(`timestamp is too old: ${age}s > ${maxAge}s`);
-    return null;
-  }
-
-  // Create the message to verify
-  const prefix = Buffer.from("dstack-env-encrypt-pubkey", "utf8");
-
-  // Remove 0x prefix if present
-  let cleanAppId = appId;
-  if (appId.startsWith("0x")) {
-    cleanAppId = appId.slice(2);
-  }
-
-  const appIdBytes = Buffer.from(cleanAppId, "hex");
-  const separator = Buffer.from(":", "utf8");
-
-  // Convert timestamp to big-endian bytes (8 bytes)
-  const timestampBytes = Buffer.alloc(8);
-  timestampBytes.writeBigUInt64BE(ts);
-
-  // Construct message: prefix + ":" + app_id + timestamp_be_bytes + public_key
-  const message = Buffer.concat([prefix, separator, appIdBytes, timestampBytes, Buffer.from(publicKey)]);
-
-  // Hash the message with Keccak-256
-  const messageHash = keccak_256(message);
-
-  try {
-    // Extract r, s, v from signature (last byte is recovery id)
-    const r = signature.slice(0, 32);
-    const s = signature.slice(32, 64);
-    const recovery = signature[64];
-
-    // Create signature in DER format for secp256k1
-    const sigBytes = new Uint8Array(64);
-    sigBytes.set(r, 0);
-    sigBytes.set(s, 32);
-
-    // Recover the public key from the signature
-    const recoveredPubKey = secp256k1.Signature.fromCompact(sigBytes)
-      .addRecoveryBit(recovery)
-      .recoverPublicKey(messageHash);
-
-    // Return compressed public key with 0x prefix
-    return '0x' + Buffer.from(recoveredPubKey.toRawBytes(true)).toString('hex');
-  } catch (error) {
-    console.error('signature verification failed:', error);
-    return null;
-  }
+  const prefix = new TextEncoder().encode("dstack-env-encrypt-pubkey")
+  const separator = new TextEncoder().encode(":")
+  const appIdBytes = hexToBytes(appId)
+  const timestampBytes = bigintToBeBytes(ts, 8)
+  const message = concat(
+    prefix,
+    separator,
+    appIdBytes,
+    timestampBytes,
+    publicKey,
+  )
+  return recoverSigner(keccak_256(message), signature)
 }
 
 /**
- * @deprecated Use verifyEnvEncryptPublicKey with timestamp parameter instead.
- * This function is kept for backward compatibility but does not protect against replay attacks.
+ * @deprecated Use {@link verifyEnvEncryptPublicKey} with timestamp. Legacy
+ * signatures do not protect against replay attacks.
  */
 export function verifyEnvEncryptPublicKeyLegacy(
   publicKey: Uint8Array,
   signature: Uint8Array,
-  appId: string
+  appId: string,
 ): string | null {
-  if (signature.length !== 65) {
-    return null;
-  }
+  if (signature.length !== 65) return null
 
-  // Create the message to verify
-  const prefix = Buffer.from("dstack-env-encrypt-pubkey", "utf8");
-
-  // Remove 0x prefix if present
-  let cleanAppId = appId;
-  if (appId.startsWith("0x")) {
-    cleanAppId = appId.slice(2);
-  }
-
-  const appIdBytes = Buffer.from(cleanAppId, "hex");
-  const separator = Buffer.from(":", "utf8");
-
-  // Construct message: prefix + ":" + app_id + public_key
-  const message = Buffer.concat([prefix, separator, appIdBytes, Buffer.from(publicKey)]);
-
-  // Hash the message with Keccak-256
-  const messageHash = keccak_256(message);
-
-  try {
-    // Extract r, s, v from signature (last byte is recovery id)
-    const r = signature.slice(0, 32);
-    const s = signature.slice(32, 64);
-    const recovery = signature[64];
-
-    // Create signature in DER format for secp256k1
-    const sigBytes = new Uint8Array(64);
-    sigBytes.set(r, 0);
-    sigBytes.set(s, 32);
-
-    // Recover the public key from the signature
-    const recoveredPubKey = secp256k1.Signature.fromCompact(sigBytes)
-      .addRecoveryBit(recovery)
-      .recoverPublicKey(messageHash);
-
-    // Return compressed public key with 0x prefix
-    return '0x' + Buffer.from(recoveredPubKey.toRawBytes(true)).toString('hex');
-  } catch (error) {
-    console.error('signature verification failed:', error);
-    return null;
-  }
+  const prefix = new TextEncoder().encode("dstack-env-encrypt-pubkey")
+  const separator = new TextEncoder().encode(":")
+  const appIdBytes = hexToBytes(appId)
+  const message = concat(prefix, separator, appIdBytes, publicKey)
+  return recoverSigner(keccak_256(message), signature)
 }
