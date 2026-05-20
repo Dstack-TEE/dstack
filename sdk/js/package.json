@@ -75,6 +75,9 @@
   "engines": {
     "node": ">=18.0.0"
   },
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "npm run build:node && npm run build:browser",
     "build:node": "tsc -p tsconfig.node.json",
