@@ -83,6 +83,10 @@ def check_info_response(result: InfoResponse):
     assert len(result.tcb_info.device_id) == 64
     assert len(result.tcb_info.app_compose) > 0
     assert len(result.tcb_info.event_log) > 0
+    # Cloud provider fields available on dstack OS >= 0.5.7. Older OS or the
+    # simulator may omit them; the attribute must still exist and be a str.
+    assert isinstance(result.cloud_vendor, str)
+    assert isinstance(result.cloud_product, str)
 
 
 @pytest.mark.asyncio
