@@ -24,10 +24,10 @@ license = {text = "Apache-2.0"}
 
 [project.optional-dependencies]
 solana = ["solders"]
-ethereum = ["web3"]
+ethereum = ["eth-account>=0.13.0"]
 sol = ["solders"]
-eth = ["web3"]
-all = ["solders", "web3"]
+eth = ["eth-account>=0.13.0"]
+all = ["solders", "eth-account>=0.13.0"]
 
 [build-system]
 requires = ["pdm-backend"]
@@ -41,7 +41,7 @@ solana = [
     "solders",
 ]
 ethereum = [
-    "web3",
+    "eth-account>=0.13.0",
 ]
 
 [tool.mypy]
@@ -135,5 +135,5 @@ solana = [
     "solders",
 ]
 ethereum = [
-    "web3",
+    "eth-account>=0.13.0",
 ]
