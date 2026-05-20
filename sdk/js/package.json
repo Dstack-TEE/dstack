@@ -2,74 +2,57 @@
   "name": "@phala/dstack-sdk",
   "version": "0.5.8-beta.1",
   "description": "dstack SDK",
-  "main": "dist/node/index.js",
-  "types": "dist/node/index.d.ts",
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "import": "./dist/node/index.js",
-      "require": "./dist/node/index.js",
-      "types": "./dist/node/index.d.ts"
+      "types": {
+        "import": "./dist/index.d.mts",
+        "require": "./dist/index.d.ts"
+      },
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
     },
     "./viem": {
-      "import": "./dist/node/viem.js",
-      "require": "./dist/node/viem.js",
-      "types": "./dist/node/viem.d.ts"
-    },
-    "./encrypt-env-vars": {
-      "node": {
-        "import": "./dist/node/encrypt-env-vars.js",
-        "require": "./dist/node/encrypt-env-vars.js",
-        "types": "./dist/node/encrypt-env-vars.d.ts"
+      "types": {
+        "import": "./dist/viem.d.mts",
+        "require": "./dist/viem.d.ts"
       },
-      "browser": {
-        "import": "./dist/browser/encrypt-env-vars.browser.js",
-        "require": "./dist/browser/encrypt-env-vars.browser.js",
-        "types": "./dist/browser/encrypt-env-vars.browser.d.ts"
-      },
-      "default": {
-        "import": "./dist/browser/encrypt-env-vars.browser.js",
-        "require": "./dist/browser/encrypt-env-vars.browser.js",
-        "types": "./dist/browser/encrypt-env-vars.browser.d.ts"
-      }
+      "import": "./dist/viem.mjs",
+      "require": "./dist/viem.js"
     },
     "./solana": {
-      "import": "./dist/node/solana.js",
-      "require": "./dist/node/solana.js",
-      "types": "./dist/node/solana.d.ts"
+      "types": {
+        "import": "./dist/solana.d.mts",
+        "require": "./dist/solana.d.ts"
+      },
+      "import": "./dist/solana.mjs",
+      "require": "./dist/solana.js"
+    },
+    "./encrypt-env-vars": {
+      "types": {
+        "import": "./dist/encrypt-env-vars.d.mts",
+        "require": "./dist/encrypt-env-vars.d.ts"
+      },
+      "import": "./dist/encrypt-env-vars.mjs",
+      "require": "./dist/encrypt-env-vars.js"
     },
     "./get-compose-hash": {
-      "node": {
-        "import": "./dist/node/get-compose-hash.js",
-        "require": "./dist/node/get-compose-hash.js",
-        "types": "./dist/node/get-compose-hash.d.ts"
+      "types": {
+        "import": "./dist/get-compose-hash.d.mts",
+        "require": "./dist/get-compose-hash.d.ts"
       },
-      "browser": {
-        "import": "./dist/browser/get-compose-hash.browser.js",
-        "require": "./dist/browser/get-compose-hash.browser.js",
-        "types": "./dist/browser/get-compose-hash.browser.d.ts"
-      },
-      "default": {
-        "import": "./dist/browser/get-compose-hash.browser.js",
-        "require": "./dist/browser/get-compose-hash.browser.js",
-        "types": "./dist/browser/get-compose-hash.browser.d.ts"
-      }
+      "import": "./dist/get-compose-hash.mjs",
+      "require": "./dist/get-compose-hash.js"
     },
     "./verify-env-encrypt-public-key": {
-      "node": {
-        "import": "./dist/node/verify-env-encrypt-public-key.js",
-        "require": "./dist/node/verify-env-encrypt-public-key.js",
-        "types": "./dist/node/verify-env-encrypt-public-key.d.ts"
+      "types": {
+        "import": "./dist/verify-env-encrypt-public-key.d.mts",
+        "require": "./dist/verify-env-encrypt-public-key.d.ts"
       },
-      "browser": {
-        "import": "./dist/browser/verify-env-encrypt-public-key.browser.js",
-        "require": "./dist/browser/verify-env-encrypt-public-key.browser.js",
-        "types": "./dist/browser/verify-env-encrypt-public-key.browser.d.ts"
-      },
-      "default": {
-        "import": "./dist/browser/verify-env-encrypt-public-key.browser.js",
-        "require": "./dist/browser/verify-env-encrypt-public-key.browser.js",
-        "types": "./dist/browser/verify-env-encrypt-public-key.browser.d.ts"
-      }
+      "import": "./dist/verify-env-encrypt-public-key.mjs",
+      "require": "./dist/verify-env-encrypt-public-key.js"
     }
   },
   "engines": {
@@ -79,9 +62,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "npm run build:node && npm run build:browser",
-    "build:node": "tsc -p tsconfig.node.json",
-    "build:browser": "tsc -p tsconfig.browser.json",
+    "build": "tsup",
     "clean": "rm -rf dist",
     "test": "vitest",
     "test:ci": "vitest --run",
@@ -104,6 +85,7 @@
     "@noble/hashes": "^1.6.1",
     "@solana/web3.js": "^1.98.4",
     "@types/node": "latest",
+    "tsup": "^8.5.1",
     "typescript": "^5.7.0",
     "viem": "^2.43.3",
     "vitest": "^3.2.4"
