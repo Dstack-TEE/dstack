@@ -260,6 +260,10 @@ class InfoResponse(BaseModel, Generic[T]):
     key_provider_info: str
     compose_hash: str
     vm_config: str = ""
+    # Cloud provider sys_vendor (e.g. "Google"). Available on dstack OS >= 0.5.7.
+    cloud_vendor: str = ""
+    # Cloud provider product_name (e.g. "Google Compute Engine"). Available on dstack OS >= 0.5.7.
+    cloud_product: str = ""
 
     @classmethod
     def parse_response(cls, obj: Any, tcb_info_type: type[T]) -> "InfoResponse[T]":
