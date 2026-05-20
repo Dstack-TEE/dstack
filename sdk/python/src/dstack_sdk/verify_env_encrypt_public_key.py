@@ -2,121 +2,113 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Verify ECDSA signatures of environment-encrypt public keys.
+"""Verify ECDSA signatures on KMS env-encrypt public keys.
 
-This module prepares the message per dstack convention and offers a simplified
-API surface. Full public key recovery is not implemented.
+The KMS signs the X25519 env-encrypt public key it returns from
+``/GetAppEnvEncryptPubKey`` so deployers can prove the key originated from a
+specific signer before encrypting secrets against it. There are two message
+formats:
+
+- ``signature_v1`` (preferred): includes a Unix timestamp to bound replay.
+- legacy: pubkey + app_id only. Kept for backward compatibility with old KMS
+  builds. Vulnerable to replay; use the v1 variant whenever available.
+
+Both formats sign ``keccak256(prefix + b":" + app_id + [timestamp_be_bytes] +
+public_key)`` with secp256k1, producing a 65-byte ``r || s || recovery_id``
+signature. This module recovers the signer's compressed public key.
 """
 
-import hashlib
+import time
 from typing import Optional
+import warnings
+
+from eth_keys import keys
+from eth_utils import keccak
+
+DEFAULT_MAX_AGE_SECONDS = 300
+_PREFIX = b"dstack-env-encrypt-pubkey"
+_SEPARATOR = b":"
+_FUTURE_SKEW_TOLERANCE_SECONDS = 60
+
+
+def _normalize_app_id(app_id: str) -> Optional[bytes]:
+    if app_id.startswith("0x"):
+        app_id = app_id[2:]
+    try:
+        return bytes.fromhex(app_id)
+    except ValueError:
+        return None
+
+
+def _recover_signer(msg_hash: bytes, signature: bytes) -> Optional[str]:
+    try:
+        recovered = keys.Signature(
+            signature_bytes=signature
+        ).recover_public_key_from_msg_hash(msg_hash)
+        return "0x" + recovered.to_compressed_bytes().hex()
+    except Exception:
+        return None
 
 
 def verify_env_encrypt_public_key(
-    public_key: bytes, signature: bytes, app_id: str
+    public_key: bytes,
+    signature: bytes,
+    app_id: str,
+    timestamp: int,
+    *,
+    max_age_seconds: int = DEFAULT_MAX_AGE_SECONDS,
 ) -> Optional[str]:
-    """Attempt public key recovery from signature; return compressed key or None."""
-    if len(signature) != 65:
-        return None
+    """Verify a timestamp-protected KMS env-encrypt public key signature.
 
-    try:
-        # Create the message to verify
-        prefix = b"dstack-env-encrypt-pubkey"
-
-        # Remove 0x prefix if present
-        clean_app_id = app_id[2:] if app_id.startswith("0x") else app_id
-
-        # Validate hex string
-        try:
-            app_id_bytes = bytes.fromhex(clean_app_id)
-        except ValueError:
-            # Invalid hex string, return None
-            return None
-
-        separator = b":"
-
-        # Construct message: prefix + ":" + app_id + public_key
-        message = prefix + separator + app_id_bytes + public_key
-
-        # Hash the message with SHA3-256 (Keccak-256)
-        # Note: Using hashlib.sha3_256 which is actually Keccak-256 in most implementations
-        message_hash = hashlib.sha3_256(message).digest()
-
-        # Extract r, s, recovery_id from signature
-        r = signature[:32]
-        s = signature[32:64]
-        recovery_id = signature[64]
-
-        # Convert r, s to integers
-        r_int = int.from_bytes(r, byteorder="big")
-        s_int = int.from_bytes(s, byteorder="big")
-
-        # Recover public key from signature
-        # This is a simplified version - for full ECDSA recovery,
-        # we need more complex logic to try different recovery possibilities
-
-        # For now, let's try a basic approach using known cryptographic libraries
-        # This is where we would typically use a library like ethereum's ecrecover
-        # Since we don't have that, let's implement a basic verification
-
-        # Try both possible recovery IDs (0 and 1, or adjusted by 27)
-        for recovery_attempt in [recovery_id, recovery_id ^ 1]:
-            # This is a stub. A proper ECDSA recovery implementation is required
-            # to return a real public key. For now, always continue.
-            recovered_key = _recover_public_key(
-                message_hash, r_int, s_int, recovery_attempt
-            )
-            if recovered_key:
-                return f"0x{recovered_key.hex()}"
-
-        return None
-
-    except Exception:
-        # Keep behavior non-fatal; callers treat None as invalid
-        # Avoid bare except to satisfy lint rules
-        return None
-
-
-def _recover_public_key(
-    message_hash: bytes, r: int, s: int, recovery_id: int
-) -> Optional[bytes]:
-    """Recover public key from ECDSA signature components.
-
-    This is a simplified implementation. In production, you should use
-    a proper ECDSA recovery library like the one used in Ethereum.
+    Returns the signer's compressed secp256k1 public key (0x-prefixed hex) on
+    success, or ``None`` on bad signature length, expired/future timestamp,
+    invalid hex app_id, or signature recovery failure.
     """
-    # Public key recovery is not implemented in this simplified version.
-    return None
-
-
-# Alternative implementation using a more direct approach
-def verify_signature_simple(public_key: bytes, signature: bytes, app_id: str) -> bool:
-    """Perform simple signature preprocessing without ECDSA recovery."""
     if len(signature) != 65:
-        return False
+        return None
 
-    try:
-        # Create the message
-        prefix = b"dstack-env-encrypt-pubkey"
-        clean_app_id = app_id[2:] if app_id.startswith("0x") else app_id
+    now = int(time.time())
+    age = now - timestamp
+    if age < -_FUTURE_SKEW_TOLERANCE_SECONDS:
+        return None
+    if age > max_age_seconds:
+        return None
 
-        # Validate hex string
-        try:
-            app_id_bytes = bytes.fromhex(clean_app_id)
-        except ValueError:
-            # Invalid hex string
-            return False
+    app_id_bytes = _normalize_app_id(app_id)
+    if app_id_bytes is None:
+        return None
 
-        separator = b":"
-        message = prefix + separator + app_id_bytes + public_key
+    timestamp_bytes = timestamp.to_bytes(8, "big")
+    message = (
+        _PREFIX + _SEPARATOR + app_id_bytes + timestamp_bytes + public_key
+    )
+    return _recover_signer(keccak(message), signature)
 
-        # Hash with SHA3-256 (Keccak-256)
-        # Compute hash to mirror verification flow, but unused in the stub
-        _ = hashlib.sha3_256(message).digest()
 
-        # For now, return True to indicate the message was processed correctly
-        # Full signature verification would require ECDSA implementation
-        return True
+def verify_env_encrypt_public_key_legacy(
+    public_key: bytes,
+    signature: bytes,
+    app_id: str,
+) -> Optional[str]:
+    """Verify a legacy (non-timestamped) KMS signature.
 
-    except Exception:
-        return False
+    .. deprecated::
+        Legacy signatures do not protect against replay attacks. Use
+        :func:`verify_env_encrypt_public_key` with a timestamp from the KMS
+        response whenever possible.
+    """
+    warnings.warn(
+        "verify_env_encrypt_public_key_legacy is deprecated; use "
+        "verify_env_encrypt_public_key with a timestamp from KMS instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    if len(signature) != 65:
+        return None
+
+    app_id_bytes = _normalize_app_id(app_id)
+    if app_id_bytes is None:
+        return None
+
+    message = _PREFIX + _SEPARATOR + app_id_bytes + public_key
+    return _recover_signer(keccak(message), signature)
