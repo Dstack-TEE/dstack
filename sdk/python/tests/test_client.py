@@ -649,3 +649,67 @@ async def test_mixed_sync_async_calls():
     # Both should work and return valid results
     assert len(sync_result.decode_key()) == 32
     assert len(async_result.decode_key()) == 32
+
+
+@pytest.mark.asyncio
+async def test_get_tls_key_new_options_payload(monkeypatch):
+    """0.5.7+ TLS options reach the payload and trigger the Version probe."""
+    calls: list = []
+
+    async def fake_send(self, method, payload):
+        calls.append((method, payload))
+        if method == "Version":
+            return {"version": "0.5.7", "rev": "test"}
+        return {"key": "k", "certificate_chain": []}
+
+    monkeypatch.setenv("DSTACK_SIMULATOR_ENDPOINT", "http://localhost:0")
+    monkeypatch.setattr(AsyncDstackClient, "_send_rpc_request", fake_send)
+    client = AsyncDstackClient()
+    result = await client.get_tls_key(
+        subject="api.example.com",
+        not_before=1_700_000_000,
+        not_after=1_800_000_000,
+        with_app_info=True,
+    )
+    assert isinstance(result, GetTlsKeyResponse)
+    assert [c[0] for c in calls] == ["Version", "GetTlsKey"]
+    payload = calls[1][1]
+    assert payload["not_before"] == 1_700_000_000
+    assert payload["not_after"] == 1_800_000_000
+    assert payload["with_app_info"] is True
+
+
+@pytest.mark.asyncio
+async def test_get_tls_key_legacy_options_skip_version_probe(monkeypatch):
+    """Calls without the new options must NOT probe Version (backward compat)."""
+    calls: list = []
+
+    async def fake_send(self, method, payload):
+        calls.append((method, payload))
+        return {"key": "k", "certificate_chain": []}
+
+    monkeypatch.setenv("DSTACK_SIMULATOR_ENDPOINT", "http://localhost:0")
+    monkeypatch.setattr(AsyncDstackClient, "_send_rpc_request", fake_send)
+    client = AsyncDstackClient()
+    await client.get_tls_key(subject="api.example.com")
+    assert [c[0] for c in calls] == ["GetTlsKey"]
+    payload = calls[0][1]
+    assert "not_before" not in payload
+    assert "not_after" not in payload
+    assert "with_app_info" not in payload
+
+
+@pytest.mark.asyncio
+async def test_get_tls_key_new_options_require_version(monkeypatch):
+    """Raise a clear error when Version RPC is unavailable on older OS."""
+
+    async def fake_send(self, method, payload):
+        if method == "Version":
+            raise RuntimeError("Version not implemented")
+        return {"key": "k", "certificate_chain": []}
+
+    monkeypatch.setenv("DSTACK_SIMULATOR_ENDPOINT", "http://localhost:0")
+    monkeypatch.setattr(AsyncDstackClient, "_send_rpc_request", fake_send)
+    client = AsyncDstackClient()
+    with pytest.raises(RuntimeError, match="TLS key options"):
+        await client.get_tls_key(with_app_info=False)
