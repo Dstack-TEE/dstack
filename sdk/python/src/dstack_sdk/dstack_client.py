@@ -6,6 +6,8 @@ import base64
 import binascii
 import functools
 import hashlib
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as _pkg_version
 import json
 import logging
 import os
@@ -23,7 +25,10 @@ from pydantic import BaseModel
 
 logger = logging.getLogger("dstack_sdk")
 
-__version__ = "0.5.2"
+try:
+    __version__ = _pkg_version("dstack-sdk")
+except PackageNotFoundError:
+    __version__ = "0.0.0+unknown"
 
 
 INIT_MR = "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
