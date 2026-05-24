@@ -399,6 +399,8 @@ service Admin {
   rpc GetGlobalConnections(google.protobuf.Empty) returns (GlobalConnectionsStats) {}
   // Get all node statuses
   rpc GetNodeStatuses(google.protobuf.Empty) returns (GetNodeStatusesResponse) {}
+  // Force remove an instance from the gateway and KvStore.
+  rpc ForceRemoveInstance(ForceRemoveInstanceRequest) returns (google.protobuf.Empty) {}
 
   // ==================== DNS Credential Management ====================
   // List all DNS credentials
@@ -606,6 +608,11 @@ message RenewZtDomainCertResponse {
 // Force release certificate lock request
 message ForceReleaseCertLockRequest {
   string domain = 1;
+}
+
+// Force remove instance request
+message ForceRemoveInstanceRequest {
+  string instance_id = 1;
 }
 
 // Certificate attestation info

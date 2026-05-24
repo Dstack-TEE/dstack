@@ -25,6 +25,11 @@ async fn create_test_state() -> TestState {
     let mut config = figment.focus("core").extract::<Config>().unwrap();
     let temp_dir = TempDir::new().expect("failed to create temp dir");
     config.sync.data_dir = temp_dir.path().to_string_lossy().to_string();
+    config.wg.config_path = temp_dir
+        .path()
+        .join("wg.conf")
+        .to_string_lossy()
+        .to_string();
     let options = ProxyOptions {
         config,
         my_app_id: None,
@@ -60,6 +65,37 @@ fn policy(restrict: bool, ports: &[u16]) -> PortPolicy {
             .collect(),
         restrict_mode: restrict,
     }
+}
+
+fn insert_instance_with_ip(
+    proxy: &mut ProxyState,
+    id: &str,
+    app_id: &str,
+    ip: Ipv4Addr,
+    public_key: &str,
+) {
+    let info = InstanceInfo {
+        id: id.to_string(),
+        app_id: app_id.to_string(),
+        ip,
+        public_key: public_key.to_string(),
+        reg_time: SystemTime::now(),
+        port_policy: None,
+        port_policy_hash: String::new(),
+        admin_port_policy: None,
+        connections: Default::default(),
+    };
+    proxy
+        .state
+        .apps
+        .entry(info.app_id.clone())
+        .or_default()
+        .insert(info.id.clone());
+    proxy.state.instances.insert(info.id.clone(), info);
+}
+
+fn allowed_ip_count(wg_config: &str, ip: Ipv4Addr) -> usize {
+    wg_config.matches(&format!("AllowedIPs = {ip}/32")).count()
 }
 
 #[tokio::test]
@@ -263,4 +299,57 @@ async fn test_config() {
     insta::assert_debug_snapshot!(info1);
     let wg_config = state.lock().generate_wg_config().unwrap();
     insta::assert_snapshot!(wg_config);
+}
+
+#[tokio::test]
+async fn test_reregister_reallocates_ip_claimed_by_other_instance() {
+    let state = create_test_state().await;
+    let first = state
+        .lock()
+        .new_client_by_id("inst-a", "app-a", "pubkey-a", "hash-a", None)
+        .unwrap();
+
+    {
+        let mut proxy = state.lock();
+        insert_instance_with_ip(&mut proxy, "inst-b", "app-b", first.ip, "pubkey-b-old");
+    }
+
+    let second = state
+        .lock()
+        .new_client_by_id("inst-b", "app-b", "pubkey-b", "hash-b", None)
+        .unwrap();
+
+    assert_ne!(second.ip, first.ip);
+    let proxy = state.lock();
+    assert_eq!(proxy.state.instances["inst-a"].ip, first.ip);
+    assert_eq!(proxy.state.instances["inst-b"].ip, second.ip);
+    assert!(proxy.state.allocated_addresses.contains(&first.ip));
+    assert!(proxy.state.allocated_addresses.contains(&second.ip));
+}
+
+#[tokio::test]
+async fn test_force_remove_instance_resolves_duplicate_allowed_ip() {
+    let state = create_test_state().await;
+    let first = state
+        .lock()
+        .new_client_by_id("inst-a", "app-a", "pubkey-a", "hash-a", None)
+        .unwrap();
+
+    let mut proxy = state.lock();
+    insert_instance_with_ip(
+        &mut proxy,
+        "inst-stale",
+        "app-stale",
+        first.ip,
+        "pubkey-stale",
+    );
+
+    let wg_config = proxy.generate_wg_config().unwrap();
+    assert_eq!(allowed_ip_count(&wg_config, first.ip), 2);
+
+    proxy.force_remove_instance("inst-stale").unwrap();
+    let wg_config = proxy.generate_wg_config().unwrap();
+    assert_eq!(allowed_ip_count(&wg_config, first.ip), 1);
+    assert!(proxy.state.instances.contains_key("inst-a"));
+    assert!(!proxy.state.instances.contains_key("inst-stale"));
 }

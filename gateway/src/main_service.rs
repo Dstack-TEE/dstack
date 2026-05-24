@@ -866,6 +866,14 @@ impl ProxyState {
         None
     }
 
+    fn ip_claimed_by_other(&self, id: &str, ip: Ipv4Addr) -> Option<String> {
+        self.state
+            .instances
+            .iter()
+            .find(|(other_id, info)| other_id.as_str() != id && info.ip == ip)
+            .map(|(other_id, _)| other_id.clone())
+    }
+
     fn new_client_by_id(
         &mut self,
         id: &str,
@@ -909,7 +917,9 @@ impl ProxyState {
                 existing.port_policy = port_policy.clone();
             }
             let existing = existing.clone();
-            if self.valid_ip(existing.ip) {
+            let valid_ip = self.valid_ip(existing.ip);
+            let claimed_by = self.ip_claimed_by_other(id, existing.ip);
+            if valid_ip && claimed_by.is_none() {
                 // Sync existing instance to KvStore (might be from legacy state)
                 let data = InstanceData {
                     app_id: existing.app_id.clone(),
@@ -925,8 +935,22 @@ impl ProxyState {
                 }
                 return Ok(existing);
             }
-            info!("ip {} is invalid, removing", existing.ip);
-            self.state.allocated_addresses.remove(&existing.ip);
+            if let Some(claimed_by) = claimed_by {
+                warn!(
+                    "ip {} for instance {id} is already claimed by instance {claimed_by}, reallocating",
+                    existing.ip
+                );
+            } else {
+                info!("ip {} is invalid, removing", existing.ip);
+                self.state.allocated_addresses.remove(&existing.ip);
+            }
+            self.state.instances.remove(id);
+            if let Some(app_instances) = self.state.apps.get_mut(&existing.app_id) {
+                app_instances.remove(id);
+                if app_instances.is_empty() {
+                    self.state.apps.remove(&existing.app_id);
+                }
+            }
         }
         let ip = self
             .alloc_ip()
@@ -1251,6 +1275,11 @@ impl ProxyState {
             }
         }
         Ok(())
+    }
+
+    pub(crate) fn force_remove_instance(&mut self, id: &str) -> Result<()> {
+        self.remove_instance(id)?;
+        self.reconfigure()
     }
 
     fn recycle(&mut self) -> Result<()> {
