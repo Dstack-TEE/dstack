@@ -130,15 +130,11 @@ impl TeePlatform {
         }
     }
 
-    pub fn resolve_from_cpuinfo(cpuinfo: &str) -> Self {
-        if cpuinfo
-            .split_whitespace()
-            .any(|flag| flag.eq_ignore_ascii_case("sev_snp"))
-        {
-            Self::AmdSevSnp
-        } else {
-            Self::Tdx
-        }
+    pub fn resolve_from_cpuinfo(_cpuinfo: &str) -> Self {
+        // Keep `auto` conservative while AMD SEV-SNP support is experimental and
+        // verifier/KMS/app binding are not production-ready. Operators must opt
+        // into SNP explicitly with `platform = "amd-sev-snp"`.
+        Self::Tdx
     }
 }
 
@@ -652,12 +648,9 @@ mod tests {
     }
 
     #[test]
-    fn tee_platform_auto_resolves_amd_from_cpu_flags() {
+    fn tee_platform_auto_stays_tdx_even_with_amd_snp_flag_while_experimental() {
         let cpuinfo = "flags : fpu svm sev sev_es sev_snp debug_swap";
-        assert_eq!(
-            TeePlatform::resolve_from_cpuinfo(cpuinfo),
-            TeePlatform::AmdSevSnp
-        );
+        assert_eq!(TeePlatform::resolve_from_cpuinfo(cpuinfo), TeePlatform::Tdx);
     }
 
     #[test]
