@@ -5,16 +5,31 @@
 //! Fail-closed AMD SEV-SNP measurement/app binding validation.
 //!
 //! This module intentionally does not release keys and does not enable any AMD
-//! KMS key-release endpoint. Until full in-KMS SNP measurement recomputation is
-//! wired in, callers must provide the expected measurement from a trusted
-//! recomputation path; this helper validates every required binding input and
-//! compares that expected value to the hardware-verified report measurement.
+//! KMS key-release endpoint. It recomputes the expected SNP MEASUREMENT from
+//! validated KMS configuration and launch inputs, then compares the recomputed
+//! value to the hardware-verified report measurement.
+//!
+//! Important: this is launch measurement binding, not a complete authorization
+//! decision. `app_id` is carried and validated so future SNP `BootInfo`
+//! construction can consume the same input, but the current QEMU SNP launch
+//! measurement does not independently bind `app_id`. Do not use this helper by
+//! itself to release app keys.
 
 #![allow(dead_code)]
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
+use sha2::{Digest, Sha256, Sha384};
+use std::fs;
 
 use crate::config::SevSnpMeasureConfig;
+
+const LD_BYTES: usize = 48;
+const ZEROS_LD: [u8; LD_BYTES] = [0u8; LD_BYTES];
+const MAX_VCPUS: u32 = 512;
+const MAX_OVMF_SECTIONS: usize = 64;
+const MAX_OVMF_METADATA_PAGES: u64 = 16_777_216; // 64 GiB worth of 4 KiB pages.
+                                                 // VMSA page GPA: (u64)(-1) page-aligned, bits >51 cleared.
+const VMSA_GPA: u64 = 0x0000_FFFF_FFFF_F000;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct OvmfSectionParam {
@@ -28,18 +43,32 @@ pub(crate) struct OvmfSectionParam {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct MeasurementInput {
+    /// 20-byte app identity. It is validated now even though the current SNP
+    /// launch measurement does not include it directly; callers must bind this
+    /// through the future SNP `BootInfo`/authorization path before key release.
     pub app_id: String,
+    /// 32-byte docker compose hash included in the measured kernel cmdline.
     pub compose_hash: String,
+    /// 32-byte rootfs hash included in the measured kernel cmdline.
     pub rootfs_hash: String,
+    /// Optional 32-byte additional docker files hash included in the measured
+    /// kernel cmdline when present.
+    pub docker_files_hash: Option<String>,
+    /// 48-byte OVMF GCTX launch digest seed. Required when OVMF sections are
+    /// supplied by the request; optional only when KMS can load ovmf_path.
     pub ovmf_hash: String,
+    /// 32-byte kernel SHA-256 hash.
     pub kernel_hash: String,
+    /// 32-byte initrd SHA-256 hash. An empty string is treated as the SHA-256 of
+    /// an empty initrd, matching QEMU/sev-snp-measure behavior.
     pub initrd_hash: String,
+    /// GPA of the SevHashTable, from OVMF footer metadata.
+    pub sev_hashes_table_gpa: u64,
+    /// AP reset EIP, from OVMF footer metadata.
+    pub sev_es_reset_eip: u32,
     pub vcpus: u32,
     pub vcpu_type: Option<String>,
     pub ovmf_sections: Vec<OvmfSectionParam>,
-    /// Trusted expected SNP MEASUREMENT from an out-of-band recomputation or
-    /// allowlist. This must never be copied from untrusted client input.
-    pub trusted_expected_measurement: Option<String>,
 }
 
 pub(crate) fn validate_amd_snp_measurement_binding(
@@ -48,51 +77,96 @@ pub(crate) fn validate_amd_snp_measurement_binding(
     input: &MeasurementInput,
 ) -> Result<()> {
     let config = config.ok_or_else(|| anyhow::anyhow!("sev-snp measurement config is required"))?;
+    validate_measurement_input(config, input)?;
+
+    let expected_measurement = compute_expected_measurement(config, input)?;
+    if expected_measurement.as_slice() != verified_measurement {
+        bail!("amd sev-snp measurement mismatch");
+    }
+
+    Ok(())
+}
+
+fn validate_measurement_input(
+    config: &SevSnpMeasureConfig,
+    input: &MeasurementInput,
+) -> Result<()> {
     if config.guest_features == 0 {
         bail!("guest_features must be non-zero");
     }
 
-    decode_required_hex("app_id", &input.app_id, 20)?;
+    let app_id = decode_required_hex("app_id", &input.app_id, 20)?;
+    if app_id.iter().all(|&b| b == 0) {
+        bail!("app_id must not be all-zeros");
+    }
     decode_required_hex("compose_hash", &input.compose_hash, 32)?;
     decode_required_hex("rootfs_hash", &input.rootfs_hash, 32)?;
-    decode_required_hex("ovmf_hash", &input.ovmf_hash, 48)?;
     decode_required_hex("kernel_hash", &input.kernel_hash, 32)?;
-    decode_required_hex("initrd_hash", &input.initrd_hash, 32)?;
+    decode_optional_hex("initrd_hash", &input.initrd_hash, 32)?;
+    if let Some(docker_files_hash) = &input.docker_files_hash {
+        decode_required_hex("docker_files_hash", docker_files_hash, 32)?;
+    }
 
     if input.vcpus == 0 {
         bail!("vcpus must be greater than zero");
     }
+    if input.vcpus > MAX_VCPUS {
+        bail!("vcpus must not exceed {MAX_VCPUS}");
+    }
     match input.vcpu_type.as_deref() {
-        Some(vcpu_type) if !vcpu_type.trim().is_empty() => {}
+        Some(vcpu_type) if !vcpu_type.trim().is_empty() => {
+            vcpu_sig_from_type(vcpu_type)?;
+        }
         _ => bail!("vcpu_type is required"),
     }
-    if config
-        .ovmf_path
-        .as_deref()
-        .unwrap_or_default()
-        .trim()
-        .is_empty()
-        && input.ovmf_sections.is_empty()
-    {
-        bail!("ovmf_sections are required when ovmf_path is not configured");
+
+    if input.ovmf_sections.is_empty() {
+        if config
+            .ovmf_path
+            .as_deref()
+            .unwrap_or_default()
+            .trim()
+            .is_empty()
+        {
+            bail!("ovmf_sections are required when ovmf_path is not configured");
+        }
+        if !input.ovmf_hash.is_empty() {
+            bail!("ovmf_hash must be empty when ovmf_path is used");
+        }
+        return Ok(());
     }
+
+    decode_required_hex("ovmf_hash", &input.ovmf_hash, 48)?;
+    if input.ovmf_sections.len() > MAX_OVMF_SECTIONS {
+        bail!("ovmf section count must not exceed {MAX_OVMF_SECTIONS}");
+    }
+    if input.sev_hashes_table_gpa == 0 {
+        bail!("sev_hashes_table_gpa must be non-zero");
+    }
+    if input.sev_es_reset_eip == 0 {
+        bail!("sev_es_reset_eip must be non-zero");
+    }
+
+    let mut has_kernel_hashes_section = false;
+    let mut measured_pages = 0u64;
     for section in &input.ovmf_sections {
         if section.size == 0 {
             bail!("ovmf section size must be greater than zero");
         }
-        if !matches!(section.section_type, 1 | 2 | 3 | 4 | 0x10) {
-            bail!("unknown ovmf section_type {:#x}", section.section_type);
+        let pages = section.size.div_ceil(4096);
+        measured_pages = measured_pages
+            .checked_add(pages)
+            .ok_or_else(|| anyhow::anyhow!("ovmf metadata page count overflow"))?;
+        if measured_pages > MAX_OVMF_METADATA_PAGES {
+            bail!("ovmf metadata page count must not exceed {MAX_OVMF_METADATA_PAGES}");
         }
+        let section_type = SectionType::from_u32(section.section_type).ok_or_else(|| {
+            anyhow::anyhow!("unknown ovmf section_type {:#x}", section.section_type)
+        })?;
+        has_kernel_hashes_section |= section_type == SectionType::SnpKernelHashes;
     }
-
-    let expected_measurement = input
-        .trusted_expected_measurement
-        .as_deref()
-        .ok_or_else(|| anyhow::anyhow!("trusted_expected_measurement is required"))?;
-    let expected_measurement =
-        decode_required_hex("trusted_expected_measurement", expected_measurement, 48)?;
-    if expected_measurement.as_slice() != verified_measurement {
-        bail!("amd sev-snp measurement mismatch");
+    if !has_kernel_hashes_section {
+        bail!("ovmf metadata does not include a snp_kernel_hashes section");
     }
 
     Ok(())
@@ -102,11 +176,502 @@ fn decode_required_hex(name: &str, value: &str, expected_len: usize) -> Result<V
     if value.is_empty() {
         bail!("{name} must not be empty");
     }
+    decode_optional_hex(name, value, expected_len)
+}
+
+fn decode_optional_hex(name: &str, value: &str, expected_len: usize) -> Result<Vec<u8>> {
+    if value.is_empty() {
+        return Ok(Vec::new());
+    }
     let bytes = hex::decode(value).map_err(|_| anyhow::anyhow!("{name} must be valid hex"))?;
     if bytes.len() != expected_len {
         bail!("{name} must be {expected_len} bytes");
     }
     Ok(bytes)
+}
+
+struct Gctx {
+    ld: [u8; LD_BYTES],
+}
+
+impl Gctx {
+    fn new() -> Self {
+        Self { ld: ZEROS_LD }
+    }
+
+    fn from_ovmf_hash(hex_value: &str) -> Result<Self> {
+        let raw = hex::decode(hex_value).context("ovmf_hash must be valid hex")?;
+        let ld: [u8; LD_BYTES] = raw
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("ovmf_hash must be 48 bytes"))?;
+        Ok(Self { ld })
+    }
+
+    /// SNP spec §8.17.2 PAGE_INFO layout (112 bytes): current digest,
+    /// contents digest, length, page type, permissions/reserved, and GPA.
+    fn update(&mut self, page_type: u8, gpa: u64, contents: &[u8; LD_BYTES]) {
+        let mut buf = [0u8; 0x70];
+        buf[..LD_BYTES].copy_from_slice(&self.ld);
+        buf[48..96].copy_from_slice(contents);
+        buf[96..98].copy_from_slice(&0x70u16.to_le_bytes());
+        buf[98] = page_type;
+        buf[104..112].copy_from_slice(&gpa.to_le_bytes());
+        let mut digest = [0u8; LD_BYTES];
+        digest.copy_from_slice(&Sha384::digest(buf));
+        self.ld = digest;
+    }
+
+    fn sha384(data: &[u8]) -> [u8; LD_BYTES] {
+        let mut out = [0u8; LD_BYTES];
+        out.copy_from_slice(&Sha384::digest(data));
+        out
+    }
+
+    fn update_normal_pages(&mut self, start_gpa: u64, data: &[u8]) {
+        for (i, chunk) in data.chunks(4096).enumerate() {
+            self.update(0x01, start_gpa + (i * 4096) as u64, &Self::sha384(chunk));
+        }
+    }
+
+    fn update_zero_pages(&mut self, gpa: u64, len: usize) {
+        for i in (0..len).step_by(4096) {
+            self.update(0x03, gpa + i as u64, &ZEROS_LD);
+        }
+    }
+
+    fn update_secrets_page(&mut self, gpa: u64) {
+        self.update(0x05, gpa, &ZEROS_LD);
+    }
+
+    fn update_cpuid_page(&mut self, gpa: u64) {
+        self.update(0x06, gpa, &ZEROS_LD);
+    }
+
+    fn update_vmsa_page(&mut self, page: &[u8]) {
+        self.update(0x02, VMSA_GPA, &Self::sha384(page));
+    }
+}
+
+const GUID_LE_HASH_TABLE_HEADER: [u8; 16] = [
+    0x06, 0xd6, 0x38, 0x94, 0x22, 0x4f, 0xc9, 0x4c, 0xb4, 0x79, 0xa7, 0x93, 0xd4, 0x11, 0xfd, 0x21,
+];
+const GUID_LE_KERNEL_ENTRY: [u8; 16] = [
+    0x37, 0x94, 0xe7, 0x4d, 0xd2, 0xab, 0x7f, 0x42, 0xb8, 0x35, 0xd5, 0xb1, 0x72, 0xd2, 0x04, 0x5b,
+];
+const GUID_LE_INITRD_ENTRY: [u8; 16] = [
+    0x31, 0xf7, 0xba, 0x44, 0x2f, 0x3a, 0xd7, 0x4b, 0x9a, 0xf1, 0x41, 0xe2, 0x91, 0x69, 0x78, 0x1d,
+];
+const GUID_LE_CMDLINE_ENTRY: [u8; 16] = [
+    0xd8, 0x2d, 0xd0, 0x97, 0x20, 0xbd, 0x94, 0x4c, 0xaa, 0x78, 0xe7, 0x71, 0x4d, 0x36, 0xab, 0x2a,
+];
+
+fn sev_entry(guid: &[u8; 16], hash: &[u8; 32]) -> [u8; 50] {
+    let mut entry = [0u8; 50];
+    entry[..16].copy_from_slice(guid);
+    entry[16..18].copy_from_slice(&50u16.to_le_bytes());
+    entry[18..].copy_from_slice(hash);
+    entry
+}
+
+fn build_sev_hashes_page(
+    kernel_hash_hex: &str,
+    initrd_hash_hex: &str,
+    append: &str,
+    page_offset: usize,
+) -> Result<[u8; 4096]> {
+    let kernel_hash: [u8; 32] = hex::decode(kernel_hash_hex)
+        .context("kernel_hash must be valid hex")?
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("kernel_hash must be 32 bytes"))?;
+
+    let initrd_hash: [u8; 32] = if initrd_hash_hex.is_empty() {
+        let mut h = [0u8; 32];
+        h.copy_from_slice(&Sha256::digest(b""));
+        h
+    } else {
+        hex::decode(initrd_hash_hex)
+            .context("initrd_hash must be valid hex")?
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("initrd_hash must be 32 bytes"))?
+    };
+
+    let mut cmdline_bytes = append.as_bytes().to_vec();
+    cmdline_bytes.push(0);
+    let mut cmdline_hash = [0u8; 32];
+    cmdline_hash.copy_from_slice(&Sha256::digest(&cmdline_bytes));
+
+    let cmdline_entry = sev_entry(&GUID_LE_CMDLINE_ENTRY, &cmdline_hash);
+    let initrd_entry = sev_entry(&GUID_LE_INITRD_ENTRY, &initrd_hash);
+    let kernel_entry = sev_entry(&GUID_LE_KERNEL_ENTRY, &kernel_hash);
+
+    const TABLE_SIZE: usize = 16 + 2 + 50 + 50 + 50;
+    let mut table = [0u8; TABLE_SIZE];
+    table[..16].copy_from_slice(&GUID_LE_HASH_TABLE_HEADER);
+    table[16..18].copy_from_slice(&(TABLE_SIZE as u16).to_le_bytes());
+    table[18..68].copy_from_slice(&cmdline_entry);
+    table[68..118].copy_from_slice(&initrd_entry);
+    table[118..168].copy_from_slice(&kernel_entry);
+
+    const PADDED: usize = (TABLE_SIZE + 15) & !(15usize);
+    if page_offset + PADDED > 4096 {
+        bail!("sev hash table overflows 4096-byte page");
+    }
+    let mut page = [0u8; 4096];
+    page[page_offset..page_offset + TABLE_SIZE].copy_from_slice(&table);
+    Ok(page)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SectionType {
+    SnpSecMemory = 1,
+    SnpSecrets = 2,
+    Cpuid = 3,
+    SvsmCaa = 4,
+    SnpKernelHashes = 0x10,
+}
+
+impl SectionType {
+    fn from_u32(value: u32) -> Option<Self> {
+        match value {
+            1 => Some(Self::SnpSecMemory),
+            2 => Some(Self::SnpSecrets),
+            3 => Some(Self::Cpuid),
+            4 => Some(Self::SvsmCaa),
+            0x10 => Some(Self::SnpKernelHashes),
+            _ => None,
+        }
+    }
+}
+
+struct MetadataSection {
+    gpa: u64,
+    size: u64,
+    section_type: SectionType,
+}
+
+struct OvmfInfo {
+    data: Vec<u8>,
+    gpa: u64,
+    sections: Vec<MetadataSection>,
+    sev_hashes_table_gpa: u64,
+    sev_es_reset_eip: u32,
+}
+
+const GUID_FOOTER_TABLE: [u8; 16] = [
+    0xde, 0x82, 0xb5, 0x96, 0xb2, 0x1f, 0xf7, 0x45, 0xba, 0xea, 0xa3, 0x66, 0xc5, 0x5a, 0x08, 0x2d,
+];
+const GUID_SEV_HASH_TABLE_RV: [u8; 16] = [
+    0x1f, 0x37, 0x55, 0x72, 0x3b, 0x3a, 0x04, 0x4b, 0x92, 0x7b, 0x1d, 0xa6, 0xef, 0xa8, 0xd4, 0x54,
+];
+const GUID_SEV_ES_RESET_BLK: [u8; 16] = [
+    0xde, 0x71, 0xf7, 0x00, 0x7e, 0x1a, 0xcb, 0x4f, 0x89, 0x0e, 0x68, 0xc7, 0x7e, 0x2f, 0xb4, 0x4e,
+];
+const GUID_SEV_META_DATA: [u8; 16] = [
+    0x66, 0x65, 0x88, 0xdc, 0x4a, 0x98, 0x98, 0x47, 0xa7, 0x5e, 0x55, 0x85, 0xa7, 0xbf, 0x67, 0xcc,
+];
+
+fn read_u16_le(buf: &[u8], off: usize) -> u16 {
+    u16::from_le_bytes([buf[off], buf[off + 1]])
+}
+
+fn read_u32_le(buf: &[u8], off: usize) -> u32 {
+    u32::from_le_bytes([buf[off], buf[off + 1], buf[off + 2], buf[off + 3]])
+}
+
+impl OvmfInfo {
+    fn load(path: &str) -> Result<Self> {
+        let data = fs::read(path).with_context(|| format!("cannot read ovmf binary '{path}'"))?;
+        let size = data.len();
+        let gpa = (0x1_0000_0000u64)
+            .checked_sub(size as u64)
+            .context("ovmf binary is larger than 4 gib")?;
+
+        const ENTRY_HDR: usize = 18;
+        let footer_off = size.saturating_sub(32 + ENTRY_HDR);
+        if footer_off + ENTRY_HDR > size {
+            bail!("ovmf binary too small to contain footer table");
+        }
+        if data[footer_off + 2..footer_off + 18] != GUID_FOOTER_TABLE {
+            bail!("ovmf footer guid not found");
+        }
+        let footer_total_size = read_u16_le(&data, footer_off) as usize;
+        if footer_total_size < ENTRY_HDR {
+            bail!("ovmf footer table has invalid total size");
+        }
+        let table_size = footer_total_size - ENTRY_HDR;
+        if table_size > footer_off {
+            bail!("ovmf footer table is out of bounds");
+        }
+        let table_start = footer_off - table_size;
+        let table_bytes = &data[table_start..footer_off];
+
+        let mut sev_hashes_table_gpa = 0u64;
+        let mut sev_es_reset_eip = 0u32;
+        let mut meta_offset_from_end = None;
+
+        let mut pos = table_bytes.len();
+        while pos >= ENTRY_HDR {
+            let entry_off = pos - ENTRY_HDR;
+            let entry_size = read_u16_le(table_bytes, entry_off) as usize;
+            if entry_size < ENTRY_HDR || entry_size > pos {
+                bail!("ovmf footer table has invalid entry size");
+            }
+            let guid = &table_bytes[entry_off + 2..entry_off + 18];
+            let data_start = pos - entry_size;
+            let data_end = pos - ENTRY_HDR;
+            let entry_data = &table_bytes[data_start..data_end];
+
+            if guid == GUID_SEV_HASH_TABLE_RV && entry_data.len() >= 4 {
+                sev_hashes_table_gpa = read_u32_le(entry_data, 0) as u64;
+            } else if guid == GUID_SEV_ES_RESET_BLK && entry_data.len() >= 4 {
+                sev_es_reset_eip = read_u32_le(entry_data, 0);
+            } else if guid == GUID_SEV_META_DATA && entry_data.len() >= 4 {
+                meta_offset_from_end = Some(read_u32_le(entry_data, 0) as usize);
+            }
+            pos -= entry_size;
+        }
+
+        if sev_hashes_table_gpa == 0 {
+            bail!("ovmf sev hash table entry not found in footer table");
+        }
+        if sev_es_reset_eip == 0 {
+            bail!("ovmf sev_es_reset_block entry not found in footer table");
+        }
+
+        let mut sections = Vec::new();
+        let off_from_end = meta_offset_from_end
+            .ok_or_else(|| anyhow::anyhow!("ovmf sev metadata entry not found in footer table"))?;
+        if off_from_end > size {
+            bail!("ovmf sev metadata offset exceeds file size");
+        }
+        let meta_start = size - off_from_end;
+        if meta_start + 16 > size {
+            bail!("ovmf sev metadata header out of bounds");
+        }
+        if &data[meta_start..meta_start + 4] != b"ASEV" {
+            bail!("ovmf sev metadata has bad signature");
+        }
+        let meta_version = read_u32_le(&data, meta_start + 8);
+        if meta_version != 1 {
+            bail!("ovmf sev metadata has unsupported version {meta_version}");
+        }
+        let num_items = read_u32_le(&data, meta_start + 12) as usize;
+        let items_start = meta_start + 16;
+        if items_start + num_items * 12 > size {
+            bail!("ovmf sev metadata sections out of bounds");
+        }
+        for i in 0..num_items {
+            let off = items_start + i * 12;
+            let section_type_value = read_u32_le(&data, off + 8);
+            let section_type = SectionType::from_u32(section_type_value).ok_or_else(|| {
+                anyhow::anyhow!("unknown ovmf section_type {section_type_value:#x}")
+            })?;
+            sections.push(MetadataSection {
+                gpa: read_u32_le(&data, off) as u64,
+                size: read_u32_le(&data, off + 4) as u64,
+                section_type,
+            });
+        }
+
+        Ok(Self {
+            data,
+            gpa,
+            sections,
+            sev_hashes_table_gpa,
+            sev_es_reset_eip,
+        })
+    }
+}
+
+fn write_u16_le_at(buf: &mut [u8], off: usize, value: u16) {
+    buf[off..off + 2].copy_from_slice(&value.to_le_bytes());
+}
+
+fn write_u32_le_at(buf: &mut [u8], off: usize, value: u32) {
+    buf[off..off + 4].copy_from_slice(&value.to_le_bytes());
+}
+
+fn write_u64_le_at(buf: &mut [u8], off: usize, value: u64) {
+    buf[off..off + 8].copy_from_slice(&value.to_le_bytes());
+}
+
+fn write_vmcb_seg(buf: &mut [u8], off: usize, selector: u16, attrib: u16, limit: u32, base: u64) {
+    write_u16_le_at(buf, off, selector);
+    write_u16_le_at(buf, off + 2, attrib);
+    write_u32_le_at(buf, off + 4, limit);
+    write_u64_le_at(buf, off + 8, base);
+}
+
+fn amd_cpu_sig(family: u32, model: u32, stepping: u32) -> u32 {
+    let (family_low, family_high) = if family > 0xf {
+        (0xf, (family - 0xf) & 0xff)
+    } else {
+        (family, 0)
+    };
+    let model_low = model & 0xf;
+    let model_high = (model >> 4) & 0xf;
+    (family_high << 20)
+        | (model_high << 16)
+        | (family_low << 8)
+        | (model_low << 4)
+        | (stepping & 0xf)
+}
+
+fn vcpu_sig_from_type(vcpu_type: &str) -> Result<u32> {
+    match vcpu_type.trim().to_lowercase().as_str() {
+        "epyc" | "epyc-v1" | "epyc-v2" | "epyc-ibpb" | "epyc-v3" | "epyc-v4" => {
+            Ok(amd_cpu_sig(23, 1, 2))
+        }
+        "epyc-rome" | "epyc-rome-v1" | "epyc-rome-v2" | "epyc-rome-v3" => {
+            Ok(amd_cpu_sig(23, 49, 0))
+        }
+        "epyc-milan" | "epyc-milan-v1" | "epyc-milan-v2" => Ok(amd_cpu_sig(25, 1, 1)),
+        "epyc-genoa" | "epyc-genoa-v1" => Ok(amd_cpu_sig(25, 17, 0)),
+        other => bail!("unknown vcpu_type {other:?}"),
+    }
+}
+
+fn build_vmsa_page(eip: u32, vcpu_sig: u32, sev_features: u64) -> Box<[u8; 4096]> {
+    let mut page = Box::new([0u8; 4096]);
+    let p = page.as_mut_slice();
+
+    let cs_base = (eip as u64) & 0xffff_0000;
+    let rip = (eip as u64) & 0x0000_ffff;
+
+    write_vmcb_seg(p, 0x000, 0, 0x0093, 0xffff, 0);
+    write_vmcb_seg(p, 0x010, 0xf000, 0x009b, 0xffff, cs_base);
+    write_vmcb_seg(p, 0x020, 0, 0x0093, 0xffff, 0);
+    write_vmcb_seg(p, 0x030, 0, 0x0093, 0xffff, 0);
+    write_vmcb_seg(p, 0x040, 0, 0x0093, 0xffff, 0);
+    write_vmcb_seg(p, 0x050, 0, 0x0093, 0xffff, 0);
+    write_vmcb_seg(p, 0x060, 0, 0x0000, 0xffff, 0);
+    write_vmcb_seg(p, 0x070, 0, 0x0082, 0xffff, 0);
+    write_vmcb_seg(p, 0x080, 0, 0x0000, 0xffff, 0);
+    write_vmcb_seg(p, 0x090, 0, 0x008b, 0xffff, 0);
+
+    write_u64_le_at(p, 0x0D0, 0x1000);
+    write_u64_le_at(p, 0x148, 0x40);
+    write_u64_le_at(p, 0x158, 0x10);
+    write_u64_le_at(p, 0x160, 0x400);
+    write_u64_le_at(p, 0x168, 0xffff_0ff0);
+    write_u64_le_at(p, 0x170, 0x2);
+    write_u64_le_at(p, 0x178, rip);
+    write_u64_le_at(p, 0x268, 0x0007_0406_0007_0406);
+    write_u64_le_at(p, 0x310, vcpu_sig as u64);
+    write_u64_le_at(p, 0x3B0, sev_features);
+    write_u64_le_at(p, 0x3E8, 0x1);
+    write_u32_le_at(p, 0x408, 0x1f80);
+    write_u16_le_at(p, 0x410, 0x037f);
+
+    page
+}
+
+pub(crate) fn compute_expected_measurement(
+    config: &SevSnpMeasureConfig,
+    input: &MeasurementInput,
+) -> Result<[u8; 48]> {
+    let vcpu_type = input
+        .vcpu_type
+        .as_deref()
+        .ok_or_else(|| anyhow::anyhow!("vcpu_type is required"))?;
+
+    let mut cmdline = format!(
+        "console=ttyS0 loglevel=7 docker_compose_hash={} rootfs_hash={}",
+        input.compose_hash, input.rootfs_hash
+    );
+    if let Some(docker_files_hash) = input.docker_files_hash.as_deref() {
+        cmdline.push_str(&format!(
+            " docker_additional_files_hash={docker_files_hash}"
+        ));
+    }
+
+    let (mut gctx, effective_hashes_gpa, effective_reset_eip, resolved_sections) =
+        if !input.ovmf_sections.is_empty() {
+            let sections = input
+                .ovmf_sections
+                .iter()
+                .map(|section| {
+                    let section_type =
+                        SectionType::from_u32(section.section_type).ok_or_else(|| {
+                            anyhow::anyhow!("unknown ovmf section_type {:#x}", section.section_type)
+                        })?;
+                    Ok(MetadataSection {
+                        gpa: section.gpa,
+                        size: section.size,
+                        section_type,
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            (
+                Gctx::from_ovmf_hash(&input.ovmf_hash)?,
+                input.sev_hashes_table_gpa,
+                input.sev_es_reset_eip,
+                sections,
+            )
+        } else {
+            let path = config.ovmf_path.as_deref().ok_or_else(|| {
+                anyhow::anyhow!("ovmf_sections are required when ovmf_path is not configured")
+            })?;
+            let ovmf = OvmfInfo::load(path)?;
+            let gctx = if input.ovmf_hash.is_empty() {
+                let mut g = Gctx::new();
+                g.update_normal_pages(ovmf.gpa, &ovmf.data);
+                g
+            } else {
+                Gctx::from_ovmf_hash(&input.ovmf_hash)?
+            };
+            (
+                gctx,
+                ovmf.sev_hashes_table_gpa,
+                ovmf.sev_es_reset_eip,
+                ovmf.sections,
+            )
+        };
+
+    let mut has_kernel_hashes_section = false;
+    for section in &resolved_sections {
+        let gpa = section.gpa;
+        let size = usize::try_from(section.size)
+            .map_err(|_| anyhow::anyhow!("ovmf section size is too large"))?;
+        match section.section_type {
+            SectionType::SnpSecMemory => gctx.update_zero_pages(gpa, size),
+            SectionType::SnpSecrets => gctx.update_secrets_page(gpa),
+            SectionType::Cpuid => gctx.update_cpuid_page(gpa),
+            SectionType::SvsmCaa => gctx.update_zero_pages(gpa, size),
+            SectionType::SnpKernelHashes => {
+                has_kernel_hashes_section = true;
+                if effective_hashes_gpa == 0 {
+                    bail!("snp_kernel_hashes section present but sev_hashes_table_gpa is 0");
+                }
+                let page_offset = (effective_hashes_gpa & 0xfff) as usize;
+                let page = build_sev_hashes_page(
+                    &input.kernel_hash,
+                    &input.initrd_hash,
+                    &cmdline,
+                    page_offset,
+                )?;
+                gctx.update_normal_pages(gpa, &page);
+            }
+        }
+    }
+    if !has_kernel_hashes_section {
+        bail!("ovmf metadata does not include a snp_kernel_hashes section");
+    }
+
+    let vcpu_sig = vcpu_sig_from_type(vcpu_type)?;
+    let bsp_vmsa = build_vmsa_page(0xffff_fff0, vcpu_sig, config.guest_features);
+    let ap_vmsa = build_vmsa_page(effective_reset_eip, vcpu_sig, config.guest_features);
+
+    for i in 0..input.vcpus as usize {
+        let vmsa_page = if i == 0 {
+            bsp_vmsa.as_ref()
+        } else {
+            ap_vmsa.as_ref()
+        };
+        gctx.update_vmsa_page(vmsa_page);
+    }
+
+    Ok(gctx.ld)
 }
 
 #[cfg(test)]
@@ -120,6 +685,13 @@ mod tests {
         }
     }
 
+    fn config_with_path(path: &str) -> SevSnpMeasureConfig {
+        SevSnpMeasureConfig {
+            ovmf_path: Some(path.to_string()),
+            guest_features: 1,
+        }
+    }
+
     fn hex_of(byte: u8, len: usize) -> String {
         hex::encode(vec![byte; len])
     }
@@ -129,24 +701,36 @@ mod tests {
             app_id: hex_of(0x11, 20),
             compose_hash: hex_of(0x22, 32),
             rootfs_hash: hex_of(0x33, 32),
+            docker_files_hash: Some(hex_of(0x77, 32)),
             ovmf_hash: hex_of(0x44, 48),
             kernel_hash: hex_of(0x55, 32),
             initrd_hash: hex_of(0x66, 32),
+            sev_hashes_table_gpa: 0x80_1000,
+            sev_es_reset_eip: 0xffff_fff0,
             vcpus: 2,
             vcpu_type: Some("epyc-v4".to_string()),
-            ovmf_sections: vec![OvmfSectionParam {
-                gpa: 0x100000,
-                size: 0x200000,
-                section_type: 1,
-            }],
-            trusted_expected_measurement: Some(hex_of(0xaa, 48)),
-        }
-    }
-
-    fn config_with_path(path: &str) -> SevSnpMeasureConfig {
-        SevSnpMeasureConfig {
-            ovmf_path: Some(path.to_string()),
-            guest_features: 1,
+            ovmf_sections: vec![
+                OvmfSectionParam {
+                    gpa: 0x100000,
+                    size: 0x2000,
+                    section_type: 1,
+                },
+                OvmfSectionParam {
+                    gpa: 0x80_0000,
+                    size: 0x1000,
+                    section_type: 0x10,
+                },
+                OvmfSectionParam {
+                    gpa: 0x81_0000,
+                    size: 0x1000,
+                    section_type: 2,
+                },
+                OvmfSectionParam {
+                    gpa: 0x82_0000,
+                    size: 0x1000,
+                    section_type: 3,
+                },
+            ],
         }
     }
 
@@ -161,10 +745,67 @@ mod tests {
     }
 
     #[test]
-    fn accepts_fully_bound_matching_measurement() {
-        let verified = [0xaa; 48];
-        validate_amd_snp_measurement_binding(Some(&config()), &verified, &valid_input())
-            .expect("valid binding should be accepted");
+    fn gctx_update_is_deterministic_and_order_sensitive() {
+        let contents = Gctx::sha384(b"page");
+        let mut first = Gctx::new();
+        first.update(0x01, 0x1000, &contents);
+        assert_eq!(
+            hex::encode(first.ld),
+            "3ebc1a70acc0bae5ae2788fae29a0371f983b19a68faf9843064f36040f58571ce5bb6bcdc9c361087073f8cffd92635"
+        );
+
+        let mut second = Gctx::new();
+        second.update(0x01, 0x2000, &contents);
+        assert_ne!(first.ld, second.ld);
+    }
+
+    #[test]
+    fn builds_sev_hashes_page_at_requested_offset() {
+        let page = build_sev_hashes_page(&hex_of(0x55, 32), "", "console=ttyS0", 0x80)
+            .expect("sev hashes page should build");
+        assert_eq!(&page[..0x80], &[0u8; 0x80]);
+        assert_eq!(&page[0x80..0x90], &GUID_LE_HASH_TABLE_HEADER);
+        assert_eq!(u16::from_le_bytes([page[0x90], page[0x91]]), 168);
+        assert_eq!(
+            &page[0x92..0xa2],
+            &GUID_LE_CMDLINE_ENTRY,
+            "cmdline entry must be first"
+        );
+        let empty_hash = Sha256::digest(b"");
+        assert_eq!(&page[0x80 + 68 + 18..0x80 + 68 + 50], empty_hash.as_slice());
+    }
+
+    #[test]
+    fn vcpu_type_mapping_is_strict() {
+        assert_eq!(
+            vcpu_sig_from_type("EPYC-v4").unwrap(),
+            amd_cpu_sig(23, 1, 2)
+        );
+        assert_eq!(
+            vcpu_sig_from_type("epyc-genoa-v1").unwrap(),
+            amd_cpu_sig(25, 17, 0)
+        );
+        let err = vcpu_sig_from_type("not-a-cpu").expect_err("unknown vcpu should reject");
+        assert!(err.to_string().contains("unknown vcpu_type"));
+    }
+
+    #[test]
+    fn accepts_recomputed_matching_measurement_and_rejects_mismatch() {
+        let input = valid_input();
+        let expected = compute_expected_measurement(&config(), &input).unwrap();
+        assert_eq!(
+            hex::encode(expected),
+            "2c598d7885c7a61e44c048ac5594600ce906339a8a6a3c0fa0d81c67275d55273d38d6ec5afcf5ff1d74621f0f0354d9",
+            "synthetic measurement vector should not drift silently"
+        );
+        validate_amd_snp_measurement_binding(Some(&config()), &expected, &input)
+            .expect("matching recomputed binding should be accepted");
+
+        let mut mismatched = expected;
+        mismatched[0] ^= 0xff;
+        let err = validate_amd_snp_measurement_binding(Some(&config()), &mismatched, &input)
+            .expect_err("mismatched measurement must reject");
+        assert!(err.to_string().contains("amd sev-snp measurement mismatch"));
     }
 
     #[test]
@@ -182,6 +823,10 @@ mod tests {
         let mut input = valid_input();
         input.app_id.clear();
         assert_rejects(input, "app_id must not be empty");
+
+        let mut input = valid_input();
+        input.app_id = hex_of(0x00, 20);
+        assert_rejects(input, "app_id must not be all-zeros");
 
         let mut input = valid_input();
         input.compose_hash = "not hex".to_string();
@@ -202,6 +847,16 @@ mod tests {
         let mut input = valid_input();
         input.initrd_hash = hex_of(0x66, 31);
         assert_rejects(input, "initrd_hash must be 32 bytes");
+
+        let mut input = valid_input();
+        input.initrd_hash.clear();
+        let expected = compute_expected_measurement(&config(), &input).unwrap();
+        validate_amd_snp_measurement_binding(Some(&config()), &expected, &input)
+            .expect("empty initrd hash should mean empty initrd");
+
+        let mut input = valid_input();
+        input.docker_files_hash = Some(String::new());
+        assert_rejects(input, "docker_files_hash must not be empty");
     }
 
     #[test]
@@ -211,8 +866,16 @@ mod tests {
         assert_rejects(input, "vcpus must be greater than zero");
 
         let mut input = valid_input();
+        input.vcpus = MAX_VCPUS + 1;
+        assert_rejects(input, "vcpus must not exceed");
+
+        let mut input = valid_input();
         input.vcpu_type = None;
         assert_rejects(input, "vcpu_type is required");
+
+        let mut input = valid_input();
+        input.vcpu_type = Some("mystery".to_string());
+        assert_rejects(input, "unknown vcpu_type");
 
         let mut input = valid_input();
         input.ovmf_sections.clear();
@@ -223,13 +886,27 @@ mod tests {
 
         let mut input = valid_input();
         input.ovmf_sections.clear();
+        input.ovmf_hash.clear();
         let verified = [0xaa; 48];
-        validate_amd_snp_measurement_binding(
+        let err = validate_amd_snp_measurement_binding(
+            Some(&config_with_path("/path/that/does/not/exist/ovmf.fd")),
+            &verified,
+            &input,
+        )
+        .expect_err("configured ovmf_path should be used for recomputation");
+        assert!(err.to_string().contains("cannot read ovmf binary"));
+
+        let mut input = valid_input();
+        input.ovmf_sections.clear();
+        let err = validate_amd_snp_measurement_binding(
             Some(&config_with_path("/opt/amd/ovmf.fd")),
             &verified,
             &input,
         )
-        .expect("configured ovmf_path should allow sections to be loaded later");
+        .expect_err("request ovmf_hash must not override configured ovmf_path");
+        assert!(err
+            .to_string()
+            .contains("ovmf_hash must be empty when ovmf_path is used"));
     }
 
     #[test]
@@ -251,8 +928,38 @@ mod tests {
         assert_rejects(input, "ovmf section size must be greater than zero");
 
         let mut input = valid_input();
+        input.ovmf_sections = vec![
+            OvmfSectionParam {
+                gpa: 0x1000,
+                size: 0x1000,
+                section_type: 1,
+            };
+            MAX_OVMF_SECTIONS + 1
+        ];
+        assert_rejects(input, "ovmf section count must not exceed");
+
+        let mut input = valid_input();
+        input.ovmf_sections[0].size = (MAX_OVMF_METADATA_PAGES + 1) * 4096;
+        assert_rejects(input, "ovmf metadata page count must not exceed");
+
+        let mut input = valid_input();
         input.ovmf_sections[0].section_type = 0xff;
         assert_rejects(input, "unknown ovmf section_type 0xff");
+
+        let mut input = valid_input();
+        input.ovmf_sections.retain(|s| s.section_type != 0x10);
+        assert_rejects(
+            input,
+            "ovmf metadata does not include a snp_kernel_hashes section",
+        );
+
+        let mut input = valid_input();
+        input.sev_hashes_table_gpa = 0;
+        assert_rejects(input, "sev_hashes_table_gpa must be non-zero");
+
+        let mut input = valid_input();
+        input.sev_es_reset_eip = 0;
+        assert_rejects(input, "sev_es_reset_eip must be non-zero");
 
         let mut input = valid_input();
         input.ovmf_sections.clear();
@@ -262,20 +969,5 @@ mod tests {
         assert!(err
             .to_string()
             .contains("ovmf_sections are required when ovmf_path is not configured"));
-    }
-
-    #[test]
-    fn rejects_missing_or_mismatched_measurement() {
-        let mut input = valid_input();
-        input.trusted_expected_measurement = None;
-        assert_rejects(input, "trusted_expected_measurement is required");
-
-        let mut input = valid_input();
-        input.trusted_expected_measurement = Some(hex_of(0xaa, 47));
-        assert_rejects(input, "trusted_expected_measurement must be 48 bytes");
-
-        let mut input = valid_input();
-        input.trusted_expected_measurement = Some(hex_of(0xbb, 48));
-        assert_rejects(input, "amd sev-snp measurement mismatch");
     }
 }
