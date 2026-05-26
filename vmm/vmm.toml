@@ -21,6 +21,8 @@ node_name = ""
 registry = ""
 
 [cvm]
+# TEE platform: "auto", "tdx", or "amd-sev-snp". Auto selects AMD SEV-SNP when host CPU flags include sev_snp, otherwise TDX.
+platform = "auto"
 qemu_path = ""
 kms_urls = ["http://127.0.0.1:8081"]
 gateway_urls = ["http://127.0.0.1:8082"]

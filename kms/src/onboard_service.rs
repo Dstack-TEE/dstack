@@ -116,6 +116,7 @@ impl OnboardRpc for OnboardHandler {
             .context("Failed to decode attestation")?;
         let attestation_mode = match &attestation.clone().into_v1().platform {
             PlatformEvidence::Tdx { .. } => "dstack-tdx",
+            PlatformEvidence::SevSnp { .. } => "dstack-amd-sev-snp",
             PlatformEvidence::GcpTdx => "dstack-gcp-tdx",
             PlatformEvidence::NitroEnclave => "dstack-nitro-enclave",
         }

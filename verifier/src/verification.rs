@@ -502,7 +502,9 @@ impl CvmVerifier {
                 self.verify_os_image_hash_for_dstack_tdx(&vm_config, attestation, debug, details)
                     .await?;
             }
-            AttestationQuote::DstackGcpTdx | AttestationQuote::DstackNitroEnclave => {
+            AttestationQuote::DstackAmdSevSnp(_)
+            | AttestationQuote::DstackGcpTdx
+            | AttestationQuote::DstackNitroEnclave => {
                 bail!(
                     "Unsupported attestation quote: {:?}",
                     attestation.quote.mode()
