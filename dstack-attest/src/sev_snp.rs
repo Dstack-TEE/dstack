@@ -4,38 +4,16 @@
 
 //! Minimal AMD SEV-SNP guest report support.
 
-use std::{fs::OpenOptions, io, path::Path};
+use std::path::Path;
 
 use anyhow::{bail, Context, Result};
+use sev::firmware::{guest::Firmware, host::CertTableEntry};
 
 use crate::attestation::{SnpQuote, SNP_REPORT_DATA_RANGE};
 
 const TSM_REPORT_ROOT: &str = "/sys/kernel/config/tsm/report";
 const SEV_GUEST_DEVICE: &str = "/dev/sev-guest";
 const SNP_REPORT_SIZE: usize = 1184;
-const SNP_REPORT_RESP_SIZE: usize = 4000;
-const SNP_GET_REPORT: libc::c_ulong = 0xc020_5300;
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct SnpReportReq {
-    report_data: [u8; 64],
-    vmpl: u32,
-    rsvd: [u8; 28],
-}
-
-#[repr(C)]
-struct SnpReportResp {
-    data: [u8; SNP_REPORT_RESP_SIZE],
-}
-
-#[repr(C)]
-struct SnpGuestRequestIoctl {
-    msg_version: u8,
-    req_data: u64,
-    resp_data: u64,
-    fw_err: u64,
-}
 
 pub fn get_report(report_data: [u8; 64]) -> Result<SnpQuote> {
     if has_sev_snp_tsm_provider(Path::new(TSM_REPORT_ROOT)) {
@@ -142,51 +120,39 @@ fn read_first_existing(paths: &[std::path::PathBuf]) -> Result<Vec<u8>> {
 }
 
 fn read_cert_chain_configfs(dir: &Path) -> Vec<Vec<u8>> {
-    ["certs", "cert_chain", "auxblob"]
-        .iter()
-        .filter_map(|name| fs_err::read(dir.join(name)).ok())
-        .filter(|bytes| !bytes.is_empty())
-        .collect()
+    for name in ["certs", "cert_chain", "auxblob"] {
+        let Ok(bytes) = fs_err::read(dir.join(name)) else {
+            continue;
+        };
+        if !bytes.is_empty() {
+            return vec![bytes];
+        }
+    }
+    Vec::new()
 }
 
 fn get_report_ioctl(report_data: [u8; 64]) -> Result<SnpQuote> {
-    let file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(SEV_GUEST_DEVICE)
-        .with_context(|| format!("failed to open {SEV_GUEST_DEVICE}"))?;
-    let mut req = SnpReportReq {
-        report_data,
-        vmpl: 0,
-        rsvd: [0; 28],
-    };
-    let mut resp = SnpReportResp {
-        data: [0; SNP_REPORT_RESP_SIZE],
-    };
-    let mut ioctl_req = SnpGuestRequestIoctl {
-        msg_version: 1,
-        req_data: (&mut req as *mut SnpReportReq) as u64,
-        resp_data: (&mut resp as *mut SnpReportResp) as u64,
-        fw_err: 0,
-    };
-
-    let rc = unsafe { libc::ioctl(file.as_raw_fd(), SNP_GET_REPORT, &mut ioctl_req) };
-    if rc < 0 {
-        return Err(io::Error::last_os_error()).context("sev-snp get report ioctl failed");
-    }
-    let report = resp.data[..SNP_REPORT_SIZE].to_vec();
+    let mut firmware =
+        Firmware::open().with_context(|| format!("failed to open {SEV_GUEST_DEVICE}"))?;
+    let (report, cert_entries) = firmware
+        .get_ext_report(Some(1), Some(report_data), Some(0))
+        .map_err(|err| anyhow::anyhow!("sev-snp get extended report ioctl failed: {err}"))?;
     ensure_report_data_matches(&report, &report_data)?;
-    Ok(SnpQuote {
-        report,
-        cert_chain: Vec::new(),
-    })
+    let cert_chain = match cert_entries {
+        Some(entries) if !entries.is_empty() => {
+            vec![CertTableEntry::cert_table_to_vec_bytes(&entries)
+                .context("failed to encode sev-snp certificate table")?]
+        }
+        _ => Vec::new(),
+    };
+    Ok(SnpQuote { report, cert_chain })
 }
 
 fn ensure_report_data_matches(report: &[u8], report_data: &[u8; 64]) -> Result<()> {
-    if report.len() < SNP_REPORT_DATA_RANGE.end {
+    if report.len() != SNP_REPORT_SIZE {
         bail!(
-            "sev-snp report too short: expected at least {} bytes, got {}",
-            SNP_REPORT_DATA_RANGE.end,
+            "sev-snp report has invalid length: expected {} bytes, got {}",
+            SNP_REPORT_SIZE,
             report.len()
         );
     }
@@ -195,8 +161,6 @@ fn ensure_report_data_matches(report: &[u8], report_data: &[u8; 64]) -> Result<(
     }
     Ok(())
 }
-
-use std::os::fd::AsRawFd;
 
 #[cfg(test)]
 mod tests {
@@ -248,6 +212,19 @@ mod tests {
         fs_err::write(root.join("entry/provider"), "tdx-guest\n").unwrap();
 
         assert!(!has_sev_snp_tsm_provider(&root));
+
+        let _ = fs_err::remove_dir_all(root);
+    }
+
+    #[test]
+    fn configfs_cert_chain_uses_first_supported_nonempty_blob() {
+        let root = test_dir("cert-chain");
+        fs_err::create_dir_all(&root).unwrap();
+        fs_err::write(root.join("certs"), []).unwrap();
+        fs_err::write(root.join("cert_chain"), b"chain").unwrap();
+        fs_err::write(root.join("auxblob"), b"auxblob").unwrap();
+
+        assert_eq!(read_cert_chain_configfs(&root), vec![b"chain".to_vec()]);
 
         let _ = fs_err::remove_dir_all(root);
     }
