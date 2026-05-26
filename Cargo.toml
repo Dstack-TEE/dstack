@@ -135,6 +135,7 @@ hex_fmt = "0.3.0"
 hex-literal = "1.0.0"
 prost = "0.13.5"
 prost-types = "0.13.5"
+sev = { version = "=6.0.0", default-features = false, features = ["snp", "crypto_nossl"] }
 scale = { version = "3.7.4", package = "parity-scale-codec", features = [
     "derive",
 ] }
