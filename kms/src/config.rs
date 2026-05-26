@@ -31,6 +31,23 @@ pub(crate) struct ImageConfig {
     pub download_timeout: Duration,
 }
 
+/// Configuration for AMD SEV-SNP measurement/app binding validation.
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct SevSnpMeasureConfig {
+    /// Path to the AMD SEV-SNP OVMF binary used for this VM image.
+    ///
+    /// Optional when callers provide OVMF section metadata with the request.
+    pub ovmf_path: Option<String>,
+    /// SNP guest features bitmask used at launch. Defaults to SNP with kernel
+    /// hashes enabled.
+    #[serde(default = "default_guest_features")]
+    pub guest_features: u64,
+}
+
+fn default_guest_features() -> u64 {
+    0x1
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct KmsConfig {
     pub cert_dir: PathBuf,
@@ -38,6 +55,11 @@ pub(crate) struct KmsConfig {
     pub auth_api: AuthApi,
     pub onboard: OnboardConfig,
     pub image: ImageConfig,
+    /// AMD SEV-SNP measurement verification configuration. Optional at config
+    /// load time for non-SNP/dev deployments; SNP binding helpers require it.
+    #[serde(default)]
+    #[allow(dead_code)]
+    pub sev_snp: Option<SevSnpMeasureConfig>,
     #[serde(with = "serde_human_bytes")]
     pub admin_token_hash: Vec<u8>,
     #[serde(default)]

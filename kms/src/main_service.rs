@@ -37,6 +37,7 @@ use crate::{
     crypto::{derive_k256_key, sign_message, sign_message_with_timestamp},
 };
 
+pub(crate) mod amd_attest;
 pub(crate) mod upgrade_authority;
 
 #[derive(Clone)]
