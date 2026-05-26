@@ -17,6 +17,11 @@ pub enum PlatformEvidence {
         quote: Vec<u8>,
         event_log: Vec<TdxEvent>,
     },
+    #[serde(rename = "sev-snp")]
+    SevSnp {
+        report: Vec<u8>,
+        cert_chain: Vec<Vec<u8>>,
+    },
     #[serde(rename = "gcp-tdx")]
     GcpTdx {
         quote: Vec<u8>,
@@ -54,6 +59,20 @@ impl PlatformEvidence {
     pub fn nsm_quote(&self) -> Option<&[u8]> {
         match self {
             Self::NitroEnclave { nsm_quote } => Some(nsm_quote.as_slice()),
+            _ => None,
+        }
+    }
+
+    pub fn sev_snp_report(&self) -> Option<&[u8]> {
+        match self {
+            Self::SevSnp { report, .. } => Some(report.as_slice()),
+            _ => None,
+        }
+    }
+
+    pub fn sev_snp_cert_chain(&self) -> Option<&[Vec<u8>]> {
+        match self {
+            Self::SevSnp { cert_chain, .. } => Some(cert_chain.as_slice()),
             _ => None,
         }
     }
@@ -327,5 +346,31 @@ mod tests {
             }
             _ => panic!("expected dstack-pod stack evidence"),
         }
+    }
+
+    #[test]
+    fn sev_snp_msgpack_roundtrip_preserves_evidence() {
+        let attestation = Attestation::new(
+            PlatformEvidence::SevSnp {
+                report: vec![0x11; 1184],
+                cert_chain: vec![vec![0x22, 0x33]],
+            },
+            StackEvidence::Dstack {
+                report_data: vec![9u8; 64],
+                runtime_events: vec![],
+                config: "{}".into(),
+            },
+        );
+
+        let encoded = attestation.to_msgpack().expect("encode msgpack");
+        let decoded = Attestation::from_msgpack(&encoded).expect("decode msgpack");
+        assert_eq!(
+            decoded.platform.sev_snp_report(),
+            Some(vec![0x11; 1184].as_slice())
+        );
+        assert_eq!(
+            decoded.platform.sev_snp_cert_chain(),
+            Some(vec![vec![0x22, 0x33]].as_slice())
+        );
     }
 }

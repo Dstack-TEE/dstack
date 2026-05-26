@@ -5,7 +5,9 @@
 //! QEMU related code
 use crate::{
     app::Manifest,
-    config::{CvmConfig, GatewayConfig, Networking, NetworkingMode, ProcessAnnotation},
+    config::{
+        CvmConfig, GatewayConfig, Networking, NetworkingMode, ProcessAnnotation, TeePlatform,
+    },
 };
 use std::{collections::HashMap, os::unix::fs::PermissionsExt};
 use std::{
@@ -796,10 +798,27 @@ impl VmConfig {
             return Ok(());
         }
 
-        command
-            .arg("-machine")
-            .arg("q35,kernel-irqchip=split,confidential-guest-support=tdx,hpet=off");
+        match cfg.platform.resolve() {
+            TeePlatform::Tdx | TeePlatform::Auto => {
+                command
+                    .arg("-machine")
+                    .arg("q35,kernel-irqchip=split,confidential-guest-support=tdx,hpet=off");
+                self.configure_tdx_guest(command, workdir, cfg, app_compose)?;
+            }
+            TeePlatform::AmdSevSnp => {
+                self.configure_amd_sev_snp_guest(command, cfg);
+            }
+        }
+        Ok(())
+    }
 
+    fn configure_tdx_guest(
+        &self,
+        command: &mut Command,
+        workdir: &VmWorkDir,
+        cfg: &CvmConfig,
+        app_compose: &AppCompose,
+    ) -> Result<()> {
         let img_ver = self.image.info.version_tuple().unwrap_or_default();
         let support_mr_config_id = img_ver >= (0, 5, 2);
 
@@ -874,6 +893,22 @@ impl VmConfig {
             serde_json::to_string(&tdx_object).context("failed to serialize tdx-guest object")?;
         command.arg("-object").arg(tdx_object_arg);
         Ok(())
+    }
+
+    fn configure_amd_sev_snp_guest(&self, command: &mut Command, cfg: &CvmConfig) {
+        command.arg("-object").arg(format!(
+            "memory-backend-memfd,id=ram1,size={}M,share=true,prealloc=false",
+            self.manifest.memory
+        ));
+        command
+            .arg("-object")
+            .arg("sev-snp-guest,id=sev0,policy=0x30000,sev-device=/dev/sev,kernel-hashes=on,cbitpos=51,reduced-phys-bits=1");
+        command.arg("-machine").arg(
+            "q35,kernel-irqchip=split,confidential-guest-support=sev0,memory-backend=ram1,hpet=off",
+        );
+        if cfg.qgs_port.is_some() {
+            tracing::warn!("qgs_port is ignored for amd sev-snp guests");
+        }
     }
 
     fn configure_smbios(&self, command: &mut Command, cfg: &CvmConfig) {

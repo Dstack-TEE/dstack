@@ -32,6 +32,7 @@ fn tee_platform_name(quote: &AttestationQuote) -> &'static str {
         AttestationQuote::DstackTdx(_) => "tdx",
         AttestationQuote::DstackGcpTdx(_) => "gcp-tdx",
         AttestationQuote::DstackNitroEnclave(_) => "nitro",
+        AttestationQuote::DstackAmdSevSnp(_) => "sev-snp",
     }
 }
 
@@ -525,6 +526,12 @@ impl CvmVerifier {
                     bail!("internal error: nitro quote without a verified nitro report");
                 };
                 self.verify_os_image_hash_for_nitro_enclave(&vm_config, &report.pcrs)?;
+            }
+            AttestationQuote::DstackAmdSevSnp(_) => {
+                bail!(
+                    "Unsupported attestation quote: {:?}",
+                    attestation.quote.mode()
+                );
             }
         }
         Ok(vm_config)
