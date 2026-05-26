@@ -330,6 +330,7 @@ impl QuoteContentType<'_> {
 #[derive(Clone)]
 pub enum DstackVerifiedReport {
     DstackTdx(TdxVerifiedReport),
+    DstackAmdSevSnp(crate::amd_sev_snp::VerifiedAmdSnpReport),
     DstackGcpTdx,
     DstackNitroEnclave,
 }
@@ -338,8 +339,18 @@ impl DstackVerifiedReport {
     pub fn tdx_report(&self) -> Option<&TdxVerifiedReport> {
         match self {
             DstackVerifiedReport::DstackTdx(report) => Some(report),
+            DstackVerifiedReport::DstackAmdSevSnp(_) => None,
             DstackVerifiedReport::DstackGcpTdx => None,
             DstackVerifiedReport::DstackNitroEnclave => None,
+        }
+    }
+
+    pub fn amd_snp_report(&self) -> Option<&crate::amd_sev_snp::VerifiedAmdSnpReport> {
+        match self {
+            DstackVerifiedReport::DstackAmdSevSnp(report) => Some(report),
+            DstackVerifiedReport::DstackTdx(_)
+            | DstackVerifiedReport::DstackGcpTdx
+            | DstackVerifiedReport::DstackNitroEnclave => None,
         }
     }
 }
@@ -650,9 +661,14 @@ impl AttestationV1 {
                 verify_tdx_quote_with_events(pccs_url, quote, &runtime_events, &report_data)
                     .await?,
             ),
-            PlatformEvidence::SevSnp { .. }
-            | PlatformEvidence::GcpTdx
-            | PlatformEvidence::NitroEnclave => {
+            PlatformEvidence::SevSnp { report, cert_chain } => {
+                DstackVerifiedReport::DstackAmdSevSnp(crate::amd_sev_snp::verify_amd_snp_evidence(
+                    report,
+                    cert_chain,
+                    &report_data,
+                )?)
+            }
+            PlatformEvidence::GcpTdx | PlatformEvidence::NitroEnclave => {
                 bail!(
                     "Unsupported attestation mode: {:?}",
                     platform_attestation_mode(&platform)
@@ -832,6 +848,7 @@ impl GetDeviceId for DstackVerifiedReport {
     fn get_devide_id(&self) -> Vec<u8> {
         match self {
             DstackVerifiedReport::DstackTdx(tdx_report) => tdx_report.ppid.to_vec(),
+            DstackVerifiedReport::DstackAmdSevSnp(report) => report.chip_id.to_vec(),
             DstackVerifiedReport::DstackGcpTdx => Vec::new(),
             DstackVerifiedReport::DstackNitroEnclave => Vec::new(),
         }

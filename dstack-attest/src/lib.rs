@@ -10,6 +10,7 @@ pub use tdx_attest as tdx;
 
 use crate::attestation::AttestationMode;
 
+pub mod amd_sev_snp;
 pub mod attestation;
 #[cfg(feature = "quote")]
 mod sev_snp;
