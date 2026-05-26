@@ -150,6 +150,121 @@ pub(crate) fn build_amd_snp_boot_info(
     })
 }
 
+/// Explicit helper-only AMD SEV-SNP authorization policy.
+///
+/// The current SNP work is intentionally not wired into key release. This type
+/// makes the future release semantics auditable before any RPC/proto path is
+/// added: an SNP `BootInfo` must match allowlisted hardware measurement,
+/// app/config identity, device identity, and TCB/advisory policy. Empty
+/// allowlists fail closed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AmdSnpAuthPolicy {
+    pub allowed_measurements: Vec<Vec<u8>>,
+    pub allowed_app_ids: Vec<Vec<u8>>,
+    pub allowed_compose_hashes: Vec<Vec<u8>>,
+    pub allowed_os_image_hashes: Vec<Vec<u8>>,
+    pub allowed_device_ids: Vec<Vec<u8>>,
+    pub allowed_tcb_statuses: Vec<String>,
+    pub allowed_advisory_ids: Vec<String>,
+}
+
+impl AmdSnpAuthPolicy {
+    /// Build a narrow exact-match policy from an already verified SNP boot
+    /// identity. This is useful for tests and for future allowlist materializing
+    /// logic, but still does not release keys by itself.
+    pub(crate) fn from_boot_info(boot_info: &BootInfo) -> Result<Self> {
+        ensure_snp_boot_info_shape(boot_info)?;
+        Ok(Self {
+            allowed_measurements: vec![boot_info.mr_aggregated.clone()],
+            allowed_app_ids: vec![boot_info.app_id.clone()],
+            allowed_compose_hashes: vec![boot_info.compose_hash.clone()],
+            allowed_os_image_hashes: vec![boot_info.os_image_hash.clone()],
+            allowed_device_ids: vec![boot_info.device_id.clone()],
+            allowed_tcb_statuses: vec![boot_info.tcb_status.clone()],
+            allowed_advisory_ids: boot_info.advisory_ids.clone(),
+        })
+    }
+}
+
+pub(crate) fn validate_amd_snp_auth_policy(
+    boot_info: &BootInfo,
+    policy: &AmdSnpAuthPolicy,
+) -> Result<()> {
+    ensure_snp_boot_info_shape(boot_info)?;
+    ensure_allowed_bytes(
+        "measurement",
+        &boot_info.mr_aggregated,
+        &policy.allowed_measurements,
+    )?;
+    ensure_allowed_bytes("app_id", &boot_info.app_id, &policy.allowed_app_ids)?;
+    ensure_allowed_bytes(
+        "compose_hash",
+        &boot_info.compose_hash,
+        &policy.allowed_compose_hashes,
+    )?;
+    ensure_allowed_bytes(
+        "os_image_hash",
+        &boot_info.os_image_hash,
+        &policy.allowed_os_image_hashes,
+    )?;
+    ensure_allowed_bytes(
+        "device_id",
+        &boot_info.device_id,
+        &policy.allowed_device_ids,
+    )?;
+    ensure_allowed_string(
+        "tcb_status",
+        &boot_info.tcb_status,
+        &policy.allowed_tcb_statuses,
+    )?;
+    for advisory_id in &boot_info.advisory_ids {
+        ensure_allowed_string("advisory_id", advisory_id, &policy.allowed_advisory_ids)?;
+    }
+    Ok(())
+}
+
+fn ensure_snp_boot_info_shape(boot_info: &BootInfo) -> Result<()> {
+    if boot_info.attestation_mode != AttestationMode::DstackAmdSevSnp {
+        bail!("attestation mode is not amd sev-snp");
+    }
+    ensure_len("measurement", &boot_info.mr_aggregated, 48)?;
+    ensure_len("app_id", &boot_info.app_id, 20)?;
+    ensure_len("compose_hash", &boot_info.compose_hash, 32)?;
+    ensure_len("os_image_hash", &boot_info.os_image_hash, 32)?;
+    ensure_len("device_id", &boot_info.device_id, 64)?;
+    ensure_len("mr_system", &boot_info.mr_system, 32)?;
+    ensure_len("key_provider_info", &boot_info.key_provider_info, 32)?;
+    ensure_len("instance_id", &boot_info.instance_id, 32)?;
+    if boot_info.tcb_status.trim().is_empty() {
+        bail!("tcb_status is not allowed");
+    }
+    Ok(())
+}
+
+fn ensure_len(name: &str, value: &[u8], expected_len: usize) -> Result<()> {
+    if value.len() != expected_len {
+        bail!("{name} must be {expected_len} bytes");
+    }
+    Ok(())
+}
+
+fn ensure_allowed_bytes(name: &str, value: &[u8], allowed: &[Vec<u8>]) -> Result<()> {
+    if allowed
+        .iter()
+        .any(|candidate| candidate.as_slice() == value)
+    {
+        return Ok(());
+    }
+    bail!("{name} is not allowed")
+}
+
+fn ensure_allowed_string(name: &str, value: &str, allowed: &[String]) -> Result<()> {
+    if allowed.iter().any(|candidate| candidate == value) {
+        return Ok(());
+    }
+    bail!("{name} is not allowed")
+}
+
 fn snp_mr_system_digest(
     config: &SevSnpMeasureConfig,
     verified_measurement: &[u8; 48],
@@ -1137,6 +1252,80 @@ mod tests {
             "859c646870cffdb4620077c20ea81702c1bd0bde9c967887ddbd430ebe31a89d2832a442b8d8d83e4bdd70b52bb3f009",
             "live sev-snp-measure golden vector should not drift silently"
         );
+    }
+
+    #[test]
+    fn explicit_snp_auth_policy_accepts_only_exact_verified_identity() {
+        let input = valid_input();
+        let verified = compute_expected_measurement(&config(), &input).unwrap();
+        let chip_id = [0x42; 64];
+        let boot_info = build_amd_snp_boot_info(&config(), &verified, &chip_id, &input).unwrap();
+        let policy = AmdSnpAuthPolicy::from_boot_info(&boot_info)
+            .expect("boot info should produce an exact SNP auth policy");
+
+        validate_amd_snp_auth_policy(&boot_info, &policy)
+            .expect("exact verified SNP identity should satisfy policy");
+
+        let mut changed = boot_info;
+        changed.compose_hash[0] ^= 0xff;
+        let err = validate_amd_snp_auth_policy(&changed, &policy)
+            .expect_err("compose hash mismatch must reject");
+        assert!(err.to_string().contains("compose_hash is not allowed"));
+    }
+
+    #[test]
+    fn explicit_snp_auth_policy_rejects_incomplete_or_unsafe_tcb() {
+        let input = valid_input();
+        let verified = compute_expected_measurement(&config(), &input).unwrap();
+        let chip_id = [0x24; 64];
+        let boot_info = build_amd_snp_boot_info(&config(), &verified, &chip_id, &input).unwrap();
+        let policy = AmdSnpAuthPolicy::from_boot_info(&boot_info).unwrap();
+
+        let mut wrong_mode = boot_info.clone();
+        wrong_mode.attestation_mode = AttestationMode::DstackTdx;
+        let err = validate_amd_snp_auth_policy(&wrong_mode, &policy)
+            .expect_err("non-SNP mode must reject");
+        assert!(err
+            .to_string()
+            .contains("attestation mode is not amd sev-snp"));
+
+        let mut wrong_status = boot_info.clone();
+        wrong_status.tcb_status = "UpToDate".to_string();
+        let err = validate_amd_snp_auth_policy(&wrong_status, &policy)
+            .expect_err("unexpected tcb status must reject");
+        assert!(err.to_string().contains("tcb_status is not allowed"));
+
+        let mut advisory = boot_info.clone();
+        advisory.advisory_ids.push("SNP-TEST-ADVISORY".to_string());
+        let err = validate_amd_snp_auth_policy(&advisory, &policy)
+            .expect_err("unexpected advisory must reject by default");
+        assert!(err.to_string().contains("advisory_id is not allowed"));
+    }
+
+    #[test]
+    fn explicit_snp_auth_policy_rejects_partial_allowlists() {
+        let input = valid_input();
+        let verified = compute_expected_measurement(&config(), &input).unwrap();
+        let chip_id = [0x35; 64];
+        let boot_info = build_amd_snp_boot_info(&config(), &verified, &chip_id, &input).unwrap();
+
+        for mutate in [
+            |p: &mut AmdSnpAuthPolicy| p.allowed_measurements.clear(),
+            |p: &mut AmdSnpAuthPolicy| p.allowed_app_ids.clear(),
+            |p: &mut AmdSnpAuthPolicy| p.allowed_compose_hashes.clear(),
+            |p: &mut AmdSnpAuthPolicy| p.allowed_os_image_hashes.clear(),
+            |p: &mut AmdSnpAuthPolicy| p.allowed_device_ids.clear(),
+            |p: &mut AmdSnpAuthPolicy| p.allowed_tcb_statuses.clear(),
+        ] {
+            let mut policy = AmdSnpAuthPolicy::from_boot_info(&boot_info).unwrap();
+            mutate(&mut policy);
+            let err = validate_amd_snp_auth_policy(&boot_info, &policy)
+                .expect_err("partial SNP policy allowlist must reject");
+            assert!(
+                err.to_string().contains("is not allowed"),
+                "unexpected error: {err:?}"
+            );
+        }
     }
 
     #[test]
