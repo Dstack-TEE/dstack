@@ -364,7 +364,7 @@ impl VmState {
 
 #[cfg(test)]
 mod tests {
-    use super::sanitize_optional;
+    use super::{amd_sev_snp_memory_backend_arg, sanitize_optional};
 
     #[test]
     fn sanitize_optional_filters_empty_owned_values() {
@@ -383,6 +383,14 @@ mod tests {
         assert_eq!(
             sanitize_optional(Some("instance-123")),
             Some("instance-123")
+        );
+    }
+
+    #[test]
+    fn amd_sev_snp_memory_backend_arg_uses_passed_final_memory_size() {
+        assert_eq!(
+            amd_sev_snp_memory_backend_arg(4096),
+            "memory-backend-memfd,id=ram1,size=4096M,share=true,prealloc=false"
         );
     }
 }
@@ -537,7 +545,6 @@ impl VmConfig {
         command.arg("-netdev").arg(netdev);
         command.arg("-device").arg(net_device);
 
-        self.configure_machine(&mut command, &workdir, cfg, &app_compose)?;
         self.configure_smbios(&mut command, cfg);
 
         if matches!(app_compose.key_provider(), KeyProviderKind::Tpm) {
@@ -659,6 +666,8 @@ impl VmConfig {
                 bus_nr += count + 1;
             }
         }
+
+        self.configure_machine(&mut command, &workdir, cfg, &app_compose, mem)?;
 
         // Configure GPU devices
         if !gpus.gpus.is_empty() {
@@ -785,6 +794,7 @@ impl VmConfig {
         workdir: &VmWorkDir,
         cfg: &CvmConfig,
         app_compose: &AppCompose,
+        mem: u32,
     ) -> Result<()> {
         if self.manifest.no_tee {
             command
@@ -801,7 +811,7 @@ impl VmConfig {
                 self.configure_tdx_guest(command, workdir, cfg, app_compose)?;
             }
             TeePlatform::AmdSevSnp => {
-                self.configure_amd_sev_snp_guest(command, cfg);
+                self.configure_amd_sev_snp_guest(command, cfg, mem);
             }
         }
         Ok(())
@@ -890,11 +900,10 @@ impl VmConfig {
         Ok(())
     }
 
-    fn configure_amd_sev_snp_guest(&self, command: &mut Command, cfg: &CvmConfig) {
-        command.arg("-object").arg(format!(
-            "memory-backend-memfd,id=ram1,size={}M,share=true,prealloc=false",
-            self.manifest.memory
-        ));
+    fn configure_amd_sev_snp_guest(&self, command: &mut Command, cfg: &CvmConfig, mem: u32) {
+        command
+            .arg("-object")
+            .arg(amd_sev_snp_memory_backend_arg(mem));
         command
             .arg("-object")
             .arg("sev-snp-guest,id=sev0,policy=0x30000,sev-device=/dev/sev,kernel-hashes=on,cbitpos=51,reduced-phys-bits=1");
@@ -949,6 +958,10 @@ impl VmConfig {
             }
         }
     }
+}
+
+fn amd_sev_snp_memory_backend_arg(mem: u32) -> String {
+    format!("memory-backend-memfd,id=ram1,size={mem}M,share=true,prealloc=false")
 }
 
 /// Round up a value to the nearest multiple of another value.

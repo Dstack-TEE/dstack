@@ -38,7 +38,7 @@ struct SnpGuestRequestIoctl {
 }
 
 pub fn get_report(report_data: [u8; 64]) -> Result<SnpQuote> {
-    if Path::new(TSM_REPORT_ROOT).exists() {
+    if has_sev_snp_tsm_provider(Path::new(TSM_REPORT_ROOT)) {
         match get_report_configfs(report_data) {
             Ok(quote) => return Ok(quote),
             Err(err) => tracing::debug!("failed to get sev-snp report from configfs tsm: {err:#}"),
@@ -48,6 +48,41 @@ pub fn get_report(report_data: [u8; 64]) -> Result<SnpQuote> {
         return get_report_ioctl(report_data);
     }
     bail!("sev-snp report is unavailable: neither {TSM_REPORT_ROOT} nor {SEV_GUEST_DEVICE} exists")
+}
+
+pub(crate) fn has_sev_snp_tsm_provider(root: &Path) -> bool {
+    if !root.exists() {
+        return false;
+    }
+
+    if provider_file_is_sev_guest(&root.join("provider")) {
+        return true;
+    }
+
+    let probe = root.join(format!("dstack-probe-{}", std::process::id()));
+    if fs_err::create_dir(&probe).is_ok() {
+        let is_sev_snp = provider_file_is_sev_guest(&probe.join("provider"));
+        let _ = fs_err::remove_dir(&probe);
+        if is_sev_snp {
+            return true;
+        }
+    }
+
+    let Ok(entries) = fs_err::read_dir(root) else {
+        return false;
+    };
+    entries.flatten().any(|entry| {
+        let Ok(file_type) = entry.file_type() else {
+            return false;
+        };
+        file_type.is_dir() && provider_file_is_sev_guest(&entry.path().join("provider"))
+    })
+}
+
+fn provider_file_is_sev_guest(path: &Path) -> bool {
+    fs_err::read_to_string(path)
+        .map(|provider| matches!(provider.trim(), "sev_guest" | "sev-guest"))
+        .unwrap_or(false)
 }
 
 fn get_report_configfs(report_data: [u8; 64]) -> Result<SnpQuote> {
@@ -166,6 +201,7 @@ use std::os::fd::AsRawFd;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn rejects_report_with_wrong_report_data() {
@@ -181,5 +217,49 @@ mod tests {
         let mut report = vec![0u8; SNP_REPORT_SIZE];
         report[SNP_REPORT_DATA_RANGE].copy_from_slice(&expected);
         ensure_report_data_matches(&report, &expected).unwrap();
+    }
+
+    #[test]
+    fn tsm_provider_detection_accepts_only_sev_guest_provider() {
+        let root = test_dir("sev-guest");
+        fs_err::create_dir_all(root.join("entry")).unwrap();
+        fs_err::write(root.join("entry/provider"), "sev_guest\n").unwrap();
+
+        assert!(has_sev_snp_tsm_provider(&root));
+
+        let _ = fs_err::remove_dir_all(root);
+    }
+
+    #[test]
+    fn tsm_provider_detection_accepts_legacy_hyphenated_sev_guest_provider() {
+        let root = test_dir("sev-guest-hyphen");
+        fs_err::create_dir_all(root.join("entry")).unwrap();
+        fs_err::write(root.join("entry/provider"), "sev-guest\n").unwrap();
+
+        assert!(has_sev_snp_tsm_provider(&root));
+
+        let _ = fs_err::remove_dir_all(root);
+    }
+
+    #[test]
+    fn tsm_provider_detection_rejects_tdx_guest_provider() {
+        let root = test_dir("tdx-guest");
+        fs_err::create_dir_all(root.join("entry")).unwrap();
+        fs_err::write(root.join("entry/provider"), "tdx-guest\n").unwrap();
+
+        assert!(!has_sev_snp_tsm_provider(&root));
+
+        let _ = fs_err::remove_dir_all(root);
+    }
+
+    fn test_dir(name: &str) -> std::path::PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "dstack-sev-snp-test-{name}-{}-{nanos}",
+            std::process::id()
+        ))
     }
 }
