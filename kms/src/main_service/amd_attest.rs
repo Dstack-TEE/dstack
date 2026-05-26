@@ -1062,6 +1062,84 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires sev-snp-measure and an SNP-capable OVMF binary"]
+    fn recomputation_matches_sev_snp_measure_live_golden_vector() {
+        let ovmf_path = std::env::var("DSTACK_SEV_SNP_GOLDEN_OVMF")
+            .unwrap_or_else(|_| "/opt/AMDSEV/usr/local/share/qemu/OVMF.fd".to_string());
+        assert!(
+            std::path::Path::new(&ovmf_path).exists(),
+            "set DSTACK_SEV_SNP_GOLDEN_OVMF to an SNP-capable OVMF binary"
+        );
+
+        let dir = tempfile::tempdir().expect("tempdir should be available");
+        let kernel_path = dir.path().join("kernel.bin");
+        let initrd_path = dir.path().join("initrd.bin");
+        let kernel_bytes = b"golden-kernel-for-dstack-sev-snp-measure\n";
+        let initrd_bytes = b"golden-initrd-for-dstack-sev-snp-measure\n";
+        std::fs::write(&kernel_path, kernel_bytes).expect("kernel fixture should be written");
+        std::fs::write(&initrd_path, initrd_bytes).expect("initrd fixture should be written");
+
+        let kernel_hash = hex::encode(Sha256::digest(kernel_bytes));
+        let initrd_hash = hex::encode(Sha256::digest(initrd_bytes));
+        let mut input = valid_input();
+        input.docker_files_hash = None;
+        input.ovmf_hash.clear();
+        input.ovmf_sections.clear();
+        input.kernel_hash = kernel_hash;
+        input.initrd_hash = initrd_hash;
+        input.vcpus = 2;
+        input.vcpu_type = Some("EPYC-v4".to_string());
+
+        let config = config_with_path(&ovmf_path);
+        let recomputed = compute_expected_measurement(&config, &input)
+            .expect("dstack recomputation should succeed");
+
+        let append = format!(
+            "console=ttyS0 loglevel=7 docker_compose_hash={} rootfs_hash={}",
+            input.compose_hash, input.rootfs_hash
+        );
+        let output = std::process::Command::new("sev-snp-measure")
+            .args([
+                "--mode",
+                "snp",
+                "--vcpus",
+                "2",
+                "--vcpu-type",
+                "EPYC-v4",
+                "--ovmf",
+                &ovmf_path,
+                "--kernel",
+                kernel_path.to_str().unwrap(),
+                "--initrd",
+                initrd_path.to_str().unwrap(),
+                "--append",
+                &append,
+                "--guest-features",
+                "0x1",
+                "--output-format",
+                "hex",
+            ])
+            .output()
+            .expect("sev-snp-measure should be installed");
+        assert!(
+            output.status.success(),
+            "sev-snp-measure failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let tool_measurement = String::from_utf8(output.stdout)
+            .expect("sev-snp-measure output should be utf8")
+            .trim()
+            .to_string();
+
+        assert_eq!(hex::encode(recomputed), tool_measurement);
+        assert_eq!(
+            tool_measurement,
+            "859c646870cffdb4620077c20ea81702c1bd0bde9c967887ddbd430ebe31a89d2832a442b8d8d83e4bdd70b52bb3f009",
+            "live sev-snp-measure golden vector should not drift silently"
+        );
+    }
+
+    #[test]
     fn rejects_missing_config() {
         let verified = [0xaa; 48];
         let err = validate_amd_snp_measurement_binding(None, &verified, &valid_input())
