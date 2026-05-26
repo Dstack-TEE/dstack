@@ -29,6 +29,8 @@ use sha2::Digest as _;
 
 pub use crate::v1::{Attestation as AttestationV1, PlatformEvidence, StackEvidence};
 
+pub const SNP_REPORT_DATA_RANGE: std::ops::Range<usize> = 0x50..0x90;
+
 const DSTACK_TDX: &str = "dstack-tdx";
 const DSTACK_AMD_SEV_SNP: &str = "dstack-amd-sev-snp";
 const DSTACK_GCP_TDX: &str = "dstack-gcp-tdx";
