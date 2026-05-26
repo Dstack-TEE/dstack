@@ -8,7 +8,7 @@ use std::{fs::OpenOptions, io, path::Path};
 
 use anyhow::{bail, Context, Result};
 
-use crate::attestation::SnpQuote;
+use crate::attestation::{SnpQuote, SNP_REPORT_DATA_RANGE};
 
 const TSM_REPORT_ROOT: &str = "/sys/kernel/config/tsm/report";
 const SEV_GUEST_DEVICE: &str = "/dev/sev-guest";
@@ -72,6 +72,7 @@ fn get_report_configfs(report_data: [u8; 64]) -> Result<SnpQuote> {
     if report.is_empty() {
         bail!("sev-snp configfs tsm returned an empty report");
     }
+    ensure_report_data_matches(&report, &report_data)?;
     Ok(SnpQuote {
         report,
         cert_chain: read_cert_chain_configfs(&dir),
@@ -138,10 +139,47 @@ fn get_report_ioctl(report_data: [u8; 64]) -> Result<SnpQuote> {
     if rc < 0 {
         return Err(io::Error::last_os_error()).context("sev-snp get report ioctl failed");
     }
+    let report = resp.data[..SNP_REPORT_SIZE].to_vec();
+    ensure_report_data_matches(&report, &report_data)?;
     Ok(SnpQuote {
-        report: resp.data[..SNP_REPORT_SIZE].to_vec(),
+        report,
         cert_chain: Vec::new(),
     })
 }
 
+fn ensure_report_data_matches(report: &[u8], report_data: &[u8; 64]) -> Result<()> {
+    if report.len() < SNP_REPORT_DATA_RANGE.end {
+        bail!(
+            "sev-snp report too short: expected at least {} bytes, got {}",
+            SNP_REPORT_DATA_RANGE.end,
+            report.len()
+        );
+    }
+    if &report[SNP_REPORT_DATA_RANGE] != report_data {
+        bail!("sev-snp report_data mismatch");
+    }
+    Ok(())
+}
+
 use std::os::fd::AsRawFd;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_report_with_wrong_report_data() {
+        let expected = [0x42; 64];
+        let mut report = vec![0u8; SNP_REPORT_SIZE];
+        report[SNP_REPORT_DATA_RANGE].copy_from_slice(&[0x24; 64]);
+        assert!(ensure_report_data_matches(&report, &expected).is_err());
+    }
+
+    #[test]
+    fn accepts_report_with_matching_report_data() {
+        let expected = [0x42; 64];
+        let mut report = vec![0u8; SNP_REPORT_SIZE];
+        report[SNP_REPORT_DATA_RANGE].copy_from_slice(&expected);
+        ensure_report_data_matches(&report, &expected).unwrap();
+    }
+}

@@ -245,7 +245,7 @@ impl Attestation {
 
     /// Return a new attestation with the report_data patched in both platform quote and stack.
     pub fn with_report_data(self, report_data: [u8; 64]) -> Self {
-        use crate::attestation::TDX_QUOTE_REPORT_DATA_RANGE;
+        use crate::attestation::{SNP_REPORT_DATA_RANGE, TDX_QUOTE_REPORT_DATA_RANGE};
 
         let platform = match self.platform {
             PlatformEvidence::Tdx {
@@ -256,6 +256,15 @@ impl Attestation {
                     quote[TDX_QUOTE_REPORT_DATA_RANGE].copy_from_slice(&report_data);
                 }
                 PlatformEvidence::Tdx { quote, event_log }
+            }
+            PlatformEvidence::SevSnp {
+                mut report,
+                cert_chain,
+            } => {
+                if report.len() >= SNP_REPORT_DATA_RANGE.end {
+                    report[SNP_REPORT_DATA_RANGE].copy_from_slice(&report_data);
+                }
+                PlatformEvidence::SevSnp { report, cert_chain }
             }
             other => other,
         };
@@ -371,6 +380,31 @@ mod tests {
         assert_eq!(
             decoded.platform.sev_snp_cert_chain(),
             Some(vec![vec![0x22, 0x33]].as_slice())
+        );
+    }
+
+    #[test]
+    fn sev_snp_with_report_data_patches_report_and_stack() {
+        let mut report = vec![0x11; 1184];
+        report[crate::attestation::SNP_REPORT_DATA_RANGE].copy_from_slice(&[0x22; 64]);
+        let attestation = Attestation::new(
+            PlatformEvidence::SevSnp {
+                report,
+                cert_chain: vec![],
+            },
+            StackEvidence::Dstack {
+                report_data: vec![0x22; 64],
+                runtime_events: vec![],
+                config: "{}".into(),
+            },
+        );
+
+        let patched = attestation.with_report_data([0x33; 64]);
+        assert_eq!(patched.report_data().unwrap(), [0x33; 64]);
+        let report = patched.platform.sev_snp_report().unwrap();
+        assert_eq!(
+            &report[crate::attestation::SNP_REPORT_DATA_RANGE],
+            &[0x33; 64]
         );
     }
 }
