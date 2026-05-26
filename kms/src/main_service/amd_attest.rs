@@ -18,17 +18,21 @@
 #![allow(dead_code)]
 
 use anyhow::{bail, Context, Result};
+use ra_tls::attestation::AttestationMode;
 use sha2::{Digest, Sha256, Sha384};
 use std::fs;
 
 use crate::config::SevSnpMeasureConfig;
 
+use super::upgrade_authority::BootInfo;
+
 const LD_BYTES: usize = 48;
 const ZEROS_LD: [u8; LD_BYTES] = [0u8; LD_BYTES];
 const MAX_VCPUS: u32 = 512;
 const MAX_OVMF_SECTIONS: usize = 64;
-const MAX_OVMF_METADATA_PAGES: u64 = 16_777_216; // 64 GiB worth of 4 KiB pages.
-                                                 // VMSA page GPA: (u64)(-1) page-aligned, bits >51 cleared.
+/// 64 GiB worth of 4 KiB pages.
+const MAX_OVMF_METADATA_PAGES: u64 = 16_777_216;
+// VMSA page GPA: (u64)(-1) page-aligned, bits >51 cleared.
 const VMSA_GPA: u64 = 0x0000_FFFF_FFFF_F000;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -85,6 +89,153 @@ pub(crate) fn validate_amd_snp_measurement_binding(
     }
 
     Ok(())
+}
+
+/// Builds a deterministic authorization `BootInfo` for an already-verified AMD
+/// SEV-SNP report without wiring it into KMS key release.
+///
+/// This helper first recomputes and validates the QEMU SNP launch measurement.
+/// `mr_aggregated` is the hardware-verified 48-byte SNP `MEASUREMENT`, and
+/// `device_id` is the hardware-verified 64-byte SNP `chip_id`. `app_id` is
+/// decoded from the request input for authorization policy, but it is not
+/// directly hardware-measured by the current QEMU SNP launch measurement model.
+/// `compose_hash` and `rootfs_hash` are bound through the measured kernel
+/// command line; `os_image_hash` is therefore represented by `rootfs_hash`.
+///
+/// Authorization-specific digests are domain separated and deterministic:
+/// * `mr_system = sha256("dstack-amd-sev-snp:mr-system:v1" || launch/system inputs)`
+/// * `key_provider_info = sha256("dstack-amd-sev-snp:app-binding:v1" || mr_system || app_id || compose_hash || chip_id)`
+/// * `instance_id = sha256("dstack-amd-sev-snp:instance-id:v1" || chip_id || measurement || app_id || compose_hash)`
+///
+/// Keeping these as helper-only values lets future authorization policy inspect
+/// exactly which SNP-specific inputs were bound while SNP key release remains
+/// fail-closed unless an explicit release path is added separately.
+pub(crate) fn build_amd_snp_boot_info(
+    config: &SevSnpMeasureConfig,
+    verified_measurement: &[u8; 48],
+    verified_chip_id: &[u8; 64],
+    input: &MeasurementInput,
+) -> Result<BootInfo> {
+    validate_amd_snp_measurement_binding(Some(config), verified_measurement, input)?;
+
+    let app_id = decode_required_hex("app_id", &input.app_id, 20)?;
+    let compose_hash = decode_required_hex("compose_hash", &input.compose_hash, 32)?;
+    let rootfs_hash = decode_required_hex("rootfs_hash", &input.rootfs_hash, 32)?;
+    let mr_system = snp_mr_system_digest(config, verified_measurement, input)?;
+    let key_provider_info = snp_app_binding_digest(
+        &mr_system,
+        &app_id,
+        &compose_hash,
+        verified_chip_id.as_slice(),
+    );
+    let instance_id = snp_instance_id_digest(
+        verified_chip_id.as_slice(),
+        verified_measurement,
+        &app_id,
+        &compose_hash,
+    );
+
+    Ok(BootInfo {
+        attestation_mode: AttestationMode::DstackAmdSevSnp,
+        mr_aggregated: verified_measurement.to_vec(),
+        os_image_hash: rootfs_hash,
+        mr_system,
+        app_id,
+        compose_hash,
+        instance_id,
+        device_id: verified_chip_id.to_vec(),
+        key_provider_info,
+        tcb_status: "snp-verified-basic-policy".to_string(),
+        advisory_ids: Vec::new(),
+    })
+}
+
+fn snp_mr_system_digest(
+    config: &SevSnpMeasureConfig,
+    verified_measurement: &[u8; 48],
+    input: &MeasurementInput,
+) -> Result<Vec<u8>> {
+    let ovmf_hash = decode_optional_hex("ovmf_hash", &input.ovmf_hash, 48)?;
+    let kernel_hash = decode_required_hex("kernel_hash", &input.kernel_hash, 32)?;
+    let initrd_hash = if input.initrd_hash.is_empty() {
+        Sha256::digest(b"").to_vec()
+    } else {
+        decode_required_hex("initrd_hash", &input.initrd_hash, 32)?
+    };
+    let rootfs_hash = decode_required_hex("rootfs_hash", &input.rootfs_hash, 32)?;
+    let docker_files_hash = input
+        .docker_files_hash
+        .as_deref()
+        .map(|value| decode_required_hex("docker_files_hash", value, 32))
+        .transpose()?;
+    let vcpu_type = input
+        .vcpu_type
+        .as_deref()
+        .ok_or_else(|| anyhow::anyhow!("vcpu_type is required"))?;
+
+    let mut h = Sha256::new();
+    h.update(b"dstack-amd-sev-snp:mr-system:v1");
+    h.update(verified_measurement);
+    h.update(len_prefixed(&ovmf_hash));
+    h.update(kernel_hash);
+    h.update(initrd_hash);
+    h.update(rootfs_hash);
+    h.update(input.vcpus.to_le_bytes());
+    h.update(len_prefixed(vcpu_type.as_bytes()));
+    h.update(config.guest_features.to_le_bytes());
+    match docker_files_hash {
+        Some(value) => {
+            h.update([1]);
+            h.update(value);
+        }
+        None => h.update([0]),
+    }
+    h.update(input.sev_hashes_table_gpa.to_le_bytes());
+    h.update(input.sev_es_reset_eip.to_le_bytes());
+    h.update((input.ovmf_sections.len() as u64).to_le_bytes());
+    for section in &input.ovmf_sections {
+        h.update(section.gpa.to_le_bytes());
+        h.update(section.size.to_le_bytes());
+        h.update(section.section_type.to_le_bytes());
+    }
+    Ok(h.finalize().to_vec())
+}
+
+fn snp_app_binding_digest(
+    mr_system: &[u8],
+    app_id: &[u8],
+    compose_hash: &[u8],
+    chip_id: &[u8],
+) -> Vec<u8> {
+    let mut h = Sha256::new();
+    h.update(b"dstack-amd-sev-snp:app-binding:v1");
+    h.update(mr_system);
+    h.update(app_id);
+    h.update(compose_hash);
+    h.update(chip_id);
+    h.finalize().to_vec()
+}
+
+fn snp_instance_id_digest(
+    chip_id: &[u8],
+    measurement: &[u8],
+    app_id: &[u8],
+    compose_hash: &[u8],
+) -> Vec<u8> {
+    let mut h = Sha256::new();
+    h.update(b"dstack-amd-sev-snp:instance-id:v1");
+    h.update(chip_id);
+    h.update(measurement);
+    h.update(app_id);
+    h.update(compose_hash);
+    h.finalize().to_vec()
+}
+
+fn len_prefixed(bytes: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(8 + bytes.len());
+    out.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
+    out.extend_from_slice(bytes);
+    out
 }
 
 fn validate_measurement_input(
@@ -806,6 +957,108 @@ mod tests {
         let err = validate_amd_snp_measurement_binding(Some(&config()), &mismatched, &input)
             .expect_err("mismatched measurement must reject");
         assert!(err.to_string().contains("amd sev-snp measurement mismatch"));
+    }
+
+    #[test]
+    fn builds_snp_boot_info_for_matching_measurement_only() {
+        let input = valid_input();
+        let verified = compute_expected_measurement(&config(), &input).unwrap();
+        let chip_id = [0xab; 64];
+
+        let boot_info = build_amd_snp_boot_info(&config(), &verified, &chip_id, &input)
+            .expect("matching measurement should build snp boot info");
+        assert_eq!(boot_info.attestation_mode, AttestationMode::DstackAmdSevSnp);
+        assert_eq!(boot_info.mr_aggregated, verified.to_vec());
+        assert_eq!(boot_info.device_id, chip_id.to_vec());
+        assert_eq!(boot_info.app_id, vec![0x11; 20]);
+        assert_eq!(boot_info.compose_hash, vec![0x22; 32]);
+        assert_eq!(boot_info.os_image_hash, vec![0x33; 32]);
+        assert_eq!(boot_info.mr_system.len(), 32);
+        assert_eq!(boot_info.key_provider_info.len(), 32);
+        assert_eq!(boot_info.instance_id.len(), 32);
+        assert_eq!(boot_info.tcb_status, "snp-verified-basic-policy");
+        assert!(boot_info.advisory_ids.is_empty());
+
+        let mut mismatched = verified;
+        mismatched[0] ^= 0xff;
+        let err = build_amd_snp_boot_info(&config(), &mismatched, &chip_id, &input)
+            .expect_err("mismatched measurement must not build boot info");
+        assert!(err.to_string().contains("amd sev-snp measurement mismatch"));
+    }
+
+    #[test]
+    fn app_id_changes_authorization_binding_not_launch_measurement() {
+        let input = valid_input();
+        let verified = compute_expected_measurement(&config(), &input).unwrap();
+        let chip_id = [0xcd; 64];
+        let boot_info = build_amd_snp_boot_info(&config(), &verified, &chip_id, &input).unwrap();
+
+        let mut changed = input.clone();
+        changed.app_id = hex_of(0x12, 20);
+        let changed_measurement = compute_expected_measurement(&config(), &changed).unwrap();
+        assert_eq!(
+            changed_measurement, verified,
+            "app_id is authorization input, not qemu snp launch-measured input"
+        );
+        let changed_boot_info =
+            build_amd_snp_boot_info(&config(), &verified, &chip_id, &changed).unwrap();
+
+        assert_ne!(boot_info.app_id, changed_boot_info.app_id);
+        assert_ne!(boot_info.instance_id, changed_boot_info.instance_id);
+        assert_ne!(
+            boot_info.key_provider_info,
+            changed_boot_info.key_provider_info
+        );
+        assert_eq!(boot_info.mr_aggregated, changed_boot_info.mr_aggregated);
+        assert_eq!(boot_info.mr_system, changed_boot_info.mr_system);
+    }
+
+    #[test]
+    fn measured_input_changes_reject_until_measurement_is_recomputed() {
+        let input = valid_input();
+        let verified = compute_expected_measurement(&config(), &input).unwrap();
+        let chip_id = [0xef; 64];
+        let boot_info = build_amd_snp_boot_info(&config(), &verified, &chip_id, &input).unwrap();
+
+        for mutate in [
+            |i: &mut MeasurementInput| i.compose_hash = hex_of(0x23, 32),
+            |i: &mut MeasurementInput| i.rootfs_hash = hex_of(0x34, 32),
+            |i: &mut MeasurementInput| i.kernel_hash = hex_of(0x56, 32),
+            |i: &mut MeasurementInput| i.vcpus = 3,
+        ] {
+            let mut changed = input.clone();
+            mutate(&mut changed);
+            let err = build_amd_snp_boot_info(&config(), &verified, &chip_id, &changed)
+                .expect_err("stale verified measurement must reject changed measured input");
+            assert!(err.to_string().contains("amd sev-snp measurement mismatch"));
+
+            let changed_verified = compute_expected_measurement(&config(), &changed).unwrap();
+            let changed_boot_info =
+                build_amd_snp_boot_info(&config(), &changed_verified, &chip_id, &changed)
+                    .expect("recomputed measurement should build boot info");
+            assert_ne!(boot_info.mr_aggregated, changed_boot_info.mr_aggregated);
+            assert_ne!(boot_info.mr_system, changed_boot_info.mr_system);
+        }
+    }
+
+    #[test]
+    fn chip_id_maps_to_device_id_and_changes_chip_bound_digests() {
+        let input = valid_input();
+        let verified = compute_expected_measurement(&config(), &input).unwrap();
+        let boot_info = build_amd_snp_boot_info(&config(), &verified, &[0x01; 64], &input).unwrap();
+        let changed_boot_info =
+            build_amd_snp_boot_info(&config(), &verified, &[0x02; 64], &input).unwrap();
+
+        assert_eq!(boot_info.device_id, vec![0x01; 64]);
+        assert_eq!(changed_boot_info.device_id, vec![0x02; 64]);
+        assert_ne!(boot_info.device_id, changed_boot_info.device_id);
+        assert_ne!(boot_info.instance_id, changed_boot_info.instance_id);
+        assert_ne!(
+            boot_info.key_provider_info,
+            changed_boot_info.key_provider_info
+        );
+        assert_eq!(boot_info.mr_aggregated, changed_boot_info.mr_aggregated);
+        assert_eq!(boot_info.mr_system, changed_boot_info.mr_system);
     }
 
     #[test]
