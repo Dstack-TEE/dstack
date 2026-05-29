@@ -92,6 +92,91 @@ describe('auth-simple', () => {
       expect(json.reason).toContain('TCB status');
     });
 
+    it('requires explicit opt-in for SEV-SNP placeholder TCB status', async () => {
+      writeTestConfig({
+        gatewayAppId: '0xgateway',
+        osImages: ['0x1fbb0cf9cc6cfbf23d6b779776fabad2c5403d643badb9e5e238615e4960a78a'],
+        kms: {
+          mrAggregated: ['0xabc123'],
+          devices: ['0xdevice999'],
+          allowAnyDevice: false
+        }
+      });
+
+      const sevSnpBootInfo = {
+        ...baseBootInfo,
+        attestationMode: 'DstackAmdSevSnp',
+        tcbStatus: 'snp-verified-basic-policy'
+      };
+      const denied = await app.fetch(new Request('http://localhost/bootAuth/kms', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(sevSnpBootInfo)
+      }));
+      expect((await denied.json()).isAllowed).toBe(false);
+
+      writeTestConfig({
+        gatewayAppId: '0xgateway',
+        osImages: ['0x1fbb0cf9cc6cfbf23d6b779776fabad2c5403d643badb9e5e238615e4960a78a'],
+        allowedTcbStatuses: ['snp-verified-basic-policy'],
+        kms: {
+          mrAggregated: ['0xabc123'],
+          devices: ['0xdevice999'],
+          allowAnyDevice: false
+        }
+      });
+
+      const allowed = await app.fetch(new Request('http://localhost/bootAuth/kms', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(sevSnpBootInfo)
+      }));
+      const allowedJson = await allowed.json();
+
+      expect(allowedJson.isAllowed).toBe(true);
+      expect(allowedJson.reason).toBe('');
+    });
+
+    it('rejects unallowlisted advisory IDs by default', async () => {
+      writeTestConfig({
+        gatewayAppId: '0xgateway',
+        osImages: ['0x1fbb0cf9cc6cfbf23d6b779776fabad2c5403d643badb9e5e238615e4960a78a'],
+        kms: {
+          mrAggregated: ['0xabc123'],
+          allowAnyDevice: true
+        }
+      });
+
+      const denied = await app.fetch(new Request('http://localhost/bootAuth/kms', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...baseBootInfo, advisoryIds: ['INTEL-SA-TEST'] })
+      }));
+      const deniedJson = await denied.json();
+
+      expect(deniedJson.isAllowed).toBe(false);
+      expect(deniedJson.reason).toContain('advisory');
+
+      writeTestConfig({
+        gatewayAppId: '0xgateway',
+        osImages: ['0x1fbb0cf9cc6cfbf23d6b779776fabad2c5403d643badb9e5e238615e4960a78a'],
+        allowedAdvisoryIds: ['INTEL-SA-TEST'],
+        kms: {
+          mrAggregated: ['0xabc123'],
+          allowAnyDevice: true
+        }
+      });
+
+      const allowed = await app.fetch(new Request('http://localhost/bootAuth/kms', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...baseBootInfo, advisoryIds: ['INTEL-SA-TEST'] })
+      }));
+      const allowedJson = await allowed.json();
+
+      expect(allowedJson.isAllowed).toBe(true);
+    });
+
     it('rejects KMS boot with invalid OS image', async () => {
       writeTestConfig({
         gatewayAppId: '0xgateway',
