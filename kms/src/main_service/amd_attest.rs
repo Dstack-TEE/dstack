@@ -35,7 +35,9 @@ const MAX_OVMF_METADATA_PAGES: u64 = 16_777_216;
 // VMSA page GPA: (u64)(-1) page-aligned, bits >51 cleared.
 const VMSA_GPA: u64 = 0x0000_FFFF_FFFF_F000;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[cfg_attr(test, derive(serde::Serialize))]
+#[serde(deny_unknown_fields)]
 pub(crate) struct OvmfSectionParam {
     pub gpa: u64,
     pub size: u64,
@@ -45,7 +47,9 @@ pub(crate) struct OvmfSectionParam {
     pub section_type: u32,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[cfg_attr(test, derive(serde::Serialize))]
+#[serde(deny_unknown_fields)]
 pub(crate) struct MeasurementInput {
     /// 20-byte app identity included in the measured kernel cmdline for SNP,
     /// matching TDX's app-id-in-measured-identity semantics.
@@ -71,7 +75,47 @@ pub(crate) struct MeasurementInput {
     pub sev_es_reset_eip: u32,
     pub vcpus: u32,
     pub vcpu_type: Option<String>,
+    #[serde(deserialize_with = "deserialize_ovmf_sections_bounded")]
     pub ovmf_sections: Vec<OvmfSectionParam>,
+}
+
+fn deserialize_ovmf_sections_bounded<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Vec<OvmfSectionParam>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    struct BoundedOvmfSections;
+
+    impl<'de> serde::de::Visitor<'de> for BoundedOvmfSections {
+        type Value = Vec<OvmfSectionParam>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(
+                formatter,
+                "at most {MAX_OVMF_SECTIONS} OVMF metadata sections"
+            )
+        }
+
+        fn visit_seq<A>(self, mut seq: A) -> std::result::Result<Vec<OvmfSectionParam>, A::Error>
+        where
+            A: serde::de::SeqAccess<'de>,
+        {
+            let mut sections =
+                Vec::with_capacity(seq.size_hint().unwrap_or(0).min(MAX_OVMF_SECTIONS));
+            while let Some(section) = seq.next_element()? {
+                if sections.len() >= MAX_OVMF_SECTIONS {
+                    return Err(serde::de::Error::custom(format!(
+                        "ovmf section count must not exceed {MAX_OVMF_SECTIONS}"
+                    )));
+                }
+                sections.push(section);
+            }
+            Ok(sections)
+        }
+    }
+
+    deserializer.deserialize_seq(BoundedOvmfSections)
 }
 
 pub(crate) fn validate_amd_snp_measurement_binding(
@@ -164,6 +208,33 @@ pub(crate) fn build_amd_snp_boot_info_from_verified_attestation(
         .amd_snp_report()
         .ok_or_else(|| anyhow::anyhow!("verified attestation is not amd sev-snp"))?;
     build_amd_snp_boot_info(config, &verified.measurement, &verified.chip_id, input)
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct SevSnpMeasurementVmConfig {
+    sev_snp_measurement: Option<MeasurementInput>,
+}
+
+/// Parses SNP launch-measurement inputs from the KMS request `vm_config` and
+/// builds helper-only SNP `BootInfo` from an already verified attestation.
+///
+/// The field is intentionally explicit (`sev_snp_measurement`) so missing SNP
+/// launch inputs fail closed instead of falling back to TDX event-log decoding.
+pub(crate) fn build_amd_snp_boot_info_from_verified_attestation_and_vm_config(
+    config: &SevSnpMeasureConfig,
+    attestation: &VerifiedAttestation,
+    vm_config: &str,
+) -> Result<BootInfo> {
+    let input = parse_measurement_input_from_vm_config(vm_config)?;
+    build_amd_snp_boot_info_from_verified_attestation(config, attestation, &input)
+}
+
+fn parse_measurement_input_from_vm_config(vm_config: &str) -> Result<MeasurementInput> {
+    let parsed: SevSnpMeasurementVmConfig = serde_json::from_str(vm_config)
+        .context("failed to parse vm_config for amd sev-snp measurement")?;
+    parsed
+        .sev_snp_measurement
+        .ok_or_else(|| anyhow::anyhow!("sev_snp_measurement is required for amd sev-snp"))
 }
 
 /// Explicit helper-only AMD SEV-SNP authorization policy.
@@ -1148,6 +1219,125 @@ mod tests {
         assert_eq!(boot_info.mr_aggregated, verified.to_vec());
         assert_eq!(boot_info.device_id, chip_id.to_vec());
         assert_eq!(boot_info.app_id, vec![0x11; 20]);
+    }
+
+    #[test]
+    fn builds_snp_boot_info_from_verified_attestation_and_vm_config_json() {
+        let input = valid_input();
+        let verified = compute_expected_measurement(&config(), &input).unwrap();
+        let chip_id = [0xab; 64];
+        let attestation = ra_tls::attestation::VerifiedAttestation {
+            quote: ra_tls::attestation::AttestationQuote::DstackAmdSevSnp(
+                ra_tls::attestation::SnpQuote {
+                    report: Vec::new(),
+                    cert_chain: Vec::new(),
+                },
+            ),
+            runtime_events: Vec::new(),
+            report_data: [0x42; 64],
+            config: String::new(),
+            report: ra_tls::attestation::DstackVerifiedReport::DstackAmdSevSnp(
+                dstack_attest::amd_sev_snp::VerifiedAmdSnpReport {
+                    measurement: verified,
+                    report_data: [0x42; 64],
+                    chip_id,
+                },
+            ),
+        };
+        let vm_config = serde_json::json!({
+            "sev_snp_measurement": input,
+        })
+        .to_string();
+
+        let boot_info = build_amd_snp_boot_info_from_verified_attestation_and_vm_config(
+            &config(),
+            &attestation,
+            &vm_config,
+        )
+        .expect("vm_config-carried snp measurement inputs should build boot info");
+
+        assert_eq!(boot_info.mr_aggregated, verified.to_vec());
+        assert_eq!(boot_info.device_id, chip_id.to_vec());
+        assert_eq!(boot_info.app_id, vec![0x11; 20]);
+    }
+
+    #[test]
+    fn verified_attestation_vm_config_helper_requires_snp_measurement_input() {
+        let input = valid_input();
+        let verified = compute_expected_measurement(&config(), &input).unwrap();
+        let attestation = ra_tls::attestation::VerifiedAttestation {
+            quote: ra_tls::attestation::AttestationQuote::DstackAmdSevSnp(
+                ra_tls::attestation::SnpQuote {
+                    report: Vec::new(),
+                    cert_chain: Vec::new(),
+                },
+            ),
+            runtime_events: Vec::new(),
+            report_data: [0x42; 64],
+            config: String::new(),
+            report: ra_tls::attestation::DstackVerifiedReport::DstackAmdSevSnp(
+                dstack_attest::amd_sev_snp::VerifiedAmdSnpReport {
+                    measurement: verified,
+                    report_data: [0x42; 64],
+                    chip_id: [0xab; 64],
+                },
+            ),
+        };
+
+        let err = build_amd_snp_boot_info_from_verified_attestation_and_vm_config(
+            &config(),
+            &attestation,
+            r#"{"os_image_hash":"0x00"}"#,
+        )
+        .expect_err("missing sev_snp_measurement must fail closed");
+        assert!(
+            err.to_string().contains("sev_snp_measurement is required"),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn vm_config_measurement_parser_rejects_unknown_measurement_fields() {
+        let mut measurement = serde_json::to_value(valid_input()).unwrap();
+        measurement["unexpected"] = serde_json::json!(true);
+        let vm_config = serde_json::json!({
+            "sev_snp_measurement": measurement,
+        })
+        .to_string();
+
+        let err = parse_measurement_input_from_vm_config(&vm_config)
+            .expect_err("unknown measurement fields must reject");
+        assert!(
+            format!("{err:?}").contains("unknown field"),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn vm_config_measurement_parser_bounds_ovmf_sections_during_deserialization() {
+        let mut measurement = serde_json::to_value(valid_input()).unwrap();
+        measurement["ovmf_sections"] = serde_json::Value::Array(
+            (0..=MAX_OVMF_SECTIONS)
+                .map(|_| {
+                    serde_json::json!({
+                        "gpa": 0x100000u64,
+                        "size": 0x1000u64,
+                        "section_type": 1u32,
+                    })
+                })
+                .collect(),
+        );
+        let vm_config = serde_json::json!({
+            "sev_snp_measurement": measurement,
+        })
+        .to_string();
+
+        let err = parse_measurement_input_from_vm_config(&vm_config)
+            .expect_err("oversized ovmf_sections must reject during parse");
+        assert!(
+            format!("{err:?}").contains("ovmf section count must not exceed"),
+            "unexpected error: {err:?}"
+        );
     }
 
     #[test]
