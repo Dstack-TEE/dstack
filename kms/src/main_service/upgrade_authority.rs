@@ -2,7 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::config::{AuthApi, KmsConfig};
+use super::build_boot_info_for_attestation;
+use crate::config::{AuthApi, KmsConfig, SevSnpMeasureConfig};
 use anyhow::{bail, Context, Result};
 use dstack_guest_agent_rpc::{
     dstack_guest_client::DstackGuestClient, AttestResponse, RawQuoteArgs,
@@ -72,7 +73,10 @@ pub(crate) fn build_boot_info(
     })
 }
 
-pub(crate) async fn local_kms_boot_info(pccs_url: Option<&str>) -> Result<BootInfo> {
+pub(crate) async fn local_kms_boot_info(
+    pccs_url: Option<&str>,
+    sev_snp_config: Option<&SevSnpMeasureConfig>,
+) -> Result<BootInfo> {
     let response = app_attest(pad64([0u8; 32]))
         .await
         .context("Failed to get local KMS attestation")?;
@@ -83,7 +87,7 @@ pub(crate) async fn local_kms_boot_info(pccs_url: Option<&str>) -> Result<BootIn
         .verify(pccs_url)
         .await
         .context("Failed to verify local KMS attestation")?;
-    build_boot_info(&verified, false, "")
+    build_boot_info_for_attestation(sev_snp_config, &verified, false, "")
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -219,7 +223,7 @@ pub(crate) async fn ensure_self_kms_allowed(cfg: &KmsConfig) -> Result<()> {
     if !cfg.enforce_self_authorization {
         return Ok(());
     }
-    let boot_info = local_kms_boot_info(cfg.pccs_url.as_deref())
+    let boot_info = local_kms_boot_info(cfg.pccs_url.as_deref(), cfg.sev_snp.as_ref())
         .await
         .context("failed to build local KMS boot info")?;
     let response = cfg
@@ -237,15 +241,16 @@ pub(crate) async fn ensure_kms_allowed(
     cfg: &KmsConfig,
     attestation: &VerifiedAttestation,
 ) -> Result<()> {
-    let mut boot_info = build_boot_info(attestation, false, "")
-        .context("failed to build KMS boot info from attestation")?;
+    let mut boot_info =
+        build_boot_info_for_attestation(cfg.sev_snp.as_ref(), attestation, false, "")
+            .context("failed to build KMS boot info from attestation")?;
     // Workaround: old source KMS instances use the legacy cert format (separate TDX_QUOTE +
     // EVENT_LOG OIDs) which lacks vm_config, resulting in an empty os_image_hash.
     // Fill it from the local KMS's own value. This is safe because mrAggregated already
     // validates OS image integrity transitively through the RTMR measurement chain.
     // TODO: remove once all source KMS instances use the unified PHALA_RATLS_ATTESTATION format.
     if boot_info.os_image_hash.is_empty() {
-        let local_info = local_kms_boot_info(cfg.pccs_url.as_deref())
+        let local_info = local_kms_boot_info(cfg.pccs_url.as_deref(), cfg.sev_snp.as_ref())
             .await
             .context("failed to get local KMS boot info for os_image_hash fallback")?;
         boot_info.os_image_hash = local_info.os_image_hash;
