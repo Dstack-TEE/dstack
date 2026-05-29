@@ -146,7 +146,7 @@ struct BootConfig {
     gateway_app_id: String,
 }
 
-fn build_boot_info_for_attestation(
+pub(crate) fn build_boot_info_for_attestation(
     sev_snp_config: Option<&SevSnpMeasureConfig>,
     att: &VerifiedAttestation,
     use_boottime_mr: bool,
