@@ -10,15 +10,15 @@
 //! value to the hardware-verified report measurement.
 //!
 //! Important: this is launch measurement binding, not a complete authorization
-//! decision. `app_id` is carried and validated so future SNP `BootInfo`
-//! construction can consume the same input, but the current QEMU SNP launch
-//! measurement does not independently bind `app_id`. Do not use this helper by
-//! itself to release app keys.
+//! decision. `app_id`, compose hash, and rootfs hash are included in the SNP
+//! measured kernel command line so the recomputed launch `MEASUREMENT` changes
+//! with app identity, matching dstack's TDX measured-identity semantics. Do not
+//! use this helper by itself to release app keys.
 
 #![allow(dead_code)]
 
 use anyhow::{bail, Context, Result};
-use ra_tls::attestation::AttestationMode;
+use ra_tls::attestation::{AttestationMode, VerifiedAttestation};
 use sha2::{Digest, Sha256, Sha384};
 use std::fs;
 
@@ -47,9 +47,8 @@ pub(crate) struct OvmfSectionParam {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct MeasurementInput {
-    /// 20-byte app identity. It is validated now even though the current SNP
-    /// launch measurement does not include it directly; callers must bind this
-    /// through the future SNP `BootInfo`/authorization path before key release.
+    /// 20-byte app identity included in the measured kernel cmdline for SNP,
+    /// matching TDX's app-id-in-measured-identity semantics.
     pub app_id: String,
     /// 32-byte docker compose hash included in the measured kernel cmdline.
     pub compose_hash: String,
@@ -96,10 +95,8 @@ pub(crate) fn validate_amd_snp_measurement_binding(
 ///
 /// This helper first recomputes and validates the QEMU SNP launch measurement.
 /// `mr_aggregated` is the hardware-verified 48-byte SNP `MEASUREMENT`, and
-/// `device_id` is the hardware-verified 64-byte SNP `chip_id`. `app_id` is
-/// decoded from the request input for authorization policy, but it is not
-/// directly hardware-measured by the current QEMU SNP launch measurement model.
-/// `compose_hash` and `rootfs_hash` are bound through the measured kernel
+/// `device_id` is the hardware-verified 64-byte SNP `chip_id`. `app_id`,
+/// `compose_hash`, and `rootfs_hash` are bound through the measured kernel
 /// command line; `os_image_hash` is therefore represented by `rootfs_hash`.
 ///
 /// Authorization-specific digests are domain separated and deterministic:
@@ -148,6 +145,25 @@ pub(crate) fn build_amd_snp_boot_info(
         tcb_status: "snp-verified-basic-policy".to_string(),
         advisory_ids: Vec::new(),
     })
+}
+
+/// Extracts the verified AMD SEV-SNP report from a verified attestation and
+/// materializes the helper-only SNP `BootInfo` used by future authorization.
+///
+/// This is the safe integration seam: the attestation verifier has already
+/// checked the report signature/collateral/report_data, while this KMS helper
+/// recomputes the launch measurement from trusted config and request inputs.
+/// It still does not release keys or expose an AMD key-release RPC.
+pub(crate) fn build_amd_snp_boot_info_from_verified_attestation(
+    config: &SevSnpMeasureConfig,
+    attestation: &VerifiedAttestation,
+    input: &MeasurementInput,
+) -> Result<BootInfo> {
+    let verified = attestation
+        .report
+        .amd_snp_report()
+        .ok_or_else(|| anyhow::anyhow!("verified attestation is not amd sev-snp"))?;
+    build_amd_snp_boot_info(config, &verified.measurement, &verified.chip_id, input)
 }
 
 /// Explicit helper-only AMD SEV-SNP authorization policy.
@@ -1099,6 +1115,75 @@ mod tests {
         let err = build_amd_snp_boot_info(&config(), &mismatched, &chip_id, &input)
             .expect_err("mismatched measurement must not build boot info");
         assert!(err.to_string().contains("amd sev-snp measurement mismatch"));
+    }
+
+    #[test]
+    fn builds_snp_boot_info_from_verified_attestation_report() {
+        let input = valid_input();
+        let verified = compute_expected_measurement(&config(), &input).unwrap();
+        let chip_id = [0xab; 64];
+        let attestation = ra_tls::attestation::VerifiedAttestation {
+            quote: ra_tls::attestation::AttestationQuote::DstackAmdSevSnp(
+                ra_tls::attestation::SnpQuote {
+                    report: Vec::new(),
+                    cert_chain: Vec::new(),
+                },
+            ),
+            runtime_events: Vec::new(),
+            report_data: [0x42; 64],
+            config: String::new(),
+            report: ra_tls::attestation::DstackVerifiedReport::DstackAmdSevSnp(
+                dstack_attest::amd_sev_snp::VerifiedAmdSnpReport {
+                    measurement: verified,
+                    report_data: [0x42; 64],
+                    chip_id,
+                },
+            ),
+        };
+
+        let boot_info =
+            build_amd_snp_boot_info_from_verified_attestation(&config(), &attestation, &input)
+                .expect("verified snp attestation should feed boot info helper");
+
+        assert_eq!(boot_info.mr_aggregated, verified.to_vec());
+        assert_eq!(boot_info.device_id, chip_id.to_vec());
+        assert_eq!(boot_info.app_id, vec![0x11; 20]);
+    }
+
+    #[test]
+    fn verified_attestation_helper_rejects_non_snp_reports() {
+        let input = valid_input();
+        let attestation = ra_tls::attestation::VerifiedAttestation {
+            quote: ra_tls::attestation::AttestationQuote::DstackNitroEnclave(
+                ra_tls::attestation::DstackNitroQuote {
+                    nsm_quote: Vec::new(),
+                },
+            ),
+            runtime_events: Vec::new(),
+            report_data: [0x42; 64],
+            config: String::new(),
+            report: ra_tls::attestation::DstackVerifiedReport::DstackNitroEnclave(
+                ra_tls::attestation::NitroVerifiedReport {
+                    module_id: String::new(),
+                    pcrs: ra_tls::attestation::NitroPcrs {
+                        pcr0: Vec::new(),
+                        pcr1: Vec::new(),
+                        pcr2: Vec::new(),
+                    },
+                    user_data: Vec::new(),
+                    timestamp: 0,
+                },
+            ),
+        };
+
+        let err =
+            build_amd_snp_boot_info_from_verified_attestation(&config(), &attestation, &input)
+                .expect_err("non-snp verified attestation must reject");
+        assert!(
+            err.to_string()
+                .contains("verified attestation is not amd sev-snp"),
+            "unexpected error: {err:?}"
+        );
     }
 
     #[test]
