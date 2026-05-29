@@ -155,6 +155,11 @@ pub(crate) fn build_boot_info_for_attestation(
     if att.report.amd_snp_report().is_some() {
         let config = sev_snp_config
             .ok_or_else(|| anyhow::anyhow!("sev_snp config is required for amd sev-snp"))?;
+        let vm_config_str = if vm_config_str.is_empty() {
+            att.config.as_str()
+        } else {
+            vm_config_str
+        };
         return amd_attest::build_amd_snp_boot_info_from_verified_attestation_and_vm_config(
             config,
             att,
@@ -179,7 +184,12 @@ impl RpcHandler {
         let boot_info = self
             .state
             .self_boot_info
-            .get_or_try_init(|| local_kms_boot_info(self.state.config.pccs_url.as_deref()))
+            .get_or_try_init(|| {
+                local_kms_boot_info(
+                    self.state.config.pccs_url.as_deref(),
+                    self.state.config.sev_snp.as_ref(),
+                )
+            })
             .await
             .context("Failed to load cached self boot info")?;
         let response = self
@@ -600,6 +610,14 @@ mod tests {
     }
 
     fn verified_snp_attestation(measurement: [u8; 48], chip_id: [u8; 64]) -> VerifiedAttestation {
+        verified_snp_attestation_with_config(measurement, chip_id, String::new())
+    }
+
+    fn verified_snp_attestation_with_config(
+        measurement: [u8; 48],
+        chip_id: [u8; 64],
+        config: String,
+    ) -> VerifiedAttestation {
         VerifiedAttestation {
             quote: ra_tls::attestation::AttestationQuote::DstackAmdSevSnp(
                 ra_tls::attestation::SnpQuote {
@@ -609,7 +627,7 @@ mod tests {
             ),
             runtime_events: Vec::new(),
             report_data: [0x42; 64],
-            config: String::new(),
+            config,
             report: ra_tls::attestation::DstackVerifiedReport::DstackAmdSevSnp(
                 dstack_attest::amd_sev_snp::VerifiedAmdSnpReport {
                     measurement,
@@ -641,6 +659,26 @@ mod tests {
         assert_eq!(boot_info.attestation_mode, AttestationMode::DstackAmdSevSnp);
         assert_eq!(boot_info.mr_aggregated, measurement.to_vec());
         assert_eq!(boot_info.device_id, vec![0xab; 64]);
+        assert_eq!(boot_info.app_id, vec![0x11; 20]);
+    }
+
+    #[test]
+    fn build_boot_info_for_attestation_uses_embedded_snp_vm_config_when_external_is_empty() {
+        let input = valid_snp_measurement_input();
+        let measurement = compute_expected_measurement(&sev_snp_config(), &input).unwrap();
+        let embedded_config = serde_json::json!({
+            "sev_snp_measurement": input,
+        })
+        .to_string();
+        let attestation =
+            verified_snp_attestation_with_config(measurement, [0xab; 64], embedded_config);
+
+        let boot_info =
+            build_boot_info_for_attestation(Some(&sev_snp_config()), &attestation, false, "")
+                .expect("snp local KMS attestation should use embedded vm_config");
+
+        assert_eq!(boot_info.attestation_mode, AttestationMode::DstackAmdSevSnp);
+        assert_eq!(boot_info.mr_aggregated, measurement.to_vec());
         assert_eq!(boot_info.app_id, vec![0x11; 20]);
     }
 
