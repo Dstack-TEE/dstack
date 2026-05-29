@@ -842,8 +842,8 @@ pub(crate) fn compute_expected_measurement(
         .ok_or_else(|| anyhow::anyhow!("vcpu_type is required"))?;
 
     let mut cmdline = format!(
-        "console=ttyS0 loglevel=7 docker_compose_hash={} rootfs_hash={}",
-        input.compose_hash, input.rootfs_hash
+        "console=ttyS0 loglevel=7 docker_compose_hash={} rootfs_hash={} app_id={}",
+        input.compose_hash, input.rootfs_hash, input.app_id
     );
     if let Some(docker_files_hash) = input.docker_files_hash.as_deref() {
         cmdline.push_str(&format!(
@@ -1061,7 +1061,7 @@ mod tests {
         let expected = compute_expected_measurement(&config(), &input).unwrap();
         assert_eq!(
             hex::encode(expected),
-            "2c598d7885c7a61e44c048ac5594600ce906339a8a6a3c0fa0d81c67275d55273d38d6ec5afcf5ff1d74621f0f0354d9",
+            "4753950048f296ea9cc36be3ba3e26f9cb014411188134d2ea40580a76edf277268cc46b67dfd213d1a7dfc9a9006e0f",
             "synthetic measurement vector should not drift silently"
         );
         validate_amd_snp_measurement_binding(Some(&config()), &expected, &input)
@@ -1102,7 +1102,7 @@ mod tests {
     }
 
     #[test]
-    fn app_id_changes_authorization_binding_not_launch_measurement() {
+    fn app_id_changes_launch_measurement_and_authorization_binding() {
         let input = valid_input();
         let verified = compute_expected_measurement(&config(), &input).unwrap();
         let chip_id = [0xcd; 64];
@@ -1111,12 +1111,16 @@ mod tests {
         let mut changed = input.clone();
         changed.app_id = hex_of(0x12, 20);
         let changed_measurement = compute_expected_measurement(&config(), &changed).unwrap();
-        assert_eq!(
+        assert_ne!(
             changed_measurement, verified,
-            "app_id is authorization input, not qemu snp launch-measured input"
+            "app_id must be launch-measured for SNP to match TDX app identity semantics"
         );
+        let err = build_amd_snp_boot_info(&config(), &verified, &chip_id, &changed)
+            .expect_err("stale measurement must reject changed app_id");
+        assert!(err.to_string().contains("amd sev-snp measurement mismatch"));
+
         let changed_boot_info =
-            build_amd_snp_boot_info(&config(), &verified, &chip_id, &changed).unwrap();
+            build_amd_snp_boot_info(&config(), &changed_measurement, &chip_id, &changed).unwrap();
 
         assert_ne!(boot_info.app_id, changed_boot_info.app_id);
         assert_ne!(boot_info.instance_id, changed_boot_info.instance_id);
@@ -1124,8 +1128,8 @@ mod tests {
             boot_info.key_provider_info,
             changed_boot_info.key_provider_info
         );
-        assert_eq!(boot_info.mr_aggregated, changed_boot_info.mr_aggregated);
-        assert_eq!(boot_info.mr_system, changed_boot_info.mr_system);
+        assert_ne!(boot_info.mr_aggregated, changed_boot_info.mr_aggregated);
+        assert_ne!(boot_info.mr_system, changed_boot_info.mr_system);
     }
 
     #[test]
@@ -1210,8 +1214,8 @@ mod tests {
             .expect("dstack recomputation should succeed");
 
         let append = format!(
-            "console=ttyS0 loglevel=7 docker_compose_hash={} rootfs_hash={}",
-            input.compose_hash, input.rootfs_hash
+            "console=ttyS0 loglevel=7 docker_compose_hash={} rootfs_hash={} app_id={}",
+            input.compose_hash, input.rootfs_hash, input.app_id
         );
         let output = std::process::Command::new("sev-snp-measure")
             .args([
@@ -1249,7 +1253,7 @@ mod tests {
         assert_eq!(hex::encode(recomputed), tool_measurement);
         assert_eq!(
             tool_measurement,
-            "859c646870cffdb4620077c20ea81702c1bd0bde9c967887ddbd430ebe31a89d2832a442b8d8d83e4bdd70b52bb3f009",
+            "6497fb9f90dc4a322228a8a5eb14742e09067bc44c184c2068d583ef628b5bae8c6cf15d91fe1bc0b7a8cbcc575be370",
             "live sev-snp-measure golden vector should not drift silently"
         );
     }
