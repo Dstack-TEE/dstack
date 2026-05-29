@@ -364,7 +364,7 @@ impl VmState {
 
 #[cfg(test)]
 mod tests {
-    use super::{amd_sev_snp_memory_backend_arg, sanitize_optional};
+    use super::{amd_sev_snp_measured_cmdline, amd_sev_snp_memory_backend_arg, sanitize_optional};
 
     #[test]
     fn sanitize_optional_filters_empty_owned_values() {
@@ -391,6 +391,19 @@ mod tests {
         assert_eq!(
             amd_sev_snp_memory_backend_arg(4096),
             "memory-backend-memfd,id=ram1,size=4096M,share=true,prealloc=false"
+        );
+    }
+
+    #[test]
+    fn amd_sev_snp_measured_cmdline_binds_app_identity() {
+        assert_eq!(
+            amd_sev_snp_measured_cmdline(
+                "console=ttyS0 loglevel=7",
+                "22",
+                "33",
+                "1111111111111111111111111111111111111111"
+            ),
+            "console=ttyS0 loglevel=7 docker_compose_hash=22 rootfs_hash=33 app_id=1111111111111111111111111111111111111111"
         );
     }
 }
@@ -732,8 +745,32 @@ impl VmConfig {
             }
         }
 
-        // Add kernel command line
-        if let Some(cmdline) = &self.image.info.cmdline {
+        // Add kernel command line. SNP launch measurement includes app identity
+        // through the measured QEMU kernel command line, matching TDX's
+        // app-id-in-measured-identity semantics without relying on post-launch
+        // RTMRs (which SNP does not have).
+        let cmdline = match (&self.image.info.cmdline, cfg.platform.resolve()) {
+            (Some(cmdline), TeePlatform::AmdSevSnp) if !self.manifest.no_tee => {
+                let compose_hash = hex::encode(
+                    workdir
+                        .app_compose_hash()
+                        .context("Failed to get compose hash")?,
+                );
+                let rootfs_hash =
+                    self.image.info.rootfs_hash.as_deref().ok_or_else(|| {
+                        anyhow::anyhow!("rootfs_hash is required for amd sev-snp")
+                    })?;
+                Some(amd_sev_snp_measured_cmdline(
+                    cmdline,
+                    &compose_hash,
+                    rootfs_hash,
+                    &self.manifest.app_id,
+                ))
+            }
+            (Some(cmdline), _) => Some(cmdline.clone()),
+            (None, _) => None,
+        };
+        if let Some(cmdline) = cmdline {
             command.arg("-append").arg(cmdline);
         }
 
@@ -962,6 +999,21 @@ impl VmConfig {
 
 fn amd_sev_snp_memory_backend_arg(mem: u32) -> String {
     format!("memory-backend-memfd,id=ram1,size={mem}M,share=true,prealloc=false")
+}
+
+fn amd_sev_snp_measured_cmdline(
+    base_cmdline: &str,
+    compose_hash: &str,
+    rootfs_hash: &str,
+    app_id: &str,
+) -> String {
+    format!(
+        "{} docker_compose_hash={} rootfs_hash={} app_id={}",
+        base_cmdline.trim(),
+        compose_hash,
+        rootfs_hash,
+        app_id
+    )
 }
 
 /// Round up a value to the nearest multiple of another value.
