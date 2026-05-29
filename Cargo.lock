@@ -2469,6 +2469,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "clap",
+ "dstack-attest",
  "dstack-guest-agent-rpc",
  "dstack-kms-rpc",
  "dstack-mr",
