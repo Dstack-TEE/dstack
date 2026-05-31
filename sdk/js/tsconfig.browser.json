@@ -3,7 +3,7 @@
   "compilerOptions": {
     "target": "es2020",
     "module": "es2015",
-    "lib": ["es2018", "dom"],
+    "lib": ["es2020", "dom"],
     "outDir": "./dist/browser",
     "declaration": true,
     "declarationMap": true,

@@ -33,11 +33,6 @@ jobs:
           node-version: '20'
           registry-url: 'https://registry.npmjs.org'
 
-      - name: Upgrade npm for OIDC support
-        run: |
-          npm install -g npm@latest
-          echo "npm version: $(npm --version)"
-
       - name: Verify OIDC token availability
         run: |
           if [ -n "${ACTIONS_ID_TOKEN_REQUEST_URL}" ] && [ -n "${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" ]; then
@@ -71,14 +66,21 @@ jobs:
         working-directory: sdk/js
         run: npm run build
 
-      - name: Determine npm dist-tag
+      - name: Determine version and npm dist-tag
         id: tag
+        working-directory: sdk/js
         run: |
-          VERSION="${GITHUB_REF_NAME#js-sdk-v}"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          PKG_VERSION=$(node -e "console.log(require('./package.json').version)")
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="$PKG_VERSION"
             echo "tag=${{ github.event.inputs.npm_tag }}" >> "$GITHUB_OUTPUT"
           else
+            TAG_VERSION="${GITHUB_REF_NAME#js-sdk-v}"
+            if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+              echo "::error::tag version ($TAG_VERSION) does not match package.json version ($PKG_VERSION)"
+              exit 1
+            fi
+            VERSION="$TAG_VERSION"
             # auto-detect from git tag: js-sdk-v0.5.8-beta.1 -> beta
             if echo "$VERSION" | grep -qiE '(beta|alpha|rc|preview)'; then
               echo "tag=beta" >> "$GITHUB_OUTPUT"
@@ -86,6 +88,7 @@ jobs:
               echo "tag=latest" >> "$GITHUB_OUTPUT"
             fi
           fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Publish to npm
         working-directory: sdk/js

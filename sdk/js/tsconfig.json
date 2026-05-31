@@ -2,7 +2,7 @@
   "compilerOptions": {
     "target": "es2020",
     "module": "commonjs",
-    "lib": ["es2018"],
+    "lib": ["es2020"],
     "declaration": true,
     "declarationMap": true,
     "sourceMap": true,
