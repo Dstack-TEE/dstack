@@ -21,8 +21,9 @@ function bigintToBeBytes(value: bigint, length: number): Uint8Array {
   return bytes
 }
 
-function hexToBytes(hex: string): Uint8Array {
-  if (hex.startsWith("0x")) hex = hex.slice(2)
+function hexToBytes(hex: string): Uint8Array | null {
+  if (hex.startsWith("0x") || hex.startsWith("0X")) hex = hex.slice(2)
+  if (hex.length % 2 !== 0 || !/^[0-9a-fA-F]*$/.test(hex)) return null
   const bytes = new Uint8Array(hex.length / 2)
   for (let i = 0; i < hex.length; i += 2) {
     bytes[i / 2] = parseInt(hex.substr(i, 2), 16)
@@ -90,9 +91,11 @@ export function verifyEnvEncryptPublicKey(
     return null
   }
 
+  const appIdBytes = hexToBytes(appId)
+  if (!appIdBytes) return null
+
   const prefix = new TextEncoder().encode("dstack-env-encrypt-pubkey")
   const separator = new TextEncoder().encode(":")
-  const appIdBytes = hexToBytes(appId)
   const timestampBytes = bigintToBeBytes(ts, 8)
   const message = concat(
     prefix,
@@ -115,9 +118,11 @@ export function verifyEnvEncryptPublicKeyLegacy(
 ): string | null {
   if (signature.length !== 65) return null
 
+  const appIdBytes = hexToBytes(appId)
+  if (!appIdBytes) return null
+
   const prefix = new TextEncoder().encode("dstack-env-encrypt-pubkey")
   const separator = new TextEncoder().encode(":")
-  const appIdBytes = hexToBytes(appId)
   const message = concat(prefix, separator, appIdBytes, publicKey)
   return recoverSigner(keccak_256(message), signature)
 }
