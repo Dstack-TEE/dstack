@@ -5,6 +5,7 @@
 use anyhow::{anyhow, bail, Context, Result};
 use cc_eventlog::{RuntimeEvent, TdxEvent};
 use serde::{Deserialize, Serialize};
+use tpm_types::TpmQuote;
 
 pub const ATTESTATION_VERSION: u64 = 1;
 
@@ -17,22 +18,42 @@ pub enum PlatformEvidence {
         event_log: Vec<TdxEvent>,
     },
     #[serde(rename = "gcp-tdx")]
-    GcpTdx,
+    GcpTdx {
+        quote: Vec<u8>,
+        event_log: Vec<TdxEvent>,
+        tpm_quote: TpmQuote,
+    },
     #[serde(rename = "nitro-enclave")]
-    NitroEnclave,
+    NitroEnclave { nsm_quote: Vec<u8> },
 }
 
 impl PlatformEvidence {
     pub fn tdx_quote(&self) -> Option<&[u8]> {
         match self {
-            Self::Tdx { quote, .. } => Some(quote.as_slice()),
+            Self::Tdx { quote, .. } | Self::GcpTdx { quote, .. } => Some(quote.as_slice()),
             _ => None,
         }
     }
 
     pub fn tdx_event_log(&self) -> Option<&[TdxEvent]> {
         match self {
-            Self::Tdx { event_log, .. } => Some(event_log.as_slice()),
+            Self::Tdx { event_log, .. } | Self::GcpTdx { event_log, .. } => {
+                Some(event_log.as_slice())
+            }
+            _ => None,
+        }
+    }
+
+    pub fn tpm_quote(&self) -> Option<&TpmQuote> {
+        match self {
+            Self::GcpTdx { tpm_quote, .. } => Some(tpm_quote),
+            _ => None,
+        }
+    }
+
+    pub fn nsm_quote(&self) -> Option<&[u8]> {
+        match self {
+            Self::NitroEnclave { nsm_quote } => Some(nsm_quote.as_slice()),
             _ => None,
         }
     }
@@ -46,6 +67,19 @@ impl PlatformEvidence {
                     .filter(|event| event.imr == 3)
                     .map(|event| event.stripped())
                     .collect(),
+            },
+            Self::GcpTdx {
+                quote,
+                event_log,
+                tpm_quote,
+            } => Self::GcpTdx {
+                quote,
+                event_log: event_log
+                    .into_iter()
+                    .filter(|event| event.imr == 3)
+                    .map(|event| event.stripped())
+                    .collect(),
+                tpm_quote,
             },
             other => other,
         }

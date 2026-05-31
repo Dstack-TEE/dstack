@@ -1,5 +1,7 @@
 # auth-simple Operations Guide
 
+> **This guide is for self-hosted deployments** on your own TDX hardware. For cloud deployments, see [Quickstart](./quickstart.md).
+
 This guide covers day-to-day operations for managing apps and devices with auth-simple.
 
 For initial deployment setup, see [Deployment Guide](./deployment.md).

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
 #
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: BUSL-1.1
 
 FROM rust:1.92.0-bookworm@sha256:e90e846de4124376164ddfbaab4b0774c7bdeef5e738866295e5a90a34a307a2 AS verifier-builder
 COPY --from=build-shared pin-packages.sh /build/
@@ -23,7 +23,7 @@ RUN apt-get update && \
     ca-certificates \
     curl && \
     rm -rf /var/lib/apt/lists/* /var/log/* /var/cache/ldconfig/aux-cache
-RUN git clone ${DSTACK_SRC_URL} && \
+RUN git clone ${DSTACK_SRC_URL} dstack && \
     cd dstack && \
     git checkout ${DSTACK_REV}
 RUN rustup target add x86_64-unknown-linux-musl

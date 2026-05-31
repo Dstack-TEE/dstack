@@ -1,8 +1,10 @@
 # dstack Usage Guide
 
-This guide covers deploying and managing applications on dstack. For infrastructure setup and self-hosting, see the [Deployment Guide](./deployment.md).
+> **This guide is for self-hosted deployments** on your own TDX hardware. For cloud deployments, see [Quickstart](./quickstart.md).
 
-You can manage VMs via the dashboard or [CLI](./vmm-cli-user-guide.md).
+This guide covers deploying and managing applications on self-hosted dstack infrastructure. For initial setup, see the [Deployment Guide](./deployment.md).
+
+You can manage VMs via the VMM dashboard or [CLI](./vmm-cli-user-guide.md).
 
 ## Deploy an App
 

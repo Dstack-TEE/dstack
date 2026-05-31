@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: © 2024-2025 Phala Network <dstack@phala.network>
 //
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: BUSL-1.1
 
 use std::{
     ffi::OsStr,
@@ -12,8 +12,10 @@ use anyhow::{anyhow, bail, Context, Result};
 use cc_eventlog::TdxEvent;
 use dstack_mr::{RtmrLog, TdxMeasurementDetails, TdxMeasurements};
 use dstack_types::VmConfig;
+use hex_literal::hex;
 use ra_tls::attestation::{
-    Attestation, AttestationQuote, VerifiedAttestation, VersionedAttestation,
+    Attestation, AttestationQuote, DstackNitroQuote, TpmQuote, VerifiedAttestation,
+    VersionedAttestation,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
@@ -498,15 +500,17 @@ impl CvmVerifier {
             .decode_vm_config(&vm_config)
             .context("Failed to decode VM config")?;
         match &attestation.quote {
+            AttestationQuote::DstackGcpTdx(quote) => {
+                self.verify_os_image_hash_for_gcp_tdx(&vm_config, &quote.tpm_quote)
+                    .await?;
+            }
             AttestationQuote::DstackTdx(_) => {
                 self.verify_os_image_hash_for_dstack_tdx(&vm_config, attestation, debug, details)
                     .await?;
             }
-            AttestationQuote::DstackGcpTdx | AttestationQuote::DstackNitroEnclave => {
-                bail!(
-                    "Unsupported attestation quote: {:?}",
-                    attestation.quote.mode()
-                );
+            AttestationQuote::DstackNitroEnclave(quote) => {
+                self.verify_os_image_hash_for_nitro_enclave(&vm_config, quote)
+                    .await?;
             }
         }
         Ok(vm_config)
@@ -635,6 +639,82 @@ impl CvmVerifier {
                 result
             }
         }
+    }
+
+    /// Verify Nitro Enclave OS image hash using NSM PCRs
+    ///
+    /// For Nitro:
+    /// 1. PCR0/1/2 come from the EIF build (code + kernel + app) in production mode.
+    /// 2. In debug mode, PCR0/1/2 are zeroed by AWS; we tolerate that and return 32 zero bytes.
+    /// 3. The computed image hash is compared against vm_config.os_image_hash.
+    async fn verify_os_image_hash_for_nitro_enclave(
+        &self,
+        vm_config: &VmConfig,
+        nsm_quote: &DstackNitroQuote,
+    ) -> Result<()> {
+        // Parse NSM attestation document
+        let os_image_hash = nsm_quote
+            .decode_image_hash()
+            .context("Failed to decode PCR values")?;
+        // Compare with expected os_image_hash from vm_config
+        if os_image_hash != vm_config.os_image_hash {
+            bail!(
+                "os_image_hash mismatch: expected={}, computed={}",
+                hex::encode(&vm_config.os_image_hash),
+                hex::encode(&os_image_hash)
+            );
+        }
+        Ok(())
+    }
+
+    async fn verify_os_image_hash_for_gcp_tdx(
+        &self,
+        vm_config: &VmConfig,
+        tpm_quote: &TpmQuote,
+    ) -> Result<()> {
+        // Verify PCR 0 (GCP OVMF firmware)
+        const EXPECTED_PCR0: [u8; 32] =
+            hex!("0cca9ec161b09288802e5a112255d21340ed5b797f5fe29cecccfd8f67b9f802");
+
+        let pcr0 = tpm_quote
+            .pcr_values
+            .iter()
+            .find(|p| p.index == 0)
+            .context("PCR 0 not found in TPM quote")?;
+
+        // Get expected UKI hash from os_image_hash (which should be set to UKI Authenticode hash)
+        let expected_uki_hash = &vm_config.os_image_hash;
+
+        let pcr2_events: Vec<_> = tpm_quote
+            .event_log
+            .iter()
+            .filter(|e| e.pcr_index == 2)
+            .collect();
+        debug!("PCR 2 Event Log contains {} events", pcr2_events.len());
+        // Extract Event 28 (3rd event, 0-indexed as 2)
+        // NOTE: This is GCP OVMF-specific behavior
+        let event_28_digest = {
+            if pcr0.value != EXPECTED_PCR0 {
+                bail!(
+                    "PCR 0 mismatch: expected GCP OVMF v2, got {}",
+                    hex::encode(&pcr0.value)
+                );
+            }
+            &pcr2_events.get(2).context("Event 28 not found")?.digest
+        };
+
+        if event_28_digest != expected_uki_hash {
+            bail!(
+                "UKI hash mismatch: expected={}, actual={}",
+                hex::encode(expected_uki_hash),
+                hex::encode(event_28_digest)
+            );
+        }
+        debug!(
+            "✓ UKI hash verified from PCR 2 Event Log (Event 28), digest: {}",
+            hex::encode(event_28_digest)
+        );
+        Ok(())
     }
 
     pub async fn download_image(&self, hex_os_image_hash: &str, dst_dir: &Path) -> Result<()> {

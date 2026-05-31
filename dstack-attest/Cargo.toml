@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
 #
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: BUSL-1.1
 
 [package]
 name = "dstack-attest"
@@ -27,6 +27,11 @@ serde_json.workspace = true
 sha2.workspace = true
 sha3.workspace = true
 tdx-attest.workspace = true
+tpm-attest.workspace = true
+nsm-attest.workspace = true
+nsm-qvl.workspace = true
+tpm-qvl.workspace = true
+tpm-types.workspace = true
 tracing.workspace = true
 insta.workspace = true
 errify.workspace = true

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2024-2025 Phala Network <dstack@phala.network>
 #
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: BUSL-1.1
 
 name: Rust checks
 
@@ -15,7 +15,7 @@ env:
 
 jobs:
   rust-checks:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     steps:
     - uses: actions/checkout@v4
 

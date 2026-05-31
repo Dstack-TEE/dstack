@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: BUSL-1.1
 
 const { vmm } = require('../proto/vmm_rpc.js');
 const { prpc } = require('../proto/prpc.js');

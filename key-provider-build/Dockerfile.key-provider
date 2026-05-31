@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2024-2025 Phala Network <dstack@phala.network>
 #
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: BUSL-1.1
 FROM gramineproject/gramine:1.9-jammy@sha256:84b3d222e0bd9ab941f0078a462af0dbc5518156b99b147c10a7b83722ac0c38
 
 # Pin Ubuntu apt sources to a fixed snapshot date so transitive dependencies

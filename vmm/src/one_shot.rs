@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: © 2024-2025 Phala Network <dstack@phala.network>
 //
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: BUSL-1.1
 
 use crate::app::{make_sys_config, Image, VmConfig, VmWorkDir};
 use crate::config::Config;

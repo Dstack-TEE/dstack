@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
 //
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: BUSL-1.1
 
 use anyhow::{bail, Context, Result};
 use dstack_types::{mr_config::MrConfig, KeyProviderKind};

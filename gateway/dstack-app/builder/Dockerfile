@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
 #
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: BUSL-1.1
 
 FROM rust:1.92.0@sha256:48851a839d6a67370c9dbe0e709bedc138e3e404b161c5233aedcf2b717366e4 AS gateway-builder
 COPY --from=build-shared pin-packages.sh /build/
@@ -19,7 +19,7 @@ RUN apt-get update && \
     libprotobuf-dev \
     clang \
     libclang-dev
-RUN git clone ${DSTACK_SRC_URL} && \
+RUN git clone ${DSTACK_SRC_URL} dstack && \
     cd dstack && \
     git checkout ${DSTACK_REV}
 RUN rustup target add x86_64-unknown-linux-musl

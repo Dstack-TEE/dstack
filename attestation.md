@@ -35,7 +35,7 @@ RTMR3 differs as it contains runtime information like compose hash and instance 
 MRTD, RTMR0, RTMR1, and RTMR2 correspond to the image. dstack OS builds all related software from source.
 Build version v0.5.4 using these commands:
 ```bash
-git clone https://github.com/Dstack-TEE/meta-dstack.git
+git clone https://github.com/Phala-Network/meta-dstack-cloud.git
 cd meta-dstack/
 git checkout f7c795b76faa693f218e1c255007e3a68c541d79
 git submodule update --init --recursive

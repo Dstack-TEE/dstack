@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
 #
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: BUSL-1.1
 
 [package]
 name = "cert-client"
@@ -16,3 +16,4 @@ dstack-kms-rpc.workspace = true
 ra-rpc = { workspace = true, features = ["client"] }
 ra-tls = { workspace = true, features = ["quote"] }
 serde_json.workspace = true
+tdx-attest.workspace = true

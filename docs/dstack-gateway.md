@@ -1,5 +1,7 @@
 # Setup dstack-gateway for Production
 
+> **This guide is for self-hosted deployments** on your own TDX hardware. For cloud deployments, see [Quickstart](./quickstart.md).
+
 To set up dstack-gateway for production, you need a wildcard domain and SSL certificate.
 
 ## Step 1: Setup wildcard domain

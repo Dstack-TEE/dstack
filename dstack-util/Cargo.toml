@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2024-2025 Phala Network <dstack@phala.network>
 #
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: BUSL-1.1
 
 [package]
 name = "dstack-util"
@@ -35,6 +35,8 @@ ra-rpc = { workspace = true, features = ["client"] }
 ra-tls = { workspace = true, features = ["quote"] }
 dstack-gateway-rpc.workspace = true
 tdx-attest.workspace = true
+tpm-attest.workspace = true
+tpm-qvl = { workspace = true, features = ["crl-download"] }
 host-api = { workspace = true, features = ["client"] }
 cmd_lib.workspace = true
 toml.workspace = true

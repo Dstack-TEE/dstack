@@ -2,7 +2,7 @@
 
 # SPDX-FileCopyrightText: © 2024 Phala Network <dstack@phala.network>
 #
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: BUSL-1.1
 
 VMDIR=$1
 IMAGE_PATH=./images/$(jq -r '.image' ${VMDIR}/vm-manifest.json)

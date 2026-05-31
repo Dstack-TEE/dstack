@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2024-2025 Phala Network <dstack@phala.network>
 #
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: BUSL-1.1
 
 [package]
 name = "dstack-verifier"
@@ -43,6 +43,9 @@ dstack-mr.workspace = true
 dcap-qvl.workspace = true
 cc-eventlog.workspace = true
 sha2.workspace = true
+tpm-qvl.workspace = true
+tpm-types.workspace = true
+nsm-attest.workspace = true
 ez-hash.workspace = true
 serde-human-bytes.workspace = true
 hex-literal.workspace = true

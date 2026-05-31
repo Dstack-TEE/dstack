@@ -3,7 +3,7 @@
 # SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
 # SPDX-FileCopyrightText: © 2025 Test in Prod <contact@testinprod.io>
 #
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: BUSL-1.1
 
 # Check if .env exists
 if [ -f ".env" ]; then
@@ -44,7 +44,7 @@ VERIFY_IMAGE=true
 ETH_RPC_URL=https://rpc.phala.network
 
 # The Git repository to deploy
-GIT_REPOSITORY=https://github.com/Dstack-TEE/dstack.git
+GIT_REPOSITORY=https://github.com/Phala-Network/dstack-cloud.git
 
 # The Git revision to deploy
 GIT_REV=HEAD

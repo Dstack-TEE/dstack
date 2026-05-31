@@ -1,7 +1,7 @@
 <!--
 SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
 
-SPDX-License-Identifier: Apache-2.0
+SPDX-License-Identifier: BUSL-1.1
 -->
 
 <!DOCTYPE html>
@@ -315,7 +315,7 @@ SPDX-License-Identifier: Apache-2.0
             methods: {
                 async handleBootstrap() {
                     try {
-                        const { ca_pubkey, k256_pubkey, quote, eventlog, error } = await rpcCall('Bootstrap', {
+                        const { ca_pubkey, k256_pubkey, attestation, error } = await rpcCall('Bootstrap', {
                             domain: this.bootstrapDomain
                         });
 
@@ -325,8 +325,7 @@ SPDX-License-Identifier: Apache-2.0
                         this.result = JSON.stringify({
                             caPubkey: '0x' + ca_pubkey,
                             k256Pubkey: '0x' + k256_pubkey,
-                            quote: '0x' + quote,
-                            eventlog: '0x' + eventlog
+                            attestation: '0x' + attestation
                         }, null, 2);
                         this.error = '';
                     } catch (err) {

@@ -1,5 +1,7 @@
 # VMM CLI User Guide
 
+> **This guide is for self-hosted deployments** on your own TDX hardware. For cloud deployments, see [Quickstart](./quickstart.md).
+
 Welcome to the **VMM CLI**! This tool helps you manage CVMs in the dstack platform.
 
 ## Table of Contents

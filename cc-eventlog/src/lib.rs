@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: © 2024 Phala Network <dstack@phala.network>
 //
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: BUSL-1.1
 
 pub use runtime_events::{replay_events, RuntimeEvent};
 pub use tdx::TdxEvent;
@@ -9,6 +9,7 @@ mod codecs;
 mod runtime_events;
 mod tcg;
 pub mod tdx;
+pub mod tpm;
 
 #[cfg(test)]
 mod tests {

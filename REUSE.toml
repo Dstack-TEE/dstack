@@ -1,19 +1,19 @@
 version = 1
 SPDX-PackageName = "dstack"
 SPDX-PackageSupplier = "Phala Network <dstack@phala.network>"
-SPDX-PackageDownloadLocation = "https://github.com/Dstack-TEE/dstack"
+SPDX-PackageDownloadLocation = "https://github.com/Phala-Network/dstack-cloud"
 
 # Non source files
 
 [[annotations]]
 path = "**/*.md"
 SPDX-FileCopyrightText = "Copyright (c) 2024-2025 The Project Contributors"
-SPDX-License-Identifier = "Apache-2.0"
+SPDX-License-Identifier = "BUSL-1.1"
 
 [[annotations]]
 path = "**/requirements.txt"
 SPDX-FileCopyrightText = "Copyright (c) 2024-2025 The Project Contributors"
-SPDX-License-Identifier = "Apache-2.0"
+SPDX-License-Identifier = "BUSL-1.1"
 
 [[annotations]]
 path = [
@@ -38,7 +38,7 @@ path = [
     "gateway/dstack-app/builder/shared/pinned-packages.txt",
 ]
 SPDX-FileCopyrightText = "Copyright (c) 2024-2025 The Project Contributors"
-SPDX-License-Identifier = "Apache-2.0"
+SPDX-License-Identifier = "BUSL-1.1"
 
 [[annotations]]
 path = [
@@ -47,7 +47,7 @@ path = [
     "key-provider-build/sgx_default_qcnl.conf",
 ]
 SPDX-FileCopyrightText = "Copyright (c) 2024-2025 The Project Contributors"
-SPDX-License-Identifier = "Apache-2.0"
+SPDX-License-Identifier = "BUSL-1.1"
 
 [[annotations]]
 path = [
@@ -57,12 +57,12 @@ path = [
     "**/.npmignore",
 ]
 SPDX-FileCopyrightText = "Copyright (c) 2024-2025 The Project Contributors"
-SPDX-License-Identifier = "Apache-2.0"
+SPDX-License-Identifier = "BUSL-1.1"
 
 [[annotations]]
 path = "basefiles/*"
 SPDX-FileCopyrightText = "Copyright (c) 2024-2025 The Project Contributors"
-SPDX-License-Identifier = "Apache-2.0"
+SPDX-License-Identifier = "BUSL-1.1"
 
 [[annotations]]
 path = [
@@ -72,6 +72,15 @@ path = [
     "sdk/simulator/attestation.bin",
     "ra-tls/assets/tdx_quote",
     "cc-eventlog/samples/ccel.bin",
+    "cc-eventlog/samples/tpm_eventlog.bin",
+    "tpm-attest/tests/tpm_quote_sample.bin",
+    "tpm-qvl/certs/gcp-root-ca.pem",
+    "dstack-attest/tests/nitro_attestation.bin",
+    "dstack-attest/tests/nitro_attestation_dbg.bin",
+    "nsm-attest/tests/nitro_attestation.bin",
+    "nsm-qvl/tests/nitro_attestation.bin",
+    "nsm-qvl/certs/AWS_NitroEnclaves_Root-G1.pem",
+    "tpm-qvl/certs/AWS_NitroEnclaves_Root-G1.pem",
 ]
 SPDX-FileCopyrightText = "NONE"
 SPDX-License-Identifier = "CC0-1.0"
@@ -86,14 +95,14 @@ path = [
     "dstack-logo.svg",
 ]
 SPDX-FileCopyrightText = "Copyright (c) 2024-2025 The Project Contributors"
-SPDX-License-Identifier = "Apache-2.0"
+SPDX-License-Identifier = "BUSL-1.1"
 
 # Scripts with SPDX-like content (false positive prevention)
 
 [[annotations]]
 path = "scripts/add-spdx-attribution.py"
 SPDX-FileCopyrightText = "© 2025 Phala Network <dstack@phala.network>"
-SPDX-License-Identifier = "Apache-2.0"
+SPDX-License-Identifier = "BUSL-1.1"
 precedence = "override"
 
 # Vendor code
@@ -101,25 +110,20 @@ precedence = "override"
 [[annotations]]
 path = "kms/auth-eth/lib/openzeppelin-contracts-upgradeable/**"
 SPDX-FileCopyrightText = "Copyright (c) 2016-2025 Zeppelin Group Ltd"
-SPDX-License-Identifier = "MIT"
+SPDX-License-Identifier = "BUSL-1.1"
 precedence = "override"
 
 [[annotations]]
 path = "kms/auth-eth/lib/openzeppelin-foundry-upgrades/**"
 SPDX-FileCopyrightText = "NONE"
-SPDX-License-Identifier = "MIT"
+SPDX-License-Identifier = "BUSL-1.1"
 precedence = "override"
 
 [[annotations]]
 path = "kms/auth-eth/lib/forge-std/**"
 SPDX-FileCopyrightText = "NONE"
-SPDX-License-Identifier = "Apache-2.0"
+SPDX-License-Identifier = "BUSL-1.1"
 precedence = "override"
-
-[[annotations]]
-path = "mod-tdx-guest/Kconfig"
-SPDX-FileCopyrightText = "© 2022 Intel Corporation"
-SPDX-License-Identifier = "GPL-2.0-only"
 
 # Generated files
 

@@ -1,5 +1,7 @@
 # Deploying dstack
 
+> **This guide is for self-hosted deployments** on your own TDX hardware. For cloud deployments, see [Quickstart](./quickstart.md).
+
 This guide covers deploying dstack on bare metal TDX hosts.
 
 ## Overview
@@ -43,7 +45,7 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 ### Build Configuration
 
 ```bash
-git clone https://github.com/Dstack-TEE/meta-dstack.git --recursive
+git clone https://github.com/Phala-Network/meta-dstack-cloud.git --recursive
 cd meta-dstack/
 mkdir build && cd build
 ../build.sh hostcfg
@@ -124,7 +126,7 @@ If you skip the KMS allowlist step, the VM may boot and the onboard UI may still
 Clone and build dstack-vmm:
 
 ```bash
-git clone https://github.com/Dstack-TEE/dstack
+git clone https://github.com/Phala-Network/dstack-cloud
 cd dstack
 cargo build --release -p dstack-vmm -p supervisor
 mkdir -p vmm-data
@@ -160,7 +162,7 @@ address = "vsock:2"
 port = 10000
 ```
 
-Download guest images from [meta-dstack releases](https://github.com/Dstack-TEE/meta-dstack/releases) and extract to `./images/`.
+Download guest images from [meta-dstack releases](https://github.com/Phala-Network/meta-dstack-cloud/releases) and extract to `./images/`.
 
 > For reproducible builds and verification, see the [Security Model](./security/security-model.md).
 
@@ -257,7 +259,7 @@ AUTH_WEBHOOK_URL=http://your-auth-server:3001
 KMS_RPC_ADDR=0.0.0.0:9201
 GUEST_AGENT_ADDR=127.0.0.1:9205
 OS_IMAGE=dstack-0.5.5
-IMAGE_DOWNLOAD_URL=https://github.com/Dstack-TEE/meta-dstack/releases/download/v0.5.5/dstack-0.5.5.tar.gz
+IMAGE_DOWNLOAD_URL=https://github.com/Phala-Network/meta-dstack-cloud/releases/download/v0.5.5/dstack-0.5.5.tar.gz
 ```
 
 Then run:

@@ -3,7 +3,7 @@
 # SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
 # SPDX-FileCopyrightText: © 2025 Test in Prod <contact@testinprod.io>
 #
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: BUSL-1.1
 
 set -e
 

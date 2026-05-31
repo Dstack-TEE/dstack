@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
 //
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: BUSL-1.1
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -59,6 +59,7 @@ use dstack_gateway_rpc::{
 use ra_tls::rcgen::{KeyPair, PKCS_ECDSA_P256_SHA256};
 use serde_human_bytes as hex_bytes;
 use serde_json::Value;
+use tpm_attest::{self as tpm, TpmContext};
 
 async fn sign_cert_request(
     cert_client: &CertRequestClient,
@@ -955,6 +956,41 @@ impl<'a> Stage0<'a> {
         Ok(app_keys)
     }
 
+    fn generate_tpm_app_keys(&self) -> Result<AppKeys> {
+        let tpm = TpmContext::detect().context("failed to detect TPM context")?;
+
+        // Get PCR policy for sealing (boot chain + app PCR)
+        let pcr_policy = tpm::dstack_pcr_policy();
+
+        // Try to read sealed seed (bound to PCR values including app PCR)
+        if let Some(seed) = tpm
+            .unseal::<32>(tpm::SEALED_NV_INDEX, tpm::PRIMARY_KEY_HANDLE, &pcr_policy)
+            .context("failed to unseal from TPM")?
+        {
+            info!(
+                "unsealed root key seed from TPM (PCR policy: {})",
+                pcr_policy.to_arg()
+            );
+            return gen_app_keys_from_seed(&seed, KeyProviderKind::Tpm, None)
+                .context("failed to generate TPM app keys");
+        }
+
+        // No sealed seed exists, generate new one
+        info!("no sealed seed found, generating new seed...");
+        let seed: [u8; 32] = tpm.get_random().context("TPM RNG unavailable")?;
+        // Seal the new seed to TPM with PCR policy (including app PCR)
+        tpm.seal(
+            &seed,
+            tpm::SEALED_NV_INDEX,
+            tpm::PRIMARY_KEY_HANDLE,
+            &pcr_policy,
+        )
+        .context("failed to seal seed to TPM")?;
+
+        gen_app_keys_from_seed(&seed, KeyProviderKind::Tpm, None)
+            .context("failed to generate TPM app keys")
+    }
+
     async fn request_app_keys(&self) -> Result<AppKeys> {
         let key_provider = self.shared.app_compose.key_provider();
         match key_provider {
@@ -967,7 +1003,8 @@ impl<'a> Stage0<'a> {
                     .context("Failed to generate app keys")
             }
             KeyProviderKind::Tpm => {
-                bail!("Tpm key provider is not supported");
+                info!("Generating app keys from TPM");
+                self.generate_tpm_app_keys()
             }
         }
     }
@@ -1364,8 +1401,8 @@ impl<'a> Stage0<'a> {
             KeyProvider::Local { mr, .. } => {
                 KeyProviderInfo::new("local-sgx".into(), hex::encode(mr))
             }
-            KeyProvider::Tpm { .. } => {
-                bail!("Tpm key provider is not supported");
+            KeyProvider::Tpm { pubkey, .. } => {
+                KeyProviderInfo::new("tpm".into(), hex::encode(pubkey))
             }
             KeyProvider::Kms { pubkey, .. } => {
                 KeyProviderInfo::new("kms".into(), hex::encode(pubkey))

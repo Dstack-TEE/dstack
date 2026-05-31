@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
 #
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: BUSL-1.1
 
 services:
   # Helios is a Ethereum light client
@@ -36,7 +36,7 @@ services:
         WORKDIR /app
 
         RUN apk add --no-cache git
-        RUN git clone https://github.com/Dstack-TEE/dstack.git && \
+        RUN git clone https://github.com/Phala-Network/dstack-cloud.git && \
             cd dstack && \
             git checkout 78057c975fe4b9e21f557fb888d72eeecfb21178
         WORKDIR /app/dstack/kms/auth-eth
@@ -69,7 +69,7 @@ services:
             libclang-dev \
             --no-install-recommends \
             && rm -rf /var/lib/apt/lists/*
-        RUN git clone https://github.com/Dstack-TEE/dstack.git && \
+        RUN git clone https://github.com/Phala-Network/dstack-cloud.git && \
             cd dstack && \
             git checkout 78057c975fe4b9e21f557fb888d72eeecfb21178
         WORKDIR /app/dstack

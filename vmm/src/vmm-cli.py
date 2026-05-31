@@ -3,7 +3,7 @@
 
 # SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
 #
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: BUSL-1.1
 
 import argparse
 import base64
@@ -1654,9 +1654,9 @@ def main():
     )
     compose_parser.add_argument(
         "--key-provider",
-        choices=["none", "kms", "local"],
+        choices=["none", "kms", "local", "tpm"],
         default=None,
-        help="Override key provider type (none, kms, local)",
+        help="Override key provider type (none, kms, local, or tpm)",
     )
     compose_parser.add_argument(
         "--key-provider-id",

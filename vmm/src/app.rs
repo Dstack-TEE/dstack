@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: © 2024-2025 Phala Network <dstack@phala.network>
 //
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: BUSL-1.1
 
 use crate::config::{Config, Networking, ProcessAnnotation, Protocol};
 use dstack_port_forward::{ForwardRule, ForwardService, Protocol as FwdProtocol};

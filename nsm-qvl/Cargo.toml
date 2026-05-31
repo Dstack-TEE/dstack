@@ -1,0 +1,38 @@
+# SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: BUSL-1.1
+
+[package]
+name = "nsm-qvl"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "AWS Nitro Enclave NSM Quote Verification Library"
+
+[dependencies]
+anyhow.workspace = true
+hex.workspace = true
+serde = { workspace = true, features = ["derive"] }
+tracing.workspace = true
+
+# CBOR/COSE parsing
+ciborium.workspace = true
+
+# Cryptographic verification
+p384 = { workspace = true, features = ["ecdsa"] }
+sha2 = { workspace = true, features = ["oid"] }
+pem.workspace = true
+
+# Certificate chain verification
+x509-parser.workspace = true
+rustls-pki-types.workspace = true
+dcap-qvl-webpki = { workspace = true, features = ["alloc", "rustcrypto"] }
+
+# CRL download
+reqwest = { workspace = true, features = ["rustls-tls"] }
+
+[dev-dependencies]
+nsm-attest.workspace = true
+tokio = { workspace = true, features = ["full"] }
+tracing-subscriber.workspace = true

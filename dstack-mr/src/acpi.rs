@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
 //
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: BUSL-1.1
 
 //! This module provides functionality to generate ACPI tables for QEMU,
 //! translated from an original Go implementation.

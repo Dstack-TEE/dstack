@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: © 2024 Phala Network <dstack@phala.network>
 //
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: BUSL-1.1
 
 use hyper::{body::Body, rt::ReadBufCursor, Uri};
 use hyper_util::{
