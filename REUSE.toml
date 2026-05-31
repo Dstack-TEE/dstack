@@ -23,6 +23,7 @@ path = [
     "**/tsconfig.node.json",
     "**/tsconfig.browser.json",
     "kms/auth-eth-bun/.oxlintrc.json",
+    "kms/auth-eth/slither.config.json",
     "package-lock.json",
     "**/package-lock.json",
     "kms/auth-eth/.openzeppelin/unknown-2035.json",

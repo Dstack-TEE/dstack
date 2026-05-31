@@ -1,0 +1,4 @@
+{
+  "filter_paths": "lib/|node_modules/|test/|script/|out/|cache/|contracts/test-utils/",
+  "detectors_to_exclude": "naming-convention,solc-version"
+}
