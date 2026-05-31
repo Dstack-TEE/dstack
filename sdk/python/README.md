@@ -282,6 +282,17 @@ if signer is None:
     if signer is None:
         raise RuntimeError('invalid KMS env-encrypt public key')
 
+# Always compare the recovered signer against a known-good KMS signer
+# address, obtained out-of-band from the DstackKms contract or your
+# deployment configuration. Without this check, an attacker could sign
+# their own env-encrypt key and the verification above would still pass.
+EXPECTED_KMS_SIGNER = '0x...'  # replace with your known KMS signer address
+if signer != EXPECTED_KMS_SIGNER:
+    raise RuntimeError(
+        f'unexpected KMS signer: got {signer}, '
+        f'expected {EXPECTED_KMS_SIGNER}'
+    )
+
 env_vars = [
     EnvVar(key='DATABASE_URL', value='postgresql://...'),
     EnvVar(key='API_KEY', value='secret'),
@@ -308,8 +319,8 @@ hash_value = get_compose_hash(app_compose_dict)
 |---|---|
 | `get_key`, `get_quote`, `get_tls_key` (legacy fields), `info` (legacy fields) | 0.3+ |
 | `emit_event` | 0.5.0+ |
-| `attest`, `sign` / `verify`, `version`, `is_reachable` | 0.5.0+ (sign/verify require server build with the feature) |
-| `algorithm='ed25519'` on `get_key`, `info.cloud_vendor` / `cloud_product`, `not_before` / `not_after` / `with_app_info` on `get_tls_key` | 0.5.7+ |
+| `attest`, `sign` / `verify`, `is_reachable` | 0.5.0+ (sign/verify require server build with the feature) |
+| `version`, `algorithm='ed25519'` on `get_key`, `info.cloud_vendor` / `cloud_product`, `not_before` / `not_after` / `with_app_info` on `get_tls_key` | 0.5.7+ |
 | `verify_env_encrypt_public_key` (signature_v1 with timestamp) | Requires KMS build that emits `signature_v1`; legacy variant remains available |
 
 Calls that require 0.5.7-only fields probe the `Version` RPC first and raise a clear `RuntimeError` on older guest agents.
