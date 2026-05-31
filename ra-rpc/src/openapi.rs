@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
 //
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: Apache-2.0
 
 //! Utilities to derive OpenAPI documents for pRPC services from their compiled
 //! protobuf descriptors. The resulting spec can be served directly or embedded

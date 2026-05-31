@@ -1,19 +1,19 @@
 version = 1
 SPDX-PackageName = "dstack"
 SPDX-PackageSupplier = "Phala Network <dstack@phala.network>"
-SPDX-PackageDownloadLocation = "https://github.com/Phala-Network/dstack-cloud"
+SPDX-PackageDownloadLocation = "https://github.com/Dstack-TEE/dstack"
 
 # Non source files
 
 [[annotations]]
 path = "**/*.md"
 SPDX-FileCopyrightText = "Copyright (c) 2024-2025 The Project Contributors"
-SPDX-License-Identifier = "BUSL-1.1"
+SPDX-License-Identifier = "Apache-2.0"
 
 [[annotations]]
 path = "**/requirements.txt"
 SPDX-FileCopyrightText = "Copyright (c) 2024-2025 The Project Contributors"
-SPDX-License-Identifier = "BUSL-1.1"
+SPDX-License-Identifier = "Apache-2.0"
 
 [[annotations]]
 path = [
@@ -38,7 +38,7 @@ path = [
     "gateway/dstack-app/builder/shared/pinned-packages.txt",
 ]
 SPDX-FileCopyrightText = "Copyright (c) 2024-2025 The Project Contributors"
-SPDX-License-Identifier = "BUSL-1.1"
+SPDX-License-Identifier = "Apache-2.0"
 
 [[annotations]]
 path = [
@@ -47,7 +47,7 @@ path = [
     "key-provider-build/sgx_default_qcnl.conf",
 ]
 SPDX-FileCopyrightText = "Copyright (c) 2024-2025 The Project Contributors"
-SPDX-License-Identifier = "BUSL-1.1"
+SPDX-License-Identifier = "Apache-2.0"
 
 [[annotations]]
 path = [
@@ -57,12 +57,12 @@ path = [
     "**/.npmignore",
 ]
 SPDX-FileCopyrightText = "Copyright (c) 2024-2025 The Project Contributors"
-SPDX-License-Identifier = "BUSL-1.1"
+SPDX-License-Identifier = "Apache-2.0"
 
 [[annotations]]
 path = "basefiles/*"
 SPDX-FileCopyrightText = "Copyright (c) 2024-2025 The Project Contributors"
-SPDX-License-Identifier = "BUSL-1.1"
+SPDX-License-Identifier = "Apache-2.0"
 
 [[annotations]]
 path = [
@@ -95,14 +95,14 @@ path = [
     "dstack-logo.svg",
 ]
 SPDX-FileCopyrightText = "Copyright (c) 2024-2025 The Project Contributors"
-SPDX-License-Identifier = "BUSL-1.1"
+SPDX-License-Identifier = "Apache-2.0"
 
 # Scripts with SPDX-like content (false positive prevention)
 
 [[annotations]]
 path = "scripts/add-spdx-attribution.py"
 SPDX-FileCopyrightText = "© 2025 Phala Network <dstack@phala.network>"
-SPDX-License-Identifier = "BUSL-1.1"
+SPDX-License-Identifier = "Apache-2.0"
 precedence = "override"
 
 # Vendor code
@@ -110,19 +110,19 @@ precedence = "override"
 [[annotations]]
 path = "kms/auth-eth/lib/openzeppelin-contracts-upgradeable/**"
 SPDX-FileCopyrightText = "Copyright (c) 2016-2025 Zeppelin Group Ltd"
-SPDX-License-Identifier = "BUSL-1.1"
+SPDX-License-Identifier = "MIT"
 precedence = "override"
 
 [[annotations]]
 path = "kms/auth-eth/lib/openzeppelin-foundry-upgrades/**"
 SPDX-FileCopyrightText = "NONE"
-SPDX-License-Identifier = "BUSL-1.1"
+SPDX-License-Identifier = "MIT"
 precedence = "override"
 
 [[annotations]]
 path = "kms/auth-eth/lib/forge-std/**"
 SPDX-FileCopyrightText = "NONE"
-SPDX-License-Identifier = "BUSL-1.1"
+SPDX-License-Identifier = "Apache-2.0"
 precedence = "override"
 
 # Generated files

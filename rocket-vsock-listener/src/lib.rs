@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: © 2024 Phala Network <dstack@phala.network>
 //
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: Apache-2.0
 
 use derive_more::Display;
 use rocket::listener::{Connection, Endpoint, Listener};

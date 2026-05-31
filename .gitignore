@@ -13,3 +13,4 @@ node_modules/
 __pycache__
 .planning/
 /vmm/src/console_v1.html
+.claude/worktrees/

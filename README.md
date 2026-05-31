@@ -263,6 +263,4 @@ Logo and branding assets: [dstack-logo-kit](./docs/assets/dstack-logo-kit/)
 
 ## License
 
-This repository is licensed under the Business Source License 1.1 (BUSL-1.1). Per the terms in [LICENSE](./LICENSE), the Licensed Work is `dstack-cloud`.
-
-BUSL-1.1 permits copying, modification, redistribution, and **non-production** use. Production use requires a commercial license. [Book a call](https://cal.com/team/phala/founders) or email support@phala.network.
+Apache 2.0

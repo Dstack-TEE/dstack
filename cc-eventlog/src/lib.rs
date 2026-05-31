@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: © 2024 Phala Network <dstack@phala.network>
 //
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: Apache-2.0
 
 pub use runtime_events::{replay_events, RuntimeEvent};
 pub use tdx::TdxEvent;

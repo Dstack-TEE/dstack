@@ -2,7 +2,7 @@
 
 # SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
 #
-# SPDX-License-Identifier: BUSL-1.1
+# SPDX-License-Identifier: Apache-2.0
 
 # Test script for vmm-cli.py compose subcommand
 # Tests the refactored create_app_compose method that accepts args directly

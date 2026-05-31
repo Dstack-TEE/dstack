@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: © 2024 Phala Network <dstack@phala.network>
 //
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: Apache-2.0
 
 //! Stream compute hash digest of stdin and output the original data to stdout. The digest is output to stderr.
 use std::io::{Read, Write};

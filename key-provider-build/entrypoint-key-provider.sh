@@ -2,7 +2,7 @@
 
 # SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
 #
-# SPDX-License-Identifier: BUSL-1.1
+# SPDX-License-Identifier: Apache-2.0
 
 echo "Waiting for AESM socket to be available..."
 AESM_SOCKET="/var/run/aesmd/aesm.socket"

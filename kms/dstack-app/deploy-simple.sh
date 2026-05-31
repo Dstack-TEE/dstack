@@ -2,7 +2,7 @@
 
 # SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
 #
-# SPDX-License-Identifier: BUSL-1.1
+# SPDX-License-Identifier: Apache-2.0
 
 # Deploy KMS with external auth-simple webhook
 # auth-simple runs outside the CVM (operator infrastructure)
