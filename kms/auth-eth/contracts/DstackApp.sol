@@ -4,18 +4,18 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-pragma solidity ^0.8.22;
+pragma solidity ^0.8.24;
 
 import "./IAppAuth.sol";
 import "./IAppAuthBasicManagement.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
-import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/access/Ownable2StepUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/utils/introspection/ERC165Upgradeable.sol";
 
 contract DstackApp is
     Initializable,
-    OwnableUpgradeable,
+    Ownable2StepUpgradeable,
     UUPSUpgradeable,
     ERC165Upgradeable,
     IAppAuth,
@@ -53,7 +53,10 @@ contract DstackApp is
         bool _allowAnyDevice,
         bytes32 initialDeviceId,
         bytes32 initialComposeHash
-    ) public initializer {
+    )
+        public
+        initializer
+    {
         _initializeCommon(initialOwner, _disableUpgrades, _allowAnyDevice, initialDeviceId, initialComposeHash);
     }
 
@@ -65,7 +68,10 @@ contract DstackApp is
         bool _allowAnyDevice,
         bytes32 initialDeviceId,
         bytes32 initialComposeHash
-    ) public initializer {
+    )
+        public
+        initializer
+    {
         requireTcbUpToDate = _requireTcbUpToDate;
         _initializeCommon(initialOwner, _disableUpgrades, _allowAnyDevice, initialDeviceId, initialComposeHash);
     }
@@ -76,7 +82,9 @@ contract DstackApp is
         bool _allowAnyDevice,
         bytes32 initialDeviceId,
         bytes32 initialComposeHash
-    ) internal {
+    )
+        internal
+    {
         require(initialOwner != address(0), "invalid owner address");
 
         _upgradesDisabled = _disableUpgrades;
@@ -116,10 +124,9 @@ contract DstackApp is
         override(ERC165Upgradeable, IERC165)
         returns (bool)
     {
-        return
-            interfaceId == 0x1e079198 || // IAppAuth
-            interfaceId == 0x8fd37527 || // IAppAuthBasicManagement
-            super.supportsInterface(interfaceId);
+        return interfaceId == 0x1e079198 // IAppAuth
+            || interfaceId == 0x8fd37527 // IAppAuthBasicManagement
+            || super.supportsInterface(interfaceId);
     }
 
     // Function to authorize upgrades (required by UUPSUpgradeable)
@@ -164,14 +171,16 @@ contract DstackApp is
     }
 
     // Check if an app is allowed to boot
-    function isAppAllowed(
-        IAppAuth.AppBootInfo calldata bootInfo
-    ) external view override returns (bool isAllowed, string memory reason) {
+    function isAppAllowed(IAppAuth.AppBootInfo calldata bootInfo)
+        external
+        view
+        override
+        returns (bool isAllowed, string memory reason)
+    {
         // Optionally require TCB status to be up to date
         if (
-            requireTcbUpToDate &&
-            keccak256(abi.encodePacked(bootInfo.tcbStatus)) !=
-            keccak256(abi.encodePacked("UpToDate"))
+            requireTcbUpToDate
+                && keccak256(abi.encodePacked(bootInfo.tcbStatus)) != keccak256(abi.encodePacked("UpToDate"))
         ) {
             return (false, "TCB status is not up to date");
         }
