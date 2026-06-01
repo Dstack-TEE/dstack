@@ -151,10 +151,29 @@ pub(crate) fn validate_amd_snp_measurement_binding(
 /// Keeping these as helper-only values lets future authorization policy inspect
 /// exactly which SNP-specific inputs were bound while SNP key release remains
 /// fail-closed unless an explicit release path is added separately.
+#[cfg(test)]
 pub(crate) fn build_amd_snp_boot_info(
     config: &SevSnpMeasureConfig,
     verified_measurement: &[u8; 48],
     verified_chip_id: &[u8; 64],
+    input: &MeasurementInput,
+) -> Result<BootInfo> {
+    build_amd_snp_boot_info_with_tcb_status(
+        config,
+        verified_measurement,
+        verified_chip_id,
+        "UpToDate",
+        &[],
+        input,
+    )
+}
+
+fn build_amd_snp_boot_info_with_tcb_status(
+    config: &SevSnpMeasureConfig,
+    verified_measurement: &[u8; 48],
+    verified_chip_id: &[u8; 64],
+    tcb_status: &str,
+    advisory_ids: &[String],
     input: &MeasurementInput,
 ) -> Result<BootInfo> {
     validate_amd_snp_measurement_binding(Some(config), verified_measurement, input)?;
@@ -186,8 +205,8 @@ pub(crate) fn build_amd_snp_boot_info(
         instance_id,
         device_id: verified_chip_id.to_vec(),
         key_provider_info,
-        tcb_status: "snp-verified-basic-policy".to_string(),
-        advisory_ids: Vec::new(),
+        tcb_status: tcb_status.to_string(),
+        advisory_ids: advisory_ids.to_vec(),
     })
 }
 
@@ -207,7 +226,14 @@ pub(crate) fn build_amd_snp_boot_info_from_verified_attestation(
         .report
         .amd_snp_report()
         .ok_or_else(|| anyhow::anyhow!("verified attestation is not amd sev-snp"))?;
-    build_amd_snp_boot_info(config, &verified.measurement, &verified.chip_id, input)
+    build_amd_snp_boot_info_with_tcb_status(
+        config,
+        &verified.measurement,
+        &verified.chip_id,
+        verified.tcb_info.tcb_status(),
+        &verified.advisory_ids,
+        input,
+    )
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -1178,7 +1204,8 @@ mod tests {
         assert_eq!(boot_info.mr_system.len(), 32);
         assert_eq!(boot_info.key_provider_info.len(), 32);
         assert_eq!(boot_info.instance_id.len(), 32);
-        assert_eq!(boot_info.tcb_status, "snp-verified-basic-policy");
+        assert_eq!(boot_info.tcb_status, "UpToDate");
+        assert_ne!(boot_info.tcb_status, "snp-verified-basic-policy");
         assert!(boot_info.advisory_ids.is_empty());
 
         let mut mismatched = verified;
@@ -1208,6 +1235,8 @@ mod tests {
                     measurement: verified,
                     report_data: [0x42; 64],
                     chip_id,
+                    tcb_info: dstack_attest::amd_sev_snp::AmdSnpTcbInfo::default(),
+                    advisory_ids: Vec::new(),
                 },
             ),
         };
@@ -1219,6 +1248,66 @@ mod tests {
         assert_eq!(boot_info.mr_aggregated, verified.to_vec());
         assert_eq!(boot_info.device_id, chip_id.to_vec());
         assert_eq!(boot_info.app_id, vec![0x11; 20]);
+        assert_eq!(boot_info.tcb_status, "UpToDate");
+    }
+
+    #[test]
+    fn verified_attestation_tcb_status_replaces_snp_placeholder() {
+        let input = valid_input();
+        let verified = compute_expected_measurement(&config(), &input).unwrap();
+        let chip_id = [0xbc; 64];
+        let tcb = dstack_attest::amd_sev_snp::AmdSnpTcbVersion {
+            bootloader: 1,
+            tee: 2,
+            snp: 3,
+            microcode: 4,
+        };
+        let stale_tcb = dstack_attest::amd_sev_snp::AmdSnpTcbVersion {
+            microcode: 3,
+            ..tcb
+        };
+        let attestation = ra_tls::attestation::VerifiedAttestation {
+            quote: ra_tls::attestation::AttestationQuote::DstackAmdSevSnp(
+                ra_tls::attestation::SnpQuote {
+                    report: Vec::new(),
+                    cert_chain: Vec::new(),
+                },
+            ),
+            runtime_events: Vec::new(),
+            report_data: [0x42; 64],
+            config: String::new(),
+            report: ra_tls::attestation::DstackVerifiedReport::DstackAmdSevSnp(
+                dstack_attest::amd_sev_snp::VerifiedAmdSnpReport {
+                    measurement: verified,
+                    report_data: [0x42; 64],
+                    chip_id,
+                    tcb_info: dstack_attest::amd_sev_snp::AmdSnpTcbInfo {
+                        current: tcb,
+                        reported: tcb,
+                        committed: tcb,
+                        launch: stale_tcb,
+                    },
+                    advisory_ids: vec!["SNP-TEST-ADVISORY".to_string()],
+                },
+            ),
+        };
+
+        let boot_info =
+            build_amd_snp_boot_info_from_verified_attestation(&config(), &attestation, &input)
+                .expect("verified snp attestation should feed boot info helper");
+
+        assert_eq!(boot_info.tcb_status, "OutOfDate");
+        assert_eq!(boot_info.advisory_ids, vec!["SNP-TEST-ADVISORY"]);
+        assert_ne!(boot_info.tcb_status, "snp-verified-basic-policy");
+        let policy = AmdSnpAuthPolicy::from_boot_info(&boot_info).unwrap();
+        let mut up_to_date_only = policy.clone();
+        up_to_date_only.allowed_tcb_statuses = vec!["UpToDate".to_string()];
+        let err = validate_amd_snp_auth_policy(&boot_info, &up_to_date_only)
+            .expect_err("out-of-date snp tcb must not satisfy up-to-date policy");
+        assert!(
+            err.to_string().contains("tcb_status is not allowed"),
+            "unexpected error: {err:?}"
+        );
     }
 
     #[test]
@@ -1241,6 +1330,8 @@ mod tests {
                     measurement: verified,
                     report_data: [0x42; 64],
                     chip_id,
+                    tcb_info: dstack_attest::amd_sev_snp::AmdSnpTcbInfo::default(),
+                    advisory_ids: Vec::new(),
                 },
             ),
         };
@@ -1280,6 +1371,8 @@ mod tests {
                     measurement: verified,
                     report_data: [0x42; 64],
                     chip_id: [0xab; 64],
+                    tcb_info: dstack_attest::amd_sev_snp::AmdSnpTcbInfo::default(),
+                    advisory_ids: Vec::new(),
                 },
             ),
         };
@@ -1569,7 +1662,7 @@ mod tests {
             .contains("attestation mode is not amd sev-snp"));
 
         let mut wrong_status = boot_info.clone();
-        wrong_status.tcb_status = "UpToDate".to_string();
+        wrong_status.tcb_status = "OutOfDate".to_string();
         let err = validate_amd_snp_auth_policy(&wrong_status, &policy)
             .expect_err("unexpected tcb status must reject");
         assert!(err.to_string().contains("tcb_status is not allowed"));

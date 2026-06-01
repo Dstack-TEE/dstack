@@ -62,7 +62,7 @@ Add more fields as you deploy Gateway and apps:
 |-------|----------|-------------|
 | `osImages` | Yes | Allowed OS image hashes (from `digest.txt`) |
 | `gatewayAppId` | No | Gateway app ID (add after Gateway deployment) |
-| `allowedTcbStatuses` | No | Allowed TCB status strings. Defaults to `["UpToDate"]`; experimental SEV-SNP dry-run authorization must explicitly opt into `"snp-verified-basic-policy"`. |
+| `allowedTcbStatuses` | No | Allowed verifier-derived TCB status strings. Defaults to `["UpToDate"]`; non-up-to-date SNP/TDX statuses remain fail-closed unless explicitly allowlisted for testing. |
 | `allowedAdvisoryIds` | No | Advisory IDs permitted in `advisoryIds`. Defaults to `[]`, which rejects any advisory. |
 | `kms.mrAggregated` | Yes for KMS authorization | Allowed KMS aggregated MR values. An empty array denies all KMS boots. |
 | `kms.devices` | No | Allowed KMS device IDs |
@@ -71,7 +71,7 @@ Add more fields as you deploy Gateway and apps:
 | `apps.<appId>.devices` | No | Allowed device IDs for this app |
 | `apps.<appId>.allowAnyDevice` | No | If true, skip device ID check for this app |
 
-For experimental AMD SEV-SNP dry-run authorization, keep the default fail-closed TCB policy unless you intentionally want the auth webhook to accept the staged SNP `BootInfo`. To exercise the dry-run path without enabling key release, set `allowedTcbStatuses` to include `"snp-verified-basic-policy"` and allowlist the recomputed SNP `mrAggregated`, `osImageHash`, app/compose identity, and device/chip identity as usual. KMS still rejects SNP before returning app keys, KMS keys, or app certificates.
+For experimental AMD SEV-SNP dry-run authorization, keep the default fail-closed TCB policy unless you intentionally want the auth webhook to accept non-up-to-date verifier-derived SNP `BootInfo`. To exercise the dry-run path without enabling key release, allowlist the recomputed SNP `mrAggregated`, `osImageHash`, app/compose identity, device/chip identity, and any non-default `allowedTcbStatuses`/`allowedAdvisoryIds` values explicitly. KMS still rejects SNP before returning app keys, KMS keys, or app certificates.
 
 ### Getting Hash Values
 

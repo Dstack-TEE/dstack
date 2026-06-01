@@ -92,7 +92,7 @@ describe('auth-simple', () => {
       expect(json.reason).toContain('TCB status');
     });
 
-    it('requires explicit opt-in for SEV-SNP placeholder TCB status', async () => {
+    it('requires explicit opt-in for non-UpToDate SEV-SNP TCB status', async () => {
       writeTestConfig({
         gatewayAppId: '0xgateway',
         osImages: ['0x1fbb0cf9cc6cfbf23d6b779776fabad2c5403d643badb9e5e238615e4960a78a'],
@@ -106,7 +106,7 @@ describe('auth-simple', () => {
       const sevSnpBootInfo = {
         ...baseBootInfo,
         attestationMode: 'DstackAmdSevSnp',
-        tcbStatus: 'snp-verified-basic-policy'
+        tcbStatus: 'OutOfDate'
       };
       const denied = await app.fetch(new Request('http://localhost/bootAuth/kms', {
         method: 'POST',
@@ -118,7 +118,7 @@ describe('auth-simple', () => {
       writeTestConfig({
         gatewayAppId: '0xgateway',
         osImages: ['0x1fbb0cf9cc6cfbf23d6b779776fabad2c5403d643badb9e5e238615e4960a78a'],
-        allowedTcbStatuses: ['snp-verified-basic-policy'],
+        allowedTcbStatuses: ['OutOfDate'],
         kms: {
           mrAggregated: ['0xabc123'],
           devices: ['0xdevice999'],

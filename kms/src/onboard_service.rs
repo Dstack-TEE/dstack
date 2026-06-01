@@ -267,6 +267,8 @@ mod tests {
                     measurement,
                     report_data: [0x42; 64],
                     chip_id,
+                    tcb_info: dstack_attest::amd_sev_snp::AmdSnpTcbInfo::default(),
+                    advisory_ids: Vec::new(),
                 },
             ),
         }

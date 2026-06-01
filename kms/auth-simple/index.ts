@@ -47,9 +47,8 @@ const AuthConfigSchema = z.object({
   chainId: z.number().default(0),
   appImplementation: z.string().default('0x0000000000000000000000000000000000000000'),
   osImages: z.array(z.string()).default([]),
-  // TDX production defaults remain strict. Experimental SEV-SNP dry-run
-  // authorization must explicitly opt into its placeholder TCB status until
-  // AMD TCB/revocation policy is finalized.
+  // TDX and SEV-SNP production defaults remain strict: only UpToDate is
+  // accepted unless operators explicitly allow another verifier-derived status.
   allowedTcbStatuses: z.array(z.string()).default(['UpToDate']),
   allowedAdvisoryIds: z.array(z.string()).default([]),
   kms: KmsConfigSchema.default({}),
