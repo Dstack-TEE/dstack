@@ -14,7 +14,7 @@ use anyhow::{bail, Context, Result};
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use sev::certs::snp::{ca, Certificate, Chain, Verifiable};
-use sev::firmware::guest::AttestationReport;
+use sev::firmware::{guest::AttestationReport, host::TcbVersion};
 
 /// AMD Genoa ARK certificate (DER, base64-encoded).
 /// Source: https://kdsintf.amd.com/vcek/v1/Genoa/cert_chain
@@ -31,11 +31,62 @@ const VLEK_CERT_GUID: [u8; 16] = [
 ];
 const CERT_TABLE_ENTRY_SIZE: usize = 24;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct AmdSnpTcbVersion {
+    pub bootloader: u8,
+    pub tee: u8,
+    pub snp: u8,
+    pub microcode: u8,
+}
+
+impl From<TcbVersion> for AmdSnpTcbVersion {
+    fn from(value: TcbVersion) -> Self {
+        Self {
+            bootloader: value.bootloader,
+            tee: value.tee,
+            snp: value.snp,
+            microcode: value.microcode,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct AmdSnpTcbInfo {
+    pub current: AmdSnpTcbVersion,
+    pub reported: AmdSnpTcbVersion,
+    pub committed: AmdSnpTcbVersion,
+    pub launch: AmdSnpTcbVersion,
+}
+
+impl AmdSnpTcbInfo {
+    pub fn from_report(report: &AttestationReport) -> Self {
+        Self {
+            current: report.current_tcb.into(),
+            reported: report.reported_tcb.into(),
+            committed: report.committed_tcb.into(),
+            launch: report.launch_tcb.into(),
+        }
+    }
+
+    pub fn tcb_status(&self) -> &'static str {
+        if self.current == self.reported
+            && self.committed == self.reported
+            && self.launch == self.reported
+        {
+            "UpToDate"
+        } else {
+            "OutOfDate"
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VerifiedAmdSnpReport {
     pub measurement: [u8; 48],
     pub report_data: [u8; 64],
     pub chip_id: [u8; 64],
+    pub tcb_info: AmdSnpTcbInfo,
+    pub advisory_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -135,6 +186,12 @@ fn verify_amd_snp_attestation_with_certs(
         measurement,
         report_data,
         chip_id,
+        tcb_info: AmdSnpTcbInfo::from_report(&report),
+        // AMD SEV-SNP attestation reports and VCEKs do not carry a direct
+        // advisory list. Keep this explicit and empty so downstream auth stays
+        // fail-closed if a future verifier adds advisories from revocation or
+        // external policy collateral.
+        advisory_ids: Vec::new(),
     })
 }
 
@@ -281,6 +338,38 @@ fn parse_kernel_cert_table(auxblob: &[u8]) -> Result<Vec<([u8; 16], Vec<u8>)>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn tcb(bootloader: u8, tee: u8, snp: u8, microcode: u8) -> AmdSnpTcbVersion {
+        AmdSnpTcbVersion {
+            bootloader,
+            tee,
+            snp,
+            microcode,
+        }
+    }
+
+    #[test]
+    fn tcb_status_is_up_to_date_only_when_all_reported_versions_match() {
+        let up_to_date = AmdSnpTcbInfo {
+            current: tcb(1, 2, 3, 4),
+            reported: tcb(1, 2, 3, 4),
+            committed: tcb(1, 2, 3, 4),
+            launch: tcb(1, 2, 3, 4),
+        };
+        assert_eq!(up_to_date.tcb_status(), "UpToDate");
+
+        let stale_launch = AmdSnpTcbInfo {
+            launch: tcb(1, 2, 3, 3),
+            ..up_to_date
+        };
+        assert_eq!(stale_launch.tcb_status(), "OutOfDate");
+
+        let stale_vcek_reported = AmdSnpTcbInfo {
+            reported: tcb(1, 2, 3, 3),
+            ..up_to_date
+        };
+        assert_eq!(stale_vcek_reported.tcb_status(), "OutOfDate");
+    }
 
     #[test]
     fn missing_cert_chain_fails_closed() {
