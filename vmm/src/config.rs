@@ -106,18 +106,13 @@ impl Protocol {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum TeePlatform {
+    #[default]
     Auto,
     Tdx,
     AmdSevSnp,
-}
-
-impl Default for TeePlatform {
-    fn default() -> Self {
-        Self::Auto
-    }
 }
 
 impl TeePlatform {
