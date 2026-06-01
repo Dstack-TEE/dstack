@@ -4,7 +4,7 @@
 
 [project]
 name = "dstack-sdk"
-version = "0.5.3"
+version = "0.5.4b0"
 description = "dstack SDK for Python"
 authors = [
     {name = "Leechael Yim", email = "yanleech@gmail.com"},
@@ -103,7 +103,7 @@ repository = "pypi"
 fmt = {composite = ["ruff format src/ tests/", "ruff check --fix src/ tests/"]}
 format = {composite = ["ruff format src/ tests/", "ruff check --fix src/ tests/"]}
 
-# Linting scripts  
+# Linting scripts
 lint = {composite = ["ruff check src/ tests/", "mypy src/"]}
 check = {composite = ["ruff check src/ tests/", "ruff format --check src/ tests/", "mypy src/"]}
 

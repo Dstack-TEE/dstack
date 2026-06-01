@@ -1,6 +1,6 @@
 {
   "name": "@phala/dstack-sdk",
-  "version": "0.5.7",
+  "version": "0.5.8-beta.0",
   "description": "dstack SDK",
   "main": "dist/node/index.js",
   "types": "dist/node/index.d.ts",
@@ -92,6 +92,11 @@
     "dstack",
     "Phala"
   ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Dstack-TEE/dstack",
+    "directory": "sdk/js"
+  },
   "author": "Leechael Yim",
   "license": "Apache-2.0",
   "dependencies": {
@@ -99,7 +104,7 @@
   },
   "devDependencies": {
     "@types/node": "latest",
-    "typescript": "latest",
+    "typescript": "^5.7.0",
     "vitest": "^3.2.4"
   },
   "optionalDependencies": {

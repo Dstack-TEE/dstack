@@ -40,7 +40,7 @@ export async function encryptEnvVars(envs: EnvVar[], publicKeyHex: string) {
   // Import shared key for AES-GCM
   const importedShared = await crypto.subtle.importKey(
     "raw",
-    shared,
+    new Uint8Array(shared),
     { name: "AES-GCM", length: 256 },
     true,
     ["encrypt"],

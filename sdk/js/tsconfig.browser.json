@@ -1,9 +1,9 @@
 {
   "extends": "./tsconfig.json",
   "compilerOptions": {
-    "target": "es2018",
+    "target": "es2020",
     "module": "es2015",
-    "lib": ["es2018", "dom"],
+    "lib": ["es2020", "dom"],
     "outDir": "./dist/browser",
     "declaration": true,
     "declarationMap": true,
@@ -11,7 +11,7 @@
   },
   "include": [
     "src/encrypt-env-vars.browser.ts",
-    "src/get-compose-hash.browser.ts", 
+    "src/get-compose-hash.browser.ts",
     "src/verify-env-encrypt-public-key.browser.ts"
   ],
   "exclude": ["node_modules", "**/*.test.ts"]
