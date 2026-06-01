@@ -176,10 +176,17 @@ fn ensure_snp_key_release_not_enabled(boot_info: &BootInfo) -> Result<()> {
     Ok(())
 }
 
+fn ensure_self_key_release_not_enabled(self_boot_info: Option<&BootInfo>) -> Result<()> {
+    if let Some(boot_info) = self_boot_info {
+        ensure_snp_key_release_not_enabled(boot_info)?;
+    }
+    Ok(())
+}
+
 impl RpcHandler {
-    async fn ensure_self_allowed(&self) -> Result<()> {
+    async fn ensure_self_allowed(&self) -> Result<Option<&BootInfo>> {
         if !self.state.config.enforce_self_authorization {
-            return Ok(());
+            return Ok(None);
         }
         let boot_info = self
             .state
@@ -202,7 +209,7 @@ impl RpcHandler {
         if !response.is_allowed {
             bail!("KMS is not allowed: {}", response.reason);
         }
-        Ok(())
+        Ok(Some(boot_info))
     }
 
     fn ensure_attested(&self) -> Result<&VerifiedAttestation> {
@@ -471,9 +478,11 @@ impl KmsRpc for RpcHandler {
     }
 
     async fn get_temp_ca_cert(self) -> Result<GetTempCaCertResponse> {
-        self.ensure_self_allowed()
+        let self_boot_info = self
+            .ensure_self_allowed()
             .await
             .context("KMS self authorization failed")?;
+        ensure_self_key_release_not_enabled(self_boot_info)?;
         Ok(GetTempCaCertResponse {
             temp_ca_cert: self.state.inner.temp_ca_cert.clone(),
             temp_ca_key: self.state.inner.temp_ca_key.clone(),
@@ -700,8 +709,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn snp_boot_info_is_still_blocked_from_key_release() {
+    fn snp_boot_info() -> BootInfo {
         let input = valid_snp_measurement_input();
         let measurement = compute_expected_measurement(&sev_snp_config(), &input).unwrap();
         let attestation = verified_snp_attestation(measurement, [0xab; 64]);
@@ -709,16 +717,29 @@ mod tests {
             "sev_snp_measurement": input,
         })
         .to_string();
-        let boot_info = build_boot_info_for_attestation(
-            Some(&sev_snp_config()),
-            &attestation,
-            false,
-            &vm_config,
-        )
-        .unwrap();
+        build_boot_info_for_attestation(Some(&sev_snp_config()), &attestation, false, &vm_config)
+            .unwrap()
+    }
+
+    #[test]
+    fn snp_boot_info_is_still_blocked_from_key_release() {
+        let boot_info = snp_boot_info();
 
         let err = ensure_snp_key_release_not_enabled(&boot_info)
             .expect_err("snp boot info must not be key-release enabled yet");
+        assert!(
+            err.to_string()
+                .contains("amd sev-snp key release is not enabled"),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn snp_self_boot_info_is_blocked_from_temp_ca_release() {
+        let boot_info = snp_boot_info();
+
+        let err = ensure_self_key_release_not_enabled(Some(&boot_info))
+            .expect_err("snp self boot info must not receive temp CA key material");
         assert!(
             err.to_string()
                 .contains("amd sev-snp key release is not enabled"),
