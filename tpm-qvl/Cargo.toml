@@ -35,7 +35,8 @@ tpm-types.workspace = true
 
 # CRL download (optional)
 reqwest = { workspace = true, features = ["blocking"], optional = true }
+tokio = { workspace = true, features = ["rt"], optional = true }
 
 [features]
 default = ["crl-download"]
-crl-download = ["reqwest"]
+crl-download = ["reqwest", "tokio"]

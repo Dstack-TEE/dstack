@@ -22,9 +22,18 @@ pub async fn get_collateral_and_verify(quote: &TpmQuote) -> Result<VerifiedRepor
 }
 
 pub async fn get_collateral(quote: &TpmQuote, root_ca_pem: &str) -> Result<QuoteCollateral> {
+    // Collateral fetching uses synchronous (blocking) HTTP. Run it on the
+    // blocking pool so it never stalls (or panics on) the async runtime worker.
+    let ak_cert = quote.ak_cert.clone();
+    let root_ca = root_ca_pem.to_string();
+    tokio::task::spawn_blocking(move || get_collateral_blocking(&ak_cert, &root_ca))
+        .await
+        .context("collateral fetch task panicked")?
+}
+
+fn get_collateral_blocking(ak_cert_der: &[u8], root_ca_pem: &str) -> Result<QuoteCollateral> {
     debug!("fetching quote collateral (intermediate cert chain + CRLs)");
 
-    let ak_cert_der = &quote.ak_cert;
     debug!("AK certificate (leaf) found: {} bytes", ak_cert_der.len());
 
     // Build certificate chain from device (via AIA)

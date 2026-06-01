@@ -96,6 +96,25 @@ pub fn verify_quote_with_ca(
         });
     }
 
+    // compute_pcr_digest() and the event-log replay below assume the SHA-256 PCR
+    // bank. Reject other banks explicitly instead of silently failing with a
+    // confusing "PCR digest mismatch".
+    const TPM_ALG_SHA256: u16 = 0x000B;
+    if let Some(sel) = attest
+        .attested_quote_info
+        .pcr_selections
+        .iter()
+        .find(|s| s.hash_alg != TPM_ALG_SHA256)
+    {
+        return Err(VerificationError {
+            status,
+            error: anyhow!(
+                "unsupported PCR bank hash_alg {:#06x}; only SHA-256 (0x000b) is supported",
+                sel.hash_alg
+            ),
+        });
+    }
+
     let computed_pcr_digest =
         compute_pcr_digest(&quote.pcr_values).map_err(|e| VerificationError {
             status: status.clone(),

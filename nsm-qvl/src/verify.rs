@@ -4,7 +4,14 @@
 
 //! NSM Attestation Verification Module
 
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+/// Maximum age of an attestation document relative to `now`. NSM certificates
+/// are short-lived, but this additionally bounds replay of an old-but-still-in-
+/// cert-validity document.
+const MAX_ATTESTATION_AGE: Duration = Duration::from_secs(3600);
+/// Tolerated clock skew when rejecting future-dated documents.
+const CLOCK_SKEW: Duration = Duration::from_secs(300);
 
 use anyhow::{bail, Context, Result};
 use p384::ecdsa::{signature::hazmat::PrehashVerifier, Signature, VerifyingKey};
@@ -49,7 +56,10 @@ pub fn verify_attestation_with_ca(
 
 /// Verify Nitro attestation with custom root CA and custom time (for testing)
 ///
-/// This enforces digest/PCR consistency and a freshness window based on `now`.
+/// This enforces digest/PCR consistency, certificate-chain validity at `now`,
+/// and a freshness window (`MAX_ATTESTATION_AGE`) on the document timestamp.
+/// Callers must still bind the attestation to a challenge via `nonce`/`user_data`
+/// for full replay protection.
 pub fn verify_attestation(
     cose_sign1_bytes: &[u8],
     root_ca_pem: &str,
@@ -67,6 +77,22 @@ pub fn verify_attestation(
     let doc = AttestationDocument::from_cbor(&cose.payload)
         .context("Failed to parse attestation document")?;
     validate_attestation_document(&doc).context("Attestation document validation failed")?;
+
+    // Freshness: NSM stamps the document (ms since epoch) at generation time.
+    let doc_time = UNIX_EPOCH + Duration::from_millis(doc.timestamp);
+    match now.duration_since(doc_time) {
+        Ok(age) if age > MAX_ATTESTATION_AGE => {
+            bail!("attestation document is stale: {age:?} old (max {MAX_ATTESTATION_AGE:?})");
+        }
+        Err(future) if future.duration() > CLOCK_SKEW => {
+            bail!(
+                "attestation document timestamp is in the future by {:?}",
+                future.duration()
+            );
+        }
+        _ => {}
+    }
+
     verify_certificate_chain(&doc, root_ca_pem, collateral, Some(now))
         .context("Certificate chain verification failed")?;
     verify_cose_signature(&cose, &doc.certificate).context("COSE signature verification failed")?;
