@@ -4,9 +4,9 @@
 
 ### Deploy confidential workloads on GCP and AWS.
 
-[![GitHub Stars](https://img.shields.io/github/stars/dstack-tee/dstack?style=flat-square&logo=github)](https://github.com/Phala-Network/dstack-cloud/stargazers)
-[![License](https://img.shields.io/github/license/dstack-tee/dstack?style=flat-square)](https://github.com/Phala-Network/dstack-cloud/blob/master/LICENSE)
-[![REUSE status](https://api.reuse.software/badge/github.com/Phala-Network/dstack-cloud)](https://api.reuse.software/info/github.com/Phala-Network/dstack-cloud)
+[![GitHub Stars](https://img.shields.io/github/stars/dstack-tee/dstack?style=flat-square&logo=github)](https://github.com/Dstack-TEE/dstack/stargazers)
+[![License](https://img.shields.io/github/license/dstack-tee/dstack?style=flat-square)](https://github.com/Dstack-TEE/dstack/blob/master/LICENSE)
+[![REUSE status](https://api.reuse.software/badge/github.com/Dstack-TEE/dstack)](https://api.reuse.software/info/github.com/Dstack-TEE/dstack)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/Dstack-TEE/dstack)
 [![Telegram](https://img.shields.io/badge/Telegram-2CA5E0?style=flat-square&logo=telegram&logoColor=white)](https://t.me/+UO4bS4jflr45YmUx)
 
@@ -225,7 +225,7 @@ AMD SEV-SNP support is planned.
 <details>
 <summary><strong>How do users verify my deployment?</strong></summary>
 
-Your app exposes attestation quotes via the SDK. Users verify these quotes using [dstack-verifier](https://github.com/Phala-Network/dstack-cloud/tree/master/verifier), [dcap-qvl](https://github.com/Phala-Network/dcap-qvl), or the [Trust Center](https://trust.phala.com). See the [verification guide](./docs/verification.md) for details.
+Your app exposes attestation quotes via the SDK. Users verify these quotes using [dstack-verifier](https://github.com/Dstack-TEE/dstack/tree/master/verifier), [dcap-qvl](https://github.com/Phala-Network/dcap-qvl), or the [Trust Center](https://trust.phala.com). See the [verification guide](./docs/verification.md) for details.
 
 </details>
 

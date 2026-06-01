@@ -6,7 +6,7 @@ FROM rust:1.92.0@sha256:48851a839d6a67370c9dbe0e709bedc138e3e404b161c5233aedcf2b
 COPY --from=build-shared /pin-packages.sh /build/
 COPY ./shared/*-pinned-packages.txt /build/
 ARG DSTACK_REV
-ARG DSTACK_SRC_URL=https://github.com/Phala-Network/dstack-cloud.git
+ARG DSTACK_SRC_URL=https://github.com/Dstack-TEE/dstack.git
 WORKDIR /build
 RUN ./pin-packages.sh ./builder-pinned-packages.txt
 RUN apt-get update && \

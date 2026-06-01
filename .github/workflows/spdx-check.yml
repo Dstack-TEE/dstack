@@ -13,11 +13,11 @@ on:
 jobs:
   reuse-lint:
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
-    
+
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
-      
+
     - name: REUSE Compliance Check
       uses: fsfe/reuse-action@v5
       with:
