@@ -151,7 +151,7 @@ impl OnboardRpc for OnboardHandler {
             }
         };
 
-        Ok(build_attestation_info_response(
+        build_attestation_info_response(
             self.state.config.sev_snp.as_ref(),
             &verified,
             attestation_mode,
@@ -159,7 +159,7 @@ impl OnboardRpc for OnboardHandler {
             self.state.config.site_name.clone(),
             eth_rpc_url,
             kms_contract_address,
-        )?)
+        )
     }
 
     async fn finish(self) -> anyhow::Result<()> {

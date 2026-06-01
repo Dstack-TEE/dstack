@@ -220,7 +220,7 @@ impl AttestationMode {
         // First, try to detect platform from DMI product name
         let platform = Platform::detect_or_dstack();
         match platform {
-            Platform::Dstack => return choose_dstack_attestation_mode(has_tdx, has_sev_snp),
+            Platform::Dstack => choose_dstack_attestation_mode(has_tdx, has_sev_snp),
             Platform::Gcp => {
                 // GCP platform: TDX + TPM dual mode
                 if has_tdx {
