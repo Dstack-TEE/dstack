@@ -401,9 +401,7 @@ class AsyncDstackClient(BaseClient):
                 "OS version too old (Version RPC unavailable)"
             )
 
-    async def _ensure_tls_key_options_supported(
-        self, feature_names: List[str]
-    ) -> None:
+    async def _ensure_tls_key_options_supported(self, feature_names: List[str]) -> None:
         """Check OS version when 0.5.7+ TLS key options are requested."""
         try:
             await self.version()

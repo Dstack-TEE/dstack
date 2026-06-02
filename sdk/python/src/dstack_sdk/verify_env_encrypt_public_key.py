@@ -79,9 +79,7 @@ def verify_env_encrypt_public_key(
         return None
 
     timestamp_bytes = timestamp.to_bytes(8, "big")
-    message = (
-        _PREFIX + _SEPARATOR + app_id_bytes + timestamp_bytes + public_key
-    )
+    message = _PREFIX + _SEPARATOR + app_id_bytes + timestamp_bytes + public_key
     return _recover_signer(keccak(message), signature)
 
 

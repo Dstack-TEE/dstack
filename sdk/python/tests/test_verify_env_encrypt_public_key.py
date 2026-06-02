@@ -108,9 +108,7 @@ def test_v1_recovers_signer_for_round_trip_signature():
     timestamp = int(time.time())
     signature = _sign_v1(signer, public_key, app_id, timestamp)
 
-    recovered = verify_env_encrypt_public_key(
-        public_key, signature, app_id, timestamp
-    )
+    recovered = verify_env_encrypt_public_key(public_key, signature, app_id, timestamp)
     assert recovered == "0x" + signer.public_key.to_compressed_bytes().hex()
 
 
@@ -122,10 +120,7 @@ def test_v1_rejects_expired_timestamp():
     signature = _sign_v1(signer, public_key, app_id, timestamp)
 
     assert (
-        verify_env_encrypt_public_key(
-            public_key, signature, app_id, timestamp
-        )
-        is None
+        verify_env_encrypt_public_key(public_key, signature, app_id, timestamp) is None
     )
 
 
@@ -137,10 +132,7 @@ def test_v1_rejects_future_timestamp_beyond_skew():
     signature = _sign_v1(signer, public_key, app_id, timestamp)
 
     assert (
-        verify_env_encrypt_public_key(
-            public_key, signature, app_id, timestamp
-        )
-        is None
+        verify_env_encrypt_public_key(public_key, signature, app_id, timestamp) is None
     )
 
 
@@ -151,9 +143,7 @@ def test_v1_accepts_small_future_skew():
     timestamp = int(time.time()) + 30  # within the 60s tolerance
     signature = _sign_v1(signer, public_key, app_id, timestamp)
 
-    recovered = verify_env_encrypt_public_key(
-        public_key, signature, app_id, timestamp
-    )
+    recovered = verify_env_encrypt_public_key(public_key, signature, app_id, timestamp)
     assert recovered == "0x" + signer.public_key.to_compressed_bytes().hex()
 
 
@@ -165,10 +155,7 @@ def test_v1_respects_custom_max_age():
     signature = _sign_v1(signer, public_key, app_id, timestamp)
 
     assert (
-        verify_env_encrypt_public_key(
-            public_key, signature, app_id, timestamp
-        )
-        is None
+        verify_env_encrypt_public_key(public_key, signature, app_id, timestamp) is None
     )
     recovered = verify_env_encrypt_public_key(
         public_key, signature, app_id, timestamp, max_age_seconds=1000
@@ -193,9 +180,7 @@ def test_v1_rejects_malformed_app_id():
     # Sign with the well-formed app_id but verify with a malformed one.
     signature = _sign_v1(signer, public_key, "ab" * 20, timestamp)
     assert (
-        verify_env_encrypt_public_key(
-            public_key, signature, "not-hex", timestamp
-        )
+        verify_env_encrypt_public_key(public_key, signature, "not-hex", timestamp)
         is None
     )
 
