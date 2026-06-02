@@ -33,6 +33,15 @@ site_name = ""
 # is unavailable.
 enforce_self_authorization = true
 
+# AMD SEV-SNP key/cert release remains disabled unless this local KMS gate is
+# explicitly enabled. External auth policy must still allow the verified
+# BootInfo before any sensitive material is returned. Enabling this also
+# requires enforce_self_authorization = true.
+[core.sev_snp_key_release]
+enabled = false
+allowed_tcb_statuses = ["UpToDate"]
+allowed_advisory_ids = []
+
 [core.image]
 verify = true
 cache_dir = "/usr/share/dstack/images"
