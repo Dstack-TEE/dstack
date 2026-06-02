@@ -4,10 +4,10 @@
 
 //! Fail-closed AMD SEV-SNP measurement/app binding validation.
 //!
-//! This module intentionally does not release keys and does not enable any AMD
-//! KMS key-release endpoint. It recomputes the expected SNP MEASUREMENT from
-//! validated KMS configuration and launch inputs, then compares the recomputed
-//! value to the hardware-verified report measurement.
+//! This module does not release keys by itself. It recomputes the expected SNP
+//! MEASUREMENT from validated KMS configuration and launch inputs, then compares
+//! the recomputed value to the hardware-verified report measurement. KMS release
+//! paths must apply their own explicit local release gate after auth succeeds.
 //!
 //! Important: this is launch measurement binding, not a complete authorization
 //! decision. `app_id`, compose hash, and rootfs hash are included in the SNP
@@ -135,7 +135,7 @@ pub(crate) fn validate_amd_snp_measurement_binding(
 }
 
 /// Builds a deterministic authorization `BootInfo` for an already-verified AMD
-/// SEV-SNP report without wiring it into KMS key release.
+/// SEV-SNP report without releasing KMS key material by itself.
 ///
 /// This helper first recomputes and validates the QEMU SNP launch measurement.
 /// `mr_aggregated` is the hardware-verified 48-byte SNP `MEASUREMENT`, and
@@ -148,9 +148,9 @@ pub(crate) fn validate_amd_snp_measurement_binding(
 /// * `key_provider_info = sha256("dstack-amd-sev-snp:app-binding:v1" || mr_system || app_id || compose_hash || chip_id)`
 /// * `instance_id = sha256("dstack-amd-sev-snp:instance-id:v1" || chip_id || measurement || app_id || compose_hash)`
 ///
-/// Keeping these as helper-only values lets future authorization policy inspect
-/// exactly which SNP-specific inputs were bound while SNP key release remains
-/// fail-closed unless an explicit release path is added separately.
+/// Keeping these values explicit lets authorization/release policy inspect
+/// exactly which SNP-specific inputs were bound before any sensitive output path
+/// returns key material.
 #[cfg(test)]
 pub(crate) fn build_amd_snp_boot_info(
     config: &SevSnpMeasureConfig,
@@ -216,7 +216,7 @@ fn build_amd_snp_boot_info_with_tcb_status(
 /// This is the safe integration seam: the attestation verifier has already
 /// checked the report signature/collateral/report_data, while this KMS helper
 /// recomputes the launch measurement from trusted config and request inputs.
-/// It still does not release keys or expose an AMD key-release RPC.
+/// It still does not release keys by itself.
 pub(crate) fn build_amd_snp_boot_info_from_verified_attestation(
     config: &SevSnpMeasureConfig,
     attestation: &VerifiedAttestation,
@@ -265,11 +265,9 @@ fn parse_measurement_input_from_vm_config(vm_config: &str) -> Result<Measurement
 
 /// Explicit helper-only AMD SEV-SNP authorization policy.
 ///
-/// The current SNP work is intentionally not wired into key release. This type
-/// makes the future release semantics auditable before any RPC/proto path is
-/// added: an SNP `BootInfo` must match allowlisted hardware measurement,
-/// app/config identity, device identity, and TCB/advisory policy. Empty
-/// allowlists fail closed.
+/// Explicit AMD SEV-SNP authorization policy: an SNP `BootInfo` must match
+/// allowlisted hardware measurement, app/config identity, device identity, and
+/// TCB/advisory policy. Empty allowlists fail closed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AmdSnpAuthPolicy {
     pub allowed_measurements: Vec<Vec<u8>>,

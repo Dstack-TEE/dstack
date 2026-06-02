@@ -1,6 +1,6 @@
 # AMD SEV-SNP Review Readiness
 
-This branch stages AMD SEV-SNP support for review while keeping SNP key/cert release fail-closed.
+This branch adds AMD SEV-SNP support and now includes a controlled, explicitly opt-in KMS key/cert release gate for SNP.
 
 ## Current review boundary
 
@@ -11,18 +11,17 @@ Implemented and intended for review:
 - Report-data challenge binding and fail-closed report policy checks.
 - SNP launch-measurement recomputation from OVMF/kernel/initrd/cmdline inputs.
 - KMS SNP `BootInfo` construction from verified report measurement, chip id, launch inputs, TCB status, and advisory ids.
-- Dry-run auth-policy evaluation through existing KMS auth flow.
+- Auth-policy evaluation through the existing KMS auth flow.
+- Controlled SNP key/cert release guarded by both external auth policy and local KMS config.
 - Onboarding attestation-info reporting for SNP identity fields.
 - VMM explicit `platform = "amd-sev-snp"` launch path.
 
-Intentionally not enabled yet:
+Default posture:
 
-- SNP app key release.
-- SNP KMS/root/temp CA key release.
-- SNP app certificate/signing certificate release.
-- Production SNP key release policy.
-
-The KMS still rejects SNP `BootInfo` before returning secrets or certificates. Treat this branch as review-ready staging, not production SNP key release.
+- SNP app key release, KMS/root/temp CA key release, and app certificate release are still disabled by default.
+- Operators must explicitly set `[core.sev_snp_key_release].enabled = true` before any SNP `BootInfo` can release sensitive material.
+- KMS startup rejects `enabled = true` unless `enforce_self_authorization = true`, so the self-authorized `GetTempCaCert` path cannot silently bypass the SNP release gate in production config.
+- Even with the local KMS gate enabled, the existing auth API must first allow the verified SNP `BootInfo` for the app/KMS identity.
 
 ## Fail-closed policy summary
 
@@ -33,6 +32,26 @@ The KMS still rejects SNP `BootInfo` before returning secrets or certificates. T
   - `OutOfDate` otherwise.
 - SNP advisory ids are propagated from verifier output into `BootInfo`; currently this list is explicit and empty because the AMD report/VCEK evidence used here does not carry a direct advisory-list field.
 - `auth-simple` defaults remain strict: only `UpToDate` is accepted and any advisory id is denied unless explicitly allowlisted.
+- The local KMS release gate mirrors that strict default:
+  - `[core.sev_snp_key_release].enabled = false` by default.
+  - `allowed_tcb_statuses = ["UpToDate"]` by default.
+  - `allowed_advisory_ids = []` by default, so any advisory remains fail-closed unless explicitly allowlisted.
+
+Example opt-in gate:
+
+```toml
+[core.sev_snp_key_release]
+enabled = true
+allowed_tcb_statuses = ["UpToDate"]
+allowed_advisory_ids = []
+```
+
+Sensitive release surfaces using this gate:
+
+- `GetAppKey`: app disk/env/k256 key material.
+- `GetKmsKey`: temp CA key plus root CA/k256 key material for authorized KMS transfer.
+- `SignCert`: app certificate chain signing.
+- `GetTempCaCert`: temp CA material for self-authorized KMS instances.
 
 ## Live golden-vector proof
 
@@ -98,6 +117,6 @@ git diff --check
 cd kms/auth-simple && npx oxlint . && npx vitest run
 ```
 
-## Next milestone after review
+## Remaining production follow-up
 
-Production SNP key release should be a separate milestone. Before removing the SNP release guards, define and test the final key-release policy contract, including revocation/advisory collateral handling, chip identity treatment, app/compose/rootfs binding, and every sensitive KMS output path.
+The release gate is controlled and production-oriented, but AMD advisory/revocation collateral is still limited by the evidence source available here: SNP reports/VCEKs do not directly carry an advisory list, so `advisory_ids` currently propagates as an explicit empty list. Future collateral fetchers can populate this field and will be denied by both auth-simple and the local KMS release gate unless each advisory is explicitly allowlisted.

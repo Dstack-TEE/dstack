@@ -49,6 +49,36 @@ fn default_guest_features() -> u64 {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+pub(crate) struct SevSnpKeyReleaseConfig {
+    /// Enable AMD SEV-SNP key/cert release after attestation, measurement
+    /// binding, and external auth-policy checks have all succeeded.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Verifier-derived TCB statuses that are acceptable for releasing
+    /// sensitive key/cert material. Defaults to the strict production value.
+    #[serde(default = "default_allowed_tcb_statuses")]
+    pub allowed_tcb_statuses: Vec<String>,
+    /// Advisory IDs that are acceptable for releasing sensitive key/cert
+    /// material. Defaults to empty, which rejects any advisory.
+    #[serde(default)]
+    pub allowed_advisory_ids: Vec<String>,
+}
+
+impl Default for SevSnpKeyReleaseConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            allowed_tcb_statuses: default_allowed_tcb_statuses(),
+            allowed_advisory_ids: Vec::new(),
+        }
+    }
+}
+
+fn default_allowed_tcb_statuses() -> Vec<String> {
+    vec!["UpToDate".to_string()]
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub(crate) struct KmsConfig {
     pub cert_dir: PathBuf,
     pub pccs_url: Option<String>,
@@ -60,6 +90,11 @@ pub(crate) struct KmsConfig {
     #[serde(default)]
     #[allow(dead_code)]
     pub sev_snp: Option<SevSnpMeasureConfig>,
+    /// Additional local release gate for AMD SEV-SNP key/cert material. This is
+    /// separate from the auth API so production deployments need an explicit KMS
+    /// opt-in as well as a successful external policy decision.
+    #[serde(default)]
+    pub sev_snp_key_release: SevSnpKeyReleaseConfig,
     #[serde(with = "serde_human_bytes")]
     pub admin_token_hash: Vec<u8>,
     #[serde(default)]
