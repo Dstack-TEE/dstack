@@ -4,7 +4,7 @@
 
 [project]
 name = "dstack-sdk"
-version = "0.5.4b0"
+version = "0.5.4b1"
 description = "dstack SDK for Python"
 authors = [
     {name = "Leechael Yim", email = "yanleech@gmail.com"},
@@ -15,6 +15,8 @@ dependencies = [
     "asyncio>=3.4.3",
     "pydantic>=2.9.2",
     "cryptography>=43.0.0",
+    "eth-keys>=0.5.0",
+    "eth-utils>=4.0.0",
 ]
 requires-python = ">=3.10"
 readme = "README.md"
@@ -22,10 +24,10 @@ license = {text = "Apache-2.0"}
 
 [project.optional-dependencies]
 solana = ["solders"]
-ethereum = ["web3"]
+ethereum = ["eth-account>=0.13.0"]
 sol = ["solders"]
-eth = ["web3"]
-all = ["solders", "web3"]
+eth = ["eth-account>=0.13.0"]
+all = ["solders", "eth-account>=0.13.0"]
 
 [build-system]
 requires = ["pdm-backend"]
@@ -39,7 +41,7 @@ solana = [
     "solders",
 ]
 ethereum = [
-    "web3",
+    "eth-account>=0.13.0",
 ]
 
 [tool.mypy]
@@ -133,5 +135,5 @@ solana = [
     "solders",
 ]
 ethereum = [
-    "web3",
+    "eth-account>=0.13.0",
 ]

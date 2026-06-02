@@ -6,6 +6,8 @@ import base64
 import binascii
 import functools
 import hashlib
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as _pkg_version
 import json
 import logging
 import os
@@ -23,7 +25,10 @@ from pydantic import BaseModel
 
 logger = logging.getLogger("dstack_sdk")
 
-__version__ = "0.5.2"
+try:
+    __version__ = _pkg_version("dstack-sdk")
+except PackageNotFoundError:
+    __version__ = "0.0.0+unknown"
 
 
 INIT_MR = "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
@@ -255,6 +260,10 @@ class InfoResponse(BaseModel, Generic[T]):
     key_provider_info: str
     compose_hash: str
     vm_config: str = ""
+    # Cloud provider sys_vendor (e.g. "Google"). Available on dstack OS >= 0.5.7.
+    cloud_vendor: str = ""
+    # Cloud provider product_name (e.g. "Google Compute Engine"). Available on dstack OS >= 0.5.7.
+    cloud_product: str = ""
 
     @classmethod
     def parse_response(cls, obj: Any, tcb_info_type: type[T]) -> "InfoResponse[T]":
@@ -392,6 +401,17 @@ class AsyncDstackClient(BaseClient):
                 "OS version too old (Version RPC unavailable)"
             )
 
+    async def _ensure_tls_key_options_supported(self, feature_names: List[str]) -> None:
+        """Check OS version when 0.5.7+ TLS key options are requested."""
+        try:
+            await self.version()
+        except Exception:
+            features = ", ".join(feature_names)
+            raise RuntimeError(
+                f"TLS key options [{features}] are not supported: "
+                "OS version too old (Version RPC unavailable)"
+            )
+
     async def get_key(
         self,
         path: str | None = None,
@@ -468,8 +488,28 @@ class AsyncDstackClient(BaseClient):
         usage_ra_tls: bool = False,
         usage_server_auth: bool = True,
         usage_client_auth: bool = False,
+        *,
+        not_before: Optional[int] = None,
+        not_after: Optional[int] = None,
+        with_app_info: Optional[bool] = None,
     ) -> GetTlsKeyResponse:
-        """Request a TLS key from the service with optional parameters."""
+        """Request a TLS key from the service with optional parameters.
+
+        ``not_before`` / ``not_after`` (seconds since UNIX epoch) and
+        ``with_app_info`` require dstack OS >= 0.5.7. When any of them is set,
+        the SDK probes the guest agent ``Version`` RPC first and raises a
+        clear error on older OS images.
+        """
+        new_features: List[str] = []
+        if not_before is not None:
+            new_features.append("not_before")
+        if not_after is not None:
+            new_features.append("not_after")
+        if with_app_info is not None:
+            new_features.append("with_app_info")
+        if new_features:
+            await self._ensure_tls_key_options_supported(new_features)
+
         data: Dict[str, Any] = {
             "subject": subject or "",
             "usage_ra_tls": usage_ra_tls,
@@ -478,6 +518,12 @@ class AsyncDstackClient(BaseClient):
         }
         if alt_names:
             data["alt_names"] = list(alt_names)
+        if not_before is not None:
+            data["not_before"] = not_before
+        if not_after is not None:
+            data["not_after"] = not_after
+        if with_app_info is not None:
+            data["with_app_info"] = with_app_info
 
         result = await self._send_rpc_request("GetTlsKey", data)
         return GetTlsKeyResponse(**result)
@@ -595,6 +641,10 @@ class DstackClient(BaseClient):
         usage_ra_tls: bool = False,
         usage_server_auth: bool = True,
         usage_client_auth: bool = False,
+        *,
+        not_before: Optional[int] = None,
+        not_after: Optional[int] = None,
+        with_app_info: Optional[bool] = None,
     ) -> GetTlsKeyResponse:
         """Request a TLS key from the service with optional parameters."""
         raise NotImplementedError
