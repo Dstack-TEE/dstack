@@ -33,6 +33,11 @@ jobs:
           node-version: '20'
           registry-url: 'https://registry.npmjs.org'
 
+      - name: Upgrade npm for trusted publishers support
+        run: |
+          npm install -g npm@latest
+          echo "npm: $(npm --version)"
+
       - name: Verify OIDC token availability
         run: |
           if [ -n "${ACTIONS_ID_TOKEN_REQUEST_URL}" ] && [ -n "${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" ]; then
