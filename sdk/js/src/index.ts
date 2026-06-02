@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import fs from 'fs'
-import crypto from 'crypto'
+import { sha384 } from '@noble/hashes/sha512'
 import { send_rpc_request } from './send-rpc-request'
 export { getComposeHash } from './get-compose-hash'
 export { verifyEnvEncryptPublicKey, verifyEnvEncryptPublicKeyLegacy } from './verify-env-encrypt-public-key'
@@ -87,6 +87,10 @@ export interface InfoResponse<VersionTcbInfo extends TcbInfo> {
   key_provider_info: string
   compose_hash: string
   vm_config?: string
+  // Cloud provider sys_vendor (e.g. "Google"). Available on dstack OS >= 0.5.7.
+  cloud_vendor?: string
+  // Cloud provider product_name (e.g. "Google Compute Engine"). Available on dstack OS >= 0.5.7.
+  cloud_product?: string
 }
 
 export interface GetQuoteResponse {
@@ -150,9 +154,7 @@ function replay_rtmr(history: string[]): string {
       const padding = Buffer.alloc(48 - contentBuffer.length, 0)
       contentBuffer = Buffer.concat([contentBuffer, padding])
     }
-    mr = Buffer.from(crypto.createHash('sha384')
-      .update(Buffer.concat([mr, contentBuffer]))
-      .digest())
+    mr = Buffer.from(sha384(Buffer.concat([mr, contentBuffer])))
   }
   return mr.toString('hex')
 }
@@ -175,6 +177,12 @@ export interface TlsKeyOptions {
   usageRaTls?: boolean;
   usageServerAuth?: boolean;
   usageClientAuth?: boolean;
+  // Certificate validity start (seconds since UNIX epoch). Requires dstack OS >= 0.5.7.
+  notBefore?: number;
+  // Certificate validity end (seconds since UNIX epoch). Requires dstack OS >= 0.5.7.
+  notAfter?: number;
+  // Embed app info into the certificate. Requires dstack OS >= 0.5.7.
+  withAppInfo?: boolean;
 }
 
 const SECP256K1_ALGORITHMS = new Set(['secp256k1', 'k256', ''])
@@ -213,7 +221,15 @@ export class DstackClient<T extends TcbInfo = TcbInfoV05x> {
     }
   }
 
-  async getKey(path: string, purpose: string = '', algorithm: string = 'secp256k1'): Promise<GetKeyResponse> {
+  private async ensureTlsKeyOptionsSupported(featureNames: string[]): Promise<void> {
+    try {
+      await this.version()
+    } catch {
+      throw new Error(`TLS key options [${featureNames.join(', ')}] are not supported: OS version too old (Version RPC unavailable)`)
+    }
+  }
+
+  async getKey(path: string = '', purpose: string = '', algorithm: string = 'secp256k1'): Promise<GetKeyResponse> {
     await this.ensureAlgorithmSupported(algorithm)
     const payload = JSON.stringify({
       path: path,
@@ -235,7 +251,18 @@ export class DstackClient<T extends TcbInfo = TcbInfoV05x> {
       usageRaTls = false,
       usageServerAuth = true,
       usageClientAuth = false,
+      notBefore,
+      notAfter,
+      withAppInfo,
     } = options;
+
+    const newFeatures: string[] = []
+    if (notBefore !== undefined) newFeatures.push('notBefore')
+    if (notAfter !== undefined) newFeatures.push('notAfter')
+    if (withAppInfo !== undefined) newFeatures.push('withAppInfo')
+    if (newFeatures.length > 0) {
+      await this.ensureTlsKeyOptionsSupported(newFeatures)
+    }
 
     let raw: Record<string, any> = {
       subject,
@@ -245,6 +272,15 @@ export class DstackClient<T extends TcbInfo = TcbInfoV05x> {
     }
     if (altNames && altNames.length) {
       raw['alt_names'] = altNames
+    }
+    if (notBefore !== undefined) {
+      raw['not_before'] = notBefore
+    }
+    if (notAfter !== undefined) {
+      raw['not_after'] = notAfter
+    }
+    if (withAppInfo !== undefined) {
+      raw['with_app_info'] = withAppInfo
     }
     const payload = JSON.stringify(raw)
     const result = await send_rpc_request<GetTlsKeyResponse>(this.endpoint, '/GetTlsKey', payload)
