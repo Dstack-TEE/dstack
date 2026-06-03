@@ -472,8 +472,16 @@ fn parse_kernel_cert_table(auxblob: &[u8]) -> Result<Vec<([u8; 16], Vec<u8>)>> {
         let guid: [u8; 16] = entry[..16]
             .try_into()
             .context("amd sev-snp certificate table entry guid has invalid length")?;
-        let offset = u32::from_le_bytes(entry[16..20].try_into().unwrap()) as usize;
-        let length = u32::from_le_bytes(entry[20..24].try_into().unwrap()) as usize;
+        let offset = u32::from_le_bytes(
+            entry[16..20]
+                .try_into()
+                .context("amd sev-snp certificate table entry offset has invalid length")?,
+        ) as usize;
+        let length = u32::from_le_bytes(
+            entry[20..24]
+                .try_into()
+                .context("amd sev-snp certificate table entry length has invalid length")?,
+        ) as usize;
         if guid == [0u8; 16] && offset == 0 && length == 0 {
             break;
         }
