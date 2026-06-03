@@ -770,11 +770,13 @@ impl AttestationV1 {
                 })
             }
             PlatformEvidence::SevSnp { report, cert_chain } => {
-                DstackVerifiedReport::DstackAmdSevSnp(crate::amd_sev_snp::verify_amd_snp_evidence(
-                    report,
-                    cert_chain,
-                    &report_data,
-                )?)
+                DstackVerifiedReport::DstackAmdSevSnp(
+                    crate::amd_sev_snp::verify_amd_snp_evidence_with_kds_fallback(
+                        report,
+                        cert_chain,
+                        &report_data,
+                    )?,
+                )
             }
         };
 

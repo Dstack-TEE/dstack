@@ -107,6 +107,13 @@ pub struct AmdSnpAttestationInput<'a> {
     pub vcek_pem: &'a [u8],
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AmdKdsCollateral {
+    ark: CertBytes,
+    ask: CertBytes,
+    vcek: CertBytes,
+}
+
 pub fn verify_amd_snp_attestation(
     input: &AmdSnpAttestationInput<'_>,
 ) -> Result<VerifiedAmdSnpReport> {
@@ -128,6 +135,26 @@ fn verify_amd_snp_attestation_with_certs(
     ask_bytes: CertBytes,
     vcek_bytes: CertBytes,
 ) -> Result<VerifiedAmdSnpReport> {
+    let ark_der = STANDARD
+        .decode(GENOA_ARK_DER_B64)
+        .context("failed to decode amd genoa ark")?;
+    verify_amd_snp_attestation_with_cert_chain(
+        report_bytes,
+        CertBytes {
+            bytes: ark_der,
+            encoding: CertEncoding::Der,
+        },
+        ask_bytes,
+        vcek_bytes,
+    )
+}
+
+fn verify_amd_snp_attestation_with_cert_chain(
+    report_bytes: &[u8],
+    ark_bytes: CertBytes,
+    ask_bytes: CertBytes,
+    vcek_bytes: CertBytes,
+) -> Result<VerifiedAmdSnpReport> {
     if report_bytes.len() != 1184 {
         bail!(
             "invalid amd sev-snp report length: expected 1184 bytes, got {}",
@@ -137,11 +164,7 @@ fn verify_amd_snp_attestation_with_certs(
     let report = AttestationReport::from_bytes(report_bytes)
         .map_err(|err| anyhow::anyhow!("failed to parse amd sev-snp report: {err}"))?;
 
-    let ark_der = STANDARD
-        .decode(GENOA_ARK_DER_B64)
-        .context("failed to decode amd genoa ark")?;
-    let ark = Certificate::from_der(&ark_der)
-        .map_err(|err| anyhow::anyhow!("failed to parse amd genoa ark: {err:?}"))?;
+    let ark = parse_certificate(&ark_bytes, "ark")?;
     let ask = parse_certificate(&ask_bytes, "ask")?;
     let vcek = parse_certificate(&vcek_bytes, "vcek")?;
 
@@ -206,6 +229,142 @@ pub fn verify_amd_snp_evidence(
         bail!("amd sev-snp report_data mismatch");
     }
     Ok(verified)
+}
+
+pub fn verify_amd_snp_evidence_with_kds_fallback(
+    report: &[u8],
+    cert_chain: &[Vec<u8>],
+    expected_report_data: &[u8; 64],
+) -> Result<VerifiedAmdSnpReport> {
+    if !cert_chain.is_empty() {
+        return verify_amd_snp_evidence(report, cert_chain, expected_report_data);
+    }
+    let report_obj = AttestationReport::from_bytes(report)
+        .map_err(|err| anyhow::anyhow!("failed to parse amd sev-snp report: {err}"))?;
+    let collateral = fetch_amd_kds_collateral_for_report(&report_obj)
+        .context("failed to fetch amd sev-snp KDS collateral for empty cert_chain")?;
+    let verified = verify_amd_snp_attestation_with_cert_chain(
+        report,
+        collateral.ark,
+        collateral.ask,
+        collateral.vcek,
+    )?;
+    if &verified.report_data != expected_report_data {
+        bail!("amd sev-snp report_data mismatch");
+    }
+    Ok(verified)
+}
+
+fn fetch_amd_kds_collateral_for_report(report: &AttestationReport) -> Result<AmdKdsCollateral> {
+    let mut errors = Vec::new();
+    for product in ["Genoa", "Milan", "Bergamo", "Siena", "Turin"] {
+        match fetch_amd_kds_collateral_for_product(product, report) {
+            Ok(collateral) => return Ok(collateral),
+            Err(err) => errors.push(format!("{product}: {err:#}")),
+        }
+    }
+    bail!(
+        "amd sev-snp KDS collateral unavailable for supported products: {}",
+        errors.join("; ")
+    )
+}
+
+fn fetch_amd_kds_collateral_for_product(
+    product: &str,
+    report: &AttestationReport,
+) -> Result<AmdKdsCollateral> {
+    let (ark, ask) = fetch_amd_kds_ca_chain(product)?;
+    let mut chip_id = [0u8; 64];
+    chip_id.copy_from_slice(
+        report
+            .chip_id
+            .as_ref()
+            .get(..64)
+            .context("amd sev-snp chip_id too short")?,
+    );
+    let vcek_url = amd_kds_vcek_url(product, &chip_id, report.reported_tcb.into());
+    let vcek = reqwest::blocking::Client::new()
+        .get(&vcek_url)
+        .send()
+        .with_context(|| format!("failed to request amd sev-snp vcek from {vcek_url}"))?
+        .error_for_status()
+        .with_context(|| format!("amd sev-snp vcek request failed for {vcek_url}"))?
+        .bytes()
+        .context("failed to read amd sev-snp vcek response")?
+        .to_vec();
+    Ok(AmdKdsCollateral {
+        ark,
+        ask,
+        vcek: CertBytes {
+            bytes: vcek,
+            encoding: CertEncoding::Der,
+        },
+    })
+}
+
+fn fetch_amd_kds_ca_chain(product: &str) -> Result<(CertBytes, CertBytes)> {
+    let url = format!("https://kdsintf.amd.com/vcek/v1/{product}/cert_chain");
+    let chain = reqwest::blocking::Client::new()
+        .get(&url)
+        .send()
+        .with_context(|| format!("failed to request amd sev-snp cert_chain from {url}"))?
+        .error_for_status()
+        .with_context(|| format!("amd sev-snp cert_chain request failed for {url}"))?
+        .bytes()
+        .context("failed to read amd sev-snp cert_chain response")?;
+    extract_ark_ask_from_amd_kds_cert_chain(&chain)
+}
+
+fn amd_kds_vcek_url(product: &str, chip_id: &[u8; 64], tcb: AmdSnpTcbVersion) -> String {
+    format!(
+        "https://kdsintf.amd.com/vcek/v1/{}/{}?blSPL={}&teeSPL={}&snpSPL={}&ucodeSPL={}",
+        product,
+        hex::encode(chip_id),
+        tcb.bootloader,
+        tcb.tee,
+        tcb.snp,
+        tcb.microcode
+    )
+}
+
+fn extract_ark_ask_from_amd_kds_cert_chain(chain: &[u8]) -> Result<(CertBytes, CertBytes)> {
+    let certs = extract_pem_certs(chain)?;
+    if certs.len() < 2 {
+        bail!("amd sev-snp cert_chain must contain ASK and ARK certificates");
+    }
+    Ok((
+        CertBytes {
+            bytes: certs[1].clone(),
+            encoding: CertEncoding::Pem,
+        },
+        CertBytes {
+            bytes: certs[0].clone(),
+            encoding: CertEncoding::Pem,
+        },
+    ))
+}
+
+fn extract_pem_certs(chain: &[u8]) -> Result<Vec<Vec<u8>>> {
+    let chain = std::str::from_utf8(chain).context("amd sev-snp cert_chain is not utf-8 pem")?;
+    let begin = "-----BEGIN CERTIFICATE-----";
+    let end = "-----END CERTIFICATE-----";
+    let mut rest = chain;
+    let mut certs = Vec::new();
+    while let Some(start) = rest.find(begin) {
+        let after_start = &rest[start..];
+        let cert_end = after_start
+            .find(end)
+            .map(|idx| idx + end.len())
+            .context("amd sev-snp cert_chain has unterminated certificate")?;
+        let mut cert = after_start.as_bytes()[..cert_end].to_vec();
+        cert.push(b'\n');
+        certs.push(cert);
+        rest = &after_start[cert_end..];
+    }
+    if certs.is_empty() {
+        bail!("amd sev-snp cert_chain missing certificates");
+    }
+    Ok(certs)
 }
 
 fn parse_certificate(cert: &CertBytes, name: &str) -> Result<Certificate> {
@@ -381,6 +540,45 @@ mod tests {
                 .contains("cert_chain must contain either ASK and VCEK certificates or one kernel certificate table auxblob"),
             "unexpected error: {err:#}"
         );
+    }
+
+    #[test]
+    fn amd_kds_vcek_url_binds_chip_id_and_reported_tcb() {
+        let chip_id = [0xab; 64];
+        let tcb = AmdSnpTcbVersion {
+            bootloader: 1,
+            tee: 2,
+            snp: 3,
+            microcode: 4,
+        };
+
+        let url = amd_kds_vcek_url("Genoa", &chip_id, tcb);
+
+        assert_eq!(
+            url,
+            format!(
+                "https://kdsintf.amd.com/vcek/v1/Genoa/{}?blSPL=1&teeSPL=2&snpSPL=3&ucodeSPL=4",
+                hex::encode(chip_id)
+            )
+        );
+    }
+
+    #[test]
+    fn amd_kds_cert_chain_extracts_ask_pem_and_ark_pem() {
+        let chain = b"-----BEGIN CERTIFICATE-----\nASK\n-----END CERTIFICATE-----\n-----BEGIN CERTIFICATE-----\nARK\n-----END CERTIFICATE-----\n";
+
+        let (ark_cert, ask_cert) = extract_ark_ask_from_amd_kds_cert_chain(chain).unwrap();
+
+        assert_eq!(
+            ask_cert.bytes,
+            b"-----BEGIN CERTIFICATE-----\nASK\n-----END CERTIFICATE-----\n".to_vec()
+        );
+        assert_eq!(ask_cert.encoding, CertEncoding::Pem);
+        assert_eq!(
+            ark_cert.bytes,
+            b"-----BEGIN CERTIFICATE-----\nARK\n-----END CERTIFICATE-----\n".to_vec()
+        );
+        assert_eq!(ark_cert.encoding, CertEncoding::Pem);
     }
 
     #[test]

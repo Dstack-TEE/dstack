@@ -218,6 +218,7 @@ mod tests {
             app_id: hex_of(0x11, 20),
             compose_hash: hex_of(0x22, 32),
             rootfs_hash: hex_of(0x33, 32),
+            base_cmdline: None,
             docker_files_hash: Some(hex_of(0x77, 32)),
             ovmf_hash: hex_of(0x44, 48),
             kernel_hash: hex_of(0x55, 32),

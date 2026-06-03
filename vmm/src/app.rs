@@ -1231,6 +1231,7 @@ fn make_vm_config(
             "app_id": manifest.app_id,
             "compose_hash": compose_hash,
             "rootfs_hash": rootfs_hash,
+            "base_cmdline": image.info.cmdline,
             "docker_files_hash": serde_json::Value::Null,
             "ovmf_hash": "",
             "kernel_hash": file_sha256_hex(&image.kernel)?,
@@ -1318,6 +1319,10 @@ mod tests {
         assert_eq!(measurement["app_id"], manifest.app_id);
         assert_eq!(measurement["compose_hash"], compose_hash);
         assert_eq!(measurement["rootfs_hash"], hex_of(0x33, 32));
+        assert_eq!(
+            measurement["base_cmdline"],
+            format!("console=ttyS0 dstack.rootfs_hash={}", hex_of(0x33, 32))
+        );
         assert_eq!(
             measurement["kernel_hash"],
             hex::encode(Sha256::digest(b"snp-test-kernel"))

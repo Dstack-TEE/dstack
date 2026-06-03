@@ -94,13 +94,27 @@ mount_overlay /usr $OVERLAY_TMP
 mount_overlay /bin $OVERLAY_TMP
 mount_overlay /home $OVERLAY_TMP
 
+# systemd-resolved may be unavailable in minimal smoke/debug boots; keep DNS usable for dockerd pulls.
+if ! [[ -s /etc/resolv.conf ]] || grep -Eq 'nameserver[[:space:]]+(127\.|::1)' /etc/resolv.conf; then
+	printf 'nameserver 1.1.1.1\nnameserver 8.8.8.8\n' >/etc/resolv.conf
+fi
+
 # Make sure the system time is synchronized
 log "Syncing system time..."
-# Let the chronyd correct the system time immediately
-chronyc makestep
+# Let the chronyd correct the system time immediately; keep booting if chronyd is not ready yet.
+chronyc makestep || log "Warning: chronyc makestep failed; continuing"
 
-if ! [[ -e /dev/tdx_guest ]]; then
-	modprobe tdx-guest
+if [[ -e /dev/sev-guest ]] || grep -qw sev_guest /sys/kernel/config/tsm/report/*/provider 2>/dev/null; then
+	log "SEV-SNP guest device/TSM provider detected"
+elif [[ -e /dev/tdx_guest ]]; then
+	log "TDX guest device detected"
+elif modprobe sev-guest 2>/dev/null; then
+	log "Loaded sev-guest module"
+elif modprobe tdx-guest 2>/dev/null; then
+	log "Loaded tdx-guest module"
+else
+	log "Error: neither sev-guest nor tdx-guest module is available"
+	exit 1
 fi
 
 # Setup configfs and TSM for TDX attestation

@@ -2340,6 +2340,7 @@ dependencies = [
  "nsm-qvl",
  "or-panic",
  "parity-scale-codec",
+ "reqwest",
  "rmp-serde",
  "serde",
  "serde-human-bytes",

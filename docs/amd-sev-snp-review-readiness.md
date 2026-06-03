@@ -113,21 +113,34 @@ That smoke exposed and fixed several VMM/KMS-auth integration issues before the 
 - The VMM launch path required `metadata.json.rootfs_hash`, while the released `dstack-0.5.11` images carry the rootfs hash in `dstack.rootfs_hash=...` on the kernel cmdline.
 - The VMM SNP QEMU path now uses the SNP measurement CPU model (`EPYC-v4`) and confidential virtio PCI options (`disable-legacy=on,iommu_platform=true`) for SNP-launched virtio devices, matching the host's working SNP launch posture more closely.
 
-After those fixes, the dstack-managed SNP guest launches far enough for OVMF to load the measured kernel/initrd/cmdline path, but the `dstack-0.5.11` and `dstack-dev-0.5.11` images did not complete Linux/userspace boot in this SNP direct-kernel environment before the smoke timeout. A control run of the same `dstack-dev-0.5.11` kernel/initrd/rootfs without SNP boots Linux and reaches `dstack Guest Preparation Service`, proving the image itself is bootable and narrowing the blocker to the SNP+OVMF direct-kernel transition rather than KMS release policy. The sanitized failure signature is:
+After those fixes, the manual smoke progressed through full dstack-managed SNP guest boot, KMS self-bootstrap, app guest boot, app quote verification, and `GetAppKey` release. Additional smoke/debug fixes made the path work end-to-end:
+
+- Minimal guest boot now keeps DNS usable when `systemd-resolved`/`chronyd` are unavailable early in smoke boots and detects `sev-guest` before trying the TDX guest module.
+- SNP guests skip TDX-only `mr_config_id` and app-info RTMR decoding while still preserving non-SNP behavior.
+- Configfs TSM report collection falls back to the SEV-SNP extended-report ioctl when configfs does not carry certificate collateral.
+- If guest evidence still lacks ASK/VCEK collateral, the verifier fetches AMD KDS ARK/ASK/VCEK using the report `chip_id` and reported TCB, then verifies the signed report fail-closed.
+- KMS measurement recomputation now uses the image's original kernel cmdline as the measurement base before appending `docker_compose_hash`, `rootfs_hash`, and `app_id`, matching the VMM QEMU `-append` path.
+
+Sanitized smoke result:
 
 ```text
 remote_host=chris@173.234.27.162
 qemu_version=10.0.2
 ovmf_sha256=67e7a7027437823e9c166a60d00666d5d5391e13050488cad5cc2acd913fab4a
-image=dstack-0.5.11 and dstack-dev-0.5.11
-vmm_head=6cb351f9bebde233 + local smoke fixes
-control_without_snp=dstack-dev-0.5.11 boots Linux and reaches dstack Guest Preparation Service
-observed=OVMF loads fw_cfg kernel/cmdline/initrd and emits "EFI stub: Loaded initrd from LINUX_EFI_INITRD_MEDIA_GUID device path"
-blocked_before=Linux/userspace readiness in SNP+OVMF direct-kernel boot; KMS guest userspace readiness / app GetAppKey release exercise
-no_secret_material_returned=true
+image=dstack-dev-0.5.11-snp-dnsfix
+platform=amd-sev-snp
+vmm_branch=feat/amd-sev-snp-conversion + local smoke fixes
+kms_guest=booted SNP Linux/userspace and started dstack-kms
+app_guest=booted SNP Linux/userspace and requested app keys
+kms_auth=/bootAuth/kms 200 and /bootAuth/app 200
+tcb_status=OutOfDate in this lab host policy run
+failure_gate=default UpToDate-only policy rejected release with "tcb_status is not allowed"
+success_gate=explicit lab allowlist ["UpToDate", "OutOfDate"] released GetTempCaCert and GetAppKey
+kms_metrics=dstack_kms_attestation_requests_total 1, dstack_kms_attestation_failures_total 0
+no_secret_material_logged=true
 ```
 
-This means the PR still has live SNP report proof, live golden-vector measurement proof, and release-gate unit/integration coverage, but the full dstack-managed guest -> KMS `GetAppKey` hardware E2E remains blocked on guest image/boot compatibility in this smoke environment.
+This means the PR now has live SNP report proof, live golden-vector measurement proof, release-gate unit/integration coverage, and a manual full dstack-managed SNP guest -> KMS `GetAppKey` hardware E2E proof. The success run required an explicit lab-only TCB allowlist because this host reports `OutOfDate`; production defaults remain fail-closed (`UpToDate` only).
 
 ## Validation commands
 

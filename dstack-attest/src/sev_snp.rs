@@ -18,7 +18,26 @@ const SNP_REPORT_SIZE: usize = 1184;
 pub fn get_report(report_data: [u8; 64]) -> Result<SnpQuote> {
     if has_sev_snp_tsm_provider(Path::new(TSM_REPORT_ROOT)) {
         match get_report_configfs(report_data) {
-            Ok(quote) => return Ok(quote),
+            Ok(quote) => {
+                if configfs_report_needs_ioctl_cert_chain_fallback(
+                    &quote,
+                    Path::new(SEV_GUEST_DEVICE).exists(),
+                ) {
+                    tracing::debug!(
+                        "sev-snp configfs tsm report did not include a certificate chain; falling back to ioctl extended report"
+                    );
+                    match get_report_ioctl(report_data) {
+                        Ok(ioctl_quote) if !ioctl_quote.cert_chain.is_empty() => {
+                            return Ok(ioctl_quote)
+                        }
+                        Ok(_) => return Ok(quote),
+                        Err(err) => tracing::debug!(
+                            "failed to get sev-snp report from ioctl fallback: {err:#}"
+                        ),
+                    }
+                }
+                return Ok(quote);
+            }
             Err(err) => tracing::debug!("failed to get sev-snp report from configfs tsm: {err:#}"),
         }
     }
@@ -26,6 +45,13 @@ pub fn get_report(report_data: [u8; 64]) -> Result<SnpQuote> {
         return get_report_ioctl(report_data);
     }
     bail!("sev-snp report is unavailable: neither {TSM_REPORT_ROOT} nor {SEV_GUEST_DEVICE} exists")
+}
+
+fn configfs_report_needs_ioctl_cert_chain_fallback(
+    quote: &SnpQuote,
+    sev_guest_device_available: bool,
+) -> bool {
+    sev_guest_device_available && quote.cert_chain.is_empty()
 }
 
 pub(crate) fn has_sev_snp_tsm_provider(root: &Path) -> bool {
@@ -227,6 +253,21 @@ mod tests {
         assert_eq!(read_cert_chain_configfs(&root), vec![b"chain".to_vec()]);
 
         let _ = fs_err::remove_dir_all(root);
+    }
+
+    #[test]
+    fn configfs_report_without_cert_chain_requires_ioctl_fallback_when_available() {
+        let quote = SnpQuote {
+            report: vec![0u8; SNP_REPORT_SIZE],
+            cert_chain: vec![],
+        };
+
+        assert!(configfs_report_needs_ioctl_cert_chain_fallback(
+            &quote, true
+        ));
+        assert!(!configfs_report_needs_ioctl_cert_chain_fallback(
+            &quote, false
+        ));
     }
 
     fn test_dir(name: &str) -> std::path::PathBuf {
