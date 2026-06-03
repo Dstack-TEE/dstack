@@ -85,8 +85,9 @@ OVERLAY_TMP="/var/volatile/overlay"
 mount_overlay() {
 	local src="$1"
 	local dst="$2/$1"
+	local overlay_opts="lowerdir=$src,upperdir=$dst/upper,workdir=$dst/work"
 	mkdir -p "$dst/upper" "$dst/work"
-	mount -t overlay overlay -o lowerdir="$src",upperdir="$dst/upper",workdir="$dst/work" "$src"
+	mount -t overlay overlay -o "$overlay_opts" "$src"
 }
 mount_overlay /etc "$OVERLAY_TMP"
 mount_overlay /usr "$OVERLAY_TMP"
