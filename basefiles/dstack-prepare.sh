@@ -80,19 +80,18 @@ WORK_DIR="/var/volatile/dstack"
 DATA_MNT="$WORK_DIR/persistent"
 
 OVERLAY_TMP="/var/volatile/overlay"
-OVERLAY_PERSIST="$DATA_MNT/overlay"
 
 # Prepare volatile dirs
 mount_overlay() {
-    local src=$1
-    local dst=$2/$1
-    mkdir -p $dst/upper $dst/work
-    mount -t overlay overlay -o lowerdir=$src,upperdir=$dst/upper,workdir=$dst/work $src
+	local src="$1"
+	local dst="$2/$1"
+	mkdir -p "$dst/upper" "$dst/work"
+	mount -t overlay overlay -o lowerdir="$src",upperdir="$dst/upper",workdir="$dst/work" "$src"
 }
-mount_overlay /etc $OVERLAY_TMP
-mount_overlay /usr $OVERLAY_TMP
-mount_overlay /bin $OVERLAY_TMP
-mount_overlay /home $OVERLAY_TMP
+mount_overlay /etc "$OVERLAY_TMP"
+mount_overlay /usr "$OVERLAY_TMP"
+mount_overlay /bin "$OVERLAY_TMP"
+mount_overlay /home "$OVERLAY_TMP"
 
 # systemd-resolved may be unavailable in minimal smoke/debug boots; keep DNS usable for dockerd pulls.
 if ! [[ -s /etc/resolv.conf ]] || grep -Eq 'nameserver[[:space:]]+(127\.|::1)' /etc/resolv.conf; then
@@ -139,9 +138,10 @@ log "Preparing dstack system..."
 
 has_partition_table() {
 	local disk="$1"
-	local disk_name=$(basename "$disk")
+	local disk_name
+	disk_name=$(basename "$disk")
 	# Check sysfs for any child partitions
-	for entry in /sys/class/block/${disk_name}/${disk_name}*; do
+	for entry in "/sys/class/block/${disk_name}/${disk_name}"*; do
 		[ -e "$entry/partition" ] || continue
 		return 0
 	done
@@ -293,9 +293,10 @@ echo "============================"
 
 cd /dstack
 
-if [ $(jq 'has("init_script")' app-compose.json) == true ]; then
+if [ "$(jq 'has("init_script")' app-compose.json)" == true ]; then
 	log "Running init script"
 	dstack-util notify-host -e "boot.progress" -d "init-script" || true
+	# shellcheck disable=SC1090
 	source <(jq -r '.init_script' app-compose.json)
 fi
 
