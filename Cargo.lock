@@ -2295,6 +2295,7 @@ dependencies = [
  "libc",
  "or-panic",
  "parity-scale-codec",
+ "reqwest",
  "rmp-serde",
  "serde",
  "serde-human-bytes",

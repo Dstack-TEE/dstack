@@ -58,6 +58,9 @@ pub(crate) struct MeasurementInput {
     pub compose_hash: String,
     /// 32-byte rootfs hash included in the measured kernel cmdline.
     pub rootfs_hash: String,
+    /// Original image kernel cmdline used as the base for SNP measured launch
+    /// before app identity fields are appended.
+    pub base_cmdline: Option<String>,
     /// Optional 32-byte additional docker files hash included in the measured
     /// kernel cmdline when present.
     pub docker_files_hash: Option<String>,
@@ -952,10 +955,19 @@ pub(crate) fn compute_expected_measurement(
         .as_deref()
         .ok_or_else(|| anyhow::anyhow!("vcpu_type is required"))?;
 
-    let mut cmdline = format!(
-        "console=ttyS0 loglevel=7 docker_compose_hash={} rootfs_hash={} app_id={}",
-        input.compose_hash, input.rootfs_hash, input.app_id
-    );
+    let mut cmdline = match input.base_cmdline.as_deref() {
+        Some(base) if !base.trim().is_empty() => format!(
+            "{} docker_compose_hash={} rootfs_hash={} app_id={}",
+            base.trim(),
+            input.compose_hash,
+            input.rootfs_hash,
+            input.app_id
+        ),
+        _ => format!(
+            "console=ttyS0 loglevel=7 docker_compose_hash={} rootfs_hash={} app_id={}",
+            input.compose_hash, input.rootfs_hash, input.app_id
+        ),
+    };
     if let Some(docker_files_hash) = input.docker_files_hash.as_deref() {
         cmdline.push_str(&format!(
             " docker_additional_files_hash={docker_files_hash}"
@@ -1078,6 +1090,7 @@ mod tests {
             app_id: hex_of(0x11, 20),
             compose_hash: hex_of(0x22, 32),
             rootfs_hash: hex_of(0x33, 32),
+            base_cmdline: None,
             docker_files_hash: Some(hex_of(0x77, 32)),
             ovmf_hash: hex_of(0x44, 48),
             kernel_hash: hex_of(0x55, 32),
