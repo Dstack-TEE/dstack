@@ -13,6 +13,7 @@ Implemented and intended for review:
 - KMS SNP `BootInfo` construction from verified report measurement, chip id, launch inputs, TCB status, and advisory ids.
 - Auth-policy evaluation through the existing KMS auth flow.
 - Controlled SNP key/cert release guarded by both external auth policy and local KMS config.
+- VMM-provided SNP launch inputs in `.sys-config.json` so KMS self/app auth can recompute the same launch measurement used by QEMU.
 - Onboarding attestation-info reporting for SNP identity fields.
 - VMM explicit `platform = "amd-sev-snp"` launch path.
 
@@ -101,6 +102,32 @@ report_data_offset=80
 report_contains_expected_report_data=true
 DSTACK_SEV_SNP_ATTESTATION_PROOF_END
 ```
+
+## Manual dstack E2E smoke status
+
+An additional manual smoke was attempted on the SNP host (`chris@173.234.27.162`) using the PR branch, release-built `dstack-vmm`/`supervisor`/`dstack-kms`, QEMU 10.0.2, and the SNP-capable OVMF at `/opt/AMDSEV/usr/local/share/qemu/OVMF.fd`.
+
+That smoke exposed and fixed several VMM/KMS-auth integration issues before the guest reached KMS:
+
+- `.sys-config.json` did not include the `sev_snp_measurement` launch input object needed by KMS SNP `BootInfo` recomputation.
+- The VMM launch path required `metadata.json.rootfs_hash`, while the released `dstack-0.5.11` images carry the rootfs hash in `dstack.rootfs_hash=...` on the kernel cmdline.
+- The VMM SNP QEMU path now uses the SNP measurement CPU model (`EPYC-v4`) and confidential virtio PCI options (`disable-legacy=on,iommu_platform=true`) for SNP-launched virtio devices, matching the host's working SNP launch posture more closely.
+
+After those fixes, the dstack-managed SNP guest launches far enough for OVMF to load the measured kernel/initrd/cmdline path, but the `dstack-0.5.11` and `dstack-dev-0.5.11` images did not complete Linux/userspace boot in this SNP direct-kernel environment before the smoke timeout. A control run of the same `dstack-dev-0.5.11` kernel/initrd/rootfs without SNP boots Linux and reaches `dstack Guest Preparation Service`, proving the image itself is bootable and narrowing the blocker to the SNP+OVMF direct-kernel transition rather than KMS release policy. The sanitized failure signature is:
+
+```text
+remote_host=chris@173.234.27.162
+qemu_version=10.0.2
+ovmf_sha256=67e7a7027437823e9c166a60d00666d5d5391e13050488cad5cc2acd913fab4a
+image=dstack-0.5.11 and dstack-dev-0.5.11
+vmm_head=6cb351f9bebde233 + local smoke fixes
+control_without_snp=dstack-dev-0.5.11 boots Linux and reaches dstack Guest Preparation Service
+observed=OVMF loads fw_cfg kernel/cmdline/initrd and emits "EFI stub: Loaded initrd from LINUX_EFI_INITRD_MEDIA_GUID device path"
+blocked_before=Linux/userspace readiness in SNP+OVMF direct-kernel boot; KMS guest userspace readiness / app GetAppKey release exercise
+no_secret_material_returned=true
+```
+
+This means the PR still has live SNP report proof, live golden-vector measurement proof, and release-gate unit/integration coverage, but the full dstack-managed guest -> KMS `GetAppKey` hardware E2E remains blocked on guest image/boot compatibility in this smoke environment.
 
 ## Validation commands
 

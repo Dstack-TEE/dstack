@@ -21,6 +21,7 @@ use or_panic::ResultOrPanic;
 use ra_rpc::client::RaClient;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
@@ -998,7 +999,8 @@ impl App {
         let shared_dir = self.shared_dir(id);
         let manifest = work_dir.manifest().context("Failed to read manifest")?;
         let cfg = &self.config;
-        let sys_config_str = make_sys_config(cfg, &manifest)?;
+        let compose_hash = sha256_file(shared_dir.join(APP_COMPOSE))?;
+        let sys_config_str = make_sys_config(cfg, &manifest, &hex::encode(compose_hash))?;
         fs::write(shared_dir.join(SYS_CONFIG), sys_config_str)
             .context("Failed to write vm config")?;
         Ok(())
@@ -1136,7 +1138,11 @@ fn rotate_serial_log(work_dir: &VmWorkDir, max_bytes: u64) {
     }
 }
 
-pub(crate) fn make_sys_config(cfg: &Config, manifest: &Manifest) -> Result<String> {
+pub(crate) fn make_sys_config(
+    cfg: &Config,
+    manifest: &Manifest,
+    compose_hash: &str,
+) -> Result<String> {
     let image_path = cfg.image.path.join(&manifest.image);
     let image = Image::load(image_path).context("Failed to load image info")?;
     let img_ver = image.info.version_tuple().unwrap_or((0, 0, 0));
@@ -1160,14 +1166,41 @@ pub(crate) fn make_sys_config(cfg: &Config, manifest: &Manifest) -> Result<Strin
         "pccs_url": cfg.cvm.pccs_url,
         "docker_registry": cfg.cvm.docker_registry,
         "host_api_url": format!("vsock://2:{}/api", cfg.host_api.port),
-        "vm_config": serde_json::to_string(&make_vm_config(cfg, manifest, &image)?)?,
+        "vm_config": serde_json::to_string(&make_vm_config(cfg, manifest, &image, compose_hash)?)?,
     });
     let sys_config_str =
         serde_json::to_string(&sys_config).context("Failed to serialize vm config")?;
     Ok(sys_config_str)
 }
 
-fn make_vm_config(cfg: &Config, manifest: &Manifest, image: &Image) -> Result<serde_json::Value> {
+fn file_sha256_hex(path: &Path) -> Result<String> {
+    Ok(hex::encode(sha256_file(path)?))
+}
+
+fn image_rootfs_hash(image: &Image) -> Result<&str> {
+    if let Some(rootfs_hash) = image.info.rootfs_hash.as_deref() {
+        return Ok(rootfs_hash);
+    }
+    let cmdline = image.info.cmdline.as_deref().unwrap_or_default();
+    cmdline
+        .split_whitespace()
+        .find_map(|param| param.strip_prefix("dstack.rootfs_hash="))
+        .ok_or_else(|| anyhow::anyhow!("rootfs_hash is required for amd sev-snp"))
+}
+
+fn sha256_file(path: impl AsRef<Path>) -> Result<[u8; 32]> {
+    let data = fs::read(path).context("Failed to read file for sha256")?;
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&Sha256::digest(data));
+    Ok(out)
+}
+
+fn make_vm_config(
+    cfg: &Config,
+    manifest: &Manifest,
+    image: &Image,
+    compose_hash: &str,
+) -> Result<serde_json::Value> {
     let os_image_hash = image
         .digest
         .as_ref()
@@ -1192,7 +1225,112 @@ fn make_vm_config(cfg: &Config, manifest: &Manifest, image: &Image) -> Result<se
     })?;
     // For backward compatibility
     config["spec_version"] = serde_json::Value::from(1);
+    if cfg.cvm.platform.resolve() == crate::config::TeePlatform::AmdSevSnp && !manifest.no_tee {
+        let rootfs_hash = image_rootfs_hash(image)?;
+        config["sev_snp_measurement"] = json!({
+            "app_id": manifest.app_id,
+            "compose_hash": compose_hash,
+            "rootfs_hash": rootfs_hash,
+            "docker_files_hash": serde_json::Value::Null,
+            "ovmf_hash": "",
+            "kernel_hash": file_sha256_hex(&image.kernel)?,
+            "initrd_hash": file_sha256_hex(&image.initrd)?,
+            "sev_hashes_table_gpa": 0,
+            "sev_es_reset_eip": 0,
+            "vcpus": manifest.vcpu,
+            "vcpu_type": "EPYC-v4",
+            "ovmf_sections": [],
+        });
+    }
     Ok(config)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{load_config_figment, TeePlatform};
+    use rocket::figment::Figment;
+    use std::time::UNIX_EPOCH;
+
+    fn hex_of(byte: u8, len: usize) -> String {
+        hex::encode(vec![byte; len])
+    }
+
+    #[test]
+    fn amd_sev_snp_sys_config_includes_measurement_input_for_kms_auth() {
+        let temp = std::env::temp_dir().join(format!(
+            "dstack-vmm-snp-test-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let temp = temp.as_path();
+        let image_root = temp.join("images");
+        let image_dir = image_root.join("dstack-test");
+        fs::create_dir_all(&image_dir).unwrap();
+        fs::write(image_dir.join("kernel"), b"snp-test-kernel").unwrap();
+        fs::write(image_dir.join("initrd"), b"snp-test-initrd").unwrap();
+        fs::write(image_dir.join("rootfs"), b"snp-test-rootfs").unwrap();
+        fs::write(
+            image_dir.join("metadata.json"),
+            serde_json::json!({
+                "cmdline": format!("console=ttyS0 dstack.rootfs_hash={}", hex_of(0x33, 32)),
+                "kernel": "kernel",
+                "initrd": "initrd",
+                "rootfs": "rootfs",
+                "version": "0.5.11"
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let mut config: Config = Figment::from(load_config_figment(None)).extract().unwrap();
+        config.image.path = image_root;
+        config.cvm.platform = TeePlatform::AmdSevSnp;
+        let compose_hash = hex_of(0x22, 32);
+        let manifest = Manifest {
+            id: "snp-test".to_string(),
+            name: "snp-test".to_string(),
+            app_id: hex_of(0x11, 20),
+            vcpu: 2,
+            memory: 1024,
+            disk_size: 1024,
+            image: "dstack-test".to_string(),
+            port_map: vec![],
+            created_at_ms: 0,
+            hugepages: false,
+            pin_numa: false,
+            gpus: None,
+            kms_urls: vec![],
+            gateway_urls: vec![],
+            no_tee: false,
+            networking: None,
+        };
+
+        let sys_config: serde_json::Value =
+            serde_json::from_str(&make_sys_config(&config, &manifest, &compose_hash).unwrap())
+                .unwrap();
+        let vm_config: serde_json::Value =
+            serde_json::from_str(sys_config["vm_config"].as_str().unwrap()).unwrap();
+        let measurement = &vm_config["sev_snp_measurement"];
+
+        assert_eq!(measurement["app_id"], manifest.app_id);
+        assert_eq!(measurement["compose_hash"], compose_hash);
+        assert_eq!(measurement["rootfs_hash"], hex_of(0x33, 32));
+        assert_eq!(
+            measurement["kernel_hash"],
+            hex::encode(Sha256::digest(b"snp-test-kernel"))
+        );
+        assert_eq!(
+            measurement["initrd_hash"],
+            hex::encode(Sha256::digest(b"snp-test-initrd"))
+        );
+        assert_eq!(measurement["vcpus"], 2);
+        assert_eq!(measurement["vcpu_type"], "EPYC-v4");
+        assert_eq!(measurement["ovmf_hash"], "");
+        assert!(measurement["ovmf_sections"].as_array().unwrap().is_empty());
+    }
 }
 
 fn paginate<T>(items: Vec<T>, page: u32, page_size: u32) -> impl Iterator<Item = T> {

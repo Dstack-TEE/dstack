@@ -235,7 +235,7 @@ Compose file content (first 200 chars):
 
     // 2. Create .sys-config.json (critical for 0.5.x VMs)
     // Use manifest URLs if available, fallback to config URLs (matching VMM's sync_dynamic_config logic)
-    let sys_config_str = make_sys_config(&config, &manifest)?;
+    let sys_config_str = make_sys_config(&config, &manifest, &compose_hash)?;
     let sys_config_path = vm_work_dir.shared_dir().join(".sys-config.json");
     fs_err::write(&sys_config_path, sys_config_str).context("Failed to write sys config")?;
 
