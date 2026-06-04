@@ -24,6 +24,16 @@ fn derive_instance_id(app_id: &str) -> String {
     hex::encode(hasher.finalize())
 }
 
+/// acquire/renew return the full signed Lease JSON, but the key-broker's slot
+/// store is keyed by the short `slot_id` (e.g. "0"). Extract it so renew targets
+/// the right slot (fall back to the raw string if it isn't the expected JSON).
+fn slot_id_of(lease: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(lease)
+        .ok()
+        .and_then(|v| v.get("slot_id").and_then(|s| s.as_str()).map(String::from))
+        .unwrap_or_else(|| lease.to_string())
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     // rustls 0.23 needs an explicit crypto provider for the mTLS key-broker client.
@@ -116,8 +126,9 @@ async fn main() -> Result<()> {
         )
         .await
         .context("failed to acquire lease")?;
-    tracing::info!("lease acquired: slot={}", lease_resp.lease);
-    *lease_id.lock().unwrap() = lease_resp.lease.clone();
+    let slot_id = slot_id_of(&lease_resp.lease);
+    tracing::info!("lease acquired: slot={}", slot_id);
+    *lease_id.lock().unwrap() = slot_id;
     *running_digest.lock().unwrap() = image_digest.clone();
 
     // Persist the leased private keys to tmpfs; ocicrypt (native JWE) tries each
@@ -186,7 +197,7 @@ async fn main() -> Result<()> {
                                 "re-acquired lease after renewal failure: slot={}",
                                 new_lease.lease
                             );
-                            *lease_id_renewal.lock().unwrap() = new_lease.lease;
+                            *lease_id_renewal.lock().unwrap() = slot_id_of(&new_lease.lease);
                             *last_renewal_clone.lock().unwrap() = Instant::now();
                         }
                         Err(re) => {
@@ -309,7 +320,7 @@ async fn main() -> Result<()> {
             if runner::is_workload_running() {
                 tracing::info!("health check passed, update to {} successful", new_digest);
                 *running_digest_update.lock().unwrap() = new_digest;
-                *lease_id_update.lock().unwrap() = new_lease.lease;
+                *lease_id_update.lock().unwrap() = slot_id_of(&new_lease.lease);
             } else {
                 tracing::warn!("health check failed after update, rolling back to {}", current_digest);
                 let rollback_ref = format!("{}@{}", workload_image_update, current_digest);
