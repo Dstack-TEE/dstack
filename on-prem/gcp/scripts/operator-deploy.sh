@@ -9,6 +9,8 @@
 #   ./operator-deploy.sh kms         # reserve IP + fill config + deploy + provision + verify KMS
 #   ./operator-deploy.sh launcher    # reserve IP + fill config + deploy + verify the workload
 #   ./operator-deploy.sh all         # sync → kms → launcher
+#   ./operator-deploy.sh sync-auth   # day-2: push a vendor-refreshed AuthBundle (no root re-provision)
+#   ./operator-deploy.sh update      # day-2: mirror the new image + push the refreshed bundle
 #
 # config.env: GCP_PROJECT, GCP_ZONE, AR_LOCATION/AR_PROJECT/AR_REPO, PUBREG,
 #   OS_IMAGE, KMS_IP, LAUNCHER_IP, WORKLOAD_NAME, USER_ID, AUTHORITY_URL,
@@ -132,12 +134,21 @@ do_launcher() {
     kill "$pid" 2>/dev/null || true
 }
 
+# day-2 workload update: after the vendor registers a new image_digest + bumps
+# the tenant bundle, mirror the new image and push the refreshed bundle. The
+# launcher then rolling-updates on its next version poll (no CVM rebuild — the
+# workload digest isn't measured). Re-running do_sync also re-pulls the OS, which
+# is skipped if already present.
+do_sync_auth() { "$HERE/refresh-auth.sh"; }
+
 bootstrap_dstack   # ensure dstack-cloud's global config exists before any stage
 
 case "${1:-}" in
-    sync)     do_sync ;;
-    kms)      do_kms ;;
-    launcher) do_launcher ;;
-    all)      do_sync; do_kms; do_launcher ;;
-    *) echo "usage: $0 {sync|kms|launcher|all}"; exit 1 ;;
+    sync)      do_sync ;;
+    kms)       do_kms ;;
+    launcher)  do_launcher ;;
+    all)       do_sync; do_kms; do_launcher ;;
+    sync-auth) do_sync_auth ;;                 # day-2: push a refreshed bundle only
+    update)    do_sync; do_sync_auth ;;        # day-2: mirror new image + push bundle
+    *) echo "usage: $0 {sync|kms|launcher|all|sync-auth|update}"; exit 1 ;;
 esac
