@@ -238,15 +238,25 @@ cat pub.pem      # -----BEGIN PUBLIC KEY-----  this is the jwe:pub.pem used in s
 registry** (e.g. `cr.kvin.wang`). The encrypted layers carry no plaintext, so a
 public registry is fine.
 
+> 🚀 **Quick-try (no build).** All three CVM component images are already published at
+> `cr.kvin.wang` — `dstack-kms`, `key-broker`, `launcher`. `scripts/vendor-release.sh`
+> pulls+retags them into your `$PUBREG` when `KEY_BROKER_SRC` / `LAUNCHER_SRC` /
+> `DSTACK_KMS_SRC` are set (they default to `cr.kvin.wang/...` in `config.env.example`),
+> so a trial skips the Rust builds below. **For a real release**, blank `KEY_BROKER_SRC` /
+> `LAUNCHER_SRC` to build your own and pin your own digests — otherwise you're trusting
+> someone else's build of the gate-enforcing components.
+
 ```bash
 export PUBREG=cr.kvin.wang        # vendor public registry
 
-# 1) Build the component images (build context = repo root). dstack-kms can use the official dstacktee/dstack-kms.
-docker build -f on-prem/key-broker/Dockerfile -t $PUBREG/key-broker:latest .
-docker build -f on-prem/launcher/Dockerfile   -t $PUBREG/launcher:latest   .
-docker push $PUBREG/key-broker:latest
-docker push $PUBREG/launcher:latest
-# dstack-kms: docker pull dstacktee/dstack-kms:latest && docker tag … $PUBREG/dstack-kms:latest && push
+# 1) Component images. Quick-try: pull the prebuilt ones (no Rust toolchain needed):
+for img in key-broker launcher dstack-kms; do
+  docker pull cr.kvin.wang/$img:latest && docker tag cr.kvin.wang/$img:latest $PUBREG/$img:latest && docker push $PUBREG/$img:latest
+done
+# Real release: build your own instead (build context = repo root):
+#   docker build -f on-prem/key-broker/Dockerfile -t $PUBREG/key-broker:latest . && docker push $PUBREG/key-broker:latest
+#   docker build -f on-prem/launcher/Dockerfile   -t $PUBREG/launcher:latest   . && docker push $PUBREG/launcher:latest
+#   (dstack-kms is an external image — pull a build with the rpc-cert IP SAN, retag, push)
 
 # 2) JWE-encrypt the workload image with the global pubkey → push to the public registry
 skopeo copy --encryption-key jwe:pub.pem \

@@ -52,25 +52,33 @@ PUBKEY="$(curl -s "$A/api/v1/authority-pubkey" | jqr pubkey)"
 [[ -n "$PUBKEY" ]] || c_die "authority unreachable at $A"
 c_ok "AUTHORITY_PUBKEY=$PUBKEY"
 
-# ── 3. build + push component images ───────────────────────────────────────────
-c_step "build + push key-broker / launcher → $PUBREG"
-( cd "$(cd "$ROOT/.." && pwd)" \
-  && docker build -f on-prem/key-broker/Dockerfile -t "$PUBREG/key-broker:latest" . \
-  && docker build -f on-prem/launcher/Dockerfile   -t "$PUBREG/launcher:latest"   . )
-docker push "$PUBREG/key-broker:latest"
-docker push "$PUBREG/launcher:latest"
-# dstack-kms: the vendor's chosen dstack-kms image, retagged into $PUBREG. The
-# official `dstacktee/dstack-kms` has NO `latest` tag (only versioned, e.g. 0.5.11)
-# and the rpc-cert IP SAN needs a recent/mainline build — so this is configurable
-# via DSTACK_KMS_SRC (defaults to one already in $PUBREG).
-DSTACK_KMS_SRC="${DSTACK_KMS_SRC:-$PUBREG/dstack-kms:latest}"
-if [[ "$DSTACK_KMS_SRC" != "$PUBREG/dstack-kms:latest" ]]; then
-    docker pull "$DSTACK_KMS_SRC"
-    docker tag  "$DSTACK_KMS_SRC" "$PUBREG/dstack-kms:latest"
-    docker push "$PUBREG/dstack-kms:latest"
-else
-    c_ok "dstack-kms: using existing $PUBREG/dstack-kms:latest"
-fi
+# ── 3. component images → $PUBREG ───────────────────────────────────────────────
+# Each of the three CVM component images is either BUILT from this repo's source or
+# PULLED from a prebuilt source (set <NAME>_SRC) and retagged into $PUBREG. Pulling
+# lets a quick-try skip the Rust builds: the vendor's published images at cr.kvin.wang
+# work out of the box (config.env.example points *_SRC there). For a REAL release,
+# leave KEY_BROKER_SRC / LAUNCHER_SRC empty to build your own (and pin your own
+# digests + your own AUTHORITY_PUBKEY — you'd be trusting someone else's build otherwise).
+REPO_ROOT="$(cd "$ROOT/.." && pwd)"
+ensure_component() {  # $1=name  $2=dockerfile(rel; "" = pull-only)  $3=src("" → build)
+    local name="$1" df="$2" src="$3" tgt="$PUBREG/$1:latest"
+    if [[ -n "$src" && "$src" != "$tgt" ]]; then
+        c_step "pull prebuilt $name ← $src (skip build)"
+        docker pull "$src"; docker tag "$src" "$tgt"; docker push "$tgt"
+    elif [[ -n "$src" ]]; then
+        c_ok "$name: using existing $tgt"
+    elif [[ -n "$df" ]]; then
+        c_step "build $name → $PUBREG"
+        ( cd "$REPO_ROOT" && docker build -f "$df" -t "$tgt" . ); docker push "$tgt"
+    else
+        c_die "$name: no Dockerfile and no prebuilt source — set its *_SRC in config.env"
+    fi
+}
+# dstack-kms has no Dockerfile here (external image); default to one already in $PUBREG.
+# The official dstacktee/dstack-kms has no :latest and lacks the rpc-cert IP SAN build.
+ensure_component key-broker on-prem/key-broker/Dockerfile "${KEY_BROKER_SRC:-}"
+ensure_component launcher   on-prem/launcher/Dockerfile   "${LAUNCHER_SRC:-}"
+ensure_component dstack-kms ""                             "${DSTACK_KMS_SRC:-$PUBREG/dstack-kms:latest}"
 
 # ── 4. JWE-encrypt the workload image → push (encryption needs only the pubkey) ─
 c_step "JWE-encrypt $WORKLOAD_SRC → $PUBREG/$WORKLOAD_NAME"

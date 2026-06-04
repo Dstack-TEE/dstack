@@ -185,15 +185,23 @@ cat pub.pem      # -----BEGIN PUBLIC KEY-----  这就是 步骤 3 加密用的 j
 
 **目的**：构建 dstack 组件镜像，并把业务镜像加密成"没私钥跑不起来"，全部推到厂商的**公共 registry**（如 `cr.kvin.wang`）。加密层无明文，可放公共仓库。
 
+> 🚀 **快速试用（免构建）。** 三个 CVM 组件镜像 `dstack-kms` / `key-broker` / `launcher` 已发布在
+> `cr.kvin.wang`。`scripts/vendor-release.sh` 在 `KEY_BROKER_SRC` / `LAUNCHER_SRC` / `DSTACK_KMS_SRC`
+> 已设时会把它们 pull+retag 进你的 `$PUBREG`（`config.env.example` 里默认就指向 `cr.kvin.wang/...`），
+> 试用即可跳过下面的 Rust 构建。**正式发布**请把 `KEY_BROKER_SRC` / `LAUNCHER_SRC` 留空、自行构建并
+> pin 自己的 digest——否则就是在信任别人构建的"执法"组件。
+
 ```bash
 export PUBREG=cr.kvin.wang        # 厂商公共 registry
 
-# 1) 构建组件镜像（构建上下文 = 仓库根）。dstack-kms 可直接用官方 dstacktee/dstack-kms。
-docker build -f on-prem/key-broker/Dockerfile -t $PUBREG/key-broker:latest .
-docker build -f on-prem/launcher/Dockerfile   -t $PUBREG/launcher:latest   .
-docker push $PUBREG/key-broker:latest
-docker push $PUBREG/launcher:latest
-# dstack-kms：docker pull dstacktee/dstack-kms:latest && docker tag … $PUBREG/dstack-kms:latest && push
+# 1) 组件镜像。快速试用:拉预构建的（无需 Rust 工具链）:
+for img in key-broker launcher dstack-kms; do
+  docker pull cr.kvin.wang/$img:latest && docker tag cr.kvin.wang/$img:latest $PUBREG/$img:latest && docker push $PUBREG/$img:latest
+done
+# 正式发布:改为自行构建（构建上下文 = 仓库根）:
+#   docker build -f on-prem/key-broker/Dockerfile -t $PUBREG/key-broker:latest . && docker push $PUBREG/key-broker:latest
+#   docker build -f on-prem/launcher/Dockerfile   -t $PUBREG/launcher:latest   . && docker push $PUBREG/launcher:latest
+#   （dstack-kms 是外部镜像——拉一个带 rpc 证书 IP-SAN 的构建,retag 后 push）
 
 # 2) 用全局公钥 JWE 加密业务镜像 → 推公共 registry（每层层密钥用公钥包好）
 skopeo copy --encryption-key jwe:pub.pem \
