@@ -606,7 +606,7 @@ to just these two.
 
 ---
 
-# Part 4 ▶ Day-2: update the workload version (Vendor + Operator)
+# Part 4 ▶ Day-2: update the workload version
 
 **Goal**: ship a new version of the business image to already-deployed CVMs **without
 rebuilding them**. The workload image digest is **not** measured (only its *name* and
@@ -618,7 +618,13 @@ The trust is preserved end-to-end: the vendor is the only party that can admit a
 digest (it must enter `allowed_workload_digests`, **G11**), and a downgrade is rejected
 (`bundle_seq` is strictly monotonic, **G8**).
 
-### Step 13 [Vendor] Cut the new version + register it
+Like the initial deploy, day-2 splits cleanly by role — **the Vendor cuts + registers the
+new version (Part 4a), then the Operator applies it (Part 4b)**; the launcher rolls it out
+on its own. Do all of 4a, hand off, then all of 4b.
+
+## Part 4a ▶ Vendor (day-2)
+
+**Cut the new version + register it:**
 
 ```bash
 cd on-prem/gcp/scripts
@@ -635,7 +641,17 @@ new `WORKLOAD_IMAGE_DIGEST`; `vendor-add-tenant.sh` (re-runnable on an existing 
 reads that manifest and calls `POST /admin/users/<id>/images`. Tell each operator a new
 version is available.
 
-### Step 14 [Operator] Mirror the image + push the refreshed bundle
+**Other vendor-side policy changes** (same shape — the vendor changes what the Authority
+signs; the operator applies it in 4b):
+
+- **Key rotation** — mint a new keyring `kid`, encrypt future images to its pubkey; the old
+  `kid` stays in the keyring until its images are retired.
+- **Revoke a version** — remove the digest from `allowed_workload_digests` (or add it to
+  `revocations.image_digests`); afterwards that digest fails **G11**.
+
+## Part 4b ▶ Operator (day-2)
+
+**Mirror the image + push the refreshed bundle:**
 
 ```bash
 cd on-prem/gcp/scripts
@@ -649,12 +665,11 @@ cd on-prem/gcp/scripts
 the bundle-only courier exchange: `usage-receipt ← key-broker → authority /sync-auth`
 (re-sign, bump `bundle_seq`) `→ /courier/install` (verify Ed25519 sig vs the pinned
 `AUTHORITY_PUBKEY` + `bundle_seq` strictly increasing). The **root key is not
-re-provisioned** — only the authorization data is swapped.
+re-provisioned** — only the authorization data is swapped. (A key rotation or revoke from
+4a lands the same way: `./operator-deploy.sh sync-auth`.)
 
-### Step 15 — automatic rolling update (launcher, no action)
-
-Each launcher polls the key-broker `/version` (every `poll_interval`). When
-`current_image_digest` changes it:
+**Then the launcher rolls out automatically (no action):** each launcher polls the
+key-broker `/version` (every `poll_interval`). When `current_image_digest` changes it:
 
 1. `lease/acquire` for the new digest — admitted only if it's in `allowed_workload_digests`
    (**G11**), re-running every gate against the live bundle;
@@ -664,10 +679,3 @@ Each launcher polls the key-broker `/version` (every `poll_interval`). When
 
 Verify on the launcher `/status` (Step 12): `running_digest` advances to the new digest and
 `bundle_seq` increments.
-
-### Related day-2 actions (same `sync-auth` push)
-
-- **Key rotation** — mint a new keyring `kid`, encrypt future images to its pubkey; the old
-  `kid` stays in the keyring until its images are retired. Push with `sync-auth`.
-- **Revoke a version** — remove the digest from `allowed_workload_digests` (or add it to
-  `revocations.image_digests`), then `sync-auth`; afterwards that digest fails **G11**.

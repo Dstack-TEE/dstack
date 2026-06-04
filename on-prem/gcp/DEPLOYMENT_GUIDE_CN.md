@@ -446,7 +446,7 @@ curl -s http://localhost:19100/status | python3 -m json.tool
 
 ---
 
-# 第 4 部分 ▶ day-2：更新 workload 版本（厂商 + operator）
+# 第 4 部分 ▶ day-2：更新 workload 版本
 
 **目标**：把业务镜像新版本下发给**已部署**的 CVM,**不重建 CVM**。业务镜像 digest **不被度量**
 (只有镜像**名字**和 `app_id` 被度量),所以版本升级是**热滚动更新**——`compose_hash` 不变、无需重部署。
@@ -455,7 +455,12 @@ curl -s http://localhost:19100/status | python3 -m json.tool
 信任全程保持:厂商是唯一能放行新 digest 的人(必须进 `allowed_workload_digests`,**G11**);降级被拒
 (`bundle_seq` 严格单调,**G8**)。
 
-### 第 13 步 [厂商] 出新版本 + 注册
+和首次部署一样,day-2 也按角色清晰拆开——**先厂商出新版本 + 注册(第 4a 部分),再 operator 应用
+(第 4b 部分)**;launcher 自行滚动。先把 4a 全做完,交接,再做 4b。
+
+## 第 4a 部分 ▶ 厂商（day-2）
+
+**出新版本 + 注册:**
 
 ```bash
 cd on-prem/gcp/scripts
@@ -470,7 +475,14 @@ cd on-prem/gcp/scripts
 `vendor-release.sh` 重新 build/加密并改写 `deploy/.release-manifest.env` 的新 `WORKLOAD_IMAGE_DIGEST`;
 `vendor-add-tenant.sh`(对已存在租户可重复跑)读清单并调 `POST /admin/users/<id>/images`。通知各 operator 有新版。
 
-### 第 14 步 [operator] 同步镜像 + 推新 bundle
+**其它厂商侧策略变更**(形式相同——厂商改 Authority 签发的内容,operator 在 4b 应用):
+
+- **密钥轮换** —— mint 新 keyring `kid`,以后的镜像加密到它的公钥;旧 `kid` 留在 keyring 直到对应镜像下线。
+- **撤销某版本** —— 从 `allowed_workload_digests` 删该 digest(或加进 `revocations.image_digests`);之后该 digest 过不了 **G11**。
+
+## 第 4b 部分 ▶ operator（day-2）
+
+**同步镜像 + 推新 bundle:**
 
 ```bash
 cd on-prem/gcp/scripts
@@ -483,19 +495,13 @@ cd on-prem/gcp/scripts
 `sync-auth`(包装脚本 `refresh-auth.sh`)开 IAP 隧道到 KMS key-broker,跑 bundle-only courier:
 `usage-receipt ← key-broker → authority /sync-auth`(重签、bundle_seq +1)`→ /courier/install`
 (用钉死的 `AUTHORITY_PUBKEY` 验 Ed25519 签名 + bundle_seq 严格递增)。**root key 不重新 provision**,
-只换授权数据。
+只换授权数据。(4a 的密钥轮换 / 撤销也走同一条:`./operator-deploy.sh sync-auth`。)
 
-### 第 15 步 —— 自动滚动更新（launcher,无需操作）
-
-每个 launcher 轮询 key-broker `/version`(每 `poll_interval`)。`current_image_digest` 变了就:
+**随后 launcher 自动滚动(无需操作):** 每个 launcher 轮询 key-broker `/version`(每 `poll_interval`)。
+`current_image_digest` 变了就:
 
 1. 对新 digest `lease/acquire` —— 只有它 ∈ `allowed_workload_digests`(**G11**)才放行,并对实时 bundle 重跑所有关卡;
 2. 拉取 + 用租来的密钥环 JWE 解密新镜像;
 3. `docker compose up` **滚动**,等约 60s 健康检查,不健康则**自动回滚**到上一个 digest。
 
 在 launcher `/status`(第 12 步)验证:`running_digest` 前进到新 digest,`bundle_seq` 自增。
-
-### 相关 day-2 动作（同样走 `sync-auth` 推送）
-
-- **密钥轮换** —— mint 新 keyring `kid`,以后的镜像加密到它的公钥;旧 `kid` 留在 keyring 直到对应镜像下线。用 `sync-auth` 推。
-- **撤销某版本** —— 从 `allowed_workload_digests` 删该 digest(或加进 `revocations.image_digests`),再 `sync-auth`;之后该 digest 过不了 **G11**。
