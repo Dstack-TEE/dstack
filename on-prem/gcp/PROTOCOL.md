@@ -25,6 +25,51 @@ AuthBundle, and a tampered compose changes `compose_hash` and is rejected at pro
 
 ---
 
+## Phase 0 — Vendor onboarding (one-time setup + per-customer account)
+
+Goal: mint the trust anchors that Phases A/B consume, and **open an account for each
+customer**. This is all the vendor's offline/admin work — no attestation yet.
+
+**A. One-time vendor setup** (`deploy-authority.sh`, `vendor-release.sh`)
+
+1. **Authority bootstrap** — generate/persist the Ed25519 signing key → `AUTHORITY_PUBKEY`.
+2. **Mint the global image keyring** — `POST /admin/keys {kid}` → EC P-256 keypair; the
+   private half never leaves the Authority.
+3. **Encrypt + push images** — `skopeo copy --encryption-key jwe:pub.pem` (public key only).
+4. **Register global policy** — `POST /admin/os-images {hash}` (read from the published OS
+   release's `auth_hash.txt`) and `POST /admin/kms-compose-hashes {hash}` (the computed KMS
+   `compose_hash`).
+5. **Pin templates** — write `AUTHORITY_PUBKEY` + image digests + `app_id` *literally* into
+   the **measured** composes. This is the step that **measures the trust root into**
+   `compose_hash`, so a later tamper changes the hash and is rejected.
+
+**B. Per-customer account / 开户** (`vendor-add-tenant.sh <user_id>`)
+
+6. `POST /admin/users {user_id}` → returns a **tenant API key** (shown once) and mints that
+   tenant's **own `root_material`** (P-256 root-CA + secp256k1 k256, independent per tenant).
+7. `POST /admin/users/{user_id}/images {app_id, allowed_launcher_digests, image_digest}` →
+   registers the app into **this tenant's** whitelist (`allowed_launcher_digests` = the
+   launcher's measured `compose_hash`; `allowed_workload_digests` = the workload image digest).
+
+**Handoff to that customer's operator:** ① the 4 images in `$PUBREG`; ② the pin-filled
+`deploy/kms` + `deploy/launcher`; ③ `AUTHORITY_PUBKEY`; ④ the **tenant API key**.
+
+| Produced in Phase 0 | Consumed at |
+|---|---|
+| `AUTHORITY_PUBKEY` (measured into the compose) | **G7** — key-broker verifies the AuthBundle signature |
+| tenant API key | Phase A `challenge`/`provision` — authenticates the courier *as* `user_id` |
+| per-tenant `root_material` | Phase A — HPKE-sealed to the KMS as `sealed_root` |
+| global image keyring (private keys) | Phase B — leased to the attested launcher to decrypt |
+| os-image hash whitelist | **G4** |
+| KMS compose-hash whitelist | **G6** |
+| app whitelist (`app_id` + launcher/workload digests) | **G9 / G10 / G11** |
+
+The tenant API key is the only thing that selects *which* account a provision draws from:
+it authenticates the courier as `user_id`, and the Authority ships **that tenant's whole app
+whitelist** (§ "which app_ids" — narrowed per-app later, at the workload's lease, by G9).
+
+---
+
 ## Phase A — KMS provisioning (courier attest)
 
 Goal: hand the KMS its root key **without the operator ever seeing it**, and only to a

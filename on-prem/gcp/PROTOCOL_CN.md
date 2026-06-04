@@ -24,6 +24,46 @@
 
 ---
 
+## 阶段 0 —— 厂商开户（一次性建置 + 逐客户开户）
+
+目标:铸造阶段 A/B 要消费的信任锚,并**为每个客户开户**。这一段全是厂商的离线/管理操作,还没有任何 attestation。
+
+**A. 一次性厂商建置**（`deploy-authority.sh`、`vendor-release.sh`）
+
+1. **Authority 引导** —— 生成/持久化 Ed25519 签名私钥 → `AUTHORITY_PUBKEY`。
+2. **铸造全局镜像密钥环** —— `POST /admin/keys {kid}` → EC P-256 密钥对;私钥永不离开 Authority。
+3. **加密 + 推镜像** —— `skopeo copy --encryption-key jwe:pub.pem`(只用公钥)。
+4. **注册全局策略** —— `POST /admin/os-images {hash}`(取自已发布 OS 版本的 `auth_hash.txt`)和
+   `POST /admin/kms-compose-hashes {hash}`(算出的 KMS `compose_hash`)。
+5. **钉模板** —— 把 `AUTHORITY_PUBKEY` + 各镜像 digest + `app_id` **字面写进被度量的** compose。
+   这一步把**信任根度量进** `compose_hash`——日后任何篡改都会改变哈希、在 provision 时被拒。
+
+**B. 逐客户开户 / 开户**（`vendor-add-tenant.sh <user_id>`）
+
+6. `POST /admin/users {user_id}` → 返回**租户 API key**(只显示一次),并铸造该租户**自己的
+   `root_material`**(P-256 root-CA + secp256k1 k256,每租户独立)。
+7. `POST /admin/users/{user_id}/images {app_id, allowed_launcher_digests, image_digest}` →
+   把 app 注册进**该租户**的白名单(`allowed_launcher_digests` = launcher 被度量的 `compose_hash`;
+   `allowed_workload_digests` = 业务镜像 digest)。
+
+**交付给该客户的 operator:** ① `$PUBREG` 里的 4 个镜像;② 填好 pin 的 `deploy/kms` + `deploy/launcher`;
+③ `AUTHORITY_PUBKEY`;④ **租户 API key**。
+
+| 阶段 0 产出 | 在哪被消费 |
+|---|---|
+| `AUTHORITY_PUBKEY`(度量进 compose) | **G7** —— key-broker 验 AuthBundle 签名 |
+| 租户 API key | 阶段 A `challenge`/`provision` —— 把 courier 认证为 `user_id` |
+| 每租户 `root_material` | 阶段 A —— HPKE 封给 KMS 作 `sealed_root` |
+| 全局镜像密钥环(私钥) | 阶段 B —— 租给已 attest 的 launcher 解密 |
+| os-image 哈希白名单 | **G4** |
+| KMS compose-hash 白名单 | **G6** |
+| app 白名单(`app_id` + launcher/workload digest) | **G9 / G10 / G11** |
+
+租户 API key 是唯一决定一次 provision 取自**哪个账户**的东西:它把 courier 认证为 `user_id`,Authority
+就下发**该租户的整张 app 白名单**(到 workload lease 时再由 G9 按 app 收窄)。
+
+---
+
 ## 阶段 A —— KMS 开通（courier attest）
 
 目标:把 root key 交给 KMS,**全程不让 operator 看到**,且只交给厂商密码学批准过的 CVM。
