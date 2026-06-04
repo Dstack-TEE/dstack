@@ -65,7 +65,7 @@
 | **镜像 digests**（key-broker/dstack-kms/launcher/业务镜像） | 厂商（构建产出） | pin 进 compose / 注册 | — |
 | **AUTHORITY_PUBKEY** | 厂商（Authority 产出） | pin 进 KMS compose | — |
 
-> ⚠️ **务必在首次 provision 前就把 KMS 绑定到规划好的静态 IP。** KMS 证书 SAN 由 key-broker 在 install 时**自测 CVM 自身内网 IP** 自动生成,所以只要 CVM 已绑静态 IP,SAN 就自动 == `kms_urls`,双方都无需配 `KMS_DOMAIN`。**部署后再改 KMS IP** 才需要重新 provision——而无 SSH 环境下改不了已装证书,要销毁重建整台 KMS(详见附录)。少数"KMS 前面挂 DNS 名/LB"的场景可用 `kms_ctl.py attest --kms-domain <name>` 覆盖。
+> ⚠️ **务必在首次 provision 前就把 KMS 绑定到规划好的静态 IP。** KMS 证书 SAN 由 key-broker 在 install 时**自测 CVM 自身内网 IP** 自动生成,所以只要 CVM 已绑静态 IP,SAN 就自动 == `kms_urls`,双方都无需配 `KMS_DOMAIN`。**部署后再改 KMS IP** 才需要重新 provision——而无 SSH 环境下不能就地改已装的证书（`provision --reset` 靠 SSH 擦 `/kms` 会失败、跑着的 dstack-kms 也无法在线重启），只能 `remove` 整台 KMS（含 data disk）后重新 `deploy`+`provision`，SAN 会自动跟到新 IP。少数"KMS 前面挂 DNS 名/LB"的场景可用 `kms_ctl.py attest --kms-domain <name>` 覆盖。
 
 ---
 
@@ -185,16 +185,16 @@ done
 
 **目的**：在 Authority 里注册"什么 OS、什么 KMS compose、什么 app + launcher/workload digest"才放行。`compose_hash` 跨客户一致（因客户值都在 `${VAR}`/user_config，不进度量），厂商**预算一次、注册一次**。
 
-先把 步骤 3 的 digest + 步骤 1 的 pubkey 填进 compose 模板并算 hash（详见 步骤 5；这里假设已填好 `deploy/kms-prod`、`deploy/launcher-prod`）：
+先把 步骤 3 的 digest + 步骤 1 的 pubkey 填进 compose 模板并算 hash（详见 步骤 5；这里假设已填好 `deploy/kms`、`deploy/launcher`）：
 
 ```bash
 # compose_hash = sha256(app-compose.json)（权威算法 = dstack-util sha256_file）
-dstack-cloud -C deploy/kms-prod      prepare >/dev/null
-dstack-cloud -C deploy/launcher-prod prepare >/dev/null
-KMS_COMPOSE_HASH=$(sha256sum deploy/kms-prod/shared/app-compose.json      | cut -d' ' -f1)
-LN_COMPOSE_HASH=$( sha256sum deploy/launcher-prod/shared/app-compose.json | cut -d' ' -f1)
+dstack-cloud -C deploy/kms      prepare >/dev/null
+dstack-cloud -C deploy/launcher prepare >/dev/null
+KMS_COMPOSE_HASH=$(sha256sum deploy/kms/shared/app-compose.json      | cut -d' ' -f1)
+LN_COMPOSE_HASH=$( sha256sum deploy/launcher/shared/app-compose.json | cut -d' ' -f1)
 
-export USER_ID=acme-prod
+export USER_ID=acme
 export APP_ID=<workload-app-id-40hex>     # 厂商选定的业务 app id
 export OS_IMAGE_HASH=<见 步骤 9 measure 取得>  # dstack OS 镜像的 UKI 哈希
 export IMAGE_DIGEST=sha256:<步骤 3 业务镜像 digest>
@@ -232,17 +232,28 @@ curl -s -X POST $AUTHORITY/api/v1/admin/users/$USER_ID/images \
 
 ```bash
 # 从 committed 模板拷出，填 pin（也可直接交付填好的模板给 operator）
-cp -a deploy-templates/kms      deploy/kms-prod
-cp -a deploy-templates/workload deploy/launcher-prod
+cp -a deploy-templates/kms      deploy/kms
+cp -a deploy-templates/workload deploy/launcher
 ```
 
-KMS compose（`deploy/kms-prod/docker-compose.yaml`）填：
+KMS compose（`deploy/kms/docker-compose.yaml`）填：
 - `key-broker` 镜像 → `${DSTACK_REGISTRY}/key-broker@sha256:<步骤 3 key-broker digest>`
 - `dstack-kms` 镜像 → `${DSTACK_REGISTRY}/dstack-kms@sha256:<步骤 3 dstack-kms digest>`
 - `AUTHORITY_PUBKEY=<步骤 1 $PUBKEY 字面量>`（**绝不来自变量**，启用 AuthBundle 验签）
 - 保留字面 `${DSTACK_REGISTRY}` / `${SWP_PROXY}`
 
-workload compose（`deploy/launcher-prod/docker-compose.yaml`）填：
+> ### `AUTHORITY_PUBKEY` 的原理与它防的作恶
+>
+> 它是**厂商 Authority 的 Ed25519 公钥**。key-broker 每次收到 AuthBundle，都用它验证 bundle 的签名（`verify_auth_bundle`），**只接受厂商私钥签过的 bundle**。而 AuthBundle 装的正是全部授权策略：`app_whitelist`（允许的 launcher / workload digest）、`os_images`、**全局镜像私钥环**、`slot_quota`、`bundle_seq`。它被**字面**写进 KMS compose → 进入 `compose_hash` → 被 TDX+vTPM 远程证明度量。
+>
+> **威胁模型：operator 是半可信的**——他跑基础设施、能直接调 key-broker 的 `/courier/install`，但绝不能自我授权去骗取镜像私钥环、或让未授权代码拿到 KMS 派生密钥。pin 这把公钥正是为防两类作恶：
+>
+> 1. **operator 自签一个假授权。** 若不 pin，operator（或被攻陷的 courier CLI）能自造一个 AuthBundle——把恶意 launcher digest / 攻击者的镜像 / 假 keyring 塞进白名单——`install` 进 KMS，从而把镜像私钥环骗到手。pin 了公钥后，key-broker 对**任何非厂商签名**的 bundle 一律拒签。
+> 2. **operator 把信任根掉包成自己的 key。** 既然 `AUTHORITY_PUBKEY` 是**字面写在被度量的 compose** 里，operator 想把它换成自己的公钥（好让自签 bundle 通过），就会改变 `compose_hash` → KMS provision 时 `compose_hash` 不在厂商预注册的 `allowed_kms_compose_hashes` 中 → 直接被拒、根密钥根本不下发。
+>
+> 所以它**必须字面、绝不能来自变量 / user_config**：一旦来自运行期变量，operator 就能替换信任锚。把它钉死在被度量的 compose 里，等于"这台 KMS 只信厂商这把签名 key"这一事实本身被远程证明背书——即便 operator 完全掌控部署，也绕不过去。（配套的 `bundle_seq` 单调递增另防把旧 bundle 回滚重放。）
+
+workload compose（`deploy/launcher/docker-compose.yaml`）填：
 - `launcher` 镜像 → `${DSTACK_REGISTRY}/launcher@sha256:<步骤 3 launcher digest>`
 - `APP_ID=<$APP_ID 字面量>`、`WORKLOAD_IMAGE=${DSTACK_REGISTRY}/<your-app>-enc`（不含 tag，digest 来自 Authority `current_image_digest`）
 - 保留字面 `${KMS_HOST}`（`KMS_URL`/`KEY_BROKER_URL=https://${KMS_HOST}:8000|8002`）
@@ -275,24 +286,24 @@ done
 
 ```bash
 # 预留 KMS / launcher 的静态内网 IP（remove/deploy 后地址不变 → 证书 SAN/kms_urls 才稳定）
-gcloud compute addresses create dstack-kms-prod-ip      --region=$REGION \
+gcloud compute addresses create dstack-kms-ip      --region=$REGION \
   --subnet=default --addresses=10.128.15.220 --project=$PROJECT
-gcloud compute addresses create dstack-launcher-prod-ip --region=$REGION \
+gcloud compute addresses create dstack-launcher-ip --region=$REGION \
   --subnet=default --addresses=10.128.15.230 --project=$PROJECT
 
 # 放厂商交付的模板（含 pin）；deploy/ 被 gitignore，是 per-customer 状态
-cp -a <vendor-delivered>/kms      deploy/kms-prod
-cp -a <vendor-delivered>/workload deploy/launcher-prod
+cp -a <vendor-delivered>/kms      deploy/kms
+cp -a <vendor-delivered>/workload deploy/launcher
 
 # 填 app.json 的 GCP 字段（这些不进 compose_hash）
-#   kms-prod:      project/zone/bucket、private_ip=10.128.15.220、key_provider=tpm
-#   launcher-prod: 同上、private_ip=10.128.15.230、app_id=<$APP_ID>、key_provider=kms
+#   kms:      project/zone/bucket、private_ip=10.128.15.220、key_provider=tpm
+#   launcher: 同上、private_ip=10.128.15.230、app_id=<$APP_ID>、key_provider=kms
 
 # 客户值（明文 JSON，经 shared 盘投递为 /dstack/.host-shared/.user-config）
-cat > deploy/kms-prod/.user-config <<EOF
+cat > deploy/kms/.user-config <<EOF
 { "DSTACK_REGISTRY": "$AR", "SWP_PROXY": "10.128.0.53:80" }
 EOF
-cat > deploy/launcher-prod/.user-config <<EOF
+cat > deploy/launcher/.user-config <<EOF
 { "DSTACK_REGISTRY": "$AR", "KMS_HOST": "10.128.15.220" }
 EOF
 
@@ -309,9 +320,9 @@ dstack-cloud config-edit      # services.kms_urls = ["https://10.128.15.220:8000
 **目的**：在 GCP 建 KMS 的 TDX 机密虚机，绑定静态 IP，从 AR 拉起 key-broker + dstack-kms。
 
 ```bash
-dstack-cloud -C deploy/kms-prod prepare        # 生成 shared/（app-compose、sys-config、.instance_info）
-dstack-cloud -C deploy/kms-prod deploy         # 建 TDX 虚机，绑定 private_ip=10.128.15.220
-dstack-cloud -C deploy/kms-prod fw allow 8001 8002   # 放行 IAP → key-broker（courier 8001 / mTLS 8002）
+dstack-cloud -C deploy/kms prepare        # 生成 shared/（app-compose、sys-config、.instance_info）
+dstack-cloud -C deploy/kms deploy         # 建 TDX 虚机，绑定 private_ip=10.128.15.220
+dstack-cloud -C deploy/kms fw allow 8001 8002   # 放行 IAP → key-broker（courier 8001 / mTLS 8002）
 ```
 
 - `prepare`：把 compose/prelaunch 归一化成 `app-compose.json`（compose_hash 来源），生成内网 IP/OS 哈希等 sys-config。
@@ -325,7 +336,7 @@ dstack-cloud -C deploy/kms-prod fw allow 8001 8002   # 放行 IAP → key-broker
 ```bash
 # 首次：取 OS 镜像哈希（只读，不释放根），填回厂商的 EXPECTED_OS_IMAGE_HASH / 步骤 4 的 os-images，
 # 并写 auth_hash.txt 让 CVM 自身也 pin（否则 BootInfo.os_image_hash 为空被 fail-closed 拒）
-gcloud compute start-iap-tunnel dstack-kms-prod 8001 --local-host-port=localhost:8001 \
+gcloud compute start-iap-tunnel dstack-kms 8001 --local-host-port=localhost:8001 \
   --project=$PROJECT --zone=$ZONE &
 python3 authority/kms_ctl.py measure --user-id $USER_ID \
   --kms-url http://localhost:8001 --authority-url $AUTHORITY   # 打印 os_image_hash 等
@@ -347,7 +358,7 @@ scripts/provision-kms.sh        # = kms_ctl.py attest
 **目的**：确认 KMS 已从下发的根启动、对外 TLS、且证书 SAN = 静态 IP（否则业务 CVM 连不上）。
 
 ```bash
-gcloud compute start-iap-tunnel dstack-kms-prod 8000 --local-host-port=localhost:18000 \
+gcloud compute start-iap-tunnel dstack-kms 8000 --local-host-port=localhost:18000 \
   --project=$PROJECT --zone=$ZONE &
 curl -sk https://localhost:18000/prpc/KMS.GetMeta | head -c 80   # → {"ca_cert":"-----BEGIN CERT…
 echo | openssl s_client -connect localhost:18000 2>/dev/null \
@@ -355,15 +366,15 @@ echo | openssl s_client -connect localhost:18000 2>/dev/null \
 ```
 
 - `GetMeta` 返回 `ca_cert`/`k256_pubkey` 即 KMS 已 serving。
-- 证书 SAN **必须是 `IP Address:10.128.15.220`**（= key-broker install 时自测到的 CVM IP，ra_tls 自动出 IP SAN）。若是 `DnsName:kms.local`，说明自测失败回落到了 fallback——检查 CVM 是否真的绑了静态 IP（见附录）。
+- 证书 SAN **必须是 `IP Address:10.128.15.220`**（= key-broker install 时自测到的 CVM IP，ra_tls 自动出 IP SAN）。若是 `DnsName:kms.local`，说明自测失败回落到了 fallback——检查 CVM 是否真的绑了静态 IP（`deploy` 输出的 Internal IP 应 == 预留地址；否则查 `dstack-cloud` 的 `private_ip` patch）。
 
 ## 步骤 11【Operator】部署业务 CVM
 
 **目的**：起 launcher，在 TEE 内取镜像私钥、JWE 解密、运行业务容器，全程无公网。
 
 ```bash
-dstack-cloud -C deploy/launcher-prod prepare
-dstack-cloud -C deploy/launcher-prod deploy    # 确认 Internal IP: 10.128.15.230
+dstack-cloud -C deploy/launcher prepare
+dstack-cloud -C deploy/launcher deploy    # 确认 Internal IP: 10.128.15.230
 ```
 
 启动链路（自动）：guest-agent `key_provider=kms` → 向 KMS（`10.128.15.220:8000`，证书 SAN 匹配）GetAppKey 拿 app 密钥 + KMS 派生 CA → launcher 调 guest-agent `get_tls_key` 拿 **KMS 签发、带 app_info 扩展的 RA-TLS 客户端证书** → 连 key-broker（`10.128.15.220:8002` mTLS）申请**密钥租约**（key-broker 验链 + 从扩展取 app_id/compose_hash/os_image 校验白名单后返回**全局镜像私钥环**）→ launcher 把私钥写 tmpfs、喂 `skopeo --decryption-key` 按摘要解密 → `docker load` → compose 起容器。租约有 TTL，断租超宽限期停业务容器。
@@ -371,7 +382,7 @@ dstack-cloud -C deploy/launcher-prod deploy    # 确认 Internal IP: 10.128.15.2
 ## 步骤 12【Operator】验证 E2E
 
 ```bash
-gcloud compute start-iap-tunnel dstack-launcher-prod 9100 --local-host-port=localhost:19100 \
+gcloud compute start-iap-tunnel dstack-launcher 9100 --local-host-port=localhost:19100 \
   --project=$PROJECT --zone=$ZONE &
 curl -s http://localhost:19100/status | python3 -m json.tool
 ```
@@ -397,42 +408,3 @@ curl -s http://localhost:19100/status | python3 -m json.tool
 
 > 一键脚本 `scripts/setup-swp.sh`（pga/gateway/hosts/lockdown/verify 各阶段）。验证：CVM 内 `curl -x http://<SWP_IP>:80 https://api.trustedservices.intel.com/...`=200，直连 `https://www.google.com` 超时。
 
----
-
-# 第四部分 ▶ 接口与安全模型（生产无 SSH / fail-closed）
-
-生产**不装 sshd**；一切交互走专门设计的 HTTP API。
-
-| 端点 | 端口/传输 | 用途 |
-|------|-----------|------|
-| `/courier/init`、`/courier/install` | 8001,IAP | provision（出证明、装 HPKE 封装的根 + 验签 AuthBundle） |
-| `/bootAuth/kms`、`/bootAuth/app` | 8001,本地 | KMS 授权 webhook：校验自身/各 app 的 app_id/compose_hash 是否在白名单 |
-| `/healthz`、`/version`、`/usage-receipt` | 8001 | 就绪、当前镜像摘要+bundle_seq、签名用量回执 |
-| `/lease/acquire`、`/lease/renew` | 8002,**mTLS** | 给业务 CVM 下发镜像私钥环 + 租约 |
-| launcher `/status`、`/healthz` | 9100 | 只读运行状态（摘要/租约/seq/是否运行/错误类别） |
-
-**API 防泄漏**：管理端点只回 HPKE 封装/加密 blob、签名/公钥、布尔+非敏感元数据（mint 只回公钥，根密钥/私钥环**任何明文端点都不返回**）。**唯一私钥出口 = mTLS `/lease/acquire`**，且绑定已远证 + 已授权的 launcher。无内省/调试/文件/exec 端点。错误响应可含文件路径但**不含密钥内容**。
-
-**Fail-closed 原则**：所有授权/校验**默认拒绝**——空白名单/缺配置/缺证明一律拒，无任何"关安全检查"的旁路开关。强制门：os-images 白名单（bootAuth + 租约都查，空=拒）、`key_provider==tpm` + `compose_hash` ∈ 白名单（KMS provision）、租约要求 launcher 出**已远证的 RA-TLS 证书**（无证则拒，空 keyring 也拒）、TCB ∈ `allowed_tcb_statuses`。
-
----
-
-# 附录 ▶ 常见问题（实测踩坑）
-
-- **`deploy` 后 Internal IP 不是预留的静态地址** → `dstack-cloud` 没有 `private_ip` patch（见前置条件，Dstack-TEE/dstack #709）。stock 版会丢弃 `private_ip` 并重写 app.json 抹掉它，需打 patch 并重新写回 `app.json` 的 `private_ip`。
-
-- **`certificate not valid for name "<IP>"; only valid for DnsName("kms.local")`**（业务 CVM boot loop / guest-agent GetAppKey 失败）→ KMS 证书 SAN 不是 CVM IP。SAN 由 key-broker 在 install 时**自测 CVM 内网 IP** 生成,正常情况自动 == `kms_urls`;见到 `kms.local`(fallback)说明:① CVM **没绑静态 IP**(检查 dstack-cloud `private_ip` patch + `deploy` 输出的 Internal IP);或 ② 自测被环境阻断。要点:`kms_urls`/`KMS_HOST` 用 CVM 的实际内网 IP;dstack-kms 的 ra-tls 要支持 IP SAN(mainline / 官方 `dstacktee/dstack-kms` 已支持)。**改 KMS IP 后须重新 provision;无 SSH 时不能就地改证书,要销毁重建整台 KMS CVM(含 data disk)**——`provision --reset` 靠 SSH 擦 `/kms` 会失败、跑着的 dstack-kms 无法在线重启。重建:`remove` → 重新预留/绑定静态 IP + 改 `kms_urls`/`KMS_HOST` → `deploy` → `provision`(SAN 自动跟到新 IP)。
-
-- **provision 403 `not in whitelist`** → 旧 `mr_aggregated` 机制（GCP PCR0 每实例变）；现机制 key 在 `os_image_hash+key_provider=tpm+compose_hash`。**故意改 KMS compose** 会合法 403，需把新 `compose_hash` 加进 `allowed_kms_compose_hashes`。
-
-- **`invalid quote: Failed to get collateral: …certificates.trustedservices.intel.com…: tunnel error`** → SWP 白名单漏了 `certificates.trustedservices.intel.com`（两个 Intel 域名都要放）。
-
-- **`Boot denied: OS image is not allowed`** → 业务 CVM 的 `os_image_hash` 为空。建 `~/.dstack/images/<os_image>/auth_hash.txt`=OS 哈希，prepare 会写进 vm_config。
-
-- **AR 拉取 `Unauthenticated`** → CVM 的 prelaunch 要用实例 SA 的 metadata token `docker login` 到 AR（dstack OS 的 python 无 `json`，用 `sed` 解析 token）。
-
-- **skopeo JWE 解密 `missing private key`** → 私钥须是 **PKCS#8**（`-----BEGIN PRIVATE KEY-----`；SEC1 的 `EC PRIVATE KEY` ocicrypt 不收，Authority mint 已用 PKCS#8）。解密 `--decryption-key <priv.pem>` **不带** `jwe:` 前缀。
-
-- **launcher `GetTlsKey returned 404`** → guest-agent prpc 路径应是裸方法名 **`/GetTlsKey`**（不是 `/prpc/…` 也不是 `/DstackGuest.GetTlsKey`）。
-
-> 完整实测链路：KMS（fail-closed + IP SAN cert + 经明文 SWP 出 Intel）→ 业务 CVM `key_provider=kms` 启动取钥解盘 → launcher `get_tls_key` 拿 KMS 签发 RA-TLS 证书 → key-broker 双向 mTLS → 租约 + **全局镜像私钥环** → skopeo `--decryption-key` JWE 解密 → 业务容器运行。零 insecure 开关，全程无 SSH。
