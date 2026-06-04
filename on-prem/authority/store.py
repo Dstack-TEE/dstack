@@ -102,42 +102,52 @@ class Store:
 
     # ─── real authorization data (per-app whitelist + image CEKs) ─────────────
 
-    def register_app_image(self, user_id: str, app_id: str, launcher_hashes,
-                           image_digest: str, cek: str = "") -> dict:
-        """Register a real workload app + an encrypted image's CEK for a user.
+    @staticmethod
+    def _migrate_app(app: dict) -> dict:
+        """Normalise an app record to the current schema (two per-app digest
+        whitelists), migrating older field names in place."""
+        if "allowed_launcher_hashes" in app:
+            app["allowed_launcher_digests"] = app.pop("allowed_launcher_hashes")
+        app.setdefault("allowed_launcher_digests", [])
+        if "allowed_workload_digests" not in app:
+            wl = [i["digest"] for i in app.get("allowed_images", []) if i.get("digest")]
+            cur = app.get("current_image_digest")
+            if cur and cur not in wl:
+                wl.append(cur)
+            app["allowed_workload_digests"] = wl
+        app.pop("allowed_images", None)
+        return app
 
-        Replaces the placeholder app_whitelist with real data the AuthBundle will
-        carry: the app_id, the allowed launcher compose hashes, and the
-        {digest → CEK} the launcher needs to decrypt the image. Generates a CEK
-        if one isn't supplied. Returns the app entry (incl. the CEK).
+    def register_app_image(self, user_id: str, app_id: str, launcher_digests,
+                           image_digest: str, cek: str = "") -> dict:
+        """Register a workload app: which launcher (compose digest) may run it and
+        which workload-image digest it may decrypt+run.
+
+        Carries into the AuthBundle's app_whitelist:
+          - allowed_launcher_digests: the launcher's measured compose_hash(es)
+          - allowed_workload_digests: the payload image digest(s) the launcher may
+            request a keyring lease for (key-broker enforces req.image_digest ∈)
+          - current_image_digest: the active version the launcher should run
+        (`cek` is accepted for call-compat and ignored — the global JWE keyring
+        replaced per-digest CEKs.)
         """
         c = self.get_or_create_user(user_id)
         apps: Dict[str, Any] = c.setdefault("apps", {})
-        app = apps.setdefault(app_id, {
-            "app_id": app_id,
-            "allowed_launcher_hashes": [],
-            "allowed_images": [],
-        })
-        # launcher hashes (dedup, "*" allowed for dev)
-        for h in (launcher_hashes if isinstance(launcher_hashes, list) else [launcher_hashes]):
-            if h and h not in app["allowed_launcher_hashes"]:
-                app["allowed_launcher_hashes"].append(h)
-        # image + CEK
-        if not cek:
-            cek = generate_cek()
-        existing = next((i for i in app["allowed_images"] if i["digest"] == image_digest), None)
-        if existing:
-            existing["cek"] = cek
-        else:
-            app["allowed_images"].append({"digest": image_digest, "cek": cek})
-        app["current_image_digest"] = image_digest
+        app = self._migrate_app(apps.setdefault(app_id, {"app_id": app_id}))
+        for h in (launcher_digests if isinstance(launcher_digests, list) else [launcher_digests]):
+            if h and h not in app["allowed_launcher_digests"]:
+                app["allowed_launcher_digests"].append(h)
+        if image_digest and image_digest not in app["allowed_workload_digests"]:
+            app["allowed_workload_digests"].append(image_digest)
+        if image_digest:
+            app["current_image_digest"] = image_digest
         self._save_customers()
         return app
 
     def get_apps(self, user_id: str) -> list:
         """Real app_whitelist for a user (empty if none registered)."""
         c = self.get_or_create_user(user_id)
-        return list(c.get("apps", {}).values())
+        return [self._migrate_app(a) for a in c.get("apps", {}).values()]
 
     # ─── GLOBAL image-decryption keyring (ocicrypt native JWE) ────────────────
     # Vendor-wide, NOT per-user: the vendor encrypts one image to the current
@@ -253,28 +263,29 @@ class Store:
     def remove_kms_compose_hash(self, h: str) -> bool: return self._policy_remove("kms_compose_hashes", h)
     def get_kms_compose_hashes(self) -> list: return list(self.policy["kms_compose_hashes"])
 
-    # ─── per-app launcher compose-hash management (dynamic) ────────────────────
+    # ─── per-app digest whitelist management (dynamic) ────────────────────────
+    # field ∈ {"allowed_launcher_digests", "allowed_workload_digests"}
     def _app(self, user_id: str, app_id: str) -> dict:
         app = self.get_or_create_user(user_id).get("apps", {}).get(app_id)
         if not app:
             raise ValueError(f"app not found: {app_id} (register it first)")
-        return app
+        return self._migrate_app(app)
 
-    def add_launcher_hash(self, user_id: str, app_id: str, h: str) -> list:
+    def add_app_digest(self, user_id: str, app_id: str, field: str, h: str) -> list:
         app = self._app(user_id, app_id)
-        if h and h not in app["allowed_launcher_hashes"]:
-            app["allowed_launcher_hashes"].append(h)
+        if h and h not in app[field]:
+            app[field].append(h)
             self._save_customers()
-        return list(app["allowed_launcher_hashes"])
+        return list(app[field])
 
-    def remove_launcher_hash(self, user_id: str, app_id: str, h: str) -> list:
+    def remove_app_digest(self, user_id: str, app_id: str, field: str, h: str) -> list:
         app = self._app(user_id, app_id)
-        app["allowed_launcher_hashes"] = [x for x in app["allowed_launcher_hashes"] if x != h]
+        app[field] = [x for x in app[field] if x != h]
         self._save_customers()
-        return list(app["allowed_launcher_hashes"])
+        return list(app[field])
 
-    def get_launcher_hashes(self, user_id: str, app_id: str) -> list:
-        return list(self._app(user_id, app_id)["allowed_launcher_hashes"])
+    def get_app_digests(self, user_id: str, app_id: str, field: str) -> list:
+        return list(self._app(user_id, app_id)[field])
 
     # ─── multi-user management ────────────────────────────────────────────────
     # A "user" is a customer that owns an API key. Each user gets its own

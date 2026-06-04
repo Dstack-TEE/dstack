@@ -293,7 +293,7 @@ skopeo copy --encryption-key jwe:pub.pem docker://<plain-image> docker://<regist
 ```
 
 Key release is gated by the AuthBundle: the launcher's RA-TLS identity must pass
-`app_id ∈ app_whitelist ∧ compose_hash ∈ allowed_launcher_hashes ∧ os_image ∈
+`app_id ∈ app_whitelist ∧ compose_hash ∈ allowed_launcher_digests ∧ os_image ∈
 os_images`; it then receives the **global** keyring (vendor-wide — one encrypted
 image decrypts for every tenant). Pulling by `@digest` enforces the digest, and
 ocicrypt decrypts only if a leased key is the image's recipient (else fails
@@ -334,7 +334,7 @@ closed). The keyring is **global**; per-tenant isolation is in `root_material`.
   GCP Secure Web Proxy configured as a **plaintext** endpoint (so the rustls
   client can use it; whitelist proven — Intel allowed, google blocked). Enforced
   by a tag-scoped fail-closed egress firewall.
-- ✅ **Real AuthBundle**: per-app `app_id` / `allowed_launcher_hashes` (from
+- ✅ **Real AuthBundle**: per-app `app_id` / `allowed_launcher_digests` (from
   `store.register_app_image`) + a **global image keyring** of `{kid, priv_pem,
   pub_pem}` keypairs (`store.mint_key`); Ed25519-signed, `bundle_seq` monotonic.
 - ✅ **Workload launcher E2E**: lease acquired → global key**ring** (private keys)

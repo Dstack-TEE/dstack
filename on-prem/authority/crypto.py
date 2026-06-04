@@ -258,7 +258,7 @@ def make_auth_bundle(user_id: str, bundle_seq: int,
     """Build and sign an AuthBundle for a user.
 
     `app_whitelist` is the user's REAL registered apps (store.get_apps): each
-    `{app_id, allowed_launcher_hashes, current_image_digest}` — the entitlement
+    `{app_id, allowed_launcher_digests, current_image_digest}` — the entitlement
     gates (which app + compose may run). `keyring` (store.get_keyring) is the
     GLOBAL, vendor-wide image keypairs `[{kid, priv_pem, pub_pem, created_at[,
     not_after]}]` — the SAME keyring goes into every tenant's bundle, so one

@@ -421,7 +421,7 @@ def register_image(user_id: str, req: RegisterImageRequest, _: None = Depends(re
     provision/sync-auth emits this in the AuthBundle's app_whitelist (replacing
     the dev placeholder). Returns the app entry incl. the CEK."""
     app = store.register_app_image(
-        user_id, req.app_id, req.allowed_launcher_hashes, req.image_digest, req.cek or ""
+        user_id, req.app_id, req.allowed_launcher_digests, req.image_digest, req.cek or ""
     )
     logger.info("registered image for %s app=%s digest=%s", user_id, req.app_id, req.image_digest)
     return {"app": app}
@@ -515,29 +515,49 @@ def remove_kms_compose_hash(h: str, _: None = Depends(require_admin)):
     return {"kms_compose_hashes": store.get_kms_compose_hashes()}
 
 
-# ─── per-app launcher compose-hash management (the workload's launcher) ───────
+# ─── per-app digest whitelists: launcher (compose_hash) + workload (payload) ──
+# Both gate the key-broker lease: the attested compose_hash must be in
+# allowed_launcher_digests, and the requested image digest in
+# allowed_workload_digests. Manage either live ("*" = wildcard, dev only).
 
-@app.post("/api/v1/admin/users/{user_id}/apps/{app_id}/launcher-hashes")
-def add_launcher_hash(user_id: str, app_id: str, req: HashRequest, _: None = Depends(require_admin)):
+_DIGEST_FIELDS = {
+    "launcher-digests": "allowed_launcher_digests",
+    "workload-digests": "allowed_workload_digests",
+}
+
+
+def _digest_field(kind: str) -> str:
+    f = _DIGEST_FIELDS.get(kind)
+    if not f:
+        raise HTTPException(status_code=404, detail=f"unknown digest list: {kind}")
+    return f
+
+
+@app.post("/api/v1/admin/users/{user_id}/apps/{app_id}/{kind}")
+def add_app_digest(user_id: str, app_id: str, kind: str, req: HashRequest,
+                   _: None = Depends(require_admin)):
+    field = _digest_field(kind)
     try:
-        lst = store.add_launcher_hash(user_id, app_id, req.hash)
+        return {field: store.add_app_digest(user_id, app_id, field, req.hash)}
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
-    return {"allowed_launcher_hashes": lst}
 
 
-@app.get("/api/v1/admin/users/{user_id}/apps/{app_id}/launcher-hashes")
-def list_launcher_hashes(user_id: str, app_id: str, _: None = Depends(require_admin)):
+@app.get("/api/v1/admin/users/{user_id}/apps/{app_id}/{kind}")
+def list_app_digests(user_id: str, app_id: str, kind: str, _: None = Depends(require_admin)):
+    field = _digest_field(kind)
     try:
-        return {"allowed_launcher_hashes": store.get_launcher_hashes(user_id, app_id)}
+        return {field: store.get_app_digests(user_id, app_id, field)}
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
 
-@app.delete("/api/v1/admin/users/{user_id}/apps/{app_id}/launcher-hashes/{h}")
-def remove_launcher_hash(user_id: str, app_id: str, h: str, _: None = Depends(require_admin)):
+@app.delete("/api/v1/admin/users/{user_id}/apps/{app_id}/{kind}/{h}")
+def remove_app_digest(user_id: str, app_id: str, kind: str, h: str,
+                      _: None = Depends(require_admin)):
+    field = _digest_field(kind)
     try:
-        return {"allowed_launcher_hashes": store.remove_launcher_hash(user_id, app_id, h)}
+        return {field: store.remove_app_digest(user_id, app_id, field, h)}
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 

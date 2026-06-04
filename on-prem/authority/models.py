@@ -92,9 +92,9 @@ class ListUsersResponse(BaseModel):
 
 class RegisterImageRequest(BaseModel):
     app_id: str                                  # workload app id
-    allowed_launcher_hashes: List[str] = ["*"]   # launcher compose hashes (gate)
-    image_digest: str                            # current encrypted image digest (version pointer)
-    cek: Optional[str] = None                    # legacy per-digest CEK; keyring (mint-key) is preferred
+    allowed_launcher_digests: List[str] = ["*"]  # launcher compose_hash gate ("*" = any)
+    image_digest: str                            # workload payload digest (→ allowed_workload_digests + current)
+    cek: Optional[str] = None                    # ignored (legacy; global JWE keyring replaced per-digest CEKs)
 
 
 class HashRequest(BaseModel):

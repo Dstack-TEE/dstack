@@ -175,15 +175,28 @@ pub async fn lease_acquire(
         })
         .ok_or_else(|| anyhow::anyhow!("app_id {} not in app_whitelist", app_id))?;
 
-    // verify compose_hash ∈ allowed_launcher_hashes ("*" is a wildcard)
-    let raw_hashes: Vec<&str> = app_entry["allowed_launcher_hashes"]
+    // verify the launcher's attested compose_hash ∈ allowed_launcher_digests
+    // (the "*" wildcard allows any — dev only).
+    let launcher_digests: Vec<&str> = app_entry["allowed_launcher_digests"]
         .as_array()
         .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
         .unwrap_or_default();
-    let wildcard = raw_hashes.contains(&"*");
-    if !wildcard && !raw_hashes.contains(&compose_hash.as_str()) {
+    if !launcher_digests.contains(&"*") && !launcher_digests.contains(&compose_hash.as_str()) {
         return Err(AppError::from(anyhow::anyhow!(
-            "compose_hash not in allowed_launcher_hashes"
+            "compose_hash not in allowed_launcher_digests (fail-closed)"
+        )));
+    }
+
+    // verify the REQUESTED workload image digest ∈ allowed_workload_digests
+    // (the payload gate — "*" allows any; empty list ⇒ deny). This bounds which
+    // images this app may lease keys to decrypt, not just which launcher runs.
+    let workload_digests: Vec<&str> = app_entry["allowed_workload_digests"]
+        .as_array()
+        .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
+        .unwrap_or_default();
+    if !workload_digests.contains(&"*") && !workload_digests.contains(&req.image_digest.as_str()) {
+        return Err(AppError::from(anyhow::anyhow!(
+            "image_digest not in allowed_workload_digests (fail-closed)"
         )));
     }
 

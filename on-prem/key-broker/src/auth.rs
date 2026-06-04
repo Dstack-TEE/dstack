@@ -155,8 +155,8 @@ async fn check_app_boot(state: &AppState, boot_info: &BootInfo) -> BootResponse 
         };
     };
 
-    // check compose hash — "*" is a wildcard that allows any hash (dev/test bundles)
-    let raw_hashes: Vec<&str> = app["allowed_launcher_hashes"]
+    // check compose hash ∈ allowed_launcher_digests — "*" wildcard allows any (dev)
+    let raw_hashes: Vec<&str> = app["allowed_launcher_digests"]
         .as_array()
         .map(|arr| arr.iter().filter_map(|h| h.as_str()).collect())
         .unwrap_or_default();
