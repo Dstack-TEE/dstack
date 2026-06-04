@@ -31,6 +31,7 @@ ra-rpc = { workspace = true, features = ["client", "rocket"] }
 dstack-guest-agent-rpc.workspace = true
 ra-tls = { workspace = true, features = ["quote"] }
 tdx-attest.workspace = true
+tpm-attest.workspace = true
 guest-api = { workspace = true, features = ["client"] }
 host-api = { workspace = true, features = ["client"] }
 sysinfo.workspace = true

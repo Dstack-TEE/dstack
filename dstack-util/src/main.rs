@@ -12,11 +12,13 @@ use host_api::HostApi;
 use k256::schnorr::SigningKey;
 use ra_rpc::Attestation;
 use ra_tls::{
-    attestation::QuoteContentType,
-    cert::generate_ra_cert,
+    attestation::{QuoteContentType, VersionedAttestation},
+    cert::{generate_ra_cert, generate_ra_cert_with_app_id},
     kdf::{derive_key, derive_p256_key_pair_from_bytes},
     rcgen::KeyPair,
 };
+use scale::Encode;
+use std::path::Path;
 use std::{
     io::{self, Read, Write},
     path::PathBuf,
@@ -70,6 +72,23 @@ enum Commands {
     NotifyHost(HostNotifyArgs),
     /// Remove orphaned containers
     RemoveOrphans(RemoveOrphansArgs),
+    /// Perform vTPM attestation (for GCP TEE instances)
+    VtpmAttest(VtpmAttestArgs),
+    /// Generate a TPM quote
+    TpmQuote(TpmQuoteArgs),
+    /// Verify a TPM quote
+    TpmVerify(TpmVerifyArgs),
+    QuoteReport(QuoteReportArgs),
+    /// Generate a versioned attestation for simulator use
+    Attest(AttestArgs),
+    /// Show size breakdown for a versioned attestation file
+    AttestInfo(AttestInfoArgs),
+    /// Dump a versioned attestation as JSON
+    AttestJson(AttestJsonArgs),
+    /// Strip attestation for certificate embedding
+    AttestStrip(AttestStripArgs),
+    /// Get app keys from a KMS server
+    GetKeys(GetKeysArgs),
 }
 
 #[derive(Parser)]
@@ -197,6 +216,437 @@ struct RemoveOrphansArgs {
     /// Docker data root directory for offline mode (default: /var/lib/docker)
     #[arg(short = 'd', long, default_value = "/var/lib/docker")]
     docker_root: String,
+}
+
+#[derive(Parser)]
+/// Perform vTPM attestation
+struct VtpmAttestArgs {
+    /// path to Root CA certificate (PEM format)
+    #[arg(long)]
+    root_ca: PathBuf,
+
+    /// nonce for replay protection
+    #[arg(long)]
+    nonce: String,
+
+    /// expected OS image SHA256 hash (optional)
+    #[arg(long)]
+    expected_os_hash: Option<String>,
+
+    /// key algorithm (rsa or ecc, default: rsa)
+    #[arg(long, default_value = "rsa")]
+    key_algo: String,
+
+    /// output format (json or text, default: text)
+    #[arg(long, default_value = "text")]
+    format: String,
+}
+
+#[derive(Parser)]
+/// Generate a TPM quote
+struct TpmQuoteArgs {
+    /// qualifying data (hex encoded, default: 32 zeros)
+    #[arg(short, long)]
+    data: Option<String>,
+
+    /// output file (default: stdout)
+    #[arg(short, long)]
+    output: Option<PathBuf>,
+
+    /// key algorithm (auto, ecc, or rsa; default: auto)
+    #[arg(short = 'k', long, default_value = "auto")]
+    key_algo: String,
+
+    /// The hash algorithm to use (default: none)
+    #[arg(short = 'H', long, default_value = "none")]
+    hash_algo: String,
+}
+
+#[derive(Parser)]
+/// Verify a TPM quote
+struct TpmVerifyArgs {
+    /// path to Root CA certificate (PEM format)
+    #[arg(long)]
+    root_ca: PathBuf,
+
+    /// path to TPM quote JSON file
+    #[arg(short, long)]
+    quote: PathBuf,
+}
+
+#[derive(Parser)]
+struct QuoteReportArgs {
+    #[arg(long)]
+    report_data: Option<String>,
+
+    #[arg(long, default_value = "/dstack/.host-shared/.sys-config.json")]
+    sys_config: PathBuf,
+
+    #[arg(short, long)]
+    output: Option<PathBuf>,
+
+    #[arg(long, default_value_t = false)]
+    debug: bool,
+}
+
+#[derive(Parser)]
+struct AttestArgs {
+    /// report data in hex (max 64 bytes)
+    #[arg(long)]
+    report_data: Option<String>,
+
+    /// app id (20 bytes in hex) - optional
+    #[arg(long)]
+    app_id: Option<String>,
+
+    /// output file (default: attestation.bin)
+    #[arg(short, long)]
+    output: Option<PathBuf>,
+
+    /// hex encode output
+    #[arg(long, default_value_t = false)]
+    hex: bool,
+}
+
+#[derive(Parser)]
+struct AttestInfoArgs {
+    /// input file (default: attestation.bin)
+    #[arg(short, long)]
+    input: Option<PathBuf>,
+}
+
+#[derive(Parser)]
+struct AttestJsonArgs {
+    /// input file (default: attestation.bin)
+    #[arg(short, long)]
+    input: Option<PathBuf>,
+
+    /// output file (default: stdout)
+    #[arg(short, long)]
+    output: Option<PathBuf>,
+}
+
+#[derive(Parser)]
+struct AttestStripArgs {
+    /// input file (default: attestation.bin)
+    #[arg(short, long)]
+    input: Option<PathBuf>,
+
+    /// output file (default: attestation.strip.bin)
+    #[arg(short, long)]
+    output: Option<PathBuf>,
+}
+
+#[derive(Parser)]
+/// Get app keys from a KMS server
+struct GetKeysArgs {
+    /// KMS server URL (e.g., https://kms.example.com)
+    #[arg(short, long)]
+    kms_url: String,
+
+    /// Application ID (20 bytes in hex) - optional
+    #[arg(long)]
+    app_id: Option<String>,
+
+    /// Output file path (default: stdout as JSON)
+    #[arg(short, long)]
+    output: Option<PathBuf>,
+
+    /// Root CA certificate (PEM format) to pin for TLS verification.
+    /// If not provided, TLS certificate verification is skipped for the initial connection.
+    #[arg(long)]
+    root_ca: Option<PathBuf>,
+}
+
+fn pad64(data: &[u8]) -> Result<[u8; 64]> {
+    if data.len() > 64 {
+        anyhow::bail!("report_data must be at most 64 bytes");
+    }
+    let mut out = [0u8; 64];
+    out[..data.len()].copy_from_slice(data);
+    Ok(out)
+}
+
+fn cmd_quote_report(args: QuoteReportArgs) -> Result<()> {
+    #[derive(serde::Serialize)]
+    struct VerificationRequestJson {
+        pub attestation: String,
+    }
+
+    let report_data = match args.report_data {
+        Some(hex_data) => {
+            pad64(&hex_decode(&hex_data).context("Failed to decode report_data hex")?)?
+        }
+        None => [0u8; 64],
+    };
+    let attestation = Attestation::quote(&report_data).context("Failed to get attestation")?;
+    let request = VerificationRequestJson {
+        attestation: hex::encode(attestation.into_versioned().to_scale()?),
+    };
+
+    let json =
+        serde_json::to_string_pretty(&request).context("Failed to serialize request JSON")?;
+    if let Some(output_path) = args.output {
+        fs::write(&output_path, json).context("Failed to write quote report")?;
+    } else {
+        println!("{json}");
+    }
+    Ok(())
+}
+
+fn decode_app_id(hex_str: Option<&str>) -> Result<Option<[u8; 20]>> {
+    let Some(hex_str) = hex_str else {
+        return Ok(None);
+    };
+    let bytes = hex_decode(hex_str).context("Invalid app_id hex string")?;
+    if bytes.len() != 20 {
+        anyhow::bail!("app_id must be exactly 20 bytes (40 hex characters)");
+    }
+    let mut arr = [0u8; 20];
+    arr.copy_from_slice(&bytes);
+    Ok(Some(arr))
+}
+
+fn cmd_attest(args: AttestArgs) -> Result<()> {
+    let report_data = match args.report_data {
+        Some(hex_data) => {
+            pad64(&hex_decode(&hex_data).context("Failed to decode report_data hex")?)?
+        }
+        None => [0u8; 64],
+    };
+    let app_id = decode_app_id(args.app_id.as_deref())?;
+    let attestation = Attestation::quote_with_app_id(&report_data, app_id)
+        .context("Failed to get attestation")?;
+    let attestation = attestation.into_versioned().to_scale()?;
+
+    if args.hex {
+        let encoded = hex::encode(&attestation);
+        if let Some(output) = args.output {
+            fs::write(&output, encoded).context("Failed to write attestation hex")?;
+        } else {
+            println!("{encoded}");
+        }
+        return Ok(());
+    }
+
+    let output = args
+        .output
+        .unwrap_or_else(|| PathBuf::from("attestation.bin"));
+    fs::write(&output, &attestation).context("Failed to write attestation sample")?;
+    Ok(())
+}
+
+fn cmd_attest_info(args: AttestInfoArgs) -> Result<()> {
+    let input = args
+        .input
+        .unwrap_or_else(|| PathBuf::from("attestation.bin"));
+    let data = fs::read(&input).context("Failed to read attestation file")?;
+    let attestation =
+        VersionedAttestation::from_scale(&data).context("Failed to decode attestation")?;
+
+    println!("file: {}", input.display());
+    println!("total_bytes: {}", data.len());
+
+    match attestation {
+        VersionedAttestation::V0 { attestation } => {
+            println!("version: V0");
+            println!("mode: {:?}", attestation.quote.mode());
+            println!("config_bytes: {}", attestation.config.len());
+            match attestation.tdx_quote() {
+                Some(tdx) => {
+                    let event_log_json = serde_json::to_vec(&tdx.event_log)
+                        .context("Failed to serialize event log")?;
+                    println!("tdx_quote_bytes: {}", tdx.quote.len());
+                    println!("event_log_entries: {}", tdx.event_log.len());
+                    println!("event_log_json_bytes: {}", event_log_json.len());
+                }
+
+                None => {
+                    println!("tdx_quote_bytes: 0");
+                    println!("event_log_entries: 0");
+                    println!("event_log_json_bytes: 0");
+                }
+            }
+            match attestation.tpm_quote() {
+                Some(tpm) => {
+                    let tpm_bytes = tpm.encode();
+                    println!("tpm_quote_bytes: {}", tpm_bytes.len());
+                }
+                None => println!("tpm_quote_bytes: 0"),
+            }
+        }
+        VersionedAttestation::V1 { attestation } => {
+            println!("version: V1");
+            println!("platform: {:?}", attestation.platform);
+            println!("stack: {:?}", attestation.stack);
+        }
+    }
+
+    Ok(())
+}
+
+fn cmd_attest_json(args: AttestJsonArgs) -> Result<()> {
+    let input = args
+        .input
+        .unwrap_or_else(|| PathBuf::from("attestation.bin"));
+    let data = fs::read(&input).context("Failed to read attestation file")?;
+    let attestation =
+        VersionedAttestation::from_scale(&data).context("Failed to decode attestation")?;
+
+    let json = match attestation {
+        VersionedAttestation::V0 { attestation } => {
+            let mode = attestation.quote.mode().as_str();
+            let tdx_quote = match attestation.tdx_quote() {
+                Some(tdx) => serde_json::json!({
+                    "quote": hex::encode(&tdx.quote),
+                    "event_log": tdx.event_log,
+                }),
+                None => serde_json::Value::Null,
+            };
+            let tpm_quote = match attestation.tpm_quote() {
+                Some(tpm) => serde_json::to_value(tpm).context("Failed to serialize TPM quote")?,
+                None => serde_json::Value::Null,
+            };
+
+            serde_json::json!({
+                "version": "V0",
+                "mode": mode,
+                "config": attestation.config,
+                "tdx_quote": tdx_quote,
+                "tpm_quote": tpm_quote,
+            })
+        }
+        VersionedAttestation::V1 { attestation } => {
+            serde_json::to_value(&attestation).context("Failed to serialize V1 attestation")?
+        }
+    };
+
+    let output = serde_json::to_string_pretty(&json).context("Failed to serialize JSON")?;
+    if let Some(path) = args.output {
+        fs::write(&path, output).context("Failed to write JSON output")?;
+    } else {
+        println!("{output}");
+    }
+    Ok(())
+}
+
+fn cmd_attest_strip(args: AttestStripArgs) -> Result<()> {
+    let input = args
+        .input
+        .unwrap_or_else(|| PathBuf::from("attestation.bin"));
+    let data = fs::read(&input).context("Failed to read attestation file")?;
+    let attestation =
+        VersionedAttestation::from_scale(&data).context("Failed to decode attestation")?;
+    let stripped = attestation.into_stripped();
+    let output = args
+        .output
+        .unwrap_or_else(|| PathBuf::from("attestation.strip.bin"));
+    fs::write(&output, stripped.to_scale()?).context("Failed to write stripped attestation")?;
+    Ok(())
+}
+
+async fn cmd_get_keys(args: GetKeysArgs) -> Result<()> {
+    use dstack_kms_rpc::kms_client::KmsClient;
+    use ra_rpc::client::RaClientConfig;
+
+    let kms_url = if args.kms_url.ends_with("/prpc") {
+        args.kms_url.clone()
+    } else {
+        format!("{}/prpc", args.kms_url.trim_end_matches('/'))
+    };
+
+    // Load root CA if provided for TLS pinning
+    let root_ca_pem = if let Some(root_ca_path) = &args.root_ca {
+        let pem = fs::read_to_string(root_ca_path)
+            .with_context(|| format!("failed to read root CA from {}", root_ca_path.display()))?;
+        Some(pem)
+    } else {
+        None
+    };
+
+    // Step 1: Get temporary CA certificate
+    eprintln!("Connecting to KMS: {kms_url}");
+    let tls_no_check = root_ca_pem.is_none();
+    if tls_no_check {
+        eprintln!("Warning: no --root-ca provided, TLS certificate verification is disabled for initial connection");
+    }
+    let tmp_ca = {
+        let client = RaClientConfig::builder()
+            .remote_uri(kms_url.clone())
+            .tls_no_check(tls_no_check)
+            .tls_built_in_root_certs(false)
+            .maybe_tls_ca_cert(root_ca_pem.clone())
+            .build()
+            .into_client()
+            .context("failed to create client")?;
+        let kms_client = KmsClient::new(client);
+        kms_client
+            .get_temp_ca_cert()
+            .await
+            .context("Failed to get temp CA cert")?
+    };
+
+    // Step 2: Generate RA-TLS client certificate
+    let app_id = decode_app_id(args.app_id.as_deref())?;
+    let cert_pair = generate_ra_cert_with_app_id(
+        tmp_ca.temp_ca_cert.clone(),
+        tmp_ca.temp_ca_key.clone(),
+        app_id,
+    )
+    .context("Failed to generate RA cert")?;
+
+    // Step 3: Create authenticated client and request app keys
+    let ra_client = RaClientConfig::builder()
+        .tls_no_check(false)
+        .tls_built_in_root_certs(false)
+        .remote_uri(kms_url.clone())
+        .tls_client_cert(cert_pair.cert_pem)
+        .tls_client_key(cert_pair.key_pem)
+        .tls_ca_cert(tmp_ca.ca_cert.clone())
+        .build()
+        .into_client()
+        .context("Failed to create RA client")?;
+
+    let kms_client = KmsClient::new(ra_client);
+    let response = kms_client
+        .get_app_key(dstack_kms_rpc::GetAppKeyRequest {
+            api_version: 1,
+            vm_config: "".to_string(),
+        })
+        .await
+        .context("Failed to get app key")?;
+
+    // Step 4: Build AppKeys structure
+    let (_, ca_pem) = x509_parser::pem::parse_x509_pem(tmp_ca.ca_cert.as_bytes())
+        .context("Failed to parse CA cert")?;
+    let x509 = ca_pem.parse_x509().context("Failed to parse CA cert")?;
+    let root_pubkey = x509.public_key().raw.to_vec();
+
+    let keys = utils::AppKeys {
+        ca_cert: tmp_ca.ca_cert,
+        disk_crypt_key: response.disk_crypt_key,
+        env_crypt_key: response.env_crypt_key,
+        k256_key: response.k256_key,
+        k256_signature: response.k256_signature,
+        gateway_app_id: response.gateway_app_id,
+        key_provider: KeyProvider::Kms {
+            url: kms_url,
+            pubkey: root_pubkey,
+            tmp_ca_key: tmp_ca.temp_ca_key,
+            tmp_ca_cert: tmp_ca.temp_ca_cert,
+        },
+    };
+
+    // Step 5: Output result
+    let json = serde_json::to_string_pretty(&keys).context("Failed to serialize app keys")?;
+    if let Some(output_path) = args.output {
+        fs::write(&output_path, &json).context("Failed to write app keys")?;
+        eprintln!("App keys written to: {}", output_path.display());
+    } else {
+        println!("{json}");
+    }
+
+    Ok(())
 }
 
 fn cmd_quote() -> Result<()> {
@@ -449,6 +899,351 @@ fn sha256(data: &[u8]) -> [u8; 32] {
     sha256.finalize().into()
 }
 
+fn cmd_vtpm_attest(args: VtpmAttestArgs) -> Result<()> {
+    use cmd_lib::run_cmd;
+    use serde::Serialize;
+
+    #[derive(Serialize)]
+    struct AttestationResult {
+        success: bool,
+        ek_cert_verified: bool,
+        quote_verified: bool,
+        os_image_verified: Option<bool>,
+        nonce: String,
+        key_algorithm: String,
+        error: Option<String>,
+    }
+
+    // verify root CA file exists
+    if !args.root_ca.exists() {
+        anyhow::bail!("root CA file not found: {:?}", args.root_ca);
+    }
+
+    // verify key algorithm
+    let (ek_algo, ak_algo, ak_scheme, algo_name) = match args.key_algo.to_lowercase().as_str() {
+        "rsa" => ("rsa", "rsa", "rsassa", "RSA-2048"),
+        "ecc" | "ecdsa" => ("ecc", "ecc", "ecdsa", "ECC P-256"),
+        _ => anyhow::bail!(
+            "invalid key algorithm: {}. Use 'rsa' or 'ecc'",
+            args.key_algo
+        ),
+    };
+
+    let mut result = AttestationResult {
+        success: false,
+        ek_cert_verified: false,
+        quote_verified: false,
+        os_image_verified: None,
+        nonce: args.nonce.clone(),
+        key_algorithm: algo_name.to_string(),
+        error: None,
+    };
+
+    let attestation_result = (|| -> Result<()> {
+        if args.format == "text" {
+            println!("=== vTPM Attestation ===");
+            println!("Root CA: {:?}", args.root_ca);
+            println!("Nonce: {}", args.nonce);
+            println!("Key Algorithm: {}", algo_name);
+            println!();
+        }
+
+        // step 1: extract EK certificate
+        if args.format == "text" {
+            println!("[1/7] extracting EK certificate...");
+        }
+        run_cmd! {
+            tpm2_nvread -o /tmp/ek_cert.der 0x1c00002 2>/dev/null;
+            openssl x509 -inform DER -in /tmp/ek_cert.der -out /tmp/ek_cert.pem 2>/dev/null;
+        }
+        .context("failed to extract EK certificate")?;
+
+        // step 2: extract intermediate CA URL
+        if args.format == "text" {
+            println!("[2/7] downloading intermediate CA...");
+        }
+        let ica_url_output = std::process::Command::new("openssl")
+            .args(["x509", "-in", "/tmp/ek_cert.pem", "-noout", "-text"])
+            .output()
+            .context("failed to read EK cert")?;
+        let ica_text = String::from_utf8_lossy(&ica_url_output.stdout);
+        let ica_url = ica_text
+            .lines()
+            .find(|l| l.contains("CA Issuers") && l.contains("URI:"))
+            .and_then(|l| l.split("URI:").nth(1))
+            .map(|s| s.trim())
+            .context("failed to find Intermediate CA URL")?;
+
+        run_cmd! {
+            curl -s -o /tmp/intermediate_ca.crt $ica_url;
+        }
+        .context("failed to download intermediate CA")?;
+
+        // try DER first, then PEM
+        let convert_result = run_cmd! {
+            openssl x509 -inform DER -in /tmp/intermediate_ca.crt -outform PEM -out /tmp/intermediate_ca.pem 2>/dev/null;
+        };
+        if convert_result.is_err() {
+            run_cmd! {
+                openssl x509 -inform PEM -in /tmp/intermediate_ca.crt -outform PEM -out /tmp/intermediate_ca.pem 2>/dev/null;
+            }
+            .context("failed to convert intermediate CA")?;
+        }
+
+        // step 3: verify intermediate CA
+        if args.format == "text" {
+            println!("[3/7] verifying certificate chain...");
+        }
+        let root_ca_path = args.root_ca.to_str().context("invalid root CA path")?;
+        run_cmd! {
+            openssl verify -CAfile $root_ca_path /tmp/intermediate_ca.pem >/dev/null 2>&1;
+        }
+        .context("intermediate CA verification failed")?;
+
+        // step 4: verify EK certificate
+        run_cmd! {
+            cat /tmp/intermediate_ca.pem $root_ca_path > /tmp/ca_chain.pem;
+            openssl verify -CAfile /tmp/ca_chain.pem /tmp/ek_cert.pem >/dev/null 2>&1;
+        }
+        .context("EK certificate verification failed")?;
+        result.ek_cert_verified = true;
+
+        // step 5: create AK
+        if args.format == "text" {
+            println!("[4/7] creating attestation key ({})...", algo_name);
+        }
+        run_cmd! {
+            tpm2_createek -c /tmp/ek.ctx -G $ek_algo -u /tmp/ek.pub >/dev/null 2>&1;
+            tpm2_createak -C /tmp/ek.ctx -c /tmp/ak.ctx -G $ak_algo -g sha256 -s $ak_scheme -u /tmp/ak.pub -n /tmp/ak.name >/dev/null 2>&1;
+        }
+        .context("failed to create attestation key")?;
+
+        // step 6: generate quote
+        if args.format == "text" {
+            println!("[5/7] generating TPM quote...");
+        }
+        let nonce = &args.nonce;
+        run_cmd! {
+            echo -n $nonce > /tmp/nonce.bin;
+            tpm2_quote -c /tmp/ak.ctx -l sha256:0,1,2,3,4,5,6,7,8,9,10,14 -q /tmp/nonce.bin -m /tmp/quote.msg -s /tmp/quote.sig -o /tmp/quote.pcr -g sha256 >/dev/null 2>&1;
+        }
+        .context("failed to generate quote")?;
+
+        // step 7: verify quote
+        if args.format == "text" {
+            println!("[6/7] verifying quote signature...");
+        }
+        run_cmd! {
+            tpm2_checkquote -u /tmp/ak.pub -m /tmp/quote.msg -s /tmp/quote.sig -f /tmp/quote.pcr -g sha256 -q /tmp/nonce.bin >/dev/null 2>&1;
+        }
+        .context("quote verification failed")?;
+        result.quote_verified = true;
+
+        // step 8: verify OS image (optional)
+        if let Some(expected_hash) = &args.expected_os_hash {
+            if args.format == "text" {
+                println!("[7/7] verifying OS image...");
+            }
+            let tpm_eventlog_path = "/sys/kernel/security/tpm0/binary_bios_measurements";
+            if Path::new(tpm_eventlog_path).exists() {
+                let _ = run_cmd! {
+                    tpm2_eventlog $tpm_eventlog_path > /tmp/eventlog.yaml 2>/dev/null;
+                };
+
+                let eventlog = fs::read_to_string("/tmp/eventlog.yaml").unwrap_or_default();
+                if eventlog.contains(expected_hash) {
+                    result.os_image_verified = Some(true);
+                } else {
+                    result.os_image_verified = Some(false);
+                    anyhow::bail!("OS image hash mismatch");
+                }
+            }
+        }
+
+        result.success = true;
+        Ok(())
+    })();
+
+    if let Err(e) = attestation_result {
+        result.error = Some(format!("{:#}", e));
+    }
+
+    if args.format == "json" {
+        println!("{}", serde_json::to_string_pretty(&result)?);
+    } else {
+        println!();
+        println!("=== Attestation Result ===");
+        println!(
+            "  EK Certificate Chain: {}",
+            if result.ek_cert_verified {
+                "✓ VERIFIED"
+            } else {
+                "✗ FAILED"
+            }
+        );
+        println!(
+            "  TPM Quote: {}",
+            if result.quote_verified {
+                "✓ VERIFIED"
+            } else {
+                "✗ FAILED"
+            }
+        );
+        if let Some(os_verified) = result.os_image_verified {
+            println!(
+                "  OS Image: {}",
+                if os_verified {
+                    "✓ VERIFIED"
+                } else {
+                    "✗ MISMATCH"
+                }
+            );
+        }
+        println!();
+        if result.success {
+            println!("🎉 ATTESTATION PASSED");
+        } else {
+            println!("❌ ATTESTATION FAILED");
+            if let Some(error) = &result.error {
+                println!("Error: {}", error);
+            }
+            anyhow::bail!("attestation failed");
+        }
+    }
+
+    Ok(())
+}
+
+fn cmd_tpm_quote(args: TpmQuoteArgs) -> Result<()> {
+    let data = if let Some(hex_data) = args.data {
+        let decoded = hex_decode(&hex_data).context("Failed to decode hex data")?;
+        if decoded.len() > 64 {
+            anyhow::bail!("Qualifying data must be at most 64 bytes");
+        }
+        decoded
+    } else {
+        vec![0u8; 32] // TPM 2.0 max qualifying data is 32 bytes
+    };
+
+    // Parse key algorithm
+    let key_algo = args
+        .key_algo
+        .parse::<tpm_attest::KeyAlgorithm>()
+        .context("Failed to parse key algorithm")?;
+
+    let qualifying_data: [u8; 32] = match args.hash_algo.as_str() {
+        "none" => data
+            .try_into()
+            .ok()
+            .context("qualifying data must be 32 bytes")?,
+        "sha256" => ez_hash::sha256(&data),
+        _ => {
+            anyhow::bail!("Unsupported hash algorithm");
+        }
+    };
+
+    let tpm = tpm_attest::TpmContext::open(None).context("Failed to open TPM context")?;
+    let pcr_selection = tpm_attest::dstack_pcr_policy();
+    let tpm_quote = tpm
+        .create_quote_with_algo(&qualifying_data, &pcr_selection, key_algo)
+        .context("Failed to create TPM quote")?;
+
+    let quote_json =
+        serde_json::to_string_pretty(&tpm_quote).context("Failed to serialize TPM quote")?;
+
+    if let Some(output_path) = args.output {
+        fs::write(&output_path, quote_json).context("Failed to write quote to file")?;
+        eprintln!("TPM quote written to: {:?}", output_path);
+    } else {
+        println!("{}", quote_json);
+    }
+
+    Ok(())
+}
+
+async fn cmd_tpm_verify(args: TpmVerifyArgs) -> Result<()> {
+    let root_ca_pem = fs::read_to_string(&args.root_ca).context("Failed to read root CA")?;
+    let quote_json = fs::read_to_string(&args.quote).context("Failed to read quote file")?;
+    let tpm_quote: tpm_attest::TpmQuote =
+        serde_json::from_str(&quote_json).context("Failed to parse quote JSON")?;
+
+    println!("=== TPM Quote Verification (dcap-qvl architecture) ===");
+    println!("Root CA: {:?}", args.root_ca);
+    println!("Quote file: {:?}", args.quote);
+    println!();
+
+    // Step 1: Get collateral (certificates + CRLs)
+    println!("[Step 1] Fetching quote collateral (certificates + CRLs)...");
+    let collateral = tpm_qvl::get_collateral(&tpm_quote, &root_ca_pem)
+        .await
+        .context("Failed to get collateral")?;
+    let crl_count = collateral.crls.len()
+        + if collateral.root_ca_crl.is_some() {
+            1
+        } else {
+            0
+        };
+    println!("  ✓ Collateral fetched: {} CRLs downloaded", crl_count);
+    println!();
+
+    // Step 2: Verify quote with conditional CRL checking
+    println!("[Step 2] Verifying quote (CRL verification if CRL DP present)...");
+
+    match tpm_qvl::verify::verify_quote_with_ca(&tpm_quote, &collateral, &root_ca_pem) {
+        Ok(_) => {
+            // Success - print simple success message
+            println!();
+            let crl_count = collateral.crls.len()
+                + if collateral.root_ca_crl.is_some() {
+                    1
+                } else {
+                    0
+                };
+            if crl_count == 0 {
+                println!("🎉 VERIFICATION PASSED (no CRLs available)");
+            } else {
+                println!(
+                    "🎉 VERIFICATION PASSED (with {} CRL(s) verified)",
+                    crl_count
+                );
+            }
+            Ok(())
+        }
+        Err(verification_result) => {
+            // Failure - print detailed status
+            println!();
+            println!("=== Verification Result ===");
+            println!(
+                "  AK Certificate Chain (webpki + CRL): {}",
+                if verification_result.status.ak_verified {
+                    "✓ VERIFIED"
+                } else {
+                    "✗ FAILED"
+                }
+            );
+            println!(
+                "  Quote Signature: {}",
+                if verification_result.status.signature_verified {
+                    "✓ VERIFIED"
+                } else {
+                    "✗ FAILED"
+                }
+            );
+            println!(
+                "  PCR Values: {}",
+                if verification_result.status.pcr_verified {
+                    "✓ VERIFIED"
+                } else {
+                    "✗ FAILED"
+                }
+            );
+            println!("  Error: {}", verification_result.error);
+            println!();
+            anyhow::bail!("Verification failed")
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     {
@@ -501,6 +1296,33 @@ async fn main() -> Result<()> {
             } else {
                 docker_compose::remove_orphans(args.compose, args.dry_run).await?;
             }
+        }
+        Commands::VtpmAttest(args) => {
+            cmd_vtpm_attest(args)?;
+        }
+        Commands::TpmQuote(args) => {
+            cmd_tpm_quote(args)?;
+        }
+        Commands::TpmVerify(args) => {
+            cmd_tpm_verify(args).await?;
+        }
+        Commands::QuoteReport(args) => {
+            cmd_quote_report(args)?;
+        }
+        Commands::Attest(args) => {
+            cmd_attest(args)?;
+        }
+        Commands::AttestInfo(args) => {
+            cmd_attest_info(args)?;
+        }
+        Commands::AttestJson(args) => {
+            cmd_attest_json(args)?;
+        }
+        Commands::AttestStrip(args) => {
+            cmd_attest_strip(args)?;
+        }
+        Commands::GetKeys(args) => {
+            cmd_get_keys(args).await?;
         }
     }
 

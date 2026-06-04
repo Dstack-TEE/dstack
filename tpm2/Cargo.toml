@@ -1,0 +1,29 @@
+# SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "tpm2"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Pure Rust TPM 2.0 implementation"
+keywords = ["tpm", "tpm2", "security", "attestation"]
+categories = ["cryptography", "hardware-support"]
+
+[dependencies]
+anyhow.workspace = true
+sha2 = { workspace = true, features = ["oid"] }
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[[bin]]
+name = "tpm2-test"
+path = "src/bin/tpm2-test.rs"
+
+[dependencies.hex]
+workspace = true
+features = ["alloc"]

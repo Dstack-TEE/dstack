@@ -1654,9 +1654,9 @@ def main():
     )
     compose_parser.add_argument(
         "--key-provider",
-        choices=["none", "kms", "local"],
+        choices=["none", "kms", "local", "tpm"],
         default=None,
-        help="Override key provider type (none, kms, local)",
+        help="Override key provider type (none, kms, local, or tpm)",
     )
     compose_parser.add_argument(
         "--key-provider-id",

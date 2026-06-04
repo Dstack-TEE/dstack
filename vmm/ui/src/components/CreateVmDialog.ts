@@ -138,6 +138,7 @@ const CreateVmDialogComponent = {
                 <option value="none">None</option>
                 <option value="kms">KMS</option>
                 <option value="local">Local</option>
+                <option value="tpm">TPM</option>
               </select>
             </div>
 

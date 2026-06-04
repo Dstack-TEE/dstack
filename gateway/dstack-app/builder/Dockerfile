@@ -19,7 +19,7 @@ RUN apt-get update && \
     libprotobuf-dev \
     clang \
     libclang-dev
-RUN git clone ${DSTACK_SRC_URL} && \
+RUN git clone ${DSTACK_SRC_URL} dstack && \
     cd dstack && \
     git checkout ${DSTACK_REV}
 RUN rustup target add x86_64-unknown-linux-musl

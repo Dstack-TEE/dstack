@@ -18,7 +18,7 @@ If any of these fail, the cryptographic proof won't verify.
 
 **Programmatic verification**: dstack provides several tools:
 
-- [dstack-verifier](https://github.com/Dstack-TEE/dstack/tree/master/verifier) - HTTP service with `/verify` endpoint, also runs as CLI
+- [dstack-verifier](https://github.com/Phala-Network/dstack-cloud/tree/master/verifier) - HTTP service with `/verify` endpoint, also runs as CLI
 - [dcap-qvl](https://github.com/Phala-Network/dcap-qvl) - Open source quote verification library (Rust, Python, JS/WASM, CLI)
 - [SDKs](../sdk/) - JavaScript and Python SDKs include `replayRtmrs()` for local RTMR verification
 

@@ -1,0 +1,17 @@
+# SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "tpm-types"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+serde-human-bytes.workspace = true
+dstack-types.workspace = true
+scale = { workspace = true, features = ["derive"] }
+cc-eventlog.workspace = true

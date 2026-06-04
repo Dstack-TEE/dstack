@@ -258,12 +258,11 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires vsock support (not available in CI)"]
     async fn test_vsock_listener_bind() {
         let endpoint = VsockEndpoint { cid: 1, port: 5000 };
         let result = VsockListener::bind(&endpoint);
 
-        // Note: This test might fail if you don't have vsock permissions
-        // or if the port is already in use
         assert!(result.is_ok());
     }
 

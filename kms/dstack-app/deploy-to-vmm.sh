@@ -10,6 +10,7 @@ if [ -f ".env" ]; then
   # Load variables from .env
   echo "Loading environment variables from .env file..."
   set -a
+  # shellcheck source=/dev/null
   source .env
   set +a
 else
@@ -56,7 +57,7 @@ OS_IMAGE=dstack-0.5.5
 KMS_IMAGE=dstacktee/dstack-kms@sha256:11ac59f524a22462ccd2152219b0bec48a28ceb734e32500152d4abefab7a62a
 
 # The admin token for the KMS app
-ADMIN_TOKEN=$(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 32 | head -n 1)
+ADMIN_TOKEN=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | fold -w 32 | head -n 1)
 EOF
   echo "Please edit the .env file and set the required variables, then run this script again."
   exit 1
@@ -86,9 +87,10 @@ CLI="../../vmm/src/vmm-cli.py --url $VMM_RPC"
 
 COMPOSE_TMP=$(mktemp)
 
-GIT_REV=$(git rev-parse $GIT_REV)
+GIT_REV=$(git rev-parse "$GIT_REV")
 
-ADMIN_TOKEN_HASH=$(echo -n $ADMIN_TOKEN | sha256sum | cut -d' ' -f1)
+# shellcheck disable=SC2034  # consumed via `subvar` into compose-*.yaml
+ADMIN_TOKEN_HASH=$(echo -n "$ADMIN_TOKEN" | sha256sum | cut -d' ' -f1)
 
 cp compose-dev.yaml "$COMPOSE_TMP"
 
@@ -137,10 +139,10 @@ echo "Deploying KMS to dstack-vmm..."
 $CLI deploy \
   --name kms \
   --compose .app-compose.json \
-  --image $OS_IMAGE \
-  --port tcp:$KMS_RPC_ADDR:8000 \
-  --port tcp:$AUTH_API_RPC_ADDR:8001 \
-  --port tcp:$GUEST_AGENT_ADDR:8090 \
+  --image "$OS_IMAGE" \
+  --port tcp:"$KMS_RPC_ADDR":8000 \
+  --port tcp:"$AUTH_API_RPC_ADDR":8001 \
+  --port tcp:"$GUEST_AGENT_ADDR":8090 \
   --vcpu 8 \
   --memory 8G \
   --disk 50G

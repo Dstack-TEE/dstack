@@ -23,7 +23,7 @@ RUN apt-get update && \
     ca-certificates \
     curl && \
     rm -rf /var/lib/apt/lists/* /var/log/* /var/cache/ldconfig/aux-cache
-RUN git clone ${DSTACK_SRC_URL} && \
+RUN git clone ${DSTACK_SRC_URL} dstack && \
     cd dstack && \
     git checkout ${DSTACK_REV}
 RUN rustup target add x86_64-unknown-linux-musl

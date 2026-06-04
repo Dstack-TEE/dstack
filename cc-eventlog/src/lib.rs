@@ -9,6 +9,7 @@ mod codecs;
 mod runtime_events;
 mod tcg;
 pub mod tdx;
+pub mod tpm;
 
 #[cfg(test)]
 mod tests {

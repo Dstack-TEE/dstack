@@ -73,6 +73,15 @@ path = [
     "sdk/simulator/attestation.bin",
     "ra-tls/assets/tdx_quote",
     "cc-eventlog/samples/ccel.bin",
+    "cc-eventlog/samples/tpm_eventlog.bin",
+    "tpm-attest/tests/tpm_quote_sample.bin",
+    "tpm-qvl/certs/gcp-root-ca.pem",
+    "dstack-attest/tests/nitro_attestation.bin",
+    "dstack-attest/tests/nitro_attestation_dbg.bin",
+    "nsm-attest/tests/nitro_attestation.bin",
+    "nsm-qvl/tests/nitro_attestation.bin",
+    "nsm-qvl/certs/AWS_NitroEnclaves_Root-G1.pem",
+    "tpm-qvl/certs/AWS_NitroEnclaves_Root-G1.pem",
 ]
 SPDX-FileCopyrightText = "NONE"
 SPDX-License-Identifier = "CC0-1.0"
@@ -116,11 +125,6 @@ path = "kms/auth-eth/lib/forge-std/**"
 SPDX-FileCopyrightText = "NONE"
 SPDX-License-Identifier = "Apache-2.0"
 precedence = "override"
-
-[[annotations]]
-path = "mod-tdx-guest/Kconfig"
-SPDX-FileCopyrightText = "© 2022 Intel Corporation"
-SPDX-License-Identifier = "GPL-2.0-only"
 
 # Generated files
 
