@@ -97,6 +97,10 @@ class RegisterImageRequest(BaseModel):
     cek: Optional[str] = None                    # legacy per-digest CEK; keyring (mint-key) is preferred
 
 
+class HashRequest(BaseModel):
+    hash: str            # a measurement hash (os-image / kms-compose / launcher-compose)
+
+
 class MintKeyRequest(BaseModel):
     kid: Optional[str] = ""          # key id; random hex if omitted (goes in image annotations)
     not_after: Optional[int] = 0     # unix expiry; 0 = no expiry

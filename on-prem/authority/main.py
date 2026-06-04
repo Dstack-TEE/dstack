@@ -26,6 +26,7 @@ from models import (
     ChallengeResponse,
     CreateUserRequest,
     CreateUserResponse,
+    HashRequest,
     ListUsersResponse,
     MeasureRequest,
     MintKeyRequest,
@@ -150,15 +151,18 @@ def verify_kms_attestation(req: ProvisionRequest, user_id: str, user: dict) -> N
                        "set REQUIRE_ATTESTATION=true in production", user_id)
         return
 
-    # Inject the vendor-approved os_image_hash so the verifier can compare it to
-    # the UKI hash measured in the event log (the CVM itself didn't pin one).
+    # Approved measurements come from the runtime-managed policy (admin API).
+    # Inject the os_image_hash into vm_config so the verifier can pin it — only
+    # when exactly one is approved; with several, the membership check below (on
+    # the measured value) is the gate.
+    allowed_os = store.get_os_images()
     vm_config = req.vm_config
-    if EXPECTED_OS_IMAGE_HASH:
+    if len(allowed_os) == 1:
         try:
             cfg = json.loads(vm_config) if vm_config else {}
         except (ValueError, TypeError):
             cfg = {}
-        cfg["os_image_hash"] = EXPECTED_OS_IMAGE_HASH
+        cfg["os_image_hash"] = allowed_os[0]
         vm_config = json.dumps(cfg)
 
     try:
@@ -201,12 +205,12 @@ def verify_kms_attestation(req: ProvisionRequest, user_id: str, user: dict) -> N
     #    measurement-pinning isn't available — accept on quote+binding unless
     #    REQUIRE_OS_IMAGE_HASH demands it.
     if not details.get("os_image_hash_verified"):
-        if REQUIRE_OS_IMAGE_HASH or EXPECTED_OS_IMAGE_HASH:
+        if REQUIRE_OS_IMAGE_HASH or allowed_os:
             raise HTTPException(status_code=403,
                                 detail=f"os_image_hash not verified: {result.get('reason')}")
-        logger.warning("provision %s: os_image_hash/measurement NOT verified (no "
-                       "EXPECTED_OS_IMAGE_HASH configured); accepting on quote authenticity + "
-                       "report_data binding only. Set EXPECTED_OS_IMAGE_HASH in production.", user_id)
+        logger.warning("provision %s: os_image_hash/measurement NOT verified and no approved "
+                       "os_image configured; accepting on quote authenticity + report_data "
+                       "binding only. Add one via POST /api/v1/admin/os-images in production.", user_id)
 
     # 5. KMS identity whitelist — pin on STABLE, semantic measurements instead of
     #    mr_aggregated. On GCP, mr_aggregated = sha256(PCR0 ‖ PCR2 ‖ runtime_pcr)
@@ -221,14 +225,14 @@ def verify_kms_attestation(req: ProvisionRequest, user_id: str, user: dict) -> N
     os_hash = (app_info.get("os_image_hash") or "").lower()
     compose_hash = (app_info.get("compose_hash") or "").lower()
 
-    # a) os_image_hash — FAIL-CLOSED, no bypass: EXPECTED_OS_IMAGE_HASH must be
-    #    configured and must match. To learn the value for a new OS image, use
-    #    the read-only `kms_ctl.py measure` command (never releases the root).
-    if not EXPECTED_OS_IMAGE_HASH:
+    # a) os_image_hash — FAIL-CLOSED: must be in the runtime-managed whitelist
+    #    (manage via POST/DELETE /api/v1/admin/os-images; discover a new image's
+    #    hash with the read-only `kms_ctl.py measure`).
+    if not allowed_os:
         raise HTTPException(status_code=403,
-                            detail="EXPECTED_OS_IMAGE_HASH not configured (fail-closed; "
-                                   "run `kms_ctl.py measure` to discover it, then set it)")
-    if os_hash != EXPECTED_OS_IMAGE_HASH.lower():
+                            detail="no approved os_image_hash (fail-closed; add one via "
+                                   "POST /api/v1/admin/os-images — discover with `kms_ctl.py measure`)")
+    if os_hash not in allowed_os:
         raise HTTPException(status_code=403,
                             detail=f"os_image_hash not in whitelist: {os_hash or 'none'}")
 
@@ -245,21 +249,19 @@ def verify_kms_attestation(req: ProvisionRequest, user_id: str, user: dict) -> N
         raise HTTPException(status_code=403,
                             detail=f"key_provider must be tpm, got '{kp_name or 'unknown'}'")
 
-    # c) compose_hash whitelist
+    # c) compose_hash — FAIL-CLOSED: must be in the runtime-managed GLOBAL KMS
+    #    compose whitelist (POST/DELETE /api/v1/admin/kms-compose-hashes), or the
+    #    user's own allowed_kms_compose_hashes (back-compat). No trust-on-first-use.
     if not compose_hash:
         raise HTTPException(status_code=403, detail="compose_hash missing from attestation")
-    allowed = [h.lower() for h in (user.get("allowed_kms_compose_hashes") or [])]
-    pinned = user.get("expected_compose_hash")
-    if allowed:
-        if compose_hash not in allowed:
-            raise HTTPException(status_code=403, detail="compose_hash not in whitelist for this user")
-    elif pinned:
-        if compose_hash != pinned:
-            raise HTTPException(status_code=403, detail="compose_hash not in whitelist for this user")
-    else:
-        user["expected_compose_hash"] = compose_hash      # trust-on-first-use (stable)
-        store._save_customers()
-        logger.info("provision %s: pinned compose_hash=%s (TOFU)", user_id, compose_hash)
+    allowed_compose = store.get_kms_compose_hashes() + \
+        [h.lower() for h in (user.get("allowed_kms_compose_hashes") or [])]
+    if not allowed_compose:
+        raise HTTPException(status_code=403,
+                            detail="no approved KMS compose_hash (fail-closed; add one via "
+                                   "POST /api/v1/admin/kms-compose-hashes)")
+    if compose_hash not in allowed_compose:
+        raise HTTPException(status_code=403, detail="compose_hash not in KMS whitelist")
     logger.info("provision %s: KMS whitelist OK (os_image_hash✓ key_provider=tpm✓ compose_hash✓)", user_id)
 
 
@@ -356,7 +358,8 @@ def provision(req: ProvisionRequest, authorization: Optional[str] = Header(None)
     auth_bundle = make_auth_bundle(
         user_id, bundle_seq, kms_k256_pubkey,
         app_whitelist=store.get_apps(user_id),
-        keyring=store.get_keyring(),   # GLOBAL image keyring (vendor-wide)
+        keyring=store.get_keyring(),       # GLOBAL image keyring (vendor-wide)
+        os_images=store.get_os_images(),   # runtime-managed os-image whitelist
     )
 
     return ProvisionResponse(sealed_root=sealed_root, auth_bundle=auth_bundle)
@@ -389,7 +392,8 @@ def sync_auth(req: SyncAuthRequest, authorization: Optional[str] = Header(None))
     auth_bundle = make_auth_bundle(
         user_id, bundle_seq,
         app_whitelist=store.get_apps(user_id),
-        keyring=store.get_keyring(),   # GLOBAL image keyring (vendor-wide)
+        keyring=store.get_keyring(),       # GLOBAL image keyring (vendor-wide)
+        os_images=store.get_os_images(),   # runtime-managed os-image whitelist
     )
     return SyncAuthResponse(auth_bundle=auth_bundle)
 
@@ -457,6 +461,85 @@ def revoke_key(kid: str, _: None = Depends(require_admin)):
         raise HTTPException(status_code=404, detail=f"kid not found: {kid}")
     logger.info("revoked global image key kid=%s", kid)
     return {"revoked": kid}
+
+
+# ─── runtime attestation policy: allowed OS-image & KMS-compose hashes ────────
+# Manage the whitelists live (no restart). Enforced fail-closed in
+# verify_kms_attestation; os-images also flow into every AuthBundle.
+
+@app.post("/api/v1/admin/os-images")
+def add_os_image(req: HashRequest, _: None = Depends(require_admin)):
+    """Approve an OS-image hash (discover it with `kms_ctl.py measure`)."""
+    try:
+        lst = store.add_os_image(req.hash)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    logger.info("approved os_image hash %s", req.hash)
+    return {"os_images": lst}
+
+
+@app.get("/api/v1/admin/os-images")
+def list_os_images(_: None = Depends(require_admin)):
+    return {"os_images": store.get_os_images()}
+
+
+@app.delete("/api/v1/admin/os-images/{h}")
+def remove_os_image(h: str, _: None = Depends(require_admin)):
+    if not store.remove_os_image(h):
+        raise HTTPException(status_code=404, detail=f"os_image hash not found: {h}")
+    logger.info("removed os_image hash %s", h)
+    return {"os_images": store.get_os_images()}
+
+
+@app.post("/api/v1/admin/kms-compose-hashes")
+def add_kms_compose_hash(req: HashRequest, _: None = Depends(require_admin)):
+    """Approve a KMS compose_hash (the key-broker+dstack-kms stack)."""
+    try:
+        lst = store.add_kms_compose_hash(req.hash)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    logger.info("approved kms compose_hash %s", req.hash)
+    return {"kms_compose_hashes": lst}
+
+
+@app.get("/api/v1/admin/kms-compose-hashes")
+def list_kms_compose_hashes(_: None = Depends(require_admin)):
+    return {"kms_compose_hashes": store.get_kms_compose_hashes()}
+
+
+@app.delete("/api/v1/admin/kms-compose-hashes/{h}")
+def remove_kms_compose_hash(h: str, _: None = Depends(require_admin)):
+    if not store.remove_kms_compose_hash(h):
+        raise HTTPException(status_code=404, detail=f"kms compose_hash not found: {h}")
+    logger.info("removed kms compose_hash %s", h)
+    return {"kms_compose_hashes": store.get_kms_compose_hashes()}
+
+
+# ─── per-app launcher compose-hash management (the workload's launcher) ───────
+
+@app.post("/api/v1/admin/users/{user_id}/apps/{app_id}/launcher-hashes")
+def add_launcher_hash(user_id: str, app_id: str, req: HashRequest, _: None = Depends(require_admin)):
+    try:
+        lst = store.add_launcher_hash(user_id, app_id, req.hash)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return {"allowed_launcher_hashes": lst}
+
+
+@app.get("/api/v1/admin/users/{user_id}/apps/{app_id}/launcher-hashes")
+def list_launcher_hashes(user_id: str, app_id: str, _: None = Depends(require_admin)):
+    try:
+        return {"allowed_launcher_hashes": store.get_launcher_hashes(user_id, app_id)}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.delete("/api/v1/admin/users/{user_id}/apps/{app_id}/launcher-hashes/{h}")
+def remove_launcher_hash(user_id: str, app_id: str, h: str, _: None = Depends(require_admin)):
+    try:
+        return {"allowed_launcher_hashes": store.remove_launcher_hash(user_id, app_id, h)}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 
 @app.get("/api/v1/admin/users", response_model=ListUsersResponse)

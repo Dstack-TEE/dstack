@@ -28,6 +28,14 @@ _USERS_PATH = os.path.expanduser(
 _KEYRING_PATH = os.path.expanduser(
     os.getenv("VENDOR_KEYRING_STORE", "~/.config/authority/keyring.json")
 )
+# GLOBAL, runtime-managed attestation policy (vendor-wide): which OS-image
+# hashes and which KMS compose hashes are allowed. Managed via the admin API
+# (POST/DELETE) — no restart needed — and seeded once from the legacy env vars
+# EXPECTED_OS_IMAGE_HASH / ALLOWED_KMS_COMPOSE_HASHES. (launcher compose hashes
+# stay per-app in the user records.)
+_POLICY_PATH = os.path.expanduser(
+    os.getenv("AUTHORITY_POLICY_STORE", "~/.config/authority/policy.json")
+)
 
 
 class Store:
@@ -37,8 +45,10 @@ class Store:
     def __init__(self) -> None:
         self.users: Dict[str, Dict[str, Any]] = {}
         self.keyring: List[Dict[str, Any]] = []   # global image-decryption keyring
+        self.policy: Dict[str, List[str]] = {"os_images": [], "kms_compose_hashes": []}
         self._load_customers()
         self._load_keyring()
+        self._load_policy()
 
     def _load_customers(self) -> None:
         if os.path.exists(_USERS_PATH):
@@ -188,6 +198,83 @@ class Store:
         if removed:
             self._save_keyring()
         return removed
+
+    # ─── GLOBAL attestation policy: allowed os-image / KMS-compose hashes ──────
+    # Runtime-managed (admin API), seeded once from env. Hashes stored lowercase.
+
+    def _load_policy(self) -> None:
+        if os.path.exists(_POLICY_PATH):
+            try:
+                with open(_POLICY_PATH) as f:
+                    p = json.load(f)
+                self.policy["os_images"] = [h.lower() for h in p.get("os_images", [])]
+                self.policy["kms_compose_hashes"] = [h.lower() for h in p.get("kms_compose_hashes", [])]
+                return  # persisted policy is authoritative — do NOT re-seed from env
+                        # (else an explicitly-removed hash would come back on restart)
+            except (json.JSONDecodeError, OSError):
+                pass
+        # first run only (no policy file): seed from legacy env vars so existing
+        # deployments keep working; thereafter manage via the admin API.
+        env_os = os.getenv("EXPECTED_OS_IMAGE_HASH", "").strip().lower()
+        if env_os:
+            self.policy["os_images"].append(env_os)
+        for h in (x.strip().lower() for x in os.getenv("ALLOWED_KMS_COMPOSE_HASHES", "").split(",") if x.strip()):
+            self.policy["kms_compose_hashes"].append(h)
+        self._save_policy()
+
+    def _save_policy(self) -> None:
+        os.makedirs(os.path.dirname(_POLICY_PATH), exist_ok=True)
+        with open(_POLICY_PATH, "w") as f:
+            json.dump(self.policy, f, indent=2)
+
+    def _policy_add(self, key: str, h: str) -> list:
+        h = (h or "").strip().lower()
+        if not h:
+            raise ValueError("empty hash")
+        if h not in self.policy[key]:
+            self.policy[key].append(h)
+            self._save_policy()
+        return list(self.policy[key])
+
+    def _policy_remove(self, key: str, h: str) -> bool:
+        h = (h or "").strip().lower()
+        before = len(self.policy[key])
+        self.policy[key] = [x for x in self.policy[key] if x != h]
+        removed = len(self.policy[key]) < before
+        if removed:
+            self._save_policy()
+        return removed
+
+    def add_os_image(self, h: str) -> list: return self._policy_add("os_images", h)
+    def remove_os_image(self, h: str) -> bool: return self._policy_remove("os_images", h)
+    def get_os_images(self) -> list: return list(self.policy["os_images"])
+
+    def add_kms_compose_hash(self, h: str) -> list: return self._policy_add("kms_compose_hashes", h)
+    def remove_kms_compose_hash(self, h: str) -> bool: return self._policy_remove("kms_compose_hashes", h)
+    def get_kms_compose_hashes(self) -> list: return list(self.policy["kms_compose_hashes"])
+
+    # ─── per-app launcher compose-hash management (dynamic) ────────────────────
+    def _app(self, user_id: str, app_id: str) -> dict:
+        app = self.get_or_create_user(user_id).get("apps", {}).get(app_id)
+        if not app:
+            raise ValueError(f"app not found: {app_id} (register it first)")
+        return app
+
+    def add_launcher_hash(self, user_id: str, app_id: str, h: str) -> list:
+        app = self._app(user_id, app_id)
+        if h and h not in app["allowed_launcher_hashes"]:
+            app["allowed_launcher_hashes"].append(h)
+            self._save_customers()
+        return list(app["allowed_launcher_hashes"])
+
+    def remove_launcher_hash(self, user_id: str, app_id: str, h: str) -> list:
+        app = self._app(user_id, app_id)
+        app["allowed_launcher_hashes"] = [x for x in app["allowed_launcher_hashes"] if x != h]
+        self._save_customers()
+        return list(app["allowed_launcher_hashes"])
+
+    def get_launcher_hashes(self, user_id: str, app_id: str) -> list:
+        return list(self._app(user_id, app_id)["allowed_launcher_hashes"])
 
     # ─── multi-user management ────────────────────────────────────────────────
     # A "user" is a customer that owns an API key. Each user gets its own

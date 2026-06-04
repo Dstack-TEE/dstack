@@ -44,8 +44,13 @@ services:
       VENDOR_AUTHORITY_STORE: /data/users.json
       # GLOBAL image-decryption keyring (vendor-wide), persisted on the /data volume.
       VENDOR_KEYRING_STORE: /data/keyring.json
+      # Runtime-managed attestation policy (allowed os-image / KMS-compose hashes);
+      # seeded once from EXPECTED_OS_IMAGE_HASH / ALLOWED_KMS_COMPOSE_HASHES, then
+      # managed live via the admin API.
+      AUTHORITY_POLICY_STORE: /data/policy.json
       REQUIRE_OS_IMAGE_HASH: ${REQUIRE_OS_IMAGE_HASH:-false}
       EXPECTED_OS_IMAGE_HASH: ${EXPECTED_OS_IMAGE_HASH:-}
+      ALLOWED_KMS_COMPOSE_HASHES: ${ALLOWED_KMS_COMPOSE_HASHES:-}
       # KMS rpc-cert domain (must match kms_urls + be resolvable by workloads).
       KMS_DOMAIN: ${KMS_DOMAIN:-kms.local}
     volumes:

@@ -253,7 +253,8 @@ def make_auth_bundle(user_id: str, bundle_seq: int,
                      kms_k256_pubkey: str = "",
                      app_whitelist: Optional[list] = None,
                      kms_identity: Optional[Dict[str, Any]] = None,
-                     keyring: Optional[list] = None) -> Dict[str, Any]:
+                     keyring: Optional[list] = None,
+                     os_images: Optional[list] = None) -> Dict[str, Any]:
     """Build and sign an AuthBundle for a user.
 
     `app_whitelist` is the user's REAL registered apps (store.get_apps): each
@@ -281,8 +282,12 @@ def make_auth_bundle(user_id: str, bundle_seq: int,
         a.setdefault("allow_any_device", True)
 
     # OS-image whitelist the key-broker enforces fail-closed (bootAuth + lease).
-    expected_os = os.getenv("EXPECTED_OS_IMAGE_HASH", "").strip()
-    os_images = [expected_os] if expected_os else []
+    # Comes from the runtime-managed policy (store.get_os_images()); fall back to
+    # the legacy env var only when the caller passes nothing.
+    if os_images is None:
+        env_os = os.getenv("EXPECTED_OS_IMAGE_HASH", "").strip()
+        os_images = [env_os] if env_os else []
+    os_images = [h.lower() for h in os_images]
     allowed_tcb = [s.strip() for s in
                    os.getenv("ALLOWED_TCB_STATUSES", "UpToDate,SWHardeningNeeded").split(",")
                    if s.strip()]
