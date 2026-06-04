@@ -12,7 +12,6 @@ over Private Google Access, with egress hard-limited by a Secure Web Proxy.
 | `QUICKSTART.md` / `QUICKSTART_CN.md` | **start here** — deploy in a handful of commands via the orchestration scripts |
 | `DEPLOYMENT_GUIDE.md` / `DEPLOYMENT_GUIDE_CN.md` | step-by-step guide — what each step does (EN / 中文) |
 | [`../PROTOCOL.md`](../PROTOCOL.md) / `../PROTOCOL_CN.md` | **protocol at a glance** (cloud-agnostic core) — every message + what's verified at each hop |
-| `DEPLOYMENT.md` | architecture + security status (English) |
 | `design.md` | design rationale / history |
 | `scripts/` | deploy + provision toolkit (gcloud / IAP / Artifact Registry / SWP) |
 | `scripts/setup-swp.sh` | Secure Web Proxy egress whitelist (Intel PCS only) |

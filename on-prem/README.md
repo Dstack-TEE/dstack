@@ -57,8 +57,9 @@ material, not the image keyring.
 
 Core services are cloud-neutral; the runnable deployment is currently GCP:
 
-- **GCP**: see [`gcp/DEPLOYMENT_GUIDE_CN.md`](gcp/DEPLOYMENT_GUIDE_CN.md) (step-by-step, 中文) and
-  [`gcp/DEPLOYMENT.md`](gcp/DEPLOYMENT.md) (architecture + security status).
+- **GCP**: see [`gcp/DEPLOYMENT_GUIDE.md`](gcp/DEPLOYMENT_GUIDE.md) (step-by-step, EN) /
+  [`gcp/DEPLOYMENT_GUIDE_CN.md`](gcp/DEPLOYMENT_GUIDE_CN.md) (中文), and
+  [`gcp/QUICKSTART.md`](gcp/QUICKSTART.md) for the scripted fast path.
 - The vendor-host authority runs anywhere: `docker compose --env-file .env.authority
   -f docker-compose.authority.yml up -d` (see `.env.authority.example`).
 
@@ -66,5 +67,5 @@ Core services are cloud-neutral; the runnable deployment is currently GCP:
 
 Default-deny everywhere; no insecure bypass switches. The only secret egress is
 the image keyring over mTLS to an attested, authorized launcher; the key-mint
-API returns public keys only. See `gcp/DEPLOYMENT.md` §8 for what is and isn't
-verified end-to-end.
+API returns public keys only. See [`PROTOCOL.md`](PROTOCOL.md) for the full set of
+fail-closed gates (what is and isn't verified at each hop).
