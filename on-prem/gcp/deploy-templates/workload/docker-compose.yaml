@@ -1,0 +1,19 @@
+services:
+  launcher:
+    image: ${DSTACK_REGISTRY}/launcher@sha256:<PINNED_LAUNCHER_DIGEST>
+    env_file: .env
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /var/run/dstack.sock:/var/run/dstack.sock
+    environment:
+      - KMS_URL=https://${KMS_HOST}:8000
+      - KEY_BROKER_URL=https://${KMS_HOST}:8002
+      - APP_ID=<WORKLOAD_APP_ID_40_HEX>
+      - WORKLOAD_IMAGE=${DSTACK_REGISTRY}/<WORKLOAD_IMAGE_NAME>
+      - COMPOSE_HASH=
+      - LEASE_TTL=3600
+      - POLL_INTERVAL=30
+      - GRACE_PERIOD=3600
+      - STATUS_PORT=9100

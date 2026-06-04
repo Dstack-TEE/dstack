@@ -1,0 +1,82 @@
+services:
+  key-broker:
+    image: ${DSTACK_REGISTRY}/key-broker@sha256:<PINNED_KEY_BROKER_DIGEST>
+    env_file: .env
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - kms-data:/kms
+      - /var/run/dstack.sock:/var/run/dstack.sock
+    environment:
+      - PORT=8001
+      - PORT_MTLS=8002
+      - KMS_VOLUME=/kms
+      - AUTHORITY_PUBKEY=<PINNED_LITERAL_BASE64_AUTHORITY_PUBKEY>
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8001/healthz || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 720
+      start_period: 5s
+
+  kms:
+    image: ${DSTACK_REGISTRY}/dstack-kms@sha256:<PINNED_DSTACK_KMS_DIGEST>
+    env_file: .env
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - kms-data:/kms
+      - /var/run/dstack.sock:/var/run/dstack.sock
+    environment:
+      - HTTP_PROXY=http://${SWP_PROXY}
+      - HTTPS_PROXY=http://${SWP_PROXY}
+      - NO_PROXY=127.0.0.1,localhost,169.254.169.254,metadata.google.internal,10.0.0.0/8,.googleapis.com,.pkg.dev
+    configs:
+      - source: kms_config
+        target: /etc/dstack/kms.toml
+    command: ["sh", "-c", "mkdir -p /kms/certs /kms/images; until [ -f /kms/_ready ]; do echo 'kms waiting for provisioned keyset'; sleep 2; done; exec dstack-kms -c /etc/dstack/kms.toml"]
+    depends_on:
+      key-broker:
+        condition: service_started
+
+volumes:
+  kms-data:
+
+configs:
+  kms_config:
+    content: |
+      [default]
+      log_level = "info"
+
+      [rpc]
+      address = "0.0.0.0"
+      port = 8000
+
+      [rpc.tls]
+      key = "/kms/certs/rpc.key"
+      certs = "/kms/certs/rpc.crt"
+
+      [rpc.tls.mutual]
+      ca_certs = "/kms/certs/tmp-ca.crt"
+      mandatory = false
+
+      [core]
+      cert_dir = "/kms/certs"
+      enforce_self_authorization = false
+      pccs_url = "https://api.trustedservices.intel.com"
+
+      [core.image]
+      verify = false
+      cache_dir = "/kms/images"
+
+      [core.auth_api]
+      type = "webhook"
+
+      [core.auth_api.webhook]
+      url = "http://127.0.0.1:8001"
+
+      [core.onboard]
+      enabled = true
+      auto_bootstrap_domain = ""
+      address = "0.0.0.0"
+      port = 8000

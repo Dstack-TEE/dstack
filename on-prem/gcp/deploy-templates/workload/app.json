@@ -1,0 +1,41 @@
+{
+  "name": "launcher-prod",
+  "os_image": "dstack-cloud-nvidia-0-6-1",
+  "gcp_config": {
+    "project": "<GCP_PROJECT>",
+    "zone": "<GCP_ZONE>",
+    "instance_name": "dstack-launcher-prod",
+    "machine_type": "c3-standard-4",
+    "boot_image": "",
+    "boot_image_tar": "",
+    "data_image": "dstack-data-disk",
+    "data_size": 20,
+    "bucket": "gs://<DSTACK_BUCKET>",
+    "network": "default",
+    "subnet": "",
+    "private_ip": "<WORKLOAD_INTERNAL_IP>",
+    "service_account": "",
+    "scopes": [],
+    "tags": [],
+    "labels": {},
+    "provisioning_model": "STANDARD"
+  },
+  "docker_compose_file": "docker-compose.yaml",
+  "prelaunch_script": "prelaunch.sh",
+  "env_file": ".env",
+  "instance_id_seed": "",
+  "app_id": "<WORKLOAD_APP_ID_40_HEX>",
+  "gateway_enabled": false,
+  "public_logs": true,
+  "public_sysinfo": true,
+  "public_tcbinfo": true,
+  "key_provider": "kms",
+  "storage_fs": "ext4",
+  "no_instance_id": false,
+  "secure_time": false,
+  "allowed_envs": [
+    "DSTACK_REGISTRY",
+    "KMS_HOST"
+  ],
+  "key_provider_id": ""
+}

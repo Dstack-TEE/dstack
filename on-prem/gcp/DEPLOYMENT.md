@@ -108,8 +108,9 @@ cd on-prem/gcp/scripts && cp config.env.example config.env && $EDITOR config.env
 cd .. && docker compose -f docker-compose.authority.yml up -d --build
 curl -s http://localhost:8083/api/v1/authority-pubkey
 
-# 2) KMS CVM — paste the pubkey LITERALLY into deploy/kms-prod/docker-compose.yaml
-#    (see §5 — it must NOT be a .env var), then:
+# 2) KMS CVM — copy the committed template, then fill only app.json/user_config.
+#    The vendor has already filled literal image digests + AUTHORITY_PUBKEY in compose.
+cp -a deploy-templates/kms deploy/kms-prod
 cd deploy/kms-prod && dstack-cloud prepare && dstack-cloud deploy
 
 # 3) provision (courier attest) — over an IAP tunnel to key-broker:8001
@@ -171,42 +172,49 @@ on its own root (cross-tenant → 403).
 
 ## 5. Customer KMS + key-broker (TDX CVM)
 
-The KMS runs as a **`dstack-cloud` app**. Create a project, drop in the
-kms+key-broker compose, then `prepare` + `deploy`. A reference project lives at
-`deploy/kms-prod/`:
+The KMS runs as a **`dstack-cloud` app**. Start from the committed template in
+`deploy-templates/kms/`, copy it into the ignored per-customer `deploy/kms-prod/`
+directory, then `prepare` + `deploy`:
 
 ```bash
 dstack-cloud new kms-prod --key-provider local --os-image dstack-cloud-nvidia-0-6-1
+# copy deploy-templates/kms/* here
 # edit app.json: gcp_config.project/bucket, machine_type (c3-* = TDX)
-# edit docker-compose.yaml: the kms + key-broker services (see below)
-# edit prelaunch.sh: AR docker-login + SSH installer
+# create user_config with DSTACK_REGISTRY/SWP_PROXY, or let registry derive from metadata
 cd kms-prod && dstack-cloud prepare && dstack-cloud deploy
 ```
 
-**Two rules that make the KMS *self*-bootstrap (no circular dependency):**
+**Three rules that make the KMS self-bootstrap and keep `compose_hash`
+customer-independent:**
 
 1. **`key_provider: tpm`** (on GCP) — a `kms` key-provider app would ask a KMS for
    its own disk/env keys at boot; this KMS *is* the KMS, so it derives them from
    the **GCP vTPM** instead (no external KMS). (`local` is for hosts without a
    usable TPM.)
-2. **No `.env` / `allowed_envs`** — dstack `.env` values are delivered as
-   `.encrypted-env`, decrypted at boot with an **env-encrypt-key the KMS derives**.
-   The KMS can't get that from itself before it's up. So **`AUTHORITY_PUBKEY` is
-   written as a *literal* directly in `docker-compose.yaml`** (not `${...}`):
+2. **Security pins are literal** — `AUTHORITY_PUBKEY` and every image
+   `@sha256:<digest>` are written directly in `docker-compose.yaml`, never via
+   `${...}`:
    ```yaml
+   image: ${DSTACK_REGISTRY}/key-broker@sha256:<literal-digest>
    environment:
      - AUTHORITY_PUBKEY=EIgvRPk5lyrmaDNT+K89Rt2IIEvvHauZGXqu8qn7AWw=   # literal
    ```
    Bonus: the literal becomes part of the measured **`compose_hash`**, so the
    pubkey that gates AuthBundle verification is tamper-evident via attestation.
-   (When the authority signing key changes, update this line + re-`prepare`.)
+   (When the authority signing key or an image digest changes, update the
+   template + re-`prepare`.)
+3. **Customer values stay runtime-only** — the compose keeps literal
+   `${DSTACK_REGISTRY}` / `${SWP_PROXY}`. `prelaunch.sh` validates the resolved
+   registry/proxy with anchored regexes, writes `/dstack/.env`, and never
+   rewrites `docker-compose.yaml`. Docker compose reads that `.env` at `up` time,
+   after dstack has already measured `app-compose.json`.
 
-The app's `docker-compose.yaml` (see `deploy/kms-prod/docker-compose.yaml`):
+The app's `docker-compose.yaml` (see `deploy-templates/kms/docker-compose.yaml`):
 
 - `kms` + `key-broker`, `network_mode: host`, sharing a `kms-data` volume at `/kms`;
   key-broker binds `/var/run/dstack.sock` (TDX Attest).
-- images pulled from **Artifact Registry** (prelaunch logs docker in with the VM's
-  SA metadata token — works air-gapped over PGA).
+- images pulled from **`${DSTACK_REGISTRY}/...@sha256:<literal-digest>`**;
+  prelaunch logs docker in with the VM's SA metadata token (works air-gapped over PGA).
 - `kms.toml` inlined via compose `configs:` (`cert_dir=/kms/certs`,
   `enforce_self_authorization=false`, webhook `http://127.0.0.1:8001` (loopback,
   host networking), `pccs_url=https://api.trustedservices.intel.com`).
@@ -247,10 +255,9 @@ root lands (it `depends_on` key-broker healthy). The 4-step flow:
      (hex of `{"name","id"}`); `none`/`local-sgx`/`kms` are rejected, so the
      KMS root is only released to a **GCP vTPM-sealed** disk;
    - **`compose_hash`** ∈ the user's whitelist — an explicit
-     `allowed_kms_compose_hashes` list if configured, else trust-on-first-use
-     (`expected_compose_hash`). `compose_hash` is stable across redeploys and
-     only changes on an intentional compose edit (→ re-review), so redeploys no
-     longer need a pin reset.
+     `allowed_kms_compose_hashes` list. With the parameterized template this
+     `compose_hash` is stable across customers; the vendor pre-computes it once
+     after filling the literal digests/pubkey and registers it for every tenant.
 4. **courier/install** → key-broker **verifies the AuthBundle signature**, checks
    `bundle_seq` monotonicity, HPKE-opens the root, and writes the 8-file KMS
    keyset (`root-ca`/`tmp-ca`/`rpc` + `root-k256.key` + `rpc-domain`).
@@ -292,12 +299,22 @@ skopeo copy --encryption-key jwe:pub.pem docker://<plain-image> docker://<regist
 #   skopeo copy --decryption-key /run/cek/<kid>.pem ... docker://<repo>@<digest> docker-archive:...
 ```
 
+The workload CVM also starts from a committed template:
+`deploy-templates/workload/`. Its measured compose pins the launcher image as
+`${DSTACK_REGISTRY}/launcher@sha256:<literal-digest>` and leaves only
+`${DSTACK_REGISTRY}` plus `${KMS_HOST}` for runtime expansion. `prelaunch.sh`
+validates those values and writes `/dstack/.env`; it does not edit the compose.
+The workload image path is `${DSTACK_REGISTRY}/<workload-name>` and the digest
+still comes from the authority's `current_image_digest`.
+
 Key release is gated by the AuthBundle: the launcher's RA-TLS identity must pass
 `app_id ∈ app_whitelist ∧ compose_hash ∈ allowed_launcher_digests ∧ os_image ∈
 os_images`; it then receives the **global** keyring (vendor-wide — one encrypted
 image decrypts for every tenant). Pulling by `@digest` enforces the digest, and
 ocicrypt decrypts only if a leased key is the image's recipient (else fails
-closed). The keyring is **global**; per-tenant isolation is in `root_material`.
+closed). The vendor pre-computes the workload template's customer-independent
+`compose_hash` once and registers it in `allowed_launcher_digests`. The keyring
+is **global**; per-tenant isolation is in `root_material`.
 
 > **Status:** verified locally (real skopeo JWE round-trip: pubkey-only encrypt,
 > keyring try-each decrypt, rotation, fail-closed) and the launcher wiring builds.
@@ -327,8 +344,9 @@ closed). The keyring is **global**; per-tenant isolation is in `root_material`.
 - ✅ Multi-user isolation; stateless HMAC nonces.
 - ✅ No-internet posture: internal Artifact Registry (PGA), Intel PCS (no PCCS VM),
   `secure_time=false` + GCP kvm-clock so boot doesn't block on public NTP,
-  `key_provider=tpm` (GCP vTPM) so the KMS self-bootstraps with no `.env`/KMS
-  dependency.
+  `key_provider=tpm` (GCP vTPM) so the KMS self-bootstraps with no
+  KMS-decrypted env dependency. The only runtime `.env` is the non-secret file
+  prelaunch writes for compose interpolation.
 - ✅ **Egress domain whitelist** (§10): launcher fully locked down (no internet —
   AR via PGA only, verified under egress-deny); KMS reaches Intel PCS only via a
   GCP Secure Web Proxy configured as a **plaintext** endpoint (so the rustls
@@ -355,7 +373,7 @@ closed). The keyring is **global**; per-tenant isolation is in `root_material`.
 - ⚠️ Authority signing key should be **HSM-backed** (currently file/seed).
 - ⚠️ `AUTHORITY_PUBKEY` must reach the key-broker over a trusted channel (the CLI's
   initial setup), not by hand.
-- ⚠️ Launcher `GetAppKey` (RA-TLS) is **degraded**: the mTLS sidecar client skips
+- ⚠️ Launcher `GetAppKey` (RA-TLS) is **degraded**: the mTLS key-broker client skips
   server-cert verification (`NoServerVerify`) because the KMS CA from a verified
   `GetAppKey` isn't wired yet — restore full RA-TLS before production.
 - ⚠️ KMS egress lockdown (§10b steps 1–4) is **staged, not applied**: the compose
@@ -368,7 +386,7 @@ closed). The keyring is **global**; per-tenant isolation is in `root_material`.
 1. **KMS stuck on the onboarding page** → `kms.toml` not delivered, so KMS ran on
    embedded defaults (`cert_dir=/etc/kms/certs`). The app compose must inline it
    via `configs:` and run `dstack-kms -c /etc/dstack/kms.toml` (see
-   `deploy/kms-prod/docker-compose.yaml`).
+   `deploy-templates/kms/docker-compose.yaml`).
 2. **Auth webhook unreachable** → host networking means the webhook is on
    `http://127.0.0.1:8001`, not the compose service name.
 3. **key-broker crash-loop `GLIBC_2.38 not found`** → build with
@@ -386,10 +404,10 @@ closed). The keyring is **global**; per-tenant isolation is in `root_material`.
    an os_image_hash; set `EXPECTED_OS_IMAGE_HASH` on the authority (it injects the
    expected value; the actual comes from the vTPM event log, PCR2 Event 28).
 8. **KMS deploy can't read its env / boot hangs on KMS** → the KMS app must use
-   `key_provider=tpm` (GCP vTPM; never `kms`) and **no `.env`/`allowed_envs`**:
-   dstack `.env` is decrypted with a KMS-derived key, which the KMS itself can't
-   obtain before bootstrap (circular). Put `AUTHORITY_PUBKEY` as a literal in the
-   compose (§5).
+   `key_provider=tpm` (GCP vTPM; never `kms`). Do not put
+   `AUTHORITY_PUBKEY` or image digests in env; they must be literal in the
+   compose (§5). The runtime `.env` written by prelaunch is only for non-secret
+   compose interpolation (`DSTACK_REGISTRY`, `SWP_PROXY`).
 9. **AR pull `Unauthenticated`** → the CVM must `docker login` to AR with its SA
    metadata token (prelaunch). NB: the dstack OS python lacks `json` — parse the
    token with `sed`, not `python3 -c`.
@@ -407,7 +425,7 @@ closed). The keyring is **global**; per-tenant isolation is in `root_material`.
     `./authority` is bind-mounted) or, for a one-off, clear `expected_mr_aggregated`
     in `/data/users.json`. An **intentional** KMS compose change legitimately
     403s until you add the new `compose_hash` to `allowed_kms_compose_hashes`
-    (or clear `expected_compose_hash` to re-TOFU).
+    after review.
 
 ---
 
@@ -471,8 +489,8 @@ scripts/setup-swp.sh gateway   # creates dstack-egress-swp @ 10.128.0.53:80 (no 
 scripts/setup-swp.sh verify    # from KMS: Intel PCS = 200, google.com = reset (56)
 ```
 
-**KMS lockdown** — the `kms` service in `deploy/kms-prod/docker-compose.yaml`
-carries `HTTP_PROXY/HTTPS_PROXY=http://10.128.0.53:80` + `NO_PROXY` (in-VPC, PGA,
+**KMS lockdown** — the `kms` service in `deploy-templates/kms/docker-compose.yaml`
+carries `HTTP_PROXY/HTTPS_PROXY=http://${SWP_PROXY}` + `NO_PROXY` (in-VPC, PGA,
 metadata go direct). After `deploy` + `provision` (§6), lock it down:
 
 1. pin Google-API hosts to the PGA VIP (`/etc/hosts`, as Layer 1).
