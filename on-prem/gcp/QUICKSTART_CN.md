@@ -45,8 +45,8 @@ cp config.env.example config.env && "$EDITOR" config.env
 ```
 
 **config.env 各侧必填**：
-- **厂商**（vendor-release / add-tenant）:`AUTHORITY_URL`、`AUTHORITY_ADMIN_TOKEN`、`PUBREG`、`IMAGE_KID`、`APP_ID`、`WORKLOAD_SRC`、`WORKLOAD_NAME`、`OS_VERSION`。运行前先 `docker login "$PUBREG"`(推镜像要认证)。
-- **operator**（operator-deploy）:`GCP_PROJECT`、`GCP_ZONE`、`AR_LOCATION/AR_PROJECT/AR_REPO`、`PUBREG`、`WORKLOAD_NAME`、`OS_VERSION`、`KMS_IP`、`LAUNCHER_IP`、`USER_ID`、`AUTHORITY_URL`、可选 `SWP_PROXY`。`OS_VERSION` 用**带点**的发布名(如 `dstack-cloud-nvidia-0.6.1`),脚本自动推导 app.json/目录用的横线名。
+- **厂商**（vendor-release / add-tenant）:`AUTHORITY_URL`、`AUTHORITY_ADMIN_TOKEN`、`PUBREG`、`IMAGE_KID`、`APP_ID`、`WORKLOAD_SRC`、`WORKLOAD_NAME`、`OS_VERSION`、`DSTACK_KMS_SRC`。运行前先 `docker login "$PUBREG"`(推镜像要认证)。
+- **operator**（operator-deploy）:`GCP_PROJECT`、`GCP_ZONE`、`AR_LOCATION/AR_PROJECT/AR_REPO`、`PUBREG`、`WORKLOAD_NAME`、`OS_VERSION`、`KMS_IP`、`LAUNCHER_IP`、`USER_ID`、`AUTHORITY_URL`、`SWP_PROXY`(KMS compose 必需)。`OS_VERSION` 用**带点**的发布名(如 `dstack-cloud-nvidia-0.6.1`),脚本自动推导 app.json/目录用的横线名。
 
 > 一次性 GCP 资源（AR 仓库 + GCS 桶 + 启用 API）见
 > [`DEPLOYMENT_GUIDE_CN.md`](DEPLOYMENT_GUIDE_CN.md) 的"前置条件"。`operator-deploy.sh`
@@ -66,7 +66,7 @@ cd on-prem/gcp/scripts
 
 ## operator 侧（在自己的 GCP）
 
-把厂商交付的 `deploy/kms`、`deploy/launcher` 放好,填 `config.env`（`KMS_IP`/`LAUNCHER_IP`/`OS_IMAGE`/`PUBREG`/`AR_*`/`USER_ID`/`AUTHORITY_URL`/可选 `SWP_PROXY`），然后:
+把厂商交付的 `deploy/kms`、`deploy/launcher` 放好,填 `config.env`（`KMS_IP`/`LAUNCHER_IP`/`OS_IMAGE`/`PUBREG`/`AR_*`/`USER_ID`/`AUTHORITY_URL`/`SWP_PROXY`），然后:
 
 ```bash
 cd on-prem/gcp/scripts

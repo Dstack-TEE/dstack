@@ -59,10 +59,18 @@ c_step "build + push key-broker / launcher → $PUBREG"
   && docker build -f on-prem/launcher/Dockerfile   -t "$PUBREG/launcher:latest"   . )
 docker push "$PUBREG/key-broker:latest"
 docker push "$PUBREG/launcher:latest"
-# dstack-kms: official image, retagged into the vendor registry
-docker pull dstacktee/dstack-kms:latest
-docker tag  dstacktee/dstack-kms:latest "$PUBREG/dstack-kms:latest"
-docker push "$PUBREG/dstack-kms:latest"
+# dstack-kms: the vendor's chosen dstack-kms image, retagged into $PUBREG. The
+# official `dstacktee/dstack-kms` has NO `latest` tag (only versioned, e.g. 0.5.11)
+# and the rpc-cert IP SAN needs a recent/mainline build — so this is configurable
+# via DSTACK_KMS_SRC (defaults to one already in $PUBREG).
+DSTACK_KMS_SRC="${DSTACK_KMS_SRC:-$PUBREG/dstack-kms:latest}"
+if [[ "$DSTACK_KMS_SRC" != "$PUBREG/dstack-kms:latest" ]]; then
+    docker pull "$DSTACK_KMS_SRC"
+    docker tag  "$DSTACK_KMS_SRC" "$PUBREG/dstack-kms:latest"
+    docker push "$PUBREG/dstack-kms:latest"
+else
+    c_ok "dstack-kms: using existing $PUBREG/dstack-kms:latest"
+fi
 
 # ── 4. JWE-encrypt the workload image → push (encryption needs only the pubkey) ─
 c_step "JWE-encrypt $WORKLOAD_SRC → $PUBREG/$WORKLOAD_NAME"

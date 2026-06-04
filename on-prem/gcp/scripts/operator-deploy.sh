@@ -84,13 +84,17 @@ do_kms() {
     c_step "prep KMS (reserve IP, fill app.json + user_config, set kms_urls)"
     reserve_ip dstack-kms-ip "$KMS_IP"
     fill_appjson kms "$KMS_INSTANCE" "$KMS_IP"
-    printf '{ "DSTACK_REGISTRY": "%s"%s }\n' "$AR" \
-        "${SWP_PROXY:+, \"SWP_PROXY\": \"$SWP_PROXY\"}" > "$GCP/deploy/kms/.user-config"
+    # the committed KMS compose pins HTTP_PROXY=http://${SWP_PROXY}, so SWP_PROXY is
+    # REQUIRED (missing → KMS prelaunch fails 'missing SWP_PROXY' and the app never starts).
+    : "${SWP_PROXY:?the KMS compose needs SWP_PROXY (egress proxy IP:port) — set it in config.env}"
+    printf '{ "DSTACK_REGISTRY": "%s", "SWP_PROXY": "%s" }\n' "$AR" "$SWP_PROXY" > "$GCP/deploy/kms/.user-config"
 
     c_step "deploy KMS CVM"
     "$DC" -C "$GCP/deploy/kms" prepare
     "$DC" -C "$GCP/deploy/kms" deploy
-    "$DC" -C "$GCP/deploy/kms" fw allow 8001 8002 || true
+    "$DC" -C "$GCP/deploy/kms" fw allow 8000 || true   # GetMeta verify over IAP (fw allow takes ONE port)
+    "$DC" -C "$GCP/deploy/kms" fw allow 8001 || true   # courier
+    "$DC" -C "$GCP/deploy/kms" fw allow 8002 || true   # mTLS keyring
 
     c_step "provision KMS (courier)"
     "$HERE/provision-kms.sh"
@@ -114,11 +118,17 @@ do_launcher() {
     c_step "deploy launcher CVM"
     "$DC" -C "$GCP/deploy/launcher" prepare
     "$DC" -C "$GCP/deploy/launcher" deploy
+    "$DC" -C "$GCP/deploy/launcher" fw allow 9100 || true   # /status over IAP
 
-    c_step "verify E2E (give it ~2.5min to fetch keys + decrypt + run)"
-    sleep 150
+    c_step "verify E2E (boot + fetch keys + decrypt + run takes a few minutes)"
     local pid; pid="$(tunnel "$LN_INSTANCE" 9100 19100)"; sleep 8
-    curl -s --max-time 6 http://localhost:19100/status | python3 -m json.tool || c_warn "/status not ready yet — check guest-agent :8090 logs"
+    local st=""
+    for _ in $(seq 1 40); do
+        st="$(curl -s --max-time 4 http://localhost:19100/status 2>/dev/null)"
+        echo "$st" | grep -q '"workload_running": *true' && break
+        sleep 10
+    done
+    if [ -n "$st" ]; then echo "$st" | python3 -m json.tool; else c_warn "/status not ready — check guest-agent :8090 logs"; fi
     kill "$pid" 2>/dev/null || true
 }
 

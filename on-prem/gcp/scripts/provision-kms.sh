@@ -28,11 +28,16 @@ gcloud compute start-iap-tunnel "$KMS_VM" 8001 \
     --project="$GCP_PROJECT" --zone="$GCP_ZONE" >/tmp/iap-prov.log 2>&1 &
 TUNNEL_PID=$!
 trap 'kill $TUNNEL_PID 2>/dev/null || true' EXIT
-for _ in $(seq 1 40); do
-    curl -s "http://localhost:${PORT}/healthz" >/dev/null 2>&1 && break
-    sleep 0.5
+# A freshly-deployed CVM needs a few minutes to boot, pull the images and start
+# the key-broker — wait for a non-empty /healthz (up to ~6min) rather than racing.
+c_step "waiting for key-broker on the tunnel (CVM may still be booting)"
+for _ in $(seq 1 90); do
+    [ -n "$(curl -s --max-time 3 "http://localhost:${PORT}/healthz" 2>/dev/null)" ] && break
+    sleep 4
 done
-c_ok "tunnel up (key-broker: $(curl -s http://localhost:${PORT}/healthz))"
+_hz="$(curl -s --max-time 3 "http://localhost:${PORT}/healthz" 2>/dev/null)"
+[ -n "$_hz" ] || c_die "key-broker not reachable on :${PORT} after ~6min (CVM booted? is 'fw allow 8001' applied? did KMS prelaunch pass?)"
+c_ok "key-broker: $_hz"
 
 c_step "courier attest (user_id=${USER_ID})"
 KMS_URL="http://localhost:${PORT}" \

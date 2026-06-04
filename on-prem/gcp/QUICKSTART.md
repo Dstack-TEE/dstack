@@ -49,11 +49,11 @@ cp config.env.example config.env && "$EDITOR" config.env
 
 **Which config.env fields each side fills:**
 - **Vendor** (vendor-release / add-tenant): `AUTHORITY_URL`, `AUTHORITY_ADMIN_TOKEN`,
-  `PUBREG`, `IMAGE_KID`, `APP_ID`, `WORKLOAD_SRC`, `WORKLOAD_NAME`, `OS_VERSION`. Run
+  `PUBREG`, `IMAGE_KID`, `APP_ID`, `WORKLOAD_SRC`, `WORKLOAD_NAME`, `OS_VERSION`, `DSTACK_KMS_SRC`. Run
   `docker login "$PUBREG"` first (pushing images needs auth).
 - **Operator** (operator-deploy): `GCP_PROJECT`, `GCP_ZONE`,
   `AR_LOCATION/AR_PROJECT/AR_REPO`, `PUBREG`, `WORKLOAD_NAME`, `OS_VERSION`, `KMS_IP`,
-  `LAUNCHER_IP`, `USER_ID`, `AUTHORITY_URL`, optional `SWP_PROXY`. `OS_VERSION` is the
+  `LAUNCHER_IP`, `USER_ID`, `AUTHORITY_URL`, `SWP_PROXY`. `OS_VERSION` is the
   **dotted** release name (e.g. `dstack-cloud-nvidia-0.6.1`); the scripts derive the
   dashed app.json/dir name automatically.
 
@@ -80,7 +80,7 @@ Keep the Authority online (the courier connects to it).
 
 Drop the vendor-delivered `deploy/kms` and `deploy/launcher` in place, fill
 `config.env` (`KMS_IP`/`LAUNCHER_IP`/`OS_IMAGE`/`PUBREG`/`AR_*`/`USER_ID`/`AUTHORITY_URL`/
-optional `SWP_PROXY`), then:
+`SWP_PROXY`), then:
 
 ```bash
 cd on-prem/gcp/scripts
