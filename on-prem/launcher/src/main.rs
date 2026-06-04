@@ -143,9 +143,9 @@ async fn main() -> Result<()> {
     let instance_id_renewal = instance_id.clone();
     let grace_period = config.grace_period;
     let lease_ttl = config.lease_ttl;
-    let workload_image_renewal = config.workload_image.clone();
     let compose_hash_renewal = config.compose_hash.clone();
     let app_id_renewal = config.app_id.clone();
+    let running_digest_renewal = Arc::clone(&running_digest);
 
     let renewal_handle = tokio::spawn(async move {
         let interval = Duration::from_secs(lease_ttl / 3);
@@ -163,14 +163,45 @@ async fn main() -> Result<()> {
                 }
                 Err(e) => {
                     tracing::warn!("lease renewal failed: {:#}", e);
-                    let elapsed = last_renewal_clone.lock().unwrap().elapsed().as_secs();
-                    if elapsed > grace_period {
-                        tracing::error!(
-                            "lease expired after {}s grace period, stopping business containers",
-                            grace_period
-                        );
-                        if let Err(e) = runner::compose_down() {
-                            tracing::error!("failed to stop containers: {:#}", e);
+                    // The slot can disappear when the KMS/key-broker restarts or is
+                    // redeployed (fresh, empty slot store) — a benign event that must
+                    // not kill a still-authorized workload. Try to RE-ACQUIRE a fresh
+                    // lease first; acquire_lease re-runs every authorization gate
+                    // (compose_hash ∈ allowed_launcher_digests, image_digest ∈
+                    // allowed_workload_digests, os_image, live keyring), so a workload
+                    // that has actually been de-authorized still fails and falls through
+                    // to the fail-safe stop below.
+                    let digest = running_digest_renewal.lock().unwrap().clone();
+                    match key_broker_renewal
+                        .acquire_lease(
+                            &app_id_renewal,
+                            &instance_id_renewal,
+                            &compose_hash_renewal,
+                            &digest,
+                        )
+                        .await
+                    {
+                        Ok(new_lease) => {
+                            tracing::info!(
+                                "re-acquired lease after renewal failure: slot={}",
+                                new_lease.lease
+                            );
+                            *lease_id_renewal.lock().unwrap() = new_lease.lease;
+                            *last_renewal_clone.lock().unwrap() = Instant::now();
+                        }
+                        Err(re) => {
+                            tracing::warn!("lease re-acquire failed: {:#}", re);
+                            let elapsed =
+                                last_renewal_clone.lock().unwrap().elapsed().as_secs();
+                            if elapsed > grace_period {
+                                tracing::error!(
+                                    "lease expired after {}s grace period, stopping business containers",
+                                    grace_period
+                                );
+                                if let Err(e) = runner::compose_down() {
+                                    tracing::error!("failed to stop containers: {:#}", e);
+                                }
+                            }
                         }
                     }
                 }
