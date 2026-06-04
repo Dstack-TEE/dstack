@@ -31,7 +31,7 @@ Everything at this level is **cloud-agnostic**; provider-specific glue lives und
 | Path | What | Cloud-specific? |
 |------|------|-----------------|
 | `authority/` | authorization service (FastAPI): roots, global JWE keyring, AuthBundles | no |
-| `key-broker/` | KMS sidecar (Rust): courier, HPKE unseal, mTLS keyring lease | no |
+| `key-broker/` | key-broker (Rust): courier, HPKE unseal, mTLS keyring lease | no |
 | `launcher/` | workload-CVM agent (Rust): RA-TLS, lease, JWE decrypt, run | no¹ |
 | `verifier/` | `dstack-verifier` container build (TDX+vTPM quote verify) | no |
 | `docker-compose.authority.yml` + `.env.authority.example` | vendor-host stack | no |

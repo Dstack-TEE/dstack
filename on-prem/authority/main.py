@@ -129,7 +129,7 @@ def resolve_user(req_user_id: str, authorization: Optional[str]) -> str:
 def authority_pubkey():
     """Return the authority Ed25519 public key.
 
-    The CLI writes this into the sidecar during initial setup so the KMS
+    The CLI writes this into the key-broker during initial setup so the KMS
     can later verify AuthBundle signatures without contacting the authority.
     """
     return {"pubkey": base64.b64encode(get_authority_pubkey_bytes()).decode()}

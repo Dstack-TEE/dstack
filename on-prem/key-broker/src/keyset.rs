@@ -10,7 +10,7 @@
 //! under `cert_dir` and, when those files exist, skips onboarding and serves
 //! directly (`kms/src/main.rs` / `config.rs::keys_exists`).
 //!
-//! So instead of the KMS bootstrapping its own root in-TEE, the sidecar writes
+//! So instead of the KMS bootstrapping its own root in-TEE, the key-broker writes
 //! the exact files the KMS loads, using the same `ra-tls`/`rcgen` primitives
 //! the KMS uses so the formats match byte-for-byte:
 //!

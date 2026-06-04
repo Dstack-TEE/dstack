@@ -3,7 +3,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 #
-# Demo: GCP private deployment — dstack KMS sidecar + vendor authority
+# Demo: GCP private deployment — dstack KMS key-broker + vendor authority
 #
 # Traces the complete operator flow on localhost:
 #   1. Courier attest  — 4-step provisioning of an air-gapped KMS
@@ -15,11 +15,11 @@
 #   bash on-prem/gcp/scripts/demo.sh
 #
 # Environment overrides:
-#   SIDECAR_BIN   path to key-broker binary  (default: target/debug/key-broker)
+#   KEY_BROKER_BIN   path to key-broker binary  (default: target/debug/key-broker)
 #   AUTHORITY_DIR  path to authority dir  (default: authority)
 #   AUTHORITY_PORT vendor authority HTTP port    (default: 18083)
-#   SIDECAR_PORT  sidecar HTTP port            (default: 18001)
-#   SIDECAR_MTLS  sidecar mTLS port            (default: 18002)
+#   KEY_BROKER_PORT  key-broker HTTP port            (default: 18001)
+#   KEY_BROKER_MTLS  key-broker mTLS port            (default: 18002)
 #   DEMO_SLOT_QUOTA  slot quota for this demo  (default: 2)
 
 set -euo pipefail
@@ -39,16 +39,16 @@ banner(){ echo -e "\n${BOLD}${CYAN}═══════════════
 # ─── config ─────────────────────────────────────────────────────────────────
 ON_PREM_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"   # on-prem/
 WORKSPACE_ROOT="$(cd "$ON_PREM_ROOT/.." && pwd)"                     # dstack workspace root (has target/)
-SIDECAR_BIN="${SIDECAR_BIN:-$WORKSPACE_ROOT/target/debug/key-broker}"
+KEY_BROKER_BIN="${KEY_BROKER_BIN:-$WORKSPACE_ROOT/target/debug/key-broker}"
 AUTHORITY_DIR="${AUTHORITY_DIR:-$ON_PREM_ROOT/authority}"
 AUTHORITY_PORT="${AUTHORITY_PORT:-18083}"
-SIDECAR_PORT="${SIDECAR_PORT:-18001}"
-SIDECAR_MTLS="${SIDECAR_MTLS:-18002}"
+KEY_BROKER_PORT="${KEY_BROKER_PORT:-18001}"
+KEY_BROKER_MTLS="${KEY_BROKER_MTLS:-18002}"
 export DEMO_SLOT_QUOTA="${DEMO_SLOT_QUOTA:-2}"
 
 AUTHORITY_URL="http://localhost:${AUTHORITY_PORT}"
-SIDECAR_URL="http://localhost:${SIDECAR_PORT}"
-SIDECAR_MTLS_URL="https://localhost:${SIDECAR_MTLS}"
+KEY_BROKER_URL="http://localhost:${KEY_BROKER_PORT}"
+KEY_BROKER_MTLS_URL="https://localhost:${KEY_BROKER_MTLS}"
 
 CUSTOMER_ID="demo-customer"
 KMS_VOL="/tmp/kms-demo-$$"
@@ -78,7 +78,7 @@ python3 -c "import fastapi, uvicorn, cryptography" 2>/dev/null \
     || fail "Missing Python packages — run: pip install fastapi uvicorn cryptography"
 
 # ─── kill any stale demo processes on our ports ──────────────────────────────
-for port in "$AUTHORITY_PORT" "$SIDECAR_PORT" "$SIDECAR_MTLS"; do
+for port in "$AUTHORITY_PORT" "$KEY_BROKER_PORT" "$KEY_BROKER_MTLS"; do
     pids=$(lsof -ti ":${port}" 2>/dev/null || true)
     if [[ -n "$pids" ]]; then
         kill $pids 2>/dev/null || true
@@ -86,13 +86,13 @@ for port in "$AUTHORITY_PORT" "$SIDECAR_PORT" "$SIDECAR_MTLS"; do
     fi
 done
 
-# ─── build sidecar ───────────────────────────────────────────────────────────
+# ─── build key-broker ───────────────────────────────────────────────────────────
 banner "Build"
-if [[ ! -x "$SIDECAR_BIN" ]]; then
+if [[ ! -x "$KEY_BROKER_BIN" ]]; then
     step "building key-broker…"
     cargo build -p key-broker 2>&1 | tail -3
 fi
-pass "sidecar binary: $SIDECAR_BIN"
+pass "key-broker binary: $KEY_BROKER_BIN"
 
 # ─── start vendor authority ───────────────────────────────────────────────────
 banner "Start Services"
@@ -115,25 +115,25 @@ curl -sf "$AUTHORITY_URL/api/v1/authority-pubkey" &>/dev/null \
 AUTHORITY_PUBKEY=$(curl -sf "$AUTHORITY_URL/api/v1/authority-pubkey" | jq -r '.pubkey')
 info "authority pubkey: ${AUTHORITY_PUBKEY:0:20}…"
 
-# ─── start KMS sidecar ────────────────────────────────────────────────────────
-step "starting KMS sidecar on ports $SIDECAR_PORT / $SIDECAR_MTLS"
+# ─── start KMS key-broker ────────────────────────────────────────────────────────
+step "starting KMS key-broker on ports $KEY_BROKER_PORT / $KEY_BROKER_MTLS"
 mkdir -p "$KMS_VOL"
 KMS_VOLUME="$KMS_VOL" \
-PORT="$SIDECAR_PORT" \
-PORT_MTLS="$SIDECAR_MTLS" \
+PORT="$KEY_BROKER_PORT" \
+PORT_MTLS="$KEY_BROKER_MTLS" \
 AUTHORITY_PUBKEY="$AUTHORITY_PUBKEY" \
-"$SIDECAR_BIN" &>/tmp/sidecar-demo-$$.log &
+"$KEY_BROKER_BIN" &>/tmp/key-broker-demo-$$.log &
 PIDS+=($!)
 
 for i in $(seq 1 30); do
-    STATUS=$(curl -s "$SIDECAR_URL/healthz" 2>/dev/null || true)
+    STATUS=$(curl -s "$KEY_BROKER_URL/healthz" 2>/dev/null || true)
     [[ "$STATUS" == "waiting for root key" || "$STATUS" == "ready" ]] && break
     sleep 0.3
 done
-STATUS=$(curl -s "$SIDECAR_URL/healthz" 2>/dev/null || true)
+STATUS=$(curl -s "$KEY_BROKER_URL/healthz" 2>/dev/null || true)
 [[ "$STATUS" == "waiting for root key" || "$STATUS" == "ready" ]] \
-    && pass "sidecar started (status: $STATUS)" \
-    || fail "sidecar failed to start — check /tmp/sidecar-demo-$$.log"
+    && pass "key-broker started (status: $STATUS)" \
+    || fail "key-broker failed to start — check /tmp/key-broker-demo-$$.log"
 
 # ─── STEP 1: Courier Attest ────────────────────────────────────────────────────
 banner "Step 1 — Courier Attest (Provisioning)"
@@ -145,8 +145,8 @@ CHALLENGE=$(curl -sf -X POST "$AUTHORITY_URL/api/v1/challenge" \
 NONCE=$(echo "$CHALLENGE" | jq -r '.nonce')
 pass "nonce: ${NONCE:0:16}…"
 
-step "1.2  sidecar /courier/init → transport keypair + TDX quote"
-INIT=$(curl -sf -X POST "$SIDECAR_URL/courier/init" \
+step "1.2  key-broker /courier/init → transport keypair + TDX quote"
+INIT=$(curl -sf -X POST "$KEY_BROKER_URL/courier/init" \
     -H 'Content-Type: application/json' \
     -d "{\"nonce\":\"$NONCE\"}")
 TRANSPORT_PUB=$(echo "$INIT" | jq -r '.transport_pub')
@@ -164,8 +164,8 @@ BUNDLE_SEQ=$(echo "$AUTH_BUNDLE" | jq '.bundle_seq')
 SLOT_QUOTA=$(echo "$AUTH_BUNDLE" | jq '.slot_quota')
 pass "sealed_root len=${#SEALED_ROOT}  bundle_seq=$BUNDLE_SEQ  slot_quota=$SLOT_QUOTA"
 
-step "1.4  sidecar /courier/install → write root key + activate AuthBundle"
-INSTALL=$(curl -sf -X POST "$SIDECAR_URL/courier/install" \
+step "1.4  key-broker /courier/install → write root key + activate AuthBundle"
+INSTALL=$(curl -sf -X POST "$KEY_BROKER_URL/courier/install" \
     -H 'Content-Type: application/json' \
     -d "{\"sealed_root\":\"$SEALED_ROOT\",\"auth_bundle\":$AUTH_BUNDLE}")
 OK=$(echo "$INSTALL" | jq -r '.ok')
@@ -173,8 +173,8 @@ OK=$(echo "$INSTALL" | jq -r '.ok')
 
 # ─── STEP 2: Healthcheck ──────────────────────────────────────────────────────
 banner "Step 2 — Healthcheck"
-STATUS=$(curl -s "$SIDECAR_URL/healthz")
-[[ "$STATUS" == "ready" ]] && pass "sidecar is ready" || fail "expected ready, got: $STATUS"
+STATUS=$(curl -s "$KEY_BROKER_URL/healthz")
+[[ "$STATUS" == "ready" ]] && pass "key-broker is ready" || fail "expected ready, got: $STATUS"
 
 # ─── STEP 3: Auth Webhook ─────────────────────────────────────────────────────
 banner "Step 3 — Auth Webhook (KMS boot authorization)"
@@ -193,7 +193,7 @@ EOF
 )
 
 step "3.1  /bootAuth/kms — should be allowed"
-RESP=$(curl -sf -X POST "$SIDECAR_URL/bootAuth/kms" \
+RESP=$(curl -sf -X POST "$KEY_BROKER_URL/bootAuth/kms" \
     -H 'Content-Type: application/json' \
     -d "$BOOT_INFO_KMS")
 IS_ALLOWED=$(echo "$RESP" | jq -r '.isAllowed')
@@ -216,7 +216,7 @@ EOF
 )
 
 step "3.2  /bootAuth/app — wildcard compose hash, should be allowed"
-RESP=$(curl -sf -X POST "$SIDECAR_URL/bootAuth/app" \
+RESP=$(curl -sf -X POST "$KEY_BROKER_URL/bootAuth/app" \
     -H 'Content-Type: application/json' \
     -d "$BOOT_INFO_APP")
 IS_ALLOWED=$(echo "$RESP" | jq -r '.isAllowed')
@@ -225,7 +225,7 @@ IS_ALLOWED=$(echo "$RESP" | jq -r '.isAllowed')
     || fail "unexpected deny: $(echo "$RESP" | jq -r '.reason')"
 
 step "3.3  /bootAuth/app — unknown app_id, should be denied"
-RESP=$(curl -sf -X POST "$SIDECAR_URL/bootAuth/app" \
+RESP=$(curl -sf -X POST "$KEY_BROKER_URL/bootAuth/app" \
     -H 'Content-Type: application/json' \
     -d "{
   \"mrAggregated\": \"0xabc\",
@@ -257,7 +257,7 @@ mtls_acquire() {
         --cert /tmp/demo-client-$$.crt \
         --key /tmp/demo-client-$$.key \
         --insecure \
-        -X POST "$SIDECAR_MTLS_URL/lease/acquire" \
+        -X POST "$KEY_BROKER_MTLS_URL/lease/acquire" \
         -H 'Content-Type: application/json' \
         -d "{
           \"app_id\": \"$APP_ID\",
@@ -297,7 +297,7 @@ RENEW=$(curl -sf \
     --cert /tmp/demo-client-$$.crt \
     --key /tmp/demo-client-$$.key \
     --insecure \
-    -X POST "$SIDECAR_MTLS_URL/lease/renew" \
+    -X POST "$KEY_BROKER_MTLS_URL/lease/renew" \
     -H 'Content-Type: application/json' \
     -d "{\"slot_id\":\"$SLOT1_ID\",\"instance_id\":\"inst-demo-1\"}")
 RENEWED=$(echo "$RENEW" | jq -r '.lease' | python3 -c "import sys,json; d=json.loads(sys.stdin.read()); print('slot='+d['slot_id']+'  expires='+str(d['expires_at']))" 2>/dev/null)
@@ -307,7 +307,7 @@ pass "renewed: $RENEWED"
 banner "Step 5 — Sync-Auth (push updated AuthBundle)"
 
 step "5.1  /usage-receipt — collect billing receipt from KMS"
-RECEIPT=$(curl -sf "$SIDECAR_URL/usage-receipt")
+RECEIPT=$(curl -sf "$KEY_BROKER_URL/usage-receipt")
 ACTIVE=$(echo "$RECEIPT" | jq '.active_slots | length')
 SEQ=$(echo "$RECEIPT" | jq '.bundle_seq')
 pass "receipt: active_slots=$ACTIVE  bundle_seq=$SEQ"
@@ -320,15 +320,15 @@ AUTH_BUNDLE2=$(echo "$SYNC" | jq -c '.auth_bundle')
 BUNDLE_SEQ2=$(echo "$AUTH_BUNDLE2" | jq '.bundle_seq')
 pass "new bundle_seq=$BUNDLE_SEQ2 (was $BUNDLE_SEQ)"
 
-step "5.3  sidecar /courier/install — activate updated bundle (sealed_root omitted)"
-INSTALL2=$(curl -sf -X POST "$SIDECAR_URL/courier/install" \
+step "5.3  key-broker /courier/install — activate updated bundle (sealed_root omitted)"
+INSTALL2=$(curl -sf -X POST "$KEY_BROKER_URL/courier/install" \
     -H 'Content-Type: application/json' \
     -d "{\"auth_bundle\":$AUTH_BUNDLE2}")
 OK2=$(echo "$INSTALL2" | jq -r '.ok')
 [[ "$OK2" == "true" ]] && pass "bundle updated" || fail "install failed: $INSTALL2"
 
 step "5.4  verify /version endpoint reflects new bundle"
-VERSION=$(curl -sf "$SIDECAR_MTLS_URL/version?app_id=$APP_ID" \
+VERSION=$(curl -sf "$KEY_BROKER_MTLS_URL/version?app_id=$APP_ID" \
     --cert /tmp/demo-client-$$.crt --key /tmp/demo-client-$$.key --insecure)
 VSEQ=$(echo "$VERSION" | jq '.bundle_seq')
 VDIG=$(echo "$VERSION" | jq -r '.current_image_digest')

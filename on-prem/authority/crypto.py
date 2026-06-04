@@ -150,7 +150,7 @@ def generate_root_material() -> dict:
     root CA key via HKDF, and signs identity chains with a separate secp256k1
     key. To let the authority hold the customer's root (enabling DR + CEK
     derivation, per the v2 design), we generate both here and ship them to the
-    KMS sidecar, which materialises the full dstack-kms key set on disk.
+    key-broker, which materialises the full dstack-kms key set on disk.
 
       - root_ca_key_pem : P-256 (prime256v1) PKCS#8 PEM. MUST be P-256 — the
         KMS KDF extracts the P-256 scalar from this key (ra-tls kdf.rs).
@@ -207,9 +207,9 @@ def generate_keypair() -> dict:
 
 def make_root_payload(root_ca_key_pem: str, k256_key_b64: str,
                       domain: str = "kms.local") -> str:
-    """Build the sealed_root payload (JSON) the KMS sidecar expects.
+    """Build the sealed_root payload (JSON) the key-broker expects.
 
-    The sidecar HPKE-opens sealed_root and parses this JSON, then materialises
+    The key-broker HPKE-opens sealed_root and parses this JSON, then materialises
     the dstack-kms key set (root-ca / tmp-ca / rpc / k256).
     """
     return json.dumps({
@@ -225,7 +225,7 @@ def make_root_payload(root_ca_key_pem: str, k256_key_b64: str,
 #   KEM  = DHKEM(X25519, HKDF-SHA256)
 #   KDF  = HKDF-SHA256
 #   AEAD = AES-256-GCM
-# The KMS sidecar (key-broker) generates an X25519 transport keypair per courier
+# The key-broker generates an X25519 transport keypair per courier
 # session and returns the public key (transport_pub). We seal the root payload
 # to it: only the holder of the transport private key (inside the TEE) can open
 # it, so the untrusted CLI relaying the blob cannot read the root.

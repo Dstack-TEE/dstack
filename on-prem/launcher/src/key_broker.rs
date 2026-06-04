@@ -37,12 +37,12 @@ pub struct VersionResponse {
     pub bundle_seq: u64,
 }
 
-pub struct SidecarClient {
+pub struct KeyBrokerClient {
     client: reqwest::Client,
     base_url: String,
 }
 
-impl SidecarClient {
+impl KeyBrokerClient {
     pub fn new(
         base_url: String,
         ca_cert_pem: &str,
@@ -194,4 +194,4 @@ impl SidecarClient {
     }
 }
 
-pub type SharedSidecarClient = Arc<SidecarClient>;
+pub type SharedKeyBrokerClient = Arc<KeyBrokerClient>;

@@ -29,7 +29,7 @@ Interactive API docs: `http://localhost:8080/docs`
 
 - TDX quote verification is skipped — every quote is trusted.
 - Root key is shipped as plaintext base64 instead of HPKE-encrypted to the
-  transport X25519 key from the KMS sidecar.
+  transport X25519 key from the key-broker.
 - Authority signing key is ephemeral (regenerated on each restart); use an
   HSM-backed key in production.
 - Customer state is stored in `~/.config/authority/customers.json`;

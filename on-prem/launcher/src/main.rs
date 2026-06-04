@@ -7,13 +7,13 @@ use tokio::time::sleep;
 mod cloud;
 mod config;
 mod gua;
+mod key_broker;
 mod kms;
 mod runner;
-mod sidecar;
 mod status;
 
 use config::Config;
-use sidecar::{SharedSidecarClient, SidecarClient};
+use key_broker::{KeyBrokerClient, SharedKeyBrokerClient};
 
 fn derive_instance_id(app_id: &str) -> String {
     let hostname = std::env::var("HOSTNAME").unwrap_or_else(|_| "launcher".to_string());
@@ -26,7 +26,7 @@ fn derive_instance_id(app_id: &str) -> String {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // rustls 0.23 needs an explicit crypto provider for the mTLS sidecar client.
+    // rustls 0.23 needs an explicit crypto provider for the mTLS key-broker client.
     rustls::crypto::ring::default_provider().install_default().ok();
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -80,21 +80,21 @@ async fn main() -> Result<()> {
     let client_cert_pem = cert_chain.join("\n");
     tracing::info!("RA-TLS client cert acquired ({} certs in chain)", cert_chain.len());
 
-    let sidecar = Arc::new(
-        SidecarClient::new(
+    let key_broker = Arc::new(
+        KeyBrokerClient::new(
             config.key_broker_url.clone(),
             &meta.ca_cert,
             &client_cert_pem,
             &client_key_pem,
         )
-        .context("failed to build mtls sidecar client")?,
+        .context("failed to build mtls key-broker client")?,
     );
 
-    tracing::info!("fetching initial version from sidecar");
-    let version = sidecar
+    tracing::info!("fetching initial version from key-broker");
+    let version = key_broker
         .get_version(&config.app_id)
         .await
-        .context("failed to get version from sidecar")?;
+        .context("failed to get version from key-broker")?;
     let image_digest = version.current_image_digest.clone();
     *bundle_seq.lock().unwrap() = version.bundle_seq;
     tracing::info!(
@@ -106,8 +106,8 @@ async fn main() -> Result<()> {
     let instance_id = derive_instance_id(&config.app_id);
     tracing::info!("instance_id={}", instance_id);
 
-    tracing::info!("acquiring lease from sidecar");
-    let lease_resp = sidecar
+    tracing::info!("acquiring lease from key-broker");
+    let lease_resp = key_broker
         .acquire_lease(
             &config.app_id,
             &instance_id,
@@ -137,7 +137,7 @@ async fn main() -> Result<()> {
     // and populated above; the background tasks below share the same Arcs.
     let last_renewal = Arc::new(Mutex::new(Instant::now()));
 
-    let sidecar_renewal = Arc::clone(&sidecar);
+    let key_broker_renewal = Arc::clone(&key_broker);
     let lease_id_renewal = Arc::clone(&lease_id);
     let last_renewal_clone = Arc::clone(&last_renewal);
     let instance_id_renewal = instance_id.clone();
@@ -153,7 +153,7 @@ async fn main() -> Result<()> {
             sleep(interval).await;
 
             let slot_id = lease_id_renewal.lock().unwrap().clone();
-            match sidecar_renewal
+            match key_broker_renewal
                 .renew_lease(&slot_id, &instance_id_renewal)
                 .await
             {
@@ -178,7 +178,7 @@ async fn main() -> Result<()> {
         }
     });
 
-    let sidecar_update = Arc::clone(&sidecar);
+    let key_broker_update = Arc::clone(&key_broker);
     let running_digest_update = Arc::clone(&running_digest);
     let lease_id_update = Arc::clone(&lease_id);
     let bundle_seq_update = Arc::clone(&bundle_seq);
@@ -194,7 +194,7 @@ async fn main() -> Result<()> {
         loop {
             sleep(interval).await;
 
-            let version_result = sidecar_update.get_version(&app_id_update).await;
+            let version_result = key_broker_update.get_version(&app_id_update).await;
             let version = match version_result {
                 Ok(v) => {
                     *bundle_seq_update.lock().unwrap() = v.bundle_seq;
@@ -220,7 +220,7 @@ async fn main() -> Result<()> {
                 new_digest
             );
 
-            let new_lease = match sidecar_update
+            let new_lease = match key_broker_update
                 .acquire_lease(
                     &app_id_update,
                     &instance_id_update,

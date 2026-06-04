@@ -415,7 +415,7 @@ pub async fn spawn_mtls_server(state: Arc<AppState>) -> Result<()> {
         .await
         .with_context(|| format!("failed to bind mtls port {}", port))?;
 
-    tracing::info!("kms-sidecar mtls server listening on port {}", port);
+    tracing::info!("key-broker mtls server listening on port {}", port);
 
     loop {
         let (stream, peer_addr) = match listener.accept().await {

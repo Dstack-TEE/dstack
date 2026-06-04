@@ -23,7 +23,7 @@ def compute_report_data(nonce: str, transport_pub_b64: str, kms_ts: int) -> byte
 
     report_data = SHA-512( nonce_utf8 || transport_pub(32 raw) || kms_ts(LE i64) )
 
-    The KMS sidecar (key-broker) must compute the identical value when it calls
+    The key-broker must compute the identical value when it calls
     getQuote, so verifying report_data proves the quote was produced *by the TEE
     that owns transport_pub*, in response to *this* challenge.
     """

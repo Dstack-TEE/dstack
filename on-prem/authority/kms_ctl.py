@@ -5,7 +5,7 @@
 """kms-ctl — operator CLI for GCP private KMS provisioning.
 
 Runs on the bastion VM inside GCP VPC, where it can reach both:
-  - the KMS sidecar  (VPC-internal, e.g. http://10.0.0.5:8001)
+  - the key-broker  (VPC-internal, e.g. http://10.0.0.5:8001)
   - the vendor authority (internet, e.g. https://authority.example.com)
 
 Usage:
@@ -15,7 +15,7 @@ Usage:
   kms-ctl receipt   --kms-url URL
 
 Environment variable equivalents (override with flags):
-  KMS_URL          sidecar HTTP URL
+  KMS_URL          key-broker HTTP URL
   AUTHORITY_URL     vendor authority URL
   AUTHORITY_API_KEY API key for vendor authority (Bearer token)
   USER_ID          user identifier
@@ -73,7 +73,7 @@ def _get(session: requests.Session, url: str) -> dict | str:
 # ─── commands ─────────────────────────────────────────────────────────────────
 
 def cmd_status(args):
-    """Show sidecar health and current bundle info."""
+    """Show key-broker health and current bundle info."""
     s = _session("")
     step("healthz")
     health = _get(s, f"{args.kms_url}/healthz")
@@ -85,7 +85,7 @@ def cmd_status(args):
 
 
 def cmd_receipt(args):
-    """Fetch signed usage receipt from sidecar."""
+    """Fetch signed usage receipt from key-broker."""
     s = _session("")
     step("usage-receipt")
     receipt = _get(s, f"{args.kms_url}/usage-receipt")
@@ -96,9 +96,9 @@ def cmd_attest(args):
     """Full courier attest: provision KMS with sealed root key + AuthBundle.
 
     Step 1  challenge      → nonce from vendor authority
-    Step 2  courier/init   → transport keypair + TDX quote from sidecar
+    Step 2  courier/init   → transport keypair + TDX quote from key-broker
     Step 3  provision      → authority verifies quote, returns sealed root + bundle
-    Step 4  courier/install→ sidecar installs root key, activates bundle
+    Step 4  courier/install→ key-broker installs root key, activates bundle
     """
     kms   = args.kms_url.rstrip("/")
     plat  = args.authority_url.rstrip("/")
@@ -114,7 +114,7 @@ def cmd_attest(args):
     ok(f"nonce: {nonce[:16]}…")
 
     # 2. courier init
-    step("2/4  courier/init → sidecar")
+    step("2/4  courier/init → key-broker")
     init = _post(s_kms, f"{kms}/courier/init", {"nonce": nonce})
     transport_pub = init["transport_pub"]
     kms_ts        = init["kms_ts"]
@@ -143,14 +143,14 @@ def cmd_attest(args):
     ok(f"sealed_root len={len(sealed_root)}  bundle_seq={bundle_seq}  slot_quota={slot_quota}")
 
     # 4. install
-    step("4/4  courier/install → sidecar")
+    step("4/4  courier/install → key-broker")
     inst = _post(s_kms, f"{kms}/courier/install", {
         "sealed_root": sealed_root,
         "auth_bundle": auth_bundle,
     })
     if not inst.get("ok"):
         die(f"install rejected: {inst}")
-    ok("sidecar provisioned and ready")
+    ok("key-broker provisioned and ready")
 
     # verify
     health = _get(s_kms, f"{kms}/healthz")
@@ -175,12 +175,12 @@ def cmd_measure(args):
                {"user_id": cid, "client_ts": int(time.time())})
     nonce = ch["nonce"]
 
-    step("2/3  courier/init → sidecar (fetch attestation)")
+    step("2/3  courier/init → key-broker (fetch attestation)")
     init = _post(s_kms, f"{kms}/courier/init", {"nonce": nonce})
     attestation = init.get("attestation", "")
     vm_config   = init.get("vm_config", "")
     if not attestation:
-        die("no attestation from sidecar (guest agent unavailable)")
+        die("no attestation from key-broker (guest agent unavailable)")
     ok(f"attestation: {len(attestation)//2} bytes")
 
     step("3/3  measure → vendor authority (read-only, no root release)")
@@ -227,9 +227,9 @@ def cmd_rotate_key(args):
 
 
 def cmd_sync_auth(args):
-    """Push updated AuthBundle to sidecar without re-provisioning root key.
+    """Push updated AuthBundle to key-broker without re-provisioning root key.
 
-    Collects usage receipt from sidecar, sends to authority, installs new bundle.
+    Collects usage receipt from key-broker, sends to authority, installs new bundle.
     """
     kms   = args.kms_url.rstrip("/")
     plat  = args.authority_url.rstrip("/")
@@ -238,7 +238,7 @@ def cmd_sync_auth(args):
     s_plt = _session(args.api_key)
 
     # 1. collect usage receipt
-    step("1/3  usage-receipt ← sidecar")
+    step("1/3  usage-receipt ← key-broker")
     receipt = _get(s_kms, f"{kms}/usage-receipt")
     active  = len(receipt.get("active_slots", []))
     old_seq = receipt.get("bundle_seq", "?")
@@ -255,7 +255,7 @@ def cmd_sync_auth(args):
     ok(f"new bundle_seq={new_seq}")
 
     # 3. install
-    step("3/3  courier/install → sidecar")
+    step("3/3  courier/install → key-broker")
     inst = _post(s_kms, f"{kms}/courier/install", {"auth_bundle": auth_bundle})
     if not inst.get("ok"):
         die(f"install rejected: {inst}")
@@ -266,7 +266,7 @@ def cmd_sync_auth(args):
 def _common(p: argparse.ArgumentParser, need_authority=False):
     p.add_argument("--kms-url",
                    default=os.getenv("KMS_URL", "http://localhost:8001"),
-                   help="KMS sidecar URL (env: KMS_URL)")
+                   help="key-broker URL (env: KMS_URL)")
     if need_authority:
         p.add_argument("--authority-url",
                        default=os.getenv("AUTHORITY_URL", ""),
@@ -286,7 +286,7 @@ def main():
     )
     sub = parser.add_subparsers(dest="cmd", required=True)
 
-    p_status = sub.add_parser("status", help="show sidecar health and bundle info")
+    p_status = sub.add_parser("status", help="show key-broker health and bundle info")
     _common(p_status)
 
     p_receipt = sub.add_parser("receipt", help="fetch signed usage receipt")

@@ -39,7 +39,7 @@ async fn main() -> anyhow::Result<()> {
     let root_ready = config.kms_volume.join("_ready").exists();
 
     if root_ready {
-        tracing::info!("root key already present, sidecar starting in ready state");
+        tracing::info!("root key already present, key-broker starting in ready state");
     } else {
         tracing::info!("waiting for courier install to provide root key");
     }
@@ -77,7 +77,7 @@ async fn main() -> anyhow::Result<()> {
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", port)).await?;
-    tracing::info!("kms-sidecar listening on port {}", port);
+    tracing::info!("key-broker listening on port {}", port);
     axum::serve(listener, app).await?;
     Ok(())
 }

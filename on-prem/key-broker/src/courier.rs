@@ -154,7 +154,7 @@ pub async fn install(
             .map_err(|e| anyhow::anyhow!("failed to write _ready marker: {}", e))?;
 
         *state.root_ready.write().await = true;
-        tracing::info!("courier install: key set materialised, sidecar is ready");
+        tracing::info!("courier install: key set materialised, key-broker is ready");
     }
 
     let bundle_path = state.config.kms_volume.join("auth_bundle.json");

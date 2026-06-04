@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use std::path::PathBuf;
 use std::process::Command;
 
-use crate::sidecar::KeyEntry;
+use crate::key_broker::KeyEntry;
 
 const COMPOSE_FILE: &str = "/tmp/business-compose.yaml";
 /// Directory the leased private-key PEMs are written to, for skopeo's
