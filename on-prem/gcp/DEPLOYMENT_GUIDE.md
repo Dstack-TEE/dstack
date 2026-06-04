@@ -16,7 +16,9 @@ Every step is tagged **[Vendor] / [Operator]**, with a per-command explanation.
 Shell variables are placeholders — substitute as needed.
 
 > A Chinese version of this guide is at [`DEPLOYMENT_GUIDE_CN.md`](DEPLOYMENT_GUIDE_CN.md).
-> Just want to deploy fast (not the rationale)? Use the orchestration scripts: [`QUICKSTART.md`](QUICKSTART.md).
+> Prefer scripts over manual steps? The orchestration scripts in [`scripts/`](scripts/)
+> automate this guide: `vendor-release.sh` + `vendor-add-tenant.sh` (vendor) and
+> `operator-deploy.sh` (operator) — each has a header doc.
 
 ---
 

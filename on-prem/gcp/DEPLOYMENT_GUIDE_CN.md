@@ -9,7 +9,8 @@
 每一步都标了 **【厂商】/【Operator】**，并逐条解释命令作用。本文用 shell 变量占位，按需替换。
 
 > English version: [`DEPLOYMENT_GUIDE.md`](DEPLOYMENT_GUIDE.md)。
-> 只想快速部署、不看原理？用编排脚本：[`QUICKSTART_CN.md`](QUICKSTART_CN.md)。
+> 想用脚本而非手动步骤？[`scripts/`](scripts/) 下的编排脚本自动化了本指南：`vendor-release.sh` +
+> `vendor-add-tenant.sh`（厂商）和 `operator-deploy.sh`（operator）——每个脚本都有头部说明。
 
 ---
 
