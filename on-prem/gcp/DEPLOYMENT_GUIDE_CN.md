@@ -91,43 +91,17 @@
 
 ---
 
-## 前置条件
-
-### 工具
-
-| 工具 | 厂商 | Operator | 说明 |
-|---|---|---|---|
-| `docker` + compose | ✅ | ✅ | Authority 栈 / 镜像构建 |
-| `skopeo` (≥1.13) | ✅ | ✅ | JWE 加密 / 同步 |
-| `dstack-cloud` | — | ✅ | 部署 CVM（**须支持 `private_ip`，见下**） |
-| `gcloud` | — | ✅ | GCP 资源 + IAP 隧道 |
-| `openssl`/`python3` | ✅ | — | 密钥/JSON |
-
-> ⚠️ **`dstack-cloud` 必须支持 `gcp_config.private_ip` 绑定静态内网 IP。** stock 版的 `GcpConfig` 没有 `private_ip` 字段 → 从 app.json 加载时被丢弃（且 `prepare`/`deploy` 会重写 app.json 抹掉它），建实例也不传 `--private-network-ip` → CVM 拿**临时 IP**，KMS 地址不可预知、证书 SAN 对不上。补丁：①`GcpConfig` 加 `private_ip: str = ""`；②建实例参数 `if config.private_ip:` 追加 `--subnet=default`（若未指定）+ `--private-network-ip={private_ip}`。已上游：**Dstack-TEE/dstack PR #709**。
-
-### GCP 一次性资源（Operator）
-
-```bash
-export PROJECT=<your-gcp-project>  REGION=us-central1  ZONE=${REGION}-a
-export AR_REPO=dstack-private
-export AR=${REGION}-docker.pkg.dev/${PROJECT}/${AR_REPO}
-export BUCKET=gs://${PROJECT}-dstack
-
-# 启用 API（compute=TDX 虚机, artifactregistry=私有镜像, networkservices/security=SWP 出网硬化）
-gcloud services enable compute.googleapis.com artifactregistry.googleapis.com \
-  networksecurity.googleapis.com networkservices.googleapis.com --project=$PROJECT
-# 私有镜像仓库（CVM 经 Private Google Access 从这里拉，无公网）
-gcloud artifacts repositories create $AR_REPO --repository-format=docker \
-  --location=$REGION --project=$PROJECT
-# dstack-cloud 部署用的 GCS 桶（放 boot/shared 盘镜像）
-gcloud storage buckets create $BUCKET --project=$PROJECT --location=$REGION
-```
-
----
-
 # 第一部分 ▶ 厂商侧（Vendor）
 
 > 厂商在自己有公网的主机上完成 步骤 1–5，产出交付物（镜像 @ 公共 registry、填好的 compose 模板、AUTHORITY_PUBKEY、已注册的白名单），再交接给 operator。
+
+## 前置条件（厂商）
+
+在厂商有公网的主机上——**无需任何 GCP 工具**,只要一个公共 registry(`docker login $PUBREG`):
+
+- `docker` + compose —— 跑 Authority 栈;构建(或 pull/retag)组件镜像
+- `skopeo` (≥1.13) —— JWE 加密 + 推业务镜像
+- `openssl` / `python3` —— 签名密钥种子、JSON、admin `curl`
 
 ## 步骤 1【厂商】启动 Authority（+ Verifier）
 
@@ -302,6 +276,35 @@ workload compose（`deploy/launcher/docker-compose.yaml`）填：
 # 第二部分 ▶ Operator 侧
 
 > Operator 在自己的 GCP 上完成 步骤 6–12。只填客户值（registry/IP），不碰厂商签名私钥。
+
+## 前置条件（Operator）
+
+在 operator 的主机上(GCP 控制面需要公网;CVM 本身无外网):
+
+- `gcloud` —— 已认证(`gcloud auth login` / 服务账号)、设好项目 —— GCP 资源 + IAP 隧道
+- `dstack-cloud` —— 部署 CVM(**须支持 `gcp_config.private_ip`,见下方警告**)
+- `skopeo` (≥1.13) —— 把镜像 PUBREG→AR 同步
+- `python3`(+ `requests`、`cryptography`) —— `dstack-cloud` 和 `kms_ctl.py` courier
+
+> ⚠️ **`dstack-cloud` 必须支持 `gcp_config.private_ip` 绑定静态内网 IP。** stock 版的 `GcpConfig` 没有 `private_ip` 字段 → 从 app.json 加载时被丢弃（且 `prepare`/`deploy` 会重写 app.json 抹掉它），建实例也不传 `--private-network-ip` → CVM 拿**临时 IP**，KMS 地址不可预知、证书 SAN 对不上。补丁：①`GcpConfig` 加 `private_ip: str = ""`；②建实例参数 `if config.private_ip:` 追加 `--subnet=default`（若未指定）+ `--private-network-ip={private_ip}`。已上游：**Dstack-TEE/dstack PR #709**。
+
+### GCP 一次性资源
+
+```bash
+export PROJECT=<your-gcp-project>  REGION=us-central1  ZONE=${REGION}-a
+export AR_REPO=dstack-private
+export AR=${REGION}-docker.pkg.dev/${PROJECT}/${AR_REPO}
+export BUCKET=gs://${PROJECT}-dstack
+
+# 启用 API（compute=TDX 虚机, artifactregistry=私有镜像, networkservices/security=SWP 出网硬化）
+gcloud services enable compute.googleapis.com artifactregistry.googleapis.com \
+  networksecurity.googleapis.com networkservices.googleapis.com --project=$PROJECT
+# 私有镜像仓库（CVM 经 Private Google Access 从这里拉，无公网）
+gcloud artifacts repositories create $AR_REPO --repository-format=docker \
+  --location=$REGION --project=$PROJECT
+# dstack-cloud 部署用的 GCS 桶（放 boot/shared 盘镜像）
+gcloud storage buckets create $BUCKET --project=$PROJECT --location=$REGION
+```
 
 ## 步骤 6【Operator】同步镜像到 AR
 

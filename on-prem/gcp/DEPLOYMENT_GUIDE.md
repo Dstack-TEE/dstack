@@ -119,52 +119,20 @@ derived from **its own independent root**, isolated across tenants.
 
 ---
 
-## Prerequisites
-
-### Tools
-
-| Tool | Vendor | Operator | Notes |
-|---|---|---|---|
-| `docker` + compose | ✅ | ✅ | Authority stack / image build |
-| `skopeo` (≥1.13) | ✅ | ✅ | JWE encrypt / sync |
-| `dstack-cloud` | — | ✅ | deploy CVMs (**must support `private_ip`, see below**) |
-| `gcloud` | — | ✅ | GCP resources + IAP tunnels |
-| `openssl` / `python3` | ✅ | — | keys / JSON |
-
-> ⚠️ **`dstack-cloud` must support binding a static internal IP via
-> `gcp_config.private_ip`.** Stock `GcpConfig` has no `private_ip` field → it's
-> dropped on load from app.json (and `prepare`/`deploy` rewrite app.json, stripping
-> it), and `--private-network-ip` is never passed → the CVM gets an **ephemeral IP**,
-> the KMS address is unpredictable, and the cert SAN won't match. Patch: ① add
-> `private_ip: str = ""` to `GcpConfig`; ② in the instance create args, `if
-> config.private_ip:` append `--subnet=default` (when unset) + `--private-network-ip={private_ip}`.
-> Upstreamed as **Dstack-TEE/dstack PR #709**.
-
-### One-time GCP resources (Operator)
-
-```bash
-export PROJECT=<your-gcp-project>  REGION=us-central1  ZONE=${REGION}-a
-export AR_REPO=dstack-private
-export AR=${REGION}-docker.pkg.dev/${PROJECT}/${AR_REPO}
-export BUCKET=gs://${PROJECT}-dstack
-
-# Enable APIs (compute=TDX VMs, artifactregistry=private images, networkservices/security=SWP egress hardening)
-gcloud services enable compute.googleapis.com artifactregistry.googleapis.com \
-  networksecurity.googleapis.com networkservices.googleapis.com --project=$PROJECT
-# Private image repo (no-internet CVMs pull from here over Private Google Access)
-gcloud artifacts repositories create $AR_REPO --repository-format=docker \
-  --location=$REGION --project=$PROJECT
-# GCS bucket dstack-cloud deploys with (holds the boot/shared disk images)
-gcloud storage buckets create $BUCKET --project=$PROJECT --location=$REGION
-```
-
----
-
 # Part 1 ▶ Vendor
 
 > The vendor completes steps 1–5 on its own internet-connected host, producing the
 > deliverables (images @ public registry, filled compose templates, AUTHORITY_PUBKEY,
 > registered whitelists), then hands off to the operator.
+
+## Prerequisites (Vendor)
+
+On the vendor's internet-connected host — **no GCP tooling needed**, just a public registry
+(`docker login $PUBREG`):
+
+- `docker` + compose — run the Authority stack; build (or pull/retag) the component images
+- `skopeo` (≥1.13) — JWE-encrypt + push the workload image
+- `openssl` / `python3` — signing-key seed, JSON, admin `curl`
 
 ## Step 1 [Vendor] Start the Authority (+ Verifier)
 
@@ -406,6 +374,44 @@ to it).
 
 > The operator completes steps 6–12 on its own GCP. It only fills customer values
 > (registry/IP) and never touches the vendor's signing private key.
+
+## Prerequisites (Operator)
+
+On the operator's host (needs internet for the GCP control plane; the CVMs themselves are
+air-gapped):
+
+- `gcloud` — authenticated (`gcloud auth login` / service account), project set — GCP
+  resources + IAP tunnels
+- `dstack-cloud` — deploy the CVMs (**must support `gcp_config.private_ip`, see warning below**)
+- `skopeo` (≥1.13) — mirror images PUBREG→AR
+- `python3` (+ `requests`, `cryptography`) — `dstack-cloud` and the `kms_ctl.py` courier
+
+> ⚠️ **`dstack-cloud` must support binding a static internal IP via
+> `gcp_config.private_ip`.** Stock `GcpConfig` has no `private_ip` field → it's
+> dropped on load from app.json (and `prepare`/`deploy` rewrite app.json, stripping
+> it), and `--private-network-ip` is never passed → the CVM gets an **ephemeral IP**,
+> the KMS address is unpredictable, and the cert SAN won't match. Patch: ① add
+> `private_ip: str = ""` to `GcpConfig`; ② in the instance create args, `if
+> config.private_ip:` append `--subnet=default` (when unset) + `--private-network-ip={private_ip}`.
+> Upstreamed as **Dstack-TEE/dstack PR #709**.
+
+### One-time GCP resources
+
+```bash
+export PROJECT=<your-gcp-project>  REGION=us-central1  ZONE=${REGION}-a
+export AR_REPO=dstack-private
+export AR=${REGION}-docker.pkg.dev/${PROJECT}/${AR_REPO}
+export BUCKET=gs://${PROJECT}-dstack
+
+# Enable APIs (compute=TDX VMs, artifactregistry=private images, networkservices/security=SWP egress hardening)
+gcloud services enable compute.googleapis.com artifactregistry.googleapis.com \
+  networksecurity.googleapis.com networkservices.googleapis.com --project=$PROJECT
+# Private image repo (no-internet CVMs pull from here over Private Google Access)
+gcloud artifacts repositories create $AR_REPO --repository-format=docker \
+  --location=$REGION --project=$PROJECT
+# GCS bucket dstack-cloud deploys with (holds the boot/shared disk images)
+gcloud storage buckets create $BUCKET --project=$PROJECT --location=$REGION
+```
 
 ## Step 6 [Operator] Sync the images into AR
 
