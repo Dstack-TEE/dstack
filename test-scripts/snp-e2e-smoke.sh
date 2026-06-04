@@ -62,7 +62,9 @@ OVMF_PATH="${DSTACK_SNP_SMOKE_OVMF:-/opt/AMDSEV/usr/local/share/qemu/OVMF.fd}"
 HOST_ART_PORT="${DSTACK_SNP_SMOKE_HOST_ART_PORT:-18080}"
 AUTH_PORT="${DSTACK_SNP_SMOKE_AUTH_PORT:-18081}"
 KMS_HOST_PORT="${DSTACK_SNP_SMOKE_KMS_HOST_PORT:-15443}"
+STRICT_KMS_HOST_PORT="${DSTACK_SNP_SMOKE_STRICT_KMS_HOST_PORT:-15444}"
 APP_HOST_PORT="${DSTACK_SNP_SMOKE_APP_HOST_PORT:-15543}"
+STRICT_APP_HOST_PORT="${DSTACK_SNP_SMOKE_STRICT_APP_HOST_PORT:-15544}"
 ALLOW_OUT_OF_DATE_TCB="${DSTACK_SNP_SMOKE_ALLOW_OUT_OF_DATE_TCB:-0}"
 RUN_STRICT_TCB_PROBE="${DSTACK_SNP_SMOKE_STRICT_TCB_PROBE:-1}"
 ALLOW_OLD_QEMU="${DSTACK_SNP_SMOKE_ALLOW_OLD_QEMU:-0}"
@@ -383,6 +385,7 @@ SH
 deploy_kms() {
 	local name="$1"
 	local statuses="$2"
+	local host_port="$3"
 	write_kms_config "$statuses"
 	cat >"$BASE/kms-compose.yaml" <<'YAML'
 services:
@@ -393,53 +396,78 @@ YAML
 	python3 "$REPO/vmm/src/vmm-cli.py" --url "$VMM_URL" compose --docker-compose "$BASE/kms-compose.yaml" --name "$name" --public-logs --public-sysinfo --no-instance-id --output "$BASE/$name.app-compose.json" | tee "$ART/$name-compose-create.txt" >&2
 	jq --arg init_script "$DNS_INIT_SCRIPT" --arg bash_script "$KMS_BASH_SCRIPT" '.storage_fs="ext4" | .init_script=$init_script | .runner="bash" | .bash_script=$bash_script | del(.docker_compose_file)' "$BASE/$name.app-compose.json" >"$BASE/$name.app-compose.json.tmp"
 	mv "$BASE/$name.app-compose.json.tmp" "$BASE/$name.app-compose.json"
-	python3 "$REPO/vmm/src/vmm-cli.py" --url "$VMM_URL" deploy --name "$name" --compose "$BASE/$name.app-compose.json" --image "$IMAGE_NAME" --port "tcp:127.0.0.1:$KMS_HOST_PORT:8000" --vcpu 2 --memory 4096 --disk 20G | tee "$ART/$name-deploy.txt" >&2
+	python3 "$REPO/vmm/src/vmm-cli.py" --url "$VMM_URL" deploy --name "$name" --compose "$BASE/$name.app-compose.json" --image "$IMAGE_NAME" --port "tcp:127.0.0.1:$host_port:8000" --vcpu 2 --memory 4096 --disk 20G | tee "$ART/$name-deploy.txt" >&2
 	sed -n 's/Created VM with ID: //p' "$ART/$name-deploy.txt" | tail -1
 }
 
-if [[ "$RUN_STRICT_TCB_PROBE" = "1" && "$ALLOW_OUT_OF_DATE_TCB" = "1" ]]; then
-	echo "== Strict TCB probe: expect failure on lab OutOfDate host =="
-	STRICT_KMS_VM_ID=$(deploy_kms snp-smoke-kms-strict '["UpToDate"]')
-	for i in $(seq 1 120); do
-		logs=$(python3 "$REPO/vmm/src/vmm-cli.py" --url "$VMM_URL" logs "$STRICT_KMS_VM_ID" -n 120 2>/dev/null || true)
-		if echo "$logs" | grep -q "tcb_status is not allowed"; then
-			echo "$logs" | tee "$ART/strict-tcb-denial-log.txt"
-			echo "strict_tcb_probe=denied_as_expected"
-			break
-		fi
+wait_for_kms_metrics() {
+	local vm_id="$1"
+	local host_port="$2"
+	local label="$3"
+	for i in $(seq 1 240); do
+		if curl -kfsS "https://127.0.0.1:$host_port/metrics" >/dev/null 2>&1; then echo "$label KMS runtime ready after ${i}s"; break; fi
 		sleep 2
-		if [[ $i -eq 120 ]]; then echo "strict TCB probe did not reach expected denial"; echo "$logs" | tee "$ART/strict-tcb-timeout-log.txt"; exit 1; fi
+		if [[ $((i % 30)) -eq 0 ]]; then echo "waiting for $label KMS..."; python3 "$REPO/vmm/src/vmm-cli.py" --url "$VMM_URL" logs "$vm_id" -n 30 || true; fi
+		if [[ $i -eq 240 ]]; then echo "$label KMS did not become ready"; python3 "$REPO/vmm/src/vmm-cli.py" --url "$VMM_URL" logs "$vm_id" -n 200 || true; exit 1; fi
 	done
-fi
+}
 
-echo "== KMS success run =="
-KMS_VM_ID=$(deploy_kms snp-smoke-kms "$allowed_tcb_statuses")
-echo "KMS_VM_ID=$KMS_VM_ID"
-
-for i in $(seq 1 240); do
-	if curl -kfsS "https://127.0.0.1:$KMS_HOST_PORT/metrics" >/dev/null 2>&1; then echo "KMS runtime ready after ${i}s"; break; fi
-	sleep 2
-	if [[ $((i % 30)) -eq 0 ]]; then echo "waiting for KMS..."; python3 "$REPO/vmm/src/vmm-cli.py" --url "$VMM_URL" logs "$KMS_VM_ID" -n 30 || true; fi
-	if [[ $i -eq 240 ]]; then echo "KMS did not become ready"; python3 "$REPO/vmm/src/vmm-cli.py" --url "$VMM_URL" logs "$KMS_VM_ID" -n 200 || true; exit 1; fi
-done
-curl -kfsS "https://127.0.0.1:$KMS_HOST_PORT/metrics" | tee "$ART/kms-metrics-before-app.txt"
-
-cat >"$BASE/app-compose.yaml" <<'YAML'
+deploy_app() {
+	local name="$1"
+	local kms_port="$2"
+	local app_port="$3"
+	cat >"$BASE/$name-compose.yaml" <<'YAML'
 services:
   smoke:
     image: debian:bookworm-slim
     command: sh -c 'echo SNP_APP_CONTAINER_STARTED; sleep 300'
 YAML
-python3 "$REPO/vmm/src/vmm-cli.py" --url "$VMM_URL" compose --docker-compose "$BASE/app-compose.yaml" --name snp-smoke-app --kms --public-logs --public-sysinfo --no-instance-id --output "$BASE/app.app-compose.json" | tee "$ART/app-compose-create.txt"
-jq --arg init_script "$DNS_INIT_SCRIPT" '.storage_fs="ext4" | .init_script=$init_script' "$BASE/app.app-compose.json" >"$BASE/app.app-compose.json.tmp"
-mv "$BASE/app.app-compose.json.tmp" "$BASE/app.app-compose.json"
-APP_VM_ID=$(python3 "$REPO/vmm/src/vmm-cli.py" --url "$VMM_URL" deploy --name snp-smoke-app --compose "$BASE/app.app-compose.json" --image "$IMAGE_NAME" --kms-url "https://10.0.2.2:$KMS_HOST_PORT" --port "tcp:127.0.0.1:$APP_HOST_PORT:8000" --vcpu 2 --memory 4096 --disk 20G | tee "$ART/app-deploy.txt" | sed -n 's/Created VM with ID: //p' | tail -1)
+	python3 "$REPO/vmm/src/vmm-cli.py" --url "$VMM_URL" compose --docker-compose "$BASE/$name-compose.yaml" --name "$name" --kms --public-logs --public-sysinfo --no-instance-id --output "$BASE/$name.app-compose.json" | tee "$ART/$name-compose-create.txt" >&2
+	jq --arg init_script "$DNS_INIT_SCRIPT" '.storage_fs="ext4" | .init_script=$init_script' "$BASE/$name.app-compose.json" >"$BASE/$name.app-compose.json.tmp"
+	mv "$BASE/$name.app-compose.json.tmp" "$BASE/$name.app-compose.json"
+	python3 "$REPO/vmm/src/vmm-cli.py" --url "$VMM_URL" deploy --name "$name" --compose "$BASE/$name.app-compose.json" --image "$IMAGE_NAME" --kms-url "https://10.0.2.2:$kms_port" --port "tcp:127.0.0.1:$app_port:8000" --vcpu 2 --memory 4096 --disk 20G | tee "$ART/$name-deploy.txt" >&2
+	sed -n 's/Created VM with ID: //p' "$ART/$name-deploy.txt" | tail -1
+}
+
+if [[ "$RUN_STRICT_TCB_PROBE" = "1" && "$ALLOW_OUT_OF_DATE_TCB" = "1" ]]; then
+	echo "== Strict TCB probe: expect app GetAppKey denial on lab OutOfDate host =="
+	STRICT_KMS_VM_ID=$(deploy_kms snp-smoke-kms-strict '["UpToDate"]' "$STRICT_KMS_HOST_PORT")
+	echo "STRICT_KMS_VM_ID=$STRICT_KMS_VM_ID"
+	wait_for_kms_metrics "$STRICT_KMS_VM_ID" "$STRICT_KMS_HOST_PORT" strict
+	STRICT_APP_VM_ID=$(deploy_app snp-smoke-app-strict "$STRICT_KMS_HOST_PORT" "$STRICT_APP_HOST_PORT")
+	echo "STRICT_APP_VM_ID=$STRICT_APP_VM_ID"
+	for i in $(seq 1 240); do
+		logs=$(python3 "$REPO/vmm/src/vmm-cli.py" --url "$VMM_URL" logs "$STRICT_APP_VM_ID" -n 180 2>/dev/null || true)
+		if echo "$logs" | grep -q "tcb_status is not allowed"; then
+			echo "$logs" | tee "$ART/strict-tcb-denial-log.txt"
+			echo "strict_tcb_probe=denied_as_expected"
+			break
+		fi
+		if echo "$logs" | grep -q "KDS collateral unavailable\|HTTP status client error"; then
+			echo "$logs" | tee "$ART/strict-tcb-kds-blocked-log.txt"
+			echo "strict_tcb_probe=blocked_by_kds_collateral"
+			break
+		fi
+		if echo "$logs" | grep -q "SNP_APP_CONTAINER_STARTED"; then echo "$logs" | tee "$ART/strict-tcb-unexpected-success-log.txt"; echo "strict TCB probe unexpectedly reached app container"; exit 1; fi
+		sleep 2
+		if [[ $((i % 30)) -eq 0 ]]; then echo "waiting for strict APP denial..."; echo "$logs" | tail -60; fi
+		if [[ $i -eq 240 ]]; then echo "strict TCB probe did not reach expected denial"; echo "$logs" | tee "$ART/strict-tcb-timeout-log.txt"; exit 1; fi
+	done
+fi
+
+echo "== KMS success run =="
+KMS_VM_ID=$(deploy_kms snp-smoke-kms "$allowed_tcb_statuses" "$KMS_HOST_PORT")
+echo "KMS_VM_ID=$KMS_VM_ID"
+wait_for_kms_metrics "$KMS_VM_ID" "$KMS_HOST_PORT" success
+curl -kfsS "https://127.0.0.1:$KMS_HOST_PORT/metrics" | tee "$ART/kms-metrics-before-app.txt"
+
+APP_VM_ID=$(deploy_app snp-smoke-app "$KMS_HOST_PORT" "$APP_HOST_PORT")
 echo "APP_VM_ID=$APP_VM_ID"
 
 for i in $(seq 1 240); do
 	logs=$(python3 "$REPO/vmm/src/vmm-cli.py" --url "$VMM_URL" logs "$APP_VM_ID" -n 160 2>/dev/null || true)
 	if echo "$logs" | grep -q "SNP_APP_CONTAINER_STARTED"; then echo "$logs" | tee "$ART/app-ready-log.txt"; echo "APP ready after ${i}s"; break; fi
-	if echo "$logs" | grep -q "Failed to get app key\|amd sev-snp key release\|measurement mismatch\|App not allowed\|KMS self authorization failed"; then echo "$logs" | tee "$ART/app-failure-log.txt"; exit 2; fi
+	if echo "$logs" | grep -q "Failed to get app key\|amd sev-snp key release\|measurement mismatch\|App not allowed\|KMS self authorization failed\|KDS collateral unavailable\|HTTP status client error"; then echo "$logs" | tee "$ART/app-failure-log.txt"; exit 2; fi
 	sleep 2
 	if [[ $((i % 30)) -eq 0 ]]; then echo "waiting for APP..."; echo "$logs" | tail -60; fi
 	if [[ $i -eq 240 ]]; then echo "APP did not become ready"; echo "$logs" | tee "$ART/app-timeout-log.txt"; exit 1; fi

@@ -121,35 +121,36 @@ After those fixes, the manual smoke progressed through full dstack-managed SNP g
 - If verifier-side evidence still lacks ASK/VCEK collateral, the verifier can fetch AMD KDS ARK/ASK/VCEK using the report `chip_id` and reported TCB, then verify the signed report fail-closed.
 - KMS measurement recomputation now uses the image's original kernel cmdline as the measurement base before appending `docker_compose_hash`, `rootfs_hash`, and `app_id`, matching the VMM QEMU `-append` path.
 
-Latest sanitized remote smoke result with PR head `38b02d7c`:
+Latest sanitized remote smoke result with PR-built host binaries and a coherent `MACHINE = "sev-snp"` guest image:
 
 ```text
 remote_host=chris@173.234.27.162
 host_kernel=Linux 6.11.0-rc3-snp-host-85ef1ac03941
 qemu_version=10.0.2
 ovmf_sha256=67e7a7027437823e9c166a60d00666d5d5391e13050488cad5cc2acd913fab4a
-image=dstack-dev-0.5.11-snp-dnsfix
+image=dstack-dev-0.6.0
 platform=amd-sev-snp
+image_kernel=Linux 6.18.24-dstack with CONFIG_AMD_MEM_ENCRYPT=y, CONFIG_SEV_GUEST=y, CONFIG_TSM_REPORTS=y
 kms_guest=booted SNP Linux/userspace and started dstack-kms
 kms_marker=SNP_KMS_CONTAINER_STARTED / KMS runtime ready
-kms_metrics=dstack_kms_attestation_requests_total 2, dstack_kms_attestation_failures_total 0
 app_guest=booted SNP Linux/userspace and reached dstack-prepare.sh
-app_marker=SNP_APP_CONTAINER_STARTED not reached
-failure_boundary=app guest GetTempCaCert/GetAppKey attestation validation
-failure_error=amd sev-snp cert_chain must contain either ASK and VCEK certificates or one kernel certificate table auxblob
+app_key_boundary=GetTempCaCert/GetAppKey request reached
+strict_tcb_probe=app request reached strict KMS, but final policy decision was blocked before TCB evaluation by AMD KDS collateral throttling
+success_probe=app request reached permissive lab KMS, but final GetAppKey success marker was blocked by the same AMD KDS collateral throttling
+failure_error=amd sev-snp KDS collateral unavailable while fetching VCEK/cert-chain collateral; Genoa VCEK returned HTTP 429
 no_secret_material_logged=true
 ```
 
-This means the PR has live SNP report proof, live golden-vector measurement proof, release-gate unit/integration coverage, and hardware smoke proof through dstack-managed SNP KMS boot plus app guest key-request boundary. The fresh-box smoke now reaches Linux/userspace, `SNP_KMS_CONTAINER_STARTED`, `GetTempCaCert`, and the app `GetAppKey` request when using a coherent **SNP** `meta-dstack` image. The remaining blocker for a completed success marker in the latest run was external AMD KDS throttling while fetching VCEK collateral for the app quote (`HTTP 429` for the Genoa VCEK request), not guest boot, KMS startup, or release-policy wiring. Host/KMS binaries must match PR #703, guest-side `dstack-util`/`dstack-attest` must include the PR cert-chain/KDS fallback, and the Yocto image must be built with `MACHINE = "sev-snp"` so the guest kernel includes AMD memory-encryption/SNP support. A coherent PR image built with the default `tdx` machine produced a `6.18.24-dstack` kernel with `# CONFIG_AMD_MEM_ENCRYPT is not set`; controlled QEMU tests showed that kernel resets immediately after OVMF loads kernel/initrd, while host SNP kernels boot the same QEMU/OVMF path to Linux/SNP markers.
+This means the PR has live SNP report proof, live golden-vector measurement proof, release-gate unit/integration coverage, and hardware smoke proof through dstack-managed SNP KMS boot plus app guest key-request boundary. The fresh-box smoke now reaches Linux/userspace, `SNP_KMS_CONTAINER_STARTED`, `GetTempCaCert`, and the app `GetAppKey` request when using a coherent **SNP** `meta-dstack` image. The remaining blocker for completed strict-denial and success markers in the latest run was external AMD KDS throttling while fetching VCEK/cert-chain collateral for the app quote (`HTTP 429` for the Genoa VCEK request), not guest boot, KMS startup, or release-policy wiring. Host/KMS binaries must match PR #703, guest-side `dstack-util`/`dstack-attest` must include the PR cert-chain/KDS fallback, and the Yocto image must be built with `MACHINE = "sev-snp"` so the guest kernel includes AMD memory-encryption/SNP support. A coherent PR image built with the default `tdx` machine produced a `6.18.24-dstack` kernel with `# CONFIG_AMD_MEM_ENCRYPT is not set`; controlled QEMU tests showed that kernel resets immediately after OVMF loads kernel/initrd, while SNP-capable kernels boot the same QEMU/OVMF path to Linux/SNP markers.
 
 ### Fresh SNP host / image requirements
 
 The checked-in smoke is enough to reproduce the current boundary on a compatible SNP host, but reviewers should treat the guest image/kernel/userspace as part of the test matrix:
 
-- Known-good host for reaching KMS and app `dstack-prepare.sh`: `chris@173.234.27.162` with AMDSEV QEMU 10.0.2, the SNP-capable OVMF above, and `dstack-dev-0.5.11-snp-dnsfix`.
-- That released image is **not** a coherent PR #703 image: its guest-side `dstack-util`/`dstack-attest` may reject SNP evidence before the newer PR fallback paths can help.
+- Known-good host for reaching KMS and app `dstack-prepare.sh`: `chris@173.234.27.162` with QEMU 10.0.2, the SNP-capable OVMF above, and a coherent `dstack-dev-0.6.0` guest image built with `MACHINE = "sev-snp"`.
+- Released images that do not carry PR #703 guest-side `dstack-util`/`dstack-attest` may reject SNP evidence before the newer PR fallback paths can help.
 - A coherent PR #703 image must be built as an SNP image, not with `meta-dstack`'s default `tdx` machine. The default TDX build can emit a kernel without `CONFIG_AMD_MEM_ENCRYPT`, which fails before Linux serial output under SNP.
-- On the same remote host/QEMU/OVMF, a minimal SNP initramfs booted host kernels (`6.11.0-rc3-snp-host` and `6.9.0-rc7-snp-host`) to Linux/SNP markers, while the default-TDX `6.18.24-dstack` kernel reset immediately after OVMF loaded kernel/initrd. This isolates that failure to the guest kernel config, not PSP firmware, KMS/auth policy, author-key, command line, virtio wiring, or basic host SNP enablement.
+- On the same remote host/QEMU/OVMF, a minimal SNP initramfs booted SNP-capable kernels (`6.11.0-rc3-snp-host`, `6.9.0-rc7-snp-host`, and the `MACHINE = "sev-snp"` `6.18.24-dstack` kernel) to Linux/SNP markers, while the default-TDX `6.18.24-dstack` kernel reset immediately after OVMF loaded kernel/initrd. This isolates that failure to the guest kernel config, not PSP firmware, KMS/auth policy, author-key, command line, virtio wiring, or basic host SNP enablement.
 
 Practical implication for reviewers/testers on a fresh box:
 
