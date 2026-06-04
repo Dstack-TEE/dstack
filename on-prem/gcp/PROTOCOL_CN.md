@@ -160,6 +160,31 @@ operator 的 CLI 全程只拿到两坨**不透明** blob(`sealed_root`、`auth_b
 5. **renew** —— 每 `ttl/3` 续租;续租失败触发完整重新 acquire(对**实时** AuthBundle 重跑**所有**
    关卡);若过宽限期仍失败,业务容器被**停掉**——授权是持续的,不是一次性的。
 
+### 阶段 B(day-2）—— workload 热更新
+
+业务镜像 **digest 不被度量**(只有名字 + `app_id` 被度量),所以新版本是热滚动更新——`compose_hash` 不变、
+无需重建 CVM。厂商驱动,launcher 下次轮询时应用。
+
+```
+ 厂商                            operator                 KMS key-broker        launcher
+   │ 加密新镜像(新 digest)                                                       
+   │ 注册:追加 → allowed_workload_digests;设 current_image_digest                
+   │ /sync-auth:重签 bundle, bundle_seq++ ─▶│ 中继 ─▶│ /courier/install          
+   │                                        │       │  验签(G7)                 
+   │                                        │       │  bundle_seq ↑(G8)         
+   │ operator 同步新镜像 → AR ───────────────│       │                           
+   │                                                │◀─ 轮询 /version ───────────│ 每 poll_interval
+   │                                                │── current_image_digest ───▶│
+   │                                                │◀─ lease/acquire(新digest) ─│ G11:digest ∈ allowed
+   │                                                │── Lease + keyset ──────────▶│
+   │                                                           解密 + compose_up --rolling
+   │                                                           健康检查 60s → 失败回滚
+```
+
+`vendor-release.sh` + `vendor-add-tenant.sh`(厂商)→ `operator-deploy.sh update`
+(operator:同步镜像 + `sync-auth`)。**G11** 是唯一放行新 digest 的闸(厂商掌控);**G8** 拒绝任何降级。
+root key 从不重新 provision——`sync-auth` 只换授权数据。
+
 ---
 
 ## Fail-closed 关卡（整个策略面）

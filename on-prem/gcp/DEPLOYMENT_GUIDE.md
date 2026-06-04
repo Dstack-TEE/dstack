@@ -582,3 +582,71 @@ to just these two.
 > One-shot script `scripts/setup-swp.sh` (pga / gateway / hosts / lockdown / verify
 > stages). Verify: inside the CVM `curl -x http://<SWP_IP>:80 https://api.trustedservices.intel.com/...`
 > = 200, while a direct `https://www.google.com` times out.
+
+---
+
+# Part 4 ▶ Day-2: update the workload version (Vendor + Operator)
+
+**Goal**: ship a new version of the business image to already-deployed CVMs **without
+rebuilding them**. The workload image digest is **not** measured (only its *name* and
+`app_id` are), so a version bump is a **hot rolling update** — no new `compose_hash`, no
+CVM redeploy. (Changing the launcher compose, the image *name*, or `app_id` *is* measured
+→ that needs a cold redeploy, see Steps 5–11.)
+
+The trust is preserved end-to-end: the vendor is the only party that can admit a new
+digest (it must enter `allowed_workload_digests`, **G11**), and a downgrade is rejected
+(`bundle_seq` is strictly monotonic, **G8**).
+
+### Step 13 [Vendor] Cut the new version + register it
+
+```bash
+cd on-prem/gcp/scripts
+# 1) re-encrypt the new upstream image to the SAME measured name (new digest) + refresh
+#    the release manifest. (WORKLOAD_SRC in config.env points at the new version.)
+./vendor-release.sh
+# 2) for EACH live tenant, register the new digest (appends to allowed_workload_digests
+#    and moves current_image_digest forward — old digests stay valid for rollback).
+./vendor-add-tenant.sh <user_id>
+```
+
+`vendor-release.sh` rebuilds/encrypts and rewrites `deploy/.release-manifest.env` with the
+new `WORKLOAD_IMAGE_DIGEST`; `vendor-add-tenant.sh` (re-runnable on an existing tenant)
+reads that manifest and calls `POST /admin/users/<id>/images`. Tell each operator a new
+version is available.
+
+### Step 14 [Operator] Mirror the image + push the refreshed bundle
+
+```bash
+cd on-prem/gcp/scripts
+./operator-deploy.sh update         # = sync (mirror images PUBREG→AR) + sync-auth (push bundle)
+# or the two halves separately:
+#   ./operator-deploy.sh sync        # mirror the new encrypted image into AR (no-internet CVM pulls here)
+#   ./operator-deploy.sh sync-auth   # relay the vendor's refreshed AuthBundle into the running KMS
+```
+
+`sync-auth` (wrapper `refresh-auth.sh`) opens an IAP tunnel to the KMS key-broker and runs
+the bundle-only courier exchange: `usage-receipt ← key-broker → authority /sync-auth`
+(re-sign, bump `bundle_seq`) `→ /courier/install` (verify Ed25519 sig vs the pinned
+`AUTHORITY_PUBKEY` + `bundle_seq` strictly increasing). The **root key is not
+re-provisioned** — only the authorization data is swapped.
+
+### Step 15 — automatic rolling update (launcher, no action)
+
+Each launcher polls the key-broker `/version` (every `poll_interval`). When
+`current_image_digest` changes it:
+
+1. `lease/acquire` for the new digest — admitted only if it's in `allowed_workload_digests`
+   (**G11**), re-running every gate against the live bundle;
+2. pulls + JWE-decrypts the new image with the leased keyring;
+3. `docker compose up` **rolling**, waits ~60 s for the health check, and **auto-rolls-back**
+   to the previous digest if it doesn't come up healthy.
+
+Verify on the launcher `/status` (Step 12): `running_digest` advances to the new digest and
+`bundle_seq` increments.
+
+### Related day-2 actions (same `sync-auth` push)
+
+- **Key rotation** — mint a new keyring `kid`, encrypt future images to its pubkey; the old
+  `kid` stays in the keyring until its images are retired. Push with `sync-auth`.
+- **Revoke a version** — remove the digest from `allowed_workload_digests` (or add it to
+  `revocations.image_digests`), then `sync-auth`; afterwards that digest fails **G11**.

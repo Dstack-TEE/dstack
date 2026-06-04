@@ -427,3 +427,59 @@ curl -s http://localhost:19100/status | python3 -m json.tool
 
 > 一键脚本 `scripts/setup-swp.sh`（pga/gateway/hosts/lockdown/verify 各阶段）。验证：CVM 内 `curl -x http://<SWP_IP>:80 https://api.trustedservices.intel.com/...`=200，直连 `https://www.google.com` 超时。
 
+
+---
+
+# 第 4 部分 ▶ day-2：更新 workload 版本（厂商 + operator）
+
+**目标**：把业务镜像新版本下发给**已部署**的 CVM,**不重建 CVM**。业务镜像 digest **不被度量**
+(只有镜像**名字**和 `app_id` 被度量),所以版本升级是**热滚动更新**——`compose_hash` 不变、无需重部署。
+(改 launcher compose、镜像**名字**或 `app_id` 才会改度量 → 那要冷更新,见第 5–11 步。)
+
+信任全程保持:厂商是唯一能放行新 digest 的人(必须进 `allowed_workload_digests`,**G11**);降级被拒
+(`bundle_seq` 严格单调,**G8**)。
+
+### 第 13 步 [厂商] 出新版本 + 注册
+
+```bash
+cd on-prem/gcp/scripts
+# 1) 把新上游镜像重新加密到同一个被度量的名字(产生新 digest)+ 刷新 release 清单。
+#    (config.env 的 WORKLOAD_SRC 指向新版本。)
+./vendor-release.sh
+# 2) 对每个在线租户注册新 digest(追加进 allowed_workload_digests,并把 current_image_digest 前移——
+#    旧 digest 仍保留以便回滚)。
+./vendor-add-tenant.sh <user_id>
+```
+
+`vendor-release.sh` 重新 build/加密并改写 `deploy/.release-manifest.env` 的新 `WORKLOAD_IMAGE_DIGEST`;
+`vendor-add-tenant.sh`(对已存在租户可重复跑)读清单并调 `POST /admin/users/<id>/images`。通知各 operator 有新版。
+
+### 第 14 步 [operator] 同步镜像 + 推新 bundle
+
+```bash
+cd on-prem/gcp/scripts
+./operator-deploy.sh update         # = sync(镜像 PUBREG→AR)+ sync-auth(推 bundle)
+# 或拆两半:
+#   ./operator-deploy.sh sync        # 把新加密镜像同步进 AR(无外网 CVM 从这拉)
+#   ./operator-deploy.sh sync-auth   # 把厂商刷新的 AuthBundle 中继进运行中的 KMS
+```
+
+`sync-auth`(包装脚本 `refresh-auth.sh`)开 IAP 隧道到 KMS key-broker,跑 bundle-only courier:
+`usage-receipt ← key-broker → authority /sync-auth`(重签、bundle_seq +1)`→ /courier/install`
+(用钉死的 `AUTHORITY_PUBKEY` 验 Ed25519 签名 + bundle_seq 严格递增)。**root key 不重新 provision**,
+只换授权数据。
+
+### 第 15 步 —— 自动滚动更新（launcher,无需操作）
+
+每个 launcher 轮询 key-broker `/version`(每 `poll_interval`)。`current_image_digest` 变了就:
+
+1. 对新 digest `lease/acquire` —— 只有它 ∈ `allowed_workload_digests`(**G11**)才放行,并对实时 bundle 重跑所有关卡;
+2. 拉取 + 用租来的密钥环 JWE 解密新镜像;
+3. `docker compose up` **滚动**,等约 60s 健康检查,不健康则**自动回滚**到上一个 digest。
+
+在 launcher `/status`(第 12 步)验证:`running_digest` 前进到新 digest,`bundle_seq` 自增。
+
+### 相关 day-2 动作（同样走 `sync-auth` 推送）
+
+- **密钥轮换** —— mint 新 keyring `kid`,以后的镜像加密到它的公钥;旧 `kid` 留在 keyring 直到对应镜像下线。用 `sync-auth` 推。
+- **撤销某版本** —— 从 `allowed_workload_digests` 删该 digest(或加进 `revocations.image_digests`),再 `sync-auth`;之后该 digest 过不了 **G11**。

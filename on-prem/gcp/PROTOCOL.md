@@ -177,6 +177,33 @@ identity to the (now-running) KMS, and loses them if it stops re-proving.
    past the grace window the workload containers are **stopped** — entitlement is
    continuous, not one-shot.
 
+### Phase B (day-2) — hot workload update
+
+The workload image **digest is not measured** (only its name + `app_id` are), so a new
+version is a hot rolling update — no new `compose_hash`, no CVM rebuild. The vendor drives
+it; the launcher applies it on its next poll.
+
+```
+ vendor                          operator                 KMS key-broker        launcher
+   │ encrypt new image (new digest)                                                
+   │ register: append → allowed_workload_digests; set current_image_digest          
+   │ /sync-auth: re-sign bundle, bundle_seq++ ─▶│ relay ─▶│ /courier/install        
+   │                                            │         │  verify sig (G7)        
+   │                                            │         │  bundle_seq ↑ (G8)      
+   │ operator mirrors new image → AR ───────────│         │                         
+   │                                                      │◀─ poll /version ────────│ every poll_interval
+   │                                                      │── current_image_digest ─▶│
+   │                                                      │◀─ lease/acquire(newdig) ─│ G11: digest ∈ allowed
+   │                                                      │── Lease + keyset ────────▶│
+   │                                                                 decrypt + compose_up --rolling
+   │                                                                 health-check 60s → rollback on fail
+```
+
+`vendor-release.sh` + `vendor-add-tenant.sh` (vendor) → `operator-deploy.sh update`
+(operator: mirror image + `sync-auth`). **G11** is the only thing that admits a new digest
+(vendor-controlled); **G8** rejects any downgrade. The root key is never re-provisioned —
+`sync-auth` swaps authorization data only.
+
 ---
 
 ## Fail-closed gates (the whole policy surface)

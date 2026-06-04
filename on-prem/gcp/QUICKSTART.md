@@ -98,9 +98,12 @@ and verifies (KMS GetMeta + cert SAN, launcher `/status`).
 
 ## Day-2
 
-- **Workload version update / key rotation** (vendor): re-run `./vendor-release.sh`,
-  then for each live tenant `./vendor-add-tenant.sh <user_id>` + `kms_ctl.py sync-auth`
-  to push the new bundle; the operator runs `./operator-deploy.sh sync` for the new image.
+- **Workload version update / key rotation** (vendor → operator): vendor re-runs
+  `./vendor-release.sh`, then `./vendor-add-tenant.sh <user_id>` for each live tenant
+  (appends the new digest + moves `current_image_digest`); the operator runs
+  `./operator-deploy.sh update` (mirror the new image into AR **+** `sync-auth` to push the
+  refreshed bundle). The launcher rolling-updates on its next version poll. Full procedure:
+  [`DEPLOYMENT_GUIDE.md`](DEPLOYMENT_GUIDE.md) Part 4.
 - **Redeploy / change IP / change OS** (operator): edit `config.env` and re-run
   `./operator-deploy.sh kms|launcher`.
 - **Monitoring**: launcher `/status`, Authority `usage-receipt`.

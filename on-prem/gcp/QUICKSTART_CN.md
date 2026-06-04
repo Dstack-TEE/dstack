@@ -82,6 +82,9 @@ cd on-prem/gcp/scripts
 
 ## day-2
 
-- **业务版本更新 / 密钥轮换**（厂商）:改好后重跑 `./vendor-release.sh`,再对每个在线租户 `./vendor-add-tenant.sh <user_id>` 更新 + `kms_ctl.py sync-auth` 推新 bundle;operator `./operator-deploy.sh sync` 同步新镜像。
+- **业务版本更新 / 密钥轮换**（厂商 → operator）:厂商重跑 `./vendor-release.sh`,再对每个在线租户
+  `./vendor-add-tenant.sh <user_id>`(追加新 digest + 前移 `current_image_digest`);operator 跑
+  `./operator-deploy.sh update`(同步新镜像进 AR **+** `sync-auth` 推新 bundle)。launcher 下次版本轮询时滚动更新。
+  完整步骤见 [`DEPLOYMENT_GUIDE_CN.md`](DEPLOYMENT_GUIDE_CN.md) 第 4 部分。
 - **重部署 / 改 IP / 换 OS**（operator）:改 `config.env` 后重跑 `./operator-deploy.sh kms|launcher`。
 - **监控**:launcher `/status`、Authority `usage-receipt`。
