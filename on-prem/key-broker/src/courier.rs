@@ -103,6 +103,23 @@ pub async fn init(
 pub struct InstallRequest {
     pub sealed_root: Option<String>,
     pub auth_bundle: serde_json::Value,
+    /// Optional operator override for the KMS rpc cert SAN/domain (e.g. when the
+    /// KMS sits behind a load balancer or a real DNS name). When unset, the
+    /// key-broker auto-detects the CVM's own internal IP; the authority's sealed
+    /// `domain` is only a last-resort fallback.
+    #[serde(default)]
+    pub kms_domain: Option<String>,
+}
+
+/// Best-effort detection of this CVM's primary internal IP. Used as the KMS rpc
+/// cert SAN so it always matches the address clients actually dial (their
+/// `kms_urls`). "Connecting" a UDP socket only selects the default-route source
+/// address — no packet is sent; `169.254.169.254` (the GCP metadata server) is
+/// always routable in-VPC, so this resolves to the primary NIC's address.
+fn detect_local_ip() -> Option<String> {
+    let sock = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
+    sock.connect("169.254.169.254:80").ok()?;
+    Some(sock.local_addr().ok()?.ip().to_string())
 }
 
 #[derive(Serialize)]
@@ -146,7 +163,22 @@ pub async fn install(
 
         // Materialise the full dstack-kms key set the KMS core loads on boot
         // (root-ca / tmp-ca / rpc / k256), so it skips onboarding and serves.
-        let material = crate::keyset::parse_root_material(&root_bytes)?;
+        let mut material = crate::keyset::parse_root_material(&root_bytes)?;
+        // KMS rpc cert SAN/domain precedence:
+        //   operator override (request) > auto-detected CVM internal IP > authority fallback.
+        // The SAN is NOT a trust anchor (that's the root CA) — it only has to match the
+        // address clients dial (their kms_urls), which is the operator's deployment topology,
+        // not vendor policy. So the vendor authority need not know it.
+        let effective_domain = req
+            .kms_domain
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .or_else(detect_local_ip)
+            .unwrap_or_else(|| material.domain.clone());
+        tracing::info!("courier install: KMS rpc cert domain/SAN = {effective_domain}");
+        material.domain = effective_domain;
         let cert_dir = kms_vol.join("certs");
         crate::keyset::install_kms_keyset(&cert_dir, &material)?;
 

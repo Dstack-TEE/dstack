@@ -144,10 +144,16 @@ def cmd_attest(args):
 
     # 4. install
     step("4/4  courier/install → key-broker")
-    inst = _post(s_kms, f"{kms}/courier/install", {
+    install_body = {
         "sealed_root": sealed_root,
         "auth_bundle": auth_bundle,
-    })
+    }
+    # Optional operator override for the KMS rpc cert SAN. Omit it and the
+    # key-broker auto-detects the CVM's own internal IP (matches kms_urls).
+    if getattr(args, "kms_domain", ""):
+        install_body["kms_domain"] = args.kms_domain
+        info(f"kms rpc cert SAN override = {args.kms_domain}")
+    inst = _post(s_kms, f"{kms}/courier/install", install_body)
     if not inst.get("ok"):
         die(f"install rejected: {inst}")
     ok("key-broker provisioned and ready")
@@ -295,6 +301,9 @@ def main():
     p_attest = sub.add_parser("attest",
         help="provision KMS: full courier attest (4-step)")
     _common(p_attest, need_authority=True)
+    p_attest.add_argument("--kms-domain", default=os.getenv("KMS_DOMAIN", ""),
+        help="override the KMS rpc cert SAN (default: key-broker auto-detects the "
+             "CVM's internal IP; set only for a DNS name / LB in front)")
 
     p_sync = sub.add_parser("sync-auth",
         help="push updated AuthBundle without re-provisioning root key")

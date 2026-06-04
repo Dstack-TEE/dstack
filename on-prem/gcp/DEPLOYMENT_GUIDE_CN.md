@@ -59,13 +59,13 @@
 
 | 参数 | 谁定 | 厂商怎么用 | operator 怎么用 |
 |---|---|---|---|
-| **KMS 静态内网 IP**（如 `10.128.15.220`） | 双方约定 | 设 Authority `KMS_DOMAIN`=该 IP（→ KMS 证书 SAN） | 预留该地址 + 设 `kms_urls`/`KMS_HOST` |
+| **KMS 静态内网 IP**（如 `10.128.15.220`） | 双方约定 | **无需配置**（key-broker 自测 CVM IP 当证书 SAN） | 预留该地址 + 绑 `private_ip` + 设 `kms_urls`/`KMS_HOST` |
 | **AR 路径** `${REGION}-docker.pkg.dev/${PROJECT}/${AR_REPO}` | operator | — | sync 目标 + `DSTACK_REGISTRY` |
 | **workload app_id**（40 hex） | 厂商 | 注册 + 写进 workload compose | 写进 `app.json` |
 | **镜像 digests**（key-broker/dstack-kms/launcher/业务镜像） | 厂商（构建产出） | pin 进 compose / 注册 | — |
 | **AUTHORITY_PUBKEY** | 厂商（Authority 产出） | pin 进 KMS compose | — |
 
-> ⚠️ **KMS_DOMAIN 必须在首次 provision 前就定成 KMS 静态 IP**——KMS 证书 SAN 来自 provision 时下发的 `domain`，无 SSH 环境下改它要销毁重建整台 KMS（详见附录）。所以静态 IP 要**提前规划**。
+> ⚠️ **务必在首次 provision 前就把 KMS 绑定到规划好的静态 IP。** KMS 证书 SAN 由 key-broker 在 install 时**自测 CVM 自身内网 IP** 自动生成,所以只要 CVM 已绑静态 IP,SAN 就自动 == `kms_urls`,双方都无需配 `KMS_DOMAIN`。**部署后再改 KMS IP** 才需要重新 provision——而无 SSH 环境下改不了已装证书,要销毁重建整台 KMS(详见附录)。少数"KMS 前面挂 DNS 名/LB"的场景可用 `kms_ctl.py attest --kms-domain <name>` 覆盖。
 
 ---
 
@@ -114,13 +114,13 @@ gcloud storage buckets create $BUCKET --project=$PROJECT --location=$REGION
 ```bash
 cd on-prem        # docker-compose.authority.yml 所在目录
 
-# 厂商密钥/配置（勿入库）。KMS_DOMAIN 用商定好的 KMS 静态 IP。
+# 厂商密钥/配置（勿入库）。注意：**不需要** KMS_DOMAIN——KMS 证书 SAN 由 key-broker 在
+# install 时自测 CVM 内网 IP 自动生成（见 O4），vendor 不必知道客户的 KMS 地址。
 cat > .env.authority <<EOF
 AUTHORITY_SIGNING_KEY=$(openssl rand -hex 32)     # Ed25519 种子，落盘持久化 → 公钥稳定
 AUTHORITY_NONCE_SECRET=$(openssl rand -hex 32)    # 无状态 challenge nonce 的 HMAC 密钥
 AUTHORITY_ADMIN_TOKEN=$(openssl rand -hex 16)     # 管理接口 Bearer token（多租户必设）
 REQUIRE_ATTESTATION=true                          # 生产必须 true：provision 必须带可验证的 quote
-KMS_DOMAIN=10.128.15.220                          # ★ KMS rpc 证书的 SAN，== kms_urls 的主机（静态内网 IP）
 ALLOWED_TCB_STATUSES=UpToDate,SWHardeningNeeded
 EOF
 export ADMIN_TOKEN=$(grep AUTHORITY_ADMIN_TOKEN .env.authority | cut -d= -f2)
@@ -300,7 +300,7 @@ EOF
 dstack-cloud config-edit      # services.kms_urls = ["https://10.128.15.220:8000"]
 ```
 
-- 预留地址 = 商定的 KMS_DOMAIN（`10.128.15.220`）。dstack-cloud（含 #709 patch）会用 app.json 的 `private_ip` 绑定它。
+- 预留地址 = 规划的 KMS 静态 IP（`10.128.15.220`）。dstack-cloud（含 #709 patch）用 app.json 的 `private_ip` 绑定它；key-broker 之后自测到的 CVM IP 就是它 → 证书 SAN 自动匹配。
 - `.user-config`：prelaunch 在 CVM 内读它，校验后写 `/dstack/.env` 供 compose 展开 `${VAR}`。**只放路径/IP，不放 digest**（注入防护）。
 - `kms_urls`：业务 CVM 的 guest-agent 用它做 GetAppKey（key_provider=kms）。主机名 `10.128.15.220` 必须 == KMS 证书 SAN。
 
@@ -338,6 +338,8 @@ scripts/provision-kms.sh        # = kms_ctl.py attest
 
 > **KMS 身份白名单**（释放根密钥前的三项稳定校验，刻意不用 `mr_aggregated`——GCP PCR0 每实例都变）：①`os_image_hash` ∈ os-images；②`key_provider==tpm`；③`compose_hash` ∈ `allowed_kms_compose_hashes`。这三项跨重部署稳定。
 >
+> **install 时 key-broker 自测 KMS rpc 证书 SAN**：取 CVM 自身内网 IP（连 `169.254.169.254` 的 UDP socket 的 `local_addr`）当 SAN → 自动 == operator 的 `kms_urls`。authority **不需要**知道这个 IP。前面挂 DNS/LB 的少数场景：`kms_ctl.py attest --kms-domain <name>` 覆盖。
+>
 > install 后 key-broker 写 `/kms/_ready`，KMS 容器的等待循环自动 `exec dstack-kms`——**无需 SSH 重启**。
 
 ## O5【Operator】验证 KMS serving
@@ -353,7 +355,7 @@ echo | openssl s_client -connect localhost:18000 2>/dev/null \
 ```
 
 - `GetMeta` 返回 `ca_cert`/`k256_pubkey` 即 KMS 已 serving。
-- 证书 SAN **必须是 `IP Address:10.128.15.220`**（ra_tls 自动把 IP 串识别成 IP SAN）。若是 `DnsName:kms.local`，说明 `KMS_DOMAIN` 没设成 IP，须销毁重建（见附录）。
+- 证书 SAN **必须是 `IP Address:10.128.15.220`**（= key-broker install 时自测到的 CVM IP，ra_tls 自动出 IP SAN）。若是 `DnsName:kms.local`，说明自测失败回落到了 fallback——检查 CVM 是否真的绑了静态 IP（见附录）。
 
 ## O6【Operator】部署业务 CVM
 
@@ -419,7 +421,7 @@ curl -s http://localhost:19100/status | python3 -m json.tool
 
 - **`deploy` 后 Internal IP 不是预留的静态地址** → `dstack-cloud` 没有 `private_ip` patch（见前置条件，Dstack-TEE/dstack #709）。stock 版会丢弃 `private_ip` 并重写 app.json 抹掉它，需打 patch 并重新写回 `app.json` 的 `private_ip`。
 
-- **`certificate not valid for name "<IP>"; only valid for DnsName("kms.local")`**（业务 CVM boot loop / guest-agent GetAppKey 失败）→ KMS 证书 SAN 不是 IP。要点：①`KMS_DOMAIN` 在**首次 provision 前**就设成 KMS 静态 IP（证书 SAN 来自 provision 时 AuthBundle 的 `domain`）；②`kms_urls`/`KMS_HOST` 用同一 IP；③dstack-kms 的 ra-tls 要支持 IP SAN（mainline / 官方 `dstacktee/dstack-kms` 已支持）。**注意：无 SSH 时改 `KMS_DOMAIN` 必须销毁重建整台 KMS CVM（含 data disk）**——`provision --reset` 靠 SSH 擦 `/kms` 状态会失败，旧证书清不掉、跑着的 dstack-kms 无法在线重启。重建：`dstack-cloud -C deploy/kms-prod remove` → 改 `KMS_DOMAIN`/`kms_urls`/`KMS_HOST` → `deploy` → `provision`。
+- **`certificate not valid for name "<IP>"; only valid for DnsName("kms.local")`**（业务 CVM boot loop / guest-agent GetAppKey 失败）→ KMS 证书 SAN 不是 CVM IP。SAN 由 key-broker 在 install 时**自测 CVM 内网 IP** 生成,正常情况自动 == `kms_urls`;见到 `kms.local`(fallback)说明:① CVM **没绑静态 IP**(检查 dstack-cloud `private_ip` patch + `deploy` 输出的 Internal IP);或 ② 自测被环境阻断。要点:`kms_urls`/`KMS_HOST` 用 CVM 的实际内网 IP;dstack-kms 的 ra-tls 要支持 IP SAN(mainline / 官方 `dstacktee/dstack-kms` 已支持)。**改 KMS IP 后须重新 provision;无 SSH 时不能就地改证书,要销毁重建整台 KMS CVM(含 data disk)**——`provision --reset` 靠 SSH 擦 `/kms` 会失败、跑着的 dstack-kms 无法在线重启。重建:`remove` → 重新预留/绑定静态 IP + 改 `kms_urls`/`KMS_HOST` → `deploy` → `provision`(SAN 自动跟到新 IP)。
 
 - **provision 403 `not in whitelist`** → 旧 `mr_aggregated` 机制（GCP PCR0 每实例变）；现机制 key 在 `os_image_hash+key_provider=tpm+compose_hash`。**故意改 KMS compose** 会合法 403，需把新 `compose_hash` 加进 `allowed_kms_compose_hashes`。
 

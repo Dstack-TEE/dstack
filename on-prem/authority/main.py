@@ -338,10 +338,11 @@ def provision(req: ProvisionRequest, authorization: Optional[str] = Header(None)
     verify_kms_attestation(req, user_id, user)
     kms_k256_pubkey = ""
     root_material = user["root_material"]
-    # KMS rpc cert domain — must be a name the workloads can resolve AND that
-    # matches kms_urls (else RA-TLS hostname verification fails). On GCP use the
-    # instance's internal DNS name (auto-resolvable in-VPC). Configurable so the
-    # cert isn't pinned to the unroutable default "kms.local".
+    # KMS rpc cert domain/SAN — LAST-RESORT FALLBACK ONLY. The SAN must match the
+    # address clients dial (kms_urls), which is the operator's deployment topology,
+    # not vendor policy — so the key-broker auto-detects the CVM's own internal IP
+    # at install (and an operator can override via `kms_ctl.py attest --kms-domain`).
+    # This env is used only if both of those are unavailable. Don't set it per-customer.
     kms_domain = os.getenv("KMS_DOMAIN", "kms.local")
     root_payload = make_root_payload(
         root_material["root_ca_key_pem"], root_material["k256_key_b64"], domain=kms_domain
