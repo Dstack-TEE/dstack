@@ -9,6 +9,7 @@
 每一步都标了 **【厂商】/【Operator】**，并逐条解释命令作用。本文用 shell 变量占位，按需替换。
 
 > English version: [`DEPLOYMENT_GUIDE.md`](DEPLOYMENT_GUIDE.md)。
+> 只想快速部署、不看原理？用编排脚本：[`QUICKSTART_CN.md`](QUICKSTART_CN.md)。
 
 ---
 

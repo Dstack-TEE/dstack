@@ -9,8 +9,8 @@ over Private Google Access, with egress hard-limited by a Secure Web Proxy.
 
 | Path | What |
 |------|------|
-| `DEPLOYMENT_GUIDE.md` | step-by-step deploy guide (English) — start here |
-| `DEPLOYMENT_GUIDE_CN.md` | same guide (中文) |
+| `QUICKSTART.md` / `QUICKSTART_CN.md` | **start here** — deploy in a handful of commands via the orchestration scripts |
+| `DEPLOYMENT_GUIDE.md` / `DEPLOYMENT_GUIDE_CN.md` | step-by-step guide — what each step does (EN / 中文) |
 | `DEPLOYMENT.md` | architecture + security status (English) |
 | `design.md` | design rationale / history |
 | `scripts/` | deploy + provision toolkit (gcloud / IAP / Artifact Registry / SWP) |
