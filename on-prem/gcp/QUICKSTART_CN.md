@@ -66,7 +66,7 @@ cd on-prem/gcp/scripts
 
 ## operator 侧（在自己的 GCP）
 
-把厂商交付的 `deploy/kms`、`deploy/launcher` 放好,填 `config.env`（`KMS_IP`/`LAUNCHER_IP`/`OS_IMAGE`/`PUBREG`/`AR_*`/`USER_ID`/`AUTHORITY_URL`/`SWP_PROXY`），然后:
+把厂商交付的 `deploy/kms`、`deploy/launcher` 放好,填 `config.env`（`KMS_IP`/`LAUNCHER_IP`/`OS_VERSION`/`PUBREG`/`AR_*`/`USER_ID`/`AUTHORITY_URL`/`SWP_PROXY`），然后:
 
 ```bash
 cd on-prem/gcp/scripts

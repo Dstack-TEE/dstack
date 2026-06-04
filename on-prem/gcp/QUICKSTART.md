@@ -79,7 +79,7 @@ Keep the Authority online (the courier connects to it).
 ## Operator (on its own GCP)
 
 Drop the vendor-delivered `deploy/kms` and `deploy/launcher` in place, fill
-`config.env` (`KMS_IP`/`LAUNCHER_IP`/`OS_IMAGE`/`PUBREG`/`AR_*`/`USER_ID`/`AUTHORITY_URL`/
+`config.env` (`KMS_IP`/`LAUNCHER_IP`/`OS_VERSION`/`PUBREG`/`AR_*`/`USER_ID`/`AUTHORITY_URL`/
 `SWP_PROXY`), then:
 
 ```bash
