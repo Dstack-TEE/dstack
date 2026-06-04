@@ -23,6 +23,12 @@
 #   DSTACK_SNP_SMOKE_IMAGE_URL=https://github.com/Dstack-TEE/meta-dstack/releases/download/v0.5.11/dstack-dev-0.5.11.tar.gz
 #   DSTACK_SNP_SMOKE_IMAGE_NAME=dstack-dev-0.5.11-snp-dnsfix
 #   DSTACK_SNP_SMOKE_ALLOW_OLD_QEMU=1  # bypasses the QEMU >= 10 preflight
+#
+# Host/image caveat: QEMU >= 10 is necessary but not sufficient. One local SNP
+# host could boot a newer Lit SNP guest kernel but reset before Linux serial
+# output with the stock meta-dstack v0.5.11 6.9.0-dstack kernel. If this smoke
+# stops after `EFI stub: Loaded initrd ...` with `cpus are not resettable`, first
+# validate the guest image/kernel on that host before debugging KMS or apps.
 
 set -euo pipefail
 

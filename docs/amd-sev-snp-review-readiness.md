@@ -142,6 +142,16 @@ no_secret_material_logged=true
 
 This means the PR now has live SNP report proof, live golden-vector measurement proof, release-gate unit/integration coverage, and a manual full dstack-managed SNP guest -> KMS `GetAppKey` hardware E2E proof. The success run required an explicit lab-only TCB allowlist because this host reports `OutOfDate`; production defaults remain fail-closed (`UpToDate` only).
 
+### Hardware smoke portability notes
+
+The checked-in smoke is enough to reproduce the proven KMS/app-key flow on a compatible SNP host, but reviewers should treat the guest image/kernel as part of the hardware matrix:
+
+- Known-good full E2E host: `chris@173.234.27.162` with AMDSEV QEMU 10.0.2, the SNP-capable OVMF above, and `dstack-dev-0.5.11-snp-dnsfix`.
+- A separate local SNP host can run SNP Linux guests, but the stock `meta-dstack` v0.5.11 `6.9.0-dstack` kernel stops after OVMF/EFI loads kernel+initrd and QEMU reports `cpus are not resettable, terminating`, even when using QEMU 10.0.2.
+- On that same local host, a newer Lit SNP guest kernel (`6.13.0-snp-guest-ffd294d346d1`) reaches Linux/SNP markers, which isolates that local failure to the dstack guest image/kernel compatibility layer rather than Chipotle/KMS/auth policy or basic host SNP enablement.
+
+Practical implication for reviewers/testers: first run `test-scripts/snp-e2e-smoke.sh` unchanged and confirm it reaches `SNP_KMS_CONTAINER_STARTED` / `SNP_APP_CONTAINER_STARTED` before substituting a real app workload. If the smoke stops after `EFI stub: Loaded initrd ...` with `cpus are not resettable`, use a host/image/kernel that is known to boot dstack under SNP (or build a coherent newer `meta-dstack` guest image with matching kernel, modules, initramfs, rootfs, and verity metadata) before debugging app-level behavior.
+
 ## Validation commands
 
 Run locally for this review-ready staging branch:
