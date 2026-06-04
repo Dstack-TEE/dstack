@@ -2,7 +2,7 @@ use anyhow::{bail, Result};
 
 pub struct Config {
     pub kms_url: String,
-    pub sidecar_url: String,
+    pub key_broker_url: String,
     pub app_id: String,
     pub workload_image: String,
     pub lease_ttl: u64,
@@ -16,8 +16,8 @@ pub struct Config {
 impl Config {
     pub fn from_env() -> Result<Self> {
         let kms_url = std::env::var("KMS_URL").unwrap_or_else(|_| "http://kms:8000".to_string());
-        let sidecar_url =
-            std::env::var("SIDECAR_URL").unwrap_or_else(|_| "https://sidecar:8002".to_string());
+        let key_broker_url =
+            std::env::var("KEY_BROKER_URL").unwrap_or_else(|_| "https://key-broker:8002".to_string());
         let app_id = std::env::var("APP_ID").unwrap_or_default();
         if app_id.is_empty() {
             bail!("APP_ID is required");
@@ -48,7 +48,7 @@ impl Config {
 
         Ok(Self {
             kms_url,
-            sidecar_url,
+            key_broker_url,
             app_id,
             workload_image,
             lease_ttl,

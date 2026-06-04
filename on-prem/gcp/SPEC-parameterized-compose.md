@@ -22,7 +22,7 @@ no per-customer compose to re-audit.
   differs per customer and the vendor cannot pre-pin it:
   - **image registry path**: `<region>-docker.pkg.dev/<project>/<repo>/...`
   - **SWP egress proxy IP**: `HTTP_PROXY=http://10.128.0.53:80` (KMS compose)
-  - **KMS internal IP**: `KMS_URL` / `SIDECAR_URL=https://10.128.15.220:...` (workload compose)
+  - **KMS internal IP**: `KMS_URL` / `KEY_BROKER_URL=https://10.128.15.220:...` (workload compose)
 - Security-critical values that are NOT customer-specific and MUST stay measured:
   - **image digests** (`@sha256:...`) — the content pin
   - **`AUTHORITY_PUBKEY`** — the AuthBundle trust anchor (per-vendor constant)
@@ -51,7 +51,7 @@ services:
     image: ${DSTACK_REGISTRY}/launcher@sha256:<PINNED_LAUNCHER_DIGEST>
     environment:
       - KMS_URL=https://${KMS_HOST}:8000
-      - SIDECAR_URL=https://${KMS_HOST}:8002
+      - KEY_BROKER_URL=https://${KMS_HOST}:8002
       - WORKLOAD_IMAGE=${DSTACK_REGISTRY}/<workload-name>   # path only; digest comes
                                                             # from current_image_digest
 ```

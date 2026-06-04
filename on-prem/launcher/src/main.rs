@@ -82,7 +82,7 @@ async fn main() -> Result<()> {
 
     let sidecar = Arc::new(
         SidecarClient::new(
-            config.sidecar_url.clone(),
+            config.key_broker_url.clone(),
             &meta.ca_cert,
             &client_cert_pem,
             &client_key_pem,
