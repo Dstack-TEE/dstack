@@ -1,9 +1,11 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
-# 协议速览（GCP 私有化部署）
+# 协议速览（on-prem 私有化部署）
 
-部署背后的密码学协议——**每条消息携带什么、每一跳校验什么**。命令见
-[`QUICKSTART_CN.md`](QUICKSTART_CN.md);操作走查见
-[`DEPLOYMENT_GUIDE_CN.md`](DEPLOYMENT_GUIDE_CN.md)。
+部署背后的密码学协议——**每条消息携带什么、每一跳校验什么**。这是**与云无关的核心**
+(authority / key-broker / launcher,见 [`README.md`](README.md));图中度量用 GCP 的
+**TDX+vTPM** profile(`key_provider=tpm`、内网 IP 证书 SAN)。命令见
+[`gcp/QUICKSTART_CN.md`](gcp/QUICKSTART_CN.md);操作走查见
+[`gcp/DEPLOYMENT_GUIDE_CN.md`](gcp/DEPLOYMENT_GUIDE_CN.md)。
 
 > English: [`PROTOCOL.md`](PROTOCOL.md)
 

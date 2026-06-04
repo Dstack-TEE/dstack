@@ -23,6 +23,10 @@ and the cloud provider — never see plaintext images or root keys.
 └─────────────┘
 ```
 
+For the wire protocol — every message and what's verified at each hop (Phase 0 onboarding,
+A provisioning, B workload launch + day-2 update, and the fail-closed gates) — see
+[`PROTOCOL.md`](PROTOCOL.md) ([中文](PROTOCOL_CN.md)).
+
 ## Layout — cloud-agnostic core vs cloud-specific
 
 Everything at this level is **cloud-agnostic**; provider-specific glue lives under

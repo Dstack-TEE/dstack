@@ -1,9 +1,12 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
-# Protocol at a glance (GCP private deployment)
+# Protocol at a glance (on-prem private deployment)
 
 The cryptographic protocol behind the deployment — **what message carries what, and
-what is verified at each hop**. For commands see [`QUICKSTART.md`](QUICKSTART.md); for
-the operational walkthrough see [`DEPLOYMENT_GUIDE.md`](DEPLOYMENT_GUIDE.md).
+what is verified at each hop**. This is the **cloud-agnostic core** (authority /
+key-broker / launcher; see [`README.md`](README.md)); the measurements shown use the GCP
+**TDX+vTPM** profile (`key_provider=tpm`, internal-IP cert SAN). For commands see
+[`gcp/QUICKSTART.md`](gcp/QUICKSTART.md); for the operational walkthrough see
+[`gcp/DEPLOYMENT_GUIDE.md`](gcp/DEPLOYMENT_GUIDE.md).
 
 > 中文: [`PROTOCOL_CN.md`](PROTOCOL_CN.md)
 
