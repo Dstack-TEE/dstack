@@ -1,0 +1,119 @@
+# SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+name: Publish JS SDK to npm
+on:
+  push:
+    tags: ['js-sdk-v*']
+  workflow_dispatch:
+    inputs:
+      npm_tag:
+        description: 'npm dist-tag (latest, beta, canary)'
+        required: true
+        default: 'latest'
+        type: choice
+        options:
+          - latest
+          - beta
+          - canary
+
+permissions:
+  id-token: write
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Upgrade npm for trusted publishers support
+        run: |
+          npm install -g npm@latest
+          echo "npm: $(npm --version)"
+
+      - name: Verify OIDC token availability
+        run: |
+          if [ -n "${ACTIONS_ID_TOKEN_REQUEST_URL}" ] && [ -n "${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" ]; then
+            echo "OIDC token available"
+          else
+            echo "OIDC token NOT available"
+            echo "Check workflow permissions include 'id-token: write'"
+            exit 1
+          fi
+
+      - name: Verify repository configuration
+        working-directory: sdk/js
+        run: |
+          echo "Checking repository consistency..."
+          GIT_REPO=$(git remote get-url origin | sed 's/.*github.com[/:]//; s/.git$//')
+          PKG_REPO=$(node -e "console.log(require('./package.json').repository?.url || '')" | sed 's|https://github.com/||; s|git+||; s|.git$||')
+          echo "Git remote:   $GIT_REPO"
+          echo "package.json: $PKG_REPO"
+          if [ "$GIT_REPO" != "$PKG_REPO" ]; then
+            echo "Repository mismatch!"
+            echo "This will cause 422 error during publish"
+            exit 1
+          fi
+          echo "Repositories match"
+
+      - name: Install dependencies
+        working-directory: sdk/js
+        run: npm install
+
+      - name: Build
+        working-directory: sdk/js
+        run: npm run build
+
+      - name: Determine version and npm dist-tag
+        id: tag
+        working-directory: sdk/js
+        run: |
+          PKG_VERSION=$(node -e "console.log(require('./package.json').version)")
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="$PKG_VERSION"
+            echo "tag=${{ github.event.inputs.npm_tag }}" >> "$GITHUB_OUTPUT"
+          else
+            TAG_VERSION="${GITHUB_REF_NAME#js-sdk-v}"
+            if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+              echo "::error::tag version ($TAG_VERSION) does not match package.json version ($PKG_VERSION)"
+              exit 1
+            fi
+            VERSION="$TAG_VERSION"
+            # auto-detect from git tag: js-sdk-v0.5.8-beta.1 -> beta
+            if echo "$VERSION" | grep -qiE '(beta|alpha|rc|preview)'; then
+              echo "tag=beta" >> "$GITHUB_OUTPUT"
+            else
+              echo "tag=latest" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Publish to npm
+        working-directory: sdk/js
+        run: |
+          NPM_TAG="${{ steps.tag.outputs.tag }}"
+          echo "Publishing with dist-tag: $NPM_TAG"
+          npm publish --access public --provenance --tag "$NPM_TAG"
+
+      - name: GitHub Release
+        if: github.event_name == 'push'
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "JS SDK v${{ steps.tag.outputs.version }}"
+          body: |
+            ## npm Package
+
+            **Package**: `@phala/dstack-sdk@${{ steps.tag.outputs.version }}`
+
+            **Install**: `npm install @phala/dstack-sdk@${{ steps.tag.outputs.version }}`
+
+            **Dist-tag**: `${{ steps.tag.outputs.tag }}`
+
+            **Registry**: https://www.npmjs.com/package/@phala/dstack-sdk/v/${{ steps.tag.outputs.version }}

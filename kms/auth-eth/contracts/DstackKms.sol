@@ -4,22 +4,16 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-pragma solidity ^0.8.22;
+pragma solidity ^0.8.24;
 
 import "./IAppAuth.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
-import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/access/Ownable2StepUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/utils/introspection/ERC165Upgradeable.sol";
 import "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 
-contract DstackKms is
-    Initializable,
-    OwnableUpgradeable,
-    UUPSUpgradeable,
-    ERC165Upgradeable,
-    IAppAuth
-{
+contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, ERC165Upgradeable, IAppAuth {
     // Struct for KMS information
     struct KmsInfo {
         bytes k256Pubkey;
@@ -51,6 +45,8 @@ contract DstackKms is
     address public appImplementation;
 
     // Events
+    // appId is unindexed for backward compatibility with deployed log indexers.
+    // slither-disable-next-line unindexed-event-address
     event AppRegistered(address appId);
     event KmsInfoSet(bytes k256Pubkey);
     event KmsAggregatedMrAdded(bytes32 mrAggregated);
@@ -60,6 +56,7 @@ contract DstackKms is
     event OsImageHashAdded(bytes32 osImageHash);
     event OsImageHashRemoved(bytes32 osImageHash);
     event GatewayAppIdSet(string gatewayAppId);
+    // slither-disable-next-line unindexed-event-address
     event AppImplementationSet(address implementation);
     event AppDeployedViaFactory(address indexed appId, address indexed deployer);
 
@@ -94,15 +91,12 @@ contract DstackKms is
         override(ERC165Upgradeable, IERC165)
         returns (bool)
     {
-        return
-            interfaceId == 0x1e079198 || // IAppAuth
-            super.supportsInterface(interfaceId);
+        return interfaceId == 0x1e079198 // IAppAuth
+            || super.supportsInterface(interfaceId);
     }
 
     // Function to authorize upgrades (required by UUPSUpgradeable)
-    function _authorizeUpgrade(
-        address newImplementation
-    ) internal override onlyOwner {}
+    function _authorizeUpgrade(address newImplementation) internal override onlyOwner { }
 
     // Function to set KMS information
     function setKmsInfo(KmsInfo memory info) external onlyOwner {
@@ -126,7 +120,15 @@ contract DstackKms is
         emit GatewayAppIdSet(appId);
     }
 
-    // Function to register an app
+    /// @notice Register an app address as known to this KMS.
+    /// @dev Intentionally permissionless: any caller can mark any non-zero
+    ///      address as registered. This is the factory hook used by
+    ///      {deployAndRegisterApp}, and direct external registration is
+    ///      also a supported use case (e.g. third parties bootstrapping
+    ///      their own DstackApp under this KMS). Authorization is gated
+    ///      downstream by the owner-controlled {allowedOsImages} whitelist
+    ///      and by the registered app's own {IAppAuth-isAppAllowed}, so
+    ///      registration alone confers no privilege.
     function registerApp(address appId) public {
         require(appId != address(0), "Invalid app ID");
         registeredApps[appId] = true;
@@ -148,7 +150,10 @@ contract DstackKms is
         bool allowAnyDevice,
         bytes32 initialDeviceId,
         bytes32 initialComposeHash
-    ) public returns (address appId) {
+    )
+        public
+        returns (address appId)
+    {
         require(appImplementation != address(0), "DstackApp implementation not set");
         require(initialOwner != address(0), "Invalid owner address");
 
@@ -162,6 +167,14 @@ contract DstackKms is
             initialComposeHash
         );
 
+        // The ERC1967Proxy constructor delegatecalls into `appImplementation`'s
+        // initializer. The owner sets `appImplementation` via
+        // setAppImplementation; safety here rests on owner trust, not on a
+        // structural reentrancy impossibility — a malicious owner could in
+        // principle install an impl whose `initialize` reenters this contract.
+        // See docs/specification.md §1 for the owner trust scope and §6.1 for
+        // the malicious-registered-app threat model.
+        // slither-disable-next-line reentrancy-benign,reentrancy-events
         appId = address(new ERC1967Proxy(appImplementation, initData));
         registerApp(appId);
         emit AppDeployedViaFactory(appId, msg.sender);
@@ -174,14 +187,12 @@ contract DstackKms is
         bool allowAnyDevice,
         bytes32 initialDeviceId,
         bytes32 initialComposeHash
-    ) external returns (address appId) {
+    )
+        external
+        returns (address appId)
+    {
         return deployAndRegisterApp(
-            initialOwner,
-            disableUpgrades,
-            false,
-            allowAnyDevice,
-            initialDeviceId,
-            initialComposeHash
+            initialOwner, disableUpgrades, false, allowAnyDevice, initialDeviceId, initialComposeHash
         );
     }
 
@@ -222,14 +233,9 @@ contract DstackKms is
     }
 
     // Function to check if KMS is allowed to boot
-    function isKmsAllowed(
-        AppBootInfo calldata bootInfo
-    ) external view returns (bool isAllowed, string memory reason) {
+    function isKmsAllowed(AppBootInfo calldata bootInfo) external view returns (bool isAllowed, string memory reason) {
         // Check if the TCB status is up to date
-        if (
-            keccak256(abi.encodePacked(bootInfo.tcbStatus)) !=
-            keccak256(abi.encodePacked("UpToDate"))
-        ) {
+        if (keccak256(abi.encodePacked(bootInfo.tcbStatus)) != keccak256(abi.encodePacked("UpToDate"))) {
             return (false, "TCB status is not up to date");
         }
 
@@ -252,9 +258,12 @@ contract DstackKms is
     }
 
     // Function to check if an app is allowed to boot
-    function isAppAllowed(
-        AppBootInfo calldata bootInfo
-    ) external view override returns (bool isAllowed, string memory reason) {
+    function isAppAllowed(AppBootInfo calldata bootInfo)
+        external
+        view
+        override
+        returns (bool isAllowed, string memory reason)
+    {
         // Check if app is registered
         if (!registeredApps[bootInfo.appId]) {
             return (false, "App not registered");
@@ -269,7 +278,10 @@ contract DstackKms is
             return (false, "App not deployed or invalid address");
         }
 
-        // Call the app's isAppAllowed function
+        // Call the app's isAppAllowed function. The tuple is forwarded as the
+        // function's return value; the slither detector trips on the named
+        // return + forward pattern but the value is actually used.
+        // slither-disable-next-line unused-return
         return IAppAuth(bootInfo.appId).isAppAllowed(bootInfo);
     }
 
@@ -277,7 +289,7 @@ contract DstackKms is
     uint256[50] private __gap;
 }
 
-function isContract(address addr) view returns (bool){
+function isContract(address addr) view returns (bool) {
     uint32 size;
     assembly {
         size := extcodesize(addr)

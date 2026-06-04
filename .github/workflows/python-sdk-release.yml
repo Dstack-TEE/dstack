@@ -1,0 +1,92 @@
+# SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+name: Publish Python SDK to PyPI
+on:
+  push:
+    tags: ['python-sdk-v*']
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Publish target'
+        required: true
+        default: 'pypi'
+        type: choice
+        options:
+          - pypi
+          - testpypi
+
+permissions:
+  id-token: write
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install PDM
+        run: pip install pdm
+
+      - name: Build distribution
+        working-directory: sdk/python
+        run: pdm build
+
+      - name: Parse and verify version
+        id: version
+        working-directory: sdk/python
+        run: |
+          PKG_VERSION=$(python -c "
+          import re
+          with open('pyproject.toml') as f:
+              m = re.search(r'^version\s*=\s*\"([^\"]+)\"', f.read(), re.M)
+              print(m.group(1) if m else '')
+          ")
+          if [ -z "$PKG_VERSION" ]; then
+            echo "::error::failed to parse version from pyproject.toml"
+            exit 1
+          fi
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="$PKG_VERSION"
+          else
+            TAG_VERSION="${GITHUB_REF_NAME#python-sdk-v}"
+            if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+              echo "::error::tag version ($TAG_VERSION) does not match pyproject.toml version ($PKG_VERSION)"
+              exit 1
+            fi
+            VERSION="$TAG_VERSION"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Publish to PyPI
+        if: github.event_name == 'push' || github.event.inputs.target == 'pypi'
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: sdk/python/dist
+
+      - name: Publish to TestPyPI
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.target == 'testpypi'
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          packages-dir: sdk/python/dist
+
+      - name: GitHub Release
+        if: github.event_name == 'push'
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "Python SDK v${{ steps.version.outputs.version }}"
+          body: |
+            ## PyPI Package
+
+            **Package**: `dstack-sdk ${{ steps.version.outputs.version }}`
+
+            **Install**: `pip install dstack-sdk==${{ steps.version.outputs.version }}`
+
+            **Registry**: https://pypi.org/project/dstack-sdk/${{ steps.version.outputs.version }}/

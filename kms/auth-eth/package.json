@@ -10,27 +10,25 @@
     "test": "jest",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
-    "test:integration": "jest -c jest.integration.config.js"
+    "test:foundry": "forge test --ffi",
+    "test:foundry:all": "forge clean && forge build && forge test --ffi",
+    "test:setup": "./scripts/setup-local-chain.sh",
+    "test:run": "./scripts/run-tests.sh",
+    "test:all": "./scripts/test-all.sh",
+    "test:cleanup": "./scripts/cleanup.sh"
   },
   "dependencies": {
     "@fastify/swagger": "^8.12.0",
     "@fastify/swagger-ui": "^2.0.1",
-    "@openzeppelin/contracts-upgradeable": "5.4.0",
     "dotenv": "^16.3.1",
     "ethers": "^6.13.5",
     "fastify": "^5.8.5",
     "yargs": "^17.7.2"
   },
   "devDependencies": {
-    "@nomicfoundation/hardhat-ethers": "^3.0.8",
-    "@nomicfoundation/hardhat-toolbox": "^4.0.0",
-    "@openzeppelin/hardhat-upgrades": "^3.9.0",
     "@types/jest": "^29.5.14",
     "@types/node": "^20.17.12",
-    "@types/supertest": "^6.0.2",
-    "hardhat": "^2.22.17",
     "jest": "^29.7.0",
-    "supertest": "^6.3.3",
     "ts-jest": "^29.1.1",
     "ts-node": "^10.9.1",
     "typescript": "^5.3.3"

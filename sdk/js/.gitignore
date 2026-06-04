@@ -2,3 +2,5 @@ node_modules/
 dist/
 *.log
 package-lock.json
+.claude/settings.local.json
+.claude/settings.local.json.license

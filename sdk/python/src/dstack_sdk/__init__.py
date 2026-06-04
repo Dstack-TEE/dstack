@@ -23,7 +23,7 @@ from .get_compose_hash import AppCompose
 from .get_compose_hash import DockerConfig
 from .get_compose_hash import get_compose_hash
 from .verify_env_encrypt_public_key import verify_env_encrypt_public_key
-from .verify_env_encrypt_public_key import verify_signature_simple
+from .verify_env_encrypt_public_key import verify_env_encrypt_public_key_legacy
 
 __all__ = [
     # Core clients
@@ -48,5 +48,5 @@ __all__ = [
     "AppCompose",
     "DockerConfig",
     "verify_env_encrypt_public_key",
-    "verify_signature_simple",
+    "verify_env_encrypt_public_key_legacy",
 ]
