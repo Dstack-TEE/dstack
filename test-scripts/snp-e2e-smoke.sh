@@ -29,6 +29,15 @@
 # output with the stock meta-dstack v0.5.11 6.9.0-dstack kernel. If this smoke
 # stops after `EFI stub: Loaded initrd ...` with `cpus are not resettable`, first
 # validate the guest image/kernel on that host before debugging KMS or apps.
+#
+# Guest userspace caveat: rebuilding the host-side PR binaries is not enough for
+# full app-key success if the downloaded meta-dstack image still embeds an older
+# dstack-util/dstack-attest. On that skewed image the app guest can reach
+# dstack-prepare.sh and fail at GetTempCaCert/GetAppKey with:
+#   amd sev-snp cert_chain must contain either ASK and VCEK certificates or one
+#   kernel certificate table auxblob
+# For full SNP_APP_CONTAINER_STARTED / GetAppKey success, use a coherent
+# meta-dstack guest image that includes the same PR cert-chain/KDS fallback code.
 
 set -euo pipefail
 
