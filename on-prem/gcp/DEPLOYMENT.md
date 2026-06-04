@@ -411,12 +411,19 @@ is **global**; per-tenant isolation is in `root_material`.
 9. **AR pull `Unauthenticated`** → the CVM must `docker login` to AR with its SA
    metadata token (prelaunch). NB: the dstack OS python lacks `json` — parse the
    token with `sed`, not `python3 -c`.
-10. **Internal IP changes on `remove`+`deploy`** (breaks `KMS_URL` etc.) →
-    `dstack-cloud` now supports a static internal IP: reserve it
-    (`gcloud compute addresses create <name> --region=<r> --subnet=<s>
-    --addresses=<ip>`) and set `gcp_config.private_ip` in `app.json`. It's
-    passed as `--private-network-ip`, so the VM keeps the same RFC1918 address
-    across redeploys (KMS pinned `10.128.15.220`, launcher `10.128.15.230`).
+10. **Internal IP changes on `remove`+`deploy`** (breaks `KMS_URL` etc.) → use a
+    static internal IP: reserve it (`gcloud compute addresses create <name>
+    --region=<r> --subnet=<s> --addresses=<ip>`) and set `gcp_config.private_ip`
+    in `app.json`, passed as `--private-network-ip` so the VM keeps the same
+    RFC1918 address across redeploys (KMS pinned `10.128.15.220`, launcher
+    `10.128.15.230`). **Requires a `dstack-cloud` that honors `private_ip`:** the
+    stock `GcpConfig` has no `private_ip` field, so it's silently dropped on load
+    (and `prepare`/`deploy` rewrite `app.json` stripping it) and never passed to
+    `gcloud` → the VM gets an ephemeral IP and the KMS cert SAN won't match. Patch
+    `dstack-cloud`: add `private_ip: str = ""` to `GcpConfig`, and in the instance
+    `create_args` add `--subnet=default` (if unset) + `--private-network-ip=<ip>`
+    when `private_ip` is set. Re-add `private_ip` to `app.json` if an old build
+    already stripped it. (Patch should be upstreamed.)
 11. **`provision` 403 `…not in whitelist` after a clean redeploy** → only with
     the *old* `mr_aggregated` pin (GCP PCR0 varies per instance). The current
     whitelist keys on `os_image_hash`+`key_provider=tpm`+`compose_hash` (§6), all
