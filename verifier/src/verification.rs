@@ -14,7 +14,7 @@ use dstack_mr::{RtmrLog, TdxMeasurementDetails, TdxMeasurements};
 use dstack_types::VmConfig;
 use hex_literal::hex;
 use ra_tls::attestation::{
-    Attestation, AttestationQuote, DstackNitroQuote, TpmQuote, VerifiedAttestation,
+    Attestation, AttestationQuote, DstackVerifiedReport, NitroPcrs, TpmQuote, VerifiedAttestation,
     VersionedAttestation,
 };
 use serde::{Deserialize, Serialize};
@@ -508,9 +508,11 @@ impl CvmVerifier {
                 self.verify_os_image_hash_for_dstack_tdx(&vm_config, attestation, debug, details)
                     .await?;
             }
-            AttestationQuote::DstackNitroEnclave(quote) => {
-                self.verify_os_image_hash_for_nitro_enclave(&vm_config, quote)
-                    .await?;
+            AttestationQuote::DstackNitroEnclave(_) => {
+                let DstackVerifiedReport::DstackNitroEnclave(report) = &attestation.report else {
+                    bail!("internal error: nitro quote without a verified nitro report");
+                };
+                self.verify_os_image_hash_for_nitro_enclave(&vm_config, &report.pcrs)?;
             }
         }
         Ok(vm_config)
@@ -641,21 +643,24 @@ impl CvmVerifier {
         }
     }
 
-    /// Verify Nitro Enclave OS image hash using NSM PCRs
+    /// Verify Nitro Enclave OS image hash using the signature-verified NSM PCRs.
     ///
     /// For Nitro:
     /// 1. PCR0/1/2 come from the EIF build (code + kernel + app) in production mode.
-    /// 2. In debug mode, PCR0/1/2 are zeroed by AWS; we tolerate that and return 32 zero bytes.
+    /// 2. In debug mode AWS zeroes PCR0/1/2, so there is no measurement of the
+    ///    actual code; we refuse to authorize such enclaves.
     /// 3. The computed image hash is compared against vm_config.os_image_hash.
-    async fn verify_os_image_hash_for_nitro_enclave(
+    fn verify_os_image_hash_for_nitro_enclave(
         &self,
         vm_config: &VmConfig,
-        nsm_quote: &DstackNitroQuote,
+        pcrs: &NitroPcrs,
     ) -> Result<()> {
-        // Parse NSM attestation document
-        let os_image_hash = nsm_quote
-            .decode_image_hash()
-            .context("Failed to decode PCR values")?;
+        // Reject debug-mode enclaves outright: their zeroed PCRs measure nothing,
+        // so accepting them would let arbitrary code run under attestation.
+        if pcrs.is_debug() {
+            bail!("nitro enclave is in debug mode (PCR0/1/2 are zeroed); refusing to verify");
+        }
+        let os_image_hash = pcrs.image_hash();
         // Compare with expected os_image_hash from vm_config
         if os_image_hash != vm_config.os_image_hash {
             bail!(

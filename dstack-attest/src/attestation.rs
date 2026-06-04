@@ -696,7 +696,11 @@ impl AttestationV1 {
                 if user_data != report_data[..] {
                     bail!("NSM user_data does not match report_data");
                 }
-                let pcrs = nsm.decode_pcrs().context("failed to decode nitro pcrs")?;
+                // Use the PCRs from the signature-verified report, not a
+                // re-parse of the raw document, so the values that feed
+                // os_image_hash / MR derivation are authenticated.
+                let pcrs = NitroPcrs::from_verified(&verified_report.pcrs)
+                    .context("verified NSM report missing PCR0/1/2")?;
                 DstackVerifiedReport::DstackNitroEnclave(NitroVerifiedReport {
                     module_id: verified_report.module_id,
                     pcrs,
@@ -756,10 +760,34 @@ pub struct NitroPcrs {
 }
 
 impl NitroPcrs {
+    /// Build `NitroPcrs` from the PCR map of a signature-verified NSM report
+    /// (`nsm_qvl::NsmVerifiedReport::pcrs`). This is the trusted source of PCR
+    /// values: it has been authenticated by the COSE signature, unlike
+    /// [`DstackNitroQuote::decode_pcrs`] which re-parses the raw document.
+    pub fn from_verified(pcrs: &std::collections::BTreeMap<u16, Vec<u8>>) -> Result<NitroPcrs> {
+        let pcr0 = pcrs.get(&0).cloned().context("PCR 0 not found")?;
+        let pcr1 = pcrs.get(&1).cloned().context("PCR 1 not found")?;
+        let pcr2 = pcrs.get(&2).cloned().context("PCR 2 not found")?;
+        Ok(NitroPcrs { pcr0, pcr1, pcr2 })
+    }
+
     fn is_zero(&self) -> bool {
         self.pcr0.iter().all(|&b| b == 0)
             && self.pcr1.iter().all(|&b| b == 0)
             && self.pcr2.iter().all(|&b| b == 0)
+    }
+
+    /// Whether the enclave ran in debug mode. AWS zeroes PCR0/1/2 for debug
+    /// enclaves, so there is no measurement of the actual code; verifiers must
+    /// refuse to authorize such enclaves.
+    pub fn is_debug(&self) -> bool {
+        self.is_zero()
+    }
+
+    /// The OS image hash = sha256(pcr0 || pcr1 || pcr2). Callers must reject
+    /// debug enclaves (see [`is_debug`](Self::is_debug)) before trusting this.
+    pub fn image_hash(&self) -> Vec<u8> {
+        sha256([&self.pcr0, &self.pcr1, &self.pcr2]).to_vec()
     }
 }
 
@@ -882,6 +910,13 @@ impl<T> Attestation<T> {
 
 pub trait GetDeviceId {
     fn get_devide_id(&self) -> Vec<u8>;
+
+    /// The signature-verified Nitro PCRs, when this report is a verified Nitro
+    /// report. Returns `None` for raw/unverified reports (e.g. `()`), in which
+    /// case callers fall back to parsing the raw document.
+    fn verified_nitro_pcrs(&self) -> Option<&NitroPcrs> {
+        None
+    }
 }
 
 impl GetDeviceId for () {
@@ -903,6 +938,13 @@ impl GetDeviceId for DstackVerifiedReport {
                     .map(|(id, _)| id.as_bytes().to_vec())
                     .unwrap_or_default()
             }
+        }
+    }
+
+    fn verified_nitro_pcrs(&self) -> Option<&NitroPcrs> {
+        match self {
+            DstackVerifiedReport::DstackNitroEnclave(report) => Some(&report.pcrs),
+            _ => None,
         }
     }
 }
@@ -1057,8 +1099,13 @@ impl<T: GetDeviceId> Attestation<T> {
     }
 
     fn decode_mr_nitro_nsm(&self, nsm_quote: &DstackNitroQuote) -> Result<Mrs> {
-        // Parse NSM attestation document to get PCR values
-        let pcrs = nsm_quote.decode_pcrs()?;
+        // Prefer the signature-verified PCRs from the report; only fall back to
+        // re-parsing the raw document for unverified reports (e.g. previews),
+        // which never feed an authorization decision.
+        let pcrs = match self.report.verified_nitro_pcrs() {
+            Some(pcrs) => pcrs.clone(),
+            None => nsm_quote.decode_pcrs()?,
+        };
 
         // Compute mr_system from PCR values and mr_key_provider
         let mr_system = sha256([&pcrs.pcr0, &pcrs.pcr1, &pcrs.pcr2]);
@@ -1694,5 +1741,44 @@ mod tests {
             }
             _ => panic!("expected dstack stack"),
         }
+    }
+
+    #[test]
+    fn nitro_pcrs_from_verified_extracts_0_1_2() {
+        let mut map = std::collections::BTreeMap::new();
+        map.insert(0u16, vec![0xaa; 48]);
+        map.insert(1u16, vec![0xbb; 48]);
+        map.insert(2u16, vec![0xcc; 48]);
+        map.insert(3u16, vec![0xdd; 48]); // ignored
+        let pcrs = NitroPcrs::from_verified(&map).unwrap();
+        assert_eq!(pcrs.pcr0, vec![0xaa; 48]);
+        assert_eq!(pcrs.pcr1, vec![0xbb; 48]);
+        assert_eq!(pcrs.pcr2, vec![0xcc; 48]);
+
+        // missing a required PCR is an error
+        map.remove(&1u16);
+        assert!(NitroPcrs::from_verified(&map).is_err());
+    }
+
+    #[test]
+    fn nitro_pcrs_debug_detection_and_image_hash() {
+        let debug = NitroPcrs {
+            pcr0: vec![0u8; 48],
+            pcr1: vec![0u8; 48],
+            pcr2: vec![0u8; 48],
+        };
+        assert!(debug.is_debug());
+
+        let prod = NitroPcrs {
+            pcr0: vec![1u8; 48],
+            pcr1: vec![0u8; 48],
+            pcr2: vec![0u8; 48],
+        };
+        assert!(!prod.is_debug());
+        // image_hash = sha256(pcr0 || pcr1 || pcr2), never the all-zero sentinel
+        assert_eq!(
+            prod.image_hash(),
+            sha256([&prod.pcr0, &prod.pcr1, &prod.pcr2]).to_vec()
+        );
     }
 }
