@@ -88,20 +88,24 @@ operator 的 CLI 全程只拿到两坨**不透明** blob(`sealed_root`、`auth_b
 
 ```
  launcher(workload CVM)        key-broker(KMS CVM)
-   │  bootAuth/app(BootInfo) ─────▶│  os_image✓ tcb✓ app_id✓ compose✓ device✓ (fail-closed)
-   │◀──────────── allowed ─────────│
-   │  RA-TLS 握手 ────────────────▶│  双向;launcher 证书内嵌其 TDX quote
-   │  get version ────────────────▶│
-   │◀── image_digest, bundle_seq ──│
-   │  lease/acquire(instance,compose,digest) ─▶│  重跑关卡 + digest ∈ allowed_workload_digests
-   │                                            │  绑 slot_id → (instance, compose)
-   │◀──────── Lease(已签) + keyset ──────────────│
-   │  私钥写入 → tmpfs                          
-   │  skopeo/ocicrypt JWE 解密(image@digest)    
-   │  运行解密后的 workload                     
-   │  ── 每 ttl/3 ── lease/renew(slot,instance) ─▶│
-   │       失败 → 重新 acquire(重跑每道关卡)       │
-   │       过宽限期仍失败 → 停容器                  │   ← 运行期 fail-closed
+  │───────bootAuth/app(BootInfo)───────▶│
+  │                                     │ os_image✓ tcb✓ app_id✓ compose✓ device✓
+  │◀──────────────allowed───────────────│
+  │──────────RA-TLS handshake──────────▶│
+  │                                     │ mutual; launcher cert embeds TDX quote
+  │─────────────get version────────────▶│
+  │◀─────image_digest, bundle_seq───────│
+  │────────────lease/acquire───────────▶│
+  │                                     │ re-run gates; digest ∈ allowed_workload_digests
+  │                                     │ bind slot_id → (instance, compose)
+  │◀──────Lease(signed) + keyset────────│
+  │  write privkeys → tmpfs             │
+  │  ocicrypt JWE decrypt(image@digest) │
+  │  run decrypted workload             │
+  │─────lease/renew  (every ttl/3)─────▶│
+  │  renew fail → re-acquire            │
+  │  (re-runs every gate)               │
+  │  past grace → stop workload         │
 ```
 
 1. **bootAuth/app** —— 任何解密之前,key-broker 先按被度量的 `BootInfo`(os-image、tcb、app_id、

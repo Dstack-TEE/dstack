@@ -97,20 +97,24 @@ identity to the (now-running) KMS, and loses them if it stops re-proving.
 
 ```
  launcher(workload CVM)        key-broker(KMS CVM)
-   │  bootAuth/app(BootInfo) ─────▶│  os_image✓ tcb✓ app_id✓ compose✓ device✓ (fail-closed)
-   │◀──────────── allowed ─────────│
-   │  RA-TLS handshake ───────────▶│  mutual; launcher cert embeds its TDX quote
-   │  get version ────────────────▶│
-   │◀── image_digest, bundle_seq ──│
-   │  lease/acquire(instance,compose,digest) ─▶│  re-run gates + digest ∈ allowed_workload_digests
-   │                                            │  bind slot_id → (instance, compose)
-   │◀──────── Lease(signed) + keyset ───────────│
-   │  write privkeys → tmpfs                    
-   │  skopeo/ocicrypt JWE decrypt(image@digest) 
-   │  run decrypted workload                    
-   │  ── every ttl/3 ── lease/renew(slot,instance) ─▶│
-   │       on fail → re-acquire (re-runs every gate) │
-   │       still fail past grace → stop containers   │   ← fail-closed at runtime
+  │───────bootAuth/app(BootInfo)───────▶│
+  │                                     │ os_image✓ tcb✓ app_id✓ compose✓ device✓
+  │◀──────────────allowed───────────────│
+  │──────────RA-TLS handshake──────────▶│
+  │                                     │ mutual; launcher cert embeds TDX quote
+  │─────────────get version────────────▶│
+  │◀─────image_digest, bundle_seq───────│
+  │────────────lease/acquire───────────▶│
+  │                                     │ re-run gates; digest ∈ allowed_workload_digests
+  │                                     │ bind slot_id → (instance, compose)
+  │◀──────Lease(signed) + keyset────────│
+  │  write privkeys → tmpfs             │
+  │  ocicrypt JWE decrypt(image@digest) │
+  │  run decrypted workload             │
+  │─────lease/renew  (every ttl/3)─────▶│
+  │  renew fail → re-acquire            │
+  │  (re-runs every gate)               │
+  │  past grace → stop workload         │
 ```
 
 1. **bootAuth/app** — before anything decrypts, the key-broker gates the boot on the
