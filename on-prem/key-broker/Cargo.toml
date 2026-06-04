@@ -1,0 +1,67 @@
+# SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: BUSL-1.1
+
+[package]
+name = "key-broker"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "key-broker"
+path = "src/main.rs"
+
+[dependencies]
+# async runtime
+tokio = { workspace = true, features = ["full"] }
+
+# HTTP server
+axum = { version = "0.7", features = ["json"] }
+tower = "0.4"
+tower-http = { version = "0.5", features = ["trace"] }
+hyper = { workspace = true }
+hyper-util = { workspace = true }
+
+# serialization
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+
+# crypto
+ed25519-dalek = { workspace = true }
+x25519-dalek = { workspace = true }
+k256 = { workspace = true, features = ["ecdsa"] }
+hpke = { version = "0.13", default-features = false, features = ["alloc", "x25519"] }
+rand = { workspace = true }
+sha2 = { workspace = true }
+hkdf = { workspace = true }
+aes-gcm = { workspace = true }
+base64 = { workspace = true }
+hex = { workspace = true }
+hmac = "0.12"
+
+# TLS
+rcgen = { workspace = true }
+tokio-rustls = { workspace = true }
+rustls = { workspace = true, features = ["ring"] }
+rustls-pemfile = "2"
+
+# RA-TLS cert parsing (for extracting AppInfo from launcher's client cert)
+ra-tls = { workspace = true }
+dstack-attest = { workspace = true }
+x509-parser = { workspace = true }
+
+# dstack guest-agent client (TDX quote generation via /var/run/dstack.sock)
+dstack-guest-agent-rpc = { workspace = true }
+http-client = { workspace = true, features = ["prpc"] }
+dstack-types = { workspace = true }
+
+# identifiers
+uuid = { workspace = true }
+
+# error handling
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+
+# logging
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }

@@ -1,0 +1,8 @@
+target/
+.git/
+**/node_modules/
+**/.venv/
+**/__pycache__/
+.claude/
+*.tar.gz
+gcp-private/platform/.venv/

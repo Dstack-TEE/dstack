@@ -60,6 +60,8 @@ members = [
     "sdk/rust",
     "sdk/rust/types",
     "no_std_check",
+    "on-prem/key-broker",
+    "on-prem/launcher",
 ]
 resolver = "2"
 

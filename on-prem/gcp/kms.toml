@@ -1,0 +1,43 @@
+[default]
+log_level = "info"
+
+[rpc]
+address = "0.0.0.0"
+port = 8000
+
+[rpc.tls]
+key = "/kms/certs/rpc.key"
+certs = "/kms/certs/rpc.crt"
+
+[rpc.tls.mutual]
+ca_certs = "/kms/certs/tmp-ca.crt"
+mandatory = false
+
+[core]
+cert_dir = "/kms/certs"
+# Set to false when running outside a TDX CVM (dev/staging).
+# Must be true in production GCP Confidential VM.
+enforce_self_authorization = false
+# TDX quote collateral for verifying WORKLOAD quotes (GetAppKey/SignCert).
+# Intel PCS directly — no PCCS to run; GCP quotes embed the PCK chain so only
+# public endpoints are used (no subscription key). The KMS CVM's egress
+# whitelist must allow api.trustedservices.intel.com.
+pccs_url = "https://api.trustedservices.intel.com"
+
+[core.image]
+verify = false
+cache_dir = "/kms/images"
+
+[core.auth_api]
+type = "webhook"
+
+[core.auth_api.webhook]
+# host networking on the GCP CVM: key-broker shares the host net namespace,
+# so the auth webhook is reached on loopback, not by compose service name.
+url = "http://127.0.0.1:8001"
+
+[core.onboard]
+enabled = true
+auto_bootstrap_domain = ""
+address = "0.0.0.0"
+port = 8000

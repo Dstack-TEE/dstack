@@ -1,0 +1,53 @@
+# GCP private deployment: dstack-kms + key-broker
+#
+# Environment variables (copy .env.example to .env):
+#   KMS_IMAGE        pre-built dstack-kms image
+#   KEY_BROKER_IMAGE pre-built key-broker image (or use 'build' below)
+#   AUTHORITY_PUBKEY  base64 Ed25519 pubkey from vendor authority
+
+services:
+  key-broker:
+    image: ${KEY_BROKER_IMAGE:-cr.kvin.wang/key-broker:latest}
+    # build:                          # uncomment to build from source
+    #   context: ..
+    #   dockerfile: key-broker/Dockerfile
+    volumes:
+      - kms-data:/kms
+      # - /var/run/dstack.sock:/var/run/dstack.sock  # enable on TDX CVM
+    ports:
+      - "8001:8001"   # courier + auth webhook (bastion accessible)
+      - "8002:8002"   # mTLS CEK delivery (launcher accessible)
+    environment:
+      KMS_VOLUME: /kms
+      AUTHORITY_PUBKEY: ${AUTHORITY_PUBKEY:-}
+      LEASE_TTL_SECS: ${LEASE_TTL_SECS:-3600}
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8001/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 60
+      start_period: 5s
+    restart: unless-stopped
+
+  kms:
+    image: ${KMS_IMAGE:-cr.kvin.wang/dstack-kms:latest}
+    volumes:
+      - kms-data:/kms
+      - /var/run/dstack.sock:/var/run/dstack.sock
+    ports:
+      - "8000:8000"
+    configs:
+      - source: kms_config
+        target: /kms/kms.toml
+    command: sh -c 'mkdir -p /kms/certs /kms/images && exec dstack-kms -c /kms/kms.toml'
+    depends_on:
+      key-broker:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  kms-data:
+
+configs:
+  kms_config:
+    file: ./kms.toml

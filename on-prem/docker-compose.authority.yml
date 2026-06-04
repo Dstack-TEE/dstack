@@ -1,0 +1,62 @@
+# Vendor-side authority stack: vendor authority + dstack-verifier.
+#
+# Runs on the VENDOR's infrastructure (has internet) — NOT in the customer VPC.
+# The authority delegates KMS TDX-attestation checks to dstack-verifier over the
+# internal compose network, then applies courier-protocol policy (report_data
+# binding to the transport key, measurement whitelist, tcb status).
+#
+# Build:  docker compose -f docker-compose.authority.yml build
+# Run:    docker compose -f docker-compose.authority.yml up -d
+#
+# Env (copy .env.authority.example → .env): AUTHORITY_ADMIN_TOKEN, AUTHORITY_NONCE_SECRET, …
+
+services:
+  verifier:
+    # Built from this repo's source (on-prem/verifier/Dockerfile → -p dstack-verifier).
+    image: ${VERIFIER_IMAGE:-cr.kvin.wang/dstack-verifier:latest}
+    build:
+      context: ..                                  # workspace root
+      dockerfile: on-prem/verifier/Dockerfile
+    environment:
+      DSTACK_VERIFIER_ADDRESS: "0.0.0.0"
+      DSTACK_VERIFIER_PORT: "8080"
+      # TDX quote collateral. Intel PCS directly (no PCCS to run): GCP quotes
+      # embed the PCK chain, so only the public TCB-info / QE-identity endpoints
+      # are hit — no Intel subscription key needed.
+      DSTACK_VERIFIER_PCCS_URL: ${PCCS_URL:-https://api.trustedservices.intel.com}
+    volumes:
+      - verifier-cache:/tmp/dstack-verifier/cache
+    restart: unless-stopped
+
+  authority:
+    image: ${AUTHORITY_IMAGE:-cr.kvin.wang/authority:latest}
+    build:
+      context: ./authority
+    environment:
+      VERIFIER_URL: "http://verifier:8080"
+      REQUIRE_ATTESTATION: ${REQUIRE_ATTESTATION:-false}
+      ALLOWED_TCB_STATUSES: ${ALLOWED_TCB_STATUSES:-UpToDate,SWHardeningNeeded}
+      AUTHORITY_ADMIN_TOKEN: ${AUTHORITY_ADMIN_TOKEN:-}
+      AUTHORITY_NONCE_SECRET: ${AUTHORITY_NONCE_SECRET:-}
+      AUTHORITY_NONCE_TTL: ${AUTHORITY_NONCE_TTL:-300}
+      # persistent Ed25519 AuthBundle signing key (stable pubkey across restarts)
+      AUTHORITY_SIGNING_KEY_FILE: /data/signing.key
+      VENDOR_AUTHORITY_STORE: /data/users.json
+      # GLOBAL image-decryption keyring (vendor-wide), persisted on the /data volume.
+      VENDOR_KEYRING_STORE: /data/keyring.json
+      REQUIRE_OS_IMAGE_HASH: ${REQUIRE_OS_IMAGE_HASH:-false}
+      EXPECTED_OS_IMAGE_HASH: ${EXPECTED_OS_IMAGE_HASH:-}
+      # KMS rpc-cert domain (must match kms_urls + be resolvable by workloads).
+      KMS_DOMAIN: ${KMS_DOMAIN:-kms.local}
+    volumes:
+      - authority-data:/data
+      - ./authority:/app          # dev: live code; restart picks up edits w/o rebuild
+    ports:
+      - "8083:8083"        # operator/admin API (CLI reaches this)
+    depends_on:
+      - verifier
+    restart: unless-stopped
+
+volumes:
+  verifier-cache:
+  authority-data:

@@ -1,0 +1,34 @@
+[package]
+name = "launcher"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "launcher"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { workspace = true, features = ["full"] }
+axum = { version = "0.7", features = ["json"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+base64 = { workspace = true }
+hex = { workspace = true }
+sha2 = { workspace = true }
+dstack-kms-rpc = { path = "../../kms/rpc" }
+dstack-guest-agent-rpc = { path = "../../guest-agent/rpc" }
+hyper = { workspace = true }
+hyper-util = { workspace = true }
+http-body-util = { workspace = true }
+bytes = { workspace = true }
+prost = { workspace = true }
+uuid = { workspace = true }
+rcgen = { workspace = true }
+rustls = { workspace = true, features = ["ring"] }
+rustls-pemfile = "2"
+tokio-rustls = { workspace = true }
