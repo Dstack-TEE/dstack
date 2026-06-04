@@ -65,7 +65,7 @@
 | **镜像 digests**（key-broker/dstack-kms/launcher/业务镜像） | 厂商（构建产出） | pin 进 compose / 注册 | — |
 | **AUTHORITY_PUBKEY** | 厂商（Authority 产出） | pin 进 KMS compose | — |
 
-> ⚠️ **务必在首次 provision 前就把 KMS 绑定到规划好的静态 IP。** KMS 证书 SAN 由 key-broker 在 install 时**自测 CVM 自身内网 IP** 自动生成,所以只要 CVM 已绑静态 IP,SAN 就自动 == `kms_urls`,双方都无需配 `KMS_DOMAIN`。**部署后再改 KMS IP** 才需要重新 provision——而无 SSH 环境下不能就地改已装的证书（`provision --reset` 靠 SSH 擦 `/kms` 会失败、跑着的 dstack-kms 也无法在线重启），只能 `remove` 整台 KMS（含 data disk）后重新 `deploy`+`provision`，SAN 会自动跟到新 IP。少数"KMS 前面挂 DNS 名/LB"的场景可用 `kms_ctl.py attest --kms-domain <name>` 覆盖。
+> ⚠️ **务必在首次 provision 前就把 KMS 绑定到规划好的静态 IP。** KMS 证书 SAN 由 key-broker 在 install 时**自测 CVM 自身内网 IP** 自动生成,只要 CVM 已绑静态 IP,SAN 就自动 == `kms_urls`(无需任何额外配置)。**部署后再改 KMS IP** 才需要重新 provision——而无 SSH 环境下不能就地改已装的证书（`provision --reset` 靠 SSH 擦 `/kms` 会失败、跑着的 dstack-kms 也无法在线重启），只能 `remove` 整台 KMS（含 data disk）后重新 `deploy`+`provision`，SAN 会自动跟到新 IP。
 
 ---
 
@@ -114,8 +114,8 @@ gcloud storage buckets create $BUCKET --project=$PROJECT --location=$REGION
 ```bash
 cd on-prem        # docker-compose.authority.yml 所在目录
 
-# 厂商密钥/配置（勿入库）。注意：**不需要** KMS_DOMAIN——KMS 证书 SAN 由 key-broker 在
-# install 时自测 CVM 内网 IP 自动生成（见 步骤 9），vendor 不必知道客户的 KMS 地址。
+# 厂商密钥/配置（勿入库）。KMS 证书 SAN 由 key-broker 自测 CVM 内网 IP（见步骤 9），
+# vendor 不必知道客户的 KMS 地址,这里也无需任何 KMS 地址相关配置。
 cat > .env.authority <<EOF
 AUTHORITY_SIGNING_KEY=$(openssl rand -hex 32)     # Ed25519 种子，落盘持久化 → 公钥稳定
 AUTHORITY_NONCE_SECRET=$(openssl rand -hex 32)    # 无状态 challenge nonce 的 HMAC 密钥
@@ -349,7 +349,7 @@ scripts/provision-kms.sh        # = kms_ctl.py attest
 
 > **KMS 身份白名单**（释放根密钥前的三项稳定校验，刻意不用 `mr_aggregated`——GCP PCR0 每实例都变）：①`os_image_hash` ∈ os-images；②`key_provider==tpm`；③`compose_hash` ∈ `allowed_kms_compose_hashes`。这三项跨重部署稳定。
 >
-> **install 时 key-broker 自测 KMS rpc 证书 SAN**：取 CVM 自身内网 IP（连 `169.254.169.254` 的 UDP socket 的 `local_addr`）当 SAN → 自动 == operator 的 `kms_urls`。authority **不需要**知道这个 IP。前面挂 DNS/LB 的少数场景：`kms_ctl.py attest --kms-domain <name>` 覆盖。
+> **install 时 key-broker 自测 KMS rpc 证书 SAN**：取 CVM 自身内网 IP（连 `169.254.169.254` 的 UDP socket 的 `local_addr`）当 SAN → 自动 == operator 的 `kms_urls`，authority 与两侧都无需配置 KMS 地址。
 >
 > install 后 key-broker 写 `/kms/_ready`，KMS 容器的等待循环自动 `exec dstack-kms`——**无需 SSH 重启**。
 
