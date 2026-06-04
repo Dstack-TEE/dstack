@@ -13,19 +13,31 @@
 ## 总览：三个角色与信任模型
 
 ```
-┌──────────────┐  【厂商主机，有公网】
-│  Authority   │  docker-compose（authority + dstack-verifier）
-│  + Verifier  │  离线签发 AuthBundle、HPKE 封装根密钥、校验 KMS 远程证明
-└──────┬───────┘
-       │ courier（CLI 中继，经 IAP 隧道；KMS 无需公网）
-┌──────┴───────┐  【客户 GCP，TDX+vTPM 机密虚机，静态内网 IP】
-│   KMS CVM    │  dstack-kms + key-broker：拿到根 → 派生各 app 密钥、租出镜像私钥环
-└──────┬───────┘
-       │ mTLS（VPC 内网）
-┌──────┴───────┐  【客户 GCP，TDX+vTPM 机密虚机】
-│   业务 CVM    │  launcher：取镜像私钥 → JWE 解密 ocicrypt 加密镜像 → 运行业务容器
-└──────────────┘
+         ┌──────────────┐      【厂商主机 · 有公网】
+         │  Authority   │      签发 AuthBundle、HPKE 封装根密钥、校验 KMS 远程证明
+         │  + Verifier  │
+         └──────┬───────┘
+                │  HTTPS：challenge / provision
+                ▼
+ ╔══════════════════════════════════════╗   【Operator 跳板机 · 不可信中继】
+ ║  ◆◆◆   C O U R I E R   (CLI)   ◆◆◆    ║   kms_ctl.py —— 在「厂商 Authority」与
+ ║                                        ║   「in-VPC key-broker」之间搬运**封装好的
+ ║  challenge → init → provision → install║   blob**(sealed root / 签名 AuthBundle /
+ ║                                        ║   quote);自己看不到任何明文,KMS 无需公网
+ ╚══════════════════╤═════════════════════╝
+                │  经 IAP 隧道(KMS 无公网入站)
+                ▼
+         ┌──────────────┐      【客户 GCP · TDX+vTPM 机密虚机 · 静态内网 IP】
+         │   KMS CVM    │      dstack-kms + key-broker:拿到根 → 派生各 app 密钥、租出镜像私钥环
+         └──────┬───────┘
+                │  mTLS(VPC 内网)
+                ▼
+         ┌──────────────┐      【客户 GCP · TDX+vTPM 机密虚机】
+         │   业务 CVM    │      launcher:取镜像私钥 → JWE 解密 ocicrypt 加密镜像 → 运行业务容器
+         └──────────────┘
 ```
+
+> **Courier(CLI,`kms_ctl.py`)是整套设计的关键、且刻意「不可信」**:它横跨厂商与客户两个信任域做中继,让 KMS **无需任何公网入站**也能完成 provision。它只转发**密码学封装**的数据——根密钥被 HPKE 封到 KMS 的已证明传输公钥、AuthBundle 由厂商 Ed25519 签名、quote 由 verifier 校验——所以即便 courier(或运行它的 operator 机器)被攻陷,也拿不到根密钥明文、伪造不了授权。
 
 **核心原理**：业务镜像被**层加密**（ocicrypt 原生 JWE，非对称 EC P-256——加密只用公钥）。解密所需**私钥**只在通过远程证明后、由 KMS 在 TEE 内租给 launcher。厂商通过 Authority 控制"哪台机器、跑哪个镜像"才拿得到私钥——客户的 GCP 管理员、GCP 本身都拿不到明文镜像和根密钥。镜像私钥是**全局**的（一份加密镜像发所有租户）；各租户的 app/disk 密钥由**各自独立的根**派生，跨租户隔离。
 
