@@ -10,6 +10,7 @@ over Private Google Access, with egress hard-limited by a Secure Web Proxy.
 | Path | What |
 |------|------|
 | `QUICKSTART.md` / `QUICKSTART_CN.md` | **start here** — deploy in a handful of commands via the orchestration scripts |
+| `PROTOCOL.md` / `PROTOCOL_CN.md` | **protocol at a glance** — every message + what's verified at each hop (EN / 中文) |
 | `DEPLOYMENT_GUIDE.md` / `DEPLOYMENT_GUIDE_CN.md` | step-by-step guide — what each step does (EN / 中文) |
 | `DEPLOYMENT.md` | architecture + security status (English) |
 | `design.md` | design rationale / history |
