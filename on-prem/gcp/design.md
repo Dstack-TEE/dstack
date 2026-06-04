@@ -7,7 +7,7 @@
 > 一份加密镜像所有租户可解;③ 不再按镜像注册 CEK,轮换=mint 新 kid;④ 删除了自定义 keyprovider,
 > launcher 把租来的私钥喂给 `skopeo --decryption-key`,ocicrypt try-each 匹配 recipient。
 > per-user 隔离仅保留在 `root_material`(派生各租户 app/disk 密钥)。下文 CEK/allowed_images 段落
-> 保留为设计沿革;操作以 `部署向导.md`/`DEPLOYMENT.md` 为准。
+> 保留为设计沿革;操作以 `DEPLOYMENT_GUIDE_CN.md`/`DEPLOYMENT.md` 为准。
 
 > 状态：Draft v4 · 2026-06-01
 > 范围：在客户无公网访问的 GCP VPC 内部署 dstack KMS 与 workload，由厂商（我们）通过密码学手段掌控授权数据（代码白名单、实例数量、时效），运维操作经一个 CLI 作为离线桥接完成。

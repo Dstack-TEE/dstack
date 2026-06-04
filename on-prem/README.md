@@ -53,7 +53,7 @@ material, not the image keyring.
 
 Core services are cloud-neutral; the runnable deployment is currently GCP:
 
-- **GCP**: see [`gcp/部署向导.md`](gcp/部署向导.md) (step-by-step, 中文) and
+- **GCP**: see [`gcp/DEPLOYMENT_GUIDE_CN.md`](gcp/DEPLOYMENT_GUIDE_CN.md) (step-by-step, 中文) and
   [`gcp/DEPLOYMENT.md`](gcp/DEPLOYMENT.md) (architecture + security status).
 - The vendor-host authority runs anywhere: `docker compose --env-file .env.authority
   -f docker-compose.authority.yml up -d` (see `.env.authority.example`).

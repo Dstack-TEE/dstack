@@ -9,7 +9,7 @@ over Private Google Access, with egress hard-limited by a Secure Web Proxy.
 
 | Path | What |
 |------|------|
-| `部署向导.md` | step-by-step deploy guide (中文) — start here |
+| `DEPLOYMENT_GUIDE_CN.md` | step-by-step deploy guide (中文) — start here |
 | `DEPLOYMENT.md` | architecture + security status (English) |
 | `design.md` | design rationale / history |
 | `scripts/` | deploy + provision toolkit (gcloud / IAP / Artifact Registry / SWP) |
@@ -31,4 +31,4 @@ over Private Google Access, with egress hard-limited by a Secure Web Proxy.
 
 Prereqs: `gcloud` authenticated, an Artifact Registry repo + GCS bucket, and the
 dstack OS image. Copy `scripts/config.env.example` → `scripts/config.env` and the
-`.env*.example` templates, then follow `部署向导.md`.
+`.env*.example` templates, then follow `DEPLOYMENT_GUIDE_CN.md`.

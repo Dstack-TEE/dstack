@@ -358,7 +358,7 @@ is **global**; per-tenant isolation is in `root_material`.
 - ✅ **Workload launcher E2E**: lease acquired → global key**ring** (private keys)
   released over mTLS → image pulled by digest → `skopeo --decryption-key` JWE
   decrypt → `docker load` → workload runs and serves — all on a no-internet CVM.
-- ✅ **No SSH in production** (see 部署向导.md §6): prelaunch installs `sshd` only
+- ✅ **No SSH in production** (see DEPLOYMENT_GUIDE_CN.md §6): prelaunch installs `sshd` only
   when deployed with instance metadata `dev-ssh=1`; `DEPLOY_MODE=prod` omits it.
   All CLI↔KMS/app interaction is HTTP: provisioning (`/courier/*`), KMS auth
   webhook (`/bootAuth/{kms,app}`), readiness (`/healthz`,`/version`), the image

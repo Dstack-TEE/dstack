@@ -115,7 +115,7 @@ customers.
 4. **`allowed_envs`** — ensure the parameterization vars are permitted to reach the
    compose if dstack constrains env via `allowed_envs`. (These are non-secret
    path/IP vars, not the encrypted env.)
-5. **Docs**: update `部署向导.md` §3/§4 and `DEPLOYMENT.md` to show the
+5. **Docs**: update `DEPLOYMENT_GUIDE_CN.md` §3/§4 and `DEPLOYMENT.md` to show the
    parameterized compose + that `compose_hash` is now customer-independent and
    pre-registered by the vendor.
 
