@@ -1,0 +1,2863 @@
+#!/usr/bin/env python3
+
+# SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+"""
+dstack-cloud: Multi-cloud VM lifecycle management tool
+
+A production-grade CLI for managing dstack VMs on various cloud platforms.
+Supports local configuration files similar to git's working model.
+
+Usage:
+    dstack-cloud new <name>              # Create a new project
+    dstack-cloud config-edit             # Edit global configuration
+    dstack-cloud prepare                 # Generate shared files
+    dstack-cloud deploy                  # Deploy VM to cloud
+    dstack-cloud status                  # Check deployment status
+    dstack-cloud logs [--follow]         # View serial console logs
+    dstack-cloud stop                    # Stop the VM
+    dstack-cloud start                   # Start a stopped VM
+    dstack-cloud remove                  # Remove the VM and cleanup
+    dstack-cloud list                    # List all deployments
+    dstack-cloud fw allow <port>         # Allow traffic on a port
+    dstack-cloud fw deny <port>          # Block traffic on a port
+    dstack-cloud fw remove <port>        # Remove a firewall rule
+    dstack-cloud fw list                 # List firewall rules
+"""
+
+import argparse
+import hashlib
+import json
+import logging
+import os
+import subprocess
+import sys
+import tempfile
+import time
+from dataclasses import dataclass, field, asdict
+from datetime import datetime
+from pathlib import Path
+from typing import Optional, List, Dict, Any
+
+# Try to import cryptography libraries for env encryption
+CRYPTO_AVAILABLE = False
+ETH_CRYPTO_AVAILABLE = False
+try:
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    from cryptography.hazmat.primitives.asymmetric import x25519
+    from cryptography.hazmat.primitives import serialization
+    CRYPTO_AVAILABLE = True
+except Exception:
+    pass
+
+try:
+    from eth_keys import keys
+    from eth_utils import keccak
+    ETH_CRYPTO_AVAILABLE = True
+except Exception:
+    pass
+
+# Default whitelist file location
+DEFAULT_KMS_WHITELIST_PATH = os.path.expanduser("~/.config/dstack-cloud/kms-whitelist.json")
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+# Configuration file names
+APP_CONFIG_FILE = "app.json"
+STATE_FILE = "state.json"
+GLOBAL_CONFIG_PATH = os.path.expanduser("~/.config/dstack-cloud/config.json")
+DEFAULT_OS_IMAGE = "dstack-cloud-0.6.0"
+
+
+@dataclass
+class App:
+    """Application configuration."""
+    # App name
+    name: str = "myapp"
+
+    # OS image
+    os_image: str = DEFAULT_OS_IMAGE
+
+    # GCP cloud configuration
+    gcp_config: 'GcpConfig' = field(default_factory=lambda: GcpConfig())
+
+    # Docker compose file name (relative to project root)
+    docker_compose_file: str = "docker-compose.yaml"
+
+    # Prelaunch script name (relative to project root)
+    prelaunch_script: str = "prelaunch.sh"
+
+    # Environment file name (relative to project root)
+    env_file: str = ".env"
+
+    # Instance identity
+    instance_id_seed: str = ""
+    app_id: str = ""
+
+    # Gateway settings
+    gateway_enabled: bool = True
+    public_logs: bool = True
+    public_sysinfo: bool = True
+    public_tcbinfo: bool = True
+
+    # KMS settings
+    key_provider: str = "kms"
+
+    # Storage
+    storage_fs: str = "ext4"
+
+    # Instance settings
+    no_instance_id: bool = False
+    secure_time: bool = False
+
+    # Allowed environments
+    allowed_envs: List[str] = field(default_factory=list)
+    key_provider_id: str = ""
+
+    def to_dict(self) -> Dict[str, Any]:
+        data = asdict(self)
+        # Convert GcpConfig to dict
+        if isinstance(data.get("gcp_config"), GcpConfig):
+            data["gcp_config"] = data["gcp_config"].to_dict()
+        return data
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'App':
+        known_fields = {f.name for f in cls.__dataclass_fields__.values()}
+        filtered = {k: v for k, v in data.items() if k in known_fields}
+
+        # Convert gcp_config dict to GcpConfig object
+        if "gcp_config" in filtered and isinstance(filtered["gcp_config"], dict):
+            filtered["gcp_config"] = GcpConfig.from_dict(filtered["gcp_config"])
+
+        return cls(**filtered)
+
+    @classmethod
+    def get_template(cls) -> Dict[str, Any]:
+        """Get default template for new projects."""
+        import secrets
+
+        # Generate random instance_id_seed (40 hex chars)
+        instance_id_seed = secrets.token_hex(20)
+
+        # Generate random app_id (40 hex chars)
+        app_id = secrets.token_hex(20)
+
+        return {
+            "name": "myapp",
+            "os_image": DEFAULT_OS_IMAGE,
+            "gcp_config": GcpConfig.get_template(),
+            "instance_id_seed": instance_id_seed,
+            "app_id": app_id,
+            "docker_compose_file": "docker-compose.yaml",
+            "prelaunch_script": "prelaunch.sh",
+            "env_file": ".env",
+            "gateway_enabled": True,
+            "public_logs": True,
+            "public_sysinfo": True,
+            "public_tcbinfo": True,
+            "key_provider": "kms",
+            "storage_fs": "ext4",
+            "no_instance_id": False,
+            "secure_time": False,
+            "allowed_envs": [],
+            "key_provider_id": ""
+        }
+
+
+@dataclass
+class GcpConfig:
+    """GCP deployment configuration."""
+    # Required settings
+    project: str = ""
+    zone: str = "us-central1-a"
+
+    # Instance settings
+    instance_name: str = ""  # Required, no default
+    machine_type: str = "c3-standard-4"
+
+    # Boot image settings
+    boot_image: str = ""  # GCP image name (auto-derived from app.os_image if empty)
+    boot_image_tar: str = ""  # Explicit tar file path (overrides search)
+
+    # Data disk settings
+    data_image: str = "dstack-data-disk"
+    data_size: int = 20
+
+    # Storage settings
+    bucket: str = ""
+
+    # Network settings
+    network: str = "default"
+    subnet: str = ""
+
+    # Identity settings
+    service_account: str = ""
+    scopes: List[str] = field(default_factory=list)
+
+    # Tags and labels
+    tags: List[str] = field(default_factory=list)
+    labels: Dict[str, str] = field(default_factory=dict)
+
+    # Scheduling: provisioning model. "STANDARD" (default) or "SPOT".
+    # SPOT instances are required on projects without on-demand
+    # NVIDIA_H100_GPUS quota (most projects, as of 2026); GCP
+    # preempts them with ~30s notice and a max ~24h lifetime, but
+    # they're billed at a steep discount.
+    provisioning_model: str = "STANDARD"
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'GcpConfig':
+        known_fields = {f.name for f in cls.__dataclass_fields__.values()}
+        filtered = {k: v for k, v in data.items() if k in known_fields}
+        return cls(**filtered)
+
+    @classmethod
+    def get_template(cls) -> Dict[str, Any]:
+        """Get default template for new projects."""
+        return {
+            "project": "",
+            "zone": "us-central1-a",
+            "instance_name": "dstack-vm",
+            "machine_type": "c3-standard-4",
+            "boot_image": "",
+            "boot_image_tar": "",
+            "data_image": "dstack-data-disk",
+            "data_size": 20,
+            "bucket": "",
+            "network": "default",
+            "subnet": "",
+            "service_account": "",
+            "scopes": [],
+            "tags": [],
+            "labels": {},
+            "provisioning_model": "STANDARD"
+        }
+
+
+@dataclass
+class DeploymentState:
+    """Deployment state tracking."""
+    instance_name: str = ""
+    project: str = ""
+    zone: str = ""
+    external_ip: str = ""
+    internal_ip: str = ""
+    status: str = ""  # RUNNING, STOPPED, TERMINATED, etc.
+    created_at: str = ""
+    updated_at: str = ""
+    boot_image: str = ""
+    data_image: str = ""
+    shared_image: str = ""
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'DeploymentState':
+        known_fields = {f.name for f in cls.__dataclass_fields__.values()}
+        filtered = {k: v for k, v in data.items() if k in known_fields}
+        return cls(**filtered)
+
+
+class CloudDeploymentManager:
+    """Manages multi-cloud VM deployments."""
+
+    def __init__(self, work_dir: Optional[str] = None):
+        self.work_dir = Path(work_dir) if work_dir else Path.cwd()
+
+    def _load_global_config(self) -> Dict[str, Any]:
+        """Load global configuration."""
+        if os.path.exists(GLOBAL_CONFIG_PATH):
+            with open(GLOBAL_CONFIG_PATH, 'r') as f:
+                return json.load(f)
+        return {}
+
+    def _save_global_config(self, config: Dict[str, Any]) -> None:
+        """Save global configuration."""
+        os.makedirs(os.path.dirname(GLOBAL_CONFIG_PATH), exist_ok=True)
+        with open(GLOBAL_CONFIG_PATH, 'w') as f:
+            json.dump(config, f, indent=2)
+
+    def _get_shared_dir(self) -> Path:
+        """Get the shared directory path (at project root)."""
+        return self.work_dir / "shared"
+
+    def load_gcp_config(self) -> 'GcpConfig':
+        """Load GCP configuration from app.gcp_config."""
+        # Load app config which contains gcp_config
+        app = self.load_app_config()
+
+        # Get local gcp_config from app
+        local_gcp = app.gcp_config.to_dict()
+
+        # Merge global config with local config
+        global_config = self._load_global_config()
+        global_gcp = global_config.get("gcp", {})
+
+        # Global config is used as fallback for empty values in local config
+        merged = {**global_gcp}  # Start with global config
+        for key, value in local_gcp.items():
+            # Only override with local value if it's non-empty
+            if value or value is False or value == 0:
+                merged[key] = value
+        return GcpConfig.from_dict(merged)
+
+    def save_gcp_config(self, config: GcpConfig) -> None:
+        """Save GCP configuration to app.gcp_config."""
+        # Load the full app config
+        app = self.load_app_config()
+
+        # Update gcp_config
+        app.gcp_config = config
+
+        # Save the updated app config
+        self.save_app_config(app)
+
+    def load_app_config(self, required: bool = False) -> App:
+        """Load application configuration.
+
+        Args:
+            required: If True, raise error when app.json doesn't exist
+        """
+        app_config_path = self.work_dir / APP_CONFIG_FILE
+
+        if not app_config_path.exists():
+            if required:
+                raise FileNotFoundError(
+                    f"No {APP_CONFIG_FILE} found in {self.work_dir}. "
+                    f"Run 'dstack-cloud new <name>' to create a project."
+                )
+            # Return default config if file doesn't exist
+            return App()
+
+        with open(app_config_path, 'r') as f:
+            return App.from_dict(json.load(f))
+
+    def save_app_config(self, app: App) -> None:
+        """Save application configuration."""
+        app_config_path = self.work_dir / APP_CONFIG_FILE
+        with open(app_config_path, 'w') as f:
+            json.dump(app.to_dict(), f, indent=2)
+
+    def _generate_app_compose(self, app: App, env_names: Optional[List[str]] = None) -> Dict[str, Any]:
+        """Generate app-compose.json content from App configuration."""
+        # Read docker-compose.yaml content
+        docker_compose_path = self.work_dir / app.docker_compose_file
+        if not docker_compose_path.exists():
+            docker_compose_content = ""
+        else:
+            with open(docker_compose_path, 'r') as f:
+                docker_compose_content = f.read()
+
+        # Read prelaunch script content
+        prelaunch_path = self.work_dir / app.prelaunch_script
+        if not prelaunch_path.exists():
+            prelaunch_content = ""
+        else:
+            with open(prelaunch_path, 'r') as f:
+                prelaunch_content = f.read()
+
+        # Merge app.allowed_envs with env_names from .env file
+        allowed_envs = list(app.allowed_envs) if app.allowed_envs else []
+        if env_names:
+            allowed_envs.extend(env_names)
+            # Remove duplicates
+            allowed_envs = list(set(allowed_envs))
+
+        return {
+            "manifest_version": 2,
+            "name": app.name,
+            "runner": "docker-compose",
+            "docker_compose_file": docker_compose_content,
+            "gateway_enabled": app.gateway_enabled,
+            "public_logs": app.public_logs,
+            "public_sysinfo": app.public_sysinfo,
+            "public_tcbinfo": app.public_tcbinfo,
+            "key_provider_id": app.key_provider_id,
+            "allowed_envs": allowed_envs,
+            "no_instance_id": app.no_instance_id,
+            "secure_time": app.secure_time,
+            "key_provider": app.key_provider,
+            "storage_fs": app.storage_fs,
+            "pre_launch_script": prelaunch_content
+        }
+
+    def _generate_sys_config(self, global_config: Dict[str, Any],
+                             gcp_config: GcpConfig, app: App) -> Dict[str, Any]:
+        """Generate .sys-config.json content."""
+        # Get services section from global config
+        services = global_config.get("services", {})
+
+        # Get KMS URLs from global config
+        kms_urls = services.get("kms_urls", [])
+        if not kms_urls:
+            kms_urls = ["https://kms.tdxlab.dstack.org:12001"]
+
+        # Get gateway URLs from global config
+        gateway_urls = services.get("gateway_urls", [])
+        if not gateway_urls:
+            gateway_urls = ["https://gateway.tdxlab.dstack.org:12002"]
+
+        # Get other settings
+        pccs_url = services.get("pccs_url", "")
+
+        # Read OS image hash from the local image directory
+        os_image_hash = ""
+        try:
+            # Find the image directory and read hash file
+            search_paths = global_config.get("image_search_paths", [])
+            local_image = gcp_config.boot_image if gcp_config.boot_image else ""
+            if not local_image:
+                # Use app.os_image if boot_image is not set
+                local_image = app.os_image
+
+            for search_path in search_paths:
+                search_path = os.path.expanduser(search_path)
+                if not os.path.isabs(search_path):
+                    search_path = os.path.join(self.work_dir, search_path)
+
+                hash_file = Path(search_path) / local_image / "auth_hash.txt"
+                if hash_file.exists():
+                    with open(hash_file, 'r') as f:
+                        os_image_hash = f.read().strip()
+                    logger.info(f"Read OS image hash from {hash_file}")
+                    break
+        except Exception as e:
+            logger.warning(f"Could not read OS image hash: {e}")
+
+        # Build vm_config
+        vm_config = {
+            "spec_version": 2,
+            "os_image_hash": os_image_hash
+        }
+
+        return {
+            "kms_urls": kms_urls,
+            "gateway_urls": gateway_urls,
+            "pccs_url": pccs_url,
+            "vm_config": json.dumps(vm_config)
+        }
+
+    def load_state(self) -> Optional[DeploymentState]:
+        """Load deployment state."""
+        state_path = self.work_dir / STATE_FILE
+
+        if not state_path.exists():
+            return None
+
+        with open(state_path, 'r') as f:
+            return DeploymentState.from_dict(json.load(f))
+
+    def save_state(self, state: DeploymentState) -> None:
+        """Save deployment state."""
+        state_path = self.work_dir / STATE_FILE
+        state.updated_at = datetime.now().isoformat()
+        with open(state_path, 'w') as f:
+            json.dump(state.to_dict(), f, indent=2)
+
+    def _run_gcloud(self, args: List[str], capture: bool = True,
+                    check: bool = True) -> subprocess.CompletedProcess:
+        """Run a gcloud command."""
+        cmd = ["gcloud"] + args
+        logger.debug(f"Running: {' '.join(cmd)}")
+
+        if capture:
+            result = subprocess.run(cmd, capture_output=True, text=True)
+        else:
+            result = subprocess.run(cmd)
+
+        if check and result.returncode != 0:
+            error_msg = result.stderr if capture else "Command failed"
+            raise RuntimeError(f"gcloud command failed: {error_msg}")
+
+        return result
+
+    def _run_gsutil(self, args: List[str], check: bool = True) -> subprocess.CompletedProcess:
+        """Run a gsutil command."""
+        cmd = ["gsutil"] + args
+        logger.debug(f"Running: {' '.join(cmd)}")
+        result = subprocess.run(cmd, capture_output=True, text=True)
+
+        if check and result.returncode != 0:
+            raise RuntimeError(f"gsutil command failed: {result.stderr}")
+
+        return result
+
+    def _ensure_data_disk_image(self, config: GcpConfig) -> str:
+        """Ensure the data disk image exists, creating it if necessary.
+
+        Creates a minimal disk image with GPT partition table and a partition
+        labeled 'dstack-data' so the guest can discover it.
+
+        Returns the image name to use.
+        """
+        image_name = config.data_image
+
+        # Check if image already exists
+        result = self._run_gcloud([
+            "compute", "images", "describe", image_name,
+            f"--project={config.project}"
+        ], check=False)
+
+        if result.returncode == 0:
+            logger.debug(f"Data disk image '{image_name}' already exists")
+            return image_name
+
+        logger.info(f"Data disk image '{image_name}' not found, creating...")
+
+        # Create a minimal raw disk image with GPT partition table
+        with tempfile.TemporaryDirectory() as tmpdir:
+            raw_file = os.path.join(tmpdir, "disk.raw")
+
+            # Create a 10MB sparse file (enough for GPT)
+            disk_size_bytes = 10 * 1024 * 1024
+            with open(raw_file, 'wb') as f:
+                f.truncate(disk_size_bytes)
+
+            # Create GPT partition table with dstack-data partition using sgdisk
+            # -o: clear and create new GPT
+            # -n 1:0:0: create partition 1, start at first available, end at last available
+            # -c 1:dstack-data: set partition 1 name (PARTLABEL) to dstack-data
+            result = subprocess.run(
+                ["sgdisk", "-o", "-n", "1:0:0", "-c", "1:dstack-data", raw_file],
+                capture_output=True, text=True
+            )
+            if result.returncode != 0:
+                raise RuntimeError(f"Failed to create GPT partition table: {result.stderr}")
+
+            logger.debug("Created GPT partition table with dstack-data label")
+
+            # Compress to tar.gz for upload
+            tar_file = os.path.join(tmpdir, "disk.tar.gz")
+            result = subprocess.run(
+                ["tar", "-czf", tar_file, "-C", tmpdir, "disk.raw"],
+                capture_output=True, text=True
+            )
+            if result.returncode != 0:
+                raise RuntimeError(f"Failed to create tar.gz: {result.stderr}")
+
+            # Upload to GCS
+            gcs_path = f"{config.bucket}/{image_name}.tar.gz"
+            logger.info(f"Uploading data disk image to {gcs_path}...")
+            self._run_gsutil(["cp", tar_file, gcs_path])
+
+            # Create GCP image from the uploaded file
+            logger.info(f"Creating GCP image '{image_name}'...")
+            self._run_gcloud([
+                "compute", "images", "create", image_name,
+                f"--project={config.project}",
+                f"--source-uri={gcs_path}",
+                "--guest-os-features=GVNIC"
+            ])
+
+            # Clean up GCS file
+            self._run_gsutil(["rm", gcs_path], check=False)
+
+            logger.info(f"Created data disk image '{image_name}'")
+
+        return image_name
+
+    def new(
+        self,
+        name: str,
+        os_image: Optional[str] = None,
+        app_id: Optional[str] = None,
+        gateway_enabled: Optional[bool] = None,
+        key_provider: Optional[str] = None,
+        storage_fs: Optional[str] = None,
+        secure_time: Optional[bool] = None,
+        no_instance_id: Optional[bool] = None,
+        project: Optional[str] = None,
+        zone: Optional[str] = None,
+        instance_name: Optional[str] = None,
+        machine_type: Optional[str] = None,
+        data_size: Optional[int] = None
+    ) -> None:
+        """Create a new project directory with template configuration."""
+        project_dir = Path.cwd() / name
+        if project_dir.exists():
+            raise FileExistsError(f"Directory '{name}' already exists.")
+
+        # Create project directory
+        project_dir.mkdir()
+
+        # Update work_dir to the new project directory
+        self.work_dir = project_dir
+
+        if not instance_name:
+            instance_name = f"dstack-{name}"
+
+        # Initialize the project (non-interactive by default for new command)
+        self._init_project(
+            force=False,
+            interactive=False,
+            app_name=name,
+            os_image=os_image,
+            app_id=app_id,
+            gateway_enabled=gateway_enabled,
+            key_provider=key_provider,
+            storage_fs=storage_fs,
+            secure_time=secure_time,
+            no_instance_id=no_instance_id,
+            project=project,
+            zone=zone,
+            instance_name=instance_name,
+            machine_type=machine_type,
+            data_size=data_size
+        )
+
+        logger.info(f"Created new project: {name}")
+        logger.info(f"Project directory: {project_dir}")
+        logger.info("")
+
+    def _init_project(
+        self,
+        force: bool = False,
+        interactive: bool = True,
+        app_name: Optional[str] = None,
+        os_image: Optional[str] = None,
+        app_id: Optional[str] = None,
+        gateway_enabled: Optional[bool] = None,
+        key_provider: Optional[str] = None,
+        storage_fs: Optional[str] = None,
+        secure_time: Optional[bool] = None,
+        no_instance_id: Optional[bool] = None,
+        project: Optional[str] = None,
+        zone: Optional[str] = None,
+        instance_name: Optional[str] = None,
+        machine_type: Optional[str] = None,
+        data_size: Optional[int] = None
+    ) -> None:
+        """Initialize project configuration."""
+        # Interactive prompts for required fields (only if not provided via CLI)
+        instance_name_cli = instance_name
+
+        if interactive:
+            print(f"\n=== dstack-cloud Project Initialization ===\n")
+
+            # Prompt for app name if not provided
+            if app_name is None:
+                while True:
+                    app_name = input("App name [myapp]: ").strip()
+                    if not app_name:
+                        app_name = "myapp"
+                    if app_name:
+                        break
+                    print("App name cannot be empty.")
+
+            # Prompt for instance name (required)
+            if not instance_name_cli:
+                while True:
+                    instance_name = input("GCP instance name: ").strip()
+                    if instance_name:
+                        break
+                    print("Instance name is required.")
+            else:
+                instance_name = instance_name_cli
+
+            print("")  # Empty line for readability
+        else:
+            # Non-interactive mode: use CLI provided values or fail
+            if app_name is None:
+                app_name = "myapp"
+            if not instance_name_cli:
+                raise ValueError("instance_name is required. Use --instance-name to specify it.")
+            instance_name = instance_name_cli
+
+        # Create shared directory at project root (for system-generated files)
+        shared_dir = self.work_dir / "shared"
+        shared_dir.mkdir(parents=True, exist_ok=True)
+
+        # Generate app config template with embedded gcp_config
+        app_template = App.get_template()
+
+        # Apply CLI-provided values (only if specified)
+        if app_name:
+            app_template["name"] = app_name
+        if os_image:
+            app_template["os_image"] = os_image
+        if app_id:
+            # Validate app_id format (40 hex chars)
+            if len(app_id) != 40 or not all(c in '0123456789abcdef' for c in app_id.lower()):
+                raise ValueError("app_id must be exactly 40 hexadecimal characters")
+            app_template["app_id"] = app_id
+        if gateway_enabled is not None:
+            app_template["gateway_enabled"] = gateway_enabled
+        if key_provider is not None:
+            app_template["key_provider"] = key_provider
+
+        # Auto-disable gateway when key_provider is not "kms"
+        if app_template["key_provider"] != "kms":
+            app_template["gateway_enabled"] = False
+            # Also set no_instance_id=True when KMS is not available
+            app_template["no_instance_id"] = True
+            # Remove env_file since .env is only supported in KMS mode
+            app_template.pop("env_file", None)
+        if storage_fs is not None:
+            app_template["storage_fs"] = storage_fs
+        if secure_time is not None:
+            app_template["secure_time"] = secure_time
+        if no_instance_id is not None:
+            app_template["no_instance_id"] = no_instance_id
+
+        # Apply GCP config values
+        if instance_name:
+            app_template["gcp_config"]["instance_name"] = instance_name
+        if project:
+            app_template["gcp_config"]["project"] = project
+        if zone:
+            app_template["gcp_config"]["zone"] = zone
+        if machine_type:
+            app_template["gcp_config"]["machine_type"] = machine_type
+        if data_size is not None:
+            app_template["gcp_config"]["data_size"] = data_size
+
+        # Create app.json at project root (not in .dstack/)
+        app_config_path = self.work_dir / APP_CONFIG_FILE
+        if not app_config_path.exists() or force:
+            with open(app_config_path, 'w') as f:
+                json.dump(app_template, f, indent=2)
+
+        # Note: app-compose.json and .sys-config.json will be generated during deploy
+
+        # Create docker-compose.yaml template at project root
+        docker_compose = self.work_dir / "docker-compose.yaml"
+        if not docker_compose.exists() or force:
+            with open(docker_compose, 'w') as f:
+                f.write("services:\n")
+                f.write("  nginx:\n")
+                f.write("    image: nginx:alpine\n")
+                f.write("    ports:\n")
+                f.write("      - \"80:80\"\n")
+                f.write("    restart: unless-stopped\n")
+
+        # Create prelaunch.sh template at project root
+        prelaunch = self.work_dir / "prelaunch.sh"
+        if not prelaunch.exists() or force:
+            with open(prelaunch, 'w') as f:
+                f.write("#!/bin/sh\n")
+                f.write("# Prelaunch script - runs before starting containers\n")
+            os.chmod(prelaunch, 0o755)
+
+        # Create .env template at project root (only for KMS mode)
+        if app_template["key_provider"] == "kms":
+            env_file = self.work_dir / ".env"
+            if not env_file.exists() or force:
+                with open(env_file, 'w') as f:
+                    f.write("# Environment variables\n")
+
+        # Create user-config template at project root
+        user_config = self.work_dir / ".user-config"
+        if not user_config.exists() or force:
+            with open(user_config, 'w') as f:
+                json.dump({}, f, indent=2)
+
+        logger.info(f"Initialized project in {self.work_dir}")
+        logger.info("")
+        if interactive:
+            logger.info("Configuration:")
+            logger.info(f"  App name: {app_name}")
+            logger.info(f"  Instance name: {instance_name}")
+            logger.info("")
+        logger.info("Created files:")
+        logger.info(f"  {app_config_path.name} - Application configuration (with embedded GCP config)")
+        logger.info(f"  shared/ - System-generated files")
+        logger.info(f"  {docker_compose.name} - Docker compose file")
+        logger.info(f"  {prelaunch.name} - Prelaunch script")
+        if app_template["key_provider"] == "kms":
+            logger.info(f"  .env - Environment variables")
+        logger.info(f"  .user-config - User configuration")
+        logger.info("")
+        logger.info("Edit the configuration files to customize your deployment.")
+
+    def config_edit(self) -> None:
+        """Edit global configuration with $EDITOR."""
+        # Create global config if it doesn't exist
+        global_config_dir = os.path.dirname(GLOBAL_CONFIG_PATH)
+        os.makedirs(global_config_dir, exist_ok=True)
+
+        if not os.path.exists(GLOBAL_CONFIG_PATH):
+            # Create template with organized sections and comments
+            template = {
+                "_comment_services": "Service endpoints configuration",
+                "services": {
+                    "kms_urls": ["https://kms.tdxlab.dstack.org:12001"],
+                    "gateway_urls": ["https://gateway.tdxlab.dstack.org:12002"],
+                    "pccs_url": "",
+                },
+                "_comment_images": "System image search paths (for boot_image_tar auto-discovery)",
+                "image_search_paths": [
+                    "~/.dstack/images"
+                ],
+                "_comment_gcp": "GCP cloud platform defaults",
+                "gcp": {
+                    "project": "",
+                    "zone": "us-central1-a",
+                    "bucket": ""
+                }
+            }
+            with open(GLOBAL_CONFIG_PATH, 'w') as f:
+                json.dump(template, f, indent=2, ensure_ascii=False)
+                f.write("\n")  # Add trailing newline
+
+        # Get editor
+        editor = os.environ.get('EDITOR', 'vi')
+
+        # Open editor
+        logger.info(f"Opening {GLOBAL_CONFIG_PATH} with {editor}...")
+        subprocess.run([editor, GLOBAL_CONFIG_PATH])
+
+    def prepare(self) -> None:
+        """Generate all files in shared directory."""
+        import secrets
+
+        # Load app config (required)
+        app = self.load_app_config(required=True)
+
+        # Ensure instance_id_seed and app_id exist
+        if not app.instance_id_seed:
+            app.instance_id_seed = secrets.token_hex(20)
+            logger.info(f"Generated instance_id_seed: {app.instance_id_seed}")
+
+        if not app.app_id:
+            app.app_id = secrets.token_hex(20)
+            logger.info(f"Generated app_id: {app.app_id}")
+
+        # Save updated app config
+        self.save_app_config(app)
+
+        # Get shared directory
+        shared_dir = self._get_shared_dir()
+        shared_dir.mkdir(parents=True, exist_ok=True)
+
+        # Generate .instance_info (instance_id will be generated in CVM)
+        instance_info = {
+            "instance_id_seed": app.instance_id_seed,
+            "app_id": app.app_id
+        }
+        instance_info_path = shared_dir / ".instance_info"
+        with open(instance_info_path, 'w') as f:
+            json.dump(instance_info, f, indent=2)
+        logger.info(f"Generated {instance_info_path}")
+
+        # Load GCP config for sys-config generation
+        try:
+            gcp_config = self.load_gcp_config()
+            global_config = self._load_global_config()
+
+            # Generate .sys-config.json
+            sys_config_content = self._generate_sys_config(global_config, gcp_config, app)
+            sys_config_path = shared_dir / ".sys-config.json"
+            with open(sys_config_path, 'w') as f:
+                json.dump(sys_config_content, f, indent=2)
+            logger.info(f"Generated {sys_config_path}")
+        except FileNotFoundError as e:
+            logger.warning(f"Could not generate .sys-config.json: {e}")
+
+        # Process .env file to collect env_names
+        env_path = self.work_dir / app.env_file
+        env_names = []
+        if env_path.exists():
+            envs = self._parse_env_file(env_path)
+            if envs:
+                env_names = list(envs.keys())
+                logger.info(f"Found {len(env_names)} environment variable(s) in {app.env_file}")
+            else:
+                logger.info(f"{app.env_file} is empty")
+
+        # Generate app-compose.json
+        app_compose_content = self._generate_app_compose(app, env_names=env_names if env_names else None)
+        app_compose_path = shared_dir / "app-compose.json"
+        with open(app_compose_path, 'w') as f:
+            json.dump(app_compose_content, f, indent=2)
+        logger.info(f"Generated {app_compose_path}")
+
+        logger.info("")
+        logger.info(f"Shared files generated in: {shared_dir}")
+        logger.info("These files will be included in the shared disk image during deploy.")
+
+    def _find_boot_image_tar(self, local_image: str) -> Optional[Path]:
+        """Search for boot image disk.raw file in configured search paths."""
+        global_config = self._load_global_config()
+        search_paths = global_config.get("image_search_paths", [])
+
+        logger.debug(f"Image search paths: {search_paths}")
+        logger.debug(f"Looking for image: {local_image}")
+
+        # Expand ~ and convert to Path objects
+        expanded_paths = []
+        for path in search_paths:
+            expanded = os.path.expanduser(path)
+            if not os.path.isabs(expanded):
+                expanded = os.path.join(self.work_dir, expanded)
+            expanded_paths.append(Path(expanded))
+
+        # Look for disk.raw in the image directory
+        patterns = [
+            f"{local_image}/disk.raw",
+        ]
+
+        for search_path in expanded_paths:
+            logger.debug(f"Checking search path: {search_path}, exists: {search_path.exists()}")
+            if not search_path.exists():
+                continue
+            for pattern in patterns:
+                file_path = search_path / pattern
+                logger.debug(f"Checking: {file_path}, exists: {file_path.exists()}")
+                if file_path.exists():
+                    logger.info(f"Found boot image: {file_path}")
+                    return file_path
+
+        return None
+
+    def pull(self, os_image: str) -> None:
+        """Download UKI image from remote repository or an absolute URL."""
+        global_config = self._load_global_config()
+        search_paths = global_config.get("image_search_paths", [])
+
+        if not search_paths:
+            logger.error("No image_search_paths configured in global config")
+            logger.error("Please set image_search_paths in: ~/.config/dstack-cloud/config.json")
+            return
+
+        # Use the first search path
+        target_dir = Path(os.path.expanduser(search_paths[0]))
+        target_dir.mkdir(parents=True, exist_ok=True)
+
+        # Check if os_image is an absolute URL
+        if os_image.startswith("http://") or os_image.startswith("https://"):
+            download_url = os_image
+            # Derive image name from URL filename
+            url_filename = download_url.rsplit("/", 1)[-1]
+            if url_filename.endswith("-uki.tar.gz"):
+                os_image = url_filename[:-len("-uki.tar.gz")]
+            elif url_filename.endswith(".tar.gz"):
+                os_image = url_filename[:-len(".tar.gz")]
+            else:
+                os_image = url_filename
+            download_tar = target_dir / url_filename
+        else:
+            # Extract version from os_image (e.g., dstack-cloud-nvidia-0.6.0 -> 0.6.0)
+            # Version is the last component after the last hyphen followed by digits
+            import re
+            version_match = re.search(r'-(\d+\.\d+\.\d+)$', os_image)
+            if not version_match:
+                logger.error(f"Could not extract version from image name: {os_image}")
+                logger.error("Expected format: dstack-cloud-<flavor>-<version> (e.g., dstack-cloud-nvidia-0.6.0)")
+                return
+            version = version_match.group(1)
+            download_url = f"https://github.com/Phala-Network/meta-dstack-cloud/releases/download/v{version}/{os_image}-uki.tar.gz"
+            download_tar = target_dir / f"{os_image}-uki.tar.gz"
+
+        if download_tar.exists():
+            logger.info(f"Download file already exists: {download_tar}")
+            response = input("Download again to overwrite? [y/N]: ").strip().lower()
+            if response != 'y':
+                logger.info("Download cancelled")
+                return
+
+        logger.info(f"Downloading {os_image} UKI image from {download_url}...")
+        logger.info(f"Target: {download_tar}")
+
+        try:
+            # Use curl to download with progress bar
+            subprocess.run(
+                ["curl", "-L", "-o", str(download_tar), download_url],
+                check=True
+            )
+            logger.info(f"Successfully downloaded to {download_tar}")
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Failed to download image: {e}")
+            # Clean up partial download
+            if download_tar.exists():
+                download_tar.unlink()
+            raise
+
+        # Extract the tar file
+        logger.info(f"Extracting {download_tar}...")
+        try:
+            subprocess.run(
+                ["tar", "-xzf", str(download_tar), "-C", str(target_dir)],
+                check=True
+            )
+            logger.info(f"Successfully extracted to {target_dir / os_image}")
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Failed to extract image: {e}")
+            raise
+
+        # Verify the expected structure
+        expected_dir = target_dir / os_image
+        expected_disk = expected_dir / "disk.raw"
+        if expected_disk.exists():
+            logger.info(f"Image ready: {expected_disk}")
+        else:
+            logger.warning(f"Expected file not found: {expected_disk}")
+            logger.warning(f"Downloaded structure may be incorrect")
+
+    def _check_and_upload_boot_image(self, config: GcpConfig, app: App, force: bool = False) -> str:
+        """Check and upload boot image if needed. Returns the image name."""
+        image_path = None
+
+        # Derive GCP image name from app.os_image
+        gcp_image = config.boot_image
+        if not gcp_image:
+            # Convert OS image name (dstack-cloud-nvidia-0.6.0 -> dstack-cloud-nvidia-0-6-0)
+            gcp_image = app.os_image.replace(".", "-")
+
+        # If boot_image_tar is specified, use it (legacy config name, can be disk.raw or tar.gz)
+        if config.boot_image_tar:
+            image_path = Path(os.path.expanduser(config.boot_image_tar))
+            if not image_path.exists():
+                logger.error("")
+                logger.error(f"Boot image not found: {image_path}")
+                logger.error("")
+                logger.error(f"Please download the image using:")
+                logger.error(f"  dstack-cloud pull {app.os_image}")
+                logger.error("")
+                raise FileNotFoundError(f"Boot image not found: {image_path}")
+        else:
+            # Auto-discover from search paths using OS image name
+            logger.info(f"Searching for boot image '{app.os_image}'...")
+            image_path = self._find_boot_image_tar(app.os_image)
+            if not image_path:
+                logger.error("")
+                logger.error(f"Boot image '{app.os_image}' not found locally.")
+                logger.error("")
+                logger.error(f"Please download the image using:")
+                logger.error(f"  dstack-cloud pull {app.os_image}")
+                logger.error("")
+                raise FileNotFoundError(
+                    f"Boot image '{app.os_image}' not found. "
+                    f"Run 'dstack-cloud pull {app.os_image}' to download it."
+                )
+
+        # Use gcp_image as the GCP image name
+        image_name = gcp_image
+        local_mtime = image_path.stat().st_mtime
+
+        # Check if GCP image exists and is up-to-date
+        result = self._run_gcloud([
+            "compute", "images", "describe", image_name,
+            f"--project={config.project}",
+            "--format=value(creationTimestamp)"
+        ], check=False)
+
+        need_upload = False
+        gcp_creation_time = result.stdout.strip() if result.returncode == 0 else ""
+
+        if force:
+            logger.info("Force enabled: will re-upload boot image")
+            need_upload = True
+        elif not gcp_creation_time:
+            logger.info(f"GCP image '{image_name}' does not exist, will upload")
+            need_upload = True
+        else:
+            # Parse GCP timestamp and compare
+            try:
+                from datetime import datetime
+                gcp_dt = datetime.fromisoformat(gcp_creation_time.replace('Z', '+00:00'))
+                gcp_epoch = gcp_dt.timestamp()
+                if local_mtime > gcp_epoch:
+                    logger.info("Local image is newer than GCP image, will re-upload")
+                    logger.info(f"  Local: {datetime.fromtimestamp(local_mtime).isoformat()}")
+                    logger.info(f"  GCP:   {gcp_creation_time}")
+                    need_upload = True
+                else:
+                    logger.info(f"GCP image '{image_name}' is up-to-date")
+            except Exception as e:
+                logger.warning(f"Could not parse GCP timestamp: {e}")
+                need_upload = True
+
+        if need_upload:
+            # Compress disk.raw to tar.gz for upload
+            logger.info("Compressing disk.raw to tar.gz for upload...")
+            import tempfile
+            with tempfile.TemporaryDirectory() as tmpdir:
+                tar_file = os.path.join(tmpdir, "disk.tar.gz")
+                result = subprocess.run(
+                    ["tar", "-czvf", tar_file, "-C", str(image_path.parent), "disk.raw"],
+                    capture_output=True,
+                    text=True
+                )
+                if result.returncode != 0:
+                    raise RuntimeError(f"Failed to create tar.gz: {result.stderr}")
+
+                logger.info("Uploading boot image to GCS...")
+                self._run_gsutil([
+                    "cp", tar_file, f"{config.bucket}/{image_name}.tar.gz"
+                ])
+
+            # Delete existing image if present
+            if gcp_creation_time:
+                logger.info("Deleting existing GCP image...")
+                self._run_gcloud([
+                    "compute", "images", "delete", image_name,
+                    f"--project={config.project}",
+                    "--quiet"
+                ])
+
+            logger.info("Creating GCP image with TDX support...")
+            self._run_gcloud([
+                "compute", "images", "create", image_name,
+                f"--project={config.project}",
+                f"--source-uri={config.bucket}/{image_name}.tar.gz",
+                "--guest-os-features=UEFI_COMPATIBLE,TDX_CAPABLE,GVNIC"
+            ])
+
+        return image_name
+
+    def _create_shared_disk_image(self, config: GcpConfig, app: App) -> str:
+        """Create and upload shared disk image. Returns the image name."""
+        import secrets
+        import shutil
+
+        # Check if mcopy (mtools) is installed
+        if not shutil.which("mcopy"):
+            logger.error("")
+            logger.error("Error: 'mcopy' command not found.")
+            logger.error("")
+            logger.error("Please install mtools:")
+            logger.error("  Ubuntu/Debian: sudo apt-get install mtools")
+            logger.error("  Fedora/RHEL:   sudo dnf install mtools")
+            logger.error("  Arch Linux:     sudo pacman -S mtools")
+            logger.error("")
+            raise FileNotFoundError("mcopy not found. Please install mtools package.")
+
+        # Ensure instance_id_seed and app_id exist
+        if not app.instance_id_seed:
+            app.instance_id_seed = secrets.token_hex(20)
+            logger.info(f"Generated instance_id_seed: {app.instance_id_seed}")
+            self.save_app_config(app)
+
+        if not app.app_id:
+            app.app_id = secrets.token_hex(20)
+            logger.info(f"Generated app_id: {app.app_id}")
+            self.save_app_config(app)
+
+        shared_dir = self._get_shared_dir()
+
+        # Ensure shared directory exists and generate all required files
+        shared_dir.mkdir(parents=True, exist_ok=True)
+
+        shared_image_name = f"{config.instance_name}-shared"
+
+        # Process .env file: encrypt and save to shared/.encrypted-env
+        env_path = self.work_dir / app.env_file
+        env_names = []  # Collect environment variable names for allowed_envs
+
+        if env_path.exists():
+            if app.key_provider != "kms":
+                raise ValueError(f"{app.env_file} found but KMS is not enabled. "
+                               f"Enable KMS with --key-provider kms or remove {app.env_file}")
+
+            if not app.app_id:
+                raise ValueError(f"{app.env_file} found but app_id is not set. "
+                               f"Run 'dstack-cloud prepare' to generate app_id")
+
+            # Parse .env file
+            envs = self._parse_env_file(env_path)
+            if envs:
+                env_names = list(envs.keys())
+
+                # Get KMS URL from global config
+                global_config = self._load_global_config()
+                kms_urls = global_config.get("services", {}).get("kms_urls", [])
+                if not kms_urls:
+                    raise ValueError("KMS enabled but no kms_urls configured in global config")
+
+                # Get encryption public key from KMS
+                kms_url = kms_urls[0]
+                pubkey = self._get_app_encrypt_pub_key(app.app_id, kms_url)
+
+                # Encrypt environment variables
+                encrypted_env = self._encrypt_env(envs, pubkey)
+
+                # Save to shared/.encrypted-env
+                encrypted_file = shared_dir / ".encrypted-env"
+                with open(encrypted_file, 'wb') as f:
+                    f.write(encrypted_env)
+                logger.info(f"Encrypted {app.env_file} -> {encrypted_file}")
+            else:
+                logger.info(f"{app.env_file} is empty, skipping")
+
+        # Regenerate app-compose.json with env_names (if any)
+        # This must be done after .env processing and before creating the disk image
+        global_config = self._load_global_config()
+        sys_config_content = self._generate_sys_config(global_config, config, app)
+        sys_config_path = shared_dir / ".sys-config.json"
+        with open(sys_config_path, 'w') as f:
+            json.dump(sys_config_content, f, indent=2)
+        logger.info(f"Generated {sys_config_path}")
+
+        # Generate .instance_info
+        instance_info = {
+            "instance_id_seed": app.instance_id_seed,
+            "app_id": app.app_id
+        }
+        instance_info_path = shared_dir / ".instance_info"
+        with open(instance_info_path, 'w') as f:
+            json.dump(instance_info, f, indent=2)
+        logger.info(f"Generated {instance_info_path}")
+
+        # Generate app-compose.json with env_names (from .env file)
+        app_compose_content = self._generate_app_compose(app, env_names=env_names if env_names else None)
+        app_compose_path = shared_dir / "app-compose.json"
+        with open(app_compose_path, 'w') as f:
+            json.dump(app_compose_content, f, indent=2)
+        logger.info(f"Generated {app_compose_path}")
+
+        with tempfile.TemporaryDirectory() as work_dir:
+            work_path = Path(work_dir)
+            raw_file = work_path / "disk.raw"
+
+            # Create FAT32 disk image (no root required)
+            logger.info("Creating shared disk image...")
+            disk_size = "8M"  # 8MB FAT32 disk
+            subprocess.run(
+                ["truncate", "-s", disk_size, str(raw_file)],
+                check=True
+            )
+            subprocess.run(
+                ["mkfs.fat", "-F", "32", "-n", "DSTACKSHR", str(raw_file)],
+                check=True, capture_output=True
+            )
+
+            # Use mtools to copy files without mounting (no root required)
+            # Copy generated system files from shared directory
+            required_files = ["app-compose.json", ".sys-config.json", ".instance_info"]
+            for f in required_files:
+                src = shared_dir / f
+                if src.exists():
+                    subprocess.run(
+                        ["mcopy", "-i", str(raw_file), str(src), "::"],
+                        check=True
+                    )
+                else:
+                    raise FileNotFoundError(f"Required file {f} not found in {shared_dir}")
+
+            # Copy optional system files from shared directory
+            optional_files = [".encrypted-env"]
+            for f in optional_files:
+                src = shared_dir / f
+                if src.exists():
+                    subprocess.run(
+                        ["mcopy", "-i", str(raw_file), str(src), "::"],
+                        check=True
+                    )
+
+            # Copy other user-editable files from project root
+            user_files = {
+                ".user-config": ".user-config",
+            }
+
+            for src_name, dst_name in user_files.items():
+                src_path = self.work_dir / src_name
+                if src_path.exists():
+                    subprocess.run(
+                        ["mcopy", "-i", str(raw_file), str(src_path), f"::{dst_name}"],
+                        check=True
+                    )
+                    logger.info(f"Included {src_name}")
+                else:
+                    logger.warning(f"{src_name} not found, skipping")
+
+            # Create tar
+            tar_file = work_path / "shared-disk.tar.gz"
+            subprocess.run(
+                ["tar", "-C", str(work_path), "-czvf", str(tar_file), "disk.raw"],
+                check=True, capture_output=True
+            )
+
+            # Upload to GCS
+            logger.info("Uploading shared disk image to GCS...")
+            self._run_gsutil([
+                "cp", str(tar_file), f"{config.bucket}/{shared_image_name}.tar.gz"
+            ])
+
+        # Delete existing image if present
+        result = self._run_gcloud([
+            "compute", "images", "describe", shared_image_name,
+            f"--project={config.project}"
+        ], check=False)
+
+        if result.returncode == 0:
+            logger.info("Deleting existing shared disk image...")
+            self._run_gcloud([
+                "compute", "images", "delete", shared_image_name,
+                f"--project={config.project}",
+                "--quiet"
+            ])
+
+        # Create GCP image
+        logger.info("Creating GCP image from shared disk...")
+        self._run_gcloud([
+            "compute", "images", "create", shared_image_name,
+            f"--project={config.project}",
+            f"--source-uri={config.bucket}/{shared_image_name}.tar.gz",
+            "--guest-os-features=GVNIC"
+        ])
+
+        return shared_image_name
+
+    def deploy(self, delete_existing: bool = False,
+               force_boot_image: bool = False) -> None:
+        """Deploy VM to GCP."""
+        # Load app config first (required) - validates project exists
+        app = self.load_app_config(required=True)
+        config = self.load_gcp_config()
+
+        # Validate required configuration
+        missing = []
+        if not config.instance_name:
+            missing.append("instance_name")
+        if not config.project:
+            missing.append("project")
+        if not config.zone:
+            missing.append("zone")
+        if missing:
+            raise ValueError(
+                f"Missing required GCP configuration: {', '.join(missing)}. "
+                f"Run 'dstack-cloud new <name>' to create a project or edit dstack-app.json."
+            )
+
+        # Auto-detect bucket if not specified
+        if not config.bucket and config.project:
+            config.bucket = f"gs://{config.project}-dstack"
+
+        shared_dir = self._get_shared_dir()
+
+        logger.info("=== GCP TDX VM Deployment ===")
+        logger.info(f"Project: {config.project}")
+        logger.info(f"Zone: {config.zone}")
+        logger.info(f"Instance: {config.instance_name}")
+        logger.info(f"Shared Directory: {shared_dir}")
+        logger.info(f"GCS Bucket: {config.bucket}")
+
+        # Check if instance already exists
+        result = self._run_gcloud([
+            "compute", "instances", "describe", config.instance_name,
+            f"--zone={config.zone}",
+            f"--project={config.project}"
+        ], check=False)
+
+        if result.returncode == 0:
+            if delete_existing:
+                logger.info(f"Deleting existing instance: {config.instance_name}")
+                self._run_gcloud([
+                    "compute", "instances", "delete", config.instance_name,
+                    f"--zone={config.zone}",
+                    f"--project={config.project}",
+                    "--quiet"
+                ])
+            else:
+                raise RuntimeError(
+                    f"Instance '{config.instance_name}' already exists. "
+                    f"Use --delete to replace it."
+                )
+
+        # Check and upload boot image
+        boot_image = self._check_and_upload_boot_image(config, app, force=force_boot_image)
+
+        # Create shared disk image
+        shared_image = self._create_shared_disk_image(config, app)
+
+        # Ensure data disk image exists (with GPT partition labeled 'dstack-data')
+        data_image = self._ensure_data_disk_image(config)
+
+        # Create TDX instance
+        logger.info("Creating TDX instance...")
+
+        create_args = [
+            "compute", "instances", "create", config.instance_name,
+            f"--zone={config.zone}",
+            f"--project={config.project}",
+            f"--machine-type={config.machine_type}",
+            "--confidential-compute-type=TDX",
+            f"--image={boot_image}",
+            "--boot-disk-size=10GB",
+            f"--create-disk=name={config.instance_name}-data,size={config.data_size}GB,type=pd-balanced,image={data_image},auto-delete=yes",
+            f"--create-disk=name={config.instance_name}-shared,size=1GB,type=pd-balanced,image={shared_image},auto-delete=yes",
+            "--maintenance-policy=TERMINATE",
+        ]
+
+        provisioning = (config.provisioning_model or "STANDARD").upper()
+        if provisioning == "SPOT":
+            create_args.append("--provisioning-model=SPOT")
+            # STOP (vs. the gcloud default DELETE) preserves the
+            # boot/data disks across preemption so the instance can
+            # be restarted with `dstack-cloud start` and keep its
+            # LUKS-encrypted data disk intact.
+            create_args.append("--instance-termination-action=STOP")
+        elif provisioning != "STANDARD":
+            raise RuntimeError(
+                f"Unsupported provisioning_model: {config.provisioning_model!r} "
+                f"(expected 'STANDARD' or 'SPOT')"
+            )
+
+        if config.network != "default":
+            create_args.append(f"--network={config.network}")
+        if config.subnet:
+            create_args.append(f"--subnet={config.subnet}")
+        if config.service_account:
+            create_args.append(f"--service-account={config.service_account}")
+        if config.scopes:
+            create_args.append(f"--scopes={','.join(config.scopes)}")
+        # Always attach firewall tag so existing firewall rules continue to work
+        # after instance recreation (e.g. deploy --delete).
+        instance_tags = list(config.tags)
+        firewall_tag = f"fw-{config.instance_name}"
+        if firewall_tag not in instance_tags:
+            instance_tags.append(firewall_tag)
+        if instance_tags:
+            create_args.append(f"--tags={','.join(instance_tags)}")
+        if config.labels:
+            labels_str = ",".join(f"{k}={v}" for k, v in config.labels.items())
+            create_args.append(f"--labels={labels_str}")
+
+        self._run_gcloud(create_args)
+
+        # Get instance details
+        result = self._run_gcloud([
+            "compute", "instances", "describe", config.instance_name,
+            f"--zone={config.zone}",
+            f"--project={config.project}",
+            "--format=json"
+        ])
+
+        instance_info = json.loads(result.stdout)
+        external_ip = ""
+        internal_ip = ""
+
+        for iface in instance_info.get("networkInterfaces", []):
+            internal_ip = iface.get("networkIP", "")
+            for access in iface.get("accessConfigs", []):
+                external_ip = access.get("natIP", "")
+                break
+
+        # Save state
+        state = DeploymentState(
+            instance_name=config.instance_name,
+            project=config.project,
+            zone=config.zone,
+            external_ip=external_ip,
+            internal_ip=internal_ip,
+            status="RUNNING",
+            created_at=datetime.now().isoformat(),
+            boot_image=boot_image,
+            data_image=data_image,
+            shared_image=shared_image,
+        )
+        self.save_state(state)
+
+        logger.info("")
+        logger.info("=== Deployment Complete ===")
+        logger.info(f"Instance: {config.instance_name}")
+        logger.info(f"External IP: {external_ip}")
+        logger.info(f"Internal IP: {internal_ip}")
+        logger.info("")
+        logger.info("To check serial output:")
+        logger.info(f"  dstack-cloud logs")
+
+    def _parse_env_file(self, file_path: Path) -> Dict[str, str]:
+        """Parse an environment file where each line is formatted as KEY=Value."""
+        if not file_path or not file_path.exists():
+            return {}
+
+        envs = {}
+        with open(file_path, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+                if '=' not in line:
+                    continue
+                key, value = line.split('=', 1)
+                envs[key.strip()] = value.strip()
+        return envs
+
+    def _encrypt_env(self, envs: Dict[str, str], hex_public_key: str) -> bytes:
+        """
+        Encrypt environment variables using X25519 key exchange and AES-GCM.
+
+        Args:
+            envs: Environment variables dictionary
+            hex_public_key: Remote encryption public key in hexadecimal format
+
+        Returns:
+            Raw bytes of (ephemeral public key || IV || ciphertext)
+        """
+        if not CRYPTO_AVAILABLE:
+            raise ImportError(
+                "Cryptography libraries not available. Please install:\n"
+                "pip install cryptography eth-keys 'eth-hash[pycryptodome]'"
+            )
+
+        # Serialize environment variables to JSON (format: {"env": [{"key": k, "value": v}, ...]})
+        env_pairs = [{"key": k, "value": v} for k, v in envs.items()]
+        envs_json = json.dumps({"env": env_pairs}).encode("utf-8")
+
+        # Remove "0x" prefix if present
+        if hex_public_key.startswith("0x"):
+            hex_public_key = hex_public_key[2:]
+
+        # Convert hex public key to bytes
+        remote_pubkey_bytes = bytes.fromhex(hex_public_key)
+
+        # Generate ephemeral X25519 key pair
+        ephemeral_private_key = x25519.X25519PrivateKey.generate()
+        ephemeral_public_key = ephemeral_private_key.public_key()
+
+        # Compute shared secret using X25519
+        peer_public_key = x25519.X25519PublicKey.from_public_bytes(remote_pubkey_bytes)
+        shared = ephemeral_private_key.exchange(peer_public_key)
+
+        # Use shared secret as key for AES-GCM (32 bytes for AES-256)
+        aesgcm = AESGCM(shared)
+        iv = os.urandom(12)  # 12-byte nonce for AES-GCM
+        ciphertext = aesgcm.encrypt(iv, envs_json, None)
+
+        # Serialize ephemeral public key to raw bytes
+        ephemeral_public_bytes = ephemeral_public_key.public_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PublicFormat.Raw
+        )
+
+        # Combine ephemeral public key, IV, and ciphertext
+        result = ephemeral_public_bytes + iv + ciphertext
+        return result
+
+    def _get_app_encrypt_pub_key(self, app_id: str, kms_url: str) -> str:
+        """Get encryption public key for the specified app_id from KMS."""
+        try:
+            import urllib.request
+            import urllib.error
+            import ssl
+
+            path = f"{kms_url}/prpc/GetAppEnvEncryptPubKey?json"
+            data = json.dumps({"app_id": app_id}).encode("utf-8")
+
+            req = urllib.request.Request(
+                path,
+                data=data,
+                headers={"Content-Type": "application/json"}
+            )
+
+            # Allow self-signed certificates for KMS server
+            ssl_context = ssl.create_default_context()
+            ssl_context.check_hostname = False
+            ssl_context.verify_mode = ssl.CERT_NONE
+
+            logger.info(f"Getting encryption public key for {app_id} from {kms_url}")
+            with urllib.request.urlopen(req, timeout=10, context=ssl_context) as response:
+                response_data = json.loads(response.read().decode("utf-8"))
+
+            if "public_key" not in response_data:
+                raise ValueError(f"No public_key in response: {response_data}")
+
+            # Verify signature if available
+            if "signature" not in response_data:
+                if not self._confirm_untrusted_signer("none"):
+                    raise ValueError("Aborted due to missing signature")
+                return response_data["public_key"]
+
+            public_key = bytes.fromhex(response_data["public_key"])
+            signature = bytes.fromhex(response_data["signature"])
+
+            signer_pubkey = self._verify_signature(public_key, signature, app_id)
+            if signer_pubkey:
+                whitelist = self._load_whitelist()
+                if whitelist and signer_pubkey not in whitelist:
+                    logger.warning(f"Signer {signer_pubkey} is not in the trusted whitelist!")
+                    if not self._confirm_untrusted_signer(signer_pubkey):
+                        raise ValueError("Aborted due to untrusted signer")
+                else:
+                    logger.info(f"Verified signature from: {signer_pubkey}")
+            else:
+                logger.warning("Could not verify signature!")
+                if not self._confirm_untrusted_signer("unknown"):
+                    raise ValueError("Aborted due to invalid signature")
+
+            return response_data["public_key"]
+
+        except Exception as e:
+            logger.warning(f"Failed to get encryption public key: {e}")
+            raise
+
+    def _verify_signature(self, public_key: bytes, signature: bytes, app_id: str) -> Optional[str]:
+        """Verify the signature of a public key.
+
+        Args:
+            public_key: The public key bytes to verify
+            signature: The signature bytes
+            app_id: The application ID
+
+        Returns:
+            The compressed public key if valid, None otherwise
+        """
+        if not ETH_CRYPTO_AVAILABLE:
+            logger.warning("eth-keys not available, skipping signature verification. "
+                           "Install with: pip install eth-keys 'eth-hash[pycryptodome]'")
+            return None
+
+        if len(signature) != 65:
+            return None
+
+        # Create the message to verify
+        prefix = b"dstack-env-encrypt-pubkey"
+        if app_id.startswith("0x"):
+            app_id = app_id[2:]
+        message = prefix + b":" + bytes.fromhex(app_id) + public_key
+
+        # Hash the message with Keccak-256 and recover the public key
+        try:
+            message_hash = keccak(message)
+            sig = keys.Signature(signature_bytes=signature)
+            recovered_key = sig.recover_public_key_from_msg_hash(message_hash)
+            return '0x' + recovered_key.to_compressed_bytes().hex()
+        except Exception as e:
+            error_msg = str(e)
+            if "hashing backends" in error_msg or "pycryptodome" in error_msg:
+                raise ImportError(
+                    "Ethereum hashing backend not available. Please install:\n"
+                    "pip install cryptography eth-keys 'eth-hash[pycryptodome]'"
+                )
+            logger.debug(f"Signature verification failed: {e}")
+            return None
+
+    def _confirm_untrusted_signer(self, signer: str) -> bool:
+        """Ask user to confirm using an untrusted signer."""
+        try:
+            response = input(f"Continue with untrusted signer '{signer}'? (y/N): ")
+            return response.lower() in ('y', 'yes')
+        except EOFError:
+            # Non-interactive mode, reject untrusted signers
+            return False
+
+    def _load_whitelist(self) -> List[str]:
+        """Load the whitelist of trusted signers from a file."""
+        if not os.path.exists(DEFAULT_KMS_WHITELIST_PATH):
+            return []
+
+        try:
+            with open(DEFAULT_KMS_WHITELIST_PATH, 'r') as f:
+                data = json.load(f)
+                return data.get('trusted_signers', [])
+        except (json.JSONDecodeError, FileNotFoundError):
+            return []
+
+    def _save_whitelist(self, whitelist: List[str]) -> None:
+        """Save the whitelist of trusted signers to a file."""
+        os.makedirs(os.path.dirname(DEFAULT_KMS_WHITELIST_PATH), exist_ok=True)
+        with open(DEFAULT_KMS_WHITELIST_PATH, 'w') as f:
+            json.dump({'trusted_signers': whitelist}, f, indent=2)
+
+    def _update_kms_whitelist(self, whitelist_path: str, bundle: Dict[str, Any]) -> None:
+        """Update the KMS whitelist with the k256 pubkey from an AuthBundle."""
+        kms_identity = bundle.get("kms_identity", {})
+        k256_pubkey = kms_identity.get("k256_pubkey", "")
+        if not k256_pubkey:
+            logger.warning("auth bundle contains no kms_identity.k256_pubkey, skipping whitelist update")
+            return
+
+        existing: List[str] = []
+        if os.path.exists(whitelist_path):
+            try:
+                with open(whitelist_path, 'r') as f:
+                    existing = json.load(f).get("trusted_signers", [])
+            except (json.JSONDecodeError, OSError):
+                pass
+
+        if k256_pubkey not in existing:
+            existing.append(k256_pubkey)
+            os.makedirs(os.path.dirname(whitelist_path), exist_ok=True)
+            with open(whitelist_path, 'w') as f:
+                json.dump({"trusted_signers": existing}, f, indent=2)
+            logger.info(f"added {k256_pubkey} to kms whitelist")
+
+    def _load_platform_config(self, platform_url: Optional[str] = None,
+                              api_key: Optional[str] = None) -> Dict[str, Any]:
+        """Load platform connection settings from config file and environment, with CLI overrides."""
+        config_path = os.path.expanduser("~/.config/dstack-cloud/platform.json")
+        file_cfg: Dict[str, Any] = {}
+        if os.path.exists(config_path):
+            try:
+                with open(config_path, 'r') as f:
+                    file_cfg = json.load(f)
+            except (json.JSONDecodeError, OSError) as e:
+                logger.warning(f"could not read platform config: {e}")
+
+        result_url = (
+            platform_url
+            or os.environ.get("DSTACK_PLATFORM_URL")
+            or file_cfg.get("platform_url", "")
+        )
+        result_key = (
+            api_key
+            or os.environ.get("DSTACK_API_KEY")
+            or file_cfg.get("api_key", "")
+        )
+        return {"platform_url": result_url, "api_key": result_key}
+
+    def _platform_post(self, platform_url: str, api_key: str,
+                       path: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """POST JSON to the vendor platform API, return parsed response."""
+        import urllib.request
+        import urllib.error
+
+        url = platform_url.rstrip("/") + path
+        data = json.dumps(payload).encode("utf-8")
+        headers: Dict[str, str] = {"Content-Type": "application/json"}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+
+        req = urllib.request.Request(url, data=data, headers=headers, method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            body = e.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"platform API error {e.code}: {body}")
+
+    def _sidecar_post(self, sidecar_url: str, path: str,
+                      payload: Dict[str, Any]) -> Dict[str, Any]:
+        """POST JSON to the KMS sidecar courier API, return parsed response."""
+        import urllib.request
+        import urllib.error
+
+        url = sidecar_url.rstrip("/") + path
+        data = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(
+            url, data=data,
+            headers={"Content-Type": "application/json"},
+            method="POST"
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            body = e.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"sidecar API error {e.code}: {body}")
+
+    def kms_attest(self, customer_id: str, sidecar_url: str,
+                   platform_url: Optional[str] = None,
+                   api_key: Optional[str] = None) -> None:
+        """Provision a KMS instance via the offline courier protocol.
+
+        Runs the full courier handshake:
+          1. request a nonce from the platform
+          2. forward nonce to the in-VPC sidecar, get TDX quote + transport key
+          3. send quote to platform for verification, receive sealed root key + AuthBundle
+          4. deliver the ProvisionPackage into the VPC via sidecar
+          5. update the local KMS whitelist (TOFU)
+        """
+        cfg = self._load_platform_config(platform_url, api_key)
+        p_url = cfg["platform_url"]
+        p_key = cfg["api_key"]
+        if not p_url:
+            raise ValueError("platform URL is required (--platform-url, DSTACK_PLATFORM_URL, or platform.json)")
+
+        # Step 1: request challenge from platform
+        logger.info("requesting challenge from platform...")
+        challenge_resp = self._platform_post(p_url, p_key, "/api/v1/challenge", {
+            "customer_id": customer_id,
+            "client_ts": int(time.time()),
+        })
+        nonce = challenge_resp["nonce"]
+        platform_ts = challenge_resp["platform_ts"]
+        logger.info(f"got nonce {nonce[:16]}...")
+
+        # Step 2: forward nonce to sidecar, get TDX quote + transport key
+        logger.info("sending nonce to sidecar, fetching TDX quote...")
+        init_data = self._sidecar_post(sidecar_url, "/courier/init", {"nonce": nonce})
+        # init_data: {transport_pub, kms_ts, quote}
+
+        # Step 3: sanity-check clock skew
+        skew = abs(init_data["kms_ts"] - platform_ts)
+        if skew > 300:
+            raise RuntimeError(f"kms clock skew too large: {skew}s (limit 300s)")
+
+        # Step 4: send quote to platform, get ProvisionPackage
+        logger.info("sending quote to platform for verification...")
+        provision = self._platform_post(p_url, p_key, "/api/v1/provision", {
+            "customer_id": customer_id,
+            "nonce": nonce,
+            "quote": init_data["quote"],
+            "transport_pub": init_data["transport_pub"],
+            "kms_ts": init_data["kms_ts"],
+        })
+        # provision: {sealed_root, auth_bundle}
+
+        # Step 5: deliver ProvisionPackage into VPC via sidecar
+        logger.info("installing provision package into KMS...")
+        install_resp = self._sidecar_post(sidecar_url, "/courier/install", {
+            "sealed_root": provision["sealed_root"],
+            "auth_bundle": provision["auth_bundle"],
+        })
+        if not install_resp.get("ok"):
+            raise RuntimeError(f"sidecar install failed: {install_resp}")
+
+        # Step 6: TOFU — update local KMS whitelist with the KMS identity pubkey
+        whitelist_path = os.path.expanduser("~/.config/dstack-cloud/kms-whitelist.json")
+        self._update_kms_whitelist(whitelist_path, provision["auth_bundle"])
+
+        bundle_seq = provision["auth_bundle"].get("bundle_seq", "?")
+        logger.info(f"KMS provisioned successfully. bundle_seq={bundle_seq}")
+
+    def kms_sync_auth(self, customer_id: str, sidecar_url: str,
+                      platform_url: Optional[str] = None,
+                      api_key: Optional[str] = None) -> None:
+        """Renew the AuthBundle for a provisioned KMS instance.
+
+        Fetches a fresh AuthBundle from the platform (no TDX quote needed)
+        and pushes it into the in-VPC KMS via the sidecar.
+
+        TODO P3: collect and upload UsageReceipt before requesting renewal.
+        """
+        cfg = self._load_platform_config(platform_url, api_key)
+        p_url = cfg["platform_url"]
+        p_key = cfg["api_key"]
+        if not p_url:
+            raise ValueError("platform URL is required (--platform-url, DSTACK_PLATFORM_URL, or platform.json)")
+
+        # TODO P3: fetch UsageReceipt from sidecar before sync
+        # receipt = self._sidecar_post(sidecar_url, "/courier/usage-receipt", {})
+
+        # Step 1: fetch fresh AuthBundle from platform
+        logger.info("fetching fresh auth bundle from platform...")
+        sync_resp = self._platform_post(p_url, p_key, "/api/v1/sync-auth", {
+            "customer_id": customer_id,
+            # "usage_receipt": receipt,  # TODO P3
+        })
+        bundle = sync_resp["auth_bundle"]
+
+        # Step 2: push AuthBundle into VPC via sidecar (no new root key)
+        logger.info("pushing auth bundle into KMS...")
+        install_resp = self._sidecar_post(sidecar_url, "/courier/install", {
+            "sealed_root": None,
+            "auth_bundle": bundle,
+        })
+        if not install_resp.get("ok"):
+            raise RuntimeError(f"sidecar install failed: {install_resp}")
+
+        bundle_seq = bundle.get("bundle_seq", "?")
+        logger.info(f"AuthBundle synced. bundle_seq={bundle_seq}")
+
+    def _derive_instance_id(self, instance_id_seed: str, app_id: str) -> str:
+        """Derive instance_id from instance_id_seed and app_id.
+
+        Both instance_id_seed and app_id are hex strings that need to be
+        decoded to bytes before concatenation, matching the Rust implementation.
+        """
+        # Decode hex strings to bytes
+        seed_bytes = bytes.fromhex(instance_id_seed)
+        app_bytes = bytes.fromhex(app_id)
+
+        # Concatenate bytes (not hex strings)
+        id_path = seed_bytes + app_bytes
+
+        # Compute SHA256 and take first 20 bytes, then convert to hex string
+        instance_id = hashlib.sha256(id_path).digest()[:20]
+        return instance_id.hex()
+
+    def _get_gateway_urls(self, app: App, instance_id: str) -> Dict[str, str]:
+        """Construct gateway URLs for app access.
+
+        Returns:
+            Dict with 'app_url' and 'instance_url' keys
+        """
+        if not app.gateway_enabled:
+            return {}
+
+        global_config = self._load_global_config()
+        gateway_urls = global_config.get("services", {}).get("gateway_urls", [])
+        if not gateway_urls:
+            return {}
+
+        # Try to get gateway info from RPC
+        gateway_info = None
+        for gateway_url in gateway_urls:
+            try:
+                info_url = f"{gateway_url}/prpc/Info"
+                result = subprocess.run(
+                    ["curl", "-sk", info_url],
+                    capture_output=True,
+                    text=True,
+                    timeout=5
+                )
+                if result.returncode == 0:
+                    gateway_info = json.loads(result.stdout)
+                    break
+            except Exception as e:
+                logger.debug(f"Failed to get gateway info from {gateway_url}: {e}")
+                continue
+
+        if not gateway_info:
+            return {}
+
+        base_domain = gateway_info.get("base_domain")
+        external_port = gateway_info.get("external_port")
+
+        if not base_domain or not external_port:
+            return {}
+
+        # Construct URLs: one with instance_id, one with app_id
+        app_id = app.app_id
+        app_url = f"https://{app_id}-8090.{base_domain}:{external_port}/"
+        instance_url = f"https://{instance_id}-8090.{base_domain}:{external_port}/"
+
+        return {
+            "app_url": app_url,
+            "instance_url": instance_url
+        }
+
+    def status(self) -> None:
+        """Check deployment status."""
+        state = self.load_state()
+        if not state or not state.instance_name:
+            logger.info("No deployment found. Run 'dstack-cloud deploy' first.")
+            return
+
+        # Get current status from GCP
+        result = self._run_gcloud([
+            "compute", "instances", "describe", state.instance_name,
+            f"--zone={state.zone}",
+            f"--project={state.project}",
+            "--format=json"
+        ], check=False)
+
+        if result.returncode != 0:
+            logger.info(f"Instance '{state.instance_name}' not found in GCP")
+            state.status = "NOT_FOUND"
+            self.save_state(state)
+            return
+
+        instance_info = json.loads(result.stdout)
+        status = instance_info.get("status", "UNKNOWN")
+
+        # Update IPs
+        external_ip = ""
+        internal_ip = ""
+        for iface in instance_info.get("networkInterfaces", []):
+            internal_ip = iface.get("networkIP", "")
+            for access in iface.get("accessConfigs", []):
+                external_ip = access.get("natIP", "")
+                break
+
+        state.status = status
+        state.external_ip = external_ip
+        state.internal_ip = internal_ip
+        self.save_state(state)
+
+        print(f"Instance:    {state.instance_name}")
+        print(f"Project:     {state.project}")
+        print(f"Zone:        {state.zone}")
+        print(f"Status:      {status}")
+        print(f"External IP: {external_ip or 'N/A'}")
+        print(f"Internal IP: {internal_ip or 'N/A'}")
+        print(f"Boot Image:  {state.boot_image}")
+        print(f"Created:     {state.created_at}")
+        print(f"Updated:     {state.updated_at}")
+
+        # Display gateway URLs if enabled
+        # Try to load from .instance_info first (actual deployed values)
+        app = self.load_app_config()
+        if not app.gateway_enabled:
+            return
+
+        instance_id_seed = None
+        app_id = None
+
+        # Try to read from shared/.instance_info (actual deployed values)
+        instance_info_path = self._get_shared_dir() / ".instance_info"
+        if instance_info_path.exists():
+            try:
+                with open(instance_info_path, 'r') as f:
+                    instance_info_data = json.load(f)
+                    instance_id_seed = instance_info_data.get("instance_id_seed")
+                    app_id = instance_info_data.get("app_id")
+            except Exception as e:
+                logger.debug(f"Failed to read .instance_info: {e}")
+
+        # Fallback to app.json if .instance_info not found or missing values
+        if not instance_id_seed or not app_id:
+            instance_id_seed = app.instance_id_seed
+            app_id = app.app_id
+
+        if instance_id_seed and app_id:
+            instance_id = self._derive_instance_id(instance_id_seed, app_id)
+            gateway_urls = self._get_gateway_urls(app, instance_id)
+            if gateway_urls:
+                print("")
+                print("Gateway URLs:")
+                print(f"  App URL:      {gateway_urls.get('app_url', 'N/A')}")
+                print(f"  Instance URL: {gateway_urls.get('instance_url', 'N/A')}")
+
+    def logs(self, follow: bool = False, lines: int = 100) -> None:
+        """View serial console logs."""
+        state = self.load_state()
+        if not state or not state.instance_name:
+            raise ValueError("No deployment found. Run 'dstack-cloud deploy' first.")
+
+        if follow:
+            # Tail logs continuously
+            logger.info(f"Following serial output for {state.instance_name}...")
+            logger.info("Press Ctrl+C to stop")
+
+            last_output = ""
+            while True:
+                try:
+                    result = self._run_gcloud([
+                        "compute", "instances", "get-serial-port-output",
+                        state.instance_name,
+                        f"--zone={state.zone}",
+                        f"--project={state.project}"
+                    ], check=False)
+
+                    if result.returncode == 0:
+                        output = result.stdout
+                        if output != last_output:
+                            # Print only new content
+                            if last_output:
+                                new_content = output[len(last_output):]
+                                if new_content:
+                                    print(new_content, end="", flush=True)
+                            else:
+                                # First time, print last N lines
+                                lines_list = output.split('\n')
+                                print('\n'.join(lines_list[-lines:]), flush=True)
+                            last_output = output
+
+                    time.sleep(2)
+                except KeyboardInterrupt:
+                    print("\nStopped following logs.")
+                    break
+        else:
+            # Get logs once
+            result = self._run_gcloud([
+                "compute", "instances", "get-serial-port-output",
+                state.instance_name,
+                f"--zone={state.zone}",
+                f"--project={state.project}"
+            ])
+
+            output = result.stdout
+            lines_list = output.split('\n')
+            print('\n'.join(lines_list[-lines:]))
+
+    def stop(self) -> None:
+        """Stop the VM."""
+        state = self.load_state()
+        if not state or not state.instance_name:
+            raise ValueError("No deployment found. Run 'dstack-cloud deploy' first.")
+
+        # Check if instance exists
+        result = self._run_gcloud([
+            "compute", "instances", "describe", state.instance_name,
+            f"--zone={state.zone}",
+            f"--project={state.project}"
+        ], check=False)
+        if result.returncode != 0:
+            if "was not found" in result.stderr:
+                logger.info(f"Instance {state.instance_name} does not exist (already removed?).")
+                return
+            raise RuntimeError(f"gcloud command failed: {result.stderr}")
+
+        logger.info(f"Stopping instance {state.instance_name}...")
+        self._run_gcloud([
+            "compute", "instances", "stop", state.instance_name,
+            f"--zone={state.zone}",
+            f"--project={state.project}"
+        ])
+
+        state.status = "STOPPED"
+        self.save_state(state)
+        logger.info("Instance stopped.")
+
+    def start(self) -> None:
+        """Start a stopped VM."""
+        state = self.load_state()
+        if not state or not state.instance_name:
+            raise ValueError("No deployment found. Run 'dstack-cloud deploy' first.")
+
+        # Check if instance exists
+        result = self._run_gcloud([
+            "compute", "instances", "describe", state.instance_name,
+            f"--zone={state.zone}",
+            f"--project={state.project}"
+        ], check=False)
+        if result.returncode != 0:
+            if "was not found" in result.stderr:
+                raise ValueError(
+                    f"Instance {state.instance_name} does not exist. "
+                    f"Run 'dstack-cloud deploy' to create it."
+                )
+            raise RuntimeError(f"gcloud command failed: {result.stderr}")
+
+        logger.info(f"Starting instance {state.instance_name}...")
+        self._run_gcloud([
+            "compute", "instances", "start", state.instance_name,
+            f"--zone={state.zone}",
+            f"--project={state.project}"
+        ])
+
+        # Update state with new IP
+        self.status()
+        logger.info("Instance started.")
+
+    def remove(self, keep_images: bool = False) -> None:
+        """Remove the VM and cleanup."""
+        state = self.load_state()
+        if not state or not state.instance_name:
+            logger.info("No deployment found.")
+            return
+
+        # Delete instance
+        logger.info(f"Deleting instance {state.instance_name}...")
+        self._run_gcloud([
+            "compute", "instances", "delete", state.instance_name,
+            f"--zone={state.zone}",
+            f"--project={state.project}",
+            "--quiet"
+        ], check=False)
+
+        if not keep_images and state.shared_image:
+            # Delete shared disk image
+            logger.info(f"Deleting shared disk image {state.shared_image}...")
+            self._run_gcloud([
+                "compute", "images", "delete", state.shared_image,
+                f"--project={state.project}",
+                "--quiet"
+            ], check=False)
+
+        # Clear state
+        state.status = "REMOVED"
+        state.external_ip = ""
+        state.internal_ip = ""
+        self.save_state(state)
+
+        logger.info("Instance removed.")
+
+    def list_deployments(self, project: Optional[str] = None) -> None:
+        """List all dstack deployments in a project."""
+        if not project:
+            # Try to get from config
+            try:
+                config = self.load_gcp_config()
+                project = config.project
+            except FileNotFoundError:
+                # Try global config
+                global_config = self._load_global_config()
+                project = global_config.get("gcp", {}).get("project", "")
+
+        if not project:
+            raise ValueError("Project is required. Specify with --project or configure it.")
+
+        result = self._run_gcloud([
+            "compute", "instances", "list",
+            f"--project={project}",
+            "--filter=name~^dstack-",
+            "--format=table(name,zone,status,networkInterfaces[0].accessConfigs[0].natIP:label=EXTERNAL_IP,creationTimestamp)"
+        ], capture=False)
+
+    def _get_firewall_rule_name(self, instance_name: str, port: int, protocol: str,
+                                 action: str = "allow") -> str:
+        """Generate firewall rule name for an instance port."""
+        return f"{instance_name}-{action}-{protocol}-{port}"
+
+    def _parse_port_spec(self, port_spec: str) -> tuple:
+        """Parse port specification like '8080' or '53/udp'.
+
+        Returns:
+            tuple: (port: int, protocol: str)
+        """
+        if "/" in port_spec:
+            port_str, protocol = port_spec.split("/", 1)
+            protocol = protocol.lower()
+            if protocol not in ("tcp", "udp"):
+                raise ValueError(f"Invalid protocol '{protocol}'. Must be 'tcp' or 'udp'.")
+        else:
+            port_str = port_spec
+            protocol = "tcp"
+
+        try:
+            port = int(port_str)
+        except ValueError:
+            raise ValueError(f"Invalid port number '{port_str}'.")
+
+        if not (1 <= port <= 65535):
+            raise ValueError(f"Port {port} out of range (1-65535).")
+
+        return port, protocol
+
+    def _get_project_for_firewall(self) -> str:
+        """Get project ID for firewall operations."""
+        # Try state first
+        state = self.load_state()
+        if state and state.project:
+            return state.project
+
+        # Try config
+        try:
+            config = self.load_gcp_config()
+            if config.project:
+                return config.project
+        except FileNotFoundError:
+            pass
+
+        # Try global config
+        global_config = self._load_global_config()
+        project = global_config.get("gcp", {}).get("project", "")
+
+        if not project:
+            raise ValueError("Project is required. Deploy first or specify with --project.")
+
+        return project
+
+    def _get_instance_name_for_firewall(self) -> str:
+        """Get instance name for firewall operations."""
+        state = self.load_state()
+        if state and state.instance_name:
+            return state.instance_name
+
+        try:
+            config = self.load_gcp_config()
+            if config.instance_name:
+                return config.instance_name
+        except FileNotFoundError:
+            pass
+
+        raise ValueError("Instance name is required. Deploy first or specify with --instance.")
+
+    def _ensure_instance_tag(self, instance_name: str, project: str) -> str:
+        """Ensure instance has the firewall tag, return the tag name."""
+        instance_tag = f"fw-{instance_name}"
+
+        state = self.load_state()
+        zone = state.zone if state and state.zone else ""
+        if not zone:
+            try:
+                config = self.load_gcp_config()
+                zone = config.zone
+            except FileNotFoundError:
+                pass
+        if not zone:
+            global_config = self._load_global_config()
+            zone = global_config.get("gcp", {}).get("zone", "us-central1-a")
+
+        result = self._run_gcloud([
+            "compute", "instances", "describe", instance_name,
+            f"--project={project}",
+            f"--zone={zone}",
+            "--format=value(tags.items)"
+        ], check=False)
+
+        current_tags = result.stdout.strip().split(";") if result.stdout.strip() else []
+        current_tags = [t.strip() for t in current_tags if t.strip()]
+
+        if instance_tag not in current_tags:
+            logger.info(f"Adding tag '{instance_tag}' to instance '{instance_name}'...")
+            self._run_gcloud([
+                "compute", "instances", "add-tags", instance_name,
+                f"--project={project}",
+                f"--zone={zone}",
+                f"--tags={instance_tag}"
+            ])
+            logger.info(f"Added tag '{instance_tag}' to instance")
+        else:
+            logger.debug(f"Instance already has tag '{instance_tag}'")
+
+        return instance_tag
+
+    def fw_allow(self, port_spec: str,
+                 source_ranges: Optional[List[str]] = None,
+                 instance_name: Optional[str] = None,
+                 project: Optional[str] = None) -> None:
+        """Add firewall rule to open a port for the instance."""
+        port, protocol = self._parse_port_spec(port_spec)
+        project = project or self._get_project_for_firewall()
+        instance_name = instance_name or self._get_instance_name_for_firewall()
+
+        if source_ranges is None:
+            source_ranges = ["0.0.0.0/0"]
+
+        # Always ensure instance has the tag first
+        instance_tag = self._ensure_instance_tag(instance_name, project)
+
+        rule_name = self._get_firewall_rule_name(instance_name, port, protocol)
+
+        # Check if rule already exists
+        result = self._run_gcloud([
+            "compute", "firewall-rules", "describe", rule_name,
+            f"--project={project}"
+        ], check=False)
+
+        if result.returncode == 0:
+            logger.info(f"Firewall rule '{rule_name}' already exists")
+            return
+
+        # Create firewall rule targeting this instance's tag
+        logger.info(f"Creating firewall rule '{rule_name}'...")
+        self._run_gcloud([
+            "compute", "firewall-rules", "create", rule_name,
+            f"--project={project}",
+            f"--allow={protocol}:{port}",
+            f"--source-ranges={','.join(source_ranges)}",
+            f"--target-tags={instance_tag}",
+            f"--description=Allow {protocol.upper()} port {port} for {instance_name}"
+        ])
+
+        logger.info(f"Opened {protocol.upper()} port {port} for instance '{instance_name}'")
+
+    def fw_deny(self, port_spec: str,
+                source_ranges: Optional[List[str]] = None,
+                instance_name: Optional[str] = None,
+                project: Optional[str] = None) -> None:
+        """Create a deny firewall rule to block traffic on a port."""
+        port, protocol = self._parse_port_spec(port_spec)
+        project = project or self._get_project_for_firewall()
+        instance_name = instance_name or self._get_instance_name_for_firewall()
+
+        if source_ranges is None:
+            source_ranges = ["0.0.0.0/0"]
+
+        # Always ensure instance has the tag first
+        instance_tag = self._ensure_instance_tag(instance_name, project)
+
+        rule_name = self._get_firewall_rule_name(instance_name, port, protocol, action="deny")
+
+        # Check if rule already exists
+        result = self._run_gcloud([
+            "compute", "firewall-rules", "describe", rule_name,
+            f"--project={project}"
+        ], check=False)
+
+        if result.returncode == 0:
+            logger.info(f"Firewall rule '{rule_name}' already exists")
+            return
+
+        # Create deny firewall rule with high priority (low number = high priority)
+        logger.info(f"Creating deny firewall rule '{rule_name}'...")
+        self._run_gcloud([
+            "compute", "firewall-rules", "create", rule_name,
+            f"--project={project}",
+            "--action=DENY",
+            f"--rules={protocol}:{port}",
+            f"--source-ranges={','.join(source_ranges)}",
+            f"--target-tags={instance_tag}",
+            "--priority=900",
+            f"--description=Deny {protocol.upper()} port {port} for {instance_name}"
+        ])
+
+        logger.info(f"Blocked {protocol.upper()} port {port} for instance '{instance_name}'")
+
+    def fw_remove(self, port_spec: str,
+                  instance_name: Optional[str] = None,
+                  project: Optional[str] = None) -> None:
+        """Remove a firewall rule (allow or deny) for a port."""
+        port, protocol = self._parse_port_spec(port_spec)
+        project = project or self._get_project_for_firewall()
+        instance_name = instance_name or self._get_instance_name_for_firewall()
+
+        # Try to delete both allow and deny rules
+        deleted = False
+        for action in ["allow", "deny"]:
+            rule_name = self._get_firewall_rule_name(instance_name, port, protocol, action=action)
+
+            # Check if rule exists
+            result = self._run_gcloud([
+                "compute", "firewall-rules", "describe", rule_name,
+                f"--project={project}"
+            ], check=False)
+
+            if result.returncode == 0:
+                # Delete the rule
+                logger.info(f"Deleting firewall rule '{rule_name}'...")
+                self._run_gcloud([
+                    "compute", "firewall-rules", "delete", rule_name,
+                    f"--project={project}",
+                    "--quiet"
+                ])
+                logger.info(f"Removed {action} rule for {protocol.upper()} port {port}")
+                deleted = True
+
+        if not deleted:
+            logger.info(f"No firewall rules found for {protocol.upper()} port {port} on instance '{instance_name}'")
+
+    def fw_list(self, instance_name: Optional[str] = None,
+                project: Optional[str] = None) -> None:
+        """List firewall rules for an instance."""
+        project = project or self._get_project_for_firewall()
+
+        if instance_name:
+            # List rules for specific instance
+            instance_tag = f"fw-{instance_name}"
+            filter_expr = f"name~^{instance_name}-allow- OR targetTags:{instance_tag}"
+        else:
+            # Try to get instance name from state
+            try:
+                instance_name = self._get_instance_name_for_firewall()
+                filter_expr = f"name~^{instance_name}-allow-"
+            except ValueError:
+                # List all dstack-related firewall rules
+                filter_expr = "name~^dstack-"
+
+        logger.info(f"Firewall rules for project '{project}':")
+        self._run_gcloud([
+            "compute", "firewall-rules", "list",
+            f"--project={project}",
+            f"--filter={filter_expr}",
+            "--format=table(name,direction,priority,allowed[].map().firewall_rule().list():label=ALLOW,sourceRanges.list():label=SRC_RANGES,targetTags.list():label=TARGET_TAGS)"
+        ], capture=False)
+
+
+    def image_sync(self, image_ref: str, registry_url: str = None,
+                   cosign_verify: bool = True) -> None:
+        """Sync an image from public registry to customer GCP Artifact Registry.
+
+        image_ref: e.g. "docker.io/vendor/workload:v2" or "ghcr.io/vendor/launcher:v1"
+        Pulls by digest, verifies cosign signature, re-pushes to GCP AR.
+        """
+        # Get registry URL from config or arg
+        if not registry_url:
+            registry_url = self._load_platform_config(None, None).get("gcp_ar_url", "")
+            if not registry_url:
+                raise ValueError("gcp_ar_url not set in platform config or --registry-url not given")
+
+        # Verify cosign signature (if enabled)
+        if cosign_verify:
+            platform_config = self._load_platform_config(None, None)
+            cosign_pubkey = platform_config.get("cosign_pubkey", "")
+            if cosign_pubkey:
+                with tempfile.NamedTemporaryFile(mode='w', suffix='.pub', delete=False) as f:
+                    f.write(cosign_pubkey)
+                    pubkey_file = f.name
+                try:
+                    print(f"verifying cosign signature for {image_ref}...")
+                    result = subprocess.run(
+                        ["cosign", "verify", "--key", pubkey_file, image_ref],
+                        capture_output=True, text=True
+                    )
+                    if result.returncode != 0:
+                        raise RuntimeError(f"cosign verification failed: {result.stderr}")
+                    print("cosign signature verified.")
+                finally:
+                    os.unlink(pubkey_file)
+            else:
+                print("warning: cosign_pubkey not configured, skipping signature verification")
+
+        # Determine destination ref in GCP AR
+        # image_ref might be "registry/vendor/workload:v2", destination: "{registry_url}/workload:v2"
+        image_name = image_ref.split("/")[-1]  # e.g. "workload:v2"
+        dest_ref = f"{registry_url}/{image_name}"
+
+        # Copy image: try skopeo first, fall back to docker pull+tag+push
+        skopeo_available = subprocess.run(["which", "skopeo"], capture_output=True).returncode == 0
+        if skopeo_available:
+            print(f"copying {image_ref} -> {dest_ref} via skopeo...")
+            result = subprocess.run(
+                ["skopeo", "copy", f"docker://{image_ref}", f"docker://{dest_ref}"],
+                capture_output=True, text=True
+            )
+            if result.returncode != 0:
+                raise RuntimeError(f"skopeo copy failed: {result.stderr}")
+        else:
+            print(f"copying {image_ref} -> {dest_ref} via docker pull+tag+push...")
+            for cmd in [
+                ["docker", "pull", image_ref],
+                ["docker", "tag", image_ref, dest_ref],
+                ["docker", "push", dest_ref],
+            ]:
+                result = subprocess.run(cmd, capture_output=True, text=True)
+                if result.returncode != 0:
+                    raise RuntimeError(f"command {cmd[0]} failed: {result.stderr}")
+
+        print(f"image synced: {dest_ref}")
+
+    def kms_deploy(self, customer_id: str, zone: str = None,
+                   machine_type: str = None) -> None:
+        """Deploy a KMS CVM with the sidecar+kms docker-compose app.
+
+        Creates a Confidential VM running the kms docker-compose app.
+        Uses the same GCP project/region as existing deploy() method.
+        """
+        try:
+            import yaml
+        except ImportError:
+            raise RuntimeError("pyyaml is required for kms deploy: pip install pyyaml")
+
+        zone = zone or self.zone
+        machine_type = machine_type or "n2d-standard-4"
+
+        # Build app-compose for KMS
+        kms_compose = {
+            "services": {
+                "sidecar": {
+                    "image": "ghcr.io/phala-network/kms-sidecar:latest",
+                    "volumes": [
+                        "kms-volume:/kms",
+                        "/var/run/dstack.sock:/var/run/dstack.sock"
+                    ],
+                    "ports": ["8001:8001", "8002:8002"],
+                    "environment": ["PLATFORM_PUBKEY=${PLATFORM_PUBKEY}"],
+                    "healthcheck": {
+                        "test": ["CMD-SHELL", "wget -qO- http://localhost:8001/healthz || exit 1"],
+                        "interval": "5s",
+                        "timeout": "3s",
+                        "retries": 60,
+                        "start_period": "5s",
+                    },
+                },
+                "kms": {
+                    "image": "ghcr.io/phala-network/dstack-kms:latest",
+                    "volumes": [
+                        "kms-volume:/kms",
+                        "/var/run/dstack.sock:/var/run/dstack.sock"
+                    ],
+                    "ports": ["8000:8000"],
+                    "depends_on": {"sidecar": {"condition": "service_healthy"}},
+                    "environment": ["AUTH_WEBHOOK_URL=http://sidecar:8001"],
+                },
+            },
+            "volumes": {"kms-volume": {}},
+        }
+        kms_compose_str = yaml.dump(kms_compose, default_flow_style=False)
+
+        print(f"deploying KMS CVM for customer {customer_id} in {zone}...")
+        print("kms_compose:")
+        print(kms_compose_str)
+        print("TODO: call existing deploy() with KMS compose app, STANDARD disk, no preemptible")
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Multi-cloud VM lifecycle management tool",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=f"""
+Examples:
+  # Create a new project
+  dstack-cloud new myproject
+
+  # Edit global configuration
+  dstack-cloud config-edit
+
+  # Download OS image
+  dstack-cloud pull {DEFAULT_OS_IMAGE}
+
+  # Deploy VM
+  dstack-cloud deploy
+
+  # Check status
+  dstack-cloud status
+
+  # View logs
+  dstack-cloud logs --follow
+
+  # Stop/Start/Remove
+  dstack-cloud stop
+  dstack-cloud start
+  dstack-cloud remove
+
+  # Firewall management
+  dstack-cloud fw allow 8080              # Allow TCP port 8080
+  dstack-cloud fw allow 53/udp            # Allow UDP port 53
+  dstack-cloud fw allow 443 -s 10.0.0.0/8 # Allow port 443 from specific range
+  dstack-cloud fw deny 22                 # Block TCP port 22
+  dstack-cloud fw deny 22 -s 0.0.0.0/0    # Block port 22 from all sources
+  dstack-cloud fw remove 8080             # Remove firewall rule for port 8080
+  dstack-cloud fw list                    # List firewall rules
+"""
+    )
+
+    parser.add_argument("-v", "--verbose", action="store_true", help="Verbose output")
+    parser.add_argument("-C", "--directory", type=str, help="Change to directory before running")
+
+    subparsers = parser.add_subparsers(dest="command", help="Commands")
+
+    # new command
+    new_parser = subparsers.add_parser("new", help="Create a new project")
+    new_parser.add_argument("name", type=str, help="Project name")
+
+    # App configuration options
+    new_parser.add_argument("--os-image", type=str, help=f"OS image (e.g., {DEFAULT_OS_IMAGE})")
+    new_parser.add_argument("--app-id", type=str, help="Application ID (40 hex chars)")
+    new_parser.add_argument("--gateway-enabled", "--gw", dest="gateway_enabled", action="store_true", help="Enable dstack-gateway")
+    new_parser.add_argument("--no-gateway-enabled", "--no-gw", dest="gateway_enabled", action="store_false")
+    new_parser.set_defaults(gateway_enabled=None)
+    new_parser.add_argument("--key-provider", "--kp", type=str, choices=["kms", "local", "tpm", "none"], help="Key provider type")
+    new_parser.add_argument("--storage-fs", "--fs", dest="storage_fs", type=str, choices=["ext4", "zfs"], help="Storage filesystem")
+    new_parser.add_argument("--secure-time", action="store_true", help="Enable secure time synchronization")
+    new_parser.add_argument("--no-secure-time", dest="secure_time", action="store_false")
+    new_parser.set_defaults(secure_time=None)
+    new_parser.add_argument("--no-instance-id", action="store_true", help="Disable instance ID generation")
+
+    # GCP configuration options
+    new_parser.add_argument("--project", "-p", type=str, help="GCP project ID")
+    new_parser.add_argument("--zone", "-z", type=str, help="GCP zone (e.g., us-central1-a)")
+    new_parser.add_argument("--instance-name", type=str, help="GCP instance name")
+    new_parser.add_argument("--machine-type", "-m", type=str, help="Machine type (e.g., c3-standard-4)")
+    new_parser.add_argument("--data-size", type=int, help="Data disk size in GB")
+
+    # config-edit command
+    subparsers.add_parser("config-edit", help="Edit global configuration")
+
+    # prepare command
+    subparsers.add_parser("prepare", help="Generate shared files")
+
+    # pull command
+    pull_parser = subparsers.add_parser("pull", help="Download OS image")
+    pull_parser.add_argument("image", type=str, help=f"OS image name (e.g., {DEFAULT_OS_IMAGE}) or absolute URL (e.g., https://example.com/image-uki.tar.gz)")
+
+    # deploy command
+    deploy_parser = subparsers.add_parser("deploy", help="Deploy VM to cloud")
+    deploy_parser.add_argument("--delete", "-d", action="store_true",
+                               help="Delete existing instance first")
+    deploy_parser.add_argument("--force-boot-image", action="store_true",
+                               help="Force re-upload boot image")
+
+    # status command
+    subparsers.add_parser("status", help="Check deployment status")
+
+    # logs command
+    logs_parser = subparsers.add_parser("logs", help="View serial console logs")
+    logs_parser.add_argument("--follow", "-f", action="store_true", help="Follow log output")
+    logs_parser.add_argument("--lines", "-n", type=int, default=100, help="Number of lines to show")
+
+    # stop command
+    subparsers.add_parser("stop", help="Stop the VM")
+
+    # start command
+    subparsers.add_parser("start", help="Start a stopped VM")
+
+    # remove command
+    remove_parser = subparsers.add_parser("remove", help="Remove the VM and cleanup")
+    remove_parser.add_argument("--keep-images", action="store_true",
+                               help="Keep disk images in GCP")
+
+    # list command
+    list_parser = subparsers.add_parser("list", help="List all deployments")
+    list_parser.add_argument("--project", "-p", type=str, help="GCP project ID")
+
+    # fw command group
+    fw_parser = subparsers.add_parser("fw", help="Firewall management")
+    fw_subparsers = fw_parser.add_subparsers(dest="fw_command", help="Firewall commands")
+
+    # fw allow
+    fw_allow_parser = fw_subparsers.add_parser("allow", help="Open a port for the instance")
+    fw_allow_parser.add_argument("port", type=str, help="Port to open (e.g., 8080, 53/udp)")
+    fw_allow_parser.add_argument("--source", "-s", type=str, action="append",
+                                 dest="source_ranges",
+                                 help="Source IP ranges (default: 0.0.0.0/0). Can be specified multiple times.")
+    fw_allow_parser.add_argument("--instance", "-i", type=str, help="Instance name (default: from state)")
+    fw_allow_parser.add_argument("--project", "-p", type=str, help="GCP project ID")
+
+    # fw deny
+    fw_deny_parser = fw_subparsers.add_parser("deny", help="Block traffic on a port")
+    fw_deny_parser.add_argument("port", type=str, help="Port to block (e.g., 8080, 53/udp)")
+    fw_deny_parser.add_argument("--source", "-s", type=str, action="append",
+                                dest="source_ranges",
+                                help="Source IP ranges to block (default: 0.0.0.0/0). Can be specified multiple times.")
+    fw_deny_parser.add_argument("--instance", "-i", type=str, help="Instance name (default: from state)")
+    fw_deny_parser.add_argument("--project", "-p", type=str, help="GCP project ID")
+
+    # fw remove
+    fw_remove_parser = fw_subparsers.add_parser("remove", help="Remove a firewall rule")
+    fw_remove_parser.add_argument("port", type=str, help="Port to remove rule for (e.g., 8080, 53/udp)")
+    fw_remove_parser.add_argument("--instance", "-i", type=str, help="Instance name (default: from state)")
+    fw_remove_parser.add_argument("--project", "-p", type=str, help="GCP project ID")
+
+    # fw list
+    fw_list_parser = fw_subparsers.add_parser("list", help="List firewall rules for instance")
+    fw_list_parser.add_argument("--instance", "-i", type=str, help="Instance name (default: from state)")
+    fw_list_parser.add_argument("--project", "-p", type=str, help="GCP project ID")
+
+    # image command group
+    image_parser = subparsers.add_parser("image", help="Container image management")
+    image_subparsers = image_parser.add_subparsers(dest="image_command", help="Image commands")
+
+    # image sync
+    image_sync_parser = image_subparsers.add_parser(
+        "sync",
+        help="Sync an image from public registry to GCP Artifact Registry"
+    )
+    image_sync_parser.add_argument("image_ref", type=str,
+                                   help="Source image reference (e.g., ghcr.io/vendor/workload:v1)")
+    image_sync_parser.add_argument("--registry-url", type=str,
+                                   help="Destination GCP AR registry URL (overrides platform config gcp_ar_url)")
+    image_sync_parser.add_argument("--no-cosign-verify", dest="cosign_verify",
+                                   action="store_false", default=True,
+                                   help="Skip cosign signature verification")
+
+    # kms command group
+    kms_parser = subparsers.add_parser("kms", help="KMS courier operations (air-gapped provisioning)")
+    kms_subparsers = kms_parser.add_subparsers(dest="kms_command", help="KMS commands")
+
+    # kms attest
+    kms_attest_parser = kms_subparsers.add_parser(
+        "attest",
+        help="Provision KMS via courier protocol (first-time setup)"
+    )
+    kms_attest_parser.add_argument("--customer-id", required=True,
+                                   help="Customer identifier registered with the vendor platform")
+    kms_attest_parser.add_argument("--sidecar-url", required=True,
+                                   help="URL of the in-VPC KMS courier sidecar (e.g., http://10.0.0.5:8001)")
+    kms_attest_parser.add_argument("--platform-url",
+                                   help="Vendor platform base URL (overrides config/env)")
+    kms_attest_parser.add_argument("--api-key",
+                                   help="Vendor platform API key (overrides config/env)")
+
+    # kms sync-auth
+    kms_sync_auth_parser = kms_subparsers.add_parser(
+        "sync-auth",
+        help="Renew AuthBundle for a provisioned KMS instance"
+    )
+    kms_sync_auth_parser.add_argument("--customer-id", required=True,
+                                      help="Customer identifier registered with the vendor platform")
+    kms_sync_auth_parser.add_argument("--sidecar-url", required=True,
+                                      help="URL of the in-VPC KMS courier sidecar (e.g., http://10.0.0.5:8001)")
+    kms_sync_auth_parser.add_argument("--platform-url",
+                                      help="Vendor platform base URL (overrides config/env)")
+    kms_sync_auth_parser.add_argument("--api-key",
+                                      help="Vendor platform API key (overrides config/env)")
+
+    # kms deploy
+    kms_deploy_parser = kms_subparsers.add_parser(
+        "deploy",
+        help="Deploy a KMS CVM with sidecar+kms docker-compose app"
+    )
+    kms_deploy_parser.add_argument("--customer-id", required=True,
+                                   help="Customer identifier for the KMS deployment")
+    kms_deploy_parser.add_argument("--zone", "-z", type=str,
+                                   help="GCP zone (overrides config)")
+    kms_deploy_parser.add_argument("--machine-type", "-m", type=str,
+                                   help="Machine type (default: n2d-standard-4)")
+
+    args = parser.parse_args()
+
+    if args.verbose:
+        logging.getLogger().setLevel(logging.DEBUG)
+
+    work_dir = args.directory if args.directory else None
+    manager = CloudDeploymentManager(work_dir)
+
+    try:
+        if args.command == "new":
+            manager.new(
+                args.name,
+                os_image=args.os_image,
+                app_id=args.app_id,
+                gateway_enabled=args.gateway_enabled,
+                key_provider=args.key_provider,
+                storage_fs=args.storage_fs,
+                secure_time=args.secure_time,
+                no_instance_id=args.no_instance_id,
+                project=args.project,
+                zone=args.zone,
+                instance_name=args.instance_name,
+                machine_type=args.machine_type,
+                data_size=args.data_size
+            )
+        elif args.command == "config-edit":
+            manager.config_edit()
+        elif args.command == "prepare":
+            manager.prepare()
+        elif args.command == "pull":
+            manager.pull(args.image)
+        elif args.command == "deploy":
+            manager.deploy(
+                delete_existing=args.delete,
+                force_boot_image=args.force_boot_image
+            )
+        elif args.command == "status":
+            manager.status()
+        elif args.command == "logs":
+            manager.logs(follow=args.follow, lines=args.lines)
+        elif args.command == "stop":
+            manager.stop()
+        elif args.command == "start":
+            manager.start()
+        elif args.command == "remove":
+            manager.remove(keep_images=args.keep_images)
+        elif args.command == "list":
+            manager.list_deployments(project=args.project)
+        elif args.command == "fw":
+            if args.fw_command == "allow":
+                manager.fw_allow(
+                    port_spec=args.port,
+                    source_ranges=args.source_ranges,
+                    instance_name=args.instance,
+                    project=args.project
+                )
+            elif args.fw_command == "deny":
+                manager.fw_deny(
+                    port_spec=args.port,
+                    source_ranges=args.source_ranges,
+                    instance_name=args.instance,
+                    project=args.project
+                )
+            elif args.fw_command == "remove":
+                manager.fw_remove(
+                    port_spec=args.port,
+                    instance_name=args.instance,
+                    project=args.project
+                )
+            elif args.fw_command == "list":
+                manager.fw_list(
+                    instance_name=args.instance,
+                    project=args.project
+                )
+            else:
+                fw_parser.print_help()
+        elif args.command == "image":
+            if args.image_command == "sync":
+                manager.image_sync(
+                    image_ref=args.image_ref,
+                    registry_url=args.registry_url,
+                    cosign_verify=args.cosign_verify,
+                )
+            else:
+                image_parser.print_help()
+        elif args.command == "kms":
+            if args.kms_command == "attest":
+                manager.kms_attest(
+                    customer_id=args.customer_id,
+                    sidecar_url=args.sidecar_url,
+                    platform_url=args.platform_url,
+                    api_key=args.api_key,
+                )
+            elif args.kms_command == "sync-auth":
+                manager.kms_sync_auth(
+                    customer_id=args.customer_id,
+                    sidecar_url=args.sidecar_url,
+                    platform_url=args.platform_url,
+                    api_key=args.api_key,
+                )
+            elif args.kms_command == "deploy":
+                manager.kms_deploy(
+                    customer_id=args.customer_id,
+                    zone=args.zone,
+                    machine_type=args.machine_type,
+                )
+            else:
+                kms_parser.print_help()
+        else:
+            parser.print_help()
+    except Exception as e:
+        logger.error(str(e))
+        if args.verbose:
+            import traceback
+            traceback.print_exc()
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

@@ -15,8 +15,8 @@ Download the `dstack-cloud` CLI:
 
 ```bash
 # Clone the repository (temporary until packaged release)
-git clone https://github.com/Phala-Network/meta-dstack-cloud.git
-export PATH="$PATH:$(pwd)/meta-dstack-cloud/scripts/bin"
+git clone https://github.com/Dstack-TEE/dstack.git
+export PATH="$PATH:$(pwd)/dstack/scripts/bin"
 ```
 
 Verify the installation:

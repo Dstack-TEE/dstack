@@ -35,12 +35,14 @@ types = ["rust"]
 pass_filenames = false
 
 # --- Python: ruff (lint + format) ---
+# scripts/bin/dstack-cloud is vendored from the dstack-cloud tree and follows its
+# own style; exclude it so we don't reformat/relint a large third-party script.
 [[repos]]
 repo = "https://github.com/astral-sh/ruff-pre-commit"
 rev = "v0.11.4"
 hooks = [
-    { id = "ruff", args = ["--fix", "--select", "E,F,I,D", "--ignore", "D203,D213,E501"] },
-    { id = "ruff-format" },
+    { id = "ruff", args = ["--fix", "--select", "E,F,I,D", "--ignore", "D203,D213,E501"], exclude = "^scripts/bin/dstack-cloud$" },
+    { id = "ruff-format", exclude = "^scripts/bin/dstack-cloud$" },
 ]
 
 # --- Go: go vet ---
