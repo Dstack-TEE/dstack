@@ -18,10 +18,40 @@
 
 参数化 compose 让 os/compose/app 哈希**跨客户一致**,所以新客户对厂商只是 1 条 `vendor-add-tenant.sh`。
 
-## 前置
-- 工具:`docker`+compose、`skopeo`≥1.13、`gcloud`、`dstack-cloud`（**须含 `private_ip` patch / Dstack-TEE/dstack #709**）、`openssl`/`python3`。
-- `cd on-prem/gcp/scripts && cp config.env.example config.env`，填好里面的值。
-- 一次性 GCP 资源（AR 仓库 + GCS 桶 + 启用 API）见指南"前置条件"。
+## 前置安装（每台机器一次）
+
+干净机器从零装（Debian/Ubuntu；其它发行版换包管理器）：
+
+```bash
+# 1) 系统工具
+sudo apt-get update
+sudo apt-get install -y ca-certificates curl git openssl python3 python3-pip \
+    skopeo docker.io docker-compose-v2
+
+# 2) python 依赖（kms_ctl.py 用 requests;dstack-cloud 的 env 加密用 cryptography）
+pip3 install --break-system-packages requests cryptography
+
+# 3) gcloud:装 SDK(https://cloud.google.com/sdk/docs/install)后登录 + 设项目
+gcloud auth login                      # 或 gcloud auth activate-service-account --key-file=…
+gcloud config set project <PROJECT>
+
+# 4) dstack-cloud —— 单文件 Python CLI,放进 PATH(如 /usr/local/bin),并 chmod +x。
+#    必须带 private_ip 绑定补丁(Dstack-TEE/dstack #709):合入后取自 dstack 仓库
+#    scripts/bin/dstack-cloud,否则按 #709 自行打补丁。它依赖上面 pip 装的 cryptography。
+
+# 5) 取仓库 + 填配置
+git clone <dstack-repo> && cd dstack/on-prem/gcp/scripts
+cp config.env.example config.env && "$EDITOR" config.env
+```
+
+**config.env 各侧必填**：
+- **厂商**（vendor-release / add-tenant）:`AUTHORITY_URL`、`AUTHORITY_ADMIN_TOKEN`、`PUBREG`、`IMAGE_KID`、`APP_ID`、`WORKLOAD_SRC`、`WORKLOAD_NAME`、`OS_VERSION`。运行前先 `docker login "$PUBREG"`(推镜像要认证)。
+- **operator**（operator-deploy）:`GCP_PROJECT`、`GCP_ZONE`、`AR_LOCATION/AR_PROJECT/AR_REPO`、`PUBREG`、`WORKLOAD_NAME`、`OS_VERSION`、`KMS_IP`、`LAUNCHER_IP`、`USER_ID`、`AUTHORITY_URL`、可选 `SWP_PROXY`。`OS_VERSION` 用**带点**的发布名(如 `dstack-cloud-nvidia-0.6.1`),脚本自动推导 app.json/目录用的横线名。
+
+> 一次性 GCP 资源（AR 仓库 + GCS 桶 + 启用 API）见
+> [`DEPLOYMENT_GUIDE_CN.md`](DEPLOYMENT_GUIDE_CN.md) 的"前置条件"。`operator-deploy.sh`
+> 会自动初始化 dstack-cloud 的全局配置(`~/.config/dstack-cloud/config.json`:
+> `image_search_paths` / `gcp` / `kms_urls`)。镜像同步(`sync`)只需 gcloud 认证。
 
 ## 厂商侧（在自己有公网的主机）
 

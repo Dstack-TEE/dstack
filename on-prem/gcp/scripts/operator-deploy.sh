@@ -18,7 +18,9 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 GCP="$(cd "$HERE/.." && pwd)"
 DC="${DSTACK_CLOUD:-dstack-cloud}"
-: "${GCP_PROJECT:?}" "${GCP_ZONE:?}" "${OS_IMAGE:?}" "${KMS_IP:?}" "${LAUNCHER_IP:?}" "${WORKLOAD_NAME:?}"
+: "${GCP_PROJECT:?}" "${GCP_ZONE:?}" "${KMS_IP:?}" "${LAUNCHER_IP:?}" "${WORKLOAD_NAME:?}"
+OS_VERSION="${OS_VERSION:?set OS_VERSION (dotted published name, e.g. dstack-cloud-nvidia-0.6.1)}"
+OS_IMAGE="${OS_VERSION//./-}"           # local image dir / app.json name (dots → dashes)
 REGION="${GCP_ZONE%-*}"
 AR="${AR_LOCATION:-$REGION}-docker.pkg.dev/${AR_PROJECT:-$GCP_PROJECT}/${AR_REPO:-dstack-private}"
 BUCKET="gs://${GCP_PROJECT}-dstack"
@@ -41,18 +43,24 @@ d["os_image"]=osimg
 json.dump(d,open(f,"w"),indent=2)
 PY
 }
-set_kms_urls() {
+# dstack-cloud's global config — needed by pull/prepare/deploy. Sets gcp project/zone,
+# the image search path (else `pull` errors "No image_search_paths configured"), and
+# kms_urls (so the workload guest-agent reaches our KMS). Call before any stage.
+bootstrap_dstack() {
     local f="$HOME/.config/dstack-cloud/config.json"
-    [[ -f "$f" ]] || { mkdir -p "$(dirname "$f")"; echo '{"gcp":{},"services":{}}' >"$f"; }
+    mkdir -p "$(dirname "$f")"; [[ -f "$f" ]] || echo '{}' >"$f"
     python3 - "$f" "$KMS_IP" "$GCP_PROJECT" "$GCP_ZONE" <<'PY'
 import json,sys
 f,ip,proj,zone=sys.argv[1:5]
-d=json.load(open(f)); d.setdefault("gcp",{}); d.setdefault("services",{})
+try: d=json.load(open(f))
+except Exception: d={}
+d.setdefault("gcp",{}); d.setdefault("services",{})
 d["gcp"]["project"],d["gcp"]["zone"]=proj,zone
 d["services"]["kms_urls"]=[f"https://{ip}:8000"]
+d.setdefault("image_search_paths",["~/.dstack/images"])
 json.dump(d,open(f,"w"),indent=2)
 PY
-    c_ok "kms_urls = https://$KMS_IP:8000"
+    c_ok "dstack-cloud config: project=$GCP_PROJECT  image_search_paths=~/.dstack/images  kms_urls=https://$KMS_IP:8000"
 }
 tunnel() { # instance remote_port local_port  → echoes PID
     gcloud compute start-iap-tunnel "$1" "$2" --local-host-port="localhost:$3" \
@@ -67,8 +75,8 @@ do_sync() {
         c_step "sync $img → AR"
         "$HERE/sync-image.sh" "$PUBREG/$img:latest" "$img:latest" | tail -1
     done
-    c_step "pull OS image $OS_IMAGE"
-    [[ -f "$HOME/.dstack/images/$OS_IMAGE/disk.raw" ]] && c_ok "already pulled" || "$DC" pull "$OS_IMAGE"
+    c_step "pull OS image $OS_VERSION"
+    [[ -f "$HOME/.dstack/images/$OS_IMAGE/disk.raw" ]] && c_ok "already pulled" || "$DC" pull "$OS_VERSION"
 }
 
 do_kms() {
@@ -78,7 +86,6 @@ do_kms() {
     fill_appjson kms "$KMS_INSTANCE" "$KMS_IP"
     printf '{ "DSTACK_REGISTRY": "%s"%s }\n' "$AR" \
         "${SWP_PROXY:+, \"SWP_PROXY\": \"$SWP_PROXY\"}" > "$GCP/deploy/kms/.user-config"
-    set_kms_urls
 
     c_step "deploy KMS CVM"
     "$DC" -C "$GCP/deploy/kms" prepare
@@ -114,6 +121,8 @@ do_launcher() {
     curl -s --max-time 6 http://localhost:19100/status | python3 -m json.tool || c_warn "/status not ready yet — check guest-agent :8090 logs"
     kill "$pid" 2>/dev/null || true
 }
+
+bootstrap_dstack   # ensure dstack-cloud's global config exists before any stage
 
 case "${1:-}" in
     sync)     do_sync ;;

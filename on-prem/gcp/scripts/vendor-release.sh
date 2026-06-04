@@ -22,7 +22,8 @@ DC="${DSTACK_CLOUD:-dstack-cloud}"
 A="${AUTHORITY_URL:?set AUTHORITY_URL}"
 PUBREG="${PUBREG:?set PUBREG (vendor public registry, e.g. cr.kvin.wang)}"
 IMAGE_KID="${IMAGE_KID:?set IMAGE_KID (global image key id, e.g. vendor-2026h1)}"
-OS_IMAGE="${OS_IMAGE:?set OS_IMAGE (e.g. dstack-cloud-nvidia-0-6-1)}"
+OS_VERSION="${OS_VERSION:?set OS_VERSION (dotted published name, e.g. dstack-cloud-nvidia-0.6.1)}"
+OS_IMAGE="${OS_VERSION//./-}"   # local dir / app.json name (dots → dashes)
 APP_ID="${APP_ID:?set APP_ID (workload app id, 40 hex)}"
 WORKLOAD_SRC="${WORKLOAD_SRC:?set WORKLOAD_SRC (image to encrypt, e.g. traefik/whoami:latest)}"
 WORKLOAD_NAME="${WORKLOAD_NAME:?set WORKLOAD_NAME (encrypted name, e.g. whoami-enc)}"
@@ -109,7 +110,7 @@ c_ok "kms_compose_hash=$KMS_COMPOSE_HASH  launcher_compose_hash=$LN_COMPOSE_HASH
 
 # ── 7. os_image_hash from the published release (no measure / no deploy) ────────
 OS_HASH_FILE="$HOME/.dstack/images/$OS_IMAGE/auth_hash.txt"
-[[ -f "$OS_HASH_FILE" ]] || { c_warn "pulling $OS_IMAGE to read auth_hash.txt"; "$DC" pull "$OS_IMAGE"; }
+[[ -f "$OS_HASH_FILE" ]] || { c_warn "pulling $OS_VERSION to read auth_hash.txt"; "$DC" pull "$OS_VERSION"; }
 OS_IMAGE_HASH="$(cat "$OS_HASH_FILE")"
 c_ok "os_image_hash=$OS_IMAGE_HASH"
 
