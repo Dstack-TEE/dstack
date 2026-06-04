@@ -140,7 +140,7 @@ failure_error=amd sev-snp cert_chain must contain either ASK and VCEK certificat
 no_secret_material_logged=true
 ```
 
-This means the PR has live SNP report proof, live golden-vector measurement proof, release-gate unit/integration coverage, and hardware smoke proof through dstack-managed SNP KMS boot plus app guest key-request boundary. The remaining full `GetAppKey` smoke blocker is a guest image/tooling skew: the app VM uses the `dstack-util`/`dstack-attest` embedded inside the released `meta-dstack` v0.5.11 guest image, while the host/KMS binaries are built from PR #703. Rebuilding only `dstack-vmm`, `supervisor`, and `dstack-kms` is not enough for a fresh tester to exercise the PR's guest-side cert-chain/KDS fallback.
+This means the PR has live SNP report proof, live golden-vector measurement proof, release-gate unit/integration coverage, and hardware smoke proof through dstack-managed SNP KMS boot plus app guest key-request boundary. The fresh-box smoke now reaches Linux/userspace, `SNP_KMS_CONTAINER_STARTED`, `GetTempCaCert`, and the app `GetAppKey` request when using a coherent **SNP** `meta-dstack` image. The remaining blocker for a completed success marker in the latest run was external AMD KDS throttling while fetching VCEK collateral for the app quote (`HTTP 429` for the Genoa VCEK request), not guest boot, KMS startup, or release-policy wiring. Host/KMS binaries must match PR #703, guest-side `dstack-util`/`dstack-attest` must include the PR cert-chain/KDS fallback, and the Yocto image must be built with `MACHINE = "sev-snp"` so the guest kernel includes AMD memory-encryption/SNP support. A coherent PR image built with the default `tdx` machine produced a `6.18.24-dstack` kernel with `# CONFIG_AMD_MEM_ENCRYPT is not set`; controlled QEMU tests showed that kernel resets immediately after OVMF loads kernel/initrd, while host SNP kernels boot the same QEMU/OVMF path to Linux/SNP markers.
 
 ### Fresh SNP host / image requirements
 
@@ -148,15 +148,32 @@ The checked-in smoke is enough to reproduce the current boundary on a compatible
 
 - Known-good host for reaching KMS and app `dstack-prepare.sh`: `chris@173.234.27.162` with AMDSEV QEMU 10.0.2, the SNP-capable OVMF above, and `dstack-dev-0.5.11-snp-dnsfix`.
 - That released image is **not** a coherent PR #703 image: its guest-side `dstack-util`/`dstack-attest` may reject SNP evidence before the newer PR fallback paths can help.
-- A separate local SNP host can run SNP Linux guests, but the stock `meta-dstack` v0.5.11 `6.9.0-dstack` kernel stops after OVMF/EFI loads kernel+initrd and QEMU reports `cpus are not resettable, terminating`, even when using QEMU 10.0.2.
-- On that same local host, a newer Lit SNP guest kernel (`6.13.0-snp-guest-ffd294d346d1`) reaches Linux/SNP markers, which isolates that local failure to the dstack guest image/kernel compatibility layer rather than Chipotle/KMS/auth policy or basic host SNP enablement.
+- A coherent PR #703 image must be built as an SNP image, not with `meta-dstack`'s default `tdx` machine. The default TDX build can emit a kernel without `CONFIG_AMD_MEM_ENCRYPT`, which fails before Linux serial output under SNP.
+- On the same remote host/QEMU/OVMF, a minimal SNP initramfs booted host kernels (`6.11.0-rc3-snp-host` and `6.9.0-rc7-snp-host`) to Linux/SNP markers, while the default-TDX `6.18.24-dstack` kernel reset immediately after OVMF loaded kernel/initrd. This isolates that failure to the guest kernel config, not PSP firmware, KMS/auth policy, author-key, command line, virtio wiring, or basic host SNP enablement.
 
 Practical implication for reviewers/testers on a fresh box:
 
 1. Install/use an AMDSEV QEMU 10.x build and the matching SNP-capable OVMF.
 2. Build the PR binaries with `cargo build --release -p dstack-vmm -p supervisor -p dstack-kms`.
 3. Run `test-scripts/snp-e2e-smoke.sh` unchanged and first confirm it reaches `SNP_KMS_CONTAINER_STARTED` and the app guest key-request boundary.
-4. For full `SNP_APP_CONTAINER_STARTED` / `GetAppKey` success, use or publish a coherent `meta-dstack` guest image whose kernel, modules, initramfs, rootfs, verity metadata, and guest userspace include the same PR #703 `dstack-util`/`dstack-attest` SNP cert-chain/KDS fallback code. Do not try to inject only a replacement `dstack-util` into the stock image; that experiment changed the initramfs/measurement enough to regress boot.
+4. For full `SNP_APP_CONTAINER_STARTED` / `GetAppKey` success, use or publish a coherent `meta-dstack` guest image whose kernel, modules, initramfs, rootfs, verity metadata, and guest userspace include the same PR #703 `dstack-util`/`dstack-attest` SNP cert-chain/KDS fallback code. The reproducible path is to build `meta-dstack` with its `dstack` submodule checked out to this PR branch, for example:
+
+   ```bash
+   git clone https://github.com/Dstack-TEE/meta-dstack.git
+   cd meta-dstack
+   git submodule update --init --recursive --depth 1
+   cd dstack
+   git fetch https://github.com/clawdbot-glitch003/dstack.git feat/amd-sev-snp-conversion
+   git checkout -B feat/amd-sev-snp-conversion FETCH_HEAD
+   cd ..
+   source dev-setup ./bb-build
+   sed -i 's/^MACHINE ??= .*/MACHINE = "sev-snp"/' ./bb-build/conf/local.conf
+   FLAVORS=dev make dist DIST_DIR=$PWD/images BB_BUILD_DIR=$PWD/bb-build
+   # Use the resulting dstack-dev image directory with:
+   #   DSTACK_SNP_SMOKE_IMAGE_NAME=<coherent-dstack-dev-image-dir>
+   ```
+
+   Do not try to inject only a replacement `dstack-util` into the stock image; that experiment changed the initramfs/measurement enough to regress boot.
 5. Only after the baseline smoke reaches the app success marker should testers swap the simple app workload for Chipotle.
 
 If the smoke stops after `EFI stub: Loaded initrd ...` with `cpus are not resettable`, use a host/image/kernel that is known to boot dstack under SNP before debugging app-level behavior. If it reaches `Requesting app keys from KMS` and fails with the cert-chain error above, rebuild/use a coherent PR guest image rather than changing KMS release policy.
