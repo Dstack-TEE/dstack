@@ -187,19 +187,21 @@ version is a hot rolling update — no new `compose_hash`, no CVM rebuild. The v
 it; the launcher applies it on its next poll.
 
 ```
- vendor                          operator                 KMS key-broker        launcher
-   │ encrypt new image (new digest)                                                
-   │ register: append → allowed_workload_digests; set current_image_digest          
-   │ /sync-auth: re-sign bundle, bundle_seq++ ─▶│ relay ─▶│ /courier/install        
-   │                                            │         │  verify sig (G7)        
-   │                                            │         │  bundle_seq ↑ (G8)      
-   │ operator mirrors new image → AR ───────────│         │                         
-   │                                                      │◀─ poll /version ────────│ every poll_interval
-   │                                                      │── current_image_digest ─▶│
-   │                                                      │◀─ lease/acquire(newdig) ─│ G11: digest ∈ allowed
-   │                                                      │── Lease + keyset ────────▶│
-   │                                                                 decrypt + compose_up --rolling
-   │                                                                 health-check 60s → rollback on fail
+vendor                operator             key-broker           launcher
+  │ encrypt new image     │                     │                   │
+  │ register new digest   │                     │                   │
+  │──re-signed bundle++──▶│                     │                   │
+  │                       │───courier/install──▶│                   │
+  │                       │                     │ verify sig (G7)   │
+  │                       │                     │ bundle_seq↑ (G8)  │
+  │                       │ mirror image → AR   │                   │
+  │                       │                     │◀──poll /version───│
+  │                       │                     │──current digest──▶│
+  │                       │                     │◀──lease/acquire───│
+  │                       │                     │ G11: ∈allowed     │
+  │                       │                     │──Lease + keyset──▶│
+  │                       │                     │                   │ decrypt + rolling
+  │                       │                     │                   │ health 60s→rollback
 ```
 
 `vendor-release.sh` + `vendor-add-tenant.sh` (vendor) → `operator-deploy.sh update`

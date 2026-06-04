@@ -168,19 +168,21 @@ operator 的 CLI 全程只拿到两坨**不透明** blob(`sealed_root`、`auth_b
 无需重建 CVM。厂商驱动,launcher 下次轮询时应用。
 
 ```
- 厂商                            operator                 KMS key-broker        launcher
-   │ 加密新镜像(新 digest)                                                       
-   │ 注册:追加 → allowed_workload_digests;设 current_image_digest                
-   │ /sync-auth:重签 bundle, bundle_seq++ ─▶│ 中继 ─▶│ /courier/install          
-   │                                        │       │  验签(G7)                 
-   │                                        │       │  bundle_seq ↑(G8)         
-   │ operator 同步新镜像 → AR ───────────────│       │                           
-   │                                                │◀─ 轮询 /version ───────────│ 每 poll_interval
-   │                                                │── current_image_digest ───▶│
-   │                                                │◀─ lease/acquire(新digest) ─│ G11:digest ∈ allowed
-   │                                                │── Lease + keyset ──────────▶│
-   │                                                           解密 + compose_up --rolling
-   │                                                           健康检查 60s → 失败回滚
+vendor                operator             key-broker           launcher
+  │ encrypt new image     │                     │                   │
+  │ register new digest   │                     │                   │
+  │──re-signed bundle++──▶│                     │                   │
+  │                       │───courier/install──▶│                   │
+  │                       │                     │ verify sig (G7)   │
+  │                       │                     │ bundle_seq↑ (G8)  │
+  │                       │ mirror image → AR   │                   │
+  │                       │                     │◀──poll /version───│
+  │                       │                     │──current digest──▶│
+  │                       │                     │◀──lease/acquire───│
+  │                       │                     │ G11: ∈allowed     │
+  │                       │                     │──Lease + keyset──▶│
+  │                       │                     │                   │ decrypt + rolling
+  │                       │                     │                   │ health 60s→rollback
 ```
 
 `vendor-release.sh` + `vendor-add-tenant.sh`(厂商)→ `operator-deploy.sh update`
