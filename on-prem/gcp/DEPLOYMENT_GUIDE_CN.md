@@ -45,17 +45,34 @@
 
 ### 两侧职责分工
 
-| | 厂商（Vendor） | Operator |
+**初始部署**
+
+| 职责 | 厂商（Vendor） | Operator |
 |---|---|---|
-| Authority/Verifier | ✅ 跑在自己主机 | — |
-| 镜像密钥环 | ✅ mint（私钥不出 Authority） | — |
-| 构建/加密镜像 | ✅ 推到公共 registry | — |
-| 同步到 AR | — | ✅ sync-image.sh |
-| 授权白名单注册 | ✅（在自己 Authority 上） | — |
-| compose 模板"安全 pin" | ✅ 填 pubkey + digest | — |
-| 客户值（registry/IP） | — | ✅ user_config |
-| 部署 CVM / courier | — | ✅ dstack-cloud |
-| 出网硬化 | — | ✅ SWP/防火墙 |
+| Authority / Verifier | ✅ 跑在自己主机 | — |
+| 全局镜像密钥环 | ✅ mint（私钥不出 Authority） | — |
+| 构建 / 加密镜像 | ✅ 推到公共 registry | — |
+| 指定 dstack OS 版本 + 从发布包取 `os_image_hash` | ✅ | — |
+| 算 compose_hash + 注册白名单（os-image / kms-compose / app） | ✅（在自己 Authority 上） | — |
+| 建租户 / 发 per-user API key（多租户） | ✅ | — |
+| compose 模板"安全 pin"（pubkey + digest） | ✅ | — |
+| 同步镜像到 AR | — | ✅ sync-image.sh |
+| 拉取指定 OS 版本 | — | ✅ `dstack-cloud pull <version>` |
+| 网络规划：预留静态 IP + 配 `kms_urls` | — | ✅ |
+| 填客户值（registry / IP） | — | ✅ user_config |
+| 部署 CVM（KMS + launcher）+ courier provision | — | ✅ dstack-cloud |
+| 验证（serving + E2E） | — | ✅ |
+| 出网硬化 | — | ✅ SWP / 防火墙 |
+
+**day-2 / 生命周期**
+
+| 职责 | 谁 |
+|---|---|
+| 业务版本更新（加密新镜像 → 注册新 `image_digest` → `sync-auth` 推新 bundle） | 厂商 |
+| 镜像密钥轮换 / 撤销 app·digest·key（→ sync-auth） | 厂商 |
+| Authority 持续在线（courier / sync-auth 要连） | 厂商 |
+| 重 provision / 重部署 CVM（改 IP、换 OS 版本、故障恢复） | Operator |
+| 监控：launcher `/status`、用量回执 `usage-receipt` | Operator（看 status）/ 厂商（收回执） |
 
 ### 部署前双方需商定的共享参数
 
@@ -63,6 +80,7 @@
 |---|---|---|---|
 | **KMS 静态内网 IP**（如 `10.128.15.220`） | 双方约定 | **无需配置**（key-broker 自测 CVM IP 当证书 SAN） | 预留该地址 + 绑 `private_ip` + 设 `kms_urls`/`KMS_HOST` |
 | **AR 路径** `${REGION}-docker.pkg.dev/${PROJECT}/${AR_REPO}` | operator | — | sync 目标 + `DSTACK_REGISTRY` |
+| **dstack OS 版本**（公开发布,如 `dstack-cloud-0.6.0`） | 厂商指定 | 从发布包的 `auth_hash.txt` 取 `os_image_hash` 注册 | `dstack-cloud pull <version>` 拉到本地 |
 | **workload app_id**（40 hex） | 厂商 | 注册 + 写进 workload compose | 写进 `app.json` |
 | **镜像 digests**（key-broker/dstack-kms/launcher/业务镜像） | 厂商（构建产出） | pin 进 compose / 注册 | — |
 | **AUTHORITY_PUBKEY** | 厂商（Authority 产出） | pin 进 KMS compose | — |
@@ -198,7 +216,7 @@ LN_COMPOSE_HASH=$( sha256sum deploy/launcher/shared/app-compose.json | cut -d' '
 
 export USER_ID=acme
 export APP_ID=<workload-app-id-40hex>     # 厂商选定的业务 app id
-export OS_IMAGE_HASH=<见 步骤 9 measure 取得>  # dstack OS 镜像的 UKI 哈希
+export OS_IMAGE_HASH=<指定 OS 版本发布包里 auth_hash.txt 的值>  # dstack OS 镜像的 UKI 哈希
 export IMAGE_DIGEST=sha256:<步骤 3 业务镜像 digest>
 
 # (a) 建租户（多租户时把返回的 API key 分发给该客户 operator）
@@ -225,7 +243,7 @@ curl -s -X POST $AUTHORITY/api/v1/admin/users/$USER_ID/images \
 ```
 
 - `prepare` + `sha256sum app-compose.json`：dstack 把 `docker-compose.yaml` 以**字面原文**（含 `${VAR}`）存进 `app-compose.json`，其 sha256 就是 CVM 证书将携带的 `compose_hash`。客户值在 user_config 不进此文件，故 hash 跨客户一致。
-- `os-images` / `kms-compose-hashes`：全局策略，KMS provision 时校验 KMS 自身身份（os + key_provider=tpm + compose）。
+- `os-images` / `kms-compose-hashes`：全局策略，KMS provision 时校验 KMS 自身身份（os + key_provider=tpm + compose）。`os_image_hash` 取自厂商**指定的 dstack 公开发布版本**——`dstack-cloud pull <version>`(或解压发布 tar)后读 `~/.dstack/images/<version>/auth_hash.txt`,**无需部署、无需 measure**。
 - `users/$USER_ID/images`：注册业务 app。`allowed_launcher_digests`=允许的 launcher compose 哈希（硬闸门）；`image_digest`→同时设为 `allowed_workload_digests` 和 `current_image_digest`（版本指针，launcher 按它拉镜像）。**解密私钥来自全局 keyring，不在此注册。**
 
 ## 步骤 5【厂商】填 compose 模板（安全 pin）+ 交付
@@ -293,6 +311,9 @@ gcloud compute addresses create dstack-kms-ip      --region=$REGION \
 gcloud compute addresses create dstack-launcher-ip --region=$REGION \
   --subnet=default --addresses=10.128.15.230 --project=$PROJECT
 
+# 拉厂商指定的 dstack OS 版本（公开发布；含 disk.raw + auth_hash.txt，prepare/deploy 要用本地镜像）
+dstack-cloud pull <os-version>      # 如 dstack-cloud-0.6.0
+
 # 放厂商交付的模板（含 pin）；deploy/ 被 gitignore，是 per-customer 状态
 cp -a <vendor-delivered>/kms      deploy/kms
 cp -a <vendor-delivered>/workload deploy/launcher
@@ -336,14 +357,9 @@ dstack-cloud -C deploy/kms fw allow 8001 8002   # 放行 IAP → key-broker（co
 **目的**：经 courier（CLI 中继 Authority ↔ in-VPC key-broker）把根密钥安全灌进 KMS。KMS 无公网也能完成。
 
 ```bash
-# 首次：取 OS 镜像哈希（只读，不释放根），填回厂商的 EXPECTED_OS_IMAGE_HASH / 步骤 4 的 os-images，
-# 并写 auth_hash.txt 让 CVM 自身也 pin（否则 BootInfo.os_image_hash 为空被 fail-closed 拒）
-gcloud compute start-iap-tunnel dstack-kms 8001 --local-host-port=localhost:8001 \
-  --project=$PROJECT --zone=$ZONE &
-python3 authority/kms_ctl.py measure --user-id $USER_ID \
-  --kms-url http://localhost:8001 --authority-url $AUTHORITY   # 打印 os_image_hash 等
-
-# provision（脚本封装了隧道 + 四步 courier）
+# provision（脚本封装了 IAP 隧道 + 四步 courier）。
+# OS 镜像哈希在步骤 4 已由厂商从发布包取得并注册;步骤 7 `dstack-cloud pull` 拉下来的镜像目录
+# 自带 auth_hash.txt,CVM 启动时自动 pin 自己的 os_image_hash——这里无需再 measure。
 scripts/provision-kms.sh        # = kms_ctl.py attest
 ```
 

@@ -65,17 +65,34 @@ derived from **its own independent root**, isolated across tenants.
 
 ### Who does what
 
-| | Vendor | Operator |
+**Initial deployment**
+
+| Responsibility | Vendor | Operator |
 |---|---|---|
 | Authority / Verifier | ✅ on its own host | — |
-| Image keyring | ✅ mint (private key never leaves the Authority) | — |
+| Global image keyring | ✅ mint (private key never leaves the Authority) | — |
 | Build / encrypt images | ✅ push to a public registry | — |
-| Sync to AR | — | ✅ sync-image.sh |
-| Register authorization whitelists | ✅ (on its own Authority) | — |
-| Compose-template "security pins" | ✅ fill pubkey + digests | — |
+| Choose the dstack OS version + read `os_image_hash` from its release | ✅ | — |
+| Compute compose_hash + register whitelists (os-image / kms-compose / app) | ✅ (on its own Authority) | — |
+| Create tenant / issue per-user API key (multi-tenant) | ✅ | — |
+| Compose-template "security pins" (pubkey + digests) | ✅ | — |
+| Sync images to AR | — | ✅ sync-image.sh |
+| Pull the chosen OS version | — | ✅ `dstack-cloud pull <version>` |
+| Network planning: reserve static IPs + set `kms_urls` | — | ✅ |
 | Customer values (registry / IP) | — | ✅ user_config |
-| Deploy CVMs / courier | — | ✅ dstack-cloud |
+| Deploy CVMs (KMS + launcher) + courier provision | — | ✅ dstack-cloud |
+| Verify (serving + E2E) | — | ✅ |
 | Egress hardening | — | ✅ SWP / firewall |
+
+**Day-2 / lifecycle**
+
+| Responsibility | Who |
+|---|---|
+| Workload version update (encrypt new image → register new `image_digest` → `sync-auth` to push the new bundle) | Vendor |
+| Image-key rotation / revoking an app·digest·key (→ sync-auth) | Vendor |
+| Keep the Authority online (courier / sync-auth connect to it) | Vendor |
+| Re-provision / redeploy CVMs (change IP, change OS version, recovery) | Operator |
+| Monitoring: launcher `/status`, usage receipts `usage-receipt` | Operator (watches status) / Vendor (collects receipts) |
 
 ### Shared parameters the two sides must agree on first
 
@@ -83,6 +100,7 @@ derived from **its own independent root**, isolated across tenants.
 |---|---|---|---|
 | **KMS static internal IP** (e.g. `10.128.15.220`) | both | **nothing to configure** (key-broker auto-detects the CVM IP as the cert SAN) | reserve the address + bind via `private_ip` + set `kms_urls`/`KMS_HOST` |
 | **AR path** `${REGION}-docker.pkg.dev/${PROJECT}/${AR_REPO}` | operator | — | sync target + `DSTACK_REGISTRY` |
+| **dstack OS version** (publicly released, e.g. `dstack-cloud-0.6.0`) | vendor chooses | read `os_image_hash` from the release's `auth_hash.txt` + register it | `dstack-cloud pull <version>` to fetch locally |
 | **workload app_id** (40 hex) | vendor | register it + put it in the workload compose | put it in `app.json` |
 | **image digests** (key-broker / dstack-kms / launcher / workload image) | vendor (build output) | pin into compose / register | — |
 | **AUTHORITY_PUBKEY** | vendor (Authority output) | pin into the KMS compose | — |
@@ -257,7 +275,7 @@ LN_COMPOSE_HASH=$( sha256sum deploy/launcher/shared/app-compose.json | cut -d' '
 
 export USER_ID=acme
 export APP_ID=<workload-app-id-40hex>     # vendor-chosen workload app id
-export OS_IMAGE_HASH=<obtained via step-9 measure>  # the dstack OS image UKI hash
+export OS_IMAGE_HASH=<the value in auth_hash.txt of the chosen OS release>  # the dstack OS image UKI hash
 export IMAGE_DIGEST=sha256:<step-3 workload image digest>
 
 # (a) Create the tenant (for multi-tenant, hand the returned API key to that customer's operator)
@@ -288,7 +306,10 @@ curl -s -X POST $AUTHORITY/api/v1/admin/users/$USER_ID/images \
   `compose_hash` the CVM's cert will carry. Customer values live in user_config and
   don't enter this file, so the hash is identical across customers.
 - `os-images` / `kms-compose-hashes`: global policy, used at KMS provision to check the
-  KMS's own identity (os + key_provider=tpm + compose).
+  KMS's own identity (os + key_provider=tpm + compose). `os_image_hash` comes from the
+  vendor-**chosen publicly-released dstack version** — `dstack-cloud pull <version>` (or
+  extract the release tar), then read `~/.dstack/images/<version>/auth_hash.txt`; **no
+  deploy and no measure needed**.
 - `users/$USER_ID/images`: registers the workload app. `allowed_launcher_digests` = the
   allowed launcher compose hashes (a hard gate); `image_digest` → set as both
   `allowed_workload_digests` and `current_image_digest` (the version pointer the
@@ -395,6 +416,9 @@ gcloud compute addresses create dstack-kms-ip      --region=$REGION \
 gcloud compute addresses create dstack-launcher-ip --region=$REGION \
   --subnet=default --addresses=10.128.15.230 --project=$PROJECT
 
+# Pull the vendor-chosen dstack OS version (public release; ships disk.raw + auth_hash.txt; prepare/deploy need the local image)
+dstack-cloud pull <os-version>      # e.g. dstack-cloud-0.6.0
+
 # Drop in the vendor-delivered templates (with the pins); deploy/ is gitignored per-customer state
 cp -a <vendor-delivered>/kms      deploy/kms
 cp -a <vendor-delivered>/workload deploy/launcher
@@ -447,15 +471,10 @@ dstack-cloud -C deploy/kms fw allow 8001 8002   # allow IAP → key-broker (cour
 Authority ↔ in-VPC key-broker). Works even though the KMS has no internet.
 
 ```bash
-# First time: read the OS-image hash (read-only, releases no root), fill it back into the
-# vendor's EXPECTED_OS_IMAGE_HASH / step-4 os-images, and write auth_hash.txt so the CVM
-# pins it too (else BootInfo.os_image_hash is empty and gets fail-closed denied)
-gcloud compute start-iap-tunnel dstack-kms 8001 --local-host-port=localhost:8001 \
-  --project=$PROJECT --zone=$ZONE &
-python3 authority/kms_ctl.py measure --user-id $USER_ID \
-  --kms-url http://localhost:8001 --authority-url $AUTHORITY   # prints os_image_hash etc.
-
-# provision (the script wraps the tunnel + 4-step courier)
+# provision (the script wraps the IAP tunnel + 4-step courier).
+# The OS-image hash was already obtained from the release and registered by the vendor in
+# step 4; the image dir pulled in step 7 ships auth_hash.txt, so the CVM pins its own
+# os_image_hash at boot — no measure needed here.
 scripts/provision-kms.sh        # = kms_ctl.py attest
 ```
 
