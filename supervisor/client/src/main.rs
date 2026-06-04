@@ -71,36 +71,37 @@ async fn main() -> Result<()> {
                 cid: None,
                 note: String::new(),
             };
-            print_json(&client.deploy(&config).await?);
+            print_json(&client.deploy(&config).await?)?;
         }
         Commands::Start { id } => {
-            print_json(&client.start(&id).await?);
+            print_json(&client.start(&id).await?)?;
         }
         Commands::Stop { id } => {
-            print_json(&client.stop(&id).await?);
+            print_json(&client.stop(&id).await?)?;
         }
         Commands::Remove { id } => {
-            print_json(&client.remove(&id).await?);
+            print_json(&client.remove(&id).await?)?;
         }
         Commands::List => {
-            print_json(&client.list().await?);
+            print_json(&client.list().await?)?;
         }
         Commands::Info { id } => {
-            print_json(&client.info(&id).await?);
+            print_json(&client.info(&id).await?)?;
         }
         Commands::Ping => {
-            print_json(&client.ping().await?);
+            print_json(&client.ping().await?)?;
         }
         Commands::Clear => {
-            print_json(&client.clear().await?);
+            print_json(&client.clear().await?)?;
         }
         Commands::Shutdown => {
-            print_json(&client.shutdown().await?);
+            print_json(&client.shutdown().await?)?;
         }
     }
     Ok(())
 }
 
-fn print_json<T: serde::Serialize>(value: &T) {
-    println!("{}", serde_json::to_string(value).unwrap());
+fn print_json<T: serde::Serialize>(value: &T) -> Result<()> {
+    println!("{}", serde_json::to_string(value)?);
+    Ok(())
 }

@@ -106,6 +106,33 @@ impl Protocol {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum TeePlatform {
+    #[default]
+    Auto,
+    Tdx,
+    AmdSevSnp,
+}
+
+impl TeePlatform {
+    pub fn resolve(self) -> Self {
+        match self {
+            Self::Auto => Self::resolve_from_cpuinfo(
+                &fs_err::read_to_string("/proc/cpuinfo").unwrap_or_default(),
+            ),
+            platform => platform,
+        }
+    }
+
+    pub fn resolve_from_cpuinfo(_cpuinfo: &str) -> Self {
+        // Keep `auto` conservative while AMD SEV-SNP support is experimental and
+        // verifier/KMS/app binding are not production-ready. Operators must opt
+        // into SNP explicitly with `platform = "amd-sev-snp"`.
+        Self::Tdx
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct PortRange {
     pub protocol: Protocol,
@@ -143,6 +170,9 @@ impl PortMappingConfig {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct CvmConfig {
+    /// TEE platform to use when launching CVMs.
+    #[serde(default)]
+    pub platform: TeePlatform,
     pub qemu_path: PathBuf,
     /// The URL of the KMS server
     pub kms_urls: Vec<String>,
@@ -604,5 +634,23 @@ mod tests {
         let output = "No version information here";
         let result = parse_qemu_version_from_output(output);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn tee_platform_deserializes_amd_sev_snp() {
+        let platform: TeePlatform = serde_json::from_str("\"amd-sev-snp\"").unwrap();
+        assert_eq!(platform, TeePlatform::AmdSevSnp);
+    }
+
+    #[test]
+    fn tee_platform_auto_stays_tdx_even_with_amd_snp_flag_while_experimental() {
+        let cpuinfo = "flags : fpu svm sev sev_es sev_snp debug_swap";
+        assert_eq!(TeePlatform::resolve_from_cpuinfo(cpuinfo), TeePlatform::Tdx);
+    }
+
+    #[test]
+    fn tee_platform_auto_falls_back_to_tdx_without_amd_snp_flag() {
+        let cpuinfo = "flags : fpu vmx tdx_guest";
+        assert_eq!(TeePlatform::resolve_from_cpuinfo(cpuinfo), TeePlatform::Tdx);
     }
 }

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::{bail, Context, Result};
+use dstack_attest::attestation::AttestationMode;
 use dstack_types::{mr_config::MrConfig, KeyProviderKind};
 use tracing::info;
 
@@ -35,6 +36,22 @@ pub fn verify_mr_config_id(
     key_provider: KeyProviderKind,
     key_provider_id: &[u8],
 ) -> Result<()> {
+    let mode = AttestationMode::detect().context("Failed to detect attestation mode")?;
+    verify_mr_config_id_for_mode(mode, compose_hash, app_id, key_provider, key_provider_id)
+}
+
+fn verify_mr_config_id_for_mode(
+    mode: AttestationMode,
+    compose_hash: &[u8; 32],
+    app_id: &[u8; 20],
+    key_provider: KeyProviderKind,
+    key_provider_id: &[u8],
+) -> Result<()> {
+    if mode == AttestationMode::DstackAmdSevSnp {
+        info!("Skipping TDX mr_config_id verification for AMD SEV-SNP guest");
+        return Ok(());
+    }
+
     let read_mr_config_id = read_mr_config_id().context("Failed to read mr_config_id")?;
     info!("mr_config_id: {}", hex::encode(read_mr_config_id));
     if read_mr_config_id == [0u8; 48] {
@@ -54,4 +71,21 @@ pub fn verify_mr_config_id(
         bail!("Invalid mr_config_id");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn amd_sev_snp_skips_tdx_mr_config_id_quote_verification() {
+        verify_mr_config_id_for_mode(
+            AttestationMode::DstackAmdSevSnp,
+            &[0u8; 32],
+            &[0u8; 20],
+            KeyProviderKind::None,
+            &[],
+        )
+        .unwrap();
+    }
 }

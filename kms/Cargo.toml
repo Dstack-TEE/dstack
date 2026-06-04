@@ -48,5 +48,8 @@ serde-duration.workspace = true
 dstack-verifier = { workspace = true, default-features = false }
 dstack-mr.workspace = true
 
+[dev-dependencies]
+dstack-attest.workspace = true
+
 [features]
 default = []

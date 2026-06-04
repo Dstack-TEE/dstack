@@ -18,16 +18,22 @@ use ra_rpc::{
     CallContext, RpcCall,
 };
 use ra_tls::{
-    attestation::{PlatformEvidence, QuoteContentType, VerifiedAttestation, VersionedAttestation},
+    attestation::{
+        GetDeviceId, PlatformEvidence, QuoteContentType, VerifiedAttestation, VersionedAttestation,
+    },
     cert::{CaCert, CertRequest},
     rcgen::{Certificate, KeyPair, PKCS_ECDSA_P256_SHA256},
 };
 use safe_write::safe_write;
+use sha2::Digest;
 
 use crate::{
-    config::KmsConfig,
-    main_service::upgrade_authority::{
-        app_attest, dstack_client, ensure_kms_allowed, ensure_self_kms_allowed, pad64,
+    config::{KmsConfig, SevSnpMeasureConfig},
+    main_service::{
+        build_boot_info_for_attestation,
+        upgrade_authority::{
+            app_attest, dstack_client, ensure_kms_allowed, ensure_self_kms_allowed, pad64,
+        },
     },
 };
 
@@ -116,6 +122,7 @@ impl OnboardRpc for OnboardHandler {
             .context("Failed to decode attestation")?;
         let attestation_mode = match &attestation.clone().into_v1().platform {
             PlatformEvidence::Tdx { .. } => "dstack-tdx",
+            PlatformEvidence::SevSnp { .. } => "dstack-amd-sev-snp",
             PlatformEvidence::GcpTdx => "dstack-gcp-tdx",
             PlatformEvidence::NitroEnclave => "dstack-nitro-enclave",
         }
@@ -132,16 +139,6 @@ impl OnboardRpc for OnboardHandler {
             .await
             .context("Failed to get VM info")?;
 
-        // Decode app info to get device_id, mr_aggregated, os_image_hash, mr_system
-        let app_info = verified
-            .decode_app_info_ex(false, &info.vm_config)
-            .context("Failed to decode app info")?;
-        let ppid = verified
-            .report
-            .tdx_report()
-            .map(|report| report.ppid.to_vec())
-            .unwrap_or_default();
-
         let (eth_rpc_url, kms_contract_address) = match self.state.config.auth_api.get_info().await
         {
             Ok(info) => (
@@ -154,20 +151,162 @@ impl OnboardRpc for OnboardHandler {
             }
         };
 
-        Ok(AttestationInfoResponse {
-            device_id: app_info.device_id,
-            mr_aggregated: app_info.mr_aggregated.to_vec(),
-            os_image_hash: app_info.os_image_hash,
+        build_attestation_info_response(
+            self.state.config.sev_snp.as_ref(),
+            &verified,
             attestation_mode,
-            site_name: self.state.config.site_name.clone(),
+            &info.vm_config,
+            self.state.config.site_name.clone(),
             eth_rpc_url,
             kms_contract_address,
-            ppid,
-        })
+        )
     }
 
     async fn finish(self) -> anyhow::Result<()> {
         std::process::exit(0);
+    }
+}
+
+fn build_attestation_info_response(
+    sev_snp_config: Option<&SevSnpMeasureConfig>,
+    verified: &VerifiedAttestation,
+    attestation_mode: String,
+    vm_config: &str,
+    site_name: String,
+    eth_rpc_url: String,
+    kms_contract_address: String,
+) -> Result<AttestationInfoResponse> {
+    let boot_info = build_boot_info_for_attestation(sev_snp_config, verified, false, vm_config)
+        .context("Failed to decode app info")?;
+    let raw_device_id = verified.report.get_devide_id();
+    Ok(AttestationInfoResponse {
+        device_id: sha2::Sha256::digest(&raw_device_id).to_vec(),
+        mr_aggregated: boot_info.mr_aggregated,
+        os_image_hash: boot_info.os_image_hash,
+        attestation_mode,
+        site_name,
+        eth_rpc_url,
+        kms_contract_address,
+        ppid: raw_device_id,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        config::SevSnpMeasureConfig,
+        main_service::amd_attest::{
+            compute_expected_measurement, MeasurementInput, OvmfSectionParam,
+        },
+    };
+    use sha2::Digest;
+
+    fn sev_snp_config() -> SevSnpMeasureConfig {
+        SevSnpMeasureConfig {
+            ovmf_path: None,
+            guest_features: 1,
+        }
+    }
+
+    fn hex_of(byte: u8, len: usize) -> String {
+        hex::encode(vec![byte; len])
+    }
+
+    fn valid_snp_measurement_input() -> MeasurementInput {
+        MeasurementInput {
+            app_id: hex_of(0x11, 20),
+            compose_hash: hex_of(0x22, 32),
+            rootfs_hash: hex_of(0x33, 32),
+            base_cmdline: None,
+            docker_files_hash: Some(hex_of(0x77, 32)),
+            ovmf_hash: hex_of(0x44, 48),
+            kernel_hash: hex_of(0x55, 32),
+            initrd_hash: hex_of(0x66, 32),
+            sev_hashes_table_gpa: 0x80_1000,
+            sev_es_reset_eip: 0xffff_fff0,
+            vcpus: 2,
+            vcpu_type: Some("epyc-v4".to_string()),
+            ovmf_sections: vec![
+                OvmfSectionParam {
+                    gpa: 0x100000,
+                    size: 0x2000,
+                    section_type: 1,
+                },
+                OvmfSectionParam {
+                    gpa: 0x80_0000,
+                    size: 0x1000,
+                    section_type: 0x10,
+                },
+                OvmfSectionParam {
+                    gpa: 0x81_0000,
+                    size: 0x1000,
+                    section_type: 2,
+                },
+                OvmfSectionParam {
+                    gpa: 0x82_0000,
+                    size: 0x1000,
+                    section_type: 3,
+                },
+            ],
+        }
+    }
+
+    fn verified_snp_attestation(measurement: [u8; 48], chip_id: [u8; 64]) -> VerifiedAttestation {
+        VerifiedAttestation {
+            quote: ra_tls::attestation::AttestationQuote::DstackAmdSevSnp(
+                ra_tls::attestation::SnpQuote {
+                    report: Vec::new(),
+                    cert_chain: Vec::new(),
+                },
+            ),
+            runtime_events: Vec::new(),
+            report_data: [0x42; 64],
+            config: String::new(),
+            report: ra_tls::attestation::DstackVerifiedReport::DstackAmdSevSnp(
+                dstack_attest::amd_sev_snp::VerifiedAmdSnpReport {
+                    measurement,
+                    report_data: [0x42; 64],
+                    chip_id,
+                    tcb_info: dstack_attest::amd_sev_snp::AmdSnpTcbInfo::default(),
+                    advisory_ids: Vec::new(),
+                },
+            ),
+        }
+    }
+
+    #[test]
+    fn attestation_info_response_uses_snp_boot_info_and_chip_id() {
+        let input = valid_snp_measurement_input();
+        let measurement = compute_expected_measurement(&sev_snp_config(), &input).unwrap();
+        let attestation = verified_snp_attestation(measurement, [0xab; 64]);
+        let vm_config = serde_json::json!({
+            "sev_snp_measurement": input,
+        })
+        .to_string();
+
+        let response = build_attestation_info_response(
+            Some(&sev_snp_config()),
+            &attestation,
+            "dstack-amd-sev-snp".to_string(),
+            &vm_config,
+            "test-site".to_string(),
+            "https://rpc.example".to_string(),
+            "0x1234".to_string(),
+        )
+        .expect("snp attestation info should be derived from snp boot info");
+
+        assert_eq!(
+            response.device_id,
+            sha2::Sha256::digest([0xab; 64]).to_vec()
+        );
+        assert_eq!(response.ppid, vec![0xab; 64]);
+        assert_eq!(response.mr_aggregated, measurement.to_vec());
+        assert_eq!(response.os_image_hash, vec![0x33; 32]);
+        assert_eq!(response.attestation_mode, "dstack-amd-sev-snp");
+        assert_eq!(response.site_name, "test-site");
+        assert_eq!(response.eth_rpc_url, "https://rpc.example");
+        assert_eq!(response.kms_contract_address, "0x1234");
     }
 }
 

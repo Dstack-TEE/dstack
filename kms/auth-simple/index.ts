@@ -9,6 +9,7 @@ import { readFileSync, existsSync } from 'fs';
 
 // zod schemas for validation - compatible with auth-eth implementation
 const BootInfoSchema = z.object({
+  attestationMode: z.string().optional().default(''),
   mrAggregated: z.string().describe('aggregated MR measurement'),
   osImageHash: z.string().describe('OS Image hash'),
   appId: z.string().describe('application ID'),
@@ -46,6 +47,10 @@ const AuthConfigSchema = z.object({
   chainId: z.number().default(0),
   appImplementation: z.string().default('0x0000000000000000000000000000000000000000'),
   osImages: z.array(z.string()).default([]),
+  // TDX and SEV-SNP production defaults remain strict: only UpToDate is
+  // accepted unless operators explicitly allow another verifier-derived status.
+  allowedTcbStatuses: z.array(z.string()).default(['UpToDate']),
+  allowedAdvisoryIds: z.array(z.string()).default([]),
   kms: KmsConfigSchema.default({}),
   apps: z.record(z.string(), AppConfigSchema).default({})
 });
@@ -92,12 +97,23 @@ class ConfigBackend {
     const deviceId = normalizeHex(bootInfo.deviceId);
 
     // check TCB status
-    if (bootInfo.tcbStatus !== 'UpToDate') {
+    const allowedTcbStatuses = config.allowedTcbStatuses;
+    if (!allowedTcbStatuses.includes(bootInfo.tcbStatus)) {
       return {
         isAllowed: false,
-        reason: 'TCB status is not up to date',
+        reason: 'TCB status is not allowed',
         gatewayAppId: config.gatewayAppId
       };
+    }
+
+    for (const advisoryId of bootInfo.advisoryIds) {
+      if (!config.allowedAdvisoryIds.includes(advisoryId)) {
+        return {
+          isAllowed: false,
+          reason: 'advisory ID is not allowed',
+          gatewayAppId: config.gatewayAppId
+        };
+      }
     }
 
     // check OS image

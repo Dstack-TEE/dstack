@@ -85,6 +85,12 @@ async fn sign_cert_request(
 
 mod config_id_verifier;
 
+fn is_unsupported_app_info_quote(err: &anyhow::Error) -> bool {
+    let message = format!("{err:#}");
+    message.contains("Unsupported attestation quote")
+        || message.contains("unsupported attestation quote for app info decoding")
+}
+
 #[derive(clap::Parser)]
 /// Prepare full disk encryption
 pub struct SetupArgs {
@@ -852,11 +858,14 @@ impl<'a> Stage0<'a> {
                     bail!("Invalid server cert usage: {usage}");
                 }
                 if let Some(att) = &cert.attestation {
-                    let kms_info = att
-                        .decode_app_info(false)
-                        .context("Failed to decode app_info")?;
-                    emit_runtime_event("mr-kms", &kms_info.mr_aggregated)
-                        .context("Failed to extend mr-kms to RTMR3")?;
+                    match att.decode_app_info(false) {
+                        Ok(kms_info) => emit_runtime_event("mr-kms", &kms_info.mr_aggregated)
+                            .context("Failed to extend mr-kms to RTMR3")?,
+                        Err(err) if is_unsupported_app_info_quote(&err) => {
+                            warn!("Skipping mr-kms runtime event for unsupported attestation quote: {err:#}");
+                        }
+                        Err(err) => return Err(err).context("Failed to decode app_info"),
+                    }
                 }
                 Ok(())
             }))

@@ -5,7 +5,9 @@
 //! QEMU related code
 use crate::{
     app::Manifest,
-    config::{CvmConfig, GatewayConfig, Networking, NetworkingMode, ProcessAnnotation},
+    config::{
+        CvmConfig, GatewayConfig, Networking, NetworkingMode, ProcessAnnotation, TeePlatform,
+    },
 };
 use std::{collections::HashMap, os::unix::fs::PermissionsExt};
 use std::{
@@ -16,7 +18,7 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use super::{image::Image, GpuConfig, VmState};
+use super::{image::Image, GpuConfig, ImageInfo, VmState};
 use anyhow::{bail, Context, Result};
 use base64::prelude::*;
 use bon::Builder;
@@ -362,7 +364,10 @@ impl VmState {
 
 #[cfg(test)]
 mod tests {
-    use super::sanitize_optional;
+    use super::{
+        amd_sev_snp_measured_cmdline, amd_sev_snp_memory_backend_arg, amd_sev_snp_rootfs_hash,
+        sanitize_optional, virtio_pci_device, ImageInfo,
+    };
 
     #[test]
     fn sanitize_optional_filters_empty_owned_values() {
@@ -382,6 +387,78 @@ mod tests {
             sanitize_optional(Some("instance-123")),
             Some("instance-123")
         );
+    }
+
+    #[test]
+    fn amd_sev_snp_memory_backend_arg_uses_passed_final_memory_size() {
+        assert_eq!(
+            amd_sev_snp_memory_backend_arg(4096),
+            "memory-backend-memfd,id=ram1,size=4096M,share=true,prealloc=false"
+        );
+    }
+
+    #[test]
+    fn amd_sev_snp_measured_cmdline_binds_app_identity() {
+        assert_eq!(
+            amd_sev_snp_measured_cmdline(
+                "console=ttyS0 loglevel=7",
+                "22",
+                "33",
+                "1111111111111111111111111111111111111111"
+            ),
+            "console=ttyS0 loglevel=7 docker_compose_hash=22 rootfs_hash=33 app_id=1111111111111111111111111111111111111111"
+        );
+    }
+
+    #[test]
+    fn amd_sev_snp_rootfs_hash_falls_back_to_dstack_cmdline() {
+        let info = ImageInfo {
+            cmdline: Some("console=ttyS0 dstack.rootfs_hash=abc123 dstack.rootfs_size=100".into()),
+            kernel: "kernel".into(),
+            initrd: "initrd".into(),
+            hda: None,
+            rootfs: None,
+            bios: None,
+            rootfs_hash: None,
+            shared_ro: false,
+            version: "0.5.11".into(),
+            is_dev: false,
+            ovmf_variant: None,
+        };
+
+        assert_eq!(amd_sev_snp_rootfs_hash(&info).unwrap(), "abc123");
+    }
+
+    #[test]
+    fn amd_sev_snp_uses_confidential_virtio_pci_options() {
+        assert_eq!(
+            virtio_pci_device("virtio-blk-pci,drive=hd0", true),
+            "virtio-blk-pci,drive=hd0,disable-legacy=on,iommu_platform=true"
+        );
+        assert_eq!(
+            virtio_pci_device("virtio-blk-pci,drive=hd0", false),
+            "virtio-blk-pci,drive=hd0"
+        );
+    }
+}
+
+fn amd_sev_snp_rootfs_hash(info: &ImageInfo) -> Result<&str> {
+    if let Some(rootfs_hash) = info.rootfs_hash.as_deref() {
+        return Ok(rootfs_hash);
+    }
+    info.cmdline
+        .as_deref()
+        .unwrap_or_default()
+        .split_whitespace()
+        .find_map(|param| param.strip_prefix("dstack.rootfs_hash="))
+        .ok_or_else(|| anyhow::anyhow!("rootfs_hash is required for amd sev-snp"))
+}
+
+fn virtio_pci_device(device: &str, snp: bool) -> String {
+    if snp {
+        format!("{device},disable-legacy=on,iommu_platform=true")
+    } else {
+        device.to_string()
     }
 }
 
@@ -410,11 +487,14 @@ impl VmConfig {
         }
         let app_compose = workdir.app_compose().context("Failed to get app compose")?;
         let qemu = &cfg.qemu_path;
+        let is_amd_sev_snp =
+            cfg.platform.resolve() == TeePlatform::AmdSevSnp && !self.manifest.no_tee;
         let mut smp = self.manifest.vcpu.max(1);
         let mut mem = self.manifest.memory;
         let mut command = Command::new(qemu);
         command.arg("-accel").arg("kvm");
-        command.arg("-cpu").arg("host");
+        let cpu = if is_amd_sev_snp { "EPYC-v4" } else { "host" };
+        command.arg("-cpu").arg(cpu);
         command.arg("-nographic");
         command.arg("-nodefaults");
         command.arg("-chardev").arg(format!(
@@ -470,7 +550,10 @@ impl VmConfig {
                         "file={},if=none,id=hd0,format=raw,readonly=on",
                         rootfs.display()
                     ));
-                    command.arg("-device").arg("virtio-blk-pci,drive=hd0");
+                    command.arg("-device").arg(virtio_pci_device(
+                        "virtio-blk-pci,drive=hd0",
+                        is_amd_sev_snp,
+                    ));
                 }
                 _ => {
                     bail!("Unsupported rootfs type: {ext}");
@@ -482,7 +565,10 @@ impl VmConfig {
             .arg("-drive")
             .arg(format!("file={},if=none,id=hd1", hda_path.display()))
             .arg("-device")
-            .arg("virtio-blk-pci,drive=hd1");
+            .arg(virtio_pci_device(
+                "virtio-blk-pci,drive=hd1",
+                is_amd_sev_snp,
+            ));
         // Resolve per-VM networking override against global config.
         // Per-VM only sets mode; shared fields (bridge name, mac_prefix, etc.)
         // are merged from global config.
@@ -506,7 +592,10 @@ impl VmConfig {
         // Generate deterministic MAC for all networking modes
         let prefix = networking.mac_prefix_bytes();
         let mac = mac_address_for_vm(&self.manifest.id, &prefix);
-        let net_device = format!("virtio-net-pci,netdev=net0,mac={mac}");
+        let net_device = virtio_pci_device(
+            &format!("virtio-net-pci,netdev=net0,mac={mac}"),
+            is_amd_sev_snp,
+        );
         let netdev = match networking.mode {
             NetworkingMode::User => {
                 let mut netdev = format!(
@@ -535,7 +624,6 @@ impl VmConfig {
         command.arg("-netdev").arg(netdev);
         command.arg("-device").arg(net_device);
 
-        self.configure_machine(&mut command, &workdir, cfg, &app_compose)?;
         self.configure_smbios(&mut command, cfg);
 
         if matches!(app_compose.key_provider(), KeyProviderKind::Tpm) {
@@ -553,9 +641,10 @@ impl VmConfig {
                 .arg("tpm-tis,tpmdev=tpm0");
         }
 
-        command
-            .arg("-device")
-            .arg(format!("vhost-vsock-pci,guest-cid={}", self.cid));
+        command.arg("-device").arg(virtio_pci_device(
+            &format!("vhost-vsock-pci,guest-cid={}", self.cid),
+            is_amd_sev_snp,
+        ));
 
         // Configure shared files delivery: either via disk or 9p
         match cfg.host_share_mode.as_str() {
@@ -580,7 +669,10 @@ impl VmConfig {
                         HOST_SHARED_DISK_LABEL
                     ))
                     .arg("-device")
-                    .arg("virtio-blk-pci,drive=vvfat0");
+                    .arg(virtio_pci_device(
+                        "virtio-blk-pci,drive=vvfat0",
+                        is_amd_sev_snp,
+                    ));
             }
             "vhd" => {
                 // Use a second virtual disk (hd2) to share files
@@ -597,7 +689,10 @@ impl VmConfig {
                         shared_disk_path.display()
                     ))
                     .arg("-device")
-                    .arg("virtio-blk-pci,drive=hd2");
+                    .arg(virtio_pci_device(
+                        "virtio-blk-pci,drive=hd2",
+                        is_amd_sev_snp,
+                    ));
             }
             _ => {
                 bail!("Invalid host sharing mode: {}", cfg.host_share_mode);
@@ -657,6 +752,8 @@ impl VmConfig {
                 bus_nr += count + 1;
             }
         }
+
+        self.configure_machine(&mut command, &workdir, cfg, &app_compose, mem)?;
 
         // Configure GPU devices
         if !gpus.gpus.is_empty() {
@@ -721,8 +818,29 @@ impl VmConfig {
             }
         }
 
-        // Add kernel command line
-        if let Some(cmdline) = &self.image.info.cmdline {
+        // Add kernel command line. SNP launch measurement includes app identity
+        // through the measured QEMU kernel command line, matching TDX's
+        // app-id-in-measured-identity semantics without relying on post-launch
+        // RTMRs (which SNP does not have).
+        let cmdline = match (&self.image.info.cmdline, cfg.platform.resolve()) {
+            (Some(cmdline), TeePlatform::AmdSevSnp) if !self.manifest.no_tee => {
+                let compose_hash = hex::encode(
+                    workdir
+                        .app_compose_hash()
+                        .context("Failed to get compose hash")?,
+                );
+                let rootfs_hash = amd_sev_snp_rootfs_hash(&self.image.info)?;
+                Some(amd_sev_snp_measured_cmdline(
+                    cmdline,
+                    &compose_hash,
+                    rootfs_hash,
+                    &self.manifest.app_id,
+                ))
+            }
+            (Some(cmdline), _) => Some(cmdline.clone()),
+            (None, _) => None,
+        };
+        if let Some(cmdline) = cmdline {
             command.arg("-append").arg(cmdline);
         }
 
@@ -783,6 +901,7 @@ impl VmConfig {
         workdir: &VmWorkDir,
         cfg: &CvmConfig,
         app_compose: &AppCompose,
+        mem: u32,
     ) -> Result<()> {
         if self.manifest.no_tee {
             command
@@ -791,10 +910,27 @@ impl VmConfig {
             return Ok(());
         }
 
-        command
-            .arg("-machine")
-            .arg("q35,kernel-irqchip=split,confidential-guest-support=tdx,hpet=off");
+        match cfg.platform.resolve() {
+            TeePlatform::Tdx | TeePlatform::Auto => {
+                command
+                    .arg("-machine")
+                    .arg("q35,kernel-irqchip=split,confidential-guest-support=tdx,hpet=off");
+                self.configure_tdx_guest(command, workdir, cfg, app_compose)?;
+            }
+            TeePlatform::AmdSevSnp => {
+                self.configure_amd_sev_snp_guest(command, cfg, mem);
+            }
+        }
+        Ok(())
+    }
 
+    fn configure_tdx_guest(
+        &self,
+        command: &mut Command,
+        workdir: &VmWorkDir,
+        cfg: &CvmConfig,
+        app_compose: &AppCompose,
+    ) -> Result<()> {
         let img_ver = self.image.info.version_tuple().unwrap_or_default();
         let support_mr_config_id = img_ver >= (0, 5, 2);
 
@@ -871,6 +1007,21 @@ impl VmConfig {
         Ok(())
     }
 
+    fn configure_amd_sev_snp_guest(&self, command: &mut Command, cfg: &CvmConfig, mem: u32) {
+        command
+            .arg("-object")
+            .arg(amd_sev_snp_memory_backend_arg(mem));
+        command
+            .arg("-object")
+            .arg("sev-snp-guest,id=sev0,policy=0x30000,sev-device=/dev/sev,kernel-hashes=on,author-key-enabled=on,cbitpos=51,reduced-phys-bits=1");
+        command.arg("-machine").arg(
+            "q35,kernel-irqchip=split,confidential-guest-support=sev0,memory-backend=ram1,hpet=off",
+        );
+        if cfg.qgs_port.is_some() {
+            tracing::warn!("qgs_port is ignored for amd sev-snp guests");
+        }
+    }
+
     fn configure_smbios(&self, command: &mut Command, cfg: &CvmConfig) {
         let p = &cfg.product;
 
@@ -914,6 +1065,25 @@ impl VmConfig {
             }
         }
     }
+}
+
+fn amd_sev_snp_memory_backend_arg(mem: u32) -> String {
+    format!("memory-backend-memfd,id=ram1,size={mem}M,share=true,prealloc=false")
+}
+
+fn amd_sev_snp_measured_cmdline(
+    base_cmdline: &str,
+    compose_hash: &str,
+    rootfs_hash: &str,
+    app_id: &str,
+) -> String {
+    format!(
+        "{} docker_compose_hash={} rootfs_hash={} app_id={}",
+        base_cmdline.trim(),
+        compose_hash,
+        rootfs_hash,
+        app_id
+    )
 }
 
 /// Round up a value to the nearest multiple of another value.

@@ -10,7 +10,10 @@ pub use tdx_attest as tdx;
 
 use crate::attestation::AttestationMode;
 
+pub mod amd_sev_snp;
 pub mod attestation;
+#[cfg(feature = "quote")]
+mod sev_snp;
 mod v1;
 
 /// Emit a runtime event that extends RTMR3 and logs the event.
