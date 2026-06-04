@@ -196,6 +196,7 @@ class GcpConfig:
     # Network settings
     network: str = "default"
     subnet: str = ""
+    private_ip: str = ""  # static internal IP to bind (--private-network-ip)
 
     # Identity settings
     service_account: str = ""
@@ -236,6 +237,7 @@ class GcpConfig:
             "bucket": "",
             "network": "default",
             "subnet": "",
+            "private_ip": "",
             "service_account": "",
             "scopes": [],
             "tags": [],
@@ -1408,6 +1410,13 @@ class CloudDeploymentManager:
             create_args.append(f"--network={config.network}")
         if config.subnet:
             create_args.append(f"--subnet={config.subnet}")
+        if config.private_ip:
+            # Bind a reserved static internal IP so the VM keeps the same RFC1918
+            # address across remove/deploy. --private-network-ip needs the subnet
+            # named, so default it when the user didn't set one.
+            if not config.subnet:
+                create_args.append("--subnet=default")
+            create_args.append(f"--private-network-ip={config.private_ip}")
         if config.service_account:
             create_args.append(f"--service-account={config.service_account}")
         if config.scopes:
