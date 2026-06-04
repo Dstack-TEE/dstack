@@ -22,6 +22,7 @@
 #   DSTACK_SNP_SMOKE_OVMF=/opt/AMDSEV/usr/local/share/qemu/OVMF.fd
 #   DSTACK_SNP_SMOKE_IMAGE_URL=https://github.com/Dstack-TEE/meta-dstack/releases/download/v0.5.11/dstack-dev-0.5.11.tar.gz
 #   DSTACK_SNP_SMOKE_IMAGE_NAME=dstack-dev-0.5.11-snp-dnsfix
+#   DSTACK_SNP_SMOKE_ALLOW_OLD_QEMU=1  # bypasses the QEMU >= 10 preflight
 
 set -euo pipefail
 
@@ -41,6 +42,7 @@ KMS_HOST_PORT="${DSTACK_SNP_SMOKE_KMS_HOST_PORT:-15443}"
 APP_HOST_PORT="${DSTACK_SNP_SMOKE_APP_HOST_PORT:-15543}"
 ALLOW_OUT_OF_DATE_TCB="${DSTACK_SNP_SMOKE_ALLOW_OUT_OF_DATE_TCB:-0}"
 RUN_STRICT_TCB_PROBE="${DSTACK_SNP_SMOKE_STRICT_TCB_PROBE:-1}"
+ALLOW_OLD_QEMU="${DSTACK_SNP_SMOKE_ALLOW_OLD_QEMU:-0}"
 
 need() {
 	if ! command -v "$1" >/dev/null 2>&1; then
@@ -61,6 +63,25 @@ test -x "$QEMU_PATH" || { echo "missing SNP QEMU: $QEMU_PATH" >&2; exit 1; }
 test -r "$OVMF_PATH" || { echo "missing SNP OVMF: $OVMF_PATH" >&2; exit 1; }
 test -f "$REPO/vmm/src/vmm-cli.py" || { echo "missing vmm-cli.py; set DSTACK_SNP_SMOKE_REPO" >&2; exit 1; }
 
+qemu_version_output=$("$QEMU_PATH" --version | head -1)
+qemu_version=$(printf '%s\n' "$qemu_version_output" | sed -n 's/.*version \([0-9][0-9]*\)\.\([0-9][0-9]*\).*/\1.\2/p')
+qemu_major=${qemu_version%%.*}
+if [[ -z "$qemu_version" ]]; then
+	echo "Warning: could not parse QEMU version from: $qemu_version_output" >&2
+elif (( qemu_major < 10 )) && [[ "$ALLOW_OLD_QEMU" != "1" ]]; then
+	cat >&2 <<EOF
+Unsupported SNP smoke QEMU version: $qemu_version_output
+
+The known-good PR #703 smoke used AMDSEV QEMU 10.0.2. A local Chipotle
+attempt with QEMU 9.1.0 reached OVMF/EFI stub and then exited with:
+  qemu-system-x86_64: cpus are not resettable, terminating
+
+Use an AMDSEV QEMU >= 10 build, or set DSTACK_SNP_SMOKE_ALLOW_OLD_QEMU=1
+if you intentionally want to reproduce/debug the older-QEMU failure.
+EOF
+	exit 1
+fi
+
 mkdir -p "$ART" "$BASE/images" "$BASE/run" "$BASE/http-root"
 exec > >(tee "$LOG") 2>&1
 
@@ -68,6 +89,7 @@ echo "== SNP E2E smoke start: $(date -Is) =="
 echo "repo=$REPO"
 echo "repo_head=$(git -C "$REPO" rev-parse --short=16 HEAD 2>/dev/null || echo unknown)"
 echo "qemu=$QEMU_PATH"
+echo "qemu_version=$qemu_version_output"
 echo "ovmf_sha256=$(sha256sum "$OVMF_PATH" | awk '{print $1}')"
 echo "image=$IMAGE_NAME"
 
@@ -243,6 +265,8 @@ address = "127.0.0.1"
 port = 3443
 EOF
 
+# Redirect to a user-owned artifact file; only the VMM process itself needs sudo.
+# shellcheck disable=SC2024
 sudo "$BIN/dstack-vmm" -c "$BASE/vmm.toml" serve >"$ART/vmm.log" 2>&1 & echo $! >"$BASE/vmm.pid"
 for i in $(seq 1 60); do
 	if python3 "$REPO/vmm/src/vmm-cli.py" --url "$VMM_URL" lsvm --json >/dev/null 2>&1; then break; fi
@@ -328,6 +352,7 @@ curl -fsS http://10.0.2.2:18080/dstack-kms -o /dstack/dstack-kms
 curl -fsS http://10.0.2.2:18080/OVMF.fd -o /dstack/OVMF.fd
 curl -fsS http://10.0.2.2:18080/kms.toml -o /dstack/kms.toml
 chmod +x /dstack/dstack-kms
+echo SNP_KMS_CONTAINER_STARTED
 RUST_LOG=info /dstack/dstack-kms -c /dstack/kms.toml
 SH
 )
@@ -342,10 +367,11 @@ services:
     image: debian:bookworm-slim
     command: sh -c 'echo unused-container-compose; sleep 300'
 YAML
-	python3 "$REPO/vmm/src/vmm-cli.py" --url "$VMM_URL" compose --docker-compose "$BASE/kms-compose.yaml" --name "$name" --public-logs --public-sysinfo --no-instance-id --output "$BASE/$name.app-compose.json" | tee "$ART/$name-compose-create.txt"
+	python3 "$REPO/vmm/src/vmm-cli.py" --url "$VMM_URL" compose --docker-compose "$BASE/kms-compose.yaml" --name "$name" --public-logs --public-sysinfo --no-instance-id --output "$BASE/$name.app-compose.json" | tee "$ART/$name-compose-create.txt" >&2
 	jq --arg init_script "$DNS_INIT_SCRIPT" --arg bash_script "$KMS_BASH_SCRIPT" '.storage_fs="ext4" | .init_script=$init_script | .runner="bash" | .bash_script=$bash_script | del(.docker_compose_file)' "$BASE/$name.app-compose.json" >"$BASE/$name.app-compose.json.tmp"
 	mv "$BASE/$name.app-compose.json.tmp" "$BASE/$name.app-compose.json"
-	python3 "$REPO/vmm/src/vmm-cli.py" --url "$VMM_URL" deploy --name "$name" --compose "$BASE/$name.app-compose.json" --image "$IMAGE_NAME" --port "tcp:127.0.0.1:$KMS_HOST_PORT:8000" --vcpu 2 --memory 4096 --disk 20G | tee "$ART/$name-deploy.txt" | sed -n 's/Created VM with ID: //p' | tail -1
+	python3 "$REPO/vmm/src/vmm-cli.py" --url "$VMM_URL" deploy --name "$name" --compose "$BASE/$name.app-compose.json" --image "$IMAGE_NAME" --port "tcp:127.0.0.1:$KMS_HOST_PORT:8000" --vcpu 2 --memory 4096 --disk 20G | tee "$ART/$name-deploy.txt" >&2
+	sed -n 's/Created VM with ID: //p' "$ART/$name-deploy.txt" | tail -1
 }
 
 if [[ "$RUN_STRICT_TCB_PROBE" = "1" && "$ALLOW_OUT_OF_DATE_TCB" = "1" ]]; then
