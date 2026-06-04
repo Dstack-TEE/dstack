@@ -29,30 +29,35 @@
 目标:把 root key 交给 KMS,**全程不让 operator 看到**,且只交给厂商密码学批准过的 CVM。
 
 ```
- CLI(operator)      Authority         Verifier      key-broker(KMS CVM)     guest-agent
-   │  challenge ──────▶│                                                          
-   │◀── nonce(HMAC,TTL)│                                                          
-   │  courier/init ───────────────────────────────▶│ 生成 X25519 transport kp    
-   │                                                │ ts = now                    
-   │                                                │ rd = SHA512(nonce‖tpub‖ts)  
-   │                                                │ Attest(rd) ───────────────▶│ TDX+vTPM
-   │◀──── transport_pub, ts, attestation, vm_config │◀───────────── quote+evlog ─│
-   │  provision(nonce,tpub,ts,attestation,vm_config)─▶│                            
-   │                                         verify ─▶│  G1 quote 真实             
-   │                                                  │  G2 report_data == rd     
-   │                                                  │  G3 tcb 合格              
-   │                                                  │  G4 os_image ∈ 白名单     
-   │                                                  │  G5 key_provider == tpm   
-   │                                                  │  G6 compose ∈ 白名单      
-   │                              sealed_root = HPKE 封(root, →tpub)              
-   │                              auth_bundle = Ed25519 签(seq++, …)             
-   │◀──────────── sealed_root, auth_bundle ──────────│                            
-   │  courier/install(sealed_root, auth_bundle) ───────────────────▶│  验签 vs PUBKEY
-   │                                                                 │  bundle_seq 严格 ↑
-   │                                                                 │  HPKE 解封 → root
-   │                                                                 │  SAN = CVM 内网 IP
-   │                                                                 │  物化 keyset → _ready
-   │                                                                 │  dstack-kms exec → TLS :8000
+guest-agent  key-broker      CLI(operator)    Authority       Verifier
+ │                │                │──challenge──▶│               │
+ │                │                │◀───nonce─────│               │
+ │                │◀─courier/init──│              │               │
+ │                │ gen X25519 kp  │              │               │
+ │                │ rd=SHA-512(…)  │              │               │
+ │◀──Attest(rd)───│                │              │               │
+ │─TDX+vTPM quote▶│                │              │               │
+ │                │─tpub,ts,attest▶│              │               │
+ │                │                │──provision──▶│               │
+ │                │                │              │────verify────▶│
+ │                │                │              │◀───verdict────│
+ │                │                │              │ G1 quote✓     │
+ │                │                │              │ G2 rd-bind✓   │
+ │                │                │              │ G3 tcb✓       │
+ │                │                │              │ G4 os_image✓  │
+ │                │                │              │ G5 kp=tpm✓    │
+ │                │                │              │ G6 compose✓   │
+ │                │                │              │ HPKE-seal root│
+ │                │                │              │ Ed25519-sign  │
+ │                │                │              │ seq++         │
+ │                │                │◀root+bundle──│               │
+ │                │◀───install─────│              │               │
+ │                │ verify sig     │              │               │
+ │                │ seq strictly↑  │              │               │
+ │                │ HPKE-open root │              │               │
+ │                │ SAN = CVM IP   │              │               │
+ │                │ keyset → _ready│              │               │
+ │                │ kms → :8000    │              │               │
 ```
 
 1. **challenge** —— CLI 用租户 API key 认证;Authority 返回无状态 HMAC `nonce`(带 TTL)。
@@ -60,8 +65,9 @@
    算 `report_data = SHA-512(nonce ‖ transport_pub ‖ kms_ts_LE)`(64 字节),让 guest-agent
    对该 `report_data` 做完整 **TDX + vTPM** attestation。返回 `transport_pub`、`kms_ts`、
    attestation、`vm_config`。
-3. **provision** —— Authority 重放校验 nonce(MAC + TTL)、检查时钟偏差 ≤ 300s,再经 Verifier
-   跑下面六道 fail-closed 关卡(G1–G6)。通过后把 root 载荷(P-256 root-CA 私钥 + k256 标量 +
+3. **provision** —— Authority 重放校验 nonce(MAC + TTL)、检查时钟偏差 ≤ 300s,把 attestation
+   交给 Verifier,再对返回的 verdict 跑下面六道 fail-closed 关卡(G1–G6)。通过后把 root 载荷
+   (P-256 root-CA 私钥 + k256 标量 +
    domain)**HPKE 封到 `transport_pub`** → `sealed_root`,`bundle_seq` 自增,并对 AuthBundle
    做 **Ed25519 签名**(app 白名单 + 全局镜像密钥环 + os-image 白名单 + 吊销表)。
 4. **courier/install** —— key-broker **用 compose 里钉死的 `AUTHORITY_PUBKEY` 验 AuthBundle 签名**,

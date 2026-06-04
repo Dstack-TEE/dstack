@@ -31,30 +31,35 @@ Goal: hand the KMS its root key **without the operator ever seeing it**, and onl
 CVM the vendor has cryptographically approved.
 
 ```
- CLI(operator)      Authority         Verifier      key-broker(KMS CVM)     guest-agent
-   │  challenge ──────▶│                                                          
-   │◀── nonce(HMAC,TTL)│                                                          
-   │  courier/init ───────────────────────────────▶│ gen X25519 transport kp     
-   │                                                │ ts = now                    
-   │                                                │ rd = SHA512(nonce‖tpub‖ts)  
-   │                                                │ Attest(rd) ───────────────▶│ TDX+vTPM
-   │◀──── transport_pub, ts, attestation, vm_config │◀───────────── quote+evlog ─│
-   │  provision(nonce,tpub,ts,attestation,vm_config)─▶│                            
-   │                                         verify ─▶│  G1 quote authentic       
-   │                                                  │  G2 report_data == rd     
-   │                                                  │  G3 tcb ok                
-   │                                                  │  G4 os_image ∈ whitelist  
-   │                                                  │  G5 key_provider == tpm   
-   │                                                  │  G6 compose ∈ whitelist   
-   │                              sealed_root = HPKE-seal(root, →tpub)            
-   │                              auth_bundle = Ed25519-sign(seq++, …)           
-   │◀──────────── sealed_root, auth_bundle ──────────│                            
-   │  courier/install(sealed_root, auth_bundle) ───────────────────▶│  verify sig vs PUBKEY
-   │                                                                 │  bundle_seq strictly ↑
-   │                                                                 │  HPKE-open → root
-   │                                                                 │  SAN = CVM internal IP
-   │                                                                 │  materialize keyset → _ready
-   │                                                                 │  dstack-kms execs → TLS :8000
+guest-agent  key-broker      CLI(operator)    Authority       Verifier
+ │                │                │──challenge──▶│               │
+ │                │                │◀───nonce─────│               │
+ │                │◀─courier/init──│              │               │
+ │                │ gen X25519 kp  │              │               │
+ │                │ rd=SHA-512(…)  │              │               │
+ │◀──Attest(rd)───│                │              │               │
+ │─TDX+vTPM quote▶│                │              │               │
+ │                │─tpub,ts,attest▶│              │               │
+ │                │                │──provision──▶│               │
+ │                │                │              │────verify────▶│
+ │                │                │              │◀───verdict────│
+ │                │                │              │ G1 quote✓     │
+ │                │                │              │ G2 rd-bind✓   │
+ │                │                │              │ G3 tcb✓       │
+ │                │                │              │ G4 os_image✓  │
+ │                │                │              │ G5 kp=tpm✓    │
+ │                │                │              │ G6 compose✓   │
+ │                │                │              │ HPKE-seal root│
+ │                │                │              │ Ed25519-sign  │
+ │                │                │              │ seq++         │
+ │                │                │◀root+bundle──│               │
+ │                │◀───install─────│              │               │
+ │                │ verify sig     │              │               │
+ │                │ seq strictly↑  │              │               │
+ │                │ HPKE-open root │              │               │
+ │                │ SAN = CVM IP   │              │               │
+ │                │ keyset → _ready│              │               │
+ │                │ kms → :8000    │              │               │
 ```
 
 1. **challenge** — CLI authenticates with its tenant API key; Authority returns a
@@ -65,7 +70,8 @@ CVM the vendor has cryptographically approved.
    guest-agent for a full **TDX + vTPM** attestation over that `report_data`. Returns
    `transport_pub`, `kms_ts`, the attestation, and `vm_config`.
 3. **provision** — Authority replays the nonce (MAC + TTL), checks clock skew ≤ 300 s,
-   then runs the six fail-closed gates (G1–G6 below) via the Verifier.
+   sends the attestation to the Verifier, and runs the six fail-closed gates (G1–G6
+   below) on the returned verdict.
    On success it **HPKE-seals** the root payload (P-256 root-CA key + k256 scalar +
    domain) **to `transport_pub`** → `sealed_root`, bumps `bundle_seq`, and **Ed25519-signs**
    the AuthBundle (app whitelist + global image keyring + os-image whitelist + revocations).
