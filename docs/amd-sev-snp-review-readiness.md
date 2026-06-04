@@ -113,44 +113,53 @@ That smoke exposed and fixed several VMM/KMS-auth integration issues before the 
 - The VMM launch path required `metadata.json.rootfs_hash`, while the released `dstack-0.5.11` images carry the rootfs hash in `dstack.rootfs_hash=...` on the kernel cmdline.
 - The VMM SNP QEMU path now uses the SNP measurement CPU model (`EPYC-v4`) and confidential virtio PCI options (`disable-legacy=on,iommu_platform=true`) for SNP-launched virtio devices, matching the host's working SNP launch posture more closely.
 
-After those fixes, the manual smoke progressed through full dstack-managed SNP guest boot, KMS self-bootstrap, app guest boot, app quote verification, and `GetAppKey` release. Additional smoke/debug fixes made the path work end-to-end:
+After those fixes, the manual smoke progressed through full dstack-managed SNP guest boot and KMS self-bootstrap on the known-good remote host. Additional smoke/debug fixes made the host/KMS side reach the app-key boundary:
 
 - Minimal guest boot now keeps DNS usable when `systemd-resolved`/`chronyd` are unavailable early in smoke boots and detects `sev-guest` before trying the TDX guest module.
 - SNP guests skip TDX-only `mr_config_id` and app-info RTMR decoding while still preserving non-SNP behavior.
 - Configfs TSM report collection falls back to the SEV-SNP extended-report ioctl when configfs does not carry certificate collateral.
-- If guest evidence still lacks ASK/VCEK collateral, the verifier fetches AMD KDS ARK/ASK/VCEK using the report `chip_id` and reported TCB, then verifies the signed report fail-closed.
+- If verifier-side evidence still lacks ASK/VCEK collateral, the verifier can fetch AMD KDS ARK/ASK/VCEK using the report `chip_id` and reported TCB, then verify the signed report fail-closed.
 - KMS measurement recomputation now uses the image's original kernel cmdline as the measurement base before appending `docker_compose_hash`, `rootfs_hash`, and `app_id`, matching the VMM QEMU `-append` path.
 
-Sanitized smoke result:
+Latest sanitized remote smoke result with PR head `38b02d7c`:
 
 ```text
 remote_host=chris@173.234.27.162
+host_kernel=Linux 6.11.0-rc3-snp-host-85ef1ac03941
 qemu_version=10.0.2
 ovmf_sha256=67e7a7027437823e9c166a60d00666d5d5391e13050488cad5cc2acd913fab4a
 image=dstack-dev-0.5.11-snp-dnsfix
 platform=amd-sev-snp
-vmm_branch=feat/amd-sev-snp-conversion + local smoke fixes
 kms_guest=booted SNP Linux/userspace and started dstack-kms
-app_guest=booted SNP Linux/userspace and requested app keys
-kms_auth=/bootAuth/kms 200 and /bootAuth/app 200
-tcb_status=OutOfDate in this lab host policy run
-failure_gate=default UpToDate-only policy rejected release with "tcb_status is not allowed"
-success_gate=explicit lab allowlist ["UpToDate", "OutOfDate"] released GetTempCaCert and GetAppKey
-kms_metrics=dstack_kms_attestation_requests_total 1, dstack_kms_attestation_failures_total 0
+kms_marker=SNP_KMS_CONTAINER_STARTED / KMS runtime ready
+kms_metrics=dstack_kms_attestation_requests_total 2, dstack_kms_attestation_failures_total 0
+app_guest=booted SNP Linux/userspace and reached dstack-prepare.sh
+app_marker=SNP_APP_CONTAINER_STARTED not reached
+failure_boundary=app guest GetTempCaCert/GetAppKey attestation validation
+failure_error=amd sev-snp cert_chain must contain either ASK and VCEK certificates or one kernel certificate table auxblob
 no_secret_material_logged=true
 ```
 
-This means the PR now has live SNP report proof, live golden-vector measurement proof, release-gate unit/integration coverage, and a manual full dstack-managed SNP guest -> KMS `GetAppKey` hardware E2E proof. The success run required an explicit lab-only TCB allowlist because this host reports `OutOfDate`; production defaults remain fail-closed (`UpToDate` only).
+This means the PR has live SNP report proof, live golden-vector measurement proof, release-gate unit/integration coverage, and hardware smoke proof through dstack-managed SNP KMS boot plus app guest key-request boundary. The remaining full `GetAppKey` smoke blocker is a guest image/tooling skew: the app VM uses the `dstack-util`/`dstack-attest` embedded inside the released `meta-dstack` v0.5.11 guest image, while the host/KMS binaries are built from PR #703. Rebuilding only `dstack-vmm`, `supervisor`, and `dstack-kms` is not enough for a fresh tester to exercise the PR's guest-side cert-chain/KDS fallback.
 
-### Hardware smoke portability notes
+### Fresh SNP host / image requirements
 
-The checked-in smoke is enough to reproduce the proven KMS/app-key flow on a compatible SNP host, but reviewers should treat the guest image/kernel as part of the hardware matrix:
+The checked-in smoke is enough to reproduce the current boundary on a compatible SNP host, but reviewers should treat the guest image/kernel/userspace as part of the test matrix:
 
-- Known-good full E2E host: `chris@173.234.27.162` with AMDSEV QEMU 10.0.2, the SNP-capable OVMF above, and `dstack-dev-0.5.11-snp-dnsfix`.
+- Known-good host for reaching KMS and app `dstack-prepare.sh`: `chris@173.234.27.162` with AMDSEV QEMU 10.0.2, the SNP-capable OVMF above, and `dstack-dev-0.5.11-snp-dnsfix`.
+- That released image is **not** a coherent PR #703 image: its guest-side `dstack-util`/`dstack-attest` may reject SNP evidence before the newer PR fallback paths can help.
 - A separate local SNP host can run SNP Linux guests, but the stock `meta-dstack` v0.5.11 `6.9.0-dstack` kernel stops after OVMF/EFI loads kernel+initrd and QEMU reports `cpus are not resettable, terminating`, even when using QEMU 10.0.2.
 - On that same local host, a newer Lit SNP guest kernel (`6.13.0-snp-guest-ffd294d346d1`) reaches Linux/SNP markers, which isolates that local failure to the dstack guest image/kernel compatibility layer rather than Chipotle/KMS/auth policy or basic host SNP enablement.
 
-Practical implication for reviewers/testers: first run `test-scripts/snp-e2e-smoke.sh` unchanged and confirm it reaches `SNP_KMS_CONTAINER_STARTED` / `SNP_APP_CONTAINER_STARTED` before substituting a real app workload. If the smoke stops after `EFI stub: Loaded initrd ...` with `cpus are not resettable`, use a host/image/kernel that is known to boot dstack under SNP (or build a coherent newer `meta-dstack` guest image with matching kernel, modules, initramfs, rootfs, and verity metadata) before debugging app-level behavior.
+Practical implication for reviewers/testers on a fresh box:
+
+1. Install/use an AMDSEV QEMU 10.x build and the matching SNP-capable OVMF.
+2. Build the PR binaries with `cargo build --release -p dstack-vmm -p supervisor -p dstack-kms`.
+3. Run `test-scripts/snp-e2e-smoke.sh` unchanged and first confirm it reaches `SNP_KMS_CONTAINER_STARTED` and the app guest key-request boundary.
+4. For full `SNP_APP_CONTAINER_STARTED` / `GetAppKey` success, use or publish a coherent `meta-dstack` guest image whose kernel, modules, initramfs, rootfs, verity metadata, and guest userspace include the same PR #703 `dstack-util`/`dstack-attest` SNP cert-chain/KDS fallback code. Do not try to inject only a replacement `dstack-util` into the stock image; that experiment changed the initramfs/measurement enough to regress boot.
+5. Only after the baseline smoke reaches the app success marker should testers swap the simple app workload for Chipotle.
+
+If the smoke stops after `EFI stub: Loaded initrd ...` with `cpus are not resettable`, use a host/image/kernel that is known to boot dstack under SNP before debugging app-level behavior. If it reaches `Requesting app keys from KMS` and fails with the cert-chain error above, rebuild/use a coherent PR guest image rather than changing KMS release policy.
 
 ## Validation commands
 
