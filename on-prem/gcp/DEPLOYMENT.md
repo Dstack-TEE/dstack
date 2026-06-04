@@ -260,7 +260,13 @@ root lands (it `depends_on` key-broker healthy). The 4-step flow:
      after filling the literal digests/pubkey and registers it for every tenant.
 4. **courier/install** → key-broker **verifies the AuthBundle signature**, checks
    `bundle_seq` monotonicity, HPKE-opens the root, and writes the 8-file KMS
-   keyset (`root-ca`/`tmp-ca`/`rpc` + `root-k256.key` + `rpc-domain`).
+   keyset (`root-ca`/`tmp-ca`/`rpc` + `root-k256.key` + `rpc-domain`). The KMS rpc
+   cert **SAN** is the CVM's own internal IP, which the key-broker **auto-detects**
+   at install (UDP-connect toward the metadata IP, read `local_addr`) so it always
+   matches the address clients dial (`kms_urls`). No `KMS_DOMAIN` config needed on
+   either side; the SAN is not a trust anchor (the root CA is). Override for a
+   DNS/LB front-end: `kms_ctl.py attest --kms-domain <name>`. The authority's
+   `KMS_DOMAIN` is only a last-resort fallback when auto-detect is unavailable.
 
 Then KMS is restarted; `keys_exists()` is true so it skips onboarding and serves
 TLS RPC (`endpoint=https://0.0.0.0:8000`).
@@ -270,7 +276,9 @@ TLS RPC (`endpoint=https://0.0.0.0:8000`).
 ```bash
 # KMS serving from the authority-provided root:
 curl -sk https://<kms>:8000/prpc/KMS.GetMeta          # → ca_cert (the root CA)
-#   rpc cert chain: subject=CN=kms.local  issuer=O=Dstack, CN=Dstack KMS CA
+# rpc cert: SAN = the CVM's internal IP (auto-detected), issuer=O=Dstack, CN=Dstack KMS CA
+openssl s_client -connect <kms>:8000 </dev/null 2>/dev/null | openssl x509 -noout -ext subjectAltName
+#   → X509v3 Subject Alternative Name: IP Address:<kms-internal-ip>
 ```
 
 To learn `EXPECTED_OS_IMAGE_HASH` for a new image: run one attest with the
