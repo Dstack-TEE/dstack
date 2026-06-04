@@ -261,3 +261,12 @@ policy, never an open one.
   consistent with the design's stated v2 tradeoff ("the platform/vendor can decrypt
   customer data"); if your threat model needs to exclude the operator from image keys too,
   the bundle's `keyring` must additionally be HPKE-sealed to `transport_pub`.
+- **Transport to the Authority is not part of the cryptographic protocol — secure it
+  separately.** The operator reaches the Authority at `AUTHORITY_URL` (FastAPI, **plaintext
+  `:8083`** by default) and authenticates with its **tenant API key as a bearer token**. The
+  protocol guarantees above hold even over a hostile network (root stays HPKE-sealed, bundle
+  stays Ed25519-signed, the quote stays bound by `report_data`) — but the **API key** and the
+  cleartext **bundle keyring** are exposed to anyone on-path. So a remote operator MUST reach
+  the Authority over **TLS** (`AUTHORITY_URL=https://…`, fronted by a reverse proxy / LB);
+  plaintext `http://` is only for same-host or a trusted private network. The admin API
+  (`AUTHORITY_ADMIN_TOKEN`) is likewise bearer-authed and must not be exposed in the clear.

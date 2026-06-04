@@ -234,3 +234,9 @@ root key 从不重新 provision——`sync-auth` 只换授权数据。
   机密性边界之内**——镜像加密防的是 registry、网络、镜像落盘,**而不是**这个 operator。这与设计中
   v2 既定取舍一致("平台/厂商可解客户数据");若你的威胁模型要把 operator 也排除在镜像密钥之外,需
   把 bundle 的 `keyring` 也 HPKE 封到 `transport_pub`。
+- **到 Authority 的传输层不在密码学协议范围内——要单独加固。** operator 在 `AUTHORITY_URL`
+  (FastAPI,默认**明文 `:8083`**)够到 Authority,用**租户 API key 作 bearer token** 认证。上面那些
+  协议保证即使在敌对网络上也成立(根仍 HPKE 封、bundle 仍 Ed25519 签、quote 仍被 `report_data` 绑定)
+  ——但 **API key** 和明文的 **bundle keyring** 会暴露给链路上的任何人。所以远程 operator **必须经
+  TLS** 够到 Authority(`AUTHORITY_URL=https://…`,前置反代 / LB);明文 `http://` 只用于同机或可信
+  内网。admin 面(`AUTHORITY_ADMIN_TOKEN`)同样是 bearer 认证,也不能明文暴露。

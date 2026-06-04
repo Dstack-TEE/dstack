@@ -157,6 +157,13 @@ curl -s $AUTHORITY/api/v1/authority-pubkey      # → {"pubkey":"TCIj…NmU="}
 - `docker compose … up -d`：拉起 `authority`（FastAPI :8083）和 `verifier`（dcap-qvl）。`authority` 把 `./authority` 源码挂载进容器，改完重启即生效。
 - `authority-pubkey`：返回 Ed25519 公钥。**记下它**（下文记作 `$PUBKEY`），步骤 5 要字面写进 KMS compose 的 `AUTHORITY_PUBKEY`。
 
+> ⚠️ **远程 operator 必须让 Authority 走 TLS。** Authority 监听**明文 `:8083`**，operator 的每次
+> `challenge`/`provision`/`sync-auth` 都用**租户 API key 作 bearer token** 认证。走公网明文时,该
+> token(以及 AuthBundle——其镜像 keyring 是明文传输的)会暴露在网络上。所以 operator 远程时**必须在
+> Authority 前面套 TLS**(反代 / HTTPS LB),并把 `AUTHORITY_URL` 设成 `https://…`;明文 `http://` 只
+> 用于同机或可信内网。(两种情况下都**不会**泄露的:KMS 根密钥——它端到端 HPKE 封装;以及伪造 bundle
+> ——它是 Ed25519 签名的。)
+
 ## 步骤 2【厂商】mint 全局镜像密钥（取公钥）
 
 **目的**：生成一把"用一段时间"的全局镜像加密密钥（EC P-256）。私钥进 Authority 的全局 keyring、永不出 API；只返回**公钥**用于加密镜像。

@@ -198,6 +198,15 @@ curl -s $AUTHORITY/api/v1/authority-pubkey      # → {"pubkey":"TCIj…NmU="}
 - `authority-pubkey`: returns the Ed25519 pubkey. **Record it** (referred to below as
   `$PUBKEY`); step 5 writes it literally into the KMS compose's `AUTHORITY_PUBKEY`.
 
+> ⚠️ **Expose the Authority over TLS for a remote operator.** The Authority listens on
+> **plaintext `:8083`** and the operator authenticates every `challenge`/`provision`/
+> `sync-auth` with its **tenant API key as a bearer token**. Over the public internet that
+> token (and the AuthBundle, whose image keyring travels in cleartext) would be exposed to
+> the network. So when the operator is remote, **front the Authority with TLS** (a reverse
+> proxy / HTTPS LB) and set `AUTHORITY_URL=https://…`. Plaintext `http://` is only for
+> same-host or a trusted private network. (What this does *not* expose either way: the KMS
+> root — it's HPKE-sealed end-to-end — and bundle forgery — it's Ed25519-signed.)
+
 ## Step 2 [Vendor] Mint the global image key (get the pubkey)
 
 **Goal**: generate a "use-for-a-while" global image-encryption key (EC P-256). The
