@@ -196,7 +196,7 @@ The response includes:
 | Field | Description |
 |-------|-------------|
 | `instance_id` | Unique identifier for this CVM instance |
-| `app_id` | Application identifier (from compose config) |
+| `app_id` | Application identifier (deploy-time `app_id` from `.instance-info`; defaults to the app-compose.json hash) |
 | `version` | dstack version running in the CVM |
 | `app_cert` | RA-TLS certificate (PEM-encoded X.509 with TDX quote in extensions) |
 | `tcb_info` | JSON string containing all measurements and the event log |
