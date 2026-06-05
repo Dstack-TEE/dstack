@@ -1335,7 +1335,6 @@ impl<'a> Stage0<'a> {
     fn measure_app_info(&self) -> Result<AppInfo> {
         let compose_hash = sha256_file(self.shared.dir.app_compose_file())?;
         let truncated_compose_hash = truncate(&compose_hash, 20);
-        let kms_enabled = self.shared.app_compose.kms_enabled();
         let key_provider = self.shared.app_compose.key_provider();
         let mut instance_info = self.shared.instance_info.clone();
 
@@ -1365,11 +1364,14 @@ impl<'a> Stage0<'a> {
             sha256(&id_path)[..20].to_vec()
         };
         instance_info.instance_id = instance_id.clone();
-        let app_id = if kms_enabled {
-            instance_info.app_id.clone()
-        } else {
-            truncated_compose_hash.to_vec()
-        };
+        // app_id is the deploy-time instance_info.app_id (which defaults to the
+        // truncated compose hash when unset, see above). Previously the non-KMS
+        // path forced the compose-derived value; now a deployment may pin an
+        // explicit app_id even without a KMS. The app_id is measured into RTMR3
+        // (emit_runtime_event below), so a verifier sees exactly this value — with
+        // no KMS to bind it, the relying party MUST gate the compose_hash
+        // (which launcher build) separately from the app_id (which app).
+        let app_id = instance_info.app_id.clone();
 
         emit_runtime_event("system-preparing", &[])?;
         emit_runtime_event("app-id", &app_id)?;
