@@ -20,10 +20,10 @@ services:
     environment:
       DSTACK_VERIFIER_ADDRESS: "0.0.0.0"
       DSTACK_VERIFIER_PORT: "8080"
-      # TDX quote collateral. Intel PCS directly (no PCCS to run): GCP quotes
+      # TDX quote collateral via Phala PCCS (caches Intel PCS). GCP quotes
       # embed the PCK chain, so only the public TCB-info / QE-identity endpoints
       # are hit — no Intel subscription key needed.
-      DSTACK_VERIFIER_PCCS_URL: ${PCCS_URL:-https://api.trustedservices.intel.com}
+      DSTACK_VERIFIER_PCCS_URL: ${PCCS_URL:-https://pccs.phala.network}
     volumes:
       - verifier-cache:/tmp/dstack-verifier/cache
     restart: unless-stopped

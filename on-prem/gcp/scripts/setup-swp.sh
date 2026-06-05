@@ -8,7 +8,7 @@
 #   - Google APIs (Artifact Registry, GCS) reach the VMs over Private Google
 #     Access (no internet); each CVM pins *.googleapis.com / *.pkg.dev to the
 #     private VIP via /etc/hosts (no VPC-wide DNS change).
-#   - the only true-internet egress is Intel PCS (api.trustedservices.intel.com),
+#   - the only true-internet egress is Phala PCCS (pccs.phala.network),
 #     forced through the SWP which allows only that host (url-list + policy).
 #   - an egress-deny firewall (tag-scoped) makes the SWP the sole internet path.
 set -euo pipefail
@@ -36,7 +36,7 @@ PGA_RANGE="199.36.153.8/30"
 
 # Intel PCS needs BOTH: api.* (TCB info / QE identity) and certificates.*
 # (the SGX Root CA der fetched during quote collateral verification).
-ALLOW_DOMAINS=("api.trustedservices.intel.com" "certificates.trustedservices.intel.com")
+ALLOW_DOMAINS=("pccs.phala.network")
 KMS_VM="dstack-kms-prod"
 LAUNCHER_VM="dstack-launcher-prod"
 
@@ -217,7 +217,7 @@ phase_verify() {
 echo '--- ALLOW: Intel PCS (expect 200/4xx from Intel, NOT proxy-blocked) ---'
 curl -s -o /dev/null -w 'http=%{http_code}\n' --max-time 20 \
   -x http://$addr:80 \
-  https://api.trustedservices.intel.com/sgx/certification/v4/qe/identity || echo 'curl-failed'
+  https://pccs.phala.network/sgx/certification/v4/qe/identity || echo 'curl-failed'
 echo '--- DENY: google.com (expect connection reset by proxy) ---'
 curl -s -o /dev/null -w 'http=%{http_code}\n' --max-time 20 \
   -x http://$addr:80 \

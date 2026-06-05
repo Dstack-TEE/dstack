@@ -438,13 +438,13 @@ curl -s http://localhost:19100/status | python3 -m json.tool
 
 # 第三部分 ▶ 出网域名白名单硬化（Operator，推荐）
 
-**目的**：让两台 CVM 只能访问被批准的目的地——业务 CVM 彻底无公网，KMS 仅能到 Intel PCS。用网络标签 `dstack-cvm` 只作用于这两台。
+**目的**：让两台 CVM 只能访问被批准的目的地——业务 CVM 彻底无公网，KMS 仅能到 PCCS。用网络标签 `dstack-cvm` 只作用于这两台。
 
 - **① Private Google Access**：子网开 PGA；CVM 用 `/etc/hosts` 把 `*.googleapis.com`/`*.pkg.dev` 钉到私有 VIP `199.36.153.10`。AR/GCS 走 Google 私网。
 - **② 业务 CVM 全锁**：`dstack-cvm` 标签 + 摘外网 IP + egress-deny（只放行内网/PGA VIP:443/SWP/metadata）。AR 经 PGA、KMS 经内网。
-- **③ KMS 经明文 SWP 出 Intel PCS**：dcap-qvl 的 rustls **不信任**自签代理证书且无处加 CA，故把 GCP **Secure Web Proxy 建成明文端点**（`ports:[80]`，不配证书），rustls 用明文 `CONNECT` 对 Intel 端到端 TLS，SWP 按 SNI 做白名单。白名单必须含**两个** Intel 域名：`api.trustedservices.intel.com` **和** `certificates.trustedservices.intel.com`（少一个 KMS 验业务 CVM 的 quote 时 `tunnel error`）。KMS compose 设 `HTTP_PROXY=http://${SWP_PROXY}`。
+- **③ KMS 经明文 SWP 出 PCCS**：dcap-qvl 的 rustls **不信任**自签代理证书且无处加 CA，故把 GCP **Secure Web Proxy 建成明文端点**（`ports:[80]`，不配证书），rustls 用明文 `CONNECT` 对 PCCS 端到端 TLS，SWP 按 SNI 做白名单。白名单只需**一个** PCCS 域名 `pccs.phala.network`（Phala 的 PCCS，缓存 Intel collateral——单域名,省去 Intel 的 `api.`/`certificates.` 两个域名；若要直连 Intel PCS,设 `PCCS_URL` 并放行那两个 Intel 域名）。KMS compose 设 `HTTP_PROXY=http://${SWP_PROXY}`。
 
-> 一键脚本 `scripts/setup-swp.sh`（pga/gateway/hosts/lockdown/verify 各阶段）。验证：CVM 内 `curl -x http://<SWP_IP>:80 https://api.trustedservices.intel.com/...`=200，直连 `https://www.google.com` 超时。
+> 一键脚本 `scripts/setup-swp.sh`（pga/gateway/hosts/lockdown/verify 各阶段）。验证：CVM 内 `curl -x http://<SWP_IP>:80 https://pccs.phala.network/...`=200，直连 `https://www.google.com` 超时。
 
 
 ---

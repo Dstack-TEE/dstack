@@ -598,16 +598,17 @@ to just these two.
 - **② Lock down the workload CVM**: `dstack-cvm` tag + remove the external IP +
   egress-deny (allow only internal / PGA VIP:443 / SWP / metadata). AR via PGA, KMS via
   internal network.
-- **③ KMS reaches Intel PCS via a plaintext SWP**: dcap-qvl's rustls **does not trust** a
+- **③ KMS reaches the PCCS via a plaintext SWP**: dcap-qvl's rustls **does not trust** a
   self-signed proxy cert and has nowhere to add a CA, so build the GCP **Secure Web
   Proxy as a plaintext endpoint** (`ports:[80]`, no cert); rustls uses a plaintext
-  `CONNECT` tunnel with end-to-end TLS to Intel, and the SWP allowlists by SNI. The
-  allowlist must include **both** Intel domains: `api.trustedservices.intel.com` **and**
-  `certificates.trustedservices.intel.com` (missing one yields a `tunnel error` when the
-  KMS verifies a workload CVM's quote). The KMS compose sets `HTTP_PROXY=http://${SWP_PROXY}`.
+  `CONNECT` tunnel with end-to-end TLS to the PCCS, and the SWP allowlists by SNI. The
+  allowlist needs the **one PCCS host** `pccs.phala.network` (Phala's PCCS, which caches
+  Intel collateral — a single host instead of Intel's two `api.`/`certificates.` domains;
+  to use Intel PCS directly instead, set `PCCS_URL` and allowlist both Intel domains). The
+  KMS compose sets `HTTP_PROXY=http://${SWP_PROXY}`.
 
 > One-shot script `scripts/setup-swp.sh` (pga / gateway / hosts / lockdown / verify
-> stages). Verify: inside the CVM `curl -x http://<SWP_IP>:80 https://api.trustedservices.intel.com/...`
+> stages). Verify: inside the CVM `curl -x http://<SWP_IP>:80 https://pccs.phala.network/...`
 > = 200, while a direct `https://www.google.com` times out.
 
 ---
