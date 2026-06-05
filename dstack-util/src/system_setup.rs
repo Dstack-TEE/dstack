@@ -349,11 +349,11 @@ impl HostShared {
             mkdir -p $host_shared_copy_dir;
             info "Copying host-shared files";
         }?;
-        copy(APP_COMPOSE, SZ_1KB * 256, false)?;
+        copy(APP_COMPOSE, SZ_1MB * 50, false)?;
         copy(SYS_CONFIG, SZ_1KB * 32, false)?;
         copy(INSTANCE_INFO, SZ_1KB * 10, true)?;
         copy(ENCRYPTED_ENV, SZ_1KB * 256, true)?;
-        copy(USER_CONFIG, SZ_1MB, true)?;
+        copy(USER_CONFIG, SZ_1MB * 50, true)?;
         cmd! {
             info "Unmounting host-shared";
             umount $host_shared_dir;
