@@ -63,7 +63,7 @@ configs:
       [core]
       cert_dir = "/kms/certs"
       enforce_self_authorization = false
-      pccs_url = "https://pccs.phala.network"
+      pccs_url = "https://api.trustedservices.intel.com"
 
       [core.image]
       verify = false
