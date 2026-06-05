@@ -138,18 +138,29 @@ fn create_hd(
 /// Create a FAT32 disk image from a directory
 fn create_shared_disk(disk_path: impl AsRef<Path>, shared_dir: impl AsRef<Path>) -> Result<()> {
     use fatfs::{FileSystem, FormatVolumeOptions, FsOptions};
-    use std::io::{Cursor, Seek, SeekFrom, Write};
+    use std::io::{Seek, SeekFrom, Write};
 
     let disk_path = disk_path.as_ref();
     let shared_dir = shared_dir.as_ref();
 
     // Must be large enough to hold all host-shared files (app-compose.json and
-    // .user-config can each be up to 50 MB, see HostShared::copy) plus FAT32 overhead.
-    const DISK_SIZE: usize = 128 * 1024 * 1024;
-    let mut disk_data = vec![0u8; DISK_SIZE];
+    // .user-config can each be up to 50 MiB, see HostShared::copy) plus FAT32 overhead.
+    const DISK_SIZE: u64 = 128 * 1024 * 1024;
+
+    // Back the image by a file (sparse until written) and stream files into it so
+    // peak memory stays bounded regardless of DISK_SIZE or input file sizes.
+    let mut image = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(disk_path)
+        .with_context(|| format!("Failed to create disk image at {}", disk_path.display()))?;
+    image
+        .set_len(DISK_SIZE)
+        .context("Failed to size disk image")?;
 
     {
-        let cursor = Cursor::new(&mut disk_data);
         let mut label_bytes = [b' '; 11];
         let label_str = HOST_SHARED_DISK_LABEL.as_bytes();
         let copy_len = label_str.len().min(11);
@@ -157,17 +168,16 @@ fn create_shared_disk(disk_path: impl AsRef<Path>, shared_dir: impl AsRef<Path>)
         let format_opts = FormatVolumeOptions::new()
             .fat_type(fatfs::FatType::Fat32)
             .volume_label(label_bytes);
-        fatfs::format_volume(cursor, format_opts).context("Failed to format disk as FAT32")?;
+        fatfs::format_volume(&mut image, format_opts).context("Failed to format disk as FAT32")?;
     }
 
-    // Open the formatted filesystem in memory and copy files
+    // Open the formatted filesystem and stream files into it
     {
-        let mut cursor = Cursor::new(&mut disk_data);
-        cursor
+        image
             .seek(SeekFrom::Start(0))
             .context("Failed to seek to start")?;
-        let fs =
-            FileSystem::new(cursor, FsOptions::new()).context("Failed to open FAT32 filesystem")?;
+        let fs = FileSystem::new(&mut image, FsOptions::new())
+            .context("Failed to open FAT32 filesystem")?;
         let root_dir = fs.root_dir();
 
         // Copy all files from shared_dir to the FAT32 root
@@ -179,24 +189,17 @@ fn create_shared_disk(disk_path: impl AsRef<Path>, shared_dir: impl AsRef<Path>)
                 let filename = entry.file_name();
                 let filename_str = filename.to_string_lossy();
 
-                // Read source file
-                let content = fs::read(&path)
-                    .with_context(|| format!("Failed to read file {}", path.display()))?;
-
-                // Write to FAT32 filesystem
+                let mut src = fs::File::open(&path)
+                    .with_context(|| format!("Failed to open file {}", path.display()))?;
                 let mut fat_file = root_dir
                     .create_file(&filename_str)
                     .with_context(|| format!("Failed to create file {filename_str} in FAT32"))?;
-                fat_file
-                    .write_all(&content)
+                std::io::copy(&mut src, &mut fat_file)
                     .with_context(|| format!("Failed to write file {filename_str} to FAT32"))?;
                 fat_file.flush().context("Failed to flush FAT32 file")?;
             }
         }
     }
-
-    fs::write(disk_path, &disk_data)
-        .with_context(|| format!("Failed to write disk image to {}", disk_path.display()))?;
 
     Ok(())
 }
