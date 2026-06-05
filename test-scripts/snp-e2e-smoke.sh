@@ -38,9 +38,13 @@
 #   kernel certificate table auxblob
 # For full SNP_APP_CONTAINER_STARTED / GetAppKey success, use a coherent
 # meta-dstack guest image that includes the same PR cert-chain/KDS fallback code.
-# The smoke may still stop at the app GetAppKey boundary if AMD KDS throttles
-# VCEK/cert-chain retrieval (for example HTTP 429 from kdsintf.amd.com); that is
-# an external collateral-fetch boundary, not a guest boot or KMS startup failure.
+# If AMD KDS throttles VCEK/cert-chain retrieval (for example HTTP 429 from
+# kdsintf.amd.com), keep verification fail-closed and set
+# DSTACK_SNP_SMOKE_KDS_PROXY_URL to a trusted path-prefix AMD-KDS passthrough,
+# e.g. https://cors.litgateway.com/ so verifier requests become:
+#   https://cors.litgateway.com/https://kdsintf.amd.com/...
+# This is an external collateral-fetch boundary, not a guest boot or KMS startup
+# failure. Do not use a ?url= wrapper unless the proxy explicitly supports it.
 # One reproducible way is to build meta-dstack with its dstack submodule checked
 # out to this PR branch, set the Yocto build MACHINE to `sev-snp` (not the
 # default `tdx`, otherwise the guest kernel can miss AMD memory-encryption
