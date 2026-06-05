@@ -133,14 +133,14 @@ platform=amd-sev-snp
 image_kernel=Linux 6.18.24-dstack with CONFIG_AMD_MEM_ENCRYPT=y, CONFIG_SEV_GUEST=y, CONFIG_TSM_REPORTS=y
 kms_guest=booted SNP Linux/userspace and started dstack-kms
 kms_marker=SNP_KMS_CONTAINER_STARTED / KMS runtime ready
-kds_proxy=enabled for smoke via DSTACK_AMD_KDS_PROXY_URL=https://cors.litgateway.com/
+kds_proxy=enabled for smoke via DSTACK_SNP_SMOKE_KDS_PROXY_URL=https://cors.litgateway.com/
 strict_tcb_probe=denied_as_expected with tcb_status is not allowed
 success_probe=GetTempCaCert HTTP 200; GetAppKey HTTP 200; SignCert HTTP 200; app container started
 smoke_result=SNP E2E smoke success
 no_secret_material_logged=true
 ```
 
-This means the PR has live SNP report proof, live golden-vector measurement proof, release-gate unit/integration coverage, and hardware smoke proof through dstack-managed SNP KMS boot, strict TCB denial, app guest key release, and app container startup. The fresh-box smoke now reaches Linux/userspace, `SNP_KMS_CONTAINER_STARTED`, `GetTempCaCert`, `GetAppKey`, `SignCert`, and app container startup when using a coherent **SNP** `meta-dstack` image. During the smoke, AMD KDS throttling was worked around by explicitly routing AMD KDS collateral fetches through `DSTACK_AMD_KDS_PROXY_URL`; the proxy value is carried in the measured guest cmdline for smoke runs and mirrored in KMS measurement recomputation to avoid measurement drift. Host/KMS binaries must match PR #703, guest-side `dstack-util`/`dstack-attest` must include the PR cert-chain/KDS fallback, and the Yocto image must be built with `MACHINE = "sev-snp"` so the guest kernel includes AMD memory-encryption/SNP support. A coherent PR image built with the default `tdx` machine produced a `6.18.24-dstack` kernel with `# CONFIG_AMD_MEM_ENCRYPT is not set`; controlled QEMU tests showed that kernel resets immediately after OVMF loads kernel/initrd, while SNP-capable kernels boot the same QEMU/OVMF path to Linux/SNP markers.
+This means the PR has live SNP report proof, live golden-vector measurement proof, release-gate unit/integration coverage, and hardware smoke proof through dstack-managed SNP KMS boot, strict TCB denial, app guest key release, and app container startup. The fresh-box smoke now reaches Linux/userspace, `SNP_KMS_CONTAINER_STARTED`, `GetTempCaCert`, `GetAppKey`, `SignCert`, and app container startup when using a coherent **SNP** `meta-dstack` image. During the smoke, AMD KDS throttling was worked around by explicitly routing AMD KDS collateral fetches through the smoke-level `DSTACK_SNP_SMOKE_KDS_PROXY_URL=https://cors.litgateway.com/`; the runtime code exports that as `DSTACK_AMD_KDS_PROXY_URL` for verifier processes. The proxy is a path-prefix passthrough (`https://cors.litgateway.com/https://kdsintf.amd.com/...`), not a `?url=` wrapper. The proxy value is carried in the measured guest cmdline for smoke runs and mirrored in KMS measurement recomputation to avoid measurement drift. Host/KMS binaries must match PR #703, guest-side `dstack-util`/`dstack-attest` must include the PR cert-chain/KDS fallback, and the Yocto image must be built with `MACHINE = "sev-snp"` so the guest kernel includes AMD memory-encryption/SNP support. A coherent PR image built with the default `tdx` machine produced a `6.18.24-dstack` kernel with `# CONFIG_AMD_MEM_ENCRYPT is not set`; controlled QEMU tests showed that kernel resets immediately after OVMF loads kernel/initrd, while SNP-capable kernels boot the same QEMU/OVMF path to Linux/SNP markers.
 
 ### Fresh SNP host / image requirements
 
@@ -155,7 +155,7 @@ Practical implication for reviewers/testers on a fresh box:
 
 1. Install/use an AMDSEV QEMU 10.x build and the matching SNP-capable OVMF.
 2. Build the PR binaries with `cargo build --release -p dstack-vmm -p supervisor -p dstack-kms`.
-3. Run `test-scripts/snp-e2e-smoke.sh` unchanged and first confirm it reaches `SNP_KMS_CONTAINER_STARTED`; if AMD KDS throttles the lab host, set `DSTACK_SNP_SMOKE_KDS_PROXY_URL` to a trusted AMD-KDS passthrough/cache endpoint and rerun.
+3. Run `test-scripts/snp-e2e-smoke.sh` unchanged and first confirm it reaches `SNP_KMS_CONTAINER_STARTED`; if AMD KDS throttles the lab host, set `DSTACK_SNP_SMOKE_KDS_PROXY_URL` to a trusted path-prefix AMD-KDS passthrough/cache endpoint such as `https://cors.litgateway.com/` and rerun. The lab success above also used `DSTACK_SNP_SMOKE_ALLOW_OUT_OF_DATE_TCB=1` because the current SNP lab host reports `OutOfDate`; production defaults remain `allowed_tcb_statuses = ["UpToDate"]` with an empty advisory allowlist.
 4. For full `SNP_APP_CONTAINER_STARTED` / `GetAppKey` success, use or publish a coherent `meta-dstack` guest image whose kernel, modules, initramfs, rootfs, verity metadata, and guest userspace include the same PR #703 `dstack-util`/`dstack-attest` SNP cert-chain/KDS fallback code. The reproducible path is to build `meta-dstack` with its `dstack` submodule checked out to this PR branch, for example:
 
    ```bash
@@ -183,10 +183,12 @@ If the smoke stops after `EFI stub: Loaded initrd ...` with `cpus are not resett
 Run locally for this review-ready staging branch:
 
 ```bash
+bash -n test-scripts/snp-e2e-smoke.sh
 cargo fmt --all
 cargo test -p dstack-kms --all-features
 cargo test -p dstack-attest --all-features
 cargo test -p dstack-vmm --all-features
+cargo test -p ra-rpc --all-features
 cargo check --workspace --all-features
 cargo clippy --workspace --all-features -- -D warnings --allow unused_variables
 git diff --check
