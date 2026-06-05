@@ -55,11 +55,15 @@ This file contains metadata about the application instance:
 
 | Field | Description |
 |-------|-------------|
-| app_id | The application ID, determined by the SHA256 digest of the app-compose.json (truncated to the first 20 bytes) |
+| app_id | The application ID. This is the deploy-time `app_id` from this file; when it is unset it defaults to the SHA256 digest of the app-compose.json (truncated to the first 20 bytes). The deploy-time value is honored in all key-provider modes. |
 | instance_id | The instance ID, determined by the SHA256 digest of the instance_id_seed || app_id (truncated to the first 20 bytes). Empty if no_instance_id is true in app-compose.json |
 | instance_id_seed | The random seed that determines the instance ID |
 
 The hash of this file is not extended to any RTMR. Instead, the `app_id` and `instance_id` are extended to RTMR3 as event name `app-id` and `instance-id` respectively.
+
+> Because `app_id` can be pinned at deploy time (it is not necessarily derived from
+> `compose_hash`), a relying party that authorizes on `app_id` MUST also verify the
+> `compose_hash` independently — the two are separate measurements.
 
 ### .sys-config.json
 

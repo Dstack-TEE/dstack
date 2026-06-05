@@ -29,6 +29,10 @@ app_id = SHA256(app-compose.json)[0..20]    // first 20 bytes, 40 hex characters
 compose hashing. Do not recompute from a re-formatted or re-serialized variant,
 or you may get a different `app_id`.
 
+> This formula is the **default**. A deployment may pin an explicit `app_id` (in
+> `.instance-info`); when it does, use that value — the attested `app_id` is the
+> deploy-time value, not necessarily the compose hash.
+
 Example:
 
 ```javascript
