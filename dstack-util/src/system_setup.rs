@@ -1371,10 +1371,9 @@ impl<'a> Stage0<'a> {
         // (emit_runtime_event below), so a verifier sees exactly this value — with
         // no KMS to bind it, the relying party MUST gate the compose_hash
         // (which launcher build) separately from the app_id (which app).
-        let app_id = instance_info.app_id.clone();
 
         emit_runtime_event("system-preparing", &[])?;
-        emit_runtime_event("app-id", &app_id)?;
+        emit_runtime_event("app-id", &instance_info.app_id)?;
         emit_runtime_event("compose-hash", &compose_hash)?;
         emit_runtime_event("instance-id", &instance_id)?;
         emit_runtime_event("boot-mr-done", &[])?;
