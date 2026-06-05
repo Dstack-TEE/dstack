@@ -205,6 +205,7 @@ mod tests {
     fn sev_snp_config() -> SevSnpMeasureConfig {
         SevSnpMeasureConfig {
             ovmf_path: None,
+            amd_kds_proxy_url: None,
             guest_features: 1,
         }
     }

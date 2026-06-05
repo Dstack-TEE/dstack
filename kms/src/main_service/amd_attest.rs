@@ -1070,6 +1070,7 @@ mod tests {
     fn config() -> SevSnpMeasureConfig {
         SevSnpMeasureConfig {
             ovmf_path: None,
+            amd_kds_proxy_url: None,
             guest_features: 1,
         }
     }
@@ -1077,6 +1078,7 @@ mod tests {
     fn config_with_path(path: &str) -> SevSnpMeasureConfig {
         SevSnpMeasureConfig {
             ovmf_path: Some(path.to_string()),
+            amd_kds_proxy_url: None,
             guest_features: 1,
         }
     }
@@ -1818,6 +1820,7 @@ mod tests {
         let err = validate_amd_snp_measurement_binding(
             Some(&SevSnpMeasureConfig {
                 ovmf_path: None,
+                amd_kds_proxy_url: None,
                 guest_features: 0,
             }),
             &verified,

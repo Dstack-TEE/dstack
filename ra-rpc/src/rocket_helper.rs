@@ -184,6 +184,7 @@ fn unix_peer_cred(stream: &UnixStream) -> Option<UnixPeerCred> {
 #[derive(Debug, Clone)]
 pub struct QuoteVerifier {
     pccs_url: Option<String>,
+    amd_kds_proxy_url: Option<String>,
 }
 
 pub mod deps {
@@ -316,7 +317,25 @@ impl<'r> FromRequest<'r> for &'r QuoteVerifier {
 
 impl QuoteVerifier {
     pub fn new(pccs_url: Option<String>) -> Self {
-        Self { pccs_url }
+        Self::new_with_amd_kds_proxy(pccs_url, None)
+    }
+
+    pub fn new_with_amd_kds_proxy(
+        pccs_url: Option<String>,
+        amd_kds_proxy_url: Option<String>,
+    ) -> Self {
+        Self {
+            pccs_url,
+            amd_kds_proxy_url: amd_kds_proxy_url
+                .map(|url| url.trim().to_string())
+                .filter(|url| !url.is_empty()),
+        }
+    }
+
+    fn configure_amd_kds_proxy_for_request(&self) {
+        if let Some(proxy_url) = &self.amd_kds_proxy_url {
+            std::env::set_var("DSTACK_AMD_KDS_PROXY_URL", proxy_url);
+        }
     }
 }
 
@@ -441,6 +460,21 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
+    fn quote_verifier_carries_trimmed_amd_kds_proxy_url() {
+        let verifier = QuoteVerifier::new_with_amd_kds_proxy(
+            None,
+            Some("  https://cors.litgateway.com/  ".to_string()),
+        );
+        assert_eq!(
+            verifier.amd_kds_proxy_url.as_deref(),
+            Some("https://cors.litgateway.com/")
+        );
+
+        let verifier = QuoteVerifier::new_with_amd_kds_proxy(None, Some("   ".to_string()));
+        assert!(verifier.amd_kds_proxy_url.is_none());
+    }
+
+    #[test]
     fn custom_unix_endpoint_maps_to_remote_endpoint() {
         let endpoint = Endpoint::new(UnixPeerEndpoint {
             path: PathBuf::from("/tmp/test.sock"),
@@ -533,6 +567,7 @@ pub async fn handle_prpc_impl<S, Call: RpcCall<S>>(
         .flatten();
     let attestation = match (request.quote_verifier, attestation) {
         (Some(quote_verifier), Some(attestation)) => {
+            quote_verifier.configure_amd_kds_proxy_for_request();
             let pubkey = request
                 .certificate
                 .context("certificate is missing")?

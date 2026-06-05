@@ -105,6 +105,20 @@ fn record_attestation_metrics(req: &rocket::Request<'_>, res: &rocket::Response<
         .record_attestation_request(res.status().code >= 400);
 }
 
+fn configure_amd_kds_proxy_from_config(config: &KmsConfig) {
+    let Some(proxy_url) = config
+        .sev_snp
+        .as_ref()
+        .and_then(|sev_snp| sev_snp.amd_kds_proxy_url.as_deref())
+        .map(str::trim)
+        .filter(|proxy_url| !proxy_url.is_empty())
+    else {
+        return;
+    };
+    std::env::set_var("DSTACK_AMD_KDS_PROXY_URL", proxy_url);
+    info!("AMD SEV-SNP KDS proxy configured");
+}
+
 #[rocket::main]
 async fn main() -> Result<()> {
     {
@@ -116,6 +130,7 @@ async fn main() -> Result<()> {
 
     let figment = config::load_config_figment(args.config.as_deref());
     let config: KmsConfig = figment.focus("core").extract()?;
+    configure_amd_kds_proxy_from_config(&config);
 
     if config.onboard.enabled && !config.keys_exists() {
         info!("Onboarding");
@@ -137,6 +152,10 @@ async fn main() -> Result<()> {
     }
 
     let pccs_url = config.pccs_url.clone();
+    let amd_kds_proxy_url = config
+        .sev_snp
+        .as_ref()
+        .and_then(|sev_snp| sev_snp.amd_kds_proxy_url.clone());
     let metrics_enabled = config.metrics.enabled;
     let state = main_service::KmsState::new(config).context("Failed to initialize KMS state")?;
     let figment = figment
@@ -164,7 +183,7 @@ async fn main() -> Result<()> {
             .mount("/", rocket::routes![metrics]);
     }
 
-    let verifier = QuoteVerifier::new(pccs_url);
+    let verifier = QuoteVerifier::new_with_amd_kds_proxy(pccs_url, amd_kds_proxy_url);
     rocket = rocket.manage(verifier);
 
     rocket

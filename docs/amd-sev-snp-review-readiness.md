@@ -133,15 +133,14 @@ platform=amd-sev-snp
 image_kernel=Linux 6.18.24-dstack with CONFIG_AMD_MEM_ENCRYPT=y, CONFIG_SEV_GUEST=y, CONFIG_TSM_REPORTS=y
 kms_guest=booted SNP Linux/userspace and started dstack-kms
 kms_marker=SNP_KMS_CONTAINER_STARTED / KMS runtime ready
-app_guest=booted SNP Linux/userspace and reached dstack-prepare.sh
-app_key_boundary=GetTempCaCert/GetAppKey request reached
-strict_tcb_probe=app request reached strict KMS, but final policy decision was blocked before TCB evaluation by AMD KDS collateral throttling
-success_probe=app request reached permissive lab KMS, but final GetAppKey success marker was blocked by the same AMD KDS collateral throttling
-failure_error=amd sev-snp KDS collateral unavailable while fetching VCEK/cert-chain collateral; Genoa VCEK returned HTTP 429
+kds_proxy=enabled for smoke via DSTACK_AMD_KDS_PROXY_URL=https://cors.litgateway.com/
+strict_tcb_probe=denied_as_expected with tcb_status is not allowed
+success_probe=GetTempCaCert HTTP 200; GetAppKey HTTP 200; SignCert HTTP 200; app container started
+smoke_result=SNP E2E smoke success
 no_secret_material_logged=true
 ```
 
-This means the PR has live SNP report proof, live golden-vector measurement proof, release-gate unit/integration coverage, and hardware smoke proof through dstack-managed SNP KMS boot plus app guest key-request boundary. The fresh-box smoke now reaches Linux/userspace, `SNP_KMS_CONTAINER_STARTED`, `GetTempCaCert`, and the app `GetAppKey` request when using a coherent **SNP** `meta-dstack` image. The remaining blocker for completed strict-denial and success markers in the latest run was external AMD KDS throttling while fetching VCEK/cert-chain collateral for the app quote (`HTTP 429` for the Genoa VCEK request), not guest boot, KMS startup, or release-policy wiring. Host/KMS binaries must match PR #703, guest-side `dstack-util`/`dstack-attest` must include the PR cert-chain/KDS fallback, and the Yocto image must be built with `MACHINE = "sev-snp"` so the guest kernel includes AMD memory-encryption/SNP support. A coherent PR image built with the default `tdx` machine produced a `6.18.24-dstack` kernel with `# CONFIG_AMD_MEM_ENCRYPT is not set`; controlled QEMU tests showed that kernel resets immediately after OVMF loads kernel/initrd, while SNP-capable kernels boot the same QEMU/OVMF path to Linux/SNP markers.
+This means the PR has live SNP report proof, live golden-vector measurement proof, release-gate unit/integration coverage, and hardware smoke proof through dstack-managed SNP KMS boot, strict TCB denial, app guest key release, and app container startup. The fresh-box smoke now reaches Linux/userspace, `SNP_KMS_CONTAINER_STARTED`, `GetTempCaCert`, `GetAppKey`, `SignCert`, and app container startup when using a coherent **SNP** `meta-dstack` image. During the smoke, AMD KDS throttling was worked around by explicitly routing AMD KDS collateral fetches through `DSTACK_AMD_KDS_PROXY_URL`; the proxy value is carried in the measured guest cmdline for smoke runs and mirrored in KMS measurement recomputation to avoid measurement drift. Host/KMS binaries must match PR #703, guest-side `dstack-util`/`dstack-attest` must include the PR cert-chain/KDS fallback, and the Yocto image must be built with `MACHINE = "sev-snp"` so the guest kernel includes AMD memory-encryption/SNP support. A coherent PR image built with the default `tdx` machine produced a `6.18.24-dstack` kernel with `# CONFIG_AMD_MEM_ENCRYPT is not set`; controlled QEMU tests showed that kernel resets immediately after OVMF loads kernel/initrd, while SNP-capable kernels boot the same QEMU/OVMF path to Linux/SNP markers.
 
 ### Fresh SNP host / image requirements
 
@@ -156,7 +155,7 @@ Practical implication for reviewers/testers on a fresh box:
 
 1. Install/use an AMDSEV QEMU 10.x build and the matching SNP-capable OVMF.
 2. Build the PR binaries with `cargo build --release -p dstack-vmm -p supervisor -p dstack-kms`.
-3. Run `test-scripts/snp-e2e-smoke.sh` unchanged and first confirm it reaches `SNP_KMS_CONTAINER_STARTED` and the app guest key-request boundary.
+3. Run `test-scripts/snp-e2e-smoke.sh` unchanged and first confirm it reaches `SNP_KMS_CONTAINER_STARTED`; if AMD KDS throttles the lab host, set `DSTACK_SNP_SMOKE_KDS_PROXY_URL` to a trusted AMD-KDS passthrough/cache endpoint and rerun.
 4. For full `SNP_APP_CONTAINER_STARTED` / `GetAppKey` success, use or publish a coherent `meta-dstack` guest image whose kernel, modules, initramfs, rootfs, verity metadata, and guest userspace include the same PR #703 `dstack-util`/`dstack-attest` SNP cert-chain/KDS fallback code. The reproducible path is to build `meta-dstack` with its `dstack` submodule checked out to this PR branch, for example:
 
    ```bash
@@ -177,7 +176,7 @@ Practical implication for reviewers/testers on a fresh box:
    Do not try to inject only a replacement `dstack-util` into the stock image; that experiment changed the initramfs/measurement enough to regress boot.
 5. Only after the baseline smoke reaches the app success marker should testers swap the simple app workload for Chipotle.
 
-If the smoke stops after `EFI stub: Loaded initrd ...` with `cpus are not resettable`, use a host/image/kernel that is known to boot dstack under SNP before debugging app-level behavior. If it reaches `Requesting app keys from KMS` and fails with the cert-chain error above, rebuild/use a coherent PR guest image rather than changing KMS release policy.
+If the smoke stops after `EFI stub: Loaded initrd ...` with `cpus are not resettable`, use a host/image/kernel that is known to boot dstack under SNP before debugging app-level behavior. If it reaches `Requesting app keys from KMS` and fails with AMD KDS `HTTP 429`, use the smoke proxy hook above; if it fails with missing cert-chain/collateral without KDS proxy evidence, rebuild/use a coherent PR guest image rather than changing KMS release policy.
 
 ## Validation commands
 
