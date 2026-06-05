@@ -54,7 +54,6 @@ REPO="${DSTACK_SNP_SMOKE_REPO:-$(pwd)}"
 BIN="${DSTACK_SNP_SMOKE_BIN_DIR:-$REPO/target/release}"
 ART="$BASE/artifacts"
 LOG="$ART/snp-e2e-smoke.log"
-VMM_URL="${DSTACK_SNP_SMOKE_VMM_URL:-http://127.0.0.1:18082}"
 IMAGE_NAME="${DSTACK_SNP_SMOKE_IMAGE_NAME:-dstack-dev-0.5.11-snp-dnsfix}"
 IMAGE_URL="${DSTACK_SNP_SMOKE_IMAGE_URL:-https://github.com/Dstack-TEE/meta-dstack/releases/download/v0.5.11/dstack-dev-0.5.11.tar.gz}"
 QEMU_PATH="${DSTACK_SNP_SMOKE_QEMU:-/opt/AMDSEV/usr/local/bin/qemu-system-x86_64}"
@@ -65,6 +64,8 @@ KMS_HOST_PORT="${DSTACK_SNP_SMOKE_KMS_HOST_PORT:-15443}"
 STRICT_KMS_HOST_PORT="${DSTACK_SNP_SMOKE_STRICT_KMS_HOST_PORT:-15444}"
 APP_HOST_PORT="${DSTACK_SNP_SMOKE_APP_HOST_PORT:-15543}"
 STRICT_APP_HOST_PORT="${DSTACK_SNP_SMOKE_STRICT_APP_HOST_PORT:-15544}"
+VMM_PORT="${DSTACK_SNP_SMOKE_VMM_PORT:-18082}"
+VMM_URL="${DSTACK_SNP_SMOKE_VMM_URL:-http://127.0.0.1:$VMM_PORT}"
 ALLOW_OUT_OF_DATE_TCB="${DSTACK_SNP_SMOKE_ALLOW_OUT_OF_DATE_TCB:-0}"
 RUN_STRICT_TCB_PROBE="${DSTACK_SNP_SMOKE_STRICT_TCB_PROBE:-1}"
 ALLOW_OLD_QEMU="${DSTACK_SNP_SMOKE_ALLOW_OLD_QEMU:-0}"
@@ -117,6 +118,9 @@ echo "qemu=$QEMU_PATH"
 echo "qemu_version=$qemu_version_output"
 echo "ovmf_sha256=$(sha256sum "$OVMF_PATH" | awk '{print $1}')"
 echo "image=$IMAGE_NAME"
+if [[ -n "${DSTACK_SNP_SMOKE_KDS_PROXY_URL:-}" ]]; then
+	echo "amd_kds_proxy_url=${DSTACK_SNP_SMOKE_KDS_PROXY_URL}"
+fi
 
 cleanup() {
 	set +e
@@ -126,6 +130,9 @@ cleanup() {
 	sudo pkill -f "$BIN/dstack-vmm" 2>/dev/null || true
 	sudo pkill -f "qemu-system-x86_64.*$BASE" 2>/dev/null || true
 	sudo pkill -f "$BASE/images" 2>/dev/null || true
+	if command -v fuser >/dev/null 2>&1; then
+		fuser -k "${HOST_ART_PORT}/tcp" "${AUTH_PORT}/tcp" "${KMS_HOST_PORT}/tcp" "${STRICT_KMS_HOST_PORT}/tcp" "${APP_HOST_PORT}/tcp" "${STRICT_APP_HOST_PORT}/tcp" "${VMM_PORT}/tcp" 2>/dev/null || true
+	fi
 }
 trap cleanup EXIT
 cleanup
@@ -148,6 +155,7 @@ jq . "$BASE/images/$IMAGE_NAME/metadata.json" | tee "$ART/image-metadata.json"
 cat >"$BASE/auth-server.py" <<'PY'
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
+import os
 import time
 
 
@@ -188,11 +196,11 @@ class H(BaseHTTPRequestHandler):
         self._send({"isAllowed": True, "gatewayAppId": "", "reason": "snp smoke permissive auth"})
 
 
-HTTPServer(("0.0.0.0", 18081), H).serve_forever()
+HTTPServer(("0.0.0.0", int(os.environ["AUTH_PORT"])), H).serve_forever()
 PY
 
 (cd "$BASE/http-root" && python3 -m http.server "$HOST_ART_PORT" >"$ART/artifacts-http.log" 2>&1 & echo $! >"$BASE/artifacts-http.pid")
-python3 "$BASE/auth-server.py" >"$ART/auth-server.log" 2>&1 & echo $! >"$BASE/auth.pid"
+AUTH_PORT="$AUTH_PORT" python3 "$BASE/auth-server.py" >"$ART/auth-server.log" 2>&1 & echo $! >"$BASE/auth.pid"
 sleep 1
 curl -fsS "http://127.0.0.1:$HOST_ART_PORT/dstack-kms" -o /dev/null
 curl -fsS "http://127.0.0.1:$AUTH_PORT/" | jq . | tee "$ART/auth-info.json"
@@ -205,7 +213,7 @@ temp_dir = "$BASE/tmp"
 keep_alive = 10
 log_level = "debug"
 address = "127.0.0.1"
-port = 18082
+port = $VMM_PORT
 reuse = true
 kms_url = "https://127.0.0.1:$KMS_HOST_PORT"
 event_buffer_size = 50
@@ -291,8 +299,10 @@ port = 3443
 EOF
 
 # Redirect to a user-owned artifact file; only the VMM process itself needs sudo.
+# Preserve the optional AMD KDS proxy URL so SNP guest cmdlines can carry it into
+# dstack-prepare before app containers or compose init scripts run.
 # shellcheck disable=SC2024
-sudo "$BIN/dstack-vmm" -c "$BASE/vmm.toml" serve >"$ART/vmm.log" 2>&1 & echo $! >"$BASE/vmm.pid"
+sudo env "DSTACK_AMD_KDS_PROXY_URL=${DSTACK_SNP_SMOKE_KDS_PROXY_URL:-}" "$BIN/dstack-vmm" -c "$BASE/vmm.toml" serve >"$ART/vmm.log" 2>&1 & echo $! >"$BASE/vmm.pid"
 for i in $(seq 1 60); do
 	if python3 "$REPO/vmm/src/vmm-cli.py" --url "$VMM_URL" lsvm --json >/dev/null 2>&1; then break; fi
 	sleep 1
@@ -339,7 +349,7 @@ download_timeout = "2m"
 type = "webhook"
 
 [core.auth_api.webhook]
-url = "http://10.0.2.2:18081"
+url = "http://10.0.2.2:$AUTH_PORT"
 
 [core.onboard]
 enabled = true
@@ -348,6 +358,7 @@ auto_bootstrap_domain = "10.0.2.2"
 [core.sev_snp]
 ovmf_path = "/dstack/OVMF.fd"
 guest_features = 1
+amd_kds_proxy_url = "${DSTACK_SNP_SMOKE_KDS_PROXY_URL:-}"
 
 [core.sev_snp_key_release]
 enabled = true
@@ -358,6 +369,7 @@ EOF
 
 DNS_INIT_SCRIPT=$(cat <<'SH'
 set -eux
+export DSTACK_AMD_KDS_PROXY_URL="__DSTACK_AMD_KDS_PROXY_URL__"
 mkdir -p /etc/docker
 cat >/etc/docker/daemon.json <<'JSON'
 {"dns":["10.0.2.3","1.1.1.1","8.8.8.8"]}
@@ -370,17 +382,23 @@ fi
 SH
 )
 
+DNS_INIT_SCRIPT=${DNS_INIT_SCRIPT/__DSTACK_AMD_KDS_PROXY_URL__/${DSTACK_SNP_SMOKE_KDS_PROXY_URL:-}}
+
 KMS_BASH_SCRIPT=$(cat <<'SH'
 set -eux
 mkdir -p /dstack/kms-certs /dstack/kms-images
-curl -fsS http://10.0.2.2:18080/dstack-kms -o /dstack/dstack-kms
-curl -fsS http://10.0.2.2:18080/OVMF.fd -o /dstack/OVMF.fd
-curl -fsS http://10.0.2.2:18080/kms.toml -o /dstack/kms.toml
+curl -fsS http://10.0.2.2:__DSTACK_HOST_ART_PORT__/dstack-kms -o /dstack/dstack-kms
+curl -fsS http://10.0.2.2:__DSTACK_HOST_ART_PORT__/OVMF.fd -o /dstack/OVMF.fd
+curl -fsS http://10.0.2.2:__DSTACK_HOST_ART_PORT__/kms.toml -o /dstack/kms.toml
 chmod +x /dstack/dstack-kms
 echo SNP_KMS_CONTAINER_STARTED
+export DSTACK_AMD_KDS_PROXY_URL="__DSTACK_AMD_KDS_PROXY_URL__"
 RUST_LOG=info /dstack/dstack-kms -c /dstack/kms.toml
 SH
 )
+KMS_BASH_SCRIPT=${KMS_BASH_SCRIPT/__DSTACK_HOST_ART_PORT__/$HOST_ART_PORT}
+KMS_BASH_SCRIPT=${KMS_BASH_SCRIPT//__DSTACK_HOST_ART_PORT__/$HOST_ART_PORT}
+KMS_BASH_SCRIPT=${KMS_BASH_SCRIPT/__DSTACK_AMD_KDS_PROXY_URL__/${DSTACK_SNP_SMOKE_KDS_PROXY_URL:-}}
 
 deploy_kms() {
 	local name="$1"
@@ -438,20 +456,21 @@ if [[ "$RUN_STRICT_TCB_PROBE" = "1" && "$ALLOW_OUT_OF_DATE_TCB" = "1" ]]; then
 	echo "STRICT_APP_VM_ID=$STRICT_APP_VM_ID"
 	for i in $(seq 1 240); do
 		logs=$(python3 "$REPO/vmm/src/vmm-cli.py" --url "$VMM_URL" logs "$STRICT_APP_VM_ID" -n 180 2>/dev/null || true)
-		if echo "$logs" | grep -q "tcb_status is not allowed"; then
-			echo "$logs" | tee "$ART/strict-tcb-denial-log.txt"
+		kms_logs=$(python3 "$REPO/vmm/src/vmm-cli.py" --url "$VMM_URL" logs "$STRICT_KMS_VM_ID" -n 220 2>/dev/null || true)
+		if { echo "$logs"; echo "$kms_logs"; } | grep -q "tcb_status is not allowed"; then
+			{ echo "$logs"; echo "$kms_logs"; } | tee "$ART/strict-tcb-denial-log.txt"
 			echo "strict_tcb_probe=denied_as_expected"
 			break
 		fi
-		if echo "$logs" | grep -q "KDS collateral unavailable\|HTTP status client error"; then
-			echo "$logs" | tee "$ART/strict-tcb-kds-blocked-log.txt"
+		if { echo "$logs"; echo "$kms_logs"; } | grep -q "KDS collateral unavailable\|HTTP status client error"; then
+			{ echo "$logs"; echo "$kms_logs"; } | tee "$ART/strict-tcb-kds-blocked-log.txt"
 			echo "strict_tcb_probe=blocked_by_kds_collateral"
 			break
 		fi
-		if echo "$logs" | grep -q "SNP_APP_CONTAINER_STARTED"; then echo "$logs" | tee "$ART/strict-tcb-unexpected-success-log.txt"; echo "strict TCB probe unexpectedly reached app container"; exit 1; fi
+		if echo "$logs" | grep -Eq "SNP_APP_CONTAINER_STARTED|Container dstack-smoke-1 Started"; then echo "$logs" | tee "$ART/strict-tcb-unexpected-success-log.txt"; echo "strict TCB probe unexpectedly reached app container"; exit 1; fi
 		sleep 2
-		if [[ $((i % 30)) -eq 0 ]]; then echo "waiting for strict APP denial..."; echo "$logs" | tail -60; fi
-		if [[ $i -eq 240 ]]; then echo "strict TCB probe did not reach expected denial"; echo "$logs" | tee "$ART/strict-tcb-timeout-log.txt"; exit 1; fi
+		if [[ $((i % 30)) -eq 0 ]]; then echo "waiting for strict APP denial..."; echo "$logs" | tail -60; echo "$kms_logs" | tail -60; fi
+		if [[ $i -eq 240 ]]; then echo "strict TCB probe did not reach expected denial"; { echo "$logs"; echo "$kms_logs"; } | tee "$ART/strict-tcb-timeout-log.txt"; exit 1; fi
 	done
 fi
 
@@ -466,7 +485,7 @@ echo "APP_VM_ID=$APP_VM_ID"
 
 for i in $(seq 1 240); do
 	logs=$(python3 "$REPO/vmm/src/vmm-cli.py" --url "$VMM_URL" logs "$APP_VM_ID" -n 160 2>/dev/null || true)
-	if echo "$logs" | grep -q "SNP_APP_CONTAINER_STARTED"; then echo "$logs" | tee "$ART/app-ready-log.txt"; echo "APP ready after ${i}s"; break; fi
+	if echo "$logs" | grep -Eq "SNP_APP_CONTAINER_STARTED|Container dstack-smoke-1 Started"; then echo "$logs" | tee "$ART/app-ready-log.txt"; echo "APP ready after ${i}s"; break; fi
 	if echo "$logs" | grep -q "Failed to get app key\|amd sev-snp key release\|measurement mismatch\|App not allowed\|KMS self authorization failed\|KDS collateral unavailable\|HTTP status client error"; then echo "$logs" | tee "$ART/app-failure-log.txt"; exit 2; fi
 	sleep 2
 	if [[ $((i % 30)) -eq 0 ]]; then echo "waiting for APP..."; echo "$logs" | tail -60; fi

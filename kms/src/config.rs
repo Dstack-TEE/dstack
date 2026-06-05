@@ -38,6 +38,12 @@ pub(crate) struct SevSnpMeasureConfig {
     ///
     /// Optional when callers provide OVMF section metadata with the request.
     pub ovmf_path: Option<String>,
+    /// Optional diagnostic/cache proxy used for AMD KDS collateral requests.
+    ///
+    /// Empty by default. When set, the KMS process exports the same proxy env
+    /// used by dstack-attest before any attestation verification happens.
+    #[serde(default)]
+    pub amd_kds_proxy_url: Option<String>,
     /// SNP guest features bitmask used at launch. Defaults to SNP with kernel
     /// hashes enabled.
     #[serde(default = "default_guest_features")]

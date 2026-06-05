@@ -404,9 +404,24 @@ mod tests {
                 "console=ttyS0 loglevel=7",
                 "22",
                 "33",
-                "1111111111111111111111111111111111111111"
+                "1111111111111111111111111111111111111111",
+                None,
             ),
             "console=ttyS0 loglevel=7 docker_compose_hash=22 rootfs_hash=33 app_id=1111111111111111111111111111111111111111"
+        );
+    }
+
+    #[test]
+    fn amd_sev_snp_measured_cmdline_can_carry_kds_proxy_for_smoke() {
+        assert_eq!(
+            amd_sev_snp_measured_cmdline(
+                "console=ttyS0 loglevel=7",
+                "22",
+                "33",
+                "1111111111111111111111111111111111111111",
+                Some("https://cors.litgateway.com/"),
+            ),
+            "console=ttyS0 loglevel=7 dstack.amd_kds_proxy_url=https://cors.litgateway.com/ docker_compose_hash=22 rootfs_hash=33 app_id=1111111111111111111111111111111111111111"
         );
     }
 
@@ -835,6 +850,7 @@ impl VmConfig {
                     &compose_hash,
                     rootfs_hash,
                     &self.manifest.app_id,
+                    std::env::var("DSTACK_AMD_KDS_PROXY_URL").ok().as_deref(),
                 ))
             }
             (Some(cmdline), _) => Some(cmdline.clone()),
@@ -1071,15 +1087,31 @@ fn amd_sev_snp_memory_backend_arg(mem: u32) -> String {
     format!("memory-backend-memfd,id=ram1,size={mem}M,share=true,prealloc=false")
 }
 
+fn amd_sev_snp_base_cmdline_with_kds_proxy(
+    base_cmdline: &str,
+    amd_kds_proxy_url: Option<&str>,
+) -> String {
+    let mut cmdline = base_cmdline.trim().to_string();
+    if let Some(proxy_url) = amd_kds_proxy_url
+        .map(str::trim)
+        .filter(|url| !url.is_empty())
+    {
+        cmdline.push_str(" dstack.amd_kds_proxy_url=");
+        cmdline.push_str(proxy_url);
+    }
+    cmdline
+}
+
 fn amd_sev_snp_measured_cmdline(
     base_cmdline: &str,
     compose_hash: &str,
     rootfs_hash: &str,
     app_id: &str,
+    amd_kds_proxy_url: Option<&str>,
 ) -> String {
     format!(
         "{} docker_compose_hash={} rootfs_hash={} app_id={}",
-        base_cmdline.trim(),
+        amd_sev_snp_base_cmdline_with_kds_proxy(base_cmdline, amd_kds_proxy_url),
         compose_hash,
         rootfs_hash,
         app_id
