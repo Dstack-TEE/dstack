@@ -50,6 +50,86 @@ APP_COMPOSE_MAX_BYTES = 50 * 1024 * 1024
 # via `systemctl start <name>`, so keep the alphabet strict).
 UNIT_RE = re.compile(r"^[A-Za-z0-9@:._-]+\.(service|socket|target|timer|path|mount)$")
 
+# app-compose flags this tool exposes, both as config.json `compose` keys and as
+# CLI options on `new`/`build`. `key_provider` is the modern enum field
+# (matches dstack-types KeyProviderKind) that replaces the legacy kms_enabled /
+# local_key_provider_enabled booleans; gateway is independent of the provider.
+KEY_PROVIDERS = ("none", "kms", "local", "tpm")
+
+COMPOSE_DEFAULTS = {
+    "key_provider": "none",
+    "gateway_enabled": False,
+    "public_logs": True,
+    "public_sysinfo": True,
+    "secure_time": False,
+    "no_instance_id": False,
+    "allowed_envs": [],
+    "key_provider_id": "",
+}
+
+# compose keys overridable from the CLI (argparse dest == compose key)
+_COMPOSE_KEYS = (
+    "key_provider", "gateway_enabled", "public_logs", "public_sysinfo",
+    "secure_time", "no_instance_id", "allowed_envs", "key_provider_id",
+)
+
+
+def _add_bool_pair(group, name: str, dest: str, help_on: str) -> None:
+    # tri-state: --flag -> True, --no-flag -> False, absent -> None (keep base)
+    group.add_argument(f"--{name}", dest=dest, action="store_const",
+                       const=True, default=None, help=help_on)
+    group.add_argument(f"--no-{name}", dest=dest, action="store_const",
+                       const=False, help=f"disable {name}")
+
+
+def add_compose_args(parser: "argparse.ArgumentParser") -> None:
+    """attach the app-compose options (shared by `new` and `build`).
+
+    every option defaults to None so an unset flag keeps the config/default
+    value while an explicit flag overrides it.
+    """
+    g = parser.add_argument_group("app-compose options")
+    g.add_argument("--key-provider", choices=KEY_PROVIDERS, default=None,
+                   help="key provider (default: none); gateway requires kms")
+    _add_bool_pair(g, "gateway", "gateway_enabled",
+                   "expose the app via dstack-gateway (needs --key-provider kms)")
+    _add_bool_pair(g, "public-logs", "public_logs", "allow public access to logs")
+    _add_bool_pair(g, "public-sysinfo", "public_sysinfo", "allow public sysinfo")
+    _add_bool_pair(g, "secure-time", "secure_time", "require secure time at boot")
+    g.add_argument("--no-instance-id", dest="no_instance_id", action="store_const",
+                   const=True, default=None, help="don't derive a per-instance id")
+    g.add_argument("--instance-id", dest="no_instance_id", action="store_const",
+                   const=False, help="derive a per-instance id (default)")
+    g.add_argument("--allowed-env", dest="allowed_envs", action="append",
+                   default=None, metavar="NAME",
+                   help="env var name the app may receive (repeatable)")
+    g.add_argument("--key-provider-id", dest="key_provider_id", default=None,
+                   help="hex key-provider id (KMS app contract)")
+
+
+def resolve_compose(base: dict, args) -> dict:
+    """layer CLI overrides (non-None values) on top of a base compose dict."""
+    out = dict(base)
+    for key in _COMPOSE_KEYS:
+        val = getattr(args, key, None)
+        if val is not None:
+            out[key] = val
+    return out
+
+
+def validate_compose(compose: dict) -> None:
+    kp = compose.get("key_provider", "none")
+    if kp not in KEY_PROVIDERS:
+        die(f"key_provider must be one of {KEY_PROVIDERS} (got {kp!r})")
+    for key in ("gateway_enabled", "public_logs", "public_sysinfo",
+                "secure_time", "no_instance_id"):
+        if not isinstance(compose.get(key, False), bool):
+            die(f"compose.{key} must be a JSON boolean (got {compose.get(key)!r})")
+    if compose.get("gateway_enabled") and kp != "kms":
+        print("  warning: gateway_enabled but key_provider is not 'kms'; the "
+              "gateway will reject the app (it needs a KMS identity)",
+              file=sys.stderr)
+
 
 # --------------------------------------------------------------------------- #
 # helpers
@@ -163,31 +243,24 @@ note "sca: started"
 # --------------------------------------------------------------------------- #
 # build
 # --------------------------------------------------------------------------- #
-def build_app_compose(cfg: dict, rootfs_b64: str, services: list[str]) -> dict:
-    compose = cfg.get("compose", {})
+def build_app_compose(cfg: dict, compose: dict, rootfs_b64: str,
+                      services: list[str]) -> dict:
     out: dict = {
         "manifest_version": cfg.get("manifest_version", 2),
         "name": cfg["name"],
         "runner": "bash",
+        # modern key-provider enum (none|kms|local|tpm); gateway is separate
+        "key_provider": compose.get("key_provider", "none"),
+        "gateway_enabled": bool(compose.get("gateway_enabled", False)),
+        "public_logs": bool(compose.get("public_logs", True)),
+        "public_sysinfo": bool(compose.get("public_sysinfo", True)),
+        "no_instance_id": bool(compose.get("no_instance_id", False)),
+        "secure_time": bool(compose.get("secure_time", False)),
+        "allowed_envs": list(compose.get("allowed_envs") or []),
     }
-    flag_defaults = {
-        "kms_enabled": False,
-        "gateway_enabled": False,
-        "local_key_provider_enabled": False,
-        "public_logs": True,
-        "public_sysinfo": True,
-        "no_instance_id": False,
-        "secure_time": False,
-    }
-    for key, default in flag_defaults.items():
-        val = compose.get(key, default)
-        if not isinstance(val, bool):
-            die(f"compose.{key} must be a JSON boolean (got {val!r})")
-        out[key] = val
-    out["key_provider_id"] = compose.get("key_provider_id", "")
-    out["allowed_envs"] = list(compose.get("allowed_envs", []))
-    if compose.get("key_provider"):
-        out["key_provider"] = compose["key_provider"]
+    kp_id = compose.get("key_provider_id") or ""
+    if kp_id:
+        out["key_provider_id"] = kp_id
     if compose.get("swap_size_mb"):
         out["swap_size"] = int(compose["swap_size_mb"]) * 1024 * 1024
 
@@ -220,10 +293,17 @@ def cmd_build(args) -> None:
             die(f"invalid service unit name: {s!r} "
                 f"(must match {UNIT_RE.pattern})")
 
+    compose_cfg = cfg.get("compose", {})
+    if not isinstance(compose_cfg, dict):
+        die("config 'compose' must be an object")
+    # precedence: built-in defaults < config.json < CLI flags
+    compose = resolve_compose({**COMPOSE_DEFAULTS, **compose_cfg}, args)
+    validate_compose(compose)
+
     gz, nfiles, raw_total = pack_rootfs(rootfs)
     rootfs_b64 = base64.b64encode(gz).decode("ascii")
 
-    app_compose = build_app_compose(cfg, rootfs_b64, services)
+    app_compose = build_app_compose(cfg, compose, rootfs_b64, services)
     blob = json.dumps(app_compose, indent=2, ensure_ascii=False).encode("utf-8")
 
     digest = hashlib.sha256(blob).hexdigest()
@@ -243,6 +323,8 @@ def cmd_build(args) -> None:
     print(f"  rootfs      : {nfiles} file(s), {human(raw_total)} raw "
           f"-> {human(len(gz))} packed (tar.gz)")
     print(f"  services    : {', '.join(services)}")
+    print(f"  key provider: {compose['key_provider']}  |  "
+          f"gateway: {str(compose['gateway_enabled']).lower()}")
     print(f"  size        : {human(size)} / {human(APP_COMPOSE_MAX_BYTES)} cap "
           f"({100 * size / APP_COMPOSE_MAX_BYTES:.1f}%)")
     print(f"  compose-hash: {digest}")
@@ -258,7 +340,7 @@ def cmd_build(args) -> None:
 # --------------------------------------------------------------------------- #
 # new (scaffold)
 # --------------------------------------------------------------------------- #
-def config_json_template(name: str) -> str:
+def config_json_template(name: str, compose: dict) -> str:
     cfg = {
         "name": name,
         "manifest_version": 2,
@@ -266,17 +348,9 @@ def config_json_template(name: str) -> str:
         "rootfs": "rootfs",
         # systemd units to start after the rootfs is extracted.
         "services": ["sca.service"],
-        "compose": {
-            "kms_enabled": False,
-            "gateway_enabled": False,
-            "local_key_provider_enabled": False,
-            "public_logs": True,
-            "public_sysinfo": True,
-            "secure_time": False,
-            "no_instance_id": False,
-            "allowed_envs": [],
-            "key_provider_id": "",
-        },
+        # app-compose options; key_provider is none|kms|local|tpm
+        # (gateway requires kms).
+        "compose": compose,
     }
     return json.dumps(cfg, indent=2) + "\n"
 
@@ -329,6 +403,20 @@ executables `chmod +x`.
 prints the compose-hash and app-id. add the compose-hash to your on-chain
 DstackApp whitelist before deploying.
 
+## options
+
+app-compose options live under `compose` in config.json and can also be set on
+`sca new` / `sca build` (CLI overrides config):
+
+    --key-provider none|kms|local|tpm   key provider (gateway requires kms)
+    --gateway / --no-gateway            expose via dstack-gateway
+    --public-logs / --no-public-logs
+    --public-sysinfo / --no-public-sysinfo
+    --secure-time / --no-secure-time
+    --no-instance-id / --instance-id
+    --allowed-env NAME                  (repeatable)
+    --key-provider-id HEX
+
 ## deploy
 
     ./vmm-cli.py deploy --name {slug} --image <os-image> \\
@@ -360,7 +448,10 @@ def cmd_new(args) -> None:
     if target.exists() and any(target.iterdir()):
         die(f"directory '{target}' exists and is not empty")
 
-    write_file(target / "config.json", config_json_template(name))
+    compose = resolve_compose(dict(COMPOSE_DEFAULTS), args)
+    validate_compose(compose)
+
+    write_file(target / "config.json", config_json_template(name, compose))
     write_file(target / "README.md", README_TEMPLATE.format(name=name, slug=slug))
     write_file(target / "rootfs" / "run" / "sca" / "bin" / "entrypoint.sh",
                ENTRYPOINT_SH, mode=0o755)
@@ -391,6 +482,7 @@ def main(argv=None) -> None:
     p_new = sub.add_parser("new", help="scaffold a new self-contained app project")
     p_new.add_argument("dir", help="target directory to create")
     p_new.add_argument("--name", help="app name (defaults to directory name)")
+    add_compose_args(p_new)
     p_new.set_defaults(func=cmd_new)
 
     p_build = sub.add_parser("build", help="pack rootfs/ into app-compose.json")
@@ -402,6 +494,7 @@ def main(argv=None) -> None:
         "-o", "--output", default="app-compose.json",
         help="output path (default: ./app-compose.json)",
     )
+    add_compose_args(p_build)
     p_build.set_defaults(func=cmd_build)
 
     args = parser.parse_args(argv)
