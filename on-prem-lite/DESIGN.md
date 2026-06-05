@@ -17,7 +17,7 @@ the launcher stops the workload.
 | Workload keys | KMS-derived (`getKey`, portable across redeploy) | none — disk is vTPM-sealed, app gets only the image |
 | Image keys delivered | whole vendor keyring (leased over mTLS) | **one CEK**, HPKE-sealed to this launcher |
 | Runtime entitlement | lease auto-renewed from in-VPC KMS (no operator) | **License** with expiry; renewed by an operator courier run |
-| Identity gate | `app_id` + `compose_hash` | **`compose_hash` only** (`app_id` ignored) |
+| Identity gate | `app_id` + `compose_hash` | `compose_hash` (launcher build) **+** `app_id` (which app) |
 | Best for | apps needing a persistent cryptographic identity, many apps, gateway | "run a vendor's encrypted container + licensing", stateless |
 
 Trade-offs (accepted for this profile): no portable/deterministic app keys (vTPM keys
@@ -67,7 +67,8 @@ payload is a per-workload `{CEK, License}` instead of a root + keyring.
    │                                                       │ G4 os_image ✓ (optional)    
    │                                                       │ G5 key_provider == tpm      
    │                                                       │ G6 compose_hash ∈ allowed   
-   │                                                       │ G7 workload ∈ allowed       
+   │                                                       │ G6b app_id ∈ tenant apps    
+   │                                                       │ G7 workload ∈ app's allowed 
    │                              sealed_cek = HPKE(→tpub, image privkey)               
    │                              license = Ed25519-sign(seq++, expires_at, …)          
    │◀──────── { sealed_cek, license } ────────────────────│                              
@@ -98,6 +99,7 @@ to `on-prem`, so the Rust verifier and Python signer interop.
   "schema_version": 1,
   "license_id": "acme-7",
   "tenant_id": "acme",
+  "app_id": "078a2ffea340832bb5d3e9eb317aad6aed067d49",
   "compose_hash": "0x<launcher compose hash>",
   "workload": {
     "image": "us-central1-docker.pkg.dev/proj/repo/whoami-enc",
@@ -122,12 +124,19 @@ sealed_cek = base64( HPKE-seal(transport_pub, <PEM of the image private key for 
 
 **Field semantics**
 
-- `compose_hash` — the launcher's measured compose. The Authority already checked the
+- `compose_hash` — the launcher's measured compose = **which launcher build** (the same
+  across all apps/customers running this launcher release). The Authority checked the
   *attested* value ∈ `allowed_launcher_digests`; the launcher additionally checks
-  `license.compose_hash == its own` so a License minted for a different launcher is refused.
-  This is the **only** identity binding (`app_id` is intentionally ignored in this profile).
+  `license.compose_hash == its own`. This says "trusted launcher build", not "which app".
+- `app_id` — **which app** (the boot-config value measured into MRCONFIGID, returned by the
+  verifier as `app_info.app_id`). The Authority assigns it (`create-app`), scopes each app's
+  `allowed_workload_digests` under it, and gates the *attested* `app_id` ∈ the tenant's
+  registered apps; the launcher checks `license.app_id == its own`. This is what
+  distinguishes one workload from another and gives per-app isolation **within** a tenant
+  (two apps on the same launcher build share a `compose_hash` but differ by `app_id`).
 - `workload.{image,digest,kid}` — which encrypted image this License authorizes and which
-  image key the `sealed_cek` carries. The launcher pulls strictly `image@digest`.
+  image key the `sealed_cek` carries; the digest is gated against **this app's**
+  `allowed_workload_digests`. The launcher pulls strictly `image@digest`.
 - `seq` — monotonic per `(tenant_id, compose_hash)`. The launcher persists the highest seq
   it has installed and refuses `seq ≤ stored` → **anti-rollback / anti-downgrade** (G8-equiv).
 - `expires_at` + `grace_period_secs` — hard stop. A watchdog stops the workload once
@@ -159,18 +168,20 @@ sealed_cek = base64( HPKE-seal(transport_pub, <PEM of the image private key for 
 | G4 | os-image hash | Authority | os-image ∉ whitelist (when configured; optional in this profile) |
 | G5 | `key_provider == tpm` | Authority | disk not vTPM-sealed |
 | G6 | launcher `compose_hash` | Authority **+** launcher | compose ∉ `allowed_launcher_digests`; or License ≠ self |
-| G7 | workload digest | Authority | digest ∉ `allowed_workload_digests` |
+| G6b | `app_id` | Authority **+** launcher | attested app_id ∉ the tenant's registered apps; or License ≠ self |
+| G7 | workload digest | Authority | digest ∉ **the app's** `allowed_workload_digests` |
 | G8 | License signature | launcher | sig ≠ pinned `AUTHORITY_PUBKEY` |
 | G9 | License `seq` monotonic | launcher | `seq ≤ stored` (rollback) |
 | G10 | License validity window | launcher | `now ∉ [not_before, expires_at(+grace)]` ⇒ stop workload |
 
-Every list-based gate denies on the empty list. `app_id` is **not** a gate here.
+Every list-based gate denies on the empty list. `compose_hash` gates the launcher build;
+`app_id` gates which app (and scopes G7's digest whitelist).
 
 ## Components
 
 | Path | What |
 |---|---|
-| `authority/` | vendor Authority (FastAPI): `/challenge`, `/license`, admin keys/policy; reuses the `on-prem` HPKE + Ed25519 + verifier conventions |
+| `authority/` | vendor Authority (FastAPI): `/challenge`, `/license`, admin (tenants, apps + per-app `allowed_workload_digests`, image keys, policy); reuses the `on-prem` HPKE + Ed25519 + verifier conventions |
 | `cli/license-ctl.py` | operator courier CLI: `attest` (issue+install a License), `renew`, `status` |
 | `launcher/` | the lite launcher (Rust): courier HTTP server, attest, License verify + CEK unseal, decrypt+run, expiry watchdog |
 | `deploy-templates/workload/` | single-CVM compose + `app.json` (`key_provider=tpm`), `AUTHORITY_PUBKEY` + workload pins literal |
