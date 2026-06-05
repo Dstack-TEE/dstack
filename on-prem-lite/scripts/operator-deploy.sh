@@ -102,23 +102,30 @@ do_license() {
     : "${APP_ID:?missing APP_ID (from release manifest)}"
     : "${WORKLOAD_IMAGE_DIGEST:?missing WORKLOAD_IMAGE_DIGEST (from release manifest)}"
 
-    c_step "opening IAP tunnel localhost:19000 → $WL_INSTANCE:9000"
-    local pid; pid="$(tunnel "$WL_INSTANCE" 9000 19000)"
+    # use a per-process local port and free it first, so a stale tunnel from a
+    # prior/parallel run (pointing at an old instance) can't shadow this one.
+    local LP=$((19000 + ($$ % 900)))
+    local stale; stale="$(ss -ltnpH "sport = :$LP" 2>/dev/null | grep -oP 'pid=\K[0-9]+' | sort -u || true)"
+    [ -n "$stale" ] && { kill $stale 2>/dev/null || true; sleep 1; }
+
+    c_step "opening IAP tunnel localhost:$LP → $WL_INSTANCE:9000"
+    local pid; pid="$(tunnel "$WL_INSTANCE" 9000 "$LP")"
     trap 'kill "$pid" 2>/dev/null || true' RETURN
     # a freshly-deployed CVM needs a few minutes to boot + start the launcher —
     # wait for a non-empty /healthz (up to ~6min) rather than racing.
     c_step "waiting for launcher on the tunnel (CVM may still be booting)"
     local hz=""
     for _ in $(seq 1 90); do
-        hz="$(curl -s --max-time 3 http://localhost:19000/healthz 2>/dev/null || true)"
+        kill -0 "$pid" 2>/dev/null || { pid="$(tunnel "$WL_INSTANCE" 9000 "$LP")"; }  # respawn if the tunnel died
+        hz="$(curl -s --max-time 3 "http://localhost:$LP/healthz" 2>/dev/null || true)"
         [ -n "$hz" ] && break
         sleep 4
     done
-    [ -n "$hz" ] || c_die "launcher not reachable on :19000 after ~6min (CVM booted? is 'fw allow 9000' applied?)"
+    [ -n "$hz" ] || c_die "launcher not reachable on :$LP after ~6min (CVM booted? is 'fw allow 9000' applied?)"
     c_ok "launcher healthz: $hz"
 
     c_step "courier attest (user_id=$USER_ID app_id=$APP_ID)"
-    LAUNCHER_URL="http://localhost:19000" \
+    LAUNCHER_URL="http://localhost:$LP" \
     AUTHORITY_URL="$AUTHORITY_URL" \
     USER_ID="$USER_ID" \
     APP_ID="$APP_ID" \
@@ -129,7 +136,7 @@ do_license() {
     c_step "waiting for the workload to come up (decrypt + run takes a moment)"
     local st=""
     for _ in $(seq 1 30); do
-        st="$(curl -s --max-time 4 http://localhost:19000/status 2>/dev/null || true)"
+        st="$(curl -s --max-time 4 "http://localhost:$LP/status" 2>/dev/null || true)"
         echo "$st" | grep -q '"workload_running": *true' && break
         sleep 6
     done
