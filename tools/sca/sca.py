@@ -5,23 +5,25 @@
 """sca — self-contained dstack app builder.
 
 build a dstack `app-compose.json` whose application is embedded directly inside
-it (base64), with NO docker and NO registry pull. at boot the measured
-`bash_script` decodes the embedded files into a tmpfs runtime dir and runs the
-app under a systemd service (Restart=always), so systemd supervises it the way
-docker would.
+it, with NO docker and NO registry pull. you lay out a `rootfs/` directory that
+mirrors the CVM filesystem; `sca build` packs the whole tree (tar+gzip+base64)
+into app-compose.json. at boot the measured `bash_script` extracts the tree onto
+the CVM root and starts your systemd service(s), so systemd supervises the app
+the way docker would.
 
-why this is secure: the whole app-compose.json (including the embedded payloads)
+why this is secure: the whole app-compose.json (including the embedded rootfs)
 is hashed into the compose-hash and extended to RTMR3, so the exact bytes you
 ship are covered by remote attestation and gated by the on-chain whitelist.
 
 subcommands:
-  new <dir>     scaffold a project (sca.toml + README + dist/)
-  build         read sca.toml and emit app-compose.json
+  new <dir>     scaffold a project (config.json + rootfs/ defaults + README)
+  build         pack rootfs/ and emit app-compose.json
 
 constraints baked in from the dstack guest runtime (verified on a live CVM):
-  - guest userland is busybox and has NO `base64`; decoding uses `openssl`.
-  - `/run`, `/tmp`, `/dev/shm` are tmpfs and mounted exec (no noexec).
-  - init is systemd; `systemctl` / `systemd-run` are available.
+  - guest userland is busybox: no `base64`, but `openssl`, `tar`, `gzip` exist.
+  - `/run`, `/tmp`, `/dev/shm` are tmpfs and mounted exec; `/etc`, `/usr` are
+    writable overlays. extracting the tree onto `/` therefore works.
+  - init is systemd; `systemctl` is available.
   - cwd of the script is /dstack, where `app-compose.json` is symlinked.
 """
 
@@ -29,18 +31,19 @@ from __future__ import annotations
 
 import argparse
 import base64
+import gzip
 import hashlib
+import io
 import json
 import re
 import sys
-import tomllib
+import tarfile
 from pathlib import Path
 
 # the guest copies app-compose.json into the CVM with this hard cap
-# (dstack-util HostShared::copy). base64 inflates payloads ~33%.
+# (dstack-util HostShared::copy). the rootfs is gzip-compressed before base64,
+# but base64 still adds ~33% on top of the compressed size.
 APP_COMPOSE_MAX_BYTES = 50 * 1024 * 1024
-
-DEFAULT_ENV_FILE = "/dstack/.host-shared/.decrypted-env"
 
 
 # --------------------------------------------------------------------------- #
@@ -60,95 +63,69 @@ def human(n: int) -> str:
     f = float(n)
     for unit in ("B", "KiB", "MiB", "GiB"):
         if f < 1024 or unit == "GiB":
-            return f"{f:.1f} {unit}" if unit != "B" else f"{int(f)} B"
+            return f"{int(f)} B" if unit == "B" else f"{f:.1f} {unit}"
         f /= 1024
     return f"{n} B"
 
 
 # --------------------------------------------------------------------------- #
+# rootfs packing (deterministic tar.gz so the compose-hash is reproducible)
+# --------------------------------------------------------------------------- #
+def pack_rootfs(rootfs: Path) -> tuple[bytes, int, int]:
+    """tar+gzip the rootfs tree deterministically.
+
+    returns (gzip_bytes, file_count, uncompressed_total_bytes).
+    """
+    paths = sorted(rootfs.rglob("*"), key=lambda p: p.relative_to(rootfs).as_posix())
+    if not paths:
+        die(f"rootfs is empty: {rootfs}")
+
+    tar_buf = io.BytesIO()
+    nfiles = 0
+    raw_total = 0
+    with tarfile.open(fileobj=tar_buf, mode="w") as tar:
+        for p in paths:
+            rel = p.relative_to(rootfs).as_posix()
+            info = tar.gettarinfo(str(p), arcname=rel)
+            # normalize metadata for a reproducible archive
+            info.uid = info.gid = 0
+            info.uname = info.gname = ""
+            info.mtime = 0
+            if info.isreg():
+                with open(p, "rb") as fh:
+                    tar.addfile(info, fh)
+                nfiles += 1
+                raw_total += info.size
+            else:
+                tar.addfile(info)
+
+    gz_buf = io.BytesIO()
+    with gzip.GzipFile(fileobj=gz_buf, mode="wb", mtime=0, compresslevel=9) as gz:
+        gz.write(tar_buf.getvalue())
+    return gz_buf.getvalue(), nfiles, raw_total
+
+
+# --------------------------------------------------------------------------- #
 # bash_script generation
 # --------------------------------------------------------------------------- #
-def render_unit(cfg: dict, service_name: str) -> str:
-    svc = cfg.get("service", {})
-    exec_start = cfg["exec_start"]
-    restart = svc.get("restart", "always")
-    restart_sec = svc.get("restart_sec", 2)
-    env_file = svc.get("env_file", DEFAULT_ENV_FILE)
-    after = svc.get("after", ["dstack-guest-agent.service"])
-    extra = svc.get("extra", [])
-
-    unit_lines = [
-        "[Unit]",
-        f"Description={cfg['name']} (dstack self-contained app)",
-    ]
-    if after:
-        unit_lines.append(f"After={' '.join(after)}")
-    unit_lines += [
-        "",
-        "[Service]",
-        f"ExecStart={exec_start}",
-        f"Restart={restart}",
-        f"RestartSec={restart_sec}",
-    ]
-    if env_file:
-        # leading '-' => optional (don't fail if the file is absent)
-        unit_lines.append(f"EnvironmentFile=-{env_file}")
-    for line in extra:
-        unit_lines.append(str(line))
-    unit_lines += [
-        "",
-        "[Install]",
-        "WantedBy=multi-user.target",
-    ]
-    return "\n".join(unit_lines) + "\n"
-
-
-def render_bash_script(cfg: dict, files: list[dict], service_name: str) -> str:
-    runtime_dir = cfg["runtime_dir"]
-    unit = render_unit(cfg, service_name)
-
-    decode_calls = "\n".join(
-        f'decode_payload {json.dumps(f["dest"])} {json.dumps(f["mode"])}'
-        for f in files
-    )
-
-    # NOTE: this script runs via `jq -r '.bash_script' app-compose.json | bash`
-    # from /dstack (app-compose.sh). cwd is /dstack; app-compose.json is here.
+def render_bash_script(services: list[str]) -> str:
+    start_lines = "\n".join(f'systemctl start {json.dumps(s)}' for s in services)
+    # runs via `jq -r '.bash_script' app-compose.json | bash` from /dstack.
     return f"""# generated by sca — do not edit by hand
 set -euo pipefail
 
 COMPOSE_FILE=app-compose.json
-RUNTIME_DIR={json.dumps(runtime_dir)}
-UNIT_NAME={json.dumps(service_name + ".service")}
-
 note() {{ dstack-util notify-host -e boot.progress -d "$1" || true; }}
 
-note "sca: decoding payloads"
-mkdir -p "$RUNTIME_DIR"
+note "sca: extracting rootfs"
+# the guest has no `base64`; openssl decodes, busybox tar/gzip unpack onto /.
+jq -r '.sca_rootfs' "$COMPOSE_FILE" | openssl base64 -d -A | tar -xz -C /
 
-# the guest has no `base64`; openssl decodes binary safely.
-decode_payload() {{
-    local rel="$1" mode="$2"
-    local out="$RUNTIME_DIR/$rel"
-    mkdir -p "$(dirname "$out")"
-    jq -r --arg k "$rel" '.sca_payloads[$k]' "$COMPOSE_FILE" \\
-        | openssl base64 -d -A > "$out"
-    chmod "$mode" "$out"
-}}
-
-{decode_calls}
-
-note "sca: installing systemd unit"
-# write the unit to /run (tmpfs, writable, ephemeral); systemd reads it there.
-mkdir -p /run/systemd/system
-cat > "/run/systemd/system/$UNIT_NAME" <<'__SCA_UNIT__'
-{unit}__SCA_UNIT__
-
+note "sca: starting services"
 systemctl daemon-reload
-note "sca: starting $UNIT_NAME"
 # `start` returns immediately so the oneshot app-compose.service completes and
 # boot is marked done; systemd then supervises the app (Restart=always).
-systemctl start "$UNIT_NAME"
+{start_lines}
 note "sca: started"
 """
 
@@ -156,36 +133,13 @@ note "sca: started"
 # --------------------------------------------------------------------------- #
 # build
 # --------------------------------------------------------------------------- #
-def normalize_files(cfg: dict, base_dir: Path) -> list[dict]:
-    raw = cfg.get("files")
-    if not raw:
-        die("config has no [[files]] entries; at least the app binary is required")
-    files = []
-    seen = set()
-    for i, entry in enumerate(raw):
-        src = entry.get("src")
-        if not src:
-            die(f"[[files]] #{i} is missing 'src'")
-        dest = entry.get("dest") or Path(src).name
-        mode = str(entry.get("mode", "0644"))
-        if dest in seen:
-            die(f"duplicate dest '{dest}' in [[files]]")
-        seen.add(dest)
-        path = (base_dir / src).resolve()
-        if not path.is_file():
-            die(f"payload file not found: {path}")
-        files.append({"src": str(path), "dest": dest, "mode": mode})
-    return files
-
-
-def build_app_compose(cfg: dict, files: list[dict], service_name: str) -> dict:
+def build_app_compose(cfg: dict, rootfs_b64: str, services: list[str]) -> dict:
     compose = cfg.get("compose", {})
     out: dict = {
         "manifest_version": cfg.get("manifest_version", 2),
         "name": cfg["name"],
         "runner": "bash",
     }
-    # pass-through compose flags (only emit when present to keep hash minimal)
     flag_defaults = {
         "kms_enabled": False,
         "gateway_enabled": False,
@@ -204,14 +158,8 @@ def build_app_compose(cfg: dict, files: list[dict], service_name: str) -> dict:
     if compose.get("swap_size_mb"):
         out["swap_size"] = int(compose["swap_size_mb"]) * 1024 * 1024
 
-    out["bash_script"] = render_bash_script(cfg, files, service_name)
-
-    payloads: dict = {}
-    for f in files:
-        data = Path(f["src"]).read_bytes()
-        # standard base64 (RFC 4648); decodes cleanly with `openssl base64 -d`.
-        payloads[f["dest"]] = base64.b64encode(data).decode("ascii")
-    out["sca_payloads"] = payloads
+    out["bash_script"] = render_bash_script(services)
+    out["sca_rootfs"] = rootfs_b64
     return out
 
 
@@ -219,18 +167,26 @@ def cmd_build(args) -> None:
     cfg_path = Path(args.config).resolve()
     if not cfg_path.is_file():
         die(f"config not found: {cfg_path} (run `sca new <dir>` first)")
-    with open(cfg_path, "rb") as fh:
-        cfg = tomllib.load(fh)
-
-    for required in ("name", "runtime_dir", "exec_start"):
-        if not cfg.get(required):
-            die(f"config is missing required key '{required}'")
+    try:
+        cfg = json.loads(cfg_path.read_text())
+    except json.JSONDecodeError as exc:
+        die(f"invalid JSON in {cfg_path}: {exc}")
+    if not cfg.get("name"):
+        die("config is missing required key 'name'")
 
     base_dir = cfg_path.parent
-    files = normalize_files(cfg, base_dir)
-    service_name = slugify(cfg.get("service", {}).get("name") or cfg["name"])
+    rootfs = (base_dir / cfg.get("rootfs", "rootfs")).resolve()
+    if not rootfs.is_dir():
+        die(f"rootfs directory not found: {rootfs}")
 
-    app_compose = build_app_compose(cfg, files, service_name)
+    services = cfg.get("services") or ["sca.service"]
+    if not isinstance(services, list) or not all(isinstance(s, str) for s in services):
+        die("config 'services' must be a list of unit names")
+
+    gz, nfiles, raw_total = pack_rootfs(rootfs)
+    rootfs_b64 = base64.b64encode(gz).decode("ascii")
+
+    app_compose = build_app_compose(cfg, rootfs_b64, services)
     blob = json.dumps(app_compose, indent=2, ensure_ascii=False).encode("utf-8")
 
     out_path = Path(args.output).resolve()
@@ -238,92 +194,97 @@ def cmd_build(args) -> None:
 
     digest = hashlib.sha256(blob).hexdigest()
     size = len(blob)
+    slug = slugify(cfg["name"])
 
     print(f"wrote {out_path}")
-    print(f"  service     : {service_name}.service  ->  {cfg['exec_start']}")
-    print(f"  payloads    : {len(files)} file(s)")
-    for f in files:
-        raw = Path(f["src"]).stat().st_size
-        print(f"      - {f['dest']} ({f['mode']}, {human(raw)} raw)")
-    print(f"  size        : {human(size)} / {human(APP_COMPOSE_MAX_BYTES)} cap"
-          f"  ({100 * size / APP_COMPOSE_MAX_BYTES:.1f}%)")
+    print(f"  rootfs      : {nfiles} file(s), {human(raw_total)} raw "
+          f"-> {human(len(gz))} packed (tar.gz)")
+    print(f"  services    : {', '.join(services)}")
+    print(f"  size        : {human(size)} / {human(APP_COMPOSE_MAX_BYTES)} cap "
+          f"({100 * size / APP_COMPOSE_MAX_BYTES:.1f}%)")
     print(f"  compose-hash: {digest}")
     print(f"  app-id      : {digest[:40]}")
     if size > APP_COMPOSE_MAX_BYTES:
         die(f"app-compose.json exceeds the {human(APP_COMPOSE_MAX_BYTES)} guest "
-            "copy limit; shrink the binary or split the payload")
+            "copy limit; shrink the rootfs")
     if size > APP_COMPOSE_MAX_BYTES * 0.9:
         print("  warning: within 10% of the size cap", file=sys.stderr)
     print()
     print("next: deploy with vmm-cli, e.g.")
-    print(f"  ./vmm-cli.py deploy --name {service_name} --image <os-image> \\")
+    print(f"  ./vmm-cli.py deploy --name {slug} --image <os-image> \\")
     print(f"      --compose {out_path.name} --vcpu 1 --memory 1024 --disk 10")
 
 
 # --------------------------------------------------------------------------- #
-# new
+# new (scaffold)
 # --------------------------------------------------------------------------- #
-SCA_TOML_TEMPLATE = """# sca.toml — self-contained dstack app (no docker, no registry pull)
+def config_json_template(name: str) -> str:
+    cfg = {
+        "name": name,
+        "manifest_version": 2,
+        # rootfs tree to embed (relative to this file). defaults to "rootfs".
+        "rootfs": "rootfs",
+        # systemd units to start after the rootfs is extracted.
+        "services": ["sca.service"],
+        "compose": {
+            "kms_enabled": False,
+            "gateway_enabled": False,
+            "local_key_provider_enabled": False,
+            "public_logs": True,
+            "public_sysinfo": True,
+            "secure_time": False,
+            "no_instance_id": False,
+            "allowed_envs": [],
+            "key_provider_id": "",
+        },
+    }
+    return json.dumps(cfg, indent=2) + "\n"
 
-name = "{name}"
-manifest_version = 2
 
-# directory inside the CVM where embedded files are extracted at boot.
-# must be tmpfs + exec: /run/* , /tmp , /dev/shm are all fine. /run is best
-# for a long-running daemon. it is ephemeral and recreated on every boot.
-runtime_dir = "/run/{slug}"
+ENTRYPOINT_SH = """#!/bin/sh
+# sca entrypoint — runs inside the CVM under systemd (sca.service).
+# put your prebuilt binary at rootfs/run/sca/bin/app, or edit this script.
+set -e
+exec /run/sca/bin/app "$@"
+"""
 
-# the command systemd runs. use absolute paths under runtime_dir.
-exec_start = "/run/{slug}/app"
+SCA_SERVICE = """[Unit]
+Description=sca self-contained app
+After=dstack-guest-agent.service
 
-# files embedded into app-compose.json (base64) and extracted at boot.
-# the first one is usually your prebuilt binary. paths are relative to this file.
-[[files]]
-src = "dist/app"
-dest = "app"
-mode = "0755"
+[Service]
+ExecStart=/run/sca/bin/entrypoint.sh
+Restart=always
+RestartSec=2
+# decrypted env from KMS (optional; '-' means don't fail if absent).
+EnvironmentFile=-/dstack/.host-shared/.decrypted-env
 
-# [[files]]
-# src = "dist/config.toml"
-# dest = "config.toml"
-# mode = "0644"
-
-[service]
-# name = "{slug}"              # systemd unit name (defaults to a slug of `name`)
-restart = "always"
-restart_sec = 2
-# decrypted env from KMS (only populated when kms_enabled + allowed_envs). the
-# leading '-' in the unit makes it optional, so this is safe to leave as-is.
-env_file = "/dstack/.host-shared/.decrypted-env"
-# after = ["dstack-guest-agent.service"]
-# extra = ["WorkingDirectory=/run/{slug}"]   # raw extra [Service] lines
-
-[compose]
-kms_enabled = false
-gateway_enabled = false
-local_key_provider_enabled = false
-public_logs = true
-public_sysinfo = true
-secure_time = false
-no_instance_id = false
-allowed_envs = []
-# key_provider_id = ""
-# swap_size_mb = 0
+[Install]
+WantedBy=multi-user.target
 """
 
 README_TEMPLATE = """# {name}
 
-self-contained dstack app: the binary is embedded in `app-compose.json` and run
-under systemd inside the CVM — no docker, no registry pull.
+self-contained dstack app: a `rootfs/` tree is embedded in `app-compose.json`
+and extracted onto the CVM at boot, then run under systemd — no docker, no
+registry pull.
 
 ## layout
 
-- `sca.toml`   — build config (edit this)
-- `dist/`      — put your prebuilt binary here (referenced by `[[files]].src`)
+    config.json                          build config (edit this)
+    rootfs/                              mirrors the CVM filesystem; whole tree
+                                         is packed into app-compose.json
+      run/sca/bin/entrypoint.sh          what the service runs (edit/extend)
+      run/sca/bin/app                    <-- drop your prebuilt binary here
+      etc/systemd/system/sca.service     the systemd unit (Restart=always)
+
+anything you add under `rootfs/` lands at the same path inside the CVM (paths
+like /run, /etc, /usr are writable). file modes are preserved, so keep
+executables `chmod +x`.
 
 ## build
 
-    sca build                 # reads sca.toml, writes app-compose.json
+    sca build                 # packs rootfs/, writes app-compose.json
 
 prints the compose-hash and app-id. add the compose-hash to your on-chain
 DstackApp whitelist before deploying.
@@ -335,14 +296,20 @@ DstackApp whitelist before deploying.
 
 ## notes
 
-- the binary is measured into RTMR3 via the compose-hash, so the exact bytes are
-  attested. rebuilding the binary changes the compose-hash (re-whitelist).
-- size cap: app-compose.json must stay under 50 MiB; base64 adds ~33%, so the
-  practical binary budget is ~37 MB.
-- the app runs as a systemd service with Restart=always. it can reach the
-  guest-agent socket at /var/run/dstack.sock — don't add heavy unit sandboxing
-  that would hide it.
+- the whole rootfs is measured into RTMR3 via the compose-hash, so the exact
+  bytes are attested. changing any file changes the compose-hash (re-whitelist).
+- size cap: app-compose.json must stay under 50 MiB. the rootfs is gzip'd before
+  base64, so the practical budget is roughly the *compressed* tree under ~37 MB.
+- the app can reach the guest-agent socket at /var/run/dstack.sock — don't add
+  heavy unit sandboxing that would hide it.
 """
+
+
+def write_file(path: Path, content: str, mode: int | None = None) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content)
+    if mode is not None:
+        path.chmod(mode)
 
 
 def cmd_new(args) -> None:
@@ -352,23 +319,22 @@ def cmd_new(args) -> None:
 
     if target.exists() and any(target.iterdir()):
         die(f"directory '{target}' exists and is not empty")
-    (target / "dist").mkdir(parents=True, exist_ok=True)
 
-    (target / "sca.toml").write_text(
-        SCA_TOML_TEMPLATE.format(name=name, slug=slug)
-    )
-    (target / "README.md").write_text(
-        README_TEMPLATE.format(name=name, slug=slug)
-    )
-    (target / "dist" / ".gitkeep").write_text("")
+    write_file(target / "config.json", config_json_template(name))
+    write_file(target / "README.md", README_TEMPLATE.format(name=name, slug=slug))
+    write_file(target / "rootfs" / "run" / "sca" / "bin" / "entrypoint.sh",
+               ENTRYPOINT_SH, mode=0o755)
+    write_file(target / "rootfs" / "etc" / "systemd" / "system" / "sca.service",
+               SCA_SERVICE)
 
     print(f"scaffolded self-contained app '{name}' at {target}")
-    print("  sca.toml      — edit build config")
-    print("  dist/         — drop your prebuilt binary here (as dist/app)")
-    print("  README.md     — notes")
+    print("  config.json")
+    print("  rootfs/run/sca/bin/entrypoint.sh   (0755)")
+    print("  rootfs/etc/systemd/system/sca.service")
+    print("  README.md")
     print()
     print("next:")
-    print(f"  cp <your-binary> {target}/dist/app")
+    print(f"  cp <your-binary> {target}/rootfs/run/sca/bin/app")
     print(f"  cd {target} && sca build")
 
 
@@ -387,9 +353,10 @@ def main(argv=None) -> None:
     p_new.add_argument("--name", help="app name (defaults to directory name)")
     p_new.set_defaults(func=cmd_new)
 
-    p_build = sub.add_parser("build", help="build app-compose.json from sca.toml")
+    p_build = sub.add_parser("build", help="pack rootfs/ into app-compose.json")
     p_build.add_argument(
-        "-c", "--config", default="sca.toml", help="path to sca.toml (default: ./sca.toml)"
+        "-c", "--config", default="config.json",
+        help="path to config.json (default: ./config.json)",
     )
     p_build.add_argument(
         "-o", "--output", default="app-compose.json",
