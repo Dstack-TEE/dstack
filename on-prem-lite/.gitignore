@@ -3,3 +3,8 @@ __pycache__/
 store.json
 signing.key
 .env.authority
+deploy/
+config.env
+.image-key.pub.pem
+.authority-pubkey
+.release-manifest.env

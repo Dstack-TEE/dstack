@@ -146,25 +146,20 @@ pub async fn install(
         );
     }
 
-    // G6/G6b: self-identity (defense in depth). Prefer the measured values from
-    // the guest agent; fall back to env hints; if neither is available, log and
-    // proceed (the authority already gated the attested values).
-    let self_id = match courier::self_identity().await {
-        Some((app_id, compose_hash)) => Some((app_id, compose_hash)),
-        None => match (&state.config.app_id, &state.config.compose_hash) {
-            (Some(a), Some(c)) => Some((a.clone(), c.clone())),
-            _ => None,
-        },
-    };
-    match self_id {
-        Some((self_app_id, self_compose_hash)) => {
-            if !ids_match(&license.app_id, &self_app_id) {
-                bail!(
-                    "license app_id != self: {} != {} (G6b)",
-                    license.app_id,
-                    self_app_id
-                );
-            }
+    // G6: self-identity (defense in depth). The MEASURED identity on the tpm
+    // profile is compose_hash (the attested app_id is just compose_hash[:40], so
+    // it can't be an independent value — see DESIGN). The License's app_id is an
+    // authority-side LABEL, so we do NOT compare it to our measured identity; we
+    // only check that the License's compose_hash matches our own measured one
+    // (refusing a License minted for a different launcher build). Prefer the
+    // measured value from the guest agent; fall back to an env hint; if neither is
+    // available, proceed (the authority already gated the attested compose_hash).
+    let self_compose = courier::self_identity()
+        .await
+        .map(|(_app, compose)| compose)
+        .or_else(|| state.config.compose_hash.clone());
+    match self_compose {
+        Some(self_compose_hash) => {
             if !ids_match(&license.compose_hash, &self_compose_hash) {
                 bail!(
                     "license compose_hash != self: {} != {} (G6)",
@@ -172,11 +167,11 @@ pub async fn install(
                     self_compose_hash
                 );
             }
-            tracing::info!("self-identity check passed (app_id + compose_hash)");
+            tracing::info!("self-identity check passed (compose_hash); license app_id label = {}", license.app_id);
         }
         None => {
             tracing::warn!(
-                "cannot determine own measured app_id/compose_hash; skipping G6/G6b self-check (authority already gated the attested values)"
+                "cannot determine own measured compose_hash; skipping G6 self-check (authority already gated the attested compose_hash)"
             );
         }
     }

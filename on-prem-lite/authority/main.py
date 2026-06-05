@@ -220,22 +220,26 @@ def _verify_launcher_attestation(req: LicenseRequest, tenant_id: str) -> tuple:
     if compose_hash not in allowed_compose:
         raise HTTPException(status_code=403, detail="compose_hash not in launcher whitelist")
 
-    # G6b: attested app_id must equal the requested app_id AND be a registered
-    # app under this tenant (fail-closed).
+    # G6b: app_id. NOTE on the `key_provider=tpm` profile the attested app_id is
+    # DERIVED from compose_hash (= compose_hash[:40]); it is NOT an independently
+    # settable measured value (that requires the KMS/on-chain registry, which the
+    # lite profile drops). So app_id here is an authority-side LABEL — the operator
+    # names the app it is deploying, and we require that app to be REGISTERED under
+    # this tenant (and gate the workload digest against THAT app's whitelist below).
+    # The *measured* identity is compose_hash (G6, enforced above). We record the
+    # attested (compose-derived) app_id for audit but don't compare it to the label.
     attested_app_id = (app_info.get("app_id") or "").lower()
     req_app_id = (req.app_id or "").lower()
-    if not attested_app_id:
-        raise HTTPException(status_code=403, detail="app_id missing from attestation")
-    if attested_app_id != req_app_id:
+    if not req_app_id:
+        raise HTTPException(status_code=403, detail="app_id (label) required")
+    if not store.is_registered_app(tenant_id, req_app_id):
         raise HTTPException(status_code=403,
-                            detail=f"attested app_id '{attested_app_id}' != requested '{req_app_id}'")
-    if not store.is_registered_app(tenant_id, attested_app_id):
-        raise HTTPException(status_code=403,
-                            detail=f"app_id not registered under tenant: {attested_app_id}")
+                            detail=f"app_id not registered under tenant: {req_app_id}")
 
     logger.info("license %s: gates OK (quote✓ report_data✓ tcb✓ key_provider=tpm✓ "
-                "compose_hash✓ app_id=%s✓)", tenant_id, attested_app_id)
-    return attested_app_id, compose_hash
+                "compose_hash✓ app_label=%s attested_app_id=%s)",
+                tenant_id, req_app_id, attested_app_id)
+    return req_app_id, compose_hash
 
 
 @app.post("/api/v1/license", response_model=LicenseResponse)

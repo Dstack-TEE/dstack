@@ -17,7 +17,7 @@ the launcher stops the workload.
 | Workload keys | KMS-derived (`getKey`, portable across redeploy) | none — disk is vTPM-sealed, app gets only the image |
 | Image keys delivered | whole vendor keyring (leased over mTLS) | **one CEK**, HPKE-sealed to this launcher |
 | Runtime entitlement | lease auto-renewed from in-VPC KMS (no operator) | **License** with expiry; renewed by an operator courier run |
-| Identity gate | `app_id` + `compose_hash` | `compose_hash` (launcher build) **+** `app_id` (which app) |
+| Identity gate | `app_id` + `compose_hash` | `compose_hash` (measured) **+** `app_id` (authority label; not measured on tpm) |
 | Best for | apps needing a persistent cryptographic identity, many apps, gateway | "run a vendor's encrypted container + licensing", stateless |
 
 Trade-offs (accepted for this profile): no portable/deterministic app keys (vTPM keys
@@ -128,12 +128,19 @@ sealed_cek = base64( HPKE-seal(transport_pub, <PEM of the image private key for 
   across all apps/customers running this launcher release). The Authority checked the
   *attested* value ∈ `allowed_launcher_digests`; the launcher additionally checks
   `license.compose_hash == its own`. This says "trusted launcher build", not "which app".
-- `app_id` — **which app** (the boot-config value measured into MRCONFIGID, returned by the
-  verifier as `app_info.app_id`). The Authority assigns it (`create-app`), scopes each app's
-  `allowed_workload_digests` under it, and gates the *attested* `app_id` ∈ the tenant's
-  registered apps; the launcher checks `license.app_id == its own`. This is what
-  distinguishes one workload from another and gives per-app isolation **within** a tenant
-  (two apps on the same launcher build share a `compose_hash` but differ by `app_id`).
+- `app_id` — **which app** (a stable authority-side label). ⚠️ On the `key_provider=tpm`
+  profile the *attested* `app_id` is **derived from `compose_hash`** (it is `compose_hash[:40]`,
+  not an independently settable measured value — that would need the KMS / on-chain app
+  registry, which this profile drops). So `app_id` here is **not a measured gate**: the
+  Authority assigns it (`create-app`), scopes each app's `allowed_workload_digests` under it,
+  and the operator names it when requesting a License; the Authority requires it to be a
+  registered app under the tenant and gates the workload digest against *that app's* whitelist.
+  The License carries the label, and it is **stable across launcher upgrades** (a new launcher
+  build changes `compose_hash`/the attested app_id, but the logical `app_id` label stays put —
+  good for billing/continuity). It is **not** a cross-app cryptographic isolator on tpm (apps
+  sharing a launcher build share a `compose_hash`); within a tenant that's acceptable (the
+  operator owns all its apps). The launcher self-checks only `compose_hash` (the measured
+  identity), not `app_id`.
 - `workload.{image,digest,kid}` — which encrypted image this License authorizes and which
   image key the `sealed_cek` carries; the digest is gated against **this app's**
   `allowed_workload_digests`. The launcher pulls strictly `image@digest`.
@@ -168,7 +175,7 @@ sealed_cek = base64( HPKE-seal(transport_pub, <PEM of the image private key for 
 | G4 | os-image hash | Authority | os-image ∉ whitelist (when configured; optional in this profile) |
 | G5 | `key_provider == tpm` | Authority | disk not vTPM-sealed |
 | G6 | launcher `compose_hash` | Authority **+** launcher | compose ∉ `allowed_launcher_digests`; or License ≠ self |
-| G6b | `app_id` | Authority **+** launcher | attested app_id ∉ the tenant's registered apps; or License ≠ self |
+| G6b | `app_id` (label) | Authority | requested app_id ∉ the tenant's registered apps (authority-side label, **not** a measured gate on tpm — see note) |
 | G7 | workload digest | Authority | digest ∉ **the app's** `allowed_workload_digests` |
 | G8 | License signature | launcher | sig ≠ pinned `AUTHORITY_PUBKEY` |
 | G9 | License `seq` monotonic | launcher | `seq ≤ stored` (rollback) |
