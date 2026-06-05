@@ -143,7 +143,9 @@ fn create_shared_disk(disk_path: impl AsRef<Path>, shared_dir: impl AsRef<Path>)
     let disk_path = disk_path.as_ref();
     let shared_dir = shared_dir.as_ref();
 
-    const DISK_SIZE: usize = 8 * 1024 * 1024;
+    // Must be large enough to hold all host-shared files (app-compose.json and
+    // .user-config can each be up to 50 MB, see HostShared::copy) plus FAT32 overhead.
+    const DISK_SIZE: usize = 128 * 1024 * 1024;
     let mut disk_data = vec![0u8; DISK_SIZE];
 
     {
