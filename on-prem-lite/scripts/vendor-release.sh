@@ -136,6 +136,17 @@ curl -s -X POST "${AUTH[@]}" -H 'content-type: application/json' \
     "$A/api/v1/admin/launcher-compose-hashes" >/dev/null
 c_ok "registered"
 
+# ── 10b. register the approved os_image_hash (G4, fail-closed) ─────────────────
+# read from the OS release's auth_hash.txt (same value the verifier extracts from
+# the vTPM event log) and register it via the API — policy is API-only, no env-seed.
+c_step "register os_image_hash (G4)"
+OS_HASH_FILE="$HOME/.dstack/images/$OS_IMAGE/auth_hash.txt"
+[[ -f "$OS_HASH_FILE" ]] || c_die "os auth_hash.txt missing ($OS_HASH_FILE); run: dstack-cloud pull $OS_VERSION"
+OS_IMAGE_HASH="$(cat "$OS_HASH_FILE")"
+curl -s -X POST "${AUTH[@]}" -H 'content-type: application/json' \
+    -d "{\"hash\":\"$OS_IMAGE_HASH\"}" "$A/api/v1/admin/os-images" >/dev/null
+c_ok "registered os_image_hash=$OS_IMAGE_HASH"
+
 # ── 11. register the workload digest under the app (G7) ────────────────────────
 c_step "register workload digest under app $APP_ID"
 curl -s -X POST "${AUTH[@]}" -H 'content-type: application/json' \

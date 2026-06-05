@@ -35,8 +35,9 @@ services:
       context: ./authority
     environment:
       VERIFIER_URL: "http://verifier:8080"
-      REQUIRE_ATTESTATION: ${REQUIRE_ATTESTATION:-false}
+      # a license is ALWAYS issued against a verified quote (no no-attestation bypass).
       ALLOWED_TCB_STATUSES: ${ALLOWED_TCB_STATUSES:-UpToDate,SWHardeningNeeded}
+      # REQUIRED (fail-closed): admin + tenant endpoints are refused until this is set.
       AUTHORITY_ADMIN_TOKEN: ${AUTHORITY_ADMIN_TOKEN:-}
       AUTHORITY_NONCE_SECRET: ${AUTHORITY_NONCE_SECRET:-}
       AUTHORITY_NONCE_TTL: ${AUTHORITY_NONCE_TTL:-300}
@@ -48,9 +49,8 @@ services:
       # license expiry policy.
       LICENSE_TTL_SECS: ${LICENSE_TTL_SECS:-2592000}
       LICENSE_GRACE_SECS: ${LICENSE_GRACE_SECS:-300}
-      # policy seed (first boot only; thereafter managed via the admin API).
-      ALLOWED_LAUNCHER_COMPOSE_HASHES: ${ALLOWED_LAUNCHER_COMPOSE_HASHES:-}
-      EXPECTED_OS_IMAGE_HASH: ${EXPECTED_OS_IMAGE_HASH:-}
+      # NOTE: policy (launcher compose hashes G6, os-image hashes G4) is set ONLY via
+      # the admin API (vendor-release.sh reads config + registers it) — no env-seed.
     volumes:
       - authority-lite-data:/data
       - ./authority:/app          # dev: live code; restart picks up edits w/o rebuild

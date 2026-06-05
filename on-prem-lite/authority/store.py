@@ -76,17 +76,13 @@ class Store:
                     "launcher_compose_hashes": [h.lower() for h in pol.get("launcher_compose_hashes", [])],
                     "os_images": [h.lower() for h in pol.get("os_images", [])],
                 }
-                return  # persisted store is authoritative — do NOT re-seed from env
+                return
             except (json.JSONDecodeError, OSError):
                 pass
-        # first run only (no store file): seed policy from legacy env vars so a
-        # fresh deployment can boot pre-configured; thereafter manage via admin API.
-        for h in (x.strip().lower() for x in
-                  os.getenv("ALLOWED_LAUNCHER_COMPOSE_HASHES", "").split(",") if x.strip()):
-            self.data["policy"]["launcher_compose_hashes"].append(h)
-        env_os = os.getenv("EXPECTED_OS_IMAGE_HASH", "").strip().lower()
-        if env_os:
-            self.data["policy"]["os_images"].append(env_os)
+        # first run (no store file): start with an EMPTY, fail-closed policy.
+        # Policy (launcher compose hashes, os-image hashes) is set ONLY via the
+        # admin API — vendor-release.sh reads config + registers it. There is no
+        # env-seed path (a misconfigured/missing env must never silently allow).
         self._save()
 
     def _save(self) -> None:

@@ -64,7 +64,7 @@ payload is a per-workload `{CEK, License}` instead of a root + keyring.
    │                                          verify ────▶│ G1 quote ✓                   
    │                                                       │ G2 report_data == rd        
    │                                                       │ G3 tcb ✓                    
-   │                                                       │ G4 os_image ✓ (optional)    
+   │                                                       │ G4 os_image ✓ (∈ list)      
    │                                                       │ G5 key_provider == tpm      
    │                                                       │ G6 compose_hash ∈ allowed   
    │                                                       │ G6b app_id ∈ tenant apps    
@@ -172,7 +172,7 @@ sealed_cek = base64( HPKE-seal(transport_pub, <PEM of the image private key for 
 | G1 | quote authentic | Authority/Verifier | TDX+vTPM quote not hardware-rooted |
 | G2 | `report_data` binding | Authority | quote not bound to this session's `transport_pub`/nonce |
 | G3 | tcb status | Authority | tcb ∉ allowed (empty/missing ⇒ deny) |
-| G4 | os-image hash | Authority | os-image ∉ whitelist (when configured; optional in this profile) |
+| G4 | os-image hash | Authority | os-image ∉ whitelist (fail-closed: empty ⇒ deny) |
 | G5 | `key_provider == tpm` | Authority | disk not vTPM-sealed |
 | G6 | launcher `compose_hash` | Authority **+** launcher | compose ∉ `allowed_launcher_digests`; or License ≠ self |
 | G6b | `app_id` (label) | Authority | requested app_id ∉ the tenant's registered apps (authority-side label, **not** a measured gate on tpm — see note) |
@@ -181,7 +181,7 @@ sealed_cek = base64( HPKE-seal(transport_pub, <PEM of the image private key for 
 | G9 | License `seq` monotonic | launcher | `seq ≤ stored` (rollback) |
 | G10 | License validity window | launcher | `now ∉ [not_before, expires_at(+grace)]` ⇒ stop workload |
 
-Every list-based gate denies on the empty list. `compose_hash` gates the launcher build;
+Every list-based gate denies on the empty list. **No fail-open anywhere**: a license is only ever issued against a verified TDX+vTPM quote (no no-attestation bypass); admin/tenant endpoints are refused until `AUTHORITY_ADMIN_TOKEN` is set; policy (G4/G6) is **API-only**, never env-seeded; and the launcher refuses if it can't determine its own measured `compose_hash`. `compose_hash` gates the launcher build;
 `app_id` gates which app (and scopes G7's digest whitelist).
 
 ## Components

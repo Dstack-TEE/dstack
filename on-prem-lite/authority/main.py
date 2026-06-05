@@ -55,11 +55,9 @@ store = Store()
 # open/dev mode in this profile.
 ADMIN_TOKEN = os.getenv("AUTHORITY_ADMIN_TOKEN", "")
 
-# Attestation verification via the repo's dstack-verifier service.
+# Attestation verification via the repo's dstack-verifier service. A license is
+# ALWAYS issued against a verified quote — there is no no-attestation bypass.
 VERIFIER_URL = os.getenv("VERIFIER_URL", "http://verifier:8080")
-# A *present* quote is ALWAYS verified. REQUIRE_ATTESTATION rejects a license
-# request with no quote (must be true in production / on real TDX).
-REQUIRE_ATTESTATION = os.getenv("REQUIRE_ATTESTATION", "false").lower() in ("1", "true", "yes")
 ALLOWED_TCB_STATUSES = {
     s.strip() for s in os.getenv("ALLOWED_TCB_STATUSES", "UpToDate,SWHardeningNeeded").split(",") if s.strip()
 }
@@ -68,8 +66,8 @@ LICENSE_TTL_SECS = int(os.getenv("LICENSE_TTL_SECS", str(86400 * 30)))   # 30d
 LICENSE_GRACE_SECS = int(os.getenv("LICENSE_GRACE_SECS", "300"))
 
 if not ADMIN_TOKEN:
-    logger.warning("AUTHORITY_ADMIN_TOKEN unset — admin + operator endpoints are unauthenticated "
-                   "(set it in production; required for multi-tenant isolation)")
+    logger.warning("AUTHORITY_ADMIN_TOKEN unset — admin + operator endpoints are FAIL-CLOSED "
+                   "(refused with 503) until it is set")
 
 
 def _bearer(authorization: Optional[str]) -> str:
@@ -82,9 +80,11 @@ def _bearer(authorization: Optional[str]) -> str:
 
 
 def require_admin(authorization: Optional[str] = Header(None)) -> None:
-    """Gate admin endpoints behind the authority admin token."""
+    """Gate admin endpoints behind the authority admin token. FAIL-CLOSED: if no
+    token is configured, admin endpoints are refused (no open/dev mode)."""
     if not ADMIN_TOKEN:
-        return
+        raise HTTPException(status_code=503,
+                            detail="authority admin token not configured (fail-closed); set AUTHORITY_ADMIN_TOKEN")
     import hmac
     if not hmac.compare_digest(_bearer(authorization), ADMIN_TOKEN):
         raise HTTPException(status_code=401, detail="invalid admin token")
@@ -92,10 +92,11 @@ def require_admin(authorization: Optional[str] = Header(None)) -> None:
 
 def resolve_tenant(req_user_id: str, authorization: Optional[str]) -> str:
     """Resolve the calling tenant from its bearer API key. The request's user_id,
-    if given, must match the authenticated tenant (strict isolation). When no
-    admin token is configured the request's user_id is trusted (dev only)."""
+    if given, must match the authenticated tenant (strict isolation). FAIL-CLOSED:
+    a tenant API key is always required (no token ⇒ refuse; no dev trust-user_id)."""
     if not ADMIN_TOKEN:
-        return req_user_id
+        raise HTTPException(status_code=503,
+                            detail="authority not configured for tenants (fail-closed); set AUTHORITY_ADMIN_TOKEN")
     tid = store.find_tenant_by_api_key(_bearer(authorization))
     if tid is None:
         raise HTTPException(status_code=401, detail="invalid or missing api key")
@@ -130,17 +131,15 @@ def _verify_launcher_attestation(req: LicenseRequest, tenant_id: str) -> tuple:
     gates G1–G6b. Returns (attested_app_id, attested_compose_hash), both
     lowercased. Raises HTTPException on any policy failure.
     """
+    # FAIL-CLOSED: an attestation is always required — there is no dev/no-quote
+    # bypass. A license is only ever issued against a verified TDX+vTPM quote.
     attestation = (req.attestation or "").strip()
     if not attestation:
-        if REQUIRE_ATTESTATION:
-            raise HTTPException(status_code=400, detail="attestation required but none provided")
-        logger.warning("license %s: no attestation — SKIPPED (dev). "
-                       "set REQUIRE_ATTESTATION=true in production; skipping G1-G6b", tenant_id)
-        return (req.app_id or "").lower(), ""
+        raise HTTPException(status_code=400, detail="attestation required (fail-closed)")
 
-    # os-image whitelist is OPTIONAL here (G4). When exactly one is configured,
-    # inject it into vm_config so the verifier can pin it; with several, the
-    # membership check below is the gate.
+    # os-image whitelist is FAIL-CLOSED (G4, enforced below). When exactly one is
+    # configured, inject it into vm_config so the verifier can pin it; with
+    # several, the membership check below is the gate.
     allowed_os = store.get_os_images()
     vm_config = req.vm_config
     if len(allowed_os) == 1:
@@ -183,17 +182,20 @@ def _verify_launcher_attestation(req: LicenseRequest, tenant_id: str) -> tuple:
     if tcb not in ALLOWED_TCB_STATUSES:
         raise HTTPException(status_code=403, detail=f"unacceptable tcb_status: {tcb}")
 
-    # G4: os-image hash — OPTIONAL. Only enforce if a non-empty whitelist is set.
-    if allowed_os:
-        if not details.get("os_image_hash_verified"):
-            raise HTTPException(status_code=403,
-                                detail=f"os_image_hash not verified: {result.get('reason')}")
-        os_hash = (app_info.get("os_image_hash") or "").lower()
-        if os_hash not in allowed_os:
-            raise HTTPException(status_code=403,
-                                detail=f"os_image_hash not in whitelist: {os_hash or 'none'}")
-    else:
-        logger.info("license %s: os-image whitelist empty — G4 skipped (optional in this profile)", tenant_id)
+    # G4: os-image hash — FAIL-CLOSED (empty whitelist ⇒ deny). Register the
+    # vendor-approved os_image_hash via POST /api/v1/admin/os-images (the vendor
+    # reads it from the OS release's auth_hash.txt; vendor-release.sh does this).
+    if not allowed_os:
+        raise HTTPException(status_code=403,
+                            detail="no approved os_image_hash (fail-closed; register one via "
+                                   "POST /api/v1/admin/os-images)")
+    if not details.get("os_image_hash_verified"):
+        raise HTTPException(status_code=403,
+                            detail=f"os_image_hash not verified: {result.get('reason')}")
+    os_hash = (app_info.get("os_image_hash") or "").lower()
+    if os_hash not in allowed_os:
+        raise HTTPException(status_code=403,
+                            detail=f"os_image_hash not in whitelist: {os_hash or 'none'}")
 
     # G5: key_provider must be tpm (vTPM-sealed disk). key_provider_info is the
     # hex of JSON {"name": "<none|local-sgx|tpm|kms>", "id": "<pubkey>"}.

@@ -154,27 +154,26 @@ pub async fn install(
     // (refusing a License minted for a different launcher build). Prefer the
     // measured value from the guest agent; fall back to an env hint; if neither is
     // available, proceed (the authority already gated the attested compose_hash).
-    let self_compose = courier::self_identity()
+    let self_compose_hash = courier::self_identity()
         .await
         .map(|(_app, compose)| compose)
-        .or_else(|| state.config.compose_hash.clone());
-    match self_compose {
-        Some(self_compose_hash) => {
-            if !ids_match(&license.compose_hash, &self_compose_hash) {
-                bail!(
-                    "license compose_hash != self: {} != {} (G6)",
-                    license.compose_hash,
-                    self_compose_hash
-                );
-            }
-            tracing::info!("self-identity check passed (compose_hash); license app_id label = {}", license.app_id);
-        }
-        None => {
-            tracing::warn!(
-                "cannot determine own measured compose_hash; skipping G6 self-check (authority already gated the attested compose_hash)"
-            );
-        }
+        .or_else(|| state.config.compose_hash.clone())
+        .filter(|s| !s.trim().is_empty())
+        .context(
+            "cannot determine own measured compose_hash (G6 fail-closed): guest-agent Info() \
+             returned none and DSTACK_COMPOSE_HASH is unset — refusing the license",
+        )?;
+    if !ids_match(&license.compose_hash, &self_compose_hash) {
+        bail!(
+            "license compose_hash != self: {} != {} (G6)",
+            license.compose_hash,
+            self_compose_hash
+        );
     }
+    tracing::info!(
+        "self-identity check passed (compose_hash); license app_id label = {}",
+        license.app_id
+    );
 
     // CEK + workload, if a sealed_cek is present (a pure license renewal may omit it).
     if let Some(sealed) = &sealed_cek {
