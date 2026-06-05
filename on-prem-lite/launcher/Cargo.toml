@@ -1,0 +1,49 @@
+# SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "dstack-lite-launcher"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "dstack-lite-launcher"
+path = "src/main.rs"
+
+[dependencies]
+# async runtime
+tokio = { workspace = true, features = ["full"] }
+
+# HTTP server
+axum = { version = "0.7", features = ["json"] }
+hyper = { workspace = true }
+hyper-util = { workspace = true }
+
+# serialization
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+
+# crypto
+ed25519-dalek = { workspace = true }
+x25519-dalek = { workspace = true }
+hpke = { version = "0.13", default-features = false, features = ["alloc", "x25519"] }
+rand = { workspace = true }
+sha2 = { workspace = true }
+base64 = { workspace = true }
+hex = { workspace = true }
+
+# TLS provider (for the rustls ring default used by guest-agent prpc client)
+rustls = { workspace = true, features = ["ring"] }
+
+# dstack guest-agent client (TDX/vTPM quote generation via /var/run/dstack.sock)
+dstack-guest-agent-rpc = { workspace = true }
+http-client = { workspace = true, features = ["prpc"] }
+dstack-types = { workspace = true }
+
+# error handling
+anyhow = { workspace = true }
+
+# logging
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }

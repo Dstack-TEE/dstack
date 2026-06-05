@@ -1,0 +1,24 @@
+services:
+  lite-launcher:
+    image: ${DSTACK_REGISTRY}/lite-launcher@sha256:<PINNED_LITE_LAUNCHER_DIGEST>
+    env_file: .env
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /var/run/dstack.sock:/var/run/dstack.sock
+      - lite-launcher-state:/var/lib/lite-launcher
+    environment:
+      # measured (literal): pinned Ed25519 License-signing pubkey of the vendor Authority.
+      - LITE_AUTHORITY_PUBKEY=<PINNED_LITERAL_BASE64_AUTHORITY_PUBKEY>
+      # measured (literal): which app this launcher is (gates License.app_id + workload scope).
+      - DSTACK_APP_ID=<WORKLOAD_APP_ID_40_HEX>
+      # courier port the operator's license-ctl reaches over the IAP tunnel.
+      - LITE_PORT=9000
+      # runtime-resolved by prelaunch.sh (the registry the launcher pulls the workload from).
+      - DSTACK_REGISTRY=${DSTACK_REGISTRY}
+      # persistent state dir: holds the installed-License seq high-water (anti-rollback).
+      - LITE_STATE_DIR=/var/lib/lite-launcher
+
+volumes:
+  lite-launcher-state:

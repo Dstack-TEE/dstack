@@ -62,6 +62,7 @@ members = [
     "no_std_check",
     "on-prem/key-broker",
     "on-prem/launcher",
+    "on-prem-lite/launcher",
 ]
 resolver = "2"
 

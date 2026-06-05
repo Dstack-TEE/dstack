@@ -1,0 +1,65 @@
+# on-prem-lite vendor authority stack: vendor authority + dstack-verifier.
+#
+# Runs on the VENDOR's infrastructure (has internet) — NOT in the customer VPC.
+# The authority delegates the launcher's TDX+vTPM attestation checks to
+# dstack-verifier over the internal compose network, then applies the lite
+# license policy (report_data binding to the transport key, launcher/app/workload
+# whitelists, tcb status) and returns one {sealed_cek, signed License}.
+#
+# Build:  docker compose -f docker-compose.authority.yml build
+# Run:    docker compose -f docker-compose.authority.yml up -d
+#
+# Env (copy .env.authority.example → .env): AUTHORITY_ADMIN_TOKEN, AUTHORITY_NONCE_SECRET, …
+
+services:
+  verifier:
+    # Built from this repo's source (on-prem/verifier/Dockerfile → -p dstack-verifier).
+    image: ${VERIFIER_IMAGE:-cr.kvin.wang/dstack-verifier:latest}
+    build:
+      context: ..                                  # workspace root
+      dockerfile: on-prem/verifier/Dockerfile
+    environment:
+      DSTACK_VERIFIER_ADDRESS: "0.0.0.0"
+      DSTACK_VERIFIER_PORT: "8080"
+      # TDX quote collateral. Intel PCS directly (no PCCS to run): GCP quotes
+      # embed the PCK chain, so only the public TCB-info / QE-identity endpoints
+      # are hit — no Intel subscription key needed.
+      DSTACK_VERIFIER_PCCS_URL: ${PCCS_URL:-https://api.trustedservices.intel.com}
+    volumes:
+      - verifier-cache:/tmp/dstack-verifier/cache
+    restart: unless-stopped
+
+  authority:
+    image: ${AUTHORITY_LITE_IMAGE:-cr.kvin.wang/authority-lite:latest}
+    build:
+      context: ./authority
+    environment:
+      VERIFIER_URL: "http://verifier:8080"
+      REQUIRE_ATTESTATION: ${REQUIRE_ATTESTATION:-false}
+      ALLOWED_TCB_STATUSES: ${ALLOWED_TCB_STATUSES:-UpToDate,SWHardeningNeeded}
+      AUTHORITY_ADMIN_TOKEN: ${AUTHORITY_ADMIN_TOKEN:-}
+      AUTHORITY_NONCE_SECRET: ${AUTHORITY_NONCE_SECRET:-}
+      AUTHORITY_NONCE_TTL: ${AUTHORITY_NONCE_TTL:-300}
+      # persistent Ed25519 License-signing key (stable pubkey across restarts;
+      # the pubkey is pinned into the measured launcher compose).
+      AUTHORITY_SIGNING_KEY_FILE: /data/signing.key
+      # single JSON store: tenants/apps/image-keys/policy.
+      AUTHORITY_LITE_STORE: /data/store.json
+      # license expiry policy.
+      LICENSE_TTL_SECS: ${LICENSE_TTL_SECS:-2592000}
+      LICENSE_GRACE_SECS: ${LICENSE_GRACE_SECS:-300}
+      # policy seed (first boot only; thereafter managed via the admin API).
+      ALLOWED_LAUNCHER_COMPOSE_HASHES: ${ALLOWED_LAUNCHER_COMPOSE_HASHES:-}
+      EXPECTED_OS_IMAGE_HASH: ${EXPECTED_OS_IMAGE_HASH:-}
+    volumes:
+      - authority-lite-data:/data
+      - ./authority:/app          # dev: live code; restart picks up edits w/o rebuild
+    ports:
+      - "8084:8084"        # operator/admin API (CLI reaches this)
+    depends_on:
+      - verifier
+    restart: unless-stopped
+
+volumes:
+  verifier-cache:
+  authority-lite-data:

@@ -2611,6 +2611,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "dstack-lite-launcher"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum 0.7.9",
+ "base64 0.22.1",
+ "dstack-guest-agent-rpc",
+ "dstack-types",
+ "ed25519-dalek",
+ "hex",
+ "hpke",
+ "http-client",
+ "hyper",
+ "hyper-util",
+ "rand 0.8.6",
+ "rustls",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "x25519-dalek",
+]
+
+[[package]]
 name = "dstack-mr"
 version = "0.5.11"
 dependencies = [
