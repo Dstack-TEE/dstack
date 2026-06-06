@@ -1,3 +1,7 @@
+/* SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 /* tiny static HTTP server for the sca hello-c example.
  * single-threaded, serves one fixed page. build with:
  *   musl-gcc -static -Os -s -o ../rootfs/run/sca/bin/app server.c

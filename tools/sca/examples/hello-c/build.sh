@@ -1,4 +1,7 @@
 #!/bin/sh
+# SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
 # compile the static server into the rootfs, then build app-compose.json.
 # requires musl-gcc (apt install musl-tools). produces a ~30 KB static binary.
 set -e

@@ -1,4 +1,7 @@
 #!/bin/sh
+# SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
 # the whole "app" is this script — no compiled binary, no toolchain needed.
 # it reads an interval from an embedded config file and logs a heartbeat.
 set -e
