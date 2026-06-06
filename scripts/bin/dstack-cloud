@@ -1222,9 +1222,20 @@ class CloudDeploymentManager:
             work_path = Path(work_dir)
             raw_file = work_path / "disk.raw"
 
-            # Create FAT32 disk image (no root required)
+            # Create FAT32 disk image (no root required). Size it to fit the
+            # shared files: app-compose.json can be large (e.g. self-contained
+            # apps embed their payload, up to the 50M guest cap), so the old
+            # fixed 8M overflowed and mcopy failed. Floor at 8M (small composes
+            # unchanged), + 4M FAT/metadata margin, rounded up to a whole MiB.
             logger.info("Creating shared disk image...")
-            disk_size = "8M"  # 8MB FAT32 disk
+            _shared_files = [shared_dir / f for f in
+                             ("app-compose.json", ".sys-config.json", ".instance_info", ".encrypted-env")]
+            _shared_files.append(self.work_dir / ".user-config")
+            _total = sum(p.stat().st_size for p in _shared_files if p.exists())
+            _bytes = max(8 * 1024 * 1024, _total + 4 * 1024 * 1024)
+            _bytes = ((_bytes + (1024 * 1024 - 1)) // (1024 * 1024)) * (1024 * 1024)
+            disk_size = str(_bytes)  # bytes
+            logger.info(f"Shared disk size: {_bytes // (1024 * 1024)}M (files {_total} bytes)")
             subprocess.run(
                 ["truncate", "-s", disk_size, str(raw_file)],
                 check=True
