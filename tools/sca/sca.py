@@ -261,7 +261,10 @@ def pack_rootfs(rootfs: Path) -> tuple[bytes, int, int]:
         for p in paths:
             rel = p.relative_to(rootfs).as_posix()
             info = tar.gettarinfo(str(p), arcname=rel)
-            if info is None:
+            # gettarinfo only returns None for sockets; FIFOs, device nodes and
+            # hardlinks still produce a TarInfo, so enforce the invariant here
+            # rather than letting them be embedded and extracted onto the guest /.
+            if info is None or not (info.isreg() or info.isdir() or info.issym()):
                 die(
                     f"unsupported file type in rootfs: {p} "
                     "(only regular files, directories, and symlinks are allowed)"
