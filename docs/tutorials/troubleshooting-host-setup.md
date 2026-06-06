@@ -267,7 +267,7 @@ Now that TDX is enabled on your host, you can:
 ### dstack Resources
 
 - **dstack Documentation:** https://docs.phala.com/dstack/overview
-- **dstack GitHub:** https://github.com/Phala-Network/dstack
+- **dstack GitHub:** https://github.com/Dstack-TEE/dstack
 
 ### Getting Help
 
