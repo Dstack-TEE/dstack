@@ -69,46 +69,91 @@ COMPOSE_DEFAULTS = {
 
 # compose keys overridable from the CLI (argparse dest == compose key)
 _COMPOSE_KEYS = (
-    "key_provider", "gateway_enabled", "public_logs", "public_sysinfo",
-    "secure_time", "no_instance_id", "allowed_envs", "key_provider_id",
+    "key_provider",
+    "gateway_enabled",
+    "public_logs",
+    "public_sysinfo",
+    "secure_time",
+    "no_instance_id",
+    "allowed_envs",
+    "key_provider_id",
 )
 
 
 def _add_bool_pair(group, name: str, dest: str, help_on: str) -> None:
     # tri-state: --flag -> True, --no-flag -> False, absent -> None (keep base)
-    group.add_argument(f"--{name}", dest=dest, action="store_const",
-                       const=True, default=None, help=help_on)
-    group.add_argument(f"--no-{name}", dest=dest, action="store_const",
-                       const=False, help=f"disable {name}")
+    group.add_argument(
+        f"--{name}",
+        dest=dest,
+        action="store_const",
+        const=True,
+        default=None,
+        help=help_on,
+    )
+    group.add_argument(
+        f"--no-{name}",
+        dest=dest,
+        action="store_const",
+        const=False,
+        help=f"disable {name}",
+    )
 
 
 def add_compose_args(parser: "argparse.ArgumentParser") -> None:
-    """attach the app-compose options (shared by `new` and `build`).
+    """Attach the app-compose options (shared by `new` and `build`).
 
     every option defaults to None so an unset flag keeps the config/default
     value while an explicit flag overrides it.
     """
     g = parser.add_argument_group("app-compose options")
-    g.add_argument("--key-provider", choices=KEY_PROVIDERS, default=None,
-                   help="key provider (default: none); gateway requires kms")
-    _add_bool_pair(g, "gateway", "gateway_enabled",
-                   "expose the app via dstack-gateway (needs --key-provider kms)")
+    g.add_argument(
+        "--key-provider",
+        choices=KEY_PROVIDERS,
+        default=None,
+        help="key provider (default: none); gateway requires kms",
+    )
+    _add_bool_pair(
+        g,
+        "gateway",
+        "gateway_enabled",
+        "expose the app via dstack-gateway (needs --key-provider kms)",
+    )
     _add_bool_pair(g, "public-logs", "public_logs", "allow public access to logs")
     _add_bool_pair(g, "public-sysinfo", "public_sysinfo", "allow public sysinfo")
     _add_bool_pair(g, "secure-time", "secure_time", "require secure time at boot")
-    g.add_argument("--no-instance-id", dest="no_instance_id", action="store_const",
-                   const=True, default=None, help="don't derive a per-instance id")
-    g.add_argument("--instance-id", dest="no_instance_id", action="store_const",
-                   const=False, help="derive a per-instance id (default)")
-    g.add_argument("--allowed-env", dest="allowed_envs", action="append",
-                   default=None, metavar="NAME",
-                   help="env var name the app may receive (repeatable)")
-    g.add_argument("--key-provider-id", dest="key_provider_id", default=None,
-                   help="hex key-provider id (KMS app contract)")
+    g.add_argument(
+        "--no-instance-id",
+        dest="no_instance_id",
+        action="store_const",
+        const=True,
+        default=None,
+        help="don't derive a per-instance id",
+    )
+    g.add_argument(
+        "--instance-id",
+        dest="no_instance_id",
+        action="store_const",
+        const=False,
+        help="derive a per-instance id (default)",
+    )
+    g.add_argument(
+        "--allowed-env",
+        dest="allowed_envs",
+        action="append",
+        default=None,
+        metavar="NAME",
+        help="env var name the app may receive (repeatable)",
+    )
+    g.add_argument(
+        "--key-provider-id",
+        dest="key_provider_id",
+        default=None,
+        help="hex key-provider id (KMS app contract)",
+    )
 
 
 def resolve_compose(base: dict, args) -> dict:
-    """layer CLI overrides (non-None values) on top of a base compose dict."""
+    """Layer CLI overrides (non-None values) on top of a base compose dict."""
     out = dict(base)
     for key in _COMPOSE_KEYS:
         val = getattr(args, key, None)
@@ -118,33 +163,58 @@ def resolve_compose(base: dict, args) -> dict:
 
 
 def validate_compose(compose: dict) -> None:
+    """Validate compose option types and warn on risky combinations."""
     kp = compose.get("key_provider", "none")
     if kp not in KEY_PROVIDERS:
         die(f"key_provider must be one of {KEY_PROVIDERS} (got {kp!r})")
-    for key in ("gateway_enabled", "public_logs", "public_sysinfo",
-                "secure_time", "no_instance_id"):
+    for key in (
+        "gateway_enabled",
+        "public_logs",
+        "public_sysinfo",
+        "secure_time",
+        "no_instance_id",
+    ):
         if not isinstance(compose.get(key, False), bool):
             die(f"compose.{key} must be a JSON boolean (got {compose.get(key)!r})")
+    allowed = compose.get("allowed_envs", [])
+    if not isinstance(allowed, list) or not all(isinstance(e, str) for e in allowed):
+        die(f"compose.allowed_envs must be a list of strings (got {allowed!r})")
+    kp_id = compose.get("key_provider_id", "")
+    if not isinstance(kp_id, str):
+        die(f"compose.key_provider_id must be a hex string (got {kp_id!r})")
+    if kp_id and not re.fullmatch(r"(?:0x)?[0-9a-fA-F]+", kp_id):
+        die(f"compose.key_provider_id must be hex (got {kp_id!r})")
+    swap = compose.get("swap_size_mb")
+    # bool is a subclass of int, so reject it explicitly
+    if swap is not None and (
+        isinstance(swap, bool) or not isinstance(swap, int) or swap < 0
+    ):
+        die(f"compose.swap_size_mb must be a non-negative integer (got {swap!r})")
     if compose.get("gateway_enabled") and kp != "kms":
-        print("  warning: gateway_enabled but key_provider is not 'kms'; the "
-              "gateway will reject the app (it needs a KMS identity)",
-              file=sys.stderr)
+        print(
+            "  warning: gateway_enabled but key_provider is not 'kms'; the "
+            "gateway will reject the app (it needs a KMS identity)",
+            file=sys.stderr,
+        )
 
 
 # --------------------------------------------------------------------------- #
 # helpers
 # --------------------------------------------------------------------------- #
 def die(msg: str) -> "None":
+    """Print an error to stderr and exit non-zero."""
     print(f"error: {msg}", file=sys.stderr)
     sys.exit(1)
 
 
 def slugify(name: str) -> str:
+    """Turn an app name into a filesystem/url-safe slug."""
     slug = re.sub(r"[^a-zA-Z0-9_.-]+", "-", name.strip()).strip("-")
     return slug or "app"
 
 
 def human(n: int) -> str:
+    """Format a byte count as a human-readable string."""
     f = float(n)
     for unit in ("B", "KiB", "MiB", "GiB"):
         if f < 1024 or unit == "GiB":
@@ -157,7 +227,7 @@ def human(n: int) -> str:
 # rootfs packing (deterministic tar.gz so the compose-hash is reproducible)
 # --------------------------------------------------------------------------- #
 def _normalized_mode(info: "tarfile.TarInfo") -> int:
-    """force modes so the archive doesn't depend on the builder's umask.
+    """Force modes so the archive doesn't depend on the builder's umask.
 
     directories -> 0755, symlinks -> 0777 (ignored on extract), regular files
     keep only the executable intent (0755 if any exec bit was set, else 0644).
@@ -192,8 +262,10 @@ def pack_rootfs(rootfs: Path) -> tuple[bytes, int, int]:
             rel = p.relative_to(rootfs).as_posix()
             info = tar.gettarinfo(str(p), arcname=rel)
             if info is None:
-                die(f"unsupported file type in rootfs: {p} "
-                    "(only regular files, directories, and symlinks are allowed)")
+                die(
+                    f"unsupported file type in rootfs: {p} "
+                    "(only regular files, directories, and symlinks are allowed)"
+                )
             # normalize all metadata for a reproducible archive
             info.uid = info.gid = 0
             info.uname = info.gname = ""
@@ -217,6 +289,7 @@ def pack_rootfs(rootfs: Path) -> tuple[bytes, int, int]:
 # bash_script generation
 # --------------------------------------------------------------------------- #
 def render_bash_script(services: list[str]) -> str:
+    """Render the boot script that extracts the rootfs and starts services."""
     # shell-quote (not json.dumps): service names land in a root shell at boot,
     # and they're already validated against UNIT_RE before we get here.
     start_lines = "\n".join(f"systemctl start {shlex.quote(s)}" for s in services)
@@ -243,8 +316,10 @@ note "sca: started"
 # --------------------------------------------------------------------------- #
 # build
 # --------------------------------------------------------------------------- #
-def build_app_compose(cfg: dict, compose: dict, rootfs_b64: str,
-                      services: list[str]) -> dict:
+def build_app_compose(
+    cfg: dict, compose: dict, rootfs_b64: str, services: list[str]
+) -> dict:
+    """Assemble the app-compose dict with the embedded rootfs and boot script."""
     out: dict = {
         "manifest_version": cfg.get("manifest_version", 2),
         "name": cfg["name"],
@@ -270,6 +345,7 @@ def build_app_compose(cfg: dict, compose: dict, rootfs_b64: str,
 
 
 def cmd_build(args) -> None:
+    """Pack the rootfs tree and write app-compose.json."""
     cfg_path = Path(args.config).resolve()
     if not cfg_path.is_file():
         die(f"config not found: {cfg_path} (run `sca new <dir>` first)")
@@ -285,13 +361,16 @@ def cmd_build(args) -> None:
     if not rootfs.is_dir():
         die(f"rootfs directory not found: {rootfs}")
 
-    services = cfg.get("services") or ["sca.service"]
+    # only default when the key is absent or null; an explicit [] must error
+    # rather than silently shipping an unintended service set.
+    services = cfg.get("services")
+    if services is None:
+        services = ["sca.service"]
     if not isinstance(services, list) or not services:
         die("config 'services' must be a non-empty list of unit names")
     for s in services:
         if not isinstance(s, str) or not UNIT_RE.match(s):
-            die(f"invalid service unit name: {s!r} "
-                f"(must match {UNIT_RE.pattern})")
+            die(f"invalid service unit name: {s!r} (must match {UNIT_RE.pattern})")
 
     compose_cfg = cfg.get("compose", {})
     if not isinstance(compose_cfg, dict):
@@ -313,20 +392,28 @@ def cmd_build(args) -> None:
     # check the cap BEFORE writing so a failed build never leaves an
     # oversized, undeployable app-compose.json behind.
     if size > APP_COMPOSE_MAX_BYTES:
-        die(f"app-compose.json would be {human(size)}, over the "
-            f"{human(APP_COMPOSE_MAX_BYTES)} guest copy limit; shrink the rootfs")
+        die(
+            f"app-compose.json would be {human(size)}, over the "
+            f"{human(APP_COMPOSE_MAX_BYTES)} guest copy limit; shrink the rootfs"
+        )
 
     out_path = Path(args.output).resolve()
     out_path.write_bytes(blob)
 
     print(f"wrote {out_path}")
-    print(f"  rootfs      : {nfiles} file(s), {human(raw_total)} raw "
-          f"-> {human(len(gz))} packed (tar.gz)")
+    print(
+        f"  rootfs      : {nfiles} file(s), {human(raw_total)} raw "
+        f"-> {human(len(gz))} packed (tar.gz)"
+    )
     print(f"  services    : {', '.join(services)}")
-    print(f"  key provider: {compose['key_provider']}  |  "
-          f"gateway: {str(compose['gateway_enabled']).lower()}")
-    print(f"  size        : {human(size)} / {human(APP_COMPOSE_MAX_BYTES)} cap "
-          f"({100 * size / APP_COMPOSE_MAX_BYTES:.1f}%)")
+    print(
+        f"  key provider: {compose['key_provider']}  |  "
+        f"gateway: {str(compose['gateway_enabled']).lower()}"
+    )
+    print(
+        f"  size        : {human(size)} / {human(APP_COMPOSE_MAX_BYTES)} cap "
+        f"({100 * size / APP_COMPOSE_MAX_BYTES:.1f}%)"
+    )
     print(f"  compose-hash: {digest}")
     print(f"  app-id      : {digest[:40]}")
     if size > APP_COMPOSE_MAX_BYTES * 0.9:
@@ -341,6 +428,7 @@ def cmd_build(args) -> None:
 # new (scaffold)
 # --------------------------------------------------------------------------- #
 def config_json_template(name: str, compose: dict) -> str:
+    """Render the default config.json contents for a new project."""
     cfg = {
         "name": name,
         "manifest_version": 2,
@@ -434,6 +522,7 @@ app-compose options live under `compose` in config.json and can also be set on
 
 
 def write_file(path: Path, content: str, mode: int | None = None) -> None:
+    """Write a text file, creating parent dirs and optionally setting mode."""
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content)
     if mode is not None:
@@ -441,11 +530,14 @@ def write_file(path: Path, content: str, mode: int | None = None) -> None:
 
 
 def cmd_new(args) -> None:
+    """Scaffold a new self-contained app project directory."""
     target = Path(args.dir).resolve()
     name = args.name or target.name
     slug = slugify(name)
 
-    if target.exists() and any(target.iterdir()):
+    if target.exists() and not target.is_dir():
+        die(f"path '{target}' exists and is not a directory")
+    if target.is_dir() and any(target.iterdir()):
         die(f"directory '{target}' exists and is not empty")
 
     compose = resolve_compose(dict(COMPOSE_DEFAULTS), args)
@@ -453,10 +545,14 @@ def cmd_new(args) -> None:
 
     write_file(target / "config.json", config_json_template(name, compose))
     write_file(target / "README.md", README_TEMPLATE.format(name=name, slug=slug))
-    write_file(target / "rootfs" / "run" / "sca" / "bin" / "entrypoint.sh",
-               ENTRYPOINT_SH, mode=0o755)
-    write_file(target / "rootfs" / "etc" / "systemd" / "system" / "sca.service",
-               SCA_SERVICE)
+    write_file(
+        target / "rootfs" / "run" / "sca" / "bin" / "entrypoint.sh",
+        ENTRYPOINT_SH,
+        mode=0o755,
+    )
+    write_file(
+        target / "rootfs" / "etc" / "systemd" / "system" / "sca.service", SCA_SERVICE
+    )
 
     print(f"scaffolded self-contained app '{name}' at {target}")
     print("  config.json")
@@ -473,6 +569,7 @@ def cmd_new(args) -> None:
 # cli
 # --------------------------------------------------------------------------- #
 def main(argv=None) -> None:
+    """Parse arguments and dispatch to the selected subcommand."""
     parser = argparse.ArgumentParser(
         prog="sca",
         description="build self-contained dstack apps (no docker, no registry)",
@@ -487,11 +584,15 @@ def main(argv=None) -> None:
 
     p_build = sub.add_parser("build", help="pack rootfs/ into app-compose.json")
     p_build.add_argument(
-        "-c", "--config", default="config.json",
+        "-c",
+        "--config",
+        default="config.json",
         help="path to config.json (default: ./config.json)",
     )
     p_build.add_argument(
-        "-o", "--output", default="app-compose.json",
+        "-o",
+        "--output",
+        default="app-compose.json",
         help="output path (default: ./app-compose.json)",
     )
     add_compose_args(p_build)
