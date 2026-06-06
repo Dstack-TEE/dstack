@@ -1,0 +1,18 @@
+{
+  "name": "hello-c",
+  "manifest_version": 2,
+  "rootfs": "rootfs",
+  "services": [
+    "sca.service"
+  ],
+  "compose": {
+    "key_provider": "kms",
+    "gateway_enabled": true,
+    "public_logs": true,
+    "public_sysinfo": true,
+    "secure_time": false,
+    "no_instance_id": false,
+    "allowed_envs": [],
+    "key_provider_id": ""
+  }
+}
