@@ -71,7 +71,12 @@ logger = logging.getLogger(__name__)
 # Configuration file names
 APP_CONFIG_FILE = "app.json"
 STATE_FILE = "state.json"
-GLOBAL_CONFIG_PATH = os.path.expanduser("~/.config/dstack-cloud/config.json")
+# Global config location. Overridable via DSTACK_CLOUD_CONFIG so a caller can use
+# a local/throwaway config (e.g. a vendor computing an OS-image hash) without
+# polluting the user's global ~/.config/dstack-cloud.
+GLOBAL_CONFIG_PATH = os.path.expanduser(
+    os.environ.get("DSTACK_CLOUD_CONFIG") or "~/.config/dstack-cloud/config.json"
+)
 DEFAULT_OS_IMAGE = "dstack-0.6.0"
 
 
