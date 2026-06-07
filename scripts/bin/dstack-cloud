@@ -95,6 +95,13 @@ class App:
     # Docker compose file name (relative to project root)
     docker_compose_file: str = "docker-compose.yaml"
 
+    # Pre-built app-compose.json to ship VERBATIM (relative to project root).
+    # When set, its exact bytes become shared/app-compose.json instead of being
+    # generated from docker_compose_file — required for externally-built composes
+    # (e.g. self-contained apps) whose compose-hash is computed over their own
+    # serialization. Empty (default) keeps the normal generated behavior.
+    app_compose_file: str = ""
+
     # Prelaunch script name (relative to project root)
     prelaunch_script: str = "prelaunch.sh"
 
@@ -398,6 +405,32 @@ class CloudDeploymentManager:
             "storage_fs": app.storage_fs,
             "pre_launch_script": prelaunch_content
         }
+
+    def _emit_app_compose(self, app: App, shared_dir: Path,
+                          env_names: Optional[List[str]] = None) -> None:
+        """Write shared/app-compose.json.
+
+        If app.app_compose_file is set, ship that file's EXACT bytes (verbatim):
+        the measured compose-hash is sha256 of the bytes on the shared disk, so
+        re-serializing would change the hash and break an externally-built
+        compose. Verbatim mode intentionally bypasses the docker-compose /
+        allowed-envs generation — the supplied compose is the source of truth.
+        Otherwise, generate from the App config as before.
+        """
+        app_compose_path = shared_dir / "app-compose.json"
+        if app.app_compose_file:
+            src = self.work_dir / app.app_compose_file
+            if not src.exists():
+                raise FileNotFoundError(f"app_compose_file not found: {src}")
+            # raw byte copy — do NOT json.load/dump (would change hashed bytes)
+            with open(src, 'rb') as fsrc, open(app_compose_path, 'wb') as fdst:
+                fdst.write(fsrc.read())
+            logger.info(f"Using verbatim app-compose: {src} -> {app_compose_path}")
+        else:
+            content = self._generate_app_compose(app, env_names=env_names)
+            with open(app_compose_path, 'w') as f:
+                json.dump(content, f, indent=2)
+            logger.info(f"Generated {app_compose_path}")
 
     def _generate_sys_config(self, global_config: Dict[str, Any],
                              gcp_config: GcpConfig, app: App) -> Dict[str, Any]:
@@ -882,12 +915,8 @@ class CloudDeploymentManager:
             else:
                 logger.info(f"{app.env_file} is empty")
 
-        # Generate app-compose.json
-        app_compose_content = self._generate_app_compose(app, env_names=env_names if env_names else None)
-        app_compose_path = shared_dir / "app-compose.json"
-        with open(app_compose_path, 'w') as f:
-            json.dump(app_compose_content, f, indent=2)
-        logger.info(f"Generated {app_compose_path}")
+        # Write app-compose.json (verbatim if app.app_compose_file is set, else generated)
+        self._emit_app_compose(app, shared_dir, env_names if env_names else None)
 
         logger.info("")
         logger.info(f"Shared files generated in: {shared_dir}")
@@ -1216,20 +1245,27 @@ class CloudDeploymentManager:
             json.dump(instance_info, f, indent=2)
         logger.info(f"Generated {instance_info_path}")
 
-        # Generate app-compose.json with env_names (from .env file)
-        app_compose_content = self._generate_app_compose(app, env_names=env_names if env_names else None)
-        app_compose_path = shared_dir / "app-compose.json"
-        with open(app_compose_path, 'w') as f:
-            json.dump(app_compose_content, f, indent=2)
-        logger.info(f"Generated {app_compose_path}")
+        # Write app-compose.json (verbatim if app.app_compose_file is set, else generated)
+        self._emit_app_compose(app, shared_dir, env_names if env_names else None)
 
         with tempfile.TemporaryDirectory() as work_dir:
             work_path = Path(work_dir)
             raw_file = work_path / "disk.raw"
 
-            # Create FAT32 disk image (no root required)
+            # Create FAT32 disk image (no root required). Size it to fit the
+            # shared files: app-compose.json can be large (e.g. self-contained
+            # apps embed their payload, up to the 50M guest cap), so the old
+            # fixed 8M overflowed and mcopy failed. Floor at 8M (small composes
+            # unchanged), + 4M FAT/metadata margin, rounded up to a whole MiB.
             logger.info("Creating shared disk image...")
-            disk_size = "8M"  # 8MB FAT32 disk
+            _shared_files = [shared_dir / f for f in
+                             ("app-compose.json", ".sys-config.json", ".instance_info", ".encrypted-env")]
+            _shared_files.append(self.work_dir / ".user-config")
+            _total = sum(p.stat().st_size for p in _shared_files if p.exists())
+            _bytes = max(8 * 1024 * 1024, _total + 4 * 1024 * 1024)
+            _bytes = ((_bytes + (1024 * 1024 - 1)) // (1024 * 1024)) * (1024 * 1024)
+            disk_size = str(_bytes)  # bytes
+            logger.info(f"Shared disk size: {_bytes // (1024 * 1024)}M (files {_total} bytes)")
             subprocess.run(
                 ["truncate", "-s", disk_size, str(raw_file)],
                 check=True
