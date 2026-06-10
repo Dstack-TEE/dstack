@@ -87,3 +87,41 @@ pub enum RtmrEventStatus {
     Extra,
     Missing,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // the README documents sending either `attestation` or
+    // (`quote` + `event_log` + `vm_config`); every field is optional, so any
+    // documented subset must deserialize without a "missing field" error.
+
+    #[test]
+    fn deserializes_quote_subset_without_attestation() {
+        let json = r#"{"quote":"00","event_log":"[]","vm_config":"{}"}"#;
+        let req: VerificationRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.quote, Some(vec![0u8]));
+        assert_eq!(req.event_log.as_deref(), Some("[]"));
+        assert_eq!(req.vm_config.as_deref(), Some("{}"));
+        assert_eq!(req.attestation, None);
+        assert_eq!(req.debug, None);
+    }
+
+    #[test]
+    fn deserializes_attestation_subset_without_quote() {
+        let json = r#"{"attestation":"00"}"#;
+        let req: VerificationRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.attestation, Some(vec![0u8]));
+        assert_eq!(req.quote, None);
+        assert_eq!(req.event_log, None);
+        assert_eq!(req.vm_config, None);
+    }
+
+    #[test]
+    fn deserializes_empty_object() {
+        let req: VerificationRequest = serde_json::from_str("{}").unwrap();
+        assert_eq!(req.quote, None);
+        assert_eq!(req.attestation, None);
+        assert_eq!(req.debug, None);
+    }
+}
