@@ -9,12 +9,15 @@ use serde_human_bytes as serde_bytes;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VerificationRequest {
-    #[serde(with = "serde_bytes")]
+    #[serde(with = "serde_bytes", default)]
     pub quote: Option<Vec<u8>>,
+    #[serde(default)]
     pub event_log: Option<String>,
+    #[serde(default)]
     pub vm_config: Option<String>,
-    #[serde(with = "serde_bytes")]
+    #[serde(with = "serde_bytes", default)]
     pub attestation: Option<Vec<u8>>,
+    #[serde(default)]
     pub debug: Option<bool>,
 }
 
