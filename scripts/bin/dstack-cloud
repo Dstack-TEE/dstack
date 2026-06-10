@@ -209,6 +209,7 @@ class GcpConfig:
     network: str = "default"
     subnet: str = ""
     private_ip: str = ""  # static internal IP to bind (--private-network-ip)
+    no_public_ip: bool = False  # network-isolated: no external IP (--no-address); reach via IAP
 
     # Identity settings
     service_account: str = ""
@@ -250,6 +251,7 @@ class GcpConfig:
             "network": "default",
             "subnet": "",
             "private_ip": "",
+            "no_public_ip": False,
             "service_account": "",
             "scopes": [],
             "tags": [],
@@ -1458,6 +1460,12 @@ class CloudDeploymentManager:
             if not config.subnet:
                 create_args.append("--subnet=default")
             create_args.append(f"--private-network-ip={config.private_ip}")
+        if config.no_public_ip:
+            # Network-isolated CVM: no ephemeral external IP. With no Cloud NAT on
+            # the subnet, this also means no internet egress. Reaching the VM still
+            # works over IAP TCP forwarding (ingress via Google's edge to the
+            # internal IP), so SSH / the on-prem courier are unaffected.
+            create_args.append("--no-address")
         if config.service_account:
             create_args.append(f"--service-account={config.service_account}")
         if config.scopes:
