@@ -51,7 +51,9 @@ jobs:
           context: verifier
           file: verifier/builder/Dockerfile
           push: true
-          tags: ${{ vars.DOCKERHUB_ORG }}/dstack-verifier:${{ env.VERSION }}
+          tags: |
+            ${{ vars.DOCKERHUB_ORG }}/dstack-verifier:${{ env.VERSION }}
+            ${{ vars.DOCKERHUB_ORG }}/dstack-verifier:latest
           platforms: linux/amd64
           provenance: false
           build-contexts: |
