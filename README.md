@@ -1,8 +1,8 @@
 <div align="center">
 
-![dstack-cloud](./dstack-logo.svg)
+![dstack](./dstack-logo.svg)
 
-### Deploy confidential workloads on GCP and AWS.
+### The open framework for confidential AI.
 
 [![GitHub Stars](https://img.shields.io/github/stars/dstack-tee/dstack?style=flat-square&logo=github)](https://github.com/Dstack-TEE/dstack/stargazers)
 [![License](https://img.shields.io/github/license/dstack-tee/dstack?style=flat-square)](https://github.com/Dstack-TEE/dstack/blob/master/LICENSE)
@@ -18,56 +18,20 @@ Original Contributors: Hang Yin, Kevin Wang, Andrew Miller
 
 ---
 
-## What is dstack-cloud?
+## What is dstack?
 
-dstack-cloud extends [dstack](https://github.com/Dstack-TEE/dstack) to deploy containers on **GCP Confidential VMs** and **AWS Nitro Enclaves**. It provisions the VM, manages attestation, and handles networking. You get confidential computing on cloud infrastructure without running your own TDX hardware.
+dstack is the open framework for confidential AI — deploy AI applications with cryptographic privacy guarantees.
 
-Your containers run with full security infrastructure out of the box: key management, remote attestation, hardened OS, and encrypted storage. Users can cryptographically verify exactly what's running.
+AI providers ask users to trust them with sensitive data. But trust doesn't scale, and trust can't be verified. With dstack, your containers run inside confidential VMs (Intel TDX) with native support for NVIDIA Confidential Computing (H100, Blackwell). Users can cryptographically verify exactly what's running: private AI with your existing Docker workflow.
 
 ## Supported Platforms
 
 | Platform | Status | Attestation |
 |----------|--------|-------------|
+| **Bare metal TDX** | Available | TDX |
 | **[Phala Cloud](https://cloud.phala.network)** | Available | TDX |
 | **GCP Confidential VMs** | Available | TDX + TPM |
 | **AWS Nitro Enclaves** | Available | NSM |
-| **Bare metal TDX** | Available | TDX |
-
-## Quick Start
-
-**1. Create a project:**
-
-```bash
-dstack-cloud new my-app
-cd my-app
-```
-
-**2. Edit your docker-compose.yaml:**
-
-```yaml
-services:
-  vllm:
-    image: vllm/vllm-openai:latest
-    runtime: nvidia
-    command: --model Qwen/Qwen2.5-7B-Instruct
-    ports:
-      - "8000:8000"
-```
-
-**3. Deploy:**
-
-```bash
-dstack-cloud deploy
-```
-
-**4. Check status:**
-
-```bash
-dstack-cloud status
-dstack-cloud logs --follow
-```
-
-For the full walkthrough, see the [Quickstart Guide](./docs/quickstart.md).
 
 ## Features
 
@@ -85,74 +49,71 @@ For the full walkthrough, see the [Quickstart Guide](./docs/quickstart.md).
 - **Isolated keys**: Per-app keys derived in TEE. Survives hardware failure. Never exposed to operators.
 - **Code governance**: Updates follow predefined rules (e.g., multi-party approval). Operators can't swap code or access secrets.
 
+## Getting Started
+
+**Try it now:** Chat with LLMs running in TEE at [chat.redpill.ai](https://chat.redpill.ai). Click the shield icon to verify attestations from Intel TDX and NVIDIA GPUs.
+
+**Deploy your own:**
+
+```yaml
+# docker-compose.yaml
+services:
+  vllm:
+    image: vllm/vllm-openai:latest
+    runtime: nvidia
+    command: --model Qwen/Qwen2.5-7B-Instruct
+    ports:
+      - "8000:8000"
+```
+
+Deploy to any Intel TDX host using a guest OS image from [meta-dstack releases](https://github.com/Dstack-TEE/meta-dstack/releases), or use [Phala Cloud](https://cloud.phala.network) for managed infrastructure.
+
+Setting up dstack on your own hardware? See the [full deployment guide →](./docs/deployment.md)
+
 ## Architecture
 
 ![Architecture](./docs/assets/arch.png)
 
-Your container runs inside a Confidential VM (Intel TDX on GCP, Nitro Enclave on AWS). GPU isolation is optional via NVIDIA Confidential Computing. The CPU TEE protects application logic. The GPU TEE protects model weights and inference data.
+Your container runs inside a Confidential VM (Intel TDX) with optional GPU isolation via NVIDIA Confidential Computing. The CPU TEE protects application logic; the GPU TEE protects model weights and inference data.
 
 **Core components:**
 
-- **Guest Agent**: Runs inside each CVM. Generates attestation quotes so users can verify exactly what's running. Provisions per-app cryptographic keys from KMS. Encrypts local storage. Apps interact via `/var/run/dstack.sock`.
+- **Guest Agent**: Runs inside each CVM. Generates TDX attestation quotes so users can verify exactly what's running. Provisions per-app cryptographic keys from KMS. Encrypts local storage. Apps interact via `/var/run/dstack.sock`.
 
-- **KMS**: Runs in its own TEE. Verifies attestation quotes before releasing keys. Enforces authorization policies that operators cannot bypass. Derives deterministic keys bound to each app's attested identity.
+- **KMS**: Runs in its own TEE. Verifies TDX quotes before releasing keys. Enforces authorization policies defined in on-chain smart contracts — operators cannot bypass these checks. Derives deterministic keys bound to each app's attested identity.
 
-- **Gateway**: Terminates TLS at the edge. Provisions ACME certificates automatically. Routes traffic to CVMs. Internal communication uses RA-TLS for mutual attestation.
+- **Gateway**: Terminates TLS at the edge and provisions ACME certificates automatically. Routes traffic to CVMs. All internal communication uses RA-TLS for mutual attestation.
 
-- **VMM**: Parses docker-compose files directly — no app changes needed. Boots CVMs from a reproducible OS image. Allocates CPU, memory, and confidential GPU resources.
+- **VMM**: Runs on bare-metal TDX hosts. Parses docker-compose files directly — no app changes needed. Boots CVMs from a reproducible OS image. Allocates CPU, memory, and confidential GPU resources.
 
 [Full security model →](./docs/security/security-model.md)
 
-## CLI Reference
-
-```
-dstack-cloud new <name>              # Create a new project
-dstack-cloud config-edit             # Edit global configuration
-dstack-cloud deploy                  # Deploy to cloud
-dstack-cloud status                  # Check deployment status
-dstack-cloud logs [--follow]         # View console logs
-dstack-cloud stop                    # Stop the VM
-dstack-cloud start                   # Start a stopped VM
-dstack-cloud remove                  # Remove the VM and cleanup
-dstack-cloud list                    # List all deployments
-dstack-cloud fw allow <port>         # Allow traffic on a port
-dstack-cloud fw deny <port>          # Block traffic on a port
-dstack-cloud fw list                 # List firewall rules
-```
-
 ## SDKs
 
-Apps communicate with the guest agent via HTTP over `/var/run/dstack.sock`. Use the [HTTP API](https://github.com/Dstack-TEE/dstack/blob/master/sdk/curl/api.md) directly with curl, or use a language SDK:
+Apps communicate with the guest agent via HTTP over `/var/run/dstack.sock`. Use the [HTTP API](./sdk/curl/api.md) directly with curl, or use a language SDK:
 
 | Language | Install | Docs |
 |----------|---------|------|
-| Python | `pip install dstack-sdk` | [README](https://github.com/Dstack-TEE/dstack/blob/master/sdk/python/README.md) |
-| TypeScript | `npm install @phala/dstack-sdk` | [README](https://github.com/Dstack-TEE/dstack/blob/master/sdk/js/README.md) |
-| Rust | `cargo add dstack-sdk` | [README](https://github.com/Dstack-TEE/dstack/blob/master/sdk/rust/README.md) |
-| Go | `go get github.com/Dstack-TEE/dstack/sdk/go` | [README](https://github.com/Dstack-TEE/dstack/blob/master/sdk/go/README.md) |
+| Python | `pip install dstack-sdk` | [README](./sdk/python/README.md) |
+| TypeScript | `npm install @phala/dstack-sdk` | [README](./sdk/js/README.md) |
+| Rust | `cargo add dstack-sdk` | [README](./sdk/rust/README.md) |
+| Go | `go get github.com/Dstack-TEE/dstack/sdk/go` | [README](./sdk/go/README.md) |
 
 ## Documentation
 
-**Getting Started**
-- [Quickstart](./docs/quickstart.md) - Deploy your first app on GCP or AWS
+**For Developers**
+- [Confidential AI](./docs/confidential-ai.md) - Inference, agents, and training with hardware privacy
 - [Usage Guide](./docs/usage.md) - Deploying and managing apps
 - [Verification](./docs/verification.md) - How to verify TEE attestation
 
-**Cloud Platforms**
-- [GCP Attestation](./docs/attestation-gcp.md) - TDX + TPM attestation on GCP
-- [AWS Nitro Attestation](./docs/attestation-nitro-enclave.md) - NSM attestation on AWS
-
-**For Developers**
-- [Confidential AI](./docs/confidential-ai.md) - Inference, agents, and training with hardware privacy
-- [App Compose Format](./docs/normalized-app-compose.md) - Compose file specification
-
-**Self-Hosted / Bare Metal**
+**For Operators**
 - [Deployment](./docs/deployment.md) - Self-hosting on TDX hardware
-- [VMM CLI Guide](./docs/vmm-cli-user-guide.md) - VMM command-line reference
+- [On-Chain Governance](./docs/onchain-governance.md) - Smart contract authorization
 - [Gateway](./docs/dstack-gateway.md) - Gateway configuration
-- [On-Chain Governance](./docs/onchain-governance.md) - Policy-based authorization
 
 **Reference**
+- [App Compose Format](./docs/normalized-app-compose.md) - Compose file specification
+- [VMM CLI Guide](./docs/vmm-cli-user-guide.md) - Command-line reference
 - [Design Decisions](./docs/design-and-hardening-decisions.md) - Architecture rationale
 - [FAQ](./docs/faq.md) - Frequently asked questions
 
@@ -169,56 +130,51 @@ Apps communicate with the guest agent via HTTP over `/var/run/dstack.sock`. Use 
 <details>
 <summary><strong>Why not use AWS Nitro / Azure Confidential VMs / GCP directly?</strong></summary>
 
-You can — but you'll build everything yourself: attestation verification, key management, Docker orchestration, certificate provisioning, and governance. dstack-cloud provides all of this out of the box.
+You can — but you'll build everything yourself: attestation verification, key management, Docker orchestration, certificate provisioning, and governance. dstack provides all of this out of the box.
 
 | Approach | Docker native | GPU TEE | Key management | Attestation tooling | Open source |
 |----------|:-------------:|:-------:|:--------------:|:-------------------:|:-----------:|
-| **dstack-cloud** | ✓ | ✓ | ✓ | ✓ | ✓ |
+| **dstack** | ✓ | ✓ | ✓ | ✓ | ✓ |
 | AWS Nitro Enclaves | - | - | Manual | Manual | - |
 | Azure Confidential VMs | - | Preview | Manual | Manual | - |
 | GCP Confidential Computing | - | - | Manual | Manual | - |
 
-Cloud providers give you the hardware primitive. dstack-cloud gives you the full stack: reproducible OS images, automatic attestation, per-app key derivation, and TLS certificates. No vendor lock-in.
+Cloud providers give you the hardware primitive. dstack gives you the full stack: reproducible OS images, automatic attestation, per-app key derivation, TLS certificates, and smart contract governance. No vendor lock-in.
 
 </details>
 
 <details>
 <summary><strong>How is this different from SGX/Gramine?</strong></summary>
 
-SGX requires porting applications to enclaves. dstack-cloud uses full-VM isolation (Intel TDX, AWS Nitro) — bring your Docker containers as-is. Plus GPU TEE support that SGX doesn't offer.
+SGX requires porting applications to enclaves. dstack uses full-VM isolation (Intel TDX) — bring your Docker containers as-is. Plus GPU TEE support that SGX doesn't offer.
 
 </details>
 
 <details>
 <summary><strong>What's the performance overhead?</strong></summary>
 
-Minimal. Intel TDX adds ~2-5% overhead for CPU workloads. NVIDIA Confidential Computing has negligible impact on GPU inference. Memory encryption is the main cost, but it's hardware-accelerated on supported CPUs.
+Minimal. Intel TDX adds ~2-5% overhead for CPU workloads. NVIDIA Confidential Computing has negligible impact on GPU inference. The main cost is memory encryption, which is hardware-accelerated on supported CPUs.
 
 </details>
 
 <details>
 <summary><strong>Is this production-ready?</strong></summary>
 
-Yes. dstack powers production AI at [OpenRouter](https://openrouter.ai/provider/phala) and [NEAR AI](https://x.com/ilblackdragon/status/1962920246148268235). It's been [audited by zkSecurity](./docs/security/dstack-audit.pdf). It's a Linux Foundation Confidential Computing Consortium project.
+Yes. dstack powers production AI infrastructure at [OpenRouter](https://openrouter.ai/provider/phala) and [NEAR AI](https://x.com/ilblackdragon/status/1962920246148268235). The framework has been [audited by zkSecurity](./docs/security/dstack-audit.pdf) and is a Linux Foundation Confidential Computing Consortium project.
 
 </details>
 
 <details>
 <summary><strong>Can I run this on my own hardware?</strong></summary>
 
-Yes. dstack-cloud runs on any Intel TDX-capable server. See the [deployment guide](./docs/deployment.md) for self-hosting instructions. You can also use [Phala Cloud](https://cloud.phala.network) for managed infrastructure.
+Yes. dstack runs on any Intel TDX-capable server. See the [deployment guide](./docs/deployment.md) for self-hosting instructions. You can also use [Phala Cloud](https://cloud.phala.network) for managed infrastructure.
 
 </details>
 
 <details>
 <summary><strong>What TEE hardware is supported?</strong></summary>
 
-- **GCP**: Intel TDX (Confidential VMs)
-- **AWS**: Nitro Enclaves (NSM attestation)
-- **Bare metal**: Intel TDX (4th/5th Gen Xeon)
-- **GPUs**: NVIDIA Confidential Computing (H100, Blackwell)
-
-AMD SEV-SNP support is planned.
+Currently: Intel TDX (4th/5th Gen Xeon) and NVIDIA Confidential Computing (H100, Blackwell). AMD SEV-SNP support is planned.
 
 </details>
 
@@ -264,3 +220,5 @@ Logo and branding assets: [dstack-logo-kit](./docs/assets/dstack-logo-kit/)
 ## License
 
 Apache 2.0
+</content>
+</invoke>
