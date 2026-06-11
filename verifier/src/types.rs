@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+use dstack_types::KeyProviderInfo;
 use ra_tls::attestation::AppInfo;
 use serde::{Deserialize, Serialize};
 
@@ -40,9 +41,17 @@ pub struct VerificationDetails {
     /// event log payloads.
     pub event_log_verified: bool,
     pub os_image_hash_verified: bool,
+    /// dev vs prod OS image, from metadata.json (bound to os_image_hash). None if not exposed.
+    pub os_image_is_dev: Option<bool>,
+    /// dstack OS version, from the same metadata.json.
+    pub os_image_version: Option<String>,
+    /// "tdx" | "gcp-tdx" | "nitro".
+    pub tee_platform: Option<String>,
     pub report_data: Option<String>,
     pub tcb_status: Option<String>,
     pub advisory_ids: Vec<String>,
+    /// decoded app_info.key_provider_info; name is e.g. "kms" or "local".
+    pub key_provider: Option<KeyProviderInfo>,
     pub app_info: Option<AppInfo>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub acpi_tables: Option<AcpiTables>,

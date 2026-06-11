@@ -50,17 +50,7 @@ async fn verify_cvm(
             error!("Verification failed: {:?}", e);
             Json(VerificationResponse {
                 is_valid: false,
-                details: VerificationDetails {
-                    quote_verified: false,
-                    event_log_verified: false,
-                    os_image_hash_verified: false,
-                    report_data: None,
-                    tcb_status: None,
-                    advisory_ids: vec![],
-                    app_info: None,
-                    acpi_tables: None,
-                    rtmr_debug: None,
-                },
+                details: VerificationDetails::default(),
                 reason: Some(format!("Internal error: {}", e)),
             })
         }
