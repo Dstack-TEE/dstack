@@ -706,6 +706,46 @@ fn truncate(s: &[u8], len: usize) -> &[u8] {
     }
 }
 
+/// Return a platform-provided, per-instance value to mix into `instance_id`.
+///
+/// `instance_id` is normally derived from `instance_id_seed`, which is persisted
+/// on the data disk. That makes it unsafe on clouds where a VM can be cloned from
+/// a disk image / snapshot: every clone inherits the same seed and therefore the
+/// same `instance_id`. To keep `instance_id` unique per running VM we mix in a
+/// per-instance value that lives outside the cloneable disk.
+///
+/// On GCP we use the public key of the pre-provisioned vTPM Attestation Key. The AK
+/// is derived deterministically from the per-instance Endorsement seed held in the
+/// vTPM (not on the data disk), so a VM cloned from a disk image derives a different
+/// AK while a reboot/stop-start of the same VM keeps it stable — exactly the property
+/// we need. We hash the AK public area rather than its certificate so the binding is
+/// immune to certificate re-issuance (a re-signed cert carries new serial/validity/
+/// signature bytes for the same key).
+///
+/// Returns `Ok(None)` on platforms with no such binding; the `instance_id` then
+/// keeps its previous seed-only derivation. Fails closed: if the platform is known
+/// to provide a binding but it cannot be read, we error rather than silently fall
+/// back to a duplication-prone id.
+fn platform_instance_binding() -> Result<Option<Vec<u8>>> {
+    use dstack_types::Platform;
+    match Platform::detect() {
+        Some(Platform::Gcp) => {
+            // Prefer the ECC AK, fall back to RSA (matches the quote path).
+            let ak = match tpm::load_gcp_ak_ecc(None) {
+                Ok(ak) => ak,
+                Err(ecc_err) => tpm::load_gcp_ak_rsa(None).with_context(|| {
+                    format!("failed to load gcp vTPM AK (ecc error: {ecc_err:#})")
+                })?,
+            };
+            if ak.pub_area.is_empty() {
+                bail!("gcp vTPM AK public area is empty");
+            }
+            Ok(Some(sha256(&ak.pub_area).to_vec()))
+        }
+        _ => Ok(None),
+    }
+}
+
 fn emit_key_provider_info(provider_info: &KeyProviderInfo) -> Result<()> {
     info!("Key provider info: {provider_info:?}");
     let provider_info_json = serde_json::to_vec(&provider_info)?;
@@ -1361,6 +1401,10 @@ impl<'a> Stage0<'a> {
         } else {
             let mut id_path = instance_info.instance_id_seed.clone();
             id_path.extend_from_slice(&instance_info.app_id);
+            if let Some(binding) = platform_instance_binding()? {
+                info!("mixing platform per-instance binding into instance_id");
+                id_path.extend_from_slice(&binding);
+            }
             sha256(&id_path)[..20].to_vec()
         };
         instance_info.instance_id = instance_id.clone();
