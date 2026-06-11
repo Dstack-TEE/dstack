@@ -32,6 +32,13 @@ pub struct LoadedAk {
     pub context: TpmContext,
     pub handle: u32,
     pub cert_nv_index: u32,
+    /// Marshaled TPMT_PUBLIC public area of the AK.
+    ///
+    /// Derived deterministically from the per-instance Endorsement seed, so it is
+    /// stable across reboot/stop-start but fresh on a disk clone. Unlike the AK
+    /// certificate it carries no serial/validity/signature, so it is immune to
+    /// certificate re-issuance.
+    pub pub_area: Vec<u8>,
 }
 
 /// Load GCP pre-provisioned ECC AK
@@ -56,7 +63,7 @@ pub fn load_gcp_ak_ecc(tcti_path: Option<&str>) -> Result<LoadedAk> {
     );
 
     // Create primary key under Endorsement hierarchy
-    let (handle, _public) =
+    let (handle, pub_area) =
         context.create_primary_from_template(tpm_rh::ENDORSEMENT, &template_bytes)?;
 
     debug!(
@@ -68,6 +75,7 @@ pub fn load_gcp_ak_ecc(tcti_path: Option<&str>) -> Result<LoadedAk> {
         context,
         handle,
         cert_nv_index: gcp_nv_index::AK_ECC_CERT,
+        pub_area,
     })
 }
 
@@ -93,7 +101,7 @@ pub fn load_gcp_ak_rsa(tcti_path: Option<&str>) -> Result<LoadedAk> {
     );
 
     // Create primary key under Endorsement hierarchy
-    let (handle, _public) =
+    let (handle, pub_area) =
         context.create_primary_from_template(tpm_rh::ENDORSEMENT, &template_bytes)?;
 
     debug!(
@@ -105,6 +113,7 @@ pub fn load_gcp_ak_rsa(tcti_path: Option<&str>) -> Result<LoadedAk> {
         context,
         handle,
         cert_nv_index: gcp_nv_index::AK_RSA_CERT,
+        pub_area,
     })
 }
 
