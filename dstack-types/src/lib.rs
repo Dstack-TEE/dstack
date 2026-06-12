@@ -309,6 +309,9 @@ pub struct ImageInfo {
     /// may omit it, so callers should treat its absence as "unknown".
     #[serde(default)]
     pub version: String,
+    /// dev vs prod image. absent in older metadata.json => prod.
+    #[serde(default)]
+    pub is_dev: bool,
     /// Optional OVMF measurement layout declared by the image. Older
     /// metadata.json files do not carry this — treat absence as "unknown" and
     /// fall back to version-based heuristics.

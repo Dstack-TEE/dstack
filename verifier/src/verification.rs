@@ -27,6 +27,22 @@ use crate::types::{
     VerificationRequest, VerificationResponse,
 };
 
+fn tee_platform_name(quote: &AttestationQuote) -> &'static str {
+    match quote {
+        AttestationQuote::DstackTdx(_) => "tdx",
+        AttestationQuote::DstackGcpTdx(_) => "gcp-tdx",
+        AttestationQuote::DstackNitroEnclave(_) => "nitro",
+    }
+}
+
+/// best-effort: None for empty/malformed blobs.
+fn decode_key_provider_info(bytes: &[u8]) -> Option<dstack_types::KeyProviderInfo> {
+    if bytes.is_empty() {
+        return None;
+    }
+    serde_json::from_slice(bytes).ok()
+}
+
 fn collect_rtmr_mismatch(
     rtmr_label: &str,
     expected: &[u8],
@@ -136,6 +152,8 @@ struct ImagePaths {
     kernel_path: PathBuf,
     initrd_path: PathBuf,
     kernel_cmdline: String,
+    is_dev: bool,
+    version: String,
 }
 
 pub struct CvmVerifier {
@@ -376,6 +394,8 @@ impl CvmVerifier {
             kernel_path,
             initrd_path,
             kernel_cmdline,
+            is_dev: image_info.is_dev,
+            version: image_info.version,
         })
     }
 
@@ -413,23 +433,14 @@ impl CvmVerifier {
         } else {
             bail!("Quote is required");
         };
-        let mut details = VerificationDetails {
-            quote_verified: false,
-            event_log_verified: false,
-            os_image_hash_verified: false,
-            report_data: None,
-            tcb_status: None,
-            advisory_ids: vec![],
-            app_info: None,
-            acpi_tables: None,
-            rtmr_debug: None,
-        };
+        let mut details = VerificationDetails::default();
 
         let debug = request.debug.unwrap_or(false);
         let verified = attestation.into_v1().verify(self.pccs_url.as_deref()).await;
         let verified_attestation = match verified {
             Ok(att) => {
                 details.quote_verified = true;
+                details.tee_platform = Some(tee_platform_name(&att.quote).to_string());
                 details.tcb_status = att.report.tdx_report().map(|r| r.status.clone());
                 details.advisory_ids = att
                     .report
@@ -471,6 +482,7 @@ impl CvmVerifier {
             Ok(mut info) => {
                 info.os_image_hash = vm_config.os_image_hash;
                 details.event_log_verified = true;
+                details.key_provider = decode_key_provider_info(&info.key_provider_info);
                 details.app_info = Some(info);
             }
             Err(e) => {
@@ -546,11 +558,16 @@ impl CvmVerifier {
             rtmr2: report.rt_mr2.to_vec(),
         };
 
-        // Compute expected measurements (reusing the public API)
+        // one download serves both measurement computation and the dev/version flags
+        let image_paths = self.ensure_image_downloaded(vm_config).await?;
+        details.os_image_is_dev = Some(image_paths.is_dev);
+        if !image_paths.version.is_empty() {
+            details.os_image_version = Some(image_paths.version.clone());
+        }
+
+        // Compute expected measurements
         let (mrs, expected_logs) = if debug {
             // For debug mode, we need detailed logs and ACPI tables
-            let image_paths = self.ensure_image_downloaded(vm_config).await?;
-
             let TdxMeasurementDetails {
                 measurements,
                 rtmr_logs,
@@ -573,11 +590,16 @@ impl CvmVerifier {
 
             (measurements, Some(rtmr_logs))
         } else {
-            // For non-debug mode, reuse the public API with caching
+            // For non-debug mode, use the cached-measurement path.
             (
-                self.compute_measurements_for_config(vm_config)
-                    .await
-                    .context("Failed to compute expected measurements")?,
+                self.load_or_compute_measurements(
+                    vm_config,
+                    &image_paths.fw_path,
+                    &image_paths.kernel_path,
+                    &image_paths.initrd_path,
+                    &image_paths.kernel_cmdline,
+                )
+                .context("Failed to compute expected measurements")?,
                 None,
             )
         };
@@ -883,5 +905,22 @@ impl Mrs {
             );
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decode_key_provider_info_parses_json_and_tolerates_garbage() {
+        let info =
+            decode_key_provider_info(br#"{"name":"kms","id":"abcd"}"#).expect("should parse");
+        assert_eq!(info.name, "kms");
+        assert_eq!(info.id, "abcd");
+
+        // empty/malformed must degrade to None, not fail the verify.
+        assert!(decode_key_provider_info(b"").is_none());
+        assert!(decode_key_provider_info(b"not json").is_none());
     }
 }
