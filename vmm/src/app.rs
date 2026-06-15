@@ -1188,24 +1188,8 @@ fn image_rootfs_hash(image: &Image) -> Result<&str> {
         .ok_or_else(|| anyhow::anyhow!("rootfs_hash is required for amd sev-snp"))
 }
 
-fn amd_sev_snp_base_cmdline_with_kds_proxy(
-    base_cmdline: Option<&str>,
-    proxy_url: Option<&str>,
-) -> Option<String> {
-    let base_cmdline = base_cmdline?;
-    let mut cmdline = base_cmdline.trim().to_string();
-    if let Some(proxy_url) = proxy_url.map(str::trim).filter(|url| !url.is_empty()) {
-        cmdline.push_str(" dstack.amd_kds_proxy_url=");
-        cmdline.push_str(proxy_url);
-    }
-    Some(cmdline)
-}
-
 fn amd_sev_snp_measurement_base_cmdline(base_cmdline: Option<&str>) -> Option<String> {
-    amd_sev_snp_base_cmdline_with_kds_proxy(
-        base_cmdline,
-        std::env::var("DSTACK_AMD_KDS_PROXY_URL").ok().as_deref(),
-    )
+    base_cmdline.map(|cmdline| cmdline.trim().to_string())
 }
 
 fn sha256_file(path: impl AsRef<Path>) -> Result<[u8; 32]> {
@@ -1278,16 +1262,10 @@ mod tests {
     }
 
     #[test]
-    fn amd_sev_snp_measurement_base_cmdline_can_carry_kds_proxy_for_smoke() {
+    fn amd_sev_snp_measurement_base_cmdline_trims_image_cmdline() {
         assert_eq!(
-            amd_sev_snp_base_cmdline_with_kds_proxy(
-                Some("console=ttyS0 loglevel=7"),
-                Some("https://cors.litgateway.com/"),
-            ),
-            Some(
-                "console=ttyS0 loglevel=7 dstack.amd_kds_proxy_url=https://cors.litgateway.com/"
-                    .to_string()
-            )
+            amd_sev_snp_measurement_base_cmdline(Some(" console=ttyS0 loglevel=7 ")),
+            Some("console=ttyS0 loglevel=7".to_string())
         );
     }
 

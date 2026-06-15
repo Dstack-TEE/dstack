@@ -269,14 +269,6 @@ if [ -f "/sys/class/block/${device_name}/partition" ]; then
 	fi
 fi
 
-AMD_KDS_PROXY_URL="$(tr ' ' '\n' </proc/cmdline | sed -n 's/^dstack.amd_kds_proxy_url=//p' | tail -n1)"
-if [ -n "$AMD_KDS_PROXY_URL" ]; then
-	log "Using AMD KDS proxy URL from kernel cmdline"
-	export DSTACK_AMD_KDS_PROXY_URL="$AMD_KDS_PROXY_URL"
-	mkdir -p /run/dstack
-	printf 'DSTACK_AMD_KDS_PROXY_URL=%s\n' "$AMD_KDS_PROXY_URL" >/run/dstack/environment
-fi
-
 dstack-util setup --work-dir $WORK_DIR --device "$DATA_DEVICE" --mount-point $DATA_MNT
 
 log "Mounting container runtime dirs to persistent storage"

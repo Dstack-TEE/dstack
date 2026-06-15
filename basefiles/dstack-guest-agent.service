@@ -15,7 +15,6 @@ WatchdogSec=30s
 StandardOutput=journal+console
 StandardError=journal+console
 Environment=RUST_LOG=warn
-EnvironmentFile=-/run/dstack/environment
 
 [Install]
 WantedBy=multi-user.target

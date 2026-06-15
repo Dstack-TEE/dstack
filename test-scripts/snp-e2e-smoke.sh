@@ -303,10 +303,8 @@ port = 3443
 EOF
 
 # Redirect to a user-owned artifact file; only the VMM process itself needs sudo.
-# Preserve the optional AMD KDS proxy URL so SNP guest cmdlines can carry it into
-# dstack-prepare before app containers or compose init scripts run.
 # shellcheck disable=SC2024
-sudo env "DSTACK_AMD_KDS_PROXY_URL=${DSTACK_SNP_SMOKE_KDS_PROXY_URL:-}" "$BIN/dstack-vmm" -c "$BASE/vmm.toml" serve >"$ART/vmm.log" 2>&1 & echo $! >"$BASE/vmm.pid"
+sudo "$BIN/dstack-vmm" -c "$BASE/vmm.toml" serve >"$ART/vmm.log" 2>&1 & echo $! >"$BASE/vmm.pid"
 for i in $(seq 1 60); do
 	if python3 "$REPO/vmm/src/vmm-cli.py" --url "$VMM_URL" lsvm --json >/dev/null 2>&1; then break; fi
 	sleep 1
@@ -373,7 +371,6 @@ EOF
 
 DNS_INIT_SCRIPT=$(cat <<'SH'
 set -eux
-export DSTACK_AMD_KDS_PROXY_URL="__DSTACK_AMD_KDS_PROXY_URL__"
 mkdir -p /etc/docker
 cat >/etc/docker/daemon.json <<'JSON'
 {"dns":["10.0.2.3","1.1.1.1","8.8.8.8"]}
@@ -386,8 +383,6 @@ fi
 SH
 )
 
-DNS_INIT_SCRIPT=${DNS_INIT_SCRIPT/__DSTACK_AMD_KDS_PROXY_URL__/${DSTACK_SNP_SMOKE_KDS_PROXY_URL:-}}
-
 KMS_BASH_SCRIPT=$(cat <<'SH'
 set -eux
 mkdir -p /dstack/kms-certs /dstack/kms-images
@@ -396,13 +391,11 @@ curl -fsS http://10.0.2.2:__DSTACK_HOST_ART_PORT__/OVMF.fd -o /dstack/OVMF.fd
 curl -fsS http://10.0.2.2:__DSTACK_HOST_ART_PORT__/kms.toml -o /dstack/kms.toml
 chmod +x /dstack/dstack-kms
 echo SNP_KMS_CONTAINER_STARTED
-export DSTACK_AMD_KDS_PROXY_URL="__DSTACK_AMD_KDS_PROXY_URL__"
 RUST_LOG=info /dstack/dstack-kms -c /dstack/kms.toml
 SH
 )
 KMS_BASH_SCRIPT=${KMS_BASH_SCRIPT/__DSTACK_HOST_ART_PORT__/$HOST_ART_PORT}
 KMS_BASH_SCRIPT=${KMS_BASH_SCRIPT//__DSTACK_HOST_ART_PORT__/$HOST_ART_PORT}
-KMS_BASH_SCRIPT=${KMS_BASH_SCRIPT/__DSTACK_AMD_KDS_PROXY_URL__/${DSTACK_SNP_SMOKE_KDS_PROXY_URL:-}}
 
 deploy_kms() {
 	local name="$1"
