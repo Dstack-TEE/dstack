@@ -1,0 +1,18 @@
+# SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "sev-snp-qvl"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "AMD SEV-SNP Quote Verification Library"
+
+[dependencies]
+anyhow.workspace = true
+base64.workspace = true
+hex.workspace = true
+reqwest = { workspace = true, features = ["blocking"] }
+sev.workspace = true

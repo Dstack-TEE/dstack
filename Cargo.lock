@@ -2324,7 +2324,6 @@ name = "dstack-attest"
 version = "0.5.11"
 dependencies = [
  "anyhow",
- "base64 0.22.1",
  "cc-eventlog",
  "dcap-qvl",
  "dstack-types",
@@ -2335,17 +2334,16 @@ dependencies = [
  "hex",
  "hex_fmt",
  "insta",
- "libc",
  "nsm-attest",
  "nsm-qvl",
  "or-panic",
  "parity-scale-codec",
- "reqwest",
  "rmp-serde",
  "serde",
  "serde-human-bytes",
  "serde_json",
- "sev",
+ "sev-snp-attest",
+ "sev-snp-qvl",
  "sha2 0.10.9",
  "sha3 0.10.9",
  "tdx-attest",
@@ -7339,6 +7337,28 @@ dependencies = [
  "static_assertions",
  "uuid",
  "x509-cert",
+]
+
+[[package]]
+name = "sev-snp-attest"
+version = "0.5.11"
+dependencies = [
+ "anyhow",
+ "fs-err",
+ "hex",
+ "sev",
+ "tracing",
+]
+
+[[package]]
+name = "sev-snp-qvl"
+version = "0.5.11"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "hex",
+ "reqwest",
+ "sev",
 ]
 
 [[package]]

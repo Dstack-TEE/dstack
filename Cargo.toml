@@ -20,10 +20,12 @@ members = [
     "ra-tls",
     "tdx-attest",
     "tpm-attest",
+    "sev-snp-attest",
     "nsm-attest",
     "tpm2",
     "tpm-types",
     "tpm-qvl",
+    "sev-snp-qvl",
     "nsm-qvl",
     "dstack-attest",
     "dstack-util",
@@ -78,11 +80,13 @@ supervisor = { path = "supervisor" }
 supervisor-client = { path = "supervisor/client" }
 tdx-attest = { path = "tdx-attest" }
 tpm-attest = { path = "tpm-attest" }
+sev-snp-attest = { path = "sev-snp-attest" }
 nsm-attest = { path = "nsm-attest" }
 tpm2 = { path = "tpm2" }
 tpm-types = { path = "tpm-types" }
 dstack-attest = { path = "dstack-attest" }
 tpm-qvl = { path = "tpm-qvl" }
+sev-snp-qvl = { path = "sev-snp-qvl" }
 nsm-qvl = { path = "nsm-qvl" }
 certbot = { path = "certbot" }
 rocket-vsock-listener = { path = "rocket-vsock-listener" }
