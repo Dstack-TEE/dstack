@@ -366,12 +366,12 @@ pub struct NitroVerifiedReport {
 #[derive(Clone)]
 pub enum DstackVerifiedReport {
     DstackTdx(TdxVerifiedReport),
-    DstackAmdSevSnp(crate::amd_sev_snp::VerifiedAmdSnpReport),
     DstackGcpTdx {
         tdx_report: TdxVerifiedReport,
         tpm_report: TpmVerifiedReport,
     },
     DstackNitroEnclave(NitroVerifiedReport),
+    DstackAmdSevSnp(crate::amd_sev_snp::VerifiedAmdSnpReport),
 }
 
 impl DstackVerifiedReport {

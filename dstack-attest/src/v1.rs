@@ -17,11 +17,6 @@ pub enum PlatformEvidence {
         quote: Vec<u8>,
         event_log: Vec<TdxEvent>,
     },
-    #[serde(rename = "sev-snp")]
-    SevSnp {
-        report: Vec<u8>,
-        cert_chain: Vec<Vec<u8>>,
-    },
     #[serde(rename = "gcp-tdx")]
     GcpTdx {
         quote: Vec<u8>,
@@ -30,6 +25,11 @@ pub enum PlatformEvidence {
     },
     #[serde(rename = "nitro-enclave")]
     NitroEnclave { nsm_quote: Vec<u8> },
+    #[serde(rename = "sev-snp")]
+    SevSnp {
+        report: Vec<u8>,
+        cert_chain: Vec<Vec<u8>>,
+    },
 }
 
 impl PlatformEvidence {
