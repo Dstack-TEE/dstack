@@ -94,11 +94,6 @@ mount_overlay /usr "$OVERLAY_TMP"
 mount_overlay /bin "$OVERLAY_TMP"
 mount_overlay /home "$OVERLAY_TMP"
 
-# systemd-resolved may be unavailable in minimal smoke/debug boots; keep DNS usable for dockerd pulls.
-if ! [[ -s /etc/resolv.conf ]] || grep -Eq 'nameserver[[:space:]]+(127\.|::1)' /etc/resolv.conf; then
-	printf 'nameserver 1.1.1.1\nnameserver 8.8.8.8\n' >/etc/resolv.conf
-fi
-
 # Make sure the system time is synchronized
 log "Syncing system time..."
 # Let the chronyd correct the system time immediately; keep booting if chronyd is not ready yet.
