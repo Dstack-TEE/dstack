@@ -31,6 +31,7 @@ use tpm_qvl::verify::VerifiedReport as TpmVerifiedReport;
 // Re-export TpmQuote from tpm-types
 pub use tpm_types::TpmQuote;
 
+use crate::amd_sev_snp::VerifiedAmdSnpReport;
 pub use crate::v1::{Attestation as AttestationV1, PlatformEvidence, StackEvidence};
 
 pub const SNP_REPORT_DATA_RANGE: std::ops::Range<usize> = 0x50..0x90;
@@ -371,7 +372,7 @@ pub enum DstackVerifiedReport {
         tpm_report: TpmVerifiedReport,
     },
     DstackNitroEnclave(NitroVerifiedReport),
-    DstackAmdSevSnp(crate::amd_sev_snp::VerifiedAmdSnpReport),
+    DstackAmdSevSnp(VerifiedAmdSnpReport),
 }
 
 impl DstackVerifiedReport {
@@ -384,7 +385,7 @@ impl DstackVerifiedReport {
         }
     }
 
-    pub fn amd_snp_report(&self) -> Option<&crate::amd_sev_snp::VerifiedAmdSnpReport> {
+    pub fn amd_snp_report(&self) -> Option<&VerifiedAmdSnpReport> {
         match self {
             DstackVerifiedReport::DstackAmdSevSnp(report) => Some(report),
             DstackVerifiedReport::DstackTdx(_)
