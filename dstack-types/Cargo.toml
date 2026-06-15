@@ -13,5 +13,8 @@ license.workspace = true
 scale = { workspace = true, features = ["derive"] }
 serde = { workspace = true, features = ["derive"] }
 serde-human-bytes.workspace = true
+serde_jcs.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
 sha3.workspace = true
 size-parser = { workspace = true, features = ["serde"] }

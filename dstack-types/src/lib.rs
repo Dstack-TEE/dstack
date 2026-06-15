@@ -114,7 +114,7 @@ where
     Ok(value.gateway_enabled || value.tproxy_enabled)
 }
 
-#[derive(Deserialize, Serialize, Debug, Clone, Copy)]
+#[derive(Deserialize, Serialize, Debug, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum KeyProviderKind {
     None,
@@ -185,6 +185,13 @@ pub struct SysConfig {
     pub pccs_url: Option<String>,
     pub docker_registry: Option<String>,
     pub host_api_url: Option<String>,
+    /// MrConfigV3 document string for platform app/config binding.
+    ///
+    /// Hosts generate this in JCS form, but verifiers hash the supplied string
+    /// bytes directly because the platform carrier binds the exact document
+    /// string.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mr_config: Option<String>,
     // JSON serialized VmConfig
     pub vm_config: String,
 }

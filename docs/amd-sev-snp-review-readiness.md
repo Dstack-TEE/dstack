@@ -80,10 +80,10 @@ initrd_fixture_sha256=e8790816224329cd76675c2aba4e62e885b5a4e0ec056227da70e77519
 vcpus=2
 vcpu_type=EPYC-v4
 guest_features=0x1
-append=console=ttyS0 loglevel=7 docker_compose_hash=2222222222222222222222222222222222222222222222222222222222222222 rootfs_hash=3333333333333333333333333333333333333333333333333333333333333333 app_id=1111111111111111111111111111111111111111
-sev_snp_measurement=6497fb9f90dc4a322228a8a5eb14742e09067bc44c184c2068d583ef628b5bae8c6cf15d91fe1bc0b7a8cbcc575be370
+append=console=ttyS0 loglevel=7
+sev_snp_measurement=requires-refresh-after-mr-config-v3-host-data-binding
 cargo_live_test=cargo test -p dstack-kms --all-features recomputation_matches_sev_snp_measure_live_golden_vector -- --ignored --nocapture
-cargo_live_test_result=passed locally on this host at 2026-06-02T19:49:14Z
+cargo_live_test_result=stale after SNP app identity moved from cmdline to HOST_DATA
 DSTACK_SEV_SNP_MEASURE_GOLDEN_VECTOR_END
 ```
 
@@ -116,10 +116,10 @@ That smoke exposed and fixed several VMM/KMS-auth integration issues before the 
 After those fixes, the manual smoke progressed through full dstack-managed SNP guest boot and KMS self-bootstrap on the known-good remote host. Additional smoke/debug fixes made the host/KMS side reach the app-key boundary:
 
 - Minimal guest boot now keeps DNS usable when `systemd-resolved`/`chronyd` are unavailable early in smoke boots and detects `sev-guest` before trying the TDX guest module.
-- SNP guests skip TDX-only `mr_config_id` and app-info RTMR decoding while still preserving non-SNP behavior.
+- SNP guests verify the SNP `HOST_DATA` value against the attached MrConfigV3 document instead of using TDX-only `mr_config_id`.
 - Configfs TSM report collection falls back to the SEV-SNP extended-report ioctl when configfs does not carry certificate collateral.
 - If verifier-side evidence still lacks ASK/VCEK collateral, the verifier can fetch AMD KDS ARK/ASK/VCEK using the report `chip_id` and reported TCB, then verify the signed report fail-closed.
-- KMS measurement recomputation now uses the image's original kernel cmdline as the measurement base before appending `docker_compose_hash`, `rootfs_hash`, and `app_id`, matching the VMM QEMU `-append` path.
+- KMS measurement recomputation now uses the image's original kernel cmdline for SNP launch measurement, while app identity is bound by MrConfigV3/HOST_DATA instead of appended cmdline fields.
 
 Latest sanitized remote smoke result with PR-built host binaries and a coherent `MACHINE = "sev-snp"` guest image:
 

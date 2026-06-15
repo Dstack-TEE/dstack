@@ -8,6 +8,7 @@ use dstack_port_forward::{ForwardRule, ForwardService, Protocol as FwdProtocol};
 use anyhow::{bail, Context, Result};
 use bon::Builder;
 use dstack_kms_rpc::kms_client::KmsClient;
+use dstack_types::mr_config::MrConfigV3;
 use dstack_types::shared_filenames::{
     APP_COMPOSE, ENCRYPTED_ENV, INSTANCE_INFO, SYS_CONFIG, USER_CONFIG,
 };
@@ -1000,7 +1001,26 @@ impl App {
         let manifest = work_dir.manifest().context("Failed to read manifest")?;
         let cfg = &self.config;
         let compose_hash = sha256_file(shared_dir.join(APP_COMPOSE))?;
-        let sys_config_str = make_sys_config(cfg, &manifest, &hex::encode(compose_hash))?;
+        let platform = cfg.cvm.platform.resolve();
+        let app_compose = work_dir
+            .app_compose()
+            .context("Failed to get app compose")?;
+        let use_mr_config_v3 = !manifest.no_tee
+            && (platform == crate::config::TeePlatform::AmdSevSnp
+                || (platform == crate::config::TeePlatform::Tdx
+                    && cfg.cvm.use_mrconfigid
+                    && !app_compose.key_provider_id.is_empty()));
+        let mr_config = if use_mr_config_v3 {
+            Some(
+                work_dir
+                    .prepare_mr_config_v3(&app_compose)
+                    .context("Failed to prepare mr_config")?,
+            )
+        } else {
+            None
+        };
+        let sys_config_str =
+            make_sys_config(cfg, &manifest, &hex::encode(compose_hash), mr_config)?;
         fs::write(shared_dir.join(SYS_CONFIG), sys_config_str)
             .context("Failed to write vm config")?;
         Ok(())
@@ -1142,6 +1162,7 @@ pub(crate) fn make_sys_config(
     cfg: &Config,
     manifest: &Manifest,
     compose_hash: &str,
+    mr_config: Option<String>,
 ) -> Result<String> {
     let image_path = cfg.image.path.join(&manifest.image);
     let image = Image::load(image_path).context("Failed to load image info")?;
@@ -1160,17 +1181,38 @@ pub(crate) fn make_sys_config(
         bail!("Unsupported image version: {img_ver:?}");
     }
 
-    let sys_config = json!({
+    let mut sys_config = json!({
         "kms_urls": kms_urls,
         "gateway_urls": gateway_urls,
         "pccs_url": cfg.cvm.pccs_url,
         "docker_registry": cfg.cvm.docker_registry,
         "host_api_url": format!("vsock://2:{}/api", cfg.host_api.port),
-        "vm_config": serde_json::to_string(&make_vm_config(cfg, manifest, &image, compose_hash)?)?,
+        "vm_config": serde_json::to_string(&make_vm_config(cfg, manifest, &image, compose_hash, mr_config.clone())?)?,
     });
+    if let Some(mr_config) = mr_config {
+        MrConfigV3::from_document(&mr_config).context("Invalid mr_config document")?;
+        sys_config["mr_config"] = serde_json::to_value(mr_config)?;
+    } else if let Some(mr_config) = mr_config_from_vm_config(&sys_config)? {
+        sys_config["mr_config"] = serde_json::to_value(mr_config)?;
+    }
     let sys_config_str =
         serde_json::to_string(&sys_config).context("Failed to serialize vm config")?;
     Ok(sys_config_str)
+}
+
+fn mr_config_from_vm_config(sys_config: &serde_json::Value) -> Result<Option<String>> {
+    let Some(vm_config) = sys_config.get("vm_config").and_then(|value| value.as_str()) else {
+        return Ok(None);
+    };
+    let vm_config: serde_json::Value = serde_json::from_str(vm_config)?;
+    let Some(mr_config) = vm_config.get("mr_config") else {
+        return Ok(None);
+    };
+    let mr_config = mr_config
+        .as_str()
+        .context("mr_config must be a JSON string")?;
+    MrConfigV3::from_document(mr_config).context("Invalid mr_config document")?;
+    Ok(Some(mr_config.to_string()))
 }
 
 fn file_sha256_hex(path: &Path) -> Result<String> {
@@ -1203,7 +1245,8 @@ fn make_vm_config(
     cfg: &Config,
     manifest: &Manifest,
     image: &Image,
-    compose_hash: &str,
+    _compose_hash: &str,
+    mr_config: Option<String>,
 ) -> Result<serde_json::Value> {
     let os_image_hash = image
         .digest
@@ -1231,9 +1274,11 @@ fn make_vm_config(
     config["spec_version"] = serde_json::Value::from(1);
     if cfg.cvm.platform.resolve() == crate::config::TeePlatform::AmdSevSnp && !manifest.no_tee {
         let rootfs_hash = image_rootfs_hash(image)?;
+        if let Some(mr_config) = mr_config {
+            MrConfigV3::from_document(&mr_config).context("Invalid mr_config document")?;
+            config["mr_config"] = serde_json::Value::String(mr_config);
+        }
         config["sev_snp_measurement"] = json!({
-            "app_id": manifest.app_id,
-            "compose_hash": compose_hash,
             "rootfs_hash": rootfs_hash,
             "base_cmdline": amd_sev_snp_measurement_base_cmdline(image.info.cmdline.as_deref()),
             "docker_files_hash": serde_json::Value::Null,
@@ -1270,21 +1315,18 @@ mod tests {
     }
 
     #[test]
-    fn amd_sev_snp_sys_config_includes_measurement_input_for_kms_auth() {
+    fn amd_sev_snp_sys_config_includes_measurement_input_and_mr_config() -> Result<()> {
         let temp = std::env::temp_dir().join(format!(
             "dstack-vmm-snp-test-{}",
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
+            SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos()
         ));
         let temp = temp.as_path();
         let image_root = temp.join("images");
         let image_dir = image_root.join("dstack-test");
-        fs::create_dir_all(&image_dir).unwrap();
-        fs::write(image_dir.join("kernel"), b"snp-test-kernel").unwrap();
-        fs::write(image_dir.join("initrd"), b"snp-test-initrd").unwrap();
-        fs::write(image_dir.join("rootfs"), b"snp-test-rootfs").unwrap();
+        fs::create_dir_all(&image_dir)?;
+        fs::write(image_dir.join("kernel"), b"snp-test-kernel")?;
+        fs::write(image_dir.join("initrd"), b"snp-test-initrd")?;
+        fs::write(image_dir.join("rootfs"), b"snp-test-rootfs")?;
         fs::write(
             image_dir.join("metadata.json"),
             serde_json::json!({
@@ -1295,10 +1337,9 @@ mod tests {
                 "version": "0.5.11"
             })
             .to_string(),
-        )
-        .unwrap();
+        )?;
 
-        let mut config: Config = Figment::from(load_config_figment(None)).extract().unwrap();
+        let mut config: Config = Figment::from(load_config_figment(None)).extract()?;
         config.image.path = image_root;
         config.cvm.platform = TeePlatform::AmdSevSnp;
         let compose_hash = hex_of(0x22, 32);
@@ -1321,15 +1362,33 @@ mod tests {
             networking: None,
         };
 
-        let sys_config: serde_json::Value =
-            serde_json::from_str(&make_sys_config(&config, &manifest, &compose_hash).unwrap())
-                .unwrap();
-        let vm_config: serde_json::Value =
-            serde_json::from_str(sys_config["vm_config"].as_str().unwrap()).unwrap();
+        let mr_config = MrConfigV3::new(
+            vec![0x11; 20],
+            vec![0x22; 32],
+            dstack_types::KeyProviderKind::None,
+            vec![],
+            vec![0x44; 20],
+        )
+        .to_canonical_json();
+        let sys_config_document =
+            make_sys_config(&config, &manifest, &compose_hash, Some(mr_config))?;
+        let sys_config: serde_json::Value = serde_json::from_str(&sys_config_document)?;
+        let vm_config: serde_json::Value = serde_json::from_str(
+            sys_config["vm_config"]
+                .as_str()
+                .context("vm_config must be a string")?,
+        )?;
         let measurement = &vm_config["sev_snp_measurement"];
+        let mr_config_document = sys_config["mr_config"]
+            .as_str()
+            .context("mr_config must be a string")?;
+        let parsed_mr_config = MrConfigV3::from_document(mr_config_document)?;
 
-        assert_eq!(measurement["app_id"], manifest.app_id);
-        assert_eq!(measurement["compose_hash"], compose_hash);
+        assert_eq!(parsed_mr_config.app_id, vec![0x11; 20]);
+        assert_eq!(parsed_mr_config.compose_hash, vec![0x22; 32]);
+        assert_eq!(vm_config["mr_config"], sys_config["mr_config"]);
+        assert!(measurement.get("app_id").is_none());
+        assert!(measurement.get("compose_hash").is_none());
         assert_eq!(measurement["rootfs_hash"], hex_of(0x33, 32));
         assert_eq!(
             measurement["base_cmdline"],
@@ -1346,7 +1405,11 @@ mod tests {
         assert_eq!(measurement["vcpus"], 2);
         assert_eq!(measurement["vcpu_type"], "EPYC-v4");
         assert_eq!(measurement["ovmf_hash"], "");
-        assert!(measurement["ovmf_sections"].as_array().unwrap().is_empty());
+        assert!(measurement["ovmf_sections"]
+            .as_array()
+            .context("ovmf_sections must be an array")?
+            .is_empty());
+        Ok(())
     }
 }
 

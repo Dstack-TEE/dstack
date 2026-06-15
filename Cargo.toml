@@ -145,6 +145,7 @@ scale = { version = "3.7.4", package = "parity-scale-codec", features = [
 ] }
 serde = { version = "1.0.228", features = ["derive"], default-features = false }
 serde-human-bytes = "0.1.2"
+serde_jcs = "0.2.0"
 rmp-serde = "1.3.1"
 serde_json = { version = "1.0.140", default-features = false }
 serde_ini = "0.2.0"

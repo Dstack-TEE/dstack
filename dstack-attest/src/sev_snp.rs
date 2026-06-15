@@ -15,6 +15,7 @@ pub fn get_report(report_data: [u8; 64]) -> Result<SnpQuote> {
     Ok(SnpQuote {
         report: quote.report,
         cert_chain: quote.cert_chain,
+        mr_config: String::new(),
     })
 }
 

@@ -19,7 +19,7 @@ use dcap_qvl::{
 };
 #[cfg(feature = "quote")]
 use dstack_types::SysConfig;
-use dstack_types::{Platform, VmConfig};
+use dstack_types::{mr_config::MrConfigV3, KeyProviderInfo, Platform, VmConfig};
 use ez_hash::{sha256, Hasher, Sha256, Sha384};
 use or_panic::ResultOrPanic;
 use scale::{Decode, Encode, Error as ScaleError, Input, Output};
@@ -91,9 +91,15 @@ fn platform_from_legacy_quote(quote: AttestationQuote) -> PlatformEvidence {
         AttestationQuote::DstackTdx(TdxQuote { quote, event_log }) => {
             PlatformEvidence::Tdx { quote, event_log }
         }
-        AttestationQuote::DstackAmdSevSnp(SnpQuote { report, cert_chain }) => {
-            PlatformEvidence::SevSnp { report, cert_chain }
-        }
+        AttestationQuote::DstackAmdSevSnp(SnpQuote {
+            report,
+            cert_chain,
+            mr_config,
+        }) => PlatformEvidence::SevSnp {
+            report,
+            cert_chain,
+            mr_config,
+        },
         AttestationQuote::DstackGcpTdx(DstackGcpTdxQuote {
             tdx_quote: TdxQuote { quote, event_log },
             tpm_quote,
@@ -113,9 +119,15 @@ fn platform_into_legacy_quote(platform: PlatformEvidence) -> AttestationQuote {
         PlatformEvidence::Tdx { quote, event_log } => {
             AttestationQuote::DstackTdx(TdxQuote { quote, event_log })
         }
-        PlatformEvidence::SevSnp { report, cert_chain } => {
-            AttestationQuote::DstackAmdSevSnp(SnpQuote { report, cert_chain })
-        }
+        PlatformEvidence::SevSnp {
+            report,
+            cert_chain,
+            mr_config,
+        } => AttestationQuote::DstackAmdSevSnp(SnpQuote {
+            report,
+            cert_chain,
+            mr_config,
+        }),
         PlatformEvidence::GcpTdx {
             quote,
             event_log,
@@ -169,7 +181,43 @@ fn decode_vm_config_with_fallback(config: &str, fallback_config: &str) -> Result
         config
     };
     let config = if config.is_empty() { "{}" } else { config };
-    serde_json::from_str(config).context("Failed to parse vm config")
+    let config = vm_config_json_from_config(config).unwrap_or(Cow::Borrowed(config));
+    serde_json::from_str(&config).context("Failed to parse vm config")
+}
+
+fn vm_config_json_from_config(config: &str) -> Option<Cow<'_, str>> {
+    let value = serde_json::from_str::<serde_json::Value>(config).ok()?;
+    value
+        .get("vm_config")
+        .and_then(|value| value.as_str())
+        .map(|vm_config| Cow::Owned(vm_config.to_string()))
+}
+
+fn mr_config_document_from_value(value: &serde_json::Value) -> Result<Option<String>> {
+    let Some(mr_config) = value.get("mr_config") else {
+        return Ok(None);
+    };
+    let document = mr_config
+        .as_str()
+        .context("amd sev-snp mr_config must be a JSON string")?;
+    MrConfigV3::from_document(document).context("Invalid amd sev-snp mr_config document")?;
+    Ok(Some(document.to_string()))
+}
+
+fn mr_config_document_from_config(config: &str) -> Result<Option<String>> {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(config) else {
+        return Ok(None);
+    };
+    if let Some(mr_config) = mr_config_document_from_value(&value)? {
+        return Ok(Some(mr_config));
+    }
+
+    let Some(vm_config) = value.get("vm_config").and_then(|value| value.as_str()) else {
+        return Ok(None);
+    };
+    let vm_config = serde_json::from_str::<serde_json::Value>(vm_config)
+        .context("Failed to parse nested vm_config for amd sev-snp mr_config")?;
+    mr_config_document_from_value(&vm_config)
 }
 
 /// Attestation mode
@@ -267,10 +315,9 @@ impl AttestationMode {
     pub fn is_composable(&self) -> bool {
         match self {
             Self::DstackTdx => true,
-            // SEV-SNP launch measurement does not provide a TDX RTMR3-equivalent
-            // runtime event extension path yet, so runtime events are
-            // informational until an SNP-specific app binding is added.
-            Self::DstackAmdSevSnp => false,
+            // SEV-SNP binds app identity through HOST_DATA carrying the hash of
+            // an attached MrConfigV3 document.
+            Self::DstackAmdSevSnp => true,
             Self::DstackGcpTdx => true,
             Self::DstackNitroEnclave => false,
         }
@@ -414,6 +461,8 @@ pub struct SnpQuote {
     pub report: Vec<u8>,
     /// Optional certificate chain blobs, when exposed by the kernel/firmware path.
     pub cert_chain: Vec<Vec<u8>>,
+    /// MrConfigV3 document bound by the report HOST_DATA field.
+    pub mr_config: String,
 }
 
 /// Represents an NSM (Nitro Security Module) attestation document
@@ -615,6 +664,17 @@ impl AttestationV1 {
     #[errify::errify("decode app info")]
     pub fn decode_app_info_ex(&self, boottime_mr: bool, vm_config: &str) -> Result<AppInfo> {
         let runtime_events = self.stack.runtime_events();
+        if let PlatformEvidence::SevSnp {
+            report, mr_config, ..
+        } = &self.platform
+        {
+            return decode_app_info_sev_snp(
+                report,
+                Some(mr_config),
+                self.stack.config(),
+                vm_config,
+            );
+        }
         let key_provider_info = if boottime_mr {
             vec![]
         } else {
@@ -645,9 +705,7 @@ impl AttestationV1 {
                     nsm_quote: nsm_quote.clone(),
                 })?
             }
-            PlatformEvidence::SevSnp { .. } => {
-                bail!("Unsupported attestation quote");
-            }
+            PlatformEvidence::SevSnp { .. } => unreachable!("handled above"),
         };
         let compose_hash = if platform_attestation_mode(&self.platform).is_composable() {
             find_event_payload(runtime_events, "compose-hash").unwrap_or_default()
@@ -770,14 +828,18 @@ impl AttestationV1 {
                     timestamp: verified_report.timestamp,
                 })
             }
-            PlatformEvidence::SevSnp { report, cert_chain } => {
-                DstackVerifiedReport::DstackAmdSevSnp(
-                    crate::amd_sev_snp::verify_amd_snp_evidence_with_kds_fallback(
-                        report,
-                        cert_chain,
-                        &report_data,
-                    )?,
-                )
+            PlatformEvidence::SevSnp {
+                report,
+                cert_chain,
+                mr_config,
+            } => {
+                let verified = crate::amd_sev_snp::verify_amd_snp_evidence_with_kds_fallback(
+                    report,
+                    cert_chain,
+                    &report_data,
+                )?;
+                verify_snp_mr_config_host_data(mr_config, &verified.host_data)?;
+                DstackVerifiedReport::DstackAmdSevSnp(verified)
             }
         };
 
@@ -944,6 +1006,7 @@ mod compatibility_tests {
         let quote = AttestationQuote::DstackAmdSevSnp(SnpQuote {
             report: Vec::new(),
             cert_chain: Vec::new(),
+            mr_config: String::new(),
         });
         assert_eq!(quote.encode()[0], 3);
     }
@@ -1088,6 +1151,80 @@ impl GetDeviceId for DstackVerifiedReport {
 struct Mrs {
     mr_system: [u8; 32],
     mr_aggregated: [u8; 32],
+}
+
+fn key_provider_info_from_mr_config(mr_config: &MrConfigV3) -> Result<Vec<u8>> {
+    serde_json::to_vec(&KeyProviderInfo::new(
+        mr_config.key_provider_name().to_string(),
+        hex::encode(&mr_config.key_provider_id),
+    ))
+    .context("Failed to serialize key provider info")
+}
+
+fn verify_snp_mr_config_host_data(
+    mr_config_document: &str,
+    host_data: &[u8; 32],
+) -> Result<MrConfigV3> {
+    let mr_config = MrConfigV3::from_document(mr_config_document)
+        .context("Invalid amd sev-snp mr_config document")?;
+    let expected = MrConfigV3::snp_host_data_from_document(mr_config_document);
+    if expected != *host_data {
+        bail!(
+            "amd sev-snp HOST_DATA mismatch, quoted: {}, expected: {}",
+            hex::encode(host_data),
+            hex::encode(expected),
+        );
+    }
+    Ok(mr_config)
+}
+
+fn decode_mr_sev_snp(measurement: &[u8; 48], host_data: &[u8; 32]) -> Mrs {
+    let mr_system = sha2::Sha256::digest(measurement).into();
+    let mr_aggregated = {
+        let mut hasher = sha2::Sha256::new();
+        hasher.update(measurement);
+        hasher.update(host_data);
+        hasher.finalize().into()
+    };
+    Mrs {
+        mr_system,
+        mr_aggregated,
+    }
+}
+
+fn decode_app_info_sev_snp(
+    report: &[u8],
+    mr_config: Option<&str>,
+    embedded_config: &str,
+    external_vm_config: &str,
+) -> Result<AppInfo> {
+    let parsed = crate::amd_sev_snp::parse_amd_snp_report(report)?;
+    let mr_config_document = if let Some(mr_config) = mr_config {
+        Cow::Borrowed(mr_config)
+    } else if let Some(mr_config) = mr_config_document_from_config(external_vm_config)? {
+        Cow::Owned(mr_config)
+    } else if let Some(mr_config) = mr_config_document_from_config(embedded_config)? {
+        Cow::Owned(mr_config)
+    } else {
+        bail!("amd sev-snp mr_config is missing");
+    };
+    let mr_config = verify_snp_mr_config_host_data(mr_config_document.as_ref(), &parsed.host_data)?;
+
+    let key_provider_info = key_provider_info_from_mr_config(&mr_config)?;
+    let os_image_hash =
+        decode_vm_config_with_fallback(external_vm_config, embedded_config)?.os_image_hash;
+    let mrs = decode_mr_sev_snp(&parsed.measurement, &parsed.host_data);
+
+    Ok(AppInfo {
+        app_id: mr_config.app_id,
+        instance_id: mr_config.instance_id,
+        device_id: sha256(parsed.chip_id).to_vec(),
+        mr_system: mrs.mr_system,
+        mr_aggregated: mrs.mr_aggregated,
+        key_provider_info,
+        os_image_hash,
+        compose_hash: mr_config.compose_hash,
+    })
 }
 
 fn decode_mr_gcp_tpm_from_v1(
@@ -1318,6 +1455,9 @@ impl<T: GetDeviceId> Attestation<T> {
 
     #[errify::errify("decode app info")]
     pub fn decode_app_info_ex(&self, boottime_mr: bool, vm_config: &str) -> Result<AppInfo> {
+        if let AttestationQuote::DstackAmdSevSnp(q) = &self.quote {
+            return decode_app_info_sev_snp(&q.report, Some(&q.mr_config), &self.config, vm_config);
+        }
         let key_provider_info = if boottime_mr {
             vec![]
         } else {
@@ -1336,9 +1476,7 @@ impl<T: GetDeviceId> Attestation<T> {
             AttestationQuote::DstackTdx(q) => {
                 self.decode_mr_tdx(boottime_mr, &mr_key_provider, q)?
             }
-            AttestationQuote::DstackAmdSevSnp(_) => {
-                bail!("unsupported attestation quote for app info decoding");
-            }
+            AttestationQuote::DstackAmdSevSnp(_) => unreachable!("handled above"),
             AttestationQuote::DstackGcpTdx(q) => {
                 self.decode_mr_gcp_tpm(boottime_mr, &mr_key_provider, &os_image_hash, &q.tpm_quote)?
             }
@@ -1472,7 +1610,7 @@ impl Attestation {
             vec![]
         };
 
-        let quote = match mode {
+        let mut quote = match mode {
             AttestationMode::DstackTdx => {
                 let quote = tdx_attest::get_quote(report_data).context("Failed to get quote")?;
                 let event_log =
@@ -1522,6 +1660,10 @@ impl Attestation {
                 .context("Failed to serialize config")?
             }
         };
+        if let AttestationQuote::DstackAmdSevSnp(quote) = &mut quote {
+            quote.mr_config = mr_config_document_from_config(&config)?
+                .context("amd sev-snp mr_config is missing")?;
+        }
 
         Ok(Self {
             quote,
@@ -1549,8 +1691,14 @@ impl Attestation {
                 let report = self.verify_tdx(pccs_url, &q.quote).await?;
                 DstackVerifiedReport::DstackTdx(report)
             }
-            AttestationQuote::DstackAmdSevSnp(_) => {
-                bail!("Unsupported attestation mode: {:?}", self.quote.mode());
+            AttestationQuote::DstackAmdSevSnp(q) => {
+                let verified = crate::amd_sev_snp::verify_amd_snp_evidence_with_kds_fallback(
+                    &q.report,
+                    &q.cert_chain,
+                    &self.report_data,
+                )?;
+                verify_snp_mr_config_host_data(&q.mr_config, &verified.host_data)?;
+                DstackVerifiedReport::DstackAmdSevSnp(verified)
             }
             AttestationQuote::DstackGcpTdx(q) => {
                 let tdx_report = self.verify_tdx(pccs_url, &q.tdx_quote.quote).await?;

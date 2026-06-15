@@ -84,9 +84,18 @@ impl AmdSnpTcbInfo {
 pub struct VerifiedAmdSnpReport {
     pub measurement: [u8; 48],
     pub report_data: [u8; 64],
+    pub host_data: [u8; 32],
     pub chip_id: [u8; 64],
     pub tcb_info: AmdSnpTcbInfo,
     pub advisory_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ParsedAmdSnpReport {
+    pub measurement: [u8; 48],
+    pub report_data: [u8; 64],
+    pub host_data: [u8; 32],
+    pub chip_id: [u8; 64],
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -128,6 +137,60 @@ pub fn verify_amd_snp_attestation(
             encoding: CertEncoding::Pem,
         },
     )
+}
+
+pub fn parse_amd_snp_report(report_bytes: &[u8]) -> Result<ParsedAmdSnpReport> {
+    if report_bytes.len() != 1184 {
+        bail!(
+            "invalid amd sev-snp report length: expected 1184 bytes, got {}",
+            report_bytes.len()
+        );
+    }
+    let report = AttestationReport::from_bytes(report_bytes)
+        .map_err(|err| anyhow::anyhow!("failed to parse amd sev-snp report: {err}"))?;
+    parsed_amd_snp_report_from_report(&report)
+}
+
+fn parsed_amd_snp_report_from_report(report: &AttestationReport) -> Result<ParsedAmdSnpReport> {
+    let mut measurement = [0u8; 48];
+    measurement.copy_from_slice(
+        report
+            .measurement
+            .as_ref()
+            .get(..48)
+            .context("amd sev-snp measurement too short")?,
+    );
+    let mut report_data = [0u8; 64];
+    report_data.copy_from_slice(
+        report
+            .report_data
+            .as_ref()
+            .get(..64)
+            .context("amd sev-snp report_data too short")?,
+    );
+    let mut host_data = [0u8; 32];
+    host_data.copy_from_slice(
+        report
+            .host_data
+            .as_ref()
+            .get(..32)
+            .context("amd sev-snp host_data too short")?,
+    );
+    let mut chip_id = [0u8; 64];
+    chip_id.copy_from_slice(
+        report
+            .chip_id
+            .as_ref()
+            .get(..64)
+            .context("amd sev-snp chip_id too short")?,
+    );
+
+    Ok(ParsedAmdSnpReport {
+        measurement,
+        report_data,
+        host_data,
+        chip_id,
+    })
 }
 
 fn verify_amd_snp_attestation_with_certs(
@@ -180,35 +243,13 @@ fn verify_amd_snp_attestation_with_cert_chain(
     })?;
     validate_amd_snp_report_policy(&report)?;
 
-    let mut measurement = [0u8; 48];
-    measurement.copy_from_slice(
-        report
-            .measurement
-            .as_ref()
-            .get(..48)
-            .context("amd sev-snp measurement too short")?,
-    );
-    let mut report_data = [0u8; 64];
-    report_data.copy_from_slice(
-        report
-            .report_data
-            .as_ref()
-            .get(..64)
-            .context("amd sev-snp report_data too short")?,
-    );
-    let mut chip_id = [0u8; 64];
-    chip_id.copy_from_slice(
-        report
-            .chip_id
-            .as_ref()
-            .get(..64)
-            .context("amd sev-snp chip_id too short")?,
-    );
+    let parsed = parsed_amd_snp_report_from_report(&report)?;
 
     Ok(VerifiedAmdSnpReport {
-        measurement,
-        report_data,
-        chip_id,
+        measurement: parsed.measurement,
+        report_data: parsed.report_data,
+        host_data: parsed.host_data,
+        chip_id: parsed.chip_id,
         tcb_info: AmdSnpTcbInfo::from_report(&report),
         // AMD SEV-SNP attestation reports and VCEKs do not carry a direct
         // advisory list. Keep this explicit and empty so downstream auth stays

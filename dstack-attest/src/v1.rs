@@ -4,6 +4,7 @@
 
 use anyhow::{anyhow, bail, Context, Result};
 use cc_eventlog::{RuntimeEvent, TdxEvent};
+use dstack_types::mr_config::MrConfigV3;
 use serde::{Deserialize, Serialize};
 use tpm_types::TpmQuote;
 
@@ -29,6 +30,7 @@ pub enum PlatformEvidence {
     SevSnp {
         report: Vec<u8>,
         cert_chain: Vec<Vec<u8>>,
+        mr_config: String,
     },
 }
 
@@ -75,6 +77,18 @@ impl PlatformEvidence {
             Self::SevSnp { cert_chain, .. } => Some(cert_chain.as_slice()),
             _ => None,
         }
+    }
+
+    pub fn sev_snp_mr_config_document(&self) -> Option<&str> {
+        match self {
+            Self::SevSnp { mr_config, .. } => Some(mr_config.as_str()),
+            _ => None,
+        }
+    }
+
+    pub fn sev_snp_mr_config(&self) -> Option<MrConfigV3> {
+        self.sev_snp_mr_config_document()
+            .and_then(|document| MrConfigV3::from_document(document).ok())
     }
 
     pub fn into_stripped(self) -> Self {
@@ -260,11 +274,16 @@ impl Attestation {
             PlatformEvidence::SevSnp {
                 mut report,
                 cert_chain,
+                mr_config,
             } => {
                 if report.len() >= SNP_REPORT_DATA_RANGE.end {
                     report[SNP_REPORT_DATA_RANGE].copy_from_slice(&report_data);
                 }
-                PlatformEvidence::SevSnp { report, cert_chain }
+                PlatformEvidence::SevSnp {
+                    report,
+                    cert_chain,
+                    mr_config,
+                }
             }
             other => other,
         };
@@ -301,6 +320,17 @@ impl Attestation {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_mr_config_document() -> String {
+        MrConfigV3::new(
+            vec![0x11; 20],
+            vec![0x22; 32],
+            dstack_types::KeyProviderKind::None,
+            Vec::new(),
+            vec![0x33; 20],
+        )
+        .to_canonical_json()
+    }
 
     #[test]
     fn msgpack_roundtrip_preserves_attestation() {
@@ -363,6 +393,7 @@ mod tests {
             PlatformEvidence::SevSnp {
                 report: vec![0x11; 1184],
                 cert_chain: vec![vec![0x22, 0x33]],
+                mr_config: test_mr_config_document(),
             },
             StackEvidence::Dstack {
                 report_data: vec![9u8; 64],
@@ -391,6 +422,7 @@ mod tests {
             PlatformEvidence::SevSnp {
                 report,
                 cert_chain: vec![],
+                mr_config: test_mr_config_document(),
             },
             StackEvidence::Dstack {
                 report_data: vec![0x22; 64],

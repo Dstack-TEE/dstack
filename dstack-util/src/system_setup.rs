@@ -32,7 +32,7 @@ use ra_rpc::{
     Attestation,
 };
 use ra_tls::{
-    attestation::QuoteContentType,
+    attestation::{AttestationMode, QuoteContentType},
     cert::{generate_ra_cert, CertConfigV2, CertSigningRequestV2, Csr},
 };
 use rand::Rng as _;
@@ -1386,6 +1386,9 @@ impl<'a> Stage0<'a> {
         let truncated_compose_hash = truncate(&compose_hash, 20);
         let key_provider = self.shared.app_compose.key_provider();
         let mut instance_info = self.shared.instance_info.clone();
+        let is_snp = AttestationMode::detect()
+            .map(|mode| mode == AttestationMode::DstackAmdSevSnp)
+            .unwrap_or(false);
 
         if instance_info.app_id.is_empty() {
             instance_info.app_id = truncated_compose_hash.to_vec();
@@ -1398,7 +1401,7 @@ impl<'a> Stage0<'a> {
         }
 
         let disk_reusable = !key_provider.is_none();
-        if (!disk_reusable) || instance_info.instance_id_seed.is_empty() {
+        if ((!disk_reusable) && !is_snp) || instance_info.instance_id_seed.is_empty() {
             instance_info.instance_id_seed = {
                 let mut rand_id = vec![0u8; 20];
                 getrandom::fill(&mut rand_id)?;
@@ -1410,9 +1413,11 @@ impl<'a> Stage0<'a> {
         } else {
             let mut id_path = instance_info.instance_id_seed.clone();
             id_path.extend_from_slice(&instance_info.app_id);
-            if let Some(binding) = platform_instance_binding()? {
-                info!("mixing platform per-instance binding into instance_id");
-                id_path.extend_from_slice(&binding);
+            if !is_snp {
+                if let Some(binding) = platform_instance_binding()? {
+                    info!("mixing platform per-instance binding into instance_id");
+                    id_path.extend_from_slice(&binding);
+                }
             }
             sha256(&id_path)[..20].to_vec()
         };
@@ -1446,6 +1451,7 @@ impl<'a> Stage0<'a> {
                 .try_into()
                 .ok()
                 .context("Invalid app id")?,
+            &app_info.instance_info.instance_id,
             keys.key_provider.kind(),
             keys.key_provider.id(),
         )?;

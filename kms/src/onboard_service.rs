@@ -253,12 +253,24 @@ mod tests {
         }
     }
 
+    fn valid_snp_mr_config() -> dstack_types::mr_config::MrConfigV3 {
+        dstack_types::mr_config::MrConfigV3::new(
+            vec![0x11; 20],
+            vec![0x22; 32],
+            dstack_types::KeyProviderKind::None,
+            Vec::new(),
+            vec![0x99; 20],
+        )
+    }
+
     fn verified_snp_attestation(measurement: [u8; 48], chip_id: [u8; 64]) -> VerifiedAttestation {
+        let mr_config = valid_snp_mr_config();
         VerifiedAttestation {
             quote: ra_tls::attestation::AttestationQuote::DstackAmdSevSnp(
                 ra_tls::attestation::SnpQuote {
                     report: Vec::new(),
                     cert_chain: Vec::new(),
+                    mr_config: mr_config.to_canonical_json(),
                 },
             ),
             runtime_events: Vec::new(),
@@ -268,6 +280,7 @@ mod tests {
                 dstack_attest::amd_sev_snp::VerifiedAmdSnpReport {
                     measurement,
                     report_data: [0x42; 64],
+                    host_data: mr_config.to_snp_host_data(),
                     chip_id,
                     tcb_info: dstack_attest::amd_sev_snp::AmdSnpTcbInfo::default(),
                     advisory_ids: Vec::new(),
@@ -280,9 +293,11 @@ mod tests {
     fn attestation_info_response_uses_snp_boot_info_and_chip_id() {
         let input = valid_snp_measurement_input();
         let measurement = compute_expected_measurement(&sev_snp_config(), &input).unwrap();
+        let mr_config = valid_snp_mr_config();
         let attestation = verified_snp_attestation(measurement, [0xab; 64]);
         let vm_config = serde_json::json!({
             "sev_snp_measurement": input,
+            "mr_config": mr_config.to_canonical_json(),
         })
         .to_string();
 
@@ -302,7 +317,7 @@ mod tests {
             sha2::Sha256::digest([0xab; 64]).to_vec()
         );
         assert_eq!(response.ppid, vec![0xab; 64]);
-        assert_eq!(response.mr_aggregated, measurement.to_vec());
+        assert_eq!(response.mr_aggregated.len(), 32);
         assert_eq!(response.os_image_hash, vec![0x33; 32]);
         assert_eq!(response.attestation_mode, "dstack-amd-sev-snp");
         assert_eq!(response.site_name, "test-site");

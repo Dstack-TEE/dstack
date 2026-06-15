@@ -58,6 +58,7 @@ pub(crate) fn build_boot_info(
         }
     };
     let app_info = att.decode_app_info_ex(use_boottime_mr, vm_config_str)?;
+    ensure_app_id_len(&app_info.app_id)?;
     Ok(BootInfo {
         attestation_mode: att.quote.mode(),
         mr_aggregated: app_info.mr_aggregated.to_vec(),
@@ -71,6 +72,13 @@ pub(crate) fn build_boot_info(
         tcb_status,
         advisory_ids,
     })
+}
+
+pub(crate) fn ensure_app_id_len(app_id: &[u8]) -> Result<()> {
+    if app_id.len() != 20 {
+        bail!("app_id must be 20 bytes");
+    }
+    Ok(())
 }
 
 pub(crate) async fn local_kms_boot_info(
@@ -264,4 +272,19 @@ pub(crate) async fn ensure_kms_allowed(
         bail!("boot denied: {}", response.reason);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn app_id_len_must_be_20_bytes() {
+        assert!(ensure_app_id_len(&[0u8; 20]).is_ok());
+
+        match ensure_app_id_len(&[0u8; 19]) {
+            Ok(()) => panic!("19-byte app_id must reject"),
+            Err(err) => assert!(err.to_string().contains("app_id must be 20 bytes")),
+        }
+    }
 }

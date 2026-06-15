@@ -18,16 +18,16 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use super::{image::Image, GpuConfig, ImageInfo, VmState};
+use super::{image::Image, GpuConfig, VmState};
 use anyhow::{bail, Context, Result};
 use base64::prelude::*;
 use bon::Builder;
 use dstack_types::{
-    mr_config::MrConfig,
+    mr_config::{MrConfig, MrConfigV3},
     shared_filenames::{
-        APP_COMPOSE, ENCRYPTED_ENV, HOST_SHARED_DISK_LABEL, INSTANCE_INFO, USER_CONFIG,
+        APP_COMPOSE, ENCRYPTED_ENV, HOST_SHARED_DISK_LABEL, INSTANCE_INFO, SYS_CONFIG, USER_CONFIG,
     },
-    AppCompose, KeyProviderKind,
+    AppCompose, KeyProviderKind, SysConfig,
 };
 use dstack_vmm_rpc as pb;
 use sha2::{Digest, Sha256};
@@ -75,10 +75,12 @@ fn sanitize_optional<T: AsRef<str>>(value: Option<T>) -> Option<T> {
     value.filter(|value| !value.as_ref().trim().is_empty())
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct InstanceInfo {
-    #[serde(default)]
-    pub instance_id: String,
+    #[serde(default, with = "hex_bytes")]
+    pub instance_id_seed: Vec<u8>,
+    #[serde(default, with = "hex_bytes")]
+    pub instance_id: Vec<u8>,
     #[serde(default, with = "hex_bytes")]
     pub app_id: Vec<u8>,
 }
@@ -348,8 +350,12 @@ impl VmState {
         }
         let uptime = display_ts(proc_state.and_then(|info| info.state.started_at.as_ref()));
         let exited_at = display_ts(proc_state.and_then(|info| info.state.stopped_at.as_ref()));
-        let instance_id =
-            sanitize_optional(workdir.instance_info().ok().map(|info| info.instance_id));
+        let instance_id = sanitize_optional(
+            workdir
+                .instance_info()
+                .ok()
+                .map(|info| hex::encode(info.instance_id)),
+        );
         VmInfo {
             manifest: self.config.manifest.clone(),
             workdir: workdir.path().to_path_buf(),
@@ -369,10 +375,7 @@ impl VmState {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        amd_sev_snp_measured_cmdline, amd_sev_snp_memory_backend_arg, amd_sev_snp_rootfs_hash,
-        sanitize_optional, virtio_pci_device, ImageInfo,
-    };
+    use super::{amd_sev_snp_memory_backend_arg, sanitize_optional, virtio_pci_device};
 
     #[test]
     fn sanitize_optional_filters_empty_owned_values() {
@@ -403,38 +406,6 @@ mod tests {
     }
 
     #[test]
-    fn amd_sev_snp_measured_cmdline_binds_app_identity() {
-        assert_eq!(
-            amd_sev_snp_measured_cmdline(
-                "console=ttyS0 loglevel=7",
-                "22",
-                "33",
-                "1111111111111111111111111111111111111111",
-            ),
-            "console=ttyS0 loglevel=7 docker_compose_hash=22 rootfs_hash=33 app_id=1111111111111111111111111111111111111111"
-        );
-    }
-
-    #[test]
-    fn amd_sev_snp_rootfs_hash_falls_back_to_dstack_cmdline() {
-        let info = ImageInfo {
-            cmdline: Some("console=ttyS0 dstack.rootfs_hash=abc123 dstack.rootfs_size=100".into()),
-            kernel: "kernel".into(),
-            initrd: "initrd".into(),
-            hda: None,
-            rootfs: None,
-            bios: None,
-            rootfs_hash: None,
-            shared_ro: false,
-            version: "0.5.11".into(),
-            is_dev: false,
-            ovmf_variant: None,
-        };
-
-        assert_eq!(amd_sev_snp_rootfs_hash(&info).unwrap(), "abc123");
-    }
-
-    #[test]
     fn amd_sev_snp_uses_confidential_virtio_pci_options() {
         assert_eq!(
             virtio_pci_device("virtio-blk-pci,drive=hd0", true),
@@ -445,18 +416,6 @@ mod tests {
             "virtio-blk-pci,drive=hd0"
         );
     }
-}
-
-fn amd_sev_snp_rootfs_hash(info: &ImageInfo) -> Result<&str> {
-    if let Some(rootfs_hash) = info.rootfs_hash.as_deref() {
-        return Ok(rootfs_hash);
-    }
-    info.cmdline
-        .as_deref()
-        .unwrap_or_default()
-        .split_whitespace()
-        .find_map(|param| param.strip_prefix("dstack.rootfs_hash="))
-        .ok_or_else(|| anyhow::anyhow!("rootfs_hash is required for amd sev-snp"))
 }
 
 fn virtio_pci_device(device: &str, snp: bool) -> String {
@@ -823,28 +782,9 @@ impl VmConfig {
             }
         }
 
-        // Add kernel command line. SNP launch measurement includes app identity
-        // through the measured QEMU kernel command line, matching TDX's
-        // app-id-in-measured-identity semantics without relying on post-launch
-        // RTMRs (which SNP does not have).
-        let cmdline = match (&self.image.info.cmdline, cfg.platform.resolve()) {
-            (Some(cmdline), TeePlatform::AmdSevSnp) if !self.manifest.no_tee => {
-                let compose_hash = hex::encode(
-                    workdir
-                        .app_compose_hash()
-                        .context("Failed to get compose hash")?,
-                );
-                let rootfs_hash = amd_sev_snp_rootfs_hash(&self.image.info)?;
-                Some(amd_sev_snp_measured_cmdline(
-                    cmdline,
-                    &compose_hash,
-                    rootfs_hash,
-                    &self.manifest.app_id,
-                ))
-            }
-            (Some(cmdline), _) => Some(cmdline.clone()),
-            (None, _) => None,
-        };
+        // SNP app identity is bound through HOST_DATA, so the measured cmdline
+        // remains the image-provided cmdline.
+        let cmdline = self.image.info.cmdline.clone();
         if let Some(cmdline) = cmdline {
             command.arg("-append").arg(cmdline);
         }
@@ -923,7 +863,7 @@ impl VmConfig {
                 self.configure_tdx_guest(command, workdir, cfg, app_compose)?;
             }
             TeePlatform::AmdSevSnp => {
-                self.configure_amd_sev_snp_guest(command, cfg, mem);
+                self.configure_amd_sev_snp_guest(command, workdir, cfg, mem)?;
             }
         }
         Ok(())
@@ -941,33 +881,47 @@ impl VmConfig {
 
         // Compute mrconfigid if needed
         let mrconfigid = if cfg.use_mrconfigid && support_mr_config_id {
-            let compose_hash = workdir
-                .app_compose_hash()
-                .context("Failed to get compose hash")?;
-            let mr_config = if app_compose.key_provider_id.is_empty() {
-                MrConfig::V1 {
-                    compose_hash: &compose_hash,
-                }
+            if let Some(mr_config_document) = workdir
+                .sys_config()
+                .context("Failed to read sys config for tdx mrconfigid")?
+                .mr_config
+            {
+                MrConfigV3::from_document(&mr_config_document)
+                    .context("Invalid mr_config document")?;
+                Some(
+                    BASE64_STANDARD.encode(MrConfigV3::tdx_mr_config_id_from_document(
+                        &mr_config_document,
+                    )),
+                )
             } else {
-                let instance_info = workdir
-                    .instance_info()
-                    .context("Failed to get instance info")?;
-                let app_id = if instance_info.app_id.is_empty() {
-                    &compose_hash[..20]
+                let compose_hash = workdir
+                    .app_compose_hash()
+                    .context("Failed to get compose hash")?;
+                let mr_config = if app_compose.key_provider_id.is_empty() {
+                    MrConfig::V1 {
+                        compose_hash: &compose_hash,
+                    }
                 } else {
-                    &instance_info.app_id
-                };
+                    let instance_info = workdir
+                        .instance_info()
+                        .context("Failed to get instance info")?;
+                    let app_id = if instance_info.app_id.is_empty() {
+                        &compose_hash[..20]
+                    } else {
+                        &instance_info.app_id
+                    };
 
-                let key_provider = app_compose.key_provider();
-                let key_provider_id = &app_compose.key_provider_id;
-                MrConfig::V2 {
-                    compose_hash: &compose_hash,
-                    app_id: &app_id.try_into().context("Invalid app ID")?,
-                    key_provider,
-                    key_provider_id,
-                }
-            };
-            Some(BASE64_STANDARD.encode(mr_config.to_mr_config_id()))
+                    let key_provider = app_compose.key_provider();
+                    let key_provider_id = &app_compose.key_provider_id;
+                    MrConfig::V2 {
+                        compose_hash: &compose_hash,
+                        app_id: &app_id.try_into().context("Invalid app ID")?,
+                        key_provider,
+                        key_provider_id,
+                    }
+                };
+                Some(BASE64_STANDARD.encode(mr_config.to_mr_config_id()))
+            }
         } else {
             None
         };
@@ -1012,19 +966,35 @@ impl VmConfig {
         Ok(())
     }
 
-    fn configure_amd_sev_snp_guest(&self, command: &mut Command, cfg: &CvmConfig, mem: u32) {
+    fn configure_amd_sev_snp_guest(
+        &self,
+        command: &mut Command,
+        workdir: &VmWorkDir,
+        cfg: &CvmConfig,
+        mem: u32,
+    ) -> Result<()> {
+        let mr_config_document = workdir
+            .sys_config()
+            .context("Failed to read sys config for amd sev-snp host-data")?
+            .mr_config
+            .context("mr_config is required for amd sev-snp host-data")?;
+        MrConfigV3::from_document(&mr_config_document).context("Invalid mr_config document")?;
+        let host_data =
+            BASE64_STANDARD.encode(MrConfigV3::snp_host_data_from_document(&mr_config_document));
+
         command
             .arg("-object")
             .arg(amd_sev_snp_memory_backend_arg(mem));
-        command
-            .arg("-object")
-            .arg("sev-snp-guest,id=sev0,policy=0x30000,sev-device=/dev/sev,kernel-hashes=on,author-key-enabled=on,cbitpos=51,reduced-phys-bits=1");
+        command.arg("-object").arg(format!(
+            "sev-snp-guest,id=sev0,policy=0x30000,sev-device=/dev/sev,kernel-hashes=on,host-data={host_data},author-key-enabled=on,cbitpos=51,reduced-phys-bits=1"
+        ));
         command.arg("-machine").arg(
             "q35,kernel-irqchip=split,confidential-guest-support=sev0,memory-backend=ram1,hpet=off",
         );
         if cfg.qgs_port.is_some() {
             tracing::warn!("qgs_port is ignored for amd sev-snp guests");
         }
+        Ok(())
     }
 
     fn configure_smbios(&self, command: &mut Command, cfg: &CvmConfig) {
@@ -1074,21 +1044,6 @@ impl VmConfig {
 
 fn amd_sev_snp_memory_backend_arg(mem: u32) -> String {
     format!("memory-backend-memfd,id=ram1,size={mem}M,share=true,prealloc=false")
-}
-
-fn amd_sev_snp_measured_cmdline(
-    base_cmdline: &str,
-    compose_hash: &str,
-    rootfs_hash: &str,
-    app_id: &str,
-) -> String {
-    format!(
-        "{} docker_compose_hash={} rootfs_hash={} app_id={}",
-        base_cmdline.trim(),
-        compose_hash,
-        rootfs_hash,
-        app_id
-    )
 }
 
 /// Round up a value to the nearest multiple of another value.
@@ -1308,6 +1263,77 @@ impl VmWorkDir {
         let info_file = self.instance_info_path();
         let info: InstanceInfo = serde_json::from_slice(&fs::read(&info_file)?)?;
         Ok(info)
+    }
+
+    pub fn instance_info_or_default(&self) -> Result<InstanceInfo> {
+        match self.instance_info() {
+            Ok(info) => Ok(info),
+            Err(err) => match err.downcast_ref::<std::io::Error>() {
+                Some(io_err) if io_err.kind() == std::io::ErrorKind::NotFound => {
+                    Ok(InstanceInfo::default())
+                }
+                _ => Err(err),
+            },
+        }
+    }
+
+    pub fn sys_config(&self) -> Result<SysConfig> {
+        let sys_config_file = self.shared_dir().join(SYS_CONFIG);
+        let sys_config: SysConfig = serde_json::from_slice(&fs::read(sys_config_file)?)?;
+        Ok(sys_config)
+    }
+
+    pub fn prepare_mr_config_v3(&self, app_compose: &AppCompose) -> Result<String> {
+        let compose_hash = self
+            .app_compose_hash()
+            .context("Failed to get compose hash")?;
+        let mut instance_info = self
+            .instance_info_or_default()
+            .context("Failed to get instance info")?;
+        let app_id = if instance_info.app_id.is_empty() {
+            compose_hash[..20].to_vec()
+        } else {
+            instance_info.app_id.clone()
+        };
+        if app_id.len() != 20 {
+            bail!(
+                "Invalid app ID length: expected 20 bytes, got {}",
+                app_id.len()
+            );
+        }
+
+        let disk_reusable = !app_compose.key_provider().is_none();
+        if !disk_reusable || instance_info.instance_id_seed.is_empty() {
+            instance_info.instance_id_seed = {
+                let mut seed = vec![0u8; 20];
+                getrandom::fill(&mut seed).context("Failed to generate instance id seed")?;
+                seed
+            };
+        }
+
+        let instance_id = if app_compose.no_instance_id {
+            Vec::new()
+        } else {
+            let mut id_path = instance_info.instance_id_seed.clone();
+            id_path.extend_from_slice(&app_id);
+            Sha256::digest(id_path)[..20].to_vec()
+        };
+        instance_info.app_id = app_id.clone();
+        instance_info.instance_id = instance_id.clone();
+        fs::write(
+            self.instance_info_path(),
+            serde_json::to_string(&instance_info).context("Failed to serialize instance info")?,
+        )
+        .context("Failed to write instance info")?;
+
+        Ok(MrConfigV3::new(
+            app_id,
+            compose_hash.to_vec(),
+            app_compose.key_provider(),
+            app_compose.key_provider_id.clone(),
+            instance_id,
+        )
+        .to_canonical_json())
     }
 
     pub fn app_compose(&self) -> Result<AppCompose> {
