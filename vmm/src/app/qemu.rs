@@ -12,9 +12,10 @@ use crate::{
 use std::{collections::HashMap, os::unix::fs::PermissionsExt};
 use std::{
     fs::Permissions,
+    io::Write,
     ops::Deref,
     path::{Path, PathBuf},
-    process::Command,
+    process::{Command, Stdio},
     time::{Duration, SystemTime},
 };
 
@@ -76,40 +77,101 @@ fn sanitize_optional<T: AsRef<str>>(value: Option<T>) -> Option<T> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct AmdSevSnpCpuid {
+struct AmdSevSnpLaunchParams {
     cbitpos: u32,
     reduced_phys_bits: u32,
 }
 
-fn amd_sev_snp_cpuid_from_ebx(ebx: u32) -> AmdSevSnpCpuid {
-    AmdSevSnpCpuid {
-        cbitpos: ebx & 0x3f,
-        reduced_phys_bits: (ebx >> 6) & 0x3f,
+fn parse_amd_sev_snp_qmp_capabilities(stdout: &[u8]) -> Result<AmdSevSnpLaunchParams> {
+    let stdout = std::str::from_utf8(stdout).context("QMP output is not valid UTF-8")?;
+    let mut qmp_error = None;
+    for line in stdout.lines() {
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        if let Some(error) = value.get("error") {
+            qmp_error = Some(error.to_string());
+        }
+        let Some(ret) = value.get("return") else {
+            continue;
+        };
+        let Some(cbitpos) = ret.get("cbitpos").and_then(|value| value.as_u64()) else {
+            continue;
+        };
+        let Some(reduced_phys_bits) = ret
+            .get("reduced-phys-bits")
+            .and_then(|value| value.as_u64())
+        else {
+            continue;
+        };
+        return Ok(AmdSevSnpLaunchParams {
+            cbitpos: cbitpos
+                .try_into()
+                .context("QMP cbitpos does not fit in u32")?,
+            reduced_phys_bits: reduced_phys_bits
+                .try_into()
+                .context("QMP reduced-phys-bits does not fit in u32")?,
+        });
+    }
+
+    match qmp_error {
+        Some(error) => bail!("QMP query-sev-capabilities failed: {error}"),
+        None => bail!("QMP query-sev-capabilities did not return cbitpos/reduced-phys-bits"),
     }
 }
 
-#[cfg(target_arch = "x86_64")]
-fn detect_amd_sev_snp_cpuid() -> Result<AmdSevSnpCpuid> {
-    use std::arch::x86_64::__cpuid_count;
+fn detect_amd_sev_snp_qemu_capabilities(qemu_path: &Path) -> Result<AmdSevSnpLaunchParams> {
+    // QEMU's reduced-phys-bits is not the same value as CPUID Fn8000_001F
+    // EBX[11:6] on all hosts. Ask the exact QEMU binary that will launch the
+    // guest for its SEV launch parameters.
+    let mut child = Command::new(qemu_path)
+        .args([
+            "-machine",
+            "none,accel=kvm",
+            "-display",
+            "none",
+            "-nodefaults",
+            "-qmp",
+            "stdio",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .with_context(|| {
+            format!(
+                "failed to start QEMU to query SEV capabilities: {}",
+                qemu_path.display()
+            )
+        })?;
 
-    // AMD CPUID Fn8000_001F reports SME/SEV capabilities. EBX[5:0] is the
-    // memory-encryption C-bit position and EBX[11:6] is the guest physical
-    // address size reduction. These are host/platform properties and must match
-    // the machine QEMU launches on.
-    let max_extended_leaf = unsafe { __cpuid_count(0x8000_0000, 0).eax };
-    if max_extended_leaf < 0x8000_001f {
-        bail!("host CPUID does not expose AMD memory encryption leaf 0x8000001f");
-    }
-    let leaf = unsafe { __cpuid_count(0x8000_001f, 0) };
-    if leaf.eax & (1 << 4) == 0 {
-        bail!("host CPUID does not report AMD SEV-SNP support");
-    }
-    Ok(amd_sev_snp_cpuid_from_ebx(leaf.ebx))
-}
+    let mut stdin = child
+        .stdin
+        .take()
+        .context("failed to open QEMU QMP stdin")?;
+    stdin
+        .write_all(
+            br#"{"execute":"qmp_capabilities"}
+{"execute":"query-sev-capabilities"}
+{"execute":"quit"}
+"#,
+        )
+        .context("failed to write QMP query-sev-capabilities commands")?;
+    drop(stdin);
 
-#[cfg(not(target_arch = "x86_64"))]
-fn detect_amd_sev_snp_cpuid() -> Result<AmdSevSnpCpuid> {
-    bail!("AMD SEV-SNP CPUID detection is only supported on x86_64 hosts")
+    let output = child
+        .wait_with_output()
+        .context("failed to wait for QEMU query-sev-capabilities")?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!(
+            "QEMU query-sev-capabilities exited with {}: {}",
+            output.status,
+            stderr.trim()
+        );
+    }
+
+    parse_amd_sev_snp_qmp_capabilities(&output.stdout)
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -413,7 +475,7 @@ impl VmState {
 #[cfg(test)]
 mod tests {
     use super::{
-        amd_sev_snp_cpuid_from_ebx, amd_sev_snp_memory_backend_arg, sanitize_optional,
+        amd_sev_snp_memory_backend_arg, parse_amd_sev_snp_qmp_capabilities, sanitize_optional,
         virtio_pci_device,
     };
 
@@ -446,14 +508,15 @@ mod tests {
     }
 
     #[test]
-    fn amd_sev_snp_cpuid_from_ebx_extracts_qemu_values() {
-        let milan = amd_sev_snp_cpuid_from_ebx(51 | (1 << 6));
-        assert_eq!(milan.cbitpos, 51);
-        assert_eq!(milan.reduced_phys_bits, 1);
-
-        let other = amd_sev_snp_cpuid_from_ebx(47 | (5 << 6));
-        assert_eq!(other.cbitpos, 47);
-        assert_eq!(other.reduced_phys_bits, 5);
+    fn amd_sev_snp_qmp_capabilities_extracts_launch_params() {
+        let stdout = br#"{"QMP":{"version":{"qemu":{"major":10,"minor":0,"micro":2}}}}
+{"return":{}}
+{"return":{"reduced-phys-bits":1,"cbitpos":51,"cert-chain":"ignored","pdh":"ignored","cpu0-id":"ignored"}}
+{"return":{}}
+"#;
+        let params = parse_amd_sev_snp_qmp_capabilities(stdout).unwrap();
+        assert_eq!(params.cbitpos, 51);
+        assert_eq!(params.reduced_phys_bits, 1);
     }
 
     #[test]
@@ -1036,11 +1099,11 @@ impl VmConfig {
         command
             .arg("-object")
             .arg(amd_sev_snp_memory_backend_arg(mem));
-        let snp_cpuid = detect_amd_sev_snp_cpuid()
-            .context("failed to detect AMD SEV-SNP cbitpos/reduced-phys-bits from host CPUID")?;
+        let snp_params = detect_amd_sev_snp_qemu_capabilities(&cfg.qemu_path)
+            .context("failed to detect AMD SEV-SNP cbitpos/reduced-phys-bits from QEMU")?;
         command.arg("-object").arg(format!(
             "sev-snp-guest,id=sev0,policy=0x30000,sev-device=/dev/sev,kernel-hashes=on,host-data={host_data},cbitpos={},reduced-phys-bits={}",
-            snp_cpuid.cbitpos, snp_cpuid.reduced_phys_bits
+            snp_params.cbitpos, snp_params.reduced_phys_bits
         ));
         command.arg("-machine").arg(
             "q35,kernel-irqchip=split,confidential-guest-support=sev0,memory-backend=ram1,hpet=off",
