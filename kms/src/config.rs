@@ -31,27 +31,17 @@ pub(crate) struct ImageConfig {
     pub download_timeout: Duration,
 }
 
-/// Configuration for AMD SEV-SNP measurement/app binding validation.
+/// Optional AMD SEV-SNP verifier configuration.
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct SevSnpMeasureConfig {
-    /// Path to the AMD SEV-SNP OVMF binary used for this VM image.
+    /// Optional AMD KDS-compatible base URL used for collateral requests.
     ///
-    /// Optional when callers provide OVMF section metadata with the request.
-    pub ovmf_path: Option<String>,
-    /// Optional diagnostic/cache proxy used for AMD KDS collateral requests.
-    ///
-    /// Empty by default. When set, the KMS process exports the same proxy env
-    /// used by dstack-attest before any attestation verification happens.
+    /// Empty by default. When set, the KMS process exports this base URL for
+    /// dstack-attest before any attestation verification happens. The base URL
+    /// must expose AMD KDS-compatible paths under `/vcek/v1`, e.g.
+    /// `https://kdsintf.amd.com/vcek/v1` or a trusted mirror/cache.
     #[serde(default)]
-    pub amd_kds_proxy_url: Option<String>,
-    /// SNP guest features bitmask used at launch. Defaults to SNP with kernel
-    /// hashes enabled.
-    #[serde(default = "default_guest_features")]
-    pub guest_features: u64,
-}
-
-fn default_guest_features() -> u64 {
-    0x1
+    pub amd_kds_base_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

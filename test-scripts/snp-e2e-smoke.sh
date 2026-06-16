@@ -40,11 +40,12 @@
 # meta-dstack guest image that includes the same PR cert-chain/KDS fallback code.
 # If AMD KDS throttles VCEK/cert-chain retrieval (for example HTTP 429 from
 # kdsintf.amd.com), keep verification fail-closed and set
-# DSTACK_SNP_SMOKE_KDS_PROXY_URL to a trusted path-prefix AMD-KDS passthrough,
-# e.g. https://cors.litgateway.com/ so verifier requests become:
-#   https://cors.litgateway.com/https://kdsintf.amd.com/...
+# DSTACK_SNP_SMOKE_KDS_BASE_URL to a trusted AMD-KDS-compatible mirror/cache
+# base, e.g. https://mirror.example.com/vcek/v1. For a path-prefix relay, set
+# the full relayed base, e.g.:
+#   https://cors.litgateway.com/https://kdsintf.amd.com/vcek/v1
 # This is an external collateral-fetch boundary, not a guest boot or KMS startup
-# failure. Do not use a ?url= wrapper unless the proxy explicitly supports it.
+# failure.
 # One reproducible way is to build meta-dstack with its dstack submodule checked
 # out to this PR branch, set the Yocto build MACHINE to `sev-snp` (not the
 # default `tdx`, otherwise the guest kernel can miss AMD memory-encryption
@@ -122,8 +123,8 @@ echo "qemu=$QEMU_PATH"
 echo "qemu_version=$qemu_version_output"
 echo "ovmf_sha256=$(sha256sum "$OVMF_PATH" | awk '{print $1}')"
 echo "image=$IMAGE_NAME"
-if [[ -n "${DSTACK_SNP_SMOKE_KDS_PROXY_URL:-}" ]]; then
-	echo "amd_kds_proxy_url=${DSTACK_SNP_SMOKE_KDS_PROXY_URL}"
+if [[ -n "${DSTACK_SNP_SMOKE_KDS_BASE_URL:-}" ]]; then
+	echo "amd_kds_base_url=${DSTACK_SNP_SMOKE_KDS_BASE_URL}"
 fi
 
 cleanup() {
@@ -144,7 +145,6 @@ sudo pkill -f "$BIN/supervisor" 2>/dev/null || true
 sudo rm -rf "$BASE/run"/* "$BASE/tmp"/*
 
 cp "$BIN/dstack-kms" "$BASE/http-root/dstack-kms"
-cp "$OVMF_PATH" "$BASE/http-root/OVMF.fd"
 chmod +x "$BASE/http-root/dstack-kms"
 
 if [[ ! -d "$BASE/images/$IMAGE_NAME" ]]; then
@@ -154,6 +154,9 @@ if [[ ! -d "$BASE/images/$IMAGE_NAME" ]]; then
 	tar -xzf "$BASE/$IMAGE_NAME.tar.gz" -C "$BASE/images/$IMAGE_NAME" --strip-components=1
 fi
 cp "$OVMF_PATH" "$BASE/images/$IMAGE_NAME/ovmf.fd"
+tmp_metadata="$(mktemp)"
+jq '.bios = "ovmf.fd"' "$BASE/images/$IMAGE_NAME/metadata.json" >"$tmp_metadata"
+mv "$tmp_metadata" "$BASE/images/$IMAGE_NAME/metadata.json"
 jq . "$BASE/images/$IMAGE_NAME/metadata.json" | tee "$ART/image-metadata.json"
 
 cat >"$BASE/auth-server.py" <<'PY'
@@ -358,9 +361,7 @@ enabled = true
 auto_bootstrap_domain = "10.0.2.2"
 
 [core.sev_snp]
-ovmf_path = "/dstack/OVMF.fd"
-guest_features = 1
-amd_kds_proxy_url = "${DSTACK_SNP_SMOKE_KDS_PROXY_URL:-}"
+amd_kds_base_url = "${DSTACK_SNP_SMOKE_KDS_BASE_URL:-}"
 
 [core.sev_snp_key_release]
 enabled = true
@@ -387,7 +388,6 @@ KMS_BASH_SCRIPT=$(cat <<'SH'
 set -eux
 mkdir -p /dstack/kms-certs /dstack/kms-images
 curl -fsS http://10.0.2.2:__DSTACK_HOST_ART_PORT__/dstack-kms -o /dstack/dstack-kms
-curl -fsS http://10.0.2.2:__DSTACK_HOST_ART_PORT__/OVMF.fd -o /dstack/OVMF.fd
 curl -fsS http://10.0.2.2:__DSTACK_HOST_ART_PORT__/kms.toml -o /dstack/kms.toml
 chmod +x /dstack/dstack-kms
 echo SNP_KMS_CONTAINER_STARTED

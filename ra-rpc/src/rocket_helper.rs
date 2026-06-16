@@ -184,7 +184,7 @@ fn unix_peer_cred(stream: &UnixStream) -> Option<UnixPeerCred> {
 #[derive(Debug, Clone)]
 pub struct QuoteVerifier {
     pccs_url: Option<String>,
-    amd_kds_proxy_url: Option<String>,
+    amd_kds_base_url: Option<String>,
 }
 
 pub mod deps {
@@ -317,24 +317,24 @@ impl<'r> FromRequest<'r> for &'r QuoteVerifier {
 
 impl QuoteVerifier {
     pub fn new(pccs_url: Option<String>) -> Self {
-        Self::new_with_amd_kds_proxy(pccs_url, None)
+        Self::new_with_amd_kds_base(pccs_url, None)
     }
 
-    pub fn new_with_amd_kds_proxy(
+    pub fn new_with_amd_kds_base(
         pccs_url: Option<String>,
-        amd_kds_proxy_url: Option<String>,
+        amd_kds_base_url: Option<String>,
     ) -> Self {
         Self {
             pccs_url,
-            amd_kds_proxy_url: amd_kds_proxy_url
+            amd_kds_base_url: amd_kds_base_url
                 .map(|url| url.trim().to_string())
                 .filter(|url| !url.is_empty()),
         }
     }
 
-    fn configure_amd_kds_proxy_for_request(&self) {
-        if let Some(proxy_url) = &self.amd_kds_proxy_url {
-            std::env::set_var("DSTACK_AMD_KDS_PROXY_URL", proxy_url);
+    fn configure_amd_kds_base_for_request(&self) {
+        if let Some(base_url) = &self.amd_kds_base_url {
+            std::env::set_var("DSTACK_AMD_KDS_BASE_URL", base_url);
         }
     }
 }
@@ -460,18 +460,18 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
-    fn quote_verifier_carries_trimmed_amd_kds_proxy_url() {
-        let verifier = QuoteVerifier::new_with_amd_kds_proxy(
+    fn quote_verifier_carries_trimmed_amd_kds_base_url() {
+        let verifier = QuoteVerifier::new_with_amd_kds_base(
             None,
-            Some("  https://cors.litgateway.com/  ".to_string()),
+            Some("  https://mirror.example.com/vcek/v1/  ".to_string()),
         );
         assert_eq!(
-            verifier.amd_kds_proxy_url.as_deref(),
-            Some("https://cors.litgateway.com/")
+            verifier.amd_kds_base_url.as_deref(),
+            Some("https://mirror.example.com/vcek/v1/")
         );
 
-        let verifier = QuoteVerifier::new_with_amd_kds_proxy(None, Some("   ".to_string()));
-        assert!(verifier.amd_kds_proxy_url.is_none());
+        let verifier = QuoteVerifier::new_with_amd_kds_base(None, Some("   ".to_string()));
+        assert!(verifier.amd_kds_base_url.is_none());
     }
 
     #[test]
@@ -567,7 +567,7 @@ pub async fn handle_prpc_impl<S, Call: RpcCall<S>>(
         .flatten();
     let attestation = match (request.quote_verifier, attestation) {
         (Some(quote_verifier), Some(attestation)) => {
-            quote_verifier.configure_amd_kds_proxy_for_request();
+            quote_verifier.configure_amd_kds_base_for_request();
             let pubkey = request
                 .certificate
                 .context("certificate is missing")?

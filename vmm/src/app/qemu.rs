@@ -986,7 +986,7 @@ impl VmConfig {
             .arg("-object")
             .arg(amd_sev_snp_memory_backend_arg(mem));
         command.arg("-object").arg(format!(
-            "sev-snp-guest,id=sev0,policy=0x30000,sev-device=/dev/sev,kernel-hashes=on,host-data={host_data},author-key-enabled=on,cbitpos=51,reduced-phys-bits=1"
+            "sev-snp-guest,id=sev0,policy=0x30000,sev-device=/dev/sev,kernel-hashes=on,host-data={host_data},cbitpos=51,reduced-phys-bits=1"
         ));
         command.arg("-machine").arg(
             "q35,kernel-irqchip=split,confidential-guest-support=sev0,memory-backend=ram1,hpet=off",

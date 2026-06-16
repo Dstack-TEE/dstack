@@ -38,6 +38,7 @@ mod id_pool;
 mod image;
 mod qemu;
 pub(crate) mod registry;
+mod snp_measure;
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct PortMapping {
@@ -1219,6 +1220,19 @@ fn file_sha256_hex(path: &Path) -> Result<String> {
     Ok(hex::encode(sha256_file(path)?))
 }
 
+fn amd_sev_snp_ovmf_measurement_info(image: &Image) -> Result<snp_measure::OvmfMeasurementInfo> {
+    let bios = image
+        .bios
+        .as_deref()
+        .ok_or_else(|| anyhow::anyhow!("bios/OVMF is required for amd sev-snp measurement"))?;
+    snp_measure::ovmf_measurement_info(bios).with_context(|| {
+        format!(
+            "failed to extract amd sev-snp OVMF measurement metadata from {}",
+            bios.display()
+        )
+    })
+}
+
 fn image_rootfs_hash(image: &Image) -> Result<&str> {
     if let Some(rootfs_hash) = image.info.rootfs_hash.as_deref() {
         return Ok(rootfs_hash);
@@ -1278,19 +1292,24 @@ fn make_vm_config(
             MrConfigV3::from_document(&mr_config).context("Invalid mr_config document")?;
             config["mr_config"] = serde_json::Value::String(mr_config);
         }
-        config["sev_snp_measurement"] = json!({
+        let ovmf = amd_sev_snp_ovmf_measurement_info(image)?;
+        let measurement = json!({
             "rootfs_hash": rootfs_hash,
             "base_cmdline": amd_sev_snp_measurement_base_cmdline(image.info.cmdline.as_deref()),
-            "docker_files_hash": serde_json::Value::Null,
-            "ovmf_hash": "",
+            "ovmf_hash": ovmf.ovmf_hash,
             "kernel_hash": file_sha256_hex(&image.kernel)?,
             "initrd_hash": file_sha256_hex(&image.initrd)?,
-            "sev_hashes_table_gpa": 0,
-            "sev_es_reset_eip": 0,
+            "sev_hashes_table_gpa": ovmf.sev_hashes_table_gpa,
+            "sev_es_reset_eip": ovmf.sev_es_reset_eip,
             "vcpus": manifest.vcpu,
             "vcpu_type": "EPYC-v4",
-            "ovmf_sections": [],
+            "guest_features": 1,
+            "ovmf_sections": ovmf.sections,
         });
+        config["sev_snp_measurement"] = serde_json::Value::String(
+            serde_json::to_string(&measurement)
+                .context("Failed to serialize amd sev-snp measurement input")?,
+        );
     }
     Ok(config)
 }
@@ -1304,6 +1323,79 @@ mod tests {
 
     fn hex_of(byte: u8, len: usize) -> String {
         hex::encode(vec![byte; len])
+    }
+
+    fn write_u16_le_at(buf: &mut [u8], off: usize, value: u16) {
+        buf[off..off + 2].copy_from_slice(&value.to_le_bytes());
+    }
+
+    fn write_u32_le_at(buf: &mut [u8], off: usize, value: u32) {
+        buf[off..off + 4].copy_from_slice(&value.to_le_bytes());
+    }
+
+    fn ovmf_footer_entry(data: &[u8], guid: &[u8; 16]) -> Vec<u8> {
+        let mut entry = data.to_vec();
+        entry.extend_from_slice(&((data.len() + 18) as u16).to_le_bytes());
+        entry.extend_from_slice(guid);
+        entry
+    }
+
+    fn synthetic_snp_ovmf() -> Vec<u8> {
+        const GUID_FOOTER_TABLE: [u8; 16] = [
+            0xde, 0x82, 0xb5, 0x96, 0xb2, 0x1f, 0xf7, 0x45, 0xba, 0xea, 0xa3, 0x66, 0xc5, 0x5a,
+            0x08, 0x2d,
+        ];
+        const GUID_SEV_HASH_TABLE_RV: [u8; 16] = [
+            0x1f, 0x37, 0x55, 0x72, 0x3b, 0x3a, 0x04, 0x4b, 0x92, 0x7b, 0x1d, 0xa6, 0xef, 0xa8,
+            0xd4, 0x54,
+        ];
+        const GUID_SEV_ES_RESET_BLK: [u8; 16] = [
+            0xde, 0x71, 0xf7, 0x00, 0x7e, 0x1a, 0xcb, 0x4f, 0x89, 0x0e, 0x68, 0xc7, 0x7e, 0x2f,
+            0xb4, 0x4e,
+        ];
+        const GUID_SEV_META_DATA: [u8; 16] = [
+            0x66, 0x65, 0x88, 0xdc, 0x4a, 0x98, 0x98, 0x47, 0xa7, 0x5e, 0x55, 0x85, 0xa7, 0xbf,
+            0x67, 0xcc,
+        ];
+
+        let mut ovmf = vec![0u8; 4096];
+        let meta_start = 512usize;
+        ovmf[meta_start..meta_start + 4].copy_from_slice(b"ASEV");
+        write_u32_le_at(&mut ovmf, meta_start + 8, 1);
+        write_u32_le_at(&mut ovmf, meta_start + 12, 4);
+        let sections = [
+            (0x1000u32, 0x1000u32, 1u32),
+            (0x2000u32, 0x1000u32, 2u32),
+            (0x3000u32, 0x1000u32, 3u32),
+            (0x4000u32, 0x1000u32, 0x10u32),
+        ];
+        for (i, (gpa, size, section_type)) in sections.into_iter().enumerate() {
+            let off = meta_start + 16 + i * 12;
+            write_u32_le_at(&mut ovmf, off, gpa);
+            write_u32_le_at(&mut ovmf, off + 4, size);
+            write_u32_le_at(&mut ovmf, off + 8, section_type);
+        }
+
+        let mut table = Vec::new();
+        table.extend(ovmf_footer_entry(
+            &0x4000u32.to_le_bytes(),
+            &GUID_SEV_HASH_TABLE_RV,
+        ));
+        table.extend(ovmf_footer_entry(
+            &0xffff_fff0u32.to_le_bytes(),
+            &GUID_SEV_ES_RESET_BLK,
+        ));
+        table.extend(ovmf_footer_entry(
+            &((ovmf.len() - meta_start) as u32).to_le_bytes(),
+            &GUID_SEV_META_DATA,
+        ));
+
+        let footer_off = ovmf.len() - 32 - 18;
+        let table_start = footer_off - table.len();
+        ovmf[table_start..footer_off].copy_from_slice(&table);
+        write_u16_le_at(&mut ovmf, footer_off, (table.len() + 18) as u16);
+        ovmf[footer_off + 2..footer_off + 18].copy_from_slice(&GUID_FOOTER_TABLE);
+        ovmf
     }
 
     #[test]
@@ -1327,6 +1419,7 @@ mod tests {
         fs::write(image_dir.join("kernel"), b"snp-test-kernel")?;
         fs::write(image_dir.join("initrd"), b"snp-test-initrd")?;
         fs::write(image_dir.join("rootfs"), b"snp-test-rootfs")?;
+        fs::write(image_dir.join("ovmf.fd"), synthetic_snp_ovmf())?;
         fs::write(
             image_dir.join("metadata.json"),
             serde_json::json!({
@@ -1334,6 +1427,7 @@ mod tests {
                 "kernel": "kernel",
                 "initrd": "initrd",
                 "rootfs": "rootfs",
+                "bios": "ovmf.fd",
                 "version": "0.5.11"
             })
             .to_string(),
@@ -1378,7 +1472,10 @@ mod tests {
                 .as_str()
                 .context("vm_config must be a string")?,
         )?;
-        let measurement = &vm_config["sev_snp_measurement"];
+        let measurement_document = vm_config["sev_snp_measurement"]
+            .as_str()
+            .context("sev_snp_measurement must be a string")?;
+        let measurement: serde_json::Value = serde_json::from_str(measurement_document)?;
         let mr_config_document = sys_config["mr_config"]
             .as_str()
             .context("mr_config must be a string")?;
@@ -1404,11 +1501,23 @@ mod tests {
         );
         assert_eq!(measurement["vcpus"], 2);
         assert_eq!(measurement["vcpu_type"], "EPYC-v4");
-        assert_eq!(measurement["ovmf_hash"], "");
-        assert!(measurement["ovmf_sections"]
-            .as_array()
-            .context("ovmf_sections must be an array")?
-            .is_empty());
+        assert_eq!(measurement["guest_features"], 1);
+        assert_eq!(
+            measurement["ovmf_hash"]
+                .as_str()
+                .context("ovmf_hash must be a string")?
+                .len(),
+            96
+        );
+        assert_eq!(measurement["sev_hashes_table_gpa"], 0x4000);
+        assert_eq!(measurement["sev_es_reset_eip"], 0xffff_fff0u32);
+        assert_eq!(
+            measurement["ovmf_sections"]
+                .as_array()
+                .context("ovmf_sections must be an array")?
+                .len(),
+            4
+        );
         Ok(())
     }
 }

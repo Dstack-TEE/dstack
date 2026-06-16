@@ -197,16 +197,15 @@ mod tests {
     use crate::{
         config::SevSnpMeasureConfig,
         main_service::amd_attest::{
-            compute_expected_measurement, MeasurementInput, OvmfSectionParam,
+            compute_expected_measurement, snp_measurement_os_image_hash, MeasurementInput,
+            OvmfSectionParam,
         },
     };
     use sha2::Digest;
 
     fn sev_snp_config() -> SevSnpMeasureConfig {
         SevSnpMeasureConfig {
-            ovmf_path: None,
-            amd_kds_proxy_url: None,
-            guest_features: 1,
+            amd_kds_base_url: None,
         }
     }
 
@@ -220,7 +219,6 @@ mod tests {
             compose_hash: hex_of(0x22, 32),
             rootfs_hash: hex_of(0x33, 32),
             base_cmdline: None,
-            docker_files_hash: Some(hex_of(0x77, 32)),
             ovmf_hash: hex_of(0x44, 48),
             kernel_hash: hex_of(0x55, 32),
             initrd_hash: hex_of(0x66, 32),
@@ -228,6 +226,7 @@ mod tests {
             sev_es_reset_eip: 0xffff_fff0,
             vcpus: 2,
             vcpu_type: Some("epyc-v4".to_string()),
+            guest_features: 1,
             ovmf_sections: vec![
                 OvmfSectionParam {
                     gpa: 0x100000,
@@ -292,11 +291,11 @@ mod tests {
     #[test]
     fn attestation_info_response_uses_snp_boot_info_and_chip_id() {
         let input = valid_snp_measurement_input();
-        let measurement = compute_expected_measurement(&sev_snp_config(), &input).unwrap();
+        let measurement = compute_expected_measurement(&input).unwrap();
         let mr_config = valid_snp_mr_config();
         let attestation = verified_snp_attestation(measurement, [0xab; 64]);
         let vm_config = serde_json::json!({
-            "sev_snp_measurement": input,
+            "sev_snp_measurement": serde_json::to_string(&input).unwrap(),
             "mr_config": mr_config.to_canonical_json(),
         })
         .to_string();
@@ -318,7 +317,10 @@ mod tests {
         );
         assert_eq!(response.ppid, vec![0xab; 64]);
         assert_eq!(response.mr_aggregated.len(), 32);
-        assert_eq!(response.os_image_hash, vec![0x33; 32]);
+        assert_eq!(
+            response.os_image_hash,
+            snp_measurement_os_image_hash(&serde_json::to_string(&input).unwrap())
+        );
         assert_eq!(response.attestation_mode, "dstack-amd-sev-snp");
         assert_eq!(response.site_name, "test-site");
         assert_eq!(response.eth_rpc_url, "https://rpc.example");

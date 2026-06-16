@@ -24,6 +24,8 @@ const VLEK_CERT_GUID: [u8; 16] = [
     0xa8, 0x07, 0x4b, 0xc2, 0xa2, 0x5a, 0x48, 0x3e, 0xaa, 0xe6, 0x39, 0xc0, 0x45, 0xa0, 0xb8, 0xa1,
 ];
 const CERT_TABLE_ENTRY_SIZE: usize = 24;
+const AMD_KDS_BASE_URL_ENV: &str = "DSTACK_AMD_KDS_BASE_URL";
+const AMD_KDS_DEFAULT_BASE_URL: &str = "https://kdsintf.amd.com/vcek/v1";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AmdSnpProduct {
@@ -369,15 +371,12 @@ fn fetch_amd_kds_collateral_for_product(
             .context("amd sev-snp chip_id too short")?,
     );
     let vcek_url = amd_kds_vcek_url(product, &chip_id, report.reported_tcb.into())?;
-    let vcek_request_url = amd_kds_request_url(&vcek_url);
     let vcek = reqwest::blocking::Client::new()
-        .get(&vcek_request_url)
+        .get(&vcek_url)
         .send()
-        .with_context(|| format!("failed to request amd sev-snp vcek from {vcek_request_url}"))?
+        .with_context(|| format!("failed to request amd sev-snp vcek from {vcek_url}"))?
         .error_for_status()
-        .with_context(|| {
-            format!("amd sev-snp vcek request failed for {vcek_url} via {vcek_request_url}")
-        })?
+        .with_context(|| format!("amd sev-snp vcek request failed for {vcek_url}"))?
         .bytes()
         .context("failed to read amd sev-snp vcek response")?
         .to_vec();
@@ -392,28 +391,37 @@ fn fetch_amd_kds_collateral_for_product(
 }
 
 fn fetch_amd_kds_ca_chain(product: AmdSnpProduct) -> Result<(CertBytes, CertBytes)> {
-    let url = format!(
-        "https://kdsintf.amd.com/vcek/v1/{}/cert_chain",
-        product.kds_name()
-    );
-    let request_url = amd_kds_request_url(&url);
+    let url = amd_kds_endpoint(&format!("{}/cert_chain", product.kds_name()));
     let chain = reqwest::blocking::Client::new()
-        .get(&request_url)
+        .get(&url)
         .send()
-        .with_context(|| format!("failed to request amd sev-snp cert_chain from {request_url}"))?
+        .with_context(|| format!("failed to request amd sev-snp cert_chain from {url}"))?
         .error_for_status()
-        .with_context(|| format!("amd sev-snp cert_chain request failed for {request_url}"))?
+        .with_context(|| format!("amd sev-snp cert_chain request failed for {url}"))?
         .bytes()
         .context("failed to read amd sev-snp cert_chain response")?;
     let (_fetched_ark, ask) = extract_ark_ask_from_amd_kds_cert_chain(&chain)?;
     Ok((product.builtin_ark(), ask))
 }
 
-fn amd_kds_request_url(amd_url: &str) -> String {
-    match std::env::var("DSTACK_AMD_KDS_PROXY_URL") {
-        Ok(proxy) if !proxy.trim().is_empty() => format!("{}{}", proxy.trim(), amd_url),
-        _ => amd_url.to_string(),
-    }
+fn amd_kds_base_url() -> String {
+    std::env::var(AMD_KDS_BASE_URL_ENV)
+        .ok()
+        .map(|url| url.trim().trim_end_matches('/').to_string())
+        .filter(|url| !url.is_empty())
+        .unwrap_or_else(|| AMD_KDS_DEFAULT_BASE_URL.to_string())
+}
+
+fn amd_kds_endpoint(path: &str) -> String {
+    join_amd_kds_url(&amd_kds_base_url(), path)
+}
+
+fn join_amd_kds_url(base_url: &str, path: &str) -> String {
+    format!(
+        "{}/{}",
+        base_url.trim().trim_end_matches('/'),
+        path.trim_start_matches('/')
+    )
 }
 
 fn amd_snp_product_candidates_for_report(report: &AttestationReport) -> Result<Vec<AmdSnpProduct>> {
@@ -467,30 +475,45 @@ fn amd_kds_vcek_url(
     chip_id: &[u8; 64],
     tcb: AmdSnpTcbVersion,
 ) -> Result<String> {
+    amd_kds_vcek_url_with_base(&amd_kds_base_url(), product, chip_id, tcb)
+}
+
+fn amd_kds_vcek_url_with_base(
+    base_url: &str,
+    product: AmdSnpProduct,
+    chip_id: &[u8; 64],
+    tcb: AmdSnpTcbVersion,
+) -> Result<String> {
     let url = match product {
         AmdSnpProduct::Turin => {
             let fmc = tcb
                 .fmc
                 .context("amd sev-snp Turin VCEK request requires reported FMC TCB")?;
-            format!(
-                "https://kdsintf.amd.com/vcek/v1/{}/{}?fmcSPL={}&blSPL={}&teeSPL={}&snpSPL={}&ucodeSPL={}",
+            join_amd_kds_url(
+                base_url,
+                &format!(
+                    "{}/{}?fmcSPL={}&blSPL={}&teeSPL={}&snpSPL={}&ucodeSPL={}",
+                    product.kds_name(),
+                    hex::encode(&chip_id[..8]),
+                    fmc,
+                    tcb.bootloader,
+                    tcb.tee,
+                    tcb.snp,
+                    tcb.microcode
+                ),
+            )
+        }
+        AmdSnpProduct::Milan | AmdSnpProduct::Genoa => join_amd_kds_url(
+            base_url,
+            &format!(
+                "{}/{}?blSPL={}&teeSPL={}&snpSPL={}&ucodeSPL={}",
                 product.kds_name(),
-                hex::encode(&chip_id[..8]),
-                fmc,
+                hex::encode(chip_id),
                 tcb.bootloader,
                 tcb.tee,
                 tcb.snp,
                 tcb.microcode
-            )
-        }
-        AmdSnpProduct::Milan | AmdSnpProduct::Genoa => format!(
-            "https://kdsintf.amd.com/vcek/v1/{}/{}?blSPL={}&teeSPL={}&snpSPL={}&ucodeSPL={}",
-            product.kds_name(),
-            hex::encode(chip_id),
-            tcb.bootloader,
-            tcb.tee,
-            tcb.snp,
-            tcb.microcode
+            ),
         ),
     };
     Ok(url)
@@ -731,7 +754,13 @@ mod tests {
             microcode: 4,
         };
 
-        let url = amd_kds_vcek_url(AmdSnpProduct::Genoa, &chip_id, tcb).unwrap();
+        let url = amd_kds_vcek_url_with_base(
+            AMD_KDS_DEFAULT_BASE_URL,
+            AmdSnpProduct::Genoa,
+            &chip_id,
+            tcb,
+        )
+        .unwrap();
 
         assert_eq!(
             url,
@@ -753,7 +782,13 @@ mod tests {
             microcode: 4,
         };
 
-        let url = amd_kds_vcek_url(AmdSnpProduct::Turin, &chip_id, tcb).unwrap();
+        let url = amd_kds_vcek_url_with_base(
+            AMD_KDS_DEFAULT_BASE_URL,
+            AmdSnpProduct::Turin,
+            &chip_id,
+            tcb,
+        )
+        .unwrap();
 
         assert_eq!(
             url,
@@ -802,22 +837,11 @@ mod tests {
     }
 
     #[test]
-    fn amd_kds_proxy_url_wraps_amd_urls_when_configured() {
-        const ENV_KEY: &str = "DSTACK_AMD_KDS_PROXY_URL";
-        let old = std::env::var(ENV_KEY).ok();
-        std::env::set_var(ENV_KEY, "https://cors.litgateway.com/");
-
-        let wrapped = amd_kds_request_url("https://kdsintf.amd.com/vcek/v1/Genoa/cert_chain");
-
+    fn amd_kds_endpoint_joins_base_url_and_relative_path() {
         assert_eq!(
-            wrapped,
-            "https://cors.litgateway.com/https://kdsintf.amd.com/vcek/v1/Genoa/cert_chain"
+            join_amd_kds_url("https://mirror.example.com/vcek/v1/", "/Genoa/cert_chain"),
+            "https://mirror.example.com/vcek/v1/Genoa/cert_chain"
         );
-        if let Some(old) = old {
-            std::env::set_var(ENV_KEY, old);
-        } else {
-            std::env::remove_var(ENV_KEY);
-        }
     }
 
     #[test]

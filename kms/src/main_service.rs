@@ -157,8 +157,16 @@ pub(crate) fn build_boot_info_for_attestation(
     vm_config_str: &str,
 ) -> Result<BootInfo> {
     if att.report.amd_snp_report().is_some() {
-        let config = sev_snp_config
-            .ok_or_else(|| anyhow::anyhow!("sev_snp config is required for amd sev-snp"))?;
+        let default_sev_snp_config;
+        let config = match sev_snp_config {
+            Some(config) => config,
+            None => {
+                default_sev_snp_config = SevSnpMeasureConfig {
+                    amd_kds_base_url: None,
+                };
+                &default_sev_snp_config
+            }
+        };
         let vm_config_str = if vm_config_str.is_empty() {
             att.config.as_str()
         } else {
@@ -614,9 +622,7 @@ mod tests {
 
     fn sev_snp_config() -> SevSnpMeasureConfig {
         SevSnpMeasureConfig {
-            ovmf_path: None,
-            amd_kds_proxy_url: None,
-            guest_features: 1,
+            amd_kds_base_url: None,
         }
     }
 
@@ -630,7 +636,6 @@ mod tests {
             compose_hash: hex_of(0x22, 32),
             rootfs_hash: hex_of(0x33, 32),
             base_cmdline: None,
-            docker_files_hash: Some(hex_of(0x77, 32)),
             ovmf_hash: hex_of(0x44, 48),
             kernel_hash: hex_of(0x55, 32),
             initrd_hash: hex_of(0x66, 32),
@@ -638,6 +643,7 @@ mod tests {
             sev_es_reset_eip: 0xffff_fff0,
             vcpus: 2,
             vcpu_type: Some("epyc-v4".to_string()),
+            guest_features: 1,
             ovmf_sections: vec![
                 OvmfSectionParam {
                     gpa: 0x100000,
@@ -711,11 +717,11 @@ mod tests {
     #[test]
     fn build_boot_info_for_attestation_accepts_snp_vm_config_path() {
         let input = valid_snp_measurement_input();
-        let measurement = compute_expected_measurement(&sev_snp_config(), &input).unwrap();
+        let measurement = compute_expected_measurement(&input).unwrap();
         let mr_config = valid_snp_mr_config();
         let attestation = verified_snp_attestation(measurement, [0xab; 64]);
         let vm_config = serde_json::json!({
-            "sev_snp_measurement": input,
+            "sev_snp_measurement": serde_json::to_string(&input).unwrap(),
             "mr_config": mr_config.to_canonical_json(),
         })
         .to_string();
@@ -737,10 +743,10 @@ mod tests {
     #[test]
     fn build_boot_info_for_attestation_uses_embedded_snp_vm_config_when_external_is_empty() {
         let input = valid_snp_measurement_input();
-        let measurement = compute_expected_measurement(&sev_snp_config(), &input).unwrap();
+        let measurement = compute_expected_measurement(&input).unwrap();
         let mr_config = valid_snp_mr_config();
         let embedded_config = serde_json::json!({
-            "sev_snp_measurement": input,
+            "sev_snp_measurement": serde_json::to_string(&input).unwrap(),
             "mr_config": mr_config.to_canonical_json(),
         })
         .to_string();
@@ -761,32 +767,30 @@ mod tests {
     }
 
     #[test]
-    fn build_boot_info_for_attestation_requires_snp_config_for_snp() {
+    fn build_boot_info_for_attestation_accepts_self_contained_snp_input_without_config() {
         let input = valid_snp_measurement_input();
-        let measurement = compute_expected_measurement(&sev_snp_config(), &input).unwrap();
+        let measurement = compute_expected_measurement(&input).unwrap();
         let mr_config = valid_snp_mr_config();
         let attestation = verified_snp_attestation(measurement, [0xab; 64]);
         let vm_config = serde_json::json!({
-            "sev_snp_measurement": input,
+            "sev_snp_measurement": serde_json::to_string(&input).unwrap(),
             "mr_config": mr_config.to_canonical_json(),
         })
         .to_string();
 
-        let err = build_boot_info_for_attestation(None, &attestation, false, &vm_config)
-            .expect_err("snp attestation must require sev_snp config");
-        assert!(
-            err.to_string().contains("sev_snp config is required"),
-            "unexpected error: {err:?}"
-        );
+        let boot_info = build_boot_info_for_attestation(None, &attestation, false, &vm_config)
+            .expect("self-contained SNP vm_config should not require KMS-local sev_snp config");
+        assert_eq!(boot_info.attestation_mode, AttestationMode::DstackAmdSevSnp);
+        assert_eq!(boot_info.device_id, vec![0xab; 64]);
     }
 
     fn snp_boot_info() -> BootInfo {
         let input = valid_snp_measurement_input();
-        let measurement = compute_expected_measurement(&sev_snp_config(), &input).unwrap();
+        let measurement = compute_expected_measurement(&input).unwrap();
         let mr_config = valid_snp_mr_config();
         let attestation = verified_snp_attestation(measurement, [0xab; 64]);
         let vm_config = serde_json::json!({
-            "sev_snp_measurement": input,
+            "sev_snp_measurement": serde_json::to_string(&input).unwrap(),
             "mr_config": mr_config.to_canonical_json(),
         })
         .to_string();
