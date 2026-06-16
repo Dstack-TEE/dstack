@@ -12,7 +12,6 @@ description = "AMD SEV-SNP Quote Verification Library"
 
 [dependencies]
 anyhow.workspace = true
-base64.workspace = true
 hex.workspace = true
 reqwest = { workspace = true, features = ["blocking"] }
 sev.workspace = true

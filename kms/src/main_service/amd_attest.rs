@@ -1275,6 +1275,7 @@ mod tests {
         let mr_config = valid_mr_config(&input)?;
         let mr_config_document = mr_config.to_canonical_json();
         let tcb = dstack_attest::amd_sev_snp::AmdSnpTcbVersion {
+            fmc: None,
             bootloader: 1,
             tee: 2,
             snp: 3,

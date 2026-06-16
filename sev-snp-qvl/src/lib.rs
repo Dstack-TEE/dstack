@@ -11,14 +11,8 @@
 //! production key release.
 
 use anyhow::{bail, Context, Result};
-use base64::engine::general_purpose::STANDARD;
-use base64::Engine as _;
-use sev::certs::snp::{ca, Certificate, Chain, Verifiable};
+use sev::certs::snp::{builtin, ca, Certificate, Chain, Verifiable};
 use sev::firmware::{guest::AttestationReport, host::TcbVersion};
-
-/// AMD Genoa ARK certificate (DER, base64-encoded).
-/// Source: https://kdsintf.amd.com/vcek/v1/Genoa/cert_chain
-const GENOA_ARK_DER_B64: &str = "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";
 
 const ASK_CERT_GUID: [u8; 16] = [
     0x4a, 0xb7, 0xb3, 0x79, 0xbb, 0xac, 0x4f, 0xe4, 0xa0, 0x2f, 0x05, 0xae, 0xf3, 0x27, 0xc7, 0x82,
@@ -31,8 +25,40 @@ const VLEK_CERT_GUID: [u8; 16] = [
 ];
 const CERT_TABLE_ENTRY_SIZE: usize = 24;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AmdSnpProduct {
+    Milan,
+    Genoa,
+    Turin,
+}
+
+impl AmdSnpProduct {
+    fn kds_name(self) -> &'static str {
+        match self {
+            Self::Milan => "Milan",
+            // AMD KDS canonicalizes Genoa-family parts such as Bergamo and
+            // Siena under the Genoa endpoint.
+            Self::Genoa => "Genoa",
+            Self::Turin => "Turin",
+        }
+    }
+
+    fn builtin_ark(self) -> CertBytes {
+        let bytes = match self {
+            Self::Milan => builtin::milan::ARK,
+            Self::Genoa => builtin::genoa::ARK,
+            Self::Turin => builtin::turin::ARK,
+        };
+        CertBytes {
+            bytes: bytes.to_vec(),
+            encoding: CertEncoding::Pem,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct AmdSnpTcbVersion {
+    pub fmc: Option<u8>,
     pub bootloader: u8,
     pub tee: u8,
     pub snp: u8,
@@ -42,6 +68,7 @@ pub struct AmdSnpTcbVersion {
 impl From<TcbVersion> for AmdSnpTcbVersion {
     fn from(value: TcbVersion) -> Self {
         Self {
+            fmc: value.fmc,
             bootloader: value.bootloader,
             tee: value.tee,
             snp: value.snp,
@@ -198,17 +225,29 @@ fn verify_amd_snp_attestation_with_certs(
     ask_bytes: CertBytes,
     vcek_bytes: CertBytes,
 ) -> Result<VerifiedAmdSnpReport> {
-    let ark_der = STANDARD
-        .decode(GENOA_ARK_DER_B64)
-        .context("failed to decode amd genoa ark")?;
-    verify_amd_snp_attestation_with_cert_chain(
-        report_bytes,
-        CertBytes {
-            bytes: ark_der,
-            encoding: CertEncoding::Der,
-        },
-        ask_bytes,
-        vcek_bytes,
+    if report_bytes.len() != 1184 {
+        bail!(
+            "invalid amd sev-snp report length: expected 1184 bytes, got {}",
+            report_bytes.len()
+        );
+    }
+    let report = AttestationReport::from_bytes(report_bytes)
+        .map_err(|err| anyhow::anyhow!("failed to parse amd sev-snp report: {err}"))?;
+    let mut errors = Vec::new();
+    for product in amd_snp_product_candidates_for_report(&report)? {
+        match verify_amd_snp_attestation_with_cert_chain(
+            report_bytes,
+            product.builtin_ark(),
+            ask_bytes.clone(),
+            vcek_bytes.clone(),
+        ) {
+            Ok(verified) => return Ok(verified),
+            Err(err) => errors.push(format!("{}: {err:#}", product.kds_name())),
+        }
+    }
+    bail!(
+        "amd sev-snp report verification failed for supported products: {}",
+        errors.join("; ")
     )
 }
 
@@ -280,6 +319,12 @@ pub fn verify_amd_snp_evidence_with_kds_fallback(
     if !cert_chain.is_empty() {
         return verify_amd_snp_evidence(report, cert_chain, expected_report_data);
     }
+    if report.len() != 1184 {
+        bail!(
+            "invalid amd sev-snp report length: expected 1184 bytes, got {}",
+            report.len()
+        );
+    }
     let report_obj = AttestationReport::from_bytes(report)
         .map_err(|err| anyhow::anyhow!("failed to parse amd sev-snp report: {err}"))?;
     let collateral = fetch_amd_kds_collateral_for_report(&report_obj)
@@ -298,10 +343,10 @@ pub fn verify_amd_snp_evidence_with_kds_fallback(
 
 fn fetch_amd_kds_collateral_for_report(report: &AttestationReport) -> Result<AmdKdsCollateral> {
     let mut errors = Vec::new();
-    for product in ["Genoa", "Milan", "Bergamo", "Siena", "Turin"] {
+    for product in amd_snp_product_candidates_for_report(report)? {
         match fetch_amd_kds_collateral_for_product(product, report) {
             Ok(collateral) => return Ok(collateral),
-            Err(err) => errors.push(format!("{product}: {err:#}")),
+            Err(err) => errors.push(format!("{}: {err:#}", product.kds_name())),
         }
     }
     bail!(
@@ -311,7 +356,7 @@ fn fetch_amd_kds_collateral_for_report(report: &AttestationReport) -> Result<Amd
 }
 
 fn fetch_amd_kds_collateral_for_product(
-    product: &str,
+    product: AmdSnpProduct,
     report: &AttestationReport,
 ) -> Result<AmdKdsCollateral> {
     let (ark, ask) = fetch_amd_kds_ca_chain(product)?;
@@ -323,7 +368,7 @@ fn fetch_amd_kds_collateral_for_product(
             .get(..64)
             .context("amd sev-snp chip_id too short")?,
     );
-    let vcek_url = amd_kds_vcek_url(product, &chip_id, report.reported_tcb.into());
+    let vcek_url = amd_kds_vcek_url(product, &chip_id, report.reported_tcb.into())?;
     let vcek_request_url = amd_kds_request_url(&vcek_url);
     let vcek = reqwest::blocking::Client::new()
         .get(&vcek_request_url)
@@ -346,8 +391,11 @@ fn fetch_amd_kds_collateral_for_product(
     })
 }
 
-fn fetch_amd_kds_ca_chain(product: &str) -> Result<(CertBytes, CertBytes)> {
-    let url = format!("https://kdsintf.amd.com/vcek/v1/{product}/cert_chain");
+fn fetch_amd_kds_ca_chain(product: AmdSnpProduct) -> Result<(CertBytes, CertBytes)> {
+    let url = format!(
+        "https://kdsintf.amd.com/vcek/v1/{}/cert_chain",
+        product.kds_name()
+    );
     let request_url = amd_kds_request_url(&url);
     let chain = reqwest::blocking::Client::new()
         .get(&request_url)
@@ -357,7 +405,8 @@ fn fetch_amd_kds_ca_chain(product: &str) -> Result<(CertBytes, CertBytes)> {
         .with_context(|| format!("amd sev-snp cert_chain request failed for {request_url}"))?
         .bytes()
         .context("failed to read amd sev-snp cert_chain response")?;
-    extract_ark_ask_from_amd_kds_cert_chain(&chain)
+    let (_fetched_ark, ask) = extract_ark_ask_from_amd_kds_cert_chain(&chain)?;
+    Ok((product.builtin_ark(), ask))
 }
 
 fn amd_kds_request_url(amd_url: &str) -> String {
@@ -367,16 +416,84 @@ fn amd_kds_request_url(amd_url: &str) -> String {
     }
 }
 
-fn amd_kds_vcek_url(product: &str, chip_id: &[u8; 64], tcb: AmdSnpTcbVersion) -> String {
-    format!(
-        "https://kdsintf.amd.com/vcek/v1/{}/{}?blSPL={}&teeSPL={}&snpSPL={}&ucodeSPL={}",
-        product,
-        hex::encode(chip_id),
-        tcb.bootloader,
-        tcb.tee,
-        tcb.snp,
-        tcb.microcode
-    )
+fn amd_snp_product_candidates_for_report(report: &AttestationReport) -> Result<Vec<AmdSnpProduct>> {
+    if let Some(product) = amd_snp_product_from_report(report)? {
+        return Ok(vec![product]);
+    }
+
+    // SNP report v2 predates the CPUID family/model fields. In that case the
+    // product cannot be derived from the signed report, so keep a small
+    // fail-closed compatibility fallback. Bergamo and Siena deliberately do
+    // not appear here because their KDS endpoint is the canonical Genoa one.
+    Ok(vec![
+        AmdSnpProduct::Genoa,
+        AmdSnpProduct::Milan,
+        AmdSnpProduct::Turin,
+    ])
+}
+
+fn amd_snp_product_from_report(report: &AttestationReport) -> Result<Option<AmdSnpProduct>> {
+    match report.version {
+        2 => return Ok(None),
+        3 => {}
+        version => bail!("unsupported amd sev-snp report version: {version}"),
+    }
+
+    let family = report
+        .cpuid_fam_id
+        .context("amd sev-snp report v3+ is missing CPUID family")?;
+    let model = report
+        .cpuid_mod_id
+        .context("amd sev-snp report v3+ is missing CPUID model")?;
+
+    let product = match family {
+        0x19 => match model {
+            0x00..=0x0f => AmdSnpProduct::Milan,
+            0x10..=0x1f | 0xa0..=0xaf => AmdSnpProduct::Genoa,
+            _ => bail!("unsupported amd sev-snp CPUID model for family 19h: {model:#04x}"),
+        },
+        0x1a => match model {
+            0x00..=0x11 => AmdSnpProduct::Turin,
+            _ => bail!("unsupported amd sev-snp CPUID model for family 1Ah: {model:#04x}"),
+        },
+        _ => bail!("unsupported amd sev-snp CPUID family: {family:#04x}"),
+    };
+
+    Ok(Some(product))
+}
+
+fn amd_kds_vcek_url(
+    product: AmdSnpProduct,
+    chip_id: &[u8; 64],
+    tcb: AmdSnpTcbVersion,
+) -> Result<String> {
+    let url = match product {
+        AmdSnpProduct::Turin => {
+            let fmc = tcb
+                .fmc
+                .context("amd sev-snp Turin VCEK request requires reported FMC TCB")?;
+            format!(
+                "https://kdsintf.amd.com/vcek/v1/{}/{}?fmcSPL={}&blSPL={}&teeSPL={}&snpSPL={}&ucodeSPL={}",
+                product.kds_name(),
+                hex::encode(&chip_id[..8]),
+                fmc,
+                tcb.bootloader,
+                tcb.tee,
+                tcb.snp,
+                tcb.microcode
+            )
+        }
+        AmdSnpProduct::Milan | AmdSnpProduct::Genoa => format!(
+            "https://kdsintf.amd.com/vcek/v1/{}/{}?blSPL={}&teeSPL={}&snpSPL={}&ucodeSPL={}",
+            product.kds_name(),
+            hex::encode(chip_id),
+            tcb.bootloader,
+            tcb.tee,
+            tcb.snp,
+            tcb.microcode
+        ),
+    };
+    Ok(url)
 }
 
 fn extract_ark_ask_from_amd_kds_cert_chain(chain: &[u8]) -> Result<(CertBytes, CertBytes)> {
@@ -560,6 +677,7 @@ mod tests {
 
     fn tcb(bootloader: u8, tee: u8, snp: u8, microcode: u8) -> AmdSnpTcbVersion {
         AmdSnpTcbVersion {
+            fmc: None,
             bootloader,
             tee,
             snp,
@@ -606,13 +724,14 @@ mod tests {
     fn amd_kds_vcek_url_binds_chip_id_and_reported_tcb() {
         let chip_id = [0xab; 64];
         let tcb = AmdSnpTcbVersion {
+            fmc: None,
             bootloader: 1,
             tee: 2,
             snp: 3,
             microcode: 4,
         };
 
-        let url = amd_kds_vcek_url("Genoa", &chip_id, tcb);
+        let url = amd_kds_vcek_url(AmdSnpProduct::Genoa, &chip_id, tcb).unwrap();
 
         assert_eq!(
             url,
@@ -620,6 +739,65 @@ mod tests {
                 "https://kdsintf.amd.com/vcek/v1/Genoa/{}?blSPL=1&teeSPL=2&snpSPL=3&ucodeSPL=4",
                 hex::encode(chip_id)
             )
+        );
+    }
+
+    #[test]
+    fn amd_kds_vcek_url_for_turin_uses_short_chip_id_and_fmc() {
+        let chip_id = [0xab; 64];
+        let tcb = AmdSnpTcbVersion {
+            fmc: Some(5),
+            bootloader: 1,
+            tee: 2,
+            snp: 3,
+            microcode: 4,
+        };
+
+        let url = amd_kds_vcek_url(AmdSnpProduct::Turin, &chip_id, tcb).unwrap();
+
+        assert_eq!(
+            url,
+            "https://kdsintf.amd.com/vcek/v1/Turin/abababababababab?fmcSPL=5&blSPL=1&teeSPL=2&snpSPL=3&ucodeSPL=4"
+        );
+    }
+
+    #[test]
+    fn report_v3_cpuid_selects_kds_product_without_enumeration() {
+        let mut report = base_report();
+        report.version = 3;
+        report.cpuid_fam_id = Some(0x19);
+        report.cpuid_mod_id = Some(0x10);
+
+        assert_eq!(
+            amd_snp_product_candidates_for_report(&report).unwrap(),
+            vec![AmdSnpProduct::Genoa]
+        );
+
+        report.cpuid_mod_id = Some(0x0f);
+        assert_eq!(
+            amd_snp_product_candidates_for_report(&report).unwrap(),
+            vec![AmdSnpProduct::Milan]
+        );
+
+        report.cpuid_fam_id = Some(0x1a);
+        report.cpuid_mod_id = Some(0x00);
+        assert_eq!(
+            amd_snp_product_candidates_for_report(&report).unwrap(),
+            vec![AmdSnpProduct::Turin]
+        );
+    }
+
+    #[test]
+    fn report_v2_keeps_canonical_compatibility_product_candidates() {
+        let report = base_report();
+
+        assert_eq!(
+            amd_snp_product_candidates_for_report(&report).unwrap(),
+            vec![
+                AmdSnpProduct::Genoa,
+                AmdSnpProduct::Milan,
+                AmdSnpProduct::Turin
+            ]
         );
     }
 

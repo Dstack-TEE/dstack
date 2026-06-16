@@ -7376,7 +7376,6 @@ name = "sev-snp-qvl"
 version = "0.5.11"
 dependencies = [
  "anyhow",
- "base64 0.22.1",
  "hex",
  "reqwest",
  "sev",
