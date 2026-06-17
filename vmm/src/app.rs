@@ -1246,6 +1246,34 @@ fn image_rootfs_hash(image: &Image) -> Result<&str> {
         .ok_or_else(|| anyhow::anyhow!("rootfs_hash is required for amd sev-snp"))
 }
 
+/// Compute the AMD SEV-SNP `os_image_hash` for an OS image, from the same
+/// image-determined inputs the VMM feeds into the launch measurement. The image
+/// build calls this (via the `sev-os-image-hash` subcommand) to emit
+/// `digest.sev.txt`; the value matches what KMS derives from a verified launch
+/// measurement, since both go through `dstack_types::SevOsImageMeasurement`.
+pub fn sev_os_image_hash(image: &Image) -> Result<Vec<u8>> {
+    let ovmf = amd_sev_snp_ovmf_measurement_info(image)?;
+    let measurement = dstack_types::SevOsImageMeasurement {
+        rootfs_hash: image_rootfs_hash(image)?.to_string(),
+        base_cmdline: amd_sev_snp_measurement_base_cmdline(image.info.cmdline.as_deref()),
+        ovmf_hash: ovmf.ovmf_hash,
+        kernel_hash: file_sha256_hex(&image.kernel)?,
+        initrd_hash: file_sha256_hex(&image.initrd)?,
+        sev_hashes_table_gpa: ovmf.sev_hashes_table_gpa,
+        sev_es_reset_eip: ovmf.sev_es_reset_eip,
+        ovmf_sections: ovmf
+            .sections
+            .into_iter()
+            .map(|s| dstack_types::OvmfSection {
+                gpa: s.gpa,
+                size: s.size,
+                section_type: s.section_type,
+            })
+            .collect(),
+    };
+    Ok(measurement.os_image_hash())
+}
+
 fn amd_sev_snp_measurement_base_cmdline(base_cmdline: Option<&str>) -> Option<String> {
     base_cmdline.map(|cmdline| cmdline.trim().to_string())
 }
@@ -1519,6 +1547,37 @@ mod tests {
                 .context("ovmf_sections must be an array")?
                 .len(),
             4
+        );
+
+        // The build-time os_image_hash (sev_os_image_hash -> digest.sev.txt)
+        // must equal the os_image_hash a verifier derives from the launch
+        // measurement document, i.e. the image-invariant projection of it.
+        let image = Image::load(&image_dir)?;
+        let build_hash = sev_os_image_hash(&image)?;
+        let as_str = |v: &serde_json::Value| v.as_str().unwrap().to_string();
+        let projected = dstack_types::SevOsImageMeasurement {
+            rootfs_hash: as_str(&measurement["rootfs_hash"]),
+            base_cmdline: measurement["base_cmdline"].as_str().map(str::to_string),
+            ovmf_hash: as_str(&measurement["ovmf_hash"]),
+            kernel_hash: as_str(&measurement["kernel_hash"]),
+            initrd_hash: as_str(&measurement["initrd_hash"]),
+            sev_hashes_table_gpa: measurement["sev_hashes_table_gpa"].as_u64().unwrap(),
+            sev_es_reset_eip: measurement["sev_es_reset_eip"].as_u64().unwrap() as u32,
+            ovmf_sections: measurement["ovmf_sections"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|s| dstack_types::OvmfSection {
+                    gpa: s["gpa"].as_u64().unwrap(),
+                    size: s["size"].as_u64().unwrap(),
+                    section_type: s["section_type"].as_u64().unwrap() as u32,
+                })
+                .collect(),
+        };
+        assert_eq!(
+            build_hash,
+            projected.os_image_hash(),
+            "digest.sev.txt must match the os_image_hash derived from the launch measurement"
         );
         Ok(())
     }

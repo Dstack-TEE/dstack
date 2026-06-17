@@ -235,6 +235,45 @@ pub struct VmConfig {
     pub ovmf_variant: Option<OvmfVariant>,
 }
 
+/// One OVMF SEV metadata section (gpa/size/type) that affects the SEV-SNP
+/// launch measurement. Mirrors the OVMF footer metadata.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OvmfSection {
+    pub gpa: u64,
+    pub size: u64,
+    pub section_type: u32,
+}
+
+/// Image-invariant projection that determines the AMD SEV-SNP OS image identity.
+///
+/// `os_image_hash` is the SHA-256 of this projection, canonically serialized
+/// (JCS). It is shared by the VMM/KMS (which derive it from a verified launch
+/// measurement) and the image build (which precomputes `digest.sev.txt`), so
+/// both sides agree. It deliberately EXCLUDES per-deployment values (vcpus,
+/// vcpu_type, guest_features, app_id, compose_hash): the same OS image must hash
+/// identically regardless of how it is launched.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SevOsImageMeasurement {
+    pub rootfs_hash: String,
+    pub base_cmdline: Option<String>,
+    pub ovmf_hash: String,
+    pub kernel_hash: String,
+    pub initrd_hash: String,
+    pub sev_hashes_table_gpa: u64,
+    pub sev_es_reset_eip: u32,
+    pub ovmf_sections: Vec<OvmfSection>,
+}
+
+impl SevOsImageMeasurement {
+    /// SHA-256 over the canonical (JCS) serialization of this projection.
+    pub fn os_image_hash(&self) -> Vec<u8> {
+        use sha2::{Digest, Sha256};
+        let canonical =
+            serde_jcs::to_vec(self).expect("SevOsImageMeasurement is always serializable");
+        Sha256::digest(canonical).to_vec()
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct AppKeys {
     #[serde(with = "hex_bytes")]

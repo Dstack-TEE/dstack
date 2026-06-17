@@ -420,19 +420,27 @@ fn snp_mr_aggregated_digest(measurement: &[u8; 48], host_data: &[u8; 32]) -> Vec
     h.finalize().to_vec()
 }
 
-/// Image-invariant projection of `MeasurementInput`: exactly the fields that are
-/// determined by the OS image (firmware, kernel, initrd, cmdline template,
-/// rootfs). Serialized canonically (fixed field order) to derive os_image_hash.
-#[derive(serde::Serialize)]
-struct SevOsImageMeasurement<'a> {
-    rootfs_hash: &'a str,
-    base_cmdline: Option<&'a str>,
-    ovmf_hash: &'a str,
-    kernel_hash: &'a str,
-    initrd_hash: &'a str,
-    sev_hashes_table_gpa: u64,
-    sev_es_reset_eip: u32,
-    ovmf_sections: &'a [OvmfSectionParam],
+/// Project a verified `MeasurementInput` to the shared image-invariant
+/// measurement (excludes per-deployment fields like vcpus/app_id/compose_hash).
+fn sev_os_image_measurement(input: &MeasurementInput) -> dstack_types::SevOsImageMeasurement {
+    dstack_types::SevOsImageMeasurement {
+        rootfs_hash: input.rootfs_hash.clone(),
+        base_cmdline: input.base_cmdline.clone(),
+        ovmf_hash: input.ovmf_hash.clone(),
+        kernel_hash: input.kernel_hash.clone(),
+        initrd_hash: input.initrd_hash.clone(),
+        sev_hashes_table_gpa: input.sev_hashes_table_gpa,
+        sev_es_reset_eip: input.sev_es_reset_eip,
+        ovmf_sections: input
+            .ovmf_sections
+            .iter()
+            .map(|s| dstack_types::OvmfSection {
+                gpa: s.gpa,
+                size: s.size,
+                section_type: s.section_type,
+            })
+            .collect(),
+    }
 }
 
 /// Derive the OS image hash from a self-contained SNP measurement document.
@@ -441,26 +449,13 @@ struct SevOsImageMeasurement<'a> {
 /// image-determined measurement inputs and EXCLUDES per-deployment values
 /// (`vcpus`, `vcpu_type`, `guest_features`, `app_id`, `compose_hash`). Hashing
 /// the full `MeasurementInput` made the same image hash differently per vCPU
-/// count, which broke per-image on-chain allow-listing.
-///
-/// The document is re-projected and canonically serialized here, so the hash is
-/// independent of the incoming field order / whitespace.
+/// count, which broke per-image on-chain allow-listing. The canonical hashing
+/// lives in `dstack_types::SevOsImageMeasurement` so the image build can
+/// reproduce the same value as `digest.sev.txt`.
 pub(crate) fn snp_measurement_os_image_hash(measurement_document: &str) -> Result<Vec<u8>> {
     let input: MeasurementInput = serde_json::from_str(measurement_document)
         .context("failed to parse sev-snp measurement document for os_image_hash")?;
-    let image = SevOsImageMeasurement {
-        rootfs_hash: &input.rootfs_hash,
-        base_cmdline: input.base_cmdline.as_deref(),
-        ovmf_hash: &input.ovmf_hash,
-        kernel_hash: &input.kernel_hash,
-        initrd_hash: &input.initrd_hash,
-        sev_hashes_table_gpa: input.sev_hashes_table_gpa,
-        sev_es_reset_eip: input.sev_es_reset_eip,
-        ovmf_sections: &input.ovmf_sections,
-    };
-    let canonical =
-        serde_json::to_vec(&image).context("failed to serialize sev os image measurement")?;
-    Ok(Sha256::digest(&canonical).to_vec())
+    Ok(sev_os_image_measurement(&input).os_image_hash())
 }
 
 fn mr_config_key_provider_info(mr_config: &MrConfigV3) -> Result<Vec<u8>> {
