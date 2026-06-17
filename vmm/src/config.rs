@@ -125,11 +125,25 @@ impl TeePlatform {
         }
     }
 
-    pub fn resolve_from_cpuinfo(_cpuinfo: &str) -> Self {
-        // Keep `auto` conservative while AMD SEV-SNP support is experimental and
-        // verifier/KMS/app binding are not production-ready. Operators must opt
-        // into SNP explicitly with `platform = "amd-sev-snp"`.
-        Self::Tdx
+    pub fn resolve_from_cpuinfo(cpuinfo: &str) -> Self {
+        // Detect the host TEE from /proc/cpuinfo CPU flags:
+        //   - AMD SEV-SNP hosts advertise the `sev_snp` flag
+        //   - Intel TDX hosts advertise the `tdx_host_platform` flag
+        // These flags are vendor-exclusive, so the flag alone is unambiguous.
+        // Anything else falls back to TDX (the conservative default; the VMM is
+        // expected to run on a TEE host). Operators can always override the
+        // detection with an explicit `platform = "tdx" | "amd-sev-snp"`.
+        let has_flag = |flag: &str| {
+            cpuinfo
+                .lines()
+                .filter(|line| line.starts_with("flags") || line.starts_with("Features"))
+                .any(|line| line.split_whitespace().any(|f| f == flag))
+        };
+        if has_flag("sev_snp") {
+            Self::AmdSevSnp
+        } else {
+            Self::Tdx
+        }
     }
 }
 
@@ -170,7 +184,9 @@ impl PortMappingConfig {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct CvmConfig {
-    /// TEE platform to use when launching CVMs.
+    /// TEE platform to use when launching CVMs. Defaults to `auto`, which
+    /// detects the host TEE from /proc/cpuinfo (AMD SEV-SNP vs Intel TDX);
+    /// set `tdx` or `amd-sev-snp` to force a platform.
     #[serde(default)]
     pub platform: TeePlatform,
     pub qemu_path: PathBuf,
@@ -643,14 +659,23 @@ mod tests {
     }
 
     #[test]
-    fn tee_platform_auto_stays_tdx_even_with_amd_snp_flag_while_experimental() {
+    fn tee_platform_auto_detects_amd_sev_snp_from_flag() {
         let cpuinfo = "flags : fpu svm sev sev_es sev_snp debug_swap";
+        assert_eq!(
+            TeePlatform::resolve_from_cpuinfo(cpuinfo),
+            TeePlatform::AmdSevSnp
+        );
+    }
+
+    #[test]
+    fn tee_platform_auto_detects_tdx_host() {
+        let cpuinfo = "flags : fpu vmx tdx_host_platform";
         assert_eq!(TeePlatform::resolve_from_cpuinfo(cpuinfo), TeePlatform::Tdx);
     }
 
     #[test]
-    fn tee_platform_auto_falls_back_to_tdx_without_amd_snp_flag() {
-        let cpuinfo = "flags : fpu vmx tdx_guest";
+    fn tee_platform_auto_falls_back_to_tdx_without_tee_flag() {
+        let cpuinfo = "flags : fpu vmx";
         assert_eq!(TeePlatform::resolve_from_cpuinfo(cpuinfo), TeePlatform::Tdx);
     }
 }
