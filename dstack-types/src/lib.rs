@@ -266,11 +266,11 @@ pub struct SevOsImageMeasurement {
 
 impl SevOsImageMeasurement {
     /// SHA-256 over the canonical (JCS) serialization of this projection.
-    pub fn os_image_hash(&self) -> Vec<u8> {
+    pub fn os_image_hash(&self) -> [u8; 32] {
         use sha2::{Digest, Sha256};
         let canonical =
             serde_jcs::to_vec(self).expect("SevOsImageMeasurement is always serializable");
-        Sha256::digest(canonical).to_vec()
+        Sha256::digest(canonical).into()
     }
 }
 

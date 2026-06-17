@@ -455,7 +455,7 @@ fn sev_os_image_measurement(input: &MeasurementInput) -> dstack_types::SevOsImag
 pub(crate) fn snp_measurement_os_image_hash(measurement_document: &str) -> Result<Vec<u8>> {
     let input: MeasurementInput = serde_json::from_str(measurement_document)
         .context("failed to parse sev-snp measurement document for os_image_hash")?;
-    Ok(sev_os_image_measurement(&input).os_image_hash())
+    Ok(sev_os_image_measurement(&input).os_image_hash().to_vec())
 }
 
 fn mr_config_key_provider_info(mr_config: &MrConfigV3) -> Result<Vec<u8>> {

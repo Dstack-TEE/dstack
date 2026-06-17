@@ -1251,7 +1251,7 @@ fn image_rootfs_hash(image: &Image) -> Result<&str> {
 /// build calls this (via the `sev-os-image-hash` subcommand) to emit
 /// `digest.sev.txt`; the value matches what KMS derives from a verified launch
 /// measurement, since both go through `dstack_types::SevOsImageMeasurement`.
-pub fn sev_os_image_hash(image: &Image) -> Result<Vec<u8>> {
+pub fn sev_os_image_hash(image: &Image) -> Result<[u8; 32]> {
     let ovmf = amd_sev_snp_ovmf_measurement_info(image)?;
     let measurement = dstack_types::SevOsImageMeasurement {
         rootfs_hash: image_rootfs_hash(image)?.to_string(),
