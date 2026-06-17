@@ -587,7 +587,7 @@ impl VmConfig {
                 workdir.qmp_socket().display()
             ));
         }
-        if let Some(bios) = &self.image.bios {
+        if let Some(bios) = self.image.firmware(is_amd_sev_snp) {
             command.arg("-bios").arg(bios);
         }
         command.arg("-kernel").arg(&self.image.kernel);

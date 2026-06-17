@@ -17,6 +17,10 @@ pub struct ImageInfo {
     pub hda: Option<String>,
     pub rootfs: Option<String>,
     pub bios: Option<String>,
+    /// AMD SEV firmware (e.g. ovmf-sev.fd). Present on unified TDX+SEV images;
+    /// used instead of `bios` when launching as an AMD SEV-SNP guest.
+    #[serde(default, rename = "bios-sev")]
+    pub bios_sev: Option<String>,
     #[serde(default)]
     pub rootfs_hash: Option<String>,
     #[serde(default)]
@@ -65,7 +69,21 @@ pub struct Image {
     pub hda: Option<PathBuf>,
     pub rootfs: Option<PathBuf>,
     pub bios: Option<PathBuf>,
+    pub bios_sev: Option<PathBuf>,
     pub digest: Option<String>,
+}
+
+impl Image {
+    /// Firmware blob to launch with, given whether this is an AMD SEV-SNP guest.
+    /// SEV-SNP prefers the dedicated SEV firmware (`bios_sev`) and falls back to
+    /// the generic `bios`; TDX always uses `bios`.
+    pub fn firmware(&self, is_amd_sev_snp: bool) -> Option<&PathBuf> {
+        if is_amd_sev_snp {
+            self.bios_sev.as_ref().or(self.bios.as_ref())
+        } else {
+            self.bios.as_ref()
+        }
+    }
 }
 
 impl Image {
@@ -77,6 +95,7 @@ impl Image {
         let hda = info.hda.as_ref().map(|hda| base_path.join(hda));
         let rootfs = info.rootfs.as_ref().map(|rootfs| base_path.join(rootfs));
         let bios = info.bios.as_ref().map(|bios| base_path.join(bios));
+        let bios_sev = info.bios_sev.as_ref().map(|bios| base_path.join(bios));
         let digest = fs::read_to_string(base_path.join("digest.txt"))
             .ok()
             .map(|s| s.trim().to_string());
@@ -91,6 +110,7 @@ impl Image {
             kernel,
             rootfs,
             bios,
+            bios_sev,
             digest,
         }
         .ensure_exists()
@@ -116,6 +136,11 @@ impl Image {
         if let Some(bios) = &self.bios {
             if !bios.exists() {
                 bail!("Bios does not exist: {}", bios.display());
+            }
+        }
+        if let Some(bios_sev) = &self.bios_sev {
+            if !bios_sev.exists() {
+                bail!("SEV bios does not exist: {}", bios_sev.display());
             }
         }
         Ok(self)

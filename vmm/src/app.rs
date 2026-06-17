@@ -1221,9 +1221,11 @@ fn file_sha256_hex(path: &Path) -> Result<String> {
 }
 
 fn amd_sev_snp_ovmf_measurement_info(image: &Image) -> Result<snp_measure::OvmfMeasurementInfo> {
+    // Measure the same firmware the guest launches with: the SEV firmware
+    // (bios-sev) when present, falling back to the generic bios.
     let bios = image
-        .bios
-        .as_deref()
+        .firmware(true)
+        .map(|p| p.as_path())
         .ok_or_else(|| anyhow::anyhow!("bios/OVMF is required for amd sev-snp measurement"))?;
     snp_measure::ovmf_measurement_info(bios).with_context(|| {
         format!(
