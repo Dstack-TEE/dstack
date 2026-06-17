@@ -172,6 +172,7 @@ pub(crate) fn build_amd_snp_boot_info(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_amd_snp_boot_info_with_tcb_status(
     config: &SevSnpMeasureConfig,
     verified_measurement: &[u8; 48],

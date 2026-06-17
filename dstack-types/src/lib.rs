@@ -4,6 +4,7 @@
 
 use std::path::Path;
 
+use or_panic::ResultOrPanic;
 use scale::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 use serde_human_bytes as hex_bytes;
@@ -268,8 +269,9 @@ impl SevOsImageMeasurement {
     /// SHA-256 over the canonical (JCS) serialization of this projection.
     pub fn os_image_hash(&self) -> [u8; 32] {
         use sha2::{Digest, Sha256};
-        let canonical =
-            serde_jcs::to_vec(self).expect("SevOsImageMeasurement is always serializable");
+        // JCS serialization of this plain owned struct (strings/ints/array)
+        // cannot fail; panic loudly if that invariant is ever broken.
+        let canonical = serde_jcs::to_vec(self).or_panic("SevOsImageMeasurement JCS serialization");
         Sha256::digest(canonical).into()
     }
 }

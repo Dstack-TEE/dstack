@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+use or_panic::ResultOrPanic;
 use serde::{Deserialize, Serialize};
 use serde_human_bytes as hex_bytes;
 use sha2::Sha256;
@@ -142,7 +143,9 @@ impl MrConfigV3 {
     }
 
     pub fn to_canonical_json(&self) -> String {
-        serde_jcs::to_string(self).expect("MrConfigV3 should serialize to JCS")
+        // JCS serialization of this owned struct cannot fail; panic loudly if
+        // that invariant is ever broken.
+        serde_jcs::to_string(self).or_panic("MrConfigV3 JCS serialization")
     }
 
     pub fn from_document(document: &str) -> Result<Self, MrConfigDocumentError> {

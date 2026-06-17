@@ -2656,6 +2656,7 @@ dependencies = [
 name = "dstack-types"
 version = "0.5.11"
 dependencies = [
+ "or-panic",
  "parity-scale-codec",
  "serde",
  "serde-human-bytes",
