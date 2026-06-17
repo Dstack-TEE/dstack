@@ -1,0 +1,713 @@
+// SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+//
+// SPDX-License-Identifier: Apache-2.0
+
+//! `dstackup` — host setup and lifecycle for a dstack host.
+//!
+//! Local + privileged only (touches `/dev/sgx`, systemd, local files, the local
+//! VMM socket). Day-to-day app operations live in the separate `dstack` binary.
+
+use anyhow::{bail, Context, Result};
+use clap::{Parser, Subcommand};
+use dstack_core::config::{self, HostConfig, VmmRender};
+use dstack_core::vmm::{Vmm, DEFAULT_HOST};
+use dstack_core::{host, ports, rpc};
+use serde::{Deserialize, Serialize};
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::Command as PCommand;
+use std::time::Duration;
+
+/// what an install put in place, recorded so re-runs are idempotent and
+/// `destroy` can reverse it cleanly.
+#[derive(Serialize, Deserialize, Default)]
+struct State {
+    prefix: String,
+    client_url: String,
+    auth_port: u16,
+    /// systemd unit names (without the `.service` suffix).
+    #[serde(default)]
+    vmm_unit: String,
+    #[serde(default)]
+    auth_unit: String,
+    #[serde(default)]
+    kms_vm_id: Option<String>,
+    #[serde(default)]
+    kms_url: String,
+    /// docker-compose project for a key provider we started ourselves.
+    #[serde(default)]
+    kp_own_project: Option<String>,
+}
+
+fn state_path(prefix: &Path) -> PathBuf {
+    prefix.join("dstackup-state.json")
+}
+
+fn read_state(prefix: &Path) -> Option<State> {
+    let body = fs::read_to_string(state_path(prefix)).ok()?;
+    serde_json::from_str(&body).ok()
+}
+
+fn write_state(prefix: &Path, st: &State) -> Result<()> {
+    write(&state_path(prefix), &serde_json::to_string_pretty(st)?)
+}
+
+/// systemd unit name (no `.service` suffix): `dstack-<base>` or, with an
+/// instance, `dstack-<base>-<instance>` (so a fresh install coexists with an
+/// existing `dstack-vmm.service`).
+fn unit_name(base: &str, instance: &Option<String>) -> String {
+    match instance {
+        Some(i) if !i.is_empty() => format!("dstack-{base}-{i}"),
+        _ => format!("dstack-{base}"),
+    }
+}
+
+fn systemctl(args: &[&str]) -> bool {
+    PCommand::new("systemctl")
+        .args(args)
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+fn unit_active(unit: &str) -> bool {
+    systemctl(&["is-active", "--quiet", &format!("{unit}.service")])
+}
+
+/// write a unit file, reload systemd, and enable+start it (idempotent).
+fn install_unit(unit: &str, contents: &str) -> Result<()> {
+    let path = format!("/etc/systemd/system/{unit}.service");
+    fs::write(&path, contents).with_context(|| format!("writing {path}"))?;
+    systemctl(&["daemon-reload"]);
+    if !systemctl(&["enable", "--now", &format!("{unit}.service")]) {
+        bail!("failed to enable+start {unit}.service");
+    }
+    Ok(())
+}
+
+/// stop, disable, and remove a unit (idempotent — missing unit is fine).
+fn remove_unit(unit: &str) {
+    let svc = format!("{unit}.service");
+    let _ = systemctl(&["disable", "--now", &svc]);
+    let _ = fs::remove_file(format!("/etc/systemd/system/{svc}"));
+}
+
+fn auth_unit_file(bin: &str, allowlist: &Path, port: u16, prefix: &Path) -> String {
+    format!(
+        "[Unit]\nDescription=dstack auth webhook\nAfter=network.target\n\n[Service]\n\
+         ExecStart={bin} --config {cfg} --address 127.0.0.1 --port {port}\n\
+         Restart=always\nRestartSec=2\nWorkingDirectory={wd}\n\n\
+         [Install]\nWantedBy=multi-user.target\n",
+        cfg = allowlist.display(),
+        wd = prefix.display(),
+    )
+}
+
+fn vmm_unit_file(bin: &str, config: &Path, prefix: &Path, auth_unit: &str) -> String {
+    // KillMode defaults to control-group, so `systemctl stop` tears down the
+    // VMM + supervisor + CVM qemus together (deterministic teardown).
+    format!(
+        "[Unit]\nDescription=dstack VMM\nAfter=network.target docker.service {auth}.service\nWants={auth}.service\n\n\
+         [Service]\nExecStart={bin} -c {cfg}\nRestart=always\nRestartSec=2\n\
+         TimeoutStopSec=120\nWorkingDirectory={wd}\n\n\
+         [Install]\nWantedBy=multi-user.target\n",
+        auth = auth_unit,
+        cfg = config.display(),
+        wd = prefix.display(),
+    )
+}
+
+#[derive(Parser)]
+#[command(name = "dstackup", version, about = "set up and manage a dstack host")]
+struct Cli {
+    /// VMM control socket / endpoint to talk to (for status and attach).
+    #[arg(long, global = true)]
+    host: Option<String>,
+
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Subcommand)]
+// `Install` carries all the host-setup flags; the size gap to `Status`/`Destroy`
+// is irrelevant for a CLI enum constructed once at startup.
+#[allow(clippy::large_enum_variant)]
+enum Command {
+    /// Bring up the host stack: SGX preflight, render configs, and start the
+    /// VMM + auth webhook. (Gramine bring-up and KMS-in-CVM bootstrap follow.)
+    Install {
+        /// expose the dashboard on this IP (default: bind localhost only —
+        /// reach it via an SSH tunnel).
+        #[arg(long, value_name = "IP")]
+        expose: Option<String>,
+
+        /// guest OS image version to deploy.
+        #[arg(long, value_name = "VERSION")]
+        image: Option<String>,
+
+        /// install prefix for configs, certs, run state.
+        #[arg(long, default_value = "/var/lib/dstack")]
+        prefix: String,
+
+        /// systemd instance suffix: units become `dstack-vmm-<instance>` etc.,
+        /// so a fresh install coexists with an existing `dstack-vmm.service`.
+        #[arg(long)]
+        instance: Option<String>,
+
+        /// guest image directory (default: <prefix>/images).
+        #[arg(long)]
+        image_path: Option<String>,
+
+        /// dstack-vmm binary.
+        #[arg(long, default_value = "dstack-vmm")]
+        vmm_bin: String,
+
+        /// dstack-auth binary.
+        #[arg(long, default_value = "dstack-auth")]
+        auth_bin: String,
+
+        /// dstack-supervisor binary.
+        #[arg(long, default_value = "dstack-supervisor")]
+        supervisor_bin: String,
+
+        /// qemu binary.
+        #[arg(long, default_value = "/usr/bin/qemu-system-x86_64")]
+        qemu: String,
+
+        /// dashboard TCP port.
+        #[arg(long, default_value_t = 9080)]
+        dashboard_port: u16,
+
+        /// auth webhook port.
+        #[arg(long, default_value_t = 8001)]
+        auth_port: u16,
+
+        /// host-api vsock port (raise to coexist with an existing VMM on 10000).
+        #[arg(long, default_value_t = 10000)]
+        host_api_port: u32,
+
+        /// CID pool start (raise to coexist with an existing VMM).
+        #[arg(long, default_value_t = 1000)]
+        cid_start: u32,
+
+        /// use an existing key provider at ADDR:PORT instead of running our own.
+        #[arg(long, value_name = "ADDR:PORT")]
+        use_existing_key_provider: Option<String>,
+
+        /// port for our own key provider (when not using an existing one).
+        #[arg(long, default_value_t = 3443)]
+        key_provider_port: u16,
+
+        /// key-provider build/compose directory (to start our own).
+        #[arg(long)]
+        key_provider_src: Option<String>,
+
+        /// KMS container image.
+        #[arg(long, default_value = "dstacktee/dstack-kms:0.5.11")]
+        kms_image: String,
+
+        /// host port for the KMS RPC (default: an auto-picked free port).
+        #[arg(long)]
+        kms_port: Option<u16>,
+
+        /// skip the KMS-in-CVM deploy (bring up VMM + auth only).
+        #[arg(long)]
+        no_kms: bool,
+
+        /// render + write configs only; do not start any process.
+        #[arg(long)]
+        no_start: bool,
+    },
+    /// Show the health of the host stack.
+    Status,
+    /// Tear down the deployment (keeps configs + KMS keys unless --purge).
+    Destroy {
+        /// install prefix to tear down.
+        #[arg(long, default_value = "/var/lib/dstack")]
+        prefix: String,
+        /// also wipe the prefix (configs + KMS keys).
+        #[arg(long)]
+        purge: bool,
+    },
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let cli = Cli::parse();
+    let host = cli.host.as_deref().unwrap_or(DEFAULT_HOST);
+    match cli.command {
+        Command::Status => cmd_status(host).await,
+        Command::Install {
+            expose,
+            image,
+            prefix,
+            instance,
+            image_path,
+            vmm_bin,
+            auth_bin,
+            supervisor_bin,
+            qemu,
+            dashboard_port,
+            auth_port,
+            host_api_port,
+            cid_start,
+            use_existing_key_provider,
+            key_provider_port,
+            key_provider_src,
+            kms_image,
+            kms_port,
+            no_kms,
+            no_start,
+        } => {
+            let opts = InstallOpts {
+                expose,
+                image,
+                prefix,
+                instance,
+                image_path,
+                vmm_bin,
+                auth_bin,
+                supervisor_bin,
+                qemu,
+                dashboard_port,
+                auth_port,
+                host_api_port,
+                cid_start,
+                use_existing_key_provider,
+                key_provider_port,
+                key_provider_src,
+                kms_image,
+                kms_port,
+                no_kms,
+                no_start,
+            };
+            let _ = host; // install uses its own prefix-derived endpoint
+            cmd_install(opts).await
+        }
+        Command::Destroy { prefix, purge } => cmd_destroy(&prefix, purge).await,
+    }
+}
+
+async fn cmd_status(host: &str) -> Result<()> {
+    let sgx = host::check_sgx();
+    println!(
+        "sgx:      enclave={}  provision={}  => {}",
+        sgx.enclave,
+        sgx.provision,
+        if sgx.ok() { "ok" } else { "MISSING" }
+    );
+    match host::detect_host_ip() {
+        Ok(ip) => {
+            let note = if host::is_link_local(&ip) {
+                "  (link-local)"
+            } else {
+                ""
+            };
+            println!("host ip:  {ip}{note}");
+        }
+        Err(e) => println!("host ip:  (undetected: {e})"),
+    }
+    print!("vmm:      {host} => ");
+    match Vmm::connect(host) {
+        Ok(vmm) => match vmm.status().await {
+            Ok(s) => println!("reachable ({} vms)", s.vms.len()),
+            Err(e) => println!("unreachable ({e})"),
+        },
+        Err(e) => println!("invalid endpoint ({e})"),
+    }
+    Ok(())
+}
+
+struct InstallOpts {
+    expose: Option<String>,
+    image: Option<String>,
+    prefix: String,
+    instance: Option<String>,
+    image_path: Option<String>,
+    vmm_bin: String,
+    auth_bin: String,
+    supervisor_bin: String,
+    qemu: String,
+    dashboard_port: u16,
+    auth_port: u16,
+    host_api_port: u32,
+    cid_start: u32,
+    use_existing_key_provider: Option<String>,
+    key_provider_port: u16,
+    key_provider_src: Option<String>,
+    kms_image: String,
+    kms_port: Option<u16>,
+    no_kms: bool,
+    no_start: bool,
+}
+
+async fn cmd_install(o: InstallOpts) -> Result<()> {
+    println!("dstackup install — preflight");
+
+    // 1. hardware gate (fail fast on non-SGX hosts).
+    host::require_sgx()?;
+    println!("  [ok] sgx present");
+
+    // 2. host IP (informational; used as the bind/SAN when --expose is set).
+    match host::detect_host_ip() {
+        Ok(ip) if host::is_link_local(&ip) => {
+            println!("  [!]  host ip {ip} is link-local")
+        }
+        Ok(ip) => println!("  [ok] host ip: {ip}"),
+        Err(e) => println!("  [!]  could not detect host ip: {e}"),
+    }
+
+    // 3. lay out the prefix.
+    let prefix = Path::new(&o.prefix);
+    let run_dir = prefix.join("run");
+    let images = o
+        .image_path
+        .clone()
+        .unwrap_or_else(|| prefix.join("images").display().to_string());
+    for dir in [prefix.to_path_buf(), prefix.join("certs"), run_dir.clone()] {
+        fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+    }
+
+    // 4. resolve the key provider — run our own unless told to use an existing one.
+    let (kp_addr, kp_port, kp_own_project) = resolve_key_provider(&o)?;
+
+    // read prior state up front so re-runs are idempotent.
+    let mut st = read_state(prefix).unwrap_or_default();
+
+    // KMS host port + URL, known up front so the VMM can inject kms_urls into
+    // app CVMs (the guest reaches the KMS at 10.0.2.2:<port> via user-net).
+    let kms_port: u16 = if o.no_kms {
+        0
+    } else if let Some(p) = o.kms_port {
+        p
+    } else if let Some(p) = st.kms_url.rsplit(':').next().and_then(|s| s.parse().ok()) {
+        p // reuse the port a prior install assigned
+    } else {
+        ports::free_local_port()?
+    };
+    let kms_urls = if o.no_kms {
+        vec![]
+    } else {
+        vec![format!("https://10.0.2.2:{kms_port}")]
+    };
+
+    // 5. render configs.
+    let bind = o.expose.clone().unwrap_or_else(|| "127.0.0.1".to_string());
+    let dashboard_addr = format!("tcp:{bind}:{}", o.dashboard_port);
+    let client_url = format!("http://{bind}:{}", o.dashboard_port);
+
+    let vmm = config::vmm_toml(&VmmRender {
+        dashboard_addr: dashboard_addr.clone(),
+        image_path: images.clone(),
+        qemu_path: o.qemu.clone(),
+        run_dir: run_dir.display().to_string(),
+        vm_path: prefix.join("vm").display().to_string(),
+        supervisor_exe: o.supervisor_bin.clone(),
+        cid_start: o.cid_start,
+        host_api_port: o.host_api_port,
+        key_provider_addr: kp_addr,
+        key_provider_port: kp_port as u32,
+        kms_urls: kms_urls.clone(),
+        ..Default::default()
+    });
+    // the KMS-in-CVM reaches the host auth webhook at 10.0.2.2:<auth_port>.
+    // os-image re-verify is off for the single-node flow (the operator controls
+    // the image at install time; turning it on needs a published image source).
+    let host_cfg = HostConfig {
+        auth_webhook_url: format!("http://10.0.2.2:{}", o.auth_port),
+        verify_os_image: false,
+        ..Default::default()
+    };
+    let kms = config::kms_toml(&host_cfg);
+    let allowlist = config::auth_allowlist_json(&host_cfg);
+
+    let vmm_path = prefix.join("vmm.toml");
+    let kms_path = prefix.join("kms.toml");
+    let allow_path = prefix.join("auth-allowlist.json");
+    write(&vmm_path, &vmm)?;
+    write(&kms_path, &kms)?;
+    write(&allow_path, &allowlist)?;
+    println!(
+        "  [ok] wrote {}, {}, {}",
+        vmm_path.display(),
+        kms_path.display(),
+        allow_path.display()
+    );
+
+    if o.no_start {
+        println!("  (--no-start: configs written; not starting any process)");
+        return Ok(());
+    }
+
+    st.prefix = prefix.display().to_string();
+    st.client_url = client_url.clone();
+    st.auth_port = o.auth_port;
+    let auth_unit = unit_name("auth", &o.instance);
+    let vmm_unit = unit_name("vmm", &o.instance);
+
+    // 5. auth webhook systemd unit (idempotent).
+    if unit_active(&auth_unit) {
+        println!("  [ok] {auth_unit}.service already active");
+    } else {
+        install_unit(
+            &auth_unit,
+            &auth_unit_file(&o.auth_bin, &allow_path, o.auth_port, prefix),
+        )
+        .context("installing the auth webhook unit")?;
+        println!(
+            "  [ok] started {auth_unit}.service on 127.0.0.1:{}",
+            o.auth_port
+        );
+    }
+    st.auth_unit = auth_unit.clone();
+
+    // 6. VMM systemd unit (idempotent).
+    if vmm_reachable(&client_url).await {
+        println!("  [ok] VMM already serving at {client_url}");
+    } else {
+        install_unit(
+            &vmm_unit,
+            &vmm_unit_file(&o.vmm_bin, &vmm_path, prefix, &auth_unit),
+        )
+        .context("installing the VMM unit")?;
+        println!("  [ok] started {vmm_unit}.service");
+        print!("  [..] waiting for VMM at {client_url} ");
+        if wait_ready(&client_url, Duration::from_secs(25)).await {
+            println!("=> ready");
+        } else {
+            println!("=> not ready within timeout (journalctl -u {vmm_unit})");
+        }
+    }
+    st.vmm_unit = vmm_unit.clone();
+
+    // persist what we have so far (so a later step / destroy can see it).
+    st.kp_own_project = kp_own_project;
+    write_state(prefix, &st)?;
+
+    // 7. deploy + bootstrap the KMS-in-CVM (idempotent).
+    if o.no_kms {
+        println!("  (--no-kms: skipping KMS deploy)");
+    } else {
+        let vmm = Vmm::connect(&client_url)?;
+        let existing = match &st.kms_vm_id {
+            Some(id) if vmm.has_vm(id).await => Some(id.clone()),
+            _ => None,
+        };
+        if let Some(id) = existing {
+            println!("  [ok] KMS CVM already deployed (vm {id})");
+        } else {
+            let img = o
+                .image
+                .clone()
+                .context("KMS deploy needs --image <version> (or pass --no-kms)")?;
+            let compose = config::kms_app_compose(&kms, &o.kms_image);
+            let cfg = rpc::VmConfiguration {
+                name: "dstack-kms".into(),
+                image: img.clone(),
+                compose_file: compose,
+                vcpu: 4,
+                memory: 8192,
+                disk_size: 20,
+                ports: vec![rpc::PortMapping {
+                    protocol: "tcp".into(),
+                    host_address: "127.0.0.1".into(),
+                    host_port: kms_port as u32,
+                    vm_port: 8000,
+                }],
+                ..Default::default()
+            };
+            println!("  [..] deploying KMS CVM (os {img}, kms {})", o.kms_image);
+            let vm_id = vmm
+                .create_vm(cfg)
+                .await
+                .context("CreateVm for KMS failed")?;
+            print!("  [..] waiting for KMS bootstrap on :{kms_port} ");
+            if wait_kms_ready(kms_port, Duration::from_secs(240)).await {
+                println!("=> bootstrapped");
+            } else {
+                println!("=> not ready in time (check `dstack logs {vm_id}` / VMM log)");
+            }
+            st.kms_vm_id = Some(vm_id);
+            st.kms_url = format!("https://10.0.2.2:{kms_port}");
+            write_state(prefix, &st)?;
+        }
+    }
+
+    println!();
+    println!("dashboard: {client_url}  (localhost — reach it via an SSH tunnel)");
+    if !st.kms_url.is_empty() {
+        println!(
+            "kms:       {}  (apps reach it via this address)",
+            st.kms_url
+        );
+    }
+    println!(
+        "deploy an app with: dstack --host {client_url} run <compose> --image {} --port <vm_port> --allowlist {}",
+        o.image.as_deref().unwrap_or("<ver>"),
+        allow_path.display()
+    );
+    Ok(())
+}
+
+/// resolve the key provider for this install. Returns (addr, port, own_project).
+fn resolve_key_provider(o: &InstallOpts) -> Result<(String, u16, Option<String>)> {
+    if let Some(ep) = &o.use_existing_key_provider {
+        let (addr, port) = split_addr_port(ep)?;
+        println!("  [ok] using existing key provider at {addr}:{port}");
+        return Ok((addr, port, None));
+    }
+    // run our own (default).
+    let src = o.key_provider_src.as_deref().context(
+        "no key provider: pass --use-existing-key-provider ADDR:PORT, or --key-provider-src DIR to run our own",
+    )?;
+    let project = format!("dstack-kp-{}", o.key_provider_port);
+    let status = PCommand::new("docker")
+        .args([
+            "compose",
+            "-p",
+            &project,
+            "-f",
+            &format!("{src}/docker-compose.yaml"),
+            "up",
+            "-d",
+        ])
+        .status()
+        .context("running docker compose for the key provider")?;
+    if !status.success() {
+        bail!("failed to start our own key provider (docker compose up)");
+    }
+    println!(
+        "  [ok] started our own key provider (project {project}, :{})",
+        o.key_provider_port
+    );
+    Ok(("127.0.0.1".to_string(), o.key_provider_port, Some(project)))
+}
+
+fn split_addr_port(ep: &str) -> Result<(String, u16)> {
+    let (addr, port) = ep
+        .rsplit_once(':')
+        .with_context(|| format!("expected ADDR:PORT, got '{ep}'"))?;
+    Ok((
+        addr.to_string(),
+        port.parse()
+            .with_context(|| format!("bad port in '{ep}'"))?,
+    ))
+}
+
+/// poll the KMS `GetMeta` RPC (self-signed TLS) via curl until it bootstraps.
+async fn wait_kms_ready(port: u16, timeout: Duration) -> bool {
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        if kms_get_meta_ok(port) {
+            return true;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    }
+}
+
+fn kms_get_meta_ok(port: u16) -> bool {
+    let out = PCommand::new("curl")
+        .args([
+            "-sk",
+            "--max-time",
+            "4",
+            "-X",
+            "POST",
+            &format!("https://127.0.0.1:{port}/prpc/KMS.GetMeta?json"),
+            "-d",
+            "{}",
+        ])
+        .output();
+    matches!(out, Ok(o) if String::from_utf8_lossy(&o.stdout).contains("ca_cert"))
+}
+
+/// tear down what `install` started; idempotent. Keeps the prefix (configs +
+/// KMS keys) unless `--purge`.
+async fn cmd_destroy(prefix: &str, purge: bool) -> Result<()> {
+    let prefix = Path::new(prefix);
+    println!("dstackup destroy ({})", prefix.display());
+    match read_state(prefix) {
+        Some(st) => {
+            // gracefully stop the KMS CVM first so its keys flush to disk
+            // (unless we purge). Stopping the VMM unit below reaps the supervisor
+            // and the CVM qemu via the unit's cgroup.
+            if let Some(id) = &st.kms_vm_id {
+                if let Ok(vmm) = Vmm::connect(&st.client_url) {
+                    if vmm.has_vm(id).await {
+                        let _ = vmm.stop_vm(id).await;
+                        println!("  stopping KMS CVM (vm {id})");
+                    }
+                }
+            }
+            // stop + remove the units. `systemctl stop` is synchronous and tears
+            // down the whole unit cgroup (VMM + supervisor + CVM qemu), so the
+            // host is back to baseline when this returns.
+            if !st.vmm_unit.is_empty() {
+                remove_unit(&st.vmm_unit);
+                println!("  stopped {}.service", st.vmm_unit);
+            }
+            if !st.auth_unit.is_empty() {
+                remove_unit(&st.auth_unit);
+                println!("  stopped {}.service", st.auth_unit);
+            }
+            systemctl(&["daemon-reload"]);
+            // stop our own key provider, if we started one.
+            if let Some(project) = &st.kp_own_project {
+                let _ = PCommand::new("docker")
+                    .args(["compose", "-p", project, "down"])
+                    .status();
+                println!("  stopped key provider (project {project})");
+            }
+            // remove the runtime-state marker so a later install starts fresh.
+            let _ = fs::remove_file(state_path(prefix));
+        }
+        None => println!(
+            "  no install state at {} (nothing running to stop)",
+            prefix.display()
+        ),
+    }
+
+    if purge {
+        if prefix.exists() {
+            fs::remove_dir_all(prefix).with_context(|| format!("purging {}", prefix.display()))?;
+            println!("  purged {} (configs + KMS keys wiped)", prefix.display());
+        }
+    } else {
+        println!(
+            "  configs + KMS keys kept at {} (use --purge to wipe)",
+            prefix.display()
+        );
+    }
+    Ok(())
+}
+
+fn write(path: &Path, body: &str) -> Result<()> {
+    fs::write(path, body).with_context(|| format!("writing {}", path.display()))
+}
+
+/// one-shot liveness probe of the VMM.
+async fn vmm_reachable(client_url: &str) -> bool {
+    match Vmm::connect(client_url) {
+        Ok(vmm) => vmm.status().await.is_ok(),
+        Err(_) => false,
+    }
+}
+
+/// poll the VMM `Status` RPC until it succeeds or the deadline passes.
+async fn wait_ready(client_url: &str, timeout: Duration) -> bool {
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        if let Ok(vmm) = Vmm::connect(client_url) {
+            if vmm.status().await.is_ok() {
+                return true;
+            }
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+}
