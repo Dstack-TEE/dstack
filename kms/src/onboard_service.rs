@@ -319,7 +319,7 @@ mod tests {
         assert_eq!(response.mr_aggregated.len(), 32);
         assert_eq!(
             response.os_image_hash,
-            snp_measurement_os_image_hash(&serde_json::to_string(&input).unwrap())
+            snp_measurement_os_image_hash(&serde_json::to_string(&input).unwrap()).unwrap()
         );
         assert_eq!(response.attestation_mode, "dstack-amd-sev-snp");
         assert_eq!(response.site_name, "test-site");

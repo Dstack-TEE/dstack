@@ -186,7 +186,7 @@ fn build_amd_snp_boot_info_with_tcb_status(
     validate_amd_snp_measurement_binding(Some(config), verified_measurement, input)?;
     let mr_config = validate_snp_mr_config_binding(verified_host_data, mr_config_document)?;
 
-    let os_image_hash = snp_measurement_os_image_hash(measurement_document);
+    let os_image_hash = snp_measurement_os_image_hash(measurement_document)?;
     let mr_system = Sha256::digest(verified_measurement).to_vec();
     let mr_aggregated = snp_mr_aggregated_digest(verified_measurement, verified_host_data);
     let key_provider_info = mr_config_key_provider_info(&mr_config)?;
@@ -420,8 +420,47 @@ fn snp_mr_aggregated_digest(measurement: &[u8; 48], host_data: &[u8; 32]) -> Vec
     h.finalize().to_vec()
 }
 
-pub(crate) fn snp_measurement_os_image_hash(measurement_document: &str) -> Vec<u8> {
-    Sha256::digest(measurement_document.as_bytes()).to_vec()
+/// Image-invariant projection of `MeasurementInput`: exactly the fields that are
+/// determined by the OS image (firmware, kernel, initrd, cmdline template,
+/// rootfs). Serialized canonically (fixed field order) to derive os_image_hash.
+#[derive(serde::Serialize)]
+struct SevOsImageMeasurement<'a> {
+    rootfs_hash: &'a str,
+    base_cmdline: Option<&'a str>,
+    ovmf_hash: &'a str,
+    kernel_hash: &'a str,
+    initrd_hash: &'a str,
+    sev_hashes_table_gpa: u64,
+    sev_es_reset_eip: u32,
+    ovmf_sections: &'a [OvmfSectionParam],
+}
+
+/// Derive the OS image hash from a self-contained SNP measurement document.
+///
+/// os_image_hash identifies the OS image only, so it covers exactly the
+/// image-determined measurement inputs and EXCLUDES per-deployment values
+/// (`vcpus`, `vcpu_type`, `guest_features`, `app_id`, `compose_hash`). Hashing
+/// the full `MeasurementInput` made the same image hash differently per vCPU
+/// count, which broke per-image on-chain allow-listing.
+///
+/// The document is re-projected and canonically serialized here, so the hash is
+/// independent of the incoming field order / whitespace.
+pub(crate) fn snp_measurement_os_image_hash(measurement_document: &str) -> Result<Vec<u8>> {
+    let input: MeasurementInput = serde_json::from_str(measurement_document)
+        .context("failed to parse sev-snp measurement document for os_image_hash")?;
+    let image = SevOsImageMeasurement {
+        rootfs_hash: &input.rootfs_hash,
+        base_cmdline: input.base_cmdline.as_deref(),
+        ovmf_hash: &input.ovmf_hash,
+        kernel_hash: &input.kernel_hash,
+        initrd_hash: &input.initrd_hash,
+        sev_hashes_table_gpa: input.sev_hashes_table_gpa,
+        sev_es_reset_eip: input.sev_es_reset_eip,
+        ovmf_sections: &input.ovmf_sections,
+    };
+    let canonical =
+        serde_json::to_vec(&image).context("failed to serialize sev os image measurement")?;
+    Ok(Sha256::digest(&canonical).to_vec())
 }
 
 fn mr_config_key_provider_info(mr_config: &MrConfigV3) -> Result<Vec<u8>> {
@@ -1103,13 +1142,14 @@ mod tests {
     }
 
     #[test]
-    fn snp_os_image_hash_covers_all_measurement_input_fields() {
+    fn snp_os_image_hash_covers_image_fields_only() {
         let input = valid_input();
-        let baseline = snp_measurement_os_image_hash(&measurement_document(&input));
+        let os_image_hash =
+            |i: &MeasurementInput| snp_measurement_os_image_hash(&measurement_document(i)).unwrap();
+        let baseline = os_image_hash(&input);
 
-        let cases: Vec<(&str, fn(&mut MeasurementInput))> = vec![
-            ("app_id", |i| i.app_id = hex_of(0x12, 20)),
-            ("compose_hash", |i| i.compose_hash = hex_of(0x23, 32)),
+        // Image-determined fields MUST change the os_image_hash.
+        let image_cases: Vec<(&str, fn(&mut MeasurementInput))> = vec![
             ("rootfs_hash", |i| i.rootfs_hash = hex_of(0x34, 32)),
             ("base_cmdline", |i| {
                 i.base_cmdline = Some("console=ttyS0 loglevel=8".to_string())
@@ -1119,25 +1159,40 @@ mod tests {
             ("initrd_hash", |i| i.initrd_hash = hex_of(0x67, 32)),
             ("sev_hashes_table_gpa", |i| i.sev_hashes_table_gpa += 0x1000),
             ("sev_es_reset_eip", |i| i.sev_es_reset_eip = 0xffff_0000),
-            ("vcpus", |i| i.vcpus = 3),
-            ("vcpu_type", |i| {
-                i.vcpu_type = Some("epyc-milan".to_string())
-            }),
-            ("guest_features", |i| i.guest_features = 3),
             ("ovmf_sections.gpa", |i| i.ovmf_sections[0].gpa += 0x1000),
             ("ovmf_sections.size", |i| i.ovmf_sections[0].size += 0x1000),
             ("ovmf_sections.section_type", |i| {
                 i.ovmf_sections[0].section_type = 4
             }),
         ];
-
-        for (name, mutate) in cases {
+        for (name, mutate) in image_cases {
             let mut changed = input.clone();
             mutate(&mut changed);
             assert_ne!(
                 baseline,
-                snp_measurement_os_image_hash(&measurement_document(&changed)),
-                "{name} must be covered by SNP os_image_hash"
+                os_image_hash(&changed),
+                "{name} must change the SNP os_image_hash"
+            );
+        }
+
+        // Per-deployment fields MUST NOT change the os_image_hash (the same OS
+        // image must hash identically regardless of vCPU count, app, etc.).
+        let deployment_cases: Vec<(&str, fn(&mut MeasurementInput))> = vec![
+            ("app_id", |i| i.app_id = hex_of(0x12, 20)),
+            ("compose_hash", |i| i.compose_hash = hex_of(0x23, 32)),
+            ("vcpus", |i| i.vcpus = 3),
+            ("vcpu_type", |i| {
+                i.vcpu_type = Some("epyc-milan".to_string())
+            }),
+            ("guest_features", |i| i.guest_features = 3),
+        ];
+        for (name, mutate) in deployment_cases {
+            let mut changed = input.clone();
+            mutate(&mut changed);
+            assert_eq!(
+                baseline,
+                os_image_hash(&changed),
+                "{name} must NOT change the SNP os_image_hash"
             );
         }
     }
@@ -1221,7 +1276,7 @@ mod tests {
         assert_eq!(boot_info.compose_hash, vec![0x22; 32]);
         assert_eq!(
             boot_info.os_image_hash,
-            snp_measurement_os_image_hash(&measurement_document(&input))
+            snp_measurement_os_image_hash(&measurement_document(&input)).unwrap()
         );
         assert_eq!(boot_info.mr_system.len(), 32);
         assert!(!boot_info.key_provider_info.is_empty());
