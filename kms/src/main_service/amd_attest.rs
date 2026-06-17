@@ -1535,7 +1535,11 @@ mod tests {
 
         assert_ne!(boot_info.app_id, changed_boot_info.app_id);
         assert_ne!(boot_info.instance_id, changed_boot_info.instance_id);
-        assert_ne!(boot_info.os_image_hash, changed_boot_info.os_image_hash);
+        // app_id is an authorization input, not part of the OS image identity.
+        assert_eq!(
+            boot_info.os_image_hash, changed_boot_info.os_image_hash,
+            "app_id must not change the os_image_hash"
+        );
         assert_ne!(boot_info.mr_aggregated, changed_boot_info.mr_aggregated);
         assert_eq!(boot_info.mr_system, changed_boot_info.mr_system);
         Ok(())
@@ -1548,10 +1552,13 @@ mod tests {
         let chip_id = [0xef; 64];
         let boot_info = build_amd_snp_boot_info(&config(), &verified, &chip_id, &input).unwrap();
 
-        for mutate in [
-            |i: &mut MeasurementInput| i.kernel_hash = hex_of(0x56, 32),
-            |i: &mut MeasurementInput| i.vcpus = 3,
-        ] {
+        // (mutation, is_image_field): both change the SNP measurement (so a stale
+        // verified measurement rejects), but only image fields change os_image_hash.
+        let cases: [(fn(&mut MeasurementInput), bool); 2] = [
+            (|i| i.kernel_hash = hex_of(0x56, 32), true),
+            (|i| i.vcpus = 3, false),
+        ];
+        for (mutate, is_image_field) in cases {
             let mut changed = input.clone();
             mutate(&mut changed);
             let err = build_amd_snp_boot_info(&config(), &verified, &chip_id, &changed)
@@ -1564,7 +1571,17 @@ mod tests {
                     .expect("recomputed measurement should build boot info");
             assert_ne!(boot_info.mr_aggregated, changed_boot_info.mr_aggregated);
             assert_ne!(boot_info.mr_system, changed_boot_info.mr_system);
-            assert_ne!(boot_info.os_image_hash, changed_boot_info.os_image_hash);
+            if is_image_field {
+                assert_ne!(
+                    boot_info.os_image_hash, changed_boot_info.os_image_hash,
+                    "image fields must change os_image_hash"
+                );
+            } else {
+                assert_eq!(
+                    boot_info.os_image_hash, changed_boot_info.os_image_hash,
+                    "per-deployment fields (vcpus) must not change os_image_hash"
+                );
+            }
         }
     }
 
