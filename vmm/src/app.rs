@@ -38,7 +38,6 @@ mod id_pool;
 mod image;
 mod qemu;
 pub(crate) mod registry;
-mod snp_measure;
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct PortMapping {
@@ -1220,14 +1219,15 @@ fn file_sha256_hex(path: &Path) -> Result<String> {
     Ok(hex::encode(sha256_file(path)?))
 }
 
-fn amd_sev_snp_ovmf_measurement_info(image: &Image) -> Result<snp_measure::OvmfMeasurementInfo> {
+fn amd_sev_snp_ovmf_measurement_info(image: &Image) -> Result<dstack_mr::sev::OvmfMeasurementInfo> {
     // Measure the same firmware the guest launches with: the SEV firmware
-    // (bios-sev) when present, falling back to the generic bios.
+    // (bios-sev) when present, falling back to the generic bios. The OVMF
+    // parsing/GCTX logic is shared with `dstack-mr sev-os-image-hash`.
     let bios = image
         .firmware(true)
         .map(|p| p.as_path())
         .ok_or_else(|| anyhow::anyhow!("bios/OVMF is required for amd sev-snp measurement"))?;
-    snp_measure::ovmf_measurement_info(bios).with_context(|| {
+    dstack_mr::sev::ovmf_measurement_info(bios).with_context(|| {
         format!(
             "failed to extract amd sev-snp OVMF measurement metadata from {}",
             bios.display()
