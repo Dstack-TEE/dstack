@@ -93,6 +93,9 @@ fn remove_unit(unit: &str) {
 }
 
 fn auth_unit_file(bin: &str, allowlist: &Path, port: u16, prefix: &Path) -> String {
+    // bind 127.0.0.1 deliberately: the webhook decides key release, so it must
+    // never be reachable off-host. CVMs still reach it at 10.0.2.2:<port> via
+    // user-mode networking (NAT), which maps to the host loopback.
     format!(
         "[Unit]\nDescription=dstack auth webhook\nAfter=network.target\n\n[Service]\n\
          ExecStart={bin} --config {cfg} --address 127.0.0.1 --port {port}\n\

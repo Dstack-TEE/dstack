@@ -107,11 +107,16 @@ impl Vmm {
 
     /// fetch the last `lines` log lines for a VM (non-following).
     ///
-    /// `/logs` is a plain-HTTP endpoint; only the local unix-socket transport is
-    /// supported today (the shared http helper posts on the remote http path).
+    /// `/logs` is a plain-HTTP `GET` endpoint. Only the local unix-socket
+    /// transport is wired today; remote `dstack logs` lands with the TLS+token
+    /// transport (the shared http helper only `POST`s, and an unauthenticated
+    /// remote log endpoint shouldn't be reachable before that exists).
     pub async fn logs(&self, id: &str, lines: u32) -> Result<String> {
         if !self.is_local() {
-            bail!("`dstack logs` currently supports a local VMM (unix socket) only");
+            bail!(
+                "`dstack logs` over a remote endpoint isn't wired yet (lands with the \
+                 TLS+token transport); use the local VMM socket for now"
+            );
         }
         let path = format!("/logs?id={id}&follow=false&ansi=false&lines={lines}");
         let (status, body) = http_request("GET", &self.base, &path, b"").await?;

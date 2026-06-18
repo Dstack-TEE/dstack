@@ -195,7 +195,8 @@ async fn cmd_run(
             .with_context(|| {
                 format!("registering app in {path} (it is usually root-owned — run with sudo, or make it writable)")
             })?;
-        println!("registered in allowlist: {path}");
+        println!("registered compose hash in {path}");
+        println!("  (the KMS issues keys only if this is the allowlist its auth webhook serves)");
     } else if !no_kms {
         println!("note: no --allowlist given; a KMS-mode app needs its compose hash registered to get keys");
     }
