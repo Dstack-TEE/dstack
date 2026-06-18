@@ -566,7 +566,7 @@ impl VmConfig {
         let app_compose = workdir.app_compose().context("Failed to get app compose")?;
         let qemu = &cfg.qemu_path;
         let is_amd_sev_snp =
-            cfg.platform.resolve() == TeePlatform::AmdSevSnp && !self.manifest.no_tee;
+            cfg.resolved_platform() == TeePlatform::AmdSevSnp && !self.manifest.no_tee;
         let mut smp = self.manifest.vcpu.max(1);
         let mut mem = self.manifest.memory;
         let mut command = Command::new(qemu);
@@ -969,8 +969,8 @@ impl VmConfig {
             return Ok(());
         }
 
-        match cfg.platform.resolve() {
-            TeePlatform::Tdx | TeePlatform::Auto => {
+        match cfg.resolved_platform() {
+            TeePlatform::Tdx => {
                 command
                     .arg("-machine")
                     .arg("q35,kernel-irqchip=split,confidential-guest-support=tdx,hpet=off");

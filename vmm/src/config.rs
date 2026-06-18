@@ -106,23 +106,18 @@ impl Protocol {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum TeePlatform {
-    #[default]
-    Auto,
     Tdx,
     AmdSevSnp,
 }
 
 impl TeePlatform {
-    pub fn resolve(self) -> Self {
-        match self {
-            Self::Auto => Self::resolve_from_cpuinfo(
-                &fs_err::read_to_string("/proc/cpuinfo").unwrap_or_default(),
-            ),
-            platform => platform,
-        }
+    /// Detect the host TEE platform from /proc/cpuinfo. Used when the operator
+    /// did not pin a platform in the config (`platform` omitted, or `auto`).
+    pub fn detect() -> Self {
+        Self::resolve_from_cpuinfo(&fs_err::read_to_string("/proc/cpuinfo").unwrap_or_default())
     }
 
     pub fn resolve_from_cpuinfo(cpuinfo: &str) -> Self {
@@ -182,13 +177,44 @@ impl PortMappingConfig {
     }
 }
 
+/// Deserialize the optional `platform` config field. `None` (field omitted, or
+/// the legacy literal `auto`) means "detect the host TEE"; `tdx` / `amd-sev-snp`
+/// pin a platform. Keeping `auto` accepted preserves existing vmm.toml configs.
+fn deserialize_platform<'de, D>(deserializer: D) -> Result<Option<TeePlatform>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(rename_all = "kebab-case")]
+    enum PlatformSetting {
+        Auto,
+        Tdx,
+        AmdSevSnp,
+    }
+    Ok(
+        match Option::<PlatformSetting>::deserialize(deserializer)? {
+            None | Some(PlatformSetting::Auto) => None,
+            Some(PlatformSetting::Tdx) => Some(TeePlatform::Tdx),
+            Some(PlatformSetting::AmdSevSnp) => Some(TeePlatform::AmdSevSnp),
+        },
+    )
+}
+
+impl CvmConfig {
+    /// The effective TEE platform: the configured one, or host auto-detection
+    /// when left unset (`platform` omitted / `auto`).
+    pub fn resolved_platform(&self) -> TeePlatform {
+        self.platform.unwrap_or_else(TeePlatform::detect)
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct CvmConfig {
-    /// TEE platform to use when launching CVMs. Defaults to `auto`, which
-    /// detects the host TEE from /proc/cpuinfo (AMD SEV-SNP vs Intel TDX);
-    /// set `tdx` or `amd-sev-snp` to force a platform.
-    #[serde(default)]
-    pub platform: TeePlatform,
+    /// TEE platform to use when launching CVMs. Omit (or set `auto`) to detect
+    /// the host TEE from /proc/cpuinfo (AMD SEV-SNP vs Intel TDX); set `tdx` or
+    /// `amd-sev-snp` to force a platform.
+    #[serde(default, deserialize_with = "deserialize_platform")]
+    pub platform: Option<TeePlatform>,
     pub qemu_path: PathBuf,
     /// The URL of the KMS server
     pub kms_urls: Vec<String>,
@@ -656,6 +682,25 @@ mod tests {
     fn tee_platform_deserializes_amd_sev_snp() {
         let platform: TeePlatform = serde_json::from_str("\"amd-sev-snp\"").unwrap();
         assert_eq!(platform, TeePlatform::AmdSevSnp);
+    }
+
+    #[test]
+    fn platform_config_maps_auto_and_omitted_to_none() {
+        #[derive(Deserialize)]
+        struct Wrap {
+            #[serde(default, deserialize_with = "deserialize_platform")]
+            platform: Option<TeePlatform>,
+        }
+        let parse = |s: &str| serde_json::from_str::<Wrap>(s).unwrap().platform;
+        // Omitted and the legacy `auto` literal both mean "auto-detect" (None).
+        assert_eq!(parse("{}"), None);
+        assert_eq!(parse(r#"{"platform":"auto"}"#), None);
+        // Explicit platforms are pinned.
+        assert_eq!(parse(r#"{"platform":"tdx"}"#), Some(TeePlatform::Tdx));
+        assert_eq!(
+            parse(r#"{"platform":"amd-sev-snp"}"#),
+            Some(TeePlatform::AmdSevSnp)
+        );
     }
 
     #[test]

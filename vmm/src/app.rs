@@ -1001,7 +1001,7 @@ impl App {
         let manifest = work_dir.manifest().context("Failed to read manifest")?;
         let cfg = &self.config;
         let compose_hash = sha256_file(shared_dir.join(APP_COMPOSE))?;
-        let platform = cfg.cvm.platform.resolve();
+        let platform = cfg.cvm.resolved_platform();
         let app_compose = work_dir
             .app_compose()
             .context("Failed to get app compose")?;
@@ -1265,7 +1265,7 @@ fn make_vm_config(
     mr_config: Option<String>,
 ) -> Result<serde_json::Value> {
     let is_amd_sev_snp =
-        cfg.cvm.platform.resolve() == crate::config::TeePlatform::AmdSevSnp && !manifest.no_tee;
+        cfg.cvm.resolved_platform() == crate::config::TeePlatform::AmdSevSnp && !manifest.no_tee;
     // AMD SEV-SNP binds the OS image through the launch-measurement-derived
     // os_image_hash, computed at image build time by `dstack-mr sev-os-image-hash`
     // and shipped as `digest.sev.txt` (the same value KMS/verifier derive from a
@@ -1452,7 +1452,7 @@ mod tests {
 
         let mut config: Config = Figment::from(load_config_figment(None)).extract()?;
         config.image.path = image_root;
-        config.cvm.platform = TeePlatform::AmdSevSnp;
+        config.cvm.platform = Some(TeePlatform::AmdSevSnp);
         let compose_hash = hex_of(0x22, 32);
         let manifest = Manifest {
             id: "snp-test".to_string(),

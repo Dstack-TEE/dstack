@@ -238,7 +238,7 @@ Compose file content (first 200 chars):
     let app_compose = vm_work_dir
         .app_compose()
         .context("Failed to get app compose")?;
-    let platform = config.cvm.platform.resolve();
+    let platform = config.cvm.resolved_platform();
     let use_mr_config_v3 = !manifest.no_tee
         && (platform == crate::config::TeePlatform::AmdSevSnp
             || (platform == crate::config::TeePlatform::Tdx
