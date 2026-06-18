@@ -62,12 +62,66 @@ fn unit_name(base: &str, instance: &Option<String>) -> String {
     }
 }
 
+/// spawn an external tool (systemctl/docker/curl) with a sanitized `PATH`, so a
+/// hijacked environment can't substitute a different binary while we run as root.
+fn tool(bin: &str) -> PCommand {
+    let mut c = PCommand::new(bin);
+    c.env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin");
+    c
+}
+
 fn systemctl(args: &[&str]) -> bool {
-    PCommand::new("systemctl")
+    tool("systemctl")
         .args(args)
         .status()
         .map(|s| s.success())
         .unwrap_or(false)
+}
+
+/// size of a VMM's CID pool (matches `config::VmmRender` default).
+const CID_POOL_SIZE: u32 = 1000;
+/// default CID pool start when nothing else is using that range.
+const DEFAULT_CID_START: u32 = 1000;
+
+/// whether `[start, start+CID_POOL_SIZE)` intersects any occupied range.
+fn cid_window_overlaps(start: u32, occupied: &[(u32, u32)]) -> bool {
+    let end = start.saturating_add(CID_POOL_SIZE);
+    occupied.iter().any(|&(s, e)| start < e && s < end)
+}
+
+/// the lowest pool-aligned CID block at or above every occupied range.
+fn next_free_cid_block(occupied: &[(u32, u32)]) -> u32 {
+    let max_end = occupied
+        .iter()
+        .map(|&(_, e)| e)
+        .max()
+        .unwrap_or(DEFAULT_CID_START);
+    (max_end.div_ceil(CID_POOL_SIZE) * CID_POOL_SIZE).max(DEFAULT_CID_START)
+}
+
+/// choose a CID window `[start, start+CID_POOL_SIZE)` that won't collide with a
+/// VMM already running on this host. With an explicit `--cid-start`, honor it
+/// but refuse on overlap; without one, use the default unless it's taken, then
+/// move to the next free block.
+fn pick_cid_start(explicit: Option<u32>, occupied: &[(u32, u32)]) -> Result<u32> {
+    match explicit {
+        Some(n) => {
+            if cid_window_overlaps(n, occupied) {
+                bail!(
+                    "--cid-start {n} overlaps a CID range already reserved on this host; \
+                     pick a free start, e.g. --cid-start {}",
+                    next_free_cid_block(occupied)
+                );
+            }
+            Ok(n)
+        }
+        None if !cid_window_overlaps(DEFAULT_CID_START, occupied) => Ok(DEFAULT_CID_START),
+        None => {
+            let start = next_free_cid_block(occupied);
+            println!("  [ok] cid-start {start} (avoids CIDs already reserved by another VMM)");
+            Ok(start)
+        }
+    }
 }
 
 fn unit_active(unit: &str) -> bool {
@@ -189,9 +243,10 @@ enum Command {
         #[arg(long, default_value_t = 10000)]
         host_api_port: u32,
 
-        /// CID pool start (raise to coexist with an existing VMM).
-        #[arg(long, default_value_t = 1000)]
-        cid_start: u32,
+        /// CID pool start (default: auto — the first free block, so it coexists
+        /// with any VMM already running on this host).
+        #[arg(long)]
+        cid_start: Option<u32>,
 
         /// use an existing key provider at ADDR:PORT instead of running our own.
         #[arg(long, value_name = "ADDR:PORT")]
@@ -334,7 +389,7 @@ struct InstallOpts {
     dashboard_port: u16,
     auth_port: u16,
     host_api_port: u32,
-    cid_start: u32,
+    cid_start: Option<u32>,
     use_existing_key_provider: Option<String>,
     key_provider_port: u16,
     key_provider_src: Option<String>,
@@ -413,6 +468,9 @@ async fn cmd_install(o: InstallOpts) -> Result<()> {
     let dashboard_addr = format!("tcp:{bind}:{}", o.dashboard_port);
     let client_url = format!("http://{bind}:{}", o.dashboard_port);
 
+    // pick a CID window that doesn't collide with a VMM already running here.
+    let cid_start = pick_cid_start(o.cid_start, &host::occupied_cid_ranges())?;
+
     let vmm = config::vmm_toml(&VmmRender {
         dashboard_addr: dashboard_addr.clone(),
         image_path: images.clone(),
@@ -420,7 +478,7 @@ async fn cmd_install(o: InstallOpts) -> Result<()> {
         run_dir: run_dir.display().to_string(),
         vm_path: prefix.join("vm").display().to_string(),
         supervisor_exe: o.supervisor_bin.clone(),
-        cid_start: o.cid_start,
+        cid_start,
         host_api_port: o.host_api_port,
         key_provider_addr: kp_addr,
         key_provider_port: kp_port as u32,
@@ -590,7 +648,7 @@ fn resolve_key_provider(o: &InstallOpts) -> Result<(String, u16, Option<String>)
         "no key provider: pass --use-existing-key-provider ADDR:PORT, or --key-provider-src DIR to run our own",
     )?;
     let project = format!("dstack-kp-{}", o.key_provider_port);
-    let status = PCommand::new("docker")
+    let status = tool("docker")
         .args([
             "compose",
             "-p",
@@ -648,8 +706,14 @@ async fn wait_kms_ready(port: u16, timeout: Duration) -> bool {
     }
 }
 
+/// is the KMS bootstrapped and answering on `port`? curl (not the typed
+/// client) because the KMS serves self-signed RA-TLS we deliberately don't
+/// verify here (`-k`); but require curl to actually succeed AND a parsed,
+/// non-empty `ca_cert` field — so an error body or a partial response that
+/// merely contains the substring can't read as "ready". A real success here
+/// also confirms it's our KMS bound to this exact port (port-verification).
 fn kms_get_meta_ok(port: u16) -> bool {
-    let out = PCommand::new("curl")
+    let out = tool("curl")
         .args([
             "-sk",
             "--max-time",
@@ -661,7 +725,18 @@ fn kms_get_meta_ok(port: u16) -> bool {
             "{}",
         ])
         .output();
-    matches!(out, Ok(o) if String::from_utf8_lossy(&o.stdout).contains("ca_cert"))
+    let Ok(out) = out else { return false };
+    if !out.status.success() {
+        return false;
+    }
+    serde_json::from_slice::<serde_json::Value>(&out.stdout)
+        .ok()
+        .and_then(|v| {
+            v.get("ca_cert")
+                .and_then(|c| c.as_str())
+                .map(|s| !s.is_empty())
+        })
+        .unwrap_or(false)
 }
 
 /// tear down what `install` started; idempotent. Keeps the prefix (configs +
@@ -708,7 +783,7 @@ async fn cmd_destroy(prefix: &str, purge: bool) -> Result<()> {
             systemctl(&["daemon-reload"]);
             // stop our own key provider, if we started one.
             if let Some(project) = &st.kp_own_project {
-                let _ = PCommand::new("docker")
+                let _ = tool("docker")
                     .args(["compose", "-p", project, "down"])
                     .status();
                 println!("  stopped key provider (project {project})");
@@ -764,5 +839,34 @@ async fn wait_ready(client_url: &str, timeout: Duration) -> bool {
             return false;
         }
         tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cid_default_when_range_free() {
+        assert_eq!(pick_cid_start(None, &[]).unwrap(), 1000);
+        // a pool entirely above the default window leaves it free.
+        assert_eq!(pick_cid_start(None, &[(2000, 3000)]).unwrap(), 1000);
+    }
+
+    #[test]
+    fn cid_auto_offsets_past_an_existing_vmm() {
+        // another VMM reserving [1000,2000) -> jump to 2000.
+        assert_eq!(pick_cid_start(None, &[(1000, 2000)]).unwrap(), 2000);
+        // its reserved pool plus a stray live CVM at 2500 -> jump past it.
+        assert_eq!(
+            pick_cid_start(None, &[(1000, 2000), (2500, 2501)]).unwrap(),
+            3000
+        );
+    }
+
+    #[test]
+    fn cid_explicit_honored_or_refused() {
+        assert_eq!(pick_cid_start(Some(2000), &[(1000, 2000)]).unwrap(), 2000);
+        assert!(pick_cid_start(Some(1000), &[(1000, 2000)]).is_err());
     }
 }

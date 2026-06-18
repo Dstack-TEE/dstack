@@ -272,4 +272,39 @@ mod tests {
         // fail closed: empty allowlist denies (the single-node case never calls this).
         assert!(!check_kms(&info, &Allowlist::default()).is_allowed);
     }
+
+    // wire-contract snapshot: BootInfo as the KMS serializes it (camelCase).
+    // Keep these field names in sync with the kms BootInfo. `#[serde(default)]`
+    // means extra fields are ignored AND a renamed field deserializes to "" —
+    // which fails closed, but silently — so this test pins the names we depend
+    // on: if the KMS renames one, the matching assertion here breaks first.
+    #[test]
+    fn deserializes_the_kms_bootinfo_wire_contract() {
+        let wire = r#"{
+            "attestationMode": "dstack",
+            "mrAggregated": "0xAABB",
+            "osImageHash": "0xC2AA",
+            "mrSystem": "0xdead",
+            "appId": "0xApp1",
+            "composeHash": "0xHASH",
+            "instanceId": "0x01",
+            "deviceId": "0xDEV",
+            "keyProviderInfo": "kp",
+            "tcbStatus": "UpToDate",
+            "advisoryIds": []
+        }"#;
+        let info: BootInfo = serde_json::from_str(wire).expect("kms BootInfo must deserialize");
+        assert_eq!(norm(&info.mr_aggregated), "aabb");
+        assert_eq!(norm(&info.os_image_hash), "c2aa");
+        assert_eq!(norm(&info.app_id), "app1");
+        assert_eq!(norm(&info.compose_hash), "hash");
+        assert_eq!(norm(&info.device_id), "dev");
+        // a check using this payload should pass against a matching allowlist.
+        let info2: BootInfo = serde_json::from_str(wire).unwrap();
+        let al: Allowlist = serde_json::from_str(
+            r#"{"osImages":["0xC2AA"],"apps":{"0xApp1":{"composeHashes":["0xHASH"],"allowAnyDevice":true}}}"#,
+        )
+        .unwrap();
+        assert!(check_app(&info2, &al).is_allowed);
+    }
 }
