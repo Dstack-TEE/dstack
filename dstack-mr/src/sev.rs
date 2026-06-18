@@ -787,6 +787,7 @@ pub fn parse_snp_inputs_from_vm_config(vm_config: &str) -> Result<SnpLaunchInput
 }
 
 /// The verified SNP image binding produced by [`verify_sev_launch`].
+#[derive(Debug, Clone)]
 pub struct SevImageBinding {
     /// Image-invariant os_image_hash derived from the (now measurement-bound)
     /// launch inputs.
@@ -1012,6 +1013,262 @@ mod tests {
         assert_eq!(
             hex::encode(os_image_hash),
             "32b4767373ad7fa0f9c418925006194d5c3f5619529f309fe81156789fecd8bc",
+        );
+    }
+
+    // ---- Forged-quote / tampered-input coverage for `verify_sev_launch` ----
+    //
+    // These build a self-consistent (launch-inputs, mr_config, MEASUREMENT,
+    // HOST_DATA) tuple, then forge one piece at a time and require rejection. The
+    // hardware report's MEASUREMENT/HOST_DATA are simulated by the values we pass
+    // as "verified"; on real hardware they come from the signed report, so an
+    // attacker cannot change them to match forged inputs.
+
+    fn synthetic_mr_config() -> MrConfigV3 {
+        MrConfigV3::new(
+            vec![0x11; 20],
+            vec![0x22; 32],
+            dstack_types::KeyProviderKind::None,
+            Vec::new(),
+            vec![0x33; 20],
+        )
+    }
+
+    fn synthetic_vm_config(input: &MeasurementInput, mr_config: &MrConfigV3) -> String {
+        serde_json::json!({
+            "sev_snp_measurement": serde_json::to_string(input).expect("serialize input"),
+            "mr_config": mr_config.to_canonical_json(),
+        })
+        .to_string()
+    }
+
+    /// Returns `(input, mr_config, verified_measurement, verified_host_data, vm_config)`
+    /// for an honest, internally-consistent SNP launch.
+    fn honest_case() -> (MeasurementInput, MrConfigV3, [u8; 48], [u8; 32], String) {
+        let input = valid_input();
+        let mr_config = synthetic_mr_config();
+        let host_data = MrConfigV3::snp_host_data_from_document(&mr_config.to_canonical_json());
+        let measurement = compute_expected_measurement(&input).expect("measurement");
+        let vm_config = synthetic_vm_config(&input, &mr_config);
+        (input, mr_config, measurement, host_data, vm_config)
+    }
+
+    #[test]
+    fn verify_sev_launch_accepts_consistent_inputs() {
+        let (input, mr_config, measurement, host_data, vm_config) = honest_case();
+        let binding = verify_sev_launch(&measurement, &host_data, &vm_config)
+            .expect("honest launch verifies");
+        assert_eq!(
+            binding.os_image_hash,
+            snp_measurement_os_image_hash(&serde_json::to_string(&input).unwrap()).unwrap()
+        );
+        assert_eq!(binding.mr_config.app_id, mr_config.app_id);
+    }
+
+    #[test]
+    fn verify_sev_launch_rejects_forged_measurement() {
+        let (_input, _mr, measurement, host_data, vm_config) = honest_case();
+        let mut forged = measurement;
+        forged[0] ^= 0xff;
+        let err = verify_sev_launch(&forged, &host_data, &vm_config)
+            .expect_err("forged hardware measurement must reject");
+        assert!(
+            err.to_string().contains("amd sev-snp measurement mismatch"),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn verify_sev_launch_rejects_forged_host_data() {
+        let (_input, _mr, measurement, host_data, vm_config) = honest_case();
+        let mut forged = host_data;
+        forged[0] ^= 0xff;
+        let err = verify_sev_launch(&measurement, &forged, &vm_config)
+            .expect_err("forged hardware host_data must reject");
+        assert!(
+            err.to_string().contains("amd sev-snp host_data mismatch"),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn verify_sev_launch_rejects_tampered_measured_inputs() {
+        // Fields that feed the launch MEASUREMENT: tampering the advertised
+        // inputs while keeping the honest hardware MEASUREMENT is caught by the
+        // measurement-equality check, so the (would-be different) os_image_hash
+        // never gets a chance to be trusted.
+        let (input, mr_config, measurement, host_data, _vm_config) = honest_case();
+        let cases: Vec<(&str, fn(&mut MeasurementInput))> = vec![
+            ("base_cmdline", |i| {
+                i.base_cmdline = Some("console=ttyS0 evil=1".to_string())
+            }),
+            ("ovmf_hash", |i| i.ovmf_hash = hex_of(0x99, 48)),
+            ("kernel_hash", |i| i.kernel_hash = hex_of(0x99, 32)),
+            ("initrd_hash", |i| i.initrd_hash = hex_of(0x99, 32)),
+            // Only the in-page offset (& 0xfff) of the hash table is measured, so
+            // tamper the low bits to actually move the measured table position.
+            ("sev_hashes_table_gpa", |i| i.sev_hashes_table_gpa += 0x40),
+            ("sev_es_reset_eip", |i| i.sev_es_reset_eip = 0xffff_0000),
+            ("ovmf_sections.gpa", |i| i.ovmf_sections[0].gpa += 0x1000),
+            ("vcpus", |i| i.vcpus = 4),
+            ("vcpu_type", |i| {
+                i.vcpu_type = Some("epyc-milan".to_string())
+            }),
+            ("guest_features", |i| i.guest_features = 3),
+        ];
+        for (name, mutate) in cases {
+            let mut tampered = input.clone();
+            mutate(&mut tampered);
+            let vm_config = synthetic_vm_config(&tampered, &mr_config);
+            let err = match verify_sev_launch(&measurement, &host_data, &vm_config) {
+                Ok(binding) => panic!(
+                    "{name} tampering was accepted; derived os_image_hash {}",
+                    hex::encode(binding.os_image_hash)
+                ),
+                Err(e) => e.to_string(),
+            };
+            assert!(
+                err.contains("amd sev-snp measurement mismatch"),
+                "{name}: unexpected error: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn tampering_rootfs_hash_changes_os_image_hash() {
+        // `rootfs_hash` is bound into the launch MEASUREMENT indirectly, through
+        // the measured kernel cmdline (`dstack.rootfs_hash=...`), but the
+        // standalone field also feeds the os_image_hash projection. Tampering the
+        // standalone field is therefore not a measurement mismatch — it yields a
+        // DIFFERENT os_image_hash that cannot match an allow-listed image, so the
+        // forgery is caught downstream by the os_image_hash allowlist instead.
+        let (input, mr_config, measurement, host_data, vm_config) = honest_case();
+        let honest = verify_sev_launch(&measurement, &host_data, &vm_config)
+            .expect("honest launch verifies");
+
+        let mut tampered = input.clone();
+        tampered.rootfs_hash = hex_of(0x99, 32);
+        let tampered_vm = synthetic_vm_config(&tampered, &mr_config);
+        let forged = verify_sev_launch(&measurement, &host_data, &tampered_vm)
+            .expect("rootfs_hash is not in the measurement, so the launch still verifies");
+        assert_ne!(
+            honest.os_image_hash, forged.os_image_hash,
+            "a tampered rootfs_hash must change the derived os_image_hash"
+        );
+    }
+
+    #[test]
+    fn verify_sev_launch_rejects_tampered_mr_config() {
+        // Changing app/compose/instance identity changes the MrConfigV3 document,
+        // so the honest HOST_DATA no longer binds it.
+        let (input, _mr, measurement, host_data, _vm) = honest_case();
+        let evil_mr_configs = [
+            MrConfigV3::new(
+                vec![0xee; 20],
+                vec![0x22; 32],
+                dstack_types::KeyProviderKind::None,
+                Vec::new(),
+                vec![0x33; 20],
+            ),
+            MrConfigV3::new(
+                vec![0x11; 20],
+                vec![0xee; 32],
+                dstack_types::KeyProviderKind::None,
+                Vec::new(),
+                vec![0x33; 20],
+            ),
+            MrConfigV3::new(
+                vec![0x11; 20],
+                vec![0x22; 32],
+                dstack_types::KeyProviderKind::None,
+                Vec::new(),
+                vec![0xee; 20],
+            ),
+        ];
+        for evil in evil_mr_configs {
+            let vm_config = synthetic_vm_config(&input, &evil);
+            let err = verify_sev_launch(&measurement, &host_data, &vm_config)
+                .expect_err("substituted mr_config must reject");
+            assert!(
+                err.to_string().contains("amd sev-snp host_data mismatch"),
+                "unexpected error: {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn verify_sev_launch_ignores_advertised_os_image_hash() {
+        // The os_image_hash is derived from the measurement-bound inputs; a
+        // top-level attacker-advertised os_image_hash is ignored entirely.
+        let (input, mr_config, measurement, host_data, _vm) = honest_case();
+        let bogus = vec![0xde; 32];
+        let vm_config = serde_json::json!({
+            "os_image_hash": hex::encode(&bogus),
+            "sev_snp_measurement": serde_json::to_string(&input).unwrap(),
+            "mr_config": mr_config.to_canonical_json(),
+        })
+        .to_string();
+        let binding = verify_sev_launch(&measurement, &host_data, &vm_config)
+            .expect("bogus advertised os_image_hash is ignored, not fatal");
+        let expected =
+            snp_measurement_os_image_hash(&serde_json::to_string(&input).unwrap()).unwrap();
+        assert_eq!(binding.os_image_hash, expected);
+        assert_ne!(binding.os_image_hash, bogus);
+    }
+
+    #[test]
+    fn swapping_os_image_changes_hash_and_is_rejected() {
+        // An attacker booting a different OS image cannot present an allowed
+        // image's inputs: the booted image's MEASUREMENT differs from the
+        // advertised inputs' recomputed measurement.
+        let honest = valid_input();
+        let honest_hash =
+            snp_measurement_os_image_hash(&serde_json::to_string(&honest).unwrap()).unwrap();
+
+        let mut malicious = honest.clone();
+        malicious.kernel_hash = hex_of(0xab, 32); // different kernel == different image
+        let malicious_measurement = compute_expected_measurement(&malicious).unwrap();
+        let malicious_hash =
+            snp_measurement_os_image_hash(&serde_json::to_string(&malicious).unwrap()).unwrap();
+        assert_ne!(
+            honest_hash, malicious_hash,
+            "different image must hash differently"
+        );
+
+        let mr_config = synthetic_mr_config();
+        let host_data = MrConfigV3::snp_host_data_from_document(&mr_config.to_canonical_json());
+        // Hardware measured the malicious image, but the quote advertises the
+        // honest (allowed) inputs.
+        let vm_config = synthetic_vm_config(&honest, &mr_config);
+        let err = verify_sev_launch(&malicious_measurement, &host_data, &vm_config)
+            .expect_err("advertised honest inputs must not pass for a different booted image");
+        assert!(
+            err.to_string().contains("amd sev-snp measurement mismatch"),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn verify_sev_launch_requires_measurement_and_mr_config() {
+        let (input, mr_config, measurement, host_data, _vm) = honest_case();
+
+        let no_measurement =
+            serde_json::json!({ "mr_config": mr_config.to_canonical_json() }).to_string();
+        let err = verify_sev_launch(&measurement, &host_data, &no_measurement)
+            .expect_err("missing sev_snp_measurement must fail closed");
+        assert!(
+            err.to_string().contains("sev_snp_measurement is required"),
+            "unexpected error: {err:?}"
+        );
+
+        let no_mr_config =
+            serde_json::json!({ "sev_snp_measurement": serde_json::to_string(&input).unwrap() })
+                .to_string();
+        let err = verify_sev_launch(&measurement, &host_data, &no_mr_config)
+            .expect_err("missing mr_config must fail closed");
+        assert!(
+            err.to_string().contains("mr_config is required"),
+            "unexpected error: {err:?}"
         );
     }
 }
