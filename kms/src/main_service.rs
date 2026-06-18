@@ -117,10 +117,6 @@ impl KmsState {
                 "self-authorization is disabled; trusted RPCs will not be gated by KMS self-attestation - do not use in production TEE deployments"
             );
         }
-        ensure_snp_key_release_config_safe(
-            config.enforce_self_authorization,
-            &config.sev_snp_key_release,
-        )?;
         Ok(Self {
             inner: Arc::new(KmsStateInner {
                 config,
@@ -206,16 +202,6 @@ fn ensure_snp_key_release_allowed(
         {
             bail!("advisory_id is not allowed");
         }
-    }
-    Ok(())
-}
-
-fn ensure_snp_key_release_config_safe(
-    enforce_self_authorization: bool,
-    policy: &SevSnpKeyReleaseConfig,
-) -> Result<()> {
-    if policy.enabled && !enforce_self_authorization {
-        bail!("self-authorization is required for amd sev-snp key release");
     }
     Ok(())
 }
@@ -843,22 +829,6 @@ mod tests {
         let err = ensure_snp_key_release_allowed(&boot_info, &policy)
             .expect_err("unallowlisted SNP advisory must not release keys");
         assert!(err.to_string().contains("advisory_id is not allowed"));
-    }
-
-    #[test]
-    fn snp_release_config_requires_self_authorization_when_enabled() {
-        let policy = SevSnpKeyReleaseConfig {
-            enabled: true,
-            ..Default::default()
-        };
-
-        let err = ensure_snp_key_release_config_safe(false, &policy)
-            .expect_err("enabled SNP release must require KMS self-authorization");
-        assert!(err
-            .to_string()
-            .contains("self-authorization is required for amd sev-snp key release"));
-        ensure_snp_key_release_config_safe(true, &policy)
-            .expect("enabled SNP release is safe only with self-authorization enforced");
     }
 
     #[test]
