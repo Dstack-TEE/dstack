@@ -1685,8 +1685,8 @@ impl Attestation {
             }
         };
         if let AttestationQuote::DstackAmdSevSnp(quote) = &mut quote {
-            quote.mr_config = read_mr_config_document()?
-                .context("amd sev-snp mr_config is missing")?;
+            quote.mr_config =
+                read_mr_config_document()?.context("amd sev-snp mr_config is missing")?;
         }
 
         Ok(Self {

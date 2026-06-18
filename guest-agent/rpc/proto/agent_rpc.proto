@@ -191,14 +191,19 @@ message AttestResponse {
 }
 
 message GetQuoteResponse {
-  // TDX quote
+  // TDX quote (empty on non-TDX platforms such as AMD SEV-SNP)
   bytes quote = 1;
-  // Event log
+  // Event log (empty on non-TDX platforms)
   string event_log = 2;
   // Report data
   bytes report_data = 3;
   // Hw config
   string vm_config = 4;
+  // Platform-adaptive versioned attestation (SCALE/msgpack encoded). Populated
+  // for every TEE platform (TDX, AMD SEV-SNP, ...) and is the verifier-ready
+  // payload to send to dstack-verifier's `/verify` `attestation` field. Use
+  // this instead of `quote`/`event_log` for platform-agnostic verification.
+  bytes attestation = 5;
 }
 
 message EmitEventArgs {
