@@ -425,10 +425,22 @@ async fn cmd_install(o: InstallOpts) -> Result<()> {
         ..Default::default()
     });
     // the KMS-in-CVM reaches the host auth webhook at 10.0.2.2:<auth_port>.
-    // os-image re-verify is off for the single-node flow (the operator controls
-    // the image at install time; turning it on needs a published image source).
+    // The KMS's own image download-verify stays off for the single-node flow
+    // (it would need a published image source), but we PIN the app OS image in
+    // the webhook allowlist: digest.txt holds the measured image hash the KMS
+    // reports for an app, so an app cannot boot under a different, unmeasured
+    // image and still receive keys. bootAuth/kms ignores osImages, so the KMS
+    // bootstrap itself is unaffected.
+    let os_image_hash = resolve_os_image_hash(&images, o.image.as_deref());
+    match &os_image_hash {
+        Some(h) => println!("  [ok] pinning app os image {h}"),
+        None => println!(
+            "  [!]  app os image NOT pinned (no digest.txt) — apps' image will be unchecked"
+        ),
+    }
     let host_cfg = HostConfig {
         auth_webhook_url: format!("http://10.0.2.2:{}", o.auth_port),
+        os_image_hash: os_image_hash.unwrap_or_default(),
         verify_os_image: false,
         ..Default::default()
     };
@@ -606,6 +618,17 @@ fn split_addr_port(ep: &str) -> Result<(String, u16)> {
         port.parse()
             .with_context(|| format!("bad port in '{ep}'"))?,
     ))
+}
+
+/// read the measured OS-image hash from the guest image's `digest.txt`
+/// (`<images>/<image>/digest.txt`), used to pin which image apps may boot.
+/// Returns None when there's no image selected or no readable digest (e.g.
+/// `--no-kms` with no `--image`), in which case apps are left unpinned.
+fn resolve_os_image_hash(images: &str, image: Option<&str>) -> Option<String> {
+    let img = image?;
+    let path = Path::new(images).join(img).join("digest.txt");
+    let hash = fs::read_to_string(path).ok()?.trim().to_string();
+    (!hash.is_empty()).then_some(hash)
 }
 
 /// poll the KMS `GetMeta` RPC (self-signed TLS) via curl until it bootstraps.
