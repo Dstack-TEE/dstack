@@ -24,5 +24,7 @@ pub fn build_app_compose(name: &str, docker_compose_yaml: &str, kms_enabled: boo
         "public_sysinfo": true,
         "no_instance_id": false,
     });
-    serde_json::to_string_pretty(&manifest).expect("app-compose manifest is always serializable")
+    // pretty-print via Value's Display (`{:#}`) — infallible, and byte-identical
+    // to serde_json::to_string_pretty (avoids an expect on an unfailable Result).
+    format!("{manifest:#}")
 }

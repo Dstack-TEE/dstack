@@ -186,7 +186,8 @@ pub fn auth_allowlist_json(cfg: &HostConfig) -> String {
         },
         "apps": {}
     });
-    serde_json::to_string_pretty(&allowlist).expect("allowlist is always serializable")
+    // infallible pretty-print via Value's Display; see compose::build_app_compose.
+    format!("{allowlist:#}")
 }
 
 /// default pinned, reproducibly-built KMS image (Docker Hub).
@@ -231,7 +232,8 @@ volumes:
         "secure_time": false,
         "allowed_envs": []
     });
-    serde_json::to_string_pretty(&manifest).expect("kms app-compose is always serializable")
+    // infallible pretty-print via Value's Display; see compose::build_app_compose.
+    format!("{manifest:#}")
 }
 
 /// inputs for rendering `vmm.toml`. Defaults target a localhost dashboard and
