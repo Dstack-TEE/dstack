@@ -2326,6 +2326,7 @@ dependencies = [
  "anyhow",
  "cc-eventlog",
  "dcap-qvl",
+ "dstack-mr",
  "dstack-types",
  "errify",
  "ez-hash",

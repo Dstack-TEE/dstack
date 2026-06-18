@@ -76,4 +76,31 @@ fn verify_sev_snp_attestation_bin() {
     println!("host_data:   {}", hex::encode(verified.host_data));
     println!("chip_id:     {}", hex::encode(verified.chip_id));
     println!("tcb_status:  {}", verified.tcb_info.tcb_status());
+
+    // End-to-end OS image binding, fully offline — exactly what dstack-verifier
+    // does after the hardware report verifies. Recompute the launch measurement
+    // from the self-contained `sev_snp_measurement` document embedded in the
+    // attestation config, require it to equal the hardware MEASUREMENT, require
+    // HOST_DATA to bind the MrConfigV3 document, and derive the os_image_hash.
+    let binding = dstack_mr::sev::verify_sev_launch(
+        &verified.measurement,
+        &verified.host_data,
+        &attestation.config,
+    )
+    .expect("recompute SEV launch + derive os_image_hash from the attestation config");
+
+    // The os_image_hash matches the value advertised in the CVM config and the
+    // image build's digest.sev.txt.
+    assert_eq!(
+        hex::encode(&binding.os_image_hash),
+        "32b4767373ad7fa0f9c418925006194d5c3f5619529f309fe81156789fecd8bc",
+        "derived os_image_hash"
+    );
+    // The HOST_DATA-bound app identity is recovered from the mr_config document.
+    assert_eq!(
+        hex::encode(&binding.mr_config.app_id),
+        "86e59625be93207bc2351c4d1bba20037cec8e16",
+        "mr_config app_id bound by HOST_DATA"
+    );
+    println!("os_image_hash: {}", hex::encode(&binding.os_image_hash));
 }
