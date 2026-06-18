@@ -26,9 +26,10 @@ fn sibling(path: &Path, suffix: &str) -> PathBuf {
 }
 
 /// atomically replace `path`'s contents: write a sibling temp file, fsync it,
-/// then rename it over the target. A crash or partial write never leaves the
-/// target torn — a reader sees either the old file or the new one, never a
-/// fragment. `tmp` and `path` are in the same directory so the rename is atomic.
+/// rename it over the target, then fsync the directory. A reader (or a crash)
+/// sees either the old file or the new one, never a fragment, and the rename is
+/// durable across a power loss. `tmp` and `path` are in the same directory so
+/// the rename is atomic.
 pub fn write_atomic(path: &Path, contents: &str) -> Result<()> {
     let tmp = sibling(path, ".tmp");
     let mut f =
@@ -40,6 +41,12 @@ pub fn write_atomic(path: &Path, contents: &str) -> Result<()> {
     drop(f);
     std::fs::rename(&tmp, path)
         .with_context(|| format!("renaming {} -> {}", tmp.display(), path.display()))?;
+    // fsync the containing directory so the rename itself survives a crash.
+    if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
+        if let Ok(d) = File::open(dir) {
+            let _ = d.sync_all();
+        }
+    }
     Ok(())
 }
 

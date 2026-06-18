@@ -19,6 +19,13 @@ pub fn free_local_port() -> Result<u16> {
     Ok(port)
 }
 
+/// whether `addr:port` can be bound right now. Best-effort and racy, but it
+/// catches the common "another service already owns this port" case so an
+/// install can refuse before it starts changing the host.
+pub fn tcp_port_free(addr: &str, port: u16) -> bool {
+    TcpListener::bind((addr, port)).is_ok()
+}
+
 /// parse a `--port` spec into a [`PortMapping`], auto-allocating the host port
 /// when it is omitted, `0`, or `auto`. Accepted forms:
 ///

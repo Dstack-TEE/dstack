@@ -11,6 +11,14 @@
 //! allowlist). The allowlist JSON is re-read on every request, so `dstack run`
 //! can add an app without a restart. Fails closed: a missing/invalid allowlist
 //! denies everything.
+//!
+//! Deliberate Tier-1 deviation from `auth-simple`: it does NOT enforce
+//! `tcbStatus == UpToDate`. Real TDX hosts routinely report a non-`UpToDate`
+//! TCB (microcode / TDX-module behind), and in the single-node model the
+//! operator already controls and trusts their own host, so a hard TCB gate
+//! would be friction without a corresponding trust gain here. Re-add the check
+//! (capture `tcbStatus`, deny unless `UpToDate`) if this grows into a
+//! multi-tenant / hosted deployment.
 
 use anyhow::Result;
 use clap::Parser;
@@ -103,8 +111,10 @@ fn contains(list: &[String], value: &str) -> bool {
     list.iter().any(|x| norm(x) == v)
 }
 
+/// matches auth-simple: an empty `devices` list means "any device" even when
+/// `allowAnyDevice` is false (it only enforces a non-empty list).
 fn device_ok(allow_any: bool, devices: &[String], device_id: &str) -> bool {
-    allow_any || contains(devices, device_id)
+    allow_any || devices.is_empty() || contains(devices, device_id)
 }
 
 fn deny(al: &Allowlist, reason: &str) -> BootResponse {

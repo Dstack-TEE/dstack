@@ -40,8 +40,22 @@ pub fn norm_hex(s: &str) -> String {
 /// accumulate visually-distinct-but-equal entries.
 pub fn register_app_in_allowlist(path: &Path, app_id: &str, compose_hash: &str) -> Result<()> {
     let _lock = crate::fsutil::lock_exclusive(path)?;
-    let body = std::fs::read_to_string(path)
-        .with_context(|| format!("reading allowlist {}", path.display()))?;
+    let body = match std::fs::read_to_string(path) {
+        Ok(b) => b,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => anyhow::bail!(
+            "allowlist {} does not exist — run `dstackup install` first, or check the --allowlist path",
+            path.display()
+        ),
+        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+            return Err(e).with_context(|| {
+                format!(
+                    "reading allowlist {} (it is usually root-owned — run with sudo)",
+                    path.display()
+                )
+            })
+        }
+        Err(e) => return Err(e).with_context(|| format!("reading allowlist {}", path.display())),
+    };
     let mut v: serde_json::Value = serde_json::from_str(&body).context("parsing allowlist json")?;
     let apps = v
         .get_mut("apps")

@@ -63,7 +63,8 @@ impl Vmm {
     }
 
     /// compute the compose hash for a VM configuration (no side effects).
-    /// the app id is the first 40 hex chars of this hash.
+    /// the app id is the first 40 hex chars of this hash. takes `&cfg` and
+    /// clones once because the generated prpc client consumes its argument.
     pub async fn get_compose_hash(&self, cfg: &VmConfiguration) -> Result<String> {
         self.rpc
             .get_compose_hash(cfg.clone())
@@ -109,8 +110,9 @@ impl Vmm {
     ///
     /// `/logs` is a plain-HTTP `GET` endpoint. Only the local unix-socket
     /// transport is wired today; remote `dstack logs` lands with the TLS+token
-    /// transport (the shared http helper only `POST`s, and an unauthenticated
-    /// remote log endpoint shouldn't be reachable before that exists).
+    /// transport (the shared `http_request` honors the method on the unix/vsock
+    /// paths but hardcodes `POST` on the remote http path, and an unauthenticated
+    /// remote log endpoint shouldn't be reachable before that exists anyway).
     pub async fn logs(&self, id: &str, lines: u32) -> Result<String> {
         if !self.is_local() {
             bail!(

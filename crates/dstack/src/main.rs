@@ -192,9 +192,7 @@ async fn cmd_run(
     // register the compose hash so the KMS will issue keys (KMS mode, local).
     if let Some(path) = allowlist {
         dstack_core::config::register_app_in_allowlist(std::path::Path::new(path), &app_id, &hash)
-            .with_context(|| {
-                format!("registering app in {path} (it is usually root-owned — run with sudo, or make it writable)")
-            })?;
+            .with_context(|| format!("registering app in {path}"))?;
         println!("registered compose hash in {path}");
         println!("  (the KMS issues keys only if this is the allowlist its auth webhook serves)");
     } else if !no_kms {

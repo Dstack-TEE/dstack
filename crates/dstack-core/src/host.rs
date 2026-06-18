@@ -151,3 +151,57 @@ fn parse_toml_u32(after_key: &str) -> Option<u32> {
         .parse()
         .ok()
 }
+
+/// host-api vsock ports reserved by other running `dstack-vmm` processes (read
+/// from each one's `-c <config>`), so a fresh install can avoid colliding on the
+/// host's vsock port space. Best-effort; sorted, deduped.
+pub fn other_vmm_host_api_ports() -> Vec<u32> {
+    let mut ports = Vec::new();
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return ports;
+    };
+    for entry in entries.flatten() {
+        let Ok(data) = std::fs::read(entry.path().join("cmdline")) else {
+            continue;
+        };
+        let args: Vec<String> = data
+            .split(|&b| b == 0)
+            .filter(|s| !s.is_empty())
+            .map(|s| String::from_utf8_lossy(s).into_owned())
+            .collect();
+        if args.is_empty() {
+            continue;
+        }
+        if Path::new(&args[0]).file_name().and_then(|f| f.to_str()) != Some("dstack-vmm") {
+            continue;
+        }
+        if let Some(cfg) = arg_value(&args, "-c").or_else(|| arg_value(&args, "--config")) {
+            if let Some(p) = read_host_api_port(&cfg) {
+                ports.push(p);
+            }
+        }
+    }
+    ports.sort_unstable();
+    ports.dedup();
+    ports
+}
+
+/// read the `[host_api]` `port` from a vmm.toml (section-aware: `port` appears
+/// under several tables, so we only read the one inside `[host_api]`).
+fn read_host_api_port(config_path: &str) -> Option<u32> {
+    let text = std::fs::read_to_string(config_path).ok()?;
+    let mut in_host_api = false;
+    for line in text.lines() {
+        let l = line.trim();
+        if l.starts_with('[') {
+            in_host_api = l == "[host_api]";
+        } else if in_host_api {
+            if let Some(v) = l.strip_prefix("port") {
+                if let Some(p) = parse_toml_u32(v) {
+                    return Some(p);
+                }
+            }
+        }
+    }
+    None
+}

@@ -89,7 +89,9 @@ fn cid_window_overlaps(start: u32, occupied: &[(u32, u32)]) -> bool {
     occupied.iter().any(|&(s, e)| start < e && s < end)
 }
 
-/// the lowest pool-aligned CID block at or above every occupied range.
+/// the lowest pool-aligned CID block at or above every occupied range. We jump
+/// above the highest reservation rather than packing into a free gap below it —
+/// simpler, and the result is always collision-free.
 fn next_free_cid_block(occupied: &[(u32, u32)]) -> u32 {
     let max_end = occupied
         .iter()
@@ -272,6 +274,11 @@ enum Command {
         #[arg(long)]
         no_kms: bool,
 
+        /// proceed even if the app OS image can't be pinned (no digest.txt) —
+        /// apps will boot any unmeasured image and still get keys. NOT recommended.
+        #[arg(long)]
+        allow_unpinned_image: bool,
+
         /// render + write configs only; do not start any process.
         #[arg(long)]
         no_start: bool,
@@ -315,6 +322,7 @@ async fn main() -> Result<()> {
             kms_image,
             kms_port,
             no_kms,
+            allow_unpinned_image,
             no_start,
         } => {
             let opts = InstallOpts {
@@ -337,6 +345,7 @@ async fn main() -> Result<()> {
                 kms_image,
                 kms_port,
                 no_kms,
+                allow_unpinned_image,
                 no_start,
             };
             let _ = host; // install uses its own prefix-derived endpoint
@@ -396,6 +405,7 @@ struct InstallOpts {
     kms_image: String,
     kms_port: Option<u16>,
     no_kms: bool,
+    allow_unpinned_image: bool,
     no_start: bool,
 }
 
@@ -429,18 +439,26 @@ async fn cmd_install(o: InstallOpts) -> Result<()> {
         Err(e) => println!("  [!]  could not detect host ip: {e}"),
     }
 
-    // 3. lay out the prefix.
+    // 3. resolve paths (no side effects yet).
     let prefix = Path::new(&o.prefix);
     let run_dir = prefix.join("run");
     let images = o
         .image_path
         .clone()
         .unwrap_or_else(|| prefix.join("images").display().to_string());
+
+    // 4. preflight — fail BEFORE any side effect (key provider, dirs, units), so
+    //    a CID/port clash or a missing os-image pin can't half-install the host.
+    let cid_start = pick_cid_start(o.cid_start, &host::occupied_cid_ranges())?;
+    preflight_ports(&o)?;
+    let os_image_hash = resolve_image_pin(&o, &images)?;
+
+    // 5. lay out the prefix.
     for dir in [prefix.to_path_buf(), prefix.join("certs"), run_dir.clone()] {
         fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
     }
 
-    // 4. resolve the key provider — run our own unless told to use an existing one.
+    // 6. resolve the key provider — run our own unless told to use an existing one.
     let (kp_addr, kp_port, kp_own_project) = resolve_key_provider(&o)?;
 
     // read prior state up front so re-runs are idempotent.
@@ -463,13 +481,10 @@ async fn cmd_install(o: InstallOpts) -> Result<()> {
         vec![format!("https://10.0.2.2:{kms_port}")]
     };
 
-    // 5. render configs.
+    // 7. render configs.
     let bind = o.expose.clone().unwrap_or_else(|| "127.0.0.1".to_string());
     let dashboard_addr = format!("tcp:{bind}:{}", o.dashboard_port);
     let client_url = format!("http://{bind}:{}", o.dashboard_port);
-
-    // pick a CID window that doesn't collide with a VMM already running here.
-    let cid_start = pick_cid_start(o.cid_start, &host::occupied_cid_ranges())?;
 
     let vmm = config::vmm_toml(&VmmRender {
         dashboard_addr: dashboard_addr.clone(),
@@ -488,17 +503,10 @@ async fn cmd_install(o: InstallOpts) -> Result<()> {
     // the KMS-in-CVM reaches the host auth webhook at 10.0.2.2:<auth_port>.
     // The KMS's own image download-verify stays off for the single-node flow
     // (it would need a published image source), but we PIN the app OS image in
-    // the webhook allowlist: digest.txt holds the measured image hash the KMS
-    // reports for an app, so an app cannot boot under a different, unmeasured
-    // image and still receive keys. bootAuth/kms ignores osImages, so the KMS
-    // bootstrap itself is unaffected.
-    let os_image_hash = resolve_os_image_hash(&images, o.image.as_deref());
-    match &os_image_hash {
-        Some(h) => println!("  [ok] pinning app os image {h}"),
-        None => println!(
-            "  [!]  app os image NOT pinned (no digest.txt) — apps' image will be unchecked"
-        ),
-    }
+    // the webhook allowlist (resolved in preflight, fail-closed): digest.txt
+    // holds the measured image hash the KMS reports for an app, so an app cannot
+    // boot under a different, unmeasured image and still receive keys.
+    // bootAuth/kms ignores osImages, so the KMS bootstrap itself is unaffected.
     let host_cfg = HostConfig {
         auth_webhook_url: format!("http://10.0.2.2:{}", o.auth_port),
         os_image_hash: os_image_hash.unwrap_or_default(),
@@ -532,7 +540,7 @@ async fn cmd_install(o: InstallOpts) -> Result<()> {
     let auth_unit = unit_name("auth", &o.instance);
     let vmm_unit = unit_name("vmm", &o.instance);
 
-    // 6. auth webhook systemd unit (idempotent).
+    // 8. auth webhook systemd unit (idempotent).
     if unit_active(&auth_unit) {
         println!("  [ok] {auth_unit}.service already active");
     } else {
@@ -548,7 +556,7 @@ async fn cmd_install(o: InstallOpts) -> Result<()> {
     }
     st.auth_unit = auth_unit.clone();
 
-    // 7. VMM systemd unit (idempotent).
+    // 9. VMM systemd unit (idempotent).
     if vmm_reachable(&client_url).await {
         println!("  [ok] VMM already serving at {client_url}");
     } else {
@@ -571,7 +579,7 @@ async fn cmd_install(o: InstallOpts) -> Result<()> {
     st.kp_own_project = kp_own_project;
     write_state(prefix, &st)?;
 
-    // 8. deploy + bootstrap the KMS-in-CVM (idempotent).
+    // 10. deploy + bootstrap the KMS-in-CVM (idempotent).
     if o.no_kms {
         println!("  (--no-kms: skipping KMS deploy)");
     } else {
@@ -586,7 +594,7 @@ async fn cmd_install(o: InstallOpts) -> Result<()> {
             let img = o
                 .image
                 .clone()
-                .context("KMS deploy needs --image <version> (or pass --no-kms)")?;
+                .context("kms deploy needs --image <version> (or pass --no-kms)")?;
             let compose = config::kms_app_compose(&kms, &o.kms_image);
             let cfg = rpc::VmConfiguration {
                 name: "dstack-kms".into(),
@@ -607,7 +615,7 @@ async fn cmd_install(o: InstallOpts) -> Result<()> {
             let vm_id = vmm
                 .create_vm(cfg)
                 .await
-                .context("CreateVm for KMS failed")?;
+                .context("createVm for the kms cvm failed")?;
             print!("  [..] waiting for KMS bootstrap on :{kms_port} ");
             if wait_kms_ready(kms_port, Duration::from_secs(240)).await {
                 println!("=> bootstrapped");
@@ -683,13 +691,58 @@ fn split_addr_port(ep: &str) -> Result<(String, u16)> {
 
 /// read the measured OS-image hash from the guest image's `digest.txt`
 /// (`<images>/<image>/digest.txt`), used to pin which image apps may boot.
-/// Returns None when there's no image selected or no readable digest (e.g.
-/// `--no-kms` with no `--image`), in which case apps are left unpinned.
+/// Returns None when there's no image selected or no readable digest.
 fn resolve_os_image_hash(images: &str, image: Option<&str>) -> Option<String> {
     let img = image?;
     let path = Path::new(images).join(img).join("digest.txt");
     let hash = fs::read_to_string(path).ok()?.trim().to_string();
     (!hash.is_empty()).then_some(hash)
+}
+
+/// resolve the OS-image pin, failing CLOSED: in KMS mode a missing/empty
+/// `digest.txt` is a hard error (an unpinned app could boot any unmeasured
+/// image and still get keys), unless the operator opts out with
+/// `--allow-unpinned-image`. Returns Some(hash) to pin, or None when pinning is
+/// deliberately off (`--no-kms`, or the explicit opt-out).
+fn resolve_image_pin(o: &InstallOpts, images: &str) -> Result<Option<String>> {
+    let hash = resolve_os_image_hash(images, o.image.as_deref());
+    match &hash {
+        Some(h) => println!("  [ok] pinning app os image {h}"),
+        None if o.no_kms => {}
+        None if o.allow_unpinned_image => {
+            println!("  [!]  app os image NOT pinned (--allow-unpinned-image) — apps' image is unchecked")
+        }
+        None => bail!(
+            "no os-image pin: could not read a digest.txt for image {:?} under {images} — an app \
+             could boot any unmeasured image and still get keys. fix --image/--image-path, or pass \
+             --allow-unpinned-image to proceed unpinned (not recommended)",
+            o.image.as_deref().unwrap_or("<none>")
+        ),
+    }
+    Ok(hash)
+}
+
+/// fail BEFORE any side effect if a port we need is already taken, so a clash
+/// refuses cleanly instead of half-installing. CIDs auto-offset (see
+/// `pick_cid_start`); ports are user-facing, so we refuse with guidance rather
+/// than silently moving the address the operator will connect to.
+fn preflight_ports(o: &InstallOpts) -> Result<()> {
+    let bind = o.expose.clone().unwrap_or_else(|| "127.0.0.1".to_string());
+    for (what, flag, port) in [
+        ("dashboard", "--dashboard-port", o.dashboard_port),
+        ("auth webhook", "--auth-port", o.auth_port),
+    ] {
+        if !ports::tcp_port_free(&bind, port) {
+            bail!("{what} port {bind}:{port} is already in use; pass {flag} <free-port>");
+        }
+    }
+    if !o.no_kms && host::other_vmm_host_api_ports().contains(&o.host_api_port) {
+        bail!(
+            "host-api vsock port {} is already reserved by another dstack-vmm; pass --host-api-port <free-port>",
+            o.host_api_port
+        );
+    }
+    Ok(())
 }
 
 /// poll the KMS `GetMeta` RPC (self-signed TLS) via curl until it bootstraps.
