@@ -6,7 +6,7 @@ use anyhow::{bail, Context, Result};
 use dstack_attest::attestation::{Attestation, AttestationMode, AttestationQuote};
 use dstack_types::{
     mr_config::{MrConfig, MrConfigV3},
-    shared_filenames::{HOST_SHARED_DIR, SYS_CONFIG},
+    shared_filenames::{host_shared_dir, SYS_CONFIG},
     KeyProviderKind, SysConfig,
 };
 use tracing::info;
@@ -32,21 +32,12 @@ fn read_mr_config_id() -> Result<[u8; 48]> {
 }
 
 fn read_mr_config_document() -> Result<String> {
-    let path = std::path::Path::new(HOST_SHARED_DIR).join(SYS_CONFIG);
+    let path = host_shared_dir().join(SYS_CONFIG);
     let content = fs_err::read_to_string(path).context("Failed to read sys-config")?;
     let sys_config: SysConfig =
         serde_json::from_str(&content).context("Failed to parse sys-config")?;
-    if let Some(mr_config) = sys_config.mr_config {
-        return Ok(mr_config);
-    }
-    serde_json::from_str::<serde_json::Value>(&sys_config.vm_config)
-        .ok()
-        .and_then(|value| {
-            value
-                .get("mr_config")
-                .and_then(|value| value.as_str())
-                .map(ToString::to_string)
-        })
+    sys_config
+        .mr_config_document()
         .context("mr_config is required")
 }
 

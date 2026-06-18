@@ -852,6 +852,14 @@ impl<'a> Stage0<'a> {
     }
     fn load(args: &'a SetupArgs) -> Result<Self> {
         let host_shared_copy_dir = args.work_dir.join(HOST_SHARED_DIR_NAME);
+        // dstack-attest and the config-id verifier read host-shared files (e.g.
+        // the SEV mr_config) from this dir. Export it so they don't fall back to
+        // the canonical /dstack/.host-shared, which is only bind-mounted to the
+        // work dir after `dstack-util setup` finishes.
+        std::env::set_var(
+            dstack_types::shared_filenames::HOST_SHARED_DIR_ENV,
+            &host_shared_copy_dir,
+        );
         let host_shared = HostShared::copy("/tmp/.host-shared".as_ref(), &host_shared_copy_dir)?;
         let host_api = HostApi::new(
             host_shared.sys_config.host_api_url.clone(),

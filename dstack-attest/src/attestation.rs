@@ -41,8 +41,15 @@ const DSTACK_AMD_SEV_SNP: &str = "dstack-amd-sev-snp";
 const DSTACK_GCP_TDX: &str = "dstack-gcp-tdx";
 const DSTACK_NITRO_ENCLAVE: &str = "dstack-nitro-enclave";
 
+/// Path to sys-config.json in the host-shared dir.
+///
+/// Honors `DSTACK_HOST_SHARED_DIR` (exported by `dstack-util setup` because the
+/// canonical `/dstack/.host-shared` is only bind-mounted after setup finishes).
 #[cfg(feature = "quote")]
-const SYS_CONFIG_PATH: &str = "/dstack/.host-shared/.sys-config.json";
+fn sys_config_path() -> std::path::PathBuf {
+    dstack_types::shared_filenames::host_shared_dir()
+        .join(dstack_types::shared_filenames::SYS_CONFIG)
+}
 
 /// Global lock for quote generation. The underlying TDX driver does not support concurrent access.
 #[cfg(feature = "quote")]
@@ -51,7 +58,7 @@ static QUOTE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 /// Read vm_config from sys-config.json
 #[cfg(feature = "quote")]
 fn read_vm_config() -> Result<String> {
-    let content = match fs_err::read_to_string(SYS_CONFIG_PATH) {
+    let content = match fs_err::read_to_string(sys_config_path()) {
         Ok(content) => content,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(String::new()),
         Err(err) => return Err(err).context("Failed to read sys-config"),
@@ -59,6 +66,23 @@ fn read_vm_config() -> Result<String> {
     let sys_config: SysConfig =
         serde_json::from_str(&content).context("Failed to parse sys-config")?;
     Ok(sys_config.vm_config)
+}
+
+/// Read the canonical mr_config document from sys-config.json.
+///
+/// Uses the same accessor as the guest config-id verifier so both agree on
+/// where `mr_config` lives (top-level field, falling back to the one embedded
+/// in `vm_config`).
+#[cfg(feature = "quote")]
+fn read_mr_config_document() -> Result<Option<String>> {
+    let content = match fs_err::read_to_string(sys_config_path()) {
+        Ok(content) => content,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err).context("Failed to read sys-config"),
+    };
+    let sys_config: SysConfig =
+        serde_json::from_str(&content).context("Failed to parse sys-config")?;
+    Ok(sys_config.mr_config_document())
 }
 
 fn is_msgpack_map_prefix(byte: u8) -> bool {
@@ -1661,7 +1685,7 @@ impl Attestation {
             }
         };
         if let AttestationQuote::DstackAmdSevSnp(quote) = &mut quote {
-            quote.mr_config = mr_config_document_from_config(&config)?
+            quote.mr_config = read_mr_config_document()?
                 .context("amd sev-snp mr_config is missing")?;
         }
 
