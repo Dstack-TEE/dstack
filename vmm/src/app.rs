@@ -1292,11 +1292,23 @@ fn make_vm_config(
     _compose_hash: &str,
     mr_config: Option<String>,
 ) -> Result<serde_json::Value> {
-    let os_image_hash = image
-        .digest
-        .as_ref()
-        .and_then(|d| hex::decode(d).ok())
-        .unwrap_or_default();
+    let is_amd_sev_snp =
+        cfg.cvm.platform.resolve() == crate::config::TeePlatform::AmdSevSnp && !manifest.no_tee;
+    // AMD SEV-SNP binds the OS image through the launch-measurement-derived
+    // os_image_hash (the same value produced by the `sev-os-image-hash`
+    // subcommand / digest.sev.txt and recomputed by KMS from the verified
+    // measurement), not the generic content digest used for TDX.
+    let os_image_hash = if is_amd_sev_snp {
+        sev_os_image_hash(image)
+            .context("Failed to compute amd sev-snp os_image_hash")?
+            .to_vec()
+    } else {
+        image
+            .digest
+            .as_ref()
+            .and_then(|d| hex::decode(d).ok())
+            .unwrap_or_default()
+    };
     let gpus = manifest.gpus.clone().unwrap_or_default();
     let mut config = serde_json::to_value(dstack_types::VmConfig {
         os_image_hash,
@@ -1316,7 +1328,7 @@ fn make_vm_config(
     })?;
     // For backward compatibility
     config["spec_version"] = serde_json::Value::from(1);
-    if cfg.cvm.platform.resolve() == crate::config::TeePlatform::AmdSevSnp && !manifest.no_tee {
+    if is_amd_sev_snp {
         let rootfs_hash = image_rootfs_hash(image)?;
         if let Some(mr_config) = mr_config {
             MrConfigV3::from_document(&mr_config).context("Invalid mr_config document")?;
