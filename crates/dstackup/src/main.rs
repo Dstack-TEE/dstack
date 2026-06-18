@@ -203,7 +203,7 @@ enum Command {
         key_provider_src: Option<String>,
 
         /// KMS container image.
-        #[arg(long, default_value = "dstacktee/dstack-kms:0.5.11")]
+        #[arg(long, default_value = config::DEFAULT_KMS_IMAGE)]
         kms_image: String,
 
         /// host port for the KMS RPC (default: an auto-picked free port).
@@ -342,6 +342,20 @@ struct InstallOpts {
 }
 
 async fn cmd_install(o: InstallOpts) -> Result<()> {
+    // --expose is not safe yet: the rendered vmm.toml binds the VM-control
+    // plane with neither TLS nor an auth token (the management RPCs are not
+    // behind an auth guard), so exposing it would hand deploy/destroy to anyone
+    // who can reach the IP. Refuse until the TLS+token transport lands; the
+    // supported path is localhost + an SSH tunnel.
+    if let Some(ip) = &o.expose {
+        bail!(
+            "--expose {ip} is not yet safe: it would bind the VM-control plane on \
+             {ip}:{port} with no TLS and no auth. reach the dashboard over an SSH \
+             tunnel instead: ssh -L {port}:127.0.0.1:{port} <host>",
+            port = o.dashboard_port
+        );
+    }
+
     println!("dstackup install — preflight");
 
     // 1. hardware gate (fail fast on non-SGX hosts).
@@ -445,7 +459,7 @@ async fn cmd_install(o: InstallOpts) -> Result<()> {
     let auth_unit = unit_name("auth", &o.instance);
     let vmm_unit = unit_name("vmm", &o.instance);
 
-    // 5. auth webhook systemd unit (idempotent).
+    // 6. auth webhook systemd unit (idempotent).
     if unit_active(&auth_unit) {
         println!("  [ok] {auth_unit}.service already active");
     } else {
@@ -461,7 +475,7 @@ async fn cmd_install(o: InstallOpts) -> Result<()> {
     }
     st.auth_unit = auth_unit.clone();
 
-    // 6. VMM systemd unit (idempotent).
+    // 7. VMM systemd unit (idempotent).
     if vmm_reachable(&client_url).await {
         println!("  [ok] VMM already serving at {client_url}");
     } else {
@@ -484,7 +498,7 @@ async fn cmd_install(o: InstallOpts) -> Result<()> {
     st.kp_own_project = kp_own_project;
     write_state(prefix, &st)?;
 
-    // 7. deploy + bootstrap the KMS-in-CVM (idempotent).
+    // 8. deploy + bootstrap the KMS-in-CVM (idempotent).
     if o.no_kms {
         println!("  (--no-kms: skipping KMS deploy)");
     } else {
@@ -633,11 +647,23 @@ async fn cmd_destroy(prefix: &str, purge: bool) -> Result<()> {
         Some(st) => {
             // gracefully stop the KMS CVM first so its keys flush to disk
             // (unless we purge). Stopping the VMM unit below reaps the supervisor
-            // and the CVM qemu via the unit's cgroup.
-            if let Some(id) = &st.kms_vm_id {
-                if let Ok(vmm) = Vmm::connect(&st.client_url) {
-                    if vmm.has_vm(id).await {
-                        let _ = vmm.stop_vm(id).await;
+            // and the CVM qemu via the unit's cgroup. Look it up by recorded id
+            // AND by name, so an install that died before persisting kms_vm_id
+            // (or a torn state file) doesn't leave the CVM orphaned.
+            if let Ok(vmm) = Vmm::connect(&st.client_url) {
+                let mut target = st.kms_vm_id.clone();
+                if target.is_none() {
+                    if let Ok(s) = vmm.status().await {
+                        target = s
+                            .vms
+                            .iter()
+                            .find(|v| v.name == "dstack-kms")
+                            .map(|v| v.id.clone());
+                    }
+                }
+                if let Some(id) = target {
+                    if vmm.has_vm(&id).await {
+                        let _ = vmm.stop_vm(&id).await;
                         println!("  stopping KMS CVM (vm {id})");
                     }
                 }
@@ -684,8 +710,11 @@ async fn cmd_destroy(prefix: &str, purge: bool) -> Result<()> {
     Ok(())
 }
 
+/// write a file atomically (temp + rename), so a crash mid-write never leaves
+/// a torn config or state file.
 fn write(path: &Path, body: &str) -> Result<()> {
-    fs::write(path, body).with_context(|| format!("writing {}", path.display()))
+    dstack_core::fsutil::write_atomic(path, body)
+        .with_context(|| format!("writing {}", path.display()))
 }
 
 /// one-shot liveness probe of the VMM.

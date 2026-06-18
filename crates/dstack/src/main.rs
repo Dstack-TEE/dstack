@@ -217,11 +217,11 @@ async fn cmd_run(
 }
 
 fn stub(name: &str) -> Result<()> {
-    eprintln!(
-        "dstack {name}: not yet implemented (scaffold) — {}",
+    // exit non-zero so `dstack <stub> && next` doesn't proceed as if it worked.
+    bail!(
+        "dstack {name}: not yet implemented ({})",
         dstack_core::user_agent()
-    );
-    Ok(())
+    )
 }
 
 async fn cmd_ls(host: &str) -> Result<()> {

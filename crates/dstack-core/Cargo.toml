@@ -13,6 +13,9 @@ anyhow.workspace = true
 http-client = { workspace = true, features = ["prpc"] }
 dstack-vmm-rpc.workspace = true
 serde_json.workspace = true
+# advisory file locking (flock) for the allowlist/state read-modify-write;
+# already in the dependency tree transitively, so no extra compile cost.
+rustix = { version = "0.38", features = ["fs"] }
 
 [dev-dependencies]
 toml.workspace = true

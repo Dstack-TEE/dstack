@@ -2347,6 +2347,7 @@ dependencies = [
  "anyhow",
  "dstack-vmm-rpc",
  "http-client",
+ "rustix 0.38.44",
  "serde_json",
  "toml",
 ]

@@ -85,7 +85,10 @@ struct AppRules {
     allow_any_device: bool,
 }
 
-/// normalize a hex string for comparison: trim, drop a `0x` prefix, lowercase.
+/// normalize a hex string for comparison: trim, drop a `0x`/`0X` prefix,
+/// lowercase. MUST stay in sync with `dstack-core::config::norm_hex` — both
+/// `dstack run` (writing the allowlist) and this webhook (reading it) must
+/// agree on the canonical form, or apps are silently denied.
 fn norm(s: &str) -> String {
     let s = s.trim();
     let s = s

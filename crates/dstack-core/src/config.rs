@@ -17,9 +17,29 @@ use anyhow::{Context, Result};
 use serde_json::json;
 use std::path::Path;
 
+/// normalize a hex string for comparison: trim, drop a single `0x`/`0X`
+/// prefix, lowercase. MUST stay in sync with `dstack-auth`'s `norm()` — the
+/// webhook compares allowlist entries against KMS-supplied hashes with the same
+/// rule, so a divergence here silently denies (or wrongly allows) apps.
+pub fn norm_hex(s: &str) -> String {
+    let s = s.trim();
+    let s = s
+        .strip_prefix("0x")
+        .or_else(|| s.strip_prefix("0X"))
+        .unwrap_or(s);
+    s.to_lowercase()
+}
+
 /// register an app (id + compose hash) in the auth webhook's allowlist file,
 /// so the KMS will issue keys to it. Read-modify-write; idempotent.
+///
+/// Holds an exclusive lock for the whole read-modify-write (so two concurrent
+/// `dstack run`s can't clobber each other) and writes atomically (so a crash or
+/// partial write can't leave torn JSON — which the webhook would read as
+/// deny-all). The stored hash is normalized so the on-disk file can't
+/// accumulate visually-distinct-but-equal entries.
 pub fn register_app_in_allowlist(path: &Path, app_id: &str, compose_hash: &str) -> Result<()> {
+    let _lock = crate::fsutil::lock_exclusive(path)?;
     let body = std::fs::read_to_string(path)
         .with_context(|| format!("reading allowlist {}", path.display()))?;
     let mut v: serde_json::Value = serde_json::from_str(&body).context("parsing allowlist json")?;
@@ -28,22 +48,20 @@ pub fn register_app_in_allowlist(path: &Path, app_id: &str, compose_hash: &str) 
         .and_then(|a| a.as_object_mut())
         .context("allowlist has no `apps` object")?;
     let entry = apps
-        .entry(app_id.to_string())
+        .entry(norm_hex(app_id))
         .or_insert_with(|| json!({ "composeHashes": [], "devices": [], "allowAnyDevice": true }));
     let hashes = entry
         .get_mut("composeHashes")
         .and_then(|h| h.as_array_mut())
         .context("app entry missing `composeHashes`")?;
-    let norm = compose_hash.trim().trim_start_matches("0x").to_lowercase();
-    let present = hashes.iter().any(|h| {
-        h.as_str()
-            .map(|s| s.trim_start_matches("0x").to_lowercase() == norm)
-            .unwrap_or(false)
-    });
+    let norm = norm_hex(compose_hash);
+    let present = hashes
+        .iter()
+        .any(|h| h.as_str().map(|s| norm_hex(s) == norm).unwrap_or(false));
     if !present {
-        hashes.push(serde_json::Value::String(compose_hash.to_string()));
+        hashes.push(serde_json::Value::String(norm));
     }
-    std::fs::write(path, serde_json::to_string_pretty(&v)?)
+    crate::fsutil::write_atomic(path, &serde_json::to_string_pretty(&v)?)
         .with_context(|| format!("writing allowlist {}", path.display()))?;
     Ok(())
 }
