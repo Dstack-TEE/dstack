@@ -4,7 +4,7 @@
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use dstack_attest::{attestation::AttestationMode, emit_runtime_event};
+use dstack_attest::emit_runtime_event;
 use dstack_types::{KeyProvider, KeyProviderKind};
 use fs_err as fs;
 use getrandom::fill as getrandom;
@@ -690,21 +690,6 @@ fn cmd_rand(rand_args: RandArgs) -> Result<()> {
 }
 
 fn cmd_show_mrs() -> Result<()> {
-    if AttestationMode::detect()? == AttestationMode::DstackAmdSevSnp {
-        serde_json::to_writer_pretty(
-            io::stdout(),
-            &serde_json::json!({
-                "attestation_mode": AttestationMode::DstackAmdSevSnp.as_str(),
-                "mr_system": null,
-                "mr_aggregated": null,
-                "note": "app-info MRs are TDX RTMR-derived and unavailable for AMD SEV-SNP",
-            }),
-        )
-        .context("Failed to write app info")?;
-        println!();
-        return Ok(());
-    }
-
     let attestation =
         ra_tls::attestation::Attestation::local().context("Failed to get attestation")?;
     let app_info = attestation
