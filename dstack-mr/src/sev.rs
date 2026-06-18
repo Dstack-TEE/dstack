@@ -20,6 +20,7 @@ use anyhow::{bail, Context, Result};
 use dstack_types::mr_config::MrConfigV3;
 use sha2::{Digest, Sha256, Sha384};
 use std::fs;
+use std::path::Path;
 
 const LD_BYTES: usize = 48;
 const ZEROS_LD: [u8; LD_BYTES] = [0u8; LD_BYTES];
@@ -200,7 +201,6 @@ struct Gctx {
 }
 
 impl Gctx {
-    #[cfg(test)]
     fn new() -> Self {
         Self { ld: ZEROS_LD }
     }
@@ -683,6 +683,125 @@ pub fn snp_measurement_os_image_hash(measurement_document: &str) -> Result<Vec<u
     let input: MeasurementInput = serde_json::from_str(measurement_document)
         .context("failed to parse sev-snp measurement document for os_image_hash")?;
     Ok(sev_os_image_measurement(&input).os_image_hash().to_vec())
+}
+
+/// OVMF launch-measurement metadata: the GCTX launch digest of the firmware
+/// bytes plus the SEV footer fields needed to recompute the launch measurement.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OvmfMeasurementInfo {
+    /// 48-byte GCTX launch digest (hex) after measuring the OVMF binary bytes.
+    pub ovmf_hash: String,
+    pub sev_hashes_table_gpa: u64,
+    pub sev_es_reset_eip: u32,
+    pub sections: Vec<OvmfSectionParam>,
+}
+
+/// Parse an OVMF (SEV firmware) binary and compute its launch-measurement
+/// metadata: the GCTX digest over the firmware bytes plus the SEV footer fields.
+pub fn ovmf_measurement_info(path: &Path) -> Result<OvmfMeasurementInfo> {
+    let path_str = path.to_str().context("ovmf path must be valid utf-8")?;
+    let ovmf = OvmfInfo::load(path_str)?;
+    let mut gctx = Gctx::new();
+    gctx.update_normal_pages(ovmf.gpa, &ovmf.data);
+    Ok(OvmfMeasurementInfo {
+        ovmf_hash: hex::encode(gctx.ld),
+        sev_hashes_table_gpa: ovmf.sev_hashes_table_gpa,
+        sev_es_reset_eip: ovmf.sev_es_reset_eip,
+        sections: ovmf
+            .sections
+            .into_iter()
+            .map(|s| OvmfSectionParam {
+                gpa: s.gpa,
+                size: s.size,
+                section_type: s.section_type as u32,
+            })
+            .collect(),
+    })
+}
+
+/// The subset of an image's `metadata.json` needed to compute the SEV
+/// os_image_hash. Kept local (rather than depending on the VMM `ImageInfo`) so
+/// `dstack-mr` stays self-contained.
+#[derive(Debug, serde::Deserialize)]
+struct ImageMetadata {
+    #[serde(default)]
+    cmdline: Option<String>,
+    kernel: String,
+    initrd: String,
+    #[serde(default)]
+    bios: Option<String>,
+    #[serde(default, rename = "bios-sev")]
+    bios_sev: Option<String>,
+    #[serde(default)]
+    rootfs_hash: Option<String>,
+}
+
+fn file_sha256_hex(path: &Path) -> Result<String> {
+    let data = fs::read(path).with_context(|| format!("cannot read {}", path.display()))?;
+    Ok(hex::encode(Sha256::digest(data)))
+}
+
+fn resolve_rootfs_hash(meta: &ImageMetadata) -> Result<String> {
+    if let Some(hash) = meta.rootfs_hash.as_deref() {
+        if !hash.is_empty() {
+            return Ok(hash.to_string());
+        }
+    }
+    // Fall back to the `dstack.rootfs_hash=` kernel cmdline parameter.
+    meta.cmdline
+        .as_deref()
+        .unwrap_or_default()
+        .split_whitespace()
+        .find_map(|param| param.strip_prefix("dstack.rootfs_hash="))
+        .map(ToString::to_string)
+        .context(
+            "rootfs_hash is required for amd sev-snp \
+             (set metadata.rootfs_hash or dstack.rootfs_hash= in the cmdline)",
+        )
+}
+
+/// Compute the AMD SEV-SNP `os_image_hash` from an OS image directory containing
+/// `metadata.json` plus the SEV firmware, kernel and initrd.
+///
+/// This is the canonical producer of `digest.sev.txt`. The value equals the
+/// `os_image_hash` the KMS and verifier derive from a hardware-verified launch
+/// measurement, because both go through [`snp_measurement_os_image_hash`] /
+/// `dstack_types::SevOsImageMeasurement`.
+pub fn sev_os_image_hash_for_image_dir(image_dir: &Path) -> Result<[u8; 32]> {
+    let meta_path = image_dir.join("metadata.json");
+    let meta_str = fs::read_to_string(&meta_path)
+        .with_context(|| format!("cannot read {}", meta_path.display()))?;
+    let meta: ImageMetadata =
+        serde_json::from_str(&meta_str).context("failed to parse image metadata.json")?;
+
+    // Measure the firmware the guest actually launches with: prefer the SEV
+    // firmware (bios-sev), fall back to the generic bios.
+    let bios = meta
+        .bios_sev
+        .as_deref()
+        .or(meta.bios.as_deref())
+        .context("bios-sev/bios is required for amd sev-snp os_image_hash")?;
+    let ovmf = ovmf_measurement_info(&image_dir.join(bios))?;
+
+    let measurement = dstack_types::SevOsImageMeasurement {
+        rootfs_hash: resolve_rootfs_hash(&meta)?,
+        base_cmdline: meta.cmdline.as_deref().map(|c| c.trim().to_string()),
+        ovmf_hash: ovmf.ovmf_hash,
+        kernel_hash: file_sha256_hex(&image_dir.join(&meta.kernel))?,
+        initrd_hash: file_sha256_hex(&image_dir.join(&meta.initrd))?,
+        sev_hashes_table_gpa: ovmf.sev_hashes_table_gpa,
+        sev_es_reset_eip: ovmf.sev_es_reset_eip,
+        ovmf_sections: ovmf
+            .sections
+            .into_iter()
+            .map(|s| dstack_types::OvmfSection {
+                gpa: s.gpa,
+                size: s.size,
+                section_type: s.section_type,
+            })
+            .collect(),
+    };
+    Ok(measurement.os_image_hash())
 }
 
 /// `sha256(MEASUREMENT || HOST_DATA)` — the SNP aggregated identity digest.

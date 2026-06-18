@@ -63,6 +63,7 @@ tar.workspace = true
 
 [dev-dependencies]
 insta.workspace = true
+dstack-mr.workspace = true
 
 [build-dependencies]
 or-panic.workspace = true

@@ -60,16 +60,6 @@ enum Command {
     Serve,
     /// One-shot VM execution mode for debugging
     Run(RunArgs),
-    /// Compute the AMD SEV-SNP os_image_hash for an OS image and print it as
-    /// hex. Used by the image build to emit digest.sev.txt; the value matches
-    /// what KMS derives from a verified launch measurement.
-    SevOsImageHash(SevOsImageHashArgs),
-}
-
-#[derive(ClapArgs)]
-struct SevOsImageHashArgs {
-    /// Path to the OS image directory (containing metadata.json + artifacts)
-    image_dir: String,
 }
 
 #[derive(ClapArgs)]
@@ -165,15 +155,6 @@ async fn main() -> Result<()> {
 
     let args = Args::parse();
 
-    // Standalone, config-free subcommand: compute the SEV os_image_hash from an
-    // OS image directory (used by the image build for digest.sev.txt).
-    if let Some(Command::SevOsImageHash(a)) = &args.command {
-        let image = app::Image::load(&a.image_dir)?;
-        let hash = app::sev_os_image_hash(&image)?;
-        println!("{}", hex::encode(hash));
-        return Ok(());
-    }
-
     let figment = config::load_config_figment(args.config.as_deref());
     let config = Config::extract_or_default(&figment)?.abs_path()?;
 
@@ -198,7 +179,6 @@ async fn main() -> Result<()> {
         Command::Serve => {
             // Default server mode - continue to main server logic
         }
-        Command::SevOsImageHash(_) => unreachable!("handled before config load"),
     }
 
     // Register this VMM instance for local discovery

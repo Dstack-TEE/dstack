@@ -71,6 +71,10 @@ pub struct Image {
     pub bios: Option<PathBuf>,
     pub bios_sev: Option<PathBuf>,
     pub digest: Option<String>,
+    /// AMD SEV-SNP os_image_hash, read from `digest.sev.txt` (produced at image
+    /// build time by `dstack-mr sev-os-image-hash`). The VMM does not recompute
+    /// it; the deploy path reads this value directly.
+    pub sev_digest: Option<String>,
 }
 
 impl Image {
@@ -99,6 +103,10 @@ impl Image {
         let digest = fs::read_to_string(base_path.join("digest.txt"))
             .ok()
             .map(|s| s.trim().to_string());
+        let sev_digest = fs::read_to_string(base_path.join("digest.sev.txt"))
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
         if info.version.is_empty() {
             // Older images does not have version field. Fallback to the version of the image folder name
             info.version = guess_version(&base_path).unwrap_or_default();
@@ -112,6 +120,7 @@ impl Image {
             bios,
             bios_sev,
             digest,
+            sev_digest,
         }
         .ensure_exists()
     }

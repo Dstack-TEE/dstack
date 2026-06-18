@@ -1246,34 +1246,6 @@ fn image_rootfs_hash(image: &Image) -> Result<&str> {
         .ok_or_else(|| anyhow::anyhow!("rootfs_hash is required for amd sev-snp"))
 }
 
-/// Compute the AMD SEV-SNP `os_image_hash` for an OS image, from the same
-/// image-determined inputs the VMM feeds into the launch measurement. The image
-/// build calls this (via the `sev-os-image-hash` subcommand) to emit
-/// `digest.sev.txt`; the value matches what KMS derives from a verified launch
-/// measurement, since both go through `dstack_types::SevOsImageMeasurement`.
-pub fn sev_os_image_hash(image: &Image) -> Result<[u8; 32]> {
-    let ovmf = amd_sev_snp_ovmf_measurement_info(image)?;
-    let measurement = dstack_types::SevOsImageMeasurement {
-        rootfs_hash: image_rootfs_hash(image)?.to_string(),
-        base_cmdline: amd_sev_snp_measurement_base_cmdline(image.info.cmdline.as_deref()),
-        ovmf_hash: ovmf.ovmf_hash,
-        kernel_hash: file_sha256_hex(&image.kernel)?,
-        initrd_hash: file_sha256_hex(&image.initrd)?,
-        sev_hashes_table_gpa: ovmf.sev_hashes_table_gpa,
-        sev_es_reset_eip: ovmf.sev_es_reset_eip,
-        ovmf_sections: ovmf
-            .sections
-            .into_iter()
-            .map(|s| dstack_types::OvmfSection {
-                gpa: s.gpa,
-                size: s.size,
-                section_type: s.section_type,
-            })
-            .collect(),
-    };
-    Ok(measurement.os_image_hash())
-}
-
 fn amd_sev_snp_measurement_base_cmdline(base_cmdline: Option<&str>) -> Option<String> {
     base_cmdline.map(|cmdline| cmdline.trim().to_string())
 }
@@ -1295,13 +1267,16 @@ fn make_vm_config(
     let is_amd_sev_snp =
         cfg.cvm.platform.resolve() == crate::config::TeePlatform::AmdSevSnp && !manifest.no_tee;
     // AMD SEV-SNP binds the OS image through the launch-measurement-derived
-    // os_image_hash (the same value produced by the `sev-os-image-hash`
-    // subcommand / digest.sev.txt and recomputed by KMS from the verified
-    // measurement), not the generic content digest used for TDX.
+    // os_image_hash, computed at image build time by `dstack-mr sev-os-image-hash`
+    // and shipped as `digest.sev.txt` (the same value KMS/verifier derive from a
+    // verified launch measurement). The VMM reads it from the image rather than
+    // recomputing it; TDX still uses the generic content digest.
     let os_image_hash = if is_amd_sev_snp {
-        sev_os_image_hash(image)
-            .context("Failed to compute amd sev-snp os_image_hash")?
-            .to_vec()
+        let digest = image.sev_digest.as_deref().context(
+            "amd sev-snp image is missing digest.sev.txt; \
+             rebuild the image so `dstack-mr sev-os-image-hash` emits it",
+        )?;
+        hex::decode(digest).context("digest.sev.txt is not valid hex")?
     } else {
         image
             .digest
@@ -1506,6 +1481,13 @@ mod tests {
             vec![0x44; 20],
         )
         .to_canonical_json();
+
+        // digest.sev.txt is produced at build time by the `dstack-mr
+        // sev-os-image-hash` command; the VMM reads it instead of recomputing.
+        // Emit it here so the deploy path (make_vm_config) can read it back.
+        let build_hash = dstack_mr::sev::sev_os_image_hash_for_image_dir(&image_dir)?;
+        fs::write(image_dir.join("digest.sev.txt"), hex::encode(build_hash))?;
+
         let sys_config_document =
             make_sys_config(&config, &manifest, &compose_hash, Some(mr_config))?;
         let sys_config: serde_json::Value = serde_json::from_str(&sys_config_document)?;
@@ -1526,6 +1508,15 @@ mod tests {
         assert_eq!(parsed_mr_config.app_id, vec![0x11; 20]);
         assert_eq!(parsed_mr_config.compose_hash, vec![0x22; 32]);
         assert_eq!(vm_config["mr_config"], sys_config["mr_config"]);
+        // The deploy path must surface the os_image_hash straight from
+        // digest.sev.txt (not recompute it).
+        assert_eq!(
+            vm_config["os_image_hash"]
+                .as_str()
+                .context("os_image_hash must be a string")?,
+            hex::encode(build_hash),
+            "vm_config os_image_hash must come from digest.sev.txt"
+        );
         assert!(measurement.get("app_id").is_none());
         assert!(measurement.get("compose_hash").is_none());
         assert_eq!(measurement["rootfs_hash"], hex_of(0x33, 32));
@@ -1561,11 +1552,9 @@ mod tests {
             4
         );
 
-        // The build-time os_image_hash (sev_os_image_hash -> digest.sev.txt)
-        // must equal the os_image_hash a verifier derives from the launch
-        // measurement document, i.e. the image-invariant projection of it.
-        let image = Image::load(&image_dir)?;
-        let build_hash = sev_os_image_hash(&image)?;
+        // The build-time os_image_hash (dstack-mr sev-os-image-hash ->
+        // digest.sev.txt) must equal the os_image_hash a verifier derives from
+        // the launch measurement document, i.e. the image-invariant projection.
         let as_str = |v: &serde_json::Value| v.as_str().unwrap().to_string();
         let projected = dstack_types::SevOsImageMeasurement {
             rootfs_hash: as_str(&measurement["rootfs_hash"]),
