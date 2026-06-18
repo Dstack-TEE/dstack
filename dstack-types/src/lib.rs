@@ -197,6 +197,31 @@ pub struct SysConfig {
     pub vm_config: String,
 }
 
+impl SysConfig {
+    /// Canonical MrConfigV3 document for this VM, if any.
+    ///
+    /// The document is carried in the top-level `mr_config` field; older hosts
+    /// only embedded it inside the serialized `vm_config`, so fall back to that
+    /// for backward compatibility. This is the single source of truth for all
+    /// readers (guest quote generation and config-id verification) so they
+    /// cannot disagree about where `mr_config` lives.
+    pub fn mr_config_document(&self) -> Option<String> {
+        if let Some(doc) = self.mr_config.as_deref() {
+            if !doc.is_empty() {
+                return Some(doc.to_string());
+            }
+        }
+        serde_json::from_str::<serde_json::Value>(&self.vm_config)
+            .ok()
+            .and_then(|value| {
+                value
+                    .get("mr_config")
+                    .and_then(|value| value.as_str())
+                    .map(ToString::to_string)
+            })
+    }
+}
+
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct VmConfig {
     #[serde(with = "hex_bytes", default)]
