@@ -7,7 +7,7 @@ This branch adds AMD SEV-SNP support and now includes a controlled, explicitly o
 Implemented and intended for review:
 
 - AMD SEV-SNP evidence plumbing in the v1 attestation format.
-- SNP report verification with AMD Genoa ARK/ASK/VCEK chain verification.
+- SNP report verification with AMD Milan/Genoa/Turin ARK/ASK/VCEK chain verification (built-in ARK/ASK roots per product; Bergamo/Siena parts are canonicalized under the Genoa KDS endpoint).
 - Report-data challenge binding and fail-closed report policy checks.
 - SNP launch-measurement recomputation from OVMF/kernel/initrd/cmdline inputs.
 - KMS SNP `BootInfo` construction from verified report measurement, chip id, launch inputs, TCB status, and advisory ids.
@@ -15,18 +15,18 @@ Implemented and intended for review:
 - Controlled SNP key/cert release guarded by both external auth policy and local KMS config.
 - VMM-provided SNP launch inputs in `.sys-config.json` so KMS self/app auth can recompute the same launch measurement used by QEMU.
 - Onboarding attestation-info reporting for SNP identity fields.
-- VMM explicit `platform = "amd-sev-snp"` launch path.
+- VMM SNP launch path, selected either by host auto-detection (`/proc/cpuinfo` `sev_snp` CPU flag) or by an explicit `platform = "amd-sev-snp"` pin.
 
 Default posture:
 
 - SNP app key release, KMS/root/temp CA key release, and app certificate release are still disabled by default.
 - Operators must explicitly set `[core.sev_snp_key_release].enabled = true` before any SNP `BootInfo` can release sensitive material.
-- KMS startup rejects `enabled = true` unless `enforce_self_authorization = true`, so the self-authorized `GetTempCaCert` path cannot silently bypass the SNP release gate in production config.
+- The self-authorized `GetTempCaCert` path is gated per-RPC, not at startup: it runs `ensure_self_key_release_allowed` against the KMS's own self `BootInfo`. With the production default `enforce_self_authorization = true`, the KMS self-attests and any SNP self `BootInfo` must clear the same release gate as app requests. `enforce_self_authorization = false` is a dev/test-only escape hatch (it logs a startup warning, not a hard error); in that mode the self `BootInfo` is `None`, so the self-release gate is skipped — do not use it in production TEE deployments.
 - Even with the local KMS gate enabled, the existing auth API must first allow the verified SNP `BootInfo` for the app/KMS identity.
 
 ## Fail-closed policy summary
 
-- `platform = "auto"` remains conservative while SNP is experimental; operators must explicitly set `platform = "amd-sev-snp"` to launch an SNP guest.
+- `platform` selects the guest TEE: omitted or the legacy `auto` value auto-detects the host TEE from `/proc/cpuinfo` (the `sev_snp` CPU flag selects AMD SEV-SNP; otherwise it falls back to TDX), and operators can pin `platform = "amd-sev-snp"` or `platform = "tdx"` to override detection. SNP key release stays fail-closed regardless of how the platform is selected: an auto-detected SNP launch still cannot release sensitive material until the SNP release gate below is explicitly enabled.
 - SNP launch measurement is recomputed from trusted KMS config/input and compared to the hardware-verified report measurement.
 - SNP `BootInfo.tcb_status` is verifier-derived from signed AMD SNP report TCB fields:
   - `UpToDate` only when current/reported/committed/launch TCB versions all match.
@@ -58,13 +58,15 @@ Sensitive release surfaces using this gate:
 
 The ignored live regression test cross-checks dstack's pure Rust SNP measurement recomputation against `sev-snp-measure` on the SNP-capable host.
 
+> Status: the captured vector below is **stale**. It predates the move of SNP app identity from the kernel cmdline into the MrConfigV3 `HOST_DATA` binding, so the recorded `sev_snp_measurement` no longer matches the current recomputation. It must be regenerated on an SNP host before relying on it as proof. The current end-to-end live evidence is the SNP E2E smoke section below, which exercises the updated HOST_DATA-bound path through real key release.
+
 Command:
 
 ```bash
 cargo test -p dstack-kms --all-features recomputation_matches_sev_snp_measure_live_golden_vector -- --ignored --nocapture
 ```
 
-Latest local proof:
+Last captured vector (STALE — regenerate before citing as proof):
 
 ```text
 DSTACK_SEV_SNP_MEASURE_GOLDEN_VECTOR_BEGIN
@@ -194,7 +196,7 @@ cargo test -p ra-rpc --all-features
 cargo check --workspace --all-features
 cargo clippy --workspace --all-features -- -D warnings --allow unused_variables
 git diff --check
-cd kms/auth-simple && npx oxlint . && npx vitest run
+cd kms/auth-simple && bun install && bun run check
 ```
 
 ## Remaining production follow-up
