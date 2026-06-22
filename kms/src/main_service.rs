@@ -565,8 +565,6 @@ mod tests {
 
     fn valid_snp_measurement_input() -> MeasurementInput {
         MeasurementInput {
-            app_id: hex_of(0x11, 20),
-            compose_hash: hex_of(0x22, 32),
             rootfs_hash: hex_of(0x33, 32),
             base_cmdline: None,
             ovmf_hash: hex_of(0x44, 48),

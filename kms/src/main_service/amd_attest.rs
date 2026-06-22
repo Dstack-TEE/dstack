@@ -36,10 +36,10 @@ use super::upgrade_authority::BootInfo;
 // working. `allow(unused_imports)` because some are consumed only by tests.
 #[allow(unused_imports)]
 pub(crate) use dstack_mr::sev::{
-    compute_expected_measurement, decode_required_hex, parse_snp_inputs_from_vm_config,
-    snp_measurement_os_image_hash, snp_mr_aggregated_digest, validate_measurement_input,
-    validate_snp_mr_config_binding, MeasurementInput, OvmfSectionParam, SnpLaunchInputs,
-    MAX_OVMF_METADATA_PAGES, MAX_OVMF_SECTIONS, MAX_VCPUS,
+    compute_expected_measurement, parse_snp_inputs_from_vm_config, snp_measurement_os_image_hash,
+    snp_mr_aggregated_digest, validate_measurement_input, validate_snp_mr_config_binding,
+    MeasurementInput, OvmfSectionParam, SnpLaunchInputs, MAX_OVMF_METADATA_PAGES,
+    MAX_OVMF_SECTIONS, MAX_VCPUS,
 };
 
 pub(crate) fn validate_amd_snp_measurement_binding(
@@ -75,7 +75,7 @@ pub(crate) fn build_amd_snp_boot_info(
     verified_chip_id: &[u8; 64],
     input: &MeasurementInput,
 ) -> Result<BootInfo> {
-    let mr_config = test_mr_config_from_input(input)?;
+    let mr_config = test_mr_config(vec![0x11; 20], vec![0x22; 32]);
     let mr_config_document = mr_config.to_canonical_json();
     let measurement_document = serde_json::to_string(input)
         .context("failed to serialize amd sev-snp measurement input")?;
@@ -190,16 +190,15 @@ fn mr_config_key_provider_info(mr_config: &MrConfigV3) -> Result<Vec<u8>> {
 }
 
 #[cfg(test)]
-fn test_mr_config_from_input(input: &MeasurementInput) -> Result<MrConfigV3> {
-    let app_id = decode_required_hex("app_id", &input.app_id, 20)?;
+fn test_mr_config(app_id: Vec<u8>, compose_hash: Vec<u8>) -> MrConfigV3 {
     let instance_id = Sha256::digest(&app_id)[..20].to_vec();
-    Ok(MrConfigV3::new(
+    MrConfigV3::new(
         app_id,
-        decode_required_hex("compose_hash", &input.compose_hash, 32)?,
+        compose_hash,
         dstack_types::KeyProviderKind::None,
         Vec::new(),
         instance_id,
-    ))
+    )
 }
 
 #[cfg(test)]
@@ -212,8 +211,6 @@ mod tests {
 
     fn valid_input() -> MeasurementInput {
         MeasurementInput {
-            app_id: hex_of(0x11, 20),
-            compose_hash: hex_of(0x22, 32),
             rootfs_hash: hex_of(0x33, 32),
             base_cmdline: None,
             ovmf_hash: hex_of(0x44, 48),
@@ -249,8 +246,8 @@ mod tests {
         }
     }
 
-    fn valid_mr_config(input: &MeasurementInput) -> Result<MrConfigV3> {
-        test_mr_config_from_input(input)
+    fn valid_mr_config(_input: &MeasurementInput) -> Result<MrConfigV3> {
+        Ok(test_mr_config(vec![0x11; 20], vec![0x22; 32]))
     }
 
     fn measurement_document(input: &MeasurementInput) -> String {
@@ -568,16 +565,40 @@ mod tests {
         let input = valid_input();
         let verified = compute_expected_measurement(&input)?;
         let chip_id = [0xcd; 64];
-        let boot_info = build_amd_snp_boot_info(&verified, &chip_id, &input)?;
+        let mr_config = test_mr_config(vec![0x11; 20], vec![0x22; 32]);
+        let mr_config_document = mr_config.to_canonical_json();
+        let measurement_doc = measurement_document(&input);
+        let host_data = MrConfigV3::snp_host_data_from_document(&mr_config_document);
+        let boot_info = build_amd_snp_boot_info_with_tcb_status(
+            &verified,
+            &host_data,
+            &chip_id,
+            "UpToDate",
+            &[],
+            &input,
+            &measurement_doc,
+            &mr_config_document,
+        )?;
 
-        let mut changed = input.clone();
-        changed.app_id = hex_of(0x12, 20);
-        let changed_measurement = compute_expected_measurement(&changed)?;
+        let changed_mr_config = test_mr_config(vec![0x12; 20], vec![0x22; 32]);
+        let changed_mr_config_document = changed_mr_config.to_canonical_json();
+        let changed_host_data =
+            MrConfigV3::snp_host_data_from_document(&changed_mr_config_document);
+        let changed_measurement = compute_expected_measurement(&input)?;
         assert_eq!(
             changed_measurement, verified,
             "app_id must not be added to the SNP measured cmdline"
         );
-        let changed_boot_info = build_amd_snp_boot_info(&verified, &chip_id, &changed)?;
+        let changed_boot_info = build_amd_snp_boot_info_with_tcb_status(
+            &verified,
+            &changed_host_data,
+            &chip_id,
+            "UpToDate",
+            &[],
+            &input,
+            &measurement_doc,
+            &changed_mr_config_document,
+        )?;
 
         assert_ne!(boot_info.app_id, changed_boot_info.app_id);
         assert_ne!(boot_info.instance_id, changed_boot_info.instance_id);

@@ -47,12 +47,6 @@ pub struct OvmfSectionParam {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct MeasurementInput {
-    /// Deprecated: app identity is now bound through MrConfigV3/HOST_DATA.
-    #[serde(default)]
-    pub app_id: String,
-    /// Deprecated: compose identity is now bound through MrConfigV3/HOST_DATA.
-    #[serde(default)]
-    pub compose_hash: String,
     /// 32-byte rootfs hash included in the self-contained SNP measurement input.
     pub rootfs_hash: String,
     /// Original image kernel cmdline used for SNP measured launch.
@@ -648,7 +642,7 @@ pub fn compute_expected_measurement(input: &MeasurementInput) -> Result<[u8; 48]
 }
 
 /// Project a verified `MeasurementInput` to the shared image-invariant
-/// measurement (excludes per-deployment fields like vcpus/app_id/compose_hash).
+/// measurement (excludes per-deployment fields like vcpus).
 fn sev_os_image_measurement(input: &MeasurementInput) -> dstack_types::SevOsImageMeasurement {
     dstack_types::SevOsImageMeasurement {
         rootfs_hash: input.rootfs_hash.clone(),
@@ -674,11 +668,12 @@ fn sev_os_image_measurement(input: &MeasurementInput) -> dstack_types::SevOsImag
 ///
 /// os_image_hash identifies the OS image only, so it covers exactly the
 /// image-determined measurement inputs and EXCLUDES per-deployment values
-/// (`vcpus`, `vcpu_type`, `guest_features`, `app_id`, `compose_hash`). Hashing
-/// the full `MeasurementInput` made the same image hash differently per vCPU
-/// count, which broke per-image on-chain allow-listing. The canonical hashing
-/// lives in `dstack_types::SevOsImageMeasurement` so the image build can
-/// reproduce the same value as `digest.sev.txt`.
+/// (`vcpus`, `vcpu_type`, `guest_features`). Hashing the full
+/// `MeasurementInput` made the same image hash differently per vCPU count,
+/// which broke per-image on-chain allow-listing. App/config identity is bound
+/// separately by MrConfigV3/HOST_DATA. The canonical hashing lives in
+/// `dstack_types::SevOsImageMeasurement` so the image build can reproduce the
+/// same value as `digest.sev.txt`.
 pub fn snp_measurement_os_image_hash(measurement_document: &str) -> Result<Vec<u8>> {
     let input: MeasurementInput = serde_json::from_str(measurement_document)
         .context("failed to parse sev-snp measurement document for os_image_hash")?;
@@ -954,8 +949,6 @@ mod tests {
 
     fn valid_input() -> MeasurementInput {
         MeasurementInput {
-            app_id: hex_of(0x11, 20),
-            compose_hash: hex_of(0x22, 32),
             rootfs_hash: hex_of(0x33, 32),
             base_cmdline: None,
             ovmf_hash: hex_of(0x44, 48),
@@ -1030,10 +1023,8 @@ mod tests {
         }
 
         // Per-deployment fields MUST NOT change the os_image_hash (the same OS
-        // image must hash identically regardless of vCPU count, app, etc.).
+        // image must hash identically regardless of vCPU count, CPU model, etc.).
         let deployment_cases: Vec<(&str, fn(&mut MeasurementInput))> = vec![
-            ("app_id", |i| i.app_id = hex_of(0x12, 20)),
-            ("compose_hash", |i| i.compose_hash = hex_of(0x23, 32)),
             ("vcpus", |i| i.vcpus = 3),
             ("vcpu_type", |i| {
                 i.vcpu_type = Some("epyc-milan".to_string())
