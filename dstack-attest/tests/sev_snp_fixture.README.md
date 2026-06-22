@@ -32,6 +32,9 @@ nothing fetched from AMD KDS (fully offline / deterministic).
   ```
   (`report-data` = ASCII `attest-test-fixture-2026`, the marker the test asserts.)
 - The `attestation` hex field of that JSON was decoded to `sev_snp_attestation.bin`.
+- The unsigned outer `config.sev_snp_measurement` JSON has been normalized to the
+  current schema by removing the obsolete standalone `rootfs_hash` field; rootfs
+  identity remains in the measured `dstack.rootfs_hash=...` cmdline.
 - ASK/VCEK were fetched from AMD KDS (`https://kdsintf.amd.com/vcek/v1/Milan/...`)
   for the report's `chip_id` and TCB and pinned here so the test stays offline.
 
