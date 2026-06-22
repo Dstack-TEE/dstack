@@ -71,6 +71,7 @@ APP_HOST_PORT="${DSTACK_SNP_SMOKE_APP_HOST_PORT:-15543}"
 STRICT_APP_HOST_PORT="${DSTACK_SNP_SMOKE_STRICT_APP_HOST_PORT:-15544}"
 VMM_PORT="${DSTACK_SNP_SMOKE_VMM_PORT:-18082}"
 VMM_URL="${DSTACK_SNP_SMOKE_VMM_URL:-http://127.0.0.1:$VMM_PORT}"
+HOST_API_PORT="${DSTACK_SNP_SMOKE_HOST_API_PORT:-11100}"
 ALLOW_OUT_OF_DATE_TCB="${DSTACK_SNP_SMOKE_ALLOW_OUT_OF_DATE_TCB:-0}"
 RUN_STRICT_TCB_PROBE="${DSTACK_SNP_SMOKE_STRICT_TCB_PROBE:-1}"
 ALLOW_OLD_QEMU="${DSTACK_SNP_SMOKE_ALLOW_OLD_QEMU:-0}"
@@ -84,6 +85,7 @@ need() {
 
 need curl
 need jq
+need openssl
 need python3
 need sudo
 
@@ -325,7 +327,7 @@ auto_start = true
 [host_api]
 ident = "dstack SNP smoke VMM"
 address = "vsock:0xffffffff"
-port = 10000
+port = $HOST_API_PORT
 
 [key_provider]
 enabled = true
@@ -448,17 +450,46 @@ wait_for_kms_metrics() {
 	done
 }
 
+kms_key_provider_id() {
+	local kms_port="$1"
+	local label="${2:-$kms_port}"
+	local meta_file="$ART/kms-$label-meta.json"
+	local ca_file="$ART/kms-$label-ca.pem"
+	for i in $(seq 1 60); do
+		if curl -kfsS "https://127.0.0.1:$kms_port/prpc/KMS.GetMeta?json" -o "$meta_file"; then
+			jq -r '.ca_cert // .caCert // empty' "$meta_file" >"$ca_file"
+			if [[ -s "$ca_file" ]] && grep -q "BEGIN CERTIFICATE" "$ca_file"; then
+				# dstack-util treats KMS provider ID as the root CA
+				# SubjectPublicKeyInfo DER bytes (x509_parser public_key().raw).
+				openssl x509 -in "$ca_file" -pubkey -noout \
+					| openssl pkey -pubin -outform DER \
+					| od -An -tx1 -v \
+					| tr -d ' \n'
+				echo
+				return 0
+			fi
+		fi
+		sleep 2
+		if [[ $((i % 10)) -eq 0 ]]; then echo "waiting for $label KMS GetMeta ca_cert..." >&2; fi
+	done
+	echo "failed to derive KMS key_provider_id from https://127.0.0.1:$kms_port/prpc/KMS.GetMeta" >&2
+	exit 1
+}
+
 deploy_app() {
 	local name="$1"
 	local kms_port="$2"
 	local app_port="$3"
+	local key_provider_id
+	key_provider_id=$(kms_key_provider_id "$kms_port" "$name")
+	echo "$name key_provider_id=$key_provider_id" >&2
 	cat >"$BASE/$name-compose.yaml" <<'YAML'
 services:
   smoke:
     image: debian:bookworm-slim
     command: sh -c 'echo SNP_APP_CONTAINER_STARTED; sleep 300'
 YAML
-	python3 "$REPO/vmm/src/vmm-cli.py" --url "$VMM_URL" compose --docker-compose "$BASE/$name-compose.yaml" --name "$name" --kms --public-logs --public-sysinfo --no-instance-id --output "$BASE/$name.app-compose.json" | tee "$ART/$name-compose-create.txt" >&2
+	python3 "$REPO/vmm/src/vmm-cli.py" --url "$VMM_URL" compose --docker-compose "$BASE/$name-compose.yaml" --name "$name" --kms --key-provider-id "$key_provider_id" --public-logs --public-sysinfo --no-instance-id --output "$BASE/$name.app-compose.json" | tee "$ART/$name-compose-create.txt" >&2
 	jq --arg init_script "$DNS_INIT_SCRIPT" '.storage_fs="ext4" | .init_script=$init_script' "$BASE/$name.app-compose.json" >"$BASE/$name.app-compose.json.tmp"
 	mv "$BASE/$name.app-compose.json.tmp" "$BASE/$name.app-compose.json"
 	python3 "$REPO/vmm/src/vmm-cli.py" --url "$VMM_URL" deploy --name "$name" --compose "$BASE/$name.app-compose.json" --image "$IMAGE_NAME" --kms-url "https://10.0.2.2:$kms_port" --port "tcp:127.0.0.1:$app_port:8000" --vcpu 2 --memory 4096 --disk 20G | tee "$ART/$name-deploy.txt" >&2
@@ -504,7 +535,7 @@ echo "APP_VM_ID=$APP_VM_ID"
 for i in $(seq 1 240); do
 	logs=$(python3 "$REPO/vmm/src/vmm-cli.py" --url "$VMM_URL" logs "$APP_VM_ID" -n 160 2>/dev/null || true)
 	if echo "$logs" | grep -Eq "SNP_APP_CONTAINER_STARTED|Container dstack-smoke-1 Started"; then echo "$logs" | tee "$ART/app-ready-log.txt"; echo "APP ready after ${i}s"; break; fi
-	if echo "$logs" | grep -q "Failed to get app key\|amd sev-snp key release\|measurement mismatch\|App not allowed\|KMS self authorization failed\|KDS collateral unavailable\|HTTP status client error"; then echo "$logs" | tee "$ART/app-failure-log.txt"; exit 2; fi
+	if echo "$logs" | grep -q "Failed to get app key\|Failed to verify app\|Invalid mr_config\|amd sev-snp key release\|measurement mismatch\|App not allowed\|KMS self authorization failed\|KDS collateral unavailable\|HTTP status client error"; then echo "$logs" | tee "$ART/app-failure-log.txt"; exit 2; fi
 	sleep 2
 	if [[ $((i % 30)) -eq 0 ]]; then echo "waiting for APP..."; echo "$logs" | tail -60; fi
 	if [[ $i -eq 240 ]]; then echo "APP did not become ready"; echo "$logs" | tee "$ART/app-timeout-log.txt"; exit 1; fi
