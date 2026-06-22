@@ -28,7 +28,7 @@ use safe_write::safe_write;
 use sha2::Digest;
 
 use crate::{
-    config::{KmsConfig, SevSnpMeasureConfig},
+    config::KmsConfig,
     main_service::{
         build_boot_info_for_attestation,
         upgrade_authority::{
@@ -152,7 +152,6 @@ impl OnboardRpc for OnboardHandler {
         };
 
         build_attestation_info_response(
-            self.state.config.sev_snp.as_ref(),
             &verified,
             attestation_mode,
             &info.vm_config,
@@ -168,7 +167,6 @@ impl OnboardRpc for OnboardHandler {
 }
 
 fn build_attestation_info_response(
-    sev_snp_config: Option<&SevSnpMeasureConfig>,
     verified: &VerifiedAttestation,
     attestation_mode: String,
     vm_config: &str,
@@ -176,7 +174,7 @@ fn build_attestation_info_response(
     eth_rpc_url: String,
     kms_contract_address: String,
 ) -> Result<AttestationInfoResponse> {
-    let boot_info = build_boot_info_for_attestation(sev_snp_config, verified, false, vm_config)
+    let boot_info = build_boot_info_for_attestation(verified, false, vm_config)
         .context("Failed to decode app info")?;
     let raw_device_id = verified.report.get_devide_id();
     Ok(AttestationInfoResponse {
@@ -194,20 +192,11 @@ fn build_attestation_info_response(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        config::SevSnpMeasureConfig,
-        main_service::amd_attest::{
-            compute_expected_measurement, snp_measurement_os_image_hash, MeasurementInput,
-            OvmfSectionParam,
-        },
+    use crate::main_service::amd_attest::{
+        compute_expected_measurement, snp_measurement_os_image_hash, MeasurementInput,
+        OvmfSectionParam,
     };
     use sha2::Digest;
-
-    fn sev_snp_config() -> SevSnpMeasureConfig {
-        SevSnpMeasureConfig {
-            amd_kds_base_url: None,
-        }
-    }
 
     fn hex_of(byte: u8, len: usize) -> String {
         hex::encode(vec![byte; len])
@@ -301,7 +290,6 @@ mod tests {
         .to_string();
 
         let response = build_attestation_info_response(
-            Some(&sev_snp_config()),
             &attestation,
             "dstack-amd-sev-snp".to_string(),
             &vm_config,

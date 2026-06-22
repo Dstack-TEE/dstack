@@ -32,15 +32,15 @@ site_name = ""
 # outside a TEE (e.g. local dev/testing) where the local guest agent socket
 # is unavailable.
 enforce_self_authorization = true
+# Optional AMD KDS-compatible base URL for SEV-SNP collateral fetches.
+# Leave empty to use the built-in default.
+amd_kds_base_url = ""
 
 # AMD SEV-SNP key/cert release remains disabled unless this local KMS gate is
 # explicitly enabled. External auth policy must still allow the verified
-# BootInfo before any sensitive material is returned. Enabling this also
-# requires enforce_self_authorization = true.
+# BootInfo before any sensitive material is returned.
 [core.sev_snp_key_release]
 enabled = false
-allowed_tcb_statuses = ["UpToDate"]
-allowed_advisory_ids = []
 
 [core.image]
 verify = true

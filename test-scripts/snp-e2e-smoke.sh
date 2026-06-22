@@ -12,7 +12,7 @@
 # Minimal setup used by the original smoke:
 #   cargo build --release -p dstack-vmm -p supervisor -p dstack-kms
 #   export DSTACK_SNP_SMOKE_BIN_DIR=$PWD/target/release
-#   export DSTACK_SNP_SMOKE_ALLOW_OUT_OF_DATE_TCB=1  # lab hosts only
+#   export DSTACK_SNP_SMOKE_ALLOW_OUT_OF_DATE_TCB=1  # lab hosts only; auth API policy
 #   test-scripts/snp-e2e-smoke.sh
 #
 # Useful overrides:
@@ -166,6 +166,9 @@ import os
 import time
 
 
+ALLOW_OUT_OF_DATE_TCB = os.environ.get("ALLOW_OUT_OF_DATE_TCB") == "1"
+
+
 class H(BaseHTTPRequestHandler):
     def _send(self, obj, status=200):
         body = json.dumps(obj).encode()
@@ -200,14 +203,39 @@ class H(BaseHTTPRequestHandler):
             if key in data:
                 summary[key] = str(data[key])[:96]
         print(json.dumps({"path": self.path, "summary": summary}), flush=True)
-        self._send({"isAllowed": True, "gatewayAppId": "", "reason": "snp smoke permissive auth"})
+
+        # TCB/advisory policy belongs to the auth API. The normal smoke can
+        # explicitly allow an OutOfDate lab host; the /strict auth namespace is
+        # used by the negative probe to prove denial comes from auth policy, not
+        # KMS-local config.
+        if self.path.endswith("/bootAuth/app"):
+            tcb_status = data.get("tcbStatus") or ""
+            advisory_ids = data.get("advisoryIds") or []
+            strict_tcb = self.path.startswith("/strict/")
+            if tcb_status not in ("", "UpToDate"):
+                if strict_tcb or tcb_status != "OutOfDate" or not ALLOW_OUT_OF_DATE_TCB:
+                    self._send({
+                        "isAllowed": False,
+                        "gatewayAppId": "",
+                        "reason": f"tcb_status is not allowed by auth api: {tcb_status}",
+                    })
+                    return
+            if advisory_ids:
+                self._send({
+                    "isAllowed": False,
+                    "gatewayAppId": "",
+                    "reason": f"advisory_id is not allowed by auth api: {advisory_ids[0]}",
+                })
+                return
+
+        self._send({"isAllowed": True, "gatewayAppId": "", "reason": "snp smoke auth"})
 
 
 HTTPServer(("0.0.0.0", int(os.environ["AUTH_PORT"])), H).serve_forever()
 PY
 
 (cd "$BASE/http-root" && python3 -m http.server "$HOST_ART_PORT" >"$ART/artifacts-http.log" 2>&1 & echo $! >"$BASE/artifacts-http.pid")
-AUTH_PORT="$AUTH_PORT" python3 "$BASE/auth-server.py" >"$ART/auth-server.log" 2>&1 & echo $! >"$BASE/auth.pid"
+AUTH_PORT="$AUTH_PORT" ALLOW_OUT_OF_DATE_TCB="$ALLOW_OUT_OF_DATE_TCB" python3 "$BASE/auth-server.py" >"$ART/auth-server.log" 2>&1 & echo $! >"$BASE/auth.pid"
 sleep 1
 curl -fsS "http://127.0.0.1:$HOST_ART_PORT/dstack-kms" -o /dev/null
 curl -fsS "http://127.0.0.1:$AUTH_PORT/" | jq . | tee "$ART/auth-info.json"
@@ -315,13 +343,12 @@ for i in $(seq 1 60); do
 done
 echo "== VMM ready =="
 
-allowed_tcb_statuses='["UpToDate"]'
-if [[ "$ALLOW_OUT_OF_DATE_TCB" = "1" ]]; then
-	allowed_tcb_statuses='["UpToDate", "OutOfDate"]'
-fi
-
 write_kms_config() {
-	local tcb_statuses="$1"
+	local auth_prefix="$1"
+	local auth_url="http://10.0.2.2:$AUTH_PORT"
+	if [[ -n "$auth_prefix" ]]; then
+		auth_url="$auth_url/$auth_prefix"
+	fi
 	cat >"$BASE/http-root/kms.toml" <<EOF
 [rpc]
 address = "0.0.0.0"
@@ -340,6 +367,7 @@ cert_dir = "/dstack/kms-certs"
 admin_token_hash = "00"
 pccs_url = ""
 enforce_self_authorization = true
+amd_kds_base_url = "${DSTACK_SNP_SMOKE_KDS_BASE_URL:-}"
 
 [core.metrics]
 enabled = true
@@ -354,19 +382,14 @@ download_timeout = "2m"
 type = "webhook"
 
 [core.auth_api.webhook]
-url = "http://10.0.2.2:$AUTH_PORT"
+url = "$auth_url"
 
 [core.onboard]
 enabled = true
 auto_bootstrap_domain = "10.0.2.2"
 
-[core.sev_snp]
-amd_kds_base_url = "${DSTACK_SNP_SMOKE_KDS_BASE_URL:-}"
-
 [core.sev_snp_key_release]
 enabled = true
-allowed_tcb_statuses = $tcb_statuses
-allowed_advisory_ids = []
 EOF
 }
 
@@ -399,9 +422,9 @@ KMS_BASH_SCRIPT=${KMS_BASH_SCRIPT//__DSTACK_HOST_ART_PORT__/$HOST_ART_PORT}
 
 deploy_kms() {
 	local name="$1"
-	local statuses="$2"
+	local auth_prefix="$2"
 	local host_port="$3"
-	write_kms_config "$statuses"
+	write_kms_config "$auth_prefix"
 	cat >"$BASE/kms-compose.yaml" <<'YAML'
 services:
   kms:
@@ -446,7 +469,7 @@ YAML
 
 if [[ "$RUN_STRICT_TCB_PROBE" = "1" && "$ALLOW_OUT_OF_DATE_TCB" = "1" ]]; then
 	echo "== Strict TCB probe: expect app GetAppKey denial on lab OutOfDate host =="
-	STRICT_KMS_VM_ID=$(deploy_kms snp-smoke-kms-strict '["UpToDate"]' "$STRICT_KMS_HOST_PORT")
+	STRICT_KMS_VM_ID=$(deploy_kms snp-smoke-kms-strict strict "$STRICT_KMS_HOST_PORT")
 	echo "STRICT_KMS_VM_ID=$STRICT_KMS_VM_ID"
 	wait_for_kms_metrics "$STRICT_KMS_VM_ID" "$STRICT_KMS_HOST_PORT" strict
 	STRICT_APP_VM_ID=$(deploy_app snp-smoke-app-strict "$STRICT_KMS_HOST_PORT" "$STRICT_APP_HOST_PORT")
@@ -472,7 +495,7 @@ if [[ "$RUN_STRICT_TCB_PROBE" = "1" && "$ALLOW_OUT_OF_DATE_TCB" = "1" ]]; then
 fi
 
 echo "== KMS success run =="
-KMS_VM_ID=$(deploy_kms snp-smoke-kms "$allowed_tcb_statuses" "$KMS_HOST_PORT")
+KMS_VM_ID=$(deploy_kms snp-smoke-kms "" "$KMS_HOST_PORT")
 echo "KMS_VM_ID=$KMS_VM_ID"
 wait_for_kms_metrics "$KMS_VM_ID" "$KMS_HOST_PORT" success
 curl -kfsS "https://127.0.0.1:$KMS_HOST_PORT/metrics" | tee "$ART/kms-metrics-before-app.txt"

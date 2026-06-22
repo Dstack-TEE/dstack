@@ -31,10 +31,19 @@ pub(crate) struct ImageConfig {
     pub download_timeout: Duration,
 }
 
-/// Optional AMD SEV-SNP verifier configuration.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub(crate) struct SevSnpKeyReleaseConfig {
+    /// Enable AMD SEV-SNP key/cert release after attestation, measurement
+    /// binding, and external auth-policy checks have all succeeded.
+    #[serde(default)]
+    pub enabled: bool,
+}
+
 #[derive(Debug, Clone, Deserialize)]
-pub(crate) struct SevSnpMeasureConfig {
-    /// Optional AMD KDS-compatible base URL used for collateral requests.
+pub(crate) struct KmsConfig {
+    pub cert_dir: PathBuf,
+    pub pccs_url: Option<String>,
+    /// Optional AMD KDS-compatible base URL used for SEV-SNP collateral requests.
     ///
     /// Empty by default. When set, the KMS process exports this base URL for
     /// dstack-attest before any attestation verification happens. The base URL
@@ -42,50 +51,9 @@ pub(crate) struct SevSnpMeasureConfig {
     /// `https://kdsintf.amd.com/vcek/v1` or a trusted mirror/cache.
     #[serde(default)]
     pub amd_kds_base_url: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub(crate) struct SevSnpKeyReleaseConfig {
-    /// Enable AMD SEV-SNP key/cert release after attestation, measurement
-    /// binding, and external auth-policy checks have all succeeded.
-    #[serde(default)]
-    pub enabled: bool,
-    /// Verifier-derived TCB statuses that are acceptable for releasing
-    /// sensitive key/cert material. Defaults to the strict production value.
-    #[serde(default = "default_allowed_tcb_statuses")]
-    pub allowed_tcb_statuses: Vec<String>,
-    /// Advisory IDs that are acceptable for releasing sensitive key/cert
-    /// material. Defaults to empty, which rejects any advisory.
-    #[serde(default)]
-    pub allowed_advisory_ids: Vec<String>,
-}
-
-impl Default for SevSnpKeyReleaseConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            allowed_tcb_statuses: default_allowed_tcb_statuses(),
-            allowed_advisory_ids: Vec::new(),
-        }
-    }
-}
-
-fn default_allowed_tcb_statuses() -> Vec<String> {
-    vec!["UpToDate".to_string()]
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub(crate) struct KmsConfig {
-    pub cert_dir: PathBuf,
-    pub pccs_url: Option<String>,
     pub auth_api: AuthApi,
     pub onboard: OnboardConfig,
     pub image: ImageConfig,
-    /// AMD SEV-SNP measurement verification configuration. Optional at config
-    /// load time for non-SNP/dev deployments; SNP binding helpers require it.
-    #[serde(default)]
-    #[allow(dead_code)]
-    pub sev_snp: Option<SevSnpMeasureConfig>,
     /// Additional local release gate for AMD SEV-SNP key/cert material. This is
     /// separate from the auth API so production deployments need an explicit KMS
     /// opt-in as well as a successful external policy decision.

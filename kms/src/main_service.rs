@@ -33,7 +33,7 @@ use tracing::{info, warn};
 use upgrade_authority::{build_boot_info, ensure_app_id_len, local_kms_boot_info, BootInfo};
 
 use crate::{
-    config::{KmsConfig, SevSnpKeyReleaseConfig, SevSnpMeasureConfig},
+    config::{KmsConfig, SevSnpKeyReleaseConfig},
     crypto::{derive_k256_key, sign_message, sign_message_with_timestamp},
 };
 
@@ -147,29 +147,17 @@ struct BootConfig {
 }
 
 pub(crate) fn build_boot_info_for_attestation(
-    sev_snp_config: Option<&SevSnpMeasureConfig>,
     att: &VerifiedAttestation,
     use_boottime_mr: bool,
     vm_config_str: &str,
 ) -> Result<BootInfo> {
     if att.report.amd_snp_report().is_some() {
-        let default_sev_snp_config;
-        let config = match sev_snp_config {
-            Some(config) => config,
-            None => {
-                default_sev_snp_config = SevSnpMeasureConfig {
-                    amd_kds_base_url: None,
-                };
-                &default_sev_snp_config
-            }
-        };
         let vm_config_str = if vm_config_str.is_empty() {
             att.config.as_str()
         } else {
             vm_config_str
         };
         return amd_attest::build_amd_snp_boot_info_from_verified_attestation_and_vm_config(
-            config,
             att,
             vm_config_str,
         );
@@ -186,22 +174,6 @@ fn ensure_snp_key_release_allowed(
     }
     if !policy.enabled {
         bail!("amd sev-snp key release is not enabled");
-    }
-    if !policy
-        .allowed_tcb_statuses
-        .iter()
-        .any(|allowed| allowed == &boot_info.tcb_status)
-    {
-        bail!("tcb_status is not allowed");
-    }
-    for advisory_id in &boot_info.advisory_ids {
-        if !policy
-            .allowed_advisory_ids
-            .iter()
-            .any(|allowed| allowed == advisory_id)
-        {
-            bail!("advisory_id is not allowed");
-        }
     }
     Ok(())
 }
@@ -224,12 +196,7 @@ impl RpcHandler {
         let boot_info = self
             .state
             .self_boot_info
-            .get_or_try_init(|| {
-                local_kms_boot_info(
-                    self.state.config.pccs_url.as_deref(),
-                    self.state.config.sev_snp.as_ref(),
-                )
-            })
+            .get_or_try_init(|| local_kms_boot_info(self.state.config.pccs_url.as_deref()))
             .await
             .context("Failed to load cached self boot info")?;
         let response = self
@@ -327,12 +294,7 @@ impl RpcHandler {
         use_boottime_mr: bool,
         vm_config_str: &str,
     ) -> Result<BootConfig> {
-        let boot_info = build_boot_info_for_attestation(
-            self.state.config.sev_snp.as_ref(),
-            att,
-            use_boottime_mr,
-            vm_config_str,
-        )?;
+        let boot_info = build_boot_info_for_attestation(att, use_boottime_mr, vm_config_str)?;
         let response = self
             .state
             .config
@@ -606,12 +568,6 @@ mod tests {
         compute_expected_measurement, MeasurementInput, OvmfSectionParam,
     };
 
-    fn sev_snp_config() -> SevSnpMeasureConfig {
-        SevSnpMeasureConfig {
-            amd_kds_base_url: None,
-        }
-    }
-
     fn hex_of(byte: u8, len: usize) -> String {
         hex::encode(vec![byte; len])
     }
@@ -712,13 +668,8 @@ mod tests {
         })
         .to_string();
 
-        let boot_info = build_boot_info_for_attestation(
-            Some(&sev_snp_config()),
-            &attestation,
-            false,
-            &vm_config,
-        )
-        .expect("snp attestation should build boot info through vm_config path");
+        let boot_info = build_boot_info_for_attestation(&attestation, false, &vm_config)
+            .expect("snp attestation should build boot info through vm_config path");
 
         assert_eq!(boot_info.attestation_mode, AttestationMode::DstackAmdSevSnp);
         assert_eq!(boot_info.mr_aggregated.len(), 32);
@@ -743,9 +694,8 @@ mod tests {
             &mr_config,
         );
 
-        let boot_info =
-            build_boot_info_for_attestation(Some(&sev_snp_config()), &attestation, false, "")
-                .expect("snp local KMS attestation should use embedded vm_config");
+        let boot_info = build_boot_info_for_attestation(&attestation, false, "")
+            .expect("snp local KMS attestation should use embedded vm_config");
 
         assert_eq!(boot_info.attestation_mode, AttestationMode::DstackAmdSevSnp);
         assert_eq!(boot_info.mr_aggregated.len(), 32);
@@ -764,7 +714,7 @@ mod tests {
         })
         .to_string();
 
-        let boot_info = build_boot_info_for_attestation(None, &attestation, false, &vm_config)
+        let boot_info = build_boot_info_for_attestation(&attestation, false, &vm_config)
             .expect("self-contained SNP vm_config should not require KMS-local sev_snp config");
         assert_eq!(boot_info.attestation_mode, AttestationMode::DstackAmdSevSnp);
         assert_eq!(boot_info.device_id, vec![0xab; 64]);
@@ -780,8 +730,7 @@ mod tests {
             "mr_config": mr_config.to_canonical_json(),
         })
         .to_string();
-        build_boot_info_for_attestation(Some(&sev_snp_config()), &attestation, false, &vm_config)
-            .unwrap()
+        build_boot_info_for_attestation(&attestation, false, &vm_config).unwrap()
     }
 
     #[test]
@@ -799,20 +748,19 @@ mod tests {
     }
 
     #[test]
-    fn snp_key_release_accepts_clean_tcb_when_explicitly_enabled() {
+    fn snp_key_release_accepts_auth_approved_boot_info_when_enabled() {
         let boot_info = snp_boot_info();
         let policy = SevSnpKeyReleaseConfig {
             enabled: true,
             ..Default::default()
         };
 
-        ensure_snp_key_release_allowed(&boot_info, &policy).expect(
-            "explicitly enabled SNP key release should allow UpToDate/no-advisory boot info",
-        );
+        ensure_snp_key_release_allowed(&boot_info, &policy)
+            .expect("explicitly enabled SNP key release should allow auth-approved boot info");
     }
 
     #[test]
-    fn snp_key_release_rejects_bad_tcb_or_unallowed_advisory() {
+    fn snp_key_release_leaves_tcb_and_advisory_policy_to_auth_api() {
         let mut boot_info = snp_boot_info();
         let policy = SevSnpKeyReleaseConfig {
             enabled: true,
@@ -820,15 +768,9 @@ mod tests {
         };
 
         boot_info.tcb_status = "OutOfDate".to_string();
-        let err = ensure_snp_key_release_allowed(&boot_info, &policy)
-            .expect_err("OutOfDate SNP TCB must not release keys by default");
-        assert!(err.to_string().contains("tcb_status is not allowed"));
-
-        let mut boot_info = snp_boot_info();
         boot_info.advisory_ids.push("SNP-TEST-ADVISORY".to_string());
-        let err = ensure_snp_key_release_allowed(&boot_info, &policy)
-            .expect_err("unallowlisted SNP advisory must not release keys");
-        assert!(err.to_string().contains("advisory_id is not allowed"));
+        ensure_snp_key_release_allowed(&boot_info, &policy)
+            .expect("TCB/advisory policy should be decided by the auth API, not this local gate");
     }
 
     #[test]

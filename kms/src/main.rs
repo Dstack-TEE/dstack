@@ -107,9 +107,8 @@ fn record_attestation_metrics(req: &rocket::Request<'_>, res: &rocket::Response<
 
 fn configure_amd_kds_base_from_config(config: &KmsConfig) {
     let Some(base_url) = config
-        .sev_snp
-        .as_ref()
-        .and_then(|sev_snp| sev_snp.amd_kds_base_url.as_deref())
+        .amd_kds_base_url
+        .as_deref()
         .map(str::trim)
         .filter(|base_url| !base_url.is_empty())
     else {
@@ -152,10 +151,7 @@ async fn main() -> Result<()> {
     }
 
     let pccs_url = config.pccs_url.clone();
-    let amd_kds_base_url = config
-        .sev_snp
-        .as_ref()
-        .and_then(|sev_snp| sev_snp.amd_kds_base_url.clone());
+    let amd_kds_base_url = config.amd_kds_base_url.clone();
     let metrics_enabled = config.metrics.enabled;
     let state = main_service::KmsState::new(config).context("Failed to initialize KMS state")?;
     let figment = figment

@@ -27,24 +27,21 @@ Default posture:
 ## Fail-closed policy summary
 
 - `platform` selects the guest TEE: omitted or the legacy `auto` value auto-detects the host TEE from `/proc/cpuinfo` (the `sev_snp` CPU flag selects AMD SEV-SNP; otherwise it falls back to TDX), and operators can pin `platform = "amd-sev-snp"` or `platform = "tdx"` to override detection. SNP key release stays fail-closed regardless of how the platform is selected: an auto-detected SNP launch still cannot release sensitive material until the SNP release gate below is explicitly enabled.
-- SNP launch measurement is recomputed from trusted KMS config/input and compared to the hardware-verified report measurement.
+- SNP launch measurement is recomputed from the self-contained VMM launch inputs and compared to the hardware-verified report measurement.
 - SNP `BootInfo.tcb_status` is verifier-derived from signed AMD SNP report TCB fields:
   - `UpToDate` only when current/reported/committed/launch TCB versions all match.
   - `OutOfDate` otherwise.
 - SNP advisory ids are propagated from verifier output into `BootInfo`; currently this list is explicit and empty because the AMD report/VCEK evidence used here does not carry a direct advisory-list field.
 - `auth-simple` defaults remain strict: only `UpToDate` is accepted and any advisory id is denied unless explicitly allowlisted.
-- The local KMS release gate mirrors that strict default:
+- The local KMS release gate is intentionally only an operator opt-in switch:
   - `[core.sev_snp_key_release].enabled = false` by default.
-  - `allowed_tcb_statuses = ["UpToDate"]` by default.
-  - `allowed_advisory_ids = []` by default, so any advisory remains fail-closed unless explicitly allowlisted.
+  - TCB/advisory policy is not duplicated in KMS config; it is decided by the auth API using the verified `BootInfo`.
 
 Example opt-in gate:
 
 ```toml
 [core.sev_snp_key_release]
 enabled = true
-allowed_tcb_statuses = ["UpToDate"]
-allowed_advisory_ids = []
 ```
 
 Sensitive release surfaces using this gate:
@@ -138,13 +135,13 @@ image_kernel=Linux 6.18.24-dstack with CONFIG_AMD_MEM_ENCRYPT=y, CONFIG_SEV_GUES
 kms_guest=booted SNP Linux/userspace and started dstack-kms
 kms_marker=SNP_KMS_CONTAINER_STARTED / KMS runtime ready
 kds_base_url=enabled for smoke via DSTACK_SNP_SMOKE_KDS_BASE_URL=https://cors.litgateway.com/https://kdsintf.amd.com/vcek/v1
-strict_tcb_probe=denied_as_expected with tcb_status is not allowed
+strict_tcb_probe=denied_as_expected by auth API with tcb_status is not allowed
 success_probe=GetTempCaCert HTTP 200; GetAppKey HTTP 200; SignCert HTTP 200; app container started
 smoke_result=SNP E2E smoke success
 no_secret_material_logged=true
 ```
 
-This means the PR has live SNP report proof, live golden-vector measurement proof, release-gate unit/integration coverage, and hardware smoke proof through dstack-managed SNP KMS boot, strict TCB denial, app guest key release, and app container startup. The fresh-box smoke now reaches Linux/userspace, `SNP_KMS_CONTAINER_STARTED`, `GetTempCaCert`, `GetAppKey`, `SignCert`, and app container startup when using a coherent **SNP** `meta-dstack` image. During the smoke, AMD KDS throttling was worked around by explicitly routing AMD KDS collateral fetches through the smoke-level `DSTACK_SNP_SMOKE_KDS_BASE_URL=https://cors.litgateway.com/https://kdsintf.amd.com/vcek/v1`; the smoke writes this value to the KMS `[core.sev_snp]` configuration. This is an AMD-KDS-compatible base URL; requests append relative KDS paths such as `/Milan/cert_chain` or `/Milan/<chip_id>?...`. Host/KMS binaries must match PR #703, guest-side `dstack-util`/`dstack-attest` must include the PR cert-chain/KDS fallback, and the Yocto image must be built with `MACHINE = "sev-snp"` so the guest kernel includes AMD memory-encryption/SNP support. A coherent PR image built with the default `tdx` machine produced a `6.18.24-dstack` kernel with `# CONFIG_AMD_MEM_ENCRYPT is not set`; controlled QEMU tests showed that kernel resets immediately after OVMF loads kernel/initrd, while SNP-capable kernels boot the same QEMU/OVMF path to Linux/SNP markers.
+This means the PR has live SNP report proof, live golden-vector measurement proof, release-gate unit/integration coverage, and hardware smoke proof through dstack-managed SNP KMS boot, auth-API strict TCB denial, app guest key release, and app container startup. The fresh-box smoke now reaches Linux/userspace, `SNP_KMS_CONTAINER_STARTED`, `GetTempCaCert`, `GetAppKey`, `SignCert`, and app container startup when using a coherent **SNP** `meta-dstack` image. During the smoke, AMD KDS throttling was worked around by explicitly routing AMD KDS collateral fetches through the smoke-level `DSTACK_SNP_SMOKE_KDS_BASE_URL=https://cors.litgateway.com/https://kdsintf.amd.com/vcek/v1`; the smoke writes this value to the top-level KMS `core.amd_kds_base_url` configuration. This is an AMD-KDS-compatible base URL; requests append relative KDS paths such as `/Milan/cert_chain` or `/Milan/<chip_id>?...`. Host/KMS binaries must match PR #703, guest-side `dstack-util`/`dstack-attest` must include the PR cert-chain/KDS fallback, and the Yocto image must be built with `MACHINE = "sev-snp"` so the guest kernel includes AMD memory-encryption/SNP support. A coherent PR image built with the default `tdx` machine produced a `6.18.24-dstack` kernel with `# CONFIG_AMD_MEM_ENCRYPT is not set`; controlled QEMU tests showed that kernel resets immediately after OVMF loads kernel/initrd, while SNP-capable kernels boot the same QEMU/OVMF path to Linux/SNP markers.
 
 ### Fresh SNP host / image requirements
 
@@ -159,7 +156,7 @@ Practical implication for reviewers/testers on a fresh box:
 
 1. Install/use an AMDSEV QEMU 10.x build and the matching SNP-capable OVMF.
 2. Build the PR binaries with `cargo build --release -p dstack-vmm -p supervisor -p dstack-kms`.
-3. Run `test-scripts/snp-e2e-smoke.sh` unchanged and first confirm it reaches `SNP_KMS_CONTAINER_STARTED`; if AMD KDS throttles the lab host, set `DSTACK_SNP_SMOKE_KDS_BASE_URL` to a trusted AMD-KDS-compatible mirror/cache base URL such as `https://mirror.example.com/vcek/v1` (or, for a path-prefix relay, `https://cors.litgateway.com/https://kdsintf.amd.com/vcek/v1`) and rerun. The lab success above also used `DSTACK_SNP_SMOKE_ALLOW_OUT_OF_DATE_TCB=1` because the current SNP lab host reports `OutOfDate`; production defaults remain `allowed_tcb_statuses = ["UpToDate"]` with an empty advisory allowlist.
+3. Run `test-scripts/snp-e2e-smoke.sh` unchanged and first confirm it reaches `SNP_KMS_CONTAINER_STARTED`; if AMD KDS throttles the lab host, set `DSTACK_SNP_SMOKE_KDS_BASE_URL` to a trusted AMD-KDS-compatible mirror/cache base URL such as `https://mirror.example.com/vcek/v1` (or, for a path-prefix relay, `https://cors.litgateway.com/https://kdsintf.amd.com/vcek/v1`) and rerun. The lab success above also used `DSTACK_SNP_SMOKE_ALLOW_OUT_OF_DATE_TCB=1` because the current SNP lab host reports `OutOfDate`; production auth policy should keep accepting only `UpToDate` and deny any advisory id unless explicitly allowlisted.
 4. For full `SNP_APP_CONTAINER_STARTED` / `GetAppKey` success, use or publish a coherent `meta-dstack` guest image whose kernel, modules, initramfs, rootfs, verity metadata, and guest userspace include the same PR #703 `dstack-util`/`dstack-attest` SNP cert-chain/KDS fallback code. The reproducible path is to build `meta-dstack` with its `dstack` submodule checked out to this PR branch, for example:
 
    ```bash
@@ -201,4 +198,4 @@ cd kms/auth-simple && bun install && bun run check
 
 ## Remaining production follow-up
 
-The release gate is controlled and production-oriented, but AMD advisory/revocation collateral is still limited by the evidence source available here: SNP reports/VCEKs do not directly carry an advisory list, so `advisory_ids` currently propagates as an explicit empty list. Future collateral fetchers can populate this field and will be denied by both auth-simple and the local KMS release gate unless each advisory is explicitly allowlisted.
+The release gate is controlled and production-oriented, but AMD advisory/revocation collateral is still limited by the evidence source available here: SNP reports/VCEKs do not directly carry an advisory list, so `advisory_ids` currently propagates as an explicit empty list. Future collateral fetchers can populate this field; auth policy should deny those advisories unless each one is explicitly allowlisted.
