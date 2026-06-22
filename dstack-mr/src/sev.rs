@@ -368,115 +368,205 @@ const GUID_SEV_META_DATA: [u8; 16] = [
     0x66, 0x65, 0x88, 0xdc, 0x4a, 0x98, 0x98, 0x47, 0xa7, 0x5e, 0x55, 0x85, 0xa7, 0xbf, 0x67, 0xcc,
 ];
 
-fn read_u16_le(buf: &[u8], off: usize) -> u16 {
-    u16::from_le_bytes([buf[off], buf[off + 1]])
+const FOUR_GIB: u64 = 0x1_0000_0000;
+const OVMF_RESET_VECTOR_TAIL_SIZE: usize = 32;
+const OVMF_FOOTER_ENTRY_SIZE: usize = 18; // u16 size + GUID
+const SEV_META_HEADER_SIZE: usize = 16;
+const SEV_META_SECTION_SIZE: usize = 12;
+
+struct OvmfFooter {
+    sev_hashes_table_gpa: u64,
+    sev_es_reset_eip: u32,
+    metadata_offset_from_end: usize,
 }
 
-fn read_u32_le(buf: &[u8], off: usize) -> u32 {
-    u32::from_le_bytes([buf[off], buf[off + 1], buf[off + 2], buf[off + 3]])
+struct OvmfFooterEntry<'a> {
+    guid: &'a [u8],
+    data: &'a [u8],
 }
 
-impl OvmfInfo {
-    pub fn load(path: &str) -> Result<Self> {
-        let data = fs::read(path).with_context(|| format!("cannot read ovmf binary '{path}'"))?;
-        let size = data.len();
-        let gpa = (0x1_0000_0000u64)
-            .checked_sub(size as u64)
-            .context("ovmf binary is larger than 4 gib")?;
+fn checked_slice<'a>(buf: &'a [u8], off: usize, len: usize, what: &str) -> Result<&'a [u8]> {
+    let end = off
+        .checked_add(len)
+        .ok_or_else(|| anyhow::anyhow!("{what} offset overflow"))?;
+    buf.get(off..end)
+        .ok_or_else(|| anyhow::anyhow!("{what} out of bounds"))
+}
 
-        const ENTRY_HDR: usize = 18;
-        let footer_off = size.saturating_sub(32 + ENTRY_HDR);
-        if footer_off + ENTRY_HDR > size {
-            bail!("ovmf binary too small to contain footer table");
-        }
-        if data[footer_off + 2..footer_off + 18] != GUID_FOOTER_TABLE {
-            bail!("ovmf footer guid not found");
-        }
-        let footer_total_size = read_u16_le(&data, footer_off) as usize;
-        if footer_total_size < ENTRY_HDR {
-            bail!("ovmf footer table has invalid total size");
-        }
-        let table_size = footer_total_size - ENTRY_HDR;
-        if table_size > footer_off {
-            bail!("ovmf footer table is out of bounds");
-        }
-        let table_start = footer_off - table_size;
-        let table_bytes = &data[table_start..footer_off];
+fn read_u16_le_at(buf: &[u8], off: usize, what: &str) -> Result<u16> {
+    Ok(u16::from_le_bytes(
+        checked_slice(buf, off, 2, what)?.try_into().unwrap(),
+    ))
+}
 
-        let mut sev_hashes_table_gpa = 0u64;
-        let mut sev_es_reset_eip = 0u32;
-        let mut meta_offset_from_end = None;
+fn read_u32_le_at(buf: &[u8], off: usize, what: &str) -> Result<u32> {
+    Ok(u32::from_le_bytes(
+        checked_slice(buf, off, 4, what)?.try_into().unwrap(),
+    ))
+}
 
-        let mut pos = table_bytes.len();
-        while pos >= ENTRY_HDR {
-            let entry_off = pos - ENTRY_HDR;
-            let entry_size = read_u16_le(table_bytes, entry_off) as usize;
-            if entry_size < ENTRY_HDR || entry_size > pos {
-                bail!("ovmf footer table has invalid entry size");
-            }
-            let guid = &table_bytes[entry_off + 2..entry_off + 18];
-            let data_start = pos - entry_size;
-            let data_end = pos - ENTRY_HDR;
-            let entry_data = &table_bytes[data_start..data_end];
+fn ovmf_gpa(size: usize) -> Result<u64> {
+    FOUR_GIB
+        .checked_sub(u64::try_from(size).context("ovmf binary size does not fit in u64")?)
+        .context("ovmf binary is larger than 4 gib")
+}
 
-            if guid == GUID_SEV_HASH_TABLE_RV && entry_data.len() >= 4 {
-                sev_hashes_table_gpa = read_u32_le(entry_data, 0) as u64;
-            } else if guid == GUID_SEV_ES_RESET_BLK && entry_data.len() >= 4 {
-                sev_es_reset_eip = read_u32_le(entry_data, 0);
-            } else if guid == GUID_SEV_META_DATA && entry_data.len() >= 4 {
-                meta_offset_from_end = Some(read_u32_le(entry_data, 0) as usize);
-            }
-            pos -= entry_size;
-        }
+fn ovmf_footer_table_bytes(data: &[u8]) -> Result<&[u8]> {
+    let footer_off = data
+        .len()
+        .checked_sub(OVMF_RESET_VECTOR_TAIL_SIZE + OVMF_FOOTER_ENTRY_SIZE)
+        .context("ovmf binary too small to contain footer table")?;
+    let footer = checked_slice(data, footer_off, OVMF_FOOTER_ENTRY_SIZE, "ovmf footer")?;
+    if footer[2..] != GUID_FOOTER_TABLE {
+        bail!("ovmf footer guid not found");
+    }
 
-        if sev_hashes_table_gpa == 0 {
-            bail!("ovmf sev hash table entry not found in footer table");
-        }
-        if sev_es_reset_eip == 0 {
-            bail!("ovmf sev_es_reset_block entry not found in footer table");
+    let footer_total_size = read_u16_le_at(data, footer_off, "ovmf footer size")? as usize;
+    if footer_total_size < OVMF_FOOTER_ENTRY_SIZE {
+        bail!("ovmf footer table has invalid total size");
+    }
+
+    let table_size = footer_total_size - OVMF_FOOTER_ENTRY_SIZE;
+    let table_start = footer_off
+        .checked_sub(table_size)
+        .context("ovmf footer table is out of bounds")?;
+    checked_slice(data, table_start, table_size, "ovmf footer table")
+}
+
+fn ovmf_footer_entries(table: &[u8]) -> Result<Vec<OvmfFooterEntry<'_>>> {
+    let mut entries = Vec::new();
+    let mut end = table.len();
+    while end >= OVMF_FOOTER_ENTRY_SIZE {
+        let header_off = end - OVMF_FOOTER_ENTRY_SIZE;
+        let entry_size = read_u16_le_at(table, header_off, "ovmf footer entry size")? as usize;
+        if entry_size < OVMF_FOOTER_ENTRY_SIZE || entry_size > end {
+            bail!("ovmf footer table has invalid entry size");
         }
 
-        let mut sections = Vec::new();
-        let off_from_end = meta_offset_from_end
-            .ok_or_else(|| anyhow::anyhow!("ovmf sev metadata entry not found in footer table"))?;
-        if off_from_end > size {
-            bail!("ovmf sev metadata offset exceeds file size");
+        let data_start = end - entry_size;
+        entries.push(OvmfFooterEntry {
+            guid: checked_slice(table, header_off + 2, 16, "ovmf footer entry guid")?,
+            data: checked_slice(
+                table,
+                data_start,
+                entry_size - OVMF_FOOTER_ENTRY_SIZE,
+                "ovmf footer entry data",
+            )?,
+        });
+        end = data_start;
+    }
+    Ok(entries)
+}
+
+fn parse_ovmf_footer(data: &[u8]) -> Result<OvmfFooter> {
+    let mut sev_hashes_table_gpa = None;
+    let mut sev_es_reset_eip = None;
+    let mut metadata_offset_from_end = None;
+
+    for entry in ovmf_footer_entries(ovmf_footer_table_bytes(data)?)? {
+        if entry.data.len() < 4 {
+            continue;
         }
-        let meta_start = size - off_from_end;
-        if meta_start + 16 > size {
-            bail!("ovmf sev metadata header out of bounds");
+        if entry.guid == GUID_SEV_HASH_TABLE_RV {
+            sev_hashes_table_gpa =
+                Some(read_u32_le_at(entry.data, 0, "ovmf sev hash table entry")? as u64);
+        } else if entry.guid == GUID_SEV_ES_RESET_BLK {
+            sev_es_reset_eip = Some(read_u32_le_at(entry.data, 0, "ovmf sev-es reset entry")?);
+        } else if entry.guid == GUID_SEV_META_DATA {
+            metadata_offset_from_end =
+                Some(read_u32_le_at(entry.data, 0, "ovmf sev metadata entry")? as usize);
         }
-        if &data[meta_start..meta_start + 4] != b"ASEV" {
-            bail!("ovmf sev metadata has bad signature");
-        }
-        let meta_version = read_u32_le(&data, meta_start + 8);
-        if meta_version != 1 {
-            bail!("ovmf sev metadata has unsupported version {meta_version}");
-        }
-        let num_items = read_u32_le(&data, meta_start + 12) as usize;
-        let items_start = meta_start + 16;
-        if items_start + num_items * 12 > size {
-            bail!("ovmf sev metadata sections out of bounds");
-        }
-        for i in 0..num_items {
-            let off = items_start + i * 12;
-            let section_type_value = read_u32_le(&data, off + 8);
+    }
+
+    let sev_hashes_table_gpa =
+        sev_hashes_table_gpa.context("ovmf sev hash table entry not found in footer table")?;
+    if sev_hashes_table_gpa == 0 {
+        bail!("ovmf sev hash table entry is zero");
+    }
+
+    let sev_es_reset_eip =
+        sev_es_reset_eip.context("ovmf sev_es_reset_block entry not found in footer table")?;
+    if sev_es_reset_eip == 0 {
+        bail!("ovmf sev_es_reset_block entry is zero");
+    }
+
+    let metadata_offset_from_end =
+        metadata_offset_from_end.context("ovmf sev metadata entry not found in footer table")?;
+    Ok(OvmfFooter {
+        sev_hashes_table_gpa,
+        sev_es_reset_eip,
+        metadata_offset_from_end,
+    })
+}
+
+fn parse_ovmf_metadata_sections(
+    data: &[u8],
+    offset_from_end: usize,
+) -> Result<Vec<MetadataSection>> {
+    let meta_start = data
+        .len()
+        .checked_sub(offset_from_end)
+        .context("ovmf sev metadata offset exceeds file size")?;
+    let header = checked_slice(
+        data,
+        meta_start,
+        SEV_META_HEADER_SIZE,
+        "ovmf sev metadata header",
+    )?;
+    if &header[..4] != b"ASEV" {
+        bail!("ovmf sev metadata has bad signature");
+    }
+    let meta_version = read_u32_le_at(header, 8, "ovmf sev metadata version")?;
+    if meta_version != 1 {
+        bail!("ovmf sev metadata has unsupported version {meta_version}");
+    }
+
+    let num_items = read_u32_le_at(header, 12, "ovmf sev metadata item count")? as usize;
+    let sections_size = num_items
+        .checked_mul(SEV_META_SECTION_SIZE)
+        .context("ovmf sev metadata sections size overflow")?;
+    let sections_start = meta_start
+        .checked_add(SEV_META_HEADER_SIZE)
+        .context("ovmf sev metadata sections offset overflow")?;
+    let section_bytes = checked_slice(
+        data,
+        sections_start,
+        sections_size,
+        "ovmf sev metadata sections",
+    )?;
+
+    section_bytes
+        .chunks_exact(SEV_META_SECTION_SIZE)
+        .map(|section| {
+            let section_type_value = read_u32_le_at(section, 8, "ovmf section_type")?;
             let section_type = SectionType::from_u32(section_type_value).ok_or_else(|| {
                 anyhow::anyhow!("unknown ovmf section_type {section_type_value:#x}")
             })?;
-            sections.push(MetadataSection {
-                gpa: read_u32_le(&data, off) as u64,
-                size: read_u32_le(&data, off + 4) as u64,
+            Ok(MetadataSection {
+                gpa: read_u32_le_at(section, 0, "ovmf section gpa")? as u64,
+                size: read_u32_le_at(section, 4, "ovmf section size")? as u64,
                 section_type,
-            });
-        }
+            })
+        })
+        .collect()
+}
 
+impl OvmfInfo {
+    pub fn load(path: impl AsRef<Path>) -> Result<Self> {
+        let path = path.as_ref();
+        let data = fs::read(path)
+            .with_context(|| format!("cannot read ovmf binary '{}'", path.display()))?;
+        Self::parse(data)
+    }
+
+    fn parse(data: Vec<u8>) -> Result<Self> {
+        let footer = parse_ovmf_footer(&data)?;
         Ok(Self {
+            gpa: ovmf_gpa(data.len())?,
+            sections: parse_ovmf_metadata_sections(&data, footer.metadata_offset_from_end)?,
+            sev_hashes_table_gpa: footer.sev_hashes_table_gpa,
+            sev_es_reset_eip: footer.sev_es_reset_eip,
             data,
-            gpa,
-            sections,
-            sev_hashes_table_gpa,
-            sev_es_reset_eip,
         })
     }
 }
@@ -694,8 +784,7 @@ pub struct OvmfMeasurementInfo {
 /// Parse an OVMF (SEV firmware) binary and compute its launch-measurement
 /// metadata: the GCTX digest over the firmware bytes plus the SEV footer fields.
 pub fn ovmf_measurement_info(path: &Path) -> Result<OvmfMeasurementInfo> {
-    let path_str = path.to_str().context("ovmf path must be valid utf-8")?;
-    let ovmf = OvmfInfo::load(path_str)?;
+    let ovmf = OvmfInfo::load(path)?;
     let mut gctx = Gctx::new();
     gctx.update_normal_pages(ovmf.gpa, &ovmf.data);
     Ok(OvmfMeasurementInfo {
