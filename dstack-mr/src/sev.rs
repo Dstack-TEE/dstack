@@ -1032,6 +1032,91 @@ mod tests {
         hex::encode(vec![byte; len])
     }
 
+    fn ovmf_footer_entry(data: &[u8], guid: &[u8; 16]) -> Vec<u8> {
+        let mut entry = data.to_vec();
+        entry.extend_from_slice(&((data.len() + OVMF_FOOTER_ENTRY_SIZE) as u16).to_le_bytes());
+        entry.extend_from_slice(guid);
+        entry
+    }
+
+    fn synthetic_snp_ovmf() -> Vec<u8> {
+        let mut ovmf = vec![0u8; 4096];
+        let meta_start = 512usize;
+        ovmf[meta_start..meta_start + 4].copy_from_slice(b"ASEV");
+        write_u32_le_at(&mut ovmf, meta_start + 8, 1);
+        write_u32_le_at(&mut ovmf, meta_start + 12, 4);
+        let sections = [
+            (0x1000u32, 0x1000u32, 1u32),
+            (0x2000u32, 0x1000u32, 2u32),
+            (0x3000u32, 0x1000u32, 3u32),
+            (0x4000u32, 0x1000u32, 0x10u32),
+        ];
+        for (i, (gpa, size, section_type)) in sections.into_iter().enumerate() {
+            let off = meta_start + 16 + i * 12;
+            write_u32_le_at(&mut ovmf, off, gpa);
+            write_u32_le_at(&mut ovmf, off + 4, size);
+            write_u32_le_at(&mut ovmf, off + 8, section_type);
+        }
+
+        let mut table = Vec::new();
+        table.extend(ovmf_footer_entry(
+            &0x4000u32.to_le_bytes(),
+            &GUID_SEV_HASH_TABLE_RV,
+        ));
+        table.extend(ovmf_footer_entry(
+            &0xffff_fff0u32.to_le_bytes(),
+            &GUID_SEV_ES_RESET_BLK,
+        ));
+        table.extend(ovmf_footer_entry(
+            &((ovmf.len() - meta_start) as u32).to_le_bytes(),
+            &GUID_SEV_META_DATA,
+        ));
+
+        let footer_off = ovmf.len() - OVMF_RESET_VECTOR_TAIL_SIZE - OVMF_FOOTER_ENTRY_SIZE;
+        let table_start = footer_off - table.len();
+        ovmf[table_start..footer_off].copy_from_slice(&table);
+        write_u16_le_at(
+            &mut ovmf,
+            footer_off,
+            (table.len() + OVMF_FOOTER_ENTRY_SIZE) as u16,
+        );
+        ovmf[footer_off + 2..footer_off + OVMF_FOOTER_ENTRY_SIZE]
+            .copy_from_slice(&GUID_FOOTER_TABLE);
+        ovmf
+    }
+
+    #[test]
+    fn ovmf_parser_matches_synthetic_footer_metadata_vector() {
+        let ovmf = synthetic_snp_ovmf();
+        let info = OvmfInfo::parse(ovmf.clone()).expect("synthetic ovmf parses");
+        assert_eq!(info.gpa, FOUR_GIB - ovmf.len() as u64);
+        assert_eq!(info.sev_hashes_table_gpa, 0x4000);
+        assert_eq!(info.sev_es_reset_eip, 0xffff_fff0);
+
+        let sections: Vec<(u64, u64, SectionType)> = info
+            .sections
+            .iter()
+            .map(|s| (s.gpa, s.size, s.section_type))
+            .collect();
+        assert_eq!(
+            sections,
+            vec![
+                (0x1000, 0x1000, SectionType::SnpSecMemory),
+                (0x2000, 0x1000, SectionType::SnpSecrets),
+                (0x3000, 0x1000, SectionType::Cpuid),
+                (0x4000, 0x1000, SectionType::SnpKernelHashes),
+            ]
+        );
+
+        let mut gctx = Gctx::new();
+        gctx.update_normal_pages(info.gpa, &info.data);
+        assert_eq!(
+            hex::encode(gctx.ld),
+            "7c0f80f0a8d0ab1ee23fe763b255b8b210bb71113febcda60d76c00e84512f0cc141ffaa61be7bd22164736e85ec52d3",
+            "synthetic OVMF launch digest vector should not drift"
+        );
+    }
+
     fn valid_input() -> MeasurementInput {
         let rootfs_hash = hex_of(0x33, 32);
         MeasurementInput {
