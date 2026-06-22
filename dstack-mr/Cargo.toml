@@ -27,6 +27,7 @@ hex = { workspace = true, features = ["std"] }
 thiserror.workspace = true
 sha2.workspace = true
 anyhow.workspace = true
+binrw.workspace = true
 object.workspace = true
 hex-literal.workspace = true
 fs-err.workspace = true
