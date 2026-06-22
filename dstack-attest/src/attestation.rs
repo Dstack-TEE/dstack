@@ -166,15 +166,6 @@ fn platform_into_legacy_quote(platform: PlatformEvidence) -> AttestationQuote {
     }
 }
 
-fn platform_attestation_mode(platform: &PlatformEvidence) -> AttestationMode {
-    match platform {
-        PlatformEvidence::Tdx { .. } => AttestationMode::DstackTdx,
-        PlatformEvidence::SevSnp { .. } => AttestationMode::DstackAmdSevSnp,
-        PlatformEvidence::GcpTdx { .. } => AttestationMode::DstackGcpTdx,
-        PlatformEvidence::NitroEnclave { .. } => AttestationMode::DstackNitroEnclave,
-    }
-}
-
 fn replay_runtime_events<H: Hasher>(
     runtime_events: &[RuntimeEvent],
     to_event: Option<&str>,
@@ -263,20 +254,6 @@ pub enum AttestationMode {
     DstackAmdSevSnp,
 }
 
-/// Trusted source used to derive [`AppInfo`] for a platform.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AppInfoSource {
-    /// App info is carried by runtime events that are replayed against RTMR3 /
-    /// the runtime TPM PCR.
-    RuntimeEvents,
-    /// App info is carried by an SEV-SNP `MrConfigV3` document whose digest is
-    /// bound into the hardware report through HOST_DATA.
-    MrConfig,
-    /// The signed platform image is the app identity; `compose_hash` falls back
-    /// to `os_image_hash`.
-    OsImage,
-}
-
 #[cfg(feature = "quote")]
 fn has_sev_snp_tsm_provider() -> bool {
     crate::sev_snp::has_sev_snp_tsm_provider(std::path::Path::new("/sys/kernel/config/tsm/report"))
@@ -346,15 +323,6 @@ impl AttestationMode {
             Self::DstackAmdSevSnp => DSTACK_AMD_SEV_SNP,
             Self::DstackGcpTdx => DSTACK_GCP_TDX,
             Self::DstackNitroEnclave => DSTACK_NITRO_ENCLAVE,
-        }
-    }
-
-    /// Return the trusted platform source for [`AppInfo`].
-    pub fn app_info_source(&self) -> AppInfoSource {
-        match self {
-            Self::DstackTdx | Self::DstackGcpTdx => AppInfoSource::RuntimeEvents,
-            Self::DstackAmdSevSnp => AppInfoSource::MrConfig,
-            Self::DstackNitroEnclave => AppInfoSource::OsImage,
         }
     }
 }
@@ -700,72 +668,89 @@ impl AttestationV1 {
     #[errify::errify("decode app info")]
     pub fn decode_app_info_ex(&self, boottime_mr: bool, vm_config: &str) -> Result<AppInfo> {
         let runtime_events = self.stack.runtime_events();
-        let app_info_from_runtime_events =
-            match platform_attestation_mode(&self.platform).app_info_source() {
-                AppInfoSource::MrConfig => {
-                    let PlatformEvidence::SevSnp {
-                        report, mr_config, ..
-                    } = &self.platform
-                    else {
-                        bail!("AppInfoSource::MrConfig requires SEV-SNP evidence");
-                    };
-                    return decode_app_info_sev_snp(
-                        report,
-                        Some(mr_config),
-                        self.stack.config(),
-                        vm_config,
-                    );
-                }
-                AppInfoSource::RuntimeEvents => true,
-                AppInfoSource::OsImage => false,
+
+        let non_snp_context = || -> Result<(Vec<u8>, [u8; 32], Vec<u8>)> {
+            let key_provider_info = if boottime_mr {
+                vec![]
+            } else {
+                find_event_payload(runtime_events, "key-provider").unwrap_or_default()
             };
-        let key_provider_info = if boottime_mr {
-            vec![]
-        } else {
-            find_event_payload(runtime_events, "key-provider").unwrap_or_default()
+            let mr_key_provider = if key_provider_info.is_empty() {
+                [0u8; 32]
+            } else {
+                sha256(&key_provider_info)
+            };
+            let os_image_hash = self
+                .decode_vm_config(vm_config)
+                .context("Failed to decode os image hash")?
+                .os_image_hash;
+            Ok((key_provider_info, mr_key_provider, os_image_hash))
         };
-        let mr_key_provider = if key_provider_info.is_empty() {
-            [0u8; 32]
-        } else {
-            sha256(&key_provider_info)
-        };
-        let os_image_hash = self
-            .decode_vm_config(vm_config)
-            .context("Failed to decode os image hash")?
-            .os_image_hash;
-        let mrs = match (&self.platform, app_info_from_runtime_events) {
-            (PlatformEvidence::Tdx { quote, .. }, true) => {
-                decode_mr_tdx_from_quote(boottime_mr, &mr_key_provider, quote, runtime_events)?
+        let build_app_info = |mrs: Mrs,
+                              key_provider_info: Vec<u8>,
+                              os_image_hash: Vec<u8>,
+                              compose_hash: Vec<u8>| {
+            AppInfo {
+                app_id: find_event_payload(runtime_events, "app-id").unwrap_or_default(),
+                instance_id: find_event_payload(runtime_events, "instance-id").unwrap_or_default(),
+                device_id: sha256(Vec::<u8>::new()).to_vec(),
+                mr_system: mrs.mr_system,
+                mr_aggregated: mrs.mr_aggregated,
+                key_provider_info,
+                os_image_hash,
+                compose_hash,
             }
-            (PlatformEvidence::GcpTdx { tpm_quote, .. }, true) => decode_mr_gcp_tpm_from_v1(
-                boottime_mr,
-                &mr_key_provider,
-                &os_image_hash,
-                tpm_quote,
-                runtime_events,
-            )?,
-            (PlatformEvidence::NitroEnclave { nsm_quote }, false) => {
-                decode_mr_nitro_nsm_from_v1(&DstackNitroQuote {
+        };
+
+        match &self.platform {
+            PlatformEvidence::SevSnp {
+                report, mr_config, ..
+            } => decode_app_info_sev_snp(report, Some(mr_config), self.stack.config(), vm_config),
+            PlatformEvidence::Tdx { quote, .. } => {
+                let (key_provider_info, mr_key_provider, os_image_hash) = non_snp_context()?;
+                let mrs =
+                    decode_mr_tdx_from_quote(boottime_mr, &mr_key_provider, quote, runtime_events)?;
+                let compose_hash =
+                    find_event_payload(runtime_events, "compose-hash").unwrap_or_default();
+                Ok(build_app_info(
+                    mrs,
+                    key_provider_info,
+                    os_image_hash,
+                    compose_hash,
+                ))
+            }
+            PlatformEvidence::GcpTdx { tpm_quote, .. } => {
+                let (key_provider_info, mr_key_provider, os_image_hash) = non_snp_context()?;
+                let mrs = decode_mr_gcp_tpm_from_v1(
+                    boottime_mr,
+                    &mr_key_provider,
+                    &os_image_hash,
+                    tpm_quote,
+                    runtime_events,
+                )?;
+                let compose_hash =
+                    find_event_payload(runtime_events, "compose-hash").unwrap_or_default();
+                Ok(build_app_info(
+                    mrs,
+                    key_provider_info,
+                    os_image_hash,
+                    compose_hash,
+                ))
+            }
+            PlatformEvidence::NitroEnclave { nsm_quote } => {
+                let (key_provider_info, _mr_key_provider, os_image_hash) = non_snp_context()?;
+                let mrs = decode_mr_nitro_nsm_from_v1(&DstackNitroQuote {
                     nsm_quote: nsm_quote.clone(),
-                })?
+                })?;
+                let compose_hash = os_image_hash.clone();
+                Ok(build_app_info(
+                    mrs,
+                    key_provider_info,
+                    os_image_hash,
+                    compose_hash,
+                ))
             }
-            _ => bail!("platform evidence does not match its AppInfoSource"),
-        };
-        let compose_hash = if app_info_from_runtime_events {
-            find_event_payload(runtime_events, "compose-hash").unwrap_or_default()
-        } else {
-            os_image_hash.clone()
-        };
-        Ok(AppInfo {
-            app_id: find_event_payload(runtime_events, "app-id").unwrap_or_default(),
-            instance_id: find_event_payload(runtime_events, "instance-id").unwrap_or_default(),
-            device_id: sha256(Vec::<u8>::new()).to_vec(),
-            mr_system: mrs.mr_system,
-            mr_aggregated: mrs.mr_aggregated,
-            key_provider_info,
-            os_image_hash,
-            compose_hash,
-        })
+        }
     }
 
     /// Verify the quote with optional custom time (testing hook).
@@ -1024,26 +1009,6 @@ mod compatibility_tests {
         assert_eq!(AttestationMode::DstackGcpTdx.encode(), vec![1]);
         assert_eq!(AttestationMode::DstackNitroEnclave.encode(), vec![2]);
         assert_eq!(AttestationMode::DstackAmdSevSnp.encode(), vec![3]);
-    }
-
-    #[test]
-    fn app_info_source_is_explicit_per_attestation_mode() {
-        assert_eq!(
-            AttestationMode::DstackTdx.app_info_source(),
-            AppInfoSource::RuntimeEvents
-        );
-        assert_eq!(
-            AttestationMode::DstackGcpTdx.app_info_source(),
-            AppInfoSource::RuntimeEvents
-        );
-        assert_eq!(
-            AttestationMode::DstackAmdSevSnp.app_info_source(),
-            AppInfoSource::MrConfig
-        );
-        assert_eq!(
-            AttestationMode::DstackNitroEnclave.app_info_source(),
-            AppInfoSource::OsImage
-        );
     }
 
     #[test]
@@ -1519,60 +1484,82 @@ impl<T: GetDeviceId> Attestation<T> {
 
     #[errify::errify("decode app info")]
     pub fn decode_app_info_ex(&self, boottime_mr: bool, vm_config: &str) -> Result<AppInfo> {
-        let app_info_from_runtime_events = match self.quote.mode().app_info_source() {
-            AppInfoSource::MrConfig => {
-                let AttestationQuote::DstackAmdSevSnp(q) = &self.quote else {
-                    bail!("AppInfoSource::MrConfig requires SEV-SNP quote");
-                };
-                return decode_app_info_sev_snp(
-                    &q.report,
-                    Some(&q.mr_config),
-                    &self.config,
-                    vm_config,
-                );
+        let non_snp_context = || -> Result<(Vec<u8>, [u8; 32], Vec<u8>)> {
+            let key_provider_info = if boottime_mr {
+                vec![]
+            } else {
+                self.find_event_payload("key-provider").unwrap_or_default()
+            };
+            let mr_key_provider = if key_provider_info.is_empty() {
+                [0u8; 32]
+            } else {
+                sha256(&key_provider_info)
+            };
+            let os_image_hash = self
+                .decode_vm_config(vm_config)
+                .context("Failed to decode os image hash")?
+                .os_image_hash;
+            Ok((key_provider_info, mr_key_provider, os_image_hash))
+        };
+        let build_app_info = |mrs: Mrs,
+                              key_provider_info: Vec<u8>,
+                              os_image_hash: Vec<u8>,
+                              compose_hash: Vec<u8>| {
+            AppInfo {
+                app_id: self.find_event_payload("app-id").unwrap_or_default(),
+                instance_id: self.find_event_payload("instance-id").unwrap_or_default(),
+                device_id: sha256(self.report.get_devide_id()).to_vec(),
+                mr_system: mrs.mr_system,
+                mr_aggregated: mrs.mr_aggregated,
+                key_provider_info,
+                os_image_hash,
+                compose_hash,
             }
-            AppInfoSource::RuntimeEvents => true,
-            AppInfoSource::OsImage => false,
         };
-        let key_provider_info = if boottime_mr {
-            vec![]
-        } else {
-            self.find_event_payload("key-provider").unwrap_or_default()
-        };
-        let mr_key_provider = if key_provider_info.is_empty() {
-            [0u8; 32]
-        } else {
-            sha256(&key_provider_info)
-        };
-        let os_image_hash = self
-            .decode_vm_config(vm_config)
-            .context("Failed to decode os image hash")?
-            .os_image_hash;
-        let mrs = match (&self.quote, app_info_from_runtime_events) {
-            (AttestationQuote::DstackTdx(q), true) => {
-                self.decode_mr_tdx(boottime_mr, &mr_key_provider, q)?
+
+        match &self.quote {
+            AttestationQuote::DstackAmdSevSnp(q) => {
+                decode_app_info_sev_snp(&q.report, Some(&q.mr_config), &self.config, vm_config)
             }
-            (AttestationQuote::DstackGcpTdx(q), true) => {
-                self.decode_mr_gcp_tpm(boottime_mr, &mr_key_provider, &os_image_hash, &q.tpm_quote)?
+            AttestationQuote::DstackTdx(q) => {
+                let (key_provider_info, mr_key_provider, os_image_hash) = non_snp_context()?;
+                let mrs = self.decode_mr_tdx(boottime_mr, &mr_key_provider, q)?;
+                let compose_hash = self.find_event_payload("compose-hash").unwrap_or_default();
+                Ok(build_app_info(
+                    mrs,
+                    key_provider_info,
+                    os_image_hash,
+                    compose_hash,
+                ))
             }
-            (AttestationQuote::DstackNitroEnclave(q), false) => self.decode_mr_nitro_nsm(q)?,
-            _ => bail!("attestation quote does not match its AppInfoSource"),
-        };
-        let compose_hash = if app_info_from_runtime_events {
-            self.find_event_payload("compose-hash").unwrap_or_default()
-        } else {
-            os_image_hash.clone()
-        };
-        Ok(AppInfo {
-            app_id: self.find_event_payload("app-id").unwrap_or_default(),
-            instance_id: self.find_event_payload("instance-id").unwrap_or_default(),
-            device_id: sha256(self.report.get_devide_id()).to_vec(),
-            mr_system: mrs.mr_system,
-            mr_aggregated: mrs.mr_aggregated,
-            key_provider_info,
-            os_image_hash,
-            compose_hash,
-        })
+            AttestationQuote::DstackGcpTdx(q) => {
+                let (key_provider_info, mr_key_provider, os_image_hash) = non_snp_context()?;
+                let mrs = self.decode_mr_gcp_tpm(
+                    boottime_mr,
+                    &mr_key_provider,
+                    &os_image_hash,
+                    &q.tpm_quote,
+                )?;
+                let compose_hash = self.find_event_payload("compose-hash").unwrap_or_default();
+                Ok(build_app_info(
+                    mrs,
+                    key_provider_info,
+                    os_image_hash,
+                    compose_hash,
+                ))
+            }
+            AttestationQuote::DstackNitroEnclave(q) => {
+                let (key_provider_info, _mr_key_provider, os_image_hash) = non_snp_context()?;
+                let mrs = self.decode_mr_nitro_nsm(q)?;
+                let compose_hash = os_image_hash.clone();
+                Ok(build_app_info(
+                    mrs,
+                    key_provider_info,
+                    os_image_hash,
+                    compose_hash,
+                ))
+            }
+        }
     }
 }
 
@@ -1678,12 +1665,12 @@ impl Attestation {
             .map_err(|_| anyhow!("Quote lock poisoned"))?;
 
         let mode = AttestationMode::detect()?;
-        let runtime_events = match mode.app_info_source() {
-            AppInfoSource::RuntimeEvents => {
+        let runtime_events = match mode {
+            AttestationMode::DstackTdx | AttestationMode::DstackGcpTdx => {
                 RuntimeEvent::read_all().context("Failed to read runtime events")?
             }
-            AppInfoSource::MrConfig => vec![],
-            AppInfoSource::OsImage => match app_id {
+            AttestationMode::DstackAmdSevSnp => vec![],
+            AttestationMode::DstackNitroEnclave => match app_id {
                 Some(app_id) => vec![RuntimeEvent::new("app-id".to_string(), app_id.to_vec())],
                 None => vec![],
             },
