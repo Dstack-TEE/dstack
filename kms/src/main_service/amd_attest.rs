@@ -210,9 +210,9 @@ mod tests {
     }
 
     fn valid_input() -> MeasurementInput {
+        let rootfs_hash = hex_of(0x33, 32);
         MeasurementInput {
-            rootfs_hash: hex_of(0x33, 32),
-            base_cmdline: None,
+            base_cmdline: Some(format!("console=ttyS0 dstack.rootfs_hash={rootfs_hash}")),
             ovmf_hash: hex_of(0x44, 48),
             kernel_hash: hex_of(0x55, 32),
             initrd_hash: hex_of(0x66, 32),
@@ -301,7 +301,7 @@ mod tests {
         let expected = compute_expected_measurement(&input).unwrap();
         assert_eq!(
             hex::encode(expected),
-            "88a47914470533e33e24befd24ef0ac877658ff82cafc9878bd9566550f100fdf56d62f419e21b959aa228fc98000da4",
+            "88b48404819692fd2a5068f1a07bf1973bbcaa1314adc670705f9388762a759faf889f8e2c71fe1ec892554415257960",
             "synthetic measurement vector should not drift silently"
         );
         validate_amd_snp_measurement_binding(&expected, &input)
@@ -681,8 +681,11 @@ mod tests {
     #[test]
     fn rejects_empty_or_malformed_binding_hashes() {
         let mut input = valid_input();
-        input.rootfs_hash = hex_of(0x33, 31);
-        assert_rejects(input, "rootfs_hash must be 32 bytes");
+        input.base_cmdline = Some(format!(
+            "console=ttyS0 dstack.rootfs_hash={}",
+            hex_of(0x33, 31)
+        ));
+        assert_rejects(input, "dstack.rootfs_hash must be 32 bytes");
 
         let mut input = valid_input();
         input.ovmf_hash = hex_of(0x44, 47);

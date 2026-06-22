@@ -47,8 +47,6 @@ pub struct OvmfSectionParam {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct MeasurementInput {
-    /// 32-byte rootfs hash included in the self-contained SNP measurement input.
-    pub rootfs_hash: String,
     /// Original image kernel cmdline used for SNP measured launch.
     pub base_cmdline: Option<String>,
     /// 48-byte OVMF GCTX launch digest seed supplied by the VMM.
@@ -69,6 +67,60 @@ pub struct MeasurementInput {
     pub guest_features: u64,
     #[serde(deserialize_with = "deserialize_ovmf_sections_bounded")]
     pub ovmf_sections: Vec<OvmfSectionParam>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MeasurementDocument {
+    /// Deprecated legacy field: rootfs identity is now derived from the measured
+    /// `dstack.rootfs_hash=` kernel cmdline parameter.
+    #[serde(default)]
+    rootfs_hash: Option<String>,
+    base_cmdline: Option<String>,
+    ovmf_hash: String,
+    kernel_hash: String,
+    initrd_hash: String,
+    sev_hashes_table_gpa: u64,
+    sev_es_reset_eip: u32,
+    vcpus: u32,
+    vcpu_type: Option<String>,
+    guest_features: u64,
+    #[serde(deserialize_with = "deserialize_ovmf_sections_bounded")]
+    ovmf_sections: Vec<OvmfSectionParam>,
+}
+
+impl MeasurementDocument {
+    fn into_input(self) -> Result<MeasurementInput> {
+        let rootfs_hash = rootfs_hash_from_cmdline(self.base_cmdline.as_deref())?;
+        if let Some(legacy_rootfs_hash) = self.rootfs_hash.as_deref() {
+            let legacy_rootfs_hash = legacy_rootfs_hash.trim();
+            if !legacy_rootfs_hash.is_empty() {
+                let legacy_rootfs_hash =
+                    hex::encode(decode_required_hex("rootfs_hash", legacy_rootfs_hash, 32)?);
+                if legacy_rootfs_hash != rootfs_hash {
+                    bail!("rootfs_hash does not match dstack.rootfs_hash in base_cmdline");
+                }
+            }
+        }
+        Ok(MeasurementInput {
+            base_cmdline: self.base_cmdline,
+            ovmf_hash: self.ovmf_hash,
+            kernel_hash: self.kernel_hash,
+            initrd_hash: self.initrd_hash,
+            sev_hashes_table_gpa: self.sev_hashes_table_gpa,
+            sev_es_reset_eip: self.sev_es_reset_eip,
+            vcpus: self.vcpus,
+            vcpu_type: self.vcpu_type,
+            guest_features: self.guest_features,
+            ovmf_sections: self.ovmf_sections,
+        })
+    }
+}
+
+fn parse_measurement_document(document: &str) -> Result<MeasurementInput> {
+    let document: MeasurementDocument =
+        serde_json::from_str(document).context("invalid amd sev-snp measurement document")?;
+    document.into_input()
 }
 
 fn deserialize_ovmf_sections_bounded<'de, D>(
@@ -116,7 +168,7 @@ pub fn validate_measurement_input(input: &MeasurementInput) -> Result<()> {
         bail!("guest_features must be non-zero");
     }
 
-    decode_required_hex("rootfs_hash", &input.rootfs_hash, 32)?;
+    rootfs_hash_from_cmdline(input.base_cmdline.as_deref())?;
     decode_required_hex("kernel_hash", &input.kernel_hash, 32)?;
     decode_optional_hex("initrd_hash", &input.initrd_hash, 32)?;
     if input.vcpus == 0 {
@@ -643,9 +695,11 @@ pub fn compute_expected_measurement(input: &MeasurementInput) -> Result<[u8; 48]
 
 /// Project a verified `MeasurementInput` to the shared image-invariant
 /// measurement (excludes per-deployment fields like vcpus).
-fn sev_os_image_measurement(input: &MeasurementInput) -> dstack_types::SevOsImageMeasurement {
-    dstack_types::SevOsImageMeasurement {
-        rootfs_hash: input.rootfs_hash.clone(),
+fn sev_os_image_measurement(
+    input: &MeasurementInput,
+) -> Result<dstack_types::SevOsImageMeasurement> {
+    Ok(dstack_types::SevOsImageMeasurement {
+        rootfs_hash: rootfs_hash_from_cmdline(input.base_cmdline.as_deref())?,
         base_cmdline: input.base_cmdline.clone(),
         ovmf_hash: input.ovmf_hash.clone(),
         kernel_hash: input.kernel_hash.clone(),
@@ -661,7 +715,7 @@ fn sev_os_image_measurement(input: &MeasurementInput) -> dstack_types::SevOsImag
                 section_type: s.section_type,
             })
             .collect(),
-    }
+    })
 }
 
 /// Derive the OS image hash from a self-contained SNP measurement document.
@@ -675,9 +729,9 @@ fn sev_os_image_measurement(input: &MeasurementInput) -> dstack_types::SevOsImag
 /// `dstack_types::SevOsImageMeasurement` so the image build can reproduce the
 /// same value as `digest.sev.txt`.
 pub fn snp_measurement_os_image_hash(measurement_document: &str) -> Result<Vec<u8>> {
-    let input: MeasurementInput = serde_json::from_str(measurement_document)
+    let input = parse_measurement_document(measurement_document)
         .context("failed to parse sev-snp measurement document for os_image_hash")?;
-    Ok(sev_os_image_measurement(&input).os_image_hash().to_vec())
+    Ok(sev_os_image_measurement(&input)?.os_image_hash().to_vec())
 }
 
 /// OVMF launch-measurement metadata: the GCTX launch digest of the firmware
@@ -736,23 +790,32 @@ fn file_sha256_hex(path: &Path) -> Result<String> {
     Ok(hex::encode(Sha256::digest(data)))
 }
 
-fn resolve_rootfs_hash(meta: &ImageMetadata) -> Result<String> {
-    if let Some(hash) = meta.rootfs_hash.as_deref() {
-        if !hash.is_empty() {
-            return Ok(hash.to_string());
-        }
-    }
-    // Fall back to the `dstack.rootfs_hash=` kernel cmdline parameter.
-    meta.cmdline
-        .as_deref()
+pub fn rootfs_hash_from_cmdline(cmdline: Option<&str>) -> Result<String> {
+    let rootfs_hash = cmdline
         .unwrap_or_default()
         .split_whitespace()
         .find_map(|param| param.strip_prefix("dstack.rootfs_hash="))
         .map(ToString::to_string)
-        .context(
-            "rootfs_hash is required for amd sev-snp \
-             (set metadata.rootfs_hash or dstack.rootfs_hash= in the cmdline)",
-        )
+        .context("dstack.rootfs_hash is required in amd sev-snp measured cmdline")?;
+    Ok(hex::encode(decode_required_hex(
+        "dstack.rootfs_hash",
+        &rootfs_hash,
+        32,
+    )?))
+}
+
+fn resolve_rootfs_hash(meta: &ImageMetadata) -> Result<String> {
+    let rootfs_hash = rootfs_hash_from_cmdline(meta.cmdline.as_deref())?;
+    if let Some(hash) = meta.rootfs_hash.as_deref() {
+        let hash = hash.trim();
+        if !hash.is_empty() {
+            let hash = hex::encode(decode_required_hex("metadata.rootfs_hash", hash, 32)?);
+            if hash != rootfs_hash {
+                bail!("metadata.rootfs_hash does not match dstack.rootfs_hash in cmdline");
+            }
+        }
+    }
+    Ok(rootfs_hash)
 }
 
 /// Compute the AMD SEV-SNP `os_image_hash` from an OS image directory containing
@@ -885,8 +948,7 @@ pub fn parse_snp_inputs_from_vm_config(vm_config: &str) -> Result<SnpLaunchInput
                 .and_then(|nested| nested.sev_snp_measurement.clone())
         })
         .ok_or_else(|| anyhow::anyhow!("sev_snp_measurement is required for amd sev-snp"))?;
-    let input: MeasurementInput = serde_json::from_str(&measurement_document)
-        .context("invalid amd sev-snp measurement document")?;
+    let input = parse_measurement_document(&measurement_document)?;
     let mr_config_document = parsed
         .mr_config
         .or_else(|| nested.and_then(|nested| nested.mr_config))
@@ -948,9 +1010,9 @@ mod tests {
     }
 
     fn valid_input() -> MeasurementInput {
+        let rootfs_hash = hex_of(0x33, 32);
         MeasurementInput {
-            rootfs_hash: hex_of(0x33, 32),
-            base_cmdline: None,
+            base_cmdline: Some(format!("console=ttyS0 dstack.rootfs_hash={rootfs_hash}")),
             ovmf_hash: hex_of(0x44, 48),
             kernel_hash: hex_of(0x55, 32),
             initrd_hash: hex_of(0x66, 32),
@@ -989,6 +1051,26 @@ mod tests {
     }
 
     #[test]
+    fn measurement_input_does_not_carry_standalone_rootfs_hash() {
+        let value = serde_json::to_value(valid_input()).expect("serialize measurement input");
+        assert!(value.get("rootfs_hash").is_none());
+        parse_measurement_document(&value.to_string()).expect("new measurement document parses");
+    }
+
+    #[test]
+    fn legacy_measurement_rootfs_hash_must_match_measured_cmdline() {
+        let mut value = serde_json::to_value(valid_input()).expect("serialize measurement input");
+        value["rootfs_hash"] = serde_json::Value::String(hex_of(0x34, 32));
+        let err = parse_measurement_document(&value.to_string())
+            .expect_err("mismatched legacy rootfs_hash must reject");
+        assert!(
+            err.to_string()
+                .contains("rootfs_hash does not match dstack.rootfs_hash"),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[test]
     fn snp_os_image_hash_covers_image_fields_only() {
         let input = valid_input();
         let os_image_hash =
@@ -997,9 +1079,17 @@ mod tests {
 
         // Image-determined fields MUST change the os_image_hash.
         let image_cases: Vec<(&str, fn(&mut MeasurementInput))> = vec![
-            ("rootfs_hash", |i| i.rootfs_hash = hex_of(0x34, 32)),
+            ("base_cmdline.rootfs_hash", |i| {
+                i.base_cmdline = Some(format!(
+                    "console=ttyS0 dstack.rootfs_hash={}",
+                    hex_of(0x34, 32)
+                ))
+            }),
             ("base_cmdline", |i| {
-                i.base_cmdline = Some("console=ttyS0 loglevel=8".to_string())
+                i.base_cmdline = Some(format!(
+                    "console=ttyS0 loglevel=8 dstack.rootfs_hash={}",
+                    hex_of(0x33, 32)
+                ))
             }),
             ("ovmf_hash", |i| i.ovmf_hash = hex_of(0x45, 48)),
             ("kernel_hash", |i| i.kernel_hash = hex_of(0x56, 32)),
@@ -1093,7 +1183,7 @@ mod tests {
         let expected = compute_expected_measurement(&input).unwrap();
         assert_eq!(
             hex::encode(expected),
-            "88a47914470533e33e24befd24ef0ac877658ff82cafc9878bd9566550f100fdf56d62f419e21b959aa228fc98000da4",
+            "88b48404819692fd2a5068f1a07bf1973bbcaa1314adc670705f9388762a759faf889f8e2c71fe1ec892554415257960",
             "synthetic measurement vector should not drift silently"
         );
     }
@@ -1104,8 +1194,8 @@ mod tests {
 
     #[test]
     fn real_fixture_recomputes_measurement_and_os_image_hash() {
-        let input: MeasurementInput =
-            serde_json::from_str(REAL_MEASUREMENT_DOC).expect("real measurement doc parses");
+        let input =
+            parse_measurement_document(REAL_MEASUREMENT_DOC).expect("real measurement doc parses");
         validate_measurement_input(&input).expect("real measurement input is valid");
 
         // Recomputed launch measurement must equal the hardware-signed value
@@ -1210,7 +1300,10 @@ mod tests {
         let (input, mr_config, measurement, host_data, _vm_config) = honest_case();
         let cases: Vec<(&str, fn(&mut MeasurementInput))> = vec![
             ("base_cmdline", |i| {
-                i.base_cmdline = Some("console=ttyS0 evil=1".to_string())
+                i.base_cmdline = Some(format!(
+                    "console=ttyS0 evil=1 dstack.rootfs_hash={}",
+                    hex_of(0x33, 32)
+                ))
             }),
             ("ovmf_hash", |i| i.ovmf_hash = hex_of(0x99, 48)),
             ("kernel_hash", |i| i.kernel_hash = hex_of(0x99, 32)),
@@ -1245,25 +1338,30 @@ mod tests {
     }
 
     #[test]
-    fn tampering_rootfs_hash_changes_os_image_hash() {
-        // `rootfs_hash` is bound into the launch MEASUREMENT indirectly, through
-        // the measured kernel cmdline (`dstack.rootfs_hash=...`), but the
-        // standalone field also feeds the os_image_hash projection. Tampering the
-        // standalone field is therefore not a measurement mismatch — it yields a
-        // DIFFERENT os_image_hash that cannot match an allow-listed image, so the
-        // forgery is caught downstream by the os_image_hash allowlist instead.
+    fn tampering_cmdline_rootfs_hash_rejects_launch() {
+        // rootfs identity comes from the measured kernel cmdline. Tampering it
+        // changes both the SNP MEASUREMENT and the derived os_image_hash.
         let (input, mr_config, measurement, host_data, vm_config) = honest_case();
         let honest = verify_sev_launch(&measurement, &host_data, &vm_config)
             .expect("honest launch verifies");
 
         let mut tampered = input.clone();
-        tampered.rootfs_hash = hex_of(0x99, 32);
+        tampered.base_cmdline = Some(format!(
+            "console=ttyS0 dstack.rootfs_hash={}",
+            hex_of(0x99, 32)
+        ));
         let tampered_vm = synthetic_vm_config(&tampered, &mr_config);
-        let forged = verify_sev_launch(&measurement, &host_data, &tampered_vm)
-            .expect("rootfs_hash is not in the measurement, so the launch still verifies");
+        let err = verify_sev_launch(&measurement, &host_data, &tampered_vm)
+            .expect_err("tampered rootfs hash in cmdline must not verify");
+        assert!(
+            err.to_string().contains("amd sev-snp measurement mismatch"),
+            "unexpected error: {err:?}"
+        );
+        let tampered_hash =
+            snp_measurement_os_image_hash(&serde_json::to_string(&tampered).unwrap()).unwrap();
         assert_ne!(
-            honest.os_image_hash, forged.os_image_hash,
-            "a tampered rootfs_hash must change the derived os_image_hash"
+            honest.os_image_hash, tampered_hash,
+            "a tampered rootfs hash must change the derived os_image_hash"
         );
     }
 

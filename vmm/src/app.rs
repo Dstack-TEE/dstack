@@ -1324,17 +1324,6 @@ fn amd_sev_snp_ovmf_measurement_info(image: &Image) -> Result<dstack_mr::sev::Ov
     })
 }
 
-fn image_rootfs_hash(image: &Image) -> Result<&str> {
-    if let Some(rootfs_hash) = image.info.rootfs_hash.as_deref() {
-        return Ok(rootfs_hash);
-    }
-    let cmdline = image.info.cmdline.as_deref().unwrap_or_default();
-    cmdline
-        .split_whitespace()
-        .find_map(|param| param.strip_prefix("dstack.rootfs_hash="))
-        .ok_or_else(|| anyhow::anyhow!("rootfs_hash is required for amd sev-snp"))
-}
-
 fn amd_sev_snp_measurement_base_cmdline(base_cmdline: Option<&str>) -> Option<String> {
     base_cmdline.map(|cmdline| cmdline.trim().to_string())
 }
@@ -1398,14 +1387,15 @@ fn make_vm_config(
     // For backward compatibility
     config["spec_version"] = serde_json::Value::from(1);
     if is_amd_sev_snp {
-        let rootfs_hash = image_rootfs_hash(image)?;
+        // The rootfs identity is part of the measured kernel cmdline; do not
+        // carry it as a standalone, unmeasured launch-input field.
+        dstack_mr::sev::rootfs_hash_from_cmdline(image.info.cmdline.as_deref())?;
         if let Some(mr_config) = mr_config {
             MrConfigV3::from_document(&mr_config).context("Invalid mr_config document")?;
             config["mr_config"] = serde_json::Value::String(mr_config);
         }
         let ovmf = amd_sev_snp_ovmf_measurement_info(image)?;
         let measurement = json!({
-            "rootfs_hash": rootfs_hash,
             "base_cmdline": amd_sev_snp_measurement_base_cmdline(image.info.cmdline.as_deref()),
             "ovmf_hash": ovmf.ovmf_hash,
             "kernel_hash": file_sha256_hex(&image.kernel)?,
@@ -1627,7 +1617,7 @@ mod tests {
         );
         assert!(measurement.get("app_id").is_none());
         assert!(measurement.get("compose_hash").is_none());
-        assert_eq!(measurement["rootfs_hash"], hex_of(0x33, 32));
+        assert!(measurement.get("rootfs_hash").is_none());
         assert_eq!(
             measurement["base_cmdline"],
             format!("console=ttyS0 dstack.rootfs_hash={}", hex_of(0x33, 32))
@@ -1664,8 +1654,10 @@ mod tests {
         // digest.sev.txt) must equal the os_image_hash a verifier derives from
         // the launch measurement document, i.e. the image-invariant projection.
         let as_str = |v: &serde_json::Value| v.as_str().unwrap().to_string();
+        let rootfs_hash =
+            dstack_mr::sev::rootfs_hash_from_cmdline(measurement["base_cmdline"].as_str())?;
         let projected = dstack_types::SevOsImageMeasurement {
-            rootfs_hash: as_str(&measurement["rootfs_hash"]),
+            rootfs_hash,
             base_cmdline: measurement["base_cmdline"].as_str().map(str::to_string),
             ovmf_hash: as_str(&measurement["ovmf_hash"]),
             kernel_hash: as_str(&measurement["kernel_hash"]),

@@ -203,9 +203,9 @@ mod tests {
     }
 
     fn valid_snp_measurement_input() -> MeasurementInput {
+        let rootfs_hash = hex_of(0x33, 32);
         MeasurementInput {
-            rootfs_hash: hex_of(0x33, 32),
-            base_cmdline: None,
+            base_cmdline: Some(format!("console=ttyS0 dstack.rootfs_hash={rootfs_hash}")),
             ovmf_hash: hex_of(0x44, 48),
             kernel_hash: hex_of(0x55, 32),
             initrd_hash: hex_of(0x66, 32),
