@@ -115,6 +115,95 @@ impl GpuConfig {
     }
 }
 
+/// Round up a value to the nearest multiple of another value.
+/// If the value is already a multiple, it remains unchanged.
+pub(crate) fn round_up(value: u32, multiple: u32) -> u32 {
+    if multiple <= 1 {
+        return value;
+    }
+
+    let remainder = value % multiple;
+    if remainder == 0 {
+        return value;
+    }
+
+    value + (multiple - remainder)
+}
+
+/// Get the NUMA node associated with a PCI device.
+pub(crate) fn pci_numa_node(device: &str) -> Result<String> {
+    // Ensure the device string only contains valid hexadecimal characters and colons.
+    if !device
+        .chars()
+        .all(|c| c.is_ascii_hexdigit() || c == ':' || c == '.')
+    {
+        bail!("Invalid device string");
+    }
+
+    let numa_node_path = format!("/sys/bus/pci/devices/0000:{device}/numa_node");
+    let numa_node = fs::read_to_string(&numa_node_path)
+        .with_context(|| format!("Failed to read NUMA node from {numa_node_path}"))?
+        .trim()
+        .to_string();
+
+    // If the NUMA node is -1, default to 0.
+    if numa_node == "-1" {
+        return Ok("0".to_string());
+    }
+
+    Ok(numa_node)
+}
+
+/// NUMA nodes used by the QEMU hugepage layout.
+///
+/// This mirrors the launch path: only GPU devices determine the split, while
+/// bridges/NVSwitches are attached after the NUMA topology is constructed.  If
+/// no GPU is attached, QEMU still creates a single node (node 0).
+pub(crate) fn hugepage_numa_nodes(gpus: &GpuConfig) -> Result<HashMap<String, u32>> {
+    let mut numa_nodes = HashMap::new();
+
+    for device in &gpus.gpus {
+        let node = pci_numa_node(&device.slot)?;
+        *numa_nodes.entry(node).or_insert(0) += 1;
+    }
+
+    if numa_nodes.is_empty() {
+        numa_nodes.insert("0".to_string(), 0);
+    }
+
+    Ok(numa_nodes)
+}
+
+/// Effective vCPU count used for both QEMU `-smp` and SNP launch measurement.
+///
+/// QEMU launches at least one vCPU and, with hugepage NUMA layout enabled,
+/// rounds the vCPU count up so it can be split evenly across NUMA nodes.  The
+/// SEV-SNP launch measurement includes one measured VMSA page per vCPU, so the
+/// measurement input must use this same effective count rather than the raw
+/// manifest value.
+pub(crate) fn effective_vcpu_count(
+    requested_vcpu: u32,
+    hugepage_numa_node_count: Option<u32>,
+) -> u32 {
+    let vcpus = requested_vcpu.max(1);
+    match hugepage_numa_node_count {
+        Some(numa_nodes) => round_up(vcpus, numa_nodes.max(1)),
+        None => vcpus,
+    }
+}
+
+pub(crate) fn effective_vcpu_count_for_manifest(
+    manifest: &Manifest,
+    gpus: &GpuConfig,
+) -> Result<u32> {
+    let numa_node_count = if manifest.hugepages {
+        Some(hugepage_numa_nodes(gpus)?.len() as u32)
+    } else {
+        None
+    };
+    Ok(effective_vcpu_count(manifest.vcpu, numa_node_count))
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct GpuSpec {
     #[serde(default)]
@@ -1284,10 +1373,15 @@ fn make_vm_config(
             .and_then(|d| hex::decode(d).ok())
             .unwrap_or_default()
     };
-    let gpus = manifest.gpus.clone().unwrap_or_default();
+    let gpus = if cfg.cvm.gpu.enabled {
+        manifest.gpus.clone().unwrap_or_default()
+    } else {
+        GpuConfig::default()
+    };
+    let effective_vcpus = effective_vcpu_count_for_manifest(manifest, &gpus)?;
     let mut config = serde_json::to_value(dstack_types::VmConfig {
         os_image_hash,
-        cpu_count: manifest.vcpu,
+        cpu_count: effective_vcpus,
         memory_size: manifest.memory as u64 * 1024 * 1024,
         qemu_single_pass_add_pages: cfg.cvm.qemu_single_pass_add_pages,
         pic: cfg.cvm.qemu_pic,
@@ -1318,7 +1412,7 @@ fn make_vm_config(
             "initrd_hash": file_sha256_hex(&image.initrd)?,
             "sev_hashes_table_gpa": ovmf.sev_hashes_table_gpa,
             "sev_es_reset_eip": ovmf.sev_es_reset_eip,
-            "vcpus": manifest.vcpu,
+            "vcpus": effective_vcpus,
             "vcpu_type": "EPYC-v4",
             "guest_features": 1,
             "ovmf_sections": ovmf.sections,
@@ -1413,6 +1507,20 @@ mod tests {
         write_u16_le_at(&mut ovmf, footer_off, (table.len() + 18) as u16);
         ovmf[footer_off + 2..footer_off + 18].copy_from_slice(&GUID_FOOTER_TABLE);
         ovmf
+    }
+
+    #[test]
+    fn effective_vcpu_count_clamps_zero_to_one() {
+        assert_eq!(effective_vcpu_count(0, None), 1);
+        assert_eq!(effective_vcpu_count(0, Some(1)), 1);
+    }
+
+    #[test]
+    fn effective_vcpu_count_rounds_for_hugepage_numa_split() {
+        assert_eq!(effective_vcpu_count(3, Some(2)), 4);
+        assert_eq!(effective_vcpu_count(4, Some(2)), 4);
+        assert_eq!(effective_vcpu_count(3, Some(0)), 3);
+        assert_eq!(effective_vcpu_count(3, None), 3);
     }
 
     #[test]

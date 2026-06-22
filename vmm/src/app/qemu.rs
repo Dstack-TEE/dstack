@@ -9,7 +9,7 @@ use crate::{
         CvmConfig, GatewayConfig, Networking, NetworkingMode, ProcessAnnotation, TeePlatform,
     },
 };
-use std::{collections::HashMap, os::unix::fs::PermissionsExt};
+use std::os::unix::fs::PermissionsExt;
 use std::{
     fs::Permissions,
     io::Write,
@@ -19,7 +19,10 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use super::{image::Image, GpuConfig, VmState};
+use super::{
+    effective_vcpu_count, hugepage_numa_nodes, image::Image, pci_numa_node, round_up, GpuConfig,
+    VmState,
+};
 use anyhow::{bail, Context, Result};
 use base64::prelude::*;
 use bon::Builder;
@@ -567,7 +570,17 @@ impl VmConfig {
         let qemu = &cfg.qemu_path;
         let is_amd_sev_snp =
             cfg.resolved_platform() == TeePlatform::AmdSevSnp && !self.manifest.no_tee;
-        let mut smp = self.manifest.vcpu.max(1);
+        let mut numa_nodes_for_hugepages = if self.manifest.hugepages {
+            Some(hugepage_numa_nodes(gpus)?)
+        } else {
+            None
+        };
+        let smp = effective_vcpu_count(
+            self.manifest.vcpu,
+            numa_nodes_for_hugepages
+                .as_ref()
+                .map(|nodes| nodes.len() as u32),
+        );
         let mut mem = self.manifest.memory;
         let mut command = Command::new(qemu);
         command.arg("-accel").arg("kvm");
@@ -785,28 +798,19 @@ impl VmConfig {
 
         // Handle hugepages configuration
         if hugepages {
-            // Create a map of NUMA nodes to count of GPUs on that node
-            let mut numa_nodes = HashMap::new();
-
-            for device in &gpus.gpus {
-                let node = find_numa_node(&device.slot)?;
-                *numa_nodes.entry(node).or_insert(0) += 1;
-            }
-
-            if numa_nodes.is_empty() {
-                numa_nodes.insert("0".to_string(), 0);
-            }
-
+            let numa_nodes = numa_nodes_for_hugepages
+                .take()
+                .context("hugepage NUMA nodes should be computed above")?;
             let n_numa = numa_nodes.len() as u32;
 
-            // Round up CPU cores and memory to multiple times of NUMA nodes
-            let vcpu_count = round_up(smp, n_numa);
+            // Round up CPU cores and memory to multiple times of NUMA nodes.
+            // `smp` is already the shared effective vCPU count used by vm_config.
+            let vcpu_count = smp;
             let mem_gb = round_up(memory / 1024, n_numa);
             let vcpu_per_node = vcpu_count / n_numa;
             let mem_per_node = mem_gb / n_numa;
 
             mem = mem_gb * 1024;
-            smp = vcpu_count;
 
             let mut bus_nr = 5_u32;
 
@@ -855,7 +859,7 @@ impl VmConfig {
                 // Add each GPU with NUMA node awareness for hugepages configuration
                 for device in &gpus.gpus {
                     let slot = &device.slot;
-                    let node = find_numa_node(slot)?;
+                    let node = pci_numa_node(slot)?;
                     command.arg("-device").arg(format!(
                         "pcie-root-port,id=pci.{dev_num},bus=pcie.node{node},chassis={dev_num}",
                     ));
@@ -1163,48 +1167,9 @@ fn amd_sev_snp_memory_backend_arg(mem: u32) -> String {
     format!("memory-backend-memfd,id=ram1,size={mem}M,share=true,prealloc=false")
 }
 
-/// Round up a value to the nearest multiple of another value.
-/// If the value is already a multiple, it remains unchanged.
-fn round_up(value: u32, multiple: u32) -> u32 {
-    if multiple <= 1 {
-        return value;
-    }
-
-    let remainder = value % multiple;
-    if remainder == 0 {
-        return value;
-    }
-
-    value + (multiple - remainder)
-}
-
-/// Get the NUMA node associated with a PCI device.
-fn find_numa_node(device: &str) -> Result<String> {
-    // Ensure the device string only contains valid hexadecimal characters and colons
-    if !device
-        .chars()
-        .all(|c| c.is_ascii_hexdigit() || c == ':' || c == '.')
-    {
-        bail!("Invalid device string");
-    }
-    // Get the NUMA node for the device
-    let numa_node_path = format!("/sys/bus/pci/devices/0000:{}/numa_node", device);
-    let numa_node = fs::read_to_string(&numa_node_path)
-        .with_context(|| format!("Failed to read NUMA node from {}", numa_node_path))?
-        .trim()
-        .to_string();
-
-    // If the NUMA node is -1, default to 0
-    if numa_node == "-1" {
-        return Ok("0".to_string());
-    }
-
-    Ok(numa_node)
-}
-
 fn find_numa(device: Option<String>) -> Result<(String, String)> {
     let numa_node = match device {
-        Some(device) => find_numa_node(&device)?,
+        Some(device) => pci_numa_node(&device)?,
         None => "0".into(),
     };
     // Get the CPU list for this NUMA node
