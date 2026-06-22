@@ -263,6 +263,20 @@ pub enum AttestationMode {
     DstackAmdSevSnp,
 }
 
+/// Trusted source used to derive [`AppInfo`] for a platform.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AppInfoSource {
+    /// App info is carried by runtime events that are replayed against RTMR3 /
+    /// the runtime TPM PCR.
+    RuntimeEvents,
+    /// App info is carried by an SEV-SNP `MrConfigV3` document whose digest is
+    /// bound into the hardware report through HOST_DATA.
+    MrConfig,
+    /// The signed platform image is the app identity; `compose_hash` falls back
+    /// to `os_image_hash`.
+    OsImage,
+}
+
 #[cfg(feature = "quote")]
 fn has_sev_snp_tsm_provider() -> bool {
     crate::sev_snp::has_sev_snp_tsm_provider(std::path::Path::new("/sys/kernel/config/tsm/report"))
@@ -335,15 +349,12 @@ impl AttestationMode {
         }
     }
 
-    /// Returns true if the attestation mode supports composability (OS image + runtime loadable application)
-    pub fn is_composable(&self) -> bool {
+    /// Return the trusted platform source for [`AppInfo`].
+    pub fn app_info_source(&self) -> AppInfoSource {
         match self {
-            Self::DstackTdx => true,
-            // SEV-SNP binds app identity through HOST_DATA carrying the hash of
-            // an attached MrConfigV3 document.
-            Self::DstackAmdSevSnp => true,
-            Self::DstackGcpTdx => true,
-            Self::DstackNitroEnclave => false,
+            Self::DstackTdx | Self::DstackGcpTdx => AppInfoSource::RuntimeEvents,
+            Self::DstackAmdSevSnp => AppInfoSource::MrConfig,
+            Self::DstackNitroEnclave => AppInfoSource::OsImage,
         }
     }
 }
@@ -679,19 +690,24 @@ impl AttestationV1 {
         decode_vm_config_with_fallback(config, self.stack.config())
     }
 
-    /// Decode the app info from the event log.
+    /// Decode the app info from the platform-specific app info source.
     pub fn decode_app_info(&self, boottime_mr: bool) -> Result<AppInfo> {
         self.decode_app_info_ex(boottime_mr, "")
     }
 
-    /// Decode the app info from the event log with an optional external vm_config.
+    /// Decode the app info from the platform-specific app info source with an
+    /// optional external vm_config.
     #[errify::errify("decode app info")]
     pub fn decode_app_info_ex(&self, boottime_mr: bool, vm_config: &str) -> Result<AppInfo> {
         let runtime_events = self.stack.runtime_events();
-        if let PlatformEvidence::SevSnp {
-            report, mr_config, ..
-        } = &self.platform
-        {
+        let app_info_source = platform_attestation_mode(&self.platform).app_info_source();
+        if matches!(app_info_source, AppInfoSource::MrConfig) {
+            let PlatformEvidence::SevSnp {
+                report, mr_config, ..
+            } = &self.platform
+            else {
+                bail!("MrConfig AppInfo source requires SEV-SNP evidence");
+            };
             return decode_app_info_sev_snp(
                 report,
                 Some(mr_config),
@@ -729,12 +745,14 @@ impl AttestationV1 {
                     nsm_quote: nsm_quote.clone(),
                 })?
             }
-            PlatformEvidence::SevSnp { .. } => unreachable!("handled above"),
+            PlatformEvidence::SevSnp { .. } => bail!("SEV-SNP AppInfo must come from MrConfig"),
         };
-        let compose_hash = if platform_attestation_mode(&self.platform).is_composable() {
-            find_event_payload(runtime_events, "compose-hash").unwrap_or_default()
-        } else {
-            os_image_hash.clone()
+        let compose_hash = match app_info_source {
+            AppInfoSource::RuntimeEvents => {
+                find_event_payload(runtime_events, "compose-hash").unwrap_or_default()
+            }
+            AppInfoSource::OsImage => os_image_hash.clone(),
+            AppInfoSource::MrConfig => bail!("MrConfig AppInfo source should be decoded above"),
         };
         Ok(AppInfo {
             app_id: find_event_payload(runtime_events, "app-id").unwrap_or_default(),
@@ -1007,6 +1025,26 @@ mod compatibility_tests {
     }
 
     #[test]
+    fn app_info_source_is_explicit_per_attestation_mode() {
+        assert_eq!(
+            AttestationMode::DstackTdx.app_info_source(),
+            AppInfoSource::RuntimeEvents
+        );
+        assert_eq!(
+            AttestationMode::DstackGcpTdx.app_info_source(),
+            AppInfoSource::RuntimeEvents
+        );
+        assert_eq!(
+            AttestationMode::DstackAmdSevSnp.app_info_source(),
+            AppInfoSource::MrConfig
+        );
+        assert_eq!(
+            AttestationMode::DstackNitroEnclave.app_info_source(),
+            AppInfoSource::OsImage
+        );
+    }
+
+    #[test]
     fn attestation_quote_scale_discriminants_preserve_existing_wire_values() {
         let gcp = AttestationQuote::DstackGcpTdx(DstackGcpTdxQuote {
             tdx_quote: TdxQuote {
@@ -1058,7 +1096,7 @@ pub struct Attestation<R = ()> {
     /// The quote
     pub quote: AttestationQuote,
 
-    /// Runtime events (only for TDX mode)
+    /// Runtime events carried by runtime-event-sourced platforms.
     pub runtime_events: Vec<RuntimeEvent>,
 
     /// The report data
@@ -1472,14 +1510,18 @@ impl<T: GetDeviceId> Attestation<T> {
         Ok(vm_config)
     }
 
-    /// Decode the app info from the event log
+    /// Decode the app info from the platform-specific app info source.
     pub fn decode_app_info(&self, boottime_mr: bool) -> Result<AppInfo> {
         self.decode_app_info_ex(boottime_mr, "")
     }
 
     #[errify::errify("decode app info")]
     pub fn decode_app_info_ex(&self, boottime_mr: bool, vm_config: &str) -> Result<AppInfo> {
-        if let AttestationQuote::DstackAmdSevSnp(q) = &self.quote {
+        let app_info_source = self.quote.mode().app_info_source();
+        if matches!(app_info_source, AppInfoSource::MrConfig) {
+            let AttestationQuote::DstackAmdSevSnp(q) = &self.quote else {
+                bail!("MrConfig AppInfo source requires SEV-SNP quote");
+            };
             return decode_app_info_sev_snp(&q.report, Some(&q.mr_config), &self.config, vm_config);
         }
         let key_provider_info = if boottime_mr {
@@ -1500,16 +1542,20 @@ impl<T: GetDeviceId> Attestation<T> {
             AttestationQuote::DstackTdx(q) => {
                 self.decode_mr_tdx(boottime_mr, &mr_key_provider, q)?
             }
-            AttestationQuote::DstackAmdSevSnp(_) => unreachable!("handled above"),
+            AttestationQuote::DstackAmdSevSnp(_) => {
+                bail!("SEV-SNP AppInfo must come from MrConfig")
+            }
             AttestationQuote::DstackGcpTdx(q) => {
                 self.decode_mr_gcp_tpm(boottime_mr, &mr_key_provider, &os_image_hash, &q.tpm_quote)?
             }
             AttestationQuote::DstackNitroEnclave(q) => self.decode_mr_nitro_nsm(q)?,
         };
-        let compose_hash = if self.quote.mode().is_composable() {
-            self.find_event_payload("compose-hash").unwrap_or_default()
-        } else {
-            os_image_hash.clone()
+        let compose_hash = match app_info_source {
+            AppInfoSource::RuntimeEvents => {
+                self.find_event_payload("compose-hash").unwrap_or_default()
+            }
+            AppInfoSource::OsImage => os_image_hash.clone(),
+            AppInfoSource::MrConfig => bail!("MrConfig AppInfo source should be decoded above"),
         };
         Ok(AppInfo {
             app_id: self.find_event_payload("app-id").unwrap_or_default(),
@@ -1626,12 +1672,15 @@ impl Attestation {
             .map_err(|_| anyhow!("Quote lock poisoned"))?;
 
         let mode = AttestationMode::detect()?;
-        let runtime_events = if mode.is_composable() {
-            RuntimeEvent::read_all().context("Failed to read runtime events")?
-        } else if let Some(app_id) = app_id {
-            vec![RuntimeEvent::new("app-id".to_string(), app_id.to_vec())]
-        } else {
-            vec![]
+        let runtime_events = match mode.app_info_source() {
+            AppInfoSource::RuntimeEvents => {
+                RuntimeEvent::read_all().context("Failed to read runtime events")?
+            }
+            AppInfoSource::MrConfig => vec![],
+            AppInfoSource::OsImage => match app_id {
+                Some(app_id) => vec![RuntimeEvent::new("app-id".to_string(), app_id.to_vec())],
+                None => vec![],
+            },
         };
 
         let mut quote = match mode {
@@ -1910,7 +1959,7 @@ pub fn validate_tcb(report: &TdxVerifiedReport) -> Result<()> {
     }
 }
 
-/// Information about the app extracted from event log
+/// Information about the app extracted from the platform-specific app info source.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppInfo {
     /// App ID
