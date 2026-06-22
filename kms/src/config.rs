@@ -31,14 +31,6 @@ pub(crate) struct ImageConfig {
     pub download_timeout: Duration,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
-pub(crate) struct SevSnpKeyReleaseConfig {
-    /// Enable AMD SEV-SNP key/cert release after attestation, measurement
-    /// binding, and external auth-policy checks have all succeeded.
-    #[serde(default)]
-    pub enabled: bool,
-}
-
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct KmsConfig {
     pub cert_dir: PathBuf,
@@ -54,11 +46,12 @@ pub(crate) struct KmsConfig {
     pub auth_api: AuthApi,
     pub onboard: OnboardConfig,
     pub image: ImageConfig,
-    /// Additional local release gate for AMD SEV-SNP key/cert material. This is
-    /// separate from the auth API so production deployments need an explicit KMS
-    /// opt-in as well as a successful external policy decision.
+    /// Whether to enable the additional local release gate for AMD SEV-SNP
+    /// key/cert material. This is separate from the auth API so production
+    /// deployments need an explicit KMS opt-in as well as a successful external
+    /// policy decision.
     #[serde(default)]
-    pub sev_snp_key_release: SevSnpKeyReleaseConfig,
+    pub sev_snp_key_release: bool,
     #[serde(with = "serde_human_bytes")]
     pub admin_token_hash: Vec<u8>,
     #[serde(default)]

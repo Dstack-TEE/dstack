@@ -20,7 +20,7 @@ Implemented and intended for review:
 Default posture:
 
 - SNP app key release, KMS/root/temp CA key release, and app certificate release are still disabled by default.
-- Operators must explicitly set `[core.sev_snp_key_release].enabled = true` before any SNP `BootInfo` can release sensitive material.
+- Operators must explicitly set `core.sev_snp_key_release = true` before any SNP `BootInfo` can release sensitive material.
 - The self-authorized `GetTempCaCert` path is gated per-RPC, not at startup: it runs `ensure_self_key_release_allowed` against the KMS's own self `BootInfo`. With the production default `enforce_self_authorization = true`, the KMS self-attests and any SNP self `BootInfo` must clear the same release gate as app requests. `enforce_self_authorization = false` is a dev/test-only escape hatch (it logs a startup warning, not a hard error); in that mode the self `BootInfo` is `None`, so the self-release gate is skipped — do not use it in production TEE deployments.
 - Even with the local KMS gate enabled, the existing auth API must first allow the verified SNP `BootInfo` for the app/KMS identity.
 
@@ -34,14 +34,14 @@ Default posture:
 - SNP advisory ids are propagated from verifier output into `BootInfo`; currently this list is explicit and empty because the AMD report/VCEK evidence used here does not carry a direct advisory-list field.
 - `auth-simple` defaults remain strict: only `UpToDate` is accepted and any advisory id is denied unless explicitly allowlisted.
 - The local KMS release gate is intentionally only an operator opt-in switch:
-  - `[core.sev_snp_key_release].enabled = false` by default.
+  - `core.sev_snp_key_release = false` by default.
   - TCB/advisory policy is not duplicated in KMS config; it is decided by the auth API using the verified `BootInfo`.
 
 Example opt-in gate:
 
 ```toml
-[core.sev_snp_key_release]
-enabled = true
+[core]
+sev_snp_key_release = true
 ```
 
 Sensitive release surfaces using this gate:

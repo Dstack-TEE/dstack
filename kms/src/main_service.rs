@@ -33,7 +33,7 @@ use tracing::{info, warn};
 use upgrade_authority::{build_boot_info, ensure_app_id_len, local_kms_boot_info, BootInfo};
 
 use crate::{
-    config::{KmsConfig, SevSnpKeyReleaseConfig},
+    config::KmsConfig,
     crypto::{derive_k256_key, sign_message, sign_message_with_timestamp},
 };
 
@@ -165,25 +165,19 @@ pub(crate) fn build_boot_info_for_attestation(
     build_boot_info(att, use_boottime_mr, vm_config_str)
 }
 
-fn ensure_snp_key_release_allowed(
-    boot_info: &BootInfo,
-    policy: &SevSnpKeyReleaseConfig,
-) -> Result<()> {
+fn ensure_snp_key_release_allowed(boot_info: &BootInfo, enabled: bool) -> Result<()> {
     if boot_info.attestation_mode != AttestationMode::DstackAmdSevSnp {
         return Ok(());
     }
-    if !policy.enabled {
+    if !enabled {
         bail!("amd sev-snp key release is not enabled");
     }
     Ok(())
 }
 
-fn ensure_self_key_release_allowed(
-    self_boot_info: Option<&BootInfo>,
-    policy: &SevSnpKeyReleaseConfig,
-) -> Result<()> {
+fn ensure_self_key_release_allowed(self_boot_info: Option<&BootInfo>, enabled: bool) -> Result<()> {
     if let Some(boot_info) = self_boot_info {
-        ensure_snp_key_release_allowed(boot_info, policy)?;
+        ensure_snp_key_release_allowed(boot_info, enabled)?;
     }
     Ok(())
 }
@@ -354,7 +348,7 @@ impl KmsRpc for RpcHandler {
             .ensure_app_boot_allowed(&request.vm_config)
             .await
             .context("App not allowed")?;
-        ensure_snp_key_release_allowed(&boot_info, &self.state.config.sev_snp_key_release)?;
+        ensure_snp_key_release_allowed(&boot_info, self.state.config.sev_snp_key_release)?;
         let app_id = boot_info.app_id;
         let instance_id = boot_info.instance_id;
         let os_image_hash = boot_info.os_image_hash;
@@ -463,7 +457,7 @@ impl KmsRpc for RpcHandler {
             .await
             .context("KMS self authorization failed")?;
         let info = self.ensure_kms_allowed(&request.vm_config).await?;
-        ensure_snp_key_release_allowed(&info, &self.state.config.sev_snp_key_release)?;
+        ensure_snp_key_release_allowed(&info, self.state.config.sev_snp_key_release)?;
         Ok(KmsKeyResponse {
             temp_ca_key: self.state.inner.temp_ca_key.clone(),
             keys: vec![KmsKeys {
@@ -478,7 +472,7 @@ impl KmsRpc for RpcHandler {
             .ensure_self_allowed()
             .await
             .context("KMS self authorization failed")?;
-        ensure_self_key_release_allowed(self_boot_info, &self.state.config.sev_snp_key_release)?;
+        ensure_self_key_release_allowed(self_boot_info, self.state.config.sev_snp_key_release)?;
         Ok(GetTempCaCertResponse {
             temp_ca_cert: self.state.inner.temp_ca_cert.clone(),
             temp_ca_key: self.state.inner.temp_ca_key.clone(),
@@ -517,10 +511,7 @@ impl KmsRpc for RpcHandler {
         let app_info = self
             .ensure_app_attestation_allowed(&attestation, false, true, &request.vm_config)
             .await?;
-        ensure_snp_key_release_allowed(
-            &app_info.boot_info,
-            &self.state.config.sev_snp_key_release,
-        )?;
+        ensure_snp_key_release_allowed(&app_info.boot_info, self.state.config.sev_snp_key_release)?;
         let app_ca = self.derive_app_ca(&app_info.boot_info.app_id)?;
         let cert = app_ca
             .sign_csr(&csr, Some(&app_info.boot_info.app_id), "app:custom")
@@ -736,9 +727,9 @@ mod tests {
     #[test]
     fn snp_key_release_requires_explicit_enablement() {
         let boot_info = snp_boot_info();
-        let policy = SevSnpKeyReleaseConfig::default();
+        let enabled = false;
 
-        let err = ensure_snp_key_release_allowed(&boot_info, &policy)
+        let err = ensure_snp_key_release_allowed(&boot_info, enabled)
             .expect_err("snp boot info must not be key-release enabled by default");
         assert!(
             err.to_string()
@@ -750,41 +741,32 @@ mod tests {
     #[test]
     fn snp_key_release_accepts_auth_approved_boot_info_when_enabled() {
         let boot_info = snp_boot_info();
-        let policy = SevSnpKeyReleaseConfig {
-            enabled: true,
-            ..Default::default()
-        };
+        let enabled = true;
 
-        ensure_snp_key_release_allowed(&boot_info, &policy)
+        ensure_snp_key_release_allowed(&boot_info, enabled)
             .expect("explicitly enabled SNP key release should allow auth-approved boot info");
     }
 
     #[test]
     fn snp_key_release_leaves_tcb_and_advisory_policy_to_auth_api() {
         let mut boot_info = snp_boot_info();
-        let policy = SevSnpKeyReleaseConfig {
-            enabled: true,
-            ..Default::default()
-        };
+        let enabled = true;
 
         boot_info.tcb_status = "OutOfDate".to_string();
         boot_info.advisory_ids.push("SNP-TEST-ADVISORY".to_string());
-        ensure_snp_key_release_allowed(&boot_info, &policy)
+        ensure_snp_key_release_allowed(&boot_info, enabled)
             .expect("TCB/advisory policy should be decided by the auth API, not this local gate");
     }
 
     #[test]
     fn snp_self_boot_info_uses_same_release_policy_for_temp_ca() {
         let boot_info = snp_boot_info();
-        let disabled = SevSnpKeyReleaseConfig::default();
-        let enabled = SevSnpKeyReleaseConfig {
-            enabled: true,
-            ..Default::default()
-        };
+        let disabled = false;
+        let enabled = true;
 
-        ensure_self_key_release_allowed(Some(&boot_info), &disabled)
+        ensure_self_key_release_allowed(Some(&boot_info), disabled)
             .expect_err("disabled SNP self boot info must not receive temp CA key material");
-        ensure_self_key_release_allowed(Some(&boot_info), &enabled)
+        ensure_self_key_release_allowed(Some(&boot_info), enabled)
             .expect("enabled clean SNP self boot info should pass the temp CA release gate");
     }
 }

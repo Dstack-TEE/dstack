@@ -39,8 +39,7 @@ amd_kds_base_url = ""
 # AMD SEV-SNP key/cert release remains disabled unless this local KMS gate is
 # explicitly enabled. External auth policy must still allow the verified
 # BootInfo before any sensitive material is returned.
-[core.sev_snp_key_release]
-enabled = false
+sev_snp_key_release = false
 
 [core.image]
 verify = true

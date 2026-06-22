@@ -368,6 +368,7 @@ admin_token_hash = "00"
 pccs_url = ""
 enforce_self_authorization = true
 amd_kds_base_url = "${DSTACK_SNP_SMOKE_KDS_BASE_URL:-}"
+sev_snp_key_release = true
 
 [core.metrics]
 enabled = true
@@ -387,9 +388,6 @@ url = "$auth_url"
 [core.onboard]
 enabled = true
 auto_bootstrap_domain = "10.0.2.2"
-
-[core.sev_snp_key_release]
-enabled = true
 EOF
 }
 
