@@ -10,11 +10,11 @@ use dstack_gateway_rpc::{
     admin_server::{AdminRpc, AdminServer},
     CertAttestationInfo, CertbotConfigResponse, ClearInstancePortPolicyRequest,
     CreateDnsCredentialRequest, DeleteDnsCredentialRequest, DeleteZtDomainRequest,
-    DnsCredentialInfo, ForceReleaseCertLockRequest, GetDefaultDnsCredentialResponse,
-    GetDnsCredentialRequest, GetInfoRequest, GetInfoResponse, GetInstanceHandshakesRequest,
-    GetInstanceHandshakesResponse, GetInstancePortPolicyRequest, GetInstancePortPolicyResponse,
-    GetMetaResponse, GetNodeStatusesResponse, GetZtDomainRequest, GlobalConnectionsStats,
-    HandshakeEntry, HostInfo, LastSeenEntry, ListCertAttestationsRequest,
+    DnsCredentialInfo, ForceReleaseCertLockRequest, ForceRemoveInstanceRequest,
+    GetDefaultDnsCredentialResponse, GetDnsCredentialRequest, GetInfoRequest, GetInfoResponse,
+    GetInstanceHandshakesRequest, GetInstanceHandshakesResponse, GetInstancePortPolicyRequest,
+    GetInstancePortPolicyResponse, GetMetaResponse, GetNodeStatusesResponse, GetZtDomainRequest,
+    GlobalConnectionsStats, HandshakeEntry, HostInfo, LastSeenEntry, ListCertAttestationsRequest,
     ListCertAttestationsResponse, ListDnsCredentialsResponse, ListZtDomainsResponse,
     NodeStatusEntry, PeerSyncStatus as ProtoPeerSyncStatus, PortAttrs as RpcPortAttrs,
     PortPolicy as RpcPortPolicy, RenewCertResponse, RenewZtDomainCertRequest,
@@ -290,6 +290,17 @@ impl AdminRpc for AdminRpcHandler {
             .collect();
 
         Ok(GetNodeStatusesResponse { statuses: entries })
+    }
+
+    async fn force_remove_instance(self, request: ForceRemoveInstanceRequest) -> Result<()> {
+        if request.instance_id.is_empty() {
+            bail!("instance_id is empty");
+        }
+        self.state
+            .lock()
+            .force_remove_instance(&request.instance_id)?;
+        info!("Force removed instance: {}", request.instance_id);
+        Ok(())
     }
 
     // ==================== DNS Credential Management ====================
