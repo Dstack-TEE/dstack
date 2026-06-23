@@ -13,7 +13,10 @@ pub use tpm_attest as tpm;
 
 use crate::attestation::AttestationMode;
 
+pub mod amd_sev_snp;
 pub mod attestation;
+#[cfg(feature = "quote")]
+mod sev_snp;
 mod v1;
 
 /// Serializes runtime event emission within this process.

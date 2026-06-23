@@ -35,9 +35,23 @@ pub(crate) struct ImageConfig {
 pub(crate) struct KmsConfig {
     pub cert_dir: PathBuf,
     pub pccs_url: Option<String>,
+    /// Optional AMD KDS-compatible base URL used for SEV-SNP collateral requests.
+    ///
+    /// Empty by default. When set, the KMS process exports this base URL for
+    /// dstack-attest before any attestation verification happens. The base URL
+    /// must expose AMD KDS-compatible paths under `/vcek/v1`, e.g.
+    /// `https://kdsintf.amd.com/vcek/v1` or a trusted mirror/cache.
+    #[serde(default)]
+    pub amd_kds_base_url: Option<String>,
     pub auth_api: AuthApi,
     pub onboard: OnboardConfig,
     pub image: ImageConfig,
+    /// Whether to enable the additional local release gate for AMD SEV-SNP
+    /// key/cert material. This is separate from the auth API so production
+    /// deployments need an explicit KMS opt-in as well as a successful external
+    /// policy decision.
+    #[serde(default)]
+    pub sev_snp_key_release: bool,
     #[serde(with = "serde_human_bytes")]
     pub admin_token_hash: Vec<u8>,
     #[serde(default)]

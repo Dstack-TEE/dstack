@@ -8,6 +8,7 @@ use dstack_port_forward::{ForwardRule, ForwardService, Protocol as FwdProtocol};
 use anyhow::{bail, Context, Result};
 use bon::Builder;
 use dstack_kms_rpc::kms_client::KmsClient;
+use dstack_types::mr_config::MrConfigV3;
 use dstack_types::shared_filenames::{
     APP_COMPOSE, ENCRYPTED_ENV, INSTANCE_INFO, SYS_CONFIG, USER_CONFIG,
 };
@@ -21,6 +22,7 @@ use or_panic::ResultOrPanic;
 use ra_rpc::client::RaClient;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
@@ -111,6 +113,95 @@ impl GpuConfig {
         }
         self.gpus.is_empty() && self.bridges.is_empty()
     }
+}
+
+/// Round up a value to the nearest multiple of another value.
+/// If the value is already a multiple, it remains unchanged.
+pub(crate) fn round_up(value: u32, multiple: u32) -> u32 {
+    if multiple <= 1 {
+        return value;
+    }
+
+    let remainder = value % multiple;
+    if remainder == 0 {
+        return value;
+    }
+
+    value + (multiple - remainder)
+}
+
+/// Get the NUMA node associated with a PCI device.
+pub(crate) fn pci_numa_node(device: &str) -> Result<String> {
+    // Ensure the device string only contains valid hexadecimal characters and colons.
+    if !device
+        .chars()
+        .all(|c| c.is_ascii_hexdigit() || c == ':' || c == '.')
+    {
+        bail!("Invalid device string");
+    }
+
+    let numa_node_path = format!("/sys/bus/pci/devices/0000:{device}/numa_node");
+    let numa_node = fs::read_to_string(&numa_node_path)
+        .with_context(|| format!("Failed to read NUMA node from {numa_node_path}"))?
+        .trim()
+        .to_string();
+
+    // If the NUMA node is -1, default to 0.
+    if numa_node == "-1" {
+        return Ok("0".to_string());
+    }
+
+    Ok(numa_node)
+}
+
+/// NUMA nodes used by the QEMU hugepage layout.
+///
+/// This mirrors the launch path: only GPU devices determine the split, while
+/// bridges/NVSwitches are attached after the NUMA topology is constructed.  If
+/// no GPU is attached, QEMU still creates a single node (node 0).
+pub(crate) fn hugepage_numa_nodes(gpus: &GpuConfig) -> Result<HashMap<String, u32>> {
+    let mut numa_nodes = HashMap::new();
+
+    for device in &gpus.gpus {
+        let node = pci_numa_node(&device.slot)?;
+        *numa_nodes.entry(node).or_insert(0) += 1;
+    }
+
+    if numa_nodes.is_empty() {
+        numa_nodes.insert("0".to_string(), 0);
+    }
+
+    Ok(numa_nodes)
+}
+
+/// Effective vCPU count used for both QEMU `-smp` and SNP launch measurement.
+///
+/// QEMU launches at least one vCPU and, with hugepage NUMA layout enabled,
+/// rounds the vCPU count up so it can be split evenly across NUMA nodes.  The
+/// SEV-SNP launch measurement includes one measured VMSA page per vCPU, so the
+/// measurement input must use this same effective count rather than the raw
+/// manifest value.
+pub(crate) fn effective_vcpu_count(
+    requested_vcpu: u32,
+    hugepage_numa_node_count: Option<u32>,
+) -> u32 {
+    let vcpus = requested_vcpu.max(1);
+    match hugepage_numa_node_count {
+        Some(numa_nodes) => round_up(vcpus, numa_nodes.max(1)),
+        None => vcpus,
+    }
+}
+
+pub(crate) fn effective_vcpu_count_for_manifest(
+    manifest: &Manifest,
+    gpus: &GpuConfig,
+) -> Result<u32> {
+    let numa_node_count = if manifest.hugepages {
+        Some(hugepage_numa_nodes(gpus)?.len() as u32)
+    } else {
+        None
+    };
+    Ok(effective_vcpu_count(manifest.vcpu, numa_node_count))
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -998,7 +1089,27 @@ impl App {
         let shared_dir = self.shared_dir(id);
         let manifest = work_dir.manifest().context("Failed to read manifest")?;
         let cfg = &self.config;
-        let sys_config_str = make_sys_config(cfg, &manifest)?;
+        let compose_hash = sha256_file(shared_dir.join(APP_COMPOSE))?;
+        let platform = cfg.cvm.resolved_platform();
+        let app_compose = work_dir
+            .app_compose()
+            .context("Failed to get app compose")?;
+        let use_mr_config_v3 = !manifest.no_tee
+            && (platform == crate::config::TeePlatform::AmdSevSnp
+                || (platform == crate::config::TeePlatform::Tdx
+                    && cfg.cvm.use_mrconfigid
+                    && !app_compose.key_provider_id.is_empty()));
+        let mr_config = if use_mr_config_v3 {
+            Some(
+                work_dir
+                    .prepare_mr_config_v3(&app_compose)
+                    .context("Failed to prepare mr_config")?,
+            )
+        } else {
+            None
+        };
+        let sys_config_str =
+            make_sys_config(cfg, &manifest, &hex::encode(compose_hash), mr_config)?;
         fs::write(shared_dir.join(SYS_CONFIG), sys_config_str)
             .context("Failed to write vm config")?;
         Ok(())
@@ -1136,7 +1247,12 @@ fn rotate_serial_log(work_dir: &VmWorkDir, max_bytes: u64) {
     }
 }
 
-pub(crate) fn make_sys_config(cfg: &Config, manifest: &Manifest) -> Result<String> {
+pub(crate) fn make_sys_config(
+    cfg: &Config,
+    manifest: &Manifest,
+    compose_hash: &str,
+    mr_config: Option<String>,
+) -> Result<String> {
     let image_path = cfg.image.path.join(&manifest.image);
     let image = Image::load(image_path).context("Failed to load image info")?;
     let img_ver = image.info.version_tuple().unwrap_or((0, 0, 0));
@@ -1154,29 +1270,107 @@ pub(crate) fn make_sys_config(cfg: &Config, manifest: &Manifest) -> Result<Strin
         bail!("Unsupported image version: {img_ver:?}");
     }
 
-    let sys_config = json!({
+    let mut sys_config = json!({
         "kms_urls": kms_urls,
         "gateway_urls": gateway_urls,
         "pccs_url": cfg.cvm.pccs_url,
         "docker_registry": cfg.cvm.docker_registry,
         "host_api_url": format!("vsock://2:{}/api", cfg.host_api.port),
-        "vm_config": serde_json::to_string(&make_vm_config(cfg, manifest, &image)?)?,
+        "vm_config": serde_json::to_string(&make_vm_config(cfg, manifest, &image, compose_hash, mr_config.clone())?)?,
     });
+    if let Some(mr_config) = mr_config {
+        MrConfigV3::from_document(&mr_config).context("Invalid mr_config document")?;
+        sys_config["mr_config"] = serde_json::to_value(mr_config)?;
+    } else if let Some(mr_config) = mr_config_from_vm_config(&sys_config)? {
+        sys_config["mr_config"] = serde_json::to_value(mr_config)?;
+    }
     let sys_config_str =
         serde_json::to_string(&sys_config).context("Failed to serialize vm config")?;
     Ok(sys_config_str)
 }
 
-fn make_vm_config(cfg: &Config, manifest: &Manifest, image: &Image) -> Result<serde_json::Value> {
-    let os_image_hash = image
-        .digest
-        .as_ref()
-        .and_then(|d| hex::decode(d).ok())
-        .unwrap_or_default();
-    let gpus = manifest.gpus.clone().unwrap_or_default();
+fn mr_config_from_vm_config(sys_config: &serde_json::Value) -> Result<Option<String>> {
+    let Some(vm_config) = sys_config.get("vm_config").and_then(|value| value.as_str()) else {
+        return Ok(None);
+    };
+    let vm_config: serde_json::Value = serde_json::from_str(vm_config)?;
+    let Some(mr_config) = vm_config.get("mr_config") else {
+        return Ok(None);
+    };
+    let mr_config = mr_config
+        .as_str()
+        .context("mr_config must be a JSON string")?;
+    MrConfigV3::from_document(mr_config).context("Invalid mr_config document")?;
+    Ok(Some(mr_config.to_string()))
+}
+
+fn file_sha256_hex(path: &Path) -> Result<String> {
+    Ok(hex::encode(sha256_file(path)?))
+}
+
+fn amd_sev_snp_ovmf_measurement_info(image: &Image) -> Result<dstack_mr::sev::OvmfMeasurementInfo> {
+    // Measure the same firmware the guest launches with: the SEV firmware
+    // (bios-sev) when present, falling back to the generic bios. The OVMF
+    // parsing/GCTX logic is shared with `dstack-mr sev-os-image-hash`.
+    let bios = image
+        .firmware(true)
+        .map(|p| p.as_path())
+        .ok_or_else(|| anyhow::anyhow!("bios/OVMF is required for amd sev-snp measurement"))?;
+    dstack_mr::sev::ovmf_measurement_info(bios).with_context(|| {
+        format!(
+            "failed to extract amd sev-snp OVMF measurement metadata from {}",
+            bios.display()
+        )
+    })
+}
+
+fn amd_sev_snp_measurement_base_cmdline(base_cmdline: Option<&str>) -> Option<String> {
+    base_cmdline.map(|cmdline| cmdline.trim().to_string())
+}
+
+fn sha256_file(path: impl AsRef<Path>) -> Result<[u8; 32]> {
+    let data = fs::read(path).context("Failed to read file for sha256")?;
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&Sha256::digest(data));
+    Ok(out)
+}
+
+fn make_vm_config(
+    cfg: &Config,
+    manifest: &Manifest,
+    image: &Image,
+    _compose_hash: &str,
+    mr_config: Option<String>,
+) -> Result<serde_json::Value> {
+    let is_amd_sev_snp =
+        cfg.cvm.resolved_platform() == crate::config::TeePlatform::AmdSevSnp && !manifest.no_tee;
+    // AMD SEV-SNP binds the OS image through the launch-measurement-derived
+    // os_image_hash, computed at image build time by `dstack-mr sev-os-image-hash`
+    // and shipped as `digest.sev.txt` (the same value KMS/verifier derive from a
+    // verified launch measurement). The VMM reads it from the image rather than
+    // recomputing it; TDX still uses the generic content digest.
+    let os_image_hash = if is_amd_sev_snp {
+        let digest = image.sev_digest.as_deref().context(
+            "amd sev-snp image is missing digest.sev.txt; \
+             rebuild the image so `dstack-mr sev-os-image-hash` emits it",
+        )?;
+        hex::decode(digest).context("digest.sev.txt is not valid hex")?
+    } else {
+        image
+            .digest
+            .as_ref()
+            .and_then(|d| hex::decode(d).ok())
+            .unwrap_or_default()
+    };
+    let gpus = if cfg.cvm.gpu.enabled {
+        manifest.gpus.clone().unwrap_or_default()
+    } else {
+        GpuConfig::default()
+    };
+    let effective_vcpus = effective_vcpu_count_for_manifest(manifest, &gpus)?;
     let mut config = serde_json::to_value(dstack_types::VmConfig {
         os_image_hash,
-        cpu_count: manifest.vcpu,
+        cpu_count: effective_vcpus,
         memory_size: manifest.memory as u64 * 1024 * 1024,
         qemu_single_pass_add_pages: cfg.cvm.qemu_single_pass_add_pages,
         pic: cfg.cvm.qemu_pic,
@@ -1192,7 +1386,302 @@ fn make_vm_config(cfg: &Config, manifest: &Manifest, image: &Image) -> Result<se
     })?;
     // For backward compatibility
     config["spec_version"] = serde_json::Value::from(1);
+    if is_amd_sev_snp {
+        // The rootfs identity is part of the measured kernel cmdline; do not
+        // carry it as a standalone, unmeasured launch-input field.
+        dstack_mr::sev::rootfs_hash_from_cmdline(image.info.cmdline.as_deref())?;
+        if let Some(mr_config) = mr_config {
+            MrConfigV3::from_document(&mr_config).context("Invalid mr_config document")?;
+            config["mr_config"] = serde_json::Value::String(mr_config);
+        }
+        let ovmf = amd_sev_snp_ovmf_measurement_info(image)?;
+        let measurement = json!({
+            "base_cmdline": amd_sev_snp_measurement_base_cmdline(image.info.cmdline.as_deref()),
+            "ovmf_hash": ovmf.ovmf_hash,
+            "kernel_hash": file_sha256_hex(&image.kernel)?,
+            "initrd_hash": file_sha256_hex(&image.initrd)?,
+            "sev_hashes_table_gpa": ovmf.sev_hashes_table_gpa,
+            "sev_es_reset_eip": ovmf.sev_es_reset_eip,
+            "vcpus": effective_vcpus,
+            "vcpu_type": "EPYC-v4",
+            "guest_features": 1,
+            "ovmf_sections": ovmf.sections,
+        });
+        config["sev_snp_measurement"] = serde_json::Value::String(
+            serde_json::to_string(&measurement)
+                .context("Failed to serialize amd sev-snp measurement input")?,
+        );
+    }
     Ok(config)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{load_config_figment, TeePlatform};
+    use rocket::figment::Figment;
+    use std::time::UNIX_EPOCH;
+
+    fn hex_of(byte: u8, len: usize) -> String {
+        hex::encode(vec![byte; len])
+    }
+
+    fn write_u16_le_at(buf: &mut [u8], off: usize, value: u16) {
+        buf[off..off + 2].copy_from_slice(&value.to_le_bytes());
+    }
+
+    fn write_u32_le_at(buf: &mut [u8], off: usize, value: u32) {
+        buf[off..off + 4].copy_from_slice(&value.to_le_bytes());
+    }
+
+    fn ovmf_footer_entry(data: &[u8], guid: &[u8; 16]) -> Vec<u8> {
+        let mut entry = data.to_vec();
+        entry.extend_from_slice(&((data.len() + 18) as u16).to_le_bytes());
+        entry.extend_from_slice(guid);
+        entry
+    }
+
+    fn synthetic_snp_ovmf() -> Vec<u8> {
+        const GUID_FOOTER_TABLE: [u8; 16] = [
+            0xde, 0x82, 0xb5, 0x96, 0xb2, 0x1f, 0xf7, 0x45, 0xba, 0xea, 0xa3, 0x66, 0xc5, 0x5a,
+            0x08, 0x2d,
+        ];
+        const GUID_SEV_HASH_TABLE_RV: [u8; 16] = [
+            0x1f, 0x37, 0x55, 0x72, 0x3b, 0x3a, 0x04, 0x4b, 0x92, 0x7b, 0x1d, 0xa6, 0xef, 0xa8,
+            0xd4, 0x54,
+        ];
+        const GUID_SEV_ES_RESET_BLK: [u8; 16] = [
+            0xde, 0x71, 0xf7, 0x00, 0x7e, 0x1a, 0xcb, 0x4f, 0x89, 0x0e, 0x68, 0xc7, 0x7e, 0x2f,
+            0xb4, 0x4e,
+        ];
+        const GUID_SEV_META_DATA: [u8; 16] = [
+            0x66, 0x65, 0x88, 0xdc, 0x4a, 0x98, 0x98, 0x47, 0xa7, 0x5e, 0x55, 0x85, 0xa7, 0xbf,
+            0x67, 0xcc,
+        ];
+
+        let mut ovmf = vec![0u8; 4096];
+        let meta_start = 512usize;
+        ovmf[meta_start..meta_start + 4].copy_from_slice(b"ASEV");
+        write_u32_le_at(&mut ovmf, meta_start + 8, 1);
+        write_u32_le_at(&mut ovmf, meta_start + 12, 4);
+        let sections = [
+            (0x1000u32, 0x1000u32, 1u32),
+            (0x2000u32, 0x1000u32, 2u32),
+            (0x3000u32, 0x1000u32, 3u32),
+            (0x4000u32, 0x1000u32, 0x10u32),
+        ];
+        for (i, (gpa, size, section_type)) in sections.into_iter().enumerate() {
+            let off = meta_start + 16 + i * 12;
+            write_u32_le_at(&mut ovmf, off, gpa);
+            write_u32_le_at(&mut ovmf, off + 4, size);
+            write_u32_le_at(&mut ovmf, off + 8, section_type);
+        }
+
+        let mut table = Vec::new();
+        table.extend(ovmf_footer_entry(
+            &0x4000u32.to_le_bytes(),
+            &GUID_SEV_HASH_TABLE_RV,
+        ));
+        table.extend(ovmf_footer_entry(
+            &0xffff_fff0u32.to_le_bytes(),
+            &GUID_SEV_ES_RESET_BLK,
+        ));
+        table.extend(ovmf_footer_entry(
+            &((ovmf.len() - meta_start) as u32).to_le_bytes(),
+            &GUID_SEV_META_DATA,
+        ));
+
+        let footer_off = ovmf.len() - 32 - 18;
+        let table_start = footer_off - table.len();
+        ovmf[table_start..footer_off].copy_from_slice(&table);
+        write_u16_le_at(&mut ovmf, footer_off, (table.len() + 18) as u16);
+        ovmf[footer_off + 2..footer_off + 18].copy_from_slice(&GUID_FOOTER_TABLE);
+        ovmf
+    }
+
+    #[test]
+    fn effective_vcpu_count_clamps_zero_to_one() {
+        assert_eq!(effective_vcpu_count(0, None), 1);
+        assert_eq!(effective_vcpu_count(0, Some(1)), 1);
+    }
+
+    #[test]
+    fn effective_vcpu_count_rounds_for_hugepage_numa_split() {
+        assert_eq!(effective_vcpu_count(3, Some(2)), 4);
+        assert_eq!(effective_vcpu_count(4, Some(2)), 4);
+        assert_eq!(effective_vcpu_count(3, Some(0)), 3);
+        assert_eq!(effective_vcpu_count(3, None), 3);
+    }
+
+    #[test]
+    fn amd_sev_snp_measurement_base_cmdline_trims_image_cmdline() {
+        assert_eq!(
+            amd_sev_snp_measurement_base_cmdline(Some(" console=ttyS0 loglevel=7 ")),
+            Some("console=ttyS0 loglevel=7".to_string())
+        );
+    }
+
+    #[test]
+    fn amd_sev_snp_sys_config_includes_measurement_input_and_mr_config() -> Result<()> {
+        let temp = std::env::temp_dir().join(format!(
+            "dstack-vmm-snp-test-{}",
+            SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos()
+        ));
+        let temp = temp.as_path();
+        let image_root = temp.join("images");
+        let image_dir = image_root.join("dstack-test");
+        fs::create_dir_all(&image_dir)?;
+        fs::write(image_dir.join("kernel"), b"snp-test-kernel")?;
+        fs::write(image_dir.join("initrd"), b"snp-test-initrd")?;
+        fs::write(image_dir.join("rootfs"), b"snp-test-rootfs")?;
+        fs::write(image_dir.join("ovmf.fd"), synthetic_snp_ovmf())?;
+        fs::write(
+            image_dir.join("metadata.json"),
+            serde_json::json!({
+                "cmdline": format!("console=ttyS0 dstack.rootfs_hash={}", hex_of(0x33, 32)),
+                "kernel": "kernel",
+                "initrd": "initrd",
+                "rootfs": "rootfs",
+                "bios": "ovmf.fd",
+                "version": "0.5.11"
+            })
+            .to_string(),
+        )?;
+
+        let mut config: Config = Figment::from(load_config_figment(None)).extract()?;
+        config.image.path = image_root;
+        config.cvm.platform = Some(TeePlatform::AmdSevSnp);
+        let compose_hash = hex_of(0x22, 32);
+        let manifest = Manifest {
+            id: "snp-test".to_string(),
+            name: "snp-test".to_string(),
+            app_id: hex_of(0x11, 20),
+            vcpu: 2,
+            memory: 1024,
+            disk_size: 1024,
+            image: "dstack-test".to_string(),
+            port_map: vec![],
+            created_at_ms: 0,
+            hugepages: false,
+            pin_numa: false,
+            gpus: None,
+            kms_urls: vec![],
+            gateway_urls: vec![],
+            no_tee: false,
+            networking: None,
+        };
+
+        let mr_config = MrConfigV3::new(
+            vec![0x11; 20],
+            vec![0x22; 32],
+            dstack_types::KeyProviderKind::None,
+            vec![],
+            vec![0x44; 20],
+        )
+        .to_canonical_json();
+
+        // digest.sev.txt is produced at build time by the `dstack-mr
+        // sev-os-image-hash` command; the VMM reads it instead of recomputing.
+        // Emit it here so the deploy path (make_vm_config) can read it back.
+        let build_hash = dstack_mr::sev::sev_os_image_hash_for_image_dir(&image_dir)?;
+        fs::write(image_dir.join("digest.sev.txt"), hex::encode(build_hash))?;
+
+        let sys_config_document =
+            make_sys_config(&config, &manifest, &compose_hash, Some(mr_config))?;
+        let sys_config: serde_json::Value = serde_json::from_str(&sys_config_document)?;
+        let vm_config: serde_json::Value = serde_json::from_str(
+            sys_config["vm_config"]
+                .as_str()
+                .context("vm_config must be a string")?,
+        )?;
+        let measurement_document = vm_config["sev_snp_measurement"]
+            .as_str()
+            .context("sev_snp_measurement must be a string")?;
+        let measurement: serde_json::Value = serde_json::from_str(measurement_document)?;
+        let mr_config_document = sys_config["mr_config"]
+            .as_str()
+            .context("mr_config must be a string")?;
+        let parsed_mr_config = MrConfigV3::from_document(mr_config_document)?;
+
+        assert_eq!(parsed_mr_config.app_id, vec![0x11; 20]);
+        assert_eq!(parsed_mr_config.compose_hash, vec![0x22; 32]);
+        assert_eq!(vm_config["mr_config"], sys_config["mr_config"]);
+        // The deploy path must surface the os_image_hash straight from
+        // digest.sev.txt (not recompute it).
+        assert_eq!(
+            vm_config["os_image_hash"]
+                .as_str()
+                .context("os_image_hash must be a string")?,
+            hex::encode(build_hash),
+            "vm_config os_image_hash must come from digest.sev.txt"
+        );
+        assert!(measurement.get("app_id").is_none());
+        assert!(measurement.get("compose_hash").is_none());
+        assert!(measurement.get("rootfs_hash").is_none());
+        assert_eq!(
+            measurement["base_cmdline"],
+            format!("console=ttyS0 dstack.rootfs_hash={}", hex_of(0x33, 32))
+        );
+        assert_eq!(
+            measurement["kernel_hash"],
+            hex::encode(Sha256::digest(b"snp-test-kernel"))
+        );
+        assert_eq!(
+            measurement["initrd_hash"],
+            hex::encode(Sha256::digest(b"snp-test-initrd"))
+        );
+        assert_eq!(measurement["vcpus"], 2);
+        assert_eq!(measurement["vcpu_type"], "EPYC-v4");
+        assert_eq!(measurement["guest_features"], 1);
+        assert_eq!(
+            measurement["ovmf_hash"]
+                .as_str()
+                .context("ovmf_hash must be a string")?
+                .len(),
+            96
+        );
+        assert_eq!(measurement["sev_hashes_table_gpa"], 0x4000);
+        assert_eq!(measurement["sev_es_reset_eip"], 0xffff_fff0u32);
+        assert_eq!(
+            measurement["ovmf_sections"]
+                .as_array()
+                .context("ovmf_sections must be an array")?
+                .len(),
+            4
+        );
+
+        // The build-time os_image_hash (dstack-mr sev-os-image-hash ->
+        // digest.sev.txt) must equal the os_image_hash a verifier derives from
+        // the launch measurement document, i.e. the image-invariant projection.
+        let as_str = |v: &serde_json::Value| v.as_str().unwrap().to_string();
+        let rootfs_hash =
+            dstack_mr::sev::rootfs_hash_from_cmdline(measurement["base_cmdline"].as_str())?;
+        let projected = dstack_types::SevOsImageMeasurement {
+            rootfs_hash,
+            base_cmdline: measurement["base_cmdline"].as_str().map(str::to_string),
+            ovmf_hash: as_str(&measurement["ovmf_hash"]),
+            kernel_hash: as_str(&measurement["kernel_hash"]),
+            initrd_hash: as_str(&measurement["initrd_hash"]),
+            sev_hashes_table_gpa: measurement["sev_hashes_table_gpa"].as_u64().unwrap(),
+            sev_es_reset_eip: measurement["sev_es_reset_eip"].as_u64().unwrap() as u32,
+            ovmf_sections: measurement["ovmf_sections"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|s| dstack_types::OvmfSection {
+                    gpa: s["gpa"].as_u64().unwrap(),
+                    size: s["size"].as_u64().unwrap(),
+                    section_type: s["section_type"].as_u64().unwrap() as u32,
+                })
+                .collect(),
+        };
+        assert_eq!(
+            build_hash,
+            projected.os_image_hash(),
+            "digest.sev.txt must match the os_image_hash derived from the launch measurement"
+        );
+        Ok(())
+    }
 }
 
 fn paginate<T>(items: Vec<T>, page: u32, page_size: u32) -> impl Iterator<Item = T> {

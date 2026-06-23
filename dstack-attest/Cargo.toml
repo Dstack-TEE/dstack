@@ -21,6 +21,8 @@ hex.workspace = true
 hex_fmt.workspace = true
 or-panic.workspace = true
 scale = { workspace = true, features = ["derive"] }
+sev-snp-attest.workspace = true
+sev-snp-qvl.workspace = true
 serde.workspace = true
 serde-human-bytes.workspace = true
 serde_json.workspace = true
@@ -42,3 +44,4 @@ quote = []
 [dev-dependencies]
 futures = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
+dstack-mr = { workspace = true }

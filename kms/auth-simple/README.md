@@ -38,6 +38,8 @@ Add more fields as you deploy Gateway and apps:
 ```json
 {
   "osImages": ["0x..."],
+  "allowedTcbStatuses": ["UpToDate"],
+  "allowedAdvisoryIds": [],
   "gatewayAppId": "0x...",
   "kms": {
     "mrAggregated": ["0x..."],
@@ -60,12 +62,16 @@ Add more fields as you deploy Gateway and apps:
 |-------|----------|-------------|
 | `osImages` | Yes | Allowed OS image hashes (from `digest.txt`) |
 | `gatewayAppId` | No | Gateway app ID (add after Gateway deployment) |
+| `allowedTcbStatuses` | No | Allowed verifier-derived TCB status strings. Defaults to `["UpToDate"]`; non-up-to-date SNP/TDX statuses remain fail-closed unless explicitly allowlisted for testing. |
+| `allowedAdvisoryIds` | No | Advisory IDs permitted in `advisoryIds`. Defaults to `[]`, which rejects any advisory. |
 | `kms.mrAggregated` | Yes for KMS authorization | Allowed KMS aggregated MR values. An empty array denies all KMS boots. |
 | `kms.devices` | No | Allowed KMS device IDs |
 | `kms.allowAnyDevice` | No | If true, skip device ID check for KMS |
 | `apps.<appId>.composeHashes` | No | Allowed compose hashes for this app |
 | `apps.<appId>.devices` | No | Allowed device IDs for this app |
 | `apps.<appId>.allowAnyDevice` | No | If true, skip device ID check for this app |
+
+For experimental AMD SEV-SNP dry-run authorization, keep the default fail-closed TCB policy unless you intentionally want the auth webhook to accept non-up-to-date verifier-derived SNP `BootInfo`. To exercise the dry-run path without enabling key release, allowlist the recomputed SNP `mrAggregated`, `osImageHash`, app/compose identity, device/chip identity, and any non-default `allowedTcbStatuses`/`allowedAdvisoryIds` values explicitly. KMS still rejects SNP before returning app keys, KMS keys, or app certificates.
 
 ### Getting Hash Values
 
@@ -128,13 +134,15 @@ App boot authorization.
 **Request:**
 ```json
 {
+  "attestationMode": "DstackTdx",
   "mrAggregated": "0x...",
   "osImageHash": "0x...",
   "appId": "0x...",
   "composeHash": "0x...",
   "instanceId": "0x...",
   "deviceId": "0x...",
-  "tcbStatus": "UpToDate"
+  "tcbStatus": "UpToDate",
+  "advisoryIds": []
 }
 ```
 
@@ -159,18 +167,20 @@ KMS boot authorization.
 
 ### KMS Boot Validation
 
-1. `tcbStatus` must be "UpToDate"
-2. `osImageHash` must be in `osImages` array
-3. `mrAggregated` must be in `kms.mrAggregated`
-4. `deviceId` must be in `kms.devices` (unless `allowAnyDevice` is true)
+1. `tcbStatus` must be listed in `allowedTcbStatuses` (default: only `"UpToDate"`)
+2. Every `advisoryIds` entry must be listed in `allowedAdvisoryIds` (default: none allowed)
+3. `osImageHash` must be in `osImages` array
+4. `mrAggregated` must be in `kms.mrAggregated`
+5. `deviceId` must be in `kms.devices` (unless `allowAnyDevice` is true)
 
 ### App Boot Validation
 
-1. `tcbStatus` must be "UpToDate"
-2. `osImageHash` must be in `osImages` array
-3. `appId` must exist in `apps` object
-4. `composeHash` must be in app's `composeHashes` array
-5. `deviceId` must be in app's `devices` (unless `allowAnyDevice` is true)
+1. `tcbStatus` must be listed in `allowedTcbStatuses` (default: only `"UpToDate"`)
+2. Every `advisoryIds` entry must be listed in `allowedAdvisoryIds` (default: none allowed)
+3. `osImageHash` must be in `osImages` array
+4. `appId` must exist in `apps` object
+5. `composeHash` must be in app's `composeHashes` array
+6. `deviceId` must be in app's `devices` (unless `allowAnyDevice` is true)
 
 ## Hot Reload
 

@@ -23,6 +23,7 @@ uuid = { workspace = true, features = ["v4"] }
 sha2.workspace = true
 hex.workspace = true
 fs-err.workspace = true
+getrandom = { workspace = true, features = ["std"] }
 nix = { workspace = true, features = ["user"] }
 dirs.workspace = true
 which.workspace = true
@@ -47,6 +48,7 @@ load_config.workspace = true
 key-provider-client.workspace = true
 dstack-port-forward.workspace = true
 dstack-types.workspace = true
+dstack-mr.workspace = true
 hex_fmt.workspace = true
 lspci.workspace = true
 base64.workspace = true

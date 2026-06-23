@@ -18,6 +18,7 @@ mod acpi;
 mod kernel;
 mod machine;
 mod num;
+pub mod sev;
 mod tdvf;
 mod uefi_var;
 mod util;

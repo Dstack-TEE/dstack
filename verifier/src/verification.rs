@@ -32,6 +32,7 @@ fn tee_platform_name(quote: &AttestationQuote) -> &'static str {
         AttestationQuote::DstackTdx(_) => "tdx",
         AttestationQuote::DstackGcpTdx(_) => "gcp-tdx",
         AttestationQuote::DstackNitroEnclave(_) => "nitro",
+        AttestationQuote::DstackAmdSevSnp(_) => "sev-snp",
     }
 }
 
@@ -508,7 +509,15 @@ impl CvmVerifier {
         debug: bool,
         details: &mut VerificationDetails,
     ) -> Result<VmConfig> {
-        let vm_config = attestation
+        // The raw config string used for platform-specific binding: the explicit
+        // request `vm_config` when supplied, otherwise the one embedded in the
+        // attestation (mirroring `decode_vm_config`'s own fallback).
+        let raw_config = if vm_config.is_empty() {
+            attestation.config.clone()
+        } else {
+            vm_config.clone()
+        };
+        let mut vm_config = attestation
             .decode_vm_config(&vm_config)
             .context("Failed to decode VM config")?;
         match &attestation.quote {
@@ -526,8 +535,51 @@ impl CvmVerifier {
                 };
                 self.verify_os_image_hash_for_nitro_enclave(&vm_config, &report.pcrs)?;
             }
+            AttestationQuote::DstackAmdSevSnp(_) => {
+                self.verify_os_image_hash_for_dstack_sev(
+                    attestation,
+                    &raw_config,
+                    &mut vm_config,
+                    details,
+                )?;
+            }
         }
         Ok(vm_config)
+    }
+
+    /// Verify the AMD SEV-SNP OS image binding.
+    ///
+    /// Unlike TDX (which replays RTMRs against a downloaded image), the SNP boot
+    /// is summarised by the launch `MEASUREMENT`. The CVM advertises the
+    /// self-contained launch inputs (`sev_snp_measurement`) and the MrConfigV3
+    /// document in its `vm_config`; we recompute the launch measurement from
+    /// those inputs and require it to equal the hardware-signed `MEASUREMENT`
+    /// (which is what makes the otherwise-untrusted inputs trustworthy), require
+    /// `HOST_DATA` to bind the MrConfigV3 document, and then derive the
+    /// image-invariant `os_image_hash`. The shared recomputation in
+    /// `dstack_mr::sev` is the same code path the KMS uses for key release, so a
+    /// quote that the KMS would release keys for verifies here too.
+    fn verify_os_image_hash_for_dstack_sev(
+        &self,
+        attestation: &VerifiedAttestation,
+        raw_config: &str,
+        vm_config: &mut VmConfig,
+        details: &mut VerificationDetails,
+    ) -> Result<()> {
+        let report = attestation
+            .report
+            .amd_snp_report()
+            .context("internal error: sev-snp quote without a verified sev-snp report")?;
+        let binding =
+            dstack_mr::sev::verify_sev_launch(&report.measurement, &report.host_data, raw_config)
+                .context("amd sev-snp launch verification failed")?;
+        // The os_image_hash derived from the measurement-bound launch inputs is
+        // the authoritative one; surface it (overriding any guest-advertised
+        // value, which is not independently trusted).
+        vm_config.os_image_hash = binding.os_image_hash;
+        details.tcb_status = Some(report.tcb_info.tcb_status().to_string());
+        details.advisory_ids = report.advisory_ids.clone();
+        Ok(())
     }
 
     async fn verify_os_image_hash_for_dstack_tdx(

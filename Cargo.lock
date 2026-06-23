@@ -758,6 +758,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "array-init"
+version = "2.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3d62b7694a562cdf5a74227903507c56ab2cc8bdd1f781ed5cb4cf9c9f810bfc"
+
+[[package]]
 name = "arraydeque"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1040,6 +1046,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "binrw"
+version = "0.15.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d53195f985e88ab94d1cc87e80049dd2929fd39e4a772c5ae96a7e5c4aad3642"
+dependencies = [
+ "array-init",
+ "binrw_derive",
+ "bytemuck",
+]
+
+[[package]]
+name = "binrw_derive"
+version = "0.15.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5910da05ee556b789032c8ff5a61fb99239580aa3fd0bfaa8f4d094b2aee00ad"
+dependencies = [
+ "either",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+]
+
+[[package]]
 name = "bit-set"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1069,6 +1098,12 @@ dependencies = [
  "bitcoin-io",
  "hex-conservative",
 ]
+
+[[package]]
+name = "bitfield"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c821a6e124197eb56d907ccc2188eab1038fb919c914f47976e64dd8dbc855d1"
 
 [[package]]
 name = "bitflags"
@@ -1571,6 +1606,12 @@ dependencies = [
  "quote",
  "syn 2.0.117",
 ]
+
+[[package]]
+name = "codicon"
+version = "3.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "12170080f3533d6f09a19f81596f836854d0fa4867dc32c8172b8474b4e9de61"
 
 [[package]]
 name = "colorchoice"
@@ -2213,11 +2254,32 @@ dependencies = [
 
 [[package]]
 name = "dirs"
+version = "5.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "44c45a9d03d6676652bcb5e724c7e988de1acad23a711b5217ab9cbecbec2225"
+dependencies = [
+ "dirs-sys 0.4.1",
+]
+
+[[package]]
+name = "dirs"
 version = "6.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3e8aa94d75141228480295a7d0e7feb620b1a5ad9f12bc40be62411e38cce4e"
 dependencies = [
- "dirs-sys",
+ "dirs-sys 0.5.0",
+]
+
+[[package]]
+name = "dirs-sys"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "520f05a5cbd335fae5a99ff7a6ab8627577660ee5cfd6a94a6a929b52ff0321c"
+dependencies = [
+ "libc",
+ "option-ext",
+ "redox_users 0.4.6",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
@@ -2228,7 +2290,7 @@ checksum = "e01a3366d27ee9890022452ee61b2b63a67e6f13f58900b651ff5665f0bb1fab"
 dependencies = [
  "libc",
  "option-ext",
- "redox_users",
+ "redox_users 0.5.2",
  "windows-sys 0.61.2",
 ]
 
@@ -2303,6 +2365,7 @@ dependencies = [
  "anyhow",
  "cc-eventlog",
  "dcap-qvl",
+ "dstack-mr",
  "dstack-types",
  "errify",
  "ez-hash",
@@ -2319,6 +2382,8 @@ dependencies = [
  "serde",
  "serde-human-bytes",
  "serde_json",
+ "sev-snp-attest",
+ "sev-snp-qvl",
  "sha2 0.10.9",
  "sha3 0.10.9",
  "tdx-attest",
@@ -2515,6 +2580,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "clap",
+ "dstack-attest",
  "dstack-guest-agent-rpc",
  "dstack-kms-rpc",
  "dstack-mr",
@@ -2569,6 +2635,7 @@ name = "dstack-mr"
 version = "0.5.11"
 dependencies = [
  "anyhow",
+ "binrw",
  "bon",
  "dstack-types",
  "flate2",
@@ -2653,9 +2720,13 @@ dependencies = [
 name = "dstack-types"
 version = "0.5.11"
 dependencies = [
+ "or-panic",
  "parity-scale-codec",
  "serde",
  "serde-human-bytes",
+ "serde_jcs",
+ "serde_json",
+ "sha2 0.10.9",
  "sha3 0.10.9",
  "size-parser",
 ]
@@ -2753,8 +2824,9 @@ dependencies = [
  "base64 0.22.1",
  "bon",
  "clap",
- "dirs",
+ "dirs 6.0.0",
  "dstack-kms-rpc",
+ "dstack-mr",
  "dstack-port-forward",
  "dstack-types",
  "dstack-vmm-rpc",
@@ -2762,6 +2834,7 @@ dependencies = [
  "flate2",
  "fs-err",
  "fscommon",
+ "getrandom 0.3.4",
  "git-version",
  "guest-api",
  "hex",
@@ -4249,6 +4322,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "iocuddle"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d8972d5be69940353d5347a1344cb375d9b457d6809b428b05bb1ca2fb9ce007"
+
+[[package]]
 name = "iohash"
 version = "0.5.11"
 dependencies = [
@@ -4613,7 +4692,7 @@ dependencies = [
  "rust-argon2",
  "secrecy",
  "serde",
- "serde-big-array",
+ "serde-big-array 0.3.3",
  "serde_json",
  "sha2 0.9.9",
  "thiserror 1.0.69",
@@ -6194,6 +6273,17 @@ dependencies = [
 
 [[package]]
 name = "redox_users"
+version = "0.4.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ba009ff324d1fc1b900bd1fdb31564febe58a8ccc8a6fdbb93b543d33b13ca43"
+dependencies = [
+ "getrandom 0.2.17",
+ "libredox",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "redox_users"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a4e608c6638b9c18977b00b475ac1f28d14e84b27d8d42f70e0bf1e3dec127ac"
@@ -6741,6 +6831,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
 
 [[package]]
+name = "ryu-js"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6518fc26bced4d53678a22d6e423e9d8716377def84545fe328236e3af070e7f"
+
+[[package]]
 name = "s2n-codec"
 version = "0.81.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7127,6 +7223,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde-big-array"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "11fc7cc2c76d73e0f27ee52abbd64eec84d46f370c88371120433196934e4b7f"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "serde-duration"
 version = "0.5.11"
 dependencies = [
@@ -7193,6 +7298,17 @@ dependencies = [
  "result",
  "serde",
  "void",
+]
+
+[[package]]
+name = "serde_jcs"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d3a60f3fda61525e439ef6d67422118f11e986566997d9021c56867ad814a0aa"
+dependencies = [
+ "ryu-js",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -7292,6 +7408,55 @@ checksum = "a84f14a19e9a014bb9f4512488d9829a68e04ecabffb0f9904cd1ace94598177"
 dependencies = [
  "base16ct",
  "serde",
+]
+
+[[package]]
+name = "sev"
+version = "6.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "20ac277517d8fffdf3c41096323ed705b3a7c75e397129c072fb448339839d0f"
+dependencies = [
+ "base64 0.22.1",
+ "bincode 1.3.3",
+ "bitfield",
+ "bitflags 1.3.2",
+ "byteorder",
+ "codicon",
+ "dirs 5.0.1",
+ "hex",
+ "iocuddle",
+ "lazy_static",
+ "libc",
+ "p384",
+ "rsa",
+ "serde",
+ "serde-big-array 0.5.1",
+ "serde_bytes",
+ "sha2 0.10.9",
+ "static_assertions",
+ "uuid",
+ "x509-cert",
+]
+
+[[package]]
+name = "sev-snp-attest"
+version = "0.5.11"
+dependencies = [
+ "anyhow",
+ "fs-err",
+ "hex",
+ "sev",
+ "tracing",
+]
+
+[[package]]
+name = "sev-snp-qvl"
+version = "0.5.11"
+dependencies = [
+ "anyhow",
+ "hex",
+ "reqwest",
+ "sev",
 ]
 
 [[package]]
@@ -7958,6 +8123,27 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 
 [[package]]
+name = "tls_codec"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0de2e01245e2bb89d6f05801c564fa27624dbd7b1846859876c7dad82e90bf6b"
+dependencies = [
+ "tls_codec_derive",
+ "zeroize",
+]
+
+[[package]]
+name = "tls_codec_derive"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2d2e76690929402faae40aebdda620a2c0e25dd6d3b9afe48867dfd95991f4bd"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+]
+
+[[package]]
 name = "tokio"
 version = "1.52.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8431,6 +8617,7 @@ checksum = "d258b83ceec21034727ecee8c382cfa6c3e133699b0742c64571814fb420c9f7"
 dependencies = [
  "getrandom 0.4.2",
  "js-sys",
+ "serde_core",
  "wasm-bindgen",
 ]
 
@@ -8898,6 +9085,15 @@ dependencies = [
 
 [[package]]
 name = "windows-sys"
+version = "0.48.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "677d2418bec65e3338edb076e806bc1ec15693c5d0104683f2efe857f61056a9"
+dependencies = [
+ "windows-targets 0.48.5",
+]
+
+[[package]]
+name = "windows-sys"
 version = "0.52.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "282be5f36a8ce781fad8c8ae18fa3f9beff57ec1b52cb3de0789201425d9a33d"
@@ -9281,6 +9477,7 @@ dependencies = [
  "const-oid",
  "der",
  "spki",
+ "tls_codec",
 ]
 
 [[package]]

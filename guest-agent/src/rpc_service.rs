@@ -839,6 +839,10 @@ pNs85uhOZE8z2jr8Pg==
                 let Some(quote) = attestation.platform.tdx_quote().map(ToOwned::to_owned) else {
                     return Err(anyhow::anyhow!("Quote not found"));
                 };
+                let versioned = VersionedAttestation::V1 {
+                    attestation: attestation.clone(),
+                }
+                .to_bytes()?;
                 Ok(GetQuoteResponse {
                     quote,
                     event_log: serde_json::to_string(
@@ -847,6 +851,7 @@ pNs85uhOZE8z2jr8Pg==
                     .unwrap_or_default(),
                     report_data: report_data.to_vec(),
                     vm_config: vm_config.to_string(),
+                    attestation: versioned,
                 })
             }
 

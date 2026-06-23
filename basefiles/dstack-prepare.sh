@@ -80,27 +80,36 @@ WORK_DIR="/var/volatile/dstack"
 DATA_MNT="$WORK_DIR/persistent"
 
 OVERLAY_TMP="/var/volatile/overlay"
-OVERLAY_PERSIST="$DATA_MNT/overlay"
 
 # Prepare volatile dirs
 mount_overlay() {
-    local src=$1
-    local dst=$2/$1
-    mkdir -p $dst/upper $dst/work
-    mount -t overlay overlay -o lowerdir=$src,upperdir=$dst/upper,workdir=$dst/work $src
+	local src="$1"
+	local dst="$2/$1"
+	local overlay_opts="lowerdir=$src,upperdir=$dst/upper,workdir=$dst/work"
+	mkdir -p "$dst/upper" "$dst/work"
+	mount -t overlay overlay -o "$overlay_opts" "$src"
 }
-mount_overlay /etc $OVERLAY_TMP
-mount_overlay /usr $OVERLAY_TMP
-mount_overlay /bin $OVERLAY_TMP
-mount_overlay /home $OVERLAY_TMP
+mount_overlay /etc "$OVERLAY_TMP"
+mount_overlay /usr "$OVERLAY_TMP"
+mount_overlay /bin "$OVERLAY_TMP"
+mount_overlay /home "$OVERLAY_TMP"
 
 # Make sure the system time is synchronized
 log "Syncing system time..."
-# Let the chronyd correct the system time immediately
-chronyc makestep
+# Let the chronyd correct the system time immediately; keep booting if chronyd is not ready yet.
+chronyc makestep || log "Warning: chronyc makestep failed; continuing"
 
-if ! [[ -e /dev/tdx_guest ]]; then
-	modprobe tdx-guest
+if [[ -e /dev/sev-guest ]] || grep -qw sev_guest /sys/kernel/config/tsm/report/*/provider 2>/dev/null; then
+	log "SEV-SNP guest device/TSM provider detected"
+elif [[ -e /dev/tdx_guest ]]; then
+	log "TDX guest device detected"
+elif modprobe sev-guest 2>/dev/null; then
+	log "Loaded sev-guest module"
+elif modprobe tdx-guest 2>/dev/null; then
+	log "Loaded tdx-guest module"
+else
+	log "Error: neither sev-guest nor tdx-guest module is available"
+	exit 1
 fi
 
 # Setup configfs and TSM for TDX attestation
@@ -125,9 +134,10 @@ log "Preparing dstack system..."
 
 has_partition_table() {
 	local disk="$1"
-	local disk_name=$(basename "$disk")
+	local disk_name
+	disk_name=$(basename "$disk")
 	# Check sysfs for any child partitions
-	for entry in /sys/class/block/${disk_name}/${disk_name}*; do
+	for entry in "/sys/class/block/${disk_name}/${disk_name}"*; do
 		[ -e "$entry/partition" ] || continue
 		return 0
 	done
@@ -279,9 +289,10 @@ echo "============================"
 
 cd /dstack
 
-if [ $(jq 'has("init_script")' app-compose.json) == true ]; then
+if [ "$(jq 'has("init_script")' app-compose.json)" == true ]; then
 	log "Running init script"
 	dstack-util notify-host -e "boot.progress" -d "init-script" || true
+	# shellcheck disable=SC1090
 	source <(jq -r '.init_script' app-compose.json)
 fi
 

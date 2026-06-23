@@ -16,6 +16,8 @@ permissions:
 jobs:
   prek:
     runs-on: ubuntu-latest
+    env:
+      RUSTUP_TOOLCHAIN: 1.92.0
 
     steps:
     - uses: actions/checkout@v5

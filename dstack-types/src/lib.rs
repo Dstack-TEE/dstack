@@ -4,6 +4,7 @@
 
 use std::path::Path;
 
+use or_panic::ResultOrPanic;
 use scale::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 use serde_human_bytes as hex_bytes;
@@ -114,7 +115,7 @@ where
     Ok(value.gateway_enabled || value.tproxy_enabled)
 }
 
-#[derive(Deserialize, Serialize, Debug, Clone, Copy)]
+#[derive(Deserialize, Serialize, Debug, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum KeyProviderKind {
     None,
@@ -185,8 +186,40 @@ pub struct SysConfig {
     pub pccs_url: Option<String>,
     pub docker_registry: Option<String>,
     pub host_api_url: Option<String>,
+    /// MrConfigV3 document string for platform app/config binding.
+    ///
+    /// Hosts generate this in JCS form, but verifiers hash the supplied string
+    /// bytes directly because the platform carrier binds the exact document
+    /// string.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mr_config: Option<String>,
     // JSON serialized VmConfig
     pub vm_config: String,
+}
+
+impl SysConfig {
+    /// Canonical MrConfigV3 document for this VM, if any.
+    ///
+    /// The document is carried in the top-level `mr_config` field; older hosts
+    /// only embedded it inside the serialized `vm_config`, so fall back to that
+    /// for backward compatibility. This is the single source of truth for all
+    /// readers (guest quote generation and config-id verification) so they
+    /// cannot disagree about where `mr_config` lives.
+    pub fn mr_config_document(&self) -> Option<String> {
+        if let Some(doc) = self.mr_config.as_deref() {
+            if !doc.is_empty() {
+                return Some(doc.to_string());
+            }
+        }
+        serde_json::from_str::<serde_json::Value>(&self.vm_config)
+            .ok()
+            .and_then(|value| {
+                value
+                    .get("mr_config")
+                    .and_then(|value| value.as_str())
+                    .map(ToString::to_string)
+            })
+    }
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
@@ -226,6 +259,46 @@ pub struct VmConfig {
     /// (e.g. parsing the OS version out of `image`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ovmf_variant: Option<OvmfVariant>,
+}
+
+/// One OVMF SEV metadata section (gpa/size/type) that affects the SEV-SNP
+/// launch measurement. Mirrors the OVMF footer metadata.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OvmfSection {
+    pub gpa: u64,
+    pub size: u64,
+    pub section_type: u32,
+}
+
+/// Image-invariant projection that determines the AMD SEV-SNP OS image identity.
+///
+/// `os_image_hash` is the SHA-256 of this projection, canonically serialized
+/// (JCS). It is shared by the VMM/KMS (which derive it from a verified launch
+/// measurement) and the image build (which precomputes `digest.sev.txt`), so
+/// both sides agree. It deliberately EXCLUDES per-deployment values (vcpus,
+/// vcpu_type, guest_features, app_id, compose_hash): the same OS image must hash
+/// identically regardless of how it is launched.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SevOsImageMeasurement {
+    pub rootfs_hash: String,
+    pub base_cmdline: Option<String>,
+    pub ovmf_hash: String,
+    pub kernel_hash: String,
+    pub initrd_hash: String,
+    pub sev_hashes_table_gpa: u64,
+    pub sev_es_reset_eip: u32,
+    pub ovmf_sections: Vec<OvmfSection>,
+}
+
+impl SevOsImageMeasurement {
+    /// SHA-256 over the canonical (JCS) serialization of this projection.
+    pub fn os_image_hash(&self) -> [u8; 32] {
+        use sha2::{Digest, Sha256};
+        // JCS serialization of this plain owned struct (strings/ints/array)
+        // cannot fail; panic loudly if that invariant is ever broken.
+        let canonical = serde_jcs::to_vec(self).or_panic("SevOsImageMeasurement JCS serialization");
+        Sha256::digest(canonical).into()
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
