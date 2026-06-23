@@ -154,6 +154,7 @@ async fn main() -> Result<()> {
     }
 
     let args = Args::parse();
+
     let figment = config::load_config_figment(args.config.as_deref());
     let config = Config::extract_or_default(&figment)?.abs_path()?;
 

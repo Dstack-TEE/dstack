@@ -117,7 +117,7 @@ pub async fn run_one_shot(
     fs_err::create_dir_all(&shared_dir).context("Failed to create shared directory")?;
 
     // Create app compose file content and parse AppCompose instance
-    let (app_compose_content, app_compose) = if vm_config.compose_file.is_empty() {
+    let (app_compose_content, _app_compose) = if vm_config.compose_file.is_empty() {
         // Create default compose JSON directly as string
         let gateway_enabled = !vm_config.gateway_urls.is_empty();
         let kms_enabled = !vm_config.kms_urls.is_empty();
@@ -235,7 +235,25 @@ Compose file content (first 200 chars):
 
     // 2. Create .sys-config.json (critical for 0.5.x VMs)
     // Use manifest URLs if available, fallback to config URLs (matching VMM's sync_dynamic_config logic)
-    let sys_config_str = make_sys_config(&config, &manifest)?;
+    let app_compose = vm_work_dir
+        .app_compose()
+        .context("Failed to get app compose")?;
+    let platform = config.cvm.resolved_platform();
+    let use_mr_config_v3 = !manifest.no_tee
+        && (platform == crate::config::TeePlatform::AmdSevSnp
+            || (platform == crate::config::TeePlatform::Tdx
+                && config.cvm.use_mrconfigid
+                && !app_compose.key_provider_id.is_empty()));
+    let mr_config = if use_mr_config_v3 {
+        Some(
+            vm_work_dir
+                .prepare_mr_config_v3(&app_compose)
+                .context("Failed to prepare mr_config")?,
+        )
+    } else {
+        None
+    };
+    let sys_config_str = make_sys_config(&config, &manifest, &compose_hash, mr_config)?;
     let sys_config_path = vm_work_dir.shared_dir().join(".sys-config.json");
     fs_err::write(&sys_config_path, sys_config_str).context("Failed to write sys config")?;
 

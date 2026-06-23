@@ -12,7 +12,7 @@ use host_api::HostApi;
 use k256::schnorr::SigningKey;
 use ra_rpc::Attestation;
 use ra_tls::{
-    attestation::{QuoteContentType, VersionedAttestation},
+    attestation::{AttestationQuote, QuoteContentType, VersionedAttestation},
     cert::{generate_ra_cert, generate_ra_cert_with_app_id},
     kdf::{derive_key, derive_p256_key_pair_from_bytes},
     rcgen::KeyPair,
@@ -654,7 +654,18 @@ fn cmd_quote() -> Result<()> {
     io::stdin()
         .read_exact(&mut report_data)
         .context("Failed to read report data")?;
-    let quote = att::get_quote(&report_data).context("Failed to get quote")?;
+    // Platform-adaptive: detect the running TEE and emit its raw hardware quote
+    // (the TDX DCAP quote, or the AMD SEV-SNP report). For a verifier-ready,
+    // platform-agnostic payload (with event log / mr_config), use `quote-report`.
+    let attestation = Attestation::quote(&report_data).context("Failed to get quote")?;
+    let quote = match &attestation.quote {
+        AttestationQuote::DstackTdx(tdx) => tdx.quote.clone(),
+        AttestationQuote::DstackGcpTdx(gcp) => gcp.tdx_quote.quote.clone(),
+        AttestationQuote::DstackAmdSevSnp(snp) => snp.report.clone(),
+        AttestationQuote::DstackNitroEnclave(_) => {
+            anyhow::bail!("nitro enclave has no raw quote; use `quote-report` instead");
+        }
+    };
     io::stdout()
         .write_all(&quote)
         .context("Failed to write quote")?;

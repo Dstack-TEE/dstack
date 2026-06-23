@@ -22,7 +22,7 @@ use fs_err as fs;
 use k256::ecdsa::SigningKey;
 use ra_rpc::{CallContext, RpcCall};
 use ra_tls::{
-    attestation::VerifiedAttestation,
+    attestation::{AttestationMode, VerifiedAttestation},
     cert::{CaCert, CertRequest, CertSigningRequestV1, CertSigningRequestV2, Csr},
     kdf,
 };
@@ -30,13 +30,14 @@ use scale::Decode;
 use sha2::Digest;
 use tokio::sync::OnceCell;
 use tracing::{info, warn};
-use upgrade_authority::{build_boot_info, local_kms_boot_info, BootInfo};
+use upgrade_authority::{build_boot_info, ensure_app_id_len, local_kms_boot_info, BootInfo};
 
 use crate::{
     config::KmsConfig,
     crypto::{derive_k256_key, sign_message, sign_message_with_timestamp},
 };
 
+pub(crate) mod amd_attest;
 pub(crate) mod upgrade_authority;
 
 #[derive(Clone)]
@@ -145,10 +146,46 @@ struct BootConfig {
     gateway_app_id: String,
 }
 
+pub(crate) fn build_boot_info_for_attestation(
+    att: &VerifiedAttestation,
+    use_boottime_mr: bool,
+    vm_config_str: &str,
+) -> Result<BootInfo> {
+    if att.report.amd_snp_report().is_some() {
+        let vm_config_str = if vm_config_str.is_empty() {
+            att.config.as_str()
+        } else {
+            vm_config_str
+        };
+        return amd_attest::build_amd_snp_boot_info_from_verified_attestation_and_vm_config(
+            att,
+            vm_config_str,
+        );
+    }
+    build_boot_info(att, use_boottime_mr, vm_config_str)
+}
+
+fn ensure_snp_key_release_allowed(boot_info: &BootInfo, enabled: bool) -> Result<()> {
+    if boot_info.attestation_mode != AttestationMode::DstackAmdSevSnp {
+        return Ok(());
+    }
+    if !enabled {
+        bail!("amd sev-snp key release is not enabled");
+    }
+    Ok(())
+}
+
+fn ensure_self_key_release_allowed(self_boot_info: Option<&BootInfo>, enabled: bool) -> Result<()> {
+    if let Some(boot_info) = self_boot_info {
+        ensure_snp_key_release_allowed(boot_info, enabled)?;
+    }
+    Ok(())
+}
+
 impl RpcHandler {
-    async fn ensure_self_allowed(&self) -> Result<()> {
+    async fn ensure_self_allowed(&self) -> Result<Option<&BootInfo>> {
         if !self.state.config.enforce_self_authorization {
-            return Ok(());
+            return Ok(None);
         }
         let boot_info = self
             .state
@@ -166,7 +203,7 @@ impl RpcHandler {
         if !response.is_allowed {
             bail!("KMS is not allowed: {}", response.reason);
         }
-        Ok(())
+        Ok(Some(boot_info))
     }
 
     fn ensure_attested(&self) -> Result<&VerifiedAttestation> {
@@ -251,7 +288,7 @@ impl RpcHandler {
         use_boottime_mr: bool,
         vm_config_str: &str,
     ) -> Result<BootConfig> {
-        let boot_info = build_boot_info(att, use_boottime_mr, vm_config_str)?;
+        let boot_info = build_boot_info_for_attestation(att, use_boottime_mr, vm_config_str)?;
         let response = self
             .state
             .config
@@ -261,9 +298,14 @@ impl RpcHandler {
         if !response.is_allowed {
             bail!("Boot denied: {}", response.reason);
         }
-        self.verify_os_image_hash(vm_config_str.into(), att)
-            .await
-            .context("Failed to verify os image hash")?;
+        // SNP rootfs/app/config binding is handled by the SNP launch-measurement
+        // helper above. The legacy OS-image verifier is TDX-oriented and still
+        // rejects SNP quotes; keep SNP on the explicit fail-closed helper path.
+        if boot_info.attestation_mode != AttestationMode::DstackAmdSevSnp {
+            self.verify_os_image_hash(vm_config_str.into(), att)
+                .await
+                .context("Failed to verify os image hash")?;
+        }
         Ok(BootConfig {
             boot_info,
             gateway_app_id: response.gateway_app_id,
@@ -306,8 +348,10 @@ impl KmsRpc for RpcHandler {
             .ensure_app_boot_allowed(&request.vm_config)
             .await
             .context("App not allowed")?;
+        ensure_snp_key_release_allowed(&boot_info, self.state.config.sev_snp_key_release)?;
         let app_id = boot_info.app_id;
         let instance_id = boot_info.instance_id;
+        let os_image_hash = boot_info.os_image_hash;
 
         let context_data = vec![&app_id[..], &instance_id[..], b"app-disk-crypt-key"];
         let app_disk_key = kdf::derive_dh_secret(&self.state.root_ca.key, &context_data)
@@ -334,7 +378,7 @@ impl KmsRpc for RpcHandler {
             k256_signature,
             tproxy_app_id: gateway_app_id.clone(),
             gateway_app_id,
-            os_image_hash: boot_info.os_image_hash,
+            os_image_hash,
         })
     }
 
@@ -342,6 +386,7 @@ impl KmsRpc for RpcHandler {
         self.ensure_self_allowed()
             .await
             .context("KMS self authorization failed")?;
+        ensure_app_id_len(&request.app_id)?;
         let secret = kdf::derive_dh_secret(
             &self.state.root_ca.key,
             &[&request.app_id[..], "env-encrypt-key".as_bytes()],
@@ -411,7 +456,8 @@ impl KmsRpc for RpcHandler {
         self.ensure_self_allowed()
             .await
             .context("KMS self authorization failed")?;
-        let _info = self.ensure_kms_allowed(&request.vm_config).await?;
+        let info = self.ensure_kms_allowed(&request.vm_config).await?;
+        ensure_snp_key_release_allowed(&info, self.state.config.sev_snp_key_release)?;
         Ok(KmsKeyResponse {
             temp_ca_key: self.state.inner.temp_ca_key.clone(),
             keys: vec![KmsKeys {
@@ -422,9 +468,11 @@ impl KmsRpc for RpcHandler {
     }
 
     async fn get_temp_ca_cert(self) -> Result<GetTempCaCertResponse> {
-        self.ensure_self_allowed()
+        let self_boot_info = self
+            .ensure_self_allowed()
             .await
             .context("KMS self authorization failed")?;
+        ensure_self_key_release_allowed(self_boot_info, self.state.config.sev_snp_key_release)?;
         Ok(GetTempCaCertResponse {
             temp_ca_cert: self.state.inner.temp_ca_cert.clone(),
             temp_ca_key: self.state.inner.temp_ca_key.clone(),
@@ -463,6 +511,7 @@ impl KmsRpc for RpcHandler {
         let app_info = self
             .ensure_app_attestation_allowed(&attestation, false, true, &request.vm_config)
             .await?;
+        ensure_snp_key_release_allowed(&app_info.boot_info, self.state.config.sev_snp_key_release)?;
         let app_ca = self.derive_app_ca(&app_info.boot_info.app_id)?;
         let cert = app_ca
             .sign_csr(&csr, Some(&app_info.boot_info.app_id), "app:custom")
@@ -501,4 +550,221 @@ impl RpcCall<KmsState> for RpcHandler {
 
 pub fn rpc_methods() -> &'static [&'static str] {
     <KmsServer<RpcHandler>>::supported_methods()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::main_service::amd_attest::{
+        compute_expected_measurement, MeasurementInput, OvmfSectionParam,
+    };
+
+    fn hex_of(byte: u8, len: usize) -> String {
+        hex::encode(vec![byte; len])
+    }
+
+    fn valid_snp_measurement_input() -> MeasurementInput {
+        let rootfs_hash = hex_of(0x33, 32);
+        MeasurementInput {
+            base_cmdline: Some(format!("console=ttyS0 dstack.rootfs_hash={rootfs_hash}")),
+            ovmf_hash: hex_of(0x44, 48),
+            kernel_hash: hex_of(0x55, 32),
+            initrd_hash: hex_of(0x66, 32),
+            sev_hashes_table_gpa: 0x80_1000,
+            sev_es_reset_eip: 0xffff_fff0,
+            vcpus: 2,
+            vcpu_type: Some("epyc-v4".to_string()),
+            guest_features: 1,
+            ovmf_sections: vec![
+                OvmfSectionParam {
+                    gpa: 0x100000,
+                    size: 0x2000,
+                    section_type: 1,
+                },
+                OvmfSectionParam {
+                    gpa: 0x80_0000,
+                    size: 0x1000,
+                    section_type: 0x10,
+                },
+                OvmfSectionParam {
+                    gpa: 0x81_0000,
+                    size: 0x1000,
+                    section_type: 2,
+                },
+                OvmfSectionParam {
+                    gpa: 0x82_0000,
+                    size: 0x1000,
+                    section_type: 3,
+                },
+            ],
+        }
+    }
+
+    fn valid_snp_mr_config() -> dstack_types::mr_config::MrConfigV3 {
+        dstack_types::mr_config::MrConfigV3::new(
+            vec![0x11; 20],
+            vec![0x22; 32],
+            dstack_types::KeyProviderKind::None,
+            Vec::new(),
+            vec![0x99; 20],
+        )
+    }
+
+    fn verified_snp_attestation(measurement: [u8; 48], chip_id: [u8; 64]) -> VerifiedAttestation {
+        let mr_config = valid_snp_mr_config();
+        verified_snp_attestation_with_config(measurement, chip_id, String::new(), &mr_config)
+    }
+
+    fn verified_snp_attestation_with_config(
+        measurement: [u8; 48],
+        chip_id: [u8; 64],
+        config: String,
+        mr_config: &dstack_types::mr_config::MrConfigV3,
+    ) -> VerifiedAttestation {
+        VerifiedAttestation {
+            quote: ra_tls::attestation::AttestationQuote::DstackAmdSevSnp(
+                ra_tls::attestation::SnpQuote {
+                    report: Vec::new(),
+                    cert_chain: Vec::new(),
+                    mr_config: mr_config.to_canonical_json(),
+                },
+            ),
+            runtime_events: Vec::new(),
+            report_data: [0x42; 64],
+            config,
+            report: ra_tls::attestation::DstackVerifiedReport::DstackAmdSevSnp(
+                dstack_attest::amd_sev_snp::VerifiedAmdSnpReport {
+                    measurement,
+                    report_data: [0x42; 64],
+                    host_data: mr_config.to_snp_host_data(),
+                    chip_id,
+                    tcb_info: dstack_attest::amd_sev_snp::AmdSnpTcbInfo::default(),
+                    advisory_ids: Vec::new(),
+                },
+            ),
+        }
+    }
+
+    #[test]
+    fn build_boot_info_for_attestation_accepts_snp_vm_config_path() {
+        let input = valid_snp_measurement_input();
+        let measurement = compute_expected_measurement(&input).unwrap();
+        let mr_config = valid_snp_mr_config();
+        let attestation = verified_snp_attestation(measurement, [0xab; 64]);
+        let vm_config = serde_json::json!({
+            "sev_snp_measurement": serde_json::to_string(&input).unwrap(),
+            "mr_config": mr_config.to_canonical_json(),
+        })
+        .to_string();
+
+        let boot_info = build_boot_info_for_attestation(&attestation, false, &vm_config)
+            .expect("snp attestation should build boot info through vm_config path");
+
+        assert_eq!(boot_info.attestation_mode, AttestationMode::DstackAmdSevSnp);
+        assert_eq!(boot_info.mr_aggregated.len(), 32);
+        assert_eq!(boot_info.device_id, vec![0xab; 64]);
+        assert_eq!(boot_info.app_id, vec![0x11; 20]);
+    }
+
+    #[test]
+    fn build_boot_info_for_attestation_uses_embedded_snp_vm_config_when_external_is_empty() {
+        let input = valid_snp_measurement_input();
+        let measurement = compute_expected_measurement(&input).unwrap();
+        let mr_config = valid_snp_mr_config();
+        let embedded_config = serde_json::json!({
+            "sev_snp_measurement": serde_json::to_string(&input).unwrap(),
+            "mr_config": mr_config.to_canonical_json(),
+        })
+        .to_string();
+        let attestation = verified_snp_attestation_with_config(
+            measurement,
+            [0xab; 64],
+            embedded_config,
+            &mr_config,
+        );
+
+        let boot_info = build_boot_info_for_attestation(&attestation, false, "")
+            .expect("snp local KMS attestation should use embedded vm_config");
+
+        assert_eq!(boot_info.attestation_mode, AttestationMode::DstackAmdSevSnp);
+        assert_eq!(boot_info.mr_aggregated.len(), 32);
+        assert_eq!(boot_info.app_id, vec![0x11; 20]);
+    }
+
+    #[test]
+    fn build_boot_info_for_attestation_accepts_self_contained_snp_input_without_config() {
+        let input = valid_snp_measurement_input();
+        let measurement = compute_expected_measurement(&input).unwrap();
+        let mr_config = valid_snp_mr_config();
+        let attestation = verified_snp_attestation(measurement, [0xab; 64]);
+        let vm_config = serde_json::json!({
+            "sev_snp_measurement": serde_json::to_string(&input).unwrap(),
+            "mr_config": mr_config.to_canonical_json(),
+        })
+        .to_string();
+
+        let boot_info = build_boot_info_for_attestation(&attestation, false, &vm_config)
+            .expect("self-contained SNP vm_config should not require KMS-local sev_snp config");
+        assert_eq!(boot_info.attestation_mode, AttestationMode::DstackAmdSevSnp);
+        assert_eq!(boot_info.device_id, vec![0xab; 64]);
+    }
+
+    fn snp_boot_info() -> BootInfo {
+        let input = valid_snp_measurement_input();
+        let measurement = compute_expected_measurement(&input).unwrap();
+        let mr_config = valid_snp_mr_config();
+        let attestation = verified_snp_attestation(measurement, [0xab; 64]);
+        let vm_config = serde_json::json!({
+            "sev_snp_measurement": serde_json::to_string(&input).unwrap(),
+            "mr_config": mr_config.to_canonical_json(),
+        })
+        .to_string();
+        build_boot_info_for_attestation(&attestation, false, &vm_config).unwrap()
+    }
+
+    #[test]
+    fn snp_key_release_requires_explicit_enablement() {
+        let boot_info = snp_boot_info();
+        let enabled = false;
+
+        let err = ensure_snp_key_release_allowed(&boot_info, enabled)
+            .expect_err("snp boot info must not be key-release enabled by default");
+        assert!(
+            err.to_string()
+                .contains("amd sev-snp key release is not enabled"),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn snp_key_release_accepts_auth_approved_boot_info_when_enabled() {
+        let boot_info = snp_boot_info();
+        let enabled = true;
+
+        ensure_snp_key_release_allowed(&boot_info, enabled)
+            .expect("explicitly enabled SNP key release should allow auth-approved boot info");
+    }
+
+    #[test]
+    fn snp_key_release_leaves_tcb_and_advisory_policy_to_auth_api() {
+        let mut boot_info = snp_boot_info();
+        let enabled = true;
+
+        boot_info.tcb_status = "OutOfDate".to_string();
+        boot_info.advisory_ids.push("SNP-TEST-ADVISORY".to_string());
+        ensure_snp_key_release_allowed(&boot_info, enabled)
+            .expect("TCB/advisory policy should be decided by the auth API, not this local gate");
+    }
+
+    #[test]
+    fn snp_self_boot_info_uses_same_release_policy_for_temp_ca() {
+        let boot_info = snp_boot_info();
+        let disabled = false;
+        let enabled = true;
+
+        ensure_self_key_release_allowed(Some(&boot_info), disabled)
+            .expect_err("disabled SNP self boot info must not receive temp CA key material");
+        ensure_self_key_release_allowed(Some(&boot_info), enabled)
+            .expect("enabled clean SNP self boot info should pass the temp CA release gate");
+    }
 }

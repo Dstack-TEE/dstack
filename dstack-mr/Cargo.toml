@@ -9,7 +9,15 @@ version.workspace = true
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "A CLI tool for calculating TDX measurements for dstack images"
+description = "A CLI tool for calculating TDX/SEV measurements for dstack images"
+
+[lib]
+name = "dstack_mr"
+path = "src/lib.rs"
+
+[[bin]]
+name = "dstack-mr"
+path = "src/main.rs"
 
 [dependencies]
 serde = { workspace = true, features = ["derive"] }
@@ -19,6 +27,7 @@ hex = { workspace = true, features = ["std"] }
 thiserror.workspace = true
 sha2.workspace = true
 anyhow.workspace = true
+binrw.workspace = true
 object.workspace = true
 hex-literal.workspace = true
 fs-err.workspace = true

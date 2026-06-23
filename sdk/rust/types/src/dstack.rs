@@ -111,6 +111,11 @@ pub struct GetQuoteResponse {
     /// VM configuration
     #[serde(default)]
     pub vm_config: String,
+    /// Platform-adaptive versioned attestation in hexadecimal format. Populated
+    /// for every TEE platform (TDX, AMD SEV-SNP, ...); this is the payload to
+    /// send to dstack-verifier for platform-agnostic verification.
+    #[serde(default)]
+    pub attestation: String,
 }
 
 /// Response containing a versioned attestation
@@ -131,6 +136,11 @@ impl AttestResponse {
 impl GetQuoteResponse {
     pub fn decode_quote(&self) -> Result<Vec<u8>, FromHexError> {
         hex::decode(&self.quote)
+    }
+
+    /// Decode the platform-adaptive versioned attestation bytes, if present.
+    pub fn decode_attestation(&self) -> Result<Vec<u8>, FromHexError> {
+        hex::decode(&self.attestation)
     }
 
     pub fn decode_event_log(&self) -> Result<Vec<EventLog>, serde_json::Error> {

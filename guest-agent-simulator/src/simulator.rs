@@ -34,12 +34,17 @@ pub fn simulated_quote_response(
     let Some(quote) = attestation.tdx_quote_bytes() else {
         return Err(anyhow!("Quote not found"));
     };
+    let versioned = VersionedAttestation::V1 {
+        attestation: attestation.clone(),
+    }
+    .to_bytes()?;
 
     Ok(GetQuoteResponse {
         quote,
         event_log: attestation.tdx_event_log_string().unwrap_or_default(),
         report_data: report_data.to_vec(),
         vm_config: vm_config.to_string(),
+        attestation: versioned,
     })
 }
 

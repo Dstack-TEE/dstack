@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+use super::build_boot_info_for_attestation;
 use crate::config::{AuthApi, KmsConfig};
 use anyhow::{bail, Context, Result};
 use dstack_guest_agent_rpc::{
@@ -15,7 +16,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_human_bytes as hex_bytes;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct BootInfo {
     pub attestation_mode: AttestationMode,
@@ -57,6 +58,7 @@ pub(crate) fn build_boot_info(
         }
     };
     let app_info = att.decode_app_info_ex(use_boottime_mr, vm_config_str)?;
+    ensure_app_id_len(&app_info.app_id)?;
     Ok(BootInfo {
         attestation_mode: att.quote.mode(),
         mr_aggregated: app_info.mr_aggregated.to_vec(),
@@ -72,6 +74,13 @@ pub(crate) fn build_boot_info(
     })
 }
 
+pub(crate) fn ensure_app_id_len(app_id: &[u8]) -> Result<()> {
+    if app_id.len() != 20 {
+        bail!("app_id must be 20 bytes");
+    }
+    Ok(())
+}
+
 pub(crate) async fn local_kms_boot_info(pccs_url: Option<&str>) -> Result<BootInfo> {
     let response = app_attest(pad64([0u8; 32]))
         .await
@@ -83,7 +92,7 @@ pub(crate) async fn local_kms_boot_info(pccs_url: Option<&str>) -> Result<BootIn
         .verify(pccs_url)
         .await
         .context("Failed to verify local KMS attestation")?;
-    build_boot_info(&verified, false, "")
+    build_boot_info_for_attestation(&verified, false, "")
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -237,7 +246,7 @@ pub(crate) async fn ensure_kms_allowed(
     cfg: &KmsConfig,
     attestation: &VerifiedAttestation,
 ) -> Result<()> {
-    let mut boot_info = build_boot_info(attestation, false, "")
+    let mut boot_info = build_boot_info_for_attestation(attestation, false, "")
         .context("failed to build KMS boot info from attestation")?;
     // Workaround: old source KMS instances use the legacy cert format (separate TDX_QUOTE +
     // EVENT_LOG OIDs) which lacks vm_config, resulting in an empty os_image_hash.
@@ -259,4 +268,19 @@ pub(crate) async fn ensure_kms_allowed(
         bail!("boot denied: {}", response.reason);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn app_id_len_must_be_20_bytes() {
+        assert!(ensure_app_id_len(&[0u8; 20]).is_ok());
+
+        match ensure_app_id_len(&[0u8; 19]) {
+            Ok(()) => panic!("19-byte app_id must reject"),
+            Err(err) => assert!(err.to_string().contains("app_id must be 20 bytes")),
+        }
+    }
 }
