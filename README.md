@@ -113,6 +113,7 @@ Apps communicate with the guest agent via HTTP over `/var/run/dstack.sock`. Use 
 
 **Reference**
 - [App Compose Format](./docs/normalized-app-compose.md) - Compose file specification
+- [Attested Confidential Inference](./docs/specs/attested-confidential-inference.md) - Draft interface for attested private AI inference services
 - [VMM CLI Guide](./docs/vmm-cli-user-guide.md) - Command-line reference
 - [Design Decisions](./docs/design-and-hardening-decisions.md) - Architecture rationale
 - [FAQ](./docs/faq.md) - Frequently asked questions
