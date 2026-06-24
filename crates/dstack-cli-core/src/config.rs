@@ -7,7 +7,7 @@
 //! * `kms.toml` — embedded into the KMS-in-CVM app-compose; this is the
 //!   single-node config (webhook auth + `enforce_self_authorization =
 //!   false` + a set `auto_bootstrap_domain`, the combination validated to make
-//!   bootstrap hands-off — see docs/onboarding-redesign.md §5).
+//!   bootstrap hands-off).
 //! * `auth-allowlist.json` — read by the host-side Rust auth webhook.
 //! * `vmm.toml` — the host VMM config (gateway + auth-token gating off).
 
@@ -134,7 +134,7 @@ cert_dir = "/kms/certs"
 admin_token_hash = ""
 # single-node: the KMS does not self-attest to its own auth API before
 # bootstrap (it still attests the genesis keys via the guest agent, and app
-# auth + per-app quote checks are unaffected). See onboarding-redesign.md §5.
+# auth + per-app quote checks are unaffected).
 enforce_self_authorization = false
 
 [core.image]

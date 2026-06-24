@@ -2402,6 +2402,7 @@ dependencies = [
  "anyhow",
  "clap",
  "dstack-cli-core",
+ "serde_json",
  "tokio",
 ]
 

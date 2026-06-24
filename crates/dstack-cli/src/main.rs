@@ -6,6 +6,9 @@
 //!
 //! Works against a local VMM (unix socket) or a remote one (`--host` + `--token`).
 //! Setup/host tasks live in the separate `dstackup` binary.
+//!
+//! Command names follow the `phala` CLI where it makes sense (`deploy`, `apps`,
+//! `logs`, a global `-j/--json`).
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
@@ -28,6 +31,10 @@ struct Cli {
     #[arg(long, global = true)]
     token: Option<String>,
 
+    /// machine-readable JSON output (honored by `deploy` and `apps`).
+    #[arg(long, short = 'j', global = true)]
+    json: bool,
+
     #[command(subcommand)]
     command: Command,
 }
@@ -35,7 +42,7 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// Deploy an app from a docker-compose file.
-    Run {
+    Deploy {
         /// path to the docker-compose file.
         compose: String,
         /// app name.
@@ -71,7 +78,7 @@ enum Command {
         dry_run: bool,
     },
     /// List deployed apps.
-    Ls,
+    Apps,
     /// Show recent logs for an app.
     Logs {
         /// app, instance, or VM id.
@@ -85,13 +92,6 @@ enum Command {
         /// app or instance id.
         id: String,
     },
-    /// Upgrade an app to a new compose.
-    Upgrade {
-        /// app or instance id.
-        id: String,
-        /// path to the new docker-compose file.
-        compose: String,
-    },
     /// Scaffold a new app project in the current directory.
     Init,
 }
@@ -102,11 +102,12 @@ async fn main() -> Result<()> {
     // remote-auth wiring lands with the TLS+token transport.
     let _ = &cli.token;
     let host = cli.host.as_deref().unwrap_or(DEFAULT_HOST);
+    let json = cli.json;
 
     match cli.command {
-        Command::Ls => cmd_ls(host).await,
+        Command::Apps => cmd_apps(host, json).await,
         Command::Logs { id, lines } => cmd_logs(host, &id, lines).await,
-        Command::Run {
+        Command::Deploy {
             compose,
             name,
             image,
@@ -118,7 +119,7 @@ async fn main() -> Result<()> {
             allowlist,
             dry_run,
         } => {
-            cmd_run(
+            cmd_deploy(
                 host,
                 &compose,
                 &name,
@@ -130,17 +131,17 @@ async fn main() -> Result<()> {
                 no_kms,
                 allowlist.as_deref(),
                 dry_run,
+                json,
             )
             .await
         }
         Command::Info { .. } => stub("info"),
-        Command::Upgrade { .. } => stub("upgrade"),
         Command::Init => stub("init"),
     }
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn cmd_run(
+async fn cmd_deploy(
     host: &str,
     compose_path: &str,
     name: &str,
@@ -152,6 +153,7 @@ async fn cmd_run(
     no_kms: bool,
     allowlist: Option<&str>,
     dry_run: bool,
+    json: bool,
 ) -> Result<()> {
     let yaml = std::fs::read_to_string(compose_path)
         .with_context(|| format!("reading compose file '{compose_path}'"))?;
@@ -177,12 +179,23 @@ async fn cmd_run(
     let hash = vmm.get_compose_hash(&cfg).await?;
     let app_id = short(&hash, 40);
     cfg.app_id = Some(app_id.clone());
-    println!("compose hash: {hash}");
-    println!("app id:       {app_id}");
+    if !json {
+        println!("compose hash: {hash}");
+        println!("app id:       {app_id}");
+    }
 
     if dry_run {
-        println!("--- app-compose ---\n{app_compose}");
-        println!("(dry run — not deploying)");
+        if json {
+            print_json(&serde_json::json!({
+                "composeHash": hash,
+                "appId": app_id,
+                "appCompose": app_compose,
+                "dryRun": true,
+            }));
+        } else {
+            println!("--- app-compose ---\n{app_compose}");
+            println!("(dry run — not deploying)");
+        }
         return Ok(());
     }
     if cfg.image.is_empty() {
@@ -197,24 +210,47 @@ async fn cmd_run(
             &hash,
         )
         .with_context(|| format!("registering app in {path}"))?;
-        println!("registered compose hash in {path}");
-        println!("  (the KMS issues keys only if this is the allowlist its auth webhook serves)");
-    } else if !no_kms {
+        if !json {
+            println!("registered compose hash in {path}");
+            println!(
+                "  (the KMS issues keys only if this is the allowlist its auth webhook serves)"
+            );
+        }
+    } else if !no_kms && !json {
         println!("note: no --allowlist given; a KMS-mode app needs its compose hash registered to get keys");
     }
 
     let id = vmm.create_vm(cfg).await?;
-    println!("deployed: vm {id}");
-    if port_maps.is_empty() {
-        println!("(no ports mapped — add --port <vm_port> to expose the app)");
-    }
-    for p in &port_maps {
-        let addr = if p.host_address.is_empty() {
-            "127.0.0.1"
-        } else {
-            &p.host_address
-        };
-        println!("  app :{} -> http://{}:{}/", p.vm_port, addr, p.host_port);
+    if json {
+        let ports: Vec<_> = port_maps
+            .iter()
+            .map(|p| {
+                serde_json::json!({
+                    "vmPort": p.vm_port,
+                    "hostPort": p.host_port,
+                    "hostAddress": host_addr(p),
+                })
+            })
+            .collect();
+        print_json(&serde_json::json!({
+            "vmId": id,
+            "appId": app_id,
+            "composeHash": hash,
+            "ports": ports,
+        }));
+    } else {
+        println!("deployed: vm {id}");
+        if port_maps.is_empty() {
+            println!("(no ports mapped — add --port <vm_port> to expose the app)");
+        }
+        for p in &port_maps {
+            println!(
+                "  app :{} -> http://{}:{}/",
+                p.vm_port,
+                host_addr(p),
+                p.host_port
+            );
+        }
     }
     Ok(())
 }
@@ -227,9 +263,26 @@ fn stub(name: &str) -> Result<()> {
     )
 }
 
-async fn cmd_ls(host: &str) -> Result<()> {
+async fn cmd_apps(host: &str, json: bool) -> Result<()> {
     let vmm = Vmm::connect(host)?;
     let resp = vmm.status().await?;
+    if json {
+        let arr: Vec<_> = resp
+            .vms
+            .iter()
+            .map(|vm| {
+                serde_json::json!({
+                    "id": vm.id,
+                    "name": vm.name,
+                    "status": vm.status,
+                    "uptime": vm.uptime,
+                    "appId": vm.app_id,
+                })
+            })
+            .collect();
+        print_json(&serde_json::Value::Array(arr));
+        return Ok(());
+    }
     if resp.vms.is_empty() {
         println!("no apps deployed");
         return Ok(());
@@ -256,6 +309,20 @@ async fn cmd_logs(host: &str, id: &str, lines: u32) -> Result<()> {
     let logs = vmm.logs(id, lines).await?;
     print!("{logs}");
     Ok(())
+}
+
+/// the host address a port maps to (loopback when unset).
+fn host_addr(p: &rpc::PortMapping) -> &str {
+    if p.host_address.is_empty() {
+        "127.0.0.1"
+    } else {
+        &p.host_address
+    }
+}
+
+/// print a value as pretty JSON (infallible via Value's Display).
+fn print_json(v: &serde_json::Value) {
+    println!("{v:#}");
 }
 
 /// first `n` chars of an id-like string.
