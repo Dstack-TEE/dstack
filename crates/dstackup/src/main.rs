@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+// SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network>
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,9 +9,9 @@
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
-use dstack_core::config::{self, HostConfig, VmmRender};
-use dstack_core::vmm::{Vmm, DEFAULT_HOST};
-use dstack_core::{host, ports, rpc};
+use dstack_cli_core::config::{self, HostConfig, VmmRender};
+use dstack_cli_core::vmm::{Vmm, DEFAULT_HOST};
+use dstack_cli_core::{host, ports, rpc};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -867,7 +867,7 @@ async fn cmd_destroy(prefix: &str, purge: bool) -> Result<()> {
 /// write a file atomically (temp + rename), so a crash mid-write never leaves
 /// a torn config or state file.
 fn write(path: &Path, body: &str) -> Result<()> {
-    dstack_core::fsutil::write_atomic(path, body)
+    dstack_cli_core::fsutil::write_atomic(path, body)
         .with_context(|| format!("writing {}", path.display()))
 }
 

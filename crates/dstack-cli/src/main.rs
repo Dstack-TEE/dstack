@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+// SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network>
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,8 +9,8 @@
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
-use dstack_core::vmm::{Vmm, DEFAULT_HOST};
-use dstack_core::{compose, ports, rpc};
+use dstack_cli_core::vmm::{Vmm, DEFAULT_HOST};
+use dstack_cli_core::{compose, ports, rpc};
 
 #[derive(Parser)]
 #[command(
@@ -191,8 +191,12 @@ async fn cmd_run(
 
     // register the compose hash so the KMS will issue keys (KMS mode, local).
     if let Some(path) = allowlist {
-        dstack_core::config::register_app_in_allowlist(std::path::Path::new(path), &app_id, &hash)
-            .with_context(|| format!("registering app in {path}"))?;
+        dstack_cli_core::config::register_app_in_allowlist(
+            std::path::Path::new(path),
+            &app_id,
+            &hash,
+        )
+        .with_context(|| format!("registering app in {path}"))?;
         println!("registered compose hash in {path}");
         println!("  (the KMS issues keys only if this is the allowlist its auth webhook serves)");
     } else if !no_kms {
@@ -219,7 +223,7 @@ fn stub(name: &str) -> Result<()> {
     // exit non-zero so `dstack <stub> && next` doesn't proceed as if it worked.
     bail!(
         "dstack {name}: not yet implemented ({})",
-        dstack_core::user_agent()
+        dstack_cli_core::user_agent()
     )
 }
 

@@ -1,13 +1,15 @@
-# SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+# SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network>
 #
 # SPDX-License-Identifier: Apache-2.0
 
 [package]
-name = "dstack"
+name = "dstack-cli"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+# the package is dstack-cli (clear it's a CLI, not the dstack project), but the
+# binary stays `dstack`.
 [[bin]]
 name = "dstack"
 path = "src/main.rs"
@@ -15,5 +17,5 @@ path = "src/main.rs"
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
-dstack-core.workspace = true
+dstack-cli-core.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

@@ -134,9 +134,9 @@ crates/
   kms/   kms/rpc/
   gateway/ gateway/rpc/
   ...
-  dstack/                  # NEW: client binary  -> `dstack`
+  dstack-cli/              # NEW: client crate (binary: `dstack`)
   dstackup/                # NEW: setup binary   -> `dstackup`
-  dstack-core/             # NEW: shared lib (vmm prpc client, config render, port alloc)
+  dstack-cli-core/         # NEW: shared lib for the two CLIs (vmm prpc client, config render, port alloc)
   dstack-auth/             # NEW: Rust JSON-allowlist webhook (binary: `dstack-auth`)
 ```
 

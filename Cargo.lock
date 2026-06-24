@@ -2349,16 +2349,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "dstack"
-version = "0.5.11"
-dependencies = [
- "anyhow",
- "clap",
- "dstack-core",
- "tokio",
-]
-
-[[package]]
 name = "dstack-attest"
 version = "0.5.11"
 dependencies = [
@@ -2406,7 +2396,17 @@ dependencies = [
 ]
 
 [[package]]
-name = "dstack-core"
+name = "dstack-cli"
+version = "0.5.11"
+dependencies = [
+ "anyhow",
+ "clap",
+ "dstack-cli-core",
+ "tokio",
+]
+
+[[package]]
+name = "dstack-cli-core"
 version = "0.5.11"
 dependencies = [
  "anyhow",
@@ -2892,7 +2892,7 @@ version = "0.5.11"
 dependencies = [
  "anyhow",
  "clap",
- "dstack-core",
+ "dstack-cli-core",
  "serde",
  "serde_json",
  "tokio",

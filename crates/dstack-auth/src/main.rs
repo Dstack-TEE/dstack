@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+// SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network>
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -94,7 +94,7 @@ struct AppRules {
 }
 
 /// normalize a hex string for comparison: trim, drop a `0x`/`0X` prefix,
-/// lowercase. MUST stay in sync with `dstack-core::config::norm_hex` — both
+/// lowercase. MUST stay in sync with `dstack-cli-core::config::norm_hex` — both
 /// `dstack run` (writing the allowlist) and this webhook (reading it) must
 /// agree on the canonical form, or apps are silently denied.
 fn norm(s: &str) -> String {

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+# SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network>
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -15,7 +15,7 @@ path = "src/main.rs"
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
-dstack-core.workspace = true
+dstack-cli-core.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
