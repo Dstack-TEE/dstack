@@ -12,7 +12,7 @@
 //! can add an app without a restart. Fails closed: a missing/invalid allowlist
 //! denies everything.
 //!
-//! Deliberate Tier-1 deviation from `auth-simple`: it does NOT enforce
+//! Deliberate single-node deviation from `auth-simple`: it does NOT enforce
 //! `tcbStatus == UpToDate`. Real TDX hosts routinely report a non-`UpToDate`
 //! TCB (microcode / TDX-module behind), and in the single-node model the
 //! operator already controls and trusts their own host, so a hard TCB gate

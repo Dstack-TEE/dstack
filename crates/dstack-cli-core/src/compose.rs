@@ -7,10 +7,11 @@
 
 use serde_json::json;
 
-/// build a minimal Tier-1 app-compose manifest from a docker-compose YAML body.
+/// build a minimal app-compose manifest from a docker-compose YAML body
+/// (single-node, no gateway).
 ///
 /// `kms_enabled` selects KMS mode (deterministic, upgradeable per-app keys);
-/// gateway and local-key-provider are off for the direct-port Tier-1 flow.
+/// gateway and local-key-provider are off for the direct-port single-node flow.
 pub fn build_app_compose(name: &str, docker_compose_yaml: &str, kms_enabled: bool) -> String {
     let manifest = json!({
         "manifest_version": 2,
