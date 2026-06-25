@@ -47,6 +47,9 @@ use crate::{
 };
 
 mod auth_client;
+mod handshakes;
+
+use handshakes::LatestHandshakesCache;
 
 #[derive(Clone)]
 pub struct Proxy {
@@ -85,7 +88,11 @@ pub struct ProxyInner {
     /// known policy, `restrict_mode` is indeterminate and we cannot safely
     /// allow traffic.
     pub(crate) port_policy_tx: UnboundedSender<String>,
+    handshake_cache: Arc<LatestHandshakesCache>,
 }
+
+const HANDSHAKE_CACHE_TTL: Duration = Duration::from_secs(30);
+const HANDSHAKE_REFRESH_INTERVAL: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub(crate) struct ProxyStateMut {
@@ -101,6 +108,7 @@ pub(crate) struct ProxyState {
     pub(crate) state: ProxyStateMut,
     /// Reference to KvStore for syncing changes
     kv_store: Arc<KvStore>,
+    handshake_cache: Arc<LatestHandshakesCache>,
 }
 
 /// Options for creating a Proxy instance
@@ -220,10 +228,19 @@ impl ProxyInner {
             None
         };
 
+        let handshake_cache = Arc::new(LatestHandshakesCache::new(
+            config.wg.interface.clone(),
+            HANDSHAKE_CACHE_TTL,
+        ));
+        if let Err(err) = handshake_cache.refresh().await {
+            warn!("failed to preload WireGuard latest-handshakes cache: {err:?}");
+        }
+
         let state = Mutex::new(ProxyState {
             config: config.clone(),
             state,
             kv_store: kv_store.clone(),
+            handshake_cache: handshake_cache.clone(),
         });
         let auth_client = AuthClient::new(config.auth.clone());
         // Bootstrap WaveKV first if sync is enabled, so certbot can load certs from peers
@@ -288,6 +305,7 @@ impl ProxyInner {
             wavekv_sync,
             https_config: Some(https_config),
             port_policy_tx,
+            handshake_cache,
         })
     }
 
@@ -302,6 +320,12 @@ impl ProxyInner {
 
 impl Proxy {
     pub(crate) async fn start_bg_tasks(&self) -> Result<()> {
+        if let Err(err) = self.handshake_cache.refresh().await {
+            warn!("failed to refresh WireGuard latest-handshakes cache before starting background tasks: {err:?}");
+        }
+        self.handshake_cache
+            .clone()
+            .spawn_refresh_task(HANDSHAKE_REFRESH_INTERVAL);
         start_recycle_thread(self.clone());
         // Start WaveKV periodic sync (bootstrap already done in new())
         if let Some(ref wavekv_sync) = self.wavekv_sync {
@@ -1188,47 +1212,7 @@ impl ProxyState {
         &self,
         stale_timeout: Option<Duration>,
     ) -> Result<BTreeMap<String, (u64, Duration)>> {
-        /*
-        $wg show ds-gw-kvin1 latest-handshakes
-        eHBq6OjihPy1IZ2cFDomSesjeD+new7KNdWn9MHdQC8=    1730190589
-        SRuIdjZ1CkR54jJ1g7JC4cy9nxHPezXf2bZlkZHjFxE=    1732085583
-        YobeKV6YpmuTAQd0+Tx30Pe4JP12fPFwftC04Umt6Bw=    1731214390
-        9pgMHikM4onpoiNPJkya003BFAdzRMiD2WMDSMb64zo=    1731213050
-        oZppF/Rk7NgnuPkkfGUiBpY9HbThJvq3jACNGW2vnVA=    1731213485
-        3OxwGWcnC+4TZ31rnmDpfgbLBi8DCWdEk4k/7gFG5HU=    1732085521
-        */
-        let ifname = &self.config.wg.interface;
-        let output = cmd_lib::run_fun!(wg show $ifname latest-handshakes)?;
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .context("system time before Unix epoch")?;
-        let mut handshakes = BTreeMap::new();
-        for line in output.lines() {
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.len() != 2 {
-                continue;
-            }
-
-            let pubkey = parts[0].trim().to_string();
-            let timestamp = parts[1]
-                .trim()
-                .parse::<u64>()
-                .context("invalid timestamp")?;
-            let timestamp_duration = Duration::from_secs(timestamp);
-
-            if timestamp == 0 {
-                handshakes.insert(pubkey, (0, Duration::MAX));
-            } else {
-                let elapsed = now.checked_sub(timestamp_duration).unwrap_or_default();
-                match stale_timeout {
-                    Some(min_duration) if elapsed < min_duration => continue,
-                    _ => (),
-                }
-                handshakes.insert(pubkey, (timestamp, elapsed));
-            }
-        }
-
-        Ok(handshakes)
+        self.handshake_cache.latest(stale_timeout)
     }
 
     fn remove_instance(&mut self, id: &str) -> Result<()> {
