@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 # Gateway test plan
 
 This document records the local checks used for the gateway handshake-cache
