@@ -14,6 +14,7 @@ use std::{
 use anyhow::{bail, Context, Result};
 use or_panic::ResultOrPanic;
 use sni::extract_sni;
+pub(crate) use tls_passthough::AppAddressResolver;
 pub(crate) use tls_terminate::create_acceptor_with_cert_resolver;
 use tokio::{
     io::AsyncReadExt,
