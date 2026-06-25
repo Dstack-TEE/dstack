@@ -24,7 +24,7 @@ use super::{
     AddressGroup,
 };
 
-const APP_ADDRESS_NEGATIVE_CACHE_TTL: Duration = Duration::ZERO;
+const APP_ADDRESS_NEGATIVE_CACHE_TTL: Duration = Duration::from_secs(10);
 
 #[derive(Debug)]
 struct AppAddress {
@@ -82,10 +82,9 @@ fn app_address_tokio_resolver_from_system_conf() -> Result<TokioAsyncResolver> {
 
     // App-address records may appear shortly after a CVM/app is registered.
     // Reusing one resolver enables positive TXT caching, but we do not want a
-    // transient NXDOMAIN/NODATA response to hide a newly-added app until the
-    // upstream negative TTL expires. Keep positive caching TTL-aware and make
-    // negative responses effectively uncached.
-    options.negative_min_ttl = Some(APP_ADDRESS_NEGATIVE_CACHE_TTL);
+    // transient NXDOMAIN/NODATA response to hide a newly-added app for too
+    // long. Keep positive caching TTL-aware and cap negative caching.
+    options.negative_min_ttl = Some(Duration::ZERO);
     options.negative_max_ttl = Some(APP_ADDRESS_NEGATIVE_CACHE_TTL);
 
     Ok(TokioAsyncResolver::tokio(config, options))
