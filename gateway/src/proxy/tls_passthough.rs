@@ -4,6 +4,7 @@
 
 use std::fmt::Debug;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use hickory_resolver::{lookup::TxtLookup, TokioAsyncResolver};
@@ -22,6 +23,8 @@ use super::{
     port_policy::{filter_allowed_addresses, should_send_pp},
     AddressGroup,
 };
+
+const APP_ADDRESS_NEGATIVE_CACHE_TTL: Duration = Duration::ZERO;
 
 #[derive(Debug)]
 struct AppAddress {
@@ -64,16 +67,28 @@ impl AppAddressResolver {
 
     async fn resolver(&self) -> Result<&TokioAsyncResolver> {
         self.resolver
-            .get_or_try_init(|| async {
-                TokioAsyncResolver::tokio_from_system_conf()
-                    .context("failed to create dns resolver")
-            })
+            .get_or_try_init(|| async { app_address_tokio_resolver_from_system_conf() })
             .await
     }
 
     async fn resolve(&self, sni: &str) -> Result<AppAddress> {
         resolve_app_address(self.resolver().await?, &self.prefix, sni, self.compat).await
     }
+}
+
+fn app_address_tokio_resolver_from_system_conf() -> Result<TokioAsyncResolver> {
+    let (config, mut options) = hickory_resolver::system_conf::read_system_conf()
+        .context("failed to read system dns config")?;
+
+    // App-address records may appear shortly after a CVM/app is registered.
+    // Reusing one resolver enables positive TXT caching, but we do not want a
+    // transient NXDOMAIN/NODATA response to hide a newly-added app until the
+    // upstream negative TTL expires. Keep positive caching TTL-aware and make
+    // negative responses effectively uncached.
+    options.negative_min_ttl = Some(APP_ADDRESS_NEGATIVE_CACHE_TTL);
+    options.negative_max_ttl = Some(APP_ADDRESS_NEGATIVE_CACHE_TTL);
+
+    Ok(TokioAsyncResolver::tokio(config, options))
 }
 
 fn parse_lookup(lookup: &TxtLookup, sni: &str, txt_domain: &str) -> Result<Option<AppAddress>> {
