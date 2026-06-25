@@ -24,6 +24,7 @@ use super::{
     AddressGroup,
 };
 
+const APP_ADDRESS_DNS_CACHE_SIZE: usize = 256;
 const APP_ADDRESS_NEGATIVE_CACHE_TTL: Duration = Duration::from_secs(10);
 
 #[derive(Debug)]
@@ -84,6 +85,7 @@ fn app_address_tokio_resolver_from_system_conf() -> Result<TokioAsyncResolver> {
     // Reusing one resolver enables positive TXT caching, but we do not want a
     // transient NXDOMAIN/NODATA response to hide a newly-added app for too
     // long. Keep positive caching TTL-aware and cap negative caching.
+    options.cache_size = APP_ADDRESS_DNS_CACHE_SIZE;
     options.negative_min_ttl = Some(Duration::ZERO);
     options.negative_max_ttl = Some(APP_ADDRESS_NEGATIVE_CACHE_TTL);
 
