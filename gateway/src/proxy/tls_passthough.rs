@@ -9,7 +9,6 @@ use std::time::Duration;
 use anyhow::{bail, Context, Result};
 use hickory_resolver::{lookup::TxtLookup, TokioAsyncResolver};
 use proxy_protocol::ProxyHeader;
-use tokio::sync::OnceCell;
 use tokio::{io::AsyncWriteExt, net::TcpStream, task::JoinSet, time::timeout};
 use tracing::{debug, info, warn};
 
@@ -54,26 +53,20 @@ impl AppAddress {
 pub(crate) struct AppAddressResolver {
     prefix: String,
     compat: bool,
-    resolver: OnceCell<TokioAsyncResolver>,
+    resolver: TokioAsyncResolver,
 }
 
 impl AppAddressResolver {
-    pub(crate) fn new(prefix: String, compat: bool) -> Self {
-        Self {
+    pub(crate) fn new(prefix: String, compat: bool) -> Result<Self> {
+        Ok(Self {
             prefix,
             compat,
-            resolver: OnceCell::new(),
-        }
-    }
-
-    async fn resolver(&self) -> Result<&TokioAsyncResolver> {
-        self.resolver
-            .get_or_try_init(|| async { app_address_tokio_resolver_from_system_conf() })
-            .await
+            resolver: app_address_tokio_resolver_from_system_conf()?,
+        })
     }
 
     async fn resolve(&self, sni: &str) -> Result<AppAddress> {
-        resolve_app_address(self.resolver().await?, &self.prefix, sni, self.compat).await
+        resolve_app_address(&self.resolver, &self.prefix, sni, self.compat).await
     }
 }
 

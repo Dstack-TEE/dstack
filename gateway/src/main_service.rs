@@ -293,10 +293,13 @@ impl ProxyInner {
         let h2_acceptor =
             create_acceptor_with_cert_resolver(&config.proxy, cert_resolver.clone(), true)
                 .context("failed to create h2 acceptor with cert resolver")?;
-        let app_address_resolver = Arc::new(AppAddressResolver::new(
-            config.proxy.app_address_ns_prefix.clone(),
-            config.proxy.app_address_ns_compat,
-        ));
+        let app_address_resolver = Arc::new(
+            AppAddressResolver::new(
+                config.proxy.app_address_ns_prefix.clone(),
+                config.proxy.app_address_ns_compat,
+            )
+            .context("failed to create app address resolver")?,
+        );
 
         Ok(Self {
             config,
