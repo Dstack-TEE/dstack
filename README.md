@@ -113,6 +113,7 @@ Apps communicate with the guest agent via HTTP over `/var/run/dstack.sock`. Use 
 
 **Reference**
 - [App Compose Format](./docs/normalized-app-compose.md) - Compose file specification
+- [Native TEE Interfaces](./docs/native-tee-interfaces.md) - Advanced compatibility with Linux TEE devices and configfs-tsm
 - [VMM CLI Guide](./docs/vmm-cli-user-guide.md) - Command-line reference
 - [Design Decisions](./docs/design-and-hardening-decisions.md) - Architecture rationale
 - [FAQ](./docs/faq.md) - Frequently asked questions
@@ -167,14 +168,17 @@ Yes. dstack powers production AI infrastructure at [OpenRouter](https://openrout
 <details>
 <summary><strong>Can I run this on my own hardware?</strong></summary>
 
-Yes. dstack runs on any Intel TDX-capable server. See the [deployment guide](./docs/deployment.md) for self-hosting instructions. You can also use [Phala Cloud](https://cloud.phala.network) for managed infrastructure.
+Yes. dstack runs on supported TEE-capable servers, including Intel TDX-capable hardware. See the [deployment guide](./docs/deployment.md) for self-hosting instructions. You can also use [Phala Cloud](https://cloud.phala.network) for managed infrastructure.
 
 </details>
 
 <details>
 <summary><strong>What TEE hardware is supported?</strong></summary>
 
-Currently: Intel TDX (4th/5th Gen Xeon) and NVIDIA Confidential Computing (H100, Blackwell). AMD SEV-SNP support is planned.
+- **GCP**: Intel TDX (Confidential VMs)
+- **AWS**: Nitro Enclaves (NSM attestation)
+- **Bare metal**: Intel TDX (4th/5th Gen Xeon) and AMD SEV-SNP on supported dstack OS images
+- **GPUs**: NVIDIA Confidential Computing (H100, Blackwell)
 
 </details>
 
