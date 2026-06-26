@@ -254,7 +254,7 @@ pub(crate) async fn cmd_install(o: InstallOpts) -> Result<()> {
         );
     }
     println!(
-        "deploy an app with: dstack --host {client_url} run <compose> --image {} --port <vm_port> --allowlist {}",
+        "deploy an app with: dstack --host {client_url} deploy <compose> --image {} --port <vm_port> --allowlist {}",
         o.image.as_deref().unwrap_or("<ver>"),
         allow_path.display()
     );
