@@ -265,13 +265,13 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn test_resolve_app_address() {
-        let resolver = AppAddressResolver::new("_dstack-app-address".to_string(), false);
+    async fn test_resolve_app_address() -> Result<()> {
+        let resolver = AppAddressResolver::new("_dstack-app-address".to_string(), false)?;
         let app_addr = resolver
             .resolve("3327603e03f5bd1f830812ca4a789277fc31f577.app.dstack.org")
-            .await
-            .unwrap();
+            .await?;
         assert_eq!(app_addr.app_id, "3327603e03f5bd1f830812ca4a789277fc31f577");
         assert_eq!(app_addr.port, 8090);
+        Ok(())
     }
 }
