@@ -1364,6 +1364,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "cached-cell"
+version = "0.5.11"
+dependencies = [
+ "tokio",
+]
+
+[[package]]
 name = "cc"
 version = "1.2.63"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2426,6 +2433,7 @@ dependencies = [
  "arc-swap",
  "base64 0.22.1",
  "bytes",
+ "cached-cell",
  "certbot",
  "clap",
  "cmd_lib",

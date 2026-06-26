@@ -4,8 +4,10 @@
 
 use std::fmt::Debug;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
+use hickory_resolver::{lookup::TxtLookup, TokioAsyncResolver};
 use proxy_protocol::ProxyHeader;
 use tokio::{io::AsyncWriteExt, net::TcpStream, task::JoinSet, time::timeout};
 use tracing::{debug, info, warn};
@@ -20,6 +22,9 @@ use super::{
     port_policy::{filter_allowed_addresses, should_send_pp},
     AddressGroup,
 };
+
+const APP_ADDRESS_DNS_CACHE_SIZE: usize = 256;
+const APP_ADDRESS_NEGATIVE_CACHE_TTL: Duration = Duration::from_secs(10);
 
 #[derive(Debug)]
 struct AppAddress {
@@ -39,37 +44,88 @@ impl AppAddress {
     }
 }
 
-/// resolve app address by sni
-async fn resolve_app_address(prefix: &str, sni: &str, compat: bool) -> Result<AppAddress> {
+/// Shared resolver for SNI -> app address TXT lookups.
+///
+/// Hickory's resolver already has an internal TTL-aware DNS cache. The old
+/// code created a new resolver per proxy connection, which defeated that cache.
+/// Keeping a resolver in `ProxyInner` makes TXT caching effective across
+/// connections without introducing a separate cache invalidation policy here.
+pub(crate) struct AppAddressResolver {
+    prefix: String,
+    compat: bool,
+    resolver: TokioAsyncResolver,
+}
+
+impl AppAddressResolver {
+    pub(crate) fn new(prefix: String, compat: bool) -> Result<Self> {
+        Ok(Self {
+            prefix,
+            compat,
+            resolver: app_address_tokio_resolver_from_system_conf()?,
+        })
+    }
+
+    async fn resolve(&self, sni: &str) -> Result<AppAddress> {
+        resolve_app_address(&self.resolver, &self.prefix, sni, self.compat).await
+    }
+}
+
+fn app_address_tokio_resolver_from_system_conf() -> Result<TokioAsyncResolver> {
+    let (config, mut options) = hickory_resolver::system_conf::read_system_conf()
+        .context("failed to read system dns config")?;
+
+    // App-address records may appear shortly after a CVM/app is registered.
+    // Reusing one resolver enables positive TXT caching, but we do not want a
+    // transient NXDOMAIN/NODATA response to hide a newly-added app for too
+    // long. Keep positive caching TTL-aware and cap negative caching.
+    options.cache_size = APP_ADDRESS_DNS_CACHE_SIZE;
+    options.negative_min_ttl = Some(Duration::ZERO);
+    options.negative_max_ttl = Some(APP_ADDRESS_NEGATIVE_CACHE_TTL);
+
+    Ok(TokioAsyncResolver::tokio(config, options))
+}
+
+fn parse_lookup(lookup: &TxtLookup, sni: &str, txt_domain: &str) -> Result<Option<AppAddress>> {
+    let Some(txt_record) = lookup.iter().next() else {
+        return Ok(None);
+    };
+    let Some(data) = txt_record.txt_data().first() else {
+        return Ok(None);
+    };
+    AppAddress::parse(data)
+        .with_context(|| format!("failed to parse app address for {sni} via {txt_domain}"))
+        .map(Some)
+}
+
+/// Resolve app address by SNI. `resolver` is shared so its DNS cache is reused.
+async fn resolve_app_address(
+    resolver: &TokioAsyncResolver,
+    prefix: &str,
+    sni: &str,
+    compat: bool,
+) -> Result<AppAddress> {
     let txt_domain = format!("{prefix}.{sni}");
-    let resolver = hickory_resolver::AsyncResolver::tokio_from_system_conf()
-        .context("failed to create dns resolver")?;
 
     if compat && prefix != "_tapp-address" {
         let txt_domain_legacy = format!("_tapp-address.{sni}");
         let (lookup, lookup_legacy) = tokio::join!(
-            resolver.txt_lookup(txt_domain),
-            resolver.txt_lookup(txt_domain_legacy),
+            resolver.txt_lookup(&txt_domain),
+            resolver.txt_lookup(&txt_domain_legacy),
         );
-        for lookup in [lookup, lookup_legacy] {
+        for (lookup, domain) in [
+            (lookup, txt_domain.as_str()),
+            (lookup_legacy, txt_domain_legacy.as_str()),
+        ] {
             let Ok(lookup) = lookup else {
                 continue;
             };
-            let Some(txt_record) = lookup.iter().next() else {
-                continue;
-            };
-            let Some(data) = txt_record.txt_data().first() else {
-                continue;
-            };
-            return AppAddress::parse(data)
-                .with_context(|| format!("failed to parse app address for {sni}"));
-        }
-    } else if let Ok(lookup) = resolver.txt_lookup(txt_domain).await {
-        if let Some(txt_record) = lookup.iter().next() {
-            if let Some(data) = txt_record.txt_data().first() {
-                return AppAddress::parse(data)
-                    .with_context(|| format!("failed to parse app address for {sni}"));
+            if let Some(app_address) = parse_lookup(&lookup, sni, domain)? {
+                return Ok(app_address);
             }
+        }
+    } else if let Ok(lookup) = resolver.txt_lookup(&txt_domain).await {
+        if let Some(app_address) = parse_lookup(&lookup, sni, &txt_domain)? {
+            return Ok(app_address);
         }
     }
 
@@ -82,17 +138,8 @@ async fn resolve_app_address(prefix: &str, sni: &str, compat: bool) -> Result<Ap
             .with_context(|| {
                 format!("failed to lookup wildcard app address for {sni} via {wildcard_domain}")
             })?;
-        let txt_record = lookup
-            .iter()
-            .next()
-            .with_context(|| format!("no txt record found for {sni} via {wildcard_domain}"))?;
-        let data = txt_record
-            .txt_data()
-            .first()
-            .with_context(|| format!("no data in txt record for {sni} via {wildcard_domain}"))?;
-        return AppAddress::parse(data).with_context(|| {
-            format!("failed to parse app address for {sni} via {wildcard_domain}")
-        });
+        return parse_lookup(&lookup, sni, &wildcard_domain)?
+            .with_context(|| format!("no txt record found for {sni} via {wildcard_domain}"));
     }
 
     anyhow::bail!("failed to resolve app address for {sni}");
@@ -105,10 +152,8 @@ pub(crate) async fn proxy_with_sni(
     buffer: Vec<u8>,
     sni: &str,
 ) -> Result<()> {
-    let ns_prefix = &state.config.proxy.app_address_ns_prefix;
-    let compat = state.config.proxy.app_address_ns_compat;
     let dns_timeout = state.config.proxy.timeouts.dns_resolve;
-    let addr = timeout(dns_timeout, resolve_app_address(ns_prefix, sni, compat))
+    let addr = timeout(dns_timeout, state.app_address_resolver.resolve(sni))
         .await
         .with_context(|| format!("DNS TXT resolve timeout for {sni}"))?
         .with_context(|| format!("failed to resolve app address for {sni}"))?;
@@ -220,15 +265,13 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn test_resolve_app_address() {
-        let app_addr = resolve_app_address(
-            "_dstack-app-address",
-            "3327603e03f5bd1f830812ca4a789277fc31f577.app.dstack.org",
-            false,
-        )
-        .await
-        .unwrap();
+    async fn test_resolve_app_address() -> Result<()> {
+        let resolver = AppAddressResolver::new("_dstack-app-address".to_string(), false)?;
+        let app_addr = resolver
+            .resolve("3327603e03f5bd1f830812ca4a789277fc31f577.app.dstack.org")
+            .await?;
         assert_eq!(app_addr.app_id, "3327603e03f5bd1f830812ca4a789277fc31f577");
         assert_eq!(app_addr.port, 8090);
+        Ok(())
     }
 }

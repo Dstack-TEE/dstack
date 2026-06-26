@@ -51,6 +51,7 @@ members = [
     "key-provider-client",
     "dstack-types",
     "cert-client",
+    "cached-cell",
     "lspci",
     "sodiumbox",
     "serde-duration",
@@ -102,6 +103,7 @@ load_config = { path = "load_config" }
 key-provider-client = { path = "key-provider-client" }
 dstack-types = { path = "dstack-types" }
 cert-client = { path = "cert-client" }
+cached-cell = { path = "cached-cell" }
 lspci = { path = "lspci" }
 sodiumbox = { path = "sodiumbox" }
 serde-duration = { path = "serde-duration" }
