@@ -43,7 +43,7 @@ use crate::{
         NodeData, NodeStatus, PortPolicy, WaveKvSyncService,
     },
     models::{InstanceInfo, PortPolicyView, WgConf},
-    proxy::{create_acceptor_with_cert_resolver, AddressGroup, AddressInfo},
+    proxy::{create_acceptor_with_cert_resolver, AddressGroup, AddressInfo, AppAddressResolver},
 };
 
 mod auth_client;
@@ -89,6 +89,9 @@ pub struct ProxyInner {
     /// allow traffic.
     pub(crate) port_policy_tx: UnboundedSender<String>,
     handshake_cache: Arc<LatestHandshakesCache>,
+    /// Shared DNS resolver for SNI TXT lookups. Reusing one resolver lets the
+    /// hickory DNS cache work across proxy connections.
+    pub(crate) app_address_resolver: Arc<AppAddressResolver>,
 }
 
 const HANDSHAKE_CACHE_TTL: Duration = Duration::from_secs(30);
@@ -290,6 +293,13 @@ impl ProxyInner {
         let h2_acceptor =
             create_acceptor_with_cert_resolver(&config.proxy, cert_resolver.clone(), true)
                 .context("failed to create h2 acceptor with cert resolver")?;
+        let app_address_resolver = Arc::new(
+            AppAddressResolver::new(
+                config.proxy.app_address_ns_prefix.clone(),
+                config.proxy.app_address_ns_compat,
+            )
+            .context("failed to create app address resolver")?,
+        );
 
         Ok(Self {
             config,
@@ -306,6 +316,7 @@ impl ProxyInner {
             https_config: Some(https_config),
             port_policy_tx,
             handshake_cache,
+            app_address_resolver,
         })
     }
 
