@@ -10,6 +10,7 @@ use crate::state::{read_state, write, write_state};
 use crate::systemd::{auth_unit_file, install_unit, tool, unit_active, unit_name, vmm_unit_file};
 use anyhow::{bail, Context, Result};
 use dstack_cli_core::config::{self, HostConfig, VmmRender};
+use dstack_cli_core::host::Platform;
 use dstack_cli_core::vmm::Vmm;
 use dstack_cli_core::{host, ports, rpc};
 use std::fs;
@@ -33,9 +34,15 @@ pub(crate) async fn cmd_install(o: InstallOpts) -> Result<()> {
 
     println!("dstackup install — preflight");
 
-    // 1. hardware gate (fail fast on non-SGX hosts).
-    host::require_sgx()?;
-    println!("  [ok] sgx present");
+    // 1. resolve the platform (auto-detects the host) and gate on the host
+    //    actually supporting it: TDX needs SGX (local key provider); SNP needs
+    //    /dev/sev.
+    let platform = match host::Platform::parse_opt(&o.platform)? {
+        Some(p) => p,
+        None => host::Platform::detect().unwrap_or(host::Platform::Tdx),
+    };
+    host::require_platform(platform)?;
+    println!("  [ok] platform: {}", platform.vmm_str());
 
     // 2. host IP (informational; used as the bind/SAN when --expose is set).
     match host::detect_host_ip() {
@@ -58,15 +65,16 @@ pub(crate) async fn cmd_install(o: InstallOpts) -> Result<()> {
     //    a CID/port clash or a missing os-image pin can't half-install the host.
     let cid_start = pick_cid_start(o.cid_start, &host::occupied_cid_ranges())?;
     preflight_ports(&o)?;
-    let os_image_hash = resolve_image_pin(&o, &images)?;
+    let os_image_hash = resolve_image_pin(&o, &images, platform)?;
 
     // 5. lay out the prefix.
     for dir in [prefix.to_path_buf(), prefix.join("certs"), run_dir.clone()] {
         fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
     }
 
-    // 6. resolve the key provider — run our own unless told to use an existing one.
-    let (kp_addr, kp_port, kp_own_project) = resolve_key_provider(&o)?;
+    // 6. resolve the key provider — run our own unless told to use an existing
+    //    one (TDX only; SNP has no SGX gramine provider).
+    let (kp_addr, kp_port, kp_own_project) = resolve_key_provider(&o, platform)?;
 
     // read prior state up front so re-runs are idempotent.
     let mut st = read_state(prefix).unwrap_or_default();
@@ -105,6 +113,7 @@ pub(crate) async fn cmd_install(o: InstallOpts) -> Result<()> {
         key_provider_addr: kp_addr,
         key_provider_port: kp_port as u32,
         kms_urls: kms_urls.clone(),
+        platform,
         ..Default::default()
     });
     // the KMS-in-CVM reaches the host auth webhook at 10.0.2.2:<auth_port>.
@@ -118,6 +127,7 @@ pub(crate) async fn cmd_install(o: InstallOpts) -> Result<()> {
         auth_webhook_url: format!("http://10.0.2.2:{}", o.auth_port),
         os_image_hash: os_image_hash.unwrap_or_default(),
         verify_os_image: false,
+        platform,
         ..Default::default()
     };
     let kms = config::kms_toml(&host_cfg);
@@ -202,7 +212,7 @@ pub(crate) async fn cmd_install(o: InstallOpts) -> Result<()> {
                 .image
                 .clone()
                 .context("kms deploy needs --image <version> (or pass --no-kms)")?;
-            let compose = config::kms_app_compose(&kms, &o.kms_image);
+            let compose = config::kms_app_compose(&kms, &o.kms_image, platform);
             let cfg = rpc::VmConfiguration {
                 name: "dstack-kms".into(),
                 image: img.clone(),
@@ -252,13 +262,23 @@ pub(crate) async fn cmd_install(o: InstallOpts) -> Result<()> {
 }
 
 /// resolve the key provider for this install. Returns (addr, port, own_project).
-fn resolve_key_provider(o: &InstallOpts) -> Result<(String, u16, Option<String>)> {
+fn resolve_key_provider(
+    o: &InstallOpts,
+    platform: Platform,
+) -> Result<(String, u16, Option<String>)> {
     if let Some(ep) = &o.use_existing_key_provider {
         let (addr, port) = split_addr_port(ep)?;
         println!("  [ok] using existing key provider at {addr}:{port}");
         return Ok((addr, port, None));
     }
-    // run our own (default).
+    // AMD SEV-SNP has no SGX gramine key provider; the rendered [key_provider]
+    // block is unused (the KMS-in-CVM runs with local_key_provider_enabled =
+    // false), so don't require or start one.
+    if platform == Platform::AmdSevSnp {
+        println!("  [ok] no local key provider (sev-snp)");
+        return Ok(("127.0.0.1".to_string(), o.key_provider_port, None));
+    }
+    // TDX: run our own gramine provider (default).
     let src = o.key_provider_src.as_deref().context(
         "no key provider: pass --use-existing-key-provider ADDR:PORT, or --key-provider-src DIR to run our own",
     )?;
@@ -299,9 +319,14 @@ fn split_addr_port(ep: &str) -> Result<(String, u16)> {
 /// read the measured OS-image hash from the guest image's `digest.txt`
 /// (`<images>/<image>/digest.txt`), used to pin which image apps may boot.
 /// Returns None when there's no image selected or no readable digest.
-fn resolve_os_image_hash(images: &str, image: Option<&str>) -> Option<String> {
+fn resolve_os_image_hash(images: &str, image: Option<&str>, platform: Platform) -> Option<String> {
     let img = image?;
-    let path = Path::new(images).join(img).join("digest.txt");
+    // SNP measures a different image, recorded in digest.sev.txt; TDX uses digest.txt.
+    let digest_file = match platform {
+        Platform::AmdSevSnp => "digest.sev.txt",
+        Platform::Tdx => "digest.txt",
+    };
+    let path = Path::new(images).join(img).join(digest_file);
     let hash = fs::read_to_string(path).ok()?.trim().to_string();
     (!hash.is_empty()).then_some(hash)
 }
@@ -311,8 +336,8 @@ fn resolve_os_image_hash(images: &str, image: Option<&str>) -> Option<String> {
 /// image and still get keys), unless the operator opts out with
 /// `--allow-unpinned-image`. Returns Some(hash) to pin, or None when pinning is
 /// deliberately off (`--no-kms`, or the explicit opt-out).
-fn resolve_image_pin(o: &InstallOpts, images: &str) -> Result<Option<String>> {
-    let hash = resolve_os_image_hash(images, o.image.as_deref());
+fn resolve_image_pin(o: &InstallOpts, images: &str, platform: Platform) -> Result<Option<String>> {
+    let hash = resolve_os_image_hash(images, o.image.as_deref(), platform);
     match &hash {
         Some(h) => println!("  [ok] pinning app os image {h}"),
         None if o.no_kms => {}

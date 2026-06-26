@@ -49,6 +49,71 @@ pub fn require_sgx() -> Result<()> {
     Ok(())
 }
 
+/// the confidential-computing platform a host launches CVMs on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Platform {
+    /// Intel TDX (with an SGX-backed local key provider).
+    #[default]
+    Tdx,
+    /// AMD SEV-SNP.
+    AmdSevSnp,
+}
+
+impl Platform {
+    /// the `[cvm] platform` value the VMM expects in `vmm.toml`.
+    pub fn vmm_str(self) -> &'static str {
+        match self {
+            Platform::Tdx => "tdx",
+            Platform::AmdSevSnp => "amd-sev-snp",
+        }
+    }
+
+    /// parse a `--platform` value: `tdx` | `amd-sev-snp` | `auto` (None).
+    pub fn parse_opt(s: &str) -> Result<Option<Platform>> {
+        match s {
+            "auto" => Ok(None),
+            "tdx" => Ok(Some(Platform::Tdx)),
+            "amd-sev-snp" | "sev-snp" | "snp" => Ok(Some(Platform::AmdSevSnp)),
+            other => bail!("unknown --platform '{other}' (expected: auto | tdx | amd-sev-snp)"),
+        }
+    }
+
+    /// auto-detect from `/proc/cpuinfo` (AMD SNP advertises the `sev_snp` flag;
+    /// Intel TDX hosts advertise `tdx_host_platform`). None if neither is found.
+    pub fn detect() -> Option<Platform> {
+        let info = std::fs::read_to_string("/proc/cpuinfo").ok()?;
+        let has = |flag: &str| {
+            info.lines()
+                .any(|l| l.starts_with("flags") && l.split_whitespace().any(|f| f == flag))
+        };
+        if has("sev_snp") {
+            Some(Platform::AmdSevSnp)
+        } else if has("tdx_host_platform") {
+            Some(Platform::Tdx)
+        } else {
+            None
+        }
+    }
+}
+
+/// require the host to actually support `platform`, with a clear message.
+/// TDX needs the SGX device nodes (for the local key provider); AMD SEV-SNP
+/// needs `/dev/sev` (the AMD secure processor).
+pub fn require_platform(platform: Platform) -> Result<()> {
+    match platform {
+        Platform::Tdx => require_sgx(),
+        Platform::AmdSevSnp => {
+            if Path::new("/dev/sev").exists() {
+                Ok(())
+            } else {
+                bail!(
+                    "amd sev-snp not available (missing /dev/sev); this host can't launch SNP CVMs — enable SEV-SNP in BIOS and load kvm_amd, or pass --platform tdx"
+                )
+            }
+        }
+    }
+}
+
 /// best-effort primary routable IPv4 of this host.
 ///
 /// uses the standard UDP-connect trick: connecting a datagram socket sends no

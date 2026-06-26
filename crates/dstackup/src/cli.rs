@@ -51,6 +51,10 @@ pub(crate) struct InstallOpts {
     #[arg(long, value_name = "VERSION")]
     pub(crate) image: Option<String>,
 
+    /// confidential-computing platform: `auto` (detect) | `tdx` | `amd-sev-snp`.
+    #[arg(long, default_value = "auto")]
+    pub(crate) platform: String,
+
     /// install prefix for configs, certs, run state.
     #[arg(long, default_value = "/var/lib/dstack")]
     pub(crate) prefix: String,

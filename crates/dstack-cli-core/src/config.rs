@@ -11,6 +11,7 @@
 //! * `auth-allowlist.json` — read by the host-side Rust auth webhook.
 //! * `vmm.toml` — the host VMM config (gateway + auth-token gating off).
 
+use crate::host::Platform;
 use anyhow::{Context, Result};
 use serde_json::json;
 use std::path::Path;
@@ -98,6 +99,8 @@ pub struct HostConfig {
     pub image_download_url: String,
     /// whether the KMS verifies the OS image hash on app key requests.
     pub verify_os_image: bool,
+    /// confidential-computing platform (selects SNP-specific KMS settings).
+    pub platform: Platform,
 }
 
 impl Default for HostConfig {
@@ -108,6 +111,7 @@ impl Default for HostConfig {
             os_image_hash: String::new(),
             image_download_url: DEFAULT_IMAGE_DOWNLOAD_URL.to_string(),
             verify_os_image: true,
+            platform: Platform::Tdx,
         }
     }
 }
@@ -136,7 +140,7 @@ admin_token_hash = ""
 # bootstrap (it still attests the genesis keys via the guest agent, and app
 # auth + per-app quote checks are unaffected).
 enforce_self_authorization = false
-
+{sev_snp}
 [core.image]
 verify = {verify}
 cache_dir = "/kms/images"
@@ -158,6 +162,13 @@ auto_bootstrap_domain = "{bootstrap_domain}"
 address = "0.0.0.0"
 port = 8000
 "#,
+        // AMD SEV-SNP gates EVERY key release (incl. the KMS's own bootstrap) on
+        // `sev_snp_key_release`, which defaults to false — so it must be set on
+        // SNP or the KMS refuses to release keys. Harmless/ignored on TDX.
+        sev_snp = match cfg.platform {
+            Platform::AmdSevSnp => "sev_snp_key_release = true\namd_kds_base_url = \"\"\n",
+            Platform::Tdx => "",
+        },
         verify = cfg.verify_os_image,
         download_url = cfg.image_download_url,
         webhook_url = cfg.auth_webhook_url,
@@ -191,10 +202,11 @@ pub fn auth_allowlist_json(cfg: &HostConfig) -> String {
 /// default pinned, reproducibly-built KMS image (Docker Hub).
 pub const DEFAULT_KMS_IMAGE: &str = "dstacktee/dstack-kms:0.5.11";
 
-/// build the KMS-in-CVM app-compose manifest. The CVM runs in
-/// local-key-provider mode; an init script writes the rendered `kms.toml` into
-/// the guest, and the KMS container mounts it.
-pub fn kms_app_compose(kms_toml: &str, kms_image: &str) -> String {
+/// build the KMS-in-CVM app-compose manifest. An init script writes the
+/// rendered `kms.toml` into the guest and the KMS container mounts it. On TDX
+/// the CVM uses the SGX local key provider to seal the KMS root key; AMD
+/// SEV-SNP has no such provider, so it's disabled there.
+pub fn kms_app_compose(kms_toml: &str, kms_image: &str, platform: Platform) -> String {
     let docker_compose = format!(
         r#"services:
   kms:
@@ -222,7 +234,7 @@ volumes:
         "init_script": init_script,
         "kms_enabled": false,
         "gateway_enabled": false,
-        "local_key_provider_enabled": true,
+        "local_key_provider_enabled": platform == Platform::Tdx,
         "public_logs": true,
         "public_sysinfo": true,
         "public_tcbinfo": true,
@@ -264,6 +276,8 @@ pub struct VmmRender {
     pub key_provider_port: u32,
     /// KMS URLs injected into app CVMs (the guest-visible KMS address).
     pub kms_urls: Vec<String>,
+    /// confidential-computing platform (selects qemu/share-mode for the CVMs).
+    pub platform: Platform,
 }
 
 impl Default for VmmRender {
@@ -281,6 +295,7 @@ impl Default for VmmRender {
             key_provider_addr: "127.0.0.1".to_string(),
             key_provider_port: 3443,
             kms_urls: Vec::new(),
+            platform: Platform::Tdx,
         }
     }
 }
@@ -310,6 +325,7 @@ path = "{image_path}"
 registry = ""
 
 [cvm]
+platform = "{platform}"
 qemu_path = "{qemu_path}"
 kms_urls = [{kms_urls}]
 gateway_urls = []
@@ -321,10 +337,10 @@ max_allocable_vcpu = 20
 max_allocable_memory_in_mb = 100_000
 qmp_socket = false
 user = ""
-use_mrconfigid = false
+use_mrconfigid = {use_mrconfigid}
 qemu_pci_hole64_size = 0
 qemu_hotplug_off = false
-host_share_mode = "9p"
+host_share_mode = "{host_share_mode}"
 qgs_port = 4050
 
 [cvm.product]
@@ -387,6 +403,14 @@ port = {kp_port}
         image_path = r.image_path,
         vm_path = r.vm_path,
         qemu_path = r.qemu_path,
+        platform = r.platform.vmm_str(),
+        // SNP CVMs share the host dir via a virtual disk (9p doesn't play with
+        // SNP memory encryption) and bind measurements via mrconfigid.
+        use_mrconfigid = r.platform == Platform::AmdSevSnp,
+        host_share_mode = match r.platform {
+            Platform::AmdSevSnp => "vhd",
+            Platform::Tdx => "9p",
+        },
         kms_urls = r
             .kms_urls
             .iter()
@@ -436,6 +460,39 @@ mod tests {
         assert!(toml.contains(r#"url = "http://10.0.2.2:8001""#));
         // sanity: it parses as TOML.
         toml::from_str::<toml::Value>(&toml).expect("kms.toml must be valid TOML");
+    }
+
+    #[test]
+    fn platform_specific_rendering() {
+        // TDX defaults: no SNP key-release, 9p share, mrconfigid off, SGX provider.
+        let tdx = kms_toml(&HostConfig::default());
+        assert!(!tdx.contains("sev_snp_key_release"));
+        toml::from_str::<toml::Value>(&tdx).expect("tdx kms.toml valid");
+        let tdx_vmm = vmm_toml(&VmmRender::default());
+        assert!(tdx_vmm.contains(r#"platform = "tdx""#));
+        assert!(tdx_vmm.contains(r#"host_share_mode = "9p""#));
+        assert!(tdx_vmm.contains("use_mrconfigid = false"));
+        toml::from_str::<toml::Value>(&tdx_vmm).expect("tdx vmm.toml valid");
+        assert!(kms_app_compose("x", "img", Platform::Tdx)
+            .contains(r#""local_key_provider_enabled": true"#));
+
+        // SNP: key-release gate set, vhd share, mrconfigid on, no local provider.
+        let snp = kms_toml(&HostConfig {
+            platform: Platform::AmdSevSnp,
+            ..Default::default()
+        });
+        assert!(snp.contains("sev_snp_key_release = true"));
+        toml::from_str::<toml::Value>(&snp).expect("snp kms.toml valid");
+        let snp_vmm = vmm_toml(&VmmRender {
+            platform: Platform::AmdSevSnp,
+            ..Default::default()
+        });
+        assert!(snp_vmm.contains(r#"platform = "amd-sev-snp""#));
+        assert!(snp_vmm.contains(r#"host_share_mode = "vhd""#));
+        assert!(snp_vmm.contains("use_mrconfigid = true"));
+        toml::from_str::<toml::Value>(&snp_vmm).expect("snp vmm.toml valid");
+        assert!(kms_app_compose("x", "img", Platform::AmdSevSnp)
+            .contains(r#""local_key_provider_enabled": false"#));
     }
 
     #[test]
