@@ -17,9 +17,11 @@ pub type RtmrLogs = [RtmrLog; 3];
 mod acpi;
 mod kernel;
 mod machine;
+pub mod measurement;
 mod num;
 pub mod sev;
 mod tdvf;
+pub mod tdx;
 mod uefi_var;
 mod util;
 

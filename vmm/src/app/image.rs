@@ -7,6 +7,7 @@ use path_absolutize::Absolutize;
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
+use dstack_types::{OsImageMeasurementDocument, TdxOsImageMeasurementDocument};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -71,9 +72,12 @@ pub struct Image {
     pub bios: Option<PathBuf>,
     pub bios_sev: Option<PathBuf>,
     pub digest: Option<String>,
-    /// AMD SEV-SNP os_image_hash, read from `digest.sev.txt` (produced at image
-    /// build time by `dstack-mr sev-os-image-hash`). The VMM does not recompute
-    /// it; the deploy path reads this value directly.
+    /// TDX os_image_hash, read from `measurement.json.tdx.os_image_hash`.
+    pub tdx_digest: Option<String>,
+    /// TDX no-image-download measurement material, read from `measurement.json.tdx`.
+    pub tdx_measurement: Option<TdxOsImageMeasurementDocument>,
+    /// AMD SEV-SNP os_image_hash, read from `measurement.json.snp.os_image_hash`
+    /// for new images, falling back to legacy `digest.sev.txt`.
     pub sev_digest: Option<String>,
 }
 
@@ -103,10 +107,31 @@ impl Image {
         let digest = fs::read_to_string(base_path.join("digest.txt"))
             .ok()
             .map(|s| s.trim().to_string());
-        let sev_digest = fs::read_to_string(base_path.join("digest.sev.txt"))
+        let measurement_path = base_path.join("measurement.json");
+        let measurement = if measurement_path.exists() {
+            let file = fs::File::open(&measurement_path)
+                .with_context(|| format!("failed to open {}", measurement_path.display()))?;
+            Some(
+                serde_json::from_reader::<_, OsImageMeasurementDocument>(file)
+                    .with_context(|| format!("failed to parse {}", measurement_path.display()))?,
+            )
+        } else {
+            None
+        };
+        let legacy_sev_digest = fs::read_to_string(base_path.join("digest.sev.txt"))
             .ok()
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty());
+        let sev_digest = measurement
+            .as_ref()
+            .and_then(|m| m.snp.as_ref())
+            .map(|snp| snp.os_image_hash.clone())
+            .or(legacy_sev_digest);
+        let tdx_digest = measurement
+            .as_ref()
+            .and_then(|m| m.tdx.as_ref())
+            .map(|tdx| tdx.os_image_hash.clone());
+        let tdx_measurement = measurement.as_ref().and_then(|m| m.tdx.clone());
         if info.version.is_empty() {
             // Older images does not have version field. Fallback to the version of the image folder name
             info.version = guess_version(&base_path).unwrap_or_default();
@@ -120,6 +145,8 @@ impl Image {
             bios,
             bios_sev,
             digest,
+            tdx_digest,
+            tdx_measurement,
             sev_digest,
         }
         .ensure_exists()

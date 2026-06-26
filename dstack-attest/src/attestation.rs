@@ -32,6 +32,7 @@ use tpm_qvl::verify::VerifiedReport as TpmVerifiedReport;
 pub use tpm_types::TpmQuote;
 
 use crate::amd_sev_snp::VerifiedAmdSnpReport;
+use crate::v1::{strip_tdx_event_log_for_config, strip_tdx_runtime_event_log};
 pub use crate::v1::{Attestation as AttestationV1, PlatformEvidence, StackEvidence};
 
 pub const SNP_REPORT_DATA_RANGE: std::ops::Range<usize> = 0x50..0x90;
@@ -596,17 +597,24 @@ impl VersionedAttestation {
         }
     }
 
-    /// Strip data for certificate embedding (e.g. keep RTMR3 event logs only).
+    /// Strip data for certificate embedding.
     pub fn into_stripped(self) -> Self {
         match self {
             Self::V0 { mut attestation } => {
-                if let Some(tdx_quote) = attestation.tdx_quote_mut() {
-                    tdx_quote.event_log = tdx_quote
-                        .event_log
-                        .iter()
-                        .filter(|e| e.imr == 3)
-                        .map(|e| e.stripped())
-                        .collect();
+                match &mut attestation.quote {
+                    AttestationQuote::DstackTdx(tdx_quote) => {
+                        tdx_quote.event_log = strip_tdx_event_log_for_config(
+                            std::mem::take(&mut tdx_quote.event_log),
+                            &attestation.config,
+                        );
+                    }
+                    AttestationQuote::DstackGcpTdx(quote) => {
+                        quote.tdx_quote.event_log = strip_tdx_runtime_event_log(std::mem::take(
+                            &mut quote.tdx_quote.event_log,
+                        ));
+                    }
+                    AttestationQuote::DstackAmdSevSnp(_)
+                    | AttestationQuote::DstackNitroEnclave(_) => {}
                 }
                 Self::V0 { attestation }
             }
@@ -983,17 +991,16 @@ pub enum AttestationQuote {
     DstackTdx(TdxQuote),
     DstackGcpTdx(DstackGcpTdxQuote),
     DstackNitroEnclave(DstackNitroQuote),
-    /// Keep this last to preserve SCALE discriminants for existing variants.
     DstackAmdSevSnp(SnpQuote),
 }
 
 impl AttestationQuote {
     pub fn mode(&self) -> AttestationMode {
         match self {
-            AttestationQuote::DstackTdx { .. } => AttestationMode::DstackTdx,
-            AttestationQuote::DstackAmdSevSnp { .. } => AttestationMode::DstackAmdSevSnp,
-            AttestationQuote::DstackGcpTdx { .. } => AttestationMode::DstackGcpTdx,
-            AttestationQuote::DstackNitroEnclave { .. } => AttestationMode::DstackNitroEnclave,
+            AttestationQuote::DstackTdx(_) => AttestationMode::DstackTdx,
+            AttestationQuote::DstackAmdSevSnp(_) => AttestationMode::DstackAmdSevSnp,
+            AttestationQuote::DstackGcpTdx(_) => AttestationMode::DstackGcpTdx,
+            AttestationQuote::DstackNitroEnclave(_) => AttestationMode::DstackNitroEnclave,
         }
     }
 }
@@ -1665,6 +1672,14 @@ impl Attestation {
             .map_err(|_| anyhow!("Quote lock poisoned"))?;
 
         let mode = AttestationMode::detect()?;
+        let config = match mode {
+            AttestationMode::DstackAmdSevSnp
+            | AttestationMode::DstackTdx
+            | AttestationMode::DstackGcpTdx => {
+                read_vm_config().context("Failed to read vm config")?
+            }
+            AttestationMode::DstackNitroEnclave => String::new(),
+        };
         let runtime_events = match mode {
             AttestationMode::DstackTdx | AttestationMode::DstackGcpTdx => {
                 RuntimeEvent::read_all().context("Failed to read runtime events")?
@@ -1713,9 +1728,7 @@ impl Attestation {
         let config = match &quote {
             AttestationQuote::DstackAmdSevSnp(_)
             | AttestationQuote::DstackTdx(_)
-            | AttestationQuote::DstackGcpTdx(_) => {
-                read_vm_config().context("Failed to read vm config")?
-            }
+            | AttestationQuote::DstackGcpTdx(_) => config,
             AttestationQuote::DstackNitroEnclave(quote) => {
                 let os_image_hash = quote
                     .decode_image_hash()

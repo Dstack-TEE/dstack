@@ -7,6 +7,19 @@ use anyhow::{bail, Context, Result};
 use object::pe;
 use sha2::{Digest, Sha384};
 
+/// QEMU's TDX setup-header patch places the initrd at a memory-dependent
+/// address below this guest-memory size. At and above this threshold the
+/// patched kernel Authenticode hash is stable for a given kernel/initrd pair.
+pub const TDX_KERNEL_HASH_STABLE_MIN_MEMORY: u64 = 0xB0000000;
+/// QEMU's low-memory initrd placement also resolves to the same below-4G
+/// placement at exactly 2 GiB, so it shares the high-memory patched kernel hash.
+pub const TDX_KERNEL_HASH_COMPAT_2G_MEMORY: u64 = 0x80000000;
+
+pub fn tdx_kernel_hash_uses_precomputed_high_mem(memory_size: u64) -> bool {
+    memory_size == TDX_KERNEL_HASH_COMPAT_2G_MEMORY
+        || memory_size >= TDX_KERNEL_HASH_STABLE_MIN_MEMORY
+}
+
 /// Calculates the Authenticode hash of a PE/COFF file
 fn authenticode_sha384_hash(data: &[u8]) -> Result<Vec<u8>> {
     let lfanew_offset = 0x3c;
@@ -177,8 +190,8 @@ fn patch_kernel(
             0x37ffffff
         };
 
-        let lowmem = if mem_size < 0xb0000000 {
-            0xb0000000
+        let lowmem = if mem_size < TDX_KERNEL_HASH_STABLE_MIN_MEMORY {
+            TDX_KERNEL_HASH_STABLE_MIN_MEMORY
         } else {
             0x80000000
         };
@@ -211,6 +224,19 @@ fn patch_kernel(
     Ok(kd)
 }
 
+/// Compute the first RTMR[1] event digest: the Authenticode SHA-384 hash of the
+/// kernel after QEMU applies its setup-header patches.
+pub(crate) fn patched_kernel_authenticode_sha384(
+    kernel_data: &[u8],
+    initrd_size: u32,
+    mem_size: u64,
+    acpi_data_size: u32,
+) -> Result<Vec<u8>> {
+    let kd = patch_kernel(kernel_data, initrd_size, mem_size, acpi_data_size)
+        .context("Failed to patch kernel")?;
+    authenticode_sha384_hash(&kd).context("Failed to compute kernel hash")
+}
+
 /// Measures a QEMU-patched TDX kernel image.
 pub(crate) fn rtmr1_log(
     kernel_data: &[u8],
@@ -218,9 +244,8 @@ pub(crate) fn rtmr1_log(
     mem_size: u64,
     acpi_data_size: u32,
 ) -> Result<Vec<Vec<u8>>> {
-    let kd = patch_kernel(kernel_data, initrd_size, mem_size, acpi_data_size)
-        .context("Failed to patch kernel")?;
-    let kernel_hash = authenticode_sha384_hash(&kd).context("Failed to compute kernel hash")?;
+    let kernel_hash =
+        patched_kernel_authenticode_sha384(kernel_data, initrd_size, mem_size, acpi_data_size)?;
     Ok(vec![
         kernel_hash,
         measure_sha384(b"Calling EFI Application from Boot Option"),
@@ -235,4 +260,54 @@ pub(crate) fn measure_cmdline(cmdline: &str) -> Vec<u8> {
     let mut utf16_cmdline = utf16_encode(cmdline);
     utf16_cmdline.extend([0, 0]);
     measure_sha384(&utf16_cmdline)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn initrd_addr(kernel: &[u8]) -> u32 {
+        u32::from_le_bytes(kernel[0x218..0x21c].try_into().unwrap())
+    }
+
+    #[test]
+    fn tdx_kernel_patch_uses_precomputed_digest_at_2g_and_high_memory() {
+        let mut kernel = vec![0u8; 0x1000];
+        // Linux boot protocol >= 2.12 with XLF_CAN_BE_LOADED_ABOVE_4G makes
+        // QEMU derive the initrd address from available low memory.
+        kernel[0x206..0x208].copy_from_slice(&0x020cu16.to_le_bytes());
+        kernel[0x236..0x238].copy_from_slice(&0x0040u16.to_le_bytes());
+
+        let below_2g = patch_kernel(&kernel, 0x100000, 0x80000000 - 0x1000, 0x28000).unwrap();
+        let at_2g = patch_kernel(&kernel, 0x100000, 0x80000000, 0x28000).unwrap();
+        let between_2g_and_high_mem = patch_kernel(
+            &kernel,
+            0x100000,
+            TDX_KERNEL_HASH_STABLE_MIN_MEMORY - 0x1000,
+            0x28000,
+        )
+        .unwrap();
+        let at_threshold = patch_kernel(
+            &kernel,
+            0x100000,
+            TDX_KERNEL_HASH_STABLE_MIN_MEMORY,
+            0x28000,
+        )
+        .unwrap();
+        let above_threshold = patch_kernel(
+            &kernel,
+            0x100000,
+            TDX_KERNEL_HASH_STABLE_MIN_MEMORY + 0x4000_0000,
+            0x28000,
+        )
+        .unwrap();
+
+        assert_ne!(initrd_addr(&below_2g), initrd_addr(&at_2g));
+        assert_ne!(
+            initrd_addr(&between_2g_and_high_mem),
+            initrd_addr(&at_threshold)
+        );
+        assert_eq!(initrd_addr(&at_2g), initrd_addr(&at_threshold));
+        assert_eq!(initrd_addr(&at_threshold), initrd_addr(&above_threshold));
+    }
 }

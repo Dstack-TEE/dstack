@@ -95,7 +95,7 @@ fn verify_sev_snp_attestation_bin() {
     // image build's digest.sev.txt.
     assert_eq!(
         hex::encode(&binding.os_image_hash),
-        "32b4767373ad7fa0f9c418925006194d5c3f5619529f309fe81156789fecd8bc",
+        "b6e8403b8f6167bcef4e39aa1039d8728fe624532ca6cedf2625a87fac2e5fda",
         "derived os_image_hash"
     );
     // The HOST_DATA-bound app identity is recovered from the mr_config document.
@@ -111,7 +111,7 @@ fn verify_sev_snp_attestation_bin() {
 // Forged / tampered quote coverage (all offline, using the real fixture).
 // ---------------------------------------------------------------------------
 
-const OS_IMAGE_HASH: &str = "32b4767373ad7fa0f9c418925006194d5c3f5619529f309fe81156789fecd8bc";
+const OS_IMAGE_HASH: &str = "b6e8403b8f6167bcef4e39aa1039d8728fe624532ca6cedf2625a87fac2e5fda";
 
 fn decoded_attestation() -> dstack_attest::attestation::Attestation {
     let versioned =

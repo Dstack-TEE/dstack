@@ -321,6 +321,27 @@ fn build_sev_hashes_page(
     Ok(page)
 }
 
+fn measured_kernel_cmdline(input: Option<&str>) -> String {
+    match input {
+        Some(base) if !base.trim().is_empty() => base.trim().to_string(),
+        _ => "console=ttyS0 loglevel=7".to_string(),
+    }
+}
+
+fn kernel_cmdline_sha256(input: Option<&str>) -> Vec<u8> {
+    let cmdline = measured_kernel_cmdline(input);
+    let mut cmdline_bytes = cmdline.as_bytes().to_vec();
+    cmdline_bytes.push(0);
+    Sha256::digest(&cmdline_bytes).to_vec()
+}
+
+fn effective_initrd_hash_from_hex(value: &str) -> Result<Vec<u8>> {
+    if value.is_empty() {
+        return Ok(Sha256::digest(b"").to_vec());
+    }
+    decode_required_hex("initrd_hash", value, 32)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SectionType {
     SnpSecMemory = 1,
@@ -664,10 +685,7 @@ pub fn compute_expected_measurement(input: &MeasurementInput) -> Result<[u8; 48]
         .as_deref()
         .ok_or_else(|| anyhow::anyhow!("vcpu_type is required"))?;
 
-    let cmdline = match input.base_cmdline.as_deref() {
-        Some(base) if !base.trim().is_empty() => base.trim().to_string(),
-        _ => "console=ttyS0 loglevel=7".to_string(),
-    };
+    let cmdline = measured_kernel_cmdline(input.base_cmdline.as_deref());
     let resolved_sections = input
         .ovmf_sections
         .iter()
@@ -737,12 +755,15 @@ pub fn compute_expected_measurement(input: &MeasurementInput) -> Result<[u8; 48]
 fn sev_os_image_measurement(
     input: &MeasurementInput,
 ) -> Result<dstack_types::SevOsImageMeasurement> {
+    // Validate that the measured command line commits the rootfs identity. The
+    // compact image projection does not carry a separate rootfs_hash because it
+    // is already committed by `kernel_cmdline_sha256`.
+    rootfs_hash_from_cmdline(input.base_cmdline.as_deref())?;
     Ok(dstack_types::SevOsImageMeasurement {
-        rootfs_hash: rootfs_hash_from_cmdline(input.base_cmdline.as_deref())?,
-        base_cmdline: input.base_cmdline.clone(),
-        ovmf_hash: input.ovmf_hash.clone(),
-        kernel_hash: input.kernel_hash.clone(),
-        initrd_hash: input.initrd_hash.clone(),
+        kernel_cmdline_sha256: kernel_cmdline_sha256(input.base_cmdline.as_deref()),
+        ovmf_hash: decode_required_hex("ovmf_hash", &input.ovmf_hash, 48)?,
+        kernel_hash: decode_required_hex("kernel_hash", &input.kernel_hash, 32)?,
+        initrd_hash: effective_initrd_hash_from_hex(&input.initrd_hash)?,
         sev_hashes_table_gpa: input.sev_hashes_table_gpa,
         sev_es_reset_eip: input.sev_es_reset_eip,
         ovmf_sections: input
@@ -821,9 +842,9 @@ struct ImageMetadata {
     bios_sev: Option<String>,
 }
 
-fn file_sha256_hex(path: &Path) -> Result<String> {
+fn file_sha256(path: &Path) -> Result<Vec<u8>> {
     let data = fs::read(path).with_context(|| format!("cannot read {}", path.display()))?;
-    Ok(hex::encode(Sha256::digest(data)))
+    Ok(Sha256::digest(data).to_vec())
 }
 
 pub fn rootfs_hash_from_cmdline(cmdline: Option<&str>) -> Result<String> {
@@ -840,14 +861,12 @@ pub fn rootfs_hash_from_cmdline(cmdline: Option<&str>) -> Result<String> {
     )?))
 }
 
-/// Compute the AMD SEV-SNP `os_image_hash` from an OS image directory containing
-/// `metadata.json` plus the SEV firmware, kernel and initrd.
-///
-/// This is the canonical producer of `digest.sev.txt`. The value equals the
-/// `os_image_hash` the KMS and verifier derive from a hardware-verified launch
-/// measurement, because both go through [`snp_measurement_os_image_hash`] /
-/// `dstack_types::SevOsImageMeasurement`.
-pub fn sev_os_image_hash_for_image_dir(image_dir: &Path) -> Result<[u8; 32]> {
+/// Compute the AMD SEV-SNP image-invariant measurement projection from an OS
+/// image directory containing `metadata.json` plus the SEV firmware, kernel and
+/// initrd.
+pub fn sev_os_image_measurement_for_image_dir(
+    image_dir: &Path,
+) -> Result<dstack_types::SevOsImageMeasurement> {
     let meta_path = image_dir.join("metadata.json");
     let meta_str = fs::read_to_string(&meta_path)
         .with_context(|| format!("cannot read {}", meta_path.display()))?;
@@ -862,13 +881,16 @@ pub fn sev_os_image_hash_for_image_dir(image_dir: &Path) -> Result<[u8; 32]> {
         .or(meta.bios.as_deref())
         .context("bios-sev/bios is required for amd sev-snp os_image_hash")?;
     let ovmf = ovmf_measurement_info(&image_dir.join(bios))?;
+    // Validate that the measured command line commits the rootfs identity. The
+    // compact image projection does not carry a separate rootfs_hash because it
+    // is already committed by `kernel_cmdline_sha256`.
+    rootfs_hash_from_cmdline(meta.cmdline.as_deref())?;
 
-    let measurement = dstack_types::SevOsImageMeasurement {
-        rootfs_hash: rootfs_hash_from_cmdline(meta.cmdline.as_deref())?,
-        base_cmdline: meta.cmdline.as_deref().map(|c| c.trim().to_string()),
-        ovmf_hash: ovmf.ovmf_hash,
-        kernel_hash: file_sha256_hex(&image_dir.join(&meta.kernel))?,
-        initrd_hash: file_sha256_hex(&image_dir.join(&meta.initrd))?,
+    Ok(dstack_types::SevOsImageMeasurement {
+        kernel_cmdline_sha256: kernel_cmdline_sha256(meta.cmdline.as_deref()),
+        ovmf_hash: decode_required_hex("ovmf_hash", &ovmf.ovmf_hash, 48)?,
+        kernel_hash: file_sha256(&image_dir.join(&meta.kernel))?,
+        initrd_hash: file_sha256(&image_dir.join(&meta.initrd))?,
         sev_hashes_table_gpa: ovmf.sev_hashes_table_gpa,
         sev_es_reset_eip: ovmf.sev_es_reset_eip,
         ovmf_sections: ovmf
@@ -880,8 +902,27 @@ pub fn sev_os_image_hash_for_image_dir(image_dir: &Path) -> Result<[u8; 32]> {
                 section_type: s.section_type,
             })
             .collect(),
-    };
-    Ok(measurement.os_image_hash())
+    })
+}
+
+/// Compute the AMD SEV-SNP `os_image_hash` from an OS image directory.
+///
+/// This is the canonical legacy producer of `digest.sev.txt`. New images carry
+/// the same value in `measurement.json.snp.os_image_hash`. The value equals the
+/// `os_image_hash` the KMS and verifier derive from a hardware-verified launch
+/// measurement, because both go through [`snp_measurement_os_image_hash`] /
+/// `dstack_types::SevOsImageMeasurement`.
+pub fn sev_os_image_hash_for_image_dir(image_dir: &Path) -> Result<[u8; 32]> {
+    Ok(sev_os_image_measurement_for_image_dir(image_dir)?.os_image_hash())
+}
+
+/// Build the SNP section of `measurement.json`.
+pub fn sev_os_image_measurement_document_for_image_dir(
+    image_dir: &Path,
+) -> Result<dstack_types::SevOsImageMeasurementDocument> {
+    Ok(dstack_types::SevOsImageMeasurementDocument::new(
+        sev_os_image_measurement_for_image_dir(image_dir)?,
+    ))
 }
 
 /// `sha256(MEASUREMENT || HOST_DATA)` — the SNP aggregated identity digest.
@@ -1313,13 +1354,13 @@ mod tests {
             "7f51e17f72a04d5422cb2c00998166536019a217376f3aa45a630e59c805a599847ff250dbffcd07e1ba639771d6f05d",
         );
 
-        // os_image_hash derived from the same document must match the value the
-        // CVM advertised in its vm_config (and digest.sev.txt).
+        // os_image_hash derived from the same document must match the current
+        // measurement.json projection for these launch inputs.
         let os_image_hash =
             snp_measurement_os_image_hash(REAL_MEASUREMENT_DOC).expect("derive os_image_hash");
         assert_eq!(
             hex::encode(os_image_hash),
-            "32b4767373ad7fa0f9c418925006194d5c3f5619529f309fe81156789fecd8bc",
+            "b6e8403b8f6167bcef4e39aa1039d8728fe624532ca6cedf2625a87fac2e5fda",
         );
     }
 

@@ -10,6 +10,8 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+ciborium.workspace = true
+hex = { workspace = true, features = ["std"] }
 or-panic.workspace = true
 scale = { workspace = true, features = ["derive"] }
 serde = { workspace = true, features = ["derive"] }

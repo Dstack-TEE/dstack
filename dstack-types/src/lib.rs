@@ -2,9 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use std::path::Path;
+use std::{io::Cursor, path::Path};
 
-use or_panic::ResultOrPanic;
 use scale::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 use serde_human_bytes as hex_bytes;
@@ -32,6 +31,52 @@ pub enum OvmfVariant {
     /// edk2-stable202505+ OVMF (17 RTMR[0] events: new fw_cfg, VARIABLE_AUTHORITY
     /// and BootXXXX entries).
     Stable202505,
+}
+
+impl OvmfVariant {
+    pub fn to_u8(self) -> u8 {
+        match self {
+            Self::Pre202505 => 0,
+            Self::Stable202505 => 1,
+        }
+    }
+
+    pub fn from_u8(value: u8) -> Option<Self> {
+        match value {
+            0 => Some(Self::Pre202505),
+            1 => Some(Self::Stable202505),
+            _ => None,
+        }
+    }
+}
+
+/// Selects how a TDX attestation should bind the OS image.
+///
+/// `Legacy` preserves the existing verifier behavior: `vm_config.os_image_hash`
+/// is the content digest (`digest.txt`) and the verifier recomputes the full
+/// TDX launch measurement using the legacy image/QEMU-derived path.
+///
+/// `Measurement` opts into the no-QEMU verifier path: `vm_config.os_image_hash`
+/// is `measurement.json.tdx.os_image_hash`, `vm_config.tdx_measurement` carries
+/// the self-contained measurement material, and KMS/verifier select the new
+/// logic from this vm_config flag while the attestation quote remains the
+/// existing `DstackTdx`.
+#[derive(Deserialize, Serialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum TdxAttestationVariant {
+    #[default]
+    Legacy,
+    Measurement,
+}
+
+impl TdxAttestationVariant {
+    pub fn is_legacy(&self) -> bool {
+        matches!(self, Self::Legacy)
+    }
+
+    pub fn is_measurement(&self) -> bool {
+        matches!(self, Self::Measurement)
+    }
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
@@ -259,6 +304,14 @@ pub struct VmConfig {
     /// (e.g. parsing the OS version out of `image`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ovmf_variant: Option<OvmfVariant>,
+    /// TDX-only attestation/hash scheme selector. Defaults to `legacy` and is
+    /// omitted from legacy configs to keep old behavior and wire shape stable.
+    #[serde(default, skip_serializing_if = "TdxAttestationVariant::is_legacy")]
+    pub tdx_attestation_variant: TdxAttestationVariant,
+    /// TDX-only no-image-download measurement material. Present only when
+    /// `tdx_attestation_variant = "measurement"` and omitted for legacy TDX.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tdx_measurement: Option<TdxOsImageMeasurementDocument>,
 }
 
 /// One OVMF SEV metadata section (gpa/size/type) that affects the SEV-SNP
@@ -270,34 +323,422 @@ pub struct OvmfSection {
     pub section_type: u32,
 }
 
-/// Image-invariant projection that determines the AMD SEV-SNP OS image identity.
-///
-/// `os_image_hash` is the SHA-256 of this projection, canonically serialized
-/// (JCS). It is shared by the VMM/KMS (which derive it from a verified launch
-/// measurement) and the image build (which precomputes `digest.sev.txt`), so
-/// both sides agree. It deliberately EXCLUDES per-deployment values (vcpus,
-/// vcpu_type, guest_features, app_id, compose_hash): the same OS image must hash
+fn cbor_to_vec<T: Serialize>(value: &T, context: &str) -> Vec<u8> {
+    let mut out = Vec::new();
+    ciborium::ser::into_writer(value, &mut out)
+        .unwrap_or_else(|e| panic!("{context}: failed to encode CBOR: {e}"));
+    out
+}
+
+fn cbor_from_slice<T: serde::de::DeserializeOwned>(
+    bytes: &[u8],
+    context: &str,
+) -> Result<T, String> {
+    ciborium::de::from_reader(Cursor::new(bytes))
+        .map_err(|e| format!("{context}: failed to decode CBOR: {e}"))
+}
+
+fn sha256(bytes: &[u8]) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(bytes).into()
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    hex::encode(sha256(bytes))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct CborOvmfSection {
+    gpa: u64,
+    size: u64,
+    #[serde(rename = "type")]
+    section_type: u32,
+}
+
+impl From<&OvmfSection> for CborOvmfSection {
+    fn from(section: &OvmfSection) -> Self {
+        Self {
+            gpa: section.gpa,
+            size: section.size,
+            section_type: section.section_type,
+        }
+    }
+}
+
+impl From<CborOvmfSection> for OvmfSection {
+    fn from(section: CborOvmfSection) -> Self {
+        Self {
+            gpa: section.gpa,
+            size: section.size,
+            section_type: section.section_type,
+        }
+    }
+}
+
+/// Image-invariant projection that determines the AMD SEV-SNP OS image
+/// identity. It deliberately excludes per-deployment values (vcpus, vcpu_type,
+/// guest_features, app_id, compose_hash): the same OS image must hash
 /// identically regardless of how it is launched.
+///
+/// `os_image_hash` is SHA-256 over the CBOR representation of this projection,
+/// not over the outer measurement.json field names.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SevOsImageMeasurement {
-    pub rootfs_hash: String,
-    pub base_cmdline: Option<String>,
-    pub ovmf_hash: String,
-    pub kernel_hash: String,
-    pub initrd_hash: String,
+    /// SHA-256 of the kernel command line bytes as measured in the SEV-SNP hash
+    /// table (trimmed command line plus trailing NUL byte). This avoids carrying
+    /// the full plaintext command line in image metadata while preserving the
+    /// exact measured value used by OVMF/QEMU.
+    #[serde(with = "hex_bytes")]
+    pub kernel_cmdline_sha256: Vec<u8>,
+    #[serde(with = "hex_bytes")]
+    pub ovmf_hash: Vec<u8>,
+    #[serde(with = "hex_bytes")]
+    pub kernel_hash: Vec<u8>,
+    #[serde(with = "hex_bytes")]
+    pub initrd_hash: Vec<u8>,
     pub sev_hashes_table_gpa: u64,
     pub sev_es_reset_eip: u32,
     pub ovmf_sections: Vec<OvmfSection>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct CborSevOsImageMeasurement {
+    /// Measured kernel cmdline SHA-256.
+    #[serde(rename = "cmdline_sha256", with = "hex_bytes")]
+    kernel_cmdline_sha256: Vec<u8>,
+    /// OVMF launch digest.
+    #[serde(with = "hex_bytes")]
+    ovmf_hash: Vec<u8>,
+    /// Kernel SHA-256.
+    #[serde(with = "hex_bytes")]
+    kernel_hash: Vec<u8>,
+    /// Initrd SHA-256.
+    #[serde(with = "hex_bytes")]
+    initrd_hash: Vec<u8>,
+    /// SEV hash table GPA.
+    hashes_table_gpa: u64,
+    /// SEV-ES AP reset EIP.
+    reset_eip: u32,
+    /// OVMF metadata sections.
+    ovmf_sections: Vec<CborOvmfSection>,
+}
+
+impl From<&SevOsImageMeasurement> for CborSevOsImageMeasurement {
+    fn from(measurement: &SevOsImageMeasurement) -> Self {
+        Self {
+            kernel_cmdline_sha256: measurement.kernel_cmdline_sha256.clone(),
+            ovmf_hash: measurement.ovmf_hash.clone(),
+            kernel_hash: measurement.kernel_hash.clone(),
+            initrd_hash: measurement.initrd_hash.clone(),
+            hashes_table_gpa: measurement.sev_hashes_table_gpa,
+            reset_eip: measurement.sev_es_reset_eip,
+            ovmf_sections: measurement.ovmf_sections.iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<CborSevOsImageMeasurement> for SevOsImageMeasurement {
+    fn from(measurement: CborSevOsImageMeasurement) -> Self {
+        Self {
+            kernel_cmdline_sha256: measurement.kernel_cmdline_sha256,
+            ovmf_hash: measurement.ovmf_hash,
+            kernel_hash: measurement.kernel_hash,
+            initrd_hash: measurement.initrd_hash,
+            sev_hashes_table_gpa: measurement.hashes_table_gpa,
+            sev_es_reset_eip: measurement.reset_eip,
+            ovmf_sections: measurement
+                .ovmf_sections
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+        }
+    }
+}
+
 impl SevOsImageMeasurement {
-    /// SHA-256 over the canonical (JCS) serialization of this projection.
+    /// CBOR representation used as the `os_image_hash` input.
+    pub fn to_cbor_vec(&self) -> Vec<u8> {
+        cbor_to_vec(
+            &CborSevOsImageMeasurement::from(self),
+            "SevOsImageMeasurement",
+        )
+    }
+
+    pub fn from_cbor_slice(bytes: &[u8]) -> Result<Self, String> {
+        cbor_from_slice::<CborSevOsImageMeasurement>(bytes, "SevOsImageMeasurement").map(Into::into)
+    }
+
+    pub fn cbor_json_value_from_slice(bytes: &[u8]) -> Result<serde_json::Value, String> {
+        let cbor = cbor_from_slice::<CborSevOsImageMeasurement>(bytes, "SevOsImageMeasurement")?;
+        serde_json::to_value(cbor)
+            .map_err(|e| format!("SevOsImageMeasurement: failed to convert CBOR to JSON: {e}"))
+    }
+
+    /// SHA-256 over the CBOR representation of this projection.
     pub fn os_image_hash(&self) -> [u8; 32] {
-        use sha2::{Digest, Sha256};
-        // JCS serialization of this plain owned struct (strings/ints/array)
-        // cannot fail; panic loudly if that invariant is ever broken.
-        let canonical = serde_jcs::to_vec(self).or_panic("SevOsImageMeasurement JCS serialization");
-        Sha256::digest(canonical).into()
+        sha256(&self.to_cbor_vec())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SevOsImageMeasurementDocument {
+    /// Document schema version.
+    #[serde(alias = "v")]
+    pub version: u32,
+    /// SHA-256 over the CBOR `measurement` bytes. This field is not included in
+    /// its own hash input.
+    #[serde(alias = "h")]
+    pub os_image_hash: String,
+    /// CBOR bytes for `SevOsImageMeasurement`.
+    #[serde(alias = "m", with = "hex_bytes")]
+    pub measurement: Vec<u8>,
+}
+
+impl SevOsImageMeasurementDocument {
+    pub const VERSION: u32 = 2;
+
+    pub fn new(measurement: SevOsImageMeasurement) -> Self {
+        let measurement = measurement.to_cbor_vec();
+        let os_image_hash = sha256_hex(&measurement);
+        Self {
+            version: Self::VERSION,
+            os_image_hash,
+            measurement,
+        }
+    }
+
+    pub fn decode_measurement(&self) -> Result<SevOsImageMeasurement, String> {
+        SevOsImageMeasurement::from_cbor_slice(&self.measurement)
+    }
+
+    pub fn decode_measurement_value(&self) -> Result<serde_json::Value, String> {
+        SevOsImageMeasurement::cbor_json_value_from_slice(&self.measurement)
+    }
+
+    pub fn measurement_os_image_hash(&self) -> [u8; 32] {
+        sha256(&self.measurement)
+    }
+}
+
+/// Image-invariant projection that determines the TDX OS image identity.
+///
+/// This is the build-time, image-static material for the verifier-side
+/// no-image-download TDX path. Dynamic VM parameters (vCPU count, RAM size,
+/// QEMU PCI topology, GPU count, etc.) are deliberately excluded and must be
+/// supplied by `VmConfig` when replaying RTMRs.
+///
+/// `os_image_hash` is SHA-256 over the CBOR representation of this projection,
+/// not over the outer measurement.json field names.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TdxOsImageMeasurement {
+    pub image: TdxImageMeasurement,
+    pub tdvf: TdxTdvfMeasurement,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TdxImageMeasurement {
+    /// SHA-384 of the exact kernel command line event measured into RTMR[2].
+    ///
+    /// The measured value is the image-provided command line plus OVMF/QEMU's
+    /// `initrd=initrd` suffix, encoded as UTF-16LE with a trailing NUL.
+    #[serde(with = "hex_bytes")]
+    pub kernel_cmdline_sha384: Vec<u8>,
+    /// Authenticode SHA-384 digest of the QEMU-patched kernel image when the
+    /// guest memory is at or above QEMU's high-memory TDX initrd placement
+    /// threshold. Below that threshold the patched kernel header depends on the
+    /// exact guest memory size, so the no-image-download verifier rejects it.
+    #[serde(with = "hex_bytes")]
+    pub kernel_authenticode: Vec<u8>,
+    /// SHA-384 of the initrd file bytes. This is the second RTMR[2] event.
+    #[serde(with = "hex_bytes")]
+    pub initrd_sha384: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TdxTdvfMeasurement {
+    /// OVMF RTMR[0] event layout.
+    pub ovmf_variant: OvmfVariant,
+    pub mrtd: TdxMrtdCandidates,
+    /// Compact TdHobWitnessV1 byte string.
+    #[serde(with = "hex_bytes")]
+    pub td_hob_witness: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TdxMrtdCandidates {
+    /// Candidate MRTD for QEMU's single-pass MEM.PAGE.ADD/MR.EXTEND order.
+    #[serde(with = "hex_bytes")]
+    pub single_pass: Vec<u8>,
+    /// Candidate MRTD for QEMU's two-pass MEM.PAGE.ADD then MR.EXTEND order.
+    #[serde(with = "hex_bytes")]
+    pub two_pass: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct CborTdxImageMeasurement {
+    /// Measured kernel cmdline SHA-384.
+    #[serde(rename = "cmdline_sha384", with = "hex_bytes")]
+    kernel_cmdline_sha384: Vec<u8>,
+    /// QEMU-patched kernel Authenticode SHA-384.
+    #[serde(with = "hex_bytes")]
+    kernel_authenticode: Vec<u8>,
+    /// Initrd SHA-384.
+    #[serde(with = "hex_bytes")]
+    initrd_sha384: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct CborTdxMrtdCandidates {
+    #[serde(with = "hex_bytes")]
+    single_pass: Vec<u8>,
+    #[serde(with = "hex_bytes")]
+    two_pass: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct CborTdxTdvfMeasurement {
+    #[serde(rename = "ovmf")]
+    ovmf_variant: OvmfVariant,
+    mrtd: CborTdxMrtdCandidates,
+    #[serde(rename = "td_hob", with = "hex_bytes")]
+    td_hob_witness: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct CborTdxOsImageMeasurement {
+    image: CborTdxImageMeasurement,
+    tdvf: CborTdxTdvfMeasurement,
+}
+
+impl From<&TdxOsImageMeasurement> for CborTdxOsImageMeasurement {
+    fn from(measurement: &TdxOsImageMeasurement) -> Self {
+        Self {
+            image: CborTdxImageMeasurement {
+                kernel_cmdline_sha384: measurement.image.kernel_cmdline_sha384.clone(),
+                kernel_authenticode: measurement.image.kernel_authenticode.clone(),
+                initrd_sha384: measurement.image.initrd_sha384.clone(),
+            },
+            tdvf: CborTdxTdvfMeasurement {
+                ovmf_variant: measurement.tdvf.ovmf_variant,
+                mrtd: CborTdxMrtdCandidates {
+                    single_pass: measurement.tdvf.mrtd.single_pass.clone(),
+                    two_pass: measurement.tdvf.mrtd.two_pass.clone(),
+                },
+                td_hob_witness: measurement.tdvf.td_hob_witness.clone(),
+            },
+        }
+    }
+}
+
+impl From<CborTdxOsImageMeasurement> for TdxOsImageMeasurement {
+    fn from(measurement: CborTdxOsImageMeasurement) -> Self {
+        Self {
+            image: TdxImageMeasurement {
+                kernel_cmdline_sha384: measurement.image.kernel_cmdline_sha384,
+                kernel_authenticode: measurement.image.kernel_authenticode,
+                initrd_sha384: measurement.image.initrd_sha384,
+            },
+            tdvf: TdxTdvfMeasurement {
+                ovmf_variant: measurement.tdvf.ovmf_variant,
+                mrtd: TdxMrtdCandidates {
+                    single_pass: measurement.tdvf.mrtd.single_pass,
+                    two_pass: measurement.tdvf.mrtd.two_pass,
+                },
+                td_hob_witness: measurement.tdvf.td_hob_witness,
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TdxOsImageMeasurementDocument {
+    /// Document schema version.
+    #[serde(alias = "v")]
+    pub version: u32,
+    /// SHA-256 over the CBOR `measurement` bytes. This field is not included in
+    /// its own hash input.
+    #[serde(alias = "h")]
+    pub os_image_hash: String,
+    /// CBOR bytes for `TdxOsImageMeasurement`.
+    #[serde(alias = "m", with = "hex_bytes")]
+    pub measurement: Vec<u8>,
+}
+
+impl TdxOsImageMeasurement {
+    /// CBOR representation used as the `os_image_hash` input.
+    pub fn to_cbor_vec(&self) -> Vec<u8> {
+        cbor_to_vec(
+            &CborTdxOsImageMeasurement::from(self),
+            "TdxOsImageMeasurement",
+        )
+    }
+
+    pub fn from_cbor_slice(bytes: &[u8]) -> Result<Self, String> {
+        let cbor = cbor_from_slice::<CborTdxOsImageMeasurement>(bytes, "TdxOsImageMeasurement")?;
+        Ok(cbor.into())
+    }
+
+    pub fn cbor_json_value_from_slice(bytes: &[u8]) -> Result<serde_json::Value, String> {
+        let cbor = cbor_from_slice::<CborTdxOsImageMeasurement>(bytes, "TdxOsImageMeasurement")?;
+        serde_json::to_value(cbor)
+            .map_err(|e| format!("TdxOsImageMeasurement: failed to convert CBOR to JSON: {e}"))
+    }
+
+    /// SHA-256 over the CBOR representation of this projection.
+    pub fn os_image_hash(&self) -> [u8; 32] {
+        sha256(&self.to_cbor_vec())
+    }
+}
+
+impl TdxOsImageMeasurementDocument {
+    pub const VERSION: u32 = 2;
+
+    pub fn new(measurement: TdxOsImageMeasurement) -> Self {
+        let measurement = measurement.to_cbor_vec();
+        let os_image_hash = sha256_hex(&measurement);
+        Self {
+            version: Self::VERSION,
+            os_image_hash,
+            measurement,
+        }
+    }
+
+    pub fn decode_measurement(&self) -> Result<TdxOsImageMeasurement, String> {
+        TdxOsImageMeasurement::from_cbor_slice(&self.measurement)
+    }
+
+    pub fn decode_measurement_value(&self) -> Result<serde_json::Value, String> {
+        TdxOsImageMeasurement::cbor_json_value_from_slice(&self.measurement)
+    }
+
+    pub fn measurement_os_image_hash(&self) -> [u8; 32] {
+        sha256(&self.measurement)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OsImageMeasurementDocument {
+    /// Document schema version.
+    #[serde(alias = "v")]
+    pub version: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tdx: Option<TdxOsImageMeasurementDocument>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snp: Option<SevOsImageMeasurementDocument>,
+}
+
+impl OsImageMeasurementDocument {
+    pub const VERSION: u32 = 2;
+
+    pub fn new(
+        tdx: Option<TdxOsImageMeasurementDocument>,
+        snp: Option<SevOsImageMeasurementDocument>,
+    ) -> Self {
+        Self {
+            version: Self::VERSION,
+            tdx,
+            snp,
+        }
     }
 }
 

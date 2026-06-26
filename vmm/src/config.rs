@@ -10,6 +10,7 @@ use path_absolutize::Absolutize;
 use rocket::figment::Figment;
 use serde::{Deserialize, Serialize};
 
+use dstack_types::TdxAttestationVariant;
 use lspci::{lspci_filtered, Device};
 use tracing::{info, warn};
 
@@ -259,6 +260,12 @@ pub struct CvmConfig {
     pub qemu_pci_hole64_size: u64,
     /// QEMU hotplug_off
     pub qemu_hotplug_off: bool,
+
+    /// TDX attestation/hash scheme. `legacy` keeps the existing digest.txt +
+    /// dstack-acpi-tables verifier path; `measurement` opts into the
+    /// measurement.json + no-QEMU verifier path.
+    #[serde(default)]
+    pub tdx_attestation_variant: TdxAttestationVariant,
 
     /// Networking configuration
     pub networking: Networking,

@@ -39,8 +39,8 @@ use crate::{
     cert_store::{CertResolver, CertStoreBuilder},
     config::{Config, TlsConfig},
     kv::{
-        fetch_peers_from_bootnode, AppIdValidator, HttpsClientConfig, InstanceData, KvStore,
-        NodeData, NodeStatus, PortPolicy, WaveKvSyncService,
+        fetch_peers_from_bootnode, AppIdValidator, CertData, HttpsClientConfig, InstanceData,
+        KvStore, NodeData, NodeStatus, PortPolicy, WaveKvSyncService,
     },
     models::{InstanceInfo, PortPolicyView, WgConf},
     proxy::{create_acceptor_with_cert_resolver, AddressGroup, AddressInfo},
@@ -266,6 +266,32 @@ impl ProxyInner {
                 "CertStore: loaded {} certificates from KvStore",
                 all_cert_data.len()
             );
+        }
+        if let (Some(base_domain), Some(cert_chain), Some(cert_key)) = (
+            &config.proxy.base_domain,
+            &config.proxy.cert_chain,
+            &config.proxy.cert_key,
+        ) {
+            let cert_pem = std::fs::read_to_string(cert_chain).with_context(|| {
+                format!("failed to read proxy cert_chain {}", cert_chain.display())
+            })?;
+            let key_pem = std::fs::read_to_string(cert_key)
+                .with_context(|| format!("failed to read proxy cert_key {}", cert_key.display()))?;
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            let cert_data = CertData {
+                cert_pem,
+                key_pem,
+                not_after: now + 14 * 24 * 60 * 60,
+                issued_by: config.sync.node_id,
+                issued_at: now,
+            };
+            cert_resolver
+                .update_cert(base_domain, &cert_data)
+                .with_context(|| format!("failed to load static proxy cert for {base_domain}"))?;
+            info!("CertStore: loaded static proxy certificate for *.{base_domain}");
         }
 
         // Create multi-domain certbot (uses KvStore configs for DNS credentials and domains)

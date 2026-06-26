@@ -2695,6 +2695,8 @@ dependencies = [
 name = "dstack-types"
 version = "0.5.11"
 dependencies = [
+ "ciborium",
+ "hex",
  "or-panic",
  "parity-scale-codec",
  "serde",
