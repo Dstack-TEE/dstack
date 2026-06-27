@@ -24,6 +24,12 @@ pub fn build_app_compose(name: &str, docker_compose_yaml: &str, kms_enabled: boo
         "public_logs": true,
         "public_sysinfo": true,
         "no_instance_id": false,
+        // don't block boot on `chronyc waitsync` — the manifest default is true,
+        // but the single-node direct-port flow has no gateway/RA-TLS that needs a
+        // pre-synced clock, and the strict wait hard-fails (→ reboot loop) whenever
+        // chrony has no usable source. chronyd still syncs in the background.
+        // (NTS is also currently broken in guest images — see dstack#745.)
+        "secure_time": false,
     });
     // pretty-print via Value's Display (`{:#}`) — infallible, and byte-identical
     // to serde_json::to_string_pretty (avoids an expect on an unfailable Result).
