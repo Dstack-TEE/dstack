@@ -53,13 +53,12 @@ pub(crate) async fn cmd_install(mut o: InstallOpts) -> Result<()> {
         Err(e) => println!("  [!]  could not detect host ip: {e}"),
     }
 
-    // 3. resolve paths (no side effects yet).
+    // 3. resolve paths (no side effects yet). The image dir resolves through the
+    //    same helper the `image` subcommands use, so `install --prefix X` and
+    //    `image pull --prefix X` always agree on where images live.
     let prefix = Path::new(&o.prefix);
     let run_dir = prefix.join("run");
-    let images = o
-        .image_path
-        .clone()
-        .unwrap_or_else(|| prefix.join("images").display().to_string());
+    let images = crate::image::resolve_image_dir(o.image_path.as_deref(), &o.prefix);
 
     // 4. preflight — fail BEFORE any side effect (key provider, dirs, units), so
     //    a CID/port clash, a missing image, or a missing os-image pin can't

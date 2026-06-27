@@ -21,9 +21,17 @@ use std::time::SystemTime;
 const REPO: &str = "Dstack-TEE/meta-dstack";
 pub(crate) const RELEASES_URL: &str = "https://github.com/Dstack-TEE/meta-dstack/releases";
 
-/// default image directory — matches `install`'s `<prefix>/images` default.
-pub(crate) fn default_image_dir() -> String {
-    "/var/lib/dstack/images".to_string()
+/// install prefix default, shared by `install` and the `image` subcommands so
+/// their image directories always agree (see [`resolve_image_dir`]).
+pub(crate) const DEFAULT_PREFIX: &str = "/var/lib/dstack";
+
+/// the single rule for where images live: `--image-path` if given, else
+/// `<prefix>/images`. `install` and every `image` subcommand resolve through
+/// here, so they can't drift.
+pub(crate) fn resolve_image_dir(image_path: Option<&str>, prefix: &str) -> String {
+    image_path
+        .map(str::to_string)
+        .unwrap_or_else(|| Path::new(prefix).join("images").display().to_string())
 }
 
 #[derive(Deserialize)]
@@ -43,18 +51,11 @@ pub(crate) fn cmd_image(cmd: ImageCmd) -> Result<()> {
         ImageCmd::Pull {
             version,
             gpu,
-            image_path,
+            loc,
             force,
-        } => pull(
-            version.as_deref(),
-            gpu,
-            &image_path.unwrap_or_else(default_image_dir),
-            force,
-        ),
-        ImageCmd::List { image_path } => list(&image_path.unwrap_or_else(default_image_dir)),
-        ImageCmd::Rm { names, image_path } => {
-            remove(&names, &image_path.unwrap_or_else(default_image_dir))
-        }
+        } => pull(version.as_deref(), gpu, &loc.dir(), force),
+        ImageCmd::List { loc } => list(&loc.dir()),
+        ImageCmd::Rm { names, loc } => remove(&names, &loc.dir()),
     }
 }
 
@@ -202,24 +203,34 @@ pub(crate) fn resolve_image(
     Ok(None)
 }
 
+/// the `dstackup image pull` invocation that targets `image_dir` — bare for the
+/// default dir, else with the explicit `--image-path` so it's copy-paste correct.
+fn pull_cmd(image_dir: &str) -> String {
+    if image_dir == resolve_image_dir(None, DEFAULT_PREFIX) {
+        "dstackup image pull".to_string()
+    } else {
+        format!("dstackup image pull --image-path {image_dir}")
+    }
+}
+
 /// the friendly "no image — here's how to get one" message.
 pub(crate) fn no_image_message(image_dir: &str) -> String {
+    let pull = pull_cmd(image_dir);
     format!(
         "no guest image found in {image_dir}\n\n\
          download the latest with:\n    \
-         dstackup image pull            # cpu image\n    \
-         dstackup image pull --gpu      # gpu (nvidia) image\n\n\
-         or a specific version:\n    \
-         dstackup image pull --version 0.5.11\n\n\
+         {pull}            # cpu image\n    \
+         {pull} --gpu      # gpu (nvidia) image\n\n\
          images are published at {RELEASES_URL}"
     )
 }
 
 fn missing_named_image_message(image_dir: &str, name: &str) -> String {
+    let pull = pull_cmd(image_dir);
     format!(
         "image '{name}' not found in {image_dir}\n\n\
          download it with:\n    \
-         dstackup image pull --version <version>\n\n\
+         {pull} --version <version>\n\n\
          or see what's available locally:\n    \
          dstackup image list"
     )

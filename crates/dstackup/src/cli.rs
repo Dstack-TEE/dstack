@@ -34,12 +34,31 @@ pub(crate) enum Command {
     /// Tear down the deployment (keeps configs + KMS keys unless --purge).
     Destroy {
         /// install prefix to tear down.
-        #[arg(long, default_value = "/var/lib/dstack")]
+        #[arg(long, default_value = crate::image::DEFAULT_PREFIX)]
         prefix: String,
         /// also wipe the prefix (configs + KMS keys).
         #[arg(long)]
         purge: bool,
     },
+}
+
+/// where guest images live, shared by every `image` subcommand and resolved the
+/// same way `install` does: `--image-path` if given, else `<prefix>/images`.
+#[derive(Args)]
+pub(crate) struct ImageLoc {
+    /// image directory (overrides <prefix>/images, e.g. an external store).
+    #[arg(long)]
+    pub(crate) image_path: Option<String>,
+    /// install prefix; images live under <prefix>/images.
+    #[arg(long, default_value = crate::image::DEFAULT_PREFIX)]
+    pub(crate) prefix: String,
+}
+
+impl ImageLoc {
+    /// the resolved image directory.
+    pub(crate) fn dir(&self) -> String {
+        crate::image::resolve_image_dir(self.image_path.as_deref(), &self.prefix)
+    }
 }
 
 /// `dstackup image` subcommands.
@@ -53,18 +72,16 @@ pub(crate) enum ImageCmd {
         /// fetch the gpu (nvidia) image instead of the cpu one.
         #[arg(long)]
         gpu: bool,
-        /// directory to unpack into (default: /var/lib/dstack/images).
-        #[arg(long)]
-        image_path: Option<String>,
+        #[command(flatten)]
+        loc: ImageLoc,
         /// re-download even if the image is already present.
         #[arg(long)]
         force: bool,
     },
     /// List guest OS images already present locally.
     List {
-        /// image directory to scan (default: /var/lib/dstack/images).
-        #[arg(long)]
-        image_path: Option<String>,
+        #[command(flatten)]
+        loc: ImageLoc,
     },
     /// Remove one or more local guest OS images.
     #[command(visible_alias = "remove")]
@@ -72,9 +89,8 @@ pub(crate) enum ImageCmd {
         /// image name(s) to delete (as shown by `dstackup image list`).
         #[arg(value_name = "NAME", required = true)]
         names: Vec<String>,
-        /// image directory to remove from (default: /var/lib/dstack/images).
-        #[arg(long)]
-        image_path: Option<String>,
+        #[command(flatten)]
+        loc: ImageLoc,
     },
 }
 
@@ -95,7 +111,7 @@ pub(crate) struct InstallOpts {
     pub(crate) platform: String,
 
     /// install prefix for configs, certs, run state.
-    #[arg(long, default_value = "/var/lib/dstack")]
+    #[arg(long, default_value = crate::image::DEFAULT_PREFIX)]
     pub(crate) prefix: String,
 
     /// systemd instance suffix: units become `dstack-vmm-<instance>` etc.,
