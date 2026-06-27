@@ -66,6 +66,16 @@ pub(crate) enum ImageCmd {
         #[arg(long)]
         image_path: Option<String>,
     },
+    /// Remove one or more local guest OS images.
+    #[command(visible_alias = "remove")]
+    Rm {
+        /// image name(s) to delete (as shown by `dstackup image list`).
+        #[arg(value_name = "NAME", required = true)]
+        names: Vec<String>,
+        /// image directory to remove from (default: /var/lib/dstack/images).
+        #[arg(long)]
+        image_path: Option<String>,
+    },
 }
 
 /// flags for `dstackup install`.

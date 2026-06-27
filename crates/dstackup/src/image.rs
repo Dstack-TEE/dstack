@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-//! `dstackup image` — fetch and list guest OS images.
+//! `dstackup image` — fetch, list, and remove guest OS images.
 //!
 //! Images are published as release tarballs at `Dstack-TEE/meta-dstack`. There
 //! are two variants — cpu (`dstack-<ver>`) and gpu (`dstack-nvidia-<ver>`); a
@@ -52,6 +52,9 @@ pub(crate) fn cmd_image(cmd: ImageCmd) -> Result<()> {
             force,
         ),
         ImageCmd::List { image_path } => list(&image_path.unwrap_or_else(default_image_dir)),
+        ImageCmd::Rm { names, image_path } => {
+            remove(&names, &image_path.unwrap_or_else(default_image_dir))
+        }
     }
 }
 
@@ -135,6 +138,36 @@ fn list(image_dir: &str) -> Result<()> {
         println!("  {name}");
     }
     Ok(())
+}
+
+/// delete one or more local images by name (the `<image_dir>/<name>` dir).
+fn remove(names: &[String], image_dir: &str) -> Result<()> {
+    let mut removed = 0;
+    for name in names {
+        // a name must be a plain dir component — never a path that could escape
+        // image_dir (`..`, `/foo`) and delete something we don't own.
+        if !valid_image_name(name) {
+            bail!("invalid image name {name:?} (expected a plain image name, see `dstackup image list`)");
+        }
+        let dir = Path::new(image_dir).join(name);
+        if !dir.is_dir() {
+            println!("  [!]  {name}: not found in {image_dir}");
+            continue;
+        }
+        fs::remove_dir_all(&dir).with_context(|| format!("removing {}", dir.display()))?;
+        println!("  [ok] removed {name}");
+        removed += 1;
+    }
+    if removed == 0 {
+        bail!("removed nothing (see `dstackup image list`)");
+    }
+    Ok(())
+}
+
+/// a removable image name is a single path component, never `.`/`..` or a path
+/// (so `rm` can't be tricked into deleting outside the image dir).
+fn valid_image_name(name: &str) -> bool {
+    !name.is_empty() && name != "." && name != ".." && !name.contains('/') && !name.contains('\\')
 }
 
 /// resolve which guest image `install` should use: an explicit `--image` if
@@ -337,5 +370,13 @@ mod tests {
     fn messages_mention_the_pull_command() {
         assert!(no_image_message("/d").contains("dstackup image pull"));
         assert!(missing_named_image_message("/d", "x").contains("dstackup image pull"));
+    }
+
+    #[test]
+    fn rm_rejects_path_escapes() {
+        assert!(valid_image_name("dstack-0.5.11"));
+        for bad in ["", ".", "..", "/etc", "a/b", "..\\x"] {
+            assert!(!valid_image_name(bad), "{bad:?} should be rejected");
+        }
     }
 }
