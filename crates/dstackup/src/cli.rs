@@ -28,6 +28,9 @@ pub(crate) enum Command {
     Install(InstallOpts),
     /// Show the health of the host stack.
     Status,
+    /// Download or list guest OS images.
+    #[command(subcommand)]
+    Image(ImageCmd),
     /// Tear down the deployment (keeps configs + KMS keys unless --purge).
     Destroy {
         /// install prefix to tear down.
@@ -36,6 +39,32 @@ pub(crate) enum Command {
         /// also wipe the prefix (configs + KMS keys).
         #[arg(long)]
         purge: bool,
+    },
+}
+
+/// `dstackup image` subcommands.
+#[derive(Subcommand)]
+pub(crate) enum ImageCmd {
+    /// Download a guest OS image from meta-dstack releases.
+    Pull {
+        /// image version to fetch (default: the latest release).
+        #[arg(long, value_name = "VERSION")]
+        version: Option<String>,
+        /// fetch the gpu (nvidia) image instead of the cpu one.
+        #[arg(long)]
+        gpu: bool,
+        /// directory to unpack into (default: /var/lib/dstack/images).
+        #[arg(long)]
+        image_path: Option<String>,
+        /// re-download even if the image is already present.
+        #[arg(long)]
+        force: bool,
+    },
+    /// List guest OS images already present locally.
+    List {
+        /// image directory to scan (default: /var/lib/dstack/images).
+        #[arg(long)]
+        image_path: Option<String>,
     },
 }
 

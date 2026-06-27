@@ -17,7 +17,7 @@ use std::fs;
 use std::path::Path;
 use std::time::Duration;
 
-pub(crate) async fn cmd_install(o: InstallOpts) -> Result<()> {
+pub(crate) async fn cmd_install(mut o: InstallOpts) -> Result<()> {
     // --expose is not safe yet: the rendered vmm.toml binds the VM-control
     // plane with neither TLS nor an auth token (the management RPCs are not
     // behind an auth guard), so exposing it would hand deploy/destroy to anyone
@@ -62,7 +62,11 @@ pub(crate) async fn cmd_install(o: InstallOpts) -> Result<()> {
         .unwrap_or_else(|| prefix.join("images").display().to_string());
 
     // 4. preflight — fail BEFORE any side effect (key provider, dirs, units), so
-    //    a CID/port clash or a missing os-image pin can't half-install the host.
+    //    a CID/port clash, a missing image, or a missing os-image pin can't
+    //    half-install the host. Resolve the guest image first: explicit --image,
+    //    else the newest present locally (KMS mode needs one now and errors with
+    //    download guidance; --no-kms only needs one later, at `dstack deploy`).
+    o.image = crate::image::resolve_image(&images, o.image.as_deref(), !o.no_kms)?;
     let cid_start = pick_cid_start(o.cid_start, &host::occupied_cid_ranges())?;
     preflight_ports(&o)?;
     let os_image_hash = resolve_image_pin(&o, &images, platform)?;
