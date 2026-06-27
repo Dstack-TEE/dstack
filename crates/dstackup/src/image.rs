@@ -44,6 +44,10 @@ struct Release {
 struct Asset {
     name: String,
     browser_download_url: String,
+    /// `"sha256:<hex>"` when the release publishes one (newer releases do); we
+    /// verify the download against it. absent on older releases.
+    #[serde(default)]
+    digest: Option<String>,
 }
 
 pub(crate) fn cmd_image(cmd: ImageCmd) -> Result<()> {
@@ -94,37 +98,84 @@ fn pull(version: Option<&str>, gpu: bool, image_dir: &str, force: bool) -> Resul
                 .join(", ")
         )
     })?;
+    // never trust the asset name into a filesystem path (github forbids `/` in
+    // asset names, but don't rely on that structurally).
+    if !valid_image_name(&asset.name) {
+        bail!(
+            "refusing release asset with an unsafe name {:?}",
+            asset.name
+        );
+    }
     println!("  [..] release {} -> {}", release.tag_name, asset.name);
 
     fs::create_dir_all(image_dir).with_context(|| format!("creating {image_dir}"))?;
 
-    // the asset name doesn't always match the unpacked dir (e.g. a `-uki` asset
-    // unpacks to the plain version dir), so snapshot the dir set before/after and
-    // diff, rather than guessing the name.
-    let before = image_subdirs(image_dir);
+    // download → verify checksum → unpack into a dot-prefixed staging dir →
+    // adopt (atomic rename) only once metadata.json is present. so a truncated
+    // download or a tar that dies mid-unpack can never masquerade as a valid
+    // image. temp artifacts are dot-prefixed (skipped by listings) and cleaned
+    // up regardless of outcome.
     let tmp = Path::new(image_dir).join(format!(".{}.partial", asset.name));
+    let staging = Path::new(image_dir).join(format!(".{}.staging", asset.name));
     let _ = fs::remove_file(&tmp);
-    let dl = download(&asset.browser_download_url, &tmp.to_string_lossy());
-    let untar = dl.and_then(|()| extract(&tmp.to_string_lossy(), image_dir));
+    let _ = fs::remove_dir_all(&staging);
+    let adopted = stage_image(asset, image_dir, &tmp, &staging);
     let _ = fs::remove_file(&tmp);
-    untar?;
+    let _ = fs::remove_dir_all(&staging);
+    let name = adopted?;
 
-    let name = image_subdirs(image_dir)
-        .into_iter()
-        .find(|d| {
-            !before.contains(d) && Path::new(image_dir).join(d).join("metadata.json").exists()
-        })
-        .unwrap_or(expected);
-    let dest = Path::new(image_dir).join(&name);
-    if !dest.join("metadata.json").exists() {
-        bail!(
-            "unpacked {} but found no metadata.json under {} (unexpected tarball layout)",
-            asset.name,
-            dest.display()
-        );
-    }
     println!("  [ok] image ready: {name}");
     println!("  deploy with: dstackup install --image {name}   (or: dstack deploy <compose> --image {name})");
+    Ok(())
+}
+
+/// download, verify, unpack into `staging`, and atomically move the unpacked
+/// image dir into `image_dir`. returns the image's (unpacked) directory name.
+fn stage_image(asset: &Asset, image_dir: &str, tmp: &Path, staging: &Path) -> Result<String> {
+    download(&asset.browser_download_url, &tmp.to_string_lossy())?;
+    verify_digest(tmp, asset.digest.as_deref())?;
+    fs::create_dir_all(staging).with_context(|| format!("creating {}", staging.display()))?;
+    extract(&tmp.to_string_lossy(), &staging.to_string_lossy())?;
+    // the unpacked dir name needn't match the asset name (e.g. a `-uki` asset),
+    // so find the dir that actually holds a metadata.json.
+    let inner = image_subdirs(&staging.to_string_lossy())
+        .into_iter()
+        .find(|d| staging.join(d).join("metadata.json").exists())
+        .context("unpacked tarball has no image dir with a metadata.json")?;
+    let dest = Path::new(image_dir).join(&inner);
+    let _ = fs::remove_dir_all(&dest);
+    fs::rename(staging.join(&inner), &dest)
+        .with_context(|| format!("moving image into {}", dest.display()))?;
+    Ok(inner)
+}
+
+/// verify a downloaded file against the release's `"sha256:<hex>"` digest. fails
+/// closed on mismatch; warns (does not fail) when the release published none.
+fn verify_digest(file: &Path, expected: Option<&str>) -> Result<()> {
+    let Some(expected) = expected else {
+        println!("  [!]  release published no sha256 digest — integrity NOT verified");
+        return Ok(());
+    };
+    let want = expected
+        .strip_prefix("sha256:")
+        .unwrap_or(expected)
+        .to_lowercase();
+    let out = tool("sha256sum")
+        .arg(file)
+        .output()
+        .context("running sha256sum")?;
+    if !out.status.success() {
+        bail!("sha256sum failed on {}", file.display());
+    }
+    let got = String::from_utf8_lossy(&out.stdout)
+        .split_whitespace()
+        .next()
+        .unwrap_or_default()
+        .to_lowercase();
+    if got != want {
+        bail!("image checksum mismatch (expected {want}, got {got}) — refusing a tampered or corrupt download");
+    }
+    println!("  [ok] sha256 verified");
     Ok(())
 }
 
@@ -190,10 +241,16 @@ pub(crate) fn resolve_image(
         }
         bail!("{}", missing_named_image_message(image_dir, name));
     }
-    if let Some(newest) = installed_images(image_dir).pop() {
-        println!(
-            "  [ok] using image {newest} (newest in {image_dir}; pass --image to pick another)"
-        );
+    let mut imgs = installed_images(image_dir);
+    if let Some(newest) = imgs.pop() {
+        if imgs.is_empty() {
+            println!("  [ok] using image {newest}");
+        } else {
+            println!(
+                "  [ok] using image {newest} (newest by fetch time; also present: {} — pass --image to choose)",
+                imgs.join(", ")
+            );
+        }
         return Ok(Some(newest));
     }
     if require {
@@ -297,8 +354,17 @@ fn download(url: &str, dest: &str) -> Result<()> {
 
 fn extract(tarball: &str, into: &str) -> Result<()> {
     println!("  [..] unpacking...");
+    // `tar` already refuses absolute/`..` members; drop owner/perms from the
+    // (root-run) extraction so a hostile member set can't carry setuid/ownership.
     let ok = tool("tar")
-        .args(["-xzf", tarball, "-C", into])
+        .args([
+            "-xzf",
+            tarball,
+            "-C",
+            into,
+            "--no-same-owner",
+            "--no-same-permissions",
+        ])
         .status()
         .context("running tar")?
         .success();
@@ -308,7 +374,8 @@ fn extract(tarball: &str, into: &str) -> Result<()> {
     Ok(())
 }
 
-/// subdirectory names directly under `dir` (no validation).
+/// subdirectory names directly under `dir`, excluding dot-prefixed entries (our
+/// `.partial`/`.staging` scratch, and never a real image name).
 fn image_subdirs(dir: &str) -> Vec<String> {
     let Ok(rd) = fs::read_dir(dir) else {
         return Vec::new();
@@ -316,6 +383,7 @@ fn image_subdirs(dir: &str) -> Vec<String> {
     rd.flatten()
         .filter(|e| e.path().is_dir())
         .filter_map(|e| e.file_name().into_string().ok())
+        .filter(|n| !n.starts_with('.'))
         .collect()
 }
 
@@ -345,6 +413,7 @@ mod tests {
         Asset {
             name: name.to_string(),
             browser_download_url: format!("https://x/{name}"),
+            digest: None,
         }
     }
 
