@@ -12,6 +12,7 @@
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
+use dstack_cli_core::layout::InstallLayout;
 use dstack_cli_core::vmm::{Vmm, DEFAULT_HOST};
 use dstack_cli_core::{compose, ports, rpc};
 
@@ -23,9 +24,13 @@ use dstack_cli_core::{compose, ports, rpc};
 )]
 struct Cli {
     /// VMM endpoint: `unix:/path/to/vmm.sock` (local) or `http(s)://host:port` (remote).
-    /// Defaults to the local control socket.
+    /// Defaults to the local `dstackup install` endpoint, then the local control socket.
     #[arg(long, global = true)]
     host: Option<String>,
+
+    /// local `dstackup install` prefix to read defaults from. Omit for the default system install.
+    #[arg(long, global = true, value_name = "DIR")]
+    prefix: Option<String>,
 
     /// auth token for a remote VMM.
     #[arg(long, global = true)]
@@ -44,11 +49,14 @@ enum Command {
     /// Deploy an app from a docker-compose file.
     Deploy {
         /// path to the docker-compose file.
-        compose: String,
+        compose: Option<String>,
+        /// path to the docker-compose file.
+        #[arg(long = "compose", short = 'c', value_name = "PATH")]
+        compose_file: Option<String>,
         /// app name.
-        #[arg(long, default_value = "app")]
+        #[arg(long, short = 'n', default_value = "app")]
         name: String,
-        /// guest OS image version (required to actually deploy).
+        /// guest OS image name. Defaults to the image selected by `dstackup install`.
         #[arg(long)]
         image: Option<String>,
         /// vCPUs.
@@ -68,9 +76,8 @@ enum Command {
         /// deploy in non-KMS mode (ephemeral keys; no KMS required).
         #[arg(long)]
         no_kms: bool,
-        /// register the app's compose hash in this auth-allowlist.json (local,
-        /// KMS mode) so the KMS will issue it keys. Usually the path printed by
-        /// `dstackup install`.
+        /// register the app's compose hash in this auth-allowlist.json. Defaults
+        /// to the local allowlist from `dstackup install`.
         #[arg(long, value_name = "PATH")]
         allowlist: Option<String>,
         /// build + hash the compose and print it, without deploying.
@@ -101,14 +108,21 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
     // remote-auth wiring lands with the TLS+token transport.
     let _ = &cli.token;
-    let host = cli.host.as_deref().unwrap_or(DEFAULT_HOST);
+    let defaults = LocalDefaults::read(cli.prefix.as_deref());
+    let use_local_defaults = cli.host.is_none();
+    let host = cli
+        .host
+        .clone()
+        .or_else(|| defaults.as_ref().and_then(|d| d.client_url.clone()))
+        .unwrap_or_else(|| DEFAULT_HOST.to_string());
     let json = cli.json;
 
     match cli.command {
-        Command::Apps => cmd_apps(host, json).await,
-        Command::Logs { id, lines } => cmd_logs(host, &id, lines).await,
+        Command::Apps => cmd_apps(&host, json).await,
+        Command::Logs { id, lines } => cmd_logs(&host, &id, lines).await,
         Command::Deploy {
             compose,
+            compose_file,
             name,
             image,
             vcpu,
@@ -119,8 +133,23 @@ async fn main() -> Result<()> {
             allowlist,
             dry_run,
         } => {
+            let compose = resolve_compose_arg(compose, compose_file)?;
+            let image = if use_local_defaults {
+                image.or_else(|| defaults.as_ref().and_then(|d| d.image.clone()))
+            } else {
+                image
+            };
+            let allowlist = if use_local_defaults {
+                allowlist.or_else(|| {
+                    (!no_kms)
+                        .then(|| defaults.as_ref().and_then(LocalDefaults::allowlist_path))
+                        .flatten()
+                })
+            } else {
+                allowlist
+            };
             cmd_deploy(
-                host,
+                &host,
                 &compose,
                 &name,
                 image.as_deref(),
@@ -137,6 +166,140 @@ async fn main() -> Result<()> {
         }
         Command::Info { .. } => stub("info"),
         Command::Init => stub("init"),
+    }
+}
+
+fn resolve_compose_arg(positional: Option<String>, flagged: Option<String>) -> Result<String> {
+    match (positional, flagged) {
+        (Some(path), None) | (None, Some(path)) => Ok(path),
+        (Some(_), Some(_)) => bail!("pass the compose file once: either as <COMPOSE> or with -c"),
+        (None, None) => bail!("missing compose file: pass -c <docker-compose.yaml>"),
+    }
+}
+
+struct LocalDefaults {
+    client_url: Option<String>,
+    image: Option<String>,
+    allowlist_path: Option<String>,
+}
+
+impl LocalDefaults {
+    fn read(prefix: Option<&str>) -> Option<Self> {
+        let path = InstallLayout::state_path_for_prefix(prefix);
+        let body = std::fs::read_to_string(path).ok()?;
+        let v: serde_json::Value = serde_json::from_str(&body).ok()?;
+        Some(Self::from_value(&v))
+    }
+
+    fn from_value(v: &serde_json::Value) -> Self {
+        Self {
+            client_url: v
+                .get("client_url")
+                .and_then(|x| x.as_str())
+                .filter(|s| !s.is_empty())
+                .map(str::to_string),
+            image: v
+                .get("image")
+                .and_then(|x| x.as_str())
+                .filter(|s| !s.is_empty())
+                .map(str::to_string),
+            allowlist_path: v
+                .get("allowlist_path")
+                .and_then(|x| x.as_str())
+                .filter(|s| !s.is_empty())
+                .map(str::to_string),
+        }
+    }
+
+    fn allowlist_path(&self) -> Option<String> {
+        self.allowlist_path.clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_local_install_defaults() {
+        let value = serde_json::json!({
+            "client_url": "http://127.0.0.1:19080",
+            "image": "dstack-0.5.11",
+            "allowlist_path": "/tmp/dstack/etc/dstack/auth-allowlist.json"
+        });
+        let defaults = LocalDefaults::from_value(&value);
+        assert_eq!(
+            defaults.client_url.as_deref(),
+            Some("http://127.0.0.1:19080")
+        );
+        assert_eq!(defaults.image.as_deref(), Some("dstack-0.5.11"));
+        assert_eq!(
+            defaults.allowlist_path().as_deref(),
+            Some("/tmp/dstack/etc/dstack/auth-allowlist.json")
+        );
+    }
+
+    #[test]
+    fn reads_local_install_defaults_from_prefix() {
+        let install_root =
+            std::env::temp_dir().join(format!("dstack-cli-state-test-{}", std::process::id()));
+        let state_dir = install_root.join("var/lib/dstack");
+        std::fs::create_dir_all(&state_dir).unwrap();
+        std::fs::write(
+            state_dir.join(dstack_cli_core::layout::STATE_FILE),
+            r#"{
+              "client_url": "http://127.0.0.1:29080",
+              "image": "dstack-0.5.12",
+              "allowlist_path": "/tmp/custom-dstack/etc/dstack/auth-allowlist.json"
+            }"#,
+        )
+        .unwrap();
+
+        let prefix = dstack_cli_core::layout::path_string(&install_root);
+        let defaults = LocalDefaults::read(Some(&prefix)).unwrap();
+        assert_eq!(
+            defaults.client_url.as_deref(),
+            Some("http://127.0.0.1:29080")
+        );
+        assert_eq!(defaults.image.as_deref(), Some("dstack-0.5.12"));
+        assert_eq!(
+            defaults.allowlist_path().as_deref(),
+            Some("/tmp/custom-dstack/etc/dstack/auth-allowlist.json")
+        );
+
+        let _ = std::fs::remove_dir_all(install_root);
+    }
+
+    #[test]
+    fn parses_phala_style_deploy_flags() {
+        let cli = Cli::parse_from([
+            "dstack",
+            "deploy",
+            "-n",
+            "hello",
+            "-c",
+            "examples/hello-nginx/docker-compose.yaml",
+            "--port",
+            "8080:80",
+        ]);
+        match cli.command {
+            Command::Deploy {
+                compose,
+                compose_file,
+                name,
+                ports,
+                ..
+            } => {
+                assert_eq!(compose, None);
+                assert_eq!(
+                    compose_file.as_deref(),
+                    Some("examples/hello-nginx/docker-compose.yaml")
+                );
+                assert_eq!(name, "hello");
+                assert_eq!(ports, vec!["8080:80"]);
+            }
+            _ => panic!("expected deploy command"),
+        }
     }
 }
 
@@ -199,7 +362,9 @@ async fn cmd_deploy(
         return Ok(());
     }
     if cfg.image.is_empty() {
-        bail!("an image is required to deploy (pass --image <version>)");
+        bail!(
+            "an image is required to deploy: run `dstackup install` first, or pass --image <name>"
+        );
     }
 
     // register the compose hash so the KMS will issue keys (KMS mode, local).

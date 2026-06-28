@@ -7,10 +7,17 @@
 use clap::{Args, Parser, Subcommand};
 use dstack_cli_core::config;
 
+pub(crate) const DEFAULT_VMM_BIN: &str = "dstack-vmm";
+pub(crate) const DEFAULT_AUTH_BIN: &str = "dstack-auth";
+pub(crate) const DEFAULT_SUPERVISOR_BIN: &str = "supervisor";
+pub(crate) const DEFAULT_SOURCE_REPO: &str = "https://github.com/Dstack-TEE/dstack";
+pub(crate) const DEFAULT_SOURCE_REF: &str = "master";
+
 #[derive(Parser)]
 #[command(name = "dstackup", version, about = "set up and manage a dstack host")]
 pub(crate) struct Cli {
-    /// VMM control socket / endpoint to talk to (for status and attach).
+    /// VMM control socket / endpoint to talk to. Defaults to the local install state,
+    /// then the local control socket.
     #[arg(long, global = true)]
     pub(crate) host: Option<String>,
 
@@ -27,37 +34,41 @@ pub(crate) enum Command {
     /// VMM + auth webhook. (Gramine bring-up and KMS-in-CVM bootstrap follow.)
     Install(InstallOpts),
     /// Show the health of the host stack.
-    Status,
+    Status {
+        /// installation root to inspect. Omit for the default system install.
+        #[arg(long, value_name = "DIR")]
+        prefix: Option<String>,
+    },
     /// Download or list guest OS images.
     #[command(subcommand)]
     Image(ImageCmd),
     /// Tear down the deployment (keeps configs + KMS keys unless --purge).
     Destroy {
-        /// install prefix to tear down.
-        #[arg(long, default_value = crate::image::DEFAULT_PREFIX)]
-        prefix: String,
-        /// also wipe the prefix (configs + KMS keys).
+        /// installation root to tear down. Omit for the default system install.
+        #[arg(long, value_name = "DIR")]
+        prefix: Option<String>,
+        /// also wipe generated config, state, cache, runtime files, and KMS keys.
         #[arg(long)]
         purge: bool,
     },
 }
 
 /// where guest images live, shared by every `image` subcommand and resolved the
-/// same way `install` does: `--image-path` if given, else `<prefix>/images`.
+/// same way `install` does: `--image-path` if given, else the layout image dir.
 #[derive(Args)]
 pub(crate) struct ImageLoc {
-    /// image directory (overrides <prefix>/images, e.g. an external store).
+    /// image directory (overrides the layout image dir, e.g. an external store).
     #[arg(long)]
     pub(crate) image_path: Option<String>,
-    /// install prefix; images live under <prefix>/images.
-    #[arg(long, default_value = crate::image::DEFAULT_PREFIX)]
-    pub(crate) prefix: String,
+    /// installation root. Omit for the default system install.
+    #[arg(long, value_name = "DIR")]
+    pub(crate) prefix: Option<String>,
 }
 
 impl ImageLoc {
     /// the resolved image directory.
     pub(crate) fn dir(&self) -> String {
-        crate::image::resolve_image_dir(self.image_path.as_deref(), &self.prefix)
+        crate::image::resolve_image_dir(self.image_path.as_deref(), self.prefix.as_deref())
     }
 }
 
@@ -105,7 +116,7 @@ pub(crate) struct InstallOpts {
     #[arg(long, value_name = "IP")]
     pub(crate) expose: Option<String>,
 
-    /// guest OS image version to deploy.
+    /// guest OS image name or release version to deploy.
     #[arg(long, value_name = "VERSION")]
     pub(crate) image: Option<String>,
 
@@ -113,29 +124,58 @@ pub(crate) struct InstallOpts {
     #[arg(long, default_value = "auto")]
     pub(crate) platform: String,
 
-    /// install prefix for configs, certs, run state.
-    #[arg(long, default_value = crate::image::DEFAULT_PREFIX)]
-    pub(crate) prefix: String,
+    /// installation root. Omit for the default system install.
+    #[arg(long, value_name = "DIR")]
+    pub(crate) prefix: Option<String>,
 
     /// systemd instance suffix: units become `dstack-vmm-<instance>` etc.,
     /// so a fresh install coexists with an existing `dstack-vmm.service`.
     #[arg(long)]
     pub(crate) instance: Option<String>,
 
-    /// guest image directory (default: <prefix>/images).
+    /// guest image directory (default: the layout image directory).
     #[arg(long)]
     pub(crate) image_path: Option<String>,
 
+    /// dstack source checkout used to build managed binaries.
+    /// Defaults to the current checkout, or a source cache under the install layout.
+    #[arg(long, value_name = "DIR")]
+    pub(crate) source: Option<String>,
+
+    /// Git repository used when dstackup needs to populate the source cache.
+    #[arg(long, default_value = DEFAULT_SOURCE_REPO)]
+    pub(crate) source_repo: String,
+
+    /// Git ref used when dstackup needs to populate the source cache.
+    #[arg(long, default_value = DEFAULT_SOURCE_REF)]
+    pub(crate) source_ref: String,
+
+    /// directory where dstackup installs user-facing dstack binaries.
+    #[arg(long, value_name = "DIR")]
+    pub(crate) bin_dir: Option<String>,
+
+    /// directory where dstackup installs private host daemon binaries.
+    #[arg(long, value_name = "DIR")]
+    pub(crate) libexec_dir: Option<String>,
+
+    /// directory where dstackup installs static assets and examples.
+    #[arg(long, value_name = "DIR")]
+    pub(crate) share_dir: Option<String>,
+
+    /// use the configured binaries as-is; do not build or install managed binaries.
+    #[arg(long)]
+    pub(crate) skip_managed_binaries: bool,
+
     /// dstack-vmm binary.
-    #[arg(long, default_value = "dstack-vmm")]
+    #[arg(long, default_value = DEFAULT_VMM_BIN)]
     pub(crate) vmm_bin: String,
 
     /// dstack-auth binary.
-    #[arg(long, default_value = "dstack-auth")]
+    #[arg(long, default_value = DEFAULT_AUTH_BIN)]
     pub(crate) auth_bin: String,
 
-    /// dstack-supervisor binary.
-    #[arg(long, default_value = "dstack-supervisor")]
+    /// supervisor binary.
+    #[arg(long, default_value = DEFAULT_SUPERVISOR_BIN)]
     pub(crate) supervisor_bin: String,
 
     /// qemu binary.
@@ -183,8 +223,9 @@ pub(crate) struct InstallOpts {
     #[arg(long)]
     pub(crate) no_kms: bool,
 
-    /// proceed even if the app OS image can't be pinned (no digest.txt) —
-    /// apps will boot any unmeasured image and still get keys. NOT recommended.
+    /// proceed even if the app OS image can't be pinned (missing platform
+    /// digest) — apps will boot any unmeasured image and still get keys. not
+    /// recommended.
     #[arg(long)]
     pub(crate) allow_unpinned_image: bool,
 

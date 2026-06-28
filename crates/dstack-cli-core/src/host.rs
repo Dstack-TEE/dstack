@@ -29,6 +29,11 @@ pub fn check_sgx() -> Sgx {
     }
 }
 
+/// check for the AMD secure processor device the host VMM needs for SEV-SNP.
+pub fn check_sev() -> bool {
+    Path::new("/dev/sev").exists()
+}
+
 /// require SGX, with a clear message if it is missing (design decision: fail fast
 /// rather than silently degrade to a host-mode KMS with no real attestation).
 pub fn require_sgx() -> Result<()> {
@@ -103,7 +108,7 @@ pub fn require_platform(platform: Platform) -> Result<()> {
     match platform {
         Platform::Tdx => require_sgx(),
         Platform::AmdSevSnp => {
-            if Path::new("/dev/sev").exists() {
+            if check_sev() {
                 Ok(())
             } else {
                 bail!(

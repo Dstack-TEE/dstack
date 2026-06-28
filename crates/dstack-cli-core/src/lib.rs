@@ -21,5 +21,6 @@ pub mod compose;
 pub mod config;
 pub mod fsutil;
 pub mod host;
+pub mod layout;
 pub mod ports;
 pub mod vmm;

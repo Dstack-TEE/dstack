@@ -5,15 +5,17 @@
 //! `dstackup image` — fetch, list, and remove guest OS images.
 //!
 //! Images are published as release tarballs at `Dstack-TEE/meta-dstack`. There
-//! are two variants — cpu (`dstack-<ver>`) and gpu (`dstack-nvidia-<ver>`); a
-//! single image serves both TDX and SEV-SNP (it ships both firmwares + digests,
-//! and the platform selects which at boot). HTTP + checksum are native (reqwest
-//! is already linked via the prpc client; sha2 verifies inline); only `tar` is
+//! are two variants — cpu (`dstack-<ver>`) and gpu (`dstack-nvidia-<ver>`).
+//! `install` validates the selected image against the platform-specific digest
+//! it needs before starting the host stack: TDX uses `digest.txt`, and
+//! SEV-SNP uses `digest.sev.txt`. HTTP + checksum are native (reqwest is
+//! already linked via the prpc client; sha2 verifies inline); only `tar` is
 //! shelled out, since GNU tar is ubiquitous and battle-tested on archive edges.
 
 use crate::cli::ImageCmd;
 use crate::systemd::tool;
 use anyhow::{bail, Context, Result};
+use dstack_cli_core::layout::{path_string, validate_owned_path, InstallLayout};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -24,17 +26,17 @@ use std::time::SystemTime;
 const REPO: &str = "Dstack-TEE/meta-dstack";
 pub(crate) const RELEASES_URL: &str = "https://github.com/Dstack-TEE/meta-dstack/releases";
 
-/// install prefix default, shared by `install` and the `image` subcommands so
-/// their image directories always agree (see [`resolve_image_dir`]).
-pub(crate) const DEFAULT_PREFIX: &str = "/var/lib/dstack";
-
-/// the single rule for where images live: `--image-path` if given, else
-/// `<prefix>/images`. `install` and every `image` subcommand resolve through
+/// the single rule for where images live: `--image-path` if given, else the
+/// image directory from the install layout. `install` and every image subcommand resolve through
 /// here, so they can't drift.
-pub(crate) fn resolve_image_dir(image_path: Option<&str>, prefix: &str) -> String {
+pub(crate) fn resolve_image_dir(image_path: Option<&str>, prefix: Option<&str>) -> String {
     image_path
         .map(str::to_string)
-        .unwrap_or_else(|| Path::new(prefix).join("images").display().to_string())
+        .unwrap_or_else(|| path_string(&InstallLayout::image_dir_for_prefix(prefix)))
+}
+
+pub(crate) fn validate_image_dir(image_dir: &str) -> Result<()> {
+    validate_owned_path("image directory", Path::new(image_dir))
 }
 
 #[derive(Deserialize)]
@@ -53,6 +55,11 @@ struct Asset {
     digest: Option<String>,
 }
 
+struct PullSpec {
+    version: String,
+    gpu: bool,
+}
+
 pub(crate) async fn cmd_image(cmd: ImageCmd) -> Result<()> {
     match cmd {
         ImageCmd::Pull {
@@ -61,20 +68,33 @@ pub(crate) async fn cmd_image(cmd: ImageCmd) -> Result<()> {
             loc,
             force,
             insecure,
-        } => pull(version.as_deref(), gpu, &loc.dir(), force, insecure).await,
-        ImageCmd::List { loc } => list(&loc.dir()),
-        ImageCmd::Rm { names, loc } => remove(&names, &loc.dir()),
+        } => {
+            let image_dir = loc.dir();
+            validate_image_dir(&image_dir)?;
+            pull(version.as_deref(), gpu, &image_dir, force, insecure).await?;
+            Ok(())
+        }
+        ImageCmd::List { loc } => {
+            let image_dir = loc.dir();
+            validate_image_dir(&image_dir)?;
+            list(&image_dir)
+        }
+        ImageCmd::Rm { names, loc } => {
+            let image_dir = loc.dir();
+            validate_image_dir(&image_dir)?;
+            remove(&names, &image_dir)
+        }
     }
 }
 
 /// download a guest image from the latest (or a specific) meta-dstack release.
-async fn pull(
+pub(crate) async fn pull(
     version: Option<&str>,
     gpu: bool,
     image_dir: &str,
     force: bool,
     insecure: bool,
-) -> Result<()> {
+) -> Result<String> {
     println!(
         "dstackup image pull — {} image",
         if gpu { "gpu (nvidia)" } else { "cpu" }
@@ -92,7 +112,7 @@ async fn pull(
             .exists()
     {
         println!("  [ok] {expected} already present (use --force to re-download)");
-        return Ok(());
+        return Ok(expected);
     }
 
     let asset = pick_asset(&release.assets, gpu).with_context(|| {
@@ -136,8 +156,8 @@ async fn pull(
     let name = adopted?;
 
     println!("  [ok] image ready: {name}");
-    println!("  deploy with: dstackup install --image {name}   (or: dstack deploy <compose> --image {name})");
-    Ok(())
+    println!("  deploy with: dstackup install --image {name}   (or: dstack deploy -c <compose> --image {name})");
+    Ok(name)
 }
 
 /// download, verify, unpack into `staging`, and atomically move the unpacked
@@ -233,7 +253,7 @@ async fn download_verified(
     let _ = file.sync_all();
 
     let Some(expected) = expected else {
-        println!("  [!]  no sha256 digest published — integrity NOT verified (--insecure)");
+        println!("  [!]  no sha256 digest published - integrity not verified (--insecure)");
         return Ok(());
     };
     let want = expected
@@ -288,7 +308,12 @@ fn remove(names: &[String], image_dir: &str) -> Result<()> {
 /// a removable image name is a single path component, never `.`/`..` or a path
 /// (so `rm` can't be tricked into deleting outside the image dir).
 fn valid_image_name(name: &str) -> bool {
-    !name.is_empty() && name != "." && name != ".." && !name.contains('/') && !name.contains('\\')
+    !name.is_empty()
+        && name != "."
+        && name != ".."
+        && !name.starts_with('.')
+        && !name.contains('/')
+        && !name.contains('\\')
 }
 
 /// resolve which guest image `install` should use: an explicit `--image` if
@@ -301,6 +326,9 @@ pub(crate) fn resolve_image(
     require: bool,
 ) -> Result<Option<String>> {
     if let Some(name) = requested {
+        if !valid_image_name(name) {
+            bail!("invalid image name {name:?} (expected a plain image name, see `dstackup image list`)");
+        }
         if Path::new(image_dir)
             .join(name)
             .join("metadata.json")
@@ -325,14 +353,159 @@ pub(crate) fn resolve_image(
     if require {
         bail!("{}", no_image_message(image_dir));
     }
-    println!("  [!]  no guest image in {image_dir} — `dstack deploy` will need one (`dstackup image pull`)");
+    println!("  [!]  no guest image in {image_dir} - `dstack deploy -c <compose>` will need one (`dstackup image pull`)");
     Ok(None)
+}
+
+/// resolve the image for install. If KMS mode needs an image and there is no
+/// local image yet, fetch the latest CPU image through the same verified pull
+/// path as `dstackup image pull`, then resolve from disk again.
+pub(crate) async fn resolve_or_pull_image(
+    image_dir: &str,
+    requested: Option<&str>,
+    require: bool,
+    required_digest: Option<&str>,
+) -> Result<Option<String>> {
+    if let Some(name) = requested {
+        if !valid_image_name(name) {
+            bail!("invalid image name {name:?} (expected a plain image name, see `dstackup image list`)");
+        }
+        if Path::new(image_dir)
+            .join(name)
+            .join("metadata.json")
+            .exists()
+        {
+            return Ok(Some(name.to_string()));
+        }
+        if let Some(spec) = pull_spec(name) {
+            println!("  [..] image {name} not found locally; downloading it");
+            let pulled = pull(Some(&spec.version), spec.gpu, image_dir, false, false).await?;
+            return Ok(Some(pulled));
+        }
+        return resolve_image(image_dir, Some(name), require);
+    }
+
+    let mut imgs = installed_images(image_dir);
+    let skipped = retain_images_with_digest(&mut imgs, image_dir, required_digest);
+    if let Some(newest) = imgs.pop() {
+        if !skipped.is_empty() {
+            println!(
+                "  [!]  ignoring image(s) without {}: {}",
+                required_digest.unwrap_or("required digest"),
+                skipped.join(", ")
+            );
+        }
+        if imgs.is_empty() {
+            println!("  [ok] using image {newest}");
+        } else {
+            println!(
+                "  [ok] using image {newest} (newest by fetch time; also present: {} - pass --image to choose)",
+                imgs.join(", ")
+            );
+        }
+        return Ok(Some(newest));
+    }
+
+    if !require {
+        if let Some(digest) = required_digest {
+            if skipped.is_empty() {
+                println!("  [!]  no guest image in {image_dir} with {digest} - `dstack deploy -c <compose>` will need one (`dstackup image pull`)");
+            } else {
+                println!(
+                    "  [!]  no guest image in {image_dir} with {digest}; ignored {} - `dstack deploy -c <compose>` will need one (`dstackup image pull`)",
+                    skipped.join(", ")
+                );
+            }
+        } else {
+            println!("  [!]  no guest image in {image_dir} - `dstack deploy -c <compose>` will need one (`dstackup image pull`)");
+        }
+        return Ok(None);
+    }
+
+    if let Some(digest) = required_digest {
+        if skipped.is_empty() {
+            println!(
+                "  [..] no local guest image with {digest} found; downloading the latest cpu image"
+            );
+        } else {
+            println!(
+                "  [..] no local guest image with {digest} found (ignored {}); downloading the latest cpu image",
+                skipped.join(", ")
+            );
+        }
+    } else {
+        println!("  [..] no local guest image found; downloading the latest cpu image");
+    }
+    let pulled = pull(None, false, image_dir, false, false).await?;
+
+    if Path::new(image_dir)
+        .join(&pulled)
+        .join("metadata.json")
+        .exists()
+    {
+        Ok(Some(pulled))
+    } else {
+        bail!("downloaded image {pulled}, but it is not available in {image_dir}")
+    }
+}
+
+fn retain_images_with_digest(
+    imgs: &mut Vec<String>,
+    image_dir: &str,
+    required_digest: Option<&str>,
+) -> Vec<String> {
+    let Some(required_digest) = required_digest else {
+        return Vec::new();
+    };
+    let mut skipped = Vec::new();
+    imgs.retain(|name| {
+        let has_digest = Path::new(image_dir)
+            .join(name)
+            .join(required_digest)
+            .is_file();
+        if !has_digest {
+            skipped.push(name.clone());
+        }
+        has_digest
+    });
+    skipped
+}
+
+fn pull_spec(name: &str) -> Option<PullSpec> {
+    if !valid_image_name(name) {
+        return None;
+    }
+    if let Some(version) = name.strip_prefix("dstack-nvidia-") {
+        return release_version(version).map(|version| PullSpec { version, gpu: true });
+    }
+    if let Some(version) = name.strip_prefix("dstack-") {
+        return release_version(version).map(|version| PullSpec {
+            version,
+            gpu: false,
+        });
+    }
+    release_version(name).map(|version| PullSpec {
+        version,
+        gpu: false,
+    })
+}
+
+fn release_version(version: &str) -> Option<String> {
+    let version = version.trim_start_matches('v');
+    let mut chars = version.chars();
+    if !chars.next().is_some_and(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    if !chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_')) {
+        return None;
+    }
+    Some(version.to_string())
 }
 
 /// the `dstackup image pull` invocation that targets `image_dir` — bare for the
 /// default dir, else with the explicit `--image-path` so it's copy-paste correct.
 fn pull_cmd(image_dir: &str) -> String {
-    if image_dir == resolve_image_dir(None, DEFAULT_PREFIX) {
+    if image_dir == resolve_image_dir(None, None) {
         "dstackup image pull".to_string()
     } else {
         format!("dstackup image pull --image-path {image_dir}")
@@ -507,8 +680,39 @@ mod tests {
     #[test]
     fn rm_rejects_path_escapes() {
         assert!(valid_image_name("dstack-0.5.11"));
-        for bad in ["", ".", "..", "/etc", "a/b", "..\\x"] {
+        for bad in ["", ".", "..", ".partial", "/etc", "a/b", "..\\x"] {
             assert!(!valid_image_name(bad), "{bad:?} should be rejected");
         }
+    }
+
+    #[test]
+    fn image_dir_rejects_root_and_relative_paths() {
+        for bad in ["/", "images", "/var/lib/../dstack/images"] {
+            assert!(
+                validate_image_dir(bad).is_err(),
+                "{bad:?} should be rejected"
+            );
+        }
+        validate_image_dir("/var/lib/dstack/images").unwrap();
+    }
+
+    #[test]
+    fn parses_requested_image_for_pull() {
+        let cpu = pull_spec("dstack-0.5.11").unwrap();
+        assert_eq!(cpu.version, "0.5.11");
+        assert!(!cpu.gpu);
+
+        let gpu = pull_spec("dstack-nvidia-0.5.11").unwrap();
+        assert_eq!(gpu.version, "0.5.11");
+        assert!(gpu.gpu);
+
+        let bare = pull_spec("v0.5.11").unwrap();
+        assert_eq!(bare.version, "0.5.11");
+        assert!(!bare.gpu);
+
+        assert!(pull_spec("").is_none());
+        assert!(pull_spec("custom-local-image").is_none());
+        assert!(pull_spec("dstack-dev-0.5.11").is_none());
+        assert!(pull_spec("a/b").is_none());
     }
 }

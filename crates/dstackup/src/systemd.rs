@@ -66,8 +66,9 @@ pub(crate) fn auth_unit_file(bin: &str, allowlist: &Path, port: u16, prefix: &Pa
          ExecStart={bin} --config {cfg} --address 127.0.0.1 --port {port}\n\
          Restart=always\nRestartSec=2\nWorkingDirectory={wd}\n\n\
          [Install]\nWantedBy=multi-user.target\n",
-        cfg = allowlist.display(),
-        wd = prefix.display(),
+        bin = systemd_arg(bin),
+        cfg = systemd_arg(&allowlist.display().to_string()),
+        wd = systemd_arg(&prefix.display().to_string()),
     )
 }
 
@@ -80,7 +81,43 @@ pub(crate) fn vmm_unit_file(bin: &str, config: &Path, prefix: &Path, auth_unit: 
          TimeoutStopSec=120\nWorkingDirectory={wd}\n\n\
          [Install]\nWantedBy=multi-user.target\n",
         auth = auth_unit,
-        cfg = config.display(),
-        wd = prefix.display(),
+        bin = systemd_arg(bin),
+        cfg = systemd_arg(&config.display().to_string()),
+        wd = systemd_arg(&prefix.display().to_string()),
     )
+}
+
+fn systemd_arg(value: &str) -> String {
+    let mut out = String::with_capacity(value.len() + 2);
+    out.push('"');
+    for ch in value.chars() {
+        match ch {
+            '%' => out.push_str("%%"),
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            ch => out.push(ch),
+        }
+    }
+    out.push('"');
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn systemd_arg_quotes_paths_and_escapes_specifiers() {
+        assert_eq!(
+            systemd_arg("/opt/dstack/bin/vmm"),
+            "\"/opt/dstack/bin/vmm\""
+        );
+        assert_eq!(
+            systemd_arg("/opt/dstack %/bin/\"vmm\""),
+            "\"/opt/dstack %%/bin/\\\"vmm\\\"\""
+        );
+    }
 }

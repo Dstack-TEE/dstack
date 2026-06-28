@@ -12,7 +12,23 @@ use std::path::{Path, PathBuf};
 
 #[derive(Serialize, Deserialize, Default)]
 pub(crate) struct State {
+    /// Backward-compatible data prefix. New clients should use the explicit
+    /// directory fields below.
     pub(crate) prefix: String,
+    #[serde(default)]
+    pub(crate) install_prefix: Option<String>,
+    #[serde(default)]
+    pub(crate) config_dir: String,
+    #[serde(default)]
+    pub(crate) state_dir: String,
+    #[serde(default)]
+    pub(crate) cache_dir: String,
+    #[serde(default)]
+    pub(crate) run_dir: String,
+    #[serde(default)]
+    pub(crate) allowlist_path: String,
+    #[serde(default)]
+    pub(crate) platform: String,
     pub(crate) client_url: String,
     pub(crate) auth_port: u16,
     /// systemd unit names (without the `.service` suffix).
@@ -24,6 +40,9 @@ pub(crate) struct State {
     pub(crate) kms_vm_id: Option<String>,
     #[serde(default)]
     pub(crate) kms_url: String,
+    /// guest image selected by install for KMS and app deployments.
+    #[serde(default)]
+    pub(crate) image: Option<String>,
     /// docker-compose project for a key provider we started ourselves.
     #[serde(default)]
     pub(crate) kp_own_project: Option<String>,

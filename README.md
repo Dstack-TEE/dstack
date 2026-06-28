@@ -29,6 +29,7 @@ AI providers ask users to trust them with sensitive data. But trust doesn't scal
 | Platform | Status | Attestation |
 |----------|--------|-------------|
 | **Bare metal TDX** | Available | TDX |
+| **Bare metal AMD SEV-SNP** | Host support; requires an SNP-capable guest image | SEV-SNP |
 | **[Phala Cloud](https://cloud.phala.network)** | Available | TDX |
 | **GCP Confidential VMs** | Available | TDX + TPM |
 | **AWS Nitro Enclaves** | Available | NSM |
@@ -66,15 +67,15 @@ services:
       - "8000:8000"
 ```
 
-Deploy to any Intel TDX host using a guest OS image from [meta-dstack releases](https://github.com/Dstack-TEE/meta-dstack/releases), or use [Phala Cloud](https://cloud.phala.network) for managed infrastructure.
+Deploy to a self-hosted TDX machine with the `dstackup install` -> `dstack deploy` workflow, or use [Phala Cloud](https://cloud.phala.network) for managed infrastructure. AMD SEV-SNP hosts use the same workflow when the selected guest image includes `digest.sev.txt`.
 
-Setting up dstack on your own hardware? See the [full deployment guide →](./docs/deployment.md)
+Setting up dstack on your own hardware? Start with the [self-hosted quick onboarding guide](./docs/onboarding.md)
 
 ## Architecture
 
 ![Architecture](./docs/assets/arch.png)
 
-Your container runs inside a Confidential VM (Intel TDX) with optional GPU isolation via NVIDIA Confidential Computing. The CPU TEE protects application logic; the GPU TEE protects model weights and inference data.
+Your container runs inside a Confidential VM, such as Intel TDX or AMD SEV-SNP, with optional GPU isolation via NVIDIA Confidential Computing. The CPU TEE protects application logic; the GPU TEE protects model weights and inference data.
 
 **Core components:**
 
@@ -107,6 +108,8 @@ Apps communicate with the guest agent via HTTP over `/var/run/dstack.sock`. Use 
 - [Verification](./docs/verification.md) - How to verify TEE attestation
 
 **For Operators**
+- [Hardware Enablement](./docs/hardware-enablement.md) - Prepare a TDX or AMD SEV-SNP host
+- [Self-hosted Quick Onboarding](./docs/onboarding.md) - First app on one host
 - [Deployment](./docs/deployment.md) - Self-hosting on TDX hardware
 - [On-Chain Governance](./docs/onchain-governance.md) - Smart contract authorization
 - [Gateway](./docs/dstack-gateway.md) - Gateway configuration
@@ -174,7 +177,7 @@ Yes. dstack runs on any Intel TDX-capable server. See the [deployment guide](./d
 <details>
 <summary><strong>What TEE hardware is supported?</strong></summary>
 
-Currently: Intel TDX (4th/5th Gen Xeon) and NVIDIA Confidential Computing (H100, Blackwell). AMD SEV-SNP support is planned.
+Currently: Intel TDX, AMD SEV-SNP, AWS Nitro Enclaves, GCP Confidential VMs, and NVIDIA Confidential Computing GPUs (H100, Blackwell).
 
 </details>
 
