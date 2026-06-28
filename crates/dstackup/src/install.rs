@@ -273,11 +273,15 @@ pub(crate) async fn cmd_install(mut o: InstallOpts) -> Result<()> {
                 .create_vm(cfg)
                 .await
                 .context("createVm for the kms cvm failed")?;
-            print!("  [..] waiting for KMS bootstrap on :{kms_port} ");
-            if wait_kms_ready(kms_port, Duration::from_secs(240)).await {
-                println!("=> bootstrapped");
-            } else {
-                println!("=> not ready in time (check `dstack logs {vm_id}` / VMM log)");
+            print!("  [..] waiting for KMS CVM boot (vm {vm_id}) ");
+            match wait_kms_vm_booted(&vmm, &vm_id, Duration::from_secs(240)).await {
+                KmsVmBootState::Ready => println!("=> booted"),
+                KmsVmBootState::Failed(reason) => {
+                    println!("=> failed ({reason}; check `dstack logs {vm_id}` / VMM log)")
+                }
+                KmsVmBootState::Pending => {
+                    println!("=> not ready in time (check `dstack logs {vm_id}` / VMM log)")
+                }
             }
             st.kms_vm_id = Some(vm_id);
             st.kms_url = format!("https://10.0.2.2:{kms_port}");
@@ -1045,51 +1049,60 @@ fn validate_install_opts(o: &InstallOpts) -> Result<()> {
     Ok(())
 }
 
-/// poll the KMS `GetMeta` RPC (self-signed TLS) until it bootstraps.
-async fn wait_kms_ready(port: u16, timeout: Duration) -> bool {
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum KmsVmBootState {
+    Pending,
+    Ready,
+    Failed(String),
+}
+
+/// poll VMM-reported guest boot state until the KMS CVM has completed the guest
+/// boot script. This avoids probing the KMS HTTPS endpoint before its CA is
+/// available, which would require disabling TLS certificate validation.
+async fn wait_kms_vm_booted(vmm: &Vmm, vm_id: &str, timeout: Duration) -> KmsVmBootState {
     let deadline = tokio::time::Instant::now() + timeout;
     loop {
-        if kms_get_meta_ok(port).await {
-            return true;
+        if let Ok(status) = vmm.status().await {
+            if let Some(vm) = status.vms.iter().find(|vm| vm.id == vm_id) {
+                let state = kms_vm_boot_state(
+                    &vm.status,
+                    &vm.boot_progress,
+                    &vm.boot_error,
+                    vm.instance_id.as_deref(),
+                );
+                if state != KmsVmBootState::Pending {
+                    return state;
+                }
+            }
         }
         if tokio::time::Instant::now() >= deadline {
-            return false;
+            return KmsVmBootState::Pending;
         }
         tokio::time::sleep(Duration::from_secs(2)).await;
     }
 }
 
-/// is the KMS bootstrapped and answering on `port`? the KMS serves self-signed
-/// RA-TLS we deliberately don't verify here (`danger_accept_invalid_certs`); but
-/// require the request to succeed AND a parsed, non-empty `ca_cert` field — so an
-/// error body or a partial response can't read as "ready". A real success here
-/// also confirms it's our KMS bound to this exact port (port-verification).
-async fn kms_get_meta_ok(port: u16) -> bool {
-    let Ok(client) = reqwest::Client::builder()
-        .danger_accept_invalid_certs(true)
-        .timeout(Duration::from_secs(4))
-        .build()
-    else {
-        return false;
-    };
-    let Ok(resp) = client
-        .post(format!("https://127.0.0.1:{port}/prpc/KMS.GetMeta?json"))
-        .body("{}")
-        .send()
-        .await
-    else {
-        return false;
-    };
-    if !resp.status().is_success() {
-        return false;
+fn kms_vm_boot_state(
+    status: &str,
+    boot_progress: &str,
+    boot_error: &str,
+    instance_id: Option<&str>,
+) -> KmsVmBootState {
+    let boot_error = boot_error.trim();
+    if !boot_error.is_empty() {
+        return KmsVmBootState::Failed(format!("boot error: {boot_error}"));
     }
-    let Ok(v) = resp.json::<serde_json::Value>().await else {
-        return false;
-    };
-    v.get("ca_cert")
-        .and_then(|c| c.as_str())
-        .map(|s| !s.is_empty())
-        .unwrap_or(false)
+    match status {
+        "exited" | "stopped" | "removing" => {
+            return KmsVmBootState::Failed(format!("vm status {status}"));
+        }
+        _ => {}
+    }
+    let has_instance = instance_id.is_some_and(|id| !id.trim().is_empty());
+    if status == "running" && boot_progress.trim() == "done" && has_instance {
+        return KmsVmBootState::Ready;
+    }
+    KmsVmBootState::Pending
 }
 
 /// one-shot liveness probe of the VMM.
@@ -1159,5 +1172,21 @@ mod tests {
             );
         }
         validate_instance("dstack-a_1.2").unwrap();
+    }
+
+    #[test]
+    fn kms_vm_boot_state_requires_running_done_instance() {
+        assert_eq!(
+            kms_vm_boot_state("running", "done", "", Some("abc")),
+            KmsVmBootState::Ready
+        );
+        assert_eq!(
+            kms_vm_boot_state("running", "setting up docker", "", Some("abc")),
+            KmsVmBootState::Pending
+        );
+        assert_eq!(
+            kms_vm_boot_state("running", "done", "failed to start containers", Some("abc")),
+            KmsVmBootState::Failed("boot error: failed to start containers".to_string())
+        );
     }
 }
