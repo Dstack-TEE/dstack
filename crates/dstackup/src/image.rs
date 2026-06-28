@@ -60,14 +60,21 @@ pub(crate) async fn cmd_image(cmd: ImageCmd) -> Result<()> {
             gpu,
             loc,
             force,
-        } => pull(version.as_deref(), gpu, &loc.dir(), force).await,
+            insecure,
+        } => pull(version.as_deref(), gpu, &loc.dir(), force, insecure).await,
         ImageCmd::List { loc } => list(&loc.dir()),
         ImageCmd::Rm { names, loc } => remove(&names, &loc.dir()),
     }
 }
 
 /// download a guest image from the latest (or a specific) meta-dstack release.
-async fn pull(version: Option<&str>, gpu: bool, image_dir: &str, force: bool) -> Result<()> {
+async fn pull(
+    version: Option<&str>,
+    gpu: bool,
+    image_dir: &str,
+    force: bool,
+    insecure: bool,
+) -> Result<()> {
     println!(
         "dstackup image pull — {} image",
         if gpu { "gpu (nvidia)" } else { "cpu" }
@@ -117,12 +124,13 @@ async fn pull(version: Option<&str>, gpu: bool, image_dir: &str, force: bool) ->
     // adopt (atomic rename) only once metadata.json is present. so a truncated
     // download or a tar that dies mid-unpack can never masquerade as a valid
     // image. temp artifacts are dot-prefixed (skipped by listings) and cleaned
-    // up regardless of outcome.
+    // up regardless of outcome. (the `valid_image_name` check above is
+    // load-bearing for these two joins — keep it before any path use.)
     let tmp = Path::new(image_dir).join(format!(".{}.partial", asset.name));
     let staging = Path::new(image_dir).join(format!(".{}.staging", asset.name));
     let _ = fs::remove_file(&tmp);
     let _ = fs::remove_dir_all(&staging);
-    let adopted = stage_image(asset, image_dir, &tmp, &staging).await;
+    let adopted = stage_image(asset, image_dir, &tmp, &staging, insecure).await;
     let _ = fs::remove_file(&tmp);
     let _ = fs::remove_dir_all(&staging);
     let name = adopted?;
@@ -134,8 +142,20 @@ async fn pull(version: Option<&str>, gpu: bool, image_dir: &str, force: bool) ->
 
 /// download, verify, unpack into `staging`, and atomically move the unpacked
 /// image dir into `image_dir`. returns the image's (unpacked) directory name.
-async fn stage_image(asset: &Asset, image_dir: &str, tmp: &Path, staging: &Path) -> Result<String> {
-    download_verified(&asset.browser_download_url, tmp, asset.digest.as_deref()).await?;
+async fn stage_image(
+    asset: &Asset,
+    image_dir: &str,
+    tmp: &Path,
+    staging: &Path,
+    insecure: bool,
+) -> Result<String> {
+    download_verified(
+        &asset.browser_download_url,
+        tmp,
+        asset.digest.as_deref(),
+        insecure,
+    )
+    .await?;
     fs::create_dir_all(staging).with_context(|| format!("creating {}", staging.display()))?;
     extract(&tmp.to_string_lossy(), &staging.to_string_lossy())?;
     // the unpacked dir name needn't match the asset name (e.g. a `-uki` asset),
@@ -152,10 +172,23 @@ async fn stage_image(asset: &Asset, image_dir: &str, tmp: &Path, staging: &Path)
 }
 
 /// stream the download to `dest`, hashing as it goes, and verify against the
-/// release's `"sha256:<hex>"` digest in the same pass — fail closed on mismatch
-/// (warn when the release published none). github 302-redirects to its object
-/// store; reqwest follows that by default.
-async fn download_verified(url: &str, dest: &Path, expected: Option<&str>) -> Result<()> {
+/// release's `"sha256:<hex>"` digest in the same pass — fail closed on mismatch,
+/// and fail closed when no digest is published unless `insecure`. github
+/// 302-redirects to its object store; reqwest follows that by default.
+///
+/// the `std::fs` writes here are synchronous inside an async fn; that's fine for
+/// this single-task CLI (nothing else runs on the executor), and not worth a
+/// `spawn_blocking` dance.
+async fn download_verified(
+    url: &str,
+    dest: &Path,
+    expected: Option<&str>,
+    insecure: bool,
+) -> Result<()> {
+    // fail closed BEFORE downloading hundreds of MB if we can't verify it.
+    if expected.is_none() && !insecure {
+        bail!("this release publishes no sha256 digest to verify the download against — pass --insecure to proceed unverified (not recommended)");
+    }
     let mut resp = reqwest::get(url)
         .await
         .with_context(|| format!("requesting {url}"))?
@@ -172,24 +205,35 @@ async fn download_verified(url: &str, dest: &Path, expected: Option<&str>) -> Re
         fs::File::create(dest).with_context(|| format!("creating {}", dest.display()))?;
     let mut hasher = Sha256::new();
     let mut done: u64 = 0;
-    let mut next_mark = 25u64;
+    let mut next_pct = 25u64;
+    let mut next_bytes = 50 * 1_048_576u64;
     while let Some(chunk) = resp.chunk().await.context("reading download stream")? {
         hasher.update(&chunk);
         file.write_all(&chunk)
             .with_context(|| format!("writing {}", dest.display()))?;
         done += chunk.len() as u64;
-        if let Some(total) = total.filter(|t| *t > 0) {
-            let pct = done * 100 / total;
-            if pct >= next_mark {
-                println!("  [..] {pct}%");
-                next_mark = (pct / 25 + 1) * 25;
+        match total.filter(|t| *t > 0) {
+            // known size: percentage milestones.
+            Some(total) => {
+                let pct = done * 100 / total;
+                if pct >= next_pct {
+                    println!("  [..] {pct}%");
+                    next_pct = (pct / 25 + 1) * 25;
+                }
+            }
+            // chunked / unknown size: byte milestones, so it's never silent.
+            None => {
+                if done >= next_bytes {
+                    println!("  [..] {} MB", done / 1_048_576);
+                    next_bytes += 50 * 1_048_576;
+                }
             }
         }
     }
     let _ = file.sync_all();
 
     let Some(expected) = expected else {
-        println!("  [!]  release published no sha256 digest — integrity NOT verified");
+        println!("  [!]  no sha256 digest published — integrity NOT verified (--insecure)");
         return Ok(());
     };
     let want = expected

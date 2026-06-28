@@ -16,7 +16,7 @@ path = "src/main.rs"
 anyhow.workspace = true
 clap.workspace = true
 dstack-cli-core.workspace = true
-hex.workspace = true
+hex = { workspace = true, features = ["alloc"] }
 # reqwest (+ rustls/hyper) is already linked via dstack-cli-core's prpc client,
 # so using it for http here adds ~no binary cost and drops the curl dependency.
 reqwest = { workspace = true }

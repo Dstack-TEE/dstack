@@ -77,6 +77,9 @@ pub(crate) enum ImageCmd {
         /// re-download even if the image is already present.
         #[arg(long)]
         force: bool,
+        /// proceed even if the release publishes no sha256 to verify against.
+        #[arg(long)]
+        insecure: bool,
     },
     /// List guest OS images already present locally.
     List {

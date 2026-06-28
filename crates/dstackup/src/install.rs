@@ -380,7 +380,7 @@ fn preflight_ports(o: &InstallOpts) -> Result<()> {
     Ok(())
 }
 
-/// poll the KMS `GetMeta` RPC (self-signed TLS) via curl until it bootstraps.
+/// poll the KMS `GetMeta` RPC (self-signed TLS) until it bootstraps.
 async fn wait_kms_ready(port: u16, timeout: Duration) -> bool {
     let deadline = tokio::time::Instant::now() + timeout;
     loop {
