@@ -16,6 +16,11 @@ path = "src/main.rs"
 anyhow.workspace = true
 clap.workspace = true
 dstack-cli-core.workspace = true
+hex.workspace = true
+# reqwest (+ rustls/hyper) is already linked via dstack-cli-core's prpc client,
+# so using it for http here adds ~no binary cost and drops the curl dependency.
+reqwest = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
+sha2.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }

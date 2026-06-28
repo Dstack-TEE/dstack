@@ -35,7 +35,7 @@ async fn main() -> Result<()> {
             let _ = host; // install uses its own prefix-derived endpoint
             install::cmd_install(opts).await
         }
-        Command::Image(cmd) => image::cmd_image(cmd),
+        Command::Image(cmd) => image::cmd_image(cmd).await,
         Command::Destroy { prefix, purge } => destroy::cmd_destroy(&prefix, purge).await,
     }
 }

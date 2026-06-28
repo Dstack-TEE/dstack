@@ -384,7 +384,7 @@ fn preflight_ports(o: &InstallOpts) -> Result<()> {
 async fn wait_kms_ready(port: u16, timeout: Duration) -> bool {
     let deadline = tokio::time::Instant::now() + timeout;
     loop {
-        if kms_get_meta_ok(port) {
+        if kms_get_meta_ok(port).await {
             return true;
         }
         if tokio::time::Instant::now() >= deadline {
@@ -394,36 +394,36 @@ async fn wait_kms_ready(port: u16, timeout: Duration) -> bool {
     }
 }
 
-/// is the KMS bootstrapped and answering on `port`? curl (not the typed
-/// client) because the KMS serves self-signed RA-TLS we deliberately don't
-/// verify here (`-k`); but require curl to actually succeed AND a parsed,
-/// non-empty `ca_cert` field — so an error body or a partial response that
-/// merely contains the substring can't read as "ready". A real success here
+/// is the KMS bootstrapped and answering on `port`? the KMS serves self-signed
+/// RA-TLS we deliberately don't verify here (`danger_accept_invalid_certs`); but
+/// require the request to succeed AND a parsed, non-empty `ca_cert` field — so an
+/// error body or a partial response can't read as "ready". A real success here
 /// also confirms it's our KMS bound to this exact port (port-verification).
-fn kms_get_meta_ok(port: u16) -> bool {
-    let out = tool("curl")
-        .args([
-            "-sk",
-            "--max-time",
-            "4",
-            "-X",
-            "POST",
-            &format!("https://127.0.0.1:{port}/prpc/KMS.GetMeta?json"),
-            "-d",
-            "{}",
-        ])
-        .output();
-    let Ok(out) = out else { return false };
-    if !out.status.success() {
+async fn kms_get_meta_ok(port: u16) -> bool {
+    let Ok(client) = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(Duration::from_secs(4))
+        .build()
+    else {
+        return false;
+    };
+    let Ok(resp) = client
+        .post(format!("https://127.0.0.1:{port}/prpc/KMS.GetMeta?json"))
+        .body("{}")
+        .send()
+        .await
+    else {
+        return false;
+    };
+    if !resp.status().is_success() {
         return false;
     }
-    serde_json::from_slice::<serde_json::Value>(&out.stdout)
-        .ok()
-        .and_then(|v| {
-            v.get("ca_cert")
-                .and_then(|c| c.as_str())
-                .map(|s| !s.is_empty())
-        })
+    let Ok(v) = resp.json::<serde_json::Value>().await else {
+        return false;
+    };
+    v.get("ca_cert")
+        .and_then(|c| c.as_str())
+        .map(|s| !s.is_empty())
         .unwrap_or(false)
 }
 

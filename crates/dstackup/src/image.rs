@@ -7,14 +7,17 @@
 //! Images are published as release tarballs at `Dstack-TEE/meta-dstack`. There
 //! are two variants — cpu (`dstack-<ver>`) and gpu (`dstack-nvidia-<ver>`); a
 //! single image serves both TDX and SEV-SNP (it ships both firmwares + digests,
-//! and the platform selects which at boot). We shell out to `curl`/`tar` to stay
-//! dependency-light and match how the rest of the crate calls system tools.
+//! and the platform selects which at boot). HTTP + checksum are native (reqwest
+//! is already linked via the prpc client; sha2 verifies inline); only `tar` is
+//! shelled out, since GNU tar is ubiquitous and battle-tested on archive edges.
 
 use crate::cli::ImageCmd;
 use crate::systemd::tool;
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 use std::fs;
+use std::io::Write;
 use std::path::Path;
 use std::time::SystemTime;
 
@@ -50,26 +53,26 @@ struct Asset {
     digest: Option<String>,
 }
 
-pub(crate) fn cmd_image(cmd: ImageCmd) -> Result<()> {
+pub(crate) async fn cmd_image(cmd: ImageCmd) -> Result<()> {
     match cmd {
         ImageCmd::Pull {
             version,
             gpu,
             loc,
             force,
-        } => pull(version.as_deref(), gpu, &loc.dir(), force),
+        } => pull(version.as_deref(), gpu, &loc.dir(), force).await,
         ImageCmd::List { loc } => list(&loc.dir()),
         ImageCmd::Rm { names, loc } => remove(&names, &loc.dir()),
     }
 }
 
 /// download a guest image from the latest (or a specific) meta-dstack release.
-fn pull(version: Option<&str>, gpu: bool, image_dir: &str, force: bool) -> Result<()> {
+async fn pull(version: Option<&str>, gpu: bool, image_dir: &str, force: bool) -> Result<()> {
     println!(
         "dstackup image pull — {} image",
         if gpu { "gpu (nvidia)" } else { "cpu" }
     );
-    let release = fetch_release(version)?;
+    let release = fetch_release(version).await?;
     let ver = release.tag_name.trim_start_matches('v');
 
     // the unpacked dir is usually `dstack[-nvidia]-<ver>`; check that first so a
@@ -119,7 +122,7 @@ fn pull(version: Option<&str>, gpu: bool, image_dir: &str, force: bool) -> Resul
     let staging = Path::new(image_dir).join(format!(".{}.staging", asset.name));
     let _ = fs::remove_file(&tmp);
     let _ = fs::remove_dir_all(&staging);
-    let adopted = stage_image(asset, image_dir, &tmp, &staging);
+    let adopted = stage_image(asset, image_dir, &tmp, &staging).await;
     let _ = fs::remove_file(&tmp);
     let _ = fs::remove_dir_all(&staging);
     let name = adopted?;
@@ -131,9 +134,8 @@ fn pull(version: Option<&str>, gpu: bool, image_dir: &str, force: bool) -> Resul
 
 /// download, verify, unpack into `staging`, and atomically move the unpacked
 /// image dir into `image_dir`. returns the image's (unpacked) directory name.
-fn stage_image(asset: &Asset, image_dir: &str, tmp: &Path, staging: &Path) -> Result<String> {
-    download(&asset.browser_download_url, &tmp.to_string_lossy())?;
-    verify_digest(tmp, asset.digest.as_deref())?;
+async fn stage_image(asset: &Asset, image_dir: &str, tmp: &Path, staging: &Path) -> Result<String> {
+    download_verified(&asset.browser_download_url, tmp, asset.digest.as_deref()).await?;
     fs::create_dir_all(staging).with_context(|| format!("creating {}", staging.display()))?;
     extract(&tmp.to_string_lossy(), &staging.to_string_lossy())?;
     // the unpacked dir name needn't match the asset name (e.g. a `-uki` asset),
@@ -149,9 +151,43 @@ fn stage_image(asset: &Asset, image_dir: &str, tmp: &Path, staging: &Path) -> Re
     Ok(inner)
 }
 
-/// verify a downloaded file against the release's `"sha256:<hex>"` digest. fails
-/// closed on mismatch; warns (does not fail) when the release published none.
-fn verify_digest(file: &Path, expected: Option<&str>) -> Result<()> {
+/// stream the download to `dest`, hashing as it goes, and verify against the
+/// release's `"sha256:<hex>"` digest in the same pass — fail closed on mismatch
+/// (warn when the release published none). github 302-redirects to its object
+/// store; reqwest follows that by default.
+async fn download_verified(url: &str, dest: &Path, expected: Option<&str>) -> Result<()> {
+    let mut resp = reqwest::get(url)
+        .await
+        .with_context(|| format!("requesting {url}"))?
+        .error_for_status()
+        .with_context(|| format!("download failed from {url}"))?;
+    let total = resp.content_length();
+    println!(
+        "  [..] downloading{}...",
+        total
+            .map(|n| format!(" {} MB", n / 1_048_576))
+            .unwrap_or_default()
+    );
+    let mut file =
+        fs::File::create(dest).with_context(|| format!("creating {}", dest.display()))?;
+    let mut hasher = Sha256::new();
+    let mut done: u64 = 0;
+    let mut next_mark = 25u64;
+    while let Some(chunk) = resp.chunk().await.context("reading download stream")? {
+        hasher.update(&chunk);
+        file.write_all(&chunk)
+            .with_context(|| format!("writing {}", dest.display()))?;
+        done += chunk.len() as u64;
+        if let Some(total) = total.filter(|t| *t > 0) {
+            let pct = done * 100 / total;
+            if pct >= next_mark {
+                println!("  [..] {pct}%");
+                next_mark = (pct / 25 + 1) * 25;
+            }
+        }
+    }
+    let _ = file.sync_all();
+
     let Some(expected) = expected else {
         println!("  [!]  release published no sha256 digest — integrity NOT verified");
         return Ok(());
@@ -160,18 +196,7 @@ fn verify_digest(file: &Path, expected: Option<&str>) -> Result<()> {
         .strip_prefix("sha256:")
         .unwrap_or(expected)
         .to_lowercase();
-    let out = tool("sha256sum")
-        .arg(file)
-        .output()
-        .context("running sha256sum")?;
-    if !out.status.success() {
-        bail!("sha256sum failed on {}", file.display());
-    }
-    let got = String::from_utf8_lossy(&out.stdout)
-        .split_whitespace()
-        .next()
-        .unwrap_or_default()
-        .to_lowercase();
+    let got = hex::encode(hasher.finalize());
     if got != want {
         bail!("image checksum mismatch (expected {want}, got {got}) — refusing a tampered or corrupt download");
     }
@@ -293,8 +318,8 @@ fn missing_named_image_message(image_dir: &str, name: &str) -> String {
     )
 }
 
-/// GET the latest (or a tagged) release JSON from the github api via curl.
-fn fetch_release(version: Option<&str>) -> Result<Release> {
+/// GET the latest (or a tagged) release JSON from the github api.
+async fn fetch_release(version: Option<&str>) -> Result<Release> {
     let url = match version {
         Some(v) => format!(
             "https://api.github.com/repos/{REPO}/releases/tags/v{}",
@@ -302,24 +327,20 @@ fn fetch_release(version: Option<&str>) -> Result<Release> {
         ),
         None => format!("https://api.github.com/repos/{REPO}/releases/latest"),
     };
-    let out = tool("curl")
-        .args([
-            "-fsSL",
-            "-H",
-            "user-agent: dstackup",
-            "-H",
-            "accept: application/vnd.github+json",
-            &url,
-        ])
-        .output()
-        .context("running curl (is it installed?)")?;
-    if !out.status.success() {
-        bail!(
-            "github release lookup failed: {}. check the version exists at {RELEASES_URL}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        );
-    }
-    serde_json::from_slice(&out.stdout).context("parsing github release json")
+    reqwest::Client::new()
+        .get(&url)
+        .header("user-agent", "dstackup")
+        .header("accept", "application/vnd.github+json")
+        .send()
+        .await
+        .context("requesting the github release")?
+        .error_for_status()
+        .with_context(|| {
+            format!("github release lookup failed; check the version exists at {RELEASES_URL}")
+        })?
+        .json()
+        .await
+        .context("parsing github release json")
 }
 
 /// pick the cpu or gpu image tarball from a release's assets, skipping `-dev`
@@ -337,19 +358,6 @@ fn pick_asset(assets: &[Asset], gpu: bool) -> Option<&Asset> {
             n.starts_with("dstack-") && !is_gpu
         }
     })
-}
-
-fn download(url: &str, dest: &str) -> Result<()> {
-    println!("  [..] downloading (this can take a minute)...");
-    let ok = tool("curl")
-        .args(["-fL", "--progress-bar", "--retry", "3", "-o", dest, url])
-        .status()
-        .context("running curl")?
-        .success();
-    if !ok {
-        bail!("download failed from {url}");
-    }
-    Ok(())
 }
 
 fn extract(tarball: &str, into: &str) -> Result<()> {
