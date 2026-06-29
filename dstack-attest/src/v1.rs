@@ -27,11 +27,19 @@ pub(crate) fn strip_tdx_runtime_event_log(event_log: Vec<TdxEvent>) -> Vec<TdxEv
         .collect()
 }
 
+fn strip_tdx_lite_acpi_data_event(event: TdxEvent) -> TdxEvent {
+    let mut event = event.stripped();
+    event.event_payload = TDX_ACPI_DATA_EVENT_PAYLOAD.to_vec();
+    event
+}
+
 pub(crate) fn strip_tdx_lite_event_log(event_log: Vec<TdxEvent>) -> Vec<TdxEvent> {
     event_log
         .into_iter()
         .filter_map(|event| {
-            if is_tdx_acpi_data_event(&event) || event.imr == 3 {
+            if is_tdx_acpi_data_event(&event) {
+                Some(strip_tdx_lite_acpi_data_event(event))
+            } else if event.imr == 3 {
                 Some(event.stripped())
             } else {
                 None
@@ -506,7 +514,7 @@ mod tests {
         );
         assert!(stripped[0..3]
             .iter()
-            .all(|event| event.imr == 0 && event.event_payload.is_empty()));
+            .all(|event| event.imr == 0 && event.event_payload == TDX_ACPI_DATA_EVENT_PAYLOAD));
         assert_eq!(stripped[3].imr, 3);
         assert_eq!(stripped[3].event, "app-id");
         assert_eq!(stripped[3].event_payload, vec![0x42]);

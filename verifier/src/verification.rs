@@ -390,7 +390,7 @@ impl CvmVerifier {
             .iter()
             .filter(|event| event.imr == 0)
             .collect::<Vec<_>>();
-        let mut candidates = rtmr0_events
+        let candidates = rtmr0_events
             .iter()
             .filter(|event| {
                 event.event_type == TDX_ACPI_DATA_EVENT_TYPE
@@ -398,14 +398,6 @@ impl CvmVerifier {
             })
             .map(|event| event.digest())
             .collect::<Vec<_>>();
-
-        // Certificate-embedded attestations strip boot payloads. In the
-        // lite path we keep only the three RTMR0 ACPI data digests, so
-        // fall back to all RTMR0 events when payload-based matching is no longer
-        // possible.
-        if candidates.is_empty() && rtmr0_events.len() == 3 {
-            candidates = rtmr0_events.iter().map(|event| event.digest()).collect();
-        }
         if candidates.len() != 3 {
             bail!(
                 "TDX lite attestation requires exactly 3 RTMR0 ACPI DATA digests; found {} candidates and {} RTMR0 events",
