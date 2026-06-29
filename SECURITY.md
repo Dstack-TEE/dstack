@@ -4,7 +4,7 @@ Use this file for vulnerability reports. For the security model, production guid
 
 ## Report a vulnerability
 
-If you believe you found a vulnerability, please use GitHub's private security reporting features for this repository. If GitHub private reporting is unavailable, contact security@phala.network.
+If you believe you found a vulnerability, please use [GitHub's private security reporting features](https://docs.github.com/en/code-security/how-tos/report-and-fix-vulnerabilities/report-privately) for this repository. If GitHub private reporting is unavailable, contact security@phala.network.
 
 Do not open public GitHub issues for exploitable vulnerabilities or details that could help exploit production deployments.
 
@@ -18,4 +18,4 @@ Before opening a public security question, check [Security Issue Triage](./docs/
 
 ## Production trust boundary
 
-Development settings are not production-safe merely because they are present in the codebase. Production deployments must rely on measured configuration, expected TEE measurements, authorization policy, and attestation verification. The documented security model is the source of truth for what dstack treats as a production guarantee.
+Development settings are not production-safe merely because they are present in the codebase. Production deployments must rely on measured configuration, expected TEE measurements, authorization policy, and attestation verification. The [Security Model](./docs/security/security-model.md#development-modes-are-auditable-not-production-safe) is the source of truth for what dstack treats as a production guarantee.
