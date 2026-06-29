@@ -216,6 +216,7 @@ validate_prefix
 if ! command -v cargo >/dev/null 2>&1 && [ -n "${HOME:-}" ] && [ -f "$HOME/.cargo/env" ]; then
     # Mirrors rustup's post-install shell setup when the current shell has not
     # loaded Cargo yet.
+    # shellcheck disable=SC1091
     . "$HOME/.cargo/env"
 fi
 
