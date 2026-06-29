@@ -91,15 +91,16 @@ Your container runs inside a Confidential VM, such as Intel TDX or AMD SEV-SNP, 
 
 ## Security and Trust
 
-dstack is security-critical infrastructure. Prior public security findings, accepted threat-model decisions, and production hardening guidance are documented publicly instead of being buried in issue threads.
+Security docs are linked here so deployers and reviewers can quickly find the trust model, production guidance, audit, and the status of already-answered public findings.
 
 - [Security Overview](./docs/security/) - entry point for users, operators, researchers, and AI agents
 - [Security Model](./docs/security/security-model.md) - threat model, trust boundaries, and verification checklist
 - [Security Issue Triage](./docs/security/security-issue-triage.md) - public status for answered, fixed, accepted, and roadmap security reports
 - [Security Best Practices](./docs/security/security-best-practices.md) - production settings and hardening guidance
-- [Responsible Disclosure](./SECURITY.md) - how to report vulnerabilities
+- [Security Audit](./docs/security/dstack-audit.pdf) - third-party audit by zkSecurity
+- [Report a Vulnerability](./SECURITY.md) - use GitHub's private security reporting path
 
-Do not open GitHub issues for exploitable vulnerabilities. Use the private reporting channel in [SECURITY.md](./SECURITY.md).
+Please do not disclose exploitable vulnerabilities in public GitHub issues. Use the private reporting path in [SECURITY.md](./SECURITY.md).
 
 ## SDKs
 
@@ -132,17 +133,6 @@ Apps communicate with the guest agent via HTTP over `/var/run/dstack.sock`. Use 
 - [VMM CLI Guide](./docs/vmm-cli-user-guide.md) - Command-line reference
 - [Design Decisions](./docs/design-and-hardening-decisions.md) - Architecture rationale
 - [FAQ](./docs/faq.md) - Frequently asked questions
-
-## Security
-
-- [Security Overview](./docs/security/) - Security documentation and responsible disclosure
-- [Security Model](./docs/security/security-model.md) - Threat model and trust boundaries
-- [Security Issue Triage](./docs/security/security-issue-triage.md) - Public status for answered, fixed, accepted, and roadmap reports
-- [Security Best Practices](./docs/security/security-best-practices.md) - Production hardening
-- [Security Audit](./docs/security/dstack-audit.pdf) - Third-party audit by zkSecurity
-- [CVM Boundaries](./docs/security/cvm-boundaries.md) - Information exchange and isolation
-
-Report exploitable vulnerabilities through the private channel in [SECURITY.md](./SECURITY.md), not public GitHub issues.
 
 ## FAQ
 

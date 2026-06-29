@@ -6,7 +6,7 @@ dstack security resources for auditors, researchers, and operators.
 
 - **Users and verifiers:** read the [Security Model](./security-model.md) to understand what dstack guarantees and what you must verify.
 - **Operators:** read [Security Best Practices](./security-best-practices.md) before deploying production KMS, gateway, or VMM services.
-- **Security researchers and AI agents:** check [Security Issue Triage](./security-issue-triage.md) before filing a public question about an already-known finding. Report exploitable vulnerabilities privately through [SECURITY.md](../../SECURITY.md).
+- **Security researchers and AI agents:** report exploitable vulnerabilities through the private path in [SECURITY.md](../../SECURITY.md). For already-public findings or docs questions, check [Security Issue Triage](./security-issue-triage.md) before opening a public issue.
 - **Maintainers:** use [Security Issue Triage](./security-issue-triage.md) to classify public reports and close issues once the maintainer position is clear.
 
 ## Audit
@@ -22,10 +22,10 @@ dstack has been audited by zkSecurity. See the [full audit report](./dstack-audi
 
 ## Already Answered Reports
 
-Some public security reports describe real hardening, some describe intentionally accepted threat-model decisions, and some are false positives under production configuration. The canonical list is [Security Issue Triage](./security-issue-triage.md). Search that page by issue number, component, or exact setting name before treating an old report as unresolved.
+Some public security reports describe real hardening work. Some describe behavior that is intentional for development or compatibility, and some are false positives under production configuration. The canonical list is [Security Issue Triage](./security-issue-triage.md). Search that page by issue number, component, or exact setting name before treating an old report as unresolved.
 
-## Responsible Disclosure
+## Report Vulnerabilities
 
-To report a security vulnerability, email security@phala.network. We will respond within 48 hours.
+If you believe you found an exploitable vulnerability, use GitHub's private security reporting features as described in [SECURITY.md](../../SECURITY.md). If GitHub private reporting is unavailable, contact security@phala.network.
 
 Do not open GitHub issues for exploitable vulnerabilities.

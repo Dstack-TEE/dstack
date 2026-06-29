@@ -21,7 +21,7 @@ dstack applications consist of:
 
 ### SDK Capabilities
 
-- **Key Derivation**: Deterministic key derivation for blockchain and Web3 applications
+- **Key Derivation**: Deterministic key derivation for wallets, signing, encryption, and other application-specific secrets
 - **Remote Attestation**: TDX quote generation providing cryptographic proof of execution environment
 - **TLS Certificate Management**: Fresh certificate generation with optional RA-TLS support for secure connections
 - **Deployment Security**: Client-side encryption of sensitive environment variables ensuring secrets are only accessible to target TEE applications
@@ -98,12 +98,12 @@ func main() {
 	fmt.Println("App Name:", info.AppName)
 	fmt.Println("TCB Info:", info.TcbInfo)
 
-	// Derive deterministic keys for blockchain applications
+	// Derive deterministic keys for application-specific secrets
 	walletKey, err := client.GetKey(ctx, "wallet/ethereum", "mainnet", "secp256k1")
 	if err != nil {
 		log.Fatal(err)
 	}
-	
+
 	keyBytes, _ := walletKey.DecodeKey()
 	fmt.Println("Derived key (32 bytes):", hex.EncodeToString(keyBytes))        // secp256k1 private key
 	fmt.Println("Signature chain:", walletKey.SignatureChain)                   // Authenticity proof
@@ -114,13 +114,13 @@ func main() {
 		"timestamp": time.Now().Unix(),
 		"user_id":   "alice",
 	}
-	
+
 	jsonData, _ := json.Marshal(applicationData)
 	quote, err := client.GetQuote(ctx, jsonData)
 	if err != nil {
 		log.Fatal(err)
 	}
-	
+
 	fmt.Println("TDX Quote:", quote.Quote)
 	fmt.Println("Event Log:", quote.EventLog)
 
@@ -548,7 +548,7 @@ Retrieves comprehensive information about the TEE instance.
 
 ##### `GetKey(ctx context.Context, path string, purpose string, algorithm string) (*GetKeyResponse, error)`
 
-Derives deterministic private key material for blockchain and Web3 applications. This is the primary method for obtaining cryptographic keys for wallets, signing, and other deterministic key scenarios.
+Derives deterministic private key material for wallets, signing, encryption, stable service identities, and other application-specific secrets.
 
 **Parameters:**
 - `path`: Unique identifier for key derivation (e.g., `"wallet/ethereum"`, `"signing/solana"`)
@@ -568,10 +568,10 @@ Derives deterministic private key material for blockchain and Web3 applications.
 For compatibility, `algorithm` selects how the same derived 32-byte material is interpreted; it does not domain-separate the derivation. Use algorithm-specific paths when independent keys are required.
 
 **Use Cases:**
-- Cryptocurrency wallets
-- Transaction signing
-- DeFi protocol interactions
-- NFT operations
+- Stable service identity keys
+- Application signing keys
+- Encryption key seeds
+- Cryptocurrency wallets and transaction signing
 - Any scenario requiring consistent, reproducible keys
 
 ```go
@@ -752,7 +752,7 @@ fmt.Println("Trusted KMS identity:", actualKMSIdentity)
 
 The legacy client mixed two different use cases that have now been properly separated:
 
-1. **`GetKey()`**: Deterministic key derivation for Web3/blockchain keys
+1. **`GetKey()`**: Deterministic key derivation for application-specific secrets
 2. **`GetTlsKey()`**: Random TLS certificate generation for HTTPS/SSL
 
 ### From TappdClient to DstackClient
@@ -786,7 +786,7 @@ client := dstack.NewDstackClient()
 **Step 2: Update Method Calls**
 
 ```go
-// For deterministic keys (most common)
+// For deterministic application keys (most common)
 // Before: TappdClient methods
 keyResult, _ := client.DeriveKey(ctx, "wallet")
 
@@ -813,7 +813,7 @@ tlsCert, _ := client.GetTlsKey(ctx, dstack.TlsKeyOptions{
 - [ ] **Client Code Updates:**
   - [ ] Replace `tappd.NewTappdClient()` with `dstack.NewDstackClient()`
   - [ ] Replace `DeriveKey()` calls with appropriate method:
-    - [ ] `GetKey()` for Web3/blockchain keys (deterministic)
+    - [ ] `GetKey()` for deterministic application keys
     - [ ] `GetTlsKey()` for TLS certificates (random)
   - [ ] Replace `TdxQuote()` calls with `GetQuote()`
   - [ ] **SECURITY CRITICAL**: Update blockchain integration functions:
