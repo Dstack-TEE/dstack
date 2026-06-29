@@ -400,7 +400,7 @@ impl CvmVerifier {
             .collect::<Vec<_>>();
 
         // Certificate-embedded attestations strip boot payloads. In the
-        // measurement path we keep only the three RTMR0 ACPI data digests, so
+        // lite path we keep only the three RTMR0 ACPI data digests, so
         // fall back to all RTMR0 events when payload-based matching is no longer
         // possible.
         if candidates.is_empty() && rtmr0_events.len() == 3 {
@@ -408,7 +408,7 @@ impl CvmVerifier {
         }
         if candidates.len() != 3 {
             bail!(
-                "TDX measurement attestation requires exactly 3 RTMR0 ACPI DATA digests; found {} candidates and {} RTMR0 events",
+                "TDX lite attestation requires exactly 3 RTMR0 ACPI DATA digests; found {} candidates and {} RTMR0 events",
                 candidates.len(),
                 rtmr0_events.len()
             );
@@ -615,8 +615,8 @@ impl CvmVerifier {
                     .await?;
             }
             AttestationQuote::DstackTdx(_) => {
-                if vm_config.tdx_attestation_variant.is_measurement() {
-                    self.verify_os_image_hash_for_dstack_tdx_measurement(
+                if vm_config.tdx_attestation_variant.is_lite() {
+                    self.verify_os_image_hash_for_dstack_tdx_lite(
                         &vm_config,
                         attestation,
                         debug,
@@ -777,7 +777,7 @@ impl CvmVerifier {
         )
     }
 
-    async fn verify_os_image_hash_for_dstack_tdx_measurement(
+    async fn verify_os_image_hash_for_dstack_tdx_lite(
         &self,
         vm_config: &VmConfig,
         attestation: &VerifiedAttestation,
@@ -808,7 +808,7 @@ impl CvmVerifier {
         let document = vm_config
             .tdx_measurement
             .as_ref()
-            .context("tdx measurement attestation requires vm_config.tdx_measurement")?;
+            .context("tdx lite attestation requires vm_config.tdx_measurement")?;
         let document_hash = hex::decode(&document.os_image_hash)
             .context("vm_config.tdx_measurement.os_image_hash is not valid hex")?;
         if document_hash != vm_config.os_image_hash {
@@ -848,7 +848,7 @@ impl CvmVerifier {
         // all assignments and accept the one that replays to the quote RTMRs.
         // This avoids hard-coding OVMF-version-specific RTMR0 indexes.
         let acpi_digests = Self::tdx_acpi_digest_candidates_from_event_log(event_log)
-            .context("TDX measurement attestation is missing RTMR0 ACPI DATA digests")?;
+            .context("TDX lite attestation is missing RTMR0 ACPI DATA digests")?;
         let mut last_error = None;
         for acpi_hashes in Self::tdx_acpi_hash_permutations(&acpi_digests) {
             let mrs = match dstack_mr::tdx::tdx_measurements_from_measurement_document(

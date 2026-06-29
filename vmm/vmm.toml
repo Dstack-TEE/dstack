@@ -46,7 +46,7 @@ use_mrconfigid = true
 qemu_pci_hole64_size = 0
 qemu_hotplug_off = false
 # TDX attestation/hash scheme: "legacy" (digest.txt + legacy verifier) or
-# "measurement" (measurement.json.tdx.os_image_hash + no-QEMU verifier).
+# "lite" (measurement.json.tdx.os_image_hash + no-QEMU verifier).
 tdx_attestation_variant = "legacy"
 
 host_share_mode = "9p"

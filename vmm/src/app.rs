@@ -1354,16 +1354,16 @@ fn make_vm_config(
     // os_image_hash, computed at image build time and shipped in
     // `measurement.json.snp.os_image_hash` (legacy images used `digest.sev.txt`). TDX keeps
     // using the generic content digest unless the
-    // operator explicitly opts into the measurement attestation variant.
+    // operator explicitly opts into the lite attestation variant.
     let os_image_hash = if is_amd_sev_snp {
         let digest = image.sev_digest.as_deref().context(
             "amd sev-snp image is missing measurement.json SNP hash; \
              rebuild the image so `dstack-mr os-image-measurement` emits it",
         )?;
         hex::decode(digest).context("SNP os_image_hash is not valid hex")?
-    } else if tdx_attestation_variant.is_measurement() {
+    } else if tdx_attestation_variant.is_lite() {
         let digest = image.tdx_digest.as_deref().context(
-            "tdx measurement attestation requested but image is missing \
+            "tdx lite attestation requested but image is missing \
              measurement.json TDX hash; rebuild the image so \
              `dstack-mr os-image-measurement` emits it",
         )?;
@@ -1375,9 +1375,9 @@ fn make_vm_config(
             .and_then(|d| hex::decode(d).ok())
             .unwrap_or_default()
     };
-    let tdx_measurement = if tdx_attestation_variant.is_measurement() {
+    let tdx_measurement = if tdx_attestation_variant.is_lite() {
         Some(image.tdx_measurement.clone().context(
-            "tdx measurement attestation requested but image is missing \
+            "tdx lite attestation requested but image is missing \
              measurement.json TDX measurement material",
         )?)
     } else {

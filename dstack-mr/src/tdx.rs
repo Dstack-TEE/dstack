@@ -360,7 +360,7 @@ pub fn tdx_measurements_from_measurement_document(
     }
     if !tdx_kernel_hash_uses_precomputed_high_mem(vm_config.memory_size) {
         bail!(
-            "TDX measurement attestation without image download requires memory_size == {} bytes ({} MiB) or >= {} bytes ({} MiB); got {} bytes",
+            "TDX lite attestation without image download requires memory_size == {} bytes ({} MiB) or >= {} bytes ({} MiB); got {} bytes",
             TDX_KERNEL_HASH_COMPAT_2G_MEMORY,
             TDX_KERNEL_HASH_COMPAT_2G_MEMORY / 1024 / 1024,
             TDX_KERNEL_HASH_STABLE_MIN_MEMORY,

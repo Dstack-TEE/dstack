@@ -56,7 +56,7 @@ impl OvmfVariant {
 /// is the content digest (`digest.txt`) and the verifier recomputes the full
 /// TDX launch measurement using the legacy image/QEMU-derived path.
 ///
-/// `Measurement` opts into the no-QEMU verifier path: `vm_config.os_image_hash`
+/// `Lite` opts into the no-QEMU verifier path: `vm_config.os_image_hash`
 /// is `measurement.json.tdx.os_image_hash`, `vm_config.tdx_measurement` carries
 /// the self-contained measurement material, and KMS/verifier select the new
 /// logic from this vm_config flag while the attestation quote remains the
@@ -66,7 +66,7 @@ impl OvmfVariant {
 pub enum TdxAttestationVariant {
     #[default]
     Legacy,
-    Measurement,
+    Lite,
 }
 
 impl TdxAttestationVariant {
@@ -74,8 +74,8 @@ impl TdxAttestationVariant {
         matches!(self, Self::Legacy)
     }
 
-    pub fn is_measurement(&self) -> bool {
-        matches!(self, Self::Measurement)
+    pub fn is_lite(&self) -> bool {
+        matches!(self, Self::Lite)
     }
 }
 
@@ -309,7 +309,7 @@ pub struct VmConfig {
     #[serde(default, skip_serializing_if = "TdxAttestationVariant::is_legacy")]
     pub tdx_attestation_variant: TdxAttestationVariant,
     /// TDX-only no-image-download measurement material. Present only when
-    /// `tdx_attestation_variant = "measurement"` and omitted for legacy TDX.
+    /// `tdx_attestation_variant = "lite"` and omitted for legacy TDX.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tdx_measurement: Option<TdxOsImageMeasurementDocument>,
 }

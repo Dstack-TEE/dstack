@@ -262,7 +262,7 @@ pub struct CvmConfig {
     pub qemu_hotplug_off: bool,
 
     /// TDX attestation/hash scheme. `legacy` keeps the existing digest.txt +
-    /// dstack-acpi-tables verifier path; `measurement` opts into the
+    /// dstack-acpi-tables verifier path; `lite` opts into the
     /// measurement.json + no-QEMU verifier path.
     #[serde(default)]
     pub tdx_attestation_variant: TdxAttestationVariant,

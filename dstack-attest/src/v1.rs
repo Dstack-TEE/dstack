@@ -27,7 +27,7 @@ pub(crate) fn strip_tdx_runtime_event_log(event_log: Vec<TdxEvent>) -> Vec<TdxEv
         .collect()
 }
 
-pub(crate) fn strip_tdx_measurement_event_log(event_log: Vec<TdxEvent>) -> Vec<TdxEvent> {
+pub(crate) fn strip_tdx_lite_event_log(event_log: Vec<TdxEvent>) -> Vec<TdxEvent> {
     event_log
         .into_iter()
         .filter_map(|event| {
@@ -40,9 +40,9 @@ pub(crate) fn strip_tdx_measurement_event_log(event_log: Vec<TdxEvent>) -> Vec<T
         .collect()
 }
 
-pub(crate) fn is_tdx_measurement_config(config: &str) -> bool {
+pub(crate) fn is_tdx_lite_config(config: &str) -> bool {
     serde_json::from_str::<dstack_types::VmConfig>(config)
-        .map(|config| config.tdx_attestation_variant.is_measurement())
+        .map(|config| config.tdx_attestation_variant.is_lite())
         .unwrap_or(false)
 }
 
@@ -50,8 +50,8 @@ pub(crate) fn strip_tdx_event_log_for_config(
     event_log: Vec<TdxEvent>,
     config: &str,
 ) -> Vec<TdxEvent> {
-    if is_tdx_measurement_config(config) {
-        strip_tdx_measurement_event_log(event_log)
+    if is_tdx_lite_config(config) {
+        strip_tdx_lite_event_log(event_log)
     } else {
         strip_tdx_runtime_event_log(event_log)
     }
@@ -487,14 +487,14 @@ mod tests {
     }
 
     #[test]
-    fn measurement_stripping_keeps_only_acpi_data_digests_and_runtime_payloads() {
+    fn lite_stripping_keeps_only_acpi_data_digests_and_runtime_payloads() {
         let mut event_log = (0..20).map(boot_event).collect::<Vec<_>>();
         event_log[3] = acpi_data_event(3);
         event_log[8] = acpi_data_event(8);
         event_log[15] = acpi_data_event(15);
         event_log.push(runtime_event());
 
-        let stripped = strip_tdx_measurement_event_log(event_log);
+        let stripped = strip_tdx_lite_event_log(event_log);
 
         assert_eq!(stripped.len(), 4);
         assert_eq!(
