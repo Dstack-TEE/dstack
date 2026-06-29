@@ -11,40 +11,25 @@ use size_parser::human_size;
 
 /// Identifies which OVMF flavour the guest image was built with.
 ///
-/// The firmware switch happened in meta-dstack commit f9f11f3 (upgrade from an
-/// untagged 2024-09 snapshot to edk2-stable202505): 0.5.7 and earlier shipped
-/// `Pre202505`, 0.5.9 onwards ships `Stable202505`. The newer firmware emits
-/// more boot-time events into RTMR[0], so quote replay needs a different
-/// expected event list for the two flavours.
-///
-/// When the variant isn't carried explicitly in `VmConfig`, the runtime cutoff
-/// rule in `dstack_mr::ovmf_variant_for_version` draws the line at OS version
-/// `0.5.10` (and again at `0.6.1`) — a deliberate policy decision that doesn't
-/// follow the firmware-flip date exactly. See that function's docs for the
-/// authoritative selection rule.
+/// Only the pre-202505 OVMF measurement layout is supported.
 #[derive(Deserialize, Serialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum OvmfVariant {
-    /// Pre-edk2-stable202505 OVMF (13 RTMR[0] events).
+    /// Pre-202505 OVMF (13 RTMR[0] events).
     #[default]
     Pre202505,
-    /// edk2-stable202505+ OVMF (17 RTMR[0] events: new fw_cfg, VARIABLE_AUTHORITY
-    /// and BootXXXX entries).
-    Stable202505,
 }
 
 impl OvmfVariant {
     pub fn to_u8(self) -> u8 {
         match self {
             Self::Pre202505 => 0,
-            Self::Stable202505 => 1,
         }
     }
 
     pub fn from_u8(value: u8) -> Option<Self> {
         match value {
             0 => Some(Self::Pre202505),
-            1 => Some(Self::Stable202505),
             _ => None,
         }
     }

@@ -140,9 +140,8 @@ fn collect_rtmr_mismatch(
 }
 
 // Bump whenever expected RTMR computation changes so stale entries get ignored.
-// v2: edk2-stable202505 OVMF RTMR[0] layout (added 4 events, reshaped BootOrder
-// and Boot0000); the legacy 13-event log no longer matches any in-field image.
-const MEASUREMENT_CACHE_VERSION: u32 = 2;
+// v3: all supported OVMF measurements use the Pre202505 RTMR[0] layout.
+const MEASUREMENT_CACHE_VERSION: u32 = 3;
 
 #[derive(Clone, Serialize, Deserialize)]
 struct CachedMeasurement {
