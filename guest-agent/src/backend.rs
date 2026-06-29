@@ -36,7 +36,7 @@ impl PlatformBackend for RealPlatform {
     fn quote_response(&self, report_data: [u8; 64], vm_config: &str) -> Result<GetQuoteResponse> {
         let attestation = Attestation::quote(&report_data).context("Failed to get quote")?;
         let tdx_quote = attestation.get_tdx_quote_bytes();
-        let tdx_event_log = attestation.get_tdx_event_log_string();
+        let tdx_event_log = attestation.get_tdx_event_log_string_for_config(vm_config);
         // Always carry the platform-adaptive versioned attestation so callers on
         // non-TDX platforms (AMD SEV-SNP) still get a verifier-ready payload.
         let versioned = attestation

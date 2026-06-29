@@ -30,10 +30,10 @@ Important fixture properties:
 
 - `vm_config.tdx_attestation_variant = "lite"`
 - `vm_config.memory_size = 2147483648` (2 GiB)
-- `vm_config.os_image_hash = dfddf213407f9bef4ce301a5a711241a821a1b53a2bf8dfedb474c2ebc1d6d00`
-- The stripped attestation keeps the three RTMR0 `ACPI DATA` digests and
-  their `ACPI DATA` marker payloads needed by the lite verifier, plus RTMR3
-  runtime events.
+- `vm_config.os_image_hash = 66dbf8143cdc3b3505a0a1c0b7c6add55bddbd86ef65b1c9eb9ecbab880d736c`
+- The top-level `event_log` and stripped attestation keep the three RTMR0
+  `ACPI DATA` digests and marker payloads needed by the lite verifier, plus
+  RTMR3 runtime events.
 
 To verify without image download, use a config whose download URL is unreachable;
 the lite verifier should still pass:

@@ -13,7 +13,7 @@ pub const ATTESTATION_VERSION: u64 = 1;
 const TDX_ACPI_DATA_EVENT_TYPE: u32 = 10;
 const TDX_ACPI_DATA_EVENT_PAYLOAD: &[u8] = b"ACPI DATA";
 
-fn is_tdx_acpi_data_event(event: &TdxEvent) -> bool {
+pub(crate) fn is_tdx_acpi_data_event(event: &TdxEvent) -> bool {
     event.imr == 0
         && event.event_type == TDX_ACPI_DATA_EVENT_TYPE
         && event.event_payload == TDX_ACPI_DATA_EVENT_PAYLOAD
