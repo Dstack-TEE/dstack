@@ -324,8 +324,7 @@ chmod 600 /etc/kms/auth-eth.env
 ### Verify configuration
 
 ```bash
-grep -E '^(HOST|PORT|KMS_CONTRACT_ADDR)=' /etc/kms/auth-eth.env
-grep -q '^ETH_RPC_URL=.' /etc/kms/auth-eth.env && echo "ETH_RPC_URL is set"
+cat /etc/kms/auth-eth.env
 ```
 
 ## Step 7: Create Docker Image for CVM Deployment
