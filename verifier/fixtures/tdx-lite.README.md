@@ -18,6 +18,7 @@ Captured with:
 
 ```bash
 E2E_APP_TIMEOUT=900 ./e2e/run.sh up \
+  --image-dir images \
   --image dstack-0.6.0 \
   --apps 1 \
   --force \
@@ -29,7 +30,7 @@ Important fixture properties:
 
 - `vm_config.tdx_attestation_variant = "lite"`
 - `vm_config.memory_size = 2147483648` (2 GiB)
-- `vm_config.os_image_hash = 457c385537cfbc8cca617b672ef395ae0aabb88f0fff1bc53ca887b46475dcc0`
+- `vm_config.os_image_hash = dfddf213407f9bef4ce301a5a711241a821a1b53a2bf8dfedb474c2ebc1d6d00`
 - The stripped attestation keeps the three RTMR0 `ACPI DATA` digests and
   their `ACPI DATA` marker payloads needed by the lite verifier, plus RTMR3
   runtime events.
