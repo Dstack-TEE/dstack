@@ -1,0 +1,9 @@
+# SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+services:
+  web:
+    image: nginx:alpine
+    ports:
+      - "80:80"

@@ -2392,6 +2392,40 @@ dependencies = [
 ]
 
 [[package]]
+name = "dstack-auth"
+version = "0.5.11"
+dependencies = [
+ "anyhow",
+ "clap",
+ "rocket",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "dstack-cli"
+version = "0.5.11"
+dependencies = [
+ "anyhow",
+ "clap",
+ "dstack-cli-core",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "dstack-cli-core"
+version = "0.5.11"
+dependencies = [
+ "anyhow",
+ "dstack-vmm-rpc",
+ "http-client",
+ "rustix 0.38.44",
+ "serde_json",
+ "toml",
+]
+
+[[package]]
 name = "dstack-gateway"
 version = "0.5.11"
 dependencies = [
@@ -2859,6 +2893,21 @@ dependencies = [
  "prpc-build",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "dstackup"
+version = "0.5.11"
+dependencies = [
+ "anyhow",
+ "clap",
+ "dstack-cli-core",
+ "hex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tokio",
 ]
 
 [[package]]

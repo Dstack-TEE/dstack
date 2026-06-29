@@ -1,20 +1,22 @@
 # Deploying dstack
 
-> **This guide is for self-hosted deployments** on your own TDX hardware. For cloud deployments, see [Quickstart](./quickstart.md).
+> **This guide is for self-hosted deployments** on your own TDX or AMD SEV-SNP hardware. For cloud deployments, see [Quickstart](./quickstart.md).
 
-This guide covers deploying dstack on bare metal TDX hosts.
+This guide covers the full manual deployment path for self-hosted dstack. Before deploying, prepare the host with [Hardware enablement](./hardware-enablement.md). If you want the shortest path to a first app on one host, start with [Self-hosted quick onboarding](./onboarding.md).
 
 ## Overview
 
 dstack can be deployed in two ways:
 
-- **Dev Deployment**: All components run directly on the host. For local development and testing only - no security guarantees.
-- **Production Deployment**: KMS and Gateway run as CVMs with hardware-rooted security. Uses auth server for authorization and OS image whitelisting. Required for any deployment where security matters.
+- **Single-node deployment**: `dstackup` downloads a verified guest image, renders host config, starts the VMM and auth webhook, bootstraps a KMS CVM, and deploys apps through direct port mappings. Use [Self-hosted quick onboarding](./onboarding.md) for the first-app path.
+- **Production deployment**: KMS and Gateway run as CVMs with hardware-rooted security. Uses an auth server for authorization and OS image allowlisting. Required for multi-node deployments, Gateway routing, custom domains, or on-chain governance.
+
+For local development and contribution workflows, see [Contributing](../CONTRIBUTING.md).
 
 ## Prerequisites
 
 **Hardware:**
-- Bare metal TDX server ([setup guide](https://github.com/canonical/tdx))
+- Bare metal TDX or AMD SEV-SNP server. See [Hardware enablement](./hardware-enablement.md).
 - At least 16GB RAM, 100GB free disk space
 - Public IPv4 address
 - Optional: NVIDIA H100 or Blackwell GPU for [Confidential Computing](https://www.nvidia.com/en-us/data-center/solutions/confidential-computing/) workloads
@@ -23,77 +25,6 @@ dstack can be deployed in two ways:
 - Domain with DNS access (for Gateway TLS)
 
 > **Note:** See [Hardware Requirements](https://docs.phala.network/dstack/hardware-requirements) for server recommendations.
-
----
-
-## Dev Deployment
-
-This approach runs all components directly on the host for local development and testing.
-
-> **Warning:** Dev deployment uses KMS in dev mode with no security guarantees. Do NOT use for production.
-
-### Install Dependencies
-
-```bash
-# Ubuntu 24.04
-sudo apt install -y build-essential chrpath diffstat lz4 wireguard-tools xorriso
-
-# Install Rust
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-```
-
-### Build Configuration
-
-```bash
-git clone https://github.com/Dstack-TEE/meta-dstack.git --recursive
-cd meta-dstack/
-mkdir build && cd build
-../build.sh hostcfg
-```
-
-Edit the generated `build-config.sh` for your environment. The minimal required changes are:
-
-| Variable | Description |
-|----------|-------------|
-| `KMS_DOMAIN` | DNS domain for KMS RPC (e.g., `kms.example.com`) |
-| `GATEWAY_DOMAIN` | DNS domain for Gateway RPC (e.g., `gateway.example.com`) |
-| `GATEWAY_PUBLIC_DOMAIN` | Public base domain for app routing (e.g., `apps.example.com`) |
-
-**TLS Certificates:**
-
-The Gateway requires TLS certificates. Configure Certbot with Cloudflare:
-
-```bash
-CERTBOT_ENABLED=true
-CF_API_TOKEN=<your-cloudflare-token>
-```
-
-The certificates will be obtained automatically via ACME DNS-01 challenge. The KMS auto-generates its own certificates during bootstrap.
-
-Other variables like ports and CID pool settings have sensible defaults.
-
-```bash
-vim ./build-config.sh
-../build.sh hostcfg
-```
-
-### Download Guest Image
-
-```bash
-../build.sh dl 0.5.5
-```
-
-### Run Components
-
-Start in separate terminals:
-
-1. **KMS**: `./dstack-kms -c kms.toml`
-2. **Gateway**: `sudo ./dstack-gateway -c gateway.toml`
-3. **VMM**: `./dstack-vmm -c vmm.toml`
-
-> **Note:** This deployment uses KMS in dev mode without an auth server. For production deployments with proper security, see [Production Deployment](#production-deployment) below.
-
----
 
 ## Production Deployment
 

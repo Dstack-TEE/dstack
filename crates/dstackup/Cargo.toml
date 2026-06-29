@@ -1,0 +1,26 @@
+# SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "dstackup"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "dstackup"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+dstack-cli-core.workspace = true
+hex = { workspace = true, features = ["alloc"] }
+# reqwest (+ rustls/hyper) is already linked via dstack-cli-core's prpc client,
+# so using it for http here adds ~no binary cost and drops the curl dependency.
+reqwest = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+sha2.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
