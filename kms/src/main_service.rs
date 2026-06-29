@@ -566,7 +566,7 @@ mod tests {
     fn valid_snp_measurement_input() -> MeasurementInput {
         let rootfs_hash = hex_of(0x33, 32);
         MeasurementInput {
-            base_cmdline: Some(format!("console=ttyS0 dstack.rootfs_hash={rootfs_hash}")),
+            base_cmdline: format!("console=ttyS0 dstack.rootfs_hash={rootfs_hash}"),
             ovmf_hash: hex_of(0x44, 48),
             kernel_hash: hex_of(0x55, 32),
             initrd_hash: hex_of(0x66, 32),

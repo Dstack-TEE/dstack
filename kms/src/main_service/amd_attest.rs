@@ -212,7 +212,7 @@ mod tests {
     fn valid_input() -> MeasurementInput {
         let rootfs_hash = hex_of(0x33, 32);
         MeasurementInput {
-            base_cmdline: Some(format!("console=ttyS0 dstack.rootfs_hash={rootfs_hash}")),
+            base_cmdline: format!("console=ttyS0 dstack.rootfs_hash={rootfs_hash}"),
             ovmf_hash: hex_of(0x44, 48),
             kernel_hash: hex_of(0x55, 32),
             initrd_hash: hex_of(0x66, 32),
@@ -681,10 +681,7 @@ mod tests {
     #[test]
     fn rejects_empty_or_malformed_binding_hashes() {
         let mut input = valid_input();
-        input.base_cmdline = Some(format!(
-            "console=ttyS0 dstack.rootfs_hash={}",
-            hex_of(0x33, 31)
-        ));
+        input.base_cmdline = format!("console=ttyS0 dstack.rootfs_hash={}", hex_of(0x33, 31));
         assert_rejects(input, "dstack.rootfs_hash must be 32 bytes");
 
         let mut input = valid_input();

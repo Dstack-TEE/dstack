@@ -1324,8 +1324,11 @@ fn amd_sev_snp_ovmf_measurement_info(image: &Image) -> Result<dstack_mr::sev::Ov
     })
 }
 
-fn amd_sev_snp_measurement_base_cmdline(base_cmdline: Option<&str>) -> Option<String> {
-    base_cmdline.map(|cmdline| cmdline.trim().to_string())
+fn amd_sev_snp_measurement_base_cmdline(base_cmdline: Option<&str>) -> Result<String> {
+    match base_cmdline.map(str::trim) {
+        Some(cmdline) if !cmdline.is_empty() => Ok(cmdline.to_string()),
+        _ => anyhow::bail!("metadata.json cmdline is required for amd sev-snp measurement"),
+    }
 }
 
 fn sha256_file(path: impl AsRef<Path>) -> Result<[u8; 32]> {
@@ -1419,7 +1422,7 @@ fn make_vm_config(
         }
         let ovmf = amd_sev_snp_ovmf_measurement_info(image)?;
         let measurement = json!({
-            "base_cmdline": amd_sev_snp_measurement_base_cmdline(image.info.cmdline.as_deref()),
+            "base_cmdline": amd_sev_snp_measurement_base_cmdline(image.info.cmdline.as_deref())?,
             "ovmf_hash": ovmf.ovmf_hash,
             "kernel_hash": file_sha256_hex(&image.kernel)?,
             "initrd_hash": file_sha256_hex(&image.initrd)?,
@@ -1539,9 +1542,11 @@ mod tests {
     #[test]
     fn amd_sev_snp_measurement_base_cmdline_trims_image_cmdline() {
         assert_eq!(
-            amd_sev_snp_measurement_base_cmdline(Some(" console=ttyS0 loglevel=7 ")),
-            Some("console=ttyS0 loglevel=7".to_string())
+            amd_sev_snp_measurement_base_cmdline(Some(" console=ttyS0 loglevel=7 ")).unwrap(),
+            "console=ttyS0 loglevel=7"
         );
+        assert!(amd_sev_snp_measurement_base_cmdline(None).is_err());
+        assert!(amd_sev_snp_measurement_base_cmdline(Some("   ")).is_err());
     }
 
     #[test]
