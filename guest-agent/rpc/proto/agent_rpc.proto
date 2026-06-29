@@ -200,9 +200,8 @@ message GetQuoteResponse {
   // Hw config
   string vm_config = 4;
   // Platform-adaptive versioned attestation (SCALE/msgpack encoded). Populated
-  // for every TEE platform (TDX, AMD SEV-SNP, ...) and is the verifier-ready
-  // payload to send to dstack-verifier's `/verify` `attestation` field. Use
-  // this instead of `quote`/`event_log` for platform-agnostic verification.
+  // on non-TDX TEE platforms (AMD SEV-SNP, ...). TDX uses `quote` + `event_log`
+  // above to keep this response compact.
   bytes attestation = 5;
 }
 

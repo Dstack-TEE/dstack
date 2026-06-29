@@ -11,8 +11,9 @@ Files:
   `GetAppKey` flow. It contains a stripped `attestation` plus the explicit
   `vm_config` carrying `tdx_measurement`.
 - `tdx-lite-getquote.json`: raw guest-agent `GetQuoteResponse` captured
-  via `GetAttestationForAppKey`, including quote, event log, vm_config, and the
-  full versioned attestation.
+  via `GetAttestationForAppKey`, including quote, event log, and vm_config.
+  TDX `GetQuoteResponse` intentionally omits the `attestation` field to keep
+  the response compact.
 
 Captured with:
 
@@ -30,7 +31,7 @@ Important fixture properties:
 
 - `vm_config.tdx_attestation_variant = "lite"`
 - `vm_config.memory_size = 2147483648` (2 GiB)
-- `vm_config.os_image_hash = 66dbf8143cdc3b3505a0a1c0b7c6add55bddbd86ef65b1c9eb9ecbab880d736c`
+- `vm_config.os_image_hash = 07a2388c7a6a1b6a646d443f1517990a4ec294471d63146cda9d56972765051d`
 - The top-level `event_log` and stripped attestation keep the three RTMR0
   `ACPI DATA` digests and marker payloads needed by the lite verifier, plus
   RTMR3 runtime events.

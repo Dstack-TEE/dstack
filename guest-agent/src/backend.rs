@@ -37,12 +37,16 @@ impl PlatformBackend for RealPlatform {
         let attestation = Attestation::quote(&report_data).context("Failed to get quote")?;
         let tdx_quote = attestation.get_tdx_quote_bytes();
         let tdx_event_log = attestation.get_tdx_event_log_string_for_config(vm_config);
-        // Always carry the platform-adaptive versioned attestation so callers on
-        // non-TDX platforms (AMD SEV-SNP) still get a verifier-ready payload.
-        let versioned = attestation
-            .into_versioned()
-            .to_bytes()
-            .context("Failed to encode versioned attestation")?;
+        // TDX callers already have quote + event_log. Only non-TDX platforms
+        // need the platform-adaptive versioned attestation payload.
+        let versioned = if tdx_quote.is_some() {
+            Vec::new()
+        } else {
+            attestation
+                .into_versioned()
+                .to_bytes()
+                .context("Failed to encode versioned attestation")?
+        };
         Ok(GetQuoteResponse {
             quote: tdx_quote.unwrap_or_default(),
             event_log: tdx_event_log.unwrap_or_default(),
