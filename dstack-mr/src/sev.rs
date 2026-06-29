@@ -321,18 +321,18 @@ fn build_sev_hashes_page(
     Ok(page)
 }
 
-fn measured_kernel_cmdline(input: Option<&str>) -> String {
+fn measured_kernel_cmdline(input: Option<&str>) -> Result<String> {
     match input {
-        Some(base) if !base.trim().is_empty() => base.trim().to_string(),
-        _ => "console=ttyS0 loglevel=7".to_string(),
+        Some(base) if !base.trim().is_empty() => Ok(base.trim().to_string()),
+        _ => bail!("base_cmdline is required in amd sev-snp measured cmdline"),
     }
 }
 
-fn kernel_cmdline_sha256(input: Option<&str>) -> Vec<u8> {
-    let cmdline = measured_kernel_cmdline(input);
+fn kernel_cmdline_sha256(input: Option<&str>) -> Result<Vec<u8>> {
+    let cmdline = measured_kernel_cmdline(input)?;
     let mut cmdline_bytes = cmdline.as_bytes().to_vec();
     cmdline_bytes.push(0);
-    Sha256::digest(&cmdline_bytes).to_vec()
+    Ok(Sha256::digest(&cmdline_bytes).to_vec())
 }
 
 fn effective_initrd_hash_from_hex(value: &str) -> Result<Vec<u8>> {
@@ -685,7 +685,7 @@ pub fn compute_expected_measurement(input: &MeasurementInput) -> Result<[u8; 48]
         .as_deref()
         .ok_or_else(|| anyhow::anyhow!("vcpu_type is required"))?;
 
-    let cmdline = measured_kernel_cmdline(input.base_cmdline.as_deref());
+    let cmdline = measured_kernel_cmdline(input.base_cmdline.as_deref())?;
     let resolved_sections = input
         .ovmf_sections
         .iter()
@@ -760,7 +760,7 @@ fn sev_os_image_measurement(
     // is already committed by `kernel_cmdline_sha256`.
     rootfs_hash_from_cmdline(input.base_cmdline.as_deref())?;
     Ok(dstack_types::SevOsImageMeasurement {
-        kernel_cmdline_sha256: kernel_cmdline_sha256(input.base_cmdline.as_deref()),
+        kernel_cmdline_sha256: kernel_cmdline_sha256(input.base_cmdline.as_deref())?,
         ovmf_hash: decode_required_hex("ovmf_hash", &input.ovmf_hash, 48)?,
         kernel_hash: decode_required_hex("kernel_hash", &input.kernel_hash, 32)?,
         initrd_hash: effective_initrd_hash_from_hex(&input.initrd_hash)?,
@@ -887,7 +887,7 @@ pub fn sev_os_image_measurement_for_image_dir(
     rootfs_hash_from_cmdline(meta.cmdline.as_deref())?;
 
     Ok(dstack_types::SevOsImageMeasurement {
-        kernel_cmdline_sha256: kernel_cmdline_sha256(meta.cmdline.as_deref()),
+        kernel_cmdline_sha256: kernel_cmdline_sha256(meta.cmdline.as_deref())?,
         ovmf_hash: decode_required_hex("ovmf_hash", &ovmf.ovmf_hash, 48)?,
         kernel_hash: file_sha256(&image_dir.join(&meta.kernel))?,
         initrd_hash: file_sha256(&image_dir.join(&meta.initrd))?,
@@ -1197,6 +1197,20 @@ mod tests {
 
     fn measurement_document(input: &MeasurementInput) -> String {
         serde_json::to_string(input).expect("measurement input should serialize")
+    }
+
+    #[test]
+    fn compute_measurement_requires_base_cmdline() {
+        for base_cmdline in [None, Some("   ".to_string())] {
+            let mut input = valid_input();
+            input.base_cmdline = base_cmdline;
+            let err = compute_expected_measurement(&input)
+                .expect_err("missing measured cmdline must reject");
+            assert!(
+                err.to_string().contains("base_cmdline is required"),
+                "unexpected error: {err:?}"
+            );
+        }
     }
 
     #[test]
