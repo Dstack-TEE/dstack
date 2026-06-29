@@ -472,10 +472,10 @@ impl<'a> Tdvf<'a> {
                 }
                 ranges.push((start_page, page_count));
             }
-            if s.sec_type == TDVF_SECTION_TD_HOB {
-                if td_hob_page.replace(s.memory_address / PAGE_SIZE).is_some() {
-                    bail!("TDVF metadata contains more than one TD_HOB section");
-                }
+            if s.sec_type == TDVF_SECTION_TD_HOB
+                && td_hob_page.replace(s.memory_address / PAGE_SIZE).is_some()
+            {
+                bail!("TDVF metadata contains more than one TD_HOB section");
             }
         }
 

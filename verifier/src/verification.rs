@@ -873,7 +873,7 @@ impl CvmVerifier {
             };
             match expected_mrs.assert_eq(&verified_mrs) {
                 Ok(()) => return Ok(()),
-                Err(e) => last_error = Some(e.into()),
+                Err(e) => last_error = Some(e),
             }
         }
 
