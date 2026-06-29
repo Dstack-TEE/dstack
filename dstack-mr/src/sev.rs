@@ -321,18 +321,15 @@ fn build_sev_hashes_page(
     Ok(page)
 }
 
-fn measured_kernel_cmdline(input: &str) -> Result<String> {
-    match input.trim() {
-        base if !base.is_empty() => Ok(base.to_string()),
-        _ => bail!("base_cmdline is required in amd sev-snp measured cmdline"),
-    }
+fn measured_kernel_cmdline(input: &str) -> String {
+    input.trim().to_string()
 }
 
-fn kernel_cmdline_sha256(input: &str) -> Result<Vec<u8>> {
-    let cmdline = measured_kernel_cmdline(input)?;
+fn kernel_cmdline_sha256(input: &str) -> Vec<u8> {
+    let cmdline = measured_kernel_cmdline(input);
     let mut cmdline_bytes = cmdline.as_bytes().to_vec();
     cmdline_bytes.push(0);
-    Ok(Sha256::digest(&cmdline_bytes).to_vec())
+    Sha256::digest(&cmdline_bytes).to_vec()
 }
 
 fn effective_initrd_hash_from_hex(value: &str) -> Result<Vec<u8>> {
@@ -685,7 +682,7 @@ pub fn compute_expected_measurement(input: &MeasurementInput) -> Result<[u8; 48]
         .as_deref()
         .ok_or_else(|| anyhow::anyhow!("vcpu_type is required"))?;
 
-    let cmdline = measured_kernel_cmdline(&input.base_cmdline)?;
+    let cmdline = measured_kernel_cmdline(&input.base_cmdline);
     let resolved_sections = input
         .ovmf_sections
         .iter()
@@ -760,7 +757,7 @@ fn sev_os_image_measurement(
     // is already committed by `kernel_cmdline_sha256`.
     rootfs_hash_from_cmdline(Some(&input.base_cmdline))?;
     Ok(dstack_types::SevOsImageMeasurement {
-        kernel_cmdline_sha256: kernel_cmdline_sha256(&input.base_cmdline)?,
+        kernel_cmdline_sha256: kernel_cmdline_sha256(&input.base_cmdline),
         ovmf_hash: decode_required_hex("ovmf_hash", &input.ovmf_hash, 48)?,
         kernel_hash: decode_required_hex("kernel_hash", &input.kernel_hash, 32)?,
         initrd_hash: effective_initrd_hash_from_hex(&input.initrd_hash)?,
@@ -891,7 +888,7 @@ pub fn sev_os_image_measurement_for_image_dir(
             meta.cmdline
                 .as_deref()
                 .context("metadata.json cmdline is required for amd sev-snp os_image_hash")?,
-        )?,
+        ),
         ovmf_hash: decode_required_hex("ovmf_hash", &ovmf.ovmf_hash, 48)?,
         kernel_hash: file_sha256(&image_dir.join(&meta.kernel))?,
         initrd_hash: file_sha256(&image_dir.join(&meta.initrd))?,
@@ -1204,7 +1201,7 @@ mod tests {
     }
 
     #[test]
-    fn compute_measurement_requires_base_cmdline() {
+    fn measurement_input_requires_base_cmdline() {
         let mut value = serde_json::to_value(valid_input()).expect("serialize measurement input");
         value
             .as_object_mut()
@@ -1220,9 +1217,9 @@ mod tests {
         let mut input = valid_input();
         input.base_cmdline = "   ".to_string();
         let err =
-            compute_expected_measurement(&input).expect_err("empty measured cmdline must reject");
+            validate_measurement_input(&input).expect_err("empty measured cmdline must reject");
         assert!(
-            err.to_string().contains("base_cmdline is required"),
+            err.to_string().contains("dstack.rootfs_hash is required"),
             "unexpected error: {err:?}"
         );
     }
