@@ -1,0 +1,52 @@
+# SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+name: Security docs question or prior finding
+description: Ask about documented behavior or already-public findings. Do not report vulnerabilities here.
+title: "Security docs: "
+labels: ["question"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not use this form for exploitable vulnerabilities. Report exploitable issues privately through the repository security policy:
+        https://github.com/Dstack-TEE/dstack/security/policy
+
+        Before filing, check the security issue triage page for answered reports:
+        https://github.com/Dstack-TEE/dstack/blob/master/docs/security/security-issue-triage.md
+  - type: textarea
+    id: concern
+    attributes:
+      label: Security docs question or prior finding
+      description: Describe the documented behavior, setting, or prior public report you want maintainers to evaluate.
+      placeholder: "Example: Does `auth_api.type = \"dev\"` affect production KMS deployments?"
+    validations:
+      required: true
+  - type: textarea
+    id: prior-art
+    attributes:
+      label: Prior reports or docs checked
+      description: Link any related issues, advisories, code locations, or docs you already checked.
+      placeholder: "Example: #608, docs/security/security-issue-triage.md"
+    validations:
+      required: true
+  - type: dropdown
+    id: impact
+    attributes:
+      label: Expected classification
+      description: Pick the closest public category. Maintainers may change it during triage.
+      options:
+        - Question about documented behavior
+        - Possible duplicate of an answered report
+        - Docs clarification
+        - Defense-in-depth hardening idea without an exploit claim
+    validations:
+      required: true
+  - type: checkboxes
+    id: disclosure
+    attributes:
+      label: Vulnerability disclosure
+      options:
+        - label: This is not an exploitable vulnerability report. If it may be exploitable, I will use the private security report channel.
+          required: true

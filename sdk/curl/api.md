@@ -64,7 +64,7 @@ curl --unix-socket /var/run/dstack.sock -X POST \
 
 ### 2. Get Key
 
-Generates an ECDSA key using the k256 elliptic curve, derived from the application key, and returns both the key and its signature chain. Sutable for ETH key generation.
+Generates a deterministic private key from the application key and returns both the key and its signature chain. Suitable for ETH key generation when using the default `secp256k1` algorithm.
 
 **Endpoint:** `/GetKey`
 
@@ -72,9 +72,11 @@ Generates an ECDSA key using the k256 elliptic curve, derived from the applicati
 
 | Field | Type | Description | Example |
 |-------|------|-------------|----------|
-| `path` | string | Path for the key | `"my/key/path"` |
-| `purpose` | string | Purpose for the key. Can be any string. This is used in the signature chain. | `"signing"` | `"encryption"` |
-| `algorithm` | string | Either `secp256k1` or `ed25519`. Defaults to `secp256k1` | `ed25519` |
+| `path` | string | Path for the key. This is the domain separator for deterministic key material. | `"my/key/path"` |
+| `purpose` | string | Purpose for the key. Can be any string. This is used in the signature chain and does not affect the private key bytes. | `"signing"` |
+| `algorithm` | string | Either `secp256k1` or `ed25519`. Defaults to `secp256k1`. For compatibility, this selects how the same derived 32-byte material is interpreted; it does not domain-separate the derivation. | `ed25519` |
+
+Use algorithm-specific paths, such as `wallet/ethereum` and `wallet/solana`, when independent keys are required across algorithms.
 
 **Example:**
 ```bash

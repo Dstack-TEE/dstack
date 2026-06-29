@@ -21,7 +21,7 @@ dstack applications consist of:
 
 ### SDK Capabilities
 
-- **Key Derivation**: Deterministic secp256k1 key generation for blockchain and Web3 applications
+- **Key Derivation**: Deterministic key derivation for blockchain and Web3 applications
 - **Remote Attestation**: TDX quote generation providing cryptographic proof of execution environment
 - **TLS Certificate Management**: Fresh certificate generation with optional RA-TLS support for secure connections
 - **Deployment Security**: Client-side encryption of sensitive environment variables ensuring secrets are only accessible to target TEE applications
@@ -318,24 +318,16 @@ if err != nil {
 
 ```go
 import (
-	"crypto/ed25519"
 	"encoding/hex"
-	
+
 	"github.com/Dstack-TEE/dstack/sdk/go/dstack"
 )
 
-keyResult, err := client.GetKey(ctx, "solana/main", "wallet", "secp256k1")
+keyResult, err := client.GetKey(ctx, "solana/main", "wallet", "ed25519")
 if err != nil {
 	log.Fatal(err)
 }
 
-// Standard keypair creation
-keypair, err := dstack.ToSolanaKeypair(keyResult)
-if err != nil {
-	log.Fatal(err)
-}
-
-// Enhanced security with SHA256 hashing (recommended)
 secureKeypair, err := dstack.ToSolanaKeypairSecure(keyResult)
 if err != nil {
 	log.Fatal(err)
@@ -365,8 +357,8 @@ The SDK provides end-to-end encryption capabilities for securely transmitting se
 import (
 	"encoding/hex"
 	"fmt"
-	"time"
-	
+	"log"
+
 	"github.com/Dstack-TEE/dstack/sdk/go/dstack"
 )
 
@@ -388,21 +380,28 @@ publicKeyBytes, _ := hex.DecodeString(publicKey)
 signatureBytes, _ := hex.DecodeString(signature)
 
 // Prefer timestamped verification to prevent replay attacks.
-timestamp := uint64(time.Now().Unix()) // should come from KMS API response
-trustedPubkey, err := dstack.VerifyEnvEncryptPublicKeyWithTimestamp(
+timestamp := uint64(1710000000) // From the KMS API response, not local time
+kmsIdentity, err := dstack.VerifyEnvEncryptPublicKeyWithTimestamp(
 	publicKeyBytes,
 	signatureBytes,
 	"your-app-id-hex",
 	timestamp,
 	nil, // use default freshness policy (max age 300s)
 )
-if err != nil || trustedPubkey == nil {
+if err != nil || kmsIdentity == nil {
 	log.Fatal("KMS API provided untrusted encryption key")
 }
 
-fmt.Println("Verified KMS public key:", hex.EncodeToString(trustedPubkey))
+expectedKMSIdentity := "03..." // From the DstackKms contract or deployment config
+actualKMSIdentity := hex.EncodeToString(kmsIdentity)
+if actualKMSIdentity != expectedKMSIdentity {
+	log.Fatalf("unexpected KMS identity: got %s", actualKMSIdentity)
+}
 
-// Note: VerifyEnvEncryptPublicKey() is kept for legacy compatibility (without timestamp check).
+fmt.Println("Verified KMS public key:", actualKMSIdentity)
+
+// VerifyEnvEncryptPublicKey() is available only for explicit compatibility with
+// older KMS builds. It does not provide timestamp replay protection.
 
 // 4. Encrypt environment variables for secure deployment
 encryptedData, err := dstack.EncryptEnvVars(envVars, publicKey)
@@ -422,7 +421,7 @@ fmt.Println("Encrypted payload:", encryptedData)
 The SDK implements secure key derivation using:
 
 - **Deterministic Generation**: Keys are derived using HMAC-based Key Derivation Function (HKDF)
-- **Application Isolation**: Each path produces unique keys, preventing cross-application access
+- **Application Isolation**: Different `app_id` values derive different keys even with the same path
 - **Signature Verification**: All derived keys include cryptographic proof of origin
 - **TEE Protection**: Master keys never leave the secure enclave
 
@@ -547,23 +546,26 @@ Retrieves comprehensive information about the TEE instance.
   - `EventLog`: Boot and runtime events
 - `AppCert`: Application certificate in PEM format
 
-##### `GetKey(ctx context.Context, path string, purpose string) (*GetKeyResponse, error)`
+##### `GetKey(ctx context.Context, path string, purpose string, algorithm string) (*GetKeyResponse, error)`
 
-Derives a deterministic secp256k1/K256 private key for blockchain and Web3 applications. This is the primary method for obtaining cryptographic keys for wallets, signing, and other deterministic key scenarios.
+Derives deterministic private key material for blockchain and Web3 applications. This is the primary method for obtaining cryptographic keys for wallets, signing, and other deterministic key scenarios.
 
 **Parameters:**
 - `path`: Unique identifier for key derivation (e.g., `"wallet/ethereum"`, `"signing/solana"`)
-- `purpose`: Additional context for key usage (default: `""`)
+- `purpose`: Included in the signature-chain message; does not affect the private key bytes
+- `algorithm`: `"secp256k1"` (default behavior), `"k256"` (alias), or `"ed25519"`
 
 **Returns:** `GetKeyResponse`
-- `Key`: 32-byte secp256k1 private key as hex string (suitable for Ethereum, Bitcoin, Solana, etc.)
+- `Key`: 32-byte private key material as a hex string
 - `SignatureChain`: Array of cryptographic signatures proving key authenticity
 
 **Key Characteristics:**
-- **Deterministic**: Same path + purpose always generates identical key
+- **Deterministic**: Same path always generates identical raw key material for the same app
 - **Isolated**: Different paths produce cryptographically independent keys  
-- **Blockchain-Ready**: Compatible with secp256k1 curve (Ethereum, Bitcoin, Solana)
+- **Blockchain-Ready**: Use `secp256k1` for Ethereum and Bitcoin-style signing; use `ed25519` with a Solana-specific path for independent Solana keys
 - **Verifiable**: Signature chain proves key was derived inside genuine TEE
+
+For compatibility, `algorithm` selects how the same derived 32-byte material is interpreted; it does not domain-separate the derivation. Use algorithm-specific paths when independent keys are required.
 
 **Use Cases:**
 - Cryptocurrency wallets
@@ -575,8 +577,8 @@ Derives a deterministic secp256k1/K256 private key for blockchain and Web3 appli
 ```go
 // Examples of deterministic key derivation
 ethWallet, _ := client.GetKey(ctx, "wallet/ethereum", "mainnet", "secp256k1")
-btcWallet, _ := client.GetKey(ctx, "wallet/bitcoin", "mainnet")
-solWallet, _ := client.GetKey(ctx, "wallet/solana", "mainnet")
+btcWallet, _ := client.GetKey(ctx, "wallet/bitcoin", "mainnet", "secp256k1")
+solWallet, _ := client.GetKey(ctx, "wallet/solana", "mainnet", "ed25519")
 
 // Same path always returns same key
 key1, _ := client.GetKey(ctx, "my-app/signing", "", "secp256k1")
@@ -695,7 +697,9 @@ Verify the authenticity of encryption public keys provided by KMS APIs:
 ```go
 import (
 	"encoding/hex"
-	"time"
+	"fmt"
+	"log"
+
 	"github.com/Dstack-TEE/dstack/sdk/go/dstack"
 )
 
@@ -704,16 +708,20 @@ publicKey, _ := hex.DecodeString("e33a1832c6562067ff8f844a61e51ad051f1180b66ec25
 signature, _ := hex.DecodeString("8542c49081fbf4e03f62034f13fbf70630bdf256a53032e38465a27c36fd6bed7a5e7111652004aef37f7fd92fbfc1285212c4ae6a6154203a48f5e16cad2cef00")
 appID := "0000000000000000000000000000000000000000"
 
-timestamp := uint64(time.Now().Unix()) // should come from KMS API response
+timestamp := uint64(1710000000) // From the KMS API response
 kmsIdentity, err := dstack.VerifyEnvEncryptPublicKeyWithTimestamp(publicKey, signature, appID, timestamp, nil)
 
-if err == nil && kmsIdentity != nil {
-	fmt.Println("Trusted KMS identity:", hex.EncodeToString(kmsIdentity))
-	// Safe to use the public key for encryption
-} else {
-	fmt.Println("KMS signature verification failed")
-	// Potential man-in-the-middle attack
+if err != nil || kmsIdentity == nil {
+	log.Fatal("KMS signature verification failed")
 }
+
+expectedKMSIdentity := "03..." // From the DstackKms contract or deployment config
+actualKMSIdentity := hex.EncodeToString(kmsIdentity)
+if actualKMSIdentity != expectedKMSIdentity {
+	log.Fatalf("unexpected KMS identity: got %s", actualKMSIdentity)
+}
+
+fmt.Println("Trusted KMS identity:", actualKMSIdentity)
 ```
 
 ## Security Best Practices
@@ -734,9 +742,9 @@ if err == nil && kmsIdentity != nil {
    - Implement proper certificate validation
 
 4. **Error Handling**
-   - Handle cryptographic operation failures gracefully
+   - Fail closed on security-critical cryptographic errors
    - Log security events for monitoring
-   - Implement fallback mechanisms where appropriate
+   - Avoid fallback behavior that weakens verification or key isolation
 
 ## Migration Guide
 
@@ -744,7 +752,7 @@ if err == nil && kmsIdentity != nil {
 
 The legacy client mixed two different use cases that have now been properly separated:
 
-1. **`GetKey()`**: Deterministic key derivation for Web3/blockchain (secp256k1)
+1. **`GetKey()`**: Deterministic key derivation for Web3/blockchain keys
 2. **`GetTlsKey()`**: Random TLS certificate generation for HTTPS/SSL
 
 ### From TappdClient to DstackClient
@@ -783,7 +791,7 @@ client := dstack.NewDstackClient()
 keyResult, _ := client.DeriveKey(ctx, "wallet")
 
 // After: DstackClient methods
-keyResult, _ := client.GetKey(ctx, "wallet", "ethereum")
+keyResult, _ := client.GetKey(ctx, "wallet/ethereum", "ethereum", "secp256k1")
 
 // For TLS certificates
 // Before: DeriveKey with TLS options

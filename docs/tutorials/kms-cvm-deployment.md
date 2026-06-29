@@ -49,7 +49,7 @@ Before starting, ensure you have:
 
 > **Why SGX is required:** The KMS uses Intel SGX to generate TDX attestation quotes via the `local_key_provider`. SGX Auto MP Registration must be enabled in BIOS so your platform is registered with Intel's Provisioning Certification Service (PCS). Without this registration, KMS cannot generate valid attestation quotes, and bootstrap will fail.
 
-> **Why local registry?** The KMS Docker image is cached in your [Local Docker Registry](/tutorial/local-docker-registry) for reliable, fast access from CVMs. The auth-eth service inside the container requires `ETH_RPC_URL` and `KMS_CONTRACT_ADDR` environment variables — these are passed via docker-compose, not baked into the image.
+> **Why local registry?** The KMS Docker image is cached in your [Local Docker Registry](/tutorial/local-docker-registry) for reliable, fast access from CVMs. This deployment passes `ETH_RPC_URL` and `KMS_CONTRACT_ADDR` through docker-compose so you can change the RPC endpoint or contract address without rebuilding the image.
 
 
 ## What Gets Deployed
@@ -167,6 +167,9 @@ configs:
 
       [rpc.tls.mutual]
       ca_certs = "/etc/kms/certs/tmp-ca.crt"
+      # Keep the TLS listener optional because bootstrap/public endpoints must be
+      # reachable before a client has an RA-TLS certificate. Sensitive KMS RPCs
+      # still enforce client certificate and attestation checks in their handlers.
       mandatory = false
 
       [core]
@@ -277,7 +280,7 @@ export DSTACK_VMM_AUTH_PASSWORD=$(cat ~/.dstack/secrets/vmm-auth-token)
 - `--image dstack-0.5.7`: Guest image from VMM images directory
 - `--port tcp:0.0.0.0:9100:9100`: Maps host port 9100 to CVM port 9100 on all interfaces
 
-> **Why `0.0.0.0` and not `127.0.0.1`?** Gateway CVMs use QEMU user-mode networking and reach the host via its public IP. If KMS is bound to localhost only, gateway CVMs cannot connect. KMS authentication uses TDX attestation, not network isolation, so public accessibility is safe.
+> **Why `0.0.0.0` and not `127.0.0.1`?** Gateway CVMs use QEMU user-mode networking and reach the host via its public IP. If KMS is bound to localhost only, gateway CVMs cannot connect. KMS authorization uses TDX attestation and auth policy, not loopback binding. Expose only the required KMS port and monitor it as a public service.
 
 > **Note:** Do NOT use `--secure-time` flag - it causes CVM to hang during boot waiting for time sync.
 

@@ -186,6 +186,9 @@ certs = "/etc/kms/certs/rpc.crt"
 # Mutual TLS (mTLS) Configuration
 [rpc.tls.mutual]
 ca_certs = "/etc/kms/certs/tmp-ca.crt"
+# Keep the TLS listener optional because bootstrap/public endpoints must be
+# reachable before a client has an RA-TLS certificate. Sensitive KMS RPCs still
+# enforce client certificate and attestation checks in their handlers.
 mandatory = false
 
 # Core KMS Configuration
@@ -221,7 +224,7 @@ EOF
 | `[rpc]` | `address` | RPC server bind address |
 | `[rpc]` | `port` | RPC server port (9100) |
 | `[core]` | `cert_dir` | Directory for certificates |
-| `[core]` | `pccs_url` | Local PCCS via host bridge (`10.0.2.2`) for quote verification |
+| `[core]` | `pccs_url` | PCCS endpoint for quote verification |
 | `[core.auth_api]` | `url` | Auth-eth webhook service URL |
 | `[core.onboard]` | `enabled` | Enable bootstrap/onboard mode |
 
@@ -321,7 +324,8 @@ chmod 600 /etc/kms/auth-eth.env
 ### Verify configuration
 
 ```bash
-cat /etc/kms/auth-eth.env
+grep -E '^(HOST|PORT|KMS_CONTRACT_ADDR)=' /etc/kms/auth-eth.env
+grep -q '^ETH_RPC_URL=.' /etc/kms/auth-eth.env && echo "ETH_RPC_URL is set"
 ```
 
 ## Step 7: Create Docker Image for CVM Deployment
@@ -465,6 +469,9 @@ certs = "/etc/kms/certs/rpc.crt"
 # Mutual TLS (mTLS) Configuration
 [rpc.tls.mutual]
 ca_certs = "/etc/kms/certs/tmp-ca.crt"
+# Keep the TLS listener optional because bootstrap/public endpoints must be
+# reachable before a client has an RA-TLS certificate. Sensitive KMS RPCs still
+# enforce client certificate and attestation checks in their handlers.
 mandatory = false
 
 # Core KMS Configuration
@@ -621,7 +628,7 @@ cat /etc/kms/kms.toml | python3 -c "import sys, tomllib; tomllib.load(sys.stdin.
 ```bash
 # Source and verify environment
 source /etc/kms/auth-eth.env
-echo "ETH_RPC_URL: ${ETH_RPC_URL:0:30}..."
+test -n "$ETH_RPC_URL" && echo "ETH_RPC_URL is set"
 echo "KMS_CONTRACT_ADDR: $KMS_CONTRACT_ADDR"
 ```
 

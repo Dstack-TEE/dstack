@@ -49,7 +49,7 @@ const client = new DstackClient('/run/dstack/dstack.sock')      // custom path
 
 ### `getKey(path?, purpose?, algorithm?)`
 
-Derive a deterministic key. Same `(app_id, path, purpose, algorithm)` always returns the same key; different apps deriving on the same path get different keys.
+Derive a deterministic key. The same `(app_id, path)` returns the same raw key material; different apps deriving on the same path get different keys.
 
 ```typescript
 const eth = await client.getKey('wallet/ethereum')                       // secp256k1 (default)
@@ -58,7 +58,7 @@ const sol = await client.getKey('wallet/solana', 'mainnet', 'ed25519')   // ed25
 
 Returns `{ key: Uint8Array, signature_chain: Uint8Array[] }`. The signature chain proves the key was derived inside a genuine TEE.
 
-`algorithm`: `'secp256k1'` (default), `'k256'` (alias), or `'ed25519'`. ed25519 requires guest agent ≥ 0.5.7.
+`purpose` is included in the signature-chain message and does not affect the private key bytes. `algorithm` selects how the derived 32-byte material is interpreted: `'secp256k1'` (default), `'k256'` (alias), or `'ed25519'`. It does not domain-separate the derivation, so use algorithm-specific paths such as `wallet/ethereum` and `wallet/solana` when those keys must be independent. ed25519 requires guest agent ≥ 0.5.7.
 
 ### `getTlsKey(options?)`
 
@@ -208,7 +208,6 @@ The full deployment flow mirrors `vmm-cli.py`: fetch the env-encrypt public key 
 ```typescript
 import {
   verifyEnvEncryptPublicKey,
-  verifyEnvEncryptPublicKeyLegacy,
 } from '@phala/dstack-sdk'
 import { encryptEnvVars, type EnvVar } from '@phala/dstack-sdk/encrypt-env-vars'
 
@@ -220,26 +219,21 @@ const response = await fetch(`${kmsUrl}/prpc/GetAppEnvEncryptPubKey?json`, {
 
 const publicKey = Buffer.from(response.public_key, 'hex')
 
-// Prefer v1 (timestamp-protected against replay)
-let signer = response.signature_v1
-  ? verifyEnvEncryptPublicKey(
-      publicKey,
-      Buffer.from(response.signature_v1, 'hex'),
-      appId,
-      BigInt(response.timestamp),
-    )
-  : null
-
-// Fall back to legacy signature on older KMS
-if (!signer && response.signature) {
-  signer = verifyEnvEncryptPublicKeyLegacy(
-    publicKey,
-    Buffer.from(response.signature, 'hex'),
-    appId,
-  )
+if (!response.signature_v1 || response.timestamp === undefined) {
+  throw new Error('KMS response missing timestamped signature')
 }
 
+const signer = verifyEnvEncryptPublicKey(
+  publicKey,
+  Buffer.from(response.signature_v1, 'hex'),
+  appId,
+  BigInt(response.timestamp),
+)
+
 if (!signer) throw new Error('KMS signature did not verify')
+
+const trustedSigners = new Set(['0x...']) // From the DstackKms contract or deployment config
+if (!trustedSigners.has(signer)) throw new Error(`unexpected KMS signer: ${signer}`)
 
 const envs: EnvVar[] = [
   { key: 'DATABASE_URL', value: 'postgresql://…' },
@@ -248,7 +242,7 @@ const envs: EnvVar[] = [
 const encrypted = await encryptEnvVars(envs, response.public_key)
 ```
 
-Verify functions return the signer's compressed public key (hex) on success, or `null` on failure. Check the signer against your trusted-signer whitelist before encrypting.
+Verify functions return the signer's compressed public key (hex) on success, or `null` on failure. `verifyEnvEncryptPublicKeyLegacy` is available only for deployments that explicitly support older KMS builds without `signature_v1`; it does not provide timestamp replay protection and should not be used for new deployments.
 
 ## Compatibility
 
