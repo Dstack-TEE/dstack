@@ -118,15 +118,14 @@ pub fn is_tdx_acpi_data_event(event: &TdxEvent) -> bool {
 /// names. The firmware event payload is the same "ACPI DATA" marker for all
 /// three entries, so the guest labels them before exposing the event log.
 pub fn label_tdx_acpi_data_events(event_logs: &mut [TdxEvent]) {
-    let mut acpi_idx = 0;
-    for event in event_logs
+    for (acpi_idx, event) in event_logs
         .iter_mut()
         .filter(|event| is_tdx_acpi_data_event(event))
+        .enumerate()
     {
         if let Some(name) = TDX_ACPI_DATA_EVENT_NAMES.get(acpi_idx) {
             event.event = (*name).to_string();
         }
-        acpi_idx += 1;
     }
 }
 
