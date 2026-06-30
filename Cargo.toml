@@ -127,6 +127,7 @@ futures = "0.3.31"
 git-version = "0.3.9"
 libc = "0.2.171"
 log = "0.4.26"
+moka = { version = "0.12.15", default-features = false, features = ["sync"] }
 notify = "8.0.0"
 rand = "0.8.5"
 tracing = "0.1.40"
