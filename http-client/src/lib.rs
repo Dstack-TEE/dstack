@@ -60,7 +60,12 @@ pub async fn http_request(
     } else {
         let uri = mk_url(base, path);
         let client = reqwest::Client::builder().build()?;
-        let response = client.post(uri).body(body.to_vec()).send().await?;
+        let method = reqwest::Method::from_bytes(method.as_bytes())?;
+        let mut request = client.request(method, uri);
+        if !body.is_empty() {
+            request = request.body(body.to_vec());
+        }
+        let response = request.send().await?;
         return Ok((
             response.status().as_u16(),
             response.text().await?.into_bytes(),
@@ -81,6 +86,8 @@ pub async fn http_request(
 mod tests {
     use super::*;
     use std::error::Error;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
 
     #[test]
     fn test_vsock_uri_parsing() -> Result<(), Box<dyn Error>> {
@@ -89,6 +96,32 @@ mod tests {
         assert_eq!(uri.host(), Some("2"));
         assert_eq!(uri.port_u16(), Some(1234));
         assert_eq!(uri.path(), "/path");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn http_transport_honors_requested_method() -> Result<(), Box<dyn Error>> {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let addr = listener.local_addr()?;
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await?;
+            let mut buf = [0u8; 1024];
+            let n = socket.read(&mut buf).await?;
+            let request = String::from_utf8_lossy(&buf[..n]).into_owned();
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+                .await?;
+            Ok::<_, std::io::Error>(request)
+        });
+
+        let (status, body) = http_request("GET", &format!("http://{addr}"), "/logs", b"").await?;
+        assert_eq!(status, 200);
+        assert_eq!(body, b"ok");
+        let request = server.await??;
+        assert!(
+            request.starts_with("GET /logs HTTP/1.1"),
+            "unexpected request: {request:?}"
+        );
         Ok(())
     }
 }
