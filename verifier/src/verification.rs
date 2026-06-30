@@ -499,6 +499,7 @@ impl CvmVerifier {
     }
 
     pub async fn verify(&self, request: VerificationRequest) -> Result<VerificationResponse> {
+        let request_vm_config = request.vm_config.clone().unwrap_or_default();
         let attestation = if let Some(attestation) = &request.attestation {
             VersionedAttestation::from_bytes(attestation).context("Failed to decode attestaion")?
         } else if let Some(tdx_quote) = request.quote {
@@ -540,7 +541,7 @@ impl CvmVerifier {
         // Step 3: Verify os-image-hash matches using dstack-mr
         let verified = self
             .verify_os_image_hash(
-                request.vm_config.clone().unwrap_or_default(),
+                request_vm_config.clone(),
                 &verified_attestation,
                 debug,
                 &mut details,
@@ -557,7 +558,7 @@ impl CvmVerifier {
             }
         };
         details.os_image_hash_verified = true;
-        match verified_attestation.decode_app_info(false) {
+        match verified_attestation.decode_app_info_ex(false, &request_vm_config) {
             Ok(mut info) => {
                 info.os_image_hash = vm_config.os_image_hash;
                 details.event_log_verified = true;
