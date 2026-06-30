@@ -13,5 +13,7 @@ description = "AMD SEV-SNP Quote Verification Library"
 [dependencies]
 anyhow.workspace = true
 hex.workspace = true
-reqwest = { workspace = true, features = ["blocking"] }
+moka.workspace = true
+reqwest.workspace = true
 sev.workspace = true
+tokio = { workspace = true, features = ["rt", "time"] }

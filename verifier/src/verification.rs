@@ -5,6 +5,7 @@
 use std::{
     ffi::OsStr,
     path::{Path, PathBuf},
+    sync::OnceLock,
     time::Duration,
 };
 
@@ -16,14 +17,15 @@ use cc_eventlog::{
     },
     TdxEvent,
 };
+use dstack_attest::amd_sev_snp::AmdKdsClient;
 use dstack_mr::{
     tdx::TdxRtmr0AcpiHashes, RtmrLog, RtmrLogs, TdxMeasurementDetails, TdxMeasurements,
 };
 use dstack_types::VmConfig;
 use hex_literal::hex;
 use ra_tls::attestation::{
-    Attestation, AttestationQuote, DstackVerifiedReport, NitroPcrs, TpmQuote, VerifiedAttestation,
-    VersionedAttestation,
+    Attestation, AttestationQuote, DstackVerifiedReport, NitroPcrs, PlatformEvidence, TpmQuote,
+    VerifiedAttestation, VersionedAttestation,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
@@ -170,6 +172,7 @@ pub struct CvmVerifier {
     pub download_url: String,
     pub download_timeout: Duration,
     pub pccs_url: Option<String>,
+    amd_kds_client: OnceLock<Result<AmdKdsClient, String>>,
 }
 
 impl CvmVerifier {
@@ -184,6 +187,17 @@ impl CvmVerifier {
             download_url,
             download_timeout,
             pccs_url,
+            amd_kds_client: OnceLock::new(),
+        }
+    }
+
+    fn amd_kds_client(&self) -> Result<&AmdKdsClient> {
+        match self
+            .amd_kds_client
+            .get_or_init(|| AmdKdsClient::new().map_err(|err| format!("{err:#}")))
+        {
+            Ok(client) => Ok(client),
+            Err(err) => bail!("failed to create amd sev-snp KDS client: {err}"),
         }
     }
 
@@ -535,7 +549,14 @@ impl CvmVerifier {
         let mut details = VerificationDetails::default();
 
         let debug = request.debug.unwrap_or(false);
-        let verified = attestation.into_v1().verify(self.pccs_url.as_deref()).await;
+        let attestation = attestation.into_v1();
+        let verified = if matches!(&attestation.platform, PlatformEvidence::SevSnp { .. }) {
+            attestation
+                .verify_with_amd_kds_client(self.pccs_url.as_deref(), self.amd_kds_client()?)
+                .await
+        } else {
+            attestation.verify(self.pccs_url.as_deref()).await
+        };
         let verified_attestation = match verified {
             Ok(att) => {
                 details.quote_verified = true;

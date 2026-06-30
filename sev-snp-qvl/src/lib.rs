@@ -10,7 +10,10 @@
 //! must still bind the verified measurement to app/config identity before
 //! production key release.
 
-use anyhow::{bail, Context, Result};
+use std::{thread, time::Duration};
+
+use anyhow::{anyhow, bail, Context, Result};
+use moka::sync::Cache;
 use sev::certs::snp::{builtin, ca, Certificate, Chain, Verifiable};
 use sev::firmware::{guest::AttestationReport, host::TcbVersion};
 
@@ -26,8 +29,12 @@ const VLEK_CERT_GUID: [u8; 16] = [
 const CERT_TABLE_ENTRY_SIZE: usize = 24;
 const AMD_KDS_BASE_URL_ENV: &str = "DSTACK_AMD_KDS_BASE_URL";
 const AMD_KDS_DEFAULT_BASE_URL: &str = "https://kdsintf.amd.com/vcek/v1";
+const AMD_KDS_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+const AMD_KDS_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
+const AMD_KDS_CA_CACHE_CAPACITY: u64 = 16;
+const AMD_KDS_VCEK_CACHE_CAPACITY: u64 = 1024;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AmdSnpProduct {
     Milan,
     Genoa,
@@ -58,7 +65,7 @@ impl AmdSnpProduct {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
 pub struct AmdSnpTcbVersion {
     pub fmc: Option<u8>,
     pub bootloader: u8,
@@ -150,6 +157,173 @@ struct AmdKdsCollateral {
     ark: CertBytes,
     ask: CertBytes,
     vcek: CertBytes,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct AmdKdsCaCacheKey {
+    product: AmdSnpProduct,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct AmdKdsVcekCacheKey {
+    product: AmdSnpProduct,
+    chip_id: [u8; 64],
+    tcb: AmdSnpTcbVersion,
+}
+
+#[derive(Clone)]
+pub struct AmdKdsClient {
+    base_url: String,
+    http_client: reqwest::Client,
+    ca_cache: Cache<AmdKdsCaCacheKey, (CertBytes, CertBytes)>,
+    vcek_cache: Cache<AmdKdsVcekCacheKey, CertBytes>,
+}
+
+impl AmdKdsClient {
+    pub fn new() -> Result<Self> {
+        Self::with_base_url(amd_kds_base_url())
+    }
+
+    pub fn with_base_url(base_url: impl AsRef<str>) -> Result<Self> {
+        let base_url = normalize_amd_kds_base_url(base_url.as_ref())?;
+        let http_client = reqwest::Client::builder()
+            .connect_timeout(AMD_KDS_CONNECT_TIMEOUT)
+            .timeout(AMD_KDS_REQUEST_TIMEOUT)
+            .build()
+            .context("failed to create amd sev-snp KDS HTTP client")?;
+        Ok(Self {
+            base_url,
+            http_client,
+            ca_cache: Cache::new(AMD_KDS_CA_CACHE_CAPACITY),
+            vcek_cache: Cache::new(AMD_KDS_VCEK_CACHE_CAPACITY),
+        })
+    }
+
+    pub async fn verify_evidence_with_kds_fallback(
+        &self,
+        report: &[u8],
+        cert_chain: &[Vec<u8>],
+        expected_report_data: &[u8; 64],
+    ) -> Result<VerifiedAmdSnpReport> {
+        if !cert_chain.is_empty() {
+            return verify_amd_snp_evidence(report, cert_chain, expected_report_data);
+        }
+        if report.len() != 1184 {
+            bail!(
+                "invalid amd sev-snp report length: expected 1184 bytes, got {}",
+                report.len()
+            );
+        }
+        let report_obj = AttestationReport::from_bytes(report)
+            .map_err(|err| anyhow::anyhow!("failed to parse amd sev-snp report: {err}"))?;
+        let collateral = self
+            .fetch_collateral_for_report(&report_obj)
+            .await
+            .context("failed to fetch amd sev-snp KDS collateral for empty cert_chain")?;
+        let verified = verify_amd_snp_attestation_with_cert_chain(
+            report,
+            collateral.ark,
+            collateral.ask,
+            collateral.vcek,
+        )?;
+        if &verified.report_data != expected_report_data {
+            bail!("amd sev-snp report_data mismatch");
+        }
+        Ok(verified)
+    }
+
+    async fn fetch_collateral_for_report(
+        &self,
+        report: &AttestationReport,
+    ) -> Result<AmdKdsCollateral> {
+        let mut errors = Vec::new();
+        for product in amd_snp_product_candidates_for_report(report)? {
+            match self.fetch_collateral_for_product(product, report).await {
+                Ok(collateral) => return Ok(collateral),
+                Err(err) => errors.push(format!("{}: {err:#}", product.kds_name())),
+            }
+        }
+        bail!(
+            "amd sev-snp KDS collateral unavailable for supported products: {}",
+            errors.join("; ")
+        )
+    }
+
+    async fn fetch_collateral_for_product(
+        &self,
+        product: AmdSnpProduct,
+        report: &AttestationReport,
+    ) -> Result<AmdKdsCollateral> {
+        let (ark, ask) = self.fetch_ca_chain(product).await?;
+        let mut chip_id = [0u8; 64];
+        chip_id.copy_from_slice(
+            report
+                .chip_id
+                .as_ref()
+                .get(..64)
+                .context("amd sev-snp chip_id too short")?,
+        );
+        let vcek = self
+            .fetch_vcek(product, &chip_id, report.reported_tcb.into())
+            .await?;
+        Ok(AmdKdsCollateral { ark, ask, vcek })
+    }
+
+    async fn fetch_ca_chain(&self, product: AmdSnpProduct) -> Result<(CertBytes, CertBytes)> {
+        let key = AmdKdsCaCacheKey { product };
+        if let Some(cached) = self.ca_cache.get(&key) {
+            return Ok(cached);
+        }
+
+        let url = join_amd_kds_url(
+            &self.base_url,
+            &format!("{}/cert_chain", product.kds_name()),
+        );
+        let chain = self.fetch_url(&url, "cert_chain").await?;
+        let (_fetched_ark, ask) = extract_ark_ask_from_amd_kds_cert_chain(&chain)?;
+        let collateral = (product.builtin_ark(), ask);
+        self.ca_cache.insert(key, collateral.clone());
+        Ok(collateral)
+    }
+
+    async fn fetch_vcek(
+        &self,
+        product: AmdSnpProduct,
+        chip_id: &[u8; 64],
+        tcb: AmdSnpTcbVersion,
+    ) -> Result<CertBytes> {
+        let key = AmdKdsVcekCacheKey {
+            product,
+            chip_id: *chip_id,
+            tcb,
+        };
+        if let Some(cached) = self.vcek_cache.get(&key) {
+            return Ok(cached);
+        }
+
+        let vcek_url = amd_kds_vcek_url_with_base(&self.base_url, product, chip_id, tcb)?;
+        let vcek = CertBytes {
+            bytes: self.fetch_url(&vcek_url, "vcek").await?,
+            encoding: CertEncoding::Der,
+        };
+        self.vcek_cache.insert(key, vcek.clone());
+        Ok(vcek)
+    }
+
+    async fn fetch_url(&self, url: &str, label: &str) -> Result<Vec<u8>> {
+        Ok(self
+            .http_client
+            .get(url)
+            .send()
+            .await
+            .with_context(|| format!("failed to request amd sev-snp {label} from {url}"))?
+            .error_for_status()
+            .with_context(|| format!("amd sev-snp {label} request failed for {url}"))?
+            .bytes()
+            .await
+            .with_context(|| format!("failed to read amd sev-snp {label} response"))?
+            .to_vec())
+    }
 }
 
 pub fn verify_amd_snp_attestation(
@@ -321,87 +495,33 @@ pub fn verify_amd_snp_evidence_with_kds_fallback(
     if !cert_chain.is_empty() {
         return verify_amd_snp_evidence(report, cert_chain, expected_report_data);
     }
-    if report.len() != 1184 {
-        bail!(
-            "invalid amd sev-snp report length: expected 1184 bytes, got {}",
-            report.len()
-        );
-    }
-    let report_obj = AttestationReport::from_bytes(report)
-        .map_err(|err| anyhow::anyhow!("failed to parse amd sev-snp report: {err}"))?;
-    let collateral = fetch_amd_kds_collateral_for_report(&report_obj)
-        .context("failed to fetch amd sev-snp KDS collateral for empty cert_chain")?;
-    let verified = verify_amd_snp_attestation_with_cert_chain(
-        report,
-        collateral.ark,
-        collateral.ask,
-        collateral.vcek,
-    )?;
-    if &verified.report_data != expected_report_data {
-        bail!("amd sev-snp report_data mismatch");
-    }
-    Ok(verified)
-}
 
-fn fetch_amd_kds_collateral_for_report(report: &AttestationReport) -> Result<AmdKdsCollateral> {
-    let mut errors = Vec::new();
-    for product in amd_snp_product_candidates_for_report(report)? {
-        match fetch_amd_kds_collateral_for_product(product, report) {
-            Ok(collateral) => return Ok(collateral),
-            Err(err) => errors.push(format!("{}: {err:#}", product.kds_name())),
-        }
-    }
-    bail!(
-        "amd sev-snp KDS collateral unavailable for supported products: {}",
-        errors.join("; ")
-    )
-}
-
-fn fetch_amd_kds_collateral_for_product(
-    product: AmdSnpProduct,
-    report: &AttestationReport,
-) -> Result<AmdKdsCollateral> {
-    let (ark, ask) = fetch_amd_kds_ca_chain(product)?;
-    let mut chip_id = [0u8; 64];
-    chip_id.copy_from_slice(
-        report
-            .chip_id
-            .as_ref()
-            .get(..64)
-            .context("amd sev-snp chip_id too short")?,
-    );
-    let vcek_url = amd_kds_vcek_url(product, &chip_id, report.reported_tcb.into())?;
-    let vcek = reqwest::blocking::Client::new()
-        .get(&vcek_url)
-        .send()
-        .with_context(|| format!("failed to request amd sev-snp vcek from {vcek_url}"))?
-        .error_for_status()
-        .with_context(|| format!("amd sev-snp vcek request failed for {vcek_url}"))?
-        .bytes()
-        .context("failed to read amd sev-snp vcek response")?
-        .to_vec();
-    Ok(AmdKdsCollateral {
-        ark,
-        ask,
-        vcek: CertBytes {
-            bytes: vcek,
-            encoding: CertEncoding::Der,
-        },
+    let report = report.to_vec();
+    let expected_report_data = *expected_report_data;
+    thread::spawn(move || -> Result<VerifiedAmdSnpReport> {
+        let kds_client = AmdKdsClient::new()?;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .context("failed to create amd sev-snp KDS fallback runtime")?;
+        runtime.block_on(kds_client.verify_evidence_with_kds_fallback(
+            &report,
+            &[],
+            &expected_report_data,
+        ))
     })
+    .join()
+    .map_err(|_| anyhow!("amd sev-snp KDS fallback worker panicked"))?
 }
 
-fn fetch_amd_kds_ca_chain(product: AmdSnpProduct) -> Result<(CertBytes, CertBytes)> {
-    let url = amd_kds_endpoint(&format!("{}/cert_chain", product.kds_name()));
-    let chain = reqwest::blocking::Client::new()
-        .get(&url)
-        .send()
-        .with_context(|| format!("failed to request amd sev-snp cert_chain from {url}"))?
-        .error_for_status()
-        .with_context(|| format!("amd sev-snp cert_chain request failed for {url}"))?
-        .bytes()
-        .context("failed to read amd sev-snp cert_chain response")?;
-    let (_fetched_ark, ask) = extract_ark_ask_from_amd_kds_cert_chain(&chain)?;
-    Ok((product.builtin_ark(), ask))
+pub async fn verify_amd_snp_evidence_with_kds_fallback_async(
+    report: &[u8],
+    cert_chain: &[Vec<u8>],
+    expected_report_data: &[u8; 64],
+) -> Result<VerifiedAmdSnpReport> {
+    AmdKdsClient::new()?
+        .verify_evidence_with_kds_fallback(report, cert_chain, expected_report_data)
+        .await
 }
 
 fn amd_kds_base_url() -> String {
@@ -412,8 +532,12 @@ fn amd_kds_base_url() -> String {
         .unwrap_or_else(|| AMD_KDS_DEFAULT_BASE_URL.to_string())
 }
 
-fn amd_kds_endpoint(path: &str) -> String {
-    join_amd_kds_url(&amd_kds_base_url(), path)
+fn normalize_amd_kds_base_url(base_url: &str) -> Result<String> {
+    let base_url = base_url.trim().trim_end_matches('/').to_string();
+    if base_url.is_empty() {
+        bail!("amd sev-snp KDS base URL is empty");
+    }
+    Ok(base_url)
 }
 
 fn join_amd_kds_url(base_url: &str, path: &str) -> String {
@@ -468,14 +592,6 @@ fn amd_snp_product_from_report(report: &AttestationReport) -> Result<Option<AmdS
     };
 
     Ok(Some(product))
-}
-
-fn amd_kds_vcek_url(
-    product: AmdSnpProduct,
-    chip_id: &[u8; 64],
-    tcb: AmdSnpTcbVersion,
-) -> Result<String> {
-    amd_kds_vcek_url_with_base(&amd_kds_base_url(), product, chip_id, tcb)
 }
 
 fn amd_kds_vcek_url_with_base(
