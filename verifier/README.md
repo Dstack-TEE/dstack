@@ -184,9 +184,9 @@ The verifier performs three main verification steps:
 1. **Quote Verification**: Validates the TDX quote using dcap-qvl, checking the quote signature and TCB status
 2. **Event Log Verification**: Replays event logs to ensure RTMR values match and extracts app information. For RTMR3 (runtime measurements), both the digest and payload integrity are verified. For RTMR 0-2 (boot-time measurements), only the digests are verified; the payload content is not validated as dstack does not define semantics for these payloads
 3. **OS Image Hash Verification**:
-   - Automatically downloads OS images if not cached locally
-   - Uses dstack-mr to compute expected measurements
-   - Compares against the verified measurements from the quote
+   - Treats `vm_config` and any attached measurement material as untrusted inputs until they are bound to the hardware quote
+   - For the full-image TDX path, downloads or loads the image identified by `os_image_hash`, checks the image checksum manifest, uses dstack-mr to compute expected MRTD/RTMR0-2, and compares them against the verified measurements from the quote
+   - For TDX lite and AMD SEV-SNP, verifies that `os_image_hash = sha256(sha256sum.txt)`, where `sha256sum.txt` is the image build's checksum manifest (`<sha256>  <relative-file-name>` lines for image files), that the manifest entry for `measurement.tdx.cbor` or `measurement.snp.cbor` matches the supplied measurement material, and that the measurement material replays to the quote's hardware-signed measurements
 
 All three steps must pass for the verification to be considered valid.
 

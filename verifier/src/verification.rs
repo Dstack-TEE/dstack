@@ -742,13 +742,14 @@ impl CvmVerifier {
         };
 
         // Legacy TDX attestation keeps the original KMS verifier semantics:
-        // os_image_hash must be the image content digest, and expected MRs are
-        // recomputed through the existing full-image path.
+        // os_image_hash must be the image digest (digest.txt =
+        // sha256(sha256sum.txt)), and expected MRs are recomputed through the
+        // existing full-image path.
         let image_paths = self.ensure_image_downloaded(vm_config).await?;
         if !Self::image_hash_matches_legacy_digest(&image_paths.image_dir, &vm_config.os_image_hash)
             .context("Failed to check legacy image digest")?
         {
-            bail!("legacy TDX attestation requires the digest.txt os_image_hash");
+            bail!("legacy TDX attestation requires os_image_hash = sha256(sha256sum.txt)");
         }
         details.os_image_is_dev = Some(image_paths.is_dev);
         if !image_paths.version.is_empty() {

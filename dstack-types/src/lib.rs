@@ -38,8 +38,9 @@ impl OvmfVariant {
 /// Selects how a TDX attestation should bind the OS image.
 ///
 /// `Legacy` preserves the existing verifier behavior: `vm_config.os_image_hash`
-/// is the content digest (`digest.txt`) and the verifier recomputes the full
-/// TDX launch measurement using the legacy image/QEMU-derived path.
+/// is the image digest (`digest.txt`, i.e. `sha256(sha256sum.txt)`) and the
+/// verifier recomputes the full TDX launch measurement using the legacy
+/// image/QEMU-derived path.
 ///
 /// `Lite` opts into the no-QEMU verifier path: `vm_config.os_image_hash`
 /// remains the unified image digest (`sha256(sha256sum.txt)`),
