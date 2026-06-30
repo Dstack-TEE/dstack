@@ -1221,4 +1221,51 @@ mod tests {
         assert!(decode_key_provider_info(b"").is_none());
         assert!(decode_key_provider_info(b"not json").is_none());
     }
+
+    #[tokio::test]
+    async fn verifies_sev_snp_attestation_fixture_without_image_download() {
+        let request: VerificationRequest =
+            serde_json::from_str(include_str!("../fixtures/sev-snp-attestation.json"))
+                .expect("SNP verifier fixture parses");
+        let cache = tempfile::tempdir().expect("temp cache dir");
+        let image_cache_dir = cache.path().join("cache");
+        let verifier = CvmVerifier::new(
+            image_cache_dir.display().to_string(),
+            "http://127.0.0.1:9/should-not-download/{OS_IMAGE_HASH}.tar.gz".to_string(),
+            Duration::from_secs(1),
+            None,
+        );
+
+        let response = verifier.verify(request).await.expect("verifier runs");
+        assert!(response.is_valid, "{:?}", response.reason);
+        assert!(response.details.quote_verified);
+        assert!(response.details.event_log_verified);
+        assert!(response.details.os_image_hash_verified);
+        assert_eq!(response.details.tee_platform.as_deref(), Some("sev-snp"));
+        assert!(
+            !image_cache_dir.exists(),
+            "SNP verification must not download or cache OS images"
+        );
+    }
+
+    #[tokio::test]
+    async fn attestation_fixture_ignores_conflicting_top_level_inputs() {
+        let mut request: VerificationRequest =
+            serde_json::from_str(include_str!("../fixtures/sev-snp-attestation.json"))
+                .expect("SNP verifier fixture parses");
+        request.quote = Some(vec![0]);
+        request.event_log = Some("[]".to_string());
+        request.vm_config = Some("not-json".to_string());
+        let cache = tempfile::tempdir().expect("temp cache dir");
+        let verifier = CvmVerifier::new(
+            cache.path().join("cache").display().to_string(),
+            "http://127.0.0.1:9/should-not-download/{OS_IMAGE_HASH}.tar.gz".to_string(),
+            Duration::from_secs(1),
+            None,
+        );
+
+        let response = verifier.verify(request).await.expect("verifier runs");
+        assert!(response.is_valid, "{:?}", response.reason);
+        assert_eq!(response.details.tee_platform.as_deref(), Some("sev-snp"));
+    }
 }
