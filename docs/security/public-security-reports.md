@@ -1,12 +1,16 @@
-# Security Issue Triage
+# Public Security Reports
 
-This page indexes public security reports, trust-boundary questions, and security-model roadmap issues that are already visible in GitHub issues. It exists so maintainers, researchers, operators, and AI agents can quickly see whether a public report is fixed, accepted by design, documentation-only, or still open.
+This page lists public GitHub issues that were filed as security reports or public mirrors of private advisories. It records the maintainer disposition so researchers, operators, and AI agents can tell whether a report is fixed, accepted by design, documentation-only, duplicate, or still open.
+
+This page also separates related security roadmap and hardening trackers from the report table. Those items matter for the security model, but they are not vulnerability reports and should not be read as CVE-style findings.
 
 This page is not a vulnerability reporting channel. Report exploitable vulnerabilities privately through [SECURITY.md](../../SECURITY.md). Use public issues only for questions, documentation gaps, already-public findings, or hardening ideas that do not disclose an exploit path.
 
-## Triage categories
+Status reflects GitHub issue state on 2026-06-30. Update this page whenever a listed issue is closed, reopened, split, or superseded.
 
-Use these categories when evaluating public security questions and already-public reports:
+## Report categories
+
+Use these categories when evaluating public security reports and already-public findings:
 
 | Category | Meaning | Expected issue state |
 | --- | --- | --- |
@@ -15,27 +19,20 @@ Use these categories when evaluating public security questions and already-publi
 | Fixed | The reported behavior has already been fixed or is fixed by the linked change | Close as completed |
 | Docs-only | The behavior is intentional or lower severity, but the repo must say so clearly | Close after documentation is merged |
 | Accepted by design | The report conflicts with the documented threat model or with an intentional compatibility constraint | Close as not planned, with the design rationale linked |
-| Roadmap | Security-relevant design work that needs an owner, migration plan, or compatibility plan | Keep open only while it remains an active roadmap item |
+| Duplicate | The report repeats another public issue or private advisory response | Close with a link to the canonical response |
 
-When a report mixes several claims, split the actionable work into separate issues before closing the original. Do not leave a broad "security" issue open just to remember future work.
+When a report mixes several claims, split the actionable work into separate issues before closing the original. Do not leave a broad security issue open just to remember future work.
 
-## Public security issue table
+## Public reports and findings
 
-Status reflects GitHub issue state on 2026-06-30. Update this table whenever a listed issue is closed, reopened, split, or superseded.
+These issues were filed as concrete vulnerability reports, security audit findings, or public mirrors of private advisories. Some were valid fixes. Some were accepted threat-model decisions or false positives under supported production configuration.
 
 | Issue | Status | Category | Disposition |
 | --- | --- | --- | --- |
-| [#113](https://github.com/Dstack-TEE/dstack/issues/113) Alternative to RA-TLS | Open | Roadmap | Tracks possible application-level attestation or pre-registration approaches. This is design work, not a vulnerability report |
-| [#114](https://github.com/Dstack-TEE/dstack/issues/114) On-chain logs for KMS replication | Open | Roadmap | Tracks auditability and transparency for KMS onboarding and replication events |
-| [#115](https://github.com/Dstack-TEE/dstack/issues/115) Censorship resistance in the KMS | Open | Roadmap | Tracks how KMS instances should prove an up-to-date chain view after de-registration or policy changes |
-| [#125](https://github.com/Dstack-TEE/dstack/issues/125) Requirements for deploying dstack OS on GCP | Open | Roadmap | Tracks cloud image packaging, app config transfer, and cloud measurement calculation. This is cloud trust plumbing, not an SNP-specific issue |
-| [#318](https://github.com/Dstack-TEE/dstack/issues/318) Security advisory unavailable | Closed | Docs-only | Clarified that the linked advisory was private at the time and expected to become public later |
-| [#330](https://github.com/Dstack-TEE/dstack/issues/330) Self-describing hash format for Intel DCAP `reportdata` | Open | Roadmap | Tracks a DIP for self-describing report data. This is format design, not a production vulnerability |
-| [#411](https://github.com/Dstack-TEE/dstack/issues/411) Adopt RFC 8785 JCS for canonical compose hash calculation | Open | Roadmap | Tracks a possible future canonical hash scheme. Current raw-byte hashing is intentional and recorded in #550 |
 | [#549](https://github.com/Dstack-TEE/dstack/issues/549) Disk encryption key collision when `no_instance_id=true` and HKDF context ambiguity | Open | Accepted by design, optional hardening | `no_instance_id=true` intentionally shares disk keys across instances, and the HKDF inputs have fixed lengths. Close the original as not planned, or split zero-padding for the unset instance ID into a separate hardening issue if an owner wants it |
 | [#550](https://github.com/Dstack-TEE/dstack/issues/550) Compose hash computed on raw bytes, not canonicalized JSON | Closed | Accepted by design | dstack treats compose JSON as an opaque byte sequence. Any byte-level change is a different measured application configuration |
 | [#551](https://github.com/Dstack-TEE/dstack/issues/551) Shell injection via `init_script` and `pre_launch_script` in compose | Closed | Accepted by design, docs-only | Scripts are application-owned code and are measured as part of app configuration. Verifiers must treat script contents as part of the application trust decision |
-| [#552](https://github.com/Dstack-TEE/dstack/issues/552) Static HKDF salt and no key versioning | Open | Roadmap | Static salt is acceptable with high-entropy KMS root material and explicit context. Key versioning and rotation require a broader compatibility design |
+| [#552](https://github.com/Dstack-TEE/dstack/issues/552) Static HKDF salt and no key versioning | Open | Docs-only, roadmap follow-up | Static salt is acceptable with high-entropy KMS root material and explicit context. Key versioning and rotation require a broader compatibility design |
 | [#553](https://github.com/Dstack-TEE/dstack/issues/553) `derive_dh_secret` hashes PKCS#8 DER | Closed | Fixed | [#603](https://github.com/Dstack-TEE/dstack/pull/603) stabilizes the P-256 private key encoding used for derivation |
 | [#554](https://github.com/Dstack-TEE/dstack/issues/554) Signature concatenation without length prefixes enables collision | Open | Fixed | [#604](https://github.com/Dstack-TEE/dstack/pull/604) enforces the 20-byte `app_id` length in CVM setup. Close as completed |
 | [#555](https://github.com/Dstack-TEE/dstack/issues/555) LUKS header TOCTOU between validation and `luksOpen` | Open | Accepted by design | The setup code validates and opens the same in-memory LUKS header. Close as not planned with the maintainer rationale |
@@ -67,7 +64,21 @@ Status reflects GitHub issue state on 2026-06-30. Update this table whenever a l
 | [#617](https://github.com/Dstack-TEE/dstack/issues/617) Guest agent exposes raw private keys to all local processes | Closed | Accepted by design | dstack treats a CVM as one application trust domain. It does not provide per-container key isolation inside the same measured application |
 | [#618](https://github.com/Dstack-TEE/dstack/issues/618) Disk encryption disableable via kernel cmdline, not measured in RTMR | Closed | Accepted by design | The kernel command line is measured into RTMR2, so changing `dstack.storage_encrypted=false` changes attestation evidence |
 | [#619](https://github.com/Dstack-TEE/dstack/issues/619) KMS `get_temp_ca_cert` returns temp CA private key without authentication | Closed | Duplicate | The report duplicates the private advisory response for the temp CA bootstrap flow |
-| [#713](https://github.com/Dstack-TEE/dstack/issues/713) AMD SEV-SNP support tracking | Open | Roadmap | Tracks remaining work before AMD SEV-SNP can be called supported. SNP remains experimental and opt-in until the tracker is complete |
+
+## Related security roadmap and hardening
+
+These issues affect security architecture, future verification behavior, operational hardening, or security documentation. They are intentionally separated from the report table because they are not vulnerability reports.
+
+| Issue | Status | Type | Scope |
+| --- | --- | --- | --- |
+| [#113](https://github.com/Dstack-TEE/dstack/issues/113) Alternative to RA-TLS | Open | Architecture roadmap | Tracks possible application-level attestation or pre-registration approaches |
+| [#114](https://github.com/Dstack-TEE/dstack/issues/114) On-chain logs for KMS replication | Open | Auditability roadmap | Tracks transparency for KMS onboarding and replication events |
+| [#115](https://github.com/Dstack-TEE/dstack/issues/115) Censorship resistance in the KMS | Open | Governance roadmap | Tracks how KMS instances should prove an up-to-date chain view after de-registration or policy changes |
+| [#125](https://github.com/Dstack-TEE/dstack/issues/125) Requirements for deploying dstack OS on GCP | Open | Cloud trust plumbing | Tracks cloud image packaging, app config transfer, and cloud measurement calculation |
+| [#318](https://github.com/Dstack-TEE/dstack/issues/318) Security advisory unavailable | Closed | Security process | Clarified that the linked advisory was private at the time and expected to become public later |
+| [#330](https://github.com/Dstack-TEE/dstack/issues/330) Self-describing hash format for Intel DCAP `reportdata` | Open | Format roadmap | Tracks a DIP for self-describing report data |
+| [#411](https://github.com/Dstack-TEE/dstack/issues/411) Adopt RFC 8785 JCS for canonical compose hash calculation | Open | Measurement roadmap | Tracks a possible future canonical hash scheme. Current raw-byte hashing is intentional and recorded in #550 |
+| [#713](https://github.com/Dstack-TEE/dstack/issues/713) AMD SEV-SNP support tracking | Open | Platform roadmap | Tracks remaining work before AMD SEV-SNP can be called supported. SNP remains experimental and opt-in until the tracker is complete |
 | [#744](https://github.com/Dstack-TEE/dstack/issues/744) Track AMD SEV-SNP support gap on GCP | Closed | Roadmap consolidation | Closed after clarifying that cloud deployment plumbing belongs in #125 and SNP support status belongs in #713 |
-| [#745](https://github.com/Dstack-TEE/dstack/issues/745) `secure_time: true` cannot sync because guest chrony lacks NTS | Open | Real blocker | Tracks a secure-time boot failure. The fix is in [meta-dstack#76](https://github.com/Dstack-TEE/meta-dstack/pull/76) |
-| [#746](https://github.com/Dstack-TEE/dstack/issues/746) Harden AMD SEV-SNP KDS collateral fetch | Open | Needs hardening | Tracks async client, timeout, and caching hardening for SNP KDS collateral fetch. Verification remains fail-closed |
+| [#745](https://github.com/Dstack-TEE/dstack/issues/745) `secure_time: true` cannot sync because guest chrony lacks NTS | Open | Security feature bug | Tracks a secure-time boot failure. The fix is in [meta-dstack#76](https://github.com/Dstack-TEE/meta-dstack/pull/76) |
+| [#746](https://github.com/Dstack-TEE/dstack/issues/746) Harden AMD SEV-SNP KDS collateral fetch | Open | Availability hardening | Tracks async client, timeout, and caching hardening for SNP KDS collateral fetch. Verification remains fail-closed |

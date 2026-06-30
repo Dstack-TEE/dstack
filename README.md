@@ -95,7 +95,7 @@ Security docs are linked here so deployers and reviewers can quickly find the tr
 
 - [Security Overview](./docs/security/) - entry point for users, operators, researchers, and AI agents
 - [Security Model](./docs/security/security-model.md) - threat model, trust boundaries, and verification checklist
-- [Security Issue Triage](./docs/security/security-issue-triage.md) - public status for answered, fixed, accepted, and roadmap security reports
+- [Public Security Reports](./docs/security/public-security-reports.md) - public status for security reports and related hardening work
 - [Security Best Practices](./docs/security/security-best-practices.md) - production settings and hardening guidance
 - [Security Audit](./docs/security/dstack-audit.pdf) - third-party audit by zkSecurity
 - [Report a Vulnerability](./SECURITY.md) - use GitHub's private security reporting path
