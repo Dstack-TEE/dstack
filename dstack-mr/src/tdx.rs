@@ -264,7 +264,7 @@ pub fn tdx_os_image_measurement_for_image_dir(image_dir: &Path) -> Result<TdxOsI
     let base_cmdline = meta
         .cmdline
         .filter(|s| !s.trim().is_empty())
-        .context("metadata.json cmdline is required for TDX os_image_hash")?
+        .context("metadata.json cmdline is required for TDX measurement")?
         .to_string();
 
     // Validate that the image identity carried by the measured cmdline is
@@ -322,25 +322,18 @@ pub fn tdx_os_image_measurement_for_image_dir(image_dir: &Path) -> Result<TdxOsI
     })
 }
 
-/// Generate the self-contained TDX measurement document for an image directory.
-///
-/// The document contains both the hash projection and the resulting
-/// `os_image_hash`, avoiding a separate `digest.tdx.txt` artifact.
-pub fn tdx_os_image_measurement_document_for_image_dir(
-    image_dir: &Path,
-) -> Result<TdxOsImageMeasurementDocument> {
-    Ok(TdxOsImageMeasurementDocument::new(
-        tdx_os_image_measurement_for_image_dir(image_dir)?,
-    ))
+/// Generate the raw `measurement.tdx.cbor` bytes for an image directory.
+pub fn tdx_os_image_measurement_cbor_for_image_dir(image_dir: &Path) -> Result<Vec<u8>> {
+    Ok(tdx_os_image_measurement_for_image_dir(image_dir)?.to_cbor_vec())
 }
 
-/// Compute the TDX static-material OS image hash for an image directory.
-pub fn tdx_os_image_hash_for_image_dir(image_dir: &Path) -> Result<[u8; 32]> {
-    Ok(tdx_os_image_measurement_for_image_dir(image_dir)?.os_image_hash())
+/// Compute the TDX static measurement-material hash for an image directory.
+pub fn tdx_measurement_hash_for_image_dir(image_dir: &Path) -> Result<[u8; 32]> {
+    Ok(tdx_os_image_measurement_for_image_dir(image_dir)?.measurement_hash())
 }
 
-/// Compute expected TDX measurements from the self-contained `measurement.json`
-/// TDX document and the three ACPI table digests captured in RTMR[0].
+/// Compute expected TDX measurements from self-contained TDX measurement
+/// material and the three ACPI table digests captured in RTMR[0].
 ///
 /// This path intentionally does not download or read the OS image. Because
 /// QEMU's patched kernel Authenticode hash depends on exact guest RAM below
@@ -352,12 +345,6 @@ pub fn tdx_measurements_from_measurement_document(
     vm_config: &VmConfig,
     acpi_hashes: &TdxRtmr0AcpiHashes,
 ) -> Result<crate::TdxMeasurements> {
-    if document.version != TdxOsImageMeasurementDocument::VERSION {
-        bail!(
-            "unsupported TDX measurement document version {}",
-            document.version
-        );
-    }
     if !tdx_kernel_hash_uses_precomputed_high_mem(vm_config.memory_size) {
         bail!(
             "TDX lite attestation without image download requires memory_size == {} bytes ({} MiB) or >= {} bytes ({} MiB); got {} bytes",

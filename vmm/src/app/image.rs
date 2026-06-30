@@ -7,7 +7,10 @@ use path_absolutize::Absolutize;
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
-use dstack_types::{OsImageMeasurementDocument, TdxOsImageMeasurementDocument};
+use dstack_types::{
+    SevOsImageMeasurementDocument, TdxOsImageMeasurementDocument, SNP_MEASUREMENT_FILENAME,
+    TDX_MEASUREMENT_FILENAME,
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -72,13 +75,10 @@ pub struct Image {
     pub bios: Option<PathBuf>,
     pub bios_sev: Option<PathBuf>,
     pub digest: Option<String>,
-    /// TDX os_image_hash, read from `measurement.json.tdx.os_image_hash`.
-    pub tdx_digest: Option<String>,
-    /// TDX no-image-download measurement material, read from `measurement.json.tdx`.
+    /// TDX no-image-download measurement material.
     pub tdx_measurement: Option<TdxOsImageMeasurementDocument>,
-    /// AMD SEV-SNP os_image_hash, read from `measurement.json.snp.os_image_hash`
-    /// for new images, falling back to legacy `digest.sev.txt`.
-    pub sev_digest: Option<String>,
+    /// AMD SEV-SNP no-image-download measurement material.
+    pub sev_measurement: Option<SevOsImageMeasurementDocument>,
 }
 
 impl Image {
@@ -107,31 +107,47 @@ impl Image {
         let digest = fs::read_to_string(base_path.join("digest.txt"))
             .ok()
             .map(|s| s.trim().to_string());
-        let measurement_path = base_path.join("measurement.json");
-        let measurement = if measurement_path.exists() {
-            let file = fs::File::open(&measurement_path)
-                .with_context(|| format!("failed to open {}", measurement_path.display()))?;
+        let sha256sum_path = base_path.join("sha256sum.txt");
+        let sha256sum = if sha256sum_path.exists() {
             Some(
-                serde_json::from_reader::<_, OsImageMeasurementDocument>(file)
-                    .with_context(|| format!("failed to parse {}", measurement_path.display()))?,
+                fs::read(&sha256sum_path)
+                    .with_context(|| format!("failed to read {}", sha256sum_path.display()))?,
             )
         } else {
             None
         };
-        let legacy_sev_digest = fs::read_to_string(base_path.join("digest.sev.txt"))
-            .ok()
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty());
-        let sev_digest = measurement
-            .as_ref()
-            .and_then(|m| m.snp.as_ref())
-            .map(|snp| snp.os_image_hash.clone())
-            .or(legacy_sev_digest);
-        let tdx_digest = measurement
-            .as_ref()
-            .and_then(|m| m.tdx.as_ref())
-            .map(|tdx| tdx.os_image_hash.clone());
-        let tdx_measurement = measurement.as_ref().and_then(|m| m.tdx.clone());
+        let tdx_path = base_path.join(TDX_MEASUREMENT_FILENAME);
+        let tdx_cbor = if tdx_path.exists() {
+            Some(
+                fs::read(&tdx_path)
+                    .with_context(|| format!("failed to read {}", tdx_path.display()))?,
+            )
+        } else {
+            None
+        };
+        let tdx_measurement = match (&sha256sum, tdx_cbor) {
+            (Some(sha256sum), Some(measurement)) => Some(TdxOsImageMeasurementDocument::new(
+                sha256sum.clone(),
+                measurement,
+            )),
+            _ => None,
+        };
+        let snp_path = base_path.join(SNP_MEASUREMENT_FILENAME);
+        let snp_cbor = if snp_path.exists() {
+            Some(
+                fs::read(&snp_path)
+                    .with_context(|| format!("failed to read {}", snp_path.display()))?,
+            )
+        } else {
+            None
+        };
+        let sev_measurement = match (&sha256sum, snp_cbor) {
+            (Some(sha256sum), Some(measurement)) => Some(SevOsImageMeasurementDocument::new(
+                sha256sum.clone(),
+                measurement,
+            )),
+            _ => None,
+        };
         if info.version.is_empty() {
             // Older images does not have version field. Fallback to the version of the image folder name
             info.version = guess_version(&base_path).unwrap_or_default();
@@ -145,9 +161,8 @@ impl Image {
             bios,
             bios_sev,
             digest,
-            tdx_digest,
             tdx_measurement,
-            sev_digest,
+            sev_measurement,
         }
         .ensure_exists()
     }

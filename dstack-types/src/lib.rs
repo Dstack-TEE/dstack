@@ -42,10 +42,10 @@ impl OvmfVariant {
 /// TDX launch measurement using the legacy image/QEMU-derived path.
 ///
 /// `Lite` opts into the no-QEMU verifier path: `vm_config.os_image_hash`
-/// is `measurement.json.tdx.os_image_hash`, `vm_config.tdx_measurement` carries
-/// the self-contained measurement material, and KMS/verifier select the new
-/// logic from this vm_config flag while the attestation quote remains the
-/// existing `DstackTdx`.
+/// remains the unified image digest (`sha256(sha256sum.txt)`),
+/// `vm_config.tdx_measurement` carries `sha256sum.txt` plus the TDX measurement
+/// CBOR file, and KMS/verifier select the new logic from this vm_config flag
+/// while the attestation quote remains the existing `DstackTdx`.
 #[derive(Deserialize, Serialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum TdxAttestationVariant {
@@ -328,8 +328,76 @@ fn sha256(bytes: &[u8]) -> [u8; 32] {
     Sha256::digest(bytes).into()
 }
 
-fn sha256_hex(bytes: &[u8]) -> String {
-    hex::encode(sha256(bytes))
+pub const TDX_MEASUREMENT_FILENAME: &str = "measurement.tdx.cbor";
+pub const SNP_MEASUREMENT_FILENAME: &str = "measurement.snp.cbor";
+
+pub fn image_hash_from_sha256sum(sha256sum: &[u8]) -> [u8; 32] {
+    sha256(sha256sum)
+}
+
+pub fn sha256sum_entry_hash(sha256sum: &[u8], filename: &str) -> Result<[u8; 32], String> {
+    let text = std::str::from_utf8(sha256sum)
+        .map_err(|e| format!("sha256sum.txt is not valid UTF-8: {e}"))?;
+    let mut found = None;
+    for (line_no, line) in text.lines().enumerate() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let mut parts = line.split_whitespace();
+        let Some(hash_hex) = parts.next() else {
+            continue;
+        };
+        let Some(path) = parts.next() else {
+            return Err(format!(
+                "sha256sum.txt line {} is missing filename",
+                line_no + 1
+            ));
+        };
+        if path != filename {
+            continue;
+        }
+        if found.is_some() {
+            return Err(format!(
+                "sha256sum.txt contains duplicate {filename} entries"
+            ));
+        }
+        let hash = hex::decode(hash_hex)
+            .map_err(|e| format!("sha256sum.txt {filename} hash is not valid hex: {e}"))?;
+        let hash: [u8; 32] = hash.try_into().map_err(|hash: Vec<u8>| {
+            format!(
+                "sha256sum.txt {filename} hash has invalid length {}, expected 32",
+                hash.len()
+            )
+        })?;
+        found = Some(hash);
+    }
+    found.ok_or_else(|| format!("sha256sum.txt is missing {filename}"))
+}
+
+pub fn verify_measurement_material(
+    os_image_hash: &[u8],
+    sha256sum: &[u8],
+    measurement: &[u8],
+    filename: &str,
+) -> Result<(), String> {
+    if image_hash_from_sha256sum(sha256sum).as_slice() != os_image_hash {
+        return Err(format!(
+            "os_image_hash mismatch: expected sha256(sha256sum.txt)={}, actual={}",
+            hex::encode(os_image_hash),
+            hex::encode(image_hash_from_sha256sum(sha256sum))
+        ));
+    }
+    let expected_measurement_hash = sha256sum_entry_hash(sha256sum, filename)?;
+    let actual_measurement_hash = sha256(measurement);
+    if expected_measurement_hash != actual_measurement_hash {
+        return Err(format!(
+            "{filename} hash mismatch: sha256sum.txt={}, actual={}",
+            hex::encode(expected_measurement_hash),
+            hex::encode(actual_measurement_hash)
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -360,21 +428,16 @@ impl From<CborOvmfSection> for OvmfSection {
     }
 }
 
-/// Image-invariant projection that determines the AMD SEV-SNP OS image
-/// identity. It deliberately excludes per-deployment values (vcpus, vcpu_type,
-/// guest_features, app_id, compose_hash): the same OS image must hash
-/// identically regardless of how it is launched.
-///
-/// `os_image_hash` is SHA-256 over the CBOR representation of this projection,
-/// not over the outer measurement.json field names.
+/// Image-invariant AMD SEV-SNP measurement material. It deliberately excludes
+/// per-deployment values (vcpus, vcpu_type, guest_features, app_id,
+/// compose_hash): the same OS image carries identical SNP material regardless of
+/// how it is launched. The OS image identity itself is always
+/// `sha256(sha256sum.txt)`; this material is bound to that identity by the
+/// `measurement.snp.cbor` entry in `sha256sum.txt`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SevOsImageMeasurement {
-    /// SHA-256 of the kernel command line bytes as measured in the SEV-SNP hash
-    /// table (trimmed command line plus trailing NUL byte). This avoids carrying
-    /// the full plaintext command line in image metadata while preserving the
-    /// exact measured value used by OVMF/QEMU.
-    #[serde(with = "hex_bytes")]
-    pub kernel_cmdline_sha256: Vec<u8>,
+    /// Original image kernel cmdline used for SNP measured launch.
+    pub base_cmdline: String,
     #[serde(with = "hex_bytes")]
     pub ovmf_hash: Vec<u8>,
     #[serde(with = "hex_bytes")]
@@ -388,9 +451,10 @@ pub struct SevOsImageMeasurement {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct CborSevOsImageMeasurement {
-    /// Measured kernel cmdline SHA-256.
-    #[serde(rename = "cmdline_sha256", with = "hex_bytes")]
-    kernel_cmdline_sha256: Vec<u8>,
+    version: u32,
+    /// Original image kernel cmdline used for SNP measured launch.
+    #[serde(rename = "cmdline")]
+    base_cmdline: String,
     /// OVMF launch digest.
     #[serde(with = "hex_bytes")]
     ovmf_hash: Vec<u8>,
@@ -411,7 +475,8 @@ struct CborSevOsImageMeasurement {
 impl From<&SevOsImageMeasurement> for CborSevOsImageMeasurement {
     fn from(measurement: &SevOsImageMeasurement) -> Self {
         Self {
-            kernel_cmdline_sha256: measurement.kernel_cmdline_sha256.clone(),
+            version: SevOsImageMeasurement::VERSION,
+            base_cmdline: measurement.base_cmdline.clone(),
             ovmf_hash: measurement.ovmf_hash.clone(),
             kernel_hash: measurement.kernel_hash.clone(),
             initrd_hash: measurement.initrd_hash.clone(),
@@ -425,7 +490,7 @@ impl From<&SevOsImageMeasurement> for CborSevOsImageMeasurement {
 impl From<CborSevOsImageMeasurement> for SevOsImageMeasurement {
     fn from(measurement: CborSevOsImageMeasurement) -> Self {
         Self {
-            kernel_cmdline_sha256: measurement.kernel_cmdline_sha256,
+            base_cmdline: measurement.base_cmdline,
             ovmf_hash: measurement.ovmf_hash,
             kernel_hash: measurement.kernel_hash,
             initrd_hash: measurement.initrd_hash,
@@ -441,7 +506,9 @@ impl From<CborSevOsImageMeasurement> for SevOsImageMeasurement {
 }
 
 impl SevOsImageMeasurement {
-    /// CBOR representation used as the `os_image_hash` input.
+    pub const VERSION: u32 = 3;
+
+    /// CBOR representation stored as `measurement.snp.cbor`.
     pub fn to_cbor_vec(&self) -> Vec<u8> {
         cbor_to_vec(
             &CborSevOsImageMeasurement::from(self),
@@ -450,7 +517,15 @@ impl SevOsImageMeasurement {
     }
 
     pub fn from_cbor_slice(bytes: &[u8]) -> Result<Self, String> {
-        cbor_from_slice::<CborSevOsImageMeasurement>(bytes, "SevOsImageMeasurement").map(Into::into)
+        let cbor = cbor_from_slice::<CborSevOsImageMeasurement>(bytes, "SevOsImageMeasurement")?;
+        if cbor.version != Self::VERSION {
+            return Err(format!(
+                "SevOsImageMeasurement: unsupported version {}, expected {}",
+                cbor.version,
+                Self::VERSION
+            ));
+        }
+        Ok(cbor.into())
     }
 
     pub fn cbor_json_value_from_slice(bytes: &[u8]) -> Result<serde_json::Value, String> {
@@ -459,37 +534,33 @@ impl SevOsImageMeasurement {
             .map_err(|e| format!("SevOsImageMeasurement: failed to convert CBOR to JSON: {e}"))
     }
 
-    /// SHA-256 over the CBOR representation of this projection.
-    pub fn os_image_hash(&self) -> [u8; 32] {
+    /// SHA-256 over the CBOR measurement material.
+    pub fn measurement_hash(&self) -> [u8; 32] {
         sha256(&self.to_cbor_vec())
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SevOsImageMeasurementDocument {
-    /// Document schema version.
-    #[serde(alias = "v")]
-    pub version: u32,
-    /// SHA-256 over the CBOR `measurement` bytes. This field is not included in
-    /// its own hash input.
-    #[serde(alias = "h")]
-    pub os_image_hash: String,
-    /// CBOR bytes for `SevOsImageMeasurement`.
+    /// Raw `sha256sum.txt` bytes. `sha256(sha256sum)` is the unified
+    /// `os_image_hash`.
+    #[serde(with = "hex_bytes")]
+    pub sha256sum: Vec<u8>,
+    /// Raw bytes of `measurement.snp.cbor`.
     #[serde(alias = "m", with = "hex_bytes")]
     pub measurement: Vec<u8>,
 }
 
 impl SevOsImageMeasurementDocument {
-    pub const VERSION: u32 = 2;
-
-    pub fn new(measurement: SevOsImageMeasurement) -> Self {
-        let measurement = measurement.to_cbor_vec();
-        let os_image_hash = sha256_hex(&measurement);
+    pub fn new(sha256sum: Vec<u8>, measurement: Vec<u8>) -> Self {
         Self {
-            version: Self::VERSION,
-            os_image_hash,
+            sha256sum,
             measurement,
         }
+    }
+
+    pub fn from_measurement(sha256sum: Vec<u8>, measurement: SevOsImageMeasurement) -> Self {
+        Self::new(sha256sum, measurement.to_cbor_vec())
     }
 
     pub fn decode_measurement(&self) -> Result<SevOsImageMeasurement, String> {
@@ -500,20 +571,22 @@ impl SevOsImageMeasurementDocument {
         SevOsImageMeasurement::cbor_json_value_from_slice(&self.measurement)
     }
 
-    pub fn measurement_os_image_hash(&self) -> [u8; 32] {
-        sha256(&self.measurement)
+    pub fn verify(&self, os_image_hash: &[u8]) -> Result<(), String> {
+        verify_measurement_material(
+            os_image_hash,
+            &self.sha256sum,
+            &self.measurement,
+            SNP_MEASUREMENT_FILENAME,
+        )
     }
 }
 
-/// Image-invariant projection that determines the TDX OS image identity.
-///
-/// This is the build-time, image-static material for the verifier-side
+/// Image-invariant TDX measurement material for the verifier-side
 /// no-image-download TDX path. Dynamic VM parameters (vCPU count, RAM size,
 /// QEMU PCI topology, GPU count, etc.) are deliberately excluded and must be
-/// supplied by `VmConfig` when replaying RTMRs.
-///
-/// `os_image_hash` is SHA-256 over the CBOR representation of this projection,
-/// not over the outer measurement.json field names.
+/// supplied by `VmConfig` when replaying RTMRs. The OS image identity itself is
+/// always `sha256(sha256sum.txt)`; this material is bound to that identity by
+/// the `measurement.tdx.cbor` entry in `sha256sum.txt`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TdxOsImageMeasurement {
     pub image: TdxImageMeasurement,
@@ -591,6 +664,7 @@ struct CborTdxTdvfMeasurement {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct CborTdxOsImageMeasurement {
+    version: u32,
     image: CborTdxImageMeasurement,
     tdvf: CborTdxTdvfMeasurement,
 }
@@ -598,6 +672,7 @@ struct CborTdxOsImageMeasurement {
 impl From<&TdxOsImageMeasurement> for CborTdxOsImageMeasurement {
     fn from(measurement: &TdxOsImageMeasurement) -> Self {
         Self {
+            version: TdxOsImageMeasurement::VERSION,
             image: CborTdxImageMeasurement {
                 kernel_cmdline_sha384: measurement.image.kernel_cmdline_sha384.clone(),
                 kernel_authenticode: measurement.image.kernel_authenticode.clone(),
@@ -637,20 +712,19 @@ impl From<CborTdxOsImageMeasurement> for TdxOsImageMeasurement {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TdxOsImageMeasurementDocument {
-    /// Document schema version.
-    #[serde(alias = "v")]
-    pub version: u32,
-    /// SHA-256 over the CBOR `measurement` bytes. This field is not included in
-    /// its own hash input.
-    #[serde(alias = "h")]
-    pub os_image_hash: String,
-    /// CBOR bytes for `TdxOsImageMeasurement`.
+    /// Raw `sha256sum.txt` bytes. `sha256(sha256sum)` is the unified
+    /// `os_image_hash`.
+    #[serde(with = "hex_bytes")]
+    pub sha256sum: Vec<u8>,
+    /// Raw bytes of `measurement.tdx.cbor`.
     #[serde(alias = "m", with = "hex_bytes")]
     pub measurement: Vec<u8>,
 }
 
 impl TdxOsImageMeasurement {
-    /// CBOR representation used as the `os_image_hash` input.
+    pub const VERSION: u32 = 3;
+
+    /// CBOR representation stored as `measurement.tdx.cbor`.
     pub fn to_cbor_vec(&self) -> Vec<u8> {
         cbor_to_vec(
             &CborTdxOsImageMeasurement::from(self),
@@ -660,6 +734,13 @@ impl TdxOsImageMeasurement {
 
     pub fn from_cbor_slice(bytes: &[u8]) -> Result<Self, String> {
         let cbor = cbor_from_slice::<CborTdxOsImageMeasurement>(bytes, "TdxOsImageMeasurement")?;
+        if cbor.version != Self::VERSION {
+            return Err(format!(
+                "TdxOsImageMeasurement: unsupported version {}, expected {}",
+                cbor.version,
+                Self::VERSION
+            ));
+        }
         Ok(cbor.into())
     }
 
@@ -669,23 +750,22 @@ impl TdxOsImageMeasurement {
             .map_err(|e| format!("TdxOsImageMeasurement: failed to convert CBOR to JSON: {e}"))
     }
 
-    /// SHA-256 over the CBOR representation of this projection.
-    pub fn os_image_hash(&self) -> [u8; 32] {
+    /// SHA-256 over the CBOR measurement material.
+    pub fn measurement_hash(&self) -> [u8; 32] {
         sha256(&self.to_cbor_vec())
     }
 }
 
 impl TdxOsImageMeasurementDocument {
-    pub const VERSION: u32 = 2;
-
-    pub fn new(measurement: TdxOsImageMeasurement) -> Self {
-        let measurement = measurement.to_cbor_vec();
-        let os_image_hash = sha256_hex(&measurement);
+    pub fn new(sha256sum: Vec<u8>, measurement: Vec<u8>) -> Self {
         Self {
-            version: Self::VERSION,
-            os_image_hash,
+            sha256sum,
             measurement,
         }
+    }
+
+    pub fn from_measurement(sha256sum: Vec<u8>, measurement: TdxOsImageMeasurement) -> Self {
+        Self::new(sha256sum, measurement.to_cbor_vec())
     }
 
     pub fn decode_measurement(&self) -> Result<TdxOsImageMeasurement, String> {
@@ -696,8 +776,13 @@ impl TdxOsImageMeasurementDocument {
         TdxOsImageMeasurement::cbor_json_value_from_slice(&self.measurement)
     }
 
-    pub fn measurement_os_image_hash(&self) -> [u8; 32] {
-        sha256(&self.measurement)
+    pub fn verify(&self, os_image_hash: &[u8]) -> Result<(), String> {
+        verify_measurement_material(
+            os_image_hash,
+            &self.sha256sum,
+            &self.measurement,
+            TDX_MEASUREMENT_FILENAME,
+        )
     }
 }
 
@@ -713,7 +798,7 @@ pub struct OsImageMeasurementDocument {
 }
 
 impl OsImageMeasurementDocument {
-    pub const VERSION: u32 = 2;
+    pub const VERSION: u32 = 3;
 
     pub fn new(
         tdx: Option<TdxOsImageMeasurementDocument>,

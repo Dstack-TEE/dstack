@@ -298,7 +298,7 @@ pub struct CvmConfig {
 
     /// TDX attestation/hash scheme policy. `legacy` keeps the existing
     /// digest.txt + dstack-acpi-tables verifier path; `lite` opts into the
-    /// measurement.json + no-QEMU verifier path; `auto` selects `legacy` for
+    /// split measurement CBOR + no-QEMU verifier path; `auto` selects `legacy` for
     /// CVMs below 3 GiB except exactly 2 GiB, otherwise uses `lite` when the
     /// image carries TDX measurement material and falls back to `legacy`.
     #[serde(default)]

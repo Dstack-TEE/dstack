@@ -119,8 +119,8 @@ After those fixes, the manual smoke progressed through full dstack-managed SNP g
 - Configfs TSM report collection falls back to the SEV-SNP extended-report ioctl when configfs does not carry certificate collateral.
 - If verifier-side evidence still lacks ASK/VCEK collateral, the verifier can fetch AMD KDS ARK/ASK/VCEK using the report `chip_id` and reported TCB, then verify the signed report fail-closed.
 - KMS measurement recomputation now uses the image's original kernel cmdline for SNP launch measurement, while app identity is bound by MrConfigV3/HOST_DATA instead of appended cmdline fields.
-- VMM now extracts the image OVMF SEV metadata and OVMF launch digest seed, includes them in the `sev_snp_measurement` document string, and passes that through the guest to KMS; KMS no longer needs a single locally configured `ovmf_path`, so different image/OVMF versions can be verified by their self-contained launch inputs.
-- SNP `BootInfo.os_image_hash` is the canonical image-invariant projection of the verified launch inputs: rootfs identity is derived from the measured `dstack.rootfs_hash=...` cmdline parameter, and the hash covers the cmdline, kernel/initrd hashes, and OVMF hash/sections while excluding per-deployment values like vCPU count/model and guest features.
+- VMM now passes the image's split `measurement.snp.cbor` material plus per-launch SNP fields through the guest to KMS; KMS no longer needs a single locally configured `ovmf_path`, so different image/OVMF versions can be verified by their self-contained launch inputs.
+- SNP `BootInfo.os_image_hash` is the unified image digest (`sha256(sha256sum.txt)`). The `measurement.snp.cbor` entry in `sha256sum.txt` commits to the cmdline, kernel/initrd hashes, and OVMF hash/sections while excluding per-deployment values like vCPU count/model and guest features.
 
 Latest sanitized remote smoke result with PR-built host binaries and a coherent `MACHINE = "sev-snp"` guest image:
 

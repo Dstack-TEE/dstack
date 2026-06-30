@@ -2,11 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-//! Unified build-time OS-image measurement document.
+//! Compatibility helpers for build-time OS-image measurement documents.
 
 use anyhow::{Context, Result};
 use dstack_types::{
     OsImageMeasurementDocument, SevOsImageMeasurementDocument, TdxOsImageMeasurementDocument,
+    SNP_MEASUREMENT_FILENAME, TDX_MEASUREMENT_FILENAME,
 };
 use fs_err as fs;
 use serde::Deserialize;
@@ -18,10 +19,11 @@ struct ImageMetadata {
     bios_sev: Option<String>,
 }
 
-/// Generate `measurement.json` for an image directory.
+/// Generate a compatibility `measurement.json` for an image directory that has
+/// already produced `sha256sum.txt` plus split measurement CBOR files.
 ///
-/// TDX material is mandatory for the normal dstack image. SNP material is
-/// included when metadata declares a dedicated `bios-sev` firmware.
+/// New image builds should ship `measurement.tdx.cbor` / `measurement.snp.cbor`
+/// directly instead of this combined JSON document.
 pub fn os_image_measurement_document_for_image_dir(
     image_dir: &Path,
 ) -> Result<OsImageMeasurementDocument> {
@@ -30,20 +32,29 @@ pub fn os_image_measurement_document_for_image_dir(
         .with_context(|| format!("cannot read {}", meta_path.display()))?;
     let meta: ImageMetadata =
         serde_json::from_str(&meta_str).context("failed to parse image metadata.json")?;
+    let sha256sum_path = image_dir.join("sha256sum.txt");
+    let sha256sum = fs::read(&sha256sum_path)
+        .with_context(|| format!("cannot read {}", sha256sum_path.display()))?;
 
-    let tdx = TdxOsImageMeasurementDocument::new(
-        crate::tdx::tdx_os_image_measurement_for_image_dir(image_dir)
-            .context("failed to build TDX measurement document")?,
-    );
-
-    let snp = if meta.bios_sev.is_some() {
-        Some(SevOsImageMeasurementDocument::new(
-            crate::sev::sev_os_image_measurement_for_image_dir(image_dir)
-                .context("failed to build SNP measurement document")?,
+    let tdx_path = image_dir.join(TDX_MEASUREMENT_FILENAME);
+    let tdx = if tdx_path.exists() {
+        Some(TdxOsImageMeasurementDocument::new(
+            sha256sum.clone(),
+            fs::read(&tdx_path).with_context(|| format!("cannot read {}", tdx_path.display()))?,
         ))
     } else {
         None
     };
 
-    Ok(OsImageMeasurementDocument::new(Some(tdx), snp))
+    let snp = if meta.bios_sev.is_some() {
+        let snp_path = image_dir.join(SNP_MEASUREMENT_FILENAME);
+        Some(SevOsImageMeasurementDocument::new(
+            sha256sum,
+            fs::read(&snp_path).with_context(|| format!("cannot read {}", snp_path.display()))?,
+        ))
+    } else {
+        None
+    };
+
+    Ok(OsImageMeasurementDocument::new(tdx, snp))
 }

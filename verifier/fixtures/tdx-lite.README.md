@@ -2,8 +2,9 @@
 
 This fixture was captured from the local meta-dstack e2e stack using TDX
 `tdx_attestation_variant = "lite"`. It covers the KMS/verifier path that
-verifies the OS image from `vm_config.tdx_measurement`, without downloading the
-image and without running the QEMU ACPI table helper.
+verifies the OS image from `vm_config.tdx_measurement` (`sha256sum.txt` bytes
+plus `measurement.tdx.cbor` bytes), without downloading the image and without
+running the QEMU ACPI table helper.
 
 Files:
 
@@ -31,7 +32,7 @@ Important fixture properties:
 
 - `vm_config.tdx_attestation_variant = "lite"`
 - `vm_config.memory_size = 2147483648` (2 GiB)
-- `vm_config.os_image_hash = 07a2388c7a6a1b6a646d443f1517990a4ec294471d63146cda9d56972765051d`
+- `vm_config.os_image_hash = e6f5cfec20c02e7b97baa213d0f718020b55e040172d90ccbcb946d56c8b09db`
 - The top-level `event_log` and stripped attestation keep the three named RTMR0
   `ACPI DATA` digests (`acpi-loader`, `acpi-rsdp`, `acpi-tables`) and marker
   payloads needed by the lite verifier, plus RTMR3 runtime events.

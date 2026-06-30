@@ -648,8 +648,8 @@ impl CvmVerifier {
     /// document in its `vm_config`; we recompute the launch measurement from
     /// those inputs and require it to equal the hardware-signed `MEASUREMENT`
     /// (which is what makes the otherwise-untrusted inputs trustworthy), require
-    /// `HOST_DATA` to bind the MrConfigV3 document, and then derive the
-    /// image-invariant `os_image_hash`. The shared recomputation in
+    /// `HOST_DATA` to bind the MrConfigV3 document, and then verify/return the
+    /// unified `os_image_hash` (`sha256(sha256sum.txt)`). The shared recomputation in
     /// `dstack_mr::sev` is the same code path the KMS uses for key release, so a
     /// quote that the KMS would release keys for verifies here too.
     fn verify_os_image_hash_for_dstack_sev(
@@ -666,9 +666,8 @@ impl CvmVerifier {
         let binding =
             dstack_mr::sev::verify_sev_launch(&report.measurement, &report.host_data, raw_config)
                 .context("amd sev-snp launch verification failed")?;
-        // The os_image_hash derived from the measurement-bound launch inputs is
-        // the authoritative one; surface it (overriding any guest-advertised
-        // value, which is not independently trusted).
+        // verify_sev_launch has checked that vm_config.os_image_hash commits to
+        // the supplied sha256sum.txt and measurement.snp.cbor material.
         vm_config.os_image_hash = binding.os_image_hash;
         details.tcb_status = Some(report.tcb_info.tcb_status().to_string());
         details.advisory_ids = report.advisory_ids.clone();
@@ -798,23 +797,10 @@ impl CvmVerifier {
             .tdx_measurement
             .as_ref()
             .context("tdx lite attestation requires vm_config.tdx_measurement")?;
-        let document_hash = hex::decode(&document.os_image_hash)
-            .context("vm_config.tdx_measurement.os_image_hash is not valid hex")?;
-        if document_hash != vm_config.os_image_hash {
-            bail!(
-                "tdx measurement os_image_hash mismatch: vm_config={}, document={}",
-                hex::encode(&vm_config.os_image_hash),
-                document.os_image_hash
-            );
-        }
-        let computed_hash = document.measurement_os_image_hash();
-        if computed_hash.as_slice() != vm_config.os_image_hash {
-            bail!(
-                "tdx measurement document hash mismatch: vm_config={}, computed={}",
-                hex::encode(&vm_config.os_image_hash),
-                hex::encode(computed_hash)
-            );
-        }
+        document
+            .verify(&vm_config.os_image_hash)
+            .map_err(anyhow::Error::msg)
+            .context("tdx lite measurement material does not match os_image_hash")?;
         let measurement = document
             .decode_measurement()
             .map_err(anyhow::Error::msg)
@@ -829,8 +815,8 @@ impl CvmVerifier {
             }
         }
 
-        // Compute expected measurements. New TDX images advertise the
-        // measurement.json-derived TDX os_image_hash; verify those without
+        // Compute expected measurements. TDX lite keeps the unified image hash
+        // and carries split measurement material; verify it without
         // downloading the image or running QEMU-derived ACPI table generators.
         // The guest labels the three RTMR0 ACPI DATA events as acpi-loader,
         // acpi-rsdp, and acpi-tables before exposing the event log, so the
@@ -1095,24 +1081,12 @@ impl CvmVerifier {
             }
         }
 
-        // Legacy images use sha256(sha256sum.txt) as os_image_hash. Newer
-        // TDX/SNP images may instead be addressed by measurement.json-derived
-        // hashes, so accept those too after recomputing them from extracted
-        // image files.
+        // All image modes are addressed by sha256(sha256sum.txt). Extra
+        // measurement CBOR files are ordinary sha256sum.txt entries and do not
+        // define alternate image hashes.
         let legacy_os_image_hash = Sha256::new_with_prefix(files_doc.as_bytes()).finalize();
-        let mut image_hash_matches = hex::encode(legacy_os_image_hash) == hex_os_image_hash;
-        if !image_hash_matches {
-            image_hash_matches = dstack_mr::tdx::tdx_os_image_hash_for_image_dir(&extracted_dir)
-                .map(|hash| hex::encode(hash) == hex_os_image_hash)
-                .unwrap_or(false)
-                || dstack_mr::sev::sev_os_image_hash_for_image_dir(&extracted_dir)
-                    .map(|hash| hex::encode(hash) == hex_os_image_hash)
-                    .unwrap_or(false);
-        }
-        if !image_hash_matches {
-            bail!(
-                "os_image_hash matches neither sha256sum.txt nor measurement.json-derived hashes"
-            );
+        if hex::encode(legacy_os_image_hash) != hex_os_image_hash {
+            bail!("os_image_hash does not match sha256(sha256sum.txt)");
         }
 
         // Move the extracted files to the destination directory

@@ -645,17 +645,47 @@ mod tests {
         }
     }
 
+    fn snp_measurement_document(
+        input: &MeasurementInput,
+    ) -> dstack_mr::sev::SnpMeasurementDocument {
+        let measurement = dstack_mr::sev::sev_os_image_measurement_from_input(input)
+            .unwrap()
+            .to_cbor_vec();
+        let sha256sum = format!(
+            "{}  {}\n",
+            hex::encode(sha2::Sha256::digest(&measurement)),
+            dstack_types::SNP_MEASUREMENT_FILENAME
+        )
+        .into_bytes();
+        dstack_mr::sev::SnpMeasurementDocument {
+            sha256sum,
+            measurement,
+            vcpus: input.vcpus,
+            vcpu_type: input.vcpu_type.clone(),
+            guest_features: input.guest_features,
+        }
+    }
+
+    fn snp_vm_config(
+        input: &MeasurementInput,
+        mr_config: &dstack_types::mr_config::MrConfigV3,
+    ) -> String {
+        let document = snp_measurement_document(input);
+        serde_json::json!({
+            "os_image_hash": hex::encode(dstack_types::image_hash_from_sha256sum(&document.sha256sum)),
+            "sev_snp_measurement": serde_json::to_string(&document).unwrap(),
+            "mr_config": mr_config.to_canonical_json(),
+        })
+        .to_string()
+    }
+
     #[test]
     fn build_boot_info_for_attestation_accepts_snp_vm_config_path() {
         let input = valid_snp_measurement_input();
         let measurement = compute_expected_measurement(&input).unwrap();
         let mr_config = valid_snp_mr_config();
         let attestation = verified_snp_attestation(measurement, [0xab; 64]);
-        let vm_config = serde_json::json!({
-            "sev_snp_measurement": serde_json::to_string(&input).unwrap(),
-            "mr_config": mr_config.to_canonical_json(),
-        })
-        .to_string();
+        let vm_config = snp_vm_config(&input, &mr_config);
 
         let boot_info = build_boot_info_for_attestation(&attestation, false, &vm_config)
             .expect("snp attestation should build boot info through vm_config path");
@@ -671,11 +701,7 @@ mod tests {
         let input = valid_snp_measurement_input();
         let measurement = compute_expected_measurement(&input).unwrap();
         let mr_config = valid_snp_mr_config();
-        let embedded_config = serde_json::json!({
-            "sev_snp_measurement": serde_json::to_string(&input).unwrap(),
-            "mr_config": mr_config.to_canonical_json(),
-        })
-        .to_string();
+        let embedded_config = snp_vm_config(&input, &mr_config);
         let attestation = verified_snp_attestation_with_config(
             measurement,
             [0xab; 64],
@@ -697,11 +723,7 @@ mod tests {
         let measurement = compute_expected_measurement(&input).unwrap();
         let mr_config = valid_snp_mr_config();
         let attestation = verified_snp_attestation(measurement, [0xab; 64]);
-        let vm_config = serde_json::json!({
-            "sev_snp_measurement": serde_json::to_string(&input).unwrap(),
-            "mr_config": mr_config.to_canonical_json(),
-        })
-        .to_string();
+        let vm_config = snp_vm_config(&input, &mr_config);
 
         let boot_info = build_boot_info_for_attestation(&attestation, false, &vm_config)
             .expect("self-contained SNP vm_config should not require KMS-local sev_snp config");
@@ -714,11 +736,7 @@ mod tests {
         let measurement = compute_expected_measurement(&input).unwrap();
         let mr_config = valid_snp_mr_config();
         let attestation = verified_snp_attestation(measurement, [0xab; 64]);
-        let vm_config = serde_json::json!({
-            "sev_snp_measurement": serde_json::to_string(&input).unwrap(),
-            "mr_config": mr_config.to_canonical_json(),
-        })
-        .to_string();
+        let vm_config = snp_vm_config(&input, &mr_config);
         build_boot_info_for_attestation(&attestation, false, &vm_config).unwrap()
     }
 

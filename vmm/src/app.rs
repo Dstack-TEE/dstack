@@ -1304,33 +1304,6 @@ fn mr_config_from_vm_config(sys_config: &serde_json::Value) -> Result<Option<Str
     Ok(Some(mr_config.to_string()))
 }
 
-fn file_sha256_hex(path: &Path) -> Result<String> {
-    Ok(hex::encode(sha256_file(path)?))
-}
-
-fn amd_sev_snp_ovmf_measurement_info(image: &Image) -> Result<dstack_mr::sev::OvmfMeasurementInfo> {
-    // Measure the same firmware the guest launches with: the SEV firmware
-    // (bios-sev) when present, falling back to the generic bios. The OVMF
-    // parsing/GCTX logic is shared with `dstack-mr sev-os-image-hash`.
-    let bios = image
-        .firmware(true)
-        .map(|p| p.as_path())
-        .ok_or_else(|| anyhow::anyhow!("bios/OVMF is required for amd sev-snp measurement"))?;
-    dstack_mr::sev::ovmf_measurement_info(bios).with_context(|| {
-        format!(
-            "failed to extract amd sev-snp OVMF measurement metadata from {}",
-            bios.display()
-        )
-    })
-}
-
-fn amd_sev_snp_measurement_base_cmdline(base_cmdline: Option<&str>) -> Result<String> {
-    match base_cmdline.map(str::trim) {
-        Some(cmdline) if !cmdline.is_empty() => Ok(cmdline.to_string()),
-        _ => anyhow::bail!("metadata.json cmdline is required for amd sev-snp measurement"),
-    }
-}
-
 fn sha256_file(path: impl AsRef<Path>) -> Result<[u8; 32]> {
     let data = fs::read(path).context("Failed to read file for sha256")?;
     let mut out = [0u8; 32];
@@ -1340,9 +1313,9 @@ fn sha256_file(path: impl AsRef<Path>) -> Result<[u8; 32]> {
 
 fn image_supports_tdx_lite(image: &Image) -> bool {
     image
-        .tdx_digest
+        .digest
         .as_deref()
-        .is_some_and(|digest| !digest.trim().is_empty())
+        .is_some_and(|d| !d.trim().is_empty())
         && image.tdx_measurement.is_some()
 }
 
@@ -1363,35 +1336,19 @@ fn make_vm_config(
     } else {
         dstack_types::TdxAttestationVariant::Legacy
     };
-    // AMD SEV-SNP binds the OS image through the launch-measurement-derived
-    // os_image_hash, computed at image build time and shipped in
-    // `measurement.json.snp.os_image_hash` (legacy images used `digest.sev.txt`).
-    // TDX keeps using the generic content digest unless the resolved
-    // attestation policy selects the lite variant.
-    let os_image_hash = if is_amd_sev_snp {
-        let digest = image.sev_digest.as_deref().context(
-            "amd sev-snp image is missing measurement.json SNP hash; \
-             rebuild the image so `dstack-mr os-image-measurement` emits it",
-        )?;
-        hex::decode(digest).context("SNP os_image_hash is not valid hex")?
-    } else if tdx_attestation_variant.is_lite() {
-        let digest = image.tdx_digest.as_deref().context(
-            "tdx lite attestation requested but image is missing \
-             measurement.json TDX hash; rebuild the image so \
-             `dstack-mr os-image-measurement` emits it",
-        )?;
-        hex::decode(digest).context("TDX os_image_hash is not valid hex")?
-    } else {
-        image
-            .digest
-            .as_ref()
-            .and_then(|d| hex::decode(d).ok())
-            .unwrap_or_default()
-    };
+    // All dstack OS-image verification modes use the same public image
+    // identity: digest.txt = sha256(sha256sum.txt). Lite TDX/SNP carry extra
+    // split CBOR measurement material, but that material is committed by
+    // sha256sum.txt instead of defining a second image hash.
+    let os_image_hash = image
+        .digest
+        .as_ref()
+        .and_then(|d| hex::decode(d).ok())
+        .unwrap_or_default();
     let tdx_measurement = if tdx_attestation_variant.is_lite() {
         Some(image.tdx_measurement.clone().context(
             "tdx lite attestation requested but image is missing \
-             measurement.json TDX measurement material",
+             measurement.tdx.cbor/sha256sum.txt measurement material",
         )?)
     } else {
         None
@@ -1423,26 +1380,20 @@ fn make_vm_config(
     // For backward compatibility
     config["spec_version"] = serde_json::Value::from(1);
     if is_amd_sev_snp {
-        // The rootfs identity is part of the measured kernel cmdline; do not
-        // carry it as a standalone, unmeasured launch-input field.
-        dstack_mr::sev::rootfs_hash_from_cmdline(image.info.cmdline.as_deref())?;
         if let Some(mr_config) = mr_config {
             MrConfigV3::from_document(&mr_config).context("Invalid mr_config document")?;
             config["mr_config"] = serde_json::Value::String(mr_config);
         }
-        let ovmf = amd_sev_snp_ovmf_measurement_info(image)?;
-        let measurement = json!({
-            "base_cmdline": amd_sev_snp_measurement_base_cmdline(image.info.cmdline.as_deref())?,
-            "ovmf_hash": ovmf.ovmf_hash,
-            "kernel_hash": file_sha256_hex(&image.kernel)?,
-            "initrd_hash": file_sha256_hex(&image.initrd)?,
-            "sev_hashes_table_gpa": ovmf.sev_hashes_table_gpa,
-            "sev_es_reset_eip": ovmf.sev_es_reset_eip,
-            "vcpus": effective_vcpus,
-            "vcpu_type": "EPYC-v4",
-            "guest_features": 1,
-            "ovmf_sections": ovmf.sections,
-        });
+        let image_measurement = image.sev_measurement.as_ref().context(
+            "amd sev-snp image is missing measurement.snp.cbor/sha256sum.txt measurement material",
+        )?;
+        let measurement = dstack_mr::sev::SnpMeasurementDocument {
+            sha256sum: image_measurement.sha256sum.clone(),
+            measurement: image_measurement.measurement.clone(),
+            vcpus: effective_vcpus,
+            vcpu_type: Some("EPYC-v4".to_string()),
+            guest_features: 1,
+        };
         config["sev_snp_measurement"] = serde_json::Value::String(
             serde_json::to_string(&measurement)
                 .context("Failed to serialize amd sev-snp measurement input")?,
@@ -1561,7 +1512,7 @@ mod tests {
     }
 
     fn dummy_tdx_measurement_document() -> TdxOsImageMeasurementDocument {
-        TdxOsImageMeasurementDocument::new(TdxOsImageMeasurement {
+        let measurement = TdxOsImageMeasurement {
             image: TdxImageMeasurement {
                 kernel_cmdline_sha384: vec![0x10; 48],
                 kernel_authenticode: vec![0x20; 48],
@@ -1575,7 +1526,15 @@ mod tests {
                 },
                 td_hob_witness: vec![0x60; 16],
             },
-        })
+        };
+        let measurement = measurement.to_cbor_vec();
+        let sha256sum = format!(
+            "{}  {}\n",
+            hex::encode(Sha256::digest(&measurement)),
+            dstack_types::TDX_MEASUREMENT_FILENAME
+        )
+        .into_bytes();
+        TdxOsImageMeasurementDocument::new(sha256sum, measurement)
     }
 
     fn test_tdx_image(supports_lite: bool) -> Image {
@@ -1602,9 +1561,8 @@ mod tests {
             bios: None,
             bios_sev: None,
             digest: Some(hex_of(0xaa, 32)),
-            tdx_digest: tdx_measurement.as_ref().map(|d| d.os_image_hash.clone()),
             tdx_measurement,
-            sev_digest: None,
+            sev_measurement: None,
         }
     }
 
@@ -1630,16 +1588,6 @@ mod tests {
     }
 
     #[test]
-    fn amd_sev_snp_measurement_base_cmdline_trims_image_cmdline() {
-        assert_eq!(
-            amd_sev_snp_measurement_base_cmdline(Some(" console=ttyS0 loglevel=7 ")).unwrap(),
-            "console=ttyS0 loglevel=7"
-        );
-        assert!(amd_sev_snp_measurement_base_cmdline(None).is_err());
-        assert!(amd_sev_snp_measurement_base_cmdline(Some("   ")).is_err());
-    }
-
-    #[test]
     fn tdx_auto_variant_uses_legacy_for_low_non_2g_memory() -> Result<()> {
         let config = test_tdx_config()?;
         let manifest = test_manifest(1024);
@@ -1662,10 +1610,6 @@ mod tests {
         let config = test_tdx_config()?;
         let manifest = test_manifest(2048);
         let image = test_tdx_image(true);
-        let expected_tdx_digest = image
-            .tdx_digest
-            .clone()
-            .context("test image must carry TDX digest")?;
         let vm_config = make_vm_config(&config, &manifest, &image, &hex_of(0x22, 32), None)?;
 
         assert_eq!(vm_config["tdx_attestation_variant"], "lite");
@@ -1674,7 +1618,7 @@ mod tests {
             vm_config["os_image_hash"]
                 .as_str()
                 .context("os_image_hash must be a string")?,
-            expected_tdx_digest
+            hex_of(0xaa, 32)
         );
         Ok(())
     }
@@ -1756,19 +1700,30 @@ mod tests {
         )
         .to_canonical_json();
 
-        // measurement.json is produced at build time by the `dstack-mr
-        // os-image-measurement` command; the VMM reads it instead of recomputing.
-        // Emit it here so the deploy path (make_vm_config) can read it back.
-        let snp_document =
-            dstack_mr::sev::sev_os_image_measurement_document_for_image_dir(&image_dir)?;
-        let build_hash =
-            hex::decode(&snp_document.os_image_hash).context("snp os_image_hash must be hex")?;
-        let measurement_document =
-            dstack_types::OsImageMeasurementDocument::new(None, Some(snp_document));
+        // The image build emits split SNP measurement CBOR, includes it in
+        // sha256sum.txt, and keeps digest.txt as sha256(sha256sum.txt).
+        let snp_cbor = dstack_mr::sev::sev_os_image_measurement_cbor_for_image_dir(&image_dir)?;
         fs::write(
-            image_dir.join("measurement.json"),
-            serde_json::to_string(&measurement_document)?,
+            image_dir.join(dstack_types::SNP_MEASUREMENT_FILENAME),
+            &snp_cbor,
         )?;
+        let mut sha256sum = String::new();
+        for name in [
+            "ovmf.fd",
+            "kernel",
+            "initrd",
+            "metadata.json",
+            dstack_types::SNP_MEASUREMENT_FILENAME,
+        ] {
+            sha256sum.push_str(&format!(
+                "{}  {}\n",
+                hex::encode(Sha256::digest(fs::read(image_dir.join(name))?)),
+                name
+            ));
+        }
+        fs::write(image_dir.join("sha256sum.txt"), &sha256sum)?;
+        let build_hash = Sha256::digest(sha256sum.as_bytes()).to_vec();
+        fs::write(image_dir.join("digest.txt"), hex::encode(&build_hash))?;
 
         let sys_config_document =
             make_sys_config(&config, &manifest, &compose_hash, Some(mr_config))?;
@@ -1781,7 +1736,11 @@ mod tests {
         let measurement_document = vm_config["sev_snp_measurement"]
             .as_str()
             .context("sev_snp_measurement must be a string")?;
-        let measurement: serde_json::Value = serde_json::from_str(measurement_document)?;
+        let measurement: dstack_mr::sev::SnpMeasurementDocument =
+            serde_json::from_str(measurement_document)?;
+        let image_measurement =
+            dstack_types::SevOsImageMeasurement::from_cbor_slice(&measurement.measurement)
+                .map_err(anyhow::Error::msg)?;
         let mr_config_document = sys_config["mr_config"]
             .as_str()
             .context("mr_config must be a string")?;
@@ -1790,86 +1749,42 @@ mod tests {
         assert_eq!(parsed_mr_config.app_id, vec![0x11; 20]);
         assert_eq!(parsed_mr_config.compose_hash, vec![0x22; 32]);
         assert_eq!(vm_config["mr_config"], sys_config["mr_config"]);
-        // The deploy path must surface the os_image_hash straight from
-        // measurement.json (not recompute it).
         assert_eq!(
             vm_config["os_image_hash"]
                 .as_str()
                 .context("os_image_hash must be a string")?,
             hex::encode(&build_hash),
-            "vm_config os_image_hash must come from measurement.json"
+            "vm_config os_image_hash must come from digest.txt"
         );
-        assert!(measurement.get("app_id").is_none());
-        assert!(measurement.get("compose_hash").is_none());
-        assert!(measurement.get("rootfs_hash").is_none());
         assert_eq!(
-            measurement["base_cmdline"],
+            image_measurement.base_cmdline,
             format!("console=ttyS0 dstack.rootfs_hash={}", hex_of(0x33, 32))
         );
         assert_eq!(
-            measurement["kernel_hash"],
-            hex::encode(Sha256::digest(b"snp-test-kernel"))
+            image_measurement.kernel_hash,
+            Sha256::digest(b"snp-test-kernel").to_vec()
         );
         assert_eq!(
-            measurement["initrd_hash"],
-            hex::encode(Sha256::digest(b"snp-test-initrd"))
+            image_measurement.initrd_hash,
+            Sha256::digest(b"snp-test-initrd").to_vec()
         );
-        assert_eq!(measurement["vcpus"], 2);
-        assert_eq!(measurement["vcpu_type"], "EPYC-v4");
-        assert_eq!(measurement["guest_features"], 1);
+        assert_eq!(measurement.vcpus, 2);
+        assert_eq!(measurement.vcpu_type.as_deref(), Some("EPYC-v4"));
+        assert_eq!(measurement.guest_features, 1);
         assert_eq!(
-            measurement["ovmf_hash"]
-                .as_str()
-                .context("ovmf_hash must be a string")?
-                .len(),
-            96
+            image_measurement.ovmf_hash.len(),
+            48,
+            "ovmf_hash must be 48 bytes"
         );
-        assert_eq!(measurement["sev_hashes_table_gpa"], 0x4000);
-        assert_eq!(measurement["sev_es_reset_eip"], 0xffff_fff0u32);
-        assert_eq!(
-            measurement["ovmf_sections"]
-                .as_array()
-                .context("ovmf_sections must be an array")?
-                .len(),
-            4
-        );
-
-        // The build-time os_image_hash (measurement.json.snp.os_image_hash) must
-        // equal the os_image_hash a verifier derives from
-        // the launch measurement document, i.e. the image-invariant projection.
-        let as_bytes = |v: &serde_json::Value| hex::decode(v.as_str().unwrap()).unwrap();
-        dstack_mr::sev::rootfs_hash_from_cmdline(measurement["base_cmdline"].as_str())?;
-        let projected = dstack_types::SevOsImageMeasurement {
-            kernel_cmdline_sha256: {
-                let mut cmdline = measurement["base_cmdline"]
-                    .as_str()
-                    .unwrap()
-                    .as_bytes()
-                    .to_vec();
-                cmdline.push(0);
-                Sha256::digest(&cmdline).to_vec()
-            },
-            ovmf_hash: as_bytes(&measurement["ovmf_hash"]),
-            kernel_hash: as_bytes(&measurement["kernel_hash"]),
-            initrd_hash: as_bytes(&measurement["initrd_hash"]),
-            sev_hashes_table_gpa: measurement["sev_hashes_table_gpa"].as_u64().unwrap(),
-            sev_es_reset_eip: measurement["sev_es_reset_eip"].as_u64().unwrap() as u32,
-            ovmf_sections: measurement["ovmf_sections"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|s| dstack_types::OvmfSection {
-                    gpa: s["gpa"].as_u64().unwrap(),
-                    size: s["size"].as_u64().unwrap(),
-                    section_type: s["section_type"].as_u64().unwrap() as u32,
-                })
-                .collect(),
-        };
-        assert_eq!(
-            build_hash,
-            projected.os_image_hash().to_vec(),
-            "measurement.json SNP hash must match the os_image_hash derived from the launch measurement"
-        );
+        assert_eq!(image_measurement.sev_hashes_table_gpa, 0x4000);
+        assert_eq!(image_measurement.sev_es_reset_eip, 0xffff_fff0u32);
+        assert_eq!(image_measurement.ovmf_sections.len(), 4);
+        dstack_types::SevOsImageMeasurementDocument::new(
+            measurement.sha256sum,
+            measurement.measurement,
+        )
+        .verify(&build_hash)
+        .map_err(anyhow::Error::msg)?;
         Ok(())
     }
 }
