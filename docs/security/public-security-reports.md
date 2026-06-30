@@ -1,14 +1,10 @@
 # Public Security Reports
 
-This page lists public GitHub issues that were filed as security reports or public mirrors of private advisories. It records the project position so readers can tell whether a report is fixed, accepted by design, documentation-only, duplicate, or still open.
+This page tracks public GitHub issues filed as security reports or mirrors of private advisories. It shows whether each report is fixed, accepted by design, documentation-only, duplicate, or still open.
 
-This page also separates related security roadmap and hardening trackers from the report table. Those items matter for the security model, but they are not vulnerability reports and should not be read as CVE-style findings.
+For new exploitable vulnerabilities, use the private reporting path in [SECURITY.md](../../SECURITY.md). Do not include exploit details in public issues.
 
-This page is not a vulnerability reporting channel. Report exploitable vulnerabilities privately through [SECURITY.md](../../SECURITY.md). Use public issues only for questions, documentation gaps, already-public findings, or hardening ideas that do not disclose an exploit path.
-
-Status reflects GitHub issue state on 2026-06-30.
-
-This page intentionally excludes support requests, process questions, roadmap consolidation issues, and general feature requests that only mention security-related terms in passing.
+Status snapshot: 2026-06-30. General support, process, consolidation, and feature-request issues are excluded. Related hardening and roadmap trackers are listed separately.
 
 ## Report categories
 
@@ -22,8 +18,6 @@ Use these categories when reading public security reports and already-public fin
 | Docs-only | The behavior is intentional or lower severity, but public documentation should make it clear |
 | Accepted by design | The report conflicts with the documented threat model or an intentional compatibility constraint |
 | Duplicate | The report repeats another public issue or private advisory response |
-
-Rows that mention follow-up work describe the public project status, not a vulnerability disclosure path.
 
 ## Public reports and findings
 
