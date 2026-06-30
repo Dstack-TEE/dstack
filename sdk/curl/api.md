@@ -74,7 +74,7 @@ Generates a deterministic private key from the application key and returns both 
 |-------|------|-------------|----------|
 | `path` | string | Path for the key. This is the domain separator for deterministic key material. | `"my/key/path"` |
 | `purpose` | string | Purpose for the key. Can be any string. This is used in the signature chain and does not affect the private key bytes. | `"signing"` |
-| `algorithm` | string | Either `secp256k1` or `ed25519`. Defaults to `secp256k1`. For compatibility, this selects how the same derived 32-byte material is interpreted; it does not domain-separate the derivation. | `ed25519` |
+| `algorithm` | string | `secp256k1` (default), `k256` (alias), or `ed25519`. For compatibility, this selects how the same derived 32-byte material is interpreted; it does not domain-separate the derivation. | `ed25519` |
 
 Use algorithm-specific paths, such as `wallet/ethereum` and `wallet/solana`, when independent keys are required across algorithms.
 

@@ -175,7 +175,7 @@ const wallet = createWalletClient({ account, chain: mainnet, transport: http() }
 ```typescript
 import { toKeypairSecure } from '@phala/dstack-sdk/solana'
 
-const key = await client.getKey('wallet/solana')
+const key = await client.getKey('wallet/solana', 'mainnet', 'ed25519')
 const keypair = toKeypairSecure(key)
 console.log(keypair.publicKey.toBase58())
 ```
@@ -220,7 +220,7 @@ const response = await fetch(`${kmsUrl}/prpc/GetAppEnvEncryptPubKey?json`, {
 const publicKey = Buffer.from(response.public_key, 'hex')
 
 if (!response.signature_v1 || response.timestamp === undefined) {
-  throw new Error('KMS response missing timestamped signature')
+  throw new Error('kms response missing timestamped signature')
 }
 
 const signer = verifyEnvEncryptPublicKey(
@@ -230,7 +230,7 @@ const signer = verifyEnvEncryptPublicKey(
   BigInt(response.timestamp),
 )
 
-if (!signer) throw new Error('KMS signature did not verify')
+if (!signer) throw new Error('kms signature did not verify')
 
 const trustedSigners = new Set(['0x...']) // From the DstackKms contract or deployment config
 if (!trustedSigners.has(signer)) throw new Error(`unexpected KMS signer: ${signer}`)

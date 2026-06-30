@@ -323,7 +323,7 @@ import (
 	"github.com/Dstack-TEE/dstack/sdk/go/dstack"
 )
 
-keyResult, err := client.GetKey(ctx, "solana/main", "wallet", "secp256k1")
+keyResult, err := client.GetKey(ctx, "solana/main", "wallet", "ed25519")
 if err != nil {
 	log.Fatal(err)
 }
@@ -370,41 +370,45 @@ envVars := []dstack.EnvVar{
 	{Key: "WALLET_MNEMONIC", Value: "abandon abandon abandon..."},
 }
 
-// 2. Obtain encryption public key from KMS API (dstack-vmm or Phala Cloud)
-// (HTTP request implementation depends on your HTTP client)
-publicKey := "a1b2c3d4..." // From KMS API
-signature := "e1f2g3h4..." // From KMS API
+// 2. Obtain encryption public key from KMS API (dstack-vmm or Phala Cloud).
+// HTTP request implementation depends on your HTTP client.
+kmsResponse := struct {
+	PublicKey   string `json:"public_key"`
+	SignatureV1 string `json:"signature_v1"`
+	Timestamp   uint64 `json:"timestamp"`
+}{
+	// Fill these fields from /prpc/GetAppEnvEncryptPubKey?json.
+}
 
 // 3. Verify KMS API authenticity to prevent man-in-the-middle attacks
-publicKeyBytes, _ := hex.DecodeString(publicKey)
-signatureBytes, _ := hex.DecodeString(signature)
+publicKeyBytes, _ := hex.DecodeString(kmsResponse.PublicKey)
+signatureBytes, _ := hex.DecodeString(kmsResponse.SignatureV1)
 
 // Prefer timestamped verification to prevent replay attacks.
-timestamp := uint64(1710000000) // From the KMS API response, not local time
 kmsIdentity, err := dstack.VerifyEnvEncryptPublicKeyWithTimestamp(
 	publicKeyBytes,
 	signatureBytes,
 	"your-app-id-hex",
-	timestamp,
+	kmsResponse.Timestamp,
 	nil, // use default freshness policy (max age 300s)
 )
 if err != nil || kmsIdentity == nil {
-	log.Fatal("KMS API provided untrusted encryption key")
+	log.Fatal("kms API provided untrusted encryption key")
 }
 
-expectedKMSIdentity := "03..." // From the DstackKms contract or deployment config
-actualKMSIdentity := hex.EncodeToString(kmsIdentity)
+expectedKMSIdentity := "0x03..." // From the DstackKms contract or deployment config
+actualKMSIdentity := string(kmsIdentity)
 if actualKMSIdentity != expectedKMSIdentity {
 	log.Fatalf("unexpected KMS identity: got %s", actualKMSIdentity)
 }
 
-fmt.Println("Verified KMS public key:", actualKMSIdentity)
+fmt.Println("Verified KMS identity:", actualKMSIdentity)
 
 // VerifyEnvEncryptPublicKey() is available only for explicit compatibility with
 // older KMS builds. It does not provide timestamp replay protection.
 
 // 4. Encrypt environment variables for secure deployment
-encryptedData, err := dstack.EncryptEnvVars(envVars, publicKey)
+encryptedData, err := dstack.EncryptEnvVars(envVars, kmsResponse.PublicKey)
 if err != nil {
 	log.Fatal(err)
 }
@@ -703,20 +707,26 @@ import (
 	"github.com/Dstack-TEE/dstack/sdk/go/dstack"
 )
 
-// Example: Verify KMS-provided encryption key
-publicKey, _ := hex.DecodeString("e33a1832c6562067ff8f844a61e51ad051f1180b66ec2551fb0251735f3ee90a")
-signature, _ := hex.DecodeString("8542c49081fbf4e03f62034f13fbf70630bdf256a53032e38465a27c36fd6bed7a5e7111652004aef37f7fd92fbfc1285212c4ae6a6154203a48f5e16cad2cef00")
+// Example: Verify a KMS response from /prpc/GetAppEnvEncryptPubKey?json
+kmsResponse := struct {
+	PublicKey   string `json:"public_key"`
+	SignatureV1 string `json:"signature_v1"`
+	Timestamp   uint64 `json:"timestamp"`
+}{
+	// Fill these fields from the KMS API response.
+}
+publicKey, _ := hex.DecodeString(kmsResponse.PublicKey)
+signature, _ := hex.DecodeString(kmsResponse.SignatureV1)
 appID := "0000000000000000000000000000000000000000"
 
-timestamp := uint64(1710000000) // From the KMS API response
-kmsIdentity, err := dstack.VerifyEnvEncryptPublicKeyWithTimestamp(publicKey, signature, appID, timestamp, nil)
+kmsIdentity, err := dstack.VerifyEnvEncryptPublicKeyWithTimestamp(publicKey, signature, appID, kmsResponse.Timestamp, nil)
 
 if err != nil || kmsIdentity == nil {
-	log.Fatal("KMS signature verification failed")
+	log.Fatal("kms signature verification failed")
 }
 
-expectedKMSIdentity := "03..." // From the DstackKms contract or deployment config
-actualKMSIdentity := hex.EncodeToString(kmsIdentity)
+expectedKMSIdentity := "0x03..." // From the DstackKms contract or deployment config
+actualKMSIdentity := string(kmsIdentity)
 if actualKMSIdentity != expectedKMSIdentity {
 	log.Fatalf("unexpected KMS identity: got %s", actualKMSIdentity)
 }

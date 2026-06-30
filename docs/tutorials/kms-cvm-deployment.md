@@ -168,8 +168,9 @@ configs:
       [rpc.tls.mutual]
       ca_certs = "/etc/kms/certs/tmp-ca.crt"
       # Keep the TLS listener optional because bootstrap/public endpoints must be
-      # reachable before a client has an RA-TLS certificate. Sensitive KMS RPCs
-      # still enforce client certificate and attestation checks in their handlers.
+      # reachable before a client has an RA-TLS certificate. Temp-CA bootstrap
+      # material is bootstrap-sensitive. Key-release RPCs still require verified
+      # caller attestation; certificate signing verifies CSR signature and attestation.
       mandatory = false
 
       [core]

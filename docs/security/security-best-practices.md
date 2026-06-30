@@ -77,7 +77,9 @@ Development settings are intentionally easy to audit, but they are not productio
 - The KMS contract pins a concrete gateway app id. Do not use `gateway_app_id = "any"` for production traffic.
 - TEE quotes are evaluated by deployment policy, including TCB status and expected OS/application measurements.
 
-The KMS TLS listener may keep `rpc.tls.mutual.mandatory = false` because bootstrap endpoints need to be reachable before a client has an RA-TLS certificate. Sensitive KMS routes still require the client certificate and attestation evidence in application code before releasing keys or signing certificates.
+The KMS TLS listener may keep `rpc.tls.mutual.mandatory = false` because bootstrap, temp-CA bootstrap, and public metadata endpoints need to be reachable before a client has an RA-TLS certificate. `GetTempCaCert` returns temp CA private material for the bootstrap flow; treat it as bootstrap-sensitive.
+
+App key release and KMS key handover still require verified caller attestation from the RA-TLS client certificate. Certificate signing verifies the CSR signature and embedded attestation before signing.
 
 ## Keep private material owner-only
 

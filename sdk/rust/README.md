@@ -56,7 +56,7 @@ let testnet_key = client.get_key(Some("wallet/eth/testnet".to_string()), None).a
 - `path`: Key derivation path (determines the key)
 - `purpose` (optional): Included in signature chain message, does not affect the derived key
 
-For compatibility, the key algorithm selects how the same derived 32-byte material is interpreted; it does not domain-separate the derivation. Use algorithm-specific paths when independent keys are required.
+The Rust SDK currently requests the default `secp256k1` key material. Use distinct paths when keys must be independent.
 
 **Returns:** `GetKeyResponse`
 - `key`: Hex-encoded private key

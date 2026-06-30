@@ -146,7 +146,9 @@ Production verifiers should reject deployments that use these development settin
 
 The KMS Rocket TLS listener permits connections without a client certificate because some bootstrap and public metadata endpoints must be reachable before a client has an RA-TLS certificate. That listener setting is not the authorization boundary for key material.
 
-Sensitive KMS handlers enforce their own boundary: callers must present the expected client certificate and attestation evidence before key derivation, KMS key replication, or certificate signing succeeds. Public endpoints are limited to bootstrap, metadata, health, and metrics behavior documented for operators.
+App key release and KMS key handover require verified caller attestation from the RA-TLS client certificate. Certificate signing verifies the CSR signature and the attestation embedded in the CSR before signing.
+
+The unauthenticated or non-client-certificate surface includes bootstrap and temp-CA bootstrap material retrieval, env-encryption public-key retrieval, metadata, health, and metrics behavior documented for operators. `GetTempCaCert` returns temp CA private material for the bootstrap flow, so operators must treat it as bootstrap-sensitive rather than harmless public metadata.
 
 ## Limitations
 

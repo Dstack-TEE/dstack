@@ -239,7 +239,7 @@ print(account.address)
 ```python
 from dstack_sdk.solana import to_keypair_secure
 
-key = client.get_key('wallet/solana')
+key = client.get_key('wallet/solana', purpose='mainnet', algorithm='ed25519')
 keypair = to_keypair_secure(key)
 print(keypair.pubkey())
 ```
