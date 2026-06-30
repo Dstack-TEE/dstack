@@ -12,7 +12,7 @@
 
 Original Contributors: Hang Yin, Kevin Wang, Andrew Miller
 
-[Documentation](https://docs.phala.com/dstack) · [Examples](https://github.com/Dstack-TEE/dstack-examples) · [Community](https://t.me/+UO4bS4jflr45YmUx)
+[Documentation](https://docs.phala.com/dstack) · [Security](./SECURITY.md) · [Examples](https://github.com/Dstack-TEE/dstack-examples) · [Community](https://t.me/+UO4bS4jflr45YmUx)
 
 </div>
 
@@ -89,6 +89,19 @@ Your container runs inside a Confidential VM, such as Intel TDX or AMD SEV-SNP, 
 
 [Full security model →](./docs/security/security-model.md)
 
+## Security and Trust
+
+Security docs are linked here so deployers and reviewers can quickly find the trust model, production guidance, audit, and the status of already-answered public findings.
+
+- [Security Overview](./docs/security/) - entry point for users, operators, researchers, and AI agents
+- [Security Model](./docs/security/security-model.md) - threat model, trust boundaries, and verification checklist
+- [Public Security Reports](./docs/security/public-security-reports.md) - public status for security reports and related hardening work
+- [Security Best Practices](./docs/security/security-best-practices.md) - production settings and hardening guidance
+- [Security Audit](./docs/security/dstack-audit.pdf) - third-party audit by zkSecurity
+- [Report a Vulnerability](./SECURITY.md) - use GitHub's private security reporting path
+
+Please do not disclose exploitable vulnerabilities in public GitHub issues. Use the private reporting path in [SECURITY.md](./SECURITY.md).
+
 ## SDKs
 
 Apps communicate with the guest agent via HTTP over `/var/run/dstack.sock`. Use the [HTTP API](./sdk/curl/api.md) directly with curl, or use a language SDK:
@@ -120,14 +133,6 @@ Apps communicate with the guest agent via HTTP over `/var/run/dstack.sock`. Use 
 - [VMM CLI Guide](./docs/vmm-cli-user-guide.md) - Command-line reference
 - [Design Decisions](./docs/design-and-hardening-decisions.md) - Architecture rationale
 - [FAQ](./docs/faq.md) - Frequently asked questions
-
-## Security
-
-- [Security Overview](./docs/security/) - Security documentation and responsible disclosure
-- [Security Model](./docs/security/security-model.md) - Threat model and trust boundaries
-- [Security Best Practices](./docs/security/security-best-practices.md) - Production hardening
-- [Security Audit](./docs/security/dstack-audit.pdf) - Third-party audit by zkSecurity
-- [CVM Boundaries](./docs/security/cvm-boundaries.md) - Information exchange and isolation
 
 ## FAQ
 
@@ -180,7 +185,7 @@ Yes. dstack runs on supported TEE-capable servers, including Intel TDX-capable h
 
 - **GCP**: Intel TDX (Confidential VMs)
 - **AWS**: Nitro Enclaves (NSM attestation)
-- **Bare metal**: Intel TDX (4th/5th Gen Xeon) and AMD SEV-SNP on supported dstack OS images
+- **Bare metal**: Intel TDX (4th/5th Gen Xeon) and AMD SEV-SNP on supported dstack OS images. Intel TDX is the production path; AMD SEV-SNP is new and experimental.
 - **GPUs**: NVIDIA Confidential Computing (H100, Blackwell)
 
 </details>
@@ -227,5 +232,3 @@ Logo and branding assets: [dstack-logo-kit](./docs/assets/dstack-logo-kit/)
 ## License
 
 Apache 2.0
-</content>
-</invoke>
