@@ -14,7 +14,7 @@ Use private reporting for issues that could expose secrets, bypass attestation o
 
 Use public issues only for questions about documented behavior, documentation gaps, already-public findings, or hardening ideas that do not include an exploit path.
 
-Before opening a public security question, check [Public Security Reports](./docs/security/public-security-reports.md). It records public reports that were fixed, accepted by design, documented, or split into related hardening and roadmap work.
+Before opening a public security question, check [Public Security Reports](./docs/security/public-security-reports.md). It records public report status and related hardening or roadmap work.
 
 ## Production trust boundary
 

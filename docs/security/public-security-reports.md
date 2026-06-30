@@ -1,29 +1,29 @@
 # Public Security Reports
 
-This page lists public GitHub issues that were filed as security reports or public mirrors of private advisories. It records the maintainer disposition so researchers, operators, and AI agents can tell whether a report is fixed, accepted by design, documentation-only, duplicate, or still open.
+This page lists public GitHub issues that were filed as security reports or public mirrors of private advisories. It records the project position so readers can tell whether a report is fixed, accepted by design, documentation-only, duplicate, or still open.
 
 This page also separates related security roadmap and hardening trackers from the report table. Those items matter for the security model, but they are not vulnerability reports and should not be read as CVE-style findings.
 
 This page is not a vulnerability reporting channel. Report exploitable vulnerabilities privately through [SECURITY.md](../../SECURITY.md). Use public issues only for questions, documentation gaps, already-public findings, or hardening ideas that do not disclose an exploit path.
 
-Status reflects GitHub issue state on 2026-06-30. Update this page whenever a listed issue is closed, reopened, split, or superseded.
+Status reflects GitHub issue state on 2026-06-30.
 
 This page intentionally excludes support requests, process questions, roadmap consolidation issues, and general feature requests that only mention security-related terms in passing.
 
 ## Report categories
 
-Use these categories when evaluating public security reports and already-public findings:
+Use these categories when reading public security reports and already-public findings:
 
-| Category | Meaning | Expected issue state |
-| --- | --- | --- |
-| Real blocker | Confirmed vulnerability that can compromise production security under supported configuration | Keep open until fixed; close as completed when the fix lands |
-| Needs hardening | Not a broken trust boundary, but a defense-in-depth improvement with no compatibility cost | Keep open only while the patch is pending; close as completed when merged |
-| Fixed | The reported behavior has already been fixed or is fixed by the linked change | Close as completed |
-| Docs-only | The behavior is intentional or lower severity, but the repo must say so clearly | Close after documentation is merged |
-| Accepted by design | The report conflicts with the documented threat model or with an intentional compatibility constraint | Close as not planned, with the design rationale linked |
-| Duplicate | The report repeats another public issue or private advisory response | Close with a link to the canonical response |
+| Category | Meaning |
+| --- | --- |
+| Real blocker | Confirmed vulnerability that can compromise production security under supported configuration |
+| Needs hardening | Defense-in-depth improvement that does not change the production trust model |
+| Fixed | The reported behavior has been fixed or is fixed by the linked change |
+| Docs-only | The behavior is intentional or lower severity, but public documentation should make it clear |
+| Accepted by design | The report conflicts with the documented threat model or an intentional compatibility constraint |
+| Duplicate | The report repeats another public issue or private advisory response |
 
-When a report mixes several claims, split the actionable work into separate issues before closing the original. Do not leave a broad security issue open just to remember future work.
+Rows that mention follow-up work describe the public project status, not a vulnerability disclosure path.
 
 ## Public reports and findings
 
@@ -31,25 +31,25 @@ These issues were filed as concrete vulnerability reports, security audit findin
 
 | Issue | Status | Category | Disposition |
 | --- | --- | --- | --- |
-| [#549](https://github.com/Dstack-TEE/dstack/issues/549) Disk encryption key collision when `no_instance_id=true` and HKDF context ambiguity | Open | Accepted by design, optional hardening | `no_instance_id=true` intentionally shares disk keys across instances, and the HKDF inputs have fixed lengths. Close the original as not planned, or split zero-padding for the unset instance ID into a separate hardening issue if an owner wants it |
+| [#549](https://github.com/Dstack-TEE/dstack/issues/549) Disk encryption key collision when `no_instance_id=true` and HKDF context ambiguity | Open | Accepted by design, optional hardening | `no_instance_id=true` intentionally shares disk keys across instances, and the HKDF inputs have fixed lengths. Zero-padding for the unset instance ID is optional hardening |
 | [#550](https://github.com/Dstack-TEE/dstack/issues/550) Compose hash computed on raw bytes, not canonicalized JSON | Closed | Accepted by design | dstack treats compose JSON as an opaque byte sequence. Any byte-level change is a different measured application configuration |
 | [#551](https://github.com/Dstack-TEE/dstack/issues/551) Shell injection via `init_script` and `pre_launch_script` in compose | Closed | Accepted by design, docs-only | Scripts are application-owned code and are measured as part of app configuration. Verifiers must treat script contents as part of the application trust decision |
 | [#552](https://github.com/Dstack-TEE/dstack/issues/552) Static HKDF salt and no key versioning | Open | Docs-only, roadmap follow-up | Static salt is acceptable with high-entropy KMS root material and explicit context. Key versioning and rotation require a broader compatibility design |
 | [#553](https://github.com/Dstack-TEE/dstack/issues/553) `derive_dh_secret` hashes PKCS#8 DER | Closed | Fixed | [#603](https://github.com/Dstack-TEE/dstack/pull/603) stabilizes the P-256 private key encoding used for derivation |
-| [#554](https://github.com/Dstack-TEE/dstack/issues/554) Signature concatenation without length prefixes enables collision | Open | Fixed | [#604](https://github.com/Dstack-TEE/dstack/pull/604) enforces the 20-byte `app_id` length in CVM setup. Close as completed |
-| [#555](https://github.com/Dstack-TEE/dstack/issues/555) LUKS header TOCTOU between validation and `luksOpen` | Open | Accepted by design | The setup code validates and opens the same in-memory LUKS header. Close as not planned with the maintainer rationale |
-| [#556](https://github.com/Dstack-TEE/dstack/issues/556) Disk encryption key and WireGuard key visible in `/proc/PID/cmdline` | Open | Needs hardening | Keep open while removing transient command-line exposure for secret-bearing setup commands, or close only if the maintainer explicitly accepts the early-boot exposure in the documented threat model |
-| [#557](https://github.com/Dstack-TEE/dstack/issues/557) Runtime event log writable by any VM process | Open | Fixed | [#602](https://github.com/Dstack-TEE/dstack/pull/602) restricts runtime event-log permissions. Close as completed |
+| [#554](https://github.com/Dstack-TEE/dstack/issues/554) Signature concatenation without length prefixes enables collision | Open | Fixed | [#604](https://github.com/Dstack-TEE/dstack/pull/604) enforces the 20-byte `app_id` length in CVM setup |
+| [#555](https://github.com/Dstack-TEE/dstack/issues/555) LUKS header TOCTOU between validation and `luksOpen` | Open | Accepted by design | The setup code validates and opens the same in-memory LUKS header |
+| [#556](https://github.com/Dstack-TEE/dstack/issues/556) Disk encryption key and WireGuard key visible in `/proc/PID/cmdline` | Open | Needs hardening | Tracks removal of transient command-line exposure for secret-bearing setup commands |
+| [#557](https://github.com/Dstack-TEE/dstack/issues/557) Runtime event log writable by any VM process | Open | Fixed | [#602](https://github.com/Dstack-TEE/dstack/pull/602) restricts runtime event-log permissions |
 | [#558](https://github.com/Dstack-TEE/dstack/issues/558) Path traversal in KMS `remove_cache` | Closed | Fixed | [#601](https://github.com/Dstack-TEE/dstack/pull/601) validates cache paths before deletion |
-| [#559](https://github.com/Dstack-TEE/dstack/issues/559) Zero `mr_config_id` bypasses verification and weakens `mr_aggregated` identity | Open | Accepted compatibility decision, docs-only | Zero `mr_config_id` remains an unset-value compatibility case, and configuration changes are still reflected through RTMR-based measurements. Close as not planned after linking the threat-model rationale |
-| [#560](https://github.com/Dstack-TEE/dstack/issues/560) Admin token comparison not constant-time | Open | Accepted by design | The comparison is over a SHA-256 digest of a high-entropy token, not the raw token. Close as not planned unless the token format changes |
+| [#559](https://github.com/Dstack-TEE/dstack/issues/559) Zero `mr_config_id` bypasses verification and weakens `mr_aggregated` identity | Open | Accepted compatibility decision, docs-only | Zero `mr_config_id` remains an unset-value compatibility case, and configuration changes are still reflected through RTMR-based measurements |
+| [#560](https://github.com/Dstack-TEE/dstack/issues/560) Admin token comparison not constant-time | Open | Accepted by design | The comparison is over a SHA-256 digest of a high-entropy token, not the raw token |
 | [#561](https://github.com/Dstack-TEE/dstack/issues/561) KMS TLS client certificates are non-mandatory in Rocket config | Open | Docs-only | The TLS listener allows unauthenticated bootstrap endpoints, while sensitive KMS handlers enforce client certificate and attestation checks in application code |
-| [#562](https://github.com/Dstack-TEE/dstack/issues/562) Configfs path overridable through an environment variable | Open | Accepted threat-model decision, possible hardening | A process that can choose its own quote path is already inside the measured CVM behavior. Close the original with that rationale, or split a production guard for `DCAP_TDX_QUOTE_CONFIGFS_PATH` into a hardening issue |
-| [#563](https://github.com/Dstack-TEE/dstack/issues/563) `simulate_quote` runtime path in production guest agent | Open | Fixed | [#582](https://github.com/Dstack-TEE/dstack/pull/582) isolates the simulator into a dedicated binary. Close as completed |
-| [#564](https://github.com/Dstack-TEE/dstack/issues/564) `GetAppEnvEncryptPubKey` unauthenticated app ID enumeration | Open | Accepted by design | The RPC returns a public encryption key before an app has an attested identity, and `app_id` is not treated as secret. Close as not planned after linking the bootstrap rationale |
+| [#562](https://github.com/Dstack-TEE/dstack/issues/562) Configfs path overridable through an environment variable | Open | Accepted threat-model decision, possible hardening | A process that can choose its own quote path is already inside the measured CVM behavior. A production guard for `DCAP_TDX_QUOTE_CONFIGFS_PATH` remains possible hardening |
+| [#563](https://github.com/Dstack-TEE/dstack/issues/563) `simulate_quote` runtime path in production guest agent | Open | Fixed | [#582](https://github.com/Dstack-TEE/dstack/pull/582) isolates the simulator into a dedicated binary |
+| [#564](https://github.com/Dstack-TEE/dstack/issues/564) `GetAppEnvEncryptPubKey` unauthenticated app ID enumeration | Open | Accepted by design | The RPC returns a public encryption key before an app has an attested identity, and `app_id` is not treated as secret |
 | [#565](https://github.com/Dstack-TEE/dstack/issues/565) Infinite loop in `wait_for_generation_change` | Closed | Fixed | [#596](https://github.com/Dstack-TEE/dstack/pull/596) bounds the ConfigFS generation wait loop |
-| [#566](https://github.com/Dstack-TEE/dstack/issues/566) Gzip decompression bomb in RA-TLS cert extension | Open | Fixed | [#595](https://github.com/Dstack-TEE/dstack/pull/595) bounds decompressed RA-TLS event-log extension size. Close as completed |
-| [#567](https://github.com/Dstack-TEE/dstack/issues/567) Unbounded allocation in `VecOf` decode | Open | Fixed | [#570](https://github.com/Dstack-TEE/dstack/pull/570) caps `VecOf` decode length and pre-allocation. Close as completed |
+| [#566](https://github.com/Dstack-TEE/dstack/issues/566) Gzip decompression bomb in RA-TLS cert extension | Open | Fixed | [#595](https://github.com/Dstack-TEE/dstack/pull/595) bounds decompressed RA-TLS event-log extension size |
+| [#567](https://github.com/Dstack-TEE/dstack/issues/567) Unbounded allocation in `VecOf` decode | Open | Fixed | [#570](https://github.com/Dstack-TEE/dstack/pull/570) caps `VecOf` decode length and pre-allocation |
 | [#568](https://github.com/Dstack-TEE/dstack/issues/568) Webhook URL leaked via `println!` in production code | Closed | Fixed | Fixed before the issue was triaged by removing the unsafe log output in `79b8b8d2` |
 | [#605](https://github.com/Dstack-TEE/dstack/issues/605) Guest agent derives identical key material for `ed25519` and `secp256k1` | Open | Accepted compatibility decision, docs-only | Existing derived key bytes are preserved. Docs state that `path` is the domain separator and callers must use algorithm-specific paths when they require independent keys |
 | [#606](https://github.com/Dstack-TEE/dstack/issues/606) App keys and decrypted env files world-readable | Open | Needs hardening | Tightening secret-bearing file writes to owner-only permissions (`0600`) is valid defense-in-depth work with no expected compatibility cost |

@@ -1,31 +1,15 @@
 # Security Documentation
 
-dstack security resources for auditors, researchers, and operators.
+Use these resources to understand dstack's trust model, production requirements, audit history, and public security report status.
 
-## Start Here
+## Resources
 
-- **Users and verifiers:** read the [Security Model](./security-model.md) to understand what dstack guarantees and what you must verify.
-- **Operators:** read [Security Best Practices](./security-best-practices.md) before deploying production KMS, gateway, or VMM services.
-- **Security researchers and AI agents:** report exploitable vulnerabilities through the private path in [SECURITY.md](../../SECURITY.md). For already-public findings or docs questions, check [Public Security Reports](./public-security-reports.md) before opening a public issue.
-- **Maintainers:** use [Public Security Reports](./public-security-reports.md) to classify public reports and close issues once the maintainer position is clear.
+- [Security Model](./security-model.md) - threat model, trust boundaries, and verifier checklist
+- [Security Best Practices](./security-best-practices.md) - production hardening for KMS, gateway, and VMM deployments
+- [Security Audit](./dstack-audit.pdf) - zkSecurity audit report
+- [Public Security Reports](./public-security-reports.md) - status of already-public reports and findings
+- [CVM Boundaries](./cvm-boundaries.md) - data exchanged across the CVM, host, KMS, and gateway
 
-## Audit
+## Report a Vulnerability
 
-dstack has been audited by zkSecurity. See the [full audit report](./dstack-audit.pdf).
-
-## Documentation
-
-- [Security Model](./security-model.md) - Threat model, trust boundaries, and verification checklist
-- [Security Best Practices](./security-best-practices.md) - Production hardening guide
-- [Public Security Reports](./public-security-reports.md) - Public status for security reports and related hardening work
-- [CVM Boundaries](./cvm-boundaries.md) - Information exchange and isolation details
-
-## Already Answered Reports
-
-Some public security reports describe real hardening work. Some describe behavior that is intentional for development or compatibility, and some are false positives under production configuration. The canonical list is [Public Security Reports](./public-security-reports.md). Search that page by issue number, component, or exact setting name before treating an old report as unresolved.
-
-## Report Vulnerabilities
-
-If you believe you found an exploitable vulnerability, use GitHub's private security reporting features as described in [SECURITY.md](../../SECURITY.md). If GitHub private reporting is unavailable, contact security@phala.network.
-
-Do not open GitHub issues for exploitable vulnerabilities.
+Do not disclose exploitable vulnerabilities in public GitHub issues. Use the private reporting path in [SECURITY.md](../../SECURITY.md). If GitHub private reporting is unavailable, contact security@phala.network.
