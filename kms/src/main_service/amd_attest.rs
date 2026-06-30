@@ -212,7 +212,7 @@ fn test_snp_measurement_document(
     )
     .into_bytes();
     Ok(dstack_mr::sev::SnpMeasurementDocument {
-        sha256sum,
+        checksum_file: sha256sum,
         measurement,
         vcpus: input.vcpus,
         vcpu_type: input.vcpu_type.clone(),
@@ -222,10 +222,10 @@ fn test_snp_measurement_document(
 
 #[cfg(test)]
 fn test_os_image_hash(input: &MeasurementInput) -> Result<Vec<u8>> {
-    Ok(
-        dstack_types::image_hash_from_sha256sum(&test_snp_measurement_document(input)?.sha256sum)
-            .to_vec(),
+    Ok(dstack_types::image_hash_from_sha256sum(
+        &test_snp_measurement_document(input)?.checksum_file,
     )
+    .to_vec())
 }
 
 #[cfg(test)]
@@ -551,14 +551,14 @@ mod tests {
         )
         .into_bytes();
         let document = dstack_mr::sev::SnpMeasurementDocument {
-            sha256sum,
+            checksum_file: sha256sum,
             measurement: measurement_cbor,
             vcpus: input.vcpus,
             vcpu_type: input.vcpu_type.clone(),
             guest_features: input.guest_features,
         };
         let vm_config = serde_json::json!({
-            "os_image_hash": hex::encode(dstack_types::image_hash_from_sha256sum(&document.sha256sum)),
+            "os_image_hash": hex::encode(dstack_types::image_hash_from_sha256sum(&document.checksum_file)),
             "sev_snp_measurement": serde_json::to_string(&document).unwrap(),
             "mr_config": mr_config.to_canonical_json(),
         })

@@ -331,12 +331,12 @@ fn sha256(bytes: &[u8]) -> [u8; 32] {
 pub const TDX_MEASUREMENT_FILENAME: &str = "measurement.tdx.cbor";
 pub const SNP_MEASUREMENT_FILENAME: &str = "measurement.snp.cbor";
 
-pub fn image_hash_from_sha256sum(sha256sum: &[u8]) -> [u8; 32] {
-    sha256(sha256sum)
+pub fn image_hash_from_sha256sum(checksum_file: &[u8]) -> [u8; 32] {
+    sha256(checksum_file)
 }
 
-pub fn sha256sum_entry_hash(sha256sum: &[u8], filename: &str) -> Result<[u8; 32], String> {
-    let text = std::str::from_utf8(sha256sum)
+pub fn sha256sum_entry_hash(checksum_file: &[u8], filename: &str) -> Result<[u8; 32], String> {
+    let text = std::str::from_utf8(checksum_file)
         .map_err(|e| format!("sha256sum.txt is not valid UTF-8: {e}"))?;
     let mut found = None;
     for (line_no, line) in text.lines().enumerate() {
@@ -377,18 +377,18 @@ pub fn sha256sum_entry_hash(sha256sum: &[u8], filename: &str) -> Result<[u8; 32]
 
 pub fn verify_measurement_material(
     os_image_hash: &[u8],
-    sha256sum: &[u8],
+    checksum_file: &[u8],
     measurement: &[u8],
     filename: &str,
 ) -> Result<(), String> {
-    if image_hash_from_sha256sum(sha256sum).as_slice() != os_image_hash {
+    if image_hash_from_sha256sum(checksum_file).as_slice() != os_image_hash {
         return Err(format!(
             "os_image_hash mismatch: expected sha256(sha256sum.txt)={}, actual={}",
             hex::encode(os_image_hash),
-            hex::encode(image_hash_from_sha256sum(sha256sum))
+            hex::encode(image_hash_from_sha256sum(checksum_file))
         ));
     }
-    let expected_measurement_hash = sha256sum_entry_hash(sha256sum, filename)?;
+    let expected_measurement_hash = sha256sum_entry_hash(checksum_file, filename)?;
     let actual_measurement_hash = sha256(measurement);
     if expected_measurement_hash != actual_measurement_hash {
         return Err(format!(
@@ -542,25 +542,25 @@ impl SevOsImageMeasurement {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SevOsImageMeasurementDocument {
-    /// Raw `sha256sum.txt` bytes. `sha256(sha256sum)` is the unified
-    /// `os_image_hash`.
-    #[serde(with = "hex_bytes")]
-    pub sha256sum: Vec<u8>,
+    /// Raw checksum file bytes (`sha256sum.txt`). `sha256(checksum_file)` is
+    /// the unified `os_image_hash`.
+    #[serde(with = "serde_human_bytes::base64")]
+    pub checksum_file: Vec<u8>,
     /// Raw bytes of `measurement.snp.cbor`.
-    #[serde(alias = "m", with = "hex_bytes")]
+    #[serde(with = "serde_human_bytes::base64")]
     pub measurement: Vec<u8>,
 }
 
 impl SevOsImageMeasurementDocument {
-    pub fn new(sha256sum: Vec<u8>, measurement: Vec<u8>) -> Self {
+    pub fn new(checksum_file: Vec<u8>, measurement: Vec<u8>) -> Self {
         Self {
-            sha256sum,
+            checksum_file,
             measurement,
         }
     }
 
-    pub fn from_measurement(sha256sum: Vec<u8>, measurement: SevOsImageMeasurement) -> Self {
-        Self::new(sha256sum, measurement.to_cbor_vec())
+    pub fn from_measurement(checksum_file: Vec<u8>, measurement: SevOsImageMeasurement) -> Self {
+        Self::new(checksum_file, measurement.to_cbor_vec())
     }
 
     pub fn decode_measurement(&self) -> Result<SevOsImageMeasurement, String> {
@@ -574,7 +574,7 @@ impl SevOsImageMeasurementDocument {
     pub fn verify(&self, os_image_hash: &[u8]) -> Result<(), String> {
         verify_measurement_material(
             os_image_hash,
-            &self.sha256sum,
+            &self.checksum_file,
             &self.measurement,
             SNP_MEASUREMENT_FILENAME,
         )
@@ -712,12 +712,12 @@ impl From<CborTdxOsImageMeasurement> for TdxOsImageMeasurement {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TdxOsImageMeasurementDocument {
-    /// Raw `sha256sum.txt` bytes. `sha256(sha256sum)` is the unified
-    /// `os_image_hash`.
-    #[serde(with = "hex_bytes")]
-    pub sha256sum: Vec<u8>,
+    /// Raw checksum file bytes (`sha256sum.txt`). `sha256(checksum_file)` is
+    /// the unified `os_image_hash`.
+    #[serde(with = "serde_human_bytes::base64")]
+    pub checksum_file: Vec<u8>,
     /// Raw bytes of `measurement.tdx.cbor`.
-    #[serde(alias = "m", with = "hex_bytes")]
+    #[serde(with = "serde_human_bytes::base64")]
     pub measurement: Vec<u8>,
 }
 
@@ -757,15 +757,15 @@ impl TdxOsImageMeasurement {
 }
 
 impl TdxOsImageMeasurementDocument {
-    pub fn new(sha256sum: Vec<u8>, measurement: Vec<u8>) -> Self {
+    pub fn new(checksum_file: Vec<u8>, measurement: Vec<u8>) -> Self {
         Self {
-            sha256sum,
+            checksum_file,
             measurement,
         }
     }
 
-    pub fn from_measurement(sha256sum: Vec<u8>, measurement: TdxOsImageMeasurement) -> Self {
-        Self::new(sha256sum, measurement.to_cbor_vec())
+    pub fn from_measurement(checksum_file: Vec<u8>, measurement: TdxOsImageMeasurement) -> Self {
+        Self::new(checksum_file, measurement.to_cbor_vec())
     }
 
     pub fn decode_measurement(&self) -> Result<TdxOsImageMeasurement, String> {
@@ -779,7 +779,7 @@ impl TdxOsImageMeasurementDocument {
     pub fn verify(&self, os_image_hash: &[u8]) -> Result<(), String> {
         verify_measurement_material(
             os_image_hash,
-            &self.sha256sum,
+            &self.checksum_file,
             &self.measurement,
             TDX_MEASUREMENT_FILENAME,
         )

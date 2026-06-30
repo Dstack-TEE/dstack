@@ -950,12 +950,12 @@ struct SevSnpMeasurementVmConfig {
     mr_config: Option<String>,
 }
 
-#[derive(Debug, serde::Deserialize, serde::Serialize)]
+#[derive(Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SnpMeasurementDocument {
-    #[serde(with = "serde_human_bytes")]
-    pub sha256sum: Vec<u8>,
-    #[serde(with = "serde_human_bytes")]
+    #[serde(with = "serde_human_bytes::base64")]
+    pub checksum_file: Vec<u8>,
+    #[serde(with = "serde_human_bytes::base64")]
     pub measurement: Vec<u8>,
     pub vcpus: u32,
     pub vcpu_type: Option<String>,
@@ -1002,7 +1002,7 @@ pub struct SnpLaunchInputs {
 }
 
 /// Parse the SNP launch-measurement inputs (`sev_snp_measurement`) and the
-/// `mr_config` document out of a VMM `vm_config` JSON string.
+/// `mr_config` document out of a VMM `vm_config` string.
 ///
 /// The fields are intentionally explicit so missing SNP launch inputs fail
 /// closed instead of falling back to TDX event-log decoding. Both the top-level
@@ -1040,7 +1040,7 @@ pub fn parse_snp_inputs_from_vm_config(vm_config: &str) -> Result<SnpLaunchInput
     let document: SnpMeasurementDocument = serde_json::from_str(&measurement_document)
         .context("invalid amd sev-snp measurement document")?;
     dstack_types::SevOsImageMeasurementDocument::new(
-        document.sha256sum.clone(),
+        document.checksum_file.clone(),
         document.measurement.clone(),
     )
     .verify(&os_image_hash)
@@ -1242,7 +1242,7 @@ mod tests {
         )
         .into_bytes();
         SnpMeasurementDocument {
-            sha256sum,
+            checksum_file: sha256sum,
             measurement,
             vcpus: input.vcpus,
             vcpu_type: input.vcpu_type.clone(),
@@ -1254,8 +1254,30 @@ mod tests {
         serde_json::to_string(&snp_document(input)).expect("measurement document serializes")
     }
 
+    #[test]
+    fn measurement_document_serializes_bytes_as_base64() {
+        let document = measurement_document(&valid_input());
+        let value: serde_json::Value =
+            serde_json::from_str(&document).expect("measurement document json");
+        let checksum_file = value["checksum_file"]
+            .as_str()
+            .expect("checksum_file string");
+        let measurement = value["measurement"].as_str().expect("measurement string");
+        assert!(
+            checksum_file.contains(|c: char| !c.is_ascii_hexdigit()),
+            "checksum_file should use base64, got {checksum_file}"
+        );
+        assert!(
+            measurement.contains(|c: char| !c.is_ascii_hexdigit()),
+            "measurement should use base64, got {measurement}"
+        );
+        let parsed: SnpMeasurementDocument =
+            serde_json::from_str(&document).expect("base64 document parses");
+        assert_eq!(parsed, snp_document(&valid_input()));
+    }
+
     fn os_image_hash(input: &MeasurementInput) -> Vec<u8> {
-        dstack_types::image_hash_from_sha256sum(&snp_document(input).sha256sum).to_vec()
+        dstack_types::image_hash_from_sha256sum(&snp_document(input).checksum_file).to_vec()
     }
 
     #[test]
@@ -1433,10 +1455,13 @@ mod tests {
         );
 
         let document = snp_document(&input);
-        let image_hash = dstack_types::image_hash_from_sha256sum(&document.sha256sum);
-        dstack_types::SevOsImageMeasurementDocument::new(document.sha256sum, document.measurement)
-            .verify(&image_hash)
-            .expect("fixture measurement material verifies against sha256sum.txt");
+        let image_hash = dstack_types::image_hash_from_sha256sum(&document.checksum_file);
+        dstack_types::SevOsImageMeasurementDocument::new(
+            document.checksum_file,
+            document.measurement,
+        )
+        .verify(&image_hash)
+        .expect("fixture measurement material verifies against sha256sum.txt");
     }
 
     // ---- Forged-quote / tampered-input coverage for `verify_sev_launch` ----

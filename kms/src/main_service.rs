@@ -658,7 +658,7 @@ mod tests {
         )
         .into_bytes();
         dstack_mr::sev::SnpMeasurementDocument {
-            sha256sum,
+            checksum_file: sha256sum,
             measurement,
             vcpus: input.vcpus,
             vcpu_type: input.vcpu_type.clone(),
@@ -672,7 +672,7 @@ mod tests {
     ) -> String {
         let document = snp_measurement_document(input);
         serde_json::json!({
-            "os_image_hash": hex::encode(dstack_types::image_hash_from_sha256sum(&document.sha256sum)),
+            "os_image_hash": hex::encode(dstack_types::image_hash_from_sha256sum(&document.checksum_file)),
             "sev_snp_measurement": serde_json::to_string(&document).unwrap(),
             "mr_config": mr_config.to_canonical_json(),
         })

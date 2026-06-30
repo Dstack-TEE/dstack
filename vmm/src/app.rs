@@ -1388,7 +1388,7 @@ fn make_vm_config(
             "amd sev-snp image is missing measurement.snp.cbor/sha256sum.txt measurement material",
         )?;
         let measurement = dstack_mr::sev::SnpMeasurementDocument {
-            sha256sum: image_measurement.sha256sum.clone(),
+            checksum_file: image_measurement.checksum_file.clone(),
             measurement: image_measurement.measurement.clone(),
             vcpus: effective_vcpus,
             vcpu_type: Some("EPYC-v4".to_string()),
@@ -1780,7 +1780,7 @@ mod tests {
         assert_eq!(image_measurement.sev_es_reset_eip, 0xffff_fff0u32);
         assert_eq!(image_measurement.ovmf_sections.len(), 4);
         dstack_types::SevOsImageMeasurementDocument::new(
-            measurement.sha256sum,
+            measurement.checksum_file,
             measurement.measurement,
         )
         .verify(&build_hash)

@@ -139,7 +139,7 @@ fn upgrade_snp_config_for_split_measurement(config: &str) -> String {
     let measurement_value: serde_json::Value =
         serde_json::from_str(&measurement_doc).expect("measurement json");
     if measurement_value.get("measurement").is_some()
-        && measurement_value.get("sha256sum").is_some()
+        && measurement_value.get("checksum_file").is_some()
     {
         return config.to_string();
     }
@@ -156,14 +156,14 @@ fn upgrade_snp_config_for_split_measurement(config: &str) -> String {
     )
     .into_bytes();
     let document = dstack_mr::sev::SnpMeasurementDocument {
-        sha256sum,
+        checksum_file: sha256sum,
         measurement,
         vcpus: input.vcpus,
         vcpu_type: input.vcpu_type,
         guest_features: input.guest_features,
     };
     value["os_image_hash"] = serde_json::Value::String(hex::encode(
-        dstack_types::image_hash_from_sha256sum(&document.sha256sum),
+        dstack_types::image_hash_from_sha256sum(&document.checksum_file),
     ));
     value["sev_snp_measurement"] =
         serde_json::Value::String(serde_json::to_string(&document).expect("serialize document"));
@@ -200,14 +200,14 @@ fn with_image_measurement(
         .expect("decode measurement.snp.cbor");
     f(&mut image);
     document.measurement = image.to_cbor_vec();
-    document.sha256sum = format!(
+    document.checksum_file = format!(
         "{}  {}\n",
         hex::encode(Sha256::digest(&document.measurement)),
         dstack_types::SNP_MEASUREMENT_FILENAME
     )
     .into_bytes();
     value["os_image_hash"] = serde_json::Value::String(hex::encode(
-        dstack_types::image_hash_from_sha256sum(&document.sha256sum),
+        dstack_types::image_hash_from_sha256sum(&document.checksum_file),
     ));
     value["sev_snp_measurement"] =
         serde_json::Value::String(serde_json::to_string(&document).expect("reserialize"));
