@@ -36,10 +36,9 @@ use super::upgrade_authority::BootInfo;
 // working. `allow(unused_imports)` because some are consumed only by tests.
 #[allow(unused_imports)]
 pub(crate) use dstack_mr::sev::{
-    compute_expected_measurement, parse_snp_inputs_from_vm_config, snp_measurement_os_image_hash,
-    snp_mr_aggregated_digest, validate_measurement_input, validate_snp_mr_config_binding,
-    MeasurementInput, OvmfSectionParam, SnpLaunchInputs, MAX_OVMF_METADATA_PAGES,
-    MAX_OVMF_SECTIONS, MAX_VCPUS,
+    compute_expected_measurement, parse_snp_inputs_from_vm_config, snp_mr_aggregated_digest,
+    validate_measurement_input, validate_snp_mr_config_binding, MeasurementInput, OvmfSectionParam,
+    SnpLaunchInputs, MAX_OVMF_METADATA_PAGES, MAX_OVMF_SECTIONS, MAX_VCPUS,
 };
 
 pub(crate) fn validate_amd_snp_measurement_binding(
@@ -77,8 +76,7 @@ pub(crate) fn build_amd_snp_boot_info(
 ) -> Result<BootInfo> {
     let mr_config = test_mr_config(vec![0x11; 20], vec![0x22; 32]);
     let mr_config_document = mr_config.to_canonical_json();
-    let measurement_document = serde_json::to_string(input)
-        .context("failed to serialize amd sev-snp measurement input")?;
+    let os_image_hash = test_os_image_hash(input)?;
     let host_data = MrConfigV3::snp_host_data_from_document(&mr_config_document);
     build_amd_snp_boot_info_with_tcb_status(
         verified_measurement,
@@ -87,7 +85,7 @@ pub(crate) fn build_amd_snp_boot_info(
         "UpToDate",
         &[],
         input,
-        &measurement_document,
+        &os_image_hash,
         &mr_config_document,
     )
 }
@@ -100,13 +98,12 @@ fn build_amd_snp_boot_info_with_tcb_status(
     tcb_status: &str,
     advisory_ids: &[String],
     input: &MeasurementInput,
-    measurement_document: &str,
+    os_image_hash: &[u8],
     mr_config_document: &str,
 ) -> Result<BootInfo> {
     validate_amd_snp_measurement_binding(verified_measurement, input)?;
     let mr_config = validate_snp_mr_config_binding(verified_host_data, mr_config_document)?;
 
-    let os_image_hash = snp_measurement_os_image_hash(measurement_document)?;
     let mr_system = Sha256::digest(verified_measurement).to_vec();
     let mr_aggregated = snp_mr_aggregated_digest(verified_measurement, verified_host_data);
     let key_provider_info = mr_config_key_provider_info(&mr_config)?;
@@ -114,7 +111,7 @@ fn build_amd_snp_boot_info_with_tcb_status(
     Ok(BootInfo {
         attestation_mode: AttestationMode::DstackAmdSevSnp,
         mr_aggregated,
-        os_image_hash,
+        os_image_hash: os_image_hash.to_vec(),
         mr_system,
         app_id: mr_config.app_id.clone(),
         compose_hash: mr_config.compose_hash.clone(),
@@ -136,8 +133,8 @@ fn build_amd_snp_boot_info_with_tcb_status(
 pub(crate) fn build_amd_snp_boot_info_from_verified_attestation(
     attestation: &VerifiedAttestation,
     input: &MeasurementInput,
-    measurement_document: &str,
     mr_config_document: &str,
+    os_image_hash: &[u8],
 ) -> Result<BootInfo> {
     let verified = attestation
         .report
@@ -150,7 +147,7 @@ pub(crate) fn build_amd_snp_boot_info_from_verified_attestation(
         verified.tcb_info.tcb_status(),
         &verified.advisory_ids,
         input,
-        measurement_document,
+        os_image_hash,
         mr_config_document,
     )
 }
@@ -166,14 +163,15 @@ pub(crate) fn build_amd_snp_boot_info_from_verified_attestation_and_vm_config(
 ) -> Result<BootInfo> {
     let SnpLaunchInputs {
         input,
-        measurement_document,
+        os_image_hash,
         mr_config_document,
+        ..
     } = parse_snp_inputs_from_vm_config(vm_config)?;
     build_amd_snp_boot_info_from_verified_attestation(
         attestation,
         &input,
-        &measurement_document,
         &mr_config_document,
+        &os_image_hash,
     )
 }
 
@@ -202,6 +200,51 @@ fn test_mr_config(app_id: Vec<u8>, compose_hash: Vec<u8>) -> MrConfigV3 {
 }
 
 #[cfg(test)]
+fn test_snp_measurement_document(
+    input: &MeasurementInput,
+) -> Result<dstack_mr::sev::SnpMeasurementDocument> {
+    let measurement = dstack_mr::sev::sev_os_image_measurement_from_input(input)?.to_cbor_vec();
+    let measurement_hash = Sha256::digest(&measurement);
+    let sha256sum = format!(
+        "{}  {}\n",
+        hex::encode(measurement_hash),
+        dstack_types::SNP_MEASUREMENT_FILENAME
+    )
+    .into_bytes();
+    Ok(dstack_mr::sev::SnpMeasurementDocument {
+        checksum_file: sha256sum,
+        measurement,
+        vcpus: input.vcpus,
+        vcpu_type: input.vcpu_type.clone(),
+        guest_features: input.guest_features,
+    })
+}
+
+#[cfg(test)]
+fn test_os_image_hash(input: &MeasurementInput) -> Result<Vec<u8>> {
+    Ok(dstack_types::image_hash_from_sha256sum(
+        &test_snp_measurement_document(input)?.checksum_file,
+    )
+    .to_vec())
+}
+
+#[cfg(test)]
+fn test_snp_measurement_document_json(input: &MeasurementInput) -> Result<String> {
+    serde_json::to_string(&test_snp_measurement_document(input)?)
+        .context("failed to serialize test SNP measurement document")
+}
+
+#[cfg(test)]
+fn test_vm_config(input: &MeasurementInput, mr_config: &MrConfigV3) -> Result<String> {
+    Ok(serde_json::json!({
+        "os_image_hash": hex::encode(test_os_image_hash(input)?),
+        "sev_snp_measurement": test_snp_measurement_document_json(input)?,
+        "mr_config": mr_config.to_canonical_json(),
+    })
+    .to_string())
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -212,7 +255,7 @@ mod tests {
     fn valid_input() -> MeasurementInput {
         let rootfs_hash = hex_of(0x33, 32);
         MeasurementInput {
-            base_cmdline: Some(format!("console=ttyS0 dstack.rootfs_hash={rootfs_hash}")),
+            base_cmdline: format!("console=ttyS0 dstack.rootfs_hash={rootfs_hash}"),
             ovmf_hash: hex_of(0x44, 48),
             kernel_hash: hex_of(0x55, 32),
             initrd_hash: hex_of(0x66, 32),
@@ -251,7 +294,7 @@ mod tests {
     }
 
     fn measurement_document(input: &MeasurementInput) -> String {
-        serde_json::to_string(input).expect("measurement input should serialize")
+        test_snp_measurement_document_json(input).expect("measurement input should serialize")
     }
 
     fn verified_snp_attestation(
@@ -327,10 +370,7 @@ mod tests {
         assert_eq!(boot_info.device_id, chip_id.to_vec());
         assert_eq!(boot_info.app_id, vec![0x11; 20]);
         assert_eq!(boot_info.compose_hash, vec![0x22; 32]);
-        assert_eq!(
-            boot_info.os_image_hash,
-            snp_measurement_os_image_hash(&measurement_document(&input)).unwrap()
-        );
+        assert_eq!(boot_info.os_image_hash, test_os_image_hash(&input).unwrap());
         assert_eq!(boot_info.mr_system.len(), 32);
         assert!(!boot_info.key_provider_info.is_empty());
         assert_eq!(boot_info.instance_id.len(), 20);
@@ -357,8 +397,8 @@ mod tests {
         let boot_info = build_amd_snp_boot_info_from_verified_attestation(
             &attestation,
             &input,
-            &measurement_document(&input),
             &mr_config_document,
+            &test_os_image_hash(&input)?,
         )
         .expect("verified snp attestation should feed boot info helper");
 
@@ -418,8 +458,8 @@ mod tests {
         let boot_info = build_amd_snp_boot_info_from_verified_attestation(
             &attestation,
             &input,
-            &measurement_document(&input),
             &mr_config_document,
+            &test_os_image_hash(&input)?,
         )
         .expect("verified snp attestation should feed boot info helper");
 
@@ -436,11 +476,7 @@ mod tests {
         let chip_id = [0xab; 64];
         let mr_config = valid_mr_config(&input)?;
         let attestation = verified_snp_attestation(verified, chip_id, &mr_config);
-        let vm_config = serde_json::json!({
-            "sev_snp_measurement": measurement_document(&input),
-            "mr_config": mr_config.to_canonical_json(),
-        })
-        .to_string();
+        let vm_config = test_vm_config(&input, &mr_config)?;
 
         let boot_info = build_amd_snp_boot_info_from_verified_attestation_and_vm_config(
             &attestation,
@@ -463,7 +499,7 @@ mod tests {
 
         let err = build_amd_snp_boot_info_from_verified_attestation_and_vm_config(
             &attestation,
-            r#"{"os_image_hash":"0x00"}"#,
+            &serde_json::json!({ "os_image_hash": hex::encode([0u8; 32]) }).to_string(),
         )
         .expect_err("missing sev_snp_measurement must fail closed");
         assert!(
@@ -475,10 +511,15 @@ mod tests {
 
     #[test]
     fn vm_config_measurement_parser_rejects_unknown_measurement_fields() {
-        let mut measurement = serde_json::to_value(valid_input()).unwrap();
+        let input = valid_input();
+        let mr_config = valid_mr_config(&input).unwrap();
+        let mut measurement =
+            serde_json::to_value(test_snp_measurement_document(&input).unwrap()).unwrap();
         measurement["unexpected"] = serde_json::json!(true);
         let vm_config = serde_json::json!({
+            "os_image_hash": hex::encode(test_os_image_hash(&input).unwrap()),
             "sev_snp_measurement": measurement.to_string(),
+            "mr_config": mr_config.to_canonical_json(),
         })
         .to_string();
 
@@ -492,20 +533,34 @@ mod tests {
 
     #[test]
     fn vm_config_measurement_parser_bounds_ovmf_sections_during_deserialization() {
-        let mut measurement = serde_json::to_value(valid_input()).unwrap();
-        measurement["ovmf_sections"] = serde_json::Value::Array(
-            (0..=MAX_OVMF_SECTIONS)
-                .map(|_| {
-                    serde_json::json!({
-                        "gpa": 0x100000u64,
-                        "size": 0x1000u64,
-                        "section_type": 1u32,
-                    })
-                })
-                .collect(),
-        );
+        let input = valid_input();
+        let mr_config = valid_mr_config(&input).unwrap();
+        let mut image = dstack_mr::sev::sev_os_image_measurement_from_input(&input).unwrap();
+        image.ovmf_sections = (0..=MAX_OVMF_SECTIONS)
+            .map(|_| dstack_types::OvmfSection {
+                gpa: 0x100000,
+                size: 0x1000,
+                section_type: 1,
+            })
+            .collect();
+        let measurement_cbor = image.to_cbor_vec();
+        let sha256sum = format!(
+            "{}  {}\n",
+            hex::encode(Sha256::digest(&measurement_cbor)),
+            dstack_types::SNP_MEASUREMENT_FILENAME
+        )
+        .into_bytes();
+        let document = dstack_mr::sev::SnpMeasurementDocument {
+            checksum_file: sha256sum,
+            measurement: measurement_cbor,
+            vcpus: input.vcpus,
+            vcpu_type: input.vcpu_type.clone(),
+            guest_features: input.guest_features,
+        };
         let vm_config = serde_json::json!({
-            "sev_snp_measurement": measurement.to_string(),
+            "os_image_hash": hex::encode(dstack_types::image_hash_from_sha256sum(&document.checksum_file)),
+            "sev_snp_measurement": serde_json::to_string(&document).unwrap(),
+            "mr_config": mr_config.to_canonical_json(),
         })
         .to_string();
 
@@ -548,8 +603,8 @@ mod tests {
         let err = build_amd_snp_boot_info_from_verified_attestation(
             &attestation,
             &input,
-            &measurement_document(&input),
             &mr_config_document,
+            &test_os_image_hash(&input)?,
         )
         .expect_err("non-snp verified attestation must reject");
         assert!(
@@ -567,7 +622,7 @@ mod tests {
         let chip_id = [0xcd; 64];
         let mr_config = test_mr_config(vec![0x11; 20], vec![0x22; 32]);
         let mr_config_document = mr_config.to_canonical_json();
-        let measurement_doc = measurement_document(&input);
+        let os_image_hash = test_os_image_hash(&input)?;
         let host_data = MrConfigV3::snp_host_data_from_document(&mr_config_document);
         let boot_info = build_amd_snp_boot_info_with_tcb_status(
             &verified,
@@ -576,7 +631,7 @@ mod tests {
             "UpToDate",
             &[],
             &input,
-            &measurement_doc,
+            &os_image_hash,
             &mr_config_document,
         )?;
 
@@ -596,7 +651,7 @@ mod tests {
             "UpToDate",
             &[],
             &input,
-            &measurement_doc,
+            &os_image_hash,
             &changed_mr_config_document,
         )?;
 
@@ -681,10 +736,7 @@ mod tests {
     #[test]
     fn rejects_empty_or_malformed_binding_hashes() {
         let mut input = valid_input();
-        input.base_cmdline = Some(format!(
-            "console=ttyS0 dstack.rootfs_hash={}",
-            hex_of(0x33, 31)
-        ));
+        input.base_cmdline = format!("console=ttyS0 dstack.rootfs_hash={}", hex_of(0x33, 31));
         assert_rejects(input, "dstack.rootfs_hash must be 32 bytes");
 
         let mut input = valid_input();

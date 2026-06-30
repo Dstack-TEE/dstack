@@ -2,13 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-//! AMD SEV-SNP launch-measurement recomputation and `os_image_hash` derivation.
+//! AMD SEV-SNP launch-measurement recomputation.
 //!
 //! This is the single source of truth shared by `dstack-kms` (key release) and
 //! `dstack-verifier` (attestation verification). It recomputes the expected SNP
 //! launch `MEASUREMENT` from self-contained launch inputs (the
-//! `sev_snp_measurement` document a VMM embeds in `vm_config`) and derives the
-//! image-invariant `os_image_hash`.
+//! `sev_snp_measurement` document a VMM embeds in `vm_config`).
 //!
 //! It deals only in primitive, hardware-verified values (`measurement`,
 //! `host_data`) so it can stay free of attestation/RA-TLS types and be reused by
@@ -50,7 +49,7 @@ pub struct OvmfSectionParam {
 #[serde(deny_unknown_fields)]
 pub struct MeasurementInput {
     /// Original image kernel cmdline used for SNP measured launch.
-    pub base_cmdline: Option<String>,
+    pub base_cmdline: String,
     /// 48-byte OVMF GCTX launch digest seed supplied by the VMM.
     pub ovmf_hash: String,
     /// 32-byte kernel SHA-256 hash.
@@ -116,7 +115,7 @@ pub fn validate_measurement_input(input: &MeasurementInput) -> Result<()> {
         bail!("guest_features must be non-zero");
     }
 
-    rootfs_hash_from_cmdline(input.base_cmdline.as_deref())?;
+    rootfs_hash_from_cmdline(Some(&input.base_cmdline))?;
     decode_required_hex("kernel_hash", &input.kernel_hash, 32)?;
     decode_optional_hex("initrd_hash", &input.initrd_hash, 32)?;
     if input.vcpus == 0 {
@@ -319,6 +318,17 @@ fn build_sev_hashes_page(
     let mut page = [0u8; 4096];
     page[page_offset..page_offset + TABLE_SIZE].copy_from_slice(&table);
     Ok(page)
+}
+
+fn measured_kernel_cmdline(input: &str) -> String {
+    input.trim().to_string()
+}
+
+fn effective_initrd_hash_from_hex(value: &str) -> Result<Vec<u8>> {
+    if value.is_empty() {
+        return Ok(Sha256::digest(b"").to_vec());
+    }
+    decode_required_hex("initrd_hash", value, 32)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -664,10 +674,7 @@ pub fn compute_expected_measurement(input: &MeasurementInput) -> Result<[u8; 48]
         .as_deref()
         .ok_or_else(|| anyhow::anyhow!("vcpu_type is required"))?;
 
-    let cmdline = match input.base_cmdline.as_deref() {
-        Some(base) if !base.trim().is_empty() => base.trim().to_string(),
-        _ => "console=ttyS0 loglevel=7".to_string(),
-    };
+    let cmdline = measured_kernel_cmdline(&input.base_cmdline);
     let resolved_sections = input
         .ovmf_sections
         .iter()
@@ -737,12 +744,15 @@ pub fn compute_expected_measurement(input: &MeasurementInput) -> Result<[u8; 48]
 fn sev_os_image_measurement(
     input: &MeasurementInput,
 ) -> Result<dstack_types::SevOsImageMeasurement> {
+    // Validate that the measured command line commits the rootfs identity. The
+    // compact image projection does not carry a separate rootfs_hash because it
+    // is already committed by `kernel_cmdline_sha256`.
+    rootfs_hash_from_cmdline(Some(&input.base_cmdline))?;
     Ok(dstack_types::SevOsImageMeasurement {
-        rootfs_hash: rootfs_hash_from_cmdline(input.base_cmdline.as_deref())?,
-        base_cmdline: input.base_cmdline.clone(),
-        ovmf_hash: input.ovmf_hash.clone(),
-        kernel_hash: input.kernel_hash.clone(),
-        initrd_hash: input.initrd_hash.clone(),
+        base_cmdline: measured_kernel_cmdline(&input.base_cmdline),
+        ovmf_hash: decode_required_hex("ovmf_hash", &input.ovmf_hash, 48)?,
+        kernel_hash: decode_required_hex("kernel_hash", &input.kernel_hash, 32)?,
+        initrd_hash: effective_initrd_hash_from_hex(&input.initrd_hash)?,
         sev_hashes_table_gpa: input.sev_hashes_table_gpa,
         sev_es_reset_eip: input.sev_es_reset_eip,
         ovmf_sections: input
@@ -757,20 +767,10 @@ fn sev_os_image_measurement(
     })
 }
 
-/// Derive the OS image hash from a self-contained SNP measurement document.
-///
-/// os_image_hash identifies the OS image only, so it covers exactly the
-/// image-determined measurement inputs and EXCLUDES per-deployment values
-/// (`vcpus`, `vcpu_type`, `guest_features`). Hashing the full
-/// `MeasurementInput` made the same image hash differently per vCPU count,
-/// which broke per-image on-chain allow-listing. App/config identity is bound
-/// separately by MrConfigV3/HOST_DATA. The canonical hashing lives in
-/// `dstack_types::SevOsImageMeasurement` so the image build can reproduce the
-/// same value as `digest.sev.txt`.
-pub fn snp_measurement_os_image_hash(measurement_document: &str) -> Result<Vec<u8>> {
-    let input: MeasurementInput = serde_json::from_str(measurement_document)
-        .context("failed to parse sev-snp measurement document for os_image_hash")?;
-    Ok(sev_os_image_measurement(&input)?.os_image_hash().to_vec())
+pub fn sev_os_image_measurement_from_input(
+    input: &MeasurementInput,
+) -> Result<dstack_types::SevOsImageMeasurement> {
+    sev_os_image_measurement(input)
 }
 
 /// OVMF launch-measurement metadata: the GCTX launch digest of the firmware
@@ -821,9 +821,9 @@ struct ImageMetadata {
     bios_sev: Option<String>,
 }
 
-fn file_sha256_hex(path: &Path) -> Result<String> {
+fn file_sha256(path: &Path) -> Result<Vec<u8>> {
     let data = fs::read(path).with_context(|| format!("cannot read {}", path.display()))?;
-    Ok(hex::encode(Sha256::digest(data)))
+    Ok(Sha256::digest(data).to_vec())
 }
 
 pub fn rootfs_hash_from_cmdline(cmdline: Option<&str>) -> Result<String> {
@@ -840,14 +840,12 @@ pub fn rootfs_hash_from_cmdline(cmdline: Option<&str>) -> Result<String> {
     )?))
 }
 
-/// Compute the AMD SEV-SNP `os_image_hash` from an OS image directory containing
-/// `metadata.json` plus the SEV firmware, kernel and initrd.
-///
-/// This is the canonical producer of `digest.sev.txt`. The value equals the
-/// `os_image_hash` the KMS and verifier derive from a hardware-verified launch
-/// measurement, because both go through [`snp_measurement_os_image_hash`] /
-/// `dstack_types::SevOsImageMeasurement`.
-pub fn sev_os_image_hash_for_image_dir(image_dir: &Path) -> Result<[u8; 32]> {
+/// Compute the AMD SEV-SNP image-invariant measurement projection from an OS
+/// image directory containing `metadata.json` plus the SEV firmware, kernel and
+/// initrd.
+pub fn sev_os_image_measurement_for_image_dir(
+    image_dir: &Path,
+) -> Result<dstack_types::SevOsImageMeasurement> {
     let meta_path = image_dir.join("metadata.json");
     let meta_str = fs::read_to_string(&meta_path)
         .with_context(|| format!("cannot read {}", meta_path.display()))?;
@@ -862,13 +860,20 @@ pub fn sev_os_image_hash_for_image_dir(image_dir: &Path) -> Result<[u8; 32]> {
         .or(meta.bios.as_deref())
         .context("bios-sev/bios is required for amd sev-snp os_image_hash")?;
     let ovmf = ovmf_measurement_info(&image_dir.join(bios))?;
+    // Validate that the measured command line commits the rootfs identity. The
+    // compact image projection does not carry a separate rootfs_hash because it
+    // is already committed by `kernel_cmdline_sha256`.
+    rootfs_hash_from_cmdline(meta.cmdline.as_deref())?;
 
-    let measurement = dstack_types::SevOsImageMeasurement {
-        rootfs_hash: rootfs_hash_from_cmdline(meta.cmdline.as_deref())?,
-        base_cmdline: meta.cmdline.as_deref().map(|c| c.trim().to_string()),
-        ovmf_hash: ovmf.ovmf_hash,
-        kernel_hash: file_sha256_hex(&image_dir.join(&meta.kernel))?,
-        initrd_hash: file_sha256_hex(&image_dir.join(&meta.initrd))?,
+    Ok(dstack_types::SevOsImageMeasurement {
+        base_cmdline: measured_kernel_cmdline(
+            meta.cmdline
+                .as_deref()
+                .context("metadata.json cmdline is required for amd sev-snp measurement")?,
+        ),
+        ovmf_hash: decode_required_hex("ovmf_hash", &ovmf.ovmf_hash, 48)?,
+        kernel_hash: file_sha256(&image_dir.join(&meta.kernel))?,
+        initrd_hash: file_sha256(&image_dir.join(&meta.initrd))?,
         sev_hashes_table_gpa: ovmf.sev_hashes_table_gpa,
         sev_es_reset_eip: ovmf.sev_es_reset_eip,
         ovmf_sections: ovmf
@@ -880,8 +885,17 @@ pub fn sev_os_image_hash_for_image_dir(image_dir: &Path) -> Result<[u8; 32]> {
                 section_type: s.section_type,
             })
             .collect(),
-    };
-    Ok(measurement.os_image_hash())
+    })
+}
+
+/// Compute the AMD SEV-SNP measurement-material hash from an OS image directory.
+pub fn sev_measurement_hash_for_image_dir(image_dir: &Path) -> Result<[u8; 32]> {
+    Ok(sev_os_image_measurement_for_image_dir(image_dir)?.measurement_hash())
+}
+
+/// Generate the raw `measurement.snp.cbor` bytes for an image directory.
+pub fn sev_os_image_measurement_cbor_for_image_dir(image_dir: &Path) -> Result<Vec<u8>> {
+    Ok(sev_os_image_measurement_for_image_dir(image_dir)?.to_cbor_vec())
 }
 
 /// `sha256(MEASUREMENT || HOST_DATA)` — the SNP aggregated identity digest.
@@ -930,21 +944,65 @@ pub fn validate_snp_mr_config_binding(
 
 #[derive(Debug, serde::Deserialize)]
 struct SevSnpMeasurementVmConfig {
+    #[serde(with = "serde_human_bytes", default)]
+    os_image_hash: Vec<u8>,
     sev_snp_measurement: Option<String>,
     mr_config: Option<String>,
+}
+
+#[derive(Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SnpMeasurementDocument {
+    #[serde(with = "serde_human_bytes::base64")]
+    pub checksum_file: Vec<u8>,
+    #[serde(with = "serde_human_bytes::base64")]
+    pub measurement: Vec<u8>,
+    pub vcpus: u32,
+    pub vcpu_type: Option<String>,
+    pub guest_features: u64,
+}
+
+pub fn measurement_input_from_snp_document(
+    document: &SnpMeasurementDocument,
+) -> Result<MeasurementInput> {
+    let image = dstack_types::SevOsImageMeasurement::from_cbor_slice(&document.measurement)
+        .map_err(anyhow::Error::msg)
+        .context("invalid measurement.snp.cbor")?;
+    Ok(MeasurementInput {
+        base_cmdline: image.base_cmdline,
+        ovmf_hash: hex::encode(image.ovmf_hash),
+        kernel_hash: hex::encode(image.kernel_hash),
+        initrd_hash: hex::encode(image.initrd_hash),
+        sev_hashes_table_gpa: image.sev_hashes_table_gpa,
+        sev_es_reset_eip: image.sev_es_reset_eip,
+        vcpus: document.vcpus,
+        vcpu_type: document.vcpu_type.clone(),
+        guest_features: document.guest_features,
+        ovmf_sections: image
+            .ovmf_sections
+            .into_iter()
+            .map(|s| OvmfSectionParam {
+                gpa: s.gpa,
+                size: s.size,
+                section_type: s.section_type,
+            })
+            .collect(),
+    })
 }
 
 /// Launch inputs extracted from a VMM-produced `vm_config` string.
 pub struct SnpLaunchInputs {
     pub input: MeasurementInput,
-    /// Raw `sev_snp_measurement` document used for os_image_hash derivation.
+    /// Raw `sev_snp_measurement` document carried by vm_config.
     pub measurement_document: String,
+    /// Unified OS image hash from vm_config: `sha256(sha256sum.txt)`.
+    pub os_image_hash: Vec<u8>,
     /// Raw MrConfigV3 document bound by HOST_DATA.
     pub mr_config_document: String,
 }
 
 /// Parse the SNP launch-measurement inputs (`sev_snp_measurement`) and the
-/// `mr_config` document out of a VMM `vm_config` JSON string.
+/// `mr_config` document out of a VMM `vm_config` string.
 ///
 /// The fields are intentionally explicit so missing SNP launch inputs fail
 /// closed instead of falling back to TDX event-log decoding. Both the top-level
@@ -970,8 +1028,26 @@ pub fn parse_snp_inputs_from_vm_config(vm_config: &str) -> Result<SnpLaunchInput
                 .and_then(|nested| nested.sev_snp_measurement.clone())
         })
         .ok_or_else(|| anyhow::anyhow!("sev_snp_measurement is required for amd sev-snp"))?;
-    let input: MeasurementInput = serde_json::from_str(&measurement_document)
+    let os_image_hash = if !parsed.os_image_hash.is_empty() {
+        parsed.os_image_hash
+    } else {
+        nested
+            .as_ref()
+            .map(|nested| nested.os_image_hash.clone())
+            .filter(|hash| !hash.is_empty())
+            .ok_or_else(|| anyhow::anyhow!("os_image_hash is required for amd sev-snp"))?
+    };
+    let document: SnpMeasurementDocument = serde_json::from_str(&measurement_document)
         .context("invalid amd sev-snp measurement document")?;
+    dstack_types::SevOsImageMeasurementDocument::new(
+        document.checksum_file.clone(),
+        document.measurement.clone(),
+    )
+    .verify(&os_image_hash)
+    .map_err(anyhow::Error::msg)
+    .context("amd sev-snp measurement material does not match os_image_hash")?;
+    let input = measurement_input_from_snp_document(&document)?;
+    validate_measurement_input(&input)?;
     let mr_config_document = parsed
         .mr_config
         .or_else(|| nested.and_then(|nested| nested.mr_config))
@@ -981,6 +1057,7 @@ pub fn parse_snp_inputs_from_vm_config(vm_config: &str) -> Result<SnpLaunchInput
     Ok(SnpLaunchInputs {
         input,
         measurement_document,
+        os_image_hash,
         mr_config_document,
     })
 }
@@ -988,8 +1065,8 @@ pub fn parse_snp_inputs_from_vm_config(vm_config: &str) -> Result<SnpLaunchInput
 /// The verified SNP image binding produced by [`verify_sev_launch`].
 #[derive(Debug, Clone)]
 pub struct SevImageBinding {
-    /// Image-invariant os_image_hash derived from the (now measurement-bound)
-    /// launch inputs.
+    /// Unified os_image_hash from vm_config after verifying it matches
+    /// sha256(sha256sum.txt) and commits to measurement.snp.cbor.
     pub os_image_hash: Vec<u8>,
     /// App/config identity bound by HOST_DATA.
     pub mr_config: MrConfigV3,
@@ -1004,7 +1081,8 @@ pub struct SevImageBinding {
 ///   2. recomputes the launch measurement and checks it equals `measurement`
 ///      (this is what makes the otherwise-untrusted launch inputs trustworthy),
 ///   3. checks `HOST_DATA` binds the `mr_config` document, and
-///   4. derives the image-invariant `os_image_hash`.
+///   4. returns the unified `os_image_hash` after checking it commits to the
+///      supplied `sha256sum.txt` and `measurement.snp.cbor`.
 pub fn verify_sev_launch(
     verified_measurement: &[u8; 48],
     verified_host_data: &[u8; 32],
@@ -1017,9 +1095,8 @@ pub fn verify_sev_launch(
         bail!("amd sev-snp measurement mismatch");
     }
     let mr_config = validate_snp_mr_config_binding(verified_host_data, &inputs.mr_config_document)?;
-    let os_image_hash = snp_measurement_os_image_hash(&inputs.measurement_document)?;
     Ok(SevImageBinding {
-        os_image_hash,
+        os_image_hash: inputs.os_image_hash,
         mr_config,
     })
 }
@@ -1120,7 +1197,7 @@ mod tests {
     fn valid_input() -> MeasurementInput {
         let rootfs_hash = hex_of(0x33, 32);
         MeasurementInput {
-            base_cmdline: Some(format!("console=ttyS0 dstack.rootfs_hash={rootfs_hash}")),
+            base_cmdline: format!("console=ttyS0 dstack.rootfs_hash={rootfs_hash}"),
             ovmf_hash: hex_of(0x44, 48),
             kernel_hash: hex_of(0x55, 32),
             initrd_hash: hex_of(0x66, 32),
@@ -1154,8 +1231,77 @@ mod tests {
         }
     }
 
+    fn snp_document(input: &MeasurementInput) -> SnpMeasurementDocument {
+        let measurement = sev_os_image_measurement_from_input(input)
+            .expect("image measurement")
+            .to_cbor_vec();
+        let sha256sum = format!(
+            "{}  {}\n",
+            hex::encode(Sha256::digest(&measurement)),
+            dstack_types::SNP_MEASUREMENT_FILENAME
+        )
+        .into_bytes();
+        SnpMeasurementDocument {
+            checksum_file: sha256sum,
+            measurement,
+            vcpus: input.vcpus,
+            vcpu_type: input.vcpu_type.clone(),
+            guest_features: input.guest_features,
+        }
+    }
+
     fn measurement_document(input: &MeasurementInput) -> String {
-        serde_json::to_string(input).expect("measurement input should serialize")
+        serde_json::to_string(&snp_document(input)).expect("measurement document serializes")
+    }
+
+    #[test]
+    fn measurement_document_serializes_bytes_as_base64() {
+        let document = measurement_document(&valid_input());
+        let value: serde_json::Value =
+            serde_json::from_str(&document).expect("measurement document json");
+        let checksum_file = value["checksum_file"]
+            .as_str()
+            .expect("checksum_file string");
+        let measurement = value["measurement"].as_str().expect("measurement string");
+        assert!(
+            checksum_file.contains(|c: char| !c.is_ascii_hexdigit()),
+            "checksum_file should use base64, got {checksum_file}"
+        );
+        assert!(
+            measurement.contains(|c: char| !c.is_ascii_hexdigit()),
+            "measurement should use base64, got {measurement}"
+        );
+        let parsed: SnpMeasurementDocument =
+            serde_json::from_str(&document).expect("base64 document parses");
+        assert_eq!(parsed, snp_document(&valid_input()));
+    }
+
+    fn os_image_hash(input: &MeasurementInput) -> Vec<u8> {
+        dstack_types::image_hash_from_sha256sum(&snp_document(input).checksum_file).to_vec()
+    }
+
+    #[test]
+    fn measurement_input_requires_base_cmdline() {
+        let mut value = serde_json::to_value(valid_input()).expect("serialize measurement input");
+        value
+            .as_object_mut()
+            .expect("measurement input is an object")
+            .remove("base_cmdline");
+        let err = serde_json::from_value::<MeasurementInput>(value)
+            .expect_err("missing base_cmdline must reject");
+        assert!(
+            err.to_string().contains("missing field `base_cmdline`"),
+            "unexpected error: {err:?}"
+        );
+
+        let mut input = valid_input();
+        input.base_cmdline = "   ".to_string();
+        let err =
+            validate_measurement_input(&input).expect_err("empty measured cmdline must reject");
+        assert!(
+            err.to_string().contains("dstack.rootfs_hash is required"),
+            "unexpected error: {err:?}"
+        );
     }
 
     #[test]
@@ -1178,25 +1324,20 @@ mod tests {
     }
 
     #[test]
-    fn snp_os_image_hash_covers_image_fields_only() {
+    fn unified_os_image_hash_covers_sha256sum_entries() {
         let input = valid_input();
-        let os_image_hash =
-            |i: &MeasurementInput| snp_measurement_os_image_hash(&measurement_document(i)).unwrap();
         let baseline = os_image_hash(&input);
 
         // Image-determined fields MUST change the os_image_hash.
         let image_cases: Vec<(&str, fn(&mut MeasurementInput))> = vec![
             ("base_cmdline.rootfs_hash", |i| {
-                i.base_cmdline = Some(format!(
-                    "console=ttyS0 dstack.rootfs_hash={}",
-                    hex_of(0x34, 32)
-                ))
+                i.base_cmdline = format!("console=ttyS0 dstack.rootfs_hash={}", hex_of(0x34, 32))
             }),
             ("base_cmdline", |i| {
-                i.base_cmdline = Some(format!(
+                i.base_cmdline = format!(
                     "console=ttyS0 loglevel=8 dstack.rootfs_hash={}",
                     hex_of(0x33, 32)
-                ))
+                )
             }),
             ("ovmf_hash", |i| i.ovmf_hash = hex_of(0x45, 48)),
             ("kernel_hash", |i| i.kernel_hash = hex_of(0x56, 32)),
@@ -1219,8 +1360,8 @@ mod tests {
             );
         }
 
-        // Per-deployment fields MUST NOT change the os_image_hash (the same OS
-        // image must hash identically regardless of vCPU count, CPU model, etc.).
+        // Per-deployment fields MUST NOT change the os_image_hash because they
+        // are outside measurement.snp.cbor and sha256sum.txt.
         let deployment_cases: Vec<(&str, fn(&mut MeasurementInput))> = vec![
             ("vcpus", |i| i.vcpus = 3),
             ("vcpu_type", |i| {
@@ -1300,7 +1441,7 @@ mod tests {
     const REAL_MEASUREMENT_DOC: &str = r#"{"base_cmdline":"console=ttyS0 init=/init panic=1 net.ifnames=0 biosdevname=0 mce=off oops=panic pci=noearly pci=nommconf random.trust_cpu=y random.trust_bootloader=n tsc=reliable no-kvmclock dstack.rootfs_hash=ca5adaef0ac3a36108035925763b48a5818f634e700fbaab561d419fd30d7121 dstack.rootfs_size=490713088","ovmf_hash":"ffb57e393469a497c0e3b07bd1c97d8611e555f464d14491837665893ac642b263a71f9507ff100a847897fe0c3f8c6f","kernel_hash":"dd9ea274ce9a07090b22e8284b0c841b65c021c2d15ca57d0f16731089dd226c","initrd_hash":"5f844c4a2ca5a3d0711b3db38293b21ba929bb8e0b3c5bc1a779a57f69221c19","sev_hashes_table_gpa":8457216,"sev_es_reset_eip":8433668,"vcpus":2,"vcpu_type":"EPYC-v4","guest_features":1,"ovmf_sections":[{"gpa":8388608,"size":36864,"section_type":1},{"gpa":8429568,"size":12288,"section_type":1},{"gpa":8441856,"size":4096,"section_type":2},{"gpa":8445952,"size":4096,"section_type":3},{"gpa":8450048,"size":4096,"section_type":4},{"gpa":8458240,"size":61440,"section_type":1},{"gpa":8454144,"size":4096,"section_type":16}]}"#;
 
     #[test]
-    fn real_fixture_recomputes_measurement_and_os_image_hash() {
+    fn real_fixture_recomputes_measurement() {
         let input: MeasurementInput =
             serde_json::from_str(REAL_MEASUREMENT_DOC).expect("real measurement doc parses");
         validate_measurement_input(&input).expect("real measurement input is valid");
@@ -1313,14 +1454,14 @@ mod tests {
             "7f51e17f72a04d5422cb2c00998166536019a217376f3aa45a630e59c805a599847ff250dbffcd07e1ba639771d6f05d",
         );
 
-        // os_image_hash derived from the same document must match the value the
-        // CVM advertised in its vm_config (and digest.sev.txt).
-        let os_image_hash =
-            snp_measurement_os_image_hash(REAL_MEASUREMENT_DOC).expect("derive os_image_hash");
-        assert_eq!(
-            hex::encode(os_image_hash),
-            "32b4767373ad7fa0f9c418925006194d5c3f5619529f309fe81156789fecd8bc",
-        );
+        let document = snp_document(&input);
+        let image_hash = dstack_types::image_hash_from_sha256sum(&document.checksum_file);
+        dstack_types::SevOsImageMeasurementDocument::new(
+            document.checksum_file,
+            document.measurement,
+        )
+        .verify(&image_hash)
+        .expect("fixture measurement material verifies against sha256sum.txt");
     }
 
     // ---- Forged-quote / tampered-input coverage for `verify_sev_launch` ----
@@ -1343,7 +1484,8 @@ mod tests {
 
     fn synthetic_vm_config(input: &MeasurementInput, mr_config: &MrConfigV3) -> String {
         serde_json::json!({
-            "sev_snp_measurement": serde_json::to_string(input).expect("serialize input"),
+            "os_image_hash": hex::encode(os_image_hash(input)),
+            "sev_snp_measurement": measurement_document(input),
             "mr_config": mr_config.to_canonical_json(),
         })
         .to_string()
@@ -1365,10 +1507,7 @@ mod tests {
         let (input, mr_config, measurement, host_data, vm_config) = honest_case();
         let binding = verify_sev_launch(&measurement, &host_data, &vm_config)
             .expect("honest launch verifies");
-        assert_eq!(
-            binding.os_image_hash,
-            snp_measurement_os_image_hash(&serde_json::to_string(&input).unwrap()).unwrap()
-        );
+        assert_eq!(binding.os_image_hash, os_image_hash(&input));
         assert_eq!(binding.mr_config.app_id, mr_config.app_id);
     }
 
@@ -1407,10 +1546,10 @@ mod tests {
         let (input, mr_config, measurement, host_data, _vm_config) = honest_case();
         let cases: Vec<(&str, fn(&mut MeasurementInput))> = vec![
             ("base_cmdline", |i| {
-                i.base_cmdline = Some(format!(
+                i.base_cmdline = format!(
                     "console=ttyS0 evil=1 dstack.rootfs_hash={}",
                     hex_of(0x33, 32)
-                ))
+                )
             }),
             ("ovmf_hash", |i| i.ovmf_hash = hex_of(0x99, 48)),
             ("kernel_hash", |i| i.kernel_hash = hex_of(0x99, 32)),
@@ -1453,10 +1592,7 @@ mod tests {
             .expect("honest launch verifies");
 
         let mut tampered = input.clone();
-        tampered.base_cmdline = Some(format!(
-            "console=ttyS0 dstack.rootfs_hash={}",
-            hex_of(0x99, 32)
-        ));
+        tampered.base_cmdline = format!("console=ttyS0 dstack.rootfs_hash={}", hex_of(0x99, 32));
         let tampered_vm = synthetic_vm_config(&tampered, &mr_config);
         let err = verify_sev_launch(&measurement, &host_data, &tampered_vm)
             .expect_err("tampered rootfs hash in cmdline must not verify");
@@ -1464,8 +1600,7 @@ mod tests {
             err.to_string().contains("amd sev-snp measurement mismatch"),
             "unexpected error: {err:?}"
         );
-        let tampered_hash =
-            snp_measurement_os_image_hash(&serde_json::to_string(&tampered).unwrap()).unwrap();
+        let tampered_hash = os_image_hash(&tampered);
         assert_ne!(
             honest.os_image_hash, tampered_hash,
             "a tampered rootfs hash must change the derived os_image_hash"
@@ -1512,23 +1647,24 @@ mod tests {
     }
 
     #[test]
-    fn verify_sev_launch_ignores_advertised_os_image_hash() {
-        // The os_image_hash is derived from the measurement-bound inputs; a
-        // top-level attacker-advertised os_image_hash is ignored entirely.
+    fn verify_sev_launch_rejects_bad_advertised_os_image_hash() {
+        // The advertised os_image_hash must equal sha256(sha256sum.txt), and
+        // sha256sum.txt must commit to measurement.snp.cbor.
         let (input, mr_config, measurement, host_data, _vm) = honest_case();
         let bogus = vec![0xde; 32];
         let vm_config = serde_json::json!({
             "os_image_hash": hex::encode(&bogus),
-            "sev_snp_measurement": serde_json::to_string(&input).unwrap(),
+            "sev_snp_measurement": measurement_document(&input),
             "mr_config": mr_config.to_canonical_json(),
         })
         .to_string();
-        let binding = verify_sev_launch(&measurement, &host_data, &vm_config)
-            .expect("bogus advertised os_image_hash is ignored, not fatal");
-        let expected =
-            snp_measurement_os_image_hash(&serde_json::to_string(&input).unwrap()).unwrap();
-        assert_eq!(binding.os_image_hash, expected);
-        assert_ne!(binding.os_image_hash, bogus);
+        let err = verify_sev_launch(&measurement, &host_data, &vm_config)
+            .expect_err("bogus advertised os_image_hash must reject");
+        assert!(
+            err.to_string()
+                .contains("amd sev-snp measurement material does not match os_image_hash"),
+            "unexpected error: {err:?}"
+        );
     }
 
     #[test]
@@ -1537,14 +1673,12 @@ mod tests {
         // image's inputs: the booted image's MEASUREMENT differs from the
         // advertised inputs' recomputed measurement.
         let honest = valid_input();
-        let honest_hash =
-            snp_measurement_os_image_hash(&serde_json::to_string(&honest).unwrap()).unwrap();
+        let honest_hash = os_image_hash(&honest);
 
         let mut malicious = honest.clone();
         malicious.kernel_hash = hex_of(0xab, 32); // different kernel == different image
         let malicious_measurement = compute_expected_measurement(&malicious).unwrap();
-        let malicious_hash =
-            snp_measurement_os_image_hash(&serde_json::to_string(&malicious).unwrap()).unwrap();
+        let malicious_hash = os_image_hash(&malicious);
         assert_ne!(
             honest_hash, malicious_hash,
             "different image must hash differently"
@@ -1576,9 +1710,11 @@ mod tests {
             "unexpected error: {err:?}"
         );
 
-        let no_mr_config =
-            serde_json::json!({ "sev_snp_measurement": serde_json::to_string(&input).unwrap() })
-                .to_string();
+        let no_mr_config = serde_json::json!({
+            "os_image_hash": hex::encode(os_image_hash(&input)),
+            "sev_snp_measurement": measurement_document(&input)
+        })
+        .to_string();
         let err = verify_sev_launch(&measurement, &host_data, &no_mr_config)
             .expect_err("missing mr_config must fail closed");
         assert!(

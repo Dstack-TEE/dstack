@@ -45,6 +45,12 @@ use_mrconfigid = true
 #qemu_version = ""
 qemu_pci_hole64_size = 0
 qemu_hotplug_off = false
+# TDX attestation/hash scheme policy:
+# - "legacy": digest.txt + legacy verifier
+# - "lite": digest.txt + measurement.tdx.cbor + no-QEMU verifier
+# - "auto": legacy for CVM memory below 3 GiB except exactly 2 GiB; otherwise
+#   lite when the image supports it, legacy when it does not.
+tdx_attestation_variant = "auto"
 
 host_share_mode = "9p"
 

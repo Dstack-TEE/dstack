@@ -17,16 +17,17 @@ pub type RtmrLogs = [RtmrLog; 3];
 mod acpi;
 mod kernel;
 mod machine;
+pub mod measurement;
 mod num;
 pub mod sev;
 mod tdvf;
-mod uefi_var;
+pub mod tdx;
 mod util;
 
-/// Pick the OVMF variant for a given dstack OS version string ("MAJOR.MINOR.PATCH").
+/// Return the supported OVMF variant for a dstack OS version string ("MAJOR.MINOR.PATCH").
 ///
-/// Treats `0.5.10 <= v < 0.6.0` and `v >= 0.6.1` as `Stable202505`, everything else as
-/// `Pre202505`. Used as a fallback when `VmConfig::ovmf_variant` is absent.
+/// The version is still parsed for compatibility with callers that validate the
+/// OS version through this helper, but all valid versions use `Pre202505`.
 pub fn ovmf_variant_for_version(version: &str) -> Result<OvmfVariant> {
     let parts: Vec<u32> = version
         .split('.')
@@ -38,13 +39,7 @@ pub fn ovmf_variant_for_version(version: &str) -> Result<OvmfVariant> {
     if parts.len() != 3 {
         bail!("expected MAJOR.MINOR.PATCH, got {version}");
     }
-    let v = (parts[0], parts[1], parts[2]);
-    let stable = ((0, 5, 10)..(0, 6, 0)).contains(&v) || v >= (0, 6, 1);
-    Ok(if stable {
-        OvmfVariant::Stable202505
-    } else {
-        OvmfVariant::Pre202505
-    })
+    Ok(OvmfVariant::Pre202505)
 }
 
 /// Extract the `MAJOR.MINOR.PATCH` version suffix from a dstack image name.
@@ -55,7 +50,7 @@ pub fn ovmf_variant_for_version(version: &str) -> Result<OvmfVariant> {
 ///
 /// The optional `.SUFFIX` is permitted to be non-numeric (pre-release tag,
 /// build label, etc.) and is dropped from the returned slice — only the
-/// numeric `X.Y.Z` is needed to pick the OVMF variant.
+/// numeric `X.Y.Z` is needed to validate the image version.
 ///
 /// Returns `None` when the segment after the last `-` is not at least a valid
 /// `X.Y.Z` triple of non-empty numeric components.
@@ -77,7 +72,7 @@ pub fn extract_version_from_image_name(image: &str) -> Option<&str> {
     Some(&tail[..core_len])
 }
 
-/// Pick the OVMF variant from an image name like `dstack-0.5.10`.
+/// Return the supported OVMF variant from an image name like `dstack-0.5.10`.
 ///
 /// Falls back to `OvmfVariant::default()` (= `Pre202505`) when the image name is
 /// missing or doesn't carry a parseable version suffix. Use this only as a
@@ -94,22 +89,14 @@ mod ovmf_variant_tests {
     use super::*;
 
     #[test]
-    fn pre_202505_for_old_versions() {
-        for v in ["0.4.99", "0.5.7", "0.5.8", "0.5.9", "0.6.0"] {
+    fn pre_202505_for_all_versions() {
+        for v in [
+            "0.4.99", "0.5.7", "0.5.8", "0.5.9", "0.5.10", "0.5.99", "0.6.0", "0.6.1", "0.6.2",
+            "0.7.0", "1.0.0",
+        ] {
             assert_eq!(
                 ovmf_variant_for_version(v).unwrap(),
                 OvmfVariant::Pre202505,
-                "{v}"
-            );
-        }
-    }
-
-    #[test]
-    fn stable_202505_for_new_versions() {
-        for v in ["0.5.10", "0.5.99", "0.6.1", "0.6.2", "0.7.0", "1.0.0"] {
-            assert_eq!(
-                ovmf_variant_for_version(v).unwrap(),
-                OvmfVariant::Stable202505,
                 "{v}"
             );
         }
@@ -177,11 +164,11 @@ mod ovmf_variant_tests {
         );
         assert_eq!(
             ovmf_variant_for_image(Some("dstack-0.5.10")),
-            OvmfVariant::Stable202505
+            OvmfVariant::Pre202505
         );
         assert_eq!(
             ovmf_variant_for_image(Some("dstack-nvidia-dev-0.6.1")),
-            OvmfVariant::Stable202505
+            OvmfVariant::Pre202505
         );
     }
 
@@ -192,12 +179,8 @@ mod ovmf_variant_tests {
             "\"pre202505\""
         );
         assert_eq!(
-            serde_json::to_string(&OvmfVariant::Stable202505).unwrap(),
-            "\"stable202505\""
-        );
-        assert_eq!(
-            serde_json::from_str::<OvmfVariant>("\"stable202505\"").unwrap(),
-            OvmfVariant::Stable202505
+            serde_json::from_str::<OvmfVariant>("\"pre202505\"").unwrap(),
+            OvmfVariant::Pre202505
         );
     }
 }

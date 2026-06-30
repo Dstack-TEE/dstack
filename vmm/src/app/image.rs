@@ -7,6 +7,10 @@ use path_absolutize::Absolutize;
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
+use dstack_types::{
+    SevOsImageMeasurementDocument, TdxOsImageMeasurementDocument, SNP_MEASUREMENT_FILENAME,
+    TDX_MEASUREMENT_FILENAME,
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -71,10 +75,10 @@ pub struct Image {
     pub bios: Option<PathBuf>,
     pub bios_sev: Option<PathBuf>,
     pub digest: Option<String>,
-    /// AMD SEV-SNP os_image_hash, read from `digest.sev.txt` (produced at image
-    /// build time by `dstack-mr sev-os-image-hash`). The VMM does not recompute
-    /// it; the deploy path reads this value directly.
-    pub sev_digest: Option<String>,
+    /// TDX no-image-download measurement material.
+    pub tdx_measurement: Option<TdxOsImageMeasurementDocument>,
+    /// AMD SEV-SNP no-image-download measurement material.
+    pub sev_measurement: Option<SevOsImageMeasurementDocument>,
 }
 
 impl Image {
@@ -103,10 +107,47 @@ impl Image {
         let digest = fs::read_to_string(base_path.join("digest.txt"))
             .ok()
             .map(|s| s.trim().to_string());
-        let sev_digest = fs::read_to_string(base_path.join("digest.sev.txt"))
-            .ok()
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty());
+        let sha256sum_path = base_path.join("sha256sum.txt");
+        let sha256sum = if sha256sum_path.exists() {
+            Some(
+                fs::read(&sha256sum_path)
+                    .with_context(|| format!("failed to read {}", sha256sum_path.display()))?,
+            )
+        } else {
+            None
+        };
+        let tdx_path = base_path.join(TDX_MEASUREMENT_FILENAME);
+        let tdx_cbor = if tdx_path.exists() {
+            Some(
+                fs::read(&tdx_path)
+                    .with_context(|| format!("failed to read {}", tdx_path.display()))?,
+            )
+        } else {
+            None
+        };
+        let tdx_measurement = match (&sha256sum, tdx_cbor) {
+            (Some(sha256sum), Some(measurement)) => Some(TdxOsImageMeasurementDocument::new(
+                sha256sum.clone(),
+                measurement,
+            )),
+            _ => None,
+        };
+        let snp_path = base_path.join(SNP_MEASUREMENT_FILENAME);
+        let snp_cbor = if snp_path.exists() {
+            Some(
+                fs::read(&snp_path)
+                    .with_context(|| format!("failed to read {}", snp_path.display()))?,
+            )
+        } else {
+            None
+        };
+        let sev_measurement = match (&sha256sum, snp_cbor) {
+            (Some(sha256sum), Some(measurement)) => Some(SevOsImageMeasurementDocument::new(
+                sha256sum.clone(),
+                measurement,
+            )),
+            _ => None,
+        };
         if info.version.is_empty() {
             // Older images does not have version field. Fallback to the version of the image folder name
             info.version = guess_version(&base_path).unwrap_or_default();
@@ -120,7 +161,8 @@ impl Image {
             bios,
             bios_sev,
             digest,
-            sev_digest,
+            tdx_measurement,
+            sev_measurement,
         }
         .ensure_exists()
     }

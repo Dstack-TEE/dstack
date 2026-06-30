@@ -10,9 +10,10 @@
 //! one built into `sev-snp-qvl`.
 
 use dstack_attest::attestation::{AttestationQuote, VersionedAttestation};
-use dstack_mr::sev::verify_sev_launch;
+use dstack_mr::sev::{sev_os_image_measurement_from_input, verify_sev_launch, MeasurementInput};
 use dstack_types::{mr_config::MrConfigV3, KeyProviderKind};
 use sev_snp_qvl::{verify_amd_snp_attestation, AmdSnpAttestationInput, VerifiedAmdSnpReport};
+use sha2::{Digest, Sha256};
 
 /// Real SEV-SNP attestation captured from a dstack CVM (VersionedAttestation, SCALE V0).
 const SEV_ATTESTATION_BIN: &[u8] = include_bytes!("sev_snp_attestation.bin");
@@ -83,20 +84,21 @@ fn verify_sev_snp_attestation_bin() {
     // does after the hardware report verifies. Recompute the launch measurement
     // from the self-contained `sev_snp_measurement` document embedded in the
     // attestation config, require it to equal the hardware MEASUREMENT, require
-    // HOST_DATA to bind the MrConfigV3 document, and derive the os_image_hash.
-    let binding = dstack_mr::sev::verify_sev_launch(
-        &verified.measurement,
-        &verified.host_data,
-        &attestation.config,
-    )
-    .expect("recompute SEV launch + derive os_image_hash from the attestation config");
+    // HOST_DATA to bind the MrConfigV3 document, and verify the unified
+    // os_image_hash against sha256sum.txt + measurement.snp.cbor.
+    let config = upgrade_snp_config_for_split_measurement(&attestation.config);
+    let binding =
+        dstack_mr::sev::verify_sev_launch(&verified.measurement, &verified.host_data, &config)
+            .expect("recompute SEV launch + verify os_image_hash from the attestation config");
 
-    // The os_image_hash matches the value advertised in the CVM config and the
-    // image build's digest.sev.txt.
+    // The os_image_hash matches the value advertised in the CVM config.
+    let config_value: serde_json::Value = serde_json::from_str(&config).expect("config json");
     assert_eq!(
         hex::encode(&binding.os_image_hash),
-        "32b4767373ad7fa0f9c418925006194d5c3f5619529f309fe81156789fecd8bc",
-        "derived os_image_hash"
+        config_value["os_image_hash"]
+            .as_str()
+            .expect("os_image_hash"),
+        "verified os_image_hash"
     );
     // The HOST_DATA-bound app identity is recovered from the mr_config document.
     assert_eq!(
@@ -110,8 +112,6 @@ fn verify_sev_snp_attestation_bin() {
 // ---------------------------------------------------------------------------
 // Forged / tampered quote coverage (all offline, using the real fixture).
 // ---------------------------------------------------------------------------
-
-const OS_IMAGE_HASH: &str = "32b4767373ad7fa0f9c418925006194d5c3f5619529f309fe81156789fecd8bc";
 
 fn decoded_attestation() -> dstack_attest::attestation::Attestation {
     let versioned =
@@ -130,8 +130,48 @@ fn fixture_report() -> Vec<u8> {
     quote.report.clone()
 }
 
+fn upgrade_snp_config_for_split_measurement(config: &str) -> String {
+    let mut value: serde_json::Value = serde_json::from_str(config).expect("config json");
+    let measurement_doc = value["sev_snp_measurement"]
+        .as_str()
+        .expect("sev_snp_measurement string")
+        .to_string();
+    let measurement_value: serde_json::Value =
+        serde_json::from_str(&measurement_doc).expect("measurement json");
+    if measurement_value.get("measurement").is_some()
+        && measurement_value.get("checksum_file").is_some()
+    {
+        return config.to_string();
+    }
+
+    let input: MeasurementInput =
+        serde_json::from_value(measurement_value).expect("legacy SNP measurement input");
+    let measurement = sev_os_image_measurement_from_input(&input)
+        .expect("image measurement")
+        .to_cbor_vec();
+    let sha256sum = format!(
+        "{}  {}\n",
+        hex::encode(Sha256::digest(&measurement)),
+        dstack_types::SNP_MEASUREMENT_FILENAME
+    )
+    .into_bytes();
+    let document = dstack_mr::sev::SnpMeasurementDocument {
+        checksum_file: sha256sum,
+        measurement,
+        vcpus: input.vcpus,
+        vcpu_type: input.vcpu_type,
+        guest_features: input.guest_features,
+    };
+    value["os_image_hash"] = serde_json::Value::String(hex::encode(
+        dstack_types::image_hash_from_sha256sum(&document.checksum_file),
+    ));
+    value["sev_snp_measurement"] =
+        serde_json::Value::String(serde_json::to_string(&document).expect("serialize document"));
+    value.to_string()
+}
+
 fn fixture_config() -> String {
-    decoded_attestation().config
+    upgrade_snp_config_for_split_measurement(&decoded_attestation().config)
 }
 
 fn verified_fixture_report() -> VerifiedAmdSnpReport {
@@ -144,18 +184,33 @@ fn verified_fixture_report() -> VerifiedAmdSnpReport {
     .expect("verify SEV-SNP attestation offline")
 }
 
-/// Rewrite one field inside the embedded `sev_snp_measurement` document.
-fn with_measurement_field(config: &str, f: impl FnOnce(&mut serde_json::Value)) -> String {
+/// Rewrite the image CBOR inside the embedded `sev_snp_measurement` document.
+fn with_image_measurement(
+    config: &str,
+    f: impl FnOnce(&mut dstack_types::SevOsImageMeasurement),
+) -> String {
     let mut value: serde_json::Value = serde_json::from_str(config).expect("config json");
     let measurement_doc = value["sev_snp_measurement"]
         .as_str()
         .expect("sev_snp_measurement string")
         .to_string();
-    let mut measurement: serde_json::Value =
+    let mut document: dstack_mr::sev::SnpMeasurementDocument =
         serde_json::from_str(&measurement_doc).expect("measurement json");
-    f(&mut measurement);
+    let mut image = dstack_types::SevOsImageMeasurement::from_cbor_slice(&document.measurement)
+        .expect("decode measurement.snp.cbor");
+    f(&mut image);
+    document.measurement = image.to_cbor_vec();
+    document.checksum_file = format!(
+        "{}  {}\n",
+        hex::encode(Sha256::digest(&document.measurement)),
+        dstack_types::SNP_MEASUREMENT_FILENAME
+    )
+    .into_bytes();
+    value["os_image_hash"] = serde_json::Value::String(hex::encode(
+        dstack_types::image_hash_from_sha256sum(&document.checksum_file),
+    ));
     value["sev_snp_measurement"] =
-        serde_json::Value::String(serde_json::to_string(&measurement).expect("reserialize"));
+        serde_json::Value::String(serde_json::to_string(&document).expect("reserialize"));
     value.to_string()
 }
 
@@ -278,8 +333,8 @@ fn tampered_launch_inputs_break_os_image_binding() {
     // recomputed measurement no longer equals the hardware MEASUREMENT, so the
     // forged (allow-listed-looking) os_image_hash is never trusted.
     let verified = verified_fixture_report();
-    let tampered = with_measurement_field(&fixture_config(), |m| {
-        m["kernel_hash"] = serde_json::Value::String("00".repeat(32));
+    let tampered = with_image_measurement(&fixture_config(), |m| {
+        m.kernel_hash = vec![0; 32];
     });
     let err = verify_sev_launch(&verified.measurement, &verified.host_data, &tampered)
         .expect_err("tampered launch inputs must reject");
@@ -311,20 +366,20 @@ fn substituted_mr_config_breaks_host_data_binding() {
 }
 
 #[test]
-fn advertised_os_image_hash_is_ignored() {
-    // A forged top-level os_image_hash is ignored; the authoritative value is
-    // derived from the measurement-bound launch inputs.
+fn advertised_os_image_hash_must_match_sha256sum() {
+    // A forged top-level os_image_hash is rejected because it must equal
+    // sha256(sha256sum.txt) for the supplied measurement material.
     let verified = verified_fixture_report();
     let mut value: serde_json::Value =
         serde_json::from_str(&fixture_config()).expect("config json");
     value["os_image_hash"] = serde_json::Value::String("de".repeat(32));
     let tampered = value.to_string();
 
-    let binding = verify_sev_launch(&verified.measurement, &verified.host_data, &tampered)
-        .expect("a bogus advertised os_image_hash is ignored, not fatal");
-    assert_eq!(
-        hex::encode(&binding.os_image_hash),
-        OS_IMAGE_HASH,
-        "derived os_image_hash must win over the advertised one"
+    let err = verify_sev_launch(&verified.measurement, &verified.host_data, &tampered)
+        .expect_err("a bogus advertised os_image_hash must reject");
+    assert!(
+        err.to_string()
+            .contains("amd sev-snp measurement material does not match os_image_hash"),
+        "unexpected error: {err:?}"
     );
 }

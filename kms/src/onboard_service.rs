@@ -193,8 +193,7 @@ fn build_attestation_info_response(
 mod tests {
     use super::*;
     use crate::main_service::amd_attest::{
-        compute_expected_measurement, snp_measurement_os_image_hash, MeasurementInput,
-        OvmfSectionParam,
+        compute_expected_measurement, MeasurementInput, OvmfSectionParam,
     };
     use sha2::Digest;
 
@@ -205,7 +204,7 @@ mod tests {
     fn valid_snp_measurement_input() -> MeasurementInput {
         let rootfs_hash = hex_of(0x33, 32);
         MeasurementInput {
-            base_cmdline: Some(format!("console=ttyS0 dstack.rootfs_hash={rootfs_hash}")),
+            base_cmdline: format!("console=ttyS0 dstack.rootfs_hash={rootfs_hash}"),
             ovmf_hash: hex_of(0x44, 48),
             kernel_hash: hex_of(0x55, 32),
             initrd_hash: hex_of(0x66, 32),
@@ -275,14 +274,38 @@ mod tests {
         }
     }
 
+    fn snp_measurement_document(
+        input: &MeasurementInput,
+    ) -> dstack_mr::sev::SnpMeasurementDocument {
+        let measurement = dstack_mr::sev::sev_os_image_measurement_from_input(input)
+            .unwrap()
+            .to_cbor_vec();
+        let sha256sum = format!(
+            "{}  {}\n",
+            hex::encode(sha2::Sha256::digest(&measurement)),
+            dstack_types::SNP_MEASUREMENT_FILENAME
+        )
+        .into_bytes();
+        dstack_mr::sev::SnpMeasurementDocument {
+            checksum_file: sha256sum,
+            measurement,
+            vcpus: input.vcpus,
+            vcpu_type: input.vcpu_type.clone(),
+            guest_features: input.guest_features,
+        }
+    }
+
     #[test]
     fn attestation_info_response_uses_snp_boot_info_and_chip_id() {
         let input = valid_snp_measurement_input();
         let measurement = compute_expected_measurement(&input).unwrap();
         let mr_config = valid_snp_mr_config();
         let attestation = verified_snp_attestation(measurement, [0xab; 64]);
+        let snp_document = snp_measurement_document(&input);
+        let os_image_hash = dstack_types::image_hash_from_sha256sum(&snp_document.checksum_file);
         let vm_config = serde_json::json!({
-            "sev_snp_measurement": serde_json::to_string(&input).unwrap(),
+            "os_image_hash": hex::encode(os_image_hash),
+            "sev_snp_measurement": serde_json::to_string(&snp_document).unwrap(),
             "mr_config": mr_config.to_canonical_json(),
         })
         .to_string();
@@ -303,10 +326,7 @@ mod tests {
         );
         assert_eq!(response.ppid, vec![0xab; 64]);
         assert_eq!(response.mr_aggregated.len(), 32);
-        assert_eq!(
-            response.os_image_hash,
-            snp_measurement_os_image_hash(&serde_json::to_string(&input).unwrap()).unwrap()
-        );
+        assert_eq!(response.os_image_hash, os_image_hash.to_vec());
         assert_eq!(response.attestation_mode, "dstack-amd-sev-snp");
         assert_eq!(response.site_name, "test-site");
         assert_eq!(response.eth_rpc_url, "https://rpc.example");

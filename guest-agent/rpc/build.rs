@@ -11,6 +11,10 @@ fn main() {
         .build_scale_ext(false)
         .disable_package_emission()
         .enable_serde_extension()
+        .field_attribute(
+            ".dstack_guest.GetQuoteResponse.attestation",
+            "#[serde(skip_serializing_if = \"::prost::alloc::vec::Vec::is_empty\")]",
+        )
         .disable_service_name_emission()
         .compile_dir("./proto")
         .expect("failed to compile proto files");

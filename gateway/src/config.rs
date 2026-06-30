@@ -9,6 +9,7 @@ use load_config::load_config;
 use rocket::figment::Figment;
 use serde::{Deserialize, Serialize};
 use std::net::Ipv4Addr;
+use std::path::PathBuf;
 use std::time::Duration;
 use tracing::info;
 
@@ -113,6 +114,12 @@ pub struct ProxyConfig {
     pub connect_top_n: usize,
     pub localhost_enabled: bool,
     pub workers: usize,
+    #[serde(default)]
+    pub base_domain: Option<String>,
+    #[serde(default)]
+    pub cert_chain: Option<PathBuf>,
+    #[serde(default)]
+    pub cert_key: Option<PathBuf>,
     pub app_address_ns_prefix: String,
     pub app_address_ns_compat: bool,
     /// Maximum concurrent connections per app. 0 means unlimited.

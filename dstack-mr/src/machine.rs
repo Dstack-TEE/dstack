@@ -33,7 +33,7 @@ pub struct Machine<'a> {
     #[builder(default)]
     pub host_share_mode: String,
     /// Selects which OVMF measurement event layout to expect.
-    /// Defaults to the pre-edk2-stable202505 layout for backwards compatibility.
+    /// Defaults to the supported pre-202505 layout.
     #[builder(default)]
     pub ovmf_variant: OvmfVariant,
 }

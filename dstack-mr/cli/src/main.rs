@@ -78,9 +78,8 @@ struct MachineConfig {
     #[arg(long)]
     qemu_version: Option<String>,
 
-    /// dstack OS version (MAJOR.MINOR.PATCH), used to pick the OVMF measurement layout.
-    /// 0.5.10 <= ver < 0.6.0 and ver >= 0.6.1 use the edk2-stable202505 layout; everything
-    /// else uses the legacy layout. If omitted, falls back to `image_info.version`.
+    /// dstack OS version (MAJOR.MINOR.PATCH), validated before using the supported OVMF
+    /// measurement layout. If omitted, falls back to `image_info.version`.
     #[arg(long)]
     dstack_os_version: Option<String>,
 

@@ -3,12 +3,65 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::{anyhow, bail, Context, Result};
-use cc_eventlog::{RuntimeEvent, TdxEvent};
+use cc_eventlog::{
+    tdx::{self, TDX_ACPI_DATA_EVENT_PAYLOAD},
+    RuntimeEvent, TdxEvent,
+};
 use dstack_types::mr_config::MrConfigV3;
 use serde::{Deserialize, Serialize};
 use tpm_types::TpmQuote;
 
 pub const ATTESTATION_VERSION: u64 = 1;
+
+pub(crate) fn is_tdx_acpi_data_event(event: &TdxEvent) -> bool {
+    tdx::is_tdx_acpi_data_event(event)
+}
+
+pub(crate) fn strip_tdx_runtime_event_log(event_log: Vec<TdxEvent>) -> Vec<TdxEvent> {
+    event_log
+        .into_iter()
+        .filter(|event| event.imr == 3)
+        .map(|event| event.stripped())
+        .collect()
+}
+
+fn strip_tdx_lite_acpi_data_event(event: TdxEvent) -> TdxEvent {
+    let mut event = event.stripped();
+    event.event_payload = TDX_ACPI_DATA_EVENT_PAYLOAD.to_vec();
+    event
+}
+
+pub(crate) fn strip_tdx_lite_event_log(event_log: Vec<TdxEvent>) -> Vec<TdxEvent> {
+    event_log
+        .into_iter()
+        .filter_map(|event| {
+            if is_tdx_acpi_data_event(&event) {
+                Some(strip_tdx_lite_acpi_data_event(event))
+            } else if event.imr == 3 {
+                Some(event.stripped())
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+pub(crate) fn is_tdx_lite_config(config: &str) -> bool {
+    serde_json::from_str::<dstack_types::VmConfig>(config)
+        .map(|config| config.tdx_attestation_variant.is_lite())
+        .unwrap_or(false)
+}
+
+pub(crate) fn strip_tdx_event_log_for_config(
+    event_log: Vec<TdxEvent>,
+    config: &str,
+) -> Vec<TdxEvent> {
+    if is_tdx_lite_config(config) {
+        strip_tdx_lite_event_log(event_log)
+    } else {
+        strip_tdx_runtime_event_log(event_log)
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "data")]
@@ -92,14 +145,14 @@ impl PlatformEvidence {
     }
 
     pub fn into_stripped(self) -> Self {
+        self.into_stripped_for_config("")
+    }
+
+    pub fn into_stripped_for_config(self, config: &str) -> Self {
         match self {
             Self::Tdx { quote, event_log } => Self::Tdx {
                 quote,
-                event_log: event_log
-                    .into_iter()
-                    .filter(|event| event.imr == 3)
-                    .map(|event| event.stripped())
-                    .collect(),
+                event_log: strip_tdx_event_log_for_config(event_log, config),
             },
             Self::GcpTdx {
                 quote,
@@ -107,11 +160,7 @@ impl PlatformEvidence {
                 tpm_quote,
             } => Self::GcpTdx {
                 quote,
-                event_log: event_log
-                    .into_iter()
-                    .filter(|event| event.imr == 3)
-                    .map(|event| event.stripped())
-                    .collect(),
+                event_log: strip_tdx_runtime_event_log(event_log),
                 tpm_quote,
             },
             other => other,
@@ -242,9 +291,10 @@ impl Attestation {
     }
 
     pub fn into_stripped(self) -> Self {
+        let config = self.stack.config().to_string();
         Self {
             version: self.version,
-            platform: self.platform.into_stripped(),
+            platform: self.platform.into_stripped_for_config(&config),
             stack: self.stack,
         }
     }
@@ -320,6 +370,7 @@ impl Attestation {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cc_eventlog::tdx::TDX_ACPI_DATA_EVENT_TYPE;
 
     fn test_mr_config_document() -> String {
         MrConfigV3::new(
@@ -412,6 +463,60 @@ mod tests {
             decoded.platform.sev_snp_cert_chain(),
             Some(vec![vec![0x22, 0x33]].as_slice())
         );
+    }
+
+    fn boot_event(idx: usize) -> TdxEvent {
+        TdxEvent {
+            imr: 0,
+            event_type: idx as u32,
+            digest: vec![idx as u8; 48],
+            event: String::new(),
+            event_payload: vec![0xff; idx + 1],
+        }
+    }
+
+    fn acpi_data_event(idx: usize) -> TdxEvent {
+        TdxEvent {
+            imr: 0,
+            event_type: TDX_ACPI_DATA_EVENT_TYPE,
+            digest: vec![idx as u8; 48],
+            event: String::new(),
+            event_payload: TDX_ACPI_DATA_EVENT_PAYLOAD.to_vec(),
+        }
+    }
+
+    fn runtime_event() -> TdxEvent {
+        RuntimeEvent {
+            event: "app-id".into(),
+            payload: vec![0x42],
+        }
+        .into()
+    }
+
+    #[test]
+    fn lite_stripping_keeps_only_acpi_data_digests_and_runtime_payloads() {
+        let mut event_log = (0..20).map(boot_event).collect::<Vec<_>>();
+        event_log[3] = acpi_data_event(3);
+        event_log[8] = acpi_data_event(8);
+        event_log[15] = acpi_data_event(15);
+        event_log.push(runtime_event());
+
+        let stripped = strip_tdx_lite_event_log(event_log);
+
+        assert_eq!(stripped.len(), 4);
+        assert_eq!(
+            stripped[0..3]
+                .iter()
+                .map(|event| event.digest.clone())
+                .collect::<Vec<_>>(),
+            vec![vec![3u8; 48], vec![8u8; 48], vec![15u8; 48]]
+        );
+        assert!(stripped[0..3]
+            .iter()
+            .all(|event| event.imr == 0 && event.event_payload == TDX_ACPI_DATA_EVENT_PAYLOAD));
+        assert_eq!(stripped[3].imr, 3);
+        assert_eq!(stripped[3].event, "app-id");
+        assert_eq!(stripped[3].event_payload, vec![0x42]);
     }
 
     #[test]

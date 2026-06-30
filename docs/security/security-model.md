@@ -92,6 +92,47 @@ dstack implements layered verification from hardware to application. Each layer 
 
 **Key management layer.** The KMS root CA public key hash is recorded in RTMR3 as the key-provider event. This binds your workload to a specific KMS instance. The KMS itself runs in a TEE with its own attestation quote, so you can verify the KMS the same way you verify any workload.
 
+### How `os_image_hash` becomes trusted
+
+The `os_image_hash` carried in `vm_config` is not trusted just because the guest
+or host reports it. The verifier first validates the hardware-signed quote, then
+uses the quoted measurements to bind `os_image_hash` to the software that
+actually booted.
+
+For the full-image TDX path, the verifier obtains the OS image identified by
+`os_image_hash`, checks the image checksum manifest, recomputes the expected
+MRTD and RTMR0-2 from the image and VM configuration, and requires those values
+to match the measurements in the quote. If the host substitutes either the image
+hash or the VM configuration, the recomputed measurements no longer match the
+quote.
+
+For the no-image-download TDX lite path and the AMD SEV-SNP path,
+`os_image_hash` is the unified image identity: `sha256(sha256sum.txt)`. The
+`sha256sum.txt` file is the image checksum manifest generated at image build
+time. It is a text file whose lines contain a SHA-256 digest and relative file
+name for each manifest entry, such as `metadata.json`, the kernel, initrd,
+firmware, and the split measurement file. Some launch-critical artifacts are
+represented indirectly instead of as direct manifest entries: for example, the
+rootfs is committed by the measured `dstack.rootfs_hash` kernel command-line
+parameter, and the SEV firmware is committed by `measurement.snp.cbor`. The exact
+`sha256sum.txt` bytes are hashed, so the manifest contents, file names, ordering,
+and line endings are all part of the image identity.
+
+The attestation carries a copy of the image's `sha256sum.txt` plus the platform
+specific measurement material (`measurement.tdx.cbor` or
+`measurement.snp.cbor`). The verifier checks that:
+
+1. `sha256(checksum_file) == os_image_hash`;
+2. the checksum file contains the expected `measurement.*.cbor` entry and that
+   entry hashes to the supplied measurement material;
+3. the supplied measurement material replays to the hardware-signed TDX
+   MRTD/RTMR values or SEV-SNP launch `MEASUREMENT`/`HOST_DATA`.
+
+Only after these checks pass does the verifier treat the returned
+`os_image_hash` as the measured OS image identity. Downstream authorization
+systems can then compare that trusted value against an allowlist or governance
+contract.
+
 ## Verification Checklist
 
 Use this checklist to verify a workload running in a dstack CVM.
@@ -123,6 +164,31 @@ dstack replays an event log only for RTMR3. RTMR0-2 (and MRTD) are not replayed 
 This is also reflected at the source: the event log shipped alongside an attestation is stripped down to RTMR3 entries before it is embedded. `VersionedAttestation::into_stripped()` keeps only events with `imr == 3` (see `dstack-attest/src/attestation.rs`), and verification only ever replays those runtime events against `rt_mr3` (`verify_tdx_quote_with_events` / `decode_mr_tdx_from_quote`).
 
 The reason boot-time event log entries (RTMR0-2) are dropped is that **nothing downstream consumes them**. Verification recomputes the OS-layer measurements directly from the signed `rt_mr0/1/2` values and compares them to independently reproduced expected measurements, so the corresponding boot event log would be redundant. Keeping it would only bloat the RA-TLS certificate and expose extra detail without adding any verification capability. RTMR3, by contrast, is runtime-extended (compose-hash, key-provider, instance-id, and application-emitted events), so its event log is the only one with a real consumer — the replay that proves what was extended into RTMR3.
+
+### Why TDX lite mode does not validate ACPI table contents
+
+TDX lite mode verifies the OS image without downloading the image and without
+running QEMU to regenerate ACPI tables. It still uses the three RTMR0 `ACPI
+DATA` digests from the attestation event log as measurement inputs. The guest
+labels those three events as `acpi-loader`, `acpi-rsdp`, and `acpi-tables`
+before exposing the event log, and the verifier checks that the recomputed RTMR
+values match the hardware-signed quote. What it does not do is reconstruct and
+byte-compare the full ACPI table contents.
+
+This is safe for dstack's threat model because ACPI tables are treated as
+untrusted host-provided platform description, not as trusted guest code. The
+dangerous executable part of ACPI is AML (ACPI Machine Language): malicious AML
+can try to use `SystemMemory` operation regions through the Linux ACPICA
+interpreter to read or write guest physical memory. dstack kernels include the
+BadAML sandbox patch (`0002-acpi-sandbox-block-aml-systemmemory-ram-access.patch`),
+which hooks the ACPI `SystemMemory` region handler, walks the guest page tables,
+and denies AML access to encrypted/private guest RAM. AML can only access
+unencrypted/shared mappings.
+
+Therefore, an infrastructure operator can still provide bad ACPI data and cause
+misconfiguration or denial of service, but unvalidated ACPI/AML cannot tamper
+with confidential private memory or extract secrets. That residual availability
+risk is already outside dstack's confidentiality/integrity guarantees.
 
 ### TCB status is surfaced, not gated, during verification
 

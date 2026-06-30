@@ -32,6 +32,10 @@ use tpm_qvl::verify::VerifiedReport as TpmVerifiedReport;
 pub use tpm_types::TpmQuote;
 
 use crate::amd_sev_snp::{AmdKdsClient, VerifiedAmdSnpReport};
+use crate::v1::{
+    is_tdx_acpi_data_event, is_tdx_lite_config, strip_tdx_event_log_for_config,
+    strip_tdx_runtime_event_log,
+};
 pub use crate::v1::{Attestation as AttestationV1, PlatformEvidence, StackEvidence};
 
 pub const SNP_REPORT_DATA_RANGE: std::ops::Range<usize> = 0x50..0x90;
@@ -596,17 +600,24 @@ impl VersionedAttestation {
         }
     }
 
-    /// Strip data for certificate embedding (e.g. keep RTMR3 event logs only).
+    /// Strip data for certificate embedding.
     pub fn into_stripped(self) -> Self {
         match self {
             Self::V0 { mut attestation } => {
-                if let Some(tdx_quote) = attestation.tdx_quote_mut() {
-                    tdx_quote.event_log = tdx_quote
-                        .event_log
-                        .iter()
-                        .filter(|e| e.imr == 3)
-                        .map(|e| e.stripped())
-                        .collect();
+                match &mut attestation.quote {
+                    AttestationQuote::DstackTdx(tdx_quote) => {
+                        tdx_quote.event_log = strip_tdx_event_log_for_config(
+                            std::mem::take(&mut tdx_quote.event_log),
+                            &attestation.config,
+                        );
+                    }
+                    AttestationQuote::DstackGcpTdx(quote) => {
+                        quote.tdx_quote.event_log = strip_tdx_runtime_event_log(std::mem::take(
+                            &mut quote.tdx_quote.event_log,
+                        ));
+                    }
+                    AttestationQuote::DstackAmdSevSnp(_)
+                    | AttestationQuote::DstackNitroEnclave(_) => {}
                 }
                 Self::V0 { attestation }
             }
@@ -1009,17 +1020,16 @@ pub enum AttestationQuote {
     DstackTdx(TdxQuote),
     DstackGcpTdx(DstackGcpTdxQuote),
     DstackNitroEnclave(DstackNitroQuote),
-    /// Keep this last to preserve SCALE discriminants for existing variants.
     DstackAmdSevSnp(SnpQuote),
 }
 
 impl AttestationQuote {
     pub fn mode(&self) -> AttestationMode {
         match self {
-            AttestationQuote::DstackTdx { .. } => AttestationMode::DstackTdx,
-            AttestationQuote::DstackAmdSevSnp { .. } => AttestationMode::DstackAmdSevSnp,
-            AttestationQuote::DstackGcpTdx { .. } => AttestationMode::DstackGcpTdx,
-            AttestationQuote::DstackNitroEnclave { .. } => AttestationMode::DstackNitroEnclave,
+            AttestationQuote::DstackTdx(_) => AttestationMode::DstackTdx,
+            AttestationQuote::DstackAmdSevSnp(_) => AttestationMode::DstackAmdSevSnp,
+            AttestationQuote::DstackGcpTdx(_) => AttestationMode::DstackGcpTdx,
+            AttestationQuote::DstackNitroEnclave(_) => AttestationMode::DstackNitroEnclave,
         }
     }
 }
@@ -1148,8 +1158,29 @@ impl<T> Attestation<T> {
     /// Get TDX event log string with RTMR[0-2] payloads stripped to reduce size.
     /// Only digests are kept for boot-time events; runtime events (RTMR3) retain full payload.
     pub fn get_tdx_event_log_string(&self) -> Option<String> {
+        self.get_tdx_event_log_string_for_config("")
+    }
+
+    /// Get TDX event log string for a vm_config.
+    ///
+    /// In lite mode, keep the `ACPI DATA` marker payloads in RTMR0 so callers
+    /// that still consume the top-level `event_log` can semantically identify
+    /// the ACPI table digest events without consulting the versioned
+    /// attestation field.
+    pub fn get_tdx_event_log_string_for_config(&self, config: &str) -> Option<String> {
         self.tdx_quote().map(|q| {
-            let stripped: Vec<_> = q.event_log.iter().map(|e| e.stripped()).collect();
+            let keep_lite_acpi_payload = is_tdx_lite_config(config);
+            let stripped: Vec<_> = q
+                .event_log
+                .iter()
+                .map(|e| {
+                    let mut stripped = e.stripped();
+                    if keep_lite_acpi_payload && is_tdx_acpi_data_event(e) {
+                        stripped.event_payload = e.event_payload.clone();
+                    }
+                    stripped
+                })
+                .collect();
             serde_json::to_string(&stripped).unwrap_or_default()
         })
     }
@@ -1691,6 +1722,14 @@ impl Attestation {
             .map_err(|_| anyhow!("Quote lock poisoned"))?;
 
         let mode = AttestationMode::detect()?;
+        let config = match mode {
+            AttestationMode::DstackAmdSevSnp
+            | AttestationMode::DstackTdx
+            | AttestationMode::DstackGcpTdx => {
+                read_vm_config().context("Failed to read vm config")?
+            }
+            AttestationMode::DstackNitroEnclave => String::new(),
+        };
         let runtime_events = match mode {
             AttestationMode::DstackTdx | AttestationMode::DstackGcpTdx => {
                 RuntimeEvent::read_all().context("Failed to read runtime events")?
@@ -1739,9 +1778,7 @@ impl Attestation {
         let config = match &quote {
             AttestationQuote::DstackAmdSevSnp(_)
             | AttestationQuote::DstackTdx(_)
-            | AttestationQuote::DstackGcpTdx(_) => {
-                read_vm_config().context("Failed to read vm config")?
-            }
+            | AttestationQuote::DstackGcpTdx(_) => config,
             AttestationQuote::DstackNitroEnclave(quote) => {
                 let os_image_hash = quote
                     .decode_image_hash()
@@ -2052,6 +2089,47 @@ mod tests {
             config: "{}".into(),
             report: (),
         }
+    }
+
+    fn tdx_event(imr: u32, event_type: u32, event_payload: &[u8]) -> TdxEvent {
+        TdxEvent {
+            imr,
+            event_type,
+            digest: vec![event_type as u8; 48],
+            event: String::new(),
+            event_payload: event_payload.to_vec(),
+        }
+    }
+
+    #[test]
+    fn tdx_event_log_string_for_lite_keeps_acpi_data_payloads() {
+        let mut attestation = dummy_tdx_attestation([0u8; 64]);
+        let AttestationQuote::DstackTdx(tdx_quote) = &mut attestation.quote else {
+            panic!("expected TDX attestation");
+        };
+        tdx_quote.event_log = vec![
+            tdx_event(0, 10, b"ACPI DATA"),
+            tdx_event(0, 4, b"boot-payload"),
+            tdx_event(3, 8, b"runtime-payload"),
+        ];
+
+        let lite_events: Vec<TdxEvent> = serde_json::from_str(
+            &attestation
+                .get_tdx_event_log_string_for_config(r#"{"tdx_attestation_variant":"lite"}"#)
+                .expect("TDX event log"),
+        )
+        .expect("decode lite event log");
+        assert_eq!(lite_events[0].event_payload, b"ACPI DATA");
+        assert!(lite_events[1].event_payload.is_empty());
+        assert!(lite_events[2].event_payload.is_empty());
+
+        let legacy_events: Vec<TdxEvent> = serde_json::from_str(
+            &attestation
+                .get_tdx_event_log_string()
+                .expect("TDX event log"),
+        )
+        .expect("decode legacy event log");
+        assert!(legacy_events[0].event_payload.is_empty());
     }
 
     #[test]
