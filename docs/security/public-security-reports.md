@@ -8,6 +8,8 @@ This page is not a vulnerability reporting channel. Report exploitable vulnerabi
 
 Status reflects GitHub issue state on 2026-06-30. Update this page whenever a listed issue is closed, reopened, split, or superseded.
 
+This page intentionally excludes support requests, process questions, roadmap consolidation issues, and general feature requests that only mention security-related terms in passing.
+
 ## Report categories
 
 Use these categories when evaluating public security reports and already-public findings:
@@ -75,10 +77,8 @@ These issues affect security architecture, future verification behavior, operati
 | [#114](https://github.com/Dstack-TEE/dstack/issues/114) On-chain logs for KMS replication | Open | Auditability roadmap | Tracks transparency for KMS onboarding and replication events |
 | [#115](https://github.com/Dstack-TEE/dstack/issues/115) Censorship resistance in the KMS | Open | Governance roadmap | Tracks how KMS instances should prove an up-to-date chain view after de-registration or policy changes |
 | [#125](https://github.com/Dstack-TEE/dstack/issues/125) Requirements for deploying dstack OS on GCP | Open | Cloud trust plumbing | Tracks cloud image packaging, app config transfer, and cloud measurement calculation |
-| [#318](https://github.com/Dstack-TEE/dstack/issues/318) Security advisory unavailable | Closed | Security process | Clarified that the linked advisory was private at the time and expected to become public later |
 | [#330](https://github.com/Dstack-TEE/dstack/issues/330) Self-describing hash format for Intel DCAP `reportdata` | Open | Format roadmap | Tracks a DIP for self-describing report data |
 | [#411](https://github.com/Dstack-TEE/dstack/issues/411) Adopt RFC 8785 JCS for canonical compose hash calculation | Open | Measurement roadmap | Tracks a possible future canonical hash scheme. Current raw-byte hashing is intentional and recorded in #550 |
 | [#713](https://github.com/Dstack-TEE/dstack/issues/713) AMD SEV-SNP support tracking | Open | Platform roadmap | Tracks remaining work before AMD SEV-SNP can be called supported. SNP remains experimental and opt-in until the tracker is complete |
-| [#744](https://github.com/Dstack-TEE/dstack/issues/744) Track AMD SEV-SNP support gap on GCP | Closed | Roadmap consolidation | Closed after clarifying that cloud deployment plumbing belongs in #125 and SNP support status belongs in #713 |
 | [#745](https://github.com/Dstack-TEE/dstack/issues/745) `secure_time: true` cannot sync because guest chrony lacks NTS | Open | Security feature bug | Tracks a secure-time boot failure. The fix is in [meta-dstack#76](https://github.com/Dstack-TEE/meta-dstack/pull/76) |
 | [#746](https://github.com/Dstack-TEE/dstack/issues/746) Harden AMD SEV-SNP KDS collateral fetch | Open | Availability hardening | Tracks async client, timeout, and caching hardening for SNP KDS collateral fetch. Verification remains fail-closed |
