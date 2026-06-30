@@ -124,6 +124,29 @@ This is also reflected at the source: the event log shipped alongside an attesta
 
 The reason boot-time event log entries (RTMR0-2) are dropped is that **nothing downstream consumes them**. Verification recomputes the OS-layer measurements directly from the signed `rt_mr0/1/2` values and compares them to independently reproduced expected measurements, so the corresponding boot event log would be redundant. Keeping it would only bloat the RA-TLS certificate and expose extra detail without adding any verification capability. RTMR3, by contrast, is runtime-extended (compose-hash, key-provider, instance-id, and application-emitted events), so its event log is the only one with a real consumer — the replay that proves what was extended into RTMR3.
 
+### Why TDX lite mode does not validate ACPI table contents
+
+TDX lite mode verifies the OS image without downloading the image and without
+running QEMU to regenerate ACPI tables. It still uses the three RTMR0 `ACPI
+DATA` digests from the attestation event log as opaque measurement inputs and
+checks that the recomputed RTMR values match the hardware-signed quote. What it
+does not do is reconstruct and byte-compare the full ACPI table contents.
+
+This is safe for dstack's threat model because ACPI tables are treated as
+untrusted host-provided platform description, not as trusted guest code. The
+dangerous executable part of ACPI is AML (ACPI Machine Language): malicious AML
+can try to use `SystemMemory` operation regions through the Linux ACPICA
+interpreter to read or write guest physical memory. dstack kernels include the
+BadAML sandbox patch (`0002-acpi-sandbox-block-aml-systemmemory-ram-access.patch`),
+which hooks the ACPI `SystemMemory` region handler, walks the guest page tables,
+and denies AML access to encrypted/private guest RAM. AML can only access
+unencrypted/shared mappings.
+
+Therefore, an infrastructure operator can still provide bad ACPI data and cause
+misconfiguration or denial of service, but unvalidated ACPI/AML cannot tamper
+with confidential private memory or extract secrets. That residual availability
+risk is already outside dstack's confidentiality/integrity guarantees.
+
 ### TCB status is surfaced, not gated, during verification
 
 dstack's `validate_tcb` does not reject a quote based on its TCB status string (`UpToDate`, `OutOfDate`, `ConfigurationNeeded`, `SWHardeningNeeded`, ...). It only enforces hard invariants: debug mode must be off, and the SEAM/service-TD measurements must be well-formed. The verified report carries the `status` field through to the caller.
