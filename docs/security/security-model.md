@@ -8,7 +8,7 @@ This document helps you evaluate whether dstack's security model fits your needs
 
 dstack removes the need to trust infrastructure operators. The cloud provider cannot read your memory, modify your code, or access your secrets. Network attackers cannot intercept your traffic because TLS terminates inside the TEE with keys fully controlled by the TEE (Zero Trust HTTPS). Docker registries cannot serve malicious images because the TEE verifies SHA256 digests before pulling.
 
-The only thing you must trust is **TEE hardware** (currently Intel TDX, with AMD SEV support planned). You trust that the TEE provides genuine memory encryption and that quotes are signed by real hardware. For GPU workloads, you also trust **NVIDIA GPU hardware** and NVIDIA's Remote Attestation Service (NRAS). These are hardware-level trust assumptions.
+The only thing you must trust is **TEE hardware**. Intel TDX is the production path. AMD SEV-SNP is available where the selected dstack OS image and host support it, but it is new and experimental. You trust that the TEE provides genuine memory encryption and that quotes are signed by real hardware. For GPU workloads, you also trust **NVIDIA GPU hardware** and NVIDIA's Remote Attestation Service (NRAS). These are hardware-level trust assumptions.
 
 Everything else is verifiable.
 
@@ -199,6 +199,22 @@ This is deliberate: whether a non-current TCB (e.g. `OutOfDate`) is acceptable i
 The one case dstack does not leave to downstream is a genuinely invalid TCB: `dcap-qvl` rejects `Revoked` outright (its `is_valid()` returns false only for `Revoked`), so a revoked TCB never reaches the policy layer in the first place.
 
 > **Future work:** this will be refactored toward a grace-period model, where an out-of-date TCB is accepted for a bounded window after a new TCB level is published rather than being a binary downstream decision.
+
+### Development modes are auditable, not production-safe
+
+dstack keeps several development switches as runtime or on-chain configuration rather than Cargo feature flags. Examples include KMS `quote_enabled = false`, `auth_api.type = "dev"`, and KMS contract `gateway_app_id = "any"`. These settings exist for local development and integration tests, not for production deployments.
+
+This is intentional. Runtime configuration that affects the trust boundary is visible in attestation measurements or public contract state. Cargo feature gates are not automatically more auditable because feature unification can enable a feature through a dependency graph, and the resulting runtime behavior is not represented as a measured deployment setting.
+
+Production verifiers should reject deployments that use these development settings. Operators should treat them the same way they treat debug-mode TEE quotes: useful for testing, invalid for production trust.
+
+### KMS mTLS is route-enforced for sensitive operations
+
+The KMS Rocket TLS listener permits connections without a client certificate because some bootstrap and public metadata endpoints must be reachable before a client has an RA-TLS certificate. That listener setting is not the authorization boundary for key material.
+
+App key release and KMS key handover require verified caller attestation from the RA-TLS client certificate. Certificate signing verifies the CSR signature and the attestation embedded in the CSR before signing.
+
+The unauthenticated or non-client-certificate surface includes bootstrap and temp-CA bootstrap material retrieval, env-encryption public-key retrieval, metadata, health, and metrics behavior documented for operators. `GetTempCaCert` returns temp CA private material for the bootstrap flow, so operators must treat it as bootstrap-sensitive rather than harmless public metadata.
 
 ## Limitations
 

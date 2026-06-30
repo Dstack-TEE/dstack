@@ -63,6 +63,10 @@ members = [
     "sdk/rust",
     "sdk/rust/types",
     "no_std_check",
+    "crates/dstack-cli-core",
+    "crates/dstack-cli",
+    "crates/dstackup",
+    "crates/dstack-auth",
 ]
 resolver = "2"
 
@@ -75,6 +79,7 @@ dstack-gateway-rpc = { path = "gateway/rpc" }
 dstack-kms-rpc = { path = "kms/rpc" }
 dstack-guest-agent-rpc = { path = "guest-agent/rpc" }
 dstack-vmm-rpc = { path = "vmm/rpc" }
+dstack-cli-core = { path = "crates/dstack-cli-core" }
 dstack-port-forward = { path = "port-forward" }
 cc-eventlog = { path = "cc-eventlog" }
 supervisor = { path = "supervisor" }

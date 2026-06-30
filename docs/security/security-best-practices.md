@@ -68,6 +68,23 @@ Example app-compose.json:
 
 **But keep in mind, even if you disable exposing app-compose.json, it is just hidden from the public API, the physical machine controller can still access it on the file system.**
 
+## Do not use development trust settings in production
+
+Development settings are intentionally easy to audit, but they are not production-safe. A production deployment should satisfy all of the following:
+
+- KMS quote verification remains enabled. Do not deploy production KMS with `quote_enabled = false`.
+- KMS authorization uses webhook/on-chain policy. Do not use `auth_api.type = "dev"` with real key material.
+- The KMS contract pins a concrete gateway app id. Do not use `gateway_app_id = "any"` for production traffic.
+- TEE quotes are evaluated by deployment policy, including TCB status and expected OS/application measurements.
+
+The KMS TLS listener may keep `rpc.tls.mutual.mandatory = false` because bootstrap, temp-CA bootstrap, and public metadata endpoints need to be reachable before a client has an RA-TLS certificate. `GetTempCaCert` returns temp CA private material for the bootstrap flow; treat it as bootstrap-sensitive.
+
+App key release and KMS key handover still require verified caller attestation from the RA-TLS client certificate. Certificate signing verifies the CSR signature and embedded attestation before signing.
+
+## Keep private material owner-only
+
+Secret-bearing files should be owner-only (`0600`) wherever possible, including app keys, decrypted env files, KMS root keys, gateway WireGuard/TLS keys, and ACME credentials. Preserve restrictive permissions when copying volumes, backing up `/etc/kms/certs`, or moving gateway and certbot state between hosts. Public issue [#606](https://github.com/Dstack-TEE/dstack/issues/606) tracks the remaining low-cost hardening work in dstack-managed file writes.
+
 ## docker logs is public available by default
 
 Similarly, to facilitate App observability, docker logs are public by default. You can disable exposing docker logs by setting public_logs=false.

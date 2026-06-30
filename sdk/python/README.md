@@ -63,7 +63,7 @@ ed_key = client.get_key('signing/key', algorithm='ed25519')
 **Parameters:**
 - `path` (optional): Key derivation path. Defaults to `""` (root).
 - `purpose` (optional): Included in the signature chain message; does not affect the derived key.
-- `algorithm` (optional): `'secp256k1'` (default) or `'ed25519'`.
+- `algorithm` (optional): `'secp256k1'` (default) or `'ed25519'`. For compatibility, this selects how the same derived 32-byte material is interpreted; it does not domain-separate the derivation. Use algorithm-specific paths when independent keys are required.
 
 **Returns:** `GetKeyResponse`
 - `key`: Hex-encoded private key
@@ -239,7 +239,7 @@ print(account.address)
 ```python
 from dstack_sdk.solana import to_keypair_secure
 
-key = client.get_key('wallet/solana')
+key = client.get_key('wallet/solana', purpose='mainnet', algorithm='ed25519')
 keypair = to_keypair_secure(key)
 print(keypair.pubkey())
 ```
@@ -260,7 +260,6 @@ The KMS returns a fresh X25519 public key (with a secp256k1 signature) that you 
 from dstack_sdk import (
     encrypt_env_vars,
     verify_env_encrypt_public_key,
-    verify_env_encrypt_public_key_legacy,
     EnvVar,
 )
 
@@ -272,15 +271,7 @@ signer = verify_env_encrypt_public_key(
     timestamp=timestamp,
 )
 if signer is None:
-    # Fallback for older KMS builds that only emit the unprotected legacy
-    # signature. Vulnerable to replay; warn loudly if you must use it.
-    signer = verify_env_encrypt_public_key_legacy(
-        public_key=public_key_bytes,
-        signature=legacy_signature_bytes,
-        app_id=app_id_hex,
-    )
-    if signer is None:
-        raise RuntimeError('invalid KMS env-encrypt public key')
+    raise RuntimeError('invalid KMS env-encrypt public key')
 
 # Always compare the recovered signer against a known-good KMS signer
 # address, obtained out-of-band from the DstackKms contract or your
@@ -302,6 +293,8 @@ encrypted = await encrypt_env_vars(env_vars, public_key_hex)
 ```
 
 `verify_env_encrypt_public_key` returns the recovered compressed secp256k1 signer (`0x`-prefixed hex) on success, or `None` for any failure (bad length, expired/future timestamp, malformed `app_id`, invalid signature). The default `max_age_seconds` is 300; pass a larger value if your deployment workflow legitimately holds the response longer.
+
+`verify_env_encrypt_public_key_legacy` remains available only for deployments that explicitly support older KMS builds without `signature_v1`. It does not provide timestamp replay protection and should not be used for new deployments.
 
 ### Calculate Compose Hash
 

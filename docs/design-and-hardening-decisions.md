@@ -24,11 +24,11 @@ The meta-dstack layer is designed to create a minimally secure image for booting
 
 ### 3. TDX Guest Driver Implementation
 
-**Decision**: We disable the built-in TDX guest driver (`CONFIG_TDX_GUEST_DRIVER=n`) and use a custom implementation.
+**Decision**: We use the in-tree confidential guest drivers and the Linux TSM report interface where they are available. For Intel TDX, the dstack kernel configuration enables `CONFIG_TDX_GUEST_DRIVER=y` and `CONFIG_TSM_REPORTS=y`.
 
-**Rationale**: **Primary Goal** is to enable RTMR3 extension capabilities. **Custom Driver Benefits** include enhanced measurement and attestation features, better integration with our security architecture, and flexibility for dstack-specific optimizations.
+**Rationale**: The in-tree TDX guest driver exposes the standard `/dev/tdx_guest` device and configfs-tsm report interface. Newer kernels also expose RTMR extension through the TSM measurement sysfs path, which dstack uses for RTMR3 runtime events. This keeps dstack aligned with the standard Linux kernel ABI while preserving measured runtime events.
 
-**Implementation Notes**: Builds upon proven meta-confidential-compute foundation. Maintains compatibility with TDX specifications. Adds value-specific functionality without compromising security.
+**Implementation Notes**: The unified dstack confidential-guest image also includes AMD SEV-SNP kernel features. Platform-specific native TEE interfaces are advanced compatibility surfaces for applications that need the kernel ABI directly. The dstack socket remains the normal application API for quotes, keys, application information, and runtime events.
 
 ### 4. Randomness Generation and Seeding
 

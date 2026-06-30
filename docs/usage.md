@@ -56,11 +56,11 @@ For development images (`dstack-x.x.x-dev`), you can SSH into the CVM for inspec
 ssh root@10.0.3.2
 ```
 
-## Getting TDX Quote in Docker Container
+## Get Attestation Evidence in Containers
 
-To get a TDX quote within app containers:
+Most applications should use the dstack socket to get attestation evidence from inside a container.
 
-**1. Mount the socket in `docker-compose.yaml`**
+**1. Mount the socket in your Compose file**
 
 ```yaml
 version: '3'
@@ -78,9 +78,11 @@ services:
 
 ```bash
 # The argument report_data accepts binary data encoding in hex string.
-# The actual report_data passing to the underlying TDX driver is sha2_256(report_data).
+# The report_data passed to the underlying TEE is padded to 64 bytes.
 curl --unix-socket /var/run/dstack.sock http://localhost/GetQuote?report_data=0x1234deadbeef | jq .
 ```
+
+For advanced compatibility with unmodified binaries that expect native Linux TEE interfaces such as `/dev/tdx_guest`, `/dev/sev-guest`, or configfs-tsm, see [Advanced Native TEE Interfaces in Containers](./native-tee-interfaces.md).
 
 ## Container Logs
 

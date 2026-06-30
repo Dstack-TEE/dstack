@@ -1,17 +1,15 @@
 # Security Documentation
 
-dstack security resources for auditors, researchers, and operators.
+Use these resources to understand dstack's trust model, production requirements, audit history, and public security report status.
 
-## Audit
+## Resources
 
-dstack has been audited by zkSecurity. See the [full audit report](./dstack-audit.pdf).
+- [Security Model](./security-model.md) - threat model, trust boundaries, and verifier checklist
+- [Security Best Practices](./security-best-practices.md) - production hardening for KMS, gateway, and VMM deployments
+- [Security Audit](./dstack-audit.pdf) - zkSecurity audit report
+- [Public Security Reports](./public-security-reports.md) - status of already-public reports and findings
+- [CVM Boundaries](./cvm-boundaries.md) - data exchanged across the CVM, host, KMS, and gateway
 
-## Documentation
+## Report a Vulnerability
 
-- [Security Model](./security-model.md) - Threat model, trust boundaries, and verification checklist
-- [Security Best Practices](./security-best-practices.md) - Production hardening guide
-- [CVM Boundaries](./cvm-boundaries.md) - Information exchange and isolation details
-
-## Responsible Disclosure
-
-To report a security vulnerability, email security@phala.network. We will respond within 48 hours.
+Do not disclose exploitable vulnerabilities in public GitHub issues. Use the private reporting path in [SECURITY.md](../../SECURITY.md). If GitHub private reporting is unavailable, contact security@phala.network.
