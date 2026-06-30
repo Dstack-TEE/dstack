@@ -36,6 +36,7 @@ tempfile.workspace = true
 
 # Internal dependencies
 ra-tls.workspace = true
+dstack-attest.workspace = true
 dstack-types.workspace = true
 dstack-mr.workspace = true
 

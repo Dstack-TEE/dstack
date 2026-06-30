@@ -2802,6 +2802,7 @@ dependencies = [
  "cc-eventlog",
  "clap",
  "dcap-qvl",
+ "dstack-attest",
  "dstack-mr",
  "dstack-types",
  "ez-hash",
@@ -7467,8 +7468,10 @@ version = "0.5.11"
 dependencies = [
  "anyhow",
  "hex",
+ "moka",
  "reqwest",
  "sev",
+ "tokio",
 ]
 
 [[package]]

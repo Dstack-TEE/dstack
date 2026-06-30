@@ -31,7 +31,7 @@ use tpm_qvl::verify::VerifiedReport as TpmVerifiedReport;
 // Re-export TpmQuote from tpm-types
 pub use tpm_types::TpmQuote;
 
-use crate::amd_sev_snp::VerifiedAmdSnpReport;
+use crate::amd_sev_snp::{AmdKdsClient, VerifiedAmdSnpReport};
 pub use crate::v1::{Attestation as AttestationV1, PlatformEvidence, StackEvidence};
 
 pub const SNP_REPORT_DATA_RANGE: std::ops::Range<usize> = 0x50..0x90;
@@ -757,7 +757,27 @@ impl AttestationV1 {
     pub async fn verify_with_time(
         self,
         pccs_url: Option<&str>,
-        _now: Option<SystemTime>,
+        now: Option<SystemTime>,
+    ) -> Result<VerifiedAttestation> {
+        self.verify_with_time_with_amd_kds_client(pccs_url, now, None)
+            .await
+    }
+
+    /// Verify the quote with a caller-owned AMD KDS client.
+    pub async fn verify_with_amd_kds_client(
+        self,
+        pccs_url: Option<&str>,
+        amd_kds_client: &AmdKdsClient,
+    ) -> Result<VerifiedAttestation> {
+        self.verify_with_time_with_amd_kds_client(pccs_url, None, Some(amd_kds_client))
+            .await
+    }
+
+    async fn verify_with_time_with_amd_kds_client(
+        self,
+        pccs_url: Option<&str>,
+        now: Option<SystemTime>,
+        amd_kds_client: Option<&AmdKdsClient>,
     ) -> Result<VerifiedAttestation> {
         let AttestationV1 {
             version: _,
@@ -836,7 +856,7 @@ impl AttestationV1 {
                     &nsm.nsm_quote,
                     nsm_qvl::AWS_NITRO_ENCLAVES_ROOT_G1,
                     None,
-                    _now,
+                    now,
                 )
                 .context("NSM attestation verification failed")?;
                 let Some(user_data) = verified_report.user_data.clone() else {
@@ -862,11 +882,17 @@ impl AttestationV1 {
                 cert_chain,
                 mr_config,
             } => {
-                let verified = crate::amd_sev_snp::verify_amd_snp_evidence_with_kds_fallback(
-                    report,
-                    cert_chain,
-                    &report_data,
-                )?;
+                let owned_kds_client;
+                let kds_client = match amd_kds_client {
+                    Some(client) => client,
+                    None => {
+                        owned_kds_client = AmdKdsClient::new()?;
+                        &owned_kds_client
+                    }
+                };
+                let verified = kds_client
+                    .verify_evidence_with_kds_fallback(report, cert_chain, &report_data)
+                    .await?;
                 verify_snp_mr_config_host_data(mr_config, &verified.host_data)?;
                 DstackVerifiedReport::DstackAmdSevSnp(verified)
             }
@@ -1752,17 +1778,43 @@ impl Attestation {
         pccs_url: Option<&str>,
         now: Option<SystemTime>,
     ) -> Result<VerifiedAttestation> {
+        self.verify_with_time_with_amd_kds_client(pccs_url, now, None)
+            .await
+    }
+
+    /// Verify the quote with a caller-owned AMD KDS client.
+    pub async fn verify_with_amd_kds_client(
+        self,
+        pccs_url: Option<&str>,
+        amd_kds_client: &AmdKdsClient,
+    ) -> Result<VerifiedAttestation> {
+        self.verify_with_time_with_amd_kds_client(pccs_url, None, Some(amd_kds_client))
+            .await
+    }
+
+    async fn verify_with_time_with_amd_kds_client(
+        self,
+        pccs_url: Option<&str>,
+        now: Option<SystemTime>,
+        amd_kds_client: Option<&AmdKdsClient>,
+    ) -> Result<VerifiedAttestation> {
         let report = match &self.quote {
             AttestationQuote::DstackTdx(q) => {
                 let report = self.verify_tdx(pccs_url, &q.quote).await?;
                 DstackVerifiedReport::DstackTdx(report)
             }
             AttestationQuote::DstackAmdSevSnp(q) => {
-                let verified = crate::amd_sev_snp::verify_amd_snp_evidence_with_kds_fallback(
-                    &q.report,
-                    &q.cert_chain,
-                    &self.report_data,
-                )?;
+                let owned_kds_client;
+                let kds_client = match amd_kds_client {
+                    Some(client) => client,
+                    None => {
+                        owned_kds_client = AmdKdsClient::new()?;
+                        &owned_kds_client
+                    }
+                };
+                let verified = kds_client
+                    .verify_evidence_with_kds_fallback(&q.report, &q.cert_chain, &self.report_data)
+                    .await?;
                 verify_snp_mr_config_host_data(&q.mr_config, &verified.host_data)?;
                 DstackVerifiedReport::DstackAmdSevSnp(verified)
             }
