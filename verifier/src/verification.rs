@@ -499,7 +499,26 @@ impl CvmVerifier {
     }
 
     pub async fn verify(&self, request: VerificationRequest) -> Result<VerificationResponse> {
-        let request_vm_config = request.vm_config.clone().unwrap_or_default();
+        // Keep the two verifier input modes disjoint:
+        // - `attestation` is self-contained and its embedded config is used.
+        // - raw TDX input uses top-level `quote` + `event_log` + `vm_config`.
+        // Never mix top-level config with an attestation; otherwise an
+        // untrusted, separately supplied config could influence verification.
+        let has_attestation = request.attestation.is_some();
+        if has_attestation
+            && (request.quote.is_some()
+                || request.event_log.is_some()
+                || request.vm_config.is_some())
+        {
+            warn!(
+                "attestation is present; ignoring top-level quote/event_log/vm_config to avoid mixed verification inputs"
+            );
+        }
+        let request_vm_config = if has_attestation {
+            String::new()
+        } else {
+            request.vm_config.clone().unwrap_or_default()
+        };
         let attestation = if let Some(attestation) = &request.attestation {
             VersionedAttestation::from_bytes(attestation).context("Failed to decode attestaion")?
         } else if let Some(tdx_quote) = request.quote {
