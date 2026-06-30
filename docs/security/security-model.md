@@ -128,9 +128,11 @@ The reason boot-time event log entries (RTMR0-2) are dropped is that **nothing d
 
 TDX lite mode verifies the OS image without downloading the image and without
 running QEMU to regenerate ACPI tables. It still uses the three RTMR0 `ACPI
-DATA` digests from the attestation event log as opaque measurement inputs and
-checks that the recomputed RTMR values match the hardware-signed quote. What it
-does not do is reconstruct and byte-compare the full ACPI table contents.
+DATA` digests from the attestation event log as measurement inputs. The guest
+labels those three events as `acpi-loader`, `acpi-rsdp`, and `acpi-tables`
+before exposing the event log, and the verifier checks that the recomputed RTMR
+values match the hardware-signed quote. What it does not do is reconstruct and
+byte-compare the full ACPI table contents.
 
 This is safe for dstack's threat model because ACPI tables are treated as
 untrusted host-provided platform description, not as trusted guest code. The

@@ -9,7 +9,13 @@ use std::{
 };
 
 use anyhow::{anyhow, bail, Context, Result};
-use cc_eventlog::TdxEvent;
+use cc_eventlog::{
+    tdx::{
+        TDX_ACPI_DATA_EVENT_PAYLOAD, TDX_ACPI_DATA_EVENT_TYPE, TDX_ACPI_LOADER_EVENT,
+        TDX_ACPI_RSDP_EVENT, TDX_ACPI_TABLES_EVENT,
+    },
+    TdxEvent,
+};
 use dstack_mr::{
     tdx::TdxRtmr0AcpiHashes, RtmrLog, RtmrLogs, TdxMeasurementDetails, TdxMeasurements,
 };
@@ -381,61 +387,53 @@ impl CvmVerifier {
             .is_some_and(|digest| digest == expected))
     }
 
-    fn tdx_acpi_digest_candidates_from_event_log(event_log: &[TdxEvent]) -> Result<Vec<Vec<u8>>> {
-        const TDX_ACPI_DATA_EVENT_TYPE: u32 = 10;
-        const TDX_ACPI_DATA_EVENT_PAYLOAD: &[u8] = b"ACPI DATA";
-
+    fn tdx_acpi_hashes_from_event_log(event_log: &[TdxEvent]) -> Result<TdxRtmr0AcpiHashes> {
         let rtmr0_events = event_log
             .iter()
             .filter(|event| event.imr == 0)
             .collect::<Vec<_>>();
-        let candidates = rtmr0_events
+        let acpi_events = rtmr0_events
             .iter()
             .filter(|event| {
                 event.event_type == TDX_ACPI_DATA_EVENT_TYPE
                     && event.event_payload == TDX_ACPI_DATA_EVENT_PAYLOAD
             })
-            .map(|event| event.digest())
             .collect::<Vec<_>>();
-        if candidates.len() != 3 {
+        if acpi_events.len() != 3 {
             bail!(
-                "TDX lite attestation requires exactly 3 RTMR0 ACPI DATA digests; found {} candidates and {} RTMR0 events",
-                candidates.len(),
+                "TDX lite attestation requires exactly 3 RTMR0 ACPI DATA events; found {} candidates and {} RTMR0 events",
+                acpi_events.len(),
                 rtmr0_events.len()
             );
         }
-        for (idx, digest) in candidates.iter().enumerate() {
+
+        let digest_for = |name: &str| -> Result<Vec<u8>> {
+            let matches = acpi_events
+                .iter()
+                .copied()
+                .filter(|event| event.event == name)
+                .collect::<Vec<_>>();
+            if matches.len() != 1 {
+                bail!(
+                    "TDX lite attestation requires exactly one RTMR0 ACPI DATA event named {name}; found {}",
+                    matches.len()
+                );
+            }
+            let digest = matches[0].digest();
             if digest.len() != 48 {
                 bail!(
-                    "TDX RTMR0 ACPI DATA digest {idx} has invalid length {}, expected 48",
+                    "TDX RTMR0 ACPI DATA event {name} has invalid digest length {}, expected 48",
                     digest.len()
                 );
             }
-        }
-        Ok(candidates)
-    }
+            Ok(digest)
+        };
 
-    fn tdx_acpi_hash_permutations(digests: &[Vec<u8>]) -> Vec<TdxRtmr0AcpiHashes> {
-        debug_assert_eq!(digests.len(), 3);
-        let mut permutations = Vec::with_capacity(6);
-        for loader_idx in 0..3 {
-            for rsdp_idx in 0..3 {
-                if rsdp_idx == loader_idx {
-                    continue;
-                }
-                for tables_idx in 0..3 {
-                    if tables_idx == loader_idx || tables_idx == rsdp_idx {
-                        continue;
-                    }
-                    permutations.push(TdxRtmr0AcpiHashes {
-                        loader: digests[loader_idx].clone(),
-                        rsdp: digests[rsdp_idx].clone(),
-                        tables: digests[tables_idx].clone(),
-                    });
-                }
-            }
-        }
-        permutations
+        Ok(TdxRtmr0AcpiHashes {
+            loader: digest_for(TDX_ACPI_LOADER_EVENT)?,
+            rsdp: digest_for(TDX_ACPI_RSDP_EVENT)?,
+            tables: digest_for(TDX_ACPI_TABLES_EVENT)?,
+        })
     }
 
     /// Helper method to ensure image is downloaded and return image paths
@@ -772,7 +770,7 @@ impl CvmVerifier {
         &self,
         vm_config: &VmConfig,
         attestation: &VerifiedAttestation,
-        debug: bool,
+        _debug: bool,
         _details: &mut VerificationDetails,
     ) -> Result<()> {
         let Some(report) = &attestation.report.tdx_report() else {
@@ -834,48 +832,27 @@ impl CvmVerifier {
         // Compute expected measurements. New TDX images advertise the
         // measurement.json-derived TDX os_image_hash; verify those without
         // downloading the image or running QEMU-derived ACPI table generators.
-        // The event log supplies only the three hardware-bound RTMR0 ACPI DATA
-        // digests. Their payloads do not distinguish loader/RSDP/tables, so try
-        // all assignments and accept the one that replays to the quote RTMRs.
-        // This avoids hard-coding OVMF-version-specific RTMR0 indexes.
-        let acpi_digests = Self::tdx_acpi_digest_candidates_from_event_log(event_log)
-            .context("TDX lite attestation is missing RTMR0 ACPI DATA digests")?;
-        let mut last_error = None;
-        for acpi_hashes in Self::tdx_acpi_hash_permutations(&acpi_digests) {
-            let mrs = match dstack_mr::tdx::tdx_measurements_from_measurement_document(
-                document,
-                vm_config,
-                &acpi_hashes,
-            )
-            .context("Failed to compute TDX expected measurements without image download")
-            {
-                Ok(mrs) => mrs,
-                Err(e) => {
-                    last_error = Some(e);
-                    continue;
-                }
-            };
+        // The guest labels the three RTMR0 ACPI DATA events as acpi-loader,
+        // acpi-rsdp, and acpi-tables before exposing the event log, so the
+        // verifier does not guess based on event order.
+        let acpi_hashes = Self::tdx_acpi_hashes_from_event_log(event_log)
+            .context("TDX lite attestation is missing named RTMR0 ACPI DATA digests")?;
+        let mrs = dstack_mr::tdx::tdx_measurements_from_measurement_document(
+            document,
+            vm_config,
+            &acpi_hashes,
+        )
+        .context("Failed to compute TDX expected measurements without image download")?;
 
-            let expected_mrs = Mrs {
-                mrtd: mrs.mrtd.clone(),
-                rtmr0: mrs.rtmr0.clone(),
-                rtmr1: mrs.rtmr1.clone(),
-                rtmr2: mrs.rtmr2.clone(),
-            };
-            match expected_mrs.assert_eq(&verified_mrs) {
-                Ok(()) => return Ok(()),
-                Err(e) => last_error = Some(e),
-            }
-        }
-
-        let result = Err(last_error.unwrap_or_else(|| {
-            anyhow!("MRs do not match for any RTMR0 ACPI DATA digest assignment")
-        }))
-        .context("MRs do not match");
-        if !debug {
-            return result;
-        }
-        result
+        let expected_mrs = Mrs {
+            mrtd: mrs.mrtd.clone(),
+            rtmr0: mrs.rtmr0.clone(),
+            rtmr1: mrs.rtmr1.clone(),
+            rtmr2: mrs.rtmr2.clone(),
+        };
+        expected_mrs
+            .assert_eq(&verified_mrs)
+            .context("MRs do not match")
     }
 
     fn compare_tdx_mrs(
@@ -1201,6 +1178,43 @@ impl Mrs {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn acpi_event(name: &str, digest_byte: u8) -> TdxEvent {
+        TdxEvent {
+            imr: 0,
+            event_type: TDX_ACPI_DATA_EVENT_TYPE,
+            digest: vec![digest_byte; 48],
+            event: name.to_string(),
+            event_payload: TDX_ACPI_DATA_EVENT_PAYLOAD.to_vec(),
+        }
+    }
+
+    #[test]
+    fn tdx_lite_acpi_hashes_are_selected_by_event_name() {
+        let event_log = vec![
+            acpi_event(TDX_ACPI_RSDP_EVENT, 2),
+            acpi_event(TDX_ACPI_TABLES_EVENT, 3),
+            acpi_event(TDX_ACPI_LOADER_EVENT, 1),
+        ];
+
+        let hashes =
+            CvmVerifier::tdx_acpi_hashes_from_event_log(&event_log).expect("named ACPI hashes");
+
+        assert_eq!(hashes.loader, vec![1u8; 48]);
+        assert_eq!(hashes.rsdp, vec![2u8; 48]);
+        assert_eq!(hashes.tables, vec![3u8; 48]);
+    }
+
+    #[test]
+    fn tdx_lite_acpi_hashes_reject_unlabeled_events() {
+        let event_log = vec![
+            acpi_event("", 1),
+            acpi_event(TDX_ACPI_RSDP_EVENT, 2),
+            acpi_event(TDX_ACPI_TABLES_EVENT, 3),
+        ];
+
+        assert!(CvmVerifier::tdx_acpi_hashes_from_event_log(&event_log).is_err());
+    }
 
     #[test]
     fn decode_key_provider_info_parses_json_and_tolerates_garbage() {

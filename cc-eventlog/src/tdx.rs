@@ -11,6 +11,17 @@ use crate::{
     tcg::TcgEventLog,
 };
 
+pub const TDX_ACPI_DATA_EVENT_TYPE: u32 = 10;
+pub const TDX_ACPI_DATA_EVENT_PAYLOAD: &[u8] = b"ACPI DATA";
+pub const TDX_ACPI_LOADER_EVENT: &str = "acpi-loader";
+pub const TDX_ACPI_RSDP_EVENT: &str = "acpi-rsdp";
+pub const TDX_ACPI_TABLES_EVENT: &str = "acpi-tables";
+pub const TDX_ACPI_DATA_EVENT_NAMES: [&str; 3] = [
+    TDX_ACPI_LOADER_EVENT,
+    TDX_ACPI_RSDP_EVENT,
+    TDX_ACPI_TABLES_EVENT,
+];
+
 /// This is the TDX event log format that is used to store the event log in the TDX guest.
 /// It is a simplified version of the TCG event log format, containing only a single digest
 /// and the raw event data. The IMR index is zero-based, unlike the TCG event log format
@@ -97,9 +108,69 @@ impl From<RuntimeEvent> for TdxEvent {
     }
 }
 
+pub fn is_tdx_acpi_data_event(event: &TdxEvent) -> bool {
+    event.imr == 0
+        && event.event_type == TDX_ACPI_DATA_EVENT_TYPE
+        && event.event_payload == TDX_ACPI_DATA_EVENT_PAYLOAD
+}
+
+/// Give dstack's three Pre202505 OVMF ACPI DATA RTMR0 events stable semantic
+/// names. The firmware event payload is the same "ACPI DATA" marker for all
+/// three entries, so the guest labels them before exposing the event log.
+pub fn label_tdx_acpi_data_events(event_logs: &mut [TdxEvent]) {
+    let mut acpi_idx = 0;
+    for event in event_logs
+        .iter_mut()
+        .filter(|event| is_tdx_acpi_data_event(event))
+    {
+        if let Some(name) = TDX_ACPI_DATA_EVENT_NAMES.get(acpi_idx) {
+            event.event = (*name).to_string();
+        }
+        acpi_idx += 1;
+    }
+}
+
 /// Read both boottime and runtime event logs.
 pub fn read_event_log() -> Result<Vec<TdxEvent>> {
     let mut event_logs = TcgEventLog::decode_from_ccel_file()?.to_cc_event_log()?;
+    label_tdx_acpi_data_events(&mut event_logs);
     event_logs.extend(RuntimeEvent::read_all()?.into_iter().map(Into::into));
     Ok(event_logs)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn acpi_data_event(digest_byte: u8) -> TdxEvent {
+        TdxEvent {
+            imr: 0,
+            event_type: TDX_ACPI_DATA_EVENT_TYPE,
+            digest: vec![digest_byte; 48],
+            event: String::new(),
+            event_payload: TDX_ACPI_DATA_EVENT_PAYLOAD.to_vec(),
+        }
+    }
+
+    #[test]
+    fn labels_pre202505_acpi_data_events_in_order() {
+        let mut events = vec![
+            TdxEvent::new(0, 4, String::new(), vec![0]),
+            acpi_data_event(1),
+            acpi_data_event(2),
+            acpi_data_event(3),
+            TdxEvent::new(3, DSTACK_RUNTIME_EVENT_TYPE, "app-id".into(), vec![4]),
+        ];
+
+        label_tdx_acpi_data_events(&mut events);
+
+        let names = events
+            .iter()
+            .filter(|event| is_tdx_acpi_data_event(event))
+            .map(|event| event.event.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(names, TDX_ACPI_DATA_EVENT_NAMES);
+        assert_eq!(events[0].event, "");
+        assert_eq!(events[4].event, "app-id");
+    }
 }

@@ -3,20 +3,18 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::{anyhow, bail, Context, Result};
-use cc_eventlog::{RuntimeEvent, TdxEvent};
+use cc_eventlog::{
+    tdx::{self, TDX_ACPI_DATA_EVENT_PAYLOAD},
+    RuntimeEvent, TdxEvent,
+};
 use dstack_types::mr_config::MrConfigV3;
 use serde::{Deserialize, Serialize};
 use tpm_types::TpmQuote;
 
 pub const ATTESTATION_VERSION: u64 = 1;
 
-const TDX_ACPI_DATA_EVENT_TYPE: u32 = 10;
-const TDX_ACPI_DATA_EVENT_PAYLOAD: &[u8] = b"ACPI DATA";
-
 pub(crate) fn is_tdx_acpi_data_event(event: &TdxEvent) -> bool {
-    event.imr == 0
-        && event.event_type == TDX_ACPI_DATA_EVENT_TYPE
-        && event.event_payload == TDX_ACPI_DATA_EVENT_PAYLOAD
+    tdx::is_tdx_acpi_data_event(event)
 }
 
 pub(crate) fn strip_tdx_runtime_event_log(event_log: Vec<TdxEvent>) -> Vec<TdxEvent> {
@@ -372,6 +370,7 @@ impl Attestation {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cc_eventlog::tdx::TDX_ACPI_DATA_EVENT_TYPE;
 
     fn test_mr_config_document() -> String {
         MrConfigV3::new(
