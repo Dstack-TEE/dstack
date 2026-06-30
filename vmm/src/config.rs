@@ -209,6 +209,41 @@ impl CvmConfig {
     }
 }
 
+/// VMM-side policy for selecting the TDX attestation/hash scheme.
+///
+/// This is intentionally separate from `dstack_types::TdxAttestationVariant`:
+/// the VM config shared with KMS/verifier must contain the resolved runtime
+/// variant (`legacy` or `lite`), never the VMM-only `auto` policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum TdxAttestationVariantConfig {
+    Legacy,
+    Lite,
+    #[default]
+    Auto,
+}
+
+impl TdxAttestationVariantConfig {
+    const TWO_GIB_MIB: u32 = 2 * 1024;
+    const THREE_GIB_MIB: u32 = 3 * 1024;
+
+    pub fn resolve(self, memory_mib: u32, image_supports_lite: bool) -> TdxAttestationVariant {
+        match self {
+            Self::Legacy => TdxAttestationVariant::Legacy,
+            Self::Lite => TdxAttestationVariant::Lite,
+            Self::Auto => {
+                if memory_mib < Self::THREE_GIB_MIB && memory_mib != Self::TWO_GIB_MIB {
+                    TdxAttestationVariant::Legacy
+                } else if image_supports_lite {
+                    TdxAttestationVariant::Lite
+                } else {
+                    TdxAttestationVariant::Legacy
+                }
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct CvmConfig {
     /// TEE platform to use when launching CVMs. Omit (or set `auto`) to detect
@@ -261,11 +296,13 @@ pub struct CvmConfig {
     /// QEMU hotplug_off
     pub qemu_hotplug_off: bool,
 
-    /// TDX attestation/hash scheme. `legacy` keeps the existing digest.txt +
-    /// dstack-acpi-tables verifier path; `lite` opts into the
-    /// measurement.json + no-QEMU verifier path.
+    /// TDX attestation/hash scheme policy. `legacy` keeps the existing
+    /// digest.txt + dstack-acpi-tables verifier path; `lite` opts into the
+    /// measurement.json + no-QEMU verifier path; `auto` selects `legacy` for
+    /// CVMs below 3 GiB except exactly 2 GiB, otherwise uses `lite` when the
+    /// image carries TDX measurement material and falls back to `legacy`.
     #[serde(default)]
-    pub tdx_attestation_variant: TdxAttestationVariant,
+    pub tdx_attestation_variant: TdxAttestationVariantConfig,
 
     /// Networking configuration
     pub networking: Networking,
@@ -707,6 +744,41 @@ mod tests {
         assert_eq!(
             parse(r#"{"platform":"amd-sev-snp"}"#),
             Some(TeePlatform::AmdSevSnp)
+        );
+    }
+
+    #[test]
+    fn tdx_attestation_variant_config_accepts_auto_and_resolves() {
+        let parse = |s: &str| serde_json::from_str::<TdxAttestationVariantConfig>(s).unwrap();
+        assert_eq!(parse(r#""legacy""#), TdxAttestationVariantConfig::Legacy);
+        assert_eq!(parse(r#""lite""#), TdxAttestationVariantConfig::Lite);
+        assert_eq!(parse(r#""auto""#), TdxAttestationVariantConfig::Auto);
+
+        use dstack_types::TdxAttestationVariant::{Legacy, Lite};
+
+        // Explicit settings bypass auto heuristics.
+        assert_eq!(
+            TdxAttestationVariantConfig::Legacy.resolve(2048, true),
+            Legacy
+        );
+        assert_eq!(TdxAttestationVariantConfig::Lite.resolve(1024, false), Lite);
+
+        // Auto avoids lite for sub-3 GiB memory sizes except exactly 2 GiB.
+        assert_eq!(
+            TdxAttestationVariantConfig::Auto.resolve(1024, true),
+            Legacy
+        );
+        assert_eq!(
+            TdxAttestationVariantConfig::Auto.resolve(2816, true),
+            Legacy
+        );
+        assert_eq!(TdxAttestationVariantConfig::Auto.resolve(2048, true), Lite);
+
+        // At 3 GiB and above, auto follows image support.
+        assert_eq!(TdxAttestationVariantConfig::Auto.resolve(3072, true), Lite);
+        assert_eq!(
+            TdxAttestationVariantConfig::Auto.resolve(3072, false),
+            Legacy
         );
     }
 

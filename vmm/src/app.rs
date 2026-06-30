@@ -1338,6 +1338,14 @@ fn sha256_file(path: impl AsRef<Path>) -> Result<[u8; 32]> {
     Ok(out)
 }
 
+fn image_supports_tdx_lite(image: &Image) -> bool {
+    image
+        .tdx_digest
+        .as_deref()
+        .is_some_and(|digest| !digest.trim().is_empty())
+        && image.tdx_measurement.is_some()
+}
+
 fn make_vm_config(
     cfg: &Config,
     manifest: &Manifest,
@@ -1345,19 +1353,21 @@ fn make_vm_config(
     _compose_hash: &str,
     mr_config: Option<String>,
 ) -> Result<serde_json::Value> {
-    let is_amd_sev_snp =
-        cfg.cvm.resolved_platform() == crate::config::TeePlatform::AmdSevSnp && !manifest.no_tee;
-    let is_tdx = cfg.cvm.resolved_platform() == crate::config::TeePlatform::Tdx && !manifest.no_tee;
+    let platform = cfg.cvm.resolved_platform();
+    let is_amd_sev_snp = platform == crate::config::TeePlatform::AmdSevSnp && !manifest.no_tee;
+    let is_tdx = platform == crate::config::TeePlatform::Tdx && !manifest.no_tee;
     let tdx_attestation_variant = if is_tdx {
-        cfg.cvm.tdx_attestation_variant
+        cfg.cvm
+            .tdx_attestation_variant
+            .resolve(manifest.memory, image_supports_tdx_lite(image))
     } else {
         dstack_types::TdxAttestationVariant::Legacy
     };
     // AMD SEV-SNP binds the OS image through the launch-measurement-derived
     // os_image_hash, computed at image build time and shipped in
-    // `measurement.json.snp.os_image_hash` (legacy images used `digest.sev.txt`). TDX keeps
-    // using the generic content digest unless the
-    // operator explicitly opts into the lite attestation variant.
+    // `measurement.json.snp.os_image_hash` (legacy images used `digest.sev.txt`).
+    // TDX keeps using the generic content digest unless the resolved
+    // attestation policy selects the lite variant.
     let os_image_hash = if is_amd_sev_snp {
         let digest = image.sev_digest.as_deref().context(
             "amd sev-snp image is missing measurement.json SNP hash; \
@@ -1444,7 +1454,11 @@ fn make_vm_config(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{load_config_figment, TeePlatform};
+    use crate::config::{load_config_figment, TdxAttestationVariantConfig, TeePlatform};
+    use dstack_types::{
+        TdxImageMeasurement, TdxMrtdCandidates, TdxOsImageMeasurement,
+        TdxOsImageMeasurementDocument, TdxTdvfMeasurement,
+    };
     use rocket::figment::Figment;
     use std::time::UNIX_EPOCH;
 
@@ -1525,6 +1539,82 @@ mod tests {
         ovmf
     }
 
+    fn test_manifest(memory: u32) -> Manifest {
+        Manifest {
+            id: "tdx-test".to_string(),
+            name: "tdx-test".to_string(),
+            app_id: hex_of(0x11, 20),
+            vcpu: 2,
+            memory,
+            disk_size: 1024,
+            image: "dstack-test".to_string(),
+            port_map: vec![],
+            created_at_ms: 0,
+            hugepages: false,
+            pin_numa: false,
+            gpus: None,
+            kms_urls: vec![],
+            gateway_urls: vec![],
+            no_tee: false,
+            networking: None,
+        }
+    }
+
+    fn dummy_tdx_measurement_document() -> TdxOsImageMeasurementDocument {
+        TdxOsImageMeasurementDocument::new(TdxOsImageMeasurement {
+            image: TdxImageMeasurement {
+                kernel_cmdline_sha384: vec![0x10; 48],
+                kernel_authenticode: vec![0x20; 48],
+                initrd_sha384: vec![0x30; 48],
+            },
+            tdvf: TdxTdvfMeasurement {
+                ovmf_variant: Default::default(),
+                mrtd: TdxMrtdCandidates {
+                    single_pass: vec![0x40; 48],
+                    two_pass: vec![0x50; 48],
+                },
+                td_hob_witness: vec![0x60; 16],
+            },
+        })
+    }
+
+    fn test_tdx_image(supports_lite: bool) -> Image {
+        let tdx_measurement = supports_lite.then(dummy_tdx_measurement_document);
+        Image {
+            info: ImageInfo {
+                cmdline: None,
+                kernel: "kernel".to_string(),
+                initrd: "initrd".to_string(),
+                hda: None,
+                rootfs: None,
+                bios: None,
+                bios_sev: None,
+                rootfs_hash: None,
+                shared_ro: false,
+                version: "0.6.0".to_string(),
+                is_dev: false,
+                ovmf_variant: None,
+            },
+            initrd: PathBuf::from("initrd"),
+            kernel: PathBuf::from("kernel"),
+            hda: None,
+            rootfs: None,
+            bios: None,
+            bios_sev: None,
+            digest: Some(hex_of(0xaa, 32)),
+            tdx_digest: tdx_measurement.as_ref().map(|d| d.os_image_hash.clone()),
+            tdx_measurement,
+            sev_digest: None,
+        }
+    }
+
+    fn test_tdx_config() -> Result<Config> {
+        let mut config: Config = Figment::from(load_config_figment(None)).extract()?;
+        config.cvm.platform = Some(TeePlatform::Tdx);
+        config.cvm.tdx_attestation_variant = TdxAttestationVariantConfig::Auto;
+        Ok(config)
+    }
+
     #[test]
     fn effective_vcpu_count_clamps_zero_to_one() {
         assert_eq!(effective_vcpu_count(0, None), 1);
@@ -1547,6 +1637,64 @@ mod tests {
         );
         assert!(amd_sev_snp_measurement_base_cmdline(None).is_err());
         assert!(amd_sev_snp_measurement_base_cmdline(Some("   ")).is_err());
+    }
+
+    #[test]
+    fn tdx_auto_variant_uses_legacy_for_low_non_2g_memory() -> Result<()> {
+        let config = test_tdx_config()?;
+        let manifest = test_manifest(1024);
+        let image = test_tdx_image(true);
+        let vm_config = make_vm_config(&config, &manifest, &image, &hex_of(0x22, 32), None)?;
+
+        assert!(vm_config.get("tdx_attestation_variant").is_none());
+        assert!(vm_config.get("tdx_measurement").is_none());
+        assert_eq!(
+            vm_config["os_image_hash"]
+                .as_str()
+                .context("os_image_hash must be a string")?,
+            hex_of(0xaa, 32)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn tdx_auto_variant_uses_lite_for_2g_supported_image() -> Result<()> {
+        let config = test_tdx_config()?;
+        let manifest = test_manifest(2048);
+        let image = test_tdx_image(true);
+        let expected_tdx_digest = image
+            .tdx_digest
+            .clone()
+            .context("test image must carry TDX digest")?;
+        let vm_config = make_vm_config(&config, &manifest, &image, &hex_of(0x22, 32), None)?;
+
+        assert_eq!(vm_config["tdx_attestation_variant"], "lite");
+        assert!(vm_config.get("tdx_measurement").is_some());
+        assert_eq!(
+            vm_config["os_image_hash"]
+                .as_str()
+                .context("os_image_hash must be a string")?,
+            expected_tdx_digest
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn tdx_auto_variant_falls_back_to_legacy_when_image_lacks_lite_support() -> Result<()> {
+        let config = test_tdx_config()?;
+        let manifest = test_manifest(3072);
+        let image = test_tdx_image(false);
+        let vm_config = make_vm_config(&config, &manifest, &image, &hex_of(0x22, 32), None)?;
+
+        assert!(vm_config.get("tdx_attestation_variant").is_none());
+        assert!(vm_config.get("tdx_measurement").is_none());
+        assert_eq!(
+            vm_config["os_image_hash"]
+                .as_str()
+                .context("os_image_hash must be a string")?,
+            hex_of(0xaa, 32)
+        );
+        Ok(())
     }
 
     #[test]
