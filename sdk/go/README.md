@@ -323,7 +323,7 @@ import (
 	"github.com/Dstack-TEE/dstack/sdk/go/dstack"
 )
 
-keyResult, err := client.GetKey(ctx, "solana/main", "wallet", "ed25519")
+keyResult, err := client.GetKey(ctx, "solana/main", "wallet", "secp256k1")
 if err != nil {
 	log.Fatal(err)
 }
