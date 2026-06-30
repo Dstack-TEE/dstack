@@ -44,14 +44,14 @@ pub fn parse_port(spec: &str) -> Result<PortMapping> {
             "invalid --port '{spec}': expected vm | host:vm | proto:host:vm | proto:addr:host:vm"
         ),
     };
-    let vm_port: u32 = vm
-        .parse()
-        .with_context(|| format!("invalid vm port in '{spec}'"))?;
+    if !matches!(proto, "tcp" | "udp") {
+        bail!("invalid protocol in --port '{spec}': expected tcp or udp");
+    }
+    let vm_port = parse_port_number(vm, "vm", spec)? as u32;
     let host_port: u32 = if host.is_empty() || host == "auto" || host == "0" {
         free_local_port()? as u32
     } else {
-        host.parse()
-            .with_context(|| format!("invalid host port in '{spec}'"))?
+        parse_port_number(host, "host", spec)? as u32
     };
     Ok(PortMapping {
         protocol: proto.to_string(),
@@ -59,4 +59,35 @@ pub fn parse_port(spec: &str) -> Result<PortMapping> {
         host_port,
         vm_port,
     })
+}
+
+fn parse_port_number(value: &str, label: &str, spec: &str) -> Result<u16> {
+    let port: u16 = value
+        .parse()
+        .with_context(|| format!("invalid {label} port in '{spec}'"))?;
+    if port == 0 {
+        bail!("invalid {label} port in --port '{spec}': port must be between 1 and 65535");
+    }
+    Ok(port)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_fixed_direct_host_mapping() {
+        let p = parse_port("8080:80").unwrap();
+        assert_eq!(p.protocol, "tcp");
+        assert_eq!(p.host_address, "127.0.0.1");
+        assert_eq!(p.host_port, 8080);
+        assert_eq!(p.vm_port, 80);
+    }
+
+    #[test]
+    fn rejects_invalid_protocol_and_port_ranges() {
+        assert!(parse_port("sctp:8080:80").is_err());
+        assert!(parse_port("70000:80").is_err());
+        assert!(parse_port("8080:0").is_err());
+    }
 }

@@ -108,18 +108,9 @@ impl Vmm {
 
     /// fetch the last `lines` log lines for a VM (non-following).
     ///
-    /// `/logs` is a plain-HTTP `GET` endpoint. Only the local unix-socket
-    /// transport is wired today; remote `dstack logs` lands with the TLS+token
-    /// transport (the shared `http_request` honors the method on the unix/vsock
-    /// paths but hardcodes `POST` on the remote http path, and an unauthenticated
-    /// remote log endpoint shouldn't be reachable before that exists anyway).
+    /// `/logs` is a plain-HTTP `GET` endpoint. It works over the local unix
+    /// socket and over the localhost HTTP endpoint written by `dstackup install`.
     pub async fn logs(&self, id: &str, lines: u32) -> Result<String> {
-        if !self.is_local() {
-            bail!(
-                "`dstack logs` over a remote endpoint isn't wired yet (lands with the \
-                 TLS+token transport); use the local VMM socket for now"
-            );
-        }
         let path = format!("/logs?id={id}&follow=false&ansi=false&lines={lines}");
         let (status, body) = http_request("GET", &self.base, &path, b"").await?;
         if status != 200 {

@@ -135,8 +135,12 @@ The deploy command:
 - computes the compose hash and app ID,
 - uses the VMM endpoint, guest image, and auth allowlist from `dstackup install`,
 - registers the compose hash in the single-node auth allowlist,
-- creates the CVM, and
+- creates the CVM with the default app resources of 2 vCPU, 2048 MB memory, and 20 GB disk, and
 - maps `http://127.0.0.1:8080/` on the host to port `80` in the CVM.
+
+Pass `--vcpu`, `--memory`, or `--disk` to change the app resources before you deploy.
+
+The `--port 8080:80` mapping means `host_port:vm_port` and uses TCP on `127.0.0.1`. The full accepted forms are `vm`, `host:vm`, `proto:host:vm`, and `proto:addr:host:vm`. Use `tcp` or `udp` for `proto`. Fixed host and VM ports must be between 1 and 65535. If you omit the host port, or use `auto` or `0`, `dstack` picks a free localhost port and prints the selected mapping after deploy.
 
 Open the app from the host:
 
@@ -163,6 +167,8 @@ Show recent app logs:
 ```bash
 dstack logs <vm-id>
 ```
+
+`dstack apps` and `dstack logs` read the VMM endpoint from the local `dstackup install` state, so they work with the default localhost dashboard endpoint. For a custom prefix, pass the same `--prefix` you used for install.
 
 Remove a local image:
 

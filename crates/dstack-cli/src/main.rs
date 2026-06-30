@@ -62,9 +62,8 @@ enum Command {
         /// vCPUs.
         #[arg(long, default_value_t = 2)]
         vcpu: u32,
-        /// memory in MB (matches vmm-cli's default; images with a large
-        /// initramfs-rootfs may need more — raise it if the guest fails early).
-        #[arg(long, default_value_t = 1024)]
+        /// memory in MB.
+        #[arg(long, default_value_t = 2048)]
         memory: u32,
         /// disk size in GB.
         #[arg(long, default_value_t = 20)]
@@ -287,6 +286,7 @@ mod tests {
                 compose,
                 compose_file,
                 name,
+                memory,
                 ports,
                 ..
             } => {
@@ -296,6 +296,7 @@ mod tests {
                     Some("examples/hello-nginx/docker-compose.yaml")
                 );
                 assert_eq!(name, "hello");
+                assert_eq!(memory, 2048);
                 assert_eq!(ports, vec!["8080:80"]);
             }
             _ => panic!("expected deploy command"),
@@ -406,7 +407,7 @@ async fn cmd_deploy(
     } else {
         println!("deployed: vm {id}");
         if port_maps.is_empty() {
-            println!("(no ports mapped — add --port <vm_port> to expose the app)");
+            println!("(no ports mapped - add --port <host_port>:<vm_port> to expose the app)");
         }
         for p in &port_maps {
             println!(
