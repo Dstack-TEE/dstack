@@ -28,6 +28,12 @@ Historical all-in-one host-stack and direct-QEMU helpers are isolated under
 [`../../tools/`](../../tools/); they are not added to `PATH` and do not shadow
 the supported Rust `dstack` CLI.
 
+## CoCo/Kata Kubernetes smoke test
+
+The Yocto rootfs includes the CoCo guest components and Kata agent integration.
+See the [CoCo/Kata Kubernetes test guide](../../docs/coco-k8s-testing.md) for a
+Kata TDX smoke-test workflow.
+
 ## Output boundary
 
 `scripts/export-artifacts.sh` converts BitBake deployment paths to the common

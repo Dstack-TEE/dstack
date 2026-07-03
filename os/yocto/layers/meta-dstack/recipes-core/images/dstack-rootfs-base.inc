@@ -14,6 +14,8 @@ IMAGE_INSTALL = "\
     docker-moby \
     docker-compose \
     dstack-guest \
+    kata-agent-coco \
+    coco-guest-components \
     wireguard-tools \
     cryptsetup \
     curl \
