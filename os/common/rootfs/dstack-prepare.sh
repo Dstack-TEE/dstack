@@ -300,6 +300,10 @@ echo "============================"
 
 cd /dstack
 
+# Seed pre-baked verity volumes (docker images / data) before dockerd starts, so
+# the images are already present with no pull. Fail-safe -- see dstack-verity.sh.
+/bin/dstack-verity.sh app-compose.json || log "dstack-verity failed (continuing; images will pull normally)"
+
 if [ "$(jq 'has("init_script")' app-compose.json)" == true ]; then
 	log "Running init script"
 	dstack-util notify-host -e "boot.progress" -d "init-script" || true
