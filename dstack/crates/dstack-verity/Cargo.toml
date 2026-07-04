@@ -1,0 +1,27 @@
+# SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "dstack-verity"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow = { workspace = true, features = ["std"] }
+tokio = { workspace = true, features = ["rt"] }
+serde = { workspace = true, features = ["derive", "std"] }
+serde_json = { workspace = true, features = ["std"] }
+sha2 = { workspace = true, features = ["std"] }
+hex = { workspace = true, features = ["std"] }
+flate2.workspace = true
+futures.workspace = true
+tar.workspace = true
+tempfile.workspace = true
+tracing.workspace = true
+rustix = { version = "0.38", features = ["fs"] }
+xattr = "1.5"
+oci-client = { version = "0.17.0", default-features = false, features = ["rustls-tls"] }
+
+[dev-dependencies]

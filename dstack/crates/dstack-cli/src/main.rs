@@ -74,6 +74,11 @@ enum Command {
         /// (host omitted/`auto`/`0` ⇒ a free host port is picked). Repeatable.
         #[arg(long = "port", value_name = "SPEC")]
         ports: Vec<String>,
+        /// attach a verity volume, as printed by `dstack verity`: the file name
+        /// in the vmm's volumes_dir, its verity_root, and the target
+        /// (`docker` or a mount path). Repeatable.
+        #[arg(long = "volume", value_name = "NAME:VERITY_ROOT:TARGET")]
+        volumes: Vec<String>,
         /// deploy in non-KMS mode (ephemeral keys; no KMS required).
         #[arg(long)]
         no_kms: bool,
@@ -102,10 +107,51 @@ enum Command {
     },
     /// Scaffold a new app project in the current directory.
     Init,
+    /// Build a verity volume that pre-loads docker images (or a directory) into
+    /// a CVM.
+    ///
+    /// The CVM mounts the volume instead of pulling and unpacking the images, so
+    /// it starts in seconds. The build runs anywhere — no docker daemon, no TEE —
+    /// but needs root, `mksquashfs`, and `veritysetup`. It prints a verity_root
+    /// to paste into your compose. See docs/verity-volumes.md.
+    Verity {
+        /// images to bake in, ideally pinned by digest (e.g. `repo@sha256:...`).
+        #[arg(value_name = "IMAGE")]
+        images: Vec<String>,
+        /// pack this directory into a data volume instead of images (mounted at a
+        /// path you choose in the compose).
+        #[arg(long, value_name = "PATH", conflicts_with = "images")]
+        dir: Option<String>,
+        /// where to write the volume.
+        #[arg(long, short = 'o', default_value = "verity.img")]
+        output: String,
+        /// squashfs compression: `none` (the default), `zstd`, or `gzip`.
+        #[arg(long, default_value = "none")]
+        compress: String,
+        /// image platform to fetch; must match the guest. `linux/amd64` today,
+        /// `linux/arm64` for arm64 hosts.
+        #[arg(long, default_value = "linux/amd64")]
+        platform: String,
+        /// allow plain-HTTP registries (loopback registries already use HTTP).
+        #[arg(long)]
+        plain_http: bool,
+    },
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // progress (e.g. `verity` pulling layers) goes to stderr so it never mixes
+    // with `--json` on stdout. RUST_LOG overrides.
+    use tracing_subscriber::EnvFilter;
+    tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .with_target(false)
+        .without_time()
+        .with_env_filter(
+            EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| EnvFilter::new("warn,dstack_verity=info")),
+        )
+        .init();
     let cli = Cli::parse();
     let defaults = LocalDefaults::read(cli.prefix.as_deref());
     let use_local_defaults = cli.host.is_none();
@@ -141,6 +187,7 @@ async fn main() -> Result<()> {
             memory,
             disk,
             ports,
+            volumes,
             no_kms,
             allowlist,
             dry_run,
@@ -170,6 +217,7 @@ async fn main() -> Result<()> {
                 memory,
                 disk,
                 &ports,
+                &volumes,
                 no_kms,
                 allowlist.as_deref(),
                 dry_run,
@@ -179,7 +227,154 @@ async fn main() -> Result<()> {
         }
         Command::Info { .. } => stub("info"),
         Command::Init => stub("init"),
+        Command::Verity {
+            images,
+            dir,
+            output,
+            compress,
+            platform,
+            plain_http,
+        } => {
+            cmd_verity(
+                &images,
+                dir.as_deref(),
+                &output,
+                &compress,
+                &platform,
+                plain_http,
+                json,
+            )
+            .await
+        }
     }
+}
+
+async fn cmd_verity(
+    images: &[String],
+    dir: Option<&str>,
+    output: &str,
+    compress: &str,
+    platform: &str,
+    plain_http: bool,
+    json: bool,
+) -> Result<()> {
+    let compress = match compress {
+        "none" => dstack_verity::Compression::None,
+        "zstd" => dstack_verity::Compression::Zstd,
+        "gzip" => dstack_verity::Compression::Gzip,
+        other => bail!("unknown --compress '{other}' (use none|zstd|gzip)"),
+    };
+    let result = dstack_verity::verity(dstack_verity::VerityOptions {
+        images: images.to_vec(),
+        dir: dir.map(std::path::PathBuf::from),
+        output: output.into(),
+        compress,
+        platform: platform.to_string(),
+        plain_http,
+    })
+    .await?;
+
+    if json {
+        let imgs: Vec<_> = result
+            .images
+            .iter()
+            .map(|i| {
+                serde_json::json!({
+                    "reference": i.reference,
+                    "manifestDigest": i.manifest_digest,
+                    "configDigest": i.config_digest,
+                    "topChainId": i.top_chain_id,
+                })
+            })
+            .collect();
+        print_json(&serde_json::json!({
+            "verityRoot": result.verity_root,
+            "output": result.output.display().to_string(),
+            "dataSize": result.data_size,
+            "images": imgs,
+        }));
+        return Ok(());
+    }
+
+    let mib = result.data_size as f64 / 1_048_576.0;
+    println!("wrote {} ({mib:.1} MiB)", result.output.display());
+    if !result.images.is_empty() {
+        // the manifest digest is what `image: repo@sha256:...` pins — not the
+        // config digest (the image id), which can't be pulled by digest.
+        println!("\nbaked images — pin each by digest in your compose:");
+        for i in &result.images {
+            println!("  {} @ {}", i.reference, i.manifest_digest);
+        }
+    }
+    let file = result
+        .output
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| result.output.display().to_string());
+    // a data volume mounts at a path you choose; it must be writable (the guest
+    // rootfs is read-only), e.g. under /run.
+    let target = if result.images.is_empty() {
+        "/run/models"
+    } else {
+        "docker"
+    };
+    println!("\ncopy {file} into the vmm's volumes_dir, then deploy with:");
+    println!(
+        "  dstack deploy -c docker-compose.yaml --volume {file}:{}:{target}",
+        result.verity_root
+    );
+    if result.images.is_empty() {
+        println!("  (change {target} to your mount path)");
+    }
+    Ok(())
+}
+
+/// A parsed `--volume` spec: the disk to attach plus its measured verity entry.
+struct VolumeSpec {
+    volume: rpc::VmVolume,
+    verity_root: String,
+    target: String,
+}
+
+/// Parse a `--volume` spec `NAME:VERITY_ROOT:TARGET`.
+///
+/// `NAME` is the volume file in the vmm's volumes_dir. `VERITY_ROOT` and `TARGET`
+/// become a measured `verity_volumes` entry in the app-compose, so the guest only
+/// seeds content matching the attested root. `dstack verity` prints the exact
+/// spec to paste.
+///
+/// `TARGET` is `docker` (seed the image store) or an absolute mount path.
+fn parse_volume(spec: &str) -> Result<VolumeSpec> {
+    let mut parts = spec.splitn(3, ':');
+    let name = parts.next().unwrap_or_default();
+    let (root, target) = match (parts.next(), parts.next()) {
+        (Some(root), Some(target)) if !root.is_empty() && !target.is_empty() => (root, target),
+        _ => bail!("--volume must be NAME:VERITY_ROOT:TARGET (as printed by `dstack verity`), got '{spec}'"),
+    };
+    if name.is_empty()
+        || name.contains('/')
+        || name.contains("..")
+        || name.contains(',')
+        || name.contains('=')
+    {
+        bail!("volume name '{name}' must be a bare file name (no '/', '..', ',', '=')");
+    }
+    if root.len() != 64 || !root.bytes().all(|b| b.is_ascii_hexdigit()) {
+        bail!("verity_root '{root}' must be 64 hex chars (copy it from `dstack verity`)");
+    }
+    if target != "docker" && !target.starts_with('/') {
+        bail!("target '{target}' must be \"docker\" or an absolute path");
+    }
+    Ok(VolumeSpec {
+        // verity volumes are read-only by construction; a writable one would let a
+        // guest corrupt the shared backing file (the vmm also forces this).
+        volume: rpc::VmVolume {
+            source: name.to_string(),
+            read_only: true,
+        },
+        verity_root: root.to_string(),
+        target: target.to_string(),
+    })
 }
 
 fn resolve_compose_arg(positional: Option<String>, flagged: Option<String>) -> Result<String> {
@@ -298,6 +493,25 @@ mod tests {
     }
 
     #[test]
+    fn parses_volume_specs() {
+        let root = "a".repeat(64);
+        let docker = parse_volume(&format!("images.img:{root}:docker")).unwrap();
+        assert_eq!(docker.volume.source, "images.img");
+        assert!(docker.volume.read_only);
+        assert_eq!(docker.verity_root, root);
+        assert_eq!(docker.target, "docker");
+
+        let data = parse_volume(&format!("weights.img:{root}:/models/llama")).unwrap();
+        assert_eq!(data.target, "/models/llama");
+
+        assert!(parse_volume("weights.img").is_err()); // missing verity_root:target
+        assert!(parse_volume(&format!("weights.img:{root}")).is_err()); // missing target
+        assert!(parse_volume(&format!("../escape.img:{root}:docker")).is_err()); // path separator
+        assert!(parse_volume("x.img:nothex:docker").is_err()); // verity_root not hex
+        assert!(parse_volume(&format!("x.img:{root}:relative/path")).is_err()); // bad target
+    }
+
+    #[test]
     fn parses_phala_style_deploy_flags() {
         let cli = Cli::parse_from([
             "dstack",
@@ -343,6 +557,7 @@ async fn cmd_deploy(
     memory: u32,
     disk: u32,
     port_specs: &[String],
+    volume_specs: &[String],
     no_kms: bool,
     allowlist: Option<&str>,
     dry_run: bool,
@@ -350,12 +565,24 @@ async fn cmd_deploy(
 ) -> Result<()> {
     let yaml = std::fs::read_to_string(compose_path)
         .with_context(|| format!("reading compose file '{compose_path}'"))?;
-    let app_compose = compose::build_app_compose(name, &yaml, !no_kms);
 
-    let mut port_maps = Vec::new();
-    for spec in port_specs {
-        port_maps.push(ports::parse_port(spec)?);
-    }
+    let port_maps = port_specs
+        .iter()
+        .map(|s| ports::parse_port(s))
+        .collect::<Result<Vec<_>>>()?;
+    let parsed_volumes = volume_specs
+        .iter()
+        .map(|s| parse_volume(s))
+        .collect::<Result<Vec<_>>>()?;
+
+    // each --volume declares a measured verity_volumes entry, so the built
+    // app-compose (and thus app_id) binds the attested roots.
+    let verity_volumes: Vec<(String, String)> = parsed_volumes
+        .iter()
+        .map(|v| (v.verity_root.clone(), v.target.clone()))
+        .collect();
+    let app_compose = compose::build_app_compose(name, &yaml, !no_kms, &verity_volumes);
+    let volumes: Vec<_> = parsed_volumes.into_iter().map(|v| v.volume).collect();
 
     let mut cfg = rpc::VmConfiguration {
         name: name.to_string(),
@@ -365,6 +592,7 @@ async fn cmd_deploy(
         memory,
         disk_size: disk,
         ports: port_maps.clone(),
+        volumes,
         ..Default::default()
     };
 

@@ -12,8 +12,17 @@ use serde_json::json;
 ///
 /// `kms_enabled` selects KMS mode (deterministic, upgradeable per-app keys);
 /// gateway and local-key-provider are off for the direct-port single-node flow.
-pub fn build_app_compose(name: &str, docker_compose_yaml: &str, kms_enabled: bool) -> String {
-    let manifest = json!({
+///
+/// `verity_volumes` is a list of `(verity_root, target)` pairs. Each becomes a
+/// measured `verity_volumes` entry, so the CVM only seeds content matching the
+/// attested root. Empty for a normal deploy.
+pub fn build_app_compose(
+    name: &str,
+    docker_compose_yaml: &str,
+    kms_enabled: bool,
+    verity_volumes: &[(String, String)],
+) -> String {
+    let mut manifest = json!({
         "manifest_version": 2,
         "name": name,
         "runner": "docker-compose",
@@ -31,6 +40,12 @@ pub fn build_app_compose(name: &str, docker_compose_yaml: &str, kms_enabled: boo
         // (NTS is also currently broken in guest images — see dstack#745.)
         "secure_time": false,
     });
+    if !verity_volumes.is_empty() {
+        manifest["verity_volumes"] = json!(verity_volumes
+            .iter()
+            .map(|(root, target)| json!({ "verity_root": root, "target": target }))
+            .collect::<Vec<_>>());
+    }
     // pretty-print via Value's Display (`{:#}`) — infallible, and byte-identical
     // to serde_json::to_string_pretty (avoids an expect on an unfailable Result).
     format!("{manifest:#}")
