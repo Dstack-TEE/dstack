@@ -119,6 +119,28 @@ pub struct AppCompose {
     /// of silently ignoring the requirements.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub requirements: Option<Requirements>,
+    /// Read-only, dm-verity-protected volumes pre-seeded into the CVM. Each
+    /// `verity_root` is measured (it is part of these compose bytes), so the
+    /// guest only mounts content matching the attested app. See
+    /// docs/verity-volumes.md.
+    #[serde(default)]
+    pub verity_volumes: Vec<VerityVolume>,
+}
+
+/// A pre-baked, read-only dm-verity volume attached to the CVM.
+#[derive(Deserialize, Serialize, Debug, Clone, Default)]
+pub struct VerityVolume {
+    /// dm-verity root hash (hex): the volume's content identity and integrity
+    /// check. The guest matches attached devices against it.
+    #[serde(default)]
+    pub verity_root: String,
+    /// `"docker"` (seed the docker overlay2 image store), or an absolute path
+    /// where the volume's filesystem is mounted (e.g. model weights).
+    ///
+    /// Defaulted so one malformed entry doesn't fail the whole AppCompose parse;
+    /// the guest skips an entry with an empty root or target.
+    #[serde(default)]
+    pub target: String,
 }
 
 /// Canonical source for the policy used when `requirements.gpu_policy` is

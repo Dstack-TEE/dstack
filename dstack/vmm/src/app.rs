@@ -79,6 +79,16 @@ pub struct PortMapping {
     pub to: u16,
 }
 
+/// An extra disk attached to the VM (e.g. a pre-baked verity volume). `source`
+/// is an absolute host path already resolved and validated by the VMM against
+/// `cvm.volumes_dir`.
+#[derive(Deserialize, Serialize, Debug, Clone)]
+pub struct VmVolume {
+    pub source: String,
+    #[serde(default)]
+    pub read_only: bool,
+}
+
 #[derive(Deserialize, Serialize, Clone, Builder, Debug)]
 pub struct Manifest {
     pub id: String,
@@ -104,6 +114,8 @@ pub struct Manifest {
     pub no_tee: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub networks: Vec<Networking>,
+    #[serde(default)]
+    pub volumes: Vec<VmVolume>,
 }
 
 impl Manifest {
@@ -1614,6 +1626,7 @@ mod tests {
             gateway_urls: vec![],
             no_tee: false,
             networks: vec![],
+            volumes: vec![],
         }
     }
 
@@ -1875,6 +1888,7 @@ mod tests {
             gateway_urls: vec![],
             no_tee: false,
             networks: vec![],
+            volumes: vec![],
         };
 
         let mr_config = MrConfigV3::new(

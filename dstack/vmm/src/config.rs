@@ -329,6 +329,12 @@ pub struct CvmConfig {
     #[serde(default = "default_serial_history_max_bytes")]
     #[serde(with = "size_parser::human_size")]
     pub serial_history_max_bytes: u64,
+
+    /// Directory holding attachable volume images (e.g. pre-baked verity
+    /// volumes). A deploy may only attach files under this directory, referenced
+    /// by bare file name. Empty (the default) disables volume attachment.
+    #[serde(default)]
+    pub volumes_dir: String,
 }
 
 /// SMBIOS product information configuration.

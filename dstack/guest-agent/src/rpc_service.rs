@@ -751,6 +751,7 @@ mod tests {
             swap_size: 0,
             port_policy: Default::default(),
             requirements: None,
+            verity_volumes: Vec::new(),
         };
 
         let dummy_appcompose_wrapper = AppComposeWrapper {

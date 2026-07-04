@@ -32,6 +32,10 @@ pccs_url = ""
 # persistent NVIDIA OCSP and RIM caches during local GPU verification.
 # nvidia_attestation_proxy_url = "http://10.0.2.1:8090"
 docker_registry = ""
+# Directory of attachable volume images (e.g. pre-baked verity volumes). A
+# deploy may only attach files under this directory, by bare file name. Empty
+# disables volume attachment.
+volumes_dir = ""
 cid_start = 1000
 cid_pool_size = 1000
 max_allocable_vcpu = 20

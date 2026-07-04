@@ -182,6 +182,7 @@ pub fn create_manifest_from_vm_config(
         Some(gpus) => resolve_gpus_with_config(gpus, cvm_config)?,
         None => GpuConfig::default(),
     };
+    let volumes = resolve_volumes(&request.volumes, cvm_config)?;
 
     Ok(Manifest {
         id,
@@ -200,7 +201,63 @@ pub fn create_manifest_from_vm_config(
         gateway_urls: request.gateway_urls.clone(),
         no_tee: request.no_tee,
         networks: networks_from_vm_config(&request, cvm_config)?,
+        volumes,
     })
+}
+
+/// Resolve requested volumes against `cvm.volumes_dir`. Each `source` must be a
+/// bare file name under that directory; the host attaches the bytes, and the
+/// guest verifies content against the measured `verity_root`.
+fn resolve_volumes(
+    reqs: &[rpc::VmVolume],
+    cvm_config: &crate::config::CvmConfig,
+) -> Result<Vec<crate::app::VmVolume>> {
+    if reqs.is_empty() {
+        return Ok(vec![]);
+    }
+    let dir = cvm_config.volumes_dir.trim();
+    if dir.is_empty() {
+        bail!("volumes requested but cvm.volumes_dir is not configured");
+    }
+    let base = std::fs::canonicalize(dir)
+        .with_context(|| format!("volumes_dir '{dir}' does not exist"))?;
+    reqs.iter()
+        .map(|v| {
+            // `,`/`=` would let a crafted file name inject qemu `-drive` options
+            // when the path is concatenated into the drive string.
+            if v.source.is_empty()
+                || v.source.contains('/')
+                || v.source.contains("..")
+                || v.source.contains(',')
+                || v.source.contains('=')
+            {
+                bail!(
+                    "invalid volume source '{}': must be a bare file name (no '/', '..', ',', '=')",
+                    v.source
+                );
+            }
+            let real = std::fs::canonicalize(base.join(&v.source)).with_context(|| {
+                format!("volume '{}' not found under volumes_dir '{dir}'", v.source)
+            })?;
+            if !real.starts_with(&base) {
+                bail!("volume '{}' escapes volumes_dir", v.source);
+            }
+            // Re-check the resolved path: a symlink could resolve to a name
+            // containing `,`/`=` and reintroduce QEMU -drive option injection.
+            let real_str = real.to_string_lossy();
+            if real_str.contains(',') || real_str.contains('=') {
+                bail!("volume '{}' resolves to a path with ',' or '='", v.source);
+            }
+            Ok(crate::app::VmVolume {
+                source: real.to_string_lossy().into_owned(),
+                // Verity volumes are always read-only: the backing file is shared
+                // content-addressed data, so a writable attach could only let one
+                // guest corrupt it for every other tenant. Force it regardless of
+                // what the client asked for.
+                read_only: true,
+            })
+        })
+        .collect()
 }
 
 fn networking_from_proto(proto: &rpc::NetworkingConfig) -> Result<Option<Networking>> {
