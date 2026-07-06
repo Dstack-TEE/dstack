@@ -23,6 +23,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use flate2::read::GzDecoder;
+use fs_err as fs;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
@@ -33,9 +34,9 @@ use crate::oci::{PulledImage, PulledLayer};
 /// Returns each image's top chain-id, in the same order as `images`. That
 /// chain-id is what the verity volume ultimately vouches for.
 pub fn build_store(images: &[PulledImage], root: &Path) -> Result<Vec<String>> {
-    std::fs::create_dir_all(root.join("overlay2/l"))?;
-    std::fs::create_dir_all(root.join("image/overlay2/layerdb/sha256"))?;
-    std::fs::create_dir_all(root.join("image/overlay2/imagedb/content/sha256"))?;
+    fs::create_dir_all(root.join("overlay2/l"))?;
+    fs::create_dir_all(root.join("image/overlay2/layerdb/sha256"))?;
+    fs::create_dir_all(root.join("image/overlay2/imagedb/content/sha256"))?;
 
     let mut built: HashSet<String> = HashSet::new();
     // repo_name -> { "repo:tag" -> "sha256:imageid", "repo@digest" -> id }
@@ -117,7 +118,7 @@ fn write_layer(
 ) -> Result<()> {
     let layer_dir = root.join("overlay2").join(chain);
     let diff_dir = layer_dir.join("diff");
-    std::fs::create_dir_all(&diff_dir)?;
+    fs::create_dir_all(&diff_dir)?;
 
     let (layer_size, actual_diff) = extract_layer(&layer.data, &layer.media_type, &diff_dir)
         .with_context(|| format!("extracting layer {layer_index} of {reference}"))?;
@@ -143,7 +144,7 @@ fn write_layer(
     }
 
     let layerdb = root.join("image/overlay2/layerdb/sha256").join(chain);
-    std::fs::create_dir_all(&layerdb)?;
+    fs::create_dir_all(&layerdb)?;
     write(layerdb.join("diff"), diff_id)?;
     write(layerdb.join("cache-id"), chain)?;
     write(layerdb.join("size"), &layer_size.to_string())?;
@@ -173,7 +174,7 @@ fn short_link(chain_hex: &str) -> String {
 /// the parent's own `lower` and prepending the parent.
 fn lower_chain(root: &Path, parent_short: &str) -> Result<String> {
     // resolve the parent's chain dir from its l/ symlink to read its `lower`.
-    let parent_dir = std::fs::read_link(root.join("overlay2/l").join(parent_short))?;
+    let parent_dir = fs::read_link(root.join("overlay2/l").join(parent_short))?;
     // ../<chain>/diff -> <chain>
     let chain = parent_dir
         .parent()
@@ -183,7 +184,7 @@ fn lower_chain(root: &Path, parent_short: &str) -> Result<String> {
         .to_string();
     let plower = root.join("overlay2").join(&chain).join("lower");
     let mut parts = vec![format!("l/{parent_short}")];
-    if let Ok(existing) = std::fs::read_to_string(&plower) {
+    if let Ok(existing) = fs::read_to_string(&plower) {
         parts.extend(existing.split(':').map(str::to_string));
     }
     Ok(parts.join(":"))
@@ -232,7 +233,7 @@ fn extract_layer(data: &[u8], media_type: &str, dest: &Path) -> Result<(u64, Str
                     None => continue,
                 };
             if name == ".wh..wh..opq" {
-                std::fs::create_dir_all(&out_parent)?;
+                fs::create_dir_all(&out_parent)?;
                 xattr::set(&out_parent, "trusted.overlay.opaque", b"y")
                     .context("setting overlay opaque xattr (need root)")?;
             } else if rest.starts_with(".wh.") {
@@ -242,7 +243,7 @@ fn extract_layer(data: &[u8], media_type: &str, dest: &Path) -> Result<(u64, Str
                 // a name like `.wh.`, `.wh..`, or `.wh...` would target the parent
                 // dir itself or escape it; ignore.
             } else {
-                std::fs::create_dir_all(&out_parent)?;
+                fs::create_dir_all(&out_parent)?;
                 let target = out_parent.join(rest);
                 let _ = remove_any(&target);
                 mknod_whiteout(&target).context("creating overlay whiteout (need root)")?;
@@ -302,7 +303,7 @@ fn safe_subpath(dest: &Path, rel: &Path) -> Option<PathBuf> {
             Component::CurDir => {}
             Component::Normal(c) => {
                 cur.push(c);
-                if let Ok(md) = std::fs::symlink_metadata(&cur) {
+                if let Ok(md) = fs::symlink_metadata(&cur) {
                     if md.file_type().is_symlink() {
                         return None;
                     }
@@ -323,9 +324,9 @@ fn mknod_whiteout(path: &Path) -> Result<()> {
 }
 
 fn remove_any(path: &Path) -> std::io::Result<()> {
-    match std::fs::symlink_metadata(path) {
-        Ok(m) if m.is_dir() => std::fs::remove_dir_all(path),
-        Ok(_) => std::fs::remove_file(path),
+    match fs::symlink_metadata(path) {
+        Ok(m) if m.is_dir() => fs::remove_dir_all(path),
+        Ok(_) => fs::remove_file(path),
         Err(e) => Err(e),
     }
 }
@@ -347,11 +348,11 @@ fn symlink(target: impl AsRef<Path>, link: impl AsRef<Path>) -> std::io::Result<
 }
 
 fn write(path: PathBuf, contents: &str) -> std::io::Result<()> {
-    std::fs::write(path, contents.as_bytes())
+    fs::write(path, contents.as_bytes())
 }
 
 fn write_bytes(path: PathBuf, contents: &[u8]) -> std::io::Result<()> {
-    std::fs::write(path, contents)
+    fs::write(path, contents)
 }
 
 #[cfg(test)]
@@ -418,10 +419,10 @@ mod tests {
         use std::os::unix::fs::MetadataExt;
         let dest = tempfile::tempdir().unwrap();
         let victim = tempfile::tempdir().unwrap();
-        std::fs::write(victim.path().join("keep"), b"x").unwrap();
+        fs::write(victim.path().join("keep"), b"x").unwrap();
         // stamp the tar entries with our own uid/gid so unpacking the symlink
         // doesn't need root to chown.
-        let md = std::fs::metadata(victim.path()).unwrap();
+        let md = fs::metadata(victim.path()).unwrap();
         let (uid, gid) = (md.uid() as u64, md.gid() as u64);
 
         let mut b = tar::Builder::new(Vec::new());

@@ -17,10 +17,13 @@ sha2 = { workspace = true, features = ["std"] }
 hex = { workspace = true, features = ["std"] }
 flate2.workspace = true
 futures.workspace = true
+fs-err.workspace = true
+gpt = "4.1.0"
 tar.workspace = true
 tempfile.workspace = true
 tracing.workspace = true
 rustix = { version = "0.38", features = ["fs"] }
+uuid.workspace = true
 xattr = "1.5"
 oci-client = { version = "0.17.0", default-features = false, features = ["rustls-tls"] }
 

@@ -15,6 +15,7 @@ use clap::{Parser, Subcommand};
 use dstack_cli_core::layout::InstallLayout;
 use dstack_cli_core::vmm::{Vmm, DEFAULT_HOST};
 use dstack_cli_core::{compose, ports, rpc};
+use fs_err as fs;
 
 #[derive(Parser)]
 #[command(
@@ -122,6 +123,10 @@ enum Command {
         /// path you choose in the compose).
         #[arg(long, value_name = "PATH", conflicts_with = "images")]
         dir: Option<String>,
+        /// wrap an existing filesystem image instead of building squashfs. The
+        /// guest mounts it read-only after dm-verity verification.
+        #[arg(long = "fs-image", value_name = "PATH", conflicts_with_all = ["images", "dir"])]
+        fs_image: Option<String>,
         /// where to write the volume.
         #[arg(long, short = 'o', default_value = "verity.img")]
         output: String,
@@ -230,6 +235,7 @@ async fn main() -> Result<()> {
         Command::Verity {
             images,
             dir,
+            fs_image,
             output,
             compress,
             platform,
@@ -238,6 +244,7 @@ async fn main() -> Result<()> {
             cmd_verity(
                 &images,
                 dir.as_deref(),
+                fs_image.as_deref(),
                 &output,
                 &compress,
                 &platform,
@@ -249,9 +256,11 @@ async fn main() -> Result<()> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn cmd_verity(
     images: &[String],
     dir: Option<&str>,
+    fs_image: Option<&str>,
     output: &str,
     compress: &str,
     platform: &str,
@@ -267,12 +276,17 @@ async fn cmd_verity(
     let result = dstack_verity::verity(dstack_verity::VerityOptions {
         images: images.to_vec(),
         dir: dir.map(std::path::PathBuf::from),
+        fs_image: fs_image.map(std::path::PathBuf::from),
         output: output.into(),
         compress,
         platform: platform.to_string(),
         plain_http,
     })
     .await?;
+
+    let volume_size = fs::metadata(&result.output)
+        .with_context(|| format!("stat {}", result.output.display()))?
+        .len();
 
     if json {
         let imgs: Vec<_> = result
@@ -291,12 +305,13 @@ async fn cmd_verity(
             "verityRoot": result.verity_root,
             "output": result.output.display().to_string(),
             "dataSize": result.data_size,
+            "volumeSize": volume_size,
             "images": imgs,
         }));
         return Ok(());
     }
 
-    let mib = result.data_size as f64 / 1_048_576.0;
+    let mib = volume_size as f64 / 1_048_576.0;
     println!("wrote {} ({mib:.1} MiB)", result.output.display());
     if !result.images.is_empty() {
         // the manifest digest is what `image: repo@sha256:...` pins — not the
@@ -395,7 +410,7 @@ struct LocalDefaults {
 impl LocalDefaults {
     fn read(prefix: Option<&str>) -> Option<Self> {
         let path = InstallLayout::state_path_for_prefix(prefix);
-        let body = std::fs::read_to_string(path).ok()?;
+        let body = fs::read_to_string(path).ok()?;
         let v: serde_json::Value = serde_json::from_str(&body).ok()?;
         Some(Self::from_value(&v))
     }
@@ -438,114 +453,6 @@ impl LocalDefaults {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parses_local_install_defaults() {
-        let value = serde_json::json!({
-            "client_url": "http://127.0.0.1:19080",
-            "image": "dstack-0.5.11",
-            "allowlist_path": "/tmp/dstack/etc/dstack/auth-allowlist.json"
-        });
-        let defaults = LocalDefaults::from_value(&value);
-        assert_eq!(
-            defaults.client_url.as_deref(),
-            Some("http://127.0.0.1:19080")
-        );
-        assert_eq!(defaults.image.as_deref(), Some("dstack-0.5.11"));
-        assert_eq!(
-            defaults.allowlist_path().as_deref(),
-            Some("/tmp/dstack/etc/dstack/auth-allowlist.json")
-        );
-    }
-
-    #[test]
-    fn reads_local_install_defaults_from_prefix() {
-        let install_root =
-            std::env::temp_dir().join(format!("dstack-cli-state-test-{}", std::process::id()));
-        let state_dir = install_root.join("var/lib/dstack");
-        std::fs::create_dir_all(&state_dir).unwrap();
-        std::fs::write(
-            state_dir.join(dstack_cli_core::layout::STATE_FILE),
-            r#"{
-              "client_url": "http://127.0.0.1:29080",
-              "image": "dstack-0.5.12",
-              "allowlist_path": "/tmp/custom-dstack/etc/dstack/auth-allowlist.json"
-            }"#,
-        )
-        .unwrap();
-
-        let prefix = dstack_cli_core::layout::path_string(&install_root);
-        let defaults = LocalDefaults::read(Some(&prefix)).unwrap();
-        assert_eq!(
-            defaults.client_url.as_deref(),
-            Some("http://127.0.0.1:29080")
-        );
-        assert_eq!(defaults.image.as_deref(), Some("dstack-0.5.12"));
-        assert_eq!(
-            defaults.allowlist_path().as_deref(),
-            Some("/tmp/custom-dstack/etc/dstack/auth-allowlist.json")
-        );
-
-        let _ = std::fs::remove_dir_all(install_root);
-    }
-
-    #[test]
-    fn parses_volume_specs() {
-        let root = "a".repeat(64);
-        let docker = parse_volume(&format!("images.img:{root}:docker")).unwrap();
-        assert_eq!(docker.volume.source, "images.img");
-        assert!(docker.volume.read_only);
-        assert_eq!(docker.verity_root, root);
-        assert_eq!(docker.target, "docker");
-
-        let data = parse_volume(&format!("weights.img:{root}:/models/llama")).unwrap();
-        assert_eq!(data.target, "/models/llama");
-
-        assert!(parse_volume("weights.img").is_err()); // missing verity_root:target
-        assert!(parse_volume(&format!("weights.img:{root}")).is_err()); // missing target
-        assert!(parse_volume(&format!("../escape.img:{root}:docker")).is_err()); // path separator
-        assert!(parse_volume("x.img:nothex:docker").is_err()); // verity_root not hex
-        assert!(parse_volume(&format!("x.img:{root}:relative/path")).is_err()); // bad target
-    }
-
-    #[test]
-    fn parses_phala_style_deploy_flags() {
-        let cli = Cli::parse_from([
-            "dstack",
-            "deploy",
-            "-n",
-            "hello",
-            "-c",
-            "examples/hello-nginx/docker-compose.yaml",
-            "--port",
-            "8080:80",
-        ]);
-        match cli.command {
-            Command::Deploy {
-                compose,
-                compose_file,
-                name,
-                memory,
-                ports,
-                ..
-            } => {
-                assert_eq!(compose, None);
-                assert_eq!(
-                    compose_file.as_deref(),
-                    Some("examples/hello-nginx/docker-compose.yaml")
-                );
-                assert_eq!(name, "hello");
-                assert_eq!(memory, 2048);
-                assert_eq!(ports, vec!["8080:80"]);
-            }
-            _ => panic!("expected deploy command"),
-        }
-    }
-}
-
 #[allow(clippy::too_many_arguments)]
 async fn cmd_deploy(
     host: &str,
@@ -563,7 +470,7 @@ async fn cmd_deploy(
     dry_run: bool,
     json: bool,
 ) -> Result<()> {
-    let yaml = std::fs::read_to_string(compose_path)
+    let yaml = fs::read_to_string(compose_path)
         .with_context(|| format!("reading compose file '{compose_path}'"))?;
 
     let port_maps = port_specs
@@ -761,5 +668,141 @@ fn trunc(s: &str, n: usize) -> String {
         let mut out: String = s.chars().take(n.saturating_sub(1)).collect();
         out.push('…');
         out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_local_install_defaults() {
+        let value = serde_json::json!({
+            "client_url": "http://127.0.0.1:19080",
+            "image": "dstack-0.5.11",
+            "allowlist_path": "/tmp/dstack/etc/dstack/auth-allowlist.json"
+        });
+        let defaults = LocalDefaults::from_value(&value);
+        assert_eq!(
+            defaults.client_url.as_deref(),
+            Some("http://127.0.0.1:19080")
+        );
+        assert_eq!(defaults.image.as_deref(), Some("dstack-0.5.11"));
+        assert_eq!(
+            defaults.allowlist_path().as_deref(),
+            Some("/tmp/dstack/etc/dstack/auth-allowlist.json")
+        );
+    }
+
+    #[test]
+    fn reads_local_install_defaults_from_prefix() {
+        let install_root =
+            std::env::temp_dir().join(format!("dstack-cli-state-test-{}", std::process::id()));
+        let state_dir = install_root.join("var/lib/dstack");
+        fs::create_dir_all(&state_dir).unwrap();
+        fs::write(
+            state_dir.join(dstack_cli_core::layout::STATE_FILE),
+            r#"{
+              "client_url": "http://127.0.0.1:29080",
+              "image": "dstack-0.5.12",
+              "allowlist_path": "/tmp/custom-dstack/etc/dstack/auth-allowlist.json"
+            }"#,
+        )
+        .unwrap();
+
+        let prefix = dstack_cli_core::layout::path_string(&install_root);
+        let defaults = LocalDefaults::read(Some(&prefix)).unwrap();
+        assert_eq!(
+            defaults.client_url.as_deref(),
+            Some("http://127.0.0.1:29080")
+        );
+        assert_eq!(defaults.image.as_deref(), Some("dstack-0.5.12"));
+        assert_eq!(
+            defaults.allowlist_path().as_deref(),
+            Some("/tmp/custom-dstack/etc/dstack/auth-allowlist.json")
+        );
+
+        let _ = fs::remove_dir_all(install_root);
+    }
+
+    #[test]
+    fn parses_volume_specs() {
+        let root = "a".repeat(64);
+        let docker = parse_volume(&format!("images.img:{root}:docker")).unwrap();
+        assert_eq!(docker.volume.source, "images.img");
+        assert!(docker.volume.read_only);
+        assert_eq!(docker.verity_root, root);
+        assert_eq!(docker.target, "docker");
+
+        let data = parse_volume(&format!("weights.img:{root}:/models/llama")).unwrap();
+        assert_eq!(data.target, "/models/llama");
+
+        assert!(parse_volume("weights.img").is_err()); // missing verity_root:target
+        assert!(parse_volume(&format!("weights.img:{root}")).is_err()); // missing target
+        assert!(parse_volume(&format!("../escape.img:{root}:docker")).is_err()); // path separator
+        assert!(parse_volume("x.img:nothex:docker").is_err()); // verity_root not hex
+        assert!(parse_volume(&format!("x.img:{root}:relative/path")).is_err()); // bad target
+    }
+
+    #[test]
+    fn parses_phala_style_deploy_flags() {
+        let cli = Cli::parse_from([
+            "dstack",
+            "deploy",
+            "-n",
+            "hello",
+            "-c",
+            "examples/hello-nginx/docker-compose.yaml",
+            "--port",
+            "8080:80",
+        ]);
+        match cli.command {
+            Command::Deploy {
+                compose,
+                compose_file,
+                name,
+                memory,
+                ports,
+                ..
+            } => {
+                assert_eq!(compose, None);
+                assert_eq!(
+                    compose_file.as_deref(),
+                    Some("examples/hello-nginx/docker-compose.yaml")
+                );
+                assert_eq!(name, "hello");
+                assert_eq!(memory, 2048);
+                assert_eq!(ports, vec!["8080:80"]);
+            }
+            _ => panic!("expected deploy command"),
+        }
+    }
+
+    #[test]
+    fn parses_verity_fs_image_flag() {
+        let cli = Cli::parse_from(["dstack", "verity", "--fs-image", "rootfs.ext4"]);
+        match cli.command {
+            Command::Verity {
+                images,
+                dir,
+                fs_image,
+                ..
+            } => {
+                assert!(images.is_empty());
+                assert_eq!(dir, None);
+                assert_eq!(fs_image.as_deref(), Some("rootfs.ext4"));
+            }
+            _ => panic!("expected verity command"),
+        }
+
+        assert!(Cli::try_parse_from([
+            "dstack",
+            "verity",
+            "--dir",
+            "data",
+            "--fs-image",
+            "rootfs.ext4"
+        ])
+        .is_err());
     }
 }

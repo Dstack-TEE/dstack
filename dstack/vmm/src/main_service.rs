@@ -219,8 +219,8 @@ fn resolve_volumes(
     if dir.is_empty() {
         bail!("volumes requested but cvm.volumes_dir is not configured");
     }
-    let base = std::fs::canonicalize(dir)
-        .with_context(|| format!("volumes_dir '{dir}' does not exist"))?;
+    let base =
+        fs::canonicalize(dir).with_context(|| format!("volumes_dir '{dir}' does not exist"))?;
     reqs.iter()
         .map(|v| {
             // `,`/`=` would let a crafted file name inject qemu `-drive` options
@@ -236,7 +236,7 @@ fn resolve_volumes(
                     v.source
                 );
             }
-            let real = std::fs::canonicalize(base.join(&v.source)).with_context(|| {
+            let real = fs::canonicalize(base.join(&v.source)).with_context(|| {
                 format!("volume '{}' not found under volumes_dir '{dir}'", v.source)
             })?;
             if !real.starts_with(&base) {

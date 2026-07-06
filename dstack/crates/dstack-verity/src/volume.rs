@@ -2,25 +2,39 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-//! Pack a directory into a reproducible, verity-protected volume.
+//! Pack a directory into a reproducible, verity-protected disk image.
 //!
-//! The output is one file: the squashfs image, then its dm-verity hash tree.
-//! squashfs is used because the guest kernel already mounts it (it's the guest's
-//! own rootfs), and because `mksquashfs` with a pinned timestamp is reproducible
-//! byte for byte. The verity root is a pure function of the squashfs bytes and
-//! the salt.
+//! The output is a raw disk with two deterministic GPT partitions:
+//!
+//!   1. the filesystem image
+//!   2. the dm-verity superblock and hash tree
+//!
+//! Keeping the verity data and hash devices in separate partitions means the
+//! guest never has to inspect filesystem metadata to find the hash tree. The
+//! partition table is only a locator hint; the measured verity root is still the
+//! content identity.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::Command;
 
 use anyhow::{bail, Context, Result};
+use fs_err as fs;
 use sha2::{Digest, Sha256};
+use uuid::Uuid;
 
 /// Fixed build timestamp (2024-01-01), so the image is the same no matter when
 /// it's built. It never shows up at runtime: `mksquashfs -all-time` normalizes
 /// the store's own timestamps away.
 const EPOCH: &str = "1704067200";
 const BLOCK: u64 = 4096;
+const SECTOR: u64 = 512;
+// 1 MiB alignment.
+const PARTITION_ALIGNMENT_SECTORS: u64 = 2048;
+// The `gpt` crate writes the primary/backup headers and partition arrays. We
+// still reserve enough trailing sectors in the raw image for the backup array
+// (128 entries * 128 bytes) plus the backup header.
+const GPT_ENTRY_SECTORS: u64 = 32;
 
 #[derive(Clone, Copy)]
 pub enum Compression {
@@ -44,11 +58,12 @@ impl Compression {
 
 pub struct BuiltVolume {
     pub verity_root: String,
-    /// size of the squashfs region = the verity hash offset.
+    /// Size of the filesystem data partition.
     pub data_size: u64,
 }
 
-/// Build `output`: the squashfs image of `store`, then its dm-verity hash tree.
+/// Build `output`: a GPT disk image with the squashfs data partition and a
+/// separate dm-verity hash partition.
 ///
 /// `store` is any directory — a docker overlay2 store, or plain data. `salt`
 /// fixes the verity root.
@@ -64,13 +79,13 @@ pub fn build_volume(
 ) -> Result<BuiltVolume> {
     require_tool("mksquashfs")?;
     require_tool("veritysetup")?;
-    if output.exists() {
-        std::fs::remove_file(output).ok();
-    }
+
+    let tmp = tempfile::tempdir().context("creating volume scratch dir")?;
+    let data_path = tmp.path().join("data.fs");
 
     // 1. reproducible squashfs.
     let mut cmd = Command::new("mksquashfs");
-    cmd.arg(store).arg(output);
+    cmd.arg(store).arg(&data_path);
     cmd.args(compress.args());
     cmd.args([
         "-all-time",
@@ -84,18 +99,51 @@ pub fn build_volume(
     run(cmd, "mksquashfs")?;
 
     // 2. the verity data region must be block-aligned; pad the squashfs up.
-    let bytes_used = squashfs_bytes_used(output)?;
-    let data_size = bytes_used.div_ceil(BLOCK) * BLOCK;
+    let bytes_used = squashfs_bytes_used(&data_path)?;
+    seal_data_image(&data_path, bytes_used, output, salt_hex)
+}
+
+/// Wrap an existing filesystem image in the same partitioned verity disk format.
+///
+/// The input image is copied to a scratch file and padded to a 4096-byte verity
+/// block boundary. Its filesystem type is otherwise opaque to the verity layer.
+pub fn build_fs_image(fs_image: &Path, output: &Path, salt_hex: &str) -> Result<BuiltVolume> {
+    require_tool("veritysetup")?;
+    let len = fs::metadata(fs_image)
+        .with_context(|| format!("stat {}", fs_image.display()))?
+        .len();
+    if len == 0 {
+        bail!("filesystem image '{}' is empty", fs_image.display());
+    }
+
+    let tmp = tempfile::tempdir().context("creating volume scratch dir")?;
+    let data_path = tmp.path().join("data.fs");
+    fs::copy(fs_image, &data_path)
+        .with_context(|| format!("copying {} into scratch", fs_image.display()))?;
+    seal_data_image(&data_path, len, output, salt_hex)
+}
+
+fn seal_data_image(
+    data_path: &Path,
+    data_len: u64,
+    output: &Path,
+    salt_hex: &str,
+) -> Result<BuiltVolume> {
+    let hash_tmp = tempfile::tempdir().context("creating verity hash scratch dir")?;
+    let hash_path = hash_tmp.path().join("verity.hash");
+    let data_size = data_len.div_ceil(BLOCK) * BLOCK;
     {
-        let f = std::fs::OpenOptions::new().write(true).open(output)?;
+        let f = fs::OpenOptions::new().write(true).open(data_path)?;
         f.set_len(data_size)?;
     }
 
-    // 3. Append the verity hash tree to the same file, at the aligned offset.
+    // Build the verity hash device as a separate image. At runtime this is
+    // partition 2, so no --hash-offset is needed and the guest does not parse
+    // filesystem metadata before verity is active.
     // Pin the superblock UUID too: veritysetup randomizes it otherwise, and we
-    // want the whole file reproducible, not just the root. The UUID sits in the
+    // want the whole image reproducible, not just the root. The UUID sits in the
     // hash tree, not the hashed data, so it never changes the root.
-    let uuid = uuid_from_data(output, data_size)?;
+    let uuid = uuid_from_data(data_path, data_size)?;
     let mut cmd = Command::new("veritysetup");
     cmd.args([
         "format",
@@ -107,13 +155,15 @@ pub fn build_volume(
         "4096",
         "--hash-block-size",
         "4096",
-        "--hash-offset",
-        &data_size.to_string(),
     ]);
-    cmd.arg(output).arg(output);
+    cmd.arg(data_path).arg(&hash_path);
     let out = capture(cmd, "veritysetup format")?;
     let verity_root =
         parse_root_hash(&out).context("could not find the root hash in veritysetup output")?;
+
+    // Wrap the two blobs in a deterministic GPT disk image:
+    //    p1 = data filesystem, p2 = verity superblock + hash tree.
+    build_partitioned_image(data_path, data_size, &hash_path, output, &verity_root)?;
 
     Ok(BuiltVolume {
         verity_root,
@@ -124,7 +174,7 @@ pub fn build_volume(
 /// squashfs superblock: `bytes_used` is a little-endian u64 at offset 40.
 fn squashfs_bytes_used(path: &Path) -> Result<u64> {
     use std::io::{Read, Seek, SeekFrom};
-    let mut f = std::fs::File::open(path)?;
+    let mut f = fs::File::open(path)?;
     let mut magic = [0u8; 4];
     f.read_exact(&mut magic)?;
     if &magic != b"hsqs" {
@@ -137,11 +187,24 @@ fn squashfs_bytes_used(path: &Path) -> Result<u64> {
 }
 
 /// Derive a UUID from the first `len` bytes of `path`.
-///
-/// Deterministic, and shaped like a version-4 UUID.
 fn uuid_from_data(path: &Path, len: u64) -> Result<String> {
+    Ok(uuid_from_file(path, len)?.to_string())
+}
+
+/// Deterministic, version-4-shaped UUID from arbitrary domain-separated
+/// material.
+fn uuid_from_material(parts: &[&[u8]]) -> Uuid {
+    let mut h = Sha256::new();
+    for part in parts {
+        h.update((part.len() as u64).to_le_bytes());
+        h.update(part);
+    }
+    uuid_from_digest(&h.finalize())
+}
+
+fn uuid_from_file(path: &Path, len: u64) -> Result<Uuid> {
     use std::io::Read;
-    let mut f = std::fs::File::open(path)?;
+    let mut f = fs::File::open(path)?;
     let mut h = Sha256::new();
     let mut remaining = len;
     let mut buf = vec![0u8; 1 << 20];
@@ -151,20 +214,149 @@ fn uuid_from_data(path: &Path, len: u64) -> Result<String> {
         h.update(&buf[..n]);
         remaining -= n as u64;
     }
-    let d = h.finalize();
+    Ok(uuid_from_digest(&h.finalize()))
+}
+
+fn uuid_from_digest(d: &[u8]) -> Uuid {
     let mut u = [0u8; 16];
     u.copy_from_slice(&d[..16]);
     u[6] = (u[6] & 0x0f) | 0x40; // version 4
     u[8] = (u[8] & 0x3f) | 0x80; // RFC 4122 variant
-    let hx = hex::encode(u);
-    Ok(format!(
-        "{}-{}-{}-{}-{}",
-        &hx[0..8],
-        &hx[8..12],
-        &hx[12..16],
-        &hx[16..20],
-        &hx[20..32]
-    ))
+    Uuid::from_bytes(u)
+}
+
+#[derive(Clone, Copy)]
+struct Partition {
+    first_lba: u64,
+    last_lba: u64,
+}
+
+struct GptLayout {
+    total_lbas: u64,
+    data: Partition,
+    hash: Partition,
+}
+
+impl GptLayout {
+    fn new(data_size: u64, hash_size: u64) -> Result<Self> {
+        if data_size == 0 || hash_size == 0 {
+            bail!("data and hash images must be non-empty");
+        }
+        let data_sectors = data_size.div_ceil(SECTOR);
+        let hash_sectors = hash_size.div_ceil(SECTOR);
+
+        let data_first = PARTITION_ALIGNMENT_SECTORS;
+        let data_last = data_first + data_sectors - 1;
+        let hash_first = align_up(data_last + 1, PARTITION_ALIGNMENT_SECTORS);
+        let hash_last = hash_first + hash_sectors - 1;
+
+        // Leave room for the backup GPT entry array and header at the end.
+        let min_lbas = hash_last + 1 + GPT_ENTRY_SECTORS + 1;
+        let total_lbas = align_up(min_lbas, PARTITION_ALIGNMENT_SECTORS);
+        Ok(Self {
+            total_lbas,
+            data: Partition {
+                first_lba: data_first,
+                last_lba: data_last,
+            },
+            hash: Partition {
+                first_lba: hash_first,
+                last_lba: hash_last,
+            },
+        })
+    }
+
+    fn total_bytes(&self) -> u64 {
+        self.total_lbas * SECTOR
+    }
+}
+
+fn align_up(value: u64, alignment: u64) -> u64 {
+    value.div_ceil(alignment) * alignment
+}
+
+fn build_partitioned_image(
+    data_path: &Path,
+    data_size: u64,
+    hash_path: &Path,
+    output: &Path,
+    root_hash: &str,
+) -> Result<()> {
+    let hash_size = fs::metadata(hash_path)
+        .with_context(|| format!("stat {}", hash_path.display()))?
+        .len();
+    let layout = GptLayout::new(data_size, hash_size)?;
+
+    let mut out = fs::OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .read(true)
+        .write(true)
+        .open(output)
+        .with_context(|| format!("creating {}", output.display()))?;
+    out.set_len(layout.total_bytes())?;
+
+    out = write_gpt(out, &layout, root_hash)?;
+
+    copy_into(data_path, &mut out, layout.data.first_lba * SECTOR)?;
+    copy_into(hash_path, &mut out, layout.hash.first_lba * SECTOR)?;
+    Ok(())
+}
+
+fn write_gpt(mut out: fs::File, layout: &GptLayout, root_hash: &str) -> Result<fs::File> {
+    let protective_size = (layout.total_lbas - 1).min(u32::MAX as u64) as u32;
+    gpt::mbr::ProtectiveMBR::with_lb_size(protective_size)
+        .overwrite_lba0(&mut out)
+        .context("writing protective MBR")?;
+
+    let disk_uuid = uuid_from_material(&[b"dstack-verity-disk", root_hash.as_bytes()]);
+    let mut disk = gpt::GptConfig::new()
+        .writable(true)
+        .logical_block_size(gpt::disk::LogicalBlockSize::Lb512)
+        .create_from_device(out, Some(disk_uuid))
+        .context("initializing GPT")?;
+
+    let mut parts = BTreeMap::new();
+    parts.insert(
+        1,
+        gpt::partition::Partition {
+            part_type_guid: gpt::partition_types::LINUX_FS,
+            part_guid: uuid_from_material(&[b"dstack-verity-data", root_hash.as_bytes()]),
+            first_lba: layout.data.first_lba,
+            last_lba: layout.data.last_lba,
+            flags: 0,
+            name: "dstack-data".to_string(),
+        },
+    );
+    parts.insert(
+        2,
+        gpt::partition::Partition {
+            part_type_guid: gpt::partition_types::LINUX_FS,
+            part_guid: uuid_from_material(&[b"dstack-verity-hash", root_hash.as_bytes()]),
+            first_lba: layout.hash.first_lba,
+            last_lba: layout.hash.last_lba,
+            flags: 0,
+            name: "dstack-verity".to_string(),
+        },
+    );
+    disk.update_partitions(parts)
+        .context("installing GPT partitions")?;
+    disk.write().context("writing GPT")
+}
+
+fn copy_into(src: &Path, out: &mut fs::File, offset: u64) -> Result<()> {
+    use std::io::{Read, Seek, SeekFrom, Write};
+    let mut input = fs::File::open(src)?;
+    out.seek(SeekFrom::Start(offset))?;
+    let mut buf = vec![0u8; 1 << 20];
+    loop {
+        let n = input.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        out.write_all(&buf[..n])?;
+    }
+    Ok(())
 }
 
 fn parse_root_hash(output: &str) -> Option<String> {
@@ -234,5 +426,73 @@ mod tests {
         assert_ne!(ua, uuid_from_data(b.path(), 16).unwrap()); // content-specific
         assert_eq!(ua.len(), 36);
         assert_eq!(&ua[14..15], "4"); // version nibble
+    }
+
+    #[test]
+    fn gpt_layout_uses_two_aligned_partitions() {
+        let layout = GptLayout::new(4096, 8192).unwrap();
+        assert_eq!(layout.data.first_lba, PARTITION_ALIGNMENT_SECTORS);
+        assert_eq!(layout.data.last_lba, PARTITION_ALIGNMENT_SECTORS + 7);
+        assert_eq!(layout.hash.first_lba, PARTITION_ALIGNMENT_SECTORS * 2);
+        assert_eq!(layout.hash.last_lba, PARTITION_ALIGNMENT_SECTORS * 2 + 15);
+        assert!(layout.total_lbas - 1 - GPT_ENTRY_SECTORS > layout.hash.last_lba);
+    }
+
+    #[test]
+    fn partitioned_image_is_valid_gpt() -> Result<()> {
+        use std::io::{Read, Seek, SeekFrom, Write};
+
+        let tmp = tempfile::tempdir()?;
+        let data_path = tmp.path().join("data.fs");
+        let hash_path = tmp.path().join("verity.hash");
+        let image_path = tmp.path().join("volume.img");
+        let data = vec![0x11; 4096];
+        let hash = vec![0x22; 8192];
+        fs::File::create(&data_path)?.write_all(&data)?;
+        fs::File::create(&hash_path)?.write_all(&hash)?;
+
+        let root_hash = "abc123";
+        build_partitioned_image(
+            &data_path,
+            data.len() as u64,
+            &hash_path,
+            &image_path,
+            root_hash,
+        )?;
+
+        let disk = gpt::GptConfig::new()
+            .logical_block_size(gpt::disk::LogicalBlockSize::Lb512)
+            .open(&image_path)?;
+        assert_eq!(
+            *disk.guid(),
+            uuid_from_material(&[b"dstack-verity-disk", root_hash.as_bytes()])
+        );
+
+        let p1 = disk.partitions().get(&1).unwrap();
+        let p2 = disk.partitions().get(&2).unwrap();
+        assert_eq!(p1.name, "dstack-data");
+        assert_eq!(p2.name, "dstack-verity");
+        assert_eq!(
+            p1.part_guid,
+            uuid_from_material(&[b"dstack-verity-data", root_hash.as_bytes()])
+        );
+        assert_eq!(
+            p2.part_guid,
+            uuid_from_material(&[b"dstack-verity-hash", root_hash.as_bytes()])
+        );
+        assert_eq!(p1.first_lba, PARTITION_ALIGNMENT_SECTORS);
+        assert_eq!(p2.first_lba, PARTITION_ALIGNMENT_SECTORS * 2);
+
+        let mut img = fs::File::open(&image_path)?;
+        let mut buf = vec![0; data.len()];
+        img.seek(SeekFrom::Start(p1.first_lba * SECTOR))?;
+        img.read_exact(&mut buf)?;
+        assert_eq!(buf, data);
+        let mut buf = vec![0; hash.len()];
+        img.seek(SeekFrom::Start(p2.first_lba * SECTOR))?;
+        img.read_exact(&mut buf)?;
+        assert_eq!(buf, hash);
+
+        Ok(())
     }
 }

@@ -4,9 +4,10 @@
 
 //! Build a verity volume from docker images or a directory.
 //!
-//! The output is a reproducible, dm-verity-protected squashfs volume that a CVM
-//! mounts instead of pulling and unpacking. A `docker` volume seeds the overlay2
-//! store; a data volume just mounts at a path.
+//! The output is a reproducible, dm-verity-protected raw disk image: partition 1
+//! is the squashfs data filesystem, and partition 2 is the dm-verity superblock
+//! plus hash tree. A `docker` volume seeds the overlay2 store; a data volume just
+//! mounts at a path.
 //!
 //! The build needs no docker daemon and no TEE, and it's reproducible: the same
 //! inputs always give the same `verity_root`. So anyone can recompute the root
@@ -16,6 +17,7 @@
 use std::path::PathBuf;
 
 use anyhow::{bail, Context, Result};
+use fs_err as fs;
 
 pub mod oci;
 mod store;
@@ -37,6 +39,10 @@ pub struct VerityOptions {
     /// build a data volume from this directory instead of docker images. The
     /// resulting volume is mounted at a `target: "/path"` in the compose.
     pub dir: Option<PathBuf>,
+    /// wrap an existing filesystem image as the verity data partition. This is
+    /// for hand-built ext4/xfs/etc. images; `dstack verity --dir` still produces
+    /// squashfs by default.
+    pub fs_image: Option<PathBuf>,
     pub output: PathBuf,
     /// squashfs compression (default: none — zero decompression at read time).
     pub compress: Compression,
@@ -62,13 +68,17 @@ pub struct ResolvedImage {
 }
 
 pub async fn verity(opts: VerityOptions) -> Result<VerityResult> {
-    match (&opts.dir, opts.images.is_empty()) {
-        (Some(_), false) => bail!("give either images or --dir, not both"),
-        (None, true) => {
-            bail!("nothing to build: pass an image, or --dir <path> to pack a directory")
-        }
-        (Some(dir), true) => verity_dir(dir.clone(), opts.output, opts.compress).await,
-        (None, false) => verity_docker(opts).await,
+    let source_count =
+        (!opts.images.is_empty()) as u8 + opts.dir.is_some() as u8 + opts.fs_image.is_some() as u8;
+    if source_count != 1 {
+        bail!("give exactly one source: images, --dir <path>, or --fs-image <path>");
+    }
+    if let Some(dir) = &opts.dir {
+        verity_dir(dir.clone(), opts.output, opts.compress).await
+    } else if let Some(fs_image) = &opts.fs_image {
+        verity_fs_image(fs_image.clone(), opts.output).await
+    } else {
+        verity_docker(opts).await
     }
 }
 
@@ -92,7 +102,7 @@ async fn verity_docker(opts: VerityOptions) -> Result<VerityResult> {
     let (built, resolved) = tokio::task::spawn_blocking(move || -> Result<_> {
         let tmp = tempfile::tempdir().context("creating scratch dir")?;
         let store_dir = tmp.path().join("store");
-        std::fs::create_dir_all(&store_dir)?;
+        fs::create_dir_all(&store_dir)?;
         let tops = store::build_store(&pulled, &store_dir)?;
         let built = volume::build_volume(&store_dir, &output, VERITY_SALT, compress)?;
         let resolved = pulled
@@ -130,6 +140,26 @@ async fn verity_dir(dir: PathBuf, output: PathBuf, compress: Compression) -> Res
     })
     .await
     .context("the build task failed")??;
+
+    Ok(VerityResult {
+        verity_root: built.verity_root,
+        data_size: built.data_size,
+        output,
+        images: vec![],
+    })
+}
+
+/// Wrap an already-built filesystem image. The guest discovers and mounts the
+/// filesystem only after dm-verity is active.
+async fn verity_fs_image(fs_image: PathBuf, output: PathBuf) -> Result<VerityResult> {
+    if !fs_image.is_file() {
+        bail!("--fs-image '{}' is not a file", fs_image.display());
+    }
+    let out = output.clone();
+    let built =
+        tokio::task::spawn_blocking(move || volume::build_fs_image(&fs_image, &out, VERITY_SALT))
+            .await
+            .context("the build task failed")??;
 
     Ok(VerityResult {
         verity_root: built.verity_root,

@@ -1193,7 +1193,7 @@ fn append_boot_separator(path: &std::path::Path) {
     if !path.exists() {
         return;
     }
-    let Ok(mut file) = std::fs::OpenOptions::new().append(true).open(path) else {
+    let Ok(mut file) = fs::OpenOptions::new().append(true).open(path) else {
         return;
     };
     let timestamp = humantime::format_rfc3339_seconds(std::time::SystemTime::now());
@@ -1216,7 +1216,7 @@ fn rotate_serial_log(work_dir: &VmWorkDir, max_bytes: u64) {
         return;
     }
     let history = work_dir.serial_history_file();
-    let Ok(mut file) = std::fs::OpenOptions::new()
+    let Ok(mut file) = fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(&history)

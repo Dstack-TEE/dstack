@@ -1121,6 +1121,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "crc"
+version = "3.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5eb8a2a1cd12ab0d987a5d5e825195d372001a4094a0376319d5a0ad71c1ba0d"
+dependencies = [
+ "crc-catalog",
+]
+
+[[package]]
+name = "crc-catalog"
+version = "2.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "217698eaf96b4a3f0bc4f3662aaa55bdf913cd54d7204591faa790070c6d0853"
+
+[[package]]
 name = "crc32fast"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1825,6 +1840,7 @@ dependencies = [
  "clap",
  "dstack-cli-core",
  "dstack-verity",
+ "fs-err",
  "serde_json",
  "tokio",
  "tracing",
@@ -2256,7 +2272,9 @@ version = "0.6.0"
 dependencies = [
  "anyhow",
  "flate2",
+ "fs-err",
  "futures",
+ "gpt",
  "hex",
  "oci-client",
  "rustix 0.38.44",
@@ -2267,6 +2285,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
+ "uuid",
  "xattr",
 ]
 
@@ -2991,6 +3010,18 @@ dependencies = [
  "bstr",
  "regex-automata",
  "regex-syntax",
+]
+
+[[package]]
+name = "gpt"
+version = "4.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3696fafb1ecdcc2ae3ce337de73e9202806068594b77d22fdf2f3573c5ec2219"
+dependencies = [
+ "bitflags 2.11.1",
+ "crc",
+ "simple-bytes",
+ "uuid",
 ]
 
 [[package]]
@@ -7114,6 +7145,12 @@ name = "similar"
 version = "2.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bbbb5d9659141646ae647b42fe094daf6c6192d1620870b449d9557f748b2daa"
+
+[[package]]
+name = "simple-bytes"
+version = "0.2.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c11532d9d241904f095185f35dcdaf930b1427a94d5b01d7002d74ba19b44cc4"
 
 [[package]]
 name = "siphasher"

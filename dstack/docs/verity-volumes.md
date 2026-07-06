@@ -13,6 +13,15 @@ A volume has a **root hash** — its identity and integrity check — and a **ta
 - `"docker"` — the volume is a docker overlay2 store; its images are seeded into docker as cache hits.
 - `"/some/path"` — the volume's filesystem is mounted there, for data like model weights.
 
+On disk, a volume is a raw GPT image with two partitions:
+
+```
+p1: filesystem data
+p2: dm-verity superblock + hash tree
+```
+
+The guest opens `p1` as the verity data device and `p2` as the verity hash device. That keeps the verity layer independent of the filesystem format: the guest does not need to read a squashfs/ext4 superblock to find a hash offset.
+
 An app lists its volumes in `app-compose.json`. dstack already hashes that file into the app's identity, so every root hash is measured as part of `app_id`, and the CVM only uses content matching what it was attested as. Everything else is untrusted: the host hands over bytes, and dm-verity rejects any that don't match the root.
 
 A volume is *additive* — it only adds read-only lower layers, so anything not on one is pulled normally — and *fail-safe*: a missing or mismatched volume falls back to a pull.
@@ -46,9 +55,10 @@ You don't hand-write that with the `dstack` CLI — `dstack deploy --volume` gen
 ```bash
 dstack verity vllm/vllm-openai@sha256:abc123...   # -> --volume vllm.img:115b6877...:docker
 dstack verity --dir ./llama-70b-weights/          # -> --volume llama-70b.img:a1b2c3d4...:/run/models/llama-70b
+dstack verity --fs-image ./weights.ext4           # -> wrap an existing filesystem image
 ```
 
-It needs no docker daemon, no CVM, and no TDX. For images it pulls the pinned layers from the registry and lays out the docker store itself; for `--dir` it packs the directory as-is. Either way it writes one volume file. Pass several images to pack them into a single `docker` volume; shared base layers are stored once. There is no auto-detection: a volume contains whatever you built it from, and the compose names those images normally.
+It needs no docker daemon, no CVM, and no TDX. For images it pulls the pinned layers from the registry and lays out the docker store itself; for `--dir` it packs the directory as squashfs; for `--fs-image` it treats the supplied filesystem image as opaque bytes and only wraps it in verity/GPT. Either way it writes one volume file. Pass several images to pack them into a single `docker` volume; shared base layers are stored once. There is no auto-detection: a volume contains whatever you built it from, and the compose names those images normally.
 
 This covers both cases. Several volumes in one CVM (the image *and* the model) is several entries with different targets. Several images from one volume is a single `docker` volume built from all of them, listed as one entry, with the compose unchanged. Attach order does not matter ([Delivery](#delivery)).
 
@@ -56,7 +66,7 @@ This covers both cases. Several volumes in one CVM (the image *and* the model) i
 
 `verity_root` lives in `app-compose.json`, so it's part of the hash that becomes `app_id` (see [Normalized App Compose](./normalized-app-compose.md)), and it is enforced by dm-verity. The consumer trusts the root hash, not whoever built the volume. A host that tampers with the bytes causes a verity fault, not a silent swap, so the delivery path can stay untrusted.
 
-`dstack verity` is deterministic: the same pinned image digests always produce the same `verity_root`, bit-for-bit (canonical overlay2 layout with chain-id cache-ids; a fixed timestamp and salt; a UUID derived from the packed bytes). One caveat: the squashfs layout is produced by `mksquashfs`, so a verifier must use a `squashfs-tools` version that lays out bytes identically (recent versions are stable; the build records nothing about the tool version yet). A verifier can therefore recompute the root from the digest-pinned images and confirm the volume is those images, without trusting whoever ran the build. The build needs no docker daemon and no TEE, so it can also run in a CI job that attests it (see [Reproducible builds and provenance](#reproducible-builds-and-provenance)); the two checks are independent. Turning on a volume changes `app-compose.json` and thus `app_id`, which is correct: the volume is part of the measured configuration.
+`dstack verity` is deterministic: the same pinned image digests always produce the same `verity_root`, bit-for-bit (canonical overlay2 layout with chain-id cache-ids; a fixed timestamp and salt; UUIDs derived from the packed bytes/root hash; a deterministic GPT wrapper). One caveat: the squashfs layout is produced by `mksquashfs`, so a verifier must use a `squashfs-tools` version that lays out bytes identically (recent versions are stable; the build records nothing about the tool version yet). A verifier can therefore recompute the root from the digest-pinned images and confirm the volume is those images, without trusting whoever ran the build. The build needs no docker daemon and no TEE, so it can also run in a CI job that attests it (see [Reproducible builds and provenance](#reproducible-builds-and-provenance)); the two checks are independent. Turning on a volume changes `app-compose.json` and thus `app_id`, which is correct: the volume is part of the measured configuration.
 
 ## How docker seeding works
 
@@ -69,7 +79,7 @@ overlay2/<id>/diff/   the already-extracted layer files          (the GBs)
 
 `diff/` is the layer already decompressed and untarred. Seeding reuses it in place:
 
-1. Open the volume with veritysetup and mount it read-only at a writable path (`/run/dstack-verity`). The rootfs is read-only dm-verity, so the mountpoint has to be on a writable fs; squashfs itself mounts read-only directly, no journal and nothing to replay.
+1. Open the volume with veritysetup (`p1` as data, `p2` as hash) and mount it read-only at a writable path (`/run/dstack-verity`). The rootfs is read-only dm-verity, so the mountpoint has to be on a writable fs; squashfs itself mounts read-only directly, no journal and nothing to replay.
 2. Copy the metadata (a few MB) into `/var/lib/docker`.
 3. Per layer: make a writable `overlay2/<id>/` dir, copy its handful of tiny files, and bind-mount only the big `diff/` read-only from the volume.
 4. This runs from `dstack-prepare.sh` *before* dockerd starts, so there's no restart — dockerd comes up with every image on the volume already present.
@@ -87,14 +97,14 @@ The volume *file* and the deploy request travel separately. First set `cvm.volum
 ```bash
 dstack deploy -c docker-compose.yaml \
   --volume vllm.img:115b6877...:docker \
-  --volume llama-70b.img:a1b2c3d4...:/models/llama-70b
+  --volume llama-70b.img:a1b2c3d4...:/run/models/llama-70b
 ```
 
-Each `--volume NAME:VERITY_ROOT:TARGET` both attaches the file and writes the measured `verity_volumes` entry (the root is yours to supply, from `dstack verity`, so it stays part of `app_id`). `vmm-cli.py` takes the same file with a hand-authored `app-compose.json` instead. The vmm resolves each name against `volumes_dir` (rejecting anything with a path separator) and attaches it as a read-only virtio-blk device, tagged with a hint: the disk's serial is set to the volume's `verity_root` prefix. `--volume` carries only the name and read-only flag, never the bytes; the bytes are already on the host. Disks are still attached in any order — the guest reads the serials once and, for each `verity_root` in the compose, opens the disk whose serial matches. That is O(devices + volumes), and no wrong disk is opened. The serial is only a hint and isn't trusted: the guest verifies the full root through dm-verity, so a missing or wrong tag falls back to trying every disk, and a tampering host causes a verity fault rather than a wrong mount. Integrity is checked lazily, per block on first read. Read-only plus content-addressed means one physical copy serves every CVM that references it: a base image or model shared by a hundred replicas is built, stored, and extracted once.
+Each `--volume NAME:VERITY_ROOT:TARGET` both attaches the file and writes the measured `verity_volumes` entry (the root is yours to supply, from `dstack verity`, so it stays part of `app_id`). `vmm-cli.py` takes the same file with a hand-authored `app-compose.json` instead. The vmm resolves each name against `volumes_dir` (rejecting anything with a path separator) and attaches it as a read-only virtio-blk device, tagged with a hint: the disk's serial is set to the volume's `verity_root` prefix. `--volume` carries only the name and read-only flag, never the bytes; the bytes are already on the host. Disks are still attached in any order — the guest reads the serials once and, for each `verity_root` in the compose, opens partition 1 and partition 2 of the disk whose serial matches. That is O(devices + volumes), and no wrong disk is opened. The serial and GPT partition table are only hints and aren't trusted: the guest verifies the full root through dm-verity, so a missing/wrong tag falls back to trying every disk, and a tampering host causes a verity fault rather than a wrong mount. Integrity is checked lazily, per block on first read. Read-only plus content-addressed means one physical copy serves every CVM that references it: a base image or model shared by a hundred replicas is built, stored, and extracted once.
 
 ## Building volumes
 
-`dstack verity` builds the store from scratch, without a docker daemon and without a CVM — just the registry (a `docker` volume does need root, because laying out overlay2 whiteouts uses `mknod` and a `trusted.*` xattr; a `--dir` volume needs no root). It pulls each layer by digest, and lays out the overlay2 store the way docker would, with one deliberate change: the per-layer directory id is the layer's *chain-id* instead of docker's random cache-id. That's what makes the store a pure function of the image. AUFS `.wh.` whiteouts in the layer tars are converted to their overlay2 on-disk form (a `0:0` char device, or the `trusted.overlay.opaque` xattr) so deletions in upper layers still take effect. Then `mksquashfs` packs it with a fixed timestamp and `veritysetup` appends the hash tree in the same file (data in `[0, size)`, hash tree after) with a fixed salt and a UUID derived from the squashfs bytes. A `--dir` volume skips the overlay2 layout and pull entirely — it packs the directory straight into the same squashfs + verity format.
+`dstack verity` builds the store from scratch, without a docker daemon and without a CVM — just the registry (a `docker` volume does need root, because laying out overlay2 whiteouts uses `mknod` and a `trusted.*` xattr; a `--dir` or `--fs-image` volume needs no root). It pulls each layer by digest, and lays out the overlay2 store the way docker would, with one deliberate change: the per-layer directory id is the layer's *chain-id* instead of docker's random cache-id. That's what makes the store a pure function of the image. AUFS `.wh.` whiteouts in the layer tars are converted to their overlay2 on-disk form (a `0:0` char device, or the `trusted.overlay.opaque` xattr) so deletions in upper layers still take effect. Then `mksquashfs` packs it with a fixed timestamp, `veritysetup` builds a separate hash image with a fixed salt and a UUID derived from the filesystem bytes, and the builder wraps both blobs in a deterministic GPT disk (`p1` data, `p2` verity metadata/hash tree). A `--dir` volume skips the overlay2 layout and pull entirely — it packs the directory straight into the same partitioned squashfs + verity format. A `--fs-image` volume skips `mksquashfs` too: the supplied ext4/xfs/etc. image becomes `p1` after 4096-byte padding, so the guest only needs kernel support and suitable read-only mount behavior for that filesystem.
 
 With those fixed, two runs of the same digests produce the same bytes. The build needs no daemon and no TEE, so it can run in a CI job that also attests it (below).
 
