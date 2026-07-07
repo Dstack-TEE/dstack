@@ -233,5 +233,6 @@ When need more detailed info, try to use deepwiki mcp.
 ## Agent Resources
 
 The `.agent/` directory contains AI assistant resources:
+- `CODING_TASTE.md` — dstack code and PR conventions (API design, compat, security reasoning, code style, project structure, PR style)
 - `WRITING_GUIDE.md` — Documentation and README writing guidelines (messaging, style, audiences)
 - `GPU_TEE_DEPLOYMENT.md` — GPU deployment to Phala Cloud (instance types, docker-compose config, debugging)
