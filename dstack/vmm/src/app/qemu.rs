@@ -445,9 +445,6 @@ impl VmInfo {
                     bridge_name: (networking.mode == NetworkingMode::Bridge)
                         .then(|| networking.bridge.clone()),
                     netdev_id: Some(format!("net{index}")),
-                    if_name: None,
-                    lowerdev: None,
-                    pci_bdf: None,
                 }
             })
             .collect();

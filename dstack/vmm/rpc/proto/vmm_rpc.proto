@@ -53,12 +53,6 @@ message NetworkInterfaceStatus {
   optional string bridge_name = 5;
   // QEMU netdev id, e.g. "net0".
   optional string netdev_id = 6;
-  // Host-side interface name when known, e.g. tap/macvtap device.
-  optional string if_name = 7;
-  // Lower device for macvtap-like backends.
-  optional string lowerdev = 8;
-  // PCI BDF for passthrough-like backends.
-  optional string pci_bdf = 9;
 }
 
 // Structured log or lifecycle event emitted by the guest or runtime.
