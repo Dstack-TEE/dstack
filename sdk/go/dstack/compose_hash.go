@@ -27,28 +27,45 @@ type DockerConfig struct {
 	TokenKey string `json:"token_key,omitempty"`
 }
 
+// RequirementPlatform represents an allowed guest attestation platform.
+type RequirementPlatform string
+
+const (
+	RequirementPlatformTdx       RequirementPlatform = "dstack-tdx"
+	RequirementPlatformGcpTdx    RequirementPlatform = "dstack-gcp-tdx"
+	RequirementPlatformAmdSevSnp RequirementPlatform = "dstack-amd-sev-snp"
+	RequirementPlatformNitro     RequirementPlatform = "dstack-nitro-enclave"
+)
+
+// Requirements represents guest-side requirements.
+type Requirements struct {
+	OsVersion string                 `json:"os_version,omitempty"`
+	Platforms *[]RequirementPlatform `json:"platforms,omitempty"`
+}
+
 // AppCompose represents the application composition structure
 type AppCompose struct {
-	ManifestVersion             *int             `json:"manifest_version,omitempty"`
-	Name                        string           `json:"name,omitempty"`
-	Features                    []string         `json:"features,omitempty"` // Deprecated
-	Runner                      string           `json:"runner"`
-	DockerComposeFile           string           `json:"docker_compose_file,omitempty"`
-	DockerConfig                *DockerConfig    `json:"docker_config,omitempty"`
-	PublicLogs                  *bool            `json:"public_logs,omitempty"`
-	PublicSysinfo               *bool            `json:"public_sysinfo,omitempty"`
-	PublicTcbinfo               *bool            `json:"public_tcbinfo,omitempty"`
-	KmsEnabled                  *bool            `json:"kms_enabled,omitempty"`
-	GatewayEnabled              *bool            `json:"gateway_enabled,omitempty"`
-	TproxyEnabled               *bool            `json:"tproxy_enabled,omitempty"` // For backward compatibility
-	LocalKeyProviderEnabled     *bool            `json:"local_key_provider_enabled,omitempty"`
-	KeyProvider                 KeyProviderKind  `json:"key_provider,omitempty"`
-	KeyProviderID               string           `json:"key_provider_id,omitempty"` // hex string
-	AllowedEnvs                 []string         `json:"allowed_envs,omitempty"`
-	NoInstanceID                *bool            `json:"no_instance_id,omitempty"`
-	SecureTime                  *bool            `json:"secure_time,omitempty"`
-	BashScript                  string           `json:"bash_script,omitempty"`          // Legacy
-	PreLaunchScript             string           `json:"pre_launch_script,omitempty"`    // Legacy
+	ManifestVersion         interface{}     `json:"manifest_version,omitempty"`
+	Name                    string          `json:"name,omitempty"`
+	Features                []string        `json:"features,omitempty"` // Deprecated
+	Runner                  string          `json:"runner"`
+	DockerComposeFile       string          `json:"docker_compose_file,omitempty"`
+	DockerConfig            *DockerConfig   `json:"docker_config,omitempty"`
+	PublicLogs              *bool           `json:"public_logs,omitempty"`
+	PublicSysinfo           *bool           `json:"public_sysinfo,omitempty"`
+	PublicTcbinfo           *bool           `json:"public_tcbinfo,omitempty"`
+	KmsEnabled              *bool           `json:"kms_enabled,omitempty"`
+	GatewayEnabled          *bool           `json:"gateway_enabled,omitempty"`
+	TproxyEnabled           *bool           `json:"tproxy_enabled,omitempty"` // For backward compatibility
+	LocalKeyProviderEnabled *bool           `json:"local_key_provider_enabled,omitempty"`
+	KeyProvider             KeyProviderKind `json:"key_provider,omitempty"`
+	KeyProviderID           string          `json:"key_provider_id,omitempty"` // hex string
+	AllowedEnvs             []string        `json:"allowed_envs,omitempty"`
+	NoInstanceID            *bool           `json:"no_instance_id,omitempty"`
+	SecureTime              *bool           `json:"secure_time,omitempty"`
+	Requirements            *Requirements   `json:"requirements,omitempty"`
+	BashScript              string          `json:"bash_script,omitempty"`       // Legacy
+	PreLaunchScript         string          `json:"pre_launch_script,omitempty"` // Legacy
 }
 
 // preprocessAppCompose removes conflicting fields based on runner type
@@ -58,11 +75,11 @@ func preprocessAppCompose(appCompose AppCompose) AppCompose {
 	} else if appCompose.Runner == "docker-compose" {
 		appCompose.BashScript = ""
 	}
-	
+
 	if appCompose.PreLaunchScript == "" {
 		// Remove empty pre_launch_script field for deterministic output
 	}
-	
+
 	return appCompose
 }
 
@@ -104,27 +121,27 @@ func toDeterministicJSON(v interface{}) (string, error) {
 // GetComposeHash computes the SHA256 hash of the application composition
 func GetComposeHash(appCompose AppCompose, normalize ...bool) (string, error) {
 	shouldNormalize := len(normalize) > 0 && normalize[0]
-	
+
 	if shouldNormalize {
 		appCompose = preprocessAppCompose(appCompose)
 	}
-	
+
 	// Convert to generic map for sorting
 	jsonBytes, err := json.Marshal(appCompose)
 	if err != nil {
 		return "", err
 	}
-	
+
 	var genericMap interface{}
 	if err := json.Unmarshal(jsonBytes, &genericMap); err != nil {
 		return "", err
 	}
-	
+
 	manifestStr, err := toDeterministicJSON(genericMap)
 	if err != nil {
 		return "", err
 	}
-	
+
 	hash := sha256.Sum256([]byte(manifestStr))
 	return hex.EncodeToString(hash[:]), nil
 }

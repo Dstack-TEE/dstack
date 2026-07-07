@@ -700,7 +700,7 @@ mod tests {
         temp_attestation_file.flush().unwrap();
 
         let dummy_appcompose = AppCompose {
-            manifest_version: 0,
+            manifest_version: "2".to_string(),
             name: String::new(),
             features: Vec::new(),
             runner: String::new(),
@@ -719,6 +719,7 @@ mod tests {
             storage_fs: None,
             swap_size: 0,
             port_policy: Default::default(),
+            requirements: None,
         };
 
         let dummy_appcompose_wrapper = AppComposeWrapper {

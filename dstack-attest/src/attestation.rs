@@ -1048,6 +1048,21 @@ mod compatibility_tests {
     }
 
     #[test]
+    fn attestation_mode_deserializes_canonical_names() {
+        let parse = |value| serde_json::from_str::<AttestationMode>(value).unwrap();
+        assert_eq!(parse(r#""dstack-tdx""#), AttestationMode::DstackTdx);
+        assert_eq!(parse(r#""dstack-gcp-tdx""#), AttestationMode::DstackGcpTdx);
+        assert_eq!(
+            parse(r#""dstack-amd-sev-snp""#),
+            AttestationMode::DstackAmdSevSnp
+        );
+        assert_eq!(
+            parse(r#""dstack-nitro-enclave""#),
+            AttestationMode::DstackNitroEnclave
+        );
+    }
+
+    #[test]
     fn attestation_quote_scale_discriminants_preserve_existing_wire_values() {
         let gcp = AttestationQuote::DstackGcpTdx(DstackGcpTdxQuote {
             tdx_quote: TdxQuote {
