@@ -20,7 +20,7 @@ use guest_api::client::DefaultClient as GuestClient;
 use id_pool::IdPool;
 use or_panic::ResultOrPanic;
 use ra_rpc::client::RaClient;
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
@@ -47,7 +47,7 @@ pub struct PortMapping {
     pub to: u16,
 }
 
-#[derive(Serialize, Clone, Builder, Debug)]
+#[derive(Deserialize, Serialize, Clone, Builder, Debug)]
 pub struct Manifest {
     pub id: String,
     pub name: String,
@@ -74,64 +74,19 @@ pub struct Manifest {
     pub networks: Vec<Networking>,
 }
 
-impl<'de> Deserialize<'de> for Manifest {
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        struct ManifestCompat {
-            id: String,
-            name: String,
-            app_id: String,
-            vcpu: u32,
-            memory: u32,
-            disk_size: u32,
-            image: String,
-            port_map: Vec<PortMapping>,
-            created_at_ms: u64,
-            #[serde(default)]
-            hugepages: bool,
-            #[serde(default)]
-            pin_numa: bool,
-            #[serde(default)]
-            gpus: Option<GpuConfig>,
-            #[serde(default)]
-            kms_urls: Vec<String>,
-            #[serde(default)]
-            gateway_urls: Vec<String>,
-            #[serde(default)]
-            no_tee: bool,
-            #[serde(default)]
-            networks: Vec<Networking>,
-            #[serde(default)]
-            networking: Option<Networking>,
+impl Manifest {
+    pub fn from_json(value: serde_json::Value) -> serde_json::Result<Self> {
+        let mut map = value;
+        if let Some(obj) = map.as_object_mut() {
+            if !obj.contains_key("networks")
+                || obj["networks"].as_array().is_some_and(|a| a.is_empty())
+            {
+                if let Some(legacy) = obj.remove("networking") {
+                    obj.insert("networks".into(), serde_json::Value::Array(vec![legacy]));
+                }
+            }
         }
-
-        let compat = ManifestCompat::deserialize(deserializer)?;
-        let networks = if compat.networks.is_empty() {
-            compat.networking.into_iter().collect()
-        } else {
-            compat.networks
-        };
-        Ok(Self {
-            id: compat.id,
-            name: compat.name,
-            app_id: compat.app_id,
-            vcpu: compat.vcpu,
-            memory: compat.memory,
-            disk_size: compat.disk_size,
-            image: compat.image,
-            port_map: compat.port_map,
-            created_at_ms: compat.created_at_ms,
-            hugepages: compat.hugepages,
-            pin_numa: compat.pin_numa,
-            gpus: compat.gpus,
-            kms_urls: compat.kms_urls,
-            gateway_urls: compat.gateway_urls,
-            no_tee: compat.no_tee,
-            networks,
-        })
+        serde_json::from_value(map)
     }
 }
 
@@ -592,11 +547,7 @@ impl App {
         let vm_id = {
             let mut state = self.lock();
             let found = state.vms.iter_mut().find_map(|(id, vm)| {
-                let networks = if vm.state.runtime_networks.is_empty() {
-                    crate::app::qemu::resolved_networks(&vm.config.manifest, &self.config.cvm)
-                } else {
-                    vm.state.runtime_networks.clone()
-                };
+                let networks = vm.effective_networks(&self.config.cvm);
                 networks.iter().enumerate().find_map(|(index, networking)| {
                     let prefix = networking.mac_prefix_bytes();
                     let nic_mac = mac_address_for_vm_index(&vm.config.manifest.id, &prefix, index);
@@ -637,11 +588,7 @@ impl App {
             let Some(vm) = state.get(id) else {
                 return;
             };
-            let networks = if vm.state.runtime_networks.is_empty() {
-                crate::app::qemu::resolved_networks(&vm.config.manifest, &self.config.cvm)
-            } else {
-                vm.state.runtime_networks.clone()
-            };
+            let networks = vm.effective_networks(&self.config.cvm);
             if networks
                 .iter()
                 .any(|networking| networking.mode == crate::config::NetworkingMode::User)
@@ -1614,7 +1561,7 @@ mod tests {
 
     #[test]
     fn manifest_deserializes_legacy_singular_networking_as_networks() {
-        let manifest: Manifest = serde_json::from_value(serde_json::json!({
+        let manifest: Manifest = Manifest::from_json(serde_json::json!({
             "id": "vm-1",
             "name": "vm-1",
             "app_id": "app-1",
@@ -2141,6 +2088,14 @@ impl VmState {
         Self {
             config: Arc::new(config),
             state: VmStateMut::default(),
+        }
+    }
+
+    pub fn effective_networks(&self, cvm: &crate::config::CvmConfig) -> Vec<Networking> {
+        if self.state.runtime_networks.is_empty() {
+            crate::app::qemu::resolved_networks(&self.config.manifest, cvm)
+        } else {
+            self.state.runtime_networks.clone()
         }
     }
 }

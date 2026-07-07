@@ -103,36 +103,25 @@ fn networking_to_proto(n: &Networking) -> pb::NetworkingConfig {
 }
 
 pub fn resolve_networking(vm_net: &Networking, cfg: &CvmConfig) -> Networking {
-    Networking {
-        mode: vm_net.mode,
-        bridge: if vm_net.bridge.is_empty() {
-            cfg.networking.bridge.clone()
-        } else {
-            vm_net.bridge.clone()
-        },
-        forward_service_enabled: vm_net.forward_service_enabled,
-        mac_prefix: if vm_net.mac_prefix.is_empty() {
-            cfg.networking.mac_prefix.clone()
-        } else {
-            vm_net.mac_prefix.clone()
-        },
-        net: if vm_net.net.is_empty() {
-            cfg.networking.net.clone()
-        } else {
-            vm_net.net.clone()
-        },
-        dhcp_start: if vm_net.dhcp_start.is_empty() {
-            cfg.networking.dhcp_start.clone()
-        } else {
-            vm_net.dhcp_start.clone()
-        },
-        restrict: cfg.networking.restrict || vm_net.restrict,
-        netdev: if vm_net.netdev.is_empty() {
-            cfg.networking.netdev.clone()
-        } else {
-            vm_net.netdev.clone()
-        },
+    let mut resolved = cfg.networking.clone();
+    resolved.mode = vm_net.mode;
+    resolved.restrict = cfg.networking.restrict || vm_net.restrict;
+    if !vm_net.bridge.is_empty() {
+        resolved.bridge = vm_net.bridge.clone();
     }
+    if !vm_net.mac_prefix.is_empty() {
+        resolved.mac_prefix = vm_net.mac_prefix.clone();
+    }
+    if !vm_net.net.is_empty() {
+        resolved.net = vm_net.net.clone();
+    }
+    if !vm_net.dhcp_start.is_empty() {
+        resolved.dhcp_start = vm_net.dhcp_start.clone();
+    }
+    if !vm_net.netdev.is_empty() {
+        resolved.netdev = vm_net.netdev.clone();
+    }
+    resolved
 }
 
 pub fn resolved_networks(manifest: &Manifest, cfg: &CvmConfig) -> Vec<Networking> {
@@ -408,6 +397,14 @@ fn create_shared_disk(disk_path: impl AsRef<Path>, shared_dir: impl AsRef<Path>)
 }
 
 impl VmInfo {
+    pub fn effective_networks(&self, cvm: &CvmConfig) -> Vec<Networking> {
+        if self.runtime_networks.is_empty() {
+            resolved_networks(&self.manifest, cvm)
+        } else {
+            self.runtime_networks.clone()
+        }
+    }
+
     pub fn to_pb(&self, gw: &GatewayConfig, cvm: &CvmConfig, brief: bool) -> pb::VmInfo {
         let workdir = VmWorkDir::new(&self.workdir);
         let vm_config = workdir.manifest();
@@ -422,11 +419,7 @@ impl VmInfo {
             .map(networking_to_proto)
             .collect::<Vec<_>>();
         let configured_networking = configured_networks.first().cloned();
-        let effective_networks = if self.runtime_networks.is_empty() {
-            resolved_networks(&self.manifest, cvm)
-        } else {
-            self.runtime_networks.clone()
-        };
+        let effective_networks = self.effective_networks(cvm);
         let ip_index = effective_networks
             .iter()
             .position(|networking| networking.mode == NetworkingMode::Bridge)
@@ -1370,10 +1363,10 @@ impl VmWorkDir {
 
     pub fn manifest(&self) -> Result<Manifest> {
         let manifest_path = self.manifest_path();
-        let manifest = fs::read_to_string(manifest_path).context("Failed to read manifest")?;
-        let manifest: Manifest =
-            serde_json::from_str(&manifest).context("Failed to parse manifest")?;
-        Ok(manifest)
+        let raw = fs::read_to_string(manifest_path).context("Failed to read manifest")?;
+        let value: serde_json::Value =
+            serde_json::from_str(&raw).context("Failed to parse manifest JSON")?;
+        Manifest::from_json(value).context("Failed to deserialize manifest")
     }
 
     pub fn put_manifest(&self, manifest: &Manifest) -> Result<()> {

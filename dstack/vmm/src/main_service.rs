@@ -239,12 +239,9 @@ fn validate_default_network(cvm_config: &CvmConfig) -> Result<()> {
 }
 
 fn resolve_requested_networks(
-    mut networks: Vec<Networking>,
+    networks: &[Networking],
     cvm_config: &CvmConfig,
 ) -> Result<Vec<Networking>> {
-    for networking in &mut networks {
-        networking.forward_service_enabled = cvm_config.networking.forward_service_enabled;
-    }
     let resolved = networks
         .iter()
         .map(|networking| crate::app::qemu::resolve_networking(networking, cvm_config))
@@ -267,10 +264,11 @@ fn networks_from_vm_config(
     cvm_config: &CvmConfig,
 ) -> Result<Vec<Networking>> {
     if !request.networks.is_empty() {
-        resolve_requested_networks(networks_from_proto(&request.networks)?, cvm_config)
+        let networks = networks_from_proto(&request.networks)?;
+        resolve_requested_networks(&networks, cvm_config)
     } else if let Some(networking) = request.networking.as_ref() {
         match networking_from_proto(networking)? {
-            Some(networking) => resolve_requested_networks(vec![networking], cvm_config),
+            Some(networking) => resolve_requested_networks(&[networking], cvm_config),
             None => Ok(vec![]),
         }
     } else {
@@ -495,10 +493,8 @@ impl VmmRpc for RpcHandler {
                 validate_default_network(&self.app.config.cvm)?;
                 vec![]
             } else {
-                resolve_requested_networks(
-                    networks_from_proto(&request.networks)?,
-                    &self.app.config.cvm,
-                )?
+                let networks = networks_from_proto(&request.networks)?;
+                resolve_requested_networks(&networks, &self.app.config.cvm)?
             };
             let is_running = self
                 .app
