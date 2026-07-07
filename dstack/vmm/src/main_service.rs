@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::ops::Deref;
+use std::path::{Component, Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{bail, Context, Result};
@@ -10,14 +11,16 @@ use dstack_types::AppCompose;
 use dstack_vmm_rpc as rpc;
 use dstack_vmm_rpc::vmm_server::{VmmRpc, VmmServer};
 use dstack_vmm_rpc::{
-    AppId, ComposeHash as RpcComposeHash, GatewaySettings, GetInfoResponse, GetMetaResponse, Id,
-    ImageInfo as RpcImageInfo, ImageListResponse, KmsSettings, ListGpusResponse, PublicKeyResponse,
-    PullRegistryImageRequest, RegistryImageInfo, RegistryImageListResponse, ReloadVmsResponse,
-    ResizeVmRequest, ResourcesSettings, StatusRequest, StatusResponse, SvListResponse,
-    SvProcessInfo, UpdateVmRequest, VersionResponse, VmConfiguration,
+    AppId, ComposeHash as RpcComposeHash, DhcpLeaseRequest, GatewaySettings, GetInfoResponse,
+    GetMetaResponse, Id, ImageInfo as RpcImageInfo, ImageListResponse, KmsSettings,
+    ListGpusResponse, PublicKeyResponse, PullRegistryImageRequest, RegistryImageInfo,
+    RegistryImageListResponse, ReloadVmsResponse, ResizeVmRequest, ResourcesSettings,
+    StatusRequest, StatusResponse, SvListResponse, SvProcessInfo, UpdateVmRequest, VersionResponse,
+    VmConfiguration,
 };
 use fs_err as fs;
 use or_panic::ResultOrPanic;
+use path_absolutize::Absolutize;
 use ra_rpc::{CallContext, RpcCall};
 use tracing::{info, warn};
 
@@ -219,35 +222,10 @@ fn resolve_volumes(
     if dir.is_empty() {
         bail!("volumes requested but cvm.volumes_dir is not configured");
     }
-    let base =
-        fs::canonicalize(dir).with_context(|| format!("volumes_dir '{dir}' does not exist"))?;
+    let base = fs::canonicalize(dir)?;
     reqs.iter()
         .map(|v| {
-            // `,`/`=` would let a crafted file name inject qemu `-drive` options
-            // when the path is concatenated into the drive string.
-            if v.source.is_empty()
-                || v.source.contains('/')
-                || v.source.contains("..")
-                || v.source.contains(',')
-                || v.source.contains('=')
-            {
-                bail!(
-                    "invalid volume source '{}': must be a bare file name (no '/', '..', ',', '=')",
-                    v.source
-                );
-            }
-            let real = fs::canonicalize(base.join(&v.source)).with_context(|| {
-                format!("volume '{}' not found under volumes_dir '{dir}'", v.source)
-            })?;
-            if !real.starts_with(&base) {
-                bail!("volume '{}' escapes volumes_dir", v.source);
-            }
-            // Re-check the resolved path: a symlink could resolve to a name
-            // containing `,`/`=` and reintroduce QEMU -drive option injection.
-            let real_str = real.to_string_lossy();
-            if real_str.contains(',') || real_str.contains('=') {
-                bail!("volume '{}' resolves to a path with ',' or '='", v.source);
-            }
+            let real = resolve_volume_source(&base, &v.source)?;
             Ok(crate::app::VmVolume {
                 source: real.to_string_lossy().into_owned(),
                 // Verity volumes are always read-only: the backing file is shared
@@ -258,6 +236,32 @@ fn resolve_volumes(
             })
         })
         .collect()
+}
+
+fn resolve_volume_source(base: &Path, source: &str) -> Result<PathBuf> {
+    if source.is_empty() {
+        bail!("invalid volume source: empty path");
+    }
+
+    let source_path = Path::new(source);
+    let mut components = source_path.components();
+    if !matches!(components.next(), Some(Component::Normal(_))) || components.next().is_some() {
+        bail!("invalid volume source '{source}': must be a bare file name");
+    }
+
+    let real = fs::canonicalize(base.join(source_path))?;
+    real.absolutize_virtually(base)
+        .with_context(|| format!("volume '{source}' escapes volumes_dir"))?;
+
+    // QEMU's -drive parser treats ',' as an option separator and '=' as an
+    // option key/value delimiter. Keep this guard while volumes are attached
+    // through `-drive file=...`.
+    let real_str = real.to_string_lossy();
+    if real_str.contains(',') || real_str.contains('=') {
+        bail!("volume '{source}' resolves to a path with ',' or '='");
+    }
+
+    Ok(real)
 }
 
 fn networking_from_proto(proto: &rpc::NetworkingConfig) -> Result<Option<Networking>> {
@@ -281,6 +285,7 @@ fn networking_from_proto(proto: &rpc::NetworkingConfig) -> Result<Option<Network
         dhcp_start: String::new(),
         restrict: false,
         netdev: String::new(),
+        forward_service_enabled: false,
     }))
 }
 
@@ -572,6 +577,9 @@ impl VmmRpc for RpcHandler {
             .load_vm(&vm_work_dir, &Default::default(), false)
             .await
             .context("Failed to load VM")?;
+        if request.update_ports {
+            self.app.reconfigure_port_forward(&request.id).await;
+        }
         Ok(Id { id: new_id })
     }
 
@@ -687,6 +695,7 @@ impl VmmRpc for RpcHandler {
                     NetworkingMode::Bridge => "bridge".to_string(),
                     NetworkingMode::Custom => String::new(),
                 },
+                forward_service_enabled: default_networking.forward_service_enabled,
                 default_bridge: default_networking.bridge.clone(),
             }),
         })
@@ -713,6 +722,11 @@ impl VmmRpc for RpcHandler {
     async fn reload_vms(self) -> Result<ReloadVmsResponse> {
         info!("Reloading VMs directory and syncing with memory state");
         self.app.reload_vms_sync().await
+    }
+
+    async fn report_dhcp_lease(self, request: DhcpLeaseRequest) -> Result<()> {
+        self.app.report_dhcp_lease(&request.mac, &request.ip).await;
+        Ok(())
     }
 
     async fn sv_list(self) -> Result<SvListResponse> {
@@ -917,6 +931,7 @@ mod tests {
             no_tee: false,
             networking: None,
             networks: vec![],
+            volumes: vec![],
         }
     }
 
@@ -974,5 +989,54 @@ mod tests {
         .unwrap_err();
 
         assert!(err.to_string().contains("custom networking mode"));
+    }
+
+    #[test]
+    fn multiple_bridges_are_rejected_when_builtin_forwarding_is_enabled() {
+        let mut cvm_config = test_cvm_config();
+        cvm_config.networking.forward_service_enabled = true;
+        let mut request = test_vm_configuration();
+        request.networks = vec![
+            rpc::NetworkingConfig {
+                mode: "bridge".to_string(),
+                bridge_name: "lo".to_string(),
+            },
+            rpc::NetworkingConfig {
+                mode: "bridge".to_string(),
+                bridge_name: "lo".to_string(),
+            },
+        ];
+
+        let err = create_manifest_from_vm_config(request, &cvm_config).unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("built-in port forwarding supports only one bridge"));
+    }
+
+    #[test]
+    fn resolve_volume_source_rejects_escape_symlink_and_qemu_metachars() -> Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let volumes = tmp.path().join("volumes");
+        fs::create_dir_all(&volumes)?;
+        fs::write(volumes.join("ok.img"), b"ok")?;
+        let base = fs::canonicalize(&volumes)?;
+
+        let ok = resolve_volume_source(&base, "ok.img")?;
+        assert_eq!(ok, base.join("ok.img"));
+
+        let err = resolve_volume_source(&base, "../ok.img").unwrap_err();
+        assert!(format!("{err:#}").contains("must be a bare file name"));
+
+        fs::write(tmp.path().join("outside.img"), b"outside")?;
+        std::os::unix::fs::symlink(tmp.path().join("outside.img"), volumes.join("link.img"))?;
+        let err = resolve_volume_source(&base, "link.img").unwrap_err();
+        assert!(format!("{err:#}").contains("escapes volumes_dir"));
+
+        fs::write(volumes.join("bad,readonly=off"), b"bad")?;
+        let err = resolve_volume_source(&base, "bad,readonly=off").unwrap_err();
+        assert!(format!("{err:#}").contains("',' or '='"));
+
+        Ok(())
     }
 }
