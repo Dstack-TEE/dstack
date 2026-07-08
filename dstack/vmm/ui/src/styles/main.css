@@ -587,29 +587,42 @@ h1, h2, h3, h4, h5, h6 {
   border-style: dashed;
 }
 
-.port-mappings {
+.port-mappings,
+.runtime-network-section {
   display: flex;
   flex-direction: column;
   gap: 12px;
 }
 
-.port-mappings h4 {
+.port-mappings h4,
+.runtime-network-section h4 {
   font-size: 14px;
   font-weight: 600;
   color: var(--color-text-primary);
   margin-bottom: 4px;
 }
 
-.port-item {
+.port-item,
+.runtime-network-item {
   padding: 12px 16px;
   background: var(--color-bg-primary);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
-  display: flex;
-  justify-content: space-between;
   align-items: center;
   font-size: 14px;
   font-family: 'SF Mono', 'Monaco', 'Cascadia Code', monospace;
+}
+
+.port-item {
+  display: flex;
+  justify-content: space-between;
+}
+
+.runtime-network-item {
+  display: grid;
+  grid-template-columns: 1.1fr 0.6fr 0.8fr 1fr 1.4fr;
+  gap: 12px;
+  overflow-wrap: anywhere;
 }
 
 .features-section {
@@ -1385,15 +1398,41 @@ h1, h2, h3, h4, h5, h6 {
 
 .encrypted-env-editor,
 .port-mapping-editor,
-.gpu-config-editor {
+.gpu-config-editor,
+.network-config-editor {
   display: flex;
   flex-direction: column;
   gap: 16px;
 }
 
-.port-mapping-editor > button {
+.port-mapping-editor > button,
+.network-config-editor > button {
   width: fit-content;
   min-width: 120px;
+}
+
+.network-config-empty {
+  padding: 12px 16px;
+  background: var(--color-bg-secondary);
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-md);
+  color: var(--color-text-secondary);
+  font-size: 14px;
+}
+
+.network-config-row {
+  display: grid;
+  grid-template-columns: 160px minmax(180px, 1fr) 100px;
+  gap: 12px;
+  align-items: center;
+}
+
+.network-config-placeholder {
+  min-height: 1px;
+}
+
+.network-config-hint {
+  grid-column: 1 / -1;
 }
 
 .gpu-section-label {
