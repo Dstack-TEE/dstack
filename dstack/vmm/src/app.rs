@@ -1471,6 +1471,11 @@ fn make_vm_config(
         GpuConfig::default()
     };
     let effective_vcpus = effective_vcpu_count_for_manifest(manifest, &gpus)?;
+    // Each resolved network interface becomes one virtio-net-pci device in the
+    // QEMU command (see `VmConfig::config_qemu`), which changes the guest's
+    // ACPI/DSDT layout and therefore RTMR0. Measure the interface count so the
+    // verifier reconstructs the exact device layout.
+    let num_nics = crate::app::qemu::resolved_networks(manifest, &cfg.cvm).len() as u32;
     let mut config = serde_json::to_value(dstack_types::VmConfig {
         os_image_hash,
         cpu_count: effective_vcpus,
@@ -1482,6 +1487,7 @@ fn make_vm_config(
         hugepages: manifest.hugepages,
         num_gpus: gpus.gpus.len() as u32,
         num_nvswitches: gpus.bridges.len() as u32,
+        num_nics,
         host_share_mode: cfg.cvm.host_share_mode.clone(),
         hotplug_off: cfg.cvm.qemu_hotplug_off,
         image: Some(manifest.image.clone()),

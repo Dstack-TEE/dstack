@@ -312,6 +312,7 @@ impl CvmVerifier {
             })
             .hugepages(vm_config.hugepages)
             .num_gpus(vm_config.num_gpus)
+            .num_nics(vm_config.num_nics)
             .num_nvswitches(vm_config.num_nvswitches)
             .host_share_mode(vm_config.host_share_mode.clone())
             .ovmf_variant(ovmf_variant)
