@@ -797,9 +797,9 @@ fn verify_app_compose_policy(app_compose: &AppCompose) -> Result<()> {
 
 fn verify_manifest_feature_requirements(app_compose: &AppCompose) -> Result<()> {
     let manifest_version = verify_manifest_version(app_compose)?;
-    if app_compose.requirements.is_some() && manifest_version != MANIFEST_VERSION_3 {
+    if app_compose.requirements.is_some() && manifest_version < MANIFEST_VERSION_3 {
         bail!(
-            "requirements requires manifest_version == {MANIFEST_VERSION_3}; use string manifest_version \"{MANIFEST_VERSION_3}\" so older guests fail closed"
+            "requirements requires manifest_version >= {MANIFEST_VERSION_3}; use string manifest_version \"{MANIFEST_VERSION_3}\" so older guests fail closed"
         );
     }
     Ok(())
@@ -900,16 +900,21 @@ fn os_release_value(content: &str, key: &str) -> Option<String> {
 
 fn unquote_os_release_value(value: &str) -> String {
     let value = value.trim();
-    let bytes = value.as_bytes();
-    if bytes.len() >= 2
-        && ((bytes[0] == b'"' && bytes[bytes.len() - 1] == b'"')
-            || (bytes[0] == b'\'' && bytes[bytes.len() - 1] == b'\''))
-    {
-        let inner = &value[1..value.len() - 1];
-        return inner
-            .replace("\\\"", "\"")
-            .replace("\\'", "'")
-            .replace("\\\\", "\\");
+    if let Some(inner) = value.strip_prefix('"').and_then(|v| v.strip_suffix('"')) {
+        // Double-quoted: a backslash escapes the next character.
+        let mut unescaped = String::with_capacity(inner.len());
+        let mut chars = inner.chars();
+        while let Some(c) = chars.next() {
+            match c {
+                '\\' => unescaped.push(chars.next().unwrap_or('\\')),
+                _ => unescaped.push(c),
+            }
+        }
+        return unescaped;
+    }
+    if let Some(inner) = value.strip_prefix('\'').and_then(|v| v.strip_suffix('\'')) {
+        // Single-quoted: shell single quotes have no escape sequences.
+        return inner.to_string();
     }
     value.to_string()
 }
@@ -2203,4 +2208,20 @@ VERSION_ID="0.6.1"
         os_release_value(content, "VERSION_ID").as_deref(),
         Some("0.6.1")
     );
+}
+
+#[test]
+fn test_unquote_os_release_value_handles_quoting_styles() {
+    assert_eq!(unquote_os_release_value("0.6.1"), "0.6.1");
+    assert_eq!(unquote_os_release_value("\"0.6.1\""), "0.6.1");
+    assert_eq!(unquote_os_release_value("'0.6.1'"), "0.6.1");
+    // Double-quoted: backslash escapes the next character.
+    assert_eq!(unquote_os_release_value(r#""a\"b""#), "a\"b");
+    assert_eq!(unquote_os_release_value(r#""a\\b""#), r"a\b");
+    assert_eq!(unquote_os_release_value(r#""a\\\"b""#), r#"a\"b"#);
+    // Single-quoted: no escape sequences.
+    assert_eq!(unquote_os_release_value(r"'a\\b'"), r"a\\b");
+    // Unbalanced/degenerate quotes are returned verbatim.
+    assert_eq!(unquote_os_release_value("\""), "\"");
+    assert_eq!(unquote_os_release_value("\"a"), "\"a");
 }

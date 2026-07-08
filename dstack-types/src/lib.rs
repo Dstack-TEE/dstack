@@ -197,6 +197,11 @@ fn parse_manifest_version_string(value: &str) -> Result<String, String> {
     if parsed == 0 {
         return Err("manifest_version must be greater than 0".to_string());
     }
+    if parsed.to_string() != value {
+        return Err(format!(
+            "manifest_version must be a canonical integer string, got {value:?}"
+        ));
+    }
     Ok(parsed.to_string())
 }
 
@@ -344,6 +349,28 @@ mod app_compose_tests {
     fn manifest_version_rejects_new_numeric_versions() {
         let err = parse_compose(serde_json::json!(3)).unwrap_err();
         assert!(err.to_string().contains("legacy versions 1 and 2"));
+    }
+
+    #[test]
+    fn manifest_version_rejects_invalid_numeric_values() {
+        let err = parse_compose(serde_json::json!(0)).unwrap_err();
+        assert!(err.to_string().contains("legacy versions 1 and 2"));
+        let err = parse_compose(serde_json::json!(-1)).unwrap_err();
+        assert!(err.to_string().contains("positive integer"));
+        assert!(parse_compose(serde_json::json!(2.5)).is_err());
+    }
+
+    #[test]
+    fn manifest_version_rejects_non_canonical_strings() {
+        let err = parse_compose(serde_json::json!("0")).unwrap_err();
+        assert!(err.to_string().contains("greater than 0"));
+        let err = parse_compose(serde_json::json!("03")).unwrap_err();
+        assert!(err.to_string().contains("canonical integer string"));
+        let err = parse_compose(serde_json::json!("+3")).unwrap_err();
+        assert!(err.to_string().contains("canonical integer string"));
+        let err = parse_compose(serde_json::json!("")).unwrap_err();
+        assert!(err.to_string().contains("must not be empty"));
+        assert!(parse_compose(serde_json::json!("3.0")).is_err());
     }
 
     #[test]
