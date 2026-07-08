@@ -59,9 +59,20 @@ RUN git clone https://github.com/MoeMahhouk/gramine-sealing-key-provider && \
 WORKDIR /gramine-sealing-key-provider
 COPY Cargo.lock .
 
-# Build key provider, generate keys, and build manifest
+# Build key provider, generate keys, and build manifest.
+#
+# Do not use `gramine-sgx-gen-private-key` here. On some hosts the Python
+# cryptography/OpenSSL stack in the Gramine image fails while generating the
+# RSA key with a generic "Unknown OpenSSL error". Generate the exact same kind
+# of Gramine signing key directly with OpenSSL instead:
+#   - 3072-bit RSA
+#   - public exponent 3
+#   - traditional PEM accepted by gramine-sgx-sign
 RUN make target/release/gramine-sealing-key-provider && \
-    gramine-sgx-gen-private-key && \
+    mkdir -p /root/.config/gramine && \
+    chmod 0700 /root/.config /root/.config/gramine && \
+    openssl genrsa -traditional -3 -out /root/.config/gramine/enclave-key.pem 3072 && \
+    chmod 0600 /root/.config/gramine/enclave-key.pem && \
     make RUST_LOG=info
 
 RUN gramine-sgx-sigstruct-view --output-format json gramine-sealing-key-provider.sig

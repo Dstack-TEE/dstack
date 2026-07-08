@@ -64,6 +64,12 @@ NODE_ID=1
 
 # Whether to use ACME staging (yes/no)
 ACME_STAGING=no
+# Optional ACME directory override for local E2E (for example Pebble).
+# ACME_URL=http://10.0.2.2:14000/dir
+# Optional Cloudflare API override for local E2E mock.
+# CF_API_URL=http://10.0.2.2:18080/client/v4
+# DNS_TXT_TTL=60
+# MAX_DNS_WAIT=300
 
 # Networking mode: bridge or user (default: user)
 # NET_MODE=bridge
