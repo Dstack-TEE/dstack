@@ -1733,8 +1733,9 @@ fi
                 };
 
                 const makeAppComposeFile = async () => {
+                    const osVersion = imageVersion(vmForm.value.image);
                     const app_compose = {
-                        "manifest_version": 2,
+                        "manifest_version": appComposeManifestVersion(osVersion),
                         "name": vmForm.value.name,
                         "runner": "docker-compose",
                         "docker_compose_file": vmForm.value.dockerComposeFile,
@@ -1773,7 +1774,7 @@ fi
                         app_compose.launch_token_hash = await calcComposeHash(launchToken.value);
                     }
 
-                    const imgFeatures = imageVersionFeatures(imageVersion(vmForm.value.image));
+                    const imgFeatures = imageVersionFeatures(osVersion);
                     if (imgFeatures.compose_version < 2) {
                         // Compatibility with old images
                         const features = [];
@@ -2181,6 +2182,10 @@ fi
                         ...currentAppCompose,
                         docker_compose_file: upgradeDialog.value.dockerComposeFile || currentAppCompose.docker_compose_file
                     };
+                    const targetManifestVersion = appComposeManifestVersion(imageVersion(upgradeDialog.value.image));
+                    if (targetManifestVersion === "3") {
+                        app_compose.manifest_version = targetManifestVersion;
+                    }
                     if (upgradeDialog.value.resetSecrets) {
                         const launchToken = upgradeDialog.value.encryptedEnvs.find(env => env.key == 'APP_LAUNCH_TOKEN');
                         if (launchToken) {
@@ -2449,6 +2454,13 @@ fi
                     const version = versionStr.split('.').map(Number);
                     const otherVersion = otherVersionStr.split('.').map(Number);
                     return version[0] > otherVersion[0] || (version[0] == otherVersion[0] && version[1] > otherVersion[1]) || (version[0] == otherVersion[0] && version[1] == otherVersion[1] && version[2] >= otherVersion[2]);
+                };
+
+                const appComposeManifestVersion = (versionStr) => {
+                    if (versionStr && verGE(versionStr, '0.6.0')) {
+                        return "3";
+                    }
+                    return 2;
                 };
 
                 const imageVersionFeatures = (versionStr) => {

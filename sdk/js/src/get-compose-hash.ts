@@ -36,6 +36,11 @@ function sortObject(obj: SortableValue): SortableValue {
 }
 
 export type KeyProviderKind = "none" | "kms" | "local" | "tpm";
+export type RequirementPlatform =
+  | "dstack-tdx"
+  | "dstack-gcp-tdx"
+  | "dstack-amd-sev-snp"
+  | "dstack-nitro-enclave";
 
 export interface DockerConfig extends SortableObject {
   registry?: string;
@@ -43,8 +48,13 @@ export interface DockerConfig extends SortableObject {
   token_key?: string;
 }
 
+export interface Requirements extends SortableObject {
+  os_version?: string;
+  platforms?: RequirementPlatform[];
+}
+
 export interface AppCompose extends SortableObject {
-  manifest_version?: number;
+  manifest_version?: number | string;
   name?: string;
   // Deprecated
   features?: string[];
@@ -64,6 +74,7 @@ export interface AppCompose extends SortableObject {
   allowed_envs?: string[];
   no_instance_id?: boolean;
   secure_time?: boolean;
+  requirements?: Requirements;
   // Legacy fields for backward compatibility
   bash_script?: string;
   pre_launch_script?: string;

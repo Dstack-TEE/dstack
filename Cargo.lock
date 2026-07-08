@@ -2777,6 +2777,7 @@ dependencies = [
  "safe-write",
  "schnorrkel",
  "scopeguard",
+ "semver 1.0.28",
  "serde",
  "serde-human-bytes",
  "serde_json",

@@ -46,13 +46,35 @@ class DockerConfig:
         return result
 
 
+class Requirements:
+    """Guest-side requirements for app compose."""
+
+    def __init__(
+        self,
+        os_version: Optional[str] = None,
+        platforms: Optional[List[str]] = None,
+    ) -> None:
+        """Initialize a new ``Requirements`` instance."""
+        self.os_version = os_version
+        self.platforms = platforms
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Return a dictionary representation excluding ``None`` fields."""
+        result: Dict[str, Any] = {}
+        if self.os_version is not None:
+            result["os_version"] = self.os_version
+        if self.platforms is not None:
+            result["platforms"] = self.platforms
+        return result
+
+
 class AppCompose:
     """App compose configuration."""
 
     def __init__(
         self,
         runner: str,
-        manifest_version: Optional[int] = None,
+        manifest_version: Optional[Union[int, str]] = None,
         name: Optional[str] = None,
         features: Optional[List[str]] = None,  # Deprecated
         docker_compose_file: Optional[str] = None,
@@ -69,6 +91,7 @@ class AppCompose:
         allowed_envs: Optional[List[str]] = None,
         no_instance_id: Optional[bool] = None,
         secure_time: Optional[bool] = None,
+        requirements: Optional[Union[Requirements, Dict[str, Any]]] = None,
         bash_script: Optional[str] = None,  # Legacy
         pre_launch_script: Optional[str] = None,  # Legacy
         **kwargs: Any,
@@ -92,6 +115,7 @@ class AppCompose:
         self.allowed_envs = allowed_envs
         self.no_instance_id = no_instance_id
         self.secure_time = secure_time
+        self.requirements = requirements
         self.bash_script = bash_script
         self.pre_launch_script = pre_launch_script
 
@@ -108,7 +132,7 @@ class AppCompose:
             if not attr_name.startswith("_") and not callable(getattr(self, attr_name)):
                 value = getattr(self, attr_name)
                 if value is not None:
-                    if isinstance(value, DockerConfig):
+                    if isinstance(value, (DockerConfig, Requirements)):
                         result[attr_name] = value.to_dict()
                     else:
                         # Handle special float values
@@ -133,6 +157,12 @@ class AppCompose:
             dc = data.pop("docker_config")
             docker_config = DockerConfig(**dc)
 
+        # Handle requirements
+        requirements: Optional[Requirements] = None
+        if "requirements" in data and data["requirements"] is not None:
+            req = data.pop("requirements")
+            requirements = Requirements(**req)
+
         # Handle special float values
         processed_data: Dict[str, Any] = {}
         for key, value in data.items():
@@ -148,7 +178,12 @@ class AppCompose:
 
         runner_value = processed_data.pop("runner")
         runner: str = str(runner_value)
-        return cls(runner=runner, docker_config=docker_config, **processed_data)
+        return cls(
+            runner=runner,
+            docker_config=docker_config,
+            requirements=requirements,
+            **processed_data,
+        )
 
 
 def sort_object(obj: Any) -> Any:

@@ -38,6 +38,7 @@ use ra_tls::{
 use rand::Rng as _;
 use safe_write::safe_write;
 use scopeguard::defer;
+use semver::{Version, VersionReq};
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
@@ -372,6 +373,8 @@ const GATEWAY_CACHE_PATH: &str = "/run/dstack/gateway-cache.json";
 const WG_CONFIG_PATH: &str = "/etc/wireguard/dstack-wg0.conf";
 /// Certificate validity period in seconds (10 days)
 const CERT_VALIDITY_SECS: u64 = 10 * 24 * 3600;
+const MAX_SUPPORTED_MANIFEST_VERSION: u32 = 3;
+const MANIFEST_VERSION_3: u32 = 3;
 
 #[derive(Serialize, Deserialize, Clone)]
 struct GatewayKeyStore {
@@ -759,6 +762,163 @@ fn emit_key_provider_info(provider_info: &KeyProviderInfo) -> Result<()> {
     Ok(())
 }
 
+fn verify_manifest_version(app_compose: &AppCompose) -> Result<u32> {
+    let manifest_version = app_compose
+        .manifest_version_u32()
+        .context("Invalid manifest_version")?;
+    if manifest_version > MAX_SUPPORTED_MANIFEST_VERSION {
+        bail!(
+            "Unsupported manifest_version: {manifest_version}, max supported: {MAX_SUPPORTED_MANIFEST_VERSION}"
+        );
+    }
+    Ok(manifest_version)
+}
+
+fn verify_app_compose_policy(app_compose: &AppCompose) -> Result<()> {
+    verify_manifest_feature_requirements(app_compose)?;
+    let Some(requirements) = app_compose.requirements.as_ref() else {
+        return Ok(());
+    };
+    if requirements.os_version.is_some() {
+        let current_os_version =
+            read_current_os_version().context("Failed to read current dstack OS version")?;
+        verify_os_version_requirement(app_compose, &current_os_version)?;
+    }
+    if let Some(platforms) = requirements.platforms.as_deref() {
+        if platforms.is_empty() {
+            bail!("Unsupported attestation platform: requirements.platforms is empty");
+        }
+        let current_platform =
+            AttestationMode::detect().context("Failed to detect current attestation platform")?;
+        verify_platform_requirements(app_compose, current_platform)?;
+    }
+    Ok(())
+}
+
+fn verify_manifest_feature_requirements(app_compose: &AppCompose) -> Result<()> {
+    let manifest_version = verify_manifest_version(app_compose)?;
+    if app_compose.requirements.is_some() && manifest_version < MANIFEST_VERSION_3 {
+        bail!(
+            "requirements requires manifest_version >= {MANIFEST_VERSION_3}; use string manifest_version \"{MANIFEST_VERSION_3}\" so older guests fail closed"
+        );
+    }
+    Ok(())
+}
+
+fn verify_os_version_requirement(app_compose: &AppCompose, current_os_version: &str) -> Result<()> {
+    let Some(requirements) = app_compose.requirements.as_ref() else {
+        return Ok(());
+    };
+    let Some(os_version) = requirements.os_version.as_deref() else {
+        return Ok(());
+    };
+    let os_version_req = VersionReq::parse(os_version)
+        .with_context(|| format!("Invalid requirements.os_version: {os_version}"))?;
+    let current_os_version = Version::parse(current_os_version)
+        .with_context(|| format!("Invalid current dstack OS version: {current_os_version}"))?;
+    if !os_version_req.matches(&current_os_version) {
+        bail!(
+            "Unsupported dstack OS version: current {current_os_version}, required {os_version_req}"
+        );
+    }
+    info!(
+        "dstack OS version requirement satisfied: current={}, requirement={}",
+        current_os_version, os_version_req
+    );
+    Ok(())
+}
+
+fn verify_platform_requirements(
+    app_compose: &AppCompose,
+    current_platform: AttestationMode,
+) -> Result<()> {
+    let Some(requirements) = app_compose.requirements.as_ref() else {
+        return Ok(());
+    };
+    let Some(allowed_platforms) = requirements.platforms.as_deref() else {
+        return Ok(());
+    };
+    let allowed_modes = allowed_platforms
+        .iter()
+        .enumerate()
+        .map(|(index, platform)| parse_requirement_platform(platform, index))
+        .collect::<Result<Vec<_>>>()?;
+    if allowed_modes.contains(&current_platform) {
+        info!(
+            "platform requirement satisfied: current={}, allowed=[{}]",
+            current_platform.as_str(),
+            format_requirement_platforms(allowed_platforms)
+        );
+        return Ok(());
+    }
+    bail!(
+        "Unsupported attestation platform: current {}, allowed [{}]",
+        current_platform.as_str(),
+        format_requirement_platforms(allowed_platforms)
+    );
+}
+
+fn parse_requirement_platform(platform: &str, index: usize) -> Result<AttestationMode> {
+    serde_json::from_value(serde_json::Value::String(platform.to_string()))
+        .with_context(|| format!("Invalid requirements.platforms[{index}]: {platform}"))
+}
+
+fn format_requirement_platforms(platforms: &[String]) -> String {
+    platforms.join(", ")
+}
+
+fn read_current_os_version() -> Result<String> {
+    const OS_RELEASE_PATHS: &[&str] = &["/etc/os-release", "/usr/lib/os-release"];
+    for path in OS_RELEASE_PATHS {
+        let content = match fs::read_to_string(path) {
+            Ok(content) => content,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(err) => return Err(err).with_context(|| format!("Failed to read {path}")),
+        };
+        if let Some(version) = os_release_value(&content, "VERSION_ID") {
+            return Ok(version);
+        }
+    }
+    bail!("VERSION_ID not found in /etc/os-release or /usr/lib/os-release")
+}
+
+fn os_release_value(content: &str, key: &str) -> Option<String> {
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let Some((k, v)) = line.split_once('=') else {
+            continue;
+        };
+        if k == key {
+            return Some(unquote_os_release_value(v));
+        }
+    }
+    None
+}
+
+fn unquote_os_release_value(value: &str) -> String {
+    let value = value.trim();
+    if let Some(inner) = value.strip_prefix('"').and_then(|v| v.strip_suffix('"')) {
+        // Double-quoted: a backslash escapes the next character.
+        let mut unescaped = String::with_capacity(inner.len());
+        let mut chars = inner.chars();
+        while let Some(c) = chars.next() {
+            match c {
+                '\\' => unescaped.push(chars.next().unwrap_or('\\')),
+                _ => unescaped.push(c),
+            }
+        }
+        return unescaped;
+    }
+    if let Some(inner) = value.strip_prefix('\'').and_then(|v| v.strip_suffix('\'')) {
+        // Single-quoted: shell single quotes have no escape sequences.
+        return inner.to_string();
+    }
+    value.to_string()
+}
+
 pub async fn cmd_sys_setup(args: SetupArgs) -> Result<()> {
     let stage0 = Stage0::load(&args)?;
     let vmm = stage0.host_api();
@@ -770,6 +930,8 @@ pub async fn cmd_sys_setup(args: SetupArgs) -> Result<()> {
 }
 
 async fn do_sys_setup(stage0: Stage0<'_>) -> Result<()> {
+    verify_app_compose_policy(&stage0.shared.app_compose)
+        .context("Failed to verify app-compose policy")?;
     if stage0.shared.app_compose.secure_time {
         info!("Waiting for the system time to be synchronized");
         cmd! {
@@ -1901,4 +2063,165 @@ fn test_validate_luks2_header() {
     assert!(error
         .to_string()
         .contains("Invalid LUKS keyslot encryption"));
+}
+
+#[cfg(test)]
+fn test_app_compose(
+    manifest_version: serde_json::Value,
+    os_version: Option<&str>,
+    platforms: Option<&[&str]>,
+) -> AppCompose {
+    let mut value = serde_json::json!({
+        "manifest_version": manifest_version,
+        "name": "test",
+        "runner": "docker-compose"
+    });
+    if os_version.is_some() || platforms.is_some() {
+        value["requirements"] = serde_json::json!({});
+    }
+    if let Some(os_version) = os_version {
+        value["requirements"]["os_version"] = serde_json::json!(os_version);
+    }
+    if let Some(platforms) = platforms {
+        value["requirements"]["platforms"] = serde_json::json!(platforms);
+    }
+    serde_json::from_value(value).unwrap()
+}
+
+#[test]
+fn test_manifest_version_policy_rejects_above_guest_max() {
+    let app_compose = test_app_compose(serde_json::json!("4"), None, None);
+    let err = verify_manifest_version(&app_compose).unwrap_err();
+    assert!(err.to_string().contains("Unsupported manifest_version"));
+}
+
+#[test]
+fn test_os_version_requirement_requires_v3_manifest() {
+    let app_compose = test_app_compose(serde_json::json!("2"), Some(">=0.6.1"), None);
+    let err = verify_manifest_feature_requirements(&app_compose).unwrap_err();
+    assert!(err.to_string().contains("requires manifest_version"));
+}
+
+#[test]
+fn test_os_version_requirement_rejects_too_old_os() {
+    let app_compose = test_app_compose(serde_json::json!("3"), Some(">=0.6.1"), None);
+    let err = verify_os_version_requirement(&app_compose, "0.6.0").unwrap_err();
+    assert!(err.to_string().contains("Unsupported dstack OS version"));
+    verify_os_version_requirement(&app_compose, "0.6.1").unwrap();
+    verify_os_version_requirement(&app_compose, "0.6.2").unwrap();
+}
+
+#[test]
+fn test_os_version_requirement_accepts_semver_requirement_ranges() {
+    let app_compose = test_app_compose(serde_json::json!("3"), Some(">=0.6.0, <0.7.0"), None);
+    verify_os_version_requirement(&app_compose, "0.6.0").unwrap();
+    verify_os_version_requirement(&app_compose, "0.6.9").unwrap();
+    let err = verify_os_version_requirement(&app_compose, "0.7.0").unwrap_err();
+    assert!(err.to_string().contains("Unsupported dstack OS version"));
+}
+
+#[test]
+fn test_os_version_requirement_rejects_invalid_semver_strings() {
+    let app_compose = test_app_compose(serde_json::json!("3"), Some(">=0.6.0.a0"), None);
+    let err = verify_os_version_requirement(&app_compose, "0.6.0").unwrap_err();
+    assert!(err.to_string().contains("Invalid requirements.os_version"));
+
+    let app_compose = test_app_compose(serde_json::json!("3"), Some(">=0.6.0-a0"), None);
+    let err = verify_os_version_requirement(&app_compose, "0.6.0.a0").unwrap_err();
+    assert!(err
+        .to_string()
+        .contains("Invalid current dstack OS version"));
+}
+
+#[test]
+fn test_platform_requirements_accept_matching_platform() {
+    let app_compose = test_app_compose(
+        serde_json::json!("3"),
+        None,
+        Some(&["dstack-gcp-tdx", "dstack-tdx"]),
+    );
+    verify_platform_requirements(&app_compose, AttestationMode::DstackGcpTdx).unwrap();
+    verify_platform_requirements(&app_compose, AttestationMode::DstackTdx).unwrap();
+}
+
+#[test]
+fn test_platform_requirements_reject_non_matching_platform() {
+    let app_compose = test_app_compose(serde_json::json!("3"), None, Some(&["dstack-gcp-tdx"]));
+    let err =
+        verify_platform_requirements(&app_compose, AttestationMode::DstackAmdSevSnp).unwrap_err();
+    assert!(err.to_string().contains("Unsupported attestation platform"));
+}
+
+#[test]
+fn test_platform_requirements_require_v3_manifest() {
+    let app_compose = test_app_compose(serde_json::json!("2"), None, Some(&["dstack-gcp-tdx"]));
+    let err = verify_manifest_feature_requirements(&app_compose).unwrap_err();
+    assert!(err.to_string().contains("requires manifest_version"));
+}
+
+#[test]
+fn test_empty_requirements_require_v3_manifest() {
+    let app_compose: AppCompose = serde_json::from_value(serde_json::json!({
+        "manifest_version": "2",
+        "name": "test",
+        "runner": "docker-compose",
+        "requirements": {}
+    }))
+    .unwrap();
+    let err = verify_manifest_feature_requirements(&app_compose).unwrap_err();
+    assert!(err.to_string().contains("requires manifest_version"));
+}
+
+#[test]
+fn test_platform_requirements_omitted_accepts_any_platform() {
+    let app_compose = test_app_compose(serde_json::json!("3"), None, None);
+    verify_platform_requirements(&app_compose, AttestationMode::DstackAmdSevSnp).unwrap();
+}
+
+#[test]
+fn test_platform_requirements_explicit_empty_rejects_all_platforms() {
+    let app_compose = test_app_compose(serde_json::json!("3"), None, Some(&[]));
+    let err = verify_platform_requirements(&app_compose, AttestationMode::DstackTdx).unwrap_err();
+    assert!(err.to_string().contains("Unsupported attestation platform"));
+
+    let app_compose = test_app_compose(serde_json::json!("2"), None, Some(&[]));
+    let err = verify_manifest_feature_requirements(&app_compose).unwrap_err();
+    assert!(err.to_string().contains("requires manifest_version"));
+}
+
+#[test]
+fn test_platform_requirements_reject_invalid_platform_value() {
+    let app_compose = test_app_compose(serde_json::json!("3"), None, Some(&["gcptdx"]));
+    let err = verify_platform_requirements(&app_compose, AttestationMode::DstackTdx).unwrap_err();
+    assert!(err
+        .to_string()
+        .contains("Invalid requirements.platforms[0]"));
+}
+
+#[test]
+fn test_os_release_value_parses_quoted_version_id() {
+    let content = r#"
+NAME="DStack"
+VERSION_ID="0.6.1"
+"#;
+    assert_eq!(
+        os_release_value(content, "VERSION_ID").as_deref(),
+        Some("0.6.1")
+    );
+}
+
+#[test]
+fn test_unquote_os_release_value_handles_quoting_styles() {
+    assert_eq!(unquote_os_release_value("0.6.1"), "0.6.1");
+    assert_eq!(unquote_os_release_value("\"0.6.1\""), "0.6.1");
+    assert_eq!(unquote_os_release_value("'0.6.1'"), "0.6.1");
+    // Double-quoted: backslash escapes the next character.
+    assert_eq!(unquote_os_release_value(r#""a\"b""#), "a\"b");
+    assert_eq!(unquote_os_release_value(r#""a\\b""#), r"a\b");
+    assert_eq!(unquote_os_release_value(r#""a\\\"b""#), r#"a\"b"#);
+    // Single-quoted: no escape sequences.
+    assert_eq!(unquote_os_release_value(r"'a\\b'"), r"a\\b");
+    // Unbalanced/degenerate quotes are returned verbatim.
+    assert_eq!(unquote_os_release_value("\""), "\"");
+    assert_eq!(unquote_os_release_value("\"a"), "\"a");
 }

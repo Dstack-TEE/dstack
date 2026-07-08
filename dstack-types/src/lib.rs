@@ -67,7 +67,8 @@ impl TdxAttestationVariant {
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct AppCompose {
-    pub manifest_version: u32,
+    #[serde(deserialize_with = "deserialize_manifest_version")]
+    pub manifest_version: String,
     pub name: String,
     // Deprecated
     #[serde(default)]
@@ -105,6 +106,103 @@ pub struct AppCompose {
     /// optional port whitelist).
     #[serde(default)]
     pub port_policy: PortPolicy,
+    /// Guest-side requirements enforced by guests that understand this field.
+    ///
+    /// Use manifest_version "3" (string) when setting this field so older
+    /// guests, which only accept numeric manifest versions, fail closed instead
+    /// of silently ignoring the requirements.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requirements: Option<Requirements>,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone, Default, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct Requirements {
+    /// OS-version requirement parsed with Rust semver requirement semantics,
+    /// e.g. `">=0.6.0"` or `">=0.6.0, <0.7.0"`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub os_version: Option<String>,
+    /// Allowed attestation platforms. Omitted means any supported platform;
+    /// an explicit empty list means no platform is allowed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub platforms: Option<Vec<String>>,
+}
+
+impl Requirements {
+    pub fn is_empty(&self) -> bool {
+        self.os_version.is_none() && self.platforms.is_none()
+    }
+}
+
+fn deserialize_manifest_version<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    struct ManifestVersionVisitor;
+
+    impl<'de> serde::de::Visitor<'de> for ManifestVersionVisitor {
+        type Value = String;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("a string manifest version, or legacy numeric 1/2")
+        }
+
+        fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            parse_manifest_version_string(value).map_err(E::custom)
+        }
+
+        fn visit_string<E>(self, value: String) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            self.visit_str(&value)
+        }
+
+        fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            match value {
+                1 | 2 => Ok(value.to_string()),
+                _ => Err(E::custom(
+                    "numeric manifest_version is only supported for legacy versions 1 and 2; use a string for newer versions",
+                )),
+            }
+        }
+
+        fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            let value = u64::try_from(value)
+                .map_err(|_| E::custom("manifest_version must be a positive integer"))?;
+            self.visit_u64(value)
+        }
+    }
+
+    deserializer.deserialize_any(ManifestVersionVisitor)
+}
+
+fn parse_manifest_version_string(value: &str) -> Result<String, String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Err("manifest_version must not be empty".to_string());
+    }
+    let parsed = value.parse::<u32>().map_err(|_| {
+        format!("manifest_version must be a positive integer string, got {value:?}")
+    })?;
+    if parsed == 0 {
+        return Err("manifest_version must be greater than 0".to_string());
+    }
+    if parsed.to_string() != value {
+        return Err(format!(
+            "manifest_version must be a canonical integer string, got {value:?}"
+        ));
+    }
+    Ok(parsed.to_string())
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone, Default)]
@@ -180,6 +278,10 @@ pub struct DockerConfig {
 }
 
 impl AppCompose {
+    pub fn manifest_version_u32(&self) -> Option<u32> {
+        self.manifest_version.parse().ok()
+    }
+
     pub fn feature_enabled(&self, feature: &str) -> bool {
         self.features.contains(&feature.to_string())
     }
@@ -205,6 +307,128 @@ impl AppCompose {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod app_compose_tests {
+    use super::*;
+
+    fn parse_compose(manifest_version: serde_json::Value) -> serde_json::Result<AppCompose> {
+        serde_json::from_value(serde_json::json!({
+            "manifest_version": manifest_version,
+            "name": "test",
+            "runner": "docker-compose"
+        }))
+    }
+
+    #[test]
+    fn manifest_version_accepts_string_versions() {
+        let compose = parse_compose(serde_json::json!("3")).unwrap();
+        assert_eq!(compose.manifest_version, "3");
+        assert_eq!(compose.manifest_version_u32(), Some(3));
+    }
+
+    #[test]
+    fn manifest_version_accepts_legacy_numeric_1_and_2() {
+        assert_eq!(
+            parse_compose(serde_json::json!(1))
+                .unwrap()
+                .manifest_version,
+            "1"
+        );
+        assert_eq!(
+            parse_compose(serde_json::json!(2))
+                .unwrap()
+                .manifest_version,
+            "2"
+        );
+    }
+
+    #[test]
+    fn manifest_version_rejects_new_numeric_versions() {
+        let err = parse_compose(serde_json::json!(3)).unwrap_err();
+        assert!(err.to_string().contains("legacy versions 1 and 2"));
+    }
+
+    #[test]
+    fn manifest_version_rejects_invalid_numeric_values() {
+        let err = parse_compose(serde_json::json!(0)).unwrap_err();
+        assert!(err.to_string().contains("legacy versions 1 and 2"));
+        let err = parse_compose(serde_json::json!(-1)).unwrap_err();
+        assert!(err.to_string().contains("positive integer"));
+        assert!(parse_compose(serde_json::json!(2.5)).is_err());
+    }
+
+    #[test]
+    fn manifest_version_rejects_non_canonical_strings() {
+        let err = parse_compose(serde_json::json!("0")).unwrap_err();
+        assert!(err.to_string().contains("greater than 0"));
+        let err = parse_compose(serde_json::json!("03")).unwrap_err();
+        assert!(err.to_string().contains("canonical integer string"));
+        let err = parse_compose(serde_json::json!("+3")).unwrap_err();
+        assert!(err.to_string().contains("canonical integer string"));
+        let err = parse_compose(serde_json::json!("")).unwrap_err();
+        assert!(err.to_string().contains("must not be empty"));
+        assert!(parse_compose(serde_json::json!("3.0")).is_err());
+    }
+
+    #[test]
+    fn requirements_support_os_version_and_platforms() {
+        let compose: AppCompose = serde_json::from_value(serde_json::json!({
+            "manifest_version": "3",
+            "name": "test",
+            "runner": "docker-compose",
+            "requirements": {
+                "os_version": ">=0.6.1",
+                "platforms": ["dstack-gcp-tdx", "dstack-tdx"]
+            }
+        }))
+        .unwrap();
+        let requirements = compose.requirements.as_ref().unwrap();
+        assert_eq!(requirements.os_version.as_deref(), Some(">=0.6.1"));
+        assert_eq!(
+            requirements.platforms,
+            Some(vec!["dstack-gcp-tdx".to_string(), "dstack-tdx".to_string()])
+        );
+
+        let err = serde_json::from_value::<AppCompose>(serde_json::json!({
+            "manifest_version": "3",
+            "name": "test",
+            "runner": "docker-compose",
+            "requirements": {
+                "os_version_policy": ">=0.6.1"
+            }
+        }))
+        .unwrap_err();
+        assert!(err.to_string().contains("unknown field"));
+    }
+
+    #[test]
+    fn requirements_distinguish_omitted_and_empty_platforms() {
+        let omitted: AppCompose = serde_json::from_value(serde_json::json!({
+            "manifest_version": "3",
+            "name": "test",
+            "runner": "docker-compose",
+            "requirements": {}
+        }))
+        .unwrap();
+        let requirements = omitted.requirements.as_ref().unwrap();
+        assert_eq!(requirements.platforms, None);
+        assert!(requirements.is_empty());
+
+        let explicit_empty: AppCompose = serde_json::from_value(serde_json::json!({
+            "manifest_version": "3",
+            "name": "test",
+            "runner": "docker-compose",
+            "requirements": {
+                "platforms": []
+            }
+        }))
+        .unwrap();
+        let requirements = explicit_empty.requirements.as_ref().unwrap();
+        assert_eq!(requirements.platforms, Some(vec![]));
+        assert!(!requirements.is_empty());
     }
 }
 

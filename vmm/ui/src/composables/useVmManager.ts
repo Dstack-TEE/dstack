@@ -9,7 +9,7 @@ import type { vmm as VmmTypes } from '../proto/vmm_rpc';
 type VmConfiguration = VmmTypes.IVmConfiguration;
 
 type AppCompose = {
-  manifest_version: number;
+  manifest_version: number | string;
   name: string;
   features: string[];
   runner: string;
@@ -26,6 +26,7 @@ type AppCompose = {
   allowed_envs: string[];
   no_instance_id: boolean;
   secure_time: boolean;
+  requirements?: Requirements;
   storage_fs?: string;
   swap_size: number;
   launch_token_hash?: string;
@@ -34,6 +35,15 @@ type AppCompose = {
 };
 
 type KeyProviderKind = 'none' | 'kms' | 'local' | 'tpm';
+type RequirementPlatform =
+  | 'dstack-tdx'
+  | 'dstack-gcp-tdx'
+  | 'dstack-amd-sev-snp'
+  | 'dstack-nitro-enclave';
+type Requirements = {
+  os_version?: string;
+  platforms?: RequirementPlatform[];
+};
 
 const x25519 = require('../lib/x25519.js');
 const { getVmmRpcClient } = require('../lib/vmmRpcClient');
@@ -642,6 +652,13 @@ type CreateVmPayloadSource = {
     );
   };
 
+  const appComposeManifestVersion = (versionStr: string | undefined): number | string => {
+    if (versionStr && verGE(versionStr, '0.6.0')) {
+      return '3';
+    }
+    return 2;
+  };
+
   const imageVersionFeatures = (versionStr: string | undefined) => {
     const features = {
       progress: false,
@@ -710,8 +727,9 @@ type CreateVmPayloadSource = {
   }
 
   async function makeAppComposeFile() {
+    const osVersion = imageVersion(vmForm.value.image);
     const appCompose: Record<string, unknown> = {
-      manifest_version: 2,
+      manifest_version: appComposeManifestVersion(osVersion),
       name: vmForm.value.name,
       runner: 'docker-compose',
       docker_compose_file: vmForm.value.dockerComposeFile,
@@ -759,7 +777,7 @@ type CreateVmPayloadSource = {
       appCompose.launch_token_hash = await calcComposeHash(launchToken.value);
     }
 
-    const imgFeatures = imageVersionFeatures(imageVersion(vmForm.value.image));
+    const imgFeatures = imageVersionFeatures(osVersion);
     if (imgFeatures.compose_version < 3) {
       appCompose.tproxy_enabled = appCompose.gateway_enabled;
       delete appCompose.gateway_enabled;
@@ -773,6 +791,10 @@ type CreateVmPayloadSource = {
       ...currentAppCompose,
       docker_compose_file: updateDialog.value.dockerComposeFile || currentAppCompose.docker_compose_file,
     };
+    const targetManifestVersion = appComposeManifestVersion(imageVersion(updateDialog.value.image));
+    if (targetManifestVersion === '3') {
+      appCompose.manifest_version = targetManifestVersion;
+    }
     if (updateDialog.value.resetSecrets) {
       // Update allowed_envs with the new environment variable keys
       appCompose.allowed_envs = updateDialog.value.encryptedEnvs.map(env => env.key);
