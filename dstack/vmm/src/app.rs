@@ -32,6 +32,7 @@ use supervisor_client::SupervisorClient;
 use tracing::{debug, error, info, warn};
 
 pub use image::{Image, ImageInfo};
+pub(crate) use qemu::{resolve_networking, validate_resolved_network, validate_resolved_networks};
 pub use qemu::{VmConfig, VmWorkDir};
 
 mod id_pool;

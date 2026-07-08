@@ -22,7 +22,10 @@ use or_panic::ResultOrPanic;
 use ra_rpc::{CallContext, RpcCall};
 use tracing::{info, warn};
 
-use crate::app::{App, AttachMode, GpuConfig, GpuSpec, Manifest, PortMapping, VmWorkDir};
+use crate::app::{
+    resolve_networking, validate_resolved_network, validate_resolved_networks, App, AttachMode,
+    GpuConfig, GpuSpec, Manifest, PortMapping, VmWorkDir,
+};
 use crate::config::{CvmConfig, Networking, NetworkingMode};
 
 fn hex_sha256(data: &str) -> String {
@@ -235,7 +238,7 @@ fn networks_from_proto(networks: &[rpc::NetworkingConfig]) -> Result<Vec<Network
 }
 
 fn validate_default_network(cvm_config: &CvmConfig) -> Result<()> {
-    crate::app::qemu::validate_resolved_network(&cvm_config.networking)
+    validate_resolved_network(&cvm_config.networking)
 }
 
 fn resolve_requested_networks(
@@ -244,9 +247,9 @@ fn resolve_requested_networks(
 ) -> Result<Vec<Networking>> {
     let resolved = networks
         .iter()
-        .map(|networking| crate::app::qemu::resolve_networking(networking, cvm_config))
+        .map(|networking| resolve_networking(networking, cvm_config))
         .collect::<Vec<_>>();
-    crate::app::qemu::validate_resolved_networks(&resolved)?;
+    validate_resolved_networks(&resolved)?;
     Ok(resolved)
 }
 
@@ -591,9 +594,7 @@ impl VmmRpc for RpcHandler {
         let default_networking = &self.app.config.cvm.networking;
         let mut bridge_networking = default_networking.clone();
         bridge_networking.mode = NetworkingMode::Bridge;
-        if crate::app::qemu::validate_resolved_network(&bridge_networking).is_ok()
-            || has_host_bridge_interface()
-        {
+        if validate_resolved_network(&bridge_networking).is_ok() || has_host_bridge_interface() {
             supported_modes.push("bridge".to_string());
         }
         Ok(GetMetaResponse {
@@ -635,6 +636,7 @@ impl VmmRpc for RpcHandler {
                     NetworkingMode::Custom => String::new(),
                 },
                 forward_service_enabled: default_networking.forward_service_enabled,
+                default_bridge: default_networking.bridge.clone(),
             }),
         })
     }

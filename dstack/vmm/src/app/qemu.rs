@@ -44,11 +44,12 @@ use sha2::{Digest, Sha256};
 /// `prefix` may contain 0-3 fixed bytes. The first byte always has the
 /// locally-administered + unicast bits set (0x02). Remaining bytes are
 /// filled from SHA256(vm_id).
-pub fn mac_address_for_vm(vm_id: &str, prefix: &[u8]) -> String {
+#[cfg(test)]
+fn mac_address_for_vm(vm_id: &str, prefix: &[u8]) -> String {
     mac_address_for_vm_index(vm_id, prefix, 0)
 }
 
-pub fn mac_address_for_vm_index(vm_id: &str, prefix: &[u8], index: usize) -> String {
+pub(crate) fn mac_address_for_vm_index(vm_id: &str, prefix: &[u8], index: usize) -> String {
     let hash_input = if index == 0 {
         vm_id.to_string()
     } else {
@@ -75,7 +76,7 @@ use serde::{Deserialize, Serialize};
 use serde_human_bytes as hex_bytes;
 use supervisor_client::supervisor::{ProcessConfig, ProcessInfo};
 
-pub fn networking_mode_name(mode: NetworkingMode) -> &'static str {
+fn networking_mode_name(mode: NetworkingMode) -> &'static str {
     match mode {
         NetworkingMode::Bridge => "bridge",
         NetworkingMode::User => "user",
@@ -102,7 +103,7 @@ fn networking_to_proto(n: &Networking) -> pb::NetworkingConfig {
     }
 }
 
-pub fn resolve_networking(vm_net: &Networking, cfg: &CvmConfig) -> Networking {
+pub(crate) fn resolve_networking(vm_net: &Networking, cfg: &CvmConfig) -> Networking {
     let mut resolved = cfg.networking.clone();
     resolved.mode = vm_net.mode;
     resolved.restrict = cfg.networking.restrict || vm_net.restrict;
@@ -124,7 +125,7 @@ pub fn resolve_networking(vm_net: &Networking, cfg: &CvmConfig) -> Networking {
     resolved
 }
 
-pub fn resolved_networks(manifest: &Manifest, cfg: &CvmConfig) -> Vec<Networking> {
+pub(crate) fn resolved_networks(manifest: &Manifest, cfg: &CvmConfig) -> Vec<Networking> {
     if manifest.networks.is_empty() {
         vec![cfg.networking.clone()]
     } else {
@@ -136,7 +137,7 @@ pub fn resolved_networks(manifest: &Manifest, cfg: &CvmConfig) -> Vec<Networking
     }
 }
 
-pub fn validate_resolved_network(networking: &Networking) -> Result<()> {
+pub(crate) fn validate_resolved_network(networking: &Networking) -> Result<()> {
     if networking.mode == NetworkingMode::Bridge {
         if networking.bridge.is_empty() {
             bail!("bridge networking requested but no bridge is configured");
@@ -151,7 +152,7 @@ pub fn validate_resolved_network(networking: &Networking) -> Result<()> {
     Ok(())
 }
 
-pub fn validate_resolved_networks(networks: &[Networking]) -> Result<()> {
+pub(crate) fn validate_resolved_networks(networks: &[Networking]) -> Result<()> {
     for networking in networks {
         validate_resolved_network(networking)?;
     }
@@ -1360,10 +1361,10 @@ impl VmWorkDir {
 
     pub fn manifest(&self) -> Result<Manifest> {
         let manifest_path = self.manifest_path();
-        let raw = fs::read_to_string(manifest_path).context("Failed to read manifest")?;
+        let raw = fs::read_to_string(manifest_path).context("failed to read manifest")?;
         let value: serde_json::Value =
-            serde_json::from_str(&raw).context("Failed to parse manifest JSON")?;
-        Manifest::from_json(value).context("Failed to deserialize manifest")
+            serde_json::from_str(&raw).context("failed to parse manifest json")?;
+        Manifest::from_json(value).context("failed to deserialize manifest")
     }
 
     pub fn put_manifest(&self, manifest: &Manifest) -> Result<()> {
@@ -1373,7 +1374,7 @@ impl VmWorkDir {
         if let Some(networking) = manifest.networks.first() {
             value["networking"] = serde_json::to_value(networking)?;
         }
-        fs::write(manifest_path, serde_json::to_string(&value)?).context("Failed to write manifest")
+        fs::write(manifest_path, serde_json::to_string(&value)?).context("failed to write manifest")
     }
 
     pub fn started(&self) -> Result<bool> {

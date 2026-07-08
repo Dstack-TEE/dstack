@@ -290,6 +290,8 @@ message NetworkingCapabilities {
   repeated string supported_modes = 1;
   string default_mode = 2;
   bool forward_service_enabled = 3;
+  // Default bridge configured in vmm.toml [cvm.networking].bridge.
+  string default_bridge = 4;
 }
 
 // Aggregated metadata exposed through GetMeta.
