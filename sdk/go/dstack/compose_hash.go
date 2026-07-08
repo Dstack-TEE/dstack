@@ -39,8 +39,9 @@ const (
 
 // Requirements represents guest-side requirements.
 type Requirements struct {
-	OsVersion string                 `json:"os_version,omitempty"`
-	Platforms *[]RequirementPlatform `json:"platforms,omitempty"`
+	OsVersion            string                 `json:"os_version,omitempty"`
+	Platforms            *[]RequirementPlatform `json:"platforms,omitempty"`
+	TdxMeasureAcpiTables *bool                  `json:"tdx_measure_acpi_tables,omitempty"`
 }
 
 // AppCompose represents the application composition structure

@@ -41,6 +41,13 @@ pub struct VerificationDetails {
     /// event log payloads.
     pub event_log_verified: bool,
     pub os_image_hash_verified: bool,
+    /// Indicates that TDX ACPI table contents were verified.
+    ///
+    /// This is true for the full-image TDX path, where the verifier recomputes
+    /// ACPI tables and checks the resulting RTMRs against the quote. It remains
+    /// false for TDX lite, which replays ACPI DATA digests from the event log
+    /// without validating the table contents.
+    pub acpi_tables_verified: bool,
     /// dev vs prod OS image, from metadata.json (bound to os_image_hash). None if not exposed.
     pub os_image_is_dev: Option<bool>,
     /// dstack OS version, from the same metadata.json.
