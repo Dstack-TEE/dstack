@@ -40,6 +40,18 @@ If your App is intended for end users who need to verify what code your App is r
 
 dstack provides encrypted environment variable functionality. Although the CVM physical machine controller cannot view encrypted environment variables, they may forge encrypted environment variables because the CVM encryption public key is known to everyone. Therefore, Apps need to perform auth checks on encrypted environment variables at the application layer. LAUNCH_TOKEN pattern is one method to prevent unauthorized envs replacement. For details, refer to the deployment script of [dstack-gateway](https://github.com/Dstack-TEE/dstack/blob/1b8a4516826b02f9d7f747eddac244dcd68fc325/gateway/dstack-app/deploy-to-vmm.sh#L150-L165).
 
+Newer dstack OS images support the LAUNCH_TOKEN pattern natively via `requirements.launch_token_hash` in app-compose.json. When this field is set, the guest reads the launch token from `user_config` at JSON path `dstack.launch_token` and refuses to boot — before any keys are provisioned — unless its digest matches the hash pinned in the (compose-hash-measured) app-compose.json. When the field is absent, `user_config` is not parsed and stays fully application-defined. Set manifest_version to `"3"` (string) when using `requirements` so older guests fail closed instead of silently ignoring it.
+
+The digest is domain-separated so it stays distinct from the legacy plain-`sha256(token)` convention and from generic precomputed tables:
+
+```bash
+LAUNCH_TOKEN_HASH=$(printf 'dstack-launch-token/v1:%s' "$TOKEN" | sha256sum | cut -d' ' -f1)
+```
+
+Because `launch_token_hash` is public, a guessable token can be recovered offline by brute force. Guests reject tokens shorter than 32 bytes, but length alone does not guarantee entropy — always generate the token randomly, e.g. `tr -dc 'a-zA-Z0-9' < /dev/urandom | head -c 32`.
+
+Also understand the protection boundary of this mechanism: the guest verifies the token before any keys are provisioned, which means the token must reach the guest through `user_config` — a channel the host can read. The requirement therefore stops parties who only know the public app-compose.json from launching the app, but once a host has hosted a deployment it learns the token and can later relaunch instances of that compose with substituted encrypted envs. Mitigations: generate a fresh token per deployment and remove stale compose hashes from the on-chain whitelist; if the token must stay secret from the host, use the app-layer `APP_LAUNCH_TOKEN` encrypted-env pattern above instead (its check necessarily runs after key provisioning).
+
 If you use dstack-vmm's built-in UI, the prelaunch script has already been automatically filled in for you:
 
 ![Prelaunch Script](../assets/prelaunch-script.png)

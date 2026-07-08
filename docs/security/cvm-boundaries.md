@@ -126,7 +126,7 @@ dstack uses encrypted environment variables to allow app developers to securely 
 This file is not measured to RTMRs. But it is highly recommended to add application-specific integrity checks on encrypted environment variables at the application layer. See [security-best-practices.md](./security-best-practices.md) for more details.
 
 ### .user-config
-This is an optional application-specific configuration file that applications inside the CVM can access. dstack OS simply stores it at /dstack/.host-shared/.user-config without any measurement or additional processing.
+This is an optional application-specific configuration file that applications inside the CVM can access. dstack OS simply stores it at /dstack/.host-shared/.user-config without any measurement or additional processing, unless `requirements.launch_token_hash` is set in app-compose.json — in that case the guest reads the launch token from JSON path `dstack.launch_token` in this file and fails closed at boot, before key provisioning, unless its SHA-256 matches the pinned hash.
 
 Application developers should perform integrity checks on user_config at the application layer if necessary.
 

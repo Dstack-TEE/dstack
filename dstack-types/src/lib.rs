@@ -131,6 +131,18 @@ pub struct Requirements {
     /// with ACPI tables measured, while `false` requires lite mode.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tdx_measure_acpi_tables: Option<bool>,
+    /// Hex digest of the launch token carried in `user_config` at JSON path
+    /// `dstack.launch_token`, computed as
+    /// `sha256("dstack-launch-token/v1:" || token)` (see
+    /// [`launch_token_hash`]). When set, guests fail closed before key
+    /// provisioning unless the token hashes to this value; when absent,
+    /// `user_config` is not parsed at all.
+    ///
+    /// This hash is public, so the token must not be guessable: guests reject
+    /// tokens shorter than 32 bytes, and deployers should use a random token
+    /// (e.g. 32 random alphanumeric characters).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub launch_token_hash: Option<String>,
 }
 
 impl Requirements {
@@ -138,7 +150,25 @@ impl Requirements {
         self.os_version.is_none()
             && self.platforms.is_none()
             && self.tdx_measure_acpi_tables.is_none()
+            && self.launch_token_hash.is_none()
     }
+}
+
+/// Domain-separation prefix for [`launch_token_hash`]. It keeps the digest
+/// distinct from a plain `sha256(token)` (as used by the legacy app-layer
+/// top-level `launch_token_hash` convention) and from generic precomputed
+/// tables.
+pub const LAUNCH_TOKEN_HASH_DOMAIN: &str = "dstack-launch-token/v1:";
+
+/// Canonical `requirements.launch_token_hash` digest of a launch token:
+/// `sha256("dstack-launch-token/v1:" || token)`.
+///
+/// Shell equivalent: `printf 'dstack-launch-token/v1:%s' "$TOKEN" | sha256sum`.
+pub fn launch_token_hash(token: &str) -> [u8; 32] {
+    let mut data = Vec::with_capacity(LAUNCH_TOKEN_HASH_DOMAIN.len() + token.len());
+    data.extend_from_slice(LAUNCH_TOKEN_HASH_DOMAIN.as_bytes());
+    data.extend_from_slice(token.as_bytes());
+    sha256(&data)
 }
 
 fn deserialize_manifest_version<'de, D>(deserializer: D) -> Result<String, D::Error>
@@ -389,7 +419,8 @@ mod app_compose_tests {
             "requirements": {
                 "os_version": ">=0.6.1",
                 "platforms": ["dstack-gcp-tdx", "dstack-tdx"],
-                "tdx_measure_acpi_tables": true
+                "tdx_measure_acpi_tables": true,
+                "launch_token_hash": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
             }
         }))
         .unwrap();
@@ -400,6 +431,10 @@ mod app_compose_tests {
             Some(vec!["dstack-gcp-tdx".to_string(), "dstack-tdx".to_string()])
         );
         assert_eq!(requirements.tdx_measure_acpi_tables, Some(true));
+        assert_eq!(
+            requirements.launch_token_hash.as_deref(),
+            Some("9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08")
+        );
 
         let err = serde_json::from_value::<AppCompose>(serde_json::json!({
             "manifest_version": "3",
@@ -451,6 +486,33 @@ mod app_compose_tests {
         let requirements = acpi_tables.requirements.as_ref().unwrap();
         assert_eq!(requirements.tdx_measure_acpi_tables, Some(false));
         assert!(!requirements.is_empty());
+
+        let launch_token: AppCompose = serde_json::from_value(serde_json::json!({
+            "manifest_version": "3",
+            "name": "test",
+            "runner": "docker-compose",
+            "requirements": {
+                "launch_token_hash": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+            }
+        }))
+        .unwrap();
+        let requirements = launch_token.requirements.as_ref().unwrap();
+        assert!(requirements.launch_token_hash.is_some());
+        assert!(!requirements.is_empty());
+    }
+
+    #[test]
+    fn launch_token_hash_is_domain_separated() {
+        assert_eq!(
+            hex::encode(launch_token_hash("unit-test-launch-token-0000000001")),
+            "28faa1319055d733ad9651f5ab7689c15b04609846bcd27b3c5bc8df6246f5a3"
+        );
+        // Not a plain sha256 of the token (the legacy app-layer convention).
+        use sha2::{Digest, Sha256};
+        assert_ne!(
+            launch_token_hash("unit-test-launch-token-0000000001").to_vec(),
+            Sha256::digest("unit-test-launch-token-0000000001".as_bytes()).to_vec()
+        );
     }
 }
 
