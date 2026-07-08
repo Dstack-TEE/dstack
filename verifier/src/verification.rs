@@ -37,15 +37,6 @@ use crate::types::{
     VerificationRequest, VerificationResponse,
 };
 
-fn tee_platform_name(quote: &AttestationQuote) -> &'static str {
-    match quote {
-        AttestationQuote::DstackTdx(_) => "tdx",
-        AttestationQuote::DstackGcpTdx(_) => "gcp-tdx",
-        AttestationQuote::DstackNitroEnclave(_) => "nitro",
-        AttestationQuote::DstackAmdSevSnp(_) => "sev-snp",
-    }
-}
-
 /// best-effort: None for empty/malformed blobs.
 fn decode_key_provider_info(bytes: &[u8]) -> Option<dstack_types::KeyProviderInfo> {
     if bytes.is_empty() {
@@ -560,7 +551,7 @@ impl CvmVerifier {
         let verified_attestation = match verified {
             Ok(att) => {
                 details.quote_verified = true;
-                details.tee_platform = Some(tee_platform_name(&att.quote).to_string());
+                details.attestation_mode = Some(att.quote.mode());
                 details.tcb_status = att.report.tdx_report().map(|r| r.status.clone());
                 details.advisory_ids = att
                     .report
@@ -1273,7 +1264,10 @@ mod tests {
         assert!(response.details.quote_verified);
         assert!(response.details.event_log_verified);
         assert!(response.details.os_image_hash_verified);
-        assert_eq!(response.details.tee_platform.as_deref(), Some("sev-snp"));
+        assert_eq!(
+            response.details.attestation_mode,
+            Some(ra_tls::attestation::AttestationMode::DstackAmdSevSnp)
+        );
         assert!(
             !image_cache_dir.exists(),
             "SNP verification must not download or cache OS images"
@@ -1298,6 +1292,9 @@ mod tests {
 
         let response = verifier.verify(request).await.expect("verifier runs");
         assert!(response.is_valid, "{:?}", response.reason);
-        assert_eq!(response.details.tee_platform.as_deref(), Some("sev-snp"));
+        assert_eq!(
+            response.details.attestation_mode,
+            Some(ra_tls::attestation::AttestationMode::DstackAmdSevSnp)
+        );
     }
 }
