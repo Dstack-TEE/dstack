@@ -298,6 +298,12 @@ pub struct VmConfig {
     /// `tdx_attestation_variant = "lite"` and omitted for legacy TDX.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tdx_measurement: Option<TdxOsImageMeasurementDocument>,
+    /// GCP TDX no-image-download measurement material. Present for GCP
+    /// deployments so `os_image_hash` can remain the unified image digest
+    /// (`sha256(sha256sum.txt)`) while the verifier still binds the TPM UKI
+    /// Authenticode event to that digest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gcp_measurement: Option<GcpOsImageMeasurementDocument>,
 }
 
 /// One OVMF SEV metadata section (gpa/size/type) that affects the SEV-SNP
@@ -331,6 +337,7 @@ fn sha256(bytes: &[u8]) -> [u8; 32] {
 
 pub const TDX_MEASUREMENT_FILENAME: &str = "measurement.tdx.cbor";
 pub const SNP_MEASUREMENT_FILENAME: &str = "measurement.snp.cbor";
+pub const GCP_MEASUREMENT_FILENAME: &str = "measurement.gcp.cbor";
 
 pub fn image_hash_from_sha256sum(checksum_file: &[u8]) -> [u8; 32] {
     sha256(checksum_file)
@@ -399,6 +406,130 @@ pub fn verify_measurement_material(
         ));
     }
     Ok(())
+}
+
+/// Image-invariant GCP TDX measurement material. GCP's TPM event log measures
+/// the UKI as a PE/COFF Authenticode SHA-256 digest. The unified image identity
+/// remains `sha256(sha256sum.txt)`; this material is bound to that identity by
+/// the `measurement.gcp.cbor` entry in `sha256sum.txt`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GcpOsImageMeasurement {
+    #[serde(with = "hex_bytes")]
+    pub uki_authenticode_sha256: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct CborGcpOsImageMeasurement {
+    version: u32,
+    #[serde(rename = "uki_auth", with = "hex_bytes")]
+    uki_authenticode_sha256: Vec<u8>,
+}
+
+impl From<&GcpOsImageMeasurement> for CborGcpOsImageMeasurement {
+    fn from(measurement: &GcpOsImageMeasurement) -> Self {
+        Self {
+            version: GcpOsImageMeasurement::VERSION,
+            uki_authenticode_sha256: measurement.uki_authenticode_sha256.clone(),
+        }
+    }
+}
+
+impl From<CborGcpOsImageMeasurement> for GcpOsImageMeasurement {
+    fn from(measurement: CborGcpOsImageMeasurement) -> Self {
+        Self {
+            uki_authenticode_sha256: measurement.uki_authenticode_sha256,
+        }
+    }
+}
+
+impl GcpOsImageMeasurement {
+    pub const VERSION: u32 = 1;
+    pub const UKI_AUTHENTICODE_SHA256_LEN: usize = 32;
+
+    pub fn new(uki_authenticode_sha256: Vec<u8>) -> Result<Self, String> {
+        if uki_authenticode_sha256.len() != Self::UKI_AUTHENTICODE_SHA256_LEN {
+            return Err(format!(
+                "GcpOsImageMeasurement: UKI Authenticode hash has invalid length {}, expected {}",
+                uki_authenticode_sha256.len(),
+                Self::UKI_AUTHENTICODE_SHA256_LEN
+            ));
+        }
+        Ok(Self {
+            uki_authenticode_sha256,
+        })
+    }
+
+    pub fn to_cbor_vec(&self) -> Vec<u8> {
+        cbor_to_vec(
+            &CborGcpOsImageMeasurement::from(self),
+            "GcpOsImageMeasurement",
+        )
+    }
+
+    pub fn from_cbor_slice(bytes: &[u8]) -> Result<Self, String> {
+        let measurement: CborGcpOsImageMeasurement =
+            cbor_from_slice(bytes, "GcpOsImageMeasurement")?;
+        if measurement.version != Self::VERSION {
+            return Err(format!(
+                "GcpOsImageMeasurement unsupported version {}, expected {}",
+                measurement.version,
+                Self::VERSION
+            ));
+        }
+        Self::new(measurement.uki_authenticode_sha256)
+    }
+
+    pub fn cbor_json_value_from_slice(bytes: &[u8]) -> Result<serde_json::Value, String> {
+        let measurement: CborGcpOsImageMeasurement =
+            cbor_from_slice(bytes, "GcpOsImageMeasurement")?;
+        serde_json::to_value(measurement)
+            .map_err(|e| format!("GcpOsImageMeasurement: failed to convert to JSON: {e}"))
+    }
+
+    pub fn measurement_hash(&self) -> [u8; 32] {
+        sha256(&self.to_cbor_vec())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GcpOsImageMeasurementDocument {
+    /// Raw checksum file bytes (`sha256sum.txt`). `sha256(checksum_file)` is
+    /// the unified `os_image_hash`.
+    #[serde(with = "serde_human_bytes::base64")]
+    pub checksum_file: Vec<u8>,
+    /// Raw bytes of `measurement.gcp.cbor`.
+    #[serde(with = "serde_human_bytes::base64")]
+    pub measurement: Vec<u8>,
+}
+
+impl GcpOsImageMeasurementDocument {
+    pub fn new(checksum_file: Vec<u8>, measurement: Vec<u8>) -> Self {
+        Self {
+            checksum_file,
+            measurement,
+        }
+    }
+
+    pub fn from_measurement(checksum_file: Vec<u8>, measurement: GcpOsImageMeasurement) -> Self {
+        Self::new(checksum_file, measurement.to_cbor_vec())
+    }
+
+    pub fn decode_measurement(&self) -> Result<GcpOsImageMeasurement, String> {
+        GcpOsImageMeasurement::from_cbor_slice(&self.measurement)
+    }
+
+    pub fn decode_measurement_value(&self) -> Result<serde_json::Value, String> {
+        GcpOsImageMeasurement::cbor_json_value_from_slice(&self.measurement)
+    }
+
+    pub fn verify(&self, os_image_hash: &[u8]) -> Result<(), String> {
+        verify_measurement_material(
+            os_image_hash,
+            &self.checksum_file,
+            &self.measurement,
+            GCP_MEASUREMENT_FILENAME,
+        )
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -796,6 +927,8 @@ pub struct OsImageMeasurementDocument {
     pub tdx: Option<TdxOsImageMeasurementDocument>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub snp: Option<SevOsImageMeasurementDocument>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gcp: Option<GcpOsImageMeasurementDocument>,
 }
 
 impl OsImageMeasurementDocument {
@@ -804,11 +937,13 @@ impl OsImageMeasurementDocument {
     pub fn new(
         tdx: Option<TdxOsImageMeasurementDocument>,
         snp: Option<SevOsImageMeasurementDocument>,
+        gcp: Option<GcpOsImageMeasurementDocument>,
     ) -> Self {
         Self {
             version: Self::VERSION,
             tdx,
             snp,
+            gcp,
         }
     }
 }

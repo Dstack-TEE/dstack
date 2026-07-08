@@ -6,8 +6,9 @@
 
 use anyhow::{Context, Result};
 use dstack_types::{
-    OsImageMeasurementDocument, SevOsImageMeasurementDocument, TdxOsImageMeasurementDocument,
-    SNP_MEASUREMENT_FILENAME, TDX_MEASUREMENT_FILENAME,
+    GcpOsImageMeasurementDocument, OsImageMeasurementDocument, SevOsImageMeasurementDocument,
+    TdxOsImageMeasurementDocument, GCP_MEASUREMENT_FILENAME, SNP_MEASUREMENT_FILENAME,
+    TDX_MEASUREMENT_FILENAME,
 };
 use fs_err as fs;
 use serde::Deserialize;
@@ -56,5 +57,16 @@ pub fn os_image_measurement_document_for_image_dir(
         None
     };
 
-    Ok(OsImageMeasurementDocument::new(tdx, snp))
+    let gcp_path = image_dir.join(GCP_MEASUREMENT_FILENAME);
+    let gcp = if gcp_path.exists() {
+        Some(GcpOsImageMeasurementDocument::new(
+            fs::read(&sha256sum_path)
+                .with_context(|| format!("cannot read {}", sha256sum_path.display()))?,
+            fs::read(&gcp_path).with_context(|| format!("cannot read {}", gcp_path.display()))?,
+        ))
+    } else {
+        None
+    };
+
+    Ok(OsImageMeasurementDocument::new(tdx, snp, gcp))
 }

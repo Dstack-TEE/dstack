@@ -1376,6 +1376,7 @@ fn make_vm_config(
         ovmf_variant: image.info.ovmf_variant,
         tdx_attestation_variant,
         tdx_measurement,
+        gcp_measurement: None,
     })?;
     // For backward compatibility
     config["spec_version"] = serde_json::Value::from(1);
