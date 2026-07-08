@@ -186,7 +186,7 @@ The verifier performs three main verification steps:
 3. **OS Image Hash Verification**:
    - Treats `vm_config` and any attached measurement material as untrusted inputs until they are bound to the hardware quote
    - For the full-image TDX path, downloads or loads the image identified by `os_image_hash`, checks the image checksum manifest, uses dstack-mr to compute expected MRTD/RTMR0-2, and compares them against the verified measurements from the quote
-   - For TDX lite and AMD SEV-SNP, verifies that `os_image_hash = sha256(sha256sum.txt)`, where `sha256sum.txt` is the image build's checksum manifest (`<sha256>  <relative-file-name>` lines for image files), that the manifest entry for `measurement.tdx.cbor` or `measurement.snp.cbor` matches the supplied measurement material, and that the measurement material replays to the quote's hardware-signed measurements
+   - For TDX lite, AMD SEV-SNP, and GCP TDX, verifies that `os_image_hash = sha256(sha256sum.txt)`, where `sha256sum.txt` is the image build's checksum manifest (`<sha256>  <relative-file-name>` lines for image files), that the manifest entry for `measurement.tdx.cbor`, `measurement.snp.cbor`, or `measurement.gcp.cbor` matches the supplied measurement material, and that the measurement material replays to the quote's hardware-signed measurements or GCP TPM UKI event
 
 All three steps must pass for the verification to be considered valid.
 

@@ -28,6 +28,7 @@ Usage:
 """
 
 import argparse
+import base64
 import hashlib
 import json
 import logging
@@ -434,6 +435,38 @@ class CloudDeploymentManager:
                 json.dump(content, f, indent=2)
             logger.info(f"Generated {app_compose_path}")
 
+    def _find_local_image_dir(
+        self,
+        global_config: Dict[str, Any],
+        image_names: List[str],
+        explicit_image_path: str = "",
+    ) -> Path:
+        """Find a local image directory from configured image_search_paths."""
+        if explicit_image_path:
+            image_path = Path(os.path.expanduser(explicit_image_path))
+            image_dir = image_path if image_path.is_dir() else image_path.parent
+            if image_dir.exists() and image_dir.is_dir():
+                return image_dir
+
+        search_paths = global_config.get("image_search_paths", [])
+        if not search_paths:
+            raise FileNotFoundError("No image_search_paths configured in global config")
+
+        candidates = [name for name in dict.fromkeys(image_names) if name]
+        for search_path in search_paths:
+            search_path = os.path.expanduser(search_path)
+            if not os.path.isabs(search_path):
+                search_path = os.path.join(self.work_dir, search_path)
+            for image_name in candidates:
+                image_dir = Path(search_path) / image_name
+                if image_dir.exists() and image_dir.is_dir():
+                    return image_dir
+
+        raise FileNotFoundError(
+            "Could not find local image directory for "
+            f"{', '.join(candidates)} in image_search_paths"
+        )
+
     def _generate_sys_config(self, global_config: Dict[str, Any],
                              gcp_config: GcpConfig, app: App) -> Dict[str, Any]:
         """Generate .sys-config.json content."""
@@ -453,34 +486,36 @@ class CloudDeploymentManager:
         # Get other settings
         pccs_url = services.get("pccs_url", "")
 
-        # Read OS image hash from the local image directory
-        os_image_hash = ""
-        try:
-            # Find the image directory and read hash file
-            search_paths = global_config.get("image_search_paths", [])
-            local_image = gcp_config.boot_image if gcp_config.boot_image else ""
-            if not local_image:
-                # Use app.os_image if boot_image is not set
-                local_image = app.os_image
+        # Read the unified OS image hash and GCP measurement material from the
+        # local image directory. No legacy auth_hash.txt fallback: GCP now uses
+        # the same os_image_hash scheme as the other platforms,
+        # sha256(sha256sum.txt), with measurement.gcp.cbor binding the UKI
+        # Authenticode hash measured by GCP TPM PCR2.
+        image_dir = self._find_local_image_dir(
+            global_config,
+            [gcp_config.boot_image, app.os_image],
+            gcp_config.boot_image_tar,
+        )
+        digest_file = image_dir / "digest.txt"
+        checksum_file = image_dir / "sha256sum.txt"
+        gcp_measurement_file = image_dir / "measurement.gcp.cbor"
+        for required in (digest_file, checksum_file, gcp_measurement_file):
+            if not required.exists():
+                raise FileNotFoundError(f"Required GCP image file not found: {required}")
 
-            for search_path in search_paths:
-                search_path = os.path.expanduser(search_path)
-                if not os.path.isabs(search_path):
-                    search_path = os.path.join(self.work_dir, search_path)
-
-                hash_file = Path(search_path) / local_image / "auth_hash.txt"
-                if hash_file.exists():
-                    with open(hash_file, 'r') as f:
-                        os_image_hash = f.read().strip()
-                    logger.info(f"Read OS image hash from {hash_file}")
-                    break
-        except Exception as e:
-            logger.warning(f"Could not read OS image hash: {e}")
+        os_image_hash = digest_file.read_text().strip()
+        checksum_bytes = checksum_file.read_bytes()
+        gcp_measurement_bytes = gcp_measurement_file.read_bytes()
+        logger.info(f"Read unified OS image hash from {digest_file}")
 
         # Build vm_config
         vm_config = {
             "spec_version": 2,
-            "os_image_hash": os_image_hash
+            "os_image_hash": os_image_hash,
+            "gcp_measurement": {
+                "checksum_file": base64.b64encode(checksum_bytes).decode("ascii"),
+                "measurement": base64.b64encode(gcp_measurement_bytes).decode("ascii"),
+            },
         }
 
         return {
@@ -1035,11 +1070,20 @@ class CloudDeploymentManager:
 
         # Verify the expected structure
         expected_dir = target_dir / os_image
-        expected_disk = expected_dir / "disk.raw"
-        if expected_disk.exists():
-            logger.info(f"Image ready: {expected_disk}")
+        expected_files = [
+            expected_dir / "disk.raw",
+            expected_dir / "digest.txt",
+            expected_dir / "sha256sum.txt",
+            expected_dir / "measurement.gcp.cbor",
+        ]
+        missing_files = [p for p in expected_files if not p.exists()]
+        if not missing_files:
+            logger.info(f"Image ready: {expected_dir / 'disk.raw'}")
         else:
-            logger.warning(f"Expected file not found: {expected_disk}")
+            logger.warning(
+                "Expected file(s) not found: "
+                + ", ".join(str(p) for p in missing_files)
+            )
             logger.warning(f"Downloaded structure may be incorrect")
 
     def _check_and_upload_boot_image(self, config: GcpConfig, app: App, force: bool = False) -> str:

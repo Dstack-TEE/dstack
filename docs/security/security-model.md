@@ -106,7 +106,8 @@ to match the measurements in the quote. If the host substitutes either the image
 hash or the VM configuration, the recomputed measurements no longer match the
 quote.
 
-For the no-image-download TDX lite path and the AMD SEV-SNP path,
+For the no-image-download TDX lite path, the AMD SEV-SNP path, and the GCP TDX
+path,
 `os_image_hash` is the unified image identity: `sha256(sha256sum.txt)`. The
 `sha256sum.txt` file is the image checksum manifest generated at image build
 time. It is a text file whose lines contain a SHA-256 digest and relative file
@@ -114,19 +115,21 @@ name for each manifest entry, such as `metadata.json`, the kernel, initrd,
 firmware, and the split measurement file. Some launch-critical artifacts are
 represented indirectly instead of as direct manifest entries: for example, the
 rootfs is committed by the measured `dstack.rootfs_hash` kernel command-line
-parameter, and the SEV firmware is committed by `measurement.snp.cbor`. The exact
-`sha256sum.txt` bytes are hashed, so the manifest contents, file names, ordering,
-and line endings are all part of the image identity.
+parameter, the SEV firmware is committed by `measurement.snp.cbor`, and the GCP
+UKI Authenticode hash is committed by `measurement.gcp.cbor`. The exact
+`sha256sum.txt` bytes are hashed, so the manifest contents, file names,
+ordering, and line endings are all part of the image identity.
 
 The attestation carries a copy of the image's `sha256sum.txt` plus the platform
 specific measurement material (`measurement.tdx.cbor` or
-`measurement.snp.cbor`). The verifier checks that:
+`measurement.snp.cbor`, or `measurement.gcp.cbor`). The verifier checks that:
 
 1. `sha256(checksum_file) == os_image_hash`;
 2. the checksum file contains the expected `measurement.*.cbor` entry and that
    entry hashes to the supplied measurement material;
 3. the supplied measurement material replays to the hardware-signed TDX
-   MRTD/RTMR values or SEV-SNP launch `MEASUREMENT`/`HOST_DATA`.
+   MRTD/RTMR values, SEV-SNP launch `MEASUREMENT`/`HOST_DATA`, or the GCP TPM
+   UKI event.
 
 Only after these checks pass does the verifier treat the returned
 `os_image_hash` as the measured OS image identity. Downstream authorization

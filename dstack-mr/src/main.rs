@@ -14,9 +14,10 @@ use std::path::Path;
 const USAGE: &str = "\
 usage:
   dstack-mr measure-os <image_dir>
-  dstack-mr inspect-measurement [tdx|snp] <measurement.cbor>
+  dstack-mr inspect-measurement [tdx|snp|gcp] <measurement.cbor>
   dstack-mr tdx-measurement-cbor <image_dir>
   dstack-mr snp-measurement-cbor <image_dir>
+  dstack-mr gcp-measurement-cbor <uki_auth_hash_file>
   dstack-mr tdx-measurement-hash <image_dir>
   dstack-mr snp-measurement-hash <image_dir>
 
@@ -65,6 +66,20 @@ fn main() -> Result<()> {
                 .context("failed to write amd sev-snp measurement CBOR")?;
             Ok(())
         }
+        Some("gcp-measurement-cbor") => {
+            let hash_file = args.next().context(USAGE)?;
+            let hash =
+                read_hex_file(&hash_file).context("failed to read GCP UKI Authenticode hash")?;
+            let hash =
+                hex::decode(hash.trim()).context("GCP UKI Authenticode hash is not valid hex")?;
+            let cbor = dstack_types::GcpOsImageMeasurement::new(hash)
+                .map_err(anyhow::Error::msg)?
+                .to_cbor_vec();
+            std::io::stdout()
+                .write_all(&cbor)
+                .context("failed to write GCP measurement CBOR")?;
+            Ok(())
+        }
         Some("tdx-measurement-cbor") => {
             let image_dir = args.next().context(USAGE)?;
             let cbor =
@@ -105,8 +120,15 @@ fn inspect_measurement(kind: &str, path: &Path) -> Result<Value> {
             .map_err(anyhow::Error::msg),
         "snp" | "sev" => dstack_types::SevOsImageMeasurement::cbor_json_value_from_slice(&cbor)
             .map_err(anyhow::Error::msg),
-        other => bail!("unknown measurement kind {other:?}; expected tdx or snp"),
+        "gcp" => dstack_types::GcpOsImageMeasurement::cbor_json_value_from_slice(&cbor)
+            .map_err(anyhow::Error::msg),
+        other => bail!("unknown measurement kind {other:?}; expected tdx, snp, or gcp"),
     }
+}
+
+fn read_hex_file(path: &str) -> Result<String> {
+    let path = Path::new(path);
+    fs_err::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))
 }
 
 fn infer_measurement_kind(path: &str) -> Result<String> {
@@ -118,7 +140,9 @@ fn infer_measurement_kind(path: &str) -> Result<String> {
         Ok("tdx".to_string())
     } else if filename.contains(".snp.") || filename.contains("snp") || filename.contains("sev") {
         Ok("snp".to_string())
+    } else if filename.contains(".gcp.") || filename.contains("gcp") {
+        Ok("gcp".to_string())
     } else {
-        bail!("cannot infer measurement kind from {filename:?}; pass tdx or snp explicitly")
+        bail!("cannot infer measurement kind from {filename:?}; pass tdx, snp, or gcp explicitly")
     }
 }

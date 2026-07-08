@@ -641,8 +641,7 @@ impl CvmVerifier {
             .context("Failed to decode VM config")?;
         match &attestation.quote {
             AttestationQuote::DstackGcpTdx(quote) => {
-                self.verify_os_image_hash_for_gcp_tdx(&vm_config, &quote.tpm_quote)
-                    .await?;
+                self.verify_os_image_hash_for_gcp_tdx(&vm_config, &quote.tpm_quote)?;
             }
             AttestationQuote::DstackTdx(_) => {
                 if vm_config.tdx_attestation_variant.is_lite() {
@@ -975,7 +974,7 @@ impl CvmVerifier {
         Ok(())
     }
 
-    async fn verify_os_image_hash_for_gcp_tdx(
+    fn verify_os_image_hash_for_gcp_tdx(
         &self,
         vm_config: &VmConfig,
         tpm_quote: &TpmQuote,
@@ -990,8 +989,19 @@ impl CvmVerifier {
             .find(|p| p.index == 0)
             .context("PCR 0 not found in TPM quote")?;
 
-        // Get expected UKI hash from os_image_hash (which should be set to UKI Authenticode hash)
-        let expected_uki_hash = &vm_config.os_image_hash;
+        let document = vm_config
+            .gcp_measurement
+            .as_ref()
+            .context("gcp tdx attestation requires vm_config.gcp_measurement")?;
+        document
+            .verify(&vm_config.os_image_hash)
+            .map_err(anyhow::Error::msg)
+            .context("gcp measurement material does not match os_image_hash")?;
+        let measurement = document
+            .decode_measurement()
+            .map_err(anyhow::Error::msg)
+            .context("failed to decode vm_config.gcp_measurement CBOR")?;
+        let expected_uki_hash = &measurement.uki_authenticode_sha256;
 
         let pcr2_events: Vec<_> = tpm_quote
             .event_log

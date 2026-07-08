@@ -36,6 +36,12 @@ Verification runs in `Attestation::verify_with_time` and splits into TDX + TPM.
    `tpm_qvl::get_collateral_and_verify(tpm_quote)`.
 2. **Replay runtime events** to compute runtime PCR and compare with quoted PCR.
 3. **Check qualifying data** equals `sha256(tdx_quote)`.
+4. **Bind the OS image identity**:
+   `vm_config.os_image_hash` is the unified image digest
+   `sha256(sha256sum.txt)`. The verifier requires `vm_config.gcp_measurement`,
+   checks that `sha256sum.txt` commits to `measurement.gcp.cbor`, then compares
+   the UKI Authenticode hash inside that CBOR file with the GCP TPM PCR2 UKI
+   event.
 
 ### Optional RA TLS binding
 If the verifier provides a RA TLS pubkey, it enforces:
