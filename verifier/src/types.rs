@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use dstack_types::KeyProviderInfo;
-use ra_tls::attestation::AppInfo;
+use ra_tls::attestation::{AppInfo, AttestationMode};
 use serde::{Deserialize, Serialize};
 
 use serde_human_bytes as serde_bytes;
@@ -45,8 +45,8 @@ pub struct VerificationDetails {
     pub os_image_is_dev: Option<bool>,
     /// dstack OS version, from the same metadata.json.
     pub os_image_version: Option<String>,
-    /// "tdx" | "gcp-tdx" | "nitro".
-    pub tee_platform: Option<String>,
+    /// Attestation mode that produced the verified quote.
+    pub attestation_mode: Option<AttestationMode>,
     pub report_data: Option<String>,
     pub tcb_status: Option<String>,
     pub advisory_ids: Vec<String>,
