@@ -62,4 +62,5 @@ dstack-verifier --config verifier-no-download.toml \
 ```
 
 Expected result: `Valid: true`, with quote, event log, and OS image hash all
-verified.
+verified, and `ACPI tables verified: false` because lite mode does not validate
+ACPI table contents.

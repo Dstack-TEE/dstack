@@ -794,7 +794,9 @@ impl CvmVerifier {
             event_log,
             debug,
             details,
-        )
+        )?;
+        details.acpi_tables_verified = true;
+        Ok(())
     }
 
     async fn verify_os_image_hash_for_dstack_tdx_lite(
@@ -1264,6 +1266,7 @@ mod tests {
         assert!(response.details.quote_verified);
         assert!(response.details.event_log_verified);
         assert!(response.details.os_image_hash_verified);
+        assert!(!response.details.acpi_tables_verified);
         assert_eq!(
             response.details.attestation_mode,
             Some(ra_tls::attestation::AttestationMode::DstackAmdSevSnp)
@@ -1295,6 +1298,36 @@ mod tests {
         assert_eq!(
             response.details.attestation_mode,
             Some(ra_tls::attestation::AttestationMode::DstackAmdSevSnp)
+        );
+    }
+
+    #[tokio::test]
+    async fn verifies_tdx_lite_fixture_without_acpi_table_verification() {
+        let request: VerificationRequest =
+            serde_json::from_str(include_str!("../fixtures/tdx-lite-attestation.json"))
+                .expect("TDX lite verifier fixture parses");
+        let cache = tempfile::tempdir().expect("temp cache dir");
+        let image_cache_dir = cache.path().join("cache");
+        let verifier = CvmVerifier::new(
+            image_cache_dir.display().to_string(),
+            "http://127.0.0.1:9/should-not-download/{OS_IMAGE_HASH}.tar.gz".to_string(),
+            Duration::from_secs(1),
+            None,
+        );
+
+        let response = verifier.verify(request).await.expect("verifier runs");
+        assert!(response.is_valid, "{:?}", response.reason);
+        assert!(response.details.quote_verified);
+        assert!(response.details.event_log_verified);
+        assert!(response.details.os_image_hash_verified);
+        assert!(!response.details.acpi_tables_verified);
+        assert_eq!(
+            response.details.attestation_mode,
+            Some(ra_tls::attestation::AttestationMode::DstackTdx)
+        );
+        assert!(
+            !image_cache_dir.exists(),
+            "TDX lite verification must not download or cache OS images"
         );
     }
 }

@@ -115,6 +115,10 @@ async fn run_oneshot(file_path: &str, config: &Config) -> anyhow::Result<()> {
         "OS image hash verified: {}",
         response.details.os_image_hash_verified
     );
+    println!(
+        "ACPI tables verified: {}",
+        response.details.acpi_tables_verified
+    );
 
     if let Some(tcb_status) = &response.details.tcb_status {
         println!("TCB status: {}", tcb_status);

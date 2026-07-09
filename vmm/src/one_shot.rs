@@ -253,7 +253,13 @@ Compose file content (first 200 chars):
     } else {
         None
     };
-    let sys_config_str = make_sys_config(&config, &manifest, &compose_hash, mr_config)?;
+    let sys_config_str = make_sys_config(
+        &config,
+        &manifest,
+        &compose_hash,
+        mr_config,
+        app_compose.requirements.as_ref(),
+    )?;
     let sys_config_path = vm_work_dir.shared_dir().join(".sys-config.json");
     fs_err::write(&sys_config_path, sys_config_str).context("Failed to write sys config")?;
 

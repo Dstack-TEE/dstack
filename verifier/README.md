@@ -33,6 +33,7 @@ or
     "quote_verified": true,
     "event_log_verified": true,  // See "Verification Process" for semantics
     "os_image_hash_verified": true,
+    "acpi_tables_verified": true,         // true only when TDX ACPI table contents are verified
     "os_image_is_dev": false,             // true=dev image, false=prod, null=unknown/N/A
     "os_image_version": "0.5.10",         // dstack OS version, null if unknown
     "attestation_mode": "dstack-tdx",   // dstack-tdx | dstack-gcp-tdx | dstack-nitro-enclave | dstack-amd-sev-snp
@@ -154,6 +155,7 @@ $ curl -s -d @quote.json localhost:8080/verify | jq
     "quote_verified": true,
     "event_log_verified": true,
     "os_image_hash_verified": true,
+    "acpi_tables_verified": true,
     "report_data": "12340000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
     "tcb_status": "UpToDate",
     "advisory_ids": [],
@@ -188,6 +190,8 @@ The verifier performs three main verification steps:
    - For the full-image TDX path, downloads or loads the image identified by `os_image_hash`, checks the image checksum manifest, uses dstack-mr to compute expected MRTD/RTMR0-2, and compares them against the verified measurements from the quote
    - For TDX lite, AMD SEV-SNP, and GCP TDX, verifies that `os_image_hash = sha256(sha256sum.txt)`, where `sha256sum.txt` is the image build's checksum manifest (`<sha256>  <relative-file-name>` lines for image files), that the manifest entry for `measurement.tdx.cbor`, `measurement.snp.cbor`, or `measurement.gcp.cbor` matches the supplied measurement material, and that the measurement material replays to the quote's hardware-signed measurements or GCP TPM UKI event
 
+`details.acpi_tables_verified` is `true` only for the full-image TDX path, where the verifier recomputes ACPI table contents and checks the resulting RTMRs against the quote. It is `false` for TDX lite, which uses the quote's named ACPI DATA digests without validating table contents, and for non-TDX platforms where ACPI table verification is not applicable.
+
 All three steps must pass for the verification to be considered valid.
 
 ### Identifying the deployment
@@ -197,6 +201,7 @@ Beyond pass/fail, the result carries a few descriptive fields so a relying party
 - **`os_image_is_dev`** — `true` for a development OS image, `false` for production. Dev images are built for local testing and are not hardened for production use, so a relying party generally wants to reject them.
 - **`os_image_version`** — the dstack OS version (e.g. `0.5.10`), useful for enforcing a minimum version.
 - **`attestation_mode`** — the attestation mode that produced the verified quote, serialized as `AttestationMode`: `dstack-tdx`, `dstack-gcp-tdx`, `dstack-nitro-enclave`, or `dstack-amd-sev-snp`.
+- **`acpi_tables_verified`** — whether TDX ACPI table contents were verified. This is useful for relying parties that require `requirements.tdx_measure_acpi_tables = true`.
 - **`key_provider`** — the decoded `app_info.key_provider_info` (`{name, id}`); `name` is e.g. `kms` or `local`. A `local` key provider means the CVM is not KMS-backed, which is itself a dev/insecure posture signal. The raw bytes remain in `app_info.key_provider_info`.
 
 `os_image_is_dev` and `os_image_version` are read from the image's `metadata.json`, which is part of `sha256sum.txt` and therefore bound to the `os_image_hash` that step 3 verifies against the quote — so they are as trustworthy as the os-image-hash check itself. They are `null` when the platform does not expose them (e.g. GCP TDX / Nitro Enclave) or when the image predates the field (images without `is_dev` are always production).

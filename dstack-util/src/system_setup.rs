@@ -774,7 +774,7 @@ fn verify_manifest_version(app_compose: &AppCompose) -> Result<u32> {
     Ok(manifest_version)
 }
 
-fn verify_app_compose_policy(app_compose: &AppCompose) -> Result<()> {
+fn verify_app_compose_policy(app_compose: &AppCompose, sys_config: &SysConfig) -> Result<()> {
     verify_manifest_feature_requirements(app_compose)?;
     let Some(requirements) = app_compose.requirements.as_ref() else {
         return Ok(());
@@ -789,8 +789,17 @@ fn verify_app_compose_policy(app_compose: &AppCompose) -> Result<()> {
             bail!("Unsupported attestation platform: requirements.platforms is empty");
         }
         let current_platform =
-            AttestationMode::detect().context("Failed to detect current attestation platform")?;
+            AttestationMode::detect().context("failed to detect current attestation platform")?;
         verify_platform_requirements(app_compose, current_platform)?;
+    }
+    if requirements.tdx_measure_acpi_tables.is_some() {
+        let current_platform =
+            AttestationMode::detect().context("failed to detect current attestation platform")?;
+        verify_tdx_measure_acpi_tables_requirement(
+            app_compose,
+            &sys_config.vm_config,
+            current_platform,
+        )?;
     }
     Ok(())
 }
@@ -867,6 +876,41 @@ fn format_requirement_platforms(platforms: &[String]) -> String {
     platforms.join(", ")
 }
 
+fn verify_tdx_measure_acpi_tables_requirement(
+    app_compose: &AppCompose,
+    vm_config: &str,
+    current_platform: AttestationMode,
+) -> Result<()> {
+    let Some(measure_acpi_tables) = app_compose
+        .requirements
+        .as_ref()
+        .and_then(|requirements| requirements.tdx_measure_acpi_tables)
+    else {
+        return Ok(());
+    };
+    if current_platform != AttestationMode::DstackTdx {
+        return Ok(());
+    }
+    let vm_config: dstack_types::VmConfig = serde_json::from_str(vm_config)
+        .context("failed to parse vm_config for requirements.tdx_measure_acpi_tables")?;
+    let uses_lite = vm_config.tdx_attestation_variant.is_lite();
+    if measure_acpi_tables && uses_lite {
+        bail!(
+            "unsupported TDX attestation mode: requirements.tdx_measure_acpi_tables=true requires ACPI table measurement"
+        );
+    }
+    if !measure_acpi_tables && !uses_lite {
+        bail!(
+            "unsupported TDX attestation mode: requirements.tdx_measure_acpi_tables=false requires TDX lite attestation"
+        );
+    }
+    info!(
+        "tdx ACPI table measurement requirement satisfied: measure_acpi_tables={}",
+        measure_acpi_tables
+    );
+    Ok(())
+}
+
 fn read_current_os_version() -> Result<String> {
     const OS_RELEASE_PATHS: &[&str] = &["/etc/os-release", "/usr/lib/os-release"];
     for path in OS_RELEASE_PATHS {
@@ -930,7 +974,7 @@ pub async fn cmd_sys_setup(args: SetupArgs) -> Result<()> {
 }
 
 async fn do_sys_setup(stage0: Stage0<'_>) -> Result<()> {
-    verify_app_compose_policy(&stage0.shared.app_compose)
+    verify_app_compose_policy(&stage0.shared.app_compose, &stage0.shared.sys_config)
         .context("Failed to verify app-compose policy")?;
     if stage0.shared.app_compose.secure_time {
         info!("Waiting for the system time to be synchronized");
@@ -2196,6 +2240,70 @@ fn test_platform_requirements_reject_invalid_platform_value() {
     assert!(err
         .to_string()
         .contains("Invalid requirements.platforms[0]"));
+}
+
+#[test]
+fn test_tdx_measure_acpi_tables_requirement_matches_vm_config() {
+    let app_compose: AppCompose = serde_json::from_value(serde_json::json!({
+        "manifest_version": "3",
+        "name": "test",
+        "runner": "docker-compose",
+        "requirements": {
+            "tdx_measure_acpi_tables": true
+        }
+    }))
+    .unwrap();
+    verify_tdx_measure_acpi_tables_requirement(&app_compose, r#"{}"#, AttestationMode::DstackTdx)
+        .unwrap();
+    let err = verify_tdx_measure_acpi_tables_requirement(
+        &app_compose,
+        r#"{"tdx_attestation_variant":"lite"}"#,
+        AttestationMode::DstackTdx,
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("tdx_measure_acpi_tables=true"));
+
+    let app_compose: AppCompose = serde_json::from_value(serde_json::json!({
+        "manifest_version": "3",
+        "name": "test",
+        "runner": "docker-compose",
+        "requirements": {
+            "tdx_measure_acpi_tables": false
+        }
+    }))
+    .unwrap();
+    verify_tdx_measure_acpi_tables_requirement(
+        &app_compose,
+        r#"{"tdx_attestation_variant":"lite"}"#,
+        AttestationMode::DstackTdx,
+    )
+    .unwrap();
+    let err = verify_tdx_measure_acpi_tables_requirement(
+        &app_compose,
+        r#"{}"#,
+        AttestationMode::DstackTdx,
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("tdx_measure_acpi_tables=false"));
+}
+
+#[test]
+fn test_tdx_measure_acpi_tables_requirement_ignored_on_non_tdx() {
+    let app_compose: AppCompose = serde_json::from_value(serde_json::json!({
+        "manifest_version": "3",
+        "name": "test",
+        "runner": "docker-compose",
+        "requirements": {
+            "tdx_measure_acpi_tables": true
+        }
+    }))
+    .unwrap();
+    verify_tdx_measure_acpi_tables_requirement(
+        &app_compose,
+        r#"{"tdx_attestation_variant":"lite"}"#,
+        AttestationMode::DstackAmdSevSnp,
+    )
+    .unwrap();
 }
 
 #[test]

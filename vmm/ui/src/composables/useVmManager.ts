@@ -43,6 +43,7 @@ type RequirementPlatform =
 type Requirements = {
   os_version?: string;
   platforms?: RequirementPlatform[];
+  tdx_measure_acpi_tables?: boolean;
 };
 
 const x25519 = require('../lib/x25519.js');

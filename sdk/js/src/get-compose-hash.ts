@@ -51,6 +51,7 @@ export interface DockerConfig extends SortableObject {
 export interface Requirements extends SortableObject {
   os_version?: string;
   platforms?: RequirementPlatform[];
+  tdx_measure_acpi_tables?: boolean;
 }
 
 export interface AppCompose extends SortableObject {

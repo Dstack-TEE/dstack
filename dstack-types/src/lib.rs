@@ -126,11 +126,18 @@ pub struct Requirements {
     /// an explicit empty list means no platform is allowed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub platforms: Option<Vec<String>>,
+    /// TDX-only ACPI table measurement requirement. When set, this overrides
+    /// the VMM-side TDX lite attestation policy: `true` requires legacy mode
+    /// with ACPI tables measured, while `false` requires lite mode.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tdx_measure_acpi_tables: Option<bool>,
 }
 
 impl Requirements {
     pub fn is_empty(&self) -> bool {
-        self.os_version.is_none() && self.platforms.is_none()
+        self.os_version.is_none()
+            && self.platforms.is_none()
+            && self.tdx_measure_acpi_tables.is_none()
     }
 }
 
@@ -381,7 +388,8 @@ mod app_compose_tests {
             "runner": "docker-compose",
             "requirements": {
                 "os_version": ">=0.6.1",
-                "platforms": ["dstack-gcp-tdx", "dstack-tdx"]
+                "platforms": ["dstack-gcp-tdx", "dstack-tdx"],
+                "tdx_measure_acpi_tables": true
             }
         }))
         .unwrap();
@@ -391,6 +399,7 @@ mod app_compose_tests {
             requirements.platforms,
             Some(vec!["dstack-gcp-tdx".to_string(), "dstack-tdx".to_string()])
         );
+        assert_eq!(requirements.tdx_measure_acpi_tables, Some(true));
 
         let err = serde_json::from_value::<AppCompose>(serde_json::json!({
             "manifest_version": "3",
@@ -428,6 +437,19 @@ mod app_compose_tests {
         .unwrap();
         let requirements = explicit_empty.requirements.as_ref().unwrap();
         assert_eq!(requirements.platforms, Some(vec![]));
+        assert!(!requirements.is_empty());
+
+        let acpi_tables: AppCompose = serde_json::from_value(serde_json::json!({
+            "manifest_version": "3",
+            "name": "test",
+            "runner": "docker-compose",
+            "requirements": {
+                "tdx_measure_acpi_tables": false
+            }
+        }))
+        .unwrap();
+        let requirements = acpi_tables.requirements.as_ref().unwrap();
+        assert_eq!(requirements.tdx_measure_acpi_tables, Some(false));
         assert!(!requirements.is_empty());
     }
 }
