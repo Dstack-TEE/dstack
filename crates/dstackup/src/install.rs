@@ -93,13 +93,12 @@ pub(crate) async fn cmd_install(mut o: InstallOpts) -> Result<()> {
     //    empty, download the latest CPU image through the verified image path.
     //    Pinning is validated before installing managed binaries, so an
     //    incompatible image fails without leaving a half-built host install.
-    let required_digest =
-        (!o.no_kms && !o.allow_unpinned_image).then_some(os_image_digest_file(platform));
+    let required_image_files = required_image_files(!o.no_kms && !o.allow_unpinned_image);
     o.image = crate::image::resolve_or_pull_image(
         &images,
         o.image.as_deref(),
         !o.no_kms,
-        required_digest,
+        required_image_files,
     )
     .await?;
     let os_image_hash = resolve_image_pin(&o, &images, platform)?;
@@ -151,8 +150,10 @@ pub(crate) async fn cmd_install(mut o: InstallOpts) -> Result<()> {
     // The KMS's own image download-verify stays off for the single-node flow
     // (it would need a published image source), but we PIN the app OS image in
     // the webhook allowlist (resolved in preflight, fail-closed): digest.txt
-    // holds the measured image hash the KMS reports for an app, so an app cannot
-    // boot under a different, unmeasured image and still receive keys.
+    // holds the measured image hash the KMS reports for an app (with
+    // platform measurement material such as measurement.snp.cbor committed by
+    // sha256sum.txt), so an app cannot boot under a different, unmeasured image
+    // and still receive keys.
     // bootAuth/kms ignores osImages, so the KMS bootstrap itself is unaffected.
     let host_cfg = HostConfig {
         auth_webhook_url: format!("http://10.0.2.2:{}", o.auth_port),
@@ -832,15 +833,20 @@ fn split_addr_port(ep: &str) -> Result<(String, u16)> {
     ))
 }
 
-fn os_image_digest_file(platform: Platform) -> &'static str {
-    match platform {
-        Platform::AmdSevSnp => "digest.sev.txt",
-        Platform::Tdx => "digest.txt",
+fn os_image_digest_file(_platform: Platform) -> &'static str {
+    "digest.txt"
+}
+
+fn required_image_files(require_pin: bool) -> &'static [&'static str] {
+    if require_pin {
+        &["digest.txt"]
+    } else {
+        &[]
     }
 }
 
-/// read the measured OS-image hash from the guest image's platform-specific
-/// digest file, used to pin which image apps may boot.
+/// read the measured OS-image hash from the guest image's digest file,
+/// used to pin which image apps may boot.
 /// Returns None when there's no image selected or no readable digest.
 fn resolve_os_image_hash(images: &str, image: Option<&str>, platform: Platform) -> Option<String> {
     let img = image?;
@@ -851,7 +857,7 @@ fn resolve_os_image_hash(images: &str, image: Option<&str>, platform: Platform) 
 }
 
 /// resolve the OS-image pin, failing CLOSED: in KMS mode a missing/empty
-/// platform digest is a hard error (an unpinned app could boot any unmeasured
+/// image digest is a hard error (an unpinned app could boot any unmeasured
 /// image and still get keys), unless the operator opts out with
 /// `--allow-unpinned-image`. Returns Some(hash) to pin, or None when pinning
 /// is deliberately off (`--no-kms`, or the explicit opt-out).

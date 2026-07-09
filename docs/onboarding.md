@@ -12,7 +12,7 @@ sudo dstack deploy \
 curl http://127.0.0.1:8080/
 ```
 
-AMD SEV-SNP hosts use the same `dstackup` and `dstack` commands after you provide a guest image that contains the SNP image digest (`digest.sev.txt`). As of June 28, 2026, the latest stable CPU image from `meta-dstack` is TDX-pinned only, so the copy-paste path below is not the AMD happy path yet.
+AMD SEV-SNP hosts use the same `dstackup` and `dstack` commands after you provide a guest image that contains the image digest (`digest.txt`).
 
 For multi-node production, Gateway TLS, custom domains, or on-chain governance, use the full [deployment guide](./deployment.md).
 
@@ -93,7 +93,7 @@ sudo dstackup install --key-provider-src /path/to/key-provider-build
 sudo dstackup install --use-existing-key-provider 127.0.0.1:3443
 ```
 
-On AMD SEV-SNP, no SGX key provider is needed. The selected guest image must include `digest.sev.txt`; otherwise, `dstackup install` fails before it starts the host units because apps could not be pinned to the measured SNP OS image.
+On AMD SEV-SNP, no SGX key provider is needed. The selected guest image must include `digest.txt`; otherwise, `dstackup install` fails before it starts the host units because apps could not be pinned to the measured OS image.
 
 To use a GPU image, pull it before install:
 
@@ -236,7 +236,7 @@ sudo /opt/dstack-test/bin/dstackup destroy --prefix /opt/dstack-test --purge
 This onboarding path is designed for one operator on one host.
 
 - The VMM dashboard and management API bind to `127.0.0.1` by default. Use SSH tunneling for remote access.
-- `dstackup install` pins the app OS image hash from the selected guest image (`digest.txt` for TDX, `digest.sev.txt` for SEV-SNP). If the digest cannot be read, install fails unless you pass `--allow-unpinned-image`.
+- `dstackup install` pins the app OS image hash from the selected guest image (`digest.txt` on all platforms). If pinning is enabled and the digest cannot be read, install fails.
 - `dstack deploy` registers the app compose hash in the local auth allowlist from `dstackup install`. Without that allowlist update, a KMS-mode app can boot but will not receive keys.
 - Gateway is not part of this flow. Apps are exposed through direct host port mappings.
 
@@ -256,15 +256,15 @@ If a release does not publish a SHA-256 digest, `dstackup image pull` and `dstac
 
 If you use a custom prefix or image directory, pass the same `--prefix` or `--image-path` to `install` and `image` commands.
 
-### Missing `digest.sev.txt` on AMD SEV-SNP
+### Missing `digest.txt`
 
-TDX images pin apps with `digest.txt`. AMD SEV-SNP images pin apps with `digest.sev.txt`. If the selected image does not contain `digest.sev.txt`, install fails with:
+All platforms pin apps with `digest.txt`. If the selected image does not contain `digest.txt`, install fails with:
 
 ```text
-no os-image pin: could not read digest.sev.txt
+no os-image pin: could not read digest.txt
 ```
 
-Use `--image` or `--image-path` with an SNP-capable image that contains `digest.sev.txt`. Do not use `--allow-unpinned-image` for onboarding unless you intentionally want apps to boot without OS-image pinning.
+Use `--image` or `--image-path` with an image that contains `digest.txt`. Do not use `--allow-unpinned-image` for onboarding unless you intentionally want apps to boot without OS-image pinning.
 
 ### No key provider on TDX
 
