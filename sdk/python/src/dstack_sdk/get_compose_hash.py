@@ -54,11 +54,13 @@ class Requirements:
         os_version: Optional[str] = None,
         platforms: Optional[List[str]] = None,
         tdx_measure_acpi_tables: Optional[bool] = None,
+        launch_token_hash: Optional[str] = None,
     ) -> None:
         """Initialize a new ``Requirements`` instance."""
         self.os_version = os_version
         self.platforms = platforms
         self.tdx_measure_acpi_tables = tdx_measure_acpi_tables
+        self.launch_token_hash = launch_token_hash
 
     def to_dict(self) -> Dict[str, Any]:
         """Return a dictionary representation excluding ``None`` fields."""
@@ -69,6 +71,8 @@ class Requirements:
             result["platforms"] = self.platforms
         if self.tdx_measure_acpi_tables is not None:
             result["tdx_measure_acpi_tables"] = self.tdx_measure_acpi_tables
+        if self.launch_token_hash is not None:
+            result["launch_token_hash"] = self.launch_token_hash
         return result
 
 

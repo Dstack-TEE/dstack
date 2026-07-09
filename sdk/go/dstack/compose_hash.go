@@ -42,6 +42,7 @@ type Requirements struct {
 	OsVersion            string                 `json:"os_version,omitempty"`
 	Platforms            *[]RequirementPlatform `json:"platforms,omitempty"`
 	TdxMeasureAcpiTables *bool                  `json:"tdx_measure_acpi_tables,omitempty"`
+	LaunchTokenHash      string                 `json:"launch_token_hash,omitempty"`
 }
 
 // AppCompose represents the application composition structure

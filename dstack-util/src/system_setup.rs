@@ -229,6 +229,10 @@ impl HostShareDir {
     fn instance_info_file(&self) -> PathBuf {
         self.base_dir.join(INSTANCE_INFO)
     }
+
+    fn user_config_file(&self) -> PathBuf {
+        self.base_dir.join(USER_CONFIG)
+    }
 }
 
 struct HostShared {
@@ -774,7 +778,9 @@ fn verify_manifest_version(app_compose: &AppCompose) -> Result<u32> {
     Ok(manifest_version)
 }
 
-fn verify_app_compose_policy(app_compose: &AppCompose, sys_config: &SysConfig) -> Result<()> {
+fn verify_app_compose_policy(shared: &HostShared) -> Result<()> {
+    let app_compose = &shared.app_compose;
+    let sys_config = &shared.sys_config;
     verify_manifest_feature_requirements(app_compose)?;
     let Some(requirements) = app_compose.requirements.as_ref() else {
         return Ok(());
@@ -800,6 +806,14 @@ fn verify_app_compose_policy(app_compose: &AppCompose, sys_config: &SysConfig) -
             &sys_config.vm_config,
             current_platform,
         )?;
+    }
+    if let Some(launch_token_hash) = requirements.launch_token_hash.as_deref() {
+        // Only touch user_config when the requirement is present; otherwise it
+        // is opaque application data and must not be parsed here.
+        let user_config = fs::read_to_string(shared.dir.user_config_file())
+            .context("failed to read user_config for requirements.launch_token_hash")?;
+        let token = launch_token_from_user_config(&user_config)?;
+        verify_launch_token_requirement(launch_token_hash, &token)?;
     }
     Ok(())
 }
@@ -911,6 +925,55 @@ fn verify_tdx_measure_acpi_tables_requirement(
     Ok(())
 }
 
+/// Minimum launch token length in bytes. `launch_token_hash` is public (it is
+/// part of app-compose.json), so short tokens can be recovered offline via
+/// brute force or precomputed tables. Length cannot prove entropy, but it
+/// rejects the trivially guessable tokens; deployers should still generate
+/// random tokens (e.g. 32 random alphanumeric characters).
+const LAUNCH_TOKEN_MIN_LEN: usize = 32;
+
+/// Enforce the launch-token pattern: the compose-hash-measured
+/// `requirements.launch_token_hash` must match the domain-separated digest of
+/// the launch token (see [`dstack_types::launch_token_hash`]). This binds a
+/// deployment to a token known only to the deployer, so a host cannot launch
+/// the app with substituted inputs.
+fn verify_launch_token_requirement(launch_token_hash: &str, token: &str) -> Result<()> {
+    let expected = hex::decode(launch_token_hash)
+        .context("invalid requirements.launch_token_hash: not a hex string")?;
+    if expected.len() != 32 {
+        bail!(
+            "invalid requirements.launch_token_hash: expected 32-byte sha256 hex, got {} bytes",
+            expected.len()
+        );
+    }
+    if token.len() < LAUNCH_TOKEN_MIN_LEN {
+        bail!(
+            "launch token too short: got {} bytes, minimum is {LAUNCH_TOKEN_MIN_LEN}; use a random token since launch_token_hash is public",
+            token.len()
+        );
+    }
+    if dstack_types::launch_token_hash(token)[..] != expected[..] {
+        bail!("launch token mismatch: sha256(\"{}\" || launch token) does not match requirements.launch_token_hash", dstack_types::LAUNCH_TOKEN_HASH_DOMAIN);
+    }
+    info!("launch token requirement satisfied");
+    Ok(())
+}
+
+/// Extract the launch token from `user_config` at JSON path
+/// `dstack.launch_token`. Callers must only invoke this when
+/// `requirements.launch_token_hash` is set; otherwise `user_config` is opaque
+/// application data and must not be parsed.
+fn launch_token_from_user_config(user_config: &str) -> Result<String> {
+    let user_config: Value = serde_json::from_str(user_config)
+        .context("failed to parse user_config as JSON for requirements.launch_token_hash")?;
+    let token = user_config
+        .pointer("/dstack/launch_token")
+        .context("user_config is missing dstack.launch_token")?
+        .as_str()
+        .context("user_config dstack.launch_token is not a string")?;
+    Ok(token.to_string())
+}
+
 fn read_current_os_version() -> Result<String> {
     const OS_RELEASE_PATHS: &[&str] = &["/etc/os-release", "/usr/lib/os-release"];
     for path in OS_RELEASE_PATHS {
@@ -974,8 +1037,7 @@ pub async fn cmd_sys_setup(args: SetupArgs) -> Result<()> {
 }
 
 async fn do_sys_setup(stage0: Stage0<'_>) -> Result<()> {
-    verify_app_compose_policy(&stage0.shared.app_compose, &stage0.shared.sys_config)
-        .context("Failed to verify app-compose policy")?;
+    verify_app_compose_policy(&stage0.shared).context("Failed to verify app-compose policy")?;
     if stage0.shared.app_compose.secure_time {
         info!("Waiting for the system time to be synchronized");
         cmd! {
@@ -2304,6 +2366,73 @@ fn test_tdx_measure_acpi_tables_requirement_ignored_on_non_tdx() {
         AttestationMode::DstackAmdSevSnp,
     )
     .unwrap();
+}
+
+#[cfg(test)]
+const TEST_LAUNCH_TOKEN: &str = "unit-test-launch-token-0000000001";
+#[cfg(test)]
+// sha256("dstack-launch-token/v1:" || TEST_LAUNCH_TOKEN)
+const TEST_LAUNCH_TOKEN_HASH: &str =
+    "28faa1319055d733ad9651f5ab7689c15b04609846bcd27b3c5bc8df6246f5a3";
+
+#[test]
+fn test_launch_token_requirement_accepts_matching_token() {
+    verify_launch_token_requirement(TEST_LAUNCH_TOKEN_HASH, TEST_LAUNCH_TOKEN).unwrap();
+}
+
+#[test]
+fn test_launch_token_requirement_rejects_wrong_token() {
+    let err = verify_launch_token_requirement(
+        TEST_LAUNCH_TOKEN_HASH,
+        "wrong-launch-token-00000000000001",
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("launch token mismatch"));
+}
+
+#[test]
+fn test_launch_token_requirement_rejects_short_token() {
+    // sha256("dstack-launch-token/v1:test"): a matching but brute-forceable
+    // token must be rejected.
+    let err = verify_launch_token_requirement(
+        "e128cf5f3c3633d3a1f450d3d4bece260b20f9afb667de4bbff6dd985f1e5d1a",
+        "test",
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("launch token too short"));
+    let err = verify_launch_token_requirement(TEST_LAUNCH_TOKEN_HASH, "").unwrap_err();
+    assert!(err.to_string().contains("launch token too short"));
+    // 31 bytes is one short of the minimum.
+    let err = verify_launch_token_requirement(TEST_LAUNCH_TOKEN_HASH, &"a".repeat(31)).unwrap_err();
+    assert!(err.to_string().contains("launch token too short"));
+}
+
+#[test]
+fn test_launch_token_requirement_rejects_invalid_hash() {
+    let err = verify_launch_token_requirement("zz", TEST_LAUNCH_TOKEN).unwrap_err();
+    assert!(err.to_string().contains("not a hex string"));
+    let err = verify_launch_token_requirement("9f86d0", TEST_LAUNCH_TOKEN).unwrap_err();
+    assert!(err.to_string().contains("expected 32-byte sha256 hex"));
+}
+
+#[test]
+fn test_launch_token_from_user_config_extracts_token() {
+    let user_config = r#"{"dstack":{"launch_token":"test"},"app":{"foo":"bar"}}"#;
+    assert_eq!(launch_token_from_user_config(user_config).unwrap(), "test");
+}
+
+#[test]
+fn test_launch_token_from_user_config_rejects_missing_or_invalid_token() {
+    let err = launch_token_from_user_config(r#"{}"#).unwrap_err();
+    assert!(err.to_string().contains("missing dstack.launch_token"));
+    let err = launch_token_from_user_config(r#"{"dstack":{}}"#).unwrap_err();
+    assert!(err.to_string().contains("missing dstack.launch_token"));
+    let err = launch_token_from_user_config(r#"{"dstack":{"launch_token":42}}"#).unwrap_err();
+    assert!(err.to_string().contains("not a string"));
+    let err = launch_token_from_user_config("not json").unwrap_err();
+    assert!(err
+        .to_string()
+        .contains("failed to parse user_config as JSON"));
 }
 
 #[test]
