@@ -620,7 +620,7 @@ h1, h2, h3, h4, h5, h6 {
 
 .runtime-network-item {
   display: grid;
-  grid-template-columns: 1.1fr 0.6fr 0.8fr 1fr 1.4fr;
+  grid-template-columns: 1.1fr 0.6fr 0.8fr 1.4fr;
   gap: 12px;
   overflow-wrap: anywhere;
 }

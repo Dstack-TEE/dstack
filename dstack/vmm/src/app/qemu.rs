@@ -9,7 +9,6 @@ use crate::{
         CvmConfig, GatewayConfig, Networking, NetworkingMode, ProcessAnnotation, TeePlatform,
     },
 };
-use std::collections::HashMap;
 use std::os::unix::fs::PermissionsExt;
 use std::{
     fs::Permissions,
@@ -284,8 +283,6 @@ pub struct VmInfo {
     pub image_version: String,
     pub gateway_enabled: bool,
     pub events: Vec<pb::GuestEvent>,
-    pub guest_ip: String,
-    pub guest_ips: HashMap<String, String>,
     pub runtime_networks: Vec<Networking>,
 }
 
@@ -421,28 +418,16 @@ impl VmInfo {
             .collect::<Vec<_>>();
         let configured_networking = configured_networks.first().cloned();
         let effective_networks = self.effective_networks(cvm);
-        let ip_index = effective_networks
-            .iter()
-            .position(|networking| networking.mode == NetworkingMode::Bridge)
-            .unwrap_or(0);
         let interfaces = effective_networks
             .iter()
             .enumerate()
             .map(|(index, networking)| {
                 let prefix = networking.mac_prefix_bytes();
                 let mac = mac_address_for_vm_index(&self.manifest.id, &prefix, index);
-                let ip = self.guest_ips.get(&mac).cloned().or_else(|| {
-                    (self.guest_ips.is_empty()
-                        && index == ip_index
-                        && networking.mode == NetworkingMode::Bridge)
-                        .then(|| self.guest_ip.clone())
-                        .filter(|ip| !ip.is_empty())
-                });
                 pb::NetworkInterfaceStatus {
                     mode: networking_mode_name(networking.mode).into(),
                     backend: networking_backend_name(networking.mode).into(),
-                    mac: mac.clone(),
-                    ip,
+                    mac,
                     bridge_name: (networking.mode == NetworkingMode::Bridge)
                         .then(|| networking.bridge.clone()),
                     netdev_id: Some(format!("net{index}")),
@@ -605,8 +590,6 @@ impl VmState {
             image_version: self.config.image.info.version.clone(),
             gateway_enabled: self.config.gateway_enabled,
             events: self.state.events.clone().into(),
-            guest_ip: self.state.guest_ip.clone(),
-            guest_ips: self.state.guest_ips.clone(),
             runtime_networks: self.state.runtime_networks.clone(),
         }
     }
@@ -1425,10 +1408,6 @@ impl VmWorkDir {
         self.workdir.join("guest-ip")
     }
 
-    pub fn guest_ips_path(&self) -> PathBuf {
-        self.workdir.join("guest-ips.json")
-    }
-
     pub fn runtime_networks_path(&self) -> PathBuf {
         self.workdir.join("runtime-networks.json")
     }
@@ -1442,20 +1421,6 @@ impl VmWorkDir {
 
     pub fn set_guest_ip(&self, ip: &str) -> Result<()> {
         fs::write(self.guest_ip_path(), ip).context("failed to write guest IP")
-    }
-
-    pub fn guest_ips(&self) -> HashMap<String, String> {
-        fs::read_to_string(self.guest_ips_path())
-            .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default()
-    }
-
-    pub fn set_guest_ip_for_mac(&self, mac: &str, ip: &str) -> Result<()> {
-        let mut guest_ips = self.guest_ips();
-        guest_ips.insert(mac.to_string(), ip.to_string());
-        fs::write(self.guest_ips_path(), serde_json::to_string(&guest_ips)?)
-            .context("failed to write guest IP map")
     }
 
     pub fn runtime_networks(&self) -> Vec<Networking> {

@@ -552,10 +552,10 @@ impl App {
                 networks.iter().enumerate().find_map(|(index, networking)| {
                     let prefix = networking.mac_prefix_bytes();
                     let nic_mac = mac_address_for_vm_index(&vm.config.manifest.id, &prefix, index);
-                    (nic_mac == mac).then(|| (id.clone(), nic_mac))
+                    (nic_mac == mac).then(|| id.clone())
                 })
             });
-            let Some((vm_id, nic_mac)) = found else {
+            let Some(vm_id) = found else {
                 debug!(mac, ip, "DHCP lease for unknown MAC, ignoring");
                 return;
             };
@@ -567,11 +567,7 @@ impl App {
             if let Err(e) = workdir.set_guest_ip(ip) {
                 error!(mac, ip, "failed to persist guest IP: {e}");
             }
-            if let Err(e) = workdir.set_guest_ip_for_mac(&nic_mac, ip) {
-                error!(mac, ip, "failed to persist guest IP map: {e}");
-            }
             vm.state.guest_ip = ip.to_string();
-            vm.state.guest_ips.insert(nic_mac, ip.to_string());
             info!(mac, ip, id = %vm_id, "DHCP lease updated");
             vm_id
         };
@@ -596,21 +592,13 @@ impl App {
             {
                 return;
             }
-            let Some((index, networking)) = networks.iter().enumerate().find(|(_, networking)| {
-                networking.is_bridge() && networking.forward_service_enabled
-            }) else {
+            if !networks
+                .iter()
+                .any(|networking| networking.is_bridge() && networking.forward_service_enabled)
+            {
                 return;
-            };
-            let prefix = networking.mac_prefix_bytes();
-            let mac =
-                crate::app::qemu::mac_address_for_vm_index(&vm.config.manifest.id, &prefix, index);
-            let guest_ip = vm.state.guest_ips.get(&mac).cloned().unwrap_or_else(|| {
-                if vm.state.guest_ips.is_empty() {
-                    vm.state.guest_ip.clone()
-                } else {
-                    String::new()
-                }
-            });
+            }
+            let guest_ip = vm.state.guest_ip.clone();
             let port_map = vm.config.manifest.port_map.clone();
             (guest_ip, port_map)
         };
@@ -750,16 +738,11 @@ impl App {
         let vm_ids: Vec<String> = self.lock().vms.keys().cloned().collect();
         for id in vm_ids {
             let workdir = self.work_dir(&id);
-            let guest_ip = workdir.guest_ip();
-            let guest_ips = workdir.guest_ips();
-            if guest_ip.is_some() || !guest_ips.is_empty() {
+            if let Some(ip) = workdir.guest_ip() {
                 {
                     let mut state = self.lock();
                     if let Some(vm) = state.get_mut(&id) {
-                        if let Some(ip) = guest_ip {
-                            vm.state.guest_ip = ip;
-                        }
-                        vm.state.guest_ips = guest_ips;
+                        vm.state.guest_ip = ip;
                     }
                 }
                 self.reconfigure_port_forward(&id).await;
@@ -2064,7 +2047,6 @@ struct VmStateMut {
     boot_error: String,
     shutdown_progress: String,
     guest_ip: String,
-    guest_ips: HashMap<String, String>,
     runtime_networks: Vec<Networking>,
     devices: GpuConfig,
     events: VecDeque<pb::GuestEvent>,

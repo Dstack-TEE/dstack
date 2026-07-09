@@ -48,11 +48,10 @@ message NetworkInterfaceStatus {
   // QEMU/network backend shape: "slirp", "tap_bridge", or "custom".
   string backend = 2;
   string mac = 3;
-  optional string ip = 4;
   // Linux bridge name for tap_bridge backend.
-  optional string bridge_name = 5;
+  optional string bridge_name = 4;
   // QEMU netdev id, e.g. "net0".
-  optional string netdev_id = 6;
+  optional string netdev_id = 5;
 }
 
 // Structured log or lifecycle event emitted by the guest or runtime.
