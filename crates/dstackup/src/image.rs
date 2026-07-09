@@ -6,9 +6,8 @@
 //!
 //! Images are published as release tarballs at `Dstack-TEE/meta-dstack`. There
 //! are two variants — cpu (`dstack-<ver>`) and gpu (`dstack-nvidia-<ver>`).
-//! `install` validates the selected image against the platform-specific digest
-//! it needs before starting the host stack: TDX uses `digest.txt`, and
-//! SEV-SNP uses `digest.sev.txt`. HTTP + checksum are native (reqwest is
+//! `install` validates the selected image against `digest.txt`, the OS image
+//! hash used on all platforms. HTTP + checksum are native (reqwest is
 //! already linked via the prpc client; sha2 verifies inline); only `tar` is
 //! shelled out, since GNU tar is ubiquitous and battle-tested on archive edges.
 
@@ -364,7 +363,7 @@ pub(crate) async fn resolve_or_pull_image(
     image_dir: &str,
     requested: Option<&str>,
     require: bool,
-    required_digest: Option<&str>,
+    required_files: &[&str],
 ) -> Result<Option<String>> {
     if let Some(name) = requested {
         if !valid_image_name(name) {
@@ -375,23 +374,29 @@ pub(crate) async fn resolve_or_pull_image(
             .join("metadata.json")
             .exists()
         {
+            ensure_image_has_required_files(image_dir, name, required_files)?;
             return Ok(Some(name.to_string()));
         }
         if let Some(spec) = pull_spec(name) {
             println!("  [..] image {name} not found locally; downloading it");
             let pulled = pull(Some(&spec.version), spec.gpu, image_dir, false, false).await?;
+            ensure_image_has_required_files(image_dir, &pulled, required_files)?;
             return Ok(Some(pulled));
         }
-        return resolve_image(image_dir, Some(name), require);
+        let resolved = resolve_image(image_dir, Some(name), require)?;
+        if let Some(resolved) = &resolved {
+            ensure_image_has_required_files(image_dir, resolved, required_files)?;
+        }
+        return Ok(resolved);
     }
 
     let mut imgs = installed_images(image_dir);
-    let skipped = retain_images_with_digest(&mut imgs, image_dir, required_digest);
+    let skipped = retain_images_with_required_files(&mut imgs, image_dir, required_files);
     if let Some(newest) = imgs.pop() {
         if !skipped.is_empty() {
             println!(
                 "  [!]  ignoring image(s) without {}: {}",
-                required_digest.unwrap_or("required digest"),
+                required_files_label(required_files),
                 skipped.join(", ")
             );
         }
@@ -407,12 +412,16 @@ pub(crate) async fn resolve_or_pull_image(
     }
 
     if !require {
-        if let Some(digest) = required_digest {
+        if !required_files.is_empty() {
             if skipped.is_empty() {
-                println!("  [!]  no guest image in {image_dir} with {digest} - `dstack deploy -c <compose>` will need one (`dstackup image pull`)");
+                println!(
+                    "  [!]  no guest image in {image_dir} with {} - `dstack deploy -c <compose>` will need one (`dstackup image pull`)",
+                    required_files_label(required_files)
+                );
             } else {
                 println!(
-                    "  [!]  no guest image in {image_dir} with {digest}; ignored {} - `dstack deploy -c <compose>` will need one (`dstackup image pull`)",
+                    "  [!]  no guest image in {image_dir} with {}; ignored {} - `dstack deploy -c <compose>` will need one (`dstackup image pull`)",
+                    required_files_label(required_files),
                     skipped.join(", ")
                 );
             }
@@ -422,14 +431,16 @@ pub(crate) async fn resolve_or_pull_image(
         return Ok(None);
     }
 
-    if let Some(digest) = required_digest {
+    if !required_files.is_empty() {
         if skipped.is_empty() {
             println!(
-                "  [..] no local guest image with {digest} found; downloading the latest cpu image"
+                "  [..] no local guest image with {} found; downloading the latest cpu image",
+                required_files_label(required_files)
             );
         } else {
             println!(
-                "  [..] no local guest image with {digest} found (ignored {}); downloading the latest cpu image",
+                "  [..] no local guest image with {} found (ignored {}); downloading the latest cpu image",
+                required_files_label(required_files),
                 skipped.join(", ")
             );
         }
@@ -443,32 +454,67 @@ pub(crate) async fn resolve_or_pull_image(
         .join("metadata.json")
         .exists()
     {
+        ensure_image_has_required_files(image_dir, &pulled, required_files)?;
         Ok(Some(pulled))
     } else {
         bail!("downloaded image {pulled}, but it is not available in {image_dir}")
     }
 }
 
-fn retain_images_with_digest(
+fn retain_images_with_required_files(
     imgs: &mut Vec<String>,
     image_dir: &str,
-    required_digest: Option<&str>,
+    required_files: &[&str],
 ) -> Vec<String> {
-    let Some(required_digest) = required_digest else {
+    if required_files.is_empty() {
         return Vec::new();
-    };
+    }
     let mut skipped = Vec::new();
     imgs.retain(|name| {
-        let has_digest = Path::new(image_dir)
-            .join(name)
-            .join(required_digest)
-            .is_file();
-        if !has_digest {
+        let has_required_files = image_has_required_files(image_dir, name, required_files);
+        if !has_required_files {
             skipped.push(name.clone());
         }
-        has_digest
+        has_required_files
     });
     skipped
+}
+
+fn image_has_required_files(image_dir: &str, image: &str, required_files: &[&str]) -> bool {
+    required_files
+        .iter()
+        .all(|file| Path::new(image_dir).join(image).join(file).is_file())
+}
+
+fn ensure_image_has_required_files(
+    image_dir: &str,
+    image: &str,
+    required_files: &[&str],
+) -> Result<()> {
+    let missing = missing_required_files(image_dir, image, required_files);
+    if missing.is_empty() {
+        return Ok(());
+    }
+    bail!(
+        "image {image:?} under {image_dir} is missing required file(s): {}",
+        missing.join(", ")
+    )
+}
+
+fn missing_required_files(image_dir: &str, image: &str, required_files: &[&str]) -> Vec<String> {
+    required_files
+        .iter()
+        .filter(|file| !Path::new(image_dir).join(image).join(file).is_file())
+        .map(|file| (*file).to_string())
+        .collect()
+}
+
+fn required_files_label(required_files: &[&str]) -> String {
+    if required_files.is_empty() {
+        "required file(s)".to_string()
+    } else {
+        required_files.join(", ")
+    }
 }
 
 fn pull_spec(name: &str) -> Option<PullSpec> {

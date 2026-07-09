@@ -49,7 +49,7 @@ cat /sys/module/kvm_amd/parameters/sev_snp
 
 The AMDSEV verification path expects `dmesg` to show SEV-SNP and RMP initialization, and `sev_snp` to read `Y`.
 
-Host enablement is necessary but not sufficient for onboarding with KMS. The selected guest image must also contain `digest.sev.txt`, which `dstackup install` uses to pin apps to the measured SNP OS image.
+Host enablement is necessary but not sufficient for onboarding with KMS. The selected guest image must also contain `digest.txt`, which `dstackup install` uses to pin apps to the measured OS image.
 
 ## What dstackup checks
 

@@ -67,7 +67,7 @@ services:
       - "8000:8000"
 ```
 
-Deploy to a self-hosted TDX machine with the `dstackup install` -> `dstack deploy` workflow, or use [Phala Cloud](https://cloud.phala.network) for managed infrastructure. AMD SEV-SNP hosts use the same workflow when the selected guest image includes `digest.sev.txt`.
+Deploy to a self-hosted TDX machine with the `dstackup install` -> `dstack deploy` workflow, or use [Phala Cloud](https://cloud.phala.network) for managed infrastructure. AMD SEV-SNP hosts use the same workflow when the selected guest image includes `digest.txt`.
 
 Setting up dstack on your own hardware? Start with the [self-hosted quick onboarding guide](./docs/onboarding.md)
 

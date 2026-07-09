@@ -223,8 +223,9 @@ pub(crate) struct InstallOpts {
     #[arg(long)]
     pub(crate) no_kms: bool,
 
-    /// proceed even if the app OS image can't be pinned (missing platform
-    /// digest) — apps will boot any unmeasured image and still get keys. not
+    /// proceed even if the app OS image can't be pinned in the host allowlist
+    /// (for example, a missing digest on platforms that can still boot without
+    /// it) — apps may boot an unmeasured image and still get keys. not
     /// recommended.
     #[arg(long)]
     pub(crate) allow_unpinned_image: bool,
