@@ -1758,8 +1758,10 @@ mod tests {
         let image = test_tdx_image(true);
         let compose_hash = hex_of(0x22, 32);
 
-        let bridge_config = make_vm_config(&config, &bridge_manifest, &image, &compose_hash, None)?;
-        let user_config = make_vm_config(&config, &user_manifest, &image, &compose_hash, None)?;
+        let bridge_config =
+            make_vm_config(&config, &bridge_manifest, &image, &compose_hash, None, None)?;
+        let user_config =
+            make_vm_config(&config, &user_manifest, &image, &compose_hash, None, None)?;
 
         assert_eq!(bridge_config, user_config);
         Ok(())
