@@ -378,20 +378,33 @@ impl App {
 
             let devices = self.try_allocate_gpus(&vm_config.manifest)?;
             let processes = vm_config.config_qemu(&work_dir, &self.config.cvm, &devices)?;
-            for process in processes {
-                self.supervisor
-                    .deploy(&process)
-                    .await
-                    .with_context(|| format!("Failed to start process {}", process.id))?;
-            }
-
             let runtime_networks =
                 crate::app::qemu::resolved_networks(&vm_config.manifest, &self.config.cvm);
             work_dir.set_runtime_networks(&runtime_networks)?;
+            {
+                let mut state = self.lock();
+                let vm_state = state.get_mut(id).context("VM not found")?;
+                vm_state.state.runtime_networks = runtime_networks;
+            }
+            for process in processes {
+                if let Err(err) = self.supervisor.deploy(&process).await {
+                    if let Err(clear_err) = work_dir.clear_runtime_networks() {
+                        warn!(
+                            id,
+                            "failed to clear runtime networks after start failure: {clear_err}"
+                        );
+                    }
+                    if let Some(vm_state) = self.lock().get_mut(id) {
+                        vm_state.state.runtime_networks.clear();
+                    }
+                    return Err(err)
+                        .with_context(|| format!("failed to start process {}", process.id));
+                }
+            }
+
             let mut state = self.lock();
             let vm_state = state.get_mut(id).context("VM not found")?;
             vm_state.state.devices = devices;
-            vm_state.state.runtime_networks = runtime_networks;
         }
         Ok(())
     }

@@ -152,6 +152,13 @@ pub(crate) fn validate_resolved_network(networking: &Networking) -> Result<()> {
 }
 
 pub(crate) fn validate_resolved_networks(networks: &[Networking]) -> Result<()> {
+    let forwarding_bridges = networks
+        .iter()
+        .filter(|networking| networking.is_bridge() && networking.forward_service_enabled)
+        .count();
+    if forwarding_bridges > 1 {
+        bail!("built-in port forwarding supports only one bridge");
+    }
     for networking in networks {
         validate_resolved_network(networking)?;
     }
@@ -599,7 +606,12 @@ impl VmState {
 mod tests {
     use super::{
         amd_sev_snp_memory_backend_arg, mac_address_for_vm, mac_address_for_vm_index,
-        parse_amd_sev_snp_qmp_capabilities, sanitize_optional, virtio_pci_device,
+        parse_amd_sev_snp_qmp_capabilities, sanitize_optional, virtio_pci_device, VmWorkDir,
+    };
+    use std::{
+        fs,
+        os::unix::fs::symlink,
+        time::{SystemTime, UNIX_EPOCH},
     };
 
     #[test]
@@ -633,6 +645,27 @@ mod tests {
             mac_address_for_vm_index("vm-123", &[], 1),
             "c6:74:2c:65:14:b9"
         );
+    }
+
+    #[test]
+    fn runtime_networks_snapshot_replaces_target_instead_of_following_it() -> anyhow::Result<()> {
+        let temp = std::env::temp_dir().join(format!(
+            "dstack-vmm-runtime-networks-test-{}",
+            SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos()
+        ));
+        fs::create_dir_all(&temp)?;
+        let external = temp.join("external.json");
+        fs::write(&external, "sentinel")?;
+        let workdir = VmWorkDir::new(temp.join("vm"));
+        fs::create_dir_all(workdir.path())?;
+        symlink(&external, workdir.runtime_networks_path())?;
+
+        workdir.set_runtime_networks(&[])?;
+
+        assert_eq!(fs::read_to_string(&external)?, "sentinel");
+        assert_eq!(fs::read_to_string(workdir.runtime_networks_path())?, "[]");
+        fs::remove_dir_all(temp)?;
+        Ok(())
     }
 
     #[test]
@@ -1431,11 +1464,9 @@ impl VmWorkDir {
     }
 
     pub fn set_runtime_networks(&self, networks: &[Networking]) -> Result<()> {
-        fs::write(
-            self.runtime_networks_path(),
-            serde_json::to_string(networks)?,
-        )
-        .context("failed to write runtime networks")
+        let serialized = serde_json::to_vec(networks)?;
+        safe_write::safe_write(self.runtime_networks_path(), serialized)
+            .context("failed to write runtime networks")
     }
 
     pub fn clear_runtime_networks(&self) -> Result<()> {

@@ -919,6 +919,29 @@ mod tests {
 
         assert!(err.to_string().contains("custom networking mode"));
     }
+
+    #[test]
+    fn multiple_bridges_are_rejected_when_builtin_forwarding_is_enabled() {
+        let mut cvm_config = test_cvm_config();
+        cvm_config.networking.forward_service_enabled = true;
+        let mut request = test_vm_configuration();
+        request.networks = vec![
+            rpc::NetworkingConfig {
+                mode: "bridge".to_string(),
+                bridge_name: "lo".to_string(),
+            },
+            rpc::NetworkingConfig {
+                mode: "bridge".to_string(),
+                bridge_name: "lo".to_string(),
+            },
+        ];
+
+        let err = create_manifest_from_vm_config(request, &cvm_config).unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("built-in port forwarding supports only one bridge"));
+    }
 }
 
 impl RpcCall<App> for RpcHandler {
