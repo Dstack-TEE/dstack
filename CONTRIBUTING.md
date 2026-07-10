@@ -32,6 +32,25 @@ Use the narrowest owning directory. Fixture explanations and component
 READMEs should stay with their fixtures/components; general guides should be
 linked from the root README and live under `docs/`.
 
+## Test without TEE
+
+Maintainers can run a development image without TDX to test VMM and guest changes.
+
+> [!WARNING]
+> A no-TEE VM has no hardware isolation or attestation. Its disk is unencrypted, and its temporary app keys are not stable across boots. Do not use this mode for production workloads or secrets.
+
+Deploy with KMS and TEE disabled:
+
+```bash
+dstack deploy ./docker-compose.yml \
+  --name no-tee-dev \
+  --image "YOUR_IMAGE" \
+  --no-kms \
+  --no-tee
+```
+
+Attestation and certificate APIs return errors in this mode. TEE mode cannot change after VM creation; recreate the VM to switch modes.
+
 ## Commit Convention
 
 This project uses [Conventional Commits](https://www.conventionalcommits.org/). Please format your commit messages as:

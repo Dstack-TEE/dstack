@@ -307,7 +307,7 @@ SPDX-License-Identifier: Apache-2.0
           </div>
           <div class="detail-item">
             <span class="detail-label">TEE</span>
-            <span class="detail-value">{{ vm.configuration?.no_tee ? 'Disabled' : 'Enabled' }}</span>
+            <span class="detail-value">{{ vm.configuration?.no_tee ? 'Disabled (development)' : 'Enabled' }}</span>
           </div>
           <div class="detail-item detail-item--gpus" v-if="vm.configuration?.gpus">
             <span class="detail-label">GPUs</span>

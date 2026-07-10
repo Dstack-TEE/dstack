@@ -39,6 +39,7 @@ This is the main configuration file for the application in JSON format:
 | public_tcbinfo | 0.5.1 | boolean | Whether TCB info is public |
 | allowed_envs | 0.4.2 | array of string | List of allowed environment variable names |
 | no_instance_id | 0.4.2 | boolean | Disable instance ID generation |
+| no_tee | 0.6.0 | boolean | Development only. Disable TEE and storage encryption. |
 | secure_time | 0.5.0 | boolean | Whether secure time is enabled |
 | pre_launch_script | 0.4.0 | string | Prelaunch bash script that runs before execute `docker compose up` |
 | init_script | 0.5.5 | string | Bash script that executed prior to dockerd startup |
@@ -47,7 +48,7 @@ This is the main configuration file for the application in JSON format:
 | key_provider | 0.5.6 | string | Key provider type. Supported values: "none", "kms", "local", "tpm". |
 
 
-The hash of this file content is extended to RTMR3 as event name `compose-hash`. Remote verifier can extract the compose-hash during remote attestation.
+In TEE mode, the hash of this file is extended to RTMR3 as `compose-hash` for remote verification.
 
 
 ### .instance-info

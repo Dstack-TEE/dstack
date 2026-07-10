@@ -75,6 +75,9 @@ enum Command {
         /// deploy in non-KMS mode (ephemeral keys; no KMS required).
         #[arg(long)]
         no_kms: bool,
+        /// disable TEE and storage encryption for development.
+        #[arg(long, requires = "no_kms")]
+        no_tee: bool,
         /// register the app's compose hash in this auth-allowlist.json. Defaults
         /// to the local allowlist from `dstackup install`.
         #[arg(long, value_name = "PATH")]
@@ -129,6 +132,7 @@ async fn main() -> Result<()> {
             disk,
             ports,
             no_kms,
+            no_tee,
             allowlist,
             dry_run,
         } => {
@@ -157,6 +161,7 @@ async fn main() -> Result<()> {
                 disk,
                 &ports,
                 no_kms,
+                no_tee,
                 allowlist.as_deref(),
                 dry_run,
                 json,
@@ -302,6 +307,21 @@ mod tests {
             _ => panic!("expected deploy command"),
         }
     }
+
+    #[test]
+    fn no_tee_requires_no_kms() {
+        assert!(Cli::try_parse_from(["dstack", "deploy", "compose.yaml", "--no-tee"]).is_err());
+
+        let cli = Cli::parse_from(["dstack", "deploy", "compose.yaml", "--no-kms", "--no-tee"]);
+        assert!(matches!(
+            cli.command,
+            Command::Deploy {
+                no_kms: true,
+                no_tee: true,
+                ..
+            }
+        ));
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -315,13 +335,14 @@ async fn cmd_deploy(
     disk: u32,
     port_specs: &[String],
     no_kms: bool,
+    no_tee: bool,
     allowlist: Option<&str>,
     dry_run: bool,
     json: bool,
 ) -> Result<()> {
     let yaml = std::fs::read_to_string(compose_path)
         .with_context(|| format!("reading compose file '{compose_path}'"))?;
-    let app_compose = compose::build_app_compose(name, &yaml, !no_kms);
+    let app_compose = compose::build_app_compose(name, &yaml, !no_kms, no_tee);
 
     let mut port_maps = Vec::new();
     for spec in port_specs {
@@ -336,6 +357,7 @@ async fn cmd_deploy(
         memory,
         disk_size: disk,
         ports: port_maps.clone(),
+        no_tee,
         ..Default::default()
     };
 

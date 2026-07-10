@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::app::{make_sys_config, Image, VmConfig, VmWorkDir};
+use crate::app::{make_sys_config, validate_no_tee_compose, Image, VmConfig, VmWorkDir};
 use crate::config::Config;
 use crate::main_service;
 use anyhow::{Context, Result};
@@ -15,7 +15,7 @@ pub async fn run_one_shot(
 ) -> Result<()> {
     use dstack_types::AppCompose;
     use dstack_vmm_rpc::VmConfiguration;
-    use main_service::create_manifest_from_vm_config;
+    use main_service::{create_manifest_from_vm_config, normalize_app_compose};
 
     // Dynamically allocate CID by scanning running QEMU processes (ps aux method)
     let mut existing_cids = Vec::new();
@@ -64,8 +64,14 @@ pub async fn run_one_shot(
         .with_context(|| format!("Failed to read VM configuration file: {}", vm_config_path))?;
 
     // Parse VM configuration
-    let vm_config: VmConfiguration = serde_json::from_str(&vm_config_json)
+    let mut vm_config: VmConfiguration = serde_json::from_str(&vm_config_json)
         .with_context(|| format!("Failed to parse VM configuration from: {}", vm_config_path))?;
+    if !vm_config.compose_file.is_empty() {
+        let (compose_file, app_compose) =
+            normalize_app_compose(&vm_config.compose_file, vm_config.no_tee)?;
+        vm_config.compose_file = compose_file;
+        vm_config.no_tee = app_compose.no_tee;
+    }
 
     // Calculate compose_hash using the same logic as main_service
     let compose_hash = {
@@ -82,7 +88,6 @@ pub async fn run_one_shot(
     let image_path = config.image.path.join(&manifest.image);
     let image = Image::load(&image_path)
         .with_context(|| format!("Failed to load image: {}", image_path.display()))?;
-
     // Create or use specified workdir and setup files
     let workdir_path = match workdir_option {
         Some(workdir_str) => {
@@ -117,7 +122,7 @@ pub async fn run_one_shot(
     fs_err::create_dir_all(&shared_dir).context("Failed to create shared directory")?;
 
     // Create app compose file content and parse AppCompose instance
-    let (app_compose_content, _app_compose) = if vm_config.compose_file.is_empty() {
+    let (app_compose_content, app_compose) = if vm_config.compose_file.is_empty() {
         // Create default compose JSON directly as string
         let gateway_enabled = !vm_config.gateway_urls.is_empty();
         let kms_enabled = !vm_config.kms_urls.is_empty();
@@ -135,11 +140,12 @@ pub async fn run_one_shot(
 "public_tcbinfo": true,
 "local_key_provider_enabled": false,
 "no_instance_id": false,
+"no_tee": {},
 "secure_time": true,
 "features": [],
 "allowed_envs": []
 }}"#,
-            vm_config.name, gateway_enabled, kms_enabled
+            vm_config.name, gateway_enabled, kms_enabled, vm_config.no_tee
         );
 
         // Parse the default compose to get AppCompose instance for gateway_enabled() call
@@ -203,6 +209,8 @@ Compose file content (first 200 chars):
             }
         }
     };
+
+    validate_no_tee_compose(manifest.no_tee, &app_compose)?;
 
     // Write the JSON string directly (no serialization needed)
     fs_err::write(vm_work_dir.app_compose_path(), app_compose_content)

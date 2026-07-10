@@ -43,6 +43,12 @@ use crate::{
     config::Config,
 };
 
+#[derive(Debug, thiserror::Error)]
+enum RpcError {
+    #[error("Attestation is unavailable in no-TEE mode")]
+    AttestationUnavailable,
+}
+
 fn read_dmi_file(name: &str) -> String {
     fs::read_to_string(format!("/sys/class/dmi/id/{name}"))
         .map(|s| s.trim().to_string())
@@ -64,11 +70,20 @@ struct AppStateInner {
 }
 
 impl AppStateInner {
+    fn ensure_attestation_available(&self) -> Result<()> {
+        if self.config.no_tee {
+            return Err(RpcError::AttestationUnavailable.into());
+        }
+        Ok(())
+    }
+
     fn info_attestation(&self) -> Result<VersionedAttestation> {
+        self.ensure_attestation_available()?;
         self.platform.attestation_for_info()
     }
 
     async fn issue_cert(&self, key: &KeyPair, config: CertConfigV2) -> Result<Vec<String>> {
+        self.ensure_attestation_available()?;
         let pubkey = key.public_key_der();
         let attestation = self
             .platform
@@ -113,6 +128,9 @@ impl AppStateInner {
 
 impl AppState {
     fn maybe_request_demo_cert(&self) {
+        if self.config().no_tee {
+            return;
+        }
         let state = self.inner.clone();
         if !state
             .demo_cert
@@ -171,12 +189,14 @@ impl AppState {
     }
 
     fn quote_response(&self, report_data: [u8; 64]) -> Result<GetQuoteResponse> {
+        self.inner.ensure_attestation_available()?;
         self.inner
             .platform
             .quote_response(report_data, &self.inner.vm_config)
     }
 
     fn attest_response(&self, report_data: [u8; 64]) -> Result<AttestResponse> {
+        self.inner.ensure_attestation_available()?;
         self.inner.platform.attest_response(report_data)
     }
 }
@@ -685,6 +705,10 @@ mod tests {
     }
 
     async fn setup_test_state() -> (AppState, tempfile::NamedTempFile) {
+        setup_test_state_with_mode(false).await
+    }
+
+    async fn setup_test_state_with_mode(no_tee: bool) -> (AppState, tempfile::NamedTempFile) {
         let mut temp_attestation_file = tempfile::NamedTempFile::new().unwrap();
 
         let attestation = include_bytes!("../fixtures/attestation.bin");
@@ -707,6 +731,7 @@ mod tests {
             key_provider_id: Vec::new(),
             allowed_envs: Vec::new(),
             no_instance_id: false,
+            no_tee: false,
             secure_time: false,
             storage_fs: None,
             swap_size: 0,
@@ -725,6 +750,7 @@ mod tests {
             sys_config_file: String::new().into(),
             pccs_url: None,
             data_disks: HashSet::new(),
+            no_tee,
         };
 
         const DUMMY_PEM_KEY: &str = r#"-----BEGIN PRIVATE KEY-----
@@ -802,6 +828,7 @@ pNs85uhOZE8z2jr8Pg==
 
         struct TestSimulatorPlatform {
             attestation: VersionedAttestation,
+            deny_attestation: bool,
         }
 
         fn patch_report_data(
@@ -813,10 +840,12 @@ pNs85uhOZE8z2jr8Pg==
 
         impl PlatformBackend for TestSimulatorPlatform {
             fn attestation_for_info(&self) -> Result<VersionedAttestation> {
+                assert!(!self.deny_attestation, "unexpected attestation request");
                 Ok(self.attestation.clone())
             }
 
             fn certificate_attestation(&self, pubkey: &[u8]) -> Result<VersionedAttestation> {
+                assert!(!self.deny_attestation, "unexpected attestation request");
                 let report_data =
                     ra_tls::attestation::QuoteContentType::RaTlsCert.to_report_data(pubkey);
                 let attestation = patch_report_data(&self.attestation, report_data);
@@ -828,6 +857,7 @@ pNs85uhOZE8z2jr8Pg==
                 report_data: [u8; 64],
                 vm_config: &str,
             ) -> Result<GetQuoteResponse> {
+                assert!(!self.deny_attestation, "unexpected attestation request");
                 let attestation = patch_report_data(&self.attestation, report_data);
                 let Some(quote) = attestation.platform.tdx_quote().map(ToOwned::to_owned) else {
                     return Err(anyhow::anyhow!("Quote not found"));
@@ -845,6 +875,7 @@ pNs85uhOZE8z2jr8Pg==
             }
 
             fn attest_response(&self, report_data: [u8; 64]) -> Result<AttestResponse> {
+                assert!(!self.deny_attestation, "unexpected attestation request");
                 let attestation = patch_report_data(&self.attestation, report_data);
                 Ok(AttestResponse {
                     attestation: VersionedAttestation::V1 { attestation }.to_bytes()?,
@@ -863,6 +894,7 @@ pNs85uhOZE8z2jr8Pg==
                     &std::fs::read(temp_attestation_file.path()).unwrap(),
                 )
                 .unwrap(),
+                deny_attestation: no_tee,
             }),
         };
 
@@ -872,6 +904,53 @@ pNs85uhOZE8z2jr8Pg==
             },
             temp_attestation_file,
         )
+    }
+
+    #[tokio::test]
+    async fn no_tee_supports_raw_keys_and_rejects_attestation() {
+        let (state, _guard) = setup_test_state_with_mode(true).await;
+        let key = InternalRpcHandler {
+            state: state.clone(),
+        }
+        .get_key(GetKeyArgs {
+            path: "development".to_string(),
+            purpose: "signing".to_string(),
+            algorithm: "ed25519".to_string(),
+        })
+        .await
+        .unwrap();
+        assert!(!key.key.is_empty());
+
+        for err in [
+            get_info(&state, false).await.unwrap_err(),
+            state.quote_response([0; 64]).unwrap_err(),
+            state.attest_response([0; 64]).unwrap_err(),
+        ] {
+            assert_eq!(err.to_string(), "Attestation is unavailable in no-TEE mode");
+        }
+        for request in [
+            GetTlsKeyArgs {
+                subject: "development".to_string(),
+                usage_server_auth: true,
+                ..Default::default()
+            },
+            GetTlsKeyArgs {
+                usage_ra_tls: true,
+                ..Default::default()
+            },
+            GetTlsKeyArgs {
+                with_app_info: true,
+                ..Default::default()
+            },
+        ] {
+            let err = InternalRpcHandler {
+                state: state.clone(),
+            }
+            .get_tls_key(request)
+            .await
+            .unwrap_err();
+            assert!(format!("{err:#}").contains("Attestation is unavailable in no-TEE mode"));
+        }
     }
 
     #[tokio::test]

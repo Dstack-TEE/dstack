@@ -108,8 +108,7 @@ elif modprobe sev-guest 2>/dev/null; then
 elif modprobe tdx-guest 2>/dev/null; then
 	log "Loaded tdx-guest module"
 else
-	log "Error: neither sev-guest nor tdx-guest module is available"
-	exit 1
+	log "No TEE guest module is available"
 fi
 
 # Setup configfs and TSM for TDX attestation
@@ -269,7 +268,7 @@ if [ -f "/sys/class/block/${device_name}/partition" ]; then
 	fi
 fi
 
-dstack-util setup --work-dir $WORK_DIR --device "$DATA_DEVICE" --mount-point $DATA_MNT
+dstack-util setup --work-dir "$WORK_DIR" --device "$DATA_DEVICE" --mount-point "$DATA_MNT"
 
 log "Mounting container runtime dirs to persistent storage"
 mkdir -p $DATA_MNT/var/lib/docker

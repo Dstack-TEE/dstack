@@ -22,7 +22,9 @@ use or_panic::ResultOrPanic;
 use ra_rpc::{CallContext, RpcCall};
 use tracing::{info, warn};
 
-use crate::app::{App, AttachMode, GpuConfig, GpuSpec, Manifest, PortMapping, VmWorkDir};
+use crate::app::{
+    validate_no_tee_compose, App, AttachMode, GpuConfig, GpuSpec, Manifest, PortMapping, VmWorkDir,
+};
 
 fn hex_sha256(data: &str) -> String {
     use sha2::Digest;
@@ -52,6 +54,32 @@ fn app_id_of(compose_file: &str) -> String {
         }
     }
     truncate40(&hex_sha256(compose_file)).to_string()
+}
+
+/// Normalize legacy RPC input into the app compose, which is the source of truth.
+pub(crate) fn normalize_app_compose(
+    compose_file: &str,
+    default_no_tee: bool,
+) -> Result<(String, AppCompose)> {
+    let mut value: serde_json::Value =
+        serde_json::from_str(compose_file).context("Invalid compose file")?;
+    let object = value
+        .as_object_mut()
+        .context("App compose must be a JSON object")?;
+    let had_no_tee = object.contains_key("no_tee");
+    if !had_no_tee && default_no_tee {
+        object.insert("no_tee".to_string(), true.into());
+    }
+    let normalized = if had_no_tee || !default_no_tee {
+        compose_file.to_string()
+    } else {
+        serde_json::to_string_pretty(&value).context("Failed to serialize app compose")?
+    };
+    let app_compose: AppCompose = serde_json::from_value(value).context("Invalid compose file")?;
+    if had_no_tee && default_no_tee && !app_compose.no_tee {
+        bail!("no_tee in the RPC request and app compose does not match");
+    }
+    Ok((normalized, app_compose))
 }
 
 /// Validate the VM label, restricting it to a safe character set to prevent injection vectors.
@@ -288,8 +316,13 @@ impl RpcHandler {
 }
 
 impl VmmRpc for RpcHandler {
-    async fn create_vm(self, request: VmConfiguration) -> Result<Id> {
+    async fn create_vm(self, mut request: VmConfiguration) -> Result<Id> {
+        let (compose_file, app_compose) =
+            normalize_app_compose(&request.compose_file, request.no_tee)?;
+        request.compose_file = compose_file;
+        request.no_tee = app_compose.no_tee;
         let manifest = create_manifest_from_vm_config(request.clone(), &self.app.config.cvm)?;
+        validate_no_tee_compose(manifest.no_tee, &app_compose)?;
         let id = manifest.id.clone();
         let app_id = manifest.app_id.clone();
         let vm_work_dir = self.app.work_dir(&id);
@@ -375,18 +408,26 @@ impl VmmRpc for RpcHandler {
     }
 
     async fn update_vm(self, request: UpdateVmRequest) -> Result<Id> {
+        let vm_work_dir = self.app.work_dir(&request.id);
+        let mut manifest = vm_work_dir.manifest().context("Failed to read manifest")?;
+        if request
+            .no_tee
+            .is_some_and(|no_tee| no_tee != manifest.no_tee)
+        {
+            bail!("TEE mode cannot be changed after VM creation");
+        }
+
         let new_id = if !request.compose_file.is_empty() {
-            // check the compose file is valid
-            let _app_compose: AppCompose =
-                serde_json::from_str(&request.compose_file).context("Invalid compose file")?;
+            let (compose_file, app_compose) =
+                normalize_app_compose(&request.compose_file, manifest.no_tee)?;
+            validate_no_tee_compose(manifest.no_tee, &app_compose)?;
             let compose_file_path = self.compose_file_path(&request.id);
             if !compose_file_path.exists() {
                 bail!("The instance {} not found", request.id);
             }
-            fs::write(compose_file_path, &request.compose_file)
-                .context("Failed to write compose file")?;
+            fs::write(compose_file_path, &compose_file).context("Failed to write compose file")?;
 
-            app_id_of(&request.compose_file)
+            app_id_of(&compose_file)
         } else {
             Default::default()
         };
@@ -400,8 +441,6 @@ impl VmmRpc for RpcHandler {
             fs::write(user_config_path, &request.user_config)
                 .context("Failed to write user config")?;
         }
-        let vm_work_dir = self.app.work_dir(&request.id);
-        let mut manifest = vm_work_dir.manifest().context("Failed to read manifest")?;
         self.apply_resource_updates(
             &request.id,
             &mut manifest,
@@ -414,9 +453,6 @@ impl VmmRpc for RpcHandler {
         .await?;
         if let Some(gpus) = request.gpus {
             manifest.gpus = Some(self.resolve_gpus(&gpus)?);
-        }
-        if let Some(no_tee) = request.no_tee {
-            manifest.no_tee = no_tee;
         }
         if request.update_ports {
             manifest.port_map = request
@@ -747,5 +783,32 @@ impl RpcCall<App> for RpcHandler {
         Ok(RpcHandler {
             app: context.state.clone(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_app_compose;
+
+    const COMPOSE: &str = r#"{"manifest_version":"2","name":"test","runner":"docker-compose"}"#;
+
+    #[test]
+    fn legacy_no_tee_request_is_written_to_compose() {
+        let (normalized, app_compose) = normalize_app_compose(COMPOSE, true).unwrap();
+        assert!(app_compose.no_tee);
+        assert!(normalized.contains(r#""no_tee": true"#));
+    }
+
+    #[test]
+    fn compose_no_tee_is_authoritative() {
+        let source =
+            r#"{"manifest_version":"2","name":"test","runner":"docker-compose","no_tee":true}"#;
+        let (normalized, app_compose) = normalize_app_compose(source, false).unwrap();
+        assert!(app_compose.no_tee);
+        assert_eq!(normalized, source);
+
+        let source =
+            r#"{"manifest_version":"2","name":"test","runner":"docker-compose","no_tee":false}"#;
+        assert!(normalize_app_compose(source, true).is_err());
     }
 }

@@ -159,6 +159,7 @@ impl FromStr for FsType {
 struct DstackOptions {
     storage_encrypted: bool,
     storage_fs: FsType,
+    no_tee: bool,
 }
 
 fn parse_dstack_options(shared: &HostShared) -> Result<DstackOptions> {
@@ -167,6 +168,7 @@ fn parse_dstack_options(shared: &HostShared) -> Result<DstackOptions> {
     let mut options = DstackOptions {
         storage_encrypted: true, // Default to encryption enabled
         storage_fs: FsType::Zfs, // Default to ZFS
+        no_tee: shared.app_compose.no_tee,
     };
 
     for param in cmdline.split_whitespace() {
@@ -186,7 +188,17 @@ fn parse_dstack_options(shared: &HostShared) -> Result<DstackOptions> {
     if let Some(fs) = &shared.app_compose.storage_fs {
         options.storage_fs = fs.parse().context("Failed to parse storage_fs")?;
     }
+    if options.no_tee {
+        options.storage_encrypted = false;
+    }
     Ok(options)
+}
+
+fn emit_runtime_event_for_setup(opts: &DstackOptions, event: &str, payload: &[u8]) -> Result<()> {
+    if opts.no_tee {
+        return Ok(());
+    }
+    emit_runtime_event(event, payload)
 }
 
 #[derive(Clone)]
@@ -759,10 +771,10 @@ fn platform_instance_binding() -> Result<Option<Vec<u8>>> {
     }
 }
 
-fn emit_key_provider_info(provider_info: &KeyProviderInfo) -> Result<()> {
+fn emit_key_provider_info(provider_info: &KeyProviderInfo, opts: &DstackOptions) -> Result<()> {
     info!("Key provider info: {provider_info:?}");
     let provider_info_json = serde_json::to_vec(&provider_info)?;
-    emit_runtime_event("key-provider", &provider_info_json)?;
+    emit_runtime_event_for_setup(opts, "key-provider", &provider_info_json)?;
     Ok(())
 }
 
@@ -1037,6 +1049,10 @@ pub async fn cmd_sys_setup(args: SetupArgs) -> Result<()> {
 }
 
 async fn do_sys_setup(stage0: Stage0<'_>) -> Result<()> {
+    let opts = parse_dstack_options(&stage0.shared).context("Failed to parse system options")?;
+    if !opts.no_tee {
+        AttestationMode::detect().context("TEE guest interface is unavailable")?;
+    }
     verify_app_compose_policy(&stage0.shared).context("Failed to verify app-compose policy")?;
     if stage0.shared.app_compose.secure_time {
         info!("Waiting for the system time to be synchronized");
@@ -1047,11 +1063,13 @@ async fn do_sys_setup(stage0: Stage0<'_>) -> Result<()> {
     } else {
         info!("System time will be synchronized by chronyd in background");
     }
-    stage0
-        .setup_gpu()
-        .await
-        .context("Failed to verify GPU TEE attestation")?;
-    let stage1 = stage0.setup_fs().await?;
+    if !opts.no_tee {
+        stage0
+            .setup_gpu()
+            .await
+            .context("Failed to verify GPU TEE attestation")?;
+    }
+    let stage1 = stage0.setup_fs(opts).await?;
     stage1.setup().await
 }
 
@@ -1278,6 +1296,7 @@ struct Stage1<'a> {
     vmm: HostApi,
     shared: HostShared,
     keys: AppKeys,
+    no_tee: bool,
 }
 
 impl<'a> Stage0<'a> {
@@ -1445,6 +1464,7 @@ impl<'a> Stage0<'a> {
             &provision.sk,
             KeyProviderKind::Local,
             Some(provision.mr.to_vec()),
+            true,
         )
         .context("Failed to generate app keys")?;
         Ok(app_keys)
@@ -1465,7 +1485,7 @@ impl<'a> Stage0<'a> {
                 "unsealed root key seed from TPM (PCR policy: {})",
                 pcr_policy.to_arg()
             );
-            return gen_app_keys_from_seed(&seed, KeyProviderKind::Tpm, None)
+            return gen_app_keys_from_seed(&seed, KeyProviderKind::Tpm, None, true)
                 .context("failed to generate TPM app keys");
         }
 
@@ -1481,19 +1501,22 @@ impl<'a> Stage0<'a> {
         )
         .context("failed to seal seed to TPM")?;
 
-        gen_app_keys_from_seed(&seed, KeyProviderKind::Tpm, None)
+        gen_app_keys_from_seed(&seed, KeyProviderKind::Tpm, None, true)
             .context("failed to generate TPM app keys")
     }
 
-    async fn request_app_keys(&self) -> Result<AppKeys> {
+    async fn request_app_keys(&self, opts: &DstackOptions) -> Result<AppKeys> {
         let key_provider = self.shared.app_compose.key_provider();
+        if opts.no_tee && !key_provider.is_none() {
+            bail!("no-TEE mode requires key_provider=none");
+        }
         match key_provider {
             KeyProviderKind::Kms => self.request_app_keys_from_kms().await,
             KeyProviderKind::Local => self.get_keys_from_local_key_provider().await,
             KeyProviderKind::None => {
                 info!("No key provider is enabled, generating temporary app keys");
                 let seed: [u8; 32] = rand::thread_rng().gen();
-                gen_app_keys_from_seed(&seed, KeyProviderKind::None, None)
+                gen_app_keys_from_seed(&seed, KeyProviderKind::None, None, !opts.no_tee)
                     .context("Failed to generate app keys")
             }
             KeyProviderKind::Tpm => {
@@ -1826,14 +1849,18 @@ impl<'a> Stage0<'a> {
         Ok(())
     }
 
-    fn measure_app_info(&self) -> Result<AppInfo> {
+    fn measure_app_info(&self, opts: &DstackOptions) -> Result<AppInfo> {
         let compose_hash = sha256_file(self.shared.dir.app_compose_file())?;
         let truncated_compose_hash = truncate(&compose_hash, 20);
         let key_provider = self.shared.app_compose.key_provider();
         let mut instance_info = self.shared.instance_info.clone();
-        let is_snp = AttestationMode::detect()
-            .map(|mode| mode == AttestationMode::DstackAmdSevSnp)
-            .unwrap_or(false);
+        let is_snp = if opts.no_tee {
+            false
+        } else {
+            AttestationMode::detect()
+                .map(|mode| mode == AttestationMode::DstackAmdSevSnp)
+                .unwrap_or(false)
+        };
 
         if instance_info.app_id.is_empty() {
             instance_info.app_id = truncated_compose_hash.to_vec();
@@ -1858,7 +1885,7 @@ impl<'a> Stage0<'a> {
         } else {
             let mut id_path = instance_info.instance_id_seed.clone();
             id_path.extend_from_slice(&instance_info.app_id);
-            if !is_snp {
+            if !is_snp && !opts.no_tee {
                 if let Some(binding) = platform_instance_binding()? {
                     info!("mixing platform per-instance binding into instance_id");
                     id_path.extend_from_slice(&binding);
@@ -1875,31 +1902,33 @@ impl<'a> Stage0<'a> {
         // no KMS to bind it, the relying party MUST gate the compose_hash
         // (which launcher build) separately from the app_id (which app).
 
-        emit_runtime_event("system-preparing", &[])?;
-        emit_runtime_event("app-id", &instance_info.app_id)?;
-        emit_runtime_event("compose-hash", &compose_hash)?;
-        emit_runtime_event("instance-id", &instance_id)?;
-        emit_runtime_event("boot-mr-done", &[])?;
+        emit_runtime_event_for_setup(opts, "system-preparing", &[])?;
+        emit_runtime_event_for_setup(opts, "app-id", &instance_info.app_id)?;
+        emit_runtime_event_for_setup(opts, "compose-hash", &compose_hash)?;
+        emit_runtime_event_for_setup(opts, "instance-id", &instance_id)?;
+        emit_runtime_event_for_setup(opts, "boot-mr-done", &[])?;
         Ok(AppInfo {
             instance_info,
             compose_hash,
         })
     }
 
-    fn verify_app(&self, app_info: &AppInfo, keys: &AppKeys) -> Result<()> {
-        config_id_verifier::verify_mr_config_id(
-            &app_info.compose_hash,
-            &app_info
-                .instance_info
-                .app_id
-                .as_slice()
-                .try_into()
-                .ok()
-                .context("Invalid app id")?,
-            &app_info.instance_info.instance_id,
-            keys.key_provider.kind(),
-            keys.key_provider.id(),
-        )?;
+    fn verify_app(&self, app_info: &AppInfo, keys: &AppKeys, opts: &DstackOptions) -> Result<()> {
+        if !opts.no_tee {
+            config_id_verifier::verify_mr_config_id(
+                &app_info.compose_hash,
+                &app_info
+                    .instance_info
+                    .app_id
+                    .as_slice()
+                    .try_into()
+                    .ok()
+                    .context("Invalid app id")?,
+                &app_info.instance_info.instance_id,
+                keys.key_provider.kind(),
+                keys.key_provider.id(),
+            )?;
+        }
         self.verify_key_provider_id(keys.key_provider.id())?;
         // TPM uses an empty id: the instance app-root pubkey is not a stable
         // provider identity and must not enter the launch measurement chain.
@@ -1913,38 +1942,42 @@ impl<'a> Stage0<'a> {
                 KeyProviderInfo::new("kms".into(), hex::encode(keys.key_provider.id()))
             }
         };
-        emit_key_provider_info(&kp_info)?;
+        emit_key_provider_info(&kp_info, opts)?;
         Ok(())
     }
 
-    async fn setup_fs(self) -> Result<Stage1<'a>> {
+    async fn setup_fs(self, opts: DstackOptions) -> Result<Stage1<'a>> {
+        if opts.no_tee {
+            warn!("Development-only no-TEE mode enabled; storage is unencrypted");
+        }
         let app_info = self
-            .measure_app_info()
+            .measure_app_info(&opts)
             .context("Failed to measure app info")?;
-        if self.shared.app_compose.key_provider().is_kms() {
+        if self.shared.app_compose.key_provider().is_kms() && !opts.no_tee {
             cmd_show_mrs()?;
         }
-        self.vmm
-            .notify_q("boot.progress", "requesting app keys")
-            .await;
+        let key_progress = if opts.no_tee {
+            "generating temporary app keys"
+        } else {
+            "requesting app keys"
+        };
+        self.vmm.notify_q("boot.progress", key_progress).await;
         let app_keys = self
-            .request_app_keys()
+            .request_app_keys(&opts)
             .await
             .context("Failed to request app keys")?;
         if app_keys.disk_crypt_key.is_empty() {
             bail!("Failed to get valid key phrase from KMS");
         }
 
-        self.verify_app(&app_info, &app_keys)
+        self.verify_app(&app_info, &app_keys, &opts)
             .context("Failed to verify app")?;
 
         // Save app keys
         let keys_json = serde_json::to_string(&app_keys).context("Failed to serialize app keys")?;
         fs::write(self.app_keys_file(), keys_json).context("Failed to write app keys")?;
 
-        // Parse kernel command line options
-        let opts = parse_dstack_options(&self.shared).context("Failed to parse kernel cmdline")?;
-        emit_runtime_event("storage-fs", opts.storage_fs.to_string().as_bytes())?;
+        emit_runtime_event_for_setup(&opts, "storage-fs", opts.storage_fs.to_string().as_bytes())?;
         info!(
             "Filesystem options: encryption={}, filesystem={:?}",
             opts.storage_encrypted, opts.storage_fs
@@ -1960,10 +1993,10 @@ impl<'a> Stage0<'a> {
                 &serde_json::to_string(&app_info.instance_info)?,
             )
             .await;
-        emit_runtime_event("system-ready", &[])?;
+        emit_runtime_event_for_setup(&opts, "system-ready", &[])?;
         self.vmm.notify_q("boot.progress", "data disk ready").await;
 
-        if !self.shared.app_compose.key_provider().is_kms() {
+        if !self.shared.app_compose.key_provider().is_kms() && !opts.no_tee {
             cmd_show_mrs()?;
         }
         Ok(Stage1 {
@@ -1971,6 +2004,7 @@ impl<'a> Stage0<'a> {
             shared: self.shared,
             vmm: self.vmm,
             keys: app_keys,
+            no_tee: opts.no_tee,
         })
     }
 }
@@ -2072,6 +2106,7 @@ impl Stage1<'_> {
                 "core": {
                     "pccs_url": self.shared.sys_config.pccs_url,
                     "data_disks": data_disks,
+                    "no_tee": self.no_tee,
                 }
             }
         });

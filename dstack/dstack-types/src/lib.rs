@@ -101,6 +101,9 @@ pub struct AppCompose {
     pub allowed_envs: Vec<String>,
     #[serde(default)]
     pub no_instance_id: bool,
+    /// Development only. Disables TEE and storage encryption.
+    #[serde(default)]
+    pub no_tee: bool,
     #[serde(default = "default_true")]
     pub secure_time: bool,
     #[serde(default)]

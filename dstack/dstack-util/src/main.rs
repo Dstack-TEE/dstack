@@ -829,7 +829,14 @@ fn cmd_gen_app_keys(args: GenAppKeysArgs) -> Result<()> {
     let key_provider = KeyProvider::None {
         key: key.serialize_pem(),
     };
-    let app_keys = make_app_keys(&key, &disk_key, &k256_key, args.ca_level, key_provider)?;
+    let app_keys = make_app_keys(
+        &key,
+        &disk_key,
+        &k256_key,
+        args.ca_level,
+        key_provider,
+        true,
+    )?;
     let app_keys = serde_json::to_string(&app_keys).context("Failed to serialize app keys")?;
     fs::write(&args.output, app_keys).context("Failed to write app keys")?;
     Ok(())
@@ -839,6 +846,7 @@ fn gen_app_keys_from_seed(
     seed: &[u8],
     provider: KeyProviderKind,
     mr: Option<Vec<u8>>,
+    with_attestation: bool,
 ) -> Result<AppKeys> {
     let key = derive_p256_key_pair_from_bytes(seed, &["app-key".as_bytes()])?;
     let disk_key = derive_p256_key_pair_from_bytes(seed, &["app-disk-key".as_bytes()])?;
@@ -860,7 +868,14 @@ fn gen_app_keys_from_seed(
             anyhow::bail!("KMS keys must be fetched from the KMS server")
         }
     };
-    make_app_keys(&key, &disk_key, &k256_key, 1, key_provider)
+    make_app_keys(
+        &key,
+        &disk_key,
+        &k256_key,
+        1,
+        key_provider,
+        with_attestation,
+    )
 }
 
 fn make_app_keys(
@@ -869,16 +884,23 @@ fn make_app_keys(
     k256_key: &SigningKey,
     ca_level: u8,
     key_provider: KeyProvider,
+    with_attestation: bool,
 ) -> Result<AppKeys> {
     use ra_tls::cert::CertRequest;
     let pubkey = app_key.public_key_der();
     let report_data = QuoteContentType::RaTlsCert.to_report_data(&pubkey);
-    let attestation = Attestation::quote(&report_data)
-        .context("Failed to get attestation")?
-        .into_versioned();
+    let attestation = if with_attestation {
+        Some(
+            Attestation::quote(&report_data)
+                .context("Failed to get attestation")?
+                .into_versioned(),
+        )
+    } else {
+        None
+    };
     let req = CertRequest::builder()
         .subject("App Root Cert")
-        .attestation(&attestation)
+        .maybe_attestation(attestation.as_ref())
         .key(app_key)
         .ca_level(ca_level)
         .build();
@@ -891,10 +913,18 @@ fn make_app_keys(
         env_crypt_key: vec![],
         k256_key: k256_key.to_bytes().to_vec(),
         k256_signature: vec![],
-        gateway_app_id: "".to_string(),
+        gateway_app_id: String::new(),
         ca_cert: cert.pem(),
         key_provider,
     })
+}
+
+#[cfg(test)]
+#[test]
+fn generates_unattested_app_keys_without_tee() {
+    let keys = gen_app_keys_from_seed(&[0x42; 32], KeyProviderKind::None, None, false).unwrap();
+    assert!(!keys.k256_key.is_empty());
+    assert!(!keys.ca_cert.is_empty());
 }
 
 async fn cmd_notify_host(args: HostNotifyArgs) -> Result<()> {

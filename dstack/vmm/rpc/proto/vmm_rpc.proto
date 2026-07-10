@@ -97,7 +97,7 @@ message VmConfiguration {
   repeated string gateway_urls = 15;
   // The VM is stopped
   bool stopped = 16;
-  // Disable confidential computing (fallback to non-TEE VM).
+  // Deprecated. Use the development-only app-compose no_tee field.
   bool no_tee = 17;
   // Per-VM networking mode override (if unset, uses global cvm.networking).
   optional NetworkingConfig networking = 18;
@@ -161,7 +161,7 @@ message UpdateVmRequest {
   optional uint32 memory = 15;
   optional uint32 disk_size = 16;
   optional string image = 17;
-  // Disable or re-enable TEE for an existing VM.
+  // Deprecated. Use the app-compose no_tee field.
   optional bool no_tee = 18;
 }
 

@@ -808,6 +808,8 @@ class VmmCLI:
         }
         if args.key_provider:
             app_compose["key_provider"] = args.key_provider
+        if args.no_tee:
+            app_compose["no_tee"] = True
         if args.prelaunch_script:
             app_compose["pre_launch_script"] = (
                 open(args.prelaunch_script, "rb").read().decode("utf-8")
@@ -835,6 +837,18 @@ class VmmCLI:
             raise Exception(f"Compose file not found: {args.compose}")
 
         compose_content = read_utf8(args.compose)
+        try:
+            compose_json = json.loads(compose_content)
+        except json.JSONDecodeError as err:
+            raise Exception(f"Invalid app compose file: {err}") from err
+        if not isinstance(compose_json, dict):
+            raise Exception("App compose must be a JSON object")
+
+        if args.no_tee is not None:
+            compose_json["no_tee"] = args.no_tee
+            compose_content = json.dumps(compose_json, indent=4, ensure_ascii=False)
+
+        no_tee = bool(compose_json.get("no_tee", False))
 
         envs = parse_env_file(args.env_file)
 
@@ -844,14 +858,10 @@ class VmmCLI:
                 raise Exception(
                     "--env-file requires --kms-url to encrypt environment variables"
                 )
-            try:
-                compose_json = json.loads(compose_content)
-                if not compose_json.get("kms_enabled", False):
-                    raise Exception(
-                        "--env-file requires kms_enabled=true in the compose file (use --kms when creating compose)"
-                    )
-            except json.JSONDecodeError:
-                pass  # Let the server handle invalid JSON
+            if not compose_json.get("kms_enabled", False):
+                raise Exception(
+                    "--env-file requires kms_enabled=true in the compose file (use --kms when creating compose)"
+                )
 
         # Read user config file if provided
         user_config = ""
@@ -872,7 +882,7 @@ class VmmCLI:
             "hugepages": args.hugepages,
             "pin_numa": args.pin_numa,
             "stopped": args.stopped,
-            "no_tee": args.no_tee,
+            "no_tee": no_tee,
         }
         if args.swap is not None:
             swap_bytes = max(0, int(round(args.swap)) * 1024 * 1024)
@@ -999,7 +1009,6 @@ class VmmCLI:
         attach_all: bool = False,
         no_gpus: bool = False,
         kms_urls: Optional[List[str]] = None,
-        no_tee: Optional[bool] = None,
     ) -> None:
         """Update multiple aspects of a VM in one command."""
         # Validate: --env-file requires --kms-url
@@ -1162,10 +1171,6 @@ class VmmCLI:
                 gpu_config = {"attach_mode": "listed", "gpus": []}
                 updates.append("GPUs (none)")
             upgrade_params["gpus"] = gpu_config
-
-        if no_tee is not None:
-            upgrade_params["no_tee"] = no_tee
-            updates.append("TEE disabled" if no_tee else "TEE enabled")
 
         if len(upgrade_params) > 1:  # more than just the id
             self.rpc_call("UpgradeApp", upgrade_params)
@@ -1676,6 +1681,11 @@ def main():
         "--no-instance-id", action="store_true", help="Disable instance ID"
     )
     compose_parser.add_argument(
+        "--no-tee",
+        action="store_true",
+        help="Disable TEE and disk encryption for development",
+    )
+    compose_parser.add_argument(
         "--secure-time", action="store_true", help="Enable secure time"
     )
     compose_parser.add_argument(
@@ -1754,7 +1764,7 @@ def main():
         "--no-tee",
         dest="no_tee",
         action="store_true",
-        help="Disable Intel TDX / run without TEE",
+        help="Disable TEE and disk encryption for development",
     )
     deploy_parser.add_argument(
         "--tee",
@@ -1762,7 +1772,7 @@ def main():
         action="store_false",
         help="Force-enable Intel TDX (default)",
     )
-    deploy_parser.set_defaults(no_tee=False)
+    deploy_parser.set_defaults(no_tee=None)
     deploy_parser.add_argument(
         "--net",
         choices=["bridge", "user"],
@@ -1906,22 +1916,6 @@ def main():
         help="Detach all GPUs from the VM",
     )
 
-    # TDX toggle
-    tee_group = update_parser.add_mutually_exclusive_group()
-    tee_group.add_argument(
-        "--no-tee",
-        dest="no_tee",
-        action="store_true",
-        help="Disable Intel TDX / run without TEE",
-    )
-    tee_group.add_argument(
-        "--tee",
-        dest="no_tee",
-        action="store_false",
-        help="Enable Intel TDX for the VM",
-    )
-    update_parser.set_defaults(no_tee=None)
-
     # KMS URL for environment encryption
     update_parser.add_argument("--kms-url", action="append", type=str, help="KMS URL")
 
@@ -2006,7 +2000,6 @@ def main():
             attach_all=args.ppcie,
             no_gpus=args.no_gpus if hasattr(args, "no_gpus") else False,
             kms_urls=args.kms_url,
-            no_tee=args.no_tee,
         )
     elif args.command == "kms":
         if not args.kms_action:

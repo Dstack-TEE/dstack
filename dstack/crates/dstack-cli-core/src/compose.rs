@@ -10,10 +10,15 @@ use serde_json::json;
 /// build a minimal app-compose manifest from a docker-compose YAML body
 /// (single-node, no gateway).
 ///
-/// `kms_enabled` selects KMS mode (deterministic, upgradeable per-app keys);
-/// gateway and local-key-provider are off for the direct-port single-node flow.
-pub fn build_app_compose(name: &str, docker_compose_yaml: &str, kms_enabled: bool) -> String {
-    let manifest = json!({
+/// `kms_enabled` selects KMS mode (deterministic, upgradeable per-app keys).
+/// `no_tee` is development-only and requires KMS to be disabled by the caller.
+pub fn build_app_compose(
+    name: &str,
+    docker_compose_yaml: &str,
+    kms_enabled: bool,
+    no_tee: bool,
+) -> String {
+    let mut manifest = json!({
         "manifest_version": 2,
         "name": name,
         "runner": "docker-compose",
@@ -31,7 +36,27 @@ pub fn build_app_compose(name: &str, docker_compose_yaml: &str, kms_enabled: boo
         // (NTS is also currently broken in guest images — see dstack#745.)
         "secure_time": false,
     });
+    if no_tee {
+        manifest["no_tee"] = true.into();
+    }
     // pretty-print via Value's Display (`{:#}`) — infallible, and byte-identical
     // to serde_json::to_string_pretty (avoids an expect on an unfailable Result).
     format!("{manifest:#}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_app_compose;
+
+    #[test]
+    fn no_tee_is_emitted_only_when_enabled() {
+        let tee: serde_json::Value =
+            serde_json::from_str(&build_app_compose("app", "services: {}", true, false)).unwrap();
+        assert!(tee.get("no_tee").is_none());
+
+        let no_tee: serde_json::Value =
+            serde_json::from_str(&build_app_compose("app", "services: {}", false, true)).unwrap();
+        assert_eq!(no_tee["no_tee"], true);
+        assert_eq!(no_tee["kms_enabled"], false);
+    }
 }

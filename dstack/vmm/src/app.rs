@@ -8,10 +8,10 @@ use dstack_port_forward::{ForwardRule, ForwardService, Protocol as FwdProtocol};
 use anyhow::{bail, Context, Result};
 use bon::Builder;
 use dstack_kms_rpc::kms_client::KmsClient;
-use dstack_types::mr_config::MrConfigV3;
 use dstack_types::shared_filenames::{
     APP_COMPOSE, ENCRYPTED_ENV, INSTANCE_INFO, SYS_CONFIG, USER_CONFIG,
 };
+use dstack_types::{mr_config::MrConfigV3, AppCompose};
 use dstack_vmm_rpc::{
     self as pb, GpuInfo, ReloadVmsResponse, StatusRequest, StatusResponse, VmConfiguration,
 };
@@ -128,6 +128,31 @@ pub(crate) fn round_up(value: u32, multiple: u32) -> u32 {
     }
 
     value + (multiple - remainder)
+}
+
+pub(crate) fn validate_no_tee_compose(no_tee: bool, app_compose: &AppCompose) -> Result<()> {
+    if no_tee != app_compose.no_tee {
+        bail!("TEE mode in manifest and app compose does not match");
+    }
+    if !no_tee {
+        return Ok(());
+    }
+    if !app_compose.key_provider().is_none() {
+        bail!("no-TEE mode requires key_provider=none");
+    }
+    if app_compose.gateway_enabled() {
+        bail!("no-TEE mode does not support the gateway");
+    }
+    if app_compose
+        .requirements
+        .as_ref()
+        .is_some_and(|requirements| {
+            requirements.platforms.is_some() || requirements.tdx_measure_acpi_tables.is_some()
+        })
+    {
+        bail!("no-TEE mode does not support TEE requirements");
+    }
+    Ok(())
 }
 
 /// Get the NUMA node associated with a PCI device.
@@ -279,6 +304,7 @@ impl App {
         let app_compose = vm_work_dir
             .app_compose()
             .context("Failed to read compose file")?;
+        validate_no_tee_compose(manifest.no_tee, &app_compose)?;
         {
             let mut states = self.lock();
             let cid = states
@@ -859,6 +885,7 @@ impl App {
         let app_compose = vm_work_dir
             .app_compose()
             .context("Failed to read compose file")?;
+        validate_no_tee_compose(manifest.no_tee, &app_compose)?;
 
         let mut is_new = false;
         {
@@ -1628,6 +1655,33 @@ mod tests {
         assert_eq!(effective_vcpu_count(4, Some(2)), 4);
         assert_eq!(effective_vcpu_count(3, Some(0)), 3);
         assert_eq!(effective_vcpu_count(3, None), 3);
+    }
+
+    #[test]
+    fn no_tee_compose_rejects_attestation_dependencies() {
+        fn app_compose(extra: serde_json::Value) -> AppCompose {
+            let mut value = serde_json::json!({
+                "manifest_version": "3",
+                "name": "test",
+                "runner": "docker-compose",
+                "key_provider": "none",
+                "no_tee": true
+            });
+            value
+                .as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            serde_json::from_value(value).unwrap()
+        }
+
+        validate_no_tee_compose(true, &app_compose(serde_json::json!({}))).unwrap();
+        for extra in [
+            serde_json::json!({"key_provider": "kms"}),
+            serde_json::json!({"gateway_enabled": true}),
+            serde_json::json!({"requirements": {"platforms": ["tdx"]}}),
+        ] {
+            assert!(validate_no_tee_compose(true, &app_compose(extra)).is_err());
+        }
     }
 
     #[test]

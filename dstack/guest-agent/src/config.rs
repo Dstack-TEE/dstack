@@ -51,6 +51,8 @@ pub struct Config {
     #[serde(default)]
     pub pccs_url: Option<String>,
     pub data_disks: HashSet<PathBuf>,
+    #[serde(default)]
+    pub no_tee: bool,
 }
 
 fn deserialize_app_compose<'de, D>(deserializer: D) -> Result<AppComposeWrapper, D::Error>
