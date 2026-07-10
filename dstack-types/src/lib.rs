@@ -143,6 +143,16 @@ pub struct Requirements {
     /// (e.g. 32 random alphanumeric characters).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub launch_token_hash: Option<String>,
+    /// GPU TEE attestation requirement, defaults to `true` when omitted.
+    ///
+    /// On guests with an NVIDIA GPU attached, `true` means the guest runs
+    /// local GPU attestation (nvattest) during system setup and refuses to
+    /// boot — before key provisioning — if the GPU fails to attest (e.g. a
+    /// non-CC GPU or CC mode disabled by the host). `false` skips attestation
+    /// and sets the GPU ready state directly. Guests without a GPU attached
+    /// are unaffected either way.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verify_gpu: Option<bool>,
 }
 
 impl Requirements {
@@ -151,6 +161,7 @@ impl Requirements {
             && self.platforms.is_none()
             && self.tdx_measure_acpi_tables.is_none()
             && self.launch_token_hash.is_none()
+            && self.verify_gpu.is_none()
     }
 }
 
@@ -345,6 +356,24 @@ impl AppCompose {
             }
         }
     }
+
+    /// Whether an attached GPU must pass local TEE attestation before the
+    /// guest continues booting. Defaults to `true` when
+    /// `requirements.verify_gpu` is omitted.
+    ///
+    /// `requirements` are only valid on manifest_version >= 3 (guests reject
+    /// older manifests carrying them); the opt-out is additionally ignored on
+    /// legacy manifests here so a caller that skipped that validation still
+    /// fails closed.
+    pub fn verify_gpu(&self) -> bool {
+        if !matches!(self.manifest_version_u32(), Some(v) if v >= 3) {
+            return true;
+        }
+        self.requirements
+            .as_ref()
+            .and_then(|r| r.verify_gpu)
+            .unwrap_or(true)
+    }
 }
 
 #[cfg(test)]
@@ -499,6 +528,54 @@ mod app_compose_tests {
         let requirements = launch_token.requirements.as_ref().unwrap();
         assert!(requirements.launch_token_hash.is_some());
         assert!(!requirements.is_empty());
+    }
+
+    #[test]
+    fn verify_gpu_defaults_to_true() {
+        let no_requirements: AppCompose = serde_json::from_value(serde_json::json!({
+            "manifest_version": 2,
+            "name": "test",
+            "runner": "docker-compose"
+        }))
+        .unwrap();
+        assert!(no_requirements.verify_gpu());
+
+        let omitted: AppCompose = serde_json::from_value(serde_json::json!({
+            "manifest_version": "3",
+            "name": "test",
+            "runner": "docker-compose",
+            "requirements": {}
+        }))
+        .unwrap();
+        assert!(omitted.verify_gpu());
+        assert!(omitted.requirements.as_ref().unwrap().is_empty());
+
+        let disabled: AppCompose = serde_json::from_value(serde_json::json!({
+            "manifest_version": "3",
+            "name": "test",
+            "runner": "docker-compose",
+            "requirements": {
+                "verify_gpu": false
+            }
+        }))
+        .unwrap();
+        assert!(!disabled.verify_gpu());
+        let requirements = disabled.requirements.as_ref().unwrap();
+        assert_eq!(requirements.verify_gpu, Some(false));
+        assert!(!requirements.is_empty());
+
+        // The opt-out is ignored on legacy manifests (requirements are only
+        // valid on manifest_version >= 3; guests reject such composes anyway).
+        let legacy_optout: AppCompose = serde_json::from_value(serde_json::json!({
+            "manifest_version": 2,
+            "name": "test",
+            "runner": "docker-compose",
+            "requirements": {
+                "verify_gpu": false
+            }
+        }))
+        .unwrap();
+        assert!(legacy_optout.verify_gpu());
     }
 
     #[test]

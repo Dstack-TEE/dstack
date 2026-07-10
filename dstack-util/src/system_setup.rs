@@ -1047,8 +1047,177 @@ async fn do_sys_setup(stage0: Stage0<'_>) -> Result<()> {
     } else {
         info!("System time will be synchronized by chronyd in background");
     }
+    stage0
+        .setup_gpu()
+        .await
+        .context("Failed to verify GPU TEE attestation")?;
     let stage1 = stage0.setup_fs().await?;
     stage1.setup().await
+}
+
+/// GPU TEE attestation gate (`requirements.verify_gpu`, defaults to true).
+///
+/// Runs before key provisioning so a CVM whose GPU cannot prove it is a
+/// genuine, CC-enabled NVIDIA TEE never gets its app keys. The GPU
+/// "ready" state (`nvidia-smi conf-compute -srs 1`) is only set from here —
+/// nvidia-persistenced deliberately does not set it — so CUDA work cannot be
+/// submitted to an unverified GPU either.
+mod gpu {
+    use super::*;
+
+    const NVATTEST: &str = "/usr/bin/nvattest";
+    const NVIDIA_SMI: &str = "/usr/bin/nvidia-smi";
+    const ATTESTATION_OUTPUT: &str = "/run/nvidia-gpu-attestation/attestation.out";
+    const ATTESTATION_TIMEOUT: Duration = Duration::from_secs(300);
+    const NVIDIA_SMI_TIMEOUT: Duration = Duration::from_secs(60);
+
+    /// True if a passed-through NVIDIA GPU is present, detected via sysfs PCI
+    /// (vendor 0x10de, class VGA 0x0300xx or 3D controller 0x0302xx) so it
+    /// works even before the nvidia driver is loaded. Fails (rather than
+    /// reporting "no GPU") when the PCI bus cannot be enumerated, so a broken
+    /// /sys cannot bypass the attestation gate.
+    pub(super) fn nvidia_gpu_present() -> Result<bool> {
+        let entries =
+            fs::read_dir("/sys/bus/pci/devices").context("failed to enumerate PCI devices")?;
+        Ok(entries.filter_map(|e| e.ok()).any(|dev| {
+            let read = |name: &str| {
+                fs::read_to_string(dev.path().join(name))
+                    .unwrap_or_default()
+                    .trim()
+                    .to_string()
+            };
+            read("vendor") == "0x10de"
+                && matches!(read("class").get(..6), Some("0x0300") | Some("0x0302"))
+        }))
+    }
+
+    /// Run a GPU tool with a bounded timeout so a wedged driver/GPU cannot
+    /// hang the boot indefinitely (dstack-prepare is a oneshot unit with no
+    /// start timeout of its own).
+    async fn run_command(
+        program: &str,
+        args: &[&str],
+        timeout: Duration,
+    ) -> Result<std::process::Output> {
+        tokio::time::timeout(
+            timeout,
+            tokio::process::Command::new(program).args(args).output(),
+        )
+        .await
+        .with_context(|| format!("{program} timed out"))?
+        .with_context(|| format!("failed to run {program}"))
+    }
+
+    /// Mark the GPU as ready to accept work. Only meaningful (and only
+    /// succeeds) when the GPU runs in CC mode.
+    pub(super) async fn set_gpu_ready_state() -> Result<()> {
+        let output = run_command(
+            NVIDIA_SMI,
+            &["conf-compute", "-srs", "1"],
+            NVIDIA_SMI_TIMEOUT,
+        )
+        .await?;
+        if !output.status.success() {
+            bail!(
+                "nvidia-smi conf-compute -srs 1 failed ({}): {}",
+                output.status,
+                truncated_lossy(&output.stderr, 512),
+            );
+        }
+        info!("GPU ready state set");
+        Ok(())
+    }
+
+    /// Run local GPU attestation via nvattest with a fresh nonce, keeping the
+    /// verifier output in /run for debugging. Fails on any non-zero exit —
+    /// including a GPU that cannot produce an attestation report at all (a
+    /// non-CC GPU, or CC mode left off by the host).
+    pub(super) async fn attest_gpu() -> Result<()> {
+        if !Path::new(NVATTEST).exists() {
+            bail!("nvattest is not available in this image");
+        }
+        // Certificate/OCSP validation needs a sane clock even when
+        // secure_time is off; best-effort step chrony before attesting.
+        if let Err(err) = cmd!(chronyc makestep) {
+            warn!("failed to step system clock: {err:?}");
+        }
+        let nonce = hex::encode(rand::thread_rng().gen::<[u8; 32]>());
+        let output = run_command(
+            NVATTEST,
+            &[
+                "attest",
+                "--device",
+                "gpu",
+                "--verifier",
+                "local",
+                "--nonce",
+                &nonce,
+            ],
+            ATTESTATION_TIMEOUT,
+        )
+        .await?;
+        if !output.stderr.is_empty() {
+            info!("nvattest: {}", truncated_lossy(&output.stderr, 2048));
+        }
+        if !output.status.success() {
+            bail!(
+                "nvattest exited with {}: {}",
+                output.status,
+                truncated_lossy(&output.stderr, 512),
+            );
+        }
+        if let Err(err) = save_attestation_output(&output.stdout) {
+            warn!("failed to save GPU attestation output: {err:?}");
+        }
+        Ok(())
+    }
+
+    fn save_attestation_output(stdout: &[u8]) -> Result<()> {
+        let output_path = Path::new(ATTESTATION_OUTPUT);
+        if let Some(parent) = output_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        safe_write(output_path, stdout)?;
+        fs::set_permissions(
+            output_path,
+            std::os::unix::fs::PermissionsExt::from_mode(0o600),
+        )?;
+        Ok(())
+    }
+
+    fn truncated_lossy(bytes: &[u8], limit: usize) -> String {
+        let text = String::from_utf8_lossy(bytes);
+        let text = text.trim();
+        match text.char_indices().nth(limit) {
+            Some((idx, _)) => format!("{}...", &text[..idx]),
+            None => text.to_string(),
+        }
+    }
+}
+
+impl Stage0<'_> {
+    /// Enforce `requirements.verify_gpu` (default true): attest an attached
+    /// NVIDIA GPU before continuing to key provisioning, or — when explicitly
+    /// disabled — set the GPU ready state without verification.
+    async fn setup_gpu(&self) -> Result<()> {
+        if !gpu::nvidia_gpu_present()? {
+            return Ok(());
+        }
+        if !self.shared.app_compose.verify_gpu() {
+            warn!("requirements.verify_gpu is false; setting GPU ready state without attestation");
+            // Best-effort: a GPU with CC mode off has no ready state to set.
+            if let Err(err) = gpu::set_gpu_ready_state().await {
+                warn!("failed to set GPU ready state: {err:?}");
+            }
+            return Ok(());
+        }
+        self.vmm.notify_q("boot.progress", "attesting GPU").await;
+        info!("verifying GPU TEE attestation");
+        gpu::attest_gpu().await?;
+        gpu::set_gpu_ready_state().await?;
+        info!("GPU TEE attestation succeeded");
+        Ok(())
+    }
 }
 
 pub async fn cmd_gateway_refresh(args: GatewayRefreshArgs) -> Result<()> {
