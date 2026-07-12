@@ -12,7 +12,7 @@ CONTEXT_DIR=$(dirname "$SCRIPT_DIR")
 SHARED_DIR="$SCRIPT_DIR/shared"
 DOCKERFILE="$SCRIPT_DIR/Dockerfile"
 
-source "$REPO_ROOT/build/shared/build-lib.sh"
+source "$REPO_ROOT/dstack/build/shared/build-lib.sh"
 
 NAME=${1:-}
 if [ -z "$NAME" ]; then
