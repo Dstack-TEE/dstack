@@ -27,7 +27,7 @@ done
 
 BUILDER_NAME=dstack-build
 THIS_DIR=$(cd $(dirname $0); pwd)
-REPO_ROOT=${REPO_ROOT:-$(dirname $THIS_DIR)}
+REPO_ROOT=${REPO_ROOT:-$(realpath "$THIS_DIR/../../..")}
 GIT_DIR=$REPO_ROOT
 
 HOST_BUILD_DIR_A=${THIS_DIR}/build-a
@@ -35,7 +35,7 @@ HOST_BUILD_DIR_B=${THIS_DIR}/build-b
 
 # guest dirs
 GUEST_BUILD_DIR=/dstack-build
-GUEST_SRC_DIR=/meta-dstack
+GUEST_SRC_DIR=/dstack-src
 
 cd $THIS_DIR
 
@@ -45,7 +45,8 @@ rm -rf .dummy
 
 build_to() {
     mkdir -p $1
-    BUILD_CMD="${2} ${GUEST_SRC_DIR}/${META_SUBDIR}/build.sh guest ./bb-build"
+    GIT_REVISION=$(git -C "$REPO_ROOT" rev-parse HEAD)
+    BUILD_CMD="DSTACK_GIT_REVISION='$GIT_REVISION' ${2} ${GUEST_SRC_DIR}/os/yocto/build.sh image ./bb-build"
     docker run --platform linux/amd64 --rm \
         --userns=host \
         --user $(id -u):$(id -g) \
@@ -79,11 +80,19 @@ cat <<EOF | tee $DIST_DIR/reproduce.sh
 #!/bin/bash
 set -e
 
-git clone https://github.com/Phala-Network/meta-dstack-cloud.git
-cd meta-dstack-cloud/
+git clone https://github.com/Dstack-TEE/dstack.git
+cd dstack/
 git checkout $(git -C $THIS_DIR rev-parse HEAD)
-git submodule update --init --recursive
-cd repro-build && RELEASE_FLAVORS='${RELEASE_FLAVORS}' ./repro-build.sh -n
+git submodule update --init -- \
+  os/yocto/deps/bitbake \
+  os/yocto/deps/openembedded-core \
+  os/yocto/deps/meta-yocto \
+  os/yocto/deps/meta-confidential-compute \
+  os/yocto/deps/meta-virtualization \
+  os/yocto/deps/meta-openembedded \
+  os/yocto/deps/meta-rust-bin \
+  os/yocto/deps/meta-security
+cd os/yocto/repro-build && RELEASE_FLAVORS='${RELEASE_FLAVORS}' ./repro-build.sh -n
 EOF
 echo "==========================="
 

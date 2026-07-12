@@ -28,7 +28,7 @@ cleanup() {
     if [ -n "$DOCKERD_PID" ] && kill -0 $DOCKERD_PID 2>/dev/null; then
         kill -TERM $DOCKERD_PID 2>/dev/null
         # Wait with timeout
-        for i in $(seq 1 50); do
+        for _ in $(seq 1 50); do
             kill -0 $DOCKERD_PID 2>/dev/null || break
             sleep 0.1
         done
@@ -40,7 +40,7 @@ cleanup() {
     # Stop containerd
     if [ -n "$CONTAINERD_PID" ] && kill -0 $CONTAINERD_PID 2>/dev/null; then
         kill -TERM $CONTAINERD_PID 2>/dev/null
-        for i in $(seq 1 50); do
+        for _ in $(seq 1 50); do
             kill -0 $CONTAINERD_PID 2>/dev/null || break
             sleep 0.1
         done
@@ -50,7 +50,7 @@ cleanup() {
 
     # Unmount any netns that docker created
     if [ -d "$TMPDIR/docker-exec/netns" ]; then
-        find "$TMPDIR/docker-exec/netns" -type f 2>/dev/null | while read ns; do
+        find "$TMPDIR/docker-exec/netns" -type f 2>/dev/null | while read -r ns; do
             umount "$ns" 2>/dev/null || true
         done
     fi
@@ -75,7 +75,7 @@ CONTAINERD_PID=$!
 
 # Wait for containerd socket with timeout
 TIMEOUT=100  # 10 seconds
-for i in $(seq 1 $TIMEOUT); do
+for _ in $(seq 1 "$TIMEOUT"); do
     [ -S "$TMPDIR/containerd.sock" ] && break
     if ! kill -0 $CONTAINERD_PID 2>/dev/null; then
         echo "Error: containerd exited unexpectedly" >&2
@@ -99,7 +99,7 @@ dockerd \
 DOCKERD_PID=$!
 
 # Wait for docker socket with timeout
-for i in $(seq 1 $TIMEOUT); do
+for _ in $(seq 1 "$TIMEOUT"); do
     [ -S "$TMPDIR/docker.sock" ] && break
     if ! kill -0 $DOCKERD_PID 2>/dev/null; then
         echo "Error: dockerd exited unexpectedly" >&2

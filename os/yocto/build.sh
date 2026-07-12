@@ -6,7 +6,7 @@ SCRIPT_DIR=$(
 ACTION=$1
 
 META_DIR=$SCRIPT_DIR
-DSTACK_DIR=$SCRIPT_DIR/dstack
+DSTACK_DIR=$(realpath "$SCRIPT_DIR/../../dstack")
 CERTS_DIR=$(pwd)/certs
 IMAGES_DIR=$(pwd)/images
 RUN_DIR=$(pwd)/run
@@ -304,18 +304,22 @@ download_image() {
 
     echo "Downloading image $VERSION${IS_DEV:+ (dev)}"
 
-    TAG=v$VERSION
+    TAG=guest-os-v$VERSION
     if [ x"$IS_DEV" = x"1" ]; then
         BASENAME=dstack-cloud-dev-$VERSION
     else
         BASENAME=dstack-cloud-$VERSION
     fi
-    URL=https://github.com/Dstack-TEE/meta-dstack/releases/download/$TAG/$BASENAME.tar.gz
+    URL=https://github.com/Dstack-TEE/dstack/releases/download/$TAG/$BASENAME.tar.gz
+    LEGACY_URL=https://github.com/Dstack-TEE/meta-dstack/releases/download/v$VERSION/$BASENAME.tar.gz
     if [ -d $IMAGES_DIR/$BASENAME ]; then
         echo "Image already exists"
     else
         mkdir -p $IMAGES_DIR/$BASENAME.tmp
-        curl -L $URL -o $IMAGES_DIR/$BASENAME.tar.gz
+        if ! curl -fL $URL -o $IMAGES_DIR/$BASENAME.tar.gz; then
+            echo "Falling back to the pre-monorepo release location"
+            curl -fL $LEGACY_URL -o $IMAGES_DIR/$BASENAME.tar.gz
+        fi
         tar -xvf $IMAGES_DIR/$BASENAME.tar.gz -C $IMAGES_DIR/$BASENAME.tmp
         rm -f $IMAGES_DIR/$BASENAME.tar.gz
         if [ -d $IMAGES_DIR/$BASENAME.tmp/$BASENAME ]; then
@@ -333,7 +337,8 @@ Usage: ${0##*/} <action> [args]
 
 Actions:
   host     - Build host binaries only
-  guest    - Build guest images only
+  image    - Build guest images (backend interface)
+  guest    - Alias for image
   cfg      - Generate configuration files only
   dl       - Download a specific image
   hostcfg  - Build host binaries and generate configuration files
@@ -356,7 +361,7 @@ case $ACTION in
 host)
     build_host
     ;;
-guest)
+image|guest)
     build_guest $2
     ;;
 cfg)

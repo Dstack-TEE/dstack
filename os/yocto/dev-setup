@@ -16,18 +16,18 @@ fi
 THIS_SCRIPT=$(realpath "$THIS_SCRIPT")
 THIS_DIR=$(dirname "$THIS_SCRIPT")
 
-LAYERS="$THIS_DIR/meta-yocto/meta-poky \
-    $THIS_DIR/meta-yocto/meta-yocto-bsp \
-    $THIS_DIR/meta-confidential-compute \
-    $THIS_DIR/meta-openembedded/meta-oe \
-    $THIS_DIR/meta-openembedded/meta-python \
-    $THIS_DIR/meta-openembedded/meta-networking \
-    $THIS_DIR/meta-openembedded/meta-filesystems \
-    $THIS_DIR/meta-virtualization \
-    $THIS_DIR/meta-rust-bin \
-    $THIS_DIR/meta-security \
-    $THIS_DIR//meta-security/meta-tpm \
-    $THIS_DIR/meta-dstack"
+LAYERS="$THIS_DIR/deps/meta-yocto/meta-poky \
+    $THIS_DIR/deps/meta-yocto/meta-yocto-bsp \
+    $THIS_DIR/deps/meta-confidential-compute \
+    $THIS_DIR/deps/meta-openembedded/meta-oe \
+    $THIS_DIR/deps/meta-openembedded/meta-python \
+    $THIS_DIR/deps/meta-openembedded/meta-networking \
+    $THIS_DIR/deps/meta-openembedded/meta-filesystems \
+    $THIS_DIR/deps/meta-virtualization \
+    $THIS_DIR/deps/meta-rust-bin \
+    $THIS_DIR/deps/meta-security \
+    $THIS_DIR/deps/meta-security/meta-tpm \
+    $THIS_DIR/layers/meta-dstack"
 
 if [ -z "$1" ]; then
     BUILD_DIR=$THIS_DIR/bb-build
@@ -35,20 +35,20 @@ else
     BUILD_DIR=$(realpath "$1")
 fi
 
-# Sync build config from meta-dstack/conf (always overwrite)
-CONF_SRC=$THIS_DIR/meta-dstack/conf
+# Sync build config from the dstack layer (always overwrite)
+CONF_SRC=$THIS_DIR/layers/meta-dstack/conf
 mkdir -p "$BUILD_DIR/conf"
 cp -f "$CONF_SRC/local.conf" "$BUILD_DIR/conf/local.conf"
 cp -rf "$CONF_SRC/multiconfig" "$BUILD_DIR/conf/"
 
-OE_INIT=$THIS_DIR/openembedded-core/oe-init-build-env
+OE_INIT=$THIS_DIR/deps/openembedded-core/oe-init-build-env
 
 for script in $THIS_DIR/setup.d/*.sh; do
     source "$script"
 done
 
 pushd "$BUILD_DIR"
-BDIR="." TEMPLATECONF=$THIS_DIR/openembedded-core/meta/conf/templates/default source $OE_INIT
+BDIR="." TEMPLATECONF=$THIS_DIR/deps/openembedded-core/meta/conf/templates/default source $OE_INIT
 popd
 
 bitbake-layers add-layer $LAYERS

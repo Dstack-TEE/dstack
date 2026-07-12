@@ -1,0 +1,102 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Dstack-TEE/dstack/blob/master/os/spec/artifact-manifest.schema.json",
+  "title": "dstack OS backend artifact manifest",
+  "description": "Versioned handoff from an OS build backend to the common image assembler. Artifact paths are relative to the manifest.",
+  "$defs": {
+    "artifactPath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!/)(?!\\.\\.(?:/|$)).+"
+    }
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "backend",
+    "image",
+    "source",
+    "boot",
+    "verity",
+    "artifacts"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "backend": {
+      "type": "string",
+      "minLength": 1
+    },
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "flavor", "is_dev"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "version": {"type": "string", "minLength": 1},
+        "flavor": {"type": "string", "minLength": 1},
+        "is_dev": {"type": "boolean"}
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["git_revision"],
+      "properties": {
+        "git_revision": {"type": "string", "minLength": 1}
+      }
+    },
+    "boot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ovmf_variant"],
+      "properties": {
+        "ovmf_variant": {"type": "string", "minLength": 1}
+      }
+    },
+    "verity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["root_hash", "data_size"],
+      "properties": {
+        "root_hash": {"type": "string", "minLength": 1},
+        "data_size": {
+          "oneOf": [
+            {"type": "integer", "minimum": 1},
+            {"type": "string", "pattern": "^[1-9][0-9]*$"}
+          ]
+        }
+      }
+    },
+    "artifacts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "initramfs",
+        "kernel",
+        "firmware",
+        "rootfs_verity",
+        "firmware_sev",
+        "uki"
+      ],
+      "properties": {
+        "initramfs": {"$ref": "#/$defs/artifactPath"},
+        "kernel": {"$ref": "#/$defs/artifactPath"},
+        "firmware": {"$ref": "#/$defs/artifactPath"},
+        "rootfs_verity": {"$ref": "#/$defs/artifactPath"},
+        "firmware_sev": {
+          "oneOf": [{"$ref": "#/$defs/artifactPath"}, {"type": "null"}]
+        },
+        "uki": {
+          "oneOf": [{"$ref": "#/$defs/artifactPath"}, {"type": "null"}]
+        }
+      }
+    },
+    "backend_metadata": {
+      "type": "object",
+      "additionalProperties": true
+    }
+  }
+}

@@ -1,10 +1,14 @@
+# SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 name: Build Guest Images
 
 on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag to create and release (e.g. v0.5.9). Leave empty to build only.'
+        description: 'Tag to create and release (e.g. guest-os-v0.5.9). Leave empty to build only.'
         required: false
         default: ''
         type: string
@@ -17,20 +21,30 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
+        uses: actions/checkout@v5
+
+      - name: Checkout Yocto dependencies
+        run: |
+          git submodule update --init --depth 1 -- \
+            os/yocto/deps/bitbake \
+            os/yocto/deps/openembedded-core \
+            os/yocto/deps/meta-yocto \
+            os/yocto/deps/meta-confidential-compute \
+            os/yocto/deps/meta-virtualization \
+            os/yocto/deps/meta-openembedded \
+            os/yocto/deps/meta-rust-bin \
+            os/yocto/deps/meta-security
 
       - name: Reproducible build
-        run: cd repro-build && ./repro-build.sh -n
+        run: cd os/yocto/repro-build && ./repro-build.sh -n
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: guest-images
           path: |
-            repro-build/dist/*.tar.gz
-            repro-build/dist/reproduce.sh
+            os/yocto/repro-build/dist/*.tar.gz
+            os/yocto/repro-build/dist/reproduce.sh
           retention-days: 30
 
   release:
@@ -43,7 +57,7 @@ jobs:
       contents: write
     steps:
       - name: Checkout default branch
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           ref: ${{ github.event.repository.default_branch }}
 
@@ -51,13 +65,13 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: guest-images
-          path: repro-build/dist
+          path: os/yocto/repro-build/dist
 
       - name: Validate release tag
         env:
           TAG: ${{ inputs.tag }}
         run: |
-          echo "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$'
+          echo "$TAG" | grep -Eq '^guest-os-v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$'
 
       - name: Create tag and release
         env:
@@ -67,6 +81,6 @@ jobs:
           git tag "$TAG"
           git push origin "$TAG"
           gh release create "$TAG" \
-            repro-build/dist/*.tar.gz \
-            repro-build/dist/reproduce.sh \
+            os/yocto/repro-build/dist/*.tar.gz \
+            os/yocto/repro-build/dist/reproduce.sh \
             --title "$TAG" --generate-notes

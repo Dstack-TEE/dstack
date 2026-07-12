@@ -9,9 +9,10 @@ SYS_CONFIG_FILE="$HOST_SHARED_DIR/.sys-config.json"
 CFG_PCCS_URL=$([ -f "$SYS_CONFIG_FILE" ] && jq -r '.pccs_url//""' "$SYS_CONFIG_FILE" || echo "")
 export PCCS_URL=${PCCS_URL:-$CFG_PCCS_URL}
 
-if [ $(jq 'has("pre_launch_script")' app-compose.json) == true ]; then
+if [ "$(jq 'has("pre_launch_script")' app-compose.json)" = true ]; then
     echo "Running pre-launch script"
     dstack-util notify-host -e "boot.progress" -d "pre-launch" || true
+    # shellcheck disable=SC1090
     source <(jq -r '.pre_launch_script' app-compose.json)
 fi
 

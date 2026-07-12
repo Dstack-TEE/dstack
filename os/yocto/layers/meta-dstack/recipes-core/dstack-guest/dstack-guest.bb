@@ -5,11 +5,16 @@ LIC_FILES_CHKSUM = "file://${COREBASE}/meta/COPYING.MIT;md5=3da9cfbcb788c80a0384
 
 inherit systemd
 
-REPO_ROOT = "${THISDIR}/../../.."
+# Keep the recipe's source boundary explicit.  The core workspace and public
+# Rust SDK are staged with the same relative layout they have in the monorepo;
+# OS-owned rootfs files are staged separately from application source.
+DSTACK_MONOREPO_ROOT ?= "${@os.path.realpath(os.path.join(d.getVar('THISDIR'), '../../../../../..'))}"
+DSTACK_CORE_SRC ?= "${DSTACK_MONOREPO_ROOT}/dstack"
+DSTACK_RUST_SDK_SRC ?= "${DSTACK_MONOREPO_ROOT}/sdk/rust"
+DSTACK_ROOTFS_SRC ?= "${DSTACK_MONOREPO_ROOT}/os/common/rootfs"
 
-SRC_DIR = '${REPO_ROOT}/dstack'
-
-S = "${UNPACKDIR}/dstack"
+S = "${UNPACKDIR}/repo/dstack"
+DSTACK_ROOTFS_FILES = "${UNPACKDIR}/repo/os/common/rootfs"
 
 RDEPENDS:${PN} += "bash"
 
@@ -27,15 +32,21 @@ EXTRA_CARGO_FLAGS = "-p dstack-guest-agent -p dstack-util"
 inherit cargo_bin
 
 do_unpack() {
-    mkdir -p ${S}
-    rsync -a --exclude="target" ${SRC_DIR}/ ${S}/
+    install -d "${S}" "${UNPACKDIR}/repo/sdk/rust" "${DSTACK_ROOTFS_FILES}"
+    rsync -a --exclude=".git" --exclude=".worktrees" --exclude="target" \
+        "${DSTACK_CORE_SRC}/" "${S}/"
+    rsync -a --exclude=".git" --exclude="target" \
+        "${DSTACK_RUST_SDK_SRC}/" "${UNPACKDIR}/repo/sdk/rust/"
+    rsync -a "${DSTACK_ROOTFS_SRC}/" "${DSTACK_ROOTFS_FILES}/"
 }
+
+do_unpack[cleandirs] = "${UNPACKDIR}/repo"
 
 # Force the configure task to run every time to detect source changes
 do_unpack[nostamp] = "1"
 
 # Add source directory to configure task dependencies
-do_unpack[vardeps] += "SRC_DIR"
+do_unpack[vardeps] += "DSTACK_CORE_SRC DSTACK_RUST_SDK_SRC DSTACK_ROOTFS_SRC"
 
 do_configure() {
     cargo_bin_do_configure
@@ -52,33 +63,33 @@ do_install() {
     install -d ${D}${sysconfdir}/systemd/journald.conf.d
     install -m 0755 ${CARGO_BINDIR}/dstack-util ${D}${bindir}
     install -m 0755 ${CARGO_BINDIR}/dstack-guest-agent ${D}${bindir}
-    install -m 0755 ${S}/basefiles/dstack-prepare.sh ${D}${bindir}
-    install -m 0755 ${S}/basefiles/ephemeral-docker.sh ${D}${bindir}
-    install -m 0755 ${S}/basefiles/wg-checker.sh ${D}${bindir}
-    install -m 0755 ${S}/basefiles/app-compose.sh ${D}${bindir}
-    install -m 0644 ${S}/basefiles/journald.conf ${D}${sysconfdir}/systemd/journald.conf.d/dstack.conf
+    install -m 0755 ${DSTACK_ROOTFS_FILES}/dstack-prepare.sh ${D}${bindir}
+    install -m 0755 ${DSTACK_ROOTFS_FILES}/ephemeral-docker.sh ${D}${bindir}
+    install -m 0755 ${DSTACK_ROOTFS_FILES}/wg-checker.sh ${D}${bindir}
+    install -m 0755 ${DSTACK_ROOTFS_FILES}/app-compose.sh ${D}${bindir}
+    install -m 0644 ${DSTACK_ROOTFS_FILES}/journald.conf ${D}${sysconfdir}/systemd/journald.conf.d/dstack.conf
 
     install -d ${D}${sysconfdir}/
-    install -m 0644 ${S}/basefiles/tdx-attest.conf ${D}${sysconfdir}/tdx-attest.conf
+    install -m 0644 ${DSTACK_ROOTFS_FILES}/tdx-attest.conf ${D}${sysconfdir}/tdx-attest.conf
 
     install -d ${D}${sysconfdir}/sysctl.d
-    install -m 0644 ${S}/basefiles/sysctl.d/99-dstack.conf ${D}${sysconfdir}/sysctl.d/99-dstack.conf
+    install -m 0644 ${DSTACK_ROOTFS_FILES}/sysctl.d/99-dstack.conf ${D}${sysconfdir}/sysctl.d/99-dstack.conf
 
     if ${@bb.utils.contains('DISTRO_FEATURES', 'systemd', 'true', 'false', d)}; then
         install -d ${D}${systemd_system_unitdir} \
                    ${D}${sysconfdir}/systemd/resolved.conf.d
 
-        install -m 0644 ${S}/basefiles/dstack-guest-agent.service ${D}${systemd_system_unitdir}
-        install -m 0644 ${S}/basefiles/dstack-prepare.service ${D}${systemd_system_unitdir}
-        install -m 0644 ${S}/basefiles/app-compose.service ${D}${systemd_system_unitdir}
-        install -m 0644 ${S}/basefiles/wg-checker.service ${D}${systemd_system_unitdir}
-        install -m 0644 ${S}/basefiles/dstack-guest-agent.socket ${D}${systemd_system_unitdir}
-        install -m 0644 ${S}/basefiles/llmnr.conf ${D}${sysconfdir}/systemd/resolved.conf.d
+        install -m 0644 ${DSTACK_ROOTFS_FILES}/dstack-guest-agent.service ${D}${systemd_system_unitdir}
+        install -m 0644 ${DSTACK_ROOTFS_FILES}/dstack-prepare.service ${D}${systemd_system_unitdir}
+        install -m 0644 ${DSTACK_ROOTFS_FILES}/app-compose.service ${D}${systemd_system_unitdir}
+        install -m 0644 ${DSTACK_ROOTFS_FILES}/wg-checker.service ${D}${systemd_system_unitdir}
+        install -m 0644 ${DSTACK_ROOTFS_FILES}/dstack-guest-agent.socket ${D}${systemd_system_unitdir}
+        install -m 0644 ${DSTACK_ROOTFS_FILES}/llmnr.conf ${D}${sysconfdir}/systemd/resolved.conf.d
         install -d ${D}${sysconfdir}/systemd/system/docker.service.d
-        install -m 0644 ${S}/basefiles/docker.service.d/* ${D}${sysconfdir}/systemd/system/docker.service.d/
+        install -m 0644 ${DSTACK_ROOTFS_FILES}/docker.service.d/* ${D}${sysconfdir}/systemd/system/docker.service.d/
 
         install -d ${D}${sysconfdir}/systemd/system/containerd.service.d
-        install -m 0644 ${S}/basefiles/containerd.service.d/* ${D}${sysconfdir}/systemd/system/containerd.service.d/
+        install -m 0644 ${DSTACK_ROOTFS_FILES}/containerd.service.d/* ${D}${sysconfdir}/systemd/system/containerd.service.d/
     fi
 }
 

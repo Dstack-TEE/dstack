@@ -1,2 +1,2 @@
 LAYERS="$LAYERS \
-    $THIS_DIR/meta-nvidia"
+    $THIS_DIR/layers/meta-nvidia"

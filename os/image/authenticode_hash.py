@@ -1,23 +1,31 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: Copyright (c) Hashforest Technology LLC
+#
+# SPDX-License-Identifier: BUSL-1.1
+
+"""Calculate the Authenticode SHA-256 hash of a PE/COFF image."""
 
 import argparse
 import hashlib
 
 
 def read_le_u16(data: bytes, offset: int) -> int:
+    """Read an unsigned little-endian 16-bit integer."""
     import struct
 
-    return struct.unpack('<H', data[offset:offset + 2])[0]
+    return struct.unpack("<H", data[offset : offset + 2])[0]
 
 
 def read_le_u32(data: bytes, offset: int) -> int:
+    """Read an unsigned little-endian 32-bit integer."""
     import struct
 
-    return struct.unpack('<I', data[offset:offset + 4])[0]
+    return struct.unpack("<I", data[offset : offset + 4])[0]
 
 
 def authenticode_hash(filepath: str) -> str:
-    with open(filepath, 'rb') as f:
+    """Return the PE/COFF Authenticode SHA-256 digest for *filepath*."""
+    with open(filepath, "rb") as f:
         data = f.read()
 
     # Read DOS header
@@ -39,7 +47,7 @@ def authenticode_hash(filepath: str) -> str:
     optional_header_offset = coff_header_offset + 20
     magic = read_le_u16(data, optional_header_offset)
 
-    is_pe32_plus = (magic == 0x20B)
+    is_pe32_plus = magic == 0x20B
 
     # Calculate offsets for excluded regions (checksum and cert directory)
     checksum_offset = optional_header_offset + 64
@@ -94,7 +102,7 @@ def authenticode_hash(filepath: str) -> str:
         else:
             available_size = max(0, len(data) - start)
             if available_size > 0:
-                hasher.update(data[start:start + available_size])
+                hasher.update(data[start : start + available_size])
 
         sum_of_bytes_hashed += size
 
@@ -113,7 +121,9 @@ def authenticode_hash(filepath: str) -> str:
             trailing_start = sum_of_bytes_hashed
 
             if trailing_start + hashed_trailing_len <= len(data):
-                hasher.update(data[trailing_start:trailing_start + hashed_trailing_len])
+                hasher.update(
+                    data[trailing_start : trailing_start + hashed_trailing_len]
+                )
 
     # Add padding to align to 8 bytes
     remainder = file_size % 8
@@ -125,14 +135,15 @@ def authenticode_hash(filepath: str) -> str:
 
 
 def main() -> None:
+    """Run the command-line interface."""
     parser = argparse.ArgumentParser(
-        description='Calculate PE/COFF Authenticode SHA256 hash (TPM Event Log compatible)'
+        description="Calculate PE/COFF Authenticode SHA256 hash (TPM Event Log compatible)"
     )
-    parser.add_argument('file', help='Path to PE/COFF binary (e.g., UKI .efi)')
+    parser.add_argument("file", help="Path to PE/COFF binary (e.g., UKI .efi)")
     args = parser.parse_args()
 
     print(authenticode_hash(args.file))
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
