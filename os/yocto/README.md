@@ -8,26 +8,19 @@ For the repository-wide OS layout and backend contract, see [`../README.md`](../
 
 ## Reproducible build
 
-Prerequisites: an x86-64 Linux system with Docker installed.
+From the repository root, the tested one-build entrypoint is:
 
 ```bash
-git clone https://github.com/Dstack-TEE/dstack.git
-cd dstack
-git submodule update --init -- \
-  os/yocto/deps/bitbake \
-  os/yocto/deps/openembedded-core \
-  os/yocto/deps/meta-yocto \
-  os/yocto/deps/meta-confidential-compute \
-  os/yocto/deps/meta-virtualization \
-  os/yocto/deps/meta-openembedded \
-  os/yocto/deps/meta-rust-bin \
-  os/yocto/deps/meta-security
-cd os/yocto/repro-build
-./repro-build.sh
+make os-image
 ```
 
-For an interactive build, source `dev-setup` and use the Makefile, or run the
-repository entrypoint `./os/build.sh --backend yocto` from the repository root.
+Use `make os-repro-check` to build twice and compare release outputs. The full
+prerequisite, output, verification, flavor, incremental-build, and
+troubleshooting instructions are in the
+[guest-OS build guide](../../docs/building-guest-os.md).
+
+For an interactive native build, source `dev-setup` and use this directory's
+Makefile, or run the repository entrypoint `./os/build.sh --backend yocto`.
 
 ## Output boundary
 

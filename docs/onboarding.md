@@ -14,6 +14,10 @@ curl http://127.0.0.1:8080/
 
 AMD SEV-SNP hosts use the same `dstackup` and `dstack` commands after you provide a guest image that contains the image digest (`digest.txt`).
 
+The default onboarding flow uses a published image. To build or customize the
+guest OS first, follow [Build the dstack guest OS](./building-guest-os.md), then
+install the resulting `dstack-<version>.tar.gz` bundle.
+
 For multi-node production, Gateway TLS, custom domains, or on-chain governance, use the full [deployment guide](./deployment.md).
 
 ## What this workflow creates

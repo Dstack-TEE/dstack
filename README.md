@@ -71,6 +71,8 @@ Deploy to a self-hosted TDX machine with the `dstackup install` -> `dstack deplo
 
 Setting up dstack on your own hardware? Start with the [self-hosted quick onboarding guide](./docs/onboarding.md)
 
+Building or customizing the guest OS itself? Follow the [guest-OS build guide](./docs/building-guest-os.md).
+
 ## Architecture
 
 ![Architecture](./docs/assets/arch.png)
@@ -137,6 +139,7 @@ Apps communicate with the guest agent via HTTP over `/var/run/dstack.sock`. Use 
 **For Operators**
 - [Hardware Enablement](./docs/hardware-enablement.md) - Prepare a TDX or AMD SEV-SNP host
 - [Self-hosted Quick Onboarding](./docs/onboarding.md) - First app on one host
+- [Build the Guest OS](./docs/building-guest-os.md) - Build and verify bootable images from source
 - [Deployment](./docs/deployment.md) - Self-hosting on TDX hardware
 - [On-Chain Governance](./docs/onchain-governance.md) - Smart contract authorization
 - [Gateway](./docs/dstack-gateway.md) - Gateway configuration

@@ -54,6 +54,10 @@ Before starting, ensure you have:
 
 If you prefer to set up guest images manually, follow these steps.
 
+To produce the image from source instead of downloading a release, follow the
+[guest-OS build guide](../building-guest-os.md). Use the generated
+`os/yocto/repro-build/dist/dstack-<version>.tar.gz` archive in Step 3 below.
+
 ### Step 1: Create Image Directory Structure
 
 Create the directory where guest images will be stored:

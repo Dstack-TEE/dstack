@@ -20,24 +20,27 @@ backend is implemented today.
 
 ## Build
 
-Initialize only the Yocto dependencies, then invoke the common entrypoint:
+For a first production build from a fresh checkout, use the repository-level
+target:
 
 ```bash
-git submodule update --init -- \
-  os/yocto/deps/bitbake \
-  os/yocto/deps/openembedded-core \
-  os/yocto/deps/meta-yocto \
-  os/yocto/deps/meta-confidential-compute \
-  os/yocto/deps/meta-virtualization \
-  os/yocto/deps/meta-openembedded \
-  os/yocto/deps/meta-rust-bin \
-  os/yocto/deps/meta-security
-
-./os/build.sh --backend yocto
+make os-image
 ```
 
-`--flavors "prod dev"` selects image flavors and `--build-dir DIR` selects the
-native backend build directory.
+It initializes only the Yocto dependency submodules and runs a complete build
+inside the pinned builder container. See [Build the dstack guest OS](../docs/building-guest-os.md)
+for prerequisites, output verification, flavor selection, reproducibility
+checking, incremental development, and troubleshooting.
+
+The lower-level native backend interface remains available:
+
+```bash
+make os-deps
+./os/build.sh --backend yocto --build-dir "$PWD/os/yocto/bb-build"
+```
+
+`--flavors "prod dev"` selects image flavors. Native builds require the host
+packages listed in `yocto/repro-build/Dockerfile.repro`.
 
 ## Backend contract
 
