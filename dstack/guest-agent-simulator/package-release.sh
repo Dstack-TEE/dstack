@@ -28,9 +28,10 @@ TARGET="$2"
 shift 2
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+CORE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+REPO_ROOT="$(cd "$CORE_DIR/.." && pwd)"
 OUT_DIR="$SCRIPT_DIR/dist"
-BINARY_PATH="$ROOT_DIR/target/$TARGET/release/dstack-simulator"
+BINARY_PATH="$CORE_DIR/target/$TARGET/release/dstack-simulator"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -68,11 +69,11 @@ rm -rf "$STAGE_DIR" "$TARBALL_PATH" "$CHECKSUM_PATH"
 mkdir -p "$STAGE_DIR"
 
 install -m 755 "$BINARY_PATH" "$STAGE_DIR/dstack-simulator"
-install -m 644 "$ROOT_DIR/sdk/simulator/dstack.toml" "$STAGE_DIR/dstack.toml"
-install -m 644 "$ROOT_DIR/sdk/simulator/app-compose.json" "$STAGE_DIR/app-compose.json"
-install -m 644 "$ROOT_DIR/sdk/simulator/appkeys.json" "$STAGE_DIR/appkeys.json"
-install -m 644 "$ROOT_DIR/sdk/simulator/sys-config.json" "$STAGE_DIR/sys-config.json"
-install -m 644 "$ROOT_DIR/sdk/simulator/attestation.bin" "$STAGE_DIR/attestation.bin"
+install -m 644 "$REPO_ROOT/sdk/simulator/dstack.toml" "$STAGE_DIR/dstack.toml"
+install -m 644 "$REPO_ROOT/sdk/simulator/app-compose.json" "$STAGE_DIR/app-compose.json"
+install -m 644 "$REPO_ROOT/sdk/simulator/appkeys.json" "$STAGE_DIR/appkeys.json"
+install -m 644 "$REPO_ROOT/sdk/simulator/sys-config.json" "$STAGE_DIR/sys-config.json"
+install -m 644 "$REPO_ROOT/sdk/simulator/attestation.bin" "$STAGE_DIR/attestation.bin"
 install -m 644 "$SCRIPT_DIR/dstack-simulator.service" "$STAGE_DIR/dstack-simulator.service"
 install -m 755 "$SCRIPT_DIR/install-systemd.sh" "$STAGE_DIR/install-systemd.sh"
 

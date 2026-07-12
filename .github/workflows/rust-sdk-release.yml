@@ -53,8 +53,8 @@ jobs:
                   pkg_version("sdk/rust/types/Cargo.toml")),
               ("sdk/rust/Cargo.toml [package.version]",
                   pkg_version("sdk/rust/Cargo.toml")),
-              ("Cargo.toml [workspace.dependencies.dstack-sdk-types.version]",
-                  ws_dep_version("Cargo.toml", "dstack-sdk-types")),
+              ("dstack/Cargo.toml [workspace.dependencies.dstack-sdk-types.version]",
+                  ws_dep_version("dstack/Cargo.toml", "dstack-sdk-types")),
           ]
 
           fail = False

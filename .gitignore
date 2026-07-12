@@ -1,8 +1,10 @@
-/target
+/dstack/target
 /certs
 /build-config.sh
 /build/*
-!/build/shared/
+/images
+/run
+/rust-target
 **/generated/*
 !**/generated/mod.rs
 node_modules/
@@ -12,5 +14,5 @@ node_modules/
 .claude/settings.local.json
 __pycache__
 .planning/
-/vmm/src/console_v1.html
+/dstack/vmm/src/console_v1.html
 .claude/worktrees/

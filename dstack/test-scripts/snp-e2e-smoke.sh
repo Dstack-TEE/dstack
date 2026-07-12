@@ -10,14 +10,14 @@
 # built release binaries.
 #
 # Minimal setup used by the original smoke:
-#   cargo build --release -p dstack-vmm -p supervisor -p dstack-kms
-#   export DSTACK_SNP_SMOKE_BIN_DIR=$PWD/target/release
+#   cargo build --manifest-path dstack/Cargo.toml --release -p dstack-vmm -p supervisor -p dstack-kms
+#   export DSTACK_SNP_SMOKE_BIN_DIR=$PWD/dstack/target/release
 #   export DSTACK_SNP_SMOKE_ALLOW_OUT_OF_DATE_TCB=1  # lab hosts only; auth API policy
 #   test-scripts/snp-e2e-smoke.sh
 #
 # Useful overrides:
 #   DSTACK_SNP_SMOKE_BASE=$HOME/dstack-snp-e2e
-#   DSTACK_SNP_SMOKE_REPO=$PWD
+#   DSTACK_SNP_SMOKE_REPO=$PWD/dstack
 #   DSTACK_SNP_SMOKE_QEMU=/opt/AMDSEV/usr/local/bin/qemu-system-x86_64
 #   DSTACK_SNP_SMOKE_OVMF=/opt/AMDSEV/usr/local/share/qemu/OVMF.fd
 #   DSTACK_SNP_SMOKE_IMAGE_URL=https://github.com/Dstack-TEE/meta-dstack/releases/download/v0.5.11/dstack-dev-0.5.11.tar.gz
@@ -46,16 +46,18 @@
 #   https://cors.litgateway.com/https://kdsintf.amd.com/vcek/v1
 # This is an external collateral-fetch boundary, not a guest boot or KMS startup
 # failure.
-# One reproducible way is to build meta-dstack with its dstack submodule checked
-# out to this PR branch, set the Yocto build MACHINE to `sev-snp` (not the
+# One reproducible way is to build os/yocto from the same monorepo revision,
+# set the Yocto build MACHINE to `sev-snp` (not the
 # default `tdx`, otherwise the guest kernel can miss AMD memory-encryption
 # support and reset immediately after OVMF loads the kernel/initrd), then point
 # DSTACK_SNP_SMOKE_IMAGE_NAME at the resulting dstack-dev image directory.
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CORE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 BASE="${DSTACK_SNP_SMOKE_BASE:-$HOME/dstack-snp-e2e}"
-REPO="${DSTACK_SNP_SMOKE_REPO:-$(pwd)}"
+REPO="${DSTACK_SNP_SMOKE_REPO:-$CORE_DIR}"
 BIN="${DSTACK_SNP_SMOKE_BIN_DIR:-$REPO/target/release}"
 ART="$BASE/artifacts"
 LOG="$ART/snp-e2e-smoke.log"

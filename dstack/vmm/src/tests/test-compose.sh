@@ -4,6 +4,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+# shellcheck disable=SC2317 # cleanup is invoked through an EXIT trap
+
 # Test script for vmm-cli.py compose subcommand
 # Tests the refactored create_app_compose method that accepts args directly
 
@@ -17,7 +19,8 @@ NC='\033[0m' # No Color
 
 # Test directory
 TEST_DIR="/tmp/vmm-cli-compose-test"
-VMM_CLI="/home/kvin/sdc/home/meta-dstack/dstack/vmm/src/vmm-cli.py"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+VMM_CLI="$SCRIPT_DIR/../vmm-cli.py"
 
 # Test counter
 TESTS_PASSED=0
@@ -45,7 +48,7 @@ cleanup() {
 setup() {
     echo -e "${YELLOW}Setting up test environment...${NC}"
     mkdir -p "$TEST_DIR"
-    
+
     # Create test docker-compose.yml
     cat > "$TEST_DIR/docker-compose.yml" << 'EOF'
 version: '3'
@@ -83,12 +86,12 @@ EOF
 # Test functions
 test_basic_compose() {
     print_test "Basic compose functionality with minimal parameters"
-    
+
     if python3 "$VMM_CLI" compose \
         --name test-basic \
         --docker-compose "$TEST_DIR/docker-compose.yml" \
         --output "$TEST_DIR/basic-output.json" > /dev/null 2>&1; then
-        
+
         if [[ -f "$TEST_DIR/basic-output.json" ]]; then
             # Verify JSON structure
             if jq -e '.name == "test-basic"' "$TEST_DIR/basic-output.json" > /dev/null && \
@@ -113,7 +116,7 @@ test_basic_compose() {
 
 test_full_compose() {
     print_test "Full compose functionality with all optional parameters"
-    
+
     if python3 "$VMM_CLI" compose \
         --name test-full \
         --docker-compose "$TEST_DIR/docker-compose.yml" \
@@ -127,7 +130,7 @@ test_full_compose() {
         --public-sysinfo \
         --no-instance-id \
         --output "$TEST_DIR/full-output.json" > /dev/null 2>&1; then
-        
+
         if [[ -f "$TEST_DIR/full-output.json" ]]; then
             # Verify all options are set correctly
             if jq -e '.name == "test-full"' "$TEST_DIR/full-output.json" > /dev/null && \
@@ -157,13 +160,13 @@ test_full_compose() {
 
 test_env_parsing() {
     print_test "Environment variable parsing"
-    
+
     python3 "$VMM_CLI" compose \
         --name test-env \
         --docker-compose "$TEST_DIR/docker-compose.yml" \
         --env-file "$TEST_DIR/test.env" \
         --output "$TEST_DIR/env-output.json" > /dev/null 2>&1
-    
+
     # Check if all environment variables are in allowed_envs
     if jq -e '.allowed_envs | contains(["API_KEY", "DEBUG", "PORT", "DATABASE_URL"])' "$TEST_DIR/env-output.json" > /dev/null; then
         print_success "Environment parsing test passed - all env vars included"
@@ -175,12 +178,12 @@ test_env_parsing() {
 
 test_docker_compose_embedding() {
     print_test "Docker compose file embedding"
-    
+
     python3 "$VMM_CLI" compose \
         --name test-docker \
         --docker-compose "$TEST_DIR/docker-compose.yml" \
         --output "$TEST_DIR/docker-output.json" > /dev/null 2>&1
-    
+
     # Check if docker-compose content is properly embedded
     if jq -e '.docker_compose_file | contains("nginx:latest")' "$TEST_DIR/docker-output.json" > /dev/null && \
        jq -e '.docker_compose_file | contains("redis:alpine")' "$TEST_DIR/docker-output.json" > /dev/null; then
@@ -193,13 +196,13 @@ test_docker_compose_embedding() {
 
 test_prelaunch_script() {
     print_test "Prelaunch script embedding"
-    
+
     python3 "$VMM_CLI" compose \
         --name test-prelaunch \
         --docker-compose "$TEST_DIR/docker-compose.yml" \
         --prelaunch-script "$TEST_DIR/prelaunch.sh" \
         --output "$TEST_DIR/prelaunch-output.json" > /dev/null 2>&1
-    
+
     # Check if prelaunch script is properly embedded
     if jq -e '.pre_launch_script | contains("Starting application...")' "$TEST_DIR/prelaunch-output.json" > /dev/null && \
        jq -e '.pre_launch_script | contains("#!/bin/bash")' "$TEST_DIR/prelaunch-output.json" > /dev/null; then
@@ -212,7 +215,7 @@ test_prelaunch_script() {
 
 test_error_handling() {
     print_test "Error handling for missing files"
-    
+
     # Test missing docker-compose file
     if python3 "$VMM_CLI" compose \
         --name test-error \
@@ -227,7 +230,7 @@ test_error_handling() {
 
 test_help_command() {
     print_test "Help command functionality"
-    
+
     if python3 "$VMM_CLI" compose --help > /dev/null 2>&1; then
         print_success "Help command test passed - help displayed correctly"
     else
@@ -238,22 +241,22 @@ test_help_command() {
 
 test_hash_generation() {
     print_test "Compose hash generation"
-    
+
     # Create two identical compose files
     python3 "$VMM_CLI" compose \
         --name test-hash-1 \
         --docker-compose "$TEST_DIR/docker-compose.yml" \
         --output "$TEST_DIR/hash1-output.json" > "$TEST_DIR/hash1.log" 2>&1
-    
+
     python3 "$VMM_CLI" compose \
         --name test-hash-1 \
         --docker-compose "$TEST_DIR/docker-compose.yml" \
         --output "$TEST_DIR/hash2-output.json" > "$TEST_DIR/hash2.log" 2>&1
-    
+
     # Extract hashes from output
     HASH1=$(grep "Compose hash:" "$TEST_DIR/hash1.log" | cut -d' ' -f3)
     HASH2=$(grep "Compose hash:" "$TEST_DIR/hash2.log" | cut -d' ' -f3)
-    
+
     if [[ "$HASH1" == "$HASH2" ]] && [[ -n "$HASH1" ]]; then
         print_success "Hash generation test passed - identical inputs produce identical hashes"
     else
@@ -266,22 +269,22 @@ test_hash_generation() {
 main() {
     echo -e "${YELLOW}=== VMM-CLI Compose Subcommand Test Suite ===${NC}"
     echo ""
-    
+
     # Check dependencies
     if ! command -v jq &> /dev/null; then
         echo -e "${RED}Error: jq is required for JSON testing but not installed${NC}"
         exit 1
     fi
-    
+
     if [[ ! -f "$VMM_CLI" ]]; then
         echo -e "${RED}Error: VMM CLI not found at $VMM_CLI${NC}"
         exit 1
     fi
-    
+
     # Setup test environment
     trap cleanup EXIT
     setup
-    
+
     # Run tests (continue even if some fail)
     test_help_command || true
     test_basic_compose || true
@@ -291,7 +294,7 @@ main() {
     test_prelaunch_script || true
     test_hash_generation || true
     test_error_handling || true
-    
+
     # Results summary
     echo ""
     echo -e "${YELLOW}=== Test Results ===${NC}"

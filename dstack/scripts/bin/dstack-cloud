@@ -1008,6 +1008,7 @@ class CloudDeploymentManager:
         target_dir.mkdir(parents=True, exist_ok=True)
 
         # Check if os_image is an absolute URL
+        fallback_url = None
         if os_image.startswith("http://") or os_image.startswith("https://"):
             download_url = os_image
             # Derive image name from URL filename
@@ -1029,7 +1030,8 @@ class CloudDeploymentManager:
                 logger.error("Expected format: dstack-<flavor>-<version> (e.g., dstack-nvidia-0.6.0)")
                 return
             version = version_match.group(1)
-            download_url = f"https://github.com/Dstack-TEE/meta-dstack/releases/download/v{version}/{os_image}-uki.tar.gz"
+            download_url = f"https://github.com/Dstack-TEE/dstack/releases/download/guest-os-v{version}/{os_image}-uki.tar.gz"
+            fallback_url = f"https://github.com/Dstack-TEE/meta-dstack/releases/download/v{version}/{os_image}-uki.tar.gz"
             download_tar = target_dir / f"{os_image}-uki.tar.gz"
 
         if download_tar.exists():
@@ -1044,10 +1046,17 @@ class CloudDeploymentManager:
 
         try:
             # Use curl to download with progress bar
-            subprocess.run(
-                ["curl", "-L", "-o", str(download_tar), download_url],
-                check=True
+            result = subprocess.run(
+                ["curl", "-fL", "-o", str(download_tar), download_url],
+                check=False
             )
+            if result.returncode != 0 and fallback_url:
+                logger.warning("Image not found in the monorepo release; trying the legacy release")
+                result = subprocess.run(
+                    ["curl", "-fL", "-o", str(download_tar), fallback_url],
+                    check=False
+                )
+            result.check_returncode()
             logger.info(f"Successfully downloaded to {download_tar}")
         except subprocess.CalledProcessError as e:
             logger.error(f"Failed to download image: {e}")

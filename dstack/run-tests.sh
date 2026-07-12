@@ -6,8 +6,9 @@
 
 set -Eeuo pipefail
 
-ROOT_DIR="$(pwd -P)"
-SIMULATOR_DIR="$ROOT_DIR/sdk/simulator"
+CORE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+REPO_ROOT="$(cd "$CORE_DIR/.." && pwd -P)"
+SIMULATOR_DIR="$REPO_ROOT/sdk/simulator"
 SIMULATOR_LOG="$SIMULATOR_DIR/dstack-simulator.log"
 DSTACK_SOCKET="$SIMULATOR_DIR/dstack.sock"
 TAPPD_SOCKET="$SIMULATOR_DIR/tappd.sock"
@@ -73,4 +74,4 @@ export TAPPD_SIMULATOR_ENDPOINT="$TAPPD_SOCKET"
 echo "DSTACK_SIMULATOR_ENDPOINT: $DSTACK_SIMULATOR_ENDPOINT"
 echo "TAPPD_SIMULATOR_ENDPOINT: $TAPPD_SIMULATOR_ENDPOINT"
 
-cargo test --all-features -- --show-output
+(cd "$CORE_DIR" && cargo test --all-features -- --show-output)

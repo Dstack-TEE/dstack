@@ -7,11 +7,11 @@ name: KMS Auth-ETH Foundry Tests
 on:
   push:
     paths:
-      - 'kms/auth-eth/**'
+      - 'dstack/kms/auth-eth/**'
       - '.github/workflows/foundry-test.yml'
   pull_request:
     paths:
-      - 'kms/auth-eth/**'
+      - 'dstack/kms/auth-eth/**'
       - '.github/workflows/foundry-test.yml'
   workflow_dispatch:
 
@@ -27,11 +27,17 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: kms/auth-eth
+        working-directory: dstack/kms/auth-eth
     steps:
       - uses: actions/checkout@v5
-        with:
-          submodules: recursive
+
+      - name: Checkout contract dependencies
+        working-directory: .
+        run: |
+          git submodule update --init --depth 1 -- \
+            dstack/kms/auth-eth/lib/forge-std \
+            dstack/kms/auth-eth/lib/openzeppelin-contracts-upgradeable \
+            dstack/kms/auth-eth/lib/openzeppelin-foundry-upgrades
 
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1

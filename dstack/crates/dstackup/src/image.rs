@@ -4,7 +4,8 @@
 
 //! `dstackup image` — fetch, list, and remove guest OS images.
 //!
-//! Images are published as release tarballs at `Dstack-TEE/meta-dstack`. There
+//! Images are published as `guest-os-v*` release tarballs in the dstack
+//! monorepo. There
 //! are two variants — cpu (`dstack-<ver>`) and gpu (`dstack-nvidia-<ver>`).
 //! `install` validates the selected image against `digest.txt`, the OS image
 //! hash used on all platforms. HTTP + checksum are native (reqwest is
@@ -22,8 +23,10 @@ use std::io::Write;
 use std::path::Path;
 use std::time::SystemTime;
 
-const REPO: &str = "Dstack-TEE/meta-dstack";
-pub(crate) const RELEASES_URL: &str = "https://github.com/Dstack-TEE/meta-dstack/releases";
+const REPO: &str = "Dstack-TEE/dstack";
+const LEGACY_REPO: &str = "Dstack-TEE/meta-dstack";
+const RELEASE_TAG_PREFIX: &str = "guest-os-v";
+pub(crate) const RELEASES_URL: &str = "https://github.com/Dstack-TEE/dstack/releases?q=guest-os-v";
 
 /// the single rule for where images live: `--image-path` if given, else the
 /// image directory from the install layout. `install` and every image subcommand resolve through
@@ -86,7 +89,7 @@ pub(crate) async fn cmd_image(cmd: ImageCmd) -> Result<()> {
     }
 }
 
-/// download a guest image from the latest (or a specific) meta-dstack release.
+/// Download a guest image from the latest (or a specific) guest-OS release.
 pub(crate) async fn pull(
     version: Option<&str>,
     gpu: bool,
@@ -99,7 +102,7 @@ pub(crate) async fn pull(
         if gpu { "gpu (nvidia)" } else { "cpu" }
     );
     let release = fetch_release(version).await?;
-    let ver = release.tag_name.trim_start_matches('v');
+    let ver = release_tag_version(&release.tag_name);
 
     // the unpacked dir is usually `dstack[-nvidia]-<ver>`; check that first so a
     // repeat pull is a cheap no-op instead of re-fetching a few hundred MB.
@@ -116,7 +119,7 @@ pub(crate) async fn pull(
 
     let asset = pick_asset(&release.assets, gpu).with_context(|| {
         format!(
-            "no {} image tarball in meta-dstack release {} (assets: {})",
+            "no {} image tarball in guest-OS release {} (assets: {})",
             if gpu { "gpu" } else { "cpu" },
             release.tag_name,
             release
@@ -581,29 +584,83 @@ fn missing_named_image_message(image_dir: &str, name: &str) -> String {
     )
 }
 
-/// GET the latest (or a tagged) release JSON from the github api.
+/// Get the latest (or a tagged) guest-OS release from the GitHub API.
+///
+/// The legacy repository remains a read-only fallback so pinned deployments
+/// keep working across the monorepo migration.
 async fn fetch_release(version: Option<&str>) -> Result<Release> {
-    let url = match version {
-        Some(v) => format!(
-            "https://api.github.com/repos/{REPO}/releases/tags/v{}",
-            v.trim_start_matches('v')
-        ),
-        None => format!("https://api.github.com/repos/{REPO}/releases/latest"),
-    };
-    reqwest::Client::new()
-        .get(&url)
+    let client = reqwest::Client::new();
+    if let Some(version) = version {
+        let version = version
+            .trim_start_matches(RELEASE_TAG_PREFIX)
+            .trim_start_matches('v');
+        let primary_url = format!(
+            "https://api.github.com/repos/{REPO}/releases/tags/{RELEASE_TAG_PREFIX}{version}"
+        );
+        if let Some(release) = fetch_tagged_release(&client, &primary_url).await? {
+            return Ok(release);
+        }
+
+        let legacy_url =
+            format!("https://api.github.com/repos/{LEGACY_REPO}/releases/tags/v{version}");
+        return fetch_tagged_release(&client, &legacy_url)
+            .await?
+            .with_context(|| {
+                format!("guest-OS version {version} was not found; check {RELEASES_URL}")
+            });
+    }
+
+    let list_url = format!("https://api.github.com/repos/{REPO}/releases?per_page=100");
+    let releases: Vec<Release> = client
+        .get(&list_url)
         .header("user-agent", "dstackup")
         .header("accept", "application/vnd.github+json")
         .send()
         .await
-        .context("requesting the github release")?
+        .context("requesting dstack releases")?
         .error_for_status()
-        .with_context(|| {
-            format!("github release lookup failed; check the version exists at {RELEASES_URL}")
-        })?
+        .with_context(|| format!("github release lookup failed; check {RELEASES_URL}"))?
         .json()
         .await
-        .context("parsing github release json")
+        .context("parsing dstack release list")?;
+    if let Some(release) = releases
+        .into_iter()
+        .find(|release| release.tag_name.starts_with(RELEASE_TAG_PREFIX))
+    {
+        return Ok(release);
+    }
+
+    let legacy_url = format!("https://api.github.com/repos/{LEGACY_REPO}/releases/latest");
+    fetch_tagged_release(&client, &legacy_url)
+        .await?
+        .with_context(|| format!("no guest-OS release found; check {RELEASES_URL}"))
+}
+
+async fn fetch_tagged_release(client: &reqwest::Client, url: &str) -> Result<Option<Release>> {
+    let response = client
+        .get(url)
+        .header("user-agent", "dstackup")
+        .header("accept", "application/vnd.github+json")
+        .send()
+        .await
+        .context("requesting the github release")?;
+    if response.status() == reqwest::StatusCode::NOT_FOUND {
+        return Ok(None);
+    }
+    Ok(Some(
+        response
+            .error_for_status()
+            .with_context(|| format!("github release lookup failed; check {RELEASES_URL}"))?
+            .json()
+            .await
+            .context("parsing github release json")?,
+    ))
+}
+
+fn release_tag_version(tag: &str) -> &str {
+    tag.strip_prefix(RELEASE_TAG_PREFIX)
+        .or_else(|| tag.strip_prefix('v'))
+        .unwrap_or(tag)
 }
 
 /// pick the cpu or gpu image tarball from a release's assets, skipping `-dev`
@@ -705,6 +762,12 @@ mod tests {
             pick_asset(&assets, true).unwrap().name,
             "dstack-nvidia-0.5.11.tar.gz"
         );
+    }
+
+    #[test]
+    fn parses_monorepo_and_legacy_release_tags() {
+        assert_eq!(release_tag_version("guest-os-v0.6.0"), "0.6.0");
+        assert_eq!(release_tag_version("v0.5.11"), "0.5.11");
     }
 
     #[test]

@@ -13,6 +13,7 @@ set -e
 if [ -f ".env.simple" ]; then
   echo "Loading environment variables from .env.simple file..."
   set -a
+  # shellcheck source=/dev/null
   source .env.simple
   set +a
 else
@@ -35,7 +36,7 @@ else
 # GUEST_AGENT_ADDR=127.0.0.1:9205
 
 # Required: The URL of the dstack app image download URL
-# IMAGE_DOWNLOAD_URL=https://github.com/Dstack-TEE/meta-dstack/releases/download/v0.5.5/dstack-0.5.5.tar.gz
+# IMAGE_DOWNLOAD_URL=https://github.com/Dstack-TEE/dstack/releases/download/guest-os-v0.5.5/dstack-0.5.5.tar.gz
 
 # Image hash verification feature flag
 VERIFY_IMAGE=true
@@ -70,11 +71,13 @@ for var in "${required_env_vars[@]}"; do
   fi
 done
 
-CLI="../../vmm/src/vmm-cli.py --url $VMM_RPC"
+CLI=(../../vmm/src/vmm-cli.py --url "$VMM_RPC")
 
 COMPOSE_TMP=$(mktemp)
 
-ADMIN_TOKEN_HASH=$(echo -n $ADMIN_TOKEN | sha256sum | cut -d' ' -f1)
+# Used indirectly by subvar.
+# shellcheck disable=SC2034
+ADMIN_TOKEN_HASH=$(printf '%s' "$ADMIN_TOKEN" | sha256sum | cut -d' ' -f1)
 
 cp compose-simple.yaml "$COMPOSE_TMP"
 
@@ -99,7 +102,7 @@ echo "  OS_IMAGE: $OS_IMAGE"
 echo ""
 
 if [ -t 0 ]; then
-  read -p "Continue? [y/N] " -n 1 -r
+  read -r -p "Continue? [y/N] " -n 1
   echo
 
   if [[ ! $REPLY =~ ^[Yy]$ ]]; then
@@ -108,7 +111,7 @@ if [ -t 0 ]; then
   fi
 fi
 
-$CLI compose \
+"${CLI[@]}" compose \
   --docker-compose "$COMPOSE_TMP" \
   --name kms \
   --local-key-provider \
@@ -122,12 +125,12 @@ rm "$COMPOSE_TMP"
 
 echo "Deploying KMS to dstack-vmm..."
 
-$CLI deploy \
+"${CLI[@]}" deploy \
   --name kms \
   --compose .app-compose.json \
-  --image $OS_IMAGE \
-  --port tcp:$KMS_RPC_ADDR:8000 \
-  --port tcp:$GUEST_AGENT_ADDR:8090 \
+  --image "$OS_IMAGE" \
+  --port "tcp:$KMS_RPC_ADDR:8000" \
+  --port "tcp:$GUEST_AGENT_ADDR:8090" \
   --vcpu 8 \
   --memory 8G \
   --disk 50G

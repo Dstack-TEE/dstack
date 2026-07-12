@@ -15,7 +15,7 @@ services:
         RUN git clone ${GIT_REPOSITORY} && \
             cd dstack && \
             git checkout ${GIT_REV}
-        WORKDIR /app/dstack/kms/auth-eth
+        WORKDIR /app/dstack/dstack/kms/auth-eth
         RUN npm install
         RUN npx tsc --project tsconfig.json
         CMD node dist/src/main.js

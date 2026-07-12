@@ -7,7 +7,7 @@
 # Shared build library for reproducible Docker image builds.
 #
 # Expected variables (set by the sourcing script):
-#   REPO_ROOT    - absolute path to the git repo root
+#   REPO_ROOT    - absolute path to the monorepo root
 #   CONTEXT_DIR  - Docker build context directory
 #   DOCKERFILE   - path to the Dockerfile
 #   GIT_REV      - git revision to build
@@ -17,7 +17,7 @@ set -euo pipefail
 
 BUILDKIT_VERSION="v0.20.2"
 BUILDKIT_BUILDER="buildkit_20"
-BUILD_SHARED_DIR="$REPO_ROOT/build/shared"
+BUILD_SHARED_DIR="$REPO_ROOT/dstack/build/shared"
 
 ensure_buildkit() {
     if ! docker buildx inspect "$BUILDKIT_BUILDER" &>/dev/null; then

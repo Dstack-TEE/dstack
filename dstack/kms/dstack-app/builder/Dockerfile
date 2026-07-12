@@ -19,11 +19,11 @@ RUN apt-get update && \
     libprotobuf-dev \
     clang \
     libclang-dev
-RUN git clone ${DSTACK_SRC_URL} dstack && \
-    cd dstack && \
+RUN git clone ${DSTACK_SRC_URL} repo && \
+    cd repo && \
     git checkout ${DSTACK_REV}
 RUN rustup target add x86_64-unknown-linux-musl
-RUN cd dstack && cargo build --release -p dstack-kms --target x86_64-unknown-linux-musl
+RUN cd repo/dstack && cargo build --release -p dstack-kms --target x86_64-unknown-linux-musl
 RUN echo "${DSTACK_REV}" > /build/.GIT_REV
 
 FROM debian:bookworm@sha256:0d8498a0e9e6a60011df39aab78534cfe940785e7c59d19dfae1eb53ea59babe
@@ -60,6 +60,6 @@ RUN git clone https://github.com/kvinwang/qemu-tdx.git --depth 1 --branch dstack
     install -m 644 pc-bios/kvmvapic.bin /usr/local/share/qemu/ && \
     install -m 644 pc-bios/linuxboot_dma.bin /usr/local/share/qemu/ && \
     cd .. && rm -rf qemu-tdx
-COPY --from=kms-builder /build/dstack/target/x86_64-unknown-linux-musl/release/dstack-kms /usr/local/bin/dstack-kms
+COPY --from=kms-builder /build/repo/dstack/target/x86_64-unknown-linux-musl/release/dstack-kms /usr/local/bin/dstack-kms
 COPY --from=kms-builder /build/.GIT_REV /etc/
 CMD ["dstack-kms"]

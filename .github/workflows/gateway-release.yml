@@ -49,13 +49,13 @@ jobs:
         env:
           SOURCE_DATE_EPOCH: ${{ env.TIMESTAMP }}
         with:
-          context: gateway/dstack-app/builder
+          context: dstack/gateway/dstack-app/builder
           push: true
           tags: ${{ vars.DOCKERHUB_ORG }}/dstack-gateway:${{ env.VERSION }}
           platforms: linux/amd64
           provenance: false
           build-contexts: |
-            build-shared=build/shared
+            build-shared=dstack/build/shared
           build-args: |
             DSTACK_REV=${{ env.GIT_REV }}
             SOURCE_DATE_EPOCH=${{ env.TIMESTAMP }}

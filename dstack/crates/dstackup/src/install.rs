@@ -451,8 +451,24 @@ fn checked_source_checkout(dir: PathBuf) -> Result<PathBuf> {
     if !is_dstack_checkout(&dir) {
         bail!("{} is not a dstack source checkout", dir.display());
     }
-    dir.canonicalize()
-        .with_context(|| format!("canonicalizing {}", dir.display()))
+    let dir = dir
+        .canonicalize()
+        .with_context(|| format!("canonicalizing {}", dir.display()))?;
+
+    // Accept either the monorepo root or its dstack/ core directory, but
+    // normalize new-layout checkouts to the monorepo root so public examples
+    // and other top-level assets remain reachable.
+    if is_core_source(&dir) {
+        if let Some(parent) = dir.parent() {
+            if parent.join("dstack") == dir
+                && parent.join("sdk").is_dir()
+                && parent.join("os").is_dir()
+            {
+                return Ok(parent.to_path_buf());
+            }
+        }
+    }
+    Ok(dir)
 }
 
 fn sync_source_cache(source: &Path, repo: &str, git_ref: &str) -> Result<()> {
@@ -537,7 +553,7 @@ fn git_status_at<const N: usize>(dir: &Path, args: [&str; N]) -> Result<bool> {
         .success())
 }
 
-fn is_dstack_checkout(dir: &Path) -> bool {
+fn is_core_source(dir: &Path) -> bool {
     dir.join("Cargo.toml").is_file()
         && dir.join("crates/dstack-cli").is_dir()
         && dir.join("crates/dstack-auth").is_dir()
@@ -545,10 +561,24 @@ fn is_dstack_checkout(dir: &Path) -> bool {
         && dir.join("supervisor").is_dir()
 }
 
+fn is_dstack_checkout(dir: &Path) -> bool {
+    is_core_source(&dir.join("dstack")) || is_core_source(dir)
+}
+
+fn core_source(source: &Path) -> PathBuf {
+    let nested = source.join("dstack");
+    if is_core_source(&nested) {
+        nested
+    } else {
+        source.to_path_buf()
+    }
+}
+
 fn build_managed_binaries(source: &Path, target_dir: &Path) -> Result<()> {
+    let source = core_source(source);
     let mut cmd = cargo_build_command(target_dir)?;
     let target_dir_arg = path_string(target_dir);
-    cmd.current_dir(source).args([
+    cmd.current_dir(&source).args([
         "build",
         "--release",
         "--target-dir",
@@ -710,13 +740,16 @@ fn install_managed_binaries(target_dir: &Path, layout: &InstallLayout) -> Result
 }
 
 fn install_share_assets(source: &Path, layout: &InstallLayout) -> Result<()> {
+    let core = core_source(source);
+    let examples = if source.join("examples").is_dir() {
+        source.join("examples")
+    } else {
+        core.join("examples")
+    };
     fs::create_dir_all(&layout.share_dir)
         .with_context(|| format!("creating {}", layout.share_dir.display()))?;
-    copy_dir_exact(
-        &source.join("key-provider-build"),
-        &layout.key_provider_dir(),
-    )?;
-    copy_dir_exact(&source.join("examples"), &layout.share_dir.join("examples"))?;
+    copy_dir_exact(&core.join("key-provider-build"), &layout.key_provider_dir())?;
+    copy_dir_exact(&examples, &layout.share_dir.join("examples"))?;
     println!(
         "  [ok] installed assets into {}",
         layout.share_dir.display()
@@ -1139,6 +1172,14 @@ async fn wait_ready(client_url: &str, timeout: Duration) -> bool {
 mod tests {
     use super::*;
 
+    fn create_core_tree(root: &Path) {
+        fs::create_dir_all(root.join("crates/dstack-cli")).unwrap();
+        fs::create_dir_all(root.join("crates/dstack-auth")).unwrap();
+        fs::create_dir_all(root.join("vmm")).unwrap();
+        fs::create_dir_all(root.join("supervisor")).unwrap();
+        fs::write(root.join("Cargo.toml"), "[workspace]\n").unwrap();
+    }
+
     fn tcp_check(what: &'static str, flag: &'static str, port: u16) -> TcpPortCheck {
         TcpPortCheck {
             what,
@@ -1158,6 +1199,37 @@ mod tests {
         let err = preflight_ports(&checks).unwrap_err().to_string();
         assert!(err.contains("--dashboard-port"));
         assert!(err.contains("--kms-port"));
+    }
+
+    #[test]
+    fn recognizes_and_normalizes_monorepo_source() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        create_core_tree(&root.join("dstack"));
+        fs::create_dir(root.join("sdk")).unwrap();
+        fs::create_dir(root.join("os")).unwrap();
+        fs::create_dir(root.join("examples")).unwrap();
+
+        assert!(is_dstack_checkout(root));
+        assert!(is_dstack_checkout(&root.join("dstack")));
+        assert_eq!(core_source(root), root.join("dstack"));
+        assert_eq!(
+            checked_source_checkout(root.join("dstack")).unwrap(),
+            root.canonicalize().unwrap()
+        );
+    }
+
+    #[test]
+    fn keeps_legacy_core_checkout_compatible() {
+        let temp = tempfile::tempdir().unwrap();
+        create_core_tree(temp.path());
+
+        assert!(is_dstack_checkout(temp.path()));
+        assert_eq!(core_source(temp.path()), temp.path());
+        assert_eq!(
+            checked_source_checkout(temp.path().to_path_buf()).unwrap(),
+            temp.path().canonicalize().unwrap()
+        );
     }
 
     #[test]

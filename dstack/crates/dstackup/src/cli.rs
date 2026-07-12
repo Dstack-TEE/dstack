@@ -75,7 +75,7 @@ impl ImageLoc {
 /// `dstackup image` subcommands.
 #[derive(Subcommand)]
 pub(crate) enum ImageCmd {
-    /// Download a guest OS image from meta-dstack releases.
+    /// Download a guest OS image from dstack guest-OS releases.
     Pull {
         /// image version to fetch (default: the latest release).
         #[arg(long, value_name = "VERSION")]

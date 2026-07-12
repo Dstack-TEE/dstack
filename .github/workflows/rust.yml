@@ -16,6 +16,9 @@ env:
 jobs:
   rust-checks:
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    defaults:
+      run:
+        working-directory: dstack
     steps:
     - uses: actions/checkout@v5
 

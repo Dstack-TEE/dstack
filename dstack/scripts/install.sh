@@ -14,8 +14,8 @@ usage() {
 Install dstackup from source.
 
 Usage:
-  scripts/install.sh [options]
-  curl -fsSL https://raw.githubusercontent.com/Dstack-TEE/dstack/master/scripts/install.sh | sh
+  dstack/scripts/install.sh [options]
+  curl -fsSL https://raw.githubusercontent.com/Dstack-TEE/dstack/master/dstack/scripts/install.sh | sh
 
 Options:
   --repo URL       Git repository to clone when not run from a checkout.
@@ -115,12 +115,24 @@ need_cmd() {
     fi
 }
 
-is_checkout() {
+is_core_checkout() {
     [ -f "$1/Cargo.toml" ] &&
         [ -d "$1/crates/dstackup" ] &&
         [ -d "$1/crates/dstack-cli" ] &&
         [ -d "$1/vmm" ] &&
         [ -d "$1/supervisor" ]
+}
+
+is_checkout() {
+    is_core_checkout "$1/dstack" || is_core_checkout "$1"
+}
+
+core_dir() {
+    if is_core_checkout "$1/dstack"; then
+        echo "$1/dstack"
+    else
+        echo "$1"
+    fi
 }
 
 abs_dir() {
@@ -131,7 +143,10 @@ script_checkout() {
     case "$0" in
         */*)
             script_dir=$(dirname "$0")
-            if [ -d "$script_dir/.." ] && is_checkout "$script_dir/.."; then
+            if [ -d "$script_dir/../.." ] && is_checkout "$script_dir/../.."; then
+                abs_dir "$script_dir/../.."
+                return 0
+            elif [ -d "$script_dir/.." ] && is_checkout "$script_dir/.."; then
                 abs_dir "$script_dir/.."
                 return 0
             fi
@@ -154,7 +169,7 @@ resolve_source() {
     need_cmd git
 
     if [ -n "$src" ] && [ -e "$src" ]; then
-        if ! is_checkout "$src" || [ ! -d "$src/.git" ]; then
+        if ! is_checkout "$src" || ! git -C "$src" rev-parse --git-dir >/dev/null 2>&1; then
             echo "error: $src exists but is not a dstack git checkout" >&2
             exit 1
         fi
@@ -224,6 +239,7 @@ need_cmd cargo
 need_cmd install
 
 checkout=$(resolve_source)
+core_checkout=$(core_dir "$checkout")
 bin_dir="$prefix/bin"
 
 if [ "$no_sudo" -eq 0 ] && [ "$(id -u)" -ne 0 ]; then
@@ -241,13 +257,13 @@ fi
 
 echo "building dstackup from $checkout"
 (
-    cd "$checkout"
+    cd "$core_checkout"
     cargo build --release \
         -p dstackup
 )
 
 install_bin() {
-    src_bin="$checkout/target/release/$1"
+    src_bin="$core_checkout/target/release/$1"
     dest_bin="$bin_dir/$2"
     if [ ! -f "$src_bin" ]; then
         echo "error: expected binary not found: $src_bin" >&2
