@@ -93,7 +93,7 @@ identical to the real backend:
 ```json
 {
   "mrAggregated": "string",
-  "osImageHash": "string", 
+  "osImageHash": "string",
   "appId": "string",
   "composeHash": "string",
   "instanceId": "string",
@@ -165,4 +165,4 @@ to switch from mock to real backend:
 3. deploy smart contracts
 4. update environment variables
 
-the API remains identical, so no client code changes are needed. 
+the API remains identical, so no client code changes are needed.

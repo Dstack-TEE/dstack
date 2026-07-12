@@ -24,4 +24,4 @@ echo "Enclave info:"
 gramine-sgx-sigstruct-view --output-format json gramine-sealing-key-provider.sig
 
 echo "Starting Gramine Sealing Key Provider"
-make SGX=1 run-provider 
+make SGX=1 run-provider

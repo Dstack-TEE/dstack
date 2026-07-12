@@ -53,7 +53,7 @@ const PortMappingEditorComponent = {
           <option value="custom">Custom</option>
         </select>
 
-        <input 
+        <input
           v-if="port.host_address_mode === 'custom'"
           type="text"
           v-model="port.custom_ip"

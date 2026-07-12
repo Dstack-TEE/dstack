@@ -13,13 +13,13 @@ describe('Deterministic JSON Serialization', () => {
         docker_compose_file: "docker-compose.yml",
         bash_script: "start.sh"
       }
-      
+
       const compose2: AppCompose = {
         bash_script: "start.sh",
         docker_compose_file: "docker-compose.yml",
         runner: "docker-compose"
       }
-      
+
       // Both should produce the same hash despite different key order
       expect(getComposeHash(compose1)).toBe(getComposeHash(compose2))
     })
@@ -33,7 +33,7 @@ describe('Deterministic JSON Serialization', () => {
           beta: 42
         }
       } as AppCompose
-      
+
       const compose2: AppCompose = {
         nested_config: {
           alpha: "first",
@@ -42,7 +42,7 @@ describe('Deterministic JSON Serialization', () => {
         },
         runner: "docker-compose"
       } as AppCompose
-      
+
       expect(getComposeHash(compose1)).toBe(getComposeHash(compose2))
     })
 
@@ -66,7 +66,7 @@ describe('Deterministic JSON Serialization', () => {
           }
         }
       } as AppCompose
-      
+
       const compose2: AppCompose = {
         config: {
           cache: {
@@ -86,7 +86,7 @@ describe('Deterministic JSON Serialization', () => {
         },
         runner: "docker-compose"
       } as AppCompose
-      
+
       expect(getComposeHash(compose1)).toBe(getComposeHash(compose2))
     })
   })
@@ -97,12 +97,12 @@ describe('Deterministic JSON Serialization', () => {
         runner: "docker-compose",
         items: [3, 1, 2]
       } as AppCompose
-      
+
       const compose2: AppCompose = {
         runner: "docker-compose",
         items: [1, 2, 3]
       } as AppCompose
-      
+
       // Different array orders should produce different hashes
       expect(getComposeHash(compose1)).not.toBe(getComposeHash(compose2))
     })
@@ -115,7 +115,7 @@ describe('Deterministic JSON Serialization', () => {
           { name: "db", port: 5432 }
         ]
       } as AppCompose
-      
+
       const compose2: AppCompose = {
         runner: "docker-compose",
         services: [
@@ -123,7 +123,7 @@ describe('Deterministic JSON Serialization', () => {
           { port: 5432, name: "db" }
         ]
       } as AppCompose
-      
+
       // Object keys should be sorted within arrays
       expect(getComposeHash(compose1)).toBe(getComposeHash(compose2))
     })
@@ -135,7 +135,7 @@ describe('Deterministic JSON Serialization', () => {
         runner: "docker-compose",
         special_value: NaN
       } as AppCompose
-      
+
       const hash = getComposeHash(compose)
       expect(hash).toBeDefined()
       expect(hash).toHaveLength(64) // SHA256 hex length
@@ -146,22 +146,22 @@ describe('Deterministic JSON Serialization', () => {
         runner: "docker-compose",
         special_value: Infinity
       } as AppCompose
-      
+
       const compose2: AppCompose = {
         runner: "docker-compose",
         special_value: -Infinity
       } as AppCompose
-      
+
       const compose3: AppCompose = {
         runner: "docker-compose",
         special_value: null
       }
-      
+
       // All should produce the same hash since NaN and Infinity become null
       const hash1 = getComposeHash(compose1)
       const hash2 = getComposeHash(compose2)
       const hash3 = getComposeHash(compose3)
-      
+
       expect(hash1).toBe(hash2)
       expect(hash2).toBe(hash3)
     })
@@ -171,11 +171,11 @@ describe('Deterministic JSON Serialization', () => {
         runner: "docker-compose",
         optional_field: undefined
       } as AppCompose
-      
+
       const compose2: AppCompose = {
         runner: "docker-compose"
       }
-      
+
       // undefined values should be treated consistently
       expect(getComposeHash(compose1)).toBe(getComposeHash(compose2))
     })
@@ -188,15 +188,15 @@ describe('Deterministic JSON Serialization', () => {
         bash_script: "start.sh",
         docker_compose_file: "docker-compose.yml"
       }
-      
+
       const hash = getComposeHash(compose, true)
-      
+
       // Should be the same as compose without docker_compose_file
       const compose2: AppCompose = {
         runner: "bash",
         bash_script: "start.sh"
       }
-      
+
       expect(hash).toBe(getComposeHash(compose2, true))
     })
 
@@ -206,15 +206,15 @@ describe('Deterministic JSON Serialization', () => {
         docker_compose_file: "docker-compose.yml",
         bash_script: "start.sh"
       }
-      
+
       const hash = getComposeHash(compose, true)
-      
+
       // Should be the same as compose without bash_script
       const compose2: AppCompose = {
         runner: "docker-compose",
         docker_compose_file: "docker-compose.yml"
       }
-      
+
       expect(hash).toBe(getComposeHash(compose2, true))
     })
 
@@ -224,12 +224,12 @@ describe('Deterministic JSON Serialization', () => {
         docker_compose_file: "docker-compose.yml",
         pre_launch_script: ""
       }
-      
+
       const compose2: AppCompose = {
         runner: "docker-compose",
         docker_compose_file: "docker-compose.yml"
       }
-      
+
       expect(getComposeHash(compose1, true)).toBe(getComposeHash(compose2, true))
     })
 
@@ -239,12 +239,12 @@ describe('Deterministic JSON Serialization', () => {
         docker_compose_file: "docker-compose.yml",
         pre_launch_script: "echo 'Starting...'"
       }
-      
+
       const compose2: AppCompose = {
         runner: "docker-compose",
         docker_compose_file: "docker-compose.yml"
       }
-      
+
       expect(getComposeHash(compose1, true)).not.toBe(getComposeHash(compose2, true))
     })
   })
@@ -256,13 +256,13 @@ describe('Deterministic JSON Serialization', () => {
         text: "你好世界",
         description: "🚀 Deploy"
       } as AppCompose
-      
+
       const compose2: AppCompose = {
         description: "🚀 Deploy",
         runner: "docker-compose",
         text: "你好世界"
       } as AppCompose
-      
+
       expect(getComposeHash(compose1)).toBe(getComposeHash(compose2))
     })
   })
@@ -284,13 +284,13 @@ describe('Deterministic JSON Serialization', () => {
           alpha: "first"
         }
       } as AppCompose
-      
+
       const hash = getComposeHash(compose)
-      
+
       // This should be a deterministic hash
       expect(hash).toHaveLength(64)
       expect(hash).toMatch(/^[a-f0-9]{64}$/)
-      
+
       // The exact hash value depends on the specific data structure
       // but it should be consistent across runs
       const hash2 = getComposeHash(compose)
@@ -303,7 +303,7 @@ describe('Deterministic JSON Serialization', () => {
       // @ts-expect-error - empty object is valid
       const compose: AppCompose = {}
       const hash = getComposeHash(compose)
-      
+
       expect(hash).toHaveLength(64)
       expect(hash).toMatch(/^[a-f0-9]{64}$/)
     })
@@ -313,7 +313,7 @@ describe('Deterministic JSON Serialization', () => {
         runner: "docker-compose",
         optional_field: null
       } as AppCompose
-      
+
       const hash = getComposeHash(compose)
       expect(hash).toBeDefined()
     })
@@ -324,13 +324,13 @@ describe('Deterministic JSON Serialization', () => {
         enabled: true,
         debug: false
       } as AppCompose
-      
+
       const compose2: AppCompose = {
         debug: false,
         enabled: true,
         runner: "docker-compose"
       } as AppCompose
-      
+
       expect(getComposeHash(compose1)).toBe(getComposeHash(compose2))
     })
 
@@ -342,7 +342,7 @@ describe('Deterministic JSON Serialization', () => {
         float: 3.14159,
         large: 1e10
       } as AppCompose
-      
+
       const hash = getComposeHash(compose)
       expect(hash).toBeDefined()
     })
@@ -359,9 +359,9 @@ describe('Deterministic JSON Serialization', () => {
           DATABASE_URL: "postgres://localhost:5432/mydb"
         }
       } as AppCompose
-      
+
       const hashes = Array.from({ length: 10 }, () => getComposeHash(compose))
-      
+
       // All hashes should be identical
       const firstHash = hashes[0]
       expect(hashes.every(hash => hash === firstHash)).toBe(true)
@@ -372,12 +372,12 @@ describe('Deterministic JSON Serialization', () => {
         runner: "docker-compose",
         docker_compose_file: "docker-compose.yml"
       }
-      
+
       const compose2: AppCompose = {
         runner: "bash",
         bash_script: "start.sh"
       }
-      
+
       expect(getComposeHash(compose1)).not.toBe(getComposeHash(compose2))
     })
   })
@@ -390,7 +390,7 @@ describe('Deterministic JSON Serialization', () => {
         runner: "docker-compose",
         docker_compose_file: "docker-compose.yml"
       }
-      
+
       const hash = getComposeHash(compose)
       expect(hash).toBeDefined()
       expect(hash).toHaveLength(64)
@@ -408,7 +408,7 @@ describe('Deterministic JSON Serialization', () => {
           token_key: "token123"
         }
       }
-      
+
       const hash = getComposeHash(compose)
       expect(hash).toBeDefined()
       expect(hash).toHaveLength(64)
@@ -429,7 +429,7 @@ describe('Deterministic JSON Serialization', () => {
         no_instance_id: false,
         secure_time: true
       }
-      
+
       const hash = getComposeHash(compose)
       expect(hash).toBeDefined()
       expect(hash).toHaveLength(64)
@@ -444,7 +444,7 @@ describe('Deterministic JSON Serialization', () => {
         key_provider: "kms",
         key_provider_id: "abcd1234"
       }
-      
+
       const hash = getComposeHash(compose)
       expect(hash).toBeDefined()
       expect(hash).toHaveLength(64)
@@ -458,7 +458,7 @@ describe('Deterministic JSON Serialization', () => {
         docker_compose_file: "docker-compose.yml",
         allowed_envs: ["NODE_ENV", "PORT", "DATABASE_URL"]
       }
-      
+
       const hash = getComposeHash(compose)
       expect(hash).toBeDefined()
       expect(hash).toHaveLength(64)
@@ -472,7 +472,7 @@ describe('Deterministic JSON Serialization', () => {
         docker_compose_file: "docker-compose.yml",
         features: ["feature1", "feature2"]
       }
-      
+
       const hash = getComposeHash(compose)
       expect(hash).toBeDefined()
       expect(hash).toHaveLength(64)
@@ -486,10 +486,10 @@ describe('Deterministic JSON Serialization', () => {
         bash_script: "start.sh",
         docker_compose_file: "docker-compose.yml"
       }
-      
+
       const hashWithoutNormalize = getComposeHash(compose)
       const hashExplicitFalse = getComposeHash(compose, false)
-      
+
       expect(hashWithoutNormalize).toBe(hashExplicitFalse)
     })
 
@@ -499,10 +499,10 @@ describe('Deterministic JSON Serialization', () => {
         bash_script: "start.sh",
         docker_compose_file: "docker-compose.yml"
       }
-      
+
       const hashWithNormalize = getComposeHash(compose, true)
       const hashWithoutNormalize = getComposeHash(compose, false)
-      
+
       // These should be different because preprocessing is applied only with normalize=true
       expect(hashWithNormalize).not.toBe(hashWithoutNormalize)
     })
@@ -513,15 +513,15 @@ describe('Deterministic JSON Serialization', () => {
         docker_compose_file: "docker-compose.yml",
         pre_launch_script: ""
       }
-      
+
       const composeWithoutEmpty: AppCompose = {
         runner: "docker-compose",
         docker_compose_file: "docker-compose.yml"
       }
-      
+
       // With normalization, empty pre_launch_script should be removed
       expect(getComposeHash(compose, true)).toBe(getComposeHash(composeWithoutEmpty, true))
-      
+
       // Without normalization, empty pre_launch_script should remain
       expect(getComposeHash(compose, false)).not.toBe(getComposeHash(composeWithoutEmpty, false))
     })
@@ -534,7 +534,7 @@ describe('Deterministic JSON Serialization', () => {
         bash_script: "start.sh",
         pre_launch_script: "echo 'Starting...'"
       }
-      
+
       const hash = getComposeHash(compose)
       expect(hash).toBeDefined()
       expect(hash).toHaveLength(64)
@@ -553,10 +553,10 @@ describe('Deterministic JSON Serialization', () => {
         allowed_envs: ["NODE_ENV"],
         secure_time: false
       }
-      
+
       const hash = getComposeHash(compose)
       expect(hash).toBeDefined()
       expect(hash).toHaveLength(64)
     })
   })
-}) 
+})

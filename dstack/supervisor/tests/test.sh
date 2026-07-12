@@ -132,7 +132,7 @@ RES=$(http POST "${BASE_URL}/deploy" '
     },
     "cwd": "/var/tmp",
     "stdout": "/tmp/stdout.log",
-    "stderr": "/tmp/stderr.log", 
+    "stderr": "/tmp/stderr.log",
     "pidfile": "/tmp/test.pid"
 }')
 assert_eq "$RES" '{"data":null}' "Deploy should return empty object"
@@ -153,10 +153,10 @@ sleep 1
 
 # Check stdout file exists and contains expected output
 info "Testing stdout file contents"
-assert_eq "$(cat "/tmp/stdout.log")" "hello world, FOO=bar, pwd=/var/tmp"  
+assert_eq "$(cat "/tmp/stdout.log")" "hello world, FOO=bar, pwd=/var/tmp"
 
 # Check stderr file exists and contains expected output
-info "Testing stderr file contents" 
+info "Testing stderr file contents"
 assert_eq "$(cat "/tmp/stderr.log")" "hello stderr" "Stderr file should contain expected output"
 
 # Check pid file exists and contains expected pid

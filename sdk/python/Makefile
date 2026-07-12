@@ -23,7 +23,7 @@ lint:
 type-check:
 	pdm run mypy src/
 
-# Run type checking on tests specifically  
+# Run type checking on tests specifically
 type-check-tests:
 	pdm run mypy tests/test_mypy_check.py tests/test_typing.py
 

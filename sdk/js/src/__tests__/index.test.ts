@@ -151,9 +151,9 @@ describe('DstackClient', () => {
     // Temporarily remove environment variable to test file check
     const savedEnv = process.env.DSTACK_SIMULATOR_ENDPOINT
     delete process.env.DSTACK_SIMULATOR_ENDPOINT
-    
+
     expect(() => new DstackClient('/non/existent/socket')).toThrow('Unix socket file /non/existent/socket does not exist')
-    
+
     // Restore environment variable
     if (savedEnv) {
       process.env.DSTACK_SIMULATOR_ENDPOINT = savedEnv
@@ -164,10 +164,10 @@ describe('DstackClient', () => {
     // Temporarily remove environment variable to test non-unix socket paths
     const savedEnv = process.env.DSTACK_SIMULATOR_ENDPOINT
     delete process.env.DSTACK_SIMULATOR_ENDPOINT
-    
+
     expect(() => new DstackClient('http://localhost:8080')).not.toThrow()
     expect(() => new DstackClient('https://example.com')).not.toThrow()
-    
+
     // Restore environment variable
     if (savedEnv) {
       process.env.DSTACK_SIMULATOR_ENDPOINT = savedEnv
@@ -281,36 +281,36 @@ describe('DstackClient', () => {
     it('should support deprecated deriveKey method with warning', async () => {
       const client = new TappdClient()
       const consoleSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
-      
+
       const result = await client.deriveKey('/', 'test')
       expect(result).toHaveProperty('key')
       expect(result).toHaveProperty('certificate_chain')
       expect(consoleSpy).toHaveBeenCalledWith('deriveKey is deprecated, please use getKey instead')
-      
+
       consoleSpy.mockRestore()
     })
 
     it('should support deprecated tdxQuote method with warning', async () => {
       const client = new TappdClient()
       const consoleSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
-      
+
       const result = await client.tdxQuote('test data')
       expect(result).toHaveProperty('quote')
       expect(result).toHaveProperty('event_log')
       expect(consoleSpy).toHaveBeenCalledWith('tdxQuote is deprecated, please use getQuote instead')
-      
+
       consoleSpy.mockRestore()
     })
 
     it('should support tdxQuote with hash algorithm parameter', async () => {
       const client = new TappdClient()
       const consoleSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
-      
+
       const result = await client.tdxQuote('test data', 'sha256')
       expect(result).toHaveProperty('quote')
       expect(result).toHaveProperty('event_log')
       expect(consoleSpy).toHaveBeenCalledWith('tdxQuote is deprecated, please use getQuote instead')
-      
+
       consoleSpy.mockRestore()
     })
   })
@@ -319,16 +319,16 @@ describe('DstackClient', () => {
     it('should throws error in deriveKey method', async () => {
       const client = new DstackClient()
       const consoleSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
-      
+
       await expect(() => client.deriveKey('/', 'test')).rejects.toThrow('deriveKey is deprecated, please use getKey instead.')
-      
+
       consoleSpy.mockRestore()
     })
 
     it('should throws error in tdxQuote method without hash algorithm parameter', async () => {
       const client = new DstackClient()
       const consoleSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
-      
+
       await expect(() => client.tdxQuote('test data')).rejects.toThrow('tdxQuote only supports raw hash algorithm.')
 
       consoleSpy.mockRestore()
@@ -337,7 +337,7 @@ describe('DstackClient', () => {
     it("should throws error in tdxQuote method with hash algorithm parameter other than raw", async () => {
       const client = new DstackClient()
       const consoleSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
-      
+
       await expect(() => client.tdxQuote('test data', 'sha256')).rejects.toThrow('tdxQuote only supports raw hash algorithm.')
 
       consoleSpy.mockRestore()
@@ -346,7 +346,7 @@ describe('DstackClient', () => {
     it('should able to get quote with plain report_data in tdxQuote method with warning', async () => {
       const client = new DstackClient()
       const consoleSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
-      
+
       const result = await client.tdxQuote('test data', "raw")
       expect(result).toHaveProperty('quote')
       expect(result).toHaveProperty('event_log')
@@ -358,9 +358,9 @@ describe('DstackClient', () => {
     it('should throws error in tdxQuote with hash algorithm parameter', async () => {
       const client = new DstackClient()
       const consoleSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
-      
+
       await expect(() => client.tdxQuote('test data', 'sha256')).rejects.toThrow('tdxQuote only supports raw hash algorithm.')
-      
+
       consoleSpy.mockRestore()
     })
   })

@@ -130,4 +130,4 @@ ${CLI} shutdown 2>/dev/null
 kill $(cat $PIDFILE) 2>/dev/null
 rm -f $UDS $PIDFILE
 
-info "CLI testing completed!" 
+info "CLI testing completed!"

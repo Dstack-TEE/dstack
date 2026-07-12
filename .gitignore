@@ -13,6 +13,7 @@ node_modules/
 /tmp
 .claude/settings.local.json
 __pycache__
+/.ruff_cache/
 .planning/
 /dstack/vmm/src/console_v1.html
 .claude/worktrees/

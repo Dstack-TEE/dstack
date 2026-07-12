@@ -12,7 +12,7 @@ beforeAll(async () => {
   // Set environment variables for testing
   process.env.KMS_CONTRACT_ADDR = '0xmockcontract1234567890123456789012345678';
   process.env.PORT = '3002';
-  
+
   // Import the app
   const indexModule = await import('./index.ts');
   appFetch = indexModule.default.fetch;
@@ -44,11 +44,11 @@ describe('Mock Backend Tests', () => {
       expect(data.gatewayAppId).toBe(process.env.MOCK_GATEWAY_APP_ID || '0xmockgateway1234567890123456789012345678');
       expect(data.chainId).toBe(parseInt(process.env.MOCK_CHAIN_ID || '1337'));
       expect(data.appImplementation).toBe(process.env.MOCK_APP_IMPLEMENTATION || '0xmockapp9876543210987654321098765432109');
-      
+
       // Verify response structure matches OpenAPI spec
       const systemInfoSchema = openApiSpec.components.schemas.MockSystemInfo;
       const requiredFields = systemInfoSchema.required;
-      
+
       requiredFields.forEach(field => {
         expect(data).toHaveProperty(field);
       });
@@ -67,7 +67,7 @@ describe('Mock Backend Tests', () => {
 
     it('should always return success for app auth', async () => {
       const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-      
+
       const response = await appFetch(new Request('http://localhost:3002/bootAuth/app', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -93,7 +93,7 @@ describe('Mock Backend Tests', () => {
       // Verify response matches OpenAPI spec
       const bootResponseSchema = openApiSpec.components.schemas.BootResponse;
       const requiredFields = bootResponseSchema.required;
-      
+
       requiredFields.forEach(field => {
         expect(data).toHaveProperty(field);
       });
@@ -172,7 +172,7 @@ describe('Mock Backend Tests', () => {
 
     it('should always return success for KMS auth', async () => {
       const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-      
+
       const response = await appFetch(new Request('http://localhost:3002/bootAuth/kms', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -225,7 +225,7 @@ describe('Mock Backend Tests', () => {
 
     it('should handle "Test backend error" appropriately', async () => {
       const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-      
+
       // This shouldn't actually throw an error in mock backend, but test the error handling path
       const response = await appFetch(new Request('http://localhost:3002/bootAuth/kms', {
         method: 'POST',
@@ -240,7 +240,7 @@ describe('Mock Backend Tests', () => {
 
       // Verify console.error was not called (no errors in mock)
       expect(consoleSpy).not.toHaveBeenCalled();
-      
+
       consoleSpy.mockRestore();
     });
   });
@@ -249,7 +249,7 @@ describe('Mock Backend Tests', () => {
 describe('API Schema Compatibility', () => {
   it('should match BootInfo schema requirements', () => {
     const bootInfoSchema = openApiSpec.components.schemas.BootInfo;
-    
+
     // Required fields should match original schema
     expect(bootInfoSchema.required).toEqual([
       'mrAggregated',
@@ -268,7 +268,7 @@ describe('API Schema Compatibility', () => {
 
   it('should match BootResponse schema requirements', () => {
     const bootResponseSchema = openApiSpec.components.schemas.BootResponse;
-    
+
     expect(bootResponseSchema.required).toEqual([
       'isAllowed',
       'reason',
@@ -282,7 +282,7 @@ describe('API Schema Compatibility', () => {
 
   it('should match MockSystemInfo schema requirements', () => {
     const systemInfoSchema = openApiSpec.components.schemas.MockSystemInfo;
-    
+
     expect(systemInfoSchema.required).toEqual([
       'status',
       'kmsContractAddr',
@@ -333,4 +333,4 @@ describe('Mock Behavior Verification', () => {
     expect(appData.reason).toBe('mock app always allowed');
     expect(kmsData.reason).toBe('mock KMS always allowed');
   });
-}); 
+});

@@ -82,7 +82,7 @@ KMS boot authentication
   "tcbStatus": "string",
   "advisoryIds": ["string"],
   "mrAggregated": "string",
-  "mrSystem": "string", 
+  "mrSystem": "string",
   "osImageHash": "string",
   "appId": "string",
   "composeHash": "string",
@@ -124,4 +124,4 @@ the test suite (`index.test.ts`) validates:
 - ✅ schema validation using OpenAPI spec
 - ✅ error handling behavior
 - ✅ hex encoding/decoding compatibility
-- ✅ optional field handling 
+- ✅ optional field handling

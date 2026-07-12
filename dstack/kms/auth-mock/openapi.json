@@ -106,7 +106,7 @@
         "type": "object",
         "required": [
           "mrAggregated",
-          "osImageHash", 
+          "osImageHash",
           "appId",
           "composeHash",
           "instanceId",
@@ -118,7 +118,7 @@
             "description": "Aggregated MR measurement"
           },
           "osImageHash": {
-            "type": "string", 
+            "type": "string",
             "description": "OS Image hash"
           },
           "appId": {
@@ -158,7 +158,7 @@
         "type": "object",
         "required": [
           "isAllowed",
-          "reason", 
+          "reason",
           "gatewayAppId"
         ],
         "properties": {
@@ -202,7 +202,7 @@
             "example": "0xmockcontract1234567890123456789012345678"
           },
           "gatewayAppId": {
-            "type": "string", 
+            "type": "string",
             "description": "Mock gateway application ID",
             "example": "0xmockgateway1234567890123456789012345678"
           },
@@ -247,4 +247,4 @@
       }
     }
   }
-} 
+}
