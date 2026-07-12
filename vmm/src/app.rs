@@ -1376,11 +1376,22 @@ fn make_vm_config(
         .as_ref()
         .and_then(|d| hex::decode(d).ok())
         .unwrap_or_default();
-    let tdx_measurement = if tdx_attestation_variant.is_lite() {
-        Some(image.tdx_measurement.clone().context(
-            "tdx lite attestation requested but image is missing \
-             measurement.tdx.cbor/sha256sum.txt measurement material",
-        )?)
+    // Attach the lite measurement material whenever the image provides it,
+    // regardless of the resolved attestation variant: the guest's exposed
+    // event log always retains the RTMR0 ACPI digest events (see
+    // cc_eventlog::tdx::label_tdx_acpi_data_events), so a verifier can freely
+    // choose lite verification for a legacy-resolved boot too.
+    // `tdx_attestation_variant` keeps its original meaning of "the scheme the
+    // VMM/KMS resolved for this boot" and is unaffected by this.
+    let tdx_measurement = if is_tdx {
+        if tdx_attestation_variant.is_lite() {
+            Some(image.tdx_measurement.clone().context(
+                "tdx lite attestation requested but image is missing \
+                 measurement.tdx.cbor/sha256sum.txt measurement material",
+            )?)
+        } else {
+            image.tdx_measurement.clone()
+        }
     } else {
         None
     };
@@ -1627,7 +1638,10 @@ mod tests {
         let vm_config = make_vm_config(&config, &manifest, &image, &hex_of(0x22, 32), None, None)?;
 
         assert!(vm_config.get("tdx_attestation_variant").is_none());
-        assert!(vm_config.get("tdx_measurement").is_none());
+        // tdx_measurement is attached whenever the image supports it, even
+        // when the resolved variant is legacy, so a verifier can still
+        // choose lite verification for this boot.
+        assert!(vm_config.get("tdx_measurement").is_some());
         assert_eq!(
             vm_config["os_image_hash"]
                 .as_str()
@@ -1693,7 +1707,9 @@ mod tests {
         )?;
 
         assert!(vm_config.get("tdx_attestation_variant").is_none());
-        assert!(vm_config.get("tdx_measurement").is_none());
+        // Still attached even though the requirement forced this boot to
+        // legacy: a verifier can independently choose lite for it.
+        assert!(vm_config.get("tdx_measurement").is_some());
         Ok(())
     }
 

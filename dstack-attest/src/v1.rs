@@ -46,21 +46,20 @@ pub(crate) fn strip_tdx_lite_event_log(event_log: Vec<TdxEvent>) -> Vec<TdxEvent
         .collect()
 }
 
-pub(crate) fn is_tdx_lite_config(config: &str) -> bool {
-    serde_json::from_str::<dstack_types::VmConfig>(config)
-        .map(|config| config.tdx_attestation_variant.is_lite())
-        .unwrap_or(false)
-}
-
+/// Always keep the RTMR0 ACPI DATA digest events (in addition to RTMR3
+/// runtime events), regardless of the boot's `tdx_attestation_variant`. This
+/// makes `strip_tdx_lite_event_log`'s output a strict superset of
+/// `strip_tdx_runtime_event_log`'s, so a verifier can independently choose
+/// lite or legacy verification for any TDX boot instead of being limited to
+/// whatever the VMM resolved at launch. See
+/// `dstack_types::TdxAttestationVariant` for the full rationale.
+///
+/// `config` is accepted for API stability but no longer changes the result.
 pub(crate) fn strip_tdx_event_log_for_config(
     event_log: Vec<TdxEvent>,
-    config: &str,
+    _config: &str,
 ) -> Vec<TdxEvent> {
-    if is_tdx_lite_config(config) {
-        strip_tdx_lite_event_log(event_log)
-    } else {
-        strip_tdx_runtime_event_log(event_log)
-    }
+    strip_tdx_lite_event_log(event_log)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -35,18 +35,23 @@ impl OvmfVariant {
     }
 }
 
-/// Selects how a TDX attestation should bind the OS image.
+/// Records which TDX attestation/hash scheme the VMM resolved for this boot
+/// (used by KMS's own key-release check and by the guest's fail-closed
+/// `requirements.tdx_measure_acpi_tables` gate). It does not restrict what a
+/// verifier can do: the guest's event log always retains the RTMR0 ACPI
+/// digest events and `vm_config.tdx_measurement` is attached whenever the
+/// image provides it, regardless of this flag, so any verifier can
+/// independently pick `Legacy` or `Lite` verification for the same
+/// attestation by supplying its own vm_config.
 ///
-/// `Legacy` preserves the existing verifier behavior: `vm_config.os_image_hash`
-/// is the image digest (`digest.txt`, i.e. `sha256(sha256sum.txt)`) and the
-/// verifier recomputes the full TDX launch measurement using the legacy
-/// image/QEMU-derived path.
+/// `Legacy` recomputes the full TDX launch measurement using the
+/// image/QEMU-derived path (`vm_config.os_image_hash` is `digest.txt`, i.e.
+/// `sha256(sha256sum.txt)`).
 ///
-/// `Lite` opts into the no-QEMU verifier path: `vm_config.os_image_hash`
-/// remains the unified image digest (`sha256(sha256sum.txt)`),
-/// `vm_config.tdx_measurement` carries `sha256sum.txt` plus the TDX measurement
-/// CBOR file, and KMS/verifier select the new logic from this vm_config flag
-/// while the attestation quote remains the existing `DstackTdx`.
+/// `Lite` recomputes measurements from `vm_config.tdx_measurement`
+/// (`sha256sum.txt` plus the TDX measurement CBOR file) and the event log's
+/// ACPI digests, without downloading the image or running QEMU. The
+/// attestation quote remains the existing `DstackTdx` in both cases.
 #[derive(Deserialize, Serialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum TdxAttestationVariant {
@@ -602,8 +607,11 @@ pub struct VmConfig {
     /// omitted from legacy configs to keep old behavior and wire shape stable.
     #[serde(default, skip_serializing_if = "TdxAttestationVariant::is_legacy")]
     pub tdx_attestation_variant: TdxAttestationVariant,
-    /// TDX-only no-image-download measurement material. Present only when
-    /// `tdx_attestation_variant = "lite"` and omitted for legacy TDX.
+    /// TDX-only no-image-download measurement material. Attached whenever
+    /// the OS image provides it, regardless of `tdx_attestation_variant`, so
+    /// a verifier can choose lite verification even for a boot that resolved
+    /// to `Legacy`. Omitted only when the image predates this measurement
+    /// material.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tdx_measurement: Option<TdxOsImageMeasurementDocument>,
     /// GCP TDX no-image-download measurement material. Present for GCP
