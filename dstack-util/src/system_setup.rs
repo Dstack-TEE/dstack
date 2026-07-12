@@ -1055,7 +1055,7 @@ async fn do_sys_setup(stage0: Stage0<'_>) -> Result<()> {
     stage1.setup().await
 }
 
-/// GPU TEE attestation gate (`requirements.verify_gpu`, defaults to true).
+/// GPU TEE attestation gate (`requirements.attest_gpu`, defaults to true).
 ///
 /// Runs before key provisioning so a CVM whose GPU cannot prove it is a
 /// genuine, CC-enabled NVIDIA TEE never gets its app keys. The GPU
@@ -1196,15 +1196,15 @@ mod gpu {
 }
 
 impl Stage0<'_> {
-    /// Enforce `requirements.verify_gpu` (default true): attest an attached
+    /// Enforce `requirements.attest_gpu` (default true): attest an attached
     /// NVIDIA GPU before continuing to key provisioning, or — when explicitly
     /// disabled — set the GPU ready state without verification.
     async fn setup_gpu(&self) -> Result<()> {
         if !gpu::nvidia_gpu_present()? {
             return Ok(());
         }
-        if !self.shared.app_compose.verify_gpu() {
-            warn!("requirements.verify_gpu is false; setting GPU ready state without attestation");
+        if !self.shared.app_compose.attest_gpu() {
+            warn!("requirements.attest_gpu is false; setting GPU ready state without attestation");
             // Best-effort: a GPU with CC mode off has no ready state to set.
             if let Err(err) = gpu::set_gpu_ready_state().await {
                 warn!("failed to set GPU ready state: {err:?}");
