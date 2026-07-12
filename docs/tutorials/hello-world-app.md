@@ -183,7 +183,7 @@ ssh user@your-server
 Use `vmm-cli.py compose` to generate the encrypted deployment manifest. The `--gateway` and `--kms` flags enable gateway registration and KMS attestation.
 
 ```bash
-cd ~/dstack/vmm
+cd ~/dstack/dstack/vmm
 export DSTACK_VMM_AUTH_PASSWORD=$(cat ~/.dstack/secrets/vmm-auth-token)
 
 ./src/vmm-cli.py --url http://127.0.0.1:9080 compose \
@@ -264,7 +264,7 @@ ssh user@your-server
 ## Step 6: Deploy the CVM
 
 ```bash
-cd ~/dstack/vmm
+cd ~/dstack/dstack/vmm
 export DSTACK_VMM_AUTH_PASSWORD=$(cat ~/.dstack/secrets/vmm-auth-token)
 
 SRV_DOMAIN=$(grep ^SRV_DOMAIN ~/gateway-deploy/.env | cut -d= -f2)
@@ -372,7 +372,7 @@ This bypasses the gateway and hits nginx directly. You should see the same nginx
 Navigate to the VMM directory:
 
 ```bash
-cd ~/dstack/vmm
+cd ~/dstack/dstack/vmm
 export DSTACK_VMM_AUTH_PASSWORD=$(cat ~/.dstack/secrets/vmm-auth-token)
 ```
 

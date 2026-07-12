@@ -3,7 +3,7 @@
 Use this guide to get a first dstack app running on one Intel TDX host. The workflow uses `dstackup` for host setup and `dstack` for app deployment:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Dstack-TEE/dstack/master/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/Dstack-TEE/dstack/master/dstack/scripts/install.sh | sh
 sudo dstackup install
 sudo dstack deploy \
   -n hello-nginx \
@@ -71,7 +71,7 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 Build and install the `dstackup` bootstrap command:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Dstack-TEE/dstack/master/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/Dstack-TEE/dstack/master/dstack/scripts/install.sh | sh
 ```
 
 The bootstrap installer builds `dstackup` from a temporary source checkout and installs it under `/usr/local/bin`. The `dstackup install` command then builds and installs `dstack`, `dstack-auth`, `dstack-vmm`, `supervisor`, static assets, and host config into the system layout.
@@ -84,7 +84,7 @@ Run:
 sudo dstackup install
 ```
 
-`dstackup install` auto-detects TDX or AMD SEV-SNP. If no local guest image exists, it downloads the latest CPU image from [meta-dstack releases](https://github.com/Dstack-TEE/meta-dstack/releases), requires the release SHA-256 digest by default, verifies the tarball, stages the unpack, and only then adopts the image.
+`dstackup install` auto-detects TDX or AMD SEV-SNP. If no local guest image exists, it downloads the latest CPU image from [dstack guest-OS releases](https://github.com/Dstack-TEE/dstack/releases?q=guest-os-v), requires the release SHA-256 digest by default, verifies the tarball, stages the unpack, and only then adopts the image. Pre-monorepo `meta-dstack` releases remain a fallback for pinned older versions.
 
 On TDX, `dstackup install` starts the SGX key provider automatically from `/usr/local/share/dstack/key-provider-build`. To use a different provider, pass one of:
 
@@ -207,7 +207,7 @@ Use `--prefix` when you want a second isolated install on the same host. A custo
 Install `dstackup` into the prefix, then use the same prefix for `dstackup` and `dstack`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Dstack-TEE/dstack/master/scripts/install.sh | sh -s -- --prefix /opt/dstack-test
+curl -fsSL https://raw.githubusercontent.com/Dstack-TEE/dstack/master/dstack/scripts/install.sh | sh -s -- --prefix /opt/dstack-test
 
 sudo /opt/dstack-test/bin/dstackup install \
   --prefix /opt/dstack-test \
@@ -246,7 +246,7 @@ Use the [deployment guide](./deployment.md) when you need domain routing, Gatewa
 
 ### Image download fails
 
-`dstackup install` downloads the latest CPU image when KMS mode needs an image and none exists locally. If the download fails, check network access to GitHub and the meta-dstack release:
+`dstackup install` downloads the latest CPU image when KMS mode needs an image and none exists locally. If the download fails, check network access to GitHub and the dstack guest-OS release:
 
 ```bash
 sudo dstackup image pull

@@ -114,7 +114,7 @@ Before starting, ensure you have:
 Verify you have a running CVM:
 
 ```bash
-cd ~/dstack/vmm
+cd ~/dstack/dstack/vmm
 export DSTACK_VMM_AUTH_PASSWORD=$(cat ~/.dstack/secrets/vmm-auth-token)
 ./src/vmm-cli.py --url http://127.0.0.1:9080 lsvm
 ```
@@ -126,7 +126,7 @@ The VMM provides a `/guest/Info` endpoint that proxies into the CVM and retrieve
 ### Via VMM Guest Proxy
 
 ```bash
-cd ~/dstack/vmm
+cd ~/dstack/dstack/vmm
 export DSTACK_VMM_AUTH_PASSWORD=$(cat ~/.dstack/secrets/vmm-auth-token)
 
 # Get the VM UUID for hello-world
@@ -274,7 +274,7 @@ rm -rf qemu-tdx
 ### Build the measurement calculator
 
 ```bash
-cd ~/dstack
+cd ~/dstack/dstack
 cargo build --release -p dstack-mr-cli
 ```
 
@@ -369,7 +369,7 @@ Compare the CVM's actual measurements against your expected values:
 #!/bin/bash
 # verify-measurements.sh
 
-cd ~/dstack/vmm
+cd ~/dstack/dstack/vmm
 export DSTACK_VMM_AUTH_PASSWORD=$(cat ~/.dstack/secrets/vmm-auth-token)
 
 # Get VM UUID
@@ -552,7 +552,7 @@ echo "Instance: $INSTANCE_NAME"
 echo "Image:    $IMAGE_VERSION"
 echo ""
 
-cd ~/dstack/vmm
+cd ~/dstack/dstack/vmm
 export DSTACK_VMM_AUTH_PASSWORD=$(cat ~/.dstack/secrets/vmm-auth-token)
 
 # --- Step 1: Get VM UUID ---
@@ -662,7 +662,7 @@ if [ -x "$DSTACK_MR" ] && [ -f "$METADATA" ]; then
     done
 else
     echo "  SKIP - dstack-mr not built or metadata not found"
-    echo "  To enable: cd ~/dstack && cargo build --release -p dstack-mr-cli"
+    echo "  To enable: cd ~/dstack/dstack && cargo build --release -p dstack-mr-cli"
 fi
 
 # --- Step 6: Display event log ---
@@ -785,8 +785,18 @@ dstack-mr measure --cpu 2 --memory 2G \
 For highest assurance, build images from source:
 
 ```bash
-git clone https://github.com/Dstack-TEE/meta-dstack.git
-cd meta-dstack/repro-build
+git clone https://github.com/Dstack-TEE/dstack.git
+cd dstack
+git submodule update --init -- \
+  os/yocto/deps/bitbake \
+  os/yocto/deps/openembedded-core \
+  os/yocto/deps/meta-yocto \
+  os/yocto/deps/meta-confidential-compute \
+  os/yocto/deps/meta-virtualization \
+  os/yocto/deps/meta-openembedded \
+  os/yocto/deps/meta-rust-bin \
+  os/yocto/deps/meta-security
+cd os/yocto/repro-build
 ./repro-build.sh -n  # Reproducible build
 ```
 
@@ -845,4 +855,4 @@ With the foundation complete, you're ready to explore:
 - [Intel TDX Documentation](https://www.intel.com/content/www/us/en/developer/tools/trust-domain-extensions/documentation.html)
 - [DCAP Attestation Guide](https://download.01.org/intel-sgx/latest/dcap-latest/linux/docs/)
 - [dstack Attestation Source](https://github.com/Dstack-TEE/dstack/tree/main/attestation)
-- [Reproducible Builds for meta-dstack](https://github.com/Dstack-TEE/meta-dstack/tree/main/repro-build)
+- [Reproducible guest-OS builds](../../os/yocto/repro-build/)

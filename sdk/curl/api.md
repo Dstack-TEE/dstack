@@ -144,7 +144,7 @@ curl --unix-socket /var/run/dstack.sock http://dstack/GetQuote?report_data=00000
 ```
 
 **Note on Event Log:**
-The `event_log` field contains a JSON array of TDX event log entries. For RTMR 0-2 (boot-time measurements), only the digest is included; the payload is stripped to reduce response size. For RTMR3 (runtime measurements), both digest and payload are included. To verify the event log, submit it along with the quote to the [verifier service](../../verifier/README.md).
+The `event_log` field contains a JSON array of TDX event log entries. For RTMR 0-2 (boot-time measurements), only the digest is included; the payload is stripped to reduce response size. For RTMR3 (runtime measurements), both digest and payload are included. To verify the event log, submit it along with the quote to the [verifier service](../../dstack/verifier/README.md).
 
 ### 4. Get Info
 

@@ -84,7 +84,7 @@ Load environment variables and deploy:
 cd ~/gateway-deploy
 set -a; source .env; set +a
 
-cd ~/dstack/vmm
+cd ~/dstack/dstack/vmm
 export DSTACK_VMM_AUTH_PASSWORD=$(cat ~/.dstack/secrets/vmm-auth-token)
 
 ./src/vmm-cli.py --url http://127.0.0.1:9080 deploy \
@@ -369,7 +369,7 @@ Expected output shows both domains with `has_cert: true` and expiry dates ~90 da
 If the cert status shows `has_cert: false`, check the gateway logs for ACME errors:
 
 ```bash
-VM_ID=$(cd ~/dstack/vmm && ./src/vmm-cli.py --url http://127.0.0.1:9080 lsvm --json | jq -r '.[] | select(.name=="dstack-gateway") | .id')
+VM_ID=$(cd ~/dstack/dstack/vmm && ./src/vmm-cli.py --url http://127.0.0.1:9080 lsvm --json | jq -r '.[] | select(.name=="dstack-gateway") | .id')
 curl -s -H "Authorization: Bearer $(cat ~/.dstack/secrets/vmm-auth-token)" \
   "http://127.0.0.1:9080/logs?id=$VM_ID&follow=false&ansi=false&lines=50" | grep -i "cert\|renew\|acme"
 ```
@@ -407,7 +407,7 @@ sudo haproxy -c -f /etc/haproxy/haproxy.cfg && sudo systemctl reload haproxy
 Navigate to the VMM directory first:
 
 ```bash
-cd ~/dstack/vmm
+cd ~/dstack/dstack/vmm
 export DSTACK_VMM_AUTH_PASSWORD=$(cat ~/.dstack/secrets/vmm-auth-token)
 ```
 

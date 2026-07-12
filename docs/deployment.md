@@ -59,10 +59,10 @@ Clone and build dstack-vmm:
 ```bash
 git clone https://github.com/Dstack-TEE/dstack
 cd dstack
-cargo build --release -p dstack-vmm -p supervisor
+cargo build --manifest-path dstack/Cargo.toml --release -p dstack-vmm -p supervisor
 mkdir -p vmm-data
-cp target/release/dstack-vmm vmm-data/
-cp target/release/supervisor vmm-data/
+cp dstack/target/release/dstack-vmm vmm-data/
+cp dstack/target/release/supervisor vmm-data/
 cd vmm-data/
 ```
 
@@ -93,7 +93,7 @@ address = "vsock:2"
 port = 10000
 ```
 
-Download guest images from [meta-dstack releases](https://github.com/Dstack-TEE/meta-dstack/releases) and extract to `./images/`.
+Download guest images from [dstack guest-OS releases](https://github.com/Dstack-TEE/dstack/releases) and extract to `./images/`.
 
 > For reproducible builds and verification, see the [Security Model](./security/security-model.md).
 
@@ -115,8 +115,8 @@ Production KMS requires:
 
 | Server | Use Case | Configuration |
 |--------|----------|---------------|
-| [auth-simple](../kms/auth-simple/) | Config-file-based whitelisting | JSON config file |
-| [auth-eth](../kms/auth-eth/) | On-chain governance via smart contracts | Ethereum RPC + contract |
+| [auth-simple](../dstack/kms/auth-simple/) | Config-file-based whitelisting | JSON config file |
+| [auth-eth](../dstack/kms/auth-eth/) | On-chain governance via smart contracts | Ethereum RPC + contract |
 | Custom | Your own authorization logic | Implement webhook interface |
 
 All auth servers implement the same webhook interface:
@@ -146,7 +146,7 @@ Create `auth-config.json` for initial KMS deployment:
 Run auth-simple:
 
 ```bash
-cd kms/auth-simple
+cd dstack/kms/auth-simple
 bun install
 PORT=3001 AUTH_CONFIG_PATH=/path/to/auth-config.json bun run start
 ```
@@ -190,7 +190,7 @@ AUTH_WEBHOOK_URL=http://your-auth-server:3001
 KMS_RPC_ADDR=0.0.0.0:9201
 GUEST_AGENT_ADDR=127.0.0.1:9205
 OS_IMAGE=dstack-0.5.5
-IMAGE_DOWNLOAD_URL=https://github.com/Dstack-TEE/meta-dstack/releases/download/v0.5.5/dstack-0.5.5.tar.gz
+IMAGE_DOWNLOAD_URL=https://github.com/Dstack-TEE/dstack/releases/download/guest-os-v0.5.5/dstack-0.5.5.tar.gz
 ```
 
 Then run:
@@ -206,7 +206,7 @@ Then run:
 **Monitor startup:**
 
 ```bash
-tail -f ../../vmm-data/run/vm/<vm-id>/serial.log
+tail -f ../../../vmm-data/run/vm/<vm-id>/serial.log
 ```
 
 Wait for `[  OK  ] Finished App Compose Service.`
@@ -345,8 +345,9 @@ This will:
 Monitor for unauthorized certificates issued to your domain.
 
 ```bash
-cargo build --release -p ct_monitor
-./target/release/ct_monitor \
+cd /path/to/dstack
+cargo build --manifest-path dstack/Cargo.toml --release -p ct_monitor
+./dstack/target/release/ct_monitor \
   --gateway-uri https://<gateway-domain> \
   --domain <your-domain>
 ```

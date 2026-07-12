@@ -115,19 +115,19 @@ The `dstacktee/dstack-gateway:0.5.7` image isn't published on Docker Hub, so we 
 The [Build dstack from Source](/tutorial/clone-build-dstack-vmm) tutorial builds `dstack-vmm` and `supervisor`, but not the gateway. Build it now:
 
 ```bash
-cd ~/dstack
+cd ~/dstack/dstack
 cargo build --release -p dstack-gateway
 ```
 
 Verify the binary was built:
 
 ```bash
-ls -lh ~/dstack/target/release/dstack-gateway
+ls -lh ~/dstack/dstack/target/release/dstack-gateway
 ```
 
 Expected output (typically 15-25MB):
 ```
--rwxrwxr-x 1 ubuntu ubuntu 20M ... /home/ubuntu/dstack/target/release/dstack-gateway
+-rwxrwxr-x 1 ubuntu ubuntu 20M ... /home/ubuntu/dstack/dstack/target/release/dstack-gateway
 ```
 
 #### Create Dockerfile
@@ -161,8 +161,8 @@ EOF
 Copy the gateway binary and entrypoint script into the build context:
 
 ```bash
-cp ~/dstack/target/release/dstack-gateway ~/gateway-deploy/
-cp ~/dstack/gateway/dstack-app/builder/entrypoint.sh ~/gateway-deploy/
+cp ~/dstack/dstack/target/release/dstack-gateway ~/gateway-deploy/
+cp ~/dstack/dstack/gateway/dstack-app/builder/entrypoint.sh ~/gateway-deploy/
 ```
 
 #### Build Docker image
@@ -458,7 +458,7 @@ cat .app_env
 Now generate the VMM deployment manifest:
 
 ```bash
-cd ~/dstack/vmm
+cd ~/dstack/dstack/vmm
 
 export DSTACK_VMM_AUTH_PASSWORD=$(cat ~/.dstack/secrets/vmm-auth-token)
 

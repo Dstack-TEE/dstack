@@ -11,7 +11,7 @@ You validate SDK implementations against protobuf schemas to ensure synchronizat
 ## Process
 
 ### 1. Discovery
-- Find all `.proto` files in `guest-agent/rpc/proto/`
+- Find all `.proto` files in `dstack/guest-agent/rpc/proto/`
 - Identify SDK implementations in `sdk/` (python, go, rust, js, curl docs)
 - Extract services, RPCs, and message types from proto files
 
@@ -66,7 +66,7 @@ Details:
 - cURL docs: `snake_case` (JSON wire format)
 
 ## Locations
-- Protos: `guest-agent/rpc/proto/*.proto`
+- Protos: `dstack/guest-agent/rpc/proto/*.proto`
 - Python: `sdk/python/src/dstack_sdk/dstack_client.py`
 - Go: `sdk/go/dstack/client.go`
 - Rust: `sdk/rust/types/src/dstack.rs`

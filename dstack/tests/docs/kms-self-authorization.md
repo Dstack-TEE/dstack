@@ -162,7 +162,7 @@ and make sure you still have a way to update allow/deny policy during the test.
 ### 5.3 If using host-local `auth-simple`, install and start two instances
 
 ```bash
-cd "$REPO_ROOT/kms/auth-simple"
+cd "$REPO_ROOT/dstack/kms/auth-simple"
 bun install
 ```
 
@@ -201,7 +201,7 @@ These placeholder configs intentionally deny all KMS boots until you populate `k
 Start the services:
 
 ```bash
-cd "$REPO_ROOT/kms/auth-simple"
+cd "$REPO_ROOT/dstack/kms/auth-simple"
 AUTH_CONFIG_PATH=/tmp/kms-self-auth/auth-src.json PORT=3101 bun run start \
   >/tmp/kms-self-auth/auth-src.log 2>&1 &
 echo $! >/tmp/kms-self-auth/auth-src.pid

@@ -60,7 +60,7 @@ The ignored live regression test cross-checks dstack's pure Rust SNP measurement
 Command:
 
 ```bash
-cargo test -p dstack-kms --all-features recomputation_matches_sev_snp_measure_live_golden_vector -- --ignored --nocapture
+cargo test --manifest-path dstack/Cargo.toml -p dstack-kms --all-features recomputation_matches_sev_snp_measure_live_golden_vector -- --ignored --nocapture
 ```
 
 Last captured vector (STALE — regenerate before citing as proof):
@@ -81,7 +81,7 @@ vcpu_type=EPYC-v4
 guest_features=0x1
 append=console=ttyS0 loglevel=7
 sev_snp_measurement=requires-refresh-after-mr-config-v3-host-data-binding
-cargo_live_test=cargo test -p dstack-kms --all-features recomputation_matches_sev_snp_measure_live_golden_vector -- --ignored --nocapture
+cargo_live_test=cargo test --manifest-path dstack/Cargo.toml -p dstack-kms --all-features recomputation_matches_sev_snp_measure_live_golden_vector -- --ignored --nocapture
 cargo_live_test_result=stale after SNP app identity moved from cmdline to HOST_DATA
 DSTACK_SEV_SNP_MEASURE_GOLDEN_VECTOR_END
 ```
@@ -104,7 +104,7 @@ DSTACK_SEV_SNP_ATTESTATION_PROOF_END
 
 ## Manual dstack E2E smoke status
 
-An additional manual smoke was attempted on the SNP host (`chris@173.234.27.162`) using the PR branch, release-built `dstack-vmm`/`supervisor`/`dstack-kms`, QEMU 10.0.2, and the SNP-capable OVMF at `/opt/AMDSEV/usr/local/share/qemu/OVMF.fd`. The reusable version of that smoke is checked in at `test-scripts/snp-e2e-smoke.sh` for follow-up debugging on SNP hosts.
+An additional manual smoke was attempted on the SNP host (`chris@173.234.27.162`) using the PR branch, release-built `dstack-vmm`/`supervisor`/`dstack-kms`, QEMU 10.0.2, and the SNP-capable OVMF at `/opt/AMDSEV/usr/local/share/qemu/OVMF.fd`. The reusable version of that smoke is checked in at `dstack/test-scripts/snp-e2e-smoke.sh` for follow-up debugging on SNP hosts.
 
 That smoke exposed and fixed several VMM/KMS-auth integration issues before the guest reached KMS:
 
@@ -155,21 +155,27 @@ The checked-in smoke is enough to reproduce the current boundary on a compatible
 Practical implication for reviewers/testers on a fresh box:
 
 1. Install/use an AMDSEV QEMU 10.x build and the matching SNP-capable OVMF.
-2. Build the PR binaries with `cargo build --release -p dstack-vmm -p supervisor -p dstack-kms`.
-3. Run `test-scripts/snp-e2e-smoke.sh` unchanged and first confirm it reaches `SNP_KMS_CONTAINER_STARTED`; if AMD KDS throttles the lab host, set `DSTACK_SNP_SMOKE_KDS_BASE_URL` to a trusted AMD-KDS-compatible mirror/cache base URL such as `https://mirror.example.com/vcek/v1` (or, for a path-prefix relay, `https://cors.litgateway.com/https://kdsintf.amd.com/vcek/v1`) and rerun. The lab success above also used `DSTACK_SNP_SMOKE_ALLOW_OUT_OF_DATE_TCB=1` because the current SNP lab host reports `OutOfDate`; production auth policy should keep accepting only `UpToDate` and deny any advisory id unless explicitly allowlisted.
-4. For full `SNP_APP_CONTAINER_STARTED` / `GetAppKey` success, use or publish a coherent `meta-dstack` guest image whose kernel, modules, initramfs, rootfs, verity metadata, and guest userspace include the same PR #703 `dstack-util`/`dstack-attest` SNP cert-chain/KDS fallback code. The reproducible path is to build `meta-dstack` with its `dstack` submodule checked out to this PR branch, for example:
+2. Build the PR binaries with `cargo build --manifest-path dstack/Cargo.toml --release -p dstack-vmm -p supervisor -p dstack-kms`.
+3. Run `dstack/test-scripts/snp-e2e-smoke.sh` unchanged and first confirm it reaches `SNP_KMS_CONTAINER_STARTED`; if AMD KDS throttles the lab host, set `DSTACK_SNP_SMOKE_KDS_BASE_URL` to a trusted AMD-KDS-compatible mirror/cache base URL such as `https://mirror.example.com/vcek/v1` (or, for a path-prefix relay, `https://cors.litgateway.com/https://kdsintf.amd.com/vcek/v1`) and rerun. The lab success above also used `DSTACK_SNP_SMOKE_ALLOW_OUT_OF_DATE_TCB=1` because the current SNP lab host reports `OutOfDate`; production auth policy should keep accepting only `UpToDate` and deny any advisory id unless explicitly allowlisted.
+4. For full `SNP_APP_CONTAINER_STARTED` / `GetAppKey` success, use or publish a coherent guest image whose kernel, modules, initramfs, rootfs, verity metadata, and guest userspace include the same PR #703 `dstack-util`/`dstack-attest` SNP cert-chain/KDS fallback code. Build the Yocto backend from the same monorepo revision, for example:
 
    ```bash
-   git clone https://github.com/Dstack-TEE/meta-dstack.git
-   cd meta-dstack
-   git submodule update --init --recursive --depth 1
+   git clone https://github.com/Dstack-TEE/dstack.git
    cd dstack
    git fetch https://github.com/clawdbot-glitch003/dstack.git feat/amd-sev-snp-conversion
    git checkout -B feat/amd-sev-snp-conversion FETCH_HEAD
-   cd ..
-   source dev-setup ./bb-build
+   git submodule update --init -- \
+     os/yocto/deps/bitbake \
+     os/yocto/deps/openembedded-core \
+     os/yocto/deps/meta-yocto \
+     os/yocto/deps/meta-confidential-compute \
+     os/yocto/deps/meta-virtualization \
+     os/yocto/deps/meta-openembedded \
+     os/yocto/deps/meta-rust-bin \
+     os/yocto/deps/meta-security
+   source os/yocto/dev-setup ./bb-build
    sed -i 's/^MACHINE ??= .*/MACHINE = "sev-snp"/' ./bb-build/conf/local.conf
-   FLAVORS=dev make dist DIST_DIR=$PWD/images BB_BUILD_DIR=$PWD/bb-build
+   FLAVORS=dev make -C os/yocto dist DIST_DIR=$PWD/images BB_BUILD_DIR=$PWD/bb-build
    # Use the resulting dstack-dev image directory with:
    #   DSTACK_SNP_SMOKE_IMAGE_NAME=<coherent-dstack-dev-image-dir>
    ```
@@ -184,16 +190,16 @@ If the smoke stops after `EFI stub: Loaded initrd ...` with `cpus are not resett
 Run locally for this review-ready staging branch:
 
 ```bash
-bash -n test-scripts/snp-e2e-smoke.sh
-cargo fmt --all
-cargo test -p dstack-kms --all-features
-cargo test -p dstack-attest --all-features
-cargo test -p dstack-vmm --all-features
-cargo test -p ra-rpc --all-features
-cargo check --workspace --all-features
-cargo clippy --workspace --all-features -- -D warnings --allow unused_variables
+bash -n dstack/test-scripts/snp-e2e-smoke.sh
+cargo fmt --manifest-path dstack/Cargo.toml --all
+cargo test --manifest-path dstack/Cargo.toml -p dstack-kms --all-features
+cargo test --manifest-path dstack/Cargo.toml -p dstack-attest --all-features
+cargo test --manifest-path dstack/Cargo.toml -p dstack-vmm --all-features
+cargo test --manifest-path dstack/Cargo.toml -p ra-rpc --all-features
+cargo check --manifest-path dstack/Cargo.toml --workspace --all-features
+cargo clippy --manifest-path dstack/Cargo.toml --workspace --all-features -- -D warnings --allow unused_variables
 git diff --check
-cd kms/auth-simple && bun install && bun run check
+cd dstack/kms/auth-simple && bun install && bun run check
 ```
 
 ## Remaining production follow-up

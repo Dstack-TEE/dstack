@@ -50,7 +50,7 @@ The resulting dstack-0.5.4.tar.gz contains:
 - rootfs.img.verity: root filesystem
 - metadata.json: image metadata, including kernel boot cmdline
 
-Calculate image MRs using [dstack-mr](dstack-mr/):
+Calculate image MRs using [dstack-mr](dstack/dstack-mr/):
 ```bash
 cargo run --manifest-path ../dstack/Cargo.toml --bin dstack-mr measure -c 4 -m 4G dstack-0.5.4/metadata.json
 ```
@@ -63,7 +63,7 @@ To verify dstack App data trustworthiness:
 
 - Review source code for correctness and safety.
 - Build image from source.
-- Calculate MRTD, RTMR0, RTMR1, and RTMR2 values using [dstack-mr](https://github.com/kvinwang/dstack-mr).
+- Calculate MRTD, RTMR0, RTMR1, and RTMR2 values using [dstack-mr](https://github.com/Dstack-TEE/dstack/tree/master/dstack/dstack-mr).
 - Verify quote measurements:
     - Confirm MRTD, RTMR0, RTMR1, and RTMR2 match pre-calculated values.
     - Verify RTMR3 matches the event log replay result.

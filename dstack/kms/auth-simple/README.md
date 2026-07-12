@@ -212,4 +212,4 @@ bun run test:run
 
 - [auth-eth](../auth-eth/) - On-chain governance auth server
 - [auth-mock](../auth-mock/) - Development/testing auth server (always allows)
-- [Deployment Guide](../../docs/deployment.md) - Full deployment instructions
+- [Deployment Guide](../../../docs/deployment.md) - Full deployment instructions

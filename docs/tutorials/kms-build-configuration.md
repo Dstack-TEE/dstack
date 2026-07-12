@@ -67,7 +67,7 @@ Build the KMS service using Cargo in release mode.
 ### Navigate to repository root
 
 ```bash
-cd ~/dstack
+cd ~/dstack/dstack
 ```
 
 ### Build KMS in release mode
@@ -83,18 +83,18 @@ This compilation will:
 ### Verify the build
 
 ```bash
-ls -lh ~/dstack/target/release/dstack-kms
+ls -lh ~/dstack/dstack/target/release/dstack-kms
 ```
 
 Expected output (typically 20-30MB):
 ```
--rwxrwxr-x 1 ubuntu ubuntu 25M Nov 20 10:30 /home/ubuntu/dstack/target/release/dstack-kms
+-rwxrwxr-x 1 ubuntu ubuntu 25M Nov 20 10:30 /home/ubuntu/dstack/dstack/target/release/dstack-kms
 ```
 
 ### Test the binary
 
 ```bash
-~/dstack/target/release/dstack-kms --help
+~/dstack/dstack/target/release/dstack-kms --help
 ```
 
 This displays available command-line options.
@@ -106,7 +106,7 @@ Install the KMS binary to a system-wide location.
 ### Copy to /usr/local/bin
 
 ```bash
-sudo cp ~/dstack/target/release/dstack-kms /usr/local/bin/dstack-kms
+sudo cp ~/dstack/dstack/target/release/dstack-kms /usr/local/bin/dstack-kms
 sudo chmod 755 /usr/local/bin/dstack-kms
 ```
 
@@ -254,7 +254,7 @@ You should see Node.js v20.x and npm v10.x (or later).
 ### Navigate to auth-eth directory
 
 ```bash
-cd ~/dstack/kms/auth-eth
+cd ~/dstack/dstack/kms/auth-eth
 ```
 
 ### Install dependencies
@@ -513,10 +513,10 @@ EOF
 
 ```bash
 # Copy KMS binary
-cp ~/dstack/target/release/dstack-kms .
+cp ~/dstack/dstack/target/release/dstack-kms .
 
 # Copy auth-eth service
-cp -r ~/dstack/kms/auth-eth auth-eth
+cp -r ~/dstack/dstack/kms/auth-eth auth-eth
 
 # Copy auth-eth environment config
 cp /etc/kms/auth-eth.env .

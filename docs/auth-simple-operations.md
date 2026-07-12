@@ -296,5 +296,5 @@ Expected responses:
 ## See Also
 
 - [Deployment Guide](./deployment.md) - Initial setup
-- [auth-simple README](../kms/auth-simple/README.md) - Developer reference
+- [auth-simple README](../dstack/kms/auth-simple/README.md) - Developer reference
 - [On-Chain Governance](./onchain-governance.md) - Smart contract-based alternative

@@ -12,7 +12,7 @@ The only thing you must trust is **TEE hardware**. Intel TDX is the production p
 
 Everything else is verifiable.
 
-**The dstack OS** is measured during boot and recorded in the attestation quote. You verify it by rebuilding from [meta-dstack](https://github.com/Dstack-TEE/meta-dstack) source and comparing measurements, or by checking that the OS hash is whitelisted in a governance contract you trust.
+**The dstack OS** is measured during boot and recorded in the attestation quote. You verify it by rebuilding from the [`os/`](../../os/) source and comparing measurements, or by checking that the OS hash is whitelisted in a governance contract you trust.
 
 **The KMS** runs in its own TEE with its own attestation quote. You verify it the same way you verify any dstack workload.
 
@@ -86,7 +86,7 @@ dstack implements layered verification from hardware to application. Each layer 
 
 **Hardware layer.** The TEE provides the root of trust. The attestation quote is cryptographically signed by TEE hardware, and verification confirms the signature chain. The TCB status shows whether firmware is patched against known vulnerabilities.
 
-**OS layer.** The dstack OS is measured during boot into MRTD and RTMR0-2. MRTD captures the virtual firmware. RTMR0 captures firmware configuration. RTMR1 captures the Linux kernel. RTMR2 captures kernel command-line parameters. You verify integrity by computing expected measurements from meta-dstack source and comparing them to the quote.
+**OS layer.** The dstack OS is measured during boot into MRTD and RTMR0-2. MRTD captures the virtual firmware. RTMR0 captures firmware configuration. RTMR1 captures the Linux kernel. RTMR2 captures kernel command-line parameters. You verify integrity by computing expected measurements from the monorepo OS source and comparing them to the quote.
 
 **Application layer.** Your application is measured into RTMR3 as the compose-hash, which is the SHA256 hash of your normalized docker-compose configuration. Each image must use SHA256 digest pinning. This proves exactly which container images are running and that no code substitution happened after measurement.
 

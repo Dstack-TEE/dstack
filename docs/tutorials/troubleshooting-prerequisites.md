@@ -289,7 +289,7 @@ docker logs aesmd 2>&1 | tail -30
 **Solution:**
 1. Verify QCNL configuration points to `https://pccs.phala.network/sgx/certification/v4/`
 2. Check network connectivity: `curl -sk https://pccs.phala.network/sgx/certification/v4/rootcacrl`
-3. Verify the QCNL config file exists at `~/dstack/key-provider-build/sgx_default_qcnl.conf`
+3. Verify the QCNL config file exists at `~/dstack/dstack/key-provider-build/sgx_default_qcnl.conf`
 
 ### Empty response from curl test
 

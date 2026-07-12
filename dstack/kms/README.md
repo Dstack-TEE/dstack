@@ -124,7 +124,7 @@ When a KMS node receives a key provisioning request, it:
 
 #### Vanilla TDX Quote attestation
 
-See [Attestation](../attestation.md) for more details.
+See [Attestation](../../attestation.md) for more details.
 
 #### Validating Apps via the KMS Auth Chain
 

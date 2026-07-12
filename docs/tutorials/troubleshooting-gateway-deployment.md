@@ -71,7 +71,7 @@ export DSTACK_VMM_AUTH_PASSWORD=$(cat ~/.dstack/secrets/vmm-auth-token)
 **Solution:** Redeploy the KMS CVM:
 
 ```bash
-cd ~/dstack/vmm
+cd ~/dstack/dstack/vmm
 export DSTACK_VMM_AUTH_PASSWORD=$(cat ~/.dstack/secrets/vmm-auth-token)
 
 # Get KMS VM ID and remove it
@@ -231,7 +231,7 @@ Let's Encrypt production allows **10 duplicate certificates per 3 hours per IP**
 **How to check if you're rate-limited:**
 
 ```bash
-VM_ID=$(cd ~/dstack/vmm && ./src/vmm-cli.py --url http://127.0.0.1:9080 lsvm --json | jq -r '.[] | select(.name=="dstack-gateway") | .id')
+VM_ID=$(cd ~/dstack/dstack/vmm && ./src/vmm-cli.py --url http://127.0.0.1:9080 lsvm --json | jq -r '.[] | select(.name=="dstack-gateway") | .id')
 curl -s -H "Authorization: Bearer $(cat ~/.dstack/secrets/vmm-auth-token)" \
   "http://127.0.0.1:9080/logs?id=$VM_ID&follow=false&ansi=false&lines=200" | grep -i "rate\|too many\|acme.*error"
 ```
@@ -294,7 +294,7 @@ If KMS itself is not running:
 curl -sk https://localhost:9100/prpc/KMS.GetMeta | jq '{chain_id}'
 
 # Verify KMS CVM is running
-cd ~/dstack/vmm
+cd ~/dstack/dstack/vmm
 ./src/vmm-cli.py --url http://127.0.0.1:9080 lsvm
 ```
 

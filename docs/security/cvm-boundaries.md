@@ -152,7 +152,7 @@ The dstack-guest-agent listens on VSOCK port 8000 inside the CVM, providing inte
 | ListContainers | List running containers | ListContainersResponse |
 | Shutdown | Gracefully shut down the guest | Empty |
 
-Full specification: [guest_api.proto](../../guest-api/proto/guest_api.proto)
+Full specification: [guest_api.proto](../../dstack/guest-api/proto/guest_api.proto)
 
 ### VSOCK-based Host API Service
 
@@ -170,7 +170,7 @@ The dstack-vmm listens on a configured VSOCK port on the bare-metal host system.
 | Notify | Send notification to host | Notification | Empty |
 | GetSealingKey | Retrieve sealing key | GetSealingKeyRequest | GetSealingKeyResponse |
 
-Full specification: [host_api.proto](../../host-api/proto/host_api.proto)
+Full specification: [host_api.proto](../../dstack/host-api/proto/host_api.proto)
 
 ### HTTP-based Public Guest API Service
 
@@ -187,6 +187,6 @@ The dstack-guest-agent runs an HTTP server on port 8090 inside the CVM. This por
 | Info | Get application information | AppInfo |
 | Version | Get guest agent version | WorkerVersion |
 
-The service also provides a web dashboard at the root URL (`/`) showing basic CVM information. View the dashboard template [here](../../guest-agent/templates/dashboard.html).
+The service also provides a web dashboard at the root URL (`/`) showing basic CVM information. View the dashboard template [here](../../dstack/guest-agent/templates/dashboard.html).
 
-Full specification: [agent_rpc.proto](../../guest-agent/rpc/proto/agent_rpc.proto)
+Full specification: [agent_rpc.proto](../../dstack/guest-agent/rpc/proto/agent_rpc.proto)

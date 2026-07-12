@@ -75,6 +75,20 @@ Setting up dstack on your own hardware? Start with the [self-hosted quick onboar
 
 ![Architecture](./docs/assets/arch.png)
 
+### Repository layout
+
+```text
+dstack/  Core services, Rust crates, host and guest runtime code
+sdk/     Stable public SDK paths
+os/      Guest-OS payload, image contract, and build backends
+docs/    User and operator documentation
+tools/   Standalone development and security tools
+```
+
+The currently implemented OS backend is Yocto under `os/yocto/`. Shared rootfs
+payload and release assembly stay outside that backend so another builder can
+be added later without duplicating them. See [`os/README.md`](./os/README.md).
+
 Your container runs inside a Confidential VM, such as Intel TDX or AMD SEV-SNP, with optional GPU isolation via NVIDIA Confidential Computing. The CPU TEE protects application logic; the GPU TEE protects model weights and inference data.
 
 **Core components:**
@@ -193,7 +207,7 @@ Yes. dstack runs on supported TEE-capable servers, including Intel TDX-capable h
 <details>
 <summary><strong>How do users verify my deployment?</strong></summary>
 
-Your app exposes attestation quotes via the SDK. Users verify these quotes using [dstack-verifier](https://github.com/Dstack-TEE/dstack/tree/master/verifier), [dcap-qvl](https://github.com/Phala-Network/dcap-qvl), or the [Trust Center](https://trust.phala.com). See the [verification guide](./docs/verification.md) for details.
+Your app exposes attestation quotes via the SDK. Users verify these quotes using [dstack-verifier](https://github.com/Dstack-TEE/dstack/tree/master/dstack/verifier), [dcap-qvl](https://github.com/Phala-Network/dcap-qvl), or the [Trust Center](https://trust.phala.com). See the [verification guide](./docs/verification.md) for details.
 
 </details>
 
@@ -231,4 +245,8 @@ Logo and branding assets: [dstack-logo-kit](./docs/assets/dstack-logo-kit/)
 
 ## License
 
-Apache 2.0
+This is a multi-license repository. Core services, SDKs, documentation, tools,
+and the shared guest rootfs payload are Apache-2.0. The imported Yocto backend
+and derived image-assembly code retain Business Source License 1.1 terms. See
+[`os/README.md`](./os/README.md), file-level SPDX declarations, and
+[`REUSE.toml`](./REUSE.toml) for the exact scope.

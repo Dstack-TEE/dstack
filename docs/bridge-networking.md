@@ -93,7 +93,7 @@ sudo apt install -y dnsmasq
 Install the DHCP notification script (notifies VMM when a VM gets an IP so port forwarding can be established):
 
 ```bash
-sudo cp scripts/dhcp-notify.sh /usr/local/bin/dhcp-notify.sh
+sudo cp dstack/scripts/dhcp-notify.sh /usr/local/bin/dhcp-notify.sh
 sudo chmod +x /usr/local/bin/dhcp-notify.sh
 ```
 
