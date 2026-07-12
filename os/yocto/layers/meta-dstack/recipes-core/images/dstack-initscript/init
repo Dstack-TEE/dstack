@@ -1,0 +1,120 @@
+#!/bin/sh
+set -e
+
+ROOT_DIR=/root
+ROOT_DEV=""
+
+log() {
+	printf '[init] %s\n' "$*" >&2
+}
+
+mount_move_all() {
+	for dir in "$@"; do
+		mount --move "/$dir" "${ROOT_DIR}/$dir"
+	done
+}
+
+find_device_by_partlabel() {
+	label=$1
+
+	log "searching for PARTLABEL=${label}"
+
+	for entry in /sys/class/block/*; do
+		[ -f "$entry/partition" ] || continue
+		uevent="${entry}/uevent"
+		if [ -f "$uevent" ]; then
+			current=$(grep -E '^PARTNAME=' "$uevent" 2>/dev/null | head -n1 | cut -d= -f2)
+			if [ "${current}" = "$label" ]; then
+				device="/dev/$(basename "$entry")"
+				if [ -b "$device" ]; then
+					log "sysfs matched PARTLABEL=${label} at ${device}"
+					realpath "$device" 2>/dev/null || echo "$device"
+					return 0
+				fi
+			fi
+		fi
+	done
+
+	log "no device found for PARTLABEL=${label}"
+	return 1
+}
+
+resolve_root_device() {
+	if [ -z "$ROOTFS_DEVICE" ]; then
+		ROOTFS_DEVICE="PARTLABEL=dstack-rootfs"
+	fi
+
+	if [ "${ROOTFS_DEVICE#PARTLABEL=}" != "$ROOTFS_DEVICE" ]; then
+		label="${ROOTFS_DEVICE#PARTLABEL=}"
+		if [ -n "$label" ]; then
+			device=$(find_device_by_partlabel "$label")
+			if [ -n "$device" ]; then
+				log "determined root device via kernel parameter: ${device}"
+				ROOT_DEV="$device"
+				return
+			fi
+		fi
+	elif [ "${ROOTFS_DEVICE#/dev/}" != "$ROOTFS_DEVICE" ]; then
+		ROOT_DEV="$ROOTFS_DEVICE"
+		return
+	fi
+
+	log "unable to determine root device from available heuristics"
+}
+
+main() {
+	export PATH=/sbin:/bin:/usr/sbin:/usr/bin
+
+	mkdir -p /proc
+	mkdir -p /sys
+	mkdir -p /run
+	mount -t proc proc /proc
+	mount -t sysfs sysfs /sys
+	mount -t tmpfs tmpfs /run
+
+	mkdir -p /dev
+	mount -t devtmpfs devtmpfs /dev
+
+	mkdir -p /dev/pts
+
+	log "booting dstack initramfs"
+
+	ROOTFS_DEVICE=""
+	for param in $(cat /proc/cmdline); do
+		case "$param" in
+		"dstack.rootfs_hash="*)
+			ROOT_HASH="${param#*=}"
+			;;
+		"dstack.rootfs_size="*)
+			DATA_SIZE="${param#*=}"
+			;;
+		"dstack.rootfs_device="*)
+			ROOTFS_DEVICE="${param#*=}"
+			;;
+		*) ;;
+		esac
+	done
+
+	resolve_root_device
+
+	if [ -z "$ROOT_DEV" ]; then
+		log "failed to determine root device"
+		exit 1
+	fi
+	log "resolved root device: ${ROOT_DEV}"
+
+	if [ -z "${ROOT_HASH}" ] || [ -z "${DATA_SIZE}" ]; then
+		log "missing dm-verity parameters; refusing to continue"
+		exit 1
+	fi
+	veritysetup open "${ROOT_DEV}" rootfs "${ROOT_DEV}" "${ROOT_HASH}" --hash-offset="${DATA_SIZE}"
+	log "mounting verified rootfs from /dev/mapper/rootfs"
+	mount -t squashfs /dev/mapper/rootfs ${ROOT_DIR}
+	mount_move_all sys proc dev run
+	log "switching root to ${ROOT_DIR}"
+	exec switch_root ${ROOT_DIR} /sbin/init
+	log "switch_root failed"
+	exit 1
+}
+
+main "$@"

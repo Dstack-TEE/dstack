@@ -1,0 +1,72 @@
+name: Build Guest Images
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to create and release (e.g. v0.5.9). Leave empty to build only.'
+        required: false
+        default: ''
+        type: string
+
+jobs:
+  build:
+    runs-on: yocto-builder
+    timeout-minutes: 480
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Reproducible build
+        run: cd repro-build && ./repro-build.sh -n
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: guest-images
+          path: |
+            repro-build/dist/*.tar.gz
+            repro-build/dist/reproduce.sh
+          retention-days: 30
+
+  release:
+    if: inputs.tag != '' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    needs: build
+    runs-on: yocto-builder
+    timeout-minutes: 60
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout default branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: guest-images
+          path: repro-build/dist
+
+      - name: Validate release tag
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          echo "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$'
+
+      - name: Create tag and release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          git tag "$TAG"
+          git push origin "$TAG"
+          gh release create "$TAG" \
+            repro-build/dist/*.tar.gz \
+            repro-build/dist/reproduce.sh \
+            --title "$TAG" --generate-notes

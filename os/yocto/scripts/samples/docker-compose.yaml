@@ -1,0 +1,15 @@
+services:
+  jupyter:
+    image: kvin/cuda-notebook
+    user: root
+    privileged: true
+    ports:
+      - "8888:8888"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    runtime: nvidia

@@ -1,0 +1,26 @@
+[Unit]
+Description=NVIDIA Persistence Daemon
+Wants=syslog.target
+Before=app-compose.service docker.service
+After=systemd-modules-load.service modprobe@.service
+
+[Service]
+Type=oneshot
+# Skip cleanly on instances without an NVIDIA GPU (exit 1 -> unit skipped, not
+# failed), so the NVIDIA image can run on GPU-less hosts.
+ExecCondition=/usr/bin/nvidia-gpu-detect gpu
+# Load NVIDIA modules only after GPU detection succeeds to avoid boot-time
+# modprobe failures/noise on GPU-less hosts.
+ExecStartPre=/usr/bin/env modprobe nvidia
+ExecStartPre=/usr/bin/env modprobe nvidia-modeset
+ExecStartPre=/usr/bin/env modprobe nvidia-drm
+ExecStartPre=/usr/bin/env modprobe nvidia-uvm
+ExecStart=/usr/bin/env nvidia-persistenced --uvm-persistence-mode
+# NOTE: the GPU ready state (conf-compute -srs 1) is intentionally NOT set
+# here. It is set by `dstack-util setup` (dstack-prepare.service), only after
+# local GPU TEE attestation via nvattest succeeds -- unless the deployment
+# opts out with app-compose requirements.verify_gpu=false.
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

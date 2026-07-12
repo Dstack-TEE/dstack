@@ -1,0 +1,30 @@
+[submodule "bitbake"]
+	path = os/yocto/deps/bitbake
+	url = https://git.openembedded.org/bitbake
+	branch = 2.18
+[submodule "openembedded-core"]
+	path = os/yocto/deps/openembedded-core
+	url = https://git.openembedded.org/openembedded-core
+	branch = wrynose
+[submodule "meta-yocto"]
+	path = os/yocto/deps/meta-yocto
+	url = https://git.yoctoproject.org/meta-yocto
+	branch = wrynose
+[submodule "meta-confidential-compute"]
+	path = os/yocto/deps/meta-confidential-compute
+	url = https://github.com/Dstack-TEE/meta-confidential-compute.git
+[submodule "meta-virtualization"]
+	path = os/yocto/deps/meta-virtualization
+	url = https://github.com/Dstack-TEE/meta-virtualization.git
+[submodule "meta-openembedded"]
+	path = os/yocto/deps/meta-openembedded
+	url = https://github.com/openembedded/meta-openembedded
+[submodule "meta-rust-bin"]
+	path = os/yocto/deps/meta-rust-bin
+	url = https://github.com/Dstack-TEE/meta-rust-bin
+[submodule "dstack"]
+	path = os/yocto/dstack
+	url = https://github.com/Dstack-TEE/dstack
+[submodule "meta-security"]
+	path = os/yocto/deps/meta-security
+	url = https://github.com/Dstack-TEE/meta-security.git

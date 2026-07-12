@@ -1,0 +1,51 @@
+#!/bin/sh
+# nvidia-gpu-detect - report NVIDIA GPU / NVSwitch presence via sysfs PCI.
+#
+# Intended for use as a systemd ExecCondition= so that GPU-only services skip
+# cleanly (instead of failing) on instances without a GPU / without NVSwitch.
+# This lets the NVIDIA and plain images be merged into a single image.
+#
+#   exit 0 -> hardware present     (systemd runs the unit)
+#   exit 1 -> hardware absent      (systemd skips the unit, no failure)
+#
+# Detection mirrors scripts/bin/enable_vfio_passthrough.sh, but reads PCI class
+# codes from sysfs so it works before the nvidia driver is loaded and without
+# relying on lspci / the pci.ids name database:
+#
+#   GPU      = NVIDIA (0x10de) VGA (0x0300xx) or 3D controller (0x0302xx)
+#   NVSwitch = NVIDIA (0x10de) bridge          (0x06xxxx, any bridge subclass)
+#
+# NVSwitch matches any NVIDIA bridge-class device (mirrors the `grep 'Bridge'`
+# heuristic in scripts/bin/enable_vfio_passthrough.sh) rather than only the
+# "Other bridge" subclass 0x0680, so it stays correct if a future NVSwitch
+# enumerates under a different bridge subclass. This is safe here because these
+# images run as TDX guests whose only NVIDIA-vendor devices are passed-through
+# GPUs (class 0x03xx) and NVSwitches (class 0x06xx).
+
+NVIDIA_VENDOR="0x10de"
+
+# match_vendor_class <class-glob>: succeed if any PCI device has NVIDIA's
+# vendor id and a class matching the given glob (e.g. "0x0302*").
+match_vendor_class() {
+    for dev in /sys/bus/pci/devices/*; do
+        [ -r "$dev/vendor" ] && [ -r "$dev/class" ] || continue
+        [ "$(cat "$dev/vendor")" = "$NVIDIA_VENDOR" ] || continue
+        case "$(cat "$dev/class")" in
+            $1) return 0 ;;
+        esac
+    done
+    return 1
+}
+
+case "${1:-gpu}" in
+    gpu)
+        match_vendor_class '0x0300*' || match_vendor_class '0x0302*'
+        ;;
+    nvswitch)
+        match_vendor_class '0x06*'
+        ;;
+    *)
+        echo "usage: ${0##*/} {gpu|nvswitch}" >&2
+        exit 64
+        ;;
+esac

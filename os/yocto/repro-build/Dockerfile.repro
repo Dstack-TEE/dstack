@@ -1,0 +1,53 @@
+FROM ubuntu:24.04@sha256:3afff29dffbc200d202546dc6c4f614edc3b109691e7ab4aa23d02b42ba86790
+
+# Prevent timezone prompt by setting noninteractive frontend and configuring tzdata
+ENV DEBIAN_FRONTEND=noninteractive \
+    TZ=Etc/UTC \
+    TZDATA=Etc/UTC \
+    LC_ALL=en_US.UTF-8 \
+    LANG=en_US.UTF-8
+
+ENV RUSTUP_HOME=/usr/local/rustup \
+    CARGO_HOME=/usr/local/cargo \
+    PATH=/usr/local/cargo/bin:$PATH
+
+# Set timezone
+RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
+
+# Install required packages
+RUN apt update && apt install -y \
+    build-essential \
+    chrpath \
+    diffstat \
+    lz4 \
+    wireguard-tools \
+    python3 \
+    locales \
+    ca-certificates \
+    curl \
+    git \
+    file \
+    gawk \
+    wget \
+    libclang-dev \
+    xorriso \
+    cpio \
+    zstd \
+    gdisk \
+    dosfstools \
+    mtools \
+    libsqlite3-dev
+
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
+    sh -s -- -y --profile minimal --default-toolchain 1.92 && \
+    rustup component add rustfmt clippy rust-analyzer && \
+    rustup target add wasm32-unknown-unknown x86_64-unknown-linux-musl thumbv6m-none-eabi && \
+    chmod -R a+rX "$RUSTUP_HOME" "$CARGO_HOME" && \
+    cargo --version && \
+    rustc --version
+
+# The image runs as the caller's uid, so keep Cargo's registry/cache writable.
+ENV CARGO_HOME=/tmp/cargo
+
+# Generate locale for bitbake
+RUN locale-gen en_US.UTF-8
