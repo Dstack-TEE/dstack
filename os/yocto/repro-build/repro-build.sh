@@ -46,7 +46,7 @@ rm -rf .dummy
 build_to() {
     mkdir -p $1
     GIT_REVISION=$(git -C "$REPO_ROOT" rev-parse HEAD)
-    BUILD_CMD="DSTACK_GIT_REVISION='$GIT_REVISION' ${2} ${GUEST_SRC_DIR}/os/yocto/build.sh image ./bb-build"
+    BUILD_CMD="DSTACK_GIT_REVISION='$GIT_REVISION' ${2} ${GUEST_SRC_DIR}/os/build.sh --backend yocto --build-dir ./bb-build"
     docker run --platform linux/amd64 --rm \
         --userns=host \
         --user $(id -u):$(id -g) \
@@ -83,16 +83,7 @@ set -e
 git clone https://github.com/Dstack-TEE/dstack.git
 cd dstack/
 git checkout $(git -C $THIS_DIR rev-parse HEAD)
-git submodule update --init -- \
-  os/yocto/deps/bitbake \
-  os/yocto/deps/openembedded-core \
-  os/yocto/deps/meta-yocto \
-  os/yocto/deps/meta-confidential-compute \
-  os/yocto/deps/meta-virtualization \
-  os/yocto/deps/meta-openembedded \
-  os/yocto/deps/meta-rust-bin \
-  os/yocto/deps/meta-security
-cd os/yocto/repro-build && RELEASE_FLAVORS='${RELEASE_FLAVORS}' ./repro-build.sh -n
+RELEASE_FLAVORS='${RELEASE_FLAVORS}' make os-image
 EOF
 echo "==========================="
 

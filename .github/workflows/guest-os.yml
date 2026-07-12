@@ -23,20 +23,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Checkout Yocto dependencies
-        run: |
-          git submodule update --init --depth 1 -- \
-            os/yocto/deps/bitbake \
-            os/yocto/deps/openembedded-core \
-            os/yocto/deps/meta-yocto \
-            os/yocto/deps/meta-confidential-compute \
-            os/yocto/deps/meta-virtualization \
-            os/yocto/deps/meta-openembedded \
-            os/yocto/deps/meta-rust-bin \
-            os/yocto/deps/meta-security
-
-      - name: Reproducible build
-        run: cd os/yocto/repro-build && ./repro-build.sh -n
+      - name: Build production guest OS
+        run: make os-image
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4

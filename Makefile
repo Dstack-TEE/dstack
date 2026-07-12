@@ -2,7 +2,17 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-.PHONY: help core core-check core-test sdk-test os os-yocto
+OS_YOCTO_SUBMODULES := \
+	os/yocto/deps/bitbake \
+	os/yocto/deps/openembedded-core \
+	os/yocto/deps/meta-yocto \
+	os/yocto/deps/meta-confidential-compute \
+	os/yocto/deps/meta-virtualization \
+	os/yocto/deps/meta-openembedded \
+	os/yocto/deps/meta-rust-bin \
+	os/yocto/deps/meta-security
+
+.PHONY: help core core-check core-test sdk-test os os-yocto os-deps os-image os-repro-check
 
 help:
 	@echo "dstack monorepo targets:"
@@ -10,8 +20,11 @@ help:
 	@echo "  core-check  check the Rust workspace"
 	@echo "  core-test   test the Rust workspace"
 	@echo "  sdk-test    run all public SDK tests"
-	@echo "  os          build the guest OS with the default backend"
-	@echo "  os-yocto    build the guest OS with Yocto"
+	@echo "  os          build the guest OS natively with the default backend"
+	@echo "  os-yocto    build the guest OS natively with Yocto"
+	@echo "  os-deps     initialize only the Yocto dependency submodules"
+	@echo "  os-image    build one production guest image in the pinned container"
+	@echo "  os-repro-check  build twice and compare reproducible outputs"
 
 core:
 	cargo build --manifest-path dstack/Cargo.toml
@@ -30,3 +43,12 @@ os:
 
 os-yocto:
 	./os/build.sh --backend yocto
+
+os-deps:
+	git submodule update --init --depth 1 -- $(OS_YOCTO_SUBMODULES)
+
+os-image: os-deps
+	cd os/yocto/repro-build && ./repro-build.sh -n
+
+os-repro-check: os-deps
+	cd os/yocto/repro-build && ./repro-build.sh
