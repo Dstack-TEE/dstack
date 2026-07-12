@@ -6,7 +6,19 @@ SPDX-PackageDownloadLocation = "https://github.com/Dstack-TEE/dstack"
 # Non source files
 
 [[annotations]]
-path = "**/*.md"
+path = [
+    "*.md",
+    ".agent/**/*.md",
+    ".claude/**/*.md",
+    "docs/**/*.md",
+    "dstack/**/*.md",
+    "examples/**/*.md",
+    "sdk/**/*.md",
+    "tools/**/*.md",
+    "os/README.md",
+    "os/common/**/*.md",
+    "os/image/**/*.md",
+]
 SPDX-FileCopyrightText = "Copyright (c) 2024-2025 The Project Contributors"
 SPDX-License-Identifier = "Apache-2.0"
 
@@ -22,33 +34,32 @@ path = [
     "**/tsconfig.json",
     "**/tsconfig.node.json",
     "**/tsconfig.browser.json",
-    "kms/auth-eth-bun/.oxlintrc.json",
-    "kms/auth-eth/slither.config.json",
-    "package-lock.json",
+    "dstack/kms/auth-eth-bun/.oxlintrc.json",
+    "dstack/kms/auth-eth/slither.config.json",
     "**/package-lock.json",
-    "kms/auth-eth/.openzeppelin/unknown-2035.json",
-    "kms/auth-mock/.oxlintrc.json",
-    "kms/auth-simple/.oxlintrc.json",
-    "kms/auth-simple/auth-config.example.json",
+    "dstack/kms/auth-eth/.openzeppelin/unknown-2035.json",
+    "dstack/kms/auth-mock/.oxlintrc.json",
+    "dstack/kms/auth-simple/.oxlintrc.json",
+    "dstack/kms/auth-simple/auth-config.example.json",
     "tools/sca/examples/heartbeat/config.json",
     "tools/sca/examples/hello-c/config.json",
     "tools/sca/examples/heartbeat/rootfs/etc/heartbeat/interval",
     "sdk/simulator/*.json",
     "sdk/go/go.sum",
     "sdk/go/ratls/go.sum",
-    "kms/dstack-app/builder/shared/builder-pinned-packages.txt",
-    "kms/dstack-app/builder/shared/qemu-pinned-packages.txt",
-    "gateway/dstack-app/builder/shared/builder-pinned-packages.txt",
-    "gateway/dstack-app/builder/shared/pinned-packages.txt",
+    "dstack/kms/dstack-app/builder/shared/builder-pinned-packages.txt",
+    "dstack/kms/dstack-app/builder/shared/qemu-pinned-packages.txt",
+    "dstack/gateway/dstack-app/builder/shared/builder-pinned-packages.txt",
+    "dstack/gateway/dstack-app/builder/shared/pinned-packages.txt",
 ]
 SPDX-FileCopyrightText = "Copyright (c) 2024-2025 The Project Contributors"
 SPDX-License-Identifier = "Apache-2.0"
 
 [[annotations]]
 path = [
-    "gateway/templates/wg.conf",
-    "guest-agent/templates/metrics.tpl",
-    "key-provider-build/sgx_default_qcnl.conf",
+    "dstack/gateway/templates/wg.conf",
+    "dstack/guest-agent/templates/metrics.tpl",
+    "dstack/key-provider-build/sgx_default_qcnl.conf",
 ]
 SPDX-FileCopyrightText = "Copyright (c) 2024-2025 The Project Contributors"
 SPDX-License-Identifier = "Apache-2.0"
@@ -57,14 +68,22 @@ SPDX-License-Identifier = "Apache-2.0"
 path = [
     ".cursorrules",
     ".mailmap",
-    "**/.gitignore",
-    "**/.npmignore",
+    ".gitignore",
+    "dstack/**/.gitignore",
+    "dstack/**/.npmignore",
+    "docs/**/.gitignore",
+    "examples/**/.gitignore",
+    "os/common/**/.gitignore",
+    "os/image/**/.gitignore",
+    "sdk/**/.gitignore",
+    "sdk/**/.npmignore",
+    "tools/**/.gitignore",
 ]
 SPDX-FileCopyrightText = "Copyright (c) 2024-2025 The Project Contributors"
 SPDX-License-Identifier = "Apache-2.0"
 
 [[annotations]]
-path = "basefiles/*"
+path = "os/common/rootfs/**"
 SPDX-FileCopyrightText = "Copyright (c) 2024-2025 The Project Contributors"
 SPDX-License-Identifier = "Apache-2.0"
 
@@ -74,23 +93,38 @@ path = [
     "dstack_Technical_Charter_Final_10-17-2025.pdf",
     "sdk/simulator/quote.hex",
     "sdk/simulator/attestation.bin",
-    "ra-tls/assets/tdx_quote",
-    "cc-eventlog/samples/ccel.bin",
-    "cc-eventlog/samples/tpm_eventlog.bin",
-    "tpm-attest/tests/tpm_quote_sample.bin",
-    "tpm-qvl/certs/gcp-root-ca.pem",
-    "dstack-attest/tests/nitro_attestation.bin",
-    "dstack-attest/tests/nitro_attestation_dbg.bin",
-    "dstack-attest/tests/sev_snp_attestation.bin",
-    "dstack-attest/tests/sev_snp_ask.pem",
-    "dstack-attest/tests/sev_snp_vcek.pem",
-    "nsm-attest/tests/nitro_attestation.bin",
-    "nsm-qvl/tests/nitro_attestation.bin",
-    "nsm-qvl/certs/AWS_NitroEnclaves_Root-G1.pem",
-    "tpm-qvl/certs/AWS_NitroEnclaves_Root-G1.pem",
+    "dstack/ra-tls/assets/tdx_quote",
+    "dstack/cc-eventlog/samples/ccel.bin",
+    "dstack/cc-eventlog/samples/tpm_eventlog.bin",
+    "dstack/tpm-attest/tests/tpm_quote_sample.bin",
+    "dstack/tpm-qvl/certs/gcp-root-ca.pem",
+    "dstack/dstack-attest/tests/nitro_attestation.bin",
+    "dstack/dstack-attest/tests/nitro_attestation_dbg.bin",
+    "dstack/dstack-attest/tests/sev_snp_attestation.bin",
+    "dstack/dstack-attest/tests/sev_snp_ask.pem",
+    "dstack/dstack-attest/tests/sev_snp_vcek.pem",
+    "dstack/nsm-attest/tests/nitro_attestation.bin",
+    "dstack/nsm-qvl/tests/nitro_attestation.bin",
+    "dstack/nsm-qvl/certs/AWS_NitroEnclaves_Root-G1.pem",
+    "dstack/tpm-qvl/certs/AWS_NitroEnclaves_Root-G1.pem",
 ]
 SPDX-FileCopyrightText = "NONE"
 SPDX-License-Identifier = "CC0-1.0"
+
+# Backend-neutral OS contract
+
+[[annotations]]
+path = "os/spec/*.json"
+SPDX-FileCopyrightText = "Copyright (c) 2026 The Project Contributors"
+SPDX-License-Identifier = "Apache-2.0"
+
+# Imported OS backend
+
+[[annotations]]
+path = "os/yocto/**"
+SPDX-FileCopyrightText = "Copyright (c) Hashforest Technology LLC"
+SPDX-License-Identifier = "BUSL-1.1"
+precedence = "override"
 
 # Artworks
 
@@ -107,7 +141,7 @@ SPDX-License-Identifier = "Apache-2.0"
 # Scripts with SPDX-like content (false positive prevention)
 
 [[annotations]]
-path = "scripts/add-spdx-attribution.py"
+path = "dstack/scripts/add-spdx-attribution.py"
 SPDX-FileCopyrightText = "© 2025 Phala Network <dstack@phala.network>"
 SPDX-License-Identifier = "Apache-2.0"
 precedence = "override"
@@ -115,19 +149,19 @@ precedence = "override"
 # Vendor code
 
 [[annotations]]
-path = "kms/auth-eth/lib/openzeppelin-contracts-upgradeable/**"
+path = "dstack/kms/auth-eth/lib/openzeppelin-contracts-upgradeable/**"
 SPDX-FileCopyrightText = "Copyright (c) 2016-2025 Zeppelin Group Ltd"
 SPDX-License-Identifier = "MIT"
 precedence = "override"
 
 [[annotations]]
-path = "kms/auth-eth/lib/openzeppelin-foundry-upgrades/**"
+path = "dstack/kms/auth-eth/lib/openzeppelin-foundry-upgrades/**"
 SPDX-FileCopyrightText = "NONE"
 SPDX-License-Identifier = "MIT"
 precedence = "override"
 
 [[annotations]]
-path = "kms/auth-eth/lib/forge-std/**"
+path = "dstack/kms/auth-eth/lib/forge-std/**"
 SPDX-FileCopyrightText = "NONE"
 SPDX-License-Identifier = "Apache-2.0"
 precedence = "override"
@@ -135,17 +169,12 @@ precedence = "override"
 # Generated files
 
 [[annotations]]
-path = "kms/auth-eth/typechain-types/**"
+path = "dstack/kms/auth-eth/typechain-types/**"
 SPDX-FileCopyrightText = "NONE"
 SPDX-License-Identifier = "CC0-1.0"
 
 [[annotations]]
 path = "**/*.lock"
-SPDX-FileCopyrightText = "NONE"
-SPDX-License-Identifier = "CC0-1.0"
-
-[[annotations]]
-path = "**/*.lockb"
 SPDX-FileCopyrightText = "NONE"
 SPDX-License-Identifier = "CC0-1.0"
 
@@ -170,40 +199,40 @@ SPDX-FileCopyrightText = "NONE"
 SPDX-License-Identifier = "CC0-1.0"
 
 [[annotations]]
-path = "gateway/assets/*"
+path = "dstack/gateway/assets/*"
 SPDX-FileCopyrightText = "NONE"
 SPDX-License-Identifier = "CC0-1.0"
 
 [[annotations]]
-path = "guest-api/src/generated/*"
+path = "dstack/guest-api/src/generated/*"
 SPDX-FileCopyrightText = "NONE"
 SPDX-License-Identifier = "CC0-1.0"
 
 [[annotations]]
-path = "dstack-util/tests/fixtures/*"
+path = "dstack/dstack-util/tests/fixtures/*"
 SPDX-FileCopyrightText = "NONE"
 SPDX-License-Identifier = "CC0-1.0"
 
 [[annotations]]
-path = "verifier/fixtures/*"
+path = "dstack/verifier/fixtures/*"
 SPDX-FileCopyrightText = "NONE"
 SPDX-License-Identifier = "CC0-1.0"
 
 [[annotations]]
-path = "verifier/builder/shared/*.txt"
+path = "dstack/verifier/builder/shared/*.txt"
 SPDX-FileCopyrightText = "NONE"
 SPDX-License-Identifier = "CC0-1.0"
 
 [[annotations]]
-path = "guest-agent/fixtures/*"
+path = "dstack/guest-agent/fixtures/*"
 SPDX-FileCopyrightText = "NONE"
 SPDX-License-Identifier = "CC0-1.0"
 
 [[annotations]]
 path = [
-    "gateway/test-run/e2e/certs/*",
-    "gateway/test-run/e2e/configs/*",
-    "gateway/test-run/e2e/pebble-config.json",
+    "dstack/gateway/test-run/e2e/certs/*",
+    "dstack/gateway/test-run/e2e/configs/*",
+    "dstack/gateway/test-run/e2e/pebble-config.json",
 ]
 SPDX-FileCopyrightText = "NONE"
 SPDX-License-Identifier = "CC0-1.0"
