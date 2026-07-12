@@ -33,8 +33,7 @@ pub use tpm_types::TpmQuote;
 
 use crate::amd_sev_snp::{AmdKdsClient, VerifiedAmdSnpReport};
 use crate::v1::{
-    is_tdx_acpi_data_event, is_tdx_lite_config, strip_tdx_event_log_for_config,
-    strip_tdx_runtime_event_log,
+    is_tdx_acpi_data_event, strip_tdx_event_log_for_config, strip_tdx_runtime_event_log,
 };
 pub use crate::v1::{Attestation as AttestationV1, PlatformEvidence, StackEvidence};
 
@@ -1178,19 +1177,24 @@ impl<T> Attestation<T> {
 
     /// Get TDX event log string for a vm_config.
     ///
-    /// In lite mode, keep the `ACPI DATA` marker payloads in RTMR0 so callers
-    /// that still consume the top-level `event_log` can semantically identify
-    /// the ACPI table digest events without consulting the versioned
-    /// attestation field.
-    pub fn get_tdx_event_log_string_for_config(&self, config: &str) -> Option<String> {
+    /// Always keeps the `ACPI DATA` marker payloads on the three RTMR0 ACPI
+    /// digest events, regardless of the vm_config's `tdx_attestation_variant`,
+    /// so callers that consume the top-level `event_log` can semantically
+    /// identify the ACPI table digest events without consulting the
+    /// versioned attestation field, and a verifier can choose lite
+    /// verification for any TDX boot rather than only ones resolved to lite
+    /// at launch.
+    ///
+    /// `config` is accepted for API stability but no longer changes the
+    /// result.
+    pub fn get_tdx_event_log_string_for_config(&self, _config: &str) -> Option<String> {
         self.tdx_quote().map(|q| {
-            let keep_lite_acpi_payload = is_tdx_lite_config(config);
             let stripped: Vec<_> = q
                 .event_log
                 .iter()
                 .map(|e| {
                     let mut stripped = e.stripped();
-                    if keep_lite_acpi_payload && is_tdx_acpi_data_event(e) {
+                    if is_tdx_acpi_data_event(e) {
                         stripped.event_payload = e.event_payload.clone();
                     }
                     stripped
@@ -2117,7 +2121,7 @@ mod tests {
     }
 
     #[test]
-    fn tdx_event_log_string_for_lite_keeps_acpi_data_payloads() {
+    fn tdx_event_log_string_always_keeps_acpi_data_payloads() {
         let mut attestation = dummy_tdx_attestation([0u8; 64]);
         let AttestationQuote::DstackTdx(tdx_quote) = &mut attestation.quote else {
             panic!("expected TDX attestation");
@@ -2128,23 +2132,27 @@ mod tests {
             tdx_event(3, 8, b"runtime-payload"),
         ];
 
-        let lite_events: Vec<TdxEvent> = serde_json::from_str(
-            &attestation
-                .get_tdx_event_log_string_for_config(r#"{"tdx_attestation_variant":"lite"}"#)
-                .expect("TDX event log"),
-        )
-        .expect("decode lite event log");
-        assert_eq!(lite_events[0].event_payload, b"ACPI DATA");
-        assert!(lite_events[1].event_payload.is_empty());
-        assert!(lite_events[2].event_payload.is_empty());
-
-        let legacy_events: Vec<TdxEvent> = serde_json::from_str(
-            &attestation
-                .get_tdx_event_log_string()
-                .expect("TDX event log"),
-        )
-        .expect("decode legacy event log");
-        assert!(legacy_events[0].event_payload.is_empty());
+        // The ACPI DATA marker payload is retained regardless of the
+        // vm_config's tdx_attestation_variant (including no vm_config at
+        // all), so a verifier can choose lite verification for any TDX boot.
+        for config in [
+            r#"{"tdx_attestation_variant":"lite"}"#,
+            r#"{"tdx_attestation_variant":"legacy"}"#,
+            "",
+        ] {
+            let events: Vec<TdxEvent> = serde_json::from_str(
+                &attestation
+                    .get_tdx_event_log_string_for_config(config)
+                    .expect("TDX event log"),
+            )
+            .unwrap_or_else(|e| panic!("decode event log for config {config:?}: {e}"));
+            assert_eq!(
+                events[0].event_payload, b"ACPI DATA",
+                "config {config:?} must keep the ACPI DATA marker payload"
+            );
+            assert!(events[1].event_payload.is_empty());
+            assert!(events[2].event_payload.is_empty());
+        }
     }
 
     #[test]
