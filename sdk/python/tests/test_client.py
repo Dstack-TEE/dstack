@@ -7,7 +7,6 @@ import os
 import warnings
 
 from evidence_api.tdx.quote import TdxQuote
-import httpx
 import pytest
 
 from dstack_sdk import AsyncDstackClient
@@ -236,8 +235,6 @@ def test_tls_key_with_alt_names():
 def test_unix_socket_file_not_exist():
     """Test that client raises error when Unix socket file doesn't exist."""
     # Temporarily remove environment variable to test file check
-    import os
-
     saved_env = os.environ.get("DSTACK_SIMULATOR_ENDPOINT")
     if "DSTACK_SIMULATOR_ENDPOINT" in os.environ:
         del os.environ["DSTACK_SIMULATOR_ENDPOINT"]
@@ -256,8 +253,6 @@ def test_unix_socket_file_not_exist():
 
 def test_non_unix_socket_endpoints():
     """Test that client doesn't throw error for non-unix socket paths."""
-    import os
-
     saved_env = os.environ.get("DSTACK_SIMULATOR_ENDPOINT")
     if "DSTACK_SIMULATOR_ENDPOINT" in os.environ:
         del os.environ["DSTACK_SIMULATOR_ENDPOINT"]
