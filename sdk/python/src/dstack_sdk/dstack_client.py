@@ -465,22 +465,6 @@ class AsyncDstackClient(BaseClient):
         result = await self._send_rpc_request("Info", {})
         return InfoResponse.parse_response(result, TcbInfoV05x)
 
-    async def emit_event(
-        self,
-        event: str,
-        payload: str | bytes,
-    ) -> None:
-        """Emit an event that extends RTMR3 on TDX platforms."""
-        if not event:
-            raise ValueError("event name cannot be empty")
-
-        payload_bytes: bytes = payload.encode() if isinstance(payload, str) else payload
-        hex_payload = binascii.hexlify(payload_bytes).decode()
-        await self._send_rpc_request(
-            "EmitEvent", {"event": event, "payload": hex_payload}
-        )
-        return None
-
     async def get_tls_key(
         self,
         subject: str | None = None,
@@ -622,15 +606,6 @@ class DstackClient(BaseClient):
     @call_async
     def info(self) -> InfoResponse[TcbInfo]:
         """Fetch service information including parsed TCB info."""
-        raise NotImplementedError
-
-    @call_async
-    def emit_event(
-        self,
-        event: str,
-        payload: str | bytes,
-    ) -> None:
-        """Emit an event that extends RTMR3 on TDX platforms."""
         raise NotImplementedError
 
     @call_async

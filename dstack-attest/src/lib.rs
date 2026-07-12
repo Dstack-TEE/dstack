@@ -24,8 +24,7 @@ mod v1;
 /// Appending to the event log and extending RTMR3 must happen atomically as a
 /// unit: the order of log entries has to match the order of RTMR extensions,
 /// otherwise the RTMR replay performed during quote verification will not
-/// reproduce the measured value. Concurrent callers (e.g. multiple
-/// `emit_event` RPCs hitting the guest-agent at once) would otherwise be able
+/// reproduce the measured value. Concurrent callers would otherwise be able
 /// to interleave their log writes and `extend_rtmr` calls.
 static EMIT_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 

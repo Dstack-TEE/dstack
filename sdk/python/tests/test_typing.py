@@ -55,7 +55,6 @@ def test_all_sync_method_types():
         "get_quote": GetQuoteResponse,
         "get_tls_key": GetTlsKeyResponse,
         "info": InfoResponse,
-        "emit_event": type(None),  # Returns None
         "is_reachable": bool,
     }
 
@@ -97,7 +96,6 @@ def test_async_method_types():
         "get_quote": GetQuoteResponse,
         "get_tls_key": GetTlsKeyResponse,
         "info": InfoResponse,
-        "emit_event": type(None),
         "is_reachable": bool,
     }
 
@@ -131,7 +129,6 @@ def test_method_signature_comparison():
         "get_quote",
         "get_tls_key",
         "info",
-        "emit_event",
         "is_reachable",
     ]
 

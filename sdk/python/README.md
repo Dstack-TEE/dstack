@@ -179,15 +179,6 @@ print(valid.valid)  # True
 **`verify()` Returns:** `VerifyResponse`
 - `valid`: Boolean indicating if the signature is valid
 
-### Emit Events
-
-Extend RTMR3 with custom measurements for your application's boot sequence (requires dstack OS 0.5.0+). These measurements are append-only and become part of the attestation record.
-
-```python
-client.emit_event('config_loaded', 'production')
-client.emit_event('plugin_initialized', 'auth-v2')
-```
-
 ### Diagnostics
 
 ```python
@@ -311,7 +302,6 @@ hash_value = get_compose_hash(app_compose_dict)
 | Feature | Required dstack OS |
 |---|---|
 | `get_key`, `get_quote`, `get_tls_key` (legacy fields), `info` (legacy fields) | 0.3+ |
-| `emit_event` | 0.5.0+ |
 | `attest`, `sign` / `verify`, `is_reachable` | 0.5.0+ (sign/verify require server build with the feature) |
 | `version`, `algorithm='ed25519'` on `get_key`, `info.cloud_vendor` / `cloud_product`, `not_before` / `not_after` / `with_app_info` on `get_tls_key` | 0.5.7+ |
 | `verify_env_encrypt_public_key` (signature_v1 with timestamp) | Requires KMS build that emits `signature_v1`; legacy variant remains available |

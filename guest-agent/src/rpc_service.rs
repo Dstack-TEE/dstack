@@ -11,10 +11,10 @@ use dstack_guest_agent_rpc::{
     dstack_guest_server::{DstackGuestRpc, DstackGuestServer},
     tappd_server::{TappdRpc, TappdServer},
     worker_server::{WorkerRpc, WorkerServer},
-    AppInfo, AttestResponse, DeriveK256KeyResponse, DeriveKeyArgs, EmitEventArgs,
-    GetAttestationForAppKeyRequest, GetKeyArgs, GetKeyResponse, GetQuoteResponse, GetTlsKeyArgs,
-    GetTlsKeyResponse, RawQuoteArgs, SignRequest, SignResponse, TdxQuoteArgs, TdxQuoteResponse,
-    VerifyRequest, VerifyResponse, WorkerVersion,
+    AppInfo, AttestResponse, DeriveK256KeyResponse, DeriveKeyArgs, GetAttestationForAppKeyRequest,
+    GetKeyArgs, GetKeyResponse, GetQuoteResponse, GetTlsKeyArgs, GetTlsKeyResponse, RawQuoteArgs,
+    SignRequest, SignResponse, TdxQuoteArgs, TdxQuoteResponse, VerifyRequest, VerifyResponse,
+    WorkerVersion,
 };
 use dstack_types::{AppKeys, SysConfig};
 use ed25519_dalek::ed25519::signature::hazmat::{PrehashSigner, PrehashVerifier};
@@ -179,10 +179,6 @@ impl AppState {
     fn attest_response(&self, report_data: [u8; 64]) -> Result<AttestResponse> {
         self.inner.platform.attest_response(report_data)
     }
-
-    fn emit_event(&self, event: &str, payload: &[u8]) -> Result<()> {
-        self.inner.platform.emit_event(event, payload)
-    }
 }
 
 pub struct InternalRpcHandler {
@@ -326,10 +322,6 @@ impl DstackGuestRpc for InternalRpcHandler {
     async fn get_quote(self, request: RawQuoteArgs) -> Result<GetQuoteResponse> {
         let report_data = pad64(&request.report_data).context("Report data is too long")?;
         self.state.quote_response(report_data)
-    }
-
-    async fn emit_event(self, request: EmitEventArgs) -> Result<()> {
-        self.state.emit_event(&request.event, &request.payload)
     }
 
     async fn info(self) -> Result<AppInfo> {
@@ -857,10 +849,6 @@ pNs85uhOZE8z2jr8Pg==
                 Ok(AttestResponse {
                     attestation: VersionedAttestation::V1 { attestation }.to_bytes()?,
                 })
-            }
-
-            fn emit_event(&self, _event: &str, _payload: &[u8]) -> Result<()> {
-                Ok(())
             }
         }
 
