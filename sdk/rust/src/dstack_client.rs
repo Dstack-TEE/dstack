@@ -181,16 +181,6 @@ impl DstackClient {
         Ok(response)
     }
 
-    pub async fn emit_event(&self, event: String, payload: Vec<u8>) -> Result<()> {
-        if event.is_empty() {
-            anyhow::bail!("Event name cannot be empty")
-        }
-        let hex_payload = hex_encode(payload);
-        let data = json!({ "event": event, "payload": hex_payload });
-        self.send_rpc_request::<_, ()>("/EmitEvent", &data).await?;
-        Ok(())
-    }
-
     pub async fn get_tls_key(&self, tls_key_config: TlsKeyConfig) -> Result<GetTlsKeyResponse> {
         let response = self.send_rpc_request("/GetTlsKey", &tls_key_config).await?;
         let response = serde_json::from_value::<GetTlsKeyResponse>(response)?;

@@ -6,7 +6,7 @@ mod simulator;
 
 use std::sync::Arc;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use clap::Parser;
 use dstack_guest_agent::{
     backend::PlatformBackend,
@@ -89,10 +89,6 @@ impl PlatformBackend for SimulatorPlatform {
     fn attest_response(&self, report_data: [u8; 64]) -> Result<AttestResponse> {
         simulator::simulated_attest_response(&self.attestation, report_data, self.patch_report_data)
     }
-
-    fn emit_event(&self, event: &str, _payload: &[u8]) -> Result<()> {
-        bail!("runtime event emission is unavailable in simulator mode: {event}")
-    }
 }
 
 #[rocket::main]
@@ -143,13 +139,6 @@ mod tests {
         )
         .expect("fixture attestation should load");
         SimulatorPlatform::new(fixture, true)
-    }
-
-    #[test]
-    fn simulator_rejects_runtime_event_emission() {
-        let platform = load_fixture_platform();
-        let err = platform.emit_event("test.event", b"payload").unwrap_err();
-        assert!(err.to_string().contains("unavailable in simulator mode"));
     }
 
     #[test]

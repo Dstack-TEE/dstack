@@ -50,9 +50,6 @@ service DstackGuest {
   // Returns a dstack-defined attestation format that supports different attestation modes across platforms.
   rpc Attest(RawQuoteArgs) returns (AttestResponse) {}
 
-  // Emit an event. This extends the event to RTMR3 on TDX platform.
-  rpc EmitEvent(EmitEventArgs) returns (google.protobuf.Empty) {}
-
   // Get app info
   rpc Info(google.protobuf.Empty) returns (AppInfo) {}
 
@@ -203,13 +200,6 @@ message GetQuoteResponse {
   // on non-TDX TEE platforms (AMD SEV-SNP, ...). TDX uses `quote` + `event_log`
   // above to keep this response compact.
   bytes attestation = 5;
-}
-
-message EmitEventArgs {
-  // The event name
-  string event = 1;
-  // The event data
-  bytes payload = 2;
 }
 
 // The request to derive a key

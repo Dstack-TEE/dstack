@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::{Context, Result};
-use dstack_attest::emit_runtime_event;
 use dstack_guest_agent_rpc::{AttestResponse, GetQuoteResponse};
 use ra_tls::attestation::Attestation;
 use ra_tls::attestation::{QuoteContentType, VersionedAttestation};
@@ -13,7 +12,6 @@ pub trait PlatformBackend: Send + Sync {
     fn certificate_attestation(&self, pubkey: &[u8]) -> Result<VersionedAttestation>;
     fn quote_response(&self, report_data: [u8; 64], vm_config: &str) -> Result<GetQuoteResponse>;
     fn attest_response(&self, report_data: [u8; 64]) -> Result<AttestResponse>;
-    fn emit_event(&self, event: &str, payload: &[u8]) -> Result<()>;
 }
 
 #[derive(Debug, Default)]
@@ -61,9 +59,5 @@ impl PlatformBackend for RealPlatform {
         Ok(AttestResponse {
             attestation: attestation.into_versioned().to_bytes()?,
         })
-    }
-
-    fn emit_event(&self, event: &str, payload: &[u8]) -> Result<()> {
-        emit_runtime_event(event, payload)
     }
 }

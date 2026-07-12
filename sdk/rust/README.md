@@ -103,9 +103,6 @@ println!("{}", info.tcb_info);
 Generates a versioned attestation with a custom 64-byte payload.
 - `attestation`: Hex-encoded attestation
 
-#### `emit_event(event: String, payload: Vec<u8>)`
-Sends an event log with associated binary payload to the runtime.
-
 ### Generate TLS Certificates
 
 `get_tls_key()` creates fresh TLS certificates. Unlike `get_key()`, each call generates a new random key.
@@ -173,19 +170,6 @@ println!("{}", valid.valid);  // true
 
 **`verify()` Returns:** `VerifyResponse`
 - `valid`: Boolean indicating if signature is valid
-
-### Emit Events
-
-Extend RTMR3 with custom measurements for your application's boot sequence (requires dstack OS 0.5.0+). These measurements are append-only and become part of the attestation record.
-
-```rust
-client.emit_event("config_loaded".to_string(), b"production".to_vec()).await?;
-client.emit_event("plugin_initialized".to_string(), b"auth-v2".to_vec()).await?;
-```
-
-**Parameters:**
-- `event`: Event name (string identifier)
-- `payload`: Event value (bytes)
 
 ## Blockchain Integration
 

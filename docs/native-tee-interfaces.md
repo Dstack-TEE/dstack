@@ -144,4 +144,4 @@ For configfs-tsm, permissions can be more provider-specific. If your main proces
 
 On TDX, RTMR3 is an append-only runtime measurement register. It is useful when a launcher measures code or configuration first, then hands permission and execution to the measured code.
 
-Use `/EmitEvent` through `/var/run/dstack.sock` when you want dstack's event log and verifier to replay an application runtime measurement. If your application extends RTMR3 directly through native interfaces, your application owns the event-log story for those extensions.
+dstack itself extends RTMR3 during guest boot (compose-hash, key-provider, instance-id, and related runtime events). Applications that need additional runtime measurements should extend RTMR3 through the native TDX / TSM measurement interfaces documented above and own the event-log story for those extensions.

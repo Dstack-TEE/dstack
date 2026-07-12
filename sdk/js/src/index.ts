@@ -361,30 +361,6 @@ export class DstackClient<T extends TcbInfo = TcbInfoV05x> {
   }
 
   /**
-   * Emit an event. This extends the event to RTMR3 on TDX platform.
-   *
-   * Requires dstack OS 0.5.0 or later.
-   *
-   * @param event The event name
-   * @param payload The event data as string or Buffer or Uint8Array
-   */
-  async emitEvent(event: string, payload: string | Buffer | Uint8Array): Promise<void> {
-    if (!event) {
-      throw new Error('Event name cannot be empty')
-    }
-
-    const hexPayload = to_hex(payload)
-    await send_rpc_request(
-      this.endpoint,
-      '/EmitEvent',
-      JSON.stringify({
-        event: event,
-        payload: hexPayload
-      })
-    )
-  }
-
-  /**
    * Signs a payload using a derived key.
    * @param algorithm The algorithm to use (e.g., "ed25519", "secp256k1", "secp256k1_prehashed")
    * @param data The data to sign. If algorithm is "secp256k1_prehashed", this must be a 32-byte hash.

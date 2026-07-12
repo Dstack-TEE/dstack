@@ -168,37 +168,6 @@ tlsKey2, _ := client.GetTlsKey(ctx, dstack.TlsKeyOptions{})
 // tlsKey1.Key != tlsKey2.Key (always different!)
 ```
 
-### Event Logging
-
-> [!NOTE]
-> This feature isn't available in the simulator. We recommend sticking with `report_data` for most cases since it's simpler and safer to use. If you're not super familiar with SGX/TDX attestation quotes, it's best to avoid adding data directly into quotes as it could cause verification issues.
-
-Extend RTMR3 with custom events for audit trails:
-
-```go
-// Emit custom events (requires dstack OS 0.5.0+)
-eventData := map[string]interface{}{
-	"action":    "transfer",
-	"amount":    1000,
-	"timestamp": time.Now().Unix(),
-}
-eventPayload, _ := json.Marshal(eventData)
-
-err := client.EmitEvent(ctx, "user-action", eventPayload)
-if err != nil {
-	log.Fatal(err)
-}
-
-// Events are automatically included in subsequent quotes
-quote, err := client.GetQuote(ctx, []byte("audit-data"))
-if err != nil {
-	log.Fatal(err)
-}
-
-var events []interface{}
-json.Unmarshal([]byte(quote.EventLog), &events)
-```
-
 ## Optional blockchain helpers (build tags)
 
 By default, the Go SDK builds a **core profile** (attestation, key derivation, info, signing, env encryption).
@@ -654,18 +623,6 @@ cert1, _ := client.GetTlsKey(ctx, dstack.TlsKeyOptions{})
 cert2, _ := client.GetTlsKey(ctx, dstack.TlsKeyOptions{})
 // cert1.Key != cert2.Key (always different)
 ```
-
-##### `EmitEvent(ctx context.Context, event string, payload []byte) error`
-
-Extends RTMR3 with a custom event for audit logging.
-
-**Parameters:**
-- `event`: Event identifier string
-- `payload`: Event data
-
-**Requirements:**
-- dstack OS version 0.5.0 or later
-- Events are permanently recorded in TEE measurements
 
 ##### `IsReachable(ctx context.Context) bool`
 

@@ -697,21 +697,6 @@ func (c *DstackClient) IsReachable(ctx context.Context) bool {
 	return err == nil
 }
 
-// EmitEvent sends an event to be extended to RTMR3 on TDX platform.
-// The event will be extended to RTMR3 with the provided name and payload.
-//
-// Requires dstack OS 0.5.0 or later.
-func (c *DstackClient) EmitEvent(ctx context.Context, event string, payload []byte) error {
-	if event == "" {
-		return fmt.Errorf("event name cannot be empty")
-	}
-	_, err := c.sendRPCRequest(ctx, "/EmitEvent", map[string]interface{}{
-		"event":   event,
-		"payload": hex.EncodeToString(payload),
-	})
-	return err
-}
-
 // Legacy methods for backward compatibility with warnings
 
 // DeriveKey is deprecated. Use GetKey instead.

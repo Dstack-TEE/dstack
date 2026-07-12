@@ -137,16 +137,6 @@ const ok = await client.verify('ed25519', 'hello dstack', res.signature, res.pub
 ok.valid // boolean
 ```
 
-### `emitEvent(event, payload)`
-
-Extends RTMR3 with a custom event. The event becomes part of the next quote's event log and cannot be removed.
-
-```typescript
-await client.emitEvent('config_loaded', 'v1.0.0')
-```
-
-Requires guest agent ≥ 0.5.0.
-
 ## Diagnostics
 
 ### `isReachable()`
@@ -249,7 +239,6 @@ Verify functions return the signer's compressed public key (hex) on success, or 
 | Feature | Minimum guest agent |
 | --- | --- |
 | `getKey`, `getTlsKey`, `getQuote`, `info` | 0.3.x |
-| `emitEvent` | 0.5.0 |
 | `attest`, `sign`, `verify`, `version`, ed25519 keys, `info.cloud_vendor` / `cloud_product`, `getTlsKey` `notBefore` / `notAfter` / `withAppInfo` | 0.5.7 |
 
 The SDK's release versions track guest agent versions — `0.5.8-x` targets dstack 0.5.7+.
