@@ -29,7 +29,7 @@ Before starting, ensure you have:
 - Completed [Blockchain Wallet Setup](/tutorial/blockchain-setup) with:
   - Wallet private key stored in `~/.dstack/secrets/sepolia-private-key`
   - Sepolia testnet ETH (~0.01 ETH recommended)
-- dstack repository cloned locally at v0.5.7: `git clone -b v0.5.7 https://github.com/Dstack-TEE/dstack ~/dstack`
+- Current dstack monorepo cloned locally: `git clone https://github.com/Dstack-TEE/dstack ~/dstack`
 ## What Gets Deployed
 
 The deployment creates two smart contracts on Sepolia:
@@ -45,17 +45,17 @@ These contracts use the UUPS (Universal Upgradeable Proxy Standard) pattern for 
 
 ## Deployment
 
-> **Important: Run these steps on your LOCAL machine, not on the TDX server.** Contract deployment requires your Ethereum private key. By running locally, your private key never touches the server. You need a clone of the dstack repo on your local machine: `git clone -b v0.5.7 https://github.com/Dstack-TEE/dstack ~/dstack`
+> **Important: Run these steps on your LOCAL machine, not on the TDX server.** Contract deployment requires your Ethereum private key. By running locally, your private key never touches the server. You need a current clone of the dstack repo on your local machine: `git clone https://github.com/Dstack-TEE/dstack ~/dstack`
 
 ### Step 1: Clone Repository and Navigate to auth-eth
 
-On your **local machine**, clone the dstack repository (if you haven't already) and check out v0.5.7:
+On your **local machine**, clone the dstack repository (if you haven't already) and use the current `master` branch:
 
 ```bash
 git clone https://github.com/Dstack-TEE/dstack.git ~/dstack 2>/dev/null || true
 cd ~/dstack
-git checkout v0.5.7
-cd kms/auth-eth
+git checkout master
+cd dstack/kms/auth-eth
 ```
 
 ### Step 2: Install Node.js and Dependencies

@@ -33,6 +33,9 @@ Do not install a generic QEMU package as a substitute for TDX host setup. Use th
 
 Use your vendor or distribution's SEV-SNP enablement path. The [AMDSEV project](https://github.com/AMDESE/AMDSEV) documents CPU, BIOS, firmware, kernel, QEMU, OVMF, and verification requirements for SEV-SNP hosts. Confidential Containers also keeps platform setup separate from its [quickstart](https://github.com/confidential-containers/documentation/blob/main/quickstart.md) and points SEV users to AMD host preparation from its [SEV guide](https://github.com/confidential-containers/documentation/blob/main/guides/sev.md).
 
+After the host is enabled, follow [AMD SEV-SNP Support](./amd-sev-snp.md) for
+the dstack guest image, installation, attestation, and KMS release policy.
+
 For dstack, the host must have:
 
 - AMD SEV-SNP enabled in firmware and the host OS.

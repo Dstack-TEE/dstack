@@ -18,12 +18,16 @@ If any of these fail, the cryptographic proof won't verify.
 
 **Programmatic verification**: dstack provides several tools:
 
-- [dstack-verifier](https://github.com/Dstack-TEE/dstack/tree/master/verifier) - HTTP service with `/verify` endpoint, also runs as CLI
+- [dstack-verifier](https://github.com/Dstack-TEE/dstack/tree/master/dstack/verifier) - HTTP service with `/verify` endpoint, also runs as CLI
 - [dcap-qvl](https://github.com/Phala-Network/dcap-qvl) - Open source quote verification library (Rust, Python, JS/WASM, CLI)
 - [SDKs](../sdk/) - JavaScript and Python SDKs include `replayRtmrs()` for local RTMR verification
 
 ## Learn More
 
+- [Intel TDX attestation](./attestation-tdx.md) - Verify TDX measurements and runtime events
+- [AMD SEV-SNP support](./amd-sev-snp.md) - SNP image, attestation, and key-release requirements
+- [GCP attestation](./attestation-gcp.md) - Verify the GCP TDX and TPM evidence chain
+- [AWS Nitro Enclaves attestation](./attestation-nitro-enclave.md) - Verify NSM evidence
 - [Attestation Documentation](https://docs.phala.com/phala-cloud/attestation/overview) - Generating quotes, programmatic verification, RTMR3 replay
 - [Confidential AI Verification](https://docs.phala.com/phala-cloud/confidential-ai/verify/overview) - GPU TEE attestation for AI workloads
 - [Domain Attestation](https://docs.phala.com/phala-cloud/networking/domain-attestation) - TLS certificates managed in TEE

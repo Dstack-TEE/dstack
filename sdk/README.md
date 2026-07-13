@@ -20,5 +20,5 @@ All SDKs communicate with the guest agent via HTTP over a Unix socket (`/var/run
 For local development without TDX hardware, use the simulator:
 
 - [Download releases](https://github.com/Dstack-TEE/dstack/releases?q=simulator-v&expanded=true)
-- [Install as a systemd service](../guest-agent-simulator/install-systemd.sh)
+- [Install as a systemd service](../dstack/guest-agent-simulator/install-systemd.sh)
 - [Docker image](https://hub.docker.com/r/phalanetwork/dstack-simulator)

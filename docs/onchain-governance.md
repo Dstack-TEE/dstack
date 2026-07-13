@@ -193,7 +193,7 @@ struct AppBootInfo {
 }
 ```
 
-Source: [`kms/auth-eth/contracts/`](../kms/auth-eth/contracts/)
+Source: [`dstack/kms/auth-eth/contracts/`](../dstack/kms/auth-eth/contracts/)
 
 ## See Also
 

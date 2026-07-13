@@ -26,21 +26,21 @@ jobs:
       - name: Build Gateway Docker image
         uses: docker/build-push-action@v5
         with:
-          context: gateway/dstack-app/builder
+          context: dstack/gateway/dstack-app/builder
           push: false
           load: true
           tags: dstack-gateway-check:latest
           provenance: false
           build-contexts: |
-            build-shared=build/shared
+            build-shared=dstack/build/shared
           build-args: |
             DSTACK_REV=${{ env.DSTACK_REV }}
             DSTACK_SRC_URL=${{ env.DSTACK_SRC_URL }}
 
       - name: Verify pinned packages
         run: |
-          build/shared/verify-pinned-packages.sh dstack-gateway-check:latest \
-            gateway/dstack-app/builder/shared/pinned-packages.txt
+          dstack/build/shared/verify-pinned-packages.sh dstack-gateway-check:latest \
+            dstack/gateway/dstack-app/builder/shared/pinned-packages.txt
 
       - name: Build gateway-builder target
         run: |
@@ -49,22 +49,27 @@ jobs:
             --target gateway-builder \
             --tag gateway-builder-check:latest \
             --provenance=false \
-            --build-context build-shared=build/shared \
+            --build-context build-shared=dstack/build/shared \
             --build-arg "DSTACK_REV=${DSTACK_REV}" \
             --build-arg "DSTACK_SRC_URL=${DSTACK_SRC_URL}" \
-            gateway/dstack-app/builder
+            dstack/gateway/dstack-app/builder
 
       - name: Verify builder pinned packages
         run: |
-          build/shared/verify-pinned-packages.sh gateway-builder-check:latest \
-            gateway/dstack-app/builder/shared/builder-pinned-packages.txt
+          dstack/build/shared/verify-pinned-packages.sh gateway-builder-check:latest \
+            dstack/gateway/dstack-app/builder/shared/builder-pinned-packages.txt
 
   kms:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-        with:
-          submodules: recursive
+
+      - name: Checkout KMS contract dependencies
+        run: |
+          git submodule update --init --recursive --depth 1 -- \
+            dstack/kms/auth-eth/lib/forge-std \
+            dstack/kms/auth-eth/lib/openzeppelin-contracts-upgradeable \
+            dstack/kms/auth-eth/lib/openzeppelin-foundry-upgrades
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -72,21 +77,21 @@ jobs:
       - name: Build KMS Docker image
         uses: docker/build-push-action@v5
         with:
-          context: kms/dstack-app/builder
+          context: dstack/kms/dstack-app/builder
           push: false
           load: true
           tags: dstack-kms-check:latest
           provenance: false
           build-contexts: |
-            build-shared=build/shared
+            build-shared=dstack/build/shared
           build-args: |
             DSTACK_REV=${{ env.DSTACK_REV }}
             DSTACK_SRC_URL=${{ env.DSTACK_SRC_URL }}
 
       - name: Verify pinned packages (qemu stage)
         run: |
-          build/shared/verify-pinned-packages.sh dstack-kms-check:latest \
-            kms/dstack-app/builder/shared/qemu-pinned-packages.txt
+          dstack/build/shared/verify-pinned-packages.sh dstack-kms-check:latest \
+            dstack/kms/dstack-app/builder/shared/qemu-pinned-packages.txt
 
       - name: Build kms-builder target
         run: |
@@ -95,22 +100,22 @@ jobs:
             --target kms-builder \
             --tag kms-builder-check:latest \
             --provenance=false \
-            --build-context build-shared=build/shared \
+            --build-context build-shared=dstack/build/shared \
             --build-arg "DSTACK_REV=${DSTACK_REV}" \
             --build-arg "DSTACK_SRC_URL=${DSTACK_SRC_URL}" \
-            kms/dstack-app/builder
+            dstack/kms/dstack-app/builder
 
       - name: Verify builder pinned packages
         run: |
-          build/shared/verify-pinned-packages.sh kms-builder-check:latest \
-            kms/dstack-app/builder/shared/builder-pinned-packages.txt
+          dstack/build/shared/verify-pinned-packages.sh kms-builder-check:latest \
+            dstack/kms/dstack-app/builder/shared/builder-pinned-packages.txt
 
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
 
       - name: Build KMS contracts
         run: |
-          cd kms/auth-eth
+          cd dstack/kms/auth-eth
           forge build
 
   verifier:
@@ -124,22 +129,22 @@ jobs:
       - name: Build Verifier Docker image
         uses: docker/build-push-action@v5
         with:
-          context: verifier
-          file: verifier/builder/Dockerfile
+          context: dstack/verifier
+          file: dstack/verifier/builder/Dockerfile
           push: false
           load: true
           tags: dstack-verifier-check:latest
           provenance: false
           build-contexts: |
-            build-shared=build/shared
+            build-shared=dstack/build/shared
           build-args: |
             DSTACK_REV=${{ env.DSTACK_REV }}
             DSTACK_SRC_URL=${{ env.DSTACK_SRC_URL }}
 
       - name: Verify pinned packages (runtime)
         run: |
-          build/shared/verify-pinned-packages.sh dstack-verifier-check:latest \
-            verifier/builder/shared/pinned-packages.txt
+          dstack/build/shared/verify-pinned-packages.sh dstack-verifier-check:latest \
+            dstack/verifier/builder/shared/pinned-packages.txt
 
       - name: Build verifier-builder target
         run: |
@@ -148,16 +153,16 @@ jobs:
             --target verifier-builder \
             --tag verifier-builder-check:latest \
             --provenance=false \
-            --file verifier/builder/Dockerfile \
-            --build-context build-shared=build/shared \
+            --file dstack/verifier/builder/Dockerfile \
+            --build-context build-shared=dstack/build/shared \
             --build-arg "DSTACK_REV=${DSTACK_REV}" \
             --build-arg "DSTACK_SRC_URL=${DSTACK_SRC_URL}" \
-            verifier
+            dstack/verifier
 
       - name: Verify builder pinned packages
         run: |
-          build/shared/verify-pinned-packages.sh verifier-builder-check:latest \
-            verifier/builder/shared/builder-pinned-packages.txt
+          dstack/build/shared/verify-pinned-packages.sh verifier-builder-check:latest \
+            dstack/verifier/builder/shared/builder-pinned-packages.txt
 
       - name: Build acpi-builder target
         run: |
@@ -166,13 +171,13 @@ jobs:
             --target acpi-builder \
             --tag verifier-acpi-check:latest \
             --provenance=false \
-            --file verifier/builder/Dockerfile \
-            --build-context build-shared=build/shared \
+            --file dstack/verifier/builder/Dockerfile \
+            --build-context build-shared=dstack/build/shared \
             --build-arg "DSTACK_REV=${DSTACK_REV}" \
             --build-arg "DSTACK_SRC_URL=${DSTACK_SRC_URL}" \
-            verifier
+            dstack/verifier
 
       - name: Verify qemu pinned packages
         run: |
-          build/shared/verify-pinned-packages.sh verifier-acpi-check:latest \
-            verifier/builder/shared/qemu-pinned-packages.txt
+          dstack/build/shared/verify-pinned-packages.sh verifier-acpi-check:latest \
+            dstack/verifier/builder/shared/qemu-pinned-packages.txt

@@ -22,6 +22,13 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v5
 
+      - name: Checkout contract dependencies
+        run: |
+          git submodule update --init --recursive --depth 1 -- \
+            dstack/kms/auth-eth/lib/forge-std \
+            dstack/kms/auth-eth/lib/openzeppelin-contracts-upgradeable \
+            dstack/kms/auth-eth/lib/openzeppelin-foundry-upgrades
+
       - name: Parse version from tag
         run: |
           # Extract version from tag (e.g., kms-v1.2.3 -> 1.2.3)
@@ -49,13 +56,13 @@ jobs:
         env:
           SOURCE_DATE_EPOCH: ${{ env.TIMESTAMP }}
         with:
-          context: kms/dstack-app/builder
+          context: dstack/kms/dstack-app/builder
           push: true
           tags: ${{ vars.DOCKERHUB_ORG }}/dstack-kms:${{ env.VERSION }}
           platforms: linux/amd64
           provenance: false
           build-contexts: |
-            build-shared=build/shared
+            build-shared=dstack/build/shared
           build-args: |
             DSTACK_REV=${{ env.GIT_REV }}
             DSTACK_SRC_URL=${{ github.server_url }}/${{ github.repository }}
@@ -73,7 +80,7 @@ jobs:
 
       - name: Compile contracts with Foundry
         run: |
-          cd kms/auth-eth
+          cd dstack/kms/auth-eth
           forge install
           forge build
 
@@ -82,8 +89,8 @@ jobs:
         with:
           name: "KMS Release v${{ env.VERSION }}"
           files: |
-            kms/auth-eth/out/DstackKms.sol/DstackKms.json
-            kms/auth-eth/out/DstackApp.sol/DstackApp.json
+            dstack/kms/auth-eth/out/DstackKms.sol/DstackKms.json
+            dstack/kms/auth-eth/out/DstackApp.sol/DstackApp.json
           body: |
             ## Docker Image Information
 

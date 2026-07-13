@@ -1,0 +1,95 @@
+# SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+name: Build Guest Images
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to create and release (e.g. guest-os-v0.6.0). Leave empty to build only.'
+        required: false
+        default: ''
+        type: string
+
+jobs:
+  build:
+    runs-on: yocto-builder
+    timeout-minutes: 480
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Build production guest OS
+        run: make os-image
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: guest-images
+          path: |
+            os/yocto/repro-build/dist/*.tar.gz
+            os/yocto/repro-build/dist/reproduce.sh
+          retention-days: 30
+
+  release:
+    if: inputs.tag != '' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    needs: build
+    runs-on: yocto-builder
+    timeout-minutes: 60
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout default branch
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: guest-images
+          path: os/yocto/repro-build/dist
+
+      - name: Validate release tag
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          echo "$TAG" | grep -Eq '^guest-os-v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$'
+          VERSION="${TAG#guest-os-v}"
+          python3 - "$VERSION" <<'PY'
+          import re
+          import sys
+
+          match = re.match(r"^(\d+)\.(\d+)\.(\d+)", sys.argv[1])
+          if not match or tuple(map(int, match.groups())) < (0, 6, 0):
+              raise SystemExit("guest OS versions below 0.6.0 belong in Dstack-TEE/meta-dstack")
+          PY
+          BARE="os/yocto/repro-build/dist/dstack-${VERSION}.tar.gz"
+          UKI="os/yocto/repro-build/dist/dstack-${VERSION}-uki.tar.gz"
+          test -f "$BARE"
+          test -f "$UKI"
+
+          read -r IMAGE_VERSION IMAGE_REVISION < <(
+            tar -xOf "$BARE" "dstack-${VERSION}/metadata.json" |
+              python3 -c 'import json, sys; data=json.load(sys.stdin); print(data["version"], data["git_revision"])'
+          )
+          test "$IMAGE_VERSION" = "$VERSION"
+          test "$IMAGE_REVISION" = "$(git rev-parse HEAD)"
+          tar -tzf "$UKI" | grep -Fx "dstack-${VERSION}/disk.raw"
+
+      - name: Create tag and release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          git tag "$TAG"
+          git push origin "$TAG"
+          gh release create "$TAG" \
+            os/yocto/repro-build/dist/*.tar.gz \
+            os/yocto/repro-build/dist/reproduce.sh \
+            --title "$TAG" --generate-notes

@@ -11,15 +11,15 @@
 repo = "https://github.com/pre-commit/pre-commit-hooks"
 rev = "v5.0.0"
 hooks = [
-    { id = "trailing-whitespace", args = ["--markdown-linebreak-ext=md"] },
-    { id = "end-of-file-fixer" },
-    { id = "check-yaml", args = ["--allow-multiple-documents"], exclude = "gateway/templates/" },
+    { id = "trailing-whitespace", args = ["--markdown-linebreak-ext=md"], exclude = '^(os/yocto/|tools/(dev-stack\.sh|vm-runner/)|dstack/(dstack-util/tests/fixtures/key-provider-docker-compose\.yaml|gateway/src/main_service/snapshots/.*))' },
+    { id = "end-of-file-fixer", exclude = "^(os/yocto/|tools/(dev-stack\\.sh|vm-runner/))" },
+    { id = "check-yaml", args = ["--allow-multiple-documents"], exclude = "dstack/gateway/templates/" },
     { id = "check-toml" },
     { id = "check-json" },
     { id = "check-merge-conflict" },
     { id = "check-added-large-files", args = ["--maxkb=500"] },
     { id = "check-symlinks" },
-    { id = "mixed-line-ending", args = ["--fix=lf"] },
+    { id = "mixed-line-ending", args = ["--fix=lf"], exclude = "^(os/yocto/|tools/(dev-stack\\.sh|vm-runner/))" },
 ]
 
 # --- Rust: rustfmt ---
@@ -29,20 +29,20 @@ repo = "local"
 [[repos.hooks]]
 id = "cargo-fmt"
 name = "cargo fmt"
-entry = "cargo fmt --all"
+entry = "cargo fmt --manifest-path dstack/Cargo.toml --all"
 language = "system"
 types = ["rust"]
 pass_filenames = false
 
 # --- Python: ruff (lint + format) ---
-# scripts/bin/dstack-cloud is vendored from the dstack-cloud tree and follows its
-# own style; exclude it so we don't reformat/relint a large third-party script.
+# dstack-cloud and the imported Yocto/legacy tools follow their upstream styles;
+# exclude them so this repository does not create unrelated formatting churn.
 [[repos]]
 repo = "https://github.com/astral-sh/ruff-pre-commit"
 rev = "v0.11.4"
 hooks = [
-    { id = "ruff", args = ["--fix", "--select", "E,F,I,D", "--ignore", "D203,D213,E501"], exclude = "^scripts/bin/dstack-cloud$" },
-    { id = "ruff-format", exclude = "^scripts/bin/dstack-cloud$" },
+    { id = "ruff", args = ["--fix", "--select", "E,F,I,D", "--ignore", "D203,D213,E501"], exclude = "^(dstack/scripts/bin/dstack-cloud|os/yocto/|tools/vm-runner/)" },
+    { id = "ruff-format", exclude = "^(dstack/scripts/bin/dstack-cloud|os/yocto/|tools/vm-runner/)" },
 ]
 
 # --- Go: go vet ---
@@ -62,7 +62,10 @@ pass_filenames = false
 repo = "https://github.com/shellcheck-py/shellcheck-py"
 rev = "v0.10.0.1"
 hooks = [
-    { id = "shellcheck" },
+    # The imported Yocto backend retains its upstream shell style. New common
+    # OS scripts remain covered by this hook. The explicit legacy list records
+    # pre-existing shellcheck debt exposed when the files moved into dstack/.
+    { id = "shellcheck", exclude = '^(os/yocto/.*|tools/(dev-stack\.sh|vm-runner/.*)|dstack/(build/shared/config-qemu\.sh|cargo-check-all\.sh|gateway/test-run/(cluster\.sh|e2e/run-e2e\.sh|test_certbot\.sh)|guest-agent-simulator/install-systemd\.sh|kms/auth-eth/run-tests\.sh|scripts/(config-fw\.sh|setup-bridge\.sh)|supervisor/tests/(test-cli\.sh|test\.sh)|test-scripts/(get-app-key\.sh|inspect-cert\.sh)|verifier/test\.sh|vmm/(src/setup-user\.sh|src/tests/test-deployment\.sh|ui/scripts/build_proto\.sh|venv\.sh)))$' },
 ]
 
 # --- Conventional commits (used by cliff.toml for changelog) ---

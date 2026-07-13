@@ -253,7 +253,7 @@ Use the VMM CLI tool to deploy the CVM:
 
 ```bash
 # Navigate to dstack VMM directory
-cd ~/dstack/vmm
+cd ~/dstack/dstack/vmm
 
 # Set VMM auth from saved token
 export DSTACK_VMM_AUTH_PASSWORD=$(cat ~/.dstack/secrets/vmm-auth-token)

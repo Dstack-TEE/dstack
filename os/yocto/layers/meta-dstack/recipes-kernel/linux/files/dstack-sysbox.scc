@@ -1,0 +1,3 @@
+define KFEATURE_DESCRIPTION "DStack Sysbox runtime configuration"
+
+kconf non-hardware dstack-sysbox.cfg

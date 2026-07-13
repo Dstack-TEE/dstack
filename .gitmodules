@@ -2,12 +2,47 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-[submodule "kms/auth-eth/lib/forge-std"]
-	path = kms/auth-eth/lib/forge-std
+[submodule "dstack/kms/auth-eth/lib/forge-std"]
+	path = dstack/kms/auth-eth/lib/forge-std
 	url = https://github.com/foundry-rs/forge-std
-[submodule "kms/auth-eth/lib/openzeppelin-contracts-upgradeable"]
-	path = kms/auth-eth/lib/openzeppelin-contracts-upgradeable
+[submodule "dstack/kms/auth-eth/lib/openzeppelin-contracts-upgradeable"]
+	path = dstack/kms/auth-eth/lib/openzeppelin-contracts-upgradeable
 	url = https://github.com/OpenZeppelin/openzeppelin-contracts-upgradeable
-[submodule "kms/auth-eth/lib/openzeppelin-foundry-upgrades"]
-	path = kms/auth-eth/lib/openzeppelin-foundry-upgrades
+[submodule "dstack/kms/auth-eth/lib/openzeppelin-foundry-upgrades"]
+	path = dstack/kms/auth-eth/lib/openzeppelin-foundry-upgrades
 	url = https://github.com/OpenZeppelin/openzeppelin-foundry-upgrades
+
+[submodule "os/yocto/deps/bitbake"]
+	path = os/yocto/deps/bitbake
+	url = https://git.openembedded.org/bitbake
+	branch = 2.18
+
+[submodule "os/yocto/deps/openembedded-core"]
+	path = os/yocto/deps/openembedded-core
+	url = https://git.openembedded.org/openembedded-core
+	branch = wrynose
+
+[submodule "os/yocto/deps/meta-yocto"]
+	path = os/yocto/deps/meta-yocto
+	url = https://git.yoctoproject.org/meta-yocto
+	branch = wrynose
+
+[submodule "os/yocto/deps/meta-confidential-compute"]
+	path = os/yocto/deps/meta-confidential-compute
+	url = https://github.com/Dstack-TEE/meta-confidential-compute.git
+
+[submodule "os/yocto/deps/meta-virtualization"]
+	path = os/yocto/deps/meta-virtualization
+	url = https://github.com/Dstack-TEE/meta-virtualization.git
+
+[submodule "os/yocto/deps/meta-openembedded"]
+	path = os/yocto/deps/meta-openembedded
+	url = https://github.com/openembedded/meta-openembedded
+
+[submodule "os/yocto/deps/meta-rust-bin"]
+	path = os/yocto/deps/meta-rust-bin
+	url = https://github.com/Dstack-TEE/meta-rust-bin
+
+[submodule "os/yocto/deps/meta-security"]
+	path = os/yocto/deps/meta-security
+	url = https://github.com/Dstack-TEE/meta-security.git

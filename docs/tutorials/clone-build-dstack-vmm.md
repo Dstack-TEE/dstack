@@ -55,25 +55,27 @@ All build commands should be run as the `ubuntu` user. Only the final installati
 
 ### Step 2: Verify dstack Repository
 
-The dstack repository should already be cloned and checked out at v0.5.7 from [Gramine Key Provider](/tutorial/gramine-key-provider):
+The dstack repository should already be cloned and checked out on the current
+`master` branch from [Gramine Key Provider](/tutorial/gramine-key-provider):
 
 ```bash
 cd ~/dstack
 git describe --tags
-# Should show v0.5.7
+git branch --show-current
+# Should show master
 ```
 
 ### Step 3: Build dstack-vmm
 
 ```bash
-cd ~/dstack/vmm
+cd ~/dstack/dstack/vmm
 cargo build --release
 ```
 
 ### Step 5: Build dstack-supervisor
 
 ```bash
-cd ~/dstack
+cd ~/dstack/dstack
 cargo build --release -p supervisor
 ```
 
@@ -81,11 +83,11 @@ cargo build --release -p supervisor
 
 ```bash
 # Install VMM
-sudo cp ~/dstack/target/release/dstack-vmm /usr/local/bin/dstack-vmm
+sudo cp ~/dstack/dstack/target/release/dstack-vmm /usr/local/bin/dstack-vmm
 sudo chmod 755 /usr/local/bin/dstack-vmm
 
 # Install supervisor
-sudo cp ~/dstack/target/release/supervisor /usr/local/bin/dstack-supervisor
+sudo cp ~/dstack/dstack/target/release/supervisor /usr/local/bin/dstack-supervisor
 sudo chmod 755 /usr/local/bin/dstack-supervisor
 ```
 
@@ -106,12 +108,12 @@ ls -la /usr/local/bin/dstack-supervisor
 ### Specify a Different Version
 
 ```bash
-# Check out a specific version
-git checkout v0.5.4
+# Check out a monorepo-era release tag when one is available
+git checkout <release-tag>
 
-# Or use main branch for latest development
-git checkout main
-git pull
+# Or use the master branch for latest development
+git checkout master
+git pull --ff-only
 ```
 
 ### Clean Build
@@ -119,6 +121,7 @@ git pull
 To rebuild from scratch:
 
 ```bash
+cd ~/dstack/dstack
 cargo clean
 cargo build --release
 ```
@@ -128,8 +131,9 @@ cargo build --release
 For development with better error messages:
 
 ```bash
+cd ~/dstack/dstack
 cargo build
-# Binary at ~/dstack/target/debug/dstack-vmm
+# Binary at ~/dstack/dstack/target/debug/dstack-vmm
 ```
 
 ---

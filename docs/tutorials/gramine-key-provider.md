@@ -105,13 +105,13 @@ Clone the dstack repository and check out the v0.5.7 release:
 cd ~
 git clone https://github.com/Dstack-TEE/dstack.git
 cd dstack
-git checkout v0.5.7
+git checkout master
 ```
 
 ### Step 2: Navigate to Key Provider
 
 ```bash
-cd ~/dstack/key-provider-build
+cd ~/dstack/dstack/key-provider-build
 ls -la
 ```
 
@@ -125,7 +125,7 @@ You should see:
 The key provider needs to know where to find a PCCS for quote verification. Create the QCNL configuration file:
 
 ```bash
-cat > ~/dstack/key-provider-build/sgx_default_qcnl.conf << 'EOF'
+cat > ~/dstack/dstack/key-provider-build/sgx_default_qcnl.conf << 'EOF'
 {
   "pccs_url": "https://pccs.phala.network/sgx/certification/v4/",
   "use_secure_cert": false,
@@ -143,7 +143,7 @@ The default configuration binds to localhost, but CVMs need to access the key pr
 
 ```bash
 # Change from 127.0.0.1:3443 to 0.0.0.0:3443
-sed -i 's/"127\.0\.0\.1:3443:3443"/"0.0.0.0:3443:3443"/' ~/dstack/key-provider-build/docker-compose.yaml
+sed -i 's/"127\.0\.0\.1:3443:3443"/"0.0.0.0:3443:3443"/' ~/dstack/dstack/key-provider-build/docker-compose.yaml
 ```
 
 > **Note:** This makes the key provider accessible from CVMs via the QEMU user-mode networking gateway (`10.0.2.2`). The key provider still verifies TDX quotes, so only legitimate CVMs can obtain keys.

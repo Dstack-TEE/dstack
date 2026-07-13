@@ -71,9 +71,31 @@ Deploy to a self-hosted TDX machine with the `dstackup install` -> `dstack deplo
 
 Setting up dstack on your own hardware? Start with the [self-hosted quick onboarding guide](./docs/onboarding.md)
 
+Building or customizing the guest OS itself? Follow the [guest-OS build guide](./docs/building-guest-os.md).
+
 ## Architecture
 
 ![Architecture](./docs/assets/arch.png)
+
+### Repository layout
+
+```text
+dstack/  Core services, Rust crates, host and guest runtime code
+sdk/     Stable public SDK paths
+os/      Guest-OS payload, image contract, and build backends
+docs/    User and operator documentation
+tools/   Standalone development and security tools
+```
+
+The currently implemented OS backend is Yocto under `os/yocto/`. Shared rootfs
+payload and release assembly stay outside that backend so another builder can
+be added later without duplicating them. See [`os/README.md`](./os/README.md).
+
+Scripts follow the same ownership boundaries: component-specific helpers stay
+beside their component under `dstack/`; files installed into every guest live
+in `os/common/rootfs/`; backend-neutral image tooling lives in `os/image/`;
+Yocto-only helpers live in `os/yocto/scripts/`; and repository-wide standalone
+utilities live in `tools/`.
 
 Your container runs inside a Confidential VM, such as Intel TDX or AMD SEV-SNP, with optional GPU isolation via NVIDIA Confidential Computing. The CPU TEE protects application logic; the GPU TEE protects model weights and inference data.
 
@@ -122,13 +144,16 @@ Apps communicate with the guest agent via HTTP over `/var/run/dstack.sock`. Use 
 
 **For Operators**
 - [Hardware Enablement](./docs/hardware-enablement.md) - Prepare a TDX or AMD SEV-SNP host
+- [AMD SEV-SNP](./docs/amd-sev-snp.md) - Image, attestation, and key-release requirements
 - [Self-hosted Quick Onboarding](./docs/onboarding.md) - First app on one host
-- [Deployment](./docs/deployment.md) - Self-hosting on TDX hardware
+- [Build the Guest OS](./docs/building-guest-os.md) - Build and verify bootable images from source
+- [Deployment](./docs/deployment.md) - Self-hosting on TDX or AMD SEV-SNP hardware
 - [On-Chain Governance](./docs/onchain-governance.md) - Smart contract authorization
 - [Gateway](./docs/dstack-gateway.md) - Gateway configuration
 
 **Reference**
 - [App Compose Format](./docs/normalized-app-compose.md) - Compose file specification
+- [Intel TDX Attestation](./docs/attestation-tdx.md) - Measurement and runtime-event verification
 - [Native TEE Interfaces](./docs/native-tee-interfaces.md) - Advanced compatibility with Linux TEE devices and configfs-tsm
 - [VMM CLI Guide](./docs/vmm-cli-user-guide.md) - Command-line reference
 - [Design Decisions](./docs/design-and-hardening-decisions.md) - Architecture rationale
@@ -193,7 +218,7 @@ Yes. dstack runs on supported TEE-capable servers, including Intel TDX-capable h
 <details>
 <summary><strong>How do users verify my deployment?</strong></summary>
 
-Your app exposes attestation quotes via the SDK. Users verify these quotes using [dstack-verifier](https://github.com/Dstack-TEE/dstack/tree/master/verifier), [dcap-qvl](https://github.com/Phala-Network/dcap-qvl), or the [Trust Center](https://trust.phala.com). See the [verification guide](./docs/verification.md) for details.
+Your app exposes attestation quotes via the SDK. Users verify these quotes using [dstack-verifier](https://github.com/Dstack-TEE/dstack/tree/master/dstack/verifier), [dcap-qvl](https://github.com/Phala-Network/dcap-qvl), or the [Trust Center](https://trust.phala.com). See the [verification guide](./docs/verification.md) for details.
 
 </details>
 
@@ -231,4 +256,7 @@ Logo and branding assets: [dstack-logo-kit](./docs/assets/dstack-logo-kit/)
 
 ## License
 
-Apache 2.0
+The dstack-owned source, SDKs, documentation, tools, guest OS backend, and
+image-assembly code are Apache-2.0. Embedded and third-party components retain
+their own license declarations and notices. See file-level SPDX declarations
+and [`REUSE.toml`](./REUSE.toml) for the exact scope.

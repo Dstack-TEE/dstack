@@ -4,7 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-dstack is a developer-friendly, security-first framwwork for deploying containerized applications into Intel TDX (Trust Domain Extensions) Trusted Execution Environments (TEEs). The system provides end-to-end security through hardware-rooted attestation, automated key management, and zero-trust networking.
+dstack is a developer-friendly, security-first framework for deploying containerized applications into Intel TDX (Trust Domain Extensions) Trusted Execution Environments (TEEs). The system provides end-to-end security through hardware-rooted attestation, automated key management, and zero-trust networking.
+
+The monorepo keeps core services and the Rust workspace in `dstack/`, public
+SDKs in `sdk/`, guest-OS builders in `os/`, documentation in `docs/`, and
+standalone utilities in `tools/`.
 
 ## Architecture
 
@@ -12,13 +16,13 @@ dstack consists of several core components that interact to provide TEE-based co
 
 ### Core Components
 
-- **`dstack-vmm`** (`vmm/`): Virtual Machine Manager that runs on bare-metal TDX hosts. Orchestrates CVM lifecycle, manages QEMU processes, allocates resources, parses docker-compose files, and provides a web UI (port 9080) for deployment.
+- **`dstack-vmm`** (`dstack/vmm/`): Virtual Machine Manager that runs on bare-metal TDX hosts. Orchestrates CVM lifecycle, manages QEMU processes, allocates resources, parses docker-compose files, and provides a web UI (port 9080) for deployment.
 
-- **`dstack-kms`** (`kms/`): Key Management System that handles cryptographic key provisioning after TDX quote verification. Derives keys deterministically per application identity and enforces authorization policies defined in smart contracts on Ethereum.
+- **`dstack-kms`** (`dstack/kms/`): Key Management System that handles cryptographic key provisioning after TDX quote verification. Derives keys deterministically per application identity and enforces authorization policies defined in smart contracts on Ethereum.
 
-- **`dstack-gateway`** (`gateway/`): Reverse proxy providing zero-trust network access. Handles TLS termination, automated ACME certificate provisioning, and traffic routing via ingress mapping rules.
+- **`dstack-gateway`** (`dstack/gateway/`): Reverse proxy providing zero-trust network access. Handles TLS termination, automated ACME certificate provisioning, and traffic routing via ingress mapping rules.
 
-- **`dstack-guest-agent`** (`guest-agent/`): Runs inside each CVM to provide runtime services including Docker Compose lifecycle management, TDX quote generation, key provisioning from KMS, and log aggregation. Exposes API via Unix socket at `/var/run/dstack.sock`.
+- **`dstack-guest-agent`** (`dstack/guest-agent/`): Runs inside each CVM to provide runtime services including Docker Compose lifecycle management, TDX quote generation, key provisioning from KMS, and log aggregation. Exposes API via Unix socket at `/var/run/dstack.sock`.
 
 ### Communication Protocols
 
@@ -29,10 +33,10 @@ dstack consists of several core components that interact to provide TEE-based co
 
 ### Additional Components
 
-- **`certbot`** (`certbot/`): Automated ACME DNS-01 certificate management
-- **`ct_monitor`** (`ct_monitor/`): Certificate Transparency log monitoring
-- **`verifier`** (`verifier/`): TDX quote verification service using `dcap-qvl`
-- **`supervisor`** (`supervisor/`): Process supervision inside CVMs
+- **`certbot`** (`dstack/certbot/`): Automated ACME DNS-01 certificate management
+- **`ct_monitor`** (`dstack/ct_monitor/`): Certificate Transparency log monitoring
+- **`verifier`** (`dstack/verifier/`): TDX quote verification service using `dcap-qvl`
+- **`supervisor`** (`dstack/supervisor/`): Process supervision inside CVMs
 - **SDKs** (`sdk/`): Client SDKs in Rust, Python, Go, and JavaScript for interacting with guest-agent APIs
 
 ## Build Commands
@@ -40,6 +44,8 @@ dstack consists of several core components that interact to provide TEE-based co
 ### Rust Components
 
 ```bash
+cd dstack
+
 # Build all components
 cargo build --release
 
@@ -63,7 +69,7 @@ cargo clippy -- -D warnings --allow unused_variables
 ### Ethereum Smart Contracts (KMS Auth)
 
 ```bash
-cd kms/auth-eth
+cd dstack/kms/auth-eth
 npm install       # Install Node.js dependencies for bootAuth server
 forge install     # Install Foundry dependencies (submodules)
 
@@ -94,7 +100,7 @@ make test     # Run tests
 
 ```bash
 # Run all Rust tests (requires simulator)
-./run-tests.sh
+./dstack/run-tests.sh
 ```
 
 This script:
@@ -106,6 +112,8 @@ This script:
 ### Running Specific Tests
 
 ```bash
+cd dstack
+
 # Run tests for a specific package
 cargo test -p dstack-kms --all-features
 
@@ -119,7 +127,7 @@ cargo test --all-features -- --show-output --test-threads=1
 ### Foundry Tests (Ethereum Contracts)
 
 ```bash
-cd kms/auth-eth
+cd dstack/kms/auth-eth
 
 # Run all Foundry tests
 forge test
@@ -168,7 +176,7 @@ This rule is enforced in `.cursorrules`.
 
 ### Local Development Setup
 
-1. Build meta-dstack artifacts (see README.md section "Build and Run")
+1. Build guest-OS artifacts through `os/build.sh` (see `os/README.md`)
 2. Download or build guest OS image
 3. Run components in separate terminals:
    - KMS: `./dstack-kms -c kms.toml`
@@ -193,10 +201,10 @@ Ingress mapping pattern: `<id>[-[<port>][s|g]].<base_domain>`
 
 ## Important Files
 
-- `Cargo.toml`: Workspace configuration with all Rust crates
-- `vmm.toml`: VMM configuration (CID pool, port mapping, KMS/gateway URLs)
-- `kms.toml`: KMS configuration (contract addresses, RPC endpoints)
-- `gateway.toml`: Gateway configuration (domain, certificates, WireGuard)
+- `dstack/Cargo.toml`: Workspace configuration with all Rust crates
+- `dstack/vmm/vmm.toml`: VMM configuration (CID pool, port mapping, KMS/gateway URLs)
+- `dstack/kms/kms.toml`: KMS configuration (contract addresses, RPC endpoints)
+- `dstack/gateway/gateway.toml`: Gateway configuration (domain, certificates, WireGuard)
 - `docker-compose.yaml`: App deployment format (normalized to `.app-compose.json`)
 
 ## Common Tasks
@@ -204,7 +212,7 @@ Ingress mapping pattern: `<id>[-[<port>][s|g]].<base_domain>`
 ### Adding a New Rust Crate
 
 1. Create crate directory and `Cargo.toml`
-2. Add to workspace members in root `Cargo.toml`
+2. Add to workspace members in `dstack/Cargo.toml`
 3. Add workspace dependency if it will be used by other crates
 
 ### Modifying RPC APIs
@@ -216,9 +224,9 @@ RPC definitions use `prpc` framework with Protocol Buffers:
 
 ### Working with TDX Quotes
 
-- Pure Rust API: `tdx-attest/`
-- Verification: `verifier/` using `dcap-qvl`
-- Event log parsing: `cc-eventlog/`
+- Pure Rust API: `dstack/tdx-attest/`
+- Verification: `dstack/verifier/` using `dcap-qvl`
+- Event log parsing: `dstack/cc-eventlog/`
 
 ## Documentation
 

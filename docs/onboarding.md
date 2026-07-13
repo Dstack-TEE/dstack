@@ -3,7 +3,7 @@
 Use this guide to get a first dstack app running on one Intel TDX host. The workflow uses `dstackup` for host setup and `dstack` for app deployment:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Dstack-TEE/dstack/master/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/Dstack-TEE/dstack/master/dstack/scripts/install.sh | sh
 sudo dstackup install
 sudo dstack deploy \
   -n hello-nginx \
@@ -12,7 +12,14 @@ sudo dstack deploy \
 curl http://127.0.0.1:8080/
 ```
 
-AMD SEV-SNP hosts use the same `dstackup` and `dstack` commands after you provide a guest image that contains the image digest (`digest.txt`).
+AMD SEV-SNP hosts use the same `dstackup` and `dstack` commands after you
+provide a guest image that contains the image digest (`digest.txt`); see
+[AMD SEV-SNP Support](./amd-sev-snp.md) for the experimental platform's image,
+attestation, and KMS requirements.
+
+The default onboarding flow uses a published image. To build or customize the
+guest OS first, follow [Build the dstack guest OS](./building-guest-os.md), then
+install the resulting `dstack-<version>.tar.gz` bundle.
 
 For multi-node production, Gateway TLS, custom domains, or on-chain governance, use the full [deployment guide](./deployment.md).
 
@@ -71,7 +78,7 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 Build and install the `dstackup` bootstrap command:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Dstack-TEE/dstack/master/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/Dstack-TEE/dstack/master/dstack/scripts/install.sh | sh
 ```
 
 The bootstrap installer builds `dstackup` from a temporary source checkout and installs it under `/usr/local/bin`. The `dstackup install` command then builds and installs `dstack`, `dstack-auth`, `dstack-vmm`, `supervisor`, static assets, and host config into the system layout.
@@ -84,7 +91,7 @@ Run:
 sudo dstackup install
 ```
 
-`dstackup install` auto-detects TDX or AMD SEV-SNP. If no local guest image exists, it downloads the latest CPU image from [meta-dstack releases](https://github.com/Dstack-TEE/meta-dstack/releases), requires the release SHA-256 digest by default, verifies the tarball, stages the unpack, and only then adopts the image.
+`dstackup install` auto-detects TDX or AMD SEV-SNP. If no local guest image exists, it downloads the latest unified image from [dstack guest-OS releases](https://github.com/Dstack-TEE/dstack/releases?q=guest-os-v), requires the release SHA-256 digest by default, verifies the tarball, stages the unpack, and only then adopts the image. Current images include NVIDIA support conditionally and work on CPU-only hosts too. Pinned versions below 0.6.0 are read directly from the archived [`meta-dstack` releases](https://github.com/Dstack-TEE/meta-dstack/releases); versions 0.6.0 and later come from this repository.
 
 On TDX, `dstackup install` starts the SGX key provider automatically from `/usr/local/share/dstack/key-provider-build`. To use a different provider, pass one of:
 
@@ -95,14 +102,16 @@ sudo dstackup install --use-existing-key-provider 127.0.0.1:3443
 
 On AMD SEV-SNP, no SGX key provider is needed. The selected guest image must include `digest.txt`; otherwise, `dstackup install` fails before it starts the host units because apps could not be pinned to the measured OS image.
 
-To use a GPU image, pull it before install:
+The normal pull command is sufficient for current CPU and GPU hosts:
 
 ```bash
-sudo dstackup image pull --gpu
+sudo dstackup image pull
 sudo dstackup install
 ```
 
-If multiple images are present, pass the image name or release version to `--image`, such as `dstack-0.5.11`, `dstack-nvidia-0.5.11`, or `0.5.11`. If the requested release-shaped image is not local, `dstackup install` downloads it.
+`dstackup image pull --gpu` remains a compatibility option for older releases that published a separate `dstack-nvidia-*` archive; it falls back to the unified archive when a release has no separate GPU asset.
+
+If multiple images are present, pass the image name or release version to `--image`, such as `dstack-0.6.0`, legacy `dstack-nvidia-0.5.11`, or `0.6.0`. If the requested release-shaped image is not local, `dstackup install` downloads it.
 
 When install succeeds, it prints the dashboard URL, the KMS address, and a `dstack deploy` command template. The default dashboard URL is:
 
@@ -207,7 +216,7 @@ Use `--prefix` when you want a second isolated install on the same host. A custo
 Install `dstackup` into the prefix, then use the same prefix for `dstackup` and `dstack`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Dstack-TEE/dstack/master/scripts/install.sh | sh -s -- --prefix /opt/dstack-test
+curl -fsSL https://raw.githubusercontent.com/Dstack-TEE/dstack/master/dstack/scripts/install.sh | sh -s -- --prefix /opt/dstack-test
 
 sudo /opt/dstack-test/bin/dstackup install \
   --prefix /opt/dstack-test \
@@ -246,7 +255,7 @@ Use the [deployment guide](./deployment.md) when you need domain routing, Gatewa
 
 ### Image download fails
 
-`dstackup install` downloads the latest CPU image when KMS mode needs an image and none exists locally. If the download fails, check network access to GitHub and the meta-dstack release:
+`dstackup install` downloads the latest CPU image when KMS mode needs an image and none exists locally. If the download fails, check network access to GitHub and the dstack guest-OS release:
 
 ```bash
 sudo dstackup image pull

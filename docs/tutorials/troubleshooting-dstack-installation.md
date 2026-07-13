@@ -108,6 +108,7 @@ rustup update stable
 ### Network timeout downloading crates
 
 ```bash
+cd ~/dstack/dstack
 export CARGO_HTTP_TIMEOUT=300
 cargo build --release
 ```
@@ -124,16 +125,17 @@ sudo apt install -y build-essential pkg-config libssl-dev
 
 ```bash
 # Ensure you're using sudo
-sudo cp ~/dstack/target/release/dstack-vmm /usr/local/bin/
+sudo cp ~/dstack/dstack/target/release/dstack-vmm /usr/local/bin/
 
 # Or install to user directory
 mkdir -p ~/.local/bin
-cp ~/dstack/target/release/dstack-vmm ~/.local/bin/
+cp ~/dstack/dstack/target/release/dstack-vmm ~/.local/bin/
 ```
 
 ### Build cache issues
 
 ```bash
+cd ~/dstack/dstack
 cargo clean
 cargo update
 cargo build --release
@@ -345,8 +347,14 @@ Try alternative download methods:
 
 ```bash
 # Using curl instead of wget
+IFS=. read -r DSTACK_MAJOR DSTACK_MINOR _ <<< "$DSTACK_VERSION"
+if (( DSTACK_MAJOR == 0 && DSTACK_MINOR < 6 )); then
+  IMAGE_URL="https://github.com/Dstack-TEE/meta-dstack/releases/download/v${DSTACK_VERSION}/dstack-${DSTACK_VERSION}.tar.gz"
+else
+  IMAGE_URL="https://github.com/Dstack-TEE/dstack/releases/download/guest-os-v${DSTACK_VERSION}/dstack-${DSTACK_VERSION}.tar.gz"
+fi
 curl -L -o dstack-${DSTACK_VERSION}.tar.gz \
-  https://github.com/Dstack-TEE/meta-dstack/releases/download/v${DSTACK_VERSION}/dstack-${DSTACK_VERSION}.tar.gz
+  "$IMAGE_URL"
 ```
 
 ### Image metadata missing

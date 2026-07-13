@@ -1,8 +1,8 @@
-# Design and Hardening Decisions in meta-dstack Layer
+# Design and Hardening Decisions in the dstack Yocto Layer
 
 ## Overview
 
-The meta-dstack layer is designed to create a minimally secure image for booting Confidential Virtual Machines (CVMs). Our design philosophy prioritizes attack surface reduction while maintaining TDX-aware functionality. This document outlines the architectural decisions and trade-offs made during development.
+The dstack-owned Yocto layer under `os/yocto/layers/meta-dstack/` is designed to create a minimally secure image for booting Confidential Virtual Machines (CVMs). Our design philosophy prioritizes attack surface reduction while maintaining TDX-aware functionality. This document outlines the architectural decisions and trade-offs made during development.
 
 ## Key Design Decisions
 
@@ -49,7 +49,7 @@ See [here](https://intel.github.io/ccc-linux-guest-hardening-docs/security-spec.
 
 ### 5. Secure System Time
 
-**Implementation**: dstack OS enforces the guest kernel uses TSC as the only timer source by appending `tsc=reliable no-kvmclock` to the kernel cmdline. It also enforces the use of NTS with built-in [trusted servers](https://github.com/Dstack-TEE/meta-dstack/blob/bef2dfa850f4116ae4ece96d8c0948965c5874b3/meta-dstack/recipes-core/chrony/files/chrony.conf#L13-L20) to synchronize system time.
+**Implementation**: dstack OS enforces the guest kernel uses TSC as the only timer source by appending `tsc=reliable no-kvmclock` to the kernel cmdline. It also enforces the use of NTS with built-in [trusted servers](../os/yocto/layers/meta-dstack/recipes-core/chrony/files/chrony.conf) to synchronize system time.
 
 **Behavior**: When `secure_time` is enabled in the app-compose.json configuration, the system ensures time synchronization is completed before requesting application keys. If `secure_time` is disabled, time synchronization is not enforced before application launch.
 

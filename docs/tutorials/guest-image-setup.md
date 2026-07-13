@@ -54,6 +54,10 @@ Before starting, ensure you have:
 
 If you prefer to set up guest images manually, follow these steps.
 
+To produce the image from source instead of downloading a release, follow the
+[guest-OS build guide](../building-guest-os.md). Use the generated
+`os/yocto/repro-build/dist/dstack-<version>.tar.gz` archive in Step 3 below.
+
 ### Step 1: Create Image Directory Structure
 
 Create the directory where guest images will be stored:
@@ -75,7 +79,13 @@ echo "Installing guest images for version: $DSTACK_VERSION"
 
 # Download the image archive
 cd /tmp
-wget https://github.com/Dstack-TEE/meta-dstack/releases/download/v${DSTACK_VERSION}/dstack-${DSTACK_VERSION}.tar.gz
+IFS=. read -r DSTACK_MAJOR DSTACK_MINOR _ <<< "$DSTACK_VERSION"
+if (( DSTACK_MAJOR == 0 && DSTACK_MINOR < 6 )); then
+  IMAGE_URL="https://github.com/Dstack-TEE/meta-dstack/releases/download/v${DSTACK_VERSION}/dstack-${DSTACK_VERSION}.tar.gz"
+else
+  IMAGE_URL="https://github.com/Dstack-TEE/dstack/releases/download/guest-os-v${DSTACK_VERSION}/dstack-${DSTACK_VERSION}.tar.gz"
+fi
+wget "$IMAGE_URL"
 ```
 
 Verify the download:
@@ -240,16 +250,16 @@ Use the `dstack-image-oci.sh` script to package and push a guest image directory
 
 ```bash
 # Push a standard image (auto-tags: version + sha256-hash)
-./scripts/dstack-image-oci.sh push /var/lib/dstack/images/dstack-0.5.8 ghcr.io/your-org/guest-image
+./os/image/dstack-image-oci.sh push /var/lib/dstack/images/dstack-0.6.0 ghcr.io/your-org/guest-image
 
-# Push an nvidia variant
-./scripts/dstack-image-oci.sh push /var/lib/dstack/images/dstack-nvidia-0.5.8 ghcr.io/your-org/guest-image
+# Current unified image is also used on NVIDIA hosts
+./os/image/dstack-image-oci.sh push /var/lib/dstack/images/dstack-0.6.0 ghcr.io/your-org/guest-image --tag 0.6.0
 
 # Push with a custom tag
-./scripts/dstack-image-oci.sh push /var/lib/dstack/images/dstack-0.5.8 ghcr.io/your-org/guest-image --tag latest
+./os/image/dstack-image-oci.sh push /var/lib/dstack/images/dstack-0.6.0 ghcr.io/your-org/guest-image --tag latest
 
 # List tags in the registry
-./scripts/dstack-image-oci.sh list ghcr.io/your-org/guest-image
+./os/image/dstack-image-oci.sh list ghcr.io/your-org/guest-image
 ```
 
 The script reads `metadata.json` and `digest.txt` from the image directory and auto-generates tags:
@@ -384,7 +394,7 @@ With guest images configured and VMM able to access them, you're ready to deploy
 
 ## Additional Resources
 
-- [meta-dstack Repository](https://github.com/Dstack-TEE/meta-dstack)
+- [Guest OS source and build backends](../../os/)
 - [dstack GitHub Repository](https://github.com/Dstack-TEE/dstack)
 - [Yocto Project](https://www.yoctoproject.org/)
 - [TDX Guest Architecture](https://www.intel.com/content/www/us/en/developer/tools/trust-domain-extensions/overview.html)

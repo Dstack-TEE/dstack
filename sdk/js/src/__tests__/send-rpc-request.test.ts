@@ -70,14 +70,14 @@ describe('send_rpc_request', () => {
       mockHttpRequest.mockImplementation((url, options, callback) => {
         // Call the callback with mock response
         callback(mockRes)
-        
+
         // Setup response data handling
         const dataCallback = mockRes.on.mock.calls.find(call => call[0] === 'data')?.[1]
         const endCallback = mockRes.on.mock.calls.find(call => call[0] === 'end')?.[1]
-        
+
         if (dataCallback) dataCallback('{"result": "success"}')
         if (endCallback) endCallback()
-        
+
         return mockReq
       })
 
@@ -109,13 +109,13 @@ describe('send_rpc_request', () => {
       // Mock the request flow
       mockHttpsRequest.mockImplementation((url, options, callback) => {
         callback(mockRes)
-        
+
         const dataCallback = mockRes.on.mock.calls.find(call => call[0] === 'data')?.[1]
         const endCallback = mockRes.on.mock.calls.find(call => call[0] === 'end')?.[1]
-        
+
         if (dataCallback) dataCallback('{"result": "success"}')
         if (endCallback) endCallback()
-        
+
         return mockReq
       })
 
@@ -150,13 +150,13 @@ describe('send_rpc_request', () => {
 
       mockHttpRequest.mockImplementation((url, options, callback) => {
         callback(mockRes)
-        
+
         const dataCallback = mockRes.on.mock.calls.find(call => call[0] === 'data')?.[1]
         const endCallback = mockRes.on.mock.calls.find(call => call[0] === 'end')?.[1]
-        
+
         if (dataCallback) dataCallback('invalid json')
         if (endCallback) endCallback()
-        
+
         return mockReq
       })
 
@@ -246,7 +246,7 @@ describe('send_rpc_request', () => {
       const path = '/api/test'
       const payload = '{"test": "data"}'
 
-      // Mock real setTimeout to trigger timeout immediately  
+      // Mock real setTimeout to trigger timeout immediately
       const originalSetTimeout = global.setTimeout
       // @ts-ignore
       global.setTimeout = vi.fn((callback, delay) => {
@@ -264,7 +264,7 @@ describe('send_rpc_request', () => {
       })
 
       await expect(send_rpc_request(endpoint, path, payload, 1)).rejects.toThrow('request timed out')
-      
+
       global.setTimeout = originalSetTimeout
     })
   })
@@ -277,13 +277,13 @@ describe('send_rpc_request', () => {
 
       mockHttpRequest.mockImplementation((url, options, callback) => {
         callback(mockRes)
-        
+
         const dataCallback = mockRes.on.mock.calls.find(call => call[0] === 'data')?.[1]
         const endCallback = mockRes.on.mock.calls.find(call => call[0] === 'end')?.[1]
-        
+
         if (dataCallback) dataCallback('{"result": "success"}')
         if (endCallback) endCallback()
-        
+
         return mockReq
       })
 
@@ -300,11 +300,11 @@ describe('send_rpc_request', () => {
 
       mockHttpRequest.mockImplementation((url, options, callback) => {
         callback(mockRes)
-        
+
         // Setup multiple data and end events
         const dataCallback = mockRes.on.mock.calls.find(call => call[0] === 'data')?.[1]
         const endCallback = mockRes.on.mock.calls.find(call => call[0] === 'end')?.[1]
-        
+
         setTimeout(() => {
           if (dataCallback) dataCallback('{"result": "success"}')
           if (endCallback) {
@@ -312,7 +312,7 @@ describe('send_rpc_request', () => {
             endCallback() // Second end - should be ignored
           }
         }, 10)
-        
+
         return mockReq
       })
 
@@ -320,4 +320,4 @@ describe('send_rpc_request', () => {
       expect(result).toEqual({ result: 'success' })
     })
   })
-}) 
+})

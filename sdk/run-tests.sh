@@ -7,11 +7,13 @@
 
 set -Eeuo pipefail
 
-ROOT_DIR="$(pwd -P)"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 SIMULATOR_DIR="$ROOT_DIR/simulator"
 SIMULATOR_LOG="$SIMULATOR_DIR/dstack-simulator.log"
 DSTACK_SOCKET="$SIMULATOR_DIR/dstack.sock"
 TAPPD_SOCKET="$SIMULATOR_DIR/tappd.sock"
+GUEST_SOCKET="$SIMULATOR_DIR/guest.sock"
+EXTERNAL_SOCKET="$SIMULATOR_DIR/external.sock"
 SIMULATOR_PID=""
 
 cleanup() {
@@ -19,6 +21,7 @@ cleanup() {
         kill "$SIMULATOR_PID" 2>/dev/null || true
         wait "$SIMULATOR_PID" 2>/dev/null || true
     fi
+    rm -f "$DSTACK_SOCKET" "$TAPPD_SOCKET" "$GUEST_SOCKET" "$EXTERNAL_SOCKET"
 }
 
 print_simulator_logs() {
@@ -52,7 +55,12 @@ wait_for_socket() {
 trap 'print_simulator_logs' ERR
 trap cleanup EXIT INT TERM
 
-rm -f "$DSTACK_SOCKET" "$TAPPD_SOCKET" "$SIMULATOR_LOG"
+rm -f \
+    "$DSTACK_SOCKET" \
+    "$TAPPD_SOCKET" \
+    "$GUEST_SOCKET" \
+    "$EXTERNAL_SOCKET" \
+    "$SIMULATOR_LOG"
 export DSTACK_SIMULATOR_ENDPOINT="$DSTACK_SOCKET"
 export TAPPD_SIMULATOR_ENDPOINT="$TAPPD_SOCKET"
 
@@ -70,20 +78,20 @@ SIMULATOR_PID=$!
 wait_for_socket "$DSTACK_SOCKET" "dstack"
 wait_for_socket "$TAPPD_SOCKET" "tappd"
 
-pushd rust/
+pushd "$ROOT_DIR/rust"
 cargo test -- --show-output
 cargo run --example tappd_client_usage
 cargo run --example dstack_client_usage
 cargo test -p dstack-sdk-types --test no_std_test --no-default-features
 popd
 
-pushd go/
+pushd "$ROOT_DIR/go"
 go clean -testcache
 go test -v ./dstack
 DSTACK_SIMULATOR_ENDPOINT=$TAPPD_SIMULATOR_ENDPOINT go test -v ./tappd
 popd
 
-pushd python/
+pushd "$ROOT_DIR/python"
 # Ensure PDM is installed
 if ! command -v pdm &> /dev/null; then
     echo "Installing PDM..."
@@ -97,7 +105,7 @@ pdm run test
 pdm run check
 popd
 
-pushd js/
+pushd "$ROOT_DIR/js"
 npm install
 npm run test -- --run
 popd

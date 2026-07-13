@@ -16,13 +16,15 @@ env:
 jobs:
   rust-checks:
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    defaults:
+      run:
+        working-directory: dstack
     steps:
     - uses: actions/checkout@v5
 
     - name: Install Rust
-      uses: dtolnay/rust-toolchain@1.86
+      uses: dtolnay/rust-toolchain@1.92.0
       with:
-        toolchain: 1.92.0
         components: clippy, rustfmt
 
     - name: Run Clippy

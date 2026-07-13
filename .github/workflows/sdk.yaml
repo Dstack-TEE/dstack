@@ -20,12 +20,11 @@ jobs:
   sdk-tests:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@1.86
+        uses: dtolnay/rust-toolchain@1.92.0
         with:
-          toolchain: 1.92.0
           components: clippy, rustfmt
           # This additional target is needed for wasm32 compatibility check.
           targets: wasm32-unknown-unknown, thumbv6m-none-eabi
@@ -35,9 +34,9 @@ jobs:
 
       - name: Verify WASM compilation
         # Ensures SDK types can be used in smart contracts
-        run: cargo check --target=wasm32-unknown-unknown -p dstack-sdk-types
+        run: cargo check --manifest-path dstack/Cargo.toml --target=wasm32-unknown-unknown -p dstack-sdk-types
 
       - name: Verify no_std compatibility
         run: |
-          cargo test -p dstack-sdk-types --test no_std_test --no-default-features
-          cargo check -p no_std_check --target thumbv6m-none-eabi
+          cargo test --manifest-path dstack/Cargo.toml -p dstack-sdk-types --test no_std_test --no-default-features
+          cargo check --manifest-path dstack/Cargo.toml -p no_std_check --target thumbv6m-none-eabi

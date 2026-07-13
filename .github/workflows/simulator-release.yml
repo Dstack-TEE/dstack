@@ -52,12 +52,14 @@ jobs:
 
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: dstack -> target
 
       - name: Build musl simulator binary
-        run: cargo build --locked --release --target "${TARGET_TRIPLE}" -p dstack-guest-agent-simulator
+        run: cargo build --manifest-path dstack/Cargo.toml --locked --release --target "${TARGET_TRIPLE}" -p dstack-guest-agent-simulator
 
       - name: Package release bundle
-        run: ./guest-agent-simulator/package-release.sh "${VERSION}" "${TARGET_TRIPLE}"
+        run: ./dstack/guest-agent-simulator/package-release.sh "${VERSION}" "${TARGET_TRIPLE}"
 
       - name: GitHub Release
         uses: softprops/action-gh-release@v2
@@ -65,9 +67,9 @@ jobs:
           tag_name: ${{ env.TAG }}
           name: "Simulator Release v${{ env.VERSION }}"
           files: |
-            guest-agent-simulator/dist/dstack-simulator-${{ env.VERSION }}-${{ env.TARGET_TRIPLE }}.tar.gz
-            guest-agent-simulator/dist/dstack-simulator-${{ env.VERSION }}-${{ env.TARGET_TRIPLE }}.tar.gz.sha256
-            guest-agent-simulator/install-systemd.sh
+            dstack/guest-agent-simulator/dist/dstack-simulator-${{ env.VERSION }}-${{ env.TARGET_TRIPLE }}.tar.gz
+            dstack/guest-agent-simulator/dist/dstack-simulator-${{ env.VERSION }}-${{ env.TARGET_TRIPLE }}.tar.gz.sha256
+            dstack/guest-agent-simulator/install-systemd.sh
           body: |
             ## Release Assets
 
@@ -92,5 +94,5 @@ jobs:
             Install to systemd:
 
             ```bash
-            curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/${{ env.TAG }}/guest-agent-simulator/install-systemd.sh | sudo bash -s -- --version ${{ env.VERSION }}
+            curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/${{ env.TAG }}/dstack/guest-agent-simulator/install-systemd.sh | sudo bash -s -- --version ${{ env.VERSION }}
             ```

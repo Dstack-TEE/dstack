@@ -48,8 +48,8 @@ jobs:
         env:
           SOURCE_DATE_EPOCH: ${{ env.TIMESTAMP }}
         with:
-          context: verifier
-          file: verifier/builder/Dockerfile
+          context: dstack/verifier
+          file: dstack/verifier/builder/Dockerfile
           push: true
           tags: |
             ${{ vars.DOCKERHUB_ORG }}/dstack-verifier:${{ env.VERSION }}
@@ -57,7 +57,7 @@ jobs:
           platforms: linux/amd64
           provenance: false
           build-contexts: |
-            build-shared=build/shared
+            build-shared=dstack/build/shared
           build-args: |
             DSTACK_REV=${{ env.GIT_REV }}
             DSTACK_SRC_URL=${{ github.server_url }}/${{ github.repository }}.git

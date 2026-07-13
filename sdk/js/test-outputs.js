@@ -9,18 +9,18 @@ const { toKeypair, toKeypairSecure } = require('./dist/node/solana.js');
 
 async function main() {
     console.log("=== JS SDK Output Test ===");
-    
+
     try {
         // Test client get_key
         const client = new DstackClient();
         console.log("\n1. Testing DstackClient.getKey()");
-        
+
         const testPaths = [
             { path: "test/wallet", purpose: "ethereum" },
             { path: "test/signing", purpose: "solana" },
             { path: "user/alice", purpose: "mainnet" }
         ];
-        
+
         for (const { path, purpose } of testPaths) {
             const keyResult = await client.getKey(path, purpose);
             console.log(`getKey('${path}', '${purpose}'):`);
@@ -32,7 +32,7 @@ async function main() {
         // Test viem integration
         console.log("\n2. Testing Viem Integration");
         const ethKey = await client.getKey("eth/test", "wallet");
-        
+
         console.log("\n2.1 toViemAccount (legacy):");
         try {
             const account = toViemAccount(ethKey);
@@ -41,7 +41,7 @@ async function main() {
         } catch (error) {
             console.log(`  error: ${error.message}`);
         }
-        
+
         console.log("\n2.2 toViemAccountSecure:");
         try {
             const accountSecure = toViemAccountSecure(ethKey);
@@ -54,7 +54,7 @@ async function main() {
         // Test solana integration
         console.log("\n3. Testing Solana Integration");
         const solKey = await client.getKey("sol/test", "wallet");
-        
+
         console.log("\n3.1 toKeypair (legacy):");
         try {
             const keypair = toKeypair(solKey);
@@ -64,7 +64,7 @@ async function main() {
         } catch (error) {
             console.log(`  error: ${error.message}`);
         }
-        
+
         console.log("\n3.2 toKeypairSecure:");
         try {
             const keypairSecure = toKeypairSecure(solKey);
@@ -112,12 +112,12 @@ async function main() {
             },
             {
                 manifest_version: 1,
-                name: "another-app", 
+                name: "another-app",
                 runner: "docker-compose",
                 docker_compose_file: "services:\\n  web:\\n    build: .\\n    environment:\\n      - NODE_ENV=production"
             }
         ];
-        
+
         testComposes.forEach((compose, index) => {
             const hash = getComposeHash(compose);
             console.log(`compose ${index + 1}: ${hash}`);

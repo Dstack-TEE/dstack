@@ -99,7 +99,7 @@ Argue from dstack's threat model, not from generic best practices.
 
 ## Code organization
 
-- **Workspace-managed dependencies.** Declare versions in the root `Cargo.toml`, reference
+- **Workspace-managed dependencies.** Declare versions in `dstack/Cargo.toml`, reference
   with `foo.workspace = true` (#161, #360).
 - **One source of truth.** Shared logic used by two components lives in one crate
   (`dstack-mr::sev` used by both KMS and verifier). Duplicated blocks get extracted —
@@ -208,7 +208,7 @@ not just the symptom:
   an `X-App-Version` response header. Follow this skeleton exactly when adding a service.
 - **Module layout**: the core RPC surface lives in `main_service.rs` (or `rpc_service.rs`
   in guest-agent). When a module grows subordinate concerns, promote it to `foo.rs` + a
-  `foo/` directory of submodules (`gateway/src/proxy.rs` + `proxy/{sni,tls_terminate,...}`).
+  `foo/` directory of submodules (`dstack/gateway/src/proxy.rs` + `proxy/{sni,tls_terminate,...}`).
   Core files routinely run 800–1500+ lines before splitting — don't over-fragment into
   many small files.
 - **Config conventions**: each service embeds its default TOML (`include_str!`), extracts
@@ -298,7 +298,7 @@ not just the symptom:
   when async is unavoidable.
 - **Golden vectors over mocks**: real captured binary fixtures embedded with
   `include_bytes!("../samples/...")`, asserted against inline hex literals or `insta`
-  snapshots (`cc-eventlog`, `dstack-attest/tests/`). Fixture provenance gets its own
+  snapshots (`dstack/cc-eventlog`, `dstack/dstack-attest/tests/`). Fixture provenance gets its own
   README (`sev_snp_fixture.README.md`). When changing an encoding, add a regression test
   proving old and new outputs match (#603).
 - **Test names are snake_case behavior statements**: `enforces_ttl`,

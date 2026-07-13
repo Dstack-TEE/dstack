@@ -13,21 +13,21 @@ export function send_rpc_request<T = any>(endpoint: string, path: string, payloa
   return new Promise((resolve, reject) => {
     const abortController = new AbortController()
     let isCompleted = false
-    
+
     const safeReject = (error: Error) => {
       if (!isCompleted) {
         isCompleted = true
         reject(error)
       }
     }
-    
+
     const safeResolve = (result: T) => {
       if (!isCompleted) {
         isCompleted = true
         resolve(result)
       }
     }
-    
+
     const timeout = setTimeout(() => {
       abortController.abort()
       safeReject(new Error('request timed out'))

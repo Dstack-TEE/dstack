@@ -1,0 +1,61 @@
+#!/bin/bash
+shopt -s nullglob
+
+if [ -n "${BASH_SOURCE[0]:-}" ]; then
+    THIS_SCRIPT=${BASH_SOURCE[0]}
+elif [ -n "${ZSH_NAME:-}" ]; then
+    THIS_SCRIPT=$0
+else
+    THIS_SCRIPT="$(pwd)/dev-setup"
+    if [ ! -e "$THIS_SCRIPT" ]; then
+        echo "Error: $THIS_SCRIPT doesn't exist!" >&2
+        echo "Please run this script in dev-setup's directory." >&2
+        exit 1
+    fi
+fi
+THIS_SCRIPT=$(realpath "$THIS_SCRIPT")
+THIS_DIR=$(dirname "$THIS_SCRIPT")
+
+LAYERS="$THIS_DIR/deps/meta-yocto/meta-poky \
+    $THIS_DIR/deps/meta-yocto/meta-yocto-bsp \
+    $THIS_DIR/deps/meta-confidential-compute \
+    $THIS_DIR/deps/meta-openembedded/meta-oe \
+    $THIS_DIR/deps/meta-openembedded/meta-python \
+    $THIS_DIR/deps/meta-openembedded/meta-networking \
+    $THIS_DIR/deps/meta-openembedded/meta-filesystems \
+    $THIS_DIR/deps/meta-virtualization \
+    $THIS_DIR/deps/meta-rust-bin \
+    $THIS_DIR/deps/meta-security \
+    $THIS_DIR/deps/meta-security/meta-tpm \
+    $THIS_DIR/layers/meta-dstack"
+
+if [ -z "${1:-}" ]; then
+    BUILD_DIR=$THIS_DIR/bb-build
+else
+    BUILD_DIR=$(realpath -m "$1")
+fi
+
+# Sync build config from the dstack layer (always overwrite)
+CONF_SRC=$THIS_DIR/layers/meta-dstack/conf
+mkdir -p "$BUILD_DIR/conf"
+cp -f "$CONF_SRC/local.conf" "$BUILD_DIR/conf/local.conf"
+rm -rf "$BUILD_DIR/conf/multiconfig"
+cp -a "$CONF_SRC/multiconfig" "$BUILD_DIR/conf/"
+
+OE_INIT=$THIS_DIR/deps/openembedded-core/oe-init-build-env
+
+for script in "$THIS_DIR"/setup.d/*.sh; do
+    # shellcheck disable=SC1090
+    source "$script"
+done
+
+# shellcheck disable=SC2317
+pushd "$BUILD_DIR" >/dev/null || { return 1 2>/dev/null || exit 1; }
+# shellcheck disable=SC1090
+BDIR="." TEMPLATECONF=$THIS_DIR/deps/openembedded-core/meta/conf/templates/default source "$OE_INIT"
+# shellcheck disable=SC2317
+popd >/dev/null || { return 1 2>/dev/null || exit 1; }
+
+# LAYERS is deliberately a space-separated list populated by setup.d hooks.
+# shellcheck disable=SC2086
+bitbake-layers add-layer $LAYERS
