@@ -80,7 +80,7 @@ pub(crate) enum ImageCmd {
         /// image version to fetch (default: the latest release).
         #[arg(long, value_name = "VERSION")]
         version: Option<String>,
-        /// fetch the gpu (nvidia) image instead of the cpu one.
+        /// prefer a legacy gpu image; current unified images are already GPU-capable.
         #[arg(long)]
         gpu: bool,
         #[command(flatten)]

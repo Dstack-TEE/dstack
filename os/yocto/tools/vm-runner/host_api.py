@@ -1,3 +1,5 @@
+"""Minimal host API used by the legacy direct-QEMU development runner."""
+
 import os
 import json
 import struct
@@ -111,4 +113,3 @@ def create_http_server(config: ServerConfig):
     server = HTTPServer(('localhost', 0), handler)
     chosen_port = server.server_port
     return server, chosen_port
-

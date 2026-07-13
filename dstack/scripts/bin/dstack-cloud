@@ -1021,13 +1021,16 @@ class CloudDeploymentManager:
                 os_image = url_filename
             download_tar = target_dir / url_filename
         else:
-            # Extract version from os_image (e.g., dstack-nvidia-0.6.0 -> 0.6.0)
-            # Version is the last component after the last hyphen followed by digits
+            # Extract the release version from the unified image name (or a
+            # legacy flavor name), including an optional prerelease suffix.
             import re
-            version_match = re.search(r'-(\d+\.\d+\.\d+)$', os_image)
+            version_match = re.search(
+                r'-(\d+\.\d+\.\d+(?:[-.][0-9A-Za-z][0-9A-Za-z.-]*)?)$',
+                os_image,
+            )
             if not version_match:
                 logger.error(f"Could not extract version from image name: {os_image}")
-                logger.error("Expected format: dstack-<flavor>-<version> (e.g., dstack-nvidia-0.6.0)")
+                logger.error("Expected format: dstack-<version> (or a legacy dstack-<flavor>-<version>)")
                 return
             version = version_match.group(1)
             download_url = f"https://github.com/Dstack-TEE/dstack/releases/download/guest-os-v{version}/{os_image}-uki.tar.gz"

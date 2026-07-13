@@ -91,6 +91,12 @@ The currently implemented OS backend is Yocto under `os/yocto/`. Shared rootfs
 payload and release assembly stay outside that backend so another builder can
 be added later without duplicating them. See [`os/README.md`](./os/README.md).
 
+Scripts follow the same ownership boundaries: component-specific helpers stay
+beside their component under `dstack/`; files installed into every guest live
+in `os/common/rootfs/`; backend-neutral image tooling lives in `os/image/`;
+Yocto-only helpers live in `os/yocto/scripts/`; and repository-wide standalone
+utilities live in `tools/`.
+
 Your container runs inside a Confidential VM, such as Intel TDX or AMD SEV-SNP, with optional GPU isolation via NVIDIA Confidential Computing. The CPU TEE protects application logic; the GPU TEE protects model weights and inference data.
 
 **Core components:**

@@ -244,16 +244,16 @@ Use the `dstack-image-oci.sh` script to package and push a guest image directory
 
 ```bash
 # Push a standard image (auto-tags: version + sha256-hash)
-./dstack/scripts/dstack-image-oci.sh push /var/lib/dstack/images/dstack-0.5.8 ghcr.io/your-org/guest-image
+./os/image/dstack-image-oci.sh push /var/lib/dstack/images/dstack-0.6.0 ghcr.io/your-org/guest-image
 
-# Push an nvidia variant
-./dstack/scripts/dstack-image-oci.sh push /var/lib/dstack/images/dstack-nvidia-0.5.8 ghcr.io/your-org/guest-image
+# Current unified image is also used on NVIDIA hosts
+./os/image/dstack-image-oci.sh push /var/lib/dstack/images/dstack-0.6.0 ghcr.io/your-org/guest-image --tag 0.6.0
 
 # Push with a custom tag
-./dstack/scripts/dstack-image-oci.sh push /var/lib/dstack/images/dstack-0.5.8 ghcr.io/your-org/guest-image --tag latest
+./os/image/dstack-image-oci.sh push /var/lib/dstack/images/dstack-0.6.0 ghcr.io/your-org/guest-image --tag latest
 
 # List tags in the registry
-./dstack/scripts/dstack-image-oci.sh list ghcr.io/your-org/guest-image
+./os/image/dstack-image-oci.sh list ghcr.io/your-org/guest-image
 ```
 
 The script reads `metadata.json` and `digest.txt` from the image directory and auto-generates tags:

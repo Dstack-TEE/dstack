@@ -88,7 +88,7 @@ Run:
 sudo dstackup install
 ```
 
-`dstackup install` auto-detects TDX or AMD SEV-SNP. If no local guest image exists, it downloads the latest CPU image from [dstack guest-OS releases](https://github.com/Dstack-TEE/dstack/releases?q=guest-os-v), requires the release SHA-256 digest by default, verifies the tarball, stages the unpack, and only then adopts the image. Pre-monorepo `meta-dstack` releases remain a fallback for pinned older versions.
+`dstackup install` auto-detects TDX or AMD SEV-SNP. If no local guest image exists, it downloads the latest unified image from [dstack guest-OS releases](https://github.com/Dstack-TEE/dstack/releases?q=guest-os-v), requires the release SHA-256 digest by default, verifies the tarball, stages the unpack, and only then adopts the image. Current images include NVIDIA support conditionally and work on CPU-only hosts too. Pre-monorepo `meta-dstack` releases remain a fallback for pinned older versions.
 
 On TDX, `dstackup install` starts the SGX key provider automatically from `/usr/local/share/dstack/key-provider-build`. To use a different provider, pass one of:
 
@@ -99,14 +99,16 @@ sudo dstackup install --use-existing-key-provider 127.0.0.1:3443
 
 On AMD SEV-SNP, no SGX key provider is needed. The selected guest image must include `digest.txt`; otherwise, `dstackup install` fails before it starts the host units because apps could not be pinned to the measured OS image.
 
-To use a GPU image, pull it before install:
+The normal pull command is sufficient for current CPU and GPU hosts:
 
 ```bash
-sudo dstackup image pull --gpu
+sudo dstackup image pull
 sudo dstackup install
 ```
 
-If multiple images are present, pass the image name or release version to `--image`, such as `dstack-0.5.11`, `dstack-nvidia-0.5.11`, or `0.5.11`. If the requested release-shaped image is not local, `dstackup install` downloads it.
+`dstackup image pull --gpu` remains a compatibility option for older releases that published a separate `dstack-nvidia-*` archive; it falls back to the unified archive when a release has no separate GPU asset.
+
+If multiple images are present, pass the image name or release version to `--image`, such as `dstack-0.6.0`, legacy `dstack-nvidia-0.5.11`, or `0.6.0`. If the requested release-shaped image is not local, `dstackup install` downloads it.
 
 When install succeeds, it prints the dashboard URL, the KMS address, and a `dstack deploy` command template. The default dashboard URL is:
 

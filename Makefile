@@ -18,7 +18,7 @@ help:
 	@echo "dstack monorepo targets:"
 	@echo "  core        build the Rust workspace"
 	@echo "  core-check  check the Rust workspace"
-	@echo "  core-test   test the Rust workspace"
+	@echo "  core-test   test the Rust workspace with the simulator"
 	@echo "  sdk-test    run all public SDK tests"
 	@echo "  os          build the guest OS natively with the default backend"
 	@echo "  os-yocto    build the guest OS natively with Yocto"
@@ -33,7 +33,7 @@ core-check:
 	cargo check --manifest-path dstack/Cargo.toml --workspace
 
 core-test:
-	cargo test --manifest-path dstack/Cargo.toml --workspace
+	./dstack/run-tests.sh
 
 sdk-test:
 	cd sdk && ./run-tests.sh

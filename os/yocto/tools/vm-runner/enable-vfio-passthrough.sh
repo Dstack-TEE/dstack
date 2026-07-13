@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) Hashforest Technology LLC
+#
+# SPDX-License-Identifier: BUSL-1.1
 
 set -euo pipefail
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 echo "==> Detecting NVIDIA GPUs and NVSwitches"
 mapfile -t GPU_BDFS < <(

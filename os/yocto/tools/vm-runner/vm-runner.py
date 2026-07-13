@@ -1,4 +1,9 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: Copyright (c) Hashforest Technology LLC
+#
+# SPDX-License-Identifier: BUSL-1.1
+
+"""Legacy direct-QEMU development runner for images built by this backend."""
 
 import argparse
 import json
@@ -797,7 +802,7 @@ def write_to_sysfs(path, value):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='dstack VM Management Tool')
+    parser = argparse.ArgumentParser(description='Legacy direct-QEMU dstack VM runner')
     subparsers = parser.add_subparsers(dest='command', help='Commands')
 
     # Setup command

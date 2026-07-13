@@ -1,19 +1,28 @@
 #!/bin/bash
+# SPDX-FileCopyrightText: Copyright (c) Hashforest Technology LLC
+#
+# SPDX-License-Identifier: BUSL-1.1
 
 set -euo pipefail
 
 # Function to display usage
 usage() {
-    echo "Usage: $0 <url_or_local_file>"
+    local status=${1:-1}
+    echo "Usage: ${0##*/} <url_or_local_file>"
     echo "Example: $0 https://github.com/Dstack-TEE/dstack/releases/download/guest-os-v0.6.0/dstack-0.6.0.tar.gz"
     echo "Example: $0 /path/to/local/file.tar.gz"
-    exit 1
+    exit "$status"
 }
 
 # Check if argument is provided
 if [ $# -ne 1 ]; then
     usage
 fi
+case "$1" in
+    -h|--help)
+        usage 0
+        ;;
+esac
 
 INPUT="$1"
 TEMP_DIR=$(mktemp -d)
@@ -33,7 +42,7 @@ if [[ "$INPUT" =~ ^https?:// ]]; then
     echo "Downloading from URL: $INPUT"
     ARCHIVE_FILE="$TEMP_DIR/archive.tar.gz"
     if command -v curl >/dev/null 2>&1; then
-        curl -L -o "$ARCHIVE_FILE" "$INPUT"
+        curl -fL -o "$ARCHIVE_FILE" "$INPUT"
     elif command -v wget >/dev/null 2>&1; then
         wget -O "$ARCHIVE_FILE" "$INPUT"
     else
@@ -46,7 +55,7 @@ else
         echo "Error: Local file does not exist: $INPUT"
         exit 1
     fi
-    ARCHIVE_FILE="$INPUT"
+    ARCHIVE_FILE=$(realpath "$INPUT")
 fi
 
 # Create extraction directory
@@ -54,18 +63,20 @@ mkdir -p "$EXTRACT_DIR"
 
 # Extract the archive
 echo "Extracting archive to: $EXTRACT_DIR"
-tar -xzf "$ARCHIVE_FILE" -C "$EXTRACT_DIR"
+tar -xzf "$ARCHIVE_FILE" -C "$EXTRACT_DIR" \
+    --no-same-owner --no-same-permissions
 
 # Find and read the digest
-DIGEST_FILE=$(find "$EXTRACT_DIR" -name "digest.txt" -type f | head -1)
-if [ -z "$DIGEST_FILE" ]; then
-    echo "Error: digest.txt file not found in the extracted archive"
+mapfile -d '' -t DIGEST_FILES < <(find "$EXTRACT_DIR" -name digest.txt -type f -print0)
+if [ "${#DIGEST_FILES[@]}" -ne 1 ]; then
+    echo "Error: expected exactly one digest.txt in the archive, found ${#DIGEST_FILES[@]}"
     exit 1
 fi
+DIGEST_FILE=${DIGEST_FILES[0]}
 
-DIGEST=$(cat "$DIGEST_FILE" | tr -d '\n\r' | sed 's/[^a-zA-Z0-9]//g')
-if [ -z "$DIGEST" ]; then
-    echo "Error: Could not read digest from $DIGEST_FILE"
+DIGEST=$(tr -d '\n\r' < "$DIGEST_FILE" | tr 'A-F' 'a-f')
+if [[ ! "$DIGEST" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "Error: digest.txt must contain exactly one SHA-256 hex digest"
     exit 1
 fi
 
@@ -73,21 +84,27 @@ echo "Found digest: $DIGEST"
 
 # Remove rootfs file(s)
 echo "Removing rootfs files..."
+REMOVED_COUNT=$(find "$EXTRACT_DIR" -name "rootfs*" -type f | wc -l)
 find "$EXTRACT_DIR" -name "rootfs*" -type f -delete
-REMOVED_COUNT=$(find "$EXTRACT_DIR" -name "rootfs*" -type f 2>/dev/null | wc -l)
-if [ $REMOVED_COUNT -eq 0 ]; then
-    echo "Rootfs files removed successfully"
-else
-    echo "Warning: Some rootfs files may still exist"
-fi
+echo "Removed $REMOVED_COUNT rootfs file(s)"
 
 # Create flattened structure in a new directory
 FLATTEN_DIR="$TEMP_DIR/flattened"
 mkdir -p "$FLATTEN_DIR"
 
 echo "Flattening directory structure..."
-# Find all files (not directories) and copy them to the flattened directory
-find "$EXTRACT_DIR" -type f -exec cp {} "$FLATTEN_DIR/" \;
+# Find all files (not directories) and copy them to the flattened directory.
+# Refuse duplicate basenames instead of silently overwriting an artifact.
+declare -A SEEN_BASENAMES=()
+while IFS= read -r -d '' file; do
+    name=$(basename "$file")
+    if [[ -n "${SEEN_BASENAMES[$name]:-}" ]]; then
+        echo "Error: duplicate archive basename while flattening: $name" >&2
+        exit 1
+    fi
+    SEEN_BASENAMES[$name]=1
+    cp "$file" "$FLATTEN_DIR/$name"
+done < <(find "$EXTRACT_DIR" -type f -print0)
 
 # Count files for verification
 FILE_COUNT=$(find "$FLATTEN_DIR" -type f | wc -l)
@@ -99,7 +116,8 @@ echo "Creating final archive: $OUTPUT_FILE"
 
 # Change to the flattened directory and create archive without directory structure
 cd "$FLATTEN_DIR"
-tar -czf "../$OUTPUT_FILE" -- *
+LC_ALL=C tar --sort=name --mtime='@0' --owner=0 --group=0 --numeric-owner \
+    -czf "../$OUTPUT_FILE" -- *
 cd - >/dev/null
 
 # Move the final file to the current working directory

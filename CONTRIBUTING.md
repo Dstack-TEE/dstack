@@ -43,7 +43,7 @@ This project uses SPDX headers for license compliance. You should add appropriat
 We have a script to automatically add SPDX headers based on git blame data:
 
 ```bash
-python3 dstack/scripts/add-spdx-attribution.py --file path/to/file.rs
+python3 tools/add-spdx-attribution.py --file path/to/file.rs
 ```
 
 Before submitting your changes, verify SPDX compliance using the [REUSE tool](https://github.com/fsfe/reuse-tool):

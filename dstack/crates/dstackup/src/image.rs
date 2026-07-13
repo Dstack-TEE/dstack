@@ -5,8 +5,8 @@
 //! `dstackup image` — fetch, list, and remove guest OS images.
 //!
 //! Images are published as `guest-os-v*` release tarballs in the dstack
-//! monorepo. There
-//! are two variants — cpu (`dstack-<ver>`) and gpu (`dstack-nvidia-<ver>`).
+//! monorepo. Current releases use one hardware-adaptive `dstack-<ver>` image;
+//! legacy releases may also contain `dstack-nvidia-<ver>` variants.
 //! `install` validates the selected image against `digest.txt`, the OS image
 //! hash used on all platforms. HTTP + checksum are native (reqwest is
 //! already linked via the prpc client; sha2 verifies inline); only `tar` is
@@ -99,28 +99,18 @@ pub(crate) async fn pull(
 ) -> Result<String> {
     println!(
         "dstackup image pull — {} image",
-        if gpu { "gpu (nvidia)" } else { "cpu" }
+        if gpu {
+            "gpu-capable (legacy nvidia variant preferred)"
+        } else {
+            "unified"
+        }
     );
     let release = fetch_release(version).await?;
-    let ver = release_tag_version(&release.tag_name);
-
-    // the unpacked dir is usually `dstack[-nvidia]-<ver>`; check that first so a
-    // repeat pull is a cheap no-op instead of re-fetching a few hundred MB.
-    let expected = format!("dstack-{}{ver}", if gpu { "nvidia-" } else { "" });
-    if !force
-        && Path::new(image_dir)
-            .join(&expected)
-            .join("metadata.json")
-            .exists()
-    {
-        println!("  [ok] {expected} already present (use --force to re-download)");
-        return Ok(expected);
-    }
 
     let asset = pick_asset(&release.assets, gpu).with_context(|| {
         format!(
-            "no {} image tarball in guest-OS release {} (assets: {})",
-            if gpu { "gpu" } else { "cpu" },
+            "no suitable {} image tarball in guest-OS release {} (assets: {})",
+            if gpu { "GPU-capable" } else { "unified" },
             release.tag_name,
             release
                 .assets
@@ -137,6 +127,23 @@ pub(crate) async fn pull(
             "refusing release asset with an unsafe name {:?}",
             asset.name
         );
+    }
+
+    // Release archives use their filename stem as the top-level image
+    // directory. Select the asset before this check because --gpu may resolve
+    // to a legacy dstack-nvidia archive or to the current unified image.
+    let expected = asset
+        .name
+        .strip_suffix(".tar.gz")
+        .context("guest image asset must end in .tar.gz")?;
+    if !force
+        && Path::new(image_dir)
+            .join(expected)
+            .join("metadata.json")
+            .exists()
+    {
+        println!("  [ok] {expected} already present (use --force to re-download)");
+        return Ok(expected.to_string());
     }
     println!("  [..] release {} -> {}", release.tag_name, asset.name);
 
@@ -180,8 +187,8 @@ async fn stage_image(
     .await?;
     fs::create_dir_all(staging).with_context(|| format!("creating {}", staging.display()))?;
     extract(&tmp.to_string_lossy(), &staging.to_string_lossy())?;
-    // the unpacked dir name needn't match the asset name (e.g. a `-uki` asset),
-    // so find the dir that actually holds a metadata.json.
+    // Do not assume the unpacked directory name matches the release asset;
+    // adopt the directory that actually contains metadata.json.
     let inner = image_subdirs(&staging.to_string_lossy())
         .into_iter()
         .find(|d| staging.join(d).join("metadata.json").exists())
@@ -567,8 +574,8 @@ pub(crate) fn no_image_message(image_dir: &str) -> String {
     format!(
         "no guest image found in {image_dir}\n\n\
          download the latest with:\n    \
-         {pull}            # cpu image\n    \
-         {pull} --gpu      # gpu (nvidia) image\n\n\
+         {pull}            # current unified CPU/GPU image\n    \
+         {pull} --gpu      # prefer a legacy nvidia-specific asset\n\n\
          images are published at {RELEASES_URL}"
     )
 }
@@ -657,27 +664,32 @@ async fn fetch_tagged_release(client: &reqwest::Client, url: &str) -> Result<Opt
     ))
 }
 
-fn release_tag_version(tag: &str) -> &str {
-    tag.strip_prefix(RELEASE_TAG_PREFIX)
-        .or_else(|| tag.strip_prefix('v'))
-        .unwrap_or(tag)
-}
-
-/// pick the cpu or gpu image tarball from a release's assets, skipping `-dev`
-/// builds. cpu = `dstack-<ver>...`, gpu = `dstack-nvidia-<ver>...`.
+/// Pick a full bare-metal image tarball, never the `-uki` archive. For a GPU
+/// request, prefer a legacy `dstack-nvidia-*` asset when present and otherwise
+/// use the current unified image (which already contains conditional NVIDIA
+/// support).
 fn pick_asset(assets: &[Asset], gpu: bool) -> Option<&Asset> {
-    assets.iter().find(|a| {
+    let matches = |a: &&Asset, want_legacy_gpu: bool| {
         let n = a.name.as_str();
-        if !n.ends_with(".tar.gz") || n.contains("-dev") {
+        if !n.ends_with(".tar.gz") || n.ends_with("-uki.tar.gz") || n.contains("-dev") {
             return false;
         }
         let is_gpu = n.starts_with("dstack-nvidia-");
-        if gpu {
+        if want_legacy_gpu {
             is_gpu
         } else {
             n.starts_with("dstack-") && !is_gpu
         }
-    })
+    };
+
+    if gpu {
+        assets
+            .iter()
+            .find(|asset| matches(asset, true))
+            .or_else(|| assets.iter().find(|asset| matches(asset, false)))
+    } else {
+        assets.iter().find(|asset| matches(asset, false))
+    }
 }
 
 fn extract(tarball: &str, into: &str) -> Result<()> {
@@ -765,19 +777,22 @@ mod tests {
     }
 
     #[test]
-    fn parses_monorepo_and_legacy_release_tags() {
-        assert_eq!(release_tag_version("guest-os-v0.6.0"), "0.6.0");
-        assert_eq!(release_tag_version("v0.5.11"), "0.5.11");
+    fn gpu_pull_falls_back_to_unified_image() {
+        let assets = vec![
+            asset("dstack-0.6.0-uki.tar.gz"),
+            asset("dstack-0.6.0.tar.gz"),
+        ];
+        assert_eq!(
+            pick_asset(&assets, true).unwrap().name,
+            "dstack-0.6.0.tar.gz"
+        );
     }
 
     #[test]
-    fn gpu_only_release_has_no_cpu_asset() {
+    fn uki_archive_is_never_selected_as_a_host_image() {
         let assets = vec![asset("dstack-nvidia-0.6.0.a2-uki.tar.gz")];
         assert!(pick_asset(&assets, false).is_none());
-        assert_eq!(
-            pick_asset(&assets, true).unwrap().name,
-            "dstack-nvidia-0.6.0.a2-uki.tar.gz"
-        );
+        assert!(pick_asset(&assets, true).is_none());
     }
 
     #[test]

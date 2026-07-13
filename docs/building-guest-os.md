@@ -182,6 +182,24 @@ Yocto fetches many upstream sources. Preserve `build-a/`, confirm outbound
 network and DNS access, then rerun `make os-image`; completed downloads and
 tasks are reused.
 
+### `docker-compose do_fetch` repeatedly shows 0–100%
+
+This is not one archive being downloaded in a loop. Docker Compose has hundreds
+of independently checksummed Go-module sources, while BitBake's terminal
+percentage describes only the current source URL. The percentage therefore
+returns to zero for every module even though the task timer and PID stay the
+same.
+
+Let the first fetch finish. If it is interrupted, rerun the same command;
+completed files have `.done` markers in the build directory's `downloads/`
+cache and are not downloaded again. To confirm which URL is currently being
+fetched during a native `make os` build, inspect the latest task log:
+
+```bash
+find os/yocto/bb-build/tmp-mc-* -path '*docker-compose/*/temp/log.do_fetch' \
+  -print -exec tail -n 5 {} \;
+```
+
 ### The disk fills up
 
 The largest disposable directories are:

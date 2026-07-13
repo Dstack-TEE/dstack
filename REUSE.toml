@@ -141,7 +141,7 @@ SPDX-License-Identifier = "Apache-2.0"
 # Scripts with SPDX-like content (false positive prevention)
 
 [[annotations]]
-path = "dstack/scripts/add-spdx-attribution.py"
+path = "tools/add-spdx-attribution.py"
 SPDX-FileCopyrightText = "© 2025 Phala Network <dstack@phala.network>"
 SPDX-License-Identifier = "Apache-2.0"
 precedence = "override"

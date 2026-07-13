@@ -1,9 +1,9 @@
 #!/bin/bash
 shopt -s nullglob
 
-if [ -n "$BASH_SOURCE" ]; then
-    THIS_SCRIPT=$BASH_SOURCE
-elif [ -n "$ZSH_NAME" ]; then
+if [ -n "${BASH_SOURCE[0]:-}" ]; then
+    THIS_SCRIPT=${BASH_SOURCE[0]}
+elif [ -n "${ZSH_NAME:-}" ]; then
     THIS_SCRIPT=$0
 else
     THIS_SCRIPT="$(pwd)/dev-setup"
@@ -29,31 +29,33 @@ LAYERS="$THIS_DIR/deps/meta-yocto/meta-poky \
     $THIS_DIR/deps/meta-security/meta-tpm \
     $THIS_DIR/layers/meta-dstack"
 
-if [ -z "$1" ]; then
+if [ -z "${1:-}" ]; then
     BUILD_DIR=$THIS_DIR/bb-build
 else
-    BUILD_DIR=$(realpath "$1")
+    BUILD_DIR=$(realpath -m "$1")
 fi
 
 # Sync build config from the dstack layer (always overwrite)
 CONF_SRC=$THIS_DIR/layers/meta-dstack/conf
 mkdir -p "$BUILD_DIR/conf"
 cp -f "$CONF_SRC/local.conf" "$BUILD_DIR/conf/local.conf"
-cp -rf "$CONF_SRC/multiconfig" "$BUILD_DIR/conf/"
+rm -rf "$BUILD_DIR/conf/multiconfig"
+cp -a "$CONF_SRC/multiconfig" "$BUILD_DIR/conf/"
 
 OE_INIT=$THIS_DIR/deps/openembedded-core/oe-init-build-env
 
-for script in $THIS_DIR/setup.d/*.sh; do
+for script in "$THIS_DIR"/setup.d/*.sh; do
+    # shellcheck disable=SC1090
     source "$script"
 done
 
-pushd "$BUILD_DIR"
-BDIR="." TEMPLATECONF=$THIS_DIR/deps/openembedded-core/meta/conf/templates/default source $OE_INIT
-popd
+# shellcheck disable=SC2317
+pushd "$BUILD_DIR" >/dev/null || { return 1 2>/dev/null || exit 1; }
+# shellcheck disable=SC1090
+BDIR="." TEMPLATECONF=$THIS_DIR/deps/openembedded-core/meta/conf/templates/default source "$OE_INIT"
+# shellcheck disable=SC2317
+popd >/dev/null || { return 1 2>/dev/null || exit 1; }
 
+# LAYERS is deliberately a space-separated list populated by setup.d hooks.
+# shellcheck disable=SC2086
 bitbake-layers add-layer $LAYERS
-
-# Add scripts/bin to PATH if not already present
-if [[ ":$PATH:" != *":$THIS_DIR/scripts/bin:"* ]]; then
-    export PATH=$PATH:$THIS_DIR/scripts/bin
-fi

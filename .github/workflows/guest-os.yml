@@ -60,6 +60,19 @@ jobs:
           TAG: ${{ inputs.tag }}
         run: |
           echo "$TAG" | grep -Eq '^guest-os-v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$'
+          VERSION="${TAG#guest-os-v}"
+          BARE="os/yocto/repro-build/dist/dstack-${VERSION}.tar.gz"
+          UKI="os/yocto/repro-build/dist/dstack-${VERSION}-uki.tar.gz"
+          test -f "$BARE"
+          test -f "$UKI"
+
+          read -r IMAGE_VERSION IMAGE_REVISION < <(
+            tar -xOf "$BARE" "dstack-${VERSION}/metadata.json" |
+              python3 -c 'import json, sys; data=json.load(sys.stdin); print(data["version"], data["git_revision"])'
+          )
+          test "$IMAGE_VERSION" = "$VERSION"
+          test "$IMAGE_REVISION" = "$(git rev-parse HEAD)"
+          tar -tzf "$UKI" | grep -Fx "dstack-${VERSION}/disk.raw"
 
       - name: Create tag and release
         env:

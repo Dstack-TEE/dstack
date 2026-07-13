@@ -27,14 +27,17 @@ BUILD_DIR=
 while [ $# -gt 0 ]; do
     case "$1" in
         --backend)
+            [ $# -ge 2 ] || { echo "Error: --backend requires a value" >&2; exit 1; }
             BACKEND=$2
             shift 2
             ;;
         --flavors)
+            [ $# -ge 2 ] || { echo "Error: --flavors requires a value" >&2; exit 1; }
             FLAVORS=$2
             shift 2
             ;;
         --build-dir)
+            [ $# -ge 2 ] || { echo "Error: --build-dir requires a value" >&2; exit 1; }
             BUILD_DIR=$2
             shift 2
             ;;
@@ -49,6 +52,13 @@ while [ $# -gt 0 ]; do
             ;;
     esac
 done
+
+case "$BACKEND" in
+    ''|*[!0-9A-Za-z_-]*)
+        echo "Error: invalid OS backend name: $BACKEND" >&2
+        exit 1
+        ;;
+esac
 
 BACKEND_SCRIPT="$SCRIPT_DIR/$BACKEND/build.sh"
 if [ ! -x "$BACKEND_SCRIPT" ]; then

@@ -22,6 +22,11 @@ troubleshooting instructions are in the
 For an interactive native build, source `dev-setup` and use this directory's
 Makefile, or run the repository entrypoint `./os/build.sh --backend yocto`.
 
+The supported backend script only builds guest images. Historical host-stack
+and direct-QEMU helpers imported with the old repository are isolated under
+`tools/`; they are not added to `PATH` and do not shadow the supported Rust
+`dstack` CLI.
+
 ## Output boundary
 
 `scripts/export-artifacts.sh` converts BitBake deployment paths to the common

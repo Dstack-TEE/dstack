@@ -8,18 +8,19 @@
 #   exit 0 -> hardware present     (systemd runs the unit)
 #   exit 1 -> hardware absent      (systemd skips the unit, no failure)
 #
-# Detection mirrors scripts/bin/enable_vfio_passthrough.sh, but reads PCI class
-# codes from sysfs so it works before the nvidia driver is loaded and without
-# relying on lspci / the pci.ids name database:
+# Detection mirrors
+# os/yocto/tools/vm-runner/enable-vfio-passthrough.sh, but reads PCI class codes
+# from sysfs so it works before the nvidia driver is loaded and without relying
+# on lspci / the pci.ids name database:
 #
 #   GPU      = NVIDIA (0x10de) VGA (0x0300xx) or 3D controller (0x0302xx)
 #   NVSwitch = NVIDIA (0x10de) bridge          (0x06xxxx, any bridge subclass)
 #
 # NVSwitch matches any NVIDIA bridge-class device (mirrors the `grep 'Bridge'`
-# heuristic in scripts/bin/enable_vfio_passthrough.sh) rather than only the
-# "Other bridge" subclass 0x0680, so it stays correct if a future NVSwitch
-# enumerates under a different bridge subclass. This is safe here because these
-# images run as TDX guests whose only NVIDIA-vendor devices are passed-through
+# heuristic in os/yocto/tools/vm-runner/enable-vfio-passthrough.sh) rather than
+# only the "Other bridge" subclass 0x0680, so it stays correct if a future
+# NVSwitch enumerates under a different bridge subclass. This is safe here
+# because these images run as TDX guests whose only NVIDIA-vendor devices are
 # GPUs (class 0x03xx) and NVSwitches (class 0x06xx).
 
 NVIDIA_VENDOR="0x10de"
