@@ -24,7 +24,7 @@ jobs:
 
       - name: Checkout contract dependencies
         run: |
-          git submodule update --init --depth 1 -- \
+          git submodule update --init --recursive --depth 1 -- \
             dstack/kms/auth-eth/lib/forge-std \
             dstack/kms/auth-eth/lib/openzeppelin-contracts-upgradeable \
             dstack/kms/auth-eth/lib/openzeppelin-foundry-upgrades
