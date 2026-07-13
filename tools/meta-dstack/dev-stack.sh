@@ -3,15 +3,15 @@
 #
 # SPDX-License-Identifier: BUSL-1.1
 
-# Legacy all-in-one host development helper imported from meta-dstack. The
-# actual Yocto backend entrypoint is ../build.sh; keep host/config/download
-# actions here so the backend interface remains single-purpose.
+# Legacy all-in-one host development helper imported from meta-dstack. It is
+# retained outside both the supported dstack CLI and the Yocto backend because
+# it crosses host build, guest build, and deployment/configuration boundaries.
 TOOL_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-SCRIPT_DIR=$(realpath "$TOOL_DIR/..")
+REPO_ROOT=$(realpath "$TOOL_DIR/../..")
 ACTION=$1
 
-META_DIR=$SCRIPT_DIR
-DSTACK_DIR=$(realpath "$SCRIPT_DIR/../../dstack")
+YOCTO_DIR=$REPO_ROOT/os/yocto
+DSTACK_DIR=$REPO_ROOT/dstack
 CERTS_DIR=$(pwd)/certs
 IMAGES_DIR=$(pwd)/images
 RUN_DIR=$(pwd)/run
@@ -127,9 +127,9 @@ build_host() {
 build_guest() {
     echo "Building guest images"
     if [ -z "$BBPATH" ]; then
-        source $SCRIPT_DIR/dev-setup $1
+        source "$YOCTO_DIR/dev-setup" "$1"
     fi
-    make -C $META_DIR dist DIST_DIR=$IMAGES_DIR BB_BUILD_DIR=${BBPATH}
+    make -C "$YOCTO_DIR" dist DIST_DIR=$IMAGES_DIR BB_BUILD_DIR=${BBPATH}
 }
 
 # Step 4: generate config files

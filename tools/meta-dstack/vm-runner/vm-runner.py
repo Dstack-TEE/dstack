@@ -3,7 +3,7 @@
 #
 # SPDX-License-Identifier: BUSL-1.1
 
-"""Legacy direct-QEMU development runner for images built by this backend."""
+"""Legacy direct-QEMU development runner for dstack guest OS images."""
 
 import argparse
 import json

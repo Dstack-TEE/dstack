@@ -12,7 +12,7 @@ os/
 └── yocto/                    # the currently implemented backend
     ├── deps/                 # external Yocto layers (git submodules)
     ├── layers/               # dstack-owned Yocto layers
-    └── tools/                # isolated legacy/imported host helpers
+    └── tools/                # Yocto-specific host workarounds
 ```
 
 A future backend can be added at `os/<backend>/` (for example `os/mkosi/`)

@@ -1,4 +1,4 @@
-# TEE Attestation Guide for dstack Applications
+# Intel TDX Attestation Guide for dstack Applications
 
 This document outlines the process of verifying the authenticity and integrity of data produced by dstack Applications running within Intel TDX environments.
 
@@ -33,26 +33,30 @@ RTMR3 differs as it contains runtime information like compose hash and instance 
 
 ### 2.2. Determining expected MRs
 MRTD, RTMR0, RTMR1, and RTMR2 correspond to the image. dstack OS builds all related software from source.
-Build version v0.5.4 using these commands:
+Build the exact image revision you intend to verify. See
+[Build the dstack guest OS](./building-guest-os.md) for prerequisites and the
+reproducible build workflow. At a high level:
+
 ```bash
-git clone https://github.com/Dstack-TEE/meta-dstack.git
-cd meta-dstack/
-git checkout f7c795b76faa693f218e1c255007e3a68c541d79
-git submodule update --init --recursive
-cd repro-build && ./repro-build.sh -n
+git clone https://github.com/Dstack-TEE/dstack.git
+cd dstack
+git checkout <release-revision>
+make os-image
 ```
 
-The resulting dstack-0.5.4.tar.gz contains:
+The resulting `dstack-<version>.tar.gz` contains:
 
 - ovmf.fd: virtual firmware
 - bzImage: kernel image
 - initramfs.cpio.gz: initrd
-- rootfs.img.verity: root filesystem
+- rootfs.img.parted.verity: partitioned dm-verity root filesystem
 - metadata.json: image metadata, including kernel boot cmdline
 
-Calculate image MRs using [dstack-mr](dstack/dstack-mr/):
+Calculate image MRs using [dstack-mr](../dstack/dstack-mr/):
 ```bash
-cargo run --manifest-path ../dstack/Cargo.toml --bin dstack-mr measure -c 4 -m 4G dstack-0.5.4/metadata.json
+VERSION=0.6.0 # replace with the image version being verified
+cargo run --manifest-path dstack/Cargo.toml --bin dstack-mr measure \
+  -c 4 -m 4G "dstack-$VERSION/metadata.json"
 ```
 
 Once these verification steps are completed successfully, the report_data contained in the verified quote can be considered authentic and trustworthy.

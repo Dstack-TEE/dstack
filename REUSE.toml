@@ -126,6 +126,15 @@ SPDX-FileCopyrightText = "Copyright (c) Hashforest Technology LLC"
 SPDX-License-Identifier = "BUSL-1.1"
 precedence = "override"
 
+# Legacy tools imported from meta-dstack but intentionally kept outside the
+# Yocto backend because they also manage host and deployment concerns.
+
+[[annotations]]
+path = "tools/meta-dstack/**"
+SPDX-FileCopyrightText = "Copyright (c) Hashforest Technology LLC"
+SPDX-License-Identifier = "BUSL-1.1"
+precedence = "override"
+
 # Artworks
 
 
