@@ -1127,6 +1127,11 @@ class VmmCLI:
             upgrade_params["user_config"] = user_config
             updates.append("user config")
 
+        if kms_urls is not None:
+            upgrade_params["update_kms_urls"] = True
+            upgrade_params["kms_urls"] = kms_urls
+            updates.append(f"KMS URLs ({len(kms_urls)})")
+
         # handle port updates - only update if --port or --no-ports is specified
         if no_ports or ports is not None:
             if no_ports:

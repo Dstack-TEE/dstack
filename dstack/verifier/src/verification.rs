@@ -392,6 +392,31 @@ impl CvmVerifier {
             .is_some_and(|digest| digest == expected))
     }
 
+    fn prune_unlisted_image_files(extracted_dir: &Path, files_doc: &str) -> Result<()> {
+        let listed_files: Vec<&OsStr> = files_doc
+            .lines()
+            .flat_map(|line| line.split_whitespace().nth(1))
+            .map(|s| s.as_ref())
+            .collect();
+        let files = fs_err::read_dir(extracted_dir).context("Failed to read directory")?;
+        for file in files {
+            let file = file.context("Failed to read directory entry")?;
+            let filename = file.file_name();
+            // sha256sum.txt is the content-addressed OS identity and is needed
+            // again when a legacy TDX quote is verified from the cache.
+            if filename != OsStr::new("sha256sum.txt")
+                && !listed_files.contains(&filename.as_os_str())
+            {
+                if file.path().is_dir() {
+                    fs_err::remove_dir_all(file.path()).context("Failed to remove directory")?;
+                } else {
+                    fs_err::remove_file(file.path()).context("Failed to remove file")?;
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn tdx_acpi_hashes_from_event_log(event_log: &[TdxEvent]) -> Result<TdxRtmr0AcpiHashes> {
         let rtmr0_events = event_log
             .iter()
@@ -1108,23 +1133,7 @@ impl CvmVerifier {
         let sha256sum_path = extracted_dir.join("sha256sum.txt");
         let files_doc =
             fs_err::read_to_string(&sha256sum_path).context("Failed to read sha256sum.txt")?;
-        let listed_files: Vec<&OsStr> = files_doc
-            .lines()
-            .flat_map(|line| line.split_whitespace().nth(1))
-            .map(|s| s.as_ref())
-            .collect();
-        let files = fs_err::read_dir(&extracted_dir).context("Failed to read directory")?;
-        for file in files {
-            let file = file.context("Failed to read directory entry")?;
-            let filename = file.file_name();
-            if !listed_files.contains(&filename.as_os_str()) {
-                if file.path().is_dir() {
-                    fs_err::remove_dir_all(file.path()).context("Failed to remove directory")?;
-                } else {
-                    fs_err::remove_file(file.path()).context("Failed to remove file")?;
-                }
-            }
-        }
+        Self::prune_unlisted_image_files(&extracted_dir, &files_doc)?;
 
         // All image modes are addressed by sha256(sha256sum.txt). Extra
         // measurement CBOR files are ordinary sha256sum.txt entries and do not
@@ -1245,6 +1254,21 @@ mod tests {
         // empty/malformed must degrade to None, not fail the verify.
         assert!(decode_key_provider_info(b"").is_none());
         assert!(decode_key_provider_info(b"not json").is_none());
+    }
+
+    #[test]
+    fn image_cache_pruning_keeps_checksum_identity() {
+        let dir = tempfile::tempdir().expect("temp image directory");
+        let files_doc = "00  metadata.json\n";
+        fs_err::write(dir.path().join("sha256sum.txt"), files_doc).unwrap();
+        fs_err::write(dir.path().join("metadata.json"), "{}").unwrap();
+        fs_err::write(dir.path().join("unmeasured"), "remove me").unwrap();
+
+        CvmVerifier::prune_unlisted_image_files(dir.path(), files_doc).unwrap();
+
+        assert!(dir.path().join("sha256sum.txt").exists());
+        assert!(dir.path().join("metadata.json").exists());
+        assert!(!dir.path().join("unmeasured").exists());
     }
 
     #[tokio::test]

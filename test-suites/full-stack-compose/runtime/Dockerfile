@@ -23,6 +23,7 @@ RUN apt-get update && \
       openssl \
       procps \
       python3 \
+      python3-venv \
       qemu-system-x86 \
       qemu-utils \
       socat \
@@ -30,6 +31,15 @@ RUN apt-get update && \
       wireguard-tools \
       xz-utils \
     && rm -rf /var/lib/apt/lists/*
+
+# vmm-cli encrypts deployment environment variables with the KMS key and
+# verifies the KMS signature before a production CVM is created.
+COPY requirements.txt /tmp/vmm-requirements.txt
+RUN python3 -m venv /opt/dstack-venv && \
+    /opt/dstack-venv/bin/pip install --no-cache-dir \
+      -r /tmp/vmm-requirements.txt && \
+    rm /tmp/vmm-requirements.txt
+ENV PATH="/opt/dstack-venv/bin:${PATH}"
 
 WORKDIR /suite
 ENTRYPOINT ["/usr/bin/tini", "--"]

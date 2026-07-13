@@ -3,173 +3,138 @@ SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network>
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# dstack full-stack compose E2E suite
+# Production-compatible KMS/Gateway upgrade E2E
 
-This directory contains a Docker Compose based test suite that mirrors the
-`tdxlab`/`dstack-k8s deploy/compose` shape: host-side services run as normal
-processes/containers, and QEMU is used only for the real app CVM under test.
+This suite runs the stateful services and applications in **real TDX CVMs**.
+Docker Compose is used only for host infrastructure (VMM, authorization,
+Local-Key-Provider, image server, and mock ACME/DNS):
 
 ```text
-docker compose
-  ├─ mock-cf-dns-api        # tiny Cloudflare API + TXT DNS mock
-  ├─ pebble                 # ACME test server (HTTP-capable custom Pebble image)
-  ├─ aesmd + local-keyprovider
-  ├─ dstack-auth            # KMS auth webhook backed by auth-allowlist.json
-  ├─ dstack-kms             # host-side dev KMS, not a CVM
-  ├─ dstack-gateway         # host-side dev Gateway, not a CVM
-  ├─ dstack-vmm             # launches real TDX/SNP app CVMs via QEMU
-  └─ runner
-       ├─ configures Gateway certbot to use mock CF + Pebble
-       ├─ deploys legacy and lite TDX nginx CVMs
-       ├─ verifies KMS key provisioning and HTTPS Gateway -> app routing
-       └─ snapshots durable KMS/Gateway state for upgrade assertions
+host Docker Compose
+  ├─ dstack-vmm + dstack-auth
+  ├─ AESMD + SGX Local-Key-Provider
+  ├─ verified OS/image artifact server
+  └─ Pebble + mock Cloudflare DNS
+
+real TDX CVMs
+  ├─ KMS 0.5.8 (Local-Key-Provider, quote-enabled onboarding)
+  ├─ current KMS (new CVM, quote-attested replication from 0.5.8)
+  ├─ two-node Gateway 0.5.8 cluster, rolled one node at a time to current
+  ├─ forced-legacy nginx app CVM
+  └─ forced-lite nginx app CVM
 ```
 
-It is intended for a **real TDX/SGX host** (or SEV-SNP host after setting the
-platform/image knobs). It is not a pure unit-test environment; QEMU still starts
-a confidential VM for the app.
+The upgrade scenario intentionally rejects the development trust settings that
+would make a passing result irrelevant to production:
+
+- KMS 0.5.8 uses `quote_enabled = true`.
+- Both KMS manifests explicitly set `enforce_self_authorization = true`.
+- KMS OS image verification is enabled and downloads a checksum-verified image
+  archive from an initially empty cache.
+- KMS root keys and Gateway TLS identity are created inside TDX CVMs; the suite
+  never generates or injects them on the host.
+- The authorization webhook pins one OS digest, exact KMS aggregate
+  measurements, the quote-derived physical TDX device ID, exact app compose
+  hashes, and a concrete 20-byte Gateway app ID. `allowAnyDevice = true` and
+  `gatewayAppId = "any"` are rejected.
+- Container references in measured app manifests are content-addressed Docker
+  image IDs. Tags are used only as the Docker Hub/build inputs that are pulled,
+  inspected, saved, and imported before boot.
 
 ## Prerequisites
 
-1. From this directory, build the host binaries from the dstack checkout:
+1. Build the host-side control binaries:
 
    ```bash
-   cargo build --release \
-     --manifest-path ../../dstack/Cargo.toml \
-     -p dstack-cli -p dstack-auth -p dstack-vmm -p dstack-kms \
-     -p dstack-gateway -p supervisor
+   cargo build --release --manifest-path ../../dstack/Cargo.toml \
+     -p dstack-cli -p dstack-auth -p dstack-vmm -p supervisor
    ```
 
-2. Make sure the host has the required devices/services:
+   The driver builds current KMS and Gateway binaries for
+   `x86_64-unknown-linux-musl` and places them in test-only container images.
+   The static binaries are layered on the released 0.5.8 production runtime;
+   the KMS production builder still uses the same Debian/QEMU revision, and the
+   current Gateway entrypoint is copied from this checkout. The built binaries
+   and in-CVM version endpoints must report the current workspace version and
+   Git revision, so Docker cache or an old binary cannot silently turn the
+   upgrade into a no-op.
 
-   - `/dev/kvm`
-   - Intel TDX support and QGS for TDX (`DSTACK_E2E_QGS_PORT`, default `4050`)
-   - `/dev/sgx_enclave` and `/dev/sgx_provision` for the local key provider
-   - an SGX QCNL config that works on the host. By default the suite uses
-     `../../dstack/key-provider-build/sgx_default_qcnl.conf`; on hosts with a local
-     PCCS, set `DSTACK_E2E_QCNL_CONF=/etc/sgx_default_qcnl.conf`.
-   - `/dev/vhost-vsock` for guest↔host vsock services
-   - a TDX-capable `qemu-system-x86_64` available inside the runtime container.
-     The default runtime image follows `../dstack-k8s/deploy/compose` and
-     installs QEMU from `ppa:kobuk-team/tdx-release`.
-   - WireGuard kernel support on the host. The Gateway service runs privileged
-     with host networking and creates `DSTACK_E2E_GATEWAY_WG_INTERFACE`.
+2. Provide a TDX/SGX host with:
 
-3. Provide an unpacked guest image store. From `meta-dstack` this is usually
-   `../../../build/images`; otherwise copy `.env.example` and set:
+   - `/dev/kvm`, `/dev/vhost-vsock`, Intel TDX, and QGS (default port `4050`)
+   - `/dev/sgx_enclave` and `/dev/sgx_provision`
+   - a working SGX QCNL/PCCS configuration
+   - an IPv4/DNS name for the host that is reachable from both the host-side
+     deployment client and QEMU user-networked CVMs; the suite derives
+     `<default-route-ip>.nip.io`, or accepts `DSTACK_E2E_KMS_RPC_DOMAIN`
+   - Docker and WireGuard kernel support
 
-   ```bash
-   cp .env.example .env
-   $EDITOR .env
-   ```
-
-The normal latest-only run needs no published KMS/Gateway image:
-`dstack-gateway` and `dstack-kms` run from the local `target/release/` binaries.
-The upgrade run additionally pulls its old KMS/Gateway images from Docker Hub.
+3. Provide an unpacked dstack image directory containing `digest.txt` and
+   `sha256sum.txt`. Copy `.env.example` to `.env` when paths or ports differ.
 
 ## Run
-
-From this directory, run:
-
-```bash
-DOCKER_BUILDKIT=0 docker compose --env-file .env -f compose.yml up --build --abort-on-container-exit runner
-```
-
-On TDX this latest-only path deploys two otherwise identical CVMs. Their v3
-manifest requirements force `tdx_measure_acpi_tables=true` (legacy) and
-`false` (lite), respectively. Both must reach `boot_progress=done`, which is
-after the boot-time `GetAppKey` request, and both must serve nginx through the
-Gateway.
-
-## Run the upgrade scenario
-
-The host-side driver is required because the runner container cannot replace
-its own KMS/Gateway dependencies:
 
 ```bash
 DOCKER_BUILDKIT=0 ./run-upgrade-e2e.sh
 ```
 
-Defaults:
+The defaults pull these released images from Docker Hub:
 
-- old KMS: `dstacktee/dstack-kms:0.5.7` (pulled from Docker Hub)
-- old Gateway: `dstacktee/dstack-gateway:0.5.8` (pulled from Docker Hub)
-- latest KMS, Gateway, VMM, guest image: current checkout/build
+- `dstacktee/dstack-kms:0.5.8@sha256:9650dcb47dad0065470f432f00e78e012912214ef1a5b1d7272918817e61a26d`
+- `dstacktee/dstack-gateway:0.5.8@sha256:6eb1dc1a5000f37cc5b0322d3fdb71e7f2e31859b5e3a611634919278cee2411`
 
-The driver deliberately fails during the image-pull preflight if the exact old
-image is unavailable. Override images only for intentional matrix runs:
+The driver checks each released binary's `--version` output before deploying
+anything. Set `DSTACK_E2E_SKIP_CURRENT_BUILD=true` only when the current musl
+binaries were already built.
 
-```bash
-DSTACK_E2E_OLD_KMS_IMAGE=dstacktee/dstack-kms:0.5.6 \
-DSTACK_E2E_OLD_GATEWAY_IMAGE=dstacktee/dstack-gateway:0.5.8 \
-  ./run-upgrade-e2e.sh
-```
+## Upgrade sequence and assertions
 
-The upgrade sequence is:
+### KMS 0.5.8 to current
 
-1. Boot a forced-legacy CVM against the old KMS and old Gateway.
-2. Record the KMS CA, root k256 public key, and that app's derived environment
-   encryption public key.
-3. Replace only KMS with the current binary while retaining its cert/key dir.
-4. Require the recorded identities to be byte-for-byte stable; force-reboot the
-   legacy CVM so it must provision keys from the new KMS; then boot a forced-lite
-   CVM from scratch against the new KMS.
-5. Flush and record Gateway WaveKV state: node UUID, CVM registrations/IPs,
-   certbot config, DNS credential, ZT domain, and wildcard cert fingerprint.
-6. Start rapid direct HTTP probes to both CVM WireGuard IPs, replace only the
-   Gateway process, and require **zero failed probe cycles**.
-7. Require all recorded Gateway state and the cert fingerprint to survive and
-   verify both SNI routes through the new Gateway.
+1. Deploy KMS 0.5.8 as a Local-Key-Provider TDX CVM with no pre-created keys.
+2. Call `Onboard.GetAttestationInfo`, authorize its exact `mrAggregated`, then
+   bootstrap it. The bootstrap response must contain non-empty attestation.
+3. Boot the forced-legacy app through KMS 0.5.8 and record the KMS CA SPKI,
+   root k256 public key, and the app's derived environment-encryption public
+   key. (The expected onboarding path reissues the self-signed CA certificate,
+   so its DER bytes/expiry are not a stable identity; its private key/SPKI is.)
+4. Deploy current KMS in a new Local-Key-Provider TDX CVM, authorize its exact
+   measurement, and call `Onboard.Onboard` against KMS 0.5.8. This exercises the
+   production RA-TLS root-key replication path; it is not a directory copy.
+5. Require all recorded identities/derived keys to be byte-for-byte equal,
+   stop KMS 0.5.8, and force the legacy app to boot against only current KMS.
+6. Boot a fresh forced-lite app against current KMS. Both modes must reach
+   `boot_progress=done`, which occurs after boot-time `GetAppKey` succeeds.
 
-The zero-downtime assertion is specifically the CVM WireGuard data plane. The
-Gateway process owns the public TLS listener, so a single-node stop/start does
-not claim that the external listener itself has zero downtime. External routing
-is asserted immediately before and after the upgrade.
+The artifact server journal must contain two successful GETs for the exact
+measured OS archive (one from each fresh KMS data disk). VM logs are also
+rejected if they say image verification or self-authorization is disabled.
 
-For iterative debugging, keep the stack running:
+### Gateway 0.5.8 to current
 
-```bash
-DOCKER_BUILDKIT=0 docker compose --env-file .env -f compose.yml up --build
-```
+1. Deploy two Gateway 0.5.8 TDX CVMs under one pinned Gateway app ID. Both get
+   app keys and RA-TLS certificates from KMS; their environment is encrypted by
+   VMM/KMS.
+2. Form a WaveKV cluster, configure Pebble/Cloudflare mock DNS once, and require
+   the second node to receive the configuration and wildcard certificate.
+3. Verify the legacy and lite app SNI routes through **both** Gateway nodes.
+4. Snapshot each node's UUID, CVM registrations/IPs, certbot configuration, DNS
+   credential metadata, ZT domains, and wildcard-certificate fingerprint.
+5. Run a rapid HA probe that alternates the preferred physical Gateway for
+   every legacy/lite request and falls back to the other node in the same cycle.
+6. Stop, update the measured app compose, and restart node 1 on current KMS;
+   require it to carry both apps and retain all durable state. Repeat for node 2.
+7. Require zero failed HA cycles and unchanged durable state/certificates.
+8. Force certificate issuance through each upgraded node against a mock DNS API
+   that rejects anything except the original bearer token. This proves the DNS
+   credential value survived even though the current admin API redacts it.
 
-The runner leaves app VMs running by default for inspection. Set
-`DSTACK_E2E_CLEANUP_AFTER=true` to remove suite VMs at the end. Stale VMs whose
-names start with `DSTACK_E2E_NAME_PREFIX` are removed at the start when
-`DSTACK_E2E_CLEAN_START=true`.
+This is a production-style **rolling two-node** zero-downtime assertion. The
+suite does not claim that rebooting a single Gateway CVM can preserve that
+node's listener; availability is maintained by the peer, as it must be in a
+production rollout.
 
-## What is verified
-
-The runner checks:
-
-1. Host-side KMS is reachable over TLS.
-2. Host-side Gateway Admin API accepts configuration.
-3. Gateway obtains a wildcard certificate for `*.DSTACK_E2E_BASE_DOMAIN` from
-   Pebble using the mock Cloudflare DNS API.
-4. VMM API becomes reachable.
-5. Real nginx app CVMs boot with `kms_enabled=true` and
-   `gateway_enabled=true`.
-6. On TDX, v3 requirements resolve one CVM to legacy attestation and one to
-   lite; both complete boot-time KMS key provisioning.
-7. `curl -k` through each Gateway SNI route returns the nginx welcome page.
-8. KMS and Gateway state can be captured in canonical, diffable artifacts.
-
-`run-upgrade-e2e.sh` additionally checks KMS key continuity, Gateway persistence,
-old-to-new config/storage compatibility, and zero-failure CVM WireGuard traffic
-during the Gateway replacement.
-
-Artifacts are written under `state/work/`.
-
-## Notes / flexibility gaps
-
-- This is a dev compose KMS/Gateway setup. KMS and Gateway key material is
-  generated under `state/`; the allowlist returns `gatewayAppId = "any"`, which
-  matches the host-side tdxlab-style deployment and avoids requiring Gateway to
-  be a CVM.
-- `dstackup install` is systemd-oriented; this suite renders `vmm.toml`,
-  `kms.toml`, `gateway.toml`, and `auth-allowlist.json` itself.
-- Running VMM in a container depends on the container image having a QEMU build
-  that supports the target TEE platform. The runtime Dockerfile uses Intel's
-  kobuk-team TDX PPA for QEMU, matching the dstack-k8s compose deployment.
-- Host API is vsock-only by design. The suite therefore uses privileged host
-  networking and a separate `DSTACK_E2E_HOST_API_PORT` to avoid conflicts with
-  other VMM instances.
+Artifacts, manifests, version headers, canonical state snapshots, probe
+results, attestation information, and VM logs are written to `state/work/`.
+The stack is retained by default for inspection; set
+`DSTACK_E2E_KEEP_STACK=false` and/or `DSTACK_E2E_CLEANUP_AFTER=true` to clean it.

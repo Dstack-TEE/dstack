@@ -73,6 +73,19 @@ def _record_content(payload: dict[str, Any]) -> str:
     return ""
 
 
+def _authorized(handler: BaseHTTPRequestHandler) -> bool:
+    """Require the configured Cloudflare bearer token for API operations."""
+    expected = os.environ.get("MOCK_CF_API_TOKEN", "test-token")
+    if handler.headers.get("Authorization", "") == f"Bearer {expected}":
+        return True
+    _json(
+        handler,
+        403,
+        {"success": False, "errors": [{"message": "invalid API token"}]},
+    )
+    return False
+
+
 class Handler(BaseHTTPRequestHandler):
     """Handle the mock Cloudflare HTTP API."""
 
@@ -94,6 +107,8 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/records":
             with STATE_LOCK:
                 _json(self, 200, {"records": RECORDS})
+            return
+        if path.startswith("/client/v4/") and not _authorized(self):
             return
         if path == "/client/v4/zones":
             zones = _zones()
@@ -149,6 +164,8 @@ class Handler(BaseHTTPRequestHandler):
                 {"success": False, "errors": [{"message": f"not found: {path}"}]},
             )
             return
+        if not _authorized(self):
+            return
         length = int(self.headers.get("content-length", "0") or "0")
         payload = json.loads(self.rfile.read(length) or b"{}")
         with STATE_LOCK:
@@ -177,6 +194,8 @@ class Handler(BaseHTTPRequestHandler):
                 404,
                 {"success": False, "errors": [{"message": f"not found: {path}"}]},
             )
+            return
+        if not _authorized(self):
             return
         record_id = urllib.parse.unquote(m.group(2))
         with STATE_LOCK:

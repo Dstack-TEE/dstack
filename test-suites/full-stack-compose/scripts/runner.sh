@@ -7,42 +7,39 @@ STATE_DIR=${DSTACK_E2E_STATE_DIR:-/suite-state}
 CONFIG_DIR=${DSTACK_E2E_CONFIG_DIR:-$STATE_DIR/config}
 WORK_DIR=${DSTACK_E2E_WORK_DIR:-$STATE_DIR/work}
 VM_DIR=${DSTACK_E2E_VM_DIR:-$STATE_DIR/vm}
-PHASE=${DSTACK_E2E_PHASE:-full}
+PHASE=${DSTACK_E2E_PHASE:-upgrade}
+CURRENT_VERSION=${DSTACK_E2E_CURRENT_VERSION:?missing current workspace version}
+CURRENT_REV=${DSTACK_E2E_CURRENT_REV:?missing current workspace revision}
 mkdir -p "$WORK_DIR"
 # shellcheck disable=SC1091
 source "$STATE_DIR/state.env"
+# shellcheck disable=SC1091
+source "$STATE_DIR/artifacts/images.env"
 
 VMM_URL="http://127.0.0.1:${VMM_PORT}"
 VMM_CLI=(python3 /workspace/vmm/src/vmm-cli.py --url "$VMM_URL")
 DSTACK_CLI=(/workspace/target/release/dstack --host "$VMM_URL")
 ALLOWLIST="$CONFIG_DIR/auth-allowlist.json"
+KMS_OLD_URL="https://${KMS_RPC_DOMAIN}:${KMS_OLD_HOST_PORT}"
+KMS_LATEST_URL="https://${KMS_RPC_DOMAIN}:${KMS_LATEST_HOST_PORT}"
+GATEWAY1_URL="https://${KMS_RPC_DOMAIN}:${GATEWAY1_RPC_HOST_PORT}"
+GATEWAY2_URL="https://${KMS_RPC_DOMAIN}:${GATEWAY2_RPC_HOST_PORT}"
+probe_pid=""
+ATTESTED_DEVICE_ID=""
 
 log() { printf '[%(%H:%M:%S)T] %s\n' -1 "$*"; }
 die() { log "ERROR: $*" >&2; exit 1; }
 
 need_bin() {
-  [[ -x "$1" ]] || die "missing executable $1; run: cargo build --release -p dstack-cli -p dstack-auth -p dstack-vmm -p dstack-kms -p dstack-gateway -p supervisor"
-}
-
-need_current_bins() {
-  need_bin /workspace/target/release/dstack
-  need_bin /workspace/target/release/dstack-auth
-  need_bin /workspace/target/release/dstack-vmm
-  need_bin /workspace/target/release/dstack-kms
-  need_bin /workspace/target/release/dstack-gateway
-  need_bin /workspace/target/release/supervisor
-}
-
-require_tdx() {
-  [[ "$PLATFORM" == "tdx" ]] || die "$PHASE requires DSTACK_E2E_PLATFORM=tdx"
+  [[ -x "$1" ]] || die "missing executable $1"
 }
 
 wait_vmm() {
   log "waiting for VMM at $VMM_URL"
-  for _ in $(seq 1 90); do
+  for _ in $(seq 1 120); do
     if "${DSTACK_CLI[@]}" apps -j >/dev/null 2>&1; then
       log "VMM ready"
-      return 0
+      return
     fi
     sleep 2
   done
@@ -51,7 +48,8 @@ wait_vmm() {
 
 vm_ids_by_prefix() {
   local prefix=$1
-  "${VMM_CLI[@]}" lsvm --json 2>/dev/null | jq -r --arg p "$prefix" '.[] | select(.name | startswith($p)) | .id'
+  "${VMM_CLI[@]}" lsvm --json 2>/dev/null \
+    | jq -r --arg p "$prefix" '.[] | select(.name | startswith($p)) | .id'
 }
 
 remove_vm() {
@@ -62,14 +60,11 @@ remove_vm() {
 }
 
 clean_start() {
-  if [[ "${DSTACK_E2E_CLEAN_START:-true}" != "true" ]]; then
-    return 0
-  fi
-  log "cleaning stale VMs with prefix ${SUITE_PREFIX}"
+  [[ "${DSTACK_E2E_CLEAN_START:-true}" == true ]] || return 0
   while read -r id; do
     remove_vm "$id"
   done < <(vm_ids_by_prefix "$SUITE_PREFIX")
-  for _ in $(seq 1 60); do
+  for _ in $(seq 1 90); do
     [[ -z "$(vm_ids_by_prefix "$SUITE_PREFIX")" ]] && return 0
     sleep 2
   done
@@ -77,454 +72,819 @@ clean_start() {
 }
 
 print_vm_info_safe() {
-  jq '{
-    id,
-    name,
-    status,
-    uptime,
-    app_id,
-    instance_id,
-    boot_progress,
-    boot_error,
-    shutdown_progress,
-    image_version,
-    events
-  }' <<<"$1"
+  jq '{id,name,status,uptime,app_id,instance_id,boot_progress,boot_error,image_version,events}' <<<"$1"
 }
 
 wait_boot_done() {
-  local id=$1 label=$2 timeout=${3:-480}
-  local deadline=$((SECONDS + timeout))
-  local last=""
+  local id=$1 label=$2 timeout=${3:-720}
+  local deadline=$((SECONDS + timeout)) last=""
   while (( SECONDS < deadline )); do
-    local info status progress error instance
+    local info status progress error line
     info=$("${VMM_CLI[@]}" info "$id" --json 2>/dev/null || true)
     if [[ -n "$info" ]]; then
       status=$(jq -r '.status // ""' <<<"$info")
       progress=$(jq -r '.boot_progress // ""' <<<"$info")
       error=$(jq -r '.boot_error // ""' <<<"$info")
-      instance=$(jq -r '.instance_id // ""' <<<"$info")
-      local line="status=$status progress=${progress:-none} instance=${instance:-none} error=${error:-none}"
+      line="status=$status progress=${progress:-none} error=${error:-none}"
       if [[ "$line" != "$last" ]]; then
         log "$label: $line"
         last=$line
       fi
-      if [[ -n "$error" && "$error" != "null" ]]; then
+      if [[ -n "$error" && "$error" != null ]]; then
         print_vm_info_safe "$info" >&2 || true
+        "${VMM_CLI[@]}" logs "$id" -n 240 >&2 || true
         die "$label boot failed: $error"
       fi
-      if [[ "$status" == "running" && "$progress" == "done" ]]; then
+      if [[ "$status" == running && "$progress" == "done" ]]; then
         printf '%s' "$info" > "$WORK_DIR/${label}.info.json"
-        return 0
+        return
       fi
-      if [[ "$status" == "exited" || "$status" == "stopped" ]]; then
+      if [[ "$status" == exited || "$status" == stopped ]]; then
         print_vm_info_safe "$info" >&2 || true
+        "${VMM_CLI[@]}" logs "$id" -n 240 >&2 || true
         die "$label exited before boot finished"
       fi
     fi
     sleep 5
   done
-  print_vm_info_safe "$("${VMM_CLI[@]}" info "$id" --json)" >&2 || true
+  "${VMM_CLI[@]}" logs "$id" -n 300 >&2 || true
   die "timed out waiting for $label"
 }
 
 wait_vm_stopped() {
-  local id=$1 deadline=$((SECONDS + 120))
+  local id=$1 deadline=$((SECONDS + 180)) status
   while (( SECONDS < deadline )); do
-    local status
     status=$("${VMM_CLI[@]}" info "$id" --json 2>/dev/null | jq -r '.status // ""' || true)
-    if [[ "$status" != "running" && "$status" != "starting" ]]; then
-      return 0
-    fi
+    [[ "$status" != running && "$status" != starting ]] && return
     sleep 2
   done
   die "VM $id did not stop"
 }
 
-wait_vm_running() {
-  local id=$1 label=$2 deadline=$((SECONDS + 90)) last=""
-  while (( SECONDS < deadline )); do
-    local info status error
-    info=$("${VMM_CLI[@]}" info "$id" --json 2>/dev/null || true)
-    if [[ -n "$info" ]]; then
-      status=$(jq -r '.status // ""' <<<"$info")
-      error=$(jq -r '.boot_error // ""' <<<"$info")
-      if [[ "$status" != "$last" ]]; then
-        log "$label restart: status=${status:-unknown}"
-        last=$status
-      fi
-      if [[ -n "$error" && "$error" != "null" ]]; then
-        print_vm_info_safe "$info" >&2 || true
-        die "$label restart failed: $error"
-      fi
-      [[ "$status" == "running" ]] && return 0
-    fi
-    sleep 1
-  done
-  die "$label did not enter running state after restart"
+stop_vm() {
+  local id=$1 label=$2
+  log "stopping $label ($id)"
+  "${VMM_CLI[@]}" stop "$id" --force >/dev/null
+  wait_vm_stopped "$id"
+}
+
+start_vm() {
+  local id=$1 label=$2
+  log "starting $label ($id)"
+  "${VMM_CLI[@]}" start "$id" >/dev/null
+  wait_boot_done "$id" "$label"
 }
 
 register_app() {
-  local app_id=$1 hash=$2 gateway_id=${3:-}
-  local args=(/suite/scripts/allowlist.py add-app --path "$ALLOWLIST" --app-id "$app_id" --compose-hash "$hash")
-  if [[ -n "$gateway_id" ]]; then
-    args+=(--gateway-app-id "$gateway_id")
-  fi
-  python3 "${args[@]}" >/dev/null
+  local app_id=$1 hash=$2
+  [[ -n "$ATTESTED_DEVICE_ID" ]] || die "cannot authorize app before pinning the attested TDX device"
+  /suite/scripts/allowlist.py add-app --path "$ALLOWLIST" \
+    --app-id "$app_id" --compose-hash "$hash" \
+    --device-id "$ATTESTED_DEVICE_ID" >/dev/null
 }
 
-wait_kms() {
-  log "waiting for KMS at https://127.0.0.1:${KMS_HOST_PORT}"
-  for _ in $(seq 1 90); do
-    if curl -kfsS "https://127.0.0.1:${KMS_HOST_PORT}/prpc/GetMeta?json" >/dev/null 2>&1; then
-      log "KMS ready"
-      return 0
+register_kms_measurement() {
+  local measurement=$1 device_id=$2
+  /suite/scripts/allowlist.py add-kms --path "$ALLOWLIST" \
+    --mr-aggregated "$measurement" --device-id "$device_id" >/dev/null
+}
+
+render_kms() {
+  local stage=$1 image_ref=$2 archive=$3 meta
+  meta=$(/suite/scripts/app_compose.py kms \
+    --name "dstack-e2e-kms-${stage}" \
+    --image-ref "$image_ref" \
+    --image-archive "$archive" \
+    --artifact-port "$ARTIFACT_PORT" \
+    --auth-port "$AUTH_PORT" \
+    --output "$WORK_DIR/kms-${stage}.app-compose.json")
+  printf '%s\n' "$meta" > "$WORK_DIR/kms-${stage}.manifest-meta.json"
+}
+
+deploy_kms_onboard() {
+  local stage=$1 port=$2 out vm_id
+  log "deploying $stage KMS CVM in Local-Key-Provider mode"
+  if ! out=$("${VMM_CLI[@]}" deploy \
+    --name "${SUITE_PREFIX}-kms-${stage}" \
+    --image "$IMAGE_NAME" \
+    --compose "$WORK_DIR/kms-${stage}.app-compose.json" \
+    --port "tcp:0.0.0.0:${port}:8000" \
+    --vcpu "${DSTACK_E2E_KMS_VCPU:-4}" \
+    --memory "${DSTACK_E2E_KMS_MEMORY:-4096}" \
+    --disk "${DSTACK_E2E_KMS_DISK:-30}" 2>&1); then
+    die "failed to deploy $stage KMS CVM: $out"
+  fi
+  printf '%s\n' "$out" | tee "$WORK_DIR/kms-${stage}.deploy.log"
+  vm_id=$(sed -n 's/^Created VM with ID: //p' <<<"$out" | tail -n1)
+  [[ -n "$vm_id" ]] || die "failed to parse $stage KMS VM id"
+  printf '%s' "$vm_id" > "$WORK_DIR/kms-${stage}.vm_id"
+  wait_boot_done "$vm_id" "kms-${stage}"
+}
+
+wait_onboard() {
+  local stage=$1 port=$2 deadline=$((SECONDS + 300)) url
+  url="http://127.0.0.1:${port}/prpc/Onboard.GetAttestationInfo?json"
+  log "waiting for $stage KMS quote-enabled onboarding endpoint"
+  while (( SECONDS < deadline )); do
+    if curl -fsS "$url" -o "$WORK_DIR/kms-${stage}.attestation-info.json"; then
+      jq -e '((.mr_aggregated // .mrAggregated // "") | length) > 0 and ((.device_id // .deviceId // "") | length) > 0' \
+        "$WORK_DIR/kms-${stage}.attestation-info.json" >/dev/null && return
     fi
-    sleep 2
+    sleep 3
   done
-  die "KMS not ready"
+  "${VMM_CLI[@]}" logs "$(cat "$WORK_DIR/kms-${stage}.vm_id")" -n 300 >&2 || true
+  die "$stage KMS onboarding endpoint not ready"
+}
+
+authorize_kms_from_attestation() {
+  local stage=$1 measurement device_id
+  measurement=$(jq -r '.mr_aggregated // .mrAggregated' "$WORK_DIR/kms-${stage}.attestation-info.json")
+  device_id=$(jq -r '.device_id // .deviceId' "$WORK_DIR/kms-${stage}.attestation-info.json")
+  [[ "$measurement" =~ ^[0-9a-fA-F]+$ ]] || die "invalid $stage KMS mrAggregated"
+  [[ "$device_id" =~ ^[0-9a-fA-F]{64}$ ]] || die "invalid $stage KMS device ID"
+  if [[ -n "$ATTESTED_DEVICE_ID" && "$device_id" != "$ATTESTED_DEVICE_ID" ]]; then
+    die "$stage KMS quote came from unexpected TDX device $device_id"
+  fi
+  ATTESTED_DEVICE_ID=$device_id
+  register_kms_measurement "$measurement" "$device_id"
+  log "authorized exact $stage KMS mrAggregated=${measurement} on device=${device_id}"
+}
+
+onboard_rpc() {
+  local port=$1 method=$2 data=$3 out=$4
+  curl -fsS -X POST -H 'Content-Type: application/json' \
+    "http://127.0.0.1:${port}/prpc/Onboard.${method}?json" \
+    --data-raw "$data" -o "$out"
+  jq -e 'has("error") | not' "$out" >/dev/null \
+    || die "Onboard.${method} returned an error: $(cat "$out")"
+  log "Onboard.${method} completed"
+}
+
+finish_onboarding() {
+  local stage=$1 port=$2
+  curl -fsS "http://127.0.0.1:${port}/finish" > "$WORK_DIR/kms-${stage}.finish.txt"
+  wait_kms_tls "$stage" "$port"
+}
+
+wait_kms_tls() {
+  local stage=$1 port=$2 deadline=$((SECONDS + 300))
+  log "waiting for $stage KMS TLS service"
+  while (( SECONDS < deadline )); do
+    if curl -kfsS "https://127.0.0.1:${port}/prpc/GetMeta?json" \
+      -o "$WORK_DIR/kms-${stage}.ready-meta.json"; then
+      log "$stage KMS TLS service ready"
+      return
+    fi
+    sleep 3
+  done
+  "${VMM_CLI[@]}" logs "$(cat "$WORK_DIR/kms-${stage}.vm_id")" -n 300 >&2 || true
+  die "$stage KMS TLS service not ready"
 }
 
 kms_rpc_get() {
-  local method=$1
-  curl -kfsS "https://127.0.0.1:${KMS_HOST_PORT}/prpc/KMS.${method}?json"
+  local port=$1 method=$2
+  curl -kfsS "https://127.0.0.1:${port}/prpc/${method}?json"
 }
 
 kms_rpc_post() {
-  local method=$1 data=$2
+  local port=$1 method=$2 data=$3
   curl -kfsS -X POST -H 'Content-Type: application/json' \
-    "https://127.0.0.1:${KMS_HOST_PORT}/prpc/KMS.${method}?json" \
-    --data-raw "$data"
+    "https://127.0.0.1:${port}/prpc/${method}?json" --data-raw "$data"
 }
 
 capture_kms_identity() {
-  local stage=$1 app_id
-  app_id=$(cat "$WORK_DIR/legacy.app_id")
-  log "capturing KMS identity ($stage) for app_id=$app_id"
-  kms_rpc_get GetMeta | tee "$WORK_DIR/kms-${stage}.meta.raw.json" \
+  local stage=$1 port=$2 app_id=$3 ca_pem ca_spki k256_pubkey
+  ca_pem="$WORK_DIR/kms-${stage}.ca.pem"
+  kms_rpc_get "$port" GetMeta | tee "$WORK_DIR/kms-${stage}.meta.raw.json" \
     | jq -S '{ca_cert, k256_pubkey}' > "$WORK_DIR/kms-${stage}.meta.json"
-  kms_rpc_post GetAppEnvEncryptPubKey "$(jq -cn --arg id "$app_id" '{app_id:$id}')" \
+  jq -er '.ca_cert' "$WORK_DIR/kms-${stage}.meta.json" > "$ca_pem"
+  openssl x509 -in "$ca_pem" -noout -checkend 0 >/dev/null
+  ca_spki=$(openssl x509 -in "$ca_pem" -pubkey -noout \
+    | openssl pkey -pubin -outform DER \
+    | openssl dgst -sha256 \
+    | awk '{print $NF}')
+  k256_pubkey=$(jq -er '.k256_pubkey' "$WORK_DIR/kms-${stage}.meta.json")
+  jq -nS --arg ca_spki_sha256 "$ca_spki" --arg k256_pubkey "$k256_pubkey" \
+    '{ca_spki_sha256:$ca_spki_sha256,k256_pubkey:$k256_pubkey}' \
+    > "$WORK_DIR/kms-${stage}.identity.json"
+  kms_rpc_post "$port" GetAppEnvEncryptPubKey \
+    "$(jq -cn --arg id "$app_id" '{app_id:$id}')" \
     | tee "$WORK_DIR/kms-${stage}.app-key.raw.json" \
     | jq -S '{public_key}' > "$WORK_DIR/kms-${stage}.app-key.json"
-  jq -e '.ca_cert != "" and .k256_pubkey != ""' "$WORK_DIR/kms-${stage}.meta.json" >/dev/null
+  jq -e '.ca_spki_sha256 != "" and .k256_pubkey != ""' \
+    "$WORK_DIR/kms-${stage}.identity.json" >/dev/null
   jq -e '.public_key != ""' "$WORK_DIR/kms-${stage}.app-key.json" >/dev/null
 }
 
 assert_kms_identity_unchanged() {
-  capture_kms_identity after
-  diff -u "$WORK_DIR/kms-before.meta.json" "$WORK_DIR/kms-after.meta.json" \
-    || die "KMS CA or root k256 public key changed across upgrade"
-  diff -u "$WORK_DIR/kms-before.app-key.json" "$WORK_DIR/kms-after.app-key.json" \
-    || die "per-app environment encryption key changed across KMS upgrade"
-  log "KMS persistent identity and per-app key are unchanged"
+  # Onboarding deliberately reissues the self-signed CA certificate with a new
+  # validity end time.  The transferable identity is its private key/SPKI, not
+  # the DER bytes of that freshly issued certificate.
+  diff -u "$WORK_DIR/kms-old.identity.json" "$WORK_DIR/kms-latest.identity.json" \
+    || die "KMS CA key or root k256 key changed during 0.5.8 -> current onboarding"
+  diff -u "$WORK_DIR/kms-old.app-key.json" "$WORK_DIR/kms-latest.app-key.json" \
+    || die "per-app environment encryption key changed during KMS upgrade"
+  log "KMS CA SPKI, root k256 key and per-app environment key are unchanged"
+}
+
+render_gateway_manifests() {
+  local stage=$1 image_ref=$2 archive=$3 meta
+  meta=$(/suite/scripts/app_compose.py gateway \
+    --name dstack-e2e-gateway \
+    --image-ref "$image_ref" \
+    --image-archive "$archive" \
+    --artifact-port "$ARTIFACT_PORT" \
+    --output "$WORK_DIR/gateway-${stage}.app-compose.json")
+  printf '%s\n' "$meta" > "$WORK_DIR/gateway-${stage}.manifest-meta.json"
+  register_app "$GATEWAY_APP_ID" "$(jq -r .composeHash <<<"$meta")"
+}
+
+write_gateway_env() {
+  local node=$1 rpc_port wg_port third_octet bootnode
+  if [[ "$node" == 1 ]]; then
+    rpc_port=$GATEWAY1_RPC_HOST_PORT
+    wg_port=$GATEWAY1_WG_HOST_PORT
+    third_octet=0
+    bootnode=""
+  else
+    rpc_port=$GATEWAY2_RPC_HOST_PORT
+    wg_port=$GATEWAY2_WG_HOST_PORT
+    third_octet=64
+    bootnode="$GATEWAY1_URL"
+  fi
+  cat > "$WORK_DIR/gateway${node}.env" <<EOF
+WG_ENDPOINT=10.0.2.2:${wg_port}
+MY_URL=https://${KMS_RPC_DOMAIN}:${rpc_port}
+BOOTNODE_URL=${bootnode}
+WG_IP=10.8.${third_octet}.1/16
+WG_RESERVED_NET=10.8.${third_octet}.1/32
+WG_CLIENT_RANGE=10.8.${third_octet}.0/18
+NODE_ID=${node}
+PCCS_URL=
+RPC_DOMAIN=${KMS_RPC_DOMAIN}
+ADMIN_API_TOKEN=${GATEWAY_ADMIN_TOKEN}
+EOF
+  chmod 0600 "$WORK_DIR/gateway${node}.env"
+}
+
+gateway_ports() {
+  local node=$1
+  if [[ "$node" == 1 ]]; then
+    printf '%s %s %s %s\n' "$GATEWAY1_RPC_HOST_PORT" "$GATEWAY1_ADMIN_HOST_PORT" \
+      "$GATEWAY1_PROXY_HOST_PORT" "$GATEWAY1_WG_HOST_PORT"
+  else
+    printf '%s %s %s %s\n' "$GATEWAY2_RPC_HOST_PORT" "$GATEWAY2_ADMIN_HOST_PORT" \
+      "$GATEWAY2_PROXY_HOST_PORT" "$GATEWAY2_WG_HOST_PORT"
+  fi
+}
+
+deploy_gateway() {
+  local node=$1 stage=$2 kms_url=$3 rpc admin proxy wg out vm_id
+  read -r rpc admin proxy wg < <(gateway_ports "$node")
+  log "deploying Gateway node $node ($stage) with pinned app id $GATEWAY_APP_ID"
+  if ! out=$("${VMM_CLI[@]}" deploy \
+    --name "${SUITE_PREFIX}-gateway-${node}" \
+    --app-id "$GATEWAY_APP_ID" \
+    --image "$IMAGE_NAME" \
+    --compose "$WORK_DIR/gateway-${stage}.app-compose.json" \
+    --env-file "$WORK_DIR/gateway${node}.env" \
+    --kms-url "$kms_url" \
+    --port "tcp:0.0.0.0:${rpc}:8000" \
+    --port "tcp:127.0.0.1:${admin}:8001" \
+    --port "tcp:127.0.0.1:${proxy}:443" \
+    --port "udp:0.0.0.0:${wg}:51820" \
+    --vcpu "${DSTACK_E2E_GATEWAY_VCPU:-4}" \
+    --memory "${DSTACK_E2E_GATEWAY_MEMORY:-4096}" \
+    --disk "${DSTACK_E2E_GATEWAY_DISK:-30}" 2>&1); then
+    die "failed to deploy Gateway node $node ($stage): $out"
+  fi
+  printf '%s\n' "$out" | tee "$WORK_DIR/gateway${node}.${stage}.deploy.log"
+  vm_id=$(sed -n 's/^Created VM with ID: //p' <<<"$out" | tail -n1)
+  [[ -n "$vm_id" ]] || die "failed to parse Gateway node $node VM id"
+  printf '%s' "$vm_id" > "$WORK_DIR/gateway${node}.vm_id"
+  wait_boot_done "$vm_id" "gateway${node}-${stage}"
+  wait_gateway "$node"
+}
+
+gateway_version() {
+  local node=$1 stage=$2 rpc _
+  read -r rpc _ < <(gateway_ports "$node")
+  curl -kfsS -D "$WORK_DIR/gateway${node}-${stage}.headers" -o /dev/null \
+    "https://127.0.0.1:${rpc}/prpc/Info?json"
+  tr -d '\r' < "$WORK_DIR/gateway${node}-${stage}.headers" \
+    | awk 'tolower($1)=="x-app-version:" {$1=""; sub(/^ /,""); print}' \
+    > "$WORK_DIR/gateway${node}-${stage}.version.txt"
+  [[ -s "$WORK_DIR/gateway${node}-${stage}.version.txt" ]] \
+    || die "Gateway node $node did not return X-App-Version"
+  if [[ "$stage" == old ]]; then
+    grep -E '^v0\.5\.8 \(git:' "$WORK_DIR/gateway${node}-${stage}.version.txt" >/dev/null \
+      || die "Gateway node $node did not run released v0.5.8"
+  else
+    grep -E "^v${CURRENT_VERSION//./\\.} \\(git:" \
+      "$WORK_DIR/gateway${node}-${stage}.version.txt" >/dev/null \
+      || die "Gateway node $node did not run current v$CURRENT_VERSION"
+    grep -F "$CURRENT_REV" "$WORK_DIR/gateway${node}-${stage}.version.txt" >/dev/null \
+      || die "Gateway node $node did not run current revision $CURRENT_REV"
+  fi
+  log "Gateway node $node $stage: $(cat "$WORK_DIR/gateway${node}-${stage}.version.txt")"
 }
 
 admin_curl() {
-  local method=$1
-  local data=${2:-'{}'}
-  local out code
+  local node=$1 method=$2 data=${3:-'{}'} admin out code
+  read -r _ admin _ < <(gateway_ports "$node")
   out=$(mktemp)
   code=$(curl -sS -o "$out" -w '%{http_code}' -X POST \
     -H "Authorization: Bearer ${GATEWAY_ADMIN_TOKEN}" \
     -H 'Content-Type: application/json' \
-    "http://127.0.0.1:${GATEWAY_ADMIN_HOST_PORT}/prpc/Admin.${method}?json" \
+    "http://127.0.0.1:${admin}/prpc/Admin.${method}?json" \
     --data-raw "$data" || true)
   if [[ "$code" =~ ^2 ]]; then
     cat "$out"
     rm -f "$out"
-    return 0
+    return
   fi
-  log "Admin.${method} failed HTTP ${code}: $(cat "$out")" >&2
+  log "Gateway $node Admin.${method} failed HTTP $code: $(cat "$out")" >&2
   rm -f "$out"
   return 1
 }
 
-wait_gateway_admin() {
-  log "waiting for Gateway admin API on 127.0.0.1:${GATEWAY_ADMIN_HOST_PORT}"
-  for _ in $(seq 1 90); do
-    if admin_curl Status >/dev/null 2>&1; then
-      log "Gateway admin ready"
-      return 0
+wait_gateway() {
+  local node=$1 rpc deadline=$((SECONDS + 300))
+  read -r rpc _ < <(gateway_ports "$node")
+  while (( SECONDS < deadline )); do
+    if curl -kfsS "https://127.0.0.1:${rpc}/prpc/Info?json" >/dev/null 2>&1 \
+      && admin_curl "$node" Status >/dev/null 2>&1; then
+      log "Gateway node $node ready"
+      return
     fi
-    sleep 2
+    sleep 3
   done
-  die "Gateway admin API not ready"
+  "${VMM_CLI[@]}" logs "$(cat "$WORK_DIR/gateway${node}.vm_id")" -n 300 >&2 || true
+  die "Gateway node $node not ready"
 }
 
-bootstrap_gateway_certbot() {
-  local acme_url="http://127.0.0.1:${PEBBLE_HTTP_PORT}/dir"
-  local cf_url="http://127.0.0.1:${MOCK_CF_HTTP_PORT}/client/v4"
-  log "configuring Gateway certbot: acme=$acme_url cf=$cf_url domain=$BASE_DOMAIN"
-  # Pebble's test certificates are short-lived. Keep the renewal threshold
-  # below their lifetime so a Gateway restart tests certificate restoration
-  # instead of intentionally rotating the certificate during startup.
-  admin_curl SetCertbotConfig "$(jq -cn --arg u "$acme_url" '{acme_url:$u, renew_before_expiration_secs:3600}')" >/dev/null
-  admin_curl CreateDnsCredential "$(jq -cn --arg u "$cf_url" '{name:"mock-cloudflare", provider_type:"cloudflare", cf_api_token:"test-token", cf_api_url:$u, set_as_default:true, dns_txt_ttl:1, max_dns_wait:0}')" >/dev/null || true
-  admin_curl AddZtDomain "$(jq -cn --arg d "$BASE_DOMAIN" '{domain:$d, port:443, priority:100}')" >/dev/null || true
-  log "requesting wildcard cert for *.${BASE_DOMAIN}"
-  admin_curl RenewZtDomainCert "$(jq -cn --arg d "$BASE_DOMAIN" '{domain:$d, force:true}')" \
-    | tee "$WORK_DIR/renew-cert.json"
+bootstrap_gateway() {
+  log "configuring Gateway cluster through node 1"
+  admin_curl 1 SetCertbotConfig \
+    "$(jq -cn --arg u "http://10.0.2.2:${PEBBLE_HTTP_PORT}/dir" \
+      '{acme_url:$u, renew_before_expiration_secs:3600}')" >/dev/null
+  admin_curl 1 CreateDnsCredential \
+    "$(jq -cn --arg u "http://10.0.2.2:${MOCK_CF_HTTP_PORT}/client/v4" \
+      '{name:"mock-cloudflare",provider_type:"cloudflare",cf_api_token:"test-token",cf_api_url:$u,set_as_default:true,dns_txt_ttl:1,max_dns_wait:0}')" \
+    >/dev/null
+  admin_curl 1 AddZtDomain \
+    "$(jq -cn --arg d "$BASE_DOMAIN" '{domain:$d,port:443,priority:100}')" \
+    >/dev/null
+  admin_curl 1 RenewZtDomainCert \
+    "$(jq -cn --arg d "$BASE_DOMAIN" '{domain:$d,force:true}')" \
+    | tee "$WORK_DIR/gateway-renew-cert.json"
+  wait_gateway_cert 1
+  wait_gateway_cluster_sync
+  wait_gateway_cert 2
+}
+
+wait_gateway_cluster_sync() {
+  local deadline=$((SECONDS + 240)) domains certbot
+  log "waiting for Gateway WaveKV config/certificate sync to node 2"
+  while (( SECONDS < deadline )); do
+    domains=$(admin_curl 2 ListZtDomains 2>/dev/null || true)
+    certbot=$(admin_curl 2 GetCertbotConfig 2>/dev/null || true)
+    if jq -e --arg d "$BASE_DOMAIN" '.domains[]? | (.domain // .config.domain) == $d' \
+      <<<"$domains" >/dev/null 2>&1 \
+      && jq -e '.acme_url != ""' <<<"$certbot" >/dev/null 2>&1; then
+      log "Gateway cluster state synced"
+      return
+    fi
+    sleep 3
+  done
+  die "Gateway node 2 did not receive synced cluster state"
 }
 
 wait_gateway_cert() {
-  local sni="gateway.${BASE_DOMAIN}" deadline=$((SECONDS + ${DSTACK_E2E_CERT_TIMEOUT:-240}))
-  log "waiting for Gateway TLS certificate with SNI $sni"
+  local node=$1 proxy deadline=$((SECONDS + 300)) sni="gateway.${BASE_DOMAIN}"
+  read -r _ _ proxy _ < <(gateway_ports "$node")
   while (( SECONDS < deadline )); do
-    if echo | timeout 8 openssl s_client \
-      -connect "127.0.0.1:${GATEWAY_PROXY_HOST_PORT}" \
-      -servername "$sni" 2>/dev/null \
+    if echo | timeout 8 openssl s_client -connect "127.0.0.1:${proxy}" -servername "$sni" 2>/dev/null \
       | openssl x509 -noout -ext subjectAltName 2>/dev/null \
       | grep -Fq "*.${BASE_DOMAIN}"; then
-      log "Gateway wildcard certificate is active"
-      return 0
+      log "Gateway node $node wildcard certificate active"
+      return
     fi
-    sleep 5
+    sleep 3
   done
-  die "timed out waiting for Gateway certificate"
+  die "Gateway node $node wildcard certificate not active"
 }
 
 gateway_cert_fingerprint() {
-  local sni="gateway.${BASE_DOMAIN}"
-  echo | timeout 8 openssl s_client \
-    -connect "127.0.0.1:${GATEWAY_PROXY_HOST_PORT}" \
-    -servername "$sni" 2>/dev/null \
+  local node=$1 proxy sni="gateway.${BASE_DOMAIN}"
+  read -r _ _ proxy _ < <(gateway_ports "$node")
+  echo | timeout 8 openssl s_client -connect "127.0.0.1:${proxy}" -servername "$sni" 2>/dev/null \
     | openssl x509 -noout -fingerprint -sha256 2>/dev/null
 }
 
 wait_gateway_persisted() {
-  log "waiting for Gateway WaveKV persistence"
-  local deadline=$((SECONDS + 90)) status
+  local node=$1 deadline=$((SECONDS + 120)) status
   while (( SECONDS < deadline )); do
-    status=$(admin_curl WaveKvStatus 2>/dev/null || true)
-    if [[ -n "$status" ]] \
-      && jq -e '.persistent.dirty == false and .persistent.n_keys > 0' <<<"$status" >/dev/null 2>&1; then
-      log "Gateway persistent store is clean ($(jq -r '.persistent.n_keys' <<<"$status") keys)"
-      return 0
+    status=$(admin_curl "$node" WaveKvStatus 2>/dev/null || true)
+    if jq -e '.persistent.dirty == false and .persistent.n_keys > 0' <<<"$status" >/dev/null 2>&1; then
+      return
     fi
-    sleep 1
+    sleep 2
   done
-  die "Gateway persistent store did not flush"
+  die "Gateway node $node persistent store did not flush"
 }
 
 capture_gateway_state() {
-  local stage=$1
-  log "capturing Gateway durable state ($stage)"
-  admin_curl Status | tee "$WORK_DIR/gateway-${stage}.status.raw.json" \
-    | jq -S '{uuid, hosts: ([.hosts[] | {instance_id, ip, app_id, base_domain}] | sort_by(.instance_id))}' \
-    > "$WORK_DIR/gateway-${stage}.status.json"
-  admin_curl GetCertbotConfig | tee "$WORK_DIR/gateway-${stage}.certbot.raw.json" \
-    | jq -S '{acme_url, renew_interval_secs, renew_before_expiration_secs, renew_timeout_secs}' \
-    > "$WORK_DIR/gateway-${stage}.certbot.json"
-  admin_curl ListDnsCredentials | tee "$WORK_DIR/gateway-${stage}.dns.raw.json" \
-    | jq -S '{default_id, credentials: ([.credentials[] | {id, name, provider_type, cf_zone_id, cf_api_url, dns_txt_ttl, max_dns_wait}] | sort_by(.id))}' \
-    > "$WORK_DIR/gateway-${stage}.dns.json"
-  admin_curl ListZtDomains | tee "$WORK_DIR/gateway-${stage}.domains.raw.json" \
-    | jq -S '{domains: ([.domains[] | .config] | sort_by(.domain))}' \
-    > "$WORK_DIR/gateway-${stage}.domains.json"
-  gateway_cert_fingerprint > "$WORK_DIR/gateway-${stage}.cert-fingerprint.txt"
+  local node=$1 stage=$2
+  wait_gateway_persisted "$node"
+  admin_curl "$node" Status | tee "$WORK_DIR/gateway${node}-${stage}.status.raw.json" \
+    | jq -S '. as $status | {
+        id: $status.id,
+        uuid: ([$status.nodes[] | select(.id == $status.id)][0].uuid),
+        hosts: ([$status.hosts[] | {instance_id,ip,app_id,base_domain}] | sort_by(.instance_id))
+      }' \
+    > "$WORK_DIR/gateway${node}-${stage}.status.json"
+  admin_curl "$node" GetCertbotConfig | jq -S \
+    '{acme_url,renew_interval_secs,renew_before_expiration_secs,renew_timeout_secs}' \
+    > "$WORK_DIR/gateway${node}-${stage}.certbot.json"
+  admin_curl "$node" ListDnsCredentials | jq -S \
+    '{default_id,credentials:([.credentials[]|{
+      id,name,provider_type,
+      cf_api_token_set: ((.cf_api_token // "") | length > 0),
+      cf_zone_id,cf_api_url,dns_txt_ttl,max_dns_wait
+    }]|sort_by(.id))}' \
+    > "$WORK_DIR/gateway${node}-${stage}.dns.json"
+  admin_curl "$node" ListZtDomains | jq -S \
+    '{domains:([.domains[]|(.config // .)]|sort_by(.domain))}' \
+    > "$WORK_DIR/gateway${node}-${stage}.domains.json"
+  gateway_cert_fingerprint "$node" > "$WORK_DIR/gateway${node}-${stage}.cert.txt"
 }
 
 assert_gateway_state_unchanged() {
-  capture_gateway_state after
-  local file
+  local node=$1 file
+  capture_gateway_state "$node" after
   for file in status certbot dns domains; do
-    diff -u "$WORK_DIR/gateway-before.${file}.json" "$WORK_DIR/gateway-after.${file}.json" \
-      || die "Gateway $file state changed across upgrade"
+    diff -u "$WORK_DIR/gateway${node}-before.${file}.json" \
+      "$WORK_DIR/gateway${node}-after.${file}.json" \
+      || die "Gateway node $node $file state changed across upgrade"
   done
-  diff -u "$WORK_DIR/gateway-before.cert-fingerprint.txt" "$WORK_DIR/gateway-after.cert-fingerprint.txt" \
-    || die "Gateway wildcard certificate changed across upgrade"
-  log "Gateway registrations, identity, certbot config, DNS/domain config and certificate are unchanged"
+  diff -u "$WORK_DIR/gateway${node}-before.cert.txt" "$WORK_DIR/gateway${node}-after.cert.txt" \
+    || die "Gateway node $node wildcard certificate changed across upgrade"
+  log "Gateway node $node durable state is unchanged"
+}
+
+assert_gateway_dns_credential_usable() {
+  local node=$1 result deadline=$((SECONDS + 90))
+  log "proving Gateway node $node retained the Cloudflare credential"
+  while (( SECONDS < deadline )); do
+    result=$(admin_curl "$node" RenewZtDomainCert \
+      "$(jq -cn --arg d "$BASE_DOMAIN" '{domain:$d,force:true}')")
+    printf '%s\n' "$result" > "$WORK_DIR/gateway${node}-post-upgrade-renew.json"
+    if jq -e '.renewed == true and .not_after > 0' <<<"$result" >/dev/null; then
+      wait_gateway_cert "$node"
+      return
+    fi
+    # WaveKV's distributed certificate lock may still be held by the peer's
+    # immediately preceding issuance.
+    sleep 3
+  done
+  die "Gateway node $node could not issue with its persisted DNS credential"
+}
+
+render_app() {
+  local label=$1 mode=$2 meta app_id hash
+  meta=$(/suite/scripts/app_compose.py nginx \
+    --name "${APP_NAME}-${label}" \
+    --image-ref "$APP_IMAGE_ID" \
+    --image-archive app.tar \
+    --artifact-port "$ARTIFACT_PORT" \
+    --attestation-mode "$mode" \
+    --output "$WORK_DIR/${label}.app-compose.json")
+  printf '%s\n' "$meta" > "$WORK_DIR/${label}.manifest-meta.json"
+  app_id=$(jq -r .appId <<<"$meta")
+  hash=$(jq -r .composeHash <<<"$meta")
+  printf '%s' "$app_id" > "$WORK_DIR/${label}.app_id"
+  register_app "$app_id" "$hash"
 }
 
 deploy_app() {
-  local label=$1 attestation_mode=$2
-  local out meta app_id hash vm_id
-  log "rendering $label nginx app-compose (TDX $attestation_mode)"
-  meta=$(python3 /suite/scripts/app_compose.py nginx \
-    --name "${APP_NAME}-${label}" \
-    --app-image "$APP_IMAGE" \
-    --attestation-mode "$attestation_mode" \
-    --output "$WORK_DIR/${label}.app-compose.json")
-  read -r app_id hash < <(jq -r '"\(.appId) \(.composeHash)"' <<<"$meta")
-  printf '%s' "$app_id" > "$WORK_DIR/${label}.app_id"
-  local gateway_id
-  gateway_id=$(jq -r '.gatewayAppId' "$ALLOWLIST")
-  log "registering $label app in auth allowlist app_id=$app_id gateway_app_id=$gateway_id"
-  register_app "$app_id" "$hash" "$gateway_id"
-  log "deploying $label nginx app CVM"
-  out=$("${VMM_CLI[@]}" deploy \
+  local label=$1 mode=$2 kms_url=$3 out vm_id
+  render_app "$label" "$mode"
+  log "deploying $label app CVM (forced TDX $mode)"
+  if ! out=$("${VMM_CLI[@]}" deploy \
     --name "${SUITE_PREFIX}-${label}" \
     --image "$IMAGE_NAME" \
     --compose "$WORK_DIR/${label}.app-compose.json" \
+    --kms-url "$kms_url" \
+    --gateway-url "$GATEWAY1_URL" \
+    --gateway-url "$GATEWAY2_URL" \
     --vcpu "${DSTACK_E2E_APP_VCPU:-2}" \
     --memory "${DSTACK_E2E_APP_MEMORY:-2048}" \
-    --disk "${DSTACK_E2E_APP_DISK:-20}")
+    --disk "${DSTACK_E2E_APP_DISK:-20}" 2>&1); then
+    die "failed to deploy $label app CVM: $out"
+  fi
   printf '%s\n' "$out" | tee "$WORK_DIR/${label}.deploy.log"
   vm_id=$(sed -n 's/^Created VM with ID: //p' <<<"$out" | tail -n1)
-  [[ -n "$vm_id" ]] || die "failed to parse $label app VM id"
+  [[ -n "$vm_id" ]] || die "failed to parse $label VM id"
   printf '%s' "$vm_id" > "$WORK_DIR/${label}.vm_id"
-  wait_boot_done "$vm_id" "$label" "${DSTACK_E2E_APP_BOOT_TIMEOUT:-600}"
-  assert_attestation_mode "$label" "$attestation_mode"
+  wait_boot_done "$vm_id" "$label"
+  assert_attestation_mode "$label" "$mode"
 }
 
 assert_attestation_mode() {
   local label=$1 expected=$2 id sys_config actual
   id=$(cat "$WORK_DIR/${label}.vm_id")
   sys_config="$VM_DIR/$id/shared/.sys-config.json"
-  [[ -s "$sys_config" ]] || die "missing $label sys config: $sys_config"
+  [[ -s "$sys_config" ]] || die "missing $label sys config"
   actual=$(jq -r '.vm_config | fromjson | .tdx_attestation_variant // "legacy"' "$sys_config")
-  [[ "$actual" == "$expected" ]] \
-    || die "$label resolved attestation mode is $actual, expected $expected"
-  jq -e '.kms_urls | length > 0' "$sys_config" >/dev/null \
-    || die "$label has no KMS URL"
-  log "$label booted with resolved TDX mode=$actual and completed KMS key provisioning"
-}
-
-restart_app_after_kms_upgrade() {
-  local label=$1 id
-  id=$(cat "$WORK_DIR/${label}.vm_id")
-  log "force-stopping $label CVM to require a fresh boot-time KMS key request"
-  "${VMM_CLI[@]}" stop "$id" --force >/dev/null
-  wait_vm_stopped "$id"
-  log "restarting $label CVM against upgraded KMS"
-  "${VMM_CLI[@]}" start "$id" >/dev/null
-  # The Start RPC returns before the supervisor updates the persisted VM state.
-  # Avoid treating that short, expected `exited` window as a failed boot.
-  wait_vm_running "$id" "$label"
-  wait_boot_done "$id" "$label" "${DSTACK_E2E_APP_BOOT_TIMEOUT:-600}"
-  assert_attestation_mode "$label" legacy
+  [[ "$actual" == "$expected" ]] || die "$label mode=$actual, expected $expected"
+  jq -e '(.kms_urls | length) > 0 and (.gateway_urls | length) == 2' "$sys_config" >/dev/null
+  log "$label completed boot-time KMS key provisioning in TDX $actual mode"
 }
 
 verify_app_via_gateway() {
-  local label=$1 app_info instance_id sni url deadline
-  app_info=$(cat "$WORK_DIR/${label}.info.json")
-  instance_id=$(jq -r '.instance_id // ""' <<<"$app_info")
-  [[ -n "$instance_id" && "$instance_id" != "null" ]] || die "$label app has no instance_id"
-  sni="${instance_id}-80.${BASE_DOMAIN}"
-  url="https://${sni}:${GATEWAY_PROXY_HOST_PORT}/"
-  log "verifying $label app through Gateway: $url"
-  deadline=$((SECONDS + ${DSTACK_E2E_APP_HTTP_TIMEOUT:-240}))
+  local label=$1 node=$2 instance sni proxy url deadline
+  instance=$(jq -r '.instance_id' "$WORK_DIR/${label}.info.json")
+  read -r _ _ proxy _ < <(gateway_ports "$node")
+  sni="${instance}-80.${BASE_DOMAIN}"
+  url="https://${sni}:${proxy}/"
+  deadline=$((SECONDS + 300))
   while (( SECONDS < deadline )); do
-    if curl -fsS -k --connect-to "${sni}:${GATEWAY_PROXY_HOST_PORT}:127.0.0.1:${GATEWAY_PROXY_HOST_PORT}" \
-      "$url" > "$WORK_DIR/${label}.http.out" 2>"$WORK_DIR/${label}.http.err"; then
-      if grep -qi 'welcome to nginx' "$WORK_DIR/${label}.http.out"; then
-        log "$label Gateway -> app HTTP check passed"
-        return 0
-      fi
+    if curl -kfsS --max-time 5 \
+      --connect-to "${sni}:${proxy}:127.0.0.1:${proxy}" "$url" \
+      | grep -qi 'welcome to nginx'; then
+      log "$label reachable through Gateway node $node"
+      return
     fi
-    sleep 5
+    sleep 3
   done
-  cat "$WORK_DIR/${label}.http.err" >&2 || true
-  die "timed out verifying $label app through Gateway"
+  die "$label not reachable through Gateway node $node"
 }
 
-write_network_targets() {
-  local status label instance ip
-  status=$(admin_curl Status)
-  : > "$WORK_DIR/network-targets.tsv"
+verify_all_routes() {
+  local label node
   for label in legacy lite; do
-    instance=$(jq -r '.instance_id' "$WORK_DIR/${label}.info.json")
-    ip=$(jq -r --arg id "$instance" '.hosts[] | select(.instance_id == $id) | .ip' <<<"$status")
-    [[ -n "$ip" && "$ip" != "null" ]] || die "Gateway has no WireGuard IP for $label ($instance)"
-    printf '%s\t%s\n' "$label" "$ip" >> "$WORK_DIR/network-targets.tsv"
-    curl -fsS --max-time 3 "http://${ip}:80/" | grep -qi 'welcome to nginx' \
-      || die "cannot reach $label directly over WireGuard at $ip"
+    for node in 1 2; do
+      verify_app_via_gateway "$label" "$node"
+    done
   done
-  log "CVM WireGuard targets: $(tr '\n' ' ' < "$WORK_DIR/network-targets.tsv")"
+}
+
+restart_legacy_on_latest_kms() {
+  local id
+  id=$(cat "$WORK_DIR/legacy.vm_id")
+  stop_vm "$id" legacy
+  "${VMM_CLI[@]}" update "$id" --kms-url "$KMS_LATEST_URL" >/dev/null
+  start_vm "$id" legacy
+  assert_attestation_mode legacy legacy
+}
+
+upgrade_gateway_node() {
+  local node=$1 id
+  id=$(cat "$WORK_DIR/gateway${node}.vm_id")
+  stop_vm "$id" "Gateway node $node"
+  "${VMM_CLI[@]}" update-app-compose "$id" "$WORK_DIR/gateway-latest.app-compose.json" >/dev/null
+  "${VMM_CLI[@]}" update "$id" --kms-url "$KMS_LATEST_URL" >/dev/null
+  start_vm "$id" "gateway${node}-latest"
+  wait_gateway "$node"
+  wait_gateway_cert "$node"
+  gateway_version "$node" latest
+  # The newly restarted node must carry traffic before its peer is touched.
+  verify_app_via_gateway legacy "$node"
+  verify_app_via_gateway lite "$node"
+  assert_gateway_state_unchanged "$node"
+}
+
+start_network_probe() {
+  rm -f "$WORK_DIR/network-probe."{ready,stop,result.json,log}
+  /suite/scripts/network-probe.sh > "$WORK_DIR/network-probe.log" 2>&1 &
+  probe_pid=$!
+  for _ in $(seq 1 120); do
+    [[ -e "$WORK_DIR/network-probe.ready" ]] && return
+    kill -0 "$probe_pid" 2>/dev/null || {
+      cat "$WORK_DIR/network-probe.log" >&2
+      die "HA network probe exited during warmup"
+    }
+    sleep 1
+  done
+  die "HA network probe did not become ready"
+}
+
+stop_network_probe() {
+  touch "$WORK_DIR/network-probe.stop"
+  if ! wait "$probe_pid"; then
+    cat "$WORK_DIR/network-probe.log" >&2
+    die "CVM traffic had downtime during rolling Gateway upgrade"
+  fi
+  probe_pid=""
+  cat "$WORK_DIR/network-probe.log"
+  jq -e '.attempts > 0 and .failures == 0 and .successful_failovers > 0' \
+    "$WORK_DIR/network-probe.result.json" >/dev/null \
+    || die "HA probe reported downtime"
+}
+
+assert_no_insecure_shortcuts() {
+  log "auditing rendered manifests for production trust settings"
+  local manifest
+  local forbidden='quote_enabled[[:space:]]*=[[:space:]]*false|enforce_self_authorization[[:space:]]*=[[:space:]]*false|verify[[:space:]]*=[[:space:]]*false'
+  if grep -R -E "$forbidden" "$WORK_DIR"/*.app-compose.json; then
+    die "rendered app manifest contains a forbidden development trust setting"
+  fi
+
+  for manifest in "$WORK_DIR/kms-old.app-compose.json" \
+    "$WORK_DIR/kms-latest.app-compose.json"; do
+    if ! python3 - "$manifest" <<'PY'
+import json
+import sys
+import tomllib
+
+manifest = json.load(open(sys.argv[1], encoding="utf-8"))
+assert manifest["local_key_provider_enabled"] is True
+assert manifest["kms_enabled"] is False
+
+# Parse the actual kms.toml embedded in the rendered Compose YAML.  Checking
+# TOML values instead of matching adjacent strings keeps this guard strict
+# while allowing comments and blank lines in the production-style config.
+marker = "configs:\n  kms_config:\n    content: |\n"
+compose = manifest["docker_compose_file"]
+assert compose.count(marker) == 1
+indented_config = compose.split(marker, 1)[1]
+config_lines = []
+for line in indented_config.splitlines():
+    if line and not line.startswith("      "):
+        break
+    config_lines.append(line[6:] if line else "")
+config = tomllib.loads("\n".join(config_lines))
+
+core = config["core"]
+assert core["enforce_self_authorization"] is True
+assert core["image"]["verify"] is True
+assert core["auth_api"]["type"] == "webhook"
+assert core["onboard"]["enabled"] is True
+assert core["onboard"]["quote_enabled"] is True
+PY
+    then
+      die "$manifest does not use quote-attested production KMS settings"
+    fi
+  done
+
+  for manifest in "$WORK_DIR/gateway-old.app-compose.json" \
+    "$WORK_DIR/gateway-latest.app-compose.json"; do
+    jq -e '.kms_enabled == true and .local_key_provider_enabled == false' \
+      "$manifest" >/dev/null \
+      || die "$manifest does not obtain its keys from KMS"
+  done
+
+  jq -e '
+    .kms_enabled == true and .gateway_enabled == true
+    and .manifest_version == "3"
+    and .requirements.tdx_measure_acpi_tables == true
+  ' "$WORK_DIR/legacy.app-compose.json" >/dev/null \
+    || die "legacy app manifest did not force the legacy TDX verifier"
+  jq -e '
+    .kms_enabled == true and .gateway_enabled == true
+    and .manifest_version == "3"
+    and .requirements.tdx_measure_acpi_tables == false
+  ' "$WORK_DIR/lite.app-compose.json" >/dev/null \
+    || die "lite app manifest did not force the lite TDX verifier"
+
+  jq -e --arg id "$GATEWAY_APP_ID" \
+    --arg device "$ATTESTED_DEVICE_ID" \
+    '.gatewayAppId == $id and .gatewayAppId != "any"
+      and (.osImages | length) == 1
+      and (.kms.mrAggregated | length) == 2
+      and (.kms.allowAnyDevice == false)
+      and (.kms.devices == [$device])
+      and (.apps | length) == 3
+      and ([.apps[].allowAnyDevice] | all(. == false))
+      and ([.apps[].devices] | all(. == [$device]))' \
+    "$ALLOWLIST" >/dev/null
+}
+
+save_vm_logs() {
+  local name file id
+  for file in "$WORK_DIR"/*.vm_id; do
+    [[ -s "$file" ]] || continue
+    name=$(basename "$file" .vm_id)
+    id=$(cat "$file")
+    "${VMM_CLI[@]}" logs "$id" -n 2000 > "$WORK_DIR/${name}.vm.log" 2>&1 || true
+  done
 }
 
 cleanup_after() {
-  if [[ "${DSTACK_E2E_CLEANUP_AFTER:-false}" != "true" ]]; then
-    return 0
-  fi
-  log "DSTACK_E2E_CLEANUP_AFTER=true: removing suite VMs"
-  local f
-  for f in "$WORK_DIR"/*.vm_id; do
-    [[ -s "$f" ]] && remove_vm "$(cat "$f")"
+  [[ "${DSTACK_E2E_CLEANUP_AFTER:-false}" == true ]] || return 0
+  local file
+  for file in "$WORK_DIR"/*.vm_id; do
+    [[ -s "$file" ]] && remove_vm "$(cat "$file")"
   done
 }
 
-prepare_common() {
+phase_upgrade() {
+  [[ "$PLATFORM" == tdx ]] || die "upgrade phase requires TDX"
   wait_vmm
   clean_start
-  wait_kms
-  wait_gateway_admin
-  bootstrap_gateway_certbot
-  wait_gateway_cert
-}
 
-phase_full() {
-  prepare_common
-  if [[ "$PLATFORM" == "tdx" ]]; then
-    deploy_app legacy legacy
-    deploy_app lite lite
-    verify_app_via_gateway legacy
-    verify_app_via_gateway lite
-    capture_kms_identity full
-    wait_gateway_persisted
-    capture_gateway_state full
-    write_network_targets
-  else
-    deploy_app app auto
-    verify_app_via_gateway app
-  fi
-  log "E2E success"
-  cleanup_after
-}
+  render_kms old "$OLD_KMS_IMAGE_ID" kms-0.5.8.tar
+  deploy_kms_onboard old "$KMS_OLD_HOST_PORT"
+  wait_onboard old "$KMS_OLD_HOST_PORT"
+  authorize_kms_from_attestation old
+  onboard_rpc "$KMS_OLD_HOST_PORT" Bootstrap \
+    "$(jq -cn --arg d "$KMS_RPC_DOMAIN" '{domain:$d}')" \
+    "$WORK_DIR/kms-old.bootstrap.json"
+  jq -e '(.attestation // "") | length > 0' "$WORK_DIR/kms-old.bootstrap.json" >/dev/null \
+    || die "KMS 0.5.8 bootstrap did not return quote-bound attestation"
+  log "KMS 0.5.8 bootstrap returned quote-bound attestation"
+  finish_onboarding old "$KMS_OLD_HOST_PORT"
 
-phase_prepare_old() {
-  require_tdx
-  prepare_common
-  deploy_app legacy legacy
-  verify_app_via_gateway legacy
-  capture_kms_identity before
-  printf 'ok\n' > "$WORK_DIR/prepare-old.done"
-  log "old KMS/Gateway phase complete"
-}
+  render_gateway_manifests old "$OLD_GATEWAY_IMAGE_ID" gateway-0.5.8.tar
+  render_gateway_manifests latest "$CURRENT_GATEWAY_IMAGE_ID" gateway-current.tar
+  write_gateway_env 1
+  write_gateway_env 2
+  deploy_gateway 1 old "$KMS_OLD_URL"
+  gateway_version 1 old
+  deploy_gateway 2 old "$KMS_OLD_URL"
+  gateway_version 2 old
+  bootstrap_gateway
 
-phase_after_kms_upgrade() {
-  require_tdx
-  wait_vmm
-  wait_kms
-  wait_gateway_admin
+  deploy_app legacy legacy "$KMS_OLD_URL"
+  verify_app_via_gateway legacy 1
+  verify_app_via_gateway legacy 2
+  capture_kms_identity old "$KMS_OLD_HOST_PORT" "$(cat "$WORK_DIR/legacy.app_id")"
+
+  # Production KMS upgrades are rolling, quote-attested replication into a new
+  # Local-Key-Provider CVM, not an unmeasured binary swap in the old CVM.
+  render_kms latest "$CURRENT_KMS_IMAGE_ID" kms-current.tar
+  deploy_kms_onboard latest "$KMS_LATEST_HOST_PORT"
+  wait_onboard latest "$KMS_LATEST_HOST_PORT"
+  authorize_kms_from_attestation latest
+  onboard_rpc "$KMS_LATEST_HOST_PORT" Onboard \
+    "$(jq -cn --arg s "$KMS_OLD_URL" --arg d "$KMS_RPC_DOMAIN" '{source_url:$s,domain:$d}')" \
+    "$WORK_DIR/kms-latest.onboard.json"
+  # Current Onboard returns only the replicated public key. Quote evidence is
+  # carried by the mutual RA-TLS connection and authorized above through the
+  # target's exact quote-derived measurement and physical TDX device ID.
+  finish_onboarding latest "$KMS_LATEST_HOST_PORT"
+  capture_kms_identity latest "$KMS_LATEST_HOST_PORT" "$(cat "$WORK_DIR/legacy.app_id")"
   assert_kms_identity_unchanged
-  restart_app_after_kms_upgrade legacy
-  verify_app_via_gateway legacy
-  deploy_app lite lite
-  verify_app_via_gateway lite
-  wait_gateway_persisted
-  capture_gateway_state before
-  write_network_targets
-  printf 'ok\n' > "$WORK_DIR/after-kms-upgrade.done"
-  log "KMS upgrade and latest lite/legacy key-provisioning phase complete"
-}
 
-phase_after_gateway_upgrade() {
-  require_tdx
-  wait_vmm
-  wait_kms
-  wait_gateway_admin
-  wait_gateway_cert
-  assert_gateway_state_unchanged
-  verify_app_via_gateway legacy
-  verify_app_via_gateway lite
-  write_network_targets
-  printf 'ok\n' > "$WORK_DIR/after-gateway-upgrade.done"
-  log "Gateway upgrade compatibility phase complete"
+  stop_vm "$(cat "$WORK_DIR/kms-old.vm_id")" "KMS 0.5.8 after cutover"
+  restart_legacy_on_latest_kms
+  deploy_app lite lite "$KMS_LATEST_URL"
+  verify_all_routes
+
+  capture_gateway_state 1 before
+  capture_gateway_state 2 before
+  start_network_probe
+  upgrade_gateway_node 1
+  upgrade_gateway_node 2
+  stop_network_probe
+  verify_all_routes
+  # The current API redacts stored tokens, so metadata equality alone cannot
+  # prove the secret survived. The mock rejects any token other than the exact
+  # original value; a forced issuance through each upgraded node proves it.
+  assert_gateway_dns_credential_usable 1
+  assert_gateway_dns_credential_usable 2
+
+  assert_no_insecure_shortcuts
+  save_vm_logs
+  # dstack-kms runs in an inner container, whose stdout is not part of the CVM
+  # serial log returned by VMM.  Each KMS has a fresh data disk, so two 200 GETs
+  # for the exact measured archive prove that both verifiers downloaded it.
+  local os_archive_gets
+  os_archive_gets=$(grep -Fc \
+    "GET /os/mr_${OS_IMAGE_HASH}.tar.gz HTTP/1.1\" 200" \
+    "$WORK_DIR/artifacts-access.log" || true)
+  (( os_archive_gets >= 2 )) \
+    || die "expected verified OS image downloads by both KMS versions, saw ${os_archive_gets}"
+  if grep -E 'Image verification is disabled|self-authorization is disabled' \
+    "$WORK_DIR/kms-"*.vm.log; then
+    die "KMS logs contain a forbidden disabled verification path"
+  fi
+
+  log "production-compatible KMS/Gateway rolling-upgrade E2E success"
   cleanup_after
 }
+
+on_exit() {
+  local rc=$?
+  if [[ -n "$probe_pid" ]] && kill -0 "$probe_pid" 2>/dev/null; then
+    touch "$WORK_DIR/network-probe.stop" 2>/dev/null || true
+    wait "$probe_pid" 2>/dev/null || true
+  fi
+  if (( rc != 0 )); then
+    save_vm_logs || true
+  fi
+  exit "$rc"
+}
+trap on_exit EXIT
 
 main() {
-  need_current_bins
-  log "running E2E phase=$PHASE"
+  need_bin /workspace/target/release/dstack
+  [[ -s "$STATE_DIR/artifacts/images.env" ]] || die "missing prepared image metadata"
   case "$PHASE" in
-    full) phase_full ;;
-    prepare-old) phase_prepare_old ;;
-    after-kms-upgrade) phase_after_kms_upgrade ;;
-    after-gateway-upgrade) phase_after_gateway_upgrade ;;
+    upgrade) phase_upgrade ;;
     *) die "unknown DSTACK_E2E_PHASE=$PHASE" ;;
   esac
-  log "VMM dashboard:  $VMM_URL"
   log "Work artifacts: $WORK_DIR"
 }
 
