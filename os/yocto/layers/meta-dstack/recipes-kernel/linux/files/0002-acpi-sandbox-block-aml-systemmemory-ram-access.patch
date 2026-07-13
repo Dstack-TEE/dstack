@@ -70,7 +70,7 @@ index 0000000..34d09ca
 --- /dev/null
 +++ b/drivers/acpi/acpica/sandbox.h
 @@ -0,0 +1,154 @@
-+/* SPDX-License-Identifier: BSD-3-Clause OR GPL-2.0 */
++/* SPDX-License-Identifier: BSD-3-Clause OR GPL-2.0-only */
 +/* SPDX-FileCopyrightText: Satoru Takekoshi, Manami Mori, Takaaki Fukai,
 + * Takahiro Shinagawa */
 +/* SPDX-FileCopyrightText: Edgeless Systems GmbH */
