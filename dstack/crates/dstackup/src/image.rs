@@ -27,6 +27,8 @@ const REPO: &str = "Dstack-TEE/dstack";
 const LEGACY_REPO: &str = "Dstack-TEE/meta-dstack";
 const RELEASE_TAG_PREFIX: &str = "guest-os-v";
 pub(crate) const RELEASES_URL: &str = "https://github.com/Dstack-TEE/dstack/releases?q=guest-os-v";
+const LEGACY_RELEASES_URL: &str = "https://github.com/Dstack-TEE/meta-dstack/releases";
+const MONOREPO_GUEST_OS_MIN_VERSION: (u64, u64, u64) = (0, 6, 0);
 
 /// the single rule for where images live: `--image-path` if given, else the
 /// image directory from the install layout. `install` and every image subcommand resolve through
@@ -593,27 +595,18 @@ fn missing_named_image_message(image_dir: &str, name: &str) -> String {
 
 /// Get the latest (or a tagged) guest-OS release from the GitHub API.
 ///
-/// The legacy repository remains a read-only fallback so pinned deployments
-/// keep working across the monorepo migration.
+/// Versions before 0.6.0 were released from `meta-dstack`; 0.6.0 and later are
+/// released from this monorepo. Do not probe the new repository first for old
+/// versions: the version boundary is authoritative and avoids redundant or
+/// misleading requests.
 async fn fetch_release(version: Option<&str>) -> Result<Release> {
     let client = reqwest::Client::new();
     if let Some(version) = version {
-        let version = version
-            .trim_start_matches(RELEASE_TAG_PREFIX)
-            .trim_start_matches('v');
-        let primary_url = format!(
-            "https://api.github.com/repos/{REPO}/releases/tags/{RELEASE_TAG_PREFIX}{version}"
-        );
-        if let Some(release) = fetch_tagged_release(&client, &primary_url).await? {
-            return Ok(release);
-        }
-
-        let legacy_url =
-            format!("https://api.github.com/repos/{LEGACY_REPO}/releases/tags/v{version}");
-        return fetch_tagged_release(&client, &legacy_url)
+        let (version, url, releases_url) = tagged_release_location(version)?;
+        return fetch_tagged_release(&client, &url, releases_url)
             .await?
             .with_context(|| {
-                format!("guest-OS version {version} was not found; check {RELEASES_URL}")
+                format!("guest-OS version {version} was not found; check {releases_url}")
             });
     }
 
@@ -638,12 +631,51 @@ async fn fetch_release(version: Option<&str>) -> Result<Release> {
     }
 
     let legacy_url = format!("https://api.github.com/repos/{LEGACY_REPO}/releases/latest");
-    fetch_tagged_release(&client, &legacy_url)
+    fetch_tagged_release(&client, &legacy_url, LEGACY_RELEASES_URL)
         .await?
         .with_context(|| format!("no guest-OS release found; check {RELEASES_URL}"))
 }
 
-async fn fetch_tagged_release(client: &reqwest::Client, url: &str) -> Result<Option<Release>> {
+fn tagged_release_location(version: &str) -> Result<(String, String, &'static str)> {
+    let version = version
+        .trim_start_matches(RELEASE_TAG_PREFIX)
+        .trim_start_matches('v');
+    let core = numeric_version_core(version)?;
+    let (repo, tag_prefix, releases_url) = if core < MONOREPO_GUEST_OS_MIN_VERSION {
+        (LEGACY_REPO, "v", LEGACY_RELEASES_URL)
+    } else {
+        (REPO, RELEASE_TAG_PREFIX, RELEASES_URL)
+    };
+    Ok((
+        version.to_string(),
+        format!("https://api.github.com/repos/{repo}/releases/tags/{tag_prefix}{version}"),
+        releases_url,
+    ))
+}
+
+fn numeric_version_core(version: &str) -> Result<(u64, u64, u64)> {
+    let mut parts = version.split('.');
+    let major = parts.next().unwrap_or_default();
+    let minor = parts.next().unwrap_or_default();
+    let patch = parts.next().unwrap_or_default();
+    let patch = patch.split_once('-').map_or(patch, |(numeric, _)| numeric);
+    if major.is_empty()
+        || minor.is_empty()
+        || patch.is_empty()
+        || !major.chars().all(|c| c.is_ascii_digit())
+        || !minor.chars().all(|c| c.is_ascii_digit())
+        || !patch.chars().all(|c| c.is_ascii_digit())
+    {
+        bail!("invalid guest-OS version {version:?}; expected MAJOR.MINOR.PATCH");
+    }
+    Ok((major.parse()?, minor.parse()?, patch.parse()?))
+}
+
+async fn fetch_tagged_release(
+    client: &reqwest::Client,
+    url: &str,
+    releases_url: &str,
+) -> Result<Option<Release>> {
     let response = client
         .get(url)
         .header("user-agent", "dstackup")
@@ -657,7 +689,7 @@ async fn fetch_tagged_release(client: &reqwest::Client, url: &str) -> Result<Opt
     Ok(Some(
         response
             .error_for_status()
-            .with_context(|| format!("github release lookup failed; check {RELEASES_URL}"))?
+            .with_context(|| format!("github release lookup failed; check {releases_url}"))?
             .json()
             .await
             .context("parsing github release json")?,
@@ -793,6 +825,36 @@ mod tests {
         let assets = vec![asset("dstack-nvidia-0.6.0.a2-uki.tar.gz")];
         assert!(pick_asset(&assets, false).is_none());
         assert!(pick_asset(&assets, true).is_none());
+    }
+
+    #[test]
+    fn routes_pinned_releases_at_the_monorepo_boundary() {
+        for version in ["0.5.11", "v0.5.11", "guest-os-v0.5.11"] {
+            let (normalized, url, releases_url) = tagged_release_location(version).unwrap();
+            assert_eq!(normalized, "0.5.11");
+            assert_eq!(
+                url,
+                "https://api.github.com/repos/Dstack-TEE/meta-dstack/releases/tags/v0.5.11"
+            );
+            assert_eq!(releases_url, LEGACY_RELEASES_URL);
+        }
+
+        for version in ["0.6.0", "0.6.0.a2", "1.0.0"] {
+            let (normalized, url, releases_url) = tagged_release_location(version).unwrap();
+            assert_eq!(normalized, version);
+            assert_eq!(
+                url,
+                format!("https://api.github.com/repos/Dstack-TEE/dstack/releases/tags/guest-os-v{version}")
+            );
+            assert_eq!(releases_url, RELEASES_URL);
+        }
+    }
+
+    #[test]
+    fn rejects_versions_without_a_numeric_core() {
+        for version in ["0.6", "latest", "0.x.0", "0.6.x"] {
+            assert!(tagged_release_location(version).is_err(), "{version}");
+        }
     }
 
     #[test]

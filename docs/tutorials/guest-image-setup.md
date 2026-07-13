@@ -79,7 +79,13 @@ echo "Installing guest images for version: $DSTACK_VERSION"
 
 # Download the image archive
 cd /tmp
-wget https://github.com/Dstack-TEE/dstack/releases/download/guest-os-v${DSTACK_VERSION}/dstack-${DSTACK_VERSION}.tar.gz
+IFS=. read -r DSTACK_MAJOR DSTACK_MINOR _ <<< "$DSTACK_VERSION"
+if (( DSTACK_MAJOR == 0 && DSTACK_MINOR < 6 )); then
+  IMAGE_URL="https://github.com/Dstack-TEE/meta-dstack/releases/download/v${DSTACK_VERSION}/dstack-${DSTACK_VERSION}.tar.gz"
+else
+  IMAGE_URL="https://github.com/Dstack-TEE/dstack/releases/download/guest-os-v${DSTACK_VERSION}/dstack-${DSTACK_VERSION}.tar.gz"
+fi
+wget "$IMAGE_URL"
 ```
 
 Verify the download:
@@ -294,7 +300,7 @@ You can have multiple image versions installed simultaneously:
 ```bash
 # Download additional version
 DSTACK_VERSION="0.5.3"
-wget https://github.com/Dstack-TEE/dstack/releases/download/guest-os-v${DSTACK_VERSION}/dstack-${DSTACK_VERSION}.tar.gz
+wget https://github.com/Dstack-TEE/meta-dstack/releases/download/v${DSTACK_VERSION}/dstack-${DSTACK_VERSION}.tar.gz
 
 # Extract to images directory (tarball already contains dstack-X.Y.Z/ folder)
 sudo tar -xvf dstack-${DSTACK_VERSION}.tar.gz -C /var/lib/dstack/images/

@@ -36,7 +36,7 @@ else
 # GUEST_AGENT_ADDR=127.0.0.1:9205
 
 # Required: The URL of the dstack app image download URL
-# IMAGE_DOWNLOAD_URL=https://github.com/Dstack-TEE/dstack/releases/download/guest-os-v0.5.5/dstack-0.5.5.tar.gz
+# IMAGE_DOWNLOAD_URL=https://github.com/Dstack-TEE/meta-dstack/releases/download/v0.5.5/dstack-0.5.5.tar.gz
 
 # Image hash verification feature flag
 VERIFY_IMAGE=true

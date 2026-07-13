@@ -295,6 +295,24 @@ EOF
     mkdir -p $CERBOT_WORKDIR/backup/preinstalled
 }
 
+guest_os_release_url() {
+    local VERSION=$1
+    local BASENAME=$2
+
+    if [[ ! "$VERSION" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)([-.][0-9A-Za-z.-]+)?$ ]]; then
+        echo "Invalid guest OS version: $VERSION" >&2
+        return 1
+    fi
+
+    local MAJOR=$((10#${BASH_REMATCH[1]}))
+    local MINOR=$((10#${BASH_REMATCH[2]}))
+    if (( MAJOR == 0 && MINOR < 6 )); then
+        echo "https://github.com/Dstack-TEE/meta-dstack/releases/download/v$VERSION/$BASENAME.tar.gz"
+    else
+        echo "https://github.com/Dstack-TEE/dstack/releases/download/guest-os-v$VERSION/$BASENAME.tar.gz"
+    fi
+}
+
 download_image() {
     local VERSION=""
     local IS_DEV=""
@@ -309,22 +327,19 @@ download_image() {
 
     echo "Downloading image $VERSION${IS_DEV:+ (dev)}"
 
-    TAG=guest-os-v$VERSION
     if [ x"$IS_DEV" = x"1" ]; then
-        BASENAME=dstack-cloud-dev-$VERSION
+        BASENAME=dstack-dev-$VERSION
     else
-        BASENAME=dstack-cloud-$VERSION
+        BASENAME=dstack-$VERSION
     fi
-    URL=https://github.com/Dstack-TEE/dstack/releases/download/$TAG/$BASENAME.tar.gz
-    LEGACY_URL=https://github.com/Dstack-TEE/meta-dstack/releases/download/v$VERSION/$BASENAME.tar.gz
+    if ! URL=$(guest_os_release_url "$VERSION" "$BASENAME"); then
+        return 1
+    fi
     if [ -d $IMAGES_DIR/$BASENAME ]; then
         echo "Image already exists"
     else
         mkdir -p $IMAGES_DIR/$BASENAME.tmp
-        if ! curl -fL $URL -o $IMAGES_DIR/$BASENAME.tar.gz; then
-            echo "Falling back to the pre-monorepo release location"
-            curl -fL $LEGACY_URL -o $IMAGES_DIR/$BASENAME.tar.gz
-        fi
+        curl -fL "$URL" -o $IMAGES_DIR/$BASENAME.tar.gz
         tar -xvf $IMAGES_DIR/$BASENAME.tar.gz -C $IMAGES_DIR/$BASENAME.tmp
         rm -f $IMAGES_DIR/$BASENAME.tar.gz
         if [ -d $IMAGES_DIR/$BASENAME.tmp/$BASENAME ]; then

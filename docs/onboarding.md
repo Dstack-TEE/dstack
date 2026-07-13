@@ -12,7 +12,10 @@ sudo dstack deploy \
 curl http://127.0.0.1:8080/
 ```
 
-AMD SEV-SNP hosts use the same `dstackup` and `dstack` commands after you provide a guest image that contains the image digest (`digest.txt`).
+AMD SEV-SNP hosts use the same `dstackup` and `dstack` commands after you
+provide a guest image that contains the image digest (`digest.txt`); see
+[AMD SEV-SNP Support](./amd-sev-snp.md) for the experimental platform's image,
+attestation, and KMS requirements.
 
 The default onboarding flow uses a published image. To build or customize the
 guest OS first, follow [Build the dstack guest OS](./building-guest-os.md), then
@@ -88,7 +91,7 @@ Run:
 sudo dstackup install
 ```
 
-`dstackup install` auto-detects TDX or AMD SEV-SNP. If no local guest image exists, it downloads the latest unified image from [dstack guest-OS releases](https://github.com/Dstack-TEE/dstack/releases?q=guest-os-v), requires the release SHA-256 digest by default, verifies the tarball, stages the unpack, and only then adopts the image. Current images include NVIDIA support conditionally and work on CPU-only hosts too. Pre-monorepo `meta-dstack` releases remain a fallback for pinned older versions.
+`dstackup install` auto-detects TDX or AMD SEV-SNP. If no local guest image exists, it downloads the latest unified image from [dstack guest-OS releases](https://github.com/Dstack-TEE/dstack/releases?q=guest-os-v), requires the release SHA-256 digest by default, verifies the tarball, stages the unpack, and only then adopts the image. Current images include NVIDIA support conditionally and work on CPU-only hosts too. Pinned versions below 0.6.0 are read directly from the archived [`meta-dstack` releases](https://github.com/Dstack-TEE/meta-dstack/releases); versions 0.6.0 and later come from this repository.
 
 On TDX, `dstackup install` starts the SGX key provider automatically from `/usr/local/share/dstack/key-provider-build`. To use a different provider, pass one of:
 

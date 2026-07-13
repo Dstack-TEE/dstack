@@ -190,7 +190,7 @@ AUTH_WEBHOOK_URL=http://your-auth-server:3001
 KMS_RPC_ADDR=0.0.0.0:9201
 GUEST_AGENT_ADDR=127.0.0.1:9205
 OS_IMAGE=dstack-0.5.5
-IMAGE_DOWNLOAD_URL=https://github.com/Dstack-TEE/dstack/releases/download/guest-os-v0.5.5/dstack-0.5.5.tar.gz
+IMAGE_DOWNLOAD_URL=https://github.com/Dstack-TEE/meta-dstack/releases/download/v0.5.5/dstack-0.5.5.tar.gz
 ```
 
 Then run:

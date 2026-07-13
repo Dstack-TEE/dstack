@@ -144,9 +144,10 @@ Apps communicate with the guest agent via HTTP over `/var/run/dstack.sock`. Use 
 
 **For Operators**
 - [Hardware Enablement](./docs/hardware-enablement.md) - Prepare a TDX or AMD SEV-SNP host
+- [AMD SEV-SNP](./docs/amd-sev-snp.md) - Image, attestation, and key-release requirements
 - [Self-hosted Quick Onboarding](./docs/onboarding.md) - First app on one host
 - [Build the Guest OS](./docs/building-guest-os.md) - Build and verify bootable images from source
-- [Deployment](./docs/deployment.md) - Self-hosting on TDX hardware
+- [Deployment](./docs/deployment.md) - Self-hosting on TDX or AMD SEV-SNP hardware
 - [On-Chain Governance](./docs/onchain-governance.md) - Smart contract authorization
 - [Gateway](./docs/dstack-gateway.md) - Gateway configuration
 
