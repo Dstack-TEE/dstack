@@ -12,6 +12,8 @@ SIMULATOR_DIR="$REPO_ROOT/sdk/simulator"
 SIMULATOR_LOG="$SIMULATOR_DIR/dstack-simulator.log"
 DSTACK_SOCKET="$SIMULATOR_DIR/dstack.sock"
 TAPPD_SOCKET="$SIMULATOR_DIR/tappd.sock"
+GUEST_SOCKET="$SIMULATOR_DIR/guest.sock"
+EXTERNAL_SOCKET="$SIMULATOR_DIR/external.sock"
 SIMULATOR_PID=""
 
 cleanup() {
@@ -19,6 +21,7 @@ cleanup() {
         kill "$SIMULATOR_PID" 2>/dev/null || true
         wait "$SIMULATOR_PID" 2>/dev/null || true
     fi
+    rm -f "$DSTACK_SOCKET" "$TAPPD_SOCKET" "$GUEST_SOCKET" "$EXTERNAL_SOCKET"
 }
 
 print_simulator_logs() {
@@ -52,7 +55,12 @@ wait_for_socket() {
 trap 'print_simulator_logs' ERR
 trap cleanup EXIT INT TERM
 
-rm -f "$DSTACK_SOCKET" "$TAPPD_SOCKET" "$SIMULATOR_LOG"
+rm -f \
+    "$DSTACK_SOCKET" \
+    "$TAPPD_SOCKET" \
+    "$GUEST_SOCKET" \
+    "$EXTERNAL_SOCKET" \
+    "$SIMULATOR_LOG"
 (
     cd "$SIMULATOR_DIR"
     ./build.sh
