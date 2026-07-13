@@ -72,8 +72,7 @@ It does not copy the entire repository or depend on a nested dstack submodule.
 
 ## Licensing
 
-The monorepo contains multiple license scopes. Core, SDK, documentation, tools,
-and `os/common/rootfs/` remain Apache-2.0. The imported Yocto implementation and
-derived image-assembly code retain the Business Source License 1.1 terms in
-`os/yocto/LICENSE`. Individual vendored recipes and patches may carry their own
-notices; moving them into this repository does not relicense them.
+The dstack-owned core, SDK, documentation, tools, guest payload, Yocto backend,
+and image-assembly code are Apache-2.0. Individual vendored recipes, patches,
+and embedded components may carry their own notices; moving them into this
+repository does not relicense them.

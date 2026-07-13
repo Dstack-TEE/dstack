@@ -118,22 +118,19 @@ path = "os/spec/*.json"
 SPDX-FileCopyrightText = "Copyright (c) 2026 The Project Contributors"
 SPDX-License-Identifier = "Apache-2.0"
 
-# Imported OS backend
+# dstack-owned OS backend
 
 [[annotations]]
 path = "os/yocto/**"
 SPDX-FileCopyrightText = "Copyright (c) Hashforest Technology LLC"
-SPDX-License-Identifier = "BUSL-1.1"
-precedence = "override"
+SPDX-License-Identifier = "Apache-2.0"
 
-# Legacy tools imported from meta-dstack but intentionally kept outside the
-# Yocto backend because they also manage host and deployment concerns.
+# Legacy cross-component tools kept outside the Yocto backend.
 
 [[annotations]]
-path = "tools/meta-dstack/**"
+path = "tools/vm-runner/**"
 SPDX-FileCopyrightText = "Copyright (c) Hashforest Technology LLC"
-SPDX-License-Identifier = "BUSL-1.1"
-precedence = "override"
+SPDX-License-Identifier = "Apache-2.0"
 
 # Artworks
 

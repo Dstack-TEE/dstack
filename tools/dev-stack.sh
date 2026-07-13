@@ -1,13 +1,13 @@
 #!/bin/bash
 # SPDX-FileCopyrightText: Copyright (c) Hashforest Technology LLC
 #
-# SPDX-License-Identifier: BUSL-1.1
+# SPDX-License-Identifier: Apache-2.0
 
-# Legacy all-in-one host development helper imported from meta-dstack. It is
-# retained outside both the supported dstack CLI and the Yocto backend because
-# it crosses host build, guest build, and deployment/configuration boundaries.
+# Legacy all-in-one host development helper. It is retained outside both the
+# supported dstack CLI and the Yocto backend because it crosses host build,
+# guest build, and deployment/configuration boundaries.
 TOOL_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-REPO_ROOT=$(realpath "$TOOL_DIR/../..")
+REPO_ROOT=$(realpath "$TOOL_DIR/..")
 ACTION=$1
 
 YOCTO_DIR=$REPO_ROOT/os/yocto

@@ -7,6 +7,5 @@ the supported backend entrypoint is [`../build.sh`](../build.sh).
 - `fix-self-uid-map.sh` is an explicit host AppArmor workaround for affected
   Ubuntu installations; it is not part of the image build.
 
-The legacy cross-cutting helpers imported from `meta-dstack` live under
-[`../../../tools/meta-dstack/`](../../../tools/meta-dstack/) instead of inside
-this backend.
+The legacy cross-cutting helpers live under [`../../../tools/`](../../../tools/)
+instead of inside this backend.

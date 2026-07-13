@@ -7,7 +7,7 @@ retained for low-level image debugging; normal deployments should use
 Run it explicitly instead of adding the directory to `PATH`:
 
 ```bash
-python3 tools/meta-dstack/vm-runner/vm-runner.py --help
+python3 tools/vm-runner/vm-runner.py --help
 ```
 
 `enable-vfio-passthrough.sh` is the matching standalone host helper for NVIDIA

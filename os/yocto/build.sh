@@ -1,7 +1,7 @@
 #!/bin/bash
 # SPDX-FileCopyrightText: Copyright (c) Hashforest Technology LLC
 #
-# SPDX-License-Identifier: BUSL-1.1
+# SPDX-License-Identifier: Apache-2.0
 
 # Yocto implementation of the guest-OS backend contract in os/README.md.
 set -eo pipefail

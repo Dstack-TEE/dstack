@@ -25,8 +25,8 @@ Makefile, or run the repository entrypoint `./os/build.sh --backend yocto`.
 The supported backend script only builds guest images. The backend-specific
 `tools/` directory contains only host workarounds needed while building Yocto.
 Historical all-in-one host-stack and direct-QEMU helpers are isolated under
-[`../../tools/meta-dstack/`](../../tools/meta-dstack/); they are not added to
-`PATH` and do not shadow the supported Rust `dstack` CLI.
+[`../../tools/`](../../tools/); they are not added to `PATH` and do not shadow
+the supported Rust `dstack` CLI.
 
 ## Output boundary
 
@@ -36,5 +36,5 @@ manifest and calls `../image/assemble.sh`.
 
 ## License
 
-The imported backend retains the Business Source License 1.1 terms in
-[`LICENSE`](LICENSE). Embedded components may have their own notices.
+The dstack-owned backend code is Apache-2.0. Embedded and third-party
+components retain their own license declarations and notices.

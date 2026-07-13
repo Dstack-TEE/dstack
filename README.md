@@ -256,8 +256,7 @@ Logo and branding assets: [dstack-logo-kit](./docs/assets/dstack-logo-kit/)
 
 ## License
 
-This is a multi-license repository. Core services, SDKs, documentation, tools,
-and the shared guest rootfs payload are Apache-2.0. The imported Yocto backend
-and derived image-assembly code retain Business Source License 1.1 terms. See
-[`os/README.md`](./os/README.md), file-level SPDX declarations, and
-[`REUSE.toml`](./REUSE.toml) for the exact scope.
+The dstack-owned source, SDKs, documentation, tools, guest OS backend, and
+image-assembly code are Apache-2.0. Embedded and third-party components retain
+their own license declarations and notices. See file-level SPDX declarations
+and [`REUSE.toml`](./REUSE.toml) for the exact scope.
