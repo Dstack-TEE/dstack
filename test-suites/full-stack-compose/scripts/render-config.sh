@@ -15,6 +15,7 @@ PLATFORM=${DSTACK_E2E_PLATFORM:-tdx}
 VMM_PORT=${DSTACK_E2E_VMM_PORT:-29080}
 AUTH_PORT=${DSTACK_E2E_AUTH_PORT:-28011}
 KMS_HOST_PORT=${DSTACK_E2E_KMS_HOST_PORT:-28082}
+KMS_RPC_DOMAIN=${DSTACK_E2E_KMS_RPC_DOMAIN:-10.0.2.2.nip.io}
 GATEWAY_RPC_HOST_PORT=${DSTACK_E2E_GATEWAY_RPC_HOST_PORT:-28000}
 GATEWAY_ADMIN_HOST_PORT=${DSTACK_E2E_GATEWAY_ADMIN_HOST_PORT:-28001}
 GATEWAY_PROXY_HOST_PORT=${DSTACK_E2E_GATEWAY_PROXY_HOST_PORT:-28443}
@@ -43,6 +44,9 @@ GATEWAY_DATA_DIR=${DSTACK_E2E_GATEWAY_DATA_DIR:-$STATE_DIR/gateway-data}
 mkdir -p \
   "$CONFIG_DIR" "$RUN_DIR" "$VM_DIR" "$VOLUMES_DIR" "$STATE_DIR/work" \
   "$KMS_CERT_DIR" "$GATEWAY_CERT_DIR" "$GATEWAY_DATA_DIR"
+# The host-side upgrade driver writes orchestration metadata and probe markers
+# here while service containers also write artifacts as root.
+chmod 0777 "$STATE_DIR/work"
 
 image_dir="$IMAGE_ROOT/$IMAGE_NAME"
 if [[ ! -d "$image_dir" ]]; then
@@ -97,7 +101,7 @@ openssl_gen_kms_rpc_cert() {
   local dir=$1 tmp csr
   tmp=$(mktemp)
   csr="$dir/rpc.csr"
-  cat > "$tmp" <<'OPENSSL_CONF'
+  cat > "$tmp" <<OPENSSL_CONF
 [req]
 prompt = no
 distinguished_name = dn
@@ -117,6 +121,7 @@ subjectAltName = @alt_names
 IP.1 = 10.0.2.2
 IP.2 = 127.0.0.1
 DNS.1 = localhost
+DNS.2 = ${KMS_RPC_DOMAIN}
 OPENSSL_CONF
   openssl_gen_ec_key "$dir/rpc.key"
   openssl req -new -key "$dir/rpc.key" -out "$csr" -config "$tmp" >/dev/null 2>&1
@@ -184,7 +189,7 @@ if [[ ! -s "$KMS_CERT_DIR/root-ca.key" || ! -s "$KMS_CERT_DIR/root-ca.crt" || \
   openssl_gen_ca "$KMS_CERT_DIR/tmp-ca.key" "$KMS_CERT_DIR/tmp-ca.crt" "/O=Dstack/CN=Dstack Client Temp CA"
   openssl_gen_kms_rpc_cert "$KMS_CERT_DIR"
   write_k256_key "$KMS_CERT_DIR/root-k256.key"
-  printf '10.0.2.2' > "$KMS_CERT_DIR/rpc-domain"
+  printf '%s' "$KMS_RPC_DOMAIN" > "$KMS_CERT_DIR/rpc-domain"
 fi
 
 if [[ ! -s "$GATEWAY_CERT_DIR/gateway-rpc.key" || ! -s "$GATEWAY_CERT_DIR/gateway-rpc.crt" ]]; then
@@ -255,6 +260,9 @@ url = "http://127.0.0.1:${AUTH_PORT}"
 [core.onboard]
 enabled = false
 auto_bootstrap_domain = ""
+# Kept for compatibility with the 0.5.x config schema. Current KMS versions
+# ignore this retired field.
+quote_enabled = false
 address = "127.0.0.1"
 port = ${KMS_HOST_PORT}
 EOF_KMS
@@ -357,9 +365,9 @@ interval = "5s"
 timeout = "10s"
 bootnode = ""
 data_dir = "${GATEWAY_DATA_DIR}"
-persist_interval = "5s"
+persist_interval = "1s"
 sync_connections_enabled = true
-sync_connections_interval = "5s"
+sync_connections_interval = "1s"
 EOF_GATEWAY
 
 cat > "$CONFIG_DIR/vmm.toml" <<EOF_VMM
@@ -385,7 +393,7 @@ registry = ""
 [cvm]
 platform = "${PLATFORM}"
 qemu_path = "${QEMU_PATH}"
-kms_urls = ["https://10.0.2.2:${KMS_HOST_PORT}"]
+kms_urls = ["https://${KMS_RPC_DOMAIN}:${KMS_HOST_PORT}"]
 gateway_urls = ["https://10.0.2.2:${GATEWAY_RPC_HOST_PORT}"]
 pccs_url = ""
 docker_registry = ""
@@ -399,6 +407,7 @@ user = ""
 use_mrconfigid = false
 qemu_pci_hole64_size = 0
 qemu_hotplug_off = false
+tdx_attestation_variant = "auto"
 host_share_mode = "9p"
 qgs_port = ${QGS_PORT}
 
@@ -471,10 +480,13 @@ OS_IMAGE_HASH=$OS_IMAGE_HASH
 VMM_PORT=$VMM_PORT
 AUTH_PORT=$AUTH_PORT
 KMS_HOST_PORT=$KMS_HOST_PORT
+KMS_RPC_DOMAIN=$KMS_RPC_DOMAIN
 GATEWAY_RPC_HOST_PORT=$GATEWAY_RPC_HOST_PORT
 GATEWAY_ADMIN_HOST_PORT=$GATEWAY_ADMIN_HOST_PORT
 GATEWAY_PROXY_HOST_PORT=$GATEWAY_PROXY_HOST_PORT
 GATEWAY_WG_HOST_PORT=$GATEWAY_WG_HOST_PORT
+GATEWAY_WG_INTERFACE=$GATEWAY_WG_INTERFACE
+GATEWAY_WG_IP=$GATEWAY_WG_IP
 GATEWAY_APP_ID=$GATEWAY_APP_ID
 KEY_PROVIDER_PORT=$KEY_PROVIDER_PORT
 HOST_API_PORT=$HOST_API_PORT
@@ -485,6 +497,9 @@ APP_IMAGE=$APP_IMAGE
 APP_NAME=$APP_NAME
 SUITE_PREFIX=$SUITE_PREFIX
 GATEWAY_ADMIN_TOKEN=$GATEWAY_ADMIN_TOKEN
+KMS_CERT_DIR=$KMS_CERT_DIR
+GATEWAY_CERT_DIR=$GATEWAY_CERT_DIR
+GATEWAY_DATA_DIR=$GATEWAY_DATA_DIR
 EOF_ENV
 
 chmod 0600 "$STATE_DIR/state.env" || true

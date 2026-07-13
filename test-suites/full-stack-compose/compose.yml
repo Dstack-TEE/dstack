@@ -16,6 +16,7 @@ x-suite-env: &suite-env
   DSTACK_E2E_VMM_PORT: ${DSTACK_E2E_VMM_PORT:-29080}
   DSTACK_E2E_AUTH_PORT: ${DSTACK_E2E_AUTH_PORT:-28011}
   DSTACK_E2E_KMS_HOST_PORT: ${DSTACK_E2E_KMS_HOST_PORT:-28082}
+  DSTACK_E2E_KMS_RPC_DOMAIN: ${DSTACK_E2E_KMS_RPC_DOMAIN:-10.0.2.2.nip.io}
   DSTACK_E2E_GATEWAY_RPC_HOST_PORT: ${DSTACK_E2E_GATEWAY_RPC_HOST_PORT:-28000}
   DSTACK_E2E_GATEWAY_ADMIN_HOST_PORT: ${DSTACK_E2E_GATEWAY_ADMIN_HOST_PORT:-28001}
   DSTACK_E2E_GATEWAY_PROXY_HOST_PORT: ${DSTACK_E2E_GATEWAY_PROXY_HOST_PORT:-28443}
@@ -37,6 +38,7 @@ x-suite-env: &suite-env
   DSTACK_E2E_APP_NAME: ${DSTACK_E2E_APP_NAME:-dstack-e2e-nginx}
   DSTACK_E2E_NAME_PREFIX: ${DSTACK_E2E_NAME_PREFIX:-dstack-e2e}
   DSTACK_E2E_ALLOW_UNPINNED_IMAGE: ${DSTACK_E2E_ALLOW_UNPINNED_IMAGE:-false}
+  DSTACK_E2E_PHASE: ${DSTACK_E2E_PHASE:-full}
 
 services:
   init-config:
@@ -147,7 +149,11 @@ services:
     restart: unless-stopped
 
   kms:
-    image: dstack-e2e-runtime:local
+    # The upgrade driver swaps this between the released Docker Hub image and
+    # the binary built from the current checkout. Keep the executable path
+    # configurable because the two images install it in different locations.
+    image: ${DSTACK_E2E_KMS_IMAGE:-dstack-e2e-runtime:local}
+    entrypoint: ["${DSTACK_E2E_KMS_BIN:-/workspace/target/release/dstack-kms}"]
     network_mode: host
     depends_on:
       init-config:
@@ -159,19 +165,19 @@ services:
       - ../../dstack:/workspace:ro
     environment:
       RUST_LOG: ${DSTACK_E2E_KMS_RUST_LOG:-info,dstack_kms=info}
-    command:
-      - bash
-      - -lc
-      - exec /workspace/target/release/dstack-kms -c /suite-state/config/kms.toml
+    command: ["-c", "/suite-state/config/kms.toml"]
     healthcheck:
-      test: ["CMD-SHELL", "curl -kfsS https://127.0.0.1:${DSTACK_E2E_KMS_HOST_PORT:-28082}/metrics >/dev/null"]
+      test: ["CMD-SHELL", "timeout 3 sh -c \"printf 'GET /prpc/GetMeta?json HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' | openssl s_client -quiet -connect 127.0.0.1:${DSTACK_E2E_KMS_HOST_PORT:-28082} 2>/dev/null | grep -q '^HTTP/1.1 200'\""]
       interval: 5s
       timeout: 3s
       retries: 30
     restart: unless-stopped
 
   gateway:
-    image: dstack-e2e-runtime:local
+    # See kms above. The old image entrypoint is intentionally bypassed so
+    # both versions consume the exact same config and persistent data dir.
+    image: ${DSTACK_E2E_GATEWAY_IMAGE:-dstack-e2e-runtime:local}
+    entrypoint: ["${DSTACK_E2E_GATEWAY_BIN:-/workspace/target/release/dstack-gateway}"]
     privileged: true
     network_mode: host
     depends_on:
@@ -185,12 +191,9 @@ services:
       - /lib/modules:/lib/modules:ro
     environment:
       RUST_LOG: ${DSTACK_E2E_GATEWAY_RUST_LOG:-info,dstack_gateway=debug,certbot=debug}
-    command:
-      - bash
-      - -lc
-      - exec /workspace/target/release/dstack-gateway -c /suite-state/config/gateway.toml
+    command: ["-c", "/suite-state/config/gateway.toml"]
     healthcheck:
-      test: ["CMD-SHELL", "curl -kfsS https://127.0.0.1:${DSTACK_E2E_GATEWAY_RPC_HOST_PORT:-28000}/health >/dev/null"]
+      test: ["CMD-SHELL", "timeout 3 sh -c \"printf 'GET /prpc/Info?json HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' | openssl s_client -quiet -connect 127.0.0.1:${DSTACK_E2E_GATEWAY_RPC_HOST_PORT:-28000} 2>/dev/null | grep -q '^HTTP/1.1 200'\""]
       interval: 5s
       timeout: 3s
       retries: 30
@@ -248,7 +251,7 @@ services:
       - ./scripts:/suite/scripts:ro
       - ../../dstack:/workspace:ro
     environment:
-      DSTACK_E2E_STATE_DIR: /suite-state
+      <<: *suite-env
       DSTACK_E2E_CLEAN_START: ${DSTACK_E2E_CLEAN_START:-true}
       DSTACK_E2E_CLEANUP_AFTER: ${DSTACK_E2E_CLEANUP_AFTER:-false}
       DSTACK_E2E_APP_VCPU: ${DSTACK_E2E_APP_VCPU:-2}

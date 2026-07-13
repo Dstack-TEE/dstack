@@ -41,6 +41,14 @@ def nginx(args: argparse.Namespace) -> None:
         "runner": "docker-compose",
         "secure_time": False,
     }
+    if args.attestation_mode != "auto":
+        # A string v3 manifest makes old guests fail closed instead of silently
+        # ignoring the requirement. The current VMM resolves this field into
+        # the corresponding legacy/lite VM attestation config.
+        manifest["manifest_version"] = "3"
+        manifest["requirements"] = {
+            "tdx_measure_acpi_tables": args.attestation_mode == "legacy"
+        }
     write_manifest(Path(args.output), manifest)
 
 
@@ -53,6 +61,11 @@ def main() -> None:
     p.add_argument("--name", required=True)
     p.add_argument("--app-image", required=True)
     p.add_argument("--output", required=True)
+    p.add_argument(
+        "--attestation-mode",
+        choices=("auto", "legacy", "lite"),
+        default="auto",
+    )
     p.set_defaults(func=nginx)
 
     args = parser.parse_args()
