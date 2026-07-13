@@ -59,9 +59,7 @@ fn derive_nonce(ephemeral_pk: &[u8], recipient_pk: &[u8]) -> Result<xsalsa20poly
 fn derive_key(shared_secret: &[u8; 32]) -> [u8; 32] {
     let hsalsa_nonce = [0u8; 16];
     let key = salsa20::hsalsa::<U10>(shared_secret.into(), &hsalsa_nonce.into());
-    let mut result = [0u8; 32];
-    result.copy_from_slice(key.as_slice());
-    result
+    key.into()
 }
 
 /// Creates a sealed box for a message using a recipient's public key.
