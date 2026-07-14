@@ -1390,11 +1390,19 @@ impl KeyProvider {
         }
     }
 
+    /// Stable key-provider identity used for launch measurement and compose pins.
+    ///
+    /// - KMS: root CA public key
+    /// - Local: sealing-provider MR
+    /// - TPM: always empty — the derived app root pubkey is instance-specific
+    ///   (from a TPM-sealed seed) and must not be treated as a stable provider id
+    ///   or measured as one. Mode is already carried by [`Self::kind`].
+    /// - None: empty
     pub fn id(&self) -> &[u8] {
         match self {
             KeyProvider::None { .. } => &[],
             KeyProvider::Local { mr, .. } => mr,
-            KeyProvider::Tpm { pubkey, .. } => pubkey,
+            KeyProvider::Tpm { .. } => &[],
             KeyProvider::Kms { pubkey, .. } => pubkey,
         }
     }
@@ -1409,6 +1417,31 @@ pub struct KeyProviderInfo {
 impl KeyProviderInfo {
     pub fn new(name: String, id: String) -> Self {
         Self { name, id }
+    }
+}
+
+#[cfg(test)]
+mod key_provider_tests {
+    use super::*;
+
+    #[test]
+    fn tpm_key_provider_id_is_empty() {
+        let tpm = KeyProvider::Tpm {
+            key: "dummy".into(),
+            // Instance app-root pubkey may still be stored on the key handle, but
+            // it must not be reported as the stable provider id.
+            pubkey: vec![0x04; 65],
+        };
+        assert!(tpm.id().is_empty());
+        assert_eq!(tpm.kind(), KeyProviderKind::Tpm);
+
+        let kms = KeyProvider::Kms {
+            url: "https://kms.example".into(),
+            pubkey: vec![0xab; 32],
+            tmp_ca_key: String::new(),
+            tmp_ca_cert: String::new(),
+        };
+        assert_eq!(kms.id(), &[0xab; 32]);
     }
 }
 

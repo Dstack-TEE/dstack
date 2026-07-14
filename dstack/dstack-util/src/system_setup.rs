@@ -1901,16 +1901,16 @@ impl<'a> Stage0<'a> {
             keys.key_provider.id(),
         )?;
         self.verify_key_provider_id(keys.key_provider.id())?;
+        // TPM uses an empty id: the instance app-root pubkey is not a stable
+        // provider identity and must not enter the launch measurement chain.
         let kp_info = match &keys.key_provider {
             KeyProvider::None { .. } => KeyProviderInfo::new("none".into(), "".into()),
-            KeyProvider::Local { mr, .. } => {
-                KeyProviderInfo::new("local-sgx".into(), hex::encode(mr))
+            KeyProvider::Local { .. } => {
+                KeyProviderInfo::new("local-sgx".into(), hex::encode(keys.key_provider.id()))
             }
-            KeyProvider::Tpm { pubkey, .. } => {
-                KeyProviderInfo::new("tpm".into(), hex::encode(pubkey))
-            }
-            KeyProvider::Kms { pubkey, .. } => {
-                KeyProviderInfo::new("kms".into(), hex::encode(pubkey))
+            KeyProvider::Tpm { .. } => KeyProviderInfo::new("tpm".into(), "".into()),
+            KeyProvider::Kms { .. } => {
+                KeyProviderInfo::new("kms".into(), hex::encode(keys.key_provider.id()))
             }
         };
         emit_key_provider_info(&kp_info)?;

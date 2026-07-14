@@ -62,7 +62,7 @@ fn read_snp_host_data() -> Result<[u8; 32]> {
 /// - compose_hash: [u8; 32]
 /// - app_id: [u8; 20]
 /// - key_provider_type: u8 // 0: none, 1: local, 2: kms, 3: tpm
-/// - key_provider_id: [u8] // the ca pubkey for KMS or the MR enclave for local-sgx provider, empty for none
+/// - key_provider_id: [u8] // KMS CA pubkey, local-sgx MR, or empty for none/tpm
 pub fn verify_mr_config_id(
     compose_hash: &[u8; 32],
     app_id: &[u8; 20],
