@@ -33,7 +33,7 @@ This is the main configuration file for the application in JSON format:
 | kms_enabled | 0.3.1 | boolean | Enable/disable KMS |
 | gateway_enabled | 0.3.1 | boolean | Enable/disable gateway |
 | local_key_provider_enabled | 0.3.1 | boolean | Use a local key provider |
-| key_provider_id | 0.5.1 | string | Key provider ID. |
+| key_provider_id | 0.5.1 | string | Optional pin for the key provider identity. For `kms` this is the KMS CA public key; for `local` the sealing-provider MR. For `tpm` and `none` it is empty — the TPM app-root public key is instance-specific and is not used as a provider id or measured as one. |
 | public_logs | 0.3.3 | boolean | Whether logs are publicly visible |
 | public_sysinfo | 0.3.3 | boolean | Whether system info is public |
 | public_tcbinfo | 0.5.1 | boolean | Whether TCB info is public |
