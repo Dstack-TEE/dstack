@@ -955,8 +955,8 @@ impl AwsOsImageMeasurement {
         Ok(Self { boot_pcr_digest })
     }
 
-    /// Build from the three SHA384 boot PCRs (same order as legacy
-    /// `aws_nitro_tpm_os_image_hash_from_pcrs`: 4, 7, 12).
+    /// Build from the three SHA384 boot PCRs (same order as
+    /// `aws_nitro_tpm_boot_pcr_digest`: 4, 7, 12).
     pub fn from_boot_pcrs(pcr4: &[u8], pcr7: &[u8], pcr12: &[u8]) -> Result<Self, String> {
         for (label, pcr) in [("pcr4", pcr4), ("pcr7", pcr7), ("pcr12", pcr12)] {
             if pcr.len() != Self::PCR_SHA384_LEN {

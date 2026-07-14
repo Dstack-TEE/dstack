@@ -1160,12 +1160,14 @@ fn aws_nitro_tpm_boot_pcr_values(
         .collect()
 }
 
-/// Compute the AWS NitroTPM `os_image_hash` as `sha256(PCR4 || PCR7 || PCR12)`.
+/// Compute the AWS NitroTPM `boot_pcr_digest` as `sha256(PCR4 || PCR7 || PCR12)`.
 ///
-/// This is the single source of truth for the boot-PCR-to-image binding; the
-/// verifier and KMS must derive the value the same way, so both call this rather
-/// than re-hardcoding the PCR set.
-pub fn aws_nitro_tpm_os_image_hash_from_pcrs(
+/// This is the single source of truth for the boot-PCR binding; the verifier
+/// and KMS must derive the value the same way, so both call this rather than
+/// re-hardcoding the PCR set. The preferred path checks it against
+/// `aws_measurement.boot_pcr_digest`; legacy paths without `aws_measurement`
+/// use the value directly as `os_image_hash`.
+pub fn aws_nitro_tpm_boot_pcr_digest(
     pcrs: &std::collections::BTreeMap<u16, Vec<u8>>,
 ) -> Result<Vec<u8>> {
     Ok(sha256(aws_nitro_tpm_boot_pcr_values(pcrs)?).to_vec())
@@ -1178,10 +1180,6 @@ impl DstackAwsNitroTpmQuote {
         let doc = nsm_qvl::AttestationDocument::from_cbor(&cose.payload)
             .context("failed to decode NitroTPM attestation document")?;
         Ok(doc.pcrs)
-    }
-
-    pub fn decode_image_hash(&self) -> Result<Vec<u8>> {
-        aws_nitro_tpm_os_image_hash_from_pcrs(&self.decode_pcrs()?)
     }
 }
 
@@ -2113,7 +2111,7 @@ impl Attestation {
                             let measurement = document
                                 .decode_measurement()
                                 .context("failed to decode aws_measurement")?;
-                            let quoted_digest = aws_nitro_tpm_os_image_hash_from_pcrs(&pcrs)
+                            let quoted_digest = aws_nitro_tpm_boot_pcr_digest(&pcrs)
                                 .context("failed to compute boot_pcr_digest from attestation")?;
                             if measurement.boot_pcr_digest.as_slice() != quoted_digest.as_slice() {
                                 bail!(
@@ -2126,7 +2124,7 @@ impl Attestation {
                         } else {
                             // sys-config present but no aws_measurement: keep as-is
                             // only if os_image_hash matches legacy PCR-derived hash.
-                            let legacy = aws_nitro_tpm_os_image_hash_from_pcrs(&pcrs)
+                            let legacy = aws_nitro_tpm_boot_pcr_digest(&pcrs)
                                 .context("failed to compute legacy NitroTPM os_image_hash")?;
                             if vm_config.os_image_hash == legacy {
                                 config
@@ -2138,7 +2136,7 @@ impl Attestation {
                             }
                         }
                     } else {
-                        let os_image_hash = aws_nitro_tpm_os_image_hash_from_pcrs(&pcrs)
+                        let os_image_hash = aws_nitro_tpm_boot_pcr_digest(&pcrs)
                             .context("failed to compute NitroTPM os_image_hash")?;
                         serde_json::to_string(&serde_json::json!({
                             "os_image_hash": hex::encode(os_image_hash),
@@ -2147,7 +2145,7 @@ impl Attestation {
                     }
                 } else {
                     // Legacy: no sys-config — bind only PCR-derived image hash.
-                    let os_image_hash = aws_nitro_tpm_os_image_hash_from_pcrs(&pcrs)
+                    let os_image_hash = aws_nitro_tpm_boot_pcr_digest(&pcrs)
                         .context("failed to compute NitroTPM os_image_hash")?;
                     serde_json::to_string(&serde_json::json!({
                         "os_image_hash": hex::encode(os_image_hash),

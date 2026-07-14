@@ -1130,9 +1130,8 @@ impl CvmVerifier {
             let measurement = document
                 .decode_measurement()
                 .context("failed to decode vm_config.aws_measurement")?;
-            let quoted_digest =
-                dstack_attest::attestation::aws_nitro_tpm_os_image_hash_from_pcrs(pcrs)
-                    .context("failed to compute NitroTPM boot_pcr_digest from attestation")?;
+            let quoted_digest = dstack_attest::attestation::aws_nitro_tpm_boot_pcr_digest(pcrs)
+                .context("failed to compute NitroTPM boot_pcr_digest from attestation")?;
             if measurement.boot_pcr_digest.as_slice() != quoted_digest.as_slice() {
                 bail!(
                     "AWS boot_pcr_digest mismatch: expected={}, quoted={}",
@@ -1143,7 +1142,7 @@ impl CvmVerifier {
             return Ok(());
         }
 
-        let os_image_hash = dstack_attest::attestation::aws_nitro_tpm_os_image_hash_from_pcrs(pcrs)
+        let os_image_hash = dstack_attest::attestation::aws_nitro_tpm_boot_pcr_digest(pcrs)
             .context("failed to compute NitroTPM os_image_hash")?;
         if os_image_hash != vm_config.os_image_hash {
             bail!(
