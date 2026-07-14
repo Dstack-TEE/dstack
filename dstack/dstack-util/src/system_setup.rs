@@ -1470,12 +1470,12 @@ impl<'a> Stage0<'a> {
     fn generate_tpm_app_keys(&self) -> Result<AppKeys> {
         let tpm = TpmContext::detect().context("failed to detect TPM context")?;
 
-        // PCR policy: platform boot chain (AWS: sha384 PCR4/7/12; no PCR23)
+        // PCR policy: platform-specific (AWS: sha384 PCR4/7/8/12/14)
         let platform = dstack_types::Platform::detect().context("failed to detect platform")?;
         let pcr_policy =
             tpm::dstack_pcr_policy_for_platform(platform).context("unsupported TPM platform")?;
 
-        // Try to read sealed seed (bound to boot PCR values)
+        // Try to read sealed seed (bound to boot/config/event PCRs)
         if let Some(seed) = tpm
             .unseal::<32>(tpm::SEALED_NV_INDEX, tpm::PRIMARY_KEY_HANDLE, &pcr_policy)
             .context("failed to unseal from TPM")?
@@ -1491,7 +1491,7 @@ impl<'a> Stage0<'a> {
         // No sealed seed exists, generate new one
         info!("no sealed seed found, generating new seed...");
         let seed: [u8; 32] = tpm.get_random().context("TPM RNG unavailable")?;
-        // Seal the new seed to TPM with boot PCR policy
+        // Seal the new seed under the platform PCR policy
         tpm.seal(
             &seed,
             tpm::SEALED_NV_INDEX,
