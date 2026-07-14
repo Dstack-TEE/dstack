@@ -148,7 +148,8 @@ fn upgrade_snp_config_for_split_measurement(config: &str) -> String {
         serde_json::from_value(measurement_value).expect("legacy SNP measurement input");
     let measurement = sev_os_image_measurement_from_input(&input)
         .expect("image measurement")
-        .to_cbor_vec();
+        .to_cbor_vec()
+        .expect("image measurement cbor");
     let sha256sum = format!(
         "{}  {}\n",
         hex::encode(Sha256::digest(&measurement)),
@@ -199,7 +200,7 @@ fn with_image_measurement(
     let mut image = dstack_types::SevOsImageMeasurement::from_cbor_slice(&document.measurement)
         .expect("decode measurement.snp.cbor");
     f(&mut image);
-    document.measurement = image.to_cbor_vec();
+    document.measurement = image.to_cbor_vec().expect("image measurement cbor");
     document.checksum_file = format!(
         "{}  {}\n",
         hex::encode(Sha256::digest(&document.measurement)),

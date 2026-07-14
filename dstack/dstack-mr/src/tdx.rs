@@ -324,12 +324,12 @@ pub fn tdx_os_image_measurement_for_image_dir(image_dir: &Path) -> Result<TdxOsI
 
 /// Generate the raw `measurement.tdx.cbor` bytes for an image directory.
 pub fn tdx_os_image_measurement_cbor_for_image_dir(image_dir: &Path) -> Result<Vec<u8>> {
-    Ok(tdx_os_image_measurement_for_image_dir(image_dir)?.to_cbor_vec())
+    Ok(tdx_os_image_measurement_for_image_dir(image_dir)?.to_cbor_vec()?)
 }
 
 /// Compute the TDX static measurement-material hash for an image directory.
 pub fn tdx_measurement_hash_for_image_dir(image_dir: &Path) -> Result<[u8; 32]> {
-    Ok(tdx_os_image_measurement_for_image_dir(image_dir)?.measurement_hash())
+    Ok(tdx_os_image_measurement_for_image_dir(image_dir)?.measurement_hash()?)
 }
 
 /// Compute expected TDX measurements from self-contained TDX measurement
@@ -358,7 +358,6 @@ pub fn tdx_measurements_from_measurement_document(
 
     let measurement = document
         .decode_measurement()
-        .map_err(anyhow::Error::msg)
         .context("failed to decode TDX measurement CBOR")?;
     let mrtd = select_mrtd(&measurement, vm_config)?;
 

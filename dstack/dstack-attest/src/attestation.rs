@@ -2138,11 +2138,9 @@ impl Attestation {
                             // Preferred: host-shared material must bind quote PCRs.
                             document
                                 .verify(&vm_config.os_image_hash)
-                                .map_err(anyhow::Error::msg)
                                 .context("aws_measurement does not match os_image_hash")?;
                             let measurement = document
                                 .decode_measurement()
-                                .map_err(anyhow::Error::msg)
                                 .context("failed to decode aws_measurement")?;
                             let quoted_digest = aws_nitro_tpm_os_image_hash_from_pcrs(&pcrs)
                                 .context("failed to compute boot_pcr_digest from attestation")?;

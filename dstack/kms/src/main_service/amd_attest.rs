@@ -203,7 +203,7 @@ fn test_mr_config(app_id: Vec<u8>, compose_hash: Vec<u8>) -> MrConfigV3 {
 fn test_snp_measurement_document(
     input: &MeasurementInput,
 ) -> Result<dstack_mr::sev::SnpMeasurementDocument> {
-    let measurement = dstack_mr::sev::sev_os_image_measurement_from_input(input)?.to_cbor_vec();
+    let measurement = dstack_mr::sev::sev_os_image_measurement_from_input(input)?.to_cbor_vec()?;
     let measurement_hash = Sha256::digest(&measurement);
     let sha256sum = format!(
         "{}  {}\n",
@@ -543,7 +543,7 @@ mod tests {
                 section_type: 1,
             })
             .collect();
-        let measurement_cbor = image.to_cbor_vec();
+        let measurement_cbor = image.to_cbor_vec().unwrap();
         let sha256sum = format!(
             "{}  {}\n",
             hex::encode(Sha256::digest(&measurement_cbor)),

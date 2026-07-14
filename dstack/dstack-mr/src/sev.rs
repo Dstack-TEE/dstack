@@ -890,12 +890,12 @@ pub fn sev_os_image_measurement_for_image_dir(
 
 /// Compute the AMD SEV-SNP measurement-material hash from an OS image directory.
 pub fn sev_measurement_hash_for_image_dir(image_dir: &Path) -> Result<[u8; 32]> {
-    Ok(sev_os_image_measurement_for_image_dir(image_dir)?.measurement_hash())
+    Ok(sev_os_image_measurement_for_image_dir(image_dir)?.measurement_hash()?)
 }
 
 /// Generate the raw `measurement.snp.cbor` bytes for an image directory.
 pub fn sev_os_image_measurement_cbor_for_image_dir(image_dir: &Path) -> Result<Vec<u8>> {
-    Ok(sev_os_image_measurement_for_image_dir(image_dir)?.to_cbor_vec())
+    Ok(sev_os_image_measurement_for_image_dir(image_dir)?.to_cbor_vec()?)
 }
 
 /// `sha256(MEASUREMENT || HOST_DATA)` — the SNP aggregated identity digest.
@@ -966,7 +966,6 @@ pub fn measurement_input_from_snp_document(
     document: &SnpMeasurementDocument,
 ) -> Result<MeasurementInput> {
     let image = dstack_types::SevOsImageMeasurement::from_cbor_slice(&document.measurement)
-        .map_err(anyhow::Error::msg)
         .context("invalid measurement.snp.cbor")?;
     Ok(MeasurementInput {
         base_cmdline: image.base_cmdline,
@@ -1044,7 +1043,6 @@ pub fn parse_snp_inputs_from_vm_config(vm_config: &str) -> Result<SnpLaunchInput
         document.measurement.clone(),
     )
     .verify(&os_image_hash)
-    .map_err(anyhow::Error::msg)
     .context("amd sev-snp measurement material does not match os_image_hash")?;
     let input = measurement_input_from_snp_document(&document)?;
     validate_measurement_input(&input)?;
@@ -1234,7 +1232,8 @@ mod tests {
     fn snp_document(input: &MeasurementInput) -> SnpMeasurementDocument {
         let measurement = sev_os_image_measurement_from_input(input)
             .expect("image measurement")
-            .to_cbor_vec();
+            .to_cbor_vec()
+            .expect("image measurement cbor");
         let sha256sum = format!(
             "{}  {}\n",
             hex::encode(Sha256::digest(&measurement)),

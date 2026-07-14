@@ -1571,7 +1571,7 @@ mod tests {
                 td_hob_witness: vec![0x60; 16],
             },
         };
-        let measurement = measurement.to_cbor_vec();
+        let measurement = measurement.to_cbor_vec().expect("tdx measurement cbor");
         let sha256sum = format!(
             "{}  {}\n",
             hex::encode(Sha256::digest(&measurement)),
@@ -1836,8 +1836,7 @@ mod tests {
         let measurement: dstack_mr::sev::SnpMeasurementDocument =
             serde_json::from_str(measurement_document)?;
         let image_measurement =
-            dstack_types::SevOsImageMeasurement::from_cbor_slice(&measurement.measurement)
-                .map_err(anyhow::Error::msg)?;
+            dstack_types::SevOsImageMeasurement::from_cbor_slice(&measurement.measurement)?;
         let mr_config_document = sys_config["mr_config"]
             .as_str()
             .context("mr_config must be a string")?;
@@ -1880,8 +1879,7 @@ mod tests {
             measurement.checksum_file,
             measurement.measurement,
         )
-        .verify(&build_hash)
-        .map_err(anyhow::Error::msg)?;
+        .verify(&build_hash)?;
         Ok(())
     }
 }

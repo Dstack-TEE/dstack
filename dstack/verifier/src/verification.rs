@@ -978,11 +978,9 @@ impl CvmVerifier {
             .context("tdx lite attestation requires vm_config.tdx_measurement")?;
         document
             .verify(&vm_config.os_image_hash)
-            .map_err(anyhow::Error::msg)
             .context("tdx lite measurement material does not match os_image_hash")?;
         let measurement = document
             .decode_measurement()
-            .map_err(anyhow::Error::msg)
             .context("failed to decode vm_config.tdx_measurement CBOR")?;
         if let Some(config_ovmf_variant) = vm_config.ovmf_variant {
             if config_ovmf_variant != measurement.tdvf.ovmf_variant {
@@ -1128,11 +1126,9 @@ impl CvmVerifier {
         if let Some(document) = &vm_config.aws_measurement {
             document
                 .verify(&vm_config.os_image_hash)
-                .map_err(anyhow::Error::msg)
                 .context("aws measurement material does not match os_image_hash")?;
             let measurement = document
                 .decode_measurement()
-                .map_err(anyhow::Error::msg)
                 .context("failed to decode vm_config.aws_measurement")?;
             let quoted_digest =
                 dstack_attest::attestation::aws_nitro_tpm_os_image_hash_from_pcrs(pcrs)
@@ -1180,11 +1176,9 @@ impl CvmVerifier {
             .context("gcp tdx attestation requires vm_config.gcp_measurement")?;
         document
             .verify(&vm_config.os_image_hash)
-            .map_err(anyhow::Error::msg)
             .context("gcp measurement material does not match os_image_hash")?;
         let measurement = document
             .decode_measurement()
-            .map_err(anyhow::Error::msg)
             .context("failed to decode vm_config.gcp_measurement CBOR")?;
         let expected_uki_hash = &measurement.uki_authenticode_sha256;
 
