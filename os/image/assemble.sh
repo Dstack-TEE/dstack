@@ -419,6 +419,41 @@ if [[ "$UKI_CREATED" = "1" ]]; then
     HAVE_MEASUREMENT_GCP=1
 fi
 
+# Optional AWS NitroTPM reference PCRs (SHA384 PCR4/7/12) for measurement.aws.cbor.
+# Uses Amazon's nitro-tpm-pcr-compute when Docker is available; skip otherwise
+# (dstack-cloud can still attach prebuilt measurement.aws.cbor at prepare time).
+HAVE_MEASUREMENT_AWS=0
+if [[ "$UKI_CREATED" = "1" && -n "${UKI_IMAGE:-}" && -f "${UKI_IMAGE}" ]]; then
+    if command -v docker >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
+        echo "Generating measurement.aws.cbor via nitro-tpm-pcr-compute + ${DSTACK_MR_BIN}"
+        uki_abs=$(realpath "$UKI_IMAGE")
+        uki_dir=$(dirname "$uki_abs")
+        uki_base=$(basename "$uki_abs")
+        if pcr_json=$(
+            docker run --rm --platform linux/amd64 \
+              -e UKI_BASENAME="$uki_base" \
+              -v "$uki_dir":/artifacts:ro \
+              amazonlinux:2023 \
+              bash -lc 'dnf install -y aws-nitro-tpm-tools >/tmp/dnf.log && nitro-tpm-pcr-compute --image "/artifacts/$UKI_BASENAME"'
+        ); then
+            pcr4=$(jq -r '.Measurements.PCR4 // empty' <<<"$pcr_json")
+            pcr7=$(jq -r '.Measurements.PCR7 // empty' <<<"$pcr_json")
+            pcr12=$(jq -r '.Measurements.PCR12 // empty' <<<"$pcr_json")
+            if [[ -n "$pcr4" && -n "$pcr7" && -n "$pcr12" ]]; then
+                "${DSTACK_MR_BIN}" aws-measurement-cbor "$pcr4" "$pcr7" "$pcr12" \
+                    > "${OUTPUT_DIR}/measurement.aws.cbor"
+                HAVE_MEASUREMENT_AWS=1
+            else
+                echo "Warning: nitro-tpm-pcr-compute output missing PCR4/7/12; skipping measurement.aws.cbor" >&2
+            fi
+        else
+            echo "Warning: nitro-tpm-pcr-compute failed; skipping measurement.aws.cbor" >&2
+        fi
+    else
+        echo "Note: docker/jq not available; skipping measurement.aws.cbor (AWS platform needs it at prepare)"
+    fi
+fi
+
 echo "Generating unified image digest to ${OUTPUT_DIR}/"
 CHECKSUM_FILES=(ovmf.fd bzImage initramfs.cpio.gz metadata.json measurement.tdx.cbor)
 if [ "$HAVE_MEASUREMENT_SNP" = "1" ]; then
@@ -426,6 +461,9 @@ if [ "$HAVE_MEASUREMENT_SNP" = "1" ]; then
 fi
 if [ "$HAVE_MEASUREMENT_GCP" = "1" ]; then
     CHECKSUM_FILES+=(measurement.gcp.cbor)
+fi
+if [ "$HAVE_MEASUREMENT_AWS" = "1" ]; then
+    CHECKSUM_FILES+=(measurement.aws.cbor)
 fi
 (
     cd "${OUTPUT_DIR}/"
@@ -450,6 +488,9 @@ if [ "$DSTACK_TAR_RELEASE" = "1" ]; then
     if [ "$HAVE_MEASUREMENT_GCP" = "1" ]; then
         BARE_METAL_FILES+=(measurement.gcp.cbor)
     fi
+    if [ "$HAVE_MEASUREMENT_AWS" = "1" ]; then
+        BARE_METAL_FILES+=(measurement.aws.cbor)
+    fi
     BARE_METAL_TAR_FILES=()
     for file in "${BARE_METAL_FILES[@]}"; do
         BARE_METAL_TAR_FILES+=("$TAR_DIR_NAME/$file")
@@ -457,11 +498,17 @@ if [ "$DSTACK_TAR_RELEASE" = "1" ]; then
     (cd "$PARENT_DIR" && tar -czvf "$IMAGE_TAR" "${BARE_METAL_TAR_FILES[@]}")
     echo
 
-    # UKI tarball: GCP boot disk plus the unified OS-image identity material.
+    # UKI tarball: cloud boot disk plus the unified OS-image identity material.
     if [[ "$UKI_CREATED" = "1" ]]; then
         rm -rf "${IMAGE_TAR_UKI}"
         echo "Archiving UKI image to ${IMAGE_TAR_UKI}"
-        UKI_FILES=(disk.raw digest.txt sha256sum.txt measurement.gcp.cbor)
+        UKI_FILES=(disk.raw digest.txt sha256sum.txt)
+        if [ "$HAVE_MEASUREMENT_GCP" = "1" ]; then
+            UKI_FILES+=(measurement.gcp.cbor)
+        fi
+        if [ "$HAVE_MEASUREMENT_AWS" = "1" ]; then
+            UKI_FILES+=(measurement.aws.cbor)
+        fi
         UKI_TAR_FILES=()
         for file in "${UKI_FILES[@]}"; do
             UKI_TAR_FILES+=("$TAR_DIR_NAME/$file")

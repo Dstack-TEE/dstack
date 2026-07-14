@@ -64,69 +64,36 @@ cd /path/to/bb-build/downloads
 sha256sum -c /path/to/aws-ec2-downloads.sha256
 ```
 
-## 2. Register the AMI
+## 2. Register the AMI and deploy with `dstack-cloud`
 
 After the release artifact hashes and AWS PCR references match the selected
-manifest, import the `disk.raw` artifact as an EC2 snapshot and register it as
-an Attestable AMI. The AMI must use UEFI boot and NitroTPM v2.0.
-
-Use the helper script to produce an auditable promotion record:
-
-```bash
-os/yocto/tools/aws/aws-ec2-import-attestable-ami.sh \
-  --disk /path/to/dstack-0.6.0/disk.raw \
-  --s3-bucket YOUR_VMIMPORT_BUCKET \
-  --s3-prefix dstack/releases \
-  --name dstack-aws-hardened-p4-api-smoke-YYYYMMDDHHMMSS \
-  --description "dstack AWS hardened P4 API-smoke release candidate" \
-  --region us-west-2 \
-  --tag Purpose=dstack-aws-release-candidate \
-  --output aws-ec2-ami-promotion.json
-```
-
-The promotion record contains the imported root snapshot, AMI ID, raw disk
-SHA256, S3 object, and registration parameters.
-
-Run a live EC2 smoke test against the registered AMI before promotion. The
-smoke test must boot the exact AMI recorded in the manifest, attach the
-deployment-specific shared disk, require explicit workload success markers, and
-write JSON evidence:
+manifest, deploy with **`dstack-cloud`** (`platform: aws`). The CLI imports the
+local UKI `disk.raw` as an Attestable AMI (UEFI + NitroTPM v2.0) when
+`aws_config.ami_id` is empty, builds the shared config disk with
+`aws_measurement` from `measurement.aws.cbor`, and launches the instance.
 
 ```bash
-os/yocto/tools/aws/aws-ec2-run-dstack-smoke.sh \
-  --ami-id AMI_FROM_PROMOTION_RECORD \
-  --region us-west-2 \
-  --name dstack-aws-hardened-p4-api-smoke-live-YYYYMMDDHHMMSS \
-  --shared-snapshot snap-0efa19b7528e14142 \
-  --data-snapshot snap-032e134d0bb685cc6 \
-  --marker DSTACK_PLATFORM_JSON= \
-  --marker DSTACK_ATTEST_LEN= \
-  --marker DSTACK_AWS_API_TEST_OK \
-  --console-output aws-ec2-live-smoke-console.txt \
-  --output aws-ec2-live-smoke.json \
-  --terminate-on-success
+# one-time: install CLI
+export PATH="$PATH:$(pwd)/dstack/scripts/bin"
+
+# project for AWS
+dstack-cloud new my-aws-app --platform aws --region us-west-2
+cd my-aws-app
+# edit dstack-app.json: aws_config.s3_bucket (vmimport), subnet/security groups as needed
+# pull or place the UKI package (must include measurement.aws.cbor) under image_search_paths
+
+dstack-cloud pull dstack-0.6.0   # or point boot_image_tar at the release image dir
+dstack-cloud prepare             # writes shared/.sys-config.json with aws_measurement
+dstack-cloud deploy              # import AMI if needed, import shared snapshot, run-instances
+
+dstack-cloud status
+dstack-cloud logs --follow
 ```
 
-For a different workload, replace the shared/data disk inputs and success
-markers with that deployment's expected evidence. The smoke helper uses EC2
-launch and console APIs only; it does not call AWS KMS. Keep the JSON evidence,
-console hash, and selected console excerpts with the release review record.
-
-Attach both evidence records to the release manifest:
-
-```bash
-os/yocto/tools/aws/aws-ec2-attach-promotion-evidence.sh \
-  --manifest aws-ec2-release-manifest.json \
-  --promotion-record aws-ec2-ami-promotion.json \
-  --live-smoke-record aws-ec2-live-smoke.json \
-  --aws-account 123456789012 \
-  --output aws-ec2-release-manifest.json
-```
-
-The helper validates the promotion schema, Attestable AMI settings, disk
-SHA256, live-smoke AMI ID, live-smoke region, and passed smoke status before it
-updates the manifest. Rerun the verifier checks below against that updated
-manifest.
+Record the resulting AMI id, shared snapshot, and instance id from
+`state.json` / `dstack-cloud status` in the release review package. For
+reproducibility manifests, continue to use
+`os/yocto/tools/aws/generate-aws-ec2-release-manifest.sh` (image evidence only).
 
 Recompute AWS reference PCRs and the UKI AuthentiCode hash from the release UKI:
 

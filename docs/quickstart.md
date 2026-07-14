@@ -1,13 +1,18 @@
 # Quickstart
 
-Deploy your first confidential workload on GCP in under 10 minutes.
-
-> **Interested in AWS Nitro Enclaves?** We support AWS Nitro attestation verification and are expanding deployment tooling. [Book a call](https://calendly.com/aspect-ux/30min) to learn more about AWS deployment options.
+Deploy your first confidential workload on GCP (or AWS EC2 NitroTPM) in under
+10 minutes.
 
 ## Prerequisites
 
+**GCP**
 - GCP account with Confidential VM quota (Intel TDX)
 - `gcloud` CLI installed and authenticated
+
+**AWS** (optional)
+- AWS account with EC2 + VM Import permissions
+- `aws` CLI installed and authenticated
+- S3 bucket for AMI import (or a prebuilt Attestable AMI id)
 
 ## Install the CLI
 
@@ -35,20 +40,29 @@ dstack-cloud config-edit
 
 This opens an editor with the global configuration file. For GCP, configure:
 
-```toml
-[gcp]
-project = "your-gcp-project-id"
-zone = "us-central1-a"
-machine_type = "n2d-standard-4"
+```json
+{
+  "gcp": {
+    "project": "your-gcp-project-id",
+    "zone": "us-central1-a"
+  },
+  "aws": {
+    "region": "us-east-1",
+    "s3_bucket": "your-vmimport-bucket"
+  }
+}
 ```
 
 ## Create a Project
 
-Create a new dstack-cloud project:
-
 ```bash
+# GCP (default)
 dstack-cloud new my-app
 cd my-app
+
+# or AWS NitroTPM
+dstack-cloud new my-aws-app --platform aws --region us-east-1
+cd my-aws-app
 ```
 
 This creates a project directory with:

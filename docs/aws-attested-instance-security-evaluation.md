@@ -670,13 +670,13 @@ Remaining productionization work:
   change and ship it with the Yocto input mirror, AMI registration data,
   app/KMS allowlists, freshness policy, and endpoint identity policy.
 - Promote the exact hardened P4 artifact with
-  `os/yocto/tools/aws/aws-ec2-import-attestable-ami.sh`, then run
-  `os/yocto/tools/aws/aws-ec2-run-dstack-smoke.sh` against that AMI before release. The
+  `dstack-cloud deploy` (`platform: aws`) to import the Attestable AMI and run
+  a live instance against that AMI before release. The
   smoke evidence must include the promoted AMI ID, root/shared/data snapshots,
   explicit workload success markers, and serial-console hash. This is a
   release-candidate gate, not a per-CI job. Attach the promotion and smoke
   records to the final manifest with
-  `os/yocto/tools/aws/aws-ec2-attach-promotion-evidence.sh`, which validates the disk hash,
+  release evidence packaging (AMI id / shared snapshot / console logs), which validates the disk hash,
   Attestable AMI settings, AMI identity, region, and passed smoke status before
   updating the manifest.
 - Deploy the external AWS verifier workflow and production auth/governance

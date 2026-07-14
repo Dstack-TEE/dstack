@@ -44,7 +44,7 @@ Current status:
    optional Yocto download evidence, optional AWS PCR/AuthentiCode measurements,
    the dstack PCR-derived `os_image_hash`, optional AMI promotion/live-smoke
    records, verifier instructions, and optional hardening audit output.
-   `os/yocto/tools/aws/aws-ec2-attach-promotion-evidence.sh` can also attach validated
+   `dstack-cloud` (`platform: aws`) performs AMI import and live deploy; validated
    promotion/live-smoke records to an existing manifest after AMI registration.
 7. `os/yocto/tools/aws/audit-aws-ec2-image-hardening.sh` provides the repeatable
    kernel/rootfs hardening audit. The hardened release candidate reports
