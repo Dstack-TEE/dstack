@@ -890,12 +890,12 @@ pub fn sev_os_image_measurement_for_image_dir(
 
 /// Compute the AMD SEV-SNP measurement-material hash from an OS image directory.
 pub fn sev_measurement_hash_for_image_dir(image_dir: &Path) -> Result<[u8; 32]> {
-    Ok(sev_os_image_measurement_for_image_dir(image_dir)?.measurement_hash()?)
+    sev_os_image_measurement_for_image_dir(image_dir)?.measurement_hash()
 }
 
 /// Generate the raw `measurement.snp.cbor` bytes for an image directory.
 pub fn sev_os_image_measurement_cbor_for_image_dir(image_dir: &Path) -> Result<Vec<u8>> {
-    Ok(sev_os_image_measurement_for_image_dir(image_dir)?.to_cbor_vec()?)
+    sev_os_image_measurement_for_image_dir(image_dir)?.to_cbor_vec()
 }
 
 /// `sha256(MEASUREMENT || HOST_DATA)` — the SNP aggregated identity digest.

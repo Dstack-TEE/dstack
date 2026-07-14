@@ -324,12 +324,12 @@ pub fn tdx_os_image_measurement_for_image_dir(image_dir: &Path) -> Result<TdxOsI
 
 /// Generate the raw `measurement.tdx.cbor` bytes for an image directory.
 pub fn tdx_os_image_measurement_cbor_for_image_dir(image_dir: &Path) -> Result<Vec<u8>> {
-    Ok(tdx_os_image_measurement_for_image_dir(image_dir)?.to_cbor_vec()?)
+    tdx_os_image_measurement_for_image_dir(image_dir)?.to_cbor_vec()
 }
 
 /// Compute the TDX static measurement-material hash for an image directory.
 pub fn tdx_measurement_hash_for_image_dir(image_dir: &Path) -> Result<[u8; 32]> {
-    Ok(tdx_os_image_measurement_for_image_dir(image_dir)?.measurement_hash()?)
+    tdx_os_image_measurement_for_image_dir(image_dir)?.measurement_hash()
 }
 
 /// Compute expected TDX measurements from self-contained TDX measurement
