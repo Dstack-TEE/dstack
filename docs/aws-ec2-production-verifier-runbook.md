@@ -82,8 +82,8 @@ cd my-aws-app
 # edit dstack-app.json: aws_config.s3_bucket (vmimport), subnet/security groups as needed
 # pull or place the UKI package (must include measurement.aws.cbor) under image_search_paths
 
-dstack-cloud pull dstack-0.6.0   # or point boot_image_tar at the release image dir
-dstack-cloud prepare             # writes shared/.sys-config.json with aws_measurement
+dstack-cloud pull dstack-0.6.0   # UKI package must include assemble-time measurement.aws.cbor
+dstack-cloud prepare             # embeds fixed os_image_hash + aws_measurement (no PCR recompute)
 dstack-cloud deploy              # import AMI if needed, import shared snapshot, run-instances
 
 dstack-cloud status

@@ -26,6 +26,9 @@ Environment:
   DSTACK_TAR_RELEASE     Create release tarballs (default: 1)
   ENABLE_UKI_IMAGE       Create the optional UKI disk image (default: 1)
   DSTACK_MR_BIN          Existing dstack-mr binary
+  NITRO_TPM_PCR_COMPUTE_BIN  Host nitro-tpm-pcr-compute (UKI AWS PCRs; required
+                         unless Docker AL2023 fallback is available)
+  NITRO_TPM_PCR_PK/KEK/DB    Optional Secure Boot ESL paths for PCR7
 EOF
 }
 
@@ -419,39 +422,78 @@ if [[ "$UKI_CREATED" = "1" ]]; then
     HAVE_MEASUREMENT_GCP=1
 fi
 
-# Optional AWS NitroTPM reference PCRs (SHA384 PCR4/7/12) for measurement.aws.cbor.
-# Uses Amazon's nitro-tpm-pcr-compute when Docker is available; skip otherwise
-# (dstack-cloud can still attach prebuilt measurement.aws.cbor at prepare time).
+# AWS NitroTPM reference PCRs (SHA384 PCR4/7/12) → measurement.aws.cbor.
+#
+# MUST be computed at image assemble time and listed in sha256sum.txt so
+# os_image_hash = sha256(sha256sum.txt) is fixed for the release artifact.
+# prepare/deploy only *embed* this material; they must never recompute it.
+#
+# Prefer a host `nitro-tpm-pcr-compute` (Rust tool from aws/NitroTPM-Tools).
+# Optional: NITRO_TPM_PCR_COMPUTE_BIN=/path/to/bin
+# Optional Secure Boot ESL inputs (PCR7): NITRO_TPM_PCR_PK/KEK/DB (.esl paths)
+# Fallback: Docker amazonlinux:2023 + aws-nitro-tpm-tools when host tool missing.
 HAVE_MEASUREMENT_AWS=0
-if [[ "$UKI_CREATED" = "1" && -n "${UKI_IMAGE:-}" && -f "${UKI_IMAGE}" ]]; then
-    if command -v docker >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
-        echo "Generating measurement.aws.cbor via nitro-tpm-pcr-compute + ${DSTACK_MR_BIN}"
-        uki_abs=$(realpath "$UKI_IMAGE")
-        uki_dir=$(dirname "$uki_abs")
-        uki_base=$(basename "$uki_abs")
-        if pcr_json=$(
+if [[ "$UKI_CREATED" = "1" ]]; then
+    if [[ -z "${UKI_IMAGE:-}" || ! -f "${UKI_IMAGE}" ]]; then
+        echo "Error: UKI image was created but UKI_IMAGE is missing" >&2
+        exit 1
+    fi
+    if ! command -v jq >/dev/null 2>&1; then
+        echo "Error: jq is required to parse nitro-tpm-pcr-compute output" >&2
+        exit 1
+    fi
+
+    uki_abs=$(realpath "$UKI_IMAGE")
+    uki_dir=$(dirname "$uki_abs")
+    uki_base=$(basename "$uki_abs")
+    pcr_compute_bin="${NITRO_TPM_PCR_COMPUTE_BIN:-}"
+    if [[ -z "$pcr_compute_bin" ]] && command -v nitro-tpm-pcr-compute >/dev/null 2>&1; then
+        pcr_compute_bin=$(command -v nitro-tpm-pcr-compute)
+    fi
+
+    pcr_json=
+    if [[ -n "$pcr_compute_bin" ]]; then
+        echo "Generating AWS PCRs via host ${pcr_compute_bin}"
+        pcr_args=(--image "$uki_abs")
+        # Secure Boot variable stores (optional; affects PCR7)
+        [[ -n "${NITRO_TPM_PCR_PK:-}" ]] && pcr_args+=(--PK "$NITRO_TPM_PCR_PK")
+        [[ -n "${NITRO_TPM_PCR_KEK:-}" ]] && pcr_args+=(--KEK "$NITRO_TPM_PCR_KEK")
+        [[ -n "${NITRO_TPM_PCR_DB:-}" ]] && pcr_args+=(--db "$NITRO_TPM_PCR_DB")
+        pcr_json=$("$pcr_compute_bin" "${pcr_args[@]}") \
+            || { echo "Error: nitro-tpm-pcr-compute failed" >&2; exit 1; }
+    elif command -v docker >/dev/null 2>&1; then
+        echo "Generating AWS PCRs via docker amazonlinux:2023 (nitro-tpm-pcr-compute)"
+        pcr_json=$(
             docker run --rm --platform linux/amd64 \
               -e UKI_BASENAME="$uki_base" \
               -v "$uki_dir":/artifacts:ro \
               amazonlinux:2023 \
               bash -lc 'dnf install -y aws-nitro-tpm-tools >/tmp/dnf.log && nitro-tpm-pcr-compute --image "/artifacts/$UKI_BASENAME"'
-        ); then
-            pcr4=$(jq -r '.Measurements.PCR4 // empty' <<<"$pcr_json")
-            pcr7=$(jq -r '.Measurements.PCR7 // empty' <<<"$pcr_json")
-            pcr12=$(jq -r '.Measurements.PCR12 // empty' <<<"$pcr_json")
-            if [[ -n "$pcr4" && -n "$pcr7" && -n "$pcr12" ]]; then
-                "${DSTACK_MR_BIN}" aws-measurement-cbor "$pcr4" "$pcr7" "$pcr12" \
-                    > "${OUTPUT_DIR}/measurement.aws.cbor"
-                HAVE_MEASUREMENT_AWS=1
-            else
-                echo "Warning: nitro-tpm-pcr-compute output missing PCR4/7/12; skipping measurement.aws.cbor" >&2
-            fi
-        else
-            echo "Warning: nitro-tpm-pcr-compute failed; skipping measurement.aws.cbor" >&2
-        fi
+        ) || { echo "Error: docker nitro-tpm-pcr-compute failed" >&2; exit 1; }
     else
-        echo "Note: docker/jq not available; skipping measurement.aws.cbor (AWS platform needs it at prepare)"
+        echo "Error: cannot produce measurement.aws.cbor for UKI image." >&2
+        echo "Install host tool (preferred):" >&2
+        echo "  cargo install --git https://github.com/aws/NitroTPM-Tools --locked nitro-tpm-pcr-compute" >&2
+        echo "  # or set NITRO_TPM_PCR_COMPUTE_BIN=/path/to/nitro-tpm-pcr-compute" >&2
+        echo "Or provide Docker for the amazonlinux:2023 fallback." >&2
+        echo "measurement.aws.cbor must be fixed at assemble time for a stable os_image_hash." >&2
+        exit 1
     fi
+
+    pcr4=$(jq -r '.Measurements.PCR4 // empty' <<<"$pcr_json")
+    pcr7=$(jq -r '.Measurements.PCR7 // empty' <<<"$pcr_json")
+    pcr12=$(jq -r '.Measurements.PCR12 // empty' <<<"$pcr_json")
+    if [[ -z "$pcr4" || -z "$pcr7" || -z "$pcr12" ]]; then
+        echo "Error: nitro-tpm-pcr-compute output missing PCR4, PCR7, or PCR12" >&2
+        echo "$pcr_json" >&2
+        exit 1
+    fi
+    echo "Generating measurement.aws.cbor via ${DSTACK_MR_BIN}"
+    "${DSTACK_MR_BIN}" aws-measurement-cbor "$pcr4" "$pcr7" "$pcr12" \
+        > "${OUTPUT_DIR}/measurement.aws.cbor"
+    # Keep machine-readable PCR side-car for release manifests (not in digest).
+    printf '%s\n' "$pcr_json" > "${OUTPUT_DIR}/aws-pcrs.json"
+    HAVE_MEASUREMENT_AWS=1
 fi
 
 echo "Generating unified image digest to ${OUTPUT_DIR}/"

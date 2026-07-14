@@ -23,8 +23,9 @@ Usage:
     dstack-cloud fw allow|deny|list ...  # Firewall (GCP)
 
 AWS projects set "platform": "aws" in dstack-app.json and fill aws_config
-(region, s3_bucket or ami_id, …). prepare/deploy embed aws_measurement from
-the local UKI package (digest.txt + sha256sum.txt + measurement.aws.cbor).
+(region, s3_bucket or ami_id, …). prepare/deploy only *embed* aws_measurement
+from the release UKI package (digest.txt + sha256sum.txt + measurement.aws.cbor
+produced at image assemble time). They never recompute PCRs or os_image_hash.
 """
 
 import argparse
@@ -639,22 +640,42 @@ class CloudDeploymentManager:
                 if not required.exists():
                     raise FileNotFoundError(
                         f"required AWS image file not found: {required}. "
-                        f"Rebuild the UKI package with measurement.aws.cbor or place it in {image_dir}"
+                        f"Use a release UKI package built by os/image/assemble.sh "
+                        f"(measurement.aws.cbor is fixed at assemble time into "
+                        f"os_image_hash; prepare does not recompute it)."
                     )
             os_image_hash = digest_file.read_text().strip()
+            checksum_bytes = checksum_file.read_bytes()
+            measurement_bytes = measurement_file.read_bytes()
             # Sanity: digest.txt must equal sha256(sha256sum.txt)
-            actual = hashlib.sha256(checksum_file.read_bytes()).hexdigest()
+            actual = hashlib.sha256(checksum_bytes).hexdigest()
             if os_image_hash != actual:
                 raise ValueError(
                     f"digest.txt ({os_image_hash}) does not match sha256(sha256sum.txt) ({actual})"
                 )
-            logger.info(f"read unified AWS OS image hash from {digest_file}")
+            # Sanity: measurement.aws.cbor must be committed by sha256sum.txt
+            meas_hash = hashlib.sha256(measurement_bytes).hexdigest()
+            checksum_text = checksum_bytes.decode("utf-8", errors="replace")
+            committed = any(
+                line.split()[:2] == [meas_hash, "measurement.aws.cbor"]
+                or (len(line.split()) >= 2
+                    and line.split()[0] == meas_hash
+                    and line.split()[1].lstrip("*") == "measurement.aws.cbor")
+                for line in checksum_text.splitlines()
+                if line.strip()
+            )
+            if not committed:
+                raise ValueError(
+                    "measurement.aws.cbor is not committed by sha256sum.txt; "
+                    "rebuild the image with assemble.sh"
+                )
+            logger.info(f"read fixed AWS os_image_hash from {digest_file} (assemble-time)")
             vm_config = {
                 "spec_version": 2,
                 "os_image_hash": os_image_hash,
                 "aws_measurement": {
-                    "checksum_file": base64.b64encode(checksum_file.read_bytes()).decode("ascii"),
-                    "measurement": base64.b64encode(measurement_file.read_bytes()).decode("ascii"),
+                    "checksum_file": base64.b64encode(checksum_bytes).decode("ascii"),
+                    "measurement": base64.b64encode(measurement_bytes).decode("ascii"),
                 },
             }
         else:
@@ -1256,7 +1277,7 @@ class CloudDeploymentManager:
             else:
                 logger.warning(
                     "No measurement.gcp.cbor or measurement.aws.cbor found; "
-                    "platform prepare will fail until measurement material is present"
+                    "rebuild the UKI package with os/image/assemble.sh"
                 )
         else:
             logger.warning(
