@@ -1900,12 +1900,26 @@ impl<'a> Stage0<'a> {
         emit_setup_launch_event("instance-id", &instance_id)?;
         emit_setup_launch_event("boot-mr-done", &[])?;
 
-        // AWS: measure shared-disk mr_config into PCR8 (not UKI cmdline).
-        if let Some(doc) = self.shared.sys_config.mr_config_document() {
-            let config_id = dstack_types::mr_config::MrConfigV3::mr_config_id_from_document(&doc);
-            dstack_attest::measure_aws_config_pcr(&config_id)
-                .context("failed to measure AWS config into PCR8")?;
+        // AWS: commit the measured app identity into PCR8 (mr_config analogue).
+        // The config id is computed from measured reality (MrConfig V2), so
+        // there is no host-supplied claim to cross-check later. key_provider_id
+        // is the deploy-time pin from app-compose (empty = not pinned); the
+        // actual provider id is enforced against the pin in
+        // verify_key_provider_id.
+        let aws_config_id = dstack_types::mr_config::MrConfig::V2 {
+            compose_hash: &compose_hash,
+            app_id: instance_info
+                .app_id
+                .as_slice()
+                .try_into()
+                .ok()
+                .context("invalid app id")?,
+            key_provider,
+            key_provider_id: &self.shared.app_compose.key_provider_id,
         }
+        .to_mr_config_id();
+        dstack_attest::measure_aws_config_pcr(&aws_config_id)
+            .context("failed to measure AWS config into PCR8")?;
 
         Ok(AppInfo {
             instance_info,

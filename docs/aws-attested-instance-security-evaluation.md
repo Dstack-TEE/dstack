@@ -1,13 +1,17 @@
 # AWS EC2 Instance Attestation Security Evaluation
 
 > **Current model (post-simplify, PR #753):** App/config is **not** embedded
-> in UKI cmdline. Shared-disk `MrConfigV3` is measured into **PCR8**. All dstack
+> in UKI cmdline and no `mr_config` document is shipped on the shared disk.
+> The guest computes the `MrConfig` **V2** id from its measured app identity
+> (compose hash, app id, key-provider kind, deploy-time key-provider pin from
+> `app-compose.json`) and extends `sha384(config_id)` into **PCR8** exactly
+> once. There is no host-supplied config claim to cross-check locally; the
+> key-provider pin is enforced by `verify_key_provider_id`. All dstack
 > events extend **SHA384 PCR14** only (TDX RTMR3 analogue; no PCR23 runtime
 > split). `os_image_hash` prefers unified `sha256(sha256sum.txt)` via
 > `VmConfig.aws_measurement`. GetAppKey is RA-TLS v1 only (no recipient v2).
-> KMS auth pins early **`mrAggregated`** only. The local `mr_config` check runs
-> once after key receipt (`verify_app`); there is no separate pre-key-release
-> gate. Historical sections below that describe cmdline `dstack.mr_config_id`,
+> KMS auth pins early **`mrAggregated`** only. Historical sections below that
+> describe cmdline `dstack.mr_config_id`, a shared-disk `MrConfigV3` document,
 > PCR23 runtime, recipient encryption, pre-key-release `mr_config` gating, or
 > `kms.composeHashes` are superseded by this model.
 

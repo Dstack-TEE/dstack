@@ -4,7 +4,11 @@ Status: **decided 2026-07-13 — implementing on aws-attestation-platform-spec**
 
 ## Decisions (locked)
 
-1. **MR_CONFIG → PCR8** (dedicated OS PCR; not cmdline/PCR4)
+1. **MR_CONFIG → PCR8** (dedicated OS PCR; not cmdline/PCR4). Update
+   2026-07-14: the guest computes the `MrConfig` **V2** id from measured
+   reality (compose hash, app id, key-provider kind, app-compose
+   key-provider pin) and extends PCR8 itself — no `mr_config` document on
+   the shared disk, no local claim-vs-reality cross-check.
 2. **Config delivery: S1 shared disk only** (no UKI cmdline rewrite)
 3. **K1: keep `system-ready` as replay/auth boundary** (single PCR14 lane)
 4. **`check_kms` pins early MR (boot-mr-done)** — same as bare TDX

@@ -74,24 +74,35 @@ pub fn emit_runtime_event(event: &str, payload: &[u8]) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Measure AWS config commitment into PCR8 (mr_config analogue).
+/// Measure the AWS config commitment into PCR8 (mr_config analogue).
 ///
-/// Call once during guest setup after shared-disk config is loaded. Does **not**
-/// append to the dstack event log / PCR14 lane — config is a separate register.
+/// `config_id` is the `MrConfig` id the guest computed from its measured app
+/// identity during setup. Extends PCR8 exactly once from zero and reads the
+/// register back, so a polluted or double-extended PCR8 fails at boot instead
+/// of producing quotes that can never verify. Does **not** append to the
+/// dstack event log / PCR14 lane — config is a separate register.
 pub fn measure_aws_config_pcr(config_id: &[u8; 48]) -> anyhow::Result<()> {
     use sha2::{Digest, Sha384};
     let mode = AttestationMode::detect()?;
     if mode != AttestationMode::DstackAwsNitroTpm {
         return Ok(());
     }
+    let config_pcr = u32::from(crate::attestation::AWS_NITRO_TPM_CONFIG_PCR);
     let digest: [u8; 48] = Sha384::digest(config_id).into();
     let tpm = tpm_attest::TpmContext::detect().context("Failed to detect TPM device")?;
-    tpm.pcr_extend(
-        u32::from(crate::attestation::AWS_NITRO_TPM_CONFIG_PCR),
-        &digest,
-        "sha384",
-    )
-    .context("failed to extend AWS NitroTPM config PCR8")?;
+    tpm.pcr_extend(config_pcr, &digest, "sha384")
+        .context("failed to extend AWS NitroTPM config PCR8")?;
+    let quoted = tpm
+        .pcr_read_single(config_pcr, "sha384")
+        .context("failed to read back AWS config PCR8")?;
+    let expected = expected_aws_config_pcr(config_id);
+    if quoted.as_slice() != expected.as_slice() {
+        anyhow::bail!(
+            "invalid AWS config PCR8 after extend (polluted or double-extended), quoted: {}, expected: {}",
+            hex::encode(&quoted),
+            hex::encode(expected)
+        );
+    }
     Ok(())
 }
 
