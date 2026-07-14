@@ -5,9 +5,11 @@
 > events extend **SHA384 PCR14** only (TDX RTMR3 analogue; no PCR23 runtime
 > split). `os_image_hash` prefers unified `sha256(sha256sum.txt)` via
 > `VmConfig.aws_measurement`. GetAppKey is RA-TLS v1 only (no recipient v2).
-> KMS auth pins early **`mrAggregated`** only. Historical sections below that
-> describe cmdline `dstack.mr_config_id`, PCR23 runtime, recipient encryption,
-> or `kms.composeHashes` are superseded by this model.
+> KMS auth pins early **`mrAggregated`** only. The local `mr_config` check runs
+> once after key receipt (`verify_app`); there is no separate pre-key-release
+> gate. Historical sections below that describe cmdline `dstack.mr_config_id`,
+> PCR23 runtime, recipient encryption, pre-key-release `mr_config` gating, or
+> `kms.composeHashes` are superseded by this model.
 
 Date: 2026-07-03
 

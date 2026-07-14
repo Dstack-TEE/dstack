@@ -87,33 +87,6 @@ pub fn verify_mr_config_id(
     verify_mr_config_id_for_mode(mode, expected)
 }
 
-pub fn verify_mr_config_id_before_key_release(
-    compose_hash: &[u8; 32],
-    app_id: &[u8; 20],
-    instance_id: &[u8],
-    key_provider: KeyProviderKind,
-) -> Result<()> {
-    let mode = AttestationMode::detect().context("failed to detect attestation mode")?;
-    let expected = ExpectedMrConfig {
-        compose_hash,
-        app_id,
-        instance_id,
-        key_provider,
-        key_provider_id: &[],
-    };
-    verify_mr_config_id_before_key_release_for_mode(mode, expected)
-}
-
-fn verify_mr_config_id_before_key_release_for_mode(
-    mode: AttestationMode,
-    expected: ExpectedMrConfig<'_>,
-) -> Result<()> {
-    match mode {
-        AttestationMode::DstackAwsNitroTpm => verify_aws_mr_config(expected),
-        _ => Ok(()),
-    }
-}
-
 fn verify_mr_config_id_for_mode(
     mode: AttestationMode,
     expected: ExpectedMrConfig<'_>,
@@ -417,7 +390,7 @@ mod tests {
         };
 
         match verify_aws_mr_config_value(mr_config_id, &document, expected) {
-            Ok(_) => panic!("changed AWS compose_hash must reject before key release"),
+            Ok(_) => panic!("changed AWS compose_hash must reject"),
             Err(err) => assert!(err.to_string().contains("Invalid mr_config compose_hash")),
         }
         Ok(())

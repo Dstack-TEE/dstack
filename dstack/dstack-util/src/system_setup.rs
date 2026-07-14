@@ -1944,21 +1944,6 @@ impl<'a> Stage0<'a> {
         Ok(())
     }
 
-    fn verify_app_before_key_release(&self, app_info: &AppInfo) -> Result<()> {
-        config_id_verifier::verify_mr_config_id_before_key_release(
-            &app_info.compose_hash,
-            &app_info
-                .instance_info
-                .app_id
-                .as_slice()
-                .try_into()
-                .ok()
-                .context("invalid app id")?,
-            &app_info.instance_info.instance_id,
-            self.shared.app_compose.key_provider(),
-        )
-    }
-
     async fn setup_fs(self) -> Result<Stage1<'a>> {
         let app_info = self
             .measure_app_info()
@@ -1966,8 +1951,6 @@ impl<'a> Stage0<'a> {
         if self.shared.app_compose.key_provider().is_kms() {
             cmd_show_mrs()?;
         }
-        self.verify_app_before_key_release(&app_info)
-            .context("failed to verify app before key release")?;
         self.vmm
             .notify_q("boot.progress", "requesting app keys")
             .await;
