@@ -2738,6 +2738,7 @@ dependencies = [
 name = "dstack-types"
 version = "0.6.0"
 dependencies = [
+ "anyhow",
  "ciborium",
  "hex",
  "or-panic",
