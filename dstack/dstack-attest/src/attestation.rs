@@ -307,16 +307,6 @@ impl AttestationMode {
             }
             Platform::NitroEnclave => Ok(Self::DstackNitroEnclave),
             Platform::AwsEc2 => {
-                // Prefer hardware confidential-compute attestation when present,
-                // so EC2 instances exposing TDX or SEV-SNP keep the attestation
-                // mode they used before NitroTPM support existed. Fall back to
-                // NitroTPM only on plain EC2 without such hardware.
-                if has_tdx {
-                    return Ok(Self::DstackTdx);
-                }
-                if has_sev_snp {
-                    return Ok(Self::DstackAmdSevSnp);
-                }
                 if std::path::Path::new("/dev/tpmrm0").exists()
                     || std::path::Path::new("/dev/tpm0").exists()
                 {
