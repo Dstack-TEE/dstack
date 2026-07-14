@@ -1115,8 +1115,9 @@ impl CvmVerifier {
     /// Verify AWS EC2 NitroTPM OS image identity.
     ///
     /// Preferred (unified with GCP/TDX lite): `vm_config.aws_measurement` with
-    /// `os_image_hash = sha256(sha256sum.txt)` and reference PCR4/7/12 bound to
-    /// the attestation document.
+    /// `os_image_hash = sha256(sha256sum.txt)` and
+    /// `boot_pcr_digest = sha256(PCR4||PCR7||PCR12)` bound to the attestation
+    /// document PCRs.
     ///
     /// Legacy fallback: `os_image_hash = sha256(PCR4 || PCR7 || PCR12)`.
     fn verify_os_image_hash_for_aws_nitro_tpm(
@@ -1133,22 +1134,15 @@ impl CvmVerifier {
                 .decode_measurement()
                 .map_err(anyhow::Error::msg)
                 .context("failed to decode vm_config.aws_measurement")?;
-            for (idx, expected) in [
-                (4u16, measurement.pcr4.as_slice()),
-                (7u16, measurement.pcr7.as_slice()),
-                (12u16, measurement.pcr12.as_slice()),
-            ] {
-                let quoted = pcrs
-                    .get(&idx)
-                    .map(Vec::as_slice)
-                    .with_context(|| format!("PCR {idx} missing from NitroTPM attestation"))?;
-                if quoted != expected {
-                    bail!(
-                        "AWS PCR{idx} mismatch: expected={}, quoted={}",
-                        hex::encode(expected),
-                        hex::encode(quoted)
-                    );
-                }
+            let quoted_digest =
+                dstack_attest::attestation::aws_nitro_tpm_os_image_hash_from_pcrs(pcrs)
+                    .context("failed to compute NitroTPM boot_pcr_digest from attestation")?;
+            if measurement.boot_pcr_digest.as_slice() != quoted_digest.as_slice() {
+                bail!(
+                    "AWS boot_pcr_digest mismatch: expected={}, quoted={}",
+                    hex::encode(&measurement.boot_pcr_digest),
+                    hex::encode(&quoted_digest)
+                );
             }
             return Ok(());
         }

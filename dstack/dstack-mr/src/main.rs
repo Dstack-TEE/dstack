@@ -146,18 +146,25 @@ fn inspect_measurement(kind: &str, path: &Path) -> Result<Value> {
 fn decode_sha384_pcr_hex(label: &str, hex_value: &str) -> Result<Vec<u8>> {
     let bytes = hex::decode(hex_value.trim())
         .with_context(|| format!("{label} is not valid hex"))?;
-    if bytes.len() != 48 {
-        bail!("{label} must be 48 bytes (SHA384), got {}", bytes.len());
+    if bytes.len() != dstack_types::AwsOsImageMeasurement::PCR_SHA384_LEN {
+        bail!(
+            "{label} must be {} bytes (SHA384), got {}",
+            dstack_types::AwsOsImageMeasurement::PCR_SHA384_LEN,
+            bytes.len()
+        );
     }
     Ok(bytes)
 }
 
+/// Encode `measurement.aws.cbor` as a single `boot_pcr_digest =
+/// sha256(PCR4||PCR7||PCR12)` (same composition as legacy image hash).
 fn aws_measurement_cbor(pcr4_hex: &str, pcr7_hex: &str, pcr12_hex: &str) -> Result<Vec<u8>> {
-    let measurement = dstack_types::AwsOsImageMeasurement {
-        pcr4: decode_sha384_pcr_hex("pcr4", pcr4_hex)?,
-        pcr7: decode_sha384_pcr_hex("pcr7", pcr7_hex)?,
-        pcr12: decode_sha384_pcr_hex("pcr12", pcr12_hex)?,
-    };
+    let measurement = dstack_types::AwsOsImageMeasurement::from_boot_pcrs(
+        &decode_sha384_pcr_hex("pcr4", pcr4_hex)?,
+        &decode_sha384_pcr_hex("pcr7", pcr7_hex)?,
+        &decode_sha384_pcr_hex("pcr12", pcr12_hex)?,
+    )
+    .map_err(anyhow::Error::msg)?;
     Ok(measurement.to_cbor_vec())
 }
 

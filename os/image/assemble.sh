@@ -422,7 +422,8 @@ if [[ "$UKI_CREATED" = "1" ]]; then
     HAVE_MEASUREMENT_GCP=1
 fi
 
-# AWS NitroTPM reference PCRs (SHA384 PCR4/7/12) → measurement.aws.cbor.
+# AWS NitroTPM boot PCR digest → measurement.aws.cbor
+# (boot_pcr_digest = sha256(PCR4||PCR7||PCR12); raw PCRs not stored).
 #
 # MUST be computed at image assemble time and listed in sha256sum.txt so
 # os_image_hash = sha256(sha256sum.txt) is fixed for the release artifact.

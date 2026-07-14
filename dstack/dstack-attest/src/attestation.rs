@@ -2144,21 +2144,14 @@ impl Attestation {
                                 .decode_measurement()
                                 .map_err(anyhow::Error::msg)
                                 .context("failed to decode aws_measurement")?;
-                            for (idx, expected) in [
-                                (4u16, measurement.pcr4.as_slice()),
-                                (7u16, measurement.pcr7.as_slice()),
-                                (12u16, measurement.pcr12.as_slice()),
-                            ] {
-                                let quoted = pcrs.get(&idx).map(Vec::as_slice).with_context(
-                                    || format!("PCR {idx} missing from NitroTPM attestation"),
-                                )?;
-                                if quoted != expected {
-                                    bail!(
-                                        "aws_measurement PCR{idx} mismatch vs attestation: expected={}, quoted={}",
-                                        hex::encode(expected),
-                                        hex::encode(quoted)
-                                    );
-                                }
+                            let quoted_digest = aws_nitro_tpm_os_image_hash_from_pcrs(&pcrs)
+                                .context("failed to compute boot_pcr_digest from attestation")?;
+                            if measurement.boot_pcr_digest.as_slice() != quoted_digest.as_slice() {
+                                bail!(
+                                    "aws_measurement boot_pcr_digest mismatch vs attestation: expected={}, quoted={}",
+                                    hex::encode(&measurement.boot_pcr_digest),
+                                    hex::encode(&quoted_digest)
+                                );
                             }
                             config
                         } else {

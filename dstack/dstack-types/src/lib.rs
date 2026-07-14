@@ -698,8 +698,9 @@ pub struct VmConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gcp_measurement: Option<GcpOsImageMeasurementDocument>,
     /// AWS NitroTPM image measurement material. When present, `os_image_hash`
-    /// is the unified digest `sha256(sha256sum.txt)` and boot PCRs are bound
-    /// via the measurement document (like GCP / TDX lite).
+    /// is the unified digest `sha256(sha256sum.txt)` and boot identity is bound
+    /// via `boot_pcr_digest = sha256(PCR4||PCR7||PCR12)` in the measurement
+    /// document (like GCP / TDX lite).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub aws_measurement: Option<AwsOsImageMeasurementDocument>,
 }
@@ -930,25 +931,61 @@ impl GcpOsImageMeasurementDocument {
     }
 }
 
+/// AWS NitroTPM boot-image measurement material.
+///
+/// Stores a single digest of the three boot PCRs rather than the raw PCR
+/// values, to keep `measurement.aws.cbor` small while still binding the full
+/// boot path. Composition is identical to the legacy image hash:
+/// `sha256(PCR4 || PCR7 || PCR12)` (each PCR is 48-byte SHA384).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AwsOsImageMeasurement {
-    /// Reference SHA384 PCR4/7/12 (48 bytes each) from nitro-tpm-pcr-compute
-    /// or a live measured boot of the same UKI/AMI.
+    /// `sha256(PCR4 || PCR7 || PCR12)` — 32 bytes.
     #[serde(with = "hex_bytes")]
-    pub pcr4: Vec<u8>,
-    #[serde(with = "hex_bytes")]
-    pub pcr7: Vec<u8>,
-    #[serde(with = "hex_bytes")]
-    pub pcr12: Vec<u8>,
+    pub boot_pcr_digest: Vec<u8>,
 }
 
 impl AwsOsImageMeasurement {
+    pub const BOOT_PCR_DIGEST_LEN: usize = 32;
+    pub const PCR_SHA384_LEN: usize = 48;
+
+    pub fn new(boot_pcr_digest: Vec<u8>) -> Result<Self, String> {
+        if boot_pcr_digest.len() != Self::BOOT_PCR_DIGEST_LEN {
+            return Err(format!(
+                "AwsOsImageMeasurement: boot_pcr_digest has invalid length {}, expected {}",
+                boot_pcr_digest.len(),
+                Self::BOOT_PCR_DIGEST_LEN
+            ));
+        }
+        Ok(Self { boot_pcr_digest })
+    }
+
+    /// Build from the three SHA384 boot PCRs (same order as legacy
+    /// `aws_nitro_tpm_os_image_hash_from_pcrs`: 4, 7, 12).
+    pub fn from_boot_pcrs(pcr4: &[u8], pcr7: &[u8], pcr12: &[u8]) -> Result<Self, String> {
+        for (label, pcr) in [("pcr4", pcr4), ("pcr7", pcr7), ("pcr12", pcr12)] {
+            if pcr.len() != Self::PCR_SHA384_LEN {
+                return Err(format!(
+                    "AwsOsImageMeasurement: {label} has invalid length {}, expected {}",
+                    pcr.len(),
+                    Self::PCR_SHA384_LEN
+                ));
+            }
+        }
+        let mut buf =
+            Vec::with_capacity(Self::PCR_SHA384_LEN * 3);
+        buf.extend_from_slice(pcr4);
+        buf.extend_from_slice(pcr7);
+        buf.extend_from_slice(pcr12);
+        Self::new(sha256(&buf).to_vec())
+    }
+
     pub fn to_cbor_vec(&self) -> Vec<u8> {
         cbor_to_vec(self, "AwsOsImageMeasurement")
     }
 
     pub fn from_cbor_slice(bytes: &[u8]) -> Result<Self, String> {
-        cbor_from_slice(bytes, "AwsOsImageMeasurement")
+        let measurement: Self = cbor_from_slice(bytes, "AwsOsImageMeasurement")?;
+        Self::new(measurement.boot_pcr_digest)
     }
 }
 

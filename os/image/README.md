@@ -12,7 +12,8 @@ to the manifest directory.
 When a UKI image is built (`ENABLE_UKI_IMAGE=1`), assemble **always** produces:
 
 - `measurement.gcp.cbor` — UKI Authenticode binding for GCP TPM
-- `measurement.aws.cbor` — NitroTPM PCR4/7/12 binding for AWS EC2
+- `measurement.aws.cbor` — NitroTPM boot binding for AWS EC2
+  (`boot_pcr_digest = sha256(PCR4||PCR7||PCR12)`)
 
 Both are listed in `sha256sum.txt`, so
 `digest.txt = sha256(sha256sum.txt) = os_image_hash` is fixed at build time.
