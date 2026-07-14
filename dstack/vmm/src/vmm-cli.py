@@ -840,13 +840,15 @@ class VmmCLI:
         try:
             compose_json = json.loads(compose_content)
         except json.JSONDecodeError as err:
-            raise Exception(f"Invalid app compose file: {err}") from err
+            raise Exception(f"invalid app compose file: {err}") from err
         if not isinstance(compose_json, dict):
-            raise Exception("App compose must be a JSON object")
+            raise Exception("app compose must be a JSON object")
 
-        if args.no_tee is not None:
-            compose_json["no_tee"] = args.no_tee
+        if args.no_tee is True and compose_json.get("no_tee") is not True:
+            compose_json["no_tee"] = True
             compose_content = json.dumps(compose_json, indent=4, ensure_ascii=False)
+        elif args.no_tee is False and compose_json.get("no_tee") is True:
+            raise Exception("--tee conflicts with no_tee=true in app compose")
 
         no_tee = bool(compose_json.get("no_tee", False))
 

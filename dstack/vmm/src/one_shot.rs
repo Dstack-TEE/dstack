@@ -6,6 +6,37 @@ use crate::app::{make_sys_config, validate_no_tee_compose, Image, VmConfig, VmWo
 use crate::config::Config;
 use crate::main_service;
 use anyhow::{Context, Result};
+use dstack_types::AppCompose;
+use dstack_vmm_rpc::VmConfiguration;
+
+fn resolve_app_compose(vm_config: &mut VmConfiguration) -> Result<AppCompose> {
+    if vm_config.compose_file.is_empty() {
+        vm_config.compose_file = serde_json::to_string_pretty(&serde_json::json!({
+            "manifest_version": 1,
+            "name": vm_config.name,
+            "runner": "none",
+            "gateway_enabled": !vm_config.gateway_urls.is_empty(),
+            "tproxy_enabled": false,
+            "kms_enabled": !vm_config.kms_urls.is_empty(),
+            "public_logs": false,
+            "public_sysinfo": false,
+            "public_tcbinfo": true,
+            "local_key_provider_enabled": false,
+            "no_instance_id": false,
+            "no_tee": vm_config.no_tee,
+            "secure_time": true,
+            "features": [],
+            "allowed_envs": []
+        }))
+        .context("failed to serialize default app compose")?;
+    }
+
+    let (compose_file, app_compose) =
+        main_service::normalize_app_compose(&vm_config.compose_file, vm_config.no_tee)?;
+    vm_config.compose_file = compose_file;
+    vm_config.no_tee = app_compose.no_tee;
+    Ok(app_compose)
+}
 
 pub async fn run_one_shot(
     vm_config_path: &str,
@@ -13,9 +44,7 @@ pub async fn run_one_shot(
     workdir_option: Option<String>,
     dry_run: bool,
 ) -> Result<()> {
-    use dstack_types::AppCompose;
-    use dstack_vmm_rpc::VmConfiguration;
-    use main_service::{create_manifest_from_vm_config, normalize_app_compose};
+    use main_service::create_manifest_from_vm_config;
 
     // Dynamically allocate CID by scanning running QEMU processes (ps aux method)
     let mut existing_cids = Vec::new();
@@ -66,12 +95,7 @@ pub async fn run_one_shot(
     // Parse VM configuration
     let mut vm_config: VmConfiguration = serde_json::from_str(&vm_config_json)
         .with_context(|| format!("Failed to parse VM configuration from: {}", vm_config_path))?;
-    if !vm_config.compose_file.is_empty() {
-        let (compose_file, app_compose) =
-            normalize_app_compose(&vm_config.compose_file, vm_config.no_tee)?;
-        vm_config.compose_file = compose_file;
-        vm_config.no_tee = app_compose.no_tee;
-    }
+    let app_compose = resolve_app_compose(&mut vm_config)?;
 
     // Calculate compose_hash using the same logic as main_service
     let compose_hash = {
@@ -121,99 +145,9 @@ pub async fn run_one_shot(
     let shared_dir = vm_work_dir.shared_dir();
     fs_err::create_dir_all(&shared_dir).context("Failed to create shared directory")?;
 
-    // Create app compose file content and parse AppCompose instance
-    let (app_compose_content, app_compose) = if vm_config.compose_file.is_empty() {
-        // Create default compose JSON directly as string
-        let gateway_enabled = !vm_config.gateway_urls.is_empty();
-        let kms_enabled = !vm_config.kms_urls.is_empty();
-
-        let default_compose = format!(
-            r#"{{
-"manifest_version": 1,
-"name": "{}",
-"runner": "none",
-"gateway_enabled": {},
-"tproxy_enabled": false,
-"kms_enabled": {},
-"public_logs": false,
-"public_sysinfo": false,
-"public_tcbinfo": true,
-"local_key_provider_enabled": false,
-"no_instance_id": false,
-"no_tee": {},
-"secure_time": true,
-"features": [],
-"allowed_envs": []
-}}"#,
-            vm_config.name, gateway_enabled, kms_enabled, vm_config.no_tee
-        );
-
-        // Parse the default compose to get AppCompose instance for gateway_enabled() call
-        let app_compose: AppCompose =
-            serde_json::from_str(&default_compose).context("Failed to parse default AppCompose")?;
-
-        (default_compose, app_compose)
-    } else {
-        // Parse AppCompose with enhanced error handling for flatten issues
-        match serde_json::from_str::<AppCompose>(&vm_config.compose_file) {
-            Ok(compose) => (vm_config.compose_file.clone(), compose),
-            Err(e) => {
-                let error_msg = e.to_string();
-                if error_msg.contains("can only flatten structs and maps") {
-                    anyhow::bail!(
-                        "AppCompose flatten error when parsing compose_file: {}
-
-This error occurs because the AppCompose struct has a flattened field for gateway settings.
-The issue is likely in the compose_file content:
-
-Common causes:
-1. 'gateway_enabled' or 'tproxy_enabled' fields have wrong type (should be boolean)
-2. Boolean fields are provided as strings (\"true\" instead of true)
-3. Missing quotes around boolean values in JSON
-
-Example of correct compose_file structure:
-{{
-\"manifest_version\": 1,
-\"name\": \"my-app\",
-\"runner\": \"none\",
-\"gateway_enabled\": true,
-\"tproxy_enabled\": false,
-\"kms_enabled\": false
-}}
-
-Debug: Compose file content (first 200 chars):
-{}",
-                        error_msg,
-                        if vm_config.compose_file.len() > 200 {
-                            format!("{}...", &vm_config.compose_file[..200])
-                        } else {
-                            vm_config.compose_file.clone()
-                        }
-                    );
-                }
-
-                return Err(e).with_context(|| {
-                    format!(
-                        "Failed to parse compose_file as AppCompose: {}
-
-Compose file content (first 200 chars):
-{}",
-                        error_msg,
-                        if vm_config.compose_file.len() > 200 {
-                            format!("{}...", &vm_config.compose_file[..200])
-                        } else {
-                            vm_config.compose_file.clone()
-                        }
-                    )
-                });
-            }
-        }
-    };
-
     validate_no_tee_compose(manifest.no_tee, &app_compose)?;
 
-    // Write the JSON string directly (no serialization needed)
-    fs_err::write(vm_work_dir.app_compose_path(), app_compose_content)
+    fs_err::write(vm_work_dir.app_compose_path(), &vm_config.compose_file)
         .context("Failed to write app compose file")?;
 
     // Write other files if present
@@ -378,4 +312,25 @@ Compose file content (first 200 chars):
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_app_compose;
+    use dstack_vmm_rpc::VmConfiguration;
+
+    #[test]
+    fn materializes_default_compose() {
+        let mut vm_config = VmConfiguration {
+            name: "test".into(),
+            no_tee: true,
+            ..Default::default()
+        };
+
+        let app_compose = resolve_app_compose(&mut vm_config).unwrap();
+
+        assert!(!vm_config.compose_file.is_empty());
+        assert!(app_compose.no_tee);
+        assert!(vm_config.no_tee);
+    }
 }

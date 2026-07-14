@@ -892,7 +892,7 @@ fn make_app_keys(
     let attestation = if with_attestation {
         Some(
             Attestation::quote(&report_data)
-                .context("Failed to get attestation")?
+                .context("failed to get attestation")?
                 .into_versioned(),
         )
     } else {

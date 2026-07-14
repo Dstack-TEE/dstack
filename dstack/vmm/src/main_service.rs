@@ -62,10 +62,10 @@ pub(crate) fn normalize_app_compose(
     default_no_tee: bool,
 ) -> Result<(String, AppCompose)> {
     let mut value: serde_json::Value =
-        serde_json::from_str(compose_file).context("Invalid compose file")?;
+        serde_json::from_str(compose_file).context("invalid compose file")?;
     let object = value
         .as_object_mut()
-        .context("App compose must be a JSON object")?;
+        .context("app compose must be a JSON object")?;
     let had_no_tee = object.contains_key("no_tee");
     if !had_no_tee && default_no_tee {
         object.insert("no_tee".to_string(), true.into());
@@ -73,13 +73,18 @@ pub(crate) fn normalize_app_compose(
     let normalized = if had_no_tee || !default_no_tee {
         compose_file.to_string()
     } else {
-        serde_json::to_string_pretty(&value).context("Failed to serialize app compose")?
+        serde_json::to_string_pretty(&value).context("failed to serialize app compose")?
     };
-    let app_compose: AppCompose = serde_json::from_value(value).context("Invalid compose file")?;
+    let app_compose: AppCompose = serde_json::from_value(value).context("invalid compose file")?;
     if had_no_tee && default_no_tee && !app_compose.no_tee {
         bail!("no_tee in the RPC request and app compose does not match");
     }
     Ok((normalized, app_compose))
+}
+
+fn normalized_compose_hash(compose_file: &str, default_no_tee: bool) -> Result<String> {
+    let (compose_file, _) = normalize_app_compose(compose_file, default_no_tee)?;
+    Ok(hex_sha256(&compose_file))
 }
 
 /// Validate the VM label, restricting it to a safe character set to prevent injection vectors.
@@ -409,12 +414,12 @@ impl VmmRpc for RpcHandler {
 
     async fn update_vm(self, request: UpdateVmRequest) -> Result<Id> {
         let vm_work_dir = self.app.work_dir(&request.id);
-        let mut manifest = vm_work_dir.manifest().context("Failed to read manifest")?;
+        let mut manifest = vm_work_dir.manifest().context("failed to read manifest")?;
         if request
             .no_tee
             .is_some_and(|no_tee| no_tee != manifest.no_tee)
         {
-            bail!("TEE mode cannot be changed after VM creation");
+            bail!("cannot change TEE mode after VM creation");
         }
 
         let new_id = if !request.compose_file.is_empty() {
@@ -425,7 +430,7 @@ impl VmmRpc for RpcHandler {
             if !compose_file_path.exists() {
                 bail!("The instance {} not found", request.id);
             }
-            fs::write(compose_file_path, &compose_file).context("Failed to write compose file")?;
+            fs::write(compose_file_path, &compose_file).context("failed to write compose file")?;
 
             app_id_of(&compose_file)
         } else {
@@ -600,10 +605,7 @@ impl VmmRpc for RpcHandler {
 
     async fn get_compose_hash(self, request: VmConfiguration) -> Result<RpcComposeHash> {
         validate_label(&request.name)?;
-        // check the compose file is valid
-        let _app_compose: AppCompose =
-            serde_json::from_str(&request.compose_file).context("Invalid compose file")?;
-        let hash = hex_sha256(&request.compose_file);
+        let hash = normalized_compose_hash(&request.compose_file, request.no_tee)?;
         Ok(RpcComposeHash { hash })
     }
 
@@ -788,7 +790,7 @@ impl RpcCall<App> for RpcHandler {
 
 #[cfg(test)]
 mod tests {
-    use super::normalize_app_compose;
+    use super::{hex_sha256, normalize_app_compose, normalized_compose_hash};
 
     const COMPOSE: &str = r#"{"manifest_version":"2","name":"test","runner":"docker-compose"}"#;
 
@@ -810,5 +812,14 @@ mod tests {
         let source =
             r#"{"manifest_version":"2","name":"test","runner":"docker-compose","no_tee":false}"#;
         assert!(normalize_app_compose(source, true).is_err());
+    }
+
+    #[test]
+    fn compose_hash_uses_legacy_no_tee_normalization() {
+        let (normalized, _) = normalize_app_compose(COMPOSE, true).unwrap();
+        assert_eq!(
+            normalized_compose_hash(COMPOSE, true).unwrap(),
+            hex_sha256(&normalized)
+        );
     }
 }

@@ -108,7 +108,7 @@ elif modprobe sev-guest 2>/dev/null; then
 elif modprobe tdx-guest 2>/dev/null; then
 	log "Loaded tdx-guest module"
 else
-	log "No TEE guest module is available"
+	log "no TEE guest module is available"
 fi
 
 # Setup configfs and TSM for TDX attestation

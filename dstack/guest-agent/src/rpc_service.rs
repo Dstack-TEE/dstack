@@ -45,7 +45,7 @@ use crate::{
 
 #[derive(Debug, thiserror::Error)]
 enum RpcError {
-    #[error("Attestation is unavailable in no-TEE mode")]
+    #[error("attestation is unavailable in no-TEE mode")]
     AttestationUnavailable,
 }
 
@@ -926,7 +926,7 @@ pNs85uhOZE8z2jr8Pg==
             state.quote_response([0; 64]).unwrap_err(),
             state.attest_response([0; 64]).unwrap_err(),
         ] {
-            assert_eq!(err.to_string(), "Attestation is unavailable in no-TEE mode");
+            assert_eq!(err.to_string(), "attestation is unavailable in no-TEE mode");
         }
         for request in [
             GetTlsKeyArgs {
@@ -949,7 +949,7 @@ pNs85uhOZE8z2jr8Pg==
             .get_tls_key(request)
             .await
             .unwrap_err();
-            assert!(format!("{err:#}").contains("Attestation is unavailable in no-TEE mode"));
+            assert!(format!("{err:#}").contains("attestation is unavailable in no-TEE mode"));
         }
     }
 

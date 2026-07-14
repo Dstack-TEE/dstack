@@ -1049,9 +1049,9 @@ pub async fn cmd_sys_setup(args: SetupArgs) -> Result<()> {
 }
 
 async fn do_sys_setup(stage0: Stage0<'_>) -> Result<()> {
-    let opts = parse_dstack_options(&stage0.shared).context("Failed to parse system options")?;
+    let opts = parse_dstack_options(&stage0.shared).context("failed to parse system options")?;
     if !opts.no_tee {
-        AttestationMode::detect().context("TEE guest interface is unavailable")?;
+        AttestationMode::detect().context("missing TEE guest interface")?;
     }
     verify_app_compose_policy(&stage0.shared).context("Failed to verify app-compose policy")?;
     if stage0.shared.app_compose.secure_time {
@@ -1067,7 +1067,7 @@ async fn do_sys_setup(stage0: Stage0<'_>) -> Result<()> {
         stage0
             .setup_gpu()
             .await
-            .context("Failed to verify GPU TEE attestation")?;
+            .context("failed to verify GPU TEE attestation")?;
     }
     let stage1 = stage0.setup_fs(opts).await?;
     stage1.setup().await
@@ -1923,7 +1923,7 @@ impl<'a> Stage0<'a> {
                     .as_slice()
                     .try_into()
                     .ok()
-                    .context("Invalid app id")?,
+                    .context("invalid app id")?,
                 &app_info.instance_info.instance_id,
                 keys.key_provider.kind(),
                 keys.key_provider.id(),
@@ -1948,7 +1948,7 @@ impl<'a> Stage0<'a> {
 
     async fn setup_fs(self, opts: DstackOptions) -> Result<Stage1<'a>> {
         if opts.no_tee {
-            warn!("Development-only no-TEE mode enabled; storage is unencrypted");
+            warn!("development-only no-TEE mode enabled; storage is unencrypted");
         }
         let app_info = self
             .measure_app_info(&opts)

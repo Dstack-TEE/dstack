@@ -132,7 +132,7 @@ pub(crate) fn round_up(value: u32, multiple: u32) -> u32 {
 
 pub(crate) fn validate_no_tee_compose(no_tee: bool, app_compose: &AppCompose) -> Result<()> {
     if no_tee != app_compose.no_tee {
-        bail!("TEE mode in manifest and app compose does not match");
+        bail!("manifest and app compose TEE modes do not match");
     }
     if !no_tee {
         return Ok(());
