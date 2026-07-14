@@ -4,6 +4,8 @@ LINUX_VERSION_EXTENSION = "-dstack"
 
 SRC_URI += "file://dstack-docker.cfg \
             file://dstack-docker.scc \
+            file://dstack-aws.cfg \
+            file://dstack-aws.scc \
             file://dstack-tdx.cfg \
             file://dstack-tdx.scc \
             file://dstack-sysbox.cfg \
@@ -57,6 +59,7 @@ KERNEL_FEATURES:append:dstack = " features/scsi/disk.scc \
                                   hyperv.scc \
                                   security-mitigations.scc \
                                   disk-encryption.scc \
+                                  dstack-aws.scc \
                                   dstack-tdx.scc"
 
 # disk-encryption.scc (above, from meta-confidential-compute) ships dm-crypt

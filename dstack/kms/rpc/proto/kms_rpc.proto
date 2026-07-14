@@ -46,6 +46,10 @@ message AppKeyResponse {
   string gateway_app_id = 7;
   // OS Image hash
   bytes os_image_hash = 8;
+  // Reserved (removed GetAppKey v2 recipient encryption).
+  bytes encrypted_app_key_response = 9 [deprecated = true];
+  // Reserved (removed GetAppKey v2 recipient encryption).
+  string key_encryption_algorithm = 10 [deprecated = true];
 }
 
 message GetMetaResponse {

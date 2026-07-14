@@ -1419,6 +1419,7 @@ fn make_vm_config(
         tdx_attestation_variant,
         tdx_measurement,
         gcp_measurement: None,
+        aws_measurement: None,
     })?;
     // For backward compatibility
     config["spec_version"] = serde_json::Value::from(1);

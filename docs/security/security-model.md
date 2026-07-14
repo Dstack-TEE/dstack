@@ -6,9 +6,9 @@ This document helps you evaluate whether dstack's security model fits your needs
 
 ## Trust Boundaries
 
-dstack removes the need to trust infrastructure operators. The cloud provider cannot read your memory, modify your code, or access your secrets. Network attackers cannot intercept your traffic because TLS terminates inside the TEE with keys fully controlled by the TEE (Zero Trust HTTPS). Docker registries cannot serve malicious images because the TEE verifies SHA256 digests before pulling.
+dstack removes the need to trust most infrastructure operators. On TEE platforms such as Intel TDX and AMD SEV-SNP, the cloud or host operator cannot read your protected memory, modify your measured code, or access your secrets without detection. On AWS EC2 NitroTPM attested instances, AWS Nitro is part of the trusted platform, and the untrusted party is the workload AWS account administrator/operator. Network attackers cannot intercept your traffic because TLS terminates inside the attested environment with keys controlled by that environment (Zero Trust HTTPS). Docker registries cannot serve malicious images because the guest verifies SHA256 digests before pulling.
 
-The only thing you must trust is **TEE hardware**. Intel TDX is the production path. AMD SEV-SNP is available where the selected dstack OS image and host support it, but it is new and experimental. You trust that the TEE provides genuine memory encryption and that quotes are signed by real hardware. For GPU workloads, you also trust **NVIDIA GPU hardware** and NVIDIA's Remote Attestation Service (NRAS). These are hardware-level trust assumptions.
+The primary trust input is **attested platform hardware**. Intel TDX is the production TEE path. AMD SEV-SNP is available where the selected dstack OS image and host support it, but it is new and experimental. AWS EC2 NitroTPM attested instances use a different trust root: the AWS Nitro system and AWS NitroTPM attestation PKI. In that mode, the threat model protects against the workload AWS account administrator and EC2 operator actions, but AWS remains trusted. For GPU workloads, you also trust **NVIDIA GPU hardware** and NVIDIA's Remote Attestation Service (NRAS). These are hardware-level trust assumptions.
 
 Everything else is verifiable.
 
@@ -39,10 +39,11 @@ Infrastructure operators can still deny service. They can shut down your workloa
 
 | Component | Verification | Measurement |
 |-----------|--------------|-------------|
-| Hardware | TEE signature | Attestation quote |
-| Firmware | Boot measurement | MRTD |
-| OS | Boot measurement | RTMR0-2 |
-| Application | Runtime measurement | RTMR3 (compose-hash) |
+| Hardware/platform | Vendor signature | TDX/SNP quote, NitroTPM Attestation Document, or Nitro Enclave document |
+| Firmware and boot path | Boot measurement | TDX/SNP MRTD and RTMR0-2, or AWS NitroTPM PCR4/PCR7/PCR12 |
+| OS image | Reproducible image measurement | dstack OS image hash and platform reference measurements |
+| Application launch identity | Event-log replay | RTMR3 on TDX-family platforms, SHA384 PCR14 on AWS NitroTPM |
+| Application runtime telemetry | Event-log replay when policy requires it | RTMR3 on TDX-family platforms; SHA384 PCR14 on AWS NitroTPM (same event lane as launch; TDX RTMR3 analogue) |
 
 ### Isolation
 
@@ -66,31 +67,32 @@ Models and training data stay within the hardware-protected environment. The inf
 
 ## Chain of Trust
 
-dstack implements layered verification from hardware to application. Each layer is measured and included in the attestation quote, which TEE hardware cryptographically signs.
+dstack implements layered verification from platform hardware to application identity. Each layer is measured and included in signed attestation evidence. The exact register names are platform-specific.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│  Attestation Quote (signed by TEE hardware)                     │
-│  ├── Hardware: TEE signature proves genuine hardware            │
-│  ├── MRTD: Virtual firmware measurement                         │
-│  ├── RTMR0-2: OS kernel and boot parameters                     │
-│  ├── RTMR3: Application (compose-hash) + KMS binding            │
-│  └── reportData: Your challenge (replay protection)             │
+│  Signed attestation evidence                                    │
+│  ├── Platform: vendor signature proves genuine platform          │
+│  ├── Boot: firmware, kernel, initrd, cmdline, rootfs state       │
+│  ├── Launch identity: app/config/KMS binding event chain         │
+│  └── Freshness binding: challenge, report_data, nonce, or key    │
 ├─────────────────────────────────────────────────────────────────┤
-│  Event Log (RTMR3 breakdown)                                    │
+│  dstack launch event log                                        │
 │  ├── compose-hash: SHA256 of your docker-compose                │
 │  ├── key-provider: KMS root CA public key hash                  │
 │  └── instance-id: Unique per deployment                         │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-**Hardware layer.** The TEE provides the root of trust. The attestation quote is cryptographically signed by TEE hardware, and verification confirms the signature chain. The TCB status shows whether firmware is patched against known vulnerabilities.
+**Hardware/platform layer.** The platform provides the root of trust. TDX and SEV-SNP quotes are signed by CPU-vendor attestation roots. AWS NitroTPM Attestation Documents are signed by the AWS NitroTPM attestation PKI. TDX and SEV-SNP verification surfaces a TCB status. AWS NitroTPM does not expose a dstack-style TCB status, so policy must rely on attestation mode, AWS signature verification, boot PCRs, image hash, and dstack launch-event replay.
 
-**OS layer.** The dstack OS is measured during boot into MRTD and RTMR0-2. MRTD captures the virtual firmware. RTMR0 captures firmware configuration. RTMR1 captures the Linux kernel. RTMR2 captures kernel command-line parameters. You verify integrity by computing expected measurements from the monorepo OS source and comparing them to the quote.
+**OS layer.** The dstack OS is measured during boot. On TDX-family platforms, MRTD captures the virtual firmware, and RTMR0-2 capture firmware configuration, kernel, initramfs, and command-line state. On AWS NitroTPM, policy checks the AWS boot PCRs for the selected boot path, currently PCR4, PCR7, and PCR12, plus the dstack OS image hash. You verify integrity by computing expected measurements from the monorepo OS source and comparing them to signed evidence.
 
-**Application layer.** Your application is measured into RTMR3 as the compose-hash, which is the SHA256 hash of your normalized docker-compose configuration. Each image must use SHA256 digest pinning. This proves exactly which container images are running and that no code substitution happened after measurement.
+**Application launch layer.** Your application launch identity includes the compose-hash, app ID, instance ID, key-provider identity, and OS image hash. On TDX-family platforms, dstack extends those events into RTMR3. On AWS NitroTPM, dstack extends those launch events into non-resettable SHA384 PCR14 and treats `system-ready` as the launch boundary. Each container image must use SHA256 digest pinning. This proves which normalized container configuration was authorized before key release.
 
-**Key management layer.** The KMS root CA public key hash is recorded in RTMR3 as the key-provider event. This binds your workload to a specific KMS instance. The KMS itself runs in a TEE with its own attestation quote, so you can verify the KMS the same way you verify any workload.
+**Runtime telemetry layer.** Application-owned runtime events remain available after launch. On AWS NitroTPM they extend the same SHA384 PCR14 event lane as OS launch events (like TDX RTMR3). Policy may still treat `system-ready` as a logical boundary when interpreting the event log; there is no separate PCR23 runtime split.
+
+**Key management layer.** The KMS root CA public key hash is recorded as the key-provider launch event. This binds your workload to a specific KMS instance. The KMS itself runs with its own attestation evidence, so you can verify the KMS the same way you verify any workload.
 
 ### How `os_image_hash` becomes trusted
 
@@ -142,14 +144,16 @@ Use this checklist to verify a workload running in a dstack CVM.
 
 **Platform verification:**
 - [ ] Attestation quote signature is valid
-- [ ] TCB status is up-to-date (no unpatched vulnerabilities)
-- [ ] OS measurements match expected values (MRTD, RTMR0-2)
+- [ ] TCB status is up-to-date for platforms that report one
+- [ ] AWS NitroTPM evidence verifies to the AWS NitroTPM attestation PKI when running on AWS
+- [ ] OS measurements match expected values (MRTD/RTMR0-2, or AWS PCR4/PCR7/PCR12)
 - [ ] OS image hash is whitelisted (if using governance)
 
 **Application verification:**
 - [ ] compose-hash matches your docker-compose
 - [ ] All images use SHA256 digests (no mutable tags)
-- [ ] RTMR3 event log replays correctly
+- [ ] Launch event log replays correctly (RTMR3 on TDX-family platforms, PCR14 on AWS NitroTPM)
+- [ ] Config commitment matches the expected app/config target (TDX `mr_config_id` / SEV `HOST_DATA` / AWS PCR8 from shared-disk MrConfigV3)
 - [ ] reportData contains your challenge (replay protection)
 
 **Key management verification:**
@@ -160,13 +164,13 @@ Use this checklist to verify a workload running in a dstack CVM.
 
 This section explains two deliberate scoping decisions in how dstack verifies a quote. Both are intentional; the rationale is recorded here so the behavior is not mistaken for an oversight.
 
-### Only RTMR3 is verified via event-log replay
+### Only application measurement lanes are verified via event-log replay
 
-dstack replays an event log only for RTMR3. RTMR0-2 (and MRTD) are not replayed from an event log — they are taken directly from the hardware-signed quote and compared against expected values computed offline from the OS source (e.g. `dstack-mr`).
+dstack replays event logs for application identity, not for the base OS boot registers. On TDX-family platforms, that replay target is RTMR3. On AWS NitroTPM, the launch replay target is SHA384 PCR14. RTMR0-2, MRTD, and AWS boot PCRs are taken directly from signed platform evidence and compared against expected values computed offline from OS source and image artifacts.
 
-This is also reflected at the source: the event log shipped alongside an attestation is stripped down to RTMR3 entries before it is embedded. `VersionedAttestation::into_stripped()` keeps only events with `imr == 3` (see `dstack-attest/src/attestation.rs`), and verification only ever replays those runtime events against `rt_mr3` (`verify_tdx_quote_with_events` / `decode_mr_tdx_from_quote`).
+For TDX evidence, the event log shipped alongside an attestation is stripped down to RTMR3 entries before it is embedded. `VersionedAttestation::into_stripped()` keeps only events with `imr == 3` (see `dstack-attest/src/attestation.rs`), and verification replays those events against `rt_mr3` (`verify_tdx_quote_with_events` / `decode_mr_tdx_from_quote`). For AWS NitroTPM evidence, dstack carries runtime event records and verifies the PCR14 launch chain against the NitroTPM Attestation Document.
 
-The reason boot-time event log entries (RTMR0-2) are dropped is that **nothing downstream consumes them**. Verification recomputes the OS-layer measurements directly from the signed `rt_mr0/1/2` values and compares them to independently reproduced expected measurements, so the corresponding boot event log would be redundant. Keeping it would only bloat the RA-TLS certificate and expose extra detail without adding any verification capability. RTMR3, by contrast, is runtime-extended (compose-hash, key-provider, instance-id, and other guest boot events), so its event log is the only one with a real consumer — the replay that proves what was extended into RTMR3.
+The reason boot-time event log entries are not the verifier contract is that downstream policy compares boot measurements directly to independently reproduced expected measurements. Keeping full boot event logs would bloat evidence and expose extra detail without adding verification capability. Application identity events, by contrast, include deployment-specific values such as compose-hash, key-provider, instance-id, and runtime events. Their event log is the data a verifier needs to prove what was extended into the application measurement lane.
 
 ### Why TDX lite mode does not validate ACPI table contents
 

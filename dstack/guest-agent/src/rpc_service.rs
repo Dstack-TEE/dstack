@@ -27,7 +27,8 @@ use or_panic::ResultOrPanic;
 use ra_rpc::{CallContext, RpcCall};
 use ra_tls::{
     attestation::{
-        QuoteContentType, TdxAttestationExt, VersionedAttestation, DEFAULT_HASH_ALGORITHM,
+        AttestationOptions, QuoteContentType, TdxAttestationExt, VersionedAttestation,
+        DEFAULT_HASH_ALGORITHM,
     },
     cert::{CertConfigV2, CertSigningRequestV2, Csr},
     kdf::{derive_key, derive_p256_key_pair_from_bytes},
@@ -170,14 +171,26 @@ impl AppState {
         &self.inner.config
     }
 
-    fn quote_response(&self, report_data: [u8; 64]) -> Result<GetQuoteResponse> {
+    fn quote_response(
+        &self,
+        report_data: [u8; 64],
+        options: AttestationOptions,
+    ) -> Result<GetQuoteResponse> {
         self.inner
             .platform
-            .quote_response(report_data, &self.inner.vm_config)
+            .quote_response(report_data, options, &self.inner.vm_config)
     }
 
-    fn attest_response(&self, report_data: [u8; 64]) -> Result<AttestResponse> {
-        self.inner.platform.attest_response(report_data)
+    fn attest_response(
+        &self,
+        report_data: [u8; 64],
+        options: AttestationOptions,
+    ) -> Result<AttestResponse> {
+        self.inner.platform.attest_response(report_data, options)
+    }
+
+    fn attestation_mode(&self) -> Result<String> {
+        self.inner.platform.attestation_mode()
     }
 }
 
@@ -247,6 +260,7 @@ pub async fn get_info(state: &AppState, external: bool) -> Result<AppInfo> {
         vm_config,
         cloud_vendor: read_dmi_file("sys_vendor"),
         cloud_product: read_dmi_file("product_name"),
+        attestation: state.attestation_mode()?,
     })
 }
 
@@ -321,7 +335,8 @@ impl DstackGuestRpc for InternalRpcHandler {
 
     async fn get_quote(self, request: RawQuoteArgs) -> Result<GetQuoteResponse> {
         let report_data = pad64(&request.report_data).context("Report data is too long")?;
-        self.state.quote_response(report_data)
+        self.state
+            .quote_response(report_data, AttestationOptions::default())
     }
 
     async fn info(self) -> Result<AppInfo> {
@@ -423,7 +438,8 @@ impl DstackGuestRpc for InternalRpcHandler {
 
     async fn attest(self, request: RawQuoteArgs) -> Result<AttestResponse> {
         let report_data = pad64(&request.report_data).context("Report data is too long")?;
-        self.state.attest_response(report_data)
+        self.state
+            .attest_response(report_data, AttestationOptions::default())
     }
 
     async fn version(self) -> Result<WorkerVersion> {
@@ -525,7 +541,9 @@ impl TappdRpc for InternalRpcHandlerV0 {
         };
         let report_data =
             content_type.to_report_data_with_hash(&request.report_data, &request.hash_algorithm)?;
-        let response = self.state.quote_response(report_data)?;
+        let response = self
+            .state
+            .quote_response(report_data, AttestationOptions::default())?;
         Ok(TdxQuoteResponse {
             quote: response.quote,
             event_log: response.event_log,
@@ -618,7 +636,8 @@ impl WorkerRpc for ExternalRpcHandler {
                 let ed_bytes = ed25519_report_string.as_bytes();
                 ed25519_report_data[..ed_bytes.len()].copy_from_slice(ed_bytes);
 
-                self.state.quote_response(ed25519_report_data)
+                self.state
+                    .quote_response(ed25519_report_data, AttestationOptions::default())
             }
             "secp256k1" | "secp256k1_prehashed" => {
                 let secp256k1_key = SigningKey::from_slice(&key_response.key)
@@ -631,7 +650,8 @@ impl WorkerRpc for ExternalRpcHandler {
                 let secp_bytes = secp256k1_report_string.as_bytes();
                 secp256k1_report_data[..secp_bytes.len()].copy_from_slice(secp_bytes);
 
-                self.state.quote_response(secp256k1_report_data)
+                self.state
+                    .quote_response(secp256k1_report_data, AttestationOptions::default())
             }
             _ => Err(anyhow::anyhow!("Unsupported algorithm")),
         }
@@ -826,8 +846,14 @@ pNs85uhOZE8z2jr8Pg==
             fn quote_response(
                 &self,
                 report_data: [u8; 64],
+                options: AttestationOptions,
                 vm_config: &str,
             ) -> Result<GetQuoteResponse> {
+                if options != AttestationOptions::default() {
+                    return Err(anyhow::anyhow!(
+                        "platform-specific attestation options are not supported by simulator"
+                    ));
+                }
                 let attestation = patch_report_data(&self.attestation, report_data);
                 let Some(quote) = attestation.platform.tdx_quote().map(ToOwned::to_owned) else {
                     return Err(anyhow::anyhow!("Quote not found"));
@@ -844,11 +870,24 @@ pNs85uhOZE8z2jr8Pg==
                 })
             }
 
-            fn attest_response(&self, report_data: [u8; 64]) -> Result<AttestResponse> {
+            fn attest_response(
+                &self,
+                report_data: [u8; 64],
+                options: AttestationOptions,
+            ) -> Result<AttestResponse> {
+                if options != AttestationOptions::default() {
+                    return Err(anyhow::anyhow!(
+                        "platform-specific attestation options are not supported by simulator"
+                    ));
+                }
                 let attestation = patch_report_data(&self.attestation, report_data);
                 Ok(AttestResponse {
                     attestation: VersionedAttestation::V1 { attestation }.to_bytes()?,
                 })
+            }
+
+            fn attestation_mode(&self) -> Result<String> {
+                Ok("dstack-tdx".to_string())
             }
         }
 
@@ -1116,6 +1155,16 @@ pNs85uhOZE8z2jr8Pg==
         assert_eq!(normalize_algorithm("ed25519"), "ed25519");
         assert_eq!(normalize_algorithm(""), "");
         assert_eq!(normalize_algorithm("unknown"), "unknown");
+    }
+
+    #[tokio::test]
+    async fn info_reports_attestation_mode() {
+        let (state, _guard) = setup_test_state().await;
+        let handler = InternalRpcHandler { state };
+
+        let info = handler.info().await.unwrap();
+
+        assert_eq!(info.attestation, "dstack-tdx");
     }
 
     #[tokio::test]

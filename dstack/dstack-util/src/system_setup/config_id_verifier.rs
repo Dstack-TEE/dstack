@@ -20,6 +20,12 @@ struct ExpectedMrConfig<'a> {
     key_provider_id: &'a [u8],
 }
 
+#[derive(Clone, Copy, Default)]
+struct MrConfigVerificationOptions {
+    allow_empty_instance_id: bool,
+    allow_empty_key_provider_id: bool,
+}
+
 fn read_mr_config_id() -> Result<[u8; 48]> {
     let quote = tdx_attest::get_quote(&[0u8; 64]).context("Failed to get quote")?;
     let quote = dcap_qvl::quote::Quote::parse(&quote).context("Failed to parse quote")?;
@@ -81,12 +87,40 @@ pub fn verify_mr_config_id(
     verify_mr_config_id_for_mode(mode, expected)
 }
 
+pub fn verify_mr_config_id_before_key_release(
+    compose_hash: &[u8; 32],
+    app_id: &[u8; 20],
+    instance_id: &[u8],
+    key_provider: KeyProviderKind,
+) -> Result<()> {
+    let mode = AttestationMode::detect().context("failed to detect attestation mode")?;
+    let expected = ExpectedMrConfig {
+        compose_hash,
+        app_id,
+        instance_id,
+        key_provider,
+        key_provider_id: &[],
+    };
+    verify_mr_config_id_before_key_release_for_mode(mode, expected)
+}
+
+fn verify_mr_config_id_before_key_release_for_mode(
+    mode: AttestationMode,
+    expected: ExpectedMrConfig<'_>,
+) -> Result<()> {
+    match mode {
+        AttestationMode::DstackAwsNitroTpm => verify_aws_mr_config(expected),
+        _ => Ok(()),
+    }
+}
+
 fn verify_mr_config_id_for_mode(
     mode: AttestationMode,
     expected: ExpectedMrConfig<'_>,
 ) -> Result<()> {
     match mode {
         AttestationMode::DstackAmdSevSnp => verify_snp_mr_config(expected),
+        AttestationMode::DstackAwsNitroTpm => verify_aws_mr_config(expected),
         _ => verify_tdx_mr_config_id(expected),
     }
 }
@@ -147,9 +181,53 @@ fn verify_snp_mr_config(expected: ExpectedMrConfig<'_>) -> Result<()> {
     Ok(())
 }
 
+fn verify_aws_mr_config(expected: ExpectedMrConfig<'_>) -> Result<()> {
+    let mr_config_document = read_mr_config_document().context("failed to read AWS mr_config")?;
+    // Shared-disk MrConfigV3 is the config source (no UKI cmdline). Empty
+    // instance/key-provider fields remain allowed as dynamic at measure time.
+    verify_mr_config_v3_document_with_options(
+        &mr_config_document,
+        expected,
+        MrConfigVerificationOptions {
+            allow_empty_instance_id: true,
+            allow_empty_key_provider_id: true,
+        },
+    )?;
+    let expected_mr_config_id = MrConfigV3::mr_config_id_from_document(&mr_config_document);
+    info!("aws mr_config_id: {}", hex::encode(expected_mr_config_id));
+    let expected_pcr8 = dstack_attest::expected_aws_config_pcr(&expected_mr_config_id);
+    let tpm = tpm_attest::TpmContext::detect().context("failed to detect NitroTPM")?;
+    let quoted_pcr8 = tpm
+        .pcr_read_single(
+            u32::from(dstack_attest::attestation::AWS_NITRO_TPM_CONFIG_PCR),
+            "sha384",
+        )
+        .context("failed to read AWS config PCR8")?;
+    if quoted_pcr8.as_slice() != expected_pcr8.as_slice() {
+        bail!(
+            "invalid AWS config PCR8, quoted: {}, expected: {}",
+            hex::encode(&quoted_pcr8),
+            hex::encode(expected_pcr8)
+        );
+    }
+    Ok(())
+}
+
 fn verify_mr_config_v3_document(
     mr_config_document: &str,
     expected: ExpectedMrConfig<'_>,
+) -> Result<MrConfigV3> {
+    verify_mr_config_v3_document_with_options(
+        mr_config_document,
+        expected,
+        MrConfigVerificationOptions::default(),
+    )
+}
+
+fn verify_mr_config_v3_document_with_options(
+    mr_config_document: &str,
+    expected: ExpectedMrConfig<'_>,
+    options: MrConfigVerificationOptions,
 ) -> Result<MrConfigV3> {
     let mr_config =
         MrConfigV3::from_document(mr_config_document).context("Invalid mr_config document")?;
@@ -162,13 +240,17 @@ fn verify_mr_config_v3_document(
     if mr_config.app_id.as_slice() != expected.app_id {
         bail!("Invalid mr_config app_id");
     }
-    if mr_config.instance_id.as_slice() != expected.instance_id {
+    if (!options.allow_empty_instance_id || !mr_config.instance_id.is_empty())
+        && mr_config.instance_id.as_slice() != expected.instance_id
+    {
         bail!("Invalid mr_config instance_id");
     }
     if mr_config.key_provider != expected.key_provider {
         bail!("Invalid mr_config key_provider");
     }
-    if mr_config.key_provider_id.as_slice() != expected.key_provider_id {
+    if (!options.allow_empty_key_provider_id || !mr_config.key_provider_id.is_empty())
+        && mr_config.key_provider_id.as_slice() != expected.key_provider_id
+    {
         bail!("Invalid mr_config key_provider_id");
     }
     Ok(mr_config)
@@ -238,6 +320,120 @@ mod tests {
         match verify_mr_config_v3_document(&document, expected) {
             Ok(_) => panic!("mismatched app_id must reject"),
             Err(err) => assert!(err.to_string().contains("Invalid mr_config app_id")),
+        }
+    }
+
+    fn verify_aws_mr_config_value(
+        cmdline_mr_config_id: [u8; 48],
+        mr_config_document: &str,
+        expected: ExpectedMrConfig<'_>,
+    ) -> Result<()> {
+        verify_mr_config_v3_document_with_options(
+            mr_config_document,
+            expected,
+            MrConfigVerificationOptions {
+                allow_empty_instance_id: true,
+                allow_empty_key_provider_id: true,
+            },
+        )?;
+        let expected_mr_config_id = MrConfigV3::mr_config_id_from_document(mr_config_document);
+        if expected_mr_config_id != cmdline_mr_config_id {
+            bail!("invalid AWS mr_config_id");
+        }
+        Ok(())
+    }
+
+    fn valid_mr_config_parts() -> (String, [u8; 32], [u8; 20], [u8; 20], [u8; 32]) {
+        let compose_hash = [0x22u8; 32];
+        let app_id = [0x11u8; 20];
+        let instance_id = [0x44u8; 20];
+        let key_provider_id = [0x33u8; 32];
+        let document = MrConfigV3::new(
+            app_id.to_vec(),
+            compose_hash.to_vec(),
+            KeyProviderKind::Kms,
+            key_provider_id.to_vec(),
+            instance_id.to_vec(),
+        )
+        .to_canonical_json();
+        (document, compose_hash, app_id, instance_id, key_provider_id)
+    }
+
+    fn expected_mr_config<'a>(
+        compose_hash: &'a [u8; 32],
+        app_id: &'a [u8; 20],
+        instance_id: &'a [u8; 20],
+        key_provider_id: &'a [u8; 32],
+    ) -> ExpectedMrConfig<'a> {
+        ExpectedMrConfig {
+            compose_hash,
+            app_id,
+            instance_id,
+            key_provider: KeyProviderKind::Kms,
+            key_provider_id,
+        }
+    }
+
+    #[test]
+    fn aws_mr_config_id_matches_document_value() -> Result<()> {
+        let (document, compose_hash, app_id, instance_id, key_provider_id) =
+            valid_mr_config_parts();
+        let expected = expected_mr_config(&compose_hash, &app_id, &instance_id, &key_provider_id);
+        let mr_config_id = MrConfigV3::mr_config_id_from_document(&document);
+        verify_aws_mr_config_value(mr_config_id, &document, expected)
+    }
+
+    #[test]
+    fn aws_mr_config_id_accepts_omitted_dynamic_instance_fields() -> Result<()> {
+        let (document, compose_hash, app_id, instance_id, key_provider_id) =
+            valid_mr_config_parts();
+        let mut mr_config = MrConfigV3::from_document(&document)?;
+        mr_config.instance_id.clear();
+        mr_config.key_provider_id.clear();
+        let document = mr_config.to_canonical_json();
+        let expected = expected_mr_config(&compose_hash, &app_id, &instance_id, &key_provider_id);
+        let mr_config_id = MrConfigV3::mr_config_id_from_document(&document);
+
+        verify_aws_mr_config_value(mr_config_id, &document, expected)
+    }
+
+    #[test]
+    fn aws_mr_config_id_rejects_changed_compose_hash_with_dynamic_key_provider_id() -> Result<()> {
+        let (document, compose_hash, app_id, instance_id, _key_provider_id) =
+            valid_mr_config_parts();
+        let mut mr_config = MrConfigV3::from_document(&document)?;
+        mr_config.instance_id.clear();
+        mr_config.key_provider_id.clear();
+        let document = mr_config.to_canonical_json();
+        let mr_config_id = MrConfigV3::mr_config_id_from_document(&document);
+        let mut changed_compose_hash = compose_hash;
+        changed_compose_hash[0] ^= 0x01;
+        let expected = ExpectedMrConfig {
+            compose_hash: &changed_compose_hash,
+            app_id: &app_id,
+            instance_id: &instance_id,
+            key_provider: KeyProviderKind::Kms,
+            key_provider_id: &[],
+        };
+
+        match verify_aws_mr_config_value(mr_config_id, &document, expected) {
+            Ok(_) => panic!("changed AWS compose_hash must reject before key release"),
+            Err(err) => assert!(err.to_string().contains("Invalid mr_config compose_hash")),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn aws_mr_config_id_rejects_unmeasured_or_changed_document() {
+        let (document, compose_hash, app_id, instance_id, key_provider_id) =
+            valid_mr_config_parts();
+        let expected = expected_mr_config(&compose_hash, &app_id, &instance_id, &key_provider_id);
+        let mut mr_config_id = MrConfigV3::mr_config_id_from_document(&document);
+        mr_config_id[1] ^= 0x01;
+
+        match verify_aws_mr_config_value(mr_config_id, &document, expected) {
+            Ok(_) => panic!("mismatched AWS mr_config_id must reject"),
+            Err(err) => assert!(err.to_string().contains("invalid AWS mr_config_id")),
         }
     }
 }

@@ -19,6 +19,7 @@ getrandom = { workspace = true, features = ["std"] }
 hex.workspace = true
 hex_fmt.workspace = true
 regex.workspace = true
+prost.workspace = true
 scale = { workspace = true, features = ["derive"] }
 schnorrkel.workspace = true
 serde.workspace = true
@@ -37,6 +38,7 @@ ra-tls = { workspace = true, features = ["quote"] }
 dstack-gateway-rpc.workspace = true
 tdx-attest.workspace = true
 tpm-attest.workspace = true
+tpm2.workspace = true
 tpm-qvl = { workspace = true, features = ["crl-download"] }
 host-api = { workspace = true, features = ["client"] }
 cmd_lib.workspace = true

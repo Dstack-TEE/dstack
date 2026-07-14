@@ -67,9 +67,9 @@ impl CoseSign1 {
         // COSE Sign1 structure is a CBOR array: [protected, unprotected, payload, signature]
         let mut reader = Cursor::new(data);
         let value: ciborium::Value =
-            ciborium::from_reader(&mut reader).context("Failed to parse COSE Sign1 CBOR")?;
+            ciborium::from_reader(&mut reader).context("failed to parse COSE Sign1 CBOR")?;
         if reader.position() != data.len() as u64 {
-            bail!("Trailing bytes after COSE Sign1");
+            bail!("trailing bytes after COSE Sign1");
         }
 
         let array = match value {
@@ -132,14 +132,14 @@ impl CoseSign1 {
         // Algorithm is key 1 in COSE
         let alg = protected_map
             .get(&1)
-            .context("No algorithm in protected header")?;
+            .context("no algorithm in protected header")?;
 
         match alg {
             ciborium::Value::Integer(i) => {
                 let val: i128 = (*i).into();
                 Ok(val as i64)
             }
-            _ => bail!("Algorithm is not an integer"),
+            _ => bail!("algorithm is not an integer"),
         }
     }
 
@@ -160,15 +160,15 @@ impl CoseSign1 {
                 ciborium::Value::Integer(i) => {
                     let val: i128 = (*i).into();
                     if val as i64 != 1 {
-                        bail!("Unsupported critical header parameter: {val}");
+                        bail!("unsupported critical header parameter: {val}");
                     }
                 }
                 ciborium::Value::Text(name) => {
                     if name != "alg" {
-                        bail!("Unsupported critical header parameter: {name}");
+                        bail!("unsupported critical header parameter: {name}");
                     }
                 }
-                _ => bail!("Invalid critical header parameter type"),
+                _ => bail!("invalid critical header parameter type"),
             }
         }
 
@@ -187,15 +187,15 @@ impl CoseSign1 {
 
         let mut buf = Vec::new();
         ciborium::into_writer(&sig_structure, &mut buf)
-            .context("Failed to encode Sig_structure")?;
+            .context("failed to encode Sig_structure")?;
         Ok(buf)
     }
 
     fn protected_map(&self) -> Result<BTreeMap<i64, ciborium::Value>> {
         let mut reader = Cursor::new(&self.protected);
-        let map = ciborium::from_reader(&mut reader).context("Failed to parse protected header")?;
+        let map = ciborium::from_reader(&mut reader).context("failed to parse protected header")?;
         if reader.position() != self.protected.len() as u64 {
-            bail!("Trailing bytes after protected header");
+            bail!("trailing bytes after protected header");
         }
         Ok(map)
     }
@@ -211,6 +211,7 @@ pub struct AttestationDocument {
     /// Timestamp (milliseconds since epoch)
     pub timestamp: u64,
     /// PCR values
+    #[serde(alias = "nitrotpm_pcrs")]
     pub pcrs: BTreeMap<u16, Vec<u8>>,
     /// Certificate (DER-encoded) - the signing certificate
     pub certificate: Vec<u8>,
@@ -233,9 +234,9 @@ impl AttestationDocument {
     pub fn from_cbor(data: &[u8]) -> Result<Self> {
         let mut reader = Cursor::new(data);
         let doc = ciborium::from_reader(&mut reader)
-            .context("Failed to parse attestation document CBOR")?;
+            .context("failed to parse attestation document CBOR")?;
         if reader.position() != data.len() as u64 {
-            bail!("Trailing bytes after attestation document CBOR");
+            bail!("trailing bytes after attestation document CBOR");
         }
         Ok(doc)
     }

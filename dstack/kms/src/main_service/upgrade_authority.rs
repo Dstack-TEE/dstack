@@ -14,37 +14,18 @@ use ra_tls::attestation::VerifiedAttestation;
 use ra_tls::attestation::VersionedAttestation;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use serde_human_bytes as hex_bytes;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct BootInfo {
-    pub attestation_mode: AttestationMode,
-    #[serde(with = "hex_bytes")]
-    pub mr_aggregated: Vec<u8>,
-    #[serde(with = "hex_bytes")]
-    pub os_image_hash: Vec<u8>,
-    #[serde(with = "hex_bytes")]
-    pub mr_system: Vec<u8>,
-    #[serde(with = "hex_bytes")]
-    pub app_id: Vec<u8>,
-    #[serde(with = "hex_bytes")]
-    pub compose_hash: Vec<u8>,
-    #[serde(with = "hex_bytes")]
-    pub instance_id: Vec<u8>,
-    #[serde(with = "hex_bytes")]
-    pub device_id: Vec<u8>,
-    #[serde(with = "hex_bytes")]
-    pub key_provider_info: Vec<u8>,
-    pub tcb_status: String,
-    pub advisory_ids: Vec<String>,
-}
+/// The KMS `bootAuth` payload. This is the verifier's `PolicyBootInfo` — the one
+/// canonical struct shared by the producer (KMS) and the policy input the
+/// verifier advertises — so the two cannot drift a field or an encoding apart.
+pub(crate) use dstack_verifier::PolicyBootInfo as BootInfo;
 
 pub(crate) fn build_boot_info(
     att: &VerifiedAttestation,
     use_boottime_mr: bool,
     vm_config_str: &str,
 ) -> Result<BootInfo> {
+    let mode = att.quote.mode();
     let tcb_status;
     let advisory_ids;
     match att.report.tdx_report() {
@@ -53,14 +34,23 @@ pub(crate) fn build_boot_info(
             advisory_ids = report.advisory_ids.clone();
         }
         None => {
-            tcb_status = "".to_string();
+            // AWS NitroTPM has no TDX/SNP-style TCB advisory surface, so a
+            // verified NitroTPM attestation is normalized to "UpToDate" and
+            // released through the shared on-chain "UpToDate" gate (the same
+            // way amd sev-snp normalizes its own tcb status). Other no-tcb
+            // platforms (e.g. nitro enclave) stay empty and fail-closed.
+            tcb_status = if mode == AttestationMode::DstackAwsNitroTpm {
+                "UpToDate".to_string()
+            } else {
+                "".to_string()
+            };
             advisory_ids = Vec::new();
         }
     };
     let app_info = att.decode_app_info_ex(use_boottime_mr, vm_config_str)?;
     ensure_app_id_len(&app_info.app_id)?;
     Ok(BootInfo {
-        attestation_mode: att.quote.mode(),
+        attestation_mode: mode,
         mr_aggregated: app_info.mr_aggregated.to_vec(),
         os_image_hash: app_info.os_image_hash,
         mr_system: app_info.mr_system.to_vec(),

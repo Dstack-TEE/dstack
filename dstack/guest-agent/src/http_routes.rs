@@ -50,6 +50,7 @@ async fn index(state: &State<AppState>) -> Result<RawHtml<String>, String> {
         vm_config: _,
         cloud_vendor,
         cloud_product,
+        attestation: _,
     } = handler
         .info()
         .await

@@ -697,6 +697,11 @@ pub struct VmConfig {
     /// Authenticode event to that digest.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gcp_measurement: Option<GcpOsImageMeasurementDocument>,
+    /// AWS NitroTPM image measurement material. When present, `os_image_hash`
+    /// is the unified digest `sha256(sha256sum.txt)` and boot PCRs are bound
+    /// via the measurement document (like GCP / TDX lite).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aws_measurement: Option<AwsOsImageMeasurementDocument>,
 }
 
 /// One OVMF SEV metadata section (gpa/size/type) that affects the SEV-SNP
@@ -921,6 +926,65 @@ impl GcpOsImageMeasurementDocument {
             &self.checksum_file,
             &self.measurement,
             GCP_MEASUREMENT_FILENAME,
+        )
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AwsOsImageMeasurement {
+    /// Reference SHA384 PCR4/7/12 (48 bytes each) from nitro-tpm-pcr-compute
+    /// or a live measured boot of the same UKI/AMI.
+    #[serde(with = "hex_bytes")]
+    pub pcr4: Vec<u8>,
+    #[serde(with = "hex_bytes")]
+    pub pcr7: Vec<u8>,
+    #[serde(with = "hex_bytes")]
+    pub pcr12: Vec<u8>,
+}
+
+impl AwsOsImageMeasurement {
+    pub fn to_cbor_vec(&self) -> Vec<u8> {
+        cbor_to_vec(self, "AwsOsImageMeasurement")
+    }
+
+    pub fn from_cbor_slice(bytes: &[u8]) -> Result<Self, String> {
+        cbor_from_slice(bytes, "AwsOsImageMeasurement")
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AwsOsImageMeasurementDocument {
+    /// Raw checksum file bytes (`sha256sum.txt`). `sha256(checksum_file)` is
+    /// the unified `os_image_hash`.
+    #[serde(with = "serde_human_bytes::base64")]
+    pub checksum_file: Vec<u8>,
+    /// Raw bytes of measurement.aws.cbor (AwsOsImageMeasurement).
+    #[serde(with = "serde_human_bytes::base64")]
+    pub measurement: Vec<u8>,
+}
+
+impl AwsOsImageMeasurementDocument {
+    pub fn new(checksum_file: Vec<u8>, measurement: Vec<u8>) -> Self {
+        Self {
+            checksum_file,
+            measurement,
+        }
+    }
+
+    pub fn from_measurement(checksum_file: Vec<u8>, measurement: AwsOsImageMeasurement) -> Self {
+        Self::new(checksum_file, measurement.to_cbor_vec())
+    }
+
+    pub fn decode_measurement(&self) -> Result<AwsOsImageMeasurement, String> {
+        AwsOsImageMeasurement::from_cbor_slice(&self.measurement)
+    }
+
+    pub fn verify(&self, os_image_hash: &[u8]) -> Result<(), String> {
+        verify_measurement_material(
+            os_image_hash,
+            &self.checksum_file,
+            &self.measurement,
+            "measurement.aws.cbor",
         )
     }
 }
@@ -1495,9 +1559,25 @@ pub enum Platform {
     Gcp,
     /// AWS Nitro Enclave
     NitroEnclave,
+    /// AWS EC2 instance with NitroTPM
+    #[serde(rename = "aws-ec2")]
+    AwsEc2,
 }
 
 impl Platform {
+    fn detect_from_dmi(product_name: Option<&str>, sys_vendor: Option<&str>) -> Option<Self> {
+        match product_name.map(str::trim) {
+            Some("dstack" | "qemu") => return Some(Self::Dstack),
+            Some("Google Compute Engine") => return Some(Self::Gcp),
+            _ => {}
+        }
+
+        match sys_vendor.map(str::trim) {
+            Some("Amazon EC2") => Some(Self::AwsEc2),
+            _ => None,
+        }
+    }
+
     /// Detect platform from system DMI information
     pub fn detect() -> Option<Self> {
         // Nitro Enclave: NSM device exists only inside enclave
@@ -1505,14 +1585,9 @@ impl Platform {
             return Some(Self::NitroEnclave);
         }
 
-        if let Ok(board_name) = std::fs::read_to_string("/sys/class/dmi/id/product_name") {
-            match board_name.trim() {
-                "dstack" | "qemu" => return Some(Self::Dstack),
-                "Google Compute Engine" => return Some(Self::Gcp),
-                _ => {}
-            }
-        }
-        None
+        let product_name = std::fs::read_to_string("/sys/class/dmi/id/product_name").ok();
+        let sys_vendor = std::fs::read_to_string("/sys/class/dmi/id/sys_vendor").ok();
+        Self::detect_from_dmi(product_name.as_deref(), sys_vendor.as_deref())
     }
 
     /// Detect platform from system DMI information, default to Dstack if cannot detect
@@ -1526,6 +1601,28 @@ impl Platform {
             Self::Dstack => "dstack",
             Self::Gcp => "gcp",
             Self::NitroEnclave => "aws-nitro-enclave",
+            Self::AwsEc2 => "aws-ec2",
         }
+    }
+}
+
+#[cfg(test)]
+mod platform_tests {
+    use super::Platform;
+
+    #[test]
+    fn detects_aws_ec2_from_dmi_vendor() {
+        assert_eq!(
+            Platform::detect_from_dmi(Some("HVM domU"), Some("Amazon EC2")),
+            Some(Platform::AwsEc2)
+        );
+    }
+
+    #[test]
+    fn product_name_takes_precedence_over_vendor() {
+        assert_eq!(
+            Platform::detect_from_dmi(Some("Google Compute Engine"), Some("Amazon EC2")),
+            Some(Platform::Gcp)
+        );
     }
 }

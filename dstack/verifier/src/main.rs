@@ -27,6 +27,10 @@ struct Cli {
     /// Oneshot mode: verify a single report JSON file and exit
     #[arg(long, value_name = "FILE")]
     verify: Option<String>,
+
+    /// Oneshot mode: verify a DER or PEM RA-TLS certificate and exit
+    #[arg(long, value_name = "FILE")]
+    verify_cert: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -151,6 +155,63 @@ async fn run_oneshot(file_path: &str, config: &Config) -> anyhow::Result<()> {
     Ok(())
 }
 
+async fn run_cert_oneshot(file_path: &str, config: &Config) -> anyhow::Result<()> {
+    use std::fs;
+
+    info!(
+        "running in certificate oneshot mode for file: {}",
+        file_path
+    );
+
+    let cert = fs::read(file_path)
+        .map_err(|e| anyhow::anyhow!("failed to read certificate {}: {}", file_path, e))?;
+
+    let verified = if cert.starts_with(b"-----BEGIN") {
+        ra_tls::attestation::verify_pem(&cert, config.pccs_url.as_deref()).await
+    } else {
+        ra_tls::attestation::verify_der(&cert, config.pccs_url.as_deref()).await
+    }
+    .map_err(|e| anyhow::anyhow!("failed to verify RA-TLS certificate: {:#}", e))?;
+
+    let app_info = verified.attestation.decode_app_info(false).ok();
+    let output = serde_json::json!({
+        "is_valid": true,
+        "details": {
+            "endpoint_identity_verified": true,
+            "attestation_mode": verified.attestation.quote.mode(),
+            "tee_platform": verified.attestation.quote.mode().as_str(),
+            "report_data": hex::encode(verified.attestation.report_data),
+            "public_key_der": hex::encode(&verified.public_key_der),
+            "app_id_extension": verified.app_id.as_ref().map(hex::encode),
+            "special_usage": verified.special_usage,
+            "app_info_extension_present": verified.app_info.is_some(),
+            "app_info": app_info.map(|info| serde_json::json!({
+                "app_id": hex::encode(info.app_id),
+                "compose_hash": hex::encode(info.compose_hash),
+                "instance_id": hex::encode(info.instance_id),
+                "device_id": hex::encode(info.device_id),
+                "mr_system": hex::encode(info.mr_system),
+                "mr_aggregated": hex::encode(info.mr_aggregated),
+                "os_image_hash": hex::encode(info.os_image_hash),
+                "key_provider_info": hex::encode(info.key_provider_info),
+            })),
+        }
+    });
+
+    let output_path = format!("{file_path}.ratls-verification.json");
+    fs::write(&output_path, serde_json::to_string_pretty(&output)?).map_err(|e| {
+        anyhow::anyhow!(
+            "failed to write certificate verification result to {}: {}",
+            output_path,
+            e
+        )
+    })?;
+    info!("stored certificate verification result at {}", output_path);
+    println!("{}", serde_json::to_string_pretty(&output)?);
+
+    Ok(())
+}
+
 #[rocket::main]
 async fn main() -> Result<()> {
     {
@@ -170,10 +231,17 @@ async fn main() -> Result<()> {
 
     let config: Config = figment.extract().context("Failed to load configuration")?;
 
-    // Check for oneshot mode
+    // Check for oneshot modes
     if let Some(file_path) = cli.verify {
         if let Err(e) = run_oneshot(&file_path, &config).await {
             error!("Oneshot verification failed: {:#}", e);
+            std::process::exit(1);
+        }
+        std::process::exit(0);
+    }
+    if let Some(file_path) = cli.verify_cert {
+        if let Err(e) = run_cert_oneshot(&file_path, &config).await {
+            error!("certificate verification failed: {:#}", e);
             std::process::exit(1);
         }
         std::process::exit(0);

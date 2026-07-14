@@ -78,6 +78,8 @@ pub enum PlatformEvidence {
     },
     #[serde(rename = "nitro-enclave")]
     NitroEnclave { nsm_quote: Vec<u8> },
+    #[serde(rename = "aws-nitro-tpm")]
+    AwsNitroTpm { attestation_doc: Vec<u8> },
     #[serde(rename = "sev-snp")]
     SevSnp {
         report: Vec<u8>,
@@ -113,6 +115,13 @@ impl PlatformEvidence {
     pub fn nsm_quote(&self) -> Option<&[u8]> {
         match self {
             Self::NitroEnclave { nsm_quote } => Some(nsm_quote.as_slice()),
+            _ => None,
+        }
+    }
+
+    pub fn aws_nitro_tpm_attestation_doc(&self) -> Option<&[u8]> {
+        match self {
+            Self::AwsNitroTpm { attestation_doc } => Some(attestation_doc.as_slice()),
             _ => None,
         }
     }

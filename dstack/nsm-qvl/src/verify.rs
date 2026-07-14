@@ -15,7 +15,7 @@ const CLOCK_SKEW: Duration = Duration::from_secs(300);
 
 use anyhow::{bail, Context, Result};
 use p384::ecdsa::{signature::hazmat::PrehashVerifier, Signature, VerifyingKey};
-use rustls_pki_types::{CertificateDer, UnixTime};
+use rustls_pki_types::{CertificateDer, TrustAnchor, UnixTime};
 use sha2::{Digest, Sha384};
 use tracing::debug;
 use webpki::{BorrowedCertRevocationList, CertRevocationList, EndEntityCert};
@@ -67,16 +67,16 @@ pub fn verify_attestation(
     now: Option<SystemTime>,
 ) -> Result<NsmVerifiedReport> {
     let now = now.unwrap_or_else(SystemTime::now);
-    let cose = CoseSign1::from_bytes(cose_sign1_bytes).context("Failed to parse COSE Sign1")?;
+    let cose = CoseSign1::from_bytes(cose_sign1_bytes).context("failed to parse COSE Sign1")?;
     cose.validate_critical_headers()
-        .context("Unsupported COSE critical headers")?;
-    let alg = cose.algorithm().context("Failed to get algorithm")?;
+        .context("unsupported COSE critical headers")?;
+    let alg = cose.algorithm().context("failed to get algorithm")?;
     if alg != -35 {
-        bail!("Unsupported COSE algorithm: {alg}. Expected -35 (ES384)");
+        bail!("unsupported COSE algorithm: {alg}. Expected -35 (ES384)");
     }
     let doc = AttestationDocument::from_cbor(&cose.payload)
-        .context("Failed to parse attestation document")?;
-    validate_attestation_document(&doc).context("Attestation document validation failed")?;
+        .context("failed to parse attestation document")?;
+    validate_attestation_document(&doc).context("attestation document validation failed")?;
 
     // Freshness: NSM stamps the document (ms since epoch) at generation time.
     let doc_time = UNIX_EPOCH + Duration::from_millis(doc.timestamp);
@@ -94,7 +94,7 @@ pub fn verify_attestation(
     }
 
     verify_certificate_chain(&doc, root_ca_pem, collateral, Some(now))
-        .context("Certificate chain verification failed")?;
+        .context("certificate chain verification failed")?;
     verify_cose_signature(&cose, &doc.certificate).context("COSE signature verification failed")?;
 
     Ok(NsmVerifiedReport {
@@ -131,81 +131,96 @@ pub async fn verify_attestation_with_crl(
     }
 }
 
-/// Verify the certificate chain from attestation document
+/// Verify the leaf signing certificate chains to the verifier-provided root.
+///
+/// The cabundle is ordered `[ROOT_CERT, INTERM_1, ..., INTERM_N]`; we validate
+/// `TARGET_CERT <- INTERM_N <- ... <- INTERM_1 <- ROOT`. The root embedded in
+/// the cabundle is deliberately dropped (index 0) — trust is anchored on the
+/// verifier-provided root CA, not on anything the attesting device supplied.
 fn verify_certificate_chain(
     doc: &AttestationDocument,
     root_ca_pem: &str,
     collateral: Option<&NsmCollateral>,
     now_override: Option<SystemTime>,
 ) -> Result<()> {
-    // Parse root CA from PEM
-    let root_ca_der = parse_pem_cert(root_ca_pem).context("Failed to parse root CA PEM")?;
+    let root_ca_der = parse_pem_cert(root_ca_pem).context("failed to parse root CA PEM")?;
+    let root_cert_der = CertificateDer::from(root_ca_der);
 
-    // The cabundle order is: [ROOT_CERT, INTERM_1, INTERM_2, ..., INTERM_N]
-    // We need to verify: TARGET_CERT <- INTERM_N <- ... <- INTERM_1 <- ROOT_CERT
-    // But we use the verifier-provided root CA, not the one from cabundle
-
-    // Build intermediate chain from cabundle (excluding root at index 0)
     let intermediates: Vec<CertificateDer<'static>> = doc
         .cabundle
         .iter()
-        .skip(1) // Skip the root cert from cabundle, use verifier-provided root
+        .skip(1)
         .map(|der| CertificateDer::from(der.clone()))
         .collect();
-
     debug!(
-        "Certificate chain: 1 leaf + {} intermediates + 1 root",
+        "certificate chain: 1 leaf + {} intermediates + 1 root",
         intermediates.len()
     );
 
-    // Parse the leaf certificate (signing certificate)
     let leaf_cert_der = CertificateDer::from(doc.certificate.clone());
     let leaf_cert =
-        EndEntityCert::try_from(&leaf_cert_der).context("Failed to parse leaf certificate")?;
-
-    // Create trust anchor from root CA
-    let root_cert_der = CertificateDer::from(root_ca_der);
+        EndEntityCert::try_from(&leaf_cert_der).context("failed to parse leaf certificate")?;
     let trust_anchor = webpki::anchor_from_trusted_cert(&root_cert_der)
-        .context("Failed to create trust anchor from root CA")?;
-
-    // Get current time
-    let now = now_override.unwrap_or(SystemTime::now());
-    let now = now
-        .duration_since(std::time::UNIX_EPOCH)
-        .context("Failed to get current time")?;
-    let time = UnixTime::since_unix_epoch(now);
-
-    let chain_has_crl_dp = has_crl_distribution_points(&doc.certificate)?
-        || doc
-            .cabundle
-            .iter()
-            .skip(1) // Skip the root cert from cabundle
-            .any(|cert| has_crl_distribution_points(cert).unwrap_or(false));
-
-    let root_has_crl_dp = has_crl_distribution_points(root_cert_der.as_ref()).unwrap_or(false);
-
+        .context("failed to create trust anchor from root CA")?;
     let trust_anchors = [trust_anchor];
 
+    let now = now_override.unwrap_or_else(SystemTime::now);
+    let now = now
+        .duration_since(std::time::UNIX_EPOCH)
+        .context("failed to get current time")?;
+    let time = UnixTime::since_unix_epoch(now);
+
     let Some(collateral) = collateral else {
-        leaf_cert
-            .verify_for_usage(
-                webpki::ALL_VERIFICATION_ALGS,
-                &trust_anchors,
-                &intermediates,
-                time,
-                webpki::KeyUsage::client_auth(),
-                None,
-                None,
-            )
-            .context("Certificate chain verification failed")?;
-        return Ok(());
+        return verify_chain(&leaf_cert, &trust_anchors, &intermediates, time, None);
     };
-    if root_has_crl_dp && collateral.root_ca_crl.is_none() {
-        bail!("Root CA has CRL distribution points but no root CA CRL provided");
-    }
-    if chain_has_crl_dp && collateral.crls.is_empty() {
-        bail!("CRL distribution points present but no CRLs downloaded");
-    }
+    verify_chain_with_crl(
+        doc,
+        &leaf_cert,
+        &root_cert_der,
+        &trust_anchors,
+        &intermediates,
+        time,
+        collateral,
+    )
+}
+
+/// Run webpki path validation with an optional CRL-based revocation policy.
+fn verify_chain(
+    leaf_cert: &EndEntityCert,
+    trust_anchors: &[TrustAnchor],
+    intermediates: &[CertificateDer<'static>],
+    time: UnixTime,
+    revocation: Option<webpki::RevocationOptions>,
+) -> Result<()> {
+    leaf_cert
+        .verify_for_usage(
+            webpki::ALL_VERIFICATION_ALGS,
+            trust_anchors,
+            intermediates,
+            time,
+            webpki::KeyUsage::client_auth(),
+            revocation,
+            None,
+        )
+        .context("certificate chain verification failed")?;
+    Ok(())
+}
+
+/// Validate the chain with CRL-based revocation checking.
+///
+/// The Nitro chain and root publish CRL distribution points. If a certificate
+/// advertises one but the collateral didn't supply the matching CRL, fail
+/// closed rather than silently skipping the revocation check.
+fn verify_chain_with_crl(
+    doc: &AttestationDocument,
+    leaf_cert: &EndEntityCert,
+    root_cert_der: &CertificateDer,
+    trust_anchors: &[TrustAnchor],
+    intermediates: &[CertificateDer<'static>],
+    time: UnixTime,
+    collateral: &NsmCollateral,
+) -> Result<()> {
+    ensure_crls_present(doc, root_cert_der, collateral)?;
 
     if let Some(root_ca_crl) = &collateral.root_ca_crl {
         let crl_refs = vec![root_ca_crl.as_slice()];
@@ -213,7 +228,52 @@ fn verify_certificate_chain(
             .context("root CA revoked or invalid CRL")?;
     }
 
-    let crls: Vec<CertRevocationList> = collateral
+    let crls = parse_intermediate_crls(collateral)?;
+    let crl_refs: Vec<&CertRevocationList> = crls.iter().collect();
+    let revocation = webpki::RevocationOptionsBuilder::new(&crl_refs)
+        .map_err(|_| anyhow::anyhow!("failed to create RevocationOptionsBuilder"))?
+        .with_depth(webpki::RevocationCheckDepth::Chain)
+        .with_status_policy(webpki::UnknownStatusPolicy::Allow)
+        .with_expiration_policy(webpki::ExpirationPolicy::Enforce)
+        .build();
+
+    verify_chain(
+        leaf_cert,
+        trust_anchors,
+        intermediates,
+        time,
+        Some(revocation),
+    )
+}
+
+/// Fail closed when a certificate advertises a CRL distribution point but the
+/// collateral didn't supply the matching CRL — otherwise revocation checking
+/// would be silently skipped.
+fn ensure_crls_present(
+    doc: &AttestationDocument,
+    root_cert_der: &CertificateDer,
+    collateral: &NsmCollateral,
+) -> Result<()> {
+    let root_has_crl_dp = has_crl_distribution_points(root_cert_der.as_ref()).unwrap_or(false);
+    if root_has_crl_dp && collateral.root_ca_crl.is_none() {
+        bail!("root CA has CRL distribution points but no root CA CRL provided");
+    }
+
+    let chain_has_crl_dp = has_crl_distribution_points(&doc.certificate)?
+        || doc
+            .cabundle
+            .iter()
+            .skip(1)
+            .any(|cert| has_crl_distribution_points(cert).unwrap_or(false));
+    if chain_has_crl_dp && collateral.crls.is_empty() {
+        bail!("CRL distribution points present but no CRLs downloaded");
+    }
+
+    Ok(())
+}
+
+fn parse_intermediate_crls(collateral: &NsmCollateral) -> Result<Vec<CertRevocationList<'_>>> {
+    collateral
         .crls
         .iter()
         .enumerate()
@@ -222,40 +282,16 @@ fn verify_certificate_chain(
                 .map(|crl| crl.into())
                 .with_context(|| format!("failed to parse intermediate CRL #{i}"))
         })
-        .collect::<Result<Vec<_>>>()?;
-    let crl_refs: Vec<&CertRevocationList> = crls.iter().collect();
-
-    let revocation_builder = webpki::RevocationOptionsBuilder::new(&crl_refs)
-        .map_err(|_| anyhow::anyhow!("failed to create RevocationOptionsBuilder"))?;
-
-    let revocation = revocation_builder
-        .with_depth(webpki::RevocationCheckDepth::Chain)
-        .with_status_policy(webpki::UnknownStatusPolicy::Allow)
-        .with_expiration_policy(webpki::ExpirationPolicy::Enforce)
-        .build();
-
-    leaf_cert
-        .verify_for_usage(
-            webpki::ALL_VERIFICATION_ALGS,
-            &trust_anchors,
-            &intermediates,
-            time,
-            webpki::KeyUsage::client_auth(),
-            Some(revocation),
-            None,
-        )
-        .context("Certificate chain verification failed")?;
-
-    Ok(())
+        .collect()
 }
 
 fn validate_attestation_document(doc: &AttestationDocument) -> Result<()> {
     if doc.digest != DIGEST_SHA384 {
-        bail!("Unsupported digest algorithm: {}", doc.digest);
+        bail!("unsupported digest algorithm: {}", doc.digest);
     }
 
     if doc.pcrs.is_empty() {
-        bail!("No PCRs in attestation document");
+        bail!("no PCRs in attestation document");
     }
 
     for (idx, value) in &doc.pcrs {
@@ -272,39 +308,34 @@ fn validate_attestation_document(doc: &AttestationDocument) -> Result<()> {
 
 /// Verify COSE signature using the certificate's public key
 fn verify_cose_signature(cose: &CoseSign1, cert_der: &[u8]) -> Result<()> {
-    // Extract public key from certificate
     let (_, cert) =
-        X509Certificate::from_der(cert_der).context("Failed to parse signing certificate")?;
+        X509Certificate::from_der(cert_der).context("failed to parse signing certificate")?;
 
     let spki = cert.public_key();
     let public_key_bytes = spki.subject_public_key.data.as_ref();
 
-    // Parse as P-384 public key
     let verifying_key = VerifyingKey::from_sec1_bytes(public_key_bytes)
-        .context("Failed to parse P-384 public key from certificate")?;
+        .context("failed to parse P-384 public key from certificate")?;
 
-    // Build Sig_structure for verification
     let sig_structure = cose
         .sig_structure()
-        .context("Failed to build Sig_structure")?;
+        .context("failed to build Sig_structure")?;
 
-    // Hash the Sig_structure with SHA-384
     let mut hasher = Sha384::new();
     hasher.update(&sig_structure);
     let message_hash = hasher.finalize();
 
-    // Parse signature (P-384 signature is 96 bytes: 48 bytes r + 48 bytes s)
+    // P-384 signature is fixed-width 96 bytes (48-byte r || 48-byte s).
     if cose.signature.len() != 96 {
         bail!(
-            "Invalid P-384 signature length: {} (expected 96)",
+            "invalid P-384 signature length: {} (expected 96)",
             cose.signature.len()
         );
     }
 
     let signature =
-        Signature::from_slice(&cose.signature).context("Failed to parse ECDSA signature")?;
+        Signature::from_slice(&cose.signature).context("failed to parse ECDSA signature")?;
 
-    // Verify signature
     verifying_key
         .verify_prehash(&message_hash, &signature)
         .context("ECDSA signature verification failed")?;
@@ -314,7 +345,7 @@ fn verify_cose_signature(cose: &CoseSign1, cert_der: &[u8]) -> Result<()> {
 
 /// Parse a PEM certificate to DER
 fn parse_pem_cert(pem_str: &str) -> Result<Vec<u8>> {
-    let pem_block = ::pem::parse(pem_str).context("Failed to parse PEM")?;
+    let pem_block = ::pem::parse(pem_str).context("failed to parse PEM")?;
     if pem_block.tag() != "CERTIFICATE" {
         bail!("PEM is not a certificate: {}", pem_block.tag());
     }
@@ -337,7 +368,7 @@ mod tests {
     use crate::AWS_NITRO_ENCLAVES_ROOT_G1;
 
     #[test]
-    fn test_root_ca_parsing() {
+    fn parses_root_ca() {
         let der = parse_pem_cert(AWS_NITRO_ENCLAVES_ROOT_G1).expect("Failed to parse root CA");
         let (_, cert) = X509Certificate::from_der(&der).expect("Failed to parse X509");
 

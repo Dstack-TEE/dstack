@@ -27,9 +27,9 @@ use crate::oids::{
     PHALA_RATLS_APP_ID, PHALA_RATLS_APP_INFO, PHALA_RATLS_ATTESTATION, PHALA_RATLS_CERT_USAGE,
 };
 use crate::traits::CertExt;
-#[cfg(feature = "quote")]
-use dstack_attest::attestation::QuoteContentType;
 use dstack_attest::attestation::{AppInfo, Attestation, VersionedAttestation};
+#[cfg(feature = "quote")]
+use dstack_attest::attestation::{AttestationOptions, QuoteContentType};
 
 /// A CA certificate and private key.
 pub struct CaCert {
@@ -533,6 +533,17 @@ pub fn generate_ra_cert(ca_cert_pem: String, ca_key_pem: String) -> Result<CertP
     generate_ra_cert_with_app_id(ca_cert_pem, ca_key_pem, None)
 }
 
+/// Generate a certificate with RA-TLS quote, event log, and platform-specific
+/// attestation options.
+#[cfg(feature = "quote")]
+pub fn generate_ra_cert_with_options(
+    ca_cert_pem: String,
+    ca_key_pem: String,
+    options: AttestationOptions,
+) -> Result<CertPair> {
+    generate_ra_cert_with_app_id_and_options(ca_cert_pem, ca_key_pem, None, options)
+}
+
 /// Generate a certificate with RA-TLS quote and event log.
 /// If app_id is provided, it will be included in the quote.
 #[cfg(feature = "quote")]
@@ -540,6 +551,23 @@ pub fn generate_ra_cert_with_app_id(
     ca_cert_pem: String,
     ca_key_pem: String,
     app_id: Option<[u8; 20]>,
+) -> Result<CertPair> {
+    generate_ra_cert_with_app_id_and_options(
+        ca_cert_pem,
+        ca_key_pem,
+        app_id,
+        AttestationOptions::default(),
+    )
+}
+
+/// Generate a certificate with RA-TLS quote, optional app ID, and
+/// platform-specific attestation options.
+#[cfg(feature = "quote")]
+pub fn generate_ra_cert_with_app_id_and_options(
+    ca_cert_pem: String,
+    ca_key_pem: String,
+    app_id: Option<[u8; 20]>,
+    options: AttestationOptions,
 ) -> Result<CertPair> {
     use rcgen::{KeyPair, PKCS_ECDSA_P256_SHA256};
 
@@ -550,7 +578,7 @@ pub fn generate_ra_cert_with_app_id(
 
     let report_data = QuoteContentType::RaTlsCert.to_report_data(&pubkey);
 
-    let attestation = Attestation::quote_with_app_id(&report_data, app_id)
+    let attestation = Attestation::quote_with_app_id_and_options(&report_data, app_id, options)
         .context("Failed to get quote for cert pubkey")?
         .into_versioned();
 

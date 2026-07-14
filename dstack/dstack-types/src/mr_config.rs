@@ -138,8 +138,12 @@ impl MrConfigV3 {
         Self::snp_host_data_from_document(&self.to_canonical_json())
     }
 
+    pub fn to_mr_config_id(&self) -> [u8; 48] {
+        Self::mr_config_id_from_document(&self.to_canonical_json())
+    }
+
     pub fn to_tdx_mr_config_id(&self) -> [u8; 48] {
-        Self::tdx_mr_config_id_from_document(&self.to_canonical_json())
+        self.to_mr_config_id()
     }
 
     pub fn to_canonical_json(&self) -> String {
@@ -156,12 +160,16 @@ impl MrConfigV3 {
         Self::hash_document(document)
     }
 
-    pub fn tdx_mr_config_id_from_document(document: &str) -> [u8; 48] {
+    pub fn mr_config_id_from_document(document: &str) -> [u8; 48] {
         let digest = Self::hash_document(document);
         let mut config_id = [0u8; 48];
         config_id[0] = 3;
         config_id[1..33].copy_from_slice(&digest);
         config_id
+    }
+
+    pub fn tdx_mr_config_id_from_document(document: &str) -> [u8; 48] {
+        Self::mr_config_id_from_document(document)
     }
 
     fn hash_document(document: &str) -> [u8; 32] {

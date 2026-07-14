@@ -59,12 +59,10 @@ impl TpmDevice {
 
     /// Send a command to the TPM and receive the response
     pub fn transmit(&mut self, command: &[u8]) -> Result<Vec<u8>> {
-        // Write command
         self.file
             .write_all(command)
             .context("failed to write TPM command")?;
 
-        // Read response
         let mut response = vec![0u8; TPM_MAX_COMMAND_SIZE];
         let n = self
             .file
@@ -88,28 +86,35 @@ pub struct TpmCommand {
 }
 
 impl TpmCommand {
-    /// Create a new command without sessions
-    pub fn new(command_code: TpmCc) -> Self {
+    fn with_tag_and_code(tag: TpmSt, command_code: u32) -> Self {
         let mut buf = CommandBuffer::with_capacity(256);
 
         // Header: tag (2) + size (4) + command code (4)
-        buf.put_u16(TpmSt::NoSessions.to_u16());
+        buf.put_u16(tag.to_u16());
         buf.put_u32(0); // Size placeholder
-        buf.put_u32(command_code.to_u32());
+        buf.put_u32(command_code);
 
         Self { buf }
     }
 
+    /// Create a new command without sessions
+    pub fn new(command_code: TpmCc) -> Self {
+        Self::with_tag_and_code(TpmSt::NoSessions, command_code.to_u32())
+    }
+
     /// Create a new command with sessions
     pub fn with_sessions(command_code: TpmCc) -> Self {
-        let mut buf = CommandBuffer::with_capacity(256);
+        Self::with_tag_and_code(TpmSt::Sessions, command_code.to_u32())
+    }
 
-        // Header: tag (2) + size (4) + command code (4)
-        buf.put_u16(TpmSt::Sessions.to_u16());
-        buf.put_u32(0); // Size placeholder
-        buf.put_u32(command_code.to_u32());
+    /// Create a new command without sessions using a raw command code.
+    pub fn new_raw(command_code: u32) -> Self {
+        Self::with_tag_and_code(TpmSt::NoSessions, command_code)
+    }
 
-        Self { buf }
+    /// Create a new command with sessions using a raw command code.
+    pub fn with_sessions_raw(command_code: u32) -> Self {
+        Self::with_tag_and_code(TpmSt::Sessions, command_code)
     }
 
     /// Add a handle to the command
@@ -163,6 +168,24 @@ impl TpmCommand {
         self.buf.put_u16(0); // Empty nonce
         self.buf.put_u8(0); // Session attributes (continue = 0)
         self.buf.put_u16(0); // Empty auth value
+    }
+
+    /// Add password authorization with a non-empty auth value.
+    pub fn add_password_auth_area(&mut self, auth: &[u8]) {
+        let auth_size: u32 = (4 + 2 + 1 + 2 + auth.len()) as u32;
+
+        self.buf.put_u32(auth_size);
+        self.buf.put_u32(tpm_rh::PW); // Password session handle
+        self.buf.put_u16(0); // Empty nonce
+        self.buf.put_u8(0); // Session attributes
+        self.buf.put_u16(auth.len() as u16);
+        self.buf.put_bytes(auth);
+    }
+
+    /// Add a precomputed authorization area.
+    pub fn add_auth_area(&mut self, auth_area: &[u8]) {
+        self.buf.put_u32(auth_area.len() as u32);
+        self.buf.put_bytes(auth_area);
     }
 
     /// Add a policy session authorization
@@ -275,7 +298,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_command_builder() {
+    fn builds_command_with_header_and_size() {
         let mut cmd = TpmCommand::new(TpmCc::GetRandom);
         cmd.add_u16(32); // Request 32 random bytes
 
@@ -291,7 +314,46 @@ mod tests {
     }
 
     #[test]
-    fn test_response_parse() {
+    fn raw_command_includes_auth_area() {
+        let mut cmd = TpmCommand::with_sessions_raw(0x2000_0001);
+        cmd.add_handle(0x0180_1000);
+        cmd.add_handle(0x0180_1000);
+        cmd.add_auth_area(&[0xaa, 0xbb, 0xcc]);
+
+        let bytes = cmd.finalize();
+
+        assert_eq!(&bytes[0..2], &[0x80, 0x02]);
+        assert_eq!(u32::from_be_bytes(bytes[2..6].try_into().unwrap()), 25);
+        assert_eq!(&bytes[6..10], &[0x20, 0x00, 0x00, 0x01]);
+        assert_eq!(&bytes[10..14], &[0x01, 0x80, 0x10, 0x00]);
+        assert_eq!(&bytes[14..18], &[0x01, 0x80, 0x10, 0x00]);
+        assert_eq!(&bytes[18..22], &[0x00, 0x00, 0x00, 0x03]);
+        assert_eq!(&bytes[22..25], &[0xaa, 0xbb, 0xcc]);
+    }
+
+    #[test]
+    fn password_auth_area_includes_auth_value() {
+        let mut cmd = TpmCommand::with_sessions(TpmCc::NvWrite);
+        cmd.add_handle(0x0180_1000);
+        cmd.add_handle(0x0180_1000);
+        cmd.add_password_auth_area(&[0x11, 0x22, 0x33]);
+        cmd.add_tpm2b(&[0x44]);
+        cmd.add_u16(0);
+
+        let bytes = cmd.finalize();
+
+        assert_eq!(&bytes[0..2], &[0x80, 0x02]);
+        assert_eq!(&bytes[6..10], &[0x00, 0x00, 0x01, 0x37]);
+        assert_eq!(&bytes[18..22], &[0x00, 0x00, 0x00, 0x0c]);
+        assert_eq!(&bytes[22..26], &[0x40, 0x00, 0x00, 0x09]);
+        assert_eq!(&bytes[26..28], &[0x00, 0x00]); // nonce
+        assert_eq!(bytes[28], 0x00); // session attributes
+        assert_eq!(&bytes[29..31], &[0x00, 0x03]);
+        assert_eq!(&bytes[31..34], &[0x11, 0x22, 0x33]);
+    }
+
+    #[test]
+    fn parses_minimal_success_response() {
         // Minimal success response
         let response = vec![
             0x80, 0x01, // TPM_ST_NO_SESSIONS

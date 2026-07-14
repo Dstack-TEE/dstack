@@ -156,6 +156,7 @@ fn check_app(info: &BootInfo, al: &Allowlist) -> BootResponse {
 }
 
 fn check_kms(info: &BootInfo, al: &Allowlist) -> BootResponse {
+    // Pin early/boot-mr-done mrAggregated only (same as bare TDX KMS auth).
     if !contains(&al.kms.mr_aggregated, &info.mr_aggregated) {
         return deny(al, "kms mrAggregated not allowed");
     }

@@ -93,6 +93,10 @@ fn is_unsupported_app_info_quote(err: &anyhow::Error) -> bool {
         || message.contains("unsupported attestation quote for app info decoding")
 }
 
+fn emit_setup_launch_event(event: &str, payload: &[u8]) -> Result<()> {
+    emit_runtime_event(event, payload)
+}
+
 #[derive(clap::Parser)]
 /// Prepare full disk encryption
 pub struct SetupArgs {
@@ -727,13 +731,13 @@ fn truncate(s: &[u8], len: usize) -> &[u8] {
 /// same `instance_id`. To keep `instance_id` unique per running VM we mix in a
 /// per-instance value that lives outside the cloneable disk.
 ///
-/// On GCP we use the public key of the pre-provisioned vTPM Attestation Key. The AK
-/// is derived deterministically from the per-instance Endorsement seed held in the
-/// vTPM (not on the data disk), so a VM cloned from a disk image derives a different
-/// AK while a reboot/stop-start of the same VM keeps it stable — exactly the property
-/// we need. We hash the AK public area rather than its certificate so the binding is
-/// immune to certificate re-issuance (a re-signed cert carries new serial/validity/
-/// signature bytes for the same key).
+/// On GCP we use the public key of the pre-provisioned vTPM Attestation Key. On
+/// AWS EC2 we create the deterministic endorsement primary key and use its
+/// public area. Both values are derived from per-instance TPM state, not from the
+/// cloneable data disk, so a disk snapshot launched as a new VM gets a different
+/// binding while reboot/stop-start of the same VM keeps it stable. We hash public
+/// areas rather than certificates so the binding is immune to certificate
+/// re-issuance.
 ///
 /// Returns `Ok(None)` on platforms with no such binding; the `instance_id` then
 /// keeps its previous seed-only derivation. Fails closed: if the platform is known
@@ -755,6 +759,19 @@ fn platform_instance_binding() -> Result<Option<Vec<u8>>> {
             }
             Ok(Some(sha256(&ak.pub_area).to_vec()))
         }
+        Some(Platform::AwsEc2) => {
+            let mut tpm = tpm2::TpmContext::new(None).context("failed to open NitroTPM")?;
+            let template = tpm2::TpmtPublic::rsa_ek();
+            let (handle, public_area) = tpm
+                .create_primary(tpm2::tpm_rh::ENDORSEMENT, &template)
+                .context("failed to create NitroTPM endorsement primary key")?;
+            let flush_result = tpm.flush_context(handle);
+            if public_area.is_empty() {
+                bail!("NitroTPM endorsement public area is empty");
+            }
+            flush_result.context("failed to flush NitroTPM endorsement primary key")?;
+            Ok(Some(sha256(&public_area).to_vec()))
+        }
         _ => Ok(None),
     }
 }
@@ -762,7 +779,7 @@ fn platform_instance_binding() -> Result<Option<Vec<u8>>> {
 fn emit_key_provider_info(provider_info: &KeyProviderInfo) -> Result<()> {
     info!("Key provider info: {provider_info:?}");
     let provider_info_json = serde_json::to_vec(&provider_info)?;
-    emit_runtime_event("key-provider", &provider_info_json)?;
+    emit_setup_launch_event("key-provider", &provider_info_json)?;
     Ok(())
 }
 
@@ -1345,8 +1362,8 @@ impl<'a> Stage0<'a> {
                 }
                 if let Some(att) = &cert.attestation {
                     match att.decode_app_info(false) {
-                        Ok(kms_info) => emit_runtime_event("mr-kms", &kms_info.mr_aggregated)
-                            .context("Failed to extend mr-kms to RTMR3")?,
+                        Ok(kms_info) => emit_setup_launch_event("mr-kms", &kms_info.mr_aggregated)
+                            .context("failed to extend mr-kms to the launch measurement")?,
                         Err(err) if is_unsupported_app_info_quote(&err) => {
                             warn!("Skipping mr-kms runtime event for unsupported attestation quote: {err:#}");
                         }
@@ -1367,8 +1384,8 @@ impl<'a> Stage0<'a> {
             .await
             .context("Failed to get app key")?;
 
-        emit_runtime_event("os-image-hash", &response.os_image_hash)
-            .context("Failed to extend os-image-hash to RTMR3")?;
+        emit_setup_launch_event("os-image-hash", &response.os_image_hash)
+            .context("failed to extend os-image-hash to the launch measurement")?;
 
         let (_, ca_pem) = x509_parser::pem::parse_x509_pem(tmp_ca.ca_cert.as_bytes())
             .context("Failed to parse ca cert")?;
@@ -1454,7 +1471,9 @@ impl<'a> Stage0<'a> {
         let tpm = TpmContext::detect().context("failed to detect TPM context")?;
 
         // Get PCR policy for sealing (boot chain + app PCR)
-        let pcr_policy = tpm::dstack_pcr_policy();
+        let platform = dstack_types::Platform::detect().context("failed to detect platform")?;
+        let pcr_policy =
+            tpm::dstack_pcr_policy_for_platform(platform).context("unsupported TPM platform")?;
 
         // Try to read sealed seed (bound to PCR values including app PCR)
         if let Some(seed) = tpm
@@ -1870,16 +1889,24 @@ impl<'a> Stage0<'a> {
         // app_id is the deploy-time instance_info.app_id (which defaults to the
         // truncated compose hash when unset, see above). Previously the non-KMS
         // path forced the compose-derived value; now a deployment may pin an
-        // explicit app_id even without a KMS. The app_id is measured into RTMR3
-        // (emit_runtime_event below), so a verifier sees exactly this value — with
+        // explicit app_id even without a KMS. The app_id is measured into the
+        // platform launch register, so a verifier sees exactly this value. With
         // no KMS to bind it, the relying party MUST gate the compose_hash
         // (which launcher build) separately from the app_id (which app).
 
-        emit_runtime_event("system-preparing", &[])?;
-        emit_runtime_event("app-id", &instance_info.app_id)?;
-        emit_runtime_event("compose-hash", &compose_hash)?;
-        emit_runtime_event("instance-id", &instance_id)?;
-        emit_runtime_event("boot-mr-done", &[])?;
+        emit_setup_launch_event("system-preparing", &[])?;
+        emit_setup_launch_event("app-id", &instance_info.app_id)?;
+        emit_setup_launch_event("compose-hash", &compose_hash)?;
+        emit_setup_launch_event("instance-id", &instance_id)?;
+        emit_setup_launch_event("boot-mr-done", &[])?;
+
+        // AWS: measure shared-disk mr_config into PCR8 (not UKI cmdline).
+        if let Some(doc) = self.shared.sys_config.mr_config_document() {
+            let config_id = dstack_types::mr_config::MrConfigV3::mr_config_id_from_document(&doc);
+            dstack_attest::measure_aws_config_pcr(&config_id)
+                .context("failed to measure AWS config into PCR8")?;
+        }
+
         Ok(AppInfo {
             instance_info,
             compose_hash,
@@ -1917,6 +1944,21 @@ impl<'a> Stage0<'a> {
         Ok(())
     }
 
+    fn verify_app_before_key_release(&self, app_info: &AppInfo) -> Result<()> {
+        config_id_verifier::verify_mr_config_id_before_key_release(
+            &app_info.compose_hash,
+            &app_info
+                .instance_info
+                .app_id
+                .as_slice()
+                .try_into()
+                .ok()
+                .context("invalid app id")?,
+            &app_info.instance_info.instance_id,
+            self.shared.app_compose.key_provider(),
+        )
+    }
+
     async fn setup_fs(self) -> Result<Stage1<'a>> {
         let app_info = self
             .measure_app_info()
@@ -1924,6 +1966,8 @@ impl<'a> Stage0<'a> {
         if self.shared.app_compose.key_provider().is_kms() {
             cmd_show_mrs()?;
         }
+        self.verify_app_before_key_release(&app_info)
+            .context("failed to verify app before key release")?;
         self.vmm
             .notify_q("boot.progress", "requesting app keys")
             .await;
@@ -1944,7 +1988,7 @@ impl<'a> Stage0<'a> {
 
         // Parse kernel command line options
         let opts = parse_dstack_options(&self.shared).context("Failed to parse kernel cmdline")?;
-        emit_runtime_event("storage-fs", opts.storage_fs.to_string().as_bytes())?;
+        emit_setup_launch_event("storage-fs", opts.storage_fs.to_string().as_bytes())?;
         info!(
             "Filesystem options: encryption={}, filesystem={:?}",
             opts.storage_encrypted, opts.storage_fs
@@ -1960,7 +2004,7 @@ impl<'a> Stage0<'a> {
                 &serde_json::to_string(&app_info.instance_info)?,
             )
             .await;
-        emit_runtime_event("system-ready", &[])?;
+        emit_setup_launch_event("system-ready", &[])?;
         self.vmm.notify_q("boot.progress", "data disk ready").await;
 
         if !self.shared.app_compose.key_provider().is_kms() {

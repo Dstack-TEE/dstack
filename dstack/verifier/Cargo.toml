@@ -18,6 +18,7 @@ path = "src/lib.rs"
 [[bin]]
 name = "dstack-verifier"
 path = "src/main.rs"
+required-features = ["binary"]
 
 [dependencies]
 anyhow.workspace = true

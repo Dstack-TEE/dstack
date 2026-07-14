@@ -12,6 +12,7 @@
 //! For quote verification, see the tpm-qvl crate.
 
 use anyhow::{bail, Context, Result};
+use dstack_types::Platform;
 use scale::{Decode, Encode};
 use std::path::Path;
 use tracing::{debug, warn};
@@ -32,6 +33,21 @@ pub const SEALED_NV_INDEX: u32 = 0x01801101;
 const APP_PCR: u32 = 14;
 pub fn dstack_pcr_policy() -> PcrSelection {
     PcrSelection::sha256(&[0, 2, APP_PCR])
+}
+
+/// AWS NitroTPM measurement PCRs: boot / OS-image measurements (PCR4, PCR7, PCR12)
+/// plus PCR23 for the dstack runtime measurement.
+///
+/// Defined locally rather than imported from dstack-attest because dstack-attest
+/// depends on this crate, not the other way around.
+const AWS_NITRO_PCRS: [u32; 4] = [4, 7, 12, 23];
+
+pub fn dstack_pcr_policy_for_platform(platform: Platform) -> Result<PcrSelection> {
+    match platform {
+        Platform::Gcp => Ok(dstack_pcr_policy()),
+        Platform::AwsEc2 => Ok(PcrSelection::sha384(&AWS_NITRO_PCRS)),
+        _ => bail!("TPM local key provider is not supported on {platform:?}"),
+    }
 }
 
 pub struct TpmContext {
@@ -141,6 +157,20 @@ impl TpmContext {
 
     pub fn pcr_extend_sha256(&self, pcr: u32, hash: &[u8; 32]) -> Result<()> {
         self.pcr_extend(pcr, hash, "sha256")
+    }
+
+    pub fn pcr_read_single(&self, pcr: u32, bank: &str) -> Result<Vec<u8>> {
+        let mut ctx = self.create_esapi_context()?;
+        let selection = crate::PcrSelection {
+            bank: bank.to_string(),
+            pcrs: vec![pcr],
+        };
+        let values = ctx.pcr_read(&selection)?;
+        values
+            .into_iter()
+            .find(|v| v.index == pcr)
+            .map(|v| v.value)
+            .ok_or_else(|| anyhow::anyhow!("PCR {pcr} not returned by TPM"))
     }
 
     pub fn dump_pcr_values(&self, selection: &PcrSelection) {
@@ -294,7 +324,7 @@ impl TpmContext {
 
     pub fn read_event_log(&self, pcr_index: u32) -> Result<Vec<TpmEvent>> {
         let event_log =
-            TpmEventLog::from_kernel_file().context("Failed to read TPM Event Log from kernel")?;
+            TpmEventLog::from_kernel_file().context("failed to read TPM Event Log from kernel")?;
 
         Ok(event_log.filter_by_pcr(pcr_index))
     }
@@ -305,13 +335,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_pcr_selection_to_string() {
+    fn pcr_selection_to_arg_formats_bank_and_indices() {
         let sel = PcrSelection::sha256(&[0, 1, 2, 7]);
         assert_eq!(sel.to_arg(), "sha256:0,1,2,7");
     }
 
     #[test]
-    fn test_sealed_blob_split() {
+    fn sealed_blob_round_trips() {
         let pub_data = vec![0x01, 0x02, 0x03, 0x04, 0x05];
         let priv_data = vec![0xAA, 0xBB, 0xCC];
 
@@ -323,9 +353,15 @@ mod tests {
     }
 
     #[test]
-    fn test_default_pcr_policy() {
+    fn default_pcr_policy_selects_expected_pcrs() {
         let policy = dstack_pcr_policy();
         assert_eq!(policy.to_arg(), "sha256:0,2,14");
+    }
+
+    #[test]
+    fn aws_pcr_policy_uses_boot_and_runtime_pcrs() {
+        let policy = dstack_pcr_policy_for_platform(Platform::AwsEc2).unwrap();
+        assert_eq!(policy.to_arg(), "sha384:4,7,12,23");
     }
 }
 

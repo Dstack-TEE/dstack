@@ -9,6 +9,7 @@ import app from './index';
 const TEST_CONFIG_PATH = './test-auth-config.json';
 
 const baseBootInfo = {
+  attestationMode: 'dstack-tdx',
   mrAggregated: '0xabc123',
   osImageHash: '0x1fbb0cf9cc6cfbf23d6b779776fabad2c5403d643badb9e5e238615e4960a78a',
   appId: '0xapp123',
@@ -105,7 +106,7 @@ describe('auth-simple', () => {
 
       const sevSnpBootInfo = {
         ...baseBootInfo,
-        attestationMode: 'DstackAmdSevSnp',
+        attestationMode: 'dstack-amd-sev-snp',
         tcbStatus: 'OutOfDate'
       };
       const denied = await app.fetch(new Request('http://localhost/bootAuth/kms', {
@@ -219,7 +220,7 @@ describe('auth-simple', () => {
       expect(json.reason).toContain('MR');
     });
 
-    it('rejects KMS boot when the allowlist is empty', async () => {
+    it('rejects KMS boot when the identity allowlist is empty', async () => {
       writeTestConfig({
         gatewayAppId: '0xgateway',
         osImages: ['0x1fbb0cf9cc6cfbf23d6b779776fabad2c5403d643badb9e5e238615e4960a78a'],
@@ -239,6 +240,7 @@ describe('auth-simple', () => {
       expect(json.isAllowed).toBe(false);
       expect(json.reason).toContain('MR');
     });
+
 
     it('allows KMS boot with allowAnyDevice', async () => {
       writeTestConfig({

@@ -131,7 +131,6 @@ pub fn compute_pcr_digest(
 ) -> Result<Vec<u8>> {
     use sha2::{Digest, Sha256, Sha384, Sha512};
 
-    // Read PCR values
     let pcr_values = read_pcr_values(device, pcr_selection)?;
 
     // Concatenate all PCR values

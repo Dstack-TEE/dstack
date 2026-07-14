@@ -37,9 +37,22 @@ tpm-types.workspace = true
 tracing.workspace = true
 insta.workspace = true
 errify.workspace = true
+aws-nitro-enclaves-nsm-api = { version = "0.4", optional = true }
+ciborium = { workspace = true, optional = true }
+hmac = { version = "0.12", optional = true }
+rand = { workspace = true, optional = true }
+rsa = { workspace = true, optional = true }
+tpm2 = { workspace = true, optional = true }
 
 [features]
-quote = []
+quote = [
+    "aws-nitro-enclaves-nsm-api",
+    "ciborium",
+    "hmac",
+    "rand",
+    "rsa",
+    "tpm2",
+]
 
 [dev-dependencies]
 futures = { workspace = true }

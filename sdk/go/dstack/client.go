@@ -86,10 +86,11 @@ func (r *GetKeyResponse) DecodeSignatureChain() ([][]byte, error) {
 
 // Represents the response from a quote request.
 type GetQuoteResponse struct {
-	Quote      string `json:"quote"`
-	EventLog   string `json:"event_log"`
-	ReportData string `json:"report_data"`
-	VmConfig   string `json:"vm_config"`
+	Quote       string `json:"quote"`
+	EventLog    string `json:"event_log"`
+	ReportData  string `json:"report_data"`
+	VmConfig    string `json:"vm_config"`
+	Attestation string `json:"attestation"`
 }
 
 // DecodeQuote returns the quote bytes
@@ -100,6 +101,10 @@ func (r *GetQuoteResponse) DecodeQuote() ([]byte, error) {
 // DecodeReportData returns the report data bytes
 func (r *GetQuoteResponse) DecodeReportData() ([]byte, error) {
 	return hex.DecodeString(r.ReportData)
+}
+
+func (r *GetQuoteResponse) DecodeAttestation() ([]byte, error) {
+	return hex.DecodeString(r.Attestation)
 }
 
 // DecodeEventLog returns the event log as structured data
@@ -157,6 +162,8 @@ type InfoResponse struct {
 	VmConfig     string `json:"vm_config,omitempty"`
 	CloudVendor  string `json:"cloud_vendor,omitempty"`
 	CloudProduct string `json:"cloud_product,omitempty"`
+	// Detected dstack attestation mode, e.g. "dstack-tdx", "dstack-aws-nitro-tpm".
+	Attestation string `json:"attestation,omitempty"`
 }
 
 // DecodeTcbInfo decodes the TcbInfo string into a TcbInfo struct

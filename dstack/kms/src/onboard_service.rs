@@ -125,6 +125,7 @@ impl OnboardRpc for OnboardHandler {
             PlatformEvidence::SevSnp { .. } => "dstack-amd-sev-snp",
             PlatformEvidence::GcpTdx { .. } => "dstack-gcp-tdx",
             PlatformEvidence::NitroEnclave { .. } => "dstack-nitro-enclave",
+            PlatformEvidence::AwsNitroTpm { .. } => "dstack-aws-nitro-tpm",
         }
         .to_string();
         let verified = attestation

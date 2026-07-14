@@ -10,6 +10,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+aes-gcm.workspace = true
 anyhow.workspace = true
 chrono.workspace = true
 clap.workspace = true
@@ -30,6 +31,7 @@ ra-tls.workspace = true
 load_config.workspace = true
 serde-human-bytes.workspace = true
 reqwest = { workspace = true, features = ["json"] }
+prost.workspace = true
 sha2.workspace = true
 sha3.workspace = true
 k256.workspace = true
@@ -49,6 +51,7 @@ dstack-verifier = { workspace = true, default-features = false }
 dstack-mr.workspace = true
 
 [dev-dependencies]
+cc-eventlog.workspace = true
 dstack-attest.workspace = true
 
 [features]
