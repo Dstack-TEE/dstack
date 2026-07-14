@@ -14,7 +14,7 @@ use dstack_guest_agent::{
     run_server, AppState,
 };
 use dstack_guest_agent_rpc::{AttestResponse, GetQuoteResponse};
-use ra_tls::attestation::{AttestationOptions, PlatformEvidence, VersionedAttestation};
+use ra_tls::attestation::{PlatformEvidence, VersionedAttestation};
 use serde::Deserialize;
 use tracing::warn;
 
@@ -77,12 +77,7 @@ impl PlatformBackend for SimulatorPlatform {
         )
     }
 
-    fn quote_response(
-        &self,
-        report_data: [u8; 64],
-        _options: AttestationOptions,
-        vm_config: &str,
-    ) -> Result<GetQuoteResponse> {
+    fn quote_response(&self, report_data: [u8; 64], vm_config: &str) -> Result<GetQuoteResponse> {
         simulator::simulated_quote_response(
             &self.attestation,
             report_data,
@@ -91,11 +86,7 @@ impl PlatformBackend for SimulatorPlatform {
         )
     }
 
-    fn attest_response(
-        &self,
-        report_data: [u8; 64],
-        _options: AttestationOptions,
-    ) -> Result<AttestResponse> {
+    fn attest_response(&self, report_data: [u8; 64]) -> Result<AttestResponse> {
         simulator::simulated_attest_response(&self.attestation, report_data, self.patch_report_data)
     }
 
@@ -175,9 +166,7 @@ mod tests {
     fn simulator_attest_response_uses_supplied_report_data() {
         let platform = load_fixture_platform();
         let report_data = [0x5a; 64];
-        let response = platform
-            .attest_response(report_data, AttestationOptions::default())
-            .unwrap();
+        let response = platform.attest_response(report_data).unwrap();
         let patched = VersionedAttestation::from_bytes(&response.attestation)
             .unwrap()
             .into_v1();
@@ -194,9 +183,7 @@ mod tests {
         let original = fixture.clone().into_v1().report_data().unwrap();
         let platform = SimulatorPlatform::new(fixture, false);
         let report_data = [0x5a; 64];
-        let response = platform
-            .attest_response(report_data, AttestationOptions::default())
-            .unwrap();
+        let response = platform.attest_response(report_data).unwrap();
         let patched = VersionedAttestation::from_bytes(&response.attestation)
             .unwrap()
             .into_v1();

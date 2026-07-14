@@ -855,8 +855,7 @@ impl GcpOsImageMeasurement {
     }
 
     pub fn to_cbor_vec(&self) -> Result<Vec<u8>> {
-        cbor_to_vec(&CborGcpOsImageMeasurement::from(self))
-            .context("GcpOsImageMeasurement")
+        cbor_to_vec(&CborGcpOsImageMeasurement::from(self)).context("GcpOsImageMeasurement")
     }
 
     pub fn from_cbor_slice(bytes: &[u8]) -> Result<Self> {
@@ -968,8 +967,7 @@ impl AwsOsImageMeasurement {
                 ));
             }
         }
-        let mut buf =
-            Vec::with_capacity(Self::PCR_SHA384_LEN * 3);
+        let mut buf = Vec::with_capacity(Self::PCR_SHA384_LEN * 3);
         buf.extend_from_slice(pcr4);
         buf.extend_from_slice(pcr7);
         buf.extend_from_slice(pcr12);

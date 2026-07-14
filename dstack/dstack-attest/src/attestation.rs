@@ -365,11 +365,6 @@ pub enum QuoteContentType<'a> {
     Custom(&'a str),
 }
 
-/// Optional quote inputs. Kept for call-site stability; AWS no longer takes
-/// per-quote nonce/public_key (RA-TLS report_data is the challenge binding).
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct AttestationOptions {}
-
 /// The default hash algorithm used to hash the report data.
 pub const DEFAULT_HASH_ALGORITHM: &str = "sha512";
 
@@ -2009,30 +2004,16 @@ impl Attestation {
 
     /// Create an attestation from a report data
     pub fn quote(report_data: &[u8; 64]) -> Result<Self> {
-        Self::quote_with_options(report_data, AttestationOptions::default())
-    }
-
-    /// Create an attestation from report data and platform-specific options.
-    pub fn quote_with_options(report_data: &[u8; 64], options: AttestationOptions) -> Result<Self> {
-        Self::quote_with_app_id_and_options(report_data, None, options)
+        Self::quote_with_app_id(report_data, None)
     }
 
     pub fn quote_with_app_id(report_data: &[u8; 64], app_id: Option<[u8; 20]>) -> Result<Self> {
-        Self::quote_with_app_id_and_options(report_data, app_id, AttestationOptions::default())
-    }
-
-    pub fn quote_with_app_id_and_options(
-        report_data: &[u8; 64],
-        app_id: Option<[u8; 20]>,
-        options: AttestationOptions,
-    ) -> Result<Self> {
         // Lock to prevent concurrent quote generation (TDX driver doesn't support it)
         let _guard = QUOTE_LOCK
             .lock()
             .map_err(|_| anyhow!("Quote lock poisoned"))?;
 
         let mode = AttestationMode::detect()?;
-        let _ = options;
         let config = match mode {
             AttestationMode::DstackAmdSevSnp
             | AttestationMode::DstackTdx

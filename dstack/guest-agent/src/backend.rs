@@ -5,24 +5,13 @@
 use anyhow::{Context, Result};
 use dstack_guest_agent_rpc::{AttestResponse, GetQuoteResponse};
 use ra_tls::attestation::Attestation;
-use ra_tls::attestation::{
-    AttestationMode, AttestationOptions, QuoteContentType, VersionedAttestation,
-};
+use ra_tls::attestation::{AttestationMode, QuoteContentType, VersionedAttestation};
 
 pub trait PlatformBackend: Send + Sync {
     fn attestation_for_info(&self) -> Result<VersionedAttestation>;
     fn certificate_attestation(&self, pubkey: &[u8]) -> Result<VersionedAttestation>;
-    fn quote_response(
-        &self,
-        report_data: [u8; 64],
-        options: AttestationOptions,
-        vm_config: &str,
-    ) -> Result<GetQuoteResponse>;
-    fn attest_response(
-        &self,
-        report_data: [u8; 64],
-        options: AttestationOptions,
-    ) -> Result<AttestResponse>;
+    fn quote_response(&self, report_data: [u8; 64], vm_config: &str) -> Result<GetQuoteResponse>;
+    fn attest_response(&self, report_data: [u8; 64]) -> Result<AttestResponse>;
     /// The detected dstack attestation mode string (e.g. `dstack-tdx`),
     /// surfaced in `AppInfo.attestation`.
     fn attestation_mode(&self) -> Result<String>;
@@ -45,14 +34,8 @@ impl PlatformBackend for RealPlatform {
             .into_versioned())
     }
 
-    fn quote_response(
-        &self,
-        report_data: [u8; 64],
-        options: AttestationOptions,
-        vm_config: &str,
-    ) -> Result<GetQuoteResponse> {
-        let attestation = Attestation::quote_with_options(&report_data, options)
-            .context("failed to get quote")?;
+    fn quote_response(&self, report_data: [u8; 64], vm_config: &str) -> Result<GetQuoteResponse> {
+        let attestation = Attestation::quote(&report_data).context("failed to get quote")?;
         let tdx_quote = attestation.get_tdx_quote_bytes();
         let tdx_event_log = attestation.get_tdx_event_log_string_for_config(vm_config);
         // TDX callers already have quote + event_log. Only non-TDX platforms
@@ -74,13 +57,8 @@ impl PlatformBackend for RealPlatform {
         })
     }
 
-    fn attest_response(
-        &self,
-        report_data: [u8; 64],
-        options: AttestationOptions,
-    ) -> Result<AttestResponse> {
-        let attestation = Attestation::quote_with_options(&report_data, options)
-            .context("failed to get attestation")?;
+    fn attest_response(&self, report_data: [u8; 64]) -> Result<AttestResponse> {
+        let attestation = Attestation::quote(&report_data).context("failed to get attestation")?;
         Ok(AttestResponse {
             attestation: attestation.into_versioned().to_bytes()?,
         })

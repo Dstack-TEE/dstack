@@ -140,8 +140,8 @@ fn inspect_measurement(kind: &str, path: &Path) -> Result<Value> {
 }
 
 fn decode_sha384_pcr_hex(label: &str, hex_value: &str) -> Result<Vec<u8>> {
-    let bytes = hex::decode(hex_value.trim())
-        .with_context(|| format!("{label} is not valid hex"))?;
+    let bytes =
+        hex::decode(hex_value.trim()).with_context(|| format!("{label} is not valid hex"))?;
     if bytes.len() != dstack_types::AwsOsImageMeasurement::PCR_SHA384_LEN {
         bail!(
             "{label} must be {} bytes (SHA384), got {}",
