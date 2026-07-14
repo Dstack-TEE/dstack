@@ -8,8 +8,10 @@
 > once. There is no host-supplied config claim to cross-check locally; the
 > key-provider pin is enforced by `verify_key_provider_id`. All dstack
 > events extend **SHA384 PCR14** only (TDX RTMR3 analogue; no PCR23 runtime
-> split). `os_image_hash` prefers unified `sha256(sha256sum.txt)` via
-> `VmConfig.aws_measurement`. GetAppKey is RA-TLS v1 only (no recipient v2).
+> split). `os_image_hash` is the unified `sha256(sha256sum.txt)`;
+> `VmConfig.aws_measurement` is required and must bind the attested boot PCRs
+> (no legacy PCR-derived fallback). GetAppKey is RA-TLS v1 only (no recipient
+> v2).
 > KMS auth pins early **`mrAggregated`** only. Historical sections below that
 > describe cmdline `dstack.mr_config_id`, a shared-disk `MrConfigV3` document,
 > PCR23 runtime, recipient encryption, pre-key-release `mr_config` gating, or

@@ -185,8 +185,8 @@ The relying party should then check `details.boot_info` against its auth policy.
 For AWS NitroTPM, the policy must require:
 
 - accepted `tcbStatus` (`UpToDate` by default, matching the normalized value);
-- accepted `osImageHash` (unified `sha256(sha256sum.txt)` when `aws_measurement`
-  is present; otherwise legacy PCR-derived hash);
+- accepted `osImageHash` (unified `sha256(sha256sum.txt)`; `aws_measurement`
+  is required and must bind the attested boot PCRs);
 - accepted app `composeHash` and `appId`;
 - accepted KMS identity via **early `mrAggregated`** (boot-mr-done), same as
   bare TDX — not `kms.composeHashes`;

@@ -244,7 +244,7 @@ The verifier performs three main verification steps:
    - Treats `vm_config` and any attached measurement material as untrusted inputs until they are bound to the hardware quote
    - For the full-image TDX path, downloads or loads the image identified by `os_image_hash`, checks the image checksum manifest, uses dstack-mr to compute expected MRTD/RTMR0-2, and compares them against the verified measurements from the quote
    - For TDX lite, AMD SEV-SNP, and GCP TDX, verifies that `os_image_hash = sha256(sha256sum.txt)`, where `sha256sum.txt` is the image build's checksum manifest (`<sha256>  <relative-file-name>` lines for image files), that the manifest entry for `measurement.tdx.cbor`, `measurement.snp.cbor`, or `measurement.gcp.cbor` matches the supplied measurement material, and that the measurement material replays to the quote's hardware-signed measurements or GCP TPM UKI event
-   - For AWS NitroTPM, verifies that `os_image_hash = sha256(PCR4 || PCR7 || PCR12)` against the attested boot PCRs
+   - For AWS NitroTPM, requires `vm_config.aws_measurement` and verifies that `os_image_hash = sha256(sha256sum.txt)` matches the measurement material and that its `boot_pcr_digest = sha256(PCR4 || PCR7 || PCR12)` matches the attested boot PCRs
 5. **Policy Input Construction**: Emits `details.boot_info`, the canonical auth-policy payload shape used by dstack KMS `/bootAuth/app` and `/bootAuth/kms`. This object is only present on successful verification.
 6. **Endpoint Certificate Verification**: In `--verify-cert` mode, verifies the
    dstack RA-TLS certificate extension and checks that the attestation

@@ -1110,45 +1110,32 @@ impl CvmVerifier {
         Ok(())
     }
 
-    /// Verify AWS EC2 NitroTPM OS image identity.
-    ///
-    /// Preferred (unified with GCP/TDX lite): `vm_config.aws_measurement` with
-    /// `os_image_hash = sha256(sha256sum.txt)` and
-    /// `boot_pcr_digest = sha256(PCR4||PCR7||PCR12)` bound to the attestation
-    /// document PCRs.
-    ///
-    /// Legacy fallback: `os_image_hash = sha256(PCR4 || PCR7 || PCR12)`.
+    /// Verify AWS EC2 NitroTPM OS image identity (unified with GCP/TDX lite):
+    /// `vm_config.aws_measurement` with `os_image_hash = sha256(sha256sum.txt)`
+    /// and `boot_pcr_digest = sha256(PCR4||PCR7||PCR12)` bound to the
+    /// attestation document PCRs. `aws_measurement` is required.
     fn verify_os_image_hash_for_aws_nitro_tpm(
         &self,
         vm_config: &VmConfig,
         pcrs: &std::collections::BTreeMap<u16, Vec<u8>>,
     ) -> Result<()> {
-        if let Some(document) = &vm_config.aws_measurement {
-            document
-                .verify(&vm_config.os_image_hash)
-                .context("aws measurement material does not match os_image_hash")?;
-            let measurement = document
-                .decode_measurement()
-                .context("failed to decode vm_config.aws_measurement")?;
-            let quoted_digest = dstack_attest::attestation::aws_nitro_tpm_boot_pcr_digest(pcrs)
-                .context("failed to compute NitroTPM boot_pcr_digest from attestation")?;
-            if measurement.boot_pcr_digest.as_slice() != quoted_digest.as_slice() {
-                bail!(
-                    "AWS boot_pcr_digest mismatch: expected={}, quoted={}",
-                    hex::encode(&measurement.boot_pcr_digest),
-                    hex::encode(&quoted_digest)
-                );
-            }
-            return Ok(());
-        }
-
-        let os_image_hash = dstack_attest::attestation::aws_nitro_tpm_boot_pcr_digest(pcrs)
-            .context("failed to compute NitroTPM os_image_hash")?;
-        if os_image_hash != vm_config.os_image_hash {
+        let document = vm_config
+            .aws_measurement
+            .as_ref()
+            .context("vm_config.aws_measurement is required on AWS NitroTPM")?;
+        document
+            .verify(&vm_config.os_image_hash)
+            .context("aws measurement material does not match os_image_hash")?;
+        let measurement = document
+            .decode_measurement()
+            .context("failed to decode vm_config.aws_measurement")?;
+        let quoted_digest = dstack_attest::attestation::aws_nitro_tpm_boot_pcr_digest(pcrs)
+            .context("failed to compute NitroTPM boot_pcr_digest from attestation")?;
+        if measurement.boot_pcr_digest.as_slice() != quoted_digest.as_slice() {
             bail!(
-                "os_image_hash mismatch: expected={}, computed={}",
-                hex::encode(&vm_config.os_image_hash),
-                hex::encode(&os_image_hash)
+                "AWS boot_pcr_digest mismatch: expected={}, quoted={}",
+                hex::encode(&measurement.boot_pcr_digest),
+                hex::encode(&quoted_digest)
             );
         }
         Ok(())

@@ -2017,8 +2017,7 @@ impl Attestation {
             | AttestationMode::DstackTdx
             | AttestationMode::DstackGcpTdx
             // AWS: prefer host-shared sys-config vm_config (carries
-            // aws_measurement + unified os_image_hash). Fall back to empty
-            // when missing; legacy PCR-hash config is filled in below.
+            // aws_measurement + unified os_image_hash); validated below.
             | AttestationMode::DstackAwsNitroTpm => {
                 read_vm_config().context("Failed to read vm config")?
             }
@@ -2098,60 +2097,35 @@ impl Attestation {
                 .context("Failed to serialize config")?
             }
             AttestationQuote::DstackAwsNitroTpm(quote) => {
+                // The embedded vm_config must be self-verifiable against the
+                // signed PCRs: os_image_hash → aws_measurement → boot_pcr_digest.
+                // Anything else is an unverifiable host claim — fail loudly
+                // instead of silently rewriting it.
                 let pcrs = quote
                     .decode_pcrs()
                     .context("failed to decode NitroTPM PCRs")?;
-                if !config.is_empty() {
-                    if let Ok(vm_config) = serde_json::from_str::<VmConfig>(&config) {
-                        if let Some(document) = &vm_config.aws_measurement {
-                            // Preferred: host-shared material must bind quote PCRs.
-                            document
-                                .verify(&vm_config.os_image_hash)
-                                .context("aws_measurement does not match os_image_hash")?;
-                            let measurement = document
-                                .decode_measurement()
-                                .context("failed to decode aws_measurement")?;
-                            let quoted_digest = aws_nitro_tpm_boot_pcr_digest(&pcrs)
-                                .context("failed to compute boot_pcr_digest from attestation")?;
-                            if measurement.boot_pcr_digest.as_slice() != quoted_digest.as_slice() {
-                                bail!(
-                                    "aws_measurement boot_pcr_digest mismatch vs attestation: expected={}, quoted={}",
-                                    hex::encode(&measurement.boot_pcr_digest),
-                                    hex::encode(&quoted_digest)
-                                );
-                            }
-                            config
-                        } else {
-                            // sys-config present but no aws_measurement: keep as-is
-                            // only if os_image_hash matches legacy PCR-derived hash.
-                            let legacy = aws_nitro_tpm_boot_pcr_digest(&pcrs)
-                                .context("failed to compute legacy NitroTPM os_image_hash")?;
-                            if vm_config.os_image_hash == legacy {
-                                config
-                            } else {
-                                serde_json::to_string(&serde_json::json!({
-                                    "os_image_hash": hex::encode(legacy),
-                                }))
-                                .context("failed to serialize config")?
-                            }
-                        }
-                    } else {
-                        let os_image_hash = aws_nitro_tpm_boot_pcr_digest(&pcrs)
-                            .context("failed to compute NitroTPM os_image_hash")?;
-                        serde_json::to_string(&serde_json::json!({
-                            "os_image_hash": hex::encode(os_image_hash),
-                        }))
-                        .context("failed to serialize config")?
-                    }
-                } else {
-                    // Legacy: no sys-config — bind only PCR-derived image hash.
-                    let os_image_hash = aws_nitro_tpm_boot_pcr_digest(&pcrs)
-                        .context("failed to compute NitroTPM os_image_hash")?;
-                    serde_json::to_string(&serde_json::json!({
-                        "os_image_hash": hex::encode(os_image_hash),
-                    }))
-                    .context("failed to serialize config")?
+                let vm_config: VmConfig = serde_json::from_str(&config)
+                    .context("invalid vm_config in sys-config on AWS NitroTPM")?;
+                let document = vm_config
+                    .aws_measurement
+                    .as_ref()
+                    .context("vm_config.aws_measurement is required on AWS NitroTPM")?;
+                document
+                    .verify(&vm_config.os_image_hash)
+                    .context("aws_measurement does not match os_image_hash")?;
+                let measurement = document
+                    .decode_measurement()
+                    .context("failed to decode aws_measurement")?;
+                let quoted_digest = aws_nitro_tpm_boot_pcr_digest(&pcrs)
+                    .context("failed to compute boot_pcr_digest from attestation")?;
+                if measurement.boot_pcr_digest.as_slice() != quoted_digest.as_slice() {
+                    bail!(
+                        "aws_measurement boot_pcr_digest mismatch vs attestation: expected={}, quoted={}",
+                        hex::encode(&measurement.boot_pcr_digest),
+                        hex::encode(&quoted_digest)
+                    );
                 }
+                config
             }
         };
         if let AttestationQuote::DstackAmdSevSnp(quote) = &mut quote {
