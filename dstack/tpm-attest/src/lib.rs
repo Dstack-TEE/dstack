@@ -35,12 +35,15 @@ pub fn dstack_pcr_policy() -> PcrSelection {
     PcrSelection::sha256(&[0, 2, APP_PCR])
 }
 
-/// AWS NitroTPM measurement PCRs: boot / OS-image measurements (PCR4, PCR7, PCR12)
-/// plus PCR23 for the dstack runtime measurement.
+/// AWS NitroTPM local key-provider seal policy: boot / OS-image measurements.
+///
+/// PCR4/7/12 bind the AMI/UKI boot path. App identity is not sealed here —
+/// dstack events use non-resettable SHA384 PCR14 for remote attestation, and
+/// PCR23 is unused (resettable; no launch/runtime split).
 ///
 /// Defined locally rather than imported from dstack-attest because dstack-attest
 /// depends on this crate, not the other way around.
-const AWS_NITRO_PCRS: [u32; 4] = [4, 7, 12, 23];
+const AWS_NITRO_PCRS: [u32; 3] = [4, 7, 12];
 
 pub fn dstack_pcr_policy_for_platform(platform: Platform) -> Result<PcrSelection> {
     match platform {
@@ -359,9 +362,9 @@ mod tests {
     }
 
     #[test]
-    fn aws_pcr_policy_uses_boot_and_runtime_pcrs() {
+    fn aws_pcr_policy_uses_boot_pcrs_only() {
         let policy = dstack_pcr_policy_for_platform(Platform::AwsEc2).unwrap();
-        assert_eq!(policy.to_arg(), "sha384:4,7,12,23");
+        assert_eq!(policy.to_arg(), "sha384:4,7,12");
     }
 }
 
