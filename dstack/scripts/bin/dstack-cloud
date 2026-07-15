@@ -22,7 +22,7 @@ Usage:
     dstack-cloud list                    # List deployments (GCP)
     dstack-cloud fw allow|deny|list ...  # Firewall (GCP)
 
-AWS projects set "platform": "aws" in dstack-app.json and fill aws_config
+AWS projects set "platform": "aws" in app.json and fill aws_config
 (region, s3_bucket or ami_id, …). prepare/deploy only *embed* aws_measurement
 from the release UKI package (digest.txt + sha256sum.txt + measurement.aws.cbor
 produced at image assemble time). They never recompute PCRs or os_image_hash.
@@ -163,17 +163,8 @@ class App:
     key_provider_id: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
-        data = asdict(self)
-        # Convert nested config dataclasses to dicts
-        if isinstance(data.get("gcp_config"), GcpConfig):
-            data["gcp_config"] = data["gcp_config"].to_dict()
-        elif hasattr(self.gcp_config, "to_dict"):
-            data["gcp_config"] = self.gcp_config.to_dict()
-        if isinstance(data.get("aws_config"), AwsConfig):
-            data["aws_config"] = data["aws_config"].to_dict()
-        elif hasattr(self.aws_config, "to_dict"):
-            data["aws_config"] = self.aws_config.to_dict()
-        return data
+        # asdict() recursively converts the nested config dataclasses too
+        return asdict(self)
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'App':
@@ -465,12 +456,6 @@ class CloudDeploymentManager:
         global_aws = global_config.get("aws", {})
         return AwsConfig.from_dict(self._merge_platform_config(local_aws, global_aws))
 
-    def save_aws_config(self, config: AwsConfig) -> None:
-        """Save AWS configuration to app.aws_config."""
-        app = self.load_app_config()
-        app.aws_config = config
-        self.save_app_config(app)
-
     def load_app_config(self, required: bool = False) -> App:
         """Load application configuration.
 
@@ -607,49 +592,36 @@ class CloudDeploymentManager:
 
         platform = (app.platform or "gcp").lower()
         if platform == "gcp":
-            gcp_config = self.load_gcp_config()
-            image_dir = self._find_local_image_dir(
-                global_config,
-                [gcp_config.boot_image, app.os_image],
-                gcp_config.boot_image_tar,
-            )
-            digest_file = image_dir / "digest.txt"
-            checksum_file = image_dir / "sha256sum.txt"
-            measurement_file = image_dir / "measurement.gcp.cbor"
-            for required in (digest_file, checksum_file, measurement_file):
-                if not required.exists():
-                    raise FileNotFoundError(f"required GCP image file not found: {required}")
-            os_image_hash = digest_file.read_text().strip()
-            logger.info(f"read unified OS image hash from {digest_file}")
-            vm_config = {
-                "spec_version": 2,
-                "os_image_hash": os_image_hash,
-                "gcp_measurement": {
-                    "checksum_file": base64.b64encode(checksum_file.read_bytes()).decode("ascii"),
-                    "measurement": base64.b64encode(measurement_file.read_bytes()).decode("ascii"),
-                },
-            }
+            platform_config = self.load_gcp_config()
         elif platform == "aws":
-            aws_config = self.load_aws_config()
-            image_dir = self._find_local_image_dir(
-                global_config,
-                [aws_config.boot_image, app.os_image],
-                aws_config.boot_image_tar,
-            )
-            digest_file = image_dir / "digest.txt"
-            checksum_file = image_dir / "sha256sum.txt"
-            measurement_file = image_dir / "measurement.aws.cbor"
-            for required in (digest_file, checksum_file, measurement_file):
-                if not required.exists():
-                    raise FileNotFoundError(
-                        f"required AWS image file not found: {required}. "
-                        f"Use a release UKI package built by os/image/assemble.sh "
-                        f"(measurement.aws.cbor is fixed at assemble time into "
-                        f"os_image_hash; prepare does not recompute it)."
+            platform_config = self.load_aws_config()
+        else:
+            raise ValueError(f"unsupported platform: {platform!r} (expected 'gcp' or 'aws')")
+
+        image_dir = self._find_local_image_dir(
+            global_config,
+            [platform_config.boot_image, app.os_image],
+            platform_config.boot_image_tar,
+        )
+        digest_file = image_dir / "digest.txt"
+        checksum_file = image_dir / "sha256sum.txt"
+        measurement_name = f"measurement.{platform}.cbor"
+        measurement_file = image_dir / measurement_name
+        for required in (digest_file, checksum_file, measurement_file):
+            if not required.exists():
+                message = f"required {platform.upper()} image file not found: {required}"
+                if platform == "aws":
+                    message += (
+                        ". Use a release UKI package built by os/image/assemble.sh "
+                        "(measurement.aws.cbor is fixed at assemble time into "
+                        "os_image_hash; prepare does not recompute it)."
                     )
-            os_image_hash = digest_file.read_text().strip()
-            checksum_bytes = checksum_file.read_bytes()
-            measurement_bytes = measurement_file.read_bytes()
+                raise FileNotFoundError(message)
+        os_image_hash = digest_file.read_text().strip()
+        checksum_bytes = checksum_file.read_bytes()
+        measurement_bytes = measurement_file.read_bytes()
+
+        if platform == "aws":
             # Sanity: digest.txt must equal sha256(sha256sum.txt)
             actual = hashlib.sha256(checksum_bytes).hexdigest()
             if os_image_hash != actual:
@@ -660,12 +632,10 @@ class CloudDeploymentManager:
             meas_hash = hashlib.sha256(measurement_bytes).hexdigest()
             checksum_text = checksum_bytes.decode("utf-8", errors="replace")
             committed = any(
-                line.split()[:2] == [meas_hash, "measurement.aws.cbor"]
-                or (len(line.split()) >= 2
-                    and line.split()[0] == meas_hash
-                    and line.split()[1].lstrip("*") == "measurement.aws.cbor")
-                for line in checksum_text.splitlines()
-                if line.strip()
+                len(parts) >= 2
+                and parts[0] == meas_hash
+                and parts[1].lstrip("*") == measurement_name
+                for parts in (line.split() for line in checksum_text.splitlines())
             )
             if not committed:
                 raise ValueError(
@@ -673,16 +643,17 @@ class CloudDeploymentManager:
                     "rebuild the image with assemble.sh"
                 )
             logger.info(f"read fixed AWS os_image_hash from {digest_file} (assemble-time)")
-            vm_config = {
-                "spec_version": 2,
-                "os_image_hash": os_image_hash,
-                "aws_measurement": {
-                    "checksum_file": base64.b64encode(checksum_bytes).decode("ascii"),
-                    "measurement": base64.b64encode(measurement_bytes).decode("ascii"),
-                },
-            }
         else:
-            raise ValueError(f"unsupported platform: {platform!r} (expected 'gcp' or 'aws')")
+            logger.info(f"read unified OS image hash from {digest_file}")
+
+        vm_config = {
+            "spec_version": 2,
+            "os_image_hash": os_image_hash,
+            f"{platform}_measurement": {
+                "checksum_file": base64.b64encode(checksum_bytes).decode("ascii"),
+                "measurement": base64.b64encode(measurement_bytes).decode("ascii"),
+            },
+        }
 
         return {
             "kms_urls": kms_urls,
@@ -1403,173 +1374,18 @@ class CloudDeploymentManager:
 
     def _create_shared_disk_image(self, config: GcpConfig, app: App) -> str:
         """Create and upload shared disk image. Returns the image name."""
-        import secrets
-        import shutil
-
-        # Check if mcopy (mtools) is installed
-        if not shutil.which("mcopy"):
-            logger.error("")
-            logger.error("Error: 'mcopy' command not found.")
-            logger.error("")
-            logger.error("Please install mtools:")
-            logger.error("  Ubuntu/Debian: sudo apt-get install mtools")
-            logger.error("  Fedora/RHEL:   sudo dnf install mtools")
-            logger.error("  Arch Linux:     sudo pacman -S mtools")
-            logger.error("")
-            raise FileNotFoundError("mcopy not found. Please install mtools package.")
-
-        # Ensure instance_id_seed and app_id exist
-        if not app.instance_id_seed:
-            app.instance_id_seed = secrets.token_hex(20)
-            logger.info(f"Generated instance_id_seed: {app.instance_id_seed}")
-            self.save_app_config(app)
-
-        if not app.app_id:
-            app.app_id = secrets.token_hex(20)
-            logger.info(f"Generated app_id: {app.app_id}")
-            self.save_app_config(app)
-
-        shared_dir = self._get_shared_dir()
-
-        # Ensure shared directory exists and generate all required files
-        shared_dir.mkdir(parents=True, exist_ok=True)
-
         shared_image_name = f"{config.instance_name}-shared"
-
-        # Process .env file: encrypt and save to shared/.encrypted-env
-        env_path = self.work_dir / app.env_file
-        env_names = []  # Collect environment variable names for allowed_envs
-
-        if env_path.exists():
-            if app.key_provider != "kms":
-                raise ValueError(f"{app.env_file} found but KMS is not enabled. "
-                               f"Enable KMS with --key-provider kms or remove {app.env_file}")
-
-            if not app.app_id:
-                raise ValueError(f"{app.env_file} found but app_id is not set. "
-                               f"Run 'dstack-cloud prepare' to generate app_id")
-
-            # Parse .env file
-            envs = self._parse_env_file(env_path)
-            if envs:
-                env_names = list(envs.keys())
-
-                # Get KMS URL from global config
-                global_config = self._load_global_config()
-                kms_urls = global_config.get("services", {}).get("kms_urls", [])
-                if not kms_urls:
-                    raise ValueError("KMS enabled but no kms_urls configured in global config")
-
-                # Get encryption public key from KMS
-                kms_url = kms_urls[0]
-                pubkey = self._get_app_encrypt_pub_key(app.app_id, kms_url)
-
-                # Encrypt environment variables
-                encrypted_env = self._encrypt_env(envs, pubkey)
-
-                # Save to shared/.encrypted-env
-                encrypted_file = shared_dir / ".encrypted-env"
-                with open(encrypted_file, 'wb') as f:
-                    f.write(encrypted_env)
-                logger.info(f"Encrypted {app.env_file} -> {encrypted_file}")
-            else:
-                logger.info(f"{app.env_file} is empty, skipping")
-
-        # Regenerate sys-config + app-compose before creating the shared disk image
-        global_config = self._load_global_config()
-        sys_config_content = self._generate_sys_config(global_config, app)
-        sys_config_path = shared_dir / ".sys-config.json"
-        with open(sys_config_path, 'w') as f:
-            json.dump(sys_config_content, f, indent=2)
-        logger.info(f"Generated {sys_config_path}")
-
-        # Generate .instance_info
-        instance_info = {
-            "instance_id_seed": app.instance_id_seed,
-            "app_id": app.app_id
-        }
-        instance_info_path = shared_dir / ".instance_info"
-        with open(instance_info_path, 'w') as f:
-            json.dump(instance_info, f, indent=2)
-        logger.info(f"Generated {instance_info_path}")
-
-        # Write app-compose.json (verbatim if app.app_compose_file is set, else generated)
-        self._emit_app_compose(app, shared_dir, env_names if env_names else None)
 
         with tempfile.TemporaryDirectory() as work_dir:
             work_path = Path(work_dir)
-            raw_file = work_path / "disk.raw"
-
-            # Create FAT32 disk image (no root required). Size it to fit the
-            # shared files: app-compose.json can be large (e.g. self-contained
-            # apps embed their payload, up to the 50M guest cap), so the old
-            # fixed 8M overflowed and mcopy failed. Floor at 8M (small composes
-            # unchanged), + 4M FAT/metadata margin, rounded up to a whole MiB.
-            logger.info("Creating shared disk image...")
-            _shared_files = [shared_dir / f for f in
-                             ("app-compose.json", ".sys-config.json", ".instance_info", ".encrypted-env")]
-            _shared_files.append(self.work_dir / ".user-config")
-            _total = sum(p.stat().st_size for p in _shared_files if p.exists())
-            _bytes = max(8 * 1024 * 1024, _total + 4 * 1024 * 1024)
-            _bytes = ((_bytes + (1024 * 1024 - 1)) // (1024 * 1024)) * (1024 * 1024)
-            disk_size = str(_bytes)  # bytes
-            logger.info(f"Shared disk size: {_bytes // (1024 * 1024)}M (files {_total} bytes)")
-            subprocess.run(
-                ["truncate", "-s", disk_size, str(raw_file)],
-                check=True
-            )
-            subprocess.run(
-                ["mkfs.fat", "-F", "32", "-n", "DSTACKSHR", str(raw_file)],
-                check=True, capture_output=True
-            )
-
-            # Use mtools to copy files without mounting (no root required)
-            # Copy generated system files from shared directory
-            required_files = ["app-compose.json", ".sys-config.json", ".instance_info"]
-            for f in required_files:
-                src = shared_dir / f
-                if src.exists():
-                    subprocess.run(
-                        ["mcopy", "-i", str(raw_file), str(src), "::"],
-                        check=True
-                    )
-                else:
-                    raise FileNotFoundError(f"Required file {f} not found in {shared_dir}")
-
-            # Copy optional system files from shared directory
-            optional_files = [".encrypted-env"]
-            for f in optional_files:
-                src = shared_dir / f
-                if src.exists():
-                    subprocess.run(
-                        ["mcopy", "-i", str(raw_file), str(src), "::"],
-                        check=True
-                    )
-
-            # Copy other user-editable files from project root
-            user_files = {
-                ".user-config": ".user-config",
-            }
-
-            for src_name, dst_name in user_files.items():
-                src_path = self.work_dir / src_name
-                if src_path.exists():
-                    subprocess.run(
-                        ["mcopy", "-i", str(raw_file), str(src_path), f"::{dst_name}"],
-                        check=True
-                    )
-                    logger.info(f"Included {src_name}")
-                else:
-                    logger.warning(f"{src_name} not found, skipping")
-
-            # Create tar
+            raw_file = self._build_shared_raw_disk(app, work_path)
             tar_file = work_path / "shared-disk.tar.gz"
             subprocess.run(
-                ["tar", "-C", str(work_path), "-czvf", str(tar_file), "disk.raw"],
-                check=True, capture_output=True
+                ["tar", "-C", str(work_path), "-czvf", str(tar_file), raw_file.name],
+                check=True,
+                capture_output=True,
             )
 
-            # Upload to GCS
             logger.info("Uploading shared disk image to GCS...")
             self._run_gsutil([
                 "cp", str(tar_file), f"{config.bucket}/{shared_image_name}.tar.gz"
@@ -1589,7 +1405,6 @@ class CloudDeploymentManager:
                 "--quiet"
             ])
 
-        # Create GCP image
         logger.info("Creating GCP image from shared disk...")
         self._run_gcloud([
             "compute", "images", "create", shared_image_name,
@@ -1597,7 +1412,6 @@ class CloudDeploymentManager:
             f"--source-uri={config.bucket}/{shared_image_name}.tar.gz",
             "--guest-os-features=GVNIC"
         ])
-
         return shared_image_name
 
     def deploy(self, delete_existing: bool = False,
@@ -1627,7 +1441,7 @@ class CloudDeploymentManager:
         if missing:
             raise ValueError(
                 f"Missing required GCP configuration: {', '.join(missing)}. "
-                f"Run 'dstack-cloud new <name>' to create a project or edit dstack-app.json."
+                f"Run 'dstack-cloud new <name>' to create a project or edit app.json."
             )
 
         if not config.bucket and config.project:
@@ -1781,84 +1595,106 @@ class CloudDeploymentManager:
         result = self._run_aws(args + ["--output", "json"], capture=True, check=True)
         return json.loads(result.stdout) if result.stdout.strip() else {}
 
-    def _build_shared_raw_disk(self, app: App) -> Path:
-        """Build a local FAT32 DSTACKSHR disk.raw for the shared config."""
+    def _build_shared_raw_disk(self, app: App, work_path: Optional[Path] = None) -> Path:
+        """Populate shared config and build a local FAT32 DSTACKSHR disk.raw."""
         import secrets
         import shutil
 
         if not shutil.which("mcopy"):
-            raise FileNotFoundError(
-                "mcopy not found. Install mtools (apt install mtools)."
-            )
+            logger.error("")
+            logger.error("Error: 'mcopy' command not found.")
+            logger.error("")
+            logger.error("Please install mtools:")
+            logger.error("  Ubuntu/Debian: sudo apt-get install mtools")
+            logger.error("  Fedora/RHEL:   sudo dnf install mtools")
+            logger.error("  Arch Linux:     sudo pacman -S mtools")
+            logger.error("")
+            raise FileNotFoundError("mcopy not found. Please install mtools package.")
 
         if not app.instance_id_seed:
             app.instance_id_seed = secrets.token_hex(20)
+            logger.info(f"Generated instance_id_seed: {app.instance_id_seed}")
             self.save_app_config(app)
         if not app.app_id:
             app.app_id = secrets.token_hex(20)
+            logger.info(f"Generated app_id: {app.app_id}")
             self.save_app_config(app)
 
         shared_dir = self._get_shared_dir()
         shared_dir.mkdir(parents=True, exist_ok=True)
+        global_config = self._load_global_config()
 
         env_path = self.work_dir / app.env_file
         env_names: List[str] = []
         if env_path.exists():
             if app.key_provider != "kms":
                 raise ValueError(
-                    f"{app.env_file} found but key_provider is not kms. "
-                    f"Use key_provider=kms or remove {app.env_file}"
+                    f"{app.env_file} found but KMS is not enabled. "
+                    f"Enable KMS with --key-provider kms or remove {app.env_file}"
                 )
             envs = self._parse_env_file(env_path)
             if envs:
                 env_names = list(envs.keys())
-                global_config = self._load_global_config()
                 kms_urls = global_config.get("services", {}).get("kms_urls", [])
                 if not kms_urls:
-                    raise ValueError("kms_urls not configured in global config")
+                    raise ValueError("KMS enabled but no kms_urls configured in global config")
                 pubkey = self._get_app_encrypt_pub_key(app.app_id, kms_urls[0])
-                encrypted_env = self._encrypt_env(envs, pubkey)
-                with open(shared_dir / ".encrypted-env", "wb") as f:
-                    f.write(encrypted_env)
+                encrypted_file = shared_dir / ".encrypted-env"
+                with open(encrypted_file, "wb") as f:
+                    f.write(self._encrypt_env(envs, pubkey))
+                logger.info(f"Encrypted {app.env_file} -> {encrypted_file}")
+            else:
+                logger.info(f"{app.env_file} is empty, skipping")
 
-        global_config = self._load_global_config()
-        sys_config_content = self._generate_sys_config(global_config, app)
-        with open(shared_dir / ".sys-config.json", "w") as f:
-            json.dump(sys_config_content, f, indent=2)
+        sys_config_path = shared_dir / ".sys-config.json"
+        with open(sys_config_path, "w") as f:
+            json.dump(self._generate_sys_config(global_config, app), f, indent=2)
+        logger.info(f"Generated {sys_config_path}")
 
-        instance_info = {
-            "instance_id_seed": app.instance_id_seed,
-            "app_id": app.app_id,
-        }
-        with open(shared_dir / ".instance_info", "w") as f:
-            json.dump(instance_info, f, indent=2)
+        instance_info_path = shared_dir / ".instance_info"
+        with open(instance_info_path, "w") as f:
+            json.dump({
+                "instance_id_seed": app.instance_id_seed,
+                "app_id": app.app_id,
+            }, f, indent=2)
+        logger.info(f"Generated {instance_info_path}")
 
-        self._emit_app_compose(app, shared_dir, env_names if env_names else None)
+        self._emit_app_compose(app, shared_dir, env_names or None)
 
-        work_path = Path(tempfile.mkdtemp(prefix="dstack-shared-"))
+        if work_path is None:
+            work_path = Path(tempfile.mkdtemp(prefix="dstack-shared-"))
         raw_file = work_path / "disk.raw"
-        _shared_files = [
-            shared_dir / f
-            for f in ("app-compose.json", ".sys-config.json", ".instance_info", ".encrypted-env")
-        ]
-        _shared_files.append(self.work_dir / ".user-config")
-        _total = sum(p.stat().st_size for p in _shared_files if p.exists())
-        _bytes = max(8 * 1024 * 1024, _total + 4 * 1024 * 1024)
-        _bytes = ((_bytes + (1024 * 1024 - 1)) // (1024 * 1024)) * (1024 * 1024)
-        logger.info(f"shared disk size: {_bytes // (1024 * 1024)}M (files {_total} bytes)")
-        subprocess.run(["truncate", "-s", str(_bytes), str(raw_file)], check=True)
+        required_files = [shared_dir / name for name in (
+            "app-compose.json", ".sys-config.json", ".instance_info"
+        )]
+        for path in required_files:
+            if not path.exists():
+                raise FileNotFoundError(f"Required file {path.name} not found in {shared_dir}")
+
+        shared_files = required_files + [shared_dir / ".encrypted-env"]
+        user_config = self.work_dir / ".user-config"
+        total = sum(path.stat().st_size for path in [*shared_files, user_config] if path.exists())
+        size = max(8 * 1024 * 1024, total + 4 * 1024 * 1024)
+        size = ((size + 1024 * 1024 - 1) // (1024 * 1024)) * (1024 * 1024)
+        logger.info(f"Shared disk size: {size // (1024 * 1024)}M (files {total} bytes)")
+
+        subprocess.run(["truncate", "-s", str(size), str(raw_file)], check=True)
         subprocess.run(
             ["mkfs.fat", "-F", "32", "-n", "DSTACKSHR", str(raw_file)],
             check=True,
             capture_output=True,
         )
-        for name in ("app-compose.json", ".sys-config.json", ".instance_info", ".encrypted-env"):
-            src = shared_dir / name
+        for src in shared_files:
             if src.exists():
                 subprocess.run(["mcopy", "-i", str(raw_file), str(src), "::"], check=True)
-        user_config = self.work_dir / ".user-config"
         if user_config.exists():
-            subprocess.run(["mcopy", "-i", str(raw_file), str(user_config), "::"], check=True)
+            subprocess.run(
+                ["mcopy", "-i", str(raw_file), str(user_config), "::.user-config"],
+                check=True,
+            )
+            logger.info("Included .user-config")
+        else:
+            logger.warning(".user-config not found, skipping")
         return raw_file
 
     def _aws_import_snapshot_from_raw(
@@ -2036,7 +1872,7 @@ class CloudDeploymentManager:
         if missing:
             raise ValueError(
                 f"missing required AWS configuration: {', '.join(missing)}. "
-                f"Edit dstack-app.json aws_config."
+                f"Edit app.json aws_config."
             )
         if not config.ami_id and not config.s3_bucket:
             raise ValueError(
