@@ -174,6 +174,11 @@ async fn run_cert_oneshot(file_path: &str, config: &Config) -> anyhow::Result<()
     .map_err(|e| anyhow::anyhow!("failed to verify RA-TLS certificate: {:#}", e))?;
 
     let app_info = verified.attestation.decode_app_info(false).ok();
+    // Bind the reported os_image_hash to the attested boot measurement. For
+    // every platform except TDX legacy this is a self-contained check (no image
+    // download); relying parties should only trust `os_image_hash` when
+    // `os_image_hash_verified` is true.
+    let os_image_hash_verified = verify_cert_os_image_hash(&verified.attestation, config).await;
     let output = serde_json::json!({
         "is_valid": true,
         "details": {
@@ -193,6 +198,7 @@ async fn run_cert_oneshot(file_path: &str, config: &Config) -> anyhow::Result<()
                 "mr_system": hex::encode(info.mr_system),
                 "mr_aggregated": hex::encode(info.mr_aggregated),
                 "os_image_hash": hex::encode(info.os_image_hash),
+                "os_image_hash_verified": os_image_hash_verified,
                 "key_provider_info": hex::encode(info.key_provider_info),
             })),
         }
@@ -210,6 +216,42 @@ async fn run_cert_oneshot(file_path: &str, config: &Config) -> anyhow::Result<()
     println!("{}", serde_json::to_string_pretty(&output)?);
 
     Ok(())
+}
+
+/// Verify that an RA-TLS certificate's `os_image_hash` is bound to its attested
+/// boot measurement.
+///
+/// Returns `true` only when the binding checks out. Returns `false` for TDX
+/// legacy (whose binding needs an image download that this oneshot mode does not
+/// perform) and for any binding failure. Every other platform — AWS NitroTPM,
+/// SEV-SNP, Nitro Enclave, GCP TDX, and TDX lite — is verified from
+/// self-contained material carried in the attestation, without network access.
+async fn verify_cert_os_image_hash(
+    attestation: &ra_tls::attestation::VerifiedAttestation,
+    config: &Config,
+) -> bool {
+    use ra_tls::attestation::AttestationQuote;
+    // Only TDX legacy verification downloads the image; skip it here and report
+    // the os_image_hash as unverified rather than fetching an image.
+    let needs_image_download = matches!(attestation.quote, AttestationQuote::DstackTdx(_))
+        && attestation
+            .decode_vm_config("")
+            .map(|vm_config| vm_config.tdx_attestation_variant.is_legacy())
+            .unwrap_or(true);
+    if needs_image_download {
+        return false;
+    }
+    let verifier = CvmVerifier::new(
+        config.image_cache_dir.clone(),
+        config.image_download_url.clone(),
+        std::time::Duration::from_secs(config.image_download_timeout_secs),
+        config.pccs_url.clone(),
+    );
+    let mut details = VerificationDetails::default();
+    verifier
+        .verify_os_image_hash(String::new(), attestation, false, &mut details)
+        .await
+        .is_ok()
 }
 
 #[rocket::main]

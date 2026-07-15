@@ -241,11 +241,15 @@ Require the generated `endpoint-cert.pem.ratls-verification.json` to contain:
 jq -e '
   .is_valid == true and
   .details.endpoint_identity_verified == true and
-  .details.attestation_mode == "dstack-aws-nitro-tpm"
+  .details.attestation_mode == "dstack-aws-nitro-tpm" and
+  .details.app_info.os_image_hash_verified == true
 ' endpoint-cert.pem.ratls-verification.json
 ```
 
-Then apply the same allowlist policy to the verified app identity. If the
+On AWS NitroTPM the `os_image_hash` binding is self-contained, so
+`os_image_hash_verified` is `true` here; only then should you trust
+`.details.app_info.os_image_hash`. Then apply the same allowlist policy to the
+verified app identity (including `os_image_hash`). If the
 deployment uses signed responses or an attested gateway instead of direct
 RA-TLS, the response-signing key or gateway certificate must be bound to
 verified NitroTPM evidence with equivalent policy checks.

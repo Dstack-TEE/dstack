@@ -158,7 +158,14 @@ The verification checks that:
    NitroTPM documents for EC2;
 3. the attestation `report_data` is
    `QuoteContentType::RaTlsCert(SubjectPublicKeyInfo)`, so the verified
-   attestation is bound to this exact TLS public key.
+   attestation is bound to this exact TLS public key; and
+4. the reported `app_info.os_image_hash` is bound to the attested boot
+   measurement, surfaced as `app_info.os_image_hash_verified`. This binding is
+   self-contained (no image download) for AWS NitroTPM, SEV-SNP, Nitro Enclave,
+   GCP TDX, and TDX lite. It is reported as `false` for the TDX legacy
+   full-image path, which needs an image download that this cert mode does not
+   perform — use `/verify` for that path. Only trust `os_image_hash` when
+   `os_image_hash_verified` is `true`.
 
 Clients, gateways, or release validators should combine this certificate-level
 check with the policy fields emitted by `/verify`: accepted OS image,
@@ -250,7 +257,10 @@ The verifier performs three main verification steps:
    dstack RA-TLS certificate extension and checks that the attestation
    `report_data` is bound to the certificate SubjectPublicKeyInfo. This is the
    production path for preventing an admin-controlled DNS/LB/proxy endpoint from
-   impersonating an attested workload with a different TLS key.
+   impersonating an attested workload with a different TLS key. It also binds
+   `app_info.os_image_hash` to the attested boot measurement and reports the
+   result as `app_info.os_image_hash_verified` (self-contained for all platforms
+   except the TDX legacy full-image path, which reports `false`).
 
 `details.acpi_tables_verified` is `true` only for the full-image TDX path, where the verifier recomputes ACPI table contents and checks the resulting RTMRs against the quote. It is `false` for TDX lite, which uses the quote's named ACPI DATA digests without validating table contents, and for non-TDX platforms where ACPI table verification is not applicable.
 
