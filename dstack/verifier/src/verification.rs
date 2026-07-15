@@ -33,8 +33,8 @@ use tokio::{io::AsyncWriteExt, process::Command};
 use tracing::{debug, info, warn};
 
 use crate::types::{
-    AcpiTables, PolicyBootInfo, RtmrEventEntry, RtmrEventStatus, RtmrMismatch,
-    VerificationDetails, VerificationRequest, VerificationResponse,
+    AcpiTables, PolicyBootInfo, RtmrEventEntry, RtmrEventStatus, RtmrMismatch, VerificationDetails,
+    VerificationRequest, VerificationResponse,
 };
 
 fn policy_tcb_fields(attestation: &VerifiedAttestation) -> (String, Vec<String>) {
@@ -579,12 +579,12 @@ impl CvmVerifier {
             Ok(att) => {
                 details.quote_verified = true;
                 details.attestation_mode = Some(att.quote.mode());
-                details.tcb_status = att.report.tdx_report().map(|r| r.status.clone());
-                details.advisory_ids = att
-                    .report
-                    .tdx_report()
-                    .map(|r| r.advisory_ids.clone())
-                    .unwrap_or_default();
+                // keep the top-level tcb_status consistent with the
+                // boot_info.tcbStatus fed to the auth policy (notably AWS
+                // NitroTPM, which is normalized to "UpToDate" there).
+                let (tcb_status, advisory_ids) = policy_tcb_fields(&att);
+                details.tcb_status = (!tcb_status.is_empty()).then_some(tcb_status);
+                details.advisory_ids = advisory_ids;
                 details.report_data = Some(hex::encode(att.report_data));
                 att
             }
