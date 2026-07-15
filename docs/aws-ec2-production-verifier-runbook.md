@@ -5,15 +5,16 @@ deployments under the account-admin-untrusted threat model.
 
 The relying party must not trust an AMI ID, DNS name, load balancer, AWS KMS
 key, or dstack KMS endpoint by itself. It should accept a workload only after
-checking the release evidence, NitroTPM evidence freshness, policy `BootInfo`,
+checking the release evidence, NitroTPM challenge binding, policy `BootInfo`,
 and endpoint identity.
 
 ## Inputs
 
 - The release image package for the exact release candidate, produced by the
   unified build entrypoint `os/build.sh` (the `<name>-<version>-uki.tar.gz`
-  dist archive). It contains the UKI, `sha256sum.txt`, `digest.txt`,
-  `metadata.json`, `measurement.aws.cbor`, and the `aws-pcrs.json` side-car.
+  dist archive). It contains `disk.raw`, `sha256sum.txt`, `digest.txt`, and
+  `measurement.{gcp,aws}.cbor`. The build output also contains an
+  `aws-pcrs.json` side-car, but that file is not part of the archive.
 - The dstack monorepo sources pinned at the exact release revision, for the
   reproducible rebuild.
 - A dstack verifier built from this repository.
@@ -36,12 +37,21 @@ git status --porcelain   # must be empty at the pinned release revision
 ./os/build.sh            # reproducible Yocto backend; emits images/<name>-<version>-uki.tar.gz
 ```
 
-Compare the rebuilt package against the published one:
+Compare the rebuilt package against the published one. `sha256sum.txt` lists
+the full build inputs, not only the files in the UKI archive, so do not run
+`sha256sum -c` inside the extracted UKI package:
 
 ```bash
-tar -xzf <name>-<version>-uki.tar.gz
-sha256sum -c sha256sum.txt        # artifacts match their recorded hashes
-sha256sum sha256sum.txt           # os_image_hash; must equal digest.txt and the rebuilt value
+mkdir published rebuilt
+tar -xzf published-<name>-<version>-uki.tar.gz -C published --strip-components=1
+tar -xzf rebuilt-<name>-<version>-uki.tar.gz -C rebuilt --strip-components=1
+
+cmp published/sha256sum.txt rebuilt/sha256sum.txt
+cmp published/measurement.aws.cbor rebuilt/measurement.aws.cbor
+cmp published/disk.raw rebuilt/disk.raw
+
+expected=$(sha256sum published/sha256sum.txt | awk '{print $1}')
+test "$expected" = "$(cat published/digest.txt)"
 ```
 
 BitBake enforces per-recipe input checksums during the rebuild; for full
@@ -60,9 +70,9 @@ os/yocto/tools/aws/audit-aws-ec2-image-hardening.sh \
 
 ## 2. Register the AMI and deploy with `dstack-cloud`
 
-After the release artifact hashes and AWS PCR references match the release
-package, deploy with **`dstack-cloud`** (`platform: aws`). The CLI imports the
-local UKI `disk.raw` as an Attestable AMI (UEFI + NitroTPM v2.0) when
+After the release artifact hashes and AWS PCR references match the published
+release evidence, deploy with **`dstack-cloud`** (`platform: aws`). The CLI
+imports the local UKI `disk.raw` as an Attestable AMI (UEFI + NitroTPM v2.0) when
 `aws_config.ami_id` is empty, builds the shared config disk with
 `aws_measurement` from `measurement.aws.cbor`, and launches the instance.
 
@@ -73,7 +83,7 @@ export PATH="$PATH:$(pwd)/dstack/scripts/bin"
 # project for AWS
 dstack-cloud new my-aws-app --platform aws --region us-west-2
 cd my-aws-app
-# edit dstack-app.json: aws_config.s3_bucket (vmimport), subnet/security groups as needed
+# edit app.json: aws_config.s3_bucket (vmimport), subnet/security groups as needed
 # pull or place the UKI package (must include measurement.aws.cbor) under image_search_paths
 
 dstack-cloud pull dstack-0.6.0   # UKI package must include assemble-time measurement.aws.cbor
@@ -93,11 +103,15 @@ toolchain for reference measurements):
 
 ```bash
 cargo install --git https://github.com/aws/NitroTPM-Tools --locked nitro-tpm-pcr-compute
+# The UKI is EFI/BOOT/BOOTX64.EFI in the 256 MiB EFI partition at 1 MiB.
+dd if=published/disk.raw of=efi.img bs=1M skip=1 count=256 status=none
+mcopy -i efi.img ::EFI/BOOT/BOOTX64.EFI dstack-uki.efi
 nitro-tpm-pcr-compute --image dstack-uki.efi
 pesign -h -P -i dstack-uki.efi   # UKI AuthentiCode SHA256
 ```
 
-The PCRs must match `aws-pcrs.json` in the release package, and their digest
+The PCRs must match the build-output `aws-pcrs.json` side-car when it is
+published with the release, and their digest
 `sha256(PCR4 || PCR7 || PCR12)` must equal the `boot_pcr_digest` committed in
 `measurement.aws.cbor`. For the generic hardened UKI this is the boot PCR set
 plus the UKI hash:
@@ -129,8 +143,7 @@ expected MrConfig V2 config id: <mr-config-id>
 
 Challenge binding uses **report_data → NitroTPM user_data** (same role as
 TDX/GCP): the relying party embeds its own challenge in `report_data` and
-checks it against the returned `boot_info`. There is no GetAppKey recipient
-`public_key` / v2 encryption path.
+checks it against `details.report_data` in the verifier result.
 
 Example verifier request shape:
 
@@ -150,11 +163,16 @@ Require:
 
 ```bash
 # from the release package: os_image_hash = sha256(sha256sum.txt)
-expected_os_image_hash=$(sha256sum sha256sum.txt | awk '{print $1}')
+expected_os_image_hash=$(sha256sum published/sha256sum.txt | awk '{print $1}')
+# exact 64-byte challenge used when collecting this attestation, as hex
+expected_report_data="<128-hex-characters>"
 
-jq -e --arg expected_os_image_hash "$expected_os_image_hash" '
+jq -e \
+  --arg expected_os_image_hash "$expected_os_image_hash" \
+  --arg expected_report_data "$expected_report_data" '
   .is_valid == true and
   .details.quote_verified == true and
+  .details.report_data == $expected_report_data and
   .details.boot_info.attestationMode == "dstack-aws-nitro-tpm" and
   .details.boot_info.tcbStatus == "UpToDate" and
   .details.boot_info.osImageHash == $expected_os_image_hash
@@ -177,7 +195,7 @@ For AWS NitroTPM, the policy must require:
   is required and must bind the attested boot PCRs);
 - accepted app `composeHash` and `appId`;
 - accepted KMS identity via **early `mrAggregated`** (boot-mr-done), same as
-  bare TDX — not `kms.composeHashes`;
+  bare TDX;
 - verified PCR14 event-log replay (single event lane; no PCR23 runtime split) —
   this is the authoritative app-identity binding (`composeHash`, `appId`,
   `instance-id`, `key-provider`);
@@ -227,7 +245,6 @@ Require the generated `endpoint-cert.pem.ratls-verification.json` to contain:
 ```bash
 jq -e '
   .is_valid == true and
-  .details.endpoint_identity_verified == true and
   .details.attestation_mode == "dstack-aws-nitro-tpm" and
   .details.app_info.os_image_hash_verified == true
 ' endpoint-cert.pem.ratls-verification.json
@@ -248,12 +265,13 @@ An AWS EC2 NitroTPM deployment can be promoted only when:
 1. a reproducible rebuild from the clean, pinned release sources yields a
    byte-identical `sha256sum.txt` (and therefore the same `os_image_hash`);
 2. Yocto input content is mirrored or otherwise available by content hash;
-3. independently recomputed AWS PCRs and the UKI AuthentiCode hash match
-   `aws-pcrs.json` and the `boot_pcr_digest` in `measurement.aws.cbor`;
+3. independently recomputed AWS PCRs and the UKI AuthentiCode hash match the
+   published build-output `aws-pcrs.json` side-car (when provided) and the
+   `boot_pcr_digest` in `measurement.aws.cbor`;
 4. the hardening audit has zero failures and zero warnings, or every warning has
    a documented release exception;
 5. the registered AMI has a live EC2 smoke record for the exact AMI ID and
    root snapshot in the release review package;
 6. `/verify` returns a valid AWS `BootInfo`;
-7. auth policy accepts only the intended OS, app, KMS, and recipient-key state;
+7. auth policy accepts only the intended OS, app, and KMS state;
 8. endpoint identity is RA-TLS, signed-response, or attested-gateway bound.

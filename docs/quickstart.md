@@ -115,6 +115,8 @@ These are encrypted before leaving your machine and only decrypted inside the TE
 Deploy to your cloud provider:
 
 ```bash
+# AWS without a preconfigured aws_config.ami_id needs the local UKI package first:
+# dstack-cloud pull <release-image-name>
 dstack-cloud deploy
 ```
 

@@ -26,8 +26,8 @@ Environment:
   DSTACK_TAR_RELEASE     Create release tarballs (default: 1)
   ENABLE_UKI_IMAGE       Create the optional UKI disk image (default: 1)
   DSTACK_MR_BIN          Existing dstack-mr binary
-  NITRO_TPM_PCR_COMPUTE_BIN  Host nitro-tpm-pcr-compute (UKI AWS PCRs; required
-                         unless Docker AL2023 fallback is available)
+  NITRO_TPM_PCR_COMPUTE_BIN  Pinned host nitro-tpm-pcr-compute (required for
+                         UKI AWS PCRs; overrides PATH lookup)
   NITRO_TPM_PCR_PK/KEK/DB    Optional Secure Boot ESL paths for PCR7
 EOF
 }
@@ -456,7 +456,6 @@ if [[ "$UKI_CREATED" = "1" ]]; then
     # measurement.aws.cbor -> sha256sum.txt -> os_image_hash, i.e. the
     # measurement the KMS and verifiers enforce. Only a version-pinned,
     # operator-installed tool may produce it.
-    pcr_json=
     if [[ -z "$pcr_compute_bin" ]]; then
         echo "Error: cannot produce measurement.aws.cbor for UKI image." >&2
         echo "Install the pinned host tool:" >&2
@@ -485,7 +484,7 @@ if [[ "$UKI_CREATED" = "1" ]]; then
     echo "Generating measurement.aws.cbor via ${DSTACK_MR_BIN}"
     "${DSTACK_MR_BIN}" aws-measurement-cbor "$pcr4" "$pcr7" "$pcr12" \
         > "${OUTPUT_DIR}/measurement.aws.cbor"
-    # Keep machine-readable PCR side-car for release manifests (not in digest).
+    # Keep a machine-readable side-car for verifier-side PCR comparison.
     printf '%s\n' "$pcr_json" > "${OUTPUT_DIR}/aws-pcrs.json"
     HAVE_MEASUREMENT_AWS=1
 fi
@@ -538,13 +537,7 @@ if [ "$DSTACK_TAR_RELEASE" = "1" ]; then
     if [[ "$UKI_CREATED" = "1" ]]; then
         rm -rf "${IMAGE_TAR_UKI}"
         echo "Archiving UKI image to ${IMAGE_TAR_UKI}"
-        UKI_FILES=(disk.raw digest.txt sha256sum.txt)
-        if [ "$HAVE_MEASUREMENT_GCP" = "1" ]; then
-            UKI_FILES+=(measurement.gcp.cbor)
-        fi
-        if [ "$HAVE_MEASUREMENT_AWS" = "1" ]; then
-            UKI_FILES+=(measurement.aws.cbor)
-        fi
+        UKI_FILES=(disk.raw digest.txt sha256sum.txt measurement.gcp.cbor measurement.aws.cbor)
         UKI_TAR_FILES=()
         for file in "${UKI_FILES[@]}"; do
             UKI_TAR_FILES+=("$TAR_DIR_NAME/$file")

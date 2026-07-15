@@ -88,9 +88,8 @@ that early MR is precomputable.
 
 The verifier that calls auth-simple must already have verified the NitroTPM
 Attestation Document, AWS NitroTPM PKI chain, boot PCRs, PCR14 launch-event
-replay (the authoritative app-identity binding), and any recipient public key
-used for encrypted key release. The PCR8 `MrConfig` V2 config commitment is an
-optional shortcut for verifiers that skip PCR14 replay, not a required check.
+replay, and OS image binding. PCR8 is an optional third-party shortcut, not a
+required dstack check; see `docs/aws-ec2-production-verifier-runbook.md`.
 auth-simple authorizes the resulting canonical `BootInfo`; it does not verify
 raw NitroTPM evidence by itself.
 
@@ -208,9 +207,8 @@ KMS boot authorization.
 1. `tcbStatus` must be listed in `allowedTcbStatuses` (default: only `"UpToDate"`). AWS NitroTPM is normalized to `"UpToDate"` by the KMS before it reaches auth-simple.
 2. Every `advisoryIds` entry must be listed in `allowedAdvisoryIds` (default: none allowed)
 3. `osImageHash` must be in `osImages` array
-4. At least one KMS identity allowlist must be configured:
-   - `kms.mrAggregated` early/boot-mr-done aggregate MR (required)
-6. `deviceId` must be in `kms.devices` unless `allowAnyDevice` is true
+4. `mrAggregated` must be in the `kms.mrAggregated` early/boot-mr-done allowlist
+5. `deviceId` must be in `kms.devices` unless `allowAnyDevice` is true
 
 ### App Boot Validation
 

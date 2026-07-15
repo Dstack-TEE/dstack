@@ -39,17 +39,6 @@ with `TEST_FETCH_CRL` set (that path reaches AWS CRL endpoints over the network)
 - The exact capture command, host operator, and the enclave workload were **not
   recorded** in-repo — treat those as unknown.
 
-## Verified values (informational)
-
-```
-module_id:   i-0827e799ec9232d44-enc019b55a68bd2ed4b
-instance:    i-0827e799ec9232d44  (region us-east-1)
-digest:      SHA384
-signature:   ECDSA P-384 / SHA-384  (COSE alg -35 / ES384, 96 bytes)
-cert window: 2025-12-25T13:15:34Z .. 2025-12-25T16:15:37Z  (short-lived NSM cert)
-root CA:     CN=aws.nitro-enclaves (G1), valid 2019-10-28 .. 2049-10-28
-```
-
 ## Refreshing
 
 NSM leaf certificates expire a few hours after issuance, so this fixture's

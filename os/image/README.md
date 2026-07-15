@@ -20,11 +20,11 @@ Both are listed in `sha256sum.txt`, so
 Deploy tooling (`dstack-cloud prepare`) only **embeds** these files into
 `VmConfig`; it must not recompute PCRs (that would change the image identity).
 
-AWS PCR precompute prefers a host `nitro-tpm-pcr-compute` binary (Rust,
+AWS PCR precompute requires a pinned host `nitro-tpm-pcr-compute` binary (Rust,
 [aws/NitroTPM-Tools](https://github.com/aws/NitroTPM-Tools)). Set
-`NITRO_TPM_PCR_COMPUTE_BIN` or install it on `PATH`. If missing, assemble falls
-back to Docker `amazonlinux:2023` + `aws-nitro-tpm-tools`; if neither is
-available, UKI assemble **fails** (no silent skip).
+`NITRO_TPM_PCR_COMPUTE_BIN` or install it on `PATH`, for example with
+`cargo install --git https://github.com/aws/NitroTPM-Tools --locked nitro-tpm-pcr-compute`.
+If it is missing, UKI assembly fails.
 
 `mk-image-mr.sh <release.tar.gz>` creates the flattened, rootfs-free
 `mr_<digest>.tar.gz` bundle consumed by verifier/KMS image-download endpoints.
