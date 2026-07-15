@@ -429,10 +429,12 @@ fi
 # os_image_hash = sha256(sha256sum.txt) is fixed for the release artifact.
 # prepare/deploy only *embed* this material; they must never recompute it.
 #
-# Prefer a host `nitro-tpm-pcr-compute` (Rust tool from aws/NitroTPM-Tools).
+# Requires a host `nitro-tpm-pcr-compute` (Rust tool from aws/NitroTPM-Tools,
+# install with --locked). No unpinned container fallback: this value ends up
+# in os_image_hash, so only a version-pinned operator-installed tool may
+# produce it.
 # Optional: NITRO_TPM_PCR_COMPUTE_BIN=/path/to/bin
 # Optional Secure Boot ESL inputs (PCR7): NITRO_TPM_PCR_PK/KEK/DB (.esl paths)
-# Fallback: Docker amazonlinux:2023 + aws-nitro-tpm-tools when host tool missing.
 HAVE_MEASUREMENT_AWS=0
 if [[ "$UKI_CREATED" = "1" ]]; then
     if [[ -z "${UKI_IMAGE:-}" || ! -f "${UKI_IMAGE}" ]]; then
@@ -445,41 +447,32 @@ if [[ "$UKI_CREATED" = "1" ]]; then
     fi
 
     uki_abs=$(realpath "$UKI_IMAGE")
-    uki_dir=$(dirname "$uki_abs")
-    uki_base=$(basename "$uki_abs")
     pcr_compute_bin="${NITRO_TPM_PCR_COMPUTE_BIN:-}"
     if [[ -z "$pcr_compute_bin" ]] && command -v nitro-tpm-pcr-compute >/dev/null 2>&1; then
         pcr_compute_bin=$(command -v nitro-tpm-pcr-compute)
     fi
 
+    # No unpinned fallback here on purpose: the computed PCRs feed
+    # measurement.aws.cbor -> sha256sum.txt -> os_image_hash, i.e. the
+    # measurement the KMS and verifiers enforce. Only a version-pinned,
+    # operator-installed tool may produce it.
     pcr_json=
-    if [[ -n "$pcr_compute_bin" ]]; then
-        echo "Generating AWS PCRs via host ${pcr_compute_bin}"
-        pcr_args=(--image "$uki_abs")
-        # Secure Boot variable stores (optional; affects PCR7)
-        [[ -n "${NITRO_TPM_PCR_PK:-}" ]] && pcr_args+=(--PK "$NITRO_TPM_PCR_PK")
-        [[ -n "${NITRO_TPM_PCR_KEK:-}" ]] && pcr_args+=(--KEK "$NITRO_TPM_PCR_KEK")
-        [[ -n "${NITRO_TPM_PCR_DB:-}" ]] && pcr_args+=(--db "$NITRO_TPM_PCR_DB")
-        pcr_json=$("$pcr_compute_bin" "${pcr_args[@]}") \
-            || { echo "Error: nitro-tpm-pcr-compute failed" >&2; exit 1; }
-    elif command -v docker >/dev/null 2>&1; then
-        echo "Generating AWS PCRs via docker amazonlinux:2023 (nitro-tpm-pcr-compute)"
-        pcr_json=$(
-            docker run --rm --platform linux/amd64 \
-              -e UKI_BASENAME="$uki_base" \
-              -v "$uki_dir":/artifacts:ro \
-              amazonlinux:2023 \
-              bash -lc 'dnf install -y aws-nitro-tpm-tools >/tmp/dnf.log && nitro-tpm-pcr-compute --image "/artifacts/$UKI_BASENAME"'
-        ) || { echo "Error: docker nitro-tpm-pcr-compute failed" >&2; exit 1; }
-    else
+    if [[ -z "$pcr_compute_bin" ]]; then
         echo "Error: cannot produce measurement.aws.cbor for UKI image." >&2
-        echo "Install host tool (preferred):" >&2
+        echo "Install the pinned host tool:" >&2
         echo "  cargo install --git https://github.com/aws/NitroTPM-Tools --locked nitro-tpm-pcr-compute" >&2
         echo "  # or set NITRO_TPM_PCR_COMPUTE_BIN=/path/to/nitro-tpm-pcr-compute" >&2
-        echo "Or provide Docker for the amazonlinux:2023 fallback." >&2
         echo "measurement.aws.cbor must be fixed at assemble time for a stable os_image_hash." >&2
         exit 1
     fi
+    echo "Generating AWS PCRs via host ${pcr_compute_bin}"
+    pcr_args=(--image "$uki_abs")
+    # Secure Boot variable stores (optional; affects PCR7)
+    [[ -n "${NITRO_TPM_PCR_PK:-}" ]] && pcr_args+=(--PK "$NITRO_TPM_PCR_PK")
+    [[ -n "${NITRO_TPM_PCR_KEK:-}" ]] && pcr_args+=(--KEK "$NITRO_TPM_PCR_KEK")
+    [[ -n "${NITRO_TPM_PCR_DB:-}" ]] && pcr_args+=(--db "$NITRO_TPM_PCR_DB")
+    pcr_json=$("$pcr_compute_bin" "${pcr_args[@]}") \
+        || { echo "Error: nitro-tpm-pcr-compute failed" >&2; exit 1; }
 
     pcr4=$(jq -r '.Measurements.PCR4 // empty' <<<"$pcr_json")
     pcr7=$(jq -r '.Measurements.PCR7 // empty' <<<"$pcr_json")
