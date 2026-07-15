@@ -90,7 +90,7 @@ The workflow below uses TDX names because the hello-world tutorial deploys a TDX
 | AMD SEV-SNP | SNP report fields and measured config ID | `MrConfigV3` app/config target |
 | AWS EC2 NitroTPM | NitroTPM Attestation Document, AWS NitroTPM PKI, PCR4/PCR7/PCR12, OS image hash | SHA384 PCR14 launch event log through `system-ready` |
 
-For AWS EC2 NitroTPM, PCR23 is not the launch authorization register. It is resettable from the guest and is reserved for optional post-launch runtime telemetry. AWS verifiers must check PCR14 replay, the PCR8 config commitment (`MrConfig` V2 of the measured app identity), and the recipient public key when key material is returned to the instance.
+For AWS EC2 NitroTPM, PCR23 is not the launch authorization register. It is resettable from the guest and is reserved for optional post-launch runtime telemetry. AWS verifiers must check PCR14 replay (the authoritative app-identity binding) and the recipient public key when key material is returned to the instance. The PCR8 `MrConfig` V2 config commitment is an optional shortcut for lightweight verifiers that would rather recompute the expected PCR8 from the known compose hash and key-provider than replay the PCR14 event log; dstack's own verifier does not check it.
 
 ## Understanding RA-TLS
 
@@ -784,7 +784,7 @@ OVMF   VM Config  Kernel   Initrd   App
 
 Each register builds on the previous one. A compromised kernel (RTMR1) could fake application measurements (RTMR3), so always verify from the firmware up.
 
-On AWS EC2 NitroTPM, the equivalent production chain is: verify the NitroTPM Attestation Document signature and AWS NitroTPM PKI, check the expected boot PCRs and OS image hash, replay the PCR14 launch event log, check the PCR8 config commitment, and bind any released key material to the attested recipient public key.
+On AWS EC2 NitroTPM, the equivalent production chain is: verify the NitroTPM Attestation Document signature and AWS NitroTPM PKI, check the expected boot PCRs and OS image hash, replay the PCR14 launch event log, and bind any released key material to the attested recipient public key. (Optionally, a verifier that skips PCR14 event-log replay can instead recompute and check the PCR8 `MrConfig` V2 config commitment for the compose hash and key-provider.)
 
 ### 4. Keep expected measurements updated
 

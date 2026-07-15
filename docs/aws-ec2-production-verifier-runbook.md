@@ -191,10 +191,19 @@ For AWS NitroTPM, the policy must require:
 - accepted app `composeHash` and `appId`;
 - accepted KMS identity via **early `mrAggregated`** (boot-mr-done), same as
   bare TDX — not `kms.composeHashes`;
-- verified PCR14 event-log replay (single event lane; no PCR23 runtime split);
-- verified PCR8 config commitment against the expected `MrConfig` V2 config id
-  (computed from the measured app identity);
+- verified PCR14 event-log replay (single event lane; no PCR23 runtime split) —
+  this is the authoritative app-identity binding (`composeHash`, `appId`,
+  `instance-id`, `key-provider`);
 - non-empty freshness via `report_data` for external verifier flows.
+
+The guest also extends a `MrConfig` V2 **config commitment** into **PCR8**
+(`PCR8 = sha384(0^48 || config_id)`). This is **optional** and exists only to
+let a lightweight third-party verifier confirm `composeHash` + key-provider
+*without* implementing PCR14 event-log replay: recompute
+`expected_aws_config_pcr(MrConfig::V2 { compose_hash, app_id, key_provider,
+key_provider_id })` and compare it to PCR8. dstack's own verifier and KMS do
+**not** check PCR8 — they rely on PCR14 replay — so it is not part of the
+required policy above.
 
 The `attestationMode` field is carried in the verified boot info for
 observability; a relying party may additionally assert

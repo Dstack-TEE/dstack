@@ -88,9 +88,11 @@ that early MR is precomputable.
 
 The verifier that calls auth-simple must already have verified the NitroTPM
 Attestation Document, AWS NitroTPM PKI chain, boot PCRs, PCR14 launch-event
-replay, `dstack.mr_config_id`, and any recipient public key used for encrypted
-key release. auth-simple authorizes the resulting canonical `BootInfo`; it does
-not verify raw NitroTPM evidence by itself.
+replay (the authoritative app-identity binding), and any recipient public key
+used for encrypted key release. The PCR8 `MrConfig` V2 config commitment is an
+optional shortcut for verifiers that skip PCR14 replay, not a required check.
+auth-simple authorizes the resulting canonical `BootInfo`; it does not verify
+raw NitroTPM evidence by itself.
 
 ### Configuration Fields
 

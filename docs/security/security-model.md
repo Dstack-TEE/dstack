@@ -153,7 +153,7 @@ Use this checklist to verify a workload running in a dstack CVM.
 - [ ] compose-hash matches your docker-compose
 - [ ] All images use SHA256 digests (no mutable tags)
 - [ ] Launch event log replays correctly (RTMR3 on TDX-family platforms, PCR14 on AWS NitroTPM)
-- [ ] Config commitment matches the expected app/config target (TDX `mr_config_id` / SEV `HOST_DATA` / AWS PCR8 extended with the guest-computed `MrConfig` V2 id)
+- [ ] Config commitment matches the expected app/config target (TDX `mr_config_id` / SEV `HOST_DATA`; on AWS NitroTPM the app/config identity is bound by PCR14 event-log replay, and the guest-computed `MrConfig` V2 PCR8 commitment is only an optional shortcut for verifiers that skip that replay)
 - [ ] reportData contains your challenge (replay protection)
 
 **Key management verification:**

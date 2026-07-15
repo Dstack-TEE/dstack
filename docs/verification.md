@@ -32,14 +32,18 @@ by platform.
 | --- | --- | --- | --- |
 | TDX-family dstack CVM | MRTD and RTMR0-2 | RTMR3 event log | `report_data` or RA-TLS certificate binding |
 | AMD SEV-SNP | SNP report fields plus `HOST_DATA`/config ID | `MrConfigV3` app/config target | report data or RA-TLS certificate binding |
-| AWS EC2 NitroTPM | NitroTPM Attestation Document, AWS NitroTPM PKI, PCR4/PCR7/PCR12, OS image hash | SHA384 PCR14 launch event log through `system-ready`, plus the PCR8 config commitment (`MrConfig` V2 of the measured app identity) | NitroTPM `nonce`, `user_data`, `public_key`, or RA-TLS certificate binding |
+| AWS EC2 NitroTPM | NitroTPM Attestation Document, AWS NitroTPM PKI, PCR4/PCR7/PCR12, OS image hash | SHA384 PCR14 launch event log through `system-ready` (authoritative; the PCR8 `MrConfig` V2 config commitment is an optional shortcut for verifiers that skip event-log replay) | NitroTPM `nonce`, `user_data`, `public_key`, or RA-TLS certificate binding |
 
 For AWS EC2 NitroTPM, do not treat PCR23 as the launch authorization register.
 PCR23 is resettable from the guest and is reserved for optional post-launch
 runtime telemetry. Production AWS policy must require the NitroTPM attestation
 mode, valid AWS NitroTPM signature chain, expected boot PCRs, expected OS image
-hash, verified PCR14 replay, the expected PCR8 config commitment, and the
-recipient public key when key material is returned to the instance.
+hash, verified PCR14 replay, and the recipient public key when key material is
+returned to the instance. The PCR8 `MrConfig` V2 config commitment is an
+optional shortcut: a verifier that does not want to replay the PCR14 event log
+may instead recompute the expected PCR8 from the known compose hash and
+key-provider and compare it. It is not required, and dstack's own verifier does
+not check it.
 
 For challenge-response verification through `dstack-verifier`, pass a
 non-empty `freshness` policy. On AWS NitroTPM this can require the expected
