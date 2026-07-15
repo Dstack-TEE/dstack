@@ -59,10 +59,12 @@ impl TpmDevice {
 
     /// Send a command to the TPM and receive the response
     pub fn transmit(&mut self, command: &[u8]) -> Result<Vec<u8>> {
+        // Write command
         self.file
             .write_all(command)
             .context("failed to write TPM command")?;
 
+        // Read response
         let mut response = vec![0u8; TPM_MAX_COMMAND_SIZE];
         let n = self
             .file
@@ -105,11 +107,6 @@ impl TpmCommand {
     /// Create a new command with sessions
     pub fn with_sessions(command_code: TpmCc) -> Self {
         Self::with_tag_and_code(TpmSt::Sessions, command_code.to_u32())
-    }
-
-    /// Create a new command without sessions using a raw command code.
-    pub fn new_raw(command_code: u32) -> Self {
-        Self::with_tag_and_code(TpmSt::NoSessions, command_code)
     }
 
     /// Create a new command with sessions using a raw command code.
@@ -298,7 +295,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn builds_command_with_header_and_size() {
+    fn test_command_builder() {
         let mut cmd = TpmCommand::new(TpmCc::GetRandom);
         cmd.add_u16(32); // Request 32 random bytes
 
@@ -353,7 +350,7 @@ mod tests {
     }
 
     #[test]
-    fn parses_minimal_success_response() {
+    fn test_response_parse() {
         // Minimal success response
         let response = vec![
             0x80, 0x01, // TPM_ST_NO_SESSIONS

@@ -9,7 +9,6 @@ use dstack_guest_agent_rpc::{
     dstack_guest_client::DstackGuestClient, AttestResponse, RawQuoteArgs,
 };
 use http_client::prpc::PrpcClient;
-use ra_tls::attestation::AttestationMode;
 use ra_tls::attestation::VerifiedAttestation;
 use ra_tls::attestation::VersionedAttestation;
 use serde::de::DeserializeOwned;
@@ -26,27 +25,7 @@ pub(crate) fn build_boot_info(
     vm_config_str: &str,
 ) -> Result<BootInfo> {
     let mode = att.quote.mode();
-    let tcb_status;
-    let advisory_ids;
-    match att.report.tdx_report() {
-        Some(report) => {
-            tcb_status = report.status.clone();
-            advisory_ids = report.advisory_ids.clone();
-        }
-        None => {
-            // AWS NitroTPM has no TDX/SNP-style TCB advisory surface, so a
-            // verified NitroTPM attestation is normalized to "UpToDate" and
-            // released through the shared on-chain "UpToDate" gate (the same
-            // way amd sev-snp normalizes its own tcb status). Other no-tcb
-            // platforms (e.g. nitro enclave) stay empty and fail-closed.
-            tcb_status = if mode == AttestationMode::DstackAwsNitroTpm {
-                "UpToDate".to_string()
-            } else {
-                "".to_string()
-            };
-            advisory_ids = Vec::new();
-        }
-    };
+    let (tcb_status, advisory_ids) = dstack_verifier::policy_tcb_fields(att);
     let app_info = att.decode_app_info_ex(use_boottime_mr, vm_config_str)?;
     ensure_app_id_len(&app_info.app_id)?;
     Ok(BootInfo {

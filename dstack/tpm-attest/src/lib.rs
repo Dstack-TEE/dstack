@@ -38,11 +38,9 @@ pub fn dstack_pcr_policy() -> PcrSelection {
 /// AWS NitroTPM local key-provider seal policy (SHA384 bank).
 ///
 /// - PCR4/7/12: AMI/UKI boot path
-/// - PCR8: shared-disk MrConfigV3 (app config commitment)
+/// - PCR8: guest-computed MrConfig V2 app/config commitment
 /// - PCR14: dstack event lane at seal time (compose-hash / app-id / …;
 ///   non-resettable; TDX RTMR3 analogue)
-///
-/// PCR23 is unused (resettable; no launch/runtime split).
 ///
 /// Defined locally rather than imported from dstack-attest because dstack-attest
 /// depends on this crate, not the other way around.
@@ -330,7 +328,7 @@ impl TpmContext {
 
     pub fn read_event_log(&self, pcr_index: u32) -> Result<Vec<TpmEvent>> {
         let event_log =
-            TpmEventLog::from_kernel_file().context("failed to read TPM Event Log from kernel")?;
+            TpmEventLog::from_kernel_file().context("Failed to read TPM Event Log from kernel")?;
 
         Ok(event_log.filter_by_pcr(pcr_index))
     }
@@ -341,13 +339,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn pcr_selection_to_arg_formats_bank_and_indices() {
+    fn test_pcr_selection_to_string() {
         let sel = PcrSelection::sha256(&[0, 1, 2, 7]);
         assert_eq!(sel.to_arg(), "sha256:0,1,2,7");
     }
 
     #[test]
-    fn sealed_blob_round_trips() {
+    fn test_sealed_blob_split() {
         let pub_data = vec![0x01, 0x02, 0x03, 0x04, 0x05];
         let priv_data = vec![0xAA, 0xBB, 0xCC];
 
@@ -359,7 +357,7 @@ mod tests {
     }
 
     #[test]
-    fn default_pcr_policy_selects_expected_pcrs() {
+    fn test_default_pcr_policy() {
         let policy = dstack_pcr_policy();
         assert_eq!(policy.to_arg(), "sha256:0,2,14");
     }

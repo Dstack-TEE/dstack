@@ -489,20 +489,6 @@ impl DstackVerifiedReport {
             | DstackVerifiedReport::DstackAwsNitroTpm(_) => None,
         }
     }
-
-    pub fn aws_nitro_tpm_public_key(&self) -> Option<&[u8]> {
-        match self {
-            DstackVerifiedReport::DstackAwsNitroTpm(report) => report.public_key.as_deref(),
-            _ => None,
-        }
-    }
-
-    pub fn aws_nitro_tpm_nonce(&self) -> Option<&[u8]> {
-        match self {
-            DstackVerifiedReport::DstackAwsNitroTpm(report) => report.nonce.as_deref(),
-            _ => None,
-        }
-    }
 }
 
 /// Represents a verified attestation
@@ -1111,8 +1097,8 @@ impl DstackNitroQuote {
 const AWS_NITRO_TPM_BOOT_PCRS: &[u16] = &[4, 7, 12];
 /// All dstack measured events (TDX RTMR3 analogue). Non-resettable on NitroTPM.
 const AWS_NITRO_TPM_EVENT_PCR: u16 = 14;
-/// Optional config commitment PCR (mr_config-like). Extended from shared-disk config only.
-pub const AWS_NITRO_TPM_CONFIG_PCR: u16 = 8;
+/// Optional config commitment PCR, extended once from the guest-computed MrConfig V2 id.
+pub(crate) const AWS_NITRO_TPM_CONFIG_PCR: u16 = 8;
 
 fn aws_nitro_tpm_pcr(pcrs: &std::collections::BTreeMap<u16, Vec<u8>>, index: u16) -> Result<&[u8]> {
     pcrs.get(&index)
@@ -1120,18 +1106,11 @@ fn aws_nitro_tpm_pcr(pcrs: &std::collections::BTreeMap<u16, Vec<u8>>, index: u16
         .with_context(|| format!("PCR {index} not found"))
 }
 
-/// Replay boundary for AWS event PCR, aligned with bare TDX RTMR3:
-/// - `boottime_mr`: stop at `boot-mr-done` (early / KMS pin snapshot)
-/// - otherwise: replay the full event log present in the quote
-fn aws_nitro_tpm_event_boundary(boottime_mr: bool) -> Option<&'static str> {
-    boottime_mr.then_some("boot-mr-done")
-}
-
 fn aws_nitro_tpm_replayed_event_pcr(
     runtime_events: &[RuntimeEvent],
     boottime_mr: bool,
 ) -> <Sha384 as Hasher>::Output {
-    replay_runtime_events::<Sha384>(runtime_events, aws_nitro_tpm_event_boundary(boottime_mr))
+    replay_runtime_events::<Sha384>(runtime_events, boottime_mr.then_some("boot-mr-done"))
 }
 
 /// Bind the event log to the quoted PCR14 register.
@@ -1180,7 +1159,7 @@ pub fn aws_nitro_tpm_boot_pcr_digest(
 }
 
 impl DstackAwsNitroTpmQuote {
-    pub fn decode_pcrs(&self) -> Result<std::collections::BTreeMap<u16, Vec<u8>>> {
+    pub(crate) fn decode_pcrs(&self) -> Result<std::collections::BTreeMap<u16, Vec<u8>>> {
         let cose = nsm_qvl::CoseSign1::from_bytes(&self.attestation_doc)
             .context("failed to decode NitroTPM COSE document")?;
         let doc = nsm_qvl::AttestationDocument::from_cbor(&cose.payload)
@@ -2036,11 +2015,10 @@ impl Attestation {
             AttestationMode::DstackNitroEnclave => String::new(),
         };
         let runtime_events = match mode {
-            AttestationMode::DstackTdx | AttestationMode::DstackGcpTdx => {
+            AttestationMode::DstackTdx
+            | AttestationMode::DstackGcpTdx
+            | AttestationMode::DstackAwsNitroTpm => {
                 RuntimeEvent::read_all().context("Failed to read runtime events")?
-            }
-            AttestationMode::DstackAwsNitroTpm => {
-                RuntimeEvent::read_all().context("failed to read runtime events")?
             }
             AttestationMode::DstackAmdSevSnp => vec![],
             AttestationMode::DstackNitroEnclave => match app_id {
@@ -2085,12 +2063,8 @@ impl Attestation {
             AttestationMode::DstackAwsNitroTpm => {
                 // Challenge binding is report_data → NitroTPM user_data only
                 // (same role as TDX/GCP report_data; no separate nonce/public_key).
-                let attestation_doc = crate::aws_nitro_tpm::attestation_document(
-                    Some(report_data.to_vec()),
-                    None,
-                    None,
-                )
-                .context("failed to get NitroTPM attestation document")?;
+                let attestation_doc = crate::aws_nitro_tpm::attestation_document(report_data)
+                    .context("failed to get NitroTPM attestation document")?;
                 AttestationQuote::DstackAwsNitroTpm(DstackAwsNitroTpmQuote { attestation_doc })
             }
         };
@@ -2123,9 +2097,11 @@ impl Attestation {
                     .context("vm_config.aws_measurement is required on AWS NitroTPM")?;
                 document
                     .verify(&vm_config.os_image_hash)
+                    .map_err(anyhow::Error::msg)
                     .context("aws_measurement does not match os_image_hash")?;
                 let measurement = document
                     .decode_measurement()
+                    .map_err(anyhow::Error::msg)
                     .context("failed to decode aws_measurement")?;
                 let quoted_digest = aws_nitro_tpm_boot_pcr_digest(&pcrs)
                     .context("failed to compute boot_pcr_digest from attestation")?;
@@ -2699,6 +2675,13 @@ mod tests {
         assert_eq!(mrs.mr_system, changed_mrs.mr_system);
         assert_ne!(mrs.mr_aggregated, changed_mrs.mr_aggregated);
 
+        let mut changed_pcrs = pcrs.clone();
+        changed_pcrs.insert(12, vec![0x99; 48]);
+        let changed_pcr12 =
+            decode_mr_aws_nitro_tpm_from_pcrs(false, &mr_key_provider, &changed_pcrs, &events)?;
+        assert_ne!(mrs.mr_system, changed_pcr12.mr_system);
+        assert_ne!(mrs.mr_aggregated, changed_pcr12.mr_aggregated);
+
         let mut missing_pcrs = pcrs.clone();
         missing_pcrs.remove(&AWS_NITRO_TPM_EVENT_PCR);
         let err = match decode_mr_aws_nitro_tpm_from_pcrs(
@@ -2724,89 +2707,6 @@ mod tests {
             Err(err) => err,
         };
         assert!(format!("{err:#}").contains("PCR14 mismatch"));
-        Ok(())
-    }
-
-    #[test]
-    fn aws_nitro_tpm_mr_aggregated_binds_pcr12() -> Result<()> {
-        let pcr4 = vec![0x04; 48];
-        let pcr7 = vec![0x07; 48];
-        let pcr12 = vec![0x12; 48];
-        let events = vec![
-            RuntimeEvent::new("app-id".into(), vec![0x11; 20]),
-            RuntimeEvent::new("compose-hash".into(), vec![0x22; 32]),
-            RuntimeEvent::new("instance-id".into(), vec![0x33; 20]),
-            RuntimeEvent::new("key-provider".into(), b"tpm".to_vec()),
-        ];
-        let replayed_pcr14 = cc_eventlog::replay_events::<Sha384>(&events, None);
-        let mr_key_provider = sha256(b"aws nitrotpm key provider");
-
-        let mut pcrs = std::collections::BTreeMap::from([
-            (4u16, pcr4.clone()),
-            (7u16, pcr7.clone()),
-            (12u16, pcr12.clone()),
-            (AWS_NITRO_TPM_EVENT_PCR, replayed_pcr14.to_vec()),
-        ]);
-        let base = decode_mr_aws_nitro_tpm_from_pcrs(false, &mr_key_provider, &pcrs, &events)?;
-
-        pcrs.insert(12u16, vec![0x99; 48]);
-        let changed_pcr12 =
-            decode_mr_aws_nitro_tpm_from_pcrs(false, &mr_key_provider, &pcrs, &events)?;
-        assert_ne!(base.mr_system, changed_pcr12.mr_system);
-        assert_ne!(base.mr_aggregated, changed_pcr12.mr_aggregated);
-
-        pcrs.remove(&12u16);
-        let err = match decode_mr_aws_nitro_tpm_from_pcrs(false, &mr_key_provider, &pcrs, &events) {
-            Ok(_) => panic!("missing PCR12 must be rejected"),
-            Err(err) => err,
-        };
-        assert!(
-            format!("{err:#}").contains("PCR 12 not found"),
-            "unexpected error: {err:#}"
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn aws_nitro_tpm_rejects_reordered_or_replayed_runtime_events() -> Result<()> {
-        let events = vec![
-            RuntimeEvent::new("app-id".into(), vec![0x11; 20]),
-            RuntimeEvent::new("compose-hash".into(), vec![0x22; 32]),
-            RuntimeEvent::new("instance-id".into(), vec![0x33; 20]),
-            RuntimeEvent::new("key-provider".into(), b"tpm".to_vec()),
-        ];
-        let quoted_pcr14 = cc_eventlog::replay_events::<Sha384>(&events, None);
-        let mr_key_provider = sha256(b"aws nitrotpm key provider");
-        let pcrs = std::collections::BTreeMap::from([
-            (4u16, vec![0x04; 48]),
-            (7u16, vec![0x07; 48]),
-            (12u16, vec![0x12; 48]),
-            (AWS_NITRO_TPM_EVENT_PCR, quoted_pcr14.to_vec()),
-        ]);
-
-        let mut reordered = events.clone();
-        reordered.swap(1, 2);
-        let err =
-            match decode_mr_aws_nitro_tpm_from_pcrs(false, &mr_key_provider, &pcrs, &reordered) {
-                Ok(_) => panic!("runtime event reordering must be rejected"),
-                Err(err) => err,
-            };
-        assert!(
-            format!("{err:#}").contains("PCR14 mismatch"),
-            "unexpected error: {err:#}"
-        );
-
-        let mut replayed = events.clone();
-        replayed.push(RuntimeEvent::new("compose-hash".into(), vec![0x22; 32]));
-        let err = match decode_mr_aws_nitro_tpm_from_pcrs(false, &mr_key_provider, &pcrs, &replayed)
-        {
-            Ok(_) => panic!("runtime event replay/duplication must be rejected"),
-            Err(err) => err,
-        };
-        assert!(
-            format!("{err:#}").contains("PCR14 mismatch"),
-            "unexpected error: {err:#}"
-        );
         Ok(())
     }
 

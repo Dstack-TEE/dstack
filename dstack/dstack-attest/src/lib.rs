@@ -110,7 +110,7 @@ pub fn measure_aws_config_pcr(config_id: &[u8; 48]) -> anyhow::Result<()> {
 /// The config id is extended as-is (it is already 48 bytes, the SHA384 bank
 /// digest size), so a verifier that recovers the claimed `config_id` can parse
 /// its version byte and recompute this value directly.
-pub fn expected_aws_config_pcr(config_id: &[u8; 48]) -> [u8; 48] {
+fn expected_aws_config_pcr(config_id: &[u8; 48]) -> [u8; 48] {
     use sha2::{Digest, Sha384};
     let mut material = [0u8; 96];
     material[48..].copy_from_slice(config_id);

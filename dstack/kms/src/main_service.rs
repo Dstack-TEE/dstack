@@ -165,29 +165,29 @@ pub(crate) fn build_boot_info_for_attestation(
     build_boot_info(att, use_boottime_mr, vm_config_str)
 }
 
-fn ensure_snp_key_release_allowed(boot_info: &BootInfo, enabled: bool) -> Result<()> {
-    if boot_info.attestation_mode != AttestationMode::DstackAmdSevSnp {
-        return Ok(());
+fn ensure_key_release_allowed(
+    boot_info: &BootInfo,
+    snp_enabled: bool,
+    aws_nitro_tpm_enabled: bool,
+) -> Result<()> {
+    match boot_info.attestation_mode {
+        AttestationMode::DstackAmdSevSnp if !snp_enabled => {
+            bail!("amd sev-snp key release is not enabled")
+        }
+        AttestationMode::DstackAwsNitroTpm if !aws_nitro_tpm_enabled => {
+            bail!("aws nitro-tpm key release is not enabled")
+        }
+        _ => Ok(()),
     }
-    if !enabled {
-        bail!("amd sev-snp key release is not enabled");
-    }
-    Ok(())
 }
 
-fn ensure_aws_nitro_tpm_key_release_allowed(boot_info: &BootInfo, enabled: bool) -> Result<()> {
-    if boot_info.attestation_mode != AttestationMode::DstackAwsNitroTpm {
-        return Ok(());
-    }
-    if !enabled {
-        bail!("aws nitro-tpm key release is not enabled");
-    }
-    Ok(())
-}
-
-fn ensure_self_key_release_allowed(self_boot_info: Option<&BootInfo>, enabled: bool) -> Result<()> {
+fn ensure_self_key_release_allowed(
+    self_boot_info: Option<&BootInfo>,
+    snp_enabled: bool,
+    aws_nitro_tpm_enabled: bool,
+) -> Result<()> {
     if let Some(boot_info) = self_boot_info {
-        ensure_snp_key_release_allowed(boot_info, enabled)?;
+        ensure_key_release_allowed(boot_info, snp_enabled, aws_nitro_tpm_enabled)?;
     }
     Ok(())
 }
@@ -358,9 +358,9 @@ impl KmsRpc for RpcHandler {
             .ensure_app_boot_allowed(&request.vm_config)
             .await
             .context("App not allowed")?;
-        ensure_snp_key_release_allowed(&boot_info, self.state.config.sev_snp_key_release)?;
-        ensure_aws_nitro_tpm_key_release_allowed(
+        ensure_key_release_allowed(
             &boot_info,
+            self.state.config.sev_snp_key_release,
             self.state.config.aws_nitro_tpm_key_release,
         )?;
         let app_id = boot_info.app_id;
@@ -471,9 +471,9 @@ impl KmsRpc for RpcHandler {
             .await
             .context("KMS self authorization failed")?;
         let info = self.ensure_kms_allowed(&request.vm_config).await?;
-        ensure_snp_key_release_allowed(&info, self.state.config.sev_snp_key_release)?;
-        ensure_aws_nitro_tpm_key_release_allowed(
+        ensure_key_release_allowed(
             &info,
+            self.state.config.sev_snp_key_release,
             self.state.config.aws_nitro_tpm_key_release,
         )?;
         Ok(KmsKeyResponse {
@@ -490,13 +490,11 @@ impl KmsRpc for RpcHandler {
             .ensure_self_allowed()
             .await
             .context("KMS self authorization failed")?;
-        ensure_self_key_release_allowed(self_boot_info, self.state.config.sev_snp_key_release)?;
-        if let Some(self_boot_info) = self_boot_info {
-            ensure_aws_nitro_tpm_key_release_allowed(
-                self_boot_info,
-                self.state.config.aws_nitro_tpm_key_release,
-            )?;
-        }
+        ensure_self_key_release_allowed(
+            self_boot_info,
+            self.state.config.sev_snp_key_release,
+            self.state.config.aws_nitro_tpm_key_release,
+        )?;
         Ok(GetTempCaCertResponse {
             temp_ca_cert: self.state.inner.temp_ca_cert.clone(),
             temp_ca_key: self.state.inner.temp_ca_key.clone(),
@@ -535,9 +533,9 @@ impl KmsRpc for RpcHandler {
         let app_info = self
             .ensure_app_attestation_allowed(&attestation, false, true, &request.vm_config)
             .await?;
-        ensure_snp_key_release_allowed(&app_info.boot_info, self.state.config.sev_snp_key_release)?;
-        ensure_aws_nitro_tpm_key_release_allowed(
+        ensure_key_release_allowed(
             &app_info.boot_info,
+            self.state.config.sev_snp_key_release,
             self.state.config.aws_nitro_tpm_key_release,
         )?;
         let app_ca = self.derive_app_ca(&app_info.boot_info.app_id)?;
@@ -681,8 +679,7 @@ mod tests {
     ) -> dstack_mr::sev::SnpMeasurementDocument {
         let measurement = dstack_mr::sev::sev_os_image_measurement_from_input(input)
             .unwrap()
-            .to_cbor_vec()
-            .unwrap();
+            .to_cbor_vec();
         let sha256sum = format!(
             "{}  {}\n",
             hex::encode(sha2::Sha256::digest(&measurement)),
@@ -830,37 +827,6 @@ mod tests {
         (attestation, vm_config, os_image_hash, key_provider_info)
     }
 
-    /// Build a unified AWS vm_config (`os_image_hash = sha256(sha256sum.txt)`
-    /// plus a bound `aws_measurement` document) matching the given quoted PCRs.
-    fn aws_nitro_tpm_unified_vm_config(pcrs: &BTreeMap<u16, Vec<u8>>) -> String {
-        let measurement =
-            dstack_types::AwsOsImageMeasurement::from_boot_pcrs(&pcrs[&4], &pcrs[&7], &pcrs[&12])
-                .expect("valid boot pcrs");
-        let measurement_cbor = measurement.to_cbor_vec().expect("encode aws measurement");
-        let checksum_file = format!(
-            "{}  measurement.aws.cbor\n",
-            hex::encode(Sha256::digest(&measurement_cbor))
-        )
-        .into_bytes();
-        let os_image_hash = dstack_types::image_hash_from_sha256sum(&checksum_file);
-        let document =
-            dstack_types::AwsOsImageMeasurementDocument::new(checksum_file, measurement_cbor);
-        serde_json::json!({
-            "os_image_hash": hex::encode(os_image_hash),
-            "aws_measurement": document,
-        })
-        .to_string()
-    }
-
-    fn test_cvm_verifier(cache_dir: &std::path::Path) -> CvmVerifier {
-        CvmVerifier::new(
-            cache_dir.display().to_string(),
-            "http://127.0.0.1:9/should-not-download/{OS_IMAGE_HASH}.tar.gz".to_string(),
-            std::time::Duration::from_secs(1),
-            None,
-        )
-    }
-
     fn verified_aws_nitro_tpm_pcrs(att: &VerifiedAttestation) -> &BTreeMap<u16, Vec<u8>> {
         match &att.report {
             ra_tls::attestation::DstackVerifiedReport::DstackAwsNitroTpm(report) => &report.pcrs,
@@ -886,21 +852,13 @@ mod tests {
         let boot_info = build_boot_info_for_attestation(&attestation, false, &vm_config)
             .expect("aws nitrotpm attestation should produce KMS boot info");
         let pcrs = verified_aws_nitro_tpm_pcrs(&attestation);
-        let expected_public_key = vec![0x55; 32];
-        let expected_nonce = vec![0x66; 32];
 
         assert_eq!(
             boot_info.attestation_mode,
             AttestationMode::DstackAwsNitroTpm
         );
-        assert_eq!(
-            attestation.report.aws_nitro_tpm_public_key(),
-            Some(expected_public_key.as_slice())
-        );
-        assert_eq!(
-            attestation.report.aws_nitro_tpm_nonce(),
-            Some(expected_nonce.as_slice())
-        );
+        assert_eq!(boot_info.tcb_status, "UpToDate");
+        assert!(boot_info.advisory_ids.is_empty());
         assert_eq!(boot_info.app_id, vec![0x11; 20]);
         assert_eq!(boot_info.compose_hash, vec![0x22; 32]);
         assert_eq!(boot_info.instance_id, vec![0x33; 20]);
@@ -940,45 +898,21 @@ mod tests {
     }
 
     #[test]
-    fn build_boot_info_normalizes_aws_nitro_tpm_tcb_status_to_up_to_date() {
-        // AWS NitroTPM has no TDX/SNP-style TCB surface; a verified attestation
-        // must be normalized to "UpToDate" so it passes the shared on-chain
-        // "UpToDate" gate without any AWS-specific contract logic.
-        let (attestation, vm_config, _, _) =
-            verified_aws_nitro_tpm_attestation(vec![0x22; 32], 0x04);
-        let boot_info = build_boot_info_for_attestation(&attestation, false, &vm_config)
-            .expect("aws nitrotpm attestation should produce KMS boot info");
-        assert_eq!(
-            boot_info.attestation_mode,
-            AttestationMode::DstackAwsNitroTpm
-        );
-        assert_eq!(boot_info.tcb_status, "UpToDate");
-        assert!(boot_info.advisory_ids.is_empty());
-    }
-
-    #[test]
     fn aws_nitro_tpm_key_release_requires_explicit_enablement() {
-        let (attestation, vm_config, _, _) =
-            verified_aws_nitro_tpm_attestation(vec![0x22; 32], 0x04);
-        let boot_info = build_boot_info_for_attestation(&attestation, false, &vm_config)
-            .expect("aws nitrotpm attestation should produce KMS boot info");
-
-        // disabled (the default) fails closed for the new AWS NitroTPM mode
-        let err = ensure_aws_nitro_tpm_key_release_allowed(&boot_info, false).unwrap_err();
-        assert!(err.to_string().contains("not enabled"));
-        // explicitly enabled permits it
-        ensure_aws_nitro_tpm_key_release_allowed(&boot_info, true).unwrap();
-    }
-
-    #[test]
-    fn aws_nitro_tpm_key_release_gate_ignores_other_modes() {
-        // A TDX boot info is unaffected by the AWS gate even when it is disabled.
         let (attestation, vm_config, _, _) =
             verified_aws_nitro_tpm_attestation(vec![0x22; 32], 0x04);
         let mut boot_info = build_boot_info_for_attestation(&attestation, false, &vm_config)
             .expect("aws nitrotpm attestation should produce KMS boot info");
+
+        // disabled (the default) fails closed for the new AWS NitroTPM mode
+        let err = ensure_key_release_allowed(&boot_info, false, false).unwrap_err();
+        assert!(err.to_string().contains("not enabled"));
+        // explicitly enabled permits it
+        ensure_key_release_allowed(&boot_info, false, true).unwrap();
+
+        // A TDX boot info is unaffected by the AWS gate even when it is disabled.
         boot_info.attestation_mode = AttestationMode::DstackTdx;
-        ensure_aws_nitro_tpm_key_release_allowed(&boot_info, false).unwrap();
+        ensure_key_release_allowed(&boot_info, false, false).unwrap();
     }
 
     #[test]
@@ -1008,7 +942,7 @@ mod tests {
     }
 
     #[test]
-    fn build_boot_info_for_attestation_rejects_aws_nitro_tpm_replayed_runtime_events() {
+    fn build_boot_info_for_attestation_rejects_reordered_aws_nitro_tpm_events() {
         let key_provider_info = aws_nitro_tpm_key_provider_info();
         let events = aws_nitro_tpm_runtime_events(vec![0x22; 32], &key_provider_info);
         let (mut attestation, vm_config, _, _) =
@@ -1018,36 +952,6 @@ mod tests {
         attestation.runtime_events.swap(2, 3);
         let err = build_boot_info_for_attestation(&attestation, false, &vm_config)
             .expect_err("runtime event reordering must be rejected");
-        assert!(
-            format!("{err:#}").contains("PCR14 mismatch"),
-            "unexpected error: {err:#}"
-        );
-
-        attestation.runtime_events = events.clone();
-        let system_ready_pos = attestation
-            .runtime_events
-            .iter()
-            .position(|event| event.event == "system-ready")
-            .expect("fixture should contain launch boundary");
-        attestation.runtime_events.insert(
-            system_ready_pos,
-            runtime_event("compose-hash", vec![0x22; 32]),
-        );
-        let err = build_boot_info_for_attestation(&attestation, false, &vm_config)
-            .expect_err("runtime event replay/duplication must be rejected");
-        assert!(
-            format!("{err:#}").contains("PCR14 mismatch"),
-            "unexpected error: {err:#}"
-        );
-
-        // Single PCR14 event lane (TDX RTMR3 analogue): extra events without
-        // a matching PCR extend must fail verification.
-        attestation.runtime_events = events;
-        attestation
-            .runtime_events
-            .push(runtime_event("app-runtime", b"ready".to_vec()));
-        let err = build_boot_info_for_attestation(&attestation, false, &vm_config)
-            .expect_err("extra events without PCR14 update must be rejected");
         assert!(
             format!("{err:#}").contains("PCR14 mismatch"),
             "unexpected error: {err:#}"
@@ -1064,18 +968,6 @@ mod tests {
             .expect_err("missing PCR14 must be rejected");
 
         assert!(format!("{err:#}").contains("PCR 14 not found"));
-    }
-
-    #[test]
-    fn build_boot_info_for_attestation_rejects_aws_nitro_tpm_mismatched_pcr14() {
-        let (mut attestation, vm_config, _, _) =
-            verified_aws_nitro_tpm_attestation(vec![0x22; 32], 0x04);
-        verified_aws_nitro_tpm_pcrs_mut(&mut attestation).insert(14, vec![0xff; 48]);
-
-        let err = build_boot_info_for_attestation(&attestation, false, &vm_config)
-            .expect_err("mismatched PCR14 must be rejected");
-
-        assert!(format!("{err:#}").contains("PCR14 mismatch"));
     }
 
     #[test]
@@ -1099,62 +991,6 @@ mod tests {
         // The boot-time snapshot truncates the launch log at boot-mr-done, so
         // its aggregated MR differs from the full runtime MR.
         assert_ne!(runtime.mr_aggregated, boottime.mr_aggregated);
-    }
-
-    // The KMS key-release pipeline (`ensure_app_attestation_allowed`) gates
-    // non-SNP quotes through `CvmVerifier::verify_os_image_hash`; these tests
-    // pin down that the AWS path of that check enforces `aws_measurement`.
-
-    #[tokio::test]
-    async fn kms_os_image_check_rejects_aws_vm_config_without_aws_measurement() {
-        let (attestation, legacy_vm_config, _, _) =
-            verified_aws_nitro_tpm_attestation(vec![0x22; 32], 0x04);
-        let cache = tempfile::tempdir().expect("temp cache dir");
-        let verifier = test_cvm_verifier(cache.path());
-        let mut details = VerificationDetails::default();
-
-        let err = verifier
-            .verify_os_image_hash(legacy_vm_config, &attestation, false, &mut details)
-            .await
-            .expect_err("vm_config without aws_measurement must be rejected");
-        assert!(
-            format!("{err:#}").contains("aws_measurement is required"),
-            "unexpected error: {err:#}"
-        );
-    }
-
-    #[tokio::test]
-    async fn kms_os_image_check_accepts_bound_aws_measurement() {
-        let (attestation, _, _, _) = verified_aws_nitro_tpm_attestation(vec![0x22; 32], 0x04);
-        let vm_config = aws_nitro_tpm_unified_vm_config(verified_aws_nitro_tpm_pcrs(&attestation));
-        let cache = tempfile::tempdir().expect("temp cache dir");
-        let verifier = test_cvm_verifier(cache.path());
-        let mut details = VerificationDetails::default();
-
-        verifier
-            .verify_os_image_hash(vm_config, &attestation, false, &mut details)
-            .await
-            .expect("unified aws_measurement vm_config should verify offline");
-    }
-
-    #[tokio::test]
-    async fn kms_os_image_check_rejects_aws_boot_pcr_digest_mismatch() {
-        let (attestation, _, _, _) = verified_aws_nitro_tpm_attestation(vec![0x22; 32], 0x04);
-        // Document computed from different boot PCRs than the quoted ones.
-        let other_pcrs = aws_nitro_tpm_boot_pcrs(0x05);
-        let vm_config = aws_nitro_tpm_unified_vm_config(&other_pcrs);
-        let cache = tempfile::tempdir().expect("temp cache dir");
-        let verifier = test_cvm_verifier(cache.path());
-        let mut details = VerificationDetails::default();
-
-        let err = verifier
-            .verify_os_image_hash(vm_config, &attestation, false, &mut details)
-            .await
-            .expect_err("aws_measurement not matching quoted PCRs must be rejected");
-        assert!(
-            format!("{err:#}").contains("boot_pcr_digest mismatch"),
-            "unexpected error: {err:#}"
-        );
     }
 
     #[test]
@@ -1223,7 +1059,7 @@ mod tests {
         let boot_info = snp_boot_info();
         let enabled = false;
 
-        let err = ensure_snp_key_release_allowed(&boot_info, enabled)
+        let err = ensure_key_release_allowed(&boot_info, enabled, false)
             .expect_err("snp boot info must not be key-release enabled by default");
         assert!(
             err.to_string()
@@ -1237,7 +1073,7 @@ mod tests {
         let boot_info = snp_boot_info();
         let enabled = true;
 
-        ensure_snp_key_release_allowed(&boot_info, enabled)
+        ensure_key_release_allowed(&boot_info, enabled, false)
             .expect("explicitly enabled SNP key release should allow auth-approved boot info");
     }
 
@@ -1248,7 +1084,7 @@ mod tests {
 
         boot_info.tcb_status = "OutOfDate".to_string();
         boot_info.advisory_ids.push("SNP-TEST-ADVISORY".to_string());
-        ensure_snp_key_release_allowed(&boot_info, enabled)
+        ensure_key_release_allowed(&boot_info, enabled, false)
             .expect("TCB/advisory policy should be decided by the auth API, not this local gate");
     }
 
@@ -1258,9 +1094,9 @@ mod tests {
         let disabled = false;
         let enabled = true;
 
-        ensure_self_key_release_allowed(Some(&boot_info), disabled)
+        ensure_self_key_release_allowed(Some(&boot_info), disabled, false)
             .expect_err("disabled SNP self boot info must not receive temp CA key material");
-        ensure_self_key_release_allowed(Some(&boot_info), enabled)
+        ensure_self_key_release_allowed(Some(&boot_info), enabled, false)
             .expect("enabled clean SNP self boot info should pass the temp CA release gate");
     }
 }

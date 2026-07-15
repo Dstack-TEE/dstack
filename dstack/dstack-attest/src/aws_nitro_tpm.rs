@@ -28,15 +28,11 @@ const TPMA_SESSION_CONTINUE_SESSION: u8 = 1 << 0;
 
 type HmacSha512 = Hmac<Sha512>;
 
-pub(crate) fn attestation_document(
-    user_data: Option<Vec<u8>>,
-    nonce: Option<Vec<u8>>,
-    public_key: Option<Vec<u8>>,
-) -> Result<Vec<u8>> {
+pub(crate) fn attestation_document(report_data: &[u8]) -> Result<Vec<u8>> {
     let request = nsm_api::Request::Attestation {
-        user_data: user_data.map(Into::into),
-        nonce: nonce.map(Into::into),
-        public_key: public_key.map(Into::into),
+        user_data: Some(report_data.to_vec().into()),
+        nonce: None,
+        public_key: None,
     };
 
     let device_path = tpm_device_path();

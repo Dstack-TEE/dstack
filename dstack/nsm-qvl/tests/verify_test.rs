@@ -1,7 +1,5 @@
-// SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
-//
+// SPDX-FileCopyrightText: Copyright (c) 2024-2025 The Project Contributors
 // SPDX-License-Identifier: Apache-2.0
-
 // Test for NSM attestation verification
 use nsm_qvl::{AttestationDocument, CoseSign1};
 use std::io::Cursor;
@@ -24,7 +22,7 @@ fn extract_cose_sign1(data: &[u8]) -> Vec<u8> {
 }
 
 #[test]
-fn parses_cose_sign1() {
+fn test_parse_cose_sign1() {
     let cose_data = extract_cose_sign1(ATTESTATION_BIN);
 
     let cose = CoseSign1::from_bytes(&cose_data).expect("Failed to parse COSE Sign1");
@@ -47,7 +45,7 @@ fn parses_cose_sign1() {
 }
 
 #[test]
-fn parses_attestation_document() {
+fn test_parse_attestation_document() {
     let cose_data = extract_cose_sign1(ATTESTATION_BIN);
     let cose = CoseSign1::from_bytes(&cose_data).expect("Failed to parse COSE Sign1");
 
@@ -69,7 +67,7 @@ fn parses_attestation_document() {
 }
 
 #[tokio::test]
-async fn verifies_full_attestation_document() {
+async fn test_verify_attestation_full() {
     tracing_subscriber::fmt::try_init().ok();
 
     let cose_data = extract_cose_sign1(ATTESTATION_BIN);

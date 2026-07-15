@@ -435,7 +435,7 @@ impl TpmContext {
     // ==================== Capability Operations ====================
 
     /// List handles in the given inclusive range.
-    pub fn get_handles(&mut self, first: u32, last: u32) -> Result<Vec<u32>> {
+    fn get_handles(&mut self, first: u32, last: u32) -> Result<Vec<u32>> {
         let mut property = first;
         let mut handles = Vec::new();
 
@@ -611,6 +611,7 @@ impl TpmContext {
         let (transient, _) = self.create_primary(tpm_rh::OWNER, &template)?;
         self.evict_control(transient, handle)?;
 
+        // Flush the transient handle
         self.flush_context(transient)?;
 
         Ok(true)
@@ -685,12 +686,16 @@ impl TpmContext {
             // First, compute the policy digest using a trial session
             let trial_session = AuthSession::start_trial(&mut self.device, hash_alg)?;
 
+            // Compute PCR digest
             let pcr_digest = compute_pcr_digest(&mut self.device, pcr_selection, hash_alg)?;
 
+            // Apply PCR policy to trial session
             trial_session.policy_pcr(&mut self.device, &pcr_digest, pcr_selection)?;
 
+            // Get the policy digest
             let digest = trial_session.get_digest(&mut self.device)?;
 
+            // Flush trial session
             trial_session.flush(&mut self.device)?;
 
             digest
@@ -765,6 +770,7 @@ impl TpmContext {
             cmd.add_null_auth_area();
             self.device.execute(&cmd.finalize())?
         } else {
+            // Start a policy session
             let policy_session = AuthSession::start_policy(&mut self.device, hash_alg)?;
 
             // Compute and apply PCR policy
@@ -781,6 +787,7 @@ impl TpmContext {
             response
         };
 
+        // Clean up object handle
         let _ = self.flush_context(object_handle);
 
         if !response.is_success() {
@@ -849,7 +856,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn pcr_selection_sets_expected_bitmap() {
+    fn test_pcr_selection() {
         let sel = TpmsPcrSelection::sha256(&[0, 1, 2, 7]);
         assert_eq!(sel.hash, TpmAlgId::Sha256);
         // PCR 0, 1, 2, 7 = bits 0, 1, 2, 7 = 0b10000111 = 0x87

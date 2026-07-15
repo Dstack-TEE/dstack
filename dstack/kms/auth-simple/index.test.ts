@@ -240,8 +240,6 @@ describe('auth-simple', () => {
       expect(json.isAllowed).toBe(false);
       expect(json.reason).toContain('MR');
     });
-
-
     it('allows KMS boot with allowAnyDevice', async () => {
       writeTestConfig({
         gatewayAppId: '0xgateway',

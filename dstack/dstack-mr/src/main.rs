@@ -75,7 +75,7 @@ fn main() -> Result<()> {
                 hex::decode(hash.trim()).context("GCP UKI Authenticode hash is not valid hex")?;
             let cbor = dstack_types::GcpOsImageMeasurement::new(hash)
                 .map_err(anyhow::Error::msg)?
-                .to_cbor_vec()?;
+                .to_cbor_vec();
             std::io::stdout()
                 .write_all(&cbor)
                 .context("failed to write GCP measurement CBOR")?;
@@ -128,11 +128,15 @@ fn main() -> Result<()> {
 fn inspect_measurement(kind: &str, path: &Path) -> Result<Value> {
     let cbor = fs_err::read(path).with_context(|| format!("failed to read {}", path.display()))?;
     match kind {
-        "tdx" => dstack_types::TdxOsImageMeasurement::cbor_json_value_from_slice(&cbor),
-        "snp" | "sev" => dstack_types::SevOsImageMeasurement::cbor_json_value_from_slice(&cbor),
-        "gcp" => dstack_types::GcpOsImageMeasurement::cbor_json_value_from_slice(&cbor),
+        "tdx" => dstack_types::TdxOsImageMeasurement::cbor_json_value_from_slice(&cbor)
+            .map_err(anyhow::Error::msg),
+        "snp" | "sev" => dstack_types::SevOsImageMeasurement::cbor_json_value_from_slice(&cbor)
+            .map_err(anyhow::Error::msg),
+        "gcp" => dstack_types::GcpOsImageMeasurement::cbor_json_value_from_slice(&cbor)
+            .map_err(anyhow::Error::msg),
         "aws" => {
-            let measurement = dstack_types::AwsOsImageMeasurement::from_cbor_slice(&cbor)?;
+            let measurement = dstack_types::AwsOsImageMeasurement::from_cbor_slice(&cbor)
+                .map_err(anyhow::Error::msg)?;
             serde_json::to_value(measurement).context("failed to convert AWS measurement to JSON")
         }
         other => bail!("unknown measurement kind {other:?}; expected tdx, snp, gcp, or aws"),
@@ -161,7 +165,7 @@ fn aws_measurement_cbor(pcr4_hex: &str, pcr7_hex: &str, pcr12_hex: &str) -> Resu
         &decode_sha384_pcr_hex("pcr12", pcr12_hex)?,
     )
     .map_err(anyhow::Error::msg)?;
-    measurement.to_cbor_vec()
+    Ok(measurement.to_cbor_vec())
 }
 
 fn read_hex_file(path: &str) -> Result<String> {

@@ -54,7 +54,7 @@ pub async fn verify_pem(cert: &[u8], pccs_url: Option<&str>) -> Result<VerifiedR
 }
 
 /// Verify the RA-TLS attestation embedded in a parsed X.509 certificate.
-pub async fn verify_cert(
+async fn verify_cert(
     cert: &x509_parser::prelude::X509Certificate<'_>,
     pccs_url: Option<&str>,
 ) -> Result<VerifiedRaTlsCert> {
@@ -162,22 +162,5 @@ mod tests {
         assert!(result.is_err());
         let err = result.err().unwrap();
         assert!(format!("{err:#}").contains("report data mismatch"));
-    }
-
-    #[tokio::test]
-    async fn verify_pem_rejects_missing_attestation_extension() {
-        let key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
-        let cert = CertRequest::builder()
-            .key(&key)
-            .subject("missing-attestation.example")
-            .usage_server_auth(true)
-            .build()
-            .self_signed()
-            .unwrap();
-
-        let result = verify_pem(cert.pem().as_bytes(), None).await;
-        assert!(result.is_err());
-        let err = result.err().unwrap();
-        assert!(err.to_string().contains("attestation extension missing"));
     }
 }

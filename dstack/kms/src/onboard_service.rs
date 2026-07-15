@@ -280,8 +280,7 @@ mod tests {
     ) -> dstack_mr::sev::SnpMeasurementDocument {
         let measurement = dstack_mr::sev::sev_os_image_measurement_from_input(input)
             .unwrap()
-            .to_cbor_vec()
-            .unwrap();
+            .to_cbor_vec();
         let sha256sum = format!(
             "{}  {}\n",
             hex::encode(sha2::Sha256::digest(&measurement)),

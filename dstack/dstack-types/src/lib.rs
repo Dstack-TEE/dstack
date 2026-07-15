@@ -4,7 +4,7 @@
 
 use std::{io::Cursor, path::Path};
 
-use anyhow::{anyhow, bail, Context, Result};
+use or_panic::ResultOrPanic;
 use scale::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 use serde_human_bytes as hex_bytes;
@@ -715,14 +715,19 @@ pub struct OvmfSection {
     pub section_type: u32,
 }
 
-fn cbor_to_vec<T: Serialize>(value: &T) -> Result<Vec<u8>> {
+fn cbor_to_vec<T: Serialize>(value: &T, context: &str) -> Vec<u8> {
     let mut out = Vec::new();
-    ciborium::ser::into_writer(value, &mut out).context("failed to encode CBOR")?;
-    Ok(out)
+    ciborium::ser::into_writer(value, &mut out)
+        .or_panic(format!("{context}: CBOR serialization should not fail"));
+    out
 }
 
-fn cbor_from_slice<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<T> {
-    ciborium::de::from_reader(Cursor::new(bytes)).context("failed to decode CBOR")
+fn cbor_from_slice<T: serde::de::DeserializeOwned>(
+    bytes: &[u8],
+    context: &str,
+) -> Result<T, String> {
+    ciborium::de::from_reader(Cursor::new(bytes))
+        .map_err(|e| format!("{context}: failed to decode CBOR: {e}"))
 }
 
 fn sha256(bytes: &[u8]) -> [u8; 32] {
@@ -854,31 +859,35 @@ impl GcpOsImageMeasurement {
         })
     }
 
-    pub fn to_cbor_vec(&self) -> Result<Vec<u8>> {
-        cbor_to_vec(&CborGcpOsImageMeasurement::from(self)).context("GcpOsImageMeasurement")
+    pub fn to_cbor_vec(&self) -> Vec<u8> {
+        cbor_to_vec(
+            &CborGcpOsImageMeasurement::from(self),
+            "GcpOsImageMeasurement",
+        )
     }
 
-    pub fn from_cbor_slice(bytes: &[u8]) -> Result<Self> {
+    pub fn from_cbor_slice(bytes: &[u8]) -> Result<Self, String> {
         let measurement: CborGcpOsImageMeasurement =
-            cbor_from_slice(bytes).context("GcpOsImageMeasurement")?;
+            cbor_from_slice(bytes, "GcpOsImageMeasurement")?;
         if measurement.version != Self::VERSION {
-            bail!(
+            return Err(format!(
                 "GcpOsImageMeasurement unsupported version {}, expected {}",
                 measurement.version,
                 Self::VERSION
-            );
+            ));
         }
-        Self::new(measurement.uki_authenticode_sha256).map_err(|e| anyhow!(e))
+        Self::new(measurement.uki_authenticode_sha256)
     }
 
-    pub fn cbor_json_value_from_slice(bytes: &[u8]) -> Result<serde_json::Value> {
+    pub fn cbor_json_value_from_slice(bytes: &[u8]) -> Result<serde_json::Value, String> {
         let measurement: CborGcpOsImageMeasurement =
-            cbor_from_slice(bytes).context("GcpOsImageMeasurement")?;
-        serde_json::to_value(measurement).context("GcpOsImageMeasurement: convert to JSON")
+            cbor_from_slice(bytes, "GcpOsImageMeasurement")?;
+        serde_json::to_value(measurement)
+            .map_err(|e| format!("GcpOsImageMeasurement: failed to convert to JSON: {e}"))
     }
 
-    pub fn measurement_hash(&self) -> Result<[u8; 32]> {
-        Ok(sha256(&self.to_cbor_vec()?))
+    pub fn measurement_hash(&self) -> [u8; 32] {
+        sha256(&self.to_cbor_vec())
     }
 }
 
@@ -901,29 +910,25 @@ impl GcpOsImageMeasurementDocument {
         }
     }
 
-    pub fn from_measurement(
-        checksum_file: Vec<u8>,
-        measurement: GcpOsImageMeasurement,
-    ) -> Result<Self> {
-        Ok(Self::new(checksum_file, measurement.to_cbor_vec()?))
+    pub fn from_measurement(checksum_file: Vec<u8>, measurement: GcpOsImageMeasurement) -> Self {
+        Self::new(checksum_file, measurement.to_cbor_vec())
     }
 
-    pub fn decode_measurement(&self) -> Result<GcpOsImageMeasurement> {
+    pub fn decode_measurement(&self) -> Result<GcpOsImageMeasurement, String> {
         GcpOsImageMeasurement::from_cbor_slice(&self.measurement)
     }
 
-    pub fn decode_measurement_value(&self) -> Result<serde_json::Value> {
+    pub fn decode_measurement_value(&self) -> Result<serde_json::Value, String> {
         GcpOsImageMeasurement::cbor_json_value_from_slice(&self.measurement)
     }
 
-    pub fn verify(&self, os_image_hash: &[u8]) -> Result<()> {
+    pub fn verify(&self, os_image_hash: &[u8]) -> Result<(), String> {
         verify_measurement_material(
             os_image_hash,
             &self.checksum_file,
             &self.measurement,
             GCP_MEASUREMENT_FILENAME,
         )
-        .map_err(|e| anyhow!(e))
     }
 }
 
@@ -974,13 +979,13 @@ impl AwsOsImageMeasurement {
         Self::new(sha256(&buf).to_vec())
     }
 
-    pub fn to_cbor_vec(&self) -> Result<Vec<u8>> {
-        cbor_to_vec(self).context("AwsOsImageMeasurement")
+    pub fn to_cbor_vec(&self) -> Vec<u8> {
+        cbor_to_vec(self, "AwsOsImageMeasurement")
     }
 
-    pub fn from_cbor_slice(bytes: &[u8]) -> Result<Self> {
-        let measurement: Self = cbor_from_slice(bytes).context("AwsOsImageMeasurement")?;
-        Self::new(measurement.boot_pcr_digest).map_err(|e| anyhow!(e))
+    pub fn from_cbor_slice(bytes: &[u8]) -> Result<Self, String> {
+        let measurement: Self = cbor_from_slice(bytes, "AwsOsImageMeasurement")?;
+        Self::new(measurement.boot_pcr_digest)
     }
 }
 
@@ -1003,25 +1008,17 @@ impl AwsOsImageMeasurementDocument {
         }
     }
 
-    pub fn from_measurement(
-        checksum_file: Vec<u8>,
-        measurement: AwsOsImageMeasurement,
-    ) -> Result<Self> {
-        Ok(Self::new(checksum_file, measurement.to_cbor_vec()?))
-    }
-
-    pub fn decode_measurement(&self) -> Result<AwsOsImageMeasurement> {
+    pub fn decode_measurement(&self) -> Result<AwsOsImageMeasurement, String> {
         AwsOsImageMeasurement::from_cbor_slice(&self.measurement)
     }
 
-    pub fn verify(&self, os_image_hash: &[u8]) -> Result<()> {
+    pub fn verify(&self, os_image_hash: &[u8]) -> Result<(), String> {
         verify_measurement_material(
             os_image_hash,
             &self.checksum_file,
             &self.measurement,
             "measurement.aws.cbor",
         )
-        .map_err(|e| anyhow!(e))
     }
 }
 
@@ -1134,32 +1131,34 @@ impl SevOsImageMeasurement {
     pub const VERSION: u32 = 3;
 
     /// CBOR representation stored as `measurement.snp.cbor`.
-    pub fn to_cbor_vec(&self) -> Result<Vec<u8>> {
-        cbor_to_vec(&CborSevOsImageMeasurement::from(self)).context("SevOsImageMeasurement")
+    pub fn to_cbor_vec(&self) -> Vec<u8> {
+        cbor_to_vec(
+            &CborSevOsImageMeasurement::from(self),
+            "SevOsImageMeasurement",
+        )
     }
 
-    pub fn from_cbor_slice(bytes: &[u8]) -> Result<Self> {
-        let cbor =
-            cbor_from_slice::<CborSevOsImageMeasurement>(bytes).context("SevOsImageMeasurement")?;
+    pub fn from_cbor_slice(bytes: &[u8]) -> Result<Self, String> {
+        let cbor = cbor_from_slice::<CborSevOsImageMeasurement>(bytes, "SevOsImageMeasurement")?;
         if cbor.version != Self::VERSION {
-            bail!(
+            return Err(format!(
                 "SevOsImageMeasurement: unsupported version {}, expected {}",
                 cbor.version,
                 Self::VERSION
-            );
+            ));
         }
         Ok(cbor.into())
     }
 
-    pub fn cbor_json_value_from_slice(bytes: &[u8]) -> Result<serde_json::Value> {
-        let cbor =
-            cbor_from_slice::<CborSevOsImageMeasurement>(bytes).context("SevOsImageMeasurement")?;
-        serde_json::to_value(cbor).context("SevOsImageMeasurement: convert CBOR to JSON")
+    pub fn cbor_json_value_from_slice(bytes: &[u8]) -> Result<serde_json::Value, String> {
+        let cbor = cbor_from_slice::<CborSevOsImageMeasurement>(bytes, "SevOsImageMeasurement")?;
+        serde_json::to_value(cbor)
+            .map_err(|e| format!("SevOsImageMeasurement: failed to convert CBOR to JSON: {e}"))
     }
 
     /// SHA-256 over the CBOR measurement material.
-    pub fn measurement_hash(&self) -> Result<[u8; 32]> {
-        Ok(sha256(&self.to_cbor_vec()?))
+    pub fn measurement_hash(&self) -> [u8; 32] {
+        sha256(&self.to_cbor_vec())
     }
 }
 
@@ -1182,29 +1181,25 @@ impl SevOsImageMeasurementDocument {
         }
     }
 
-    pub fn from_measurement(
-        checksum_file: Vec<u8>,
-        measurement: SevOsImageMeasurement,
-    ) -> Result<Self> {
-        Ok(Self::new(checksum_file, measurement.to_cbor_vec()?))
+    pub fn from_measurement(checksum_file: Vec<u8>, measurement: SevOsImageMeasurement) -> Self {
+        Self::new(checksum_file, measurement.to_cbor_vec())
     }
 
-    pub fn decode_measurement(&self) -> Result<SevOsImageMeasurement> {
+    pub fn decode_measurement(&self) -> Result<SevOsImageMeasurement, String> {
         SevOsImageMeasurement::from_cbor_slice(&self.measurement)
     }
 
-    pub fn decode_measurement_value(&self) -> Result<serde_json::Value> {
+    pub fn decode_measurement_value(&self) -> Result<serde_json::Value, String> {
         SevOsImageMeasurement::cbor_json_value_from_slice(&self.measurement)
     }
 
-    pub fn verify(&self, os_image_hash: &[u8]) -> Result<()> {
+    pub fn verify(&self, os_image_hash: &[u8]) -> Result<(), String> {
         verify_measurement_material(
             os_image_hash,
             &self.checksum_file,
             &self.measurement,
             SNP_MEASUREMENT_FILENAME,
         )
-        .map_err(|e| anyhow!(e))
     }
 }
 
@@ -1352,32 +1347,34 @@ impl TdxOsImageMeasurement {
     pub const VERSION: u32 = 3;
 
     /// CBOR representation stored as `measurement.tdx.cbor`.
-    pub fn to_cbor_vec(&self) -> Result<Vec<u8>> {
-        cbor_to_vec(&CborTdxOsImageMeasurement::from(self)).context("TdxOsImageMeasurement")
+    pub fn to_cbor_vec(&self) -> Vec<u8> {
+        cbor_to_vec(
+            &CborTdxOsImageMeasurement::from(self),
+            "TdxOsImageMeasurement",
+        )
     }
 
-    pub fn from_cbor_slice(bytes: &[u8]) -> Result<Self> {
-        let cbor =
-            cbor_from_slice::<CborTdxOsImageMeasurement>(bytes).context("TdxOsImageMeasurement")?;
+    pub fn from_cbor_slice(bytes: &[u8]) -> Result<Self, String> {
+        let cbor = cbor_from_slice::<CborTdxOsImageMeasurement>(bytes, "TdxOsImageMeasurement")?;
         if cbor.version != Self::VERSION {
-            bail!(
+            return Err(format!(
                 "TdxOsImageMeasurement: unsupported version {}, expected {}",
                 cbor.version,
                 Self::VERSION
-            );
+            ));
         }
         Ok(cbor.into())
     }
 
-    pub fn cbor_json_value_from_slice(bytes: &[u8]) -> Result<serde_json::Value> {
-        let cbor =
-            cbor_from_slice::<CborTdxOsImageMeasurement>(bytes).context("TdxOsImageMeasurement")?;
-        serde_json::to_value(cbor).context("TdxOsImageMeasurement: convert CBOR to JSON")
+    pub fn cbor_json_value_from_slice(bytes: &[u8]) -> Result<serde_json::Value, String> {
+        let cbor = cbor_from_slice::<CborTdxOsImageMeasurement>(bytes, "TdxOsImageMeasurement")?;
+        serde_json::to_value(cbor)
+            .map_err(|e| format!("TdxOsImageMeasurement: failed to convert CBOR to JSON: {e}"))
     }
 
     /// SHA-256 over the CBOR measurement material.
-    pub fn measurement_hash(&self) -> Result<[u8; 32]> {
-        Ok(sha256(&self.to_cbor_vec()?))
+    pub fn measurement_hash(&self) -> [u8; 32] {
+        sha256(&self.to_cbor_vec())
     }
 }
 
@@ -1389,29 +1386,25 @@ impl TdxOsImageMeasurementDocument {
         }
     }
 
-    pub fn from_measurement(
-        checksum_file: Vec<u8>,
-        measurement: TdxOsImageMeasurement,
-    ) -> Result<Self> {
-        Ok(Self::new(checksum_file, measurement.to_cbor_vec()?))
+    pub fn from_measurement(checksum_file: Vec<u8>, measurement: TdxOsImageMeasurement) -> Self {
+        Self::new(checksum_file, measurement.to_cbor_vec())
     }
 
-    pub fn decode_measurement(&self) -> Result<TdxOsImageMeasurement> {
+    pub fn decode_measurement(&self) -> Result<TdxOsImageMeasurement, String> {
         TdxOsImageMeasurement::from_cbor_slice(&self.measurement)
     }
 
-    pub fn decode_measurement_value(&self) -> Result<serde_json::Value> {
+    pub fn decode_measurement_value(&self) -> Result<serde_json::Value, String> {
         TdxOsImageMeasurement::cbor_json_value_from_slice(&self.measurement)
     }
 
-    pub fn verify(&self, os_image_hash: &[u8]) -> Result<()> {
+    pub fn verify(&self, os_image_hash: &[u8]) -> Result<(), String> {
         verify_measurement_material(
             os_image_hash,
             &self.checksum_file,
             &self.measurement,
             TDX_MEASUREMENT_FILENAME,
         )
-        .map_err(|e| anyhow!(e))
     }
 }
 

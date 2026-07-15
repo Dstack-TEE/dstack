@@ -119,13 +119,6 @@ impl PlatformEvidence {
         }
     }
 
-    pub fn aws_nitro_tpm_attestation_doc(&self) -> Option<&[u8]> {
-        match self {
-            Self::AwsNitroTpm { attestation_doc } => Some(attestation_doc.as_slice()),
-            _ => None,
-        }
-    }
-
     pub fn sev_snp_report(&self) -> Option<&[u8]> {
         match self {
             Self::SevSnp { report, .. } => Some(report.as_slice()),
