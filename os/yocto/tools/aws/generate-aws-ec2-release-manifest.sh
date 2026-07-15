@@ -365,7 +365,16 @@ hardening_json() {
   if [ -n "$rootfs_squashfs" ]; then
     args+=(--rootfs-squashfs "$rootfs_squashfs")
   fi
-  output_text=$("$audit_script" "${args[@]}" 2>&1)
+  # Capture the audit status explicitly: under `set -e` a plain command
+  # substitution would abort the whole manifest run without printing the
+  # audit output, leaving no diagnostics for the release blocker.
+  local audit_status=0
+  output_text=$("$audit_script" "${args[@]}" 2>&1) || audit_status=$?
+  if [ "$audit_status" -ne 0 ]; then
+    printf '%s\n' "$output_text" >&2
+    echo "ERROR: hardening audit failed with exit code $audit_status; see audit output above" >&2
+    exit "$audit_status"
+  fi
   failures=$(printf '%s\n' "$output_text" | awk -F'[ =]' '/^failures=/{print $2}')
   warnings=$(printf '%s\n' "$output_text" | awk -F'[ =]' '/^failures=/{print $4}')
   jq -n \

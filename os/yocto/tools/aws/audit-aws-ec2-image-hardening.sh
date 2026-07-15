@@ -178,7 +178,9 @@ if [ -n "$rootfs_squashfs" ]; then
   if [ ! -f "$rootfs_squashfs" ]; then
     fail "rootfs squashfs not found: $rootfs_squashfs"
   elif ! command -v unsquashfs >/dev/null 2>&1; then
-    warn "unsquashfs not available; skipped rootfs content checks"
+    # A squashfs was supplied, so the caller expects the rootfs content checks
+    # to run; a missing tool must not silently pass the audit (fail-closed).
+    fail "unsquashfs not available; cannot run rootfs content checks (install squashfs-tools)"
   else
     echo "== Rootfs account and unit checks =="
     shadow=$(unsquashfs -cat "$rootfs_squashfs" etc/shadow 2>/dev/null || true)
