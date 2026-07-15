@@ -2592,7 +2592,6 @@ dependencies = [
 name = "dstack-kms"
 version = "0.6.0"
 dependencies = [
- "aes-gcm",
  "anyhow",
  "cc-eventlog",
  "chrono",
@@ -2611,7 +2610,6 @@ dependencies = [
  "k256",
  "load_config",
  "parity-scale-codec",
- "prost 0.13.5",
  "ra-rpc",
  "ra-tls",
  "rand 0.8.6",
@@ -2780,7 +2778,6 @@ dependencies = [
  "libc",
  "luks2",
  "parity-scale-codec",
- "prost 0.13.5",
  "ra-rpc",
  "ra-tls",
  "rand 0.8.6",

@@ -19,7 +19,6 @@ getrandom = { workspace = true, features = ["std"] }
 hex.workspace = true
 hex_fmt.workspace = true
 regex.workspace = true
-prost.workspace = true
 scale = { workspace = true, features = ["derive"] }
 schnorrkel.workspace = true
 serde.workspace = true

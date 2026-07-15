@@ -384,7 +384,7 @@ impl KmsRpc for RpcHandler {
             (k256_app_key.to_bytes().to_vec(), signature)
         };
 
-        let response = AppKeyResponse {
+        Ok(AppKeyResponse {
             ca_cert: self.state.root_ca.pem_cert.clone(),
             disk_crypt_key: app_disk_key.to_vec(),
             env_crypt_key: env_crypt_key.to_vec(),
@@ -393,10 +393,7 @@ impl KmsRpc for RpcHandler {
             tproxy_app_id: gateway_app_id.clone(),
             gateway_app_id,
             os_image_hash,
-            ..Default::default()
-        };
-
-        Ok(response)
+        })
     }
 
     async fn get_app_env_encrypt_pub_key(self, request: AppId) -> Result<PublicKeyResponse> {

@@ -105,7 +105,6 @@ export interface GetQuoteResponse {
   replayRtmrs: () => string[]
 }
 
-
 export interface AttestResponse {
   __name__: Readonly<'AttestResponse'>
 
@@ -127,11 +126,6 @@ export function to_hex(data: string | Buffer | Uint8Array): string {
     return Buffer.from(data).toString('hex');
   }
   return (data as Buffer).toString('hex');
-}
-
-
-function attestation_request_payload(reportData: string | Buffer | Uint8Array): string {
-  return JSON.stringify({ report_data: to_hex(reportData) })
 }
 
 function x509key_to_uint8array(pem: string, max_length?: number) {
@@ -306,7 +300,7 @@ export class DstackClient<T extends TcbInfo = TcbInfoV05x> {
     if (hex.length > 128) {
       throw new Error(`Report data is too large, it should be less than 64 bytes.`)
     }
-    const payload = attestation_request_payload(report_data)
+    const payload = JSON.stringify({ report_data: hex })
     const result = await send_rpc_request<GetQuoteResponse>(this.endpoint, '/GetQuote', payload)
     if ('error' in result) {
       const err = result['error'] as string
@@ -325,7 +319,7 @@ export class DstackClient<T extends TcbInfo = TcbInfoV05x> {
     if (hex.length > 128) {
       throw new Error(`Report data is too large, it should be less than 64 bytes.`)
     }
-    const payload = attestation_request_payload(report_data)
+    const payload = JSON.stringify({ report_data: hex })
     const result = await send_rpc_request<{ attestation: string }>(this.endpoint, '/Attest', payload)
     if ('error' in (result as any)) {
       const err = (result as any)['error'] as string

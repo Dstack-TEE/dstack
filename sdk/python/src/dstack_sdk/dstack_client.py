@@ -210,22 +210,6 @@ class VersionResponse(BaseModel):
     rev: str
 
 
-def _bytes_to_hex(value: str | bytes) -> str:
-    value_bytes = value.encode() if isinstance(value, str) else value
-    return binascii.hexlify(value_bytes).decode()
-
-
-def _attestation_request_payload(report_data: str | bytes) -> Dict[str, Any]:
-    if not report_data or not isinstance(report_data, (bytes, str)):
-        raise ValueError("report_data can not be empty")
-    report_bytes: bytes = (
-        report_data.encode() if isinstance(report_data, str) else report_data
-    )
-    if len(report_bytes) > 64:
-        raise ValueError("report_data must be less than 64 bytes")
-    return {"report_data": binascii.hexlify(report_bytes).decode()}
-
-
 class EventLog(BaseModel):
     imr: int
     event_type: int
@@ -447,16 +431,36 @@ class AsyncDstackClient(BaseClient):
         result = await self._send_rpc_request("GetKey", data)
         return GetKeyResponse(**result)
 
-    async def get_quote(self, report_data: str | bytes) -> GetQuoteResponse:
+    async def get_quote(
+        self,
+        report_data: str | bytes,
+    ) -> GetQuoteResponse:
         """Request an attestation quote for the provided report data."""
-        payload = _attestation_request_payload(report_data)
-        result = await self._send_rpc_request("GetQuote", payload)
+        if not report_data or not isinstance(report_data, (bytes, str)):
+            raise ValueError("report_data can not be empty")
+        report_bytes: bytes = (
+            report_data.encode() if isinstance(report_data, str) else report_data
+        )
+        if len(report_bytes) > 64:
+            raise ValueError("report_data must be less than 64 bytes")
+        hex = binascii.hexlify(report_bytes).decode()
+        result = await self._send_rpc_request("GetQuote", {"report_data": hex})
         return GetQuoteResponse(**result)
 
-    async def attest(self, report_data: str | bytes) -> AttestResponse:
+    async def attest(
+        self,
+        report_data: str | bytes,
+    ) -> AttestResponse:
         """Request a versioned attestation for the provided report data."""
-        payload = _attestation_request_payload(report_data)
-        result = await self._send_rpc_request("Attest", payload)
+        if not report_data or not isinstance(report_data, (bytes, str)):
+            raise ValueError("report_data can not be empty")
+        report_bytes: bytes = (
+            report_data.encode() if isinstance(report_data, str) else report_data
+        )
+        if len(report_bytes) > 64:
+            raise ValueError("report_data must be less than 64 bytes")
+        hex = binascii.hexlify(report_bytes).decode()
+        result = await self._send_rpc_request("Attest", {"report_data": hex})
         return AttestResponse(**result)
 
     async def info(self) -> InfoResponse[TcbInfo]:
@@ -587,12 +591,18 @@ class DstackClient(BaseClient):
         raise NotImplementedError
 
     @call_async
-    def get_quote(self, report_data: str | bytes) -> GetQuoteResponse:
+    def get_quote(
+        self,
+        report_data: str | bytes,
+    ) -> GetQuoteResponse:
         """Request an attestation quote for the provided report data."""
         raise NotImplementedError
 
     @call_async
-    def attest(self, report_data: str | bytes) -> AttestResponse:
+    def attest(
+        self,
+        report_data: str | bytes,
+    ) -> AttestResponse:
         """Request a versioned attestation for the provided report data."""
         raise NotImplementedError
 
