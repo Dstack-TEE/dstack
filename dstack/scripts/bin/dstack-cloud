@@ -339,8 +339,11 @@ class AwsConfig:
     import_role_name: str = ""  # optional vmimport role override
     delete_s3_after_import: bool = True
 
-    # Metadata options
-    metadata_hop_limit: int = 2
+    # Metadata options. Hop limit 1 keeps IMDSv2 tokens (and any instance-role
+    # credentials) unreachable from app containers behind the docker bridge;
+    # dstack itself never talks to IMDS. Set to 2 only if your containers
+    # legitimately need the instance role.
+    metadata_hop_limit: int = 1
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -375,7 +378,7 @@ class AwsConfig:
             "s3_prefix": "dstack-import",
             "import_role_name": "",
             "delete_s3_after_import": True,
-            "metadata_hop_limit": 2,
+            "metadata_hop_limit": 1,
         }
 
 
