@@ -1171,9 +1171,8 @@ fn aws_nitro_tpm_boot_pcr_values(
 ///
 /// This is the single source of truth for the boot-PCR binding; the verifier
 /// and KMS must derive the value the same way, so both call this rather than
-/// re-hardcoding the PCR set. The preferred path checks it against
-/// `aws_measurement.boot_pcr_digest`; legacy paths without `aws_measurement`
-/// use the value directly as `os_image_hash`.
+/// re-hardcoding the PCR set. The value is checked against
+/// `aws_measurement.boot_pcr_digest` (`aws_measurement` is mandatory on AWS).
 pub fn aws_nitro_tpm_boot_pcr_digest(
     pcrs: &std::collections::BTreeMap<u16, Vec<u8>>,
 ) -> Result<Vec<u8>> {
