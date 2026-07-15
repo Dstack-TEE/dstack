@@ -118,18 +118,19 @@ PCR12: 0000000000000000000000000000000000000000000000000000000000000000000000000
 UKI AuthentiCode SHA256: <uki-authenticode-sha256>
 ```
 
-For a dynamic app package, the **UKI/AMI stays generic**. App/config identity is
-on the shared disk (`MrConfigV3` in `.sys-config.json` / host-shared) and is
-measured into **PCR8** at guest setup (not embedded as `dstack.mr_config_id` in
-the UKI cmdline). Record the expected config id and shared-disk hash in the
-deployment-specific release package:
+For a dynamic app package, the **UKI/AMI stays generic**. App/config identity
+is not embedded in the UKI cmdline; the guest computes the `MrConfig` **V2**
+config id from its measured app identity (compose hash, app id, key-provider
+kind, deploy-time key-provider pin from `app-compose.json`) and extends the
+raw config id into **PCR8** at guest setup. Record the expected config id in
+the deployment-specific release package:
 
 ```text
 dstack_os_image_hash: <os-image-hash>   # prefer sha256(sha256sum.txt) + aws_measurement
 PCR4/PCR7/PCR12: <boot PCRs for the AMI UKI>
-PCR8: <sha384 extend of MrConfigV3 config id from shared disk>
+PCR8: sha384(0^48 || <MrConfig V2 config id>)
 PCR14: <event-log replay; early pin uses boot-mr-done cutoff>
-shared MrConfigV3 document hash / config id: <mr-config-id>
+expected MrConfig V2 config id: <mr-config-id>
 ```
 
 ## 3. Verify Attestation Freshness
@@ -191,7 +192,8 @@ For AWS NitroTPM, the policy must require:
 - accepted KMS identity via **early `mrAggregated`** (boot-mr-done), same as
   bare TDX — not `kms.composeHashes`;
 - verified PCR14 event-log replay (single event lane; no PCR23 runtime split);
-- verified PCR8 config commitment against shared-disk MrConfigV3;
+- verified PCR8 config commitment against the expected `MrConfig` V2 config id
+  (computed from the measured app identity);
 - non-empty freshness via `report_data` for external verifier flows.
 
 The `attestationMode` field is carried in the verified boot info for

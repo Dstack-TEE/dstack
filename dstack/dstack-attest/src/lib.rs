@@ -82,15 +82,13 @@ pub fn emit_runtime_event(event: &str, payload: &[u8]) -> anyhow::Result<()> {
 /// of producing quotes that can never verify. Does **not** append to the
 /// dstack event log / PCR14 lane — config is a separate register.
 pub fn measure_aws_config_pcr(config_id: &[u8; 48]) -> anyhow::Result<()> {
-    use sha2::{Digest, Sha384};
     let mode = AttestationMode::detect()?;
     if mode != AttestationMode::DstackAwsNitroTpm {
         return Ok(());
     }
     let config_pcr = u32::from(crate::attestation::AWS_NITRO_TPM_CONFIG_PCR);
-    let digest: [u8; 48] = Sha384::digest(config_id).into();
     let tpm = tpm_attest::TpmContext::detect().context("Failed to detect TPM device")?;
-    tpm.pcr_extend(config_pcr, &digest, "sha384")
+    tpm.pcr_extend(config_pcr, config_id, "sha384")
         .context("failed to extend AWS NitroTPM config PCR8")?;
     let quoted = tpm
         .pcr_read_single(config_pcr, "sha384")
@@ -106,11 +104,15 @@ pub fn measure_aws_config_pcr(config_id: &[u8; 48]) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Expected PCR8 value after a single SHA384 extend of `sha384(config_id)` from zero.
+/// Expected PCR8 value after a single SHA384 extend of the raw `config_id`
+/// from zero: `sha384(0^48 || config_id)`.
+///
+/// The config id is extended as-is (it is already 48 bytes, the SHA384 bank
+/// digest size), so a verifier that recovers the claimed `config_id` can parse
+/// its version byte and recompute this value directly.
 pub fn expected_aws_config_pcr(config_id: &[u8; 48]) -> [u8; 48] {
     use sha2::{Digest, Sha384};
-    let digest: [u8; 48] = Sha384::digest(config_id).into();
     let mut material = [0u8; 96];
-    material[48..].copy_from_slice(&digest);
+    material[48..].copy_from_slice(config_id);
     Sha384::digest(material).into()
 }

@@ -1,5 +1,13 @@
 # AWS EC2 dstack-os AMI Reproducibility Manifest
 
+> **Note (post-simplify, PR #753):** this manifest is a dated evidence record.
+> Passages below that describe embedding `dstack.mr_config_id` in the UKI
+> cmdline or a shared-disk `MrConfigV3` document reflect the model at build
+> time and are superseded: the guest now computes the `MrConfig` **V2** id
+> from its measured app identity and extends the raw config id into **PCR8**
+> (`PCR8 = sha384(0^48 || config_id)`). See
+> `docs/aws-ec2-production-verifier-runbook.md` for the current model.
+
 Date: 2026-07-01
 
 This manifest records the reproducibility and reference-measurement evidence for

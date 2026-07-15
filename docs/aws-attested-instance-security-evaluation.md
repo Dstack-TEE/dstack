@@ -4,8 +4,9 @@
 > in UKI cmdline and no `mr_config` document is shipped on the shared disk.
 > The guest computes the `MrConfig` **V2** id from its measured app identity
 > (compose hash, app id, key-provider kind, deploy-time key-provider pin from
-> `app-compose.json`) and extends `sha384(config_id)` into **PCR8** exactly
-> once. There is no host-supplied config claim to cross-check locally; the
+> `app-compose.json`) and extends the raw 48-byte `config_id` into **PCR8**
+> exactly once (`PCR8 = sha384(0^48 || config_id)`), so verifiers can parse
+> the config-id version byte and recompute the register directly. There is no host-supplied config claim to cross-check locally; the
 > key-provider pin is enforced by `verify_key_provider_id`. All dstack
 > events extend **SHA384 PCR14** only (TDX RTMR3 analogue; no PCR23 runtime
 > split). `os_image_hash` is the unified `sha256(sha256sum.txt)`;
