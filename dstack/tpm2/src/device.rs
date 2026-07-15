@@ -320,7 +320,10 @@ mod tests {
         let bytes = cmd.finalize();
 
         assert_eq!(&bytes[0..2], &[0x80, 0x02]);
-        assert_eq!(u32::from_be_bytes(bytes[2..6].try_into().unwrap()), 25);
+        assert_eq!(
+            u32::from_be_bytes([bytes[2], bytes[3], bytes[4], bytes[5]]),
+            25
+        );
         assert_eq!(&bytes[6..10], &[0x20, 0x00, 0x00, 0x01]);
         assert_eq!(&bytes[10..14], &[0x01, 0x80, 0x10, 0x00]);
         assert_eq!(&bytes[14..18], &[0x01, 0x80, 0x10, 0x00]);
@@ -358,7 +361,10 @@ mod tests {
             0x00, 0x00, 0x00, 0x00, // TPM_RC_SUCCESS
         ];
 
-        let parsed = TpmResponse::parse(&response).unwrap();
+        let parsed = match TpmResponse::parse(&response) {
+            Ok(parsed) => parsed,
+            Err(error) => panic!("failed to parse minimal TPM response: {error}"),
+        };
         assert!(parsed.is_success());
         assert!(parsed.data.is_empty());
     }

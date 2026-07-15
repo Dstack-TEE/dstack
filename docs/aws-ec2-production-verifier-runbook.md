@@ -74,7 +74,8 @@ After the release artifact hashes and AWS PCR references match the published
 release evidence, deploy with **`dstack-cloud`** (`platform: aws`). The CLI
 imports the local UKI `disk.raw` as an Attestable AMI (UEFI + NitroTPM v2.0) when
 `aws_config.ami_id` is empty, builds the shared config disk with
-`aws_measurement` from `measurement.aws.cbor`, and launches the instance.
+`aws_measurement` from `measurement.aws.cbor`, imports a minimal GPT data-disk
+template whose partition is labeled `dstack-data`, and launches the instance.
 
 ```bash
 # one-time: install CLI
@@ -88,13 +89,13 @@ cd my-aws-app
 
 dstack-cloud pull dstack-0.6.0   # UKI package must include assemble-time measurement.aws.cbor
 dstack-cloud prepare             # embeds fixed os_image_hash + aws_measurement (no PCR recompute)
-dstack-cloud deploy              # import AMI if needed, import shared snapshot, run-instances
+dstack-cloud deploy              # import AMI/shared/labeled-data snapshots, run-instances
 
 dstack-cloud status
 dstack-cloud logs --follow
 ```
 
-Record the resulting AMI id, shared snapshot, and instance id from
+Record the resulting AMI id, shared/data snapshots, and instance id from
 `state.json` / `dstack-cloud status` in the release review package.
 
 Recompute AWS reference PCRs and the UKI AuthentiCode hash from the release
@@ -102,7 +103,9 @@ UKI with version-pinned host tools (do not rely on an unpinned container
 toolchain for reference measurements):
 
 ```bash
-cargo install --git https://github.com/aws/NitroTPM-Tools --locked nitro-tpm-pcr-compute
+cargo install --git https://github.com/aws/NitroTPM-Tools \
+  --rev d76d6eeebd4169b00a3c3af9858852d48f40e748 \
+  --locked nitro-tpm-pcr-compute   # aws/NitroTPM-Tools v1.1.2
 # The UKI is EFI/BOOT/BOOTX64.EFI in the 256 MiB EFI partition at 1 MiB.
 dd if=published/disk.raw of=efi.img bs=1M skip=1 count=256 status=none
 mcopy -i efi.img ::EFI/BOOT/BOOTX64.EFI dstack-uki.efi

@@ -23,7 +23,8 @@ Deploy tooling (`dstack-cloud prepare`) only **embeds** these files into
 AWS PCR precompute requires a pinned host `nitro-tpm-pcr-compute` binary (Rust,
 [aws/NitroTPM-Tools](https://github.com/aws/NitroTPM-Tools)). Set
 `NITRO_TPM_PCR_COMPUTE_BIN` or install it on `PATH`, for example with
-`cargo install --git https://github.com/aws/NitroTPM-Tools --locked nitro-tpm-pcr-compute`.
+`cargo install --git https://github.com/aws/NitroTPM-Tools --rev d76d6eeebd4169b00a3c3af9858852d48f40e748 --locked nitro-tpm-pcr-compute`
+(aws/NitroTPM-Tools v1.1.2).
 If it is missing, UKI assembly fails.
 
 `mk-image-mr.sh <release.tar.gz>` creates the flattened, rootfs-free

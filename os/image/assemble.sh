@@ -459,7 +459,7 @@ if [[ "$UKI_CREATED" = "1" ]]; then
     if [[ -z "$pcr_compute_bin" ]]; then
         echo "Error: cannot produce measurement.aws.cbor for UKI image." >&2
         echo "Install the pinned host tool:" >&2
-        echo "  cargo install --git https://github.com/aws/NitroTPM-Tools --locked nitro-tpm-pcr-compute" >&2
+        echo "  cargo install --git https://github.com/aws/NitroTPM-Tools --rev d76d6eeebd4169b00a3c3af9858852d48f40e748 --locked nitro-tpm-pcr-compute" >&2
         echo "  # or set NITRO_TPM_PCR_COMPUTE_BIN=/path/to/nitro-tpm-pcr-compute" >&2
         echo "measurement.aws.cbor must be fixed at assemble time for a stable os_image_hash." >&2
         exit 1

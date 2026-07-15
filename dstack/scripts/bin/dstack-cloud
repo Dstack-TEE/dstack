@@ -310,7 +310,7 @@ class AwsConfig:
     boot_image_tar: str = ""  # explicit path override
 
     # Data disk
-    data_size: int = 20  # GiB for new empty data volume
+    data_size: int = 20  # GiB for the volume created from the labeled template
     data_snapshot: str = ""  # optional existing snapshot for data disk
 
     # Shared-disk device names (dstack host-shared + data)
@@ -324,7 +324,7 @@ class AwsConfig:
     security_group_ids: List[str] = field(default_factory=list)
     iam_instance_profile: str = ""  # name or ARN
 
-    # S3 used when importing AMI / shared snapshot from local disk.raw
+    # S3 used when importing AMI / shared / labeled-data snapshots from raw disks
     s3_bucket: str = ""
     s3_prefix: str = "dstack-import"
     import_role_name: str = ""  # optional vmimport role override
@@ -384,6 +384,7 @@ class DeploymentState:
     instance_id: str = ""
     ami_id: str = ""
     shared_snapshot: str = ""
+    data_snapshot: str = ""  # Data template snapshot created by dstack-cloud
     external_ip: str = ""
     internal_ip: str = ""
     status: str = ""  # RUNNING, STOPPED, TERMINATED, etc.
@@ -731,25 +732,7 @@ class CloudDeploymentManager:
 
         # Create a minimal raw disk image with GPT partition table
         with tempfile.TemporaryDirectory() as tmpdir:
-            raw_file = os.path.join(tmpdir, "disk.raw")
-
-            # Create a 10MB sparse file (enough for GPT)
-            disk_size_bytes = 10 * 1024 * 1024
-            with open(raw_file, 'wb') as f:
-                f.truncate(disk_size_bytes)
-
-            # Create GPT partition table with dstack-data partition using sgdisk
-            # -o: clear and create new GPT
-            # -n 1:0:0: create partition 1, start at first available, end at last available
-            # -c 1:dstack-data: set partition 1 name (PARTLABEL) to dstack-data
-            result = subprocess.run(
-                ["sgdisk", "-o", "-n", "1:0:0", "-c", "1:dstack-data", raw_file],
-                capture_output=True, text=True
-            )
-            if result.returncode != 0:
-                raise RuntimeError(f"Failed to create GPT partition table: {result.stderr}")
-
-            logger.debug("Created GPT partition table with dstack-data label")
+            self._build_data_raw_disk(Path(tmpdir))
 
             # Compress to tar.gz for upload
             tar_file = os.path.join(tmpdir, "disk.tar.gz")
@@ -1697,6 +1680,29 @@ class CloudDeploymentManager:
             logger.warning(".user-config not found, skipping")
         return raw_file
 
+    def _build_data_raw_disk(self, work_path: Optional[Path] = None) -> Path:
+        """Build a minimal GPT disk with a PARTLABEL=dstack-data partition."""
+        import shutil
+
+        if not shutil.which("sgdisk"):
+            raise FileNotFoundError(
+                "'sgdisk' command not found. Install the gdisk package."
+            )
+        if work_path is None:
+            work_path = Path(tempfile.mkdtemp(prefix="dstack-data-"))
+        work_path.mkdir(parents=True, exist_ok=True)
+        raw_file = work_path / "disk.raw"
+        subprocess.run(["truncate", "-s", "10M", str(raw_file)], check=True)
+        subprocess.run(
+            [
+                "sgdisk", "-o", "-n", "1:0:0", "-c", "1:dstack-data",
+                str(raw_file),
+            ],
+            check=True,
+            capture_output=True,
+        )
+        return raw_file
+
     def _aws_import_snapshot_from_raw(
         self,
         config: AwsConfig,
@@ -1931,14 +1937,31 @@ class CloudDeploymentManager:
                 pass
 
         # Block device mappings: shared + data
+        managed_data_snapshot = ""
+        if config.data_snapshot:
+            data_snapshot = config.data_snapshot
+        else:
+            logger.info("building labeled data disk template...")
+            data_raw = self._build_data_raw_disk()
+            try:
+                data_token = f"data-{config.instance_name}-{int(time.time())}"[:64]
+                data_snapshot = self._aws_import_snapshot_from_raw(
+                    config, data_raw, f"dstack-data-{config.instance_name}", data_token
+                )
+                managed_data_snapshot = data_snapshot
+            finally:
+                try:
+                    import shutil
+                    shutil.rmtree(data_raw.parent, ignore_errors=True)
+                except Exception:
+                    pass
+
         data_ebs: Dict[str, Any] = {
             "DeleteOnTermination": True,
             "VolumeType": config.volume_type,
+            "SnapshotId": data_snapshot,
+            "VolumeSize": int(config.data_size),
         }
-        if config.data_snapshot:
-            data_ebs["SnapshotId"] = config.data_snapshot
-        else:
-            data_ebs["VolumeSize"] = int(config.data_size)
 
         mappings = [
             {
@@ -2019,6 +2042,7 @@ class CloudDeploymentManager:
             instance_id=instance_id,
             ami_id=ami_id,
             shared_snapshot=shared_snapshot,
+            data_snapshot=managed_data_snapshot,
             external_ip=external_ip,
             internal_ip=internal_ip,
             status=inst.get("State", {}).get("Name", "running").upper(),
@@ -2032,6 +2056,8 @@ class CloudDeploymentManager:
         logger.info(f"Instance ID: {instance_id}")
         logger.info(f"AMI: {ami_id}")
         logger.info(f"Shared snapshot: {shared_snapshot}")
+        if managed_data_snapshot:
+            logger.info(f"Data template snapshot: {managed_data_snapshot}")
         logger.info(f"Public IP: {external_ip or '(none)'}")
         logger.info(f"Private IP: {internal_ip or '(none)'}")
         logger.info("")
@@ -2757,6 +2783,13 @@ class CloudDeploymentManager:
                     "ec2", "delete-snapshot",
                     "--region", state.region,
                     "--snapshot-id", state.shared_snapshot,
+                ], capture=True, check=False)
+            if not keep_images and state.data_snapshot:
+                logger.info(f"Deleting data template snapshot {state.data_snapshot}...")
+                self._run_aws([
+                    "ec2", "delete-snapshot",
+                    "--region", state.region,
+                    "--snapshot-id", state.data_snapshot,
                 ], capture=True, check=False)
             state_path = self.work_dir / STATE_FILE
             if state_path.exists():
