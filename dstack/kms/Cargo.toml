@@ -51,6 +51,7 @@ dstack-mr.workspace = true
 [dev-dependencies]
 cc-eventlog.workspace = true
 dstack-attest.workspace = true
+tokio = { workspace = true, features = ["macros", "rt"] }
 
 [features]
 default = []

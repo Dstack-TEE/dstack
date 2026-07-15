@@ -830,6 +830,37 @@ mod tests {
         (attestation, vm_config, os_image_hash, key_provider_info)
     }
 
+    /// Build a unified AWS vm_config (`os_image_hash = sha256(sha256sum.txt)`
+    /// plus a bound `aws_measurement` document) matching the given quoted PCRs.
+    fn aws_nitro_tpm_unified_vm_config(pcrs: &BTreeMap<u16, Vec<u8>>) -> String {
+        let measurement =
+            dstack_types::AwsOsImageMeasurement::from_boot_pcrs(&pcrs[&4], &pcrs[&7], &pcrs[&12])
+                .expect("valid boot pcrs");
+        let measurement_cbor = measurement.to_cbor_vec().expect("encode aws measurement");
+        let checksum_file = format!(
+            "{}  measurement.aws.cbor\n",
+            hex::encode(Sha256::digest(&measurement_cbor))
+        )
+        .into_bytes();
+        let os_image_hash = dstack_types::image_hash_from_sha256sum(&checksum_file);
+        let document =
+            dstack_types::AwsOsImageMeasurementDocument::new(checksum_file, measurement_cbor);
+        serde_json::json!({
+            "os_image_hash": hex::encode(os_image_hash),
+            "aws_measurement": document,
+        })
+        .to_string()
+    }
+
+    fn test_cvm_verifier(cache_dir: &std::path::Path) -> CvmVerifier {
+        CvmVerifier::new(
+            cache_dir.display().to_string(),
+            "http://127.0.0.1:9/should-not-download/{OS_IMAGE_HASH}.tar.gz".to_string(),
+            std::time::Duration::from_secs(1),
+            None,
+        )
+    }
+
     fn verified_aws_nitro_tpm_pcrs(att: &VerifiedAttestation) -> &BTreeMap<u16, Vec<u8>> {
         match &att.report {
             ra_tls::attestation::DstackVerifiedReport::DstackAwsNitroTpm(report) => &report.pcrs,
@@ -1068,6 +1099,62 @@ mod tests {
         // The boot-time snapshot truncates the launch log at boot-mr-done, so
         // its aggregated MR differs from the full runtime MR.
         assert_ne!(runtime.mr_aggregated, boottime.mr_aggregated);
+    }
+
+    // The KMS key-release pipeline (`ensure_app_attestation_allowed`) gates
+    // non-SNP quotes through `CvmVerifier::verify_os_image_hash`; these tests
+    // pin down that the AWS path of that check enforces `aws_measurement`.
+
+    #[tokio::test]
+    async fn kms_os_image_check_rejects_aws_vm_config_without_aws_measurement() {
+        let (attestation, legacy_vm_config, _, _) =
+            verified_aws_nitro_tpm_attestation(vec![0x22; 32], 0x04);
+        let cache = tempfile::tempdir().expect("temp cache dir");
+        let verifier = test_cvm_verifier(cache.path());
+        let mut details = VerificationDetails::default();
+
+        let err = verifier
+            .verify_os_image_hash(legacy_vm_config, &attestation, false, &mut details)
+            .await
+            .expect_err("vm_config without aws_measurement must be rejected");
+        assert!(
+            format!("{err:#}").contains("aws_measurement is required"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    #[tokio::test]
+    async fn kms_os_image_check_accepts_bound_aws_measurement() {
+        let (attestation, _, _, _) = verified_aws_nitro_tpm_attestation(vec![0x22; 32], 0x04);
+        let vm_config = aws_nitro_tpm_unified_vm_config(verified_aws_nitro_tpm_pcrs(&attestation));
+        let cache = tempfile::tempdir().expect("temp cache dir");
+        let verifier = test_cvm_verifier(cache.path());
+        let mut details = VerificationDetails::default();
+
+        verifier
+            .verify_os_image_hash(vm_config, &attestation, false, &mut details)
+            .await
+            .expect("unified aws_measurement vm_config should verify offline");
+    }
+
+    #[tokio::test]
+    async fn kms_os_image_check_rejects_aws_boot_pcr_digest_mismatch() {
+        let (attestation, _, _, _) = verified_aws_nitro_tpm_attestation(vec![0x22; 32], 0x04);
+        // Document computed from different boot PCRs than the quoted ones.
+        let other_pcrs = aws_nitro_tpm_boot_pcrs(0x05);
+        let vm_config = aws_nitro_tpm_unified_vm_config(&other_pcrs);
+        let cache = tempfile::tempdir().expect("temp cache dir");
+        let verifier = test_cvm_verifier(cache.path());
+        let mut details = VerificationDetails::default();
+
+        let err = verifier
+            .verify_os_image_hash(vm_config, &attestation, false, &mut details)
+            .await
+            .expect_err("aws_measurement not matching quoted PCRs must be rejected");
+        assert!(
+            format!("{err:#}").contains("boot_pcr_digest mismatch"),
+            "unexpected error: {err:#}"
+        );
     }
 
     #[test]
