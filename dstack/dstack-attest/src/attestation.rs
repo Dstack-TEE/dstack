@@ -1134,13 +1134,20 @@ fn aws_nitro_tpm_replayed_event_pcr(
     replay_runtime_events::<Sha384>(runtime_events, aws_nitro_tpm_event_boundary(boottime_mr))
 }
 
-fn aws_nitro_tpm_verified_event_pcr(
+/// Bind the event log to the quoted PCR14 register.
+///
+/// Always replays the **full** event log and requires it to equal the quoted
+/// PCR14, exactly like the TDX RTMR3 (`verify_tdx_quote_with_events`) and GCP
+/// PCR14 verify paths. The boot-time snapshot boundary is a property of the MR
+/// derivation, not of this integrity check, so it is intentionally not applied
+/// here — otherwise a full runtime quote could never satisfy a boot-time
+/// (`boottime_mr`) decode.
+fn aws_nitro_tpm_verify_event_pcr(
     pcrs: &std::collections::BTreeMap<u16, Vec<u8>>,
     runtime_events: &[RuntimeEvent],
-    boottime_mr: bool,
-) -> Result<<Sha384 as Hasher>::Output> {
+) -> Result<()> {
     let quoted = aws_nitro_tpm_pcr(pcrs, AWS_NITRO_TPM_EVENT_PCR)?;
-    let replayed = aws_nitro_tpm_replayed_event_pcr(runtime_events, boottime_mr);
+    let replayed = aws_nitro_tpm_replayed_event_pcr(runtime_events, false);
     if quoted != replayed.as_slice() {
         bail!(
             "PCR{AWS_NITRO_TPM_EVENT_PCR} mismatch, quoted: {}, replayed: {}",
@@ -1148,7 +1155,7 @@ fn aws_nitro_tpm_verified_event_pcr(
             hex::encode(replayed),
         );
     }
-    Ok(replayed)
+    Ok(())
 }
 
 fn aws_nitro_tpm_boot_pcr_values(
@@ -1564,7 +1571,12 @@ fn decode_mr_aws_nitro_tpm_from_pcrs(
     let mut mr_system_inputs = boot_pcrs.clone();
     mr_system_inputs.push(mr_key_provider);
     let mr_system = sha256(mr_system_inputs);
-    let launch_pcr = aws_nitro_tpm_verified_event_pcr(pcrs, runtime_events, boottime_mr)?;
+    // Bind the full event log to the quoted PCR14 first (defense-in-depth,
+    // mirrors the TDX/GCP verify paths), then take the boot-snapshot value for
+    // the MR. Splitting these two lets a full runtime quote still produce a
+    // boot-time (`boottime_mr`) MR instead of failing the integrity check.
+    aws_nitro_tpm_verify_event_pcr(pcrs, runtime_events)?;
+    let launch_pcr = aws_nitro_tpm_replayed_event_pcr(runtime_events, boottime_mr);
     boot_pcrs.push(launch_pcr.as_slice());
     let mr_aggregated = sha256(boot_pcrs);
     Ok(Mrs {
@@ -1683,7 +1695,7 @@ fn verify_aws_nitro_tpm_attestation_doc(
         bail!("NitroTPM user_data does not match report_data");
     }
 
-    aws_nitro_tpm_verified_event_pcr(&verified_report.pcrs, runtime_events, false)?;
+    aws_nitro_tpm_verify_event_pcr(&verified_report.pcrs, runtime_events)?;
 
     Ok(AwsNitroTpmVerifiedReport {
         module_id: verified_report.module_id,
@@ -2835,20 +2847,39 @@ mod tests {
             ])
         );
 
-        let early_mrs = decode_mr_aws_nitro_tpm_from_pcrs(true, &mr_key_provider, &pcrs, &events);
-        // boottime_mr expects PCR14 to match only through boot-mr-done
-        match early_mrs {
-            Ok(_) => panic!("boottime_mr must reject full PCR14 when log has more events"),
-            Err(err) => assert!(
-                format!("{err:#}").contains("PCR14 mismatch"),
-                "unexpected error: {err:#}"
-            ),
-        }
+        // A full runtime quote (PCR14 covers the whole log) decoded in
+        // boottime mode binds the full replay to the quoted register, then
+        // returns the boot-mr-done snapshot for the MR — it must NOT fail the
+        // integrity check. This is the SignCert path (runtime quote, boot-time
+        // MR).
+        let early_from_full =
+            decode_mr_aws_nitro_tpm_from_pcrs(true, &mr_key_provider, &pcrs, &events)?;
+        assert_eq!(
+            early_from_full.mr_aggregated,
+            sha256([
+                pcrs[&4].as_slice(),
+                pcrs[&7].as_slice(),
+                pcrs[&12].as_slice(),
+                early_pcr.as_slice(),
+            ])
+        );
 
+        // A genuine early quote carries both the truncated PCR14 and the
+        // truncated event log; the full replay of that log equals the quoted
+        // early PCR14, so the binding passes and the MR uses the same value.
+        let early_events: Vec<RuntimeEvent> = events
+            .iter()
+            .take_while(|event| event.event != "boot-mr-done")
+            .cloned()
+            .chain(std::iter::once(RuntimeEvent::new(
+                "boot-mr-done".into(),
+                Vec::new(),
+            )))
+            .collect();
         let mut early_pcrs = pcrs.clone();
         early_pcrs.insert(AWS_NITRO_TPM_EVENT_PCR, early_pcr.to_vec());
         let early_ok =
-            decode_mr_aws_nitro_tpm_from_pcrs(true, &mr_key_provider, &early_pcrs, &events)?;
+            decode_mr_aws_nitro_tpm_from_pcrs(true, &mr_key_provider, &early_pcrs, &early_events)?;
         assert_eq!(
             early_ok.mr_aggregated,
             sha256([

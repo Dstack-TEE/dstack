@@ -1048,6 +1048,29 @@ mod tests {
     }
 
     #[test]
+    fn build_boot_info_for_attestation_accepts_aws_nitro_tpm_boottime_mr_for_runtime_quote() {
+        // Regression: SignCert authorizes with use_boottime_mr=true, but the app
+        // submits a full runtime quote whose PCR14 covers the whole event log.
+        // Decode must bind the full replay to the quoted register and then take
+        // the boot-mr-done snapshot for the MR, instead of rejecting the runtime
+        // quote with "PCR14 mismatch".
+        let (attestation, vm_config, _, _) =
+            verified_aws_nitro_tpm_attestation(vec![0x22; 32], 0x04);
+
+        let runtime = build_boot_info_for_attestation(&attestation, false, &vm_config)
+            .expect("runtime-mr decode should succeed");
+        let boottime = build_boot_info_for_attestation(&attestation, true, &vm_config)
+            .expect("boottime-mr decode of a full runtime quote must not fail");
+
+        // App identity is snapshot-independent.
+        assert_eq!(runtime.app_id, boottime.app_id);
+        assert_eq!(runtime.compose_hash, boottime.compose_hash);
+        // The boot-time snapshot truncates the launch log at boot-mr-done, so
+        // its aggregated MR differs from the full runtime MR.
+        assert_ne!(runtime.mr_aggregated, boottime.mr_aggregated);
+    }
+
+    #[test]
     fn build_boot_info_for_attestation_accepts_snp_vm_config_path() {
         let input = valid_snp_measurement_input();
         let measurement = compute_expected_measurement(&input).unwrap();
