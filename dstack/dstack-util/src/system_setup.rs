@@ -93,10 +93,6 @@ fn is_unsupported_app_info_quote(err: &anyhow::Error) -> bool {
         || message.contains("unsupported attestation quote for app info decoding")
 }
 
-fn emit_setup_launch_event(event: &str, payload: &[u8]) -> Result<()> {
-    emit_runtime_event(event, payload)
-}
-
 #[derive(clap::Parser)]
 /// Prepare full disk encryption
 pub struct SetupArgs {
@@ -779,7 +775,7 @@ fn platform_instance_binding() -> Result<Option<Vec<u8>>> {
 fn emit_key_provider_info(provider_info: &KeyProviderInfo) -> Result<()> {
     info!("Key provider info: {provider_info:?}");
     let provider_info_json = serde_json::to_vec(&provider_info)?;
-    emit_setup_launch_event("key-provider", &provider_info_json)?;
+    emit_runtime_event("key-provider", &provider_info_json)?;
     Ok(())
 }
 
@@ -1362,7 +1358,7 @@ impl<'a> Stage0<'a> {
                 }
                 if let Some(att) = &cert.attestation {
                     match att.decode_app_info(false) {
-                        Ok(kms_info) => emit_setup_launch_event("mr-kms", &kms_info.mr_aggregated)
+                        Ok(kms_info) => emit_runtime_event("mr-kms", &kms_info.mr_aggregated)
                             .context("failed to extend mr-kms to the launch measurement")?,
                         Err(err) if is_unsupported_app_info_quote(&err) => {
                             warn!("Skipping mr-kms runtime event for unsupported attestation quote: {err:#}");
@@ -1384,7 +1380,7 @@ impl<'a> Stage0<'a> {
             .await
             .context("Failed to get app key")?;
 
-        emit_setup_launch_event("os-image-hash", &response.os_image_hash)
+        emit_runtime_event("os-image-hash", &response.os_image_hash)
             .context("failed to extend os-image-hash to the launch measurement")?;
 
         let (_, ca_pem) = x509_parser::pem::parse_x509_pem(tmp_ca.ca_cert.as_bytes())
@@ -1894,11 +1890,11 @@ impl<'a> Stage0<'a> {
         // no KMS to bind it, the relying party MUST gate the compose_hash
         // (which launcher build) separately from the app_id (which app).
 
-        emit_setup_launch_event("system-preparing", &[])?;
-        emit_setup_launch_event("app-id", &instance_info.app_id)?;
-        emit_setup_launch_event("compose-hash", &compose_hash)?;
-        emit_setup_launch_event("instance-id", &instance_id)?;
-        emit_setup_launch_event("boot-mr-done", &[])?;
+        emit_runtime_event("system-preparing", &[])?;
+        emit_runtime_event("app-id", &instance_info.app_id)?;
+        emit_runtime_event("compose-hash", &compose_hash)?;
+        emit_runtime_event("instance-id", &instance_id)?;
+        emit_runtime_event("boot-mr-done", &[])?;
 
         // AWS: commit the measured app identity into PCR8 (mr_config analogue).
         // The config id is computed from measured reality (MrConfig V2), so
@@ -1985,7 +1981,7 @@ impl<'a> Stage0<'a> {
 
         // Parse kernel command line options
         let opts = parse_dstack_options(&self.shared).context("Failed to parse kernel cmdline")?;
-        emit_setup_launch_event("storage-fs", opts.storage_fs.to_string().as_bytes())?;
+        emit_runtime_event("storage-fs", opts.storage_fs.to_string().as_bytes())?;
         info!(
             "Filesystem options: encryption={}, filesystem={:?}",
             opts.storage_encrypted, opts.storage_fs
@@ -2001,7 +1997,7 @@ impl<'a> Stage0<'a> {
                 &serde_json::to_string(&app_info.instance_info)?,
             )
             .await;
-        emit_setup_launch_event("system-ready", &[])?;
+        emit_runtime_event("system-ready", &[])?;
         self.vmm.notify_q("boot.progress", "data disk ready").await;
 
         if !self.shared.app_compose.key_provider().is_kms() {
