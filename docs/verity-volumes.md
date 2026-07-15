@@ -142,7 +142,7 @@ jobs:
 - Layers are treated as public — the volume is unencrypted and shareable. Secret layers would need a per-app, KMS-encrypted volume, and that's out of scope for now.
 - Under TDX the single-copy saving is on storage, transfer, and extraction, not RAM — each CVM still caches the blocks it reads in its own encrypted memory.
 - The per-boot `docker image prune -af` removes images no running container references, so bake the images your compose actually runs; guarding prune against verity-seeded images is a follow-up.
-- On guest images that don't yet ship the helper, `vmm-cli` injects it into `init_script`, so `app_id` depends on the bundled helper bytes — pin your CLI/image version when you register compose hashes.
+- Verity volumes require a guest image that ships `/bin/dstack-verity.sh`; the helper runs from `dstack-prepare.sh` before dockerd starts.
 - Seeded overlay2 metadata lives on the persistent disk, while the layer `diff/` binds are re-established each boot. A *partial* seed (a metadata copy fails mid-write) unwinds its binds and falls back to a normal pull. The open gap is across boots: if a volume that seeded once is later not re-attached (or swapped), its metadata persists while its `diff/` binds don't, so docker can see the image present with empty layers. The normal reboot (same volume) re-binds correctly. Reconciling stale seeded metadata against missing binds on boot is a follow-up — it needs image→layer dependency walking so it doesn't drop a pulled image that happens to share a base layer.
 
 ## What's proven

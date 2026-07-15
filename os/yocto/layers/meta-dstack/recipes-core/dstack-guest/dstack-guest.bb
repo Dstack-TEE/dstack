@@ -67,6 +67,7 @@ do_install() {
     install -m 0755 ${CARGO_BINDIR}/dstack-util ${D}${bindir}
     install -m 0755 ${CARGO_BINDIR}/dstack-guest-agent ${D}${bindir}
     install -m 0755 ${DSTACK_ROOTFS_FILES}/dstack-prepare.sh ${D}${bindir}
+    install -m 0755 ${DSTACK_ROOTFS_FILES}/dstack-verity.sh ${D}${bindir}
     install -m 0755 ${DSTACK_ROOTFS_FILES}/ephemeral-docker.sh ${D}${bindir}
     install -m 0755 ${DSTACK_ROOTFS_FILES}/wg-checker.sh ${D}${bindir}
     install -m 0755 ${DSTACK_ROOTFS_FILES}/app-compose.sh ${D}${bindir}

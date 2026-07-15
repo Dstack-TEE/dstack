@@ -361,61 +361,6 @@ def parse_volume(spec: str) -> Dict:
     return {"source": name, "read_only": True}
 
 
-def _load_verity_helper() -> Optional[str]:
-    """Read the bundled dstack-verity helper (basefiles/dstack-verity.sh)."""
-    path = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)),
-        "..",
-        "..",
-        "basefiles",
-        "dstack-verity.sh",
-    )
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return f.read()
-    except OSError:
-        return None
-
-
-def inject_verity_init(compose_content: str) -> str:
-    """Inject an init_script that runs the dstack-verity helper.
-
-    This applies when the compose declares verity_volumes but has no init_script.
-    It lets verity volumes work on guest images that don't yet ship
-    /bin/dstack-verity.sh. The injected script defers to that binary when present,
-    so it becomes a no-op once the image ships the helper.
-    """
-    try:
-        compose = json.loads(compose_content)
-    except (ValueError, TypeError):
-        return compose_content
-    if not compose.get("verity_volumes"):
-        return compose_content
-    if compose.get("init_script"):
-        # don't clobber the user's own init_script; warn instead.
-        print(
-            "warning: verity_volumes set but the compose has its own init_script; "
-            "not injecting the helper (the guest image must ship /bin/dstack-verity.sh)"
-        )
-        return compose_content
-    helper = _load_verity_helper()
-    if not helper:
-        print(
-            "warning: verity_volumes set but dstack-verity helper not found; images will pull"
-        )
-        return compose_content
-    compose["init_script"] = (
-        "if [ -x /bin/dstack-verity.sh ]; then :; else\n"
-        "cat > /run/dstack-verity.sh <<'DSTACK_VERITY_EOF'\n"
-        + helper.rstrip("\n")
-        + "\nDSTACK_VERITY_EOF\n"
-        "bash /run/dstack-verity.sh /dstack/app-compose.json || true\n"
-        "fi\n"
-    )
-    print("injected dstack-verity init_script for verity_volumes")
-    return json.dumps(compose, indent=4, ensure_ascii=False)
-
-
 def read_utf8(filepath: str) -> str:
     """Read a file and return its contents as a UTF-8 string."""
     with open(filepath, "rb") as f:
@@ -933,7 +878,6 @@ class VmmCLI:
             raise Exception(f"Compose file not found: {args.compose}")
 
         compose_content = read_utf8(args.compose)
-        compose_content = inject_verity_init(compose_content)
 
         envs = parse_env_file(args.env_file)
 
