@@ -25,19 +25,9 @@ or
 }
 ```
 
-For production challenge-response verification, include a freshness policy:
-
-```json
-{
-  "attestation": "hex-encoded-attestation",
-  "freshness": {
-    "expected_report_data": "hex-encoded-64-byte-challenge",
-    "expected_nonce": "hex-encoded-nitrotpm-nonce",
-    "expected_public_key": "hex-encoded-nitrotpm-recipient-public-key",
-    "max_age_seconds": 300
-  }
-}
-```
+For challenge-response verification, the relying party embeds its own challenge
+in the certificate's `report_data` (or the NitroTPM `nonce`) and checks it
+against the returned evidence.
 
 **Response:**
 ```json
@@ -45,7 +35,6 @@ For production challenge-response verification, include a freshness policy:
   "is_valid": true,
   "details": {
     "quote_verified": true,
-    "freshness_verified": true,
     "event_log_verified": true,  // See "Verification Process" for semantics
     "os_image_hash_verified": true,
     "acpi_tables_verified": true,         // true only when TDX ACPI table contents are verified
@@ -169,8 +158,8 @@ The verification checks that:
 
 Clients, gateways, or release validators should combine this certificate-level
 check with the policy fields emitted by `/verify`: accepted OS image,
-`attestationMode`, `mrAggregated`, app compose hash, KMS identity, freshness
-policy, and any deployment-specific endpoint allowlist.
+`attestationMode`, `mrAggregated`, app compose hash, KMS identity, a
+`report_data` challenge, and any deployment-specific endpoint allowlist.
 
 ### Running with Docker Compose
 
@@ -242,18 +231,17 @@ $ curl -s -d @quote.json localhost:8080/verify | jq
 
 ## Verification Process
 
-The verifier performs three main verification steps:
+The verifier performs the following verification steps:
 
 1. **Quote Verification**: Validates the platform quote using the platform verifier: DCAP for TDX, AMD SNP report verification for SEV-SNP, NSM for Nitro Enclaves, and AWS NitroTPM attestation-document verification for EC2 NitroTPM.
-2. **Freshness Verification**: When the request includes `freshness`, checks the verified `report_data`, AWS NitroTPM `nonce`, AWS NitroTPM `public_key`, and/or attestation document age. An empty `freshness` object is rejected.
-3. **Event Log Verification**: Replays event logs to ensure RTMR/PCR values match and extracts app information. For RTMR3 and AWS NitroTPM PCR14 launch measurements, both the digest and payload integrity are verified. For TDX RTMR 0-2 boot-time measurements, only the digests are verified; the payload content is not validated as dstack does not define semantics for these payloads.
-4. **OS Image Hash Verification**:
+2. **Event Log Verification**: Replays event logs to ensure RTMR/PCR values match and extracts app information. For RTMR3 and AWS NitroTPM PCR14 launch measurements, both the digest and payload integrity are verified. For TDX RTMR 0-2 boot-time measurements, only the digests are verified; the payload content is not validated as dstack does not define semantics for these payloads.
+3. **OS Image Hash Verification**:
    - Treats `vm_config` and any attached measurement material as untrusted inputs until they are bound to the hardware quote
    - For the full-image TDX path, downloads or loads the image identified by `os_image_hash`, checks the image checksum manifest, uses dstack-mr to compute expected MRTD/RTMR0-2, and compares them against the verified measurements from the quote
    - For TDX lite, AMD SEV-SNP, and GCP TDX, verifies that `os_image_hash = sha256(sha256sum.txt)`, where `sha256sum.txt` is the image build's checksum manifest (`<sha256>  <relative-file-name>` lines for image files), that the manifest entry for `measurement.tdx.cbor`, `measurement.snp.cbor`, or `measurement.gcp.cbor` matches the supplied measurement material, and that the measurement material replays to the quote's hardware-signed measurements or GCP TPM UKI event
    - For AWS NitroTPM, requires `vm_config.aws_measurement` and verifies that `os_image_hash = sha256(sha256sum.txt)` matches the measurement material and that its `boot_pcr_digest = sha256(PCR4 || PCR7 || PCR12)` matches the attested boot PCRs
-5. **Policy Input Construction**: Emits `details.boot_info`, the canonical auth-policy payload shape used by dstack KMS `/bootAuth/app` and `/bootAuth/kms`. This object is only present on successful verification.
-6. **Endpoint Certificate Verification**: In `--verify-cert` mode, verifies the
+4. **Policy Input Construction**: Emits `details.boot_info`, the canonical auth-policy payload shape used by dstack KMS `/bootAuth/app` and `/bootAuth/kms`. This object is only present on successful verification.
+5. **Endpoint Certificate Verification**: In `--verify-cert` mode, verifies the
    dstack RA-TLS certificate extension and checks that the attestation
    `report_data` is bound to the certificate SubjectPublicKeyInfo. This is the
    production path for preventing an admin-controlled DNS/LB/proxy endpoint from
@@ -276,6 +264,5 @@ Beyond pass/fail, the result carries a few descriptive fields so a relying party
 - **`acpi_tables_verified`** — whether TDX ACPI table contents were verified. This is useful for relying parties that require `requirements.tdx_measure_acpi_tables = true`.
 - **`key_provider`** — the decoded `app_info.key_provider_info` (`{name, id}`); `name` is e.g. `kms` or `local`. A `local` key provider means the CVM is not KMS-backed, which is itself a dev/insecure posture signal. The raw bytes remain in `app_info.key_provider_info`.
 - **`boot_info`** — the policy object a relying party should feed to its auth/governance layer. For AWS EC2 NitroTPM this includes `attestationMode = dstack-aws-nitro-tpm`, PCR4/7/12-derived `osImageHash`, PCR14-bound `mrAggregated`, app identity, instance/device identity, and a `tcbStatus` normalized to `UpToDate`.
-- **`freshness_verified`** — `true` only when the request supplied a non-empty `freshness` policy and every requested challenge/key/age check passed. Production relying parties should require this for AWS NitroTPM challenge-response verification.
 
 `os_image_is_dev` and `os_image_version` are read from the image's `metadata.json`, which is part of `sha256sum.txt` and therefore bound to the `os_image_hash` that step 3 verifies against the quote — so they are as trustworthy as the os-image-hash check itself. They are `null` when the platform does not expose them (e.g. GCP TDX / Nitro Enclave) or when the image predates the field (images without `is_dev` are always production).

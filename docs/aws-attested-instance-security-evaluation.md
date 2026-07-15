@@ -17,10 +17,15 @@
 > `VmConfig.aws_measurement` is required and must bind the attested boot PCRs
 > (no legacy PCR-derived fallback). GetAppKey is RA-TLS v1 only (no recipient
 > v2).
-> KMS auth pins early **`mrAggregated`** only. Historical sections below that
-> describe cmdline `dstack.mr_config_id`, a shared-disk `MrConfigV3` document,
-> PCR23 runtime, recipient encryption, pre-key-release `mr_config` gating, or
-> `kms.composeHashes` are superseded by this model.
+> KMS auth pins early **`mrAggregated`** only. The `dstack-verifier` **freshness
+> policy** (`FreshnessPolicy` / `details.freshness_verified`) has been removed:
+> KMS key release is replay-protected by the live RA-TLS handshake and
+> timestamped signatures, so liveness for external `/verify` flows relies on the
+> relying party's own `report_data` challenge rather than a verifier policy
+> object. Historical sections below that describe cmdline `dstack.mr_config_id`,
+> a shared-disk `MrConfigV3` document, PCR23 runtime, recipient encryption,
+> pre-key-release `mr_config` gating, a `freshness` policy / `freshness_verified`
+> field, or `kms.composeHashes` are superseded by this model.
 
 Date: 2026-07-03
 

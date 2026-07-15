@@ -45,13 +45,6 @@ may instead recompute the expected PCR8 from the known compose hash and
 key-provider and compare it. It is not required, and dstack's own verifier does
 not check it.
 
-For challenge-response verification through `dstack-verifier`, pass a
-non-empty `freshness` policy. On AWS NitroTPM this can require the expected
-`report_data` challenge, NitroTPM `nonce`, NitroTPM recipient `public_key`, and
-maximum attestation age. Treat `details.freshness_verified = true` as the signal
-that the requested freshness/key-binding checks passed; a valid static
-attestation without this flag is not enough to prove liveness.
-
 ## Learn More
 
 - [AWS EC2 NitroTPM production verification](./aws-ec2-production-verifier-runbook.md) - Verify and operate the AWS NitroTPM path

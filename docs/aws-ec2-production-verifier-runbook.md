@@ -133,22 +133,18 @@ PCR14: <event-log replay; early pin uses boot-mr-done cutoff>
 expected MrConfig V2 config id: <mr-config-id>
 ```
 
-## 3. Verify Attestation Freshness
+## 3. Verify the Attestation
 
-Production challenge-response verification must use a non-empty freshness
-policy. The verifier rejects empty freshness objects. Challenge binding uses
-**report_data → NitroTPM user_data** (same role as TDX/GCP); there is no
-GetAppKey recipient `public_key` / v2 encryption path.
+Challenge binding uses **report_data → NitroTPM user_data** (same role as
+TDX/GCP): the relying party embeds its own challenge in `report_data` and
+checks it against the returned `boot_info`. There is no GetAppKey recipient
+`public_key` / v2 encryption path.
 
 Example verifier request shape:
 
 ```json
 {
-  "attestation": "hex-encoded-dstack-attestation",
-  "freshness": {
-    "expected_report_data": "hex-encoded-64-byte-challenge",
-    "max_age_seconds": 300
-  }
+  "attestation": "hex-encoded-dstack-attestation"
 }
 ```
 
@@ -167,7 +163,6 @@ expected_os_image_hash=$(jq -r '.aws_measurements.dstack_os_image_hash' "$releas
 jq -e --arg expected_os_image_hash "$expected_os_image_hash" '
   .is_valid == true and
   .details.quote_verified == true and
-  .details.freshness_verified == true and
   .details.boot_info.attestationMode == "dstack-aws-nitro-tpm" and
   .details.boot_info.tcbStatus == "UpToDate" and
   .details.boot_info.osImageHash == $expected_os_image_hash
@@ -194,7 +189,7 @@ For AWS NitroTPM, the policy must require:
 - verified PCR14 event-log replay (single event lane; no PCR23 runtime split) —
   this is the authoritative app-identity binding (`composeHash`, `appId`,
   `instance-id`, `key-provider`);
-- non-empty freshness via `report_data` for external verifier flows.
+- a `report_data` challenge for external verifier flows that need liveness.
 
 The guest also extends a `MrConfig` V2 **config commitment** into **PCR8**
 (`PCR8 = sha384(0^48 || config_id)`). This is **optional** and exists only to
@@ -265,6 +260,6 @@ An AWS EC2 NitroTPM deployment can be promoted only when:
    a documented release exception;
 5. the registered AMI has a live EC2 smoke record for the exact AMI ID and
    root snapshot in the manifest;
-6. `/verify` returns valid, freshness-verified AWS `BootInfo`;
+6. `/verify` returns a valid AWS `BootInfo`;
 7. auth policy accepts only the intended OS, app, KMS, and recipient-key state;
 8. endpoint identity is RA-TLS, signed-response, or attested-gateway bound.

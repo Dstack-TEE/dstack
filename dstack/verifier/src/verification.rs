@@ -6,7 +6,7 @@ use std::{
     ffi::OsStr,
     path::{Path, PathBuf},
     sync::OnceLock,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::Duration,
 };
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -33,11 +33,9 @@ use tokio::{io::AsyncWriteExt, process::Command};
 use tracing::{debug, info, warn};
 
 use crate::types::{
-    AcpiTables, FreshnessPolicy, PolicyBootInfo, RtmrEventEntry, RtmrEventStatus, RtmrMismatch,
+    AcpiTables, PolicyBootInfo, RtmrEventEntry, RtmrEventStatus, RtmrMismatch,
     VerificationDetails, VerificationRequest, VerificationResponse,
 };
-
-const FRESHNESS_CLOCK_SKEW: Duration = Duration::from_secs(300);
 
 fn policy_tcb_fields(attestation: &VerifiedAttestation) -> (String, Vec<String>) {
     match &attestation.report {
@@ -64,96 +62,6 @@ fn policy_boot_info_from_verified_app_info(
 ) -> PolicyBootInfo {
     let (tcb_status, advisory_ids) = policy_tcb_fields(attestation);
     PolicyBootInfo::from_app_info(attestation.quote.mode(), app_info, tcb_status, advisory_ids)
-}
-
-fn aws_nitro_tpm_report(
-    attestation: &VerifiedAttestation,
-) -> Option<&ra_tls::attestation::AwsNitroTpmVerifiedReport> {
-    match &attestation.report {
-        DstackVerifiedReport::DstackAwsNitroTpm(report) => Some(report),
-        _ => None,
-    }
-}
-
-fn attestation_timestamp_ms(attestation: &VerifiedAttestation) -> Option<u64> {
-    match &attestation.report {
-        DstackVerifiedReport::DstackAwsNitroTpm(report) => Some(report.timestamp),
-        DstackVerifiedReport::DstackNitroEnclave(report) => Some(report.timestamp),
-        _ => None,
-    }
-}
-
-fn ensure_expected_bytes(name: &str, expected: &[u8], actual: Option<&[u8]>) -> Result<()> {
-    let Some(actual) = actual else {
-        bail!("{name} is required by freshness policy but is missing from verified attestation");
-    };
-    if actual != expected {
-        bail!("{name} does not match freshness policy");
-    }
-    Ok(())
-}
-
-fn ensure_attestation_max_age(timestamp_ms: u64, max_age: Duration, now: SystemTime) -> Result<()> {
-    let doc_time = UNIX_EPOCH
-        .checked_add(Duration::from_millis(timestamp_ms))
-        .context("attestation timestamp overflow")?;
-    match now.duration_since(doc_time) {
-        Ok(age) if age > max_age => {
-            bail!("attestation document is stale: {age:?} old (max {max_age:?})");
-        }
-        Err(future) if future.duration() > FRESHNESS_CLOCK_SKEW => {
-            bail!(
-                "attestation document timestamp is in the future by {:?}",
-                future.duration()
-            );
-        }
-        _ => Ok(()),
-    }
-}
-
-fn verify_freshness_policy(
-    policy: Option<&FreshnessPolicy>,
-    attestation: &VerifiedAttestation,
-    now: SystemTime,
-) -> Result<bool> {
-    let Some(policy) = policy else {
-        return Ok(false);
-    };
-
-    let has_checks = policy.expected_report_data.is_some()
-        || policy.expected_nonce.is_some()
-        || policy.expected_public_key.is_some()
-        || policy.max_age_seconds.is_some();
-    if !has_checks {
-        bail!("freshness policy must set at least one check");
-    }
-
-    if let Some(expected) = &policy.expected_report_data {
-        ensure_expected_bytes("report_data", expected, Some(&attestation.report_data))?;
-    }
-
-    if policy.expected_nonce.is_some() || policy.expected_public_key.is_some() {
-        let report = aws_nitro_tpm_report(attestation)
-            .context("NitroTPM nonce/public_key policy requires AWS NitroTPM attestation")?;
-        if let Some(expected) = &policy.expected_nonce {
-            ensure_expected_bytes("NitroTPM nonce", expected, report.nonce.as_deref())?;
-        }
-        if let Some(expected) = &policy.expected_public_key {
-            ensure_expected_bytes(
-                "NitroTPM public_key",
-                expected,
-                report.public_key.as_deref(),
-            )?;
-        }
-    }
-
-    if let Some(max_age_seconds) = policy.max_age_seconds {
-        let timestamp = attestation_timestamp_ms(attestation)
-            .context("timestamp freshness policy requires timestamped attestation evidence")?;
-        ensure_attestation_max_age(timestamp, Duration::from_secs(max_age_seconds), now)?;
-    }
-
-    Ok(true)
 }
 
 /// best-effort: None for empty/malformed blobs.
@@ -688,22 +596,6 @@ impl CvmVerifier {
                 });
             }
         };
-        match verify_freshness_policy(
-            request.freshness.as_ref(),
-            &verified_attestation,
-            SystemTime::now(),
-        ) {
-            Ok(verified) => {
-                details.freshness_verified = verified;
-            }
-            Err(e) => {
-                return Ok(VerificationResponse {
-                    is_valid: false,
-                    details,
-                    reason: Some(format!("Freshness policy verification failed: {e:#}")),
-                });
-            }
-        }
         // Step 3: Verify os-image-hash matches using dstack-mr
         let verified = self
             .verify_os_image_hash(
@@ -1549,115 +1441,5 @@ mod tests {
         assert_eq!(boot_info.mr_system, app_info.mr_system.to_vec());
         assert_eq!(boot_info.mr_aggregated, app_info.mr_aggregated.to_vec());
         assert_eq!(boot_info.key_provider_info, app_info.key_provider_info);
-    }
-
-    fn verified_aws_attestation_for_freshness(now: SystemTime) -> VerifiedAttestation {
-        let timestamp = now
-            .duration_since(UNIX_EPOCH)
-            .expect("test time should be after UNIX epoch")
-            .as_millis() as u64;
-        VerifiedAttestation {
-            quote: AttestationQuote::DstackAwsNitroTpm(DstackAwsNitroTpmQuote {
-                attestation_doc: Vec::new(),
-            }),
-            runtime_events: Vec::new(),
-            report_data: [0x42; 64],
-            config: String::new(),
-            report: DstackVerifiedReport::DstackAwsNitroTpm(AwsNitroTpmVerifiedReport {
-                module_id: "i-aws-nitrotpm-test".to_string(),
-                pcrs: BTreeMap::new(),
-                public_key: Some(vec![0xaa; 32]),
-                user_data: vec![0x42; 64],
-                nonce: Some(vec![0xbb; 32]),
-                timestamp,
-            }),
-        }
-    }
-
-    #[test]
-    fn freshness_policy_accepts_matching_aws_nonce_key_report_data_and_age() {
-        let now = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
-        let attestation = verified_aws_attestation_for_freshness(now);
-        let policy = FreshnessPolicy {
-            expected_report_data: Some(vec![0x42; 64]),
-            expected_nonce: Some(vec![0xbb; 32]),
-            expected_public_key: Some(vec![0xaa; 32]),
-            max_age_seconds: Some(60),
-        };
-
-        let verified = verify_freshness_policy(Some(&policy), &attestation, now)
-            .expect("matching policy should pass");
-
-        assert!(verified);
-    }
-
-    #[test]
-    fn freshness_policy_rejects_empty_policy_object() {
-        let now = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
-        let attestation = verified_aws_attestation_for_freshness(now);
-
-        let err = verify_freshness_policy(Some(&FreshnessPolicy::default()), &attestation, now)
-            .expect_err("empty freshness policy must reject");
-
-        assert!(
-            format!("{err:#}").contains("at least one check"),
-            "unexpected error: {err:#}"
-        );
-    }
-
-    #[test]
-    fn freshness_policy_rejects_mismatched_aws_nonce_and_public_key() {
-        let now = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
-        let attestation = verified_aws_attestation_for_freshness(now);
-
-        let nonce_policy = FreshnessPolicy {
-            expected_nonce: Some(vec![0xbc; 32]),
-            ..Default::default()
-        };
-        let nonce_err = verify_freshness_policy(Some(&nonce_policy), &attestation, now)
-            .expect_err("mismatched nonce must reject");
-        assert!(
-            format!("{nonce_err:#}").contains("nonce"),
-            "unexpected error: {nonce_err:#}"
-        );
-
-        let key_policy = FreshnessPolicy {
-            expected_public_key: Some(vec![0xab; 32]),
-            ..Default::default()
-        };
-        let key_err = verify_freshness_policy(Some(&key_policy), &attestation, now)
-            .expect_err("mismatched public key must reject");
-        assert!(
-            format!("{key_err:#}").contains("public_key"),
-            "unexpected error: {key_err:#}"
-        );
-    }
-
-    #[test]
-    fn freshness_policy_rejects_stale_or_far_future_timestamp() {
-        let now = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
-        let stale_attestation =
-            verified_aws_attestation_for_freshness(now - Duration::from_secs(61));
-        let policy = FreshnessPolicy {
-            max_age_seconds: Some(60),
-            ..Default::default()
-        };
-
-        let stale_err = verify_freshness_policy(Some(&policy), &stale_attestation, now)
-            .expect_err("stale timestamp must reject");
-        assert!(
-            format!("{stale_err:#}").contains("stale"),
-            "unexpected error: {stale_err:#}"
-        );
-
-        let future_attestation = verified_aws_attestation_for_freshness(
-            now + FRESHNESS_CLOCK_SKEW + Duration::from_secs(1),
-        );
-        let future_err = verify_freshness_policy(Some(&policy), &future_attestation, now)
-            .expect_err("future timestamp past skew must reject");
-        assert!(
-            format!("{future_err:#}").contains("future"),
-            "unexpected error: {future_err:#}"
-        );
     }
 }

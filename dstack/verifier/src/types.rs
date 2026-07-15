@@ -20,23 +20,6 @@ pub struct VerificationRequest {
     pub attestation: Option<Vec<u8>>,
     #[serde(default)]
     pub debug: Option<bool>,
-    #[serde(default)]
-    pub freshness: Option<FreshnessPolicy>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub struct FreshnessPolicy {
-    /// Expected 64-byte report_data/user_data challenge.
-    #[serde(with = "serde_bytes", default)]
-    pub expected_report_data: Option<Vec<u8>>,
-    /// Expected NitroTPM nonce from the signed attestation document.
-    #[serde(with = "serde_bytes", default)]
-    pub expected_nonce: Option<Vec<u8>>,
-    /// Expected NitroTPM public key from the signed attestation document.
-    #[serde(with = "serde_bytes", default)]
-    pub expected_public_key: Option<Vec<u8>>,
-    /// Maximum accepted age of the attestation document timestamp.
-    pub max_age_seconds: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -96,8 +79,6 @@ impl PolicyBootInfo {
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct VerificationDetails {
     pub quote_verified: bool,
-    /// Indicates that the optional request freshness policy was supplied and passed.
-    pub freshness_verified: bool,
     /// Indicates that the event log was verified against the quote.
     ///
     /// For RTMR3 (runtime measurements), both the digest and payload integrity are verified
@@ -209,26 +190,6 @@ mod tests {
         assert_eq!(req.quote, None);
         assert_eq!(req.attestation, None);
         assert_eq!(req.debug, None);
-        assert_eq!(req.freshness, None);
-    }
-
-    #[test]
-    fn deserializes_freshness_policy() {
-        let json = r#"{
-            "attestation": "00",
-            "freshness": {
-                "expected_report_data": "11",
-                "expected_nonce": "22",
-                "expected_public_key": "33",
-                "max_age_seconds": 60
-            }
-        }"#;
-        let req: VerificationRequest = serde_json::from_str(json).unwrap();
-        let freshness = req.freshness.expect("freshness policy should decode");
-        assert_eq!(freshness.expected_report_data, Some(vec![0x11]));
-        assert_eq!(freshness.expected_nonce, Some(vec![0x22]));
-        assert_eq!(freshness.expected_public_key, Some(vec![0x33]));
-        assert_eq!(freshness.max_age_seconds, Some(60));
     }
 
     #[test]
