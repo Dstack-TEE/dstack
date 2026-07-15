@@ -149,7 +149,7 @@ The `event_log` field contains a JSON array of TDX event log entries. For RTMR 0
 
 ### 4. Get Info
 
-Retrieves worker information, including the detected cloud platform and dstack attestation mode.
+Retrieves worker information, including the detected cloud platform.
 
 **Endpoint:** `/Info`
 
@@ -173,12 +173,11 @@ curl --unix-socket /var/run/dstack.sock http://dstack/Info
   "compose_hash": "<hex-encoded-compose-hash>",
   "vm_config": "<json-vm-config-string>",
   "cloud_vendor": "<detected-cloud-vendor>",
-  "cloud_product": "<detected-cloud-product>",
-  "attestation": "dstack-aws-nitro-tpm"
+  "cloud_product": "<detected-cloud-product>"
 }
 ```
 
-The `cloud_vendor`, `cloud_product`, and `attestation` fields report the detected cloud platform and dstack attestation mode (for example, `dstack-tdx` or `dstack-aws-nitro-tpm`).
+The `cloud_vendor` and `cloud_product` fields report the detected cloud platform.
 
 ### 5. Sign (not yet released)
 

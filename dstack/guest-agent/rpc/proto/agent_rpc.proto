@@ -230,8 +230,6 @@ message AppInfo {
   string cloud_vendor = 15;
   // Cloud provider product_name (e.g. "Google Compute Engine")
   string cloud_product = 16;
-  // Detected dstack attestation mode, e.g. `dstack-tdx`, `dstack-aws-nitro-tpm`.
-  string attestation = 17;
 }
 
 // The response to a Version request

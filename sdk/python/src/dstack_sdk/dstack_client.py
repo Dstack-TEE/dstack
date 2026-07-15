@@ -265,8 +265,6 @@ class InfoResponse(BaseModel, Generic[T]):
     cloud_vendor: str = ""
     # Cloud provider product_name (e.g. "Google Compute Engine"). Available on dstack OS >= 0.5.7.
     cloud_product: str = ""
-    # Detected dstack attestation mode, e.g. "dstack-tdx", "dstack-aws-nitro-tpm".
-    attestation: str = ""
 
     @classmethod
     def parse_response(cls, obj: Any, tcb_info_type: type[T]) -> "InfoResponse[T]":

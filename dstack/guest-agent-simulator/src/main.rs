@@ -14,7 +14,7 @@ use dstack_guest_agent::{
     run_server, AppState,
 };
 use dstack_guest_agent_rpc::{AttestResponse, GetQuoteResponse};
-use ra_tls::attestation::{PlatformEvidence, VersionedAttestation};
+use ra_tls::attestation::VersionedAttestation;
 use serde::Deserialize;
 use tracing::warn;
 
@@ -88,17 +88,6 @@ impl PlatformBackend for SimulatorPlatform {
 
     fn attest_response(&self, report_data: [u8; 64]) -> Result<AttestResponse> {
         simulator::simulated_attest_response(&self.attestation, report_data, self.patch_report_data)
-    }
-
-    fn attestation_mode(&self) -> Result<String> {
-        let mode = match self.attestation.clone().into_v1().platform {
-            PlatformEvidence::Tdx { .. } => "dstack-tdx",
-            PlatformEvidence::GcpTdx { .. } => "dstack-gcp-tdx",
-            PlatformEvidence::NitroEnclave { .. } => "dstack-nitro-enclave",
-            PlatformEvidence::AwsNitroTpm { .. } => "dstack-aws-nitro-tpm",
-            PlatformEvidence::SevSnp { .. } => "dstack-amd-sev-snp",
-        };
-        Ok(mode.to_string())
     }
 }
 

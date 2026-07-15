@@ -179,10 +179,6 @@ impl AppState {
     fn attest_response(&self, report_data: [u8; 64]) -> Result<AttestResponse> {
         self.inner.platform.attest_response(report_data)
     }
-
-    fn attestation_mode(&self) -> Result<String> {
-        self.inner.platform.attestation_mode()
-    }
 }
 
 pub struct InternalRpcHandler {
@@ -251,7 +247,6 @@ pub async fn get_info(state: &AppState, external: bool) -> Result<AppInfo> {
         vm_config,
         cloud_vendor: read_dmi_file("sys_vendor"),
         cloud_product: read_dmi_file("product_name"),
-        attestation: state.attestation_mode()?,
     })
 }
 
@@ -855,10 +850,6 @@ pNs85uhOZE8z2jr8Pg==
                     attestation: VersionedAttestation::V1 { attestation }.to_bytes()?,
                 })
             }
-
-            fn attestation_mode(&self) -> Result<String> {
-                Ok("dstack-tdx".to_string())
-            }
         }
 
         let inner = AppStateInner {
@@ -1125,16 +1116,6 @@ pNs85uhOZE8z2jr8Pg==
         assert_eq!(normalize_algorithm("ed25519"), "ed25519");
         assert_eq!(normalize_algorithm(""), "");
         assert_eq!(normalize_algorithm("unknown"), "unknown");
-    }
-
-    #[tokio::test]
-    async fn info_reports_attestation_mode() {
-        let (state, _guard) = setup_test_state().await;
-        let handler = InternalRpcHandler { state };
-
-        let info = handler.info().await.unwrap();
-
-        assert_eq!(info.attestation, "dstack-tdx");
     }
 
     #[tokio::test]

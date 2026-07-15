@@ -162,8 +162,6 @@ type InfoResponse struct {
 	VmConfig     string `json:"vm_config,omitempty"`
 	CloudVendor  string `json:"cloud_vendor,omitempty"`
 	CloudProduct string `json:"cloud_product,omitempty"`
-	// Detected dstack attestation mode, e.g. "dstack-tdx", "dstack-aws-nitro-tpm".
-	Attestation string `json:"attestation,omitempty"`
 }
 
 // DecodeTcbInfo decodes the TcbInfo string into a TcbInfo struct

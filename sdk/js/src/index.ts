@@ -91,8 +91,6 @@ export interface InfoResponse<VersionTcbInfo extends TcbInfo> {
   cloud_vendor?: string
   // Cloud provider product_name (e.g. "Google Compute Engine"). Available on dstack OS >= 0.5.7.
   cloud_product?: string
-  // Detected dstack attestation mode, e.g. "dstack-tdx", "dstack-aws-nitro-tpm".
-  attestation?: string
 }
 
 export interface GetQuoteResponse {

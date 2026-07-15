@@ -199,9 +199,6 @@ pub struct InfoResponse {
     /// VM configuration
     #[serde(default)]
     pub vm_config: String,
-    /// Detected dstack attestation mode, e.g. `dstack-tdx`, `dstack-aws-nitro-tpm`.
-    #[serde(default)]
-    pub attestation: String,
 }
 
 impl InfoResponse {

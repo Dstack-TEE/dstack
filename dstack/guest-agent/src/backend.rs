@@ -5,16 +5,13 @@
 use anyhow::{Context, Result};
 use dstack_guest_agent_rpc::{AttestResponse, GetQuoteResponse};
 use ra_tls::attestation::Attestation;
-use ra_tls::attestation::{AttestationMode, QuoteContentType, VersionedAttestation};
+use ra_tls::attestation::{QuoteContentType, VersionedAttestation};
 
 pub trait PlatformBackend: Send + Sync {
     fn attestation_for_info(&self) -> Result<VersionedAttestation>;
     fn certificate_attestation(&self, pubkey: &[u8]) -> Result<VersionedAttestation>;
     fn quote_response(&self, report_data: [u8; 64], vm_config: &str) -> Result<GetQuoteResponse>;
     fn attest_response(&self, report_data: [u8; 64]) -> Result<AttestResponse>;
-    /// The detected dstack attestation mode string (e.g. `dstack-tdx`),
-    /// surfaced in `AppInfo.attestation`.
-    fn attestation_mode(&self) -> Result<String>;
 }
 
 #[derive(Debug, Default)]
@@ -35,7 +32,7 @@ impl PlatformBackend for RealPlatform {
     }
 
     fn quote_response(&self, report_data: [u8; 64], vm_config: &str) -> Result<GetQuoteResponse> {
-        let attestation = Attestation::quote(&report_data).context("failed to get quote")?;
+        let attestation = Attestation::quote(&report_data).context("Failed to get quote")?;
         let tdx_quote = attestation.get_tdx_quote_bytes();
         let tdx_event_log = attestation.get_tdx_event_log_string_for_config(vm_config);
         // TDX callers already have quote + event_log. Only non-TDX platforms
@@ -58,13 +55,9 @@ impl PlatformBackend for RealPlatform {
     }
 
     fn attest_response(&self, report_data: [u8; 64]) -> Result<AttestResponse> {
-        let attestation = Attestation::quote(&report_data).context("failed to get attestation")?;
+        let attestation = Attestation::quote(&report_data).context("Failed to get attestation")?;
         Ok(AttestResponse {
             attestation: attestation.into_versioned().to_bytes()?,
         })
-    }
-
-    fn attestation_mode(&self) -> Result<String> {
-        Ok(AttestationMode::detect()?.as_str().to_string())
     }
 }
