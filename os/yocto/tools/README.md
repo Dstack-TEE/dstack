@@ -7,12 +7,15 @@ the guest-OS backend interface; the supported build entrypoint is
 
 - `fix-self-uid-map.sh` is an explicit host AppArmor workaround for affected
   Ubuntu installations; it is not part of the image build.
-- `aws/` contains **image-side** helpers only (hardening audit and release
-  manifest generation). AWS EC2 **lifecycle** (AMI import, shared-disk deploy,
-  start/stop/logs) lives in `dstack-cloud` (`dstack/scripts/bin/dstack-cloud`)
-  with `platform: aws`. App/config binding is **not** baked into the UKI
-  cmdline; shared-disk MrConfigV3 is measured into PCR8 at boot, and
-  `measurement.aws.cbor` + `VmConfig.aws_measurement` provide the unified
+- `aws/` contains the **image-side** hardening audit only
+  (`audit-aws-ec2-image-hardening.sh`). Release images and their evidence
+  (`sha256sum.txt`, `measurement.aws.cbor`, `aws-pcrs.json`) come from the
+  unified `os/build.sh` flow. AWS EC2 **lifecycle** (AMI import, shared-disk
+  deploy, start/stop/logs) lives in `dstack-cloud`
+  (`dstack/scripts/bin/dstack-cloud`) with `platform: aws`. App/config binding
+  is **not** baked into the UKI cmdline; the guest extends the `MrConfig` V2
+  config id into PCR8 at setup, and `measurement.aws.cbor` +
+  `VmConfig.aws_measurement` provide the unified
   `os_image_hash = sha256(sha256sum.txt)`.
 
 The legacy cross-cutting helpers live under [`../../../tools/`](../../../tools/)

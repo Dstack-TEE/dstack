@@ -26,6 +26,14 @@
 > a shared-disk `MrConfigV3` document, PCR23 runtime, recipient encryption,
 > pre-key-release `mr_config` gating, a `freshness` policy / `freshness_verified`
 > field, or `kms.composeHashes` are superseded by this model.
+> The standalone release-manifest tooling referenced below
+> (`os/yocto/tools/aws/generate-aws-ec2-release-manifest.sh` and
+> `docs/aws-ec2-ami-reproducibility-manifest.md`) has been removed: release
+> images and their evidence (`sha256sum.txt`, `digest.txt`,
+> `measurement.aws.cbor`, `aws-pcrs.json`) are produced by the unified
+> `os/build.sh` flow, and the verifier-side workflow is
+> `docs/aws-ec2-production-verifier-runbook.md`. The hardening audit script
+> (`audit-aws-ec2-image-hardening.sh`) remains.
 
 Date: 2026-07-03
 
