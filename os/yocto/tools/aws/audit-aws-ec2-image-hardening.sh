@@ -150,7 +150,9 @@ echo "== Kernel hardening recommendations =="
 recommend_config CONFIG_SECURITY_DMESG_RESTRICT y
 recommend_config CONFIG_IO_STRICT_DEVMEM y
 recommend_config CONFIG_INIT_ON_ALLOC_DEFAULT_ON y
-recommend_config CONFIG_INIT_ON_FREE_DEFAULT_ON y
+# CONFIG_INIT_ON_FREE_DEFAULT_ON is intentionally not recommended: the unified
+# image also boots on GCP TDX, where init_on_free=1 makes the host kill the
+# guest during the SWIOTLB private->shared conversion (see dstack.cfg).
 recommend_config CONFIG_SLAB_FREELIST_RANDOM y
 recommend_config CONFIG_SLAB_FREELIST_HARDENED y
 recommend_config CONFIG_HARDENED_USERCOPY y
