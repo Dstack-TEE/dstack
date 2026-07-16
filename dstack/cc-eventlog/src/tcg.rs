@@ -5,7 +5,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::{codecs::VecOf, tdx::TdxEvent};
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use scale::Decode;
 use std::path::PathBuf;
 
@@ -302,9 +302,7 @@ impl TcgEventLog {
     }
 
     pub fn decode_from_ccel_file() -> Result<Self> {
-        let path = std::env::var_os(CCEL_FILE_ENV)
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from(CCEL_FILE));
+        let path = ccel_file_path()?;
         let data = fs_err::read(&path)
             .with_context(|| format!("failed to read CCEL from {}", path.display()))?;
         Self::decode(&mut data.as_slice()).context("failed to decode CCEL")
@@ -318,6 +316,27 @@ impl TcgEventLog {
             .map(TdxEvent::try_from)
             .collect()
     }
+}
+
+/// Resolve the CCEL path, honoring `DSTACK_CCEL_FILE` when set.
+///
+/// Overrides must be non-empty absolute paths so relative values cannot silently
+/// resolve against the process working directory.
+fn ccel_file_path() -> Result<PathBuf> {
+    let Some(value) = std::env::var_os(CCEL_FILE_ENV) else {
+        return Ok(PathBuf::from(CCEL_FILE));
+    };
+    if value.is_empty() {
+        bail!("empty path override from {CCEL_FILE_ENV}");
+    }
+    let path = PathBuf::from(value);
+    if !path.is_absolute() {
+        bail!(
+            "path override from {CCEL_FILE_ENV} must be absolute: {}",
+            path.display()
+        );
+    }
+    Ok(path)
 }
 
 fn parse_spec_id_event_log<I: scale::Input>(
@@ -377,5 +396,46 @@ impl TryFrom<TcgEvent> for TdxEvent {
             event: Default::default(),
             event_payload: value.event.into(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ccel_override_rejects_empty_and_relative() {
+        let previous = std::env::var_os(CCEL_FILE_ENV);
+
+        std::env::set_var(CCEL_FILE_ENV, "");
+        assert!(ccel_file_path()
+            .unwrap_err()
+            .to_string()
+            .contains("empty path override"));
+
+        std::env::set_var(CCEL_FILE_ENV, "relative/ccel.bin");
+        assert!(ccel_file_path()
+            .unwrap_err()
+            .to_string()
+            .contains("must be absolute"));
+
+        std::env::set_var(CCEL_FILE_ENV, "/abs/ccel.bin");
+        assert_eq!(ccel_file_path().unwrap(), PathBuf::from("/abs/ccel.bin"));
+
+        match previous {
+            Some(value) => std::env::set_var(CCEL_FILE_ENV, value),
+            None => std::env::remove_var(CCEL_FILE_ENV),
+        }
+    }
+
+    #[test]
+    fn ccel_defaults_without_override() {
+        let previous = std::env::var_os(CCEL_FILE_ENV);
+        std::env::remove_var(CCEL_FILE_ENV);
+        assert_eq!(ccel_file_path().unwrap(), PathBuf::from(CCEL_FILE));
+        match previous {
+            Some(value) => std::env::set_var(CCEL_FILE_ENV, value),
+            None => std::env::remove_var(CCEL_FILE_ENV),
+        }
     }
 }
