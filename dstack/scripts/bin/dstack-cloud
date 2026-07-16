@@ -23,13 +23,15 @@ Usage:
     dstack-cloud fw allow|deny|list ...  # Firewall (GCP)
 
 AWS projects set "platform": "aws" in app.json and fill aws_config
-(region, s3_bucket or ami_id, …). prepare/deploy only *embed* aws_measurement
+(region, networking, …). Local RAW disks are written directly to EBS snapshots.
+prepare/deploy only *embed* aws_measurement
 from the release UKI package (digest.txt + sha256sum.txt + measurement.aws.cbor
 produced at image assemble time). They never recompute PCRs or os_image_hash.
 """
 
 import argparse
 import base64
+import concurrent.futures
 import hashlib
 import json
 import logging
@@ -82,6 +84,9 @@ GLOBAL_CONFIG_PATH = os.path.expanduser(
 )
 DEFAULT_OS_IMAGE = "dstack-0.6.0"
 MONOREPO_GUEST_OS_MIN_VERSION = (0, 6, 0)
+AWS_EBS_BLOCK_SIZE = 512 * 1024
+AWS_EBS_UPLOAD_WORKERS = 8
+AWS_EBS_UPLOAD_QUEUE_DEPTH = AWS_EBS_UPLOAD_WORKERS * 2
 
 
 def guest_os_release_url(os_image: str, version: str) -> str:
@@ -324,12 +329,6 @@ class AwsConfig:
     security_group_ids: List[str] = field(default_factory=list)
     iam_instance_profile: str = ""  # name or ARN
 
-    # S3 used when importing AMI / shared / labeled-data snapshots from raw disks
-    s3_bucket: str = ""
-    s3_prefix: str = "dstack-import"
-    import_role_name: str = ""  # optional vmimport role override
-    delete_s3_after_import: bool = True
-
     # Metadata options. Hop limit 1 keeps IMDSv2 tokens (and any instance-role
     # credentials) unreachable from app containers behind the docker bridge;
     # dstack itself never talks to IMDS. Set to 2 only if your containers
@@ -365,10 +364,6 @@ class AwsConfig:
             "subnet_id": "",
             "security_group_ids": [],
             "iam_instance_profile": "",
-            "s3_bucket": "",
-            "s3_prefix": "dstack-import",
-            "import_role_name": "",
-            "delete_s3_after_import": True,
             "metadata_hop_limit": 1,
         }
 
@@ -1023,8 +1018,6 @@ class CloudDeploymentManager:
                 "_comment_aws": "AWS EC2 NitroTPM platform defaults",
                 "aws": {
                     "region": "us-east-1",
-                    "s3_bucket": "",
-                    "s3_prefix": "dstack-import",
                     "instance_type": "m6i.large"
                 }
             }
@@ -1578,6 +1571,15 @@ class CloudDeploymentManager:
         result = self._run_aws(args + ["--output", "json"], capture=True, check=True)
         return json.loads(result.stdout) if result.stdout.strip() else {}
 
+    @staticmethod
+    def _aws_cli_error_code(result: subprocess.CompletedProcess) -> str:
+        """Return a safe AWS CLI error code without echoing request metadata."""
+        stderr = result.stderr or ""
+        match = re.search(r"An error occurred \(([^)]+)\)", stderr)
+        if match:
+            return match.group(1)
+        return f"exit status {result.returncode}"
+
     def _build_shared_raw_disk(self, app: App, work_path: Optional[Path] = None) -> Path:
         """Populate shared config and build a local FAT32 DSTACKSHR disk.raw."""
         import secrets
@@ -1703,92 +1705,221 @@ class CloudDeploymentManager:
         )
         return raw_file
 
-    def _aws_import_snapshot_from_raw(
+    def _aws_ebs_call(
+        self,
+        args: List[str],
+        action: str,
+        max_attempts: int = 5,
+    ) -> subprocess.CompletedProcess:
+        """Call an EBS Direct API with safe errors and transient retries."""
+        retryable = {
+            "InternalServerException",
+            "RequestThrottledException",
+            "ServiceUnavailableException",
+            "ThrottlingException",
+        }
+        result = None
+        code = "unknown"
+        for attempt in range(1, max_attempts + 1):
+            result = self._run_aws(args, capture=True, check=False)
+            if result.returncode == 0:
+                return result
+            code = self._aws_cli_error_code(result)
+            should_retry = code in retryable
+            if not should_retry or attempt == max_attempts:
+                break
+            delay = min(2 ** (attempt - 1), 8)
+            logger.warning(
+                f"AWS EBS {action} returned {code}; retrying in {delay}s "
+                f"({attempt}/{max_attempts})"
+            )
+            time.sleep(delay)
+
+        error_type = PermissionError if code in {
+            "AccessDenied",
+            "AccessDeniedException",
+            "UnauthorizedOperation",
+        } else RuntimeError
+        raise error_type(
+            f"AWS EBS {action} failed (AWS error: {code}). "
+            f"Grant ebs:{action} in {args[args.index('--region') + 1]} and retry."
+        )
+
+    def _aws_put_snapshot_block(
+        self,
+        region: str,
+        snapshot_id: str,
+        block_index: int,
+        block_data: bytes,
+    ) -> None:
+        """Upload one checksummed 512-KiB block to a pending EBS snapshot."""
+        checksum = base64.b64encode(hashlib.sha256(block_data).digest()).decode()
+        block_path = ""
+        try:
+            with tempfile.NamedTemporaryFile(
+                prefix=f"dstack-ebs-{block_index}-",
+                suffix=".block",
+                delete=False,
+            ) as block_file:
+                block_file.write(block_data)
+                block_path = block_file.name
+            self._aws_ebs_call([
+                "ebs", "put-snapshot-block",
+                "--region", region,
+                "--snapshot-id", snapshot_id,
+                "--block-index", str(block_index),
+                "--block-data", block_path,
+                "--data-length", str(AWS_EBS_BLOCK_SIZE),
+                "--checksum", checksum,
+                "--checksum-algorithm", "SHA256",
+            ], "PutSnapshotBlock")
+        finally:
+            if block_path:
+                Path(block_path).unlink(missing_ok=True)
+
+    def _aws_upload_snapshot_blocks(
+        self,
+        region: str,
+        snapshot_id: str,
+        raw_path: Path,
+    ) -> int:
+        """Upload all non-zero RAW blocks with bounded concurrency."""
+        raw_size = raw_path.stat().st_size
+        total_blocks = (raw_size + AWS_EBS_BLOCK_SIZE - 1) // AWS_EBS_BLOCK_SIZE
+        zero_block = bytes(AWS_EBS_BLOCK_SIZE)
+        pending = set()
+        uploaded = 0
+
+        def collect(done: set) -> None:
+            nonlocal uploaded
+            for future in done:
+                future.result()
+                uploaded += 1
+                if uploaded % 128 == 0:
+                    logger.info(
+                        f"uploaded {uploaded} non-zero EBS blocks "
+                        f"({uploaded * AWS_EBS_BLOCK_SIZE // (1024 * 1024)} MiB)"
+                    )
+
+        with raw_path.open("rb") as raw_file, concurrent.futures.ThreadPoolExecutor(
+            max_workers=AWS_EBS_UPLOAD_WORKERS,
+            thread_name_prefix="dstack-ebs",
+        ) as executor:
+            for block_index in range(total_blocks):
+                block_data = raw_file.read(AWS_EBS_BLOCK_SIZE)
+                if len(block_data) < AWS_EBS_BLOCK_SIZE:
+                    block_data += bytes(AWS_EBS_BLOCK_SIZE - len(block_data))
+                if block_data == zero_block:
+                    continue
+                pending.add(executor.submit(
+                    self._aws_put_snapshot_block,
+                    region,
+                    snapshot_id,
+                    block_index,
+                    block_data,
+                ))
+                if len(pending) >= AWS_EBS_UPLOAD_QUEUE_DEPTH:
+                    done, pending = concurrent.futures.wait(
+                        pending,
+                        return_when=concurrent.futures.FIRST_COMPLETED,
+                    )
+                    collect(done)
+            if pending:
+                done, _ = concurrent.futures.wait(pending)
+                collect(done)
+
+        logger.info(
+            f"uploaded {uploaded} non-zero blocks from {raw_size} RAW bytes "
+            f"({total_blocks} logical blocks)"
+        )
+        return uploaded
+
+    def _aws_create_snapshot_from_raw(
         self,
         config: AwsConfig,
         raw_path: Path,
         description: str,
         client_token: str,
     ) -> str:
-        """Upload raw disk to S3 and import as EBS snapshot. Returns snapshot id."""
-        if not config.s3_bucket:
-            raise ValueError(
-                "aws_config.s3_bucket is required to import local disks "
-                "(or set ami_id / pre-imported snapshots)"
-            )
-        disk_sha = hashlib.sha256(raw_path.read_bytes()).hexdigest()
-        safe = re.sub(r"[^A-Za-z0-9._-]", "-", description)[:48]
-        prefix = (config.s3_prefix or "dstack-import").strip("/")
-        s3_key = f"{prefix}/{safe}-{disk_sha[:16]}.raw" if prefix else f"{safe}-{disk_sha[:16]}.raw"
-        s3_uri = f"s3://{config.s3_bucket}/{s3_key}"
-        logger.info(f"uploading {raw_path} to {s3_uri}")
-        self._run_aws(
-            ["s3", "cp", str(raw_path), s3_uri, "--region", config.region],
-            capture=True,
-            check=True,
+        """Write a local RAW disk directly to a new EBS snapshot."""
+        raw_size = raw_path.stat().st_size
+        if raw_size <= 0:
+            raise ValueError(f"RAW disk is empty: {raw_path}")
+        gib = 1024 * 1024 * 1024
+        volume_size = max(1, (raw_size + gib - 1) // gib)
+        logger.info(
+            f"creating {volume_size}-GiB EBS snapshot from {raw_size} RAW bytes..."
         )
-        disk_container = json.dumps({
-            "Description": description,
-            "Format": "RAW",
-            "UserBucket": {"S3Bucket": config.s3_bucket, "S3Key": s3_key},
-        })
-        import_args = [
-            "ec2", "import-snapshot",
+        start = self._aws_ebs_call([
+            "ebs", "start-snapshot",
             "--region", config.region,
-            "--client-token", client_token[:64],
-            "--description", description,
-            "--disk-container", disk_container,
-        ]
-        if config.import_role_name:
-            import_args.extend(["--role-name", config.import_role_name])
-        import_json = self._aws_json(import_args)
-        task_id = import_json.get("ImportTaskId")
-        if not task_id:
-            raise RuntimeError(f"import-snapshot returned no ImportTaskId: {import_json}")
-        logger.info(f"import task: {task_id}")
-        deadline = time.time() + 7200
-        snapshot_id = ""
-        while time.time() < deadline:
-            task = self._aws_json([
-                "ec2", "describe-import-snapshot-tasks",
-                "--region", config.region,
-                "--import-task-ids", task_id,
-            ])
-            detail = (task.get("ImportSnapshotTasks") or [{}])[0]
-            status = (
-                (detail.get("SnapshotTaskDetail") or {}).get("Status")
-                or detail.get("Status")
-                or ""
+            "--volume-size", str(volume_size),
+            "--description", description[:255],
+            "--client-token", client_token[:255],
+            "--timeout", "120",
+            "--output", "json",
+        ], "StartSnapshot")
+        start_json = json.loads(start.stdout) if start.stdout.strip() else {}
+        snapshot_id = start_json.get("SnapshotId", "")
+        block_size = int(start_json.get("BlockSize", 0))
+        if not snapshot_id or block_size != AWS_EBS_BLOCK_SIZE:
+            if snapshot_id:
+                self._run_aws([
+                    "ec2", "delete-snapshot",
+                    "--region", config.region,
+                    "--snapshot-id", snapshot_id,
+                ], capture=True, check=False)
+            raise RuntimeError(
+                "EBS StartSnapshot returned no snapshot id or an unsupported block size"
             )
-            snapshot_id = (detail.get("SnapshotTaskDetail") or {}).get("SnapshotId") or ""
-            progress = (detail.get("SnapshotTaskDetail") or {}).get("Progress") or ""
-            logger.info(f"import status: {status or 'unknown'} {progress}")
-            if status == "completed":
-                if not snapshot_id:
-                    raise RuntimeError(f"completed import missing SnapshotId: {detail}")
-                break
-            if status in ("deleted", "deleting"):
-                raise RuntimeError(f"import task ended with status {status}: {detail}")
-            time.sleep(15)
-        else:
-            raise RuntimeError(f"timed out waiting for import task {task_id}")
+
+        try:
+            changed_blocks = self._aws_upload_snapshot_blocks(
+                config.region,
+                snapshot_id,
+                raw_path,
+            )
+            if changed_blocks == 0:
+                raise ValueError(f"RAW disk contains no non-zero data: {raw_path}")
+            self._aws_ebs_call([
+                "ebs", "complete-snapshot",
+                "--region", config.region,
+                "--snapshot-id", snapshot_id,
+                "--changed-blocks-count", str(changed_blocks),
+            ], "CompleteSnapshot")
+            wait_result = self._run_aws([
+                "ec2", "wait", "snapshot-completed",
+                "--region", config.region,
+                "--snapshot-ids", snapshot_id,
+            ], capture=True, check=False)
+            if wait_result.returncode != 0:
+                code = self._aws_cli_error_code(wait_result)
+                raise RuntimeError(
+                    "EBS snapshot did not reach completed state "
+                    f"(AWS error: {code}); grant ec2:DescribeSnapshots and retry"
+                )
+        except Exception:
+            logger.warning("EBS snapshot creation failed; deleting partial snapshot")
+            self._run_aws([
+                "ec2", "delete-snapshot",
+                "--region", config.region,
+                "--snapshot-id", snapshot_id,
+            ], capture=True, check=False)
+            raise
 
         self._run_aws([
-            "ec2", "wait", "snapshot-completed",
+            "ec2", "create-tags",
             "--region", config.region,
-            "--snapshot-ids", snapshot_id,
-        ], capture=True, check=True)
-
-        if config.delete_s3_after_import:
-            self._run_aws(
-                ["s3", "rm", s3_uri, "--region", config.region],
-                capture=True,
-                check=False,
-            )
+            "--resources", snapshot_id,
+            "--tags",
+            f"Key=Name,Value={description[:255]}",
+            "Key=dstack:managed-by,Value=dstack-cloud",
+        ], capture=True, check=False)
+        logger.info(f"EBS snapshot ready: {snapshot_id}")
         return snapshot_id
 
     def _aws_ensure_ami(self, config: AwsConfig, app: App, force: bool = False) -> str:
-        """Return AMI id, importing local UKI disk.raw when ami_id is empty."""
+        """Return an AMI id, writing local disk.raw to EBS when necessary."""
         if config.ami_id and not force:
             logger.info(f"using configured AMI {config.ami_id}")
             return config.ami_id
@@ -1821,7 +1952,7 @@ class CloudDeploymentManager:
                     return ami_id
 
         token = f"ami-{re.sub(r'[^A-Za-z0-9-]', '-', ami_name)[:40]}-{int(time.time())}"
-        snapshot_id = self._aws_import_snapshot_from_raw(
+        snapshot_id = self._aws_create_snapshot_from_raw(
             config, disk_raw, f"dstack-boot-{ami_name}", token
         )
         mappings = json.dumps([{
@@ -1880,12 +2011,6 @@ class CloudDeploymentManager:
                 f"missing required AWS configuration: {', '.join(missing)}. "
                 f"Edit app.json aws_config."
             )
-        if not config.ami_id and not config.s3_bucket:
-            raise ValueError(
-                "set aws_config.ami_id for a prebuilt AMI, or aws_config.s3_bucket "
-                "to import the local UKI disk.raw"
-            )
-
         logger.info("=== AWS EC2 NitroTPM Deployment ===")
         logger.info(f"Region: {config.region}")
         logger.info(f"Instance name: {config.instance_name}")
@@ -1925,7 +2050,7 @@ class CloudDeploymentManager:
         shared_raw = self._build_shared_raw_disk(app)
         try:
             shared_token = f"shared-{config.instance_name}-{int(time.time())}"[:64]
-            shared_snapshot = self._aws_import_snapshot_from_raw(
+            shared_snapshot = self._aws_create_snapshot_from_raw(
                 config, shared_raw, f"dstack-shared-{config.instance_name}", shared_token
             )
         finally:
@@ -1945,7 +2070,7 @@ class CloudDeploymentManager:
             data_raw = self._build_data_raw_disk()
             try:
                 data_token = f"data-{config.instance_name}-{int(time.time())}"[:64]
-                data_snapshot = self._aws_import_snapshot_from_raw(
+                data_snapshot = self._aws_create_snapshot_from_raw(
                     config, data_raw, f"dstack-data-{config.instance_name}", data_token
                 )
                 managed_data_snapshot = data_snapshot

@@ -10,9 +10,51 @@ Deploy your first confidential workload on GCP (or AWS EC2 NitroTPM) in under
 - `gcloud` CLI installed and authenticated
 
 **AWS** (optional)
-- AWS account with EC2 + VM Import permissions
+- AWS account with EC2 and EBS Direct snapshot permissions
 - `aws` CLI installed and authenticated
-- S3 bucket for AMI import (or a prebuilt Attestable AMI id)
+
+The following IAM policy covers image creation, deployment, status/log access,
+start/stop, replacement, and removal performed by `dstack-cloud`:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "ebs:StartSnapshot",
+        "ebs:PutSnapshotBlock",
+        "ebs:CompleteSnapshot"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "ec2:CreateTags",
+        "ec2:DeleteSnapshot",
+        "ec2:DescribeImages",
+        "ec2:DescribeInstances",
+        "ec2:DescribeSnapshots",
+        "ec2:GetConsoleOutput",
+        "ec2:RegisterImage",
+        "ec2:RunInstances",
+        "ec2:StartInstances",
+        "ec2:StopInstances",
+        "ec2:TerminateInstances"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
+```
+
+If `aws_config.iam_instance_profile` is set, also grant `iam:PassRole` for that
+specific role. `iam:PassRole` is not required for EBS Direct or for instances
+launched without an instance profile. Creating a VPC, subnet, or security group
+is outside `dstack-cloud`; supply existing IDs in `aws_config` and grant their
+management permissions separately only when needed.
 
 ## Install the CLI
 
@@ -47,11 +89,14 @@ This opens an editor with the global configuration file. For GCP, configure:
     "zone": "us-central1-a"
   },
   "aws": {
-    "region": "us-east-1",
-    "s3_bucket": "your-vmimport-bucket"
+    "region": "us-east-1"
   }
 }
 ```
+
+For AWS, `dstack-cloud` writes the local boot, shared, and labeled-data RAW disks
+directly to EBS snapshots in 512-KiB checksummed blocks. It does not require an
+S3 bucket, a `vmimport` service role, or `iam:PassRole`.
 
 ## Create a Project
 

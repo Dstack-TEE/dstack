@@ -70,11 +70,16 @@ os/yocto/tools/aws/audit-aws-ec2-image-hardening.sh \
 
 ## 2. Register the AMI and deploy with `dstack-cloud`
 
+Apply the EC2 and EBS Direct IAM policy in the AWS prerequisites of
+[`quickstart.md`](quickstart.md). `iam:PassRole` is needed only when
+`aws_config.iam_instance_profile` is configured.
+
 After the release artifact hashes and AWS PCR references match the published
 release evidence, deploy with **`dstack-cloud`** (`platform: aws`). The CLI
-imports the local UKI `disk.raw` as an Attestable AMI (UEFI + NitroTPM v2.0) when
-`aws_config.ami_id` is empty, builds the shared config disk with
-`aws_measurement` from `measurement.aws.cbor`, imports a minimal GPT data-disk
+uploads the local UKI `disk.raw` directly to an EBS snapshot and registers an
+Attestable AMI (UEFI + NitroTPM v2.0) when `aws_config.ami_id` is empty, builds
+the shared config disk with
+`aws_measurement` from `measurement.aws.cbor`, writes a minimal GPT data-disk
 template whose partition is labeled `dstack-data`, and launches the instance.
 
 ```bash
@@ -84,12 +89,12 @@ export PATH="$PATH:$(pwd)/dstack/scripts/bin"
 # project for AWS
 dstack-cloud new my-aws-app --platform aws --region us-west-2
 cd my-aws-app
-# edit app.json: aws_config.s3_bucket (vmimport), subnet/security groups as needed
+# configure subnet/security groups; no S3 bucket or vmimport role is required
 # pull or place the UKI package (must include measurement.aws.cbor) under image_search_paths
 
 dstack-cloud pull dstack-0.6.0   # UKI package must include assemble-time measurement.aws.cbor
 dstack-cloud prepare             # embeds fixed os_image_hash + aws_measurement (no PCR recompute)
-dstack-cloud deploy              # import AMI/shared/labeled-data snapshots, run-instances
+dstack-cloud deploy              # create EBS snapshots directly, register AMI, run-instances
 
 dstack-cloud status
 dstack-cloud logs --follow
