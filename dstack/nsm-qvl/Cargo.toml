@@ -30,7 +30,7 @@ rustls-pki-types.workspace = true
 dcap-qvl-webpki = { workspace = true, features = ["alloc", "rustcrypto"] }
 
 # CRL download
-reqwest = { workspace = true, features = ["rustls-tls"] }
+reqwest = { workspace = true, features = ["rustls"] }
 
 [dev-dependencies]
 nsm-attest.workspace = true
