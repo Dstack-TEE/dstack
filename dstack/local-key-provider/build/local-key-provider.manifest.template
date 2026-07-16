@@ -30,4 +30,4 @@ sgx.trusted_files = [
   "file:{{ arch_libdir }}/libgcc_s.so.1",
   "file:/etc/ssl/certs/ca-certificates.crt",
 ]
-sgx.max_threads = 4
+sgx.max_threads = 32
