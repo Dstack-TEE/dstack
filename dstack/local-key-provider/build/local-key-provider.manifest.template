@@ -10,7 +10,7 @@ loader.env.MALLOC_ARENA_MAX = "1"
 loader.env.RUST_LOG = "{{ rust_log }}"
 loader.env.SSL_CERT_FILE = "/etc/ssl/certs/ca-certificates.crt"
 loader.env.PCCS_URL = { passthrough = true }
-loader.env.SEALING_PROVIDER_ADDR = { passthrough = true }
+loader.env.LISTEN_ADDR = { passthrough = true }
 
 fs.mounts = [
   { path = "/lib", uri = "file:{{ gramine.runtimedir() }}" },

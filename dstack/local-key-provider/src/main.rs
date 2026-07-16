@@ -28,7 +28,7 @@ async fn main() -> Result<(), ProviderError> {
         )
         .init();
 
-    let address = env::var("SEALING_PROVIDER_ADDR").unwrap_or_else(|_| DEFAULT_ADDRESS.into());
+    let address = env::var("LISTEN_ADDR").unwrap_or_else(|_| DEFAULT_ADDRESS.into());
     let address: SocketAddr = address.parse().map_err(|error| {
         ProviderError::InvalidRequest(format!("invalid listen address: {error}"))
     })?;
