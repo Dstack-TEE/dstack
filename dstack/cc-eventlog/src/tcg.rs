@@ -433,6 +433,7 @@ mod tests {
 
     #[test]
     fn ccel_defaults_without_override() {
+        let _env_guard = ENV_LOCK.lock().unwrap();
         let previous = std::env::var_os(CCEL_FILE_ENV);
         std::env::remove_var(CCEL_FILE_ENV);
         assert_eq!(ccel_file_path().unwrap(), PathBuf::from(CCEL_FILE));
