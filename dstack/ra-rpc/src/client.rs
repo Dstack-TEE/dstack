@@ -48,7 +48,6 @@ impl RaClientConfig {
             .tls_sni(true)
             .danger_accept_invalid_certs(self.tls_no_check)
             .danger_accept_invalid_hostnames(self.tls_no_check_hostname)
-            .tls_built_in_root_certs(self.tls_built_in_root_certs)
             .connect_timeout(Duration::from_secs(5))
             .timeout(Duration::from_secs(60));
         if self.cert_validator.is_some() {
@@ -60,9 +59,20 @@ impl RaClientConfig {
                 Identity::from_pem(identity_pem.as_bytes()).context("Failed to parse identity")?;
             builder = builder.identity(identity);
         }
-        if let Some(ca) = self.tls_ca_cert {
-            let ca = Certificate::from_pem(ca.as_bytes()).context("Failed to parse CA")?;
-            builder = builder.add_root_certificate(ca);
+        // reqwest 0.13 replaced tls_built_in_root_certs / add_root_certificate with
+        // tls_certs_merge (keep platform roots) and tls_certs_only (custom roots only).
+        // Hostname-check bypass also requires tls_certs_only on the rustls backend.
+        let ca_cert = self
+            .tls_ca_cert
+            .as_deref()
+            .map(|ca| Certificate::from_pem(ca.as_bytes()).context("Failed to parse CA"))
+            .transpose()?;
+        if self.tls_built_in_root_certs && !self.tls_no_check_hostname {
+            if let Some(ca) = ca_cert {
+                builder = builder.tls_certs_merge([ca]);
+            }
+        } else {
+            builder = builder.tls_certs_only(ca_cert);
         }
         let client = builder.build().context("failed to create client")?;
         Ok(RaClient {

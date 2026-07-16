@@ -4,7 +4,8 @@
 
 use anyhow::{bail, Context, Result};
 use fs_err as fs;
-use hickory_resolver::error::ResolveErrorKind;
+use hickory_resolver::proto::rr::RData;
+use hickory_resolver::TokioResolver;
 use instant_acme::{
     Account, AccountCredentials, AuthorizationStatus, ChallengeType, Identifier, NewAccount,
     NewOrder, Order, OrderStatus, Problem,
@@ -372,8 +373,6 @@ impl AcmeClient {
         let start_time = std::time::Instant::now();
 
         'outer: loop {
-            use hickory_resolver::AsyncResolver;
-
             sleep(delay).await;
 
             let elapsed = start_time.elapsed();
@@ -385,25 +384,28 @@ impl AcmeClient {
                 break;
             }
 
-            let dns_resolver =
-                AsyncResolver::tokio_from_system_conf().context("failed to create dns resolver")?;
+            let dns_resolver = TokioResolver::builder_tokio()
+                .context("failed to create dns resolver")?
+                .build()
+                .context("failed to build dns resolver")?;
 
             while let Some(challenge) = unsettled_challenges.pop() {
                 let expected_txt = &challenge.dns_value;
                 let settled = match dns_resolver.txt_lookup(&challenge.acme_domain).await {
-                    Ok(record) => record.iter().any(|txt| {
+                    Ok(record) => record.answers().iter().any(|answer| {
+                        let RData::TXT(txt) = &answer.data else {
+                            return false;
+                        };
                         let actual_txt = txt.to_string();
                         debug!("Expected challenge: {expected_txt}, actual: {actual_txt}");
                         actual_txt == *expected_txt
                     }),
+                    Err(err) if err.is_no_records_found() => false,
                     Err(err) => {
-                        let ResolveErrorKind::NoRecordsFound { .. } = err.kind() else {
-                            bail!(
-                                "failed to lookup dns record {}: {err}",
-                                challenge.acme_domain
-                            );
-                        };
-                        false
+                        bail!(
+                            "failed to lookup dns record {}: {err}",
+                            challenge.acme_domain
+                        );
                     }
                 };
                 if !settled {
