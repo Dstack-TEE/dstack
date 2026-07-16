@@ -32,12 +32,17 @@ use supervisor_client::SupervisorClient;
 use tracing::{debug, error, info, warn};
 
 pub use image::{Image, ImageInfo};
-pub use qemu::{VmConfig, VmWorkDir};
+pub use qemu::VmConfig;
+pub use workdir::VmWorkDir;
 
+mod host_share;
 mod id_pool;
 mod image;
+mod mr_config;
 mod qemu;
 pub(crate) mod registry;
+mod vm_info;
+mod workdir;
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct PortMapping {
@@ -512,7 +517,7 @@ impl App {
     /// Handle a DHCP lease notification: look up VM by MAC address, persist
     /// the guest IP, and reconfigure port forwarding.
     pub async fn report_dhcp_lease(&self, mac: &str, ip: &str) {
-        use crate::app::qemu::mac_address_for_vm;
+        use crate::app::mr_config::mac_address_for_vm;
 
         let vm_id = {
             let mut state = self.lock();
