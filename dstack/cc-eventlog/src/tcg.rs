@@ -403,8 +403,11 @@ impl TryFrom<TcgEvent> for TdxEvent {
 mod tests {
     use super::*;
 
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn ccel_override_rejects_empty_and_relative() {
+        let _env_guard = ENV_LOCK.lock().unwrap();
         let previous = std::env::var_os(CCEL_FILE_ENV);
 
         std::env::set_var(CCEL_FILE_ENV, "");
