@@ -1449,6 +1449,11 @@ mod gpu {
             .unwrap()
         }
 
+        // Captured with the pinned nvattest SDK on an Ubuntu 22.04 GCP A3 TDX
+        // VM with an H100 and the NVIDIA 580 open kernel driver.
+        const H100_ATTESTATION_OUTPUT: &[u8] =
+            include_bytes!("../tests/fixtures/gpu_attestation_h100.json");
+
         #[test]
         fn inventory_counts_nvidia_and_non_nvidia_gpus() {
             let root = tempfile::tempdir().unwrap();
@@ -1517,6 +1522,26 @@ mod gpu {
             extra_claims["claims"][0]["dbgstat"] = Value::String("enabled".to_string());
             validate_attestation_output(&serde_json::to_vec(&extra_claims).unwrap(), &nonce, 2)
                 .unwrap();
+        }
+
+        #[test]
+        fn real_h100_attestation_fixture_validates_and_drives_rego() {
+            let nonce = "11".repeat(32);
+            let claims = validate_attestation_output(H100_ATTESTATION_OUTPUT, &nonce, 1).unwrap();
+            assert_eq!(claims[0]["hwmodel"], "GH100 A01 GSP BROM");
+            assert_eq!(claims[0]["x-nvidia-gpu-claims-version"], "3.0");
+
+            let policy = r#"
+                package policy
+                default nv_match = false
+                nv_match {
+                    count(input) == 1
+                    input[0].secboot == true
+                    input[0].dbgstat == "disabled"
+                    input[0].measres == "success"
+                }
+            "#;
+            evaluate_policy(policy, &claims).unwrap();
         }
 
         #[test]
