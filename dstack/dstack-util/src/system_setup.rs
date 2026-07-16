@@ -1347,8 +1347,6 @@ mod gpu {
             if !device.cc_enabled {
                 bail!("gpu at index {index} does not enable confidential compute mode");
             }
-        }
-        for (index, device) in devices.iter().enumerate() {
             if device.devtools && !policy.allow_devtools {
                 bail!("gpu at index {index} enables NVIDIA DevTools mode");
             }
