@@ -52,7 +52,8 @@ ENV RUST_LOG=info
 # Build the self-contained in-tree implementation rather than cloning or
 # depending on another source repository.
 WORKDIR /local-key-provider/build
-COPY Cargo.toml Cargo.lock /local-key-provider/
+COPY build/Cargo.standalone.toml /local-key-provider/Cargo.toml
+COPY build/Cargo.lock /local-key-provider/
 COPY src /local-key-provider/src
 COPY build/Makefile ./
 RUN make target/release/local-key-provider
