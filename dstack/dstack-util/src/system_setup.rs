@@ -20,7 +20,7 @@ use dstack_types::{
         APP_COMPOSE, APP_KEYS, DECRYPTED_ENV, DECRYPTED_ENV_JSON, ENCRYPTED_ENV,
         HOST_SHARED_DIR_NAME, HOST_SHARED_DISK_LABEL, INSTANCE_INFO, SYS_CONFIG, USER_CONFIG,
     },
-    KeyProvider, KeyProviderInfo,
+    GpuPolicy, KeyProvider, KeyProviderInfo,
 };
 use fs_err as fs;
 use luks2::{
@@ -1114,7 +1114,8 @@ mod gpu {
 
     pub(super) struct GpuAttestationResult {
         claims: Vec<Value>,
-        event: Vec<u8>,
+        output: Vec<u8>,
+        devices: u32,
     }
 
     impl GpuAttestationResult {
@@ -1122,8 +1123,8 @@ mod gpu {
             &self.claims
         }
 
-        pub(super) fn event(&self) -> &[u8] {
-            &self.event
+        pub(super) fn event(&self, devtools: bool) -> Result<Vec<u8>> {
+            attestation_event(&self.output, self.devices, devtools)
         }
     }
 
@@ -1236,18 +1237,26 @@ mod gpu {
         parse_nvidia_smi_state(&output.stdout, name)
     }
 
-    /// Require the current system-wide GPU state to be production CC. NVAT's
-    /// NVML collector accepts protected-PCIe as well as CC and its default
-    /// appraisal does not reject DevTools, so a successful appraisal alone is
-    /// not a sufficient confidentiality check.
-    async fn verify_production_cc_mode() -> Result<()> {
-        if !query_nvidia_smi_state("-f", "CC feature state").await? {
+    fn validate_cc_state(cc_enabled: bool, devtools: bool, allow_devtools: bool) -> Result<()> {
+        if !cc_enabled {
             bail!("nvidia confidential compute mode is not enabled");
         }
-        if query_nvidia_smi_state("-d", "DevTools mode").await? {
+        if devtools && !allow_devtools {
             bail!("nvidia DevTools mode is enabled");
         }
         Ok(())
+    }
+
+    /// Require the current system-wide GPU state to use CC. NVAT's NVML
+    /// collector accepts protected-PCIe as well as CC, so a successful
+    /// appraisal alone is not a sufficient confidentiality check. DevTools is
+    /// rejected by default but can be explicitly allowed by the measured app
+    /// policy.
+    pub(super) async fn verify_cc_mode(allow_devtools: bool) -> Result<bool> {
+        let cc_enabled = query_nvidia_smi_state("-f", "CC feature state").await?;
+        let devtools = query_nvidia_smi_state("-d", "DevTools mode").await?;
+        validate_cc_state(cc_enabled, devtools, allow_devtools)?;
+        Ok(devtools)
     }
 
     /// Mark the GPU as ready to accept work. Only meaningful (and only
@@ -1306,13 +1315,13 @@ mod gpu {
         Ok(output.claims)
     }
 
-    fn attestation_event(stdout: &[u8], devices: u32) -> Result<Vec<u8>> {
+    fn attestation_event(stdout: &[u8], devices: u32, devtools: bool) -> Result<Vec<u8>> {
         let event = GpuAttestationEvent {
             version: EVENT_VERSION,
             provider: "nvidia",
             devices,
             cc_mode: "on",
-            devtools: false,
+            devtools,
             evidence_sha256: hex::encode(sha256(stdout)),
         };
         serde_json::to_vec(&event).context("failed to serialize GPU attestation event")
@@ -1320,8 +1329,8 @@ mod gpu {
 
     /// Run local GPU attestation via nvattest with a fresh nonce and no custom
     /// relying-party policy. nvattest's built-in appraisal still applies. The
-    /// complete JSON output is preserved under /run, while its claims and a
-    /// versioned summary are returned for the application policy and RTMR3.
+    /// complete JSON output is preserved under /run and retained with its
+    /// claims for the application policy and versioned RTMR3 summary.
     pub(super) async fn attest_gpu(expected_devices: u32) -> Result<GpuAttestationResult> {
         if !Path::new(NVATTEST).exists() {
             bail!("nvattest is not available in this image");
@@ -1360,15 +1369,16 @@ mod gpu {
             );
         }
         let claims = validate_attestation_output(&output.stdout, &nonce, expected_devices)?;
-        verify_production_cc_mode().await?;
         Ok(GpuAttestationResult {
             claims,
-            event: attestation_event(&output.stdout, expected_devices)?,
+            output: output.stdout,
+            devices: expected_devices,
         })
     }
 
-    pub(super) fn policy_digest(policy: &str) -> [u8; 32] {
-        sha256(policy.as_bytes())
+    pub(super) fn policy_digest(policy: &GpuPolicy) -> Result<[u8; 32]> {
+        let canonical = serde_jcs::to_vec(policy).context("failed to canonicalize GPU policy")?;
+        Ok(sha256(&canonical))
     }
 
     /// Evaluate the app-provided Rego v0 policy using the same input shape as
@@ -1484,6 +1494,14 @@ mod gpu {
         }
 
         #[test]
+        fn basic_policy_requires_cc_and_rejects_devtools_by_default() {
+            validate_cc_state(true, false, false).unwrap();
+            assert!(validate_cc_state(false, false, false).is_err());
+            assert!(validate_cc_state(true, true, false).is_err());
+            validate_cc_state(true, true, true).unwrap();
+        }
+
+        #[test]
         fn nvattest_output_requires_every_expected_gpu_and_fresh_nonce() {
             let nonce = "11".repeat(32);
             let valid = nvattest_output(&nonce, 2);
@@ -1510,12 +1528,12 @@ mod gpu {
             let nonce = "22".repeat(32);
             let output = nvattest_output(&nonce, 1);
             let event: Value =
-                serde_json::from_slice(&attestation_event(&output, 1).unwrap()).unwrap();
+                serde_json::from_slice(&attestation_event(&output, 1, true).unwrap()).unwrap();
             assert_eq!(event["version"], EVENT_VERSION);
             assert_eq!(event["devices"], 1);
             assert!(event.get("policy").is_none());
             assert_eq!(event["cc_mode"], "on");
-            assert_eq!(event["devtools"], false);
+            assert_eq!(event["devtools"], true);
             assert_eq!(event["evidence_sha256"], hex::encode(sha256(&output)));
         }
 
@@ -1539,10 +1557,22 @@ mod gpu {
         }
 
         #[test]
-        fn policy_digest_uses_exact_utf8_bytes() {
-            let policy = "package policy\n\ndefault nv_match = true\n";
-            assert_eq!(policy_digest(policy), sha256(policy.as_bytes()));
-            assert_ne!(policy_digest(policy), policy_digest(policy.trim()));
+        fn policy_digest_commits_to_the_canonical_policy_structure() {
+            let policy = GpuPolicy {
+                rego: Some("package policy\n\ndefault nv_match = true\n".to_string()),
+                allow_devtools: true,
+            };
+            let canonical = serde_jcs::to_vec(&policy).unwrap();
+            assert_eq!(policy_digest(&policy).unwrap(), sha256(&canonical));
+
+            let production_policy = GpuPolicy {
+                allow_devtools: false,
+                ..policy.clone()
+            };
+            assert_ne!(
+                policy_digest(&policy).unwrap(),
+                policy_digest(&production_policy).unwrap()
+            );
         }
     }
 }
@@ -2240,26 +2270,33 @@ impl<'a> Stage0<'a> {
         emit_runtime_event("app-id", &instance_info.app_id)?;
         emit_runtime_event("compose-hash", &compose_hash)?;
 
-        if let Some(policy) = self
+        let gpu_policy = self
             .shared
             .app_compose
             .requirements
             .as_ref()
-            .and_then(|requirements| requirements.gpu_policy.as_deref())
-        {
-            emit_runtime_event("gpu-policy", &gpu::policy_digest(policy))?;
+            .and_then(|requirements| requirements.gpu_policy.as_ref());
+        if let Some(policy) = gpu_policy {
+            emit_runtime_event("gpu-policy", &gpu::policy_digest(policy)?)?;
             let claims = gpu_attestation
                 .map(gpu::GpuAttestationResult::claims)
                 .unwrap_or(&[]);
-            gpu::evaluate_policy(policy, claims).context("failed to apply GPU policy")?;
-            info!("application GPU policy accepted the attestation claims");
+            if let Some(rego) = policy.rego.as_deref() {
+                gpu::evaluate_policy(rego, claims).context("failed to apply GPU Rego policy")?;
+            }
         }
 
         if let Some(attestation) = gpu_attestation {
+            let allow_devtools = gpu_policy.is_some_and(|policy| policy.allow_devtools);
+            let devtools = gpu::verify_cc_mode(allow_devtools).await?;
             gpu::set_gpu_ready_state().await?;
-            emit_runtime_event("gpu-attestation", attestation.event())
+            let event = attestation.event(devtools)?;
+            emit_runtime_event("gpu-attestation", &event)
                 .context("failed to emit GPU attestation event")?;
             info!("GPU TEE attestation succeeded");
+        }
+        if gpu_policy.is_some() {
+            info!("application GPU policy accepted the attestation claims and state");
         }
 
         emit_runtime_event("instance-id", &instance_id)?;
@@ -2865,7 +2902,9 @@ fn test_gpu_policy_requires_gpu_attestation() {
         "runner": "docker-compose",
         "requirements": {
             "attest_gpu": false,
-            "gpu_policy": "package policy\n\ndefault nv_match = true\n"
+            "gpu_policy": {
+                "rego": "package policy\n\ndefault nv_match = true\n"
+            }
         }
     }))
     .unwrap();

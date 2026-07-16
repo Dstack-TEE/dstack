@@ -123,6 +123,19 @@ pub struct AppCompose {
 
 #[derive(Deserialize, Serialize, Debug, Clone, Default, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
+pub struct GpuPolicy {
+    /// Optional Rego v0 policy evaluated against NVIDIA nvattest's `claims`
+    /// array. It must define the boolean rule `data.policy.nv_match`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rego: Option<String>,
+    /// Permit NVIDIA DevTools mode. This defaults to false because DevTools
+    /// disables the GPU memory-confidentiality guarantees expected in
+    /// production.
+    pub allow_devtools: bool,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone, Default, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
 pub struct Requirements {
     /// OS-version requirement parsed with Rust semver requirement semantics,
     /// e.g. `">=0.6.0"` or `">=0.6.0, <0.7.0"`.
@@ -159,15 +172,12 @@ pub struct Requirements {
     /// are unaffected either way.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub attest_gpu: Option<bool>,
-    /// Optional application-supplied Rego policy evaluated against the
-    /// `claims` array in NVIDIA nvattest's JSON output before key
-    /// provisioning. The policy must define the boolean rule
-    /// `data.policy.nv_match`.
+    /// Optional application GPU policy applied before key provisioning.
     ///
-    /// The SHA-256 digest of the exact UTF-8 policy bytes is emitted as the
-    /// `gpu-policy` launch event immediately after `compose-hash`.
+    /// Its default-expanded, JCS-canonicalized JSON SHA-256 digest is emitted
+    /// as the `gpu-policy` launch event immediately after `compose-hash`.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub gpu_policy: Option<String>,
+    pub gpu_policy: Option<GpuPolicy>,
 }
 
 impl Requirements {
@@ -466,7 +476,10 @@ mod app_compose_tests {
                 "platforms": ["dstack-gcp-tdx", "dstack-tdx"],
                 "tdx_measure_acpi_tables": true,
                 "launch_token_hash": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
-                "gpu_policy": "package policy\n\ndefault nv_match = false\n"
+                "gpu_policy": {
+                    "rego": "package policy\n\ndefault nv_match = false\n",
+                    "allow_devtools": true
+                }
             }
         }))
         .unwrap();
@@ -481,10 +494,12 @@ mod app_compose_tests {
             requirements.launch_token_hash.as_deref(),
             Some("9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08")
         );
+        let gpu_policy = requirements.gpu_policy.as_ref().unwrap();
         assert_eq!(
-            requirements.gpu_policy.as_deref(),
+            gpu_policy.rego.as_deref(),
             Some("package policy\n\ndefault nv_match = false\n")
         );
+        assert!(gpu_policy.allow_devtools);
 
         let err = serde_json::from_value::<AppCompose>(serde_json::json!({
             "manifest_version": "3",
@@ -555,13 +570,31 @@ mod app_compose_tests {
             "name": "test",
             "runner": "docker-compose",
             "requirements": {
-                "gpu_policy": "package policy\n\ndefault nv_match = false\n"
+                "gpu_policy": {
+                    "rego": "package policy\n\ndefault nv_match = false\n"
+                }
             }
         }))
         .unwrap();
         let requirements = gpu_policy.requirements.as_ref().unwrap();
-        assert!(requirements.gpu_policy.is_some());
+        let gpu_policy = requirements.gpu_policy.as_ref().unwrap();
+        assert!(gpu_policy.rego.is_some());
+        assert!(!gpu_policy.allow_devtools);
         assert!(!requirements.is_empty());
+
+        let err = serde_json::from_value::<AppCompose>(serde_json::json!({
+            "manifest_version": "3",
+            "name": "test",
+            "runner": "docker-compose",
+            "requirements": {
+                "gpu_policy": {
+                    "rego": "package policy",
+                    "allow_debug": true
+                }
+            }
+        }))
+        .unwrap_err();
+        assert!(err.to_string().contains("unknown field"));
     }
 
     #[test]

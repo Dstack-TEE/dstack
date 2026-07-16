@@ -57,9 +57,14 @@ dstack supports NVIDIA H100, H200, and B200 GPUs in confidential compute mode fo
 
 GPUs are passed through via VFIO to the TEE-protected CVM. Before key provisioning, `dstack-util setup` inventories every VGA/3D-controller PCI function, compares that count with `vm_config.num_gpus`, and runs NVIDIA's local `nvattest` verifier over every NVIDIA-driver-visible GPU with a fresh nonce. dstack does not ship or pass a custom relying-party policy to this command; nvattest's built-in appraisal still applies. The complete JSON result (`result_code`, `result_message`, `claims`, and `detached_eat`) is saved at `/run/nvidia-gpu-attestation/attestation.out`.
 
-An application may additionally set `requirements.gpu_policy` to a Rego v0 script. Its input is the nvattest output's `claims` array, and it must define the boolean entrypoint `data.policy.nv_match` in `package policy`. Immediately after measuring `compose-hash`, dstack measures `sha256(gpu_policy UTF-8 bytes)` in a `gpu-policy` event and then evaluates the policy. A false, undefined, malformed, or non-boolean result stops boot before key provisioning. If no GPU is configured, the policy receives an empty array. `gpu_policy` cannot be combined with `attest_gpu: false`.
+An application may additionally set `requirements.gpu_policy` to an object with the following deny-unknown-fields schema:
 
-Separate fail-closed `nvidia-smi` queries require the current CC feature to be ON and DevTools mode to be OFF. Only after the default appraisal, optional application policy, and these checks succeed does dstack set the GPU ready state. The dstack CPU/guest boot chain is verified independently through measured boot; a GPU claim named `secboot` refers to the GPU appraisal, not UEFI Secure Boot in the CVM.
+- `rego` (optional string): a Rego v0 script evaluated with the nvattest output's `claims` array as `input`. It must define the boolean entrypoint `data.policy.nv_match` in `package policy`.
+- `allow_devtools` (boolean, default `false`): permit NVIDIA DevTools mode. Production applications should leave this disabled because DevTools removes the expected GPU memory-confidentiality guarantee.
+
+Immediately after measuring `compose-hash`, dstack applies field defaults, JCS-canonicalizes the complete `gpu_policy` structure, and measures its SHA-256 digest in a `gpu-policy` event. It then applies the basic settings and optional Rego policy. A false, undefined, malformed, or non-boolean Rego result stops boot before key provisioning. If no GPU is configured, Rego receives an empty array. `gpu_policy` cannot be combined with `attest_gpu: false`.
+
+Separate fail-closed `nvidia-smi` queries always require the current CC feature to be ON and require DevTools mode to be OFF unless the measured policy explicitly permits it. Only after the default appraisal, optional application policy, and these checks succeed does dstack set the GPU ready state. The dstack CPU/guest boot chain is verified independently through measured boot; a GPU claim named `secboot` refers to the GPU appraisal, not UEFI Secure Boot in the CVM.
 
 ### Dual Attestation
 
@@ -71,7 +76,7 @@ A verifier must replay the measured event log, require exactly one pre-`system-r
 
 The GPU gate assumes a malicious host/VMM and untrusted host-provided PCI topology, while trusting the CPU TEE, the measured dstack guest/kernel, NVIDIA hardware/firmware roots, and the cryptography used by both attestation chains. Availability is out of scope.
 
-The events make the following **boot-time** statement: immediately before key provisioning, all attached VGA/3D PCI functions were NVIDIA devices, their count matched the quote-bound VM configuration, nvattest returned one fresh successfully appraised claim for each device, the measured application policy accepted those claims when present, CC was ON, DevTools was OFF, and setting the GPU ready state succeeded. This closes these cases:
+The events make the following **boot-time** statement: immediately before key provisioning, all attached VGA/3D PCI functions were NVIDIA devices, their count matched the quote-bound VM configuration, nvattest returned one fresh successfully appraised claim for each device, the measured application policy accepted those claims and GPU state when present, CC was ON, DevTools complied with that policy (OFF by default), and setting the GPU ready state succeeded. This closes these cases:
 
 - A GPU-less launch cannot be presented as a GPU-verified launch: it has `num_gpus == 0` and no `gpu-attestation` event.
 - A mixed launch cannot attest only its TEE-capable subset. Non-NVIDIA display GPUs are rejected, and the sysfs, `vm_config`, and nvattest claim counts must all agree. A non-CC NVIDIA GPU either prevents evidence collection/appraisal or causes the default appraisal, application policy, or CC-state check to fail.
@@ -180,7 +185,7 @@ Use this checklist to verify a workload running in a dstack CVM.
 - [ ] `vm_config.num_gpus` is greater than zero and matches the expected deployment
 - [ ] If `requirements.gpu_policy` is required, exactly one `gpu-policy` event follows `compose-hash`, and its payload matches the expected SHA-256 digest
 - [ ] Exactly one `gpu-attestation` event appears before `system-ready`
-- [ ] The event device count matches `vm_config.num_gpus`, and its CC/DevTools fields indicate production mode
+- [ ] The event device count matches `vm_config.num_gpus`, CC is ON, and its DevTools field complies with the measured policy
 - [ ] The platform binds the event log to a quoted RTMR/PCR (do not accept it from current SEV-SNP evidence)
 
 **Key management verification:**
