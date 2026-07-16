@@ -99,10 +99,21 @@ log "Syncing system time..."
 # Let the chronyd correct the system time immediately; keep booting if chronyd is not ready yet.
 chronyc makestep || log "Warning: chronyc makestep failed; continuing"
 
-if [[ -e /dev/sev-guest ]] || grep -qw sev_guest /sys/kernel/config/tsm/report/*/provider 2>/dev/null; then
+has_tsm_provider() {
+	local prefix="$1"
+	local provider value
+	for provider in /sys/kernel/config/tsm/report/*/provider; do
+		[[ -r "$provider" ]] || continue
+		value=$(<"$provider")
+		[[ "$value" == "$prefix"* ]] && return 0
+	done
+	return 1
+}
+
+if [[ -e /dev/sev-guest ]] || has_tsm_provider sev_guest; then
 	log "SEV-SNP guest device/TSM provider detected"
-elif [[ -e /dev/tdx_guest ]]; then
-	log "TDX guest device detected"
+elif [[ -e /dev/tdx_guest ]] || has_tsm_provider tdx_guest; then
+	log "TDX guest device/TSM provider detected"
 elif modprobe sev-guest 2>/dev/null; then
 	log "Loaded sev-guest module"
 elif modprobe tdx-guest 2>/dev/null; then
