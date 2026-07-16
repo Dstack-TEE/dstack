@@ -7,27 +7,27 @@ libos.entrypoint = "{{ self_exe }}"
 loader.log_level = "{{ log_level }}"
 loader.env.LD_LIBRARY_PATH = "/lib:{{ arch_libdir }}"
 loader.env.MALLOC_ARENA_MAX = "1"
-loader.env.RUST_BACKTRACE = "full"
 loader.env.RUST_LOG = "{{ rust_log }}"
+loader.env.SSL_CERT_FILE = "/etc/ssl/certs/ca-certificates.crt"
 loader.env.PCCS_URL = { passthrough = true }
 loader.env.SEALING_PROVIDER_ADDR = { passthrough = true }
 
 fs.mounts = [
   { path = "/lib", uri = "file:{{ gramine.runtimedir() }}" },
-  { path = "{{ arch_libdir }}", uri = "file:{{ arch_libdir }}" },
+  { path = "{{ arch_libdir }}/libgcc_s.so.1", uri = "file:{{ arch_libdir }}/libgcc_s.so.1" },
   { path = "/etc/ssl/certs/ca-certificates.crt", uri = "file:/etc/ssl/certs/ca-certificates.crt" },
 ]
 
 sys.enable_extra_runtime_domain_names_conf = true
 
-sgx.debug = {{ 'true' if log_level == 'debug' else 'false' }}
-sgx.edmm_enable = {{ 'true' if env.get('EDMM', '0') == '1' else 'false' }}
+sgx.debug = false
+sgx.edmm_enable = false
+sgx.file_check_policy = "strict"
 sgx.remote_attestation = "dcap"
-sgx.allowed_files = []
 sgx.trusted_files = [
   "file:{{ self_exe }}",
   "file:{{ gramine.runtimedir() }}/",
-  "file:{{ arch_libdir }}/",
+  "file:{{ arch_libdir }}/libgcc_s.so.1",
   "file:/etc/ssl/certs/ca-certificates.crt",
 ]
-sgx.max_threads = {{ '1' if env.get('EDMM', '0') == '1' else '32' }}
+sgx.max_threads = 4
