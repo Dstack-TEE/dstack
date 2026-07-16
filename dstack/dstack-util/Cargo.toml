@@ -46,6 +46,7 @@ dcap-qvl.workspace = true
 k256 = { workspace = true, features = ["ecdsa"] }
 dstack-types.workspace = true
 rand.workspace = true
+regorus.workspace = true
 sha3.workspace = true
 dstack-attest.workspace = true
 cert-client.workspace = true

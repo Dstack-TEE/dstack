@@ -159,6 +159,15 @@ pub struct Requirements {
     /// are unaffected either way.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub attest_gpu: Option<bool>,
+    /// Optional application-supplied Rego policy evaluated against the
+    /// `claims` array in NVIDIA nvattest's JSON output before key
+    /// provisioning. The policy must define the boolean rule
+    /// `data.policy.nv_match`.
+    ///
+    /// The SHA-256 digest of the exact UTF-8 policy bytes is emitted as the
+    /// `gpu-policy` launch event immediately after `compose-hash`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gpu_policy: Option<String>,
 }
 
 impl Requirements {
@@ -168,6 +177,7 @@ impl Requirements {
             && self.tdx_measure_acpi_tables.is_none()
             && self.launch_token_hash.is_none()
             && self.attest_gpu.is_none()
+            && self.gpu_policy.is_none()
     }
 }
 
@@ -455,7 +465,8 @@ mod app_compose_tests {
                 "os_version": ">=0.6.1",
                 "platforms": ["dstack-gcp-tdx", "dstack-tdx"],
                 "tdx_measure_acpi_tables": true,
-                "launch_token_hash": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+                "launch_token_hash": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+                "gpu_policy": "package policy\n\ndefault nv_match = false\n"
             }
         }))
         .unwrap();
@@ -469,6 +480,10 @@ mod app_compose_tests {
         assert_eq!(
             requirements.launch_token_hash.as_deref(),
             Some("9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08")
+        );
+        assert_eq!(
+            requirements.gpu_policy.as_deref(),
+            Some("package policy\n\ndefault nv_match = false\n")
         );
 
         let err = serde_json::from_value::<AppCompose>(serde_json::json!({
@@ -533,6 +548,19 @@ mod app_compose_tests {
         .unwrap();
         let requirements = launch_token.requirements.as_ref().unwrap();
         assert!(requirements.launch_token_hash.is_some());
+        assert!(!requirements.is_empty());
+
+        let gpu_policy: AppCompose = serde_json::from_value(serde_json::json!({
+            "manifest_version": "3",
+            "name": "test",
+            "runner": "docker-compose",
+            "requirements": {
+                "gpu_policy": "package policy\n\ndefault nv_match = false\n"
+            }
+        }))
+        .unwrap();
+        let requirements = gpu_policy.requirements.as_ref().unwrap();
+        assert!(requirements.gpu_policy.is_some());
         assert!(!requirements.is_empty());
     }
 
