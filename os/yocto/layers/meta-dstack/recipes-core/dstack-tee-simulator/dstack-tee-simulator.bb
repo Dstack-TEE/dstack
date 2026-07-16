@@ -5,9 +5,10 @@ LIC_FILES_CHKSUM = "file://${COREBASE}/meta/files/common-licenses/Apache-2.0;md5
 
 inherit systemd
 
+# Stage the monorepo core workspace only. The public Rust SDK lives in its own
+# Cargo workspace and is not needed to build dstack-tee-simulator.
 DSTACK_MONOREPO_ROOT ?= "${@os.path.realpath(os.path.join(d.getVar('THISDIR'), '../../../../../..'))}"
 DSTACK_CORE_SRC ?= "${DSTACK_MONOREPO_ROOT}/dstack"
-DSTACK_RUST_SDK_SRC ?= "${DSTACK_MONOREPO_ROOT}/sdk/rust"
 
 S = "${UNPACKDIR}/repo/dstack"
 
@@ -22,16 +23,14 @@ EXTRA_CARGO_FLAGS = "-p dstack-tee-simulator"
 inherit cargo_bin
 
 do_unpack() {
-    install -d "${S}" "${UNPACKDIR}/repo/sdk/rust"
+    install -d "${S}"
     rsync -a --exclude=".git" --exclude=".worktrees" --exclude="target" \
         "${DSTACK_CORE_SRC}/" "${S}/"
-    rsync -a --exclude=".git" --exclude="target" \
-        "${DSTACK_RUST_SDK_SRC}/" "${UNPACKDIR}/repo/sdk/rust/"
 }
 
 do_unpack[cleandirs] = "${UNPACKDIR}/repo"
 do_unpack[nostamp] = "1"
-do_unpack[vardeps] += "DSTACK_CORE_SRC DSTACK_RUST_SDK_SRC"
+do_unpack[vardeps] += "DSTACK_CORE_SRC"
 
 do_configure() {
     cargo_bin_do_configure
