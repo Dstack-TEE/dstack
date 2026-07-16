@@ -1206,10 +1206,7 @@ mod gpu {
         Ok(inventory)
     }
 
-    /// Bind the runtime inventory to `vm_config.num_gpus`. On TDX this config
-    /// affects the measured launch layout, so a remote verifier can compare the
-    /// event's device count with the same quote-bound value.
-    pub(super) fn expected_gpu_count(vm_config: &str, inventory: GpuInventory) -> Result<u32> {
+    pub(super) fn nvidia_gpu_count(inventory: GpuInventory) -> Result<u32> {
         if inventory.total != inventory.nvidia {
             bail!(
                 "unsupported non-NVIDIA GPU attached: found {} display GPUs, {} NVIDIA",
@@ -1217,16 +1214,7 @@ mod gpu {
                 inventory.nvidia
             );
         }
-        let vm_config: dstack_types::VmConfig = serde_json::from_str(vm_config)
-            .context("failed to parse vm_config for GPU attestation")?;
-        let expected = vm_config.num_gpus;
-        if inventory.total != expected {
-            bail!(
-                "gpu count mismatch: vm_config requires {expected}, found {}",
-                inventory.total
-            );
-        }
-        Ok(expected)
+        Ok(inventory.nvidia)
     }
 
     /// Run a GPU tool with a bounded timeout so a wedged driver/GPU cannot
@@ -1528,20 +1516,18 @@ mod gpu {
         }
 
         #[test]
-        fn expected_count_rejects_mixed_or_unmeasured_gpus() {
+        fn gpu_count_rejects_non_nvidia_gpus() {
             let mixed = GpuInventory {
                 total: 2,
                 nvidia: 1,
             };
-            assert!(expected_gpu_count(r#"{"num_gpus":2}"#, mixed).is_err());
+            assert!(nvidia_gpu_count(mixed).is_err());
 
             let nvidia = GpuInventory {
                 total: 2,
                 nvidia: 2,
             };
-            let err = expected_gpu_count(r#"{"num_gpus":1}"#, nvidia).unwrap_err();
-            assert!(err.to_string().contains("gpu count mismatch"));
-            assert_eq!(expected_gpu_count(r#"{"num_gpus":2}"#, nvidia).unwrap(), 2);
+            assert_eq!(nvidia_gpu_count(nvidia).unwrap(), 2);
         }
 
         #[test]
@@ -1782,8 +1768,7 @@ impl Stage0<'_> {
             }
             return Ok(());
         }
-        let expected_devices =
-            gpu::expected_gpu_count(&self.shared.sys_config.vm_config, inventory)?;
+        let expected_devices = gpu::nvidia_gpu_count(inventory)?;
         if expected_devices == 0 {
             return Ok(());
         }

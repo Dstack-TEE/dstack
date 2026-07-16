@@ -55,7 +55,7 @@ dstack supports NVIDIA H100, H200, and B200 GPUs in confidential compute mode fo
 
 ### How It Works
 
-GPUs are passed through via VFIO to the TEE-protected CVM. Before key provisioning, `dstack-util setup` inventories every VGA/3D-controller PCI function, compares that count with `vm_config.num_gpus`, and runs NVIDIA's local `nvattest` verifier over every NVIDIA-driver-visible GPU with a fresh nonce. dstack does not ship or pass a custom relying-party policy to this command; nvattest's built-in appraisal still applies. The complete JSON result (`result_code`, `result_message`, `claims`, and `detached_eat`) is saved at `/run/nvidia-gpu-attestation/attestation.out`.
+GPUs are passed through via VFIO to the TEE-protected CVM. Before key provisioning, `dstack-util setup` inventories every VGA/3D-controller PCI function, rejects non-NVIDIA display devices, and runs NVIDIA's local `nvattest` verifier over every NVIDIA-driver-visible GPU with a fresh nonce. dstack does not ship or pass a custom relying-party policy to this command; nvattest's built-in appraisal still applies. The complete JSON result (`result_code`, `result_message`, `claims`, and `detached_eat`) is saved at `/run/nvidia-gpu-attestation/attestation.out`.
 
 An application may additionally set `requirements.gpu_policy` to an object with the following deny-unknown-fields schema:
 
@@ -72,16 +72,16 @@ For every NVML-enumerated GPU, dstack calls `Device::is_cc_enabled()` and `Devic
 
 GPU workloads require verification of both hardware components. The CPU TEE quote verifies the CVM and its measured guest code. NVIDIA-signed evidence, checked against NVIDIA RIMs and certificate status by `nvattest`, verifies the GPU appraisal. After the optional policy and ready-state operations succeed, dstack emits a `gpu-attestation` launch event before `system-ready`. Its versioned payload records the number of appraised devices, asserted CC/DevTools state, and SHA-256 of the complete nvattest JSON output (claims and detached EAT). On TDX, both `gpu-policy-hash` and `gpu-attestation` are append-only RTMR3 events; they are never derived from application-controlled `report_data`.
 
-A verifier must replay the measured event log, require exactly one pre-`system-ready` `gpu-attestation` event when GPU protection is required, and require `devices == vm_config.num_gpus > 0`. If an application policy is required, the verifier must also require exactly one `gpu-policy-hash` event immediately after `compose-hash` and compare its 32-byte payload with the expected policy digest. The raw `attestation.out` file is not trusted by itself; if it is supplied for inspection, its digest must match the `gpu-attestation` event.
+A verifier must replay the measured event log, require exactly one pre-`system-ready` `gpu-attestation` event when GPU protection is required, and require `devices > 0` and, when applicable, the expected deployment count. If an application policy is required, the verifier must also require exactly one `gpu-policy-hash` event immediately after `compose-hash` and compare its 32-byte payload with the expected policy digest. The raw `attestation.out` file is not trusted by itself; if it is supplied for inspection, its digest must match the `gpu-attestation` event.
 
 ### GPU Threat Model and Lifetime
 
 The GPU gate assumes a malicious host/VMM and untrusted host-provided PCI topology, while trusting the CPU TEE, the measured dstack guest/kernel, NVIDIA hardware/firmware roots, and the cryptography used by both attestation chains. Availability is out of scope.
 
-The events make the following **boot-time** statement: immediately before key provisioning, all attached VGA/3D PCI functions were NVIDIA devices, their count matched the quote-bound VM configuration and NVML inventory, nvattest returned one fresh successfully appraised claim for each device, the measured application policy accepted those claims and GPU state when present, every enumerated GPU passed the CC/DevTools NVML checks, and setting the GPU ready state succeeded. This closes these cases:
+The events make the following **boot-time** statement: immediately before key provisioning, all attached VGA/3D PCI functions were NVIDIA devices, their count matched the NVML inventory, nvattest returned one fresh successfully appraised claim for each device, the measured application policy accepted those claims and GPU state when present, every enumerated GPU passed the CC/DevTools NVML checks, and setting the GPU ready state succeeded. This closes these cases:
 
-- A GPU-less launch cannot be presented as a GPU-verified launch: it has `num_gpus == 0` and no `gpu-attestation` event.
-- A mixed launch cannot attest only its TEE-capable subset. Non-NVIDIA display GPUs are rejected, and the sysfs, `vm_config`, and nvattest claim counts must all agree. A non-CC NVIDIA GPU either prevents evidence collection/appraisal or causes the default appraisal, application policy, or CC-state check to fail.
+- A GPU-less launch cannot be presented as a GPU-verified launch because it has no `gpu-attestation` event.
+- A mixed launch cannot attest only its TEE-capable subset. Non-NVIDIA display GPUs are rejected, and the sysfs, NVML, and nvattest claim counts must all agree. A non-CC NVIDIA GPU either prevents evidence collection/appraisal or causes the default appraisal, application policy, or CC-state check to fail.
 - Copying another CVM's result into a file or `report_data` does not work. Only measured pre-application code can place the event before `system-ready`, and event-log replay binds it to the quoted RTMR/PCR value.
 
 This is **not a lifetime or physical co-location guarantee**. After `system-ready`, an application with sufficient guest privileges can unload the NVIDIA driver, and a malicious host may attempt PCI hot-remove/replacement or proxy GPU traffic. The boot event remains a true historical statement but does not prove that the same device is still attached. dstack also cannot rule out a live relay/cuckoo attack to a genuine remote GPU: current Hopper/Blackwell deployments do not provide a CPU-TEE-verifiable TEE-I/O/TDISP device binding. Applications that mutate the driver or PCI topology are outside this guarantee; higher-assurance deployments must prevent that behavior and re-attest before using a newly initialized GPU.
@@ -184,10 +184,10 @@ Use this checklist to verify a workload running in a dstack CVM.
 - [ ] reportData contains your challenge (replay protection)
 
 **GPU verification (when required):**
-- [ ] `vm_config.num_gpus` is greater than zero and matches the expected deployment
+- [ ] The `gpu-attestation` device count is greater than zero and matches the expected deployment
 - [ ] If `requirements.gpu_policy` is required, exactly one `gpu-policy-hash` event follows `compose-hash`, and its payload matches the expected SHA-256 digest
 - [ ] Exactly one `gpu-attestation` event appears before `system-ready`
-- [ ] The event device count matches `vm_config.num_gpus`, CC is ON, and its DevTools field complies with the measured policy
+- [ ] CC is ON and the event's DevTools field complies with the measured policy
 - [ ] The platform binds the event log to a quoted RTMR/PCR (do not accept it from current SEV-SNP evidence)
 
 **Key management verification:**
