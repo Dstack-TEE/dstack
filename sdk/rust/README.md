@@ -2,6 +2,8 @@
 
 Access TEE features from your Rust application running inside dstack. Derive deterministic keys, generate attestation quotes, create TLS certificates, and sign data—all backed by hardware security.
 
+This directory is a **standalone Cargo workspace** (`dstack-sdk`, `dstack-sdk-types`, and a `no_std` check crate). It does not join the `dstack/` core workspace.
+
 ## Installation
 
 ```toml

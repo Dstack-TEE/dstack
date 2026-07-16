@@ -6,6 +6,7 @@
 name = "no_std_check"
 version = "0.1.0"
 edition = "2021"
+publish = false
 
 [dependencies]
 dstack-sdk-types = { workspace = true, features = ["borsh"] }
