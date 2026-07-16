@@ -24,7 +24,9 @@ use super::{
     image::Image,
     mr_config::{snp_host_data, tdx_mr_config_id},
     network::{mac_address_for_vm_index, resolved_networks, validate_resolved_networks},
-    pci_numa_node, round_up, GpuConfig, VmWorkDir,
+    pci_numa_node, round_up,
+    volume::verity_serial_hint,
+    GpuConfig, VmWorkDir,
 };
 use anyhow::{bail, Context, Result};
 use bon::Builder;
@@ -174,10 +176,17 @@ fn virtio_pci_device(device: &str, snp: bool) -> String {
     }
 }
 
+struct PreparedVolume {
+    source: String,
+    read_only: bool,
+    serial: Option<String>,
+}
+
 struct PreparedQemuLaunch {
     workdir: VmWorkDir,
     platform: TeePlatform,
     networks: Vec<Networking>,
+    volumes: Vec<PreparedVolume>,
     hugepage_numa_nodes: Option<HashMap<String, u32>>,
     gpu_numa_nodes: HashMap<String, String>,
     numa_cpus: Option<String>,
@@ -202,6 +211,18 @@ impl PreparedQemuLaunch {
         let platform = cfg.resolved_platform();
         let networks = resolved_networks(&vm.manifest, cfg);
         validate_resolved_networks(&networks)?;
+        let volumes = vm
+            .manifest
+            .volumes
+            .iter()
+            .map(|volume| PreparedVolume {
+                source: volume.source.clone(),
+                read_only: volume.read_only,
+                // File inspection belongs to launch preparation. Keep the
+                // command builder host-I/O-free so it remains deterministic.
+                serial: verity_serial_hint(Path::new(&volume.source)),
+            })
+            .collect();
 
         let hugepage_numa_nodes = if vm.manifest.hugepages {
             Some(hugepage_numa_nodes(gpus)?)
@@ -266,6 +287,7 @@ impl PreparedQemuLaunch {
             workdir,
             platform,
             networks,
+            volumes,
             hugepage_numa_nodes,
             gpu_numa_nodes,
             numa_cpus,
@@ -409,6 +431,7 @@ impl QemuCommandBuilder<'_> {
         let mut command = self.base_command();
         self.configure_rootfs(&mut command)?;
         self.configure_data_disk(&mut command);
+        self.configure_volumes(&mut command);
         self.configure_networking(&mut command)?;
         self.vm.configure_smbios(&mut command, self.cfg);
         self.configure_tpm_and_vsock(&mut command);
@@ -525,6 +548,31 @@ impl QemuCommandBuilder<'_> {
                 "virtio-blk-pci,drive=hd1",
                 self.is_amd_sev_snp(),
             ));
+    }
+
+    fn configure_volumes(&self, command: &mut Command) {
+        // Sources are host paths already validated by the VMM. Attach extra
+        // volumes after the data disk and before networking, matching the
+        // established device order.
+        for (index, volume) in self.prepared.volumes.iter().enumerate() {
+            let id = format!("vol{index}");
+            let mut drive = format!("file={},if=none,id={id},format=raw", volume.source);
+            if volume.read_only {
+                drive.push_str(",readonly=on");
+            }
+
+            // The serial is only a lookup hint. The guest still verifies the
+            // complete dm-verity root before using the volume.
+            let mut device = format!("virtio-blk-pci,drive={id}");
+            if let Some(serial) = &volume.serial {
+                device.push_str(&format!(",serial={serial}"));
+            }
+            command
+                .arg("-drive")
+                .arg(drive)
+                .arg("-device")
+                .arg(virtio_pci_device(&device, self.is_amd_sev_snp()));
+        }
     }
 
     fn configure_networking(&self, command: &mut Command) -> Result<()> {
@@ -939,10 +987,10 @@ mod tests {
 
     use super::{
         amd_sev_snp_memory_backend_arg, parse_amd_sev_snp_qmp_capabilities, virtio_pci_device,
-        PreparedQemuLaunch, QemuCommandBuilder, VmConfig,
+        PreparedQemuLaunch, PreparedVolume, QemuCommandBuilder, VmConfig,
     };
     use crate::app::image::{Image, ImageInfo};
-    use crate::app::{GpuConfig, Manifest, PortMapping, VmWorkDir};
+    use crate::app::{GpuConfig, Manifest, PortMapping, VmVolume, VmWorkDir};
     use crate::config::{Config, Protocol, TeePlatform, DEFAULT_CONFIG};
 
     #[test]
@@ -1009,6 +1057,10 @@ mod tests {
                 gateway_urls: vec![],
                 no_tee: true,
                 networks: vec![],
+                volumes: vec![VmVolume {
+                    source: "/does-not-exist/volume.img".into(),
+                    read_only: true,
+                }],
             },
             image: Image {
                 info: ImageInfo {
@@ -1043,6 +1095,11 @@ mod tests {
             workdir: VmWorkDir::new("/does-not-exist/vm-1"),
             platform: TeePlatform::Tdx,
             networks: vec![config.cvm.networking.clone(), config.cvm.networking.clone()],
+            volumes: vec![PreparedVolume {
+                source: "/does-not-exist/volume.img".into(),
+                read_only: true,
+                serial: Some("0123456789abcdef0123".into()),
+            }],
             hugepage_numa_nodes: None,
             gpu_numa_nodes: HashMap::new(),
             numa_cpus: None,
@@ -1075,6 +1132,27 @@ mod tests {
             .args
             .windows(2)
             .any(|args| args == ["-append", "console=hvc0"]));
+        assert!(process.args.windows(2).any(|args| {
+            args == [
+                "-drive",
+                "file=/does-not-exist/volume.img,if=none,id=vol0,format=raw,readonly=on",
+            ]
+        }));
+        assert!(process
+            .args
+            .iter()
+            .any(|arg| { arg == "virtio-blk-pci,drive=vol0,serial=0123456789abcdef0123" }));
+        let volume_position = process
+            .args
+            .iter()
+            .position(|arg| arg.contains("id=vol0"))
+            .unwrap();
+        let network_position = process
+            .args
+            .iter()
+            .position(|arg| arg == "-netdev")
+            .unwrap();
+        assert!(volume_position < network_position);
         let netdevs = process
             .args
             .windows(2)

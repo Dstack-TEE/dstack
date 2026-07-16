@@ -1039,4 +1039,24 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn resolve_volumes_forces_read_only() -> Result<()> {
+        let tmp = tempfile::tempdir()?;
+        fs::write(tmp.path().join("volume.img"), b"volume")?;
+        let mut cvm_config = test_cvm_config();
+        cvm_config.volumes_dir = tmp.path().to_string_lossy().into_owned();
+
+        let volumes = resolve_volumes(
+            &[rpc::VmVolume {
+                source: "volume.img".into(),
+                read_only: false,
+            }],
+            &cvm_config,
+        )?;
+
+        assert_eq!(volumes.len(), 1);
+        assert!(volumes[0].read_only);
+        Ok(())
+    }
 }

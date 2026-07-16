@@ -45,6 +45,7 @@ mod network;
 mod qemu;
 pub(crate) mod registry;
 mod vm_info;
+mod volume;
 mod workdir;
 
 fn signal_pidfd(pid: u32, signal: libc::c_int) -> std::io::Result<()> {
