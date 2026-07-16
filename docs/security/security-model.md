@@ -55,7 +55,7 @@ dstack supports NVIDIA H100, H200, and B200 GPUs in confidential compute mode fo
 
 ### How It Works
 
-GPUs are passed through via VFIO to the TEE-protected CVM. Before key provisioning, `dstack-util setup` inventories every VGA/3D-controller PCI function, compares that count with `vm_config.num_gpus`, and runs NVIDIA's local `nvattest` verifier over every NVIDIA-driver-visible GPU with a fresh nonce. A mandatory relying-party policy requires secure boot and disabled debug status. Separate fail-closed `nvidia-smi` queries require the current CC feature to be ON and DevTools mode to be OFF. Only then does dstack set the GPU ready state.
+GPUs are passed through via VFIO to the TEE-protected CVM. Before key provisioning, `dstack-util setup` inventories every VGA/3D-controller PCI function, compares that count with `vm_config.num_gpus`, and runs NVIDIA's local `nvattest` verifier over every NVIDIA-driver-visible GPU with a fresh nonce. A mandatory relying-party policy requires successful GPU measurement appraisal, the NVIDIA GPU claim `secboot == true`, and `dbgstat == "disabled"`. This `secboot` field describes the GPU attestation result; it does not require UEFI Secure Boot in the CVM. The dstack CPU/guest boot chain is verified independently through measured boot. Separate fail-closed `nvidia-smi` queries require the current CC feature to be ON and DevTools mode to be OFF. Only then does dstack set the GPU ready state.
 
 ### Dual Attestation
 
