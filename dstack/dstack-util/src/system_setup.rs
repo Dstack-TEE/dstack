@@ -1307,7 +1307,10 @@ mod gpu {
         let output: NvattestOutput =
             serde_json::from_slice(stdout).context("failed to parse nvattest JSON output")?;
         if output.result_code != 0 {
-            bail!("nvattest JSON result is not successful");
+            bail!(
+                "nvattest JSON result is not successful (result_code={})",
+                output.result_code
+            );
         }
         if output.claims.len() != expected_devices as usize {
             bail!(
