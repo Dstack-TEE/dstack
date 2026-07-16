@@ -838,15 +838,6 @@ fn verify_manifest_feature_requirements(app_compose: &AppCompose) -> Result<()> 
             "requirements requires manifest_version >= {MANIFEST_VERSION_3}; use string manifest_version \"{MANIFEST_VERSION_3}\" so older guests fail closed"
         );
     }
-    if app_compose
-        .requirements
-        .as_ref()
-        .is_some_and(|requirements| {
-            !requirements.gpu_policy.is_default() && requirements.attest_gpu == Some(false)
-        })
-    {
-        bail!("requirements.gpu_policy requires GPU attestation");
-    }
     Ok(())
 }
 
@@ -3088,26 +3079,6 @@ fn test_empty_requirements_require_v3_manifest() {
     .unwrap();
     let err = verify_manifest_feature_requirements(&app_compose).unwrap_err();
     assert!(err.to_string().contains("requires manifest_version"));
-}
-
-#[test]
-fn test_gpu_policy_requires_gpu_attestation() {
-    let app_compose: AppCompose = serde_json::from_value(serde_json::json!({
-        "manifest_version": "3",
-        "name": "test",
-        "runner": "docker-compose",
-        "requirements": {
-            "attest_gpu": false,
-            "gpu_policy": {
-                "rego": "package policy\n\ndefault nv_match = true\n"
-            }
-        }
-    }))
-    .unwrap();
-    let err = verify_manifest_feature_requirements(&app_compose).unwrap_err();
-    assert!(err
-        .to_string()
-        .contains("requirements.gpu_policy requires GPU attestation"));
 }
 
 #[test]
