@@ -61,10 +61,12 @@ An application may additionally set `requirements.gpu_policy` to an object with 
 
 - `rego` (optional string): a Rego v0 script evaluated with the nvattest output's `claims` array as `input`. It must define the boolean entrypoint `data.policy.nv_match` in `package policy`.
 - `allow_devtools` (boolean, default `false`): permit NVIDIA DevTools mode. Production applications should leave this disabled because DevTools removes the expected GPU memory-confidentiality guarantee.
+- `allow_debug` (boolean, default `false`): permit an attestation claim whose `dbgstat` is `enabled`.
+- `allow_insecure_boot` (boolean, default `false`): permit an attestation claim whose GPU `secboot` value is false.
 
 After measuring `compose-hash`, dstack enters the GPU setup gate. If GPUs are configured, it attests them, applies field defaults, JCS-canonicalizes the complete `gpu_policy` structure, and measures its SHA-256 digest in a `gpu-policy` event. It then applies the basic settings and optional Rego policy before setting the GPU ready state. A false, undefined, malformed, or non-boolean Rego result stops boot before key provisioning. GPU-less launches return from the gate without measuring or evaluating a GPU policy. `gpu_policy` cannot be combined with `attest_gpu: false`.
 
-Separate fail-closed `nvidia-smi` queries always require the current CC feature to be ON and require DevTools mode to be OFF unless the measured policy explicitly permits it. Only after the default appraisal, optional application policy, and these checks succeed does dstack set the GPU ready state. The dstack CPU/guest boot chain is verified independently through measured boot; a GPU claim named `secboot` refers to the GPU appraisal, not UEFI Secure Boot in the CVM.
+For every NVML-enumerated GPU, dstack calls `Device::is_cc_enabled()` and `Device::is_cc_dev_mode_enabled()` and requires the NVML device count to match the expected GPU count. CC must always be ON; DevTools must be OFF unless the measured policy explicitly permits it. The typed claim checks always require `measres == "success"`; by default they also require `dbgstat == "disabled"` and `secboot == true`, with the latter two checks controlled by their explicit opt-ins. Only after the default appraisal, typed claim checks, optional Rego policy, and per-device NVML checks succeed does dstack call `Device::set_confidential_compute_state(true)` to set the GPU ready state. The dstack CPU/guest boot chain is verified independently through measured boot; a GPU claim named `secboot` refers to the GPU appraisal, not UEFI Secure Boot in the CVM.
 
 ### Dual Attestation
 
@@ -76,7 +78,7 @@ A verifier must replay the measured event log, require exactly one pre-`system-r
 
 The GPU gate assumes a malicious host/VMM and untrusted host-provided PCI topology, while trusting the CPU TEE, the measured dstack guest/kernel, NVIDIA hardware/firmware roots, and the cryptography used by both attestation chains. Availability is out of scope.
 
-The events make the following **boot-time** statement: immediately before key provisioning, all attached VGA/3D PCI functions were NVIDIA devices, their count matched the quote-bound VM configuration, nvattest returned one fresh successfully appraised claim for each device, the measured application policy accepted those claims and GPU state when present, CC was ON, DevTools complied with that policy (OFF by default), and setting the GPU ready state succeeded. This closes these cases:
+The events make the following **boot-time** statement: immediately before key provisioning, all attached VGA/3D PCI functions were NVIDIA devices, their count matched the quote-bound VM configuration and NVML inventory, nvattest returned one fresh successfully appraised claim for each device, the measured application policy accepted those claims and GPU state when present, every enumerated GPU passed the CC/DevTools NVML checks, and setting the GPU ready state succeeded. This closes these cases:
 
 - A GPU-less launch cannot be presented as a GPU-verified launch: it has `num_gpus == 0` and no `gpu-attestation` event.
 - A mixed launch cannot attest only its TEE-capable subset. Non-NVIDIA display GPUs are rejected, and the sysfs, `vm_config`, and nvattest claim counts must all agree. A non-CC NVIDIA GPU either prevents evidence collection/appraisal or causes the default appraisal, application policy, or CC-state check to fail.

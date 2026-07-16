@@ -1078,17 +1078,15 @@ async fn do_sys_setup(stage0: Stage0<'_>) -> Result<()> {
 /// Runs before key provisioning so a CVM whose GPU cannot prove it is a
 /// genuine, CC-enabled NVIDIA TEE never gets its app keys. An optional
 /// application policy is measured and evaluated after `compose-hash`. The GPU
-/// "ready" state (`nvidia-smi conf-compute -srs 1`) is only set from here —
-/// nvidia-persistenced deliberately does not set it — so CUDA work cannot be
-/// submitted to an unverified GPU either.
+/// "ready" state is only set through NVML from here — nvidia-persistenced
+/// deliberately does not set it — so CUDA work cannot be submitted to an
+/// unverified GPU either.
 mod gpu {
     use super::*;
 
     const NVATTEST: &str = "/usr/bin/nvattest";
-    const NVIDIA_SMI: &str = "/usr/bin/nvidia-smi";
     const ATTESTATION_OUTPUT: &str = "/run/nvidia-gpu-attestation/attestation.out";
     const ATTESTATION_TIMEOUT: Duration = Duration::from_secs(300);
-    const NVIDIA_SMI_TIMEOUT: Duration = Duration::from_secs(60);
     const EVENT_VERSION: u32 = 2;
     const POLICY_ENTRYPOINT: &str = "data.policy.nv_match";
 
@@ -1110,6 +1108,7 @@ mod gpu {
 
     pub(super) struct GpuAttestationResult {
         claims: Vec<Value>,
+        parsed_claims: Vec<NvidiaGpuClaim>,
         output: Vec<u8>,
         devices: u32,
     }
@@ -1122,12 +1121,40 @@ mod gpu {
         pub(super) fn event(&self, devtools: bool) -> Result<Vec<u8>> {
             attestation_event(&self.output, self.devices, devtools)
         }
+
+        pub(super) fn verify_claim_policy(&self, policy: Option<&GpuPolicy>) -> Result<()> {
+            verify_claim_policy(&self.parsed_claims, policy)
+        }
     }
 
     #[derive(Deserialize)]
     struct NvattestOutput {
         result_code: i64,
         claims: Vec<Value>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct NvidiaGpuClaim {
+        #[serde(rename = "x-nvidia-device-type")]
+        device_type: String,
+        eat_nonce: String,
+        #[serde(rename = "x-nvidia-gpu-attestation-report-nonce-match")]
+        nonce_match: bool,
+        measres: String,
+        secboot: bool,
+        dbgstat: NvidiaGpuDebugStatus,
+    }
+
+    #[derive(Debug, Deserialize, PartialEq, Eq)]
+    #[serde(rename_all = "lowercase")]
+    enum NvidiaGpuDebugStatus {
+        Disabled,
+        Enabled,
+    }
+
+    struct ValidatedClaims {
+        raw: Vec<Value>,
+        parsed: Vec<NvidiaGpuClaim>,
     }
 
     /// Count passed-through display-class GPUs through sysfs so devices which
@@ -1203,36 +1230,6 @@ mod gpu {
         .with_context(|| format!("failed to run {program}"))
     }
 
-    fn parse_nvidia_smi_state(stdout: &[u8], name: &str) -> Result<bool> {
-        let output = std::str::from_utf8(stdout)
-            .with_context(|| format!("nvidia-smi returned non-UTF-8 {name}"))?;
-        let states = output
-            .split(|ch: char| !ch.is_ascii_alphanumeric())
-            .filter_map(|word| match word.to_ascii_lowercase().as_str() {
-                "on" | "enabled" => Some(true),
-                "off" | "disabled" => Some(false),
-                _ => None,
-            })
-            .collect::<BTreeSet<_>>();
-        if states.len() != 1 {
-            bail!("unable to parse nvidia-smi {name}");
-        }
-        states.first().copied().context("missing nvidia-smi state")
-    }
-
-    async fn query_nvidia_smi_state(argument: &str, name: &str) -> Result<bool> {
-        let output =
-            run_command(NVIDIA_SMI, &["conf-compute", argument], NVIDIA_SMI_TIMEOUT).await?;
-        if !output.status.success() {
-            bail!(
-                "nvidia-smi conf-compute {argument} failed ({}): {}",
-                output.status,
-                truncated_lossy(&output.stderr, 512),
-            );
-        }
-        parse_nvidia_smi_state(&output.stdout, name)
-    }
-
     fn validate_cc_state(cc_enabled: bool, devtools: bool, allow_devtools: bool) -> Result<()> {
         if !cc_enabled {
             bail!("nvidia confidential compute mode is not enabled");
@@ -1243,43 +1240,70 @@ mod gpu {
         Ok(())
     }
 
-    /// Require the current system-wide GPU state to use CC. NVAT's NVML
-    /// collector accepts protected-PCIe as well as CC, so a successful
-    /// appraisal alone is not a sufficient confidentiality check. DevTools is
-    /// rejected by default but can be explicitly allowed by the measured app
-    /// policy.
-    pub(super) async fn verify_cc_mode(allow_devtools: bool) -> Result<bool> {
-        let cc_enabled = query_nvidia_smi_state("-f", "CC feature state").await?;
-        let devtools = query_nvidia_smi_state("-d", "DevTools mode").await?;
-        validate_cc_state(cc_enabled, devtools, allow_devtools)?;
-        Ok(devtools)
+    fn init_nvml(expected_devices: u32) -> Result<nvml_wrapper::Nvml> {
+        let nvml = nvml_wrapper::Nvml::init().context("failed to initialize NVML")?;
+        let devices = nvml
+            .device_count()
+            .context("failed to get NVML GPU count")?;
+        if devices != expected_devices {
+            bail!("nvml GPU count mismatch: expected {expected_devices}, got {devices}");
+        }
+        Ok(nvml)
     }
 
-    /// Mark the GPU as ready to accept work. Only meaningful (and only
-    /// succeeds) when the GPU runs in CC mode.
-    pub(super) async fn set_gpu_ready_state() -> Result<()> {
-        let output = run_command(
-            NVIDIA_SMI,
-            &["conf-compute", "-srs", "1"],
-            NVIDIA_SMI_TIMEOUT,
-        )
-        .await?;
-        if !output.status.success() {
-            bail!(
-                "nvidia-smi conf-compute -srs 1 failed ({}): {}",
-                output.status,
-                truncated_lossy(&output.stderr, 512),
-            );
-        }
+    fn set_gpu_ready_state_with_nvml(nvml: &nvml_wrapper::Nvml) -> Result<()> {
+        // nvml-wrapper exposes nvmlSystemSetConfComputeGpusReadyState through
+        // Device, but the transition applies to all CC GPUs in the system.
+        let first = nvml
+            .device_by_index(0)
+            .context("failed to get first NVML GPU")?;
+        first
+            .set_confidential_compute_state(true)
+            .context("failed to set GPU ready state")?;
         info!("GPU ready state set");
         Ok(())
+    }
+
+    /// Check the CC and DevTools state through NVML for every expected GPU,
+    /// then set the system-wide GPU ready state only after every check passes.
+    /// NVML exposes these settings as system values through Device methods;
+    /// call them for every handle so every expected device must be enumerable.
+    pub(super) fn verify_gpu_state_and_set_ready(
+        expected_devices: u32,
+        allow_devtools: bool,
+    ) -> Result<bool> {
+        let nvml = init_nvml(expected_devices)?;
+        let mut any_devtools = false;
+        for index in 0..expected_devices {
+            let device = nvml
+                .device_by_index(index)
+                .with_context(|| format!("failed to get NVML GPU at index {index}"))?;
+            let cc_enabled = device
+                .is_cc_enabled()
+                .with_context(|| format!("failed to query CC mode for GPU at index {index}"))?;
+            let devtools = device.is_cc_dev_mode_enabled().with_context(|| {
+                format!("failed to query DevTools mode for GPU at index {index}")
+            })?;
+            validate_cc_state(cc_enabled, devtools, allow_devtools)
+                .with_context(|| format!("gpu at index {index} violates the basic policy"))?;
+            any_devtools |= devtools;
+        }
+        set_gpu_ready_state_with_nvml(&nvml)?;
+        Ok(any_devtools)
+    }
+
+    /// Set the system-wide GPU ready state without appraisal for the explicit
+    /// `attest_gpu: false` compatibility path.
+    pub(super) fn set_gpu_ready_state(expected_devices: u32) -> Result<()> {
+        let nvml = init_nvml(expected_devices)?;
+        set_gpu_ready_state_with_nvml(&nvml)
     }
 
     fn validate_attestation_output(
         stdout: &[u8],
         nonce: &str,
         expected_devices: u32,
-    ) -> Result<Vec<Value>> {
+    ) -> Result<ValidatedClaims> {
         let output: NvattestOutput =
             serde_json::from_slice(stdout).context("failed to parse nvattest JSON output")?;
         if output.result_code != 0 {
@@ -1291,24 +1315,39 @@ mod gpu {
                 output.claims.len()
             );
         }
+        let mut parsed_claims = Vec::with_capacity(output.claims.len());
         for (index, claim) in output.claims.iter().enumerate() {
-            let claim = claim
-                .as_object()
+            let claim: NvidiaGpuClaim = serde_json::from_value(claim.clone())
                 .with_context(|| format!("invalid GPU claim at index {index}"))?;
-            let string_claim = |name: &str| claim.get(name).and_then(Value::as_str);
-            if string_claim("x-nvidia-device-type") != Some("gpu") {
+            if claim.device_type != "gpu" {
                 bail!("gpu claim at index {index} has an invalid device type");
             }
-            if string_claim("eat_nonce") != Some(nonce)
-                || claim
-                    .get("x-nvidia-gpu-attestation-report-nonce-match")
-                    .and_then(Value::as_bool)
-                    != Some(true)
-            {
+            if claim.eat_nonce != nonce || !claim.nonce_match {
                 bail!("gpu claim at index {index} has an invalid nonce");
             }
+            parsed_claims.push(claim);
         }
-        Ok(output.claims)
+        Ok(ValidatedClaims {
+            raw: output.claims,
+            parsed: parsed_claims,
+        })
+    }
+
+    fn verify_claim_policy(claims: &[NvidiaGpuClaim], policy: Option<&GpuPolicy>) -> Result<()> {
+        let allow_debug = policy.is_some_and(|policy| policy.allow_debug);
+        let allow_insecure_boot = policy.is_some_and(|policy| policy.allow_insecure_boot);
+        for (index, claim) in claims.iter().enumerate() {
+            if claim.measres != "success" {
+                bail!("gpu claim at index {index} has unsuccessful measurements");
+            }
+            if !allow_insecure_boot && !claim.secboot {
+                bail!("gpu claim at index {index} does not assert secure boot");
+            }
+            if !allow_debug && claim.dbgstat != NvidiaGpuDebugStatus::Disabled {
+                bail!("gpu claim at index {index} does not disable debug mode");
+            }
+        }
+        Ok(())
     }
 
     fn attestation_event(stdout: &[u8], devices: u32, devtools: bool) -> Result<Vec<u8>> {
@@ -1366,7 +1405,8 @@ mod gpu {
         }
         let claims = validate_attestation_output(&output.stdout, &nonce, expected_devices)?;
         Ok(GpuAttestationResult {
-            claims,
+            claims: claims.raw,
+            parsed_claims: claims.parsed,
             output: output.stdout,
             devices: expected_devices,
         })
@@ -1437,7 +1477,10 @@ mod gpu {
                     serde_json::json!({
                         "x-nvidia-device-type": "gpu",
                         "eat_nonce": nonce,
-                        "x-nvidia-gpu-attestation-report-nonce-match": true
+                        "x-nvidia-gpu-attestation-report-nonce-match": true,
+                        "measres": "success",
+                        "secboot": true,
+                        "dbgstat": "disabled"
                     })
                 })
                 .collect::<Vec<_>>();
@@ -1487,14 +1530,6 @@ mod gpu {
         }
 
         #[test]
-        fn nvidia_smi_state_parser_is_fail_closed() {
-            assert!(parse_nvidia_smi_state(b"CC status: ON\n", "CC").unwrap());
-            assert!(!parse_nvidia_smi_state(b"DevTools Mode: OFF\n", "DevTools").unwrap());
-            assert!(parse_nvidia_smi_state(b"unknown\n", "CC").is_err());
-            assert!(parse_nvidia_smi_state(b"current: ON, pending: OFF\n", "CC").is_err());
-        }
-
-        #[test]
         fn basic_policy_requires_cc_and_rejects_devtools_by_default() {
             validate_cc_state(true, false, false).unwrap();
             assert!(validate_cc_state(false, false, false).is_err());
@@ -1516,8 +1551,7 @@ mod gpu {
                     .is_err()
             );
 
-            // Claim appraisal belongs to nvattest's default policy and the
-            // optional app policy, not a second policy hard-coded here.
+            // Basic claim settings are enforced after structural validation.
             let mut extra_claims: Value = serde_json::from_slice(&valid).unwrap();
             extra_claims["claims"][0]["dbgstat"] = Value::String("enabled".to_string());
             validate_attestation_output(&serde_json::to_vec(&extra_claims).unwrap(), &nonce, 2)
@@ -1525,11 +1559,89 @@ mod gpu {
         }
 
         #[test]
+        fn basic_claim_policy_is_fail_closed_and_honors_opt_ins() {
+            let nonce = "33".repeat(32);
+            let output = nvattest_output(&nonce, 1);
+            let claims = validate_attestation_output(&output, &nonce, 1).unwrap();
+            verify_claim_policy(&claims.parsed, None).unwrap();
+
+            let with_policy = |name: &str, value: Value, policy: &GpuPolicy| {
+                let mut output: Value = serde_json::from_slice(&output).unwrap();
+                output["claims"][0][name] = value;
+                let output = serde_json::to_vec(&output).unwrap();
+                let claims = validate_attestation_output(&output, &nonce, 1).unwrap();
+                verify_claim_policy(&claims.parsed, Some(policy))
+            };
+
+            assert!(with_policy("secboot", Value::Bool(false), &GpuPolicy::default()).is_err());
+            with_policy(
+                "secboot",
+                Value::Bool(false),
+                &GpuPolicy {
+                    allow_insecure_boot: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+            assert!(with_policy(
+                "dbgstat",
+                Value::String("enabled".to_string()),
+                &GpuPolicy::default(),
+            )
+            .is_err());
+            with_policy(
+                "dbgstat",
+                Value::String("enabled".to_string()),
+                &GpuPolicy {
+                    allow_debug: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+            let mut unknown_debug: Value = serde_json::from_slice(&output).unwrap();
+            unknown_debug["claims"][0]["dbgstat"] = Value::String("unknown".to_string());
+            assert!(validate_attestation_output(
+                &serde_json::to_vec(&unknown_debug).unwrap(),
+                &nonce,
+                1,
+            )
+            .is_err());
+
+            assert!(with_policy(
+                "measres",
+                Value::String("failure".to_string()),
+                &GpuPolicy {
+                    allow_debug: true,
+                    allow_insecure_boot: true,
+                    ..Default::default()
+                },
+            )
+            .is_err());
+
+            for required in ["measres", "secboot", "dbgstat"] {
+                let mut missing: Value = serde_json::from_slice(&output).unwrap();
+                missing["claims"][0]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove(required);
+                assert!(validate_attestation_output(
+                    &serde_json::to_vec(&missing).unwrap(),
+                    &nonce,
+                    1,
+                )
+                .is_err());
+            }
+        }
+
+        #[test]
         fn real_h100_attestation_fixture_validates_and_drives_rego() {
             let nonce = "11".repeat(32);
             let claims = validate_attestation_output(H100_ATTESTATION_OUTPUT, &nonce, 1).unwrap();
-            assert_eq!(claims[0]["hwmodel"], "GH100 A01 GSP BROM");
-            assert_eq!(claims[0]["x-nvidia-gpu-claims-version"], "3.0");
+            assert_eq!(claims.raw[0]["hwmodel"], "GH100 A01 GSP BROM");
+            assert_eq!(claims.raw[0]["x-nvidia-gpu-claims-version"], "3.0");
+            verify_claim_policy(&claims.parsed, None).unwrap();
 
             let policy = r#"
                 package policy
@@ -1541,7 +1653,7 @@ mod gpu {
                     input[0].measres == "success"
                 }
             "#;
-            evaluate_policy(policy, &claims).unwrap();
+            evaluate_policy(policy, &claims.raw).unwrap();
         }
 
         #[test]
@@ -1582,6 +1694,7 @@ mod gpu {
             let policy = GpuPolicy {
                 rego: Some("package policy\n\ndefault nv_match = true\n".to_string()),
                 allow_devtools: true,
+                ..Default::default()
             };
             let canonical = serde_jcs::to_vec(&policy).unwrap();
             assert_eq!(policy_digest(&policy).unwrap(), sha256(&canonical));
@@ -1610,7 +1723,7 @@ impl Stage0<'_> {
             }
             warn!("requirements.attest_gpu is false; setting GPU ready state without attestation");
             // Best-effort: a GPU with CC mode off has no ready state to set.
-            if let Err(err) = gpu::set_gpu_ready_state().await {
+            if let Err(err) = gpu::set_gpu_ready_state(inventory.nvidia) {
                 warn!("failed to set GPU ready state: {err:?}");
             }
             return Ok(());
@@ -1632,15 +1745,17 @@ impl Stage0<'_> {
             .and_then(|requirements| requirements.gpu_policy.as_ref());
         if let Some(policy) = gpu_policy {
             emit_runtime_event("gpu-policy", &gpu::policy_digest(policy)?)?;
-            if let Some(rego) = policy.rego.as_deref() {
-                gpu::evaluate_policy(rego, attestation.claims())
-                    .context("failed to apply GPU Rego policy")?;
-            }
+        }
+        attestation
+            .verify_claim_policy(gpu_policy)
+            .context("failed to apply basic GPU claim policy")?;
+        if let Some(rego) = gpu_policy.and_then(|policy| policy.rego.as_deref()) {
+            gpu::evaluate_policy(rego, attestation.claims())
+                .context("failed to apply GPU Rego policy")?;
         }
 
         let allow_devtools = gpu_policy.is_some_and(|policy| policy.allow_devtools);
-        let devtools = gpu::verify_cc_mode(allow_devtools).await?;
-        gpu::set_gpu_ready_state().await?;
+        let devtools = gpu::verify_gpu_state_and_set_ready(expected_devices, allow_devtools)?;
         let event = attestation.event(devtools)?;
         emit_runtime_event("gpu-attestation", &event)
             .context("failed to emit GPU attestation event")?;

@@ -132,6 +132,11 @@ pub struct GpuPolicy {
     /// disables the GPU memory-confidentiality guarantees expected in
     /// production.
     pub allow_devtools: bool,
+    /// Permit claims whose GPU attestation debug status is `enabled`. Defaults
+    /// to false.
+    pub allow_debug: bool,
+    /// Permit claims that do not assert GPU secure boot. Defaults to false.
+    pub allow_insecure_boot: bool,
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone, Default, PartialEq, Eq)]
@@ -478,7 +483,9 @@ mod app_compose_tests {
                 "launch_token_hash": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
                 "gpu_policy": {
                     "rego": "package policy\n\ndefault nv_match = false\n",
-                    "allow_devtools": true
+                    "allow_devtools": true,
+                    "allow_debug": true,
+                    "allow_insecure_boot": true
                 }
             }
         }))
@@ -500,6 +507,8 @@ mod app_compose_tests {
             Some("package policy\n\ndefault nv_match = false\n")
         );
         assert!(gpu_policy.allow_devtools);
+        assert!(gpu_policy.allow_debug);
+        assert!(gpu_policy.allow_insecure_boot);
 
         let err = serde_json::from_value::<AppCompose>(serde_json::json!({
             "manifest_version": "3",
@@ -580,6 +589,8 @@ mod app_compose_tests {
         let gpu_policy = requirements.gpu_policy.as_ref().unwrap();
         assert!(gpu_policy.rego.is_some());
         assert!(!gpu_policy.allow_devtools);
+        assert!(!gpu_policy.allow_debug);
+        assert!(!gpu_policy.allow_insecure_boot);
         assert!(!requirements.is_empty());
 
         let err = serde_json::from_value::<AppCompose>(serde_json::json!({
@@ -589,7 +600,7 @@ mod app_compose_tests {
             "requirements": {
                 "gpu_policy": {
                     "rego": "package policy",
-                    "allow_debug": true
+                    "allow_debugger": true
                 }
             }
         }))
