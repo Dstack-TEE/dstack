@@ -11,8 +11,11 @@ use dstack_vmm_rpc as pb;
 use fs_err as fs;
 use supervisor_client::supervisor::ProcessInfo;
 
-use super::{Manifest, VmState, VmWorkDir};
-use crate::config::{GatewayConfig, Networking, NetworkingMode};
+use super::{
+    network::{mac_address_for_vm_index, resolved_networks},
+    Manifest, VmState, VmWorkDir,
+};
+use crate::config::{CvmConfig, GatewayConfig, Networking, NetworkingMode};
 
 pub(crate) struct VmInfo {
     pub manifest: Manifest,
@@ -27,15 +30,34 @@ pub(crate) struct VmInfo {
     pub image_version: String,
     pub gateway_enabled: bool,
     pub events: Vec<pb::GuestEvent>,
+    pub runtime_networks: Vec<Networking>,
 }
 
-fn networking_to_proto(networking: &Networking) -> pb::NetworkingConfig {
-    let mode = match networking.mode {
+fn networking_mode_name(mode: NetworkingMode) -> &'static str {
+    match mode {
         NetworkingMode::Bridge => "bridge",
         NetworkingMode::User => "user",
         NetworkingMode::Custom => "custom",
-    };
-    pb::NetworkingConfig { mode: mode.into() }
+    }
+}
+
+fn networking_backend_name(mode: NetworkingMode) -> &'static str {
+    match mode {
+        NetworkingMode::Bridge => "tap_bridge",
+        NetworkingMode::User => "slirp",
+        NetworkingMode::Custom => "custom",
+    }
+}
+
+fn networking_to_proto(networking: &Networking) -> pb::NetworkingConfig {
+    pb::NetworkingConfig {
+        mode: networking_mode_name(networking.mode).into(),
+        bridge_name: if networking.mode == NetworkingMode::Bridge {
+            networking.bridge.clone()
+        } else {
+            String::new()
+        },
+    }
 }
 
 fn sanitize_optional<T: AsRef<str>>(value: Option<T>) -> Option<T> {
@@ -43,13 +65,48 @@ fn sanitize_optional<T: AsRef<str>>(value: Option<T>) -> Option<T> {
 }
 
 impl VmInfo {
-    pub fn to_pb(&self, gateway: &GatewayConfig, brief: bool) -> pb::VmInfo {
+    pub fn effective_networks(&self, cvm: &CvmConfig) -> Vec<Networking> {
+        if self.runtime_networks.is_empty() {
+            resolved_networks(&self.manifest, cvm)
+        } else {
+            self.runtime_networks.clone()
+        }
+    }
+
+    pub fn to_pb(&self, gateway: &GatewayConfig, cvm: &CvmConfig, brief: bool) -> pb::VmInfo {
         let workdir = VmWorkDir::new(&self.workdir);
         let vm_config = workdir.manifest();
         let custom_gateway_urls = vm_config
             .as_ref()
             .map(|config| config.gateway_urls.clone())
             .unwrap_or_default();
+        let configured_networks = self
+            .manifest
+            .networks
+            .iter()
+            .map(networking_to_proto)
+            .collect::<Vec<_>>();
+        let configured_networking = configured_networks.first().cloned();
+        let interfaces = self
+            .effective_networks(cvm)
+            .iter()
+            .enumerate()
+            .map(|(index, networking)| {
+                let mac = mac_address_for_vm_index(
+                    &self.manifest.id,
+                    &networking.mac_prefix_bytes(),
+                    index,
+                );
+                pb::NetworkInterfaceStatus {
+                    mode: networking_mode_name(networking.mode).into(),
+                    backend: networking_backend_name(networking.mode).into(),
+                    mac,
+                    bridge_name: (networking.mode == NetworkingMode::Bridge)
+                        .then(|| networking.bridge.clone()),
+                    netdev_id: Some(format!("net{index}")),
+                }
+            })
+            .collect();
         pb::VmInfo {
             id: self.manifest.id.clone(),
             name: self.manifest.name.clone(),
@@ -110,7 +167,8 @@ impl VmInfo {
                     gateway_urls: custom_gateway_urls.clone(),
                     stopped,
                     no_tee,
-                    networking: self.manifest.networking.as_ref().map(networking_to_proto),
+                    networking: configured_networking,
+                    networks: configured_networks,
                 })
             },
             app_url: self
@@ -123,6 +181,7 @@ impl VmInfo {
             instance_id: sanitize_optional(self.instance_id.clone()),
             exited_at: self.exited_at.clone(),
             events: self.events.clone(),
+            interfaces,
         }
     }
 }
@@ -202,6 +261,7 @@ impl VmState {
             image_version: self.config.image.info.version.clone(),
             gateway_enabled: self.config.gateway_enabled,
             events: self.state.events.clone().into(),
+            runtime_networks: self.state.runtime_networks.clone(),
         }
     }
 }

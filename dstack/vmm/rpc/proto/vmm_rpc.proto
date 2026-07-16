@@ -37,6 +37,21 @@ message VmInfo {
   string image_version = 13;
   // Events
   repeated GuestEvent events = 14;
+  // Effective network interfaces resolved against node config.
+  repeated NetworkInterfaceStatus interfaces = 15;
+}
+
+// Runtime status of a resolved VM network interface.
+message NetworkInterfaceStatus {
+  // Product-facing mode: "user", "bridge", or "custom".
+  string mode = 1;
+  // QEMU/network backend shape: "slirp", "tap_bridge", or "custom".
+  string backend = 2;
+  string mac = 3;
+  // Linux bridge name for tap_bridge backend.
+  optional string bridge_name = 4;
+  // QEMU netdev id, e.g. "net0".
+  optional string netdev_id = 5;
 }
 
 // Structured log or lifecycle event emitted by the guest or runtime.
@@ -101,12 +116,16 @@ message VmConfiguration {
   bool no_tee = 17;
   // Per-VM networking mode override (if unset, uses global cvm.networking).
   optional NetworkingConfig networking = 18;
+  // Per-VM networking overrides. If set, wins over singular networking.
+  repeated NetworkingConfig networks = 19;
 }
 
 // Per-VM networking configuration.
 message NetworkingConfig {
   // Networking mode: "bridge", "user"
   string mode = 1;
+  // Per-VM bridge interface name. Empty = node default bridge.
+  string bridge_name = 2;
 }
 
 // Requested GPU layout for a CVM.
@@ -163,6 +182,10 @@ message UpdateVmRequest {
   optional string image = 17;
   // Disable or re-enable TEE for an existing VM.
   optional bool no_tee = 18;
+  // Optional update networking.
+  bool update_networking = 19;
+  // Networking list. Empty + update_networking=true resets to node default.
+  repeated NetworkingConfig networks = 20;
 }
 
 // Parameters for listing CVMs with pagination and keyword filtering.
@@ -262,11 +285,20 @@ message ResourcesSettings {
   uint32 max_allocable_memory_in_mb = 3; // in MB.
 }
 
+message NetworkingCapabilities {
+  repeated string supported_modes = 1;
+  string default_mode = 2;
+  bool forward_service_enabled = 3;
+  // Default bridge configured in vmm.toml [cvm.networking].bridge.
+  string default_bridge = 4;
+}
+
 // Aggregated metadata exposed through GetMeta.
 message GetMetaResponse {
   KmsSettings kms = 1;
   GatewaySettings gateway = 2;
   ResourcesSettings resources = 3;
+  NetworkingCapabilities networking = 4;
 }
 
 // Build information for the running VMM binary.

@@ -643,6 +643,14 @@ impl SysConfig {
     }
 }
 
+fn default_num_nics() -> u32 {
+    1
+}
+
+fn is_default_num_nics(n: &u32) -> bool {
+    *n == default_num_nics()
+}
+
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct VmConfig {
     #[serde(with = "hex_bytes", default)]
@@ -666,6 +674,16 @@ pub struct VmConfig {
     pub num_gpus: u32,
     #[serde(default)]
     pub num_nvswitches: u32,
+    /// Number of virtio-net NICs attached to the guest. Each NIC adds a PCI
+    /// device to the ACPI/DSDT layout and therefore changes RTMR0, so it must
+    /// be measured. Defaults to 1 and is omitted from the serialized form when
+    /// equal to 1, keeping configs (and their cache keys / hashes) produced
+    /// before this field existed byte-for-byte stable.
+    #[serde(
+        default = "default_num_nics",
+        skip_serializing_if = "is_default_num_nics"
+    )]
+    pub num_nics: u32,
     #[serde(default)]
     pub hotplug_off: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1527,5 +1545,46 @@ impl Platform {
             Self::Gcp => "gcp",
             Self::NitroEnclave => "aws-nitro-enclave",
         }
+    }
+}
+
+#[cfg(test)]
+mod vm_config_num_nics_tests {
+    use super::VmConfig;
+
+    fn legacy_json() -> serde_json::Value {
+        serde_json::json!({
+            "cpu_count": 4,
+            "memory_size": 4294967296u64,
+            "num_gpus": 0,
+            "num_nvswitches": 0,
+        })
+    }
+
+    #[test]
+    fn legacy_config_without_num_nics_defaults_to_one() {
+        let cfg: VmConfig = serde_json::from_value(legacy_json()).unwrap();
+        assert_eq!(cfg.num_nics, 1);
+    }
+
+    #[test]
+    fn single_nic_is_omitted_to_keep_cache_key_stable() {
+        // A config with the default single NIC must serialize identically to a
+        // legacy config, so the verifier's measurement cache key (a hash of the
+        // serialized VmConfig) is unchanged for existing deployments.
+        let cfg: VmConfig = serde_json::from_value(legacy_json()).unwrap();
+        let serialized = serde_json::to_value(&cfg).unwrap();
+        assert!(
+            serialized.get("num_nics").is_none(),
+            "num_nics must be omitted when equal to 1, got {serialized}"
+        );
+    }
+
+    #[test]
+    fn multi_nic_is_serialized() {
+        let mut cfg: VmConfig = serde_json::from_value(legacy_json()).unwrap();
+        cfg.num_nics = 2;
+        let serialized = serde_json::to_value(&cfg).unwrap();
+        assert_eq!(serialized.get("num_nics").and_then(|v| v.as_u64()), Some(2));
     }
 }

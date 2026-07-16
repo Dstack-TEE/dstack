@@ -13,25 +13,6 @@ use sha2::{Digest, Sha256};
 
 use super::VmWorkDir;
 
-/// Derives a deterministic, locally administered unicast MAC address from a VM ID.
-///
-/// `prefix` may contain zero to three fixed bytes. Remaining bytes are filled
-/// from SHA-256 of `vm_id`.
-pub(super) fn mac_address_for_vm(vm_id: &str, prefix: &[u8]) -> String {
-    let hash = Sha256::digest(vm_id.as_bytes());
-    let prefix_len = prefix.len().min(3);
-    let mut bytes = [0_u8; 6];
-    bytes[..prefix_len].copy_from_slice(&prefix[..prefix_len]);
-    for index in prefix_len..bytes.len() {
-        bytes[index] = hash[index - prefix_len];
-    }
-    bytes[0] = (bytes[0] & 0xfe) | 0x02;
-    format!(
-        "{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
-        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5]
-    )
-}
-
 pub(super) fn tdx_mr_config_id(workdir: &VmWorkDir, app_compose: &AppCompose) -> Result<String> {
     if let Some(document) = workdir
         .sys_config()
@@ -130,19 +111,5 @@ impl VmWorkDir {
             instance_id,
         )
         .to_canonical_json())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::mac_address_for_vm;
-
-    #[test]
-    fn mac_address_is_deterministic_and_locally_administered() {
-        let mac = mac_address_for_vm("vm-1", &[0xaa, 0xbb, 0xcc]);
-        assert_eq!(&mac[..8], "aa:bb:cc");
-        assert_eq!(mac, mac_address_for_vm("vm-1", &[0xaa, 0xbb, 0xcc]));
-        let first = u8::from_str_radix(&mac[..2], 16).unwrap();
-        assert_eq!(first & 0x03, 0x02);
     }
 }
