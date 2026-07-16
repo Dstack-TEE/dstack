@@ -7,9 +7,11 @@
 use crate::{codecs::VecOf, tdx::TdxEvent};
 use anyhow::{Context, Result};
 use scale::Decode;
+use std::path::PathBuf;
 
 /// The path to boottime ccel file.
 const CCEL_FILE: &str = "/sys/firmware/acpi/tables/data/CCEL";
+const CCEL_FILE_ENV: &str = "DSTACK_CCEL_FILE";
 
 pub const TPM_ALG_ERROR: u16 = 0x0;
 pub const TPM_ALG_RSA: u16 = 0x1;
@@ -300,8 +302,12 @@ impl TcgEventLog {
     }
 
     pub fn decode_from_ccel_file() -> Result<Self> {
-        let data = fs_err::read(CCEL_FILE).context("Failed to read CCEL")?;
-        Self::decode(&mut data.as_slice())
+        let path = std::env::var_os(CCEL_FILE_ENV)
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(CCEL_FILE));
+        let data = fs_err::read(&path)
+            .with_context(|| format!("failed to read CCEL from {}", path.display()))?;
+        Self::decode(&mut data.as_slice()).context("failed to decode CCEL")
     }
 
     pub fn to_cc_event_log(&self) -> Result<Vec<TdxEvent>> {
