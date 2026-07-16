@@ -1069,11 +1069,7 @@ async fn do_sys_setup(stage0: Stage0<'_>) -> Result<()> {
     } else {
         info!("System time will be synchronized by chronyd in background");
     }
-    let gpu_attestation = stage0
-        .setup_gpu()
-        .await
-        .context("Failed to verify GPU TEE attestation")?;
-    let stage1 = stage0.setup_fs(gpu_attestation).await?;
+    let stage1 = stage0.setup_fs().await?;
     stage1.setup().await
 }
 
@@ -1581,28 +1577,53 @@ impl Stage0<'_> {
     /// Enforce `requirements.attest_gpu` (default true): attest an attached
     /// NVIDIA GPU before continuing to key provisioning, or — when explicitly
     /// disabled — set the GPU ready state without verification.
-    async fn setup_gpu(&self) -> Result<Option<gpu::GpuAttestationResult>> {
+    async fn setup_gpu(&self) -> Result<()> {
         let inventory = gpu::gpu_inventory()?;
         if !self.shared.app_compose.attest_gpu() {
             if inventory.nvidia == 0 {
-                return Ok(None);
+                return Ok(());
             }
             warn!("requirements.attest_gpu is false; setting GPU ready state without attestation");
             // Best-effort: a GPU with CC mode off has no ready state to set.
             if let Err(err) = gpu::set_gpu_ready_state().await {
                 warn!("failed to set GPU ready state: {err:?}");
             }
-            return Ok(None);
+            return Ok(());
         }
         let expected_devices =
             gpu::expected_gpu_count(&self.shared.sys_config.vm_config, inventory)?;
         if expected_devices == 0 {
-            return Ok(None);
+            return Ok(());
         }
         self.vmm.notify_q("boot.progress", "attesting GPU").await;
         info!("verifying GPU TEE attestation");
         let attestation = gpu::attest_gpu(expected_devices).await?;
-        Ok(Some(attestation))
+
+        let gpu_policy = self
+            .shared
+            .app_compose
+            .requirements
+            .as_ref()
+            .and_then(|requirements| requirements.gpu_policy.as_ref());
+        if let Some(policy) = gpu_policy {
+            emit_runtime_event("gpu-policy", &gpu::policy_digest(policy)?)?;
+            if let Some(rego) = policy.rego.as_deref() {
+                gpu::evaluate_policy(rego, attestation.claims())
+                    .context("failed to apply GPU Rego policy")?;
+            }
+        }
+
+        let allow_devtools = gpu_policy.is_some_and(|policy| policy.allow_devtools);
+        let devtools = gpu::verify_cc_mode(allow_devtools).await?;
+        gpu::set_gpu_ready_state().await?;
+        let event = attestation.event(devtools)?;
+        emit_runtime_event("gpu-attestation", &event)
+            .context("failed to emit GPU attestation event")?;
+        if gpu_policy.is_some() {
+            info!("application GPU policy accepted the attestation claims and state");
+        }
+        info!("GPU TEE attestation succeeded");
+        Ok(())
     }
 }
 
@@ -2214,10 +2235,7 @@ impl<'a> Stage0<'a> {
         Ok(())
     }
 
-    async fn measure_app_info(
-        &self,
-        gpu_attestation: Option<&gpu::GpuAttestationResult>,
-    ) -> Result<AppInfo> {
+    async fn measure_app_info(&self) -> Result<AppInfo> {
         let compose_hash = sha256_file(self.shared.dir.app_compose_file())?;
         let truncated_compose_hash = truncate(&compose_hash, 20);
         let key_provider = self.shared.app_compose.key_provider();
@@ -2269,35 +2287,9 @@ impl<'a> Stage0<'a> {
         emit_runtime_event("system-preparing", &[])?;
         emit_runtime_event("app-id", &instance_info.app_id)?;
         emit_runtime_event("compose-hash", &compose_hash)?;
-
-        let gpu_policy = self
-            .shared
-            .app_compose
-            .requirements
-            .as_ref()
-            .and_then(|requirements| requirements.gpu_policy.as_ref());
-        if let Some(policy) = gpu_policy {
-            emit_runtime_event("gpu-policy", &gpu::policy_digest(policy)?)?;
-            let claims = gpu_attestation
-                .map(gpu::GpuAttestationResult::claims)
-                .unwrap_or(&[]);
-            if let Some(rego) = policy.rego.as_deref() {
-                gpu::evaluate_policy(rego, claims).context("failed to apply GPU Rego policy")?;
-            }
-        }
-
-        if let Some(attestation) = gpu_attestation {
-            let allow_devtools = gpu_policy.is_some_and(|policy| policy.allow_devtools);
-            let devtools = gpu::verify_cc_mode(allow_devtools).await?;
-            gpu::set_gpu_ready_state().await?;
-            let event = attestation.event(devtools)?;
-            emit_runtime_event("gpu-attestation", &event)
-                .context("failed to emit GPU attestation event")?;
-            info!("GPU TEE attestation succeeded");
-        }
-        if gpu_policy.is_some() {
-            info!("application GPU policy accepted the attestation claims and state");
-        }
+        self.setup_gpu()
+            .await
+            .context("failed to verify GPU TEE attestation")?;
 
         emit_runtime_event("instance-id", &instance_id)?;
         emit_runtime_event("boot-mr-done", &[])?;
@@ -2360,12 +2352,9 @@ impl<'a> Stage0<'a> {
         Ok(())
     }
 
-    async fn setup_fs(
-        self,
-        gpu_attestation: Option<gpu::GpuAttestationResult>,
-    ) -> Result<Stage1<'a>> {
+    async fn setup_fs(self) -> Result<Stage1<'a>> {
         let app_info = self
-            .measure_app_info(gpu_attestation.as_ref())
+            .measure_app_info()
             .await
             .context("Failed to measure app info")?;
         if self.shared.app_compose.key_provider().is_kms() {
