@@ -34,9 +34,9 @@ jobs:
 
       - name: Verify WASM compilation
         # Ensures SDK types can be used in smart contracts
-        run: cargo check --manifest-path dstack/Cargo.toml --target=wasm32-unknown-unknown -p dstack-sdk-types
+        run: cargo check --manifest-path sdk/rust/Cargo.toml --target=wasm32-unknown-unknown -p dstack-sdk-types
 
       - name: Verify no_std compatibility
         run: |
-          cargo test --manifest-path dstack/Cargo.toml -p dstack-sdk-types --test no_std_test --no-default-features
-          cargo check --manifest-path dstack/Cargo.toml -p no_std_check --target thumbv6m-none-eabi
+          cargo test --manifest-path sdk/rust/Cargo.toml -p dstack-sdk-types --test no_std_test --no-default-features
+          cargo check --manifest-path sdk/rust/Cargo.toml -p no_std_check --target thumbv6m-none-eabi

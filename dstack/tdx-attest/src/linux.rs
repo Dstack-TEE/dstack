@@ -12,10 +12,11 @@
 //! 2. VSock - via QGS (Quote Generation Service) over vsock
 //! 3. TDVMCALL - via `/dev/tdx_guest` ioctl (legacy)
 
+use std::ffi::OsStr;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::os::unix::io::AsRawFd;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -33,6 +34,7 @@ const CONFIGFS_BASE: &str = "/sys/kernel/config/tsm/report";
 const CONFIGFS_DEFAULT: &str = "/sys/kernel/config/tsm/report/com.intel.dcap";
 const CONFIGFS_PATH_ENV: &str = "DCAP_TDX_QUOTE_CONFIGFS_PATH";
 const RTMR_SYSFS_BASE: &str = "/sys/devices/virtual/misc/tdx_guest/measurements";
+const RTMR_SYSFS_PATH_ENV: &str = "DCAP_TDX_RTMR_SYSFS_PATH";
 const TDX_ATTEST_CONFIG_PATH: &str = "/etc/tdx-attest.conf";
 
 const TDX_REPORT_DATA_SIZE: usize = 64;
@@ -166,7 +168,7 @@ static CONFIGFS_MKDIR_TRIED: Mutex<bool> = Mutex::new(false);
 pub fn get_quote(report_data: &TdxReportData) -> Result<Vec<u8>> {
     let _guard = TDX_LOCK.lock().map_err(|_| TdxAttestError::Busy)?;
 
-    if is_configfs_available() {
+    if should_try_configfs() {
         return get_quote_via_configfs(report_data);
     }
 
@@ -179,8 +181,59 @@ pub fn get_quote(report_data: &TdxReportData) -> Result<Vec<u8>> {
     ))
 }
 
-fn is_configfs_available() -> bool {
-    Path::new(CONFIGFS_DEFAULT).is_dir() || Path::new(CONFIGFS_BASE).is_dir()
+fn should_try_configfs() -> bool {
+    // An explicit override is authoritative. Let prepare_configfs() report an
+    // invalid path instead of silently falling back to another quote method.
+    std::env::var_os(CONFIGFS_PATH_ENV).is_some()
+        || Path::new(CONFIGFS_DEFAULT).is_dir()
+        || Path::new(CONFIGFS_BASE).is_dir()
+}
+
+/// Parse an environment path override.
+///
+/// Overrides must be non-empty absolute paths so a mis-set relative value like
+/// `"."` cannot silently operate on the process working directory.
+fn absolute_env_path(var: &str, value: impl AsRef<OsStr>) -> Result<PathBuf> {
+    let value = value.as_ref();
+    if value.is_empty() {
+        return Err(TdxAttestError::NotSupported(format!(
+            "empty path override from {var}"
+        )));
+    }
+    let path = PathBuf::from(value);
+    if !path.is_absolute() {
+        return Err(TdxAttestError::NotSupported(format!(
+            "path override from {var} must be absolute: {}",
+            path.display()
+        )));
+    }
+    Ok(path)
+}
+
+/// Return whether a TDX guest provider is available through either the legacy
+/// misc device or the standard TSM report interface.
+pub fn is_tdx_available() -> bool {
+    if Path::new(TDX_GUEST_DEVICE).exists() {
+        return true;
+    }
+
+    if let Some(value) = std::env::var_os(CONFIGFS_PATH_ENV) {
+        let Ok(path) = absolute_env_path(CONFIGFS_PATH_ENV, &value) else {
+            return false;
+        };
+        return verify_configfs_provider(&path).unwrap_or(false);
+    }
+
+    if verify_configfs_provider(Path::new(CONFIGFS_DEFAULT)).unwrap_or(false) {
+        return true;
+    }
+
+    fs::read_dir(CONFIGFS_BASE)
+        .ok()
+        .into_iter()
+        .flatten()
+        .filter_map(std::result::Result::ok)
+        .any(|entry| verify_configfs_provider(&entry.path()).unwrap_or(false))
 }
 
 fn is_vsock_available() -> bool {
@@ -223,8 +276,8 @@ pub fn extend_rtmr(index: u32, _event_type: u32, digest: [u8; 48]) -> Result<()>
         return Err(TdxAttestError::InvalidRtmrIndex(index));
     }
 
-    if is_rtmr_sysfs_available() {
-        return extend_rtmr_via_sysfs(index, &digest);
+    if let Some(base) = rtmr_sysfs_base()? {
+        return extend_rtmr_via_sysfs(&base, index, &digest);
     }
 
     if Path::new(TDX_GUEST_DEVICE).exists() {
@@ -236,24 +289,37 @@ pub fn extend_rtmr(index: u32, _event_type: u32, digest: [u8; 48]) -> Result<()>
     ))
 }
 
-fn is_rtmr_sysfs_available() -> bool {
-    Path::new(RTMR_SYSFS_BASE).is_dir()
+fn rtmr_sysfs_base() -> Result<Option<PathBuf>> {
+    if let Some(value) = std::env::var_os(RTMR_SYSFS_PATH_ENV) {
+        let path = absolute_env_path(RTMR_SYSFS_PATH_ENV, &value)?;
+        if path.as_os_str().len() < 240 && path.is_dir() {
+            return Ok(Some(path));
+        }
+        return Err(TdxAttestError::NotSupported(format!(
+            "invalid RTMR sysfs path from {RTMR_SYSFS_PATH_ENV}: {}",
+            path.display()
+        )));
+    }
+
+    Ok(Path::new(RTMR_SYSFS_BASE)
+        .is_dir()
+        .then(|| PathBuf::from(RTMR_SYSFS_BASE)))
 }
 
-fn extend_rtmr_via_sysfs(index: u32, digest: &[u8; 48]) -> Result<()> {
-    let path = format!("{}/rtmr{}:sha384", RTMR_SYSFS_BASE, index);
+fn extend_rtmr_via_sysfs(base: &Path, index: u32, digest: &[u8; 48]) -> Result<()> {
+    let path = base.join(format!("rtmr{index}:sha384"));
 
     let mut file = OpenOptions::new()
         .write(true)
         .open(&path)
-        .map_err(|e| TdxAttestError::ExtendFailure(format!("open {path}: {e}")))?;
+        .map_err(|e| TdxAttestError::ExtendFailure(format!("open {}: {e}", path.display())))?;
 
     file.write_all(digest).map_err(|e| match e.raw_os_error() {
         Some(libc::EINVAL) => TdxAttestError::InvalidRtmrIndex(index),
         Some(libc::EPERM) | Some(libc::EACCES) => {
             TdxAttestError::ExtendFailure(format!("permission denied for RTMR {index}"))
         }
-        _ => TdxAttestError::ExtendFailure(format!("write {path}: {e}")),
+        _ => TdxAttestError::ExtendFailure(format!("write {}: {e}", path.display())),
     })
 }
 
@@ -333,17 +399,19 @@ fn get_quote_via_configfs(report_data: &TdxReportData) -> Result<Vec<u8>> {
 }
 
 fn prepare_configfs() -> Result<String> {
-    if let Ok(path) = std::env::var(CONFIGFS_PATH_ENV) {
-        if path.len() < 240 && Path::new(&path).is_dir() && verify_configfs_provider(&path)? {
-            return Ok(path);
+    if let Ok(value) = std::env::var(CONFIGFS_PATH_ENV) {
+        let path = absolute_env_path(CONFIGFS_PATH_ENV, &value)?;
+        if path.as_os_str().len() < 240 && path.is_dir() && verify_configfs_provider(&path)? {
+            return Ok(path.display().to_string());
         }
         return Err(TdxAttestError::NotSupported(format!(
-            "invalid configfs path from env: {path}"
+            "invalid configfs path from env: {}",
+            path.display()
         )));
     }
 
     let default_path = CONFIGFS_DEFAULT;
-    if Path::new(default_path).is_dir() && verify_configfs_provider(default_path)? {
+    if Path::new(default_path).is_dir() && verify_configfs_provider(Path::new(default_path))? {
         return Ok(default_path.to_string());
     }
 
@@ -369,7 +437,7 @@ fn prepare_configfs() -> Result<String> {
         let provider_path = format!("{}/provider", default_path);
         for i in 0..5 {
             if Path::new(&provider_path).exists() {
-                if verify_configfs_provider(default_path)? {
+                if verify_configfs_provider(Path::new(default_path))? {
                     return Ok(default_path.to_string());
                 }
                 break;
@@ -383,10 +451,11 @@ fn prepare_configfs() -> Result<String> {
     )))
 }
 
-fn verify_configfs_provider(path: &str) -> Result<bool> {
-    let provider_path = format!("{}/provider", path);
-    let provider = fs::read_to_string(&provider_path)
-        .map_err(|e| TdxAttestError::Unexpected(format!("read {provider_path}: {e}")))?;
+fn verify_configfs_provider(path: &Path) -> Result<bool> {
+    let provider_path = path.join("provider");
+    let provider = fs::read_to_string(&provider_path).map_err(|e| {
+        TdxAttestError::Unexpected(format!("read {}: {e}", provider_path.display()))
+    })?;
 
     Ok(provider.trim().starts_with("tdx_guest"))
 }
@@ -646,4 +715,80 @@ fn parse_qgs_get_quote_response(data: &[u8]) -> Result<Vec<u8>> {
     }
 
     Ok(quote)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recognizes_tdx_configfs_provider() {
+        let temp = tempfile::tempdir().unwrap();
+        fs::write(temp.path().join("provider"), "tdx_guest_sim\n").unwrap();
+        assert!(verify_configfs_provider(temp.path()).unwrap());
+
+        fs::write(temp.path().join("provider"), "sev_guest\n").unwrap();
+        assert!(!verify_configfs_provider(temp.path()).unwrap());
+    }
+
+    #[test]
+    fn invalid_configfs_override_does_not_fall_back() {
+        let previous = std::env::var_os(CONFIGFS_PATH_ENV);
+        std::env::set_var(
+            CONFIGFS_PATH_ENV,
+            "/definitely/not/a/real/tdx-configfs-provider",
+        );
+
+        let result = get_quote(&[0u8; 64]);
+
+        match previous {
+            Some(value) => std::env::set_var(CONFIGFS_PATH_ENV, value),
+            None => std::env::remove_var(CONFIGFS_PATH_ENV),
+        }
+        assert!(matches!(
+            result,
+            Err(TdxAttestError::NotSupported(message))
+                if message.contains("invalid configfs path from env")
+        ));
+    }
+
+    #[test]
+    fn absolute_env_path_rejects_empty_and_relative() {
+        assert!(absolute_env_path("TEST_PATH", "").is_err());
+        assert!(absolute_env_path("TEST_PATH", ".").is_err());
+        assert!(absolute_env_path("TEST_PATH", "relative/path").is_err());
+        assert_eq!(
+            absolute_env_path("TEST_PATH", "/abs/path").unwrap(),
+            PathBuf::from("/abs/path")
+        );
+    }
+
+    #[test]
+    fn relative_configfs_override_is_not_available() {
+        let previous = std::env::var_os(CONFIGFS_PATH_ENV);
+        std::env::set_var(CONFIGFS_PATH_ENV, ".");
+        let available = is_tdx_available();
+        match previous {
+            Some(value) => std::env::set_var(CONFIGFS_PATH_ENV, value),
+            None => std::env::remove_var(CONFIGFS_PATH_ENV),
+        }
+        // relative overrides are ignored; only a real guest device can still pass
+        assert_eq!(available, Path::new(TDX_GUEST_DEVICE).exists());
+    }
+
+    #[test]
+    fn relative_rtmr_override_is_rejected() {
+        let previous = std::env::var_os(RTMR_SYSFS_PATH_ENV);
+        std::env::set_var(RTMR_SYSFS_PATH_ENV, ".");
+        let result = rtmr_sysfs_base();
+        match previous {
+            Some(value) => std::env::set_var(RTMR_SYSFS_PATH_ENV, value),
+            None => std::env::remove_var(RTMR_SYSFS_PATH_ENV),
+        }
+        assert!(matches!(
+            result,
+            Err(TdxAttestError::NotSupported(message))
+                if message.contains("must be absolute")
+        ));
+    }
 }

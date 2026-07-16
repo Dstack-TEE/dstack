@@ -290,7 +290,7 @@ fn choose_dstack_attestation_mode(has_tdx: bool, has_sev_snp: bool) -> Result<At
 impl AttestationMode {
     /// Detect attestation mode from system
     pub fn detect() -> Result<Self> {
-        let has_tdx = std::path::Path::new("/dev/tdx_guest").exists();
+        let has_tdx = tdx_attest::is_tdx_available();
         let has_sev_snp =
             std::path::Path::new("/dev/sev-guest").exists() || has_sev_snp_tsm_provider();
 

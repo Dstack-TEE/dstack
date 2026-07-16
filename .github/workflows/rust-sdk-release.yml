@@ -53,8 +53,8 @@ jobs:
                   pkg_version("sdk/rust/types/Cargo.toml")),
               ("sdk/rust/Cargo.toml [package.version]",
                   pkg_version("sdk/rust/Cargo.toml")),
-              ("dstack/Cargo.toml [workspace.dependencies.dstack-sdk-types.version]",
-                  ws_dep_version("dstack/Cargo.toml", "dstack-sdk-types")),
+              ("sdk/rust/Cargo.toml [workspace.dependencies.dstack-sdk-types.version]",
+                  ws_dep_version("sdk/rust/Cargo.toml", "dstack-sdk-types")),
           ]
 
           fail = False
@@ -64,7 +64,7 @@ jobs:
               print(f"  {'OK ' if ok else 'BAD'}  {label}: {got}")
 
           if fail:
-              print(f"\ntag is dstack-sdk-v{want}; bump all three to {want} before tagging.",
+              print(f"\ntag is dstack-sdk-v{want}; bump SDK package versions to {want} before tagging.",
                     file=sys.stderr)
               sys.exit(1)
           PY
