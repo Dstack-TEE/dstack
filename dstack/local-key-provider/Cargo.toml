@@ -12,9 +12,6 @@ homepage = "https://github.com/Dstack-TEE/dstack"
 repository = "https://github.com/Dstack-TEE/dstack"
 description = "SGX-backed local sealing-key provider for dstack TDX guests"
 
-[features]
-dev-mode = []
-
 [dependencies]
 blake2 = "0.10.6"
 dcap-qvl = "=0.5.2"

@@ -46,7 +46,6 @@ ENV PATH="/root/.cargo/bin:${PATH}"
 # Set environment variables
 ENV SGX=1
 ENV DEBUG=0
-ENV DEV_MODE=0
 ENV GRAMINE=gramine-sgx
 ENV RUST_LOG=info
 

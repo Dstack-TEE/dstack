@@ -10,11 +10,6 @@ PROVIDER_DIR ?= ..
 
 SGX ?= 1
 DEBUG ?= 0
-DEV_MODE ?= 0
-
-ifeq ($(DEV_MODE),1)
-CARGO_FEATURES := --features dev-mode
-endif
 
 ifeq ($(DEBUG),1)
 GRAMINE_LOG_LEVEL := debug
@@ -38,7 +33,7 @@ $(SELF_EXE): $(PROVIDER_DIR)/Cargo.toml $(PROVIDER_DIR)/Cargo.lock $(PROVIDER_SO
 	CARGO_PROFILE_RELEASE_LTO=true \
 	CARGO_PROFILE_RELEASE_PANIC=abort \
 	CARGO_PROFILE_RELEASE_STRIP=true \
-	cargo build --locked --release --manifest-path $(PROVIDER_DIR)/Cargo.toml $(CARGO_FEATURES)
+	cargo build --locked --release --manifest-path $(PROVIDER_DIR)/Cargo.toml
 
 $(MANIFEST): local-key-provider.manifest.template $(SELF_EXE)
 	gramine-manifest \

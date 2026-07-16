@@ -15,8 +15,6 @@ use error::ProviderError;
 use provider::KeyProvider;
 use server::Server;
 use tracing::info;
-#[cfg(feature = "dev-mode")]
-use tracing::warn;
 use tracing_subscriber::EnvFilter;
 
 const DEFAULT_ADDRESS: &str = "0.0.0.0:3443";
@@ -29,9 +27,6 @@ async fn main() -> Result<(), ProviderError> {
                 .unwrap_or_else(|_| EnvFilter::new("local_key_provider=info")),
         )
         .init();
-
-    #[cfg(feature = "dev-mode")]
-    warn!("running in development mode; quote verification is disabled");
 
     let address = env::var("SEALING_PROVIDER_ADDR").unwrap_or_else(|_| DEFAULT_ADDRESS.into());
     let address: SocketAddr = address.parse().map_err(|error| {

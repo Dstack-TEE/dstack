@@ -20,11 +20,9 @@ pub enum ProviderError {
     #[error("failed to parse {kind} quote: {reason}")]
     QuoteParse { kind: &'static str, reason: String },
 
-    #[cfg(not(feature = "dev-mode"))]
     #[error("TDX quote verification failed: {0}")]
     QuoteVerification(String),
 
-    #[cfg(not(feature = "dev-mode"))]
     #[error("SGX and TDX platform identifiers do not match")]
     PlatformMismatch,
 

@@ -3,14 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use dcap_qvl::quote::{Quote, TDReport10};
-#[cfg(not(feature = "dev-mode"))]
 use dcap_qvl::{collateral::CollateralClient, quote::Report};
 use sha2::{Digest, Sha256};
-#[cfg(not(feature = "dev-mode"))]
-use tracing::debug;
-use tracing::info;
-#[cfg(feature = "dev-mode")]
-use tracing::warn;
+use tracing::{debug, info};
 
 use crate::{
     crypto::{derive_key, public_key, seal},
@@ -19,24 +14,18 @@ use crate::{
     protocol::QuoteResponse,
 };
 
-#[cfg(not(feature = "dev-mode"))]
 const PLATFORM_ID_SIZE: usize = 16;
 
 pub struct KeyProvider {
-    #[cfg(not(feature = "dev-mode"))]
     collateral: CollateralClient,
 }
 
 impl KeyProvider {
     pub fn from_env() -> Result<Self, ProviderError> {
-        #[cfg(not(feature = "dev-mode"))]
         let collateral = CollateralClient::from_env()
             .map_err(|error| ProviderError::QuoteVerification(error.to_string()))?;
 
-        Ok(Self {
-            #[cfg(not(feature = "dev-mode"))]
-            collateral,
-        })
+        Ok(Self { collateral })
     }
 
     pub async fn provision(&self, raw_tdx_quote: &[u8]) -> Result<QuoteResponse, ProviderError> {
@@ -70,32 +59,22 @@ impl KeyProvider {
     }
 
     async fn verify_tdx_quote(&self, raw_quote: &[u8]) -> Result<(), ProviderError> {
-        #[cfg(feature = "dev-mode")]
-        {
-            let _ = raw_quote;
-            warn!("TDX quote verification is disabled by the dev-mode feature");
-            Ok(())
+        let report = self
+            .collateral
+            .fetch_and_verify(raw_quote)
+            .await
+            .map_err(|error| ProviderError::QuoteVerification(error.to_string()))?;
+        if !matches!(report.report, Report::TD10(_) | Report::TD15(_)) {
+            return Err(ProviderError::QuoteVerification(
+                "verified quote is not a TDX quote".into(),
+            ));
         }
-
-        #[cfg(not(feature = "dev-mode"))]
-        {
-            let report = self
-                .collateral
-                .fetch_and_verify(raw_quote)
-                .await
-                .map_err(|error| ProviderError::QuoteVerification(error.to_string()))?;
-            if !matches!(report.report, Report::TD10(_) | Report::TD15(_)) {
-                return Err(ProviderError::QuoteVerification(
-                    "verified quote is not a TDX quote".into(),
-                ));
-            }
-            debug!(
-                tcb_status = %report.status,
-                advisories = ?report.advisory_ids,
-                "TDX quote verified"
-            );
-            Ok(())
-        }
+        debug!(
+            tcb_status = %report.status,
+            advisories = ?report.advisory_ids,
+            "TDX quote verified"
+        );
+        Ok(())
     }
 }
 
@@ -127,23 +106,13 @@ fn require_sgx_report(quote: &Quote) -> Result<(), ProviderError> {
 }
 
 fn verify_same_platform(sgx_quote: &Quote, tdx_quote: &Quote) -> Result<(), ProviderError> {
-    #[cfg(feature = "dev-mode")]
-    {
-        let _ = (sgx_quote, tdx_quote);
-        warn!("SGX/TDX platform matching is disabled by the dev-mode feature");
-        Ok(())
+    let sgx_id = &sgx_quote.header.user_data[..PLATFORM_ID_SIZE];
+    let tdx_id = &tdx_quote.header.user_data[..PLATFORM_ID_SIZE];
+    if sgx_id != tdx_id {
+        return Err(ProviderError::PlatformMismatch);
     }
-
-    #[cfg(not(feature = "dev-mode"))]
-    {
-        let sgx_id = &sgx_quote.header.user_data[..PLATFORM_ID_SIZE];
-        let tdx_id = &tdx_quote.header.user_data[..PLATFORM_ID_SIZE];
-        if sgx_id != tdx_id {
-            return Err(ProviderError::PlatformMismatch);
-        }
-        debug!("SGX and TDX quotes originate from the same platform");
-        Ok(())
-    }
+    debug!("SGX and TDX quotes originate from the same platform");
+    Ok(())
 }
 
 fn measurements(report: &TDReport10) -> Vec<u8> {
