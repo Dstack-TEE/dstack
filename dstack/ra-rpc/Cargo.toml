@@ -15,7 +15,7 @@ prpc.workspace = true
 rocket = { workspace = true, features = ["mtls"], optional = true }
 serde_json.workspace = true
 tracing.workspace = true
-reqwest = { workspace = true, default-features = false, features = ["rustls-tls", "charset"], optional = true }
+reqwest = { workspace = true, default-features = false, features = ["rustls", "charset"], optional = true }
 
 ra-tls.workspace = true
 bon.workspace = true

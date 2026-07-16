@@ -14,6 +14,7 @@ use std::{borrow::Cow, time::SystemTime};
 use anyhow::{anyhow, bail, Context, Result};
 use cc_eventlog::{RuntimeEvent, TdxEvent};
 use dcap_qvl::{
+    collateral::CollateralClient,
     quote::{EnclaveReport, Quote, Report, TDReport10, TDReport15},
     verify::VerifiedReport as TdxVerifiedReport,
 };
@@ -44,6 +45,13 @@ const DSTACK_AMD_SEV_SNP: &str = "dstack-amd-sev-snp";
 const DSTACK_GCP_TDX: &str = "dstack-gcp-tdx";
 const DSTACK_NITRO_ENCLAVE: &str = "dstack-nitro-enclave";
 const DSTACK_AWS_NITRO_TPM: &str = "dstack-aws-nitro-tpm";
+
+fn dcap_collateral_client(pccs_url: Option<&str>) -> Result<CollateralClient> {
+    match pccs_url.map(str::trim).filter(|url| !url.is_empty()) {
+        Some(pccs_url) => CollateralClient::with_default_http(pccs_url),
+        None => CollateralClient::from_env(),
+    }
+}
 
 /// Path to sys-config.json in the host-shared dir.
 ///
@@ -1623,17 +1631,10 @@ async fn verify_tdx_quote_with_events(
     runtime_events: &[RuntimeEvent],
     report_data: &[u8; 64],
 ) -> Result<TdxVerifiedReport> {
-    let mut pccs_url = Cow::Borrowed(pccs_url.unwrap_or_default());
-    if pccs_url.is_empty() {
-        pccs_url = match std::env::var("PCCS_URL") {
-            Ok(url) => Cow::Owned(url),
-            Err(_) => Cow::Borrowed(""),
-        };
-    }
-    let tdx_report =
-        dcap_qvl::collateral::get_collateral_and_verify(quote, Some(pccs_url.as_ref()))
-            .await
-            .context("Failed to get collateral")?;
+    let tdx_report = dcap_collateral_client(pccs_url)?
+        .fetch_and_verify(quote)
+        .await
+        .context("Failed to get collateral")?;
     validate_tcb(&tdx_report)?;
 
     let td_report = tdx_report.report.as_td10().context("no td report")?;
@@ -2315,18 +2316,10 @@ impl Attestation {
     }
 
     async fn verify_tdx(&self, pccs_url: Option<&str>, quote: &[u8]) -> Result<TdxVerifiedReport> {
-        let mut pccs_url = Cow::Borrowed(pccs_url.unwrap_or_default());
-        if pccs_url.is_empty() {
-            // try to read from PCCS_URL env var
-            pccs_url = match std::env::var("PCCS_URL") {
-                Ok(url) => Cow::Owned(url),
-                Err(_) => Cow::Borrowed(""),
-            };
-        }
-        let tdx_report =
-            dcap_qvl::collateral::get_collateral_and_verify(quote, Some(pccs_url.as_ref()))
-                .await
-                .context("Failed to get collateral")?;
+        let tdx_report = dcap_collateral_client(pccs_url)?
+            .fetch_and_verify(quote)
+            .await
+            .context("Failed to get collateral")?;
         validate_tcb(&tdx_report)?;
 
         let td_report = tdx_report.report.as_td10().context("no td report")?;

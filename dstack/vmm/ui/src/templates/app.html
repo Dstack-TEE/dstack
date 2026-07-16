@@ -85,6 +85,9 @@ SPDX-License-Identifier: Apache-2.0
     :allow-attach-all-gpus="allowAttachAllGpus"
     :kms-available="vmForm.kms_enabled"
     :port-mapping-enabled="config.portMappingEnabled"
+    :networking-modes="networkingModes"
+    :default-bridge="defaultBridge"
+    :default-networking-label="defaultNetworkingLabel"
     @close="showCreateDialog = false"
     @submit="createVm"
     @load-compose="loadComposeFile"
@@ -97,6 +100,9 @@ SPDX-License-Identifier: Apache-2.0
     :available-gpus="availableGpus"
     :allow-attach-all-gpus="allowAttachAllGpus"
     :port-mapping-enabled="config.portMappingEnabled"
+    :networking-modes="networkingModes"
+    :default-bridge="defaultBridge"
+    :default-networking-label="defaultNetworkingLabel"
     :kms-enabled="kmsEnabled(updateDialog.vm || {})"
     :compose-hash-preview="updateComposeHashPreview"
     @close="updateDialog.show = false"
@@ -341,6 +347,16 @@ SPDX-License-Identifier: Apache-2.0
               : (port.host_address === '0.0.0.0' ? 'Public' : port.host_address)
               }}</span>
             <span>{{ port.protocol.toUpperCase() }}: {{ port.host_port }} → {{ port.vm_port }}</span>
+          </div>
+        </div>
+
+        <div v-if="vm.interfaces?.length" class="runtime-network-section">
+          <h4>VMM Network Interfaces</h4>
+          <div v-for="(iface, index) in vm.interfaces" :key="iface.netdev_id || index" class="runtime-network-item">
+            <span>{{ networkModeLabel(iface.mode) }} / {{ iface.backend || '-' }}</span>
+            <span>{{ iface.netdev_id || '-' }}</span>
+            <span>{{ iface.bridge_name || '-' }}</span>
+            <span>{{ iface.mac || '-' }}</span>
           </div>
         </div>
 

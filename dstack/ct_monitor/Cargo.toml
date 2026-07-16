@@ -15,7 +15,7 @@ clap = { workspace = true, features = ["derive", "env"] }
 hex = { workspace = true, features = ["alloc", "std"] }
 hex_fmt.workspace = true
 regex.workspace = true
-reqwest = { workspace = true, default-features = false, features = ["json", "rustls-tls", "charset", "hickory-dns"] }
+reqwest = { workspace = true, default-features = false, features = ["json", "rustls", "charset", "hickory-dns"] }
 serde = { workspace = true, features = ["derive"] }
 serde-human-bytes.workspace = true
 serde_json.workspace = true

@@ -28,6 +28,11 @@ pub struct Machine<'a> {
     pub hugepages: bool,
     pub num_gpus: u32,
     pub num_nvswitches: u32,
+    /// Number of virtio-net NICs. Each NIC contributes a PCI device to the
+    /// ACPI/DSDT layout measured into RTMR0. Defaults to 1 so callers that
+    /// predate this field keep the historical single-NIC layout.
+    #[builder(default = 1)]
+    pub num_nics: u32,
     pub hotplug_off: bool,
     pub root_verity: bool,
     #[builder(default)]

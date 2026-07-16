@@ -21,7 +21,8 @@ use super::{
     host_share::create_shared_disk,
     hugepage_numa_nodes,
     image::Image,
-    mr_config::{mac_address_for_vm, snp_host_data, tdx_mr_config_id},
+    mr_config::{snp_host_data, tdx_mr_config_id},
+    network::{mac_address_for_vm_index, resolved_networks, validate_resolved_networks},
     pci_numa_node, round_up, GpuConfig, VmWorkDir,
 };
 use anyhow::{bail, Context, Result};
@@ -174,6 +175,7 @@ fn virtio_pci_device(device: &str, snp: bool) -> String {
 struct PreparedQemuLaunch {
     workdir: VmWorkDir,
     platform: TeePlatform,
+    networks: Vec<Networking>,
     hugepage_numa_nodes: Option<HashMap<String, u32>>,
     gpu_numa_nodes: HashMap<String, String>,
     numa_cpus: Option<String>,
@@ -195,6 +197,8 @@ impl PreparedQemuLaunch {
         prepare_shared_dir(&workdir)?;
         let app_compose = workdir.app_compose().context("failed to get app compose")?;
         let platform = cfg.resolved_platform();
+        let networks = resolved_networks(&vm.manifest, cfg);
+        validate_resolved_networks(&networks)?;
 
         let hugepage_numa_nodes = if vm.manifest.hugepages {
             Some(hugepage_numa_nodes(gpus)?)
@@ -249,6 +253,7 @@ impl PreparedQemuLaunch {
         Ok(Self {
             workdir,
             platform,
+            networks,
             hugepage_numa_nodes,
             gpu_numa_nodes,
             numa_cpus,
@@ -337,7 +342,7 @@ impl QemuCommandBuilder<'_> {
         let mut command = self.base_command();
         self.configure_rootfs(&mut command)?;
         self.configure_data_disk(&mut command);
-        self.configure_networking(&mut command);
+        self.configure_networking(&mut command)?;
         self.vm.configure_smbios(&mut command, self.cfg);
         self.configure_tpm_and_vsock(&mut command);
         self.configure_host_share(&mut command)?;
@@ -455,57 +460,61 @@ impl QemuCommandBuilder<'_> {
             ));
     }
 
-    fn configure_networking(&self, command: &mut Command) {
-        // Per-VM networking only overrides the mode and bridge name. All other
-        // fields continue to come from the global configuration.
-        let resolved_networking;
-        let networking = match self.vm.manifest.networking.as_ref() {
-            Some(vm_networking) => {
-                resolved_networking = Networking {
-                    mode: vm_networking.mode,
-                    bridge: if vm_networking.bridge.is_empty() {
-                        self.cfg.networking.bridge.clone()
-                    } else {
-                        vm_networking.bridge.clone()
-                    },
-                    ..self.cfg.networking.clone()
-                };
-                &resolved_networking
-            }
-            None => &self.cfg.networking,
-        };
-        let mac = mac_address_for_vm(&self.vm.manifest.id, &networking.mac_prefix_bytes());
-        let net_device = virtio_pci_device(
-            &format!("virtio-net-pci,netdev=net0,mac={mac}"),
-            self.is_amd_sev_snp(),
-        );
-        let netdev = match networking.mode {
-            NetworkingMode::User => {
-                let mut netdev = format!(
-                    "user,id=net0,net={},dhcpstart={},restrict={}",
-                    networking.net,
-                    networking.dhcp_start,
-                    if networking.restrict { "yes" } else { "no" }
-                );
-                for mapping in &self.vm.manifest.port_map {
-                    netdev.push_str(&format!(
-                        ",hostfwd={}:{}:{}-:{}",
-                        mapping.protocol.as_str(),
-                        mapping.address,
-                        mapping.from,
-                        mapping.to
-                    ));
+    fn configure_networking(&self, command: &mut Command) -> Result<()> {
+        let hostfwd_index = self
+            .prepared
+            .networks
+            .iter()
+            .position(|networking| networking.mode == NetworkingMode::User);
+        for (index, networking) in self.prepared.networks.iter().enumerate() {
+            let net_id = format!("net{index}");
+            let mac = mac_address_for_vm_index(
+                &self.vm.manifest.id,
+                &networking.mac_prefix_bytes(),
+                index,
+            );
+            let net_device = virtio_pci_device(
+                &format!("virtio-net-pci,netdev={net_id},mac={mac}"),
+                self.is_amd_sev_snp(),
+            );
+            let netdev = match networking.mode {
+                NetworkingMode::User => {
+                    let mut netdev = format!(
+                        "user,id={net_id},net={},dhcpstart={},restrict={}",
+                        networking.net,
+                        networking.dhcp_start,
+                        if networking.restrict { "yes" } else { "no" }
+                    );
+                    if hostfwd_index == Some(index) {
+                        for mapping in &self.vm.manifest.port_map {
+                            netdev.push_str(&format!(
+                                ",hostfwd={}:{}:{}-:{}",
+                                mapping.protocol.as_str(),
+                                mapping.address,
+                                mapping.from,
+                                mapping.to
+                            ));
+                        }
+                    }
+                    netdev
                 }
-                netdev
-            }
-            NetworkingMode::Bridge => {
-                tracing::info!("bridge networking: mac={mac} bridge={}", networking.bridge);
-                format!("bridge,id=net0,br={}", networking.bridge)
-            }
-            NetworkingMode::Custom => networking.netdev.clone(),
-        };
-        command.arg("-netdev").arg(netdev);
-        command.arg("-device").arg(net_device);
+                NetworkingMode::Bridge => {
+                    tracing::info!("bridge networking: mac={mac} bridge={}", networking.bridge);
+                    format!("bridge,id={net_id},br={}", networking.bridge)
+                }
+                NetworkingMode::Custom => {
+                    if !networking.netdev.contains(&format!("id={net_id}")) {
+                        bail!(
+                            "custom networking netdev must contain id={net_id} for interface index {index}"
+                        );
+                    }
+                    networking.netdev.clone()
+                }
+            };
+            command.arg("-netdev").arg(netdev);
+            command.arg("-device").arg(net_device);
+        }
+        Ok(())
     }
 
     fn configure_tpm_and_vsock(&self, command: &mut Command) {
@@ -864,8 +873,8 @@ mod tests {
         PreparedQemuLaunch, QemuCommandBuilder, VmConfig,
     };
     use crate::app::image::{Image, ImageInfo};
-    use crate::app::{GpuConfig, Manifest, VmWorkDir};
-    use crate::config::{Config, TeePlatform, DEFAULT_CONFIG};
+    use crate::app::{GpuConfig, Manifest, PortMapping, VmWorkDir};
+    use crate::config::{Config, Protocol, TeePlatform, DEFAULT_CONFIG};
 
     #[test]
     fn amd_sev_snp_memory_backend_arg_uses_passed_final_memory_size() {
@@ -917,7 +926,12 @@ mod tests {
                 memory: 2048,
                 disk_size: 10,
                 image: "test-image".into(),
-                port_map: vec![],
+                port_map: vec![PortMapping {
+                    address: "127.0.0.1".parse().unwrap(),
+                    protocol: Protocol::Tcp,
+                    from: 18080,
+                    to: 8080,
+                }],
                 created_at_ms: 0,
                 hugepages: false,
                 pin_numa: false,
@@ -925,7 +939,7 @@ mod tests {
                 kms_urls: vec![],
                 gateway_urls: vec![],
                 no_tee: true,
-                networking: None,
+                networks: vec![],
             },
             image: Image {
                 info: ImageInfo {
@@ -959,6 +973,7 @@ mod tests {
         let prepared = PreparedQemuLaunch {
             workdir: VmWorkDir::new("/does-not-exist/vm-1"),
             platform: TeePlatform::Tdx,
+            networks: vec![config.cvm.networking.clone(), config.cvm.networking.clone()],
             hugepage_numa_nodes: None,
             gpu_numa_nodes: HashMap::new(),
             numa_cpus: None,
@@ -990,5 +1005,24 @@ mod tests {
             .args
             .windows(2)
             .any(|args| args == ["-append", "console=hvc0"]));
+        let netdevs = process
+            .args
+            .windows(2)
+            .filter(|args| args[0] == "-netdev")
+            .map(|args| args[1].as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(netdevs.len(), 2);
+        assert!(netdevs[0].contains("user,id=net0"));
+        assert!(netdevs[0].contains("hostfwd=tcp:127.0.0.1:18080-:8080"));
+        assert!(netdevs[1].contains("user,id=net1"));
+        assert!(!netdevs[1].contains("hostfwd="));
+        assert!(process
+            .args
+            .iter()
+            .any(|arg| arg.contains("virtio-net-pci,netdev=net0")));
+        assert!(process
+            .args
+            .iter()
+            .any(|arg| arg.contains("virtio-net-pci,netdev=net1")));
     }
 }

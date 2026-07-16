@@ -4,7 +4,7 @@
 
 //! Test TDX attestation functions on real TDX hardware.
 
-use dcap_qvl::collateral::get_collateral_and_verify;
+use dcap_qvl::collateral::CollateralClient;
 use dcap_qvl::quote::Quote;
 
 #[tokio::main]
@@ -64,7 +64,11 @@ async fn main() {
             "   PCCS URL: {}",
             pccs_url.as_deref().unwrap_or("(default)")
         );
-        match get_collateral_and_verify(quote, pccs_url.as_deref()).await {
+        let verification = match CollateralClient::from_env() {
+            Ok(client) => client.fetch_and_verify(quote).await,
+            Err(err) => Err(err),
+        };
+        match verification {
             Ok(verified) => {
                 println!("   ✓ Quote verified!");
                 println!("   QE status: {:?}", verified.qe_status);

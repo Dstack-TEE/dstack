@@ -32,6 +32,9 @@ use supervisor_client::SupervisorClient;
 use tracing::{debug, error, info, warn};
 
 pub use image::{Image, ImageInfo};
+pub(crate) use network::{
+    resolve_networking, resolved_networks, validate_resolved_network, validate_resolved_networks,
+};
 pub use qemu::VmConfig;
 pub use workdir::VmWorkDir;
 
@@ -39,6 +42,7 @@ mod host_share;
 mod id_pool;
 mod image;
 mod mr_config;
+mod network;
 mod qemu;
 pub(crate) mod registry;
 mod vm_info;
@@ -75,8 +79,24 @@ pub struct Manifest {
     pub gateway_urls: Vec<String>,
     #[serde(default)]
     pub no_tee: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub networking: Option<Networking>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub networks: Vec<Networking>,
+}
+
+impl Manifest {
+    pub fn from_json(value: serde_json::Value) -> serde_json::Result<Self> {
+        let mut map = value;
+        if let Some(obj) = map.as_object_mut() {
+            if !obj.contains_key("networks")
+                || obj["networks"].as_array().is_some_and(|a| a.is_empty())
+            {
+                if let Some(legacy) = obj.remove("networking") {
+                    obj.insert("networks".into(), serde_json::Value::Array(vec![legacy]));
+                }
+            }
+        }
+        serde_json::from_value(map)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -281,6 +301,13 @@ impl App {
         let image_path = self.config.image.path.join(&manifest.image);
         let image = Image::load(&image_path).context("Failed to load image")?;
         let vm_id = manifest.id.clone();
+        let mut runtime_networks = vm_work_dir.runtime_networks();
+        if runtime_networks.is_empty() && cids_assigned.contains_key(&vm_id) {
+            runtime_networks = resolved_networks(&manifest, &self.config.cvm);
+            if let Err(err) = vm_work_dir.set_runtime_networks(&runtime_networks) {
+                warn!(id = %vm_id, "failed to persist inferred runtime networks: {err}");
+            }
+        }
         let app_compose = vm_work_dir
             .app_compose()
             .context("Failed to read compose file")?;
@@ -302,9 +329,12 @@ impl App {
             match states.get_mut(&vm_id) {
                 Some(vm) => {
                     vm.config = vm_config.into();
+                    vm.state.runtime_networks = runtime_networks;
                 }
                 None => {
-                    states.add(VmState::new(vm_config));
+                    let mut vm_state = VmState::new(vm_config);
+                    vm_state.state.runtime_networks = runtime_networks;
+                    states.add(vm_state);
                 }
             }
         };
@@ -356,11 +386,27 @@ impl App {
 
             let devices = self.try_allocate_gpus(&vm_config.manifest)?;
             let processes = vm_config.config_qemu(&work_dir, &self.config.cvm, &devices)?;
+            let runtime_networks = resolved_networks(&vm_config.manifest, &self.config.cvm);
+            work_dir.set_runtime_networks(&runtime_networks)?;
+            {
+                let mut state = self.lock();
+                let vm_state = state.get_mut(id).context("VM not found")?;
+                vm_state.state.runtime_networks = runtime_networks;
+            }
             for process in processes {
-                self.supervisor
-                    .deploy(&process)
-                    .await
-                    .with_context(|| format!("Failed to start process {}", process.id))?;
+                if let Err(err) = self.supervisor.deploy(&process).await {
+                    if let Err(clear_err) = work_dir.clear_runtime_networks() {
+                        warn!(
+                            id,
+                            "failed to clear runtime networks after start failure: {clear_err}"
+                        );
+                    }
+                    if let Some(vm_state) = self.lock().get_mut(id) {
+                        vm_state.state.runtime_networks.clear();
+                    }
+                    return Err(err)
+                        .with_context(|| format!("failed to start process {}", process.id));
+                }
             }
 
             let mut state = self.lock();
@@ -517,20 +563,26 @@ impl App {
     /// Handle a DHCP lease notification: look up VM by MAC address, persist
     /// the guest IP, and reconfigure port forwarding.
     pub async fn report_dhcp_lease(&self, mac: &str, ip: &str) {
-        use crate::app::mr_config::mac_address_for_vm;
+        use crate::app::network::mac_address_for_vm_index;
 
         let vm_id = {
             let mut state = self.lock();
-            let prefix = self.config.cvm.networking.mac_prefix_bytes();
-            let found = state
-                .vms
-                .iter_mut()
-                .find(|(id, _)| mac_address_for_vm(id, &prefix) == mac);
-            let Some((id, vm)) = found else {
+            let found = state.vms.iter_mut().find_map(|(id, vm)| {
+                let networks = vm.effective_networks(&self.config.cvm);
+                networks.iter().enumerate().find_map(|(index, networking)| {
+                    let prefix = networking.mac_prefix_bytes();
+                    let nic_mac = mac_address_for_vm_index(&vm.config.manifest.id, &prefix, index);
+                    (nic_mac == mac).then(|| id.clone())
+                })
+            });
+            let Some(vm_id) = found else {
                 debug!(mac, ip, "DHCP lease for unknown MAC, ignoring");
                 return;
             };
-            let vm_id = id.clone();
+            let Some(vm) = state.get_mut(&vm_id) else {
+                debug!(mac, ip, id = %vm_id, "DHCP lease for missing VM, ignoring");
+                return;
+            };
             let workdir = VmWorkDir::new(vm.config.workdir.clone());
             if let Err(e) = workdir.set_guest_ip(ip) {
                 error!(mac, ip, "failed to persist guest IP: {e}");
@@ -553,13 +605,17 @@ impl App {
             let Some(vm) = state.get(id) else {
                 return;
             };
-            let networking = vm
-                .config
-                .manifest
-                .networking
-                .as_ref()
-                .unwrap_or(&self.config.cvm.networking);
-            if !networking.is_bridge() || !networking.forward_service_enabled {
+            let networks = vm.effective_networks(&self.config.cvm);
+            if networks
+                .iter()
+                .any(|networking| networking.mode == crate::config::NetworkingMode::User)
+            {
+                return;
+            }
+            if !networks
+                .iter()
+                .any(|networking| networking.is_bridge() && networking.forward_service_enabled)
+            {
                 return;
             }
             let guest_ip = vm.state.guest_ip.clone();
@@ -861,6 +917,13 @@ impl App {
         let image = Image::load(&image_path).context("Failed to load image")?;
         let vm_id = manifest.id.clone();
         let already_running = cids_assigned.contains_key(&vm_id);
+        let mut runtime_networks = vm_work_dir.runtime_networks();
+        if runtime_networks.is_empty() && already_running {
+            runtime_networks = resolved_networks(&manifest, &self.config.cvm);
+            if let Err(err) = vm_work_dir.set_runtime_networks(&runtime_networks) {
+                warn!(id = %vm_id, "failed to persist inferred runtime networks: {err}");
+            }
+        }
         let app_compose = vm_work_dir
             .app_compose()
             .context("Failed to read compose file")?;
@@ -893,7 +956,10 @@ impl App {
             match states.get_mut(&vm_id) {
                 Some(vm) => {
                     // Update existing VM but preserve statistics and CID
-                    let old_state = vm.state.clone();
+                    let mut old_state = vm.state.clone();
+                    if old_state.runtime_networks.is_empty() {
+                        old_state.runtime_networks = runtime_networks;
+                    }
                     vm.config = vm_config.into();
                     vm.state = old_state; // Preserve the existing state with statistics
                 }
@@ -902,7 +968,9 @@ impl App {
                     if !cids_assigned.contains_key(&vm_id) {
                         states.cid_pool.occupy(cid)?;
                     }
-                    states.add(VmState::new(vm_config));
+                    let mut vm_state = VmState::new(vm_config);
+                    vm_state.state.runtime_networks = runtime_networks;
+                    states.add(vm_state);
                     is_new = true;
                 }
             }
@@ -962,7 +1030,7 @@ impl App {
                     &self.work_dir(&vm.config.manifest.id),
                 )
             })
-            .map(|info| info.to_pb(&self.config.gateway, request.brief))
+            .map(|info| info.to_pb(&self.config.gateway, &self.config.cvm, request.brief))
             .collect::<Vec<_>>();
         Ok(StatusResponse {
             vms,
@@ -991,7 +1059,7 @@ impl App {
         };
         let info = vm_state
             .merged_info(proc_state.as_ref(), &self.work_dir(id))
-            .to_pb(&self.config.gateway, false);
+            .to_pb(&self.config.gateway, &self.config.cvm, false);
         Ok(Some(info))
     }
 
@@ -1406,6 +1474,11 @@ fn make_vm_config(
         GpuConfig::default()
     };
     let effective_vcpus = effective_vcpu_count_for_manifest(manifest, &gpus)?;
+    // Each resolved network interface becomes one virtio-net-pci device in the
+    // QEMU command (see `VmConfig::config_qemu`), which changes the guest's
+    // ACPI/DSDT layout and therefore RTMR0. Measure the interface count so the
+    // verifier reconstructs the exact device layout.
+    let num_nics = resolved_networks(manifest, &cfg.cvm).len() as u32;
     let mut config = serde_json::to_value(dstack_types::VmConfig {
         os_image_hash,
         cpu_count: effective_vcpus,
@@ -1417,6 +1490,7 @@ fn make_vm_config(
         hugepages: manifest.hugepages,
         num_gpus: gpus.gpus.len() as u32,
         num_nvswitches: gpus.bridges.len() as u32,
+        num_nics,
         host_share_mode: cfg.cvm.host_share_mode.clone(),
         hotplug_off: cfg.cvm.qemu_hotplug_off,
         image: Some(manifest.image.clone()),
@@ -1454,7 +1528,9 @@ fn make_vm_config(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{load_config_figment, TdxAttestationVariantConfig, TeePlatform};
+    use crate::config::{
+        load_config_figment, Networking, NetworkingMode, TdxAttestationVariantConfig, TeePlatform,
+    };
     use dstack_types::{
         TdxImageMeasurement, TdxMrtdCandidates, TdxOsImageMeasurement,
         TdxOsImageMeasurementDocument, TdxTdvfMeasurement,
@@ -1464,6 +1540,55 @@ mod tests {
 
     fn hex_of(byte: u8, len: usize) -> String {
         hex::encode(vec![byte; len])
+    }
+
+    #[test]
+    fn put_manifest_keeps_legacy_networking_for_rollback() -> Result<()> {
+        let temp = std::env::temp_dir().join(format!(
+            "dstack-vmm-manifest-test-{}",
+            SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos()
+        ));
+        let workdir = VmWorkDir::new(&temp);
+        let mut manifest = test_manifest(1024);
+        manifest.networks = vec![Networking {
+            mode: NetworkingMode::Bridge,
+            bridge: "dstack-br0".to_string(),
+            forward_service_enabled: true,
+            mac_prefix: String::new(),
+            net: String::new(),
+            dhcp_start: String::new(),
+            restrict: false,
+            netdev: String::new(),
+        }];
+
+        workdir.put_manifest(&manifest)?;
+        let raw = fs::read_to_string(workdir.manifest_path())?;
+        let value: serde_json::Value = serde_json::from_str(&raw)?;
+        assert_eq!(value["networks"].as_array().map(Vec::len), Some(1));
+        assert_eq!(value["networking"]["mode"], "bridge");
+        fs::remove_dir_all(temp)?;
+        Ok(())
+    }
+
+    #[test]
+    fn manifest_deserializes_legacy_singular_networking_as_networks() {
+        let manifest: Manifest = Manifest::from_json(serde_json::json!({
+            "id": "vm-1",
+            "name": "vm-1",
+            "app_id": "app-1",
+            "vcpu": 1,
+            "memory": 1024,
+            "disk_size": 10,
+            "image": "dstack-test",
+            "port_map": [],
+            "created_at_ms": 0,
+            "networking": { "mode": "bridge", "bridge": "dstack-br0" }
+        }))
+        .unwrap();
+
+        assert_eq!(manifest.networks.len(), 1);
+        assert_eq!(manifest.networks[0].mode, NetworkingMode::Bridge);
+        assert_eq!(manifest.networks[0].bridge, "dstack-br0");
     }
 
     fn write_u16_le_at(buf: &mut [u8], off: usize, value: u16) {
@@ -1556,7 +1681,7 @@ mod tests {
             kms_urls: vec![],
             gateway_urls: vec![],
             no_tee: false,
-            networking: None,
+            networks: vec![],
         }
     }
 
@@ -1634,6 +1759,33 @@ mod tests {
         assert_eq!(effective_vcpu_count(4, Some(2)), 4);
         assert_eq!(effective_vcpu_count(3, Some(0)), 3);
         assert_eq!(effective_vcpu_count(3, None), 3);
+    }
+
+    #[test]
+    fn vm_measurement_config_ignores_networking_changes() -> Result<()> {
+        let config = test_tdx_config()?;
+        let mut bridge_manifest = test_manifest(2048);
+        bridge_manifest.networks = vec![Networking {
+            mode: NetworkingMode::Bridge,
+            bridge: "dstack-br0".to_string(),
+            forward_service_enabled: true,
+            mac_prefix: "02:aa:bb".to_string(),
+            net: String::new(),
+            dhcp_start: String::new(),
+            restrict: false,
+            netdev: String::new(),
+        }];
+        let user_manifest = test_manifest(2048);
+        let image = test_tdx_image(true);
+        let compose_hash = hex_of(0x22, 32);
+
+        let bridge_config =
+            make_vm_config(&config, &bridge_manifest, &image, &compose_hash, None, None)?;
+        let user_config =
+            make_vm_config(&config, &user_manifest, &image, &compose_hash, None, None)?;
+
+        assert_eq!(bridge_config, user_config);
+        Ok(())
     }
 
     #[test]
@@ -1790,7 +1942,7 @@ mod tests {
             kms_urls: vec![],
             gateway_urls: vec![],
             no_tee: false,
-            networking: None,
+            networks: vec![],
         };
 
         let mr_config = MrConfigV3::new(
@@ -1918,6 +2070,7 @@ struct VmStateMut {
     boot_error: String,
     shutdown_progress: String,
     guest_ip: String,
+    runtime_networks: Vec<Networking>,
     devices: GpuConfig,
     events: VecDeque<pb::GuestEvent>,
     /// True when the VM is being removed (cleanup in progress).
@@ -1947,6 +2100,14 @@ impl VmState {
         Self {
             config: Arc::new(config),
             state: VmStateMut::default(),
+        }
+    }
+
+    pub fn effective_networks(&self, cvm: &crate::config::CvmConfig) -> Vec<Networking> {
+        if self.state.runtime_networks.is_empty() {
+            resolved_networks(&self.config.manifest, cvm)
+        } else {
+            self.state.runtime_networks.clone()
         }
     }
 }

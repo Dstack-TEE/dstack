@@ -1,0 +1,22 @@
+[Unit]
+Description=dstack development TEE ABI simulator (TDX backend)
+Documentation=https://github.com/Dstack-TEE/dstack/blob/master/CONTRIBUTING.md
+Before=dstack-prepare.service
+ConditionPathExists=!/dev/tdx_guest
+ConditionPathExists=!/dev/sev-guest
+
+[Service]
+Type=notify
+ExecCondition=/bin/sh -c '! grep -qE "^(tdx_guest|sev_guest)" /sys/kernel/config/tsm/report/*/provider 2>/dev/null'
+ExecStart=/usr/bin/dstack-tee-simulator
+ExecStartPost=/bin/systemctl set-environment DCAP_TDX_RTMR_SYSFS_PATH=/sys/kernel/config/tsm/report/com.intel.dcap/measurements DSTACK_CCEL_FILE=/sys/kernel/config/tsm/report/com.intel.dcap/ccel
+ExecStop=-/bin/fusermount3 -u /sys/kernel/config/tsm/report
+ExecStopPost=-/bin/fusermount3 -uz /sys/kernel/config/tsm/report
+ExecStopPost=/bin/systemctl unset-environment DCAP_TDX_RTMR_SYSFS_PATH DSTACK_CCEL_FILE
+Restart=on-failure
+RestartSec=1s
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target
