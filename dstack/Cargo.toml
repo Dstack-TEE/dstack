@@ -33,6 +33,7 @@ members = [
     "guest-agent",
     "guest-agent/rpc",
     "guest-agent-simulator",
+    "tee-simulator",
     "vmm",
     "vmm/rpc",
     "gateway",
@@ -118,6 +119,7 @@ chrono = "0.4.40"
 clap = { version = "4.5.32", features = ["derive", "string"] }
 dashmap = "6.1.0"
 fs-err = "3.1.0"
+fuser = "0.16.0"
 path-absolutize = "3.1.1"
 futures = "0.3.31"
 git-version = "0.3.9"
