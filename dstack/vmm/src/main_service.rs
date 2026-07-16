@@ -828,6 +828,16 @@ impl VmmRpc for RpcHandler {
     }
 }
 
+impl RpcCall<App> for RpcHandler {
+    type PrpcService = VmmServer<Self>;
+
+    fn construct(context: CallContext<'_, App>) -> Result<Self> {
+        Ok(RpcHandler {
+            app: context.state.clone(),
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -941,15 +951,5 @@ mod tests {
         assert!(err
             .to_string()
             .contains("built-in port forwarding supports only one bridge"));
-    }
-}
-
-impl RpcCall<App> for RpcHandler {
-    type PrpcService = VmmServer<Self>;
-
-    fn construct(context: CallContext<'_, App>) -> Result<Self> {
-        Ok(RpcHandler {
-            app: context.state.clone(),
-        })
     }
 }

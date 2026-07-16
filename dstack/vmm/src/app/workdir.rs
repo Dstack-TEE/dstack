@@ -16,7 +16,7 @@ use fs_err as fs;
 use serde::{Deserialize, Serialize};
 use serde_human_bytes as hex_bytes;
 
-use crate::app::Manifest;
+use crate::{app::Manifest, config::Networking};
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct InstanceInfo {
@@ -67,17 +67,20 @@ impl VmWorkDir {
 
     pub fn manifest(&self) -> Result<Manifest> {
         let manifest_path = self.manifest_path();
-        let manifest = fs::read_to_string(manifest_path).context("failed to read manifest")?;
-        let manifest: Manifest =
-            serde_json::from_str(&manifest).context("failed to parse manifest")?;
-        Ok(manifest)
+        let raw = fs::read_to_string(manifest_path).context("failed to read manifest")?;
+        let value: serde_json::Value =
+            serde_json::from_str(&raw).context("failed to parse manifest json")?;
+        Manifest::from_json(value).context("failed to deserialize manifest")
     }
 
     pub fn put_manifest(&self, manifest: &Manifest) -> Result<()> {
         fs::create_dir_all(&self.workdir).context("failed to create workdir")?;
         let manifest_path = self.manifest_path();
-        fs::write(manifest_path, serde_json::to_string(manifest)?)
-            .context("failed to write manifest")
+        let mut value = serde_json::to_value(manifest)?;
+        if let Some(networking) = manifest.networks.first() {
+            value["networking"] = serde_json::to_value(networking)?;
+        }
+        fs::write(manifest_path, serde_json::to_string(&value)?).context("failed to write manifest")
     }
 
     pub fn started(&self) -> Result<bool> {
@@ -128,6 +131,10 @@ impl VmWorkDir {
         self.workdir.join("guest-ip")
     }
 
+    pub fn runtime_networks_path(&self) -> PathBuf {
+        self.workdir.join("runtime-networks.json")
+    }
+
     pub fn guest_ip(&self) -> Option<String> {
         fs::read_to_string(self.guest_ip_path())
             .ok()
@@ -137,6 +144,27 @@ impl VmWorkDir {
 
     pub fn set_guest_ip(&self, ip: &str) -> Result<()> {
         fs::write(self.guest_ip_path(), ip).context("failed to write guest IP")
+    }
+
+    pub fn runtime_networks(&self) -> Vec<Networking> {
+        fs::read_to_string(self.runtime_networks_path())
+            .ok()
+            .and_then(|contents| serde_json::from_str(&contents).ok())
+            .unwrap_or_default()
+    }
+
+    pub fn set_runtime_networks(&self, networks: &[Networking]) -> Result<()> {
+        let serialized = serde_json::to_vec(networks)?;
+        safe_write::safe_write(self.runtime_networks_path(), serialized)
+            .context("failed to write runtime networks")
+    }
+
+    pub fn clear_runtime_networks(&self) -> Result<()> {
+        let path = self.runtime_networks_path();
+        if path.exists() {
+            fs::remove_file(path).context("failed to clear runtime networks")?;
+        }
+        Ok(())
     }
 
     pub fn serial_file(&self) -> PathBuf {
@@ -219,5 +247,39 @@ impl VmWorkDir {
         let compose_file = self.app_compose_path();
         let compose: AppCompose = serde_json::from_str(&fs::read_to_string(compose_file)?)?;
         Ok(compose)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        os::unix::fs::symlink,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    use anyhow::Result;
+    use fs_err as fs;
+
+    use super::VmWorkDir;
+
+    #[test]
+    fn runtime_networks_snapshot_replaces_target_instead_of_following_it() -> Result<()> {
+        let temp = std::env::temp_dir().join(format!(
+            "dstack-vmm-runtime-networks-test-{}",
+            SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos()
+        ));
+        fs::create_dir_all(&temp)?;
+        let external = temp.join("external.json");
+        fs::write(&external, "sentinel")?;
+        let workdir = VmWorkDir::new(temp.join("vm"));
+        fs::create_dir_all(workdir.path())?;
+        symlink(&external, workdir.runtime_networks_path())?;
+
+        workdir.set_runtime_networks(&[])?;
+
+        assert_eq!(fs::read_to_string(&external)?, "sentinel");
+        assert_eq!(fs::read_to_string(workdir.runtime_networks_path())?, "[]");
+        fs::remove_dir_all(temp)?;
+        Ok(())
     }
 }

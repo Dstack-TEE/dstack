@@ -32,13 +32,21 @@ use supervisor_client::SupervisorClient;
 use tracing::{debug, error, info, warn};
 
 pub use image::{Image, ImageInfo};
-pub(crate) use qemu::{resolve_networking, validate_resolved_network, validate_resolved_networks};
-pub use qemu::{VmConfig, VmWorkDir};
+pub(crate) use network::{
+    resolve_networking, resolved_networks, validate_resolved_network, validate_resolved_networks,
+};
+pub use qemu::VmConfig;
+pub use workdir::VmWorkDir;
 
+mod host_share;
 mod id_pool;
 mod image;
+mod mr_config;
+mod network;
 mod qemu;
 pub(crate) mod registry;
+mod vm_info;
+mod workdir;
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct PortMapping {
@@ -295,7 +303,7 @@ impl App {
         let vm_id = manifest.id.clone();
         let mut runtime_networks = vm_work_dir.runtime_networks();
         if runtime_networks.is_empty() && cids_assigned.contains_key(&vm_id) {
-            runtime_networks = crate::app::qemu::resolved_networks(&manifest, &self.config.cvm);
+            runtime_networks = resolved_networks(&manifest, &self.config.cvm);
             if let Err(err) = vm_work_dir.set_runtime_networks(&runtime_networks) {
                 warn!(id = %vm_id, "failed to persist inferred runtime networks: {err}");
             }
@@ -378,8 +386,7 @@ impl App {
 
             let devices = self.try_allocate_gpus(&vm_config.manifest)?;
             let processes = vm_config.config_qemu(&work_dir, &self.config.cvm, &devices)?;
-            let runtime_networks =
-                crate::app::qemu::resolved_networks(&vm_config.manifest, &self.config.cvm);
+            let runtime_networks = resolved_networks(&vm_config.manifest, &self.config.cvm);
             work_dir.set_runtime_networks(&runtime_networks)?;
             {
                 let mut state = self.lock();
@@ -556,7 +563,7 @@ impl App {
     /// Handle a DHCP lease notification: look up VM by MAC address, persist
     /// the guest IP, and reconfigure port forwarding.
     pub async fn report_dhcp_lease(&self, mac: &str, ip: &str) {
-        use crate::app::qemu::mac_address_for_vm_index;
+        use crate::app::network::mac_address_for_vm_index;
 
         let vm_id = {
             let mut state = self.lock();
@@ -912,7 +919,7 @@ impl App {
         let already_running = cids_assigned.contains_key(&vm_id);
         let mut runtime_networks = vm_work_dir.runtime_networks();
         if runtime_networks.is_empty() && already_running {
-            runtime_networks = crate::app::qemu::resolved_networks(&manifest, &self.config.cvm);
+            runtime_networks = resolved_networks(&manifest, &self.config.cvm);
             if let Err(err) = vm_work_dir.set_runtime_networks(&runtime_networks) {
                 warn!(id = %vm_id, "failed to persist inferred runtime networks: {err}");
             }
@@ -1471,7 +1478,7 @@ fn make_vm_config(
     // QEMU command (see `VmConfig::config_qemu`), which changes the guest's
     // ACPI/DSDT layout and therefore RTMR0. Measure the interface count so the
     // verifier reconstructs the exact device layout.
-    let num_nics = crate::app::qemu::resolved_networks(manifest, &cfg.cvm).len() as u32;
+    let num_nics = resolved_networks(manifest, &cfg.cvm).len() as u32;
     let mut config = serde_json::to_value(dstack_types::VmConfig {
         os_image_hash,
         cpu_count: effective_vcpus,
@@ -2097,7 +2104,7 @@ impl VmState {
 
     pub fn effective_networks(&self, cvm: &crate::config::CvmConfig) -> Vec<Networking> {
         if self.state.runtime_networks.is_empty() {
-            crate::app::qemu::resolved_networks(&self.config.manifest, cvm)
+            resolved_networks(&self.config.manifest, cvm)
         } else {
             self.state.runtime_networks.clone()
         }
