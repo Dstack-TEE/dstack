@@ -30,8 +30,8 @@ services:
     <<: *common-config
     container_name: local-key-provider
     build:
-      context: ..
-      dockerfile: build/Dockerfile.key-provider
+      context: ../..
+      dockerfile: local-key-provider/build/Dockerfile.key-provider
       # These defaults select the base snapshot and toolchain. Always record
       # the mr_enclave printed by the completed build before pinning it.
       args:

@@ -19,4 +19,6 @@ The wire protocol remains a four-byte big-endian JSON length followed by a
 `provider_quote` byte arrays.
 
 Use the `build/` directory's Docker Compose configuration to build and run the
-provider under Gramine.
+provider under Gramine. The container build uses the repository workspace's
+`Cargo.toml` and `Cargo.lock` instead of a second build-only manifest or
+lockfile.

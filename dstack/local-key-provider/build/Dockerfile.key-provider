@@ -43,26 +43,18 @@ RUN curl --proto '=https' --tlsv1.2 -fsSL \
  && rm /tmp/rustup-init
 ENV PATH="/root/.cargo/bin:${PATH}"
 
-# Build the self-contained in-tree implementation rather than cloning or
-# depending on another source repository.
-WORKDIR /local-key-provider/build
-COPY build/Cargo.standalone.toml /local-key-provider/Cargo.toml
-COPY src /local-key-provider/src
-COPY build/Makefile ./
+# Build from dstack's workspace manifest and lockfile rather than maintaining
+# provider-specific Cargo metadata or cloning another source repository.
+WORKDIR /dstack/local-key-provider/build
+COPY . /dstack
 RUN make target/release/local-key-provider \
  && find target/release -mindepth 1 -maxdepth 1 \
       ! -name local-key-provider -exec rm -rf {} + \
- && rm -rf /root/.cargo/registry /root/.cargo/git \
- && rm -f /local-key-provider/Cargo.lock
+ && rm -rf /root/.cargo/registry /root/.cargo/git
 
-COPY build/local-key-provider.manifest.template ./
 RUN gramine-sgx-gen-private-key \
  && make \
  && rm -f /root/.config/gramine/enclave-key.pem
 RUN gramine-sgx-sigstruct-view --output-format json local-key-provider.sig
 
-# Create an entrypoint script for the key provider only
-COPY build/entrypoint-local-key-provider.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
-
-ENTRYPOINT ["/entrypoint.sh"]
+ENTRYPOINT ["/dstack/local-key-provider/build/entrypoint-local-key-provider.sh"]
