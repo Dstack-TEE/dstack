@@ -1,0 +1,63 @@
+// SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network>
+//
+// SPDX-License-Identifier: Apache-2.0
+
+use std::io;
+
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+pub enum ProviderError {
+    #[error("invalid request: {0}")]
+    InvalidRequest(String),
+
+    #[error("failed to serialize protocol message: {0}")]
+    Serialization(#[from] serde_json::Error),
+
+    #[error("network I/O failed: {0}")]
+    Network(#[source] io::Error),
+
+    #[error("failed to parse {kind} quote: {reason}")]
+    QuoteParse { kind: &'static str, reason: String },
+
+    #[cfg(not(feature = "dev-mode"))]
+    #[error("TDX quote verification failed: {0}")]
+    QuoteVerification(String),
+
+    #[cfg(not(feature = "dev-mode"))]
+    #[error("SGX and TDX platform identifiers do not match")]
+    PlatformMismatch,
+
+    #[error("invalid public key in TDX report data")]
+    InvalidPublicKey,
+
+    #[error("cryptographic operation failed: {0}")]
+    Crypto(String),
+
+    #[error("attestation I/O failed while {operation}: {source}")]
+    AttestationIo {
+        operation: &'static str,
+        #[source]
+        source: io::Error,
+    },
+
+    #[error("permission denied while {operation}; process restart required: {source}")]
+    RestartRequired {
+        operation: &'static str,
+        #[source]
+        source: io::Error,
+    },
+
+    #[error("internal synchronization failed: {0}")]
+    Synchronization(&'static str),
+}
+
+impl ProviderError {
+    pub fn network(source: io::Error) -> Self {
+        Self::Network(source)
+    }
+
+    pub fn requires_restart(&self) -> bool {
+        matches!(self, Self::RestartRequired { .. })
+    }
+}

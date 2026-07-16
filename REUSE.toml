@@ -59,7 +59,7 @@ SPDX-License-Identifier = "Apache-2.0"
 path = [
     "dstack/gateway/templates/wg.conf",
     "dstack/guest-agent/templates/metrics.tpl",
-    "dstack/key-provider-build/sgx_default_qcnl.conf",
+    "dstack/local-key-provider/build/sgx_default_qcnl.conf",
 ]
 SPDX-FileCopyrightText = "Copyright (c) 2024-2025 The Project Contributors"
 SPDX-License-Identifier = "Apache-2.0"

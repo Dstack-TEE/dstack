@@ -1,10 +1,10 @@
 ---
-title: "Gramine Key Provider"
-description: "Deploy SGX-based Gramine Sealing Key Provider for CVM attestation"
+title: "Local Key Provider"
+description: "Deploy dstack's SGX-backed local key provider for CVM attestation"
 section: "Prerequisites"
 stepNumber: 4
 totalSteps: 7
-lastUpdated: 2026-01-09
+lastUpdated: 2026-07-16
 prerequisites:
   - docker-setup
 tags:
@@ -17,326 +17,144 @@ difficulty: advanced
 estimatedTime: "30 minutes"
 ---
 
-# Gramine Key Provider
+# Local Key Provider
 
-This tutorial guides you through deploying the Gramine Sealing Key Provider, an SGX-based service that solves the "chicken-and-egg" problem in CVM deployment. The key provider runs on the host and provides attestation-backed sealing keys to CVMs during boot.
+`local-key-provider` is dstack's SGX-based bootstrap key service. It solves the
+chicken-and-egg problem in which the KMS runs in a CVM but needs a stable key in
+order to boot. The service runs under Gramine on the host, verifies a requesting
+CVM's TDX quote, and returns a measurement-bound key encrypted to that CVM.
 
-## Why You Need This
+The implementation is maintained in this repository under
+`dstack/local-key-provider`; its build assets live in the `build/` subdirectory,
+and the container build does not
+clone an external key-provider repository. It currently uses the latest stable
+Gramine release, 1.9, on the Ubuntu Noble image.
 
-When deploying a dstack CVM (like the KMS), there's a fundamental bootstrapping problem:
+## Security Flow
 
-| The Problem | Why It Matters |
-|-------------|----------------|
-| CVMs need sealing keys to boot | Keys protect secrets inside the CVM |
-| KMS is the service that provides keys | But KMS itself is a CVM that needs keys |
-| **Chicken-and-egg:** KMS needs keys, but KMS provides keys | Deployment deadlock |
+1. The guest places an ephemeral X25519 public key in its TDX report data.
+2. The VMM forwards the TDX quote to `local-key-provider` over the host-only TCP
+   listener.
+3. The provider verifies the TDX quote and checks that its SGX quote has the
+   same platform identifier.
+4. Inside SGX it derives
+   `SHA-256(SGX sealing key || MRTD || RTMR0 || RTMR1 || RTMR2 || RTMR3)`.
+5. It encrypts the derived key to the guest using the libsodium sealed-box wire
+   format.
+6. It returns the ciphertext and an SGX quote whose report data binds the
+   ciphertext hash.
 
-**The Solution:** The Gramine Sealing Key Provider runs on the **host** using Intel SGX (not TDX). It can provide attestation-backed sealing keys to CVMs during their initial boot. Once the KMS CVM boots successfully, it takes over key management for subsequent deployments.
-
-## How It Works
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                       TDX Host                               │
-│                                                              │
-│  ┌──────────────────────────────────────┐                   │
-│  │     Gramine Sealing Key Provider     │                   │
-│  │          (SGX Enclave)               │                   │
-│  │                                      │                   │
-│  │  - Runs in Intel SGX enclave         │                   │
-│  │  - Listens on 0.0.0.0:3443           │                   │
-│  │  - Provides sealing keys via HTTPS   │                   │
-│  │  - Verifies TDX quotes from CVMs     │                   │
-│  └──────────────────────┬───────────────┘                   │
-│                         │                                    │
-│                         ▼ (provides keys)                    │
-│  ┌──────────────────────────────────────┐                   │
-│  │           KMS CVM (TDX)              │                   │
-│  │                                      │                   │
-│  │  - Boots with sealing key            │                   │
-│  │  - Generates TDX attestation quote   │                   │
-│  │  - Takes over key management         │                   │
-│  └──────────────────────────────────────┘                   │
-│                                                              │
-└──────────────────────────────────────────────────────────────┘
-```
-
-**Key Points:**
-- Gramine runs in an SGX enclave (not a TDX CVM)
-- Only provides keys to verified TDX CVMs
-- Uses PPID (Platform Provisioning ID) verification
-- Temporary solution until KMS CVM is running
+The guest independently verifies the SGX quote and hash before decrypting the
+key. Plaintext key material therefore never leaves either TEE.
 
 ## Prerequisites
 
-Before starting, ensure you have:
+- Intel SGX and TDX enabled in firmware
+- Docker Engine with the Compose plugin
+- `/dev/sgx_enclave` and `/dev/sgx_provision`
 
-- Completed [TDX & SGX Verification](/tutorial/tdx-sgx-verification) - SGX devices must be present
-- Docker installed and running
-- SGX devices accessible: `/dev/sgx_enclave`, `/dev/sgx_provision`
-
-### Verify SGX Devices
+Verify the devices:
 
 ```bash
-ls -la /dev/sgx*
+ls -l /dev/sgx_enclave /dev/sgx_provision
 ```
 
-Expected output:
-```
-crw------- 1 root root 10, 125 Dec  8 00:00 /dev/sgx_enclave
-crw------- 1 root root 10, 126 Dec  8 00:00 /dev/sgx_provision
-crw------- 1 root root 10, 124 Dec  8 00:00 /dev/sgx_vepc
-```
+If either device is absent, complete the TDX/SGX host setup before continuing.
 
-If these devices are missing, complete the [TDX BIOS Configuration](/tutorial/tdx-bios-configuration) tutorial first.
+## Deploy
 
----
-
-
-## Manual Deployment
-
-If you prefer to deploy manually, follow these steps.
-
-### Step 1: Clone dstack Repository
-
-Clone the dstack repository and check out the v0.5.7 release:
+Clone dstack and enter the build directory:
 
 ```bash
-cd ~
 git clone https://github.com/Dstack-TEE/dstack.git
-cd dstack
-git checkout master
+cd dstack/dstack/local-key-provider/build
 ```
 
-### Step 2: Navigate to Key Provider
+The bundled `sgx_default_qcnl.conf` points AESM at the Phala PCCS. To use a
+different PCCS, edit its `pccs_url` while keeping certificate verification
+enabled, and export the provider's base URL as `PCCS_URL` before running
+Compose.
 
-```bash
-cd ~/dstack/dstack/key-provider-build
-ls -la
-```
-
-You should see:
-- `docker-compose.yml` - Container orchestration
-- `Dockerfile.aesmd` (or similar) - SGX AESM daemon image
-- `Dockerfile.gramine` (or similar) - Gramine key provider image
-
-### Step 3: Create QCNL Configuration
-
-The key provider needs to know where to find a PCCS for quote verification. Create the QCNL configuration file:
-
-```bash
-cat > ~/dstack/dstack/key-provider-build/sgx_default_qcnl.conf << 'EOF'
-{
-  "pccs_url": "https://pccs.phala.network/sgx/certification/v4/",
-  "use_secure_cert": false,
-  "retry_times": 6,
-  "retry_delay": 10
-}
-EOF
-```
-
-This configures the key provider to use Phala Network's public PCCS for attestation verification.
-
-### Step 4: Configure Network Binding for CVM Access
-
-The default configuration binds to localhost, but CVMs need to access the key provider via the host's network. Update the port binding:
-
-```bash
-# Change from 127.0.0.1:3443 to 0.0.0.0:3443
-sed -i 's/"127\.0\.0\.1:3443:3443"/"0.0.0.0:3443:3443"/' ~/dstack/dstack/key-provider-build/docker-compose.yaml
-```
-
-> **Note:** This makes the key provider accessible from CVMs via the QEMU user-mode networking gateway (`10.0.2.2`). The key provider still verifies TDX quotes, so only legitimate CVMs can obtain keys.
-
-### Step 5: Build Docker Images
+Build and start both AESM and the provider:
 
 ```bash
 docker compose build
-```
-
-This builds two images:
-1. **aesmd** - Intel SGX Architectural Enclave Service Manager
-2. **gramine-sealing-key-provider** - The actual key provider
-
-### Step 6: Start Services
-
-```bash
 docker compose up -d
 ```
 
-This starts:
-- **aesmd container** - Provides SGX enclave services
-- **gramine-sealing-key-provider container** - Key provider on port 3443
-
-### Step 7: Verify Services Running
-
-Check container status:
+Or use the convenience script:
 
 ```bash
-docker ps | grep -E "(aesmd|gramine)"
+./run.sh
 ```
 
-Expected output shows both containers running:
-```
-abc123  aesmd                           Up 2 minutes
-def456  gramine-sealing-key-provider    Up 2 minutes
-```
+The Compose configuration publishes port 3443 on `127.0.0.1` only. Keep this
+host-only binding: guests send requests through the VMM host API and do not
+connect to the provider directly.
 
-Check aesmd logs:
+## Verify
+
+Check both containers and the listener:
 
 ```bash
-docker logs aesmd 2>&1 | tail -20
+docker compose ps
+docker compose logs --tail=50 aesmd
+docker compose logs --tail=50 local-key-provider
+ss -tln | grep '127.0.0.1:3443'
 ```
 
-Look for successful initialization messages.
+Expected results:
 
-Check key provider logs:
+- `aesmd` and `local-key-provider` are running;
+- the provider log includes `local key provider listening`; and
+- TCP port 3443 is bound only to localhost.
 
-```bash
-docker logs gramine-sealing-key-provider 2>&1 | tail -20
-```
+The endpoint is a length-prefixed JSON protocol over raw TCP, not HTTP or
+HTTPS, so `curl` is not a valid health check. An actual provisioning request is
+made automatically when a TDX CVM starts with local key provisioning enabled.
 
-Look for messages indicating the enclave is ready and listening.
+## Container Configuration
 
----
-
-## Verification
-
-### Check Port Binding
-
-```bash
-sudo ss -tlnp | grep 3443
-```
-
-Expected:
-```
-LISTEN  0  4096  0.0.0.0:3443  0.0.0.0:*  users:(("node",pid=12345,fd=7))
-```
-
-> **Note:** The `-p` flag requires sudo to show process information.
-
-> **Note:** The service binds to `0.0.0.0` to allow access from CVMs via QEMU's user-mode networking (`10.0.2.2` from the CVM's perspective).
-
-### Check SGX Enclave Status
-
-The key provider should show SGX enclave initialization in its logs:
-
-```bash
-docker logs gramine-sealing-key-provider 2>&1 | grep -i "enclave\|sgx\|quote"
-```
-
-Look for messages like:
-- `SGX enclave initialized`
-- `Quote provider ready`
-- `Listening on 0.0.0.0:3443`
-
-### Test Key Provider Endpoint
-
-The key provider uses HTTPS with a self-signed certificate. Test connectivity:
-
-```bash
-curl -sk https://127.0.0.1:3443/
-```
-
-An empty response or a brief error message indicates the service is running - the TLS handshake succeeded. The key provider doesn't serve a root endpoint; it only responds to specific API calls from CVMs.
-
-If you get `curl: (7) Failed to connect` or similar connection error, the service is not running.
-
----
-
-## How CVMs Use the Key Provider
-
-When deploying a CVM with `--local-key-provider` flag, the VMM:
-
-1. CVM boots and needs sealing key
-2. CVM generates TDX attestation quote
-3. Quote is sent to Gramine Key Provider (127.0.0.1:3443)
-4. Key Provider verifies quote authenticity
-5. Key Provider returns sealing key to CVM
-6. CVM uses key to decrypt/protect secrets
-
-This happens automatically - you don't need to configure anything in the CVM.
-
----
-
-## Architecture Details
-
-### Container Configuration
+The relevant Compose structure is:
 
 ```yaml
 services:
   aesmd:
-    # Intel SGX AESM daemon
-    # Provides enclave management services
     devices:
-      - /dev/sgx_enclave:/dev/sgx/enclave
-      - /dev/sgx_provision:/dev/sgx/provision
+      - /dev/sgx_enclave:/dev/sgx_enclave
+      - /dev/sgx_provision:/dev/sgx_provision
     volumes:
-      - /var/run/aesmd:/var/run/aesmd
+      - aesmd:/var/run/aesmd/
 
-  gramine-sealing-key-provider:
-    # Gramine-based key provider
-    # Runs inside SGX enclave
+  local-key-provider:
     depends_on:
       - aesmd
-    ports:
-      - "0.0.0.0:3443:3443"  # Accessible from CVMs via 10.0.2.2
     devices:
-      - /dev/sgx_enclave:/dev/sgx/enclave
-      - /dev/sgx_provision:/dev/sgx/provision
+      - /dev/sgx_enclave:/dev/sgx_enclave
+      - /dev/sgx_provision:/dev/sgx_provision
     volumes:
-      - /var/run/aesmd:/var/run/aesmd
+      - aesmd:/var/run/aesmd/
+    ports:
+      - "127.0.0.1:3443:3443"
 ```
-
-### Security Considerations
-
-| Aspect | Implementation |
-|--------|----------------|
-| Network binding | `0.0.0.0:3443` - accessible from CVMs via `10.0.2.2` |
-| Quote verification | Validates TDX quotes before providing keys |
-| Enclave protection | Keys never leave SGX enclave in plaintext |
-| PPID verification | Ensures keys only go to legitimate CVMs |
-
-> **Why `0.0.0.0`?** CVMs use QEMU's user-mode networking where the host appears as `10.0.2.2`. Binding to localhost would prevent CVMs from reaching the key provider. Security is maintained through TDX quote verification - only legitimate CVMs with valid attestation can obtain keys.
-
----
 
 ## Troubleshooting
 
-For detailed solutions, see the [Prerequisites Troubleshooting Guide](/tutorial/troubleshooting-prerequisites#gramine-key-provider-issues):
+For detailed solutions, see the
+[Prerequisites Troubleshooting Guide](/tutorial/troubleshooting-prerequisites#local-key-provider-issues):
 
 - [Container fails to start: SGX devices not found](/tutorial/troubleshooting-prerequisites#container-fails-to-start-sgx-devices-not-found)
 - [Error: AESM service not ready](/tutorial/troubleshooting-prerequisites#error-aesm-service-not-ready)
 - [Quote verification failures](/tutorial/troubleshooting-prerequisites#quote-verification-failures)
-- [Empty response from curl test](/tutorial/troubleshooting-prerequisites#empty-response-from-curl-test)
 - [Port 3443 already in use](/tutorial/troubleshooting-prerequisites#port-3443-already-in-use)
 - [SGX enclave initialization timeout](/tutorial/troubleshooting-prerequisites#sgx-enclave-initialization-timeout)
 
----
-
-## Verification Summary
-
-Run this verification script:
-
-```bash
-echo "AESMD Container: $(docker ps --format '{{.Names}}' | grep -q aesmd && echo 'running' || echo 'not running')"
-echo "Key Provider Container: $(docker ps --format '{{.Names}}' | grep -q gramine-sealing-key-provider && echo 'running' || echo 'not running')"
-echo "Port 3443: $(ss -tln | grep -q :3443 && echo 'listening' || echo 'not listening')"
-echo "SGX Devices: $([ -e /dev/sgx_enclave ] && [ -e /dev/sgx_provision ] && echo 'present' || echo 'missing')"
-```
-
-All checks should show positive status (running, listening, present).
-
----
-
 ## Next Steps
 
-With the Gramine Key Provider running, proceed to:
-
-- [Local Docker Registry](/tutorial/local-docker-registry) - Set up registry for CVM images
+With `local-key-provider` running, proceed to
+[Local Docker Registry](/tutorial/local-docker-registry).
 
 ## Additional Resources
 
-- [Gramine Documentation](https://gramine.readthedocs.io/)
-- [Intel SGX Developer Guide](https://download.01.org/intel-sgx/sgx-dcap/1.14/linux/docs/)
-- [dstack GitHub Repository](https://github.com/Dstack-TEE/dstack)
+- [Gramine documentation](https://gramine.readthedocs.io/)
+- [dstack source](https://github.com/Dstack-TEE/dstack)

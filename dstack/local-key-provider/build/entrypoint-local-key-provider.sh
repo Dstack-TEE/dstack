@@ -1,6 +1,6 @@
 #!/bin/sh
 
-# SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+# SPDX-FileCopyrightText: © 2025-2026 Phala Network <dstack@phala.network>
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -21,7 +21,7 @@ if [ ! -S "$AESM_SOCKET" ]; then
 fi
 
 echo "Enclave info:"
-gramine-sgx-sigstruct-view --output-format json gramine-sealing-key-provider.sig
+gramine-sgx-sigstruct-view --output-format json local-key-provider.sig
 
-echo "Starting Gramine Sealing Key Provider"
-make SGX=1 run-provider
+echo "Starting dstack Local Key Provider"
+exec make SGX=1 run-provider

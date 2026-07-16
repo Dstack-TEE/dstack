@@ -118,7 +118,7 @@ pub(crate) async fn cmd_install(mut o: InstallOpts) -> Result<()> {
     }
 
     // 8. resolve the key provider - run our own unless told to use an existing
-    //    one (TDX only; SNP has no SGX gramine provider).
+    //    one (TDX only; SNP has no SGX local provider).
     let (kp_addr, kp_port, kp_own_project) =
         resolve_key_provider(&o, platform, !o.no_start, &layout)?;
 
@@ -748,7 +748,10 @@ fn install_share_assets(source: &Path, layout: &InstallLayout) -> Result<()> {
     };
     fs::create_dir_all(&layout.share_dir)
         .with_context(|| format!("creating {}", layout.share_dir.display()))?;
-    copy_dir_exact(&core.join("key-provider-build"), &layout.key_provider_dir())?;
+    copy_dir_exact(
+        &core.join("local-key-provider"),
+        &layout.share_dir.join("local-key-provider"),
+    )?;
     copy_dir_exact(&examples, &layout.share_dir.join("examples"))?;
     println!(
         "  [ok] installed assets into {}",
@@ -801,14 +804,14 @@ fn resolve_key_provider(
         println!("  [ok] using existing key provider at {addr}:{port}");
         return Ok((addr, port, None));
     }
-    // AMD SEV-SNP has no SGX gramine key provider; the rendered [key_provider]
+    // AMD SEV-SNP has no SGX local key provider; the rendered [key_provider]
     // block is unused (the KMS-in-CVM runs with local_key_provider_enabled =
     // false), so don't require or start one.
     if platform == Platform::AmdSevSnp {
         println!("  [ok] no local key provider (sev-snp)");
         return Ok(("127.0.0.1".to_string(), o.key_provider_port, None));
     }
-    // TDX: run our own gramine provider from the installed static assets unless
+    // TDX: run our in-tree provider under Gramine from the installed assets unless
     // the operator points at an external provider or build directory.
     let default_key_provider_src = layout.key_provider_dir();
     let src = match o.key_provider_src.as_deref() {

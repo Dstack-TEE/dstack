@@ -1,4 +1,5 @@
 /dstack/target
+/dstack/local-key-provider/build/target
 /certs
 /build-config.sh
 /build/*
