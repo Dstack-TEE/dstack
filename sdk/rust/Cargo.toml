@@ -16,7 +16,7 @@ borsh = { version = "1.5.7", default-features = false, features = ["derive"] }
 hex = { version = "0.4.3", default-features = false }
 pkcs8 = { version = "0.10", default-features = false }
 serde = { version = "1.0.228", default-features = false, features = ["derive"] }
-serde_json = { version = "1.0.140", default-features = false }
+serde_json = { version = "1.0.140", default-features = false, features = ["alloc"] }
 sha2 = { version = "0.10.8", default-features = false }
 dcap-qvl = "0.3.10"
 tokio = { version = "1.46.1" }
