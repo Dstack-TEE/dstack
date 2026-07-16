@@ -149,6 +149,31 @@ has_luks_header() {
 	return 1
 }
 
+create_data_partition() {
+	local disk="$1"
+	log "Creating GPT partition table on ${disk}..."
+	if ! command -v sgdisk >/dev/null 2>&1; then
+		log "Error: sgdisk not available, cannot create partition table"
+		return 1
+	fi
+	# Create GPT with single partition filling entire disk
+	sgdisk -Z "$disk" >/dev/null || true # Zap any existing data
+	sgdisk -n 1:1MiB:0 -c 1:dstack-data -t 1:8300 "$disk" >/dev/null || return 1
+	# Trigger kernel to re-read partition table
+	blockdev --rereadpt "$disk" >/dev/null || true
+	udevadm settle >/dev/null || sleep 1
+	part_device=$(
+		lsblk -nr -o PATH "$disk" 2>/dev/null | sed -n '2p'
+	)
+	if [ -n "$part_device" ] && [ -b "$part_device" ]; then
+		log "Created partition: $part_device"
+		echo "$part_device"
+		return 0
+	fi
+	log "Failed to create partition"
+	return 1
+}
+
 choose_data_device() {
 	local override="$1"
 	local dev=""
@@ -191,11 +216,16 @@ choose_data_device() {
 		return 1
 	fi
 
-	# Do not guess which blank disk is persistent storage or destructively
-	# initialize it. Cloud deployment tooling must provision PARTLABEL=dstack-data.
-	log "Error: Empty /dev/vdb has no 'dstack-data' partition"
-	log "Provision a labeled data-disk image or specify dstack.data_device"
-	return 1
+	# 3.3. /dev/vdb is empty, create partition table
+	log "Empty disk detected at /dev/vdb, creating dstack-data partition..."
+	local new_partition
+	new_partition=$(create_data_partition /dev/vdb)
+	if [ -z "$new_partition" ]; then
+		log "Error: Failed to create partition on /dev/vdb"
+		return 1
+	fi
+	echo "$new_partition"
+	return 0
 }
 
 DATA_DEVICE_OVERRIDE=$(get_cmdline_value "dstack.data_device" || true)
