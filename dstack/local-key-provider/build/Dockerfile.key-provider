@@ -1,7 +1,15 @@
 # SPDX-FileCopyrightText: © 2024-2026 Phala Network <dstack@phala.network>
 #
 # SPDX-License-Identifier: Apache-2.0
+ARG SOURCE_DATE_EPOCH=1776902400
 FROM gramineproject/gramine:1.9-noble@sha256:bdf2d0ef9bd09fa10684e14fbe822236df35708d58a852209c5f235842ecb6d7
+ARG SOURCE_DATE_EPOCH
+
+ENV LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8 \
+    PYTHONHASHSEED=0 \
+    SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH} \
+    TZ=UTC
 
 # Pin Ubuntu apt sources to a fixed snapshot date so transitive dependencies
 # (e.g. libc6) don't drift between builds. Without this,
@@ -42,6 +50,7 @@ RUN curl --proto '=https' --tlsv1.2 -fsSL \
  && /tmp/rustup-init -y --profile minimal --default-toolchain "${RUST_TOOLCHAIN}" \
  && rm /tmp/rustup-init
 ENV PATH="/root/.cargo/bin:${PATH}"
+ENV CARGO_INCREMENTAL=0
 
 # Build from dstack's workspace manifest and lockfile rather than maintaining
 # provider-specific Cargo metadata or cloning another source repository.
