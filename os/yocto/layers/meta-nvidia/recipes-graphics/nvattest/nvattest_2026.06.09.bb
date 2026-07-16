@@ -1,5 +1,5 @@
 SUMMARY = "NVIDIA GPU attestation CLI"
-DESCRIPTION = "Builds NVIDIA's nvattest CLI. dstack-util setup runs it at boot to gate readiness on local GPU TEE attestation (app-compose requirements.verify_gpu)."
+DESCRIPTION = "Builds NVIDIA's nvattest CLI. dstack-util setup runs it at boot to gate readiness on local GPU TEE attestation (app-compose requirements.attest_gpu)."
 HOMEPAGE = "https://github.com/NVIDIA/attestation-sdk"
 LICENSE = "Apache-2.0"
 LIC_FILES_CHKSUM = "file://LICENSE;md5=e620fc90e76c4aa0c3efdd1673ca0b3b"
@@ -7,6 +7,7 @@ LIC_FILES_CHKSUM = "file://LICENSE;md5=e620fc90e76c4aa0c3efdd1673ca0b3b"
 SRC_URI = " \
     git://github.com/NVIDIA/attestation-sdk.git;protocol=https;branch=main \
     file://10-nvidia-gpu-ordering.conf \
+    file://dstack-gpu-attestation.rego \
 "
 SRCREV = "9d12801cea8a198ea0f29640dfaf8a4017c841c5"
 
@@ -100,10 +101,19 @@ do_install() {
     install -d ${D}${systemd_system_unitdir}/dstack-prepare.service.d
     install -m 0644 ${UNPACKDIR}/10-nvidia-gpu-ordering.conf \
         ${D}${systemd_system_unitdir}/dstack-prepare.service.d/10-nvidia-gpu-ordering.conf
+
+    # dstack-util passes this policy explicitly. It retains every check from
+    # the SDK's default appraisal and additionally requires production debug
+    # status. (The pinned SDK does not expose GPU mode as a Rego claim, so
+    # dstack-util separately requires CC=ON and DevTools=OFF.)
+    install -d ${D}${datadir}/nvattest
+    install -m 0644 ${UNPACKDIR}/dstack-gpu-attestation.rego \
+        ${D}${datadir}/nvattest/dstack-gpu-attestation.rego
 }
 
 FILES:${PN} += " \
     ${systemd_system_unitdir}/dstack-prepare.service.d/10-nvidia-gpu-ordering.conf \
+    ${datadir}/nvattest/dstack-gpu-attestation.rego \
     ${libdir}/lib*.so \
     ${libdir}/lib*.so.* \
 "

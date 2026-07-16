@@ -19,7 +19,7 @@ ExecStart=/usr/bin/env nvidia-persistenced --uvm-persistence-mode
 # NOTE: the GPU ready state (conf-compute -srs 1) is intentionally NOT set
 # here. It is set by `dstack-util setup` (dstack-prepare.service), only after
 # local GPU TEE attestation via nvattest succeeds -- unless the deployment
-# opts out with app-compose requirements.verify_gpu=false.
+# opts out with app-compose requirements.attest_gpu=false.
 RemainAfterExit=yes
 
 [Install]

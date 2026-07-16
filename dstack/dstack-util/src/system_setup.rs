@@ -1080,28 +1080,90 @@ mod gpu {
 
     const NVATTEST: &str = "/usr/bin/nvattest";
     const NVIDIA_SMI: &str = "/usr/bin/nvidia-smi";
+    const NVIDIA_POLICY: &str = "/usr/share/nvattest/dstack-gpu-attestation.rego";
     const ATTESTATION_OUTPUT: &str = "/run/nvidia-gpu-attestation/attestation.out";
     const ATTESTATION_TIMEOUT: Duration = Duration::from_secs(300);
     const NVIDIA_SMI_TIMEOUT: Duration = Duration::from_secs(60);
+    const EVENT_VERSION: u32 = 1;
+    const POLICY_VERSION: &str = "nvidia-cc-production-v1";
 
-    /// True if a passed-through NVIDIA GPU is present, detected via sysfs PCI
-    /// (vendor 0x10de, class VGA 0x0300xx or 3D controller 0x0302xx) so it
-    /// works even before the nvidia driver is loaded. Fails (rather than
-    /// reporting "no GPU") when the PCI bus cannot be enumerated, so a broken
-    /// /sys cannot bypass the attestation gate.
-    pub(super) fn nvidia_gpu_present() -> Result<bool> {
-        let entries =
-            fs::read_dir("/sys/bus/pci/devices").context("failed to enumerate PCI devices")?;
-        Ok(entries.filter_map(|e| e.ok()).any(|dev| {
-            let read = |name: &str| {
-                fs::read_to_string(dev.path().join(name))
-                    .unwrap_or_default()
-                    .trim()
-                    .to_string()
-            };
-            read("vendor") == "0x10de"
-                && matches!(read("class").get(..6), Some("0x0300") | Some("0x0302"))
-        }))
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(super) struct GpuInventory {
+        pub(super) total: u32,
+        pub(super) nvidia: u32,
+    }
+
+    #[derive(Debug, Serialize)]
+    struct GpuAttestationEvent {
+        version: u32,
+        provider: &'static str,
+        devices: u32,
+        policy: &'static str,
+        cc_mode: &'static str,
+        devtools: bool,
+        evidence_sha256: String,
+    }
+
+    #[derive(Deserialize)]
+    struct NvattestOutput {
+        result_code: i64,
+        claims: Vec<Value>,
+    }
+
+    /// Count passed-through display-class GPUs through sysfs so devices which
+    /// the NVIDIA driver did not bind cannot be hidden from the gate. Reading
+    /// the inventory is fail-closed: a mixed NVIDIA/non-NVIDIA set must not be
+    /// represented by an attestation result for only the NVIDIA subset.
+    pub(super) fn gpu_inventory() -> Result<GpuInventory> {
+        gpu_inventory_at(Path::new("/sys/bus/pci/devices"))
+    }
+
+    fn gpu_inventory_at(devices_path: &Path) -> Result<GpuInventory> {
+        let entries = fs::read_dir(devices_path).context("failed to enumerate PCI devices")?;
+        let mut inventory = GpuInventory {
+            total: 0,
+            nvidia: 0,
+        };
+        for entry in entries {
+            let device = entry.context("failed to read PCI device entry")?;
+            let class_path = device.path().join("class");
+            let class = fs::read_to_string(&class_path)
+                .with_context(|| format!("failed to read {}", class_path.display()))?;
+            if !matches!(class.trim().get(..6), Some("0x0300") | Some("0x0302")) {
+                continue;
+            }
+            inventory.total += 1;
+            let vendor_path = device.path().join("vendor");
+            let vendor = fs::read_to_string(&vendor_path)
+                .with_context(|| format!("failed to read {}", vendor_path.display()))?;
+            if vendor.trim() == "0x10de" {
+                inventory.nvidia += 1;
+            }
+        }
+        Ok(inventory)
+    }
+
+    /// Bind the runtime inventory to `vm_config.num_gpus`. On TDX this config
+    /// affects the measured launch layout, so a remote verifier can compare the
+    /// event's device count with the same quote-bound value.
+    pub(super) fn expected_gpu_count(vm_config: &str, inventory: GpuInventory) -> Result<u32> {
+        if inventory.total != inventory.nvidia {
+            bail!(
+                "unsupported non-NVIDIA GPU attached: found {} display GPUs, {} NVIDIA",
+                inventory.total,
+                inventory.nvidia
+            );
+        }
+        let vm_config: dstack_types::VmConfig = serde_json::from_str(vm_config)
+            .context("failed to parse vm_config for GPU attestation")?;
+        let expected = vm_config.num_gpus;
+        if inventory.total != expected {
+            bail!(
+                "gpu count mismatch: vm_config requires {expected}, found {}",
+                inventory.total
+            );
+        }
+        Ok(expected)
     }
 
     /// Run a GPU tool with a bounded timeout so a wedged driver/GPU cannot
@@ -1119,6 +1181,50 @@ mod gpu {
         .await
         .with_context(|| format!("{program} timed out"))?
         .with_context(|| format!("failed to run {program}"))
+    }
+
+    fn parse_nvidia_smi_state(stdout: &[u8], name: &str) -> Result<bool> {
+        let output = std::str::from_utf8(stdout)
+            .with_context(|| format!("nvidia-smi returned non-UTF-8 {name}"))?;
+        let states = output
+            .split(|ch: char| !ch.is_ascii_alphanumeric())
+            .filter_map(|word| match word.to_ascii_lowercase().as_str() {
+                "on" | "enabled" => Some(true),
+                "off" | "disabled" => Some(false),
+                _ => None,
+            })
+            .collect::<BTreeSet<_>>();
+        if states.len() != 1 {
+            bail!("unable to parse nvidia-smi {name}");
+        }
+        states.first().copied().context("missing nvidia-smi state")
+    }
+
+    async fn query_nvidia_smi_state(argument: &str, name: &str) -> Result<bool> {
+        let output =
+            run_command(NVIDIA_SMI, &["conf-compute", argument], NVIDIA_SMI_TIMEOUT).await?;
+        if !output.status.success() {
+            bail!(
+                "nvidia-smi conf-compute {argument} failed ({}): {}",
+                output.status,
+                truncated_lossy(&output.stderr, 512),
+            );
+        }
+        parse_nvidia_smi_state(&output.stdout, name)
+    }
+
+    /// Require the current system-wide GPU state to be production CC. NVAT's
+    /// NVML collector accepts protected-PCIe as well as CC and its default
+    /// appraisal does not reject DevTools, so a successful appraisal alone is
+    /// not a sufficient confidentiality check.
+    async fn verify_production_cc_mode() -> Result<()> {
+        if !query_nvidia_smi_state("-f", "CC feature state").await? {
+            bail!("nvidia confidential compute mode is not enabled");
+        }
+        if query_nvidia_smi_state("-d", "DevTools mode").await? {
+            bail!("nvidia DevTools mode is enabled");
+        }
+        Ok(())
     }
 
     /// Mark the GPU as ready to accept work. Only meaningful (and only
@@ -1141,13 +1247,89 @@ mod gpu {
         Ok(())
     }
 
-    /// Run local GPU attestation via nvattest with a fresh nonce, keeping the
-    /// verifier output in /run for debugging. Fails on any non-zero exit —
-    /// including a GPU that cannot produce an attestation report at all (a
-    /// non-CC GPU, or CC mode left off by the host).
-    pub(super) async fn attest_gpu() -> Result<()> {
+    fn validate_attestation_output(
+        stdout: &[u8],
+        nonce: &str,
+        expected_devices: u32,
+    ) -> Result<()> {
+        let output: NvattestOutput =
+            serde_json::from_slice(stdout).context("failed to parse nvattest JSON output")?;
+        if output.result_code != 0 {
+            bail!("nvattest JSON result is not successful");
+        }
+        if output.claims.len() != expected_devices as usize {
+            bail!(
+                "gpu attestation count mismatch: expected {expected_devices}, got {}",
+                output.claims.len()
+            );
+        }
+        for (index, claim) in output.claims.iter().enumerate() {
+            let claim = claim
+                .as_object()
+                .with_context(|| format!("invalid GPU claim at index {index}"))?;
+            let string_claim = |name: &str| claim.get(name).and_then(Value::as_str);
+            let valid_cert_chain = |name: &str| {
+                let cert = claim.get(name).and_then(Value::as_object)?;
+                Some(
+                    cert.get("x-nvidia-cert-status").and_then(Value::as_str) == Some("valid")
+                        && cert
+                            .get("x-nvidia-cert-ocsp-status")
+                            .and_then(Value::as_str)
+                            == Some("good")
+                        && cert
+                            .get("x-nvidia-cert-ocsp-nonce-matches")
+                            .and_then(Value::as_bool)
+                            == Some(true)
+                        && cert
+                            .get("x-nvidia-cert-ocsp-response-valid")
+                            .and_then(Value::as_bool)
+                            == Some(true),
+                )
+            };
+            if string_claim("x-nvidia-device-type") != Some("gpu")
+                || claim.get("secboot").and_then(Value::as_bool) != Some(true)
+                || string_claim("dbgstat") != Some("disabled")
+                || string_claim("measres") != Some("success")
+                || valid_cert_chain("x-nvidia-gpu-attestation-report-cert-chain") != Some(true)
+                || valid_cert_chain("x-nvidia-gpu-driver-rim-cert-chain") != Some(true)
+                || valid_cert_chain("x-nvidia-gpu-vbios-rim-cert-chain") != Some(true)
+            {
+                bail!("gpu claim at index {index} violates the production policy");
+            }
+            if string_claim("eat_nonce") != Some(nonce)
+                || claim
+                    .get("x-nvidia-gpu-attestation-report-nonce-match")
+                    .and_then(Value::as_bool)
+                    != Some(true)
+            {
+                bail!("gpu claim at index {index} has an invalid nonce");
+            }
+        }
+        Ok(())
+    }
+
+    fn attestation_event(stdout: &[u8], devices: u32) -> Result<Vec<u8>> {
+        let event = GpuAttestationEvent {
+            version: EVENT_VERSION,
+            provider: "nvidia",
+            devices,
+            policy: POLICY_VERSION,
+            cc_mode: "on",
+            devtools: false,
+            evidence_sha256: hex::encode(sha256(stdout)),
+        };
+        serde_json::to_vec(&event).context("failed to serialize GPU attestation event")
+    }
+
+    /// Run local GPU attestation via nvattest with a fresh nonce and a
+    /// mandatory relying-party policy. The JSON output is preserved under
+    /// /run; its hash is returned in a versioned summary for RTMR3.
+    pub(super) async fn attest_gpu(expected_devices: u32) -> Result<Vec<u8>> {
         if !Path::new(NVATTEST).exists() {
             bail!("nvattest is not available in this image");
+        }
+        if !Path::new(NVIDIA_POLICY).exists() {
+            bail!("gpu attestation policy is not available in this image");
         }
         // Certificate/OCSP validation needs a sane clock even when
         // secure_time is off; best-effort step chrony before attesting.
@@ -1163,8 +1345,12 @@ mod gpu {
                 "gpu",
                 "--verifier",
                 "local",
+                "--relying-party-policy",
+                NVIDIA_POLICY,
                 "--nonce",
                 &nonce,
+                "--format",
+                "json",
             ],
             ATTESTATION_TIMEOUT,
         )
@@ -1179,10 +1365,10 @@ mod gpu {
                 truncated_lossy(&output.stderr, 512),
             );
         }
-        if let Err(err) = save_attestation_output(&output.stdout) {
-            warn!("failed to save GPU attestation output: {err:?}");
-        }
-        Ok(())
+        validate_attestation_output(&output.stdout, &nonce, expected_devices)?;
+        verify_production_cc_mode().await?;
+        save_attestation_output(&output.stdout).context("failed to save GPU attestation output")?;
+        attestation_event(&output.stdout, expected_devices)
     }
 
     fn save_attestation_output(stdout: &[u8]) -> Result<()> {
@@ -1206,6 +1392,117 @@ mod gpu {
             None => text.to_string(),
         }
     }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        fn add_pci_device(root: &Path, name: &str, vendor: &str, class: &str) {
+            let device = root.join(name);
+            fs::create_dir_all(&device).unwrap();
+            fs::write(device.join("vendor"), vendor).unwrap();
+            fs::write(device.join("class"), class).unwrap();
+        }
+
+        fn nvattest_output(nonce: &str, claims: usize) -> Vec<u8> {
+            let cert_chain = serde_json::json!({
+                "x-nvidia-cert-status": "valid",
+                "x-nvidia-cert-ocsp-status": "good",
+                "x-nvidia-cert-ocsp-nonce-matches": true,
+                "x-nvidia-cert-ocsp-response-valid": true
+            });
+            let claims = (0..claims)
+                .map(|_| {
+                    serde_json::json!({
+                        "x-nvidia-device-type": "gpu",
+                        "secboot": true,
+                        "dbgstat": "disabled",
+                        "measres": "success",
+                        "eat_nonce": nonce,
+                        "x-nvidia-gpu-attestation-report-nonce-match": true,
+                        "x-nvidia-gpu-attestation-report-cert-chain": cert_chain,
+                        "x-nvidia-gpu-driver-rim-cert-chain": cert_chain,
+                        "x-nvidia-gpu-vbios-rim-cert-chain": cert_chain
+                    })
+                })
+                .collect::<Vec<_>>();
+            serde_json::to_vec(&serde_json::json!({
+                "result_code": 0,
+                "claims": claims,
+                "detached_eat": {}
+            }))
+            .unwrap()
+        }
+
+        #[test]
+        fn inventory_counts_nvidia_and_non_nvidia_gpus() {
+            let root = tempfile::tempdir().unwrap();
+            add_pci_device(root.path(), "0000:01:00.0", "0x10de\n", "0x030200\n");
+            add_pci_device(root.path(), "0000:02:00.0", "0x1234\n", "0x030000\n");
+            add_pci_device(root.path(), "0000:03:00.0", "0x1af4\n", "0x020000\n");
+            assert_eq!(
+                gpu_inventory_at(root.path()).unwrap(),
+                GpuInventory {
+                    total: 2,
+                    nvidia: 1
+                }
+            );
+        }
+
+        #[test]
+        fn expected_count_rejects_mixed_or_unmeasured_gpus() {
+            let mixed = GpuInventory {
+                total: 2,
+                nvidia: 1,
+            };
+            assert!(expected_gpu_count(r#"{"num_gpus":2}"#, mixed).is_err());
+
+            let nvidia = GpuInventory {
+                total: 2,
+                nvidia: 2,
+            };
+            let err = expected_gpu_count(r#"{"num_gpus":1}"#, nvidia).unwrap_err();
+            assert!(err.to_string().contains("gpu count mismatch"));
+            assert_eq!(expected_gpu_count(r#"{"num_gpus":2}"#, nvidia).unwrap(), 2);
+        }
+
+        #[test]
+        fn nvidia_smi_state_parser_is_fail_closed() {
+            assert!(parse_nvidia_smi_state(b"CC status: ON\n", "CC").unwrap());
+            assert!(!parse_nvidia_smi_state(b"DevTools Mode: OFF\n", "DevTools").unwrap());
+            assert!(parse_nvidia_smi_state(b"unknown\n", "CC").is_err());
+            assert!(parse_nvidia_smi_state(b"current: ON, pending: OFF\n", "CC").is_err());
+        }
+
+        #[test]
+        fn nvattest_output_requires_every_expected_production_gpu() {
+            let nonce = "11".repeat(32);
+            let valid = nvattest_output(&nonce, 2);
+            validate_attestation_output(&valid, &nonce, 2).unwrap();
+            assert!(validate_attestation_output(&valid, &nonce, 1).is_err());
+
+            let mut invalid: Value = serde_json::from_slice(&valid).unwrap();
+            invalid["claims"][1]["dbgstat"] = Value::String("enabled".to_string());
+            assert!(
+                validate_attestation_output(&serde_json::to_vec(&invalid).unwrap(), &nonce, 2)
+                    .is_err()
+            );
+        }
+
+        #[test]
+        fn event_commits_to_complete_nvattest_output() {
+            let nonce = "22".repeat(32);
+            let output = nvattest_output(&nonce, 1);
+            let event: Value =
+                serde_json::from_slice(&attestation_event(&output, 1).unwrap()).unwrap();
+            assert_eq!(event["version"], EVENT_VERSION);
+            assert_eq!(event["devices"], 1);
+            assert_eq!(event["policy"], POLICY_VERSION);
+            assert_eq!(event["cc_mode"], "on");
+            assert_eq!(event["devtools"], false);
+            assert_eq!(event["evidence_sha256"], hex::encode(sha256(&output)));
+        }
+    }
 }
 
 impl Stage0<'_> {
@@ -1213,10 +1510,11 @@ impl Stage0<'_> {
     /// NVIDIA GPU before continuing to key provisioning, or — when explicitly
     /// disabled — set the GPU ready state without verification.
     async fn setup_gpu(&self) -> Result<()> {
-        if !gpu::nvidia_gpu_present()? {
-            return Ok(());
-        }
+        let inventory = gpu::gpu_inventory()?;
         if !self.shared.app_compose.attest_gpu() {
+            if inventory.nvidia == 0 {
+                return Ok(());
+            }
             warn!("requirements.attest_gpu is false; setting GPU ready state without attestation");
             // Best-effort: a GPU with CC mode off has no ready state to set.
             if let Err(err) = gpu::set_gpu_ready_state().await {
@@ -1224,10 +1522,17 @@ impl Stage0<'_> {
             }
             return Ok(());
         }
+        let expected_devices =
+            gpu::expected_gpu_count(&self.shared.sys_config.vm_config, inventory)?;
+        if expected_devices == 0 {
+            return Ok(());
+        }
         self.vmm.notify_q("boot.progress", "attesting GPU").await;
         info!("verifying GPU TEE attestation");
-        gpu::attest_gpu().await?;
+        let event = gpu::attest_gpu(expected_devices).await?;
         gpu::set_gpu_ready_state().await?;
+        emit_runtime_event("gpu-attestation", &event)
+            .context("failed to emit GPU attestation event")?;
         info!("GPU TEE attestation succeeded");
         Ok(())
     }

@@ -8,7 +8,7 @@ This document helps you evaluate whether dstack's security model fits your needs
 
 dstack removes the need to trust most infrastructure operators. On TEE platforms such as Intel TDX and AMD SEV-SNP, the cloud or host operator cannot read your protected memory, modify your measured code, or access your secrets without detection. On AWS EC2 NitroTPM attested instances, AWS Nitro is part of the trusted platform, and the untrusted party is the workload AWS account administrator/operator. Network attackers cannot intercept your traffic because TLS terminates inside the attested environment with keys controlled by that environment (Zero Trust HTTPS). Docker registries cannot serve malicious images because the guest verifies SHA256 digests before pulling.
 
-The primary trust input is **attested platform hardware**. Intel TDX is the production TEE path. AMD SEV-SNP is available where the selected dstack OS image and host support it, but it is new and experimental. AWS EC2 NitroTPM attested instances use a different trust root: the AWS Nitro system and AWS NitroTPM attestation PKI. In that mode, the threat model protects against the workload AWS account administrator and EC2 operator actions, but AWS remains trusted. For GPU workloads, you also trust **NVIDIA GPU hardware** and NVIDIA's Remote Attestation Service (NRAS). These are hardware-level trust assumptions.
+The primary trust input is **attested platform hardware**. Intel TDX is the production TEE path. AMD SEV-SNP is available where the selected dstack OS image and host support it, but it is new and experimental. AWS EC2 NitroTPM attested instances use a different trust root: the AWS Nitro system and AWS NitroTPM attestation PKI. In that mode, the threat model protects against the workload AWS account administrator and EC2 operator actions, but AWS remains trusted. For GPU workloads, you also trust **NVIDIA GPU hardware**, NVIDIA's attestation PKI/RIMs, and its revocation service (or NRAS when a deployment selects remote verification). These are hardware-level trust assumptions.
 
 Everything else is verifiable.
 
@@ -55,11 +55,27 @@ dstack supports NVIDIA H100, H200, and B200 GPUs in confidential compute mode fo
 
 ### How It Works
 
-GPUs are passed through via VFIO directly to the TEE-protected CVM. The GPU operates in confidential compute mode, encrypting data during computation. Both the CPU TEE and NVIDIA GPU provide hardware isolation together. If either component fails verification, the security model breaks.
+GPUs are passed through via VFIO to the TEE-protected CVM. Before key provisioning, `dstack-util setup` inventories every VGA/3D-controller PCI function, compares that count with `vm_config.num_gpus`, and runs NVIDIA's local `nvattest` verifier over every NVIDIA-driver-visible GPU with a fresh nonce. A mandatory relying-party policy requires secure boot and disabled debug status. Separate fail-closed `nvidia-smi` queries require the current CC feature to be ON and DevTools mode to be OFF. Only then does dstack set the GPU ready state.
 
 ### Dual Attestation
 
-GPU workloads require verification of both hardware components. The CPU TEE provides the quote that verifies CPU and memory isolation. NVIDIA's Remote Attestation Service (NRAS) independently verifies the GPU is genuine and running in confidential mode. Both attestations must pass for complete verification.
+GPU workloads require verification of both hardware components. The CPU TEE quote verifies the CVM and its measured guest code. NVIDIA-signed evidence, checked against NVIDIA RIMs and certificate status by `nvattest`, verifies the GPU appraisal. After the ready-state operation succeeds, dstack emits a `gpu-attestation` launch event before `system-ready`. Its versioned payload records the number of appraised devices, policy version, asserted CC/DevTools state, and SHA-256 of the complete nvattest JSON output (claims and detached EAT). On TDX this event is append-only in RTMR3; it is never derived from application-controlled `report_data`.
+
+A verifier must replay the measured event log, require exactly one pre-`system-ready` `gpu-attestation` event when GPU protection is required, require `devices == vm_config.num_gpus > 0`, and accept the named policy version. The raw file under `/run/nvidia-gpu-attestation/attestation.out` is not trusted by itself; if it is supplied for inspection, its digest must match the event.
+
+### GPU Threat Model and Lifetime
+
+The GPU gate assumes a malicious host/VMM and untrusted host-provided PCI topology, while trusting the CPU TEE, the measured dstack guest/kernel, NVIDIA hardware/firmware roots, and the cryptography used by both attestation chains. Availability is out of scope.
+
+The event makes the following **boot-time** statement: immediately before key provisioning, all attached VGA/3D PCI functions were NVIDIA devices, their count matched the quote-bound VM configuration, nvattest returned one fresh production-policy claim for each device, CC was ON, DevTools was OFF, and setting the GPU ready state succeeded. This closes these cases:
+
+- A GPU-less launch cannot be presented as a GPU-verified launch: it has `num_gpus == 0` and no `gpu-attestation` event.
+- A mixed launch cannot attest only its TEE-capable subset. Non-NVIDIA display GPUs are rejected, and the sysfs, `vm_config`, and nvattest claim counts must all agree. A non-CC NVIDIA GPU either prevents evidence collection/appraisal or causes that count/policy check to fail.
+- Copying another CVM's result into a file or `report_data` does not work. Only measured pre-application code can place the event before `system-ready`, and event-log replay binds it to the quoted RTMR/PCR value.
+
+This is **not a lifetime or physical co-location guarantee**. After `system-ready`, an application with sufficient guest privileges can unload the NVIDIA driver, and a malicious host may attempt PCI hot-remove/replacement or proxy GPU traffic. The boot event remains a true historical statement but does not prove that the same device is still attached. dstack also cannot rule out a live relay/cuckoo attack to a genuine remote GPU: current Hopper/Blackwell deployments do not provide a CPU-TEE-verifiable TEE-I/O/TDISP device binding. Applications that mutate the driver or PCI topology are outside this guarantee; higher-assurance deployments must prevent that behavior and re-attest before using a newly initialized GPU.
+
+AMD SEV-SNP has no runtime measurement register in the current dstack stack. The local boot gate can still fail closed, but a `gpu-attestation` event carried beside an SNP report is not remotely bound to that report and must not be accepted as dual-attestation evidence. SNP needs a measured vTPM/PCR channel before it can provide the same remote binding.
 
 ### AI Workload Protection
 
@@ -155,6 +171,12 @@ Use this checklist to verify a workload running in a dstack CVM.
 - [ ] Launch event log replays correctly (RTMR3 on TDX-family platforms, PCR14 on AWS NitroTPM)
 - [ ] Config commitment matches the expected app/config target (on AWS: PCR14 replay; PCR8 is an optional shortcut — see the [AWS verifier runbook](../aws-ec2-production-verifier-runbook.md))
 - [ ] reportData contains your challenge (replay protection)
+
+**GPU verification (when required):**
+- [ ] `vm_config.num_gpus` is greater than zero and matches the expected deployment
+- [ ] Exactly one `gpu-attestation` event appears before `system-ready`
+- [ ] The event device count matches `vm_config.num_gpus`, and its policy/CC/DevTools fields match the production policy
+- [ ] The platform binds the event log to a quoted RTMR/PCR (do not accept it from current SEV-SNP evidence)
 
 **Key management verification:**
 - [ ] key-provider matches expected KMS identity
