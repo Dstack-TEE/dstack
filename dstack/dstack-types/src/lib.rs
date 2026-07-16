@@ -180,7 +180,7 @@ pub struct Requirements {
     /// Optional application GPU policy applied before key provisioning.
     ///
     /// Its default-expanded, JCS-canonicalized JSON SHA-256 digest is emitted
-    /// as the `gpu-policy` launch event immediately after `compose-hash`.
+    /// as the `gpu-policy-hash` launch event immediately after `compose-hash`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gpu_policy: Option<GpuPolicy>,
 }

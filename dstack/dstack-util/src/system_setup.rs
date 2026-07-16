@@ -1744,7 +1744,7 @@ impl Stage0<'_> {
             .as_ref()
             .and_then(|requirements| requirements.gpu_policy.as_ref());
         if let Some(policy) = gpu_policy {
-            emit_runtime_event("gpu-policy", &gpu::policy_digest(policy)?)?;
+            emit_runtime_event("gpu-policy-hash", &gpu::policy_digest(policy)?)?;
         }
         attestation
             .verify_claim_policy(gpu_policy)
