@@ -8,10 +8,8 @@ inherit systemd
 DSTACK_MONOREPO_ROOT ?= "${@os.path.realpath(os.path.join(d.getVar('THISDIR'), '../../../../../..'))}"
 DSTACK_CORE_SRC ?= "${DSTACK_MONOREPO_ROOT}/dstack"
 DSTACK_RUST_SDK_SRC ?= "${DSTACK_MONOREPO_ROOT}/sdk/rust"
-DSTACK_ROOTFS_SRC ?= "${DSTACK_MONOREPO_ROOT}/os/common/rootfs"
 
 S = "${UNPACKDIR}/repo/dstack"
-DSTACK_ROOTFS_FILES = "${UNPACKDIR}/repo/os/common/rootfs"
 
 DEPENDS += "rsync-native"
 RDEPENDS:${PN} += "fuse3-utils kernel-module-fuse"
@@ -24,17 +22,16 @@ EXTRA_CARGO_FLAGS = "-p dstack-tee-simulator"
 inherit cargo_bin
 
 do_unpack() {
-    install -d "${S}" "${UNPACKDIR}/repo/sdk/rust" "${DSTACK_ROOTFS_FILES}"
+    install -d "${S}" "${UNPACKDIR}/repo/sdk/rust"
     rsync -a --exclude=".git" --exclude=".worktrees" --exclude="target" \
         "${DSTACK_CORE_SRC}/" "${S}/"
     rsync -a --exclude=".git" --exclude="target" \
         "${DSTACK_RUST_SDK_SRC}/" "${UNPACKDIR}/repo/sdk/rust/"
-    rsync -a "${DSTACK_ROOTFS_SRC}/" "${DSTACK_ROOTFS_FILES}/"
 }
 
 do_unpack[cleandirs] = "${UNPACKDIR}/repo"
 do_unpack[nostamp] = "1"
-do_unpack[vardeps] += "DSTACK_CORE_SRC DSTACK_RUST_SDK_SRC DSTACK_ROOTFS_SRC"
+do_unpack[vardeps] += "DSTACK_CORE_SRC DSTACK_RUST_SDK_SRC"
 
 do_configure() {
     cargo_bin_do_configure
@@ -49,14 +46,19 @@ do_compile[network] = "1"
 do_install() {
     install -d ${D}${bindir} ${D}${systemd_system_unitdir}
     install -m 0755 ${CARGO_BINDIR}/dstack-tee-simulator ${D}${bindir}
-    install -m 0644 ${DSTACK_ROOTFS_FILES}/dstack-tee-simulator.service \
+    install -m 0644 ${THISDIR}/files/dstack-tee-simulator.service \
         ${D}${systemd_system_unitdir}
 
     install -d ${D}${sysconfdir}/systemd/system/dstack-prepare.service.d
-    install -m 0644 \
-        ${DSTACK_ROOTFS_FILES}/dstack-prepare.service.d/tee-simulator.conf \
+    install -m 0644 ${THISDIR}/files/tee-simulator.conf \
         ${D}${sysconfdir}/systemd/system/dstack-prepare.service.d/tee-simulator.conf
 }
+
+# Unit/drop-in live next to this recipe; include them in task checksums.
+do_install[file-checksums] += "\
+    ${THISDIR}/files/dstack-tee-simulator.service:True \
+    ${THISDIR}/files/tee-simulator.conf:True \
+"
 
 FILES:${PN} += "${sysconfdir}/systemd/system/dstack-prepare.service.d/tee-simulator.conf"
 

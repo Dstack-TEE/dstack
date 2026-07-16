@@ -17,7 +17,7 @@ use crate::TeeBackend;
 
 const TDX_DEFAULT_MOUNTPOINT: &str = "/sys/kernel/config/tsm/report";
 const PROVIDER_NAME: &str = "com.intel.dcap";
-const PROVIDER_VALUE: &[u8] = b"tdx_guest_sim\n";
+const PROVIDER_VALUE: &[u8] = b"tdx_guest\n";
 const DIRECT_IO: u32 = 1;
 const TTL: Duration = Duration::ZERO;
 
