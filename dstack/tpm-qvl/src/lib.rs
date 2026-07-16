@@ -30,6 +30,9 @@ pub fn get_root_ca(platform: Platform) -> Result<&'static str> {
         Platform::NitroEnclave => {
             bail!("Nitro Enclave uses NSM attestation, not TPM. Use nsm-qvl instead.")
         }
+        Platform::AwsEc2 => {
+            bail!("AWS EC2 uses NitroTPM attestation documents, not GCP AK TPM quotes.")
+        }
         Platform::Dstack => bail!("dstack platform does not use TPM attestation"),
     }
 }

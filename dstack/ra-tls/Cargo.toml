@@ -47,3 +47,6 @@ rmp-serde.workspace = true
 
 [features]
 quote = ["dstack-attest/quote"]
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }

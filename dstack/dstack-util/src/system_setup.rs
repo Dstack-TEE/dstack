@@ -727,13 +727,13 @@ fn truncate(s: &[u8], len: usize) -> &[u8] {
 /// same `instance_id`. To keep `instance_id` unique per running VM we mix in a
 /// per-instance value that lives outside the cloneable disk.
 ///
-/// On GCP we use the public key of the pre-provisioned vTPM Attestation Key. The AK
-/// is derived deterministically from the per-instance Endorsement seed held in the
-/// vTPM (not on the data disk), so a VM cloned from a disk image derives a different
-/// AK while a reboot/stop-start of the same VM keeps it stable — exactly the property
-/// we need. We hash the AK public area rather than its certificate so the binding is
-/// immune to certificate re-issuance (a re-signed cert carries new serial/validity/
-/// signature bytes for the same key).
+/// On GCP we use the public key of the pre-provisioned vTPM Attestation Key. On
+/// AWS EC2 we create the deterministic endorsement primary key and use its
+/// public area. Both values are derived from per-instance TPM state, not from the
+/// cloneable data disk, so a disk snapshot launched as a new VM gets a different
+/// binding while reboot/stop-start of the same VM keeps it stable. We hash public
+/// areas rather than certificates so the binding is immune to certificate
+/// re-issuance.
 ///
 /// Returns `Ok(None)` on platforms with no such binding; the `instance_id` then
 /// keeps its previous seed-only derivation. Fails closed: if the platform is known
@@ -754,6 +754,19 @@ fn platform_instance_binding() -> Result<Option<Vec<u8>>> {
                 bail!("gcp vTPM AK public area is empty");
             }
             Ok(Some(sha256(&ak.pub_area).to_vec()))
+        }
+        Some(Platform::AwsEc2) => {
+            let mut tpm = tpm2::TpmContext::new(None).context("failed to open NitroTPM")?;
+            let template = tpm2::TpmtPublic::rsa_ek();
+            let (handle, public_area) = tpm
+                .create_primary(tpm2::tpm_rh::ENDORSEMENT, &template)
+                .context("failed to create NitroTPM endorsement primary key")?;
+            let flush_result = tpm.flush_context(handle);
+            if public_area.is_empty() {
+                bail!("NitroTPM endorsement public area is empty");
+            }
+            flush_result.context("failed to flush NitroTPM endorsement primary key")?;
+            Ok(Some(sha256(&public_area).to_vec()))
         }
         _ => Ok(None),
     }
@@ -1346,7 +1359,7 @@ impl<'a> Stage0<'a> {
                 if let Some(att) = &cert.attestation {
                     match att.decode_app_info(false) {
                         Ok(kms_info) => emit_runtime_event("mr-kms", &kms_info.mr_aggregated)
-                            .context("Failed to extend mr-kms to RTMR3")?,
+                            .context("failed to extend mr-kms to the launch measurement")?,
                         Err(err) if is_unsupported_app_info_quote(&err) => {
                             warn!("Skipping mr-kms runtime event for unsupported attestation quote: {err:#}");
                         }
@@ -1368,7 +1381,7 @@ impl<'a> Stage0<'a> {
             .context("Failed to get app key")?;
 
         emit_runtime_event("os-image-hash", &response.os_image_hash)
-            .context("Failed to extend os-image-hash to RTMR3")?;
+            .context("failed to extend os-image-hash to the launch measurement")?;
 
         let (_, ca_pem) = x509_parser::pem::parse_x509_pem(tmp_ca.ca_cert.as_bytes())
             .context("Failed to parse ca cert")?;
@@ -1453,10 +1466,12 @@ impl<'a> Stage0<'a> {
     fn generate_tpm_app_keys(&self) -> Result<AppKeys> {
         let tpm = TpmContext::detect().context("failed to detect TPM context")?;
 
-        // Get PCR policy for sealing (boot chain + app PCR)
-        let pcr_policy = tpm::dstack_pcr_policy();
+        // PCR policy: platform-specific (AWS: sha384 PCR4/7/8/12/14)
+        let platform = dstack_types::Platform::detect().context("failed to detect platform")?;
+        let pcr_policy =
+            tpm::dstack_pcr_policy_for_platform(platform).context("unsupported TPM platform")?;
 
-        // Try to read sealed seed (bound to PCR values including app PCR)
+        // Try to read sealed seed (bound to boot/config/event PCRs)
         if let Some(seed) = tpm
             .unseal::<32>(tpm::SEALED_NV_INDEX, tpm::PRIMARY_KEY_HANDLE, &pcr_policy)
             .context("failed to unseal from TPM")?
@@ -1472,7 +1487,7 @@ impl<'a> Stage0<'a> {
         // No sealed seed exists, generate new one
         info!("no sealed seed found, generating new seed...");
         let seed: [u8; 32] = tpm.get_random().context("TPM RNG unavailable")?;
-        // Seal the new seed to TPM with PCR policy (including app PCR)
+        // Seal the new seed under the platform PCR policy
         tpm.seal(
             &seed,
             tpm::SEALED_NV_INDEX,
@@ -1870,8 +1885,8 @@ impl<'a> Stage0<'a> {
         // app_id is the deploy-time instance_info.app_id (which defaults to the
         // truncated compose hash when unset, see above). Previously the non-KMS
         // path forced the compose-derived value; now a deployment may pin an
-        // explicit app_id even without a KMS. The app_id is measured into RTMR3
-        // (emit_runtime_event below), so a verifier sees exactly this value — with
+        // explicit app_id even without a KMS. The app_id is measured into the
+        // platform launch register, so a verifier sees exactly this value. With
         // no KMS to bind it, the relying party MUST gate the compose_hash
         // (which launcher build) separately from the app_id (which app).
 
@@ -1880,6 +1895,28 @@ impl<'a> Stage0<'a> {
         emit_runtime_event("compose-hash", &compose_hash)?;
         emit_runtime_event("instance-id", &instance_id)?;
         emit_runtime_event("boot-mr-done", &[])?;
+
+        // AWS: commit the measured app identity into PCR8 (mr_config analogue).
+        // The config id is computed from measured reality (MrConfig V2), so
+        // there is no host-supplied claim to cross-check later. key_provider_id
+        // is the deploy-time pin from app-compose (empty = not pinned); the
+        // actual provider id is enforced against the pin in
+        // verify_key_provider_id.
+        let aws_config_id = dstack_types::mr_config::MrConfig::V2 {
+            compose_hash: &compose_hash,
+            app_id: instance_info
+                .app_id
+                .as_slice()
+                .try_into()
+                .ok()
+                .context("invalid app id")?,
+            key_provider,
+            key_provider_id: &self.shared.app_compose.key_provider_id,
+        }
+        .to_mr_config_id();
+        dstack_attest::measure_aws_config_pcr(&aws_config_id)
+            .context("failed to measure AWS config into PCR8")?;
+
         Ok(AppInfo {
             instance_info,
             compose_hash,

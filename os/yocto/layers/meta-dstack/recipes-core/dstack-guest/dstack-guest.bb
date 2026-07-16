@@ -3,7 +3,7 @@ DESCRIPTION = "${SUMMARY}"
 LICENSE = "MIT"
 LIC_FILES_CHKSUM = "file://${COREBASE}/meta/COPYING.MIT;md5=3da9cfbcb788c80a0384361b4de20420"
 
-inherit systemd
+inherit systemd pkgconfig
 
 # Stage the monorepo core workspace and OS-owned rootfs files for the guest
 # image. The public Rust SDK lives in its own Cargo workspace and is not needed
@@ -17,7 +17,7 @@ DSTACK_ROOTFS_FILES = "${UNPACKDIR}/repo/os/common/rootfs"
 
 RDEPENDS:${PN} += "bash"
 
-DEPENDS += "rsync-native"
+DEPENDS += "rsync-native tpm2-tss"
 
 # Ensure rsync-native is built before unpack runs
 do_unpack[depends] += "rsync-native:do_populate_sysroot"

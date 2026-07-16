@@ -98,6 +98,7 @@ export interface GetQuoteResponse {
   event_log: string
   report_data?: Hex
   vm_config?: string
+  attestation?: Hex
 
   replayRtmrs: () => string[]
 }

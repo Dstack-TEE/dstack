@@ -87,6 +87,10 @@ fn verify_mr_config_id_for_mode(
 ) -> Result<()> {
     match mode {
         AttestationMode::DstackAmdSevSnp => verify_snp_mr_config(expected),
+        // AWS PCR8 is computed by the guest from measured reality (MrConfig V2
+        // in measure_app_info); there is no host-supplied claim to cross-check.
+        // The key_provider_id pin is enforced by verify_key_provider_id.
+        AttestationMode::DstackAwsNitroTpm => Ok(()),
         _ => verify_tdx_mr_config_id(expected),
     }
 }

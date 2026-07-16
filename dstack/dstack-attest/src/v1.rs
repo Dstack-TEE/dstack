@@ -78,6 +78,8 @@ pub enum PlatformEvidence {
     },
     #[serde(rename = "nitro-enclave")]
     NitroEnclave { nsm_quote: Vec<u8> },
+    #[serde(rename = "aws-nitro-tpm")]
+    AwsNitroTpm { attestation_doc: Vec<u8> },
     #[serde(rename = "sev-snp")]
     SevSnp {
         report: Vec<u8>,

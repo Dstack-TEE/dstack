@@ -1,11 +1,18 @@
 # Yocto host tools
 
-This directory is reserved for host-side workarounds that are specific to
-building the Yocto backend. It is not part of the guest-OS backend interface;
-the supported backend entrypoint is [`../build.sh`](../build.sh).
+This directory contains host-side utilities that are specific to building,
+validating, or publishing artifacts from the Yocto backend. It is not part of
+the guest-OS backend interface; the supported build entrypoint is
+[`../build.sh`](../build.sh).
 
 - `fix-self-uid-map.sh` is an explicit host AppArmor workaround for affected
   Ubuntu installations; it is not part of the image build.
+- `aws/` contains the **image-side** hardening audit only
+  (`audit-aws-ec2-image-hardening.sh`). Release images and their evidence
+  (`sha256sum.txt`, `measurement.aws.cbor`, `aws-pcrs.json`) come from the
+  unified `os/build.sh` flow. AWS EC2 **lifecycle** (AMI import, shared-disk
+  deploy, start/stop/logs) lives in `dstack-cloud`
+  (`dstack/scripts/bin/dstack-cloud`) with `platform: aws`.
 
 The legacy cross-cutting helpers live under [`../../../tools/`](../../../tools/)
 instead of inside this backend.

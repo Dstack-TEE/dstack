@@ -22,6 +22,8 @@ estimatedTime: "45 minutes"
 
 This tutorial guides you through verifying TDX attestation for your deployed applications. Attestation is the cryptographic proof that your application is genuinely running inside a TDX-protected Confidential Virtual Machine with the expected software stack.
 
+This page is TDX-specific. Other dstack platforms use the same verification goal with different measurement carriers. AWS EC2 NitroTPM uses a NitroTPM Attestation Document, AWS boot PCRs, and SHA384 PCR14 for dstack launch identity replay instead of TDX MRTD/RTMR values.
+
 ## What You'll Learn
 
 - **Retrieving attestation data** - Get measurements and RA-TLS certificates from running CVMs
@@ -77,6 +79,18 @@ TDX uses several measurement registers to track the boot process:
 │                                                              │
 └─────────────────────────────────────────────────────────────┘
 ```
+
+## Platform Differences
+
+The workflow below uses TDX names because the hello-world tutorial deploys a TDX CVM. When verifying another platform, keep the same security checks but use that platform's signed evidence and measurement registers.
+
+| Platform | Boot measurements | dstack app identity replay |
+| --- | --- | --- |
+| TDX-family CVM | MRTD and RTMR0-2 | RTMR3 event log |
+| AMD SEV-SNP | SNP report fields and measured config ID | `MrConfigV3` app/config target |
+| AWS EC2 NitroTPM | NitroTPM Attestation Document, AWS NitroTPM PKI, PCR4/PCR7/PCR12, OS image hash | SHA384 PCR14 launch event log through `system-ready` |
+
+For the authoritative PCR14 replay and optional PCR8 shortcut, see the [AWS production verifier runbook](../aws-ec2-production-verifier-runbook.md).
 
 ## Understanding RA-TLS
 
@@ -456,9 +470,9 @@ echo ""
 echo "RTMR3 requires event log replay (see Step 6)"
 ```
 
-## Step 6: Verify RTMR3 via Event Log
+## Step 6: Verify TDX RTMR3 via Event Log
 
-RTMR3 contains runtime measurements that can't be pre-calculated — they depend on the application configuration, instance ID, and other runtime values. Instead, verify by examining the event log.
+On TDX, RTMR3 contains runtime measurements that can't be pre-calculated because they depend on the application configuration, instance ID, and other runtime values. Verify RTMR3 by examining and replaying the event log. On AWS NitroTPM, apply the same replay concept to the PCR14 launch event log.
 
 ### View the event log
 
@@ -480,7 +494,7 @@ Each event in the log has these fields:
 
 ### Decode and verify known events
 
-The event log records everything that was measured into RTMR3 during boot:
+For this TDX flow, the event log records everything that was measured into RTMR3 during boot:
 
 ```bash
 # Display events in human-readable format
@@ -667,7 +681,7 @@ fi
 
 # --- Step 6: Display event log ---
 echo ""
-echo "Step 6: Event log (RTMR3 events)..."
+echo "Step 6: Event log (TDX RTMR3 events)..."
 EVENT_COUNT=$(echo "$TCB_INFO" | jq '.event_log | length')
 echo "  $EVENT_COUNT events recorded:"
 
@@ -702,8 +716,8 @@ echo "  Event log:     $EVENT_COUNT events"
 echo ""
 echo "  Next steps:"
 echo "  - Compare MRTD/RTMR0-2 with dstack-mr output"
-echo "  - Verify RTMR3 by reviewing event log entries"
-echo "  - In production, verify app_cert chain and TDX quote signature"
+echo "  - Verify TDX RTMR3 by reviewing event log entries"
+echo "  - In production, verify app_cert chain and platform quote signature"
 echo "========================================="
 ```
 
@@ -759,7 +773,7 @@ The verifier sends the nonce, the app includes it in the quote, and the verifier
 
 ### 3. Verify the complete measurement chain
 
-Don't just check one register — verify the complete chain:
+Don't just check one register. On TDX, verify the complete chain:
 
 ```
 MRTD → RTMR0 → RTMR1 → RTMR2 → RTMR3
@@ -769,6 +783,8 @@ OVMF   VM Config  Kernel   Initrd   App
 ```
 
 Each register builds on the previous one. A compromised kernel (RTMR1) could fake application measurements (RTMR3), so always verify from the firmware up.
+
+On AWS EC2 NitroTPM, verify the AWS NitroTPM PKI, expected boot PCRs and OS image hash, then replay PCR14. See the [AWS production verifier runbook](../aws-ec2-production-verifier-runbook.md).
 
 ### 4. Keep expected measurements updated
 
@@ -845,7 +861,7 @@ Your dstack deployment now includes:
 With the foundation complete, you're ready to explore:
 
 - **Phase 6:** Deploy more complex applications from dstack-examples
-- **Advanced attestation:** ConfigID and RTMR3-based verification
+- **Advanced attestation:** ConfigID and platform event-log verification
 - **Custom domains:** Access apps via your own domain
 - **SSH access:** Connect directly to CVMs
 - **Port forwarding:** Expose additional services

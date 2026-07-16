@@ -26,6 +26,9 @@ Environment:
   DSTACK_TAR_RELEASE     Create release tarballs (default: 1)
   ENABLE_UKI_IMAGE       Create the optional UKI disk image (default: 1)
   DSTACK_MR_BIN          Existing dstack-mr binary
+  NITRO_TPM_PCR_COMPUTE_BIN  Pinned host nitro-tpm-pcr-compute (required for
+                         UKI AWS PCRs; overrides PATH lookup)
+  NITRO_TPM_PCR_PK/KEK/DB    Optional Secure Boot ESL paths for PCR7
 EOF
 }
 
@@ -419,6 +422,73 @@ if [[ "$UKI_CREATED" = "1" ]]; then
     HAVE_MEASUREMENT_GCP=1
 fi
 
+# AWS NitroTPM boot PCR digest → measurement.aws.cbor
+# (boot_pcr_digest = sha256(PCR4||PCR7||PCR12); raw PCRs not stored).
+#
+# MUST be computed at image assemble time and listed in sha256sum.txt so
+# os_image_hash = sha256(sha256sum.txt) is fixed for the release artifact.
+# prepare/deploy only *embed* this material; they must never recompute it.
+#
+# Requires a host `nitro-tpm-pcr-compute` (Rust tool from aws/NitroTPM-Tools,
+# install with --locked). No unpinned container fallback: this value ends up
+# in os_image_hash, so only a version-pinned operator-installed tool may
+# produce it.
+# Optional: NITRO_TPM_PCR_COMPUTE_BIN=/path/to/bin
+# Optional Secure Boot ESL inputs (PCR7): NITRO_TPM_PCR_PK/KEK/DB (.esl paths)
+HAVE_MEASUREMENT_AWS=0
+if [[ "$UKI_CREATED" = "1" ]]; then
+    if [[ -z "${UKI_IMAGE:-}" || ! -f "${UKI_IMAGE}" ]]; then
+        echo "Error: UKI image was created but UKI_IMAGE is missing" >&2
+        exit 1
+    fi
+    if ! command -v jq >/dev/null 2>&1; then
+        echo "Error: jq is required to parse nitro-tpm-pcr-compute output" >&2
+        exit 1
+    fi
+
+    uki_abs=$(realpath "$UKI_IMAGE")
+    pcr_compute_bin="${NITRO_TPM_PCR_COMPUTE_BIN:-}"
+    if [[ -z "$pcr_compute_bin" ]] && command -v nitro-tpm-pcr-compute >/dev/null 2>&1; then
+        pcr_compute_bin=$(command -v nitro-tpm-pcr-compute)
+    fi
+
+    # No unpinned fallback here on purpose: the computed PCRs feed
+    # measurement.aws.cbor -> sha256sum.txt -> os_image_hash, i.e. the
+    # measurement the KMS and verifiers enforce. Only a version-pinned,
+    # operator-installed tool may produce it.
+    if [[ -z "$pcr_compute_bin" ]]; then
+        echo "Error: cannot produce measurement.aws.cbor for UKI image." >&2
+        echo "Install the pinned host tool:" >&2
+        echo "  cargo install --git https://github.com/aws/NitroTPM-Tools --rev d76d6eeebd4169b00a3c3af9858852d48f40e748 --locked nitro-tpm-pcr-compute" >&2
+        echo "  # or set NITRO_TPM_PCR_COMPUTE_BIN=/path/to/nitro-tpm-pcr-compute" >&2
+        echo "measurement.aws.cbor must be fixed at assemble time for a stable os_image_hash." >&2
+        exit 1
+    fi
+    echo "Generating AWS PCRs via host ${pcr_compute_bin}"
+    pcr_args=(--image "$uki_abs")
+    # Secure Boot variable stores (optional; affects PCR7)
+    [[ -n "${NITRO_TPM_PCR_PK:-}" ]] && pcr_args+=(--PK "$NITRO_TPM_PCR_PK")
+    [[ -n "${NITRO_TPM_PCR_KEK:-}" ]] && pcr_args+=(--KEK "$NITRO_TPM_PCR_KEK")
+    [[ -n "${NITRO_TPM_PCR_DB:-}" ]] && pcr_args+=(--db "$NITRO_TPM_PCR_DB")
+    pcr_json=$("$pcr_compute_bin" "${pcr_args[@]}") \
+        || { echo "Error: nitro-tpm-pcr-compute failed" >&2; exit 1; }
+
+    pcr4=$(jq -r '.Measurements.PCR4 // empty' <<<"$pcr_json")
+    pcr7=$(jq -r '.Measurements.PCR7 // empty' <<<"$pcr_json")
+    pcr12=$(jq -r '.Measurements.PCR12 // empty' <<<"$pcr_json")
+    if [[ -z "$pcr4" || -z "$pcr7" || -z "$pcr12" ]]; then
+        echo "Error: nitro-tpm-pcr-compute output missing PCR4, PCR7, or PCR12" >&2
+        echo "$pcr_json" >&2
+        exit 1
+    fi
+    echo "Generating measurement.aws.cbor via ${DSTACK_MR_BIN}"
+    "${DSTACK_MR_BIN}" aws-measurement-cbor "$pcr4" "$pcr7" "$pcr12" \
+        > "${OUTPUT_DIR}/measurement.aws.cbor"
+    # Keep a machine-readable side-car for verifier-side PCR comparison.
+    printf '%s\n' "$pcr_json" > "${OUTPUT_DIR}/aws-pcrs.json"
+    HAVE_MEASUREMENT_AWS=1
+fi
+
 echo "Generating unified image digest to ${OUTPUT_DIR}/"
 CHECKSUM_FILES=(ovmf.fd bzImage initramfs.cpio.gz metadata.json measurement.tdx.cbor)
 if [ "$HAVE_MEASUREMENT_SNP" = "1" ]; then
@@ -426,6 +496,9 @@ if [ "$HAVE_MEASUREMENT_SNP" = "1" ]; then
 fi
 if [ "$HAVE_MEASUREMENT_GCP" = "1" ]; then
     CHECKSUM_FILES+=(measurement.gcp.cbor)
+fi
+if [ "$HAVE_MEASUREMENT_AWS" = "1" ]; then
+    CHECKSUM_FILES+=(measurement.aws.cbor)
 fi
 (
     cd "${OUTPUT_DIR}/"
@@ -450,6 +523,9 @@ if [ "$DSTACK_TAR_RELEASE" = "1" ]; then
     if [ "$HAVE_MEASUREMENT_GCP" = "1" ]; then
         BARE_METAL_FILES+=(measurement.gcp.cbor)
     fi
+    if [ "$HAVE_MEASUREMENT_AWS" = "1" ]; then
+        BARE_METAL_FILES+=(measurement.aws.cbor)
+    fi
     BARE_METAL_TAR_FILES=()
     for file in "${BARE_METAL_FILES[@]}"; do
         BARE_METAL_TAR_FILES+=("$TAR_DIR_NAME/$file")
@@ -457,11 +533,11 @@ if [ "$DSTACK_TAR_RELEASE" = "1" ]; then
     (cd "$PARENT_DIR" && tar -czvf "$IMAGE_TAR" "${BARE_METAL_TAR_FILES[@]}")
     echo
 
-    # UKI tarball: GCP boot disk plus the unified OS-image identity material.
+    # UKI tarball: cloud boot disk plus the unified OS-image identity material.
     if [[ "$UKI_CREATED" = "1" ]]; then
         rm -rf "${IMAGE_TAR_UKI}"
         echo "Archiving UKI image to ${IMAGE_TAR_UKI}"
-        UKI_FILES=(disk.raw digest.txt sha256sum.txt measurement.gcp.cbor)
+        UKI_FILES=(disk.raw digest.txt sha256sum.txt measurement.gcp.cbor measurement.aws.cbor)
         UKI_TAR_FILES=()
         for file in "${UKI_FILES[@]}"; do
             UKI_TAR_FILES+=("$TAR_DIR_NAME/$file")

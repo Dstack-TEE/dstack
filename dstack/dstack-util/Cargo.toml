@@ -37,6 +37,7 @@ ra-tls = { workspace = true, features = ["quote"] }
 dstack-gateway-rpc.workspace = true
 tdx-attest.workspace = true
 tpm-attest.workspace = true
+tpm2.workspace = true
 tpm-qvl = { workspace = true, features = ["crl-download"] }
 host-api = { workspace = true, features = ["client"] }
 cmd_lib.workspace = true

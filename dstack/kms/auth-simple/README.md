@@ -20,13 +20,16 @@ bun install
 
 Create `auth-config.json` (see `auth-config.example.json`).
 
-For KMS deployment, you must allowlist both the OS image hash and the KMS `mrAggregated` value:
+For KMS deployment, you must allowlist the OS image hash and at least one KMS
+identity value via `kms.mrAggregated` (the early/boot-mr-done aggregate MR,
+same pinning model as bare TDX). App compose hashes still use
+`apps.<appId>.composeHashes`.
 
 ```json
 {
   "osImages": ["0x0b327bcd642788b0517de3ff46d31ebd3847b6c64ea40bacde268bb9f1c8ec83"],
   "kms": {
-    "mrAggregated": ["0x<kms-mr-aggregated>"],
+    "mrAggregated": ["0x<kms-early-mr-aggregated>"],
     "allowAnyDevice": true
   },
   "apps": {}
@@ -56,6 +59,40 @@ Add more fields as you deploy Gateway and apps:
 }
 ```
 
+### AWS NitroTPM Example
+
+AWS NitroTPM has no TDX/SNP-style TCB advisory surface, so the KMS normalizes a
+verified NitroTPM attestation to `tcbStatus: "UpToDate"` before calling
+auth-simple. Pin KMS via early `mrAggregated` (boot-mr-done snapshot), same as
+bare TDX. Prefer a stable AMI/`os_image_hash` and empty TPM key-provider id so
+that early MR is precomputable.
+
+```json
+{
+  "osImages": ["0x<aws-os-image-hash>"],
+  "allowedAdvisoryIds": [],
+  "kms": {
+    "mrAggregated": ["0x<kms-early-mr-aggregated>"],
+    "devices": [],
+    "allowAnyDevice": true
+  },
+  "apps": {
+    "0x<app-id>": {
+      "composeHashes": ["0x<app-compose-hash>"],
+      "devices": [],
+      "allowAnyDevice": true
+    }
+  }
+}
+```
+
+The verifier that calls auth-simple must already have verified the NitroTPM
+Attestation Document, AWS NitroTPM PKI chain, boot PCRs, PCR14 launch-event
+replay, and OS image binding. PCR8 is an optional third-party shortcut, not a
+required dstack check; see `docs/aws-ec2-production-verifier-runbook.md`.
+auth-simple authorizes the resulting canonical `BootInfo`; it does not verify
+raw NitroTPM evidence by itself.
+
 ### Configuration Fields
 
 | Field | Required | Description |
@@ -64,7 +101,7 @@ Add more fields as you deploy Gateway and apps:
 | `gatewayAppId` | No | Gateway app ID (add after Gateway deployment) |
 | `allowedTcbStatuses` | No | Allowed verifier-derived TCB status strings. Defaults to `["UpToDate"]`; non-up-to-date SNP/TDX statuses remain fail-closed unless explicitly allowlisted for testing. |
 | `allowedAdvisoryIds` | No | Advisory IDs permitted in `advisoryIds`. Defaults to `[]`, which rejects any advisory. |
-| `kms.mrAggregated` | Yes for KMS authorization | Allowed KMS aggregated MR values. An empty array denies all KMS boots. |
+| `kms.mrAggregated` | Yes | Allowed KMS early aggregate MR values (boot-mr-done). |
 | `kms.devices` | No | Allowed KMS device IDs |
 | `kms.allowAnyDevice` | No | If true, skip device ID check for KMS |
 | `apps.<appId>.composeHashes` | No | Allowed compose hashes for this app |
@@ -134,7 +171,7 @@ App boot authorization.
 **Request:**
 ```json
 {
-  "attestationMode": "DstackTdx",
+  "attestationMode": "dstack-tdx",
   "mrAggregated": "0x...",
   "osImageHash": "0x...",
   "appId": "0x...",
@@ -167,15 +204,15 @@ KMS boot authorization.
 
 ### KMS Boot Validation
 
-1. `tcbStatus` must be listed in `allowedTcbStatuses` (default: only `"UpToDate"`)
+1. `tcbStatus` must be listed in `allowedTcbStatuses` (default: only `"UpToDate"`). AWS NitroTPM is normalized to `"UpToDate"` by the KMS before it reaches auth-simple.
 2. Every `advisoryIds` entry must be listed in `allowedAdvisoryIds` (default: none allowed)
 3. `osImageHash` must be in `osImages` array
-4. `mrAggregated` must be in `kms.mrAggregated`
-5. `deviceId` must be in `kms.devices` (unless `allowAnyDevice` is true)
+4. `mrAggregated` must be in the `kms.mrAggregated` early/boot-mr-done allowlist
+5. `deviceId` must be in `kms.devices` unless `allowAnyDevice` is true
 
 ### App Boot Validation
 
-1. `tcbStatus` must be listed in `allowedTcbStatuses` (default: only `"UpToDate"`)
+1. `tcbStatus` must be listed in `allowedTcbStatuses` (default: only `"UpToDate"`). AWS NitroTPM is normalized to `"UpToDate"` by the KMS before it reaches auth-simple.
 2. Every `advisoryIds` entry must be listed in `allowedAdvisoryIds` (default: none allowed)
 3. `osImageHash` must be in `osImages` array
 4. `appId` must exist in `apps` object

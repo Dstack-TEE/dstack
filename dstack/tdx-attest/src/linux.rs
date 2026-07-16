@@ -721,6 +721,10 @@ fn parse_qgs_get_quote_response(data: &[u8]) -> Result<Vec<u8>> {
 mod tests {
     use super::*;
 
+    // Environment variables are process-global, while Rust tests run in
+    // parallel by default. Serialize tests that temporarily override them.
+    static ENV_TEST_LOCK: Mutex<()> = Mutex::new(());
+
     #[test]
     fn recognizes_tdx_configfs_provider() {
         let temp = tempfile::tempdir().unwrap();
@@ -733,6 +737,7 @@ mod tests {
 
     #[test]
     fn invalid_configfs_override_does_not_fall_back() {
+        let _guard = ENV_TEST_LOCK.lock().unwrap();
         let previous = std::env::var_os(CONFIGFS_PATH_ENV);
         std::env::set_var(
             CONFIGFS_PATH_ENV,
@@ -765,6 +770,7 @@ mod tests {
 
     #[test]
     fn relative_configfs_override_is_not_available() {
+        let _guard = ENV_TEST_LOCK.lock().unwrap();
         let previous = std::env::var_os(CONFIGFS_PATH_ENV);
         std::env::set_var(CONFIGFS_PATH_ENV, ".");
         let available = is_tdx_available();
@@ -778,6 +784,7 @@ mod tests {
 
     #[test]
     fn relative_rtmr_override_is_rejected() {
+        let _guard = ENV_TEST_LOCK.lock().unwrap();
         let previous = std::env::var_os(RTMR_SYSFS_PATH_ENV);
         std::env::set_var(RTMR_SYSFS_PATH_ENV, ".");
         let result = rtmr_sysfs_base();

@@ -29,6 +29,53 @@ pub struct VerificationResponse {
     pub reason: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PolicyBootInfo {
+    pub attestation_mode: AttestationMode,
+    #[serde(with = "serde_bytes")]
+    pub mr_aggregated: Vec<u8>,
+    #[serde(with = "serde_bytes")]
+    pub os_image_hash: Vec<u8>,
+    #[serde(with = "serde_bytes")]
+    pub mr_system: Vec<u8>,
+    #[serde(with = "serde_bytes")]
+    pub app_id: Vec<u8>,
+    #[serde(with = "serde_bytes")]
+    pub compose_hash: Vec<u8>,
+    #[serde(with = "serde_bytes")]
+    pub instance_id: Vec<u8>,
+    #[serde(with = "serde_bytes")]
+    pub device_id: Vec<u8>,
+    #[serde(with = "serde_bytes")]
+    pub key_provider_info: Vec<u8>,
+    pub tcb_status: String,
+    pub advisory_ids: Vec<String>,
+}
+
+impl PolicyBootInfo {
+    pub fn from_app_info(
+        attestation_mode: AttestationMode,
+        app_info: &AppInfo,
+        tcb_status: String,
+        advisory_ids: Vec<String>,
+    ) -> Self {
+        Self {
+            attestation_mode,
+            mr_aggregated: app_info.mr_aggregated.to_vec(),
+            os_image_hash: app_info.os_image_hash.clone(),
+            mr_system: app_info.mr_system.to_vec(),
+            app_id: app_info.app_id.clone(),
+            compose_hash: app_info.compose_hash.clone(),
+            instance_id: app_info.instance_id.clone(),
+            device_id: app_info.device_id.clone(),
+            key_provider_info: app_info.key_provider_info.clone(),
+            tcb_status,
+            advisory_ids,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct VerificationDetails {
     pub quote_verified: bool,
@@ -60,6 +107,9 @@ pub struct VerificationDetails {
     /// decoded app_info.key_provider_info; name is e.g. "kms" or "local".
     pub key_provider: Option<KeyProviderInfo>,
     pub app_info: Option<AppInfo>,
+    /// Canonical auth-policy input matching the KMS bootAuth payload.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub boot_info: Option<PolicyBootInfo>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub acpi_tables: Option<AcpiTables>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -107,6 +157,7 @@ pub enum RtmrEventStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ra_tls::attestation::AttestationMode;
 
     // the README documents sending either `attestation` or
     // (`quote` + `event_log` + `vm_config`); every field is optional, so any
@@ -139,5 +190,35 @@ mod tests {
         assert_eq!(req.quote, None);
         assert_eq!(req.attestation, None);
         assert_eq!(req.debug, None);
+    }
+
+    #[test]
+    fn policy_boot_info_serializes_as_auth_payload() {
+        let app_info = AppInfo {
+            app_id: vec![0x11; 20],
+            compose_hash: vec![0x22; 32],
+            instance_id: vec![0x33; 20],
+            device_id: vec![0x44; 32],
+            mr_system: [0x55; 32],
+            mr_aggregated: [0x66; 32],
+            os_image_hash: vec![0x77; 32],
+            key_provider_info: br#"{"name":"tpm","id":"aws-test"}"#.to_vec(),
+        };
+
+        let boot_info = PolicyBootInfo::from_app_info(
+            AttestationMode::DstackAwsNitroTpm,
+            &app_info,
+            String::new(),
+            Vec::new(),
+        );
+        let encoded = serde_json::to_value(&boot_info).unwrap();
+
+        assert_eq!(encoded["attestationMode"], "dstack-aws-nitro-tpm");
+        assert_eq!(encoded["tcbStatus"], "");
+        assert_eq!(encoded["advisoryIds"], serde_json::json!([]));
+        assert!(encoded.get("mrAggregated").unwrap().is_string());
+        assert!(encoded.get("osImageHash").unwrap().is_string());
+        assert!(encoded.get("mrSystem").unwrap().is_string());
+        assert!(encoded.get("keyProviderInfo").unwrap().is_string());
     }
 }

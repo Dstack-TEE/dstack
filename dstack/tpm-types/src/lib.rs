@@ -85,6 +85,10 @@ impl PcrSelection {
         Self::new("sha256", pcrs)
     }
 
+    pub fn sha384(pcrs: &[u32]) -> Self {
+        Self::new("sha384", pcrs)
+    }
+
     pub fn to_arg(&self) -> String {
         let pcr_list: Vec<String> = self.pcrs.iter().map(|p| p.to_string()).collect();
         format!(

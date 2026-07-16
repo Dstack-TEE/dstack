@@ -11,6 +11,10 @@ ENV RUSTUP_HOME=/usr/local/rustup \
     CARGO_HOME=/usr/local/cargo \
     PATH=/usr/local/cargo/bin:$PATH
 
+# aws/NitroTPM-Tools v1.1.2. This binary contributes release measurements, so
+# pin the source revision rather than following the repository default branch.
+ARG NITRO_TPM_TOOLS_REV=d76d6eeebd4169b00a3c3af9858852d48f40e748
+
 # Set timezone
 RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 
@@ -26,6 +30,7 @@ RUN apt update && apt install -y \
     ca-certificates \
     curl \
     git \
+    jq \
     file \
     gawk \
     wget \
@@ -42,6 +47,8 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
     sh -s -- -y --profile minimal --default-toolchain 1.92 && \
     rustup component add rustfmt clippy rust-analyzer && \
     rustup target add wasm32-unknown-unknown x86_64-unknown-linux-musl thumbv6m-none-eabi && \
+    cargo install --git https://github.com/aws/NitroTPM-Tools \
+      --rev "$NITRO_TPM_TOOLS_REV" --locked nitro-tpm-pcr-compute && \
     chmod -R a+rX "$RUSTUP_HOME" "$CARGO_HOME" && \
     cargo --version && \
     rustc --version

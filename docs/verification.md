@@ -6,7 +6,7 @@ Attestation is cryptographic proof that your app runs in genuine TEE hardware wi
 
 When you verify a dstack deployment, you're checking three things:
 
-1. **Genuine hardware** - Hardware vendor signatures confirm real TEE hardware generated the proof (Intel TDX, NVIDIA CC, or AMD SEV)
+1. **Genuine platform** - Vendor signatures confirm real attested hardware or platform generated the proof (Intel TDX, AMD SEV-SNP, AWS NitroTPM, Nitro Enclave, or NVIDIA CC)
 2. **Correct code** - The compose-hash matches your docker-compose configuration
 3. **Secure environment** - OS and firmware measurements show no tampering
 
@@ -22,8 +22,26 @@ If any of these fail, the cryptographic proof won't verify.
 - [dcap-qvl](https://github.com/Phala-Network/dcap-qvl) - Open source quote verification library (Rust, Python, JS/WASM, CLI)
 - [SDKs](../sdk/) - JavaScript and Python SDKs include `replayRtmrs()` for local RTMR verification
 
+## Platform-Specific Verification
+
+Verification has the same goal on every platform: prove the platform signature,
+the boot state, and the dstack application identity. The evidence fields differ
+by platform.
+
+| Platform | Boot evidence | Application identity replay | Freshness/key binding |
+| --- | --- | --- | --- |
+| TDX-family dstack CVM | MRTD and RTMR0-2 | RTMR3 event log | `report_data` or RA-TLS certificate binding |
+| AMD SEV-SNP | SNP report fields plus `HOST_DATA`/config ID | `MrConfigV3` app/config target | report data or RA-TLS certificate binding |
+| AWS EC2 NitroTPM | NitroTPM Attestation Document, AWS NitroTPM PKI, PCR4/PCR7/PCR12, OS image hash | SHA384 PCR14 launch event log through `system-ready` | NitroTPM `user_data` challenge or RA-TLS certificate binding |
+
+On AWS, PCR14 replay is the authoritative application-identity check; PCR8 is
+an optional shortcut for third-party verifiers. See the
+[AWS production verifier runbook](./aws-ec2-production-verifier-runbook.md)
+for the complete platform policy.
+
 ## Learn More
 
+- [AWS EC2 NitroTPM production verification](./aws-ec2-production-verifier-runbook.md) - Verify and operate the AWS NitroTPM path
 - [Intel TDX attestation](./attestation-tdx.md) - Verify TDX measurements and runtime events
 - [AMD SEV-SNP support](./amd-sev-snp.md) - SNP image, attestation, and key-release requirements
 - [GCP attestation](./attestation-gcp.md) - Verify the GCP TDX and TPM evidence chain

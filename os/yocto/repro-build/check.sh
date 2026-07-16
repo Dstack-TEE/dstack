@@ -31,12 +31,14 @@ COMPARE_IMAGE_WHITELIST=(
     "initramfs.cpio.gz"
     "metadata.json"
     "measurement.gcp.cbor"
+    "measurement.aws.cbor"
     "measurement.snp.cbor"
     "measurement.tdx.cbor"
     "ovmf.fd"
     "rootfs.img.parted.verity"
     "sha256sum.txt"
     "auth_hash.txt"
+    "aws-pcrs.json"
     "gcp/efi-root/EFI/BOOT/BOOTX64.EFI"
 )
 

@@ -1575,7 +1575,9 @@ name = "dstack-attest"
 version = "0.6.0"
 dependencies = [
  "anyhow",
+ "aws-nitro-enclaves-nsm-api",
  "cc-eventlog",
+ "ciborium",
  "dcap-qvl",
  "dstack-mr",
  "dstack-types",
@@ -1585,12 +1587,15 @@ dependencies = [
  "futures",
  "hex",
  "hex_fmt",
+ "hmac 0.12.1",
  "insta",
  "nsm-attest",
  "nsm-qvl",
  "or-panic",
  "parity-scale-codec",
+ "rand 0.8.6",
  "rmp-serde",
+ "rsa",
  "serde",
  "serde-human-bytes",
  "serde_json",
@@ -1603,6 +1608,7 @@ dependencies = [
  "tpm-attest",
  "tpm-qvl",
  "tpm-types",
+ "tpm2",
  "tracing",
 ]
 
@@ -1802,6 +1808,7 @@ name = "dstack-kms"
 version = "0.6.0"
 dependencies = [
  "anyhow",
+ "cc-eventlog",
  "chrono",
  "clap",
  "dstack-attest",
@@ -1985,6 +1992,7 @@ dependencies = [
  "toml",
  "tpm-attest",
  "tpm-qvl",
+ "tpm2",
  "tracing",
  "tracing-subscriber",
  "x25519-dalek",
@@ -5116,6 +5124,7 @@ dependencies = [
  "sha2 0.10.9",
  "sha3",
  "tdx-attest",
+ "tokio",
  "tpm-qvl",
  "tpm-types",
  "tracing",
