@@ -139,6 +139,13 @@ pub struct GpuPolicy {
     pub allow_insecure_boot: bool,
 }
 
+impl GpuPolicy {
+    /// Returns true when no application-specific GPU policy setting is set.
+    pub fn is_default(&self) -> bool {
+        self == &Self::default()
+    }
+}
+
 #[derive(Deserialize, Serialize, Debug, Clone, Default, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
 pub struct Requirements {
@@ -181,8 +188,8 @@ pub struct Requirements {
     ///
     /// Its default-expanded, JCS-canonicalized JSON SHA-256 digest is emitted
     /// as the `gpu-policy-hash` launch event immediately after `compose-hash`.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub gpu_policy: Option<GpuPolicy>,
+    #[serde(default, skip_serializing_if = "GpuPolicy::is_default")]
+    pub gpu_policy: GpuPolicy,
 }
 
 impl Requirements {
@@ -192,7 +199,7 @@ impl Requirements {
             && self.tdx_measure_acpi_tables.is_none()
             && self.launch_token_hash.is_none()
             && self.attest_gpu.is_none()
-            && self.gpu_policy.is_none()
+            && self.gpu_policy.is_default()
     }
 }
 
@@ -501,7 +508,7 @@ mod app_compose_tests {
             requirements.launch_token_hash.as_deref(),
             Some("9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08")
         );
-        let gpu_policy = requirements.gpu_policy.as_ref().unwrap();
+        let gpu_policy = &requirements.gpu_policy;
         assert_eq!(
             gpu_policy.rego.as_deref(),
             Some("package policy\n\ndefault nv_match = false\n")
@@ -533,7 +540,10 @@ mod app_compose_tests {
         .unwrap();
         let requirements = omitted.requirements.as_ref().unwrap();
         assert_eq!(requirements.platforms, None);
+        assert!(requirements.gpu_policy.is_default());
         assert!(requirements.is_empty());
+        let serialized = serde_json::to_value(requirements).unwrap();
+        assert!(serialized.get("gpu_policy").is_none());
 
         let explicit_empty: AppCompose = serde_json::from_value(serde_json::json!({
             "manifest_version": "3",
@@ -586,7 +596,7 @@ mod app_compose_tests {
         }))
         .unwrap();
         let requirements = gpu_policy.requirements.as_ref().unwrap();
-        let gpu_policy = requirements.gpu_policy.as_ref().unwrap();
+        let gpu_policy = &requirements.gpu_policy;
         assert!(gpu_policy.rego.is_some());
         assert!(!gpu_policy.allow_devtools);
         assert!(!gpu_policy.allow_debug);
