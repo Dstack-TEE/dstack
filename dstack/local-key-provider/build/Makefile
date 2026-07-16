@@ -27,13 +27,13 @@ endif
 
 PROVIDER_SOURCES := $(shell find $(PROVIDER_DIR)/src -type f -name '*.rs')
 
-$(SELF_EXE): $(PROVIDER_DIR)/Cargo.toml $(PROVIDER_DIR)/Cargo.lock $(PROVIDER_SOURCES)
+$(SELF_EXE): $(PROVIDER_DIR)/Cargo.toml $(PROVIDER_SOURCES)
 	CARGO_TARGET_DIR=$(CARGO_TARGET_DIR) \
 	CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1 \
 	CARGO_PROFILE_RELEASE_LTO=true \
 	CARGO_PROFILE_RELEASE_PANIC=abort \
 	CARGO_PROFILE_RELEASE_STRIP=true \
-	cargo build --locked --release --manifest-path $(PROVIDER_DIR)/Cargo.toml
+	cargo build --release --manifest-path $(PROVIDER_DIR)/Cargo.toml
 
 $(MANIFEST): local-key-provider.manifest.template $(SELF_EXE)
 	gramine-manifest \

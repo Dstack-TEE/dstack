@@ -9,15 +9,15 @@ use crate::error::ProviderError;
 
 // The existing client caps the binary quote at 1 MiB. JSON represents every
 // byte as a decimal number, so its framed representation can approach 4 MiB.
-pub const MAX_QUOTE_SIZE: usize = 1024 * 1024;
+const MAX_QUOTE_SIZE: usize = 1024 * 1024;
 const MAX_FRAME_SIZE: usize = 8 * 1024 * 1024;
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize)]
 pub struct QuoteRequest {
     pub quote: Vec<u8>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Serialize)]
 pub struct QuoteResponse {
     pub encrypted_key: Vec<u8>,
     pub provider_quote: Vec<u8>,
@@ -28,10 +28,7 @@ where
     R: AsyncRead + Unpin,
 {
     let mut length = [0_u8; 4];
-    reader
-        .read_exact(&mut length)
-        .await
-        .map_err(ProviderError::network)?;
+    reader.read_exact(&mut length).await?;
     let length = u32::from_be_bytes(length) as usize;
     if length == 0 || length > MAX_FRAME_SIZE {
         return Err(ProviderError::InvalidRequest(format!(
@@ -40,10 +37,7 @@ where
     }
 
     let mut frame = vec![0_u8; length];
-    reader
-        .read_exact(&mut frame)
-        .await
-        .map_err(ProviderError::network)?;
+    reader.read_exact(&mut frame).await?;
     let request: QuoteRequest = serde_json::from_slice(&frame)?;
     if request.quote.len() > MAX_QUOTE_SIZE {
         return Err(ProviderError::InvalidRequest(format!(
@@ -64,14 +58,8 @@ where
     let frame = serde_json::to_vec(response)?;
     let length = u32::try_from(frame.len())
         .map_err(|_| ProviderError::InvalidRequest("response frame is too large".into()))?;
-    writer
-        .write_all(&length.to_be_bytes())
-        .await
-        .map_err(ProviderError::network)?;
-    writer
-        .write_all(&frame)
-        .await
-        .map_err(ProviderError::network)?;
+    writer.write_all(&length.to_be_bytes()).await?;
+    writer.write_all(&frame).await?;
     Ok(())
 }
 

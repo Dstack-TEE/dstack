@@ -11,11 +11,11 @@ pub enum ProviderError {
     #[error("invalid request: {0}")]
     InvalidRequest(String),
 
-    #[error("failed to serialize protocol message: {0}")]
-    Serialization(#[from] serde_json::Error),
+    #[error("invalid JSON protocol message: {0}")]
+    Json(#[from] serde_json::Error),
 
     #[error("network I/O failed: {0}")]
-    Network(#[source] io::Error),
+    Network(#[from] io::Error),
 
     #[error("failed to parse {kind} quote: {reason}")]
     QuoteParse { kind: &'static str, reason: String },
@@ -23,8 +23,8 @@ pub enum ProviderError {
     #[error("TDX quote verification failed: {0}")]
     QuoteVerification(String),
 
-    #[error("SGX and TDX platform identifiers do not match")]
-    PlatformMismatch,
+    #[error("SGX and TDX quoting-enclave identifiers do not match")]
+    QeIdMismatch,
 
     #[error("invalid public key in TDX report data")]
     InvalidPublicKey,
@@ -51,10 +51,6 @@ pub enum ProviderError {
 }
 
 impl ProviderError {
-    pub fn network(source: io::Error) -> Self {
-        Self::Network(source)
-    }
-
     pub fn requires_restart(&self) -> bool {
         matches!(self, Self::RestartRequired { .. })
     }

@@ -2,8 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use dcap_qvl::quote::{Quote, TDReport10};
-use dcap_qvl::{collateral::CollateralClient, quote::Report};
+use dcap_qvl::{
+    collateral::CollateralClient,
+    quote::{Quote, TDReport10},
+};
 use sha2::{Digest, Sha256};
 use tracing::{debug, info};
 
@@ -13,8 +15,6 @@ use crate::{
     gramine,
     protocol::QuoteResponse,
 };
-
-const PLATFORM_ID_SIZE: usize = 16;
 
 pub struct KeyProvider {
     collateral: CollateralClient,
@@ -30,19 +30,18 @@ impl KeyProvider {
 
     pub async fn provision(&self, raw_tdx_quote: &[u8]) -> Result<QuoteResponse, ProviderError> {
         info!(quote_len = raw_tdx_quote.len(), "processing TDX quote");
-        self.verify_tdx_quote(raw_tdx_quote).await?;
+        let tdx_report = self.verify_tdx_quote(raw_tdx_quote).await?;
         let tdx_quote = parse_quote("TDX", raw_tdx_quote)?;
-        let tdx_report = tdx_report(&tdx_quote)?;
 
-        // Obtain a cheap initial quote before reading the sealing key. Its QE
-        // user data identifies the physical platform and must match the TDX QE.
+        // Obtain an initial quote before reading the sealing key. Its QE ID
+        // must match the TDX quote's QE ID.
         let initial_sgx_quote = gramine::quote(&[])?;
         let sgx_quote = parse_quote("SGX", &initial_sgx_quote)?;
         require_sgx_report(&sgx_quote)?;
-        verify_same_platform(&sgx_quote, &tdx_quote)?;
+        verify_same_qe_id(&sgx_quote, &tdx_quote)?;
 
         let sealing_key = gramine::sealing_key()?;
-        let measurements = measurements(tdx_report);
+        let measurements = measurements(&tdx_report);
         let derived_key = derive_key(&sealing_key, &measurements);
         let recipient = public_key(&tdx_report.report_data)?;
         let encrypted_key = seal(&derived_key, &recipient)?;
@@ -58,23 +57,21 @@ impl KeyProvider {
         })
     }
 
-    async fn verify_tdx_quote(&self, raw_quote: &[u8]) -> Result<(), ProviderError> {
+    async fn verify_tdx_quote(&self, raw_quote: &[u8]) -> Result<TDReport10, ProviderError> {
         let report = self
             .collateral
             .fetch_and_verify(raw_quote)
             .await
             .map_err(|error| ProviderError::QuoteVerification(error.to_string()))?;
-        if !matches!(report.report, Report::TD10(_) | Report::TD15(_)) {
-            return Err(ProviderError::QuoteVerification(
-                "verified quote is not a TDX quote".into(),
-            ));
-        }
+        let tdx_report = report.report.as_td10().copied().ok_or_else(|| {
+            ProviderError::QuoteVerification("verified quote is not a TDX quote".into())
+        })?;
         debug!(
             tcb_status = %report.status,
             advisories = ?report.advisory_ids,
             "TDX quote verified"
         );
-        Ok(())
+        Ok(tdx_report)
     }
 }
 
@@ -83,16 +80,6 @@ fn parse_quote(kind: &'static str, raw_quote: &[u8]) -> Result<Quote, ProviderEr
         kind,
         reason: error.to_string(),
     })
-}
-
-fn tdx_report(quote: &Quote) -> Result<&TDReport10, ProviderError> {
-    quote
-        .report
-        .as_td10()
-        .ok_or_else(|| ProviderError::QuoteParse {
-            kind: "TDX",
-            reason: "quote contains a non-TDX report".into(),
-        })
 }
 
 fn require_sgx_report(quote: &Quote) -> Result<(), ProviderError> {
@@ -105,13 +92,11 @@ fn require_sgx_report(quote: &Quote) -> Result<(), ProviderError> {
     Ok(())
 }
 
-fn verify_same_platform(sgx_quote: &Quote, tdx_quote: &Quote) -> Result<(), ProviderError> {
-    let sgx_id = &sgx_quote.header.user_data[..PLATFORM_ID_SIZE];
-    let tdx_id = &tdx_quote.header.user_data[..PLATFORM_ID_SIZE];
-    if sgx_id != tdx_id {
-        return Err(ProviderError::PlatformMismatch);
+fn verify_same_qe_id(sgx_quote: &Quote, tdx_quote: &Quote) -> Result<(), ProviderError> {
+    if sgx_quote.qeid() != tdx_quote.qeid() {
+        return Err(ProviderError::QeIdMismatch);
     }
-    debug!("SGX and TDX quotes originate from the same platform");
+    debug!("SGX and TDX quotes carry the same QE ID");
     Ok(())
 }
 
@@ -132,7 +117,7 @@ mod tests {
     #[test]
     fn extracts_all_key_derivation_measurements_in_wire_order() {
         let quote = Quote::parse(include_bytes!("../../ra-tls/assets/tdx_quote")).unwrap();
-        let report = tdx_report(&quote).unwrap();
+        let report = quote.report.as_td10().unwrap();
         let output = measurements(report);
 
         assert_eq!(output.len(), 48 * 5);

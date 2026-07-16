@@ -30,14 +30,12 @@ impl Server {
     }
 
     pub async fn run(self) -> Result<(), ProviderError> {
-        let listener = TcpListener::bind(self.address)
-            .await
-            .map_err(ProviderError::network)?;
+        let listener = TcpListener::bind(self.address).await?;
         let connections = Arc::new(Semaphore::new(CONNECTION_LIMIT));
         info!(address = %self.address, "local key provider listening");
 
         loop {
-            let (mut socket, peer) = listener.accept().await.map_err(ProviderError::network)?;
+            let (mut socket, peer) = listener.accept().await?;
             let Ok(permit) = connections.clone().try_acquire_owned() else {
                 warn!(%peer, "connection limit reached; rejecting client");
                 continue;

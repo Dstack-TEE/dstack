@@ -32,9 +32,8 @@ services:
     build:
       context: ..
       dockerfile: build/Dockerfile.key-provider
-      # Defaults reproduce a canonical build; consumers that pin to a specific
-      # mr_enclave (e.g. attestation flows) override these via environment
-      # variables, e.g. `APT_SNAPSHOT=YYYYMMDDT000000Z ./run.sh`.
+      # These defaults select the base snapshot and toolchain. Always record
+      # the mr_enclave printed by the completed build before pinning it.
       args:
         APT_SNAPSHOT: ${APT_SNAPSHOT:-20260423T000000Z}
         RUSTUP_VERSION: ${RUSTUP_VERSION:-1.28.2}
@@ -48,10 +47,11 @@ services:
       - aesmd
     environment:
       PCCS_URL: ${PCCS_URL:-https://pccs.phala.network}
+      SEALING_PROVIDER_ADDR: 0.0.0.0:3443
     volumes:
       - "aesmd:/var/run/aesmd/"
     ports:
-      - "127.0.0.1:3443:3443"
+      - "127.0.0.1:${KEY_PROVIDER_PORT:-3443}:3443"
 
 volumes:
   aesmd:

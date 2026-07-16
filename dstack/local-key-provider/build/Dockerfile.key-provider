@@ -43,23 +43,22 @@ RUN curl --proto '=https' --tlsv1.2 -fsSL \
  && rm /tmp/rustup-init
 ENV PATH="/root/.cargo/bin:${PATH}"
 
-# Set environment variables
-ENV SGX=1
-ENV DEBUG=0
-ENV GRAMINE=gramine-sgx
-ENV RUST_LOG=info
-
 # Build the self-contained in-tree implementation rather than cloning or
 # depending on another source repository.
 WORKDIR /local-key-provider/build
 COPY build/Cargo.standalone.toml /local-key-provider/Cargo.toml
-COPY build/Cargo.lock /local-key-provider/
 COPY src /local-key-provider/src
 COPY build/Makefile ./
-RUN make target/release/local-key-provider
+RUN make target/release/local-key-provider \
+ && find target/release -mindepth 1 -maxdepth 1 \
+      ! -name local-key-provider -exec rm -rf {} + \
+ && rm -rf /root/.cargo/registry /root/.cargo/git \
+ && rm -f /local-key-provider/Cargo.lock
 
 COPY build/local-key-provider.manifest.template ./
-RUN gramine-sgx-gen-private-key && make RUST_LOG=info
+RUN gramine-sgx-gen-private-key \
+ && make \
+ && rm -f /root/.config/gramine/enclave-key.pem
 RUN gramine-sgx-sigstruct-view --output-format json local-key-provider.sig
 
 # Create an entrypoint script for the key provider only

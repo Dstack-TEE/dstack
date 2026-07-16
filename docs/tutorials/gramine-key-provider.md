@@ -35,8 +35,8 @@ Gramine release, 1.9, on the Ubuntu Noble image.
 1. The guest places an ephemeral X25519 public key in its TDX report data.
 2. The VMM forwards the TDX quote to `local-key-provider` over the host-only TCP
    listener.
-3. The provider verifies the TDX quote and checks that its SGX quote has the
-   same platform identifier.
+3. The provider verifies the TDX quote and checks that its SGX quote carries
+   the same quoting-enclave ID.
 4. Inside SGX it derives
    `SHA-256(SGX sealing key || MRTD || RTMR0 || RTMR1 || RTMR2 || RTMR3)`.
 5. It encrypts the derived key to the guest using the libsodium sealed-box wire

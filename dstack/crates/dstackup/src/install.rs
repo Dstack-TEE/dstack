@@ -843,6 +843,7 @@ fn resolve_key_provider(
         return Ok(("127.0.0.1".to_string(), o.key_provider_port, None));
     }
     let status = tool("docker")
+        .env("KEY_PROVIDER_PORT", o.key_provider_port.to_string())
         .args(["compose", "-p", &project, "-f"])
         .arg(src.join("docker-compose.yaml"))
         .args(["up", "-d"])

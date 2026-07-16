@@ -4,6 +4,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+set -eu
+
 echo "Waiting for AESM socket to be available..."
 AESM_SOCKET="/var/run/aesmd/aesm.socket"
 for i in $(seq 1 30); do
@@ -24,4 +26,4 @@ echo "Enclave info:"
 gramine-sgx-sigstruct-view --output-format json local-key-provider.sig
 
 echo "Starting dstack Local Key Provider"
-exec make SGX=1 run-provider
+exec gramine-sgx local-key-provider

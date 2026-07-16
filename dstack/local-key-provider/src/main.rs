@@ -17,7 +17,7 @@ use server::Server;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
-const DEFAULT_ADDRESS: &str = "0.0.0.0:3443";
+const DEFAULT_ADDRESS: &str = "127.0.0.1:3443";
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), ProviderError> {

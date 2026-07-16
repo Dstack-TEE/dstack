@@ -4,6 +4,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+set -euo pipefail
+
 echo "Starting all SGX services using docker-compose..."
 docker compose up --build -d
 

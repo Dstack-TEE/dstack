@@ -8,7 +8,7 @@ dstack repository.
 For each request it:
 
 1. verifies the guest's TDX quote with DCAP;
-2. checks that the SGX and TDX quoting enclaves identify the same platform;
+2. checks that the SGX and TDX quotes carry the same quoting-enclave ID;
 3. derives a 32-byte key as `SHA-256(SGX sealing key || MRTD || RTMR0..3)`;
 4. encrypts the key using the libsodium sealed-box format and the X25519 public
    key in the TDX report data; and
