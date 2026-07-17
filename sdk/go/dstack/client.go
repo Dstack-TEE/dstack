@@ -119,6 +119,11 @@ type AttestResponse struct {
 	Attestation []byte
 }
 
+// GetGpuAttestationResponse contains the complete NVIDIA GPU attestation JSON.
+type GetGpuAttestationResponse struct {
+	Attestation string `json:"attestation"`
+}
+
 // Represents an event log entry in the TCB info
 type EventLog struct {
 	IMR          int    `json:"imr"`
@@ -577,6 +582,20 @@ func (c *DstackClient) Attest(ctx context.Context, reportData []byte) (*AttestRe
 	}
 
 	return &AttestResponse{Attestation: attestation}, nil
+}
+
+// GetGpuAttestation returns the complete NVIDIA GPU attestation JSON produced during boot.
+func (c *DstackClient) GetGpuAttestation(ctx context.Context) (*GetGpuAttestationResponse, error) {
+	data, err := c.sendRPCRequest(ctx, "/GetGpuAttestation", map[string]interface{}{})
+	if err != nil {
+		return nil, err
+	}
+
+	var response GetGpuAttestationResponse
+	if err := json.Unmarshal(data, &response); err != nil {
+		return nil, err
+	}
+	return &response, nil
 }
 
 // Represents the response from a Version request.

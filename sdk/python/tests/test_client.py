@@ -13,6 +13,7 @@ from dstack_sdk import AsyncDstackClient
 from dstack_sdk import AsyncTappdClient
 from dstack_sdk import AttestResponse
 from dstack_sdk import DstackClient
+from dstack_sdk import GetGpuAttestationResponse
 from dstack_sdk import GetKeyResponse
 from dstack_sdk import GetQuoteResponse
 from dstack_sdk import GetTlsKeyResponse
@@ -118,6 +119,22 @@ async def test_async_client_attest():
     result = await client.attest("test")
     assert isinstance(result, AttestResponse)
     assert len(result.attestation) > 0
+
+
+@pytest.mark.asyncio
+async def test_async_client_get_gpu_attestation(monkeypatch):
+    attestation = '{"result_code":0,"claims":[]}'
+
+    async def fake_send(self, method, payload):
+        assert method == "GetGpuAttestation"
+        assert payload == {}
+        return {"attestation": attestation}
+
+    monkeypatch.setenv("DSTACK_SIMULATOR_ENDPOINT", "http://localhost:0")
+    monkeypatch.setattr(AsyncDstackClient, "_send_rpc_request", fake_send)
+    result = await AsyncDstackClient().get_gpu_attestation()
+    assert isinstance(result, GetGpuAttestationResponse)
+    assert result.attestation == attestation
 
 
 @pytest.mark.asyncio

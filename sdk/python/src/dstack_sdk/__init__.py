@@ -7,6 +7,7 @@ from .dstack_client import AsyncTappdClient
 from .dstack_client import AttestResponse
 from .dstack_client import DstackClient
 from .dstack_client import EventLog
+from .dstack_client import GetGpuAttestationResponse
 from .dstack_client import GetKeyResponse
 from .dstack_client import GetQuoteResponse
 from .dstack_client import GetTlsKeyResponse
@@ -36,6 +37,7 @@ __all__ = [
     "GetKeyResponse",
     "GetTlsKeyResponse",
     "AttestResponse",
+    "GetGpuAttestationResponse",
     "GetQuoteResponse",
     "InfoResponse",
     "TcbInfo",

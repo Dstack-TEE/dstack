@@ -186,6 +186,10 @@ class AttestResponse(BaseModel):
         return bytes.fromhex(self.attestation)
 
 
+class GetGpuAttestationResponse(BaseModel):
+    attestation: str
+
+
 class SignResponse(BaseModel):
     signature: str
     signature_chain: List[str]
@@ -461,6 +465,11 @@ class AsyncDstackClient(BaseClient):
         result = await self._send_rpc_request("Attest", {"report_data": hex})
         return AttestResponse(**result)
 
+    async def get_gpu_attestation(self) -> GetGpuAttestationResponse:
+        """Return the complete NVIDIA GPU attestation JSON produced at boot."""
+        result = await self._send_rpc_request("GetGpuAttestation", {})
+        return GetGpuAttestationResponse(**result)
+
     async def info(self) -> InfoResponse[TcbInfo]:
         """Fetch service information including parsed TCB info."""
         result = await self._send_rpc_request("Info", {})
@@ -602,6 +611,11 @@ class DstackClient(BaseClient):
         report_data: str | bytes,
     ) -> AttestResponse:
         """Request a versioned attestation for the provided report data."""
+        raise NotImplementedError
+
+    @call_async
+    def get_gpu_attestation(self) -> GetGpuAttestationResponse:
+        """Return the complete NVIDIA GPU attestation JSON produced at boot."""
         raise NotImplementedError
 
     @call_async

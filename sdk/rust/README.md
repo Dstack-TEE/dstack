@@ -105,6 +105,19 @@ println!("{}", info.tcb_info);
 Generates a versioned attestation with a custom 64-byte payload.
 - `attestation`: Hex-encoded attestation
 
+#### `get_gpu_attestation() -> GetGpuAttestationResponse`
+
+Returns the complete NVIDIA `nvattest` JSON output produced during boot.
+
+```rust
+let gpu = client.get_gpu_attestation().await?;
+println!("{}", gpu.attestation);
+```
+
+The call returns an error when no GPU attestation output is available. The raw
+output is not trusted by itself; remote verifiers should compare its digest
+with the measured `gpu-attestation` runtime event.
+
 ### Generate TLS Certificates
 
 `get_tls_key()` creates fresh TLS certificates. Unlike `get_key()`, each call generates a new random key.

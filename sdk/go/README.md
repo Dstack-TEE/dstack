@@ -581,6 +581,22 @@ Generates a TDX attestation quote containing the provided report data.
 - Cryptographic proof of execution environment
 - Audit trail generation
 
+##### `GetGpuAttestation(ctx context.Context) (*GetGpuAttestationResponse, error)`
+
+Returns the complete NVIDIA `nvattest` JSON output produced during boot.
+
+```go
+gpu, err := client.GetGpuAttestation(ctx)
+if err != nil {
+	log.Fatal(err)
+}
+fmt.Println(gpu.Attestation)
+```
+
+The call returns an error when no GPU attestation output is available. The raw
+output is not trusted by itself; remote verifiers should compare its digest
+with the measured `gpu-attestation` runtime event.
+
 ##### `GetTlsKey(ctx context.Context, options TlsKeyOptions) (*GetTlsKeyResponse, error)`
 
 Generates a fresh, random TLS key pair with X.509 certificate for TLS/SSL connections. **Important**: This method generates different keys on each call - use `GetKey()` for deterministic keys.

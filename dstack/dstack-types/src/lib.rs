@@ -156,7 +156,7 @@ pub struct GpuPolicy {
 impl Default for GpuPolicy {
     fn default() -> Self {
         serde_json::from_str(DEFAULT_GPU_POLICY)
-            .expect("DEFAULT_GPU_POLICY must be a valid GPU policy")
+            .or_panic("DEFAULT_GPU_POLICY must be a valid GPU policy")
     }
 }
 

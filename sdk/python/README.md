@@ -101,6 +101,20 @@ print(result.attestation)        # hex string
 print(result.decode_attestation())  # bytes
 ```
 
+### Get GPU Attestation
+
+`get_gpu_attestation()` returns the complete NVIDIA `nvattest` JSON output
+produced during boot.
+
+```python
+gpu = client.get_gpu_attestation()
+print(gpu.attestation)
+```
+
+The call fails when no GPU attestation output is available. The raw output is
+not trusted by itself; remote verifiers should compare its digest with the
+measured `gpu-attestation` runtime event.
+
 ### Get Instance Info
 
 ```python
