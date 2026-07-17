@@ -17,7 +17,7 @@ estimatedTime: "10 minutes"
 
 # Docker Setup
 
-This tutorial guides you through installing Docker Engine on your TDX server. Docker is required for the Gramine Key Provider and Local Docker Registry.
+This tutorial guides you through installing Docker Engine on your TDX server. Docker is required for the Local Key Provider and Local Docker Registry.
 
 ## What You'll Install
 
@@ -148,7 +148,7 @@ For detailed solutions, see the [Prerequisites Troubleshooting Guide](/tutorial/
 
 With Docker installed, proceed to:
 
-- [Gramine Key Provider](/tutorial/gramine-key-provider) - Deploy SGX-based key provider
+- [Local Key Provider](/tutorial/gramine-key-provider) - Deploy SGX-based key provider
 
 ## Additional Resources
 

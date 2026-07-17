@@ -23,12 +23,12 @@ running your first confidential application.
 | 2 | SSL Certificate Setup | [ssl-certificate-setup.md](ssl-certificate-setup.md) |
 | 3 | Docker Setup | [docker-setup.md](docker-setup.md) |
 | 3 | HAProxy Setup | [haproxy-setup.md](haproxy-setup.md) |
-| 4 | Gramine Key Provider | [gramine-key-provider.md](gramine-key-provider.md) |
+| 4 | Local Key Provider | [gramine-key-provider.md](gramine-key-provider.md) |
 | 4 | Local Docker Registry | [local-docker-registry.md](local-docker-registry.md) |
 | 5 | Blockchain Wallet Setup | [blockchain-setup.md](blockchain-setup.md) |
 
 > Steps 3–4 contain parallel tracks. Docker Setup and HAProxy Setup are
-> both step 3; Gramine Key Provider and Local Docker Registry are both
+> both step 3; Local Key Provider and Local Docker Registry are both
 > step 4. Complete both within each step number.
 
 ### 3. dstack Installation

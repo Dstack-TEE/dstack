@@ -389,10 +389,10 @@ services:
 
     #[test]
     fn test_parse_real_compose_file() {
-        // Test with real docker-compose.yaml from key-provider-build
+        // Test with the real local-key-provider/build/docker-compose.yaml
         let compose_path = concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/tests/fixtures/key-provider-docker-compose.yaml"
+            "/../local-key-provider/build/docker-compose.yaml"
         );
 
         let compose_info = parse_docker_compose_file(compose_path).unwrap();
@@ -400,14 +400,12 @@ services:
         // Verify service names are correctly extracted
         assert_eq!(compose_info.service_names.len(), 2);
         assert!(compose_info.service_names.contains("aesmd"));
-        assert!(compose_info
-            .service_names
-            .contains("gramine-sealing-key-provider"));
+        assert!(compose_info.service_names.contains("local-key-provider"));
 
         // Note: x-common is an anchor definition, not a service, so it should not be in service_names
         assert!(!compose_info.service_names.contains("x-common"));
 
-        // Project name should be "fixtures" (the parent directory name)
-        assert_eq!(compose_info.project_name, "fixtures");
+        // Project name defaults to the Compose file's parent directory.
+        assert_eq!(compose_info.project_name, "build");
     }
 }

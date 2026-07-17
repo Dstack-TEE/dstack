@@ -256,7 +256,7 @@ grep "dstack" /etc/haproxy/haproxy.cfg
 
 ---
 
-## Gramine Key Provider Issues
+## Local Key Provider Issues
 
 ### Container fails to start: SGX devices not found
 
@@ -276,7 +276,7 @@ grep "dstack" /etc/haproxy/haproxy.cfg
 # Restart aesmd first
 docker restart aesmd
 sleep 5
-docker restart gramine-sealing-key-provider
+docker restart local-key-provider
 
 # Check aesmd logs
 docker logs aesmd 2>&1 | tail -30
@@ -289,15 +289,15 @@ docker logs aesmd 2>&1 | tail -30
 **Solution:**
 1. Verify QCNL configuration points to `https://pccs.phala.network/sgx/certification/v4/`
 2. Check network connectivity: `curl -sk https://pccs.phala.network/sgx/certification/v4/rootcacrl`
-3. Verify the QCNL config file exists at `~/dstack/dstack/key-provider-build/sgx_default_qcnl.conf`
+3. Verify the QCNL config file exists at `~/dstack/dstack/local-key-provider/build/sgx_default_qcnl.conf`
 
-### Empty response from curl test
+### HTTP health checks fail
 
-**Symptom:** `curl -sk https://127.0.0.1:3443/` returns nothing
+**Symptom:** `curl` cannot get a response from port 3443.
 
-**Explanation:** This is normal. The key provider doesn't serve a root endpoint - it only responds to specific API calls from CVMs. An empty response means the TLS handshake succeeded, confirming the service is running.
-
-If you get `curl: (7) Failed to connect`, the service is not running - check container logs with `docker logs gramine-sealing-key-provider`.
+**Explanation:** This is expected. `local-key-provider` uses a length-prefixed
+JSON protocol over raw TCP, not HTTP or HTTPS. Check `docker logs
+local-key-provider` and confirm the listener with `ss -tln | grep 3443`.
 
 ### Port 3443 already in use
 

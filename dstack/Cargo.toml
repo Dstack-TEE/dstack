@@ -49,6 +49,7 @@ members = [
     "host-api",
     "guest-api",
     "load_config",
+    "local-key-provider",
     "key-provider-client",
     "dstack-types",
     "cert-client",
