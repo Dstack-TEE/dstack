@@ -1420,6 +1420,13 @@ mod gpu {
         Ok(sha256(&canonical))
     }
 
+    pub(super) fn evaluate_rego_policy(policy: &GpuPolicy, claims: &[Value]) -> Result<()> {
+        let Some(rego) = policy.rego.as_deref() else {
+            return Ok(());
+        };
+        evaluate_policy(rego, claims).context("failed to apply GPU Rego policy")
+    }
+
     /// Evaluate the app-provided Rego v0 policy using the same input shape as
     /// NVIDIA relying-party policies: the nvattest `claims` JSON array.
     pub(super) fn evaluate_policy(policy: &str, claims: &[Value]) -> Result<()> {
@@ -1722,11 +1729,32 @@ mod gpu {
                 }
             "#;
             evaluate_policy(policy, &claims).unwrap();
+            assert!(evaluate_policy(policy, &[]).is_err());
 
             let rejected = vec![serde_json::json!({"status": "rejected"})];
             assert!(evaluate_policy(policy, &rejected).is_err());
             assert!(evaluate_policy("package policy", &claims).is_err());
             assert!(evaluate_policy("not valid rego", &claims).is_err());
+
+            let allow_no_gpus = GpuPolicy {
+                rego: Some(
+                    r#"
+                        package policy
+                        default nv_match = false
+                        nv_match { count(input) == 0 }
+                    "#
+                    .to_string(),
+                ),
+                ..Default::default()
+            };
+            evaluate_rego_policy(&allow_no_gpus, &[]).unwrap();
+
+            let require_one_gpu = GpuPolicy {
+                rego: Some(policy.to_string()),
+                ..Default::default()
+            };
+            assert!(evaluate_rego_policy(&require_one_gpu, &[]).is_err());
+            evaluate_rego_policy(&GpuPolicy::default(), &[]).unwrap();
         }
 
         #[test]
@@ -1754,10 +1782,27 @@ mod gpu {
 impl Stage0<'_> {
     /// Enforce `requirements.attest_gpu` (default true): attest an attached
     /// NVIDIA GPU before continuing to key provisioning, or — when explicitly
-    /// disabled — set the GPU ready state without verification.
+    /// disabled — set the GPU ready state without verification. The optional
+    /// Rego policy is always evaluated; when no attestation is performed, its
+    /// claims-array input is empty.
     async fn setup_gpu(&self) -> Result<()> {
+        let gpu_policy = self
+            .shared
+            .app_compose
+            .requirements
+            .as_ref()
+            .map(|requirements| requirements.gpu_policy.clone())
+            .unwrap_or_default();
+        if !gpu_policy.is_default() {
+            emit_runtime_event("gpu-policy-hash", &gpu::policy_digest(&gpu_policy)?)?;
+        }
+
         let inventory = gpu::gpu_inventory()?;
         if !self.shared.app_compose.attest_gpu() {
+            gpu::evaluate_rego_policy(&gpu_policy, &[])?;
+            if gpu_policy.rego.is_some() {
+                info!("application GPU Rego policy accepted an empty claims array");
+            }
             if inventory.nvidia == 0 {
                 return Ok(());
             }
@@ -1770,39 +1815,30 @@ impl Stage0<'_> {
         }
         let expected_devices = gpu::nvidia_gpu_count(inventory)?;
         if expected_devices == 0 {
+            gpu::evaluate_rego_policy(&gpu_policy, &[])?;
+            if gpu_policy.rego.is_some() {
+                info!("application GPU Rego policy accepted an empty claims array");
+            }
             return Ok(());
         }
         self.vmm.notify_q("boot.progress", "attesting GPU").await;
         info!("verifying GPU TEE attestation");
         let attestation = gpu::attest_gpu(expected_devices).await?;
 
-        let gpu_policy = self
-            .shared
-            .app_compose
-            .requirements
-            .as_ref()
-            .map(|requirements| requirements.gpu_policy.clone())
-            .unwrap_or_default();
-        if !gpu_policy.is_default() {
-            emit_runtime_event("gpu-policy-hash", &gpu::policy_digest(&gpu_policy)?)?;
-        }
         let gpu_state = gpu::query_gpu_state(expected_devices)?;
         attestation
             .verify_claim_policy(&gpu_state, &gpu_policy)
             .context("failed to apply basic GPU policy")?;
-        if let Some(rego) = gpu_policy.rego.as_deref() {
-            gpu::evaluate_policy(rego, attestation.claims())
-                .context("failed to apply GPU Rego policy")?;
-        }
+        gpu::evaluate_rego_policy(&gpu_policy, attestation.claims())?;
 
+        if !gpu_policy.is_default() {
+            info!("application GPU policy accepted the attestation claims and state");
+        }
         gpu_state.set_ready()?;
         let devtools = gpu_state.any_devtools();
         let event = attestation.event(devtools)?;
         emit_runtime_event("gpu-attestation", &event)
             .context("failed to emit GPU attestation event")?;
-        if !gpu_policy.is_default() {
-            info!("application GPU policy accepted the attestation claims and state");
-        }
         info!("GPU TEE attestation succeeded");
         Ok(())
     }

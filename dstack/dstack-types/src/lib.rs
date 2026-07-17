@@ -180,14 +180,17 @@ pub struct Requirements {
     /// local GPU attestation (nvattest) during system setup and refuses to
     /// boot — before key provisioning — if the GPU fails to attest (e.g. a
     /// non-CC GPU or CC mode disabled by the host). `false` skips attestation
-    /// and sets the GPU ready state directly. Guests without a GPU attached
-    /// are unaffected either way.
+    /// and sets the GPU ready state directly. An application Rego GPU policy
+    /// is still evaluated with an empty claims array when attestation is
+    /// skipped or no GPU is attached.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub attest_gpu: Option<bool>,
     /// Optional application GPU policy applied before key provisioning.
     ///
     /// Its default-expanded, JCS-canonicalized JSON SHA-256 digest is emitted
     /// as the `gpu-policy-hash` launch event immediately after `compose-hash`.
+    /// Rego receives an empty claims array when no GPU attestation is produced,
+    /// allowing applications to enforce an expected GPU count.
     #[serde(default, skip_serializing_if = "GpuPolicy::is_default")]
     pub gpu_policy: GpuPolicy,
 }
