@@ -1,0 +1,25 @@
+# SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+address = "0.0.0.0"
+port = 8090
+log_level = "info"
+
+# NVIDIA attestation collateral upstreams.
+upstream_ocsp_url = "https://ocsp.ndis.nvidia.com"
+upstream_rim_url = "https://rim.attestation.nvidia.com"
+
+# Persistent cache location: one JSON file per entry under ocsp/ and rim/.
+cache_dir = "/var/lib/dstack/gpu-attest-proxy"
+
+# RIM documents are re-fetched after rim_ttl; when the upstream is
+# unreachable a stale document keeps being served for up to rim_max_stale.
+rim_ttl = "24h"
+rim_max_stale = "7d"
+
+# OCSP responses are cached until their nextUpdate, bounded by ocsp_max_ttl;
+# entries within refresh_margin of expiry are refreshed in the background so
+# a warm cache rides through upstream outages.
+ocsp_max_ttl = "7d"
+refresh_margin = "24h"

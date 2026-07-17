@@ -59,6 +59,7 @@ members = [
     "dstack-mr",
     "dstack-mr/cli",
     "verifier",
+    "gpu-attest-proxy",
     "size-parser",
     "port-forward",
     "crates/dstack-cli-core",

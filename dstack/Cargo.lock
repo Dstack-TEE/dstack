@@ -2832,6 +2832,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "gpu-attest-proxy"
+version = "0.6.0"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "clap",
+ "dashmap",
+ "fs-err",
+ "git-version",
+ "hex",
+ "load_config",
+ "or-panic",
+ "reqwest",
+ "rocket",
+ "serde",
+ "serde-duration",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "group"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

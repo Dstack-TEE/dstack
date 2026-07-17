@@ -1,0 +1,33 @@
+# SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "gpu-attest-proxy"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+base64.workspace = true
+clap = { workspace = true, features = ["derive", "string"] }
+dashmap.workspace = true
+fs-err.workspace = true
+git-version.workspace = true
+hex = { workspace = true, features = ["alloc"] }
+load_config.workspace = true
+or-panic.workspace = true
+reqwest.workspace = true
+rocket = { workspace = true, features = ["json"] }
+serde = { workspace = true, features = ["derive"] }
+serde-duration.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
