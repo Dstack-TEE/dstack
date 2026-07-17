@@ -260,6 +260,9 @@ pub struct CvmConfig {
     /// The URL of the PCCS server
     #[serde(default)]
     pub pccs_url: String,
+    /// Optional NVIDIA OCSP/RIM cache passed to guests in sys-config.
+    #[serde(default)]
+    pub nvidia_attestation_proxy_url: Option<String>,
     /// The URL of the Docker registry
     pub docker_registry: String,
     /// The start of the CID pool that allocates CIDs to VMs

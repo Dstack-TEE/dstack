@@ -74,6 +74,7 @@ This file contains system configuration in JSON format:
 | kms_urls | array of string | List of KMS service URLs |
 | gateway_urls | array of string | List of gateway service URLs |
 | pccs_url | string | URL of the PCCS service (used when dstack components need to verify a remote TD CVM or SGX enclave) |
+| nvidia_attestation_proxy_url | string | Optional persistent OCSP and RIM cache used by NVIDIA local GPU attestation |
 | docker_registry | string | URL of the docker registry |
 | host_api_url | string | VSOCK URL of host API |
 | vm_config | string | JSON string of VM configuration (os_image_hash, cpu_count, memory_size) |
@@ -85,6 +86,7 @@ The hash of this file is not extended to any RTMR because each field has its own
 | kms_urls | URLs themselves aren't security-critical. The trust anchor is the KMS root public key, which is extended as the `key-provider` launch event. On TDX-family platforms this is RTMR3; on AWS NitroTPM this is PCR14. Keys obtained from KMS will either successfully decrypt/encrypt the disk or fail-and-abort. |
 | gateway_urls | URLs aren't security-critical. Trust is established through CA certificates from KMS. App CVM and dstack-gateway CVM verify each other's CA certificates to ensure they're under the same KMS authority. |
 | pccs_url | URL isn't security-critical. Trust is anchored by the root public key pinned in the attestation verification program. |
+| nvidia_attestation_proxy_url | The URL is not a collateral trust anchor. The measured guest verifies NVIDIA signatures and the signed OCSP validity window, and continues to require a fresh GPU evidence nonce. A bad endpoint can withhold collateral and cause a denial of service, but cannot forge a successful attestation or replay an expired `good` response. |
 | docker_registry | Docker daemon verifies image integrity using the pinned image hashes in the docker-compose file. |
 | host_api_url | Used only for reporting or encrypted sealing key transport. An incorrect URL doesn't create security vulnerabilities. |
 | vm_config | Informs the CVM to report virtual hardware info to KMS when requesting keys. KMS uses this info to calculate expected RTMRs and verify image hash. If tampered with, image hash verification would fail and no keys would be distributed. |

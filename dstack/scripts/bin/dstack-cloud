@@ -585,6 +585,7 @@ class CloudDeploymentManager:
         kms_urls = services.get("kms_urls") or ["https://kms.tdxlab.dstack.org:12001"]
         gateway_urls = services.get("gateway_urls") or ["https://gateway.tdxlab.dstack.org:12002"]
         pccs_url = services.get("pccs_url", "")
+        nvidia_attestation_proxy_url = services.get("nvidia_attestation_proxy_url")
 
         platform = (app.platform or "gcp").lower()
         if platform == "gcp":
@@ -651,12 +652,15 @@ class CloudDeploymentManager:
             },
         }
 
-        return {
+        sys_config = {
             "kms_urls": kms_urls,
             "gateway_urls": gateway_urls,
             "pccs_url": pccs_url,
             "vm_config": json.dumps(vm_config),
         }
+        if nvidia_attestation_proxy_url:
+            sys_config["nvidia_attestation_proxy_url"] = nvidia_attestation_proxy_url
+        return sys_config
 
     def load_state(self) -> Optional[DeploymentState]:
         """Load deployment state."""
@@ -1004,6 +1008,7 @@ class CloudDeploymentManager:
                     "kms_urls": ["https://kms.tdxlab.dstack.org:12001"],
                     "gateway_urls": ["https://gateway.tdxlab.dstack.org:12002"],
                     "pccs_url": "",
+                    "nvidia_attestation_proxy_url": "",
                 },
                 "_comment_images": "System image search paths (for boot_image_tar auto-discovery)",
                 "image_search_paths": [

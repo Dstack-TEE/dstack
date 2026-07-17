@@ -1368,6 +1368,7 @@ pub(crate) fn make_sys_config(
         "kms_urls": kms_urls,
         "gateway_urls": gateway_urls,
         "pccs_url": cfg.cvm.pccs_url,
+        "nvidia_attestation_proxy_url": cfg.cvm.nvidia_attestation_proxy_url,
         "docker_registry": cfg.cvm.docker_registry,
         "host_api_url": format!("vsock://2:{}/api", cfg.host_api.port),
         "vm_config": serde_json::to_string(&vm_config)?,
@@ -1956,6 +1957,7 @@ mod tests {
         let mut config: Config = Figment::from(load_config_figment(None)).extract()?;
         config.image.path = image_root;
         config.cvm.platform = Some(TeePlatform::AmdSevSnp);
+        config.cvm.nvidia_attestation_proxy_url = Some("http://10.0.2.2:8090".to_string());
         let compose_hash = hex_of(0x22, 32);
         let manifest = Manifest {
             id: "snp-test".to_string(),
@@ -2032,6 +2034,10 @@ mod tests {
             .context("mr_config must be a string")?;
         let parsed_mr_config = MrConfigV3::from_document(mr_config_document)?;
 
+        assert_eq!(
+            sys_config["nvidia_attestation_proxy_url"],
+            "http://10.0.2.2:8090"
+        );
         assert_eq!(parsed_mr_config.app_id, vec![0x11; 20]);
         assert_eq!(parsed_mr_config.compose_hash, vec![0x22; 32]);
         assert_eq!(parsed_mr_config.gpu_policy_hash, None);

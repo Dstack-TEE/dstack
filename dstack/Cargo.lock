@@ -1809,6 +1809,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "dstack-gpu-attest-proxy"
+version = "0.6.0"
+dependencies = [
+ "anyhow",
+ "bytes",
+ "chrono",
+ "clap",
+ "dashmap",
+ "hex",
+ "http",
+ "http-body-util",
+ "humantime",
+ "hyper",
+ "hyper-util",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+]
+
+[[package]]
 name = "dstack-guest-agent"
 version = "0.6.0"
 dependencies = [
@@ -2083,6 +2109,7 @@ dependencies = [
  "tpm2",
  "tracing",
  "tracing-subscriber",
+ "url",
  "x25519-dalek",
  "x509-parser",
  "yaml-rust2",

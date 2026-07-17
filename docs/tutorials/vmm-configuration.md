@@ -105,6 +105,8 @@ qemu_path = ""
 kms_urls = ["http://127.0.0.1:8081"]
 gateway_urls = ["http://127.0.0.1:8082"]
 pccs_url = "https://pccs.phala.network/sgx/certification/v4"
+# Optional. See "NVIDIA GPU attestation cache" below.
+# nvidia_attestation_proxy_url = "http://10.0.2.2:8090"
 docker_registry = ""
 cid_start = 1000
 cid_pool_size = 1000
@@ -211,6 +213,24 @@ Verify QGS is running:
 ```bash
 systemctl status qgsd
 ```
+
+### Optional: NVIDIA GPU attestation cache
+
+GPU images perform local NVIDIA attestation before app keys are provisioned.
+Without a cache this contacts NVIDIA's OCSP and RIM services during every cold
+boot. A fleet can run the persistent
+[`dstack-gpu-attest-proxy`](../../dstack/gpu-attest-proxy/README.md) and pass its
+URL to guests through sys-config:
+
+```toml
+[cvm]
+nvidia_attestation_proxy_url = "http://10.0.2.2:8090"
+```
+
+The example address is the host as seen from QEMU user-mode networking. The
+proxy must be reachable during `dstack-prepare`. It stores only NVIDIA-signed
+collateral and never becomes a signing trust anchor. OCSP entries are not
+served after their signed validity window.
 
 ### Step 7: Create Runtime Directories
 
