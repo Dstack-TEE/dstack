@@ -15,8 +15,8 @@ use dstack_guest_agent_rpc::{
     tappd_server::{TappdRpc, TappdServer},
     worker_server::{WorkerRpc, WorkerServer},
     AppInfo, AttestResponse, DeriveK256KeyResponse, DeriveKeyArgs, GetAttestationForAppKeyRequest,
-    GetGpuAttestationResponse, GetKeyArgs, GetKeyResponse, GetQuoteResponse, GetTlsKeyArgs,
-    GetTlsKeyResponse, RawQuoteArgs, SignRequest, SignResponse, TdxQuoteArgs, TdxQuoteResponse,
+    GetKeyArgs, GetKeyResponse, GetQuoteResponse, GetTlsKeyArgs, GetTlsKeyResponse,
+    GpuInfoResponse, RawQuoteArgs, SignRequest, SignResponse, TdxQuoteArgs, TdxQuoteResponse,
     VerifyRequest, VerifyResponse, WorkerVersion,
 };
 use dstack_types::{AppKeys, SysConfig, GPU_ATTESTATION_OUTPUT};
@@ -340,8 +340,8 @@ impl DstackGuestRpc for InternalRpcHandler {
         get_info(&self.state, false).await
     }
 
-    async fn get_gpu_attestation(self) -> Result<GetGpuAttestationResponse> {
-        Ok(GetGpuAttestationResponse {
+    async fn gpu_info(self) -> Result<GpuInfoResponse> {
+        Ok(GpuInfoResponse {
             attestation: read_gpu_attestation(Path::new(GPU_ATTESTATION_OUTPUT))?,
         })
     }

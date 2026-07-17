@@ -285,17 +285,18 @@ curl --unix-socket /var/run/dstack.sock http://dstack/Attest?report_data=0000000
 }
 ```
 
-### 8. Get GPU Attestation
+### 8. GPU Info
 
-Returns the complete JSON output produced by NVIDIA `nvattest` during boot.
+Returns GPU information collected during boot. Currently, this includes the
+complete JSON output produced by NVIDIA `nvattest`.
 The endpoint returns an error when no GPU attestation output is available, for
 example on a VM without an NVIDIA GPU or when GPU attestation was disabled.
 
-**Endpoint:** `/GetGpuAttestation`
+**Endpoint:** `/GpuInfo`
 
 **Example:**
 ```bash
-curl --unix-socket /var/run/dstack.sock http://dstack/GetGpuAttestation
+curl --unix-socket /var/run/dstack.sock http://dstack/GpuInfo
 ```
 
 **Response:**

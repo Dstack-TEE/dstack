@@ -101,13 +101,13 @@ print(result.attestation)        # hex string
 print(result.decode_attestation())  # bytes
 ```
 
-### Get GPU Attestation
+### GPU Info
 
-`get_gpu_attestation()` returns the complete NVIDIA `nvattest` JSON output
-produced during boot.
+`gpu_info()` returns GPU information collected during boot. Currently, this
+includes the complete NVIDIA `nvattest` JSON output.
 
 ```python
-gpu = client.get_gpu_attestation()
+gpu = client.gpu_info()
 print(gpu.attestation)
 ```
 

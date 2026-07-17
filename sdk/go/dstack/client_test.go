@@ -118,10 +118,10 @@ func TestAttest(t *testing.T) {
 	}
 }
 
-func TestGetGpuAttestation(t *testing.T) {
+func TestGpuInfo(t *testing.T) {
 	const attestation = `{"result_code":0,"claims":[]}`
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/GetGpuAttestation" {
+		if r.URL.Path != "/GpuInfo" {
 			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -130,7 +130,7 @@ func TestGetGpuAttestation(t *testing.T) {
 	defer server.Close()
 
 	client := dstack.NewDstackClient(dstack.WithEndpoint(server.URL))
-	response, err := client.GetGpuAttestation(context.Background())
+	response, err := client.GpuInfo(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}

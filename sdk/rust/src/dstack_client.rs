@@ -166,12 +166,10 @@ impl DstackClient {
         Ok(response)
     }
 
-    /// Returns the complete NVIDIA GPU attestation JSON produced during boot.
-    pub async fn get_gpu_attestation(&self) -> Result<GetGpuAttestationResponse> {
-        let response = self
-            .send_rpc_request("/GetGpuAttestation", &json!({}))
-            .await?;
-        let response = serde_json::from_value::<GetGpuAttestationResponse>(response)?;
+    /// Returns GPU information collected during boot.
+    pub async fn gpu_info(&self) -> Result<GpuInfoResponse> {
+        let response = self.send_rpc_request("/GpuInfo", &json!({})).await?;
+        let response = serde_json::from_value::<GpuInfoResponse>(response)?;
         Ok(response)
     }
 

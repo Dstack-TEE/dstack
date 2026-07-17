@@ -581,12 +581,13 @@ Generates a TDX attestation quote containing the provided report data.
 - Cryptographic proof of execution environment
 - Audit trail generation
 
-##### `GetGpuAttestation(ctx context.Context) (*GetGpuAttestationResponse, error)`
+##### `GpuInfo(ctx context.Context) (*GpuInfoResponse, error)`
 
-Returns the complete NVIDIA `nvattest` JSON output produced during boot.
+Returns GPU information collected during boot. Currently, this includes the
+complete NVIDIA `nvattest` JSON output.
 
 ```go
-gpu, err := client.GetGpuAttestation(ctx)
+gpu, err := client.GpuInfo(ctx)
 if err != nil {
 	log.Fatal(err)
 }

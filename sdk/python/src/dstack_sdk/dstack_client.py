@@ -186,7 +186,7 @@ class AttestResponse(BaseModel):
         return bytes.fromhex(self.attestation)
 
 
-class GetGpuAttestationResponse(BaseModel):
+class GpuInfoResponse(BaseModel):
     attestation: str
 
 
@@ -465,10 +465,10 @@ class AsyncDstackClient(BaseClient):
         result = await self._send_rpc_request("Attest", {"report_data": hex})
         return AttestResponse(**result)
 
-    async def get_gpu_attestation(self) -> GetGpuAttestationResponse:
-        """Return the complete NVIDIA GPU attestation JSON produced at boot."""
-        result = await self._send_rpc_request("GetGpuAttestation", {})
-        return GetGpuAttestationResponse(**result)
+    async def gpu_info(self) -> GpuInfoResponse:
+        """Return GPU information collected during boot."""
+        result = await self._send_rpc_request("GpuInfo", {})
+        return GpuInfoResponse(**result)
 
     async def info(self) -> InfoResponse[TcbInfo]:
         """Fetch service information including parsed TCB info."""
@@ -614,8 +614,8 @@ class DstackClient(BaseClient):
         raise NotImplementedError
 
     @call_async
-    def get_gpu_attestation(self) -> GetGpuAttestationResponse:
-        """Return the complete NVIDIA GPU attestation JSON produced at boot."""
+    def gpu_info(self) -> GpuInfoResponse:
+        """Return GPU information collected during boot."""
         raise NotImplementedError
 
     @call_async

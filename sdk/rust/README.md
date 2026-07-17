@@ -105,12 +105,13 @@ println!("{}", info.tcb_info);
 Generates a versioned attestation with a custom 64-byte payload.
 - `attestation`: Hex-encoded attestation
 
-#### `get_gpu_attestation() -> GetGpuAttestationResponse`
+#### `gpu_info() -> GpuInfoResponse`
 
-Returns the complete NVIDIA `nvattest` JSON output produced during boot.
+Returns GPU information collected during boot. Currently, this includes the
+complete NVIDIA `nvattest` JSON output.
 
 ```rust
-let gpu = client.get_gpu_attestation().await?;
+let gpu = client.gpu_info().await?;
 println!("{}", gpu.attestation);
 ```
 

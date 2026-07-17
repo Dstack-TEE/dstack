@@ -119,8 +119,8 @@ type AttestResponse struct {
 	Attestation []byte
 }
 
-// GetGpuAttestationResponse contains the complete NVIDIA GPU attestation JSON.
-type GetGpuAttestationResponse struct {
+// GpuInfoResponse contains GPU information collected during boot.
+type GpuInfoResponse struct {
 	Attestation string `json:"attestation"`
 }
 
@@ -584,14 +584,14 @@ func (c *DstackClient) Attest(ctx context.Context, reportData []byte) (*AttestRe
 	return &AttestResponse{Attestation: attestation}, nil
 }
 
-// GetGpuAttestation returns the complete NVIDIA GPU attestation JSON produced during boot.
-func (c *DstackClient) GetGpuAttestation(ctx context.Context) (*GetGpuAttestationResponse, error) {
-	data, err := c.sendRPCRequest(ctx, "/GetGpuAttestation", map[string]interface{}{})
+// GpuInfo returns GPU information collected during boot.
+func (c *DstackClient) GpuInfo(ctx context.Context) (*GpuInfoResponse, error) {
+	data, err := c.sendRPCRequest(ctx, "/GpuInfo", map[string]interface{}{})
 	if err != nil {
 		return nil, err
 	}
 
-	var response GetGpuAttestationResponse
+	var response GpuInfoResponse
 	if err := json.Unmarshal(data, &response); err != nil {
 		return nil, err
 	}

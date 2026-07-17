@@ -109,8 +109,8 @@ export interface AttestResponse {
   attestation: Hex
 }
 
-export interface GetGpuAttestationResponse {
-  __name__: Readonly<'GetGpuAttestationResponse'>
+export interface GpuInfoResponse {
+  __name__: Readonly<'GpuInfoResponse'>
 
   attestation: string
 }
@@ -335,11 +335,11 @@ export class DstackClient<T extends TcbInfo = TcbInfoV05x> {
     })
   }
 
-  async getGpuAttestation(): Promise<GetGpuAttestationResponse> {
-    const result = await send_rpc_request<{ attestation: string }>(this.endpoint, '/GetGpuAttestation', '{}')
+  async gpuInfo(): Promise<GpuInfoResponse> {
+    const result = await send_rpc_request<{ attestation: string }>(this.endpoint, '/GpuInfo', '{}')
     return Object.freeze({
       ...result,
-      __name__: 'GetGpuAttestationResponse',
+      __name__: 'GpuInfoResponse',
     })
   }
 

@@ -131,7 +131,7 @@ pub struct AttestResponse {
 #[derive(Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "borsh", derive(BorshSerialize, BorshDeserialize))]
 #[cfg_attr(feature = "borsh_schema", derive(BorshSchema))]
-pub struct GetGpuAttestationResponse {
+pub struct GpuInfoResponse {
     /// Complete JSON output produced by nvattest during guest boot.
     pub attestation: String,
 }

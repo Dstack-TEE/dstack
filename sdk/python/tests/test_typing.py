@@ -9,10 +9,10 @@ from typing import get_type_hints
 
 from dstack_sdk import AsyncDstackClient
 from dstack_sdk import DstackClient
-from dstack_sdk import GetGpuAttestationResponse
 from dstack_sdk import GetKeyResponse
 from dstack_sdk import GetQuoteResponse
 from dstack_sdk import GetTlsKeyResponse
+from dstack_sdk import GpuInfoResponse
 from dstack_sdk.dstack_client import InfoResponse
 
 # Use a test endpoint to avoid socket file not found errors
@@ -53,7 +53,7 @@ def test_all_sync_method_types():
 
     expected_types = {
         "get_key": GetKeyResponse,
-        "get_gpu_attestation": GetGpuAttestationResponse,
+        "gpu_info": GpuInfoResponse,
         "get_quote": GetQuoteResponse,
         "get_tls_key": GetTlsKeyResponse,
         "info": InfoResponse,
@@ -95,7 +95,7 @@ def test_async_method_types():
 
     expected_types = {
         "get_key": GetKeyResponse,
-        "get_gpu_attestation": GetGpuAttestationResponse,
+        "gpu_info": GpuInfoResponse,
         "get_quote": GetQuoteResponse,
         "get_tls_key": GetTlsKeyResponse,
         "info": InfoResponse,
@@ -129,7 +129,7 @@ def test_method_signature_comparison():
 
     methods_to_check = [
         "get_key",
-        "get_gpu_attestation",
+        "gpu_info",
         "get_quote",
         "get_tls_key",
         "info",
