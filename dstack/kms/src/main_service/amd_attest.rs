@@ -193,6 +193,7 @@ fn test_mr_config(app_id: Vec<u8>, compose_hash: Vec<u8>) -> MrConfigV3 {
     MrConfigV3::new(
         app_id,
         compose_hash,
+        None,
         dstack_types::KeyProviderKind::None,
         Vec::new(),
         instance_id,

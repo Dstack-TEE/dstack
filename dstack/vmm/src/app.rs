@@ -132,6 +132,10 @@ pub struct GpuConfig {
 }
 
 impl GpuConfig {
+    pub fn has_gpus(&self) -> bool {
+        !self.gpus.is_empty()
+    }
+
     pub fn is_empty(&self) -> bool {
         if self.attach_mode.is_all() {
             return false;
@@ -1175,7 +1179,10 @@ impl App {
         let mr_config = if use_mr_config_v3 {
             Some(
                 work_dir
-                    .prepare_mr_config_v3(&app_compose)
+                    .prepare_mr_config_v3(
+                        &app_compose,
+                        manifest.gpus.as_ref().is_some_and(GpuConfig::has_gpus),
+                    )
                     .context("Failed to prepare mr_config")?,
             )
         } else {
@@ -1540,6 +1547,30 @@ mod tests {
 
     fn hex_of(byte: u8, len: usize) -> String {
         hex::encode(vec![byte; len])
+    }
+
+    #[test]
+    fn gpu_config_has_gpus_only_when_resolved_gpu_list_is_non_empty() {
+        assert!(!GpuConfig::default().has_gpus());
+        assert!(!GpuConfig {
+            attach_mode: AttachMode::All,
+            ..Default::default()
+        }
+        .has_gpus());
+        assert!(!GpuConfig {
+            bridges: vec![GpuSpec {
+                slot: "0000:01:00.0".into(),
+            }],
+            ..Default::default()
+        }
+        .has_gpus());
+        assert!(GpuConfig {
+            gpus: vec![GpuSpec {
+                slot: "0000:02:00.0".into(),
+            }],
+            ..Default::default()
+        }
+        .has_gpus());
     }
 
     #[test]
@@ -1948,6 +1979,7 @@ mod tests {
         let mr_config = MrConfigV3::new(
             vec![0x11; 20],
             vec![0x22; 32],
+            None,
             dstack_types::KeyProviderKind::None,
             vec![],
             vec![0x44; 20],
@@ -2002,6 +2034,7 @@ mod tests {
 
         assert_eq!(parsed_mr_config.app_id, vec![0x11; 20]);
         assert_eq!(parsed_mr_config.compose_hash, vec![0x22; 32]);
+        assert_eq!(parsed_mr_config.gpu_policy_hash, None);
         assert_eq!(vm_config["mr_config"], sys_config["mr_config"]);
         assert_eq!(
             vm_config["os_image_hash"]

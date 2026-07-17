@@ -25,7 +25,6 @@ serde.workspace = true
 serde-human-bytes.workspace = true
 semver.workspace = true
 serde_json.workspace = true
-serde_jcs.workspace = true
 sha2.workspace = true
 tokio = { workspace = true, features = ["full"] }
 tracing.workspace = true

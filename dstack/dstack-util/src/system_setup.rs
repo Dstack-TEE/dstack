@@ -16,11 +16,12 @@ use anyhow::{anyhow, bail, Context, Result};
 use dstack_attest::emit_runtime_event;
 use dstack_kms_rpc as rpc;
 use dstack_types::{
+    gpu_policy_hash,
     shared_filenames::{
         APP_COMPOSE, APP_KEYS, DECRYPTED_ENV, DECRYPTED_ENV_JSON, ENCRYPTED_ENV,
         HOST_SHARED_DIR_NAME, HOST_SHARED_DISK_LABEL, INSTANCE_INFO, SYS_CONFIG, USER_CONFIG,
     },
-    GpuPolicy, KeyProvider, KeyProviderInfo, DEFAULT_GPU_POLICY, GPU_ATTESTATION_OUTPUT,
+    GpuPolicy, KeyProvider, KeyProviderInfo, GPU_ATTESTATION_OUTPUT,
 };
 use fs_err as fs;
 use luks2::{
@@ -1415,25 +1416,13 @@ mod gpu {
         })
     }
 
-    fn gpu_policy_measurement(compose_json: &[u8]) -> Result<[u8; 32]> {
-        let compose: Value =
-            serde_json::from_slice(compose_json).context("failed to parse raw app compose")?;
-        let default_policy: Value = serde_json::from_str(DEFAULT_GPU_POLICY)
-            .context("failed to parse default GPU policy")?;
-        let policy = compose
-            .pointer("/requirements/gpu_policy")
-            .unwrap_or(&default_policy);
-        let canonical =
-            serde_jcs::to_vec(policy).context("failed to canonicalize raw GPU policy")?;
-        Ok(sha256(&canonical))
-    }
-
-    pub(super) fn measure_gpu_policy(compose_path: &Path) -> Result<()> {
+    pub(super) fn measure_gpu_policy(compose_path: &Path) -> Result<[u8; 32]> {
         let compose_json = fs::read(compose_path)
             .with_context(|| format!("failed to read {}", compose_path.display()))?;
-        let digest = gpu_policy_measurement(&compose_json)?;
+        let digest = gpu_policy_hash(&compose_json).context("failed to hash raw GPU policy")?;
         emit_runtime_event("gpu-policy-hash", &digest)
-            .context("failed to emit GPU policy measurement")
+            .context("failed to emit GPU policy measurement")?;
+        Ok(digest)
     }
 
     pub(super) fn evaluate_rego_policy(policy: &GpuPolicy, claims: &[Value]) -> Result<()> {
@@ -1778,17 +1767,14 @@ mod gpu {
             let no_requirements = br#"{}"#;
             let absent = br#"{"requirements": {}}"#;
             let empty_digest = sha256(b"{}");
-            assert_eq!(
-                gpu_policy_measurement(no_requirements).unwrap(),
-                empty_digest
-            );
-            assert_eq!(gpu_policy_measurement(absent).unwrap(), empty_digest);
+            assert_eq!(gpu_policy_hash(no_requirements).unwrap(), empty_digest);
+            assert_eq!(gpu_policy_hash(absent).unwrap(), empty_digest);
 
             let empty = br#"{"requirements": {"gpu_policy": {}}}"#;
-            assert_eq!(gpu_policy_measurement(empty).unwrap(), empty_digest);
+            assert_eq!(gpu_policy_hash(empty).unwrap(), empty_digest);
 
             let explicit_default = br#"{"requirements":{"gpu_policy":{"attest_gpu":true}}}"#;
-            let explicit_default_digest = gpu_policy_measurement(explicit_default).unwrap();
+            let explicit_default_digest = gpu_policy_hash(explicit_default).unwrap();
             assert_ne!(explicit_default_digest, empty_digest);
 
             let reordered = br#"
@@ -1804,8 +1790,8 @@ mod gpu {
             let canonical_order =
                 br#"{"requirements":{"gpu_policy":{"allow_debug":false,"rego":"package policy"}}}"#;
             assert_eq!(
-                gpu_policy_measurement(reordered).unwrap(),
-                gpu_policy_measurement(canonical_order).unwrap()
+                gpu_policy_hash(reordered).unwrap(),
+                gpu_policy_hash(canonical_order).unwrap()
             );
         }
     }
@@ -1817,8 +1803,8 @@ impl Stage0<'_> {
     /// explicitly disabled — set the GPU ready state without verification. The
     /// optional Rego policy is always evaluated; when no attestation is
     /// performed, its claims-array input is empty.
-    async fn measure_gpu(&self) -> Result<()> {
-        gpu::measure_gpu_policy(&self.shared.dir.app_compose_file())?;
+    async fn measure_gpu(&self) -> Result<Option<[u8; 32]>> {
+        let gpu_policy_hash = gpu::measure_gpu_policy(&self.shared.dir.app_compose_file())?;
 
         let gpu_policy = self
             .shared
@@ -1829,6 +1815,7 @@ impl Stage0<'_> {
             .unwrap_or_default();
 
         let inventory = gpu::gpu_inventory()?;
+        let gpu_policy_hash = (inventory.total > 0).then_some(gpu_policy_hash);
         if !gpu_policy.attest_gpu {
             // Attestation is explicitly disabled, so there are no claims. Rego
             // still runs with an empty input before any GPU is made ready.
@@ -1837,7 +1824,7 @@ impl Stage0<'_> {
                 info!("application GPU Rego policy accepted an empty claims array");
             }
             if inventory.nvidia == 0 {
-                return Ok(());
+                return Ok(gpu_policy_hash);
             }
             warn!(
                 "requirements.gpu_policy.attest_gpu is false; setting GPU ready state without attestation"
@@ -1846,7 +1833,7 @@ impl Stage0<'_> {
             if let Err(err) = gpu::set_gpu_ready_state(inventory.nvidia) {
                 warn!("failed to set GPU ready state: {err:?}");
             }
-            return Ok(());
+            return Ok(gpu_policy_hash);
         }
         let expected_devices = gpu::nvidia_gpu_count(inventory)?;
         if expected_devices == 0 {
@@ -1854,7 +1841,7 @@ impl Stage0<'_> {
             if gpu_policy.rego.is_some() {
                 info!("application GPU Rego policy accepted an empty claims array");
             }
-            return Ok(());
+            return Ok(gpu_policy_hash);
         }
         self.vmm.notify_q("boot.progress", "attesting GPU").await;
         info!("verifying GPU TEE attestation");
@@ -1873,7 +1860,7 @@ impl Stage0<'_> {
         emit_runtime_event("gpu-attestation", &event)
             .context("failed to emit GPU attestation event")?;
         info!("GPU TEE attestation succeeded");
-        Ok(())
+        Ok(gpu_policy_hash)
     }
 }
 
@@ -1922,6 +1909,7 @@ impl AppIdValidator {
 struct AppInfo {
     instance_info: InstanceInfo,
     compose_hash: [u8; 32],
+    gpu_policy_hash: Option<[u8; 32]>,
 }
 
 struct Stage0<'a> {
@@ -2537,7 +2525,8 @@ impl<'a> Stage0<'a> {
         emit_runtime_event("system-preparing", &[])?;
         emit_runtime_event("app-id", &instance_info.app_id)?;
         emit_runtime_event("compose-hash", &compose_hash)?;
-        self.measure_gpu()
+        let gpu_policy_hash = self
+            .measure_gpu()
             .await
             .context("failed to verify GPU TEE attestation")?;
 
@@ -2568,12 +2557,14 @@ impl<'a> Stage0<'a> {
         Ok(AppInfo {
             instance_info,
             compose_hash,
+            gpu_policy_hash,
         })
     }
 
     fn verify_app(&self, app_info: &AppInfo, keys: &AppKeys) -> Result<()> {
         config_id_verifier::verify_mr_config_id(
             &app_info.compose_hash,
+            app_info.gpu_policy_hash.as_ref(),
             &app_info
                 .instance_info
                 .app_id

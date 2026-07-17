@@ -14,6 +14,7 @@ use tracing::info;
 #[derive(Clone, Copy)]
 struct ExpectedMrConfig<'a> {
     compose_hash: &'a [u8; 32],
+    gpu_policy_hash: Option<&'a [u8; 32]>,
     app_id: &'a [u8; 20],
     instance_id: &'a [u8],
     key_provider: KeyProviderKind,
@@ -65,6 +66,7 @@ fn read_snp_host_data() -> Result<[u8; 32]> {
 /// - key_provider_id: [u8] // KMS CA pubkey, local-sgx MR, or empty for none/tpm
 pub fn verify_mr_config_id(
     compose_hash: &[u8; 32],
+    gpu_policy_hash: Option<&[u8; 32]>,
     app_id: &[u8; 20],
     instance_id: &[u8],
     key_provider: KeyProviderKind,
@@ -73,6 +75,7 @@ pub fn verify_mr_config_id(
     let mode = AttestationMode::detect().context("Failed to detect attestation mode")?;
     let expected = ExpectedMrConfig {
         compose_hash,
+        gpu_policy_hash,
         app_id,
         instance_id,
         key_provider,
@@ -163,6 +166,10 @@ fn verify_mr_config_v3_document(
     if mr_config.compose_hash.as_slice() != expected.compose_hash {
         bail!("Invalid mr_config compose_hash");
     }
+    if mr_config.gpu_policy_hash.as_deref() != expected.gpu_policy_hash.map(|hash| hash.as_slice())
+    {
+        bail!("Invalid mr_config gpu_policy_hash");
+    }
     if mr_config.app_id.as_slice() != expected.app_id {
         bail!("Invalid mr_config app_id");
     }
@@ -194,12 +201,14 @@ mod tests {
     #[test]
     fn tdx_mr_config_id_v3_accepts_document_value() -> Result<()> {
         let compose_hash = [0x22u8; 32];
+        let gpu_policy_hash = [0x55u8; 32];
         let app_id = [0x11u8; 20];
         let instance_id = [0x44u8; 20];
         let key_provider_id = [0x33u8; 32];
         let mr_config = MrConfigV3::new(
             app_id.to_vec(),
             compose_hash.to_vec(),
+            Some(gpu_policy_hash.to_vec()),
             KeyProviderKind::Kms,
             key_provider_id.to_vec(),
             instance_id.to_vec(),
@@ -207,6 +216,7 @@ mod tests {
         let document = mr_config.to_canonical_json();
         let expected = ExpectedMrConfig {
             compose_hash: &compose_hash,
+            gpu_policy_hash: Some(&gpu_policy_hash),
             app_id: &app_id,
             instance_id: &instance_id,
             key_provider: KeyProviderKind::Kms,
@@ -219,12 +229,14 @@ mod tests {
     #[test]
     fn mr_config_v3_document_must_match_expected_app_info() {
         let compose_hash = [0x22u8; 32];
+        let gpu_policy_hash = [0x55u8; 32];
         let app_id = [0x11u8; 20];
         let instance_id = [0x44u8; 20];
         let key_provider_id = [0x33u8; 32];
         let document = MrConfigV3::new(
             app_id.to_vec(),
             compose_hash.to_vec(),
+            Some(gpu_policy_hash.to_vec()),
             KeyProviderKind::Kms,
             key_provider_id.to_vec(),
             instance_id.to_vec(),
@@ -233,6 +245,7 @@ mod tests {
         let wrong_app_id = [0x12u8; 20];
         let expected = ExpectedMrConfig {
             compose_hash: &compose_hash,
+            gpu_policy_hash: Some(&gpu_policy_hash),
             app_id: &wrong_app_id,
             instance_id: &instance_id,
             key_provider: KeyProviderKind::Kms,
@@ -243,5 +256,90 @@ mod tests {
             Ok(_) => panic!("mismatched app_id must reject"),
             Err(err) => assert!(err.to_string().contains("Invalid mr_config app_id")),
         }
+    }
+
+    #[test]
+    fn mr_config_v3_document_must_match_expected_gpu_policy_hash() {
+        let compose_hash = [0x22u8; 32];
+        let gpu_policy_hash = [0x55u8; 32];
+        let app_id = [0x11u8; 20];
+        let instance_id = [0x44u8; 20];
+        let key_provider_id = [0x33u8; 32];
+        let document = MrConfigV3::new(
+            app_id.to_vec(),
+            compose_hash.to_vec(),
+            Some(gpu_policy_hash.to_vec()),
+            KeyProviderKind::Kms,
+            key_provider_id.to_vec(),
+            instance_id.to_vec(),
+        )
+        .to_canonical_json();
+        let wrong_gpu_policy_hash = [0x56u8; 32];
+        let expected = ExpectedMrConfig {
+            compose_hash: &compose_hash,
+            gpu_policy_hash: Some(&wrong_gpu_policy_hash),
+            app_id: &app_id,
+            instance_id: &instance_id,
+            key_provider: KeyProviderKind::Kms,
+            key_provider_id: &key_provider_id,
+        };
+
+        match verify_mr_config_v3_document(&document, expected) {
+            Ok(_) => panic!("mismatched gpu_policy_hash must reject"),
+            Err(err) => assert!(err
+                .to_string()
+                .contains("Invalid mr_config gpu_policy_hash")),
+        }
+
+        let document_without_gpu_policy_hash = MrConfigV3::new(
+            app_id.to_vec(),
+            compose_hash.to_vec(),
+            None,
+            KeyProviderKind::Kms,
+            key_provider_id.to_vec(),
+            instance_id.to_vec(),
+        )
+        .to_canonical_json();
+        let expected = ExpectedMrConfig {
+            compose_hash: &compose_hash,
+            gpu_policy_hash: Some(&gpu_policy_hash),
+            app_id: &app_id,
+            instance_id: &instance_id,
+            key_provider: KeyProviderKind::Kms,
+            key_provider_id: &key_provider_id,
+        };
+        match verify_mr_config_v3_document(&document_without_gpu_policy_hash, expected) {
+            Ok(_) => panic!("missing gpu_policy_hash on a GPU launch must reject"),
+            Err(err) => assert!(err
+                .to_string()
+                .contains("Invalid mr_config gpu_policy_hash")),
+        }
+    }
+
+    #[test]
+    fn mr_config_v3_allows_missing_gpu_policy_hash_for_non_gpu_launch() -> Result<()> {
+        let compose_hash = [0x22u8; 32];
+        let app_id = [0x11u8; 20];
+        let instance_id = [0x44u8; 20];
+        let key_provider_id = [0x33u8; 32];
+        let mr_config = MrConfigV3::new(
+            app_id.to_vec(),
+            compose_hash.to_vec(),
+            None,
+            KeyProviderKind::Kms,
+            key_provider_id.to_vec(),
+            instance_id.to_vec(),
+        );
+        let document = mr_config.to_canonical_json();
+        let expected = ExpectedMrConfig {
+            compose_hash: &compose_hash,
+            gpu_policy_hash: None,
+            app_id: &app_id,
+            instance_id: &instance_id,
+            key_provider: KeyProviderKind::Kms,
+            key_provider_id: &key_provider_id,
+        };
+
+        verify_tdx_mr_config_id_value(mr_config.to_tdx_mr_config_id(), Some(&document), expected)
     }
 }

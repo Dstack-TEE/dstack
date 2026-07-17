@@ -247,7 +247,10 @@ Compose file content (first 200 chars):
     let mr_config = if use_mr_config_v3 {
         Some(
             vm_work_dir
-                .prepare_mr_config_v3(&app_compose)
+                .prepare_mr_config_v3(
+                    &app_compose,
+                    manifest.gpus.as_ref().is_some_and(|gpus| gpus.has_gpus()),
+                )
                 .context("Failed to prepare mr_config")?,
         )
     } else {

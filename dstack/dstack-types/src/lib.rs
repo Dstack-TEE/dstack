@@ -128,6 +128,21 @@ pub const DEFAULT_GPU_POLICY: &str = "{}";
 /// Path containing the complete output of the NVIDIA GPU attestation command.
 pub const GPU_ATTESTATION_OUTPUT: &str = "/run/nvidia-gpu-attestation/attestation.out";
 
+/// Computes the SHA-256 digest of the JCS-canonicalized raw
+/// `requirements.gpu_policy` JSON value. An absent policy is equivalent to
+/// the default empty object.
+pub fn gpu_policy_hash(compose_json: &[u8]) -> Result<[u8; 32], serde_json::Error> {
+    use sha2::{Digest, Sha256};
+
+    let compose: serde_json::Value = serde_json::from_slice(compose_json)?;
+    let default_policy: serde_json::Value = serde_json::from_str(DEFAULT_GPU_POLICY)?;
+    let policy = compose
+        .pointer("/requirements/gpu_policy")
+        .unwrap_or(&default_policy);
+    let canonical = serde_jcs::to_vec(policy)?;
+    Ok(Sha256::digest(canonical).into())
+}
+
 #[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct GpuPolicy {
