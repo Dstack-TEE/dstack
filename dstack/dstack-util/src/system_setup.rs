@@ -1803,7 +1803,7 @@ impl Stage0<'_> {
     /// explicitly disabled — set the GPU ready state without verification. The
     /// optional Rego policy is always evaluated; when no attestation is
     /// performed, its claims-array input is empty.
-    async fn measure_gpu(&self) -> Result<Option<[u8; 32]>> {
+    async fn measure_gpu(&self) -> Result<[u8; 32]> {
         let gpu_policy_hash = gpu::measure_gpu_policy(&self.shared.dir.app_compose_file())?;
 
         let gpu_policy = self
@@ -1815,7 +1815,6 @@ impl Stage0<'_> {
             .unwrap_or_default();
 
         let inventory = gpu::gpu_inventory()?;
-        let gpu_policy_hash = (inventory.total > 0).then_some(gpu_policy_hash);
         if !gpu_policy.attest_gpu {
             // Attestation is explicitly disabled, so there are no claims. Rego
             // still runs with an empty input before any GPU is made ready.
@@ -1909,7 +1908,7 @@ impl AppIdValidator {
 struct AppInfo {
     instance_info: InstanceInfo,
     compose_hash: [u8; 32],
-    gpu_policy_hash: Option<[u8; 32]>,
+    gpu_policy_hash: [u8; 32],
 }
 
 struct Stage0<'a> {
@@ -2564,7 +2563,7 @@ impl<'a> Stage0<'a> {
     fn verify_app(&self, app_info: &AppInfo, keys: &AppKeys) -> Result<()> {
         config_id_verifier::verify_mr_config_id(
             &app_info.compose_hash,
-            app_info.gpu_policy_hash.as_ref(),
+            &app_info.gpu_policy_hash,
             &app_info
                 .instance_info
                 .app_id
