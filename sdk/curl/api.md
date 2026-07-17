@@ -306,6 +306,33 @@ curl --unix-socket /var/run/dstack.sock http://dstack/GpuInfo
 }
 ```
 
+`GpuInfo.attestation` is the exact UTF-8 `nvattest` output saved during boot;
+calling this endpoint does not perform a new attestation. To authenticate it on
+TDX, first verify the quote and replay the supplied event log to the quote's
+RTMR3. Then decode the `gpu-attestation` event payload and compare its
+`evidence_sha256` with the SHA-256 digest of the exact returned string:
+
+```python
+import hashlib
+import json
+
+gpu_info = json.load(open("gpu-info.json"))
+quote_response = json.load(open("quote.json"))
+events = quote_response["event_log"]
+if isinstance(events, str):
+    events = json.loads(events)
+
+entry = next(event for event in events if event["event"] == "gpu-attestation")
+measured = json.loads(bytes.fromhex(entry["event_payload"]))
+actual = hashlib.sha256(gpu_info["attestation"].encode()).hexdigest()
+assert actual == measured["evidence_sha256"]
+```
+
+The comparison above is meaningful only after quote verification and RTMR3
+event-log replay have succeeded. See the
+[security model](../../docs/security/security-model.md#gpu-security-for-ai-workloads)
+for the event ordering and AWS/AMD SEV-SNP verification paths.
+
 ## Error Responses
 
 All endpoints may return the following HTTP status codes:

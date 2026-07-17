@@ -65,13 +65,58 @@ An application may additionally set `requirements.gpu_policy` to an object with 
 - `allow_debug` (boolean, default `false`): permit an attestation claim whose `dbgstat` is `enabled`.
 - `allow_insecure_boot` (boolean, default `false`): permit an attestation claim whose GPU `secboot` value is false.
 
+The optional Rego v0 policy can enforce deployment-specific claims. For example, this app-compose fragment requires exactly one H100 whose `hwmodel` matches the value emitted by `nvattest`:
+
+```json
+{
+  "requirements": {
+    "gpu_policy": {
+      "rego": "package policy\n\ndefault nv_match = false\n\nnv_match {\n  count(input) == 1\n  input[0].hwmodel == \"GH100 A01 GSP BROM\"\n}"
+    }
+  }
+}
+```
+
+The policy must define the boolean rule `data.policy.nv_match`. Its `input` is the complete `claims` array from `nvattest`; when no attestation is performed, `input` is `[]`, so the example also rejects a launch without exactly one attested GPU.
+
 After measuring `compose-hash`, dstack enters the GPU setup gate and JCS-canonicalizes the original `requirements.gpu_policy` JSON value, then measures its SHA-256 digest in a `gpu-policy-hash` event. When the field is absent—including when `requirements` itself is absent—both parsing and measurement use the default empty object `{}`. Thus an omitted policy and an explicit `{}` have the same digest, while any explicitly present field, including an explicit default value, changes the digest. MrConfigV3 GPU launches also carry this digest as the optional `gpu_policy_hash` field; non-GPU launches omit it for compatibility. When the field is present, the guest compares it with the digest computed from app-compose; when it is absent, the guest skips this MrConfigV3 check. The MrConfigV3 document is bound by TDX `MR_CONFIG_ID` or SEV-SNP `HOST_DATA`, so the host cannot substitute a different GPU policy when this optional binding is present without changing the platform launch identity. The typed policy used for enforcement applies omitted-field defaults and rejects unknown fields. If GPU attestation is enabled and NVIDIA GPUs are present, dstack attests them and applies the basic settings and optional Rego policy before setting the GPU ready state. When no attestation claims are produced—because no GPU is attached or `gpu_policy.attest_gpu` is false—Rego is still evaluated with an empty array as `input` before any ready-state transition. This lets an application reject a launch whose attested GPU count is wrong. A false, undefined, malformed, or non-boolean Rego result stops boot before key provisioning.
+
+The policy digest is remotely verifiable on each supported platform, but through different carriers:
+
+- **TDX:** `gpu-policy-hash` contains the raw 32-byte digest and is measured into RTMR3. Replay the event log and compare the result with the quote's RTMR3, then compare the event payload with the expected digest. When an MrConfigV3 document includes `gpu_policy_hash`, TDX `MR_CONFIG_ID` additionally binds that field.
+- **AWS NitroTPM:** the same `gpu-policy-hash` event is extended into non-resettable SHA384 PCR14. Replay the PCR14 event chain against the signed NitroTPM Attestation Document, then compare the payload with the expected digest.
+- **AMD SEV-SNP:** there is no quote-bound runtime event register in the current stack. Instead, GPU launches put the digest in optional `MrConfigV3.gpu_policy_hash`, and the signed SNP report's `HOST_DATA` binds the exact MrConfigV3 document. Verify the SNP report and `HOST_DATA` binding, then compare the field with the expected digest. If the optional field is absent, this check is not asserted.
 
 For every NVML-enumerated GPU, dstack calls `Device::is_cc_enabled()` and `Device::is_cc_dev_mode_enabled()` and requires the NVML device count to match the expected GPU count. CC must always be ON; DevTools must be OFF unless the measured policy explicitly permits it. The typed claim checks always require `measres == "success"`; by default they also require `dbgstat == "disabled"` and `secboot == true`, with the latter two checks controlled by their explicit opt-ins. Only after the default appraisal, typed claim checks, optional Rego policy, and per-device NVML checks succeed does dstack call `Device::set_confidential_compute_state(true)` to set the GPU ready state. The dstack CPU/guest boot chain is verified independently through measured boot; a GPU claim named `secboot` refers to the GPU appraisal, not UEFI Secure Boot in the CVM.
 
 ### Dual Attestation
 
 GPU workloads require verification of both hardware components. The CPU TEE quote verifies the CVM and its measured guest code. NVIDIA-signed evidence, checked against NVIDIA RIMs and certificate status by `nvattest`, verifies the GPU appraisal. After the optional policy and ready-state operations succeed, dstack emits a `gpu-attestation` launch event before `system-ready`. Its versioned payload records the number of appraised devices, asserted CC/DevTools state, and SHA-256 of the complete nvattest JSON output (claims and detached EAT). On TDX, both `gpu-policy-hash` and `gpu-attestation` are append-only RTMR3 events; they are never derived from application-controlled `report_data`.
+
+For a successful TDX GPU launch, the GPU-relevant RTMR3 event order is:
+
+```text
+compose-hash
+gpu-policy-hash
+gpu-attestation
+instance-id
+boot-mr-done
+```
+
+`gpu-policy-hash` is emitted even for a GPU-less launch. `gpu-attestation` is emitted only after an attached GPU passes `nvattest`, the built-in checks, the optional Rego policy, and the NVML state checks. Its UTF-8 JSON payload has this shape:
+
+```json
+{
+  "version": 2,
+  "provider": "nvidia",
+  "devices": 1,
+  "cc_mode": "on",
+  "devtools": false,
+  "evidence_sha256": "<sha256-of-complete-nvattest-json>"
+}
+```
+
+`GpuInfo` returns that complete boot-time `nvattest` JSON in its `attestation` string; it does not run a new attestation. To bind the API result to TDX evidence: verify the quote, replay the event log to the quote's RTMR3, require exactly one pre-`system-ready` `gpu-attestation` event, decode its JSON payload, and compare `evidence_sha256` with `SHA-256(UTF-8(GpuInfo.attestation))`. Only after this comparison should the verifier inspect the returned claims. This exact-byte comparison includes any whitespace or trailing newline in the returned string.
 
 A verifier must replay the measured event log, require exactly one `gpu-policy-hash` event immediately after `compose-hash`, and compare its 32-byte payload with the expected policy digest (`SHA-256(JCS({}))` for the omitted/default policy). When MrConfigV3 includes `gpu_policy_hash`, it must match the same digest. When GPU protection is required, the verifier must also require exactly one pre-`system-ready` `gpu-attestation` event with `devices > 0` and, when applicable, the expected deployment count. The raw `attestation.out` file is not trusted by itself; if it is supplied for inspection, its digest must match the `gpu-attestation` event.
 
