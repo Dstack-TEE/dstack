@@ -22,3 +22,8 @@ Use the `build/` directory's Docker Compose configuration to build and run the
 provider under Gramine. The container build uses the repository workspace's
 `Cargo.toml` and `Cargo.lock` instead of a second build-only manifest or
 lockfile.
+
+Tagged releases (`local-key-provider-v*`) publish the image as
+`docker.io/dstacktee/local-key-provider:<version>`. The corresponding GitHub
+release records the image digest and enclave measurements, attaches the full
+SIGSTRUCT metadata, and links to its Sigstore build-provenance attestation.
