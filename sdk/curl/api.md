@@ -285,6 +285,26 @@ curl --unix-socket /var/run/dstack.sock http://dstack/Attest?report_data=0000000
 }
 ```
 
+### 8. Get GPU Attestation
+
+Returns the complete JSON output produced by NVIDIA `nvattest` during boot.
+The endpoint returns an error when no GPU attestation output is available, for
+example on a VM without an NVIDIA GPU or when GPU attestation was disabled.
+
+**Endpoint:** `/GetGpuAttestation`
+
+**Example:**
+```bash
+curl --unix-socket /var/run/dstack.sock http://dstack/GetGpuAttestation
+```
+
+**Response:**
+```json
+{
+  "attestation": "{\"result_code\": 0, \"claims\": [...]}"
+}
+```
+
 ## Error Responses
 
 All endpoints may return the following HTTP status codes:

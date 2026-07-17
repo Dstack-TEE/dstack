@@ -125,6 +125,9 @@ pub struct AppCompose {
 /// absent. Both typed defaults and measurement are derived from this JSON.
 pub const DEFAULT_GPU_POLICY: &str = "{}";
 
+/// Path containing the complete output of the NVIDIA GPU attestation command.
+pub const GPU_ATTESTATION_OUTPUT: &str = "/run/nvidia-gpu-attestation/attestation.out";
+
 #[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct GpuPolicy {

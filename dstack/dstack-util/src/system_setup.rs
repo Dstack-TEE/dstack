@@ -20,7 +20,7 @@ use dstack_types::{
         APP_COMPOSE, APP_KEYS, DECRYPTED_ENV, DECRYPTED_ENV_JSON, ENCRYPTED_ENV,
         HOST_SHARED_DIR_NAME, HOST_SHARED_DISK_LABEL, INSTANCE_INFO, SYS_CONFIG, USER_CONFIG,
     },
-    GpuPolicy, KeyProvider, KeyProviderInfo, DEFAULT_GPU_POLICY,
+    GpuPolicy, KeyProvider, KeyProviderInfo, DEFAULT_GPU_POLICY, GPU_ATTESTATION_OUTPUT,
 };
 use fs_err as fs;
 use luks2::{
@@ -1077,7 +1077,6 @@ mod gpu {
     use super::*;
 
     const NVATTEST: &str = "/usr/bin/nvattest";
-    const ATTESTATION_OUTPUT: &str = "/run/nvidia-gpu-attestation/attestation.out";
     const ATTESTATION_TIMEOUT: Duration = Duration::from_secs(300);
     const EVENT_VERSION: u32 = 2;
     const POLICY_ENTRYPOINT: &str = "data.policy.nv_match";
@@ -1466,7 +1465,7 @@ mod gpu {
     }
 
     fn save_attestation_output(stdout: &[u8]) -> Result<()> {
-        let output_path = Path::new(ATTESTATION_OUTPUT);
+        let output_path = Path::new(GPU_ATTESTATION_OUTPUT);
         if let Some(parent) = output_path.parent() {
             fs::create_dir_all(parent)?;
         }

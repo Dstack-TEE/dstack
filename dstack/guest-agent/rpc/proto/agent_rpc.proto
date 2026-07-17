@@ -53,6 +53,9 @@ service DstackGuest {
   // Get app info
   rpc Info(google.protobuf.Empty) returns (AppInfo) {}
 
+  // Get the complete NVIDIA GPU attestation output produced during boot.
+  rpc GetGpuAttestation(google.protobuf.Empty) returns (GetGpuAttestationResponse) {}
+
   // Sign a payload
   rpc Sign(SignRequest) returns (SignResponse) {}
 
@@ -185,6 +188,11 @@ message TdxQuoteResponse {
 message AttestResponse {
   // The attestation
   bytes attestation = 1;
+}
+
+message GetGpuAttestationResponse {
+  // Complete JSON output produced by nvattest.
+  string attestation = 1;
 }
 
 message GetQuoteResponse {
