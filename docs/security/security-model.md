@@ -65,15 +65,30 @@ An application may additionally set `requirements.gpu_policy` to an object with 
 - `allow_debug` (boolean, default `false`): permit an attestation claim whose `dbgstat` is `enabled`.
 - `allow_insecure_boot` (boolean, default `false`): permit an attestation claim whose GPU `secboot` value is false.
 
-The optional Rego v0 policy can enforce deployment-specific claims. For example, this app-compose fragment requires exactly one H100 whose `hwmodel` matches the value emitted by `nvattest`:
+The optional Rego v0 policy can enforce deployment-specific claims. A minimal `app-compose.json` containing one looks like this; replace the placeholder with the policy source:
 
 ```json
 {
+  "manifest_version": "3",
+  "name": "gpu-app",
+  "runner": "docker-compose",
   "requirements": {
     "gpu_policy": {
-      "rego": "package policy\n\ndefault nv_match = false\n\nnv_match {\n  count(input) == 1\n  input[0].hwmodel == \"GH100 A01 GSP BROM\"\n}"
+      "rego": "<rego-v0-policy>"
     }
   }
+}
+```
+
+For example, the following policy requires exactly one H100 whose `hwmodel` matches the value emitted by `nvattest`:
+
+```rego
+package policy
+default nv_match = false
+
+nv_match {
+  count(input) == 1
+  input[0].hwmodel == "GH100 A01 GSP BROM"
 }
 ```
 
