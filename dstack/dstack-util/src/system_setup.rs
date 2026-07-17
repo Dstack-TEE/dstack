@@ -1818,7 +1818,7 @@ impl Stage0<'_> {
     /// explicitly disabled — set the GPU ready state without verification. The
     /// optional Rego policy is always evaluated; when no attestation is
     /// performed, its claims-array input is empty.
-    async fn setup_gpu(&self) -> Result<()> {
+    async fn measure_gpu(&self) -> Result<()> {
         gpu::measure_gpu_policy(&self.shared.dir.app_compose_file())?;
 
         let gpu_policy = self
@@ -2538,7 +2538,7 @@ impl<'a> Stage0<'a> {
         emit_runtime_event("system-preparing", &[])?;
         emit_runtime_event("app-id", &instance_info.app_id)?;
         emit_runtime_event("compose-hash", &compose_hash)?;
-        self.setup_gpu()
+        self.measure_gpu()
             .await
             .context("failed to verify GPU TEE attestation")?;
 
