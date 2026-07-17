@@ -710,6 +710,12 @@ pub struct SysConfig {
     #[serde(default, alias = "tproxy_urls")]
     pub gateway_urls: Vec<String>,
     pub pccs_url: Option<String>,
+    /// Base URL of an NVIDIA GPU attestation collateral proxy (OCSP + RIM
+    /// cache, e.g. gpu-attest-proxy). When set, the guest routes nvattest's
+    /// OCSP and RIM requests through it instead of NVIDIA's endpoints and
+    /// relaxes the OCSP nonce check via a packaged relying-party policy.
+    #[serde(default)]
+    pub gpu_attest_proxy_url: Option<String>,
     pub docker_registry: Option<String>,
     pub host_api_url: Option<String>,
     /// MrConfigV3 document string for platform app/config binding.

@@ -1368,6 +1368,7 @@ pub(crate) fn make_sys_config(
         "kms_urls": kms_urls,
         "gateway_urls": gateway_urls,
         "pccs_url": cfg.cvm.pccs_url,
+        "gpu_attest_proxy_url": cfg.cvm.gpu_attest_proxy_url,
         "docker_registry": cfg.cvm.docker_registry,
         "host_api_url": format!("vsock://2:{}/api", cfg.host_api.port),
         "vm_config": serde_json::to_string(&vm_config)?,

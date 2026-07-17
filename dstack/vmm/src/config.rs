@@ -260,6 +260,11 @@ pub struct CvmConfig {
     /// The URL of the PCCS server
     #[serde(default)]
     pub pccs_url: String,
+    /// Base URL of an NVIDIA GPU attestation collateral proxy (OCSP + RIM
+    /// cache). Passed to guests via sys-config; empty disables the proxy and
+    /// guests talk to NVIDIA's endpoints directly.
+    #[serde(default)]
+    pub gpu_attest_proxy_url: Option<String>,
     /// The URL of the Docker registry
     pub docker_registry: String,
     /// The start of the CID pool that allocates CIDs to VMs

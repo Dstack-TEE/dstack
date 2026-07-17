@@ -28,6 +28,11 @@ kms_urls = ["http://127.0.0.1:8081"]
 gateway_urls = ["http://127.0.0.1:8082"]
 # PCCS URL used by guest to verify the quote from local key provider
 pccs_url = ""
+# Base URL of an NVIDIA GPU attestation collateral proxy (OCSP + RIM cache,
+# e.g. gpu-attest-proxy). Guests route nvattest's OCSP/RIM requests through it
+# and relax the OCSP nonce check via a packaged relying-party policy. Empty
+# means guests talk to NVIDIA's endpoints directly.
+#gpu_attest_proxy_url = "http://10.0.2.1:8090"
 docker_registry = ""
 cid_start = 1000
 cid_pool_size = 1000
