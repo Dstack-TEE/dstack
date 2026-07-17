@@ -121,9 +121,13 @@ pub struct AppCompose {
     pub requirements: Option<Requirements>,
 }
 
-#[derive(Deserialize, Serialize, Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
 pub struct GpuPolicy {
+    /// Whether an attached GPU must pass local TEE attestation before the
+    /// guest continues booting. Defaults to true.
+    #[serde(default = "default_true")]
+    pub attest_gpu: bool,
     /// Optional Rego v0 policy evaluated against NVIDIA nvattest's `claims`
     /// array. It must define the boolean rule `data.policy.nv_match`.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -137,6 +141,18 @@ pub struct GpuPolicy {
     pub allow_debug: bool,
     /// Permit claims that do not assert GPU secure boot. Defaults to false.
     pub allow_insecure_boot: bool,
+}
+
+impl Default for GpuPolicy {
+    fn default() -> Self {
+        Self {
+            attest_gpu: true,
+            rego: None,
+            allow_devtools: false,
+            allow_debug: false,
+            allow_insecure_boot: false,
+        }
+    }
 }
 
 impl GpuPolicy {
@@ -174,23 +190,13 @@ pub struct Requirements {
     /// (e.g. 32 random alphanumeric characters).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub launch_token_hash: Option<String>,
-    /// GPU TEE attestation requirement, defaults to `true` when omitted.
+    /// Application GPU policy applied before key provisioning. An omitted
+    /// field is parsed and measured as the default empty policy `{}`.
     ///
-    /// On guests with an NVIDIA GPU attached, `true` means the guest runs
-    /// local GPU attestation (nvattest) during system setup and refuses to
-    /// boot — before key provisioning — if the GPU fails to attest (e.g. a
-    /// non-CC GPU or CC mode disabled by the host). `false` skips attestation
-    /// and sets the GPU ready state directly. An application Rego GPU policy
-    /// is still evaluated with an empty claims array when attestation is
-    /// skipped or no GPU is attached.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub attest_gpu: Option<bool>,
-    /// Optional application GPU policy applied before key provisioning.
-    ///
-    /// When this field is present, its original JSON value is JCS-canonicalized
-    /// and its SHA-256 digest is emitted as the `gpu-policy-hash` launch event
-    /// immediately after `compose-hash`, including when the object is empty or
-    /// contains only explicit default values.
+    /// Its original JSON value is JCS-canonicalized and its SHA-256 digest is
+    /// emitted as the `gpu-policy-hash` launch event immediately after
+    /// `compose-hash`. When the field is absent, `{}` is measured. An explicitly
+    /// present default-valued field remains part of the raw measurement.
     /// Rego receives an empty claims array when no GPU attestation is produced,
     /// allowing applications to enforce an expected GPU count.
     #[serde(default, skip_serializing_if = "GpuPolicy::is_default")]
@@ -203,7 +209,6 @@ impl Requirements {
             && self.platforms.is_none()
             && self.tdx_measure_acpi_tables.is_none()
             && self.launch_token_hash.is_none()
-            && self.attest_gpu.is_none()
             && self.gpu_policy.is_default()
     }
 }
@@ -399,24 +404,6 @@ impl AppCompose {
             }
         }
     }
-
-    /// Whether an attached GPU must pass local TEE attestation before the
-    /// guest continues booting. Defaults to `true` when
-    /// `requirements.attest_gpu` is omitted.
-    ///
-    /// `requirements` are only valid on manifest_version >= 3 (guests reject
-    /// older manifests carrying them); the opt-out is additionally ignored on
-    /// legacy manifests here so a caller that skipped that validation still
-    /// fails closed.
-    pub fn attest_gpu(&self) -> bool {
-        if !matches!(self.manifest_version_u32(), Some(v) if v >= 3) {
-            return true;
-        }
-        self.requirements
-            .as_ref()
-            .and_then(|r| r.attest_gpu)
-            .unwrap_or(true)
-    }
 }
 
 #[cfg(test)]
@@ -514,6 +501,7 @@ mod app_compose_tests {
             Some("9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08")
         );
         let gpu_policy = &requirements.gpu_policy;
+        assert!(gpu_policy.attest_gpu);
         assert_eq!(
             gpu_policy.rego.as_deref(),
             Some("package policy\n\ndefault nv_match = false\n")
@@ -602,6 +590,7 @@ mod app_compose_tests {
         .unwrap();
         let requirements = gpu_policy.requirements.as_ref().unwrap();
         let gpu_policy = &requirements.gpu_policy;
+        assert!(gpu_policy.attest_gpu);
         assert!(gpu_policy.rego.is_some());
         assert!(!gpu_policy.allow_devtools);
         assert!(!gpu_policy.allow_debug);
@@ -625,13 +614,7 @@ mod app_compose_tests {
 
     #[test]
     fn attest_gpu_defaults_to_true() {
-        let no_requirements: AppCompose = serde_json::from_value(serde_json::json!({
-            "manifest_version": 2,
-            "name": "test",
-            "runner": "docker-compose"
-        }))
-        .unwrap();
-        assert!(no_requirements.attest_gpu());
+        assert!(GpuPolicy::default().attest_gpu);
 
         let omitted: AppCompose = serde_json::from_value(serde_json::json!({
             "manifest_version": "3",
@@ -640,10 +623,40 @@ mod app_compose_tests {
             "requirements": {}
         }))
         .unwrap();
-        assert!(omitted.attest_gpu());
-        assert!(omitted.requirements.as_ref().unwrap().is_empty());
+        let requirements = omitted.requirements.as_ref().unwrap();
+        assert!(requirements.gpu_policy.attest_gpu);
+        assert!(requirements.is_empty());
+
+        let explicit_empty: AppCompose = serde_json::from_value(serde_json::json!({
+            "manifest_version": "3",
+            "name": "test",
+            "runner": "docker-compose",
+            "requirements": {
+                "gpu_policy": {}
+            }
+        }))
+        .unwrap();
+        assert_eq!(
+            explicit_empty.requirements.unwrap().gpu_policy,
+            requirements.gpu_policy
+        );
 
         let disabled: AppCompose = serde_json::from_value(serde_json::json!({
+            "manifest_version": "3",
+            "name": "test",
+            "runner": "docker-compose",
+            "requirements": {
+                "gpu_policy": {
+                    "attest_gpu": false
+                }
+            }
+        }))
+        .unwrap();
+        let requirements = disabled.requirements.as_ref().unwrap();
+        assert!(!requirements.gpu_policy.attest_gpu);
+        assert!(!requirements.is_empty());
+
+        let old_location = serde_json::from_value::<AppCompose>(serde_json::json!({
             "manifest_version": "3",
             "name": "test",
             "runner": "docker-compose",
@@ -651,24 +664,8 @@ mod app_compose_tests {
                 "attest_gpu": false
             }
         }))
-        .unwrap();
-        assert!(!disabled.attest_gpu());
-        let requirements = disabled.requirements.as_ref().unwrap();
-        assert_eq!(requirements.attest_gpu, Some(false));
-        assert!(!requirements.is_empty());
-
-        // The opt-out is ignored on legacy manifests (requirements are only
-        // valid on manifest_version >= 3; guests reject such composes anyway).
-        let legacy_optout: AppCompose = serde_json::from_value(serde_json::json!({
-            "manifest_version": 2,
-            "name": "test",
-            "runner": "docker-compose",
-            "requirements": {
-                "attest_gpu": false
-            }
-        }))
-        .unwrap();
-        assert!(legacy_optout.attest_gpu());
+        .unwrap_err();
+        assert!(old_location.to_string().contains("unknown field"));
     }
 
     #[test]

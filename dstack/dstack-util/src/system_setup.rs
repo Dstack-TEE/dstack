@@ -1064,7 +1064,8 @@ async fn do_sys_setup(stage0: Stage0<'_>) -> Result<()> {
     stage1.setup().await
 }
 
-/// GPU TEE attestation gate (`requirements.attest_gpu`, defaults to true).
+/// GPU TEE attestation gate (`requirements.gpu_policy.attest_gpu`, defaults to
+/// true).
 ///
 /// Runs before key provisioning so a CVM whose GPU cannot prove it is a
 /// genuine, CC-enabled NVIDIA TEE never gets its app keys. An optional
@@ -1283,7 +1284,7 @@ mod gpu {
     }
 
     /// Set the system-wide GPU ready state without appraisal for the explicit
-    /// `attest_gpu: false` compatibility path.
+    /// `gpu_policy.attest_gpu: false` compatibility path.
     pub(super) fn set_gpu_ready_state(expected_devices: u32) -> Result<()> {
         let nvml = init_nvml(expected_devices)?;
         set_gpu_ready_state_with_nvml(&nvml)
@@ -1415,23 +1416,22 @@ mod gpu {
         })
     }
 
-    fn gpu_policy_measurement(compose_json: &[u8]) -> Result<Option<[u8; 32]>> {
+    fn gpu_policy_measurement(compose_json: &[u8]) -> Result<[u8; 32]> {
         let compose: Value =
             serde_json::from_slice(compose_json).context("failed to parse raw app compose")?;
-        let Some(policy) = compose.pointer("/requirements/gpu_policy") else {
-            return Ok(None);
-        };
+        let default_policy = Value::Object(Default::default());
+        let policy = compose
+            .pointer("/requirements/gpu_policy")
+            .unwrap_or(&default_policy);
         let canonical =
             serde_jcs::to_vec(policy).context("failed to canonicalize raw GPU policy")?;
-        Ok(Some(sha256(&canonical)))
+        Ok(sha256(&canonical))
     }
 
     pub(super) fn measure_gpu_policy(compose_path: &Path) -> Result<()> {
         let compose_json = fs::read(compose_path)
             .with_context(|| format!("failed to read {}", compose_path.display()))?;
-        let Some(digest) = gpu_policy_measurement(&compose_json)? else {
-            return Ok(());
-        };
+        let digest = gpu_policy_measurement(&compose_json)?;
         emit_runtime_event("gpu-policy-hash", &digest)
             .context("failed to emit GPU policy measurement")
     }
@@ -1774,19 +1774,22 @@ mod gpu {
         }
 
         #[test]
-        fn gpu_policy_measurement_uses_the_present_raw_json_value() {
+        fn gpu_policy_measurement_defaults_to_empty_object_and_uses_raw_json() {
+            let no_requirements = br#"{}"#;
             let absent = br#"{"requirements": {}}"#;
-            assert_eq!(gpu_policy_measurement(absent).unwrap(), None);
+            let empty_digest = sha256(b"{}");
+            assert_eq!(
+                gpu_policy_measurement(no_requirements).unwrap(),
+                empty_digest
+            );
+            assert_eq!(gpu_policy_measurement(absent).unwrap(), empty_digest);
 
             let empty = br#"{"requirements": {"gpu_policy": {}}}"#;
-            assert_eq!(gpu_policy_measurement(empty).unwrap(), Some(sha256(b"{}")));
+            assert_eq!(gpu_policy_measurement(empty).unwrap(), empty_digest);
 
-            let explicit_default = br#"{"requirements":{"gpu_policy":{"allow_debug":false}}}"#;
+            let explicit_default = br#"{"requirements":{"gpu_policy":{"attest_gpu":true}}}"#;
             let explicit_default_digest = gpu_policy_measurement(explicit_default).unwrap();
-            assert_ne!(
-                explicit_default_digest,
-                gpu_policy_measurement(empty).unwrap()
-            );
+            assert_ne!(explicit_default_digest, empty_digest);
 
             let reordered = br#"
                 {
@@ -1809,11 +1812,11 @@ mod gpu {
 }
 
 impl Stage0<'_> {
-    /// Enforce `requirements.attest_gpu` (default true): attest an attached
-    /// NVIDIA GPU before continuing to key provisioning, or — when explicitly
-    /// disabled — set the GPU ready state without verification. The optional
-    /// Rego policy is always evaluated; when no attestation is performed, its
-    /// claims-array input is empty.
+    /// Enforce `requirements.gpu_policy.attest_gpu` (default true): attest an
+    /// attached NVIDIA GPU before continuing to key provisioning, or — when
+    /// explicitly disabled — set the GPU ready state without verification. The
+    /// optional Rego policy is always evaluated; when no attestation is
+    /// performed, its claims-array input is empty.
     async fn setup_gpu(&self) -> Result<()> {
         gpu::measure_gpu_policy(&self.shared.dir.app_compose_file())?;
 
@@ -1826,7 +1829,7 @@ impl Stage0<'_> {
             .unwrap_or_default();
 
         let inventory = gpu::gpu_inventory()?;
-        if !self.shared.app_compose.attest_gpu() {
+        if !gpu_policy.attest_gpu {
             gpu::evaluate_rego_policy(&gpu_policy, &[])?;
             if gpu_policy.rego.is_some() {
                 info!("application GPU Rego policy accepted an empty claims array");
@@ -1834,7 +1837,9 @@ impl Stage0<'_> {
             if inventory.nvidia == 0 {
                 return Ok(());
             }
-            warn!("requirements.attest_gpu is false; setting GPU ready state without attestation");
+            warn!(
+                "requirements.gpu_policy.attest_gpu is false; setting GPU ready state without attestation"
+            );
             // Best-effort: a GPU with CC mode off has no ready state to set.
             if let Err(err) = gpu::set_gpu_ready_state(inventory.nvidia) {
                 warn!("failed to set GPU ready state: {err:?}");
