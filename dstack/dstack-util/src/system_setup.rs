@@ -1415,9 +1415,25 @@ mod gpu {
         })
     }
 
-    pub(super) fn policy_digest(policy: &GpuPolicy) -> Result<[u8; 32]> {
-        let canonical = serde_jcs::to_vec(policy).context("failed to canonicalize GPU policy")?;
-        Ok(sha256(&canonical))
+    fn gpu_policy_measurement(compose_json: &[u8]) -> Result<Option<[u8; 32]>> {
+        let compose: Value =
+            serde_json::from_slice(compose_json).context("failed to parse raw app compose")?;
+        let Some(policy) = compose.pointer("/requirements/gpu_policy") else {
+            return Ok(None);
+        };
+        let canonical =
+            serde_jcs::to_vec(policy).context("failed to canonicalize raw GPU policy")?;
+        Ok(Some(sha256(&canonical)))
+    }
+
+    pub(super) fn measure_gpu_policy(compose_path: &Path) -> Result<()> {
+        let compose_json = fs::read(compose_path)
+            .with_context(|| format!("failed to read {}", compose_path.display()))?;
+        let Some(digest) = gpu_policy_measurement(&compose_json)? else {
+            return Ok(());
+        };
+        emit_runtime_event("gpu-policy-hash", &digest)
+            .context("failed to emit GPU policy measurement")
     }
 
     pub(super) fn evaluate_rego_policy(policy: &GpuPolicy, claims: &[Value]) -> Result<()> {
@@ -1758,22 +1774,35 @@ mod gpu {
         }
 
         #[test]
-        fn policy_digest_commits_to_the_canonical_policy_structure() {
-            let policy = GpuPolicy {
-                rego: Some("package policy\n\ndefault nv_match = true\n".to_string()),
-                allow_devtools: true,
-                ..Default::default()
-            };
-            let canonical = serde_jcs::to_vec(&policy).unwrap();
-            assert_eq!(policy_digest(&policy).unwrap(), sha256(&canonical));
+        fn gpu_policy_measurement_uses_the_present_raw_json_value() {
+            let absent = br#"{"requirements": {}}"#;
+            assert_eq!(gpu_policy_measurement(absent).unwrap(), None);
 
-            let production_policy = GpuPolicy {
-                allow_devtools: false,
-                ..policy.clone()
-            };
+            let empty = br#"{"requirements": {"gpu_policy": {}}}"#;
+            assert_eq!(gpu_policy_measurement(empty).unwrap(), Some(sha256(b"{}")));
+
+            let explicit_default = br#"{"requirements":{"gpu_policy":{"allow_debug":false}}}"#;
+            let explicit_default_digest = gpu_policy_measurement(explicit_default).unwrap();
             assert_ne!(
-                policy_digest(&policy).unwrap(),
-                policy_digest(&production_policy).unwrap()
+                explicit_default_digest,
+                gpu_policy_measurement(empty).unwrap()
+            );
+
+            let reordered = br#"
+                {
+                    "requirements": {
+                        "gpu_policy": {
+                            "rego": "package policy",
+                            "allow_debug": false
+                        }
+                    }
+                }
+            "#;
+            let canonical_order =
+                br#"{"requirements":{"gpu_policy":{"allow_debug":false,"rego":"package policy"}}}"#;
+            assert_eq!(
+                gpu_policy_measurement(reordered).unwrap(),
+                gpu_policy_measurement(canonical_order).unwrap()
             );
         }
     }
@@ -1786,6 +1815,8 @@ impl Stage0<'_> {
     /// Rego policy is always evaluated; when no attestation is performed, its
     /// claims-array input is empty.
     async fn setup_gpu(&self) -> Result<()> {
+        gpu::measure_gpu_policy(&self.shared.dir.app_compose_file())?;
+
         let gpu_policy = self
             .shared
             .app_compose
@@ -1793,9 +1824,6 @@ impl Stage0<'_> {
             .as_ref()
             .map(|requirements| requirements.gpu_policy.clone())
             .unwrap_or_default();
-        if !gpu_policy.is_default() {
-            emit_runtime_event("gpu-policy-hash", &gpu::policy_digest(&gpu_policy)?)?;
-        }
 
         let inventory = gpu::gpu_inventory()?;
         if !self.shared.app_compose.attest_gpu() {

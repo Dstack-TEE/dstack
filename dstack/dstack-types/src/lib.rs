@@ -187,8 +187,10 @@ pub struct Requirements {
     pub attest_gpu: Option<bool>,
     /// Optional application GPU policy applied before key provisioning.
     ///
-    /// Its default-expanded, JCS-canonicalized JSON SHA-256 digest is emitted
-    /// as the `gpu-policy-hash` launch event immediately after `compose-hash`.
+    /// When this field is present, its original JSON value is JCS-canonicalized
+    /// and its SHA-256 digest is emitted as the `gpu-policy-hash` launch event
+    /// immediately after `compose-hash`, including when the object is empty or
+    /// contains only explicit default values.
     /// Rego receives an empty claims array when no GPU attestation is produced,
     /// allowing applications to enforce an expected GPU count.
     #[serde(default, skip_serializing_if = "GpuPolicy::is_default")]
