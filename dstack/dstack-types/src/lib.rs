@@ -121,8 +121,12 @@ pub struct AppCompose {
     pub requirements: Option<Requirements>,
 }
 
+/// Canonical source for the policy used when `requirements.gpu_policy` is
+/// absent. Both typed defaults and measurement are derived from this JSON.
+pub const DEFAULT_GPU_POLICY: &str = "{}";
+
 #[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Eq)]
-#[serde(default, deny_unknown_fields)]
+#[serde(deny_unknown_fields)]
 pub struct GpuPolicy {
     /// Whether an attached GPU must pass local TEE attestation before the
     /// guest continues booting. Defaults to true.
@@ -130,28 +134,26 @@ pub struct GpuPolicy {
     pub attest_gpu: bool,
     /// Optional Rego v0 policy evaluated against NVIDIA nvattest's `claims`
     /// array. It must define the boolean rule `data.policy.nv_match`.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rego: Option<String>,
     /// Permit NVIDIA DevTools mode. This defaults to false because DevTools
     /// disables the GPU memory-confidentiality guarantees expected in
     /// production.
+    #[serde(default)]
     pub allow_devtools: bool,
     /// Permit claims whose GPU attestation debug status is `enabled`. Defaults
     /// to false.
+    #[serde(default)]
     pub allow_debug: bool,
     /// Permit claims that do not assert GPU secure boot. Defaults to false.
+    #[serde(default)]
     pub allow_insecure_boot: bool,
 }
 
 impl Default for GpuPolicy {
     fn default() -> Self {
-        Self {
-            attest_gpu: true,
-            rego: None,
-            allow_devtools: false,
-            allow_debug: false,
-            allow_insecure_boot: false,
-        }
+        serde_json::from_str(DEFAULT_GPU_POLICY)
+            .expect("DEFAULT_GPU_POLICY must be a valid GPU policy")
     }
 }
 

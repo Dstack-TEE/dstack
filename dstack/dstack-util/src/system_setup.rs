@@ -20,7 +20,7 @@ use dstack_types::{
         APP_COMPOSE, APP_KEYS, DECRYPTED_ENV, DECRYPTED_ENV_JSON, ENCRYPTED_ENV,
         HOST_SHARED_DIR_NAME, HOST_SHARED_DISK_LABEL, INSTANCE_INFO, SYS_CONFIG, USER_CONFIG,
     },
-    GpuPolicy, KeyProvider, KeyProviderInfo,
+    GpuPolicy, KeyProvider, KeyProviderInfo, DEFAULT_GPU_POLICY,
 };
 use fs_err as fs;
 use luks2::{
@@ -1419,7 +1419,8 @@ mod gpu {
     fn gpu_policy_measurement(compose_json: &[u8]) -> Result<[u8; 32]> {
         let compose: Value =
             serde_json::from_slice(compose_json).context("failed to parse raw app compose")?;
-        let default_policy = Value::Object(Default::default());
+        let default_policy: Value = serde_json::from_str(DEFAULT_GPU_POLICY)
+            .context("failed to parse default GPU policy")?;
         let policy = compose
             .pointer("/requirements/gpu_policy")
             .unwrap_or(&default_policy);
@@ -1830,6 +1831,8 @@ impl Stage0<'_> {
 
         let inventory = gpu::gpu_inventory()?;
         if !gpu_policy.attest_gpu {
+            // Attestation is explicitly disabled, so there are no claims. Rego
+            // still runs with an empty input before any GPU is made ready.
             gpu::evaluate_rego_policy(&gpu_policy, &[])?;
             if gpu_policy.rego.is_some() {
                 info!("application GPU Rego policy accepted an empty claims array");
