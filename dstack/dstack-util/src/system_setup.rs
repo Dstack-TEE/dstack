@@ -1083,6 +1083,10 @@ mod gpu {
     const POLICY_ENTRYPOINT: &str = "data.policy.nv_match";
     /// Bound Rego evaluation so a runaway application policy cannot hang boot.
     const POLICY_TIMEOUT: Duration = Duration::from_secs(10);
+    /// NVIDIA's sample relying-party policy packaged by the nvattest recipe.
+    /// It keeps every built-in appraisal check except the OCSP nonce match,
+    /// which a caching collateral proxy can never satisfy.
+    const OUTPOST_POLICY: &str = "/usr/share/nvattest/policies/allow_trust_outpost_ocsp.rego";
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub(super) struct GpuInventory {
@@ -1368,11 +1372,70 @@ mod gpu {
         serde_json::to_vec(&event).context("failed to serialize GPU attestation event")
     }
 
-    /// Run local GPU attestation via nvattest with a fresh nonce and no custom
-    /// relying-party policy. nvattest's built-in appraisal still applies. The
-    /// complete JSON output is preserved under /run and retained with its
-    /// claims for the application policy and versioned RTMR3 summary.
-    pub(super) async fn attest_gpu(expected_devices: u32) -> Result<GpuAttestationResult> {
+    /// Build the nvattest command line. When `proxy_url` is set, OCSP and RIM
+    /// requests are routed through the caching collateral proxy and the
+    /// packaged outpost policy replaces nvattest's built-in appraisal (a
+    /// cached OCSP response can never echo the per-request nonce). The policy
+    /// file must exist — it is packaged by the nvattest recipe; fail closed
+    /// with a clear error rather than silently skipping appraisal.
+    fn nvattest_args(nonce: &str, proxy_url: Option<&str>) -> Result<Vec<String>> {
+        let proxy_base = match proxy_url {
+            Some(url) => {
+                let base = url.trim_end_matches('/');
+                if base.is_empty() {
+                    bail!("sys-config gpu_attest_proxy_url is empty");
+                }
+                Some(base)
+            }
+            None => None,
+        };
+        if proxy_base.is_some() && !Path::new(OUTPOST_POLICY).exists() {
+            bail!(
+                "sys-config gpu_attest_proxy_url is set but {} is not packaged in this image",
+                OUTPOST_POLICY
+            );
+        }
+        Ok(nvattest_cmdline(nonce, proxy_base))
+    }
+
+    fn nvattest_cmdline(nonce: &str, proxy_base: Option<&str>) -> Vec<String> {
+        let mut args = vec![
+            "attest".to_string(),
+            "--device".to_string(),
+            "gpu".to_string(),
+            "--verifier".to_string(),
+            "local".to_string(),
+            "--nonce".to_string(),
+            nonce.to_string(),
+            "--format".to_string(),
+            "json".to_string(),
+        ];
+        if let Some(base) = proxy_base.map(|url| url.trim_end_matches('/')) {
+            args.extend([
+                "--ocsp-url".to_string(),
+                format!("{base}/ocsp"),
+                "--rim-url".to_string(),
+                base.to_string(),
+                "--relying-party-policy".to_string(),
+                OUTPOST_POLICY.to_string(),
+            ]);
+        }
+        args
+    }
+
+    /// Run local GPU attestation via nvattest with a fresh nonce. Without a
+    /// collateral proxy no custom relying-party policy is given, so nvattest's
+    /// built-in appraisal applies. With `proxy_url` (sys-config
+    /// `gpu_attest_proxy_url`), OCSP and RIM requests go through the caching
+    /// proxy and the packaged outpost policy replaces the built-in one: a
+    /// cached OCSP response can never echo the request nonce, while signature,
+    /// validity-window and measurement checks are unchanged. The complete JSON
+    /// output is preserved under /run and retained with its claims for the
+    /// application policy and versioned RTMR3 summary.
+    pub(super) async fn attest_gpu(
+        expected_devices: u32,
+        proxy_url: Option<&str>,
+    ) -> Result<GpuAttestationResult> {
         if !Path::new(NVATTEST).exists() {
             bail!("nvattest is not available in this image");
         }
@@ -1382,22 +1445,15 @@ mod gpu {
             warn!("failed to step system clock: {err:?}");
         }
         let nonce = hex::encode(rand::thread_rng().gen::<[u8; 32]>());
-        let output = run_command(
-            NVATTEST,
-            &[
-                "attest",
-                "--device",
-                "gpu",
-                "--verifier",
-                "local",
-                "--nonce",
-                &nonce,
-                "--format",
-                "json",
-            ],
-            ATTESTATION_TIMEOUT,
-        )
-        .await?;
+        let args = nvattest_args(&nonce, proxy_url)?;
+        if let Some(base) = proxy_url {
+            info!(
+                "routing GPU attestation collateral through proxy: {}",
+                base.trim_end_matches('/')
+            );
+        }
+        let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
+        let output = run_command(NVATTEST, &arg_refs, ATTESTATION_TIMEOUT).await?;
         if !output.stderr.is_empty() {
             info!("nvattest: {}", truncated_lossy(&output.stderr, 2048));
         }
@@ -1554,6 +1610,20 @@ mod gpu {
                 nvidia: 2,
             };
             assert_eq!(nvidia_gpu_count(nvidia).unwrap(), 2);
+        }
+
+        #[test]
+        fn nvattest_cmdline_routes_collateral_through_proxy() {
+            let args = nvattest_cmdline("aa", Some("http://10.0.2.1:8090/"));
+            let joined = args.join(" ");
+            assert!(joined.contains("--ocsp-url http://10.0.2.1:8090/ocsp"));
+            assert!(joined.contains("--rim-url http://10.0.2.1:8090"));
+            assert!(joined.contains(&format!("--relying-party-policy {OUTPOST_POLICY}")));
+
+            let direct = nvattest_cmdline("aa", None).join(" ");
+            assert!(!direct.contains("--ocsp-url"));
+            assert!(!direct.contains("--rim-url"));
+            assert!(!direct.contains("--relying-party-policy"));
         }
 
         #[test]
@@ -1874,7 +1944,11 @@ impl Stage0<'_> {
         }
         self.vmm.notify_q("boot.progress", "attesting GPU").await;
         info!("verifying GPU TEE attestation");
-        let attestation = gpu::attest_gpu(expected_devices).await?;
+        let attestation = gpu::attest_gpu(
+            expected_devices,
+            self.shared.sys_config.gpu_attest_proxy_url.as_deref(),
+        )
+        .await?;
 
         let gpu_state = gpu::query_gpu_state(expected_devices)?;
         attestation
