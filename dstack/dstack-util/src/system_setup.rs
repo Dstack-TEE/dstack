@@ -1867,9 +1867,7 @@ impl Stage0<'_> {
             .context("failed to apply basic GPU policy")?;
         gpu::evaluate_rego_policy(&gpu_policy, attestation.claims())?;
 
-        if !gpu_policy.is_default() {
-            info!("application GPU policy accepted the attestation claims and state");
-        }
+        info!("application GPU policy accepted the attestation claims and state");
         gpu_state.set_ready()?;
         let devtools = gpu_state.any_devtools();
         let event = attestation.event(devtools)?;
