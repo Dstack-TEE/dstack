@@ -100,7 +100,6 @@ do_install() {
     install -d ${D}${systemd_system_unitdir}/dstack-prepare.service.d
     install -m 0644 ${UNPACKDIR}/10-nvidia-gpu-ordering.conf \
         ${D}${systemd_system_unitdir}/dstack-prepare.service.d/10-nvidia-gpu-ordering.conf
-
 }
 
 FILES:${PN} += " \
