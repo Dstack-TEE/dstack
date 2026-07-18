@@ -1,6 +1,6 @@
 # NVIDIA GPU Attestation Proxy
 
-`dstack-gpu-attest-proxy` is a persistent, PCCS-like cache for the two NVIDIA
+`dstack-nvidia-attest-proxy` is a persistent, PCCS-like cache for the two NVIDIA
 services used by local GPU attestation:
 
 - `POST /ocsp` caches DER OCSP responses by the request's certificate IDs. The
@@ -17,13 +17,13 @@ entries are persisted so a warm cache survives both proxy and VM restarts.
 ## Run
 
 ```bash
-cargo build --release -p dstack-gpu-attest-proxy
-sudo install -m 0755 target/release/dstack-gpu-attest-proxy /usr/local/bin/
-sudo install -d -m 0750 /var/cache/dstack/gpu-attest-proxy
+cargo build --release -p dstack-nvidia-attest-proxy
+sudo install -m 0755 target/release/dstack-nvidia-attest-proxy /usr/local/bin/
+sudo install -d -m 0750 /var/cache/dstack/nvidia-attest-proxy
 
-sudo /usr/local/bin/dstack-gpu-attest-proxy \
+sudo /usr/local/bin/dstack-nvidia-attest-proxy \
   --listen 0.0.0.0:8090 \
-  --cache-dir /var/cache/dstack/gpu-attest-proxy
+  --cache-dir /var/cache/dstack/nvidia-attest-proxy
 ```
 
 All options have environment-variable equivalents; see `--help`. In

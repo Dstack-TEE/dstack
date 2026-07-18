@@ -219,7 +219,7 @@ systemctl status qgsd
 GPU images perform local NVIDIA attestation before app keys are provisioned.
 Without a cache this contacts NVIDIA's OCSP and RIM services during every cold
 boot. A fleet can run the persistent
-[`dstack-gpu-attest-proxy`](../../dstack/gpu-attest-proxy/README.md) and pass its
+[`dstack-nvidia-attest-proxy`](../../dstack/nvidia-attest-proxy/README.md) and pass its
 URL to guests through sys-config:
 
 ```toml

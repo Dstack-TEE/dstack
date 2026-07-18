@@ -6,7 +6,7 @@ use std::{net::SocketAddr, path::PathBuf, time::Duration};
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use dstack_gpu_attest_proxy::ProxyConfig;
+use dstack_nvidia_attest_proxy::ProxyConfig;
 use tracing_subscriber::EnvFilter;
 use url::Url;
 
@@ -14,21 +14,25 @@ use url::Url;
 #[command(about = "Persistent NVIDIA OCSP and RIM cache for dstack GPU attestation")]
 struct Args {
     /// Address on which the HTTP proxy listens.
-    #[arg(long, env = "GPU_ATTEST_PROXY_LISTEN", default_value = "0.0.0.0:8090")]
+    #[arg(
+        long,
+        env = "NVIDIA_ATTEST_PROXY_LISTEN",
+        default_value = "0.0.0.0:8090"
+    )]
     listen: SocketAddr,
 
     /// Directory for persistent OCSP and RIM cache entries.
     #[arg(
         long,
-        env = "GPU_ATTEST_PROXY_CACHE_DIR",
-        default_value = "/var/cache/dstack/gpu-attest-proxy"
+        env = "NVIDIA_ATTEST_PROXY_CACHE_DIR",
+        default_value = "/var/cache/dstack/nvidia-attest-proxy"
     )]
     cache_dir: PathBuf,
 
     /// NVIDIA OCSP responder URL.
     #[arg(
         long,
-        env = "GPU_ATTEST_PROXY_OCSP_URL",
+        env = "NVIDIA_ATTEST_PROXY_OCSP_URL",
         default_value = "https://ocsp.ndis.nvidia.com"
     )]
     ocsp_url: Url,
@@ -36,7 +40,7 @@ struct Args {
     /// NVIDIA RIM service base URL.
     #[arg(
         long,
-        env = "GPU_ATTEST_PROXY_RIM_URL",
+        env = "NVIDIA_ATTEST_PROXY_RIM_URL",
         default_value = "https://rim.attestation.nvidia.com"
     )]
     rim_url: Url,
@@ -45,18 +49,18 @@ struct Args {
     #[arg(long, env = "NV_ATTESTATION_SERVICE_KEY", hide_env_values = true)]
     service_key: Option<String>,
 
-    #[arg(long, env = "GPU_ATTEST_PROXY_REQUEST_TIMEOUT", default_value = "30s", value_parser = parse_duration)]
+    #[arg(long, env = "NVIDIA_ATTEST_PROXY_REQUEST_TIMEOUT", default_value = "30s", value_parser = parse_duration)]
     request_timeout: Duration,
 
-    #[arg(long, env = "GPU_ATTEST_PROXY_CONNECT_TIMEOUT", default_value = "10s", value_parser = parse_duration)]
+    #[arg(long, env = "NVIDIA_ATTEST_PROXY_CONNECT_TIMEOUT", default_value = "10s", value_parser = parse_duration)]
     connect_timeout: Duration,
 
     /// Maximum time an OCSP response may remain cached. Signed nextUpdate can shorten it.
-    #[arg(long, env = "GPU_ATTEST_PROXY_OCSP_MAX_TTL", default_value = "24h", value_parser = parse_duration)]
+    #[arg(long, env = "NVIDIA_ATTEST_PROXY_OCSP_MAX_TTL", default_value = "24h", value_parser = parse_duration)]
     ocsp_max_ttl: Duration,
 
     /// Cache lifetime for OCSP responses that omit nextUpdate.
-    #[arg(long, env = "GPU_ATTEST_PROXY_OCSP_DEFAULT_TTL", default_value = "1h", value_parser = parse_duration)]
+    #[arg(long, env = "NVIDIA_ATTEST_PROXY_OCSP_DEFAULT_TTL", default_value = "1h", value_parser = parse_duration)]
     ocsp_default_ttl: Duration,
 
     /// Refresh an OCSP response when less than this much validity remains.
@@ -64,25 +68,25 @@ struct Args {
     ocsp_refresh_before: Duration,
 
     /// Cache lifetime for version-addressed RIM documents.
-    #[arg(long, env = "GPU_ATTEST_PROXY_RIM_TTL", default_value = "30d", value_parser = parse_duration)]
+    #[arg(long, env = "NVIDIA_ATTEST_PROXY_RIM_TTL", default_value = "30d", value_parser = parse_duration)]
     rim_ttl: Duration,
 
     /// How long an expired RIM document may still be served when the upstream
     /// cannot provide a fresh copy. RIM documents are signed and
     /// version-addressed, so this trades availability, not security. 0
     /// disables stale serving.
-    #[arg(long, env = "GPU_ATTEST_PROXY_RIM_MAX_STALE", default_value = "7d", value_parser = parse_duration)]
+    #[arg(long, env = "NVIDIA_ATTEST_PROXY_RIM_MAX_STALE", default_value = "7d", value_parser = parse_duration)]
     rim_max_stale: Duration,
 
     /// Interval between background refresh sweeps renewing cache entries past
     /// half their lifetime. 0 disables background refresh.
-    #[arg(long, env = "GPU_ATTEST_PROXY_REFRESH_INTERVAL", default_value = "10m", value_parser = parse_duration)]
+    #[arg(long, env = "NVIDIA_ATTEST_PROXY_REFRESH_INTERVAL", default_value = "10m", value_parser = parse_duration)]
     refresh_interval: Duration,
 
     /// Maximum persistent entries in each of the OCSP and RIM caches.
     #[arg(
         long,
-        env = "GPU_ATTEST_PROXY_MAX_CACHE_ENTRIES_PER_KIND",
+        env = "NVIDIA_ATTEST_PROXY_MAX_CACHE_ENTRIES_PER_KIND",
         default_value_t = 10_000
     )]
     max_cache_entries_per_kind: usize,
@@ -100,7 +104,7 @@ async fn main() -> Result<()> {
         )
         .init();
     let args = Args::parse();
-    dstack_gpu_attest_proxy::run(ProxyConfig {
+    dstack_nvidia_attest_proxy::run(ProxyConfig {
         listen_addr: args.listen,
         cache_dir: args.cache_dir,
         ocsp_url: args.ocsp_url,

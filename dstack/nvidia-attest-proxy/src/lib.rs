@@ -161,7 +161,7 @@ impl Proxy {
             .timeout(config.request_timeout)
             .redirect(reqwest::redirect::Policy::none())
             .user_agent(concat!(
-                "dstack-gpu-attest-proxy/",
+                "dstack-nvidia-attest-proxy/",
                 env!("CARGO_PKG_VERSION")
             ))
             .build()

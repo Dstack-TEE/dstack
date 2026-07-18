@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 [package]
-name = "dstack-gpu-attest-proxy"
+name = "dstack-nvidia-attest-proxy"
 version.workspace = true
 authors.workspace = true
 edition.workspace = true

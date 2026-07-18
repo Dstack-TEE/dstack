@@ -58,7 +58,7 @@ members = [
     "serde-duration",
     "dstack-mr",
     "dstack-mr/cli",
-    "gpu-attest-proxy",
+    "nvidia-attest-proxy",
     "verifier",
     "size-parser",
     "port-forward",
