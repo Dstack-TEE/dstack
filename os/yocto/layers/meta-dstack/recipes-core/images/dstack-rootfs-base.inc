@@ -53,6 +53,7 @@ IMAGE_INSTALL = "\
     kernel-module-ip-set-hash-ipport \
     kernel-module-ip-set-hash-ipportip \
     kernel-module-ip-set-hash-ipportnet \
+    kernel-module-ip-set-hash-netport \
     kernel-module-ip-set-hash-netiface \
     kernel-module-ip-set-bitmap-ip \
     kernel-module-ip-set-bitmap-port \
