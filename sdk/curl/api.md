@@ -289,8 +289,8 @@ curl --unix-socket /var/run/dstack.sock http://dstack/Attest?report_data=0000000
 
 Returns GPU information collected during boot. Currently, this includes the
 complete JSON output produced by NVIDIA `nvattest`.
-The endpoint returns an error when no GPU attestation output is available, for
-example on a VM without an NVIDIA GPU or when GPU attestation was disabled.
+The `attestation` field is empty when no GPU attestation output is available,
+for example on a VM without an NVIDIA GPU or when GPU attestation was disabled.
 
 **Endpoint:** `/GpuInfo`
 

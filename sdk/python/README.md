@@ -111,9 +111,9 @@ gpu = client.gpu_info()
 print(gpu.attestation)
 ```
 
-The call fails when no GPU attestation output is available. The raw output is
-not trusted by itself; remote verifiers should compare its digest with the
-measured `gpu-attestation` runtime event.
+The `attestation` field is empty when no GPU attestation output is available.
+The raw output is not trusted by itself; remote verifiers should compare its
+digest with the measured `gpu-attestation` runtime event.
 
 ### Get Instance Info
 
