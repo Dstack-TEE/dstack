@@ -67,6 +67,18 @@ struct Args {
     #[arg(long, env = "GPU_ATTEST_PROXY_RIM_TTL", default_value = "30d", value_parser = parse_duration)]
     rim_ttl: Duration,
 
+    /// How long an expired RIM document may still be served when the upstream
+    /// cannot provide a fresh copy. RIM documents are signed and
+    /// version-addressed, so this trades availability, not security. 0
+    /// disables stale serving.
+    #[arg(long, env = "GPU_ATTEST_PROXY_RIM_MAX_STALE", default_value = "7d", value_parser = parse_duration)]
+    rim_max_stale: Duration,
+
+    /// Interval between background refresh sweeps renewing cache entries past
+    /// half their lifetime. 0 disables background refresh.
+    #[arg(long, env = "GPU_ATTEST_PROXY_REFRESH_INTERVAL", default_value = "10m", value_parser = parse_duration)]
+    refresh_interval: Duration,
+
     /// Maximum persistent entries in each of the OCSP and RIM caches.
     #[arg(
         long,
@@ -100,6 +112,8 @@ async fn main() -> Result<()> {
         ocsp_default_ttl: args.ocsp_default_ttl,
         ocsp_refresh_before: args.ocsp_refresh_before,
         rim_ttl: args.rim_ttl,
+        rim_max_stale: args.rim_max_stale,
+        refresh_interval: args.refresh_interval,
         max_cache_entries_per_kind: args.max_cache_entries_per_kind,
     })
     .await

@@ -7,6 +7,7 @@ services used by local GPU attestation:
   per-request OCSP nonce is deliberately excluded from the key.
 - `GET /v1/rim/<id>` caches version-addressed NVIDIA RIM documents.
 - `GET /healthz` reports process health.
+- `GET /info` reports fresh/stale entry counts per cache kind.
 
 The proxy never signs or rewrites collateral. `nvattest` in the CVM still
 verifies NVIDIA's certificate chains, OCSP signatures, response validity
@@ -47,16 +48,25 @@ response is cached no later than its signed `nextUpdate` and no longer than
 hour from `thisUpdate`, matching the pinned NVIDIA SDK. RIM documents default
 to a 30-day TTL.
 
-When an OCSP response has less than `--ocsp-refresh-before` validity remaining
-(five minutes by default), the next request refreshes it synchronously from
-NVIDIA. Concurrent refreshes are coalesced. If the refresh fails, the proxy
-continues serving the old response only until its existing signed expiry; it
-never extends or serves an expired response.
+Two mechanisms keep entries warm, and they compose: a background sweep (every
+`--refresh-interval`, 10 minutes by default) renews entries that have
+consumed half their lifetime, so a warm cache rides through an NVIDIA outage
+with close to a full validity window instead of only the remainder; entries
+past their usefulness are dropped, not retried. As a synchronous fallback, an
+OCSP response with less than `--ocsp-refresh-before` validity remaining
+(five minutes by default) is refreshed in-line on the next request before it
+is served — concurrent refreshes for the same entry are coalesced. If an
+in-line refresh fails, the proxy keeps serving the old response only until
+its existing signed expiry; it never extends or serves an expired one.
 
-Expired entries are never served. Therefore a warm cache removes the NVIDIA
-service from the boot path only for the signed validity period; it does not
-turn revocation checking into an indefinite fail-open. Response headers expose
-`X-Dstack-Cache: HIT|MISS|REFRESH`, `Age`, and `X-Dstack-Cache-Expires` for operations.
+Expired OCSP entries are never served. Therefore a warm cache removes the
+NVIDIA service from the boot path only for the signed validity period; it does
+not turn revocation checking into an indefinite fail-open. RIM documents are
+signed and version-addressed, so an expired RIM entry — unlike OCSP — may
+still be served for up to `--rim-max-stale` (7 days by default) when the
+upstream is unreachable or failing; the guest verifies its signature either
+way. Response headers expose `X-Dstack-Cache: HIT|MISS|REFRESH|STALE`, `Age`,
+and `X-Dstack-Cache-Expires` for operations.
 Each cache kind is capped at 10,000 entries by default; the oldest entry is
 evicted when the limit is reached. Use `--max-cache-entries-per-kind` to tune
 the bound for a deployment.
