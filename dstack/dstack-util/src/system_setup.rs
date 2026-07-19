@@ -1449,7 +1449,7 @@ mod gpu {
         engine.set_rego_v0(true);
         engine.set_execution_timer_config(regorus::utils::limits::ExecutionTimerConfig {
             limit: timeout,
-            check_interval: std::num::NonZeroU32::new(1024).expect("non-zero check interval"),
+            check_interval: std::num::NonZeroU32::new(1024).unwrap_or(std::num::NonZeroU32::MIN),
         });
         engine
             .add_policy("gpu-policy.rego".to_string(), policy.to_string())
