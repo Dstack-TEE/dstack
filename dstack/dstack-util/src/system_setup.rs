@@ -1082,6 +1082,8 @@ mod gpu {
     const EVENT_VERSION: u32 = 2;
     const POLICY_ENTRYPOINT: &str = "data.policy.nv_match";
     const TRUST_OUTPOST_POLICY: &str = "/usr/share/nvattest/policies/allow_trust_outpost_ocsp.rego";
+    /// Bound Rego evaluation so a runaway application policy cannot hang boot.
+    const POLICY_TIMEOUT: Duration = Duration::from_secs(10);
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub(super) struct GpuInventory {
@@ -1478,8 +1480,20 @@ mod gpu {
     /// Evaluate the app-provided Rego v0 policy using the same input shape as
     /// NVIDIA relying-party policies: the nvattest `claims` JSON array.
     pub(super) fn evaluate_policy(policy: &str, claims: &[Value]) -> Result<()> {
+        evaluate_policy_with_timeout(policy, claims, POLICY_TIMEOUT)
+    }
+
+    fn evaluate_policy_with_timeout(
+        policy: &str,
+        claims: &[Value],
+        timeout: Duration,
+    ) -> Result<()> {
         let mut engine = regorus::Engine::new();
         engine.set_rego_v0(true);
+        engine.set_execution_timer_config(regorus::utils::limits::ExecutionTimerConfig {
+            limit: timeout,
+            check_interval: std::num::NonZeroU32::new(1024).expect("non-zero check interval"),
+        });
         engine
             .add_policy("gpu-policy.rego".to_string(), policy.to_string())
             .context("failed to load GPU policy")?;
@@ -1830,6 +1844,22 @@ mod gpu {
             };
             assert!(evaluate_rego_policy(&require_one_gpu, &[]).is_err());
             evaluate_rego_policy(&GpuPolicy::default(), &[]).unwrap();
+        }
+
+        #[test]
+        fn rego_policy_evaluation_is_time_bounded() {
+            let policy = r#"
+                package policy
+                default nv_match = false
+                nv_match {
+                    count([x |
+                        x := numbers.range(0, 5000)[_]
+                        y := numbers.range(0, 5000)[_]
+                        x == y
+                    ]) > 0
+                }
+            "#;
+            evaluate_policy_with_timeout(policy, &[], Duration::from_millis(50)).unwrap_err();
         }
 
         #[test]

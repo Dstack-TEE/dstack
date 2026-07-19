@@ -191,7 +191,8 @@ message AttestResponse {
 }
 
 message GpuInfoResponse {
-  // Complete JSON output produced by nvattest.
+  // Complete JSON output produced by nvattest. Empty when no boot-time GPU
+  // attestation output is available.
   string attestation = 1;
 }
 

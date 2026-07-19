@@ -594,9 +594,9 @@ if err != nil {
 fmt.Println(gpu.Attestation)
 ```
 
-The call returns an error when no GPU attestation output is available. The raw
-output is not trusted by itself; remote verifiers should compare its digest
-with the measured `gpu-attestation` runtime event.
+The `Attestation` field is empty when no GPU attestation output is available.
+The raw output is not trusted by itself; remote verifiers should compare its
+digest with the measured `gpu-attestation` runtime event.
 
 ##### `GetTlsKey(ctx context.Context, options TlsKeyOptions) (*GetTlsKeyResponse, error)`
 

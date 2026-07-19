@@ -39,7 +39,7 @@ use rcgen::KeyPair;
 use ring::rand::{SecureRandom, SystemRandom};
 use serde_json::json;
 use sha3::{Digest, Keccak256};
-use tracing::error;
+use tracing::{error, warn};
 
 use crate::{
     backend::{PlatformBackend, RealPlatform},
@@ -52,13 +52,18 @@ fn read_dmi_file(name: &str) -> String {
         .unwrap_or_default()
 }
 
-fn read_gpu_attestation(path: &Path) -> Result<String> {
-    fs::read_to_string(path).with_context(|| {
-        format!(
-            "Failed to read GPU attestation output at {}",
-            path.display()
-        )
-    })
+/// Read the GPU attestation output saved during boot. Returns an empty string
+/// when no output is available (e.g. no GPU attached or attestation disabled).
+fn read_gpu_attestation(path: &Path) -> String {
+    match fs::read_to_string(path) {
+        Ok(attestation) => attestation,
+        Err(err) => {
+            if err.kind() != std::io::ErrorKind::NotFound {
+                warn!("failed to read GPU attestation output: {err:?}");
+            }
+            String::new()
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -342,7 +347,7 @@ impl DstackGuestRpc for InternalRpcHandler {
 
     async fn gpu_info(self) -> Result<GpuInfoResponse> {
         Ok(GpuInfoResponse {
-            attestation: read_gpu_attestation(Path::new(GPU_ATTESTATION_OUTPUT))?,
+            attestation: read_gpu_attestation(Path::new(GPU_ATTESTATION_OUTPUT)),
         })
     }
 
@@ -693,7 +698,13 @@ mod tests {
         output.write_all(attestation.as_bytes()).unwrap();
         output.flush().unwrap();
 
-        assert_eq!(read_gpu_attestation(output.path()).unwrap(), attestation);
+        assert_eq!(read_gpu_attestation(output.path()), attestation);
+    }
+
+    #[test]
+    fn missing_gpu_attestation_output_reads_as_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(read_gpu_attestation(&dir.path().join("missing")), "");
     }
 
     fn extract_pubkey_from_report_data(report_data: &[u8], prefix: &str) -> Result<Vec<u8>> {
