@@ -266,7 +266,7 @@ impl RpcHandler {
 
     fn ensure_admin(&self, token: &str) -> Result<()> {
         if !dstack_api_auth::verify_sha256_token(token, &self.state.config.admin_token_hash) {
-            bail!("Invalid token");
+            bail!("invalid token");
         }
         Ok(())
     }
