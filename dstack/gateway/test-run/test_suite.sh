@@ -100,6 +100,7 @@ address = "127.0.0.1:${debug_port}"
 [core.admin]
 enabled = true
 address = "127.0.0.1:${admin_port}"
+# TEST ONLY - do not use in production; disables admin API authentication
 insecure_no_auth = true
 
 [core.sync]
