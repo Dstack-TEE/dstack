@@ -135,7 +135,6 @@ mandatory = false
 
 [core]
 cert_dir = "/kms/certs"
-admin_token_hash = ""
 # single-node: the KMS does not self-attest to its own auth API before
 # bootstrap (it still attests the genesis keys via the guest agent, and app
 # auth + per-app quote checks are unaffected).

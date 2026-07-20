@@ -30,6 +30,41 @@ CVMs running in dstack support three boot modes:
 - `key-provider` in RTMR: `{"type": "kms", "id": "<kms-root-pubkey>"}`
 - `app-id` is equal to the address of the deployed App Smart Contract.
 
+## Admin API authentication
+
+The KMS public RPCs authenticate callers by RA-TLS attestation. Operator-facing
+admin RPCs (currently `ClearImageCache`) are instead served on a **separate admin
+listener** (`[core.admin]` in `kms.toml`) behind the same shared HTTP
+authenticator used by the VMM and gateway, configured identically to the gateway
+admin API, so the credential travels in the `Authorization: Bearer <token>` or
+`X-Admin-Token: <token>` header:
+
+```toml
+[core.admin]
+enabled = true
+address = "127.0.0.1"
+port = 8001
+# generate with: openssl rand -hex 32
+auth_token = "<token>"
+# htpasswd_file = "/etc/kms/admin.htpasswd"   # bcrypt (htpasswd -B), optional
+insecure_no_auth = false
+```
+
+The token can also be supplied via the `DSTACK_KMS_ADMIN_TOKEN` or
+`ADMIN_API_TOKEN` environment variables instead of the config file. The admin
+listener fails closed: enabled with neither `auth_token` nor `htpasswd_file`
+(and `insecure_no_auth = false`) refuses to start. Call it with, for example:
+
+```bash
+curl -X POST "http://127.0.0.1:8001/prpc/Admin.ClearImageCache?json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"image_hash": "<hash>", "config_hash": "<hash>"}'
+```
+
+This admin authentication is separate from the on-chain / webhook authorization
+below, which decides whether a CVM may boot and receive keys.
+
 ## KMS Implementation
 
 ### Components

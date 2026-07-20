@@ -367,7 +367,6 @@ mandatory = false
 
 [core]
 cert_dir = "/dstack/kms-certs"
-admin_token_hash = "00"
 pccs_url = ""
 enforce_self_authorization = true
 amd_kds_base_url = "${DSTACK_SNP_SMOKE_KDS_BASE_URL:-}"

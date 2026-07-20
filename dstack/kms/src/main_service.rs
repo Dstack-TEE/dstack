@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::{
-    path::{Path, PathBuf},
+    path::Path,
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc,
@@ -13,9 +13,9 @@ use std::{
 use anyhow::{bail, Context, Result};
 use dstack_kms_rpc::{
     kms_server::{KmsRpc, KmsServer},
-    AppId, AppKeyResponse, ClearImageCacheRequest, GetAppKeyRequest, GetKmsKeyRequest,
-    GetMetaResponse, GetTempCaCertResponse, KmsKeyResponse, KmsKeys, PublicKeyResponse,
-    SignCertRequest, SignCertResponse,
+    AppId, AppKeyResponse, GetAppKeyRequest, GetKmsKeyRequest, GetMetaResponse,
+    GetTempCaCertResponse, KmsKeyResponse, KmsKeys, PublicKeyResponse, SignCertRequest,
+    SignCertResponse,
 };
 use dstack_verifier::{CvmVerifier, VerificationDetails};
 use fs_err as fs;
@@ -94,7 +94,44 @@ impl KmsMetrics {
     }
 }
 
+/// remove a single cache entry (a hex-named subdir/file) under `parent_dir`, or
+/// everything when `sub_dir == "all"`. A non-hex key is rejected to keep the
+/// deletion confined to the cache.
+fn remove_cache(parent_dir: &Path, sub_dir: &str) -> Result<()> {
+    if sub_dir.is_empty() {
+        return Ok(());
+    }
+    if sub_dir == "all" {
+        if parent_dir.exists() {
+            fs::remove_dir_all(parent_dir)?;
+        }
+        return Ok(());
+    }
+    if !sub_dir.chars().all(|c| c.is_ascii_hexdigit()) {
+        bail!("invalid cache key");
+    }
+    let path = parent_dir.join(sub_dir);
+    if path.is_dir() {
+        fs::remove_dir_all(path)?;
+    } else if path.is_file() {
+        fs::remove_file(path)?;
+    }
+    Ok(())
+}
+
 impl KmsState {
+    /// clear cached image and measurement material for the given hashes. Used by
+    /// the admin `ClearImageCache` RPC; authorization is enforced by the admin
+    /// listener's HTTP authenticator, not here.
+    pub(crate) fn clear_image_cache(&self, image_hash: &str, config_hash: &str) -> Result<()> {
+        let images_dir = self.config.image.cache_dir.join("images");
+        remove_cache(&images_dir, image_hash).context("failed to clear image cache")?;
+        // measurement cache is kept by the verifier under measurements/.
+        let mr_cache_dir = self.config.image.cache_dir.join("measurements");
+        remove_cache(&mr_cache_dir, config_hash).context("failed to clear measurement cache")?;
+        Ok(())
+    }
+
     pub fn new(config: KmsConfig) -> Result<Self> {
         let root_ca = CaCert::load(config.root_ca_cert(), config.root_ca_key())
             .context("Failed to load root CA certificate")?;
@@ -233,42 +270,6 @@ impl RpcHandler {
         let att = self.ensure_attested()?;
         self.ensure_app_attestation_allowed(att, false, false, vm_config)
             .await
-    }
-
-    fn image_cache_dir(&self) -> PathBuf {
-        self.state.config.image.cache_dir.join("images")
-    }
-
-    fn remove_cache(&self, parent_dir: &Path, sub_dir: &str) -> Result<()> {
-        if sub_dir.is_empty() {
-            return Ok(());
-        }
-
-        if sub_dir == "all" {
-            fs::remove_dir_all(parent_dir)?;
-            return Ok(());
-        }
-
-        if !sub_dir.chars().all(|c| c.is_ascii_hexdigit()) {
-            bail!("Invalid cache key");
-        }
-
-        let path = parent_dir.join(sub_dir);
-
-        if path.is_dir() {
-            fs::remove_dir_all(path)?;
-        } else if path.is_file() {
-            fs::remove_file(path)?;
-        }
-
-        Ok(())
-    }
-
-    fn ensure_admin(&self, token: &str) -> Result<()> {
-        if !dstack_api_auth::verify_sha256_token(token, &self.state.config.admin_token_hash) {
-            bail!("invalid token");
-        }
-        Ok(())
     }
 
     async fn verify_os_image_hash(
@@ -548,17 +549,6 @@ impl KmsRpc for RpcHandler {
             ],
         })
     }
-
-    async fn clear_image_cache(self, request: ClearImageCacheRequest) -> Result<()> {
-        self.ensure_admin(&request.token)?;
-        self.remove_cache(&self.image_cache_dir(), &request.image_hash)
-            .context("Failed to clear image cache")?;
-        // Clear measurement cache (now handled by verifier's cache in measurements/ dir)
-        let mr_cache_dir = self.state.config.image.cache_dir.join("measurements");
-        self.remove_cache(&mr_cache_dir, &request.config_hash)
-            .context("Failed to clear measurement cache")?;
-        Ok(())
-    }
 }
 
 impl RpcCall<KmsState> for RpcHandler {
@@ -584,6 +574,29 @@ mod tests {
     };
     use cc_eventlog::RuntimeEvent;
     use sha2::{Digest, Sha256, Sha384};
+
+    #[test]
+    fn remove_cache_only_deletes_the_named_hex_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let keep = root.join("cafe");
+        let drop = root.join("beef");
+        fs::create_dir_all(&keep).unwrap();
+        fs::create_dir_all(&drop).unwrap();
+
+        remove_cache(root, "beef").unwrap();
+        assert!(!drop.exists(), "named entry must be removed");
+        assert!(keep.exists(), "other entries must be kept");
+
+        // empty key is a no-op; a non-hex key is rejected before touching disk.
+        remove_cache(root, "").unwrap();
+        assert!(remove_cache(root, "../escape").is_err());
+        assert!(keep.exists());
+
+        // "all" clears the whole cache dir.
+        remove_cache(root, "all").unwrap();
+        assert!(!root.exists());
+    }
     use std::collections::BTreeMap;
 
     fn hex_of(byte: u8, len: usize) -> String {
