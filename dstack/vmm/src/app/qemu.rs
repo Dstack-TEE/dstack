@@ -369,7 +369,7 @@ impl VmConfig {
             "--tpmstate".into(),
             format!("dir={}", prepared.workdir.swtpm_state_dir().display()),
             "--ctrl".into(),
-            format!("type=unixio,path={},mode=0666", socket.display()),
+            format!("type=unixio,path={},mode=0600", socket.display()),
             "--flags".into(),
             "not-need-init,startup-clear".into(),
         ];
