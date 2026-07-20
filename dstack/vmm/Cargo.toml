@@ -33,8 +33,8 @@ humantime.workspace = true
 strip-ansi-escapes.workspace = true
 tailf.workspace = true
 tokio = { workspace = true, features = ["full"] }
+dstack-api-auth.workspace = true
 dstack-build-info.workspace = true
-rocket-apitoken.workspace = true
 serde_ini.workspace = true
 
 supervisor-client.workspace = true

@@ -409,6 +409,9 @@ pub struct AuthConfig {
     pub enabled: bool,
     /// The API tokens
     pub tokens: Vec<String>,
+    /// Optional Apache htpasswd file for HTTP Basic authentication.
+    #[serde(default)]
+    pub htpasswd_file: PathBuf,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]

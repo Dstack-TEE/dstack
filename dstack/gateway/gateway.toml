@@ -30,6 +30,8 @@ address = "127.0.0.1:8011"
 # or (GET only, for dashboard links) `?token=...`. Required unless
 # `insecure_no_auth = true`.
 admin_token = ""
+# Optional Apache htpasswd file for HTTP Basic authentication.
+htpasswd_file = ""
 # Development/testing escape hatch only. Never enable this on an admin
 # interface that is reachable from the network.
 insecure_no_auth = false

@@ -136,6 +136,8 @@ agent_port = 8090
 [auth]
 enabled = false
 tokens = []
+# Optional Apache htpasswd file for HTTP Basic authentication.
+htpasswd_file = ""
 
 [supervisor]
 exe = "./supervisor"

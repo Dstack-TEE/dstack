@@ -66,6 +66,7 @@ members = [
     "crates/dstack-cli",
     "crates/dstackup",
     "crates/dstack-auth",
+    "crates/api-auth",
     "crates/build-info",
 ]
 resolver = "2"
@@ -79,6 +80,7 @@ dstack-kms-rpc = { path = "kms/rpc" }
 dstack-guest-agent-rpc = { path = "guest-agent/rpc" }
 dstack-vmm-rpc = { path = "vmm/rpc" }
 dstack-cli-core = { path = "crates/dstack-cli-core" }
+dstack-api-auth = { path = "crates/api-auth" }
 dstack-build-info = { path = "crates/build-info" }
 cc-eventlog = { path = "cc-eventlog" }
 supervisor = { path = "supervisor" }
@@ -144,6 +146,7 @@ flate2 = "1.1"
 borsh = { version = "1.5.7", default-features = false, features = ["derive"] }
 bon = { version = "3.4.0", default-features = false }
 base64 = "0.22.1"
+bcrypt = "0.17.1"
 hex = { version = "0.4.3", default-features = false }
 hex_fmt = "0.3.0"
 hex-literal = "1.0.0"
