@@ -6,6 +6,7 @@
 use crate::{
     app::Manifest,
     config::{CvmConfig, Networking, NetworkingMode, ProcessAnnotation, TeePlatform},
+    vm_launcher::{ChildCommand, LaunchSpec},
 };
 use std::collections::HashMap;
 use std::os::unix::fs::PermissionsExt;
@@ -330,7 +331,7 @@ impl VmConfig {
         gpus: &GpuConfig,
     ) -> Result<Vec<ProcessConfig>> {
         let prepared = PreparedQemuLaunch::prepare(self, workdir, cfg, gpus)?;
-        let mut process = QemuCommandBuilder {
+        let process = QemuCommandBuilder {
             vm: self,
             cfg,
             gpus,
@@ -345,24 +346,6 @@ impl VmConfig {
             .as_ref()
             .context("missing swtpm executable for configured socket")?;
 
-        // The supervisor starts process configs in order, but swtpm may need a
-        // moment to create its socket. Make QEMU wait without shell-quoting any
-        // of its arguments: they are passed as positional parameters.
-        let original_command = std::mem::replace(&mut process.command, "/bin/sh".into());
-        let original_args = std::mem::take(&mut process.args);
-        process.args = vec![
-            "-c".into(),
-            "for i in $(seq 1 100); do [ -S \"$1\" ] && shift && exec \"$@\"; sleep 0.05; done; echo 'timed out waiting for swtpm socket' >&2; exit 1".into(),
-            "dstack-qemu-wait-swtpm".into(),
-            socket.to_string_lossy().into_owned(),
-            original_command,
-        ];
-        process.args.extend(original_args);
-
-        let note = serde_json::to_string(&ProcessAnnotation {
-            kind: "swtpm".into(),
-            live_for: Some(self.manifest.id.clone()),
-        })?;
         let swtpm_args = vec![
             "socket".into(),
             "--tpm2".into(),
@@ -373,33 +356,42 @@ impl VmConfig {
             "--flags".into(),
             "not-need-init,startup-clear".into(),
         ];
-        let swtpm = ProcessConfig {
-            id: format!("{}-swtpm", self.manifest.id),
-            name: format!("{} swtpm", self.manifest.name),
-            command: swtpm_path.to_string_lossy().into_owned(),
-            args: swtpm_args,
-            env: Default::default(),
-            cwd: prepared.workdir.path().to_string_lossy().into_owned(),
-            stdout: prepared
-                .workdir
-                .stdout_file()
-                .to_string_lossy()
-                .into_owned(),
-            stderr: prepared
-                .workdir
-                .stderr_file()
-                .to_string_lossy()
-                .into_owned(),
-            pidfile: prepared
-                .workdir
-                .swtpm_state_dir()
-                .join("supervisor.pid")
-                .to_string_lossy()
-                .into_owned(),
-            cid: None,
-            note,
+        let spec = LaunchSpec {
+            qemu: ChildCommand {
+                command: process.command,
+                args: process.args,
+            },
+            swtpm: ChildCommand {
+                command: swtpm_path.to_string_lossy().into_owned(),
+                args: swtpm_args,
+            },
+            swtpm_socket: socket.to_path_buf(),
+            startup_timeout_ms: 5_000,
+            shutdown_timeout_ms: 10_000,
         };
-        Ok(vec![swtpm, process])
+        let spec_path = prepared.workdir.launch_spec_path();
+        safe_write::safe_write(&spec_path, serde_json::to_vec_pretty(&spec)?)
+            .context("failed to write VM launch specification")?;
+        let executable =
+            std::env::current_exe().context("failed to locate dstack-vmm executable")?;
+        let launcher = ProcessConfig {
+            id: self.manifest.id.clone(),
+            name: self.manifest.name.clone(),
+            command: executable.to_string_lossy().into_owned(),
+            args: vec![
+                "vm-launcher".into(),
+                "--spec".into(),
+                spec_path.to_string_lossy().into_owned(),
+            ],
+            env: process.env,
+            cwd: process.cwd,
+            stdout: process.stdout,
+            stderr: process.stderr,
+            pidfile: process.pidfile,
+            cid: process.cid,
+            note: process.note,
+        };
+        Ok(vec![launcher])
     }
 }
 

@@ -48,6 +48,30 @@ pub(crate) mod registry;
 mod vm_info;
 mod workdir;
 
+fn signal_pidfd(pid: u32, signal: libc::c_int) -> std::io::Result<()> {
+    // SAFETY: pidfd syscalls receive scalar arguments and a null siginfo pointer.
+    let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) };
+    if fd < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let result = unsafe {
+        libc::syscall(
+            libc::SYS_pidfd_send_signal,
+            fd,
+            signal,
+            std::ptr::null::<libc::siginfo_t>(),
+            0,
+        )
+    };
+    // SAFETY: fd was returned by pidfd_open and is owned by this function.
+    unsafe { libc::close(fd as libc::c_int) };
+    if result < 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct PortMapping {
     pub address: IpAddr,
@@ -255,26 +279,6 @@ pub struct App {
     pub(crate) pull_status: Arc<Mutex<std::collections::HashMap<String, PullStatus>>>,
 }
 
-#[derive(Debug, PartialEq, Eq)]
-enum DependencyAction {
-    KeepRunning,
-    StopDependents,
-    StopVm,
-    Finished,
-}
-
-fn dependency_action(main_running: bool, dependents_running: &[bool]) -> DependencyAction {
-    if dependents_running.is_empty() {
-        DependencyAction::Finished
-    } else if !main_running {
-        DependencyAction::StopDependents
-    } else if dependents_running.iter().any(|running| !running) {
-        DependencyAction::StopVm
-    } else {
-        DependencyAction::KeepRunning
-    }
-}
-
 impl App {
     pub(crate) fn lock(&self) -> MutexGuard<'_, AppState> {
         self.state.lock().or_panic("mutex poisoned")
@@ -298,7 +302,6 @@ impl App {
                 cid_pool,
                 vms: HashMap::new(),
                 active_forwards: HashMap::new(),
-                dependency_monitors: HashSet::new(),
             })),
             config: Arc::new(config),
             forward_service: Arc::new(tokio::sync::Mutex::new(ForwardService::new())),
@@ -397,7 +400,6 @@ impl App {
             vm_state.config.clone()
         };
         if !is_running {
-            self.wait_for_dependent_processes_stopped(id).await?;
             let work_dir = self.work_dir(id);
             for path in [work_dir.serial_pty(), work_dir.qmp_socket()] {
                 if path.symlink_metadata().is_ok() {
@@ -419,10 +421,8 @@ impl App {
                 let vm_state = state.get_mut(id).context("VM not found")?;
                 vm_state.state.runtime_networks = runtime_networks;
             }
-            let has_dependent_processes = processes.len() > 1;
             for process in processes {
                 if let Err(err) = self.supervisor.deploy(&process).await {
-                    self.stop_dependent_processes(id).await;
                     if let Err(clear_err) = work_dir.clear_runtime_networks() {
                         warn!(
                             id,
@@ -435,9 +435,6 @@ impl App {
                     return Err(err)
                         .with_context(|| format!("failed to start process {}", process.id));
                 }
-            }
-            if has_dependent_processes {
-                self.spawn_dependency_monitor(id);
             }
 
             let mut state = self.lock();
@@ -457,103 +454,36 @@ impl App {
     pub async fn stop_vm(&self, id: &str) -> Result<()> {
         self.set_started(id, false)?;
         self.cleanup_port_forward(id).await;
-        let result = self.supervisor.stop(id).await;
-        self.stop_dependent_processes(id).await;
-        result
+        self.stop_vm_process(id).await?;
+        Ok(())
     }
 
-    async fn stop_dependent_processes(&self, id: &str) {
-        for process in self.supervisor.list().await.unwrap_or_default() {
-            let note =
-                serde_json::from_str::<ProcessAnnotation>(&process.config.note).unwrap_or_default();
-            if note.live_for.as_deref() == Some(id) {
-                if let Err(err) = self.supervisor.stop(&process.config.id).await {
-                    debug!(
-                        process_id = process.config.id,
-                        "failed to stop dependent process: {err:?}"
-                    );
+    async fn stop_vm_process(&self, id: &str) -> Result<()> {
+        let Some(info) = self.supervisor.info(id).await? else {
+            return Ok(());
+        };
+        if info.state.status.is_running() {
+            let pid = info.state.pid.context("running VM launcher has no PID")?;
+            if let Err(error) = signal_pidfd(pid, libc::SIGTERM) {
+                warn!(id, %pid, %error, "failed to signal VM launcher gracefully; forcing shutdown");
+                return self.supervisor.stop(id).await;
+            }
+            for _ in 0..150 {
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                let running = self
+                    .supervisor
+                    .info(id)
+                    .await?
+                    .is_some_and(|info| info.state.status.is_running());
+                if !running {
+                    // Synchronize Supervisor's `started` flag after the launcher
+                    // completed its graceful child cleanup.
+                    return self.supervisor.stop(id).await;
                 }
             }
+            warn!(id, "VM launcher did not stop gracefully; forcing shutdown");
         }
-    }
-
-    async fn wait_for_dependent_processes_stopped(&self, id: &str) -> Result<()> {
-        for _ in 0..50 {
-            let running = self.supervisor.list().await?.into_iter().any(|process| {
-                let note = serde_json::from_str::<ProcessAnnotation>(&process.config.note)
-                    .unwrap_or_default();
-                note.live_for.as_deref() == Some(id) && process.state.status.is_running()
-            });
-            if !running {
-                return Ok(());
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        }
-        bail!("timed out waiting for dependent processes of VM {id} to stop")
-    }
-
-    /// Keep auxiliary processes fail-closed with their owning VM. If QEMU
-    /// exits, all dependents are stopped. If a required dependent exits first,
-    /// QEMU is stopped rather than continuing with a broken emulated device.
-    fn spawn_dependency_monitor(&self, id: &str) {
-        {
-            let mut state = self.lock();
-            if !state.dependency_monitors.insert(id.to_string()) {
-                return;
-            }
-        }
-        let app = self.clone();
-        let id = id.to_string();
-        tokio::spawn(async move {
-            loop {
-                tokio::time::sleep(std::time::Duration::from_millis(250)).await;
-                let processes = match app.supervisor.list().await {
-                    Ok(processes) => processes,
-                    Err(err) => {
-                        warn!(vm_id = id, "failed to inspect dependent processes: {err:?}");
-                        continue;
-                    }
-                };
-                let main_running = processes
-                    .iter()
-                    .find(|process| process.config.id == id)
-                    .is_some_and(|process| process.state.status.is_running());
-                let dependents = processes
-                    .iter()
-                    .filter(|process| {
-                        serde_json::from_str::<ProcessAnnotation>(&process.config.note)
-                            .unwrap_or_default()
-                            .live_for
-                            .as_deref()
-                            == Some(id.as_str())
-                    })
-                    .collect::<Vec<_>>();
-                let dependent_states = dependents
-                    .iter()
-                    .map(|process| process.state.status.is_running())
-                    .collect::<Vec<_>>();
-                match dependency_action(main_running, &dependent_states) {
-                    DependencyAction::KeepRunning => continue,
-                    DependencyAction::Finished => break,
-                    DependencyAction::StopDependents => {
-                        app.stop_dependent_processes(&id).await;
-                        break;
-                    }
-                    DependencyAction::StopVm => {
-                        error!(vm_id = id, "required VM process exited; stopping VM");
-                        if let Err(err) = app.supervisor.stop(&id).await {
-                            debug!(
-                                vm_id = id,
-                                "failed to stop VM after dependent exit: {err:?}"
-                            );
-                        }
-                        app.stop_dependent_processes(&id).await;
-                        break;
-                    }
-                }
-            }
-            app.lock().dependency_monitors.remove(&id);
-        });
+        self.supervisor.stop(id).await
     }
 
     pub async fn remove_vm(&self, id: &str) -> Result<()> {
@@ -594,10 +524,9 @@ impl App {
     /// `delete_workdir`: true for user-initiated removal, false for orphan cleanup.
     async fn finish_remove_vm(&self, id: &str, delete_workdir: bool) -> Result<()> {
         // Stop the supervisor process (idempotent if already stopped)
-        if let Err(err) = self.supervisor.stop(id).await {
-            debug!("supervisor.stop({id}) during removal: {err:?}");
+        if let Err(err) = self.stop_vm_process(id).await {
+            debug!("graceful VM stop during removal failed: {err:?}");
         }
-        self.stop_dependent_processes(id).await;
 
         // Poll until the process is no longer running, then remove it.
         // Some VMs take a long time to stop (e.g. 2+ hours), so we wait indefinitely.
@@ -629,31 +558,6 @@ impl App {
                     warn!("supervisor.info({id}) failed during removal: {err:?}");
                     tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                 }
-            }
-        }
-
-        // Auxiliary processes (currently swtpm) are owned by the VM through
-        // ProcessAnnotation::live_for. Remove their stopped supervisor entries
-        // before deleting the VM workdir.
-        for process in self.supervisor.list().await.unwrap_or_default() {
-            let note =
-                serde_json::from_str::<ProcessAnnotation>(&process.config.note).unwrap_or_default();
-            if note.live_for.as_deref() != Some(id) {
-                continue;
-            }
-            for _ in 0..50 {
-                match self.supervisor.info(&process.config.id).await {
-                    Ok(Some(info)) if info.state.status.is_running() => {
-                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                    }
-                    _ => break,
-                }
-            }
-            if let Err(err) = self.supervisor.remove(&process.config.id).await {
-                warn!(
-                    process_id = process.config.id,
-                    "failed to remove dependent process: {err:?}"
-                );
             }
         }
 
@@ -896,22 +800,14 @@ impl App {
 
         // Clean up orphaned supervisor processes (in supervisor but not loaded as VMs)
         let loaded_vm_ids: HashSet<String> = self.lock().vms.keys().cloned().collect();
-        for (note, process) in &running_vms {
-            let owner = note.live_for.as_deref().unwrap_or(&process.config.id);
-            if !loaded_vm_ids.contains(owner) {
+        for (_, process) in &running_vms {
+            if !loaded_vm_ids.contains(&process.config.id) {
                 info!(
                     "Cleaning up orphaned supervisor process: {}",
                     process.config.id
                 );
-                self.spawn_finish_remove(owner);
+                self.spawn_finish_remove(&process.config.id);
             }
-        }
-
-        // Re-establish lifecycle monitoring after a VMM restart. The monitor
-        // also reconciles a QEMU or dependent process that exited while VMM was
-        // unavailable.
-        for id in self.lock().vms.keys().cloned().collect::<Vec<_>>() {
-            self.spawn_dependency_monitor(&id);
         }
 
         // Restore port forwarding for running bridge-mode VMs with persisted guest IPs
@@ -1706,24 +1602,6 @@ mod tests {
     }
 
     #[test]
-    fn dependency_lifecycle_is_fail_closed() {
-        assert_eq!(
-            dependency_action(true, &[true]),
-            DependencyAction::KeepRunning
-        );
-        assert_eq!(
-            dependency_action(false, &[true]),
-            DependencyAction::StopDependents
-        );
-        assert_eq!(dependency_action(true, &[false]), DependencyAction::StopVm);
-        assert_eq!(
-            dependency_action(false, &[false]),
-            DependencyAction::StopDependents
-        );
-        assert_eq!(dependency_action(true, &[]), DependencyAction::Finished);
-    }
-
-    #[test]
     fn gpu_config_has_gpus_only_when_resolved_gpu_list_is_non_empty() {
         assert!(!GpuConfig::default().has_gpus());
         assert!(!GpuConfig {
@@ -2324,8 +2202,6 @@ pub(crate) struct AppState {
     vms: HashMap<String, VmState>,
     /// Tracks active port forwarding rules per VM ID (bridge mode only).
     active_forwards: HashMap<String, Vec<ForwardRule>>,
-    /// VM IDs with an active auxiliary-process lifecycle monitor.
-    dependency_monitors: HashSet<String>,
 }
 
 impl AppState {

@@ -112,6 +112,10 @@ impl VmWorkDir {
         self.swtpm_state_dir().join("swtpm.sock")
     }
 
+    pub fn launch_spec_path(&self) -> PathBuf {
+        self.workdir.join("launch.json")
+    }
+
     pub fn app_compose_path(&self) -> PathBuf {
         self.shared_dir().join(APP_COMPOSE)
     }
