@@ -51,14 +51,6 @@ impl Drop for SocketCleanup {
     }
 }
 
-fn set_process_name() {
-    let name = b"dstack-cvm\0";
-    // SAFETY: PR_SET_NAME reads a NUL-terminated buffer of at most 16 bytes.
-    unsafe {
-        libc::prctl(libc::PR_SET_NAME, name.as_ptr().cast::<libc::c_void>());
-    }
-}
-
 fn spawn_child(spec: &ChildCommand) -> Result<Child> {
     let parent = unsafe { libc::getpid() };
     let mut command = Command::new(&spec.command);
@@ -139,7 +131,6 @@ async fn wait_for_swtpm(swtpm: &mut Child, socket: &Path, deadline: Instant) -> 
 }
 
 pub async fn run(spec_path: &Path) -> Result<()> {
-    set_process_name();
     let raw = fs_err::read(spec_path)
         .with_context(|| format!("failed to read launch spec {}", spec_path.display()))?;
     let spec: LaunchSpec = serde_json::from_slice(&raw).context("failed to parse launch spec")?;
