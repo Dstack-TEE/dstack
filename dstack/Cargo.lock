@@ -1819,7 +1819,6 @@ dependencies = [
  "sha2 0.10.9",
  "shared_child",
  "smallvec",
- "subtle",
  "tdx-attest",
  "tempfile",
  "tokio",
