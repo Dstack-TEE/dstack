@@ -27,3 +27,19 @@ macro_rules! git_revision {
         )
     };
 }
+
+/// Returns the calling package's version and Git revision for display.
+///
+/// The result has the form `v0.6.0 (git:0123456789abcdef0123)`. This is a
+/// macro so `CARGO_PKG_VERSION` is evaluated for the calling package rather
+/// than for `dstack-build-info` itself.
+#[macro_export]
+macro_rules! app_version {
+    () => {
+        format!(
+            "v{} ({})",
+            env!("CARGO_PKG_VERSION"),
+            $crate::git_revision!()
+        )
+    };
+}

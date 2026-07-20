@@ -35,7 +35,7 @@ const CARGO_PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
 const GIT_REV: &str = dstack_build_info::git_revision!();
 
 fn app_version() -> String {
-    format!("v{CARGO_PKG_VERSION} ({GIT_REV})")
+    dstack_build_info::app_version!()
 }
 
 #[derive(Parser)]

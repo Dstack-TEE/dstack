@@ -22,7 +22,7 @@ use tokio::sync::oneshot;
 use tracing::{error, info};
 
 pub fn app_version() -> String {
-    format!("v{} ({})", crate::CARGO_PKG_VERSION, crate::GIT_REV)
+    dstack_build_info::app_version!()
 }
 
 async fn run_internal_v0(

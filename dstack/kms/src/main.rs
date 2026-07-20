@@ -22,9 +22,7 @@ mod main_service;
 mod onboard_service;
 
 fn app_version() -> String {
-    const CARGO_PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
-    const VERSION: &str = dstack_build_info::git_revision!();
-    format!("v{CARGO_PKG_VERSION} ({VERSION})")
+    dstack_build_info::app_version!()
 }
 
 #[derive(Parser)]
