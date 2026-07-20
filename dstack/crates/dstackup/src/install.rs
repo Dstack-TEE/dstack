@@ -1230,14 +1230,11 @@ pub(crate) fn read_token_file(path: &Path) -> Option<String> {
 }
 
 /// write the management-API token atomically with owner-only (0600)
-/// permissions — it is a bearer credential.
+/// permissions — it is a bearer credential, so it is created 0600 up front
+/// (never exposed with wider bits, even transiently).
 fn write_token_file(path: &Path, token: &str) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-    dstack_cli_core::fsutil::write_atomic(path, token)
-        .with_context(|| format!("writing {}", path.display()))?;
-    fs::set_permissions(path, fs::Permissions::from_mode(0o600))
-        .with_context(|| format!("setting 0600 on {}", path.display()))?;
-    Ok(())
+    dstack_cli_core::fsutil::write_atomic_mode(path, token, 0o600)
+        .with_context(|| format!("writing {}", path.display()))
 }
 
 #[cfg(test)]
