@@ -352,7 +352,6 @@ mode = "user"
 net = "10.0.2.0/24"
 dhcp_start = "10.0.2.10"
 restrict = false
-forward_service_enabled = false
 
 [cvm.port_mapping]
 enabled = true
