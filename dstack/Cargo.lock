@@ -1901,17 +1901,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "dstack-port-forward"
-version = "0.6.0"
-dependencies = [
- "anyhow",
- "nix 0.29.0",
- "tokio",
- "tokio-util",
- "tracing",
-]
-
-[[package]]
 name = "dstack-tee-simulator"
 version = "0.6.0"
 dependencies = [
@@ -2043,7 +2032,6 @@ dependencies = [
  "dirs 6.0.0",
  "dstack-kms-rpc",
  "dstack-mr",
- "dstack-port-forward",
  "dstack-types",
  "dstack-vmm-rpc",
  "fatfs",
@@ -4066,7 +4054,6 @@ dependencies = [
  "cfg-if",
  "cfg_aliases",
  "libc",
- "memoffset 0.9.1",
 ]
 
 [[package]]
@@ -7105,7 +7092,6 @@ dependencies = [
  "bytes",
  "futures-core",
  "futures-sink",
- "futures-util",
  "pin-project-lite",
  "tokio",
 ]

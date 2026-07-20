@@ -519,10 +519,6 @@ pub struct Networking {
     #[serde(default)]
     pub bridge: String,
 
-    /// Enable userspace port forwarding for bridge-mode VMs.
-    #[serde(default)]
-    pub forward_service_enabled: bool,
-
     // ── MAC prefix ─────────────────────────────────────────────────
     /// Fixed MAC address prefix (0-3 colon-separated hex bytes, e.g. "02:ab:cd").
     /// Remaining bytes are derived from the VM ID hash.

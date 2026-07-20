@@ -90,13 +90,6 @@ sudo sysctl -p /etc/sysctl.d/99-dstack-bridge.conf
 sudo apt install -y dnsmasq
 ```
 
-Install the DHCP notification script (notifies VMM when a VM gets an IP so port forwarding can be established):
-
-```bash
-sudo cp dstack/scripts/dhcp-notify.sh /usr/local/bin/dhcp-notify.sh
-sudo chmod +x /usr/local/bin/dhcp-notify.sh
-```
-
 Create dnsmasq config:
 
 ```ini
@@ -106,10 +99,7 @@ bind-interfaces
 dhcp-range=10.0.100.10,10.0.100.254,255.255.255.0,12h
 dhcp-option=option:router,10.0.100.1
 dhcp-option=option:dns-server,8.8.8.8,1.1.1.1
-dhcp-script=/usr/local/bin/dhcp-notify.sh
 ```
-
-The `dhcp-script` option tells dnsmasq to call the notification script on every lease event. The script sends the MAC and IP to VMM's `ReportDhcpLease` RPC, which triggers automatic port forwarding for the VM.
 
 ```bash
 sudo systemctl restart dnsmasq
@@ -172,8 +162,7 @@ sudo chmod u+s /usr/lib/qemu/qemu-bridge-helper
 - VMM passes `-netdev bridge,id=net0,br=<bridge>` to QEMU
 - QEMU's bridge helper (setuid) creates a TAP device and attaches it to the bridge
 - Guest MAC address is derived from SHA256 of the VM ID, with an optional configurable prefix (stable across restarts for DHCP IP consistency)
-- The host DHCP server (dnsmasq) assigns an IP and calls `dhcp-notify.sh`, which notifies VMM via the `ReportDhcpLease` RPC
-- VMM matches the MAC address to identify the VM and establishes port forwarding rules
+- The host DHCP server (dnsmasq) assigns an IP to the VM
 - When QEMU exits, the TAP device is automatically destroyed
 - VMM does not need root or `CAP_NET_ADMIN`
 
