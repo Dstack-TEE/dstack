@@ -103,14 +103,6 @@ async fn stop_child(child: &mut Child, name: &str, grace: Duration) {
             }
         }
     }
-    // The group normally disappears with its foreground process. Kill any
-    // helper descendants that outlived the group leader before launcher exits.
-    if unsafe { libc::kill(-(pid as libc::pid_t), libc::SIGKILL) } != 0 {
-        let error = std::io::Error::last_os_error();
-        if error.raw_os_error() != Some(libc::ESRCH) {
-            warn!(%pid, %name, %error, "failed to clean up child process group");
-        }
-    }
 }
 
 async fn wait_for_swtpm(swtpm: &mut Child, socket: &Path, deadline: Instant) -> Result<()> {
