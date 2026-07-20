@@ -28,8 +28,8 @@ address = "127.0.0.1:8011"
 # be supplied via the `DSTACK_GATEWAY_ADMIN_TOKEN` or `ADMIN_API_TOKEN` env
 # vars. Clients send it as `Authorization: Bearer <token>`, `X-Admin-Token`,
 # or (GET only, for dashboard links) `?token=...`. Required unless
-# `insecure_no_auth = true`.
-admin_token = ""
+# `insecure_no_auth = true`. (The legacy key `admin_token` is still accepted.)
+auth_token = ""
 # Optional Apache htpasswd file for HTTP Basic authentication.
 htpasswd_file = ""
 # Development/testing escape hatch only. Never enable this on an admin

@@ -22,7 +22,7 @@ GATEWAY_PROXIES="gateway-1:9014 gateway-2:9014 gateway-3:9014"
 GATEWAY_DEBUG_URLS="http://gateway-1:9015 http://gateway-2:9015 http://gateway-3:9015"
 GATEWAY_ADMIN="http://gateway-1:9016"
 
-# Must match `admin_token` in configs/gateway-*.toml
+# Must match `auth_token` in configs/gateway-*.toml
 ADMIN_TOKEN="e2e-admin-token"
 ADMIN_AUTH_HEADER="Authorization: Bearer ${ADMIN_TOKEN}"
 

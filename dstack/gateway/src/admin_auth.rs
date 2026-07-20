@@ -23,8 +23,8 @@ impl AdminAuthFairing {
                 http_config(),
             )));
         }
-        let token = if !config.admin_token.is_empty() {
-            config.admin_token.trim().to_owned()
+        let token = if !config.auth_token.is_empty() {
+            config.auth_token.trim().to_owned()
         } else {
             std::env::var(ENV_ADMIN_TOKEN)
                 .or_else(|_| std::env::var(ENV_ADMIN_TOKEN_COMPAT))
@@ -34,8 +34,8 @@ impl AdminAuthFairing {
         };
         if token.is_empty() && config.htpasswd_file.as_os_str().is_empty() {
             bail!(
-                "admin API is enabled but neither admin_token nor htpasswd_file is configured; \
-                 set core.admin.admin_token, {ENV_ADMIN_TOKEN}, {ENV_ADMIN_TOKEN_COMPAT}, \
+                "admin API is enabled but neither auth_token nor htpasswd_file is configured; \
+                 set core.admin.auth_token, {ENV_ADMIN_TOKEN}, {ENV_ADMIN_TOKEN_COMPAT}, \
                  core.admin.htpasswd_file, or insecure_no_auth = true (testing only)"
             );
         }
