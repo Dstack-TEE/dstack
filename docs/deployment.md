@@ -122,7 +122,7 @@ Production KMS requires:
 
 #### Auth Server Options
 
-> **Note:** the boot-authorization webhook below (auth-simple / auth-eth) is a *different* mechanism from the KMS admin-API authentication. The webhook allowlists which CVMs may boot and receive keys; the admin API (`admin_token_hash` in `kms.toml`) guards operator RPCs. See [dstack-kms admin authentication](../dstack/kms/README.md#admin-api-authentication).
+> **Note:** the boot-authorization webhook below (auth-simple / auth-eth) is a *different* mechanism from the KMS admin-API authentication. The webhook allowlists which CVMs may boot and receive keys; the admin API (`[core.admin]` in `kms.toml`) guards operator RPCs. See [dstack-kms admin authentication](../dstack/kms/README.md#admin-api-authentication).
 
 | Server | Use Case | Configuration |
 |--------|----------|---------------|
@@ -439,7 +439,7 @@ curl http://<new-kms>:9203/finish
 >
 > If you skip this, `Onboard.Onboard` or later trusted RPCs will fail with KMS authorization errors.
 
-> **Admin authentication.** Onboarding itself is gated by attestation and the authorization backend above — not by a token. Separately, the KMS *admin* RPCs (for example `ClearImageCache`) are guarded by an admin token: set `admin_token_hash` (SHA-256 hex of your token) in the KMS `kms.toml`. Unlike VMM/gateway, the KMS admin token is not an HTTP header — it is passed as the `token` field of the admin RPC request (the raw token; the server hashes and compares it). An empty hash denies all admin RPCs (fail-closed). See [dstack-kms admin authentication](../dstack/kms/README.md#admin-api-authentication).
+> **Admin authentication.** Onboarding itself is gated by attestation and the authorization backend above — not by a token. Separately, the KMS *admin* RPCs (for example `ClearImageCache`) are served on a dedicated `[core.admin]` listener behind the shared HTTP authenticator, just like the VMM and gateway: set `[core.admin] enabled = true` with an `auth_token` (or the `DSTACK_KMS_ADMIN_TOKEN` / `ADMIN_API_TOKEN` env vars), and clients send `Authorization: Bearer <token>` or `X-Admin-Token`. Enabled with neither `auth_token` nor `htpasswd_file` (and `insecure_no_auth = false`) fails closed — the KMS refuses to start. See [dstack-kms admin authentication](../dstack/kms/README.md#admin-api-authentication).
 
 ---
 
