@@ -63,13 +63,6 @@ pub(crate) fn validate_resolved_network(networking: &Networking) -> Result<()> {
 }
 
 pub(crate) fn validate_resolved_networks(networks: &[Networking]) -> Result<()> {
-    let forwarding_bridges = networks
-        .iter()
-        .filter(|networking| networking.is_bridge() && networking.forward_service_enabled)
-        .count();
-    if forwarding_bridges > 1 {
-        bail!("built-in port forwarding supports only one bridge");
-    }
     for networking in networks {
         validate_resolved_network(networking)?;
     }

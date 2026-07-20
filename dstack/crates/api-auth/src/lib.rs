@@ -8,7 +8,7 @@
 //! Apache htpasswd file, and an optional GET-only query token for compatibility
 //! with browser dashboard links.
 
-use std::{path::Path, sync::Arc};
+use std::{collections::HashMap, path::Path, sync::Arc};
 
 use anyhow::{Context, Result};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
@@ -23,11 +23,59 @@ use subtle::{Choice, ConstantTimeEq};
 
 const UNAUTH_URI: &str = "/__dstack_api_auth_unauthorized";
 
+#[derive(Debug)]
+struct Htpasswd {
+    entries: HashMap<String, String>,
+}
+
+impl Htpasswd {
+    fn load(path: &Path) -> Result<Self> {
+        let contents = std::fs::read_to_string(path)
+            .with_context(|| format!("failed to read htpasswd file {}", path.display()))?;
+        Self::parse(&contents)
+            .with_context(|| format!("failed to parse htpasswd file {}", path.display()))
+    }
+
+    fn parse(contents: &str) -> Result<Self> {
+        let mut entries = HashMap::new();
+        for (line_number, line) in contents.lines().enumerate() {
+            if line.trim().is_empty() || line.starts_with('#') {
+                continue;
+            }
+
+            let (username, hash) = line
+                .split_once(':')
+                .with_context(|| format!("invalid entry on line {}", line_number + 1))?;
+            if username.is_empty() {
+                anyhow::bail!("empty username on line {}", line_number + 1);
+            }
+            if !matches!(hash.get(..4), Some("$2a$") | Some("$2b$") | Some("$2y$")) {
+                anyhow::bail!(
+                    "unsupported hash for user {username:?} on line {}; only bcrypt hashes are supported",
+                    line_number + 1
+                );
+            }
+            entries.insert(username.to_owned(), hash.to_owned());
+        }
+
+        if entries.is_empty() {
+            anyhow::bail!("file contains no users");
+        }
+        Ok(Self { entries })
+    }
+
+    fn verify(&self, username: &str, password: &str) -> bool {
+        self.entries
+            .get(username)
+            .is_some_and(|hash| bcrypt::verify(password, hash).unwrap_or(false))
+    }
+}
+
 #[derive(Clone, Default)]
 pub struct Authenticator {
     enabled: bool,
     token_hashes: Arc<Vec<[u8; 32]>>,
-    htpasswd: Option<Arc<Vec<(String, String)>>>,
+    htpasswd: Option<Arc<Htpasswd>>,
 }
 
 impl Authenticator {
@@ -60,28 +108,7 @@ impl Authenticator {
     pub fn with_htpasswd_file(mut self, path: impl AsRef<Path>) -> Result<Self> {
         self.enabled = true;
         let path = path.as_ref();
-        let contents = std::fs::read_to_string(path)
-            .with_context(|| format!("failed to read htpasswd file {}", path.display()))?;
-        let entries = contents
-            .lines()
-            .filter(|line| !line.trim().is_empty() && !line.starts_with('#'))
-            .map(|line| {
-                let (username, hash) = line.split_once(':').with_context(|| {
-                    format!("invalid htpasswd entry in {}", path.display())
-                })?;
-                if username.is_empty() || !matches!(hash.get(..4), Some("$2a$") | Some("$2b$") | Some("$2y$")) {
-                    anyhow::bail!(
-                        "unsupported htpasswd entry for {username:?} in {}; only bcrypt hashes are supported",
-                        path.display()
-                    );
-                }
-                Ok((username.to_owned(), hash.to_owned()))
-            })
-            .collect::<Result<Vec<_>>>()?;
-        if entries.is_empty() {
-            anyhow::bail!("htpasswd file {} contains no users", path.display());
-        }
-        self.htpasswd = Some(Arc::new(entries));
+        self.htpasswd = Some(Arc::new(Htpasswd::load(path)?));
         Ok(self)
     }
 
@@ -101,11 +128,9 @@ impl Authenticator {
     }
 
     pub fn verify_basic(&self, username: &str, password: &str) -> bool {
-        self.htpasswd.as_ref().is_some_and(|entries| {
-            entries.iter().any(|(expected_user, hash)| {
-                expected_user == username && bcrypt::verify(password, hash).unwrap_or(false)
-            })
-        })
+        self.htpasswd
+            .as_ref()
+            .is_some_and(|htpasswd| htpasswd.verify(username, password))
             // Preserve the old dashboard behavior: Basic user:token and
             // token: are aliases for a shared token.
             || self.verify_token(password)
