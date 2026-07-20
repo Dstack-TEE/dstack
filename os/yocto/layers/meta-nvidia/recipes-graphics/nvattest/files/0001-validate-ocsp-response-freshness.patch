@@ -1,0 +1,55 @@
+From 9f2cd5ff477168e73d182b5492bc43cb7403f3fc Mon Sep 17 00:00:00 2001
+From: dstack contributors <dstack@phala.network>
+Date: Thu, 16 Jul 2026 12:00:00 -0700
+Subject: [PATCH] Validate OCSP response freshness
+
+OCSP_basic_verify authenticates the response but does not validate its
+thisUpdate/nextUpdate window. This normally goes unnoticed because a fresh
+nonce prevents replay. Trust Outpost-compatible caches deliberately return a
+response with an older nonce, so the verifier must independently reject stale
+signed responses.
+
+Use OpenSSL's OCSP_check_validity without accepting expired responses through
+a clock-skew grace period. Preserve the SDK's existing one-hour lifetime for
+responses without nextUpdate and enforce that synthesized deadline as well.
+
+Upstream-Status: Pending
+
+---
+ nv-attestation-sdk-cpp/src/nv_ocsp.cpp | 17 +++++++++++++++++
+ 1 file changed, 17 insertions(+)
+diff --git a/nv-attestation-sdk-cpp/src/nv_ocsp.cpp b/nv-attestation-sdk-cpp/src/nv_ocsp.cpp
+index 8054971..a4a29c7 100644
+--- a/nv-attestation-sdk-cpp/src/nv_ocsp.cpp
++++ b/nv-attestation-sdk-cpp/src/nv_ocsp.cpp
+@@ -291,6 +291,14 @@ Error NvHttpOcspClient::get_ocsp_status(
+             return Error::OcspInvalidResponse;
+         }
+
++        // OCSP_basic_verify checks signature and trust, but not response time.
++        // Cached responses intentionally cannot satisfy the request nonce, so
++        // the signed validity window is the remaining replay boundary.
++        if (OCSP_check_validity(thisupd, nextupd, 0, -1) != 1) {
++            LOG_ERROR("OCSP response is outside its validity window: " << get_openssl_error());
++            return Error::OcspInvalidResponse;
++        }
++
+         // note: timegm only works on linux.
+         struct tm this_update_tm{};
+         if (ASN1_TIME_to_tm((const ASN1_TIME *)thisupd, &this_update_tm) != 1) {
+@@ -318,6 +326,15 @@ Error NvHttpOcspClient::get_ocsp_status(
+             LOG_DEBUG("ASN1_TIME_to_tm successful for next update time: " << next_update_time);
+             out_ocsp_response.nextupd = next_update_time;
+         }
++        // When nextUpdate is absent OCSP_check_validity has no upper bound to
++        // evaluate. The SDK already synthesizes one hour from thisUpdate;
++        // enforce it before exposing a successful claim.
++        time_t now = time(nullptr);
++        if (out_ocsp_response.nextupd < now) {
++            LOG_ERROR("OCSP response has expired (nextUpdate: "
++                      << out_ocsp_response.nextupd << ", now: " << now << ")");
++            return Error::OcspInvalidResponse;
++        }
+
+         out_ocsp_response.status = status;
+         out_ocsp_response.reason = reason;

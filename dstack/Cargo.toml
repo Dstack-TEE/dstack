@@ -59,6 +59,7 @@ members = [
     "serde-duration",
     "dstack-mr",
     "dstack-mr/cli",
+    "nvidia-attest-proxy",
     "verifier",
     "size-parser",
     "crates/dstack-cli-core",

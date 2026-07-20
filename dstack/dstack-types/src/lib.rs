@@ -710,6 +710,10 @@ pub struct SysConfig {
     #[serde(default, alias = "tproxy_urls")]
     pub gateway_urls: Vec<String>,
     pub pccs_url: Option<String>,
+    /// Optional NVIDIA attestation collateral proxy. When present, nvattest
+    /// fetches both OCSP responses and RIM documents through this endpoint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nvidia_attestation_proxy_url: Option<String>,
     pub docker_registry: Option<String>,
     pub host_api_url: Option<String>,
     /// MrConfigV3 document string for platform app/config binding.

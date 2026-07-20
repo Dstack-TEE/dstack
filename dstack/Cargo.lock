@@ -1987,6 +1987,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "dstack-nvidia-attest-proxy"
+version = "0.6.0"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "bytes",
+ "chrono",
+ "clap",
+ "dashmap",
+ "futures",
+ "hex",
+ "http",
+ "http-body-util",
+ "humantime",
+ "hyper",
+ "hyper-util",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+]
+
+[[package]]
 name = "dstack-tee-simulator"
 version = "0.6.0"
 dependencies = [
@@ -2072,6 +2100,7 @@ dependencies = [
  "tpm2",
  "tracing",
  "tracing-subscriber",
+ "url",
  "x25519-dalek",
  "x509-parser",
  "yaml-rust2",
