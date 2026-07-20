@@ -192,47 +192,6 @@ check_dhcp() {
     check_info "Run: $(basename "$0") setup --mode standalone --bridge $BRIDGE"
 }
 
-check_dhcp_notify() {
-    echo
-    bold "DHCP lease notification"
-
-    local provider
-    provider=$(detect_bridge_provider)
-
-    if [[ "$provider" == libvirt:* ]]; then
-        check_warn "libvirt DHCP does not support dhcp-script callback"
-        check_info "port forwarding requires manual PRPC call or alternative notification"
-        return
-    fi
-
-    # Check dnsmasq config for dhcp-script
-    local conf_files=(/etc/dnsmasq.d/*"$BRIDGE"* /etc/dnsmasq.d/*.conf)
-    local found_script=""
-    for f in "${conf_files[@]}"; do
-        [[ -f "$f" ]] || continue
-        local script_path
-        script_path=$(grep -oP '^dhcp-script=\K.*' "$f" 2>/dev/null || true)
-        if [[ -n "$script_path" ]]; then
-            found_script="$script_path"
-            break
-        fi
-    done
-
-    if [[ -z "$found_script" ]]; then
-        check_warn "no dhcp-script configured in dnsmasq"
-        check_info "port forwarding will not be set up automatically"
-        check_info "add 'dhcp-script=/usr/local/bin/dhcp-notify.sh' to dnsmasq config"
-        return
-    fi
-
-    if [[ -x "$found_script" ]]; then
-        check_pass "dhcp-script configured: $found_script"
-    else
-        check_fail "dhcp-script $found_script is not executable or missing"
-        check_info "Fix: sudo chmod +x $found_script"
-    fi
-}
-
 check_ip_forward() {
     echo
     bold "IP forwarding"
@@ -542,28 +501,12 @@ sudo mv /tmp/.dstack-br-network $network"
             dhcp_end="${prefix}.254"
         fi
 
-        # Install dhcp-notify.sh if present
-        local notify_script="/usr/local/bin/dhcp-notify.sh"
-        local dhcp_script_line=""
-        local src_notify
-        src_notify="$(cd "$(dirname "$0")" && pwd)/dhcp-notify.sh"
-        if [[ -f "$src_notify" ]]; then
-            run_cmd sudo cp "$src_notify" "$notify_script"
-            run_cmd sudo chmod +x "$notify_script"
-            dhcp_script_line="dhcp-script=${notify_script}"
-            echo "  installed $notify_script"
-        else
-            echo "  $(yellow '[WARN]') dhcp-notify.sh not found at $src_notify"
-            echo "  VM port forwarding will not be set up automatically"
-        fi
-
         run_cmd bash -c "cat > /tmp/.dstack-dnsmasq <<HEREDOC
 interface=$BRIDGE
 bind-interfaces
 dhcp-range=${dhcp_start},${dhcp_end},255.255.255.0,12h
 dhcp-option=option:router,${bridge_ip}
 dhcp-option=option:dns-server,8.8.8.8,1.1.1.1
-${dhcp_script_line}
 HEREDOC
 sudo mv /tmp/.dstack-dnsmasq $conf"
         echo "  created $conf"
@@ -742,7 +685,6 @@ cmd_check() {
     check_bridge_conf
     check_bridge_interface
     check_dhcp
-    check_dhcp_notify
     check_dhcp_firewall
     check_ip_forward
     check_nat_rules

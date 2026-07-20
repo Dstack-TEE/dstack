@@ -2015,17 +2015,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "dstack-port-forward"
-version = "0.6.0"
-dependencies = [
- "anyhow",
- "nix 0.29.0",
- "tokio",
- "tokio-util",
- "tracing",
-]
-
-[[package]]
 name = "dstack-tee-simulator"
 version = "0.6.0"
 dependencies = [
@@ -2160,7 +2149,6 @@ dependencies = [
  "dirs 6.0.0",
  "dstack-kms-rpc",
  "dstack-mr",
- "dstack-port-forward",
  "dstack-types",
  "dstack-vmm-rpc",
  "fatfs",
@@ -3953,6 +3941,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "local-key-provider"
+version = "0.6.0"
+dependencies = [
+ "blake2",
+ "dcap-qvl",
+ "rand_core 0.6.4",
+ "salsa20",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "x25519-dalek",
+ "xsalsa20poly1305",
+]
+
+[[package]]
 name = "lock_api"
 version = "0.4.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4295,7 +4302,6 @@ dependencies = [
  "cfg-if",
  "cfg_aliases",
  "libc",
- "memoffset 0.9.1",
 ]
 
 [[package]]
@@ -7461,7 +7467,6 @@ dependencies = [
  "bytes",
  "futures-core",
  "futures-sink",
- "futures-util",
  "pin-project-lite",
  "tokio",
 ]

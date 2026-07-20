@@ -49,6 +49,7 @@ members = [
     "host-api",
     "guest-api",
     "load_config",
+    "local-key-provider",
     "key-provider-client",
     "dstack-types",
     "cert-client",
@@ -61,7 +62,6 @@ members = [
     "nvidia-attest-proxy",
     "verifier",
     "size-parser",
-    "port-forward",
     "crates/dstack-cli-core",
     "crates/dstack-cli",
     "crates/dstackup",
@@ -78,7 +78,6 @@ dstack-kms-rpc = { path = "kms/rpc" }
 dstack-guest-agent-rpc = { path = "guest-agent/rpc" }
 dstack-vmm-rpc = { path = "vmm/rpc" }
 dstack-cli-core = { path = "crates/dstack-cli-core" }
-dstack-port-forward = { path = "port-forward" }
 cc-eventlog = { path = "cc-eventlog" }
 supervisor = { path = "supervisor" }
 supervisor-client = { path = "supervisor/client" }

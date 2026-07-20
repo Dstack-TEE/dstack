@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::config::{Config, Networking, ProcessAnnotation, Protocol};
-use dstack_port_forward::{ForwardRule, ForwardService, Protocol as FwdProtocol};
 
 use anyhow::{bail, Context, Result};
 use bon::Builder;
@@ -250,7 +249,6 @@ pub struct App {
     pub config: Arc<Config>,
     pub supervisor: SupervisorClient,
     state: Arc<Mutex<AppState>>,
-    forward_service: Arc<tokio::sync::Mutex<ForwardService>>,
     /// Pull status for registry images: tag → status.
     pub(crate) pull_status: Arc<Mutex<std::collections::HashMap<String, PullStatus>>>,
 }
@@ -277,10 +275,8 @@ impl App {
             state: Arc::new(Mutex::new(AppState {
                 cid_pool,
                 vms: HashMap::new(),
-                active_forwards: HashMap::new(),
             })),
             config: Arc::new(config),
-            forward_service: Arc::new(tokio::sync::Mutex::new(ForwardService::new())),
             pull_status: Arc::new(Mutex::new(std::collections::HashMap::new())),
         }
     }
@@ -429,7 +425,6 @@ impl App {
 
     pub async fn stop_vm(&self, id: &str) -> Result<()> {
         self.set_started(id, false)?;
-        self.cleanup_port_forward(id).await;
         self.supervisor.stop(id).await?;
         Ok(())
     }
@@ -450,9 +445,6 @@ impl App {
         if let Err(err) = work_dir.set_removing() {
             warn!("failed to write .removing marker for {id}: {err:?}");
         }
-
-        // Clean up port forwarding immediately
-        self.cleanup_port_forward(id).await;
 
         // User-initiated removal always deletes the workdir
         let app = self.clone();
@@ -564,140 +556,6 @@ impl App {
         true
     }
 
-    /// Handle a DHCP lease notification: look up VM by MAC address, persist
-    /// the guest IP, and reconfigure port forwarding.
-    pub async fn report_dhcp_lease(&self, mac: &str, ip: &str) {
-        use crate::app::network::mac_address_for_vm_index;
-
-        let vm_id = {
-            let mut state = self.lock();
-            let found = state.vms.iter_mut().find_map(|(id, vm)| {
-                let networks = vm.effective_networks(&self.config.cvm);
-                networks.iter().enumerate().find_map(|(index, networking)| {
-                    let prefix = networking.mac_prefix_bytes();
-                    let nic_mac = mac_address_for_vm_index(&vm.config.manifest.id, &prefix, index);
-                    (nic_mac == mac).then(|| id.clone())
-                })
-            });
-            let Some(vm_id) = found else {
-                debug!(mac, ip, "DHCP lease for unknown MAC, ignoring");
-                return;
-            };
-            let Some(vm) = state.get_mut(&vm_id) else {
-                debug!(mac, ip, id = %vm_id, "DHCP lease for missing VM, ignoring");
-                return;
-            };
-            let workdir = VmWorkDir::new(vm.config.workdir.clone());
-            if let Err(e) = workdir.set_guest_ip(ip) {
-                error!(mac, ip, "failed to persist guest IP: {e}");
-            }
-            vm.state.guest_ip = ip.to_string();
-            info!(mac, ip, id = %vm_id, "DHCP lease updated");
-            vm_id
-        };
-        self.reconfigure_port_forward(&vm_id).await;
-    }
-
-    /// Reconfigure port forwarding for a bridge-mode VM.
-    ///
-    /// Computes desired rules from the VM's port_map and guest_ip, then diffs
-    /// against currently active rules. Only changed rules are added/removed so
-    /// existing connections on unchanged rules are not interrupted.
-    pub async fn reconfigure_port_forward(&self, id: &str) {
-        let info = {
-            let state = self.lock();
-            let Some(vm) = state.get(id) else {
-                return;
-            };
-            let networks = vm.effective_networks(&self.config.cvm);
-            if networks
-                .iter()
-                .any(|networking| networking.mode == crate::config::NetworkingMode::User)
-            {
-                return;
-            }
-            if !networks
-                .iter()
-                .any(|networking| networking.is_bridge() && networking.forward_service_enabled)
-            {
-                return;
-            }
-            let guest_ip = vm.state.guest_ip.clone();
-            let port_map = vm.config.manifest.port_map.clone();
-            (guest_ip, port_map)
-        };
-
-        let (guest_ip_str, port_map) = info;
-        if guest_ip_str.is_empty() {
-            return;
-        }
-        let Ok(guest_ip) = guest_ip_str.parse::<IpAddr>() else {
-            warn!(id, ip = %guest_ip_str, "invalid guest IP, skipping port forward");
-            return;
-        };
-
-        let new_rules: Vec<ForwardRule> = port_map
-            .iter()
-            .map(|pm| ForwardRule {
-                protocol: match pm.protocol {
-                    Protocol::Tcp => FwdProtocol::Tcp,
-                    Protocol::Udp => FwdProtocol::Udp,
-                },
-                listen_addr: pm.address,
-                listen_port: pm.from,
-                target_ip: guest_ip,
-                target_port: pm.to,
-            })
-            .collect();
-
-        let old_rules = self
-            .lock()
-            .active_forwards
-            .get(id)
-            .cloned()
-            .unwrap_or_default();
-
-        let old_set: HashSet<_> = old_rules.iter().collect();
-        let new_set: HashSet<_> = new_rules.iter().collect();
-
-        let mut fwd = self.forward_service.lock().await;
-
-        // Remove rules no longer needed
-        for rule in old_rules.iter().filter(|r| !new_set.contains(r)) {
-            if let Err(e) = fwd.remove_rule(rule).await {
-                warn!(id, ?rule, "failed to remove forwarding rule: {e}");
-            }
-        }
-
-        // Add new rules
-        for rule in new_rules.iter().filter(|r| !old_set.contains(r)) {
-            if let Err(e) = fwd.add_rule(rule.clone()) {
-                warn!(id, ?rule, "failed to add forwarding rule: {e}");
-            }
-        }
-
-        drop(fwd);
-        self.lock()
-            .active_forwards
-            .insert(id.to_string(), new_rules);
-        info!(id, "port forwarding reconfigured");
-    }
-
-    /// Remove all port forwarding rules for a VM.
-    pub async fn cleanup_port_forward(&self, id: &str) {
-        let old_rules = self.lock().active_forwards.remove(id).unwrap_or_default();
-        if old_rules.is_empty() {
-            return;
-        }
-        let mut fwd = self.forward_service.lock().await;
-        for rule in &old_rules {
-            if let Err(e) = fwd.remove_rule(rule).await {
-                warn!(id, ?rule, "failed to remove forwarding rule: {e}");
-            }
-        }
-        info!(id, count = old_rules.len(), "port forwarding cleaned up");
-    }
-
     pub async fn reload_vms(&self) -> Result<()> {
         let vm_path = self.vm_dir();
         let running_vms = self.supervisor.list().await.context("Failed to list VMs")?;
@@ -755,21 +613,6 @@ impl App {
                     process.config.id
                 );
                 self.spawn_finish_remove(&process.config.id);
-            }
-        }
-
-        // Restore port forwarding for running bridge-mode VMs with persisted guest IPs
-        let vm_ids: Vec<String> = self.lock().vms.keys().cloned().collect();
-        for id in vm_ids {
-            let workdir = self.work_dir(&id);
-            if let Some(ip) = workdir.guest_ip() {
-                {
-                    let mut state = self.lock();
-                    if let Some(vm) = state.get_mut(&id) {
-                        vm.state.guest_ip = ip;
-                    }
-                }
-                self.reconfigure_port_forward(&id).await;
             }
         }
 
@@ -1585,7 +1428,6 @@ mod tests {
         manifest.networks = vec![Networking {
             mode: NetworkingMode::Bridge,
             bridge: "dstack-br0".to_string(),
-            forward_service_enabled: true,
             mac_prefix: String::new(),
             net: String::new(),
             dhcp_start: String::new(),
@@ -1800,7 +1642,6 @@ mod tests {
         bridge_manifest.networks = vec![Networking {
             mode: NetworkingMode::Bridge,
             bridge: "dstack-br0".to_string(),
-            forward_service_enabled: true,
             mac_prefix: "02:aa:bb".to_string(),
             net: String::new(),
             dhcp_start: String::new(),
@@ -2108,7 +1949,6 @@ struct VmStateMut {
     boot_progress: String,
     boot_error: String,
     shutdown_progress: String,
-    guest_ip: String,
     runtime_networks: Vec<Networking>,
     devices: GpuConfig,
     events: VecDeque<pb::GuestEvent>,
@@ -2141,21 +1981,11 @@ impl VmState {
             state: VmStateMut::default(),
         }
     }
-
-    pub fn effective_networks(&self, cvm: &crate::config::CvmConfig) -> Vec<Networking> {
-        if self.state.runtime_networks.is_empty() {
-            resolved_networks(&self.config.manifest, cvm)
-        } else {
-            self.state.runtime_networks.clone()
-        }
-    }
 }
 
 pub(crate) struct AppState {
     cid_pool: IdPool<u32>,
     vms: HashMap<String, VmState>,
-    /// Tracks active port forwarding rules per VM ID (bridge mode only).
-    active_forwards: HashMap<String, Vec<ForwardRule>>,
 }
 
 impl AppState {

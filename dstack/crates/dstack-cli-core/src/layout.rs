@@ -78,7 +78,7 @@ impl InstallLayout {
     }
 
     pub fn key_provider_dir(&self) -> PathBuf {
-        self.share_dir.join("key-provider-build")
+        self.share_dir.join("local-key-provider/build")
     }
 
     pub fn hello_nginx_compose(&self) -> PathBuf {
@@ -191,6 +191,10 @@ mod tests {
             layout.state_path(),
             PathBuf::from("/var/lib/dstack/dstackup-state.json")
         );
+        assert_eq!(
+            layout.key_provider_dir(),
+            PathBuf::from("/usr/local/share/dstack/local-key-provider/build")
+        );
     }
 
     #[test]
@@ -215,6 +219,10 @@ mod tests {
             PathBuf::from("/opt/dstack-a/var/cache/dstack")
         );
         assert_eq!(layout.run_dir, PathBuf::from("/opt/dstack-a/run/dstack"));
+        assert_eq!(
+            layout.key_provider_dir(),
+            PathBuf::from("/opt/dstack-a/share/dstack/local-key-provider/build")
+        );
     }
 
     #[test]

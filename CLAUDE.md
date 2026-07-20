@@ -146,11 +146,12 @@ forge clean
 
 ### Logging and Error Messages
 
-- **Never capitalize** the first letter of log messages and error messages
+- Start log messages and error messages with lowercase text
+- Preserve the conventional capitalization of identifiers and acronyms when they
+  begin a message (for example, `RIM`, `OCSP`, or `HTTP`)
 - Example: `log::info!("starting server on port {}", port);`
 - Example: `anyhow::bail!("failed to connect to server");`
-
-This rule is enforced in `.cursorrules`.
+- Example: `log::warn!("RIM upstream is unavailable");`
 
 ## Key Security Concepts
 

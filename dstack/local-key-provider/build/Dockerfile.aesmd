@@ -34,7 +34,7 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Create an entrypoint script for AESM
-COPY entrypoint-aesmd.sh /entrypoint.sh
+COPY build/entrypoint-aesmd.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 ENTRYPOINT ["/entrypoint.sh"]

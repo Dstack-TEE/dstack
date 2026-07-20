@@ -273,7 +273,7 @@ For detailed solutions, see the [Prerequisites Troubleshooting Guide](/tutorial/
 With SSL certificates configured, proceed to:
 
 - [HAProxy Setup](/tutorial/haproxy-setup) - Configure HAProxy as TLS entry point
-- [Gramine Key Provider](/tutorial/gramine-key-provider) - Deploy SGX-based key provider
+- [Local Key Provider](/tutorial/gramine-key-provider) - Deploy SGX-based key provider
 - [Local Docker Registry](/tutorial/local-docker-registry) - Uses these certificates
 
 ## Additional Resources

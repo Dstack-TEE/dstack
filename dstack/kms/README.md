@@ -17,7 +17,7 @@ CVMs running in dstack support three boot modes:
 - `key-provider` in RTMR: `{"type": "none", "id": ""}`
 
 #### Local-Key-Provider Mode
-- Uses `gramine-sealing-key-provider` for app keys
+- Uses `local-key-provider` for app keys
 - Maintains persistent disk state
 - Validates key provider via SGX quote
 - `key-provider` in RTMR: `{"type": "local-sgx", "id": "<sgx mrenclave>"}`
@@ -66,16 +66,16 @@ The solidity contracts are deployed on an ethereum compatible chain.
 ## Trustness
 
 ### Local-Key-Provider Mode
-A instance of [`gramine-sealing-key-provider`](https://github.com/MoeMahhouk/gramine-sealing-key-provider) is required being deployed on the host machine. Can be deployed by [../key-provider-build](../key-provider-build/run.sh).
+An instance of the in-tree [`local-key-provider`](../local-key-provider) must be deployed on the host. Use its [`build`](../local-key-provider/build/run.sh) directory to build and start it under Gramine.
 
-In this mode, the CVM obtains application keys from the `gramine-sealing-key-provider`, which runs within an SGX enclave. The provider derives the application keys using:
+In this mode, the CVM obtains application keys from the `local-key-provider`, which runs within an SGX enclave. The provider derives the application keys using:
 - The SGX sealing key
 - CVM measurements, including:
   - MRTD + RTMR[0-2]: Base image and VM configuration measurements
   - RTMR[3]: Runtime application configuration
 
 The key provisioning process:
-1. The CVM validates the SGX quote from `gramine-sealing-key-provider`
+1. The CVM validates the SGX quote from `local-key-provider`
 2. After obtaining the keys, the CVM records the provider's MR enclave in RTMR3
 3. Applications can verify trust by validating measurements in the TDX quote
 
