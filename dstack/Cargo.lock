@@ -1745,6 +1745,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "dstack-build-info"
+version = "0.6.0"
+dependencies = [
+ "git-version",
+]
+
+[[package]]
 name = "dstack-cli"
 version = "0.6.0"
 dependencies = [
@@ -1780,6 +1787,7 @@ dependencies = [
  "clap",
  "cmd_lib",
  "dstack-api-auth",
+ "dstack-build-info",
  "dstack-gateway-rpc",
  "dstack-guest-agent-rpc",
  "dstack-kms-rpc",
@@ -1787,7 +1795,6 @@ dependencies = [
  "flate2",
  "fs-err",
  "futures",
- "git-version",
  "hex",
  "hickory-resolver",
  "http-body-util",
@@ -1857,12 +1864,12 @@ dependencies = [
  "cmd_lib",
  "default-net",
  "dstack-attest",
+ "dstack-build-info",
  "dstack-guest-agent-rpc",
  "dstack-types",
  "ed25519-dalek",
  "figment",
  "fs-err",
- "git-version",
  "guest-api",
  "hex",
  "host-api",
@@ -1934,13 +1941,13 @@ dependencies = [
  "clap",
  "dstack-api-auth",
  "dstack-attest",
+ "dstack-build-info",
  "dstack-guest-agent-rpc",
  "dstack-kms-rpc",
  "dstack-mr",
  "dstack-types",
  "dstack-verifier",
  "fs-err",
- "git-version",
  "hex",
  "hex_fmt",
  "http-client",
@@ -2184,6 +2191,7 @@ dependencies = [
  "clap",
  "dirs 6.0.0",
  "dstack-api-auth",
+ "dstack-build-info",
  "dstack-kms-rpc",
  "dstack-mr",
  "dstack-types",
@@ -2193,7 +2201,6 @@ dependencies = [
  "fs-err",
  "fscommon",
  "getrandom 0.3.4",
- "git-version",
  "guest-api",
  "hex",
  "hex_fmt",
@@ -7079,8 +7086,8 @@ dependencies = [
  "bon",
  "clap",
  "dashmap",
+ "dstack-build-info",
  "fs-err",
- "git-version",
  "libc",
  "load_config",
  "nix 0.29.0",

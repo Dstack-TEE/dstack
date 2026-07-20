@@ -67,6 +67,7 @@ members = [
     "crates/dstackup",
     "crates/dstack-auth",
     "crates/api-auth",
+    "crates/build-info",
 ]
 resolver = "2"
 
@@ -80,6 +81,7 @@ dstack-guest-agent-rpc = { path = "guest-agent/rpc" }
 dstack-vmm-rpc = { path = "vmm/rpc" }
 dstack-cli-core = { path = "crates/dstack-cli-core" }
 dstack-api-auth = { path = "crates/api-auth" }
+dstack-build-info = { path = "crates/build-info" }
 cc-eventlog = { path = "cc-eventlog" }
 supervisor = { path = "supervisor" }
 supervisor-client = { path = "supervisor/client" }
@@ -124,7 +126,6 @@ fs-err = "3.1.0"
 fuser = "0.16.0"
 path-absolutize = "3.1.1"
 futures = "0.3.31"
-git-version = "0.3.9"
 libc = "0.2.171"
 log = "0.4.26"
 moka = { version = "0.12.15", default-features = false, features = ["sync"] }
