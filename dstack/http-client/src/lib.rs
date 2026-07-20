@@ -140,4 +140,62 @@ mod tests {
         );
         Ok(())
     }
+
+    #[tokio::test]
+    async fn http_transport_sends_extra_headers() -> Result<(), Box<dyn Error>> {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let addr = listener.local_addr()?;
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await?;
+            let mut buf = [0u8; 1024];
+            let n = socket.read(&mut buf).await?;
+            let request = String::from_utf8_lossy(&buf[..n]).into_owned();
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+                .await?;
+            Ok::<_, std::io::Error>(request)
+        });
+
+        let (status, _body) = http_request_with_headers(
+            "POST",
+            &format!("http://{addr}"),
+            "/prpc/Status",
+            b"{}",
+            &[("Authorization", "Bearer secret-token")],
+        )
+        .await?;
+        assert_eq!(status, 200);
+        let request = server.await??;
+        assert!(
+            request.contains("authorization: Bearer secret-token")
+                || request.contains("Authorization: Bearer secret-token"),
+            "request is missing the Authorization header: {request:?}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn http_transport_omits_headers_when_none() -> Result<(), Box<dyn Error>> {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let addr = listener.local_addr()?;
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await?;
+            let mut buf = [0u8; 1024];
+            let n = socket.read(&mut buf).await?;
+            let request = String::from_utf8_lossy(&buf[..n]).into_owned();
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+                .await?;
+            Ok::<_, std::io::Error>(request)
+        });
+
+        let (status, _body) = http_request("GET", &format!("http://{addr}"), "/x", b"").await?;
+        assert_eq!(status, 200);
+        let request = server.await??;
+        assert!(
+            !request.to_lowercase().contains("authorization:"),
+            "unexpected Authorization header: {request:?}"
+        );
+        Ok(())
+    }
 }
