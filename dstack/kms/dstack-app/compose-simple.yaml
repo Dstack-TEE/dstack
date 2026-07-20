@@ -39,7 +39,6 @@ configs:
 
       [core]
       cert_dir = "/kms/certs"
-      admin_token_hash = "${ADMIN_TOKEN_HASH}"
 
       [core.image]
       verify = true
