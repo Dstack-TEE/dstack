@@ -798,13 +798,14 @@ SPDX-License-Identifier: Apache-2.0
                         <label>Features</label>
                         <div
                             style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 15px;">
-                            <label style="display: grid; grid-template-columns: 20px 1fr; align-items: center;">
-                                <input type="checkbox" v-model="vmForm.kms_enabled">
-                                <span style="margin-left: 5px;">KMS</span>
-                            </label>
-                            <label style="display: grid; grid-template-columns: 20px 1fr; align-items: center;">
-                                <input type="checkbox" v-model="vmForm.local_key_provider_enabled">
-                                <span style="margin-left: 5px;">Local Key Provider</span>
+                            <label style="display: grid; grid-template-columns: 1fr; align-items: center;">
+                                <span>Key Provider</span>
+                                <select v-model="vmForm.key_provider" style="margin-top: 5px;">
+                                    <option value="kms">KMS</option>
+                                    <option value="local">Local SGX</option>
+                                    <option value="tpm">TPM (swtpm on Dstack)</option>
+                                    <option value="none">None (temporary keys)</option>
+                                </select>
                             </label>
                             <label style="display: grid; grid-template-columns: 20px 1fr; align-items: center;">
                                 <input type="checkbox" v-model="vmForm.gateway_enabled">
@@ -832,13 +833,13 @@ SPDX-License-Identifier: Apache-2.0
                             </label>
                         </div>
                     </div>
-                    <div class="form-group">
+                    <div class="form-group" v-if="vmForm.key_provider === 'kms' || vmForm.key_provider === 'local'">
                         <label for="keyProviderId">Key Provider ID (optional)</label>
                         <input id="keyProviderId" v-model="vmForm.key_provider_id" type="text"
                             placeholder="Key provider ID if you want to bind to a specific key provider">
                     </div>
 
-                    <div class="form-group full-width" v-if="vmForm.kms_enabled">
+                    <div class="form-group full-width" v-if="vmForm.key_provider === 'kms'">
                         <encrypted-env-editor :env-vars="vmForm.encryptedEnvs"></encrypted-env-editor>
                     </div>
 
@@ -849,12 +850,12 @@ SPDX-License-Identifier: Apache-2.0
                                 style="width: 16px; height: 16px;">
                         </label>
                         <div v-if="vmForm.docker_config.enabled" class="docker-registry-section">
-                            <div class="docker-registry-field" v-if="vmForm.kms_enabled">
+                            <div class="docker-registry-field" v-if="vmForm.key_provider === 'kms'">
                                 <label class="docker-registry-label">Username</label>
                                 <input type="text" v-model="vmForm.docker_config.username"
                                     class="docker-registry-input">
                             </div>
-                            <div class="docker-registry-field" v-if="vmForm.kms_enabled">
+                            <div class="docker-registry-field" v-if="vmForm.key_provider === 'kms'">
                                 <label class="docker-registry-label">Token Key</label>
                                 <input type="text" v-model="vmForm.docker_config.token_key"
                                     placeholder="The key name in the encrypted environment variables"
@@ -1574,8 +1575,7 @@ fi
                     },
                     storage_fs: '',
                     app_id: '',
-                    kms_enabled: true,
-                    local_key_provider_enabled: false,
+                    key_provider: 'kms',
                     key_provider_id: '',
                     gateway_enabled: true,
                     public_logs: true,
@@ -1743,13 +1743,15 @@ fi
                             "username": vmForm.value.docker_config.username,
                             "token_key": vmForm.value.docker_config.token_key,
                         } : {},
-                        "kms_enabled": vmForm.value.kms_enabled,
+                        "key_provider": vmForm.value.key_provider,
+                        "kms_enabled": vmForm.value.key_provider === 'kms',
                         "gateway_enabled": vmForm.value.gateway_enabled,
                         "public_logs": vmForm.value.public_logs,
                         "public_sysinfo": vmForm.value.public_sysinfo,
                         "public_tcbinfo": vmForm.value.public_tcbinfo,
-                        "local_key_provider_enabled": vmForm.value.local_key_provider_enabled,
-                        "key_provider_id": vmForm.value.key_provider_id,
+                        "local_key_provider_enabled": vmForm.value.key_provider === 'local',
+                        "key_provider_id": (vmForm.value.key_provider === 'kms' || vmForm.value.key_provider === 'local')
+                            ? vmForm.value.key_provider_id : '',
                         "allowed_envs": vmForm.value.encryptedEnvs.map(env => env.key),
                         "no_instance_id": !vmForm.value.gateway_enabled,
                         "secure_time": false,
@@ -1778,7 +1780,7 @@ fi
                     if (imgFeatures.compose_version < 2) {
                         // Compatibility with old images
                         const features = [];
-                        if (vmForm.value.kms_enabled) features.push("kms");
+                        if (vmForm.value.key_provider === 'kms') features.push("kms");
                         if (vmForm.value.gateway_enabled) features.push("tproxy-net");
                         app_compose.features = features;
                         app_compose.manifest_version = 1;
@@ -1949,7 +1951,7 @@ fi
                             allowed_envs: vmForm.value.encryptedEnvs.map(env => env.key),
                             encrypted_env: await makeEncryptedEnv(
                                 vmForm.value.encryptedEnvs,
-                                vmForm.value.kms_enabled,
+                                vmForm.value.key_provider === 'kms',
                                 vmForm.value.app_id
                             ),
                             user_config: vmForm.value.user_config,
@@ -2517,12 +2519,11 @@ fi
                     () => vmForm.value.name,
                     () => vmForm.value.dockerComposeFile,
                     () => vmForm.value.preLaunchScript,
-                    () => vmForm.value.kms_enabled,
+                    () => vmForm.value.key_provider,
                     () => vmForm.value.gateway_enabled,
                     () => vmForm.value.public_logs,
                     () => vmForm.value.public_sysinfo,
                     () => vmForm.value.public_tcbinfo,
-                    () => vmForm.value.local_key_provider_enabled,
                     () => vmForm.value.key_provider_id,
                     () => vmForm.value.docker_config.enabled,
                     () => vmForm.value.docker_config.username,

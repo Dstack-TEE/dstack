@@ -179,7 +179,8 @@ struct PreparedQemuLaunch {
     hugepage_numa_nodes: Option<HashMap<String, u32>>,
     gpu_numa_nodes: HashMap<String, String>,
     numa_cpus: Option<String>,
-    tpm_path: Option<&'static str>,
+    swtpm_socket: Option<PathBuf>,
+    swtpm_path: Option<PathBuf>,
     tdx_mr_config_id: Option<String>,
     snp_host_data: Option<String>,
     snp_launch_params: Option<AmdSevSnpLaunchParams>,
@@ -219,11 +220,23 @@ impl PreparedQemuLaunch {
         } else {
             None
         };
-        let tpm_path = if matches!(app_compose.key_provider(), KeyProviderKind::Tpm) {
-            Some(detect_tpm_device()?)
-        } else {
-            None
-        };
+        let (swtpm_socket, swtpm_path) =
+            if matches!(app_compose.key_provider(), KeyProviderKind::Tpm) {
+                if !vm.manifest.no_tee || !vm.image.info.is_dev {
+                    bail!("swtpm key provider is only available to no-TEE development VMs");
+                }
+                let swtpm_path = which::which("swtpm")
+                    .context("tpm key provider requested but swtpm is not installed")?;
+                let state_dir = workdir.swtpm_state_dir();
+                fs::create_dir_all(&state_dir).context("failed to create swtpm state directory")?;
+                let socket = workdir.swtpm_socket();
+                if socket.exists() {
+                    fs::remove_file(&socket).context("failed to remove stale swtpm socket")?;
+                }
+                (Some(socket), Some(swtpm_path))
+            } else {
+                (None, None)
+            };
         prepare_shared_disk(&workdir, cfg)?;
 
         let tee_enabled = !vm.manifest.no_tee;
@@ -257,7 +270,8 @@ impl PreparedQemuLaunch {
             hugepage_numa_nodes,
             gpu_numa_nodes,
             numa_cpus,
-            tpm_path,
+            swtpm_socket,
+            swtpm_path,
             tdx_mr_config_id,
             snp_host_data,
             snp_launch_params,
@@ -301,16 +315,6 @@ fn prepare_shared_disk(workdir: &VmWorkDir, cfg: &CvmConfig) -> Result<()> {
     create_shared_disk(&shared_disk_path, shared_dir).context("failed to create shared disk")
 }
 
-fn detect_tpm_device() -> Result<&'static str> {
-    if Path::new("/dev/tpmrm0").exists() {
-        Ok("/dev/tpmrm0")
-    } else if Path::new("/dev/tpm0").exists() {
-        Ok("/dev/tpm0")
-    } else {
-        bail!("tpm key provider requested but no TPM device found on host")
-    }
-}
-
 struct QemuCommandBuilder<'a> {
     vm: &'a VmConfig,
     cfg: &'a CvmConfig,
@@ -326,14 +330,76 @@ impl VmConfig {
         gpus: &GpuConfig,
     ) -> Result<Vec<ProcessConfig>> {
         let prepared = PreparedQemuLaunch::prepare(self, workdir, cfg, gpus)?;
-        let process = QemuCommandBuilder {
+        let mut process = QemuCommandBuilder {
             vm: self,
             cfg,
             gpus,
             prepared: &prepared,
         }
         .build()?;
-        Ok(vec![process])
+        let Some(socket) = prepared.swtpm_socket.as_deref() else {
+            return Ok(vec![process]);
+        };
+        let swtpm_path = prepared
+            .swtpm_path
+            .as_ref()
+            .context("missing swtpm executable for configured socket")?;
+
+        // The supervisor starts process configs in order, but swtpm may need a
+        // moment to create its socket. Make QEMU wait without shell-quoting any
+        // of its arguments: they are passed as positional parameters.
+        let original_command = std::mem::replace(&mut process.command, "/bin/sh".into());
+        let original_args = std::mem::take(&mut process.args);
+        process.args = vec![
+            "-c".into(),
+            "for i in $(seq 1 100); do [ -S \"$1\" ] && shift && exec \"$@\"; sleep 0.05; done; echo 'timed out waiting for swtpm socket' >&2; exit 1".into(),
+            "dstack-qemu-wait-swtpm".into(),
+            socket.to_string_lossy().into_owned(),
+            original_command,
+        ];
+        process.args.extend(original_args);
+
+        let note = serde_json::to_string(&ProcessAnnotation {
+            kind: "swtpm".into(),
+            live_for: Some(self.manifest.id.clone()),
+        })?;
+        let swtpm_args = vec![
+            "socket".into(),
+            "--tpm2".into(),
+            "--tpmstate".into(),
+            format!("dir={}", prepared.workdir.swtpm_state_dir().display()),
+            "--ctrl".into(),
+            format!("type=unixio,path={},mode=0666", socket.display()),
+            "--flags".into(),
+            "not-need-init,startup-clear".into(),
+        ];
+        let swtpm = ProcessConfig {
+            id: format!("{}-swtpm", self.manifest.id),
+            name: format!("{} swtpm", self.manifest.name),
+            command: swtpm_path.to_string_lossy().into_owned(),
+            args: swtpm_args,
+            env: Default::default(),
+            cwd: prepared.workdir.path().to_string_lossy().into_owned(),
+            stdout: prepared
+                .workdir
+                .stdout_file()
+                .to_string_lossy()
+                .into_owned(),
+            stderr: prepared
+                .workdir
+                .stderr_file()
+                .to_string_lossy()
+                .into_owned(),
+            pidfile: prepared
+                .workdir
+                .swtpm_state_dir()
+                .join("supervisor.pid")
+                .to_string_lossy()
+                .into_owned(),
+            cid: None,
+            note,
+        };
+        Ok(vec![swtpm, process])
     }
 }
 
@@ -518,10 +584,12 @@ impl QemuCommandBuilder<'_> {
     }
 
     fn configure_tpm_and_vsock(&self, command: &mut Command) {
-        if let Some(tpm_path) = self.prepared.tpm_path {
+        if let Some(socket) = &self.prepared.swtpm_socket {
             command
+                .arg("-chardev")
+                .arg(format!("socket,id=chrtpm,path={}", socket.display()))
                 .arg("-tpmdev")
-                .arg(format!("passthrough,id=tpm0,path={tpm_path}"))
+                .arg("emulator,id=tpm0,chardev=chrtpm")
                 .arg("-device")
                 .arg("tpm-tis,tpmdev=tpm0");
         }
@@ -970,14 +1038,15 @@ mod tests {
             workdir: PathBuf::from("/does-not-exist/vm-1"),
             gateway_enabled: false,
         };
-        let prepared = PreparedQemuLaunch {
+        let mut prepared = PreparedQemuLaunch {
             workdir: VmWorkDir::new("/does-not-exist/vm-1"),
             platform: TeePlatform::Tdx,
             networks: vec![config.cvm.networking.clone(), config.cvm.networking.clone()],
             hugepage_numa_nodes: None,
             gpu_numa_nodes: HashMap::new(),
             numa_cpus: None,
-            tpm_path: None,
+            swtpm_socket: None,
+            swtpm_path: None,
             tdx_mr_config_id: None,
             snp_host_data: None,
             snp_launch_params: None,
@@ -1024,5 +1093,25 @@ mod tests {
             .args
             .iter()
             .any(|arg| arg.contains("virtio-net-pci,netdev=net1")));
+
+        prepared.swtpm_socket = Some(PathBuf::from("/does-not-exist/vm-1/swtpm/swtpm.sock"));
+        let process = QemuCommandBuilder {
+            vm: &vm,
+            cfg: &config.cvm,
+            gpus: &GpuConfig::default(),
+            prepared: &prepared,
+        }
+        .build()
+        .unwrap();
+        assert!(process.args.windows(2).any(|args| {
+            args == [
+                "-chardev",
+                "socket,id=chrtpm,path=/does-not-exist/vm-1/swtpm/swtpm.sock",
+            ]
+        }));
+        assert!(process
+            .args
+            .windows(2)
+            .any(|args| args == ["-tpmdev", "emulator,id=tpm0,chardev=chrtpm"]));
     }
 }

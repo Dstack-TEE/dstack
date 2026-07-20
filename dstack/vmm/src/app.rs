@@ -399,6 +399,7 @@ impl App {
             }
             for process in processes {
                 if let Err(err) = self.supervisor.deploy(&process).await {
+                    self.stop_dependent_processes(id).await;
                     if let Err(clear_err) = work_dir.clear_runtime_networks() {
                         warn!(
                             id,
@@ -430,8 +431,24 @@ impl App {
     pub async fn stop_vm(&self, id: &str) -> Result<()> {
         self.set_started(id, false)?;
         self.cleanup_port_forward(id).await;
-        self.supervisor.stop(id).await?;
-        Ok(())
+        let result = self.supervisor.stop(id).await;
+        self.stop_dependent_processes(id).await;
+        result
+    }
+
+    async fn stop_dependent_processes(&self, id: &str) {
+        for process in self.supervisor.list().await.unwrap_or_default() {
+            let note =
+                serde_json::from_str::<ProcessAnnotation>(&process.config.note).unwrap_or_default();
+            if note.live_for.as_deref() == Some(id) {
+                if let Err(err) = self.supervisor.stop(&process.config.id).await {
+                    debug!(
+                        process_id = process.config.id,
+                        "failed to stop dependent process: {err:?}"
+                    );
+                }
+            }
+        }
     }
 
     pub async fn remove_vm(&self, id: &str) -> Result<()> {
@@ -475,6 +492,7 @@ impl App {
         if let Err(err) = self.supervisor.stop(id).await {
             debug!("supervisor.stop({id}) during removal: {err:?}");
         }
+        self.stop_dependent_processes(id).await;
 
         // Poll until the process is no longer running, then remove it.
         // Some VMs take a long time to stop (e.g. 2+ hours), so we wait indefinitely.
@@ -506,6 +524,31 @@ impl App {
                     warn!("supervisor.info({id}) failed during removal: {err:?}");
                     tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                 }
+            }
+        }
+
+        // Auxiliary processes (currently swtpm) are owned by the VM through
+        // ProcessAnnotation::live_for. Remove their stopped supervisor entries
+        // before deleting the VM workdir.
+        for process in self.supervisor.list().await.unwrap_or_default() {
+            let note =
+                serde_json::from_str::<ProcessAnnotation>(&process.config.note).unwrap_or_default();
+            if note.live_for.as_deref() != Some(id) {
+                continue;
+            }
+            for _ in 0..50 {
+                match self.supervisor.info(&process.config.id).await {
+                    Ok(Some(info)) if info.state.status.is_running() => {
+                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    }
+                    _ => break,
+                }
+            }
+            if let Err(err) = self.supervisor.remove(&process.config.id).await {
+                warn!(
+                    process_id = process.config.id,
+                    "failed to remove dependent process: {err:?}"
+                );
             }
         }
 
@@ -748,13 +791,14 @@ impl App {
 
         // Clean up orphaned supervisor processes (in supervisor but not loaded as VMs)
         let loaded_vm_ids: HashSet<String> = self.lock().vms.keys().cloned().collect();
-        for (_, process) in &running_vms {
-            if !loaded_vm_ids.contains(&process.config.id) {
+        for (note, process) in &running_vms {
+            let owner = note.live_for.as_deref().unwrap_or(&process.config.id);
+            if !loaded_vm_ids.contains(owner) {
                 info!(
                     "Cleaning up orphaned supervisor process: {}",
                     process.config.id
                 );
-                self.spawn_finish_remove(&process.config.id);
+                self.spawn_finish_remove(owner);
             }
         }
 
