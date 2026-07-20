@@ -7,6 +7,7 @@ LIC_FILES_CHKSUM = "file://LICENSE;md5=e620fc90e76c4aa0c3efdd1673ca0b3b"
 SRC_URI = " \
     git://github.com/NVIDIA/attestation-sdk.git;protocol=https;branch=main \
     file://10-nvidia-gpu-ordering.conf \
+    file://0001-validate-ocsp-response-freshness.patch \
 "
 SRCREV = "9d12801cea8a198ea0f29640dfaf8a4017c841c5"
 
@@ -100,10 +101,19 @@ do_install() {
     install -d ${D}${systemd_system_unitdir}/dstack-prepare.service.d
     install -m 0644 ${UNPACKDIR}/10-nvidia-gpu-ordering.conf \
         ${D}${systemd_system_unitdir}/dstack-prepare.service.d/10-nvidia-gpu-ordering.conf
+
+    # Cached OCSP responses cannot echo each verifier request's nonce. NVIDIA
+    # ships this policy for its Trust Outpost cache: it omits only the OCSP
+    # nonce claim while retaining certificate, signature and measurement
+    # appraisal. dstack-util selects it only when sys-config enables a proxy.
+    install -d ${D}${datadir}/nvattest/policies
+    install -m 0644 ${S}/relying_party_policy_examples/allow_trust_outpost_ocsp.rego \
+        ${D}${datadir}/nvattest/policies/allow_trust_outpost_ocsp.rego
 }
 
 FILES:${PN} += " \
     ${systemd_system_unitdir}/dstack-prepare.service.d/10-nvidia-gpu-ordering.conf \
+    ${datadir}/nvattest/policies/allow_trust_outpost_ocsp.rego \
     ${libdir}/lib*.so \
     ${libdir}/lib*.so.* \
 "

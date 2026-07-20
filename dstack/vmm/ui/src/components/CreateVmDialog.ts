@@ -141,11 +141,11 @@ const CreateVmDialogComponent = {
                 <option value="none">None</option>
                 <option value="kms">KMS</option>
                 <option value="local">Local</option>
-                <option value="tpm">TPM</option>
+                <option value="tpm">TPM (swtpm)</option>
               </select>
             </div>
 
-            <div class="form-group full-width" v-if="form.key_provider !== 'none'">
+            <div class="form-group full-width" v-if="form.key_provider === 'kms' || form.key_provider === 'local'">
               <label for="keyProviderId">Key Provider ID</label>
               <input id="keyProviderId" v-model="form.key_provider_id" type="text" placeholder="Optional provider ID">
             </div>
@@ -184,7 +184,7 @@ const CreateVmDialogComponent = {
                 <label><input type="checkbox" v-model="form.public_logs"> Public logs</label>
                 <label><input type="checkbox" v-model="form.public_sysinfo"> Public sysinfo</label>
                 <label><input type="checkbox" v-model="form.public_tcbinfo"> Public TCB info</label>
-                <label><input type="checkbox" v-model="form.no_tee"> Disable TDX</label>
+                <label><input type="checkbox" v-model="form.no_tee"> No TEE</label>
                 <label><input type="checkbox" v-model="form.pin_numa"> Pin NUMA</label>
                 <label><input type="checkbox" v-model="form.hugepages"> Huge pages</label>
               </div>

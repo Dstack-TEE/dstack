@@ -813,7 +813,9 @@ type CreateVmPayloadSource = {
       public_logs: vmForm.value.public_logs,
       public_sysinfo: vmForm.value.public_sysinfo,
       public_tcbinfo: vmForm.value.public_tcbinfo,
-      key_provider_id: vmForm.value.key_provider_id,
+      key_provider_id: vmForm.value.key_provider === 'kms' || vmForm.value.key_provider === 'local'
+        ? vmForm.value.key_provider_id
+        : '',
       allowed_envs: vmForm.value.encryptedEnvs.map((env) => env.key),
       no_instance_id: !vmForm.value.gateway_enabled,
       secure_time: false,
@@ -1360,11 +1362,6 @@ type CreateVmPayloadSource = {
     window.open('/api-docs/docs', '_blank', 'noopener');
   }
 
-  function openLegacyUi() {
-    closeSystemMenu();
-    window.open('/v0', '_blank', 'noopener');
-  }
-
   function shortUptime(uptime?: string | null) {
     if (!uptime) {
       return '-';
@@ -1807,7 +1804,6 @@ type CreateVmPayloadSource = {
     toggleSystemMenu,
     closeSystemMenu,
     openApiDocs,
-    openLegacyUi,
     reloadVMs,
     devMode,
     toggleDevMode,
