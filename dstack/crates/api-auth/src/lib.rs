@@ -19,7 +19,7 @@ use rocket::{
     Data, Request, Response, Route,
 };
 use sha2::{Digest, Sha256};
-use subtle::ConstantTimeEq;
+use subtle::{Choice, ConstantTimeEq};
 
 const UNAUTH_URI: &str = "/__dstack_api_auth_unauthorized";
 
@@ -91,9 +91,13 @@ impl Authenticator {
 
     pub fn verify_token(&self, token: &str) -> bool {
         let candidate = sha256(token.as_bytes());
-        self.token_hashes
+        let matched = self
+            .token_hashes
             .iter()
-            .any(|expected| bool::from(candidate.ct_eq(expected)))
+            .fold(Choice::from(0), |matched, expected| {
+                matched | candidate.ct_eq(expected)
+            });
+        bool::from(matched)
     }
 
     pub fn verify_basic(&self, username: &str, password: &str) -> bool {
@@ -337,15 +341,16 @@ mod tests {
     #[test]
     fn verifies_tokens_and_apache_hashes() {
         let dir = std::env::temp_dir().join(format!("dstack-api-auth-{}", std::process::id()));
-        let hash = bcrypt::hash("password", 4).unwrap();
+        let password = format!("test-password-{}", std::process::id());
+        let hash = bcrypt::hash(&password, 4).unwrap();
         std::fs::write(&dir, format!("alice:{hash}\n")).unwrap();
         let auth = Authenticator::from_tokens(["secret"])
             .with_htpasswd_file(&dir)
             .unwrap();
         assert!(auth.verify_token("secret"));
         assert!(!auth.verify_token("wrong"));
-        assert!(auth.verify_basic("alice", "password"));
-        assert!(!auth.verify_basic("alice", "wrong"));
+        assert!(auth.verify_basic("alice", &password));
+        assert!(!auth.verify_basic("alice", &format!("{password}-wrong")));
         let _ = std::fs::remove_file(dir);
     }
 
