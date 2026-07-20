@@ -32,7 +32,7 @@ humantime.workspace = true
 strip-ansi-escapes.workspace = true
 tailf.workspace = true
 tokio = { workspace = true, features = ["full"] }
-git-version.workspace = true
+dstack-build-info.workspace = true
 rocket-apitoken.workspace = true
 serde_ini.workspace = true
 

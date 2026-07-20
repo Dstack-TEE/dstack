@@ -54,11 +54,7 @@ static ALLOCATOR: jemallocator::Jemalloc = jemallocator::Jemalloc;
 
 fn app_version() -> String {
     const CARGO_PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
-    const VERSION: &str = git_version::git_version!(
-        args = ["--abbrev=20", "--always", "--dirty=-modified"],
-        prefix = "git:",
-        fallback = "unknown"
-    );
+    const VERSION: &str = dstack_build_info::git_revision!();
     format!("v{CARGO_PKG_VERSION} ({VERSION})")
 }
 

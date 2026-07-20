@@ -32,19 +32,7 @@ mod one_shot;
 mod openapi;
 
 const CARGO_PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
-const GIT_REV: &str = git_version::git_version!(
-    // This is a monorepo with component-specific tags (for example,
-    // `verifier-v0.5.11`). Exclude tags so `git describe` cannot mistake an
-    // unrelated component's tag for the VMM revision.
-    args = [
-        "--abbrev=20",
-        "--always",
-        "--dirty=-modified",
-        "--exclude=*"
-    ],
-    prefix = "git:",
-    fallback = "unknown"
-);
+const GIT_REV: &str = dstack_build_info::git_revision!();
 
 fn app_version() -> String {
     format!("v{CARGO_PKG_VERSION} ({GIT_REV})")

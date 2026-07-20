@@ -30,7 +30,7 @@ hickory-resolver.workspace = true
 pin-project.workspace = true
 serde_json.workspace = true
 rand.workspace = true
-git-version.workspace = true
+dstack-build-info.workspace = true
 ra-rpc = { workspace = true, features = ["client", "rocket"] }
 dstack-gateway-rpc.workspace = true
 certbot.workspace = true
