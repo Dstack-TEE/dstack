@@ -72,6 +72,7 @@ mkdir -p ~/.dstack-vmm
 install -Dm755 dstack/target/release/dstack-vmm ~/.local/bin/dstack-vmm
 install -Dm755 dstack/target/release/supervisor ~/.local/bin/supervisor
 install -Dm755 dstack/vmm/src/vmm-cli.py ~/.local/bin/dstack
+mkdir -p ~/.dstack-vmm
 cp dstack/vmm/vmm.toml ~/.dstack-vmm/vmm.toml
 ```
 
