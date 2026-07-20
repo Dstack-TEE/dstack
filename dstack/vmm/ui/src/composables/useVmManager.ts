@@ -1362,11 +1362,6 @@ type CreateVmPayloadSource = {
     window.open('/api-docs/docs', '_blank', 'noopener');
   }
 
-  function openLegacyUi() {
-    closeSystemMenu();
-    window.open('/v0', '_blank', 'noopener');
-  }
-
   function shortUptime(uptime?: string | null) {
     if (!uptime) {
       return '-';
@@ -1809,7 +1804,6 @@ type CreateVmPayloadSource = {
     toggleSystemMenu,
     closeSystemMenu,
     openApiDocs,
-    openLegacyUi,
     reloadVMs,
     devMode,
     toggleDevMode,
