@@ -33,7 +33,7 @@ echo "Waiting for gateway admin API at $ADMIN_ADDR..."
 max_retries=60
 retry=0
 while [ $retry -lt $max_retries ]; do
-  if curl -sf "${AUTH_HEADER[@]}" "http://$ADMIN_ADDR/prpc/Admin.Status" >/dev/null 2>&1; then
+  if curl -sf "${AUTH_HEADER[@]}" "http://$ADMIN_ADDR/prpc/Status" >/dev/null 2>&1; then
     break
   fi
   retry=$((retry + 1))
@@ -48,45 +48,29 @@ fi
 
 echo "Admin API ready, bootstrapping configuration..."
 
-# Set ACME URL. ACME_URL is useful for local E2E suites (for example Pebble).
-if [ -n "${ACME_URL:-}" ]; then
-  :
-elif [ "$ACME_STAGING" = "yes" ]; then
+# Set ACME URL
+if [ "$ACME_STAGING" = "yes" ]; then
   ACME_URL="https://acme-staging-v02.api.letsencrypt.org/directory"
 else
   ACME_URL="https://acme-v02.api.letsencrypt.org/directory"
 fi
 
 echo "Setting certbot config (ACME URL: $ACME_URL)..."
-curl -sf -X POST "${AUTH_HEADER[@]}" "http://$ADMIN_ADDR/prpc/Admin.SetCertbotConfig" \
+curl -sf -X POST "${AUTH_HEADER[@]}" "http://$ADMIN_ADDR/prpc/SetCertbotConfig" \
   -H "Content-Type: application/json" \
   -d '{"acme_url":"'"$ACME_URL"'","renew_interval_secs":3600,"renew_before_expiration_secs":864000,"renew_timeout_secs":300}' >/dev/null \
   && echo "  Certbot config set" || echo "  WARN: failed to set certbot config"
 
 # Create DNS credential if CF_API_TOKEN is provided and no credentials exist yet
 if [ -n "$CF_API_TOKEN" ]; then
-  existing=$(curl -sf "${AUTH_HEADER[@]}" "http://$ADMIN_ADDR/prpc/Admin.ListDnsCredentials" 2>/dev/null)
+  existing=$(curl -sf "${AUTH_HEADER[@]}" "http://$ADMIN_ADDR/prpc/ListDnsCredentials" 2>/dev/null)
   cred_count=$(echo "$existing" | jq -r '.credentials | length' 2>/dev/null || echo "0")
 
   if [ "$cred_count" = "0" ]; then
     echo "Creating default DNS credential..."
-    dns_payload=$(jq -cn \
-      --arg token "$CF_API_TOKEN" \
-      --arg api_url "${CF_API_URL:-}" \
-      --argjson ttl "${DNS_TXT_TTL:-60}" \
-      --argjson max_wait "${MAX_DNS_WAIT:-300}" \
-      '{
-        name: "cloudflare",
-        provider_type: "cloudflare",
-        cf_api_token: $token,
-        set_as_default: true,
-        dns_txt_ttl: $ttl,
-        max_dns_wait: $max_wait
-      }
-      + (if $api_url == "" then {} else {cf_api_url: $api_url} end)')
-    curl -sf -X POST "${AUTH_HEADER[@]}" "http://$ADMIN_ADDR/prpc/Admin.CreateDnsCredential" \
+    curl -sf -X POST "${AUTH_HEADER[@]}" "http://$ADMIN_ADDR/prpc/CreateDnsCredential" \
       -H "Content-Type: application/json" \
-      -d "$dns_payload" >/dev/null \
+      -d '{"name":"cloudflare","provider_type":"cloudflare","cf_api_token":"'"$CF_API_TOKEN"'","set_as_default":true}' >/dev/null \
       && echo "  DNS credential created" || echo "  WARN: failed to create DNS credential"
   else
     echo "  DNS credentials already exist ($cred_count), skipping"
@@ -97,12 +81,12 @@ fi
 
 # Add ZT-Domain if SRV_DOMAIN is provided and domain doesn't exist yet
 if [ -n "$SRV_DOMAIN" ]; then
-  existing=$(curl -sf "${AUTH_HEADER[@]}" "http://$ADMIN_ADDR/prpc/Admin.ListZtDomains" 2>/dev/null)
+  existing=$(curl -sf "${AUTH_HEADER[@]}" "http://$ADMIN_ADDR/prpc/ListZtDomains" 2>/dev/null)
   has_domain=$(echo "$existing" | jq -r '.domains[]? | select(.domain=="'"$SRV_DOMAIN"'") | .domain' 2>/dev/null)
 
   if [ -z "$has_domain" ]; then
     echo "Adding ZT-Domain: $SRV_DOMAIN..."
-    curl -sf -X POST "${AUTH_HEADER[@]}" "http://$ADMIN_ADDR/prpc/Admin.AddZtDomain" \
+    curl -sf -X POST "${AUTH_HEADER[@]}" "http://$ADMIN_ADDR/prpc/AddZtDomain" \
       -H "Content-Type: application/json" \
       -d '{"domain":"'"$SRV_DOMAIN"'","port":443,"priority":100}' >/dev/null \
       && echo "  ZT-Domain added" || echo "  WARN: failed to add ZT-Domain"
