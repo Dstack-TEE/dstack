@@ -255,6 +255,26 @@ pub struct App {
     pub(crate) pull_status: Arc<Mutex<std::collections::HashMap<String, PullStatus>>>,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum DependencyAction {
+    KeepRunning,
+    StopDependents,
+    StopVm,
+    Finished,
+}
+
+fn dependency_action(main_running: bool, dependents_running: &[bool]) -> DependencyAction {
+    if dependents_running.is_empty() {
+        DependencyAction::Finished
+    } else if !main_running {
+        DependencyAction::StopDependents
+    } else if dependents_running.iter().any(|running| !running) {
+        DependencyAction::StopVm
+    } else {
+        DependencyAction::KeepRunning
+    }
+}
+
 impl App {
     pub(crate) fn lock(&self) -> MutexGuard<'_, AppState> {
         self.state.lock().or_panic("mutex poisoned")
@@ -278,6 +298,7 @@ impl App {
                 cid_pool,
                 vms: HashMap::new(),
                 active_forwards: HashMap::new(),
+                dependency_monitors: HashSet::new(),
             })),
             config: Arc::new(config),
             forward_service: Arc::new(tokio::sync::Mutex::new(ForwardService::new())),
@@ -376,6 +397,7 @@ impl App {
             vm_state.config.clone()
         };
         if !is_running {
+            self.wait_for_dependent_processes_stopped(id).await?;
             let work_dir = self.work_dir(id);
             for path in [work_dir.serial_pty(), work_dir.qmp_socket()] {
                 if path.symlink_metadata().is_ok() {
@@ -397,6 +419,7 @@ impl App {
                 let vm_state = state.get_mut(id).context("VM not found")?;
                 vm_state.state.runtime_networks = runtime_networks;
             }
+            let has_dependent_processes = processes.len() > 1;
             for process in processes {
                 if let Err(err) = self.supervisor.deploy(&process).await {
                     self.stop_dependent_processes(id).await;
@@ -412,6 +435,9 @@ impl App {
                     return Err(err)
                         .with_context(|| format!("failed to start process {}", process.id));
                 }
+            }
+            if has_dependent_processes {
+                self.spawn_dependency_monitor(id);
             }
 
             let mut state = self.lock();
@@ -449,6 +475,85 @@ impl App {
                 }
             }
         }
+    }
+
+    async fn wait_for_dependent_processes_stopped(&self, id: &str) -> Result<()> {
+        for _ in 0..50 {
+            let running = self.supervisor.list().await?.into_iter().any(|process| {
+                let note = serde_json::from_str::<ProcessAnnotation>(&process.config.note)
+                    .unwrap_or_default();
+                note.live_for.as_deref() == Some(id) && process.state.status.is_running()
+            });
+            if !running {
+                return Ok(());
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        bail!("timed out waiting for dependent processes of VM {id} to stop")
+    }
+
+    /// Keep auxiliary processes fail-closed with their owning VM. If QEMU
+    /// exits, all dependents are stopped. If a required dependent exits first,
+    /// QEMU is stopped rather than continuing with a broken emulated device.
+    fn spawn_dependency_monitor(&self, id: &str) {
+        {
+            let mut state = self.lock();
+            if !state.dependency_monitors.insert(id.to_string()) {
+                return;
+            }
+        }
+        let app = self.clone();
+        let id = id.to_string();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                let processes = match app.supervisor.list().await {
+                    Ok(processes) => processes,
+                    Err(err) => {
+                        warn!(vm_id = id, "failed to inspect dependent processes: {err:?}");
+                        continue;
+                    }
+                };
+                let main_running = processes
+                    .iter()
+                    .find(|process| process.config.id == id)
+                    .is_some_and(|process| process.state.status.is_running());
+                let dependents = processes
+                    .iter()
+                    .filter(|process| {
+                        serde_json::from_str::<ProcessAnnotation>(&process.config.note)
+                            .unwrap_or_default()
+                            .live_for
+                            .as_deref()
+                            == Some(id.as_str())
+                    })
+                    .collect::<Vec<_>>();
+                let dependent_states = dependents
+                    .iter()
+                    .map(|process| process.state.status.is_running())
+                    .collect::<Vec<_>>();
+                match dependency_action(main_running, &dependent_states) {
+                    DependencyAction::KeepRunning => continue,
+                    DependencyAction::Finished => break,
+                    DependencyAction::StopDependents => {
+                        app.stop_dependent_processes(&id).await;
+                        break;
+                    }
+                    DependencyAction::StopVm => {
+                        error!(vm_id = id, "required VM process exited; stopping VM");
+                        if let Err(err) = app.supervisor.stop(&id).await {
+                            debug!(
+                                vm_id = id,
+                                "failed to stop VM after dependent exit: {err:?}"
+                            );
+                        }
+                        app.stop_dependent_processes(&id).await;
+                        break;
+                    }
+                }
+            }
+            app.lock().dependency_monitors.remove(&id);
+        });
     }
 
     pub async fn remove_vm(&self, id: &str) -> Result<()> {
@@ -800,6 +905,13 @@ impl App {
                 );
                 self.spawn_finish_remove(owner);
             }
+        }
+
+        // Re-establish lifecycle monitoring after a VMM restart. The monitor
+        // also reconciles a QEMU or dependent process that exited while VMM was
+        // unavailable.
+        for id in self.lock().vms.keys().cloned().collect::<Vec<_>>() {
+            self.spawn_dependency_monitor(&id);
         }
 
         // Restore port forwarding for running bridge-mode VMs with persisted guest IPs
@@ -1594,6 +1706,24 @@ mod tests {
     }
 
     #[test]
+    fn dependency_lifecycle_is_fail_closed() {
+        assert_eq!(
+            dependency_action(true, &[true]),
+            DependencyAction::KeepRunning
+        );
+        assert_eq!(
+            dependency_action(false, &[true]),
+            DependencyAction::StopDependents
+        );
+        assert_eq!(dependency_action(true, &[false]), DependencyAction::StopVm);
+        assert_eq!(
+            dependency_action(false, &[false]),
+            DependencyAction::StopDependents
+        );
+        assert_eq!(dependency_action(true, &[]), DependencyAction::Finished);
+    }
+
+    #[test]
     fn gpu_config_has_gpus_only_when_resolved_gpu_list_is_non_empty() {
         assert!(!GpuConfig::default().has_gpus());
         assert!(!GpuConfig {
@@ -2194,6 +2324,8 @@ pub(crate) struct AppState {
     vms: HashMap<String, VmState>,
     /// Tracks active port forwarding rules per VM ID (bridge mode only).
     active_forwards: HashMap<String, Vec<ForwardRule>>,
+    /// VM IDs with an active auxiliary-process lifecycle monitor.
+    dependency_monitors: HashSet<String>,
 }
 
 impl AppState {
