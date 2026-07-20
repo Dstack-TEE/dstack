@@ -24,6 +24,8 @@ dstack protects the execution environment, not your application code. Bugs in yo
 
 Infrastructure operators can still deny service. They can shut down your workload, throttle resources, or block network access. If availability matters, plan for redundancy across providers.
 
+**Persistent-storage freshness, integrity, and availability.** Disk encryption protects the confidentiality of data at rest. The default ZFS storage filesystem also provides integrity checking; switching the storage filesystem to ext4 may forgo strong integrity protection. Neither filesystem proves that an attached disk represents the latest application state. An infrastructure operator can withhold, delete, replace, or restore an earlier valid encrypted disk image. Applications that require rollback-resistant state must anchor a monotonic version or state commitment in an external trusted service, ledger, or equivalent freshness mechanism.
+
 ## Security Guarantees
 
 ### Confidentiality
