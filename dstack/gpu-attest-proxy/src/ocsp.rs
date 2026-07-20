@@ -313,9 +313,10 @@ mod tests {
 
     #[test]
     fn cache_key_ignores_ocsp_nonce() {
+        let nonce = std::process::id() as u8;
         assert_eq!(
-            request_cache_key(&request(1)).unwrap(),
-            request_cache_key(&request(2)).unwrap()
+            request_cache_key(&request(nonce)).unwrap(),
+            request_cache_key(&request(nonce.wrapping_add(1))).unwrap()
         );
     }
 

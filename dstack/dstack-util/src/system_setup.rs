@@ -1601,7 +1601,8 @@ mod gpu {
 
         #[test]
         fn proxy_routes_ocsp_and_rim_and_selects_outpost_policy() {
-            let args = nvattest_args("abcd", Some("http://10.0.2.2:8090/")).unwrap();
+            let nonce = format!("test-nonce-{}", std::process::id());
+            let args = nvattest_args(&nonce, Some("http://10.0.2.2:8090/")).unwrap();
             assert!(args
                 .windows(2)
                 .any(|args| args == ["--ocsp-url", "http://10.0.2.2:8090/ocsp"]));
@@ -1612,17 +1613,18 @@ mod gpu {
                 .windows(2)
                 .any(|args| args == ["--relying-party-policy", TRUST_OUTPOST_POLICY]));
 
-            let direct = nvattest_args("abcd", None).unwrap();
+            let direct = nvattest_args(&nonce, None).unwrap();
             assert!(!direct.iter().any(|arg| arg == "--ocsp-url"));
             assert!(!direct.iter().any(|arg| arg == "--relying-party-policy"));
         }
 
         #[test]
         fn proxy_url_validation_is_fail_closed() {
-            assert!(nvattest_args("abcd", Some("file:///tmp/proxy")).is_err());
-            assert!(nvattest_args("abcd", Some("https://user@example.com")).is_err());
-            assert!(nvattest_args("abcd", Some("https://example.com?q=1")).is_err());
-            assert!(nvattest_args("abcd", Some("https://example.com/base")).is_err());
+            let nonce = format!("test-nonce-{}", std::process::id());
+            assert!(nvattest_args(&nonce, Some("file:///tmp/proxy")).is_err());
+            assert!(nvattest_args(&nonce, Some("https://user@example.com")).is_err());
+            assert!(nvattest_args(&nonce, Some("https://example.com?q=1")).is_err());
+            assert!(nvattest_args(&nonce, Some("https://example.com/base")).is_err());
             assert!(normalize_proxy_url(Some("  ")).unwrap().is_none());
         }
 

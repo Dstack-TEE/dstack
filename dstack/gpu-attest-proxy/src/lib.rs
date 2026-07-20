@@ -595,19 +595,22 @@ mod tests {
         };
 
         let proxy = Proxy::new(config.clone()).await.unwrap();
-        let miss = proxy.handle_ocsp(ocsp_request(1)).await;
+        let nonce = std::process::id() as u8;
+        let miss = proxy.handle_ocsp(ocsp_request(nonce)).await;
         assert_eq!(miss.headers()["x-dstack-cache"], "MISS");
         assert_eq!(
             miss.into_body().collect().await.unwrap().to_bytes(),
             response
         );
-        let hit = proxy.handle_ocsp(ocsp_request(2)).await;
+        let hit = proxy.handle_ocsp(ocsp_request(nonce.wrapping_add(1))).await;
         assert_eq!(hit.headers()["x-dstack-cache"], "HIT");
         assert_eq!(requests.load(Ordering::SeqCst), 1);
 
         drop(proxy);
         let reopened = Proxy::new(config).await.unwrap();
-        let hit = reopened.handle_ocsp(ocsp_request(3)).await;
+        let hit = reopened
+            .handle_ocsp(ocsp_request(nonce.wrapping_add(2)))
+            .await;
         assert_eq!(hit.headers()["x-dstack-cache"], "HIT");
         assert_eq!(requests.load(Ordering::SeqCst), 1);
         upstream.abort();
