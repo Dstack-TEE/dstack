@@ -35,6 +35,17 @@ pub async fn http_request(
     path: &str,
     body: &[u8],
 ) -> Result<(u16, Vec<u8>)> {
+    http_request_with_headers(method, base, path, body, &[]).await
+}
+
+/// Same as [`http_request`], with extra request headers (e.g. `Authorization`).
+pub async fn http_request_with_headers(
+    method: &str,
+    base: &str,
+    path: &str,
+    body: &[u8],
+    headers: &[(&str, &str)],
+) -> Result<(u16, Vec<u8>)> {
     debug!("Sending HTTP request to {base}, path={path}");
     let mut response = if let Some(uds) = base.strip_prefix("unix:") {
         let path = if path.starts_with("/") {
@@ -44,24 +55,29 @@ pub async fn http_request(
         };
         let client: Client<UnixConnector, Full<Bytes>> = Client::unix();
         let unix_uri: hyper::Uri = Uri::new(uds, &path).into();
-        let req = Request::builder()
-            .method(method)
-            .uri(unix_uri)
-            .body(Full::new(Bytes::copy_from_slice(body)))?;
+        let mut builder = Request::builder().method(method).uri(unix_uri);
+        for (name, value) in headers {
+            builder = builder.header(*name, *value);
+        }
+        let req = builder.body(Full::new(Bytes::copy_from_slice(body)))?;
         client.request(req).await?
     } else if base.starts_with("vsock:") {
         let client = Client::vsock();
         let uri = mk_url(base, path).parse::<hyper::Uri>()?;
-        let req = Request::builder()
-            .method(method)
-            .uri(uri)
-            .body(Full::new(Bytes::copy_from_slice(body)))?;
+        let mut builder = Request::builder().method(method).uri(uri);
+        for (name, value) in headers {
+            builder = builder.header(*name, *value);
+        }
+        let req = builder.body(Full::new(Bytes::copy_from_slice(body)))?;
         client.request(req).await?
     } else {
         let uri = mk_url(base, path);
         let client = reqwest::Client::builder().build()?;
         let method = reqwest::Method::from_bytes(method.as_bytes())?;
         let mut request = client.request(method, uri);
+        for (name, value) in headers {
+            request = request.header(*name, *value);
+        }
         if !body.is_empty() {
             request = request.body(body.to_vec());
         }
