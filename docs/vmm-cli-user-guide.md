@@ -80,8 +80,11 @@ forms.
 Pass the VMM API token directly; it is sent as `Authorization: Bearer <token>`.
 
 ```bash
-# the token dstackup writes, or your configured `[auth] tokens` entry
-export DSTACK_VMM_TOKEN=$(cat ~/.dstack/secrets/vmm-auth-token)
+# your VMM API token. `dstackup install` writes it to
+# <config-dir>/vmm-auth-token (default /etc/dstack/vmm-auth-token) — and the
+# local `dstack` CLI reads it automatically; a manual setup (see the VMM
+# configuration tutorial) stores it at ~/.dstack/secrets/vmm-auth-token.
+export DSTACK_VMM_TOKEN=$(cat /etc/dstack/vmm-auth-token)
 ./vmm-cli.py lsvm
 
 # or as a flag
@@ -95,18 +98,18 @@ The server also accepts HTTP Basic, where the password may be the shared token
 
 ```bash
 export DSTACK_VMM_AUTH_USER=admin
-export DSTACK_VMM_AUTH_PASSWORD=$(cat ~/.dstack/secrets/vmm-auth-token)
+export DSTACK_VMM_AUTH_PASSWORD=$(cat /etc/dstack/vmm-auth-token)
 ./vmm-cli.py lsvm
 
 # or as flags
 ./vmm-cli.py --auth-user admin --auth-password "$DSTACK_VMM_AUTH_PASSWORD" lsvm
 ```
 
-**Note:** A bearer token takes precedence over Basic when both are set.
-Environment variables take precedence over command line arguments. Setting only
-one half of a Basic credential (e.g. `DSTACK_VMM_AUTH_PASSWORD` without
-`DSTACK_VMM_AUTH_USER`) is rejected with an error rather than silently sending an
-unauthenticated request.
+**Note:** A bearer token takes precedence over Basic when both are set. For each
+setting, command-line flags take precedence over environment variables, which
+take precedence over the config file. Setting only one half of a Basic
+credential (e.g. `DSTACK_VMM_AUTH_PASSWORD` without `DSTACK_VMM_AUTH_USER`) is
+rejected with an error rather than silently sending an unauthenticated request.
 
 
 ## Basic Commands
